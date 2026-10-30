@@ -4,7 +4,8 @@
  * package's own `admin.ts` — read as part of this task's research — serves only `GET /healthz`,
  * no registration endpoint, so the file is the actual, documented integration contract, not a
  * stand-in this task invents. Schema verified against `packages/egress-proxy/src/source-map.ts`
- * `SourceEntrySchema`: `{sourceId: string, allow?: string[], deny?: string[]}`, keyed by client IP.
+ * `SourceEntrySchema`: `{sourceId: string, allow?: string[], deny?: string[], denyAll?: boolean}`,
+ * keyed by client IP.
  *
  * `sourceId` encoding: egress-proxy treats it as an opaque string it only ever echoes back into
  * `EgressObservation.sourceId` (`report.ts`'s own doc comment: "this proxy only ever knows a
@@ -29,6 +30,9 @@ export interface SourceMapEntry {
   readonly sourceId: string;
   readonly allow?: readonly string[];
   readonly deny?: readonly string[];
+  /** S10 E3-2-0: every request from this source is denied (egress-proxy `policy.ts` `denyAll`).
+   *  Written with `allow: [DENY_ALL_FALLBACK_ALLOW]` (`denyAllEntryFields`). */
+  readonly denyAll?: boolean;
   /** Leftover 87, optional: a Worker container's inherited correlation id — egress-proxy writes it
    *  into its log line for every request from this source (an older egress-proxy strips it). Set
    *  for Task containers only: a resident entry container serves many Turns, so no one id fits. */
@@ -36,6 +40,17 @@ export interface SourceMapEntry {
 }
 
 export type SourceMapFile = Record<string, SourceMapEntry>;
+
+/** S10 E3-2-0: the only `allow` entry a deny-all source carries. A reserved name (RFC 6761
+ *  `.invalid` never resolves), so an egress-proxy that predates `denyAll` (its loader drops the
+ *  key) still denies every request from the source: by its allow list, its bare-name rule, or a
+ *  failed lookup. An egress-proxy that knows `denyAll` denies before reading the list. */
+export const DENY_ALL_FALLBACK_ALLOW = 'nexttime-deny-all.invalid';
+
+/** The fields a deny-all source's entry carries on top of `sourceId` (see `DENY_ALL_FALLBACK_ALLOW`). */
+export function denyAllEntryFields(): Pick<SourceMapEntry, 'allow' | 'denyAll'> {
+  return { allow: [DENY_ALL_FALLBACK_ALLOW], denyAll: true };
+}
 
 export function entrySourceId(workspaceId: string, principalId: string): string {
   return `entry:${workspaceId}:${principalId}`;

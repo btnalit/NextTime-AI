@@ -15,7 +15,7 @@ request forwarding and `CONNECT` tunnelling for HTTPS, no TLS interception, no c
 | `EGRESS_DENY_HOST_SUFFIXES` | — | Comma-separated extra suffixes appended to the deny list (your site's own LAN domain, e.g. `corp.example`). A bare name denies the name and every subdomain; a leading `.` / `*.` is accepted as the same. An entry that can never match a host (a URL, a port, a CIDR, a wildcard elsewhere) is logged at startup as an `error` line. |
 | `NEXTTIME_SUBNET_CONTROL` / `NEXTTIME_SUBNET_WORKERS` | — | Platform subnets (CIDR), always denied. |
 | `EGRESS_TRUSTED_RESOLVED_CIDRS` | — | Comma-separated CIDRs owned by a transparent ("fake-IP") proxy on the host network: a **hostname** resolving into one of them is treated as public (the range is the transparent proxy, not a real internal host). Literal-IP targets in the range and the platform subnets are still denied. Unset on a normal network. |
-| `SOURCE_MAP_FILE` | — | Path to `{"<clientIp>": {"sourceId","allow"?,"deny"?}}`, hot-reloaded. Written by `packages/worker-supervisor` on every container spawn/reuse (`egress-map.ts`'s `EgressMapStore`) — as of feat/egress-definition-lists, a source's own `deny` entry is the spawned/invoked WorkerDefinition's own `egressDeny` (`packages/shared/src/worker-definition.ts`), narrowing that one source's egress on top of this proxy's own fixed `DENY_HOSTS`/private-range denial. An entry with no `deny` (definition declared none, or a container predating this field) behaves exactly as before. |
+| `SOURCE_MAP_FILE` | — | Path to `{"<clientIp>": {"sourceId","allow"?,"deny"?,"denyAll"?}}`, hot-reloaded. Written by `packages/worker-supervisor` on every container spawn/reuse (`egress-map.ts`'s `EgressMapStore`) — as of feat/egress-definition-lists, a source's own `deny` entry is the spawned/invoked WorkerDefinition's own `egressDeny` (`packages/shared/src/worker-definition.ts`), narrowing that one source's egress on top of this proxy's own fixed `DENY_HOSTS`/private-range denial. An entry with no `deny` (definition declared none, or a container predating this field) behaves exactly as before. `denyAll: true` (S10 E3-2-0) marks an evaluation Task's container: every request from it is denied (`403 source-deny-all`); such an entry also carries the reserved `allow` name `nexttime-deny-all.invalid`, so a proxy that predates `denyAll` still denies everything from it. |
 | `MAX_TUNNELS_PER_SOURCE` | `32` | Concurrent tunnels per source. |
 | `IDLE_TIMEOUT_MS` / `CONNECT_TIMEOUT_MS` | `120000` / `10000` | Per-tunnel idle and connect timeouts. |
 | `ALLOW_LOOPBACK_FOR_TESTS` | unset | `1` treats loopback as allowed. **Test-only — never set in production.** |
@@ -24,8 +24,8 @@ request forwarding and `CONNECT` tunnelling for HTTPS, no TLS interception, no c
 ## Policy (`src/policy.ts`)
 
 Deny, in order (deny always beats allow): **an unregistered source** (no `SOURCE_MAP_FILE` entry
-for the client IP at all — `EGRESS_DENY_UNKNOWN_SOURCE`, default fail-closed) → a source's own
-`deny` list (suffix match) → global `DENY_HOSTS` + the built-in private suffixes +
+for the client IP at all — `EGRESS_DENY_UNKNOWN_SOURCE`, default fail-closed) → **a deny-all
+source** (`denyAll`, whatever the hostname) → a source's own `deny` list (suffix match) → global `DENY_HOSTS` + the built-in private suffixes +
 `EGRESS_DENY_HOST_SUFFIXES` (suffix match, before any DNS lookup) → a bare hostname (no dot)
 unless explicitly on the source's `allow` list → a source's `allow` list, when present, restricts
 to it. Otherwise: DNS is resolved *inside the proxy*, every resolved address is classified, and

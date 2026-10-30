@@ -316,8 +316,20 @@ describe('TaskSpawnRequestSchema', () => {
         timeoutSec: 120,
         skillsInline: [{ name: 'inventory', files: { 'SKILL.md': '---\nname: x\n---\n\nbody\n' } }],
         egressDeny: ['blocked.example.com'],
+        egressDenyAll: true,
       }).success,
     ).toBe(true);
+  });
+
+  it('takes egressDenyAll only as a boolean (S10 E3-2-0)', () => {
+    expect(
+      TaskSpawnRequestSchema.safeParse({ ...validTaskSpawnBody, egressDenyAll: false }).success,
+    ).toBe(true);
+    for (const egressDenyAll of ['true', 1, null]) {
+      expect(
+        TaskSpawnRequestSchema.safeParse({ ...validTaskSpawnBody, egressDenyAll }).success,
+      ).toBe(false);
+    }
   });
 
   it('rejects the removed skills[] host-path field (lane-6 review P1-3 — unknown field, strict schema)', () => {

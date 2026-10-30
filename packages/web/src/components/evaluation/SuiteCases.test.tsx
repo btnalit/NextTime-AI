@@ -279,8 +279,17 @@ describe('SuiteCases (S10 E3-1b)', () => {
 
     type(within(sheet).getByTestId('eval-case-title'), ' new one ');
     select(within(sheet).getByTestId('eval-case-partition'), 'regression');
+    expect(within(sheet).queryByTestId('eval-case-holdout-notice')).toBeNull();
+    select(within(sheet).getByTestId('eval-case-split'), 'dev');
+    expect(within(sheet).queryByTestId('eval-case-holdout-notice')).toBeNull();
     select(within(sheet).getByTestId('eval-case-split'), 'holdout');
     expect(sheet.textContent).toContain('holdout：只用于最终确认');
+    // Legacy 516: holdout text is withheld from agents wherever it turns up — say so while it is
+    // written, so a stock phrase or a copied log line does not also stop real work.
+    const notice = within(sheet).getByTestId('eval-case-holdout-notice').textContent ?? '';
+    expect(notice).toContain('连续 40 个字符');
+    expect(notice).toContain('不要用常见套话');
+    expect(notice).toContain('夹具应答的数据不算在内');
     type(within(sheet).getByTestId('eval-case-input'), 'restart web');
 
     fireEvent.click(within(sheet).getByTestId('eval-case-rule-add'));
@@ -361,6 +370,8 @@ describe('SuiteCases (S10 E3-1b)', () => {
     fireEvent.click(screen.getByTestId('eval-case-edit'));
     const sheet = screen.getByTestId('eval-case-sheet');
     expect(within(sheet).getByTestId('eval-case-kind-fixed').textContent).toContain('回归');
+    // A dev case's text is not withheld from agents: no holdout notice.
+    expect(within(sheet).queryByTestId('eval-case-holdout-notice')).toBeNull();
     expect(within(sheet).queryByTestId('eval-case-partition')).toBeNull();
     const save = within(sheet).getByTestId('eval-case-save') as HTMLButtonElement;
     expect(save.disabled).toBe(true);
@@ -467,6 +478,25 @@ describe('SuiteCases (S10 E3-1b)', () => {
       reason: 'duplicate of another',
     });
     expect(await screen.findByTestId('eval-suite-cases-empty')).toBeTruthy();
+  });
+
+  it('editing a holdout case says its text is withheld from agents (legacy 516)', async () => {
+    const cases = [wholeCase({ split: 'holdout' })];
+    const http = scriptedHttp(
+      handlers(
+        'builder',
+        () => suite(cases),
+        () => cases,
+      ),
+    );
+    renderDetail(http);
+    fireEvent.click(await screen.findByTestId('eval-case-open'));
+    await screen.findByTestId('eval-case-view');
+    fireEvent.click(screen.getByTestId('eval-case-edit'));
+    const sheet = screen.getByTestId('eval-case-sheet');
+    expect(within(sheet).getByTestId('eval-case-holdout-notice').textContent).toContain(
+      '不要整段照抄真实数据或日志',
+    );
   });
 
   it('a member reads cases whole and is offered no change', async () => {

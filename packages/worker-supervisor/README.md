@@ -119,6 +119,7 @@ Task 容器每次都是全新工作目录，天然每次都写；常驻入口容
                               // 省略时删掉该文件、容器用镜像自带的默认提示
   "timeoutSec": 90,          // 可选，默认 TASK_MAX_RUNTIME_SEC
   "egressDeny": ["blocked.example.com"], // 可选（feat/egress-definition-lists），见下方一条
+  "egressDenyAll": true,     // 可选（S10 E3-2-0），评测运行；见下方一条
 }
 ```
 
@@ -130,6 +131,16 @@ entry）——写进这个 WorkerRun 在 `SOURCE_MAP_FILE` 里的条目（`deny`
 恢复这份名单（否则重启会把这个字段静默清空，短暂放宽出网，直到该 Task 结束——见
 `task-spawn-spec.ts`/`task-service.ts` 的模块注释）。省略时不注册任何每来源拒绝名单，行为与该字段
 存在前完全一致。`/resident/spawn`（常驻入口容器）走同一套机制，见下一节。
+
+`egressDenyAll`（S10 E3-2-0）：评测 Task 的运行。这个 WorkerRun 在 `SOURCE_MAP_FILE` 里的条目写成
+`{"sourceId", "allow": ["nexttime-deny-all.invalid"], "denyAll": true}`，`@nexttime/egress-proxy`
+对它的每个请求都回 `403 source-deny-all`；它照常能连 kernel 与 llm-proxy（都在 workers 网络上，
+不经出网代理）。`allow` 里那个保留名（RFC 6761 的 `.invalid` 永远解析不到）是给不认识 `denyAll`
+的旧版出网代理兜底的：旧代理丢掉这个键，仍会因 allow 名单把所有请求拒掉。条目在 Handle 绑定之后、
+spawn 返回之前写入，写不进去时解绑 Handle、删掉容器、spawn 失败；容器带 `nexttime.egress-deny-all=true`
+label，supervisor 重启后 `reconcile()` 据此恢复条目，恢复不了就以 `egress_registration_failed`
+终止这个运行，绝不让它在没有这条登记的情况下继续跑。不带这个字段（或为 `false`）时行为与以前完全一致；
+不认识这个字段的旧 supervisor 会因请求体 strict 校验直接拒绝，所以 kernel 拿不到一个不受限的评测容器。
 
 **已删除**：早前这里还有一个 `skills: [{name, hostPath}]` 字段（只读 bind-mount 一个"已经在宿主机上
 的文件"）。已随 fix/runtime-hardening（lane-6 review P1-3）整个删除，不再是请求体的合法字段——

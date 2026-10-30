@@ -5,9 +5,9 @@ import type { SourcePolicy } from './policy.js';
 
 /**
  * `SOURCE_MAP_FILE` loader (design doc §7.9): `{ "<clientIp>": {"sourceId": "...", "allow": [...],
- * "deny": [...]} }`. This is the S1 stand-in for `resolveSource(clientIp)` — a future supervisor
- * registry (S1.5) replaces the file with a live `(worker_run_id, container_id, ip)` lookup behind
- * the same interface.
+ * "deny": [...], "denyAll": true} }`. This is the S1 stand-in for `resolveSource(clientIp)` — a
+ * future supervisor registry (S1.5) replaces the file with a live `(worker_run_id, container_id,
+ * ip)` lookup behind the same interface.
  *
  * Reload is driven by `fs.watch`, which — per Node's docs — fires reliably on same-inode edits
  * (`echo ... > file`, most editors' "save") but not always on a replace-by-rename; a full write
@@ -18,6 +18,8 @@ const SourceEntrySchema = z.object({
   sourceId: z.string(),
   allow: z.array(z.string()).optional(),
   deny: z.array(z.string()).optional(),
+  // S10 E3-2-0: an evaluation Task's container — every request denied (policy.ts `denyAll`).
+  denyAll: z.boolean().optional(),
   // Leftover 87: a Worker container's inherited correlation id (worker-supervisor's egress-map.ts
   // writes it for Task containers) — only ever copied into log lines, and only when it is a valid
   // id (`isValidCorrelationId`), so a malformed map entry can never inject into a log line.
@@ -48,8 +50,8 @@ export interface SourcePatternProblem {
  * narrows (fail-closed) — it is reported, never rewritten into a match (that would widen egress),
  * and never makes the whole file fail to load (a rejected file freezes the map: new containers'
  * registrations would stop applying while a stale IP kept a departed container's policy).
- * No code path writes `allow` today (worker-supervisor writes only `deny`), so a reported `allow`
- * entry is a hand edit.
+ * The only `allow` worker-supervisor writes is its deny-all fallback name (egress-map.ts
+ * `DENY_ALL_FALLBACK_ALLOW`, a valid name), so a reported `allow` entry is a hand edit.
  */
 export function findSourcePatternProblems(
   entries: Readonly<Record<string, SourcePolicy>>,
