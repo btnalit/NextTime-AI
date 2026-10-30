@@ -494,16 +494,27 @@ goal_s7_cancel_drain() {
   [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] || goal_fail "s7-cancelled" "$S7_GOAL_ID" "cancel_goal HTTP $(parse_kv "$out" HTTP_STATUS): $(parse_kv "$out" BODY)"
   [ "$(parse_kv "$out" EXTRACTED)" = "cancelling,3,both-withdrawn" ] \
     || goal_fail "s7-cancelled" "$S7_GOAL_ID" "cancel_goal answered '$(parse_kv "$out" EXTRACTED)', expected cancelling with its three steps cancelled and both writes withdrawn in the same call"
-  # The withdrawal's own event drains the gate; the periodic drain is every 60s.
+  # The withdrawal's own event drains the gate within seconds; the periodic drain comes every 60s
+  # at a phase of its own, so 10s leaves it about one chance in six of passing for a broken event
+  # path (review #488 on #811). On a miss the poll goes on past one periodic drain, so the FAIL
+  # line tells a missed event (ran late) from a stuck queue (never ran).
+  s7_bound=10
   while :; do
     s7b_status=$(psql_ws "select status from action_requests where workspace_id='$WORKSPACE_ID' and id='$s7b_ar'")
     case "$s7b_status" in executed | failed | rejected | withdrawn | expired) break ;; esac
-    [ "$(date +%s)" -lt $((s7_t0 + 20)) ] || break
+    [ "$(date +%s)" -lt $((s7_t0 + s7_bound)) ] || break
     sleep 1
   done
   s7_elapsed=$(($(date +%s) - s7_t0))
-  [ "$s7b_status" = "executed" ] \
-    || goal_fail "s7-drained" "$S7B_GOAL_ID" "goal $S7B_GOAL_ID's write $s7b_ar reads '$s7b_status' ${s7_elapsed}s after the cancel, expected executed within 20s — the withdrawal's own event drains the gate, the periodic drain comes only every 60s"
+  if [ "$s7b_status" != "executed" ]; then
+    while :; do
+      case "$s7b_status" in executed | failed | rejected | withdrawn | expired) break ;; esac
+      [ "$(date +%s)" -lt $((s7_t0 + 75)) ] || break
+      sleep 3
+      s7b_status=$(psql_ws "select status from action_requests where workspace_id='$WORKSPACE_ID' and id='$s7b_ar'")
+    done
+    goal_fail "s7-drained" "$S7B_GOAL_ID" "goal $S7B_GOAL_ID's write $s7b_ar was not executed within ${s7_bound}s of the cancel; $(($(date +%s) - s7_t0))s after it, it reads '$s7b_status' — executed then means the periodic drain caught what the withdrawal's own event should have drained at once; still approved means the queue is stuck"
+  fi
   pass "s7-drained" "goal $S7B_GOAL_ID's write $s7b_ar ran ${s7_elapsed}s after the cancel: the withdrawal drained the gate at once, not at the next periodic drain"
 
   goal_wait "$S7_GOAL_ID" 60 "[d.result.status, d.result.cleanupPending].join(',')" 'cancelled,*' \
