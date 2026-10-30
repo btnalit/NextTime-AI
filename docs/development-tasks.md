@@ -4348,6 +4348,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 - 实现说明：（未开工）
 - 计划变更（协调线程 2026-10-30 定）：拆成两段。**GO7a**（主机窗口前）：staging 上用夹具门 + fake-llm 跑 S1–S12 里能在部署环境跑的目标场景；内核线程从最新 main 开分支，审查 #488 + #493。**GO7b**（主机窗口）：主机实跑、遗留 230 的真实目标、一次付费真实模型回归。
+- 实现说明（GO7a-1，#806，2026-10-30 合入，a779298；无迁移）：S1、S5、S6、S11 场景在 `scripts/lib/accept-s2-goals.sh`，由 `accept_s2.sh` fake 路径调用（S3 原本由第 9 步覆盖）；夹具账本 `ledger.get` / `ledger.add` 在门侧计数，`--real` 下发布前丢弃、不进真实模型的工具列表（`real-ledger-withheld`）；S1 里程碑 60 秒内轮询到两类行都到齐，按值排序后整体比较（重复一条也判失败）；S6 等待时长依赖内核默认 `GOAL_ACCEPTANCE_CHECK_MAX_*`，写在 `host-accept-s2.md`；S5 的 `await_decision: false` 与 S11 的审批过期两半在主机上不覆盖，只由 `advancer.integration.test.ts` 覆盖。下一步 GO7a-2：S2、S4、S7、S12 与 S8–S10 冒烟，需要夹具门的「丢响应」模式。
 
 ### W1a — 统计车道（与 W1 并行）
 
