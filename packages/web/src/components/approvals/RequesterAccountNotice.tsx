@@ -21,8 +21,8 @@ export function RequesterAccountNotice({
     <Notice tone="warn" testId={testId}>
       {own
         ? t(
-            '你还没有在这个门上连接自己的账户：批准后门会因为没有可用凭证拒绝这次调用。先在「系统与授权」里给这个门「录入我的凭证」，再来审批。',
-            'You have not connected your own account on this gate: once approved, the gate would refuse the call for want of a credential. Use “Enter my credential” for the gate in Systems & access first, then come back to decide.',
+            '你还没有在这个门上连接自己的账户：即使批准，门也会因为没有可用凭证拒绝这次调用。请先在「系统与授权」里给这个门「录入我的凭证」。',
+            'You have not connected your own account on this gate: even once approved, the gate would refuse the call for want of a credential. Use “Enter my credential” for the gate in Systems & access first.',
           )
         : t(
             '申请人还没有在这个门上连接自己的账户：批准后门会因为没有可用凭证拒绝这次调用。可以请申请人先在「系统与授权」里给这个门「录入我的凭证」，再审批。',
