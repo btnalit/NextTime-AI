@@ -4725,7 +4725,7 @@ const evaluationCapabilities = [
     minRole: 'builder',
     actsForPerson: true,
     paramsSchema: z
-      .object({ suiteId: evalSuiteId, suiteVersion: evalSuiteVersion, caseId: z.string().uuid() })
+      .object({ suiteId: evalSuiteId, suiteVersion: evalSuiteVersion, caseId: z.guid() })
       .strict(),
     resultSchema: wire.EvalRunWireSchema,
     description:
@@ -4738,7 +4738,7 @@ const evaluationCapabilities = [
     channel: 'human',
     minRole: 'member',
     actsForPerson: true,
-    paramsSchema: z.object({ runId: z.string().uuid() }).strict(),
+    paramsSchema: z.object({ runId: z.guid() }).strict(),
     resultSchema: wire.EvalRunWireSchema,
     description:
       'Read one evaluation run whole: the suite version and WorkerDefinition version it ran, and each trial — its status, verdict or error, each assertion’s outcome, the result its Worker reported, every fixture call it made with the rule that answered it, its cost and tokens, and its evaluation Task. People only. 404 not_found for a run that is not there.',
@@ -4750,7 +4750,7 @@ const evaluationCapabilities = [
     channel: 'human',
     minRole: 'member',
     actsForPerson: true,
-    paramsSchema: z.object({ suiteId: evalSuiteId, caseId: z.string().uuid().optional() }).strict(),
+    paramsSchema: z.object({ suiteId: evalSuiteId, caseId: z.guid().optional() }).strict(),
     resultSchema: listEnvelope(wire.EvalRunSummaryWireSchema),
     description:
       'List a suite’s evaluation runs, newest first (the last 20), each in brief — its case rows and how many trials passed, failed, errored or still run, and its cost; with caseId, only the runs that tried that case row. People only. 404 not_found for a suite that is not there.',
