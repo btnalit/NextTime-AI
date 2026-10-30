@@ -1,10 +1,14 @@
 import { randomBytes } from 'node:crypto';
-import type {
-  EvalFixtureGateWire,
-  EvalSuiteChangeKind,
-  EvalSuiteChangeWire,
-  EvalSuiteSummaryWire,
-  EvalSuiteWire,
+import {
+  EVAL_CASE_PARTITION_VALUES,
+  EVAL_CASE_SPLIT_VALUES,
+  type EvalCasePartition,
+  type EvalCaseSplit,
+  type EvalFixtureGateWire,
+  type EvalSuiteChangeKind,
+  type EvalSuiteChangeWire,
+  type EvalSuiteSummaryWire,
+  type EvalSuiteWire,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { ReviewedVersionChangedError } from '../../governance/capability/index.js';
@@ -15,6 +19,13 @@ import {
 } from '../../governance/redaction/index.js';
 import { getWorkerDefinition } from '../worker/index.js';
 import {
+  type LiveGateSnapshots,
+  caseSummaryWire,
+  fixtureProblemsOf,
+  readLiveCases,
+} from './case-reads.js';
+import {
+  EvalFixtureGateInUseError,
   EvalSuiteInputError,
   EvalSuiteNameTakenError,
   EvalSuiteNotFoundError,
@@ -32,9 +43,9 @@ import {
 /**
  * application/eval/suites: an evaluation suite's shell (S10 E3-1a) — creating one, the changes
  * that make each later version (repin, a fixture gate added, synced or removed) and the reads the
- * console shows (`list_eval_suites`, `get_eval_suite`). Tables: `eval_suites`,
- * `eval_suite_changes`, `eval_fixture_gates` (migrations/worker/0007, whose guards refuse what this
- * module never writes).
+ * console shows (`list_eval_suites`, `get_eval_suite`, with the cases it holds in brief since
+ * E3-1b). Tables: `eval_suites`, `eval_suite_changes`, `eval_fixture_gates` (migrations/worker/
+ * 0007, whose guards refuse what this module never writes); the cases are `cases.ts`'s.
  *
  * Every change runs the same steps in the caller's transaction: hold the suite row
  * (`for update`), check it is at the version the person looked at (`ReviewedVersionChangedError`
@@ -107,6 +118,7 @@ export async function listEvalSuites(
       where workspace_id = $1 and retired_in_version is null`,
     [workspaceId],
   );
+  const cases = await readLiveCases(client, workspaceId);
   const live = liveSnapshots(client, workspaceId);
   const summaries: EvalSuiteSummaryWire[] = [];
   for (const suite of suites.rows) {
@@ -116,12 +128,26 @@ export async function listEvalSuites(
       const current = await live(gate.gatekeeper_id);
       if (liveStateOf(gate.snapshot_digest, current) !== 'same') needingAttention += 1;
     }
-    summaries.push(await summaryOf(client, workspaceId, suite, own.length, needingAttention));
+    const frozen: LiveGateSnapshots = new Map(
+      own.map((gate) => [gate.gatekeeper_id, gate.snapshot]),
+    );
+    const ownCases = cases.filter((row) => row.suite_id === suite.id);
+    summaries.push(
+      await summaryOf(client, workspaceId, suite, {
+        fixtureGateCount: own.length,
+        fixtureGatesNeedingAttention: needingAttention,
+        caseCount: ownCases.length,
+        casesNeedingAttention: ownCases.filter(
+          (row) => fixtureProblemsOf(row.fixture_refs, frozen).length > 0,
+        ).length,
+      }),
+    );
   }
   return summaries;
 }
 
-/** One suite whole: its fixture gates with their live state, its canary and its history. */
+/** One suite whole: its fixture gates with their live state, its cases in brief, its canary and
+ *  its history. */
 export async function getEvalSuite(
   client: PoolClient,
   workspaceId: string,
@@ -148,22 +174,28 @@ export async function getEvalSuite(
       liveState: liveStateOf(gate.snapshot_digest, await live(gate.gatekeeper_id)),
     });
   }
+  const frozen: LiveGateSnapshots = new Map(
+    gates.rows.map((gate) => [gate.gatekeeper_id, gate.snapshot]),
+  );
+  const cases = (await readLiveCases(client, workspaceId, suiteId)).map((row) =>
+    caseSummaryWire(row, frozen),
+  );
   const changes = await client.query<ChangeRow>(
     `select version, kind, actor_id, reason, detail, created_at from eval_suite_changes
       where workspace_id = $1 and suite_id = $2 order by version desc`,
     [workspaceId, suiteId],
   );
-  const summary = await summaryOf(
-    client,
-    workspaceId,
-    suite,
-    fixtureGates.length,
-    fixtureGates.filter((gate) => gate.liveState !== 'same').length,
-  );
+  const summary = await summaryOf(client, workspaceId, suite, {
+    fixtureGateCount: fixtureGates.length,
+    fixtureGatesNeedingAttention: fixtureGates.filter((gate) => gate.liveState !== 'same').length,
+    caseCount: cases.length,
+    casesNeedingAttention: cases.filter((row) => row.fixtureProblems.length > 0).length,
+  });
   return {
     ...summary,
     canary: suite.canary,
     fixtureGates,
+    cases,
     history: changes.rows.map(changeWire),
   };
 }
@@ -353,6 +385,21 @@ export async function removeEvalFixtureGate(
   if (current === null) {
     throw new EvalSuiteStateError(`the suite has no fixture gate ${target.gatekeeperId}`);
   }
+  // E3-1b: a case the suite holds answers calls through it — removing it would leave those rules
+  // answering nothing. The person edits or retires the cases first (each its own version).
+  const using = await client.query<{ id: string; title: string }>(
+    `select id, title from eval_cases
+      where workspace_id = $1 and suite_id = $2 and retired_in_version is null
+        and fixtures @> $3::jsonb
+      order by added_in_version, created_at, id`,
+    [workspaceId, suite.id, JSON.stringify([{ gatekeeperId: target.gatekeeperId }])],
+  );
+  if (using.rows.length > 0) {
+    throw new EvalFixtureGateInUseError(
+      current.snapshot.gateName,
+      using.rows.map((row) => ({ id: row.id, title: shownFreeText(row.title) })),
+    );
+  }
   const version = await nextVersion(client, workspaceId, suite.id);
   await retireFixtureGate(client, workspaceId, current.id, version);
   await recordChange(
@@ -373,10 +420,10 @@ export async function removeEvalFixtureGate(
 }
 
 // -------------------------------------------------------------------------------------------
-// Internals
+// Internals (the ones exported serve `cases.ts`, never `index.ts`)
 // -------------------------------------------------------------------------------------------
 
-async function readSuite(
+export async function readSuite(
   client: PoolClient,
   workspaceId: string,
   suiteId: string,
@@ -392,7 +439,7 @@ async function readSuite(
 }
 
 /** The suite row, held for this transaction, at the version the person looked at. */
-async function holdSuiteAt(
+export async function holdSuiteAt(
   client: PoolClient,
   workspaceId: string,
   action: string,
@@ -411,7 +458,7 @@ async function holdSuiteAt(
 }
 
 /** Moves the held suite one version on (and to another pinned version, when given). */
-async function nextVersion(
+export async function nextVersion(
   client: PoolClient,
   workspaceId: string,
   suiteId: string,
@@ -428,7 +475,7 @@ async function nextVersion(
   return result.rows[0]?.version as number;
 }
 
-async function recordChange(
+export async function recordChange(
   client: PoolClient,
   workspaceId: string,
   suiteId: string,
@@ -543,12 +590,18 @@ function liveSnapshots(
   };
 }
 
+interface SuiteCounts {
+  readonly fixtureGateCount: number;
+  readonly fixtureGatesNeedingAttention: number;
+  readonly caseCount: number;
+  readonly casesNeedingAttention: number;
+}
+
 async function summaryOf(
   client: PoolClient,
   workspaceId: string,
   suite: SuiteRow,
-  fixtureGateCount: number,
-  fixtureGatesNeedingAttention: number,
+  counts: SuiteCounts,
 ): Promise<EvalSuiteSummaryWire> {
   const pinned = await getWorkerDefinition(client, workspaceId, {
     definitionId: suite.worker_definition_id,
@@ -565,8 +618,7 @@ async function summaryOf(
       status: pinned?.status ?? 'published',
     },
     version: suite.version,
-    fixtureGateCount,
-    fixtureGatesNeedingAttention,
+    ...counts,
     createdBy: suite.created_by,
     createdAt: suite.created_at.toISOString(),
     updatedAt: suite.updated_at.toISOString(),
@@ -619,10 +671,33 @@ function changeWire(row: ChangeRow): EvalSuiteChangeWire {
         removedOperations: names('removedOperations'),
         changedOperations: names('changedOperations'),
       };
+    case 'case_added':
+    case 'case_retired':
+      return { ...base, kind: row.kind, ...caseOf(detail) };
+    case 'case_edited':
+      return { ...base, kind: 'case_edited', ...caseOf(detail), supersedes: text('supersedes') };
   }
 }
 
-function checkedReason(reason: string | undefined): string | null {
+/** A case change's detail (`cases.ts` writes it): the case row, its title then, its partition and
+ *  split. */
+function caseOf(detail: Record<string, unknown>): {
+  caseId: string;
+  title: string;
+  partition: EvalCasePartition;
+  split: EvalCaseSplit;
+} {
+  const partition = EVAL_CASE_PARTITION_VALUES.find((value) => value === detail.partition);
+  const split = EVAL_CASE_SPLIT_VALUES.find((value) => value === detail.split);
+  return {
+    caseId: typeof detail.caseId === 'string' ? detail.caseId : '',
+    title: typeof detail.title === 'string' ? shownFreeText(detail.title) : '',
+    partition: partition ?? 'full',
+    split: split ?? 'holdout',
+  };
+}
+
+export function checkedReason(reason: string | undefined): string | null {
   if (reason === undefined) return null;
   const trimmed = reason.trim();
   refuseCredentialText('reason', trimmed);

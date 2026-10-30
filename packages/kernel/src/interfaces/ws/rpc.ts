@@ -24,6 +24,7 @@ import {
 } from '../../application/chat/index.js';
 // S10 E3-1a: an evaluation suite's refusals, imported directly like the domain errors around.
 import {
+  EvalFixtureGateInUseError,
   EvalSuiteInputError,
   EvalSuiteNameTakenError,
   EvalSuiteNotFoundError,
@@ -631,7 +632,11 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (err instanceof EvalSuiteInputError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
-  if (err instanceof EvalSuiteStateError || err instanceof EvalSuiteNameTakenError) {
+  if (
+    err instanceof EvalSuiteStateError ||
+    err instanceof EvalSuiteNameTakenError ||
+    err instanceof EvalFixtureGateInUseError
+  ) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // S10 E1 — WS equivalents of capability-route.ts's own mappings for these two classes.

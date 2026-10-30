@@ -69,13 +69,15 @@ export interface SheetContentProps
 export const SheetContent = forwardRef<
   ElementRef<typeof DialogPrimitive.Content>,
   SheetContentProps
->(function SheetContent({ side, className, ...rest }, ref) {
+>(function SheetContent({ side, size, className, ...rest }, ref) {
   return (
     <SheetPortal>
       <SheetOverlay />
       <GuardedDialogContent
         ref={ref}
-        className={cn(sheetVariants({ side }), className)}
+        // `size` was dropped here (and reached the DOM as an attribute) until S10 E3-1b, so a
+        // `wide` sheet opened at the default width.
+        className={cn(sheetVariants({ side, size }), className)}
         {...rest}
       />
     </SheetPortal>

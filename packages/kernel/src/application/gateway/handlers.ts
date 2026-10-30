@@ -209,12 +209,16 @@ import {
 // S10 E3-1a — evaluation suites (eval-handlers.ts, the one gateway file that imports
 // application/eval).
 import {
+  addEvalCaseHandler,
   addEvalFixtureGateHandler,
   createEvalSuiteHandler,
+  editEvalCaseHandler,
+  getEvalCaseHandler,
   getEvalSuiteHandler,
   listEvalSuitesHandler,
   removeEvalFixtureGateHandler,
   repinEvalSuiteHandler,
+  retireEvalCaseHandler,
   syncEvalFixtureGateHandler,
 } from './eval-handlers.js';
 // S8 W1-C (F6) — execution_readiness / resolve_refs, split into their own files (same
@@ -2402,6 +2406,10 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['add_eval_fixture_gate', addEvalFixtureGateHandler],
   ['sync_eval_fixture_gate', syncEvalFixtureGateHandler],
   ['remove_eval_fixture_gate', removeEvalFixtureGateHandler],
+  ['get_eval_case', getEvalCaseHandler],
+  ['add_eval_case', addEvalCaseHandler],
+  ['edit_eval_case', editEvalCaseHandler],
+  ['retire_eval_case', retireEvalCaseHandler],
   // S11 P1-C packs (pack-handlers.ts)
   ['list_packs', listPacksHandler],
   ['preview_pack_install', previewPackInstallHandler],

@@ -1,22 +1,25 @@
 import type {
+  EvalCaseSummaryWire,
   EvalFixtureGateWire,
   EvalSuiteWire,
   GatekeeperSummaryWire,
   OperationSummaryWire,
 } from '@nexttime/shared';
-import { type RefObject, useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useResource } from '../../hooks/useResource.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import { workerItemId } from '../../lib/catalog.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { type ErrorOverrides, isVersionChangedError } from '../../lib/errors.js';
+import { isVersionChangedError } from '../../lib/errors.js';
 import {
   liveStateNotice,
   operationDiffParts,
   pinnedWorkerName,
   shownName,
   suiteChangeText,
+  suiteVersionStep,
   syncPreview,
+  writeErrors,
 } from '../../lib/evaluation.js';
 import { actionKindTagText, formatDateTime, formatRelative } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
@@ -36,6 +39,8 @@ import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { StillNeeded } from '../kit/still-needed.js';
 import { Textarea } from '../kit/textarea.js';
+import { type OpenedCase, SuiteCases } from './SuiteCases.js';
+import { useFocusAfterChange, useLoadWhen } from './hooks.js';
 
 export interface SuiteDetailProps {
   readonly http: CapabilityCaller;
@@ -49,23 +54,6 @@ export interface SuiteDetailProps {
 }
 
 const REASON_MAX = 500;
-
-/** 「用例集版本 v2 → v3」: what every change does to the suite's version. */
-function suiteVersionStep(version: number, t: Translate): string {
-  const next = version + 1;
-  return t(`用例集版本 v${version} → v${next}`, `Suite version v${version} → v${next}`);
-}
-
-/** Every write names the suite version the reader saw (`suiteVersion`); another change in between
- *  is refused (409 `version_changed`) and nothing is written. The detail re-reads the suite then. */
-function writeErrors(t: Translate): ErrorOverrides {
-  return {
-    version_changed: t(
-      '用例集在你打开之后被改过，什么也没有保存。已重新读取最新内容，看过后再操作。',
-      'The suite changed after you opened it, and nothing was saved. The latest version has been loaded; look it over and try again.',
-    ),
-  };
-}
 
 /**
  * components/evaluation/SuiteDetail (S10 E3-1a): one evaluation suite — the Worker version it pins
@@ -91,6 +79,8 @@ export function SuiteDetail({
   const mutate = suite.mutate;
   // A removed gate takes its card, and the 移除 that had focus, with it.
   const [gatesSection, focusGatesSection] = useFocusAfterChange<HTMLElement>();
+  // The case sheet, held here so a fixture gate card can open the cases that use its gate.
+  const [openedCase, setOpenedCase] = useState<OpenedCase | null>(null);
 
   const reread = useCallback(async () => {
     const fresh = await http.call<EvalSuiteWire>('get_eval_suite', { suiteId });
@@ -124,15 +114,19 @@ export function SuiteDetail({
 
   /** One governed change at the version shown; the result replaces the suite. A stale version
    *  re-reads the suite and rethrows, so the confirm says what happened and stays open. */
-  async function change(write: () => Promise<EvalSuiteWire>): Promise<void> {
+  async function changeTo(write: () => Promise<EvalSuiteWire>): Promise<EvalSuiteWire> {
     try {
       const next = await write();
       mutate(() => next);
       onChanged(next);
+      return next;
     } catch (err) {
       if (isVersionChangedError(err)) await reread().catch(() => undefined);
       throw err;
     }
+  }
+  async function change(write: () => Promise<EvalSuiteWire>): Promise<void> {
+    await changeTo(write);
   }
 
   const workerName = pinnedWorkerName(definitions, data.workerDefinition);
@@ -311,6 +305,10 @@ export function SuiteDetail({
               gate={gate}
               suiteVersion={data.version}
               principalNames={principalNames}
+              usedBy={data.cases.filter((item) =>
+                item.fixtureOperations.some((pair) => pair.gatekeeperId === gate.gatekeeperId),
+              )}
+              onOpenCase={(caseId) => setOpenedCase({ mode: 'case', caseId })}
               onSync={
                 can('sync_eval_fixture_gate') !== false
                   ? () =>
@@ -340,6 +338,15 @@ export function SuiteDetail({
           ))
         )}
       </section>
+
+      <SuiteCases
+        http={http}
+        suite={data}
+        principalNames={principalNames}
+        change={changeTo}
+        opened={openedCase}
+        onOpenedChange={setOpenedCase}
+      />
 
       <section className="stack-s" data-testid="eval-suite-history">
         <span className="section-title">{t('变更记录', 'History')}</span>
@@ -385,61 +392,6 @@ export function SuiteDetail({
       </section>
     </div>
   );
-}
-
-/** A read that runs whenever `key` is set and changes; idle while it is `null`. */
-function useLoadWhen<T>(
-  key: string | null,
-  load: () => Promise<T>,
-): {
-  readonly status: 'idle' | 'loading' | 'ready' | 'error';
-  readonly data?: T;
-  readonly error?: unknown;
-} {
-  const [state, setState] = useState<{
-    readonly key: string | null;
-    readonly status: 'idle' | 'loading' | 'ready' | 'error';
-    readonly data?: T;
-    readonly error?: unknown;
-  }>({ key: null, status: 'idle' });
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `key` decides when to read; `load` is a fresh closure every render
-  useEffect(() => {
-    if (key === null) {
-      setState({ key: null, status: 'idle' });
-      return;
-    }
-    let cancelled = false;
-    setState({ key, status: 'loading' });
-    load().then(
-      (data) => !cancelled && setState({ key, status: 'ready', data }),
-      (error: unknown) => !cancelled && setState({ key, status: 'error', error }),
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [key]);
-  return state.key === key ? state : { status: key === null ? 'idle' : 'loading' };
-}
-
-/** A change that takes away the control that had focus — the 同步 that leaves with its gate's
- *  mismatch, a removed gate's whole card (#802 UX P3-2) — hands focus to `target` instead of the
- *  page. `request` once the change is made; the move waits for the closing confirm's own focus
- *  return, which finds its control gone, and leaves alone any focus the reader has moved on to. */
-function useFocusAfterChange<T extends HTMLElement>(): readonly [RefObject<T>, () => void] {
-  const target = useRef<T>(null);
-  const [requested, setRequested] = useState(0);
-  useEffect(() => {
-    if (requested === 0) return;
-    const timer = window.setTimeout(() => {
-      const active = document.activeElement;
-      if (active === null || active === document.body || !active.isConnected) {
-        target.current?.focus();
-      }
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [requested]);
-  const request = useCallback(() => setRequested((n) => n + 1), []);
-  return [target, request];
 }
 
 /** The gate's published Operations as `list_operations` shows the reader now (by name). */
@@ -724,6 +676,8 @@ function FixtureGateCard({
   gate,
   suiteVersion,
   principalNames,
+  usedBy,
+  onOpenCase,
   onSync,
   onRemove,
 }: {
@@ -731,6 +685,9 @@ function FixtureGateCard({
   readonly gate: EvalFixtureGateWire;
   readonly suiteVersion: number;
   readonly principalNames: ReadonlyMap<string, string>;
+  /** The cases the suite holds whose fixture rules answer through this gate. */
+  readonly usedBy: readonly EvalCaseSummaryWire[];
+  readonly onOpenCase: (caseId: string) => void;
   /** Absent when the reader's role may not sync (or remove): no button then. */
   readonly onSync?: () => Promise<void>;
   readonly onRemove?: (reason: string) => Promise<void>;
@@ -777,6 +734,7 @@ function FixtureGateCard({
               http={http}
               gate={gate}
               suiteVersion={suiteVersion}
+              usedBy={usedBy}
               onSync={async () => {
                 await onSync();
                 focusCard();
@@ -784,7 +742,12 @@ function FixtureGateCard({
             />
           ) : null}
           {onRemove !== undefined ? (
-            <RemoveFixtureGateConfirm gate={gate} suiteVersion={suiteVersion} onRemove={onRemove} />
+            <RemoveFixtureGateConfirm
+              gate={gate}
+              suiteVersion={suiteVersion}
+              usedBy={usedBy.length}
+              onRemove={onRemove}
+            />
           ) : null}
         </span>
       </div>
@@ -792,6 +755,25 @@ function FixtureGateCard({
         <Notice tone="warn" testId="eval-fixture-gate-notice">
           {notice}
         </Notice>
+      ) : null}
+      {usedBy.length > 0 ? (
+        <div className="row-wrap text-small" data-testid="eval-fixture-gate-used-by">
+          <span className="text-3">
+            {t(`${usedBy.length} 条用例用到它：`, `Used by ${usedBy.length} case(s):`)}
+          </span>
+          {usedBy.map((item) => (
+            <Button
+              key={item.id}
+              variant="ghost"
+              size="s"
+              className="wrap-anywhere"
+              onClick={() => onOpenCase(item.id)}
+              data-testid="eval-fixture-gate-used-by-case"
+            >
+              {item.title}
+            </Button>
+          ))}
+        </div>
       ) : null}
       <OperationList operations={gate.operations} />
     </div>
@@ -802,11 +784,13 @@ function SyncFixtureGateConfirm({
   http,
   gate,
   suiteVersion,
+  usedBy,
   onSync,
 }: {
   readonly http: CapabilityCaller;
   readonly gate: EvalFixtureGateWire;
   readonly suiteVersion: number;
+  readonly usedBy: readonly EvalCaseSummaryWire[];
   readonly onSync: () => Promise<void>;
 }) {
   const t = useT();
@@ -817,6 +801,17 @@ function SyncFixtureGateConfirm({
   const preview = now.status === 'ready' ? syncPreview(gate.operations, now.data ?? []) : null;
   const gateName = shownName(gate.gateName);
   const parts = preview === null ? [] : operationDiffParts(preview, t);
+  // Cases whose rules answer an operation the sync drops: they stop matching (#810 UX P3-4).
+  const stranded =
+    preview === null
+      ? 0
+      : usedBy.filter((item) =>
+          item.fixtureOperations.some(
+            (pair) =>
+              pair.gatekeeperId === gate.gatekeeperId &&
+              preview.removedOperations.includes(pair.operation),
+          ),
+        ).length;
   return (
     <Confirm
       tier="medium"
@@ -838,7 +833,18 @@ function SyncFixtureGateConfirm({
         'Freezes the gate again from the operations it publishes now. Earlier suite versions keep the definitions frozen before.',
       )}
       target={gateName}
-      impact={[...parts, suiteVersionStep(suiteVersion, t)]}
+      impact={[
+        ...parts,
+        ...(stranded > 0
+          ? [
+              t(
+                `${stranded} 条用例的规则用到要移除的操作，同步后会对不上`,
+                `${stranded} case(s) have rules on an operation the sync removes; they will no longer match`,
+              ),
+            ]
+          : []),
+        suiteVersionStep(suiteVersion, t),
+      ]}
       confirmLabel={t('同步', 'Sync')}
       onConfirm={onSync}
       errorOverrides={writeErrors(t)}
@@ -861,10 +867,13 @@ function SyncFixtureGateConfirm({
 function RemoveFixtureGateConfirm({
   gate,
   suiteVersion,
+  usedBy,
   onRemove,
 }: {
   readonly gate: EvalFixtureGateWire;
   readonly suiteVersion: number;
+  /** How many cases the suite holds answer through the gate: none may, for it to go. */
+  readonly usedBy: number;
   readonly onRemove: (reason: string) => Promise<void>;
 }) {
   const t = useT();
@@ -882,14 +891,30 @@ function RemoveFixtureGateConfirm({
         if (!next) setReason('');
       }}
       anchor={
-        <Button
-          variant="ghost"
-          size="s"
-          onClick={() => setOpen(true)}
-          data-testid="eval-fixture-gate-remove-trigger"
-        >
-          {t('移除', 'Remove')}
-        </Button>
+        <span className="row-wrap">
+          <Button
+            variant="ghost"
+            size="s"
+            disabled={usedBy > 0}
+            onClick={() => setOpen(true)}
+            data-testid="eval-fixture-gate-remove-trigger"
+          >
+            {t('移除', 'Remove')}
+          </Button>
+          <StillNeeded
+            items={
+              usedBy > 0
+                ? [
+                    t(
+                      `先编辑或退役用到它的 ${usedBy} 条用例`,
+                      `edit or retire the ${usedBy} case(s) that use it`,
+                    ),
+                  ]
+                : []
+            }
+            testId="eval-fixture-gate-remove-in-use"
+          />
+        </span>
       }
       title={t(`移除夹具门 ${gateName}`, `Remove fixture gate ${gateName}`)}
       description={t(
@@ -902,7 +927,14 @@ function RemoveFixtureGateConfirm({
       danger
       confirmDisabled={trimmed === ''}
       onConfirm={() => onRemove(trimmed)}
-      errorOverrides={writeErrors(t)}
+      errorOverrides={{
+        ...writeErrors(t),
+        // A case took the gate up after this page was read.
+        fixture_gate_in_use: t(
+          '用例集里还有用例在用这个门，什么也没有改。先在「用例」一节编辑或退役它们，再移除这个门。',
+          'Cases the suite holds still use this gate, and nothing changed. Edit or retire them under Cases first, then remove the gate.',
+        ),
+      }}
       testId="eval-fixture-gate-remove"
     >
       <Field

@@ -35,6 +35,14 @@ import { Textarea } from '../kit/textarea.js';
 type FormDraft = Extract<PredicateDraft, { mode: 'form' }>;
 type ErrorList = readonly { readonly path: string; readonly message: string }[];
 
+/** What a condition's path reads from: the field's label, what its aria-label names, and the
+ *  placeholder's example paths. An observed result unless the editor is told otherwise. */
+export interface PredicateSubject {
+  readonly label: string;
+  readonly which: string;
+  readonly placeholder: string;
+}
+
 const MODE_LABEL: Readonly<Record<'all' | 'any', readonly [string, string]>> = {
   all: ['全部满足', 'All hold'],
   any: ['任一满足', 'Any holds'],
@@ -57,6 +65,7 @@ export function PredicateEditor({
   errors,
   busy,
   onChange,
+  subject,
   testId,
 }: {
   readonly id: string;
@@ -65,9 +74,16 @@ export function PredicateEditor({
   readonly errors: ErrorList;
   readonly busy: boolean;
   readonly onChange: (draft: PredicateDraft) => void;
+  /** What the paths read from (S10 E3-1b: a call's params, a run); an observed result if absent. */
+  readonly subject?: PredicateSubject;
   readonly testId: string;
 }) {
   const t = useT();
+  const pathSubject: PredicateSubject = subject ?? {
+    label: t('结果里的', 'In the result'),
+    which: t('结果里的哪个值', 'which value'),
+    placeholder: t('路径，如 status、items[0].count', 'A path, e.g. status, items[0].count'),
+  };
   const root = useRef<HTMLFieldSetElement>(null);
   const focusAfterRender = useFocusAfterRender();
   const written = draft.mode === 'form' ? predicateWithPaths(draft) : undefined;
@@ -177,6 +193,7 @@ export function PredicateEditor({
           busy={busy}
           onChange={(patch) => edit(withConditionChanged(form, node.uid, patch))}
           onRemove={() => remove(form, group, at)}
+          subject={pathSubject}
           testId={testId}
         />
       ) : (
@@ -371,6 +388,7 @@ function ConditionRow({
   busy,
   onChange,
   onRemove,
+  subject,
   testId,
 }: {
   readonly id: string;
@@ -380,6 +398,7 @@ function ConditionRow({
   readonly busy: boolean;
   readonly onChange: (patch: Partial<Omit<PredicateConditionDraft, 'kind' | 'uid'>>) => void;
   readonly onRemove: () => void;
+  readonly subject: PredicateSubject;
   readonly testId: string;
 }) {
   const t = useT();
@@ -392,15 +411,12 @@ function ConditionRow({
       data-testid={`${testId}-condition`}
     >
       <div className="row-wrap predicate-condition-row">
-        <Field id={`${id}-path`} label={t('结果里的', 'In the result')}>
+        <Field id={`${id}-path`} label={subject.label}>
           <input
             id={`${id}-path`}
             className="input input-mono"
-            aria-label={t(`第 ${n} 个条件：结果里的哪个值`, `Condition ${n}: which value`)}
-            placeholder={t(
-              '路径，如 status、items[0].count',
-              'A path, e.g. status, items[0].count',
-            )}
+            aria-label={t(`第 ${n} 个条件：${subject.which}`, `Condition ${n}: ${subject.which}`)}
+            placeholder={subject.placeholder}
             value={node.path}
             onChange={(event) => onChange({ path: event.target.value })}
             disabled={busy}

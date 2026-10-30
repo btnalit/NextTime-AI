@@ -90,6 +90,7 @@ export const AUDITOR_READ_CAPABILITIES: ReadonlySet<string> = new Set<Capability
   // S10 E3-1a: evaluation suites are open to every person (§5.6 "auditor 只读")
   'list_eval_suites',
   'get_eval_suite',
+  'get_eval_case',
   // the workspace and the auditor itself
   'get_workspace',
   'list_models',

@@ -52,6 +52,7 @@ export {
   PREDICATE_REFUSAL_ANSWERS,
   bindingPathProblems,
   bindingSchemaProblems,
+  documentPathProblems,
   evaluatePredicate,
   lintPredicate,
   predicateLiterals,

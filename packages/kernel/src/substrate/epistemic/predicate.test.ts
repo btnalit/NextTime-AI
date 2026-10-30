@@ -1,4 +1,4 @@
-import type { Predicate } from '@nexttime/shared';
+import { EVAL_ASSERTION_ROOTS, type Predicate, evalCallCountPath } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
   PREDICATE_EMPTY_PROBES,
@@ -6,6 +6,7 @@ import {
   type PredicateLintBudget,
   bindingPathProblems,
   bindingSchemaProblems,
+  documentPathProblems,
   evaluatePredicate,
   lintPredicate,
   predicateRefusalProbes,
@@ -545,5 +546,48 @@ describe('binding paths (S11 GO5d-1)', () => {
     const failed = selectPath({ a: 'x' }, 'length(a.b.c) > `1` && abs(a)');
     expect(failed.found).toBe(false);
     expect(failed.found === false && failed.error).toBeTruthy();
+  });
+});
+
+describe("document paths (S10 E3-1b: an evaluation case's assertions)", () => {
+  const roots = EVAL_ASSERTION_ROOTS;
+  it('takes a path that starts at one of the roots, an absence and a filter included', () => {
+    for (const path of [
+      'result.summary',
+      'result.output.hosts[0].name',
+      "result.output.hosts[?name=='web-1'] | length(@)",
+      evalCallCountPath('6b0e2f1e-3d4a-4c4e-9a8b-0d2c4e6f8a1b', "it's `odd`"),
+      'length(calls)',
+      'calls[0].params.host',
+      'result.summary || calls[0].operation',
+    ]) {
+      expect(documentPathProblems(path, roots), path).toEqual([]);
+    }
+  });
+
+  it('refuses a path that reads the document itself, another field, or nothing', () => {
+    expect(documentPathProblems('summary', roots)).toEqual([
+      'path "summary" reads "summary" — the document has only result and calls',
+    ]);
+    expect(documentPathProblems('result.ok || outcome', roots)[0]).toMatch(/reads "outcome"/);
+    for (const path of ['@', 'keys(@)', '[0]', '*.summary', 'length(@)']) {
+      expect(documentPathProblems(path, roots)[0], path).toMatch(
+        /reads the document itself|reads nothing/,
+      );
+    }
+    expect(documentPathProblems("'literal'", roots)[0]).toMatch(/reads nothing from the document/);
+    expect(documentPathProblems('result[', roots)[0]).toMatch(/is not a JMESPath expression/);
+    expect(documentPathProblems('result.__proto__', roots)[0]).toMatch(/goes through __proto__/);
+  });
+
+  it('judges an absence on the document as the evaluation will', () => {
+    const gate = '6b0e2f1e-3d4a-4c4e-9a8b-0d2c4e6f8a1b';
+    const never: Predicate = { path: evalCallCountPath(gate, 'hosts.restart'), op: 'eq', value: 0 };
+    const call = { gatekeeperId: gate, operation: 'hosts.restart' };
+    expect(evaluatePredicate(never, { result: {}, calls: [] }).outcome).toBe('satisfied');
+    expect(evaluatePredicate(never, { result: {}, calls: [call] }).outcome).toBe('unsatisfied');
+    expect(
+      evaluatePredicate(never, { result: {}, calls: [{ ...call, gatekeeperId: 'other' }] }).outcome,
+    ).toBe('satisfied');
   });
 });

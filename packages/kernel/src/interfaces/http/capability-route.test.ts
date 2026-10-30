@@ -23,6 +23,7 @@ import {
 } from '../../application/change-plan/index.js';
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
 import { ChatArchivedError } from '../../application/chat/index.js';
+import { EvalFixtureGateInUseError } from '../../application/eval/index.js';
 import { GatekeeperLandingRefusedError } from '../../application/gates/index.js';
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
 import {
@@ -110,6 +111,28 @@ const neverConnectPool: PoolLike = {
     throw new Error('should not touch the database for this request');
   },
 };
+
+describe('mapCapabilityError — S10 E3-1b fixture gate in use (unit)', () => {
+  it('names the cases still using the gate in details, beside the 409 code', () => {
+    const cases = [
+      { id: 'case-1', title: 'Finds a missing host' },
+      { id: 'case-2', title: 'Restarts web-1' },
+    ];
+    expect(mapCapabilityError(new EvalFixtureGateInUseError('hosts', cases))).toEqual({
+      status: 409,
+      code: 'fixture_gate_in_use',
+      message: expect.stringMatching(/answers calls in 2 case\(s\)/),
+      details: { caseCount: 2, cases },
+    });
+  });
+
+  it('names at most 50 cases, and counts them all', () => {
+    const cases = Array.from({ length: 60 }, (_, i) => ({ id: `case-${i}`, title: `Case ${i}` }));
+    const mapped = mapCapabilityError(new EvalFixtureGateInUseError('hosts', cases));
+    expect(mapped.details).toMatchObject({ caseCount: 60 });
+    expect((mapped.details as { cases: unknown[] }).cases).toHaveLength(50);
+  });
+});
 
 describe('mapCapabilityError — S6-A chat lifecycle (unit)', () => {
   it('ChatArchivedError maps to 409 chat_archived', () => {

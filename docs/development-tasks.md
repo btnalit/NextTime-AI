@@ -4586,6 +4586,11 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **能力与授权**：7 个人工通道能力，dispatch `actsForPerson` → handler `personOf` → depcruise `kernel-eval-imported-only-by-eval-handlers` 三层；读能力并入 `AUDITOR_READ_CAPABILITIES`；名字、说明、原因按凭据与遮蔽标记拒绝写入，读出经 `shownFreeText`；写带 `suiteVersion`，冲突 409 `version_changed`，重名 409 `eval_suite_name_taken`。
   - **控制台**：「治理 → 评测」（`#/govern/evaluation/suites[/<id>]`）：新建 Sheet（Worker 与版本下拉选）、换版本、添加 / 同步（预览新增 / 移除 / 变更）/ 移除夹具门（原因必填）、变更记录；操作名走 `actionKindTagText`、门名与 Worker 名走 `visibleText`；e2e 截图门新增 `evaluation` 面。
   - **后续**：holdout 读路径约束与测试在 E3-1b；#493 对 #796 留下的两件（评测 Task 的读范围、带范围的 Worker 发起目标）记在 E3-2 的分叉里。
+- 实现说明（E3-1b 评测用例，#810，2026-10-30 合入，eb4dd1c；迁移 worker/0008 可逆，须与 0007 同版本发布）：
+  - **用例**：固定字段（分区回归 / 机制 / 全量、dev / holdout、机制分区的机制）写入后不改（E3-1 分叉 6）；输入为文本或 JSON；夹具规则按序、第一条匹配作答，选用例集里的一个夹具门和冻结的 Operation，条件按参数或谓词，应答「返回数据」「不存在」（只对声明了不存在应答的观察类 Operation）或「报错」；断言是作用在 `{result, calls}` 上的谓词，至少一条。编辑与退役必填原因。业务规则在 `application/eval/cases.ts`、`case-reads.ts`。
+  - **holdout 读路径**：用例内容只存在 `eval_cases`，唯一读路径是人调用 `get_eval_case`；`Capability.auditWithheldParamKeys`（值固定 `[withheld]`，payload 列 `withheldParams`）与凭据规则 `redactedParamKeys` 分开；控制台审计页说明内容在「治理 → 评测」查看。变异检查：去掉省略逻辑后测试在 `audit_records` 里找到 7 个标记。
+  - **摘要**：`get_eval_suite` 的 `cases` 摘要带 `fixtureOperations`，不读用例内容（#493 审查 P3 本 PR 修）；`fixture_gate_in_use` 的 `details` 带用例标题，只回给调用人、不进审计。
+  - **下一步**：E3-1c holdout 防泄漏扫描；runs / trials 在 E3-2。
 - 2026-10-23 设计输入（victor 定分叉 2 = b，与自进化闭环审查 §2.3–§2.5、§7.1）：回归断言失败或判 `worse` 时，发布人要逐条确认失败项并写理由，记审计（同 10-09「已核对凭据」）；`inconclusive` 只显示、不加确认（避免确认疲劳）；按每月测试额度，MVP 主力是确定性回归棘轮 + 大效应机制筛，样本不够判 `inconclusive`，不显示成「在噪声内」；δ 与 k 改为在夹具上做 A/A 重跑校准（主机只有验收账号，遗留 230）。
 
 **GO16 — 沉淀提议：WorkerSpec 组合提议为 WorkerDefinition**（见 `global-roadmap-2026-10-16.md` §4）
