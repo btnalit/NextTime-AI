@@ -13,6 +13,7 @@ import { goalRun, stepRun } from '../components/goals/goal-fixtures.test-helpers
 import {
   type GoalMilestone,
   absenceOperationKey,
+  actionFailureCodeText,
   checkErrorLabel,
   checkErrorReason,
   checkKindLabel,
@@ -133,6 +134,41 @@ describe('lib/goals', () => {
     expect(planHintKey({ code: 'step_capability_not_held', message: 'm', stepKey: 'a' })).not.toBe(
       planHintKey({ code: 'step_capability_not_held', message: 'm', stepKey: 'b' }),
     );
+  });
+
+  it('legacy 513: a step on a gate where the requester has not connected their own account — who connects it, where, and what comes next', () => {
+    const gateNames = new Map([['11111111-2222-4333-8444-555555555555', 'mail-gate']]);
+    const hint = {
+      code: 'step_account_not_connected' as const,
+      message: 'step "send": …',
+      stepKey: 'send',
+      gatekeeperIds: ['11111111-2222-4333-8444-555555555555'],
+    };
+    const proposal = planHintText(hint, zh, gateNames);
+    expect(proposal).toMatch(
+      /^步骤「send」要用请求人自己的账户操作门「mail-gate」，请求人还没有在这个门上连接账户：/,
+    );
+    // Approving does not help: only the requester's own credential does.
+    expect(proposal).toContain('批准也改变不了');
+    expect(proposal).toContain(
+      '请求人可以先在「系统与授权」里给这个门「录入我的凭证」再确认，或者驳回',
+    );
+    const revised = planHintText(hint, zh, gateNames, 'revision');
+    expect(revised).toContain('或者再修订计划，换掉或移除这一步。');
+    expect(revised).not.toContain('驳回');
+    expect(planHintText(hint, en, gateNames)).toMatch(
+      /^Step “send” acts on gate “mail-gate” with the requester’s own account, .*Enter my credential/,
+    );
+    expect(isStepAuthorityHint(hint)).toBe(true);
+    expect(stepHintChipLabel(hint, zh)).toBe('请求人未连接账户');
+  });
+
+  it("legacy 513: a step's refused action reads by its code, never as the code itself", () => {
+    expect(actionFailureCodeText('credential_unavailable', zh)).toContain('录入我的凭证');
+    expect(actionFailureCodeText('credential_unavailable', en)).not.toContain(
+      'credential_unavailable',
+    );
+    expect(actionFailureCodeText('gate_unreachable', zh)).toBe('连不上门');
   });
 
   it('reads a predicate as a sentence: leaves, all / any / not', () => {

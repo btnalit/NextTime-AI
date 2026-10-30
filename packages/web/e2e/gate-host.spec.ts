@@ -313,6 +313,14 @@ test.describe('P-B2a acceptance: a generic mcp gate-host instance, end to end', 
     expect(
       (await page.request.get(`/gate-host/i/${GATE_ID}/gate/connected-accounts`)).status(),
     ).toBe(404);
+    // Legacy 513: whether a member connected is the kernel's question alone.
+    expect(
+      (
+        await page.request.post(`/gate-host/i/${GATE_ID}/gate/credential-presence`, {
+          data: { onBehalfOf: 'anyone' },
+        })
+      ).status(),
+    ).toBe(404);
 
     // --- 测试连接: the gate host's own health probe against the fixture, through the take-over
     //     from the previous test — never `unreachable` once taken over. Asserted on `data-status`

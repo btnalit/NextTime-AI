@@ -38,6 +38,7 @@ import { StatusChip } from '../kit/status-chip.js';
 import { Textarea } from '../kit/textarea.js';
 import { ActionFailureNotice, FailureReasonWhere } from './ActionFailure.js';
 import { ActionWaitingNotice } from './ActionWaiting.js';
+import { RequesterAccountNotice } from './RequesterAccountNotice.js';
 import { nameOf, resourceScopeLabel } from './useDirectoryNames.js';
 
 export interface ApprovalDecisionInput {
@@ -405,6 +406,12 @@ export function ApprovalDetail({
       </header>
 
       <ActionWaitingNotice row={row} testId="approval-waiting" />
+      {row.status === 'pending_approval' && row.onBehalfOfAccount === 'not_connected' ? (
+        <RequesterAccountNotice
+          own={callerPrincipalId != null && row.onBehalfOf === callerPrincipalId}
+          testId="approval-requester-account"
+        />
+      ) : null}
       <ActionFailureNotice
         row={row}
         check={{

@@ -67,6 +67,38 @@ describe('HttpGatekeeperClient', () => {
     expect(result).toEqual({ data: { qty: 3 } });
   });
 
+  it('credentialPresence (legacy 513) POSTs who to ask about and answers the mode and a yes or no', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://example.test/gate/credential-presence');
+      expect(init?.method).toBe('POST');
+      expect(JSON.parse(init?.body as string)).toEqual({ onBehalfOf: 'user-a' });
+      return jsonResponse({
+        ok: true,
+        result: { credentialMode: 'connected_account', present: false },
+      });
+    });
+    const client = new HttpGatekeeperClient({ fetchImpl });
+    expect(await client.credentialPresence(GATE, 'user-a')).toEqual({
+      credentialMode: 'connected_account',
+      present: false,
+    });
+  });
+
+  it('credentialPresence refuses an answer carrying anything more than the mode and the boolean', async () => {
+    for (const result of [
+      { credentialMode: 'connected_account', present: true, credential: { token: 'x' } },
+      { credentialMode: 'shared', present: true },
+      { credentialMode: 'connected_account' },
+    ]) {
+      const client = new HttpGatekeeperClient({
+        fetchImpl: vi.fn(async () => jsonResponse({ ok: true, result })),
+      });
+      await expect(client.credentialPresence(GATE, 'user-a')).rejects.toMatchObject({
+        code: 'invalid_response',
+      });
+    }
+  });
+
   it('apply carries actionRequestId through', async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(init?.body as string);

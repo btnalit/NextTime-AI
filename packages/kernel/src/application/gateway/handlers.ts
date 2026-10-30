@@ -173,7 +173,7 @@ import {
   toWireTurnAttribution,
 } from './attribution-handlers.js';
 import { ForbiddenError } from './authorize.js';
-import type { CapabilityHandler } from './capability-handler.js';
+import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 import { computeCapabilityReachability, operationReachability } from './capability-reachability.js';
 // S11 P1-B: the workspace's ChangePlan segments (安装历史) and their rollback.
 import {
@@ -192,6 +192,11 @@ import {
   requestConnectionHandler,
   rotateConnectionSecretHandler,
 } from './connection-handlers.js';
+import {
+  accountOnGateKey,
+  connectedAccountPresenceOf,
+  servesPerson,
+} from './credential-presence.js';
 // S8 W3 K2 (leftover 82) — discard_draft, same one-capability-per-file convention as
 // export-prov-handler.ts/operation-manifest-handlers.ts below.
 import { discardDraftHandler } from './discard-draft-handler.js';
@@ -1427,15 +1432,45 @@ const rejectHandler: CapabilityHandler = async (client, workspaceId, params) => 
   };
 };
 
+/**
+ * Legacy 513: on each `pending_approval` row, whether its requester has connected their own account
+ * on its gate (`onBehalfOfAccount`, `credential-presence.ts`) — so the approval card says "this
+ * member has not connected this account" before anyone approves a call the gate would refuse.
+ * Only for a person ({@link servesPerson}); rows are left as they are otherwise.
+ */
+async function withRequesterAccounts(
+  client: PoolClient,
+  workspaceId: string,
+  wires: readonly ReturnType<typeof toWireActionRequest>[],
+  ctx: CapabilityHandlerContext | undefined,
+): Promise<ReturnType<typeof toWireActionRequest>[]> {
+  if (!servesPerson(ctx)) return [...wires];
+  const presence = await connectedAccountPresenceOf(
+    client,
+    workspaceId,
+    wires
+      .filter((wire) => wire.status === 'pending_approval')
+      .map((wire) => ({ principalId: wire.onBehalfOf, gatekeeperId: wire.gatekeeperId })),
+  );
+  return wires.map((wire) => {
+    const answer =
+      wire.status === 'pending_approval'
+        ? presence.get(accountOnGateKey(wire.onBehalfOf, wire.gatekeeperId))
+        : undefined;
+    return answer !== undefined ? { ...wire, onBehalfOfAccount: answer } : wire;
+  });
+}
+
 /** `list_pending`: the caller's own I14-scoped queue (`governance/approval/reads.ts`'s
  *  `listPendingForApprover`). §3 envelope — `{items}`, never a bare array. */
-const listPendingHandler: CapabilityHandler = async (client, workspaceId) => {
+const listPendingHandler: CapabilityHandler = async (client, workspaceId, _params, ctx) => {
   const caller = await currentPrincipalRole(client, workspaceId);
   const rows = await listPendingForApprover(client, workspaceId, {
     principalId: caller.id,
     role: caller.role,
   });
-  return { result: { items: await withApprovalDecision(client, workspaceId, rows) } };
+  const items = await withApprovalDecision(client, workspaceId, rows);
+  return { result: { items: await withRequesterAccounts(client, workspaceId, items, ctx) } };
 };
 
 /** `get_action` (R-42, maintainer decision D-22): one ActionRequest under the same visibility as
@@ -1444,7 +1479,7 @@ const listPendingHandler: CapabilityHandler = async (client, workspaceId) => {
  *  one they requested themselves. A row outside that visibility answers 404 exactly like an
  *  unknown id, so a single-row read never shows more than the list does (its `params` can carry
  *  an ssh command line or API arguments). */
-const getActionHandler: CapabilityHandler = async (client, workspaceId, params) => {
+const getActionHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { actionRequestId } = params as { actionRequestId: string };
   const caller = await currentPrincipalRole(client, workspaceId);
   const result = await getActionRequestVisibleTo(
@@ -1454,8 +1489,14 @@ const getActionHandler: CapabilityHandler = async (client, workspaceId, params) 
     actionRequestId,
   );
   if (!result) throw new ActionRequestNotFoundError(workspaceId, actionRequestId);
+  const [wire] = await withRequesterAccounts(
+    client,
+    workspaceId,
+    [await oneWithApprovalDecision(client, workspaceId, result)],
+    ctx,
+  );
   return {
-    result: await oneWithApprovalDecision(client, workspaceId, result),
+    result: wire,
     resourceType: 'action_request',
     resourceId: actionRequestId,
   };

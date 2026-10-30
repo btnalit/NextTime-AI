@@ -1039,7 +1039,7 @@ Operation 一律 409，不执行任何东西（fail closed）。
    ```
 
    判读：基于旧 gatekeeper-base 的自连门不校验摘要，升级后照常工作。只有 owner 用新 base 重建、且门的清单与导入副本不一致的
-   自连门会被拒，处理见 `add-gatekeeper.md` §12。v0.49.0 及以前产品内没有同步路径；#612 起（v0.49.0 之后的下一版）系统抽屉有
+   自连门会被拒，处理见 `add-gatekeeper.md` §12。v0.49.0 及以前产品内没有同步路径；#612 起（v0.50.0）系统抽屉有
    「重新读取门的清单」，按门自己的描述预览差异并开修订 / 导入草稿，由 owner 发布后生效，见 §12 那一行。
 
 3. §3.20 的候选参数查询照跑，判读时门拥有的头名单补上：`es-security-runas-user`、`X-Run-As`、`X-Hasura-*`、`x-functions-key`、
@@ -1078,14 +1078,14 @@ SQL 列出的自连门清单就是要逐个确认的范围。
 
 **存量清洗 `STEP raw-secret-scrub`**：`--pull` 在 `BACKUP_NOW` 之后自动跑 `node dist/cli/scrub-raw-secrets.js --yes`（备份失败就跳过；
 失败不致命；可重复执行；日志 `drills/apply-<tag>-<ts>-raw-secret-scrub.log`，apply 日志里一行 `STEP raw-secret-scrub exit=…` 带摘要）。
-- 改写 3 类（人会读的智能体副本）：`turnReports`、`decisions`、`toolCallRecords`。v0.49.0 之后的下一版起改写 6 类：#620（core 0045）加
+- 改写 3 类（人会读的智能体副本）：`turnReports`、`decisions`、`toolCallRecords`。v0.50.0 起改写 6 类：#620（core 0045）加
   `selfConnectionAddresses`（自连门在平台面的地址副本，`workspace_self_connections.target / endpoint`，见 §3.34），#637 加 `gatekeeperNames`
   （Gatekeeper 的 `name`）与 `connectedSystems`（门旁 ConnectedSystem 的 identity key `name`、`target`、`name`）。名字按读侧的显示规则改写；
   剪掉凭据后同名的，按键序第一个拿到名字，其余释放 identity key，名字留在 `properties.name`，并以 `properties.duplicateOf` 指向持有者。
 - 只计数、不改写 7 类，日志只列行 id、从不列值：`taskInputs`、`connectionTargets`、`gatekeeperAddresses`、`gateInstanceAddresses`、
   `factProperties`、`objectProperties`、`auditResults`。其中 Task 输入、审计里的门结果和 Fact / 对象属性在读出时已经遮蔽，原文留在库里和
   备份里。
-- 只列、不改 1 类（v0.49.0 之后的下一版起，#637）：`connectedSystemDuplicates`，不是凭据，列出被写成重复件的 ConnectedSystem（本次与以往
+- 只列、不改 1 类（v0.50.0 起，#637）：`connectedSystemDuplicates`，不是凭据，列出被写成重复件的 ConnectedSystem（本次与以往
   运行）；报告里这一类的标签是 `listed, nothing to fix`，与只计数的类别分开看。dry run 只列以往运行留下的：剪后是否撞名，要等前面的名字改写之后才知道。
 - 写一条平台审计 `cli.raw_secrets_scrubbed`（只有计数和行 id）；core 0043 只为允许这条未署名的主机操作放宽 `audit_records_actor_shape`。
 - 要逐行读 `audit_records` 等表，表大时会拉长窗口。
@@ -1105,7 +1105,7 @@ docker compose run --rm --no-deps -T kernel node dist/cli/scrub-raw-secrets.js -
 
 **维护窗口前**（在当前版本上跑，只读，主机执行）：用目标 tag 里的预检 SQL 估上限，再记下相关表的行数用来估耗时，结果记 `docs/private/`。
 预检文件随 tag 发布，`--prefetch` 之后本地就有这个 tag；`<目标 tag>` 与 §3.27 的窗口目标是同一个（开窗口时刷新为当时最新的发版）。
-v0.49.0 之后的下一版起预检多两列上界 `gatekeeper_names`、`connected_systems`（#637）：
+v0.50.0 起预检多两列上界 `gatekeeper_names`、`connected_systems`（#637）：
 
 ```sh
 ssh -n <主机别名> 'cd <检出目录> && (echo "begin transaction read only;"; git show <目标 tag>:packages/kernel/src/cli/scrub-raw-secrets.preflight.sql; echo "rollback;") | docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1'
@@ -1186,32 +1186,37 @@ SQL
 Caddyfile，日志重新记录请求头与查询串原文；不要为了「生效」去主动重建 caddy（没被重建的 caddy 继续遮蔽，更安全）。回滚期间不要用
 API key 经 caddy 调接口。
 
-### 3.27 升级窗口总清单：v0.46.0 → v0.49.0
+### 3.27 升级窗口总清单：v0.46.0 → v0.50.0
 
-v0.47.0、v0.48.0 不单独上主机（#554 不在 v0.47.0 里，遗留 259 的修复 #561 不在 v0.48.0 里），一次窗口直接到 v0.49.0。v0.49.0 收齐：#541（只改控制台渲染
+**2026-10-30 刷新**：维护者 2026-10-16 暂缓窗口，2026-10-30 开窗口时目标改为当时最新的发版 v0.50.0。v0.47.0、v0.48.0、v0.49.0 都不单独上主机，一次窗口从 v0.46.0 直接到 v0.50.0。v0.50.0 在 v0.49.0 之上带了 §3.28–§3.74 各节（索引见本节末尾），**每一节的「窗口前」「应用后」「回滚」都要按节执行**；下表第 2、8、9、10 行把它们按时机汇总，细节以各节为准。
+
+以下是 v0.49.0 部分的原清单（仍然适用）：v0.47.0、v0.48.0 不单独上主机（#554 不在 v0.47.0 里，遗留 259 的修复 #561 不在 v0.48.0 里）。v0.49.0 收齐：#541（只改控制台渲染
 与两个只读查询）、#549（§3.25）、#554、#559 与 #561（只改控制台与 CI 守卫，无主机步骤）、#556（§3.26）；v0.49.0 只比 v0.48.0 多 #561 与 STATUS。迁移只有 core 0043（放宽一条审计约束）。没有 Handle 吊销，不需要排空 Worker。
 先确认起点：`git describe --tags --exact-match </dev/null` 应输出 `v0.46.0`；上主机前按 §1 第 5 步对同一个 tag 跑一次 `staging` 预演。
 
 窗口开始前告诉维护者：执行会话被本地权限检查拦下时会停下等他批准（§3 开头，遗留 231），请他在场或提前加好允许规则。
 
 主机直连 GitHub 不稳定：`git fetch` 拿不到 tag 时，从维护者电脑用 git bundle 导入 tag（bundle 的具体路径记在 `docs/private/`，不入库），
-导入后核对 `git rev-parse 'v0.49.0^{commit}'` 等于发版 commit，再做第 1 步。
+导入后核对 `git rev-parse 'v0.50.0^{commit}'` 等于发版 commit，再做第 1 步。
 
 | # | 时机 | 步骤 | 谁 |
 |---|---|---|---|
-| 1 | 窗口前 | `--prefetch v0.49.0`，日志最后一行 `RESULT ok`（§3）；tag 拿不到时先按上面用 bundle 导入并核对 commit | 主机 |
-| 2 | 窗口前 | §3.25 的预检 SQL 与表行数；目标含 #644 时再跑 §3.38 的打包门只读检查（不为空先改 `.env` 的 `GATE_CONNECTOR`）；目标含 #650 时可选跑 §3.40 的本体族只读检查；结果记 `docs/private/` | 主机 |
-| 3 | 窗口内 | `--pull v0.49.0`，**按最后一行 RESULT 判断，不按退出码**（§3）。日志里应看到：`STEP caddy-log-redaction` 各项 PASS（caddy 由 `up -d` 或 `mount-refresh` 重建，看不到 `mount-refresh caddy recreated` 不算异常；backup、update-feed 可能 recreated，也属正常，§3.26）；`STEP acceptance-fixtures none left running`；`STEP backup-now exit=0` 在前、`STEP raw-secret-scrub exit=0` 在后。`acceptance-failures` 按 §5 判断回滚；`degraded=…` 按 §3.26 的表逐项补做，补做结果记 `docs/private/` | 主机 |
+| 1 | 窗口前 | `--prefetch v0.50.0`，日志最后一行 `RESULT ok`（§3）；tag 拿不到时先按上面用 bundle 导入并核对 commit | 主机 |
+| 2 | 窗口前 | §3.25 的预检 SQL 与表行数；目标含 #644 时再跑 §3.38 的打包门只读检查（不为空先改 `.env` 的 `GATE_CONNECTOR`）；目标含 #650 时可选跑 §3.40 的本体族只读检查；结果记 `docs/private/`。v0.50.0 另加：§3.30 与 §3.32 估算 `audit_records` 回填 / 建索引的锁与等待（等不起时按 §3.32 预建并确认索引有效），§3.31 与 §3.37 看相关表行数，§3.45 查同名已发布 Skill，§3.47 四条只读查询，§3.48 清点工作区 pi 资源文件（不删），§3.50 `goal_runs` 行数，§3.52 看 `connectors` 里 `ragflow` 一行，§3.55 `plan_revisions` / `procedures` 行数，§3.56 列出部署了 `document.parse` 的工作区，§3.57 `models/` 目录属主与权限，**§3.63 只读 SQL A–E（D 有行先处理）**，§3.67 可选计数，**§3.73 `docker version` 的 Engine ≥ 26.0.0** | 主机 |
+| 3 | 窗口内 | `--pull v0.50.0`，**按最后一行 RESULT 判断，不按退出码**（§3）。日志里应看到：`STEP caddy-log-redaction` 各项 PASS（caddy 由 `up -d` 或 `mount-refresh` 重建，看不到 `mount-refresh caddy recreated` 不算异常；backup、update-feed 可能 recreated，也属正常，§3.26）；`STEP acceptance-fixtures none left running`；`STEP backup-now exit=0` 在前、`STEP raw-secret-scrub exit=0` 在后。`acceptance-failures` 按 §5 判断回滚；`degraded=…` 按 §3.26 的表逐项补做，补做结果记 `docs/private/` | 主机 |
 | 4 | 应用后 | 读 `-raw-secret-scrub.log`：改写 6 类、只计数 7 类、只列 1 类（`connectedSystemDuplicates`）的数字、`cli.raw_secrets_scrubbed` 的审计 id、全部 `counted …` 行，记 `docs/private/` | 主机 |
 | 5 | 应用后 | §3.25「应用后」的处置：只计数的地址类别 > 0 时按 `counted …` 行逐条决定 | victor 决定 |
 | 6 | 应用后 | §3.26「应用后」：owner API key 是否轮换、旧 caddy 日志副本是否清理 | victor 决定 |
 | 7 | 应用后 | 控制台核对，结果告诉远程会话记 `docs/private/`：(a) 用一个非所有者账号打开 治理 → 系统与授权 →「接入一个系统」，选一个还没在本工作区启用的实例，到「在本工作区启用」这一步应说明由谁启用、给出一句可复制发给所有者的申请、能退回，没有死路（#541 验收盲区，#554）；(b) 第 4 步 `gateInstanceAddresses` > 0 时，在 平台 → 集成 试着启用其中一个实例，应被拒并在字段上给出说明，不建链接（遗留 251）；(c) 治理 → 审计 的行标题是中文名；(d) 打开任一新建 / 添加表单先不填，提交按钮灰掉时旁边写着「还差：…」（#554）；(e) 在授权表单里选成员时，两个同名成员各带短 id、能分开（遗留 259，#561） | **victor 手动** |
+| 8 | 应用后 | v0.50.0 各节的应用后只读核对：§3.28 `vector` 扩展版本仍是 `0.8.6`（**不执行 `ALTER EXTENSION vector UPDATE`**）；§3.29 两类审计计数与内核日志 N / M 对上，旧「始终允许」规则可能显示「已暂停 · 待确认版本」由 owner 重新确认；§3.30 历史失败行多显示「结果不明」是预期；§3.31 三个触发器为 `O`、`I-G*` 不变式指标为 0；§3.32 索引 `indisvalid` 为 `t`；§3.47 迁移 NOTICE 每类 `without` 为 0；§3.48 在应用之后新建的容器上核对；§3.53 三条约束在；§3.56 `document.parse` 需平台采用 + 各工作区对齐；结果记 `docs/private/` | 主机 |
+| 9 | 应用后 | GO7b：`accept_s2` 的 fake 路径照常跑 S1、S4–S11，S12、S2 不跑（S2 摘要里有一行 `NOTE goal-disruptive …`）。S12、S2 会 `SIGKILL` 内核两次、重启 worker-supervisor 一次（整套约 35–45 分钟，每次中断约 20 秒），**只在维护者当场明确同意后**单独再跑 `ACCEPT_DISRUPTIVE=1 sh scripts/accept_s2.sh`；跑之前确认 `.env` 没有调大 `TASK_REAPER_INTERVAL_MS`、`GOAL_ACCEPTANCE_CHECK_*`、`GOAL_RECONCILE_CHECK_*`，llm-proxy 的 `UPSTREAM_IDLE_TIMEOUT_MS` 不低于 120 秒；不同意就不跑，两项以同一 tag 的 staging 结果代替，STATUS 写「staging 代替，主机未跑」 | 主机；破坏性部分 **victor 当场同意** |
+| 10 | 应用后 | GO7b：维护者挑一个遗留 230 的真实目标在主机上真实跑一遍并在控制台可查；§7.2 付费真实模型回归按协调线程的安排并入最后一轮 | **victor** |
 
-**回滚**（§5）：回滚目标是 v0.46.0，按 §3.25 与 §3.26 的回滚说明；不需要排空 Worker。
+**回滚**（§5）：回滚目标是 v0.46.0，按 §3.25 与 §3.26 的回滚说明；不需要排空 Worker。 v0.50.0 另外：worker-runtime 与 worker-supervisor 只能整版回滚（§3.48）；有接入预设实例时先停 `gate-host`（§3.52）；回滚 worker-supervisor 前先终止带 `nexttime.egress-deny-all=true` 标签的 Task（§3.73）；回退代码前先处理挂在系统接入包上的实例（§3.38）；其余按各节「回滚」。
 
-窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.34（#620：core 0045，窗口前三数预检、迁移期间不接新门、清洗改写类变成 4 个、回滚后自接门暂停失效；#637 再加两个改写类与一个只列类，见 §3.25）、§3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）、§3.36（#633：goal 0004，加列与重建一个守卫函数，无主机步骤）、§3.37（#642：governance 0023，`action_requests` 加列、约束与守卫触发器，窗口前看一眼该表行数，无主机步骤）、§3.38（#644：无迁移，窗口前打包门只读检查，内核与门宿主同版，回退代码前先处理挂在系统接入包上的实例）、§3.39（#649：governance 0024，新表与重建核对守卫，两个可选环境变量不设即默认，代码回退期间观察压缩报 degraded 可忽略）、§3.40（#650：governance 0025，只加新表，可选的窗口前本体族只读检查，模块升级可能新返回 400 `change_confirmation_required`）、§3.41（#664：goal 0005，新表与重建目标守卫，两个可选环境变量不设即默认，升级后 I-G5 指标应为 0，代码回退期间观察压缩报 degraded 可忽略）、§3.42（#670：goal 0006，步骤验收新表与新触发器，无新环境变量，代码回退期间观察压缩报 degraded 可忽略）、§3.43（#668：无迁移，能力包清单在镜像 `/app/packs`，`kernel.env` 不要设 `PACKS_DIR`）与 §3.44（#674：core 0046 + goal 0007，可逆，无新环境变量，升级后 I-G5 指标仍应为 0）与 §3.45（#679：governance 0026，可逆，窗口前只读查同名已发布 Skill，镜像新增 ops-base）与 §3.46（#690：governance 0027，可逆，镜像新增 ops-base v2，装或升级能力包后对门做一次健康探测）与 §3.47（#700：governance 0028，可逆，窗口前四条只读查询，迁移结束的 NOTICE 每类 `without` 应为 0，窗口后核对找不到主体的 Decision）与 §3.48（#698：无迁移，worker-runtime 与 worker-supervisor 同版、只能整版回滚，窗口前只读清点工作区里的 pi 资源文件，应用后在新建的容器上核对）与 §3.49（#705：无迁移，镜像新增 ops-base v3，包里的 Worker 安装时可绑门）与 §3.50（#704：goal 0008，可逆，可选环境变量 `GOAL_MAX_PROPOSED_PER_REQUESTER` 写错内核起不来）与 §3.51（#710：无迁移，门对齐时治理字段从三个扩到九个）与 §3.52（#715：无迁移，内核镜像带接入预设；有预设实例时回滚要先停 `gate-host`）与 §3.53（#716：task 0008，可逆，worker-runtime 与内核同版本）与 §3.54（#721：无迁移，镜像新增 knowledge v1 能力包）与 §3.55（#722：goal 0009 + worker 0005，可逆）与 §3.56（#726：无迁移，RAGFlow `document.parse` 收紧，需平台采用 + 各工作区对齐）与 §3.57（#730：task 0009 可逆，supervisor 加 `models/` 只读挂载，kernel 与 supervisor 同版本）与 §3.58（#728：无迁移，入口 agent 新增目标工具，验收脚本自建 fake-llm）与 §3.59（#737：linkage 0003 放宽 CHECK，可逆）与 §3.60（#745：goal 0010 加一列，不回填，可逆）与 §3.61（#747：无迁移，已有工作区可对齐入口模板，由所有者决定）与 §3.62（#753：无迁移，门可声明「不存在」的回答）与 §3.63（#759：无迁移，安全修复，窗口前只读核查 A–E）与 §3.64（#765：core 0047 加触发器守护已发布 Operation，可逆，无主机步骤）与 §3.65（#764：无迁移，`publish_skill` / `publish_procedure` 必填 `draftDigest`，契约不向后兼容）与 §3.66（#757：无迁移，发布带「不存在」声明的 Operation 要人确认）与 §3.67（#772：无迁移，新能力 `reject_draft`）；#774（遗留 486）无迁移、无主机步骤，发版说明写「指向入口定义的流程步骤在提议和发布时被拒，`find_procedures` 不再推荐这类流程」；#781（W1a E2-1）无迁移、无主机步骤，发版说明写「新能力 `get_skill_stats`（builder 起，人的通道），控制台 Skill 详情新增「使用情况」」；§3.68（#780：迁移 goal/0011，按门确认不存在验收）；#784（W1a E2-2）无迁移、无主机步骤，发版说明写「新能力 `get_procedure_stats`（builder 起，人的通道）；`find_procedures` 的结果多了 `outcomes{achieved, total}`（新增字段，旧调用方不受影响）；控制台流程详情新增「使用情况」」；§3.69（#792：迁移 worker/0006，Worker 定义族与 `invoke_worker` 的契约变化）与 §3.70（#786：迁移 goal/0012，「存在过」基线）；§3.71（#796：迁移 task/0010，任务级观察范围）；§3.72（#799：迁移 governance/0029，reconcile 用门确认不存在）；§3.73（#818：评测容器出网全拒，无迁移，窗口前核对 Docker Engine ≥ 26.0.0）。
+v0.50.0 带的各版小节（2026-10-30 已按 v0.50.0 刷新本清单；下一次发版若改窗口目标，照同样方式刷新）：§3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.34（#620：core 0045，窗口前三数预检、迁移期间不接新门、清洗改写类变成 4 个、回滚后自接门暂停失效；#637 再加两个改写类与一个只列类，见 §3.25）、§3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）、§3.36（#633：goal 0004，加列与重建一个守卫函数，无主机步骤）、§3.37（#642：governance 0023，`action_requests` 加列、约束与守卫触发器，窗口前看一眼该表行数，无主机步骤）、§3.38（#644：无迁移，窗口前打包门只读检查，内核与门宿主同版，回退代码前先处理挂在系统接入包上的实例）、§3.39（#649：governance 0024，新表与重建核对守卫，两个可选环境变量不设即默认，代码回退期间观察压缩报 degraded 可忽略）、§3.40（#650：governance 0025，只加新表，可选的窗口前本体族只读检查，模块升级可能新返回 400 `change_confirmation_required`）、§3.41（#664：goal 0005，新表与重建目标守卫，两个可选环境变量不设即默认，升级后 I-G5 指标应为 0，代码回退期间观察压缩报 degraded 可忽略）、§3.42（#670：goal 0006，步骤验收新表与新触发器，无新环境变量，代码回退期间观察压缩报 degraded 可忽略）、§3.43（#668：无迁移，能力包清单在镜像 `/app/packs`，`kernel.env` 不要设 `PACKS_DIR`）与 §3.44（#674：core 0046 + goal 0007，可逆，无新环境变量，升级后 I-G5 指标仍应为 0）与 §3.45（#679：governance 0026，可逆，窗口前只读查同名已发布 Skill，镜像新增 ops-base）与 §3.46（#690：governance 0027，可逆，镜像新增 ops-base v2，装或升级能力包后对门做一次健康探测）与 §3.47（#700：governance 0028，可逆，窗口前四条只读查询，迁移结束的 NOTICE 每类 `without` 应为 0，窗口后核对找不到主体的 Decision）与 §3.48（#698：无迁移，worker-runtime 与 worker-supervisor 同版、只能整版回滚，窗口前只读清点工作区里的 pi 资源文件，应用后在新建的容器上核对）与 §3.49（#705：无迁移，镜像新增 ops-base v3，包里的 Worker 安装时可绑门）与 §3.50（#704：goal 0008，可逆，可选环境变量 `GOAL_MAX_PROPOSED_PER_REQUESTER` 写错内核起不来）与 §3.51（#710：无迁移，门对齐时治理字段从三个扩到九个）与 §3.52（#715：无迁移，内核镜像带接入预设；有预设实例时回滚要先停 `gate-host`）与 §3.53（#716：task 0008，可逆，worker-runtime 与内核同版本）与 §3.54（#721：无迁移，镜像新增 knowledge v1 能力包）与 §3.55（#722：goal 0009 + worker 0005，可逆）与 §3.56（#726：无迁移，RAGFlow `document.parse` 收紧，需平台采用 + 各工作区对齐）与 §3.57（#730：task 0009 可逆，supervisor 加 `models/` 只读挂载，kernel 与 supervisor 同版本）与 §3.58（#728：无迁移，入口 agent 新增目标工具，验收脚本自建 fake-llm）与 §3.59（#737：linkage 0003 放宽 CHECK，可逆）与 §3.60（#745：goal 0010 加一列，不回填，可逆）与 §3.61（#747：无迁移，已有工作区可对齐入口模板，由所有者决定）与 §3.62（#753：无迁移，门可声明「不存在」的回答）与 §3.63（#759：无迁移，安全修复，窗口前只读核查 A–E）与 §3.64（#765：core 0047 加触发器守护已发布 Operation，可逆，无主机步骤）与 §3.65（#764：无迁移，`publish_skill` / `publish_procedure` 必填 `draftDigest`，契约不向后兼容）与 §3.66（#757：无迁移，发布带「不存在」声明的 Operation 要人确认）与 §3.67（#772：无迁移，新能力 `reject_draft`）；#774（遗留 486）无迁移、无主机步骤，发版说明写「指向入口定义的流程步骤在提议和发布时被拒，`find_procedures` 不再推荐这类流程」；#781（W1a E2-1）无迁移、无主机步骤，发版说明写「新能力 `get_skill_stats`（builder 起，人的通道），控制台 Skill 详情新增「使用情况」」；§3.68（#780：迁移 goal/0011，按门确认不存在验收）；#784（W1a E2-2）无迁移、无主机步骤，发版说明写「新能力 `get_procedure_stats`（builder 起，人的通道）；`find_procedures` 的结果多了 `outcomes{achieved, total}`（新增字段，旧调用方不受影响）；控制台流程详情新增「使用情况」」；§3.69（#792：迁移 worker/0006，Worker 定义族与 `invoke_worker` 的契约变化）与 §3.70（#786：迁移 goal/0012，「存在过」基线）；§3.71（#796：迁移 task/0010，任务级观察范围）；§3.72（#799：迁移 governance/0029，reconcile 用门确认不存在）；§3.73（#818：评测容器出网全拒，无迁移，窗口前核对 Docker Engine ≥ 26.0.0）；§3.74（#821：门新路由 `gate/credential-presence`，无迁移）。
 
-### 3.28 第三方镜像升钉：pgvector、node、postgres（#589，v0.49.0 之后的下一版起）
+### 3.28 第三方镜像升钉：pgvector、node、postgres（#589，v0.50.0 起）
 
 无迁移。按 issue #587（`image-pins` 每周比对，遗留 181）把三个钉值移到上游 tag 当前 digest：pgvector（主库 `postgres` 服务）
 PostgreSQL 仍是 17.11，扩展 0.8.6 → 0.8.7；postgres（`backup` 服务与 `restore.sh` 的 dry-run 工具镜像）仍是 17.11，只是 Alpine 包重建；
@@ -1224,7 +1229,7 @@ node 24.21.0 → 24.22.0，只影响平台镜像的构建，随发版重建，�
 - **回滚**：旧 tag 按旧 digest 引用 GHCR 副本，旧版本仍在包里（§3.19：不删 `nexttime-mirror-*` 的旧包版本），`up -d` 再重建一次即可；前提是没有执行过 `ALTER EXTENSION`（见上）。
   §3.19 回滚命令里的 postgres digest（`18cfe3ef…`）是升钉前的旧值，**保留不改**：回滚到 v0.44.0 及更早时给旧版 `restore.sh` 补本地 tag 要用它。
 
-### 3.29 「始终允许」绑定所审的定义；发布与安装绑定所审的版本（#592，governance 0020，遗留 218 / 300 / 301，v0.49.0 之后的下一版起）
+### 3.29 「始终允许」绑定所审的定义；发布与安装绑定所审的版本（#592，governance 0020，遗留 218 / 300 / 301，v0.50.0 起）
 
 带一个 governance 迁移（`0020_auto_approval_definition`），随 `apply-release.sh` 的迁移步骤自动应用，无单独主机步骤；线上契约**不向后兼容**（见下）。
 
@@ -1234,7 +1239,7 @@ node 24.21.0 → 24.22.0，只影响平台镜像的构建，随发版重建，�
 - **契约不向后兼容**：升级时浏览器里还开着的旧控制台页，在发布、安装、「始终允许」、发布清单时会得到 400 `invalid_params`（什么都不写），刷新页面即可。直接调 API 的脚本要带上新参数：`publish_skill` / `publish_procedure` / `install_module` / `upgrade_module` 必填 `version`；`publish_operation` 的 `draftDigest` 必填；`set_auto_approved_action_kind` 必填 `actionRequestId`；`set_policy` 按门开自动批准要 `operationVersion`，不再接受门上不存在的动作；`publish_manifest` 必填 `drafts`；`set_policy` 省略 `requesterCanApprove` 时保留原值（以前写成默认），回到默认要显式传 `null`。仓库内的 `scripts/accept_s2.sh`、`accept_s4.sh`、`drill-add-gatekeeper.sh` 已随 #592 更新，窗口里跑 S2 / S4 时一并验证。
 - **回滚**：只回退代码即可（§6）。回退后上一版写的规则不带摘要，回到本版时显示暂停、走审批；用上一版编辑一条已绑定的规则会保留旧摘要，回到本版时显示「已暂停 · 定义已变」。两种都只会更窄，回到本版后由 owner 重新确认。
 
-### 3.30 ActionRequest 撤回状态与失败类别（#601，governance 0021，S11 GO1 前半，遗留 310，v0.49.0 之后的下一版起）
+### 3.30 ActionRequest 撤回状态与失败类别（#601，governance 0021，S11 GO1 前半，遗留 310，v0.50.0 起）
 
 带一个 governance 迁移（`0021_action_request_withdraw_failure_kind`），随 `apply-release.sh` 的迁移步骤自动应用，无单独主机步骤。
 
@@ -1244,7 +1249,7 @@ node 24.21.0 → 24.22.0，只影响平台镜像的构建，随发版重建，�
 - **契约**：`ActionRequestStatus` 新增 `withdrawn`，`ActionRequestWire` 新增必填可空字段 `failureKind`。仓库内消费方已同步；升级时还开着的旧控制台页遇到这两个值时显示可能不全，刷新即可。发版说明人工补一句：`markActionRequestFailed` 现在要求 `failureKind`，`ActionExecutorResult` 改为联合类型（只影响仓库内调用方）。
 - **回滚**：只回退代码即可（§6）。上一版写失败行不带类别，触发器补 `outcome_unknown`；残留的 `withdrawn` 行对上一版是终态（它的 drain 与过期只按名字挑 `auto_approved` / `approved` / `pending_approval` / `executing`）。
 
-### 3.31 目标级执行的数据模型（#607，goal 0001、task 0007、governance 0022，S11 GO1 后半，v0.49.0 之后的下一版起）
+### 3.31 目标级执行的数据模型（#607，goal 0001、task 0007、governance 0022，S11 GO1 后半，v0.50.0 起）
 
 带三个迁移，随 `apply-release.sh` 的迁移步骤自动应用，无单独主机步骤；线上契约无变化。
 
@@ -1253,7 +1258,7 @@ node 24.21.0 → 24.22.0，只影响平台镜像的构建，随发版重建，�
 - **应用后只读核对**：`select tgname, tgenabled from pg_trigger where tgname in ('tasks_goal_step_immutable', 'action_requests_step_run_immutable', 'action_requests_status_guard');` 都是 `O`；内核日志里 `nexttime_invariant_violations{invariant=~"I-G.*"}` 为 0。
 - **回滚**：只回退代码即可（§6）。上一版不读写三张新表，看不到新列；新列都可空、上一版写的行全为 NULL，满足 CHECK 与外键；不可改触发器只在改这些列时触发。
 
-### 3.32 审计按对象的索引（#615，core 0044，遗留 338，v0.49.0 之后的下一版起）
+### 3.32 审计按对象的索引（#615，core 0044，遗留 338，v0.50.0 起）
 
 带一个 core 迁移（`0044_audit_records_resource_idx`），随 `apply-release.sh` 的迁移步骤自动应用；线上契约形状不变。
 
@@ -1272,7 +1277,7 @@ node 24.21.0 → 24.22.0，只影响平台镜像的构建，随发版重建，�
 - **行为变化（发版说明补一句）**：agent 从 `request_action` 拿到的失败原因与 wire 上的 `outcomeInDoubt.reason`，现在和 `failureReason` 一样截断到 1000 个 code point，不可见字符显示为 `\u{XXXX}`。
 - **回滚**：只回退代码即可（§6）。要连 schema 一起撤：`drop index if exists audit_records_resource_idx;` 并 `delete from schema_migrations where module = 'core' and version = 44;`（不撤也无害）。
 
-### 3.33 目标推进器（#619，goal 0002，S11 GO2，遗留 325，v0.49.0 之后的下一版起）
+### 3.33 目标推进器（#619，goal 0002，S11 GO2，遗留 325，v0.50.0 起）
 
 带一个 goal 迁移（`0002_goal_advancer`），随 `apply-release.sh` 的迁移步骤自动应用；没有新环境变量、不改 compose、无单独主机步骤。
 
@@ -1281,7 +1286,7 @@ node 24.21.0 → 24.22.0，只影响平台镜像的构建，随发版重建，�
 - **goal 之外的行为变化**：`run_lost` 不再收割从没有过 WorkerRun 的 `running` / `waiting_approval` Task（遗留 325），现有入口不会产生这样的 Task。
 - **回滚**：只回退代码即可（§6）。上一版没有 goal 模块，回退后这些表不再被读写；GO1 的代码也不读写 `next_tick_at`。
 
-### 3.34 自连门的来源与平台切断；接入路径统一（#620，core 0045，S11 P0b，遗留 118 残余 ①，v0.49.0 之后的下一版起）
+### 3.34 自连门的来源与平台切断；接入路径统一（#620，core 0045，S11 P0b，遗留 118 残余 ①，v0.50.0 起）
 
 带一个 core 迁移（`0045_workspace_self_connections`），随 `apply-release.sh` 的迁移步骤自动应用；没有新环境变量、不改 compose。
 
@@ -1331,7 +1336,7 @@ SQL
 **回滚**（§5、§6）：只回退代码即可，表可以保留、重新升级幂等。**回滚到 0045 之前的 kernel 后，自接门的暂停不再生效**（旧 kernel 不读这张表），
 回滚后在平台侧确认哪些门需要切断，改用停用工作区或在门宿主侧断开。
 
-### 3.35 目标的暂停、继续与取消（#626，goal 0003，S11 GO3a，遗留 330、357，v0.49.0 之后的下一版起）
+### 3.35 目标的暂停、继续与取消（#626，goal 0003，S11 GO3a，遗留 330、357，v0.50.0 起）
 
 带一个 goal 迁移（`0003_goal_cancelling`），随 `apply-release.sh` 的迁移步骤自动应用；没有新环境变量、不改 compose、无单独主机步骤。
 
@@ -1340,7 +1345,7 @@ SQL
 - **goal 之外的行为变化**：排水器遇到队首在读与开始之间被撤回或被别处开始时重读队列继续，不再结束本轮（遗留 330）；目标步骤下的 Worker 在步骤关闭后发起 `request_action` 或嵌套 `invoke_worker` 得到 409 并留一条拒绝审计；目标步骤下的嵌套子 Task 先用目标空闲余量，不够时从调用方 Task 的预算里分（审计 `task.budget_handed_down`）。目标之外的调用都不受影响。
 - **回滚**：只回退代码即可（§6）。上一版没有取消路径，永远不会碰到这个拒绝。
 
-### 3.36 目标的修订与 hold（#633，goal 0004，S11 GO3b，遗留 356、364，v0.49.0 之后的下一版起）
+### 3.36 目标的修订与 hold（#633，goal 0004，S11 GO3b，遗留 356、364，v0.50.0 起）
 
 带一个 goal 迁移（`0004_goal_revision_hold`），随 `apply-release.sh` 的迁移步骤自动应用；没有新环境变量、不改 compose、无单独主机步骤。
 
@@ -1349,7 +1354,7 @@ SQL
 - **goal 之外的行为变化**：无（`withdrawStepActions` 多一个可选参数，取消路径不传，行为不变）。
 - **回滚**：只回退代码即可（§6）。上一版不写新列，两列为空时守卫和 CHECK 都接受。
 
-### 3.37 动作的去重与人工核对（#642，governance 0023，S11 GO3c，v0.49.0 之后的下一版起）
+### 3.37 动作的去重与人工核对（#642，governance 0023，S11 GO3c，v0.50.0 起）
 
 带一个 governance 迁移（`0023_action_request_reconciliation`），随 `apply-release.sh` 的迁移步骤自动应用；没有新环境变量、不改 compose、无单独主机步骤。
 
@@ -1357,7 +1362,7 @@ SQL
 - **goal 之外的行为变化**：目标步骤之外的 `request_action` 不变（GO5 开放能力之前库里没有 GoalRun）；I6 不变量检查不再把不带 `resultingStatus` 的审计行当转移，少报一类违规。线上契约只新增可选字段 `reconciliation`。
 - **回滚**：只回退代码即可（§6）。上一版用显式列清单读写 `action_requests`，看不到新列；CHECK 对三列为空的旧行恒真；触发器放行三列为空的插入，更新只在写这三列时触发。
 
-### 3.38 门宿主实例的系统接入包（#644，S11 P1 第一个小 PR，无迁移，v0.49.0 之后的下一版起）
+### 3.38 门宿主实例的系统接入包（#644，S11 P1 第一个小 PR，无迁移，v0.50.0 起）
 
 没有迁移、没有新环境变量、不改 compose。主机上已有的门宿主实例都在通用接入包上，不受影响。
 
@@ -1400,7 +1405,7 @@ rollback;" </dev/null
 - 再删除这些实例（有工作区启用的，删除会被拒 409 `gate_in_use`，要先解除链接），回退后在通用接入包下重建。
 - 不这样做的话，旧版里这些实例会失去对应：还没被接管的，旧门宿主 announce 通用名被拒；已接管还没启用的（`discovered`），旧内核按 announce 把它改挂到通用接入包，通用接入包不是平台预置时它在目录里看不到，回退后在通用接入包下删了重建；已启用或禁用的，announce 身份不符，旧内核保留原记录、健康度置为 unknown。接入包这一行留在库里，旧控制台把它显示为「通用」类型，无害。挂在通用接入包上的实例不受影响。
 
-### 3.39 平台核对观察（#649，governance 0024，S11 GO3d，v0.49.0 之后的下一版起）
+### 3.39 平台核对观察（#649，governance 0024，S11 GO3d，v0.50.0 起）
 
 带一个 governance 迁移（`0024_action_request_reconcile_checks`），随 `apply-release.sh` 的迁移步骤自动应用；不改 compose、无单独主机步骤；窗口前只读检查：无。
 
@@ -1409,7 +1414,7 @@ rollback;" </dev/null
 - **新增两个可选环境变量**（kernel 的 env_file，即主机 `.env`）：`GOAL_RECONCILE_CHECK_MAX_ATTEMPTS`（默认 5）、`GOAL_RECONCILE_CHECK_MAX_DURATION_MS`（默认 900000，15 分钟），正整数，不设即用默认值，主机 `.env` 不需要改。两个上限同时生效、先到先停，目标的墙钟预算也照样封顶，所以不另设最大值。
 - **回滚**：只回退代码即可（§6）。上一版不读写新表。**代码回退到上一版后，apply-release 的 observations-compaction 步骤会报 degraded**：上一版的压缩看到 0024 指向 `observations` 的新外键就拒绝运行（安全失败，不删任何东西），重新应用带 0024 的版本后恢复；回退期间这一条 degraded 可以忽略。
 
-### 3.40 变更计划核心：模块安装与升级记段（#650，governance 0025，S11 P1-A，v0.49.0 之后的下一版起）
+### 3.40 变更计划核心：模块安装与升级记段（#650，governance 0025，S11 P1-A，v0.50.0 起）
 
 带一个 governance 迁移（`0025_change_segments`），随 `apply-release.sh` 的迁移步骤自动应用；没有新环境变量、不改 compose、无单独主机步骤。
 
@@ -1437,7 +1442,7 @@ rollback;" </dev/null
 
 - **回滚**：只回退代码即可（§6）。新表留在库里，旧代码不读也不写，模块安装照旧工作；之后再升级回来，回退期间装的版本溯源显示 `provenance_unknown`，这是预期。
 
-### 3.41 目标验收（#664，goal 0005，S11 GO4a，v0.49.0 之后的下一版起）
+### 3.41 目标验收（#664，goal 0005，S11 GO4a，v0.50.0 起）
 
 带一个 goal 迁移（`0005_goal_acceptance`），随 `apply-release.sh` 的迁移步骤自动应用；不改 compose、无单独主机步骤；窗口前只读检查：无。
 
@@ -1447,7 +1452,7 @@ rollback;" </dev/null
 - **新指标**：`nexttime_invariant_violations{invariant="I-G5"}`，升级后应为 0；不为 0 说明守卫缺失或被禁用，或有不经验收得到 `achieved` 的目标，先停下查。
 - **回滚**：只回退代码即可（§6）。上一版不读写新表与新列。**代码回退到上一版后，apply-release 的 observations-compaction 步骤会报 degraded**：上一版的压缩看到 0005 指向 `observations` 的新外键就拒绝运行（安全失败，不删任何东西），重新应用带 0005 的版本后恢复；与 §3.39 同类，回退期间这一条 degraded 可以忽略。
 
-### 3.42 步骤验收（#670，goal 0006，S11 GO4b，v0.49.0 之后的下一版起）
+### 3.42 步骤验收（#670，goal 0006，S11 GO4b，v0.50.0 起）
 
 带一个 goal 迁移（`0006_step_acceptance`），随 `apply-release.sh` 的迁移步骤自动应用；没有新环境变量（沿用 §3.41 的 `GOAL_ACCEPTANCE_CHECK_*`）、不改 compose、无单独主机步骤；窗口前只读检查：无。
 
@@ -1455,7 +1460,7 @@ rollback;" </dev/null
 - **I-G5 指标**：§3.41 的 `nexttime_invariant_violations{invariant="I-G5"}` 现在也覆盖步骤验收，升级后仍应为 0。
 - **回滚**：只回退代码即可（§6）。上一版不读写新表。**代码回退到上一版后，apply-release 的 observations-compaction 步骤会报 degraded**（与 §3.39、§3.41 同类，重新应用带 0006 的版本后恢复，回退期间可以忽略）。上一版遇到停在 `waiting(acceptance)` 的步骤会推进失败，连续失败后目标暂停等人，不会未经验收就成功。
 
-### 3.43 能力包（#668，S11 P1-C，v0.49.0 之后的下一版起）
+### 3.43 能力包（#668，S11 P1-C，v0.50.0 起）
 
 没有迁移、没有新环境变量、不改 compose、无单独主机步骤；窗口前只读检查：无。
 
@@ -1464,7 +1469,7 @@ rollback;" </dev/null
 - **注册表整体校验**：`packs/` 里任何一处不合规，整份能力包注册表都会被拒（不半装），症状与处理见 `operations.md` §14。镜像里的 `packs/` 随版本发布，正常升级不会遇到。
 - **回滚**：只回退代码即可。安装状态和摘要都不入库、每次现算，所以摘要格式改成 `contentDigest` 对已有工作区透明。
 
-### 3.44 事实判定式（#674，core 0046 + goal 0007，S11 GO4c，v0.49.0 之后的下一版起）
+### 3.44 事实判定式（#674，core 0046 + goal 0007，S11 GO4c，v0.50.0 起）
 
 带两个迁移（`core/0046_activity_trigger_record`、`goal/0007_fact_acceptance`），随 `apply-release.sh` 的迁移步骤自动应用；没有新环境变量、不改 compose、无单独主机步骤；窗口前只读检查：无。
 
@@ -1473,7 +1478,7 @@ rollback;" </dev/null
 - **I-G5 指标**：§3.41 的 `nexttime_invariant_violations{invariant="I-G5"}` 现在也覆盖事实检查与「按计划声明」两个条件，升级后仍应为 0。
 - **回滚**：只回退代码即可（§6），两个迁移都可逆，不需要 `reversibility-deltas.json` 条目。上一版不读写新列，也不写事实检查行；它写目标级检查行时本来就按计划声明建行，新的绑定规则不挡它。回滚后留下的 pending 事实检查不会被上一版领取，所在目标或步骤一直等待；上一版读到带事实检查的计划会视为不可读并暂停目标；什么都不会被判达成。
 
-### 3.45 能力包可带 Skill 与 Worker（#679，governance 0026，S11 P1-D，v0.49.0 之后的下一版起）
+### 3.45 能力包可带 Skill 与 Worker（#679，governance 0026，S11 P1-D，v0.50.0 起）
 
 带一个迁移（`governance/0026_change_item_worker_kinds`），随 `apply-release.sh` 的迁移步骤自动应用；没有新环境变量、不改 compose、无单独主机步骤。
 
@@ -1489,7 +1494,7 @@ rollback;" </dev/null
 - **新错误码**：409 `skill_name_conflict`（`details.skillName`）；`publish_skill` 现在拒绝与已发布 Skill 同名的发布。
 - **回滚**：只回退代码即可（§6）。0026 只放宽约束、可逆，上一版不读 `change_items`（0025 同一版新增）；回滚后已安装的 Skill / Worker 版本留在原处、照常可用，只是没有能力包页面去撤销它们。
 
-### 3.46 安装记录核验与 Operation 改动项（#690，governance 0027，S11 P1-E1，v0.49.0 之后的下一版起）
+### 3.46 安装记录核验与 Operation 改动项（#690，governance 0027，S11 P1-E1，v0.50.0 起）
 
 带一个迁移（`governance/0027_change_item_operation_kind`），随 `apply-release.sh` 的迁移步骤自动应用；没有新环境变量、不改 compose、无单独主机步骤。
 
@@ -1499,7 +1504,7 @@ rollback;" </dev/null
 - **新错误码**：409 `change_segment_superseded`（`details.supersededBy`）、429 `change_verification_cooldown`（`details.retryAfterSeconds`）；新审计事件 `change_segment.verify`。
 - **回滚**：只回退代码即可（§6）。0027 只放宽约束、可逆，上一版不读 `change_items`（0025 同一未发版系列新增）；回滚后经改动项发布的 Operation 版本留在原处、照常生效，只是没有安装记录页面去撤销或核验它们。
 
-### 3.47 Decision 只给看得到它主体的人看（#700，governance 0028，S11 W1 GO5c 前小 PR C，v0.49.0 之后的下一版起）
+### 3.47 Decision 只给看得到它主体的人看（#700，governance 0028，S11 W1 GO5c 前小 PR C，v0.50.0 起）
 
 带一个迁移（`governance/0028_decision_subjects`），随 `apply-release.sh` 的迁移步骤自动应用；没有新环境变量、不改 compose。
 
@@ -1538,7 +1543,7 @@ rollback;" </dev/null
 - **新行为**：成员读不到看不到的请求、目标、私聊与冲突上的 Decision（列表里没有、单条 404）；auditor 的 `export_prov` 按普通成员规则过滤；被裁决作废的 Fact 的作废原因只写哪个冲突、怎么裁的。owner 从此也看不到别人私聊里的 Decision。
 - **回滚**：只回退代码即可（§6）。上一版不读新列，触发器在它的插入上照样填主体，回滚再升级不会留下没有主体的 Decision；上一版的读面只因两条 RLS 规则变窄（别人私聊里的 Decision、看不到的 Conflict 的裁决）。
 
-### 3.48 pi 白名单启动（#698，遗留 422，S11 W3，v0.49.0 之后的下一版起）
+### 3.48 pi 白名单启动（#698，遗留 422，S11 W3，v0.50.0 起）
 
 无迁移；worker-supervisor 与 worker-runtime 镜像随本版一起应用。
 
@@ -1568,7 +1573,7 @@ rollback;" </dev/null
   `.pi/agent/skills/`、`.pi/agent/settings.json`、`.pi/agent/models.json` 是旧版平台自己写的（已发布的 Skill 和设置），不是智能体写的，要单独列出。清点出的这些文件从此不再生效。
 - **新错误码与 wire**：409 `runtime_image_incompatible`（supervisor 起容器；内核设为活动、回滚、滚动重建）；`RuntimeImageWire` 新增 `runtimeCompatible`。
 
-### 3.49 包里的 Worker 按系统类型绑定工作区的门（#705，S11 P1-E2a，v0.49.0 之后的下一版起）
+### 3.49 包里的 Worker 按系统类型绑定工作区的门（#705，S11 P1-E2a，v0.50.0 起）
 
 无迁移；没有新环境变量、不改 compose、无单独主机步骤。
 
@@ -1577,7 +1582,7 @@ rollback;" </dev/null
 - **新错误与参数**：`preview_pack_install` / `install_pack` 新可选参数 `workerGates`，不在候选里的门 400 `invalid_params`，审阅后门有变化 409 `change_plan_changed`；需求状态去掉 `can_connect`。
 - **回滚**：只回退代码即可。上一版不认识 Worker 的 `systems`（已发布的 Worker 版本里没有这个字段，它只在包清单里），本版绑上的门留在 Worker 版本里照常生效。
 
-### 3.50 入口 agent 替人提议目标（#704，goal 0008，S11 GO5c，v0.49.0 之后的下一版起）
+### 3.50 入口 agent 替人提议目标（#704，goal 0008，S11 GO5c，v0.50.0 起）
 
 带一个迁移（`goal/0008_goal_idempotency_key`），随 `apply-release.sh` 的迁移步骤自动应用；不改 compose。
 
@@ -1586,7 +1591,7 @@ rollback;" </dev/null
 - **新行为与错误码**：新能力 `propose_goal`（服务账号、agent 主体发起 403，`issue_service_handle` 不再签它），超出上限 409 `proposed_goal_limit`（`details.limit` / `details.proposed`）；`revise_goal` 拒收带凭据或 `[redacted]` 的计划与理由（400 `credentials_in_text` / `redacted_text_submitted`，带位置），原样提交的调用当作没改；入口 Handle 可以读自己代表的人的目标。
 - **回滚**：只回退代码即可（§6）。上一版不知道这一列，插入时它是 NULL，两个索引都不管；`goal_runs_status_guard` 不允许改这一列。
 
-### 3.51 Operation 治理字段收敛到同一套分类器（#710，S11 P1-E2b，v0.49.0 之后的下一版起）
+### 3.51 Operation 治理字段收敛到同一套分类器（#710，S11 P1-E2b，v0.50.0 起）
 
 无迁移；没有新环境变量、不改镜像与 compose、无单独主机步骤。
 
@@ -1594,7 +1599,7 @@ rollback;" </dev/null
 - **应用后第一次对齐**：平台门上已有的 Operation 若与门当前宣告在这几个字段上不一致，「集成」页与对齐预览会第一次显示这些差异；按确认框逐项看后再对齐，这是预期的，不是回归。
 - **回滚**：只回退代码即可。这几个字段本来就是 Operation 定义的一部分，上一版照常读取本版写入的值；上一版只是不再比较和写入它们。
 
-### 3.52 接入预设，首个 RAGFlow（#715，S11 P1-F1，v0.49.0 之后的下一版起）
+### 3.52 接入预设，首个 RAGFlow（#715，S11 P1-F1，v0.50.0 起）
 
 无迁移；不改 compose 与 `.env`。内核镜像新增 `/app/connectors` 与 `CONNECTOR_PRESETS_DIR=/app/connectors`（镜像内自带，不需要主机配置），内核与门宿主同版本发布。
 
@@ -1619,7 +1624,7 @@ rollback;" </dev/null
 
   为空照常回滚。非空时先 `docker compose stop gate-host`，再回滚其余服务，最后启动旧版 `gate-host`：新版门宿主一旦从旧内核拉定义，会把预设实例当作已删除并清掉它的凭证目录，升回来就要重新录入 RAGFlow 的 API key。整库恢复不受影响。回滚期间在旧版删除预设实例会留下孤儿凭证目录（遗留 451）。
 
-### 3.53 步骤之间的数据交接与返工一次（#716，task 0008，S11 GO5d-1，v0.49.0 之后的下一版起）
+### 3.53 步骤之间的数据交接与返工一次（#716，task 0008，S11 GO5d-1，v0.50.0 起）
 
 带一个迁移（`task/0008_task_output_contract`），随 `apply-release.sh` 的迁移步骤自动应用；没有新环境变量或服务，不改 compose。Worker 扩展（platform-extension）有改动，worker-runtime 与内核同版本发布。
 
@@ -1628,7 +1633,7 @@ rollback;" </dev/null
 - **应用后检查**：`select conname from pg_constraint where conname like 'tasks_%output%' or conname = 'tasks_rework_of';` 应列出三条约束。
 - **回滚**：只回退代码即可（§6），worker-runtime 与内核一起回退。上一版插入和查询 `tasks` 都写明列名，看不到这三列；它对 Task 的更新（状态、结果、token）不碰触发器保护的列。
 
-### 3.54 knowledge 能力包 v1 与能力包依赖（#721，S11 P1-F2，v0.49.0 之后的下一版起）
+### 3.54 knowledge 能力包 v1 与能力包依赖（#721，S11 P1-F2，v0.50.0 起）
 
 无迁移；没有新环境变量，不改 compose，无单独主机步骤。
 
@@ -1636,7 +1641,7 @@ rollback;" </dev/null
 - **新行为与错误码**：能力包可以声明依赖别的能力包；依赖没满足时 `install_pack` 返回 409 `pack_dependency_unmet`，什么也不写；核验新增依赖检查，已有核验记录读出来依赖为空，不受影响。knowledge 要先装 ops-assets v2，并需要工作区已接入 RAGFlow（打包门或 §3.52 的预设实例）。步骤见 operations.md §14.9。
 - **回滚**：只回退代码即可。上一版不认识 `requires.packs`，但它的 `packs/` 里也没有 knowledge，已装的 knowledge 留下的 Skill 与 Worker 版本照常存在；核验记录里多出的 `dependencies` 键上一版不读。
 
-### 3.55 Procedure 成为计划模板（#722，goal 0009 + worker 0005，S11 GO5d-2，v0.49.0 之后的下一版起）
+### 3.55 Procedure 成为计划模板（#722，goal 0009 + worker 0005，S11 GO5d-2，v0.50.0 起）
 
 带两个迁移（`goal/0009_plan_revision_source`、`worker/0005_procedure_parameters`），随 `apply-release.sh` 的迁移步骤自动应用（goal 模块先于 worker）；没有新环境变量或服务，不改 compose。
 
@@ -1646,7 +1651,7 @@ rollback;" </dev/null
 - **新行为与错误码**：`propose_goal` 可以用 `fromProcedure` 代替 `plan`；`publish_procedure` 对写了模板字段的流程，展开出的计划不通过时返回 400 `invalid_params`（`details.problems`），草稿不变；已有流程照常发布。`get_goal` / `get_goal_revision` 的计划版本加 `fromProcedure`，`list_procedures` 加 `parameters`。
 - **回滚**：只回退代码即可（§6）。上一版不读写这些列，它提的流程 `parameters` 为 NULL，触发器多出来的比较对它没有影响；外键只约束非空的来源列。
 
-### 3.56 RAGFlow `document.parse` 每次都要人批（#726，S11 P1-F，v0.49.0 之后的下一版起）
+### 3.56 RAGFlow `document.parse` 每次都要人批（#726，S11 P1-F，v0.50.0 起）
 
 没有迁移、新环境变量或服务，不改 compose；只改 `ragflow` 门的清单（打包门与 RAGFlow 预设）。`document.parse` 从 `low`、可自动批准改为 `medium`、不可自动批准，因为重新解析会删掉文档原有的全部分块（含手工添加或编辑过的）。**已有部署不会自动收紧**，按下面三步做。详细步骤见 `docs/runbooks/host-gatekeepers.md` §13「升级后收紧 `document.parse`」。
 
@@ -1657,7 +1662,7 @@ rollback;" </dev/null
 - **核对（只读）**：对齐后在「已部署 Operation 的治理字段」或 `list_operations` 里看到 `document.parse` 是 `medium`、不可自动批准。**不要用真实参数发 `request_action` 核对**：被批准就会删掉分块。要验证审批路径，`document_ids` 用不存在的 id，看到 `pending_approval` 后立即拒绝。
 - **回滚**：无迁移，只回退代码（§6）。
 
-### 3.57 WorkerRun 运行指纹（#730，task 0009，S11 W1a，v0.49.0 之后的下一版起）
+### 3.57 WorkerRun 运行指纹（#730，task 0009，S11 W1a，v0.50.0 起）
 
 带一个迁移（`task/0009_worker_run_fingerprint`），随 `apply-release.sh` 的迁移步骤自动应用；compose 有一处改动：worker-supervisor 新增 `${NEXTTIME_DATA:?}/models:/data/models:ro`（挂目录不挂文件；`models.json` 不含凭据）。没有新环境变量或服务。
 
@@ -1673,7 +1678,7 @@ rollback;" </dev/null
 - **可比范围**：`environment_digest` 只在同一台主机内可比（`imageId` 是本机 Docker 解析出的 id），不要拿 staging 与主机的指纹比较。
 - **回滚**：回退代码即可（§6）。上一版对 `worker_runs` 的 INSERT / SELECT 都列名、从不写这三列、也从不把运行退回 `provisioning`，CHECK 对它写的全 NULL 行成立；去掉 compose 的 `models/` 挂载随整版回退。
 
-### 3.58 入口 agent 在对话里发起目标（#728，S11 GO5e-1，v0.49.0 之后的下一版起）
+### 3.58 入口 agent 在对话里发起目标（#728，S11 GO5e-1，v0.50.0 起）
 
 没有迁移、新环境变量或服务，不改 compose。
 
@@ -1682,7 +1687,7 @@ rollback;" </dev/null
 - **验收**：`scripts/accept_s2.sh` fake 模式多第 9 步，多跑一两分钟。验收脚本 fake 模式每次先按当前检出构建 fake-llm（镜像站 node 基础镜像加一层 COPY），主机上第一次跑会把一直沿用的旧 fake-llm 换成当前版本；`server.mjs` 每变一次留下一个悬空旧镜像，是否清理由操作员决定（遗留 460）。
 - **回滚**：无迁移，只回退代码（§6）。
 
-### 3.59 目标在发起它的对话里（#737，linkage 0003，S11 GO5e-2，v0.49.0 之后的下一版起）
+### 3.59 目标在发起它的对话里（#737，linkage 0003，S11 GO5e-2，v0.50.0 起）
 
 带一个迁移（`linkage/0003`），随 `apply-release.sh` 的迁移步骤自动应用；没有新环境变量或服务，不改 compose、Dockerfile 或启动脚本。
 
@@ -1691,7 +1696,7 @@ rollback;" </dev/null
 - **验收**：`host-accept-s2.md` 多一条 `step9-goal-milestones` 的 PASS 行，随下一次发版窗口在主机上跑。
 - **回滚**：回退代码即可（§6）。上一版读到 `goal_update` 行会把它和其他条目一样放进 `tasks` 那一组，不需要动数据。
 
-### 3.60 目标记下启动参数（#745，goal 0010，遗留 454/455，v0.49.0 之后的下一版起）
+### 3.60 目标记下启动参数（#745，goal 0010，遗留 454/455，v0.50.0 起）
 
 带一个迁移（`goal/0010`），随 `apply-release.sh` 的迁移步骤自动应用；没有新环境变量或服务，不改 compose、Dockerfile 或启动脚本。
 
@@ -1699,7 +1704,7 @@ rollback;" </dev/null
 - **新行为**：用流程发起的目标在 `get_goal` / `get_goal_revision` 的 `fromProcedure` 上带启动参数（读面遮蔽）与请求人确认验收来自流程第几步；计划与流程里绑定取自自己或不存在的步骤时，提示直接说清楚。
 - **回滚**：回退代码即可（§6）。上一版代码不读也不写这一列，不需要动数据。
 
-### 3.61 已有工作区的入口定义对齐平台模板（#747，遗留 145，v0.49.0 之后的下一版起）
+### 3.61 已有工作区的入口定义对齐平台模板（#747，遗留 145，v0.50.0 起）
 
 无迁移；没有新环境变量或服务，不改 compose、Dockerfile 或启动脚本。发版后镜像里新的 `ontology/entry-agent.yaml` 就是比对用的模板。
 
@@ -1707,7 +1712,7 @@ rollback;" </dev/null
 - **不代为采用**：按模板生成草稿与发布都由所有者在控制台决定，窗口里不代为生成或发布。
 - **回滚**：回退代码即可，不需要动数据；按模板发布的入口版本和手工发布的版本一样，是入口家族里的普通版本。
 
-### 3.62 门确认不存在：声明与接收（#753，S11「门确认不存在」A，v0.49.0 之后的下一版起）
+### 3.62 门确认不存在：声明与接收（#753，S11「门确认不存在」A，v0.50.0 起）
 
 无迁移；不改 compose、Dockerfile 或启动脚本，门镜像随发版重建。
 
@@ -1716,7 +1721,7 @@ rollback;" </dev/null
 - **混跑**：门与内核必须同版本。老门或老内核遇到带声明的定义会因摘要不一致拒绝调用（409 `operation_definition_mismatch`），不会误判「不存在」；按 §3.27 单窗口一起升级即可。
 - **回滚**：回退代码即可。回退前先确认没有发布过带声明的 Operation；若有，老版本不认识这两个字段，先发布不带声明的版本再回退。
 
-### 3.63 观察型写入不能改写平台元本体对象（#759，安全修复，v0.49.0 之后的下一版起）
+### 3.63 观察型写入不能改写平台元本体对象（#759，安全修复，v0.50.0 起）
 
 无迁移；不改 compose、Dockerfile 或启动脚本。主机 v0.46.0 上两条路径（`submit_observations`、门回写的 observedFacts）都在且没有元本体检查，所以**窗口前**先在当前版本上跑下面的只读 SQL（只读事务，结果记 `docs/private/`；正常应全部 0 行，E 除外）：
 
@@ -1764,7 +1769,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **D 有行**：升级前先把这些 Operation 废弃或改正 `result_mapping` 再发布，否则升级后读写失败。
 - **回滚**：回退到旧内核即失去这道收口，问题回到修复前；新内核不会自动恢复已被改写的行，要靠上面的核查。
 
-### 3.64 已发布 Operation 由数据库守护（#765，遗留 482，v0.49.0 之后的下一版起）
+### 3.64 已发布 Operation 由数据库守护（#765，遗留 482，v0.50.0 起）
 
 带一个迁移（`core/0047_operation_version_guard`），随 `apply-release.sh` 的迁移步骤自动应用；只建两个触发器和两个函数，不改数据、不回填、不扫表。没有新环境变量或服务，不改 compose、Dockerfile 或启动脚本；门不用升级，门的定义摘要与审批结果都不变。
 
@@ -1774,7 +1779,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **撤销 schema**（只在确需时，由维护者决定）：`drop trigger objects_operation_governance_audited on objects; drop trigger objects_operation_version_guard on objects; drop function objects_operation_governance_audited(); drop function objects_operation_version_guard();`
 - 这道守护针对应用路径，不防数据库属主（属主能 `disable trigger`）。以后的迁移如果确实要改已发布行，要在迁移里显式处理并写明原因。
 
-### 3.65 编辑已发布的 Skill / 流程 = 同族下一版本（#764，S11 W1a E2-0，遗留 48 ②，v0.49.0 之后的下一版起）
+### 3.65 编辑已发布的 Skill / 流程 = 同族下一版本（#764，S11 W1a E2-0，遗留 48 ②，v0.50.0 起）
 
 无迁移；没有新环境变量或服务，不改 compose、Dockerfile 或启动脚本；窗口前只读检查：无新增。
 
@@ -1783,7 +1788,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **已有数据**：不改。`propose_*` 不带族 id 时照旧建新族；带族 id 才提议同族下一版本。
 - **回滚**：回退代码即可，库不用恢复。回退后旧控制台的发布请求不带 `draftDigest`，旧内核照常接受。
 
-### 3.66 门确认不存在 B-a：发布时由人确认（#757，S11，v0.49.0 之后的下一版起）
+### 3.66 门确认不存在 B-a：发布时由人确认（#757，S11，v0.50.0 起）
 
 无迁移；不改 compose、Dockerfile 或启动脚本；窗口前只读检查：无新增。A（§3.62）和 B-a 都未发版，现有门清单没有「不存在」声明，所以发版后行为不变；有人在门清单里加了声明，发布时会被要求确认。
 
@@ -1791,7 +1796,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：回退代码即可，库不用恢复。旧代码读 Operation 时会把 `absentAnswersReviewedBy` / `absentAnswersReviewedAt` 留在定义对象里，但线上 `OperationSchema` 解析丢掉未知键，门的调用摘要只取固定字段，不受影响；旧代码发布只翻状态，core 0047 照样放行。
 - **再升级回来**：回滚期间发布的带声明版本没有确认，目录显示「没有人确认过」；B-b 合入后验收要求 Operation 带确认，这些版本要重新发布一次。
 
-### 3.67 拒绝待审的 Skill / 流程草稿（#772，S11 W1a E2-0b，v0.49.0 之后的下一版起）
+### 3.67 拒绝待审的 Skill / 流程草稿（#772，S11 W1a E2-0b，v0.50.0 起）
 
 无迁移；没有新环境变量或服务，不改 compose、Dockerfile 或启动脚本；窗口前只读检查：无新增。
 
@@ -1799,7 +1804,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **契约**：只新增能力，向后兼容。
 - **回滚**：回退代码即可，库不用恢复；回退后待审草稿又只能由提议者丢弃、所有者发布或 30 天清理。
 
-### 3.68 按门确认不存在验收（#780，goal 0011，S11 B-b，v0.49.0 之后的下一版起）
+### 3.68 按门确认不存在验收（#780，goal 0011，S11 B-b，v0.50.0 起）
 
 带一个迁移（`goal/0011_absence_acceptance`），随 `apply-release.sh` 的迁移步骤自动应用：两张检查表的 kind / 形状 CHECK 收进新种类 `observe_absent`，两个 guard 和 `goal_runs_status_guard` 整体重定义，执行器的 due 索引带上新种类。没有回填：现有行都是 `observe_predicate`、`fact_predicate` 或 `requester_confirm`，新 CHECK 对它们都成立。没有新环境变量或服务，不改 compose、Dockerfile 或启动脚本；门不用升级。
 
@@ -1808,7 +1813,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **回滚**：上一个发布 v0.49.0 没有目标代码，不读写这些表，回退代码即可，库不用恢复。带 GO4 验收但不带本迁移的版本没有上过主机；假如中间有这样一个版本，它的扫描只认自己知道的种类，不会领取 `observe_absent` 行，计划 schema 读不了这种计划，推进时把目标停到 `needs_decision`，不会照着做；恢复要等回到本版本。
 - 发版说明可写「删除、下线类目标可以让平台按门确认不存在来验收」。
 
-### 3.69 被拒绝的草稿给到提议人；看不到的 Worker 定义族按不存在（#792，遗留 491 / 492，v0.49.0 之后的下一版起）
+### 3.69 被拒绝的草稿给到提议人；看不到的 Worker 定义族按不存在（#792，遗留 491 / 492，v0.50.0 起）
 
 带一个迁移（`worker/0006_draft_rejections`），随 `apply-release.sh` 的迁移步骤自动应用：新表 `draft_rejections`（RLS 按工作区，`nexttime_app` 只有 select / insert），并从已有的 `reject_draft` 审计记录回填历史拒绝（名字取同族上一版本，重跑不重复插入）。没有新环境变量或服务，不改 compose、Dockerfile 或启动脚本。
 
@@ -1816,7 +1821,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **契约变化（发版说明照写）**：`propose_worker_definition{definitionId}` 的 `definitionId` 必须是调用方看得到的族，只有别人私有草稿的族与不存在的 id 一律 404 `not_found`，不再在调用方自选的 id 下新建族（省略 `definitionId` 仍新建；能力包安装不受影响）；`invoke_worker` 对别人私有的 Worker 定义草稿从 409 `not_published` 改为 404 `not_found`；`publish_procedure` 步骤引用、目标计划校验、`resolve_refs` 对别人的草稿同样按不存在回答；新能力 `list_draft_rejections`（人的通道，member 起）。
 - **回滚**：回退代码即可，库不用恢复。旧代码不读不写新表，在新结构上照常运行，只是它做的拒绝不留记录。
 
-### 3.70 「存在过」基线（#786，goal 0012，S11 B-c，v0.49.0 之后的下一版起）
+### 3.70 「存在过」基线（#786，goal 0012，S11 B-c，v0.50.0 起）
 
 带一个迁移（`goal/0012_absence_baselines`），随 `apply-release.sh` 的迁移步骤自动应用：新表 `goal_absence_baselines`（RLS，`nexttime_app` 只有 select / insert / update）、它的 guard、函数 `goal_absence_seen_before`，以及两张验收表上的 I-AB1 触发器。没有回填：B-b（goal/0011）没上过主机，不存在 pending 或 passed 的 `observe_absent`。没有新环境变量或服务，不改 compose、Dockerfile 或启动脚本；门不用升级。
 
@@ -1824,7 +1829,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **生效后**：删除类目标开工前平台先用同样的调用确认要删的东西在；参数写错、东西本来就不在时目标暂停交给请求人，不会被当成已经删掉。`get_goal` 的 `acceptance` 多一个只读字段 `absenceBaselines`。发版说明可写「删除类目标开工前平台先确认要删的东西在，参数写错不会被当成已经删掉」。
 - **回滚**：上一个发布 v0.49.0 没有目标代码，不读写新表；**它的观察压缩遇到指向 `observations` 的新外键会按既有 fail-closed 守卫拒绝运行**（已在 `reversibility-deltas.json` 声明），回滚期间观察不压缩、不影响其他功能，回到本版本即恢复。带 B-b 但不带 B-c 的版本没上过主机；假如中间有这样一个版本，它会忽略基线，没有基线的不存在检查想通过时被新触发器拒绝，检查停在 pending，回到本版本后继续运行。
 
-### 3.71 任务级观察范围（#796，task 0010，S11 GO11 / W1a E3-0，v0.49.0 之后的下一版起）
+### 3.71 任务级观察范围（#796，task 0010，S11 GO11 / W1a E3-0，v0.50.0 起）
 
 带一个迁移（`task/0010_task_observe_scope`），随 `apply-release.sh` 的迁移步骤自动应用：`tasks.observe_scope uuid[]`（可空，不回填，CHECK 一维且不含 NULL 元素），触发器 `tasks_observe_scope_immutable`（创建后不可改）与 `worker_runs_observe_scope_inherited`（子运行的 Task 范围必须包含在上级范围内）。没有新环境变量或服务，不改 compose、Dockerfile 或启动脚本；门不用升级。
 
@@ -1832,7 +1837,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **契约变化（发版说明照写）**：`get_task` / `list_tasks` 的 Task 多一个字段 `observeScope: string[] | null`（只增）；`find_operations` 的 `reachability` 注解只给入口 agent，任何 WorkerRun 会话都不再带（以前目标步骤里没有上级的 Worker 会拿到按成员入口 agent 算的可达性，与能力描述不符）；`excluded_by_policy` 多一个来源（Task 的观察范围），错误码不变。
 - **回滚**：回退代码即可，库不用恢复。上一版插入与读取 `tasks` 都列出列名，不碰新列，它创建的 Task 都不设范围，`worker_runs` 插入都能通过继承检查。只有本版本能创建带范围的 Task：回退后这类 Task 的 Worker 再启动子 Worker 会被触发器拒绝（失败即关闭），观察也不再按范围收窄。
 
-### 3.72 reconcile 用门确认不存在（#799，governance 0029，S11「门确认不存在」reconcile，v0.49.0 之后的下一版起）
+### 3.72 reconcile 用门确认不存在（#799，governance 0029，S11「门确认不存在」reconcile，v0.50.0 起）
 
 带一个迁移（`governance/0029_reconcile_absence_seen_before`），随 `apply-release.sh` 的迁移步骤自动应用：新增 SQL 函数 `action_request_absence_seen_before` 和 `action_requests` 上的触发器 `action_requests_reconciliation_seen_before`，不动表结构，不回填（之前没有哪个版本让 reconcile 检查做不存在调用）。goal 模块排在 governance 之前，`step_runs` 与 `goal_absence_baselines`（goal/0012）在它之前已存在。没有新环境变量或服务，不改 compose、Dockerfile 或启动脚本；门不用升级。
 
@@ -1841,13 +1846,22 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：删除类动作结果不明时，平台能用门确认「已经不在了」来核对，前提是开工前看到过它在；门对「找不到」回空结果时，目标会在开工前暂停。
 - **回滚**：回退代码即可，库不用恢复。上一发布 v0.49.0 没有目标代码，不跑 reconcile，触发器碰不到它的写入。假如中间有带 #786 但不带本 PR 的版本（没上过主机）：它的计划校验拒绝 reconcile 里的不存在调用；库里已有的这类核对检查，旧执行器照常调门，门说不在时去记 `effect_seen`，但不带 `absentAnswersReview`，新触发器会拒绝；试满次数后这条检查记 `unavailable` 交给人核对，不会误判生效。
 
-### 3.73 评测容器出网全拒（#818，S10 E3-2-0，v0.49.0 之后的下一版起）
+### 3.73 评测容器出网全拒（#818，S10 E3-2-0，v0.50.0 起）
 
 没有迁移，不改 compose、Dockerfile 或启动脚本；只改 egress-proxy 与 worker-supervisor。egress-proxy 的来源条目可带 `denyAll`，命中时拒绝原因为 `source-deny-all`；supervisor `/task/spawn` 新增可选字段 `egressDenyAll`，带它起的容器打标签 `nexttime.egress-deny-all=true`。现有请求与来源表的行为不变；这类容器从 E3-2a 起才会出现。
 
 - **窗口前只读检查**：主机上跑 `docker version`，确认 Engine ≥ 26.0.0（CVE-2024-29018）。低于它时，internal 的 `workers` 网络上的容器经 Docker 内嵌 DNS 会把查询转给外部解析器，能解析外网名字，形成 DNS 外带通道；后续处理是给评测容器设一个不可达的 `--dns`。结果记 `docs/private/`。
 - **发版说明可写**：egress-proxy 新增拒绝原因 `source-deny-all`；worker-supervisor `/task/spawn` 新增可选 `egressDenyAll`。
 - **回滚**：回退代码即可，库不用恢复。**回滚 worker-supervisor 到本版之前的版本前，先终止所有带 `nexttime.egress-deny-all=true` 标签的 Task 容器**：旧 supervisor 的 reconcile 会把它们重新登记成不带 `denyAll`、也不带兜底放行名的条目，出网完全放开（遗留 518）。
+
+### 3.74 审批前提示「成员未连接此账户」（#821，遗留 513，v0.50.0 起）
+
+没有迁移，不改 compose。门（gatekeeper-base）新增路由 `gate/credential-presence`，只认 `gate_token`、只回有无，Caddy 不对外发布这条路由（边缘访问回 404）。**门镜像与内核同版才会出现提示**：旧门对新路由回 404，内核把它当「未知」、不显示提示，所以不阻塞升级，也不要求先升级门。
+
+- **窗口前只读检查**：无新增。
+- **契约变化（发版说明照写）**：只增量。`StepActionWire.failureCode` 为必填但可空；`ActionRequestWire.onBehalfOfAccount` 可选；新增一个 PlanHint code。
+- **发版说明可写**：提目标、确认、审批时，如果申请人在某扇按成员连接账户的门上没有自己的凭证，目标页、确认框、审批详情和对话里的审批卡会提前标出「该成员未连接此账户」，不用等批准后被门拒绝才知道。
+- **回滚**：回退代码即可，库不用恢复。旧内核不调新路由；旧门不认新路由也不影响新内核。
 
 ## 4. Hotfix 流程
 
@@ -1958,41 +1972,41 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.44.0 之后的下一版 | governance `0018_container_held_handles_revoked`（#524，遗留 156）：吊销所有未过期、未吊销的 `entry` / `worker_run` Handle，每个 (工作区, 主体) 写一条审计 `principal.container_handles_revoked` | 可逆 | 无 schema 变更，只置 `capability_handles.revoked_at`（0015 的单调吊销触发器允许）。v0.44.0 的代码在入口 Handle 被吊销后于下一个 Turn 重签（`ensureEntryHandle` 检查缓存 jti 的吊销），WorkerRun 本来就在窗口前排空；被吊销的 Handle 不恢复，也不需要恢复 | 只需回退代码 |
 | v0.45.0 之后的下一版 | governance `0019_action_request_operation_digest`（#538，遗留 189）：`action_requests` 加一列可空的 `operation_digest`（text，检查约束 `action_requests_operation_digest_shape`：为空、`none` 或 `sha256:<64 hex>`），不回填 | 可逆 | 只加一列可空列和只约束这一列的检查。读了 v0.44.0 的 `governance/approval`：`action_requests` 的读写都用显式列清单（`ACTION_REQUEST_ROW_COLUMNS`），不读不写新列，旧代码插入的行恒为空，约束天然满足。回退后旧代码回到执行时不带摘要（即遗留 189 本身），新代码期间写下的摘要留在列里、旧代码看不见；重新升级后这些行照常按记下的摘要执行，回退期间写入的空值行按执行时已发布的版本执行 | 只需回退代码；若要连 schema 一起撤：`alter table action_requests drop column operation_digest`（约束随列删除），并 `delete from schema_migrations where module = 'governance' and version = 19`（不撤也无害） |
 | v0.46.0 之后的下一版 | core `0043_audit_unattributed_raw_secret_scrub`（#549，遗留 183–187）：`audit_records_actor_shape` 在 0040 的未署名主机操作名单里加上 `cli.raw_secrets_scrubbed`，其余不变；不改数据、不加列 | 可逆 | 只放宽：满足 0040 约束的行都满足新约束，重建约束不需要回填；v0.46.0 的代码从不写这个动作，回退后约束只是多允许一种它不会写的行。`scrub-raw-secrets` 改写的 3 类数据是另一回事：遮蔽是单向的，回退代码不会恢复原文，旧代码照常读遮蔽后的文本（§3.25） | 只需回退代码；恢复备份会把原文带回来，只用于灾备 |
-| v0.49.0 之后的下一版 | governance `0020_auto_approval_definition`（#592，遗留 218）：`gatekeeper_policies` 加两列可空列 `operation_digest`（检查约束 `gatekeeper_policies_operation_digest_shape`：为空或 `sha256:<64 hex>`）与 `operation_version`（`gatekeeper_policies_operation_version_positive`：为空或 > 0），并按批准证据回填既有的按门自动批准规则（无证据的不回填，各记一条审计） | 可逆 | 只加两列可空列与只约束这两列的检查，回填只写新列与审计行。上一版的 `governance/policy` 读写 `gatekeeper_policies` 都用显式列清单，看不到新列（PR 与审查 #493 核对，不需要 reversibility 声明）。回退后上一版写的规则不带摘要，重新升级后在本版显示暂停、走审批；用上一版编辑一条已绑定的规则会保留旧摘要，回到本版显示「已暂停 · 定义已变」——都只会更窄，不会更宽（§3.29） | 只需回退代码；若要连 schema 一起撤：`alter table gatekeeper_policies drop column operation_digest, drop column operation_version`（约束随列删除），并 `delete from schema_migrations where module = 'governance' and version = 20`（不撤也无害；审计行保留） |
-| v0.49.0 之后的下一版 | governance `0021_action_request_withdraw_failure_kind`（#601，S11 GO1 前半）：重建 `action_requests_status_check` 加 `withdrawn`，加列 `failure_kind` 与 CHECK `action_requests_failure_kind_check`，加触发器 `action_requests_status_guard`，按白名单回填存量失败行 | 可逆 | 上一版按显式列清单读写 `action_requests`，看不到 `failure_kind`，也从不写 `withdrawn`；它写的失败行由触发器补 `outcome_unknown`（从不诱导重试的读法）；残留的 `withdrawn` 行对它是终态。PR 在本地先应用本版全部迁移、再跑 v0.49.0 内核全套测试（199 个文件 3343 个测试）全过，不需要 reversibility 声明。回填和 `ALTER TABLE` 同一事务、全表扫描 `audit_records`，窗口前估算锁表时间（§3.30） | 只需回退代码；若要连 schema 一起撤：`drop trigger action_requests_status_guard on action_requests` 与 `drop function action_requests_status_guard()`、`alter table action_requests drop column failure_kind`，把 `withdrawn` 行先改到终态后按 0003 重建状态 CHECK，并 `delete from schema_migrations where module = 'governance' and version = 21`（不撤也无害） |
-| v0.49.0 之后的下一版 | goal `0001_goal_runs`（#607，S11 GO1 后半，新模块 `goal`，迁移锁键 7241000701）：新表 `goal_runs` / `plan_revisions` / `step_runs`、守卫触发器、延迟约束触发器 `plan_revisions_adopted` | 可逆 | 新模块的新表，上一版从不读写（PR 在本地按 `reversibility-probe` 方式核对） | 只需回退代码；若要连 schema 一起撤：先撤 `task/0007` 与 `governance/0022` 的外键，再 `drop table step_runs, plan_revisions, goal_runs cascade` 并 `delete from schema_migrations where module = 'goal'`（不撤也无害） |
-| v0.49.0 之后的下一版 | task `0007_task_goal_step`（#607）：`tasks` 加可空列 `goal_run_id` / `step_run_id` / `plan_revision` / `step_attempt` / `run_config_snapshot`、CHECK、外键、I-G1 唯一索引、触发器 `tasks_goal_step_immutable`，`worker_runs_task_idx` | 可逆 | 只加可空列与只约束这些列的 CHECK / 外键 / 触发器，不回填；上一版按显式列清单读写 `tasks`，写的行新列全为 NULL。建索引期间阻塞 `worker_runs` 写入（§3.31） | 只需回退代码；若要撤：`drop trigger tasks_goal_step_immutable on tasks`、删索引与五列，并 `delete from schema_migrations where module = 'task' and version = 7` |
-| v0.49.0 之后的下一版 | governance `0022_action_request_step_run`（#607）：`action_requests` 加可空列 `step_run_id`、外键、触发器 `action_requests_step_run_immutable`，`action_requests_parent_worker_run_idx` | 可逆 | 同上：可空列不回填，上一版写的行为 NULL，触发器只在改这一列时触发；建索引期间阻塞 `action_requests` 写入（§3.31） | 只需回退代码；若要撤：`drop trigger action_requests_step_run_immutable on action_requests`、删索引与列，并 `delete from schema_migrations where module = 'governance' and version = 22` |
-| v0.49.0 之后的下一版 | core `0044_audit_records_resource_idx`（#615，遗留 338）：部分索引 `audit_records_resource_idx (workspace_id, resource_id, created_at) where resource_id is not null`，同名无效残留先删再建 | 可逆 | 只加索引，上一版不引用它，规划器自己选路径；PR 在本地先应用本版全部迁移、再跑 v0.49.0 内核全套测试全过，不需要 reversibility 声明。建索引期间阻塞审计写入（§3.32） | 只需回退代码；若要撤：`drop index if exists audit_records_resource_idx` 并 `delete from schema_migrations where module = 'core' and version = 44` |
-| v0.49.0 之后的下一版 | goal `0002_goal_advancer`（#619，S11 GO2）：`goal_runs` 加可空列 `next_tick_at`、CHECK `goal_runs_next_tick`、部分索引，重建守卫 `goal_runs_status_guard`（只多放行 `next_tick_at`） | 可逆 | 上一版没有 goal 模块，回退后不读写这些表；GO1 代码不读写 `next_tick_at`，守卫只是多允许改一列，不需要 reversibility 声明（§3.33） | 只需回退代码；若要撤：按 goal 0001 重建守卫函数、删索引与 CHECK、`alter table goal_runs drop column next_tick_at`，并 `delete from schema_migrations where module = 'goal' and version = 2` |
-| v0.49.0 之后的下一版 | goal `0003_goal_cancelling`（#626，S11 GO3a）：照 goal 0001 重建 `step_runs_status_guard`，把 `cancelling` 加进「步骤只能走向结束」的目标状态 | 可逆 | 守卫只多拒绝一种情况，上一版没有取消路径、不会碰到它，不需要 reversibility 声明（§3.35） | 只需回退代码；若要撤：按 goal 0001 重建 `step_runs_status_guard`，并 `delete from schema_migrations where module = 'goal' and version = 3` |
-| v0.49.0 之后的下一版 | core `0045_workspace_self_connections`（#620，S11 P0b）：新表 `workspace_self_connections`（强制 RLS、`endpoint_key` 部分唯一索引），按没有目录关联的 Gatekeeper 回填并剪掉地址里的凭据 | 可逆 | 上一版不读写这张表；回退后自接门的暂停**不再生效**（§3.34），其余行为与上一版相同；重新升级时 `create table if not exists` 与 `on conflict do nothing` 幂等 | 只需回退代码，表保留；若要撤：`drop table workspace_self_connections` 并 `delete from schema_migrations where module = 'core' and version = 45`（会丢掉平台的暂停记录，先导出） |
-| v0.49.0 之后的下一版 | goal `0004_goal_revision_hold`（#633，S11 GO3b）：`goal_runs` 加 `paused_by`、`paused_by_authority`、`advance_failures`，`plan_revisions` 加 `removals`，四个约束，照 goal 0002 重建 `goal_runs_status_guard`（多 hold 一段） | 可逆 | 加列都有上一版从不写的默认值或可空；守卫只多拒绝这几列的变化，上一版的暂停、继续不写 `paused_by`，回滚到上一版不需要额外步骤 |
-| v0.49.0 之后的下一版 | governance `0023_action_request_reconciliation`（#642，S11 GO3c）：`action_requests` 加 `reconciliation`、`reconciliation_decision_id`、`reexecute_decision_id`，四个 CHECK、两个外键，守卫触发器 `action_requests_reconciliation_guard` | 可逆 | 新列可空、上一版从不写；CHECK 对三列为空的行恒真；触发器只拦写这三列的插入和更新，回滚到上一版不需要额外步骤 |
-| v0.49.0 之后的下一版 | governance `0024_action_request_reconcile_checks`（#649，S11 GO3d）：新表 `action_request_reconcile_checks`（两个部分索引），重建 `action_requests_reconciliation_guard`（`decided_by` 为空的分支收窄） | 可逆（代码回退期间观察压缩报 degraded） | 上一版不读写新表；守卫收窄不影响 0023 下写出的人的结论；上一版的观察压缩看到新外键会安全拒绝运行（不删东西），apply-release 的 observations-compaction 报 degraded，重新应用带 0024 的版本后恢复 |
-| v0.49.0 之后的下一版 | governance `0025_change_segments`（#650，S11 P1-A）：新表 `change_segments`、`change_items`（守卫、RLS、授权） | 可逆 | 只加新表，上一版不读不写；回退期间装的模块版本之后溯源为 `provenance_unknown`，属预期 |
-| v0.49.0 之后的下一版 | goal `0005_goal_acceptance`（#664，S11 GO4a）：新表 `goal_acceptance_checks`，新列 `goal_runs.outcome_decision_id`，重建 `goal_runs_status_guard`（加 I-G5） | 可逆（代码回退期间观察压缩报 degraded） | 上一版不读写新表与新列；守卫只收紧得到 `achieved` 的路径；上一版没有任何路径把目标结束为 `completed` |
-| v0.49.0 之后的下一版 | goal `0006_step_acceptance`（#670，S11 GO4b）：扩大 `step_runs.waiting_reason` 的 CHECK，新表 `step_acceptance_checks`，新触发器 `step_runs_acceptance_guard` | 可逆（代码回退期间观察压缩报 degraded） | 上一版不读写新表；上一版遇到停在 `waiting(acceptance)` 的步骤会推进失败，连续失败后目标暂停等人，不会未经验收就成功 |
-| v0.49.0 之后的下一版 | core `0046_activity_trigger_record`（#674，S11 GO4c）：Activity 的 `kind` 与触发记录键写入后不可改的守卫 | 可逆 | 上一版从不改这些键 |
-| v0.49.0 之后的下一版 | goal `0007_fact_acceptance`（#674，S11 GO4c）：两张检查表加 `fact_check` / `fact_id`（外键指向 `links`）与新 kind，重建三个守卫（目标级检查绑定计划声明），新增四个函数 | 可逆 | 上一版不读写新列、不写事实检查行；回滚后留下的 pending 事实检查一直等待，上一版读到带事实检查的计划会暂停目标，不会判达成 |
-| v0.49.0 之后的下一版 | governance `0026_change_item_worker_kinds`（#679，S11 P1-D）：`change_items_kind_check` 加 `skill_version`、`worker_definition_version` | 可逆 | 只放宽约束、无数据改写；上一版不读 `change_items` |
-| v0.49.0 之后的下一版 | governance `0027_change_item_operation_kind`（#690，S11 P1-E1）：`change_items_kind_check` 加 `operation_version` | 可逆 | 只放宽约束、无数据改写；上一版不读 `change_items` |
-| v0.49.0 之后的下一版 | governance `0028_decision_subjects`（#700，遗留 421）：`decisions` 加主体五列、触发器 `decisions_subject` 与回填，RLS `decisions_visibility` 加对话与冲突规则 | 可逆 | 上一版不读新列，触发器在它的插入上照样填主体；上一版读面只因两条 RLS 规则变窄；可逆性探针（v0.49.0 内核套件跑在本版库结构上）只有 `reversibility-deltas.json` 已登记的 4 例失败 |
-| v0.49.0 之后的下一版 | goal `0008_goal_idempotency_key`（#704，S11 GO5c）：`goal_runs` 加可空列 `idempotency_key` 与两个部分唯一索引，不回填 | 可逆 | 上一版插入时该列为 NULL，两个索引都不收；守卫不允许改这一列 |
-| v0.49.0 之后的下一版 | task `0008_task_output_contract`（#716，S11 GO5d-1）：`tasks` 加三列 nullable jsonb、三条 CHECK 与写入后不可改触发器，不回填 | 可逆 | 上一版按列名读写 `tasks`，看不到这三列；已有行全为 NULL，CHECK 成立；它的更新不碰受保护的列 |
-| v0.49.0 之后的下一版 | goal `0009_plan_revision_source`（#722，S11 GO5d-2）：`plan_revisions` 加两列来源与 CHECK、写入后不可改，不回填 | 可逆 | 上一版不读写这两列，已有行为 NULL，CHECK 成立 |
-| v0.49.0 之后的下一版 | worker `0005_procedure_parameters`（#722，S11 GO5d-2）：`procedures.parameters` 与对象 CHECK、不可改触发器覆盖该列、`plan_revisions` 来源外键与部分索引，不回填 | 可逆 | 上一版提的流程 `parameters` 为 NULL，触发器多出的比较不影响它；外键只约束非空来源 |
-| v0.49.0 之后的下一版 | task `0009_worker_run_fingerprint`（#730，S11 W1a）：`worker_runs` 加 `run_spec` / `runtime_report` / `environment_digest` 与 CHECK、部分索引、只写一次触发器，不回填 | 可逆 | 上一版的 INSERT / SELECT 都列名、不写这三列、不把运行退回 `provisioning`，CHECK 对全 NULL 行成立 |
-| v0.49.0 之后的下一版 | linkage `0003`（#737，S11 GO5e-2）：`pending_context_items.kind` 的 CHECK 加上 `goal_update` | 可逆 | 只放宽 CHECK；上一版把 `goal_update` 行放进 `tasks` 组，不动数据 |
-| v0.49.0 之后的下一版 | goal `0010`（#745，遗留 454）：`plan_revisions` 加 `source_procedure_parameters` 与 CHECK | 可逆 | 只加可空列，不回填；上一版不读不写这一列，不动数据 |
-| v0.49.0 之后的下一版 | core `0047_operation_version_guard`（#765，遗留 482）：`objects` 上两个触发器（已发布 Operation 的版本守护、治理字段须有同事务审计），不改数据 | 可逆 | 上一版改 Operation 只走受治理的路径，它的 `refresh_operation_governance` 在同一事务写同样的审计；它绕过 handler 直接调 `refreshOperationGovernance` 的 3 条单元测试已在 `reversibility-deltas.json` 声明；撤销 SQL 见 §3.64 |
-| v0.49.0 之后的下一版 | goal `0011_absence_acceptance`（#780，S11 B-b）：两张检查表的 kind / 形状 CHECK 加 `observe_absent`，两个 guard 与 `goal_runs_status_guard` 重定义，due 索引带上新种类，不回填 | 可逆 | 上一发布 v0.49.0 没有目标代码，不读写这些表；现有行对新 CHECK 都成立；中间版本的处理见 §3.68 |
-| v0.49.0 之后的下一版 | worker `0006_draft_rejections`（#792，遗留 491）：新表 `draft_rejections`（只追加，RLS），从 `reject_draft` 审计回填 | 可逆 | 上一版不读不写这张表，在新结构上照常运行，只是它做的拒绝不留记录；工作区清除按 `workspace_id` 自动覆盖 |
-| v0.49.0 之后的下一版 | goal `0012_absence_baselines`（#786，S11 B-c）：新表 `goal_absence_baselines` 与 guard、`goal_absence_seen_before`、两张验收表上的 I-AB1 触发器，不回填 | 可逆 | 上一发布 v0.49.0 没有目标代码，不读写新表；它的观察压缩遇到新外键 fail-closed 拒绝运行（`reversibility-deltas.json` 已声明），见 §3.70 |
-| v0.49.0 之后的下一版 | task `0010_task_observe_scope`（#796，S11 GO11）：`tasks.observe_scope` 可空列与 CHECK、不可改触发器、`worker_runs` 继承触发器，不回填 | 可逆 | 上一版按列名读写 `tasks`，创建的 Task 都不设范围，`worker_runs` 插入都能通过继承检查；只有本版本创建的带范围 Task 回退后不能再启动子 Worker（失败即关闭），见 §3.71 |
-| v0.49.0 之后的下一版 | governance `0029_reconcile_absence_seen_before`（#799，S11「门确认不存在」reconcile）：函数 `action_request_absence_seen_before` 与 `action_requests` 触发器，不改表、不回填 | 可逆 | 上一发布 v0.49.0 没有目标代码，不跑 reconcile；中间版本的旧执行器写 `effect_seen` 不带 `absentAnswersReview` 会被拒，试满后记 `unavailable` 交人核对，见 §3.72 |
-| v0.49.0 之后的下一版 | worker `0007_eval_suites`（#802，S10 E3-1a）：新表 `eval_suites`、`eval_suite_changes`、`eval_fixture_gates` 与守卫触发器，无 DELETE 授权，不回填 | 可逆 | 只新增表，上一版不读不写，在新结构上照常运行；`purge_workspace` 按 `workspace_id` 清掉这三张表（有集成测试） |
-| v0.49.0 之后的下一版 | worker `0008_eval_cases`（#810，S10 E3-1b）：新表 `eval_cases` 与守卫触发器，`eval_suite_changes` kind 检查多收 `case_added` / `case_edited` / `case_retired`，无 DELETE 授权，不回填 | 可逆，**必须与 worker `0007` 同一版本发布** | 只新增表；上一发布 v0.49.0 不读不写评测表。假如有只带 0007 的版本，回滚到它后不认识三种新 kind，读写过用例的用例集历史会失败，所以两者不能分版本发布；`purge_workspace` 按 `workspace_id` 清理（有集成测试） |
+| v0.50.0 | governance `0020_auto_approval_definition`（#592，遗留 218）：`gatekeeper_policies` 加两列可空列 `operation_digest`（检查约束 `gatekeeper_policies_operation_digest_shape`：为空或 `sha256:<64 hex>`）与 `operation_version`（`gatekeeper_policies_operation_version_positive`：为空或 > 0），并按批准证据回填既有的按门自动批准规则（无证据的不回填，各记一条审计） | 可逆 | 只加两列可空列与只约束这两列的检查，回填只写新列与审计行。上一版的 `governance/policy` 读写 `gatekeeper_policies` 都用显式列清单，看不到新列（PR 与审查 #493 核对，不需要 reversibility 声明）。回退后上一版写的规则不带摘要，重新升级后在本版显示暂停、走审批；用上一版编辑一条已绑定的规则会保留旧摘要，回到本版显示「已暂停 · 定义已变」——都只会更窄，不会更宽（§3.29） | 只需回退代码；若要连 schema 一起撤：`alter table gatekeeper_policies drop column operation_digest, drop column operation_version`（约束随列删除），并 `delete from schema_migrations where module = 'governance' and version = 20`（不撤也无害；审计行保留） |
+| v0.50.0 | governance `0021_action_request_withdraw_failure_kind`（#601，S11 GO1 前半）：重建 `action_requests_status_check` 加 `withdrawn`，加列 `failure_kind` 与 CHECK `action_requests_failure_kind_check`，加触发器 `action_requests_status_guard`，按白名单回填存量失败行 | 可逆 | 上一版按显式列清单读写 `action_requests`，看不到 `failure_kind`，也从不写 `withdrawn`；它写的失败行由触发器补 `outcome_unknown`（从不诱导重试的读法）；残留的 `withdrawn` 行对它是终态。PR 在本地先应用本版全部迁移、再跑 v0.49.0 内核全套测试（199 个文件 3343 个测试）全过，不需要 reversibility 声明。回填和 `ALTER TABLE` 同一事务、全表扫描 `audit_records`，窗口前估算锁表时间（§3.30） | 只需回退代码；若要连 schema 一起撤：`drop trigger action_requests_status_guard on action_requests` 与 `drop function action_requests_status_guard()`、`alter table action_requests drop column failure_kind`，把 `withdrawn` 行先改到终态后按 0003 重建状态 CHECK，并 `delete from schema_migrations where module = 'governance' and version = 21`（不撤也无害） |
+| v0.50.0 | goal `0001_goal_runs`（#607，S11 GO1 后半，新模块 `goal`，迁移锁键 7241000701）：新表 `goal_runs` / `plan_revisions` / `step_runs`、守卫触发器、延迟约束触发器 `plan_revisions_adopted` | 可逆 | 新模块的新表，上一版从不读写（PR 在本地按 `reversibility-probe` 方式核对） | 只需回退代码；若要连 schema 一起撤：先撤 `task/0007` 与 `governance/0022` 的外键，再 `drop table step_runs, plan_revisions, goal_runs cascade` 并 `delete from schema_migrations where module = 'goal'`（不撤也无害） |
+| v0.50.0 | task `0007_task_goal_step`（#607）：`tasks` 加可空列 `goal_run_id` / `step_run_id` / `plan_revision` / `step_attempt` / `run_config_snapshot`、CHECK、外键、I-G1 唯一索引、触发器 `tasks_goal_step_immutable`，`worker_runs_task_idx` | 可逆 | 只加可空列与只约束这些列的 CHECK / 外键 / 触发器，不回填；上一版按显式列清单读写 `tasks`，写的行新列全为 NULL。建索引期间阻塞 `worker_runs` 写入（§3.31） | 只需回退代码；若要撤：`drop trigger tasks_goal_step_immutable on tasks`、删索引与五列，并 `delete from schema_migrations where module = 'task' and version = 7` |
+| v0.50.0 | governance `0022_action_request_step_run`（#607）：`action_requests` 加可空列 `step_run_id`、外键、触发器 `action_requests_step_run_immutable`，`action_requests_parent_worker_run_idx` | 可逆 | 同上：可空列不回填，上一版写的行为 NULL，触发器只在改这一列时触发；建索引期间阻塞 `action_requests` 写入（§3.31） | 只需回退代码；若要撤：`drop trigger action_requests_step_run_immutable on action_requests`、删索引与列，并 `delete from schema_migrations where module = 'governance' and version = 22` |
+| v0.50.0 | core `0044_audit_records_resource_idx`（#615，遗留 338）：部分索引 `audit_records_resource_idx (workspace_id, resource_id, created_at) where resource_id is not null`，同名无效残留先删再建 | 可逆 | 只加索引，上一版不引用它，规划器自己选路径；PR 在本地先应用本版全部迁移、再跑 v0.49.0 内核全套测试全过，不需要 reversibility 声明。建索引期间阻塞审计写入（§3.32） | 只需回退代码；若要撤：`drop index if exists audit_records_resource_idx` 并 `delete from schema_migrations where module = 'core' and version = 44` |
+| v0.50.0 | goal `0002_goal_advancer`（#619，S11 GO2）：`goal_runs` 加可空列 `next_tick_at`、CHECK `goal_runs_next_tick`、部分索引，重建守卫 `goal_runs_status_guard`（只多放行 `next_tick_at`） | 可逆 | 上一版没有 goal 模块，回退后不读写这些表；GO1 代码不读写 `next_tick_at`，守卫只是多允许改一列，不需要 reversibility 声明（§3.33） | 只需回退代码；若要撤：按 goal 0001 重建守卫函数、删索引与 CHECK、`alter table goal_runs drop column next_tick_at`，并 `delete from schema_migrations where module = 'goal' and version = 2` |
+| v0.50.0 | goal `0003_goal_cancelling`（#626，S11 GO3a）：照 goal 0001 重建 `step_runs_status_guard`，把 `cancelling` 加进「步骤只能走向结束」的目标状态 | 可逆 | 守卫只多拒绝一种情况，上一版没有取消路径、不会碰到它，不需要 reversibility 声明（§3.35） | 只需回退代码；若要撤：按 goal 0001 重建 `step_runs_status_guard`，并 `delete from schema_migrations where module = 'goal' and version = 3` |
+| v0.50.0 | core `0045_workspace_self_connections`（#620，S11 P0b）：新表 `workspace_self_connections`（强制 RLS、`endpoint_key` 部分唯一索引），按没有目录关联的 Gatekeeper 回填并剪掉地址里的凭据 | 可逆 | 上一版不读写这张表；回退后自接门的暂停**不再生效**（§3.34），其余行为与上一版相同；重新升级时 `create table if not exists` 与 `on conflict do nothing` 幂等 | 只需回退代码，表保留；若要撤：`drop table workspace_self_connections` 并 `delete from schema_migrations where module = 'core' and version = 45`（会丢掉平台的暂停记录，先导出） |
+| v0.50.0 | goal `0004_goal_revision_hold`（#633，S11 GO3b）：`goal_runs` 加 `paused_by`、`paused_by_authority`、`advance_failures`，`plan_revisions` 加 `removals`，四个约束，照 goal 0002 重建 `goal_runs_status_guard`（多 hold 一段） | 可逆 | 加列都有上一版从不写的默认值或可空；守卫只多拒绝这几列的变化，上一版的暂停、继续不写 `paused_by`，回滚到上一版不需要额外步骤 |
+| v0.50.0 | governance `0023_action_request_reconciliation`（#642，S11 GO3c）：`action_requests` 加 `reconciliation`、`reconciliation_decision_id`、`reexecute_decision_id`，四个 CHECK、两个外键，守卫触发器 `action_requests_reconciliation_guard` | 可逆 | 新列可空、上一版从不写；CHECK 对三列为空的行恒真；触发器只拦写这三列的插入和更新，回滚到上一版不需要额外步骤 |
+| v0.50.0 | governance `0024_action_request_reconcile_checks`（#649，S11 GO3d）：新表 `action_request_reconcile_checks`（两个部分索引），重建 `action_requests_reconciliation_guard`（`decided_by` 为空的分支收窄） | 可逆（代码回退期间观察压缩报 degraded） | 上一版不读写新表；守卫收窄不影响 0023 下写出的人的结论；上一版的观察压缩看到新外键会安全拒绝运行（不删东西），apply-release 的 observations-compaction 报 degraded，重新应用带 0024 的版本后恢复 |
+| v0.50.0 | governance `0025_change_segments`（#650，S11 P1-A）：新表 `change_segments`、`change_items`（守卫、RLS、授权） | 可逆 | 只加新表，上一版不读不写；回退期间装的模块版本之后溯源为 `provenance_unknown`，属预期 |
+| v0.50.0 | goal `0005_goal_acceptance`（#664，S11 GO4a）：新表 `goal_acceptance_checks`，新列 `goal_runs.outcome_decision_id`，重建 `goal_runs_status_guard`（加 I-G5） | 可逆（代码回退期间观察压缩报 degraded） | 上一版不读写新表与新列；守卫只收紧得到 `achieved` 的路径；上一版没有任何路径把目标结束为 `completed` |
+| v0.50.0 | goal `0006_step_acceptance`（#670，S11 GO4b）：扩大 `step_runs.waiting_reason` 的 CHECK，新表 `step_acceptance_checks`，新触发器 `step_runs_acceptance_guard` | 可逆（代码回退期间观察压缩报 degraded） | 上一版不读写新表；上一版遇到停在 `waiting(acceptance)` 的步骤会推进失败，连续失败后目标暂停等人，不会未经验收就成功 |
+| v0.50.0 | core `0046_activity_trigger_record`（#674，S11 GO4c）：Activity 的 `kind` 与触发记录键写入后不可改的守卫 | 可逆 | 上一版从不改这些键 |
+| v0.50.0 | goal `0007_fact_acceptance`（#674，S11 GO4c）：两张检查表加 `fact_check` / `fact_id`（外键指向 `links`）与新 kind，重建三个守卫（目标级检查绑定计划声明），新增四个函数 | 可逆 | 上一版不读写新列、不写事实检查行；回滚后留下的 pending 事实检查一直等待，上一版读到带事实检查的计划会暂停目标，不会判达成 |
+| v0.50.0 | governance `0026_change_item_worker_kinds`（#679，S11 P1-D）：`change_items_kind_check` 加 `skill_version`、`worker_definition_version` | 可逆 | 只放宽约束、无数据改写；上一版不读 `change_items` |
+| v0.50.0 | governance `0027_change_item_operation_kind`（#690，S11 P1-E1）：`change_items_kind_check` 加 `operation_version` | 可逆 | 只放宽约束、无数据改写；上一版不读 `change_items` |
+| v0.50.0 | governance `0028_decision_subjects`（#700，遗留 421）：`decisions` 加主体五列、触发器 `decisions_subject` 与回填，RLS `decisions_visibility` 加对话与冲突规则 | 可逆 | 上一版不读新列，触发器在它的插入上照样填主体；上一版读面只因两条 RLS 规则变窄；可逆性探针（v0.49.0 内核套件跑在本版库结构上）只有 `reversibility-deltas.json` 已登记的 4 例失败 |
+| v0.50.0 | goal `0008_goal_idempotency_key`（#704，S11 GO5c）：`goal_runs` 加可空列 `idempotency_key` 与两个部分唯一索引，不回填 | 可逆 | 上一版插入时该列为 NULL，两个索引都不收；守卫不允许改这一列 |
+| v0.50.0 | task `0008_task_output_contract`（#716，S11 GO5d-1）：`tasks` 加三列 nullable jsonb、三条 CHECK 与写入后不可改触发器，不回填 | 可逆 | 上一版按列名读写 `tasks`，看不到这三列；已有行全为 NULL，CHECK 成立；它的更新不碰受保护的列 |
+| v0.50.0 | goal `0009_plan_revision_source`（#722，S11 GO5d-2）：`plan_revisions` 加两列来源与 CHECK、写入后不可改，不回填 | 可逆 | 上一版不读写这两列，已有行为 NULL，CHECK 成立 |
+| v0.50.0 | worker `0005_procedure_parameters`（#722，S11 GO5d-2）：`procedures.parameters` 与对象 CHECK、不可改触发器覆盖该列、`plan_revisions` 来源外键与部分索引，不回填 | 可逆 | 上一版提的流程 `parameters` 为 NULL，触发器多出的比较不影响它；外键只约束非空来源 |
+| v0.50.0 | task `0009_worker_run_fingerprint`（#730，S11 W1a）：`worker_runs` 加 `run_spec` / `runtime_report` / `environment_digest` 与 CHECK、部分索引、只写一次触发器，不回填 | 可逆 | 上一版的 INSERT / SELECT 都列名、不写这三列、不把运行退回 `provisioning`，CHECK 对全 NULL 行成立 |
+| v0.50.0 | linkage `0003`（#737，S11 GO5e-2）：`pending_context_items.kind` 的 CHECK 加上 `goal_update` | 可逆 | 只放宽 CHECK；上一版把 `goal_update` 行放进 `tasks` 组，不动数据 |
+| v0.50.0 | goal `0010`（#745，遗留 454）：`plan_revisions` 加 `source_procedure_parameters` 与 CHECK | 可逆 | 只加可空列，不回填；上一版不读不写这一列，不动数据 |
+| v0.50.0 | core `0047_operation_version_guard`（#765，遗留 482）：`objects` 上两个触发器（已发布 Operation 的版本守护、治理字段须有同事务审计），不改数据 | 可逆 | 上一版改 Operation 只走受治理的路径，它的 `refresh_operation_governance` 在同一事务写同样的审计；它绕过 handler 直接调 `refreshOperationGovernance` 的 3 条单元测试已在 `reversibility-deltas.json` 声明；撤销 SQL 见 §3.64 |
+| v0.50.0 | goal `0011_absence_acceptance`（#780，S11 B-b）：两张检查表的 kind / 形状 CHECK 加 `observe_absent`，两个 guard 与 `goal_runs_status_guard` 重定义，due 索引带上新种类，不回填 | 可逆 | 上一发布 v0.49.0 没有目标代码，不读写这些表；现有行对新 CHECK 都成立；中间版本的处理见 §3.68 |
+| v0.50.0 | worker `0006_draft_rejections`（#792，遗留 491）：新表 `draft_rejections`（只追加，RLS），从 `reject_draft` 审计回填 | 可逆 | 上一版不读不写这张表，在新结构上照常运行，只是它做的拒绝不留记录；工作区清除按 `workspace_id` 自动覆盖 |
+| v0.50.0 | goal `0012_absence_baselines`（#786，S11 B-c）：新表 `goal_absence_baselines` 与 guard、`goal_absence_seen_before`、两张验收表上的 I-AB1 触发器，不回填 | 可逆 | 上一发布 v0.49.0 没有目标代码，不读写新表；它的观察压缩遇到新外键 fail-closed 拒绝运行（`reversibility-deltas.json` 已声明），见 §3.70 |
+| v0.50.0 | task `0010_task_observe_scope`（#796，S11 GO11）：`tasks.observe_scope` 可空列与 CHECK、不可改触发器、`worker_runs` 继承触发器，不回填 | 可逆 | 上一版按列名读写 `tasks`，创建的 Task 都不设范围，`worker_runs` 插入都能通过继承检查；只有本版本创建的带范围 Task 回退后不能再启动子 Worker（失败即关闭），见 §3.71 |
+| v0.50.0 | governance `0029_reconcile_absence_seen_before`（#799，S11「门确认不存在」reconcile）：函数 `action_request_absence_seen_before` 与 `action_requests` 触发器，不改表、不回填 | 可逆 | 上一发布 v0.49.0 没有目标代码，不跑 reconcile；中间版本的旧执行器写 `effect_seen` 不带 `absentAnswersReview` 会被拒，试满后记 `unavailable` 交人核对，见 §3.72 |
+| v0.50.0 | worker `0007_eval_suites`（#802，S10 E3-1a）：新表 `eval_suites`、`eval_suite_changes`、`eval_fixture_gates` 与守卫触发器，无 DELETE 授权，不回填 | 可逆 | 只新增表，上一版不读不写，在新结构上照常运行；`purge_workspace` 按 `workspace_id` 清掉这三张表（有集成测试） |
+| v0.50.0 | worker `0008_eval_cases`（#810，S10 E3-1b）：新表 `eval_cases` 与守卫触发器，`eval_suite_changes` kind 检查多收 `case_added` / `case_edited` / `case_retired`，无 DELETE 授权，不回填 | 可逆，**必须与 worker `0007` 同一版本发布** | 只新增表；上一发布 v0.49.0 不读不写评测表。假如有只带 0007 的版本，回滚到它后不认识三种新 kind，读写过用例的用例集历史会失败，所以两者不能分版本发布；`purge_workspace` 按 `workspace_id` 清理（有集成测试） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

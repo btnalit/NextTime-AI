@@ -85,6 +85,8 @@ export {
 export {
   ApplyLookupRequestSchema,
   ApplyRequestSchema,
+  CredentialPresenceRequestSchema,
+  CredentialPresenceResponseSchema,
   DescribeOperationsRequestSchema,
   DescribeOperationsResponseSchema,
   HealthResponseSchema,
@@ -100,6 +102,8 @@ export type {
   ApplyLookupRequest,
   ApplyRequest,
   ApplyResponse,
+  CredentialPresenceRequest,
+  CredentialPresenceResponse,
   DescribeOperationsRequest,
   DescribeOperationsResponse,
   HealthResponse,

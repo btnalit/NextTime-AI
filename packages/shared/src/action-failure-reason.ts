@@ -58,6 +58,26 @@ const REASON_CODE = /^([a-z][a-z_]*):/;
 const NOT_DELIVERED: ReadonlySet<string> = new Set(NOT_DELIVERED_FAILURE_CODES);
 const REFUSED: ReadonlySet<string> = new Set(REFUSED_BEFORE_RUNNING_FAILURE_CODES);
 
+/**
+ * Legacy 513: the codes that say for certain nothing ran — the two whitelists above. The goal page
+ * shows a step's refused or undelivered request by its code (`StepActionWire.failureCode`), never
+ * by its reason text (that stays in the approval detail, read by those who may read the request).
+ */
+export const ACTION_FAILURE_CODE_VALUES = [
+  ...NOT_DELIVERED_FAILURE_CODES,
+  ...REFUSED_BEFORE_RUNNING_FAILURE_CODES,
+] as const;
+export type ActionFailureCode = (typeof ACTION_FAILURE_CODE_VALUES)[number];
+
+const FAILURE_CODES: ReadonlySet<string> = new Set(ACTION_FAILURE_CODE_VALUES);
+
+/** The whitelisted code `reason` starts with (`<code>: <detail>`), or `null` — for a reason with
+ *  no code, a code not on either list, and the one refusal with no code. */
+export function failureCodeOfReason(reason: string | null | undefined): ActionFailureCode | null {
+  const code = reason ? REASON_CODE.exec(reason)?.[1] : undefined;
+  return code !== undefined && FAILURE_CODES.has(code) ? (code as ActionFailureCode) : null;
+}
+
 /** The failure kind `reason` names — `outcome_unknown` unless its code says for certain nothing
  *  ran (see the module comment). */
 export function failureKindOfReason(reason: string | null | undefined): ActionRequestFailureKind {

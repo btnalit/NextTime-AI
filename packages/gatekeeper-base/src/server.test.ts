@@ -467,6 +467,18 @@ describe('gatekeeper protocol server', () => {
     expect(del.statusCode).toBe(501);
   });
 
+  it('credential-presence says shared, and nothing else, on a shared-credential gate (legacy 513)', async () => {
+    app = buildApp(fakeTransport);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/gate/credential-presence',
+      headers: AUTH_HEADERS,
+      payload: { onBehalfOf: 'user-a' },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, result: { credentialMode: 'shared' } });
+  });
+
   describe('with a ConnectedAccountStore configured', () => {
     let dir: string;
     let store: ConnectedAccountStore;
@@ -506,6 +518,43 @@ describe('gatekeeper protocol server', () => {
         headers: AUTH_HEADERS,
       });
       expect(response.statusCode).toBe(404);
+    });
+
+    it('credential-presence answers the mode and a boolean only, never the credential (legacy 513)', async () => {
+      const server = buildApp(fakeTransport, store);
+      app = server;
+      await store.set('user-a', { token: 'super-secret-value', user: 'alice' });
+      const ask = (onBehalfOf: string) =>
+        server.inject({
+          method: 'POST',
+          url: '/gate/credential-presence',
+          headers: AUTH_HEADERS,
+          payload: { onBehalfOf },
+        });
+      const stored = await ask('user-a');
+      expect(stored.statusCode).toBe(200);
+      expect(stored.json()).toEqual({
+        ok: true,
+        result: { credentialMode: 'connected_account', present: true },
+      });
+      expect(stored.body).not.toContain('super-secret-value');
+      expect(stored.body).not.toContain('alice');
+      expect((await ask('user-b')).json().result).toEqual({
+        credentialMode: 'connected_account',
+        present: false,
+      });
+    });
+
+    it('credential-presence is kernel-only: no gate token, no answer', async () => {
+      app = buildApp(fakeTransport, store);
+      await store.set('user-a', { token: 'secret' });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/gate/credential-presence',
+        payload: { onBehalfOf: 'user-a' },
+      });
+      expect(response.statusCode).toBe(401);
+      expect(response.body).not.toContain('present');
     });
 
     it('DELETE removes a stored credential', async () => {

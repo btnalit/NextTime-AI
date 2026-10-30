@@ -66,6 +66,10 @@ export interface ActionRequestRowLike {
    *  whether this request was made against it; "总是允许" is offered only then, for that version
    *  (`lib/always-allow`). Absent on a row of another status: nothing is known either way. */
   readonly publishedDefinition?: PublishedDefinition;
+  /** Legacy 513: on a pending row read by a person, whether the requester has connected their own
+   *  account on the gate, when it is a gate where members do — asked of the gate. Absent when the
+   *  gate holds one shared credential, did not answer, or the row is not pending. */
+  readonly onBehalfOfAccount?: 'connected' | 'not_connected';
 }
 
 export interface ActionCardData {
@@ -103,6 +107,8 @@ export interface ActionCardData {
    *  or chat message carries neither; the chat reads the row for a card it may decide. */
   readonly requesterCanApprove?: boolean | null;
   readonly publishedDefinition?: PublishedDefinition;
+  /** Legacy 513: from a `list_pending`/`get_action` row only — see `ActionRequestRowLike`. */
+  readonly onBehalfOfAccount?: 'connected' | 'not_connected';
 }
 
 /** "docker.container_restart" -> "docker container restart" — the kernel's own convention
@@ -234,6 +240,7 @@ export function actionCardFromRow(
     ...(row.publishedDefinition !== undefined
       ? { publishedDefinition: row.publishedDefinition }
       : {}),
+    ...(row.onBehalfOfAccount !== undefined ? { onBehalfOfAccount: row.onBehalfOfAccount } : {}),
   };
 }
 

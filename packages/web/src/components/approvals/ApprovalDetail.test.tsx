@@ -7,6 +7,7 @@ import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import type { ActionRequestRow } from '../../lib/governance.js';
 import { HttpError } from '../../lib/http-client.js';
+import { hrefs } from '../../lib/router.js';
 import { FailureReasonWhere } from './ActionFailure.js';
 import { ApprovalDetail, type PendingConfirm } from './ApprovalDetail.js';
 
@@ -319,6 +320,33 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     cleanup();
     renderDetail({ requesterCanApprove: null }, { callerPrincipalId: 'principal-a' });
     expect(screen.getByTestId('approval-approve')).toBeTruthy();
+  });
+
+  it('legacy 513: a pending request whose requester has not connected their account on the gate says so before anyone approves, with where to connect it', () => {
+    renderDetail({ onBehalfOfAccount: 'not_connected' }, { callerPrincipalId: 'principal-b' });
+    const notice = screen.getByTestId('approval-requester-account');
+    expect(notice.textContent).toMatch(/申请人还没有在这个门上连接自己的账户/);
+    expect(
+      within(notice).getByTestId('approval-requester-account-connect').getAttribute('href'),
+    ).toBe(hrefs.systems());
+    // Approving stays possible: the notice informs, it does not decide.
+    expect(screen.getByTestId('approval-approve')).toBeTruthy();
+    cleanup();
+    // The requester reads it about their own account.
+    renderDetail({ onBehalfOfAccount: 'not_connected' }, { callerPrincipalId: 'principal-a' });
+    expect(screen.getByTestId('approval-requester-account').textContent).toMatch(
+      /^你还没有在这个门上连接自己的账户/,
+    );
+    cleanup();
+    for (const overrides of [
+      { onBehalfOfAccount: 'connected' as const },
+      {},
+      { onBehalfOfAccount: 'not_connected' as const, status: 'denied' },
+    ]) {
+      renderDetail(overrides);
+      expect(screen.queryByTestId('approval-requester-account')).toBeNull();
+      cleanup();
+    }
   });
 
   it('a medium approval without "总是允许" still goes straight through, no confirm', async () => {

@@ -1,5 +1,6 @@
 import type {
   AcceptanceCheck,
+  ActionFailureCode,
   ActionRequestFailureKind,
   ActionRequestReconciliation,
   FactCheck,
@@ -528,6 +529,20 @@ const GRANT_NEXT_STEP: Readonly<Record<PlanHintContext, readonly [string, string
   ],
 };
 
+/** Legacy 513: what to do about an account the requester has not connected — only they can
+ *  connect it (「录入我的凭证」 on the gate's row in Systems & access); then confirm, or turn the plan
+ *  down (a proposal), or revise it again (a revision). */
+const ACCOUNT_NEXT_STEP: Readonly<Record<PlanHintContext, readonly [string, string]>> = {
+  proposal: [
+    '请求人可以先在「系统与授权」里给这个门「录入我的凭证」再确认，或者驳回，让助手换个做法。',
+    'The requester can first use “Enter my credential” for the gate in Systems & access and then confirm, or turn the plan down so the assistant tries another way.',
+  ],
+  revision: [
+    '请求人可以在「系统与授权」里给这个门「录入我的凭证」，或者再修订计划，换掉或移除这一步。',
+    'The requester can use “Enter my credential” for the gate in Systems & access, or revise the plan again to change or remove the step.',
+  ],
+};
+
 /** A list in a sentence: each name in 「」 joined by 、 (zh), in quotes joined by commas (en). */
 function namesIn(names: readonly string[]): readonly [string, string] {
   return [
@@ -540,6 +555,8 @@ interface PlanHintArgs {
   readonly step: string;
   /** What to do about a missing grant, where the hint is read. */
   readonly next: readonly [string, string];
+  /** What to do about an account the requester has not connected, where the hint is read. */
+  readonly accountNext: readonly [string, string];
   /** The gates a `step_gate_not_held` step needs, by name where known. */
   readonly gates: readonly string[];
   /** The execute permissions a `step_capability_not_held` step needs, by their console names. */
@@ -587,6 +604,15 @@ const PLAN_HINT: Readonly<
     `请求人的智能体设置排除了步骤「${step}」的 Worker：${STEP_HINT_CONSEQUENCE[0]}请求人可以在「我的智能体」里调整设置。`,
     `The requester’s agent profile excludes the Worker of step “${step}” — ${STEP_HINT_CONSEQUENCE[1]} The requester can change it in My Agent.`,
   ],
+  // Legacy 513: asked of the gate when a person reads the proposal — the step would start, and the
+  // gate would refuse its calls for want of the requester's own credential.
+  step_account_not_connected: ({ step, gates, accountNext }) => {
+    const [zh, en] = namesIn(gates);
+    return [
+      `步骤「${step}」要用请求人自己的账户操作门${zh}，请求人还没有在${gates.length === 1 ? '这个门' : '这些门'}上连接账户：这一步开始后，门会因为没有可用凭证拒绝它的调用，批准也改变不了。${accountNext[0]}`,
+      `Step “${step}” acts on ${gates.length === 1 ? 'gate' : 'gates'} ${en} with the requester’s own account, which they have not connected there: once the step starts, the gate refuses its calls for want of a credential, and no approval changes that. ${accountNext[1]}`,
+    ];
+  },
 };
 
 const inZh: Translate = (zh) => zh;
@@ -603,6 +629,7 @@ export function planHintText(
   const [zh, en] = entry({
     step: hint.stepKey ?? '',
     next: GRANT_NEXT_STEP[context],
+    accountNext: ACCOUNT_NEXT_STEP[context],
     gates: (hint.gatekeeperIds ?? []).map((id) => gateNames.get(id) ?? shortId(id)),
     capabilities: (hint.capabilityNames ?? []).map(
       (name) => [actionLabel(name, inZh), actionLabel(name, inEn)] as const,
@@ -625,6 +652,8 @@ export function stepHintChipLabel(hint: PlanHint, t: Translate): string | null {
       return t('请求人无权限', 'Requester lacks access');
     case 'step_definition_excluded':
       return t('智能体设置已排除', 'Excluded by agent settings');
+    case 'step_account_not_connected':
+      return t('请求人未连接账户', 'Requester’s account not connected');
     default:
       return null;
   }
@@ -1472,6 +1501,48 @@ const ACTION_FAILURE: Readonly<Record<ActionRequestFailureKind, readonly [string
 /** How an action of a step failed (`StepActionWire.failureKind`). */
 export function actionFailureLabel(kind: ActionRequestFailureKind, t: Translate): string {
   const [zh, en] = ACTION_FAILURE[kind];
+  return t(zh, en);
+}
+
+/** Legacy 513: why a step's action was refused or not delivered, by its code
+ *  (`StepActionWire.failureCode`) — the reason's text stays with the request (its approval page). */
+const ACTION_FAILURE_CODE: Readonly<Record<ActionFailureCode, readonly [string, string]>> = {
+  gate_unreachable: ['连不上门', 'The gate could not be reached'],
+  gate_token_unavailable: [
+    '平台没有调用这个门的凭据',
+    'The platform holds no token to call this gate',
+  ],
+  connection_secret_missing: [
+    '这个门还没有连接密钥，所有者可以在门的详情里签发',
+    'The gate has no connection secret yet; an owner can issue one on the gate’s page',
+  ],
+  gate_not_found: ['门的地址上没有这个门', 'No gate answered at its address'],
+  apply_not_received: ['门上没有它执行过的记录', 'The gate has no record of running it'],
+  operation_disabled: ['这个动作在平台上被停用了', 'The Operation is disabled on the platform'],
+  operation_definition_unavailable: ['没有批准过的定义', 'No approved definition'],
+  target_refused: ['门的地址不是允许的目标', 'The gate’s address is not an allowed target'],
+  redirect_refused: [
+    '门要求跳转到别处，平台不跟随',
+    'The gate answered with a redirect the platform does not follow',
+  ],
+  unauthorized: ['门不接受平台的身份', 'The gate did not accept the platform’s credentials'],
+  operation_not_found: ['门上没有这个动作', 'The gate has no such Operation'],
+  invalid_params: ['门认为参数不对', 'The gate found the parameters invalid'],
+  invalid_operation_schema: ['动作的参数定义无效', 'The Operation’s parameter schema is invalid'],
+  operation_definition_mismatch: [
+    '门运行的定义和批准的不一样',
+    'The gate runs another definition than the approved one',
+  ],
+  operation_refused: ['门拒绝了这次调用', 'The gate refused the call'],
+  credential_unavailable: [
+    '门上没有这次调用可用的凭证：按成员连接账户的门，是请求人还没有在「系统与授权」里「录入我的凭证」',
+    'The gate holds no credential for this call: on a gate where members connect their own account, the requester has not used “Enter my credential” in Systems & access yet',
+  ],
+};
+
+/** Why a step's action was refused or not delivered, as a sentence. */
+export function actionFailureCodeText(code: ActionFailureCode, t: Translate): string {
+  const [zh, en] = ACTION_FAILURE_CODE[code];
   return t(zh, en);
 }
 

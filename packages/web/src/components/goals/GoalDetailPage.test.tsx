@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import { type CapabilityCaller, type PushSource, SILENT_PUSH_SOURCE } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
+import { hrefs } from '../../lib/router.js';
 import type { TaskUpdatedPush } from '../../lib/ws-client.js';
 import { GoalDetailPage } from './GoalDetailPage.js';
 import { GATE_ID, goalDetail, stepRun } from './goal-fixtures.test-helpers.js';
@@ -117,6 +118,7 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
               actionRequestId: 'ar-1',
               status: 'failed',
               failureKind: 'outcome_unknown',
+              failureCode: null,
               reconciliation: null,
             },
           ],
@@ -216,6 +218,65 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     expect(screen.getAllByTestId('goal-plan-hint').map((hint) => hint.textContent)).toEqual([
       expect.stringContaining('只凭请求人确认'),
     ]);
+  });
+
+  it('legacy 513: a step on a gate where the requester has not connected their account says so, with where to connect it; a refused action says why', async () => {
+    const base = goalDetail();
+    const proposal = goalDetail({
+      status: 'proposed',
+      planRevision: {
+        ...base.planRevision,
+        status: 'proposed',
+        hints: [
+          {
+            code: 'step_account_not_connected',
+            message: 'step "apply": …',
+            stepKey: 'apply',
+            gatekeeperIds: [GATE_ID],
+          },
+        ],
+      },
+    });
+    const { unmount } = renderPage(scriptedHttp(baseHandlers(proposal)));
+    const [hint] = await screen.findAllByTestId('goal-step-hint');
+    expect(hint?.textContent).toContain('请求人还没有在这个门上连接账户');
+    expect(
+      within(hint as HTMLElement)
+        .getByTestId('goal-step-hint-connect')
+        .getAttribute('href'),
+    ).toBe(hrefs.systems());
+    expect(
+      within(
+        screen
+          .getAllByTestId('goal-step')
+          .find((row) => row.dataset.stepKey === 'apply') as HTMLElement,
+      )
+        .getAllByTestId('goal-step-hint-chip')
+        .map((chip) => chip.textContent),
+    ).toEqual(['请求人未连接账户']);
+    unmount();
+
+    const failed = goalDetail({
+      status: 'paused',
+      steps: [
+        stepRun({
+          status: 'failed',
+          actions: [
+            {
+              actionRequestId: 'ar-1',
+              status: 'failed',
+              failureKind: 'refused',
+              failureCode: 'credential_unavailable',
+              reconciliation: null,
+            },
+          ],
+        }),
+      ],
+    });
+    renderPage(scriptedHttp(baseHandlers(failed)));
+    const reason = await screen.findByTestId('goal-step-action-reason');
+    expect(reason.textContent).toContain('门上没有这次调用可用的凭证');
+    expect(reason.textContent).not.toContain('credential_unavailable');
   });
 
   it('a cancel that left work running lists the leftovers', async () => {

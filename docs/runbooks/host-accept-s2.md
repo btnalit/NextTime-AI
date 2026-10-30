@@ -76,9 +76,25 @@ sh scripts/accept_s2.sh --keep
 跑完后切回来。用法、每个场景判定什么、怎么读 `RUN`/`REAL` 输出，见专门的
 `docs/runbooks/host-accept-real-model.md`。
 
-fake 路径在第 9 步之后还跑目标场景 S1、S4–S7、S9–S11（S11 GO7a，`scripts/lib/accept-s2-goals.sh`），
-比以前多 10 到 15 分钟：S6 的验收检查和 S4 反向的核对检查故意不成立，平台按各自的重试上限（默认 5 次、
-约 7.5 分钟）重试完才暂停，其余场景在这段时间里依次跑完。`--real` 不跑这些场景，并且在发布 http 门的清单之前把夹具测试账本的
+fake 路径在第 9 步之后还跑目标场景 S1、S2、S4–S12（S11 GO7a，`scripts/lib/accept-s2-goals.sh`），
+比以前多 20 到 25 分钟：S6 的验收检查和 S4 反向的核对检查故意不成立，平台按各自的重试上限（默认 5 次、
+约 7.5 分钟）重试完才暂停，S1、S11、S5、S4、S7、S9、S10、S12、S8 在这段时间里依次跑完；S2 最后单独跑。
+
+**S12 和 S2 会中断服务，默认不跑，只在环境变量 `ACCEPT_DISRUPTIVE=1` 时跑。** S2 `SIGKILL` 内核两次、重启
+`worker-supervisor` 一次（都是本项目自己的服务，脚本随即拉起并等健康检查通过，每次中断约 20 秒：这期间控制台和
+API 不可用，正在跑的入口 agent 会断线重连，每个 Task 容器短暂失去 supervisor）；S12 和 S2 还在 postgres 里锁住
+自己目标的一行（S12 至多 90 秒，S2 至多 180 秒）。不设这个变量时两者都不跑，日志里只有一行
+`NOTE goal-disruptive S12 (…) and S2 (…) not run: ACCEPT_DISRUPTIVE=unset, not 1 …`（`apply-release.sh` 的 S2
+摘要也打印这一行）；这是 NOTE 不是 SKIP，其余场景照常判定，最后照样打印 `S2 OK`。
+
+- **staging 预演打开**：`scripts/staging-rehearsal.sh` 跑在一次性的 runner 上，自己 `export ACCEPT_DISRUPTIVE=1`，
+  经目标版本的 `apply-release.sh` 传到它的 `accept_s2.sh`，所以每次预演都跑 S12 和 S2。
+- **生产主机默认关闭**：`apply-release.sh` 不设这个变量，主机 apply 里的 S2 不跑这两个场景。**要在主机上跑，必须在
+  维护窗口里、victor 当场明确同意之后**，由维护者在 apply 报 `RESULT ok` 之后单独再跑一遍
+  `ACCEPT_DISRUPTIVE=1 sh scripts/accept_s2.sh`（整套 S2，约 35–45 分钟，期间按上面说的中断两次），结果照常记
+  `docs/private/`。没有当场同意就不跑；这两项每次 staging 预演都跑。
+
+不要在别人正用这台主机上的栈时跑 fake 路径（`ACCEPT_DISRUPTIVE=1` 时尤其如此）。`--real` 不跑这些场景，并且在发布 http 门的清单之前把夹具测试账本的
 两个草稿（`ledger.get` / `ledger.add`）丢弃，发布后用 `real-ledger-withheld` 证明门上已发布的只有
 `stock.get`：真实模型的工具列表和加账本之前一样，`api_observe` 不会多一个 GET 可选。
 
@@ -215,10 +231,32 @@ PASS s9-cancelled bob cancelled goal <uuid>; alice revoked bob's other two grant
 PASS s10-confirmed alice proposed and confirmed goal <uuid> with maxTokens 1 (a writes to the test ledger under s10-<hex>, b after a)
 PASS s10-budget-exhausted goal <uuid> paused budget_exhausted, not failed: a's one attempt, capped at 1 token, spent <n> and failed budget_exhausted; b never started — its write had reached the gate first and is left pending for a person
 PASS s10-cancelled alice cancelled goal <uuid>, the decision a spent budget leaves to a person: a's pending write withdrawn, nothing written (ledger count 0 at the gate)
+PASS s12-confirmed alice proposed and confirmed goal <uuid> (a, held at fake-llm until released, then b after a)
+PASS s12-locked goal <uuid>'s row is locked (for no key update, its own transaction) while a's Worker is held mid model call, its Task <uuid> running
+PASS s12-wake-lost a's Task <uuid> completed with the held turn's report while the row was held; its TaskUpdated took <n>s to dispatch — the wake's update waited on the row and gave up (seen waiting, then gone, the lock still held) — and the run's next tick was <n>s away (its wall-clock deadline); lock ended (1)
+PASS s12-reconciled the reconcile scan found the run: a succeeded <n>s after the lock ended (one scan period is 60s), its Task having ended with that one, lost, TaskUpdated
+PASS s12-achieved goal <uuid> completed(achieved) on its own: b ran after a, one attempt and one Task each
+PASS s8t-confirmed alice proposed and confirmed goal <uuid> (a asks for s8t-<hex>-1, -2, -3; b after a)
+PASS s8t-running a's Worker asked for s8t-<hex>-1 (<uuid>) and s8t-<hex>-2 (<uuid>), both pending approval, and is held before the third; its Task <uuid> is waiting_approval
+PASS s8t-revised alice paused goal <uuid> and revised it to c alone: a and b superseded, a's writes <uuid> and <uuid> withdrawn in the same revision
+PASS s8t-terminated a's Task <uuid> was terminated (cancelled, WorkerRun terminated) while its Worker was held; its two writes stay withdrawn, it never asked for the third, the ledger holds nothing under s8t-<hex>
+PASS s8t-achieved alice resumed goal <uuid>; it completed(achieved) on c alone — a superseded after its one attempt, b never started
+PASS s8l-confirmed alice proposed and confirmed goal <uuid> (a asks for s8l-<hex>-1, -2, -3; b after a)
+PASS s8l-running a's Worker asked for s8l-<hex>-1 (<uuid>) and s8l-<hex>-2 (<uuid>), both pending approval, and is held before the third; its Task <uuid> is waiting_approval
+PASS s8l-revised alice paused goal <uuid> and revised it to c alone, letting a finish: s8l-<hex>-2 (<uuid>) withdrawn, s8l-<hex>-1 (<uuid>) released and audited
+PASS s8l-finished a's Worker asked for s8l-<hex>-3 after the revision and the kernel refused it (I-G9, audited on a; the Worker reported '<the refusal as its tool saw it>'); its Task completed with its result recorded, a stays superseded with no third request
+PASS s8l-released-holds c succeeded, and the goal stays running: it does not verify while the released s8l-<hex>-1 still awaits a decision
+PASS s8l-achieved alice approved the released s8l-<hex>-1; it ran once (ledger 1 at the gate) and goal <uuid> completed(achieved); s8l-<hex>-2 and s8l-<hex>-3 never ran (ledger 0 and 0)
 PASS s6-not-achieved goal <uuid> paused needs_decision, not completed: its check failed on an Observation after 5 attempts
 PASS s6-ended-not-achieved alice ended goal <uuid> as not achieved: completed,not_achieved,requester,
 PASS s4u-awaiting-reconcile goal <uuid> paused awaiting_reconcile: the platform's check did not see the effect after retrying, recorded nothing, ran nothing again (ledger count still 1 at the gate)
 PASS s4u-cancelled alice cancelled goal <uuid>, the decision a not-seen effect leaves to a person
+PASS s2-confirmed alice proposed and confirmed goal <uuid> (a, b, c in turn; a and b held at fake-llm until released)
+PASS s2-kernel-killed-task the kernel was killed (SIGKILL) while a's Worker was held mid model call and was healthy again in <n>s: a's Task <uuid> and its WorkerRun <uuid> are the same, still running, the run has one Task; its model call stayed held throughout (held=1 dropped=0)
+PASS s2-kernel-killed-advance a's Task completed with its held turn's report; the advance its end set off stopped on b's locked row with its transaction open; the kernel was killed in it and healthy again in <n>s; the dead advance still waited on the row (1 waiting) until the lock was ended (1); b had no Task
+PASS s2-advance-redone the new kernel advanced the run <n>s after the lock ended: a succeeded on its one attempt, b started once (Task <uuid>), one Task per attempt
+PASS s2-supervisor-restarted worker-supervisor restarted while b's Worker was held and answered /healthz in <n>s; 35s later (past one Task-reaper look) b's Task <uuid> and its WorkerRun <uuid> are the same, still running
+PASS s2-achieved goal <uuid> completed(achieved) through two kernel crashes and a worker-supervisor restart: a, b, c each succeeded on one attempt, each after the one before, one Task each; b's Task <uuid> completed with its held turn's report
 PASS cleanup reclaimed alice/bob entry containers, removed the accept-s2 fixture containers; workspace retained: <uuid>
 
 S2 OK
@@ -228,6 +266,10 @@ S2 OK
 时序原因没赶上，脚本会把它们降级成 `SKIP`——approval 链路本身（`list_pending`/`approve`/
 `get_action`）不受影响，仍然全部 PASS，只是"卡片出现在对话里"这一条视觉断言单独 SKIP，见脚本内注释。
 若确实出现，最后不会打印 `S2 OK`，而是打印 SKIP 汇总并以非 0 退出。）
+
+上面是 `ACCEPT_DISRUPTIVE=1` 时的输出。不设它时没有 `s12-*` 和 `s2-*` 这 11 行，`s4u-cancelled` 之后是一行
+`NOTE goal-disruptive S12 (row lock on a goal) and S2 (kernel killed twice, worker-supervisor restarted) not run: ACCEPT_DISRUPTIVE=unset, not 1 — …`，
+其余不变，最后仍是 `S2 OK`。
 
 **在 `packages/platform-extension` 的 entry-mode 工具注册修复落地之前**，对着当前 `main` 跑这个脚本，
 预期在 `ops-runner-publish` 之后很快看到：
@@ -261,13 +303,16 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
 | `s1-*` | S11 §7.2 S1：用户发起目标（a、b 并行，c 依赖 a、b）并确认后不再发消息（GO7a，`scripts/lib/accept-s2-goals.sh`） | 新对话里发「发起三步验收目标 GOAL_NONCE=…」，`entryGoalDagChatScenario`（fake-llm）驱动入口 agent `find_workers` → `find_operations('stock')` → `propose_goal`（三步都跑 ops-runner 的 `goal_step` 剧本，c 的 `dependsOn` 是 a、b；验收同第 9 步）。`proposed`：计划读出来 a、b 无依赖、c 依赖两者；`confirmed`：alice 在对话外以人通道确认，一次建出三个 StepRun；`achieved`：轮询至多 360s 到 `completed / achieved / verified_by_check`，三步各成功一次、各一个 Task；`order`：c 的尝试建于 a、b 都结束之后（a、b 是否真的重叠取决于请求者的并发配额，只报告不判定）；`no-new-turn`：从确认到结束，整个 workspace 没有新的 `agent_turn` Activity；`milestones`：发起对话里依次是 `propose`、`confirm`、`verify`、`complete`，a、b、c 各一条完成的 Task 状态行 |
 | `s11-*` | S11 §7.2 S11：一步的执行动作被拒绝 → 步骤与目标进入需要决定，不自动重试同一动作 | alice 以人通道提一步目标（ops-runner 的 `goal_ledger` 剧本：经 http 门调 `ledger.add` 往夹具账本写一条，`await_decision: true`；`maxAttempts` 2，留一次尝试不用），确认；等这条写入 `pending_approval` 后 alice `reject`。`needs-decision`：目标 `paused(needs_decision)`，步骤 `failed / action_refused`、一次尝试、那条写入 `rejected`；`no-retry`：15s 后状态不变、仍一次尝试一个 Task，夹具账本在这个键下计数 0（门侧根本没执行）；`cancelled`：alice `cancel_goal` 收尾 |
 | `s5-*` | S11 §7.2 S5：一步含需审批的执行动作，审批晚于 Worker 退出 → 步骤 `waiting(approval)`，目标不失败；批准并执行后，步骤验收通过才判成功，下一步自动开始 | 两步：`write`（`goal_ledger`，步骤验收是平台对 `ledger.get` 的观察 `count` 等于 1）与 `after`（`goal_step`，依赖 `write`）。Worker 的写入等决定到内核的等待上限（25s）后拿到 `pending_approval`、报告、退出；`waiting-approval`：此时目标 `running`、`write` 是 `waiting(approval)` 且那条写入仍 `pending_approval`、`after` 仍 `pending` 未开始、账本计数 0；alice 批准；`achieved`：轮询至多 300s 到 `completed / achieved / verified_by_check`，`write` 一次尝试、写入 `executed`、步骤检查 `passed` 且有 Observation，`after` 的尝试建于 `write` 结束之后并成功，账本计数 1（门侧恰好执行一次） |
-| `s6-*` | S11 §7.2 S6：各步都报告成功，但验收观察为假 → 不进入 `completed(achieved)`；暂停并附证据；人选「按未达成结束」后为 `completed(not_achieved)` | 一步 `goal_step`，验收是 `stock.get` 的 `symbol` 等于一个它永远不会返回的值。`verifying`：最先启动，步骤成功后目标进入 `verifying`；平台按重试上限在后台重试这条检查，期间跑 S1、S11、S5、S4、S7、S9、S10；`not-achieved`：最后回来，轮询至多 960s（默认上限 15 分钟加余量）到 `paused(needs_decision)`、无结果，检查 `failed` 且有 Observation、至少重试过一次；`ended-not-achieved`：alice `end_goal(not_achieved)` 后为 `completed / not_achieved` |
+| `s6-*` | S11 §7.2 S6：各步都报告成功，但验收观察为假 → 不进入 `completed(achieved)`；暂停并附证据；人选「按未达成结束」后为 `completed(not_achieved)` | 一步 `goal_step`，验收是 `stock.get` 的 `symbol` 等于一个它永远不会返回的值。`verifying`：最先启动，步骤成功后目标进入 `verifying`；平台按重试上限在后台重试这条检查，期间跑 S1、S11、S5、S4、S7、S9、S10、S12、S8；`not-achieved`：最后回来，轮询至多 960s（默认上限 15 分钟加余量）到 `paused(needs_decision)`、无结果，检查 `failed` 且有 Observation、至少重试过一次；`ended-not-achieved`：alice `end_goal(not_achieved)` 后为 `completed / not_achieved` |
 | `s4-*` / `s4u-*` | S11 §7.2 S4：门执行了写入但丢掉响应，且门的幂等重放也答 `apply_outcome_unknown` → 步骤 `waiting(reconcile)`；核对观察看到效果后判成功，门侧计数 1。反向：看不到效果 → `paused(awaiting_reconcile)`，不自动重新执行，门侧计数仍为 1 | 一步 `goal_ledger`，键以 `lose-` 开头：夹具记下这一条后不回答、直接断开连接，门无法判断是否执行，把这次调用记成结果不明，同一幂等键的重放也这样回答（R-51）。步骤声明了怎么核对（`reconcile`：观察 `ledger.get` 同一个键的 `count`）。alice 在 Worker 等决定时批准；`approved`：那条写入 `failed / outcome_unknown`。`s4u` 最先启动（与 S6 一起在后台），核对检查要 `count` 等于 2，永远不成立：`waiting-reconcile`：目标仍 `running`、步骤 `waiting(reconcile)`；最后回来，`awaiting-reconcile`：轮询至多 960s 到 `paused(awaiting_reconcile)`，写入仍只是结果不明、平台什么都没记下，核对检查 `not_seen` 且有 Observation、重试过，一个 Task，账本计数仍 1；`cancelled`：alice 取消。`s4` 在中间跑，核对要 `count` 等于 1：`reconciled`：轮询至多 300s 到 `completed / achieved / verified_by_check`，写入 `failed / outcome_unknown / effect_seen`，核对检查 `seen` 且有 Observation，一次尝试、一个 Task，账本计数 1 |
 | `s7-*` | S11 §7.2 S7（第一种）：运行中取消目标，此时有一条待审批写入在门队列队头、一条已批准还在队列里排队 → 两条都 `withdrawn`、门侧计数 0；同门里别的目标的后续写入随即被排水，不等周期 tick | 目标 A：`a1`、`a2` 两步并行写账本，`later` 依赖两者。两个 Worker 等决定超时退出后，两条写入都 `pending_approval`；按门自己的顺序（`requested_at`、id）取后一条批准，它排在队头后面不执行。目标 B：一步写账本，等它的写入也 `pending_approval` 后批准。`queued`：5s 后读门的队列（与排水器同一条件），恰好是「A 的待审批 → A 的已批准 → B 的已批准」，三个键的账本计数都是 0；alice `cancel_goal` A，回答 `cancelling`、三步取消、同一次调用撤回 A 的两条写入。`drained`：B 的写入在取消后 10s 内 `executed`（周期排水每 60s 一次、相位随机，10s 让撤回事件这条路坏了时误报 PASS 的机会约六分之一），报告实际秒数；`cancelled`：A 到 `cancelled`、`cleanupPending` 为假，两步各一次尝试、写入 `withdrawn`，`later` 没有尝试，两个 Task，A 的两个键账本计数 0，门队列空；`other-goal`：B `completed / achieved / verified_by_check`，账本计数 1 |
 | `s9-*` | S11 §7.2 S9：运行中请求者失去该门的授权 → 下一步不开始，目标 `paused(authority_lost)` | alice 把 ops-runner 声明的 ssh、http、docker 三扇门授权给 bob（`connect_gatekeeper`）；bob 以人通道提两步目标并确认：`a` 经 docker 门重启 accept-s2 测试容器（`docker_restart`），`b` 依赖 `a`。`a` 的写入待审批时，alice `revoke_capability` 撤掉 bob 的 ssh 门授权（`a` 用不到这扇门），再批准 `a` 的写入。`authority-lost`：目标 `paused(authority_lost)`，`a` 成功、写入 `executed`，`b` 为 `ready` 但没有尝试，一个 Task；`cancelled`：bob 取消自己的目标，alice 撤掉 bob 另外两条授权 |
 | `s10-*` | S11 §7.2 S10：累计 token 超出目标预算 → 目标 `paused(budget_exhausted)`，不是失败 | alice 提两步目标，`maxTokens` 为 1：`a` 写账本，`b` 依赖 `a`。`a` 这次尝试的 token 预算被限到目标剩下的 1；fake 模型第一次回答就超过，llm-proxy 上报用量（约每 2s）后内核把 Task 判 `failed / budget_exhausted` 并终止 Worker（写入已到门、Task 在 `waiting_approval` 时也一样：这次回答的用量往往在写入把 Task 移到等审批之后才上报），下一次推进发现目标的 token 用完，暂停。`budget-exhausted`：轮询至多 180s 到 `paused(budget_exhausted)`，`a` 一次尝试 `failed / budget_exhausted`，`b` 没有尝试，一个 Task、它的 `token_budget` 是 1，目标已用 token ≥ 1；`a` 的写入通常已先到门、仍待审批（`a` 是 `waiting(approval)`），偶尔 Worker 在写入到门之前就被停掉（`a` 是 `failed / transient`、没有写入），两种都接受并在 PASS 行里说明是哪一种；`cancelled`：alice 取消，那条写入（若有）`withdrawn`，账本计数 0 |
+| `s12-*` | S11 §7.2 S12：丢一次唤醒 → 周期核对扫描发现，在一个扫描周期内推进（只在 `ACCEPT_DISRUPTIVE=1` 时跑，见 §2） | 两步：`a`（`goal_step`，输入带 `HOLD=`：fake-llm 扣住它这一轮模型回答，等脚本放行）、`b` 依赖 `a`。`locked`：`a` 的 Worker 被扣住、Task `running` 时，脚本在 postgres 容器里另开一个 psql 会话，按推进锁行的同一方式锁住这个目标在 `goal_runs` 里的那一行（`for no key update`，只锁这一行、自己的事务；最多等 5s 拿锁，最多持有 90s 后自己提交（脚本带着锁最多等 55s），`client_connection_check_interval` 让死掉的 psql 进程 1s 内回滚；只杀掉这边的 `docker compose exec` 不会结束容器里的 psql，那时靠持有上限结束）。`wake-lost`：放行 `a`（放行前 `a` 的 Task 必须仍 `running`，放行恰好放出一次请求）；它报告、Task `completed`，且 Task 存下的 summary 必须是 fake-llm 为这一轮写好的那句（`accept_s2: goal step <nonce> done; …`），`TaskUpdated` 在锁住期间被派发，唤醒消费者的 `update goal_runs set next_tick_at = now() …` 被看到卡在这行锁上、等满自己的 `lock_timeout`（5s）后放弃（先看到等待、再看到消失，锁一直在），这时目标的下一次 tick 是它的墙钟截止（≥120s 之后，否则判失败：那样推进会自己到来，证明不了扫描）；然后 `pg_terminate_backend` 结束这把锁。`reconciled`：90s 内 `a` 成功、一次尝试，且离锁结束不超过 75s（扫描每 60s 一次，加推进器 1s 的 tick 和脚本 3s 的轮询）；结束这个 Task 的 `TaskUpdated` 只有那一条（丢掉的那条）。`achieved`：`completed / achieved / verified_by_check`，两步各一次尝试、一个 Task |
+| `s8t-*` / `s8l-*` | S11 §7.2 S8：修订移除一个正在运行的步骤 → 默认终止它的 Task 并撤回它的动作；选「让它跑完」时结果记录但不推进、新的执行请求被拒；修订时放行的那条照常审批执行，其余撤回 | 两步：`a` 跑 `goal_three_writes`（fake-llm：依次请求往账本写 `<k>-1`、`<k>-2`、`<k>-3`，第三次之前那一轮被扣住），`b` 依赖 `a`。前两条各等满内核的等待上限（25s）后都 `pending_approval`，`a` 的 Worker 被扣住、Task 仍活着。`running`：此时目标与 `a` 都是 `running`，两条写入待审批，`b` 没开始。alice `pause_goal`，再 `revise_goal`（基于修订 1，新计划只有一步 `c`，丢掉 `a`、`b`）。`s8t`（默认 `terminate`）：`revised`：修订 2，`a`、`b` 被取代、`c` 新建，`a` 的两条写入在同一次调用里撤回、没有放行；`terminated`：60s 内 `a` 的 Task `cancelled`、WorkerRun `terminated`，`a` 没有第三条请求，账本三个键都是 0；`achieved`：alice 恢复后只靠 `c` 到 `completed / achieved`，`a` 一次尝试后被取代，`b` 从没开始。`s8l`（`a` 设 `let_finish`，放行 `<k>-1`）：`revised`：`<k>-2` 撤回、`<k>-1` 放行，审计里恰好一条 `action_request.release`；`finished`：放行 `a` 的那一轮，Worker 请求 `<k>-3`，内核拒绝（I-G9：被取代的步骤不收新活；审计里 `a` 这个 StepRun 恰好一条 `request_action` 被拒、`refusal.code` 为 `goal_step_closed`、`stepStatus` 为 `superseded`），Worker 报告、Task `completed` 且审计记下，`a` 仍是被取代、没有第三条请求；`released-holds`：恢复后 `c` 成功，10s 后目标仍是 `running`——放行的 `<k>-1` 还没人决定，不进验收，账本仍 0；`achieved`：alice 批准 `<k>-1` 后它执行一次（账本 1），目标 `completed / achieved`，`<k>-2`、`<k>-3` 账本都是 0 |
+| `s2-*` | S11 §7.2 S2：运行中杀内核、重启 worker-supervisor → 恢复后继续，每次尝试恰好一个 Task，不跳步（只在 `ACCEPT_DISRUPTIVE=1` 时跑，见 §2） | 三步依次：`a`、`b`（都带 `HOLD=`）、`c`。`kernel-killed-task`：`a` 的 Worker 被扣住时 `docker compose kill -s SIGKILL kernel` 再 `start`，至多 120s 等新容器健康检查通过；之后 fake-llm 仍扣着 `a`（最多等 30s，容 fake-llm 在重启后刚开始应答 `docker compose exec` 慢），且它对这个名字的计数必须是 `held=1 dropped=0`：只扣住过一次请求、没有一次断开。Worker 的模型调用走 llm-proxy、不经内核，杀内核不能把它切断；`a` 的 Task 与 WorkerRun 还是原来那个、仍 `running`，目标只有一个 Task。（fake-llm 扣住一轮之前先发出响应头：llm-proxy 等上游响应头最多 10s（`UPSTREAM_CONNECT_TIMEOUT_MS`），超时就给 Worker 回 502、这一轮以错误结束；staging 前两轮就是这样在扣住 10s 后断开的，与杀内核无关。）`kernel-killed-advance`：先锁住 `b` 在 `step_runs` 里的那一行（同 S12 的锁，但最多持有 180s，内核恢复最长要 120s，锁不能在内核停着时自己结束），再放行 `a`（放行前 Task 仍 `running`）；`a` 报告、Task `completed`、存下的 summary 是 fake-llm 写好的那句，它触发的那次推进（先锁目标行、再按顺序锁每一步的行）卡在 `b` 这行上、事务开着——这时再杀内核、拉起；内核回来后断言锁仍在、死掉的那次推进的会话仍在等这行（等锁的会话察觉不到客户端已断，它还拿着先锁的目标行）；然后结束这把锁，死掉的那次推进拿到行锁、回结果时发现客户端不在了，事务回滚，`b` 在锁结束前没有 Task。`advance-redone`：新内核的推进器在那次死掉的认领租期（60s）过后接手，150s 内 `b` 被扣住：`a` 一次尝试成功、`b` 只开始一次、`c` 未开始，每次尝试一个 Task。`supervisor-restarted`：`b` 被扣住时 `docker compose restart worker-supervisor`，至多 90s 等它重新回答 `/healthz`（它在开始监听前接管仍在跑的 Task 容器），再等 35s（内核的 Task 回收器每 30s 看一次）：`b` 的 Task 与 WorkerRun 还是原来那个、仍 `running`。`achieved`：放行 `b`（放行前 Task 仍 `running`），`completed / achieved / verified_by_check`，三步各一次尝试、依次开始，每步一个 Task，`b` 的 Task 存下的 summary 是 fake-llm 写好的那句。fake-llm 的计数只看得到 llm-proxy 到 fake-llm 这一段：Worker 到 llm-proxy 那段断了时，Worker 会自己以兜底 summary 结束 Task，fake-llm 却仍扣着 llm-proxy 发来的请求，放行也放得出 1 次；所以 S12 与 S2 每次放行前看 Task 仍 `running`、结束后看 summary，从 Worker 这一侧确认被扣住的回答确实到了它手里 |
 | `real-ledger-withheld`（只在 `--real`） | 审查 #488 对 #806：夹具账本只给 fake 路径的目标场景用，不进真实模型的工具列表 | `connect-http-publish` 之前，alice 用 `discard_operation_draft` 丢弃 http 门的 `ledger.get` / `ledger.add` 两个导入草稿（`publish_manifest` 必须点名每个草稿，所以先丢弃再发布）；发布后按 `list_allowed_operations` 读工具时用的同一条件（`status` 为 `published`）查这扇门，已发布的恰好只有 `stock.get`，`find_operations("ledger")` 也查不到账本 |
-| `cleanup` | — | 第 9 步与目标场景里没走到结束的目标先收尾（`proposed` 用 `reject_goal`，`running` / `paused` / `verifying` 用 `cancel_goal`，只记日志；alice 是 owner，bob 的目标也由 alice 取消）；S9 给 bob 的授权没来得及撤的，`revoke_capability` 撤掉（只记日志）；回收 alice/bob 入口容器；`docker compose --profile accept-s2 rm -sf` 六个 accept-s2 容器（不是 `down`，见 §6）；workspace 行留作审计留痕 |
+| `cleanup` | — | 最先（`--keep` 也一样）：S2 杀掉还没拉起的服务先拉起，S12、S2 还持有的行锁结束掉，fake-llm 还扣着的回答放行（都只记日志）；然后第 9 步与目标场景里没走到结束的目标先收尾（`proposed` 用 `reject_goal`，`running` / `paused` / `verifying` 用 `cancel_goal`，只记日志；alice 是 owner，bob 的目标也由 alice 取消）；S9 给 bob 的授权没来得及撤的，`revoke_capability` 撤掉（只记日志）；回收 alice/bob 入口容器；`docker compose --profile accept-s2 rm -sf` 六个 accept-s2 容器（不是 `down`，见 §6）；workspace 行留作审计留痕 |
 
 ## 5. 已知偏离
 
@@ -281,8 +326,13 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
   `advancer.integration.test.ts` 的两个 S7 用例覆盖。S9 用撤掉一扇门的授权来做，和计划写的「降为无该门授权的
   角色」走同一处检查（`resolveStepAuthority`）；降角色与禁用请求者由集成测试覆盖。S9 的 `a` 写 docker 门而不写账本：
   动作以目标请求者的身份执行，http 门以 `connected_account` 接入、只存了 alice 的令牌，bob 在那里的写入会被门以
-  `credential_unavailable` 拒绝（这是正确行为），docker 门不按人取凭证。S2（重启）、S8（修订移除运行中的
-  步骤）、S12（丢一次唤醒）留给 GO7a 的下一个 PR。目标场景失败时 FAIL 行末尾带 `evidence:`，是那个目标的
+  `credential_unavailable` 拒绝（这是正确行为），docker 门不按人取凭证。S8 不覆盖被取代步骤的嵌套子 Task
+  （fake Worker 不派子 Task）和修订时已在 `executing` 的请求（门收到批准的写入就立即执行，停不住）——两者由
+  `advancer.integration.test.ts` 的 S8 用例覆盖。S12 计划里写的「重试直到死信」与内核不符：唤醒消费者从不抛错（抛错会把
+  事件重投给它的每个消费者），失败的唤醒就丢了，不重试、没有死信；把目标带回来的是周期核对扫描，`s12-*` 证明的就是这个。
+  S12 和 S2 默认不跑（§2）：生产主机上只有维护窗口里 victor 当场同意后、设 `ACCEPT_DISRUPTIVE=1` 才跑，平时由 staging 预演覆盖。
+  S2 杀内核是 `SIGKILL`（模拟崩溃，不是正常停机），重启 `worker-supervisor` 走它自己的 SIGTERM 停机（不停 Task 容器）；
+  `kernel-killed-advance` 靠一把行锁让推进停在事务中间，`s2-*` 失败时脚本退出前会先拉起内核、结束行锁再收尾。目标场景失败时 FAIL 行末尾带 `evidence:`，是那个目标的
   `get_goal` 摘要（状态、暂停原因、每步的尝试与动作、每条验收检查的尝试次数与最后错误），再跟 `actions:`：目标
   每条动作的状态、失败类别和审计里记下的失败原因（`get_goal` 只给类别，不给原因）；脚本退出前
   `cleanup` 会把没结束的目标取消掉，要留着现场排障就加 `--keep`（目标不取消，夹具也不删）。
@@ -409,7 +459,12 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
 
 ## 6. 清理
 
-`--keep` 不传时，`cleanup_step` 会：先收尾第 9 步与目标场景确认过、却没看到结束的目标（轮询超时、断言失败）——
+`cleanup_step` 最先做的一件事不看 `--keep`：S2 杀掉的服务若还没拉起就拉起（并等内核健康检查通过，至多
+120s），S12、S2 还持有的行锁用 `pg_terminate_backend` 结束（只结束 `application_name` 为 `accept_s2_lock_<名字>`
+的那个会话），fake-llm 还扣着的回答放行——这些都不是要留着排障的夹具，留着只会让内核不可用、让别的推进卡在锁上；
+只打日志（`cleanup: …`），不判失败。行锁即使脚本被直接杀掉、这一步没跑，也会在各自的上限（S12 90s、S2 180s）后自己提交结束。
+
+`--keep` 不传时，`cleanup_step` 接着会：先收尾第 9 步与目标场景确认过、却没看到结束的目标（轮询超时、断言失败）——
 否则它在脚本退出后还会继续：推进器在恢复生产 provider 之后重试那一步，平台验收对已删的门重试，
 最后停在等人决定的状态。`proposed` 的用 `reject_goal`，`running` / `paused` / `verifying` 的用
 `cancel_goal`，结果只打日志（`cleanup: goal <uuid> was … — cancel_goal answered HTTP 200, now

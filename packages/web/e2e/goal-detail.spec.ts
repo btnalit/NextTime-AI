@@ -233,6 +233,7 @@ const DETAIL = {
           actionRequestId: ACTION,
           status: 'failed',
           failureKind: 'outcome_unknown',
+          failureCode: null,
           reconciliation: null,
         },
       ],
