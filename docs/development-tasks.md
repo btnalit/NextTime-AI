@@ -4349,6 +4349,14 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 实现说明：（未开工）
 - 计划变更（协调线程 2026-10-30 定）：拆成两段。**GO7a**（主机窗口前）：staging 上用夹具门 + fake-llm 跑 S1–S12 里能在部署环境跑的目标场景；内核线程从最新 main 开分支，审查 #488 + #493。**GO7b**（主机窗口）：主机实跑、遗留 230 的真实目标、一次付费真实模型回归。
 - 实现说明（GO7a-1，#806，2026-10-30 合入，a779298；无迁移）：S1、S5、S6、S11 场景在 `scripts/lib/accept-s2-goals.sh`，由 `accept_s2.sh` fake 路径调用（S3 原本由第 9 步覆盖）；夹具账本 `ledger.get` / `ledger.add` 在门侧计数，`--real` 下发布前丢弃、不进真实模型的工具列表（`real-ledger-withheld`）；S1 里程碑 60 秒内轮询到两类行都到齐，按值排序后整体比较（重复一条也判失败）；S6 等待时长依赖内核默认 `GOAL_ACCEPTANCE_CHECK_MAX_*`，写在 `host-accept-s2.md`；S5 的 `await_decision: false` 与 S11 的审批过期两半在主机上不覆盖，只由 `advancer.integration.test.ts` 覆盖。下一步 GO7a-2：S2、S4、S7、S12 与 S8–S10 冒烟，需要夹具门的「丢响应」模式。
+- 实现说明（GO7a-2，#811，2026-10-30 合入，7f28dc7；无迁移，含运行时修复）：
+  - 夹具的 `lose-` 丢响应模式是 S4 的门侧结果不明来源；
+  - S7 用门队列（与 `listExecutableQueue` 同一条件）做前置断言，10 秒内排水作为「不等周期 tick」的判据；
+  - S9 用撤授权代替降角色（同一处检查），a 写 docker 门，因为 http 门按人取凭证、bob 在那里没有令牌；S10 用 `maxTokens: 1` 加阻塞的首步，让用量在尝试仍在运行时落地；
+  - 目标场景的 FAIL 行带每条动作审计里的失败原因；
+  - S10 在 staging 上查出 `recordWorkerRunUsage` 只判 `running` 的 Task，本 PR 修了：未结束的 Task 都判，已结束的终止仍活着的 Worker；同类排查结论在 PR 说明里；
+  - S7 运行中 Worker 被终止、S7 第二种、S9 降角色与禁用只由集成测试覆盖；
+  - 下一步 GO7a-3：S2、S8、S12（S12 的 psql 加锁只加行锁、带超时、失败时确保释放）。
 
 ### W1a — 统计车道（与 W1 并行）
 
