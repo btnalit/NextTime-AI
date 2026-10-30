@@ -232,6 +232,8 @@ function CapabilityPickerField({
               placeholder={t('按名称筛选…', 'Filter by name…')}
               mono
               data-testid="wd-capabilities-filter"
+              // Narrows the list, saves nothing: not an edit to ask about (legacy 497 rule).
+              data-no-discard-guard
             />
             <span className="text-3 text-small" data-testid="wd-capabilities-count">
               {t(`已选 ${selected.length} 个`, `${selected.length} selected`)}

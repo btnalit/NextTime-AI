@@ -621,6 +621,9 @@ function ConnectionStep({
           >
             <Input
               id="launcher-intended-gate-id"
+              // The launcher's other choices take effect step by step; a typed GATE_ID is the one
+              // thing to lose on a stray Escape (legacy 497 rule, #794 UX P3-1).
+              data-discard-guard
               value={intendedGateId}
               onChange={(event) => {
                 const normalized = normalizeGateIdInput(event.target.value);

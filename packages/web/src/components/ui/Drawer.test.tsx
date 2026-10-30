@@ -58,4 +58,16 @@ describe('ui/Drawer discard guard (legacy 497)', () => {
     fireEvent.click(await screen.findByTestId('discard-confirm-discard'));
     await waitFor(() => expect(screen.getByTestId('state').textContent).toBe('closed'));
   });
+
+  it('继续编辑 after a click on the overlay hands focus back to the field edited last (#794 UX R-1)', async () => {
+    render(<Harness />);
+    const input = screen.getByLabelText('name') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'half' } });
+    // A pointer press on the overlay leaves focus on <body>.
+    (document.activeElement as HTMLElement | null)?.blur();
+    fireEvent.click(screen.getByTestId('drawer-overlay'));
+    fireEvent.click(await screen.findByTestId('discard-confirm-keep'));
+    await waitFor(() => expect(screen.queryByTestId('discard-confirm')).toBeNull());
+    expect(document.activeElement).toBe(input);
+  });
 });

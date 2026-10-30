@@ -75,6 +75,9 @@ export function useDiscardGuard(): DiscardGuard {
   const t = useT();
   // Fields the person changed, and what each held before they did.
   const touched = useRef(new Set<FieldElement>());
+  // The field edited last — where 继续编辑 returns when the question came from a click on the
+  // overlay, which leaves focus on <body> (#794 UX R-1).
+  const lastEdited = useRef<FieldElement | null>(null);
   const before = useRef(new WeakMap<FieldElement, string>());
   const attached = useRef<HTMLElement | null>(null);
   const [pending, setPending] = useState<(() => void) | null>(null);
@@ -91,6 +94,7 @@ export function useDiscardGuard(): DiscardGuard {
   }, []);
   const reset = useCallback(() => {
     touched.current.clear();
+    lastEdited.current = null;
     before.current = new WeakMap();
     if (attached.current !== null) note(attached.current);
   }, [note]);
@@ -113,7 +117,9 @@ export function useDiscardGuard(): DiscardGuard {
       };
       const onEdit = (event: Event) => {
         const field = asField(event.target);
-        if (field !== null) touched.current.add(field);
+        if (field === null) return;
+        touched.current.add(field);
+        lastEdited.current = field;
       };
       element.addEventListener('focusin', onFocus, true);
       element.addEventListener('input', onEdit, true);
@@ -141,7 +147,11 @@ export function useDiscardGuard(): DiscardGuard {
         close();
         return;
       }
-      returnTo.current = document.activeElement;
+      const active = document.activeElement;
+      returnTo.current =
+        active !== null && active !== document.body && attached.current?.contains(active)
+          ? active
+          : lastEdited.current;
       setPending(() => close);
     },
     [edited],

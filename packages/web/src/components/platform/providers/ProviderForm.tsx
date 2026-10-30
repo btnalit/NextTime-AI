@@ -885,6 +885,8 @@ export function ProviderForm({
                 onChange={(event) => setFilter(event.target.value)}
                 placeholder={t('筛选，如 sonnet / gpt-4.1 / chat', 'Filter, e.g. sonnet / gpt-4.1')}
                 data-testid="provider-model-filter"
+                // Narrows the list, saves nothing: not an edit to ask about (legacy 497 rule).
+                data-no-discard-guard
               />
             ) : null}
             <ul className="provider-model-options">
