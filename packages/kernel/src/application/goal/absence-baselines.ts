@@ -210,6 +210,12 @@ async function latestTakes(
   return latest;
 }
 
+/** A check's current baseline with `look`: which look with that call it is — the looks made
+ *  before it with the same call, takes superseded before they settled not counted, plus one. A take
+ *  counts per check, so after the call changed the first look is take 2 or later, yet look 1
+ *  (#786 UX P3). */
+export type AbsenceBaselineLook = AbsenceBaselineRow & { readonly look: number };
+
 /** The baseline each of `checks` goes by: its latest take, when that take is of the call the check
  *  makes — otherwise none (the run has not taken one since the call changed). */
 export async function currentAbsenceBaselines(
@@ -217,21 +223,31 @@ export async function currentAbsenceBaselines(
   workspaceId: string,
   goalRunId: string,
   checks: readonly AbsenceBaselineCheck[],
-): Promise<ReadonlyMap<string, AbsenceBaselineRow>> {
-  const latest = await latestTakes(client, workspaceId, goalRunId);
-  const current = new Map<string, AbsenceBaselineRow>();
+): Promise<ReadonlyMap<string, AbsenceBaselineLook>> {
+  const takes = new Map<string, AbsenceBaselineRow[]>();
+  for (const row of await listAbsenceBaselines(client, workspaceId, goalRunId)) {
+    const own = takes.get(checkName(row)) ?? [];
+    own.push(row);
+    takes.set(checkName(row), own);
+  }
+  const current = new Map<string, AbsenceBaselineLook>();
   for (const check of checks) {
-    const row = latest.get(checkName(check));
-    if (row && sameAbsenceCall(row.call, check.call)) current.set(checkName(check), row);
+    const own = takes.get(checkName(check)) ?? [];
+    const row = own.at(-1);
+    if (!row || !sameAbsenceCall(row.call, check.call)) continue;
+    const before = own
+      .slice(0, -1)
+      .filter((take) => take.status !== 'superseded' && sameAbsenceCall(take.call, check.call));
+    current.set(checkName(check), { ...row, look: before.length + 1 });
   }
   return current;
 }
 
 /** The baseline {@link currentAbsenceBaselines} keeps for `check`, if any. */
 export function baselineOf(
-  current: ReadonlyMap<string, AbsenceBaselineRow>,
+  current: ReadonlyMap<string, AbsenceBaselineLook>,
   check: { readonly stepKey: string | null; readonly checkKey: string },
-): AbsenceBaselineRow | undefined {
+): AbsenceBaselineLook | undefined {
   return current.get(checkName(check));
 }
 

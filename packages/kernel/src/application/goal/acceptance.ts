@@ -18,7 +18,7 @@ import { redactedForAudit, refuseCredentialText } from '../../governance/redacti
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { listGoalRunLiveTaskSteps } from '../task/index.js';
 import {
-  type AbsenceBaselineRow,
+  type AbsenceBaselineLook,
   currentAbsenceBaselines,
   declaredAbsenceChecks,
 } from './absence-baselines.js';
@@ -431,9 +431,9 @@ export interface GoalAcceptanceView {
    *  one, in creation order. */
   readonly steps: readonly StepAcceptanceView[];
   /** S11 「门确认不存在」 B-c: the baseline each absence check of the plan in force goes by — the
-   *  goal's, then its steps' in plan order — the latest take of the call the plan makes; a check
-   *  without one has none listed. */
-  readonly absenceBaselines: readonly AbsenceBaselineRow[];
+   *  goal's, then its steps' in plan order — the latest take of the call the plan makes, with which
+   *  look with that call it is; a check without one has none listed. */
+  readonly absenceBaselines: readonly AbsenceBaselineLook[];
   /** What a completed run's outcome rests on — `null` until it completes. */
   readonly outcome: {
     readonly outcome: ObjectiveOutcome;
@@ -490,7 +490,7 @@ export async function readGoalAcceptance(
   const baselines =
     absenceChecks.length > 0
       ? await currentAbsenceBaselines(client, workspaceId, goalRunId, absenceChecks)
-      : new Map<string, AbsenceBaselineRow>();
+      : new Map<string, AbsenceBaselineLook>();
   return {
     goalRunId: goal.id,
     status: goal.status,

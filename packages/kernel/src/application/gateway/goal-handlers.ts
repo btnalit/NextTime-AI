@@ -328,6 +328,7 @@ function toWireAcceptance(view: GoalAcceptanceView): GoalAcceptanceWire {
       stepKey: baseline.stepKey,
       checkKey: baseline.checkKey,
       take: baseline.take,
+      look: baseline.look,
       status: baseline.status,
       attempts: baseline.attempts,
       lastError: baseline.lastError,

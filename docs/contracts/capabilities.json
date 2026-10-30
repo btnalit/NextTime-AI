@@ -9964,6 +9964,10 @@
                       "null"
                     ]
                   },
+                  "look": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
                   "observationId": {
                     "type": [
                       "string",
@@ -10001,6 +10005,7 @@
                   "stepKey",
                   "checkKey",
                   "take",
+                  "look",
                   "status",
                   "attempts",
                   "lastError",

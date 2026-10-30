@@ -853,6 +853,13 @@ const CHECK_ERROR: Readonly<Record<string, readonly [string, string]>> = {
     '这个 Operation 现在的版本发布时没有人确认门用的凭据看得到要查的东西，它的“不存在”证明不了什么，检查不做',
     'Nobody confirmed, when the Operation’s version in force was published, that the gate’s credentials can see what it looks up; its “not there” proves nothing, so the check is not made',
   ],
+  // A gate call that got no answer, or a refusal (#786 UX P3: said, not shown as a code).
+  gate_unreachable: ['连不上门', 'The gate could not be reached'],
+  gate_connection_lost: [
+    '和门的连接断了，没收到回答',
+    'The connection to the gate dropped before it answered',
+  ],
+  operation_refused: ['门拒绝了这次调用', 'The gate refused the call'],
   // S11 「门确认不存在」 B-c.
   never_seen_present: [
     '平台用同样的调用没有一次看到过它在：现在它不在，证明不了是这个目标删掉的，检查不做',
@@ -867,6 +874,15 @@ export function checkErrorLabel(code: string, t: Translate): string {
   if (known) return t(known[0], known[1]);
   const shown = visibleText(code);
   return t(`上次没成功（代码 ${shown}）`, `The last attempt did not succeed (code ${shown})`);
+}
+
+/** Why a try did not succeed, for a sentence that already says it did not (#786 UX P3): the
+ *  label of a known code, else just the code — not 「上次没成功」 again. */
+export function checkErrorReason(code: string, t: Translate): string {
+  const known = CHECK_ERROR[code];
+  if (known) return t(known[0], known[1]);
+  const shown = visibleText(code);
+  return t(`代码 ${shown}`, `code ${shown}`);
 }
 
 /** Legacy 470: an end given as an Object already in the graph reads as `objectNames`' 「名字 ·

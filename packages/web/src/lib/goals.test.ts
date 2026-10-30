@@ -14,6 +14,7 @@ import {
   type GoalMilestone,
   absenceOperationKey,
   checkErrorLabel,
+  checkErrorReason,
   checkKindLabel,
   exhaustedBudget,
   factCheckSentence,
@@ -259,6 +260,7 @@ describe('lib/goals', () => {
       stepKey: null,
       checkKey: 'gone',
       take: 1,
+      look: 1,
       status,
       attempts: 1,
       lastError: null,
@@ -459,6 +461,10 @@ describe('lib/goals', () => {
     expect(checkErrorLabel('predicate_unsatisfied', zh)).toBe('结果不符合期望');
     expect(checkErrorLabel('fact_not_observed', zh)).toMatch(/^没看到能作证据的事实/);
     expect(checkErrorLabel('gate_timeout', zh)).toBe('上次没成功（代码 gate_timeout）');
+    // #786 UX P3: inside a sentence that already says the try failed, only why.
+    expect(checkErrorReason('gate_timeout', en)).toBe('code gate_timeout');
+    expect(checkErrorReason('gate_unreachable', zh)).toBe('连不上门');
+    expect(checkErrorLabel('gate_unreachable', zh)).toBe('连不上门');
   });
 });
 

@@ -661,6 +661,7 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
       stepKey,
       checkKey,
       take: 1,
+      look: 1,
       status: 'pending' as const,
       attempts: 0,
       lastError: null,
@@ -691,6 +692,7 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
           }),
           look(null, 'never', {
             take: 2,
+            look: 2,
             status: 'never_seen_present',
             attempts: 1,
             observationId: 'obs-never-0001',
@@ -719,8 +721,9 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
       'none',
     ]);
     const [seen, never, later] = lines;
+    // #786 UX P2-1: a condition, not a verdict on the check beside it.
     expect(seen.textContent).toContain(
-      '开始前平台看到它在，所以它后来不在了，说明是在目标运行期间被删掉的。',
+      '开始前平台看到它在。之后门回答它不在，就说明是在目标运行期间删掉的。',
     );
     expect(seen.textContent).toContain('obs-seen');
     expect(never.textContent).toContain('开始前门就回答它不在（第 2 次看）');
@@ -730,7 +733,7 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     const step = (await screen.findAllByTestId('goal-step'))[1] as HTMLElement;
     const stepLine = within(step).getByTestId('goal-absence-baseline');
     expect(stepLine.getAttribute('data-baseline')).toBe('unavailable');
-    expect(stepLine.textContent).toContain('开始前平台没能看它在不在');
+    expect(stepLine.textContent).toContain('开始前平台没能看它在不在：门拒绝了这次调用。');
     expect(stepLine.textContent).toContain('继续运行会再看一次');
   });
 
@@ -749,6 +752,7 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
       stepKey: null,
       checkKey,
       take: 1,
+      look: 1,
       attempts: 1,
       lastError: null,
       observationId: null,
@@ -774,10 +778,15 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
       acceptance: {
         ...base.acceptance,
         absenceBaselines: [
-          look('seen', { status: 'seen_present', observationId: 'obs-seen-0001' }),
+          // Its call changed: take 2, yet the first look with this call.
+          look('seen', { take: 2, status: 'seen_present', observationId: 'obs-seen-0001' }),
           look('never', { status: 'never_seen_present', observationId: 'obs-never-0001' }),
           look('refused', { status: 'unavailable', lastError: 'operation_refused' }),
-          look('pending', { status: 'pending', attempts: 0, settledAt: null }),
+          look('pending', {
+            status: 'pending',
+            lastError: 'gate_unreachable',
+            settledAt: null,
+          }),
         ],
       },
     });
@@ -788,17 +797,20 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
       'goal-absence-baseline',
     ) as [HTMLElement, HTMLElement, HTMLElement, HTMLElement, HTMLElement];
     expect(seen.textContent).toContain(
-      '目标的步骤开始之后（计划改了这条检查）平台看到它在，所以它后来不在了，说明是在这之后被删掉的。',
+      '目标的步骤开始之后（计划改了这条检查）平台看到它在。之后门回答它不在，就说明是在这之后删掉的。',
     );
+    expect(seen.textContent).not.toContain('次看');
     expect(never.getAttribute('data-baseline')).toBe('never_seen_present');
     expect(never.textContent).toContain('平台在目标的步骤开始之后才看（计划改了这条检查）');
     expect(never.textContent).toContain('可能是前面的步骤删掉了它，也可能参数没指向要删的东西');
     expect(never.textContent).toContain('可以用「结束目标…」按你的判断结束');
     expect(never.textContent).not.toContain('开始前');
-    expect(refused.textContent).toContain('平台没能看它在不在（');
+    expect(refused.textContent).toContain('平台没能看它在不在：门拒绝了这次调用。');
     expect(refused.textContent).toContain('所以目标暂停，没有往下做');
     expect(refused.textContent).not.toContain('开始前');
     expect(pending.textContent).toContain('看到它在之后，目标才往下做。');
+    // #786 UX P3: the gate's failure in words, not 「上次没成功（代码 …）」 inside 「上次没看成」.
+    expect(pending.textContent).toContain('上次没看成：连不上门，稍后再试。');
     expect(later.getAttribute('data-baseline')).toBe('none');
     expect(later.textContent).toContain('目标往下做之前，平台会先看一次它在不在，还没看。');
   });

@@ -668,6 +668,7 @@ test.describe('S11 「门确认不存在」 B: absence checks on a goal (stand-i
   /** B-c: the platform's look before the goal's work, settled once. */
   const LOOK = {
     take: 1,
+    look: 1,
     attempts: 1,
     lastError: null,
     observationId: null,
@@ -786,7 +787,7 @@ test.describe('S11 「门确认不存在」 B: absence checks on a goal (stand-i
         'seen_present',
       );
       await expect(acceptance.getByTestId('goal-absence-baseline')).toContainText(
-        '说明是在目标运行期间被删掉的',
+        '之后门回答它不在，就说明是在目标运行期间删掉的。',
       );
       const removeOld = page.locator('[data-testid="goal-step"][data-step-key="remove-old"]');
       await removeOld.getByText(/这一步的验收检查/).click();
@@ -796,7 +797,7 @@ test.describe('S11 「门确认不存在」 B: absence checks on a goal (stand-i
       const stepLook = removeOld.getByTestId('goal-absence-baseline');
       await expect(stepLook).toHaveAttribute('data-baseline', 'unavailable');
       // #786 review #501: a look made after the work began does not say "before the work".
-      await expect(stepLook).toContainText('平台没能看它在不在（');
+      await expect(stepLook).toContainText('平台没能看它在不在：');
       await expect(stepLook).toContainText('所以目标暂停，没有往下做');
       await expect(stepLook).not.toContainText('开始前');
       await page.screenshot({

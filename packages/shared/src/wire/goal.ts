@@ -306,12 +306,16 @@ export type OverriddenAcceptanceCheckWire = z.infer<typeof OverriddenAcceptanceC
  *  `createdAt` is after an attempt's came after the work began). The goal's own check
  *  has `stepKey` `null`. Only a baseline of the call the plan in force makes is listed (its latest
  *  take); a check with none listed has not been looked at since the run last started running or its
- *  call changed. `lastError`: why it is `unavailable`, or why it was tried again. */
+ *  call changed. `take` counts the check's takes (as the audit does); `look` is which look with this
+ *  call it is — the earlier looks with the same call, ones superseded before they settled not
+ *  counted, plus one — so the first look after the call changed is look 1 (#786 UX P3).
+ *  `lastError`: why it is `unavailable`, or why it was tried again. */
 export const GoalAbsenceBaselineWireSchema = z
   .object({
     stepKey: z.string().nullable(),
     checkKey: z.string(),
     take: z.number().int().positive(),
+    look: z.number().int().positive(),
     status: GoalAbsenceBaselineStatusSchema,
     attempts: z.number().int().nonnegative(),
     lastError: z.string().nullable(),

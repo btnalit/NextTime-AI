@@ -6000,6 +6000,10 @@ describe.runIf(DATABASE_URL !== undefined)(
           after: { take: 1, status: 'never_seen_present' },
           retake: true,
         });
+        // The second look with this call (#786 UX P3: get_goal says which look it is).
+        expect((await acceptanceOf(goalRunId))?.absenceBaselines).toMatchObject([
+          { checkKey: 'gone', take: 2, look: 2, status: 'pending' },
+        ]);
         await advance(goalRunId, requester);
         expect(await attemptsOfA(goalRunId)).toEqual([]);
 
@@ -6081,6 +6085,10 @@ describe.runIf(DATABASE_URL !== undefined)(
           { take: 1, status: 'superseded' },
           { take: 2, status: 'seen_present' },
         ]);
+        // A take superseded before it settled was no look: take 2 is the first.
+        expect((await acceptanceOf(goalRunId))?.absenceBaselines).toMatchObject([
+          { take: 2, look: 1, status: 'seen_present' },
+        ]);
 
         const revise = (basedOnRevision: number, acceptance: readonly unknown[]) =>
           asRequester(requester, (client) =>
@@ -6112,7 +6120,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           { take: 3, status: 'pending', call: moved.check },
         ]);
         expect((await acceptanceOf(goalRunId))?.absenceBaselines).toMatchObject([
-          { checkKey: 'gone', take: 3, status: 'pending' },
+          { checkKey: 'gone', take: 3, look: 1, status: 'pending' },
         ]);
         const calls = observeClient.calls.length;
         expect(await lookBefore(goalRunId, RUNNING)).toEqual(['seen_present']);

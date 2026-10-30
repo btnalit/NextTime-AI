@@ -8,7 +8,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
 import {
   absenceOperationKey,
-  checkErrorLabel,
+  checkErrorReason,
   observationSentence,
   planAbsenceChecks,
 } from '../../lib/goals.js';
@@ -117,9 +117,10 @@ export function AbsenceBaselineLine({
   readonly firstAttemptAt: string | null;
 }) {
   const t = useT();
+  // Which look with this call (#786 UX P3: not the take, which counts the check's every call).
   const take =
-    baseline !== undefined && baseline.take > 1
-      ? t(`（第 ${baseline.take} 次看）`, ` (look ${baseline.take})`)
+    baseline !== undefined && baseline.look > 1
+      ? t(`（第 ${baseline.look} 次看）`, ` (look ${baseline.look})`)
       : '';
   if (baseline === undefined) {
     if (goalStatus !== 'proposed' && goalStatus !== 'running' && goalStatus !== 'paused') {
@@ -169,8 +170,8 @@ export function AbsenceBaselineLine({
               )}
           {baseline.lastError
             ? t(
-                ` 上次没看成：${checkErrorLabel(baseline.lastError, t)}，稍后再试。`,
-                ` The last try did not get an answer: ${checkErrorLabel(baseline.lastError, t)}; it tries again shortly.`,
+                ` 上次没看成：${checkErrorReason(baseline.lastError, t)}，稍后再试。`,
+                ` The last try did not get an answer: ${checkErrorReason(baseline.lastError, t)}; it tries again shortly.`,
               )
             : null}
         </span>
@@ -183,14 +184,15 @@ export function AbsenceBaselineLine({
           data-baseline="seen_present"
         >
           <span>
+            {/* #786 UX P2-1: a condition, not a verdict — the check beside it may not have passed. */}
             {afterWork
               ? t(
-                  `目标的步骤开始之后（计划改了这条检查）平台看到它在${take}，所以它后来不在了，说明是在这之后被删掉的。`,
-                  `After the goal’s steps had started (the plan changed this check) the platform saw it there${take}, so its absence later shows it was removed since.`,
+                  `目标的步骤开始之后（计划改了这条检查）平台看到它在${take}。之后门回答它不在，就说明是在这之后删掉的。`,
+                  `After the goal’s steps had started (the plan changed this check) the platform saw it there${take}. If the gate later answers that it is not there, it was removed since.`,
                 )
               : t(
-                  `开始前平台看到它在${take}，所以它后来不在了，说明是在目标运行期间被删掉的。`,
-                  `Before the work the platform saw it there${take}, so its absence later shows it was removed while the goal ran.`,
+                  `开始前平台看到它在${take}。之后门回答它不在，就说明是在目标运行期间删掉的。`,
+                  `Before the work the platform saw it there${take}. If the gate later answers that it is not there, it was removed while the goal ran.`,
                 )}
           </span>
           {baseline.settledAt ? (
@@ -230,7 +232,7 @@ export function AbsenceBaselineLine({
       );
     case 'unavailable': {
       const reason = baseline.lastError
-        ? checkErrorLabel(baseline.lastError, t)
+        ? checkErrorReason(baseline.lastError, t)
         : t('没有记下原因', 'no reason recorded');
       return (
         <span
@@ -240,12 +242,12 @@ export function AbsenceBaselineLine({
         >
           {afterWork
             ? t(
-                `平台没能看它在不在${take}（${reason}），所以目标暂停，没有往下做。继续运行会再看一次。`,
-                `The platform could not look whether it is there${take} (${reason}), so the goal paused and did not go on. Resuming looks again.`,
+                `平台没能看它在不在${take}：${reason}。所以目标暂停，没有往下做。继续运行会再看一次。`,
+                `The platform could not look whether it is there${take}: ${reason}. So the goal paused and did not go on. Resuming looks again.`,
               )
             : t(
-                `开始前平台没能看它在不在${take}（${reason}），所以目标暂停，步骤没有开始。继续运行会再看一次。`,
-                `Before the work the platform could not look whether it is there${take} (${reason}), so the goal paused before any step. Resuming looks again.`,
+                `开始前平台没能看它在不在${take}：${reason}。所以目标暂停，步骤没有开始。继续运行会再看一次。`,
+                `Before the work the platform could not look whether it is there${take}: ${reason}. So the goal paused before any step. Resuming looks again.`,
               )}
         </span>
       );
