@@ -19,7 +19,7 @@ import { Button } from './kit/button.js';
 import { EmptyState } from './kit/empty-state.js';
 import { ErrorBanner } from './kit/error-banner.js';
 import { Field, describedBy } from './kit/field.js';
-import { ModelHealthNote, ModelOption } from './kit/model-health.js';
+import { ModelHealthNote, ModelOption, withModelHealthNote } from './kit/model-health.js';
 import { Notice } from './kit/notice.js';
 import { DashboardCard } from './kit/section.js';
 import { Select } from './kit/select.js';
@@ -243,7 +243,12 @@ export function AgentProfileForm({
             onChange={(event) => update('model', event.target.value)}
             disabled={disabled}
             invalid={!!fieldErrors.model}
-            aria-describedby={describedBy('ap-model', !fieldErrors.model, !!fieldErrors.model)}
+            aria-describedby={withModelHealthNote(
+              describedBy('ap-model', true, !!fieldErrors.model),
+              'ap-model-health',
+              allowedModels,
+              state.model === INHERIT_MODEL ? policy?.defaultModel : state.model,
+            )}
           >
             <option value={INHERIT_MODEL}>
               {t('继承工作区默认', 'Inherit workspace default')}
@@ -266,6 +271,7 @@ export function AgentProfileForm({
             selectedId={state.model === INHERIT_MODEL ? policy?.defaultModel : state.model}
             canFix={false}
             testId="ap-model-health"
+            id="ap-model-health"
           />
         </Field>
       </DashboardCard>
@@ -382,11 +388,7 @@ export function AgentProfileForm({
             minRows={4}
             disabled={disabled}
             invalid={!!fieldErrors.promptAddendum || overLimit}
-            aria-describedby={describedBy(
-              'ap-prompt',
-              !fieldErrors.promptAddendum,
-              !!fieldErrors.promptAddendum,
-            )}
+            aria-describedby={describedBy('ap-prompt', true, !!fieldErrors.promptAddendum)}
           />
         </Field>
       </DashboardCard>

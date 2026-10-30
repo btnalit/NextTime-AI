@@ -8,7 +8,7 @@ import {
 import type { CapabilityCaller } from '../../../lib/clients.js';
 import type { ModelRow } from '../../../lib/governance.js';
 import { useT } from '../../../lib/i18n.js';
-import { ModelHealthNote, ModelOption } from '../../kit/model-health.js';
+import { ModelHealthNote, ModelOption, withModelHealthNote } from '../../kit/model-health.js';
 import { Select } from '../../kit/select.js';
 import { Card } from '../../ui/Card.js';
 import { ErrorBanner } from '../../ui/ErrorBanner.js';
@@ -96,6 +96,12 @@ export function DefaultModelControl({ http }: DefaultModelControlProps) {
             value={settings.state.data.defaultEntryModel ?? PI_DEFAULT}
             onChange={(event) => void handleChange(event.target.value)}
             disabled={submitting}
+            aria-describedby={withModelHealthNote(
+              undefined,
+              'platform-default-model-health',
+              catalog,
+              currentDefault,
+            )}
             data-testid="platform-default-model-select"
           >
             <option value={PI_DEFAULT}>
@@ -112,6 +118,7 @@ export function DefaultModelControl({ http }: DefaultModelControlProps) {
             selectedId={currentDefault}
             canFix
             testId="platform-default-model-health"
+            id="platform-default-model-health"
           />
         ) : null}
         {saved ? (

@@ -105,6 +105,10 @@ describe('SkillEditor (S6-A A2)', () => {
     await waitFor(() => expect(screen.getAllByRole('alert').length).toBeGreaterThan(0));
     expect(calls).toHaveLength(0);
     expect(screen.getByLabelText(/^描述/).getAttribute('aria-invalid')).toBe('true');
+    // #791 UX P3-2: the hint stays named next to the error — both are on screen.
+    expect(screen.getByLabelText(/^描述/).getAttribute('aria-describedby')).toBe(
+      'skill-description-hint skill-description-error',
+    );
     expect(screen.getByLabelText(/SKILL.md 正文/).getAttribute('aria-invalid')).toBe('true');
   });
 

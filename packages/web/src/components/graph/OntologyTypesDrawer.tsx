@@ -490,7 +490,13 @@ function LinkValidateTool({ http, linkType, signatures, t }: LinkValidateToolPro
       <h3 className="text-12 font-semibold uppercase tracking-wider text-text-3">
         {t('校验一个候选关系', 'Validate a candidate link')}
       </h3>
-      <form className="row-wrap" onSubmit={run} data-testid="graph-type-validate-form">
+      <form
+        className="row-wrap"
+        onSubmit={run}
+        data-testid="graph-type-validate-form"
+        // A check that saves nothing: Escape just closes the drawer (legacy 497 rule).
+        data-no-discard-guard
+      >
         <div className="field">
           <label className="field-label" htmlFor="graph-type-validate-source">
             {t('来源类型', 'Source type')}

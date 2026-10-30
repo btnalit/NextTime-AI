@@ -5,6 +5,7 @@ import { useT } from '../../lib/i18n.js';
 import { QUOTA_KEY_INFO, type QuotaKey } from '../../lib/quotas.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
+import { GuardedCancelButton } from '../kit/discard-guard.js';
 import { Field, describedBy } from '../kit/field.js';
 import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '../kit/sheet.js';
 import { StillNeeded } from '../kit/still-needed.js';
@@ -125,7 +126,7 @@ export function QuotaEditSheet({ http, open, onOpenChange, row, onSaved }: Quota
 
   return (
     <Sheet open={open} onOpenChange={(next) => !submitting && onOpenChange(next)}>
-      <SheetContent data-testid="quota-edit-sheet">
+      <SheetContent data-testid="quota-edit-sheet" data-discard-guard>
         <SheetHeader>
           <SheetTitle>{t(`编辑配额：${label}`, `Edit quota: ${label}`)}</SheetTitle>
         </SheetHeader>
@@ -215,9 +216,13 @@ export function QuotaEditSheet({ http, open, onOpenChange, row, onSaved }: Quota
             onConfirm={submit}
             testId="quota-edit-confirm"
           />
-          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting}>
+          <GuardedCancelButton
+            variant="ghost"
+            onCancel={() => onOpenChange(false)}
+            disabled={submitting}
+          >
             {t('取消', 'Cancel')}
-          </Button>
+          </GuardedCancelButton>
           <StillNeeded items={missing} hidden={submitting} testId="quota-edit-missing" />
         </SheetFooter>
       </SheetContent>

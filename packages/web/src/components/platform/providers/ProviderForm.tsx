@@ -32,6 +32,7 @@ import {
   providerKeyProblem,
   slugifyProviderId,
 } from '../../../lib/provider-form.js';
+import { useGuardedClose } from '../../kit/discard-guard.js';
 import { ErrorDetails } from '../../kit/error-details.js';
 import { InlineError } from '../../kit/inline-error.js';
 import { StillNeeded } from '../../kit/still-needed.js';
@@ -173,6 +174,8 @@ export function ProviderForm({
   onSubmit,
   onCancel,
 }: ProviderFormProps) {
+  // Legacy 497: in a drawer whose form was edited, 取消 asks before discarding it.
+  const guardedClose = useGuardedClose();
   const t = useT();
   const editing = initial !== undefined;
   const [presetKey, setPresetKey] = useState<string | null>(null);
@@ -882,6 +885,8 @@ export function ProviderForm({
                 onChange={(event) => setFilter(event.target.value)}
                 placeholder={t('筛选，如 sonnet / gpt-4.1 / chat', 'Filter, e.g. sonnet / gpt-4.1')}
                 data-testid="provider-model-filter"
+                // Narrows the list, saves nothing: not an edit to ask about (legacy 497 rule).
+                data-no-discard-guard
               />
             ) : null}
             <ul className="provider-model-options">
@@ -1105,7 +1110,7 @@ export function ProviderForm({
         >
           {editing ? t('保存', 'Save') : t('新增', 'Create')}
         </Button>
-        <Button variant="ghost" onClick={onCancel} disabled={submitting}>
+        <Button variant="ghost" onClick={() => guardedClose(onCancel)} disabled={submitting}>
           {t('取消', 'Cancel')}
         </Button>
         <StillNeeded items={missing} hidden={submitting} testId="provider-form-missing" />

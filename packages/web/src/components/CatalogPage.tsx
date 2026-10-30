@@ -2627,7 +2627,6 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       sheetTitle={t('Skill 详情', 'Skill detail')}
       detailTestId={showEditor ? 'skill-editor-drawer' : 'catalog-detail'}
       closeFocusFallback={catalogSectionTab}
-      holdOpen={showEditor}
     />
   );
 }
@@ -3239,7 +3238,6 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       sheetTitle={t('流程详情', 'Procedure detail')}
       detailTestId={showEditor ? 'procedure-editor-drawer' : 'catalog-detail'}
       closeFocusFallback={catalogSectionTab}
-      holdOpen={showEditor}
     />
   );
 }
@@ -3844,7 +3842,6 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         onClose={closeEditor}
         sheetTitle={t('Worker 详情', 'Worker detail')}
         detailTestId={showEditor ? 'worker-editor-drawer' : 'catalog-detail'}
-        holdOpen={showEditor}
       />
     );
   }
@@ -4204,7 +4201,6 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       sheetTitle={t('Worker 详情', 'Worker detail')}
       detailTestId={showEditor ? 'worker-editor-drawer' : 'catalog-detail'}
       closeFocusFallback={catalogSectionTab}
-      holdOpen={showEditor}
     />
   );
 }

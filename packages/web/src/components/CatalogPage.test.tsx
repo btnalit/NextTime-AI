@@ -2880,7 +2880,7 @@ describe('CatalogPage editors (S6-A A2)', () => {
     });
   });
 
-  it('at a narrow width, Escape leaves a half-filled Procedure editor open (legacy 497)', async () => {
+  it('at a narrow width, a half-filled Procedure editor asks before Escape or 取消 drops it (legacy 497)', async () => {
     vi.stubGlobal(
       'matchMedia',
       vi.fn(() => ({
@@ -2900,10 +2900,13 @@ describe('CatalogPage editors (S6-A A2)', () => {
       const name = within(drawer).getByLabelText(/^名称/) as HTMLInputElement;
       fireEvent.change(name, { target: { value: 'Deploy' } });
       fireEvent.keyDown(name, { key: 'Escape' });
+      fireEvent.click(await screen.findByTestId('discard-confirm-keep'));
+      await waitFor(() => expect(screen.queryByTestId('discard-confirm')).toBeNull());
       expect(screen.getByTestId('procedure-editor-drawer')).toBe(drawer);
       expect(name.value).toBe('Deploy');
-      // Its own 取消 still closes it.
+      // Its own 取消 asks the same; 放弃 closes it.
       fireEvent.click(within(drawer).getByRole('button', { name: /^取消$/ }));
+      fireEvent.click(await screen.findByTestId('discard-confirm-discard'));
       await waitFor(() => expect(screen.queryByTestId('procedure-editor-drawer')).toBeNull());
     } finally {
       vi.unstubAllGlobals();

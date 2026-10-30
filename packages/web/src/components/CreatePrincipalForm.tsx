@@ -8,6 +8,7 @@ import { roleDescription, roleLabel } from '../lib/labels.js';
 import { Button } from './kit/button.js';
 import { Confirm } from './kit/confirm.js';
 import { CopyButton } from './kit/copy-button.js';
+import { useGuardedClose } from './kit/discard-guard.js';
 import { ErrorBanner } from './kit/error-banner.js';
 import { Field, describedBy } from './kit/field.js';
 import { Notice } from './kit/notice.js';
@@ -44,6 +45,8 @@ export interface CreatePrincipalFormProps {
 const RESERVED_DISPLAY_NAME = /^__.+__$/;
 
 export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalFormProps) {
+  // Legacy 497: in a drawer whose form was edited, 取消 asks before discarding it.
+  const guardedClose = useGuardedClose();
   const t = useT();
   const [displayName, setDisplayName] = useState('');
   const [role, setRole] = useState<Role>('member');
@@ -205,7 +208,7 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
           hidden={submitting}
           testId="create-principal-missing"
         />
-        <Button variant="ghost" onClick={onCancel} disabled={submitting}>
+        <Button variant="ghost" onClick={() => guardedClose(onCancel)} disabled={submitting}>
           {t('取消', 'Cancel')}
         </Button>
         <Confirm

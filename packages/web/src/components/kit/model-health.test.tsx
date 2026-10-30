@@ -8,6 +8,7 @@ import {
   ModelHealthTag,
   ModelOption,
   modelOptionDisabled,
+  withModelHealthNote,
 } from './model-health.js';
 
 afterEach(cleanup);
@@ -178,5 +179,25 @@ describe('kit/model-health', () => {
     rerender(<ModelHealthTag model={model('a/x', 'untested')} testId="tag" />);
     expect(screen.getByTestId('tag').className).toContain('chip-warn');
     expect(screen.getByTestId('tag').textContent).toBe('未测试');
+  });
+
+  it('a picker names the note in aria-describedby exactly while the note is on screen (#791 UX P3-3)', () => {
+    const cases: readonly [readonly HealthAwareModel[], string | null][] = [
+      [[model('a/ok', 'ok'), model('deepseek/chat', 'key_rejected')], 'a/ok'],
+      [[model('a/ok', 'ok'), model('b/unknown')], null],
+      [[model('a/ok', 'ok'), model('c/new', 'untested')], 'a/ok'],
+      [[model('a/ok', 'ok'), model('c/new', 'untested')], 'c/new'],
+      [[model('a/ok', 'ok')], 'a/ok'],
+    ];
+    for (const [models, selectedId] of cases) {
+      const view = render(
+        <ModelHealthNote models={models} selectedId={selectedId} canFix id="pick-health" />,
+      );
+      const shown = document.getElementById('pick-health') !== null;
+      expect(withModelHealthNote('pick-hint', 'pick-health', models, selectedId)).toBe(
+        shown ? 'pick-hint pick-health' : 'pick-hint',
+      );
+      view.unmount();
+    }
   });
 });

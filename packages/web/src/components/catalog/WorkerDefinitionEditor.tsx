@@ -40,7 +40,8 @@ import { hrefs } from '../../lib/router.js';
 import { sameNameIds } from '../../lib/same-name.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import { definitionName, unnamedDefinitionLabel } from '../../lib/tasks.js';
-import { ModelHealthNote, ModelOption } from '../kit/model-health.js';
+import { useGuardedClose } from '../kit/discard-guard.js';
+import { ModelHealthNote, ModelOption, withModelHealthNote } from '../kit/model-health.js';
 import { SameNameId } from '../kit/same-name-id.js';
 import { Button } from '../ui/Button.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -231,6 +232,8 @@ function CapabilityPickerField({
               placeholder={t('按名称筛选…', 'Filter by name…')}
               mono
               data-testid="wd-capabilities-filter"
+              // Narrows the list, saves nothing: not an edit to ask about (legacy 497 rule).
+              data-no-discard-guard
             />
             <span className="text-3 text-small" data-testid="wd-capabilities-count">
               {t(`已选 ${selected.length} 个`, `${selected.length} selected`)}
@@ -350,6 +353,8 @@ export function WorkerDefinitionEditor({
   onDone,
   onPublished,
 }: WorkerDefinitionEditorProps) {
+  // Legacy 497: in a drawer whose form was edited, 取消 asks before discarding it.
+  const guardedClose = useGuardedClose();
   const t = useT();
   const gateSame = useMemo(
     () =>
@@ -606,6 +611,12 @@ export function WorkerDefinitionEditor({
                 onChange={(event) => update('model', event.target.value)}
                 disabled={busy}
                 invalid={!!errors.model}
+                aria-describedby={withModelHealthNote(
+                  describedBy('wd-model', true, !!fieldError('model')),
+                  'wd-model-health',
+                  modelOptions,
+                  form.model,
+                )}
               >
                 <option value="">
                   {t('留空 = 使用工作区默认', 'Blank = use the workspace default')}
@@ -620,6 +631,7 @@ export function WorkerDefinitionEditor({
                 selectedId={form.model}
                 canFix={false}
                 testId="wd-model-health"
+                id="wd-model-health"
               />
             </Field>
           </div>
@@ -847,7 +859,7 @@ export function WorkerDefinitionEditor({
         <Button type="submit" variant="primary" loading={busy} data-testid="worker-submit">
           {t('保存草稿', 'Save draft')}
         </Button>
-        <Button variant="ghost" onClick={onDone} disabled={busy}>
+        <Button variant="ghost" onClick={() => guardedClose(onDone)} disabled={busy}>
           {t('取消', 'Cancel')}
         </Button>
       </div>

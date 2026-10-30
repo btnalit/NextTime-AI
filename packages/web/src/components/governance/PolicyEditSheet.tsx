@@ -12,6 +12,7 @@ import { BLAST_RADIUS_TONES } from '../../lib/status-tone.js';
 import { Button } from '../kit/button.js';
 import { Combobox } from '../kit/combobox.js';
 import { Confirm } from '../kit/confirm.js';
+import { GuardedCancelButton } from '../kit/discard-guard.js';
 import { Field, describedBy } from '../kit/field.js';
 import { Notice } from '../kit/notice.js';
 import { Select } from '../kit/select.js';
@@ -231,6 +232,8 @@ export function PolicyEditSheet({
   const canSubmit =
     trimmedKind.length > 0 && !unknownManualKind && !nothingPublished && !submitting;
 
+  const close = (): void => onOpenChange(false);
+
   function resetAndClose(): void {
     setConfirmOpen(false);
     onOpenChange(false);
@@ -270,7 +273,7 @@ export function PolicyEditSheet({
 
   return (
     <Sheet open={open} onOpenChange={(next) => !submitting && onOpenChange(next)}>
-      <SheetContent data-testid="policy-edit-sheet">
+      <SheetContent data-testid="policy-edit-sheet" data-discard-guard>
         <SheetHeader>
           <SheetTitle>
             {isEdit ? t('编辑策略', 'Edit policy') : t('新增策略', 'New policy')}
@@ -667,9 +670,9 @@ export function PolicyEditSheet({
             onConfirm={submit}
             testId="policy-edit-confirm"
           />
-          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting}>
+          <GuardedCancelButton variant="ghost" onCancel={close} disabled={submitting}>
             {t('取消', 'Cancel')}
-          </Button>
+          </GuardedCancelButton>
           {/* Audit P1-9: a disabled 保存 says what it still waits for. */}
           <StillNeeded
             items={

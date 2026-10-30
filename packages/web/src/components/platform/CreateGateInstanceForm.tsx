@@ -21,6 +21,7 @@ import { HttpError } from '../../lib/http-client.js';
 import { type Translate, sentenceGap, useT } from '../../lib/i18n.js';
 import { connectorModeLabel } from '../../lib/labels.js';
 import { GATE_ID_PATTERN } from '../../lib/platform-errors.js';
+import { useGuardedClose } from '../kit/discard-guard.js';
 import { ErrorDetails } from '../kit/error-details.js';
 import { StillNeeded } from '../kit/still-needed.js';
 import { Button } from '../ui/Button.js';
@@ -135,6 +136,8 @@ export function CreateGateInstanceForm({
   initialPreset,
   transportKind,
 }: CreateGateInstanceFormProps) {
+  // Legacy 497: in a drawer whose form was edited, 取消 asks before discarding it.
+  const guardedClose = useGuardedClose();
   const t = useT();
   const list = useCapabilityList<ConnectorPresetWire>(http, 'list_connector_presets', ALL_PRESETS, {
     autoLoadAll: true,
@@ -229,7 +232,7 @@ export function CreateGateInstanceForm({
             )}
           </p>
           <div className="row" style={{ justifyContent: 'flex-end' }}>
-            <Button variant="ghost" onClick={onCancel}>
+            <Button variant="ghost" onClick={() => guardedClose(onCancel)}>
               {t('取消', 'Cancel')}
             </Button>
           </div>
@@ -279,6 +282,8 @@ function CustomGateInstanceForm({
   onCreated,
   onCancel,
 }: Pick<CreateGateInstanceFormProps, 'http' | 'onCreated' | 'onCancel'>) {
+  // Legacy 497: in a drawer whose form was edited, 取消 asks before discarding it.
+  const guardedClose = useGuardedClose();
   const t = useT();
   const [gateIdInput, setGateIdInput] = useState('');
   /** `true` once the administrator typed into the gate-id field; leaving it empty (blur) resumes
@@ -892,7 +897,7 @@ function CustomGateInstanceForm({
       />
 
       <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
-        <Button variant="ghost" onClick={onCancel} disabled={submitting}>
+        <Button variant="ghost" onClick={() => guardedClose(onCancel)} disabled={submitting}>
           {t('取消', 'Cancel')}
         </Button>
         <Button

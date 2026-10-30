@@ -18,6 +18,7 @@ import { transportKindLabel } from '../lib/labels.js';
 import { CompleteConnectionForm } from './CompleteConnectionForm.js';
 import { OnboardingWizardReview } from './OnboardingWizardReview.js';
 import { ManifestPublishResultNotice } from './connect/GateOwnedParams.js';
+import { useGuardedClose } from './kit/discard-guard.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Notice } from './ui/Notice.js';
@@ -88,6 +89,8 @@ export function OnboardingWizard({
   onFinished,
   onShowGatekeeper,
 }: OnboardingWizardProps) {
+  // Legacy 497: in a drawer whose form was edited, 取消 asks before discarding it.
+  const guardedClose = useGuardedClose();
   const t = useT();
   const [step, setStep] = useState<WizardStep>('kind');
   const [kind, setKind] = useState<ConnectionKind>('http');
@@ -141,7 +144,7 @@ export function OnboardingWizard({
   }
 
   return (
-    <div className="stack" data-testid="onboarding-wizard">
+    <div className="stack" data-testid="onboarding-wizard" data-discard-guard>
       <ol className="wizard-steps" aria-label={t('接入向导步骤', 'Onboarding steps')}>
         {STEP_LABELS.map((entry) => (
           <li
@@ -177,7 +180,7 @@ export function OnboardingWizard({
           </fieldset>
           <Notice testId="wizard-kind-copy">{kindCopy(kind, t)}</Notice>
           <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
-            <Button variant="ghost" onClick={onCancel}>
+            <Button variant="ghost" onClick={() => guardedClose(onCancel)}>
               {t('取消', 'Cancel')}
             </Button>
             <Button variant="primary" onClick={() => setStep('connect')}>
@@ -327,7 +330,7 @@ export function OnboardingWizard({
             <code className="mono">{connection.gatekeeperId}</code>
           </Notice>
           <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
-            <Button variant="ghost" onClick={onCancel}>
+            <Button variant="ghost" onClick={() => guardedClose(onCancel)}>
               {t('关闭', 'Close')}
             </Button>
             <Button variant="primary" onClick={() => onFinished(connection.gatekeeperId)}>

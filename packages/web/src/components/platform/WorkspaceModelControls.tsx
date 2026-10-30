@@ -1,6 +1,11 @@
 import type { ModelRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
-import { ModelHealthNote, ModelHealthTag, ModelOption } from '../kit/model-health.js';
+import {
+  ModelHealthNote,
+  ModelHealthTag,
+  ModelOption,
+  withModelHealthNote,
+} from '../kit/model-health.js';
 import { Field, Select } from '../ui/Field.js';
 
 /** The 入口模型 select's "no model of its own" choice — `entryModel: null` on the wire (pi's own
@@ -55,6 +60,12 @@ export function EntryModelSelect({
           onChange(event.target.value === PLATFORM_DEFAULT ? null : event.target.value)
         }
         disabled={disabled}
+        aria-describedby={withModelHealthNote(
+          `${id}-hint`,
+          `${id}-health`,
+          models.filter((model) => options.includes(model.id)),
+          value,
+        )}
         data-testid={testId}
       >
         {allowPlatformDefault ? (
@@ -77,6 +88,7 @@ export function EntryModelSelect({
         selectedId={value}
         canFix
         testId={testId ? `${testId}-health` : undefined}
+        id={`${id}-health`}
       />
     </Field>
   );

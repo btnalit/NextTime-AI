@@ -3,6 +3,7 @@ import { type FormEvent, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import type { ModelRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
+import { useGuardedClose } from '../kit/discard-guard.js';
 import { StillNeeded } from '../kit/still-needed.js';
 import { Button } from '../ui/Button.js';
 import { Field, Input } from '../ui/Field.js';
@@ -41,6 +42,8 @@ export function CreateWorkspaceForm({
   onCreated,
   onCancel,
 }: CreateWorkspaceFormProps) {
+  // Legacy 497: in a drawer whose form was edited, 取消 asks before discarding it.
+  const guardedClose = useGuardedClose();
   const t = useT();
   const [name, setName] = useState('');
   const [ownerUserId, setOwnerUserId] = useState(defaultOwnerUserId ?? '');
@@ -135,7 +138,7 @@ export function CreateWorkspaceForm({
       />
 
       <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
-        <Button variant="ghost" onClick={onCancel} disabled={submitting}>
+        <Button variant="ghost" onClick={() => guardedClose(onCancel)} disabled={submitting}>
           {t('取消', 'Cancel')}
         </Button>
         <Button
