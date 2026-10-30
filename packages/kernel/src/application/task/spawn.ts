@@ -10,7 +10,10 @@ import { currentCorrelationId } from '../../substrate/correlation/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import {
   EvaluationContentWithheldError,
+  EvaluationProbeHoldError,
+  assertNoSealHold,
   recordEvaluationWithheld,
+  recordProbeHoldRefusal,
   sealWithholds,
 } from '../eval-seal/index.js';
 import { ensureWorkerAgentPrincipal } from './agent-principal.js';
@@ -163,6 +166,10 @@ export async function spawnWorkerRun(
         throw new IllegalTransition(TASK_TRANSITIONS.machine, taskStatus ?? 'missing', 'start');
       }
 
+      // S10 E3-2c (legacy 514): no Worker starts for a Principal the evaluation seal has paused
+      // (application/eval-seal hold.ts) — before anything is created, like the seal below.
+      await assertNoSealHold(client, workspaceId, input.onBehalfOf);
+
       // S10 E3-1c (I-E4): a Worker never starts with evaluation content — what it is handed (its
       // Task input; the system prompt and Skills forwarded to the supervisor below) carrying a
       // suite's canary or a verbatim run of a holdout case's text. Checked before anything is
@@ -277,6 +284,15 @@ export async function spawnWorkerRun(
         workspaceId,
         principalId: input.onBehalfOf,
         where: err.where,
+        taskId: input.task.id,
+      });
+    }
+    if (err instanceof EvaluationProbeHoldError && !err.recorded) {
+      err.recorded = true;
+      await recordProbeHoldRefusal(deps.pool, {
+        workspaceId,
+        principalId: input.onBehalfOf,
+        path: 'worker_start',
         taskId: input.task.id,
       });
     }

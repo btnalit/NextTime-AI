@@ -253,6 +253,10 @@ export const AUDIT_LIFECYCLE_ACTIONS = [
   // S10 E3-2b: a draft evaluation's stages and verdict (`application/eval` draft-evaluations).
   'evaluation.draft_stage',
   'evaluation.draft_verdict',
+  // S10 E3-2c: the seal's pause of a Principal's agents, and what it refused
+  // (`application/eval-seal` hold.ts).
+  'evaluation.seal_hold_opened',
+  'evaluation.seal_hold_refused',
 ] as const;
 
 /**

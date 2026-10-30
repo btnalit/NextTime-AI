@@ -5,6 +5,7 @@ import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import {
   composerEvaluationContentStep,
+  composerProbeHoldStep,
   composerUnstorableTextStep,
   describeError,
 } from '../lib/errors.js';
@@ -296,13 +297,15 @@ export function ChatPage({
               ) : null}
               {/* Legacy 334: U+0000 in what the person typed is named as the message, not the
                   wire param `text`, and without the note about an agent's call. S10 E3-1c: so is
-                  the evaluation seal's refusal, which here only ever stops the message. */}
+                  the evaluation seal's refusal, which here only ever stops the message; E3-2c: and
+                  its pause of the person's own agents. */}
               {sendError !== null ? (
                 <ErrorBanner
                   error={sendError}
                   overrides={{
                     unstorable_text: composerUnstorableTextStep(t, composer.hasUnstorableChar),
                     evaluation_content_withheld: composerEvaluationContentStep(t),
+                    evaluation_probe_hold: composerProbeHoldStep(t),
                   }}
                   action={
                     // Legacy 335: the character is in the draft, so the page can take it out.

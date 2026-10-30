@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   OperationModeSchema,
+  PrincipalKindSchema,
   PublishableStatusSchema,
   TASK_FAILURE_REASON_VALUES,
 } from '../enums.js';
@@ -762,3 +763,84 @@ export const DraftCheckProblemWireSchema = z
   })
   .strict();
 export type DraftCheckProblemWire = z.infer<typeof DraftCheckProblemWireSchema>;
+
+// ----- seal holds (S10 E3-2c) -----------------------------------------------------------------
+
+/**
+ * Where the evaluation seal (E3-1c) stopped content an agent could have put there itself — the
+ * refusals it counts towards a pause (legacy 514): a capability's result or error on its way to a
+ * Handle, and what a Worker would start with (its Task input comes from whoever invoked it). Not a
+ * person's chat message or what the entry agent starts a Turn with: people write those, and every
+ * person may read the cases anyway.
+ */
+export const EVAL_SEAL_HIT_PLACE_VALUES = [
+  'capability_result',
+  'capability_error',
+  'worker_start',
+] as const;
+export type EvalSealHitPlace = (typeof EVAL_SEAL_HIT_PLACE_VALUES)[number];
+
+/** How many of a pause's refusals were at each counted place — the shape a pause keeps, its audit
+ *  row says and the wire carries. */
+export const EvalSealHoldPlacesSchema = z
+  .object({
+    capabilityResult: z.number().int().nonnegative(),
+    capabilityError: z.number().int().nonnegative(),
+    workerStart: z.number().int().nonnegative(),
+  })
+  .strict();
+export type EvalSealHoldPlaces = z.infer<typeof EvalSealHoldPlacesSchema>;
+
+/** Each counted place's key in `EvalSealHoldPlaces`. */
+export const EVAL_SEAL_HOLD_PLACE_KEY: Readonly<
+  Record<EvalSealHitPlace, keyof EvalSealHoldPlaces>
+> = {
+  capability_result: 'capabilityResult',
+  capability_error: 'capabilityError',
+  worker_start: 'workerStart',
+};
+
+/** How many counted refusals within `EVAL_SEAL_HOLD_WINDOW_HOURS` (and since the Principal's last
+ *  release) open a pause. Fixed, not a setting (coordinator 2026-10-30). */
+export const EVAL_SEAL_HOLD_THRESHOLD = 5;
+export const EVAL_SEAL_HOLD_WINDOW_HOURS = 24;
+
+export const EVAL_SEAL_HOLD_STATUS_VALUES = ['active', 'released'] as const;
+export const EvalSealHoldStatusSchema = z.enum(EVAL_SEAL_HOLD_STATUS_VALUES);
+export type EvalSealHoldStatus = z.infer<typeof EvalSealHoldStatusSchema>;
+
+/**
+ * A pause of every agent acting for one Principal (S10 E3-2c, legacy 514): the seal refused
+ * `EVAL_SEAL_HOLD_THRESHOLD` times within `EVAL_SEAL_HOLD_WINDOW_HOURS` what agents acting for it
+ * were about to receive or start with — the pattern of an agent probing which texts are held out.
+ * While `active`, every agent call, Worker start and entry Turn for that Principal is refused
+ * (403 `evaluation_probe_hold`, the same whatever path) and so is starting an evaluation when it
+ * is the evaluation Principal; it stays so until the workspace owner releases it
+ * (`release_eval_seal_hold`) — never by itself.
+ *
+ *   - `principal`: whose agents are paused; `evaluation` marks the workspace's evaluation service
+ *     Principal (every evaluation Task acts for it), whose name is internal.
+ *   - `hits` / `places`: the refusals that opened it, by where the seal stopped them. People only
+ *     (owner and auditor) — what is told to the paused agents never says where.
+ */
+export const EvalSealHoldWireSchema = z
+  .object({
+    id: z.string(),
+    principal: z
+      .object({
+        id: z.string(),
+        kind: PrincipalKindSchema,
+        displayName: z.string().nullable(),
+        evaluation: z.boolean(),
+      })
+      .strict(),
+    status: EvalSealHoldStatusSchema,
+    hits: z.number().int().positive(),
+    places: EvalSealHoldPlacesSchema,
+    openedAt: z.string(),
+    releasedAt: z.string().nullable(),
+    releasedBy: z.string().nullable(),
+    releaseReason: z.string().nullable(),
+  })
+  .strict();
+export type EvalSealHoldWire = z.infer<typeof EvalSealHoldWireSchema>;

@@ -10,7 +10,10 @@ import {
   ChangeSegmentNotFoundError,
   ChangeSegmentRolledBackError,
 } from '../../application/change-plan/index.js';
-import { EvaluationContentWithheldError } from '../../application/eval-seal/index.js';
+import {
+  EvaluationContentWithheldError,
+  EvaluationProbeHoldError,
+} from '../../application/eval-seal/index.js';
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
 import {
   ConflictNotFoundError,
@@ -188,6 +191,15 @@ describe('mapDispatchError — legacy 232 unknown operation', () => {
     expect(WS_ERROR_CODES.EVALUATION_CONTENT_WITHHELD).toBe(-32018);
     expect(mapDispatchError(err)).toEqual({
       code: WS_ERROR_CODES.EVALUATION_CONTENT_WITHHELD,
+      message: err.message,
+    });
+  });
+
+  it('EvaluationProbeHoldError (S10 E3-2c) maps to its own EVALUATION_PROBE_HOLD (-32019), not FORBIDDEN', () => {
+    const err = new EvaluationProbeHoldError('principal-1');
+    expect(WS_ERROR_CODES.EVALUATION_PROBE_HOLD).toBe(-32019);
+    expect(mapDispatchError(err)).toEqual({
+      code: WS_ERROR_CODES.EVALUATION_PROBE_HOLD,
       message: err.message,
     });
   });

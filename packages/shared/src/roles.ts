@@ -98,6 +98,8 @@ export const AUDITOR_READ_CAPABILITIES: ReadonlySet<string> = new Set<Capability
   // S10 E3-2b: and the draft evaluations whose draft they may see
   'get_draft_evaluation',
   'list_draft_evaluations',
+  // S10 E3-2c: and the seal's pauses (minRole auditor: the owner and auditors)
+  'list_eval_seal_holds',
   // the workspace and the auditor itself
   'get_workspace',
   'list_models',

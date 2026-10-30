@@ -34,7 +34,7 @@ import {
   registerGatekeeper,
 } from '../../governance/gatekeepers/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
-import { resetEvaluationSealForTests } from '../eval-seal/index.js';
+import { EvaluationProbeHoldError, resetEvaluationSealForTests } from '../eval-seal/index.js';
 import {
   DRAFT_EVALUATION_STAGE_ACTION,
   DRAFT_EVALUATION_VERDICT_ACTION,
@@ -47,6 +47,7 @@ import {
   EvaluationBudgetInsufficientError,
   runEvalTrialTick,
 } from '../eval/index.js';
+import { getOrCreateEvaluationPrincipal } from '../eval/principal.js';
 import { purgeWorkspace } from '../platform/index.js';
 import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
 import {
@@ -1012,6 +1013,78 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(await count('select 1 from eval_draft_evaluations where workspace_id = $1')).toBe(
         evaluations,
       );
+    });
+
+    // S10 E3-2c (legacy 514): the evaluation seal's pause of the evaluation Principal.
+    it('while the evaluation Principal is paused its queued trials wait and no evaluation starts; the owner’s release starts them', async () => {
+      const started = await start();
+      const confirming = await drive(started.id, allPass, (e) => e.stage === 'confirm');
+      const runId = stageOf(confirming, 'confirm').runId as string;
+      const trials = async () =>
+        (await call<EvalRunWire>(person('builder'), 'get_eval_run', { runId })).trials;
+      expect((await trials()).filter((t) => t.status === 'queued')).toHaveLength(7);
+
+      const evaluationPrincipalId = await asApp((client) =>
+        getOrCreateEvaluationPrincipal(client, workspaceId),
+      );
+      const pause = () =>
+        asApp(async (client) => {
+          const inserted = await client.query<{ id: string }>(
+            `insert into eval_seal_holds (workspace_id, principal_id, hits, places)
+             values ($1, $2, 5, '{"capabilityResult": 5, "capabilityError": 0, "workerStart": 0}')
+             returning id`,
+            [workspaceId, evaluationPrincipalId],
+          );
+          return inserted.rows[0]?.id as string;
+        });
+      const release = (holdId: string) =>
+        call(person('owner'), 'release_eval_seal_hold', {
+          holdId,
+          reason: 'The trial Worker echoed a fixture; not a probe.',
+        });
+      // The five running end, then the pause opens: the tick starts none of the seven waiting.
+      for (const trial of await trials()) {
+        if (trial.status !== 'running' || acted.has(trial.id)) continue;
+        acted.add(trial.id);
+        await act(trial, 'pass');
+      }
+      const hold = await pause();
+      await runEvalTrialTick(pool);
+      await runEvalTrialTick(pool);
+      const waiting = await trials();
+      expect(waiting.filter((t) => t.status === 'running')).toHaveLength(0);
+      expect(waiting.filter((t) => t.status === 'queued')).toHaveLength(7);
+      expect((await readEvaluation(started.id)).status).toBe('running');
+      // No other evaluation starts either.
+      expect(
+        await rejection(
+          call(person('builder'), 'start_eval_case_trial', {
+            suiteId: suite.id,
+            suiteVersion: suite.version,
+            caseId: caseIds.dev,
+          }),
+        ),
+      ).toBeInstanceOf(EvaluationProbeHoldError);
+
+      await release(hold);
+      // The release starts them at once, five at a time.
+      const resumed = await trials();
+      const running = resumed.filter((t) => t.status === 'running');
+      expect(running).toHaveLength(5);
+      expect(resumed.filter((t) => t.status === 'queued')).toHaveLength(2);
+      // Paused again, a running trial's Worker gets nothing done.
+      const again = await pause();
+      const trial = running[0] as EvalTrialWire;
+      expect(
+        await rejection(
+          call({ channel: 'handle', claims: workerClaims(spawnOf(trial.taskId)) }, 'get_task', {
+            taskId: trial.taskId,
+          }),
+        ),
+      ).toBeInstanceOf(EvaluationProbeHoldError);
+      await release(again);
+      await call(person('builder'), 'cancel_draft_evaluation', { evaluationId: started.id });
+      await runEvalTrialTick(pool);
     });
 
     it('cancelling cancels the trials not started and terminates the running ones; it ends with no verdict and the draft can go', async () => {

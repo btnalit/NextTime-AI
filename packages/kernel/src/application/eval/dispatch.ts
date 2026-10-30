@@ -40,7 +40,9 @@ export interface DispatchOptions {
   readonly onError?: (error: unknown, workspaceId: string) => void;
 }
 
-/** Workspaces with a queued trial of a running evaluation, and their evaluation Principal. */
+/** Workspaces with a queued trial of a running evaluation, and their evaluation Principal — not
+ *  one whose evaluation Principal the evaluation seal has paused (S10 E3-2c): its trials wait,
+ *  queued, until the workspace owner releases the pause. */
 async function listQueuedWorkspaces(
   pool: PoolLike,
   workspaceId: string | undefined,
@@ -48,14 +50,20 @@ async function listQueuedWorkspaces(
   const client = await pool.connect();
   try {
     const result = await client.query<{ workspace_id: string; principal_id: string | null }>(
-      `select q.workspace_id,
-              (select p.id from principals p
-                where p.workspace_id = q.workspace_id and p.kind = 'service'
-                  and p.display_name = $2
-                order by p.created_at limit 1) as principal_id
-         from (select distinct tr.workspace_id
-                 from eval_trials tr
-                where tr.status = 'queued' and ($1::uuid is null or tr.workspace_id = $1)) q`,
+      `select w.workspace_id, w.principal_id
+         from (select q.workspace_id,
+                      (select p.id from principals p
+                        where p.workspace_id = q.workspace_id and p.kind = 'service'
+                          and p.display_name = $2
+                        order by p.created_at limit 1) as principal_id
+                 from (select distinct tr.workspace_id
+                         from eval_trials tr
+                        where tr.status = 'queued'
+                          and ($1::uuid is null or tr.workspace_id = $1)) q) w
+        where not exists (
+          select 1 from eval_seal_holds h
+           where h.workspace_id = w.workspace_id and h.principal_id = w.principal_id
+             and h.status = 'active')`,
       [workspaceId ?? null, EVALUATION_PRINCIPAL_DISPLAY_NAME],
     );
     return result.rows

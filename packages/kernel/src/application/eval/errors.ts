@@ -170,3 +170,20 @@ export class DraftEvaluationEndedError extends EvalSuiteStateError {
     this.name = 'DraftEvaluationEndedError';
   }
 }
+
+/** 404 not_found (S10 E3-2c): no pause of the evaluation seal by this id in the workspace. */
+export class EvalSealHoldNotFoundError extends EvalRunNotFoundError {
+  constructor(holdId: string) {
+    super(holdId);
+    this.message = `evaluation seal pause ${holdId} not found`;
+    this.name = 'EvalSealHoldNotFoundError';
+  }
+}
+
+/** 409 conflict (S10 E3-2c): the pause was released already. */
+export class EvalSealHoldReleasedError extends EvalSuiteStateError {
+  constructor(holdId: string) {
+    super(`evaluation seal pause ${holdId} was released already; nothing was changed`);
+    this.name = 'EvalSealHoldReleasedError';
+  }
+}

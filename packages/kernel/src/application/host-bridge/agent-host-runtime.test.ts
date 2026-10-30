@@ -77,6 +77,10 @@ interface FakePublishedSkill {
 /** S10 E3-1c: what the evaluation seal's count query answers (`application/eval-seal`) — no
  *  suites (nothing to check) unless a test sets it, and `'throw'` for a check that cannot run. */
 let sealCounts: { suites: number; holdout: number } | 'throw' = { suites: 0, holdout: 0 };
+/** S10 E3-2c: whether the seal has paused the person's agents (`hasActiveSealHold`). */
+let sealHeld = false;
+/** S10 E3-2c: the audit rows the fake pool was asked to write (action, payload). */
+const auditWrites: { action: string; payload: unknown }[] = [];
 
 function createFakePool(
   publishedEntryDefinitions: ReadonlyMap<string, FakeEntryDefinitionRow> = new Map(),
@@ -311,10 +315,36 @@ function createFakePool(
       };
     }
 
+    // S10 E3-2c: application/eval-seal's hasActiveSealHold, called by startWithheld first.
+    if (sql.startsWith('select 1 from eval_seal_holds')) {
+      return sealHeld ? { rows: [{ '?column?': 1 }], rowCount: 1 } : { rows: [], rowCount: 0 };
+    }
+
     // S10 E3-1c: application/eval-seal's sealWithholds, called by startWithheld.
     if (sql.startsWith('select (select count(*) from eval_suites')) {
       if (sealCounts === 'throw') throw new Error('connection terminated unexpectedly');
       return { rows: [sealCounts], rowCount: 1 };
+    }
+
+    // S10 E3-2c: substrate/audit's writeAudit (a refusal under a seal pause).
+    if (sql.startsWith('insert into audit_records')) {
+      auditWrites.push({ action: params[3] as string, payload: JSON.parse(params[6] as string) });
+      return {
+        rows: [
+          {
+            workspace_id: params[0],
+            id: randomUUID(),
+            actor_principal_id: params[1],
+            actor_user_id: null,
+            action: params[3],
+            resource_type: params[4],
+            resource_id: params[5],
+            payload: JSON.parse(params[6] as string),
+            created_at: new Date(),
+          },
+        ],
+        rowCount: 1,
+      };
     }
 
     if (sql.startsWith('insert into capability_handles')) {
@@ -414,6 +444,60 @@ describe('AgentHostRuntime — startTurn with no agent-host connected', () => {
 describe('AgentHostRuntime — startTurn and the evaluation seal', () => {
   afterEach(() => {
     sealCounts = { suites: 0, holdout: 0 };
+    sealHeld = false;
+    auditWrites.length = 0;
+  });
+
+  it('S10 E3-2c: a person whose agents the seal paused gets no Turn — it ends failed, sends nothing, and the refusal is audited without the prompt', async () => {
+    const workspaceId = randomUUID();
+    const { pool } = createFakePool(
+      new Map([
+        [
+          workspaceId,
+          { systemPrompt: 'You are the entry agent of this workspace, answer plainly.' },
+        ],
+      ]),
+    );
+    const { sink, events } = createFakeSink();
+    const lines: string[] = [];
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey: await ephemeralPrivateKey(),
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: (line) => lines.push(line),
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+    sealHeld = true;
+
+    const input = startTurnInput({ workspaceId });
+    await runtime.startTurn(input);
+
+    expect(sent).toEqual([]);
+    expect(events).toEqual([
+      {
+        type: 'turnEnded',
+        status: 'failed',
+        workspaceId,
+        chatId: input.chatId,
+        turnId: input.turnId,
+        principalId: input.principalId,
+      },
+    ]);
+    expect(lines.some((line) => line.includes('paused by the evaluation seal'))).toBe(true);
+    for (const line of lines) expect(line).not.toContain('entry agent of this workspace');
+    expect(auditWrites).toEqual([
+      {
+        action: 'evaluation.seal_hold_refused',
+        payload: expect.objectContaining({
+          onBehalfOf: input.principalId,
+          path: 'entry_start',
+          outcome: 'refused',
+        }),
+      },
+    ]);
+    expect(JSON.stringify(auditWrites)).not.toContain('entry agent of this workspace');
   });
 
   it('fails closed: a seal check that cannot run ends the Turn failed, sends nothing, and logs no prompt', async () => {

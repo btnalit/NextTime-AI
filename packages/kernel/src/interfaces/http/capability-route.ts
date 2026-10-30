@@ -22,7 +22,10 @@ import {
   ChatNotFoundError,
   TurnAlreadyRunningError,
 } from '../../application/chat/index.js';
-import { EvaluationContentWithheldError } from '../../application/eval-seal/index.js';
+import {
+  EvaluationContentWithheldError,
+  EvaluationProbeHoldError,
+} from '../../application/eval-seal/index.js';
 // S10 E3-1a: an evaluation suite's refusals — imported directly like the domain errors around.
 import {
   DraftCheckFailedError,
@@ -385,6 +388,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // content. The message says where it was stopped and nothing more (no details: no run of text,
   // no case, no suite).
   if (err instanceof EvaluationContentWithheldError) {
+    return { status: 403, code: err.code, message: err.message };
+  }
+  // S10 E3-2c: the Principal the call would run for is paused by the seal — the same message
+  // whichever path refused it and whatever opened the pause (no details).
+  if (err instanceof EvaluationProbeHoldError) {
     return { status: 403, code: err.code, message: err.message };
   }
   // D-24 (governance/capability/publish-authority.ts): a publish_* / deprecate_* on a row someone

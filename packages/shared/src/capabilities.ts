@@ -4729,7 +4729,7 @@ const evaluationCapabilities = [
       .strict(),
     resultSchema: wire.EvalRunWireSchema,
     description:
-      'Try one case of the suite once, as it would run now (a case_trial run): the kernel starts an evaluation Task of the suite’s pinned WorkerDefinition version with the case’s input, for the workspace’s evaluation service principal — its Worker reads only its own Task, sees the suite’s fixture gates as its tools, and every call to them is answered from the case’s fixtures (no gate is ever called, nothing is executed); its egress is denied. When the Worker reports, the case’s assertions judge {result, calls} and the trial is scored passed or failed; a Task that ends without a report leaves it errored. Read the outcome with get_eval_run. suiteVersion is the suite version you looked at (409 version_changed when it has changed since). A case the suite does not hold now, or a pinned version no longer published, is 409 conflict; a suite or case that is not there is 404 not_found; once this UTC month’s evaluation spending has reached the evaluation budget (evaluation.monthly_cost_budget_usd, $10 unless the owner set it) 429 evaluation_budget_exhausted, with details.budgetUsd and details.spentUsd; the workspace’s Task quotas apply to evaluation Tasks as to any (429 concurrency_exceeded when as many evaluation Tasks run as one principal may run at once, 429 daily_cost_exceeded once the workspace’s daily cost budget is spent). Nothing is started on any refusal. People only.',
+      'Try one case of the suite once, as it would run now (a case_trial run): the kernel starts an evaluation Task of the suite’s pinned WorkerDefinition version with the case’s input, for the workspace’s evaluation service principal — its Worker reads only its own Task, sees the suite’s fixture gates as its tools, and every call to them is answered from the case’s fixtures (no gate is ever called, nothing is executed); its egress is denied. When the Worker reports, the case’s assertions judge {result, calls} and the trial is scored passed or failed; a Task that ends without a report leaves it errored. Read the outcome with get_eval_run. suiteVersion is the suite version you looked at (409 version_changed when it has changed since). A case the suite does not hold now, or a pinned version no longer published, is 409 conflict; a suite or case that is not there is 404 not_found; once this UTC month’s evaluation spending has reached the evaluation budget (evaluation.monthly_cost_budget_usd, $10 unless the owner set it) 429 evaluation_budget_exhausted, with details.budgetUsd and details.spentUsd; the workspace’s Task quotas apply to evaluation Tasks as to any (429 concurrency_exceeded when as many evaluation Tasks run as one principal may run at once, 429 daily_cost_exceeded once the workspace’s daily cost budget is spent); while the evaluation seal has paused the evaluation Principal’s agents (list_eval_seal_holds), 403 evaluation_probe_hold. Nothing is started on any refusal. People only.',
   },
   {
     name: 'get_eval_run',
@@ -4797,7 +4797,7 @@ const evaluationCapabilities = [
       .strict(),
     resultSchema: wire.DraftEvaluationWireSchema,
     description:
-      'Evaluate a Skill draft against a suite: the candidate (the draft) and the baseline (the published version of its family it would replace; for a new Skill, the suite’s pinned WorkerDefinition without it) run the suite’s cases as evaluation Tasks — every gate call answered from fixtures, egress denied — through three stages in order: regression (each regression case twice per arm: the candidate must pass each as often as the baseline, else regressed), mechanism (the cases aimed at mechanism, 10 tries per arm in all: the candidate must pass all and the baseline at most 4 in 10, else refuted; skipped without mechanism), confirm (each full case 3 times per arm: dev pass rates against δ = 0.1 → worse, better, non_inferior or inconclusive; holdout must agree). A trial that could not start, was lost, terminated or crashed has no outcome: a verdict must hold whichever way it would have gone, else inconclusive (errored_trials), as is an arm with over a quarter of a stage’s trials without one. Both arms load the same other Skills, pinned now. Read progress and the verdict with get_draft_evaluation. Before anything runs the draft is checked: a credential-like value, a platform-shaped id, text over 20000 characters, no change from the baseline, more than 200 changed lines, or a canary or held-out case text refuses the start with 400 draft_check_failed (details.problems: [{check, count, limit}]). A stage the month’s evaluation budget cannot cover — after what is spent and what the trials not ended yet, of any evaluation, are expected to cost (get_eval_budget committedUsd) — is not run (the verdict is inconclusive, reason budget); when even the first stage’s estimate does not fit, 429 evaluation_budget_insufficient (details: budgetUsd, spentUsd, committedUsd, estimateUsd) and nothing starts; a spent budget is 429 evaluation_budget_exhausted. Refused too: a draft that is not there or not visible (404 not_found), one that is no longer a draft (409 not_a_draft), one changed since it was read (409 draft_changed), one already being evaluated (409 draft_evaluating), a suite at another version (409 version_changed), a mechanism the suite’s cases do not name, a suite with no case to run or a draft whose name another loaded Skill has (409 conflict). While it runs the draft cannot be discarded, rejected or expired. People only.',
+      'Evaluate a Skill draft against a suite: the candidate (the draft) and the baseline (the published version of its family it would replace; for a new Skill, the suite’s pinned WorkerDefinition without it) run the suite’s cases as evaluation Tasks — every gate call answered from fixtures, egress denied — through three stages in order: regression (each regression case twice per arm: the candidate must pass each as often as the baseline, else regressed), mechanism (the cases aimed at mechanism, 10 tries per arm in all: the candidate must pass all and the baseline at most 4 in 10, else refuted; skipped without mechanism), confirm (each full case 3 times per arm: dev pass rates against δ = 0.1 → worse, better, non_inferior or inconclusive; holdout must agree). A trial that could not start, was lost, terminated or crashed has no outcome: a verdict must hold whichever way it would have gone, else inconclusive (errored_trials), as is an arm with over a quarter of a stage’s trials without one. Both arms load the same other Skills, pinned now. Read progress and the verdict with get_draft_evaluation. Before anything runs the draft is checked: a credential-like value, a platform-shaped id, text over 20000 characters, no change from the baseline, more than 200 changed lines, or a canary or held-out case text refuses the start with 400 draft_check_failed (details.problems: [{check, count, limit}]). A stage the month’s evaluation budget cannot cover — after what is spent and what the trials not ended yet, of any evaluation, are expected to cost (get_eval_budget committedUsd) — is not run (the verdict is inconclusive, reason budget); when even the first stage’s estimate does not fit, 429 evaluation_budget_insufficient (details: budgetUsd, spentUsd, committedUsd, estimateUsd) and nothing starts; a spent budget is 429 evaluation_budget_exhausted. Refused too: a draft that is not there or not visible (404 not_found), one that is no longer a draft (409 not_a_draft), one changed since it was read (409 draft_changed), one already being evaluated (409 draft_evaluating), a suite at another version (409 version_changed), a mechanism the suite’s cases do not name, a suite with no case to run or a draft whose name another loaded Skill has (409 conflict), the evaluation seal having paused the evaluation Principal’s agents (403 evaluation_probe_hold; list_eval_seal_holds). A stage whose trials are waiting while such a pause opens keeps them waiting until the owner releases it. While it runs the draft cannot be discarded, rejected or expired. People only.',
   },
   {
     name: 'get_draft_evaluation',
@@ -4836,6 +4836,34 @@ const evaluationCapabilities = [
     resultSchema: wire.DraftEvaluationWireSchema,
     description:
       'Cancel a running draft evaluation: its trials not started yet are cancelled, its running evaluation Tasks are terminated, no later stage starts, and it ends cancelled, with no verdict. What its trials already measured stays readable. One that has ended is 409 conflict; one that is not there or whose draft the caller may not see is 404 not_found. People only.',
+  },
+  // S10 E3-2c (legacy 514): the pauses the evaluation seal puts on the agents of a Principal it
+  // keeps refusing — the pattern of an agent probing which texts are held out.
+  {
+    name: 'list_eval_seal_holds',
+    group: 'evaluation',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'auditor',
+    actsForPerson: true,
+    paramsSchema: z.object({ status: wire.EvalSealHoldStatusSchema.optional() }).strict(),
+    resultSchema: listEnvelope(wire.EvalSealHoldWireSchema),
+    description:
+      'List the pauses the evaluation seal opened, newest first (the last 50); with status, only active or only released ones. The seal refuses to hand an agent a suite’s canary or a verbatim run of a held-out case’s text, and counts the refusals an agent could have provoked (a capability’s result or error, what a Worker would start with) per Principal they acted for: 5 within 24 hours, since its last release, pause every agent acting for that Principal — every call, Worker start and entry Turn is refused with 403 evaluation_probe_hold — until the workspace owner releases it (release_eval_seal_hold). Each says whose agents (principal.evaluation marks the evaluation Principal every evaluation Task acts for), how many refusals opened it and where, when, and once released by whom and why. The workspace owner and auditors only. People only.',
+  },
+  {
+    name: 'release_eval_seal_hold',
+    group: 'evaluation',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'owner',
+    actsForPerson: true,
+    paramsSchema: z
+      .object({ holdId: z.guid(), reason: z.string().trim().min(1).max(500) })
+      .strict(),
+    resultSchema: wire.EvalSealHoldWireSchema,
+    description:
+      'Release an active pause of the evaluation seal (list_eval_seal_holds) — the workspace owner only, with a reason (required, kept with the pause and in the audit record). The agents acting for its Principal run again, and the seal counts that Principal’s refusals afresh from now. One already released is 409 conflict; one that is not there is 404 not_found. People only.',
   },
 ] as const satisfies readonly Capability[];
 
@@ -4961,6 +4989,9 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   'get_draft_evaluation',
   'list_draft_evaluations',
   'cancel_draft_evaluation',
+  // S10 E3-2c: and the seal's pauses.
+  'list_eval_seal_holds',
+  'release_eval_seal_hold',
   'audit_query',
   'reconstruct',
   'export_prov',

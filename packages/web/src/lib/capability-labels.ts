@@ -952,6 +952,21 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     enHint:
       'Stops a running draft evaluation: queued trials are dropped and running evaluation tasks are terminated; it ends with no verdict.',
   },
+  // S10 E3-2c (legacy 514): the evaluation seal's pauses.
+  list_eval_seal_holds: {
+    zh: '查看评测防泄漏暂停',
+    en: 'List evaluation seal pauses',
+    zhHint: '列出评测防泄漏暂停了谁名下的智能体、因为几次拦截、何时，以及谁、为什么解除。',
+    enHint:
+      'Lists whose agents the evaluation seal paused, after how many refusals and when, and who released each and why.',
+  },
+  release_eval_seal_hold: {
+    zh: '解除评测防泄漏暂停',
+    en: 'Release an evaluation seal pause',
+    zhHint: '工作区所有者写明理由后解除暂停：这些智能体恢复运行，拦截次数重新计算。',
+    enHint:
+      'The workspace owner releases a pause with a reason: those agents run again and the seal counts afresh.',
+  },
 
   // -----------------------------------------------------------------------------------------
   // Capabilities — Worker definitions and drafts
@@ -1995,6 +2010,22 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
       '要交给智能体的内容里有评测用例集保留的部分，已拦下：调用结果没有返回、Worker 没有启动，或聊天消息没有发出。',
     enHint:
       'Content on its way to an agent held text an evaluation suite keeps back, so it was stopped: a call’s result was not returned, a Worker was not started, or a chat message was not sent.',
+  },
+  // S10 E3-2c (kernel application/eval-seal hold.ts): the seal's pause, and what it refused.
+  'evaluation.seal_hold_opened': {
+    zh: '智能体被评测防泄漏暂停',
+    en: 'Agents paused by the evaluation seal',
+    zhHint:
+      '24 小时内 5 次拦下了要交给同一个人（或评测）名下智能体的评测保留内容，像是在逐字试探，于是暂停了这些智能体，直到工作区所有者解除。',
+    enHint:
+      'Content reserved for evaluation was stopped on its way to the agents of one person (or of evaluation) 5 times within 24 hours, the pattern of probing, so those agents were paused until the workspace owner releases them.',
+  },
+  'evaluation.seal_hold_refused': {
+    zh: '暂停中的智能体被拒绝',
+    en: 'Refused while paused',
+    zhHint: '这些智能体正被评测防泄漏暂停，这次调用、Worker 启动、对话或评测没有执行。',
+    enHint:
+      'These agents are paused by the evaluation seal, so this call, Worker start, chat turn or evaluation did not run.',
   },
   'task.budget_handed_down': {
     zh: '任务预算已分给步骤',

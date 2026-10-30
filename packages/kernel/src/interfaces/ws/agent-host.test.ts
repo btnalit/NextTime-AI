@@ -100,6 +100,11 @@ function createFakePool(): PoolLike {
     if (sql.startsWith('select distinct resource_id')) {
       return { rows: [], rowCount: 0 };
     }
+    // S10 E3-2c: application/eval-seal's hasActiveSealHold, called by AgentHostRuntime's
+    // startWithheld — nobody's agents are paused here.
+    if (sql.startsWith('select 1 from eval_seal_holds')) {
+      return { rows: [], rowCount: 0 };
+    }
     throw new Error(`fake pool: unhandled query: ${sql}`);
   });
 

@@ -22,7 +22,10 @@ import {
   ChatNotFoundError,
   TurnAlreadyRunningError,
 } from '../../application/chat/index.js';
-import { EvaluationContentWithheldError } from '../../application/eval-seal/index.js';
+import {
+  EvaluationContentWithheldError,
+  EvaluationProbeHoldError,
+} from '../../application/eval-seal/index.js';
 // S10 E3-1a: an evaluation suite's refusals, imported directly like the domain errors around.
 import {
   DraftCheckFailedError,
@@ -279,6 +282,10 @@ export const WS_ERROR_CODES = {
    *  same reason as `UNSTORABLE_TEXT`: the console's chat composer sends over WS, and a person whose
    *  message was stopped must not read "you are not permitted". */
   EVALUATION_CONTENT_WITHHELD: -32018,
+  /** S10 E3-2c — mirrors HTTP 403 `evaluation_probe_hold`: the agents of the Principal this was
+   *  for are paused by the evaluation seal until the workspace owner releases them. Its own code,
+   *  for the chat composer as above: the person must read what happened and who can undo it. */
+  EVALUATION_PROBE_HOLD: -32019,
 } as const;
 
 /** A passed-through gate refusal's HTTP status (`gateRefusalOf`) as its WS code: 400, 403, 404
@@ -410,6 +417,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   // S10 E3-1c: mirrors HTTP 403 `evaluation_content_withheld` (capability-route.ts).
   if (err instanceof EvaluationContentWithheldError) {
     return { code: WS_ERROR_CODES.EVALUATION_CONTENT_WITHHELD, message: err.message };
+  }
+  // S10 E3-2c: mirrors HTTP 403 `evaluation_probe_hold` (capability-route.ts).
+  if (err instanceof EvaluationProbeHoldError) {
+    return { code: WS_ERROR_CODES.EVALUATION_PROBE_HOLD, message: err.message };
   }
   // An Operation declaring a gate-owned param, not published (see capability-route.ts's own mapping).
   if (err instanceof OperationDeclaresGateOwnedParamsError) {
