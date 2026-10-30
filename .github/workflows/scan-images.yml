@@ -1,0 +1,101 @@
+name: scan-images
+
+# Trivy scan of the images publish-images.yml just pushed for one release tag (report only: SARIF
+# to code scanning, never blocks anything — same stance as image-scan.yml). Split out of
+# publish-images.yml so the scan is not part of that workflow's result: release-please.yml runs it
+# as a sibling of publish-images and lets release-channel depend on publish-images alone, so a
+# scan leg that fails or never gets a runner cannot keep the release off the channel feed.
+#
+# Called only from a run that also ran publish-images.yml's build-sign: each leg reads the
+# `digest-<service>` artifact build-sign uploaded in the same workflow run (artifacts are shared
+# by every reusable workflow of one run) and scans exactly that digest. A leg whose artifact is
+# missing (its build-sign leg failed) has nothing to scan and ends green.
+#
+# No packages, no id-token, no registry credentials: nothing here can push or sign (R-33).
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag whose published images to scan (vX.Y.Z)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: scan (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # No packages, no id-token: nothing here can push or sign. Trivy pulls the public image
+    # anonymously.
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # The same services as publish-images.yml's build-sign.
+        service:
+          - kernel
+          - agent-host
+          - worker-supervisor
+          - llm-proxy
+          - egress-proxy
+          - caddy
+          - worker-runtime
+          - gatekeeper-docker
+          - gatekeeper-ragflow
+          - gate-host
+          - collector-host-inventory
+    steps:
+      # Only so the SARIF upload attributes the results to the tag's commit, as before the split.
+      - name: Checkout ${{ inputs.tag }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+
+      - name: Download the signed digest (${{ matrix.service }})
+        id: download
+        # Absent when this service's build-sign leg failed — nothing to scan then.
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: digest-${{ matrix.service }}
+          path: ${{ runner.temp }}/digest
+
+      - name: Read the image reference
+        id: ref
+        if: steps.download.outcome == 'success'
+        env:
+          SERVICE: ${{ matrix.service }}
+        run: |
+          ref=$(head -n 1 "$RUNNER_TEMP/digest/image-ref")
+          case "$ref" in
+            ghcr.io/*/nexttime-ai-"$SERVICE"@sha256:*) ;;
+            *) echo "::error::unexpected image reference '$ref'"; exit 1 ;;
+          esac
+          echo "image_ref=$ref" >>"$GITHUB_OUTPUT"
+
+      - name: Scan ${{ matrix.service }} with Trivy
+        if: steps.ref.outcome == 'success'
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.ref.outputs.image_ref }}
+          format: sarif
+          output: trivy-${{ matrix.service }}.sarif
+          severity: HIGH,CRITICAL
+          vuln-type: os,library
+          scanners: vuln
+
+      - name: Upload SARIF (${{ matrix.service }})
+        if: always() && hashFiles(format('trivy-{0}.sarif', matrix.service)) != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          sarif_file: trivy-${{ matrix.service }}.sarif
+          category: publish-${{ matrix.service }}
