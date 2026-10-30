@@ -223,19 +223,76 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(asked).toEqual([]);
     });
 
-    it('a shared-credential gate, or one that does not answer, says nothing — and an unanswered gate is asked again', async () => {
+    it('a shared-credential gate, or one that does not answer, says nothing — and an unanswered gate is not asked again until the answer would have expired', async () => {
       asked = [];
       clock = 4_000_000;
       useFakeGate(async () => ({ credentialMode: 'shared' }));
       const id = await seedRequest('pending_approval');
       expect(await getAction(owner(), id)).not.toHaveProperty('onBehalfOfAccount');
 
-      clock += PRESENCE_TTL_MS + 1;
       useFakeGate(async () => {
         throw new Error('gate down');
       });
       expect(await getAction(owner(), id)).not.toHaveProperty('onBehalfOfAccount');
+      // Review #493 on #821: a gate that did not answer costs one timeout per TTL, not per read.
       expect(await getAction(owner(), id)).not.toHaveProperty('onBehalfOfAccount');
+      expect(asked).toHaveLength(2);
+      clock += PRESENCE_TTL_MS + 1;
+      expect(await getAction(owner(), id)).not.toHaveProperty('onBehalfOfAccount');
+      expect(asked).toHaveLength(3);
+    });
+
+    it('the queue asks every requester’s gate at once: a slow gate costs one wait, not one per requester', async () => {
+      asked = [];
+      clock = 5_000_000;
+      const others = [await newPrincipal('member'), await newPrincipal('member')];
+      let inFlight = 0;
+      let mostInFlight = 0;
+      let release: () => void = () => {};
+      const allAsked = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      useFakeGate(async () => {
+        inFlight += 1;
+        mostInFlight = Math.max(mostInFlight, inFlight);
+        if (inFlight === 3) release();
+        await allAsked;
+        inFlight -= 1;
+        return { credentialMode: 'connected_account', present: false };
+      });
+      const ids = [await seedRequest('pending_approval')];
+      for (const requester of others) {
+        const id = randomUUID();
+        await admin((client) =>
+          client.query(
+            `insert into action_requests
+               (workspace_id, id, status, gatekeeper_id, action_kind, resource_scope, blast_radius,
+                policy_decision, await_decision, on_behalf_of, actor_runtime, requester_can_approve,
+                params)
+             values ($1, $2, 'pending_approval', $3::uuid, 'l513.test.action', $3::text, 'medium',
+                     'require_approval', false, $4, 'pi', true, '{}'::jsonb)`,
+            [workspaceId, id, gatekeeperId, requester],
+          ),
+        );
+        ids.push(id);
+      }
+      // One read of the queue: the fake answers only once all three are asked together, so asking
+      // one requester after another would never finish.
+      const result = (await dispatchCapability({ pool }, owner(), 'list_pending', {})) as {
+        items: unknown[];
+      };
+      const listed = result.items.map((item) => ActionRequestWireSchema.parse(item));
+      const rows = ids.map((id) => listed.find((row) => row.id === id));
+      expect(rows.map((row) => row?.onBehalfOfAccount)).toEqual([
+        'not_connected',
+        'not_connected',
+        'not_connected',
+      ]);
+      // All three requesters were asked about together, each once.
+      expect(mostInFlight).toBe(3);
+      expect(new Set(asked.map((entry) => entry.onBehalfOf))).toEqual(
+        new Set([memberId, ...others]),
+      );
       expect(asked).toHaveLength(3);
     });
   },

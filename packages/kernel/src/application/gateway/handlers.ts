@@ -193,8 +193,8 @@ import {
   rotateConnectionSecretHandler,
 } from './connection-handlers.js';
 import {
-  type ConnectedAccountPresence,
-  connectedAccountPresence,
+  accountOnGateKey,
+  connectedAccountPresenceOf,
   servesPerson,
 } from './credential-presence.js';
 // S8 W3 K2 (leftover 82) — discard_draft, same one-capability-per-file convention as
@@ -1441,22 +1441,17 @@ async function withRequesterAccounts(
   ctx: CapabilityHandlerContext | undefined,
 ): Promise<ReturnType<typeof toWireActionRequest>[]> {
   if (!servesPerson(ctx)) return [...wires];
-  const gatesByRequester = new Map<string, string[]>();
-  for (const wire of wires) {
-    if (wire.status !== 'pending_approval') continue;
-    const gates = gatesByRequester.get(wire.onBehalfOf) ?? [];
-    gates.push(wire.gatekeeperId);
-    gatesByRequester.set(wire.onBehalfOf, gates);
-  }
-  const presence = new Map<string, ConnectedAccountPresence>();
-  for (const [requester, gates] of gatesByRequester) {
-    const answers = await connectedAccountPresence(client, workspaceId, requester, gates);
-    for (const [gate, answer] of answers) presence.set(`${requester}\u0000${gate}`, answer);
-  }
+  const presence = await connectedAccountPresenceOf(
+    client,
+    workspaceId,
+    wires
+      .filter((wire) => wire.status === 'pending_approval')
+      .map((wire) => ({ principalId: wire.onBehalfOf, gatekeeperId: wire.gatekeeperId })),
+  );
   return wires.map((wire) => {
     const answer =
       wire.status === 'pending_approval'
-        ? presence.get(`${wire.onBehalfOf}\u0000${wire.gatekeeperId}`)
+        ? presence.get(accountOnGateKey(wire.onBehalfOf, wire.gatekeeperId))
         : undefined;
     return answer !== undefined ? { ...wire, onBehalfOfAccount: answer } : wire;
   });

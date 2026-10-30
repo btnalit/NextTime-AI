@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg';
 import { HttpGatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
-import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
+import type { GateTarget, GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
 import { getGatekeeper } from '../../governance/gatekeepers/index.js';
 import type { CapabilityHandlerContext } from './capability-handler.js';
 import { resolveGateTarget } from './gate-target.js';
@@ -21,22 +21,24 @@ import { resolveGateTarget } from './gate-target.js';
  * worked out only on a path serving a human Principal on the human channel ({@link servesPerson}),
  * and no capability an agent or a Handle can call carries it.
  *
- * Best effort: a gate that does not answer (down, too old to have the route, a self-connected gate
- * with no connection secret) is left out of the answer, and the reader shows nothing for it — the
- * same as before this check existed.
+ * Best effort: a gate that does not answer (down, too old to have the route) or cannot be asked (a
+ * self-connected gate with no connection secret) is left out of the answer, and the reader shows
+ * nothing for it — the same as before this check existed.
  */
 
 /** A member's account on one `connected_account` gate. A `shared` gate, or one whose answer is not
  *  known, has no entry. */
 export type ConnectedAccountPresence = 'connected' | 'not_connected';
 
-/** How long one gate's answer for one member is reused. Short: the member connects their account
- *  in the console straight on the gate, which the kernel does not see. */
+/** How long one gate's answer for one member is reused — and how long a gate that did not answer
+ *  is not asked again (review #493 on #821: a hung gate must not cost every read of a page that
+ *  polls its timeout). Short: the member connects their account in the console straight on the
+ *  gate, which the kernel does not see. */
 export const PRESENCE_TTL_MS = 15_000;
 const PRESENCE_CACHE_MAX = 1_000;
 const PRESENCE_TIMEOUT_MS = 3_000;
 
-type CachedAnswer = ConnectedAccountPresence | 'shared';
+type CachedAnswer = ConnectedAccountPresence | 'shared' | 'unknown';
 
 const cache = new Map<string, { readonly answer: CachedAnswer; readonly expiresAt: number }>();
 
@@ -70,8 +72,19 @@ export function servesPerson(ctx: CapabilityHandlerContext | undefined): boolean
   return ctx?.channel === 'human' && ctx.principal?.kind === 'human';
 }
 
-function cacheKey(workspaceId: string, gatekeeperId: string, principalId: string): string {
-  return `${workspaceId}\u0000${gatekeeperId}\u0000${principalId}`;
+/** One member's account on one gate — what {@link connectedAccountPresenceOf} is asked about. */
+export interface AccountOnGate {
+  readonly principalId: string;
+  readonly gatekeeperId: string;
+}
+
+/** The key {@link connectedAccountPresenceOf}'s answer is read by. */
+export function accountOnGateKey(principalId: string, gatekeeperId: string): string {
+  return `${principalId}\u0000${gatekeeperId}`;
+}
+
+function cacheKey(workspaceId: string, account: AccountOnGate): string {
+  return `${workspaceId}\u0000${accountOnGateKey(account.principalId, account.gatekeeperId)}`;
 }
 
 function remember(key: string, answer: CachedAnswer): void {
@@ -84,54 +97,90 @@ function remember(key: string, answer: CachedAnswer): void {
 }
 
 /**
- * `principalId`'s account on each of `gatekeeperIds` that runs in `connected_account` mode (see
- * the module comment). Never throws for a gate: one that does not answer is left out.
+ * Each member's account on each gate that runs in `connected_account` mode (see the module
+ * comment), keyed by {@link accountOnGateKey}. The database reads run first, one after the other
+ * on `client`; then every gate not answered from memory is asked at once — so a read waits at most
+ * one gate timeout however many members and gates it covers. Never throws for a gate: one that
+ * does not answer is left out, and not asked again until {@link PRESENCE_TTL_MS} has passed.
  */
+export async function connectedAccountPresenceOf(
+  client: PoolClient,
+  workspaceId: string,
+  accounts: readonly AccountOnGate[],
+): Promise<ReadonlyMap<string, ConnectedAccountPresence>> {
+  const answers = new Map<string, CachedAnswer>();
+  const gateClient = resolveClient();
+  const targets = new Map<string, GateTarget | null>();
+  const asks: {
+    readonly account: AccountOnGate;
+    readonly key: string;
+    readonly target: GateTarget;
+  }[] = [];
+  const seen = new Set<string>();
+  for (const account of accounts) {
+    const key = cacheKey(workspaceId, account);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const cached = cache.get(key);
+    if (cached && cached.expiresAt > now()) {
+      answers.set(accountOnGateKey(account.principalId, account.gatekeeperId), cached.answer);
+      continue;
+    }
+    if (!gateClient.credentialPresence) continue;
+    let target = targets.get(account.gatekeeperId);
+    if (target === undefined) {
+      const record = await getGatekeeper(client, workspaceId, account.gatekeeperId);
+      const resolved = record ? await resolveGateTarget(client, workspaceId, record) : null;
+      target = resolved && resolved.credential.kind !== 'none' ? resolved : null;
+      targets.set(account.gatekeeperId, target);
+    }
+    if (target) asks.push({ account, key, target });
+  }
+  const ask = gateClient.credentialPresence;
+  if (ask) {
+    await Promise.all(
+      asks.map(async ({ account, key, target }) => {
+        let answer: CachedAnswer;
+        try {
+          const response = await ask.call(gateClient, target, account.principalId);
+          answer =
+            response.credentialMode === 'shared'
+              ? 'shared'
+              : response.present
+                ? 'connected'
+                : 'not_connected';
+        } catch {
+          // Not known: shown as nothing, and not asked again until the answer would have expired.
+          answer = 'unknown';
+        }
+        remember(key, answer);
+        answers.set(accountOnGateKey(account.principalId, account.gatekeeperId), answer);
+      }),
+    );
+  }
+  const presence = new Map<string, ConnectedAccountPresence>();
+  for (const [key, answer] of answers) {
+    if (answer === 'connected' || answer === 'not_connected') presence.set(key, answer);
+  }
+  return presence;
+}
+
+/** {@link connectedAccountPresenceOf} for one member, keyed by gatekeeper id. */
 export async function connectedAccountPresence(
   client: PoolClient,
   workspaceId: string,
   principalId: string,
   gatekeeperIds: readonly string[],
 ): Promise<ReadonlyMap<string, ConnectedAccountPresence>> {
-  const answers = new Map<string, CachedAnswer>();
-  const asks: Promise<void>[] = [];
-  const gateClient = resolveClient();
-  for (const gatekeeperId of new Set(gatekeeperIds)) {
-    const key = cacheKey(workspaceId, gatekeeperId, principalId);
-    const cached = cache.get(key);
-    if (cached && cached.expiresAt > now()) {
-      answers.set(gatekeeperId, cached.answer);
-      continue;
-    }
-    if (!gateClient.credentialPresence) continue;
-    // The reads share one client, so they run one after the other; the gate calls overlap.
-    const record = await getGatekeeper(client, workspaceId, gatekeeperId);
-    if (!record) continue;
-    const target = await resolveGateTarget(client, workspaceId, record);
-    if (target.credential.kind === 'none') continue;
-    const ask = gateClient.credentialPresence;
-    asks.push(
-      ask.call(gateClient, target, principalId).then(
-        (response) => {
-          const answer: CachedAnswer =
-            response.credentialMode === 'shared'
-              ? 'shared'
-              : response.present
-                ? 'connected'
-                : 'not_connected';
-          remember(key, answer);
-          answers.set(gatekeeperId, answer);
-        },
-        () => {
-          // Not known: shown as nothing, and asked again on the next read.
-        },
-      ),
-    );
+  const presence = await connectedAccountPresenceOf(
+    client,
+    workspaceId,
+    gatekeeperIds.map((gatekeeperId) => ({ principalId, gatekeeperId })),
+  );
+  const byGate = new Map<string, ConnectedAccountPresence>();
+  for (const gatekeeperId of gatekeeperIds) {
+    const answer = presence.get(accountOnGateKey(principalId, gatekeeperId));
+    if (answer !== undefined) byGate.set(gatekeeperId, answer);
   }
-  await Promise.all(asks);
-  const presence = new Map<string, ConnectedAccountPresence>();
-  for (const [gatekeeperId, answer] of answers) {
-    if (answer !== 'shared') presence.set(gatekeeperId, answer);
-  }
-  return presence;
+  return byGate;
 }

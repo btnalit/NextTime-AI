@@ -126,7 +126,7 @@ export async function planAuthorityHints(
       if (missing.length === 0) continue;
       hints.push({
         code: 'step_account_not_connected',
-        message: `step "${entry.stepKey}": the requester has not connected their own account on gate(s) ${missing.join(', ')} — the gate would refuse the step's calls (credential_unavailable)`,
+        message: `step "${entry.stepKey}": the requester has not connected their own account on gate(s) ${missing.join(', ')} — the gate would refuse any call the step makes there (credential_unavailable)`,
         stepKey: entry.stepKey,
         gatekeeperIds: missing,
       });
