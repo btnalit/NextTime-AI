@@ -118,6 +118,9 @@ if [ -z "${NEXTTIME_DATA:-}" ] || [ -z "${KERNEL_BIND_ADDR:-}" ]; then
 fi
 
 . "$(dirname "$0")/lib/accept-common.sh"
+# S11 GO7a: goal scenarios S1, S5, S6, S11 (goal_scenarios_step, after step 9) and the cleanup of
+# every goal they start — see that file's own header comment.
+. "$(dirname "$0")/lib/accept-s2-goals.sh"
 require_driver
 
 # `set -u` is active from the top of this script — pre-set every variable cleanup_step reads so
@@ -1375,25 +1378,16 @@ cleanup_step() {
     echo "cleanup: --keep set, leaving accept-s2 fixtures/gates/workspace up"
     return
   fi
-  # A goal step 9 confirmed but did not see end (a poll that ran out, a failed assertion) would go
-  # on after this script: the advancer retrying its step on a fake model the provider restore
-  # switches away from, the platform's check retrying a gate removed below. Bounded either way,
-  # but still Worker containers, audit rows and a goal waiting on a decision after the operator
-  # saw FAIL. So it is ended here, before the gates go: a proposed run rejected, a live one
-  # cancelled. Logged, never failed — on the success path the run is completed and this does
-  # nothing.
-  if [ -n "$GOAL_ID" ]; then
-    goal_end_state=$(parse_kv "$(cap "$ALICE_KEY" get_goal "{\"goalRunId\":\"$GOAL_ID\"}" "d.result.status")" EXTRACTED)
-    case "$goal_end_state" in
-      proposed) goal_end_cap=reject_goal; goal_end_params="{\"goalRunId\":\"$GOAL_ID\",\"revision\":1}" ;;
-      running|paused|verifying) goal_end_cap=cancel_goal; goal_end_params="{\"goalRunId\":\"$GOAL_ID\"}" ;;
-      *) goal_end_cap="" ;;
-    esac
-    if [ -n "$goal_end_cap" ]; then
-      goal_end_out=$(cap "$ALICE_KEY" "$goal_end_cap" "$goal_end_params" "d.result.status")
-      echo "cleanup: goal $GOAL_ID was $goal_end_state — $goal_end_cap answered HTTP $(parse_kv "$goal_end_out" HTTP_STATUS), now '$(parse_kv "$goal_end_out" EXTRACTED)'"
-    fi
-  fi
+  # A goal step 9 or the goal scenarios confirmed but did not see end (a poll that ran out, a
+  # failed assertion) would go on after this script: the advancer retrying its step on a fake model
+  # the provider restore switches away from, the platform's check retrying a gate removed below.
+  # Bounded either way, but still Worker containers, audit rows and a goal waiting on a decision
+  # after the operator saw FAIL. So each is ended here, before the gates go: a proposed run
+  # rejected, a live one cancelled (goal_end_live). Logged, never failed — on the success path
+  # every run is settled and this does nothing.
+  for live_goal in $GOAL_ID $GOALS_STARTED; do
+    goal_end_live "$live_goal"
+  done
   resident_reclaim "$ALICE_PRINCIPAL_ID" >/dev/null 2>&1
   resident_reclaim "$BOB_PRINCIPAL_ID" >/dev/null 2>&1
   # `down` on a profile also stops every default-profile service (postgres/kernel/…), which broke
@@ -1982,6 +1976,7 @@ else
   step7_facts_inferred
   step8_mcp_connect
   step9_goal_from_chat
+  goal_scenarios_step
   cleanup_step
 fi
 

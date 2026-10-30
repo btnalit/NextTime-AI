@@ -9,8 +9,10 @@
 # member) -> create_connection (as owner, importing an OpenAPI manifest) -> publish_manifest ->
 # connect_gatekeeper (grant to the member) -> request_action (the member observes one Operation,
 # confirming a Fact is written) — exactly the "接入一个 fake 系统" acceptance sentence. It reuses
-# the *same* accept-s2 OpenAPI fixture (deploy/accept-s2/openapi-fixture/, one Operation:
-# `stock.get`) scripts/accept_s2.sh's own http-connection block already exercises — not a second,
+# the *same* accept-s2 OpenAPI fixture (deploy/accept-s2/openapi-fixture/; the drill observes its
+# `stock.get` — its two `ledger.*` Operations, the test ledger accept_s2.sh's goal scenarios write
+# to, are published with it and left alone) scripts/accept_s2.sh's own http-connection block
+# already exercises — not a second,
 # parallel fixture — because that fixture already models exactly what a fake "接入包" (the
 # add-gatekeeper.md scenario) looks like from the kernel's side: a real HTTP service + a fronting
 # Gatekeeper process.

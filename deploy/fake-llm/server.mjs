@@ -646,6 +646,109 @@ function goalStepScenario(messages) {
   ];
 }
 
+/** S11 GO7a (scripts/lib/accept-s2-goals.sh `goal_s1_dag`, plan §7.2 S1): "发起三步验收目标
+ *  GOAL_NONCE=<n>" — the entry agent proposes a goal of three report-only steps on the ops-runner
+ *  Worker (`goalStepScenario` scripts each): `a` and `b` run side by side, `c` after both
+ *  (`dependsOn`); the goal accepted by the platform reading `stock.get`, as in
+ *  `entryGoalChatScenario`. alice confirms it outside the chat and nobody writes in the chat again:
+ *  the run must reach its end on its own, its milestones landing in this chat as status lines.
+ *  Every id chains off a real tool result, as in `entryGoalChatScenario`; nothing here tries to
+ *  confirm (that scenario covers it). No marker of this scenario in the statement or a step's input
+ *  (see `entryGoalChatScenario`).
+ *
+ *  Turn 1 `find_workers({need:'restart'})`, turn 2 `find_operations({need:'stock'})`, turn 3
+ *  `propose_goal`, turn 4 a final text with `GOAL_ID=` and `GOAL_STATUS=` from turn 3's result. */
+function entryGoalDagChatScenario(messages) {
+  const asked = latestMessageWith(messages, '发起三步验收目标');
+  const nonce = extractMarker(asked, 'GOAL_NONCE') ?? 'none';
+  const foundWorkers = findToolResult(messages, 'find_workers');
+  const workerMatch = Array.isArray(foundWorkers?.items)
+    ? foundWorkers.items.find((w) => w && w.kind === 'worker')
+    : undefined;
+  const foundOperations = findToolResult(messages, 'find_operations');
+  const stockGet = Array.isArray(foundOperations?.items)
+    ? foundOperations.items.find(
+        (o) =>
+          o?.identityKey?.name === 'stock.get' && typeof o.identityKey.gatekeeperId === 'string',
+      )
+    : undefined;
+  const proposed = findToolResult(messages, 'propose_goal');
+  // Called only once `workerMatch` resolved (the propose_goal turn below).
+  const step = (key, dependsOn) => ({
+    key,
+    worker: { definitionId: workerMatch.definitionId, version: workerMatch.version },
+    input: `ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=${nonce} STEP=${key}`,
+    ...(dependsOn ? { dependsOn } : {}),
+  });
+
+  return [
+    { tool: { name: 'find_workers', args: { need: 'restart' } } },
+    workerMatch
+      ? { tool: { name: 'find_operations', args: { need: 'stock' } } }
+      : { text: 'echo: 发起三步验收目标 (find_workers did not resolve — see docs/runbooks/host-accept-s2.md)' },
+    workerMatch && stockGet
+      ? {
+          tool: {
+            name: 'propose_goal',
+            args: {
+              statement: `accept_s2 three-step goal ${nonce}: two ops-runner steps report side by side, a third after both, and the platform reads the test stock API to accept the goal.`,
+              plan: {
+                steps: [step('a'), step('b'), step('c', ['a', 'b'])],
+                acceptance: [
+                  {
+                    kind: 'observe_predicate',
+                    key: 'stock-visible',
+                    check: {
+                      gatekeeperId: stockGet.identityKey.gatekeeperId,
+                      operation: 'stock.get',
+                      params: {},
+                      expect: { path: 'symbol', op: 'eq', value: 'NXT' },
+                    },
+                  },
+                ],
+              },
+              budget: { maxTokens: 200000, maxSteps: 6, maxRevisions: 1, maxWallClockSeconds: 1800 },
+              idempotencyKey: `accept-s2-goal-dag-${nonce}`,
+            },
+          },
+        }
+      : { text: 'echo: 发起三步验收目标 (find_operations did not resolve stock.get — see docs/runbooks/host-accept-s2.md)' },
+    {
+      text: `Proposed goal GOAL_ID=${proposed?.goalRunId} GOAL_STATUS=${proposed?.status} — please confirm it in the console under Goals; nothing runs until you do.`,
+    },
+  ];
+}
+
+/** S11 GO7a (scripts/lib/accept-s2-goals.sh, plan §7.2 S5 and S11): a goal step whose Worker makes
+ *  one governed write — `ledger.add` on the http gate (tool `accept_s2_api_ledger_add`: the
+ *  connection's target `accept_s2_api` and the Operation's name), under the key the step's input
+ *  names (`LEDGER_KEY=<k>`) — then reports. The Operation is `await_decision: true`, so the call
+ *  waits for a decision up to the kernel's own await budget and comes back `pending_approval` when
+ *  nobody decided by then (S5), or with the decision made in time (S11's rejection). The report
+ *  repeats what came back and claims nothing about the write: the step's acceptance check reads the
+ *  ledger itself. Another attempt of the step makes the same call again, and the kernel answers it
+ *  with the step's earlier request (step-scoped de-duplication), never a second write. */
+function goalLedgerStepScenario(messages) {
+  const blob = JSON.stringify(messages);
+  const key = extractMarker(blob, 'LEDGER_KEY') ?? 'none';
+  const answer = findToolResultText(messages, 'accept_s2_api_ledger_add') ?? '';
+  return [
+    { tool: { name: 'accept_s2_api_ledger_add', args: { key } } },
+    {
+      tool: {
+        name: 'report_result',
+        args: {
+          summary: `accept_s2: asked the test ledger for one entry under ${key}; the platform answered: ${answer.slice(0, 300)}`,
+          findings: [`ledger.add requested under ${key}`],
+          factsToAssert: [],
+          evidence: [{ kind: 'accept_s2_worker_note', content: { key } }],
+          artifacts: [],
+        },
+      },
+    },
+  ];
+}
+
 // Order matters: the entry-chat scenarios must be tested first. Once the entry agent has called
 // `invoke_worker`, its own message history contains the Worker marker (inside the tool-call
 // arguments' `input`), so a Worker-marker-first table would hand the *entry* agent the Worker's
@@ -656,9 +759,11 @@ const SCENARIOS = [
   { marker: '测试 API 的 GET 返回什么', build: entryObserveChatScenario, chat: true },
   { marker: '哪个服务依赖哪个', build: entryDependencyChatScenario, chat: true },
   { marker: '发起验收目标', build: entryGoalChatScenario, chat: true },
+  { marker: '发起三步验收目标', build: entryGoalDagChatScenario, chat: true },
   { marker: 'ACCEPT_S2_SCENARIO=docker_restart', build: dockerRestartScenario, chat: false },
   { marker: 'ACCEPT_S2_SCENARIO=ssh_run', build: sshRunScenario, chat: false },
   { marker: 'ACCEPT_S2_SCENARIO=goal_step', build: goalStepScenario, chat: false },
+  { marker: 'ACCEPT_S2_SCENARIO=goal_ledger', build: goalLedgerStepScenario, chat: false },
 ];
 
 /**

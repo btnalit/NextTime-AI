@@ -16,12 +16,19 @@
 //                         must describe the exact same Operation(s) `importOpenApi` would derive
 //                         from this document, so the two independently-arrived-at shapes agree.
 //                         No auth — the manifest itself is not sensitive.
-//   GET /stock       -> the one real "data" operation (operationId `stock.get` in openapi.json).
+//   GET /stock       -> the stock reading (operationId `stock.get` in openapi.json).
 //                        Requires `Authorization: Bearer <ACCEPT_S2_API_TOKEN>` — 401 without it
 //                        or with the wrong value, so accept_s2.sh can assert the credential
 //                        actually reaches this fixture (via the http gate's ConnectedAccount
 //                        credential resolution) and, separately, that the literal token string
 //                        never lands in any kernel DB table (S2.13's own acceptance sentence).
+//   GET  /ledger/{key} -> `ledger.get`: {key, count}, how many entries the ledger holds under
+//   POST /ledger/{key}    `key`; `ledger.add` adds one and answers the new count. The ledger is
+//                         the gate-side record of how many times a governed write ran: S11 GO7a's
+//                         goal scenarios in scripts/lib/accept-s2-goals.sh count each action's
+//                         executions there (an approved action ran exactly once, a rejected one
+//                         never). In memory, one fixture run's lifetime; same bearer token as
+//                         /stock. `key` is one path segment of letters, digits, `_` and `-`.
 //
 // ACCEPT_S2_API_TOKEN is required — this fixture refuses to start without it (a token-less fixture
 // would make the 401 check meaningless), matching this task's "never hardcode secrets in the repo"
@@ -45,6 +52,10 @@ if (!TOKEN) {
   );
   process.exit(1);
 }
+
+/** `ledger.get` / `ledger.add`'s state: entries per key. */
+const ledger = new Map();
+const LEDGER_PATH = /^\/ledger\/([A-Za-z0-9_-]{1,64})$/;
 
 const OPENAPI_DOC_PATH = join(dirname(fileURLToPath(import.meta.url)), 'openapi.json');
 
@@ -92,6 +103,17 @@ const server = createServer(async (req, res) => {
       return;
     }
     sendJson(res, 200, { symbol: 'NXT', quantity: 42, asOf: new Date().toISOString() });
+    return;
+  }
+
+  const ledgerKey = LEDGER_PATH.exec(url.pathname)?.[1];
+  if (ledgerKey !== undefined && (req.method === 'GET' || req.method === 'POST')) {
+    if (bearerToken(req) !== TOKEN) {
+      sendJson(res, 401, { error: { message: 'missing or invalid bearer token' } });
+      return;
+    }
+    if (req.method === 'POST') ledger.set(ledgerKey, (ledger.get(ledgerKey) ?? 0) + 1);
+    sendJson(res, 200, { key: ledgerKey, count: ledger.get(ledgerKey) ?? 0 });
     return;
   }
 

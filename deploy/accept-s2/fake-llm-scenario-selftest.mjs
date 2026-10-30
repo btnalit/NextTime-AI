@@ -802,6 +802,135 @@ async function main() {
       checkToolCallAgainstRegistry('goal-step-worker', call);
     }
 
+    // 6l. S11 GO7a entryGoalDagChatScenario: "发起三步验收目标" — the same two finds, then a
+    //     three-step plan (a and b side by side, c after both) chained off both real results,
+    //     then a final text accept_s2.sh reads. Not mistaken for "发起验收目标"'s script.
+    {
+      const WORKER_ID = '11111111-1111-4111-8111-111111111111';
+      const GATE_ID = '22222222-2222-4222-8222-222222222222';
+      const GOAL_ID = '44444444-4444-4444-8444-444444444444';
+      const ask = { role: 'user', content: '发起三步验收目标 GOAL_NONCE=d42' };
+      const call = (id, name, args) => ({
+        role: 'assistant',
+        content: null,
+        tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+      });
+      const result = (id, content) => ({
+        role: 'tool',
+        tool_call_id: id,
+        content: typeof content === 'string' ? content : JSON.stringify(content),
+      });
+      const foundWorkers = [
+        call('call_fw', 'find_workers', { need: 'restart' }),
+        result('call_fw', { items: [{ definitionId: WORKER_ID, version: 2, kind: 'worker', name: 'ops-runner' }] }),
+      ];
+      const foundOperations = [
+        call('call_fo', 'find_operations', { need: 'stock' }),
+        result('call_fo', {
+          items: [{ id: 'op-object-id', objectType: 'Operation', identityKey: { gatekeeperId: GATE_ID, name: 'stock.get', version: 1 } }],
+        }),
+      ];
+      {
+        const { json } = await post([ask]);
+        const turn1 = toolCallOf(json);
+        check('entry-goal-dag-turn1', turn1?.name === 'find_workers' && turn1.args.need === 'restart', JSON.stringify(json.choices[0]));
+      }
+      {
+        const { json } = await post([ask, ...foundWorkers, ...foundOperations]);
+        const turn3 = toolCallOf(json);
+        const steps = turn3?.args?.plan?.steps ?? [];
+        check(
+          'entry-goal-dag-turn3',
+          turn3?.name === 'propose_goal' &&
+            steps.map((st) => `${st.key}:${(st.dependsOn ?? []).join('+')}`).join(',') === 'a:,b:,c:a+b' &&
+            steps.every(
+              (st) =>
+                st.worker.definitionId === WORKER_ID &&
+                st.worker.version === 2 &&
+                st.input === `ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=d42 STEP=${st.key}`,
+            ) &&
+            turn3.args.plan.acceptance?.[0]?.check?.gatekeeperId === GATE_ID &&
+            turn3.args.idempotencyKey === 'accept-s2-goal-dag-d42',
+          JSON.stringify(json.choices[0]),
+        );
+        check(
+          'entry-goal-dag-turn3-no-chat-marker',
+          turn3 !== undefined && !JSON.stringify(turn3.args).includes('验收目标'),
+          JSON.stringify(turn3?.args),
+        );
+        checkToolCallAgainstRegistry('entry-goal-dag-turn3', turn3);
+      }
+      {
+        const { json } = await post([
+          ask,
+          ...foundWorkers,
+          ...foundOperations,
+          call('call_pg', 'propose_goal', {}),
+          result('call_pg', { goalRunId: GOAL_ID, status: 'proposed', changed: true, planRevisionId: 'rev-1', hints: [] }),
+        ]);
+        const text = json.choices[0].message.content;
+        check(
+          'entry-goal-dag-turn4',
+          json.choices[0].finish_reason === 'stop' && text.includes(`GOAL_ID=${GOAL_ID}`) && text.includes('GOAL_STATUS=proposed'),
+          JSON.stringify(json.choices[0]),
+        );
+      }
+      {
+        // "发起验收目标" asked earlier in the same resident session: the newest question wins.
+        const { json } = await post([
+          { role: 'user', content: '发起验收目标 GOAL_NONCE=n1' },
+          { role: 'assistant', content: 'earlier reply' },
+          ask,
+          ...foundWorkers,
+          ...foundOperations,
+        ]);
+        const turn3 = toolCallOf(json);
+        check(
+          'entry-goal-dag-after-single',
+          turn3?.name === 'propose_goal' && turn3.args.plan.steps.length === 3,
+          JSON.stringify(json.choices[0]),
+        );
+      }
+    }
+
+    // 6m. S11 GO7a goalLedgerStepScenario: the step's Worker asks for one ledger entry under the
+    //     key its input names, then reports what the platform answered.
+    {
+      const input = { role: 'custom', content: '### Task input\nACCEPT_S2_SCENARIO=goal_ledger GOAL_NONCE=l42 LEDGER_KEY=s5-l42' };
+      const begin = { role: 'user', content: 'Begin working on your assigned Task now' };
+      {
+        const { json } = await post([input, begin]);
+        const call = toolCallOf(json);
+        check(
+          'goal-ledger-worker-turn1',
+          call?.name === 'accept_s2_api_ledger_add' && call.args.key === 's5-l42',
+          JSON.stringify(json.choices[0]),
+        );
+      }
+      {
+        const { json } = await post([
+          input,
+          begin,
+          {
+            role: 'assistant',
+            content: null,
+            tool_calls: [{ id: 'call_la', type: 'function', function: { name: 'accept_s2_api_ledger_add', arguments: '{"key":"s5-l42"}' } }],
+          },
+          { role: 'tool', tool_call_id: 'call_la', content: '{"status":"pending_approval","actionRequestId":"ar-1"}' },
+        ]);
+        const call = toolCallOf(json);
+        check(
+          'goal-ledger-worker-turn2',
+          call?.name === 'report_result' &&
+            call.args.factsToAssert.length === 0 &&
+            call.args.summary.includes('s5-l42') &&
+            call.args.summary.includes('pending_approval'),
+          JSON.stringify(json.choices[0]),
+        );
+        checkToolCallAgainstRegistry('goal-ledger-worker-turn2', call);
+      }
+    }
+
     // 7. Streaming mode also honors scenarios (SSE contains the scripted tool name).
     {
       const { sse } = await post(

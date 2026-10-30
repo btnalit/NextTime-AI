@@ -76,6 +76,10 @@ sh scripts/accept_s2.sh --keep
 跑完后切回来。用法、每个场景判定什么、怎么读 `RUN`/`REAL` 输出，见专门的
 `docs/runbooks/host-accept-real-model.md`。
 
+fake 路径在第 9 步之后还跑目标场景 S1、S5、S6、S11（S11 GO7a，`scripts/lib/accept-s2-goals.sh`），
+比以前多 10 分钟上下：S6 的验收检查故意不成立，平台按重试上限（默认 5 次、约 7.5 分钟）重试完才暂停，
+其余三个场景在这段时间里依次跑完。`--real` 不跑这些场景。
+
 ## 3. 期望输出
 
 逐步打印 `PASS <step> <detail>` / `SKIP <step> <detail>`；任何一步真失败打印 `FAIL <step> <detail>`
@@ -178,6 +182,24 @@ PASS step9-goal-confirm alice confirmed goal <uuid> (one StepRun); confirming ag
 PASS step9-goal-achieved goal <uuid> completed(achieved, verified_by_check): the step succeeded, the platform's own observation of stock.get passed
 PASS step9-goal-one-task one Task for the goal's one step
 PASS step9-goal-milestones chat <uuid> shows the goal's milestones (proposed, confirmed, checking, completed: achieved) and its step's Task under 'report'; the next turn gets the three after the proposal, not the Task
+PASS s6-verifying goal <uuid>: its step reported success, the platform is checking the stock API for a symbol it never shows
+PASS s1-goal-proposed the entry agent proposed goal <uuid> in chat <uuid>: a and b side by side, c after both
+PASS s1-goal-confirmed alice confirmed goal <uuid> outside the chat; nobody writes in any chat from here on
+PASS s1-goal-achieved goal <uuid> completed(achieved, verified_by_check) on its own: three steps, one attempt and one Task each
+PASS s1-goal-order c started only after a and b had both ended (c-after-both,a-b-overlapped)
+PASS s1-no-new-turn no Turn started anywhere in the workspace while goal <uuid> ran (1 in its chat, the proposal's)
+PASS s1-goal-milestones chat <uuid> shows the goal's milestones (proposed, confirmed, checking, completed) and a completed Task under each of a, b, c
+PASS s11-confirmed alice proposed and confirmed goal <uuid> (one step writing to the test ledger under s11-<hex>)
+PASS s11-rejected alice rejected the step's write <uuid>
+PASS s11-needs-decision goal <uuid> paused needs_decision; the step failed action_refused
+PASS s11-no-retry 15s later still paused: one attempt, one Task, the write still rejected; the ledger holds nothing under s11-<hex> (the gate never ran it)
+PASS s11-cancelled alice cancelled goal <uuid>, the decision S11 leaves to a person
+PASS s5-confirmed alice proposed and confirmed goal <uuid> (write to the test ledger under s5-<hex>, then a step after it)
+PASS s5-waiting-approval the Worker exited with its write still pending: step waiting(approval), goal still running, the next step not started, the ledger empty (1 Task)
+PASS s5-approved alice approved the write <uuid> after its Worker had gone ('approved')
+PASS s5-achieved goal <uuid> completed(achieved): the write ran once (ledger count 1 at the gate), the step's check passed on an Observation, then the next step started on its own and succeeded
+PASS s6-not-achieved goal <uuid> paused needs_decision, not completed: its check failed on an Observation after 5 attempts
+PASS s6-ended-not-achieved alice ended goal <uuid> as not achieved: completed,not_achieved,requester,
 PASS cleanup reclaimed alice/bob entry containers, removed the accept-s2 fixture containers; workspace retained: <uuid>
 
 S2 OK
@@ -217,9 +239,21 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
 | `connect-mcp-target-refused` | R-27（2026-10-02 评审）：owner 提供的 `manifestSource` 指向平台服务（`http://worker-supervisor:8081/task/<id>/terminate`）→ 内核出站目标判定在任何抓取前拒绝，400 `connection_target_refused` | 同一个 `create_connection`，换一个指向 worker-supervisor 的 `manifestSource`；不带 `connectionRequestId`，不消耗随后那张连接请求卡 |
 | `connect-mcp-*` | S3.12 自己的验收句——"通过 UI 接入一个 fixture MCP server ... publish 后 find_operations 命中其工具"（本脚本覆盖 capability 层这一半，不覆盖对话内 `<gate>.<op>` 工具出现这一半——那是 S3.13 入口 `session_start` 投影的范围，见 `docs/runbooks/web-console.md`） | 同一条 `request_connection → create_connection → publish_manifest` 路径，`kind:'mcp'`；`create_connection` 的 `manifestSource` 指向 `accept-s2-mcp` 自己的 JSON-RPC 端点，导入两个工具（`accept_s2_mcp_echo` 观察类、`accept_s2_mcp_note` 执行类）；`find_operations('accept_s2_mcp')` 发布前 0 命中、发布后 2 命中，与 `s213-find-operations-*` 同一条 I16/I17 不变量 |
 | `step9-*` | S11 GO5e-1：前后依赖、要在对话之外跑完的一串委派步骤，在对话里发起成目标（`docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md`） | 真实 chat 驱动链路：`entryGoalChatScenario`（fake-llm）驱动入口 agent 依次调 `find_workers` → `find_operations('stock')` → `propose_goal`（一步跑在 ops-runner 上；验收是平台自己对 http 门 `stock.get` 的观察 `observe_predicate`，`symbol` 等于 `NXT`；带 `idempotencyKey`），再自己试一次 `confirm_goal`。`agent-cannot-confirm`：回复里 `CONFIRM_GOAL=unavailable`，且 `get_goal` 读到的仍是 `proposed`、未确认、来源 Turn 就是这一轮——入口模式不注册 `confirm_goal`，内核对任何 Handle 也拒绝它（仅人通道）；`idempotent`：同一对话再问一次，回同一个目标、`changed=false`，`list_goals` 里这次请求只有一个目标；`confirm`：alice 以人通道确认（一个 StepRun），再确认一次 `changed=false`；`achieved`：轮询 `get_goal` 至 `completed / achieved / verified_by_check`，唯一一步成功、首次尝试，`stock-visible` 检查 `passed` 且有 Observation——Worker 不写任何 Fact，验收不靠它的话；`one-task`：`tasks` 里这个目标恰好一行；`milestones`（S11 GO5e-2）：发起目标的那个对话里依次出现 `propose`、`confirm`、`verify`、`complete` 四条 `system.goal_update` 状态行，最后一条带 `completed / achieved / verified_by_check`；那一步的 Task 在同一个对话里报告，带 `stepKey`=`report`；除发起那条之外的三条在这个对话下一轮的上下文里等着，那一步的 Task 不进上下文 |
-| `cleanup` | — | 第 9 步的目标没走到结束时先收尾（`proposed` 用 `reject_goal`，`running` / `paused` / `verifying` 用 `cancel_goal`，只记日志）；回收 alice/bob 入口容器；`docker compose --profile accept-s2 rm -sf` 六个 accept-s2 容器（不是 `down`，见 §6）；workspace 行留作审计留痕 |
+| `s1-*` | S11 §7.2 S1：用户发起目标（a、b 并行，c 依赖 a、b）并确认后不再发消息（GO7a，`scripts/lib/accept-s2-goals.sh`） | 新对话里发「发起三步验收目标 GOAL_NONCE=…」，`entryGoalDagChatScenario`（fake-llm）驱动入口 agent `find_workers` → `find_operations('stock')` → `propose_goal`（三步都跑 ops-runner 的 `goal_step` 剧本，c 的 `dependsOn` 是 a、b；验收同第 9 步）。`proposed`：计划读出来 a、b 无依赖、c 依赖两者；`confirmed`：alice 在对话外以人通道确认，一次建出三个 StepRun；`achieved`：轮询至多 360s 到 `completed / achieved / verified_by_check`，三步各成功一次、各一个 Task；`order`：c 的尝试建于 a、b 都结束之后（a、b 是否真的重叠取决于请求者的并发配额，只报告不判定）；`no-new-turn`：从确认到结束，整个 workspace 没有新的 `agent_turn` Activity；`milestones`：发起对话里依次是 `propose`、`confirm`、`verify`、`complete`，a、b、c 各一条完成的 Task 状态行 |
+| `s11-*` | S11 §7.2 S11：一步的执行动作被拒绝 → 步骤与目标进入需要决定，不自动重试同一动作 | alice 以人通道提一步目标（ops-runner 的 `goal_ledger` 剧本：经 http 门调 `ledger.add` 往夹具账本写一条，`await_decision: true`；`maxAttempts` 2，留一次尝试不用），确认；等这条写入 `pending_approval` 后 alice `reject`。`needs-decision`：目标 `paused(needs_decision)`，步骤 `failed / action_refused`、一次尝试、那条写入 `rejected`；`no-retry`：15s 后状态不变、仍一次尝试一个 Task，夹具账本在这个键下计数 0（门侧根本没执行）；`cancelled`：alice `cancel_goal` 收尾 |
+| `s5-*` | S11 §7.2 S5：一步含需审批的执行动作，审批晚于 Worker 退出 → 步骤 `waiting(approval)`，目标不失败；批准并执行后，步骤验收通过才判成功，下一步自动开始 | 两步：`write`（`goal_ledger`，步骤验收是平台对 `ledger.get` 的观察 `count` 等于 1）与 `after`（`goal_step`，依赖 `write`）。Worker 的写入等决定到内核的等待上限（25s）后拿到 `pending_approval`、报告、退出；`waiting-approval`：此时目标 `running`、`write` 是 `waiting(approval)` 且那条写入仍 `pending_approval`、`after` 仍 `pending` 未开始、账本计数 0；alice 批准；`achieved`：轮询至多 300s 到 `completed / achieved / verified_by_check`，`write` 一次尝试、写入 `executed`、步骤检查 `passed` 且有 Observation，`after` 的尝试建于 `write` 结束之后并成功，账本计数 1（门侧恰好执行一次） |
+| `s6-*` | S11 §7.2 S6：各步都报告成功，但验收观察为假 → 不进入 `completed(achieved)`；暂停并附证据；人选「按未达成结束」后为 `completed(not_achieved)` | 一步 `goal_step`，验收是 `stock.get` 的 `symbol` 等于一个它永远不会返回的值。`verifying`：最先启动，步骤成功后目标进入 `verifying`；平台按重试上限在后台重试这条检查，期间跑 S1、S11、S5；`not-achieved`：最后回来，轮询至多 960s（默认上限 15 分钟加余量）到 `paused(needs_decision)`、无结果，检查 `failed` 且有 Observation、至少重试过一次；`ended-not-achieved`：alice `end_goal(not_achieved)` 后为 `completed / not_achieved` |
+| `cleanup` | — | 第 9 步与目标场景里没走到结束的目标先收尾（`proposed` 用 `reject_goal`，`running` / `paused` / `verifying` 用 `cancel_goal`，只记日志）；回收 alice/bob 入口容器；`docker compose --profile accept-s2 rm -sf` 六个 accept-s2 容器（不是 `down`，见 §6）；workspace 行留作审计留痕 |
 
 ## 5. 已知偏离
+
+- **目标场景（S11 GO7a）在主机上不覆盖的部分**：S5 的 `await_decision: false` 一半与 S11 的「审批过期」一半——
+  前者要一个不等决定的执行类 Operation 且没有任何「总是允许」，后者要把审批过期时间调到秒级，在跑着的
+  栈上都只能改内核配置才做得到，脚本不改主机配置；两者由 `advancer.integration.test.ts` 的 S5、S11 用例
+  对真实 Postgres 覆盖。S2（重启）、S4（门丢响应后核对）、S7（带在途动作取消）、S12（丢一次唤醒）和
+  S8–S10 冒烟留给 GO7a 的下一个 PR。目标场景失败时 FAIL 行末尾带 `evidence:`，是那个目标的
+  `get_goal` 摘要（状态、暂停原因、每步的尝试与动作、每条验收检查的尝试次数与最后错误）；脚本退出前
+  `cleanup` 会把没结束的目标取消掉，要留着现场排障就加 `--keep`（目标不取消，夹具也不删）。
 
 - **核心缺口 1（已修复——`fix/entry-mode-tools` 已合入，entry 模式现在注册 S2 的工具与 `observe_operation`；
   以下为当时的根因记录）：`packages/platform-extension` 的 entry 模式当时从未注册 S2 新增的任何工具**——
@@ -334,11 +368,11 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
 
 ## 6. 清理
 
-`--keep` 不传时，`cleanup_step` 会：先收尾第 9 步确认过、却没看到结束的目标（轮询超时、断言失败）——
+`--keep` 不传时，`cleanup_step` 会：先收尾第 9 步与目标场景确认过、却没看到结束的目标（轮询超时、断言失败）——
 否则它在脚本退出后还会继续：推进器在恢复生产 provider 之后重试那一步，平台验收对已删的门重试，
 最后停在等人决定的状态。`proposed` 的用 `reject_goal`，`running` / `paused` / `verifying` 的用
 `cancel_goal`，结果只打日志（`cleanup: goal <uuid> was … — cancel_goal answered HTTP 200, now
-'cancelling'`），不判失败；成功路径上目标已经 `completed`，这一步什么都不做。然后
+'cancelling'`），不判失败；成功路径上每个目标都已结束（`completed` 或 `cancelled`），这一步什么都不做。然后
 `docker compose --profile accept-s2 rm -sf`（移除
 `accept-s2-sshd`/`accept-s2-openapi`/`accept-s2-mcp`/`accept-s2-ssh-gate`/`accept-s2-http-gate`/
 `accept-s2-restart-target` 六个容器，只 `rm` 这六个而不是整体 `down`，避免连基础栈一起停掉——

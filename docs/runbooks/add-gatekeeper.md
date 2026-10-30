@@ -401,7 +401,8 @@ sh scripts/drill-add-gatekeeper.sh
 ```
 
 用的"fake 系统"就是 §9 之外这份文档里反复提到的 accept-s2 OpenAPI fixture
-（`deploy/accept-s2/openapi-fixture/`，一个 `stock.get` observe Operation）——不是另起一套新
+（`deploy/accept-s2/openapi-fixture/`；演练只用它的 `stock.get` observe Operation，另外两个 `ledger.*` 是
+`accept_s2.sh` 目标场景用的测试账本，发布了但演练不碰）——不是另起一套新
 fixture，与 `scripts/accept_s2.sh` 自己的 http 连接那一段共用同一对 compose 服务
 （`accept-s2-openapi`/`accept-s2-http-gate`）与同一个 `${NEXTTIME_DATA}/accept-s2/http-gate/`
 目录，因此**不要**与一次正在跑的 `accept_s2.sh` 并发执行（两者都会重新生成令牌并让 compose 重建

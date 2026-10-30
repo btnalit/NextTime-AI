@@ -13,6 +13,34 @@
           }
         }
       }
+    },
+    "/ledger/{key}": {
+      "get": {
+        "operationId": "ledger.get",
+        "summary": "How many entries the test ledger holds under one key (accept_s2.sh goal scenarios).",
+        "parameters": [
+          { "name": "key", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      },
+      "post": {
+        "operationId": "ledger.add",
+        "summary": "Add one entry to the test ledger under one key (accept_s2.sh goal scenarios).",
+        "parameters": [
+          { "name": "key", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
     }
   }
 }

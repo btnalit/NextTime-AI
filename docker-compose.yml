@@ -1189,7 +1189,8 @@ services:
     restart: "no"
 
   # A test OpenAPI service (S2.12 deliverable 1b) — serves both the OpenAPI document
-  # `create_connection`'s `manifestSource` imports from and the one real `/stock` operation
+  # `create_connection`'s `manifestSource` imports from and its operations (`/stock`, and the test
+  # ledger under `/ledger/{key}` that scripts/lib/accept-s2-goals.sh writes to)
   # (bearer-token gated, ACCEPT_S2_API_TOKEN generated at accept_s2.sh runtime — never a value
   # baked into this file). See deploy/accept-s2/openapi-fixture/server.mjs's own header comment.
   # `:-` (not `:?`): compose interpolates every service's `environment:` block for the *whole*
@@ -1272,7 +1273,8 @@ services:
   # generated bearer token goes straight into this gate's local encrypted ConnectedAccount store,
   # never through the kernel — S2.13's own acceptance sentence "凭证明文不出现在任何内核 DB 表").
   # GATE_STORE_KEY_FILE is generated at accept_s2.sh runtime, same directory convention as the ssh
-  # keypair above. deploy/accept-s2/http-gate-manifest.json's one Operation (`stock.get`) is the
+  # keypair above. deploy/accept-s2/http-gate-manifest.json's Operations (`stock.get`, and the test
+  # ledger's `ledger.get` / `ledger.add` the goal scenarios use) are the
   # same shape `@nexttime/gatekeeper-base`'s `importOpenApi` deterministically derives from
   # accept-s2-openapi's own openapi.json — see that manifest file's own header comment for why both
   # copies must agree.
