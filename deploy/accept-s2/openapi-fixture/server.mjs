@@ -29,6 +29,11 @@
 //                         executions there (an approved action ran exactly once, a rejected one
 //                         never). In memory, one fixture run's lifetime; same bearer token as
 //                         /stock. `key` is one path segment of letters, digits, `_` and `-`.
+//                         A POST under a key starting `lose-` adds its entry and then drops the
+//                         connection without answering: the write took effect, its response is
+//                         lost (S11 GO7a S4). The gate cannot tell whether it ran, records the
+//                         call as outcome unknown and answers every repeat of it the same way, so
+//                         the platform has to reconcile by observing the ledger.
 //
 // ACCEPT_S2_API_TOKEN is required — this fixture refuses to start without it (a token-less fixture
 // would make the 401 check meaningless), matching this task's "never hardcode secrets in the repo"
@@ -113,6 +118,10 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (req.method === 'POST') ledger.set(ledgerKey, (ledger.get(ledgerKey) ?? 0) + 1);
+    if (req.method === 'POST' && ledgerKey.startsWith('lose-')) {
+      req.socket.destroy();
+      return;
+    }
     sendJson(res, 200, { key: ledgerKey, count: ledger.get(ledgerKey) ?? 0 });
     return;
   }

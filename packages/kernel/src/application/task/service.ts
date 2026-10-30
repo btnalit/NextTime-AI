@@ -431,7 +431,17 @@ export interface WorkerRunUsageTokens {
  *  triggered via `budget_warned_at`, mirroring `governance/llm-usage/service.ts`'s own workspace-
  *  level crossing check); at ≥100% marks the Task `failed: budget_exhausted` and best-effort
  *  terminates every still-running WorkerRun under it (design doc I18: "到 100% 时 ... Task 进入
- *  failed: budget_exhausted"). Must be called on the same `client`/transaction the llm-usage
+ *  failed: budget_exhausted").
+ *
+ *  Whatever the Task's status (S11 GO7a, accept_s2 S10: a goal attempt capped at one token ran on
+ *  past it while its Task was `waiting_approval` — this judged only `running` Tasks). A Worker can
+ *  spend under every status its Task has not ended in: `queued` between its WorkerRun's spawn and
+ *  the Task's move to `running`; `waiting_approval`, where it keeps its Handle and goes on calling
+ *  the model once an `await_decision` gate call comes back `pending_approval` (and the usage of the
+ *  answer that raised the request is reported after the request moved the Task). Those Tasks fail
+ *  like a `running` one. An ended Task is not changed, but a WorkerRun of it still live past the
+ *  budget is terminated all the same: `terminateTask` ends the Task first and its runs after, in
+ *  their own transactions. The 80% warning is for Tasks that have not ended. Must be called on the same `client`/transaction the llm-usage
  *  INSERT itself ran on (`interfaces/http/internal/llm-usage.ts`'s own doc comment) — this
  *  function opens no transaction of its own.
  */
@@ -464,11 +474,15 @@ export async function recordWorkerRunUsage(
   if (!taskRow) return;
   const task = mapTaskRow(taskRow);
 
-  if (task.tokenBudget === null || task.status !== 'running') return;
+  if (task.tokenBudget === null) return;
+  const ended =
+    task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled';
   const percent = task.tokenBudget > 0 ? (task.tokensUsed / task.tokenBudget) * 100 : 100;
 
   if (percent >= 100) {
-    await failTaskRow(client, workspaceId, task.onBehalfOf, task.id, 'budget_exhausted');
+    if (!ended) {
+      await failTaskRow(client, workspaceId, task.onBehalfOf, task.id, 'budget_exhausted');
+    }
     const runningRuns = await client.query<{ id: string }>(
       `select id from worker_runs
        where workspace_id = $1 and task_id = $2 and status in ('provisioning', 'running', 'suspended')`,
@@ -487,7 +501,7 @@ export async function recordWorkerRunUsage(
     return;
   }
 
-  if (percent >= 80 && task.budgetWarnedAt === null) {
+  if (!ended && percent >= 80 && task.budgetWarnedAt === null) {
     await client.query(
       'update tasks set budget_warned_at = now() where workspace_id = $1 and id = $2',
       [workspaceId, task.id],
