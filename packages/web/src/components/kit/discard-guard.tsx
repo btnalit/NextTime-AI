@@ -3,6 +3,7 @@ import * as DialogPrimitive from '@radix-ui/react-dialog';
 import {
   type ComponentPropsWithoutRef,
   type ElementRef,
+  type ForwardedRef,
   type ReactNode,
   createContext,
   forwardRef,
@@ -232,6 +233,27 @@ export function useDiscardGuard(): DiscardGuard {
   return { attach, edited, reset, guard, confirm };
 }
 
+/** A ref callback that attaches `discard` to the element it lands on (and detaches it when the
+ *  element goes), passing the element on to `ref`. */
+export function useGuardedElement<T extends HTMLElement>(
+  discard: DiscardGuard,
+  ref?: ForwardedRef<T>,
+): (element: T | null) => void {
+  const detach = useRef<{ element: T; off: () => void } | null>(null);
+  const attach = discard.attach;
+  return useCallback(
+    (element: T | null) => {
+      if (detach.current?.element !== element) {
+        detach.current?.off();
+        detach.current = element === null ? null : { element, off: attach(element) };
+      }
+      if (typeof ref === 'function') ref(element);
+      else if (ref) ref.current = element;
+    },
+    [ref, attach],
+  );
+}
+
 const GuardedCloseContext = createContext<((close: () => void) => void) | null>(null);
 
 /** Gives the drawer's guard to the form inside it (`null`: no drawer around it now). */
@@ -301,19 +323,7 @@ export const GuardedDialogContent = forwardRef<
   const close = () => closeRef.current?.click();
   // The guard watches the content's element itself: a detail portaled into it is outside its
   // React tree, so React's own events would not see its edits.
-  const detach = useRef<{ el: HTMLElement; off: () => void } | null>(null);
-  const attach = discard.attach;
-  const contentRef = useCallback(
-    (el: HTMLDivElement | null) => {
-      if (detach.current?.el !== el) {
-        detach.current?.off();
-        detach.current = el === null ? null : { el, off: attach(el) };
-      }
-      if (typeof ref === 'function') ref(el);
-      else if (ref) ref.current = el;
-    },
-    [ref, attach],
-  );
+  const contentRef = useGuardedElement(discard, ref);
   return (
     <DialogPrimitive.Content
       ref={contentRef}
