@@ -65,6 +65,11 @@ export { EGRESS_DENY_LABEL as TASK_EGRESS_DENY_LABEL };
  *  `docker ps --filter label=nexttime.correlation-id=<id>`. Only set when an id was given. */
 export const TASK_CORRELATION_ID_LABEL = 'nexttime.correlation-id';
 
+/** S10 E3-2-0: `'true'` on an evaluation Task's container, whose egress source entry is
+ *  deny-all — read back by `task-service.ts`'s `reconcile()` after a supervisor restart, like
+ *  `TASK_EGRESS_DENY_LABEL`. Absent on every other container. */
+export const TASK_EGRESS_DENY_ALL_LABEL = 'nexttime.egress-deny-all';
+
 export function taskContainerName(workerRunId: string): string {
   return `nexttime-task-${workerRunId}`;
 }
@@ -85,6 +90,8 @@ export interface BuildTaskSpawnSpecInput {
    *  `TASK_EGRESS_DENY_LABEL` (comma-joined) — see that label's own doc comment. `undefined`/empty
    *  stamps an empty label. */
   readonly egressDeny?: readonly string[];
+  /** S10 E3-2-0: stamps `TASK_EGRESS_DENY_ALL_LABEL` — see that label's own doc comment. */
+  readonly egressDenyAll?: boolean;
   /** Leftover 87: the delegating call's correlation id — becomes the container's
    *  `NEXTTIME_CORRELATION_ID` (the platform extension's worker mode sends it on every kernel
    *  call) and `TASK_CORRELATION_ID_LABEL`. Ignored unless valid (`@nexttime/shared`). */
@@ -134,6 +141,7 @@ export function buildTaskSpawnSpec(input: BuildTaskSpawnSpecInput): ContainerSpe
       [WORKER_RUN_ID_LABEL]: input.workerRunId,
       [TASK_WORKSPACE_LABEL]: input.workspaceId,
       [EGRESS_DENY_LABEL]: (input.egressDeny ?? []).join(','),
+      ...(input.egressDenyAll === true ? { [TASK_EGRESS_DENY_ALL_LABEL]: 'true' } : {}),
       ...(correlationId !== undefined ? { [TASK_CORRELATION_ID_LABEL]: correlationId } : {}),
     },
     networkName: input.networkName,

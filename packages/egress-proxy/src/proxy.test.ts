@@ -298,6 +298,56 @@ describe('createProxyServer', () => {
     });
   });
 
+  // S10 E3-2-0: an evaluation Task's container, registered deny-all by worker-supervisor.
+  it('(e) a deny-all source from SOURCE_MAP_FILE gets 403 for http and CONNECT, without DNS', async () => {
+    const upstream = await startUpstream('should-not-reach');
+    cleanups.push(upstream.close);
+    const echo = await startEchoServer();
+    cleanups.push(echo.close);
+
+    const dir = mkdtempSync(join(tmpdir(), 'egress-proxy-proxy-test-'));
+    cleanups.push(async () => rmSync(dir, { recursive: true, force: true }));
+    const sourceMapFile = join(dir, 'sources.json');
+    writeFileSync(
+      sourceMapFile,
+      JSON.stringify({
+        '127.0.0.1': {
+          sourceId: 'worker-eval',
+          allow: ['nexttime-deny-all.invalid'],
+          denyAll: true,
+        },
+      }),
+    );
+    const sourceMap = createSourceMap(sourceMapFile);
+    cleanups.push(async () => sourceMap.close());
+
+    const resolveHost = vi.fn(async () => ['127.0.0.1']);
+    const proxy = await startTestProxy({
+      allowLoopbackForTests: true,
+      resolveHost,
+      resolveSource: (clientIp) => sourceMap.resolveSource(clientIp),
+    });
+    cleanups.push(proxy.close);
+
+    const res = await httpGetThroughProxy(
+      proxy.port,
+      `http://allowed.example.test:${upstream.port}/`,
+    );
+    expect(res.status).toBe(403);
+    const { statusLine } = await rawConnect(proxy.port, `127.0.0.1:${echo.port}`);
+    expect(statusLine).toContain('403');
+    expect(resolveHost).not.toHaveBeenCalled();
+
+    await vi.waitFor(() => expect(proxy.recordings).toHaveLength(2));
+    for (const recording of proxy.recordings) {
+      expect(recording).toMatchObject({
+        allowed: false,
+        reason: 'source-deny-all',
+        sourceId: 'worker-eval',
+      });
+    }
+  });
+
   it('tunnels a CONNECT stream end to end and reports both byte directions', async () => {
     const echo = await startEchoServer();
     cleanups.push(echo.close);

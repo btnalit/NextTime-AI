@@ -468,6 +468,13 @@ export const TaskSpawnRequestSchema = z
      *  `SOURCE_MAP_FILE` entry on spawn. Omitted (no list declared) registers no per-source deny
      *  list, same as before this field existed. */
     egressDeny: z.array(z.string().min(1)).optional(),
+    /** S10 E3-2-0: an evaluation Task's run — this WorkerRun's `SOURCE_MAP_FILE` entry is
+     *  written deny-all (`egress-map.ts`) with its Handle binding, and a spawn whose entry cannot
+     *  be written fails (`task-service.ts`). It still reaches the kernel and llm-proxy,
+     *  which are on the workers network and never go through egress-proxy. Omitted or `false`
+     *  leaves egress as before. A supervisor that predates this field rejects the request (this
+     *  schema is strict), so the kernel never gets an unrestricted evaluation container. */
+    egressDenyAll: z.boolean().optional(),
   })
   .strict();
 export type TaskSpawnRequest = z.infer<typeof TaskSpawnRequestSchema>;

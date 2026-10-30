@@ -34,6 +34,11 @@ export interface SourcePolicy {
   allow?: string[];
   /** Suffix patterns (`matchesDenySuffix`): `x`, `.x` and `*.x` all deny `x` and its subdomains. */
   deny?: string[];
+  /** S10 E3-2-0: this source may reach nothing through this proxy — every request is denied
+   *  (`source-deny-all`) before any hostname rule or DNS lookup, whatever `allow` / `deny` say.
+   *  worker-supervisor sets it for an evaluation Task's container, which talks only to the kernel
+   *  and llm-proxy (both on the workers network, never through this proxy). */
+  denyAll?: boolean;
   /** Leftover 87: logged with every observation from this source; never part of any decision. */
   correlationId?: string;
 }
@@ -91,6 +96,7 @@ export interface PolicyConfig {
 
 export type PolicyDenyReason =
   | 'unknown-source'
+  | 'source-deny-all'
   | 'source-deny'
   | 'deny-host'
   | 'bare-hostname'
@@ -122,6 +128,7 @@ export interface DecideEgressInput {
  *    `config.denyUnknownSource` is set (lane-6 review P2-7; not part of the original design doc
  *    order, checked first since it's a question about the *caller's* identity, prior to anything
  *    about the requested hostname).
+ * 0a. A source registered as deny-all (`SourcePolicy.denyAll`) — denied whatever the hostname.
  * 1. Per-source `deny` (beats `allow` — checked first).
  * 2. Global `DENY_HOSTS` (internal service names).
  * 3. Bare hostnames (no dot), unless the source's `allow` list explicitly names them.
@@ -131,7 +138,8 @@ export interface DecideEgressInput {
  *    connects to the address this function returns, never re-resolving the hostname itself.
  *
  * Steps 0–3 need no DNS lookup at all, so an obviously-denied hostname (an internal service name,
- * a source's deny list, or an unregistered source) is rejected before `resolve` is ever called.
+ * a source's deny list, an unregistered or deny-all source) is rejected before `resolve` is ever
+ * called.
  */
 export async function decideEgress(input: DecideEgressInput): Promise<PolicyDecision> {
   const { source, config, resolve } = input;
@@ -139,6 +147,9 @@ export async function decideEgress(input: DecideEgressInput): Promise<PolicyDeci
 
   if (source === undefined && config.denyUnknownSource) {
     return { allowed: false, reason: 'unknown-source' };
+  }
+  if (source?.denyAll === true) {
+    return { allowed: false, reason: 'source-deny-all' };
   }
   if (matchesDenySuffix(hostname, source?.deny)) {
     return { allowed: false, reason: 'source-deny' };
