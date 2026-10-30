@@ -1887,6 +1887,26 @@ where object_type = 'Operation' and properties->>'status' = 'published'
   - `.int()` 字段拒绝超出安全整数范围的整数（如 2^53+2）。
 - **回滚**：回退代码即可，库不用恢复。回滚后 GHSA-mrhx 回来，入参值上限消失。
 
+### 3.77 草稿评测（#833，S10 E3-2b，v0.50.0 之后的下一版起）
+
+迁移 worker `0010`（新表 `eval_draft_evaluations`；`eval_runs.kind` 可取 `draft`，`eval_trials.status` 可取 `queued`；账本守卫，以及阻止删除评测中 Skill 草稿的触发器），只新增、不回填。不改 compose，无新配额键（沿用 §3.75 的 `evaluation.monthly_cost_budget_usd`）。E3-2a（§3.75）与本节同一版发。
+
+- **窗口前只读检查**：无新增。
+- **发版说明可写**：
+  - 能力目录里 Skill 草稿的详情可以「评测」，结果在「评测 → 草稿评测」。
+  - 新能力 `start_draft_evaluation`、`get_draft_evaluation`、`list_draft_evaluations`、`cancel_draft_evaluation`；`list_eval_runs{kind?}`。
+  - `EvalRun.kind` 新增 `draft`，`EvalTrial.status` 新增 `queued`；草稿评测的每臂计数含 `voided`（取消时还在排队、从未开始的试跑）。
+  - 新错误 400 `draft_check_failed`、429 `evaluation_budget_insufficient`（details `budgetUsd`、`spentUsd`、`committedUsd`、`estimateUsd`）、409 `draft_evaluating`（`discard_draft` / `reject_draft` 也会回）。
+  - `get_eval_budget`（`EvalBudgetWire`）新增 `committedUsd`：未结束试跑的预估成本，评测开始与每段开始都把它计入本月预算。
+  - 审计动作 `evaluation.draft_stage`、`evaluation.draft_verdict`。
+- **回滚**：
+  - 把内核回滚到本版之前，先取消或等完所有在跑的草稿评测。两条只读检查都必须为 0：`select count(*) from eval_draft_evaluations where status = 'running'`；`select count(*) from eval_trials where status in ('queued','running')`。
+  - 计数不为 0 时先用 `cancel_draft_evaluation`（评测 → 草稿评测 → 取消评测）取消，等 trial tick 把被终止的试跑记为 errored，再重查（#488）。
+  - 新内核停下后、旧内核启动前再查一次，同 §3.75。
+  - 原因：旧内核从不启动排队的试跑，也不推进或结束评测；数据库触发器仍拒绝丢弃、拒绝与过期评测中的草稿，草稿会卡住。
+  - 回滚过本版后，旧内核读不了 `draft` 运行：有过草稿评测的用例集 `list_eval_runs` 结果校验失败，控制台里它的运行列表报错，别处不受影响。
+  - worker-supervisor 回滚照 §3.73 与 §3.75 执行。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -2033,6 +2053,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.50.0 | worker `0008_eval_cases`（#810，S10 E3-1b）：新表 `eval_cases` 与守卫触发器，`eval_suite_changes` kind 检查多收 `case_added` / `case_edited` / `case_retired`，无 DELETE 授权，不回填 | 可逆，**必须与 worker `0007` 同一版本发布** | 只新增表；上一发布 v0.49.0 不读不写评测表。假如有只带 0007 的版本，回滚到它后不认识三种新 kind，读写过用例的用例集历史会失败，所以两者不能分版本发布；`purge_workspace` 按 `workspace_id` 清理（有集成测试） |
 | v0.51.0 | task `0011_task_purpose`（#822，S10 E3-2a）：`tasks.purpose` 列与约束（不可改、评测 Task 只由评测服务主体发起、带观察范围、不是目标步骤，WorkerRun 为根运行），不回填 | 可逆 | 只新增列与约束，旧代码不写 `purpose`；回滚前评测 Task 必须全部结束（§3.75） |
 | v0.51.0 | worker `0009_eval_runs`（#822，S10 E3-2a）：新表 `eval_runs`、`eval_trials`、`eval_trial_calls` 与账本守卫，不回填 | 可逆 | 只新增表，旧代码不读不写；`purge_workspace` 清理新表（有集成测试） |
+| v0.51.0 | worker `0010_draft_evaluations`（#833，S10 E3-2b）：新表 `eval_draft_evaluations`，`eval_runs.kind` 加 `draft`、`eval_trials.status` 加 `queued`，账本守卫与保护评测中草稿的触发器，不回填 | 可逆 | 只新增表与取值，旧代码读不了 `draft` 运行；回滚前草稿评测与排队、在跑试跑必须为 0（§3.77）；`purge_workspace` 清理新表 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
