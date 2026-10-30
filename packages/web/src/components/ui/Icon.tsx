@@ -51,7 +51,9 @@ export type IconName =
   // ChatLifecycleActions`'s icon-only row actions).
   | 'edit'
   // S11 GO6: 目标 Goals (the sidebar item).
-  | 'flag';
+  | 'flag'
+  // S10 E3-1a: 评测 Evaluation (the sidebar item) — a lab flask.
+  | 'flask';
 
 const PATHS: Readonly<Record<IconName, string>> = {
   chat: 'M4 5h16v10H9l-5 4V5z',
@@ -96,6 +98,7 @@ const PATHS: Readonly<Record<IconName, string>> = {
   more: 'M12 5v.01M12 12v.01M12 19v.01',
   edit: 'M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4L16.5 3.5z',
   flag: 'M5 21V4M5 4h12l-2.5 4L17 12H5',
+  flask: 'M9 3h6M10 3v6l-5.5 9.5A1.7 1.7 0 0 0 6 21h12a1.7 1.7 0 0 0 1.5-2.5L14 9V3M7.5 15h9',
 };
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'name'> {

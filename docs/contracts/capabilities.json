@@ -35,6 +35,438 @@
     "sideEffects": true
   },
   {
+    "actsForPerson": true,
+    "channel": "human",
+    "group": "evaluation",
+    "minRole": "builder",
+    "mode": "write",
+    "name": "add_eval_fixture_gate",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "gatekeeperId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "suiteId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "suiteVersion": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "suiteId",
+        "suiteVersion",
+        "gatekeeperId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "canary": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "createdBy": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "fixtureGateCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fixtureGates": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "addedAt": {
+                "type": "string"
+              },
+              "addedBy": {
+                "type": "string"
+              },
+              "addedInVersion": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "gateName": {
+                "type": "string"
+              },
+              "gatekeeperId": {
+                "type": "string"
+              },
+              "liveState": {
+                "enum": [
+                  "same",
+                  "changed",
+                  "unavailable"
+                ],
+                "type": "string"
+              },
+              "operations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "description": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "mode": {
+                      "enum": [
+                        "observe",
+                        "execute"
+                      ],
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "paramsSchema": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "version": {
+                      "exclusiveMinimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "version",
+                    "mode",
+                    "description",
+                    "paramsSchema"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "snapshotDigest": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "gatekeeperId",
+              "gateName",
+              "operations",
+              "snapshotDigest",
+              "addedInVersion",
+              "addedBy",
+              "addedAt",
+              "liveState"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "fixtureGatesNeedingAttention": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "history": {
+          "items": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "created",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "workerDefinitionVersion": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "kind",
+                  "workerDefinitionVersion"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "fromVersion": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "kind": {
+                    "const": "repinned",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "toVersion": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "kind",
+                  "fromVersion",
+                  "toVersion"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "gateName": {
+                    "type": "string"
+                  },
+                  "gatekeeperId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "fixture_gate_added",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "gatekeeperId",
+                  "gateName",
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "addedOperations": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "changedOperations": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "gateName": {
+                    "type": "string"
+                  },
+                  "gatekeeperId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "fixture_gate_synced",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "removedOperations": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "gatekeeperId",
+                  "gateName",
+                  "kind",
+                  "addedOperations",
+                  "removedOperations",
+                  "changedOperations"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "gateName": {
+                    "type": "string"
+                  },
+                  "gatekeeperId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "fixture_gate_removed",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "gatekeeperId",
+                  "gateName",
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "workerDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "draft",
+                "published",
+                "deprecated"
+              ],
+              "type": "string"
+            },
+            "version": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "version",
+            "status"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "workerDefinition",
+        "version",
+        "fixtureGateCount",
+        "fixtureGatesNeedingAttention",
+        "createdBy",
+        "createdAt",
+        "updatedAt",
+        "canary",
+        "fixtureGates",
+        "history"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
     "channel": "human",
     "group": "members",
     "minRole": "owner",
@@ -2853,6 +3285,443 @@
         "importedOperationNames",
         "skippedOperationNames",
         "connectionRequestId"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
+    "actsForPerson": true,
+    "channel": "human",
+    "group": "evaluation",
+    "minRole": "builder",
+    "mode": "write",
+    "name": "create_eval_suite",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "maxLength": 2000,
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 120,
+          "minLength": 1,
+          "type": "string"
+        },
+        "workerDefinitionId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "workerDefinitionVersion": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "workerDefinitionId",
+        "workerDefinitionVersion"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "canary": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "createdBy": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "fixtureGateCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fixtureGates": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "addedAt": {
+                "type": "string"
+              },
+              "addedBy": {
+                "type": "string"
+              },
+              "addedInVersion": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "gateName": {
+                "type": "string"
+              },
+              "gatekeeperId": {
+                "type": "string"
+              },
+              "liveState": {
+                "enum": [
+                  "same",
+                  "changed",
+                  "unavailable"
+                ],
+                "type": "string"
+              },
+              "operations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "description": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "mode": {
+                      "enum": [
+                        "observe",
+                        "execute"
+                      ],
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "paramsSchema": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "version": {
+                      "exclusiveMinimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "version",
+                    "mode",
+                    "description",
+                    "paramsSchema"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "snapshotDigest": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "gatekeeperId",
+              "gateName",
+              "operations",
+              "snapshotDigest",
+              "addedInVersion",
+              "addedBy",
+              "addedAt",
+              "liveState"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "fixtureGatesNeedingAttention": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "history": {
+          "items": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "created",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "workerDefinitionVersion": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "kind",
+                  "workerDefinitionVersion"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "fromVersion": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "kind": {
+                    "const": "repinned",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "toVersion": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "kind",
+                  "fromVersion",
+                  "toVersion"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "gateName": {
+                    "type": "string"
+                  },
+                  "gatekeeperId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "fixture_gate_added",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "gatekeeperId",
+                  "gateName",
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "addedOperations": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "changedOperations": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "gateName": {
+                    "type": "string"
+                  },
+                  "gatekeeperId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "fixture_gate_synced",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "removedOperations": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "gatekeeperId",
+                  "gateName",
+                  "kind",
+                  "addedOperations",
+                  "removedOperations",
+                  "changedOperations"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "gateName": {
+                    "type": "string"
+                  },
+                  "gatekeeperId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "fixture_gate_removed",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "gatekeeperId",
+                  "gateName",
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "workerDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "draft",
+                "published",
+                "deprecated"
+              ],
+              "type": "string"
+            },
+            "version": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "version",
+            "status"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "workerDefinition",
+        "version",
+        "fixtureGateCount",
+        "fixtureGatesNeedingAttention",
+        "createdBy",
+        "createdAt",
+        "updatedAt",
+        "canary",
+        "fixtureGates",
+        "history"
       ],
       "type": "object"
     },
@@ -8798,6 +9667,428 @@
         "template",
         "current",
         "differs"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "actsForPerson": true,
+    "channel": "human",
+    "group": "evaluation",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "get_eval_suite",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "suiteId": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "suiteId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "canary": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "createdBy": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "fixtureGateCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fixtureGates": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "addedAt": {
+                "type": "string"
+              },
+              "addedBy": {
+                "type": "string"
+              },
+              "addedInVersion": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "gateName": {
+                "type": "string"
+              },
+              "gatekeeperId": {
+                "type": "string"
+              },
+              "liveState": {
+                "enum": [
+                  "same",
+                  "changed",
+                  "unavailable"
+                ],
+                "type": "string"
+              },
+              "operations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "description": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "mode": {
+                      "enum": [
+                        "observe",
+                        "execute"
+                      ],
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "paramsSchema": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "version": {
+                      "exclusiveMinimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "version",
+                    "mode",
+                    "description",
+                    "paramsSchema"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "snapshotDigest": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "gatekeeperId",
+              "gateName",
+              "operations",
+              "snapshotDigest",
+              "addedInVersion",
+              "addedBy",
+              "addedAt",
+              "liveState"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "fixtureGatesNeedingAttention": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "history": {
+          "items": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "created",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "workerDefinitionVersion": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "kind",
+                  "workerDefinitionVersion"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "fromVersion": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "kind": {
+                    "const": "repinned",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "toVersion": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "kind",
+                  "fromVersion",
+                  "toVersion"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "gateName": {
+                    "type": "string"
+                  },
+                  "gatekeeperId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "fixture_gate_added",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "gatekeeperId",
+                  "gateName",
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "addedOperations": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "changedOperations": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "gateName": {
+                    "type": "string"
+                  },
+                  "gatekeeperId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "fixture_gate_synced",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "removedOperations": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "gatekeeperId",
+                  "gateName",
+                  "kind",
+                  "addedOperations",
+                  "removedOperations",
+                  "changedOperations"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "gateName": {
+                    "type": "string"
+                  },
+                  "gatekeeperId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "fixture_gate_removed",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "gatekeeperId",
+                  "gateName",
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "workerDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "draft",
+                "published",
+                "deprecated"
+              ],
+              "type": "string"
+            },
+            "version": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "version",
+            "status"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "workerDefinition",
+        "version",
+        "fixtureGateCount",
+        "fixtureGatesNeedingAttention",
+        "createdBy",
+        "createdAt",
+        "updatedAt",
+        "canary",
+        "fixtureGates",
+        "history"
       ],
       "type": "object"
     },
@@ -20774,6 +22065,115 @@
             "type": "object"
           },
           "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "actsForPerson": true,
+    "channel": "human",
+    "group": "evaluation",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "list_eval_suites",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "createdAt": {
+                "type": "string"
+              },
+              "createdBy": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "fixtureGateCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "fixtureGatesNeedingAttention": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "updatedAt": {
+                "type": "string"
+              },
+              "version": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "workerDefinition": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "draft",
+                      "published",
+                      "deprecated"
+                    ],
+                    "type": "string"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "id",
+                  "version",
+                  "status"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "description",
+              "workerDefinition",
+              "version",
+              "fixtureGateCount",
+              "fixtureGatesNeedingAttention",
+              "createdBy",
+              "createdAt",
+              "updatedAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
         }
       },
       "required": [
@@ -37784,6 +39184,444 @@
     "sideEffects": true
   },
   {
+    "actsForPerson": true,
+    "channel": "human",
+    "group": "evaluation",
+    "minRole": "builder",
+    "mode": "write",
+    "name": "remove_eval_fixture_gate",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "gatekeeperId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 500,
+          "minLength": 1,
+          "type": "string"
+        },
+        "suiteId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "suiteVersion": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "suiteId",
+        "suiteVersion",
+        "gatekeeperId",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "canary": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "createdBy": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "fixtureGateCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fixtureGates": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "addedAt": {
+                "type": "string"
+              },
+              "addedBy": {
+                "type": "string"
+              },
+              "addedInVersion": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "gateName": {
+                "type": "string"
+              },
+              "gatekeeperId": {
+                "type": "string"
+              },
+              "liveState": {
+                "enum": [
+                  "same",
+                  "changed",
+                  "unavailable"
+                ],
+                "type": "string"
+              },
+              "operations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "description": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "mode": {
+                      "enum": [
+                        "observe",
+                        "execute"
+                      ],
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "paramsSchema": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "version": {
+                      "exclusiveMinimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "version",
+                    "mode",
+                    "description",
+                    "paramsSchema"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "snapshotDigest": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "gatekeeperId",
+              "gateName",
+              "operations",
+              "snapshotDigest",
+              "addedInVersion",
+              "addedBy",
+              "addedAt",
+              "liveState"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "fixtureGatesNeedingAttention": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "history": {
+          "items": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "created",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "workerDefinitionVersion": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "kind",
+                  "workerDefinitionVersion"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "fromVersion": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "kind": {
+                    "const": "repinned",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "toVersion": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "kind",
+                  "fromVersion",
+                  "toVersion"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "gateName": {
+                    "type": "string"
+                  },
+                  "gatekeeperId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "fixture_gate_added",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "gatekeeperId",
+                  "gateName",
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "addedOperations": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "changedOperations": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "gateName": {
+                    "type": "string"
+                  },
+                  "gatekeeperId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "fixture_gate_synced",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "removedOperations": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "gatekeeperId",
+                  "gateName",
+                  "kind",
+                  "addedOperations",
+                  "removedOperations",
+                  "changedOperations"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "gateName": {
+                    "type": "string"
+                  },
+                  "gatekeeperId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "fixture_gate_removed",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "gatekeeperId",
+                  "gateName",
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "workerDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "draft",
+                "published",
+                "deprecated"
+              ],
+              "type": "string"
+            },
+            "version": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "version",
+            "status"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "workerDefinition",
+        "version",
+        "fixtureGateCount",
+        "fixtureGatesNeedingAttention",
+        "createdBy",
+        "createdAt",
+        "updatedAt",
+        "canary",
+        "fixtureGates",
+        "history"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
     "channel": "human",
     "group": "platform",
     "mode": "write",
@@ -37901,6 +39739,443 @@
         "archivedAt",
         "lastActivityAt",
         "hasRunningTurn"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
+    "actsForPerson": true,
+    "channel": "human",
+    "group": "evaluation",
+    "minRole": "builder",
+    "mode": "write",
+    "name": "repin_eval_suite",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "maxLength": 500,
+          "minLength": 1,
+          "type": "string"
+        },
+        "suiteId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "suiteVersion": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "workerDefinitionVersion": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "suiteId",
+        "suiteVersion",
+        "workerDefinitionVersion"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "canary": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "createdBy": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "fixtureGateCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fixtureGates": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "addedAt": {
+                "type": "string"
+              },
+              "addedBy": {
+                "type": "string"
+              },
+              "addedInVersion": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "gateName": {
+                "type": "string"
+              },
+              "gatekeeperId": {
+                "type": "string"
+              },
+              "liveState": {
+                "enum": [
+                  "same",
+                  "changed",
+                  "unavailable"
+                ],
+                "type": "string"
+              },
+              "operations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "description": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "mode": {
+                      "enum": [
+                        "observe",
+                        "execute"
+                      ],
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "paramsSchema": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "version": {
+                      "exclusiveMinimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "version",
+                    "mode",
+                    "description",
+                    "paramsSchema"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "snapshotDigest": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "gatekeeperId",
+              "gateName",
+              "operations",
+              "snapshotDigest",
+              "addedInVersion",
+              "addedBy",
+              "addedAt",
+              "liveState"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "fixtureGatesNeedingAttention": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "history": {
+          "items": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "created",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "workerDefinitionVersion": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "kind",
+                  "workerDefinitionVersion"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "fromVersion": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "kind": {
+                    "const": "repinned",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "toVersion": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "kind",
+                  "fromVersion",
+                  "toVersion"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "gateName": {
+                    "type": "string"
+                  },
+                  "gatekeeperId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "fixture_gate_added",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "gatekeeperId",
+                  "gateName",
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "addedOperations": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "changedOperations": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "gateName": {
+                    "type": "string"
+                  },
+                  "gatekeeperId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "fixture_gate_synced",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "removedOperations": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "gatekeeperId",
+                  "gateName",
+                  "kind",
+                  "addedOperations",
+                  "removedOperations",
+                  "changedOperations"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "gateName": {
+                    "type": "string"
+                  },
+                  "gatekeeperId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "fixture_gate_removed",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "gatekeeperId",
+                  "gateName",
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "workerDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "draft",
+                "published",
+                "deprecated"
+              ],
+              "type": "string"
+            },
+            "version": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "version",
+            "status"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "workerDefinition",
+        "version",
+        "fixtureGateCount",
+        "fixtureGatesNeedingAttention",
+        "createdBy",
+        "createdAt",
+        "updatedAt",
+        "canary",
+        "fixtureGates",
+        "history"
       ],
       "type": "object"
     },
@@ -44500,6 +46775,438 @@
         "suspendedByLogin",
         "suspensionReason",
         "catalogGateId"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
+    "actsForPerson": true,
+    "channel": "human",
+    "group": "evaluation",
+    "minRole": "builder",
+    "mode": "write",
+    "name": "sync_eval_fixture_gate",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "gatekeeperId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "suiteId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "suiteVersion": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "suiteId",
+        "suiteVersion",
+        "gatekeeperId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "canary": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "createdBy": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "fixtureGateCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fixtureGates": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "addedAt": {
+                "type": "string"
+              },
+              "addedBy": {
+                "type": "string"
+              },
+              "addedInVersion": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "gateName": {
+                "type": "string"
+              },
+              "gatekeeperId": {
+                "type": "string"
+              },
+              "liveState": {
+                "enum": [
+                  "same",
+                  "changed",
+                  "unavailable"
+                ],
+                "type": "string"
+              },
+              "operations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "description": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "mode": {
+                      "enum": [
+                        "observe",
+                        "execute"
+                      ],
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "paramsSchema": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "version": {
+                      "exclusiveMinimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "version",
+                    "mode",
+                    "description",
+                    "paramsSchema"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "snapshotDigest": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "gatekeeperId",
+              "gateName",
+              "operations",
+              "snapshotDigest",
+              "addedInVersion",
+              "addedBy",
+              "addedAt",
+              "liveState"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "fixtureGatesNeedingAttention": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "history": {
+          "items": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "created",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "workerDefinitionVersion": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "kind",
+                  "workerDefinitionVersion"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "fromVersion": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "kind": {
+                    "const": "repinned",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "toVersion": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "kind",
+                  "fromVersion",
+                  "toVersion"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "gateName": {
+                    "type": "string"
+                  },
+                  "gatekeeperId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "fixture_gate_added",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "gatekeeperId",
+                  "gateName",
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "addedOperations": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "changedOperations": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "gateName": {
+                    "type": "string"
+                  },
+                  "gatekeeperId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "fixture_gate_synced",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "removedOperations": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "gatekeeperId",
+                  "gateName",
+                  "kind",
+                  "addedOperations",
+                  "removedOperations",
+                  "changedOperations"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "gateName": {
+                    "type": "string"
+                  },
+                  "gatekeeperId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "fixture_gate_removed",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "actorId",
+                  "reason",
+                  "createdAt",
+                  "gatekeeperId",
+                  "gateName",
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "workerDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "draft",
+                "published",
+                "deprecated"
+              ],
+              "type": "string"
+            },
+            "version": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "version",
+            "status"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "workerDefinition",
+        "version",
+        "fixtureGateCount",
+        "fixtureGatesNeedingAttention",
+        "createdBy",
+        "createdAt",
+        "updatedAt",
+        "canary",
+        "fixtureGates",
+        "history"
       ],
       "type": "object"
     },

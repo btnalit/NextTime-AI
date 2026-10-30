@@ -109,6 +109,10 @@ export const CAPABILITY_GROUP_VALUES = [
   // reads (GO5a), the requester's and owner's operations (GO5b) and `propose_goal` (GO5c). Its own
   // group: a GoalRun is neither a Task (it runs many) nor a governance record.
   'goal',
+  // S10 E3 (docs/s10-evolution-plan-2026-10-04.md §5.5, §5.6): evaluation suites (E3-1) and, later,
+  // evaluation runs. Its own group: what it holds is closed to agents (I-E4), so every member is
+  // human-channel, made for a person, and listed in HUMAN_ONLY_CAPABILITY_NAMES.
+  'evaluation',
 ] as const;
 export type CapabilityGroup = (typeof CAPABILITY_GROUP_VALUES)[number];
 export const CapabilityGroupSchema = z.enum(CAPABILITY_GROUP_VALUES);
@@ -4492,6 +4496,136 @@ const goalCapabilities = [
   },
 ] as const satisfies readonly Capability[];
 
+// S10 E3-1a (docs/s10-evolution-plan-2026-10-04.md §3.1 EvalSuite, §3.3 I-E4, §5.5, §5.6): an
+// evaluation suite's shell — the pinned WorkerDefinition version and the fixture gates its cases
+// are answered through (E3-1b adds the cases, E3-2 the runs). Open to people, closed to agents
+// (I-E4): human channel, `actsForPerson` (a service Principal's API key is refused too), in
+// HUMAN_ONLY_CAPABILITY_NAMES; every workspace role reads (the auditor through
+// AUDITOR_READ_CAPABILITIES), a builder or the owner changes. Every change
+// names the suite version the person looked at (`suiteVersion`): another change since is 409
+// version_changed and nothing is written.
+const EVAL_SUITE_CHANGE_RULE =
+  'suiteVersion is the suite version you looked at: when the suite has changed since, 409 version_changed and nothing is written. Each change is a new suite version, recorded in its history with who made it and when. A suite that is not there is 404 not_found.';
+const evalSuiteId = z.string().uuid();
+const evalSuiteVersion = z.number().int().positive();
+const evalReason = z.string().trim().min(1).max(500);
+
+const evaluationCapabilities = [
+  {
+    name: 'list_eval_suites',
+    group: 'evaluation',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    actsForPerson: true,
+    paramsSchema: z.object({}).strict(),
+    resultSchema: listEnvelope(wire.EvalSuiteSummaryWireSchema),
+    description:
+      'List this workspace’s evaluation suites, by name: each with the WorkerDefinition version it pins (and that version’s status now), its suite version, how many fixture gates it has and how many of them no longer match their gate. People only: an agent never reads an evaluation suite.',
+  },
+  {
+    name: 'get_eval_suite',
+    group: 'evaluation',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    actsForPerson: true,
+    paramsSchema: z.object({ suiteId: evalSuiteId }).strict(),
+    resultSchema: wire.EvalSuiteWireSchema,
+    description:
+      'Read one evaluation suite: its pinned WorkerDefinition version, its canary, its fixture gates — each with the gate’s name and published Operations as frozen when added, and whether the gate still matches (liveState same / changed / unavailable) — and its history, every version’s change with who made it, when and why. People only. 404 not_found for a suite that is not there.',
+  },
+  {
+    name: 'create_eval_suite',
+    group: 'evaluation',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'builder',
+    actsForPerson: true,
+    paramsSchema: z
+      .object({
+        name: z.string().trim().min(1).max(120),
+        description: z.string().trim().max(2000).optional(),
+        workerDefinitionId: z.string().uuid(),
+        workerDefinitionVersion: z.number().int().positive(),
+      })
+      .strict(),
+    resultSchema: wire.EvalSuiteWireSchema,
+    description:
+      'Create an evaluation suite (version 1) that pins one published worker-kind WorkerDefinition version — the template its evaluation runs start from — and gets a random canary. It holds no fixture gate and no case yet. A version that is not a published worker-kind one is 400 invalid_params; a name another suite has (case and surrounding blanks ignored) is 409 eval_suite_name_taken. The name and description never change afterwards; neither may carry a credential (400 credentials_in_text) or a masked [redacted] mark (400 redacted_text_submitted).',
+  },
+  {
+    name: 'repin_eval_suite',
+    group: 'evaluation',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'builder',
+    actsForPerson: true,
+    paramsSchema: z
+      .object({
+        suiteId: evalSuiteId,
+        suiteVersion: evalSuiteVersion,
+        workerDefinitionVersion: z.number().int().positive(),
+        reason: evalReason.optional(),
+      })
+      .strict(),
+    resultSchema: wire.EvalSuiteWireSchema,
+    description: `Pin another published version of the suite’s WorkerDefinition (never another WorkerDefinition: that is another suite). A version that is not published is 400 invalid_params; the version pinned now is 409 conflict. ${EVAL_SUITE_CHANGE_RULE}`,
+  },
+  {
+    name: 'add_eval_fixture_gate',
+    group: 'evaluation',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'builder',
+    actsForPerson: true,
+    paramsSchema: z
+      .object({
+        suiteId: evalSuiteId,
+        suiteVersion: evalSuiteVersion,
+        gatekeeperId: z.string().uuid(),
+      })
+      .strict(),
+    resultSchema: wire.EvalSuiteWireSchema,
+    description: `Add a fixture gate: a stand-in for one of this workspace’s gates, freezing the gate’s name and its published Operations as an agent’s tool list shows them, so an evaluated Worker sees the same tool names and params. Evaluation never calls the gate: every call is answered from a case’s fixture. A gate that is not there or publishes no Operation is 400 invalid_params; a gate the suite already has is 409 conflict. ${EVAL_SUITE_CHANGE_RULE}`,
+  },
+  {
+    name: 'sync_eval_fixture_gate',
+    group: 'evaluation',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'builder',
+    actsForPerson: true,
+    paramsSchema: z
+      .object({
+        suiteId: evalSuiteId,
+        suiteVersion: evalSuiteVersion,
+        gatekeeperId: z.string().uuid(),
+      })
+      .strict(),
+    resultSchema: wire.EvalSuiteWireSchema,
+    description: `Freeze a fixture gate again from the gate’s published Operations now, when they no longer match (liveState changed); the history records which Operations were added, removed or changed. A gate the suite does not have, or one that still matches, is 409 conflict; a gate that is gone or publishes nothing now is 400 invalid_params (remove it instead). ${EVAL_SUITE_CHANGE_RULE}`,
+  },
+  {
+    name: 'remove_eval_fixture_gate',
+    group: 'evaluation',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'builder',
+    actsForPerson: true,
+    paramsSchema: z
+      .object({
+        suiteId: evalSuiteId,
+        suiteVersion: evalSuiteVersion,
+        gatekeeperId: z.string().uuid(),
+        reason: evalReason,
+      })
+      .strict(),
+    resultSchema: wire.EvalSuiteWireSchema,
+    description: `Remove a fixture gate from the suite, with a reason (kept in its history). Earlier suite versions still hold it. A gate the suite does not have is 409 conflict. ${EVAL_SUITE_CHANGE_RULE}`,
+  },
+] as const satisfies readonly Capability[];
+
 /**
  * The registry's groups, each with its literal names kept (`as const`), for `CapabilityName`. The
  * annotation names each group's type rather than letting the compiler infer the whole tuple: the
@@ -4517,6 +4651,7 @@ const GROUPS: readonly [
   typeof platformCapabilities,
   typeof modulesCapabilities,
   typeof goalCapabilities,
+  typeof evaluationCapabilities,
 ] = [
   chatCapabilities,
   ontologyCapabilities,
@@ -4535,6 +4670,7 @@ const GROUPS: readonly [
   platformCapabilities,
   modulesCapabilities,
   goalCapabilities,
+  evaluationCapabilities,
 ];
 
 /** The complete capability registry (design doc §9.3). */
@@ -4589,6 +4725,14 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   'reject_draft',
   // Legacy 491: the reviewer's words go to the person whose draft it was.
   'list_draft_rejections',
+  // S10 E3-1a (I-E4): an evaluation suite is open to people, closed to agents.
+  'list_eval_suites',
+  'get_eval_suite',
+  'create_eval_suite',
+  'repin_eval_suite',
+  'add_eval_fixture_gate',
+  'sync_eval_fixture_gate',
+  'remove_eval_fixture_gate',
   'audit_query',
   'reconstruct',
   'export_prov',

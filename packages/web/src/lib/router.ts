@@ -26,6 +26,7 @@ export type NavSection =
   | 'access'
   | 'systems'
   | 'catalog'
+  | 'evaluation'
   | 'models'
   | 'audit'
   | 'graph'
@@ -56,6 +57,11 @@ export const CATALOG_TAB_VALUES = [
 ] as const;
 export type CatalogTab = (typeof CATALOG_TAB_VALUES)[number];
 
+/** 评测 Evaluation's tabs (S10 E3-1a: 用例集 only; 用例 and 评测运行 come with E3-1b / E3-2). The
+ *  item route is a suite's id. */
+export const EVALUATION_TAB_VALUES = ['suites'] as const;
+export type EvaluationTab = (typeof EVALUATION_TAB_VALUES)[number];
+
 /** 集成 Integrations' tabs. Legacy 380: the one shown is in the URL (`?tab=`), so a reload or a
  *  shared link lands on it; the first one is the page's default and carries no query. A query, not
  *  a path segment: `#/platform/integrations/<gateId>` already takes any segment as a gate id. */
@@ -76,6 +82,7 @@ export type Route =
   | { readonly kind: 'access' }
   | { readonly kind: 'systems'; readonly gatekeeperId?: string }
   | { readonly kind: 'catalog'; readonly tab: CatalogTab; readonly itemId?: string }
+  | { readonly kind: 'evaluation'; readonly tab: EvaluationTab; readonly suiteId?: string }
   | { readonly kind: 'models' }
   | { readonly kind: 'audit' }
   | { readonly kind: 'platformOverview' }
@@ -92,6 +99,10 @@ export type Route =
 
 function isCatalogTab(value: string | undefined): value is CatalogTab {
   return value !== undefined && (CATALOG_TAB_VALUES as readonly string[]).includes(value);
+}
+
+function isEvaluationTab(value: string | undefined): value is EvaluationTab {
+  return value !== undefined && (EVALUATION_TAB_VALUES as readonly string[]).includes(value);
 }
 
 /** Catalog tabs that were renamed, so a bookmark or a link written before still lands. */
@@ -165,6 +176,18 @@ export function routeFromHash(fullHash: string): Route {
       kind: 'catalog',
       tab: isCatalogTab(tab) ? tab : 'operations',
       ...(itemId !== undefined ? { itemId } : {}),
+    };
+  }
+
+  // S10 E3-1a: `#/govern/evaluation[/<tab>[/<suite id>]]`; an unknown tab lands on 用例集.
+  const evaluation = /^#\/govern\/evaluation(?:\/([^/]+)(?:\/(.+))?)?$/.exec(hash);
+  if (evaluation) {
+    const tab = evaluation[1] ? decodeURIComponent(evaluation[1]) : undefined;
+    const suiteId = evaluation[2] ? decodeURIComponent(evaluation[2]) : undefined;
+    return {
+      kind: 'evaluation',
+      tab: isEvaluationTab(tab) ? tab : 'suites',
+      ...(suiteId !== undefined ? { suiteId } : {}),
     };
   }
 
@@ -243,6 +266,10 @@ export const hrefs = {
     itemId !== undefined
       ? `#/govern/catalog/${tab}/${encodeURIComponent(itemId)}`
       : `#/govern/catalog/${tab}`,
+  evaluation: (tab: EvaluationTab = 'suites', suiteId?: string) =>
+    suiteId !== undefined
+      ? `#/govern/evaluation/${tab}/${encodeURIComponent(suiteId)}`
+      : `#/govern/evaluation/${tab}`,
   models: () => '#/govern/models',
   audit: () => '#/govern/audit',
   graph: () => '#/work/graph',

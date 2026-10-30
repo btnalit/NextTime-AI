@@ -144,6 +144,10 @@ const PURGE_COUNT_LABELS = {
   changeSegments: { zh: '安装记录', en: 'Install records' },
   connectionRequests: { zh: '连接申请', en: 'Connection requests' },
   draftRejections: { zh: '草稿被拒绝的记录', en: 'Draft rejections' },
+  // S10 E3-1a (migrations/worker/0007): the names 治理 → 评测 uses.
+  evalFixtureGates: { zh: '用例集的夹具门', en: 'Suite fixture gates' },
+  evalSuiteChanges: { zh: '用例集变更记录', en: 'Suite history entries' },
+  evalSuites: { zh: '用例集', en: 'Evaluation suites' },
   gatekeeperPolicies: { zh: '按门的审批策略', en: 'Per-gate approval policies' },
   llmUsage: { zh: '模型用量记录', en: 'Model usage records' },
   ontologyVersions: { zh: '本体版本', en: 'Ontology versions' },

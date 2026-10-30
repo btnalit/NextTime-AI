@@ -10,6 +10,8 @@
  *   - application/chat and application/host-bridge must never import governance/approval,
  *     application/task or application/goal — they consume domain events and read-only views
  *     instead.
+ *   - application/eval (S10 E3, I-E4) is imported only by the gateway's eval-handlers.ts and the
+ *     transports' error mapping.
  *   - no package may reach into another package's internal src/ files; only the published
  *     @nexttime/<pkg> entry point is a legal cross-package import.
  *
@@ -90,17 +92,35 @@ module.exports = {
       },
     },
     {
+      name: 'kernel-eval-imported-only-by-eval-handlers',
+      severity: 'error',
+      comment:
+        'S10 E3 (docs/s10-evolution-plan-2026-10-04.md §5.5 封闭, I-E4): evaluation data is open to ' +
+        'people and closed to agents. application/eval is reached only through the human-channel ' +
+        'capabilities in application/gateway/eval-handlers.ts (and the transports map its errors), ' +
+        'so no Handle-channel handler can read a suite, a case or a score by importing it.',
+      from: {
+        path: '^packages/kernel/src/',
+        pathNot: [
+          '^packages/kernel/src/application/eval/',
+          '^packages/kernel/src/application/gateway/eval-handlers\\.ts$',
+          '^packages/kernel/src/interfaces/(http/capability-route|ws/rpc)\\.ts$',
+        ],
+      },
+      to: { path: '^packages/kernel/src/application/eval/' },
+    },
+    {
       name: 'no-cross-package-internal-import',
       severity: 'error',
       comment:
-        "A package may only be consumed via its @nexttime/<pkg> entry point, never by reaching into " +
+        'A package may only be consumed via its @nexttime/<pkg> entry point, never by reaching into ' +
         "another package's src/ directly. Every workspace package's `exports` field (package.json) " +
         "resolves the bare `@nexttime/<pkg>` specifier straight to that package's own `src/index.ts` " +
-        "under the `types`/`development` conditions (so typecheck and tests run against source, no " +
+        'under the `types`/`development` conditions (so typecheck and tests run against source, no ' +
         "build required first) — with `tsPreCompilationDeps` on, dependency-cruiser's own resolver " +
-        "follows that same condition and legitimately lands on `src/index.ts` for a plain package-root " +
-        "import, which is exempted below. A deeper path (`@nexttime/<pkg>/src/...`) is not published in " +
-        "`exports` at all and cannot resolve there through package resolution, so anything that does " +
+        'follows that same condition and legitimately lands on `src/index.ts` for a plain package-root ' +
+        'import, which is exempted below. A deeper path (`@nexttime/<pkg>/src/...`) is not published in ' +
+        '`exports` at all and cannot resolve there through package resolution, so anything that does ' +
         "land elsewhere under another package's `src/` only got there via a forbidden deep import.",
       from: { path: '^packages/([^/]+)/src/' },
       to: {

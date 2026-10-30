@@ -22,6 +22,13 @@ import {
   ChatNotFoundError,
   TurnAlreadyRunningError,
 } from '../../application/chat/index.js';
+// S10 E3-1a: an evaluation suite's refusals, imported directly like the domain errors around.
+import {
+  EvalSuiteInputError,
+  EvalSuiteNameTakenError,
+  EvalSuiteNotFoundError,
+  EvalSuiteStateError,
+} from '../../application/eval/index.js';
 // NoActiveTurnError/TurnNotFoundError: see capability-route.ts's own comment on this same import
 // — exported by handlers.ts but not re-exported by gateway/index.ts's curated surface; that one-
 // line addition is inside application/gateway/**, outside this task's file ownership.
@@ -616,6 +623,16 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   if (err instanceof GoalRunInputError || err instanceof GoalPlanValidationError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  // S10 E3-1a — same mapping as interfaces/http/capability-route.ts.
+  if (err instanceof EvalSuiteNotFoundError) {
+    return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
+  }
+  if (err instanceof EvalSuiteInputError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  if (err instanceof EvalSuiteStateError || err instanceof EvalSuiteNameTakenError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // S10 E1 — WS equivalents of capability-route.ts's own mappings for these two classes.
   if (err instanceof ObjectiveOutcomeForbiddenError) {

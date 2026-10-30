@@ -206,6 +206,17 @@ import {
   resolveConflictHandler,
   verifyFactHandler,
 } from './epistemic-handlers.js';
+// S10 E3-1a — evaluation suites (eval-handlers.ts, the one gateway file that imports
+// application/eval).
+import {
+  addEvalFixtureGateHandler,
+  createEvalSuiteHandler,
+  getEvalSuiteHandler,
+  listEvalSuitesHandler,
+  removeEvalFixtureGateHandler,
+  repinEvalSuiteHandler,
+  syncEvalFixtureGateHandler,
+} from './eval-handlers.js';
 // S8 W1-C (F6) — execution_readiness / resolve_refs, split into their own files (same
 // one-capability(-family)-per-file convention `export-prov-handler.ts`/`operation-manifest-
 // handlers.ts` already established), not grown inline into this file's own map body.
@@ -2383,6 +2394,14 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['confirm_goal_acceptance', confirmGoalAcceptanceHandler],
   ['end_goal', endGoalHandler],
   ['reconcile_goal_action', reconcileGoalActionHandler],
+  // S10 E3-1a evaluation suites (eval-handlers.ts)
+  ['list_eval_suites', listEvalSuitesHandler],
+  ['get_eval_suite', getEvalSuiteHandler],
+  ['create_eval_suite', createEvalSuiteHandler],
+  ['repin_eval_suite', repinEvalSuiteHandler],
+  ['add_eval_fixture_gate', addEvalFixtureGateHandler],
+  ['sync_eval_fixture_gate', syncEvalFixtureGateHandler],
+  ['remove_eval_fixture_gate', removeEvalFixtureGateHandler],
   // S11 P1-C packs (pack-handlers.ts)
   ['list_packs', listPacksHandler],
   ['preview_pack_install', previewPackInstallHandler],

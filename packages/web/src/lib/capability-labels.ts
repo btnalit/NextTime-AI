@@ -816,6 +816,59 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   },
 
   // -----------------------------------------------------------------------------------------
+  // Capabilities — evaluation (S10 E3-1a: evaluation suites, people only)
+  // -----------------------------------------------------------------------------------------
+  list_eval_suites: {
+    zh: '查看用例集',
+    en: 'List evaluation suites',
+    zhHint: '列出工作区的评测用例集：钉住的 Worker 版本、用例集版本、夹具门是否还和门一致。',
+    enHint:
+      'Lists the workspace’s evaluation suites: the Worker version each pins, its suite version, whether its fixture gates still match their gates.',
+  },
+  get_eval_suite: {
+    zh: '查看用例集详情',
+    en: 'Read evaluation suite',
+    zhHint:
+      '查看一个用例集：钉住的 Worker 版本、canary、夹具门冻结的操作，以及每个版本的变更记录。',
+    enHint:
+      'Reads one evaluation suite: its pinned Worker version, canary, the operations its fixture gates froze, and every version’s change.',
+  },
+  create_eval_suite: {
+    zh: '新建用例集',
+    en: 'Create evaluation suite',
+    zhHint: '新建一个评测用例集，钉住一个已发布的 Worker 版本，从版本 1 开始。',
+    enHint:
+      'Creates an evaluation suite pinning a published Worker version, starting at version 1.',
+  },
+  repin_eval_suite: {
+    zh: '用例集换版本',
+    en: 'Repin evaluation suite',
+    zhHint: '让用例集改钉同一个 Worker 的另一个已发布版本，用例集版本加 1。',
+    enHint: 'Pins another published version of the same Worker; the suite moves one version on.',
+  },
+  add_eval_fixture_gate: {
+    zh: '添加夹具门',
+    en: 'Add fixture gate',
+    zhHint: '把一个门的名字和已发布操作冻结进用例集，评测时由夹具作答，不调用这个门。',
+    enHint:
+      'Freezes a gate’s name and published operations into the suite; evaluation answers from fixtures and never calls the gate.',
+  },
+  sync_eval_fixture_gate: {
+    zh: '同步夹具门',
+    en: 'Sync fixture gate',
+    zhHint: '门的已发布操作变了时，按门现在的定义重新冻结，用例集版本加 1。',
+    enHint:
+      'Freezes a fixture gate again from the gate’s published operations now; the suite moves one version on.',
+  },
+  remove_eval_fixture_gate: {
+    zh: '移除夹具门',
+    en: 'Remove fixture gate',
+    zhHint: '带原因把夹具门移出用例集；之前的用例集版本仍保留它。',
+    enHint:
+      'Removes a fixture gate from the suite with a reason; earlier suite versions still hold it.',
+  },
+
+  // -----------------------------------------------------------------------------------------
   // Capabilities — Worker definitions and drafts
   // -----------------------------------------------------------------------------------------
   propose_worker_definition: {

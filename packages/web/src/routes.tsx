@@ -51,6 +51,9 @@ const AuditPage = lazy(() =>
 const CatalogPage = lazy(() =>
   import('./components/CatalogPage.js').then((m) => ({ default: m.CatalogPage })),
 );
+const EvaluationPage = lazy(() =>
+  import('./components/evaluation/EvaluationPage.js').then((m) => ({ default: m.EvaluationPage })),
+);
 const ChatListPage = lazy(() =>
   import('./components/ChatListPage.js').then((m) => ({ default: m.ChatListPage })),
 );
@@ -366,6 +369,15 @@ export function Routed({
           itemId={route.itemId}
           onSelectItem={(id) => navigate(hrefs.catalog(route.tab, id ?? undefined))}
           platformAdmin={session.user?.platformRole === 'admin'}
+        />
+      );
+      break;
+    case 'evaluation':
+      page = (
+        <EvaluationPage
+          http={session.http}
+          suiteId={route.suiteId}
+          onSelectSuite={(id) => navigate(hrefs.evaluation(route.tab, id ?? undefined))}
         />
       );
       break;
