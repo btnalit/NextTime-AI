@@ -240,6 +240,8 @@ export const AUDIT_LIFECYCLE_ACTIONS = [
   'agent_policy.auto_approve_low_default_applied',
   'principal.auditor_handles_revoked',
   'principal.container_handles_revoked',
+  // S10 E3-1c: evaluation content stopped on its way to an agent (`application/eval-seal`).
+  'evaluation.content_withheld',
 ] as const;
 
 /**

@@ -100,6 +100,7 @@ const RPC_CODE_NAMES: Readonly<Record<number, string>> = {
   [-32016]: 'worker_definition_not_enabled',
   // Legacy 320 (UX acceptance of #602): the composer's own path for text holding U+0000.
   [-32017]: 'unstorable_text',
+  [-32018]: 'evaluation_content_withheld',
   // Client-side only (lib/ws-client.ts `RPC_TIMEOUT_CODE`, C5): the kernel never answered.
   [-32000]: 'timeout',
 };
@@ -159,6 +160,7 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   credentials_in_observe_params: 'Credentials in the parameters',
   credentials_in_text: 'Credentials in the text',
   redacted_text_submitted: 'Masked text sent back',
+  evaluation_content_withheld: 'Reserved for evaluation',
   credentials_in_connection_params: 'Credentials in the address',
   operation_definition_mismatch: 'The gate runs another definition',
   operation_definition_unavailable: 'No approved definition',
@@ -248,6 +250,7 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   credentials_in_observe_params: '参数里带了凭据',
   credentials_in_text: '文字里带了凭据',
   redacted_text_submitted: '文字里还留着遮蔽标记',
+  evaluation_content_withheld: '含评测保留的内容',
   credentials_in_connection_params: '地址里带了凭据',
   operation_definition_mismatch: '门运行的定义和批准的不一样',
   operation_definition_unavailable: '没有批准过的定义',
@@ -457,6 +460,13 @@ export const ERROR_NEXT_STEPS: Readonly<
   redacted_text_submitted: {
     zh: '文字里还留着 [redacted]：那里的原文已经遮住，不会填回来，什么也没保存。请把这一段重新填写。',
     en: 'The text still holds [redacted]: the original there was masked and is never filled back in, so nothing was saved. Write that part again.',
+  },
+  // S10 E3-1c (kernel application/eval-seal): a chat message or a Worker's start carried a run of
+  // a holdout case's text or a suite's canary. Never says which case or which part: the refusal
+  // must not teach anyone what is held out.
+  evaluation_content_withheld: {
+    zh: '内容里有评测用例集留作测试的部分（只在「治理 → 评测」给人看，任何智能体都不能读到），所以在交给智能体之前拦下了：聊天消息没有发出，也没有保存；Worker 没有启动。去掉那一段再试。拦在哪里记在审计里。',
+    en: 'The content holds text an evaluation suite keeps for testing (shown to people under Govern → Evaluation only; no agent may read it), so it was stopped before reaching an agent: a chat message was neither sent nor saved, and a Worker was not started. Remove that part and try again. Where it was stopped is in the audit log.',
   },
   // The fallback when no form shows it on its own field (each form says where the credential goes
   // in its own terms): no field name here, since not every place that refuses it has one.

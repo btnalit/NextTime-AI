@@ -42,6 +42,29 @@ describe('AuditPayloadNotes (legacy 159, 178)', () => {
     expect(screen.getByTestId('audit-revoked-handles').textContent).toContain('吊销了 4 个凭证');
   });
 
+  it('S10 E3-1c: says where the evaluation seal stopped content, what that left, and that the record holds none of it', () => {
+    const cases: [Record<string, unknown>, string][] = [
+      [
+        { where: 'capability_result', rolledBack: true, outcome: 'withheld' },
+        '调用写进平台的内容已撤回',
+      ],
+      [{ where: 'capability_result', rolledBack: false, outcome: 'withheld' }, '调用本身已经生效'],
+      [{ where: 'capability_error', outcome: 'withheld' }, '错误信息里有评测用例集保留的内容'],
+      [{ where: 'worker_start', outcome: 'withheld' }, '没有启动，任务记为启动失败'],
+      [{ where: 'entry_turn', outcome: 'withheld' }, '没有发给智能体，也没有保存'],
+    ];
+    for (const [payload, says] of cases) {
+      render(<AuditPayloadNotes payload={{ onBehalfOf: 'p', ...payload }} />);
+      const note = screen.getByTestId('audit-evaluation-withheld').textContent;
+      expect(note).toContain(says);
+      expect(note).toContain('不写拦下的是哪段内容');
+      cleanup();
+    }
+    // Another row's `outcome` is not this note.
+    render(<AuditPayloadNotes payload={{ where: 'somewhere', outcome: 'withheld' }} />);
+    expect(screen.queryByTestId('audit-payload-notes')).toBeNull();
+  });
+
   it('S10 E3-1b: names what an evaluation case write keeps out of the record, and where to read it', () => {
     render(
       <AuditPayloadNotes

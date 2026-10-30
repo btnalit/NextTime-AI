@@ -22,6 +22,7 @@ import {
   ChatNotFoundError,
   TurnAlreadyRunningError,
 } from '../../application/chat/index.js';
+import { EvaluationContentWithheldError } from '../../application/eval-seal/index.js';
 // S10 E3-1a: an evaluation suite's refusals — imported directly like the domain errors around.
 import {
   EvalFixtureGateInUseError,
@@ -373,6 +374,12 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof ForbiddenError) {
     return { status: 403, code: 'forbidden', message: err.message };
+  }
+  // S10 E3-1c (application/eval-seal): what was about to reach an agent carries evaluation
+  // content. The message says where it was stopped and nothing more (no details: no run of text,
+  // no case, no suite).
+  if (err instanceof EvaluationContentWithheldError) {
+    return { status: 403, code: err.code, message: err.message };
   }
   // D-24 (governance/capability/publish-authority.ts): a publish_* / deprecate_* on a row someone
   // else proposed. Its own code, not `forbidden`: the refusal is about this row, not the role —

@@ -40,6 +40,30 @@ describe('presentError', () => {
     expect(presentError(err, en).title).toBe('Text holds a character that cannot be stored');
   });
 
+  // S10 E3-1c: the evaluation seal's refusal reads the same over HTTP and over WS (the composer),
+  // and never as "not permitted".
+  it('evaluation_content_withheld says what was stopped and what to do, over HTTP and WS alike', () => {
+    const message =
+      'this message carries content reserved for evaluation, which no agent may read, so it was not sent — nothing was saved';
+    for (const err of [
+      new HttpError('capability_error', message, 'evaluation_content_withheld'),
+      new RpcError(-32018, message),
+    ]) {
+      const shown = presentError(err, zh);
+      expect(shown).toMatchObject({
+        code: 'evaluation_content_withheld',
+        title: '含评测保留的内容',
+        curated: true,
+      });
+      expect(shown.message).toContain('没有发出');
+      expect(shown.message).toContain('去掉那一段再试');
+      expect(shown.message).not.toContain('权限');
+      expect(shown.raw).toBe(message);
+      expect(presentError(err, en).title).toBe('Reserved for evaluation');
+      expect(presentError(err, en).message).toContain('Remove that part and try again');
+    }
+  });
+
   // UX acceptance of #602 (P2-1): the note names the field the kernel names, says the character
   // cannot be seen, and says how to get rid of it — the same over HTTP and over WS (the composer).
   it('legacy 320: the unstorable_text note names the field and how to remove an invisible character', () => {
