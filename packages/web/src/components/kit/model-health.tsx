@@ -107,11 +107,35 @@ function NextStep({
  * (a platform page); otherwise the note says who can. Renders nothing when there is nothing to
  * say.
  */
+/** Whether `ModelHealthNote` says anything for this picker — for a picker that names the note in
+ *  its `aria-describedby` only while it is on screen (#791 UX acceptance P3-3). */
+export function modelHealthNoteShown(
+  models: readonly HealthAwareModel[],
+  selectedId?: string | null,
+): boolean {
+  const selected = selectedId ? models.find((model) => model.id === selectedId) : undefined;
+  const health = modelHealth(selected);
+  if (selected && health && health.usability !== 'ok') return true;
+  return models.some((model) => !model.health || modelHealth(model)?.usability === 'blocked');
+}
+
+/** `ids` joined for `aria-describedby`, the note's id added while it is shown. */
+export function withModelHealthNote(
+  ids: string | undefined,
+  noteId: string,
+  models: readonly HealthAwareModel[],
+  selectedId?: string | null,
+): string | undefined {
+  const all = [ids, modelHealthNoteShown(models, selectedId) ? noteId : undefined].filter(Boolean);
+  return all.length > 0 ? all.join(' ') : undefined;
+}
+
 export function ModelHealthNote({
   models,
   selectedId,
   canFix,
   testId = 'model-health-note',
+  id,
 }: {
   readonly models: readonly HealthAwareModel[];
   /** The picker's current model id; `null` / `undefined` = an inherited default (nothing chosen
@@ -119,13 +143,15 @@ export function ModelHealthNote({
   readonly selectedId?: string | null;
   readonly canFix: boolean;
   readonly testId?: string;
+  /** For the picker that names this note in its `aria-describedby` (`withModelHealthNote`). */
+  readonly id?: string;
 }) {
   const t = useT();
   const selected = selectedId ? models.find((model) => model.id === selectedId) : undefined;
   const health = modelHealth(selected);
   if (selected && health && health.usability !== 'ok') {
     return (
-      <Notice tone="warn" testId={testId}>
+      <Notice tone="warn" testId={testId} id={id}>
         <span data-health={health.kind}>
           {t(
             `所选模型的供应商「${selected.provider}」：${health.zh}。${health.detailZh}。`,
@@ -147,7 +173,7 @@ export function ModelHealthNote({
   const unknownProviders = providersOf(unknown);
   const step = describeProviderHealth(blocked.length > 0 ? 'test_failed' : 'unknown');
   return (
-    <Notice testId={testId}>
+    <Notice testId={testId} id={id}>
       {blocked.length > 0 ? (
         <span data-blocked={blocked.length}>
           {t(

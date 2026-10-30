@@ -32,6 +32,7 @@ export function DiscardReasonField({
         aria-label={t('丢弃原因', 'Discard reason')}
         aria-describedby={`${id}-hint`}
         data-testid={id}
+        data-discard-guard
       />
     </Field>
   );

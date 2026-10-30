@@ -288,7 +288,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           budget: BUDGET,
           usage: { tokens: 0, steps: 0, revisions: 0 },
           steps: [],
-          acceptance: { rounds: [], steps: [], overriddenChecks: [] },
+          acceptance: { rounds: [], steps: [], absenceBaselines: [], overriddenChecks: [] },
           leftovers: null,
         });
         expect(Object.values(result.stepCounts).every((count) => count === 0)).toBe(true);

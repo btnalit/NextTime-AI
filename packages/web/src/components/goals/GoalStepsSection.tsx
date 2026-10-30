@@ -10,11 +10,13 @@ import {
 } from '../../lib/format.js';
 import {
   type StepView,
+  absenceBaselineOf,
   absenceOperationKey,
   actionFailureLabel,
   bindingSentence,
   checkKindLabel,
   factCheckSentence,
+  goalFirstAttemptAt,
   goalSteps,
   isStepAuthorityHint,
   observationSentence,
@@ -34,7 +36,7 @@ import { RedactedNote } from '../kit/redacted-note.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { DashboardCard } from '../kit/section.js';
 import { StatusChip } from '../kit/status-chip.js';
-import { AbsenceBasis } from './AbsenceBasis.js';
+import { AbsenceBaselineLine, AbsenceBasis } from './AbsenceBasis.js';
 import { ActionChip } from './ActionChip.js';
 import { OutputContractFields, OutputProblemList } from './OutputContract.js';
 import type { AbsenceOperations } from './useAbsenceOperations.js';
@@ -99,6 +101,7 @@ export function GoalStepsSection({
             gateNames={gateNames}
             objectNames={objectNames}
             absenceOperations={absenceOperations}
+            detail={detail}
             t={t}
           />
         ))}
@@ -143,6 +146,9 @@ interface StepItemProps {
   readonly objectNames: ReadonlyMap<string, string> | undefined;
   /** What the plan in force's absence checks rest on; a superseded step's are not shown. */
   readonly absenceOperations?: AbsenceOperations;
+  /** S11 「门确认不存在」 B-c: the run, for the platform's look before the goal's work at each of
+   *  the step's absence checks; a superseded step's are not shown. */
+  readonly detail?: GoalDetailWire;
   readonly t: Translate;
 }
 
@@ -154,6 +160,7 @@ function StepItem({
   gateNames,
   objectNames,
   absenceOperations,
+  detail,
   t,
 }: StepItemProps) {
   const { planStep, run } = view;
@@ -298,6 +305,13 @@ function StepItem({
                       <AbsenceBasis
                         http={http}
                         operation={absenceOperations.get(absenceOperationKey(check.check))}
+                      />
+                    ) : null}
+                    {check.kind === 'observe_absent' && detail ? (
+                      <AbsenceBaselineLine
+                        baseline={absenceBaselineOf(detail, view.key, check.key)}
+                        goalStatus={detail.status}
+                        firstAttemptAt={goalFirstAttemptAt(detail)}
                       />
                     ) : null}
                   </li>

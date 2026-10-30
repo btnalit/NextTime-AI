@@ -31,7 +31,10 @@
  * this caller (`GoalRunForbiddenError`), not now (`GoalRunStateError`) and malformed
  * (`GoalRunInputError`) — the `goal` capabilities' 403, 409 and 400. GO5d-1 adds the data a step
  * hands the next (`bindings.ts`); GO5d-2 a plan made from a published Procedure
- * (`from-procedure.ts`).
+ * (`from-procedure.ts`). S11 「门确认不存在」 B-c adds the baseline an absence check goes by
+ * (`absence-baselines.ts`, goal/0012): the platform's look before the goal's work, made by
+ * `absence-baseline.ts` on the acceptance checks' timer; the advance waits on it before any step
+ * starts.
  *
  * Boundaries: it lives in `application` because the advancer creates Tasks (`application/task`) and
  * withdraws ActionRequests (`governance/approval`) in the transaction that moves a StepRun.
@@ -186,6 +189,23 @@ export {
   runReconcileCheck,
   runReconcileCheckTick,
 } from './reconcile-check.js';
+
+export {
+  type AbsenceBaselineCheck,
+  type AbsenceBaselineRow,
+  NEVER_SEEN_PRESENT,
+  declaredAbsenceChecks,
+  listAbsenceBaselines,
+  requiredAbsenceChecks,
+} from './absence-baselines.js';
+
+export {
+  type AbsenceBaselineOutcome,
+  type DueAbsenceBaseline,
+  listDueAbsenceBaselines,
+  runAbsenceBaseline,
+  runAbsenceBaselineTick,
+} from './absence-baseline.js';
 
 export {
   type AcceptanceCheckRow,

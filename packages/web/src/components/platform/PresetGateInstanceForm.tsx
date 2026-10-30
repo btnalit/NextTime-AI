@@ -13,6 +13,7 @@ import { sentenceGap, useT } from '../../lib/i18n.js';
 import { connectorModeLabel } from '../../lib/labels.js';
 import { GATE_ID_PATTERN } from '../../lib/platform-errors.js';
 import { Button } from '../kit/button.js';
+import { useGuardedClose } from '../kit/discard-guard.js';
 import { ErrorDetails } from '../kit/error-details.js';
 import { Field, describedBy } from '../kit/field.js';
 import { Notice } from '../kit/notice.js';
@@ -51,6 +52,8 @@ export function PresetGateInstanceForm({
   onCreated,
   onCancel,
 }: PresetGateInstanceFormProps) {
+  // Legacy 497: in a drawer whose form was edited, 取消 asks before discarding it.
+  const guardedClose = useGuardedClose();
   const t = useT();
   const [displayName, setDisplayName] = useState('');
   const [gateIdInput, setGateIdInput] = useState('');
@@ -309,7 +312,7 @@ export function PresetGateInstanceForm({
       />
 
       <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
-        <Button variant="ghost" onClick={onCancel} disabled={submitting}>
+        <Button variant="ghost" onClick={() => guardedClose(onCancel)} disabled={submitting}>
           {t('取消', 'Cancel')}
         </Button>
         {preset.packagedConnector ? null : (

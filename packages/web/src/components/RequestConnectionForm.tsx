@@ -4,6 +4,7 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import { CONNECTION_KIND_VALUES, type ConnectionKind } from '../lib/connections.js';
 import { presentError } from '../lib/errors.js';
 import { useT } from '../lib/i18n.js';
+import { useGuardedClose } from './kit/discard-guard.js';
 import { ErrorDetails } from './kit/error-details.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -21,6 +22,8 @@ export interface RequestConnectionFormProps {
  *  form's terms — a request has no credential field; the owner configures it when completing —
  *  with the kernel's own text in the field's collapsed 「技术细节」 (review of #549). */
 export function RequestConnectionForm({ http, onDone, onCancel }: RequestConnectionFormProps) {
+  // Legacy 497: in a drawer whose form was edited, 取消 asks before discarding it.
+  const guardedClose = useGuardedClose();
   const t = useT();
   const [kind, setKind] = useState<ConnectionKind>('http');
   const [target, setTarget] = useState('');
@@ -113,7 +116,7 @@ export function RequestConnectionForm({ http, onDone, onCancel }: RequestConnect
         </div>
       ) : null}
       <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
-        <Button variant="ghost" onClick={onCancel} disabled={submitting}>
+        <Button variant="ghost" onClick={() => guardedClose(onCancel)} disabled={submitting}>
           {t('取消', 'Cancel')}
         </Button>
         <Button type="submit" variant="primary" loading={submitting}>

@@ -324,6 +324,18 @@ function toWireAcceptance(view: GoalAcceptanceView): GoalAcceptanceWire {
         stepAttempt: round.stepAttempt,
       })),
     })),
+    absenceBaselines: view.absenceBaselines.map((baseline) => ({
+      stepKey: baseline.stepKey,
+      checkKey: baseline.checkKey,
+      take: baseline.take,
+      look: baseline.look,
+      status: baseline.status,
+      attempts: baseline.attempts,
+      lastError: baseline.lastError,
+      observationId: baseline.observationId,
+      createdAt: baseline.createdAt.toISOString(),
+      settledAt: iso(baseline.settledAt),
+    })),
     overriddenChecks: (view.outcome?.overriddenChecks ?? []).map((check) => ({
       checkKey: check.checkKey,
       kind: check.kind,

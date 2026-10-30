@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useId, useRef } from 'react';
+import { GuardedCloseProvider, useDiscardGuard } from '../kit/discard-guard.js';
 import { Button } from './Button.js';
 
 export interface DrawerProps {
@@ -32,6 +33,19 @@ export function Drawer({
 }: DrawerProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
+  // Legacy 497: an edited form asks 「放弃未保存的内容？」 before Escape, the overlay or × close
+  // it (`kit/discard-guard`, as `kit/sheet` does); the form's own 取消 asks via `useGuardedClose`.
+  const discard = useDiscardGuard();
+  const requestClose = useRef(() => discard.guard(onClose));
+  requestClose.current = () => discard.guard(onClose);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a fresh drawer forgets old edits.
+  useEffect(() => {
+    if (!open || panelRef.current === null) return;
+    const detach = discard.attach(panelRef.current);
+    discard.reset();
+    return detach;
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -45,7 +59,7 @@ export function Drawer({
     function onKeyDown(event: KeyboardEvent): void {
       if (event.key === 'Escape') {
         event.preventDefault();
-        onClose();
+        requestClose.current();
         return;
       }
       if (event.key !== 'Tab' || !panel) return;
@@ -74,14 +88,19 @@ export function Drawer({
       document.body.style.overflow = previousOverflow;
       opener?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
   return (
     <>
       {/* biome-ignore lint/a11y/useKeyWithClickEvents: Esc on the dialog is the keyboard path; the overlay is a pointer-only affordance. */}
-      <div className="drawer-overlay" onClick={onClose} aria-hidden data-testid="drawer-overlay" />
+      <div
+        className="drawer-overlay"
+        onClick={() => requestClose.current()}
+        aria-hidden
+        data-testid="drawer-overlay"
+      />
       <div
         ref={panelRef}
         className={`drawer${wide ? ' drawer-wide' : ''}`}
@@ -105,12 +124,15 @@ export function Drawer({
             icon="close"
             iconOnly
             aria-label="Close"
-            onClick={onClose}
+            onClick={() => requestClose.current()}
           />
         </header>
-        <div className="drawer-body">{children}</div>
-        {footer !== undefined ? <footer className="drawer-footer">{footer}</footer> : null}
+        <GuardedCloseProvider guard={discard.guard}>
+          <div className="drawer-body">{children}</div>
+          {footer !== undefined ? <footer className="drawer-footer">{footer}</footer> : null}
+        </GuardedCloseProvider>
       </div>
+      {discard.confirm}
     </>
   );
 }

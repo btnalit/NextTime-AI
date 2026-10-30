@@ -44,6 +44,7 @@ import {
   versionOptionText,
   workerDefinitionChoices,
 } from '../../lib/tasks.js';
+import { useGuardedClose } from '../kit/discard-guard.js';
 import { Button } from '../ui/Button.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Field, Input, Select, Textarea, describedBy } from '../ui/Field.js';
@@ -109,6 +110,8 @@ export function ProcedureEditor({
   onDone,
   onPublished,
 }: ProcedureEditorProps) {
+  // Legacy 497: in a drawer whose form was edited, 取消 asks before discarding it.
+  const guardedClose = useGuardedClose();
   const t = useT();
   const permissions = usePermissions();
   const can = useRoleCan(http);
@@ -789,7 +792,7 @@ export function ProcedureEditor({
         <Button type="submit" variant="primary" loading={busy} data-testid="procedure-submit">
           {t('保存草稿', 'Save draft')}
         </Button>
-        <Button variant="ghost" onClick={onDone} disabled={busy}>
+        <Button variant="ghost" onClick={() => guardedClose(onDone)} disabled={busy}>
           {t('取消', 'Cancel')}
         </Button>
       </div>

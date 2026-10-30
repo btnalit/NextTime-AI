@@ -1,6 +1,7 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useMediaQuery } from '../../hooks/useMediaQuery.js';
+import { GuardedCloseProvider, useDiscardGuard } from './discard-guard.js';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from './sheet.js';
 
 /** ≤1179px: list only, the detail opens in a `kit/sheet`; ≥1180px: two-pane master-detail. Chosen
@@ -54,10 +55,6 @@ export interface MasterDetailProps {
    *  it was opened from left the list (deprecated, discarded) while it was open. Focus otherwise
    *  goes back to what opened the sheet, never to <body> (UX acceptance of #782, R-1). */
   readonly closeFocusFallback?: () => HTMLElement | null | undefined;
-  /** Narrow layout: Escape and a click outside leave the sheet open — while it holds an editor,
-   *  whose half-filled form closes only through its own 取消 or by submitting, as in the wide
-   *  layout, where the editor is a pane nothing dismisses (legacy 497). */
-  readonly holdOpen?: boolean;
 }
 
 /**
@@ -91,7 +88,6 @@ export function MasterDetail({
   sheetTitle,
   detailTestId,
   closeFocusFallback,
-  holdOpen = false,
 }: MasterDetailProps) {
   const isNarrowViewport = useMediaQuery(NARROW_MASTER_DETAIL_QUERY);
   // Decided while rendering the crossing, so the sheet never mounts over the overlay first.
@@ -131,6 +127,9 @@ export function MasterDetail({
   const showDetail = isNarrow ? open : detail !== null;
   // What had focus as the sheet opened — where the sheet hands it back on close.
   const opener = useRef<Element | null>(null);
+  // The sheet's discard guard, held here: the detail is portaled into the sheet, outside its React
+  // tree, so the sheet could not hand the guard to a form's 取消 itself.
+  const discard = useDiscardGuard();
 
   return (
     <>
@@ -156,12 +155,7 @@ export function MasterDetail({
         >
           <SheetContent
             data-testid={detailTestId}
-            onEscapeKeyDown={(event) => {
-              if (holdOpen) event.preventDefault();
-            }}
-            onInteractOutside={(event) => {
-              if (holdOpen) event.preventDefault();
-            }}
+            discardGuard={discard}
             onOpenAutoFocus={() => {
               opener.current = document.activeElement;
             }}
@@ -188,7 +182,16 @@ export function MasterDetail({
         </Sheet>
       ) : null}
 
-      {showDetail && host !== null ? createPortal(detail, host) : null}
+      {showDetail && host !== null
+        ? createPortal(
+            // Always the same wrapper, so the detail keeps its state across the breakpoint (480);
+            // the wide pane has nothing to close, so a 取消 there just runs.
+            <GuardedCloseProvider guard={isNarrow ? discard.guard : null}>
+              {detail}
+            </GuardedCloseProvider>,
+            host,
+          )
+        : null}
     </>
   );
 }

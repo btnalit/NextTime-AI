@@ -2,6 +2,7 @@ import type { GoalRunPauseAuthority, GoalRunStatus, StepRunStatus } from '@nextt
 import type { PoolClient } from 'pg';
 import { listStepActionOutcomes, withdrawStepActions } from '../../governance/approval/index.js';
 import { listStepLiveTasks } from '../task/index.js';
+import { ensureAbsenceBaselines, requiredAbsenceChecks } from './absence-baselines.js';
 import { GOAL_CANCELLED_WITHDRAW_REASON } from './cancelling.js';
 import { actionDisposition, stepActionEffect } from './disposition.js';
 import { type GoalMoveActor, moveGoalRun, moveStepRun } from './moves.js';
@@ -49,7 +50,9 @@ import type { GoalControlActor, GoalRunRow, StepRunRow } from './types.js';
  *     attempt's nested child Tasks included — still running, and still part of the current plan
  *     (I-G2). A failed step it does not name stays failed: once nothing else of the run moves, the
  *     advance pauses it `needs_decision` again (legacy 393, `advance.ts` phase E) rather than let
- *     it wait for its wall clock.
+ *     it wait for its wall clock. The run's absence checks (S11 「门确认不存在」 B-c) get a new
+ *     baseline where the last one did not see the thing, so the platform looks again before any
+ *     step starts.
  *   - {@link cancelGoalRun}: `running | paused | verifying → cancelling`, due at once. In the same
  *     transaction every step not yet ended is `cancelled` and every request of the run's steps that
  *     has not started is `withdrawn` (I-G9) — read under its row lock, so one the drainer started
@@ -224,7 +227,32 @@ export async function resumeGoalRun(
     due: 'now',
     audit: { pauseReason: goal.pauseReason, retriedSteps: [...new Set(input.retrySteps ?? [])] },
   });
+  await retakeAbsenceBaselines(client, goal, input.actor.principalId);
   return { status, changed: true, retriedStepRunIds: retried };
+}
+
+/** S11 「门确认不存在」 B-c (F-b): a resume looks again at what the run's absence checks want gone,
+ *  where the last look did not see it (`never_seen_present`, `unavailable`) — and takes every
+ *  baseline the run's stop superseded. A plan that cannot be read is left to the advance, which
+ *  pauses the run for it. */
+async function retakeAbsenceBaselines(
+  client: PoolClient,
+  goal: GoalRunRow,
+  actorPrincipalId: string,
+): Promise<void> {
+  if (goal.currentRevision === null) return;
+  const plan = await getPlanRevision(client, goal.workspaceId, goal.id, goal.currentRevision);
+  const checks = requiredAbsenceChecks(
+    plan?.plan,
+    await lockStepRuns(client, goal.workspaceId, goal.id),
+  );
+  if (!checks || checks.length === 0) return;
+  await ensureAbsenceBaselines(client, goal.workspaceId, {
+    goalRunId: goal.id,
+    checks,
+    retake: true,
+    actorPrincipalId,
+  });
 }
 
 /** A person's retry runs no new attempt beside a request that may still run (I-G4) or a Task of the
