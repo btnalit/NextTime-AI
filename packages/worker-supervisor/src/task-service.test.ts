@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig } from './config.js';
-import { createEgressMapStore } from './egress-map.js';
+import { DENY_ALL_FALLBACK_ALLOW, createEgressMapStore } from './egress-map.js';
 import type { EgressMapStore } from './egress-map.js';
 import {
   IMAGE_RUNTIME_CONTRACT_LABEL,
@@ -773,5 +773,114 @@ describe('task-service Handle binding (the Handle never enters the container)', 
     };
     await service.terminate('run-1');
     expect(boundAtStop).toBe(false);
+  });
+});
+
+describe('task-service deny-all egress for evaluation runs (S10 E3-2-0)', () => {
+  /** An egress map whose writes fail (EACCES-style) while its reads still work. */
+  function failingWrites(inner: EgressMapStore): EgressMapStore {
+    return {
+      register: () => {
+        throw new Error('EACCES: permission denied');
+      },
+      unregister: (ip) => inner.unregister(ip),
+      read: () => inner.read(),
+    };
+  }
+
+  it('registers the run deny-all, with the fallback allow name, and labels the container', async () => {
+    const { service, docker, egressMap } = setup();
+    const outcome = await service.spawn({
+      ...spawnInput,
+      egressDenyAll: true,
+      egressDeny: ['blocked.example.com'],
+    });
+    expect(egressMap.read()[outcome.ip as string]).toEqual({
+      sourceId: 'worker:ws-1:run-1',
+      allow: [DENY_ALL_FALLBACK_ALLOW],
+      denyAll: true,
+      deny: ['blocked.example.com'],
+    });
+    expect(docker.createCalls[0]?.labels['nexttime.egress-deny-all']).toBe('true');
+  });
+
+  it('egressDenyAll false registers the run exactly as before', async () => {
+    const { service, docker, egressMap } = setup();
+    const outcome = await service.spawn({ ...spawnInput, egressDenyAll: false });
+    expect(egressMap.read()[outcome.ip as string]).toEqual({ sourceId: 'worker:ws-1:run-1' });
+    expect(docker.createCalls[0]?.labels).not.toHaveProperty('nexttime.egress-deny-all');
+  });
+
+  it('fails the spawn, unbinds the Handle and removes the container when the entry cannot be written', async () => {
+    const { config, docker, egressMap } = setup();
+    const handleBindings = memoryHandleBindings();
+    const service = createTaskService({
+      config,
+      docker,
+      handleBindings,
+      egressMap: failingWrites(egressMap),
+    });
+    await expect(service.spawn({ ...spawnInput, egressDenyAll: true })).rejects.toThrow(
+      /deny-all egress entry/,
+    );
+    expect(docker.removeCalls).toEqual(['nexttime-task-run-1']);
+    expect(handleBindings.snapshot().size).toBe(0);
+    expect(await service.status('run-1')).toBeUndefined();
+    expect(egressMap.read()).toEqual({});
+  });
+
+  it('restores the deny-all entry from the container label after a supervisor restart', async () => {
+    const { config, docker, egressMap } = setup();
+    const first = createTaskService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+    });
+    const outcome = await first.spawn({ ...spawnInput, egressDenyAll: true });
+
+    egressMap.unregister(outcome.ip as string); // pretend the file was also reset/lost
+    const second = createTaskService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+    });
+    await second.reconcile();
+
+    expect(egressMap.read()[outcome.ip as string]).toEqual({
+      sourceId: 'worker:ws-1:run-1',
+      allow: [DENY_ALL_FALLBACK_ALLOW],
+      denyAll: true,
+    });
+    expect((await second.status('run-1'))?.status).toBe('running');
+  });
+
+  it('terminates a still-running deny-all run whose entry cannot be re-written after a restart; other runs keep running', async () => {
+    const { config, docker, egressMap } = setup();
+    const first = createTaskService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+    });
+    const evalRun = await first.spawn({ ...spawnInput, egressDenyAll: true });
+    await first.spawn({ ...spawnInput, taskId: 'task-2', workerRunId: 'run-2' });
+
+    egressMap.unregister(evalRun.ip as string);
+    const second = createTaskService({
+      config,
+      docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap: failingWrites(egressMap),
+    });
+    await second.reconcile();
+
+    expect(docker.stopCalls.map((c) => c.name)).toEqual(['nexttime-task-run-1']);
+    expect(await second.status('run-1')).toMatchObject({
+      status: 'terminated',
+      reason: 'egress_registration_failed',
+    });
+    expect((await second.status('run-2'))?.status).toBe('running');
   });
 });

@@ -502,4 +502,82 @@ describe('decideEgress', () => {
       expect(decision).toEqual({ allowed: false, reason: 'unknown-source' });
     });
   });
+
+  describe('denyAll (S10 E3-2-0: evaluation Task containers)', () => {
+    it('denies a public host before any DNS lookup, even one its own allow list names', async () => {
+      const decision = await decideEgress({
+        hostname: 'example.com',
+        source: { sourceId: 'worker-eval', denyAll: true, allow: ['example.com'] },
+        config: baseConfig({ denyUnknownSource: true }),
+        resolve: unreachableResolver(),
+      });
+      expect(decision).toEqual({ allowed: false, reason: 'source-deny-all' });
+    });
+
+    it('denies a literal public address and a bare name alike', async () => {
+      for (const hostname of ['192.0.2.10', 'kernel', 'nexttime-deny-all.invalid']) {
+        const decision = await decideEgress({
+          hostname,
+          source: { sourceId: 'worker-eval', denyAll: true },
+          config: baseConfig(),
+          resolve: unreachableResolver(),
+        });
+        expect(decision).toEqual({ allowed: false, reason: 'source-deny-all' });
+      }
+    });
+
+    it('denies even when the operator turned unknown-source denial off', async () => {
+      const decision = await decideEgress({
+        hostname: 'example.com',
+        source: { sourceId: 'worker-eval', denyAll: true },
+        config: baseConfig({ denyUnknownSource: false }),
+        resolve: unreachableResolver(),
+      });
+      expect(decision).toEqual({ allowed: false, reason: 'source-deny-all' });
+    });
+
+    it('denyAll false leaves the source unrestricted as before', async () => {
+      const decision = await decideEgress({
+        hostname: 'example.com',
+        source: { sourceId: 'worker-1', denyAll: false },
+        config: baseConfig(),
+        resolve: resolverReturning('192.0.2.10'),
+      });
+      expect(decision).toEqual({ allowed: true, address: '192.0.2.10' });
+    });
+
+    // worker-supervisor also writes an allow list holding one reserved `.invalid` name for a
+    // deny-all source (egress-map.ts `DENY_ALL_FALLBACK_ALLOW`), so a proxy that predates
+    // `denyAll` (its loader drops the key) still denies everything: this is that proxy's view.
+    it('the fallback allow entry alone denies every host a deny-all source could ask for', async () => {
+      const source: SourcePolicy = {
+        sourceId: 'worker-eval',
+        allow: ['nexttime-deny-all.invalid'],
+      };
+      for (const [hostname, reason] of [
+        ['example.com', 'not-in-allow-list'],
+        ['192.0.2.10', 'not-in-allow-list'],
+        ['kernel', 'deny-host'],
+        ['metadata', 'bare-hostname'],
+      ] as const) {
+        const decision = await decideEgress({
+          hostname,
+          source,
+          config: baseConfig(),
+          resolve: unreachableResolver(),
+        });
+        expect(decision).toEqual({ allowed: false, reason });
+      }
+      // The one name it does match is reserved (RFC 6761 `.invalid`): it never resolves.
+      const decision = await decideEgress({
+        hostname: 'x.nexttime-deny-all.invalid',
+        source,
+        config: baseConfig(),
+        resolve: async () => {
+          throw new Error('ENOTFOUND');
+        },
+      });
+      expect(decision).toEqual({ allowed: false, reason: 'dns-error' });
+    });
+  });
 });

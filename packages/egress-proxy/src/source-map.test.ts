@@ -49,6 +49,30 @@ describe('createSourceMap', () => {
     map.close();
   });
 
+  // S10 E3-2-0: worker-supervisor marks an evaluation Task's container deny-all.
+  it('keeps the optional denyAll of an entry', () => {
+    writeFileSync(
+      file,
+      JSON.stringify({
+        '198.51.100.13': {
+          sourceId: 'worker-3',
+          allow: ['nexttime-deny-all.invalid'],
+          denyAll: true,
+        },
+      }),
+    );
+    const problems = vi.fn();
+    const map = createSourceMap(file, { onPatternProblems: problems });
+    expect(map.resolveSource('198.51.100.13')).toEqual({
+      sourceId: 'worker-3',
+      allow: ['nexttime-deny-all.invalid'],
+      denyAll: true,
+    });
+    // The fallback allow name is a valid host name: nothing to report.
+    expect(problems).not.toHaveBeenCalled();
+    map.close();
+  });
+
   it('returns undefined for every client IP when no file is configured', () => {
     const map = createSourceMap(undefined);
     expect(map.resolveSource('198.51.100.10')).toBeUndefined();

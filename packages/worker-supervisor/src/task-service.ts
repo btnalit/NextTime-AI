@@ -54,7 +54,7 @@ import { isValidCorrelationId } from '@nexttime/shared';
 import type { SupervisorConfig } from './config.js';
 import type { TaskSkillInline } from './config.js';
 import type { ContainerState, DockerClient } from './docker-client.js';
-import { taskSourceId } from './egress-map.js';
+import { denyAllEntryFields, taskSourceId } from './egress-map.js';
 import type { EgressMapStore } from './egress-map.js';
 import { type HandleBindingStore, bindExclusive, containerAtAddress } from './handle-bindings.js';
 import {
@@ -72,6 +72,7 @@ import {
 } from './runtime-report.js';
 import {
   TASK_CORRELATION_ID_LABEL,
+  TASK_EGRESS_DENY_ALL_LABEL,
   TASK_EGRESS_DENY_LABEL,
   TASK_ID_LABEL,
   TASK_ROLE_LABEL,
@@ -125,6 +126,11 @@ export interface TaskSpawnInput {
    *  WorkerRun's `SOURCE_MAP_FILE` entry (`registerEgress` below) and stamped onto the container
    *  as `TASK_EGRESS_DENY_LABEL` so `reconcile()` can restore it after a supervisor restart. */
   readonly egressDeny?: readonly string[];
+  /** S10 E3-2-0: an evaluation Task's run — its `SOURCE_MAP_FILE` entry is deny-all, written
+   *  with its Handle binding, before `spawn()` returns, and stamped as
+   *  `TASK_EGRESS_DENY_ALL_LABEL` for `reconcile()`. A run whose entry cannot be written is never
+   *  left running: `spawn()` fails, `reconcile()` terminates it. */
+  readonly egressDenyAll?: boolean;
   /** Leftover 87: the delegating call's correlation id (`server.ts` passes the request's own id —
    *  the kernel's `x-correlation-id`, or one minted here). Becomes the container's
    *  `NEXTTIME_CORRELATION_ID` and label, and this run's egress source-map `correlationId`. */
@@ -243,18 +249,22 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
   }
 
   // Best-effort, matching resident-service.ts's own registerEgress/unregisterEgress — a broken
-  // SOURCE_MAP_FILE must never fail a spawn/terminate/reap.
+  // SOURCE_MAP_FILE must never fail a spawn/terminate/reap. The one exception is a deny-all
+  // (evaluation) run: its callers act on the `false` this returns (`TaskSpawnInput.egressDenyAll`).
   function registerEgress(
     workspaceId: string,
     workerRunId: string,
     ip: string | undefined,
     egressDeny?: readonly string[],
     correlationId?: string,
-  ): void {
-    if (!ip) return;
+    denyAll = false,
+  ): boolean {
+    if (!ip) return false;
     try {
       egressMap.register(ip, {
         sourceId: taskSourceId(workspaceId, workerRunId),
+        // S10 E3-2-0: omitted entirely for every other run, same convention as `deny` below.
+        ...(denyAll ? denyAllEntryFields() : {}),
         // Omit `deny` entirely when there is nothing to narrow — same convention as
         // resident-service.ts's own registerEgress (keeps the common "no list" case byte-for-byte
         // identical to before this field existed).
@@ -262,16 +272,20 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         // Leftover 87: same "omit when absent" convention.
         ...(correlationId !== undefined ? { correlationId } : {}),
       });
+      return true;
     } catch (err) {
       console.error(
         JSON.stringify({
-          level: 'warn',
-          msg: 'task egress registration failed (spawn still succeeds)',
+          level: denyAll ? 'error' : 'warn',
+          msg: denyAll
+            ? 'task egress registration failed (deny-all run is not left running)'
+            : 'task egress registration failed (spawn still succeeds)',
           workerRunId,
           ip,
           error: String(err),
         }),
       );
+      return false;
     }
   }
 
@@ -448,6 +462,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         skillsInline,
         timeoutSec,
         egressDeny,
+        egressDenyAll,
         correlationId,
       } = input;
       const paths = taskWorkspacePaths(config, taskId);
@@ -505,8 +520,12 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         model,
         networkName,
         egressDeny,
+        egressDenyAll,
         correlationId,
       });
+      // Only what the spec builder accepted (a valid id) is remembered and registered.
+      const acceptedCorrelationId = spec.labels[TASK_CORRELATION_ID_LABEL];
+      const denyAll = egressDenyAll === true;
       let created: ContainerState;
       try {
         created = await docker.createAndStart(spec);
@@ -561,8 +580,47 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         throw new Error(`binding the Worker's Handle failed: ${String(err)}`);
       }
 
-      // Only what the spec builder accepted (a valid id) is remembered and registered.
-      const acceptedCorrelationId = spec.labels[TASK_CORRELATION_ID_LABEL];
+      // S10 E3-2-0: an evaluation run's deny-all entry is written right after its Handle binding
+      // (which has just proved the address is this container's, so no other container's entry
+      // is overwritten). A run whose entry can't be written doesn't start: its Handle is unbound
+      // and the container removed, as for a failed binding.
+      if (
+        denyAll &&
+        !registerEgress(
+          workspaceId,
+          workerRunId,
+          created.ip,
+          egressDeny,
+          acceptedCorrelationId,
+          true,
+        )
+      ) {
+        try {
+          handleBindings.unbind(created.ip as string, created.id);
+        } catch (unbindErr) {
+          console.error(
+            JSON.stringify({
+              level: 'error',
+              msg: 'task handle unbinding failed after a failed deny-all egress registration',
+              workerRunId,
+              error: String(unbindErr),
+            }),
+          );
+        }
+        try {
+          await docker.remove(spec.name);
+        } catch (removeErr) {
+          console.error(
+            JSON.stringify({
+              level: 'warn',
+              msg: 'task container removal failed after a failed deny-all egress registration',
+              workerRunId,
+              error: String(removeErr),
+            }),
+          );
+        }
+        throw new Error("writing the evaluation run's deny-all egress entry failed");
+      }
 
       registry.set(workerRunId, {
         taskId,
@@ -578,7 +636,9 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         terminating: false,
         correlationId: acceptedCorrelationId,
       });
-      registerEgress(workspaceId, workerRunId, created.ip, egressDeny, acceptedCorrelationId);
+      if (!denyAll) {
+        registerEgress(workspaceId, workerRunId, created.ip, egressDeny, acceptedCorrelationId);
+      }
 
       return {
         containerId: created.id,
@@ -616,7 +676,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
           ? labelCorrelationId
           : undefined;
 
-        registry.set(workerRunId, {
+        const entry: RegistryEntry = {
           taskId,
           workspaceId,
           containerId: state.id,
@@ -632,19 +692,41 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
           reason: undefined,
           terminating: false,
           correlationId: restoredCorrelationId,
-        });
+        };
+        registry.set(workerRunId, entry);
         // Restores the egress deny list this container was spawned with (TASK_EGRESS_DENY_LABEL)
         // — without this, a supervisor restart would re-register a still-running Task's source-map
         // entry with no deny list at all, silently widening its egress for the rest of its run
         // (never re-registered again — reap()/status() only reconcile *exit* state, not egress).
+        // S10 E3-2-0: and a deny-all (evaluation) run's entry, from TASK_EGRESS_DENY_ALL_LABEL —
+        // one that can't be re-written is terminated rather than left running without it.
         if (state.running) {
-          registerEgress(
+          const denyAll = state.labels[TASK_EGRESS_DENY_ALL_LABEL] === 'true';
+          const registered = registerEgress(
             workspaceId,
             workerRunId,
             state.ip,
             splitEgressDenyLabel(state.labels[TASK_EGRESS_DENY_LABEL]),
             restoredCorrelationId,
+            denyAll,
           );
+          if (denyAll && !registered) {
+            try {
+              await terminateOne(workerRunId, entry, 'egress_registration_failed');
+            } catch (err) {
+              // Docker refused the stop: the run stays until its timeout's own terminate. An
+              // address with no entry is denied by egress-proxy meanwhile (EGRESS_DENY_UNKNOWN_SOURCE,
+              // on by default).
+              console.error(
+                JSON.stringify({
+                  level: 'error',
+                  msg: 'terminating a deny-all task without its egress entry failed',
+                  workerRunId,
+                  error: String(err),
+                }),
+              );
+            }
+          }
         }
       }
     },

@@ -201,6 +201,24 @@ describe('buildTaskSpawnSpec', () => {
     expect(withDeny.labels['nexttime.egress-deny']).toBe('blocked.example.com,.suffix.example.net');
   });
 
+  it('stamps nexttime.egress-deny-all only for an evaluation run (S10 E3-2-0)', () => {
+    const base = {
+      config,
+      taskId: 'task-1',
+      workerRunId: 'run-1',
+      workspaceId: 'ws-1',
+      image: 'nexttime-ai-worker-runtime',
+      networkName: 'workers',
+    };
+    expect(buildTaskSpawnSpec({ ...base, egressDenyAll: true }).labels).toMatchObject({
+      'nexttime.egress-deny-all': 'true',
+    });
+    expect(buildTaskSpawnSpec({ ...base, egressDenyAll: false }).labels).not.toHaveProperty(
+      'nexttime.egress-deny-all',
+    );
+    expect(buildTaskSpawnSpec(base).labels).not.toHaveProperty('nexttime.egress-deny-all');
+  });
+
   it('places the given image (allowlist-checked by the caller, not here) verbatim', () => {
     const custom = buildTaskSpawnSpec({
       config,
