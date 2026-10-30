@@ -704,6 +704,27 @@ describe.runIf(DATABASE_URL !== undefined)(
           /not a Gatekeeper|violates foreign key/,
         );
       });
+
+      it('a fixture gate joins or leaves only in a suite version not recorded yet', async () => {
+        // The suite is at v2, recorded as gate A's addition: another gate added, or gate A retired,
+        // at v2 would change what v2 held after the fact.
+        await refused(
+          `insert into eval_fixture_gates
+             (workspace_id, suite_id, gatekeeper_id, snapshot, snapshot_digest, added_in_version, created_by)
+           values ($1, $2, $3, '{"gateName":"x","operations":[]}', 'sha256:${'0'.repeat(64)}', 2, $4)`,
+          [workspaceId, suiteId, gateEmpty, people.builder],
+          /suite version 2 is already recorded/,
+        );
+        await refused(
+          'update eval_fixture_gates set retired_in_version = 2 where workspace_id = $1 and suite_id = $2',
+          [workspaceId, suiteId],
+          /suite version 2 is already recorded/,
+        );
+        const suite = await call<EvalSuiteWire>(person('builder'), 'get_eval_suite', { suiteId });
+        expect(suite.version).toBe(2);
+        expect(suite.fixtureGates.map((gate) => gate.gatekeeperId)).toEqual([gateA]);
+        expect(suite.history.map((change) => change.version)).toEqual([2, 1]);
+      });
     });
 
     // Last: it removes this test's workspace. The cascade runs with triggers off, so the append-only

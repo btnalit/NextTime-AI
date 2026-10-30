@@ -35,7 +35,10 @@
 --   * every suite version has exactly one change row (checked at commit), written at that version;
 --     change rows are never updated or deleted;
 --   * a fixture gate row names a Gatekeeper object, is written at its suite's current version, and
---     only ever has `retired_in_version` set, once, to its suite's current version.
+--     only ever has `retired_in_version` set, once, to its suite's current version — and only
+--     while that version's change is not recorded yet (a gate added or retired at a recorded
+--     version would change what that version held after the fact; the kernel steps the version,
+--     writes the gate, then records the change, all in one transaction).
 -- No DELETE grant on any of them: cases and suites are retired, never removed (§5.5 回归棘轮). The
 -- workspace purge cascade (application/platform/purge-workspace.ts) runs as the owning role with
 -- triggers off and finds these tables by their `workspace_id` like any other.
@@ -291,6 +294,13 @@ begin
         raise exception 'eval_fixture_gates: a synced fixture gate replaces the row of the same gate retired at the same suite version';
       end if;
     end if;
+    -- Once the version's change is recorded, what that version holds is settled.
+    if exists (
+      select 1 from eval_suite_changes
+       where workspace_id = new.workspace_id and suite_id = new.suite_id and version = current_version
+    ) then
+      raise exception 'eval_fixture_gates: suite version % is already recorded; a fixture gate changes only in a new suite version', current_version;
+    end if;
     return new;
   end if;
 
@@ -311,6 +321,12 @@ begin
   end if;
   if new.retired_in_version is distinct from current_version then
     raise exception 'eval_fixture_gates: a fixture gate is retired at its suite''s current version (%)', current_version;
+  end if;
+  if exists (
+    select 1 from eval_suite_changes
+     where workspace_id = new.workspace_id and suite_id = new.suite_id and version = current_version
+  ) then
+    raise exception 'eval_fixture_gates: suite version % is already recorded; a fixture gate changes only in a new suite version', current_version;
   end if;
   return new;
 end;
