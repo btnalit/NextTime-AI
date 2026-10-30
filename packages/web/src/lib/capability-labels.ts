@@ -863,6 +863,13 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     enHint:
       'Rejects someone else’s Skill or Procedure draft with a reason; the draft is deleted and the version in use stays.',
   },
+  list_draft_rejections: {
+    zh: '查看被拒绝的草稿',
+    en: 'List rejected drafts',
+    zhHint: '列出你提议（含你的 Worker 代你提议）后被拒绝的 Skill 和流程草稿，带拒绝原因。',
+    enHint:
+      'Lists the Skill and Procedure drafts you proposed (or your Workers proposed for you) that were rejected, with the reason.',
+  },
   list_worker_definitions: {
     zh: '查看 Worker 定义',
     en: 'List Worker definitions',

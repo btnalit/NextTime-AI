@@ -829,19 +829,23 @@ function findCycle(steps: readonly PlanStep[]): readonly string[] | null {
 }
 
 /** {@link parsePlan}, then every step's worker must be a published `kind='worker'` version in the
- *  workspace — what `invoke_worker` would accept today. */
+ *  workspace — what `invoke_worker` would accept today. `requester` (legacy 492): the goal's
+ *  requester, whom the problems are for — another principal's WorkerDefinition draft does not
+ *  exist for them (I16), so neither its status nor its kind is named. */
 export async function validatePlan(
   client: PoolClient,
   workspaceId: string,
   plan: unknown,
+  requester: string,
 ): Promise<GoalPlan> {
   const parsed = parsePlan(plan);
   const problems: string[] = [];
   for (const step of parsed.steps) {
     const definition = await getWorkerDefinition(client, workspaceId, step.worker);
     const ref = `${step.worker.definitionId}@${step.worker.version}`;
-    if (!definition) problems.push(`step "${step.key}": WorkerDefinition ${ref} does not exist`);
-    else if (definition.kind !== 'worker') {
+    if (!definition || (definition.status === 'draft' && definition.proposedBy !== requester)) {
+      problems.push(`step "${step.key}": WorkerDefinition ${ref} does not exist`);
+    } else if (definition.kind !== 'worker') {
       problems.push(`step "${step.key}": WorkerDefinition ${ref} is ${definition.kind}-kind`);
     } else if (definition.status !== 'published') {
       problems.push(`step "${step.key}": WorkerDefinition ${ref} is ${definition.status}`);

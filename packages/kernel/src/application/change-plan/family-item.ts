@@ -381,8 +381,10 @@ export async function applyFamilyItem(
     version = published.version;
   } else {
     const { definitionId } = planned.target;
+    // As the Skill above: the pack derives the family id, so its first install starts the family.
     const draft = await proposeWorkerDefinition(client, workspaceId, appliedBy, {
       definitionId,
+      onMissingFamily: 'start',
       kind: 'worker',
       definition: { ...planned.content },
     });

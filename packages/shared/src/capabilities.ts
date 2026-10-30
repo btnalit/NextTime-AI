@@ -2574,9 +2574,11 @@ const workerCapabilities = [
     // `kind` — both required by `worker_definitions`' own schema (migrations/worker/
     // 0001_worker_definitions.sql: `kind`/`id` are columns, never derived from inside the opaque
     // `definition` jsonb). `definitionId` omitted starts a new family (a fresh `id`, version 1);
-    // given, proposes the next version under that existing `id`. `kind` is immutable per `id`
-    // across versions (enforced by application/worker/definitions.ts, not by this schema alone —
-    // a Zod shape has no way to see prior versions).
+    // given, proposes the next version under that existing `id`, which must be a family the
+    // caller can see — not found otherwise, as an id nothing has, also when only another
+    // principal's drafts carry it (legacy 492: before, an unknown id started a family under it).
+    // `kind` is immutable per `id` across versions (enforced by application/worker/definitions.ts,
+    // not by this schema alone — a Zod shape has no way to see prior versions).
     paramsSchema: z
       .object({
         definitionId: id.optional(),
@@ -2586,7 +2588,7 @@ const workerCapabilities = [
       .strict(),
     resultSchema: wire.WorkerDefinitionWireSchema,
     description:
-      'Propose a private draft WorkerDefinition version (definitionId omitted starts a new family).',
+      'Propose a private draft WorkerDefinition version: definitionId omitted starts a new family; given, it must name a family you can see (not found otherwise) and the version keeps its kind.',
   },
   {
     // Legacy 145: the platform's entry template against the entry definition the workspace runs
@@ -2704,7 +2706,22 @@ const workerCapabilities = [
       .strict(),
     resultSchema: wire.RejectDraftResultWireSchema,
     description:
-      'Reject a pending draft Skill / Procedure version (kind skill or procedure) so the family’s next version can be proposed again: the draft is deleted and the reason (required, kept in the audit record) says why. Only the workspace owner or the proposer of the family’s version in use (its latest published version) may reject — anyone else is 403 not_proposer, and a family with no published version is the owner’s; the draft’s own proposer discards it instead (discard_draft). draftDigest is the draftDigest list_skills / get_skill / list_procedures gave for that draft: another draft under the same version since is 409 draft_changed. A version that is not a draft is 409 not_a_draft. Nothing is written when refused.',
+      'Reject a pending draft Skill / Procedure version (kind skill or procedure) so the family’s next version can be proposed again: the draft is deleted and the reason (required, kept in the audit record and shown to the draft’s proposer by list_draft_rejections) says why. Only the workspace owner or the proposer of the family’s version in use (its latest published version) may reject — anyone else is 403 not_proposer, and a family with no published version is the owner’s; the draft’s own proposer discards it instead (discard_draft). draftDigest is the draftDigest list_skills / get_skill / list_procedures gave for that draft: another draft under the same version since is 409 draft_changed. A version that is not a draft is 409 not_a_draft. Nothing is written when refused.',
+  },
+  {
+    // Legacy 491: a rejection reaches the draft's proposer — the person, also for a draft an agent
+    // proposed (its `proposedBy` is the person the Handle acted for). Only the caller's own; human
+    // channel, as the rejection itself; `member`, since a member's Worker proposes Skills in their
+    // name.
+    name: 'list_draft_rejections',
+    group: 'worker',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ kind: RejectableDraftKindSchema.optional() }).strict(),
+    resultSchema: wire.ListDraftRejectionsResultWireSchema,
+    description:
+      'The Skill / Procedure drafts you proposed that a reviewer rejected (reject_draft), newest first (the latest 50): which family, version and name, who rejected it, when, and the reason they gave. kind narrows to skill or procedure. Only your own — also those an agent proposed on your behalf.',
   },
   {
     name: 'list_worker_definitions',
@@ -4570,6 +4587,8 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   'discard_draft',
   // S11 W1a E2-0b (review #493 on #772, N1): a reviewer's transition — never an agent's.
   'reject_draft',
+  // Legacy 491: the reviewer's words go to the person whose draft it was.
+  'list_draft_rejections',
   'audit_query',
   'reconstruct',
   'export_prov',

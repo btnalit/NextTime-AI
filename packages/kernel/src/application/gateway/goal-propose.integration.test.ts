@@ -569,6 +569,22 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(await problemsOf(unknownWorker)).toEqual([
           `step "b": WorkerDefinition ${worker.definitionId}@${worker.version + 7} does not exist`,
         ]);
+        // Legacy 492: someone else's draft does not exist for the requester — neither its status
+        // nor its kind is named.
+        const theirs = await as(ownerId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, ownerId, {
+            kind: 'entry',
+            definition: { systemPrompt: 'not published', capabilities: [] },
+          }),
+        );
+        const draftWorker = planOf(['a', 'b']);
+        draftWorker.steps[1] = {
+          ...draftWorker.steps[1],
+          worker: { definitionId: theirs.id, version: theirs.version },
+        };
+        expect(await problemsOf(draftWorker)).toEqual([
+          `step "b": WorkerDefinition ${theirs.id}@${theirs.version} does not exist`,
+        ]);
       });
 
       it('revise_goal refuses a plan, or a reason, the same way; nothing is written', async () => {

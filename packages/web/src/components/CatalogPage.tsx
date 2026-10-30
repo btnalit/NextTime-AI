@@ -96,6 +96,7 @@ import { PacksTab } from './catalog/PacksTab.js';
 import { ProcedureEditorHost } from './catalog/ProcedureEditorHost.js';
 import { ProcedureTemplateView } from './catalog/ProcedureTemplateView.js';
 import { ProcedureUsageSection } from './catalog/ProcedureUsage.js';
+import { RejectedDrafts } from './catalog/RejectedDrafts.js';
 import { SkillEditor } from './catalog/SkillEditor.js';
 import { SkillUsageSection } from './catalog/SkillUsage.js';
 import { WorkerEditorHost } from './catalog/WorkerEditorHost.js';
@@ -2249,6 +2250,8 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const [inUseOf, setInUseOf] = useState<string | null>(null);
   // UX acceptance of #764 (P3-1): the family whose detail title takes focus when it shows.
   const [focusFamily, setFocusFamily] = useState<string | null>(null);
+  // Legacy 491: the list's refresh reads 「被拒绝的草稿」 again too.
+  const [rejectionsRead, setRejectionsRead] = useState(0);
 
   const rows = skills.state.status === 'ready' ? skills.state.data.items : [];
   useCatalogTabFocusFallback(
@@ -2267,6 +2270,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   function refresh(): void {
     invalidateCapability(http, 'list_skills');
     void skills.reload();
+    setRejectionsRead((n) => n + 1);
   }
 
   function openEditor(next: EditorState<SkillRow>): void {
@@ -2522,6 +2526,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
             testId="skills-load-more-error"
           />
         ) : null}
+        <RejectedDrafts http={http} kind="skill" reloadKey={rejectionsRead} />
       </div>
     );
 
@@ -2830,6 +2835,8 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   // UX acceptance of #764 (P2-1, P3-1): as the Skills tab's.
   const [inUseOf, setInUseOf] = useState<string | null>(null);
   const [focusFamily, setFocusFamily] = useState<string | null>(null);
+  // Legacy 491: as the Skills tab's.
+  const [rejectionsRead, setRejectionsRead] = useState(0);
   // UX acceptance of #722 (P2-1): the last publish refusal as a template, by `id@version`.
   // Legacy 493: or a step whose Operation or Worker does not resolve (`invalid_step_reference`).
   const [publishRefusal, setPublishRefusal] = useState<{
@@ -2858,6 +2865,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   function refresh(): void {
     invalidateCapability(http, 'list_procedures');
     void procedures.reload();
+    setRejectionsRead((n) => n + 1);
   }
 
   function openEditor(next: EditorState<ProcedureRow>): void {
@@ -3130,6 +3138,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
             testId="procedures-load-more-error"
           />
         ) : null}
+        <RejectedDrafts http={http} kind="procedure" reloadKey={rejectionsRead} />
       </div>
     );
 
