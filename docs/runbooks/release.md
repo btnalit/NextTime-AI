@@ -1907,6 +1907,23 @@ where object_type = 'Operation' and properties->>'status' = 'published'
   - 回滚过本版后，旧内核读不了 `draft` 运行：有过草稿评测的用例集 `list_eval_runs` 结果校验失败，控制台里它的运行列表报错，别处不受影响。
   - worker-supervisor 回滚照 §3.73 与 §3.75 执行。
 
+### 3.78 评测防泄漏暂停（#838，S10 E3-2c，v0.51.0 之后的下一版起）
+
+迁移 worker `0011`（新表 `eval_seal_hits`、`eval_seal_holds`，各带守卫触发器），只新增、不回填。不改 compose，没有新配置或环境变量；阈值（24 小时内 5 次）固定在代码里。
+
+- **窗口前只读检查**：无新增。
+- **发版说明可写**：
+  - 防泄漏拦截现在会暂停反复触发它的智能体：同一个人（或评测自己）24 小时内被拦 5 次，代表他的全部智能体暂停，直到工作区 owner 在「治理 → 评测」写明理由解除；系统从不自动解除。
+  - 新能力 `list_eval_seal_holds`、`release_eval_seal_hold`（只走人的通道）。
+  - 新错误 403 `evaluation_probe_hold`（WS -32019），`start_eval_case_trial`、`start_draft_evaluation` 也会回。
+  - 新试跑错误 `paused`：试跑在评测被暂停期间跑过，没有结果。
+  - 审计动作 `evaluation.seal_hold_opened`、`evaluation.seal_hold_refused`。
+- **回滚**：旧内核在这个 schema 上照常运行，但既不计数也不检查暂停，回滚过本版等于解除所有生效中的暂停，而行仍是 `active`。按下面顺序做，不要调换（#488 P2：解除评测主体的暂停会立刻派发它排队的试跑）：
+  1. 先处理生效中的暂停：`select count(*) from eval_seal_holds where status = 'active'`。不为 0 时与 owner 定这些智能体能否在不暂停的情况下运行；能的话先用 `release_eval_seal_hold` 写明理由解除，让记录说明原因。
+  2. 用 `cancel_draft_evaluation` 取消在跑的草稿评测，等 trial tick 把被终止的试跑记完。
+  3. 跑 §3.77 与 §3.75 的计数（草稿评测、排队与在跑试跑、未结束的评测 Task），确认为 0。只回滚到 v0.51.0 时，这一步确保第 1 步解除暂停后派发的试跑也已结束。
+  4. 停新内核；旧内核起来之前把以上计数全部再查一遍。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -2054,6 +2071,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.51.0 | task `0011_task_purpose`（#822，S10 E3-2a）：`tasks.purpose` 列与约束（不可改、评测 Task 只由评测服务主体发起、带观察范围、不是目标步骤，WorkerRun 为根运行），不回填 | 可逆 | 只新增列与约束，旧代码不写 `purpose`；回滚前评测 Task 必须全部结束（§3.75） |
 | v0.51.0 | worker `0009_eval_runs`（#822，S10 E3-2a）：新表 `eval_runs`、`eval_trials`、`eval_trial_calls` 与账本守卫，不回填 | 可逆 | 只新增表，旧代码不读不写；`purge_workspace` 清理新表（有集成测试） |
 | v0.51.0 | worker `0010_draft_evaluations`（#833，S10 E3-2b）：新表 `eval_draft_evaluations`，`eval_runs.kind` 加 `draft`、`eval_trials.status` 加 `queued`，账本守卫与保护评测中草稿的触发器，不回填 | 可逆 | 只新增表与取值，旧代码读不了 `draft` 运行；回滚前草稿评测与排队、在跑试跑必须为 0（§3.77）；`purge_workspace` 清理新表 |
+| v0.52.0 | worker `0011_eval_seal_holds`（#838，S10 E3-2c）：新表 `eval_seal_hits`、`eval_seal_holds` 与守卫触发器，不回填 | 可逆 | 旧内核照常运行但不再执行生效中的暂停；回滚前按 §3.78 的顺序先处理 `active` 暂停；`purge_workspace` 清理两张新表 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
