@@ -164,6 +164,8 @@
 
 ### 页首更新记录（2026-10-04 精简时移出，原文照搬）
 
+上一版 2026-10-30（**S10 E3-2-0「评测容器出网全拒」合入（#818，W1a，29b5fcb，无迁移，未发版）**：egress-proxy 新增来源级 `denyAll`（拒绝原因 `source-deny-all`），worker-supervisor `/task/spawn` 新增可选 `egressDenyAll`，登记失败时评测运行一律不跑；现有请求和来源表行为不变。发版手册 §3.73：窗口前核对主机 Docker Engine ≥ 26.0.0，回滚 supervisor 前先终止带 `nexttime.egress-deny-all=true` 标签的 Task。新遗留 518（P2，已在手册里处理）、519（P3）。W1a 下一步 E3-2a；W1 下一步 GO7a-3 #817（审查中））。
+
 上一版 2026-10-30（**遗留 516 关闭（#816，35b6221，只改控制台）**：holdout 用例编辑器在选了 holdout 时提示「避免 40 字以上的常见套话或真实数据原文」，否则真实工作里同样的文字会被拦下。UX 验收通过。W1 下一步 GO7a-3 #817（审查中）；W1a 下一步 E3-2，E3-2-0 #818（审查中））。
 
 上一版 2026-10-30（**S10 E3-1c「holdout 防泄漏扫描」合入（#813，W1a，d2b848a，无迁移，未发版）**：评测内容（任一用例集的 canary，或 holdout 用例文字里规范化后连续 40 字的原样片段）在四处被拦下、不交给任何 agent：能力调用的结果和错误、Worker 启动内容、入口智能体的对话消息、入口智能体每一轮的系统提示词与 Skill；被拦时回 403 `evaluation_content_withheld`（WS `-32018`）并写审计 `evaluation.content_withheld`，返回和审计都不带命中内容。新遗留 514–517（P3）。W1a 下一步 E3-2（runs / trials）；W1 下一步 GO7a-3）。
