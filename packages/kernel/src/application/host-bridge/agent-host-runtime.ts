@@ -20,6 +20,7 @@ import {
   listActiveGrantResourceScopes,
 } from '../../governance/capability/index.js';
 import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
+import { recordEvaluationWithheld, sealWithholds } from '../eval-seal/index.js';
 import {
   composeSystemPrompt,
   readInstanceInstructions,
@@ -466,6 +467,23 @@ export class AgentHostRuntime implements AgentRuntime {
       input.turnId,
     );
 
+    // P-A2: definition prompt → platform `instanceInstructions` → user addendum, in that order
+    // (`application/platform`'s `composeSystemPrompt`, the same function the Worker path uses).
+    const systemPrompt = composeSystemPrompt({
+      base: entryDefinition?.systemPrompt,
+      instanceInstructions,
+      promptAddendum: agentProfile?.effective.promptAddendum,
+    });
+
+    // S10 E3-1c (review #493 of #813): what the entry agent would start with goes through the
+    // evaluation seal, as a Worker's start does (`spawnWorkerRun`) — the person's message itself
+    // was checked when it was sent (`sendChatMessage`).
+    if (await this.startWithheld(input, systemPrompt, skillsInline)) {
+      this.activeTurns.delete(input.turnId);
+      await this.emitEnded(input, turn.stopRequested ? 'interrupted' : 'failed');
+      return;
+    }
+
     if (turn.stopRequested) {
       // R-55: stopped while the reads above ran — agent-host never hears of it.
       this.activeTurns.delete(input.turnId);
@@ -495,8 +513,8 @@ export class AgentHostRuntime implements AgentRuntime {
       handleToken,
       entryDefinition,
       agentProfile?.effective,
+      systemPrompt,
       skillsInline,
-      instanceInstructions,
       image,
     );
     if (!sent.ok) {
@@ -656,7 +674,8 @@ export class AgentHostRuntime implements AgentRuntime {
    *     a concrete `string`, `''` meaning "nothing configured anywhere" —
    *     `governance/agent-profile/resolve.ts`'s own doc comment); otherwise the WorkerDefinition's
    *     own `model` applies, exactly as before this task.
-   *   - `systemPrompt`: the platform's `instanceInstructions` (P-A2, 平台设置) and then
+   *   - `systemPrompt`: composed by `startTurn` (so the evaluation seal checks exactly what is
+   *     sent) — the platform's `instanceInstructions` (P-A2, 平台设置) and then
    *     `agentProfile.promptAddendum`, when non-empty, are appended as clearly delimited sections
    *     (`composeSystemPrompt`, application/platform) — strictly *after* the platform's own
    *     `entryDefinition.systemPrompt`, so neither can precede or otherwise override it.
@@ -667,8 +686,8 @@ export class AgentHostRuntime implements AgentRuntime {
     handleToken: string,
     entryDefinition: ResolvedEntryDefinition | undefined,
     agentProfile: EffectiveAgentProfile | undefined,
+    systemPrompt: string | undefined,
     skillsInline: SkillInlineMount[],
-    instanceInstructions: string,
     image: string | undefined,
   ): { ok: true; wait: Promise<AcceptOutcome> } | { ok: false; reason: string } {
     let resolveWait!: (outcome: AcceptOutcome) => void;
@@ -694,13 +713,6 @@ export class AgentHostRuntime implements AgentRuntime {
     });
 
     const model = agentProfile?.model ? agentProfile.model : entryDefinition?.model;
-    // P-A2: definition prompt → platform `instanceInstructions` → user addendum, in that order
-    // (`application/platform`'s `composeSystemPrompt`, the same function the Worker path uses).
-    const systemPrompt = composeSystemPrompt({
-      base: entryDefinition?.systemPrompt,
-      instanceInstructions,
-      promptAddendum: agentProfile?.promptAddendum,
-    });
 
     try {
       link.send({
@@ -831,6 +843,47 @@ export class AgentHostRuntime implements AgentRuntime {
         principalId: turn.principalId,
       });
     }
+  }
+
+  /**
+   * S10 E3-1c: whether what this Turn would start the entry agent with — its system prompt and the
+   * Skills it mounts — carries evaluation content (`application/eval-seal`), read as the person in
+   * their workspace like the reads above. A refusal is audited (`entry_start`), saying for whom
+   * and nothing of what. Fails closed: a check that cannot run counts as withheld, logged with its
+   * reason and none of the content, and audited as nothing (nothing was found).
+   */
+  private async startWithheld(
+    input: StartTurnInput,
+    systemPrompt: string | undefined,
+    skillsInline: SkillInlineMount[],
+  ): Promise<boolean> {
+    const { workspaceId, principalId } = input;
+    let withheld: boolean;
+    try {
+      withheld = await withWorkspace(this.pool, { workspaceId, principalId }, (client) =>
+        sealWithholds(client, workspaceId, { systemPrompt, skillsInline }),
+      );
+    } catch (err) {
+      this.log(
+        JSON.stringify({
+          level: 'error',
+          msg: 'agent-host-runtime: could not check what the turn starts with for content reserved for evaluation — not started',
+          turnId: input.turnId,
+          error: String(err),
+        }),
+      );
+      return true;
+    }
+    if (!withheld) return false;
+    this.log(
+      JSON.stringify({
+        level: 'warn',
+        msg: 'agent-host-runtime: what the turn starts with carries content reserved for evaluation — not started',
+        turnId: input.turnId,
+      }),
+    );
+    await recordEvaluationWithheld(this.pool, { workspaceId, principalId, where: 'entry_start' });
+    return true;
   }
 
   private async emitEnded(input: StartTurnInput, status: 'failed' | 'interrupted'): Promise<void> {

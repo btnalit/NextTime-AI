@@ -29,6 +29,8 @@ import {
   EvaluationContentWithheldError,
   resetEvaluationSealForTests,
 } from '../eval-seal/index.js';
+import type { AgentRuntimeEvent } from '../host-bridge/agent-runtime.js';
+import { AgentHostRuntime } from '../host-bridge/index.js';
 import { completeTaskWithResult } from '../task/lifecycle.js';
 import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
@@ -40,13 +42,14 @@ import type { ResolvedCaller } from './resolve-caller.js';
 /**
  * application/gateway/eval-seal.integration.test: DB-gated (real Postgres; auto-skip without
  * DATABASE_URL) — S10 E3-1c, the evaluation seal (I-E4 评测对人透明、对 agent 封闭) on each way
- * evaluation content could reach an agent: a capability's result to a Handle (in the call's own
- * transaction, and after commit for `invoke_worker`'s `wait`), what a Worker starts with, and a
- * person's chat message to the entry agent. Each refusal answers 403 `evaluation_content_withheld`
- * and writes one `evaluation.content_withheld` audit row; neither — nor anything logged — holds
- * the run of text that matched, the case, the suite, or its canary. Development cases and short
- * runs pass, a case added later is sealed from then on, a retired holdout case stays sealed, and a
- * person still reads every case in full.
+ * evaluation content could reach an agent: a capability's result or error to a Handle (in the
+ * call's own transaction, and after commit for `invoke_worker`'s `wait`), what a Worker starts
+ * with, a person's chat message to the entry agent, and what the entry agent starts a Turn with.
+ * Each refusal answers 403 `evaluation_content_withheld` (a Turn's start ends the Turn failed) and
+ * writes one `evaluation.content_withheld` audit row; neither — nor anything logged — holds the
+ * run of text that matched, the case, the suite, or its canary. Development cases, short runs and
+ * a fixture rule's answer pass, a case added later is sealed from then on, a retired holdout case
+ * stays sealed, and a person still reads every case in full.
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -668,6 +671,115 @@ describe.runIf(DATABASE_URL !== undefined)(
         },
       ]);
       for (const row of rows) expectNothingOf(row.whole);
+    });
+
+    // Review #493 of #813 (P2): the entry agent's system prompt — here the person's own prompt
+    // addendum — goes through the seal before the Turn's start frame does.
+    it('the entry agent never starts a Turn with holdout content in its system prompt', async () => {
+      const owner = person(ownerId, 'owner');
+      async function startTurn(): Promise<{
+        events: AgentRuntimeEvent[];
+        sent: unknown[];
+        turnId: string;
+      }> {
+        const events: AgentRuntimeEvent[] = [];
+        const sent: unknown[] = [];
+        const runtime = new AgentHostRuntime({
+          pool,
+          sink: {
+            handle(event) {
+              events.push(event);
+            },
+          },
+          privateKey,
+          kernelLlmUrl: 'http://llm-proxy:8082',
+        });
+        runtime.connect({ send: (frame) => sent.push(frame) });
+        const turnId = randomUUID();
+        await runtime.startTurn({
+          workspaceId,
+          chatId: randomUUID(),
+          turnId,
+          principalId: ownerId,
+          prompt: 'hello',
+        });
+        // Settle the accept wait so no timer outlives the test.
+        if (sent.length > 0) runtime.handleFrame({ type: 'turnAccepted', turnId });
+        return { events, sent, turnId };
+      }
+
+      await call(owner, 'set_agent_profile', {
+        promptAddendum: `House notes: ${DISGUISED_RUN}, always.`,
+      });
+      const before = (await sealRows()).length;
+      const refused = await startTurn();
+      expect(refused.sent).toEqual([]);
+      expect(refused.events).toEqual([
+        expect.objectContaining({ type: 'turnEnded', status: 'failed', turnId: refused.turnId }),
+      ]);
+      const rows = (await sealRows()).slice(before);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.actor_principal_id).toBe(ownerId);
+      expect(rows[0]?.resource_type).toBeNull();
+      expect(rows[0]?.payload).toEqual({
+        onBehalfOf: ownerId,
+        where: 'entry_start',
+        outcome: 'withheld',
+      });
+      expectNothingOf(rows[0]?.whole ?? '');
+
+      // Without it, the same person's Turn starts.
+      await call(owner, 'set_agent_profile', { promptAddendum: null });
+      const started = await startTurn();
+      expect(started.sent).toHaveLength(1);
+      expect(started.events).toEqual([]);
+    });
+
+    // Coordinator ruling on review #493 of #813: what a fixture rule answers stands in for a real
+    // system's reply, so it is not sealed — only the rule's condition is.
+    it("a fixture rule's answer is not sealed, its condition is", async () => {
+      const condition = 'the canopy-heron replica set in the cold aisle';
+      const answer = 'Hosts report: web-1 up, web-2 up, db-1 up, cache-1 degraded since noon.';
+      const failure = 'The inventory service timed out after thirty seconds, try again later.';
+      NEVER_SHOWN.push('canopy-heron');
+      const current = await call<EvalSuiteWire>(person(builderId, 'builder'), 'get_eval_suite', {
+        suiteId: suite.id,
+      });
+      const added = await call<EvalSuiteWire>(person(builderId, 'builder'), 'add_eval_case', {
+        suiteId: suite.id,
+        suiteVersion: current.version,
+        partition: 'full',
+        split: 'holdout',
+        title: 'Host inventory',
+        input: 'List the hosts.',
+        fixtures: [
+          {
+            gatekeeperId: gate,
+            operation: 'hosts.list',
+            when: { path: 'host', op: 'eq', value: condition },
+            answer: { kind: 'data', data: { report: answer } },
+          },
+          {
+            gatekeeperId: gate,
+            operation: 'hosts.list',
+            answer: { kind: 'error', message: failure },
+          },
+        ],
+        assertions: [{ expect: { path: 'calls', op: 'exists' } }],
+      });
+      NEVER_SHOWN.push(added.cases.find((c) => c.title === 'Host inventory')?.id as string);
+
+      const agent = await ownerAgent();
+      for (const text of [answer, failure]) {
+        const objectId = await objectHolding(text);
+        await expect(call(agent, 'get_object', { objectId })).resolves.toMatchObject({
+          id: objectId,
+        });
+      }
+      const err = await refusal(
+        call(agent, 'get_object', { objectId: await objectHolding(`About ${condition}.`) }),
+      );
+      expect(err.where).toBe('capability_result');
     });
 
     it('a person still reads every holdout case in full: the seal stands only between content and agents', async () => {

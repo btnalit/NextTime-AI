@@ -3,7 +3,11 @@ import { usePermissions } from '../hooks/usePermissions.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { CapabilityCaller } from '../lib/clients.js';
-import { composerUnstorableTextStep, describeError } from '../lib/errors.js';
+import {
+  composerEvaluationContentStep,
+  composerUnstorableTextStep,
+  describeError,
+} from '../lib/errors.js';
 import { useT } from '../lib/i18n.js';
 import { liveOutputPaused } from '../lib/live-stream.js';
 import { goalRunIdsIn, latestGoalStatuses } from '../lib/system-status.js';
@@ -291,12 +295,14 @@ export function ChatPage({
                 </Notice>
               ) : null}
               {/* Legacy 334: U+0000 in what the person typed is named as the message, not the
-                  wire param `text`, and without the note about an agent's call. */}
+                  wire param `text`, and without the note about an agent's call. S10 E3-1c: so is
+                  the evaluation seal's refusal, which here only ever stops the message. */}
               {sendError !== null ? (
                 <ErrorBanner
                   error={sendError}
                   overrides={{
                     unstorable_text: composerUnstorableTextStep(t, composer.hasUnstorableChar),
+                    evaluation_content_withheld: composerEvaluationContentStep(t),
                   }}
                   action={
                     // Legacy 335: the character is in the draft, so the page can take it out.

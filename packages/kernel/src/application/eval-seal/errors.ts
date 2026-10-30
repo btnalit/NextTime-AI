@@ -7,7 +7,10 @@ export type SealPlace =
   /** What a Worker starts with: its Task input, system prompt and mounted Skills. */
   | 'worker_start'
   /** A person's chat message, the prompt of an entry agent's Turn. */
-  | 'entry_turn';
+  | 'entry_turn'
+  /** What an entry agent starts a Turn with: its system prompt (the published entry definition's,
+   *  the platform's instructions, the person's own prompt addendum) and its mounted Skills. */
+  | 'entry_start';
 
 const MESSAGES: Record<SealPlace, (rolledBack: boolean) => string> = {
   capability_result: (rolledBack) =>
@@ -20,6 +23,8 @@ const MESSAGES: Record<SealPlace, (rolledBack: boolean) => string> = {
     'what this Worker would start with carries content reserved for evaluation, so it was not started',
   entry_turn: () =>
     'this message carries content reserved for evaluation, which no agent may read, so it was not sent — nothing was saved',
+  entry_start: () =>
+    'what the entry agent would start this turn with carries content reserved for evaluation, so the turn was not started',
 };
 
 /**

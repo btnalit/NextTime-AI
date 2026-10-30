@@ -11,8 +11,13 @@ import {
  * application/eval-seal/seal: whether a value on its way to an agent carries evaluation content
  * (S10 E3-1c, I-E4 评测对人透明、对 agent 封闭) — any suite's canary, or a verbatim run of
  * {@link SEAL_SPAN_CHARS} normalized characters of any holdout case's text (its title, mechanism,
- * input, fixture rules and assertions; every row ever written, retired ones included — a retired
- * holdout case is no less held out).
+ * input, the conditions of its fixture rules, and its assertions; every row ever written, retired
+ * ones included — a retired holdout case is no less held out).
+ *
+ * A fixture rule's answer is not indexed, nor the gate and operation it names (coordinator, #813
+ * review): what a holdout case hides is what it asks and what it expects. A fixture stands in for a
+ * real system, so its answer is usually copied from that system's real replies — indexing it would
+ * refuse the real gate's same answer on the production path, which is not where evaluation runs.
  *
  * What it knows is built from `eval_suites` and `eval_cases` (read directly: `application/eval` is
  * for the human-channel handlers only) and kept in this process's memory, one snapshot per
@@ -63,14 +68,17 @@ async function snapshotFor(client: PoolClient, workspaceId: string): Promise<Sea
     'select canary from eval_suites where workspace_id = $1',
     [workspaceId],
   );
+  // Of the fixture rules, only their `when` conditions (see the module comment).
   const caseRows = await client.query<{
     title: string;
     mechanism: string | null;
     input: unknown;
-    fixtures: unknown;
+    fixture_conditions: unknown;
     assertions: unknown;
   }>(
-    `select title, mechanism, input, fixtures, assertions from eval_cases
+    `select title, mechanism, input,
+            jsonb_path_query_array(fixtures, '$[*].when') as fixture_conditions, assertions
+       from eval_cases
       where workspace_id = $1 and split = 'holdout'`,
     [workspaceId],
   );
@@ -80,7 +88,7 @@ async function snapshotFor(client: PoolClient, workspaceId: string): Promise<Sea
       row.title,
       row.mechanism,
       row.input,
-      row.fixtures,
+      row.fixture_conditions,
       row.assertions,
     ])) {
       spans.add(text);

@@ -320,6 +320,16 @@ export function composerUnstorableTextStep(t: Translate, canStrip = false): stri
   );
 }
 
+/** S10 E3-1c (UX acceptance of #813, P3): the evaluation seal's refusal as the chat composer shows
+ *  it. It stops a message only at the entry agent's Turn, so it names the message and nothing
+ *  else — not a Worker, not the audit log. */
+export function composerEvaluationContentStep(t: Translate): string {
+  return t(
+    '消息里有评测用例集留作测试的部分，任何智能体都不能读到，所以这条消息没有发出，也没有保存。去掉那一段再试。',
+    'The message holds text an evaluation suite keeps for testing, which no agent may read, so it was neither sent nor saved. Remove that part and try again.',
+  );
+}
+
 /** Where the kernel's `unstorable_text` message (`@nexttime/shared` `UnstorableTextError`) says
  *  the character is: `the text at params "title" holds U+0000` names a value, `the key at …` a key.
  *  The quotes may arrive escaped (`\"`), when the message sits inside a tool result shown as
@@ -461,12 +471,13 @@ export const ERROR_NEXT_STEPS: Readonly<
     zh: '文字里还留着 [redacted]：那里的原文已经遮住，不会填回来，什么也没保存。请把这一段重新填写。',
     en: 'The text still holds [redacted]: the original there was masked and is never filled back in, so nothing was saved. Write that part again.',
   },
-  // S10 E3-1c (kernel application/eval-seal): a chat message or a Worker's start carried a run of
-  // a holdout case's text or a suite's canary. Never says which case or which part: the refusal
-  // must not teach anyone what is held out.
+  // S10 E3-1c (kernel application/eval-seal): what a Worker would start with carried a run of a
+  // holdout case's text or a suite's canary. A person's call meets it only there or in the chat
+  // composer, which says it its own way (`composerEvaluationContentStep`). Never says which case
+  // or which part: the refusal must not teach anyone what is held out.
   evaluation_content_withheld: {
-    zh: '内容里有评测用例集留作测试的部分（只在「治理 → 评测」给人看，任何智能体都不能读到），所以在交给智能体之前拦下了：聊天消息没有发出，也没有保存；Worker 没有启动。去掉那一段再试。拦在哪里记在审计里。',
-    en: 'The content holds text an evaluation suite keeps for testing (shown to people under Govern → Evaluation only; no agent may read it), so it was stopped before reaching an agent: a chat message was neither sent nor saved, and a Worker was not started. Remove that part and try again. Where it was stopped is in the audit log.',
+    zh: 'Worker 要读的内容（任务输入、系统提示词或挂载的 Skill）里有评测用例集留作测试的部分（只在「治理 → 评测」给人看，任何智能体都不能读到），所以 Worker 没有启动，任务记为启动失败。去掉那一段再试。',
+    en: 'What the Worker would read (the task input, its system prompt or a mounted Skill) holds text an evaluation suite keeps for testing (shown to people under Govern → Evaluation only; no agent may read it), so the Worker was not started and the task is recorded as failed to start. Remove that part and try again.',
   },
   // The fallback when no form shows it on its own field (each form says where the credential goes
   // in its own terms): no field name here, since not every place that refuses it has one.

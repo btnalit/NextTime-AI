@@ -60,6 +60,11 @@ function sealNote(
         zh: '这条聊天消息里有评测用例集保留的内容，没有发给智能体，也没有保存。',
         en: 'This chat message held content an evaluation suite keeps back, so it was neither sent to the agent nor saved.',
       };
+    case 'entry_start':
+      return {
+        zh: '入口智能体这一轮要读的系统提示词或技能里有评测用例集保留的内容，这一轮没有开始。',
+        en: 'The system prompt or Skills the entry agent would have started this turn with held content an evaluation suite keeps back, so the turn did not start.',
+      };
     default:
       return undefined;
   }
