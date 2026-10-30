@@ -746,8 +746,10 @@ fake_llm_wait_hold() {
 #   - the scenario ends it as soon as it has seen what it needs (goal_row_lock_release:
 #     pg_terminate_backend on that application_name, which rolls the transaction back), and
 #     cleanup_step ends any still held before anything else, with --keep too;
-#   - a psql client that goes away mid-hold has it aborted within a second
-#     (`client_connection_check_interval`).
+#   - a psql process that dies mid-hold has it aborted within a second
+#     (`client_connection_check_interval`). Killing only this side's `docker compose exec` does
+#     not end psql inside the postgres container; then the bound above is what ends it (review
+#     #493 on #817).
 
 GOAL_LOCK_MAX_SECONDS=60
 GOAL_LOCKS=""
