@@ -1,12 +1,16 @@
 // @vitest-environment jsdom
 import {
+  type EvalBudgetWire,
   type EvalCaseSummaryWire,
   type EvalCaseWire,
   type EvalFixtureGateWire,
+  type EvalRunSummaryWire,
+  type EvalRunWire,
   type EvalSuiteWire,
+  type EvalTrialWire,
   evalCallCountPath,
 } from '@nexttime/shared';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -71,6 +75,15 @@ const GATES: EvalFixtureGateWire[] = [
     liveState: 'same',
   },
 ];
+
+const BUDGET: EvalBudgetWire = {
+  monthlyBudgetUsd: 10,
+  spentUsd: 2.5,
+  periodStart: '2026-10-01T00:00:00.000Z',
+  periodEnd: '2026-11-01T00:00:00.000Z',
+  trialCostUsd: 0.4,
+  unpricedTrials: 0,
+};
 
 function wholeCase(extra: Partial<EvalCaseWire> = {}): EvalCaseWire {
   const evalCase: EvalCaseWire = {
@@ -173,6 +186,8 @@ function handlers(role: string, current: () => EvalSuiteWire, cases: () => EvalC
     }),
     list_eval_suites: () => ({ items: [] }),
     get_eval_suite: () => current(),
+    get_eval_budget: () => BUDGET,
+    list_eval_runs: () => ({ items: [] }),
     get_eval_case: (params: unknown) => {
       const { caseId } = params as { caseId: string };
       const found = cases().find((item) => item.id === caseId);
@@ -680,5 +695,333 @@ describe('SuiteCases (S10 E3-1b)', () => {
     expect(runPath.placeholder.endsWith('result.summary')).toBe(true);
     expect(assertion.textContent).toContain('运行里的');
     expect(assertion.textContent).not.toContain('结果里的');
+  });
+});
+
+function trialOf(extra: Partial<EvalTrialWire> = {}): EvalTrialWire {
+  return {
+    id: 't-1',
+    arm: 'baseline',
+    caseId: 'c-1',
+    caseTitle: 'check dependants first',
+    rep: 1,
+    status: 'scored',
+    verdict: 'failed',
+    error: null,
+    taskId: 'task-1',
+    assertions: [
+      { index: 0, outcome: 'satisfied', note: null },
+      { index: 1, outcome: 'unsatisfied', note: null },
+    ],
+    result: { summary: 'Checked api, then restarted web.' },
+    calls: [
+      {
+        seq: 1,
+        gatekeeperId: GATE,
+        gate: 'inventory',
+        operation: 'hosts.get',
+        mode: 'observe',
+        params: { host: 'web' },
+        ruleIndex: 0,
+        answer: 'data',
+        at: AT,
+      },
+      {
+        seq: 2,
+        gatekeeperId: GATE,
+        gate: 'inventory',
+        operation: 'hosts.restart',
+        mode: 'execute',
+        params: { host: 'web' },
+        ruleIndex: null,
+        answer: 'unanswered',
+        at: AT,
+      },
+    ],
+    costUsd: 0.37,
+    tokens: 12345,
+    startedAt: AT,
+    finishedAt: '2026-10-30T00:01:30.000Z',
+    ...extra,
+  };
+}
+
+function runOf(trial: Partial<EvalTrialWire> = {}, extra: Partial<EvalRunWire> = {}): EvalRunWire {
+  const whole = trialOf(trial);
+  return {
+    id: 'r-1',
+    suiteId: 's-1',
+    suiteVersion: 3,
+    kind: 'case_trial',
+    workerDefinition: { id: WD, version: 1 },
+    k: 1,
+    status: whole.status === 'running' ? 'running' : 'finished',
+    createdBy: 'p-me',
+    createdAt: AT,
+    finishedAt: whole.finishedAt,
+    trials: [whole],
+    ...extra,
+  };
+}
+
+function summaryOfRun(run: EvalRunWire): EvalRunSummaryWire {
+  const { trials, ...rest } = run;
+  const count = (status: string) =>
+    trials.filter((trial) =>
+      status === 'passed' || status === 'failed'
+        ? trial.status === 'scored' && trial.verdict === status
+        : trial.status === status,
+    ).length;
+  return {
+    ...rest,
+    caseIds: [...new Set(trials.map((trial) => trial.caseId))],
+    passed: count('passed'),
+    failed: count('failed'),
+    errored: count('errored'),
+    running: count('running'),
+    costUsd: trials[0]?.costUsd ?? null,
+  };
+}
+
+async function openCaseTrials(http: CapabilityCaller): Promise<HTMLElement> {
+  renderDetail(http);
+  const section = await screen.findByTestId('eval-suite-cases');
+  fireEvent.click(within(section).getAllByTestId('eval-case-open')[0] as HTMLElement);
+  await screen.findByTestId('eval-case-view');
+  return screen.findByTestId('eval-case-trials');
+}
+
+describe('CaseTrials (S10 E3-2a 试跑)', () => {
+  it('a builder tries a case: the confirm says what runs and what it costs, then the trial shows whole', async () => {
+    const cases = [wholeCase()];
+    let runs: EvalRunWire[] = [];
+    const http = scriptedHttp({
+      ...handlers(
+        'builder',
+        () => suite(cases),
+        () => cases,
+      ),
+      list_eval_runs: () => ({ items: runs.map(summaryOfRun) }),
+      start_eval_case_trial: () => {
+        runs = [runOf()];
+        return runs[0];
+      },
+      get_eval_run: () => runs[0],
+    });
+    const trials = await openCaseTrials(http);
+    await within(trials).findByTestId('eval-case-trials-empty');
+    await waitFor(() =>
+      expect(within(trials).getByTestId('eval-case-trial-budget').textContent).toMatch(
+        /本月已用 \$2\.50 \/ \$10\.00，剩余 \$7\.50。按最近试跑的平均，一次试跑约 \$0\.40/,
+      ),
+    );
+    const start = within(trials).getByTestId('eval-case-trial-start') as HTMLButtonElement;
+    await waitFor(() => expect(start.disabled).toBe(false));
+    fireEvent.click(start);
+
+    const confirm = await screen.findByTestId('eval-case-trial-confirm');
+    const impact = within(confirm).getByTestId('confirm-impact').textContent ?? '';
+    expect(impact).toContain('按 Worker v1、用例集 v3 运行');
+    expect(impact).toContain('费用约 $0.40，计入本月评测预算');
+    expect(impact).toContain('剩余 $7.50');
+    expect(within(confirm).queryByTestId('eval-case-trial-short')).toBeNull();
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+
+    const shown = await within(trials).findByTestId('eval-case-trial');
+    expect(http.calls.find((c) => c.name === 'start_eval_case_trial')?.params).toEqual({
+      suiteId: 's-1',
+      suiteVersion: 3,
+      caseId: 'c-1',
+    });
+    expect(shown.getAttribute('data-status')).toBe('failed');
+    expect(within(shown).getByTestId('eval-case-trial-cost').textContent).toBe(
+      '$0.37 · 12,345 token',
+    );
+    const assertions = within(shown).getAllByTestId('eval-case-trial-assertion');
+    expect(assertions.map((item) => item.textContent)).toEqual([
+      expect.stringContaining('结果摘要包含 "api"'),
+      expect.stringMatching(/没有调用 inventory · hosts\.restart/),
+    ]);
+    const calls = within(shown).getAllByTestId('eval-case-trial-call');
+    expect(calls.map((item) => item.getAttribute('data-answer'))).toEqual(['data', 'unanswered']);
+    expect(calls[0]?.textContent).toContain('inventory · hosts.get');
+    expect(calls[0]?.textContent).toContain('规则 1 作答：返回数据');
+    expect(calls[1]?.textContent).toMatch(/没有规则匹配/);
+    expect(within(shown).getByTestId('eval-case-trial-report').textContent).toContain(
+      'Checked api, then restarted web.',
+    );
+    // The evaluation Task is the owner's to open, not a builder's.
+    expect(within(shown).queryByTestId('eval-case-trial-task')).toBeNull();
+  });
+
+  it('a running trial is read again until it ends, and then the list and the budget move with it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const cases = [wholeCase()];
+      const running = runOf({
+        status: 'running',
+        verdict: null,
+        assertions: [],
+        result: null,
+        calls: [],
+        costUsd: null,
+        tokens: 0,
+        finishedAt: null,
+      });
+      let reads = 0;
+      const http = scriptedHttp({
+        ...handlers(
+          'owner',
+          () => suite(cases),
+          () => cases,
+        ),
+        list_eval_runs: () => ({ items: [summaryOfRun(running)] }),
+        get_eval_run: () => {
+          reads += 1;
+          return reads === 1 ? running : runOf({ verdict: 'passed' });
+        },
+      });
+      const trials = await openCaseTrials(http);
+      const shown = await within(trials).findByTestId('eval-case-trial');
+      expect(shown.getAttribute('data-status')).toBe('running');
+      expect(shown.textContent).toMatch(/还没有调用夹具门/);
+      const listed = http.calls.filter((c) => c.name === 'list_eval_runs').length;
+      const budgets = http.calls.filter((c) => c.name === 'get_eval_budget').length;
+
+      await act(async () => {
+        vi.advanceTimersByTime(3000);
+      });
+      await waitFor(() =>
+        expect(within(trials).getByTestId('eval-case-trial').getAttribute('data-status')).toBe(
+          'passed',
+        ),
+      );
+      await waitFor(() =>
+        expect(http.calls.filter((c) => c.name === 'list_eval_runs').length).toBeGreaterThan(
+          listed,
+        ),
+      );
+      expect(http.calls.filter((c) => c.name === 'get_eval_budget').length).toBeGreaterThan(
+        budgets,
+      );
+      // The owner opens the evaluation Task.
+      expect(within(trials).getByTestId('eval-case-trial-task').getAttribute('href')).toBe(
+        '#/work/tasks/task-1',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a trial that ended without a verdict says why', async () => {
+    const cases = [wholeCase()];
+    const withheld = runOf({
+      status: 'errored',
+      verdict: null,
+      error: 'withheld',
+      assertions: [],
+      result: null,
+      calls: [],
+      costUsd: 0,
+      tokens: 0,
+    });
+    const http = scriptedHttp({
+      ...handlers(
+        'member',
+        () => suite(cases),
+        () => cases,
+      ),
+      list_eval_runs: () => ({ items: [summaryOfRun(withheld)] }),
+      get_eval_run: () => withheld,
+    });
+    const trials = await openCaseTrials(http);
+    const notice = await within(trials).findByTestId('eval-case-trial-errored');
+    expect(notice.textContent).toMatch(/holdout 原文或用例集的 canary/);
+    expect(within(trials).queryByTestId('eval-case-trial-assertions')).toBeNull();
+    expect(within(trials).getByTestId('eval-case-trial-calls').textContent).toMatch(
+      /没有调用夹具门/,
+    );
+    // A member reads trials and starts none.
+    expect(within(trials).queryByTestId('eval-case-trial-start')).toBeNull();
+  });
+
+  it('a spent budget turns 试跑 off before anything starts, and says where it is raised', async () => {
+    const cases = [wholeCase()];
+    const http = scriptedHttp({
+      ...handlers(
+        'builder',
+        () => suite(cases),
+        () => cases,
+      ),
+      get_eval_budget: () => ({ ...BUDGET, spentUsd: 10 }),
+    });
+    const trials = await openCaseTrials(http);
+    const exhausted = await within(trials).findByTestId('eval-case-trial-exhausted');
+    expect(exhausted.textContent).toMatch(/请工作区所有者在「模型与配额」调高「评测月度预算」/);
+    expect(
+      (within(trials).getByTestId('eval-case-trial-start') as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it('too little left for the estimate is said in the confirm, not refused', async () => {
+    const cases = [wholeCase()];
+    const http = scriptedHttp({
+      ...handlers(
+        'builder',
+        () => suite(cases),
+        () => cases,
+      ),
+      get_eval_budget: () => ({ ...BUDGET, spentUsd: 9.8 }),
+    });
+    const trials = await openCaseTrials(http);
+    const start = within(trials).getByTestId('eval-case-trial-start') as HTMLButtonElement;
+    await waitFor(() => expect(start.disabled).toBe(false));
+    fireEvent.click(start);
+    const confirm = await screen.findByTestId('eval-case-trial-confirm');
+    expect(within(confirm).getByTestId('eval-case-trial-short').textContent).toMatch(
+      /可能不够这次试跑/,
+    );
+  });
+
+  it('a suite changed since it was opened refuses the start and says nothing ran', async () => {
+    const cases = [wholeCase()];
+    const http = scriptedHttp({
+      ...handlers(
+        'builder',
+        () => suite(cases),
+        () => cases,
+      ),
+      start_eval_case_trial: () => {
+        throw new HttpError('capability_error', 'suite changed', 'version_changed');
+      },
+    });
+    const trials = await openCaseTrials(http);
+    const start = within(trials).getByTestId('eval-case-trial-start') as HTMLButtonElement;
+    await waitFor(() => expect(start.disabled).toBe(false));
+    fireEvent.click(start);
+    const confirm = await screen.findByTestId('eval-case-trial-confirm');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    const error = await within(confirm).findByTestId('confirm-error');
+    expect(error.textContent).toMatch(/什么也没有启动/);
+  });
+
+  it('a retired case keeps its earlier trials and offers no new one', async () => {
+    const retired = wholeCase({ retiredInVersion: 4, retireReason: 'covered elsewhere' });
+    const done = runOf({ verdict: 'passed' });
+    const http = scriptedHttp({
+      ...handlers(
+        'builder',
+        () => suite([retired]),
+        () => [retired],
+      ),
+      list_eval_runs: () => ({ items: [summaryOfRun(done), summaryOfRun({ ...done, id: 'r-0' })] }),
+      get_eval_run: () => done,
+    });
+    // Opened as an earlier row is (the history's link to a retired or replaced case).
+    const view = await openCaseTrials(http);
+    expect(view.textContent).toMatch(/不能再试跑/);
+    expect(within(view).queryByTestId('eval-case-trial-start')).toBeNull();
+    await within(view).findByTestId('eval-case-trial');
+    expect(within(view).getAllByTestId('eval-case-trial-row')).toHaveLength(2);
   });
 });

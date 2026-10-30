@@ -20,6 +20,7 @@ import {
 import { writeAudit } from '../../substrate/audit/index.js';
 import {
   EvaluationContentWithheldError,
+  type SealOptions,
   recordEvaluationWithheld,
   sealWithholds,
 } from '../eval-seal/index.js';
@@ -29,6 +30,12 @@ import {
   recordRejectedOutput,
 } from '../task/index.js';
 import { ForbiddenError, assertActsForPerson, authorizeCapabilityCall } from './authorize.js';
+import {
+  type EvaluationSession,
+  evaluationAuditAction,
+  readEvaluationSession,
+  runEvaluationSessionCall,
+} from './evaluation-session.js';
 import { CAPABILITY_HANDLERS } from './handlers.js';
 import { UnknownOperationError } from './request-action-handler.js';
 import type { ResolvedCaller } from './resolve-caller.js';
@@ -388,6 +395,7 @@ async function sealedError(
     readonly name: string;
   },
   err: unknown,
+  options: SealOptions = {},
 ): Promise<unknown> {
   if (
     call.channel !== 'handle' ||
@@ -402,7 +410,7 @@ async function sealedError(
     carries = await withWorkspace(
       deps.pool,
       { workspaceId: call.workspaceId, principalId: call.principalId },
-      (client) => sealWithholds(client, call.workspaceId, text),
+      (client) => sealWithholds(client, call.workspaceId, text, options),
     );
   } catch (checkErr) {
     const why = checkErr instanceof Error ? checkErr.message : String(checkErr);
@@ -503,6 +511,9 @@ async function auditUnknownOperation(
     readonly name: string;
     readonly params: Record<string, unknown>;
     readonly err: unknown;
+    /** S10 E3-2a: an evaluation session's call is recorded under its own action (`evaluation
+     *  .fixture_call`), naming the capability — never as a call a gate refused. */
+    readonly auditAction?: string;
   },
 ): Promise<void> {
   const err = call.err;
@@ -518,10 +529,13 @@ async function auditUnknownOperation(
         writeAudit(client, {
           workspaceId: call.workspaceId,
           actorPrincipalId: call.principalId,
-          action: call.name,
+          action: call.auditAction ?? call.name,
           resourceType: 'gatekeeper',
           resourceId: resourceRef.resourceId,
           payload: {
+            ...(call.auditAction !== undefined && call.auditAction !== call.name
+              ? { capability: call.name }
+              : {}),
             channel: call.channel,
             onBehalfOf: call.principalId,
             ...auditParams(call.capability, rest),
@@ -697,6 +711,9 @@ export async function dispatchCapability(
   }
   const { workspaceId, principalId } = callerContext(caller);
   const onBehalfOf = principalId;
+  // S10 E3-2a: set once the call is known to come from an evaluation Task's Worker (below).
+  let evaluation: EvaluationSession | null = null;
+  let sealOptions: SealOptions = {};
 
   const handlerResult = await withWorkspace(
     deps.pool,
@@ -723,7 +740,15 @@ export async function dispatchCapability(
         );
         assertActsForPerson(capability, obo.rows[0]?.kind);
       }
-      const result = await handler(client, workspaceId, parsed.data, {
+      // S10 E3-2a (application/eval-session): an evaluation Task's Worker is closed in — its call
+      // runs through the second layer (`evaluation-session.ts`) instead of the capability's own
+      // handler, and what it gets back may carry its own Task's input (the case's) and nothing
+      // else of an evaluation's.
+      if (caller.channel === 'handle' && caller.claims.sid) {
+        evaluation = await readEvaluationSession(client, workspaceId, caller.claims.sid);
+        if (evaluation) sealOptions = { allow: evaluation.taskInput };
+      }
+      const handlerCtx: Parameters<typeof handler>[3] = {
         channel: caller.channel,
         principalId,
         scope: caller.channel === 'handle' ? caller.claims.scope : undefined,
@@ -752,14 +777,25 @@ export async function dispatchCapability(
         ...(caller.channel === 'human' && caller.user
           ? { consoleUser: { platformRole: caller.user.platformRole } }
           : {}),
-      });
+      };
+      const result = evaluation
+        ? await runEvaluationSessionCall(
+            client,
+            workspaceId,
+            evaluation,
+            name,
+            parsed.data,
+            handlerCtx,
+            handler,
+          )
+        : await handler(client, workspaceId, parsed.data, handlerCtx);
       // S10 E3-1c (I-E4): nothing a Handle gets back carries evaluation content — a suite's
       // canary or a verbatim run of a holdout case. Checked inside the call's own transaction, so
       // what a refused call wrote is rolled back as well as its result withheld (a result produced
       // after commit is checked below).
       if (
         caller.channel === 'handle' &&
-        (await sealWithholds(client, workspaceId, result.result))
+        (await sealWithholds(client, workspaceId, result.result, sealOptions))
       ) {
         throw new EvaluationContentWithheldError('capability_result');
       }
@@ -767,7 +803,7 @@ export async function dispatchCapability(
       await writeAudit(client, {
         workspaceId,
         actorPrincipalId: principalId,
-        action: name,
+        action: evaluation ? evaluationAuditAction(name) : name,
         resourceType: result.resourceType,
         resourceId: resourceRef.resourceId,
         payload: {
@@ -792,19 +828,20 @@ export async function dispatchCapability(
       name,
       params: parsed.data as Record<string, unknown>,
       err,
+      ...(evaluation ? { auditAction: evaluationAuditAction(name) } : {}),
     };
     await auditGateRefusal(deps, refused);
     await auditEvaluationWithheld(deps, refused);
     await auditUnknownOperation(deps, refused);
     await auditGoalStepClosed(deps, refused);
     await recordRefusedOutput(deps, refused);
-    throw await sealedError(deps, refused, err);
+    throw await sealedError(deps, refused, err, sealOptions);
   });
 
   const sealed = { workspaceId, principalId, channel: caller.channel, name };
   const finalResult = handlerResult.afterCommit
     ? await handlerResult.afterCommit(deps.pool).catch(async (err: unknown) => {
-        throw await sealedError(deps, sealed, err);
+        throw await sealedError(deps, sealed, err, sealOptions);
       })
     : handlerResult.result;
   // S10 E3-1c: a result produced after the call committed (`invoke_worker`'s `wait`, the Worker's
@@ -813,7 +850,7 @@ export async function dispatchCapability(
     caller.channel === 'handle' &&
     handlerResult.afterCommit &&
     (await withWorkspace(deps.pool, { workspaceId, principalId }, (client) =>
-      sealWithholds(client, workspaceId, finalResult),
+      sealWithholds(client, workspaceId, finalResult, sealOptions),
     ))
   ) {
     const withheld = new EvaluationContentWithheldError('capability_result', false);

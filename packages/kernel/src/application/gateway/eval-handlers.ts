@@ -5,12 +5,18 @@ import {
   addEvalFixtureGate,
   createEvalSuite,
   editEvalCase,
+  evalBudgetWire,
   getEvalCase,
+  getEvalRun,
   getEvalSuite,
+  listEvalRuns,
   listEvalSuites,
+  readEvalBudget,
   removeEvalFixtureGate,
   repinEvalSuite,
   retireEvalCase,
+  startCaseTrial,
+  startCaseTrialTask,
   syncEvalFixtureGate,
 } from '../eval/index.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
@@ -23,7 +29,9 @@ import type { CapabilityHandler, CapabilityHandlerContext } from './capability-h
  * have already refused a Handle, an agent and a service Principal before a handler runs. dispatch's
  * per-call AuditRecord carries the params (a reason redacted like every audited param) but for a
  * case's content, which it withholds (`auditWithheldParamKeys`: a case is read through
- * `get_eval_case` only); the suite's own history is `eval_suite_changes`.
+ * `get_eval_case` only); the suite's own history is `eval_suite_changes`. E3-2a: a run is started
+ * here (`start_eval_case_trial`, its Task started after the commit) and read here; its trials are
+ * scored by `application/eval`'s runner, which the composition root ticks.
  */
 
 function personOf(capability: string, ctx: CapabilityHandlerContext | undefined): EvalSuiteActor {
@@ -197,4 +205,59 @@ export const retireEvalCaseHandler: CapabilityHandler = async (
     target,
   );
   return suiteResult(suite, suite);
+};
+
+// ----- runs (E3-2a) ----------------------------------------------------------------------------
+
+/** Starts the run in this call's transaction; its Task is started once that commits, and the run
+ *  as it is then is the result. */
+export const startEvalCaseTrialHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const actor = personOf('start_eval_case_trial', ctx);
+  const target = params as { suiteId: string; suiteVersion: number; caseId: string };
+  const started = await startCaseTrial(client, workspaceId, actor, target);
+  return {
+    result: started.run,
+    resourceType: 'eval_run',
+    resourceId: started.run.id,
+    auditPayload: { taskId: started.task.task.id },
+    afterCommit: (pool) => startCaseTrialTask(pool, workspaceId, actor, started),
+  };
+};
+
+export const getEvalRunHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  personOf('get_eval_run', ctx);
+  const { runId } = params as { runId: string };
+  const run = await getEvalRun(client, workspaceId, runId);
+  // The suite, so the console's audit row links to it.
+  return {
+    result: run,
+    resourceType: 'eval_run',
+    resourceId: run.id,
+    auditPayload: { suiteId: run.suiteId },
+  };
+};
+
+export const listEvalRunsHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  personOf('list_eval_runs', ctx);
+  const filter = params as { suiteId: string; caseId?: string };
+  return {
+    result: { items: await listEvalRuns(client, workspaceId, filter) },
+    resourceType: 'eval_suite',
+    resourceId: filter.suiteId,
+  };
+};
+
+export const getEvalBudgetHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  _params,
+  ctx,
+) => {
+  personOf('get_eval_budget', ctx);
+  return { result: evalBudgetWire(await readEvalBudget(client, workspaceId)) };
 };

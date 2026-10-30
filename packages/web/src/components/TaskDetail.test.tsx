@@ -585,3 +585,23 @@ describe('TaskDetail observation scope', () => {
     expect(screen.queryByText('观察范围')).toBeNull();
   });
 });
+
+/** S10 E3-2a: an evaluation trial's Task. */
+describe('TaskDetail evaluation purpose', () => {
+  it('says the Task is an evaluation trial and names its principal as the evaluation service', async () => {
+    renderDetail({ purpose: 'evaluation', onBehalfOf: 'p-eval', observeScope: [] });
+    const purpose = await screen.findByTestId('task-purpose');
+    expect(purpose.textContent).toContain('评测试跑');
+    expect(purpose.textContent).toContain('不能出网');
+    expect(purpose.textContent).toContain('治理 → 评测');
+    expect(screen.getByTestId('task-on-behalf-of').textContent).toContain('评测服务');
+    expect(screen.getByTestId('task-on-behalf-of').textContent).not.toContain('__');
+  });
+
+  it('a Task for anything else shows no purpose row', async () => {
+    renderDetail({ purpose: null });
+    await screen.findByTestId('task-detail');
+    expect(screen.queryByTestId('task-purpose')).toBeNull();
+    expect(screen.getByTestId('task-on-behalf-of').textContent).toContain('Alice');
+  });
+});

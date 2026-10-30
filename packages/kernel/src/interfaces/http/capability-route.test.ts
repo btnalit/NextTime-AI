@@ -24,7 +24,11 @@ import {
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
 import { ChatArchivedError } from '../../application/chat/index.js';
 import { EvaluationContentWithheldError } from '../../application/eval-seal/index.js';
-import { EvalFixtureGateInUseError } from '../../application/eval/index.js';
+import {
+  EvalFixtureGateInUseError,
+  EvalRunNotFoundError,
+  EvaluationBudgetExhaustedError,
+} from '../../application/eval/index.js';
 import { GatekeeperLandingRefusedError } from '../../application/gates/index.js';
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
 import {
@@ -132,6 +136,24 @@ describe('mapCapabilityError — S10 E3-1b fixture gate in use (unit)', () => {
     const mapped = mapCapabilityError(new EvalFixtureGateInUseError('hosts', cases));
     expect(mapped.details).toMatchObject({ caseCount: 60 });
     expect((mapped.details as { cases: unknown[] }).cases).toHaveLength(50);
+  });
+});
+
+describe('mapCapabilityError — S10 E3-2a evaluation runs (unit)', () => {
+  it('a spent evaluation budget is 429 evaluation_budget_exhausted, with the budget and what was spent', () => {
+    expect(mapCapabilityError(new EvaluationBudgetExhaustedError(10, 10.25))).toEqual({
+      status: 429,
+      code: 'evaluation_budget_exhausted',
+      message: expect.stringMatching(/evaluation\.monthly_cost_budget_usd/),
+      details: { budgetUsd: 10, spentUsd: 10.25 },
+    });
+  });
+
+  it('an unknown run is 404 not_found', () => {
+    expect(mapCapabilityError(new EvalRunNotFoundError('run-1'))).toMatchObject({
+      status: 404,
+      code: 'not_found',
+    });
   });
 });
 

@@ -40,6 +40,7 @@ import {
 import { SkeletonRows } from '../kit/skeleton.js';
 import { Textarea } from '../kit/textarea.js';
 import { CaseEditor, type CaseSave } from './CaseEditor.js';
+import { CaseTrials } from './CaseTrials.js';
 import { useFocusAfterChange, useLoadWhen } from './hooks.js';
 
 export interface SuiteCasesProps {
@@ -68,7 +69,8 @@ export type OpenedCase =
  * fixture rule needs attention after a fixture gate sync; 添加用例; and a case's sheet,
  * which shows it whole (input, fixture rules in order, assertions as sentences) with 编辑 (a
  * reason required; the old case is retired and the new one replaces it) and 退役 (a reason
- * required). Every change is a new suite version, at the version the reader saw.
+ * required). Every change is a new suite version, at the version the reader saw. E3-2a: the
+ * sheet also holds the case's 试跑 (`CaseTrials`).
  */
 export function SuiteCases({
   http,
@@ -389,6 +391,7 @@ function CaseSheetContent({
             principalNames={principalNames}
             http={http}
           />
+          <CaseTrials key={evalCase.id} http={http} suite={suite} evalCase={evalCase} />
           <SheetFooter>
             {canRetire && evalCase.retiredInVersion === null ? (
               <RetireCaseConfirm

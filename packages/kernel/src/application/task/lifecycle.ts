@@ -515,7 +515,14 @@ export async function reactToSupervisorStatus(
     // S11 GO2 (plan §3.1, I-G1): a goal step's attempt Task never retries inside itself — the
     // step's `failed → retry → ready` starts a new attempt (a new Task) under the attempt limit
     // and backoff, so a crash here fails the Task and the advancer decides.
-    if (task.retryCount < 1 && task.status !== 'waiting_approval' && task.stepAttempt === null) {
+    // S10 E3-2a: neither does an evaluation Task — a trial is one try; its crash is its outcome
+    // (`errored`), and a second run would spend the evaluation budget on a try nobody asked for.
+    if (
+      task.retryCount < 1 &&
+      task.status !== 'waiting_approval' &&
+      task.stepAttempt === null &&
+      task.purpose === null
+    ) {
       // 2026-10-02 review R-58: the reaper tick and a `wait:true` poll can react to the same crash
       // at once, and a cancel can land between the reads above and here. Both writes are guarded,
       // and the retry is spawned only when *this* call terminated the run and won the

@@ -16,5 +16,5 @@ export {
   type EvaluationWithheldRecord,
   recordEvaluationWithheld,
 } from './record.js';
-export { resetEvaluationSealForTests, sealWithholds } from './seal.js';
+export { type SealOptions, resetEvaluationSealForTests, sealWithholds } from './seal.js';
 export { SEAL_SPAN_CHARS, normalizeSealText } from './span-index.js';

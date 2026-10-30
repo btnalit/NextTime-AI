@@ -142,6 +142,7 @@ export const AUDIT_RESOURCE_TYPE_LABELS: Readonly<Record<AuditResourceType, Bili
   connection_request: { zh: '连接申请', en: 'Connection request' },
   decision: { zh: '决策', en: 'Decision' },
   eval_case: { zh: '用例', en: 'Evaluation case' },
+  eval_run: { zh: '评测运行', en: 'Evaluation run' },
   eval_suite: { zh: '用例集', en: 'Evaluation suite' },
   fact: { zh: '事实', en: 'Fact' },
   // Legacy sweep (console batch, 2026-10-16): `gatekeeper` reads 门 now that `gate_instance` (the

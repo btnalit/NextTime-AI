@@ -89,13 +89,16 @@ export async function readSkillStats(
   const latest = versions.rows[0];
   if (!latest) return null;
 
-  // Usage: every run that loaded a version, by the run's environment.
+  // Usage: every run that loaded a version, by the run's environment. An evaluation Task's run
+  // (S10 E3-2a, `tasks.purpose`) is not use: it is judged by its suite (`application/eval`), and
+  // its fixture-answered calls are not the workspace's work — so neither here nor below.
   const usage = await client.query<UsageRow>(
     `select w.skill_version as version, r.environment_digest,
             count(*)::int as runs, max(r.started_at) as last_used_at
        from worker_run_skills w
        join worker_runs r on r.workspace_id = w.workspace_id and r.id = w.worker_run_id
-      where w.workspace_id = $1 and w.skill_id = $2
+       join tasks t on t.workspace_id = r.workspace_id and t.id = r.task_id
+      where w.workspace_id = $1 and w.skill_id = $2 and t.purpose is null
       group by w.skill_version, r.environment_digest`,
     [workspaceId, skillId],
   );
@@ -108,7 +111,8 @@ export async function readSkillStats(
        select distinct r.task_id
          from worker_run_skills w
          join worker_runs r on r.workspace_id = w.workspace_id and r.id = w.worker_run_id
-        where w.workspace_id = $1 and w.skill_id = $2
+         join tasks ct on ct.workspace_id = r.workspace_id and ct.id = r.task_id
+        where w.workspace_id = $1 and w.skill_id = $2 and ct.purpose is null
      ), last_run as (
        select distinct on (r.task_id) r.task_id, r.id, r.environment_digest
          from worker_runs r

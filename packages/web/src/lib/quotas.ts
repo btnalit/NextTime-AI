@@ -1,10 +1,10 @@
 /**
- * lib/quotas: the five I18 quota keys (`application/task/quotas.ts` `QUOTA_KEY_VALUES` in the
- * kernel — not re-exported through `@nexttime/shared`, so mirrored here by hand) with a human
- * label, unit, and the value bounds `set_quota` enforces server-side
- * (`QUOTA_VALUE_SCHEMAS`/`HARD_MAX_DEPTH`, same file). Kept in one place so `ModelsPage`'s
- * read-only table and `governance/QuotaEditSheet`'s editor never drift from each other — extend
- * this file (not either component) if the kernel ever adds a sixth axis.
+ * lib/quotas: the quota keys (`application/task/quotas.ts` `QUOTA_KEY_VALUES` in the kernel —
+ * not re-exported through `@nexttime/shared`, so mirrored here by hand): the five I18 axes and,
+ * S10 E3-2a, the monthly evaluation budget — each with a human label, unit, and the value bounds
+ * `set_quota` enforces server-side (`QUOTA_VALUE_SCHEMAS`/`HARD_MAX_DEPTH`, same file). Kept in
+ * one place so `ModelsPage`'s read-only table and `governance/QuotaEditSheet`'s editor never drift
+ * from each other — extend this file (not either component) when the kernel adds a key.
  */
 
 export const QUOTA_KEY_VALUES = [
@@ -13,6 +13,7 @@ export const QUOTA_KEY_VALUES = [
   'task.default_token_budget',
   'task.default_duration_limit_sec',
   'task.daily_cost_budget_usd',
+  'evaluation.monthly_cost_budget_usd',
 ] as const;
 export type QuotaKey = (typeof QUOTA_KEY_VALUES)[number];
 
@@ -24,9 +25,9 @@ export interface QuotaKeyInfo {
   /** `undefined` — no upper bound enforced client-side (the kernel still enforces its own). */
   readonly max?: number;
   readonly integer: boolean;
-  /** Can this axis be set to "unlimited" (`value: null`)? Only the two budget axes — depth,
-   *  concurrency, and duration always resolve to a concrete number (`resolveQuotas`'s own
-   *  defaults). */
+  /** Can this axis be set to "unlimited" (`value: null`)? Only the token and daily cost budgets —
+   *  depth, concurrency, duration and the evaluation budget always resolve to a concrete number
+   *  (`resolveQuotas`'s own defaults). */
   readonly nullable: boolean;
 }
 
@@ -74,5 +75,14 @@ export const QUOTA_KEY_INFO: Readonly<Record<QuotaKey, QuotaKeyInfo>> = {
     min: 0,
     integer: false,
     nullable: true,
+  },
+  // S10 E3-2a: what evaluation runs may spend in a UTC month ($10 unless set); never unlimited.
+  'evaluation.monthly_cost_budget_usd': {
+    zh: '评测月度预算',
+    en: 'Monthly evaluation budget',
+    unit: 'USD',
+    min: 0,
+    integer: false,
+    nullable: false,
   },
 };

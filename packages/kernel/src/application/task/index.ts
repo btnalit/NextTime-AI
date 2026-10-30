@@ -72,6 +72,13 @@ export {
 } from './output-contract.js';
 
 export {
+  type CreateEvaluationTaskInput,
+  type CreateEvaluationTaskResult,
+  EVALUATION_HANDLE_CAPABILITIES,
+  createEvaluationTask,
+} from './evaluation-task.js';
+
+export {
   type CreateStepAttemptInput,
   type CreateStepAttemptResult,
   type PreparedStepAttempt,

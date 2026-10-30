@@ -213,12 +213,16 @@ import {
   addEvalFixtureGateHandler,
   createEvalSuiteHandler,
   editEvalCaseHandler,
+  getEvalBudgetHandler,
   getEvalCaseHandler,
+  getEvalRunHandler,
   getEvalSuiteHandler,
+  listEvalRunsHandler,
   listEvalSuitesHandler,
   removeEvalFixtureGateHandler,
   repinEvalSuiteHandler,
   retireEvalCaseHandler,
+  startEvalCaseTrialHandler,
   syncEvalFixtureGateHandler,
 } from './eval-handlers.js';
 // S8 W1-C (F6) — execution_readiness / resolve_refs, split into their own files (same
@@ -2064,6 +2068,7 @@ function toWireTask(
         }
       : null,
     observeScope: task.observeScope === null ? null : [...task.observeScope],
+    purpose: task.purpose,
   };
 }
 
@@ -2410,6 +2415,11 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['add_eval_case', addEvalCaseHandler],
   ['edit_eval_case', editEvalCaseHandler],
   ['retire_eval_case', retireEvalCaseHandler],
+  // S10 E3-2a: evaluation runs (eval-handlers.ts).
+  ['start_eval_case_trial', startEvalCaseTrialHandler],
+  ['get_eval_run', getEvalRunHandler],
+  ['list_eval_runs', listEvalRunsHandler],
+  ['get_eval_budget', getEvalBudgetHandler],
   // S11 P1-C packs (pack-handlers.ts)
   ['list_packs', listPacksHandler],
   ['preview_pack_install', previewPackInstallHandler],

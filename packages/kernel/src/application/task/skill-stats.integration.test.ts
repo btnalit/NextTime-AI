@@ -76,6 +76,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       readonly stepAttempt?: number | null;
       readonly outputRejected?: boolean;
       readonly agentOutcome?: { readonly outcome: string; readonly at: Date };
+      /** S10 E3-2a: `evaluation` for a trial's Task. */
+      readonly purpose?: 'evaluation';
     }
 
     async function task(fixture: TaskFixture): Promise<string> {
@@ -91,9 +93,9 @@ describe.runIf(DATABASE_URL !== undefined)(
            worker_definition_version, failure_reason, failed_at, created_by_activity_id,
            goal_run_id, step_run_id, plan_revision, step_attempt, run_config_snapshot,
            output_schema, rejected_output, objective_outcome, outcome_given_by, outcome_given_at,
-           outcome_revision)
+           outcome_revision, purpose, observe_scope)
          values ($1, $2, $3, $4, $5, 1, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-           $18, $19)`,
+           $18, $19, $20, $21::uuid[])`,
         [
           workspaceId,
           id,
@@ -114,6 +116,9 @@ describe.runIf(DATABASE_URL !== undefined)(
           fixture.agentOutcome ? ownerId : null,
           fixture.agentOutcome?.at ?? null,
           fixture.agentOutcome ? 1 : null,
+          fixture.purpose ?? null,
+          // An evaluation Task names its fixture gates (migrations/task/0011).
+          fixture.purpose ? [] : null,
         ],
       );
       return id;
@@ -668,6 +673,46 @@ describe.runIf(DATABASE_URL !== undefined)(
         { basis: 'reviewer_assessed', achieved: 0, notAchieved: 0 },
         { basis: 'agent_reported', achieved: 0, notAchieved: 0 },
       ]);
+    });
+
+    it('leaves out evaluation Tasks’ runs: a trial is judged by its suite, not counted as use (S10 E3-2a)', async () => {
+      const skillId = await skillFamily(['published']);
+      const used = await task({
+        status: 'completed',
+        agentOutcome: { outcome: 'achieved', at: at('10:10') },
+      });
+      await run({
+        taskId: used,
+        startedAt: at('10:00'),
+        environment: ENV_A,
+        loaded: [[skillId, 1]],
+      });
+      for (const [status, time] of [
+        ['completed', '11:00'],
+        ['failed', '12:00'],
+      ] as const) {
+        const trial = await task({
+          status,
+          purpose: 'evaluation',
+          ...(status === 'failed'
+            ? { failureReason: 'worker_failed', failedAt: at(time) }
+            : { agentOutcome: { outcome: 'not_achieved', at: at(time) } }),
+        });
+        await run({
+          taskId: trial,
+          startedAt: at(time),
+          environment: ENV_A,
+          loaded: [[skillId, 1]],
+        });
+      }
+
+      const [v1] = (await stats(skillId))?.versions ?? [];
+      expect(v1?.usage).toEqual({
+        runs: 1,
+        tasks: { completed: 1, failed: 0, cancelled: 0, inProgress: 0 },
+        lastUsedAt: at('10:00').toISOString(),
+      });
+      expect(v1?.outcomes.proxy).toMatchObject({ achieved: 1, notAchieved: 0 });
     });
 
     it('suggests a review per environment: the latest three primary outcomes there all not achieved', async () => {

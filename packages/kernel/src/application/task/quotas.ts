@@ -7,7 +7,7 @@ import { z } from 'zod';
  * S2.7 "quota keys ... as workspace policy data ... with compiled-in defaults and a set_quota
  * handler"; migrations/task/0002_quotas.sql).
  *
- * Five keys, one per I18 axis:
+ * Five keys, one per I18 axis, and the evaluation budget:
  *
  *   - `task.max_depth`                        — invoke_worker derivation-chain depth ceiling.
  *   - `task.max_concurrent_worker_runs_per_user` — per-`on_behalf_of` concurrent WorkerRuns.
@@ -19,6 +19,12 @@ import { z } from 'zod';
  *   - `task.daily_cost_budget_usd`            — per-workspace daily `llm_usage.cost_usd` sum cap
  *                                                (`governance/llm-usage`'s `sumTodayCostUsd`);
  *                                                `null` = unlimited.
+ *   - `evaluation.monthly_cost_budget_usd`     — S10 E3-2a: what evaluation runs may spend in a
+ *                                                UTC month (`llm_usage.cost_usd` of evaluation
+ *                                                Tasks' runs, `application/eval`), apart from the
+ *                                                daily budget; a run is not started once it is
+ *                                                spent. $10 by default (product default: small,
+ *                                                the owner raises it); never unlimited.
  *
  * `HARD_MAX_DEPTH` (3) is I18's own invariant, not a workspace-adjustable default — a workspace
  * may only ever *tighten* `task.max_depth` below it, never loosen past it (`resolveQuotas` clamps
@@ -34,6 +40,7 @@ export const QUOTA_KEY_VALUES = [
   'task.default_token_budget',
   'task.default_duration_limit_sec',
   'task.daily_cost_budget_usd',
+  'evaluation.monthly_cost_budget_usd',
 ] as const;
 export type QuotaKey = (typeof QUOTA_KEY_VALUES)[number];
 
@@ -54,6 +61,7 @@ export const DEFAULT_QUOTA_VALUES: {
   'task.default_token_budget': 200_000,
   'task.default_duration_limit_sec': 3600,
   'task.daily_cost_budget_usd': null,
+  'evaluation.monthly_cost_budget_usd': 10,
 };
 
 /** Per-key value validation for `set_quota` (`application/task/service.ts`'s `setQuotaValue`) —
@@ -66,6 +74,7 @@ export const QUOTA_VALUE_SCHEMAS: { readonly [K in QuotaKey]: z.ZodType } = {
   'task.default_token_budget': z.number().int().min(0).nullable(),
   'task.default_duration_limit_sec': z.number().int().min(1),
   'task.daily_cost_budget_usd': z.number().min(0).nullable(),
+  'evaluation.monthly_cost_budget_usd': z.number().min(0),
 };
 
 export class UnknownQuotaKeyError extends Error {
@@ -88,6 +97,7 @@ export interface ResolvedQuotas {
   readonly defaultTokenBudget: number | null;
   readonly defaultDurationLimitSec: number;
   readonly dailyCostBudgetUsd: number | null;
+  readonly evaluationMonthlyCostBudgetUsd: number;
 }
 
 interface QuotaDbRow {
@@ -132,6 +142,10 @@ export async function resolveQuotas(
     dailyCostBudgetUsd: overrides.has('task.daily_cost_budget_usd')
       ? (overrides.get('task.daily_cost_budget_usd') ?? null)
       : DEFAULT_QUOTA_VALUES['task.daily_cost_budget_usd'],
+    evaluationMonthlyCostBudgetUsd:
+      overrides.get('evaluation.monthly_cost_budget_usd') ??
+      DEFAULT_QUOTA_VALUES['evaluation.monthly_cost_budget_usd'] ??
+      0,
   };
 }
 
