@@ -5,6 +5,7 @@ import type {
   ReworkOfWire,
   RunEnvironmentWire,
   SkillLoadWire,
+  TaskPurpose,
   TaskStatus,
   TurnAttributionWire,
 } from '@nexttime/shared';
@@ -67,6 +68,9 @@ export interface TaskSummary {
   /** S11 GO11: the only gatekeepers this Task's Workers may read through, fixed at creation (`[]` =
    *  none). `null` = the Task sets no scope; absent from a kernel that predates GO11. */
   readonly observeScope?: readonly string[] | null;
+  /** S10 E3-2a: what the Task is for when it is not ordinary work — `evaluation`, a trial of an
+   *  evaluation case. `null` = ordinary work; absent from a kernel that predates E3-2a. */
+  readonly purpose?: TaskPurpose | null;
 }
 
 /** `list_worker_definitions` row (`toWireWorkerDefinition`, handlers.ts) — only what the Tasks

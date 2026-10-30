@@ -1,6 +1,7 @@
 import {
   IllegalTransition,
   type OutputSchema,
+  type TaskPurpose,
   type TaskStatus,
   type WorkerRunStatus,
 } from '@nexttime/shared';
@@ -46,6 +47,9 @@ export interface TaskRow {
   /** S11 GO11 (migrations/task/0010, `observe-scope.ts`): the only Gatekeepers this Task's Workers
    *  may observe through, sorted; `null` = the Task sets no scope. Written once, at creation. */
   readonly observeScope: readonly string[] | null;
+  /** S10 E3-2a (migrations/task/0011): `evaluation` — a run of an evaluation case, acting for the
+   *  workspace's evaluation service principal; `null` — ordinary work. Fixed at creation. */
+  readonly purpose: TaskPurpose | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
   readonly completedAt: Date | null;
@@ -74,6 +78,7 @@ interface TaskDbRow {
   rejected_output: unknown;
   rework_of: unknown;
   observe_scope: string[] | null;
+  purpose: TaskPurpose | null;
   created_at: Date;
   updated_at: Date;
   completed_at: Date | null;
@@ -106,6 +111,7 @@ export function mapTaskRow(row: TaskDbRow): TaskRow {
     rejectedOutput: parseRejectedOutput(row.rejected_output),
     reworkOf: parseReworkOf(row.rework_of),
     observeScope: row.observe_scope,
+    purpose: row.purpose,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at,
@@ -117,8 +123,8 @@ export function mapTaskRow(row: TaskDbRow): TaskRow {
 export const TASK_ROW_COLUMNS = `workspace_id, id, status, on_behalf_of, created_by_activity_id,
   worker_definition_id, worker_definition_version, input, result, token_budget,
   duration_limit_sec, tokens_used, budget_warned_at, failure_reason, retry_count, step_attempt,
-  output_schema, rejected_output, rework_of, observe_scope, created_at, updated_at, completed_at,
-  failed_at, cancelled_at`;
+  output_schema, rejected_output, rework_of, observe_scope, purpose, created_at, updated_at,
+  completed_at, failed_at, cancelled_at`;
 
 export interface WorkerRunRow {
   readonly workspaceId: string;

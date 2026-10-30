@@ -31,6 +31,7 @@ describe('resolveQuotas', () => {
       defaultTokenBudget: DEFAULT_QUOTA_VALUES['task.default_token_budget'],
       defaultDurationLimitSec: DEFAULT_QUOTA_VALUES['task.default_duration_limit_sec'],
       dailyCostBudgetUsd: DEFAULT_QUOTA_VALUES['task.daily_cost_budget_usd'],
+      evaluationMonthlyCostBudgetUsd: DEFAULT_QUOTA_VALUES['evaluation.monthly_cost_budget_usd'],
     });
   });
 

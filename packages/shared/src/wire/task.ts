@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { TaskStatusSchema, WorkerRunStatusSchema } from '../enums.js';
+import { TaskPurposeSchema, TaskStatusSchema, WorkerRunStatusSchema } from '../enums.js';
 import { OutputProblemSchema } from '../output-schema.js';
 import {
   ObjectiveOutcomeWireSchema,
@@ -144,6 +144,9 @@ export const TaskWireSchema = z
      *  was created — `[]` = none at all. `null` = the Task sets no scope: its Workers observe what
      *  the member's agent may. */
     observeScope: z.array(z.string()).nullable(),
+    /** S10 E3-2a: `evaluation` — a run of an evaluation case (the console shows its result under
+     *  治理 → 评测); `null` — ordinary work. */
+    purpose: TaskPurposeSchema.nullable(),
   })
   .strict();
 export type TaskWire = z.infer<typeof TaskWireSchema>;

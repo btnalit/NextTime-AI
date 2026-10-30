@@ -2130,7 +2130,8 @@ const governanceCapabilities = [
     minRole: 'owner',
     paramsSchema: z.object({ key: z.string(), value: z.unknown().optional() }).strict(),
     resultSchema: wire.QuotaWireSchema,
-    description: 'Set an I18 quota (invoke_worker depth, concurrency, token/time, daily cost).',
+    description:
+      'Set an I18 quota (invoke_worker depth, concurrency, token/time, daily cost) or the monthly evaluation budget (evaluation.monthly_cost_budget_usd, a number of USD, never null).',
   },
   {
     // S3.6 registry-entry fix (docs/development-tasks.md W2-B): previously `{sessionId,
@@ -4713,6 +4714,59 @@ const evaluationCapabilities = [
     resultSchema: wire.EvalSuiteWireSchema,
     description: `Take a case out of the suite from the next version on, with a reason (kept in its history) — a person's decision, whatever its partition: a regression case is never dropped otherwise. Earlier suite versions still hold it; it is never deleted. A case the suite does not hold now is 409 conflict; one that is not there is 404 not_found. ${EVAL_SUITE_CHANGE_RULE}`,
   },
+  // S10 E3-2a: evaluation runs — a person starts one, the kernel runs it as evaluation Tasks of
+  // the workspace's evaluation service principal, every gate call answered from the case's fixtures
+  // (I-E1); results stay in `eval_*` tables, read by people only (I-E4).
+  {
+    name: 'start_eval_case_trial',
+    group: 'evaluation',
+    mode: 'execute',
+    channel: 'human',
+    minRole: 'builder',
+    actsForPerson: true,
+    paramsSchema: z
+      .object({ suiteId: evalSuiteId, suiteVersion: evalSuiteVersion, caseId: z.string().uuid() })
+      .strict(),
+    resultSchema: wire.EvalRunWireSchema,
+    description:
+      'Try one case of the suite once, as it would run now (a case_trial run): the kernel starts an evaluation Task of the suite’s pinned WorkerDefinition version with the case’s input, for the workspace’s evaluation service principal — its Worker reads only its own Task, sees the suite’s fixture gates as its tools, and every call to them is answered from the case’s fixtures (no gate is ever called, nothing is executed); its egress is denied. When the Worker reports, the case’s assertions judge {result, calls} and the trial is scored passed or failed; a Task that ends without a report leaves it errored. Read the outcome with get_eval_run. suiteVersion is the suite version you looked at (409 version_changed when it has changed since). A case the suite does not hold now, or a pinned version no longer published, is 409 conflict; a suite or case that is not there is 404 not_found; once this UTC month’s evaluation spending has reached the evaluation budget (evaluation.monthly_cost_budget_usd, $10 unless the owner set it) 429 evaluation_budget_exhausted, with details.budgetUsd and details.spentUsd; the workspace’s Task quotas apply to evaluation Tasks as to any (429 concurrency_exceeded when as many evaluation Tasks run as one principal may run at once, 429 daily_cost_exceeded once the workspace’s daily cost budget is spent). Nothing is started on any refusal. People only.',
+  },
+  {
+    name: 'get_eval_run',
+    group: 'evaluation',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    actsForPerson: true,
+    paramsSchema: z.object({ runId: z.string().uuid() }).strict(),
+    resultSchema: wire.EvalRunWireSchema,
+    description:
+      'Read one evaluation run whole: the suite version and WorkerDefinition version it ran, and each trial — its status, verdict or error, each assertion’s outcome, the result its Worker reported, every fixture call it made with the rule that answered it, its cost and tokens, and its evaluation Task. People only. 404 not_found for a run that is not there.',
+  },
+  {
+    name: 'list_eval_runs',
+    group: 'evaluation',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    actsForPerson: true,
+    paramsSchema: z.object({ suiteId: evalSuiteId, caseId: z.string().uuid().optional() }).strict(),
+    resultSchema: listEnvelope(wire.EvalRunSummaryWireSchema),
+    description:
+      'List a suite’s evaluation runs, newest first (the last 20), each in brief — its case rows and how many trials passed, failed, errored or still run, and its cost; with caseId, only the runs that tried that case row. People only. 404 not_found for a suite that is not there.',
+  },
+  {
+    name: 'get_eval_budget',
+    group: 'evaluation',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    actsForPerson: true,
+    paramsSchema: z.object({}).strict(),
+    resultSchema: wire.EvalBudgetWireSchema,
+    description:
+      'The workspace’s evaluation budget this UTC month: the budget (evaluation.monthly_cost_budget_usd — $10 unless the owner set it with set_quota), what evaluation runs have spent, the month’s start and end, what one trial has cost on average lately (null before any priced one) and how many trials this month ran on a model with no price (not counted in spentUsd). People only.',
+  },
 ] as const satisfies readonly Capability[];
 
 /**
@@ -4827,6 +4881,11 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   'add_eval_case',
   'edit_eval_case',
   'retire_eval_case',
+  // S10 E3-2a: and every run.
+  'start_eval_case_trial',
+  'get_eval_run',
+  'list_eval_runs',
+  'get_eval_budget',
   'audit_query',
   'reconstruct',
   'export_prov',

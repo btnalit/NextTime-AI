@@ -26,10 +26,12 @@ import { EvaluationContentWithheldError } from '../../application/eval-seal/inde
 // S10 E3-1a: an evaluation suite's refusals — imported directly like the domain errors around.
 import {
   EvalFixtureGateInUseError,
+  EvalRunNotFoundError,
   EvalSuiteInputError,
   EvalSuiteNameTakenError,
   EvalSuiteNotFoundError,
   EvalSuiteStateError,
+  EvaluationBudgetExhaustedError,
 } from '../../application/eval/index.js';
 import { GateInstanceNotAvailableError } from '../../application/gateway/gate-instance-handlers.js';
 // NoActiveTurnError/TurnNotFoundError are exported from handlers.ts itself but not re-exported by
@@ -796,11 +798,16 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // would take (400); a suite already as asked, or without the gate named (409 conflict); a name
   // another suite has (409 eval_suite_name_taken). A change made against another suite version is
   // `ReviewedVersionChangedError` (409 version_changed) above.
-  if (err instanceof EvalSuiteNotFoundError) {
+  if (err instanceof EvalSuiteNotFoundError || err instanceof EvalRunNotFoundError) {
     return { status: 404, code: 'not_found', message: err.message };
   }
   if (err instanceof EvalSuiteInputError) {
     return { status: 400, code: 'invalid_params', message: err.message };
+  }
+  // E3-2a: this month's evaluation budget is spent — the daily cost budget's status (429), with
+  // the budget and what was spent in `details`.
+  if (err instanceof EvaluationBudgetExhaustedError) {
+    return { status: 429, code: err.code, message: err.message, details: { ...err.details } };
   }
   if (err instanceof EvalSuiteStateError) {
     return { status: 409, code: 'conflict', message: err.message };

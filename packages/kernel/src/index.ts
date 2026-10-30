@@ -25,6 +25,7 @@ import {
   createChatEventSink,
   interruptStaleRunningTurns,
 } from './application/chat/index.js';
+import { runEvalTrialTick } from './application/eval/index.js';
 import { markLostGateInstances } from './application/gates/index.js';
 import { setAgentRuntimeForHandlers } from './application/gateway/handlers.js';
 import {
@@ -526,6 +527,13 @@ export interface CreateBackgroundServicesOptions {
    *  acceptance-check failure — same shape as `onTaskReaperError`. Defaults to a no-op; `main()`
    *  passes `app.log.error`. */
   readonly onGoalAdvancerError?: (error: unknown) => void;
+  /** S10 E3-2a: how often evaluation trials whose Task ended are scored (`application/eval`'s
+   *  `runEvalTrialTick`). Default `DEFAULT_EVAL_TRIAL_INTERVAL_MS` (5 s). Wired with the task
+   *  reaper (needs the Task runtime, as the trials' Tasks do). */
+  readonly evalTrialIntervalMs?: number;
+  /** Called with every failure of the evaluation trial tick — same shape as `onTaskReaperError`.
+   *  Defaults to a no-op; `main()` passes `app.log.error`. */
+  readonly onEvalTrialError?: (error: unknown) => void;
   /**
    * `OutboxDispatcher.pruneDispatched`'s `olderThanDays` — deletes dispatched outbox rows older
    * than this many days on a periodic tick (fix/invoke-worker-wait-and-outbox-prune: `pruneDispatched`
@@ -659,6 +667,10 @@ export const DEFAULT_APPROVAL_REAPER_INTERVAL_MS = 5 * 60 * 1000;
  *  heartbeat may be before the instance is `lost` (3× gatekeeper-base's default announce interval). */
 export const DEFAULT_GATE_LIVENESS_INTERVAL_MS = 60 * 1000;
 export const DEFAULT_GATE_LOST_AFTER_SECONDS = 180;
+
+/** Default evaluation trial tick interval (S10 E3-2a) — 5 seconds: a trial's verdict shows soon
+ *  after its Worker reports, and an idle tick is one indexed query. */
+export const DEFAULT_EVAL_TRIAL_INTERVAL_MS = 5_000;
 
 /** Default S2.4 Gatekeeper-queue periodic drain tick interval — 1 minute. */
 export const DEFAULT_GATEKEEPER_DRAIN_INTERVAL_MS = 60 * 1000;
@@ -882,6 +894,10 @@ export function createBackgroundServices(
   let goalReconcileCheckRunning = false;
   let goalAcceptanceCheckTimer: NodeJS.Timeout | undefined;
   let goalAcceptanceCheckRunning = false;
+  // S10 E3-2a: the evaluation trial runner; ticks do not overlap.
+  const onEvalTrialError = options.onEvalTrialError ?? (() => {});
+  let evalTrialTimer: NodeJS.Timeout | undefined;
+  let evalTrialRunning = false;
   let unsubscribeGoalWake: (() => void) | undefined;
   let taskDeps:
     | {
@@ -1087,6 +1103,17 @@ export function createBackgroundServices(
             });
         }, options.goalAcceptanceCheckIntervalMs ?? DEFAULT_ACCEPTANCE_CHECK_INTERVAL_MS);
         goalAcceptanceCheckTimer.unref?.();
+
+        evalTrialTimer = setInterval(() => {
+          if (evalTrialRunning) return;
+          evalTrialRunning = true;
+          runEvalTrialTick(options.pool, { onError: (err) => onEvalTrialError(err) })
+            .catch(onEvalTrialError)
+            .finally(() => {
+              evalTrialRunning = false;
+            });
+        }, options.evalTrialIntervalMs ?? DEFAULT_EVAL_TRIAL_INTERVAL_MS);
+        evalTrialTimer.unref?.();
       }
 
       // S8 W3 K2 (leftover 82): the draft-expiry sweep — `draftExpiryDays === 0` is a deliberate
@@ -1207,6 +1234,10 @@ export function createBackgroundServices(
       if (goalAcceptanceCheckTimer) {
         clearInterval(goalAcceptanceCheckTimer);
         goalAcceptanceCheckTimer = undefined;
+      }
+      if (evalTrialTimer) {
+        clearInterval(evalTrialTimer);
+        evalTrialTimer = undefined;
       }
       if (draftExpiryTimer) {
         clearInterval(draftExpiryTimer);
@@ -1595,6 +1626,7 @@ export function main(): void {
       taskReaperIntervalMs,
       onTaskReaperError: (err: unknown) => app.log.error(err),
       onGoalAdvancerError: (err: unknown) => app.log.error(err),
+      onEvalTrialError: (err: unknown) => app.log.error(err),
       kind,
       handleKeyPair,
       kernelLlmUrl: process.env.KERNEL_LLM_URL,

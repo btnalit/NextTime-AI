@@ -4,7 +4,7 @@ import { useFocusWhenLost } from '../hooks/useFocusWhenLost.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { type CreatePrincipalResult, ownerCredentialConfirmCopy } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
-import { roleDescription, roleLabel } from '../lib/labels.js';
+import { RESERVED_PRINCIPAL_DISPLAY_NAME, roleDescription, roleLabel } from '../lib/labels.js';
 import { Button } from './kit/button.js';
 import { Confirm } from './kit/confirm.js';
 import { CopyButton } from './kit/copy-button.js';
@@ -39,11 +39,6 @@ export interface CreatePrincipalFormProps {
  * spells out what an owner-level key can do; the call only runs from that confirm, so cancelling
  * creates nothing. Every other role submits straight away, as before.
  */
-/** The kernel's reserved display names (`members-handlers.ts` `INTERNAL_PRINCIPAL_DISPLAY_NAME_PATTERN`,
- *  checked on the trimmed name this form sends): two underscores at each end mark the platform's
- *  internal identities, and `create_principal` refuses them with `reserved_name`. */
-const RESERVED_DISPLAY_NAME = /^__.+__$/;
-
 export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalFormProps) {
   // Legacy 497: in a drawer whose form was edited, 取消 asks before discarding it.
   const guardedClose = useGuardedClose();
@@ -60,7 +55,7 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
   const [confirmingOwner, setConfirmingOwner] = useState(false);
   const ownerCopy = ownerCredentialConfirmCopy(t);
   // Legacy 362: say so while typing instead of after a refused submit.
-  const reservedName = RESERVED_DISPLAY_NAME.test(displayName.trim());
+  const reservedName = RESERVED_PRINCIPAL_DISPLAY_NAME.test(displayName.trim());
 
   async function createPrincipal(trimmed: string): Promise<void> {
     const result = await http.call<CreatePrincipalResult>('create_principal', {

@@ -140,7 +140,9 @@ export type StatusMachine =
   | 'stepRun'
   | 'goalCheck'
   | 'planRevision'
-  | 'packRequirement';
+  | 'packRequirement'
+  | 'evalTrial'
+  | 'evalAssertion';
 
 export const ACTION_REQUEST_TONES: Readonly<Record<ActionRequestStatus, ChipStyle>> = {
   proposed: { tone: 'neutral', label: { zh: '已提议', en: 'Proposed' } },
@@ -472,6 +474,28 @@ export const PACK_REQUIREMENT_TONES: Readonly<Record<PackRequirementState, ChipS
   needs_platform: { tone: 'danger', label: { zh: '平台未提供', en: 'Not offered' } },
 };
 
+/** S10 E3-2a: how an evaluation trial came out — `running`, its verdict once `scored`, or
+ *  `errored` (`EvalTrialWire`'s `status` and `verdict` read together, `lib/eval-runs.ts`
+ *  `trialOutcomeStatus`). */
+export const EVAL_TRIAL_OUTCOME_VALUES = ['running', 'passed', 'failed', 'errored'] as const;
+export type EvalTrialOutcome = (typeof EVAL_TRIAL_OUTCOME_VALUES)[number];
+export const EVAL_TRIAL_TONES: Readonly<Record<EvalTrialOutcome, ChipStyle>> = {
+  running: { tone: 'info', label: { zh: '运行中', en: 'Running' }, live: true },
+  passed: { tone: 'ok', label: { zh: '通过', en: 'Passed' } },
+  failed: { tone: 'danger', label: { zh: '未通过', en: 'Failed' } },
+  errored: { tone: 'warn', label: { zh: '出错', en: 'Errored' } },
+};
+
+/** S10 E3-2a: one assertion of a case, as a trial judged it (`EvalAssertionResultWire.outcome`). */
+export const EVAL_ASSERTION_OUTCOME_VALUES = ['satisfied', 'unsatisfied', 'undetermined'] as const;
+export const EVAL_ASSERTION_TONES: Readonly<
+  Record<(typeof EVAL_ASSERTION_OUTCOME_VALUES)[number], ChipStyle>
+> = {
+  satisfied: { tone: 'ok', label: { zh: '成立', en: 'Holds' } },
+  unsatisfied: { tone: 'danger', label: { zh: '不成立', en: 'Does not hold' } },
+  undetermined: { tone: 'warn', label: { zh: '无法判断', en: 'Undetermined' } },
+};
+
 const MACHINES: Readonly<
   Record<StatusMachine, { values: readonly string[]; tones: Readonly<Record<string, ChipStyle>> }>
 > = {
@@ -516,6 +540,8 @@ const MACHINES: Readonly<
   goalCheck: { values: GOAL_ACCEPTANCE_CHECK_STATUS_VALUES, tones: GOAL_CHECK_TONES },
   planRevision: { values: PLAN_REVISION_STATUS_VALUES, tones: PLAN_REVISION_TONES },
   packRequirement: { values: PACK_REQUIREMENT_STATE_VALUES, tones: PACK_REQUIREMENT_TONES },
+  evalTrial: { values: EVAL_TRIAL_OUTCOME_VALUES, tones: EVAL_TRIAL_TONES },
+  evalAssertion: { values: EVAL_ASSERTION_OUTCOME_VALUES, tones: EVAL_ASSERTION_TONES },
 };
 
 export interface ResolvedChipStyle extends ChipStyle {

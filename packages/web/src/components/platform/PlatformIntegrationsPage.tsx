@@ -12,7 +12,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { addressText } from '../../lib/connections.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
-import { connectorModeLabel, transportKindLabel } from '../../lib/labels.js';
+import { connectorModeLabel, principalShownName, transportKindLabel } from '../../lib/labels.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { type IntegrationsTab, hrefs, navigate, readIntegrationsTab } from '../../lib/router.js';
 import { deriveGateInstanceStatus, deriveSelfConnectionStatus } from '../../lib/status-tone.js';
@@ -1383,7 +1383,9 @@ function ExternalRuntimeRow({
     <tr data-testid={`external-runtime-row-${runtime.sessionId}`}>
       <td>{runtime.workspaceName}</td>
       <td data-label={t('所属成员', 'Member')}>
-        {runtime.displayName ?? <span className="mono text-3">{runtime.principalId}</span>}
+        {principalShownName(runtime.displayName, t) ?? (
+          <span className="mono text-3">{runtime.principalId}</span>
+        )}
       </td>
       <td data-label={t('会话种类', 'Session kind')}>{runtime.sessionKind}</td>
       <td data-label={t('创建时间', 'Created')}>

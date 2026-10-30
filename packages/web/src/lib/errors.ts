@@ -192,6 +192,7 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   depth_exceeded: 'Delegation too deep',
   concurrency_exceeded: 'Too many running at once',
   daily_cost_exceeded: 'Daily cost budget reached',
+  evaluation_budget_exhausted: 'Evaluation budget spent',
   // `PrincipalOperationRefusedError`'s reasons (`principalRefusalCode`); `last_owner` and
   // `self_disable` are platform-plane codes too.
   ...PRINCIPAL_REFUSAL_TITLES,
@@ -282,6 +283,7 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   depth_exceeded: '派生链太深',
   concurrency_exceeded: '同时运行的任务太多',
   daily_cost_exceeded: '今日成本已达上限',
+  evaluation_budget_exhausted: '本月评测预算已用完',
   ...PRINCIPAL_REFUSAL_TITLES_ZH,
   unknown: '出错了',
 };
@@ -647,6 +649,11 @@ export const ERROR_NEXT_STEPS: Readonly<
   daily_cost_exceeded: {
     zh: '工作区今天的花费已经达到「每工作区日成本」，这次没有创建任务。等预算按天重置后再试；急需的话，请工作区所有者在「模型与配额」调高它。',
     en: 'The workspace’s spending today has reached its daily cost budget, so no task was created. Retry once the budget resets for the next day; if it cannot wait, ask a workspace owner to raise it under Models.',
+  },
+  // S10 E3-2a: this UTC month's evaluation spending reached `evaluation.monthly_cost_budget_usd`.
+  evaluation_budget_exhausted: {
+    zh: '这个月的评测花费已经达到「评测月度预算」，什么也没有启动。等下个月（UTC）预算重置后再试；急需的话，请工作区所有者在「模型与配额」调高它。',
+    en: 'Evaluation spending this month has reached the monthly evaluation budget, so nothing was started. Retry once it resets next month (UTC); if it cannot wait, ask a workspace owner to raise it under Models.',
   },
   ...PRINCIPAL_REFUSAL_NEXT_STEPS,
 };

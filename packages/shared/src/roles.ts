@@ -91,6 +91,10 @@ export const AUDITOR_READ_CAPABILITIES: ReadonlySet<string> = new Set<Capability
   'list_eval_suites',
   'get_eval_suite',
   'get_eval_case',
+  // S10 E3-2a: and so are its runs and the evaluation budget
+  'get_eval_run',
+  'list_eval_runs',
+  'get_eval_budget',
   // the workspace and the auditor itself
   'get_workspace',
   'list_models',

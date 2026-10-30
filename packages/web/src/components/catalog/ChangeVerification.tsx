@@ -16,6 +16,7 @@ import { isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, shortId } from '../../lib/format.js';
 import { HttpError } from '../../lib/http-client.js';
 import { type Translate, useT } from '../../lib/i18n.js';
+import { principalShownName } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
 import { EnableGateConfirm } from '../connect/EnableGateConfirm.js';
 import { Button } from '../kit/button.js';
@@ -220,8 +221,8 @@ export function PackRequirementList({
   );
 }
 
-function principalName(ref: ChangeVerificationWire['verifiedBy']): string {
-  return ref.displayName ?? shortId(ref.id);
+function principalName(ref: ChangeVerificationWire['verifiedBy'], t: Translate): string {
+  return principalShownName(ref.displayName, t) ?? shortId(ref.id);
 }
 
 /** One system as the run found it: its state and, when connected, each gate's health. One the
@@ -278,7 +279,7 @@ function VerificationResult({
   readonly itemSubject: (ordinal: number) => string;
 }) {
   const t = useT();
-  const who = principalName(verification.verifiedBy);
+  const who = principalName(verification.verifiedBy, t);
   const notInEffect = verification.items.filter((item) => item.state !== 'in_effect');
   return (
     <div className="stack-s" data-testid="catalog-change-verification-result">

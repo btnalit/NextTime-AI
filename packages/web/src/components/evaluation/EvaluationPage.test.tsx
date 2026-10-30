@@ -1,5 +1,10 @@
 // @vitest-environment jsdom
-import type { EvalFixtureGateWire, EvalSuiteSummaryWire, EvalSuiteWire } from '@nexttime/shared';
+import type {
+  EvalBudgetWire,
+  EvalFixtureGateWire,
+  EvalSuiteSummaryWire,
+  EvalSuiteWire,
+} from '@nexttime/shared';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
@@ -109,6 +114,15 @@ function suite(extra: Partial<EvalSuiteWire> = {}): EvalSuiteWire {
   };
 }
 
+const BUDGET: EvalBudgetWire = {
+  monthlyBudgetUsd: 10,
+  spentUsd: 2.5,
+  periodStart: '2026-10-01T00:00:00.000Z',
+  periodEnd: '2026-11-01T00:00:00.000Z',
+  trialCostUsd: 0.4,
+  unpricedTrials: 0,
+};
+
 function summaryOf(full: EvalSuiteWire): EvalSuiteSummaryWire {
   const { canary: _c, fixtureGates: _g, history: _h, ...rest } = full;
   return rest;
@@ -119,6 +133,8 @@ function baseHandlers(role = 'builder', current: () => EvalSuiteWire = () => sui
     get_workspace: workspaceAs(role),
     list_eval_suites: () => ({ items: [summaryOf(current())] }),
     get_eval_suite: () => current(),
+    get_eval_budget: () => BUDGET,
+    list_eval_runs: () => ({ items: [] }),
     list_worker_definitions: () => DEFINITIONS,
     list_principals: () => ({
       items: [{ id: 'p-me', displayName: 'alice', kind: 'human', role }],
@@ -649,5 +665,72 @@ describe('EvaluationPage (S10 E3-1a)', () => {
     expect((screen.getByTestId('eval-suite-repin-trigger') as HTMLButtonElement).disabled).toBe(
       true,
     );
+  });
+});
+
+describe('EvaluationPage — the month’s evaluation budget (S10 E3-2a)', () => {
+  it('shows what is spent and left, what a trial costs and when the month resets', async () => {
+    const http = scriptedHttp({
+      ...baseHandlers(),
+      get_eval_budget: () => ({ ...BUDGET, unpricedTrials: 2 }),
+    });
+    renderPage(http);
+    const card = await screen.findByTestId('eval-budget');
+    await waitFor(() =>
+      expect(within(card).getByTestId('eval-budget-line').textContent).toBe(
+        '本月已用 $2.50 / $10.00，剩余 $7.50',
+      ),
+    );
+    expect(within(card).getByTestId('eval-budget-estimate').textContent).toMatch(
+      /一次试跑约 \$0\.40/,
+    );
+    expect(within(card).getByTestId('eval-budget-estimate').textContent).toMatch(/UTC 自然月/);
+    expect(within(card).getByTestId('eval-budget-unpriced').textContent).toMatch(/2 次试跑/);
+    expect(within(card).queryByTestId('eval-budget-exhausted')).toBeNull();
+    // Only the owner sets it.
+    expect(within(card).queryByTestId('eval-budget-raise')).toBeNull();
+  });
+
+  it('once it is spent, says nothing can start, and points the owner to where it is raised', async () => {
+    const http = scriptedHttp({
+      ...baseHandlers('owner'),
+      get_eval_budget: () => ({ ...BUDGET, spentUsd: 10.2, trialCostUsd: null }),
+    });
+    renderPage(http);
+    const card = await screen.findByTestId('eval-budget');
+    const exhausted = await within(card).findByTestId('eval-budget-exhausted');
+    expect(exhausted.textContent).toMatch(/已经用完/);
+    expect(within(card).getByTestId('eval-budget-line').textContent).toMatch(/剩余 \$0\.00/);
+    expect(within(card).getByTestId('eval-budget-estimate').textContent).toMatch(/估不出/);
+    await waitFor(() => expect(within(exhausted).getByTestId('eval-budget-raise')).toBeTruthy());
+  });
+
+  it('a budget of $0 reads as evaluation turned off, not a month used up (#822 UX P3-3)', async () => {
+    const http = scriptedHttp({
+      ...baseHandlers('owner'),
+      get_eval_budget: () => ({ ...BUDGET, monthlyBudgetUsd: 0, spentUsd: 0 }),
+    });
+    renderPage(http);
+    const card = await screen.findByTestId('eval-budget');
+    const exhausted = await within(card).findByTestId('eval-budget-exhausted');
+    expect(exhausted.textContent).toMatch(/本月评测预算是 \$0，不能试跑/);
+    expect(exhausted.textContent).not.toContain('用完');
+  });
+
+  it('a budget it cannot read is an error with a retry, the page still usable', async () => {
+    let fail = true;
+    const http = scriptedHttp({
+      ...baseHandlers(),
+      get_eval_budget: () => {
+        if (fail) throw kernelError('internal', 'boom');
+        return BUDGET;
+      },
+    });
+    renderPage(http);
+    await screen.findByTestId('eval-budget-error');
+    expect(await screen.findByTestId('eval-suite-row')).toBeTruthy();
+    fail = false;
+    fireEvent.click(within(screen.getByTestId('eval-budget-error')).getByRole('button'));
+    await screen.findByTestId('eval-budget-line');
   });
 });

@@ -894,6 +894,35 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '带原因把一条用例移出用例集；之前的用例集版本仍保留它。',
     enHint: 'Takes a case out of the suite with a reason; earlier suite versions still hold it.',
   },
+  // S10 E3-2a: evaluation runs.
+  start_eval_case_trial: {
+    zh: '试跑用例',
+    en: 'Try evaluation case',
+    zhHint:
+      '用钉住的 Worker 版本把一条用例跑一次：调用夹具门由用例的夹具规则作答，不调用真实系统，不能出网；跑完用断言判分，花费计入本月评测预算。',
+    enHint:
+      'Runs one case once with the pinned Worker version: fixture gate calls are answered by the case’s fixture rules, no real system is called and there is no network access; the assertions then judge it, and its cost counts against this month’s evaluation budget.',
+  },
+  get_eval_run: {
+    zh: '查看评测运行',
+    en: 'Read evaluation run',
+    zhHint: '查看一次评测运行：每次试跑的判分、每条断言、每次夹具调用、Worker 的汇报和花费。',
+    enHint:
+      'Reads one evaluation run: each trial’s verdict, every assertion, every fixture call, the Worker’s report and the cost.',
+  },
+  list_eval_runs: {
+    zh: '列出评测运行',
+    en: 'List evaluation runs',
+    zhHint: '列出用例集（或其中一条用例）最近的评测运行，每次的通过、未通过、出错数和花费。',
+    enHint:
+      'Lists a suite’s (or one case’s) latest evaluation runs, each with its passed, failed and errored counts and cost.',
+  },
+  get_eval_budget: {
+    zh: '查看评测预算',
+    en: 'Read evaluation budget',
+    zhHint: '本月评测预算：已用、剩余和一次试跑的平均花费。',
+    enHint: 'This month’s evaluation budget: spent, left, and what one trial costs on average.',
+  },
 
   // -----------------------------------------------------------------------------------------
   // Capabilities — Worker definitions and drafts
@@ -1898,6 +1927,21 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     en: 'Plan revision rejected',
     zhHint: '提出的计划被驳回。',
     enHint: 'A proposed plan was rejected.',
+  },
+  // S10 E3-2a (kernel application/eval-session, application/eval): an evaluation trial's Worker
+  // calling a fixture gate, and the trial ending.
+  'evaluation.fixture_call': {
+    zh: '评测夹具调用',
+    en: 'Evaluation fixture call',
+    zhHint: '评测试跑的 Worker 调用了夹具门，由用例的夹具规则作答，没有调用真实系统。',
+    enHint:
+      'An evaluation trial’s Worker called a fixture gate; the case’s fixture rules answered it and no real system was called.',
+  },
+  'evaluation.trial_end': {
+    zh: '评测试跑结束',
+    en: 'Evaluation trial ended',
+    zhHint: '一次评测试跑结束：按断言判了分，或没有结果（出错）。',
+    enHint: 'An evaluation trial ended: judged by its assertions, or errored without a result.',
   },
   // S10 E3-1c (kernel application/eval-seal): evaluation content stopped on its way to an agent.
   'evaluation.content_withheld': {

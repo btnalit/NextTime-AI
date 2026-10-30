@@ -108,6 +108,14 @@ async function snapshotFor(client: PoolClient, workspaceId: string): Promise<Sea
   return snapshot;
 }
 
+export interface SealOptions {
+  /** S10 E3-2a: text whose windows pass — what an evaluation Task's Worker is meant to read even
+   *  when its case is held out: its case's input, and (on its calls) its case's fixture answers
+   *  (`application/eval-session`'s `evaluationSealAllowance`). Only that case's: another case's
+   *  text, any assertion or fixture condition, and every canary are still stopped. */
+  readonly allow?: unknown;
+}
+
 /**
  * Whether `value` carries evaluation content of `workspaceId`'s suites. `client` is any
  * transaction scoped to that workspace (the caller's own). Reads nothing at all when `value` has
@@ -117,14 +125,26 @@ export async function sealWithholds(
   client: PoolClient,
   workspaceId: string,
   value: unknown,
+  options: SealOptions = {},
 ): Promise<boolean> {
   const texts = candidates(value);
   if (texts.length === 0) return false;
   const snapshot = await snapshotFor(client, workspaceId);
   if (snapshot === null) return false;
+  let allowed: SealSpanIndex | null = null;
+  if (options.allow !== undefined) {
+    allowed = new SealSpanIndex();
+    for (const text of sealStrings(options.allow)) allowed.add(text);
+  }
   for (const text of texts) {
     if (canariesIn(text).some((canary) => snapshot.canaries.has(canary))) return true;
-    if (snapshot.spans.holdsWindowOf(text)) return true;
+    if (
+      allowed === null
+        ? snapshot.spans.holdsWindowOf(text)
+        : snapshot.spans.holdsWindowOutside(text, allowed)
+    ) {
+      return true;
+    }
   }
   return false;
 }

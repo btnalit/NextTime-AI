@@ -142,6 +142,31 @@ describe('kit/RefChip', () => {
     expect(screen.getByRole('button', { name: /^复制智能体 id$/ })).toBeTruthy();
   });
 
+  it('an internal service Principal reads by what it is, given or self-resolved, never by its __…__ name (#822 UX P2-1)', async () => {
+    const http = scriptedCaller((ids) =>
+      ids.map((id) => ({
+        id,
+        kind: 'principal',
+        name: '__evaluation_service__',
+        typeName: 'service',
+      })),
+    );
+    render(
+      <>
+        <RefChip kind="principal" id="p-given" name="__evaluation_service__" testId="given" />
+        <RefChip kind="principal" id="p-resolved" http={http} testId="resolved" />
+        <RefChip kind="object" id="o-1" name="__evaluation_service__" testId="object" />
+      </>,
+    );
+    expect(screen.getByTestId('given').textContent).toContain('评测服务');
+    expect(screen.getByTestId('given').textContent).not.toContain('__evaluation_service__');
+    expect(screen.getByTestId('given').getAttribute('title')).not.toContain('__');
+    await waitFor(() => expect(screen.getByTestId('resolved').textContent).toContain('评测服务'));
+    expect(screen.getByTestId('resolved').textContent).toMatch(/^服务评测服务/);
+    // Only a Principal's name is read this way; any other ref keeps its own name.
+    expect(screen.getByTestId('object').textContent).toContain('__evaluation_service__');
+  });
+
   it('links the name to href when both a name and href are given', () => {
     render(
       <RefChip kind="gatekeeper" id="g-1" name="Gate" href="#/govern/systems" testId="chip" />,

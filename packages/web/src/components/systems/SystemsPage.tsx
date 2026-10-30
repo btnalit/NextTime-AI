@@ -21,7 +21,7 @@ import { describeError, isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
 import type { GrantRow, PrincipalRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
-import { transportKindLabel } from '../../lib/labels.js';
+import { principalShownName, transportKindLabel } from '../../lib/labels.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { labelText, statusChipStyle, statusValues } from '../../lib/status-tone.js';
 import { AvailableGateInstancesSection } from '../AvailableGateInstancesSection.js';
@@ -270,8 +270,13 @@ export function SystemsPage({
 
   const principalNames = useMemo(() => {
     if (principalsList.state.status !== 'ready') return EMPTY_NAMES;
-    return new Map(principalsList.state.data.items.map((row) => [row.id, row.displayName]));
-  }, [principalsList.state]);
+    return new Map(
+      principalsList.state.data.items.map((row) => [
+        row.id,
+        principalShownName(row.displayName, t) ?? row.displayName,
+      ]),
+    );
+  }, [principalsList.state, t]);
   // R-39: the grantee's role, for the card's "also an approver" disclosure.
   const principalRoles = useMemo(() => {
     if (principalsList.state.status !== 'ready') return new Map<string, Role>();

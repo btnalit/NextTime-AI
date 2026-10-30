@@ -137,12 +137,37 @@ export function TaskDetail({
         <RefChip
           kind="principal"
           id={task.onBehalfOf}
-          name={nameOf(principalNames, task.onBehalfOf)}
+          name={
+            // S10 E3-2a: an evaluation Task acts for the workspace's evaluation service principal,
+            // whose `__…__` name is internal.
+            task.purpose === 'evaluation'
+              ? t('评测服务', 'Evaluation service')
+              : nameOf(principalNames, task.onBehalfOf)
+          }
           size="s"
           testId="task-on-behalf-of"
         />
       ),
     },
+    ...(task.purpose === 'evaluation'
+      ? [
+          {
+            key: 'purpose',
+            label: t('用途', 'Purpose'),
+            value: (
+              <span className="stack-s" data-testid="task-purpose">
+                <span>{t('评测试跑', 'Evaluation trial')}</span>
+                <span className="text-3 text-small">
+                  {t(
+                    '这个任务是一次评测试跑：Worker 只能读自己的任务、调用用例集的夹具门（由用例的夹具规则作答，不调用真实系统）和汇报结果，不能出网；结果和判分在「治理 → 评测」的用例里查看，不进入知识图谱，也不计入技能的使用统计。',
+                    'This task is an evaluation trial: its Worker can only read its own task, call the suite’s fixture gates (answered by the case’s fixture rules, never a real system) and report, with no network access. Its result and verdict are on the case under Govern → Evaluation; nothing from it enters the knowledge graph or a Skill’s usage statistics.',
+                  )}
+                </span>
+              </span>
+            ),
+          },
+        ]
+      : []),
     {
       key: 'createdAt',
       label: t('创建', 'Created'),

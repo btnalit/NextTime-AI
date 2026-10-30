@@ -26,10 +26,12 @@ import { EvaluationContentWithheldError } from '../../application/eval-seal/inde
 // S10 E3-1a: an evaluation suite's refusals, imported directly like the domain errors around.
 import {
   EvalFixtureGateInUseError,
+  EvalRunNotFoundError,
   EvalSuiteInputError,
   EvalSuiteNameTakenError,
   EvalSuiteNotFoundError,
   EvalSuiteStateError,
+  EvaluationBudgetExhaustedError,
 } from '../../application/eval/index.js';
 // NoActiveTurnError/TurnNotFoundError: see capability-route.ts's own comment on this same import
 // — exported by handlers.ts but not re-exported by gateway/index.ts's curated surface; that one-
@@ -636,8 +638,11 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   // S10 E3-1a — same mapping as interfaces/http/capability-route.ts.
-  if (err instanceof EvalSuiteNotFoundError) {
+  if (err instanceof EvalSuiteNotFoundError || err instanceof EvalRunNotFoundError) {
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
+  }
+  if (err instanceof EvaluationBudgetExhaustedError) {
+    return { code: WS_ERROR_CODES.QUOTA_EXCEEDED, message: err.message };
   }
   if (err instanceof EvalSuiteInputError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };

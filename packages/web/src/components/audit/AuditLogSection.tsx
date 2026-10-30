@@ -26,7 +26,7 @@ import {
 } from '../../lib/format.js';
 import type { PrincipalRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
-import { auditResourceTypeLabel, roleLabel } from '../../lib/labels.js';
+import { auditResourceTypeLabel, principalShownName, roleLabel } from '../../lib/labels.js';
 import { sameNameIds, withSameNameId } from '../../lib/same-name.js';
 import { nameOf } from '../approvals/useDirectoryNames.js';
 import { Button } from '../ui/Button.js';
@@ -151,11 +151,8 @@ export function AuditLogSection({
   }
 
   const actorSelect = !principalsUnavailable;
-  const actorSame = sameNameIds(
-    principals,
-    (p) => p.id,
-    (p) => p.displayName,
-  );
+  const actorName = (p: PrincipalRow) => principalShownName(p.displayName, t) ?? p.displayName;
+  const actorSame = sameNameIds(principals, (p) => p.id, actorName);
 
   return (
     <section className="section" aria-labelledby="audit-query-title" data-testid="audit-log">
@@ -192,7 +189,7 @@ export function AuditLogSection({
               <option value="">{t('任意', 'Any')}</option>
               {(principals ?? []).map((principal) => (
                 <option key={principal.id} value={principal.id}>
-                  {withSameNameId(principal.displayName, principal.id, actorSame)} ·{' '}
+                  {withSameNameId(actorName(principal), principal.id, actorSame)} ·{' '}
                   {roleLabel(principal.role, t)}
                 </option>
               ))}

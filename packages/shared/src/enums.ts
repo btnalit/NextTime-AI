@@ -232,6 +232,17 @@ export const TASK_STATUS_VALUES = [
 export type TaskStatus = (typeof TASK_STATUS_VALUES)[number];
 export const TaskStatusSchema = asEnum(TASK_STATUS_VALUES);
 
+/**
+ * S10 E3-2a: what a Task is for, when it is not ordinary work (`tasks.purpose`, fixed when the Task
+ * is created). `evaluation`: a run of an evaluation case — the kernel starts it for the workspace's
+ * evaluation service principal, its Worker's Handle is closed (its own Task, its tool list, its
+ * gate calls, its report), every gate call is answered from the case's fixtures and its egress is
+ * denied. `null` on the wire: ordinary work.
+ */
+export const TASK_PURPOSE_VALUES = ['evaluation'] as const;
+export type TaskPurpose = (typeof TASK_PURPOSE_VALUES)[number];
+export const TaskPurposeSchema = asEnum(TASK_PURPOSE_VALUES);
+
 /** WorkerRun status (§5.5): `provisioning → running → suspended → terminated`. */
 export const WORKER_RUN_STATUS_VALUES = [
   'provisioning',

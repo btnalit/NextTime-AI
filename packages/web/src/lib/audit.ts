@@ -82,7 +82,8 @@ export function isEmptyEntry(entry: AuditEntry): boolean {
  * (`platform-modules-handlers.ts`) are written on workspace rows too; S11 P1: `change_item`
  * (`application/change-plan`); P1-B: `change_segment` (`roll_back_change_segment`); S11 GO6: `goal_run`,
  * `plan_revision`, `step_run` (`application/goal`, written since GO1); S10 E3-1a: `eval_suite`
- * (`eval-handlers.ts`); E3-1b: `eval_case` (`get_eval_case`).
+ * (`eval-handlers.ts`); E3-1b: `eval_case` (`get_eval_case`); E3-2a: `eval_run` (a run's start
+ * and reads, and each trial's end).
  */
 export const AUDIT_RESOURCE_TYPES = [
   'action_request',
@@ -97,6 +98,7 @@ export const AUDIT_RESOURCE_TYPES = [
   'connection_request',
   'decision',
   'eval_case',
+  'eval_run',
   'eval_suite',
   'fact',
   'gate_instance',
@@ -242,6 +244,10 @@ export const AUDIT_LIFECYCLE_ACTIONS = [
   'principal.container_handles_revoked',
   // S10 E3-1c: evaluation content stopped on its way to an agent (`application/eval-seal`).
   'evaluation.content_withheld',
+  // S10 E3-2a: an evaluation trial's fixture call (`application/eval-session`) and its end
+  // (`application/eval` runner).
+  'evaluation.fixture_call',
+  'evaluation.trial_end',
 ] as const;
 
 /**
@@ -354,10 +360,12 @@ function resourceRoute(
       return hrefs.chat(resourceId);
     case 'gatekeeper':
       return hrefs.gatekeeper(resourceId);
-    // S10 E3-1b: a suite, or one of its cases (the row's payload names the suite), opens the suite.
+    // S10 E3-1b: a suite, or one of its cases or runs (the row's payload names the suite), opens
+    // the suite.
     case 'eval_suite':
       return hrefs.evaluation('suites', resourceId);
-    case 'eval_case': {
+    case 'eval_case':
+    case 'eval_run': {
       const suiteId = payload ? stringField(payload, 'suiteId') : undefined;
       return suiteId ? hrefs.evaluation('suites', suiteId) : undefined;
     }
