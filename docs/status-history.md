@@ -164,6 +164,8 @@
 
 ### 页首更新记录（2026-10-04 精简时移出，原文照搬）
 
+上一版 2026-10-30（**控制台遗留 508、509 合入（#798，273eb52，只改 `packages/web`，未发版）**：「编辑描述」「取代该事实」两个对话框接入与抽屉相同的「放弃未保存的内容？」规则（新 `GuardedDialogContent`，`kit/sheet` 与 `kit/dialog` 共用）；抽屉与对话框关闭后焦点回到打开它的按钮，从「更多操作」菜单打开的界面回到菜单按钮。无新遗留。W1 下一步 reconcile 小 PR #799 审查中 → GO7；W1a 下一步 E3-1）。
+
 上一版 2026-10-30（**S11 GO11「任务级观察范围」合入（#796，W1a E3-0，7368b25，迁移 task/0010，未发版）**：Task 可在创建时定下不可改的观察范围（`tasks.observe_scope`），它的 Worker 读范围外的门一律 403 `excluded_by_policy`、门不被调用，工具列表与 `find_procedures` 也不列；子 Task 继承且只能更窄（数据库触发器兜底）；控制台任务详情「概览」显示「观察范围」。现在只有内核内部入口能定范围，评测 Task（E3-2）与 WorkerSpec（GO8）会用。无新遗留。W1a 下一步 E3-1（用例集）；W1 下一步 reconcile 小 PR → GO7）。
 
 上一版 2026-10-30（**控制台遗留 503–506 合入（#794，12d2eae，只改 `packages/web`，未发版）**：所有抽屉统一一条规则，表单改过时 Esc、点外面、× 与表单自己的「取消」先问「放弃未保存的内容？」（新 `kit/discard-guard`，接在 `kit/sheet`、`ui/Drawer`、`kit/master-detail` 窄屏面板上，去掉 #791 的 `holdOpen`），并修完 #791 UX 的三条 P3。新遗留 508、509；遗留 507 升为 P2（reconcile 小 PR 依赖的基线不变量）。W1 下一步 reconcile 小 PR（goal 0013）→ GO7；W1a 下一步 E3）。
