@@ -1981,6 +1981,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.49.0 之后的下一版 | goal `0012_absence_baselines`（#786，S11 B-c）：新表 `goal_absence_baselines` 与 guard、`goal_absence_seen_before`、两张验收表上的 I-AB1 触发器，不回填 | 可逆 | 上一发布 v0.49.0 没有目标代码，不读写新表；它的观察压缩遇到新外键 fail-closed 拒绝运行（`reversibility-deltas.json` 已声明），见 §3.70 |
 | v0.49.0 之后的下一版 | task `0010_task_observe_scope`（#796，S11 GO11）：`tasks.observe_scope` 可空列与 CHECK、不可改触发器、`worker_runs` 继承触发器，不回填 | 可逆 | 上一版按列名读写 `tasks`，创建的 Task 都不设范围，`worker_runs` 插入都能通过继承检查；只有本版本创建的带范围 Task 回退后不能再启动子 Worker（失败即关闭），见 §3.71 |
 | v0.49.0 之后的下一版 | governance `0029_reconcile_absence_seen_before`（#799，S11「门确认不存在」reconcile）：函数 `action_request_absence_seen_before` 与 `action_requests` 触发器，不改表、不回填 | 可逆 | 上一发布 v0.49.0 没有目标代码，不跑 reconcile；中间版本的旧执行器写 `effect_seen` 不带 `absentAnswersReview` 会被拒，试满后记 `unavailable` 交人核对，见 §3.72 |
+| v0.49.0 之后的下一版 | worker `0007_eval_suites`（#802，S10 E3-1a）：新表 `eval_suites`、`eval_suite_changes`、`eval_fixture_gates` 与守卫触发器，无 DELETE 授权，不回填 | 可逆 | 只新增表，上一版不读不写，在新结构上照常运行；`purge_workspace` 按 `workspace_id` 清掉这三张表（有集成测试） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

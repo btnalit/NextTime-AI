@@ -4579,7 +4579,12 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **E3 — Skill 评测 MVP**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（E3-1a 评测用例集外壳，#802，2026-10-30 合入，6a1790c；迁移 worker/0007 可逆）：协调线程拆分：1a 用例集外壳，1b 用例与 holdout 读路径约束，runs / trials 在 E3-2；E3-0 是 GO11 任务级观察范围（#796）。
+  - **模型**：用例集钉住已发布 worker 类 WorkerDefinition 版本（`repin` 只能换同一定义的另一个已发布版本），canary 只给人看（E3-2 / E3-3 用来查评测内容泄露）；夹具门冻结 `list_allowed_operations` 看到的样子（门名 + 按名字排序的已发布 Operation），工具名 `<门名>.<操作名>` 与生产一致，`liveState`（same / changed / unavailable）读时比较得出。放在 `worker` 模块因为引用 `worker_definitions`；不进图谱。
+  - **守卫**：版本每次恰好加 1、其余字段不变；每个版本提交时必须有变更记录（deferred 约束触发器）；变更记录只追加且写在当前版本；夹具门行不可改，只能在还没记下变更的版本上加入或退役（#493 审查补上）；三张表无 DELETE 授权；`purge_workspace` 关触发器后按 `workspace_id` 清理。
+  - **能力与授权**：7 个人工通道能力，dispatch `actsForPerson` → handler `personOf` → depcruise `kernel-eval-imported-only-by-eval-handlers` 三层；读能力并入 `AUDITOR_READ_CAPABILITIES`；名字、说明、原因按凭据与遮蔽标记拒绝写入，读出经 `shownFreeText`；写带 `suiteVersion`，冲突 409 `version_changed`，重名 409 `eval_suite_name_taken`。
+  - **控制台**：「治理 → 评测」（`#/govern/evaluation/suites[/<id>]`）：新建 Sheet（Worker 与版本下拉选）、换版本、添加 / 同步（预览新增 / 移除 / 变更）/ 移除夹具门（原因必填）、变更记录；操作名走 `actionKindTagText`、门名与 Worker 名走 `visibleText`；e2e 截图门新增 `evaluation` 面。
+  - **后续**：holdout 读路径约束与测试在 E3-1b；#493 对 #796 留下的两件（评测 Task 的读范围、带范围的 Worker 发起目标）记在 E3-2 的分叉里。
 - 2026-10-23 设计输入（victor 定分叉 2 = b，与自进化闭环审查 §2.3–§2.5、§7.1）：回归断言失败或判 `worse` 时，发布人要逐条确认失败项并写理由，记审计（同 10-09「已核对凭据」）；`inconclusive` 只显示、不加确认（避免确认疲劳）；按每月测试额度，MVP 主力是确定性回归棘轮 + 大效应机制筛，样本不够判 `inconclusive`，不显示成「在噪声内」；δ 与 k 改为在夹具上做 A/A 重跑校准（主机只有验收账号，遗留 230）。
 
 **GO16 — 沉淀提议：WorkerSpec 组合提议为 WorkerDefinition**（见 `global-roadmap-2026-10-16.md` §4）
