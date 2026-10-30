@@ -608,7 +608,7 @@ W5 之前的路线（W0–W4）不依赖这一层；管理员 Agent 在配置层
 
 **不做（留 W2 及以后）**：规划器自主修订、组合 WorkerSpec、产物文件交接、按目标资源的队列、任务级观察范围、`review` 类验收。
 
-**验收场景**（CI 集成测试 + fake-llm e2e 旅程 + 主机验收脚本，主机脚本命名随 runbook 惯例在实现时定）。维护者列的 6 个失败场景对应
+**验收场景**（CI 集成测试 + fake-llm e2e 旅程 + 主机验收脚本；主机脚本是 `scripts/lib/accept-s2-goals.sh`，由 `scripts/accept_s2.sh` 的 fake 路径调用，见 `docs/runbooks/host-accept-s2.md`）。维护者列的 6 个失败场景对应
 S1（用户不再发消息）、S2（服务重启）、S3（重复事件）、S4（响应丢失先核对）、S5（审批后继续）、S6（验证失败不宣布完成）；S7–S12 是审查补的。
 
 | # | 场景 | 断言 |
@@ -616,10 +616,10 @@ S1（用户不再发消息）、S2（服务重启）、S3（重复事件）、S4
 | S1 | 用户发起目标（A、B 并行，C 依赖 A、B）并确认后不再发消息 | 三步全部完成；期间没有产生新的 `TurnStarted`；对话里出现里程碑消息 |
 | S2 | 某步 Task 运行中、推进事务进行中分别杀掉内核；另跑一次重启 worker-supervisor | 重启后继续；每步每次尝试恰好一个 Task；没有步骤被跳过 |
 | S3 | 同一 `TaskUpdated` / `ActionRequestUpdated` 事件投递两次；同一 `propose_goal` / `confirm_goal` 以同一幂等键重发 | 不重复建 Task、不重复推进；不重复建 GoalRun、不重复确认 |
-| S4 | 夹具门执行成功但丢掉响应，且门的幂等重放也返回 `apply_outcome_unknown`（绕过 R-48 重放，否则走不到核对路径） | 步骤进入 `waiting(reconcile)`；核对观察看到效果后判成功；门侧该动作执行计数为 1。反向：核对观察看不到效果 → `paused(needs_decision)`，不自动重新执行，门侧计数仍为 1 |
+| S4 | 夹具门执行成功但丢掉响应，且门的幂等重放也返回 `apply_outcome_unknown`（绕过 R-48 重放，否则走不到核对路径） | 步骤进入 `waiting(reconcile)`；核对观察看到效果后判成功；门侧该动作执行计数为 1。反向：核对观察按重试上限重试后仍看不到效果 → `paused(awaiting_reconcile)`，等人记录核对结果（`reconcile_goal_action`），不自动重新执行，门侧计数仍为 1 |
 | S5 | 一步含需审批的执行动作，审批时间超过 Task 时长上限（测试里调短）；`await_decision` 为 true 与 false 各跑一次 | Worker 退出后步骤 `waiting(approval)`，目标不失败；批准并执行后，名下动作都到终态、步骤验收通过才判成功，下一步自动开始 |
 | S6 | 各步都报告成功，但验收观察为假 | 目标不进入 `completed(achieved)`；暂停并附证据；人选"按未达成结束"后为 `completed(not_achieved)` |
-| S7 | 运行中取消目标，此时有一条待审批动作（在门队列队头）、一条已批准还在门队列里排队的动作；另一次取消时，有一条动作处于 `executing` 且结果不明 | 不再开新 Task；运行中的被终止；两条动作都变 `withdrawn`，门侧执行计数为 0；同门里别的目标的后续动作随即被排水，不等周期 tick。另一次：目标停在 `cancelling`，截止后为 `cleanup_pending` 并列出那条 `executing` 动作；它按 R-48 收尾，结果入审计 |
+| S7 | 运行中取消目标，此时有一条待审批动作（在门队列队头）、一条已批准还在门队列里排队的动作；另一次取消时，有一条动作处于 `executing` 且结果不明 | 不再开新 Task；运行中的被终止；两条动作都变 `withdrawn`，门侧执行计数为 0；同门里别的目标的后续动作随即被排水，不等周期 tick。另一次：目标停在 `cancelling`，截止后为 `cleanup_pending` 并列出那条 `executing` 动作；它按 R-48 收尾，结果入审计。这一次只由 `advancer.integration.test.ts` 覆盖：取消截止时间默认 30 分钟、没有配置项，过期 `executing` 回收器会先把那条动作收尾，所以主机与 staging 上只能看到 `cancelling → cancelled` |
 | S8 | 人改计划移除一个运行中的步骤；另一次对该步骤选"让它跑完"，并在确认修订时放行一条已提交的动作 | 默认：其 Task 与子孙被终止、动作撤回；"让它跑完"：结果入库入审计但不推进，它和它的嵌套子 Task 的新 `request_action` 被拒绝；放行的那条照常走审批与执行，其余变 `withdrawn` |
 | S9 | 运行中把请求者降为无该门授权的角色 | 下一步不开始，目标 `paused(authority_lost)` |
 | S10 | 累计 token 超出目标预算 | 目标 `paused(budget_exhausted)`，不是失败 |

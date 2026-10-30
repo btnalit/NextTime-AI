@@ -118,9 +118,9 @@ if [ -z "${NEXTTIME_DATA:-}" ] || [ -z "${KERNEL_BIND_ADDR:-}" ]; then
 fi
 
 . "$(dirname "$0")/lib/accept-common.sh"
-# S11 GO7a: goal scenarios S1, S5, S6, S11 (goal_scenarios_step, after step 9), the cleanup of
-# every goal they start, and with --real keeping their test ledger out of the published manifest —
-# see that file's own header comment.
+# S11 GO7a: goal scenarios S1, S4–S7, S9–S11 (goal_scenarios_step, after step 9), the cleanup of
+# every goal they start and of the grants S9 gives bob, and with --real keeping their test ledger
+# out of the published manifest — see that file's own header comment.
 . "$(dirname "$0")/lib/accept-s2-goals.sh"
 require_driver
 
@@ -1388,11 +1388,13 @@ cleanup_step() {
   # the provider restore switches away from, the platform's check retrying a gate removed below.
   # Bounded either way, but still Worker containers, audit rows and a goal waiting on a decision
   # after the operator saw FAIL. So each is ended here, before the gates go: a proposed run
-  # rejected, a live one cancelled (goal_end_live). Logged, never failed — on the success path
-  # every run is settled and this does nothing.
+  # rejected, a live one cancelled (goal_end_live); and a gate S9 granted bob and did not get to
+  # revoke is revoked (goal_cleanup_grants). Logged, never failed — on the success path every run
+  # is settled, every grant revoked, and this does nothing.
   for live_goal in $GOAL_ID $GOALS_STARTED; do
     goal_end_live "$live_goal"
   done
+  goal_cleanup_grants
   resident_reclaim "$ALICE_PRINCIPAL_ID" >/dev/null 2>&1
   resident_reclaim "$BOB_PRINCIPAL_ID" >/dev/null 2>&1
   # `down` on a profile also stops every default-profile service (postgres/kernel/…), which broke
