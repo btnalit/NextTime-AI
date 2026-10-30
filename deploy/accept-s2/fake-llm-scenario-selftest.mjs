@@ -936,7 +936,8 @@ async function main() {
     //     past the end of the script (the clamp) is not held; a held request whose client went
     //     away drops off the list.
     {
-      const holds = async () => (await (await fetch(`http://127.0.0.1:${PORT}/accept-s2/holds`)).json()).holds;
+      const holdsBody = async () => (await fetch(`http://127.0.0.1:${PORT}/accept-s2/holds`)).json();
+      const holds = async () => (await holdsBody()).holds;
       const release = async (name) =>
         (await (await fetch(`http://127.0.0.1:${PORT}/accept-s2/holds/${name}/release`, { method: 'POST' })).json()).released;
       const settle = () => new Promise((resolve) => setTimeout(resolve, 300));
@@ -955,6 +956,8 @@ async function main() {
       const call = toolCallOf(json);
       check('held-turn-answered', call?.name === 'report_result' && call.args.summary.includes('h42'), JSON.stringify(json.choices[0]));
       check('held-turn-unlisted', (await holds()).length === 0, 'expected no hold left');
+      const heldCounts = (await holdsBody()).counts['s12-h42-a'];
+      check('held-turn-counts', heldCounts?.held === 1 && heldCounts.dropped === 0, JSON.stringify(heldCounts));
       const again = toolCallOf((await post([input, begin])).json);
       check('held-turn-once', again?.name === 'report_result', 'a released name must answer at once');
       check('held-turn-release-none', (await release('never-held')) === 0, 'releasing an unknown name releases nothing');
@@ -985,6 +988,24 @@ async function main() {
       await settle();
       const after = await holds();
       check('held-turn-client-gone', before.includes('s12-h44-a') && !after.includes('s12-h44-a'), JSON.stringify({ before, after }));
+      const goneCounts = (await holdsBody()).counts['s12-h44-a'];
+      check('held-turn-client-gone-counted', goneCounts?.held === 1 && goneCounts.dropped === 1, JSON.stringify(goneCounts));
+      // Asked again after its client went away (a Worker's SDK retrying a cut model call): held
+      // again under the same name, the count saying so.
+      let againAnswered = false;
+      const againPending = post([goneInput, begin]).then((reply) => {
+        againAnswered = true;
+        return reply;
+      });
+      await settle();
+      const reHeld = await holdsBody();
+      check(
+        'held-turn-asked-again',
+        !againAnswered && reHeld.holds.includes('s12-h44-a') && reHeld.counts['s12-h44-a'].held === 2 && reHeld.counts['s12-h44-a'].dropped === 1,
+        JSON.stringify({ againAnswered, reHeld }),
+      );
+      check('held-turn-asked-again-release', (await release('s12-h44-a')) === 1, 'expected the one request asked again released');
+      await againPending;
     }
 
     // 6o. S11 GO7a-3 goalThreeWritesScenario: three ledger writes under <k>-1..3, the third asked

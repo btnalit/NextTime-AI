@@ -19,6 +19,14 @@
 # lock only, bounded in time, ended by the scenario and again by cleanup_step), and S2 kills the
 # kernel (SIGKILL) twice and restarts worker-supervisor.
 #
+# S12 and S2 interrupt service — every connection to the kernel drops twice, every Task container
+# loses its supervisor for a moment, a goal's row stays locked for up to 90 s (S12) or 180 s (S2)
+# — so they run only with ACCEPT_DISRUPTIVE=1 in the environment. Without it they are not run and one
+# `NOTE goal-disruptive …` line says so (a NOTE, not a SKIP: the run still ends in "S2 OK").
+# scripts/staging-rehearsal.sh sets it, on its throwaway runner; on the production host it stays
+# off, and the maintainer sets it in the window only once victor has agreed on the spot
+# (docs/runbooks/host-accept-s2.md).
+#
 # Each scenario's polls are bounded and each failure carries the goal's own evidence (status,
 # pause reason, every step with its attempts and actions, every acceptance check with its attempts
 # and last error, every action with the reason its failure was audited with) in the FAIL line.
@@ -33,7 +41,8 @@
 # (GOAL_ACCEPTANCE_CHECK_MAX_ATTEMPTS / _MAX_DURATION_MS) and an unmet reconcile check
 # (GOAL_RECONCILE_CHECK_MAX_ATTEMPTS / _MAX_DURATION_MS) with backoff, by default 5 attempts within
 # about 7.5 minutes, before it pauses the run — while S1, S11, S5, S4, S7, S9, S10, S12 and S8 run
-# one after the other; S6 and the reverse S4 are finished next, and S2 runs last, alone: the
+# one after the other (S12 only with ACCEPT_DISRUPTIVE=1); S6 and the reverse S4 are finished
+# next, and S2 (also only with ACCEPT_DISRUPTIVE=1) runs last, alone: the
 # kernel's restarts would drop a background goal's checks and every connection to the kernel. No
 # two scenarios have a Worker running at the same time, and no two have a write at the http gate at
 # the same time (S7 reads the gate's queue).
@@ -56,6 +65,9 @@
 #     goal_s12_lost_wake); what S12 shows is the reconcile scan bringing the run back.
 
 GOALS_STARTED=""
+
+# 1 runs S12 and S2 (header); anything else leaves them out with a NOTE line.
+ACCEPT_DISRUPTIVE="${ACCEPT_DISRUPTIVE:-0}"
 
 GOAL_BUDGET='{"maxTokens":200000,"maxSteps":6,"maxRevisions":1,"maxWallClockSeconds":1800}'
 
@@ -697,6 +709,13 @@ fake_llm_holds() {
   compose_accept --profile test exec -T fake-llm node -e "fetch('http://127.0.0.1:8090/accept-s2/holds').then((r) => r.json()).then((d) => console.log(d.holds.join(',')))" </dev/null 2>/dev/null
 }
 
+# fake_llm_hold_counts <name>: `held=<n> dropped=<n>` — how many requests fake-llm held under <name>
+# and how many of those lost their client while held (a model call cut and asked again holds the
+# name twice, one dropped); `unknown` when fake-llm did not answer.
+fake_llm_hold_counts() {
+  compose_accept --profile test exec -T fake-llm node -e "fetch('http://127.0.0.1:8090/accept-s2/holds').then((r) => r.json()).then((d) => { const c = d.counts[process.argv[1]] || {held: 0, dropped: 0}; console.log('held=' + c.held + ' dropped=' + c.dropped); })" "$1" </dev/null 2>/dev/null || echo unknown
+}
+
 # fake_llm_release <name>: lets the turns held under <name> answer; prints how many there were.
 fake_llm_release() {
   compose_accept --profile test exec -T fake-llm node -e "fetch('http://127.0.0.1:8090/accept-s2/holds/' + process.argv[1] + '/release', {method: 'POST'}).then((r) => r.json()).then((d) => console.log(d.released))" "$1" </dev/null 2>/dev/null
@@ -720,8 +739,10 @@ fake_llm_wait_hold() {
 # every `select … for update` takes, which conflicts with DDL alone (EXCLUSIVE, ACCESS EXCLUSIVE),
 # never with a read or a write; foreign-key checks (`for key share`) pass it too. Bounded four ways:
 #   - taking it waits at most 5 s (`lock_timeout`), so it never queues behind an advance for long;
-#   - it holds for at most GOAL_LOCK_MAX_SECONDS (`pg_sleep`, with a `statement_timeout` above it)
-#     and then commits, even when this script was killed outright and no trap ran;
+#   - it holds for at most its bound — GOAL_LOCK_MAX_SECONDS (60 s) unless the scenario names one:
+#     S12 90 s, S2 180 s, each well past what the scenario waits with it held (`pg_sleep`, with a
+#     `statement_timeout` above it) — and then commits, even when this script was killed outright
+#     and no trap ran;
 #   - the scenario ends it as soon as it has seen what it needs (goal_row_lock_release:
 #     pg_terminate_backend on that application_name, which rolls the transaction back), and
 #     cleanup_step ends any still held before anything else, with --keep too;
@@ -731,17 +752,23 @@ fake_llm_wait_hold() {
 GOAL_LOCK_MAX_SECONDS=60
 GOAL_LOCKS=""
 
-# goal_row_lock_take <name> <goal_runs|step_runs> <rowId>: takes the lock in the background and
-# returns once it is held (its holder in pg_sleep); 1 when it was not held within 10 s.
+# goal_row_lock_take <name> <goal_runs|step_runs> <rowId> [<max seconds>]: takes the lock in the
+# background and returns once it is held (its holder in pg_sleep); 1 when it was not held within
+# 10 s. It ends on its own after <max seconds> (default GOAL_LOCK_MAX_SECONDS, at most 300).
 goal_row_lock_take() {
   case "$2" in
     goal_runs | step_runs) : ;;
     *) echo "goal_row_lock_take: table '$2' is not one this script may lock" >&2; return 1 ;;
   esac
+  grl_max=${4:-$GOAL_LOCK_MAX_SECONDS}
+  case "$grl_max" in
+    '' | *[!0-9]*) echo "goal_row_lock_take: bound '$grl_max' is not a number of seconds" >&2; return 1 ;;
+  esac
+  [ "$grl_max" -ge 1 ] && [ "$grl_max" -le 300 ] || { echo "goal_row_lock_take: bound ${grl_max}s is outside 1–300s" >&2; return 1; }
   grl_app="accept_s2_lock_$1"
   GOAL_LOCKS="$GOAL_LOCKS $1"
   docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 -tAc \
-    "set application_name = '$grl_app'; set client_connection_check_interval = '1s'; begin; set local lock_timeout = '5s'; set local statement_timeout = '$((GOAL_LOCK_MAX_SECONDS + 15))s'; select 1 from $2 where workspace_id = '$WORKSPACE_ID' and id = '$3' for no key update; select pg_sleep($GOAL_LOCK_MAX_SECONDS); commit;" \
+    "set application_name = '$grl_app'; set client_connection_check_interval = '1s'; begin; set local lock_timeout = '5s'; set local statement_timeout = '$((grl_max + 15))s'; select 1 from $2 where workspace_id = '$WORKSPACE_ID' and id = '$3' for no key update; select pg_sleep($grl_max); commit;" \
     </dev/null >/dev/null 2>&1 &
   grl_deadline=$(($(date +%s) + 10))
   while :; do
@@ -893,7 +920,8 @@ goal_s12_lost_wake() {
   fake_llm_wait_hold "$hold" 180 || goal_fail "s12-locked" "$S12_GOAL_ID" "a's Worker did not reach its held turn within 180s (fake-llm holds '$(fake_llm_holds)')"
   task=$(goal_step_task "$S12_GOAL_ID" a 1)
   [ "$(goal_task_status "$task")" = "running" ] || goal_fail "s12-locked" "$S12_GOAL_ID" "a's Task '$task' reads '$(goal_task_status "$task")' while its Worker is held, expected running"
-  goal_row_lock_take "$lock" goal_runs "$S12_GOAL_ID" || goal_fail "s12-locked" "$S12_GOAL_ID" "could not lock goal $S12_GOAL_ID's row within 10s (an advance holding it?)"
+  # 90 s: at most 10 s to take it and 45 s of the loop below pass with it held.
+  goal_row_lock_take "$lock" goal_runs "$S12_GOAL_ID" 90 || goal_fail "s12-locked" "$S12_GOAL_ID" "could not lock goal $S12_GOAL_ID's row within 10s (an advance holding it?)"
   pass "s12-locked" "goal $S12_GOAL_ID's row is locked (for no key update, its own transaction) while a's Worker is held mid model call, its Task $task running"
 
   released=$(fake_llm_release "$hold")
@@ -1148,17 +1176,25 @@ goal_s2_restarts() {
   task_a=$(goal_step_task "$S2_GOAL_ID" a 1)
   run_a=$(psql_ws "select id from worker_runs where workspace_id='$WORKSPACE_ID' and task_id='$task_a'")
   goal_kernel_kill_restart s2-kernel-killed-task
+  # The Worker has to come through the kill; its model call need not: one cut while the kernel was
+  # down is asked again by the Worker's own SDK and held again under the same name — fake-llm's
+  # counts tell the two apart, and the PASS line says which (first staging run: not held 8 s after
+  # the kill, held again a moment later).
+  fake_llm_wait_hold "$hold_a" 60 || goal_fail "s2-kernel-killed-task" "$S2_GOAL_ID" "fake-llm does not hold a's turn 60s after the kernel was back (${GOAL_RESTART_SECONDS}s after the kill; fake-llm's counts for it: $(fake_llm_hold_counts "$hold_a"); a's Task reads '$(goal_task_status "$task_a")')"
+  counts_a=$(fake_llm_hold_counts "$hold_a")
   after="$(goal_task_status "$task_a"),$(psql_ws "select status from worker_runs where workspace_id='$WORKSPACE_ID' and id='$run_a'"),$(goal_tasks "$S2_GOAL_ID")"
-  case ",$(fake_llm_holds)," in
-    *",$hold_a,"*) : ;;
-    *) goal_fail "s2-kernel-killed-task" "$S2_GOAL_ID" "fake-llm no longer holds a's turn ${GOAL_RESTART_SECONDS}s after the kill (it answers a held turn itself after 120s; a's Task reads '$(goal_task_status "$task_a")')" ;;
+  [ "$after" = "running,running,1" ] || goal_fail "s2-kernel-killed-task" "$S2_GOAL_ID" "with the kernel back, a's Task $task_a, its WorkerRun $run_a and the run's Task count read '$after', expected the same Task and WorkerRun still running and one Task (fake-llm's counts for a's turn: $counts_a)"
+  case "$counts_a" in
+    "held=1 dropped=0") call_a="its model call stayed held throughout" ;;
+    *) call_a="its model call was cut while the kernel was down and asked again ($counts_a)" ;;
   esac
-  [ "$after" = "running,running,1" ] || goal_fail "s2-kernel-killed-task" "$S2_GOAL_ID" "with the kernel back, a's Task $task_a, its WorkerRun $run_a and the run's Task count read '$after', expected the same Task and WorkerRun still running and one Task"
-  pass "s2-kernel-killed-task" "the kernel was killed (SIGKILL) while a's Worker was held mid model call and was healthy again in ${GOAL_RESTART_SECONDS}s: a's Task $task_a and its WorkerRun $run_a are the same, still running, the run has one Task"
+  pass "s2-kernel-killed-task" "the kernel was killed (SIGKILL) while a's Worker was held mid model call and was healthy again in ${GOAL_RESTART_SECONDS}s: a's Task $task_a and its WorkerRun $run_a are the same, still running, the run has one Task; $call_a"
 
   # (b) The advance a's end sets off stops on b's locked row; the kernel crashes inside it.
   b_row=$(psql_ws "select id from step_runs where workspace_id='$WORKSPACE_ID' and goal_run_id='$S2_GOAL_ID' and step_key='b'")
-  goal_row_lock_take "$lock" step_runs "$b_row" || goal_fail "s2-kernel-killed-advance" "$S2_GOAL_ID" "could not lock b's StepRun row $b_row within 10s"
+  # 180 s: up to 45 s below, the kernel's restart (up to 120 s) and the checks after it pass with it
+  # held — it must not end on its own while the kernel is down (review #488 on #817).
+  goal_row_lock_take "$lock" step_runs "$b_row" 180 || goal_fail "s2-kernel-killed-advance" "$S2_GOAL_ID" "could not lock b's StepRun row $b_row within 10s"
   released=$(fake_llm_release "$hold_a")
   [ "$released" = "1" ] || { goal_row_lock_release "$lock" >/dev/null; goal_fail "s2-kernel-killed-advance" "$S2_GOAL_ID" "releasing a's held turn released '$released' request(s), expected 1"; }
   # Both: a's Task completed and an advance waiting on b's row — the one its end set off (the run
@@ -1175,10 +1211,14 @@ goal_s2_restarts() {
     sleep 1
   done
   goal_kernel_kill_restart s2-kernel-killed-advance
+  # A session blocked on a row lock does not notice that its client is gone, so the dead kernel's
+  # advance still waits there (with the run's own row, which it locked first) until it gets the row.
   zombie=$(goal_row_lock_waiters "$lock" 'from step_runs')
+  held=$(goal_row_lock_held "$lock")
   b_before=$(psql_ws "select count(*) from tasks where workspace_id='$WORKSPACE_ID' and step_run_id='$b_row'")
   unlocked=$(date +%s)
   ended=$(goal_row_lock_release "$lock")
+  [ "$held|$zombie" = "1|1" ] || goal_fail "s2-kernel-killed-advance" "$S2_GOAL_ID" "with the kernel back, the lock on b's row read held '$held' with $zombie session(s) waiting on it — expected it still held and the dead advance's session still waiting there"
   [ "$b_before" = "0" ] || goal_fail "s2-kernel-killed-advance" "$S2_GOAL_ID" "b has $b_before Task(s) before the lock on its row ended, expected none (the advance that would start it was stopped on that row)"
   pass "s2-kernel-killed-advance" "the advance a's end set off stopped on b's locked row with its transaction open; the kernel was killed in it and healthy again in ${GOAL_RESTART_SECONDS}s; the dead advance still waited on the row ($zombie waiting) until the lock was ended ($ended); b had no Task"
 
@@ -1214,7 +1254,8 @@ goal_s2_restarts() {
   pass "s2-achieved" "goal $S2_GOAL_ID completed(achieved) through two kernel crashes and a worker-supervisor restart: a, b, c each succeeded on one attempt, each after the one before, one Task each"
 }
 
-# goal_scenarios_step: the scenarios, in the order the header explains.
+# goal_scenarios_step: the scenarios, in the order the header explains; S12 and S2 only with
+# ACCEPT_DISRUPTIVE=1.
 goal_scenarios_step() {
   goal_s6_start
   goal_s4_unseen_start
@@ -1225,12 +1266,16 @@ goal_scenarios_step() {
   goal_s7_cancel_drain
   goal_s9_authority_lost
   goal_s10_budget
-  goal_s12_lost_wake
+  [ "$ACCEPT_DISRUPTIVE" != 1 ] || goal_s12_lost_wake
   goal_s8_terminate
   goal_s8_let_finish
   goal_s6_finish
   goal_s4_unseen_finish
-  goal_s2_restarts
+  if [ "$ACCEPT_DISRUPTIVE" = 1 ]; then
+    goal_s2_restarts
+  else
+    echo "NOTE goal-disruptive S12 (row lock on a goal) and S2 (kernel killed twice, worker-supervisor restarted) not run: ACCEPT_DISRUPTIVE=${ACCEPT_DISRUPTIVE:-unset}, not 1 — on the production host only in the window, after victor agrees on the spot (docs/runbooks/host-accept-s2.md)"
+  fi
 }
 
 # --- --real: the test ledger stays out of a real model's tools (review #488 on #806) ------------

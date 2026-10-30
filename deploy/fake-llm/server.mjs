@@ -21,8 +21,10 @@
 //                                pi always streams, but this is also exercised directly by
 //                                packages/llm-proxy's own byte-for-byte SSE passthrough tests
 //                                (docs/development-tasks.md S1.7 acceptance).
-//   GET  /accept-s2/holds    -> {holds:[name...]}: the scripted turns held right now (S11 GO7a-3,
-//                                see "Held turns" below).
+//   GET  /accept-s2/holds    -> {holds:[name...], counts:{name:{held, dropped}}}: the scripted
+//                                turns held right now, and per name how many requests it held and
+//                                how many of those lost their client while held (S11 GO7a-3, see
+//                                "Held turns" below).
 //   POST /accept-s2/holds/<name>/release -> {released:<n>}: lets the turns held under <name> answer.
 //
 // Tool-call trigger (this task's own deliverable text: "when the prompt contains a tool-use
@@ -901,8 +903,10 @@ function matchScenarioStep(messages, tools) {
 // way: a turn is held at most HOLD_MAX_MS, so a script that died never leaves a Worker waiting on
 // this double for longer; a name held once — released or timed out — is never held again (a
 // retried attempt answers at once); a request whose client went away while held (a terminated
-// Worker) is dropped from the list and never answered. In memory only: a restarted fake-llm
-// forgets every hold, and the held requests' connections go with it.
+// Worker) is dropped from the list and never answered. Each name also keeps counts — how many
+// requests it held and how many of those were dropped that way — so the script can tell a turn
+// held throughout from one whose model call was cut and asked again (S2's kernel kill). In memory
+// only: a restarted fake-llm forgets every hold, and the held requests' connections go with it.
 // -------------------------------------------------------------------------------------------
 
 const HOLD_MAX_MS = 120_000;
@@ -910,6 +914,8 @@ const HOLD_MAX_MS = 120_000;
 const HELD = new Map();
 /** Names released or timed out: never held again. */
 const RELEASED = new Set();
+/** name -> {held, dropped}: requests held under it, and those whose client went away while held. */
+const HOLD_COUNTS = new Map();
 
 /** Resolves once `name` is released, HOLD_MAX_MS has passed, or `res`'s client went away. */
 function holdTurn(name, res) {
@@ -917,15 +923,22 @@ function holdTurn(name, res) {
   return new Promise((resolve) => {
     const waiting = HELD.get(name) ?? new Set();
     HELD.set(name, waiting);
+    const counts = HOLD_COUNTS.get(name) ?? { held: 0, dropped: 0 };
+    HOLD_COUNTS.set(name, counts);
+    counts.held += 1;
     const release = () => {
       clearTimeout(timer);
-      res.off('close', release);
+      res.off('close', dropped);
       waiting.delete(release);
       if (waiting.size === 0 && HELD.get(name) === waiting) HELD.delete(name);
       resolve();
     };
+    const dropped = () => {
+      counts.dropped += 1;
+      release();
+    };
     const timer = setTimeout(() => releaseHold(name), HOLD_MAX_MS);
-    res.on('close', release);
+    res.on('close', dropped);
     waiting.add(release);
   });
 }
@@ -1186,7 +1199,7 @@ const server = createServer((req, res) => {
     return;
   }
   if (req.method === 'GET' && url.pathname === '/accept-s2/holds') {
-    sendJson(res, 200, { holds: [...HELD.keys()].sort() });
+    sendJson(res, 200, { holds: [...HELD.keys()].sort(), counts: Object.fromEntries(HOLD_COUNTS) });
     return;
   }
   const releasing = /^\/accept-s2\/holds\/([A-Za-z0-9_.:-]+)\/release$/.exec(url.pathname);

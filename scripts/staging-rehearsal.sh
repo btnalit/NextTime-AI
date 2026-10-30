@@ -88,6 +88,11 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ "$disposable" -eq 1 ] || die "refusing to run without --disposable-host (this script takes over the host's Docker; see the header comment)"
+# The target's accept_s2 runs its service-interrupting goal scenarios (S12's row lock, S2's two
+# kernel kills and worker-supervisor restart) only with ACCEPT_DISRUPTIVE=1. This host is
+# disposable, so they run here; the production host leaves it off unless victor agrees in the window
+# (docs/runbooks/host-accept-s2.md). It reaches accept_s2 through the target's apply-release.sh.
+export ACCEPT_DISRUPTIVE="${ACCEPT_DISRUPTIVE:-1}"
 [ -n "$FROM" ] && [ -n "$TO" ] && [ -n "$WORK" ] || die "--from, --to and --work are required"
 [ "$(id -u)" -eq 0 ] || die "run as root (the host-init scripts chown the data root to the container uid)"
 [ -f docker-compose.yml ] && [ -f scripts/apply-release.sh ] || die "run from the repository root"
