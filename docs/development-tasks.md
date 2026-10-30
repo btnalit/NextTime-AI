@@ -4624,6 +4624,14 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **打分与预算**：`report_task_result` 只完成 Task，runner tick 再按断言打分并记 `evaluation.trial_end`；失败或取消判 `errored` 并写原因，评测 Task 从不重排；成本取 `llm_usage`。配额 `evaluation.monthly_cost_budget_usd` 默认 $10、owner 才能改、不能不限，按 UTC 月只计评测 Task，同时计入工作区日预算；超出回 429 `evaluation_budget_exhausted`。评测运行不计入 Skill / Procedure 用量统计。
   - **审查**：#488（P2、P3 进 release.md §3.75 回滚）、#493（held-out 用例的夹具应答被封条挡住、报告后的夹具调用仍被应答、守卫无测试，均在 PR 修）、UX（内部服务主体名、文案等 P2 / P3 在 PR 修；既有问题记遗留 525、526）。
   - **下一步**：E3-2b 草稿评测（#833），E3-2c 探针阈值（遗留 514）；真实模型核对并入最后一轮。
+- 实现说明（E3-2b 草稿评测，#833，2026-10-30 合入，2b4d285；迁移 worker/0010 可逆）：
+  - **漏斗**：每段是一个 `draft` EvalRun，含两臂，段开始时整段写入、试跑全为 `queued`；`dispatch.ts` 按评测主体的并发配额启动，最早的运行优先、每条用例两臂交替，段被截断时两臂试得一样多；runner tick 打分、结束段、判定或进下一段、再派发。判定规则见 `verdict.ts`（回归 / 机制 / 确认三段，`refuted` 为新判定，确认段 δ = 0.10、单侧 95% Newcombe 界，holdout 方向须一致）。
+  - **预算**：段开始前预估（试跑数 × 近期单次成本）对本月剩余（扣已花与未结束试跑的 `committedUsd`）检查，不够就不跑该段并判 `inconclusive`（`budget`），段内从不中途停；两次同时开始的评测不会算同一笔钱。
+  - **没有结果的试跑**：超时、无报告、用尽 token 算该臂未通过；起不来、丢失、被终止、崩溃算没有结果，判定须两种走向都成立，否则 `errored_trials`；任一臂超过 ¼ 没有结果也判 `inconclusive`；取消时还在排队的试跑计 `voided`（无 Task、无成本，`trialVoided`）。
+  - **钉住与检查**：两臂开始时钉住用例集版本、WorkerDefinition 版本、其他 Skill 与草稿内容快照；新 Skill 的 baseline 是不带它的 Worker。`draft-check.ts` 开始前检查，不过回 400 `draft_check_failed`，`details.problems` 只给 `{check, count, limit}`。
+  - **账本与可见性**：worker/0010 守卫评测只前进、只结束一次、每个草稿只有一个在跑；触发器拒绝丢弃、拒绝与过期评测中的草稿（409 `draft_evaluating`，过期清扫跳过）；无 DELETE 授权，`purge_workspace` 清新表。草稿的提议人、owner、builder 可见，草稿以被评测的内容发布后所有人可见，其余 404。审计 `evaluation.draft_stage`、`evaluation.draft_verdict`。
+  - **审查**：#488 通过（两条 P3 记遗留 534、535，回滚做法进 release.md §3.77）；#493 首审 CHANGES REQUESTED（预算超支、基础设施错误被判为 Skill 回退、P3 守卫），在 PR 修后复审通过；UX 有条件通过后复验通过（评测区不自动刷新、运行环境文案矛盾、「查看」打开位置三个 P2 与五个 P3 均在 PR 修，P3-2 带来每臂 `voided` 计数）。
+  - **下一步**：E3-2c 探针阈值（遗留 514）；真实模型核对（小用例集一次草稿评测，确认两臂加载的 Skill 集合正确、漏斗能出判定）并入最后一轮。
 - 2026-10-23 设计输入（victor 定分叉 2 = b，与自进化闭环审查 §2.3–§2.5、§7.1）：回归断言失败或判 `worse` 时，发布人要逐条确认失败项并写理由，记审计（同 10-09「已核对凭据」）；`inconclusive` 只显示、不加确认（避免确认疲劳）；按每月测试额度，MVP 主力是确定性回归棘轮 + 大效应机制筛，样本不够判 `inconclusive`，不显示成「在噪声内」；δ 与 k 改为在夹具上做 A/A 重跑校准（主机只有验收账号，遗留 230）。
 
 **GO16 — 沉淀提议：WorkerSpec 组合提议为 WorkerDefinition**（见 `global-roadmap-2026-10-16.md` §4）
