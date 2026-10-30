@@ -244,6 +244,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             observeExclusions: {
               policyAllowedGatekeepers: [],
               profileExcludedGatekeepers: [gatekeeperId],
+              taskScope: null,
             },
           },
           unique,

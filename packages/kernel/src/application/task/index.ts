@@ -19,6 +19,7 @@ export {
   type InvokeWorkerCallerCtx,
   type InvokeWorkerInput,
   type InvokeWorkerResult,
+  type InvokeWorkerTaskOptions,
   invokeWorker,
   invokeWorkerCreate,
   readTask,
@@ -51,6 +52,14 @@ export {
 } from './goal-step.js';
 
 export { lockTaskQuotas } from './quota-check.js';
+
+export {
+  narrowObserveScope,
+  normalizeObserveScope,
+  readHandleObserveExclusions,
+  readSessionTaskObserveScope,
+  readTaskObserveScope,
+} from './observe-scope.js';
 
 export {
   type RejectedOutput,

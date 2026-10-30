@@ -140,6 +140,10 @@ export const TaskWireSchema = z
     rejectedOutput: RejectedOutputWireSchema.nullable(),
     /** S11 GO5d-1: the earlier attempt of the step this one redoes, if it is a rework. */
     reworkOf: ReworkOfWireSchema.nullable(),
+    /** S11 GO11: the only Gatekeepers this Task's Workers may observe through, fixed when the Task
+     *  was created — `[]` = none at all. `null` = the Task sets no scope: its Workers observe what
+     *  the member's agent may. */
+    observeScope: z.array(z.string()).nullable(),
   })
   .strict();
 export type TaskWire = z.infer<typeof TaskWireSchema>;

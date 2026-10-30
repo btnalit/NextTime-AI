@@ -43,6 +43,9 @@ export interface TaskRow {
   readonly outputSchema: OutputSchema | null;
   readonly rejectedOutput: RejectedOutput | null;
   readonly reworkOf: ReworkOf | null;
+  /** S11 GO11 (migrations/task/0010, `observe-scope.ts`): the only Gatekeepers this Task's Workers
+   *  may observe through, sorted; `null` = the Task sets no scope. Written once, at creation. */
+  readonly observeScope: readonly string[] | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
   readonly completedAt: Date | null;
@@ -70,6 +73,7 @@ interface TaskDbRow {
   output_schema: unknown;
   rejected_output: unknown;
   rework_of: unknown;
+  observe_scope: string[] | null;
   created_at: Date;
   updated_at: Date;
   completed_at: Date | null;
@@ -101,6 +105,7 @@ export function mapTaskRow(row: TaskDbRow): TaskRow {
         : null,
     rejectedOutput: parseRejectedOutput(row.rejected_output),
     reworkOf: parseReworkOf(row.rework_of),
+    observeScope: row.observe_scope,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at,
@@ -112,8 +117,8 @@ export function mapTaskRow(row: TaskDbRow): TaskRow {
 export const TASK_ROW_COLUMNS = `workspace_id, id, status, on_behalf_of, created_by_activity_id,
   worker_definition_id, worker_definition_version, input, result, token_budget,
   duration_limit_sec, tokens_used, budget_warned_at, failure_reason, retry_count, step_attempt,
-  output_schema, rejected_output, rework_of, created_at, updated_at, completed_at, failed_at,
-  cancelled_at`;
+  output_schema, rejected_output, rework_of, observe_scope, created_at, updated_at, completed_at,
+  failed_at, cancelled_at`;
 
 export interface WorkerRunRow {
   readonly workspaceId: string;
