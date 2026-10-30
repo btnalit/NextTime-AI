@@ -118,8 +118,9 @@ if [ -z "${NEXTTIME_DATA:-}" ] || [ -z "${KERNEL_BIND_ADDR:-}" ]; then
 fi
 
 . "$(dirname "$0")/lib/accept-common.sh"
-# S11 GO7a: goal scenarios S1, S5, S6, S11 (goal_scenarios_step, after step 9) and the cleanup of
-# every goal they start — see that file's own header comment.
+# S11 GO7a: goal scenarios S1, S5, S6, S11 (goal_scenarios_step, after step 9), the cleanup of
+# every goal they start, and with --real keeping their test ledger out of the published manifest —
+# see that file's own header comment.
 . "$(dirname "$0")/lib/accept-s2-goals.sh"
 require_driver
 
@@ -473,10 +474,14 @@ connections_step() {
   [ "$pre_count" = "0" ] || fail "s213-find-operations-pre-publish" "find_operations('stock') returned $pre_count results before publish_manifest — draft manifest is visible (I16/I17 violation)"
   pass "s213-find-operations-pre-publish" "find_operations('stock') misses before publish_manifest, as required"
 
+  # S11 GO7a (review #488 on #806): with --real the fixture's test ledger, which only the fake
+  # path's goal scenarios use, is discarded before publishing so no real model is offered it.
+  [ "$REAL" -eq 0 ] || goal_ledger_discard_real
   out=$(publish_manifest_as_read "$ALICE_KEY" "$GATEKEEPER_ID_HTTP")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "connect-http-publish" "publish_manifest(http) HTTP $status: $(parse_kv "$out" BODY)"
   pass "connect-http-publish" "http manifest published"
+  [ "$REAL" -eq 0 ] || goal_ledger_withheld_check_real
 
   out=$(cap "$ALICE_KEY" find_operations "{\"need\":\"stock\"}" "d.result.items.length")
   status=$(parse_kv "$out" HTTP_STATUS)

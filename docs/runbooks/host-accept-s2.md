@@ -78,7 +78,9 @@ sh scripts/accept_s2.sh --keep
 
 fake 路径在第 9 步之后还跑目标场景 S1、S5、S6、S11（S11 GO7a，`scripts/lib/accept-s2-goals.sh`），
 比以前多 10 分钟上下：S6 的验收检查故意不成立，平台按重试上限（默认 5 次、约 7.5 分钟）重试完才暂停，
-其余三个场景在这段时间里依次跑完。`--real` 不跑这些场景。
+其余三个场景在这段时间里依次跑完。`--real` 不跑这些场景，并且在发布 http 门的清单之前把夹具测试账本的
+两个草稿（`ledger.get` / `ledger.add`）丢弃，发布后用 `real-ledger-withheld` 证明门上已发布的只有
+`stock.get`：真实模型的工具列表和加账本之前一样，`api_observe` 不会多一个 GET 可选。
 
 ## 3. 期望输出
 
@@ -243,6 +245,7 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
 | `s11-*` | S11 §7.2 S11：一步的执行动作被拒绝 → 步骤与目标进入需要决定，不自动重试同一动作 | alice 以人通道提一步目标（ops-runner 的 `goal_ledger` 剧本：经 http 门调 `ledger.add` 往夹具账本写一条，`await_decision: true`；`maxAttempts` 2，留一次尝试不用），确认；等这条写入 `pending_approval` 后 alice `reject`。`needs-decision`：目标 `paused(needs_decision)`，步骤 `failed / action_refused`、一次尝试、那条写入 `rejected`；`no-retry`：15s 后状态不变、仍一次尝试一个 Task，夹具账本在这个键下计数 0（门侧根本没执行）；`cancelled`：alice `cancel_goal` 收尾 |
 | `s5-*` | S11 §7.2 S5：一步含需审批的执行动作，审批晚于 Worker 退出 → 步骤 `waiting(approval)`，目标不失败；批准并执行后，步骤验收通过才判成功，下一步自动开始 | 两步：`write`（`goal_ledger`，步骤验收是平台对 `ledger.get` 的观察 `count` 等于 1）与 `after`（`goal_step`，依赖 `write`）。Worker 的写入等决定到内核的等待上限（25s）后拿到 `pending_approval`、报告、退出；`waiting-approval`：此时目标 `running`、`write` 是 `waiting(approval)` 且那条写入仍 `pending_approval`、`after` 仍 `pending` 未开始、账本计数 0；alice 批准；`achieved`：轮询至多 300s 到 `completed / achieved / verified_by_check`，`write` 一次尝试、写入 `executed`、步骤检查 `passed` 且有 Observation，`after` 的尝试建于 `write` 结束之后并成功，账本计数 1（门侧恰好执行一次） |
 | `s6-*` | S11 §7.2 S6：各步都报告成功，但验收观察为假 → 不进入 `completed(achieved)`；暂停并附证据；人选「按未达成结束」后为 `completed(not_achieved)` | 一步 `goal_step`，验收是 `stock.get` 的 `symbol` 等于一个它永远不会返回的值。`verifying`：最先启动，步骤成功后目标进入 `verifying`；平台按重试上限在后台重试这条检查，期间跑 S1、S11、S5；`not-achieved`：最后回来，轮询至多 960s（默认上限 15 分钟加余量）到 `paused(needs_decision)`、无结果，检查 `failed` 且有 Observation、至少重试过一次；`ended-not-achieved`：alice `end_goal(not_achieved)` 后为 `completed / not_achieved` |
+| `real-ledger-withheld`（只在 `--real`） | 审查 #488 对 #806：夹具账本只给 fake 路径的目标场景用，不进真实模型的工具列表 | `connect-http-publish` 之前，alice 用 `discard_operation_draft` 丢弃 http 门的 `ledger.get` / `ledger.add` 两个导入草稿（`publish_manifest` 必须点名每个草稿，所以先丢弃再发布）；发布后按 `list_allowed_operations` 读工具时用的同一条件（`status` 为 `published`）查这扇门，已发布的恰好只有 `stock.get`，`find_operations("ledger")` 也查不到账本 |
 | `cleanup` | — | 第 9 步与目标场景里没走到结束的目标先收尾（`proposed` 用 `reject_goal`，`running` / `paused` / `verifying` 用 `cancel_goal`，只记日志）；回收 alice/bob 入口容器；`docker compose --profile accept-s2 rm -sf` 六个 accept-s2 容器（不是 `down`，见 §6）；workspace 行留作审计留痕 |
 
 ## 5. 已知偏离
@@ -254,6 +257,9 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
   S8–S10 冒烟留给 GO7a 的下一个 PR。目标场景失败时 FAIL 行末尾带 `evidence:`，是那个目标的
   `get_goal` 摘要（状态、暂停原因、每步的尝试与动作、每条验收检查的尝试次数与最后错误）；脚本退出前
   `cleanup` 会把没结束的目标取消掉，要留着现场排障就加 `--keep`（目标不取消，夹具也不删）。
+  `s6-not-achieved` 的 960s 是按内核默认的验收重试上限算的（`GOAL_ACCEPTANCE_CHECK_MAX_ATTEMPTS` 5 次、
+  `GOAL_ACCEPTANCE_CHECK_MAX_DURATION_MS` 15 分钟）：它超时失败、证据里检查仍是 `pending` 且尝试次数还在涨时，
+  先看内核这两个环境变量是不是被调大了，那是配置与脚本不匹配，不是平台问题。
 
 - **核心缺口 1（已修复——`fix/entry-mode-tools` 已合入，entry 模式现在注册 S2 的工具与 `observe_operation`；
   以下为当时的根因记录）：`packages/platform-extension` 的 entry 模式当时从未注册 S2 新增的任何工具**——

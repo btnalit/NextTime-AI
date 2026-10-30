@@ -23,6 +23,10 @@
 # minutes) before it pauses the run — while S1, S11 and S5 run one after the other; S6 is finished
 # last. No two scenarios have a Worker running at the same time.
 #
+# With --real none of these scenarios runs, and the ledger is discarded before the http gate's
+# manifest is published (goal_ledger_discard_real / goal_ledger_withheld_check_real, called from
+# connections_step), so a real model's tool list holds stock.get alone, as before this file.
+#
 # Not covered here, and why (docs/runbooks/host-accept-s2.md, goal scenarios):
 #   - S5 with `await_decision: false`, and S11's expired approval: neither can be set up on a live
 #     stack without changing the kernel's own configuration; advancer.integration.test.ts covers
@@ -208,19 +212,21 @@ goal_s1_dag() {
   [ "$new_turns" = "0" ] || goal_fail "s1-no-new-turn" "$S1_GOAL_ID" "$new_turns Turn(s) started in the workspace between the confirmation and the goal's end, expected none"
   pass "s1-no-new-turn" "no Turn started anywhere in the workspace while goal $S1_GOAL_ID ran ($turns in its chat, the proposal's)"
 
+  # Both kinds of line come through the outbox, which retries a row that failed later while the
+  # rows after it go on (review #493 on #806): no order is promised, so both are compared as sorted
+  # lists — each milestone and each step exactly once — and polled until complete or 60s are up.
   lines=""
+  step_lines=""
   attempt=0
-  while [ "$attempt" -lt 30 ]; do
-    lines=$(psql_ws "select string_agg(content->>'change', ',' order by sequence) from chat_messages where workspace_id='$WORKSPACE_ID' and chat_id='$s1_chat_id' and role='system' and content->>'kind'='system.goal_update' and content->>'goalRunId'='$S1_GOAL_ID'")
-    case "$lines" in
-      *complete) break ;;
-    esac
+  while [ "$attempt" -lt 60 ]; do
+    lines=$(psql_ws "select coalesce(string_agg(content->>'change', ',' order by content->>'change'), '') from chat_messages where workspace_id='$WORKSPACE_ID' and chat_id='$s1_chat_id' and role='system' and content->>'kind'='system.goal_update' and content->>'goalRunId'='$S1_GOAL_ID'")
+    step_lines=$(psql_ws "select coalesce(string_agg(content->>'stepKey', ',' order by content->>'stepKey'), '') from chat_messages where workspace_id='$WORKSPACE_ID' and chat_id='$s1_chat_id' and content->>'kind'='system.task_update' and content->>'goalRunId'='$S1_GOAL_ID' and content->>'status'='completed'")
+    [ "$lines|$step_lines" = "complete,confirm,propose,verify|a,b,c" ] && break
     attempt=$((attempt + 1))
     sleep 1
   done
-  [ "$lines" = "propose,confirm,verify,complete" ] || goal_fail "s1-goal-milestones" "$S1_GOAL_ID" "goal $S1_GOAL_ID's milestones in chat $s1_chat_id read '$lines', expected propose,confirm,verify,complete"
-  step_lines=$(psql_ws "select coalesce(string_agg(content->>'stepKey', ',' order by content->>'stepKey'), '') from chat_messages where workspace_id='$WORKSPACE_ID' and chat_id='$s1_chat_id' and content->>'kind'='system.task_update' and content->>'goalRunId'='$S1_GOAL_ID' and content->>'status'='completed'")
-  [ "$step_lines" = "a,b,c" ] || goal_fail "s1-goal-milestones" "$S1_GOAL_ID" "chat $s1_chat_id has completed-Task lines for steps '$step_lines', expected a,b,c"
+  [ "$lines" = "complete,confirm,propose,verify" ] || goal_fail "s1-goal-milestones" "$S1_GOAL_ID" "goal $S1_GOAL_ID's milestones in chat $s1_chat_id read '$lines' (sorted) after 60s, expected complete,confirm,propose,verify, each once"
+  [ "$step_lines" = "a,b,c" ] || goal_fail "s1-goal-milestones" "$S1_GOAL_ID" "chat $s1_chat_id has completed-Task lines for steps '$step_lines' (sorted) after 60s, expected a,b,c, each once"
   pass "s1-goal-milestones" "chat $s1_chat_id shows the goal's milestones (proposed, confirmed, checking, completed) and a completed Task under each of a, b, c"
 }
 
@@ -318,6 +324,45 @@ goal_scenarios_step() {
   goal_s11_reject
   goal_s5_approval
   goal_s6_finish
+}
+
+# --- --real: the test ledger stays out of a real model's tools (review #488 on #806) ------------
+#
+# Only the fake path's scenarios above use the ledger. Published, it would sit in the entry agent's
+# tool list next to `stock.get` (as accept_s2_api_ledger_get, and ledger.add among the execute
+# tools) and give a real model asked what the test API's GET returns a second GET to pick — a paid
+# run lost to the fixture, not to the model. So with --real, connections_step discards the
+# ledger's import drafts before it publishes the http gate's manifest, then checks that the gate
+# publishes stock.get alone.
+
+# goal_ledger_discard_real: discards the http gate's ledger.get / ledger.add drafts as alice (the
+# owner); connections_step, --real only, before publish_manifest (which names every draft).
+goal_ledger_discard_real() {
+  for gld_name in ledger.get ledger.add; do
+    gld_out=$(cap "$ALICE_KEY" list_operations "{\"gatekeeperId\":\"$GATEKEEPER_ID_HTTP\"}" \
+      "(() => { const o = d.result.items.find((x) => x.name === '$gld_name' && x.status === 'draft' && x.draftDigest); return o ? o.version + ' ' + o.draftDigest : ''; })()")
+    [ "$(parse_kv "$gld_out" HTTP_STATUS)" = "200" ] || fail "real-ledger-withheld" "list_operations(http) HTTP $(parse_kv "$gld_out" HTTP_STATUS): $(parse_kv "$gld_out" BODY)"
+    gld_draft=$(parse_kv "$gld_out" EXTRACTED)
+    [ -n "$gld_draft" ] || fail "real-ledger-withheld" "the http gate has no $gld_name draft to discard (the fixture manifest and the OpenAPI import disagree?): $(parse_kv "$gld_out" BODY)"
+    gld_version=${gld_draft%% *}
+    gld_digest=${gld_draft#* }
+    gld_out=$(cap "$ALICE_KEY" discard_operation_draft \
+      "{\"gatekeeperId\":\"$GATEKEEPER_ID_HTTP\",\"name\":\"$gld_name\",\"version\":$gld_version,\"draftDigest\":\"$gld_digest\",\"reason\":\"accept_s2 --real: the test ledger is for the fake path's goal scenarios only\"}" "")
+    [ "$(parse_kv "$gld_out" HTTP_STATUS)" = "200" ] || fail "real-ledger-withheld" "discard_operation_draft($gld_name) HTTP $(parse_kv "$gld_out" HTTP_STATUS): $(parse_kv "$gld_out" BODY)"
+  done
+}
+
+# goal_ledger_withheld_check_real: after publish_manifest, --real only — the http gate's published
+# Operations are exactly stock.get, read with the predicate list_allowed_operations (and so every
+# agent's tool list) reads them by (listPublishedOperationsForGatekeepers: status 'published'), and
+# find_operations offers no ledger either.
+goal_ledger_withheld_check_real() {
+  glw_published=$(psql_ws "select coalesce(string_agg(identity_key->>'name', ',' order by identity_key->>'name'), '') from objects where workspace_id='$WORKSPACE_ID' and object_type='Operation' and identity_key->>'gatekeeperId'='$GATEKEEPER_ID_HTTP' and properties->>'status'='published'")
+  [ "$glw_published" = "stock.get" ] || fail "real-ledger-withheld" "the http gate's published Operations read '$glw_published', expected stock.get alone — with --real the test ledger must not reach the entry agent's tools"
+  glw_out=$(cap "$ALICE_KEY" find_operations "{\"need\":\"ledger\"}" "d.result.items.filter((o) => String((o.properties || {}).name).startsWith('ledger.')).length")
+  [ "$(parse_kv "$glw_out" HTTP_STATUS)" = "200" ] || fail "real-ledger-withheld" "find_operations('ledger') HTTP $(parse_kv "$glw_out" HTTP_STATUS): $(parse_kv "$glw_out" BODY)"
+  [ "$(parse_kv "$glw_out" EXTRACTED)" = "0" ] || fail "real-ledger-withheld" "find_operations('ledger') still offers $(parse_kv "$glw_out" EXTRACTED) ledger Operation(s) after they were discarded"
+  pass "real-ledger-withheld" "with --real the http gate publishes stock.get alone: ledger.get and ledger.add were discarded as drafts, so neither an agent's tool list nor find_operations offers them"
 }
 
 # goal_end_live <goalRunId>: for cleanup_step — rejects a proposed run, cancels a live one, leaves
