@@ -10,5 +10,37 @@
     "await_decision": false,
     "reads": [],
     "writes": []
+  },
+  {
+    "name": "ledger.get",
+    "binding": { "kind": "http", "method": "GET", "path": "/ledger/{key}" },
+    "params_schema": {
+      "type": "object",
+      "properties": { "key": { "type": "string", "x-in": "path" } },
+      "required": ["key"]
+    },
+    "mode": "observe",
+    "blast_radius": "low",
+    "reversibility": false,
+    "auto_approvable": true,
+    "await_decision": false,
+    "reads": [],
+    "writes": []
+  },
+  {
+    "name": "ledger.add",
+    "binding": { "kind": "http", "method": "POST", "path": "/ledger/{key}" },
+    "params_schema": {
+      "type": "object",
+      "properties": { "key": { "type": "string", "x-in": "path" } },
+      "required": ["key"]
+    },
+    "mode": "execute",
+    "blast_radius": "medium",
+    "reversibility": false,
+    "auto_approvable": false,
+    "await_decision": true,
+    "reads": [],
+    "writes": []
   }
 ]
