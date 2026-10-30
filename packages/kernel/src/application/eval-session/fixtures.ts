@@ -196,6 +196,16 @@ export async function answerFixtureCall(
   if (trial.rows[0]?.status !== 'running') {
     return { kind: 'refused', refusal: { reason: 'trial_ended' } };
   }
+  // Nothing is answered once the Task has ended (its report is in, or it failed or was cancelled)
+  // — before the runner scores the trial, a call would otherwise still count against the
+  // assertions. Held `for share` so a report committing meanwhile is seen, never raced.
+  const task = await client.query<{ status: string }>(
+    'select status from tasks where workspace_id = $1 and id = $2 for share',
+    [workspaceId, session.taskId],
+  );
+  if (task.rows[0]?.status !== 'running') {
+    return { kind: 'refused', refusal: { reason: 'trial_ended' } };
+  }
   const caseRow = await client.query<{ fixtures: readonly EvalFixtureRule[] }>(
     'select fixtures from eval_cases where workspace_id = $1 and id = $2',
     [workspaceId, session.caseId],

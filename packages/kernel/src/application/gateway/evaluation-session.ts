@@ -12,6 +12,7 @@ import {
   type FixtureCall,
   type FixtureCallRefusal,
   answerFixtureCall,
+  evaluationSealAllowance,
   listFixtureOperations,
   readEvaluationSession,
   reportEvaluationResult,
@@ -40,7 +41,7 @@ import { UnknownOperationError } from './request-action-handler.js';
  * capability, the trial, the call's number and how it was answered.
  */
 
-export { readEvaluationSession, type EvaluationSession };
+export { evaluationSealAllowance, readEvaluationSession, type EvaluationSession };
 
 /** The audit action `dispatch.ts` records a call of an evaluation session under. */
 export function evaluationAuditAction(capability: string): string {

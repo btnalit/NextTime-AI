@@ -37,5 +37,6 @@ export {
   type EvaluationSession,
   FIXTURE_CALL_AUDIT_ACTION,
   FIXTURE_CALL_CAPABILITIES,
+  evaluationSealAllowance,
   readEvaluationSession,
 } from './session.js';

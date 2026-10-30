@@ -37,7 +37,11 @@ import {
   registerGatekeeper,
 } from '../../governance/gatekeepers/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
-import { EVALUATION_WITHHELD_ACTION, resetEvaluationSealForTests } from '../eval-seal/index.js';
+import {
+  EVALUATION_WITHHELD_ACTION,
+  EvaluationContentWithheldError,
+  resetEvaluationSealForTests,
+} from '../eval-seal/index.js';
 import {
   EVALUATION_PRINCIPAL_DISPLAY_NAME,
   EVALUATION_TRIAL_END_ACTION,
@@ -365,6 +369,44 @@ describe.runIf(DATABASE_URL !== undefined)(
           [workspaceId, claims.sid, claims.jti, tokens.input, tokens.output, costUsd],
         ),
       );
+    }
+
+    interface OrdinaryTaskRun {
+      readonly taskId: string;
+      readonly workerRunId: string;
+      readonly sessionId: string;
+      readonly jti: string;
+    }
+
+    /** A person's ordinary Task and its ended WorkerRun, written as the kernel leaves them, with
+     *  a Handle for the run's session (what a model call's usage row names). */
+    async function ordinaryTaskRun(): Promise<OrdinaryTaskRun> {
+      return asOwnerRole(async (client) => {
+        const session = await client.query<{ id: string }>(
+          `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+           values ($1, $2, 'worker_run', $2, 'active') returning id`,
+          [workspaceId, people.owner],
+        );
+        const sessionId = session.rows[0]?.id as string;
+        const task = await client.query<{ id: string }>(
+          `insert into tasks (workspace_id, status, on_behalf_of, worker_definition_id, worker_definition_version)
+           values ($1, 'completed', $2, $3, 1) returning id`,
+          [workspaceId, people.owner, workerDefinitionId],
+        );
+        const taskId = task.rows[0]?.id as string;
+        const run = await client.query<{ id: string }>(
+          `insert into worker_runs (workspace_id, status, task_id, session_id, depth, attempt)
+           values ($1, 'terminated', $2, $3, 0, 1) returning id`,
+          [workspaceId, taskId, sessionId],
+        );
+        const issued = await issueHandle(client, {
+          sessionId,
+          scope: entryScope(),
+          ttlSeconds: 600,
+          privateKey,
+        });
+        return { taskId, workerRunId: run.rows[0]?.id as string, sessionId, jti: issued.jti };
+      });
     }
 
     async function count(sql: string, params: unknown[] = [workspaceId]): Promise<number> {
@@ -751,6 +793,17 @@ describe.runIf(DATABASE_URL !== undefined)(
         },
       );
       expect(reported).toMatchObject({ id: passing.taskId, status: 'completed', factIds: [] });
+      // Its report ends the trial for its Worker, before the runner scores it: a second restart
+      // is refused, not recorded, and does not count against "restarts exactly once".
+      const late = await rejection(
+        call(passing.worker, 'request_action', {
+          gatekeeperId: gate,
+          operation: 'hosts.restart',
+          params: { host: 'web-1' },
+        }),
+      );
+      expect(late).toBeInstanceOf(ForbiddenError);
+      expect((late as Error).message).toMatch(/^evaluation_run_ended:/);
 
       // Failing: restarts twice, and the summary does not name the host.
       for (let i = 0; i < 2; i += 1) {
@@ -1005,21 +1058,9 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(start.getUTCHours()).toBe(0);
       expect(new Date(budget.periodEnd).getUTCMonth()).toBe((start.getUTCMonth() + 1) % 12);
 
-      // A person's own agent's model calls are not evaluation spending.
-      const issued = await asApp(async (client) => {
-        const session = await client.query<{ id: string }>(
-          `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
-           values ($1, $2, 'entry', $2, 'active') returning id`,
-          [workspaceId, people.owner],
-        );
-        return issueHandle(client, {
-          sessionId: session.rows[0]?.id as string,
-          scope: entryScope(),
-          ttlSeconds: 600,
-          privateKey,
-        });
-      });
-      await recordUsage({ ...trialLessClaims, sid: issued.sessionId, jti: issued.jti }, 3.0);
+      // An ordinary Task's model calls — a WorkerRun like a trial's — are not evaluation spending.
+      const ordinary = await ordinaryTaskRun();
+      await recordUsage({ ...trialLessClaims, sid: ordinary.sessionId, jti: ordinary.jti }, 3.0);
       expect(
         (await call<EvalBudgetWire>(person('member'), 'get_eval_budget', {})).spentUsd,
       ).toBeCloseTo(0.15, 6);
@@ -1103,6 +1144,97 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).toBeInstanceOf(EvalSuiteNotFoundError);
     });
 
+    // After the budget and list tests: this trial is scored at no cost, which would move the average.
+    it('a held-out case’s own fixture answers reach its Worker though its assertions quote them; text only its assertions hold stays withheld', async () => {
+      const NOTE = 'heron-quay went quiet once the overnight ledger export finished writing';
+      const FAILURE = 'heron-quay is draining its replication backlog and refuses reads for now';
+      const ASSERTED_ONLY =
+        'an operator confirmed that heron-quay recovered without anyone touching it';
+      const INPUT =
+        'Read heron-quay and one host next to it, and quote what each of them answered.';
+      const target = await suiteFor('Quoted answers', workerDefinitionId);
+      const quoting = await call<EvalSuiteWire>(person('builder'), 'add_eval_case', {
+        suiteId: target.id,
+        suiteVersion: target.version,
+        partition: 'regression',
+        split: 'holdout',
+        title: 'Quote what the hosts answer',
+        input: INPUT,
+        fixtures: [
+          {
+            gatekeeperId: gate,
+            operation: 'hosts.get',
+            when: { path: 'host', op: 'eq', value: 'heron-quay' },
+            answer: { kind: 'data', data: { host: 'heron-quay', note: NOTE } },
+          },
+          {
+            gatekeeperId: gate,
+            operation: 'hosts.get',
+            answer: { kind: 'error', message: FAILURE },
+          },
+        ],
+        assertions: [
+          { expect: { path: 'result.summary', op: 'contains', value: NOTE } },
+          { expect: { path: 'result.summary', op: 'contains', value: FAILURE } },
+          { expect: { path: 'result.summary', op: 'contains', value: ASSERTED_ONLY } },
+          { expect: { path: evalCallCountPath(gate, 'hosts.get'), op: 'eq', value: 2 } },
+        ],
+      });
+      const evaluator = await evaluationPrincipalId();
+      const withheld = () =>
+        count(
+          'select 1 from audit_records where workspace_id = $1 and action = $2 and actor_principal_id = $3',
+          [workspaceId, EVALUATION_WITHHELD_ACTION, evaluator],
+        );
+      const withheldBefore = await withheld();
+      const trial = await startTrial(quoting.cases[0]?.id as string, quoting.id);
+
+      // A data answer the assertions quote: returned to the Worker, and recorded.
+      await expect(
+        call(trial.worker, 'observe_operation', {
+          gatekeeperId: gate,
+          operation: 'hosts.get',
+          params: { host: 'heron-quay' },
+        }),
+      ).resolves.toEqual({
+        status: 'ok',
+        data: { host: 'heron-quay', note: NOTE },
+        observedFactCount: 0,
+      });
+      // An error answer they quote: the call fails with it, as a gate whose target failed.
+      const failed = await rejection(
+        call(trial.worker, 'observe_operation', {
+          gatekeeperId: gate,
+          operation: 'hosts.get',
+          params: { host: 'heron-annex' },
+        }),
+      );
+      expect(failed).toBeInstanceOf(GatekeeperClientError);
+      expect((failed as Error).message).toContain(FAILURE);
+      await expect(
+        call<TaskWire>(trial.worker, 'get_task', { taskId: trial.taskId }),
+      ).resolves.toMatchObject({ input: INPUT });
+      expect(await withheld()).toBe(withheldBefore);
+
+      // What only the assertions hold is still stopped: the Worker's own report, read back, quotes
+      // it, and is withheld.
+      await call(trial.worker, 'report_task_result', {
+        summary: `${NOTE}. ${FAILURE}. ${ASSERTED_ONLY}.`,
+      });
+      expect(
+        await rejection(call(trial.worker, 'get_task', { taskId: trial.taskId })),
+      ).toBeInstanceOf(EvaluationContentWithheldError);
+      expect(await withheld()).toBe(withheldBefore + 1);
+
+      await runEvalTrialTick(pool);
+      const scored = (await readRun(trial.run.id)).trials[0];
+      expect(scored).toMatchObject({ status: 'scored', verdict: 'passed' });
+      expect(scored?.calls.map((c) => [c.seq, c.answer, c.ruleIndex])).toEqual([
+        [1, 'data', 0],
+        [2, 'error', 1],
+      ]);
+    });
+
     it('the database holds the ledger: a run finishes only with its trials ended, an ended trial and a recorded call never change', async () => {
       const trial = await startTrial(devCaseId);
       const trialId = trial.run.trials[0]?.id as string;
@@ -1155,6 +1287,98 @@ describe.runIf(DATABASE_URL !== undefined)(
           ]),
         ),
       ).rejects.toThrow(/purpose never changes/);
+    });
+
+    it('the database holds an evaluation Task to its shape and its trials and calls to their order', async () => {
+      const evaluator = await evaluationPrincipalId();
+      const trial = await startTrial(devCaseId);
+      const trialId = trial.run.trials[0]?.id as string;
+      const ordinary = await ordinaryTaskRun();
+      const write = (sql: string, params: unknown[]) =>
+        asOwnerRole((client) => client.query(sql, params));
+      const insertTask = (onBehalfOf: string, extra: Record<string, unknown> = {}) => {
+        const columns = {
+          workspace_id: workspaceId,
+          status: 'queued',
+          on_behalf_of: onBehalfOf,
+          worker_definition_id: workerDefinitionId,
+          worker_definition_version: 1,
+          ...extra,
+        };
+        const names = Object.keys(columns);
+        return write(
+          `insert into tasks (${names.join(', ')}) values (${names.map((_, i) => `$${i + 1}`).join(', ')})`,
+          Object.values(columns),
+        );
+      };
+
+      // task/0011: the evaluation Principal acts in evaluation Tasks only, an evaluation Task
+      // acts for it only, …
+      const coupled = /an evaluation Task acts for the evaluation service principal/;
+      await expect(insertTask(evaluator)).rejects.toThrow(coupled);
+      await expect(
+        insertTask(people.builder, { purpose: 'evaluation', observe_scope: [gate] }),
+      ).rejects.toThrow(coupled);
+      await expect(
+        write('update tasks set on_behalf_of = $3 where workspace_id = $1 and id = $2', [
+          workspaceId,
+          trial.taskId,
+          people.builder,
+        ]),
+      ).rejects.toThrow(coupled);
+      // …with an observation scope and outside any goal, …
+      await expect(insertTask(evaluator, { purpose: 'evaluation' })).rejects.toThrow(
+        /tasks_evaluation_shape/,
+      );
+      // …and its run neither starts under another run nor starts one.
+      const nested = /an evaluation Task's run neither starts under another run nor starts one/;
+      const insertRun = (taskId: string, parentId: string) =>
+        write(
+          `insert into worker_runs (workspace_id, status, task_id, parent_worker_run_id, depth, attempt)
+           values ($1, 'running', $2, $3, 1, 1)`,
+          [workspaceId, taskId, parentId],
+        );
+      await expect(insertRun(ordinary.taskId, trial.spawn.workerRunId)).rejects.toThrow(nested);
+      await expect(insertRun(trial.taskId, ordinary.workerRunId)).rejects.toThrow(nested);
+
+      // worker/0009: a trial is added to a running run, as one of the run's own, running…
+      const insertTrial = (runId: string, extra: Record<string, unknown> = {}) => {
+        const columns = {
+          workspace_id: workspaceId,
+          run_id: runId,
+          arm: 'baseline',
+          case_id: devCaseId,
+          rep: 1,
+          ...extra,
+        };
+        const names = Object.keys(columns);
+        return write(
+          `insert into eval_trials (${names.join(', ')}) values (${names.map((_, i) => `$${i + 1}`).join(', ')})`,
+          Object.values(columns),
+        );
+      };
+      const notOwn = /a trial's arm, case and try are the run's own/;
+      await expect(insertTrial(trial.run.id, { arm: 'candidate' })).rejects.toThrow(notOwn);
+      await expect(insertTrial(trial.run.id, { case_id: holdoutCaseId })).rejects.toThrow(notOwn);
+      await expect(insertTrial(trial.run.id, { rep: 2 })).rejects.toThrow(notOwn);
+      await expect(
+        insertTrial(trial.run.id, { status: 'scored', verdict: 'passed', finished_at: new Date() }),
+      ).rejects.toThrow(/a trial starts running, with nothing recorded yet/);
+      // …and its calls are numbered from 1, in order.
+      const insertCall = (seq: number) =>
+        write(
+          `insert into eval_trial_calls (workspace_id, trial_id, seq, gatekeeper_id, gate_name, operation, mode, params, rule_index, answer)
+           values ($1, $2, $3, $4, 'hosts', 'hosts.list', 'observe', '{}'::jsonb, null, 'unanswered')`,
+          [workspaceId, trialId, seq, gate],
+        );
+      await expect(insertCall(2)).rejects.toThrow(/calls are numbered in order \(next is 1\)/);
+
+      // Once the run has finished: no trial is added to it, no call to its trial.
+      await call(trial.worker, 'report_task_result', { summary: 'Nothing to restart.' });
+      await runEvalTrialTick(pool);
+      expect((await readRun(trial.run.id)).status).toBe('finished');
+      await expect(insertTrial(trial.run.id)).rejects.toThrow(/a trial is added to a running run/);
+      await expect(insertCall(1)).rejects.toThrow(/a call is recorded only while its trial runs/);
     });
 
     // Last: it removes this test's workspace. The cascade runs with triggers off and finds the run

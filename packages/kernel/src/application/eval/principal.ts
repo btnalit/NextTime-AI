@@ -5,9 +5,11 @@ import type { PoolClient } from 'pg';
  * Task acts for — never a person, so no person's Grants, quotas or knowledge are involved in a
  * trial, and no person's agent sees an evaluation Task (`taskVisibleTo`: neither theirs nor
  * acting for them). One per workspace, `kind = 'service'`, `role = 'member'`, no API key and no
- * Grant; its `__…__` name marks it internal: off the Members page, and no service Handle is issued
- * for it (`service-handle-handler.ts`), so a Handle acting for it comes only from an evaluation
- * Task's spawn. migrations/task/0011 holds the other half: it acts in evaluation Tasks only.
+ * Grant; its `__…__` name marks it internal: off the Members page, and the gateway issues no
+ * service Handle for it (`service-handle-handler.ts`), so a Handle acting for it comes from an
+ * evaluation Task's spawn — or from the host's `bootstrap issue-service-handle`, which runs with the
+ * database owner's rights and is not held to that. migrations/task/0011 holds the other half: it
+ * acts in evaluation Tasks only.
  */
 export const EVALUATION_PRINCIPAL_DISPLAY_NAME = '__evaluation_service__';
 

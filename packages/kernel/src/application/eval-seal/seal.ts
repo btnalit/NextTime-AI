@@ -109,9 +109,10 @@ async function snapshotFor(client: PoolClient, workspaceId: string): Promise<Sea
 }
 
 export interface SealOptions {
-  /** S10 E3-2a: text whose windows pass — an evaluation Task's own input, which its Worker is
-   *  meant to read even when its case is held out. Only that case's input: another case's text,
-   *  any assertion or fixture condition, and every canary are still stopped. */
+  /** S10 E3-2a: text whose windows pass — what an evaluation Task's Worker is meant to read even
+   *  when its case is held out: its case's input, and (on its calls) its case's fixture answers
+   *  (`application/eval-session`'s `evaluationSealAllowance`). Only that case's: another case's
+   *  text, any assertion or fixture condition, and every canary are still stopped. */
   readonly allow?: unknown;
 }
 

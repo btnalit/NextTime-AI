@@ -33,6 +33,7 @@ import { ForbiddenError, assertActsForPerson, authorizeCapabilityCall } from './
 import {
   type EvaluationSession,
   evaluationAuditAction,
+  evaluationSealAllowance,
   readEvaluationSession,
   runEvaluationSessionCall,
 } from './evaluation-session.js';
@@ -742,11 +743,11 @@ export async function dispatchCapability(
       }
       // S10 E3-2a (application/eval-session): an evaluation Task's Worker is closed in — its call
       // runs through the second layer (`evaluation-session.ts`) instead of the capability's own
-      // handler, and what it gets back may carry its own Task's input (the case's) and nothing
-      // else of an evaluation's.
+      // handler, and what it gets back may carry its own Task's input and its case's fixture
+      // answers (`evaluationSealAllowance`) and nothing else of an evaluation's.
       if (caller.channel === 'handle' && caller.claims.sid) {
         evaluation = await readEvaluationSession(client, workspaceId, caller.claims.sid);
-        if (evaluation) sealOptions = { allow: evaluation.taskInput };
+        if (evaluation) sealOptions = { allow: evaluationSealAllowance(evaluation) };
       }
       const handlerCtx: Parameters<typeof handler>[3] = {
         channel: caller.channel,

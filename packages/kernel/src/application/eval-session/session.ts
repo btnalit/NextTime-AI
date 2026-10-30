@@ -1,3 +1,4 @@
+import type { EvalFixtureRule } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { EVALUATION_HANDLE_CAPABILITIES } from '../task/index.js';
 
@@ -37,6 +38,29 @@ export interface EvaluationSession {
   readonly suiteVersion: number;
   /** The `eval_cases` row the trial runs. */
   readonly caseId: string;
+  /** What that case's fixture rules answer with — each `data` answer and each error's message:
+   *  what the Worker is given by its calls, whatever its split. */
+  readonly fixtureAnswers: readonly unknown[];
+}
+
+/**
+ * What the evaluation seal lets through to this session's Worker (`SealOptions.allow`): its case's
+ * input and its case's fixture answers — what the Worker is meant to read even when its case is
+ * held out (an assertion often quotes what a fixture answers). The rest of that case — its
+ * assertions and fixture conditions — every other case's text and every canary are still stopped.
+ */
+export function evaluationSealAllowance(session: EvaluationSession): unknown {
+  return [session.taskInput, ...session.fixtureAnswers];
+}
+
+function fixtureAnswersOf(fixtures: readonly EvalFixtureRule[] | null): unknown[] {
+  return (fixtures ?? []).flatMap((rule) =>
+    rule.answer.kind === 'data'
+      ? [rule.answer.data]
+      : rule.answer.kind === 'error'
+        ? [rule.answer.message]
+        : [],
+  );
 }
 
 interface EvaluationSessionRow {
@@ -49,16 +73,20 @@ interface EvaluationSessionRow {
   run_id: string | null;
   suite_id: string | null;
   suite_version: number | null;
+  fixtures: readonly EvalFixtureRule[] | null;
 }
 
 /**
  * The evaluation trial the Handle session `sessionId` runs, or `null` when the session is not an
  * evaluation Task's Worker. One indexed read per Handle call (`worker_runs_session_id_idx`).
  *
- * Only a WorkerRun session is ever an evaluation one: the evaluation service Principal acts in
- * evaluation Tasks only (migrations/task/0011), no service Handle is issued for an internal
- * Principal (`service-handle-handler.ts`), and an evaluation run starts no other run — so a Handle
- * acting for that Principal comes from an evaluation Task's own spawn and nowhere else.
+ * Only a WorkerRun session is ever an evaluation one: this reads by the WorkerRun's session, the
+ * evaluation service Principal acts in evaluation Tasks only (migrations/task/0011), and an
+ * evaluation run starts no other run. The gateway issues no service Handle for an internal
+ * Principal (`service-handle-handler.ts`); the host's `bootstrap issue-service-handle`, run with
+ * the database owner's rights, is not held to that — a Handle it mints has a service session, not
+ * a WorkerRun's, so it reads here as no evaluation session and acts as that Principal does
+ * anywhere: a member with no Grant.
  *
  * An evaluation Task with no trial cannot be made (the runner writes both in one transaction); if
  * one is found anyway, this throws, and the call fails rather than reaching anything.
@@ -70,11 +98,13 @@ export async function readEvaluationSession(
 ): Promise<EvaluationSession | null> {
   const found = await client.query<EvaluationSessionRow>(
     `select t.id as task_id, t.input, w.id as worker_run_id, w.activity_id,
-            tr.id as trial_id, tr.case_id, r.id as run_id, r.suite_id, r.suite_version
+            tr.id as trial_id, tr.case_id, r.id as run_id, r.suite_id, r.suite_version,
+            c.fixtures
        from worker_runs w
        join tasks t on t.workspace_id = w.workspace_id and t.id = w.task_id
        left join eval_trials tr on tr.workspace_id = t.workspace_id and tr.task_id = t.id
        left join eval_runs r on r.workspace_id = tr.workspace_id and r.id = tr.run_id
+       left join eval_cases c on c.workspace_id = tr.workspace_id and c.id = tr.case_id
       where w.workspace_id = $1 and w.session_id = $2 and t.purpose = 'evaluation'`,
     [workspaceId, sessionId],
   );
@@ -101,5 +131,6 @@ export async function readEvaluationSession(
     suiteId: row.suite_id,
     suiteVersion: row.suite_version,
     caseId: row.case_id,
+    fixtureAnswers: fixtureAnswersOf(row.fixtures),
   };
 }
