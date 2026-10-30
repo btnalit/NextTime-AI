@@ -5,6 +5,7 @@ import type {
   EvalSuiteWire,
 } from '@nexttime/shared';
 import { useRef, useState } from 'react';
+import { byData } from '../../hooks/useFocusAfterRender.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import {
@@ -29,6 +30,7 @@ import { Notice } from '../kit/notice.js';
 import { RefChip } from '../kit/ref-chip.js';
 import {
   Sheet,
+  SheetClose,
   SheetContent,
   SheetDescription,
   SheetFooter,
@@ -47,27 +49,62 @@ export interface SuiteCasesProps {
   /** One governed change at the version shown (`SuiteDetail`'s): the suite it left. A stale
    *  version re-reads the suite and rethrows. */
   readonly change: (write: () => Promise<EvalSuiteWire>) => Promise<EvalSuiteWire>;
+  /** What the case sheet shows — held by `SuiteDetail`, whose fixture gate cards open the cases
+   *  that use a gate. */
+  readonly opened: OpenedCase | null;
+  readonly onOpenedChange: (next: OpenedCase | null) => void;
 }
 
 const REASON_MAX = 500;
 
-type Opened = { readonly mode: 'add' } | { readonly mode: 'case'; readonly caseId: string };
+/** The case sheet: adding a case, or one case shown (and maybe edited). */
+export type OpenedCase =
+  | { readonly mode: 'add' }
+  | { readonly mode: 'case'; readonly caseId: string };
 
 /**
  * components/evaluation/SuiteCases (S10 E3-1b): the 用例 section of a suite's detail — the cases
  * the suite holds at its version, each with its partition, dev / holdout split and whether a
- * fixture rule needs attention after a fixture gate sync or removal; 添加用例; and a case's sheet,
+ * fixture rule needs attention after a fixture gate sync; 添加用例; and a case's sheet,
  * which shows it whole (input, fixture rules in order, assertions as sentences) with 编辑 (a
  * reason required; the old case is retired and the new one replaces it) and 退役 (a reason
  * required). Every change is a new suite version, at the version the reader saw.
  */
-export function SuiteCases({ http, suite, principalNames, change }: SuiteCasesProps) {
+export function SuiteCases({
+  http,
+  suite,
+  principalNames,
+  change,
+  opened,
+  onOpenedChange: setOpened,
+}: SuiteCasesProps) {
   const t = useT();
   const can = useRoleCan(http);
   const canAdd = can('add_eval_case') !== false;
-  const [opened, setOpened] = useState<Opened | null>(null);
+  const canEdit = can('edit_eval_case') !== false;
   // A retired case takes its row, and the title that opened its sheet, with it.
   const [section, focusSection] = useFocusAfterChange<HTMLElement>();
+  // The case the sheet was opened on, kept while it stays open (an edit moves it to the case
+  // that replaced it; idempotent, so it may be noted while rendering).
+  const openedFor = useRef<string | null>(null);
+  const shown = opened?.mode === 'case' ? opened.caseId : null;
+  if (opened === null) openedFor.current = null;
+  else if (openedFor.current === null) openedFor.current = shown;
+  const openedOn = openedFor.current;
+  /** An edit replaced the row that opened the sheet (#810 UX P3-3): closing hands focus to the
+   *  row of the case it shows now, not to <body>. */
+  const returnFocus = (event: Event) => {
+    if (shown === null || shown === openedOn) return;
+    const row = byData(
+      section.current,
+      '[data-case-id]',
+      'caseId',
+      shown,
+    )?.querySelector<HTMLElement>('[data-testid="eval-case-open"]');
+    if (row === undefined || row === null) return;
+    event.preventDefault();
+    row.focus();
+  };
   const at = { suiteId: suite.id, suiteVersion: suite.version };
   const attention = suite.cases.filter((item) => item.fixtureProblems.length > 0).length;
   const dev = suite.cases.filter((item) => item.split === 'dev').length;
@@ -111,10 +148,15 @@ export function SuiteCases({ http, suite, principalNames, change }: SuiteCasesPr
       </p>
       {attention > 0 ? (
         <Notice tone="warn" testId="eval-suite-cases-attention">
-          {t(
-            `${attention} 条用例的夹具规则在夹具门同步或移除后对不上了，打开它们编辑。`,
-            `${attention} case(s) have fixture rules a fixture gate sync or removal left without a match; open them to edit.`,
-          )}
+          {canEdit
+            ? t(
+                `${attention} 条用例的夹具规则在夹具门同步后对不上了，打开它们编辑。`,
+                `${attention} case(s) have fixture rules a fixture gate sync left without a match; open them to edit.`,
+              )
+            : t(
+                `${attention} 条用例的夹具规则在夹具门同步后对不上了，打开它们查看。`,
+                `${attention} case(s) have fixture rules a fixture gate sync left without a match; open them to see which.`,
+              )}
         </Notice>
       ) : null}
       {suite.cases.length === 0 ? (
@@ -169,8 +211,9 @@ export function SuiteCases({ http, suite, principalNames, change }: SuiteCasesPr
             suite={suite}
             caseId={opened.caseId}
             principalNames={principalNames}
-            canEdit={can('edit_eval_case') !== false}
+            canEdit={canEdit}
             canRetire={can('retire_eval_case') !== false}
+            onCloseAutoFocus={returnFocus}
             onEdit={async (save) => {
               const next = await change(() =>
                 http.call<EvalSuiteWire>('edit_eval_case', {
@@ -276,6 +319,7 @@ function CaseSheetContent({
   canRetire,
   onEdit,
   onRetire,
+  onCloseAutoFocus,
 }: {
   readonly http: CapabilityCaller;
   readonly suite: EvalSuiteWire;
@@ -285,6 +329,7 @@ function CaseSheetContent({
   readonly canRetire: boolean;
   readonly onEdit: (save: CaseSave) => Promise<void>;
   readonly onRetire: (reason: string) => Promise<void>;
+  readonly onCloseAutoFocus: (event: Event) => void;
 }) {
   const t = useT();
   // Read again whenever the suite moves on: a sync or a removal changes what a rule finds.
@@ -301,7 +346,7 @@ function CaseSheetContent({
   const title =
     editing !== null ? t('编辑用例', 'Edit case') : (evalCase?.title ?? t('用例', 'Case'));
   return (
-    <SheetContent size="wide" data-testid="eval-case-sheet">
+    <SheetContent size="wide" onCloseAutoFocus={onCloseAutoFocus} data-testid="eval-case-sheet">
       <SheetHeader>
         <SheetTitle className="wrap-anywhere">{title}</SheetTitle>
         <SheetDescription>
@@ -361,6 +406,13 @@ function CaseSheetContent({
                 {t('编辑', 'Edit')}
               </Button>
             ) : null}
+            {/* A reader with nothing to change has no other way out of a full-screen sheet on a
+             *  phone (no overlay to tap, no Esc) — #810 UX P2-2. */}
+            <SheetClose asChild>
+              <Button variant="ghost" data-testid="eval-case-close">
+                {t('关闭', 'Close')}
+              </Button>
+            </SheetClose>
           </SheetFooter>
         </>
       )}

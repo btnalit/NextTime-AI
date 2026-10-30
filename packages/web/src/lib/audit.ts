@@ -352,6 +352,13 @@ function resourceRoute(
       return hrefs.chat(resourceId);
     case 'gatekeeper':
       return hrefs.gatekeeper(resourceId);
+    // S10 E3-1b: a suite, or one of its cases (the row's payload names the suite), opens the suite.
+    case 'eval_suite':
+      return hrefs.evaluation('suites', resourceId);
+    case 'eval_case': {
+      const suiteId = payload ? stringField(payload, 'suiteId') : undefined;
+      return suiteId ? hrefs.evaluation('suites', suiteId) : undefined;
+    }
     default:
       return undefined;
   }

@@ -4557,7 +4557,7 @@ const evaluationCapabilities = [
     paramsSchema: z.object({ suiteId: evalSuiteId }).strict(),
     resultSchema: wire.EvalSuiteWireSchema,
     description:
-      'Read one evaluation suite: its pinned WorkerDefinition version, its canary, its fixture gates — each with the gate’s name and published Operations as frozen when added, and whether the gate still matches (liveState same / changed / unavailable) — the cases it holds now, each in brief (title, partition, split, mechanism, how many fixture rules and assertions, and fixtureProblems: rules a fixture gate change left without a match) — and its history, every version’s change with who made it, when and why. People only. 404 not_found for a suite that is not there.',
+      'Read one evaluation suite: its pinned WorkerDefinition version, its canary, its fixture gates — each with the gate’s name and published Operations as frozen when added, and whether the gate still matches (liveState same / changed / unavailable) — the cases it holds now, each in brief (title, partition, split, mechanism, how many fixture rules and assertions, fixtureOperations: the gate and operation pairs its rules answer, and fixtureProblems: rules a fixture gate sync left without a match) — and its history, every version’s change with who made it, when and why. People only. 404 not_found for a suite that is not there.',
   },
   {
     name: 'get_eval_case',
@@ -4658,7 +4658,7 @@ const evaluationCapabilities = [
       })
       .strict(),
     resultSchema: wire.EvalSuiteWireSchema,
-    description: `Remove a fixture gate from the suite, with a reason (kept in its history). Earlier suite versions still hold it. A gate the suite does not have, or one a case the suite holds answers calls to (edit or retire those cases first), is 409 conflict. ${EVAL_SUITE_CHANGE_RULE}`,
+    description: `Remove a fixture gate from the suite, with a reason (kept in its history). Earlier suite versions still hold it. A gate the suite does not have is 409 conflict; one a case the suite holds answers calls to is 409 fixture_gate_in_use, with details.caseCount and details.cases (id and title of each, the first 50, oldest first) — edit or retire those cases first. ${EVAL_SUITE_CHANGE_RULE}`,
   },
   {
     name: 'add_eval_case',

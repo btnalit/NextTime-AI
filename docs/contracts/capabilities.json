@@ -399,6 +399,25 @@
                 "exclusiveMinimum": 0,
                 "type": "integer"
               },
+              "fixtureOperations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "gatekeeperId": {
+                      "type": "string"
+                    },
+                    "operation": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "gatekeeperId",
+                    "operation"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "fixtureProblems": {
                 "items": {
                   "additionalProperties": false,
@@ -481,6 +500,7 @@
               "supersedes",
               "fixtureRuleCount",
               "assertionCount",
+              "fixtureOperations",
               "fixtureProblems"
             ],
             "type": "object"
@@ -1130,6 +1150,25 @@
                 "exclusiveMinimum": 0,
                 "type": "integer"
               },
+              "fixtureOperations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "gatekeeperId": {
+                      "type": "string"
+                    },
+                    "operation": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "gatekeeperId",
+                    "operation"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "fixtureProblems": {
                 "items": {
                   "additionalProperties": false,
@@ -1212,6 +1251,7 @@
               "supersedes",
               "fixtureRuleCount",
               "assertionCount",
+              "fixtureOperations",
               "fixtureProblems"
             ],
             "type": "object"
@@ -4690,6 +4730,25 @@
                 "exclusiveMinimum": 0,
                 "type": "integer"
               },
+              "fixtureOperations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "gatekeeperId": {
+                      "type": "string"
+                    },
+                    "operation": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "gatekeeperId",
+                    "operation"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "fixtureProblems": {
                 "items": {
                   "additionalProperties": false,
@@ -4772,6 +4831,7 @@
               "supersedes",
               "fixtureRuleCount",
               "assertionCount",
+              "fixtureOperations",
               "fixtureProblems"
             ],
             "type": "object"
@@ -7589,6 +7649,25 @@
                 "exclusiveMinimum": 0,
                 "type": "integer"
               },
+              "fixtureOperations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "gatekeeperId": {
+                      "type": "string"
+                    },
+                    "operation": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "gatekeeperId",
+                    "operation"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "fixtureProblems": {
                 "items": {
                   "additionalProperties": false,
@@ -7671,6 +7750,7 @@
               "supersedes",
               "fixtureRuleCount",
               "assertionCount",
+              "fixtureOperations",
               "fixtureProblems"
             ],
             "type": "object"
@@ -12487,6 +12567,25 @@
         "contentDigest": {
           "type": "string"
         },
+        "fixtureOperations": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "gatekeeperId": {
+                "type": "string"
+              },
+              "operation": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "gatekeeperId",
+              "operation"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "fixtureProblems": {
           "items": {
             "additionalProperties": false,
@@ -12762,6 +12861,7 @@
         "supersedes",
         "fixtureRuleCount",
         "assertionCount",
+        "fixtureOperations",
         "fixtureProblems",
         "suiteId",
         "fixtures",
@@ -12824,6 +12924,25 @@
               "assertionCount": {
                 "exclusiveMinimum": 0,
                 "type": "integer"
+              },
+              "fixtureOperations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "gatekeeperId": {
+                      "type": "string"
+                    },
+                    "operation": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "gatekeeperId",
+                    "operation"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
               },
               "fixtureProblems": {
                 "items": {
@@ -12907,6 +13026,7 @@
               "supersedes",
               "fixtureRuleCount",
               "assertionCount",
+              "fixtureOperations",
               "fixtureProblems"
             ],
             "type": "object"
@@ -42742,6 +42862,25 @@
                 "exclusiveMinimum": 0,
                 "type": "integer"
               },
+              "fixtureOperations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "gatekeeperId": {
+                      "type": "string"
+                    },
+                    "operation": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "gatekeeperId",
+                    "operation"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "fixtureProblems": {
                 "items": {
                   "additionalProperties": false,
@@ -42824,6 +42963,7 @@
               "supersedes",
               "fixtureRuleCount",
               "assertionCount",
+              "fixtureOperations",
               "fixtureProblems"
             ],
             "type": "object"
@@ -43601,6 +43741,25 @@
                 "exclusiveMinimum": 0,
                 "type": "integer"
               },
+              "fixtureOperations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "gatekeeperId": {
+                      "type": "string"
+                    },
+                    "operation": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "gatekeeperId",
+                    "operation"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "fixtureProblems": {
                 "items": {
                   "additionalProperties": false,
@@ -43683,6 +43842,7 @@
               "supersedes",
               "fixtureRuleCount",
               "assertionCount",
+              "fixtureOperations",
               "fixtureProblems"
             ],
             "type": "object"
@@ -45916,6 +46076,25 @@
                 "exclusiveMinimum": 0,
                 "type": "integer"
               },
+              "fixtureOperations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "gatekeeperId": {
+                      "type": "string"
+                    },
+                    "operation": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "gatekeeperId",
+                    "operation"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "fixtureProblems": {
                 "items": {
                   "additionalProperties": false,
@@ -45998,6 +46177,7 @@
               "supersedes",
               "fixtureRuleCount",
               "assertionCount",
+              "fixtureOperations",
               "fixtureProblems"
             ],
             "type": "object"
@@ -51695,6 +51875,25 @@
                 "exclusiveMinimum": 0,
                 "type": "integer"
               },
+              "fixtureOperations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "gatekeeperId": {
+                      "type": "string"
+                    },
+                    "operation": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "gatekeeperId",
+                    "operation"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "fixtureProblems": {
                 "items": {
                   "additionalProperties": false,
@@ -51777,6 +51976,7 @@
               "supersedes",
               "fixtureRuleCount",
               "assertionCount",
+              "fixtureOperations",
               "fixtureProblems"
             ],
             "type": "object"

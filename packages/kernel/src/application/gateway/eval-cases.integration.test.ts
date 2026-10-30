@@ -26,7 +26,13 @@ import {
   TextCarriesCredentialsError,
 } from '../../governance/redaction/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
-import { EvalCaseNotFoundError, EvalSuiteInputError, EvalSuiteStateError } from '../eval/index.js';
+import { readLiveCases } from '../eval/case-reads.js';
+import {
+  EvalCaseNotFoundError,
+  EvalFixtureGateInUseError,
+  EvalSuiteInputError,
+  EvalSuiteStateError,
+} from '../eval/index.js';
 import { purgeWorkspace } from '../platform/index.js';
 import { ForbiddenError } from './authorize.js';
 import { dispatchCapability } from './dispatch.js';
@@ -307,10 +313,27 @@ describe.runIf(DATABASE_URL !== undefined)(
           supersedes: null,
           fixtureRuleCount: 3,
           assertionCount: 2,
+          fixtureOperations: [
+            { gatekeeperId: gate, operation: 'hosts.get' },
+            { gatekeeperId: gate, operation: 'hosts.restart' },
+          ],
           fixtureProblems: [],
         },
       ]);
       const caseId = added.cases[0]?.id as string;
+      // The brief read (#493 P3: no input, rule data or assertions) keeps what each rule answers,
+      // in order — what `fixtureProblems` is worked out from.
+      const brief = await asApp((client) => readLiveCases(client, workspaceId, added.id));
+      expect(brief.map((row) => row.fixture_refs)).toEqual([
+        [
+          { gatekeeperId: gate, operation: 'hosts.get', answer: { kind: 'data' } },
+          { gatekeeperId: gate, operation: 'hosts.get', answer: { kind: 'absent' } },
+          { gatekeeperId: gate, operation: 'hosts.restart', answer: { kind: 'data' } },
+        ],
+      ]);
+      expect(Object.keys(brief[0] ?? {})).not.toContain('input');
+      expect(Object.keys(brief[0] ?? {})).not.toContain('assertions');
+      expect(Object.keys(brief[0] ?? {})).not.toContain('fixtures');
       expect(added.history[0]).toEqual({
         version: 3,
         kind: 'case_added',
@@ -796,14 +819,27 @@ describe.runIf(DATABASE_URL !== undefined)(
         fixtures: [{ gatekeeperId: used, operation: 'hosts.get', answer: { kind: 'absent' } }],
         assertions: [{ expect: { path: 'result.summary', op: 'contains', value: 'not' } }],
       });
-      await expect(
-        call(person('builder'), 'remove_eval_fixture_gate', {
-          suiteId: suite.id,
-          suiteVersion: added.version,
-          gatekeeperId: used,
-          reason: 'not needed',
-        }),
-      ).rejects.toThrow(/answers calls in 1 case\(s\) the suite holds \("Finds a missing host"\)/);
+      const inUse = await call(person('builder'), 'remove_eval_fixture_gate', {
+        suiteId: suite.id,
+        suiteVersion: added.version,
+        gatekeeperId: used,
+        reason: 'not needed',
+      }).then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+      expect(inUse).toBeInstanceOf(EvalFixtureGateInUseError);
+      expect((inUse as EvalFixtureGateInUseError).code).toBe('fixture_gate_in_use');
+      expect((inUse as EvalFixtureGateInUseError).message).toMatch(
+        /answers calls in 1 case\(s\) the suite holds \("Finds a missing host"\)/,
+      );
+      expect((inUse as EvalFixtureGateInUseError).details).toEqual({
+        caseCount: 1,
+        cases: [{ id: added.cases[0]?.id, title: 'Finds a missing host' }],
+      });
+      expect(added.cases[0]?.fixtureOperations).toEqual([
+        { gatekeeperId: used, operation: 'hosts.get' },
+      ]);
 
       // The gate stops publishing hosts.get; the sync freezes the gate without it.
       await asApp((client) =>

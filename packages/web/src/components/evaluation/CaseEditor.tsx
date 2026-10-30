@@ -11,6 +11,7 @@ import {
   type EvalCaseKind,
   type EvalCaseWire,
   type EvalFixtureGateWire,
+  visibleText,
 } from '@nexttime/shared';
 import { useMemo, useRef, useState } from 'react';
 import { byData, useFocusAfterRender } from '../../hooks/useFocusAfterRender.js';
@@ -98,6 +99,7 @@ export function CaseEditor({ gates, editing, onSave, onCancel }: CaseEditorProps
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const errorAnchor = useRef<HTMLDivElement>(null);
   const root = useRef<HTMLFormElement>(null);
   const focusAfterRender = useFocusAfterRender();
 
@@ -181,6 +183,9 @@ export function CaseEditor({ gates, editing, onSave, onCancel }: CaseEditorProps
       });
     } catch (err) {
       setError(err);
+      // The 保存 that had focus is disabled while it saves; the refusal takes focus instead
+      // (#810 UX P3-2), so it is read out and scrolled into view, inside the sheet.
+      focusAfterRender(() => errorAnchor.current);
     } finally {
       setSubmitting(false);
     }
@@ -524,11 +529,13 @@ export function CaseEditor({ gates, editing, onSave, onCancel }: CaseEditorProps
         ) : null}
 
         {error !== null ? (
-          <InlineError
-            error={error}
-            overrides={caseWriteErrors(error, t)}
-            testId="eval-case-save-error"
-          />
+          <div ref={errorAnchor} tabIndex={-1} data-testid="eval-case-save-error-anchor">
+            <InlineError
+              error={error}
+              overrides={caseWriteErrors(error, t)}
+              testId="eval-case-save-error"
+            />
+          </div>
         ) : null}
       </form>
 
@@ -624,11 +631,21 @@ function GateOperationPicker({
           data-testid={`${testId}-op`}
         >
           <option value="">{t('选择操作', 'Choose an operation')}</option>
-          {operations.map((op) => (
-            <option key={op.name} value={op.name}>
-              {`${actionKindTagText(op.name)}（${op.mode === 'execute' ? t('执行', 'execute') : t('观察', 'observe')}）`}
-            </option>
-          ))}
+          {operations.map((op) => {
+            // The kernel refuses a case holding a character a reader cannot see (#810 UX P3-1):
+            // such an Operation is listed, never offered.
+            const unseen = visibleText(op.name) !== op.name;
+            return (
+              <option key={op.name} value={op.name} disabled={unseen && op.name !== operation}>
+                {unseen
+                  ? t(
+                      `${actionKindTagText(op.name)}（名字里有看不见的字符，不能用在用例里）`,
+                      `${actionKindTagText(op.name)} (its name holds characters a reader cannot see; not usable in a case)`,
+                    )
+                  : `${actionKindTagText(op.name)}（${op.mode === 'execute' ? t('执行', 'execute') : t('观察', 'observe')}）`}
+              </option>
+            );
+          })}
           {opGone ? (
             <option value={operation}>
               {t(
@@ -894,6 +911,14 @@ function RuleEditor({
             errors={errorsUnder(errors, `${rule.uid}.when`)}
             busy={busy}
             onChange={(whenPredicate) => onChange({ whenPredicate })}
+            subject={{
+              label: t('调用参数里的', 'In the call’s params'),
+              which: t('调用参数里的哪个值', 'which param'),
+              placeholder: t(
+                `参数，如 ${params[0] ?? 'host'}`,
+                `A param, e.g. ${params[0] ?? 'host'}`,
+              ),
+            }}
             testId="eval-case-rule-predicate"
           />
           <p className="text-3 text-small">
@@ -1165,6 +1190,11 @@ function AssertionEditor({
             errors={errorsUnder(errors, `${assertion.uid}.expect`)}
             busy={busy}
             onChange={(predicate) => onChange({ predicate })}
+            subject={{
+              label: t('运行里的', 'In the run'),
+              which: t('运行里的哪个值', 'which value of the run'),
+              placeholder: t('路径，如 result.summary', 'A path, e.g. result.summary'),
+            }}
             testId="eval-case-assertion-predicate"
           />
           <p className="text-3 text-small">

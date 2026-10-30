@@ -20,6 +20,7 @@ export type { EvalCaseTarget } from './cases.js';
 export { addEvalCase, editEvalCase, getEvalCase, retireEvalCase } from './cases.js';
 export {
   EvalCaseNotFoundError,
+  EvalFixtureGateInUseError,
   EvalSuiteInputError,
   EvalSuiteNameTakenError,
   EvalSuiteNotFoundError,

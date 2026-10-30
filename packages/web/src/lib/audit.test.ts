@@ -67,6 +67,15 @@ describe('audit entry links', () => {
     expect(resourceHref('task', null)).toBeUndefined();
   });
 
+  it('S10 E3-1b: an evaluation suite, or a case of one, opens the suite under 治理 → 评测', () => {
+    expect(resourceHref('eval_suite', 's-1')).toBe('#/govern/evaluation/suites/s-1');
+    expect(resourceHref('eval_case', 'c-1', () => true, { suiteId: 's-1' })).toBe(
+      '#/govern/evaluation/suites/s-1',
+    );
+    expect(resourceHref('eval_case', 'c-1')).toBeUndefined();
+    expect(resourceHref('eval_suite', 's-1', () => false)).toBeUndefined();
+  });
+
   it('S11 P1-B: an install record opens 安装历史; a change item opens the record it belongs to', () => {
     expect(resourceHref('change_segment', 'seg-1')).toBe('#/govern/catalog/changes/seg-1');
     expect(resourceHref('change_item', 'item-1', () => true, { segmentId: 'seg-1' })).toBe(

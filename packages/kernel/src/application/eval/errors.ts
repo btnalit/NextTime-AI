@@ -35,7 +35,7 @@ export class EvalSuiteInputError extends Error {
 
 /** 409 conflict: the suite already is as asked (the version pinned now, a gate it already has, a
  *  gate that still matches, a case that already reads so) or does not have the gate or the live
- *  case named, or a case it holds still answers calls through the gate to remove. */
+ *  case named. */
 export class EvalSuiteStateError extends Error {
   constructor(message: string) {
     super(message);
@@ -52,5 +52,28 @@ export class EvalSuiteNameTakenError extends Error {
       `another evaluation suite is already named "${name}" — choose another name; nothing was created`,
     );
     this.name = 'EvalSuiteNameTakenError';
+  }
+}
+
+/** How many of the cases using a fixture gate a refusal names (the count is always whole). */
+const IN_USE_CASES_SHOWN = 50;
+
+/** 409 fixture_gate_in_use (E3-1b): cases the suite holds answer calls through the fixture gate
+ *  to remove — removing it would leave those rules answering nothing. `details` names them (the
+ *  first {@link IN_USE_CASES_SHOWN}, oldest first, and how many in all), so the person can edit or
+ *  retire them first. Only a person reaches it (`remove_eval_fixture_gate` is human-only). */
+export class EvalFixtureGateInUseError extends Error {
+  readonly code = 'fixture_gate_in_use' as const;
+  readonly details: {
+    readonly caseCount: number;
+    readonly cases: ReadonlyArray<{ readonly id: string; readonly title: string }>;
+  };
+  constructor(gateName: string, cases: ReadonlyArray<{ id: string; title: string }>) {
+    const titles = cases.slice(0, 5).map((item) => `"${item.title}"`);
+    super(
+      `fixture gate "${gateName}" answers calls in ${cases.length} case(s) the suite holds (${titles.join(', ')}${cases.length > 5 ? ', …' : ''}) — edit or retire them first; nothing was changed`,
+    );
+    this.name = 'EvalFixtureGateInUseError';
+    this.details = { caseCount: cases.length, cases: cases.slice(0, IN_USE_CASES_SHOWN) };
   }
 }

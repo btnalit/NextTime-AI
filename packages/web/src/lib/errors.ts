@@ -176,6 +176,7 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   pack_not_found: 'No such pack',
   pack_dependency_unmet: 'Install the packs it builds on first',
   eval_suite_name_taken: 'Name taken',
+  fixture_gate_in_use: 'Cases still use this gate',
   not_a_draft: 'No longer a draft',
   invalid_scope: 'Scope not allowed',
   service_principal_required: 'Not an active service account',
@@ -264,6 +265,7 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   pack_not_found: '找不到这个能力包',
   pack_dependency_unmet: '要先装好它依赖的能力包',
   eval_suite_name_taken: '名字已被占用',
+  fixture_gate_in_use: '还有用例在用这个门',
   not_a_draft: '已经不是草稿',
   invalid_scope: '权限范围无效',
   service_principal_required: '不是启用中的服务账号',
@@ -585,6 +587,11 @@ export const ERROR_NEXT_STEPS: Readonly<
   eval_suite_name_taken: {
     zh: '工作区里已经有同名的用例集（不区分大小写），什么也没有保存。换一个名字再试。',
     en: 'The workspace already has an evaluation suite by this name (case ignored), and nothing was saved. Choose another name.',
+  },
+  // S10 E3-1b: cases the suite holds answer calls through the fixture gate to remove.
+  fixture_gate_in_use: {
+    zh: '用例集里还有用例的夹具规则在用这个门，移除了它们就没有答案了，所以什么也没有改。先在「用例」一节编辑或退役这些用例，再移除这个门。',
+    en: 'Cases the suite holds still answer calls through this gate, and removing it would leave those rules with no answer, so nothing changed. Edit or retire those cases under Cases first, then remove the gate.',
   },
   not_a_draft: {
     zh: '它已经发布或弃用了，只有草稿才能丢弃，什么也没有改。刷新后查看它现在的状态。',

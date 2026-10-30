@@ -25,6 +25,7 @@ import {
   readLiveCases,
 } from './case-reads.js';
 import {
+  EvalFixtureGateInUseError,
   EvalSuiteInputError,
   EvalSuiteNameTakenError,
   EvalSuiteNotFoundError,
@@ -137,7 +138,7 @@ export async function listEvalSuites(
         fixtureGatesNeedingAttention: needingAttention,
         caseCount: ownCases.length,
         casesNeedingAttention: ownCases.filter(
-          (row) => fixtureProblemsOf(row.fixtures, frozen).length > 0,
+          (row) => fixtureProblemsOf(row.fixture_refs, frozen).length > 0,
         ).length,
       }),
     );
@@ -386,17 +387,17 @@ export async function removeEvalFixtureGate(
   }
   // E3-1b: a case the suite holds answers calls through it — removing it would leave those rules
   // answering nothing. The person edits or retires the cases first (each its own version).
-  const using = await client.query<{ title: string }>(
-    `select title from eval_cases
+  const using = await client.query<{ id: string; title: string }>(
+    `select id, title from eval_cases
       where workspace_id = $1 and suite_id = $2 and retired_in_version is null
         and fixtures @> $3::jsonb
       order by added_in_version, created_at, id`,
     [workspaceId, suite.id, JSON.stringify([{ gatekeeperId: target.gatekeeperId }])],
   );
   if (using.rows.length > 0) {
-    const titles = using.rows.slice(0, 5).map((row) => `"${shownFreeText(row.title)}"`);
-    throw new EvalSuiteStateError(
-      `fixture gate "${current.snapshot.gateName}" answers calls in ${using.rows.length} case(s) the suite holds (${titles.join(', ')}${using.rows.length > 5 ? ', …' : ''}) — edit or retire them first; nothing was changed`,
+    throw new EvalFixtureGateInUseError(
+      current.snapshot.gateName,
+      using.rows.map((row) => ({ id: row.id, title: shownFreeText(row.title) })),
     );
   }
   const version = await nextVersion(client, workspaceId, suite.id);

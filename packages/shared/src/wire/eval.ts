@@ -205,6 +205,11 @@ export const EvalCaseSummaryWireSchema = z
     supersedes: z.string().nullable(),
     fixtureRuleCount: z.number().int().nonnegative(),
     assertionCount: z.number().int().positive(),
+    /** The distinct fixture gate and operation pairs its rules answer, in rule order — which
+     *  cases a gate's removal or a sync touches. */
+    fixtureOperations: z.array(
+      z.object({ gatekeeperId: z.string(), operation: z.string() }).strict(),
+    ),
     fixtureProblems: z.array(EvalFixtureProblemWireSchema),
   })
   .strict();

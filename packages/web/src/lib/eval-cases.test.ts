@@ -66,7 +66,7 @@ const GATES: readonly EvalFixtureGateWire[] = [
 ];
 
 function wholeCase(extra: Partial<EvalCaseWire> = {}): EvalCaseWire {
-  return {
+  const evalCase: EvalCaseWire = {
     id: 'c-1',
     suiteId: 's-1',
     title: 'restart web only after checking dependants',
@@ -81,6 +81,7 @@ function wholeCase(extra: Partial<EvalCaseWire> = {}): EvalCaseWire {
     fixtureRuleCount: 3,
     assertionCount: 6,
     fixtureProblems: [],
+    fixtureOperations: [],
     input: { ask: 'restart web', priority: 2 },
     fixtures: [
       {
@@ -130,6 +131,14 @@ function wholeCase(extra: Partial<EvalCaseWire> = {}): EvalCaseWire {
     supersededBy: null,
     ...extra,
   };
+  // The kernel's brief: the distinct gate and operation pairs the rules answer, in rule order.
+  const pairs = new Map(
+    evalCase.fixtures.map((rule) => [
+      `${rule.gatekeeperId}\u0000${rule.operation}`,
+      { gatekeeperId: rule.gatekeeperId, operation: rule.operation },
+    ]),
+  );
+  return { ...evalCase, fixtureOperations: extra.fixtureOperations ?? [...pairs.values()] };
 }
 
 describe('lib/eval-cases (S10 E3-1b)', () => {

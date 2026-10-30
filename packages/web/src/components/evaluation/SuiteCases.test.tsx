@@ -73,7 +73,7 @@ const GATES: EvalFixtureGateWire[] = [
 ];
 
 function wholeCase(extra: Partial<EvalCaseWire> = {}): EvalCaseWire {
-  return {
+  const evalCase: EvalCaseWire = {
     id: 'c-1',
     suiteId: 's-1',
     title: 'check dependants first',
@@ -88,6 +88,7 @@ function wholeCase(extra: Partial<EvalCaseWire> = {}): EvalCaseWire {
     fixtureRuleCount: 1,
     assertionCount: 2,
     fixtureProblems: [],
+    fixtureOperations: [],
     input: 'restart web',
     fixtures: [
       {
@@ -107,6 +108,14 @@ function wholeCase(extra: Partial<EvalCaseWire> = {}): EvalCaseWire {
     supersededBy: null,
     ...extra,
   };
+  // The kernel's brief: the distinct gate and operation pairs the rules answer, in rule order.
+  const pairs = new Map(
+    evalCase.fixtures.map((rule) => [
+      `${rule.gatekeeperId}\u0000${rule.operation}`,
+      { gatekeeperId: rule.gatekeeperId, operation: rule.operation },
+    ]),
+  );
+  return { ...evalCase, fixtureOperations: extra.fixtureOperations ?? [...pairs.values()] };
 }
 
 function summaryOfCase(evalCase: EvalCaseWire): EvalCaseSummaryWire {
@@ -366,6 +375,14 @@ describe('SuiteCases (S10 E3-1b)', () => {
 
     const view = await screen.findByTestId('eval-case-view');
     await waitFor(() => expect(view.getAttribute('data-case-id')).toBe('c-1b'));
+    // Closed, focus goes to the row of the case that replaced the one opened (#810 UX P3-3).
+    fireEvent.click(screen.getByTestId('eval-case-close'));
+    await waitFor(() => expect(screen.queryByTestId('eval-case-sheet')).toBeNull());
+    await waitFor(() =>
+      expect(
+        document.activeElement?.closest('[data-testid="eval-case"]')?.getAttribute('data-case-id'),
+      ).toBe('c-1b'),
+    );
     const params = http.calls.find((c) => c.name === 'edit_eval_case')?.params as Record<
       string,
       unknown
@@ -407,6 +424,10 @@ describe('SuiteCases (S10 E3-1b)', () => {
     fireEvent.click(within(sheet).getByTestId('eval-case-save'));
     const error = await within(sheet).findByTestId('eval-case-save-error');
     expect(error.textContent).toContain('用例集在你打开之后被改过');
+    // The refusal has focus, not <body> (#810 UX P3-2).
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(sheet).getByTestId('eval-case-save-error-anchor')),
+    );
     expect((within(sheet).getByTestId('eval-case-title') as HTMLInputElement).value).toBe(
       'renamed',
     );
@@ -463,5 +484,171 @@ describe('SuiteCases (S10 E3-1b)', () => {
     await waitFor(() => expect(screen.queryByTestId('eval-case-add-trigger')).toBeNull());
     expect(screen.queryByTestId('eval-case-edit')).toBeNull();
     expect(screen.queryByTestId('eval-case-retire-trigger')).toBeNull();
+    // A reader with nothing to change still has a way out (#810 UX P2-2).
+    fireEvent.click(screen.getByTestId('eval-case-close'));
+    await waitFor(() => expect(screen.queryByTestId('eval-case-sheet')).toBeNull());
+  });
+
+  it('a reader who may not edit is asked to open flagged cases to see them, not to edit them', async () => {
+    const cases = [
+      wholeCase({ fixtureProblems: [{ index: 0, problem: 'operation_not_on_gate' }] }),
+    ];
+    const http = scriptedHttp(
+      handlers(
+        'member',
+        () => suite(cases),
+        () => cases,
+      ),
+    );
+    renderDetail(http);
+    const notice = await screen.findByTestId('eval-suite-cases-attention');
+    await waitFor(() => expect(notice.textContent).toContain('打开它们查看'));
+    expect(notice.textContent).toContain('在夹具门同步后对不上了');
+    expect(notice.textContent).not.toContain('编辑');
+  });
+
+  it('a fixture gate a case uses names the case, opens it, and says what removing it waits for', async () => {
+    const cases = [wholeCase()];
+    const http = scriptedHttp(
+      handlers(
+        'builder',
+        () => suite(cases),
+        () => cases,
+      ),
+    );
+    renderDetail(http);
+    const card = await screen.findByTestId('eval-fixture-gate');
+    const remove = (await within(card).findByTestId(
+      'eval-fixture-gate-remove-trigger',
+    )) as HTMLButtonElement;
+    expect(remove.disabled).toBe(true);
+    expect(within(card).getByTestId('eval-fixture-gate-remove-in-use').textContent).toBe(
+      '还差：先编辑或退役用到它的 1 条用例',
+    );
+    const usedBy = within(card).getByTestId('eval-fixture-gate-used-by');
+    expect(usedBy.textContent).toContain('1 条用例用到它');
+    fireEvent.click(within(usedBy).getByTestId('eval-fixture-gate-used-by-case'));
+    const view = await screen.findByTestId('eval-case-view');
+    expect(view.getAttribute('data-case-id')).toBe('c-1');
+  });
+
+  it('a gate no case uses can be removed', async () => {
+    const http = scriptedHttp(
+      handlers(
+        'builder',
+        () => suite([]),
+        () => [],
+      ),
+    );
+    renderDetail(http);
+    const card = await screen.findByTestId('eval-fixture-gate');
+    const remove = (await within(card).findByTestId(
+      'eval-fixture-gate-remove-trigger',
+    )) as HTMLButtonElement;
+    expect(remove.disabled).toBe(false);
+    expect(within(card).queryByTestId('eval-fixture-gate-remove-in-use')).toBeNull();
+    expect(within(card).queryByTestId('eval-fixture-gate-used-by')).toBeNull();
+  });
+
+  it('a sync that drops an operation a case answers says how many cases stop matching', async () => {
+    const cases = [wholeCase()];
+    const changed = suite(cases, {
+      fixtureGates: GATES.map((gate) => ({ ...gate, liveState: 'changed' as const })),
+    });
+    const http = scriptedHttp({
+      ...handlers(
+        'builder',
+        () => changed,
+        () => cases,
+      ),
+      // hosts.get is gone from the gate now; hosts.list and hosts.restart stay.
+      list_operations: () => ({
+        items: [
+          { name: 'hosts.list', version: 1, status: 'published' },
+          { name: 'hosts.restart', version: 1, status: 'published' },
+        ],
+      }),
+    });
+    renderDetail(http);
+    fireEvent.click(await screen.findByTestId('eval-fixture-gate-sync-trigger'));
+    const confirm = await screen.findByTestId('eval-fixture-gate-sync');
+    await waitFor(() =>
+      expect(within(confirm).getByTestId('confirm-impact').textContent).toContain(
+        '1 条用例的规则用到要移除的操作，同步后会对不上',
+      ),
+    );
+  });
+
+  it('an operation whose name hides characters is listed but cannot be picked', async () => {
+    const hidden = 'restart\u{202E}gnp.exe\u{200B}';
+    const gates = GATES.map((gate) => ({
+      ...gate,
+      operations: [
+        ...gate.operations,
+        {
+          name: hidden,
+          version: 1,
+          mode: 'execute' as const,
+          description: null,
+          paramsSchema: {},
+          answersAbsent: false,
+        },
+      ],
+    }));
+    const http = scriptedHttp(
+      handlers(
+        'builder',
+        () => suite([], { fixtureGates: gates }),
+        () => [],
+      ),
+    );
+    renderDetail(http);
+    fireEvent.click(await screen.findByTestId('eval-case-add-trigger'));
+    const sheet = await screen.findByTestId('eval-case-sheet');
+    fireEvent.click(within(sheet).getByTestId('eval-case-rule-add'));
+    const rule = within(sheet).getByTestId('eval-case-rule');
+    select(within(rule).getByTestId('eval-case-rule-gate'), GATE);
+    const op = within(rule).getByTestId('eval-case-rule-op') as HTMLSelectElement;
+    const option = [...op.options].find((candidate) => candidate.value === hidden);
+    expect(option?.disabled).toBe(true);
+    expect(option?.textContent).toContain('名字里有看不见的字符');
+    expect([...op.options].find((candidate) => candidate.value === 'hosts.get')?.disabled).toBe(
+      false,
+    );
+  });
+
+  it('a custom condition says what its paths read: the call’s params in a rule, the run in an assertion', async () => {
+    const http = scriptedHttp(
+      handlers(
+        'builder',
+        () => suite([]),
+        () => [],
+      ),
+    );
+    renderDetail(http);
+    fireEvent.click(await screen.findByTestId('eval-case-add-trigger'));
+    const sheet = await screen.findByTestId('eval-case-sheet');
+    fireEvent.click(within(sheet).getByTestId('eval-case-rule-add'));
+    const rule = within(sheet).getByTestId('eval-case-rule');
+    select(within(rule).getByTestId('eval-case-rule-gate'), GATE);
+    select(within(rule).getByTestId('eval-case-rule-op'), 'hosts.get');
+    select(within(rule).getByTestId('eval-case-rule-when'), 'predicate');
+    const rulePath = within(rule).getByTestId('eval-case-rule-predicate-path') as HTMLInputElement;
+    // 「参数，如 host」: the gate's own first param as the example.
+    expect(rulePath.placeholder.startsWith('参数')).toBe(true);
+    expect(rulePath.placeholder.endsWith('host')).toBe(true);
+    expect(rulePath.getAttribute('aria-label')).toBe('第 1 个条件：调用参数里的哪个值');
+    expect(rule.textContent).toContain('调用参数里的');
+    expect(rule.textContent).not.toContain('结果里的');
+
+    const assertion = within(sheet).getByTestId('eval-case-assertion');
+    select(within(assertion).getByTestId('eval-case-assertion-template'), 'predicate');
+    const runPath = within(assertion).getByTestId(
+      'eval-case-assertion-predicate-path',
+    ) as HTMLInputElement;
+    expect(runPath.placeholder.startsWith('路径')).toBe(true);
+    expect(runPath.placeholder.endsWith('result.summary')).toBe(true);
+    expect(assertion.textContent).toContain('运行里的');
+    expect(assertion.textContent).not.toContain('结果里的');
   });
 });
