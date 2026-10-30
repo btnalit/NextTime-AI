@@ -14,10 +14,11 @@
 #
 # Each scenario's polls are bounded and each failure carries the goal's own evidence (status,
 # pause reason, every step with its attempts and actions, every acceptance check with its attempts
-# and last error) in the FAIL line. Every goal proposed here is recorded in GOALS_STARTED, and
-# cleanup_step ends whichever is still live (proposed: rejected; running, paused or verifying:
-# cancelled — alice is the owner, so bob's too) before the gates go, the same way it ends step 9's,
-# and revokes any gate S9 granted bob and did not get to revoke itself.
+# and last error, every action with the reason its failure was audited with) in the FAIL line.
+# Every goal proposed here is recorded in GOALS_STARTED, and cleanup_step ends whichever is still
+# live (proposed: rejected; running, paused or verifying: cancelled — alice is the owner, so bob's
+# too) before the gates go, the same way it ends step 9's, and revokes any gate S9 granted bob and
+# did not get to revoke itself.
 #
 # Order (`goal_scenarios_step`): S6's goal and the reverse half of S4 start first and wait in the
 # background on checks that fail on purpose — the platform retries an unmet acceptance check
@@ -53,9 +54,18 @@ goal_get() {
   parse_kv "$(cap "$ALICE_KEY" get_goal "{\"goalRunId\":\"$1\"}" "$2")" EXTRACTED
 }
 
-# goal_fail <name> <goalRunId> <detail>: fail with the goal's evidence attached.
+# goal_fail <name> <goalRunId> <detail>: fail with the goal's evidence attached — get_goal's summary,
+# then each of its actions with the reason the platform audited when it failed (get_goal names a
+# failed action's kind, not its reason).
 goal_fail() {
-  fail "$1" "$3 — evidence: $(goal_get "$2" "$GOAL_EVIDENCE_EXPR")"
+  fail "$1" "$3 — evidence: $(goal_get "$2" "$GOAL_EVIDENCE_EXPR") actions: $(goal_action_reasons "$2")"
+}
+
+# goal_action_reasons <goalRunId>: `status[:failure kind] (reason)` for each ActionRequest of the
+# goal's steps, oldest first — the reason from the last audit row that recorded one
+# (governance/approval/execution.ts reasonAuditFields, already scrubbed of secret literals).
+goal_action_reasons() {
+  psql_ws "select coalesce(string_agg(ar.status || coalesce(':' || ar.failure_kind, '') || coalesce(' (' || left(a.payload->>'reason', 240) || ')', ''), '; ' order by ar.requested_at, ar.id), 'none') from action_requests ar join step_runs sr on sr.workspace_id = ar.workspace_id and sr.id = ar.step_run_id left join lateral (select r.payload from audit_records r where r.workspace_id = ar.workspace_id and r.resource_type = 'action_request' and r.resource_id = ar.id and r.payload ? 'reason' order by r.created_at desc limit 1) a on true where ar.workspace_id = '$WORKSPACE_ID' and sr.goal_run_id = '$1'"
 }
 
 # goal_wait <goalRunId> <seconds> <expr> <pattern>...: polls get_goal until the value of <expr>
@@ -537,61 +547,67 @@ goal_s7_cancel_drain() {
 # --- S9: the requester loses a gate the Worker needs; the next step does not start -----------
 #
 # bob (member) is granted the three gates the ops-runner Worker declares and proposes a goal of two
-# steps, b after a; a writes to the test ledger, so the run holds while the write waits. alice
-# (owner) revokes bob's docker gate, then approves a's write: a succeeds, and b, whose Worker would
-# need a gate bob no longer holds, never starts — the run pauses authority_lost (step-attempt.ts,
-# resolveStepAuthority). The plan's own wording, demoting the requester to a role without the gate,
-# meets the same check; advancer.integration.test.ts covers the demoted and the disabled requester.
-# bob's grants are revoked again at the end (cleanup_step too, via goal_cleanup_grants).
+# steps, b after a; a restarts the accept-s2 test container through the docker gate, so the run
+# holds while that write waits for approval. alice (owner) revokes bob's ssh gate, then approves
+# a's write: a succeeds, and b, whose Worker would need a gate bob no longer holds, never starts —
+# the run pauses authority_lost (step-attempt.ts, resolveStepAuthority). The plan's own wording,
+# demoting the requester to a role without the gate, meets the same check;
+# advancer.integration.test.ts covers the demoted and the disabled requester. bob's grants are
+# revoked again at the end (cleanup_step too, via goal_cleanup_grants).
+#
+# a's write is a docker one, not a ledger one: an action runs on behalf of its goal's requester,
+# and the http gate is connected `connected_account` with alice's token alone — a write there for
+# bob is refused by the gate (credential_unavailable), as it should be. The docker gate takes no
+# per-person credential. The goal's acceptance check (stock.get, the same http gate) never runs:
+# the run pauses before it, and bob cancels it.
 
 S9_GRANTS=""
 
 goal_s9_authority_lost() {
   n=$(real_token)
-  key="s9-$n"
+  s9_ssh_grant=""
   for s9_gate in "$GATEKEEPER_ID_SSH" "$GATEKEEPER_ID_HTTP" "$GATEKEEPER_ID_DOCKER"; do
     out=$(cap "$ALICE_KEY" connect_gatekeeper "{\"gatekeeperId\":\"$s9_gate\",\"principalId\":\"$BOB_PRINCIPAL_ID\"}" "d.result.id")
     [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] || fail "s9-confirmed" "connect_gatekeeper($s9_gate) for bob HTTP $(parse_kv "$out" HTTP_STATUS): $(parse_kv "$out" BODY)"
     s9_grant=$(parse_kv "$out" EXTRACTED)
     S9_GRANTS="$S9_GRANTS $s9_grant"
+    # The first one granted: the ssh gate's, which step a does not use.
+    [ -n "$s9_ssh_grant" ] || s9_ssh_grant=$s9_grant
   done
-  # The last one granted: the docker gate's.
-  s9_docker_grant=$s9_grant
-  write=$(goal_step_json a "ACCEPT_S2_SCENARIO=goal_ledger LEDGER_KEY=$key")
+  write=$(goal_step_json a "ACCEPT_S2_SCENARIO=docker_restart CONTAINER_ID=$RESTART_TARGET_ID")
   after=$(goal_step_json b "ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=$n STEP=b" '"dependsOn":["a"]')
-  goal_propose_confirm s9 "{\"statement\":\"accept_s2 S9 $n: one ops-runner step adds an entry to the test ledger once approved; another runs after it, unless the requester has lost a gate it needs.\",\"plan\":{\"steps\":[$write,$after],\"acceptance\":[$(goal_observe_check_json stock-visible stock.get '{}' symbol '"NXT"')]},\"budget\":$GOAL_BUDGET,\"idempotencyKey\":\"accept-s2-goal-s9-$n\"}" "$BOB_KEY"
+  goal_propose_confirm s9 "{\"statement\":\"accept_s2 S9 $n: one ops-runner step restarts the accept-s2 test container once approved; another runs after it, unless the requester has lost a gate it needs.\",\"plan\":{\"steps\":[$write,$after],\"acceptance\":[$(goal_observe_check_json stock-visible stock.get '{}' symbol '"NXT"')]},\"budget\":$GOAL_BUDGET,\"idempotencyKey\":\"accept-s2-goal-s9-$n\"}" "$BOB_KEY"
   S9_GOAL_ID=$GOAL_RUN_ID
-  pass "s9-confirmed" "alice granted bob the ssh, http and docker gates the ops-runner Worker declares; bob proposed and confirmed goal $S9_GOAL_ID (a writes to the test ledger under $key, b after a)"
+  pass "s9-confirmed" "alice granted bob the ssh, http and docker gates the ops-runner Worker declares; bob proposed and confirmed goal $S9_GOAL_ID (a restarts the test container through the docker gate, b after a)"
 
   wait_expr="(() => { const s = Object.fromEntries(d.result.steps.map((x) => [x.stepKey, x])); return [d.result.status, s.a.status, s.a.waitingReason || '', s.a.actions.map((a) => a.status).join('+'), s.b.status, s.b.attempts.length].join(','); })()"
   goal_wait "$S9_GOAL_ID" 180 "$wait_expr" 'running,waiting,*' 'paused,*' 'completed,*' 'cancelled,*' 'failed,*' \
     || goal_fail "s9-revoked" "$S9_GOAL_ID" "step a did not reach waiting within 180s (last '$GOAL_WAIT_VALUE')"
   [ "$GOAL_WAIT_VALUE" = "running,waiting,approval,pending_approval,pending,0" ] \
     || goal_fail "s9-revoked" "$S9_GOAL_ID" "goal $S9_GOAL_ID reads '$GOAL_WAIT_VALUE', expected the run running, step a waiting(approval) on its pending write, b not started"
-  out=$(cap "$ALICE_KEY" revoke_capability "{\"grantId\":\"$s9_docker_grant\"}" "d.result.status")
-  [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] || goal_fail "s9-revoked" "$S9_GOAL_ID" "revoke_capability($s9_docker_grant) HTTP $(parse_kv "$out" HTTP_STATUS): $(parse_kv "$out" BODY)"
-  [ "$(parse_kv "$out" EXTRACTED)" = "revoked" ] || goal_fail "s9-revoked" "$S9_GOAL_ID" "revoke_capability($s9_docker_grant) answered '$(parse_kv "$out" EXTRACTED)', expected revoked"
+  out=$(cap "$ALICE_KEY" revoke_capability "{\"grantId\":\"$s9_ssh_grant\"}" "d.result.status")
+  [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] || goal_fail "s9-revoked" "$S9_GOAL_ID" "revoke_capability($s9_ssh_grant) HTTP $(parse_kv "$out" HTTP_STATUS): $(parse_kv "$out" BODY)"
+  [ "$(parse_kv "$out" EXTRACTED)" = "revoked" ] || goal_fail "s9-revoked" "$S9_GOAL_ID" "revoke_capability($s9_ssh_grant) answered '$(parse_kv "$out" EXTRACTED)', expected revoked"
   ar_id=$(goal_get "$S9_GOAL_ID" "d.result.steps.find((x) => x.stepKey === 'a').actions[0].actionRequestId")
   out=$(cap "$ALICE_KEY" approve "{\"actionRequestId\":\"$ar_id\"}" "d.result.status")
   [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] || goal_fail "s9-revoked" "$S9_GOAL_ID" "approve HTTP $(parse_kv "$out" HTTP_STATUS): $(parse_kv "$out" BODY)"
-  pass "s9-revoked" "alice revoked bob's docker gate ($s9_docker_grant) while step a's write waited, then approved the write $ar_id"
+  pass "s9-revoked" "alice revoked bob's ssh gate ($s9_ssh_grant) while step a's write waited, then approved the write $ar_id"
 
   goal_wait "$S9_GOAL_ID" 180 "$GOAL_END_EXPR" 'paused,*' 'completed,*' 'cancelled,*' 'failed,*' \
     || goal_fail "s9-authority-lost" "$S9_GOAL_ID" "goal $S9_GOAL_ID did not settle within 180s of the approval (last '$GOAL_WAIT_VALUE')"
   [ "$GOAL_WAIT_VALUE" = "paused,,,authority_lost" ] || goal_fail "s9-authority-lost" "$S9_GOAL_ID" "goal $S9_GOAL_ID reads '$GOAL_WAIT_VALUE', expected paused authority_lost"
   steps=$(goal_get "$S9_GOAL_ID" "(() => { const s = Object.fromEntries(d.result.steps.map((x) => [x.stepKey, x])); return [s.a.status, s.a.actions.map((a) => a.status).join('+'), s.b.status, s.b.attempts.length].join(','); })()")
   tasks=$(goal_tasks "$S9_GOAL_ID")
-  count=$(ledger_count "$key")
-  [ "$steps|$tasks|$count" = "succeeded,executed,ready,0|1|1" ] \
-    || goal_fail "s9-authority-lost" "$S9_GOAL_ID" "read steps '$steps', $tasks Task(s), ledger count under $key '$count' — expected a succeeded with its write executed, b ready and never started, one Task, one entry"
-  pass "s9-authority-lost" "goal $S9_GOAL_ID paused authority_lost: a succeeded (its write ran once), b is ready but never started — bob no longer holds the docker gate its Worker declares; one Task"
+  [ "$steps|$tasks" = "succeeded,executed,ready,0|1" ] \
+    || goal_fail "s9-authority-lost" "$S9_GOAL_ID" "read steps '$steps', $tasks Task(s) — expected a succeeded with its write executed, b ready and never started, one Task"
+  pass "s9-authority-lost" "goal $S9_GOAL_ID paused authority_lost: a succeeded (the docker gate ran its write), b is ready but never started — bob no longer holds the ssh gate its Worker declares; one Task"
 
   out=$(cap "$BOB_KEY" cancel_goal "{\"goalRunId\":\"$S9_GOAL_ID\"}" "d.result.status")
   [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] || goal_fail "s9-cancelled" "$S9_GOAL_ID" "cancel_goal (bob) HTTP $(parse_kv "$out" HTTP_STATUS): $(parse_kv "$out" BODY)"
   goal_wait "$S9_GOAL_ID" 60 "d.result.status" 'cancelled' \
     || goal_fail "s9-cancelled" "$S9_GOAL_ID" "goal $S9_GOAL_ID reads '$GOAL_WAIT_VALUE' 60s after cancel_goal, expected cancelled"
   for s9_grant in $S9_GRANTS; do
-    [ "$s9_grant" = "$s9_docker_grant" ] && continue
+    [ "$s9_grant" = "$s9_ssh_grant" ] && continue
     out=$(cap "$ALICE_KEY" revoke_capability "{\"grantId\":\"$s9_grant\"}" "d.result.status")
     [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] || goal_fail "s9-cancelled" "$S9_GOAL_ID" "revoke_capability($s9_grant) HTTP $(parse_kv "$out" HTTP_STATUS): $(parse_kv "$out" BODY)"
   done
