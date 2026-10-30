@@ -1,4 +1,5 @@
 import { type FormEvent, useState } from 'react';
+import { useFocusWhenLost } from '../hooks/useFocusWhenLost.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { CONNECTION_KIND_VALUES, type ConnectionKind } from '../lib/connections.js';
 import { presentError } from '../lib/errors.js';
@@ -24,6 +25,9 @@ export function RequestConnectionForm({ http, onDone, onCancel }: RequestConnect
   const [kind, setKind] = useState<ConnectionKind>('http');
   const [target, setTarget] = useState('');
   const [error, setError] = useState<unknown | null>(null);
+  // Legacy 500: the submit button is disabled while it runs, so a refusal left focus on <body>
+  // and its banner, above the pinned action row, below the fold — focus goes to the banner.
+  const submitErrorRef = useFocusWhenLost<HTMLDivElement>(error);
   /** A `credentials_in_connection_params` refusal, shown on the target field instead of the banner. */
   const [targetRefusal, setTargetRefusal] = useState<unknown | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -104,7 +108,9 @@ export function RequestConnectionForm({ http, onDone, onCancel }: RequestConnect
         />
       </Field>
       {error !== null ? (
-        <ErrorBanner error={error} title={t('无法创建申请', 'Could not create the request')} />
+        <div ref={submitErrorRef} tabIndex={-1}>
+          <ErrorBanner error={error} title={t('无法创建申请', 'Could not create the request')} />
+        </div>
       ) : null}
       <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>

@@ -1,6 +1,7 @@
 import type { MintConnectionSecretResultWire } from '@nexttime/shared';
 import { type FormEvent, useEffect, useState } from 'react';
 import { useCapabilityList } from '../hooks/useCapability.js';
+import { useFocusWhenLost } from '../hooks/useFocusWhenLost.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import {
   CONNECTION_KIND_VALUES,
@@ -253,6 +254,9 @@ export function CompleteConnectionForm({
   const [serverFieldError, setServerFieldError] = useState<ServerFieldError | null>(null);
   const [existingGatekeeper, setExistingGatekeeper] = useState<ExistingGatekeeper | null>(null);
   const [submitError, setSubmitError] = useState<unknown | null>(null);
+  // Legacy 500: the submit button is disabled while it runs, so a refusal left focus on <body>
+  // and its banner, above the pinned action row, below the fold — focus goes to the banner.
+  const submitErrorRef = useFocusWhenLost<HTMLDivElement>(submitError);
   const [submitting, setSubmitting] = useState(false);
   const [connectionSecret, setConnectionSecret] = useState<string | null>(null);
   const [secretError, setSecretError] = useState<unknown | null>(null);
@@ -682,10 +686,12 @@ export function CompleteConnectionForm({
       ) : null}
 
       {submitError !== null ? (
-        <ErrorBanner
-          error={submitError}
-          title={t('门未接受这次连接', 'The gate did not accept this connection')}
-        />
+        <div ref={submitErrorRef} tabIndex={-1}>
+          <ErrorBanner
+            error={submitError}
+            title={t('门未接受这次连接', 'The gate did not accept this connection')}
+          />
+        </div>
       ) : null}
 
       <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>

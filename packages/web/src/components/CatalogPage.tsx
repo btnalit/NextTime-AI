@@ -441,9 +441,11 @@ function DeprecateConfirm({
         </Button>
       }
       title={t(`弃用 ${target}`, `Deprecate ${target}`)}
+      // Legacy 501: the kernel has no way back from `deprecated` (PUBLISHABLE_EDGES: published →
+      // deprecated is the last edge) — say so, and what does bring it back.
       description={t(
-        '弃用后 Agent 不能再使用它；已发生的调用与审计不受影响，随时可以重新发布恢复。',
-        'Once deprecated, agents can no longer reach it; past calls and the audit trail are unaffected, and republishing brings it back at any time.',
+        '弃用后 Agent 不能再使用它；已发生的调用与审计不受影响。弃用不能撤销：以后要再用，需要重新提议并发布。',
+        'Once deprecated, agents can no longer reach it; past calls and the audit trail are unaffected. It cannot be undone: to use it again, propose it again and publish it.',
       )}
       target={target}
       impact={impact}
@@ -1272,6 +1274,15 @@ function OperationDetailView({
         </div>
       </header>
       <KeyValue items={items} />
+      {row.status === 'deprecated' ? (
+        // Legacy 501: no button brings a deprecated version back — the detail says what does.
+        <Notice testId="operation-deprecated-note">
+          {t(
+            '这个版本已弃用，Agent 不能再调用它；弃用不能撤销。之后再导入或提议这个 Operation，会作为新版本出现，发布后即可再用。',
+            'This version is deprecated: agents can no longer call it, and it cannot be undone. If this Operation is imported or proposed again, it comes back as a new version, usable once published.',
+          )}
+        </Notice>
+      ) : null}
       {row.status === 'draft' && row.governanceChange ? <RevisionDiff row={row} /> : null}
       {rewrittenFrom !== null && gateOwned.length === 0 ? (
         <Notice testId="operation-rewritten">
@@ -2616,6 +2627,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       sheetTitle={t('Skill 详情', 'Skill detail')}
       detailTestId={showEditor ? 'skill-editor-drawer' : 'catalog-detail'}
       closeFocusFallback={catalogSectionTab}
+      holdOpen={showEditor}
     />
   );
 }
@@ -3227,6 +3239,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       sheetTitle={t('流程详情', 'Procedure detail')}
       detailTestId={showEditor ? 'procedure-editor-drawer' : 'catalog-detail'}
       closeFocusFallback={catalogSectionTab}
+      holdOpen={showEditor}
     />
   );
 }
@@ -3831,6 +3844,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         onClose={closeEditor}
         sheetTitle={t('Worker 详情', 'Worker detail')}
         detailTestId={showEditor ? 'worker-editor-drawer' : 'catalog-detail'}
+        holdOpen={showEditor}
       />
     );
   }
@@ -4190,6 +4204,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       sheetTitle={t('Worker 详情', 'Worker detail')}
       detailTestId={showEditor ? 'worker-editor-drawer' : 'catalog-detail'}
       closeFocusFallback={catalogSectionTab}
+      holdOpen={showEditor}
     />
   );
 }

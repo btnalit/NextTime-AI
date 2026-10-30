@@ -12,7 +12,7 @@ import { BLAST_RADIUS_TONES } from '../../lib/status-tone.js';
 import { Button } from '../kit/button.js';
 import { Combobox } from '../kit/combobox.js';
 import { Confirm } from '../kit/confirm.js';
-import { Field } from '../kit/field.js';
+import { Field, describedBy } from '../kit/field.js';
 import { Notice } from '../kit/notice.js';
 import { Select } from '../kit/select.js';
 import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '../kit/sheet.js';
@@ -395,6 +395,7 @@ export function PolicyEditSheet({
                 disabled={isEdit || submitting}
                 placeholder={isEdit ? undefined : t('Operation 名', 'Operation name')}
                 aria-invalid={unknownManualKind || undefined}
+                aria-describedby={describedBy('pe-action-kind', true, false)}
                 data-testid="policy-edit-action-kind-input"
               />
             ) : (

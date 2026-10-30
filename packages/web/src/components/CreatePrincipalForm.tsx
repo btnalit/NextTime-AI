@@ -1,5 +1,6 @@
 import { ROLE_VALUES, type Role } from '@nexttime/shared';
 import { type FormEvent, useState } from 'react';
+import { useFocusWhenLost } from '../hooks/useFocusWhenLost.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { type CreatePrincipalResult, ownerCredentialConfirmCopy } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
@@ -48,6 +49,9 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
   const [role, setRole] = useState<Role>('member');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
+  // Legacy 500: the submit button is disabled while it runs, so a refusal left focus on <body>
+  // and its banner, above the pinned action row, below the fold — focus goes to the banner.
+  const submitErrorRef = useFocusWhenLost<HTMLDivElement>(error);
   const [created, setCreated] = useState<CreatePrincipalResult | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
   const [confirmingOwner, setConfirmingOwner] = useState(false);
@@ -176,10 +180,12 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
       </Field>
 
       {error !== null ? (
-        <ErrorBanner
-          error={error}
-          title={t('无法创建', 'Could not create this service credential')}
-        />
+        <div ref={submitErrorRef} tabIndex={-1}>
+          <ErrorBanner
+            error={error}
+            title={t('无法创建', 'Could not create this service credential')}
+          />
+        </div>
       ) : null}
 
       <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
