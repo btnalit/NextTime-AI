@@ -17,6 +17,7 @@ import {
 } from '../../lib/login-input.js';
 import { passwordLengthNeed, passwordLengthProblem } from '../../lib/password-rule.js';
 import { WorkspacePicker, useActiveWorkspaces } from '../../lib/users-workspace-picker.js';
+import { useGuardedClose } from '../kit/discard-guard.js';
 import { StillNeeded } from '../kit/still-needed.js';
 import { Button } from '../ui/Button.js';
 import { Field, Input, Select } from '../ui/Field.js';
@@ -54,6 +55,8 @@ export function CreateUserForm({
   onCreated,
   onCancel,
 }: CreateUserFormProps) {
+  // Legacy 497: in a drawer whose form was edited, 取消 asks before discarding it.
+  const guardedClose = useGuardedClose();
   const t = useT();
   const [login, setLogin] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -306,7 +309,7 @@ export function CreateUserForm({
       />
 
       <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
-        <Button variant="ghost" onClick={onCancel} disabled={submitting}>
+        <Button variant="ghost" onClick={() => guardedClose(onCancel)} disabled={submitting}>
           {t('取消', 'Cancel')}
         </Button>
         <Button

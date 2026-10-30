@@ -6,7 +6,12 @@ import { shortId } from '../lib/format.js';
 import type { GatekeeperListRow, ModelRow, SkillRow } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { sameNameIds } from '../lib/same-name.js';
-import { ModelHealthNote, ModelHealthTag, ModelOption } from './kit/model-health.js';
+import {
+  ModelHealthNote,
+  ModelHealthTag,
+  ModelOption,
+  withModelHealthNote,
+} from './kit/model-health.js';
 import { announceReadinessChange } from './readiness/useExecutionReadiness.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -330,6 +335,12 @@ export function AgentPolicyForm({
           onChange={(event) => update('defaultModel', event.target.value)}
           disabled={submitting}
           invalid={!!fieldErrors.defaultModel}
+          aria-describedby={withModelHealthNote(
+            describedBy('ap-default-model', false, !!fieldErrors.defaultModel),
+            'ap-default-model-health',
+            models.filter((m) => defaultModelOptions.includes(m.id)),
+            defaultModelValue,
+          )}
           data-testid="agent-policy-default-model"
         >
           {restrictedModels ? (
@@ -362,6 +373,7 @@ export function AgentPolicyForm({
           selectedId={defaultModelValue}
           canFix={false}
           testId="agent-policy-default-model-health"
+          id="ap-default-model-health"
         />
       </Field>
 

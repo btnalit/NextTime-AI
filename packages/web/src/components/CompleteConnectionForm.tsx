@@ -26,6 +26,7 @@ import { roleLabel } from '../lib/labels.js';
 import { endpointAlreadyConnectedMessage } from '../lib/platform-errors.js';
 import { sameNameIds, withSameNameId } from '../lib/same-name.js';
 import { ConnectionSecretReveal } from './connect/ConnectionSecretReveal.js';
+import { useGuardedClose } from './kit/discard-guard.js';
 import { ErrorDetails } from './kit/error-details.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -226,6 +227,8 @@ export function CompleteConnectionForm({
   hideKindField = false,
   onShowGatekeeper,
 }: CompleteConnectionFormProps) {
+  // Legacy 497: in a drawer whose form was edited, 取消 asks before discarding it.
+  const guardedClose = useGuardedClose();
   const t = useT();
   const [kind, setKind] = useState<ConnectionKind>(request?.kind ?? initialKind ?? 'http');
   // Legacy 247 ①: a request from before legacy 186 can carry a credential in its address; the
@@ -695,7 +698,7 @@ export function CompleteConnectionForm({
       ) : null}
 
       <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
-        <Button variant="ghost" onClick={onCancel} disabled={submitting}>
+        <Button variant="ghost" onClick={() => guardedClose(onCancel)} disabled={submitting}>
           {t('取消', 'Cancel')}
         </Button>
         {/* ux-lint-allow-disabled: the 门的连接密钥 field above shows it generating, or why it failed. */}

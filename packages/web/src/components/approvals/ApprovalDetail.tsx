@@ -533,6 +533,7 @@ export function ApprovalDetail({
                   aria-describedby={describedBy(reasonId, !reasonError, reasonError !== null)}
                   maxLength={DECISION_REASON_MAX_LENGTH}
                   data-testid="approval-reason"
+                  data-discard-guard
                 />
               </Field>
               {reasonCount !== null ? (

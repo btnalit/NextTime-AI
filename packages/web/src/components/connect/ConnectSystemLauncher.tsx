@@ -27,6 +27,7 @@ import { sameNameIds } from '../../lib/same-name.js';
 import { deriveGateInstanceStatus, labelText, statusChipStyle } from '../../lib/status-tone.js';
 import { OnboardingWizardReview } from '../OnboardingWizardReview.js';
 import { GrantGateForm } from '../access/GrantGateForm.js';
+import { useGuardedClose } from '../kit/discard-guard.js';
 import { RouteLink } from '../kit/route-link.js';
 import { CreateGateInstanceForm } from '../platform/CreateGateInstanceForm.js';
 import { GateCredentialEntry } from '../platform/GateCredentialEntry.js';
@@ -205,6 +206,8 @@ export function ConnectSystemLauncher({
   onFinished,
   pollIntervalMs,
 }: ConnectSystemLauncherProps) {
+  // Legacy 497: in a drawer whose form was edited, 取消 asks before discarding it.
+  const guardedClose = useGuardedClose();
   const t = useT();
   const toast = useToast();
   const isAdmin = origin === 'platform' || platformAdmin;
@@ -515,7 +518,7 @@ export function ConnectSystemLauncher({
 
       {step === 0 ? (
         <div className="row" style={{ justifyContent: 'flex-end' }}>
-          <Button variant="ghost" onClick={onCancel}>
+          <Button variant="ghost" onClick={() => guardedClose(onCancel)}>
             {t('取消', 'Cancel')}
           </Button>
         </div>

@@ -16,6 +16,7 @@ import {
 import { platformErrorMessage } from '../lib/platform-errors.js';
 import { useUserDirectoryTap } from '../lib/users-directory.js';
 import { Button } from './kit/button.js';
+import { useGuardedClose } from './kit/discard-guard.js';
 import { ErrorBanner } from './kit/error-banner.js';
 import { Field, describedBy } from './kit/field.js';
 import { Select } from './kit/select.js';
@@ -72,6 +73,8 @@ export function AddMemberForm({
   platformAdmin,
   workspaceId,
 }: AddMemberFormProps) {
+  // Legacy 497: in a drawer whose form was edited, 取消 asks before discarding it.
+  const guardedClose = useGuardedClose();
   const t = useT();
   const permissions = usePermissions();
   const directory = useUserDirectoryTap(http);
@@ -307,7 +310,7 @@ export function AddMemberForm({
       ) : null}
 
       <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
-        <Button variant="ghost" onClick={onCancel} disabled={submitting}>
+        <Button variant="ghost" onClick={() => guardedClose(onCancel)} disabled={submitting}>
           {t('取消', 'Cancel')}
         </Button>
         <Button type="submit" variant="primary" aria-busy={submitting} disabled={!ready}>

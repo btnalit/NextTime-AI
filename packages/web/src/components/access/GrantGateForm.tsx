@@ -17,6 +17,7 @@ import { sameNameIds, withSameNameId } from '../../lib/same-name.js';
 import { useGatekeeperDirectory } from '../approvals/useDirectoryNames.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
+import { useGuardedClose } from '../kit/discard-guard.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { Field, describedBy } from '../kit/field.js';
 import { Notice } from '../kit/notice.js';
@@ -90,6 +91,8 @@ function GrantGateFormBody({
   submitLabel,
   testId,
 }: GrantGateFormProps) {
+  // Legacy 497: in a drawer whose form was edited, 取消 asks before discarding it.
+  const guardedClose = useGuardedClose();
   const t = useT();
   const can = useRoleCan(http);
 
@@ -273,7 +276,7 @@ function GrantGateFormBody({
   );
 
   return (
-    <div className="stack" data-testid={testId ?? 'grant-gate-form'}>
+    <div className="stack" data-testid={testId ?? 'grant-gate-form'} data-discard-guard>
       <Field
         id="ggf-member-query"
         label={t('成员', 'Member')}
@@ -289,6 +292,7 @@ function GrantGateFormBody({
           value={memberQuery}
           onChange={(event) => setMemberQuery(event.target.value)}
           placeholder={t('搜索成员…', 'Search members…')}
+          data-no-discard-guard
           disabled={submitting}
           aria-describedby={describedBy('ggf-member-query', true, false)}
         />
@@ -376,6 +380,7 @@ function GrantGateFormBody({
               value={gateQuery}
               onChange={(event) => setGateQuery(event.target.value)}
               placeholder={t('搜索门…', 'Search gates…')}
+              data-no-discard-guard
               disabled={submitting || allGates}
               aria-describedby={describedBy('ggf-gate-query', true, false)}
             />
@@ -539,7 +544,7 @@ function GrantGateFormBody({
       <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
         <StillNeeded items={missing} hidden={submitting} testId="ggf-missing" />
         {onCancel ? (
-          <Button variant="ghost" onClick={onCancel} disabled={submitting}>
+          <Button variant="ghost" onClick={() => guardedClose(onCancel)} disabled={submitting}>
             {t('取消', 'Cancel')}
           </Button>
         ) : null}

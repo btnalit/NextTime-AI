@@ -27,6 +27,7 @@ import { useT } from '../../lib/i18n.js';
 import { transportKindLabel } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
 import { Combobox, ComboboxChips } from '../kit/combobox.js';
+import { useGuardedClose } from '../kit/discard-guard.js';
 import { Button } from '../ui/Button.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Field, Input, Textarea, describedBy } from '../ui/Field.js';
@@ -78,6 +79,8 @@ export function SkillEditor({
   onDone,
   onPublished,
 }: SkillEditorProps) {
+  // Legacy 497: in a drawer whose form was edited, 取消 asks before discarding it.
+  const guardedClose = useGuardedClose();
   const t = useT();
   const permissions = usePermissions();
   const can = useRoleCan(http);
@@ -376,11 +379,7 @@ export function SkillEditor({
           rows={2}
           disabled={busy}
           invalid={!!errors.description}
-          aria-describedby={describedBy(
-            'skill-description',
-            !errors.description,
-            !!errors.description,
-          )}
+          aria-describedby={describedBy('skill-description', true, !!errors.description)}
         />
       </Field>
       <div className="row-wrap" style={{ alignItems: 'flex-start' }}>
@@ -578,7 +577,7 @@ export function SkillEditor({
         <Button type="submit" variant="primary" loading={busy} data-testid="skill-submit">
           {t('保存草稿', 'Save draft')}
         </Button>
-        <Button variant="ghost" onClick={onDone} disabled={busy}>
+        <Button variant="ghost" onClick={() => guardedClose(onDone)} disabled={busy}>
           {t('取消', 'Cancel')}
         </Button>
       </div>

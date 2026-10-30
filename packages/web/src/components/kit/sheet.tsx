@@ -1,7 +1,14 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { type VariantProps, cva } from 'class-variance-authority';
-import { type ComponentPropsWithoutRef, type ElementRef, forwardRef } from 'react';
+import {
+  type ComponentPropsWithoutRef,
+  type ElementRef,
+  forwardRef,
+  useCallback,
+  useRef,
+} from 'react';
 import { cn } from '../../lib/cn.js';
+import { type DiscardGuard, GuardedCloseProvider, useDiscardGuard } from './discard-guard.js';
 
 /**
  * components/kit/sheet (S8 W1-A0, docs/development-tasks.md §5e decision F3): a side drawer on
@@ -28,8 +35,10 @@ export const SheetOverlay = forwardRef<
 });
 
 const sheetVariants = cva(
-  // `--overlay-actions-inset` = the bottom padding a pinned action row covers (legacy 347).
-  'fixed z-50 flex flex-col gap-4 overflow-y-auto border-border bg-surface-1 p-5 shadow-1 [--overlay-actions-inset:1.25rem]',
+  // `--overlay-actions-inset` = the bottom padding a pinned action row covers (legacy 347). The
+  // sheet is its own scroller, so it leaves that row out of what a focused field (a refusal's
+  // banner) scrolls into — as `.drawer-body` does in styles/pages.css (#791 UX acceptance P3-1).
+  'fixed z-50 flex flex-col gap-4 overflow-y-auto border-border bg-surface-1 p-5 shadow-1 [--overlay-actions-inset:1.25rem] [&:has(.overlay-actions)]:[scroll-padding-bottom:112px]',
   {
     variants: {
       side: {
@@ -59,21 +68,81 @@ const sheetVariants = cva(
 
 export interface SheetContentProps
   extends ComponentPropsWithoutRef<typeof DialogPrimitive.Content>,
-    VariantProps<typeof sheetVariants> {}
+    VariantProps<typeof sheetVariants> {
+  /** The guard to use — for a caller that hands it to content it renders elsewhere (a portal,
+   *  `kit/master-detail`); by default the sheet keeps its own. */
+  readonly discardGuard?: DiscardGuard;
+}
 
+/**
+ * Legacy 497: an edited form in the sheet is not lost to a stray Escape or outside click — the
+ * sheet asks 「放弃未保存的内容？」 first (`kit/discard-guard`), and a form's own 取消 asks the same
+ * through `useGuardedClose`. A sheet nothing was typed into closes as before. A caller's own
+ * `onEscapeKeyDown` / `onInteractOutside` runs first; one that prevents the close keeps it.
+ */
 export const SheetContent = forwardRef<
   ElementRef<typeof DialogPrimitive.Content>,
   SheetContentProps
->(function SheetContent({ side, className, children, ...rest }, ref) {
+>(function SheetContent(
+  {
+    side,
+    className,
+    children,
+    onEscapeKeyDown,
+    onInteractOutside,
+    onOpenAutoFocus,
+    discardGuard,
+    ...rest
+  },
+  ref,
+) {
+  const own = useDiscardGuard();
+  const discard = discardGuard ?? own;
+  // The sheet's own close, as its Close button would — the Root's `onOpenChange(false)`.
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const close = () => closeRef.current?.click();
+  // The guard watches the sheet's element itself: a detail portaled into it is outside its React
+  // tree, so React's own events would not see its edits.
+  const detach = useRef<{ el: HTMLElement; off: () => void } | null>(null);
+  const attach = discard.attach;
+  const contentRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      if (detach.current?.el !== el) {
+        detach.current?.off();
+        detach.current = el === null ? null : { el, off: attach(el) };
+      }
+      if (typeof ref === 'function') ref(el);
+      else if (ref) ref.current = el;
+    },
+    [ref, attach],
+  );
   return (
     <SheetPortal>
       <SheetOverlay />
       <DialogPrimitive.Content
-        ref={ref}
+        ref={contentRef}
         className={cn(sheetVariants({ side }), className)}
         {...rest}
+        onOpenAutoFocus={(event) => {
+          discard.reset();
+          onOpenAutoFocus?.(event);
+        }}
+        onEscapeKeyDown={(event) => {
+          onEscapeKeyDown?.(event);
+          if (event.defaultPrevented || !discard.edited()) return;
+          event.preventDefault();
+          discard.guard(close);
+        }}
+        onInteractOutside={(event) => {
+          onInteractOutside?.(event);
+          if (event.defaultPrevented || !discard.edited()) return;
+          event.preventDefault();
+          discard.guard(close);
+        }}
       >
-        {children}
+        <GuardedCloseProvider guard={discard.guard}>{children}</GuardedCloseProvider>
+        <DialogPrimitive.Close ref={closeRef} hidden tabIndex={-1} aria-hidden />
+        {discard.confirm}
       </DialogPrimitive.Content>
     </SheetPortal>
   );
