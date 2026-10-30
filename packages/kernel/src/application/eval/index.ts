@@ -7,13 +7,16 @@
  * how its calls are answered and what makes it pass. E3-2a adds runs (`runs.ts`): a case tried
  * once as an evaluation Task acting for the workspace's evaluation Principal (`principal.ts`),
  * under a monthly evaluation budget (`budget.ts`), scored once its Task ends (`runner.ts`); the
- * trial's Worker itself is served by `application/eval-session`. Draft runs (E3-2b) and verdicts
- * (E3-3) come later.
+ * trial's Worker itself is served by `application/eval-session`. E3-2b adds draft evaluations
+ * (`draft-evaluations.ts`): a Skill draft against the version it would replace, stage by stage,
+ * after a check of the draft (`draft-check.ts`); each stage's trials queued and started by
+ * `dispatch.ts`, judged by `verdict.ts`. Using a verdict when publishing comes with E3-3.
  *
  * It owns `eval_suites`, `eval_suite_changes`, `eval_fixture_gates` (migrations/worker/0007 —
  * in the `worker` migration module only because they reference `worker_definitions` and modules
  * run in directory order), `eval_cases` (worker/0008) and `eval_runs` / `eval_trials`
- * (worker/0009; `eval_trial_calls` is eval-session's), and exposes only this interface.
+ * (worker/0009; `eval_trial_calls` is eval-session's), `eval_draft_evaluations` (worker/0010), and
+ * exposes only this interface.
  *
  * Closed to agents (I-E4 "评测对人透明、对 agent 封闭"): nothing here is written to the graph, so
  * `search` / `explain` never reach it, and its capabilities are human-channel, made for a person
@@ -25,7 +28,29 @@ export type { EvalBudget } from './budget.js';
 export { evalBudgetWire, readEvalBudget } from './budget.js';
 export type { EvalCaseTarget } from './cases.js';
 export { addEvalCase, editEvalCase, getEvalCase, retireEvalCase } from './cases.js';
+export type {
+  CancelledDraftEvaluation,
+  DraftEvaluationActor,
+  DraftEvaluationTarget,
+  StartedDraftEvaluation,
+} from './draft-evaluations.js';
 export {
+  DRAFT_EVALUATION_STAGE_ACTION,
+  DRAFT_EVALUATION_VERDICT_ACTION,
+  afterDraftEvaluationCancel,
+  afterDraftEvaluationStart,
+  cancelDraftEvaluation,
+  getDraftEvaluation,
+  listDraftEvaluations,
+  startDraftEvaluation,
+} from './draft-evaluations.js';
+export { dispatchEvalTrials } from './dispatch.js';
+export {
+  DraftCheckFailedError,
+  DraftEvaluationEndedError,
+  DraftEvaluationNotFoundError,
+  EvalSkillNotADraftError,
+  EvaluationBudgetInsufficientError,
   EvalCaseNotFoundError,
   EvalFixtureGateInUseError,
   EvalRunNotFoundError,

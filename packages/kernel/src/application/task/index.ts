@@ -220,12 +220,14 @@ export {
 } from './attribution.js';
 
 export type { LoadedSkillRef, ResolvedRunSkills } from './definition-content.js';
+export { readDefinitionContent } from './definition-content.js';
 export {
   type RunEnvironment,
   type RunRuntimeReport,
   type RunSpec,
   RunSpecSchema,
   environmentDigest,
+  readRunEnvironment,
 } from './run-fingerprint.js';
 
 // S11 W1a E2-1 — `get_skill_stats`, read-time aggregation over the records the work left.

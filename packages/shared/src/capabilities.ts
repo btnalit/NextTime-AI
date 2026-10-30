@@ -17,7 +17,7 @@ import {
 } from './enums.js';
 import type { CapabilityChannel, Role } from './enums.js';
 import { listEnvelope } from './envelope.js';
-import { evalCaseContentFields, evalCaseKindFields } from './eval-case.js';
+import { EVAL_CASE_MECHANISM_MAX, evalCaseContentFields, evalCaseKindFields } from './eval-case.js';
 import {
   GoalBudgetSchema,
   GoalPlanSchema,
@@ -2702,7 +2702,7 @@ const workerCapabilities = [
       .strict(),
     resultSchema: wire.DiscardDraftResultWireSchema,
     description:
-      'Discard one of your own private draft WorkerDefinition/Skill/Procedure/OntologyVersion versions (I16), with an optional reason (kept in the audit record). Only the draft’s own proposer may discard it; a published or deprecated version is never deletable through this.',
+      'Discard one of your own private draft WorkerDefinition/Skill/Procedure/OntologyVersion versions (I16), with an optional reason (kept in the audit record). Only the draft’s own proposer may discard it; a published or deprecated version is never deletable through this. A Skill draft being evaluated (start_draft_evaluation) is 409 draft_evaluating until its evaluation ends or is cancelled.',
   },
   {
     // E2-0b (review #493 on #764, F2): the reviewer's transition beside `discard_draft` — a pending
@@ -2726,7 +2726,7 @@ const workerCapabilities = [
       .strict(),
     resultSchema: wire.RejectDraftResultWireSchema,
     description:
-      'Reject a pending draft Skill / Procedure version (kind skill or procedure) so the family’s next version can be proposed again: the draft is deleted and the reason (required, kept in the audit record and shown to the draft’s proposer by list_draft_rejections) says why. Only the workspace owner or the proposer of the family’s version in use (its latest published version) may reject — anyone else is 403 not_proposer, and a family with no published version is the owner’s; the draft’s own proposer discards it instead (discard_draft). draftDigest is the draftDigest list_skills / get_skill / list_procedures gave for that draft: another draft under the same version since is 409 draft_changed. A version that is not a draft is 409 not_a_draft. Nothing is written when refused.',
+      'Reject a pending draft Skill / Procedure version (kind skill or procedure) so the family’s next version can be proposed again: the draft is deleted and the reason (required, kept in the audit record and shown to the draft’s proposer by list_draft_rejections) says why. Only the workspace owner or the proposer of the family’s version in use (its latest published version) may reject — anyone else is 403 not_proposer, and a family with no published version is the owner’s; the draft’s own proposer discards it instead (discard_draft). draftDigest is the draftDigest list_skills / get_skill / list_procedures gave for that draft: another draft under the same version since is 409 draft_changed. A version that is not a draft is 409 not_a_draft; a Skill draft being evaluated (start_draft_evaluation) is 409 draft_evaluating until its evaluation ends or is cancelled. Nothing is written when refused.',
   },
   {
     // Legacy 491: a rejection reaches the draft's proposer — the person, also for a draft an agent
@@ -4745,7 +4745,7 @@ const evaluationCapabilities = [
     paramsSchema: z.object({ runId: z.string().uuid() }).strict(),
     resultSchema: wire.EvalRunWireSchema,
     description:
-      'Read one evaluation run whole: the suite version and WorkerDefinition version it ran, and each trial — its status, verdict or error, each assertion’s outcome, the result its Worker reported, every fixture call it made with the rule that answered it, its cost and tokens, and its evaluation Task. People only. 404 not_found for a run that is not there.',
+      'Read one evaluation run whole: the suite version and WorkerDefinition version it ran, and each trial — its status, verdict or error, each assertion’s outcome, the result its Worker reported, every fixture call it made with the rule that answered it, its cost and tokens, and its evaluation Task. People only. 404 not_found for a run that is not there — and for a draft evaluation’s stage you may not see (as get_draft_evaluation).',
   },
   {
     name: 'list_eval_runs',
@@ -4754,10 +4754,16 @@ const evaluationCapabilities = [
     channel: 'human',
     minRole: 'member',
     actsForPerson: true,
-    paramsSchema: z.object({ suiteId: evalSuiteId, caseId: z.string().uuid().optional() }).strict(),
+    paramsSchema: z
+      .object({
+        suiteId: evalSuiteId,
+        caseId: z.string().uuid().optional(),
+        kind: wire.EvalRunKindSchema.optional(),
+      })
+      .strict(),
     resultSchema: listEnvelope(wire.EvalRunSummaryWireSchema),
     description:
-      'List a suite’s evaluation runs, newest first (the last 20), each in brief — its case rows and how many trials passed, failed, errored or still run, and its cost; with caseId, only the runs that tried that case row. People only. 404 not_found for a suite that is not there.',
+      'List a suite’s evaluation runs, newest first (the last 20), each in brief — its case rows and how many trials passed, failed, errored, still run or wait to start, and its cost; with caseId, only the runs that tried that case row; with kind, only runs of that kind (case_trial: single trials; draft: the stages of draft evaluations — those you may see, as get_draft_evaluation). People only. 404 not_found for a suite that is not there.',
   },
   {
     name: 'get_eval_budget',
@@ -4770,6 +4776,70 @@ const evaluationCapabilities = [
     resultSchema: wire.EvalBudgetWireSchema,
     description:
       'The workspace’s evaluation budget this UTC month: the budget (evaluation.monthly_cost_budget_usd — $10 unless the owner set it with set_quota), what evaluation runs have spent, the month’s start and end, what one trial has cost on average lately (null before any priced one) and how many trials this month ran on a model with no price (not counted in spentUsd). People only.',
+  },
+  // S10 E3-2b: draft evaluations — a Skill draft against what it would replace, through the
+  // funnel's stages (regression, mechanism, confirm), judged by fixed rules (shared
+  // draft-evaluation.ts). Evaluation is evidence for the person who publishes, never a gate.
+  {
+    name: 'start_draft_evaluation',
+    group: 'evaluation',
+    mode: 'execute',
+    channel: 'human',
+    minRole: 'builder',
+    actsForPerson: true,
+    paramsSchema: z
+      .object({
+        skillId: z.string().uuid(),
+        version: z.number().int().positive(),
+        // The draft as the caller read it (SkillSummaryWire.draftDigest).
+        draftDigest: z.string().min(1),
+        suiteId: evalSuiteId,
+        suiteVersion: evalSuiteVersion,
+        // One of the suite's mechanism cases' mechanisms; omitted, the mechanism stage is skipped.
+        mechanism: z.string().trim().min(1).max(EVAL_CASE_MECHANISM_MAX).optional(),
+      })
+      .strict(),
+    resultSchema: wire.DraftEvaluationWireSchema,
+    description:
+      'Evaluate a Skill draft against a suite: the candidate (the draft) and the baseline (the published version of its family it would replace; for a new Skill, the suite’s pinned WorkerDefinition without it) run the suite’s cases as evaluation Tasks — every gate call answered from fixtures, egress denied — through three stages in order: regression (each regression case twice per arm: the candidate must pass each as often as the baseline, else regressed), mechanism (the cases aimed at mechanism, 10 tries per arm in all: the candidate must pass all and the baseline at most 4 in 10, else refuted; skipped without mechanism), confirm (each full case 3 times per arm: dev pass rates against δ = 0.1 → worse, better, non_inferior or inconclusive; holdout must agree). Both arms load the same other Skills, pinned now. Read progress and the verdict with get_draft_evaluation. Before anything runs the draft is checked: a credential-like value, a platform-shaped id, text over 20000 characters, no change from the baseline, more than 200 changed lines, or a canary or held-out case text refuses the start with 400 draft_check_failed (details.problems: [{check, count, limit}]). A stage the month’s evaluation budget cannot cover is not run (the verdict is inconclusive, reason budget); when even the first stage’s estimate does not fit, 429 evaluation_budget_insufficient (details: budgetUsd, spentUsd, estimateUsd) and nothing starts; a spent budget is 429 evaluation_budget_exhausted. Refused too: a draft that is not there or not visible (404 not_found), one that is no longer a draft (409 not_a_draft), one changed since it was read (409 draft_changed), one already being evaluated (409 draft_evaluating), a suite at another version (409 version_changed), a mechanism the suite’s cases do not name, a suite with no case to run or a draft whose name another loaded Skill has (409 conflict). While it runs the draft cannot be discarded, rejected or expired. People only.',
+  },
+  {
+    name: 'get_draft_evaluation',
+    group: 'evaluation',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    actsForPerson: true,
+    paramsSchema: z.object({ evaluationId: z.string().uuid() }).strict(),
+    resultSchema: wire.DraftEvaluationWireSchema,
+    description:
+      'Read one draft evaluation whole: what it compares (suite version, WorkerDefinition version, the draft and the baseline, the other Skills, both contents), each stage — its state, its run (get_eval_run reads its trials), its estimate, each arm’s trials and cost, the case × arm matrix and what it measured — the verdict, why and which stage decided it, and every environment its trials ran in. People who may see the draft only — the draft’s proposer and the workspace’s draft reviewers (owner, builders), or anyone once that draft is published as it was evaluated: 404 not_found otherwise, as for an evaluation that is not there.',
+  },
+  {
+    name: 'list_draft_evaluations',
+    group: 'evaluation',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    actsForPerson: true,
+    paramsSchema: z
+      .object({ skillId: z.string().uuid().optional(), suiteId: evalSuiteId.optional() })
+      .strict(),
+    resultSchema: listEnvelope(wire.DraftEvaluationSummaryWireSchema),
+    description:
+      'List draft evaluations, newest first (the last 50), each in brief — what it compares, its state, the stage running, the verdict and why, its cost; with skillId, those of one Skill family; with suiteId, those against one suite. Only those whose draft the caller may see (as get_draft_evaluation). People only.',
+  },
+  {
+    name: 'cancel_draft_evaluation',
+    group: 'evaluation',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'builder',
+    actsForPerson: true,
+    paramsSchema: z.object({ evaluationId: z.string().uuid() }).strict(),
+    resultSchema: wire.DraftEvaluationWireSchema,
+    description:
+      'Cancel a running draft evaluation: its trials not started yet are cancelled, its running evaluation Tasks are terminated, no later stage starts, and it ends cancelled, with no verdict. What its trials already measured stays readable. One that has ended is 409 conflict; one that is not there or whose draft the caller may not see is 404 not_found. People only.',
   },
 ] as const satisfies readonly Capability[];
 
@@ -4890,6 +4960,11 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   'get_eval_run',
   'list_eval_runs',
   'get_eval_budget',
+  // S10 E3-2b: and every draft evaluation.
+  'start_draft_evaluation',
+  'get_draft_evaluation',
+  'list_draft_evaluations',
+  'cancel_draft_evaluation',
   'audit_query',
   'reconstruct',
   'export_prov',

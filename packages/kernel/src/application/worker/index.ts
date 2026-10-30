@@ -109,6 +109,7 @@ export { lockWorkerRegistry } from './registry-lock.js';
 
 export {
   DEFAULT_DRAFT_EXPIRY_DAYS,
+  DraftEvaluatingError,
   DraftNotDiscardableError,
   DraftNotRejectableError,
   discardDraft,
