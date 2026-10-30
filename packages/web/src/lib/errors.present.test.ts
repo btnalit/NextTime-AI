@@ -67,6 +67,34 @@ describe('presentError', () => {
     }
   });
 
+  // S10 E3-2c (legacy 514): the seal's pause reads the same over HTTP and over WS, never as "not
+  // permitted", and never says which refusals opened it (no second side channel).
+  it('evaluation_probe_hold says the agents are paused and who releases them, over HTTP and WS alike', () => {
+    const message =
+      'paused: content reserved for evaluation was withheld from the agents acting for this principal too many times, so nothing runs for them until the workspace owner releases the pause';
+    for (const err of [
+      new HttpError('capability_error', message, 'evaluation_probe_hold'),
+      new RpcError(-32019, message),
+    ]) {
+      const shown = presentError(err, zh);
+      expect(shown).toMatchObject({
+        code: 'evaluation_probe_hold',
+        title: '智能体已暂停',
+        curated: true,
+      });
+      expect(shown.message).toContain('已被暂停');
+      expect(shown.message).toContain('工作区所有者');
+      expect(shown.message).toContain('治理 → 评测');
+      expect(shown.message).not.toContain('权限');
+      for (const place of ['调用结果', '调用报错', 'Worker 启动', '系统提示词', '任务输入']) {
+        expect(shown.message).not.toContain(place);
+      }
+      expect(shown.raw).toBe(message);
+      expect(presentError(err, en).title).toBe('Agents paused');
+      expect(presentError(err, en).message).toContain('Govern → Evaluation');
+    }
+  });
+
   // UX acceptance of #602 (P2-1): the note names the field the kernel names, says the character
   // cannot be seen, and says how to get rid of it — the same over HTTP and over WS (the composer).
   it('legacy 320: the unstorable_text note names the field and how to remove an invisible character', () => {

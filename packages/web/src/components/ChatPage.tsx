@@ -5,11 +5,13 @@ import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import {
   composerEvaluationContentStep,
+  composerProbeHoldStep,
   composerUnstorableTextStep,
   describeError,
 } from '../lib/errors.js';
 import { useT } from '../lib/i18n.js';
 import { liveOutputPaused } from '../lib/live-stream.js';
+import { hrefs } from '../lib/router.js';
 import { goalRunIdsIn, latestGoalStatuses } from '../lib/system-status.js';
 import { persistedToolCallIds, threadItems } from '../lib/tool-call-record.js';
 import type { WsClient } from '../lib/ws-client.js';
@@ -27,6 +29,7 @@ import { useChatMessages } from './chat/useChatMessages.js';
 import { useChatSummary } from './chat/useChatSummary.js';
 import { useComposer } from './chat/useComposer.js';
 import { useTurnAttributions } from './chat/useTurnAttributions.js';
+import { RouteLink } from './kit/route-link.js';
 import { Textarea } from './kit/textarea.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -296,13 +299,15 @@ export function ChatPage({
               ) : null}
               {/* Legacy 334: U+0000 in what the person typed is named as the message, not the
                   wire param `text`, and without the note about an agent's call. S10 E3-1c: so is
-                  the evaluation seal's refusal, which here only ever stops the message. */}
+                  the evaluation seal's refusal, which here only ever stops the message; E3-2c: and
+                  its pause of the person's own agents. */}
               {sendError !== null ? (
                 <ErrorBanner
                   error={sendError}
                   overrides={{
                     unstorable_text: composerUnstorableTextStep(t, composer.hasUnstorableChar),
                     evaluation_content_withheld: composerEvaluationContentStep(t),
+                    evaluation_probe_hold: composerProbeHoldStep(t),
                   }}
                   action={
                     // Legacy 335: the character is in the draft, so the page can take it out.
@@ -329,6 +334,16 @@ export function ChatPage({
                       >
                         {t('移除看不见的字符', 'Remove invisible characters')}
                       </Button>
+                    ) : describeError(sendError).code === 'evaluation_probe_hold' &&
+                      can('list_eval_seal_holds') === true ? (
+                      // #838 UX P3: whoever can see the pauses goes straight to them.
+                      <RouteLink
+                        href={hrefs.evaluation()}
+                        className="link-inline"
+                        testId="composer-probe-hold-open"
+                      >
+                        {t('去「治理 → 评测」查看暂停', 'See the pause under Govern → Evaluation')}
+                      </RouteLink>
                     ) : undefined
                   }
                 />

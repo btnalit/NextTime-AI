@@ -14,6 +14,7 @@ import {
   draftCheckProblemsOf,
   draftEvaluationOutcome,
   draftEvaluationPlan,
+  draftEvaluationStartErrors,
   passRateText,
   pointsText,
   skipReasonText,
@@ -23,6 +24,7 @@ import {
   suiteMechanisms,
   verdictReasonText,
 } from './draft-evaluations.js';
+import { trialStartErrors } from './eval-runs.js';
 import { HttpError } from './http-client.js';
 import type { Translate } from './i18n.js';
 import { statusChipStyle } from './status-tone.js';
@@ -226,5 +228,14 @@ describe('copy', () => {
     expect(pointsText(-0.1)).toBe('−10.0');
     expect(pointsText(0)).toBe('0.0');
     expect(pointsText(null)).toBe('—');
+  });
+});
+
+describe('draftEvaluationStartErrors (#838 UX P3)', () => {
+  it('a paused evaluation reads the same as on a trial’s start', () => {
+    expect(draftEvaluationStartErrors(zhT).evaluation_probe_hold).toBe(
+      trialStartErrors(zhT).evaluation_probe_hold,
+    );
+    expect(draftEvaluationStartErrors(zhT).evaluation_probe_hold).toMatch(/^评测自己的智能体/);
   });
 });

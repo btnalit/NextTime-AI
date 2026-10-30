@@ -1,4 +1,9 @@
-import type { EvalCaseContent, EvalCaseKind, EvalRunKind } from '@nexttime/shared';
+import type {
+  EvalCaseContent,
+  EvalCaseKind,
+  EvalRunKind,
+  EvalSealHoldStatus,
+} from '@nexttime/shared';
 import {
   type DraftEvaluationActor,
   type EvalSuiteActor,
@@ -8,6 +13,7 @@ import {
   afterDraftEvaluationStart,
   cancelDraftEvaluation,
   createEvalSuite,
+  dispatchEvalTrials,
   editEvalCase,
   evalBudgetWire,
   getDraftEvaluation,
@@ -17,7 +23,9 @@ import {
   listDraftEvaluations,
   listEvalRuns,
   listEvalSuites,
+  listSealHolds,
   readEvalBudget,
+  releaseSealHold,
   removeEvalFixtureGate,
   repinEvalSuite,
   retireEvalCase,
@@ -41,7 +49,8 @@ import type { CapabilityHandler, CapabilityHandlerContext } from './capability-h
  * scored by `application/eval`'s runner, which the composition root ticks. E3-2b: a draft
  * evaluation is started (its first trials started after the commit), read and cancelled (its
  * running Tasks terminated after the commit) here; who may see one is `application/eval`'s rule,
- * by the caller's role.
+ * by the caller's role. E3-2c: the evaluation seal's pauses are listed (the owner and auditors, by
+ * the registry's minRole) and released (the owner) here.
  */
 
 function personOf(capability: string, ctx: CapabilityHandlerContext | undefined): EvalSuiteActor {
@@ -347,5 +356,43 @@ export const cancelDraftEvaluationHandler: CapabilityHandler = async (
     resourceId: evaluationId,
     auditPayload: { runningTaskCount: cancelled.taskIds.length },
     afterCommit: (pool) => afterDraftEvaluationCancel(pool, workspaceId, actor, cancelled),
+  };
+};
+
+export const listEvalSealHoldsHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  personOf('list_eval_seal_holds', ctx);
+  const filter = params as { status?: EvalSealHoldStatus };
+  return { result: { items: await listSealHolds(client, workspaceId, filter) } };
+};
+
+export const releaseEvalSealHoldHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const actor = personOf('release_eval_seal_hold', ctx);
+  const target = params as { holdId: string; reason: string };
+  const hold = await releaseSealHold(client, workspaceId, actor, target);
+  return {
+    result: hold,
+    resourceType: 'eval_seal_hold',
+    resourceId: hold.id,
+    auditPayload: { heldPrincipalId: hold.principal.id },
+    // The evaluation Principal's queued trials wait for its release; start them now rather than at
+    // the next tick.
+    ...(hold.principal.evaluation
+      ? {
+          afterCommit: async (pool) => {
+            await dispatchEvalTrials(pool, { workspaceId }).catch(() => 0);
+            return hold;
+          },
+        }
+      : {}),
   };
 };

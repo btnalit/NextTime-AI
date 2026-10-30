@@ -4,7 +4,11 @@ import { redactedForAudit } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
-import { EvaluationContentWithheldError, sealWithholds } from '../eval-seal/index.js';
+import {
+  EvaluationContentWithheldError,
+  assertNoSealHold,
+  sealWithholds,
+} from '../eval-seal/index.js';
 import { publishChatPushEvent } from './push.js';
 
 /**
@@ -539,6 +543,9 @@ export async function sendChatMessage(
 ): Promise<SendChatMessageResult> {
   const chat = await requireChatAccess(client, workspaceId, input.chatId);
   if (chat.archivedAt !== null) throw new ChatArchivedError(input.chatId);
+  // S10 E3-2c (legacy 514): a person whose agents the evaluation seal has paused starts no Turn
+  // until the workspace owner releases the pause (the dispatch writes the audit row).
+  await assertNoSealHold(client, workspaceId, principalId);
   // S10 E3-1c (I-E4): a person's message is the entry agent's prompt — one carrying a suite's
   // canary or a verbatim run of a holdout case's text is refused before anything is saved (the
   // dispatch it came through writes the audit row).

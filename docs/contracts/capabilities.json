@@ -15170,7 +15170,8 @@
                       "budget_exhausted",
                       "terminated",
                       "cancelled",
-                      "withheld"
+                      "withheld",
+                      "paused"
                     ],
                     "type": "string"
                   },
@@ -28567,6 +28568,156 @@
               "running",
               "queued",
               "costUsd"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "actsForPerson": true,
+    "channel": "human",
+    "group": "evaluation",
+    "minRole": "auditor",
+    "mode": "observe",
+    "name": "list_eval_seal_holds",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "active",
+            "released"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "hits": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "openedAt": {
+                "type": "string"
+              },
+              "places": {
+                "additionalProperties": false,
+                "properties": {
+                  "capabilityError": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "capabilityResult": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "workerStart": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "capabilityResult",
+                  "capabilityError",
+                  "workerStart"
+                ],
+                "type": "object"
+              },
+              "principal": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "evaluation": {
+                    "type": "boolean"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "human",
+                      "agent",
+                      "service"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "kind",
+                  "displayName",
+                  "evaluation"
+                ],
+                "type": "object"
+              },
+              "releaseReason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "releasedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "releasedBy": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "enum": [
+                  "active",
+                  "released"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "principal",
+              "status",
+              "hits",
+              "places",
+              "openedAt",
+              "releasedAt",
+              "releasedBy",
+              "releaseReason"
             ],
             "type": "object"
           },
@@ -45710,6 +45861,143 @@
     "sideEffects": true
   },
   {
+    "actsForPerson": true,
+    "channel": "human",
+    "group": "evaluation",
+    "minRole": "owner",
+    "mode": "write",
+    "name": "release_eval_seal_hold",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "holdId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 500,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "holdId",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "hits": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "openedAt": {
+          "type": "string"
+        },
+        "places": {
+          "additionalProperties": false,
+          "properties": {
+            "capabilityError": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "capabilityResult": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "workerStart": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "capabilityResult",
+            "capabilityError",
+            "workerStart"
+          ],
+          "type": "object"
+        },
+        "principal": {
+          "additionalProperties": false,
+          "properties": {
+            "displayName": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "evaluation": {
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "human",
+                "agent",
+                "service"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "displayName",
+            "evaluation"
+          ],
+          "type": "object"
+        },
+        "releaseReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "releasedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "releasedBy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "enum": [
+            "active",
+            "released"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "principal",
+        "status",
+        "hits",
+        "places",
+        "openedAt",
+        "releasedAt",
+        "releasedBy",
+        "releaseReason"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
     "channel": "human",
     "group": "goal",
     "minRole": "owner",
@@ -55285,7 +55573,8 @@
                       "budget_exhausted",
                       "terminated",
                       "cancelled",
-                      "withheld"
+                      "withheld",
+                      "paused"
                     ],
                     "type": "string"
                   },

@@ -1,4 +1,9 @@
-import { PRINCIPAL_REFUSAL_REASON_VALUES, type PrincipalRefusalReason } from '@nexttime/shared';
+import {
+  EVAL_SEAL_HOLD_THRESHOLD,
+  EVAL_SEAL_HOLD_WINDOW_HOURS,
+  PRINCIPAL_REFUSAL_REASON_VALUES,
+  type PrincipalRefusalReason,
+} from '@nexttime/shared';
 import { HttpError } from './http-client.js';
 import { type Translate, sentenceGap } from './i18n.js';
 import { LlmAdminError, llmAdminErrorMessage } from './llm-admin.js';
@@ -101,6 +106,8 @@ const RPC_CODE_NAMES: Readonly<Record<number, string>> = {
   // Legacy 320 (UX acceptance of #602): the composer's own path for text holding U+0000.
   [-32017]: 'unstorable_text',
   [-32018]: 'evaluation_content_withheld',
+  // S10 E3-2c: the person's agents are paused by the evaluation seal (the chat composer's path).
+  [-32019]: 'evaluation_probe_hold',
   // Client-side only (lib/ws-client.ts `RPC_TIMEOUT_CODE`, C5): the kernel never answered.
   [-32000]: 'timeout',
 };
@@ -161,6 +168,7 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   credentials_in_text: 'Credentials in the text',
   redacted_text_submitted: 'Masked text sent back',
   evaluation_content_withheld: 'Reserved for evaluation',
+  evaluation_probe_hold: 'Agents paused',
   credentials_in_connection_params: 'Credentials in the address',
   operation_definition_mismatch: 'The gate runs another definition',
   operation_definition_unavailable: 'No approved definition',
@@ -255,6 +263,7 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   credentials_in_text: '文字里带了凭据',
   redacted_text_submitted: '文字里还留着遮蔽标记',
   evaluation_content_withheld: '含评测保留的内容',
+  evaluation_probe_hold: '智能体已暂停',
   credentials_in_connection_params: '地址里带了凭据',
   operation_definition_mismatch: '门运行的定义和批准的不一样',
   operation_definition_unavailable: '没有批准过的定义',
@@ -335,6 +344,15 @@ export function composerEvaluationContentStep(t: Translate): string {
   return t(
     '消息里有评测用例集留作测试的部分，任何智能体都不能读到，所以这条消息没有发出，也没有保存。去掉那一段再试。',
     'The message holds text an evaluation suite keeps for testing, which no agent may read, so it was neither sent nor saved. Remove that part and try again.',
+  );
+}
+
+/** S10 E3-2c (legacy 514): the evaluation seal's pause as the chat composer shows it — the person's
+ *  own agents are paused, so the message was not sent. Never says which refusals opened it. */
+export function composerProbeHoldStep(t: Translate): string {
+  return t(
+    `你名下的智能体已被评测防泄漏暂停（${EVAL_SEAL_HOLD_WINDOW_HOURS} 小时内 ${EVAL_SEAL_HOLD_THRESHOLD} 次被拦下评测保留的内容），这条消息没有发出，也没有保存。工作区所有者在「治理 → 评测」查看并解除后，才能继续对话。`,
+    `Your agents are paused by the evaluation seal (content reserved for evaluation was stopped on its way to them ${EVAL_SEAL_HOLD_THRESHOLD} times within ${EVAL_SEAL_HOLD_WINDOW_HOURS} hours), so the message was neither sent nor saved. You can chat again once a workspace owner reviews and releases the pause under Govern → Evaluation.`,
   );
 }
 
@@ -486,6 +504,14 @@ export const ERROR_NEXT_STEPS: Readonly<
   evaluation_content_withheld: {
     zh: 'Worker 要读的内容（任务输入、系统提示词或挂载的 Skill）里有评测用例集留作测试的部分（只在「治理 → 评测」给人看，任何智能体都不能读到），所以 Worker 没有启动，任务记为启动失败。去掉那一段再试。',
     en: 'What the Worker would read (the task input, its system prompt or a mounted Skill) holds text an evaluation suite keeps for testing (shown to people under Govern → Evaluation only; no agent may read it), so the Worker was not started and the task is recorded as failed to start. Remove that part and try again.',
+  },
+  // S10 E3-2c (kernel application/eval-seal hold.ts): the agents of whoever this was for — a
+  // person's own, or the evaluation's — are paused by the seal. Never says which refusals opened
+  // it. The chat composer says it its own way (`composerProbeHoldStep`); the evaluation page lists
+  // whose agents are paused under its budget (`components/evaluation/SealHolds`).
+  evaluation_probe_hold: {
+    zh: `评测防泄漏在 ${EVAL_SEAL_HOLD_WINDOW_HOURS} 小时内 ${EVAL_SEAL_HOLD_THRESHOLD} 次拦下了要交给这些智能体的评测保留内容，像是在逐字试探留作测试的用例，所以它们已被暂停：调用、启动 Worker、开始对话和评测都不会执行。工作区所有者在「治理 → 评测」查看后可以解除。`,
+    en: `The evaluation seal stopped content reserved for evaluation on its way to these agents ${EVAL_SEAL_HOLD_THRESHOLD} times within ${EVAL_SEAL_HOLD_WINDOW_HOURS} hours — the pattern of probing held-out cases one character at a time — so they are paused: no call, Worker start, chat turn or evaluation runs for them. A workspace owner can review and release the pause under Govern → Evaluation.`,
   },
   // The fallback when no form shows it on its own field (each form says where the credential goes
   // in its own terms): no field name here, since not every place that refuses it has one.

@@ -2,6 +2,7 @@ import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import type { SealPlace } from './errors.js';
+import { countSealHit, isCountedSealPlace } from './hold.js';
 
 /** The audit action of a seal refusal. */
 export const EVALUATION_WITHHELD_ACTION = 'evaluation.content_withheld';
@@ -29,6 +30,10 @@ export interface EvaluationWithheldRecord {
  * it was: no run of text, no case or suite, not whether a canary or a holdout case matched, and
  * none of the call's params (they may be the very content). Best effort: a failure to write it is
  * logged, without any of the call's content, and never replaces the refusal.
+ *
+ * S10 E3-2c: then, in a transaction of its own (so a failure there never costs the audit row), a
+ * refusal an agent could have provoked is counted for the Principal (`countSealHit`), which pauses
+ * that Principal's agents once the count reaches the threshold.
  */
 export async function recordEvaluationWithheld(
   pool: PoolLike,
@@ -59,6 +64,28 @@ export async function recordEvaluationWithheld(
     const detail = auditErr instanceof Error ? auditErr.message : String(auditErr);
     console.error(
       `[kernel] audit of an evaluation seal refusal failed (where=${record.where}): ${detail}`.replace(
+        /\n|\r/g,
+        '',
+      ),
+    );
+  }
+  const where = record.where;
+  if (!isCountedSealPlace(where)) return;
+  try {
+    const opened = await withWorkspace(
+      pool,
+      { workspaceId: record.workspaceId, principalId: record.principalId },
+      (client) => countSealHit(client, record.workspaceId, record.principalId, where),
+    );
+    if (opened) {
+      console.warn(
+        `[kernel] evaluation seal: paused the agents acting for principal ${record.principalId} after ${opened.hits} refusals (pause ${opened.id})`,
+      );
+    }
+  } catch (countErr) {
+    const detail = countErr instanceof Error ? countErr.message : String(countErr);
+    console.error(
+      `[kernel] counting an evaluation seal refusal failed (where=${where}): ${detail}`.replace(
         /\n|\r/g,
         '',
       ),

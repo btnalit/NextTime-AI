@@ -25,7 +25,7 @@ import {
 } from '../../governance/capability/index.js';
 import { shownFreeText } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
-import { normalizeSealText } from '../eval-seal/index.js';
+import { assertNoSealHold, normalizeSealText } from '../eval-seal/index.js';
 import {
   type RunEnvironment,
   getConfiguredTaskRuntime,
@@ -371,7 +371,8 @@ export interface StartedDraftEvaluation {
  * WorkerDefinition version no longer published, a mechanism no live case names, no stage with a
  * case, or a draft named like another Skill the arms load (409 conflict); the check failed (400
  * draft_check_failed); the budget spent (429 evaluation_budget_exhausted) or short of the first
- * stage's estimate (429 evaluation_budget_insufficient).
+ * stage's estimate (429 evaluation_budget_insufficient); the evaluation Principal paused by the
+ * evaluation seal (403 evaluation_probe_hold, S10 E3-2c).
  */
 export async function startDraftEvaluation(
   client: PoolClient,
@@ -531,7 +532,9 @@ export async function startDraftEvaluation(
     );
   }
 
-  await getOrCreateEvaluationPrincipal(client, workspaceId);
+  // S10 E3-2c: none while the seal has paused the evaluation Principal's agents (403).
+  const evaluationPrincipalId = await getOrCreateEvaluationPrincipal(client, workspaceId);
+  await assertNoSealHold(client, workspaceId, evaluationPrincipalId, 'evaluation');
   let evaluationId: string;
   try {
     const inserted = await client.query<{ id: string }>(

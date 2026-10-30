@@ -223,7 +223,20 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     /** Every console line written while a test runs, to prove the seal logs no content. */
     let logged: string[];
-    beforeEach(() => {
+    beforeEach(async () => {
+      // These tests are about each refusal; the pause their count opens (S10 E3-2c) has its own
+      // tests (eval-seal-holds.integration.test.ts), so each test here starts with none.
+      if (pool !== undefined && workspaceId !== undefined) {
+        await asApp((client) =>
+          client.query(
+            `update eval_seal_holds
+                set status = 'released', released_at = now(), released_by = $2,
+                    release_reason = 'released between seal tests'
+              where workspace_id = $1 and status = 'active'`,
+            [workspaceId, ownerId],
+          ),
+        );
+      }
       logged = [];
       for (const method of ['log', 'info', 'warn', 'error', 'debug'] as const) {
         vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {

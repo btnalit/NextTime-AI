@@ -686,6 +686,66 @@ describe('ChatPage send refused for evaluation content (S10 E3-1c)', () => {
   });
 });
 
+// S10 E3-2c (legacy 514): a person whose agents the seal paused cannot chat; the composer says
+// the message was neither sent nor saved, who releases the pause, and nothing of what opened it.
+describe('ChatPage send refused while the person’s agents are paused (S10 E3-2c)', () => {
+  it('says the agents are paused, the message was not kept, and where the owner releases it', async () => {
+    const fake = fakeClient();
+    (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new RpcError(
+        -32019,
+        'paused: content reserved for evaluation was withheld from the agents acting for this principal too many times, so nothing runs for them until the workspace owner releases the pause',
+      ),
+    );
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => fake.caughtUp());
+
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'hello' } });
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+    const banner = await screen.findByRole('alert');
+    const body = banner.querySelector('.error-banner-message')?.textContent ?? '';
+    expect(banner.textContent).toContain('智能体已暂停');
+    expect(body).toContain('这条消息没有发出，也没有保存');
+    expect(body).toContain('治理 → 评测');
+    expect(body).not.toContain('权限');
+    for (const place of ['调用结果', '调用报错', 'Worker 启动']) expect(body).not.toContain(place);
+  });
+
+  // #838 UX P3: the owner (or an auditor) goes straight to the pauses; a member, who cannot read
+  // them, is only told who releases them.
+  it.each([
+    ['owner', true],
+    ['auditor', true],
+    ['member', false],
+  ] as const)('a %s is linked to 治理 → 评测: %s', async (role, linked) => {
+    const fake = fakeClient();
+    (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new RpcError(-32019, 'paused'),
+    );
+    renderChat(
+      fake.client,
+      scriptedHttp({
+        get_workspace: () => ({ name: 'ws', caller: { id: 'p-me', role } }),
+        list_chats: () => ({ items: [] }),
+      }),
+    );
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => fake.caughtUp());
+
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'hello' } });
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+    const banner = await screen.findByRole('alert');
+    if (linked) {
+      const link = await within(banner).findByTestId('composer-probe-hold-open');
+      expect(link.getAttribute('href')).toBe('#/govern/evaluation/suites');
+    } else {
+      await waitFor(() => expect(banner.textContent).toContain('智能体已暂停'));
+      expect(within(banner).queryByTestId('composer-probe-hold-open')).toBeNull();
+    }
+  });
+});
+
 // Legacy 334 (UX review of #605, P3-2): U+0000 in what the person typed is named as the message,
 // not the wire param `text`, and without the sentence about an agent's call.
 describe('ChatPage send refused for U+0000 (legacy 334)', () => {

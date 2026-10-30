@@ -95,6 +95,8 @@ describe('refusalPause', () => {
       'needs_decision',
     );
     expect(refusalPause({ kind: 'quota', code: 'concurrency_exceeded', detail: 'x' })).toBeNull();
+    // S10 E3-2c: the evaluation seal pausing the requester's agents — a person decides.
+    expect(refusalPause({ kind: 'paused', detail: 'x' })).toBe('needs_decision');
     expect(refusalPause({ kind: 'quota', code: 'daily_cost_exceeded', detail: 'x' })).toBe(
       'budget_exhausted',
     );

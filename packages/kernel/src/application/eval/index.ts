@@ -10,7 +10,9 @@
  * trial's Worker itself is served by `application/eval-session`. E3-2b adds draft evaluations
  * (`draft-evaluations.ts`): a Skill draft against the version it would replace, stage by stage,
  * after a check of the draft (`draft-check.ts`); each stage's trials queued and started by
- * `dispatch.ts`, judged by `verdict.ts`. Using a verdict when publishing comes with E3-3.
+ * `dispatch.ts`, judged by `verdict.ts`. E3-2c adds the human side of the evaluation seal's pauses
+ * (`seal-holds.ts`: list and release; `application/eval-seal` opens and checks them). Using a
+ * verdict when publishing comes with E3-3.
  *
  * It owns `eval_suites`, `eval_suite_changes`, `eval_fixture_gates` (migrations/worker/0007 —
  * in the `worker` migration module only because they reference `worker_definitions` and modules
@@ -57,6 +59,8 @@ export {
   EvalSuiteInputError,
   EvalSuiteNameTakenError,
   EvalSuiteNotFoundError,
+  EvalSealHoldNotFoundError,
+  EvalSealHoldReleasedError,
   EvalSuiteStateError,
   EvaluationBudgetExhaustedError,
 } from './errors.js';
@@ -64,6 +68,7 @@ export { EVALUATION_PRINCIPAL_DISPLAY_NAME } from './principal.js';
 export type { EvalTrialTickOptions } from './runner.js';
 export { EVALUATION_TRIAL_END_ACTION, runEvalTrialTick } from './runner.js';
 export type { CaseTrialTarget, StartedCaseTrial } from './runs.js';
+export { listSealHolds, releaseSealHold } from './seal-holds.js';
 export { getEvalRun, listEvalRuns, startCaseTrial, startCaseTrialTask } from './runs.js';
 export type {
   CreateEvalSuiteInput,

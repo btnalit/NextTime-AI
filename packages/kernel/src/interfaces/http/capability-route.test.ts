@@ -23,7 +23,10 @@ import {
 } from '../../application/change-plan/index.js';
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
 import { ChatArchivedError } from '../../application/chat/index.js';
-import { EvaluationContentWithheldError } from '../../application/eval-seal/index.js';
+import {
+  EvaluationContentWithheldError,
+  EvaluationProbeHoldError,
+} from '../../application/eval-seal/index.js';
 import {
   EvalFixtureGateInUseError,
   EvalRunNotFoundError,
@@ -767,6 +770,25 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
         message: err.message,
       });
     }
+  });
+
+  it('EvaluationProbeHoldError (S10 E3-2c) → 403 evaluation_probe_hold, one message whoever was refused — no details', () => {
+    const agents = new EvaluationProbeHoldError('principal-1');
+    expect(mapCapabilityError(agents)).toEqual({
+      status: 403,
+      code: 'evaluation_probe_hold',
+      message: agents.message,
+    });
+    expect(mapCapabilityError(new EvaluationProbeHoldError('principal-2'))).toEqual(
+      mapCapabilityError(agents),
+    );
+    const evaluation = new EvaluationProbeHoldError('evaluation-principal', 'evaluation');
+    expect(mapCapabilityError(evaluation)).toEqual({
+      status: 403,
+      code: 'evaluation_probe_hold',
+      message: evaluation.message,
+    });
+    expect(agents.message).not.toContain('principal-1');
   });
 
   it('ConflictNotFoundError (resolve_conflict/list_conflicts) → 404 not_found, not 500', () => {

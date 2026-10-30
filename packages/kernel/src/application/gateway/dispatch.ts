@@ -20,8 +20,11 @@ import {
 import { writeAudit } from '../../substrate/audit/index.js';
 import {
   EvaluationContentWithheldError,
+  EvaluationProbeHoldError,
   type SealOptions,
+  assertNoSealHold,
   recordEvaluationWithheld,
+  recordProbeHoldRefusal,
   sealWithholds,
 } from '../eval-seal/index.js';
 import {
@@ -382,6 +385,37 @@ async function auditEvaluationWithheld(
 }
 
 /**
+ * S10 E3-2c: a call refused because the Principal it would run for is paused by the evaluation
+ * seal (`EvaluationProbeHoldError`: a Handle's call for that Principal, a person's message to their
+ * paused entry agent, a person starting an evaluation while the evaluation Principal is paused)
+ * leaves the pause's refusal row (`recordProbeHoldRefusal`) — which call, for whom, not its params.
+ * Once per refusal, like the seal's own.
+ */
+async function auditProbeHold(
+  deps: DispatchDeps,
+  call: {
+    readonly workspaceId: string;
+    readonly principalId: string;
+    readonly channel: string;
+    readonly name: string;
+    readonly err: unknown;
+  },
+): Promise<void> {
+  if (!(call.err instanceof EvaluationProbeHoldError) || call.err.recorded) return;
+  call.err.recorded = true;
+  await recordProbeHoldRefusal(deps.pool, {
+    workspaceId: call.workspaceId,
+    principalId: call.principalId,
+    ...(call.err.heldPrincipalId !== call.principalId
+      ? { heldPrincipalId: call.err.heldPrincipalId }
+      : {}),
+    channel: call.channel,
+    path: 'capability_call',
+    capability: call.name,
+  });
+}
+
+/**
  * S10 E3-1c: the error a Handle's call failed with, checked like a result — its message and
  * details can carry what a gate or a Worker answered. Returns what to throw: the seal's refusal
  * (audited) when that text carries evaluation content, else `err` itself. A check that cannot run
@@ -406,7 +440,8 @@ async function sealedError(
   if (
     call.channel !== 'handle' ||
     !(err instanceof Error) ||
-    err instanceof EvaluationContentWithheldError
+    err instanceof EvaluationContentWithheldError ||
+    err instanceof EvaluationProbeHoldError
   ) {
     return err;
   }
@@ -745,6 +780,12 @@ export async function dispatchCapability(
       if (workspaceRow.rows[0]?.status !== 'active') {
         throw new ForbiddenError('workspace_disabled: this workspace is disabled');
       }
+      // S10 E3-2c (legacy 514): no agent acting for a Principal the evaluation seal has paused
+      // gets anything done — every Handle call for it is refused before it runs, the same way
+      // whichever call it is (application/eval-seal hold.ts).
+      if (caller.channel === 'handle') {
+        await assertNoSealHold(client, workspaceId, principalId);
+      }
       // S11 GO5c: a capability made only for a person, on a Handle — whoever the Handle acts for
       // must be one (a service Handle's `obo` is the service Principal itself). The human channel
       // checked the caller's own kind in `authorizeCapabilityCall`.
@@ -852,6 +893,7 @@ export async function dispatchCapability(
     };
     await auditGateRefusal(deps, refused);
     await auditEvaluationWithheld(deps, refused);
+    await auditProbeHold(deps, refused);
     await auditUnknownOperation(deps, refused);
     await auditGoalStepClosed(deps, refused);
     await recordRefusedOutput(deps, refused);

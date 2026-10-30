@@ -1,5 +1,6 @@
 import type {
   DraftEvaluationSummaryWire,
+  EvalSealHoldWire,
   EvalSuiteSummaryWire,
   EvalSuiteWire,
 } from '@nexttime/shared';
@@ -25,6 +26,7 @@ import { Tabs } from '../kit/tabs.js';
 import { CreateSuiteSheet } from './CreateSuiteSheet.js';
 import { DraftEvaluationsTab } from './DraftEvaluations.js';
 import { EvalBudgetCard, useEvalBudget, useIsOwner } from './EvalBudget.js';
+import { SealHoldsNotice, useSealHolds } from './SealHolds.js';
 import { SuiteDetail } from './SuiteDetail.js';
 
 export interface EvaluationPageProps {
@@ -43,7 +45,8 @@ export interface EvaluationPageProps {
  * (E3-1b) and their 试跑 (E3-2a, in a case's sheet) are in its detail; the month's evaluation
  * budget (`EvalBudgetCard`, E3-2a) heads the page. E3-2b adds the 草稿评测 tab
  * (`DraftEvaluationsTab`, `#/govern/evaluation/drafts/<id>`): the Skill draft evaluations the
- * reader may see, and one whole.
+ * reader may see, and one whole. E3-2c (legacy 514): under the budget, the owner and auditors see
+ * whose agents the evaluation seal paused (`SealHoldsNotice`), and the owner releases them.
  *
  * Worker names come from `list_worker_definitions{kind:'worker'}` (published rows, every version)
  * — the same list the create form picks from and a repin chooses a version in.
@@ -86,6 +89,7 @@ export function EvaluationPage({ http, tab, itemId, onNavigate }: EvaluationPage
   const principalNames = usePrincipalNames(http);
   const budget = useEvalBudget(http);
   const isOwner = useIsOwner(http);
+  const sealHolds = useSealHolds(http);
   const [creating, setCreating] = useState(false);
 
   const rows = suites.state.status === 'ready' ? suites.state.data : [];
@@ -111,6 +115,16 @@ export function EvaluationPage({ http, tab, itemId, onNavigate }: EvaluationPage
   const canCreate = can('create_eval_suite') !== false;
   const reloadBudget = budget.reload;
   const onEvaluationChanged = useCallback(() => void reloadBudget(), [reloadBudget]);
+  const reloadEvaluations = evaluations.reload;
+  // A released pause of the evaluation's own agents starts its queued trials.
+  const onSealHoldReleased = useCallback(
+    (hold: EvalSealHoldWire) => {
+      if (!hold.principal.evaluation) return;
+      void reloadEvaluations();
+      void reloadBudget();
+    },
+    [reloadEvaluations, reloadBudget],
+  );
   const current = tab === 'suites' ? suites : evaluations;
   const evaluationCount =
     evaluations.state.status === 'ready' ? evaluations.state.data.length : undefined;
@@ -133,6 +147,7 @@ export function EvaluationPage({ http, tab, itemId, onNavigate }: EvaluationPage
               onClick={() => {
                 void current.reload();
                 void budget.reload();
+                sealHolds.reload();
               }}
             >
               {t('刷新', 'Refresh')}
@@ -151,6 +166,8 @@ export function EvaluationPage({ http, tab, itemId, onNavigate }: EvaluationPage
       />
 
       <EvalBudgetCard budget={budget} isOwner={isOwner} />
+
+      <SealHoldsNotice http={http} holds={sealHolds} onReleased={onSealHoldReleased} />
 
       <Tabs<EvaluationTab>
         ariaLabel={t('评测', 'Evaluation')}

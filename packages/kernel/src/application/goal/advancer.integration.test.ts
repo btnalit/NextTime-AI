@@ -53,6 +53,7 @@ import {
   GoalStepClosedError,
   RunConfigSnapshotSchema,
   RunSpecSchema,
+  STEP_ATTEMPT_PAUSED_DETAIL,
   type TaskRuntimeDeps,
   allotChildTokenBudget,
   completeTaskWithResult,
@@ -1142,6 +1143,78 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect(stepB.status).toBe('ready');
           expect(await attemptTasks(stepB.id)).toEqual([]);
         }
+      });
+
+      // S10 E3-2c (#838 review): the evaluation seal pausing the requester's agents would refuse
+      // the attempt's Worker start, which reads transient and spends the step's attempts.
+      it('while the evaluation seal pauses the requester’s agents no attempt starts: the run pauses needs_decision, the refusal audited, and it waits for a person', async () => {
+        const requester = await newPrincipal();
+        const goalRunId = await startGoal(requester, [
+          { key: 'a' },
+          { key: 'b', dependsOn: ['a'] },
+        ]);
+        await advance(goalRunId, requester);
+        const stepA = (await stepsOf(goalRunId)).a as StepRunRow;
+        await completeStep(stepA.id, requester);
+        const holds = await admin((client) =>
+          client.query<{ id: string }>(
+            `insert into eval_seal_holds (workspace_id, principal_id, hits, places)
+             values ($1, $2, 5, '{"capabilityResult": 5, "capabilityError": 0, "workerStart": 0}')
+             returning id`,
+            [workspaceId, requester],
+          ),
+        );
+        const spawned = supervisor.spawnCalls.length;
+        const outcome = await advance(goalRunId, requester);
+        expect(outcome.status).toBe('paused');
+        expect(outcome.nextTickAt).toBeNull();
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'needs_decision',
+        });
+        const stepB = (await stepsOf(goalRunId)).b as StepRunRow;
+        expect(stepB).toMatchObject({ status: 'ready', attemptCount: 0 });
+        expect(await attemptTasks(stepB.id)).toEqual([]);
+        expect(supervisor.spawnCalls).toHaveLength(spawned);
+        const paused = (await goalAudit(goalRunId))
+          .filter((row) => row.action === 'goal_run.pause')
+          .at(-1)?.payload;
+        expect(paused).toMatchObject({
+          reason: 'needs_decision',
+          detail: `step b: ${STEP_ATTEMPT_PAUSED_DETAIL}`,
+        });
+        // The same words whichever refusals opened the pause.
+        expect(STEP_ATTEMPT_PAUSED_DETAIL).not.toMatch(/result|error|worker_start|capability/);
+        const refused = await admin((client) =>
+          client.query<{ actor_principal_id: string; payload: Record<string, unknown> }>(
+            `select actor_principal_id, payload from audit_records
+              where workspace_id = $1 and action = 'evaluation.seal_hold_refused'
+                and actor_principal_id = $2`,
+            [workspaceId, requester],
+          ),
+        );
+        expect(refused.rows).toEqual([
+          {
+            actor_principal_id: requester,
+            payload: { onBehalfOf: requester, path: 'worker_start', outcome: 'refused' },
+          },
+        ]);
+        // Another advance while paused starts nothing and adds no refusal.
+        await advance(goalRunId, requester);
+        expect(await attemptTasks(stepB.id)).toEqual([]);
+        await admin((client) =>
+          client.query(
+            `update eval_seal_holds
+                set status = 'released', released_at = now(), released_by = $3,
+                    release_reason = 'cleared in a test'
+              where workspace_id = $1 and id = $2`,
+            [workspaceId, holds.rows[0]?.id, ownerId],
+          ),
+        );
+        // Released, the run still waits for a person: nothing resumes by itself.
+        await advance(goalRunId, requester);
+        expect((await goalOf(goalRunId)).status).toBe('paused');
+        expect(await attemptTasks(stepB.id)).toEqual([]);
       });
     });
 

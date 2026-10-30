@@ -9,6 +9,7 @@ import type { PoolClient } from 'pg';
 import { type PoolLike, withWorkspace } from '../../adapters/db/pool.js';
 import { ReviewedVersionChangedError, seesEveryDraft } from '../../governance/capability/index.js';
 import { shownFreeText } from '../../governance/redaction/index.js';
+import { assertNoSealHold } from '../eval-seal/index.js';
 import {
   type PreparedStepAttempt,
   createEvaluationTask,
@@ -64,7 +65,7 @@ export interface StartedCaseTrial {
  * the suite does not hold now — retired, or replaced by an edit (409 conflict); a pinned
  * WorkerDefinition version no longer published (409 conflict); this month's evaluation budget
  * spent (429 evaluation_budget_exhausted); the evaluation Principal at its concurrency limit
- * (429, I18). The suite is held (`for share`) until the transaction ends, so no change to it lands
+ * (429, I18), or paused by the evaluation seal (403 evaluation_probe_hold, S10 E3-2c). The suite is held (`for share`) until the transaction ends, so no change to it lands
  * between the checks and the writes.
  */
 export async function startCaseTrial(
@@ -118,6 +119,8 @@ export async function startCaseTrial(
     [workspaceId, target.suiteId],
   );
   const evaluationPrincipalId = await getOrCreateEvaluationPrincipal(client, workspaceId);
+  // S10 E3-2c: none while the seal has paused the evaluation Principal's agents (403).
+  await assertNoSealHold(client, workspaceId, evaluationPrincipalId, 'evaluation');
   const created = await createEvaluationTask(client, workspaceId, {
     evaluationPrincipalId,
     definition: { id: suite.worker_definition_id, version: suite.worker_definition_version },

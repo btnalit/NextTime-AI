@@ -20,7 +20,12 @@ import {
   listActiveGrantResourceScopes,
 } from '../../governance/capability/index.js';
 import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
-import { recordEvaluationWithheld, sealWithholds } from '../eval-seal/index.js';
+import {
+  hasActiveSealHold,
+  recordEvaluationWithheld,
+  recordProbeHoldRefusal,
+  sealWithholds,
+} from '../eval-seal/index.js';
 import {
   composeSystemPrompt,
   readInstanceInstructions,
@@ -851,6 +856,10 @@ export class AgentHostRuntime implements AgentRuntime {
    * their workspace like the reads above. A refusal is audited (`entry_start`), saying for whom
    * and nothing of what. Fails closed: a check that cannot run counts as withheld, logged with its
    * reason and none of the content, and audited as nothing (nothing was found).
+   *
+   * S10 E3-2c (legacy 514): first, whether the person's agents are paused by the seal — then the
+   * Turn is not started either (audited as a refusal under the pause). `sendChatMessage` refused a
+   * new message already; this covers a Turn on its way here when the pause opened.
    */
   private async startWithheld(
     input: StartTurnInput,
@@ -859,10 +868,12 @@ export class AgentHostRuntime implements AgentRuntime {
   ): Promise<boolean> {
     const { workspaceId, principalId } = input;
     let withheld: boolean;
+    let held = false;
     try {
-      withheld = await withWorkspace(this.pool, { workspaceId, principalId }, (client) =>
-        sealWithholds(client, workspaceId, { systemPrompt, skillsInline }),
-      );
+      withheld = await withWorkspace(this.pool, { workspaceId, principalId }, async (client) => {
+        held = await hasActiveSealHold(client, workspaceId, principalId);
+        return held || sealWithholds(client, workspaceId, { systemPrompt, skillsInline });
+      });
     } catch (err) {
       this.log(
         JSON.stringify({
@@ -875,6 +886,17 @@ export class AgentHostRuntime implements AgentRuntime {
       return true;
     }
     if (!withheld) return false;
+    if (held) {
+      this.log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'agent-host-runtime: the agents acting for this person are paused by the evaluation seal — not started',
+          turnId: input.turnId,
+        }),
+      );
+      await recordProbeHoldRefusal(this.pool, { workspaceId, principalId, path: 'entry_start' });
+      return true;
+    }
     this.log(
       JSON.stringify({
         level: 'warn',

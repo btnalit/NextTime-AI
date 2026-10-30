@@ -84,7 +84,7 @@ export function isEmptyEntry(entry: AuditEntry): boolean {
  * `plan_revision`, `step_run` (`application/goal`, written since GO1); S10 E3-1a: `eval_suite`
  * (`eval-handlers.ts`); E3-1b: `eval_case` (`get_eval_case`); E3-2a: `eval_run` (a run's start
  * and reads, and each trial's end); E3-2b: `draft_evaluation` (its start, stages, verdict, reads
- * and cancel).
+ * and cancel); E3-2c: `eval_seal_hold` (a pause's opening and release).
  */
 export const AUDIT_RESOURCE_TYPES = [
   'action_request',
@@ -101,6 +101,7 @@ export const AUDIT_RESOURCE_TYPES = [
   'draft_evaluation',
   'eval_case',
   'eval_run',
+  'eval_seal_hold',
   'eval_suite',
   'fact',
   'gate_instance',
@@ -253,6 +254,10 @@ export const AUDIT_LIFECYCLE_ACTIONS = [
   // S10 E3-2b: a draft evaluation's stages and verdict (`application/eval` draft-evaluations).
   'evaluation.draft_stage',
   'evaluation.draft_verdict',
+  // S10 E3-2c: the seal's pause of a Principal's agents, and what it refused
+  // (`application/eval-seal` hold.ts).
+  'evaluation.seal_hold_opened',
+  'evaluation.seal_hold_refused',
 ] as const;
 
 /**
@@ -377,6 +382,9 @@ function resourceRoute(
     // S10 E3-2b: a draft evaluation opens in 评测 · 草稿评测.
     case 'draft_evaluation':
       return hrefs.evaluation('drafts', resourceId);
+    // S10 E3-2c: the seal's pauses are listed on the evaluation page, above its tabs.
+    case 'eval_seal_hold':
+      return hrefs.evaluation();
     default:
       return undefined;
   }

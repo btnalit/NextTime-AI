@@ -76,6 +76,8 @@ describe('eval-runs (S10 E3-2a)', () => {
     expect(trialErrorText('withheld', zhT)).toMatch(/holdout 原文或用例集的 canary/);
     expect(trialErrorText('withheld', zhT)).toMatch(/系统提示词/);
     expect(trialErrorText('no_result', zhT)).toMatch(/没有汇报结果/);
+    expect(trialErrorText('paused', zhT)).toMatch(/评测防泄漏暂停了评测自己的智能体/);
+    expect(trialErrorText('paused', zhT)).toMatch(/不算这一边没通过/);
     // Any other: the Task's own failure reason, short and in detail.
     expect(trialErrorText('timeout', zhT)).toContain('：');
   });
@@ -146,5 +148,12 @@ describe('eval-runs (S10 E3-2a)', () => {
     expect(overrides.version_changed).toMatch(/什么也没有启动/);
     expect(overrides.conflict).toMatch(/不在用例集里/);
     expect(overrides.concurrency_exceeded).toMatch(/评测服务主体/);
+    // #838 UX P3: the evaluation's own agents are paused, named, with who releases them — not
+    // the generic 「智能体已暂停」 that reads as the person's own.
+    expect(overrides.evaluation_probe_hold).toMatch(
+      /^评测自己的智能体（替所有评测跑试跑的那些）已被评测防泄漏暂停/,
+    );
+    expect(overrides.evaluation_probe_hold).toContain('什么也没有启动');
+    expect(overrides.evaluation_probe_hold).toContain('治理 → 评测');
   });
 });

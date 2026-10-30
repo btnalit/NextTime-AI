@@ -2,6 +2,7 @@
 import type {
   EvalBudgetWire,
   EvalFixtureGateWire,
+  EvalSealHoldWire,
   EvalSuiteSummaryWire,
   EvalSuiteWire,
 } from '@nexttime/shared';
@@ -142,6 +143,7 @@ function baseHandlers(role = 'builder', current: () => EvalSuiteWire = () => sui
     }),
     resolve_refs: () => ({ items: [] }),
     list_draft_evaluations: () => ({ items: [] }),
+    list_eval_seal_holds: () => ({ items: [] }),
   };
 }
 
@@ -753,5 +755,174 @@ describe('EvaluationPage — the month’s evaluation budget (S10 E3-2a)', () =>
     fail = false;
     fireEvent.click(within(screen.getByTestId('eval-budget-error')).getByRole('button'));
     await screen.findByTestId('eval-budget-line');
+  });
+});
+
+function hold(extra: Partial<EvalSealHoldWire> = {}): EvalSealHoldWire {
+  return {
+    id: '44444444-4444-4444-8444-444444444444',
+    principal: { id: 'p-bob', kind: 'human', displayName: 'bob', evaluation: false },
+    status: 'active',
+    hits: 5,
+    places: { capabilityResult: 3, capabilityError: 0, workerStart: 2 },
+    openedAt: '2026-10-30T00:00:00.000Z',
+    releasedAt: null,
+    releasedBy: null,
+    releaseReason: null,
+    ...extra,
+  };
+}
+
+const EVAL_HOLD = hold({
+  id: '55555555-5555-4555-8555-555555555555',
+  principal: { id: 'p-eval', kind: 'service', displayName: null, evaluation: true },
+  places: { capabilityResult: 0, capabilityError: 5, workerStart: 0 },
+});
+
+describe('EvaluationPage — the evaluation seal’s pauses (S10 E3-2c, legacy 514)', () => {
+  it('the owner sees whose agents are paused, how many refusals and where, and releases one with a required reason', async () => {
+    let active = [hold(), EVAL_HOLD];
+    const http = scriptedHttp({
+      ...baseHandlers('owner'),
+      list_eval_seal_holds: () => ({ items: active }),
+      release_eval_seal_hold: (params) => {
+        const { holdId } = params as { holdId: string };
+        const released = active.find((row) => row.id === holdId);
+        active = active.filter((row) => row.id !== holdId);
+        return { ...released, status: 'released' };
+      },
+    });
+    renderPage(http);
+    const notice = await screen.findByTestId('eval-seal-holds');
+    const rows = within(notice).getAllByTestId('eval-seal-hold-row');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.textContent).toContain('bob 名下的智能体');
+    expect(within(rows[0] as HTMLElement).getByTestId('eval-seal-hold-hits').textContent).toBe(
+      '5 次被拦：调用结果 3 次、Worker 启动 2 次',
+    );
+    expect(rows[1]?.textContent).toContain('评测自己的智能体');
+    expect(within(rows[1] as HTMLElement).getByTestId('eval-seal-hold-evaluation')).toBeTruthy();
+    expect(http.calls.find((c) => c.name === 'list_eval_seal_holds')?.params).toEqual({
+      status: 'active',
+    });
+    expect(within(notice).queryByTestId('eval-seal-holds-owner-only')).toBeNull();
+    // Each row opens the seal's own refusals for whoever it paused (#838 UX P2-1).
+    const bobAudit = within(rows[0] as HTMLElement).getByTestId('eval-seal-hold-audit');
+    expect(bobAudit.getAttribute('href')).toBe(
+      '#/govern/audit?actorPrincipalId=p-bob&action=evaluation.content_withheld',
+    );
+    expect(
+      within(rows[1] as HTMLElement)
+        .getByTestId('eval-seal-hold-audit')
+        .getAttribute('href'),
+    ).toContain('actorPrincipalId=p-eval');
+
+    fireEvent.click(within(rows[1] as HTMLElement).getByTestId('eval-seal-hold-release'));
+    const confirm = await screen.findByTestId(`eval-seal-hold-release-${EVAL_HOLD.id}`);
+    expect(within(confirm).getByTestId('eval-seal-hold-release-audit').getAttribute('href')).toBe(
+      '#/govern/audit?actorPrincipalId=p-eval&action=evaluation.content_withheld',
+    );
+    expect(within(confirm).getByTestId('confirm-impact').textContent).toContain(
+      '排队中的试跑开始运行',
+    );
+    const button = within(confirm).getByTestId('confirm-button') as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    fireEvent.change(within(confirm).getByTestId('eval-seal-hold-release-reason'), {
+      target: { value: '  the probing Skill is retired ' },
+    });
+    expect(button.disabled).toBe(false);
+    const draftReads = http.calls.filter((c) => c.name === 'list_draft_evaluations').length;
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(http.calls.find((c) => c.name === 'release_eval_seal_hold')?.params).toEqual({
+        holdId: EVAL_HOLD.id,
+        reason: 'the probing Skill is retired',
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getAllByTestId('eval-seal-hold-row').map((row) => row.textContent)).toEqual([
+        expect.stringContaining('bob'),
+      ]),
+    );
+    const said = screen.getByTestId('eval-seal-hold-released');
+    expect(said.textContent).toContain('已解除：评测自己的智能体');
+    await waitFor(() => expect(document.activeElement).toBe(said));
+    // The evaluation's queued trials start once released, so its runs are read again.
+    await waitFor(() =>
+      expect(http.calls.filter((c) => c.name === 'list_draft_evaluations').length).toBeGreaterThan(
+        draftReads,
+      ),
+    );
+  });
+
+  it('the owner’s own pause reads as theirs, and a pause released meanwhile re-reads the list once the dialog closes', async () => {
+    const mine = hold({
+      principal: { id: 'p-me', kind: 'human', displayName: 'Me', evaluation: false },
+    });
+    let active: EvalSealHoldWire[] = [mine];
+    const http = scriptedHttp({
+      ...baseHandlers('owner'),
+      list_eval_seal_holds: () => ({ items: active }),
+      release_eval_seal_hold: () => {
+        active = [];
+        throw kernelError('conflict', 'hold already released');
+      },
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('eval-seal-hold-row');
+    expect(row.textContent).toContain('你名下的智能体');
+    expect(row.textContent).not.toContain('Me 名下');
+
+    fireEvent.click(within(row).getByTestId('eval-seal-hold-release'));
+    const confirm = await screen.findByTestId(`eval-seal-hold-release-${mine.id}`);
+    expect(within(confirm).getByTestId('confirm-target').textContent).toBe('你名下的智能体');
+    fireEvent.change(within(confirm).getByTestId('eval-seal-hold-release-reason'), {
+      target: { value: 'my own Skill, retired' },
+    });
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    expect((await within(confirm).findByTestId('confirm-error')).textContent).toContain(
+      '这个暂停已经被解除了',
+    );
+    const reads = http.calls.filter((c) => c.name === 'list_eval_seal_holds').length;
+    fireEvent.click(within(confirm).getByTestId('confirm-cancel'));
+    // The reason typed is asked about before it is dropped.
+    fireEvent.click(await screen.findByTestId('discard-confirm-discard'));
+    await waitFor(() =>
+      expect(http.calls.filter((c) => c.name === 'list_eval_seal_holds').length).toBe(reads + 1),
+    );
+    await waitFor(() => expect(screen.queryByTestId('eval-seal-holds')).toBeNull());
+  });
+
+  it('an auditor sees the pauses but cannot release them', async () => {
+    const http = scriptedHttp({
+      ...baseHandlers('auditor'),
+      list_principals: () => {
+        throw kernelError('forbidden', 'list_principals needs operator');
+      },
+      list_eval_seal_holds: () => ({ items: [hold()] }),
+    });
+    renderPage(http);
+    const notice = await screen.findByTestId('eval-seal-holds');
+    expect(within(notice).queryByTestId('eval-seal-hold-release')).toBeNull();
+    expect(within(notice).getByTestId('eval-seal-holds-owner-only').textContent).toContain(
+      '只有工作区所有者能解除',
+    );
+  });
+
+  it('a builder never reads the pauses, and with nothing paused nothing shows', async () => {
+    const builder = scriptedHttp(baseHandlers('builder'));
+    renderPage(builder);
+    await screen.findByTestId('eval-suite-row');
+    expect(builder.calls.some((c) => c.name === 'list_eval_seal_holds')).toBe(false);
+    expect(screen.queryByTestId('eval-seal-holds')).toBeNull();
+    cleanup();
+
+    const owner = scriptedHttp(baseHandlers('owner'));
+    renderPage(owner);
+    await waitFor(() =>
+      expect(owner.calls.some((c) => c.name === 'list_eval_seal_holds')).toBe(true),
+    );
+    await screen.findByTestId('eval-suite-row');
+    expect(screen.queryByTestId('eval-seal-holds')).toBeNull();
   });
 });
