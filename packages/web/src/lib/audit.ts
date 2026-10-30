@@ -83,7 +83,8 @@ export function isEmptyEntry(entry: AuditEntry): boolean {
  * (`application/change-plan`); P1-B: `change_segment` (`roll_back_change_segment`); S11 GO6: `goal_run`,
  * `plan_revision`, `step_run` (`application/goal`, written since GO1); S10 E3-1a: `eval_suite`
  * (`eval-handlers.ts`); E3-1b: `eval_case` (`get_eval_case`); E3-2a: `eval_run` (a run's start
- * and reads, and each trial's end).
+ * and reads, and each trial's end); E3-2b: `draft_evaluation` (its start, stages, verdict, reads
+ * and cancel).
  */
 export const AUDIT_RESOURCE_TYPES = [
   'action_request',
@@ -97,6 +98,7 @@ export const AUDIT_RESOURCE_TYPES = [
   'conflict',
   'connection_request',
   'decision',
+  'draft_evaluation',
   'eval_case',
   'eval_run',
   'eval_suite',
@@ -248,6 +250,9 @@ export const AUDIT_LIFECYCLE_ACTIONS = [
   // (`application/eval` runner).
   'evaluation.fixture_call',
   'evaluation.trial_end',
+  // S10 E3-2b: a draft evaluation's stages and verdict (`application/eval` draft-evaluations).
+  'evaluation.draft_stage',
+  'evaluation.draft_verdict',
 ] as const;
 
 /**
@@ -369,6 +374,9 @@ function resourceRoute(
       const suiteId = payload ? stringField(payload, 'suiteId') : undefined;
       return suiteId ? hrefs.evaluation('suites', suiteId) : undefined;
     }
+    // S10 E3-2b: a draft evaluation opens in 评测 · 草稿评测.
+    case 'draft_evaluation':
+      return hrefs.evaluation('drafts', resourceId);
     default:
       return undefined;
   }

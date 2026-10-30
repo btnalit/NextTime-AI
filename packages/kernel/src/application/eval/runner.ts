@@ -9,6 +9,8 @@ import type { PoolClient } from 'pg';
 import { type PoolLike, withWorkspace } from '../../adapters/db/pool.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { evaluatePredicate } from '../../substrate/epistemic/index.js';
+import { dispatchEvalTrials } from './dispatch.js';
+import { settleDraftStage } from './draft-evaluations.js';
 
 /**
  * application/eval/runner: scores evaluation trials (S10 E3-2a; docs/s10-evolution-plan-2026-10-04.md
@@ -32,7 +34,9 @@ import { evaluatePredicate } from '../../substrate/epistemic/index.js';
  * usage as a call ends) is not in the trial's figures; the evaluation budget reads `llm_usage`
  * itself, so it is in the month's. A run is `finished` once its last trial ended (the database
  * holds the count, worker/0009). Each trial end is audited (`evaluation.trial_end`, on the run),
- * without the case's content or the report.
+ * without the case's content or the report. A draft evaluation's stage run that finishes is settled
+ * in the same transaction (`draft-evaluations.ts`'s `settleDraftStage`: the verdict, or the next
+ * stage's trials queued). After scoring, the tick starts queued trials (`dispatch.ts`).
  *
  * Cross-workspace scan, then one transaction per trial in its workspace, acting as the evaluation
  * Principal the Task ran for; the trial row is held (`for update`) and re-read, so two kernels
@@ -80,11 +84,16 @@ async function listEndedTrials(pool: PoolLike, limit: number): Promise<readonly 
 
 export interface EvalTrialTickOptions {
   readonly limit?: number;
-  /** One trial's failure — the others in the batch are still scored. */
-  readonly onError?: (error: unknown, trial: EndedTrial) => void;
+  /** One trial's failure — the others in the batch are still scored — or a workspace's failure to
+   *  start its queued trials (no `trialId`). */
+  readonly onError?: (
+    error: unknown,
+    at: { readonly workspaceId: string; readonly trialId?: string },
+  ) => void;
 }
 
-/** Scores every trial whose Task has ended. Returns how many it looked at. */
+/** Scores every trial whose Task has ended, then starts queued trials. Returns how many ended
+ *  trials it looked at. */
 export async function runEvalTrialTick(
   pool: PoolLike,
   options: EvalTrialTickOptions = {},
@@ -101,6 +110,9 @@ export async function runEvalTrialTick(
       options.onError?.(err, trial);
     }
   }
+  await dispatchEvalTrials(pool, {
+    onError: (err, workspaceId) => options.onError?.(err, { workspaceId }),
+  });
   return ended.length;
 }
 
@@ -185,14 +197,15 @@ export async function endTrial(
 
   const runs = await client.query<{
     suite_id: string;
+    kind: string;
     expected: number;
     held: number;
     open: number;
   }>(
-    `select r.suite_id,
+    `select r.suite_id, r.kind,
             (cardinality(r.arms) * cardinality(r.case_ids) * r.k)::int as expected,
             count(tr.id)::int as held,
-            count(tr.id) filter (where tr.status = 'running')::int as open
+            count(tr.id) filter (where tr.status in ('queued', 'running'))::int as open
        from eval_runs r
        join eval_trials tr on tr.workspace_id = r.workspace_id and tr.run_id = r.id
       where r.workspace_id = $1 and r.id = $2
@@ -207,6 +220,9 @@ export async function endTrial(
         where workspace_id = $1 and id = $2 and status = 'running'`,
       [workspaceId, trial.run_id],
     );
+    if (run.kind === 'draft') {
+      await settleDraftStage(client, workspaceId, trial.run_id, actorPrincipalId);
+    }
   }
 
   await writeAudit(client, {

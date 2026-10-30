@@ -27,6 +27,7 @@ export * from './chat-message-content.js';
 export * from './skill.js';
 export * from './procedure.js';
 export * from './predicate.js';
+export * from './draft-evaluation.js';
 export * from './eval-case.js';
 export * from './output-schema.js';
 export * from './json-schema.js';

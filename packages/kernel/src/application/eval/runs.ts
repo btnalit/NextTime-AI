@@ -7,7 +7,7 @@ import type {
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { type PoolLike, withWorkspace } from '../../adapters/db/pool.js';
-import { ReviewedVersionChangedError } from '../../governance/capability/index.js';
+import { ReviewedVersionChangedError, seesEveryDraft } from '../../governance/capability/index.js';
 import { shownFreeText } from '../../governance/redaction/index.js';
 import {
   type PreparedStepAttempt,
@@ -16,6 +16,11 @@ import {
   startStepAttemptTask,
 } from '../task/index.js';
 import { readEvalBudget } from './budget.js';
+import {
+  DRAFT_EVALUATION_VISIBLE_TO,
+  type DraftEvaluationActor,
+  draftEvaluationVisibleTo,
+} from './draft-evaluations.js';
 import {
   EvalCaseNotFoundError,
   EvalRunNotFoundError,
@@ -28,8 +33,9 @@ import type { EvalSuiteActor } from './suites.js';
 
 /**
  * application/eval/runs: evaluation runs (S10 E3-2a; docs/s10-evolution-plan-2026-10-04.md §3.1
- * EvalRun, §5.5 账本恒等式) — E3-2a's one kind, `case_trial`: one case of a suite tried once, as
- * it would run now, from the case's page. Tables: `eval_runs`, `eval_trials`, `eval_trial_calls`
+ * EvalRun, §5.5 账本恒等式) — started here: `case_trial`, one case of a suite tried once, as it
+ * would run now, from the case's page; read here: those and a draft evaluation's stages (E3-2b,
+ * `draft-evaluations.ts` starts them). Tables: `eval_runs`, `eval_trials`, `eval_trial_calls`
  * (migrations/worker/0009, whose guards hold the ledger: a run finishes with exactly arms × cases
  * × k trials, none still running; a trial ends once; a call is kept as made).
  *
@@ -173,19 +179,21 @@ interface RunRow {
   id: string;
   suite_id: string;
   suite_version: number;
-  kind: 'case_trial';
+  kind: EvalRunWire['kind'];
   worker_definition_id: string;
   worker_definition_version: number;
   case_ids: string[];
   k: number;
   status: 'running' | 'finished';
+  draft_evaluation_id: string | null;
+  stage: EvalRunWire['stage'];
   created_by: string;
   created_at: Date;
   finished_at: Date | null;
 }
 
 const RUN_COLUMNS = `id, suite_id, suite_version, kind, worker_definition_id, worker_definition_version,
-  case_ids, k, status, created_by, created_at, finished_at`;
+  case_ids, k, status, draft_evaluation_id, stage, created_by, created_at, finished_at`;
 
 function runBase(row: RunRow) {
   return {
@@ -196,6 +204,8 @@ function runBase(row: RunRow) {
     workerDefinition: { id: row.worker_definition_id, version: row.worker_definition_version },
     k: row.k,
     status: row.status,
+    draftEvaluationId: row.draft_evaluation_id,
+    stage: row.stage,
     createdBy: row.created_by,
     createdAt: row.created_at.toISOString(),
     finishedAt: row.finished_at ? row.finished_at.toISOString() : null,
@@ -204,7 +214,7 @@ function runBase(row: RunRow) {
 
 interface TrialRow {
   id: string;
-  arm: 'baseline';
+  arm: EvalTrialWire['arm'];
   case_id: string;
   case_title: string;
   rep: number;
@@ -216,7 +226,8 @@ interface TrialRow {
   result: unknown;
   cost_usd: number | null;
   tokens: string;
-  started_at: Date;
+  environment_digest: string | null;
+  started_at: Date | null;
   finished_at: Date | null;
 }
 
@@ -233,11 +244,13 @@ interface CallRow {
   created_at: Date;
 }
 
-/** A run whole — every trial, its assertions and its calls. 404 when there is none. */
+/** A run whole — every trial, its assertions and its calls. 404 when there is none — or, for a
+ *  draft evaluation's stage, when `viewer` may not see the evaluation (E3-2b). */
 export async function getEvalRun(
   client: PoolClient,
   workspaceId: string,
   runId: string,
+  viewer?: DraftEvaluationActor,
 ): Promise<EvalRunWire> {
   const runs = await client.query<RunRow>(
     `select ${RUN_COLUMNS} from eval_runs where workspace_id = $1 and id = $2`,
@@ -245,15 +258,25 @@ export async function getEvalRun(
   );
   const run = runs.rows[0];
   if (!run) throw new EvalRunNotFoundError(runId);
+  if (
+    viewer !== undefined &&
+    run.draft_evaluation_id !== null &&
+    !(await draftEvaluationVisibleTo(client, workspaceId, viewer, run.draft_evaluation_id))
+  ) {
+    throw new EvalRunNotFoundError(runId);
+  }
   const trials = await client.query<TrialRow>(
     `select tr.id, tr.arm, tr.case_id, c.title as case_title, tr.rep, tr.task_id, tr.status,
             tr.verdict, tr.error, tr.assertion_results, tr.result, tr.cost_usd::float8 as cost_usd,
-            tr.tokens, tr.started_at, tr.finished_at
+            tr.tokens, tr.started_at, tr.finished_at,
+            (select w.environment_digest from worker_runs w
+              where w.workspace_id = tr.workspace_id and w.task_id = tr.task_id
+              order by w.started_at desc limit 1) as environment_digest
        from eval_trials tr
        join eval_cases c on c.workspace_id = tr.workspace_id and c.id = tr.case_id
       where tr.workspace_id = $1 and tr.run_id = $2
-      order by tr.arm, tr.case_id, tr.rep`,
-    [workspaceId, runId],
+      order by array_position($3::uuid[], tr.case_id), tr.rep, tr.arm`,
+    [workspaceId, runId, run.case_ids],
   );
   const calls = await client.query<CallRow>(
     `select trial_id, seq, gatekeeper_id, gate_name, operation, mode, params, rule_index, answer,
@@ -296,7 +319,8 @@ export async function getEvalRun(
       calls: callsByTrial.get(trial.id) ?? [],
       costUsd: trial.cost_usd,
       tokens: Number(trial.tokens),
-      startedAt: trial.started_at.toISOString(),
+      environmentDigest: trial.environment_digest,
+      startedAt: trial.started_at ? trial.started_at.toISOString() : null,
       finishedAt: trial.finished_at ? trial.finished_at.toISOString() : null,
     })),
   };
@@ -305,12 +329,18 @@ export async function getEvalRun(
 /** How many runs `listEvalRuns` returns. */
 const LIST_EVAL_RUNS_LIMIT = 20;
 
-/** A suite's runs, newest first, in brief; with `caseId`, those that tried that case row. 404 for a
- *  suite that is not there. */
+/** A suite's runs, newest first, in brief; with `caseId`, those that tried that case row; with
+ *  `kind`, those of that kind. A draft evaluation's stages only where `viewer` may see the
+ *  evaluation (E3-2b). 404 for a suite that is not there. */
 export async function listEvalRuns(
   client: PoolClient,
   workspaceId: string,
-  filter: { readonly suiteId: string; readonly caseId?: string },
+  viewer: DraftEvaluationActor,
+  filter: {
+    readonly suiteId: string;
+    readonly caseId?: string;
+    readonly kind?: EvalRunWire['kind'];
+  },
 ): Promise<readonly EvalRunSummaryWire[]> {
   const suite = await client.query(
     'select 1 from eval_suites where workspace_id = $1 and id = $2',
@@ -323,6 +353,7 @@ export async function listEvalRuns(
       failed: string;
       errored: string;
       running: string;
+      queued: string;
       cost_usd: number | null;
       unpriced: string;
     }
@@ -334,16 +365,33 @@ export async function listEvalRuns(
             count(tr.id) filter (where tr.verdict = 'failed')::bigint as failed,
             count(tr.id) filter (where tr.status = 'errored')::bigint as errored,
             count(tr.id) filter (where tr.status = 'running')::bigint as running,
+            count(tr.id) filter (where tr.status = 'queued')::bigint as queued,
             sum(tr.cost_usd)::float8 as cost_usd,
-            count(tr.id) filter (where tr.status <> 'running' and tr.cost_usd is null)::bigint as unpriced
+            count(tr.id) filter (
+              where tr.status in ('scored', 'errored') and tr.task_id is not null
+                and tr.cost_usd is null
+            )::bigint as unpriced
        from eval_runs r
        left join eval_trials tr on tr.workspace_id = r.workspace_id and tr.run_id = r.id
       where r.workspace_id = $1 and r.suite_id = $2
         and ($3::uuid is null or $3::uuid = any(r.case_ids))
+        and ($5::text is null or r.kind = $5)
+        and (r.draft_evaluation_id is null or exists (
+          select 1 from eval_draft_evaluations e
+           where e.workspace_id = r.workspace_id and e.id = r.draft_evaluation_id
+             and ${DRAFT_EVALUATION_VISIBLE_TO('$6', '$7')}))
       group by r.workspace_id, r.id
       order by r.created_at desc, r.id desc
       limit $4`,
-    [workspaceId, filter.suiteId, filter.caseId ?? null, LIST_EVAL_RUNS_LIMIT],
+    [
+      workspaceId,
+      filter.suiteId,
+      filter.caseId ?? null,
+      LIST_EVAL_RUNS_LIMIT,
+      filter.kind ?? null,
+      seesEveryDraft(viewer.role),
+      viewer.principalId,
+    ],
   );
   return runs.rows.map((row) => ({
     ...runBase(row),
@@ -352,6 +400,7 @@ export async function listEvalRuns(
     failed: Number(row.failed),
     errored: Number(row.errored),
     running: Number(row.running),
+    queued: Number(row.queued),
     // Unknown while a trial with no price has ended; a run with nothing ended yet has none.
     costUsd: Number(row.unpriced) > 0 ? null : row.cost_usd,
   }));

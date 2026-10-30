@@ -923,6 +923,35 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '本月评测预算：已用、剩余和一次试跑的平均花费。',
     enHint: 'This month’s evaluation budget: spent, left, and what one trial costs on average.',
   },
+  // S10 E3-2b: draft evaluations.
+  start_draft_evaluation: {
+    zh: '评测 Skill 草稿',
+    en: 'Evaluate Skill draft',
+    zhHint:
+      '用一个用例集对比 Skill 草稿和它要替换的已发布版本：依次跑回归检查、机制检验、确认对比，每一阶段不过就停；不调用真实系统，花费计入本月评测预算。评测期间草稿不能丢弃或拒绝。',
+    enHint:
+      'Compares a Skill draft with the published version it would replace on a suite: regression check, mechanism test, then confirmation, stopping at the first stage that fails. No real system is called, and the cost counts against this month’s evaluation budget. The draft cannot be discarded or rejected while it runs.',
+  },
+  get_draft_evaluation: {
+    zh: '查看草稿评测',
+    en: 'Read draft evaluation',
+    zhHint: '查看一次草稿评测：每个阶段的进度、用例 × 两组的结果、结论和理由、运行环境。',
+    enHint:
+      'Reads one draft evaluation: each stage’s progress, the case × arm results, the verdict and why, and the environments it ran in.',
+  },
+  list_draft_evaluations: {
+    zh: '列出草稿评测',
+    en: 'List draft evaluations',
+    zhHint: '列出最近的草稿评测：对比的是什么、进行到哪个阶段、结论和花费。',
+    enHint: 'Lists recent draft evaluations: what each compares, its stage, verdict and cost.',
+  },
+  cancel_draft_evaluation: {
+    zh: '取消草稿评测',
+    en: 'Cancel draft evaluation',
+    zhHint: '停止一次进行中的草稿评测：排队的试跑作废，正在跑的评测任务被终止，没有结论。',
+    enHint:
+      'Stops a running draft evaluation: queued trials are dropped and running evaluation tasks are terminated; it ends with no verdict.',
+  },
 
   // -----------------------------------------------------------------------------------------
   // Capabilities — Worker definitions and drafts
@@ -1942,6 +1971,21 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     en: 'Evaluation trial ended',
     zhHint: '一次评测试跑结束：按断言判了分，或没有结果（出错）。',
     enHint: 'An evaluation trial ended: judged by its assertions, or errored without a result.',
+  },
+  // S10 E3-2b (kernel application/eval draft-evaluations): a draft evaluation's stage starting or
+  // skipped, and its verdict.
+  'evaluation.draft_stage': {
+    zh: '草稿评测阶段',
+    en: 'Draft evaluation stage',
+    zhHint: '草稿评测进入下一个阶段，或跳过了它（没有用例、没有选机制，或预算不够）。',
+    enHint:
+      'A draft evaluation moved on to its next stage, or skipped it (no case, no mechanism chosen, or not enough budget).',
+  },
+  'evaluation.draft_verdict': {
+    zh: '草稿评测结论',
+    en: 'Draft evaluation verdict',
+    zhHint: '草稿评测结束，给出了结论和理由。',
+    enHint: 'A draft evaluation ended with its verdict and why.',
   },
   // S10 E3-1c (kernel application/eval-seal): evaluation content stopped on its way to an agent.
   'evaluation.content_withheld': {

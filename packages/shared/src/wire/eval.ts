@@ -12,6 +12,7 @@ import {
   EvalCaseSplitSchema,
   EvalFixtureRuleSchema,
 } from '../eval-case.js';
+import { RunEnvironmentWireSchema } from './task.js';
 
 /**
  * wire/eval (S10 E3-1a; docs/s10-evolution-plan-2026-10-04.md §3.1 EvalSuite, §3.3 I-E4, §5.5,
@@ -247,6 +248,13 @@ export const EvalSuiteWireSchema = EvalSuiteSummaryWireSchema.extend({
 }).strict();
 export type EvalSuiteWire = z.infer<typeof EvalSuiteWireSchema>;
 
+/** The stages of a draft evaluation, in the order they run (S10 E3-2b; §5.5 四级漏斗, levels 1–3 —
+ *  level 0 is the check before it starts): `regression` (回归棘轮), `mechanism` (机制筛), `confirm`
+ *  (确认). */
+export const DRAFT_EVALUATION_STAGE_VALUES = ['regression', 'mechanism', 'confirm'] as const;
+export const DraftEvaluationStageNameSchema = z.enum(DRAFT_EVALUATION_STAGE_VALUES);
+export type DraftEvaluationStageName = z.infer<typeof DraftEvaluationStageNameSchema>;
+
 // ----- evaluation runs (S10 E3-2a) -------------------------------------------------------------
 
 /**
@@ -257,22 +265,27 @@ export type EvalSuiteWire = z.infer<typeof EvalSuiteWireSchema>;
  * kernel answers from the case's fixtures, and whose report and calls the case's assertions judge.
  * Human channel only (I-E4).
  *
- *   - `kind`: `case_trial` — one case, once, as it would run now (E3-2a's 「试跑」). Draft runs
- *     (candidate against baseline, many cases, `k` tries each) are E3-2b.
+ *   - `kind`: `case_trial` — one case, once, as it would run now (E3-2a's 「试跑」); `draft` — one
+ *     stage of a draft evaluation (E3-2b, {@link DraftEvaluationWireSchema}): the stage's cases,
+ *     `k` tries per arm, both arms.
  *   - `arm`: `baseline` — the suite's pinned WorkerDefinition version with the Skill versions it
- *     loads now. E3-2b adds `candidate`.
+ *     loads (a `case_trial`: the latest published, as it would run now; a draft run: those the
+ *     evaluation pinned, with the Skill version the draft would replace); `candidate` — the same
+ *     with the draft in that Skill's place (draft runs only).
  *   - A run is `running` until every trial it holds has ended, then `finished` — and the database
  *     refuses `finished` unless it holds exactly arms × cases × k trials, all ended (§5.5 账本恒等式).
- *   - A trial is `running` while its Task runs, then `scored` (`verdict` passed: every assertion
- *     satisfied; failed otherwise) when its Worker reported a result, or `errored` when it ended
- *     without one (`error` says how: the Task's failure reason, `cancelled`, or `withheld` — what it
- *     would start with carried another case's held-out text or a canary).
+ *   - A trial is `queued` until the kernel starts its Task (a draft run's trials wait their turn:
+ *     the evaluation Principal runs only so many Tasks at once), `running` while its Task runs, then
+ *     `scored` (`verdict` passed: every assertion satisfied; failed otherwise) when its Worker
+ *     reported a result, or `errored` when it ended without one (`error` says how: the Task's
+ *     failure reason, `cancelled` — its Task, or the evaluation before it started — or `withheld`:
+ *     what it would start with carried a held-out case's text or a canary).
  */
-export const EVAL_RUN_KIND_VALUES = ['case_trial'] as const;
+export const EVAL_RUN_KIND_VALUES = ['case_trial', 'draft'] as const;
 export const EvalRunKindSchema = z.enum(EVAL_RUN_KIND_VALUES);
 export type EvalRunKind = z.infer<typeof EvalRunKindSchema>;
 
-export const EVAL_ARM_VALUES = ['baseline'] as const;
+export const EVAL_ARM_VALUES = ['baseline', 'candidate'] as const;
 export const EvalArmSchema = z.enum(EVAL_ARM_VALUES);
 export type EvalArm = z.infer<typeof EvalArmSchema>;
 
@@ -280,7 +293,7 @@ export const EVAL_RUN_STATUS_VALUES = ['running', 'finished'] as const;
 export const EvalRunStatusSchema = z.enum(EVAL_RUN_STATUS_VALUES);
 export type EvalRunStatus = z.infer<typeof EvalRunStatusSchema>;
 
-export const EVAL_TRIAL_STATUS_VALUES = ['running', 'scored', 'errored'] as const;
+export const EVAL_TRIAL_STATUS_VALUES = ['queued', 'running', 'scored', 'errored'] as const;
 export const EvalTrialStatusSchema = z.enum(EVAL_TRIAL_STATUS_VALUES);
 export type EvalTrialStatus = z.infer<typeof EvalTrialStatusSchema>;
 
@@ -336,7 +349,8 @@ export const EvalTrialWireSchema = z
     status: EvalTrialStatusSchema,
     verdict: EvalTrialVerdictSchema.nullable(),
     error: EvalTrialErrorSchema.nullable(),
-    /** The evaluation Task the trial ran as. */
+    /** The evaluation Task the trial ran as — `null` while it is queued, or when it was cancelled
+     *  before it started. */
     taskId: z.string().nullable(),
     /** Each assertion's outcome, in the case's order — once scored. */
     assertions: z.array(EvalAssertionResultWireSchema),
@@ -347,7 +361,12 @@ export const EvalTrialWireSchema = z
     /** What its model calls cost, where the model has a price; `null` while none is known. */
     costUsd: z.number().nullable(),
     tokens: z.number().int().nonnegative(),
-    startedAt: z.string(),
+    /** What its Worker ran in (S11 W1a `environmentDigest`): `null` until its run reports, or when
+     *  one of its parts is unknown (`RunEnvironmentWire`). A draft evaluation's trials must share
+     *  one (I-E2). */
+    environmentDigest: z.string().nullable(),
+    /** `null` while it is queued (and for one cancelled before it started). */
+    startedAt: z.string().nullable(),
     finishedAt: z.string().nullable(),
   })
   .strict();
@@ -362,6 +381,9 @@ const EvalRunBaseWireSchema = z
     workerDefinition: z.object({ id: z.string(), version: z.number().int().positive() }).strict(),
     k: z.number().int().positive(),
     status: EvalRunStatusSchema,
+    /** A `draft` run's evaluation and the stage it is (E3-2b); `null` for a `case_trial`. */
+    draftEvaluationId: z.string().nullable(),
+    stage: DraftEvaluationStageNameSchema.nullable(),
     createdBy: z.string(),
     createdAt: z.string(),
     finishedAt: z.string().nullable(),
@@ -381,6 +403,7 @@ export const EvalRunSummaryWireSchema = EvalRunBaseWireSchema.extend({
   failed: z.number().int().nonnegative(),
   errored: z.number().int().nonnegative(),
   running: z.number().int().nonnegative(),
+  queued: z.number().int().nonnegative(),
   costUsd: z.number().nullable(),
 }).strict();
 export type EvalRunSummaryWire = z.infer<typeof EvalRunSummaryWireSchema>;
@@ -401,6 +424,341 @@ export const EvalBudgetWireSchema = z
     periodEnd: z.string(),
     trialCostUsd: z.number().nonnegative().nullable(),
     unpricedTrials: z.number().int().nonnegative(),
+    /** What the trials not ended yet (queued or running, of every evaluation) are expected to
+     *  cost: their count × `trialCostUsd`, 0 while that is unknown. A draft evaluation's stage
+     *  starts only when spent + this + its estimate fits the budget (S10 E3-2b). */
+    committedUsd: z.number().nonnegative(),
   })
   .strict();
 export type EvalBudgetWire = z.infer<typeof EvalBudgetWireSchema>;
+
+// ----- draft evaluations (S10 E3-2b) -----------------------------------------------------------
+
+/**
+ * A draft evaluation (S10 E3-2b; docs/s10-evolution-plan-2026-10-04.md §3.2 EvalRun evaluated /
+ * compared_to, §3.4 草稿的评测子状态, §5.5 四级漏斗 / 怎么判, §5.6 评测运行详情): one person-started
+ * evaluation of a Skill draft against a suite. Both arms run the suite's pinned WorkerDefinition
+ * version with the same other Skills, pinned when it started; the `baseline` arm loads the Skill
+ * version the draft would replace (none, for a new Skill: the WorkerDefinition without it), the
+ * `candidate` arm the draft as it was when the evaluation started (`candidate.draftDigest`). The
+ * stages run in order, each a `draft` EvalRun of both arms (`@nexttime/shared` draft-evaluation.ts
+ * holds their k and thresholds):
+ *
+ *   1. `regression` — the suite's regression cases. The candidate must pass each as many times as
+ *      the baseline does, else `regressed`.
+ *   2. `mechanism` — the cases aimed at the mechanism the person named (none named, or none such:
+ *      skipped). The candidate must pass every try and the baseline at most 40% of them, else
+ *      `refuted` — the hypothesis that the draft fixes that mechanism was refuted.
+ *   3. `confirm` — the suite's full cases. On `dev`: the candidate's pass rate below the baseline's
+ *      by more than δ is `worse`; the difference's one-sided lower bound above 0 is `better`, above
+ *      −δ `non_inferior`, else `inconclusive` (too few trials to tell). `better` and
+ *      `non_inferior` also need `holdout` to point the same way (holdout difference ≥ 0, ≥ −δ), and
+ *      a suite with no holdout case cannot give them.
+ *
+ * A trial that errored because its Worker ran out of time, ended without reporting or spent its
+ * token budget counts as not passed; one that could not start, was lost, terminated or crashed has
+ * no outcome (`trialHasOutcome`), and a verdict must hold whichever way such trials would have gone
+ * — else `inconclusive` (`errored_trials`); confirm leaves them out of its rates. Any stage ends the
+ * evaluation `contaminated` when a trial's Worker was withheld evaluation content or reported a
+ * canary, `unmeasured` when its trials did not all run in one environment (I-E2), `inconclusive`
+ * when more than a quarter of either arm's trials have no outcome. Before a stage starts its cost
+ * is estimated (its trials × the recent cost of a trial); a stage the month's evaluation budget
+ * cannot cover — after what is spent and what the trials not ended yet are expected to cost — is
+ * not run and the evaluation ends `inconclusive` (`budget`): it never stops part-way through a
+ * stage. A stage with no cases is skipped; with all three skipped nothing would run, and the start
+ * is refused.
+ *
+ * `running` while a stage runs; then `finished`, with a verdict, why (`reason`), and the stage that
+ * decided it — or `cancelled` by a person (no verdict). While it runs the draft cannot be discarded,
+ * rejected or expired; afterwards it can, and this keeps the content it evaluated. Human channel
+ * only (I-E4).
+ */
+export const DRAFT_EVALUATION_STATUS_VALUES = ['running', 'finished', 'cancelled'] as const;
+export const DraftEvaluationStatusSchema = z.enum(DRAFT_EVALUATION_STATUS_VALUES);
+export type DraftEvaluationStatus = z.infer<typeof DraftEvaluationStatusSchema>;
+
+export const DRAFT_EVALUATION_VERDICT_VALUES = [
+  'regressed',
+  'refuted',
+  'worse',
+  'better',
+  'non_inferior',
+  'inconclusive',
+  'unmeasured',
+  'contaminated',
+] as const;
+export const DraftEvaluationVerdictSchema = z.enum(DRAFT_EVALUATION_VERDICT_VALUES);
+export type DraftEvaluationVerdict = z.infer<typeof DraftEvaluationVerdictSchema>;
+
+/** Why the verdict, one per rule that gives it:
+ *   - `regressed`: `regression_case_lost` (a regression case the candidate passed fewer times);
+ *   - `refuted`: `mechanism_not_shown`;
+ *   - `worse`: `below_margin`; `better`: `above_baseline`; `non_inferior`: `within_margin`;
+ *   - `inconclusive`: `too_few_trials` (the lower bound not above −δ), `holdout_disagrees`,
+ *     `no_holdout_cases`, `no_confirm_cases`, `errored_trials` (an arm with over a quarter of its
+ *     trials without an outcome, or such trials that could tip the stage's rule), `budget`;
+ *   - `unmeasured`: `environment_differs`, `environment_unknown` (a trial's environment is not
+ *     known — its run reported nothing);
+ *   - `contaminated`: `content_withheld`, `canary_reported`. */
+export const DRAFT_EVALUATION_REASON_VALUES = [
+  'regression_case_lost',
+  'mechanism_not_shown',
+  'below_margin',
+  'above_baseline',
+  'within_margin',
+  'too_few_trials',
+  'holdout_disagrees',
+  'no_holdout_cases',
+  'no_confirm_cases',
+  'errored_trials',
+  'budget',
+  'environment_differs',
+  'environment_unknown',
+  'content_withheld',
+  'canary_reported',
+] as const;
+export const DraftEvaluationReasonSchema = z.enum(DRAFT_EVALUATION_REASON_VALUES);
+export type DraftEvaluationReason = z.infer<typeof DraftEvaluationReasonSchema>;
+
+/** A stage's state: `waiting` (a later stage of a running evaluation), `running`, `ended` (it ran
+ *  every trial; the evaluation's `decidedBy` says whether it ended the evaluation), `skipped`
+ *  (`skipReason` — a later stage reads so already when it will be, for no mechanism or no case;
+ *  for the budget only once it is reached), `not_run` (an earlier stage ended the evaluation),
+ *  `cancelled`. */
+export const DRAFT_EVALUATION_STAGE_STATUS_VALUES = [
+  'waiting',
+  'running',
+  'ended',
+  'skipped',
+  'not_run',
+  'cancelled',
+] as const;
+export const DraftEvaluationStageStatusSchema = z.enum(DRAFT_EVALUATION_STAGE_STATUS_VALUES);
+export type DraftEvaluationStageStatus = z.infer<typeof DraftEvaluationStageStatusSchema>;
+
+/** Why a stage was skipped: it has no case (`no_cases`), no mechanism was named (`no_mechanism`),
+ *  or the month's evaluation budget could not cover it (`budget`). */
+export const DRAFT_EVALUATION_SKIP_VALUES = ['no_cases', 'no_mechanism', 'budget'] as const;
+export const DraftEvaluationSkipSchema = z.enum(DRAFT_EVALUATION_SKIP_VALUES);
+export type DraftEvaluationSkip = z.infer<typeof DraftEvaluationSkipSchema>;
+
+/** One arm's trials in a stage. */
+export const DraftEvaluationArmTallyWireSchema = z
+  .object({
+    trials: z.number().int().nonnegative(),
+    passed: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    /** Ended without a verdict after it started. */
+    errored: z.number().int().nonnegative(),
+    /** Never started: the evaluation was cancelled while it was queued (`trialVoided`). */
+    voided: z.number().int().nonnegative(),
+    /** Queued or running. */
+    open: z.number().int().nonnegative(),
+    /** `null` while a trial with no price has ended. */
+    costUsd: z.number().nullable(),
+    tokens: z.number().int().nonnegative(),
+  })
+  .strict();
+export type DraftEvaluationArmTallyWire = z.infer<typeof DraftEvaluationArmTallyWireSchema>;
+
+/** One case of a stage, both arms — a row of the case × arm matrix. */
+export const DraftEvaluationCaseRowWireSchema = z
+  .object({
+    caseId: z.string(),
+    title: z.string(),
+    split: EvalCaseSplitSchema,
+    baseline: DraftEvaluationArmTallyWireSchema,
+    candidate: DraftEvaluationArmTallyWireSchema,
+  })
+  .strict();
+export type DraftEvaluationCaseRowWire = z.infer<typeof DraftEvaluationCaseRowWireSchema>;
+
+/** Passes out of tries, per arm, on one split of the confirm stage — and the difference
+ *  (candidate − baseline) with its one-sided lower bound; `null` without a try in either arm.
+ *  Tries are those with an outcome (`trialHasOutcome`); `…NoOutcome` counts the others, left out
+ *  of the rates. */
+export const DraftEvaluationSplitMeasureWireSchema = z
+  .object({
+    candidatePassed: z.number().int().nonnegative(),
+    candidateTrials: z.number().int().nonnegative(),
+    candidateNoOutcome: z.number().int().nonnegative(),
+    baselinePassed: z.number().int().nonnegative(),
+    baselineTrials: z.number().int().nonnegative(),
+    baselineNoOutcome: z.number().int().nonnegative(),
+    difference: z.number().nullable(),
+    lowerBound: z.number().nullable(),
+  })
+  .strict();
+export type DraftEvaluationSplitMeasureWire = z.infer<typeof DraftEvaluationSplitMeasureWireSchema>;
+
+/** What a stage measured, as its rule reads it — once it ended. */
+export const DraftEvaluationMeasureWireSchema = z.discriminatedUnion('stage', [
+  z
+    .object({
+      stage: z.literal('regression'),
+      /** Cases the candidate passed fewer times than the baseline, even had each of its tries
+       *  without an outcome passed. */
+      lostCaseIds: z.array(z.string()),
+      /** Cases neither lost nor held: tries without an outcome (in either arm) could tip them. */
+      unsettledCaseIds: z.array(z.string()),
+    })
+    .strict(),
+  z
+    .object({
+      stage: z.literal('mechanism'),
+      /** Passes out of the arm's tries with an outcome (`trialHasOutcome`); `…NoOutcome` counts
+       *  the others — as the confirm stage's splits count them. */
+      candidatePassed: z.number().int().nonnegative(),
+      candidateTrials: z.number().int().nonnegative(),
+      candidateNoOutcome: z.number().int().nonnegative(),
+      baselinePassed: z.number().int().nonnegative(),
+      baselineTrials: z.number().int().nonnegative(),
+      baselineNoOutcome: z.number().int().nonnegative(),
+      /** The most the baseline may pass, of every try it ran. */
+      baselineMaxPassed: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z
+    .object({
+      stage: z.literal('confirm'),
+      delta: z.number(),
+      confidence: z.number(),
+      dev: DraftEvaluationSplitMeasureWireSchema,
+      /** `null`: the stage holds no holdout case. */
+      holdout: DraftEvaluationSplitMeasureWireSchema.nullable(),
+    })
+    .strict(),
+]);
+export type DraftEvaluationMeasureWire = z.infer<typeof DraftEvaluationMeasureWireSchema>;
+
+export const DraftEvaluationStageWireSchema = z
+  .object({
+    stage: DraftEvaluationStageNameSchema,
+    status: DraftEvaluationStageStatusSchema,
+    skipReason: DraftEvaluationSkipSchema.nullable(),
+    /** The stage's EvalRun (`get_eval_run` reads its trials) — `null` until it starts. */
+    runId: z.string().nullable(),
+    caseCount: z.number().int().nonnegative(),
+    k: z.number().int().nonnegative(),
+    /** Its trials × the cost of a recent trial, when it started (or now, while it waits): `null`
+     *  while no trial's cost is known. */
+    estimateUsd: z.number().nonnegative().nullable(),
+    baseline: DraftEvaluationArmTallyWireSchema,
+    candidate: DraftEvaluationArmTallyWireSchema,
+    cases: z.array(DraftEvaluationCaseRowWireSchema),
+    measure: DraftEvaluationMeasureWireSchema.nullable(),
+  })
+  .strict();
+export type DraftEvaluationStageWire = z.infer<typeof DraftEvaluationStageWireSchema>;
+
+const DraftEvaluationSkillRefWireSchema = z
+  .object({ skillId: z.string(), version: z.number().int().positive(), name: z.string() })
+  .strict();
+
+/** What the evaluation compares, as it was when it started. */
+const DraftEvaluationSubjectFields = {
+  suite: z
+    .object({ id: z.string(), name: z.string(), version: z.number().int().positive() })
+    .strict(),
+  workerDefinition: z.object({ id: z.string(), version: z.number().int().positive() }).strict(),
+  /** The draft: its family, version, name and the digest of its content then. */
+  candidate: DraftEvaluationSkillRefWireSchema.extend({ draftDigest: z.string() }).strict(),
+  /** The published version of the family it would replace; `null` for a new Skill. */
+  baseline: DraftEvaluationSkillRefWireSchema.nullable(),
+  /** The mechanism the mechanism stage tries; `null`: none named. */
+  mechanism: z.string().nullable(),
+};
+
+const DraftEvaluationStateFields = {
+  id: z.string(),
+  status: DraftEvaluationStatusSchema,
+  /** The stage running now; `null` once it ended. */
+  stage: DraftEvaluationStageNameSchema.nullable(),
+  verdict: DraftEvaluationVerdictSchema.nullable(),
+  reason: DraftEvaluationReasonSchema.nullable(),
+  /** The stage whose outcome gave the verdict. */
+  decidedBy: DraftEvaluationStageNameSchema.nullable(),
+  /** What its trials cost so far; `null` while a trial with no price has ended. */
+  costUsd: z.number().nullable(),
+  createdBy: z.string(),
+  createdAt: z.string(),
+  finishedAt: z.string().nullable(),
+  cancelledBy: z.string().nullable(),
+};
+
+/** A draft evaluation in brief, for a list. */
+export const DraftEvaluationSummaryWireSchema = z
+  .object({ ...DraftEvaluationStateFields, ...DraftEvaluationSubjectFields })
+  .strict();
+export type DraftEvaluationSummaryWire = z.infer<typeof DraftEvaluationSummaryWireSchema>;
+
+/** One environment the evaluation's trials ran in, and how many of each arm's did. */
+export const DraftEvaluationEnvironmentWireSchema = z
+  .object({
+    environment: RunEnvironmentWireSchema,
+    baselineTrials: z.number().int().nonnegative(),
+    candidateTrials: z.number().int().nonnegative(),
+  })
+  .strict();
+export type DraftEvaluationEnvironmentWire = z.infer<typeof DraftEvaluationEnvironmentWireSchema>;
+
+/** A Skill's content as an arm loads it. */
+export const DraftEvaluationSkillContentWireSchema = z
+  .object({ name: z.string(), description: z.string(), markdown: z.string() })
+  .strict();
+
+/** A draft evaluation whole. */
+export const DraftEvaluationWireSchema = z
+  .object({
+    ...DraftEvaluationStateFields,
+    ...DraftEvaluationSubjectFields,
+    /** The other Skills both arms load, pinned when it started. */
+    otherSkills: z.array(DraftEvaluationSkillRefWireSchema),
+    /** The draft's content as evaluated (kept after the draft is gone), and the baseline's
+     *  (`null` for a new Skill). Free text reads as every read shows it. */
+    candidateContent: DraftEvaluationSkillContentWireSchema,
+    baselineContent: DraftEvaluationSkillContentWireSchema.nullable(),
+    /** The three stages, in order. */
+    stages: z.array(DraftEvaluationStageWireSchema),
+    /** Every environment its trials ran in, one when they agree (I-E2). */
+    environments: z.array(DraftEvaluationEnvironmentWireSchema),
+  })
+  .strict();
+export type DraftEvaluationWire = z.infer<typeof DraftEvaluationWireSchema>;
+
+/**
+ * The check a Skill draft passes before an evaluation starts (§5.5 审查器, level 0): any one
+ * failing refuses the start, nothing run (400 `draft_check_failed`, each failing check in
+ * `details.problems`).
+ *   - `credential_like`: it carries a value shaped like a credential (the detector every scrub and
+ *     the publish confirmation use);
+ *   - `internal_id`: it carries an id shaped like this platform's (a UUID) — a Skill names things,
+ *     not one workspace's rows;
+ *   - `oversized`: its text is longer than `DRAFT_CHECK_LIMITS.maxChars` (draft-evaluation.ts;
+ *     §5.5 步骤有界);
+ *   - `unchanged`: it says exactly what the version it would replace says;
+ *   - `edit_budget`: more lines differ from that version (all of them, for a new Skill) than
+ *     `DRAFT_CHECK_LIMITS.maxChangedLines` (§5.5 编辑预算);
+ *   - `contaminated`: it carries an evaluation suite's canary or a run of a held-out case's text
+ *     (the E3-1c seal) — its Worker would be stopped anyway.
+ */
+export const DRAFT_CHECK_VALUES = [
+  'credential_like',
+  'internal_id',
+  'oversized',
+  'unchanged',
+  'edit_budget',
+  'contaminated',
+] as const;
+export type DraftCheck = (typeof DRAFT_CHECK_VALUES)[number];
+
+/** One check of the draft that failed (400 `draft_check_failed`'s `details.problems`): `count`
+ *  of what it found, or the size it measured, and the limit, where the check has them. */
+export const DraftCheckProblemWireSchema = z
+  .object({
+    check: z.enum(DRAFT_CHECK_VALUES),
+    count: z.number().int().nonnegative().nullable(),
+    limit: z.number().int().nonnegative().nullable(),
+  })
+  .strict();
+export type DraftCheckProblemWire = z.infer<typeof DraftCheckProblemWireSchema>;

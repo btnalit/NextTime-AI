@@ -1,4 +1,8 @@
-import type { EvalSuiteSummaryWire, EvalSuiteWire } from '@nexttime/shared';
+import type {
+  DraftEvaluationSummaryWire,
+  EvalSuiteSummaryWire,
+  EvalSuiteWire,
+} from '@nexttime/shared';
 import { useCallback, useMemo, useState } from 'react';
 import { type Resource, useResource } from '../../hooks/useResource.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
@@ -7,6 +11,7 @@ import { pinnedWorkerName, suiteSummaryOf, workerChoices } from '../../lib/evalu
 import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
+import type { EvaluationTab } from '../../lib/router.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import { usePrincipalNames } from '../approvals/useDirectoryNames.js';
 import { Button } from '../kit/button.js';
@@ -16,14 +21,18 @@ import { List, ListRow } from '../kit/list-row.js';
 import { MasterDetail, nothingToPick } from '../kit/master-detail.js';
 import { PageHeader } from '../kit/page-header.js';
 import { SkeletonRows } from '../kit/skeleton.js';
+import { Tabs } from '../kit/tabs.js';
 import { CreateSuiteSheet } from './CreateSuiteSheet.js';
+import { DraftEvaluationsTab } from './DraftEvaluations.js';
 import { EvalBudgetCard, useEvalBudget, useIsOwner } from './EvalBudget.js';
 import { SuiteDetail } from './SuiteDetail.js';
 
 export interface EvaluationPageProps {
   readonly http: CapabilityCaller;
-  readonly suiteId?: string;
-  readonly onSelectSuite: (suiteId: string | null) => void;
+  readonly tab: EvaluationTab;
+  /** The suite (用例集) or the draft evaluation (草稿评测) open in the tab's detail. */
+  readonly itemId?: string;
+  readonly onNavigate: (tab: EvaluationTab, itemId: string | null) => void;
 }
 
 /**
@@ -32,15 +41,26 @@ export interface EvaluationPageProps {
  * like 任务): the list, and one suite's detail (`SuiteDetail`). Every person reads them (an auditor
  * included); a builder or the owner creates one (`CreateSuiteSheet`) and changes it. A suite's cases
  * (E3-1b) and their 试跑 (E3-2a, in a case's sheet) are in its detail; the month's evaluation
- * budget (`EvalBudgetCard`, E3-2a) heads the page. The route already carries a tab segment
- * (`#/govern/evaluation/suites/<id>`) for the draft runs E3-2b adds.
+ * budget (`EvalBudgetCard`, E3-2a) heads the page. E3-2b adds the 草稿评测 tab
+ * (`DraftEvaluationsTab`, `#/govern/evaluation/drafts/<id>`): the Skill draft evaluations the
+ * reader may see, and one whole.
  *
  * Worker names come from `list_worker_definitions{kind:'worker'}` (published rows, every version)
  * — the same list the create form picks from and a repin chooses a version in.
  */
-export function EvaluationPage({ http, suiteId, onSelectSuite }: EvaluationPageProps) {
+export function EvaluationPage({ http, tab, itemId, onNavigate }: EvaluationPageProps) {
   const t = useT();
   const can = useRoleCan(http);
+  const suiteId = tab === 'suites' ? itemId : undefined;
+  const onSelectSuite = useCallback((id: string | null) => onNavigate('suites', id), [onNavigate]);
+  const loadEvaluations = useCallback(async () => {
+    const page = await http.call<{ items: readonly DraftEvaluationSummaryWire[] }>(
+      'list_draft_evaluations',
+      {},
+    );
+    return page.items;
+  }, [http]);
+  const evaluations = useResource(loadEvaluations);
   const load = useCallback(async () => {
     const page = await http.call<{ items: readonly EvalSuiteSummaryWire[] }>(
       'list_eval_suites',
@@ -89,6 +109,11 @@ export function EvaluationPage({ http, suiteId, onSelectSuite }: EvaluationPageP
   );
 
   const canCreate = can('create_eval_suite') !== false;
+  const reloadBudget = budget.reload;
+  const onEvaluationChanged = useCallback(() => void reloadBudget(), [reloadBudget]);
+  const current = tab === 'suites' ? suites : evaluations;
+  const evaluationCount =
+    evaluations.state.status === 'ready' ? evaluations.state.data.length : undefined;
 
   return (
     <div className="page evaluation-page">
@@ -103,16 +128,16 @@ export function EvaluationPage({ http, suiteId, onSelectSuite }: EvaluationPageP
           <>
             <Button
               variant="ghost"
-              aria-busy={suites.state.status === 'ready' && suites.state.refreshing}
-              disabled={suites.state.status === 'ready' && suites.state.refreshing}
+              aria-busy={current.state.status === 'ready' && current.state.refreshing}
+              disabled={current.state.status === 'ready' && current.state.refreshing}
               onClick={() => {
-                void suites.reload();
+                void current.reload();
                 void budget.reload();
               }}
             >
               {t('刷新', 'Refresh')}
             </Button>
-            {canCreate ? (
+            {canCreate && tab === 'suites' ? (
               <Button
                 variant="primary"
                 onClick={() => setCreating(true)}
@@ -127,44 +152,76 @@ export function EvaluationPage({ http, suiteId, onSelectSuite }: EvaluationPageP
 
       <EvalBudgetCard budget={budget} isOwner={isOwner} />
 
-      <MasterDetail
-        list={
-          <SuitesList
-            t={t}
-            suites={suites}
-            rows={rows}
-            definitionRows={definitionRows}
-            selectedId={suiteId}
-            onSelect={onSelectSuite}
-          />
-        }
-        detail={
-          nothingToPick(suites.state.status, rows.length, suiteId) ? null : suiteId !==
-            undefined ? (
-            <SuiteDetail
-              key={suiteId}
-              http={http}
-              suiteId={suiteId}
-              definitions={definitionRows}
-              principalNames={principalNames}
-              onChanged={onChanged}
-            />
-          ) : (
-            <EmptyState
-              title={t('还没有选择用例集', 'No suite selected yet')}
-              body={t(
-                '选择左侧一个用例集，查看钉住的 Worker、夹具门和变更记录。',
-                'Pick a suite on the left to see its pinned Worker, fixture gates and history.',
-              )}
-              testId="eval-suite-detail-empty"
-            />
-          )
-        }
-        open={suiteId !== undefined}
-        onClose={() => onSelectSuite(null)}
-        sheetTitle={t('用例集详情', 'Suite detail')}
-        detailTestId="eval-suite-drawer"
+      <Tabs<EvaluationTab>
+        ariaLabel={t('评测', 'Evaluation')}
+        value={tab}
+        options={[
+          {
+            value: 'suites',
+            label: t('用例集', 'Suites'),
+            ...(suites.state.status === 'ready' ? { count: rows.length } : {}),
+            testId: 'eval-tab-suites',
+          },
+          {
+            value: 'drafts',
+            label: t('草稿评测', 'Draft evaluations'),
+            ...(evaluationCount !== undefined ? { count: evaluationCount } : {}),
+            testId: 'eval-tab-drafts',
+          },
+        ]}
+        onChange={(next) => onNavigate(next, null)}
       />
+
+      {tab === 'drafts' ? (
+        <DraftEvaluationsTab
+          http={http}
+          evaluations={evaluations}
+          evaluationId={itemId}
+          onSelect={(id) => onNavigate('drafts', id)}
+          definitions={definitionRows}
+          principalNames={principalNames}
+          onEvaluationChanged={onEvaluationChanged}
+        />
+      ) : (
+        <MasterDetail
+          list={
+            <SuitesList
+              t={t}
+              suites={suites}
+              rows={rows}
+              definitionRows={definitionRows}
+              selectedId={suiteId}
+              onSelect={onSelectSuite}
+            />
+          }
+          detail={
+            nothingToPick(suites.state.status, rows.length, suiteId) ? null : suiteId !==
+              undefined ? (
+              <SuiteDetail
+                key={suiteId}
+                http={http}
+                suiteId={suiteId}
+                definitions={definitionRows}
+                principalNames={principalNames}
+                onChanged={onChanged}
+              />
+            ) : (
+              <EmptyState
+                title={t('还没有选择用例集', 'No suite selected yet')}
+                body={t(
+                  '选择左侧一个用例集，查看钉住的 Worker、夹具门和变更记录。',
+                  'Pick a suite on the left to see its pinned Worker, fixture gates and history.',
+                )}
+                testId="eval-suite-detail-empty"
+              />
+            )
+          }
+          open={suiteId !== undefined}
+          onClose={() => onSelectSuite(null)}
+          sheetTitle={t('用例集详情', 'Suite detail')}
+          detailTestId="eval-suite-drawer"
+        />
+      )}
 
       {canCreate ? (
         <CreateSuiteSheet

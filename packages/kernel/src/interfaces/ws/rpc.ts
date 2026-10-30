@@ -25,13 +25,16 @@ import {
 import { EvaluationContentWithheldError } from '../../application/eval-seal/index.js';
 // S10 E3-1a: an evaluation suite's refusals, imported directly like the domain errors around.
 import {
+  DraftCheckFailedError,
   EvalFixtureGateInUseError,
   EvalRunNotFoundError,
+  EvalSkillNotADraftError,
   EvalSuiteInputError,
   EvalSuiteNameTakenError,
   EvalSuiteNotFoundError,
   EvalSuiteStateError,
   EvaluationBudgetExhaustedError,
+  EvaluationBudgetInsufficientError,
 } from '../../application/eval/index.js';
 // NoActiveTurnError/TurnNotFoundError: see capability-route.ts's own comment on this same import
 // — exported by handlers.ts but not re-exported by gateway/index.ts's curated surface; that one-
@@ -106,6 +109,7 @@ import {
   UnknownQuotaKeyError,
 } from '../../application/task/index.js';
 import {
+  DraftEvaluatingError,
   DraftNotDiscardableError,
   EntryTemplateChangedError,
   EntryTemplateCurrentError,
@@ -641,13 +645,17 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (err instanceof EvalSuiteNotFoundError || err instanceof EvalRunNotFoundError) {
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
   }
-  if (err instanceof EvaluationBudgetExhaustedError) {
+  if (
+    err instanceof EvaluationBudgetExhaustedError ||
+    err instanceof EvaluationBudgetInsufficientError
+  ) {
     return { code: WS_ERROR_CODES.QUOTA_EXCEEDED, message: err.message };
   }
-  if (err instanceof EvalSuiteInputError) {
+  if (err instanceof EvalSuiteInputError || err instanceof DraftCheckFailedError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   if (
+    err instanceof EvalSkillNotADraftError ||
     err instanceof EvalSuiteStateError ||
     err instanceof EvalSuiteNameTakenError ||
     err instanceof EvalFixtureGateInUseError
@@ -682,7 +690,7 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   // S8 W3 K2 (leftover 82) `discard_draft` — same mapping as interfaces/http/capability-route.ts's
   // DraftNotDiscardableError branch (409/ILLEGAL_TRANSITION: well-formed request, the row's
   // current state forbids it).
-  if (err instanceof DraftNotDiscardableError) {
+  if (err instanceof DraftNotDiscardableError || err instanceof DraftEvaluatingError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   if (

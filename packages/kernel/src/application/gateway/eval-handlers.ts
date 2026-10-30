@@ -1,14 +1,20 @@
-import type { EvalCaseContent, EvalCaseKind } from '@nexttime/shared';
+import type { EvalCaseContent, EvalCaseKind, EvalRunKind } from '@nexttime/shared';
 import {
+  type DraftEvaluationActor,
   type EvalSuiteActor,
   addEvalCase,
   addEvalFixtureGate,
+  afterDraftEvaluationCancel,
+  afterDraftEvaluationStart,
+  cancelDraftEvaluation,
   createEvalSuite,
   editEvalCase,
   evalBudgetWire,
+  getDraftEvaluation,
   getEvalCase,
   getEvalRun,
   getEvalSuite,
+  listDraftEvaluations,
   listEvalRuns,
   listEvalSuites,
   readEvalBudget,
@@ -17,6 +23,7 @@ import {
   retireEvalCase,
   startCaseTrial,
   startCaseTrialTask,
+  startDraftEvaluation,
   syncEvalFixtureGate,
 } from '../eval/index.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
@@ -31,7 +38,10 @@ import type { CapabilityHandler, CapabilityHandlerContext } from './capability-h
  * case's content, which it withholds (`auditWithheldParamKeys`: a case is read through
  * `get_eval_case` only); the suite's own history is `eval_suite_changes`. E3-2a: a run is started
  * here (`start_eval_case_trial`, its Task started after the commit) and read here; its trials are
- * scored by `application/eval`'s runner, which the composition root ticks.
+ * scored by `application/eval`'s runner, which the composition root ticks. E3-2b: a draft
+ * evaluation is started (its first trials started after the commit), read and cancelled (its
+ * running Tasks terminated after the commit) here; who may see one is `application/eval`'s rule,
+ * by the caller's role.
  */
 
 function personOf(capability: string, ctx: CapabilityHandlerContext | undefined): EvalSuiteActor {
@@ -43,6 +53,17 @@ function personOf(capability: string, ctx: CapabilityHandlerContext | undefined)
     );
   }
   return { principalId: ctx.principal.id };
+}
+
+/** The person, with their role — who may see a draft evaluation depends on it. */
+function viewerOf(
+  capability: string,
+  ctx: CapabilityHandlerContext | undefined,
+): DraftEvaluationActor {
+  const person = personOf(capability, ctx);
+  const role = ctx?.principal?.role;
+  if (!role) throw new Error(`${capability}: no role in context`);
+  return { principalId: person.principalId, role };
 }
 
 function suiteResult(suite: { readonly id: string }, result: unknown) {
@@ -230,9 +251,9 @@ export const startEvalCaseTrialHandler: CapabilityHandler = async (
 };
 
 export const getEvalRunHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
-  personOf('get_eval_run', ctx);
+  const viewer = viewerOf('get_eval_run', ctx);
   const { runId } = params as { runId: string };
-  const run = await getEvalRun(client, workspaceId, runId);
+  const run = await getEvalRun(client, workspaceId, runId, viewer);
   // The suite, so the console's audit row links to it.
   return {
     result: run,
@@ -243,10 +264,10 @@ export const getEvalRunHandler: CapabilityHandler = async (client, workspaceId, 
 };
 
 export const listEvalRunsHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
-  personOf('list_eval_runs', ctx);
-  const filter = params as { suiteId: string; caseId?: string };
+  const viewer = viewerOf('list_eval_runs', ctx);
+  const filter = params as { suiteId: string; caseId?: string; kind?: EvalRunKind };
   return {
-    result: { items: await listEvalRuns(client, workspaceId, filter) },
+    result: { items: await listEvalRuns(client, workspaceId, viewer, filter) },
     resourceType: 'eval_suite',
     resourceId: filter.suiteId,
   };
@@ -260,4 +281,71 @@ export const getEvalBudgetHandler: CapabilityHandler = async (
 ) => {
   personOf('get_eval_budget', ctx);
   return { result: evalBudgetWire(await readEvalBudget(client, workspaceId)) };
+};
+
+export const startDraftEvaluationHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const actor = viewerOf('start_draft_evaluation', ctx);
+  const target = params as {
+    skillId: string;
+    version: number;
+    draftDigest: string;
+    suiteId: string;
+    suiteVersion: number;
+    mechanism?: string;
+  };
+  const started = await startDraftEvaluation(client, workspaceId, actor, target);
+  return {
+    result: started.evaluation,
+    resourceType: 'draft_evaluation',
+    resourceId: started.evaluation.id,
+    auditPayload: started.audit,
+    afterCommit: (pool) =>
+      afterDraftEvaluationStart(pool, workspaceId, actor, started.evaluation.id),
+  };
+};
+
+export const getDraftEvaluationHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const viewer = viewerOf('get_draft_evaluation', ctx);
+  const { evaluationId } = params as { evaluationId: string };
+  const evaluation = await getDraftEvaluation(client, workspaceId, viewer, evaluationId);
+  return { result: evaluation, resourceType: 'draft_evaluation', resourceId: evaluation.id };
+};
+
+export const listDraftEvaluationsHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const viewer = viewerOf('list_draft_evaluations', ctx);
+  const filter = params as { skillId?: string; suiteId?: string };
+  return { result: { items: await listDraftEvaluations(client, workspaceId, viewer, filter) } };
+};
+
+export const cancelDraftEvaluationHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const actor = viewerOf('cancel_draft_evaluation', ctx);
+  const { evaluationId } = params as { evaluationId: string };
+  const cancelled = await cancelDraftEvaluation(client, workspaceId, actor, evaluationId);
+  return {
+    result: cancelled.evaluation,
+    resourceType: 'draft_evaluation',
+    resourceId: evaluationId,
+    auditPayload: { runningTaskCount: cancelled.taskIds.length },
+    afterCommit: (pool) => afterDraftEvaluationCancel(pool, workspaceId, actor, cancelled),
+  };
 };

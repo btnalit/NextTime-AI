@@ -1364,7 +1364,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       await expect(insertTrial(trial.run.id, { rep: 2 })).rejects.toThrow(notOwn);
       await expect(
         insertTrial(trial.run.id, { status: 'scored', verdict: 'passed', finished_at: new Date() }),
-      ).rejects.toThrow(/a trial starts running, with nothing recorded yet/);
+      ).rejects.toThrow(/a trial starts queued or running, with nothing recorded yet/);
       // …and its calls are numbered from 1, in order.
       const insertCall = (seq: number) =>
         write(

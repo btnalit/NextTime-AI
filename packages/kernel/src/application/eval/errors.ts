@@ -1,3 +1,5 @@
+import type { DraftCheckProblemWire } from '@nexttime/shared';
+
 /**
  * application/eval's refusals, sorted the way the `goal` module sorts its own: not there (404), a
  * request no state of the suite would take (400 invalid_params), one the suite's state does not
@@ -99,5 +101,72 @@ export class EvaluationBudgetExhaustedError extends Error {
     );
     this.name = 'EvaluationBudgetExhaustedError';
     this.details = { budgetUsd, spentUsd };
+  }
+}
+
+/** 404 not_found: no draft evaluation with this id in the workspace, or one the caller may not see
+ *  (its draft is someone else's and was never published; E3-2b). An `EvalRunNotFoundError`, so
+ *  every place that maps that one maps this one the same way. */
+export class DraftEvaluationNotFoundError extends EvalRunNotFoundError {
+  constructor(evaluationId: string) {
+    super(evaluationId);
+    this.message = `draft evaluation ${evaluationId} not found`;
+    this.name = 'DraftEvaluationNotFoundError';
+  }
+}
+
+/** 400 draft_check_failed (E3-2b): the draft failed the check it passes before an evaluation
+ *  starts (`draft-check.ts`). `details.problems` names each failed check with what it counted —
+ *  never the text it found. */
+export class DraftCheckFailedError extends Error {
+  readonly code = 'draft_check_failed' as const;
+  readonly details: { readonly problems: readonly DraftCheckProblemWire[] };
+  constructor(problems: readonly DraftCheckProblemWire[]) {
+    super(
+      `the draft did not pass the check an evaluation starts with (${problems.map((p) => p.check).join(', ')}) — change the draft and try again; nothing was started`,
+    );
+    this.name = 'DraftCheckFailedError';
+    this.details = { problems };
+  }
+}
+
+/** 429 evaluation_budget_insufficient (E3-2b): what is left of this month's evaluation budget —
+ *  after what is spent and what the trials not ended yet are expected to cost — does not cover the
+ *  first stage the evaluation would run (its trials × the recent cost of a trial). `details`
+ *  carries the budget, what was spent, what is committed and the estimate, in USD. */
+export class EvaluationBudgetInsufficientError extends Error {
+  readonly code = 'evaluation_budget_insufficient' as const;
+  readonly details: {
+    readonly budgetUsd: number;
+    readonly spentUsd: number;
+    readonly committedUsd: number;
+    readonly estimateUsd: number;
+  };
+  constructor(budgetUsd: number, spentUsd: number, committedUsd: number, estimateUsd: number) {
+    super(
+      `this month's evaluation budget ($${budgetUsd.toFixed(2)}, $${spentUsd.toFixed(2)} spent, about $${committedUsd.toFixed(2)} committed to trials not ended yet) does not cover the first stage (about $${estimateUsd.toFixed(2)}) — nothing was started; wait for running evaluations to end, an owner can raise evaluation.monthly_cost_budget_usd, or wait for the next UTC month`,
+    );
+    this.name = 'EvaluationBudgetInsufficientError';
+    this.details = { budgetUsd, spentUsd, committedUsd, estimateUsd };
+  }
+}
+
+/** 409 not_a_draft (E3-2b): the Skill version named is published or deprecated — only a draft is
+ *  evaluated. */
+export class EvalSkillNotADraftError extends Error {
+  readonly code = 'not_a_draft' as const;
+  constructor(skillId: string, version: number, status: string) {
+    super(
+      `Skill ${skillId}@${version} is not a draft (status: ${status}) — only a draft is evaluated; nothing was started`,
+    );
+    this.name = 'EvalSkillNotADraftError';
+  }
+}
+
+/** 409 conflict on a draft evaluation that has already ended (cancel). An `EvalSuiteStateError`. */
+export class DraftEvaluationEndedError extends EvalSuiteStateError {
+  constructor(evaluationId: string, status: string) {
+    super(`draft evaluation ${evaluationId} has already ended (${status}); nothing was changed`);
+    this.name = 'DraftEvaluationEndedError';
   }
 }

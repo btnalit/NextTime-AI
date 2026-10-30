@@ -193,6 +193,9 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   concurrency_exceeded: 'Too many running at once',
   daily_cost_exceeded: 'Daily cost budget reached',
   evaluation_budget_exhausted: 'Evaluation budget spent',
+  evaluation_budget_insufficient: 'Not enough evaluation budget',
+  draft_check_failed: 'The draft did not pass the check',
+  draft_evaluating: 'The draft is being evaluated',
   // `PrincipalOperationRefusedError`'s reasons (`principalRefusalCode`); `last_owner` and
   // `self_disable` are platform-plane codes too.
   ...PRINCIPAL_REFUSAL_TITLES,
@@ -284,6 +287,9 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   concurrency_exceeded: '同时运行的任务太多',
   daily_cost_exceeded: '今日成本已达上限',
   evaluation_budget_exhausted: '本月评测预算已用完',
+  evaluation_budget_insufficient: '评测预算不够',
+  draft_check_failed: '草稿没有通过检查',
+  draft_evaluating: '草稿正在评测',
   ...PRINCIPAL_REFUSAL_TITLES_ZH,
   unknown: '出错了',
 };
@@ -654,6 +660,20 @@ export const ERROR_NEXT_STEPS: Readonly<
   evaluation_budget_exhausted: {
     zh: '这个月的评测花费已经达到「评测月度预算」，什么也没有启动。等下个月（UTC）预算重置后再试；急需的话，请工作区所有者在「模型与配额」调高它。',
     en: 'Evaluation spending this month has reached the monthly evaluation budget, so nothing was started. Retry once it resets next month (UTC); if it cannot wait, ask a workspace owner to raise it under Models.',
+  },
+  // S10 E3-2b: what is left of the month's evaluation budget does not cover a draft evaluation's
+  // first stage; the draft's check before it starts; a draft whose evaluation runs.
+  evaluation_budget_insufficient: {
+    zh: '这个月剩下的评测预算不够跑草稿评测的第一个阶段，什么也没有启动。等下个月（UTC）预算重置后再试；急需的话，请工作区所有者在「模型与配额」调高「评测月度预算」。',
+    en: 'What is left of this month’s evaluation budget does not cover the draft evaluation’s first stage, so nothing was started. Retry once it resets next month (UTC); if it cannot wait, ask a workspace owner to raise the monthly evaluation budget under Models.',
+  },
+  draft_check_failed: {
+    zh: '草稿没有通过评测前的检查（像凭证的值、平台 id、太长、和基线一样、改动太多，或含评测保留的内容），什么也没有启动。在 Skill 草稿的「评测」对话框里看具体是哪几项，改好草稿后再评测。',
+    en: 'The draft did not pass the check before an evaluation (a credential-like value, a platform id, too long, the same as its baseline, too many changes, or text evaluation keeps back), so nothing was started. Open Evaluate on the Skill draft to see which, fix the draft, then evaluate it again.',
+  },
+  draft_evaluating: {
+    zh: '这个草稿正在评测，评测结束或取消之前不能丢弃、拒绝它，也不能再开一次评测，什么也没有改。到「评测 → 草稿评测」查看进度，需要的话在那里取消。',
+    en: 'This draft is being evaluated: until the evaluation ends or is cancelled it cannot be discarded, rejected or evaluated again, and nothing changed. See its progress under Evaluation → Draft evaluations, and cancel it there if you need to.',
   },
   ...PRINCIPAL_REFUSAL_NEXT_STEPS,
 };

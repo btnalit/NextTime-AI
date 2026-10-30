@@ -25,13 +25,16 @@ import {
 import { EvaluationContentWithheldError } from '../../application/eval-seal/index.js';
 // S10 E3-1a: an evaluation suite's refusals — imported directly like the domain errors around.
 import {
+  DraftCheckFailedError,
   EvalFixtureGateInUseError,
   EvalRunNotFoundError,
+  EvalSkillNotADraftError,
   EvalSuiteInputError,
   EvalSuiteNameTakenError,
   EvalSuiteNotFoundError,
   EvalSuiteStateError,
   EvaluationBudgetExhaustedError,
+  EvaluationBudgetInsufficientError,
 } from '../../application/eval/index.js';
 import { GateInstanceNotAvailableError } from '../../application/gateway/gate-instance-handlers.js';
 // NoActiveTurnError/TurnNotFoundError are exported from handlers.ts itself but not re-exported by
@@ -140,6 +143,7 @@ import {
   UnknownQuotaKeyError,
 } from '../../application/task/index.js';
 import {
+  DraftEvaluatingError,
   DraftNotDiscardableError,
   EntryTemplateChangedError,
   EntryTemplateCurrentError,
@@ -809,6 +813,23 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   if (err instanceof EvaluationBudgetExhaustedError) {
     return { status: 429, code: err.code, message: err.message, details: { ...err.details } };
   }
+  // E3-2b: a stage the rest of the budget does not cover — the budget, what was spent and the
+  // estimate in `details`; a draft that failed its check — each failed check in `details.problems`
+  // (counts, never the text found); a version that is not a draft.
+  if (err instanceof EvaluationBudgetInsufficientError) {
+    return { status: 429, code: err.code, message: err.message, details: { ...err.details } };
+  }
+  if (err instanceof DraftCheckFailedError) {
+    return {
+      status: 400,
+      code: err.code,
+      message: err.message,
+      details: { problems: err.details.problems.map((p) => ({ ...p })) },
+    };
+  }
+  if (err instanceof EvalSkillNotADraftError) {
+    return { status: 409, code: err.code, message: err.message };
+  }
   if (err instanceof EvalSuiteStateError) {
     return { status: 409, code: 'conflict', message: err.message };
   }
@@ -869,6 +890,10 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // WorkerDefinitionNotPublishedError just above.
   if (err instanceof DraftNotDiscardableError) {
     return { status: 409, code: 'not_a_draft', message: err.message };
+  }
+  // S10 E3-2b: the draft is being evaluated — it stays until the evaluation ends or is cancelled.
+  if (err instanceof DraftEvaluatingError) {
+    return { status: 409, code: err.code, message: err.message };
   }
   if (err instanceof ProcedureStepReferenceError) {
     return { status: 400, code: 'invalid_step_reference', message: err.message };

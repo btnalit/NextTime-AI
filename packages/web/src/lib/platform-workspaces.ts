@@ -144,8 +144,9 @@ const PURGE_COUNT_LABELS = {
   changeSegments: { zh: '安装记录', en: 'Install records' },
   connectionRequests: { zh: '连接申请', en: 'Connection requests' },
   draftRejections: { zh: '草稿被拒绝的记录', en: 'Draft rejections' },
-  // S10 E3-1a / E3-1b / E3-2a (migrations/worker/0007–0009): the names 治理 → 评测 uses.
+  // S10 E3-1a / E3-1b / E3-2a / E3-2b (migrations/worker/0007–0010): the names 治理 → 评测 uses.
   evalCases: { zh: '评测用例', en: 'Evaluation cases' },
+  evalDraftEvaluations: { zh: '草稿评测', en: 'Draft evaluations' },
   evalFixtureGates: { zh: '用例集的夹具门', en: 'Suite fixture gates' },
   evalRuns: { zh: '评测运行', en: 'Evaluation runs' },
   evalSuiteChanges: { zh: '用例集变更记录', en: 'Suite history entries' },

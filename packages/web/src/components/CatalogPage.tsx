@@ -97,6 +97,7 @@ import { ProcedureEditorHost } from './catalog/ProcedureEditorHost.js';
 import { ProcedureTemplateView } from './catalog/ProcedureTemplateView.js';
 import { ProcedureUsageSection } from './catalog/ProcedureUsage.js';
 import { RejectedDrafts } from './catalog/RejectedDrafts.js';
+import { SkillDraftEvaluations } from './catalog/SkillDraftEvaluations.js';
 import { SkillEditor } from './catalog/SkillEditor.js';
 import { SkillUsageSection } from './catalog/SkillUsage.js';
 import { WorkerEditorHost } from './catalog/WorkerEditorHost.js';
@@ -871,12 +872,15 @@ function RevisionDiff({ row }: { readonly row: OperationCatalogRow }) {
  *  private to the caller alone and easy to recreate. */
 function DiscardDraftConfirm({
   busy,
+  heldReason,
   target,
   description,
   onConfirm,
   testId,
 }: {
   readonly busy: boolean;
+  /** Why it cannot be discarded now (a draft under evaluation, #833 UX P3-1); held while set. */
+  readonly heldReason?: string;
   readonly target: string;
   /** What discarding does to this kind of draft — deleted outright by default (`discard_draft`);
    *  an Operation draft is kept and marked instead (legacy 278, `discard_operation_draft`). */
@@ -902,7 +906,8 @@ function DiscardDraftConfirm({
         <Button
           variant="ghost"
           size="s"
-          disabled={busy}
+          disabled={busy || heldReason !== undefined}
+          title={heldReason}
           onClick={() => setOpen(true)}
           data-testid={`${testId}-trigger`}
         >
@@ -937,6 +942,7 @@ function DiscardDraftConfirm({
 function RejectDraftConfirm({
   kind,
   busy,
+  heldReason,
   target,
   inUseVersion,
   onConfirm,
@@ -944,6 +950,8 @@ function RejectDraftConfirm({
 }: {
   readonly kind: 'skill' | 'procedure';
   readonly busy: boolean;
+  /** As `DiscardDraftConfirm`'s. */
+  readonly heldReason?: string;
   readonly target: string;
   /** The family's version in use, which stays in use; `undefined`: none. */
   readonly inUseVersion: number | undefined;
@@ -969,7 +977,8 @@ function RejectDraftConfirm({
         <Button
           variant="ghost"
           size="s"
-          disabled={busy}
+          disabled={busy || heldReason !== undefined}
+          title={heldReason}
           onClick={() => setOpen(true)}
           data-testid={`${testId}-trigger`}
         >
@@ -2094,6 +2103,14 @@ function SkillDetailView({
   readonly onReject: (reason: string) => Promise<void>;
 }) {
   const t = useT();
+  // S10 E3-2b (#833 UX P3-1): a draft under evaluation is neither discarded nor rejected.
+  const [evaluating, setEvaluating] = useState(false);
+  const heldReason = evaluating
+    ? t(
+        '评测进行中：结束或取消之前不能丢弃或拒绝',
+        'Being evaluated: it cannot be discarded or rejected until the evaluation ends or is cancelled',
+      )
+    : undefined;
   // Best-effort read of the current version's full body — degrades to "—" on error/while loading
   // rather than blocking the rest of the detail (same convention `get_operation_stats` uses on the
   // Operations tab above). `get_skill` already exists and is already called from this same file
@@ -2174,6 +2191,14 @@ function SkillDetailView({
       {/* S11 W1a E2-1: the family's statistics — builders and up only (the section decides). */}
       <SkillUsageSection http={http} skillId={row.id} />
 
+      {/* S10 E3-2b: this version's draft evaluations, and 「评测」 on a draft. */}
+      <SkillDraftEvaluations
+        http={http}
+        skill={row}
+        inUseVersion={inUseVersion}
+        onEvaluatingChange={setEvaluating}
+      />
+
       {canPublish && row.status === 'draft' ? (
         <PublishCredentialSlot
           review={credentialReview}
@@ -2222,6 +2247,7 @@ function SkillDetailView({
         {canDiscard && row.status === 'draft' ? (
           <DiscardDraftConfirm
             busy={busy}
+            heldReason={heldReason}
             target={row.name}
             onConfirm={onDiscard}
             testId={`skill-discard-confirm-${row.id}`}
@@ -2231,6 +2257,7 @@ function SkillDetailView({
           <RejectDraftConfirm
             kind="skill"
             busy={busy}
+            heldReason={heldReason}
             target={`${row.name} v${row.version}`}
             inUseVersion={inUseVersion}
             onConfirm={onReject}

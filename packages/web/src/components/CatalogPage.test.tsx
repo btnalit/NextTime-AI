@@ -3739,6 +3739,54 @@ describe('CatalogPage — reject a pending draft (E2-0b)', () => {
     );
   });
 
+  it('Skills: while a draft is being evaluated, neither its proposer’s 丢弃 nor a reviewer’s 拒绝 opens; they say why (#833 UX P3-1)', async () => {
+    const running = {
+      id: 'e-1',
+      status: 'running',
+      stage: 'regression',
+      verdict: null,
+      reason: null,
+      decidedBy: null,
+      costUsd: 0,
+      createdBy: 'p-other',
+      createdAt: '2026-10-30T00:00:00.000Z',
+      finishedAt: null,
+      cancelledBy: null,
+      suite: { id: 's-1', name: 'restart drills', version: 3 },
+      workerDefinition: { id: 'wd-1', version: 1 },
+      candidate: { skillId: 'sk-1', version: 2, name: 'restart-web', draftDigest: 'sha256:v2' },
+      baseline: { skillId: 'sk-1', version: 1, name: 'restart-web' },
+      mechanism: null,
+    };
+    const held = async (trigger: string) => {
+      const detail = await selectRow(await screen.findByTestId('catalog-row'));
+      await within(detail).findByTestId('skill-draft-evaluating');
+      const button = (await within(detail).findByTestId(trigger)) as HTMLButtonElement;
+      await waitFor(() => expect(button.disabled).toBe(true));
+      expect(button.title).toContain('评测进行中');
+    };
+
+    const reviewer = scriptedHttp({
+      get_workspace: workspaceAs('builder'),
+      list_skills: () => ({ items: [draftSkill] }),
+      get_skill: () => null,
+      list_draft_evaluations: () => ({ items: [running] }),
+    });
+    renderPage(reviewer, 'skills');
+    await held('skill-reject-confirm-sk-1-trigger');
+    cleanup();
+
+    const proposer = scriptedHttp({
+      get_workspace: workspaceAs('builder', 'p-other'),
+      list_skills: () => ({ items: [draftSkill] }),
+      get_skill: () => null,
+      list_draft_evaluations: () => ({ items: [running] }),
+    });
+    renderPage(proposer, 'skills');
+    await held('skill-discard-confirm-sk-1-trigger');
+    expect(proposer.calls.some((c) => c.name === 'discard_draft')).toBe(false);
+  });
+
   it.each([
     ['the owner, on another principal’s draft', true, 'owner', 'p-other', 'p-other'],
     ['the owner, on a draft of a family with no version in use', true, 'owner', 'p-other', null],

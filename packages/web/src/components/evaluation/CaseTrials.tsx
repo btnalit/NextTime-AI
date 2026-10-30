@@ -74,9 +74,11 @@ export function CaseTrials({ http, suite, evalCase }: CaseTrialsProps) {
   const isOwner = useIsOwner(http);
   const budget = useEvalBudget(http);
   const loadRuns = useCallback(async () => {
+    // This case's own 试跑 — not the draft evaluations' stages that ran it (草稿评测 shows those).
     const page = await http.call<{ items: readonly EvalRunSummaryWire[] }>('list_eval_runs', {
       suiteId: suite.id,
       caseId: evalCase.id,
+      kind: 'case_trial',
     });
     return page.items;
   }, [http, suite.id, evalCase.id]);
@@ -378,7 +380,9 @@ function RunResult({
   );
 }
 
-function TrialView({
+/** One trial whole: its outcome, assertions, fixture calls and report (E3-2b: a draft
+ *  evaluation's trials open the same way, `DraftEvaluations`). */
+export function TrialView({
   trial,
   runAt,
   evalCase,
@@ -402,7 +406,7 @@ function TrialView({
           <time title={formatDateTime(runAt)}>{formatRelative(runAt)}</time>
           {' · '}
           {formatDuration(trial.startedAt, trial.finishedAt ?? undefined)}
-          {trial.finishedAt !== null ? (
+          {trial.finishedAt !== null && status !== 'voided' ? (
             <>
               {' · '}
               <span className="tabular" data-testid="eval-case-trial-cost">
@@ -436,8 +440,22 @@ function TrialView({
             'The Worker is running. Once it reports, the assertions judge it and this updates on its own.',
           )}
         </p>
+      ) : trial.status === 'queued' ? (
+        <p className="text-3 text-small">
+          {t(
+            '排队中：评测服务同时只跑有限几个任务，轮到它就会开始。',
+            'Queued: the evaluation service runs only so many tasks at once, and this one starts when its turn comes.',
+          )}
+        </p>
       ) : null}
-      {trial.status === 'errored' && trial.error !== null ? (
+      {status === 'voided' ? (
+        <p className="text-3 text-small" data-testid="eval-case-trial-voided">
+          {t(
+            '作废：评测被取消时它还在排队，没有开始，也没有花费。',
+            'Voided: it was still queued when the evaluation was cancelled, so it never started and cost nothing.',
+          )}
+        </p>
+      ) : trial.status === 'errored' && trial.error !== null ? (
         <Notice tone="warn" testId="eval-case-trial-errored">
           {trialErrorText(trial.error, t)}
         </Notice>
@@ -485,7 +503,7 @@ function TrialView({
         </span>
         {trial.calls.length === 0 ? (
           <p className="text-3 text-small">
-            {trial.status === 'running'
+            {trial.status === 'running' || trial.status === 'queued'
               ? t('还没有调用夹具门。', 'No fixture gate called yet.')
               : t('Worker 没有调用夹具门。', 'The Worker called no fixture gate.')}
           </p>
