@@ -1,27 +1,32 @@
-# scripts/lib/accept-s2-goals.sh — S11 GO7a: goal scenarios S1, S5, S6 and S11 of
+# scripts/lib/accept-s2-goals.sh — S11 GO7a: goal scenarios S1, S4, S5, S6, S7, S9, S10 and S11 of
 # docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §7.2, run by scripts/accept_s2.sh in
 # its fake-provider path after step 9 (which covers proposing from chat, confirming, the platform's
 # acceptance and S3's idempotent propose/confirm). Sourced by accept_s2.sh right after
 # accept-common.sh; POSIX sh, same conventions (pass/fail, cap, parse_kv, no temp file, no jq).
 #
-# Everything here runs on what accept_s2.sh already set up: alice and her API key, the ops-runner
-# Worker (fake model), the http gate in front of the accept-s2 OpenAPI fixture. The fixture's test
-# ledger (`ledger.get` observe / `ledger.add` execute with `await_decision`, see
-# deploy/accept-s2/openapi-fixture/server.mjs) counts at the gate's side how often a write really
-# ran, so S5 and S11 read the effect itself rather than the platform's own record of it. No
-# credential is involved beyond the fixture token accept_s2.sh already generates.
+# Everything here runs on what accept_s2.sh already set up: alice (owner) and bob (member, holding
+# no gate until S9 grants some) with their API keys, the ops-runner Worker (fake model), the http
+# gate in front of the accept-s2 OpenAPI fixture. The fixture's test ledger (`ledger.get` observe /
+# `ledger.add` execute with `await_decision`, see deploy/accept-s2/openapi-fixture/server.mjs)
+# counts at the gate's side how often a write really ran, so the scenarios read the effect itself
+# rather than the platform's own record of it; under a `lose-` key it adds the entry and drops the
+# answer (S4). No credential is involved beyond the fixture token accept_s2.sh already generates.
 #
 # Each scenario's polls are bounded and each failure carries the goal's own evidence (status,
 # pause reason, every step with its attempts and actions, every acceptance check with its attempts
-# and last error) in the FAIL line. Every goal proposed here is recorded in GOALS_STARTED, and
-# cleanup_step ends whichever is still live (proposed: rejected; running, paused or verifying:
-# cancelled) before the gates go, the same way it ends step 9's.
+# and last error, every action with the reason its failure was audited with) in the FAIL line.
+# Every goal proposed here is recorded in GOALS_STARTED, and cleanup_step ends whichever is still
+# live (proposed: rejected; running, paused or verifying: cancelled — alice is the owner, so bob's
+# too) before the gates go, the same way it ends step 9's, and revokes any gate S9 granted bob and
+# did not get to revoke itself.
 #
-# Order (`goal_scenarios_step`): S6's goal starts first and verifies in the background — its
-# acceptance check fails on purpose and the platform retries an unmet check with backoff
-# (GOAL_ACCEPTANCE_CHECK_MAX_ATTEMPTS / _MAX_DURATION_MS, by default 5 attempts within about 7.5
-# minutes) before it pauses the run — while S1, S11 and S5 run one after the other; S6 is finished
-# last. No two scenarios have a Worker running at the same time.
+# Order (`goal_scenarios_step`): S6's goal and the reverse half of S4 start first and wait in the
+# background on checks that fail on purpose — the platform retries an unmet acceptance check
+# (GOAL_ACCEPTANCE_CHECK_MAX_ATTEMPTS / _MAX_DURATION_MS) and an unmet reconcile check
+# (GOAL_RECONCILE_CHECK_MAX_ATTEMPTS / _MAX_DURATION_MS) with backoff, by default 5 attempts within
+# about 7.5 minutes, before it pauses the run — while S1, S11, S5, S4, S7, S9 and S10 run one after
+# the other; S6 and the reverse S4 are finished last. No two scenarios have a Worker running at the
+# same time, and no two have a write at the http gate at the same time (S7 reads the gate's queue).
 #
 # With --real none of these scenarios runs, and the ledger is discarded before the http gate's
 # manifest is published (goal_ledger_discard_real / goal_ledger_withheld_check_real, called from
@@ -31,8 +36,11 @@
 #   - S5 with `await_decision: false`, and S11's expired approval: neither can be set up on a live
 #     stack without changing the kernel's own configuration; advancer.integration.test.ts covers
 #     both against real Postgres.
-#   - S2, S4, S7 and S12 (restarts, a lost gate response, cancelling with actions in flight, a lost
-#     wake) and the S8–S10 smoke: the next PR of GO7a.
+#   - S7's Task still running at the cancel and its second variant (an `executing` action holding
+#     the run in `cancelling` past the deadline, `cleanup_pending`): see goal_s7_cancel_drain;
+#     advancer.integration.test.ts covers both.
+#   - S2, S8 and S12 (restarts, a revision removing a running step, a lost wake): the next PR of
+#     GO7a.
 
 GOALS_STARTED=""
 
@@ -46,9 +54,18 @@ goal_get() {
   parse_kv "$(cap "$ALICE_KEY" get_goal "{\"goalRunId\":\"$1\"}" "$2")" EXTRACTED
 }
 
-# goal_fail <name> <goalRunId> <detail>: fail with the goal's evidence attached.
+# goal_fail <name> <goalRunId> <detail>: fail with the goal's evidence attached — get_goal's summary,
+# then each of its actions with the reason the platform audited when it failed (get_goal names a
+# failed action's kind, not its reason).
 goal_fail() {
-  fail "$1" "$3 — evidence: $(goal_get "$2" "$GOAL_EVIDENCE_EXPR")"
+  fail "$1" "$3 — evidence: $(goal_get "$2" "$GOAL_EVIDENCE_EXPR") actions: $(goal_action_reasons "$2")"
+}
+
+# goal_action_reasons <goalRunId>: `status[:failure kind] (reason)` for each ActionRequest of the
+# goal's steps, oldest first — the reason from the last audit row that recorded one
+# (governance/approval/execution.ts reasonAuditFields, already scrubbed of secret literals).
+goal_action_reasons() {
+  psql_ws "select coalesce(string_agg(ar.status || coalesce(':' || ar.failure_kind, '') || coalesce(' (' || left(a.payload->>'reason', 240) || ')', ''), '; ' order by ar.requested_at, ar.id), 'none') from action_requests ar join step_runs sr on sr.workspace_id = ar.workspace_id and sr.id = ar.step_run_id left join lateral (select r.payload from audit_records r where r.workspace_id = ar.workspace_id and r.resource_type = 'action_request' and r.resource_id = ar.id and r.payload ? 'reason' order by r.created_at desc limit 1) a on true where ar.workspace_id = '$WORKSPACE_ID' and sr.goal_run_id = '$1'"
 }
 
 # goal_wait <goalRunId> <seconds> <expr> <pattern>...: polls get_goal until the value of <expr>
@@ -73,17 +90,19 @@ goal_wait() {
 # How a goal stands: status, outcome, basis — what goal_wait waits on for a run to settle.
 GOAL_END_EXPR="[d.result.status, d.result.outcome || '', d.result.outcomeBasis || '', d.result.pauseReason || ''].join(',')"
 
-# goal_propose_confirm <name> <paramsJson>: proposes as alice (a person's propose_goal, as the
-# console makes it), records the run for cleanup, confirms revision 1. Sets GOAL_RUN_ID.
+# goal_propose_confirm <name> <paramsJson> [apiKey]: proposes as alice — or as the holder of
+# <apiKey> — (a person's propose_goal, as the console makes it), records the run for cleanup,
+# confirms revision 1 as the same person. Sets GOAL_RUN_ID.
 goal_propose_confirm() {
-  out=$(cap "$ALICE_KEY" propose_goal "$2" "[d.result.goalRunId, d.result.status, d.result.changed].join(',')")
+  gpc_key=${3:-$ALICE_KEY}
+  out=$(cap "$gpc_key" propose_goal "$2" "[d.result.goalRunId, d.result.status, d.result.changed].join(',')")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "$1-proposed" "propose_goal HTTP $status: $(parse_kv "$out" BODY)"
   proposed=$(parse_kv "$out" EXTRACTED)
   GOAL_RUN_ID=${proposed%%,*}
   [ "${proposed#*,}" = "proposed,true" ] || fail "$1-proposed" "propose_goal answered '$proposed', expected a new proposed run: $(parse_kv "$out" BODY)"
   GOALS_STARTED="$GOALS_STARTED $GOAL_RUN_ID"
-  out=$(cap "$ALICE_KEY" confirm_goal "{\"goalRunId\":\"$GOAL_RUN_ID\",\"revision\":1}" "[d.result.status, d.result.changed].join(',')")
+  out=$(cap "$gpc_key" confirm_goal "{\"goalRunId\":\"$GOAL_RUN_ID\",\"revision\":1}" "[d.result.status, d.result.changed].join(',')")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "$1-confirmed" "confirm_goal HTTP $status: $(parse_kv "$out" BODY)"
   [ "$(parse_kv "$out" EXTRACTED)" = "running,true" ] || fail "$1-confirmed" "confirm_goal answered '$(parse_kv "$out" EXTRACTED)', expected running,true"
@@ -317,13 +336,351 @@ goal_s5_approval() {
   pass "s5-achieved" "goal $S5_GOAL_ID completed(achieved): the write ran once (ledger count 1 at the gate), the step's check passed on an Observation, then the next step started on its own and succeeded"
 }
 
-# goal_scenarios_step: the four scenarios, in the order the header explains.
+# --- S4: a write ran but its response was lost; the platform reconciles before anything else --
+#
+# The fixture's ledger adds an entry under a `lose-` key and then drops the connection unanswered
+# (deploy/accept-s2/openapi-fixture/server.mjs). The gate cannot tell whether the write ran, so it
+# records the call as outcome unknown and answers any repeat of it the same way (R-51): the
+# ActionRequest ends failed(outcome_unknown) and is never run again. The step declares how to
+# reconcile it — the platform observes `ledger.get` for the same key — and waits(reconcile) on that
+# check without pausing the run (reconcile-check.ts).
+
+# goal_s4_reconcile_json <key> <count>: the step's one reconcile declaration — its ledger.add under
+# <key>, checked by observing ledger.get's `count` eq <count>.
+goal_s4_reconcile_json() {
+  printf '"reconcile":[{"action":{"gatekeeperId":"%s","operation":"ledger.add","params":{"key":"%s"}},"check":{"gatekeeperId":"%s","operation":"ledger.get","params":{"key":"%s"},"expect":{"path":"count","op":"eq","value":%s}}}]' \
+    "$GATEKEEPER_ID_HTTP" "$1" "$GATEKEEPER_ID_HTTP" "$1" "$2"
+}
+
+# goal_s4_write <name> <key> <count>: proposes and confirms a one-step goal whose write under <key>
+# is reconciled against `count` eq <count>, waits for the write to be pending and approves it while
+# its Worker still waits, then waits for the write to end. Sets GOAL_RUN_ID and S4_WRITE_AR.
+goal_s4_write() {
+  goal_propose_confirm "$1" "{\"statement\":\"accept_s2 S4 $(real_token): one ops-runner step adds an entry to the test ledger; the answer to the write is lost on the way back.\",\"plan\":{\"steps\":[$(goal_step_json write "ACCEPT_S2_SCENARIO=goal_ledger LEDGER_KEY=$2" "$(goal_s4_reconcile_json "$2" "$3")")],\"acceptance\":[$(goal_observe_check_json stock-visible stock.get '{}' symbol '"NXT"')]},\"budget\":$GOAL_BUDGET,\"idempotencyKey\":\"accept-s2-goal-$1-$2\"}"
+  s4_id=$GOAL_RUN_ID
+  s4_expr="(() => { const s = d.result.steps.find((x) => x.stepKey === 'write'); return [d.result.status, s ? s.actions.map((a) => a.status).join('+') : ''].join(','); })()"
+  goal_wait "$s4_id" 180 "$s4_expr" '*pending_approval*' 'paused,*' 'completed,*' 'cancelled,*' 'failed,*' \
+    || goal_fail "$1-approved" "$s4_id" "the step's write did not reach pending_approval within 180s (last '$GOAL_WAIT_VALUE')"
+  [ "$GOAL_WAIT_VALUE" = "running,pending_approval" ] || goal_fail "$1-approved" "$s4_id" "goal $s4_id reads '$GOAL_WAIT_VALUE', expected running with one write pending approval"
+  s4_ar=$(goal_get "$s4_id" "d.result.steps.find((x) => x.stepKey === 'write').actions[0].actionRequestId")
+  out=$(cap "$ALICE_KEY" approve "{\"actionRequestId\":\"$s4_ar\"}" "d.result.status")
+  [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] || goal_fail "$1-approved" "$s4_id" "approve HTTP $(parse_kv "$out" HTTP_STATUS): $(parse_kv "$out" BODY)"
+  # The write runs at once; its answer never comes back, the gate says outcome unknown.
+  goal_wait "$s4_id" 180 "d.result.steps.find((x) => x.stepKey === 'write').actions.map((a) => a.status + ':' + (a.failureKind || '')).join('+')" 'failed:*' 'executed:*' 'rejected:*' 'expired:*' \
+    || goal_fail "$1-approved" "$s4_id" "the approved write did not end within 180s (last '$GOAL_WAIT_VALUE')"
+  [ "$GOAL_WAIT_VALUE" = "failed:outcome_unknown" ] || goal_fail "$1-approved" "$s4_id" "the approved write ended '$GOAL_WAIT_VALUE', expected failed:outcome_unknown (the fixture dropped its answer)"
+  pass "$1-approved" "alice approved the write $s4_ar under $2; it ran and its answer was lost: failed(outcome_unknown), never run again by the gate"
+  GOAL_RUN_ID=$s4_id
+  S4_WRITE_AR=$s4_ar
+}
+
+# goal_s4_seen: the reconcile observation shows the effect, so the step succeeds without the write
+# running a second time.
+goal_s4_seen() {
+  key="lose-s4-$(real_token)"
+  goal_s4_write s4 "$key" 1
+  S4_GOAL_ID=$GOAL_RUN_ID
+  s4_ar=$S4_WRITE_AR
+  goal_wait "$S4_GOAL_ID" 300 "$GOAL_END_EXPR" 'completed,*' 'paused,*' 'cancelled,*' 'failed,*' \
+    || goal_fail "s4-reconciled" "$S4_GOAL_ID" "goal $S4_GOAL_ID did not settle within 300s of the lost answer (last '$GOAL_WAIT_VALUE')"
+  [ "$GOAL_WAIT_VALUE" = "completed,achieved,verified_by_check," ] || goal_fail "s4-reconciled" "$S4_GOAL_ID" "goal $S4_GOAL_ID ended '$GOAL_WAIT_VALUE', expected completed,achieved,verified_by_check once the platform saw the write's effect"
+  step=$(goal_get "$S4_GOAL_ID" "(() => { const s = d.result.steps.find((x) => x.stepKey === 'write'); return [s.status, s.attempts.length, s.actions.map((a) => [a.status, a.failureKind || '', a.reconciliation || ''].join(':')).join('+')].join(','); })()")
+  checks=$(psql_ws "select coalesce(string_agg(status || ':' || (observation_id is not null), ','), '') from action_request_reconcile_checks where workspace_id='$WORKSPACE_ID' and action_request_id='$s4_ar'")
+  tasks=$(goal_tasks "$S4_GOAL_ID")
+  count=$(ledger_count "$key")
+  [ "$step|$checks|$tasks|$count" = "succeeded,1,failed:outcome_unknown:effect_seen|seen:true|1|1" ] \
+    || goal_fail "s4-reconciled" "$S4_GOAL_ID" "read step '$step', reconcile check '$checks', $tasks Task(s), ledger count under $key '$count' — expected the step succeeded on one attempt, its write failed(outcome_unknown) and reconciled effect_seen by the platform's check on an Observation, one Task, one entry"
+  pass "s4-reconciled" "goal $S4_GOAL_ID completed(achieved): the platform's reconcile observation saw the lost write's effect (effect_seen), the step went on; one attempt, one Task, the write ran once (ledger count 1 at the gate)"
+}
+
+# goal_s4_unseen_start: the reverse — the reconcile observation looks for a count the write never
+# makes, so it does not see the effect. Like S6 its check retries with backoff in the background
+# (GOAL_RECONCILE_CHECK_MAX_ATTEMPTS / _MAX_DURATION_MS, by default 5 attempts within about 7.5
+# minutes); goal_s4_unseen_finish picks it up.
+goal_s4_unseen_start() {
+  S4U_KEY="lose-s4u-$(real_token)"
+  goal_s4_write s4u "$S4U_KEY" 2
+  S4U_GOAL_ID=$GOAL_RUN_ID
+  S4U_AR=$S4_WRITE_AR
+  # The Worker reports once its write ends; the step then waits on the platform's check, which does
+  # not see the effect and so tries again for minutes — the wait is observable, unlike in
+  # goal_s4_seen, whose check sees the effect on its first attempt.
+  goal_wait "$S4U_GOAL_ID" 120 "(() => { const s = d.result.steps.find((x) => x.stepKey === 'write'); return [d.result.status, s.status, s.waitingReason || ''].join(','); })()" 'running,waiting,reconcile' 'paused,*' 'completed,*' 'cancelled,*' 'failed,*' \
+    || goal_fail "s4u-waiting-reconcile" "$S4U_GOAL_ID" "the step did not wait on its reconcile check within 120s of the lost answer (last '$GOAL_WAIT_VALUE')"
+  [ "$GOAL_WAIT_VALUE" = "running,waiting,reconcile" ] || goal_fail "s4u-waiting-reconcile" "$S4U_GOAL_ID" "goal $S4U_GOAL_ID reads '$GOAL_WAIT_VALUE', expected the run running with the step waiting(reconcile)"
+  pass "s4u-waiting-reconcile" "goal $S4U_GOAL_ID still running, its step waiting(reconcile): the platform checks the ledger before anything else happens to the step"
+}
+
+goal_s4_unseen_finish() {
+  goal_wait "$S4U_GOAL_ID" 960 "$GOAL_END_EXPR" 'paused,*' 'completed,*' 'cancelled,*' 'failed,*' \
+    || goal_fail "s4u-awaiting-reconcile" "$S4U_GOAL_ID" "goal $S4U_GOAL_ID did not settle within 960s of retrying its reconcile check (last '$GOAL_WAIT_VALUE')"
+  [ "$GOAL_WAIT_VALUE" = "paused,,,awaiting_reconcile" ] || goal_fail "s4u-awaiting-reconcile" "$S4U_GOAL_ID" "goal $S4U_GOAL_ID reads '$GOAL_WAIT_VALUE', expected paused awaiting_reconcile"
+  step=$(goal_get "$S4U_GOAL_ID" "(() => { const s = d.result.steps.find((x) => x.stepKey === 'write'); return [s.attempts.length, s.actions.map((a) => [a.status, a.failureKind || '', a.reconciliation || ''].join(':')).join('+')].join(','); })()")
+  checks=$(psql_ws "select coalesce(string_agg(status || ':' || (observation_id is not null) || ':' || (attempts >= 2), ','), '') from action_request_reconcile_checks where workspace_id='$WORKSPACE_ID' and action_request_id='$S4U_AR'")
+  tasks=$(goal_tasks "$S4U_GOAL_ID")
+  count=$(ledger_count "$S4U_KEY")
+  [ "$step|$checks|$tasks|$count" = "1,failed:outcome_unknown:|not_seen:true:true|1|1" ] \
+    || goal_fail "s4u-awaiting-reconcile" "$S4U_GOAL_ID" "read step '$step', reconcile check '$checks', $tasks Task(s), ledger count under $S4U_KEY '$count' — expected one attempt with its write failed(outcome_unknown) and nothing recorded about it, the check not_seen on an Observation after retrying, one Task, the write run once and never again"
+  pass "s4u-awaiting-reconcile" "goal $S4U_GOAL_ID paused awaiting_reconcile: the platform's check did not see the effect after retrying, recorded nothing, ran nothing again (ledger count still 1 at the gate)"
+
+  out=$(cap "$ALICE_KEY" cancel_goal "{\"goalRunId\":\"$S4U_GOAL_ID\"}" "d.result.status")
+  [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] || goal_fail "s4u-cancelled" "$S4U_GOAL_ID" "cancel_goal HTTP $(parse_kv "$out" HTTP_STATUS): $(parse_kv "$out" BODY)"
+  goal_wait "$S4U_GOAL_ID" 60 "d.result.status" 'cancelled' \
+    || goal_fail "s4u-cancelled" "$S4U_GOAL_ID" "goal $S4U_GOAL_ID reads '$GOAL_WAIT_VALUE' 60s after cancel_goal, expected cancelled"
+  pass "s4u-cancelled" "alice cancelled goal $S4U_GOAL_ID, the decision a not-seen effect leaves to a person"
+}
+
+# --- S7: cancelled with a write pending at the head of the gate's queue and an approved one behind
+# it; another goal's approved write behind both runs at once -----------------------------------
+#
+# The http gate runs its writes one at a time in the order they were asked for, and a write still
+# pending approval at the head holds everything behind it (R-50, listExecutableQueue). Goal A asks
+# for two writes; the earlier stays pending, the later is approved and waits behind it. Goal B's
+# write, asked for after both, is approved and waits too. Cancelling A withdraws both of A's writes
+# in the cancel's own transaction, and the withdrawal's own event drains the gate (the drain
+# consumer re-drains on `withdrawn`): B's write runs within seconds, not at the next periodic drain
+# (every 60s), and neither of A's ever runs. A's third step, after both writes, never starts.
+#
+# Not set up here: a Worker still running at the cancel (a goal_ledger Worker lives only for the
+# kernel's await budget), and the second variant — an `executing` action whose outcome is unknown
+# holding the run in `cancelling` until the deadline, then `cleanup_pending`: the deadline is 30
+# minutes and the stale-executing reaper settles such an action first, so on a live stack only
+# cancelling → cancelled shows. advancer.integration.test.ts covers both (S7).
+
+# goal_s7_queue: the http gate's queue as the drainer reads it (listExecutableQueue: approved,
+# auto-approved, pending approval or executing, oldest first), as id:status,...
+goal_s7_queue() {
+  psql_ws "select coalesce(string_agg(id || ':' || status, ',' order by requested_at, id), '') from action_requests where workspace_id='$WORKSPACE_ID' and gatekeeper_id='$GATEKEEPER_ID_HTTP' and status in ('auto_approved', 'approved', 'pending_approval', 'executing')"
+}
+
+# goal_s7_approve <name> <goalRunId> <actionRequestId>: approves as alice; the gate does not run it
+# while the queue's head is pending.
+goal_s7_approve() {
+  out=$(cap "$ALICE_KEY" approve "{\"actionRequestId\":\"$3\"}" "d.result.status")
+  [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] || goal_fail "$1" "$2" "approve($3) HTTP $(parse_kv "$out" HTTP_STATUS): $(parse_kv "$out" BODY)"
+  [ "$(parse_kv "$out" EXTRACTED)" = "approved" ] || goal_fail "$1" "$2" "approve($3) answered '$(parse_kv "$out" EXTRACTED)', expected approved (still queued behind the pending head)"
+}
+
+goal_s7_cancel_drain() {
+  n=$(real_token)
+  a1=$(goal_step_json a1 "ACCEPT_S2_SCENARIO=goal_ledger LEDGER_KEY=s7a1-$n")
+  a2=$(goal_step_json a2 "ACCEPT_S2_SCENARIO=goal_ledger LEDGER_KEY=s7a2-$n")
+  later=$(goal_step_json later "ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=$n STEP=later" '"dependsOn":["a1","a2"]')
+  goal_propose_confirm s7 "{\"statement\":\"accept_s2 S7 $n: two ops-runner steps each ask to add an entry to the test ledger, a third runs after both; the requester cancels with both writes still queued at the gate.\",\"plan\":{\"steps\":[$a1,$a2,$later],\"acceptance\":[$(goal_observe_check_json stock-visible stock.get '{}' symbol '"NXT"')]},\"budget\":$GOAL_BUDGET,\"idempotencyKey\":\"accept-s2-goal-s7-$n\"}"
+  S7_GOAL_ID=$GOAL_RUN_ID
+  # Both Workers wait for a decision up to the kernel's await budget, then exit; their steps then
+  # wait(approval) on their pending writes.
+  held_expr="(() => { const s = Object.fromEntries(d.result.steps.map((x) => [x.stepKey, x])); return [d.result.status, ...['a1', 'a2'].map((k) => [s[k].status, s[k].waitingReason || '', s[k].actions.map((a) => a.status).join('+')].join(':')), s.later.status + ':' + s.later.attempts.length].join(','); })()"
+  goal_wait "$S7_GOAL_ID" 240 "$held_expr" 'running,waiting:approval:pending_approval,waiting:approval:pending_approval,*' 'paused,*' 'completed,*' 'cancelled,*' 'failed,*' \
+    || goal_fail "s7-queued" "$S7_GOAL_ID" "goal $S7_GOAL_ID's two writes were not both pending with their Workers gone within 240s (last '$GOAL_WAIT_VALUE')"
+  [ "$GOAL_WAIT_VALUE" = "running,waiting:approval:pending_approval,waiting:approval:pending_approval,pending:0" ] \
+    || goal_fail "s7-queued" "$S7_GOAL_ID" "goal $S7_GOAL_ID reads '$GOAL_WAIT_VALUE', expected both write steps waiting(approval) on a pending write and the step after them not started"
+  s7_ids=$(goal_get "$S7_GOAL_ID" "['a1', 'a2'].map((k) => d.result.steps.find((x) => x.stepKey === k).actions[0].actionRequestId).join(' ')")
+  # Which of the two is the queue's head: the gate's own order (requested_at, then id).
+  s7_order=$(psql_ws "select string_agg(id::text, ' ' order by requested_at, id) from action_requests where workspace_id='$WORKSPACE_ID' and id in ('${s7_ids% *}', '${s7_ids#* }')")
+  s7_head=${s7_order%% *}
+  s7_queued=${s7_order#* }
+  goal_s7_approve "s7-queued" "$S7_GOAL_ID" "$s7_queued"
+
+  goal_propose_confirm s7b "{\"statement\":\"accept_s2 S7 $n (another goal): one ops-runner step asks to add an entry to the test ledger behind the first goal's writes.\",\"plan\":{\"steps\":[$(goal_step_json write "ACCEPT_S2_SCENARIO=goal_ledger LEDGER_KEY=s7b-$n")],\"acceptance\":[$(goal_observe_check_json stock-visible stock.get '{}' symbol '"NXT"')]},\"budget\":$GOAL_BUDGET,\"idempotencyKey\":\"accept-s2-goal-s7b-$n\"}"
+  S7B_GOAL_ID=$GOAL_RUN_ID
+  b_expr="(() => { const s = d.result.steps.find((x) => x.stepKey === 'write'); return [d.result.status, s.status, s.waitingReason || '', s.actions.map((a) => a.status).join('+')].join(','); })()"
+  goal_wait "$S7B_GOAL_ID" 180 "$b_expr" 'running,waiting,approval,pending_approval' 'paused,*' 'completed,*' 'cancelled,*' 'failed,*' \
+    || goal_fail "s7-queued" "$S7B_GOAL_ID" "goal $S7B_GOAL_ID's write was not pending with its Worker gone within 180s (last '$GOAL_WAIT_VALUE')"
+  [ "$GOAL_WAIT_VALUE" = "running,waiting,approval,pending_approval" ] \
+    || goal_fail "s7-queued" "$S7B_GOAL_ID" "goal $S7B_GOAL_ID reads '$GOAL_WAIT_VALUE', expected its write step waiting(approval) on a pending write"
+  s7b_ar=$(goal_get "$S7B_GOAL_ID" "d.result.steps.find((x) => x.stepKey === 'write').actions[0].actionRequestId")
+  goal_s7_approve "s7-queued" "$S7B_GOAL_ID" "$s7b_ar"
+  # Long enough for an approval's own drain to have run anything it could.
+  sleep 5
+  queue=$(goal_s7_queue)
+  counts="$(ledger_count "s7a1-$n"),$(ledger_count "s7a2-$n"),$(ledger_count "s7b-$n")"
+  [ "$queue|$counts" = "$s7_head:pending_approval,$s7_queued:approved,$s7b_ar:approved|0,0,0" ] \
+    || goal_fail "s7-queued" "$S7_GOAL_ID" "the http gate's queue reads '$queue' with ledger counts (A1,A2,B) '$counts' — expected A's pending write $s7_head at its head, A's approved $s7_queued behind it, B's approved $s7b_ar behind both, nothing run"
+  pass "s7-queued" "the http gate's queue: goal $S7_GOAL_ID's write $s7_head pending at its head, its approved write $s7_queued behind it, goal $S7B_GOAL_ID's approved write $s7b_ar behind both; nothing has run"
+
+  s7_t0=$(date +%s)
+  out=$(cap "$ALICE_KEY" cancel_goal "{\"goalRunId\":\"$S7_GOAL_ID\"}" "(() => { const w = d.result.withdrawnActionRequestIds; return [d.result.status, d.result.cancelledStepRunIds.length, w.length === 2 && w.includes('$s7_head') && w.includes('$s7_queued') ? 'both-withdrawn' : 'withdrew:' + w.join('+')].join(','); })()")
+  [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] || goal_fail "s7-cancelled" "$S7_GOAL_ID" "cancel_goal HTTP $(parse_kv "$out" HTTP_STATUS): $(parse_kv "$out" BODY)"
+  [ "$(parse_kv "$out" EXTRACTED)" = "cancelling,3,both-withdrawn" ] \
+    || goal_fail "s7-cancelled" "$S7_GOAL_ID" "cancel_goal answered '$(parse_kv "$out" EXTRACTED)', expected cancelling with its three steps cancelled and both writes withdrawn in the same call"
+  # The withdrawal's own event drains the gate within seconds; the periodic drain comes every 60s
+  # at a phase of its own, so 10s leaves it about one chance in six of passing for a broken event
+  # path (review #488 on #811). On a miss the poll goes on past one periodic drain, so the FAIL
+  # line tells a missed event (ran late) from a stuck queue (never ran).
+  s7_bound=10
+  while :; do
+    s7b_status=$(psql_ws "select status from action_requests where workspace_id='$WORKSPACE_ID' and id='$s7b_ar'")
+    case "$s7b_status" in executed | failed | rejected | withdrawn | expired) break ;; esac
+    [ "$(date +%s)" -lt $((s7_t0 + s7_bound)) ] || break
+    sleep 1
+  done
+  s7_elapsed=$(($(date +%s) - s7_t0))
+  if [ "$s7b_status" != "executed" ]; then
+    while :; do
+      case "$s7b_status" in executed | failed | rejected | withdrawn | expired) break ;; esac
+      [ "$(date +%s)" -lt $((s7_t0 + 75)) ] || break
+      sleep 3
+      s7b_status=$(psql_ws "select status from action_requests where workspace_id='$WORKSPACE_ID' and id='$s7b_ar'")
+    done
+    goal_fail "s7-drained" "$S7B_GOAL_ID" "goal $S7B_GOAL_ID's write $s7b_ar was not executed within ${s7_bound}s of the cancel; $(($(date +%s) - s7_t0))s after it, it reads '$s7b_status' — executed then means the periodic drain caught what the withdrawal's own event should have drained at once; still approved means the queue is stuck"
+  fi
+  pass "s7-drained" "goal $S7B_GOAL_ID's write $s7b_ar ran ${s7_elapsed}s after the cancel: the withdrawal drained the gate at once, not at the next periodic drain"
+
+  goal_wait "$S7_GOAL_ID" 60 "[d.result.status, d.result.cleanupPending].join(',')" 'cancelled,*' \
+    || goal_fail "s7-cancelled" "$S7_GOAL_ID" "goal $S7_GOAL_ID reads '$GOAL_WAIT_VALUE' 60s after cancel_goal, expected cancelled"
+  steps=$(goal_get "$S7_GOAL_ID" "d.result.steps.map((s) => [s.stepKey, s.status, s.attempts.length, s.actions.map((a) => a.status).join('+')].join(':')).sort().join(',')")
+  tasks=$(goal_tasks "$S7_GOAL_ID")
+  counts="$(ledger_count "s7a1-$n"),$(ledger_count "s7a2-$n")"
+  [ "$GOAL_WAIT_VALUE|$steps|$tasks|$counts|$(goal_s7_queue)" = "cancelled,false|a1:cancelled:1:withdrawn,a2:cancelled:1:withdrawn,later:cancelled:0:|2|0,0|" ] \
+    || goal_fail "s7-cancelled" "$S7_GOAL_ID" "read goal '$GOAL_WAIT_VALUE', steps '$steps', $tasks Task(s), ledger counts (A1,A2) '$counts', the gate's queue '$(goal_s7_queue)' — expected cancelled without cleanup left, both writes withdrawn, the third step never started, two Tasks, nothing written, the queue empty"
+  pass "s7-cancelled" "goal $S7_GOAL_ID cancelled (cancelling → cancelled, nothing left to clean up): both writes withdrawn and never run (ledger counts 0 at the gate), the step after them never started, no new Task"
+
+  goal_wait "$S7B_GOAL_ID" 180 "$GOAL_END_EXPR" 'completed,*' 'paused,*' 'cancelled,*' 'failed,*' \
+    || goal_fail "s7-other-goal" "$S7B_GOAL_ID" "goal $S7B_GOAL_ID did not settle within 180s of its write running (last '$GOAL_WAIT_VALUE')"
+  count=$(ledger_count "s7b-$n")
+  [ "$GOAL_WAIT_VALUE|$count" = "completed,achieved,verified_by_check,|1" ] \
+    || goal_fail "s7-other-goal" "$S7B_GOAL_ID" "goal $S7B_GOAL_ID ended '$GOAL_WAIT_VALUE' with ledger count '$count', expected completed,achieved,verified_by_check with its one write run once"
+  pass "s7-other-goal" "goal $S7B_GOAL_ID completed(achieved): its write ran once (ledger count 1 at the gate)"
+}
+
+# --- S9: the requester loses a gate the Worker needs; the next step does not start -----------
+#
+# bob (member) is granted the three gates the ops-runner Worker declares and proposes a goal of two
+# steps, b after a; a restarts the accept-s2 test container through the docker gate, so the run
+# holds while that write waits for approval. alice (owner) revokes bob's ssh gate, then approves
+# a's write: a succeeds, and b, whose Worker would need a gate bob no longer holds, never starts —
+# the run pauses authority_lost (step-attempt.ts, resolveStepAuthority). The plan's own wording,
+# demoting the requester to a role without the gate, meets the same check;
+# advancer.integration.test.ts covers the demoted and the disabled requester. bob's grants are
+# revoked again at the end (cleanup_step too, via goal_cleanup_grants).
+#
+# a's write is a docker one, not a ledger one: an action runs on behalf of its goal's requester,
+# and the http gate is connected `connected_account` with alice's token alone — a write there for
+# bob is refused by the gate (credential_unavailable), as it should be. The docker gate takes no
+# per-person credential. The goal's acceptance check (stock.get, the same http gate) never runs:
+# the run pauses before it, and bob cancels it.
+
+S9_GRANTS=""
+
+goal_s9_authority_lost() {
+  n=$(real_token)
+  s9_ssh_grant=""
+  for s9_gate in "$GATEKEEPER_ID_SSH" "$GATEKEEPER_ID_HTTP" "$GATEKEEPER_ID_DOCKER"; do
+    out=$(cap "$ALICE_KEY" connect_gatekeeper "{\"gatekeeperId\":\"$s9_gate\",\"principalId\":\"$BOB_PRINCIPAL_ID\"}" "d.result.id")
+    [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] || fail "s9-confirmed" "connect_gatekeeper($s9_gate) for bob HTTP $(parse_kv "$out" HTTP_STATUS): $(parse_kv "$out" BODY)"
+    s9_grant=$(parse_kv "$out" EXTRACTED)
+    S9_GRANTS="$S9_GRANTS $s9_grant"
+    # The first one granted: the ssh gate's, which step a does not use.
+    [ -n "$s9_ssh_grant" ] || s9_ssh_grant=$s9_grant
+  done
+  write=$(goal_step_json a "ACCEPT_S2_SCENARIO=docker_restart CONTAINER_ID=$RESTART_TARGET_ID")
+  after=$(goal_step_json b "ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=$n STEP=b" '"dependsOn":["a"]')
+  goal_propose_confirm s9 "{\"statement\":\"accept_s2 S9 $n: one ops-runner step restarts the accept-s2 test container once approved; another runs after it, unless the requester has lost a gate it needs.\",\"plan\":{\"steps\":[$write,$after],\"acceptance\":[$(goal_observe_check_json stock-visible stock.get '{}' symbol '"NXT"')]},\"budget\":$GOAL_BUDGET,\"idempotencyKey\":\"accept-s2-goal-s9-$n\"}" "$BOB_KEY"
+  S9_GOAL_ID=$GOAL_RUN_ID
+  pass "s9-confirmed" "alice granted bob the ssh, http and docker gates the ops-runner Worker declares; bob proposed and confirmed goal $S9_GOAL_ID (a restarts the test container through the docker gate, b after a)"
+
+  wait_expr="(() => { const s = Object.fromEntries(d.result.steps.map((x) => [x.stepKey, x])); return [d.result.status, s.a.status, s.a.waitingReason || '', s.a.actions.map((a) => a.status).join('+'), s.b.status, s.b.attempts.length].join(','); })()"
+  goal_wait "$S9_GOAL_ID" 180 "$wait_expr" 'running,waiting,*' 'paused,*' 'completed,*' 'cancelled,*' 'failed,*' \
+    || goal_fail "s9-revoked" "$S9_GOAL_ID" "step a did not reach waiting within 180s (last '$GOAL_WAIT_VALUE')"
+  [ "$GOAL_WAIT_VALUE" = "running,waiting,approval,pending_approval,pending,0" ] \
+    || goal_fail "s9-revoked" "$S9_GOAL_ID" "goal $S9_GOAL_ID reads '$GOAL_WAIT_VALUE', expected the run running, step a waiting(approval) on its pending write, b not started"
+  out=$(cap "$ALICE_KEY" revoke_capability "{\"grantId\":\"$s9_ssh_grant\"}" "d.result.status")
+  [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] || goal_fail "s9-revoked" "$S9_GOAL_ID" "revoke_capability($s9_ssh_grant) HTTP $(parse_kv "$out" HTTP_STATUS): $(parse_kv "$out" BODY)"
+  [ "$(parse_kv "$out" EXTRACTED)" = "revoked" ] || goal_fail "s9-revoked" "$S9_GOAL_ID" "revoke_capability($s9_ssh_grant) answered '$(parse_kv "$out" EXTRACTED)', expected revoked"
+  ar_id=$(goal_get "$S9_GOAL_ID" "d.result.steps.find((x) => x.stepKey === 'a').actions[0].actionRequestId")
+  out=$(cap "$ALICE_KEY" approve "{\"actionRequestId\":\"$ar_id\"}" "d.result.status")
+  [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] || goal_fail "s9-revoked" "$S9_GOAL_ID" "approve HTTP $(parse_kv "$out" HTTP_STATUS): $(parse_kv "$out" BODY)"
+  pass "s9-revoked" "alice revoked bob's ssh gate ($s9_ssh_grant) while step a's write waited, then approved the write $ar_id"
+
+  goal_wait "$S9_GOAL_ID" 180 "$GOAL_END_EXPR" 'paused,*' 'completed,*' 'cancelled,*' 'failed,*' \
+    || goal_fail "s9-authority-lost" "$S9_GOAL_ID" "goal $S9_GOAL_ID did not settle within 180s of the approval (last '$GOAL_WAIT_VALUE')"
+  [ "$GOAL_WAIT_VALUE" = "paused,,,authority_lost" ] || goal_fail "s9-authority-lost" "$S9_GOAL_ID" "goal $S9_GOAL_ID reads '$GOAL_WAIT_VALUE', expected paused authority_lost"
+  steps=$(goal_get "$S9_GOAL_ID" "(() => { const s = Object.fromEntries(d.result.steps.map((x) => [x.stepKey, x])); return [s.a.status, s.a.actions.map((a) => a.status).join('+'), s.b.status, s.b.attempts.length].join(','); })()")
+  tasks=$(goal_tasks "$S9_GOAL_ID")
+  [ "$steps|$tasks" = "succeeded,executed,ready,0|1" ] \
+    || goal_fail "s9-authority-lost" "$S9_GOAL_ID" "read steps '$steps', $tasks Task(s) — expected a succeeded with its write executed, b ready and never started, one Task"
+  pass "s9-authority-lost" "goal $S9_GOAL_ID paused authority_lost: a succeeded (the docker gate ran its write), b is ready but never started — bob no longer holds the ssh gate its Worker declares; one Task"
+
+  out=$(cap "$BOB_KEY" cancel_goal "{\"goalRunId\":\"$S9_GOAL_ID\"}" "d.result.status")
+  [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] || goal_fail "s9-cancelled" "$S9_GOAL_ID" "cancel_goal (bob) HTTP $(parse_kv "$out" HTTP_STATUS): $(parse_kv "$out" BODY)"
+  goal_wait "$S9_GOAL_ID" 60 "d.result.status" 'cancelled' \
+    || goal_fail "s9-cancelled" "$S9_GOAL_ID" "goal $S9_GOAL_ID reads '$GOAL_WAIT_VALUE' 60s after cancel_goal, expected cancelled"
+  for s9_grant in $S9_GRANTS; do
+    [ "$s9_grant" = "$s9_ssh_grant" ] && continue
+    out=$(cap "$ALICE_KEY" revoke_capability "{\"grantId\":\"$s9_grant\"}" "d.result.status")
+    [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] || goal_fail "s9-cancelled" "$S9_GOAL_ID" "revoke_capability($s9_grant) HTTP $(parse_kv "$out" HTTP_STATUS): $(parse_kv "$out" BODY)"
+  done
+  S9_GRANTS=""
+  pass "s9-cancelled" "bob cancelled goal $S9_GOAL_ID; alice revoked bob's other two grants: bob holds no gate again, as after bootstrap"
+}
+
+# --- S10: the goal's tokens run out; the run pauses, it does not fail -------------------------
+#
+# maxTokens 1: the first step's attempt is capped at what is left of the goal's budget, one token
+# (advance.ts startSteps, step-attempt.ts). The fake model's first answer spends more; once
+# llm-proxy reports the usage (every ~2s) the kernel fails the Task budget_exhausted and terminates
+# its Worker (recordWorkerRunUsage), and the next advance finds the goal's tokens spent and pauses
+# the run budget_exhausted. A goal_ledger step, so the attempt is still live when the usage lands:
+# its write (await_decision) has usually reached the gate by then, moved the Task to
+# waiting_approval and holds the step waiting(approval) — a waiting Task is stopped all the same
+# (the third rehearsal of GO7a-2 caught the kernel letting it run on: it judged only running
+# Tasks), the run pauses, the write is left to the person, and the cancel at the end withdraws it.
+# Should the Worker be stopped before its write reaches the gate, the step fails transient instead,
+# under the same pause. Either way: not failed, not completed, the next step never started.
+
+goal_s10_budget() {
+  n=$(real_token)
+  key="s10-$n"
+  write=$(goal_step_json a "ACCEPT_S2_SCENARIO=goal_ledger LEDGER_KEY=$key")
+  after=$(goal_step_json b "ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=$n STEP=b" '"dependsOn":["a"]')
+  goal_propose_confirm s10 "{\"statement\":\"accept_s2 S10 $n: a goal allowed one token; its first step's Worker spends more than that.\",\"plan\":{\"steps\":[$write,$after],\"acceptance\":[$(goal_observe_check_json stock-visible stock.get '{}' symbol '"NXT"')]},\"budget\":{\"maxTokens\":1,\"maxSteps\":6,\"maxRevisions\":1,\"maxWallClockSeconds\":1800},\"idempotencyKey\":\"accept-s2-goal-s10-$n\"}"
+  S10_GOAL_ID=$GOAL_RUN_ID
+  pass "s10-confirmed" "alice proposed and confirmed goal $S10_GOAL_ID with maxTokens 1 (a writes to the test ledger under $key, b after a)"
+
+  goal_wait "$S10_GOAL_ID" 180 "$GOAL_END_EXPR" 'paused,*' 'completed,*' 'cancelled,*' 'failed,*' \
+    || goal_fail "s10-budget-exhausted" "$S10_GOAL_ID" "goal $S10_GOAL_ID did not settle within 180s (last '$GOAL_WAIT_VALUE')"
+  [ "$GOAL_WAIT_VALUE" = "paused,,,budget_exhausted" ] || goal_fail "s10-budget-exhausted" "$S10_GOAL_ID" "goal $S10_GOAL_ID reads '$GOAL_WAIT_VALUE', expected paused budget_exhausted (not failed, not completed)"
+  steps=$(goal_get "$S10_GOAL_ID" "(() => { const s = Object.fromEntries(d.result.steps.map((x) => [x.stepKey, x])); return [s.a.attempts.map((t) => t.status + ':' + (t.failureReason || '')).join('+'), s.a.status + ':' + (s.a.waitingReason || s.a.failureCategory || '') + ':' + s.a.actions.map((a) => a.status).join('+'), s.b.attempts.length].join(','); })()")
+  case "$steps" in
+    "failed:budget_exhausted,waiting:approval:pending_approval,0") s10_way="its write had reached the gate first and is left pending for a person" ;;
+    "failed:budget_exhausted,failed:transient:,0") s10_way="its Worker was stopped before its write reached the gate, the step failed transient" ;;
+    *) goal_fail "s10-budget-exhausted" "$S10_GOAL_ID" "read steps '$steps', expected a's one attempt failed budget_exhausted (a waiting(approval) on its pending write, or failed transient without one) and b never started" ;;
+  esac
+  spent=$(goal_get "$S10_GOAL_ID" "d.result.usage.tokens")
+  tasks=$(goal_tasks "$S10_GOAL_ID")
+  cap_budget=$(psql_ws "select coalesce(string_agg(token_budget::text, ','), '') from tasks where workspace_id='$WORKSPACE_ID' and goal_run_id='$S10_GOAL_ID'")
+  [ "$tasks|$cap_budget" = "1|1" ] || goal_fail "s10-budget-exhausted" "$S10_GOAL_ID" "goal $S10_GOAL_ID has $tasks Task(s) with token budget(s) '$cap_budget', expected one, capped at the one token the goal had left"
+  [ "$spent" -ge 1 ] 2>/dev/null || goal_fail "s10-budget-exhausted" "$S10_GOAL_ID" "the goal reads '$spent' token(s) spent, expected at least its budget (1)"
+  pass "s10-budget-exhausted" "goal $S10_GOAL_ID paused budget_exhausted, not failed: a's one attempt, capped at 1 token, spent $spent and failed budget_exhausted; b never started — $s10_way"
+
+  out=$(cap "$ALICE_KEY" cancel_goal "{\"goalRunId\":\"$S10_GOAL_ID\"}" "d.result.status")
+  [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] || goal_fail "s10-cancelled" "$S10_GOAL_ID" "cancel_goal HTTP $(parse_kv "$out" HTTP_STATUS): $(parse_kv "$out" BODY)"
+  goal_wait "$S10_GOAL_ID" 60 "d.result.status" 'cancelled' \
+    || goal_fail "s10-cancelled" "$S10_GOAL_ID" "goal $S10_GOAL_ID reads '$GOAL_WAIT_VALUE' 60s after cancel_goal, expected cancelled"
+  actions=$(goal_get "$S10_GOAL_ID" "d.result.steps.find((x) => x.stepKey === 'a').actions.map((a) => a.status).join('+')")
+  count=$(ledger_count "$key")
+  case "$actions|$count" in
+    "withdrawn|0") s10_write="a's pending write withdrawn" ;;
+    "|0") s10_write="a raised no write" ;;
+    *) goal_fail "s10-cancelled" "$S10_GOAL_ID" "after the cancel a's write reads '$actions' with ledger count under $key '$count', expected it withdrawn (or never raised) and nothing written" ;;
+  esac
+  pass "s10-cancelled" "alice cancelled goal $S10_GOAL_ID, the decision a spent budget leaves to a person: $s10_write, nothing written (ledger count 0 at the gate)"
+}
+
+# goal_scenarios_step: the scenarios, in the order the header explains.
 goal_scenarios_step() {
   goal_s6_start
+  goal_s4_unseen_start
   goal_s1_dag
   goal_s11_reject
   goal_s5_approval
+  goal_s4_seen
+  goal_s7_cancel_drain
+  goal_s9_authority_lost
+  goal_s10_budget
   goal_s6_finish
+  goal_s4_unseen_finish
 }
 
 # --- --real: the test ledger stays out of a real model's tools (review #488 on #806) ------------
@@ -363,6 +720,15 @@ goal_ledger_withheld_check_real() {
   [ "$(parse_kv "$glw_out" HTTP_STATUS)" = "200" ] || fail "real-ledger-withheld" "find_operations('ledger') HTTP $(parse_kv "$glw_out" HTTP_STATUS): $(parse_kv "$glw_out" BODY)"
   [ "$(parse_kv "$glw_out" EXTRACTED)" = "0" ] || fail "real-ledger-withheld" "find_operations('ledger') still offers $(parse_kv "$glw_out" EXTRACTED) ledger Operation(s) after they were discarded"
   pass "real-ledger-withheld" "with --real the http gate publishes stock.get alone: ledger.get and ledger.add were discarded as drafts, so neither an agent's tool list nor find_operations offers them"
+}
+
+# goal_cleanup_grants: for cleanup_step — revokes the grants goal_s9_authority_lost gave bob and
+# did not get to revoke itself; prints one line each, never fails.
+goal_cleanup_grants() {
+  for gcg_grant in $S9_GRANTS; do
+    gcg_out=$(cap "$ALICE_KEY" revoke_capability "{\"grantId\":\"$gcg_grant\"}" "d.result.status")
+    echo "cleanup: bob's grant $gcg_grant — revoke_capability answered HTTP $(parse_kv "$gcg_out" HTTP_STATUS), now '$(parse_kv "$gcg_out" EXTRACTED)'"
+  done
 }
 
 # goal_end_live <goalRunId>: for cleanup_step — rejects a proposed run, cancels a live one, leaves

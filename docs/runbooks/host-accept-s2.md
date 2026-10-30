@@ -76,9 +76,9 @@ sh scripts/accept_s2.sh --keep
 跑完后切回来。用法、每个场景判定什么、怎么读 `RUN`/`REAL` 输出，见专门的
 `docs/runbooks/host-accept-real-model.md`。
 
-fake 路径在第 9 步之后还跑目标场景 S1、S5、S6、S11（S11 GO7a，`scripts/lib/accept-s2-goals.sh`），
-比以前多 10 分钟上下：S6 的验收检查故意不成立，平台按重试上限（默认 5 次、约 7.5 分钟）重试完才暂停，
-其余三个场景在这段时间里依次跑完。`--real` 不跑这些场景，并且在发布 http 门的清单之前把夹具测试账本的
+fake 路径在第 9 步之后还跑目标场景 S1、S4–S7、S9–S11（S11 GO7a，`scripts/lib/accept-s2-goals.sh`），
+比以前多 10 到 15 分钟：S6 的验收检查和 S4 反向的核对检查故意不成立，平台按各自的重试上限（默认 5 次、
+约 7.5 分钟）重试完才暂停，其余场景在这段时间里依次跑完。`--real` 不跑这些场景，并且在发布 http 门的清单之前把夹具测试账本的
 两个草稿（`ledger.get` / `ledger.add`）丢弃，发布后用 `real-ledger-withheld` 证明门上已发布的只有
 `stock.get`：真实模型的工具列表和加账本之前一样，`api_observe` 不会多一个 GET 可选。
 
@@ -185,6 +185,8 @@ PASS step9-goal-achieved goal <uuid> completed(achieved, verified_by_check): the
 PASS step9-goal-one-task one Task for the goal's one step
 PASS step9-goal-milestones chat <uuid> shows the goal's milestones (proposed, confirmed, checking, completed: achieved) and its step's Task under 'report'; the next turn gets the three after the proposal, not the Task
 PASS s6-verifying goal <uuid>: its step reported success, the platform is checking the stock API for a symbol it never shows
+PASS s4u-approved alice approved the write <uuid> under lose-s4u-<hex>; it ran and its answer was lost: failed(outcome_unknown), never run again by the gate
+PASS s4u-waiting-reconcile goal <uuid> still running, its step waiting(reconcile): the platform checks the ledger before anything else happens to the step
 PASS s1-goal-proposed the entry agent proposed goal <uuid> in chat <uuid>: a and b side by side, c after both
 PASS s1-goal-confirmed alice confirmed goal <uuid> outside the chat; nobody writes in any chat from here on
 PASS s1-goal-achieved goal <uuid> completed(achieved, verified_by_check) on its own: three steps, one attempt and one Task each
@@ -200,8 +202,23 @@ PASS s5-confirmed alice proposed and confirmed goal <uuid> (write to the test le
 PASS s5-waiting-approval the Worker exited with its write still pending: step waiting(approval), goal still running, the next step not started, the ledger empty (1 Task)
 PASS s5-approved alice approved the write <uuid> after its Worker had gone ('approved')
 PASS s5-achieved goal <uuid> completed(achieved): the write ran once (ledger count 1 at the gate), the step's check passed on an Observation, then the next step started on its own and succeeded
+PASS s4-approved alice approved the write <uuid> under lose-s4-<hex>; it ran and its answer was lost: failed(outcome_unknown), never run again by the gate
+PASS s4-reconciled goal <uuid> completed(achieved): the platform's reconcile observation saw the lost write's effect (effect_seen), the step went on; one attempt, one Task, the write ran once (ledger count 1 at the gate)
+PASS s7-queued the http gate's queue: goal <uuid>'s write <uuid> pending at its head, its approved write <uuid> behind it, goal <uuid>'s approved write <uuid> behind both; nothing has run
+PASS s7-drained goal <uuid>'s write <uuid> ran <n>s after the cancel: the withdrawal drained the gate at once, not at the next periodic drain
+PASS s7-cancelled goal <uuid> cancelled (cancelling → cancelled, nothing left to clean up): both writes withdrawn and never run (ledger counts 0 at the gate), the step after them never started, no new Task
+PASS s7-other-goal goal <uuid> completed(achieved): its write ran once (ledger count 1 at the gate)
+PASS s9-confirmed alice granted bob the ssh, http and docker gates the ops-runner Worker declares; bob proposed and confirmed goal <uuid> (a restarts the test container through the docker gate, b after a)
+PASS s9-revoked alice revoked bob's ssh gate (<uuid>) while step a's write waited, then approved the write <uuid>
+PASS s9-authority-lost goal <uuid> paused authority_lost: a succeeded (the docker gate ran its write), b is ready but never started — bob no longer holds the ssh gate its Worker declares; one Task
+PASS s9-cancelled bob cancelled goal <uuid>; alice revoked bob's other two grants: bob holds no gate again, as after bootstrap
+PASS s10-confirmed alice proposed and confirmed goal <uuid> with maxTokens 1 (a writes to the test ledger under s10-<hex>, b after a)
+PASS s10-budget-exhausted goal <uuid> paused budget_exhausted, not failed: a's one attempt, capped at 1 token, spent <n> and failed budget_exhausted; b never started — its write had reached the gate first and is left pending for a person
+PASS s10-cancelled alice cancelled goal <uuid>, the decision a spent budget leaves to a person: a's pending write withdrawn, nothing written (ledger count 0 at the gate)
 PASS s6-not-achieved goal <uuid> paused needs_decision, not completed: its check failed on an Observation after 5 attempts
 PASS s6-ended-not-achieved alice ended goal <uuid> as not achieved: completed,not_achieved,requester,
+PASS s4u-awaiting-reconcile goal <uuid> paused awaiting_reconcile: the platform's check did not see the effect after retrying, recorded nothing, ran nothing again (ledger count still 1 at the gate)
+PASS s4u-cancelled alice cancelled goal <uuid>, the decision a not-seen effect leaves to a person
 PASS cleanup reclaimed alice/bob entry containers, removed the accept-s2 fixture containers; workspace retained: <uuid>
 
 S2 OK
@@ -244,22 +261,40 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
 | `s1-*` | S11 §7.2 S1：用户发起目标（a、b 并行，c 依赖 a、b）并确认后不再发消息（GO7a，`scripts/lib/accept-s2-goals.sh`） | 新对话里发「发起三步验收目标 GOAL_NONCE=…」，`entryGoalDagChatScenario`（fake-llm）驱动入口 agent `find_workers` → `find_operations('stock')` → `propose_goal`（三步都跑 ops-runner 的 `goal_step` 剧本，c 的 `dependsOn` 是 a、b；验收同第 9 步）。`proposed`：计划读出来 a、b 无依赖、c 依赖两者；`confirmed`：alice 在对话外以人通道确认，一次建出三个 StepRun；`achieved`：轮询至多 360s 到 `completed / achieved / verified_by_check`，三步各成功一次、各一个 Task；`order`：c 的尝试建于 a、b 都结束之后（a、b 是否真的重叠取决于请求者的并发配额，只报告不判定）；`no-new-turn`：从确认到结束，整个 workspace 没有新的 `agent_turn` Activity；`milestones`：发起对话里依次是 `propose`、`confirm`、`verify`、`complete`，a、b、c 各一条完成的 Task 状态行 |
 | `s11-*` | S11 §7.2 S11：一步的执行动作被拒绝 → 步骤与目标进入需要决定，不自动重试同一动作 | alice 以人通道提一步目标（ops-runner 的 `goal_ledger` 剧本：经 http 门调 `ledger.add` 往夹具账本写一条，`await_decision: true`；`maxAttempts` 2，留一次尝试不用），确认；等这条写入 `pending_approval` 后 alice `reject`。`needs-decision`：目标 `paused(needs_decision)`，步骤 `failed / action_refused`、一次尝试、那条写入 `rejected`；`no-retry`：15s 后状态不变、仍一次尝试一个 Task，夹具账本在这个键下计数 0（门侧根本没执行）；`cancelled`：alice `cancel_goal` 收尾 |
 | `s5-*` | S11 §7.2 S5：一步含需审批的执行动作，审批晚于 Worker 退出 → 步骤 `waiting(approval)`，目标不失败；批准并执行后，步骤验收通过才判成功，下一步自动开始 | 两步：`write`（`goal_ledger`，步骤验收是平台对 `ledger.get` 的观察 `count` 等于 1）与 `after`（`goal_step`，依赖 `write`）。Worker 的写入等决定到内核的等待上限（25s）后拿到 `pending_approval`、报告、退出；`waiting-approval`：此时目标 `running`、`write` 是 `waiting(approval)` 且那条写入仍 `pending_approval`、`after` 仍 `pending` 未开始、账本计数 0；alice 批准；`achieved`：轮询至多 300s 到 `completed / achieved / verified_by_check`，`write` 一次尝试、写入 `executed`、步骤检查 `passed` 且有 Observation，`after` 的尝试建于 `write` 结束之后并成功，账本计数 1（门侧恰好执行一次） |
-| `s6-*` | S11 §7.2 S6：各步都报告成功，但验收观察为假 → 不进入 `completed(achieved)`；暂停并附证据；人选「按未达成结束」后为 `completed(not_achieved)` | 一步 `goal_step`，验收是 `stock.get` 的 `symbol` 等于一个它永远不会返回的值。`verifying`：最先启动，步骤成功后目标进入 `verifying`；平台按重试上限在后台重试这条检查，期间跑 S1、S11、S5；`not-achieved`：最后回来，轮询至多 960s（默认上限 15 分钟加余量）到 `paused(needs_decision)`、无结果，检查 `failed` 且有 Observation、至少重试过一次；`ended-not-achieved`：alice `end_goal(not_achieved)` 后为 `completed / not_achieved` |
+| `s6-*` | S11 §7.2 S6：各步都报告成功，但验收观察为假 → 不进入 `completed(achieved)`；暂停并附证据；人选「按未达成结束」后为 `completed(not_achieved)` | 一步 `goal_step`，验收是 `stock.get` 的 `symbol` 等于一个它永远不会返回的值。`verifying`：最先启动，步骤成功后目标进入 `verifying`；平台按重试上限在后台重试这条检查，期间跑 S1、S11、S5、S4、S7、S9、S10；`not-achieved`：最后回来，轮询至多 960s（默认上限 15 分钟加余量）到 `paused(needs_decision)`、无结果，检查 `failed` 且有 Observation、至少重试过一次；`ended-not-achieved`：alice `end_goal(not_achieved)` 后为 `completed / not_achieved` |
+| `s4-*` / `s4u-*` | S11 §7.2 S4：门执行了写入但丢掉响应，且门的幂等重放也答 `apply_outcome_unknown` → 步骤 `waiting(reconcile)`；核对观察看到效果后判成功，门侧计数 1。反向：看不到效果 → `paused(awaiting_reconcile)`，不自动重新执行，门侧计数仍为 1 | 一步 `goal_ledger`，键以 `lose-` 开头：夹具记下这一条后不回答、直接断开连接，门无法判断是否执行，把这次调用记成结果不明，同一幂等键的重放也这样回答（R-51）。步骤声明了怎么核对（`reconcile`：观察 `ledger.get` 同一个键的 `count`）。alice 在 Worker 等决定时批准；`approved`：那条写入 `failed / outcome_unknown`。`s4u` 最先启动（与 S6 一起在后台），核对检查要 `count` 等于 2，永远不成立：`waiting-reconcile`：目标仍 `running`、步骤 `waiting(reconcile)`；最后回来，`awaiting-reconcile`：轮询至多 960s 到 `paused(awaiting_reconcile)`，写入仍只是结果不明、平台什么都没记下，核对检查 `not_seen` 且有 Observation、重试过，一个 Task，账本计数仍 1；`cancelled`：alice 取消。`s4` 在中间跑，核对要 `count` 等于 1：`reconciled`：轮询至多 300s 到 `completed / achieved / verified_by_check`，写入 `failed / outcome_unknown / effect_seen`，核对检查 `seen` 且有 Observation，一次尝试、一个 Task，账本计数 1 |
+| `s7-*` | S11 §7.2 S7（第一种）：运行中取消目标，此时有一条待审批写入在门队列队头、一条已批准还在队列里排队 → 两条都 `withdrawn`、门侧计数 0；同门里别的目标的后续写入随即被排水，不等周期 tick | 目标 A：`a1`、`a2` 两步并行写账本，`later` 依赖两者。两个 Worker 等决定超时退出后，两条写入都 `pending_approval`；按门自己的顺序（`requested_at`、id）取后一条批准，它排在队头后面不执行。目标 B：一步写账本，等它的写入也 `pending_approval` 后批准。`queued`：5s 后读门的队列（与排水器同一条件），恰好是「A 的待审批 → A 的已批准 → B 的已批准」，三个键的账本计数都是 0；alice `cancel_goal` A，回答 `cancelling`、三步取消、同一次调用撤回 A 的两条写入。`drained`：B 的写入在取消后 10s 内 `executed`（周期排水每 60s 一次、相位随机，10s 让撤回事件这条路坏了时误报 PASS 的机会约六分之一），报告实际秒数；`cancelled`：A 到 `cancelled`、`cleanupPending` 为假，两步各一次尝试、写入 `withdrawn`，`later` 没有尝试，两个 Task，A 的两个键账本计数 0，门队列空；`other-goal`：B `completed / achieved / verified_by_check`，账本计数 1 |
+| `s9-*` | S11 §7.2 S9：运行中请求者失去该门的授权 → 下一步不开始，目标 `paused(authority_lost)` | alice 把 ops-runner 声明的 ssh、http、docker 三扇门授权给 bob（`connect_gatekeeper`）；bob 以人通道提两步目标并确认：`a` 经 docker 门重启 accept-s2 测试容器（`docker_restart`），`b` 依赖 `a`。`a` 的写入待审批时，alice `revoke_capability` 撤掉 bob 的 ssh 门授权（`a` 用不到这扇门），再批准 `a` 的写入。`authority-lost`：目标 `paused(authority_lost)`，`a` 成功、写入 `executed`，`b` 为 `ready` 但没有尝试，一个 Task；`cancelled`：bob 取消自己的目标，alice 撤掉 bob 另外两条授权 |
+| `s10-*` | S11 §7.2 S10：累计 token 超出目标预算 → 目标 `paused(budget_exhausted)`，不是失败 | alice 提两步目标，`maxTokens` 为 1：`a` 写账本，`b` 依赖 `a`。`a` 这次尝试的 token 预算被限到目标剩下的 1；fake 模型第一次回答就超过，llm-proxy 上报用量（约每 2s）后内核把 Task 判 `failed / budget_exhausted` 并终止 Worker（写入已到门、Task 在 `waiting_approval` 时也一样：这次回答的用量往往在写入把 Task 移到等审批之后才上报），下一次推进发现目标的 token 用完，暂停。`budget-exhausted`：轮询至多 180s 到 `paused(budget_exhausted)`，`a` 一次尝试 `failed / budget_exhausted`，`b` 没有尝试，一个 Task、它的 `token_budget` 是 1，目标已用 token ≥ 1；`a` 的写入通常已先到门、仍待审批（`a` 是 `waiting(approval)`），偶尔 Worker 在写入到门之前就被停掉（`a` 是 `failed / transient`、没有写入），两种都接受并在 PASS 行里说明是哪一种；`cancelled`：alice 取消，那条写入（若有）`withdrawn`，账本计数 0 |
 | `real-ledger-withheld`（只在 `--real`） | 审查 #488 对 #806：夹具账本只给 fake 路径的目标场景用，不进真实模型的工具列表 | `connect-http-publish` 之前，alice 用 `discard_operation_draft` 丢弃 http 门的 `ledger.get` / `ledger.add` 两个导入草稿（`publish_manifest` 必须点名每个草稿，所以先丢弃再发布）；发布后按 `list_allowed_operations` 读工具时用的同一条件（`status` 为 `published`）查这扇门，已发布的恰好只有 `stock.get`，`find_operations("ledger")` 也查不到账本 |
-| `cleanup` | — | 第 9 步与目标场景里没走到结束的目标先收尾（`proposed` 用 `reject_goal`，`running` / `paused` / `verifying` 用 `cancel_goal`，只记日志）；回收 alice/bob 入口容器；`docker compose --profile accept-s2 rm -sf` 六个 accept-s2 容器（不是 `down`，见 §6）；workspace 行留作审计留痕 |
+| `cleanup` | — | 第 9 步与目标场景里没走到结束的目标先收尾（`proposed` 用 `reject_goal`，`running` / `paused` / `verifying` 用 `cancel_goal`，只记日志；alice 是 owner，bob 的目标也由 alice 取消）；S9 给 bob 的授权没来得及撤的，`revoke_capability` 撤掉（只记日志）；回收 alice/bob 入口容器；`docker compose --profile accept-s2 rm -sf` 六个 accept-s2 容器（不是 `down`，见 §6）；workspace 行留作审计留痕 |
 
 ## 5. 已知偏离
 
 - **目标场景（S11 GO7a）在主机上不覆盖的部分**：S5 的 `await_decision: false` 一半与 S11 的「审批过期」一半——
   前者要一个不等决定的执行类 Operation 且没有任何「总是允许」，后者要把审批过期时间调到秒级，在跑着的
   栈上都只能改内核配置才做得到，脚本不改主机配置；两者由 `advancer.integration.test.ts` 的 S5、S11 用例
-  对真实 Postgres 覆盖。S2（重启）、S4（门丢响应后核对）、S7（带在途动作取消）、S12（丢一次唤醒）和
-  S8–S10 冒烟留给 GO7a 的下一个 PR。目标场景失败时 FAIL 行末尾带 `evidence:`，是那个目标的
-  `get_goal` 摘要（状态、暂停原因、每步的尝试与动作、每条验收检查的尝试次数与最后错误）；脚本退出前
+  对真实 Postgres 覆盖。S7 只跑第一种，而且取消时没有还在运行的 Worker：`goal_ledger` 的 Worker 只活到内核的
+  等待决定上限（25s），等它退出才排得出那个队列；第二种（一条 `executing`、结果不明的动作让目标停在
+  `cancelling`，截止后 `cleanup_pending`）的截止时间默认 30 分钟、没有配置项，过期 `executing` 回收器会先把
+  那条动作收尾，跑着的栈上只能看到 `cancelling → cancelled`——运行中 Task 被终止与第二种都由
+  `advancer.integration.test.ts` 的两个 S7 用例覆盖。S9 用撤掉一扇门的授权来做，和计划写的「降为无该门授权的
+  角色」走同一处检查（`resolveStepAuthority`）；降角色与禁用请求者由集成测试覆盖。S9 的 `a` 写 docker 门而不写账本：
+  动作以目标请求者的身份执行，http 门以 `connected_account` 接入、只存了 alice 的令牌，bob 在那里的写入会被门以
+  `credential_unavailable` 拒绝（这是正确行为），docker 门不按人取凭证。S2（重启）、S8（修订移除运行中的
+  步骤）、S12（丢一次唤醒）留给 GO7a 的下一个 PR。目标场景失败时 FAIL 行末尾带 `evidence:`，是那个目标的
+  `get_goal` 摘要（状态、暂停原因、每步的尝试与动作、每条验收检查的尝试次数与最后错误），再跟 `actions:`：目标
+  每条动作的状态、失败类别和审计里记下的失败原因（`get_goal` 只给类别，不给原因）；脚本退出前
   `cleanup` 会把没结束的目标取消掉，要留着现场排障就加 `--keep`（目标不取消，夹具也不删）。
   `s6-not-achieved` 的 960s 是按内核默认的验收重试上限算的（`GOAL_ACCEPTANCE_CHECK_MAX_ATTEMPTS` 5 次、
   `GOAL_ACCEPTANCE_CHECK_MAX_DURATION_MS` 15 分钟）：它超时失败、证据里检查仍是 `pending` 且尝试次数还在涨时，
-  先看内核这两个环境变量是不是被调大了，那是配置与脚本不匹配，不是平台问题。
+  先看内核这两个环境变量是不是被调大了，那是配置与脚本不匹配，不是平台问题。`s4u-awaiting-reconcile` 的
+  960s 同理，对应 `GOAL_RECONCILE_CHECK_MAX_ATTEMPTS` / `GOAL_RECONCILE_CHECK_MAX_DURATION_MS`。`s7-drained`
+  的 10s 是给「撤回立即触发排水」留的上限；没赶上时脚本再等过一次周期排水（到取消后 75s）才判失败，FAIL 行
+  报出那时 B 的写入状态：`executed` 说明撤回的事件没有触发排水、是周期排水接住的，要查
+  `ActionRequestUpdated` 的排水消费者；仍是 `approved` 说明队列卡住了，先看门队列里排在它前面的是什么。
+  `s4` / `s4u` 的「丢响应」依赖门的 HTTP 客户端在连接断开后不重发 POST（结果不明就记成结果不明）：`s4u`
+  读到账本计数 2、或目标没有暂停而是完成了，先查门这一侧是否重发了写入，那是门的问题，不是平台的核对问题。
 
 - **核心缺口 1（已修复——`fix/entry-mode-tools` 已合入，entry 模式现在注册 S2 的工具与 `observe_operation`；
   以下为当时的根因记录）：`packages/platform-extension` 的 entry 模式当时从未注册 S2 新增的任何工具**——
@@ -378,7 +413,8 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
 否则它在脚本退出后还会继续：推进器在恢复生产 provider 之后重试那一步，平台验收对已删的门重试，
 最后停在等人决定的状态。`proposed` 的用 `reject_goal`，`running` / `paused` / `verifying` 的用
 `cancel_goal`，结果只打日志（`cleanup: goal <uuid> was … — cancel_goal answered HTTP 200, now
-'cancelling'`），不判失败；成功路径上每个目标都已结束（`completed` 或 `cancelled`），这一步什么都不做。然后
+'cancelling'`），不判失败；S9 给 bob 的门授权没来得及撤的也撤掉（`cleanup: bob's grant <uuid> — …`）。
+成功路径上每个目标都已结束（`completed` 或 `cancelled`）、授权都已撤回，这一步什么都不做。然后
 `docker compose --profile accept-s2 rm -sf`（移除
 `accept-s2-sshd`/`accept-s2-openapi`/`accept-s2-mcp`/`accept-s2-ssh-gate`/`accept-s2-http-gate`/
 `accept-s2-restart-target` 六个容器，只 `rm` 这六个而不是整体 `down`，避免连基础栈一起停掉——

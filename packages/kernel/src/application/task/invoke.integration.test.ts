@@ -1846,6 +1846,92 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     expect(workerRunAfter?.status).toBe('terminated');
   });
 
+  // S11 GO7a (accept_s2 S10): a Worker spends under every status its Task has not ended in — the
+  // usage of the answer that raised an approval is reported after the request moved the Task to
+  // `waiting_approval`, the Worker goes on once an `await_decision` call comes back
+  // `pending_approval`, and a `queued` Task's run is spawned before the Task moves to `running`.
+  // 100% stops it there too; its WorkerRun (never suspended meanwhile) is terminated.
+  async function spawnWithBudget(status: string, cancelled = false) {
+    const sessionId = await insertSession('entry', ownerId, ownerId);
+    const issued = await issueTestHandle(sessionId, entryScope());
+    const supervisorClient = new FakeTaskSupervisorClient();
+    const runtimeDeps = deps(supervisorClient);
+    const spawnResult = await invokeWorker(
+      workspaceId,
+      { principalId: ownerId, channel: 'handle', claims: claimsFromIssued(issued) },
+      { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+      runtimeDeps,
+    );
+    await inTx(ownerId, (client) =>
+      client.query(
+        `update tasks set token_budget = 1, tokens_used = 0, status = $3,
+                cancelled_at = case when $4 then now() end
+          where workspace_id = $1 and id = $2`,
+        [workspaceId, spawnResult.taskId, status, cancelled],
+      ),
+    );
+    const workerRun = await inTx(ownerId, (client) =>
+      readWorkerRunRow(client, workspaceId, spawnResult.workerRunId),
+    );
+    expect(workerRun?.status).toBe('running');
+    return { runtimeDeps, spawnResult, childSessionId: workerRun?.sessionId as string };
+  }
+
+  async function reportUsage(
+    runtimeDeps: ReturnType<typeof deps>,
+    childSessionId: string,
+  ): Promise<void> {
+    const { configureTaskRuntime, resetTaskRuntimeForTests } = await import('./runtime.js');
+    configureTaskRuntime(runtimeDeps);
+    try {
+      await inTx(ownerId, (client) =>
+        recordWorkerRunUsage(client, workspaceId, childSessionId, {
+          inputTokens: 30,
+          outputTokens: 12,
+        }),
+      );
+    } finally {
+      resetTaskRuntimeForTests();
+    }
+  }
+
+  it.each(['waiting_approval', 'queued'])(
+    'budget 100% while the Task is %s also fails it budget_exhausted and terminates the WorkerRun',
+    async (status) => {
+      const { runtimeDeps, spawnResult, childSessionId } = await spawnWithBudget(status);
+      await reportUsage(runtimeDeps, childSessionId);
+
+      const task = await inTx(ownerId, (client) =>
+        readTaskRow(client, workspaceId, spawnResult.taskId),
+      );
+      expect(task?.status).toBe('failed');
+      expect(task?.failureReason).toBe('budget_exhausted');
+      expect(task?.tokensUsed).toBe(42);
+      const workerRunAfter = await inTx(ownerId, (client) =>
+        readWorkerRunRow(client, workspaceId, spawnResult.workerRunId),
+      );
+      expect(workerRunAfter?.status).toBe('terminated');
+    },
+  );
+
+  it('budget 100% on an ended Task whose WorkerRun is still live terminates the run and leaves the Task as it ended', async () => {
+    // terminateTask ends the Task first and its runs after, in their own transactions.
+    const { runtimeDeps, spawnResult, childSessionId } = await spawnWithBudget('cancelled', true);
+    await reportUsage(runtimeDeps, childSessionId);
+
+    const task = await inTx(ownerId, (client) =>
+      readTaskRow(client, workspaceId, spawnResult.taskId),
+    );
+    expect(task?.status).toBe('cancelled');
+    expect(task?.failureReason).toBeNull();
+    expect(task?.tokensUsed).toBe(42);
+    expect(task?.budgetWarnedAt).toBeNull();
+    const workerRunAfter = await inTx(ownerId, (client) =>
+      readWorkerRunRow(client, workspaceId, spawnResult.workerRunId),
+    );
+    expect(workerRunAfter?.status).toBe('terminated');
+  });
+
   it('80% budget warning fires exactly once (budget_warned_at set)', async () => {
     const sessionId = await insertSession('entry', ownerId, ownerId);
     const issued = await issueTestHandle(sessionId, entryScope());
