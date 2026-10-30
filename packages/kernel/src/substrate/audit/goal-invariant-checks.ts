@@ -22,7 +22,7 @@ import type { PoolClient } from 'pg';
  * |---|---|
  * | I-G1 one Task per attempt | `tasks_step_attempt_uidx` missing or not a valid unique index; a StepRun whose attempt Tasks do not number exactly 1..`attempt_count`; a StepRun with more than one unfinished attempt Task at once (attempts are sequential, one layer of retry); an attempt Task with more than one WorkerRun (S11 GO2: the advancer's Tasks have no Task-internal retry, so a second run means a retry layer under the StepRun's) |
  * | I-G2 only current-plan steps advance | a guard trigger of `goal_runs` / `plan_revisions` / `step_runs` (goal/0001) or `tasks_goal_step_immutable` (task/0007) missing or not enabled; an unfinished StepRun (`pending` … `failed`, not superseded) whose definition is not in its GoalRun's current plan unchanged — dropped or redefined without being superseded; a finished one whose key the current plan redefines; a key of the current plan with no live StepRun while the GoalRun runs; an attempt Task started under a revision outside its StepRun's live window or under a revision never accepted; an accepted revision off the chain that `based_on_revision` walks back from the current one (newer than it, or skipped by it — I-G3); a revision on that chain that is not accepted |
- * | I-G5 an outcome rests on verification or the requester's word — the goal's, and a step's success on its own checks (GO4b) | `goal_runs_status_guard` (goal/0005), `goal_acceptance_checks_guard`, `step_runs_acceptance_guard` or `step_acceptance_checks_guard` (goal/0006) missing or not enabled; a GoalRun completed by check (`verified_by_check`) other than `achieved` (a CHECK keeps a person's Decision off it), or whose latest acceptance round has a check not `passed`, a check on a plan other than the current one, no check the platform made (an observation, or a Fact of the graph — GO4c) — or no round at all; or whose latest round has a check not as the plan in force declares it, or lacks one it declares (goal/0007, review #493 on GO4c); a GoalRun completed on the requester's word whose outcome Decision is not the requester's own, approved, naming the run and that outcome; a `passed` acceptance check with no evidence — an observation without an Observation of that check that satisfied its predicate, a fact check whose Fact is not the Link it names (GO4c), a confirmation without the requester's own Decision for that check; a succeeded StepRun whose plan entry declares acceptance checks with no round of them, or whose latest round has a check not `passed` for its current attempt, lacks one it declares, or has one not as its plan entry declares it; a `passed` step acceptance check without its evidence, as for the goal's |
+ * | I-G5 an outcome rests on verification or the requester's word — the goal's, and a step's success on its own checks (GO4b) | `goal_runs_status_guard` (goal/0005), `goal_acceptance_checks_guard`, `step_runs_acceptance_guard` or `step_acceptance_checks_guard` (goal/0006), `goal_absence_baselines_guard`, `goal_acceptance_checks_seen_before` or `step_acceptance_checks_seen_before` (goal/0012) missing or not enabled; a GoalRun completed by check (`verified_by_check`) other than `achieved` (a CHECK keeps a person's Decision off it), or whose latest acceptance round has a check not `passed`, a check on a plan other than the current one, no check the platform made (an observation, or a Fact of the graph — GO4c) — or no round at all; or whose latest round has a check not as the plan in force declares it, or lacks one it declares (goal/0007, review #493 on GO4c); a GoalRun completed on the requester's word whose outcome Decision is not the requester's own, approved, naming the run and that outcome; a `passed` acceptance check with no evidence — an observation without an Observation of that check that satisfied its predicate, an absence check without one in which the gate confirmed the thing is not there or without an earlier baseline of its call that saw the thing (I-AB1, S11 「门确认不存在」 B-c), a fact check whose Fact is not the Link it names (GO4c), a confirmation without the requester's own Decision for that check; a succeeded StepRun whose plan entry declares acceptance checks with no round of them, or whose latest round has a check not `passed` for its current attempt, lacks one it declares, or has one not as its plan entry declares it; a `passed` step acceptance check without its evidence, as for the goal's |
  * | I-G6 budget | a `running` GoalRun past its wall-clock budget by more than the grace period; or over its token, step or revision budget with no Task of it still running and nothing finished for the grace period — the advancer checks budgets between steps, so a Task that overshoots mid-run is not counted until it ends |
  * | I-G9 only live steps act | `action_requests_status_guard` (governance/0021, the `withdrawn` guard) or `action_requests_step_run_immutable` (governance/0022) missing or not enabled; a request of a cancelled StepRun, or of a cancelling / cancelled GoalRun, or of a superseded StepRun that the superseding revision did not release (`plan_revisions.removals`, goal/0004), still awaiting a decision or approved and queued (it is withdrawn in the transaction that cancels or revises); a request of a cancelled StepRun, or of a superseded one not released, that started executing after the step ended; a request created after its StepRun was superseded or cancelled; a request whose StepRun is not the one its Worker's Task runs for, or that records a StepRun with no Worker's Task behind it |
  *
@@ -357,6 +357,25 @@ function absenceConfirmed(o: string, c: string): string {
           and ${o}.content #>> '{absentAnswersReview,reviewedAt}' <> '')`;
 }
 
+/** I-AB1 (S11 「门确认不存在」 B-c, goal/0012): whether the run of absence check row `c` saw the thing
+ *  it looks for before Observation `o` — a `seen_present` baseline of the check (`stepKey`: SQL for
+ *  its step's key, `null` for the goal's own) with the same call, on an Observation of it older
+ *  than `o` in which the gate answered with data. */
+/** The step key of step acceptance check row `c` — what its baselines are named by. */
+const STEP_KEY_OF_C =
+  '(select s.step_key from step_runs s where s.workspace_id = c.workspace_id and s.id = c.step_run_id)';
+
+function absenceSeenBefore(o: string, c: string, stepKey: string): string {
+  return `exists (
+    select 1 from goal_absence_baselines b
+      join observations bo on bo.workspace_id = b.workspace_id and bo.id = b.observation_id
+     where b.workspace_id = ${c}.workspace_id and b.goal_run_id = ${c}.goal_run_id
+       and b.step_key is not distinct from ${stepKey} and b.check_key = ${c}.check_key
+       and b.observation_check = ${c}.observation_check and b.status = 'seen_present'
+       and bo.content ->> 'purpose' = 'absence_baseline' and not (bo.content ? 'absent')
+       and bo.created_at < ${o}.created_at)`;
+}
+
 /** Whether acceptance check row `c` is the declared check `d` (an element of a plan's
  *  `acceptance`), as the goal tables' guards bind them (goal/0006, goal/0007, goal/0011): the same
  *  key and kind, and the same check (an observation, an absence among them), Fact or — a goal's
@@ -406,6 +425,10 @@ export async function checkIG5(
         ['goal_acceptance_checks', 'goal_acceptance_checks_guard'],
         ['step_runs', 'step_runs_acceptance_guard'],
         ['step_acceptance_checks', 'step_acceptance_checks_guard'],
+        // S11 「门确认不存在」 B-c (goal/0012, I-AB1).
+        ['goal_absence_baselines', 'goal_absence_baselines_guard'],
+        ['goal_acceptance_checks', 'goal_acceptance_checks_seen_before'],
+        ['step_acceptance_checks', 'step_acceptance_checks_seen_before'],
       ]),
       {
         label: 'achieved-by-check',
@@ -521,7 +544,8 @@ export async function checkIG5(
                             and o.content ->> 'round' = c.round::text
                             and o.content ->> 'checkKey' = c.check_key
                             and o.content ->> 'outcome' = 'satisfied'
-                            and ${absenceConfirmed('o', 'c')})
+                            and ${absenceConfirmed('o', 'c')}
+                            and ${absenceSeenBefore('o', 'c', 'null::text')})
                        when 'requester_confirm' then not exists (
                          select 1 from decisions d
                           where d.workspace_id = c.workspace_id and d.id = c.decision_id
@@ -640,7 +664,8 @@ export async function checkIG5(
                             and o.content ->> 'round' = c.round::text
                             and o.content ->> 'checkKey' = c.check_key
                             and o.content ->> 'outcome' = 'satisfied'
-                            and ${absenceConfirmed('o', 'c')})
+                            and ${absenceConfirmed('o', 'c')}
+                            and ${absenceSeenBefore('o', 'c', STEP_KEY_OF_C)})
                        when 'fact_predicate' then not ${factIsNamed('c')}
                        -- A kind this check does not know how to vouch for counts until it does.
                        else true

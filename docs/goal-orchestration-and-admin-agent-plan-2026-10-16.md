@@ -126,7 +126,7 @@ Task / WorkerRun 与转移日志（每次转移发 `TaskUpdated`，`task/transit
 | **StepRun** | Governance | 计划里的一个业务步骤：依赖、输入绑定、输出 Schema、状态、尝试次数、失败分类；由 0..N 个 Task 执行（每次尝试一个） | Task 是一次委派；StepRun 是业务步骤，跨 Task 保持身份。**尝试只在 StepRun 这一层**：推进器建的 Task 关掉 Task 内部的崩溃重试 |
 | **RunConfigSnapshot**（运行配置快照，W1） | Governance | 一个 Task 实际生效的配置：`definition@version`、Skill `id@version`、模型、`instanceInstructions` 摘要、运行镜像 digest、步骤 Handle 的门与能力、预算 | 已解析的事实记录；重试读它而不是重新解析。钉住的组件被弃用或吊销时，该次尝试失败，不静默换新 |
 | **WorkerSpec**（期望组合，W2） | Governance | 规划者想要的 Worker 组合：职责说明、Skill、门与 Operation 子集、模型、预算、停止条件、输出 Schema；经准入（§4.4）后解析成一份 RunConfigSnapshot | WorkerDefinition 是经发布的可复用模板；WorkerSpec 是这一次想要的组合；RunConfigSnapshot 是准入后实际跑的 |
-| **AcceptanceCheck** | Epistemic | 验收条件的一项：`observe_predicate`（一个观察类 Operation + 参数 + 对结果的判定式）、`observe_absent`（一个声明了“哪些回答表示不存在”且发布时有人确认过的观察类 Operation + 参数，只有门这样回答才通过；「门确认不存在」B）、`fact_predicate`（图上事实 + 新鲜度）、`requester_confirm`、`review`（独立评审，W4） | 判定式由入口 agent 或规划器起草，**经请求者确认后才生效**（F2）；执行者自报不是一种验收（I-G5） |
+| **AcceptanceCheck** | Epistemic | 验收条件的一项：`observe_predicate`（一个观察类 Operation + 参数 + 对结果的判定式）、`observe_absent`（一个声明了“哪些回答表示不存在”且发布时有人确认过的观察类 Operation + 参数，只有门这样回答才通过，而且目标开工前平台用同样的调用看到过它在；「门确认不存在」B、B-c）、`fact_predicate`（图上事实 + 新鲜度）、`requester_confirm`、`review`（独立评审，W4） | 判定式由入口 agent 或规划器起草，**经请求者确认后才生效**（F2）；执行者自报不是一种验收（I-G5） |
 | **业务动作身份** | Governance | StepRun 内一个外部动作的去重键：（`step_run_id`, 门, Operation, 参数摘要） | 现有幂等键（`action-executor.ts:125,139`）里的会话身份 `sid` 换成 `step_run_id`；连续创建三张工单这类参数不同的合法调用不受影响 |
 | **ChangePlan / ChangeSegment / ChangeItem** | Governance | 一组意图变更，按授权分段：**平台段**（平台管理员应用）与**每个工作区一段**（该工作区 owner 应用）；每项 ChangeItem 是对一个现有发布 / 配置能力的调用意图（参数不含凭证）、干跑差异、授权影响分类、逆操作；每段绑定审阅时的内容摘要，工作区段还绑定它所依赖平台段应用时的摘要 | 能力包安装计划是 ChangePlan 的一种来源；管理员 Agent 的提案是另一种 |
 | **ChangeProposal（代码层，待定）** | Governance | 一个代码改动提议的平台侧记录：仓库、分支、PR 引用、头提交、CI 与审查状态、关联的 GoalRun | W5 决策门通过后才引入；Git 与 PR 是真源，平台只存引用与状态快照 |
@@ -285,6 +285,13 @@ apply_failed（本段整体回滚）→ verifying → verified | verification_fa
 
 - GoalRun 与 StepRun 都可带验收检查（经请求者确认，§4.3）。推进器在步骤或目标结束时执行：`observe_predicate` 用请求者的观察权限调门、
   对结果求判定式（复用接口清单已有的 JMESPath 映射能力），检查结果写成一条 Observation 作为证据；`observe_absent` 同样调门，只认门按 Operation 声明回答的“不存在”（拿到数据就是还在），证据同样是 Observation；`fact_predicate` 查图并检查新鲜度。
+- 「不存在」不等于「被删掉了」（B-c，goal/0012）：参数指向本来就没有的东西，门同样回答“不存在”。所以目标开工前（第一步开始前），平台对计划里每条
+  `observe_absent`（目标的和未结束步骤的）用同样的调用先看一次，记成基线（`goal_absence_baselines`，每看一次一行，证据是 Observation）。
+  - 看到它在（`seen_present`）：步骤才开始；之后这条检查只能在比基线更晚的“不存在”上通过（I-AB1，数据库触发器 + I-G5 检查器）。
+  - 门说它本来就不在（`never_seen_present`）或没能看（`unavailable`）：`paused(needs_decision)`，请求人核对参数后修订、继续（再看一次）或取消。
+  - 暂停时没看完的基线作废，继续时重看；修订保留同一调用时沿用已看到的基线（东西可能已被本目标删掉，重看会误判成“本来就不在”），改了调用就重看。
+  - 步骤开始后才由修订加上或改了调用的检查，基线在目标往下做之前看，而不是开工前。这时门说不在，可能是前面的步骤已经删掉了它：照样暂停（这条检查证明不了），暂停说明和控制台都说明这次看是在步骤开始之后，可能是前面步骤删的，而不是只让人核对参数。
+  - 控制台在每条不存在检查下显示这次看的结果（get_goal 的 `acceptance.absenceBaselines`），确认卡说明开工前会先看。
 - 例："修复服务"的验收是"重启后 2 分钟内健康检查为 healthy、错误率指标低于阈值"，由平台观察，不看 Worker 怎么说。
 - 验收不过：W1 → `paused(needs_decision)`，附证据通知人；W2 → 拉起规划器提修订（返工、补观察、换路），受修订次数预算约束。
 - `review`（独立评审模型按评分标准判定）放 W4，与 E3 评测共用评审与判定推导的展示。评分标准是代理指标，对执行该目标的 Worker 封闭；评审模型与执行

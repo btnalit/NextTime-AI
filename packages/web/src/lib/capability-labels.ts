@@ -863,6 +863,13 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     enHint:
       'Rejects someone else’s Skill or Procedure draft with a reason; the draft is deleted and the version in use stays.',
   },
+  list_draft_rejections: {
+    zh: '查看被拒绝的草稿',
+    en: 'List rejected drafts',
+    zhHint: '列出你提议（含你的 Worker 代你提议）后被拒绝的 Skill 和流程草稿，带拒绝原因。',
+    enHint:
+      'Lists the Skill and Procedure drafts you proposed (or your Workers proposed for you) that were rejected, with the reason.',
+  },
   list_worker_definitions: {
     zh: '查看 Worker 定义',
     en: 'List Worker definitions',
@@ -1725,6 +1732,14 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '平台对一个步骤的验收检查试了一次，记下结果或下次再试。',
     enHint:
       'The platform tried one of a step’s acceptance checks, recording its result or the next try.',
+  },
+  'goal_run.absence_baseline': {
+    zh: '先看要删的东西在不在',
+    en: 'Absence baseline looked at',
+    zhHint:
+      '目标开始做之前，平台用“确认不存在”检查的同一调用先看一次，记下它当时在、已经不在，或者没看成。',
+    enHint:
+      'Before the goal’s work, the platform looked with an absence check’s call, recording that the thing was there, was already not there, or could not be looked at.',
   },
   'step_run.create': {
     zh: '目标步骤已建立',

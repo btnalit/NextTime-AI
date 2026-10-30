@@ -963,7 +963,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         }
       });
 
-      it('counts a passed absence check without the gate’s absence of its own call, recorded under a version a person confirmed — on the goal and on a step (S11 「门确认不存在」 B)', async () => {
+      it('counts a passed absence check without the gate’s absence of its own call, recorded under a version a person confirmed, after a look that saw the thing there — on the goal and on a step (S11 「门确认不存在」 B, B-c I-AB1)', async () => {
         const CALL = { gatekeeperId: randomUUID(), operation: 'svc.get', params: { name: 'web' } };
         const REVIEW = { reviewedBy: randomUUID(), reviewedAt: new Date().toISOString() };
         /** What `acceptance-check.ts` records when the gate confirmed the thing is not there. */
@@ -984,20 +984,73 @@ describe.runIf(DATABASE_URL !== undefined)(
           { absentAnswersReview: { ...REVIEW, reviewedBy: '' } },
           { outcome: 'unsatisfied' },
         ];
-        const observation = async (content: Record<string, unknown>) => {
+        const observation = async (content: Record<string, unknown>, ago = '0 seconds') => {
           const rows = await raw<{ id: string }>(
-            `insert into observations (workspace_id, source_id, activity_id, content)
-             values ($1, $2, $3, $4::jsonb) returning id`,
-            [workspaceId, randomUUID(), randomUUID(), JSON.stringify(content)],
+            `insert into observations (workspace_id, source_id, activity_id, content, created_at)
+             values ($1, $2, $3, $4::jsonb, now() - $5::interval) returning id`,
+            [workspaceId, randomUUID(), randomUUID(), JSON.stringify(content), ago],
           );
           return rows[0]?.id as string;
         };
+        /** B-c: how the run's look before its work went, over one that saw the thing (`null`: no
+         *  look). */
+        interface Baseline {
+          readonly stepKey?: string | null;
+          readonly checkKey?: string;
+          readonly call?: unknown;
+          readonly status?: string;
+          readonly content?: Record<string, unknown>;
+          /** How long before the check's Observation the look's was made. */
+          readonly ago?: string;
+        }
+        const BREACHES_OF_THE_LOOK: readonly (Baseline | null)[] = [
+          null,
+          { status: 'never_seen_present', content: { absent: { status: 404 } } },
+          { checkKey: 'other' },
+          { call: { ...CALL, params: { name: 'api' } } },
+          { content: { purpose: 'acceptance_check' } },
+          { content: { absent: { status: 404 } } },
+          { ago: '-1 minute' },
+        ];
+        const look = async (goalRunId: string, stepKey: string | null, baseline: Baseline) => {
+          const observationId = await observation(
+            {
+              purpose: 'absence_baseline',
+              goalRunId,
+              ...(stepKey !== null ? { stepKey } : {}),
+              checkKey: 'gone',
+              take: 1,
+              gatekeeperId: CALL.gatekeeperId,
+              operation: CALL.operation,
+              result: { name: 'web' },
+              outcome: 'unsatisfied',
+              ...baseline.content,
+            },
+            baseline.ago ?? '1 minute',
+          );
+          await raw(
+            `insert into goal_absence_baselines (workspace_id, goal_run_id, step_key, check_key,
+               take, observation_check, status, attempts, first_attempt_at, observation_id,
+               settled_at)
+             values ($1, $2, $3, $4, 1, $5::jsonb, $6, 1, now(), $7, now())`,
+            [
+              workspaceId,
+              goalRunId,
+              baseline.stepKey === undefined ? stepKey : baseline.stepKey,
+              baseline.checkKey ?? 'gone',
+              JSON.stringify(baseline.call ?? CALL),
+              baseline.status ?? 'seen_present',
+              observationId,
+            ],
+          );
+        };
 
         /** A verifying run whose plan declares the absence check `gone`, passed on an Observation
-         *  of it with `content` over what the gate's confirmed absence records. */
-        const onGoal = async (content: Record<string, unknown>) => {
+         *  of it with `content` over what the gate's confirmed absence records, after `baseline`. */
+        const onGoal = async (content: Record<string, unknown>, baseline: Baseline | null = {}) => {
           const id = await goal({ status: 'verifying' });
           await declare(id, [{ kind: 'observe_absent', key: 'gone', check: CALL }]);
+          if (baseline) await look(id, null, baseline);
           const observationId = await observation({
             purpose: 'acceptance_check',
             goalRunId: id,
@@ -1019,10 +1072,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         const stepsOf = await goal();
         await revision(stepsOf, 1, ['s']);
         /** A waiting step of `stepsOf` whose absence check `gone` passed on such an Observation. */
-        const onStep = async (content: Record<string, unknown>) => {
-          const stepRunId = await step(stepsOf, `a${randomUUID().slice(0, 8)}`, {
-            status: 'waiting',
-          });
+        const onStep = async (content: Record<string, unknown>, baseline: Baseline | null = {}) => {
+          const stepKey = `a${randomUUID().slice(0, 8)}`;
+          const stepRunId = await step(stepsOf, stepKey, { status: 'waiting' });
+          if (baseline) await look(stepsOf, stepKey, baseline);
           const observationId = await observation({
             purpose: 'step_acceptance_check',
             goalRunId: stepsOf,
@@ -1051,6 +1104,13 @@ describe.runIf(DATABASE_URL !== undefined)(
           goalBreaches.push(await onGoal(content));
           stepBreaches.push(await onStep(content));
         }
+        for (const baseline of BREACHES_OF_THE_LOOK) {
+          goalBreaches.push(await onGoal({}, baseline));
+          stepBreaches.push(await onStep({}, baseline));
+        }
+        // A look of the goal's own check does not vouch for a step's, nor a step's for the goal's.
+        goalBreaches.push(await onGoal({}, { stepKey: 'a' }));
+        stepBreaches.push(await onStep({}, { stepKey: null }));
 
         const result = await check((client) => checkIG5(client, ALL));
         expect(mentioned(result, healthyGoal)).toBe(false);

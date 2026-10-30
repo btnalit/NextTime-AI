@@ -251,6 +251,8 @@ import {
 import { graphFreshnessHandler } from './graph-freshness-handler.js';
 import { registerSourceHandler, submitObservationsHandler } from './ingest-handlers.js';
 import { issueHandleHandler } from './issue-handle-handler.js';
+// Legacy 491 — list_draft_rejections, a proposer's own rejected drafts with the reason.
+import { listDraftRejectionsHandler } from './list-draft-rejections-handler.js';
 import { issueLlmAdminTokenHandler } from './llm-admin-handlers.js';
 import {
   addMemberHandler,
@@ -2416,6 +2418,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   // S8 W3 K2 (leftover 82) — discard-draft-handler.ts.
   ['discard_draft', discardDraftHandler],
   ['reject_draft', rejectDraftHandler],
+  ['list_draft_rejections', listDraftRejectionsHandler],
   ['assert_fact', assertFactHandler],
   ['supersede_fact', supersedeFactHandler],
   ['invalidate_fact', invalidateFactHandler],

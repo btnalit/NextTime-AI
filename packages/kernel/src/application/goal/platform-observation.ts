@@ -132,7 +132,7 @@ export type PlatformObservationCall = ObservationCheck | ObservationAbsenceCheck
 
 /** Whether `call` is met by the gate confirming absence rather than by a predicate — the one test
  *  the kernel makes, mirroring goal/0011's shape rule (an absence call carries no `expect`). */
-export function expectsAbsence(call: PlatformObservationCall): boolean {
+export function expectsAbsence(call: PlatformObservationCall): call is ObservationAbsenceCheck {
   return !('expect' in call);
 }
 

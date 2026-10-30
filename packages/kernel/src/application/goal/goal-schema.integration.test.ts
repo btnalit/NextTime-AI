@@ -285,6 +285,80 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       return result.rows[0]?.id as string;
     }
+    /** S11 「门确认不存在」 B-c (goal/0012): absence check `checkKey`'s baseline (a step's: `stepKey`)
+     *  of `call`, taken through the table's guard while the run is running — `seen_present` on an
+     *  Observation of it in which the gate answered with the thing, or (`absent`)
+     *  `never_seen_present` on one in which it answered "not there" (what `absence-baseline.ts`
+     *  records; `content` overrides it). Returns the baseline's id and its Observation's. */
+    async function takeBaseline(
+      goalRunId: string,
+      checkKey: string,
+      call: { readonly gatekeeperId: string; readonly operation: string },
+      options: {
+        readonly stepKey?: string;
+        readonly take?: number;
+        readonly absent?: boolean;
+        readonly content?: Record<string, unknown>;
+      } = {},
+    ): Promise<{ readonly id: string; readonly observationId: string }> {
+      const take = options.take ?? 1;
+      const inserted = await sql(
+        `insert into goal_absence_baselines
+           (workspace_id, goal_run_id, step_key, check_key, take, observation_check)
+         values ($1, $2, $3, $4, $5, $6::jsonb) returning id`,
+        [workspaceId, goalRunId, options.stepKey ?? null, checkKey, take, JSON.stringify(call)],
+      );
+      const id = inserted.rows[0]?.id as string;
+      const observationId = await baselineObservation(goalRunId, checkKey, call, {
+        ...options,
+        take,
+      });
+      await sql(
+        `update goal_absence_baselines
+            set status = $3, observation_id = $4, attempts = 1, first_attempt_at = now(),
+                settled_at = now()
+          where workspace_id = $1 and id = $2`,
+        [workspaceId, id, options.absent ? 'never_seen_present' : 'seen_present', observationId],
+      );
+      return { id, observationId };
+    }
+    /** The Observation `absence-baseline.ts` records for a take of `checkKey`'s baseline. */
+    async function baselineObservation(
+      goalRunId: string,
+      checkKey: string,
+      call: { readonly gatekeeperId: string; readonly operation: string },
+      options: {
+        readonly stepKey?: string;
+        readonly take?: number;
+        readonly absent?: boolean;
+        readonly content?: Record<string, unknown>;
+      } = {},
+    ): Promise<string> {
+      const { activityId, sourceId } = await refs();
+      const result = await sql(
+        `insert into observations (workspace_id, source_id, activity_id, content)
+         values ($1, $2, $3, $4::jsonb) returning id`,
+        [
+          workspaceId,
+          sourceId,
+          activityId,
+          JSON.stringify({
+            purpose: 'absence_baseline',
+            goalRunId,
+            ...(options.stepKey !== undefined ? { stepKey: options.stepKey } : {}),
+            checkKey,
+            take: options.take ?? 1,
+            gatekeeperId: call.gatekeeperId,
+            operation: call.operation,
+            ...(options.absent
+              ? { outcome: 'satisfied', absent: { status: 404 }, result: null }
+              : { outcome: 'unsatisfied', result: { name: 'web', state: 'running' } }),
+            ...options.content,
+          }),
+        ],
+      );
+      return result.rows[0]?.id as string;
+    }
     /** Passes an observation on an Observation of it that satisfied its predicate. */
     async function passObservation(goalRunId: string, round: number, key: string) {
       const observationId = await acceptanceObservation(goalRunId, round, key);
@@ -2451,6 +2525,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       it('passes only on an Observation of that very check in which the gate confirmed absence of the call it names, under a version a person confirmed', async () => {
         const goalRunId = await runningGoal(['A', 'B'], [absentCheck('gone'), observeCheck('up')]);
+        await takeBaseline(goalRunId, 'gone', ABSENT);
         await setGoal(goalRunId, "status = 'verifying'");
         await insertAbsent(goalRunId, 1, 'gone');
         await insertCheck(goalRunId, 1, 'up');
@@ -2495,6 +2570,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       it('achieves a run by check on a round whose only check the platform made is an absence the gate confirmed (I-G5)', async () => {
         const goalRunId = await runningGoal(['A', 'B'], [absentCheck('gone'), confirmCheck('ok')]);
+        await takeBaseline(goalRunId, 'gone', ABSENT);
         await setGoal(goalRunId, "status = 'verifying'");
         await insertAbsent(goalRunId, 1, 'gone');
         await insertCheck(goalRunId, 1, 'ok', 'requester_confirm');
@@ -2548,6 +2624,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           'B',
         ]);
         await confirmGoal(goalRunId, ['A', 'B']);
+        await takeBaseline(goalRunId, 'gone', ABSENT, { stepKey: 'A' });
         const a = await stepId(goalRunId, 'A');
         await setStep(a, "status = 'ready'");
         await setStep(a, "status = 'running', attempt_count = 1");
@@ -2613,6 +2690,320 @@ describe.runIf(DATABASE_URL !== undefined)(
           ).rejects.toThrow(NOT_PASSED);
         }
         await passOn(await stepObservation(CONFIRMED));
+      });
+    });
+
+    describe('goal/0012: the baselines absence checks go by (S11 「门确认不存在」 B-c, I-AB1)', () => {
+      const ABSENT = {
+        gatekeeperId: OBSERVE.gatekeeperId,
+        operation: 'svc.get',
+        params: { name: 'web' },
+      };
+      const OTHER_CALL = { ...ABSENT, params: { name: 'db' } };
+      const absentCheck = (key: string, check: unknown = ABSENT): DeclaredCheck => ({
+        kind: 'observe_absent',
+        key,
+        check,
+      });
+      const insertBaseline = (
+        goalRunId: string,
+        checkKey: string,
+        call: unknown = ABSENT,
+        take = 1,
+        stepKey: string | null = null,
+      ) =>
+        sql(
+          `insert into goal_absence_baselines
+             (workspace_id, goal_run_id, step_key, check_key, take, observation_check)
+           values ($1, $2, $3, $4, $5, $6::jsonb) returning id`,
+          [workspaceId, goalRunId, stepKey, checkKey, take, JSON.stringify(call)],
+        );
+      const setBaseline = (id: string, set: string, params: readonly unknown[] = []) =>
+        sql(`update goal_absence_baselines set ${set} where workspace_id = $1 and id = $2`, [
+          workspaceId,
+          id,
+          ...params,
+        ]);
+      const SETTLED = 'attempts = 1, first_attempt_at = now(), settled_at = now()';
+      /** A run of steps A and B whose plan declares the goal's absence check `gone` and an
+       *  observation `up`, and step A's own absence check `gone` — confirmed and running. */
+      async function absenceGoal(): Promise<string> {
+        const goal = await sql(
+          `insert into goal_runs (workspace_id, on_behalf_of, statement, ${BUDGET_COLUMNS})
+           values ($1, $2, 'remove the web service', 100000, 10, 3, 3600) returning id`,
+          [workspaceId, ownerId],
+        );
+        const goalRunId = goal.rows[0]?.id as string;
+        await proposeRevision(
+          goalRunId,
+          1,
+          null,
+          [{ key: 'A', acceptance: [absentCheck('gone')] }, 'B'],
+          [absentCheck('gone'), absentCheck('also', OTHER_CALL), observeCheck('up')],
+        );
+        return goalRunId;
+      }
+
+      it('is taken while the run is running, of an absence check the plan in force declares with that call, one take after another', async () => {
+        const goalRunId = await absenceGoal();
+        const RUNNING = /a baseline is taken while its goal run is running/;
+        await expect(insertBaseline(goalRunId, 'gone')).rejects.toThrow(RUNNING);
+        await confirmGoal(goalRunId, ['A', 'B']);
+
+        const NOT_DECLARED =
+          /a baseline is of an absence check the plan in force declares, with the call it declares/;
+        await expect(insertBaseline(goalRunId, 'gone', OBSERVE)).rejects.toThrow(NOT_DECLARED);
+        await expect(insertBaseline(goalRunId, 'up', ABSENT)).rejects.toThrow(NOT_DECLARED);
+        // A call with a predicate is no absence call, whatever writes it.
+        await expect(
+          raw(
+            `insert into goal_absence_baselines
+               (workspace_id, goal_run_id, check_key, take, observation_check)
+             values ($1, $2, 'up', 1, $3::jsonb)`,
+            [workspaceId, goalRunId, JSON.stringify(OBSERVE)],
+          ),
+        ).rejects.toThrow(/goal_absence_baselines_call/);
+        await expect(insertBaseline(goalRunId, 'gone', OTHER_CALL)).rejects.toThrow(NOT_DECLARED);
+        await expect(insertBaseline(goalRunId, 'also', ABSENT)).rejects.toThrow(NOT_DECLARED);
+        await expect(insertBaseline(goalRunId, 'gone', ABSENT, 1, 'B')).rejects.toThrow(
+          NOT_DECLARED,
+        );
+        await expect(insertBaseline(goalRunId, 'gone', ABSENT, 2)).rejects.toThrow(
+          /a check's next baseline is take 1/,
+        );
+        await expect(
+          sql(
+            `insert into goal_absence_baselines
+               (workspace_id, goal_run_id, check_key, take, observation_check, status, attempts,
+                first_attempt_at, settled_at)
+             values ($1, $2, 'gone', 1, $3::jsonb, 'unavailable', 1, now(), now())`,
+            [workspaceId, goalRunId, JSON.stringify(ABSENT)],
+          ),
+        ).rejects.toThrow(/a baseline is created pending and untried/);
+
+        const first = (await insertBaseline(goalRunId, 'gone')).rows[0]?.id as string;
+        // The goal's own check and step A's are two checks, though they share a key and a call.
+        await insertBaseline(goalRunId, 'gone', ABSENT, 1, 'A');
+        await insertBaseline(goalRunId, 'also', OTHER_CALL);
+        await expect(insertBaseline(goalRunId, 'gone', ABSENT, 2)).rejects.toThrow(
+          /a check is retaken only once its last baseline settled/,
+        );
+        await setBaseline(first, `status = 'unavailable', last_error = 'gate_timeout', ${SETTLED}`);
+        await insertBaseline(goalRunId, 'gone', ABSENT, 2);
+        await expect(insertBaseline(goalRunId, 'gone', ABSENT, 2)).rejects.toThrow(
+          /a check's next baseline is take 3|duplicate key/,
+        );
+
+        // Not while the run verifies (or is paused, or has ended).
+        await setGoal(goalRunId, "status = 'verifying'");
+        await expect(insertBaseline(goalRunId, 'also', OTHER_CALL, 2)).rejects.toThrow(RUNNING);
+      });
+
+      it('settles once, while the run is running: seen_present only on an Observation of that take in which the gate answered with the thing, never_seen_present only on one in which it answered "not there"', async () => {
+        const goalRunId = await absenceGoal();
+        await confirmGoal(goalRunId, ['A', 'B']);
+        const id = (await insertBaseline(goalRunId, 'gone')).rows[0]?.id as string;
+        const settleOn = (status: string, observationId: string) =>
+          setBaseline(id, `status = $3, observation_id = $4, ${SETTLED}`, [status, observationId]);
+        const NOT_EVIDENCE =
+          /a baseline settles seen_present only on an Observation of it in which the gate answered with the thing, and never_seen_present only on one in which it answered the thing is not there/;
+        for (const content of [
+          { purpose: 'acceptance_check' },
+          { goalRunId: randomUUID() },
+          { stepKey: 'A' },
+          { checkKey: 'also' },
+          { take: 2 },
+          { gatekeeperId: randomUUID() },
+          { operation: 'svc.other' },
+          { absent: { status: 404 } },
+          { expect: OBSERVE.expect },
+        ]) {
+          await expect(
+            settleOn(
+              'seen_present',
+              await baselineObservation(goalRunId, 'gone', ABSENT, { content }),
+            ),
+            JSON.stringify(content),
+          ).rejects.toThrow(NOT_EVIDENCE);
+        }
+        await expect(
+          settleOn('never_seen_present', await baselineObservation(goalRunId, 'gone', ABSENT)),
+        ).rejects.toThrow(NOT_EVIDENCE);
+        await expect(setBaseline(id, `status = 'seen_present', ${SETTLED}`)).rejects.toThrow(
+          NOT_EVIDENCE,
+        );
+        await expect(
+          setBaseline(id, 'observation_check = $3::jsonb', [JSON.stringify(OTHER_CALL)]),
+        ).rejects.toThrow(/which check a baseline is of, and its call, never change/);
+
+        // Not while the run is paused: it settles once the run runs again — or is superseded.
+        const seen = await baselineObservation(goalRunId, 'gone', ABSENT);
+        await setGoal(goalRunId, "status = 'paused', pause_reason = 'requested'");
+        await expect(settleOn('seen_present', seen)).rejects.toThrow(
+          /a baseline settles while its goal run is running/,
+        );
+        await setGoal(goalRunId, "status = 'running', pause_reason = null");
+        await settleOn('seen_present', seen);
+        await expect(setBaseline(id, "status = 'superseded'")).rejects.toThrow(
+          /a settled baseline is not changed/,
+        );
+
+        // The step's take, on the gate's "not there"; then superseded once the run stopped.
+        const step = (await insertBaseline(goalRunId, 'gone', ABSENT, 1, 'A')).rows[0]
+          ?.id as string;
+        await setBaseline(step, `status = 'never_seen_present', observation_id = $3, ${SETTLED}`, [
+          await baselineObservation(goalRunId, 'gone', ABSENT, { stepKey: 'A', absent: true }),
+        ]);
+        const also = (await insertBaseline(goalRunId, 'also', OTHER_CALL)).rows[0]?.id as string;
+        await setGoal(goalRunId, "status = 'paused', pause_reason = 'requested'");
+        await setBaseline(also, "status = 'superseded', settled_at = now()");
+      });
+
+      it('I-AB1: an absence check passes only on a baseline of its call that saw the thing before the Observation it passes on — the goal’s check on the goal’s baseline, a step’s on its step’s', async () => {
+        const NOT_SEEN =
+          /goal_acceptance_checks: an absence check passes only once the platform saw the thing there before — an earlier baseline of this check's call that found it \(I-AB1\)/;
+        const CONFIRMED = {
+          gatekeeperId: ABSENT.gatekeeperId,
+          operation: ABSENT.operation,
+          expect: undefined,
+          absent: { status: 404 },
+          absentAnswersReview: { reviewedBy: randomUUID(), reviewedAt: new Date().toISOString() },
+        };
+        /** A run that did `whileRunning` while it ran, then `gone` of its round 1 passed on an
+         *  Observation the gate confirmed absence in — one made after `whileVerifying`, or the one
+         *  made before `whileRunning` when it answers `'early'`. */
+        async function passGone(
+          whileRunning: (goalRunId: string) => Promise<unknown>,
+          whileVerifying: (goalRunId: string) => Promise<unknown> = async () => undefined,
+        ) {
+          const goalRunId = await absenceGoal();
+          await confirmGoal(goalRunId, ['A', 'B']);
+          const early = await acceptanceObservation(goalRunId, 1, 'gone', CONFIRMED);
+          await whileRunning(goalRunId);
+          await setGoal(goalRunId, "status = 'verifying'");
+          await sql(
+            `insert into goal_acceptance_checks
+               (workspace_id, goal_run_id, round, check_key, plan_revision, kind, observation_check)
+             values ($1, $2, 1, 'gone', 1, 'observe_absent', $3::jsonb)`,
+            [workspaceId, goalRunId, JSON.stringify(ABSENT)],
+          );
+          const observationId =
+            (await whileVerifying(goalRunId)) === 'early'
+              ? early
+              : await acceptanceObservation(goalRunId, 1, 'gone', CONFIRMED);
+          return setCheck(
+            goalRunId,
+            1,
+            'gone',
+            `status = 'passed', observation_id = $5, ${SETTLED}`,
+            [observationId],
+          );
+        }
+        // None; one that found it already gone; one of another check, or of the step's check of
+        // that key; one of another call (a revision changed it).
+        await expect(passGone(async () => undefined)).rejects.toThrow(NOT_SEEN);
+        await expect(
+          passGone((goalRunId) => takeBaseline(goalRunId, 'gone', ABSENT, { absent: true })),
+        ).rejects.toThrow(NOT_SEEN);
+        await expect(
+          passGone((goalRunId) => takeBaseline(goalRunId, 'also', OTHER_CALL)),
+        ).rejects.toThrow(NOT_SEEN);
+        await expect(
+          passGone((goalRunId) => takeBaseline(goalRunId, 'gone', ABSENT, { stepKey: 'A' })),
+        ).rejects.toThrow(NOT_SEEN);
+        await expect(
+          passGone(async (goalRunId) => {
+            await raw(
+              `insert into goal_absence_baselines
+                 (workspace_id, goal_run_id, check_key, take, observation_check, status, attempts,
+                  first_attempt_at, observation_id, settled_at)
+               values ($1, $2, 'gone', 1, $3::jsonb, 'seen_present', 1, now(), $4, now())`,
+              [
+                workspaceId,
+                goalRunId,
+                JSON.stringify(OTHER_CALL),
+                await baselineObservation(goalRunId, 'gone', OTHER_CALL),
+              ],
+            );
+          }),
+        ).rejects.toThrow(NOT_SEEN);
+        // Seen, but only after the absence it would pass on was observed.
+        await expect(
+          passGone(
+            (goalRunId) => takeBaseline(goalRunId, 'gone', ABSENT),
+            async () => 'early',
+          ),
+        ).rejects.toThrow(NOT_SEEN);
+        // Seen first: the absence shows something this goal removed.
+        await passGone((goalRunId) => takeBaseline(goalRunId, 'gone', ABSENT));
+        // A retake that saw it, after one that could not look.
+        await passGone(async (goalRunId) => {
+          const first = (await insertBaseline(goalRunId, 'gone')).rows[0]?.id as string;
+          await setBaseline(
+            first,
+            `status = 'unavailable', last_error = 'gate_timeout', ${SETTLED}`,
+          );
+          await takeBaseline(goalRunId, 'gone', ABSENT, { take: 2 });
+        });
+      });
+
+      it('I-AB1 for a step: its absence check passes only on its step’s baseline, not the goal’s of the same key', async () => {
+        const NOT_SEEN =
+          /step_acceptance_checks: an absence check passes only once the platform saw the thing there before/;
+        const CONFIRMED = {
+          gatekeeperId: ABSENT.gatekeeperId,
+          operation: ABSENT.operation,
+          absent: { status: 404 },
+          absentAnswersReview: { reviewedBy: randomUUID(), reviewedAt: new Date().toISOString() },
+        };
+        async function passStepGone(whileRunning: (goalRunId: string) => Promise<unknown>) {
+          const goalRunId = await absenceGoal();
+          await confirmGoal(goalRunId, ['A', 'B']);
+          await whileRunning(goalRunId);
+          const a = await stepId(goalRunId, 'A');
+          await setStep(a, "status = 'ready'");
+          await setStep(a, "status = 'running', attempt_count = 1");
+          await setStep(a, "status = 'waiting', waiting_reason = 'acceptance'");
+          await sql(
+            `insert into step_acceptance_checks
+               (workspace_id, goal_run_id, step_run_id, step_attempt, round, check_key,
+                plan_revision, kind, observation_check)
+             values ($1, $2, $3, 1, 1, 'gone', 1, 'observe_absent', $4::jsonb)`,
+            [workspaceId, goalRunId, a, JSON.stringify(ABSENT)],
+          );
+          const { activityId, sourceId } = await refs();
+          const observation = await sql(
+            `insert into observations (workspace_id, source_id, activity_id, content)
+             values ($1, $2, $3, $4::jsonb) returning id`,
+            [
+              workspaceId,
+              sourceId,
+              activityId,
+              JSON.stringify({
+                purpose: 'step_acceptance_check',
+                goalRunId,
+                stepRunId: a,
+                stepAttempt: 1,
+                round: 1,
+                checkKey: 'gone',
+                outcome: 'satisfied',
+                ...CONFIRMED,
+              }),
+            ],
+          );
+          return sql(
+            `update step_acceptance_checks
+                set status = 'passed', observation_id = $3, ${SETTLED}
+              where workspace_id = $1 and step_run_id = $2 and check_key = 'gone'`,
+            [workspaceId, a, observation.rows[0]?.id],
+          );
+        }
+        await expect(
+          passStepGone((goalRunId) => takeBaseline(goalRunId, 'gone', ABSENT)),
+        ).rejects.toThrow(NOT_SEEN);
+        await passStepGone((goalRunId) =>
+          takeBaseline(goalRunId, 'gone', ABSENT, { stepKey: 'A' }),
+        );
       });
     });
 

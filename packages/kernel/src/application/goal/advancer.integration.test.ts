@@ -61,6 +61,8 @@ import {
 } from '../task/index.js';
 import { failTaskAndReapWorkerRuns } from '../task/lifecycle.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
+import { listDueAbsenceBaselines, runAbsenceBaseline } from './absence-baseline.js';
+import { listAbsenceBaselines } from './absence-baselines.js';
 import {
   type DueAcceptanceCheck,
   listDueAcceptanceChecks,
@@ -361,6 +363,30 @@ describe.runIf(DATABASE_URL !== undefined)(
         },
         { workspaceId, goalRunId, requesterId },
       );
+    }
+
+    /** S11 「门确认不存在」 B-c: takes the run's due absence baselines with `gatekeeperClient`
+     *  answering with the thing, whatever it answers otherwise — how a run with absence checks gets
+     *  past its baselines to its first step. Returns how many it took. */
+    async function seeAbsenceBaselines(
+      goalRunId: string,
+      gatekeeperClient: FakeObserveClient,
+    ): Promise<number> {
+      const due = (await listDueAbsenceBaselines(pool, 1000)).filter(
+        (candidate) => candidate.goalRunId === goalRunId,
+      );
+      const answer = gatekeeperClient.answer;
+      gatekeeperClient.answer = async () => ({ data: { name: 'web', state: 'running' } });
+      try {
+        for (const baseline of due) {
+          expect(await runAbsenceBaseline({ pool, gatekeeperClient }, baseline)).toBe(
+            'seen_present',
+          );
+        }
+      } finally {
+        gatekeeperClient.answer = answer;
+      }
+      return due.length;
     }
 
     const goalOf = async (goalRunId: string): Promise<GoalRunRow> => {
@@ -4862,6 +4888,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       async function verifyingGoal(requester: string, acceptance?: readonly unknown[]) {
         const created = await proposeWith(requester, acceptance);
         await advance(created.goalRunId, requester);
+        // S11 「门确认不存在」 B-c: an absence check's baseline sees the thing before step a starts.
+        if ((await seeAbsenceBaselines(created.goalRunId, observeClient)) > 0) {
+          await advance(created.goalRunId, requester);
+        }
         await completeStep((await stepsOf(created.goalRunId)).a?.id as string, requester);
         const entered = await advance(created.goalRunId, requester);
         return { goalRunId: created.goalRunId, created, entered };
@@ -5806,6 +5836,344 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(await evidenceOf(unconfirmed.goalRunId, 'gone')).toEqual([]);
       });
 
+      /** S11 「门确认不存在」 B-c: every take of the run's baselines. */
+      const baselinesOf = (goalRunId: string) =>
+        admin((client) => listAbsenceBaselines(client, workspaceId, goalRunId));
+      /** Takes the run's due baselines now (their backoff skipped), the gate answering `answer`. */
+      async function lookBefore(
+        goalRunId: string,
+        answer: FakeObserveClient['answer'],
+        options: Parameters<typeof runAbsenceBaseline>[0]['options'] = {},
+      ) {
+        await raw(
+          `update goal_absence_baselines set next_attempt_at = now()
+            where workspace_id = $1 and goal_run_id = $2 and status = 'pending'`,
+          [workspaceId, goalRunId],
+        );
+        observeClient.answer = answer;
+        const outcomes: string[] = [];
+        for (const due of await listDueAbsenceBaselines(pool, 1000)) {
+          if (due.goalRunId !== goalRunId) continue;
+          outcomes.push(await runAbsenceBaseline(checkDeps(options), due));
+        }
+        return outcomes;
+      }
+      const baselineEvidenceOf = async (goalRunId: string) =>
+        (
+          await admin((client) =>
+            client.query<{ id: string; content: Record<string, unknown> }>(
+              `select id, content from observations
+                where workspace_id = $1 and content ->> 'purpose' = 'absence_baseline'
+                  and content ->> 'goalRunId' = $2
+                order by created_at, id`,
+              [workspaceId, goalRunId],
+            ),
+          )
+        ).rows;
+      const baselineAudit = async (goalRunId: string) =>
+        (await goalAudit(goalRunId))
+          .filter((row) => row.action === 'goal_run.absence_baseline')
+          .map((row) => row.payload);
+      const attemptsOfA = async (goalRunId: string) =>
+        attemptTasks((await stepsOf(goalRunId)).a?.id as string);
+      const pauseAs = (goalRunId: string, principal: string) =>
+        asRequester(principal, (client) =>
+          pauseGoalRun(client, workspaceId, { goalRunId, actor: by(principal) }),
+        );
+      const resumeAs = (goalRunId: string, principal: string) =>
+        asRequester(principal, (client) =>
+          resumeGoalRun(client, workspaceId, { goalRunId, actor: by(principal) }),
+        );
+
+      it('S11 「门确认不存在」 B-c: before any step starts the platform looks for what an absence check will want gone; no step starts until it has seen it there, and only then can the check pass (I-AB1)', async () => {
+        const requester = await newPrincipal();
+        const { goalRunId } = await proposeWith(requester, [absence()]);
+        await advance(goalRunId, requester);
+        expect(await attemptsOfA(goalRunId)).toEqual([]);
+        expect(await baselinesOf(goalRunId)).toMatchObject([
+          {
+            stepKey: null,
+            checkKey: 'gone',
+            take: 1,
+            call: absence().check,
+            status: 'pending',
+            attempts: 0,
+            observationId: null,
+          },
+        ]);
+        expect((await acceptanceOf(goalRunId))?.absenceBaselines).toMatchObject([
+          { stepKey: null, checkKey: 'gone', take: 1, status: 'pending', observationId: null },
+        ]);
+
+        // Advanced again before the look: nothing more is opened, and still no step starts.
+        await advance(goalRunId, requester);
+        expect(await baselinesOf(goalRunId)).toHaveLength(1);
+        expect(await attemptsOfA(goalRunId)).toEqual([]);
+
+        const calls = observeClient.calls.length;
+        expect(await lookBefore(goalRunId, RUNNING)).toEqual(['seen_present']);
+        expect(observeClient.calls.slice(calls)).toEqual([
+          {
+            target: expect.anything(),
+            input: {
+              operation: LOOKUP.name,
+              params: { name: 'web' },
+              onBehalfOf: requester,
+              operationDigest: expect.any(String),
+            },
+          },
+        ]);
+        const [seen] = await baselineEvidenceOf(goalRunId);
+        expect(seen?.content).toMatchObject({
+          purpose: 'absence_baseline',
+          goalRunId,
+          checkKey: 'gone',
+          take: 1,
+          operation: LOOKUP.name,
+          outcome: 'unsatisfied',
+          result: { name: 'web', state: 'running' },
+        });
+        expect(seen?.content).not.toHaveProperty('absent');
+        expect(seen?.content).not.toHaveProperty('stepKey');
+        expect(await baselinesOf(goalRunId)).toMatchObject([
+          { take: 1, status: 'seen_present', attempts: 1, observationId: seen?.id },
+        ]);
+        // The look sets the run due.
+        expect((await goalOf(goalRunId)).nextTickAt).not.toBeNull();
+
+        await advance(goalRunId, requester);
+        expect(await attemptsOfA(goalRunId)).toHaveLength(1);
+        await completeStep((await stepsOf(goalRunId)).a?.id as string, requester);
+        await advance(goalRunId, requester);
+        observeClient.answer = NOT_THERE;
+        expect(await observeNow(goalRunId, 'gone')).toBe('passed');
+        expect(await advance(goalRunId, requester)).toMatchObject({ status: 'completed' });
+        expect((await acceptanceOf(goalRunId))?.absenceBaselines).toMatchObject([
+          { checkKey: 'gone', take: 1, status: 'seen_present', observationId: seen?.id },
+        ]);
+        expect(await baselineAudit(goalRunId)).toMatchObject([
+          { outcome: 'opened', checkKey: 'gone', take: 1, operation: LOOKUP.name },
+          {
+            outcome: 'seen_present',
+            checkKey: 'gone',
+            take: 1,
+            attempt: 1,
+            observationId: seen?.id,
+          },
+        ]);
+      });
+
+      it('S11 「门确认不存在」 B-c: a thing the gate already says is not there before the goal’s work, or that the platform could not look for, pauses the run for the requester; their resume looks again', async () => {
+        const requester = await newPrincipal();
+        const { goalRunId } = await proposeWith(requester, [absence()]);
+        await advance(goalRunId, requester);
+        expect(await lookBefore(goalRunId, NOT_THERE)).toEqual(['never_seen_present']);
+        const [notThere] = await baselineEvidenceOf(goalRunId);
+        expect(notThere?.content).toMatchObject({
+          purpose: 'absence_baseline',
+          take: 1,
+          absent: { status: 404 },
+          result: null,
+        });
+        expect(await baselinesOf(goalRunId)).toMatchObject([
+          { take: 1, status: 'never_seen_present', observationId: notThere?.id },
+        ]);
+        await advance(goalRunId, requester);
+        expect(await attemptsOfA(goalRunId)).toEqual([]);
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'needs_decision',
+        });
+        expect(await pauseDetail(goalRunId)).toBe(
+          "acceptance check gone: before the goal's work the gate already answered that the thing is not there (never_seen_present), so the check could never show this goal removed it; revise the check's params or the plan, resume to look again, or cancel",
+        );
+
+        // Resumed: a second take, and the run waits for it as it did for the first.
+        await resumeAs(goalRunId, requester);
+        expect(await baselinesOf(goalRunId)).toMatchObject([
+          { take: 1, status: 'never_seen_present' },
+          { take: 2, status: 'pending', attempts: 0 },
+        ]);
+        expect((await baselineAudit(goalRunId)).at(-1)).toMatchObject({
+          outcome: 'opened',
+          take: 2,
+          after: { take: 1, status: 'never_seen_present' },
+          retake: true,
+        });
+        // The second look with this call (#786 UX P3: get_goal says which look it is).
+        expect((await acceptanceOf(goalRunId))?.absenceBaselines).toMatchObject([
+          { checkKey: 'gone', take: 2, look: 2, status: 'pending' },
+        ]);
+        await advance(goalRunId, requester);
+        expect(await attemptsOfA(goalRunId)).toEqual([]);
+
+        // The gate refuses the look: unavailable at once, and the run pauses again.
+        const refused = async (): Promise<ObserveResponse> => {
+          throw new GatekeeperClientError('refused by the gate', {
+            code: 'operation_refused',
+            status: 403,
+          });
+        };
+        expect(await lookBefore(goalRunId, refused)).toEqual(['unavailable']);
+        expect((await baselinesOf(goalRunId))[1]).toMatchObject({
+          take: 2,
+          status: 'unavailable',
+          observationId: null,
+          lastError: 'operation_refused',
+        });
+        await advance(goalRunId, requester);
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'needs_decision',
+        });
+        expect(await pauseDetail(goalRunId)).toBe(
+          "acceptance check gone: the platform could not look before the goal's work started (operation_refused); revise the check's params or the plan, resume to look again, or cancel",
+        );
+
+        // No answer: tried again with backoff, then unavailable.
+        await resumeAs(goalRunId, requester);
+        const silent = async (): Promise<ObserveResponse> => {
+          throw new GatekeeperClientError('could not connect', {
+            code: 'gate_unreachable',
+            status: 0,
+          });
+        };
+        const options = { maxAttempts: 2, backoffMs: () => 60_000 };
+        expect(await lookBefore(goalRunId, silent, options)).toEqual(['retry']);
+        expect((await baselinesOf(goalRunId))[2]).toMatchObject({
+          take: 3,
+          status: 'pending',
+          attempts: 1,
+          lastError: 'gate_unreachable',
+        });
+        expect(await lookBefore(goalRunId, silent, options)).toEqual(['unavailable']);
+        await advance(goalRunId, requester);
+        expect(await pauseDetail(goalRunId)).toBe(
+          "acceptance check gone: the platform could not look before the goal's work started (gate_unreachable); revise the check's params or the plan, resume to look again, or cancel",
+        );
+
+        // Seen at last, on a fourth take: the step starts.
+        await resumeAs(goalRunId, requester);
+        expect(await lookBefore(goalRunId, RUNNING)).toEqual(['seen_present']);
+        await advance(goalRunId, requester);
+        expect(await goalOf(goalRunId)).toMatchObject({ status: 'running' });
+        expect(await attemptsOfA(goalRunId)).toHaveLength(1);
+        expect((await baselinesOf(goalRunId)).map((row) => [row.take, row.status])).toEqual([
+          [1, 'never_seen_present'],
+          [2, 'unavailable'],
+          [3, 'unavailable'],
+          [4, 'seen_present'],
+        ]);
+      });
+
+      it('S11 「门确认不存在」 B-c: a pause supersedes a take not yet made and the resume opens another; a revision that keeps a check’s call keeps what was seen, one that changes it looks again', async () => {
+        const requester = await newPrincipal();
+        const { goalRunId } = await proposeWith(requester, [absence()]);
+        await advance(goalRunId, requester);
+        await pauseAs(goalRunId, requester);
+        expect(await baselinesOf(goalRunId)).toMatchObject([{ take: 1, status: 'superseded' }]);
+        expect(await lookBefore(goalRunId, RUNNING)).toEqual([]);
+        expect((await baselineAudit(goalRunId)).at(-1)).toMatchObject({
+          outcome: 'superseded',
+          take: 1,
+          reason: 'goal_moved',
+        });
+
+        await resumeAs(goalRunId, requester);
+        expect(await lookBefore(goalRunId, RUNNING)).toEqual(['seen_present']);
+        expect(await baselinesOf(goalRunId)).toMatchObject([
+          { take: 1, status: 'superseded' },
+          { take: 2, status: 'seen_present' },
+        ]);
+        // A take superseded before it settled was no look: take 2 is the first.
+        expect((await acceptanceOf(goalRunId))?.absenceBaselines).toMatchObject([
+          { take: 2, look: 1, status: 'seen_present' },
+        ]);
+
+        const revise = (basedOnRevision: number, acceptance: readonly unknown[]) =>
+          asRequester(requester, (client) =>
+            reviseGoalRun(client, workspaceId, {
+              goalRunId,
+              actor: by(requester),
+              basedOnRevision,
+              plan: { ...planOf([{ key: 'a' }, { key: 'b' }]), acceptance },
+            }),
+          );
+
+        // Revision 2 adds a step and keeps the check's call: the look already made stands.
+        await pauseAs(goalRunId, requester);
+        await revise(1, [absence()]);
+        await resumeAs(goalRunId, requester);
+        expect(await baselinesOf(goalRunId)).toHaveLength(2);
+        await advance(goalRunId, requester);
+        expect(await goalOf(goalRunId)).toMatchObject({ status: 'running' });
+        expect(await attemptsOfA(goalRunId)).toHaveLength(1);
+
+        // Revision 3 looks the check up under another name: a new take, and the console shows it.
+        const moved = { ...absence(), check: { ...absence().check, params: { name: 'api' } } };
+        await pauseAs(goalRunId, requester);
+        await revise(2, [moved]);
+        await resumeAs(goalRunId, requester);
+        expect(await baselinesOf(goalRunId)).toMatchObject([
+          { take: 1, status: 'superseded' },
+          { take: 2, status: 'seen_present', call: absence().check },
+          { take: 3, status: 'pending', call: moved.check },
+        ]);
+        expect((await acceptanceOf(goalRunId))?.absenceBaselines).toMatchObject([
+          { checkKey: 'gone', take: 3, look: 1, status: 'pending' },
+        ]);
+        const calls = observeClient.calls.length;
+        expect(await lookBefore(goalRunId, RUNNING)).toEqual(['seen_present']);
+        expect(observeClient.calls.slice(calls)).toMatchObject([
+          { input: { params: { name: 'api' } } },
+        ]);
+
+        // Revision 4 re-calls the check after step a started: a "not there" now may be step a's
+        // doing, so the pause says the look came after the work began rather than before it.
+        const late = { ...absence(), check: { ...absence().check, params: { name: 'old-api' } } };
+        await pauseAs(goalRunId, requester);
+        await revise(3, [late]);
+        await resumeAs(goalRunId, requester);
+        expect(await lookBefore(goalRunId, NOT_THERE)).toEqual(['never_seen_present']);
+        await advance(goalRunId, requester);
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'needs_decision',
+        });
+        expect(await pauseDetail(goalRunId)).toBe(
+          "acceptance check gone: the platform first looked after the goal's steps had started (the plan changed the check) and the gate answered that the thing is not there (never_seen_present) — an earlier step may have removed it, or the params name something else; either way the check could never show this goal removed it; revise the check's params or the plan, resume to look again, end the run on the requester's word (end_goal), or cancel",
+        );
+      });
+
+      it('S11 「门确认不存在」 B-c: an absence check with no look that saw the thing is unavailable without the gate being asked, and the run pauses naming it', async () => {
+        const requester = await newPrincipal();
+        const { goalRunId } = await verifyingGoal(requester, [absence()]);
+        // The look the run went by is gone (as no path of the platform removes it).
+        await raw(
+          'delete from goal_absence_baselines where workspace_id = $1 and goal_run_id = $2',
+          [workspaceId, goalRunId],
+        );
+        observeClient.answer = NOT_THERE;
+        const calls = observeClient.calls.length;
+        expect(await observeNow(goalRunId, 'gone')).toBe('unavailable');
+        expect(observeClient.calls).toHaveLength(calls);
+        expect(await evidenceOf(goalRunId, 'gone')).toEqual([]);
+        expect((await rowsOf(goalRunId))[0]).toMatchObject({
+          status: 'unavailable',
+          observationId: null,
+          lastError: 'never_seen_present',
+        });
+        await advance(goalRunId, requester);
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'needs_decision',
+          outcome: null,
+        });
+        expect(await pauseDetail(goalRunId)).toContain(
+          'acceptance check gone: the platform has no look with this call that saw the thing there (never_seen_present), so its absence now does not show this goal removed it',
+        );
+      });
+
       it('a plan’s acceptance observation names a published observe-class Operation of an enabled gate, with params that carry no credential', async () => {
         const requester = await newPrincipal();
         const unknownGate = randomUUID();
@@ -5927,6 +6295,10 @@ describe.runIf(DATABASE_URL !== undefined)(
           { key: 'b', dependsOn: ['a'] },
         ]);
         await advance(goalRunId, requester);
+        // S11 「门确认不存在」 B-c: an absence check's baseline sees the thing before step a starts.
+        if ((await seeAbsenceBaselines(goalRunId, observeClient)) > 0) {
+          await advance(goalRunId, requester);
+        }
         return { goalRunId, a: (await stepsOf(goalRunId)).a as StepRunRow };
       }
 

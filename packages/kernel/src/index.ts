@@ -49,6 +49,7 @@ import {
   markReconcileDue,
   maxProposedGoalsPerRequester,
   registerGoalWakeConsumer,
+  runAbsenceBaselineTick,
   runAcceptanceCheckTick,
   runGoalAdvancerTick,
   runReconcileCheckTick,
@@ -511,11 +512,12 @@ export interface CreateBackgroundServicesOptions {
    *  tests. */
   readonly goalReconcileCheckOptions?: ReconcileCheckOptions;
   /** S11 GO4a: how often the platform's acceptance observations run (`application/goal/
-   *  acceptance-check.ts`'s `runAcceptanceCheckTick`). Default `DEFAULT_ACCEPTANCE_CHECK_INTERVAL_MS`
-   *  (5 s). Wired with the goal advancer. */
+   *  acceptance-check.ts`'s `runAcceptanceCheckTick`) — and, first on each tick, the absence checks'
+   *  baselines (S11 「门确认不存在」 B-c, `absence-baseline.ts`). Default
+   *  `DEFAULT_ACCEPTANCE_CHECK_INTERVAL_MS` (5 s). Wired with the goal advancer. */
   readonly goalAcceptanceCheckIntervalMs?: number;
-  /** S11 GO4a: the acceptance observations' caps — `main()` reads `maxAttempts` from
-   *  `GOAL_ACCEPTANCE_CHECK_MAX_ATTEMPTS` and `maxDurationMs` from
+  /** S11 GO4a: the acceptance observations' caps, the baselines' too (B-c) — `main()` reads
+   *  `maxAttempts` from `GOAL_ACCEPTANCE_CHECK_MAX_ATTEMPTS` and `maxDurationMs` from
    *  `GOAL_ACCEPTANCE_CHECK_MAX_DURATION_MS` (defaults `DEFAULT_ACCEPTANCE_CHECK_MAX_ATTEMPTS`, 5,
    *  and `DEFAULT_ACCEPTANCE_CHECK_MAX_DURATION_MS`, 15 minutes) — and their lease and backoff,
    *  for tests. */
@@ -1068,9 +1070,17 @@ export function createBackgroundServices(
         goalAcceptanceCheckTimer = setInterval(() => {
           if (goalAcceptanceCheckRunning) return;
           goalAcceptanceCheckRunning = true;
-          runAcceptanceCheckTick(acceptanceCheckDeps, {
+          // S11 「门确认不存在」 B-c: the absence checks' baselines first, under the same options —
+          // a run waits on them before any step starts.
+          runAbsenceBaselineTick(acceptanceCheckDeps, {
             onError: (err) => onGoalAdvancerError(err),
           })
+            .catch(onGoalAdvancerError)
+            .then(() =>
+              runAcceptanceCheckTick(acceptanceCheckDeps, {
+                onError: (err) => onGoalAdvancerError(err),
+              }),
+            )
             .catch(onGoalAdvancerError)
             .finally(() => {
               goalAcceptanceCheckRunning = false;

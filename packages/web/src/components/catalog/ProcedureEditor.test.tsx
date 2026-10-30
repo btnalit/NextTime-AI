@@ -1613,6 +1613,8 @@ describe('ProcedureEditor (S6-A A2)', () => {
 
     // #780 UX P3-2: whoever writes the params is told what the confirm card tells the requester.
     expect(step.textContent).toContain('参数要正好指向目标要删掉的那个东西');
+    // B-c: wrong params pause the goal before its work, rather than passing the check.
+    expect(step.textContent).toContain('本来就没有的东西时，目标会暂停');
     // Legacy 498: said to whoever focuses the params, too.
     const paramsHint = within(step).getByText(/参数要正好指向目标要删掉的那个东西/);
     expect(

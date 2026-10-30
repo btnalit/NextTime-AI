@@ -115,6 +115,10 @@ const PURGE_COUNT_LABELS = {
   stepRuns: { zh: '步骤运行', en: 'Step runs' },
   goalAcceptanceChecks: { zh: '目标验收检查', en: 'Goal acceptance checks' },
   stepAcceptanceChecks: { zh: '步骤验收检查', en: 'Step acceptance checks' },
+  goalAbsenceBaselines: {
+    zh: '不存在检查的事先查看',
+    en: 'Absence checks’ looks beforehand',
+  },
   chats: { zh: '对话', en: 'Chats' },
   chatMessages: { zh: '消息', en: 'Messages' },
   activities: { zh: '活动', en: 'Activities' },
@@ -139,6 +143,7 @@ const PURGE_COUNT_LABELS = {
   changeItems: { zh: '安装记录里的改动项', en: 'Install record changes' },
   changeSegments: { zh: '安装记录', en: 'Install records' },
   connectionRequests: { zh: '连接申请', en: 'Connection requests' },
+  draftRejections: { zh: '草稿被拒绝的记录', en: 'Draft rejections' },
   gatekeeperPolicies: { zh: '按门的审批策略', en: 'Per-gate approval policies' },
   llmUsage: { zh: '模型用量记录', en: 'Model usage records' },
   ontologyVersions: { zh: '本体版本', en: 'Ontology versions' },

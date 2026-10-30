@@ -271,7 +271,7 @@ const DETAIL = {
       output: null,
     },
   ],
-  acceptance: { rounds: [], steps: [], overriddenChecks: [] },
+  acceptance: { rounds: [], steps: [], absenceBaselines: [], overriddenChecks: [] },
   leftovers: null,
 };
 
@@ -637,8 +637,9 @@ test.describe('S11 GO6: operations on a goal (stand-in reads and operations)', (
  * goal's (the old certificate is gone) and remove-old's own (its host binding is gone). Beside each,
  * and on the confirm card, what its "not there" rests on: the answers the Operation declares mean
  * so and who confirmed, publishing it, that the gate's credentials can see what it looks up — or,
- * for an Operation nobody confirmed, that the platform does not make the check. `list_operations`
- * is a stand-in like the goal reads.
+ * for an Operation nobody confirmed, that the platform does not make the check. B-c: under each,
+ * how the platform's look before the goal's work went (`absenceBaselines`). `list_operations` is a
+ * stand-in like the goal reads.
  */
 test.describe('S11 「门确认不存在」 B: absence checks on a goal (stand-in reads)', () => {
   test.skip(!OWNER_API_KEY, 'set WEB_E2E_BASE_URL and WEB_E2E_API_KEY to run this suite');
@@ -663,6 +664,15 @@ test.describe('S11 「门确认不存在」 B: absence checks on a goal (stand-i
       { kind: 'observe_absent', key: 'old-cert-gone', check: OLD_CERT },
       ...PLAN_V1.acceptance,
     ],
+  };
+  /** B-c: the platform's look before the goal's work, settled once. */
+  const LOOK = {
+    take: 1,
+    look: 1,
+    attempts: 1,
+    lastError: null,
+    observationId: null,
+    createdAt: T0,
   };
   const operation = (name: string, extra: Record<string, unknown>) => ({
     gatekeeperId: GATE,
@@ -714,7 +724,36 @@ test.describe('S11 「门确认不存在」 B: absence checks on a goal (stand-i
                   steps: [],
                   usage: { tokens: 0, steps: 0, revisions: 0 },
                 }
-              : { ...DETAIL, planRevision },
+              : {
+                  ...DETAIL,
+                  ...run({ pauseReason: 'needs_decision' }),
+                  planRevision,
+                  // B-c: the platform saw the old certificate before the work; revision 2 added
+                  // remove-old's check once the steps had started (its look comes after their
+                  // attempts), and its Operation nobody confirmed, so that look was refused.
+                  acceptance: {
+                    ...DETAIL.acceptance,
+                    absenceBaselines: [
+                      {
+                        ...LOOK,
+                        stepKey: null,
+                        checkKey: 'old-cert-gone',
+                        status: 'seen_present',
+                        observationId: '6d1f0c2a-7b9e-4e1a-9c33-0a7b5e2f1c01',
+                        settledAt: T0,
+                      },
+                      {
+                        ...LOOK,
+                        stepKey: 'remove-old',
+                        checkKey: 'binding-gone',
+                        status: 'unavailable',
+                        lastError: 'absence_not_reviewed',
+                        createdAt: T3,
+                        settledAt: T3,
+                      },
+                    ],
+                  },
+                },
           ),
         );
       });
@@ -743,11 +782,24 @@ test.describe('S11 「门确认不存在」 B: absence checks on a goal (stand-i
       await expect(acceptance).toContainText(
         '以参数 {"serial":"old-2025"} 调用 cert.get，门回答“要查的东西不存在”才算通过',
       );
+      await expect(acceptance.getByTestId('goal-absence-baseline')).toHaveAttribute(
+        'data-baseline',
+        'seen_present',
+      );
+      await expect(acceptance.getByTestId('goal-absence-baseline')).toContainText(
+        '之后门回答它不在，就说明是在目标运行期间删掉的。',
+      );
       const removeOld = page.locator('[data-testid="goal-step"][data-step-key="remove-old"]');
       await removeOld.getByText(/这一步的验收检查/).click();
       const stepBasis = removeOld.getByTestId('goal-absence-basis');
       await expect(stepBasis).toHaveAttribute('data-basis', 'unconfirmed');
       await expect(stepBasis).toContainText('所以平台不做这条检查。');
+      const stepLook = removeOld.getByTestId('goal-absence-baseline');
+      await expect(stepLook).toHaveAttribute('data-baseline', 'unavailable');
+      // #786 review #501: a look made after the work began does not say "before the work".
+      await expect(stepLook).toContainText('平台没能看它在不在：');
+      await expect(stepLook).toContainText('所以目标暂停，没有往下做');
+      await expect(stepLook).not.toContainText('开始前');
       await page.screenshot({
         path: testInfo.outputPath(`goal-absence-${width}.png`),
         fullPage: true,
@@ -770,6 +822,9 @@ test.describe('S11 「门确认不存在」 B: absence checks on a goal (stand-i
       await expect(
         listed.locator('[data-testid="goal-absence-basis"][data-basis="unconfirmed"]'),
       ).toHaveCount(1);
+      await expect(listed.getByTestId('goal-confirm-absence-params')).toContainText(
+        '门说它本来就不在时，目标会暂停等你处理',
+      );
       await page.screenshot({
         path: testInfo.outputPath(`goal-confirm-absence-${width}.png`),
         fullPage: true,

@@ -328,6 +328,43 @@ describe.runIf(DATABASE_URL !== undefined)(
         ).rejects.toThrow(/is entry-kind/);
       });
 
+      it('legacy 492: publish answers another principal’s WorkerDefinition draft as a version nothing has', async () => {
+        const othersDraft = await inTx(otherPrincipalId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, otherPrincipalId, {
+            kind: 'worker',
+            definition: { systemPrompt: 'A private worker draft.' },
+          }),
+        );
+        const publishAs = async (principalId: string, step: { id: string; version: number }) => {
+          const draft = await inTx(proposerId, (client) =>
+            proposeProcedure(client, workspaceId, proposerId, {
+              name: `proc-draft-worker-${randomUUID()}`,
+              description: 'Names a WorkerDefinition version that is only a draft.',
+              steps: [{ kind: 'worker', definitionId: step.id, version: step.version }],
+            }),
+          );
+          return inTx(principalId, (client) =>
+            publishProcedure(client, workspaceId, principalId, draft.id, {
+              principalId,
+              role: 'owner',
+            }),
+          ).then(
+            () => new Error('published'),
+            (err: unknown) => err as Error,
+          );
+        };
+        const unknown = { id: randomUUID(), version: 1 };
+        const theirs = await publishAs(ownerId, othersDraft);
+        const nothing = await publishAs(ownerId, unknown);
+        expect(theirs).toBeInstanceOf(ProcedureStepReferenceError);
+        expect(theirs.message).not.toMatch(/draft/);
+        expect(theirs.message.replaceAll(othersDraft.id, '<id>')).toBe(
+          nothing.message.replaceAll(unknown.id, '<id>'),
+        );
+        // Its own proposer is told it is not published yet.
+        expect((await publishAs(otherPrincipalId, othersDraft)).message).toMatch(/status: draft/);
+      });
+
       it('publish refuses a draft written before propose checked the kind, and leaves it a draft', async () => {
         const id = await legacyDraft([
           { kind: 'worker', definitionId: entryDefinitionId, version: entryDefinitionVersion },

@@ -18,6 +18,11 @@ import { redactedForAudit, refuseCredentialText } from '../../governance/redacti
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { listGoalRunLiveTaskSteps } from '../task/index.js';
 import {
+  type AbsenceBaselineLook,
+  currentAbsenceBaselines,
+  declaredAbsenceChecks,
+} from './absence-baselines.js';
+import {
   type AcceptanceCheckRow,
   listAcceptanceChecks,
   listStepAcceptanceChecks,
@@ -62,9 +67,10 @@ import type { GoalControlActor, GoalRunRow } from './types.js';
  *     may still run: no step running or waiting, no Task live, no request in flight (one could
  *     still execute after the end — cancel the run instead, which withdraws them). Steps not
  *     started (`pending`, `ready`) are skipped; a failed step stays failed — that is what it was.
- *   - {@link readGoalAcceptance}: the verification rounds and their checks, and what the outcome
- *     rests on — the read model the console tells "the platform's checks passed" from "checks did
- *     not pass, the requester declared it achieved" by (GO6), never by parsing a pause's detail.
+ *   - {@link readGoalAcceptance}: the verification rounds and their checks, the baselines its
+ *     absence checks go by (S11 「门确认不存在」 B-c), and what the outcome rests on — the read model
+ *     the console tells "the platform's checks passed" from "checks did not pass, the requester
+ *     declared it achieved" by (GO6), never by parsing a pause's detail.
  */
 
 /** The longest note the requester gives with an outcome (`@nexttime/shared`'s, which the
@@ -424,6 +430,10 @@ export interface GoalAcceptanceView {
   /** Steps that verify their own work (S11 GO4b): every step with an acceptance round or waiting on
    *  one, in creation order. */
   readonly steps: readonly StepAcceptanceView[];
+  /** S11 「门确认不存在」 B-c: the baseline each absence check of the plan in force goes by — the
+   *  goal's, then its steps' in plan order — the latest take of the call the plan makes, with which
+   *  look with that call it is; a check without one has none listed. */
+  readonly absenceBaselines: readonly AbsenceBaselineLook[];
   /** What a completed run's outcome rests on — `null` until it completes. */
   readonly outcome: {
     readonly outcome: ObjectiveOutcome;
@@ -475,11 +485,18 @@ export async function readGoalAcceptance(
       })),
     });
   }
+  const inForce = await getPlanRevision(client, workspaceId, goalRunId, goal.currentRevision ?? 1);
+  const absenceChecks = declaredAbsenceChecks(inForce?.plan) ?? [];
+  const baselines =
+    absenceChecks.length > 0
+      ? await currentAbsenceBaselines(client, workspaceId, goalRunId, absenceChecks)
+      : new Map<string, AbsenceBaselineLook>();
   return {
     goalRunId: goal.id,
     status: goal.status,
     rounds: roundViews(rows, (round, checkKey) => overridden.has(`${round}:${checkKey}`)),
     steps,
+    absenceBaselines: [...baselines.values()],
     outcome:
       goal.status === 'completed' && goal.outcome && goal.outcomeBasis
         ? {
