@@ -4605,6 +4605,10 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **接入**：dispatch（Handle 通道，结果、错误与 `afterCommit` 结果）、`spawnWorkerRun`、`sendChatMessage`、`AgentHostRuntime.startTurn`（系统提示词改由 `startTurn` 拼好，扫描和发出的是同一个值）；检查本身失败时一律按拒绝处理，日志不写内容。
   - **返回与审计**：403 `evaluation_content_withheld` / WS `-32018`，只有 `code`、`where`、`rolledBack` 和固定文案；审计 `evaluation.content_withheld` 按 `where` 区分能力结果、能力错误（`capability_error`）、Worker 启动（`worker_start`）、对话消息（`entry_turn`）、入口启动（`entry_start`），不写调用参数。
   - **后续**：探针风险（遗留 514）在 E3-2 加命中次数阈值时修；回放生成用例与 holdout 的冲突（遗留 517）在做回放生成前定；下一步 E3-2 runs / trials。
+- 实现说明（E3-2-0 评测容器出网全拒，#818，2026-10-30 合入，29b5fcb；无迁移）：
+  - egress-proxy 来源条目新增 `denyAll`（拒绝原因 `source-deny-all`）；worker-supervisor `/task/spawn` 新增可选 `egressDenyAll`，容器带标签 `nexttime.egress-deny-all=true`，reconcile 兜底按标签重新登记；登记失败的路径一律不让评测运行在没有登记的情况下跑。
+  - 运维前提：主机 Docker Engine ≥ 26.0.0（CVE-2024-29018，否则 internal 网络经内嵌 DNS 可解析外网名字），见 release.md §3.73；回滚 supervisor 前先终止带标签的 Task（遗留 518）。启动到写入条目之间的毫秒级窗口是原有问题（遗留 519）。
+  - **下一步**：E3-2a（评测运行首次设置 `egressDenyAll`）。
 - 2026-10-23 设计输入（victor 定分叉 2 = b，与自进化闭环审查 §2.3–§2.5、§7.1）：回归断言失败或判 `worse` 时，发布人要逐条确认失败项并写理由，记审计（同 10-09「已核对凭据」）；`inconclusive` 只显示、不加确认（避免确认疲劳）；按每月测试额度，MVP 主力是确定性回归棘轮 + 大效应机制筛，样本不够判 `inconclusive`，不显示成「在噪声内」；δ 与 k 改为在夹具上做 A/A 重跑校准（主机只有验收账号，遗留 230）。
 
 **GO16 — 沉淀提议：WorkerSpec 组合提议为 WorkerDefinition**（见 `global-roadmap-2026-10-16.md` §4）
