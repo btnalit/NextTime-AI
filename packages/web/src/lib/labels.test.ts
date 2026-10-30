@@ -40,6 +40,7 @@ import {
   epistemicStatusLabel,
   label,
   principalKindLabel,
+  principalShownName,
   roleLabel,
   sourceKindLabel,
   sourceVisibilityLabel,
@@ -81,6 +82,21 @@ describe('lib/labels', () => {
     const entry = { zh: '中文', en: 'English' };
     expect(label(entry, zhT)).toBe('中文');
     expect(label(entry, enT)).toBe('English');
+  });
+
+  it('an internal service Principal reads by what it is, never by its reserved __…__ name', () => {
+    expect(principalShownName('__evaluation_service__', zhT)).toBe('评测服务');
+    expect(principalShownName('__evaluation_service__', enT)).toBe('Evaluation service');
+    expect(principalShownName('__gatekeeper_service__', zhT)).toBe('门观测服务');
+    expect(principalShownName('__draft_reaper__', enT)).toBe('Draft cleanup service');
+    // One this console does not know yet, and inherited names, read generically.
+    for (const unknown of ['__future_service__', '__proto__', '__constructor__'])
+      expect(principalShownName(unknown, zhT)).toBe('平台内部服务');
+    // Ordinary names (an underscore only at one end included) and a missing one pass through.
+    expect(principalShownName('Alice', zhT)).toBe('Alice');
+    expect(principalShownName('__alice', zhT)).toBe('__alice');
+    expect(principalShownName(null, zhT)).toBeNull();
+    expect(principalShownName(undefined, zhT)).toBeNull();
   });
 
   it('every PrincipalKind has a bilingual label (exhaustive — a new kind fails tsc first)', () => {

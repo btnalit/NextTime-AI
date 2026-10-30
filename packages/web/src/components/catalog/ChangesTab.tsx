@@ -22,7 +22,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
-import { operationFieldLabel } from '../../lib/labels.js';
+import { operationFieldLabel, principalShownName } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
 import { BLAST_RADIUS_TONES, labelText } from '../../lib/status-tone.js';
 import { Button } from '../kit/button.js';
@@ -55,8 +55,8 @@ export function sourceLabel(segment: Pick<ChangeSegmentWire, 'source'>, t: Trans
   return t(`能力包 ${name} v${version}`, `Pack ${name} v${version}`);
 }
 
-function principalName(ref: ChangePrincipalRefWire): string {
-  return ref.displayName ?? shortId(ref.id);
+function principalName(ref: ChangePrincipalRefWire, t: Translate): string {
+  return principalShownName(ref.displayName, t) ?? shortId(ref.id);
 }
 
 /** Who applied it, as one phrase. `platform`: the platform installed it with the workspace (it is
@@ -65,8 +65,8 @@ function appliedByText(segment: ChangeSegmentWire, t: Translate): string {
   return segment.channel === 'platform'
     ? t('创建工作区时由平台安装', 'Installed by the platform with the workspace')
     : t(
-        `由 ${principalName(segment.appliedBy)} 应用`,
-        `Applied by ${principalName(segment.appliedBy)}`,
+        `由 ${principalName(segment.appliedBy, t)} 应用`,
+        `Applied by ${principalName(segment.appliedBy, t)}`,
       );
 }
 
@@ -527,8 +527,8 @@ function ChangeSegmentDetail({
                   value: (
                     <span>
                       {t(
-                        `由 ${principalName(segment.rolledBackBy)} 撤销于 `,
-                        `By ${principalName(segment.rolledBackBy)}, `,
+                        `由 ${principalName(segment.rolledBackBy, t)} 撤销于 `,
+                        `By ${principalName(segment.rolledBackBy, t)}, `,
                       )}
                       <span data-volatile="">{formatDateTime(segment.rolledBackAt)}</span>
                     </span>
@@ -541,8 +541,8 @@ function ChangeSegmentDetail({
       {segment.channel === 'platform' ? (
         <p className="text-3 text-small">
           {t(
-            `这是平台在创建工作区时代为安装的，记在第一位所有者 ${principalName(segment.appliedBy)} 名下。`,
-            `The platform installed this when it created the workspace; it is recorded under the first owner, ${principalName(segment.appliedBy)}.`,
+            `这是平台在创建工作区时代为安装的，记在第一位所有者 ${principalName(segment.appliedBy, t)} 名下。`,
+            `The platform installed this when it created the workspace; it is recorded under the first owner, ${principalName(segment.appliedBy, t)}.`,
           )}
         </p>
       ) : null}
@@ -637,8 +637,8 @@ function ChangeItemView({
           {item.widening.map((w) => wideningText(w, t)).join(t('；', '; '))}
           {item.confirmedBy
             ? t(
-                `（${principalName(item.confirmedBy)} 已逐项确认）`,
-                ` (confirmed by ${principalName(item.confirmedBy)})`,
+                `（${principalName(item.confirmedBy, t)} 已逐项确认）`,
+                ` (confirmed by ${principalName(item.confirmedBy, t)})`,
               )
             : null}
         </span>

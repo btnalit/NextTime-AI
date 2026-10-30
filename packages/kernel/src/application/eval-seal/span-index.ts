@@ -107,6 +107,13 @@ export class SealSpanIndex {
     return eachWindowKey(normalized, (key) => this.#keys.has(key));
   }
 
+  /** Whether some window of `normalized` is in the index and not in `allowed` (S10 E3-2a: an
+   *  evaluation Task's own input, which its Worker is meant to read). */
+  holdsWindowOutside(normalized: string, allowed: SealSpanIndex): boolean {
+    if (this.#keys.size === 0) return false;
+    return eachWindowKey(normalized, (key) => this.#keys.has(key) && !allowed.#keys.has(key));
+  }
+
   get size(): number {
     return this.#keys.size;
   }

@@ -12431,6 +12431,65 @@
     "group": "evaluation",
     "minRole": "member",
     "mode": "observe",
+    "name": "get_eval_budget",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "monthlyBudgetUsd": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "periodEnd": {
+          "type": "string"
+        },
+        "periodStart": {
+          "type": "string"
+        },
+        "spentUsd": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "trialCostUsd": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unpricedTrials": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "monthlyBudgetUsd",
+        "spentUsd",
+        "periodStart",
+        "periodEnd",
+        "trialCostUsd",
+        "unpricedTrials"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "actsForPerson": true,
+    "channel": "human",
+    "group": "evaluation",
+    "minRole": "member",
+    "mode": "observe",
     "name": "get_eval_case",
     "params": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -12884,6 +12943,319 @@
         "retiredInVersion",
         "retireReason",
         "supersededBy"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "actsForPerson": true,
+    "channel": "human",
+    "group": "evaluation",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "get_eval_run",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "runId": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "runId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "createdAt": {
+          "type": "string"
+        },
+        "createdBy": {
+          "type": "string"
+        },
+        "finishedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "k": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "enum": [
+            "case_trial"
+          ],
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "running",
+            "finished"
+          ],
+          "type": "string"
+        },
+        "suiteId": {
+          "type": "string"
+        },
+        "suiteVersion": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "trials": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "arm": {
+                "enum": [
+                  "baseline"
+                ],
+                "type": "string"
+              },
+              "assertions": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "index": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "note": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "outcome": {
+                      "enum": [
+                        "satisfied",
+                        "unsatisfied",
+                        "undetermined"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "index",
+                    "outcome",
+                    "note"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "calls": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "answer": {
+                      "enum": [
+                        "data",
+                        "absent",
+                        "error",
+                        "unanswered"
+                      ],
+                      "type": "string"
+                    },
+                    "at": {
+                      "type": "string"
+                    },
+                    "gate": {
+                      "type": "string"
+                    },
+                    "gatekeeperId": {
+                      "type": "string"
+                    },
+                    "mode": {
+                      "enum": [
+                        "observe",
+                        "execute"
+                      ],
+                      "type": "string"
+                    },
+                    "operation": {
+                      "type": "string"
+                    },
+                    "params": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "ruleIndex": {
+                      "anyOf": [
+                        {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "seq": {
+                      "exclusiveMinimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "seq",
+                    "gatekeeperId",
+                    "gate",
+                    "operation",
+                    "mode",
+                    "params",
+                    "ruleIndex",
+                    "answer",
+                    "at"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "caseId": {
+                "type": "string"
+              },
+              "caseTitle": {
+                "type": "string"
+              },
+              "costUsd": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "error": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "timeout",
+                      "no_result",
+                      "worker_failed",
+                      "spawn_failed",
+                      "spawn_lost",
+                      "run_lost",
+                      "budget_exhausted",
+                      "terminated",
+                      "cancelled",
+                      "withheld"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "finishedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "rep": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "result": {},
+              "startedAt": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "running",
+                  "scored",
+                  "errored"
+                ],
+                "type": "string"
+              },
+              "taskId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tokens": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "verdict": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "passed",
+                      "failed"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "arm",
+              "caseId",
+              "caseTitle",
+              "rep",
+              "status",
+              "verdict",
+              "error",
+              "taskId",
+              "assertions",
+              "calls",
+              "costUsd",
+              "tokens",
+              "startedAt",
+              "finishedAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "workerDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "version": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "version"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "suiteId",
+        "suiteVersion",
+        "kind",
+        "workerDefinition",
+        "k",
+        "status",
+        "createdBy",
+        "createdAt",
+        "finishedAt",
+        "trials"
       ],
       "type": "object"
     },
@@ -21139,6 +21511,19 @@
             }
           ]
         },
+        "purpose": {
+          "anyOf": [
+            {
+              "enum": [
+                "evaluation"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "rejectedOutput": {
           "anyOf": [
             {
@@ -21689,7 +22074,8 @@
         "outputSchema",
         "rejectedOutput",
         "reworkOf",
-        "observeScope"
+        "observeScope",
+        "purpose"
       ],
       "type": "object"
     },
@@ -25693,6 +26079,161 @@
             "type": "object"
           },
           "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "actsForPerson": true,
+    "channel": "human",
+    "group": "evaluation",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "list_eval_runs",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "caseId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "suiteId": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "suiteId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "caseIds": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "costUsd": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "createdBy": {
+                "type": "string"
+              },
+              "errored": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "failed": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "finishedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "k": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "case_trial"
+                ],
+                "type": "string"
+              },
+              "passed": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "running": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "status": {
+                "enum": [
+                  "running",
+                  "finished"
+                ],
+                "type": "string"
+              },
+              "suiteId": {
+                "type": "string"
+              },
+              "suiteVersion": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "workerDefinition": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "id",
+                  "version"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "id",
+              "suiteId",
+              "suiteVersion",
+              "kind",
+              "workerDefinition",
+              "k",
+              "status",
+              "createdBy",
+              "createdAt",
+              "finishedAt",
+              "caseIds",
+              "passed",
+              "failed",
+              "errored",
+              "running",
+              "costUsd"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
         }
       },
       "required": [
@@ -31869,6 +32410,19 @@
                   }
                 ]
               },
+              "purpose": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "evaluation"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "rejectedOutput": {
                 "anyOf": [
                   {
@@ -32419,7 +32973,8 @@
               "outputSchema",
               "rejectedOutput",
               "reworkOf",
-              "observeScope"
+              "observeScope",
+              "purpose"
             ],
             "type": "object"
           },
@@ -51124,6 +51679,329 @@
         "memberCount",
         "owners",
         "createdAt"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
+    "actsForPerson": true,
+    "channel": "human",
+    "group": "evaluation",
+    "minRole": "builder",
+    "mode": "execute",
+    "name": "start_eval_case_trial",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "caseId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "suiteId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "suiteVersion": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "suiteId",
+        "suiteVersion",
+        "caseId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "createdAt": {
+          "type": "string"
+        },
+        "createdBy": {
+          "type": "string"
+        },
+        "finishedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "k": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "enum": [
+            "case_trial"
+          ],
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "running",
+            "finished"
+          ],
+          "type": "string"
+        },
+        "suiteId": {
+          "type": "string"
+        },
+        "suiteVersion": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "trials": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "arm": {
+                "enum": [
+                  "baseline"
+                ],
+                "type": "string"
+              },
+              "assertions": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "index": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "note": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "outcome": {
+                      "enum": [
+                        "satisfied",
+                        "unsatisfied",
+                        "undetermined"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "index",
+                    "outcome",
+                    "note"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "calls": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "answer": {
+                      "enum": [
+                        "data",
+                        "absent",
+                        "error",
+                        "unanswered"
+                      ],
+                      "type": "string"
+                    },
+                    "at": {
+                      "type": "string"
+                    },
+                    "gate": {
+                      "type": "string"
+                    },
+                    "gatekeeperId": {
+                      "type": "string"
+                    },
+                    "mode": {
+                      "enum": [
+                        "observe",
+                        "execute"
+                      ],
+                      "type": "string"
+                    },
+                    "operation": {
+                      "type": "string"
+                    },
+                    "params": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "ruleIndex": {
+                      "anyOf": [
+                        {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "seq": {
+                      "exclusiveMinimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "seq",
+                    "gatekeeperId",
+                    "gate",
+                    "operation",
+                    "mode",
+                    "params",
+                    "ruleIndex",
+                    "answer",
+                    "at"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "caseId": {
+                "type": "string"
+              },
+              "caseTitle": {
+                "type": "string"
+              },
+              "costUsd": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "error": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "timeout",
+                      "no_result",
+                      "worker_failed",
+                      "spawn_failed",
+                      "spawn_lost",
+                      "run_lost",
+                      "budget_exhausted",
+                      "terminated",
+                      "cancelled",
+                      "withheld"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "finishedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "rep": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "result": {},
+              "startedAt": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "running",
+                  "scored",
+                  "errored"
+                ],
+                "type": "string"
+              },
+              "taskId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tokens": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "verdict": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "passed",
+                      "failed"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "arm",
+              "caseId",
+              "caseTitle",
+              "rep",
+              "status",
+              "verdict",
+              "error",
+              "taskId",
+              "assertions",
+              "calls",
+              "costUsd",
+              "tokens",
+              "startedAt",
+              "finishedAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "workerDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "version": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "version"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "suiteId",
+        "suiteVersion",
+        "kind",
+        "workerDefinition",
+        "k",
+        "status",
+        "createdBy",
+        "createdAt",
+        "finishedAt",
+        "trials"
       ],
       "type": "object"
     },

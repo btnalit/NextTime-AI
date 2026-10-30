@@ -11,7 +11,8 @@
  *     application/task or application/goal — they consume domain events and read-only views
  *     instead.
  *   - application/eval (S10 E3, I-E4) is imported only by the gateway's eval-handlers.ts and the
- *     transports' error mapping.
+ *     transports' error mapping; application/eval-session (E3-2a, its Handle side) only by the
+ *     gateway's evaluation-session.ts.
  *   - no package may reach into another package's internal src/ files; only the published
  *     @nexttime/<pkg> entry point is a legal cross-package import.
  *
@@ -97,17 +98,37 @@ module.exports = {
       comment:
         'S10 E3 (docs/s10-evolution-plan-2026-10-04.md §5.5 封闭, I-E4): evaluation data is open to ' +
         'people and closed to agents. application/eval is reached only through the human-channel ' +
-        'capabilities in application/gateway/eval-handlers.ts (and the transports map its errors), ' +
-        'so no Handle-channel handler can read a suite, a case or a score by importing it.',
+        'capabilities in application/gateway/eval-handlers.ts (and the transports map its errors; ' +
+        "the composition root runs its trial runner's tick), so no Handle-channel handler can read " +
+        'a suite, a case or a score by importing it.',
       from: {
         path: '^packages/kernel/src/',
         pathNot: [
           '^packages/kernel/src/application/eval/',
           '^packages/kernel/src/application/gateway/eval-handlers\\.ts$',
           '^packages/kernel/src/interfaces/(http/capability-route|ws/rpc)\\.ts$',
+          '^packages/kernel/src/index\\.ts$',
         ],
       },
       to: { path: '^packages/kernel/src/application/eval/' },
+    },
+    {
+      name: 'kernel-eval-session-imported-only-by-gateway-second-layer',
+      severity: 'error',
+      comment:
+        'S10 E3-2a (docs/s10-evolution-plan-2026-10-04.md §5.5 封闭): application/eval-session is the ' +
+        "Handle side of an evaluation — it reads a trial's case and fixture gates to answer its " +
+        "Worker's calls. Only the gateway's second layer for an evaluation session " +
+        '(application/gateway/evaluation-session.ts) may import it, so no other Handle-channel ' +
+        'handler can reach a case through it.',
+      from: {
+        path: '^packages/kernel/src/',
+        pathNot: [
+          '^packages/kernel/src/application/eval-session/',
+          '^packages/kernel/src/application/gateway/evaluation-session\\.ts$',
+        ],
+      },
+      to: { path: '^packages/kernel/src/application/eval-session/' },
     },
     {
       name: 'no-cross-package-internal-import',

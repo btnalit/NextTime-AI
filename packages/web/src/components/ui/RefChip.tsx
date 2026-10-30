@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { useT } from '../../lib/i18n.js';
+import { principalShownName } from '../../lib/labels.js';
 import { CopyId } from './CopyId.js';
 
 /** The five reference kinds of docs/console-completion-plan.md §5.9 "RefChip". */
@@ -32,9 +33,12 @@ export interface RefChipProps {
  * missing mapping is noticed rather than mistaken for a name. Pure presentation: it never calls a
  * capability itself; callers resolve names with `useRefNames` over a list they already hold.
  */
-export function RefChip({ kind, id, name, href, size = 'm', testId }: RefChipProps) {
+export function RefChip({ kind, id, name: givenName, href, size = 'm', testId }: RefChipProps) {
   const t = useT();
   const label = t(KIND_LABEL[kind].zh, KIND_LABEL[kind].en);
+  // An internal service Principal reads by what it is (「评测服务」), never by its reserved
+  // `__…__` name, whichever caller handed the name in.
+  const name = kind === 'principal' ? principalShownName(givenName, t) : givenName;
   const bare = name === undefined || name === null || name === '';
   const classes = [
     'ref-chip',

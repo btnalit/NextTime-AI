@@ -13,7 +13,7 @@
  *
  *   POST /task/spawn                {taskId, workerRunId, workspaceId, onBehalfOf,
  *                                     capabilityHandle, image?, model?, skills?, skillsInline?,
- *                                     timeoutSec?, egressDeny?}
+ *                                     timeoutSec?, egressDeny?, egressDenyAll?}
  *                                     -> 200 {containerId, ip, runtime} / 403 (image not
  *                                        allowlisted) / 400
  *   POST /task/:workerRunId/terminate -> 204 | 404
@@ -117,6 +117,12 @@ export interface TaskSpawnInput {
    *  (`packages/worker-supervisor`'s `config.ts` `TaskSpawnRequestSchema`) — the invoked
    *  WorkerDefinition's own egress deny list, never re-derived by this client. */
   readonly egressDeny?: readonly string[];
+  /** S10 E3-2a: `true` for an evaluation Task's run — its egress source is written deny-all
+   *  (worker-supervisor's `egressDenyAll`, E3-2-0), so the run reaches nothing outside the
+   *  platform. Set by `spawnWorkerRun` from the Task's own `purpose`, never by a caller. A
+   *  supervisor that predates the field refuses the spawn (strict schema → 400), so an evaluation
+   *  run never starts without it. */
+  readonly egressDenyAll?: boolean;
   /** P-A2: the Worker container's system prompt (the WorkerDefinition's own `systemPrompt` plus
    *  the platform's `instanceInstructions`), written by worker-supervisor into the Task's
    *  platform directory outside its workspace (read-only `/opt/nexttime/platform/system-prompt.md`

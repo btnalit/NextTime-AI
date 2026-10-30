@@ -77,3 +77,27 @@ export class EvalFixtureGateInUseError extends Error {
     this.details = { caseCount: cases.length, cases: cases.slice(0, IN_USE_CASES_SHOWN) };
   }
 }
+
+/** 404 not_found: no evaluation run with this id in the workspace (E3-2a). */
+export class EvalRunNotFoundError extends Error {
+  constructor(runId: string) {
+    super(`evaluation run ${runId} not found`);
+    this.name = 'EvalRunNotFoundError';
+  }
+}
+
+/** 429 evaluation_budget_exhausted (E3-2a): this UTC month's evaluation budget
+ *  (`evaluation.monthly_cost_budget_usd`) is spent, so no run is started. `details` carries the
+ *  budget and what was spent, in USD. The status and family are the daily cost budget's
+ *  (`daily_cost_exceeded`): a spending limit, lifted when the period turns or an owner raises it. */
+export class EvaluationBudgetExhaustedError extends Error {
+  readonly code = 'evaluation_budget_exhausted' as const;
+  readonly details: { readonly budgetUsd: number; readonly spentUsd: number };
+  constructor(budgetUsd: number, spentUsd: number) {
+    super(
+      `this month's evaluation budget ($${budgetUsd.toFixed(2)}) is spent ($${spentUsd.toFixed(2)} so far) — nothing was started; an owner can raise evaluation.monthly_cost_budget_usd, or wait for the next UTC month`,
+    );
+    this.name = 'EvaluationBudgetExhaustedError';
+    this.details = { budgetUsd, spentUsd };
+  }
+}

@@ -4,7 +4,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { cn } from '../../lib/cn.js';
 import { shortId } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
-import { WORKER_DEFINITION_KIND_LABELS } from '../../lib/labels.js';
+import { WORKER_DEFINITION_KIND_LABELS, principalShownName } from '../../lib/labels.js';
 import { unnamedDefinitionLabel } from '../../lib/tasks.js';
 
 /**
@@ -101,12 +101,15 @@ export function RefChip({
   const effectiveTypeName = typeName ?? resolved?.typeName;
   // Legacy 485: a definition the kernel found but nobody named (an entry definition above all)
   // reads as what its kind calls an unnamed one, not as 「未知 / 已删除」.
-  const effectiveName =
+  const givenName =
     name ??
     resolved?.name ??
     (kind === 'workerDefinition' && resolved
       ? unnamedDefinitionLabel(effectiveTypeName ?? 'worker', t)
       : undefined);
+  // An internal service Principal reads by what it is (「评测服务」), never by its reserved
+  // `__…__` name, whichever caller handed the name in.
+  const effectiveName = kind === 'principal' ? principalShownName(givenName, t) : givenName;
   const bare = effectiveName === undefined || effectiveName === null || effectiveName === '';
   const copy = kindLabel(kind, effectiveTypeName);
   const label = t(copy.zh, copy.en);

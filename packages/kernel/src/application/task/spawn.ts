@@ -168,12 +168,19 @@ export async function spawnWorkerRun(
       // suite's canary or a verbatim run of a holdout case's text. Checked before anything is
       // created, so the refusal leaves nothing behind; every caller then fails the Task as for any
       // other failed start. Covers the initial spawn and the requeue alike.
+      // S10 E3-2a: an evaluation Task's input is its case's input — its Worker is meant to read it,
+      // held out or not; everything else is checked as for any Worker.
       if (
-        await sealWithholds(client, workspaceId, {
-          input: input.task.input,
-          systemPrompt: input.systemPrompt,
-          skillsInline: input.skillsInline,
-        })
+        await sealWithholds(
+          client,
+          workspaceId,
+          {
+            input: input.task.input,
+            systemPrompt: input.systemPrompt,
+            skillsInline: input.skillsInline,
+          },
+          input.task.purpose === 'evaluation' ? { allow: input.task.input } : {},
+        )
       ) {
         throw new EvaluationContentWithheldError('worker_start');
       }
@@ -296,6 +303,8 @@ export async function spawnWorkerRun(
         skillsInline: input.skillsInline,
         timeoutSec: durationLimitSec,
         egressDeny: input.egressDeny,
+        // S10 E3-2a: from what the Task is for, whoever spawns it (the trial runner today).
+        ...(input.task.purpose === 'evaluation' ? { egressDenyAll: true } : {}),
         systemPrompt: input.systemPrompt,
         image: input.image,
       },

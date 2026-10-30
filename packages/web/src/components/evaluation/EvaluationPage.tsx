@@ -17,6 +17,7 @@ import { MasterDetail, nothingToPick } from '../kit/master-detail.js';
 import { PageHeader } from '../kit/page-header.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { CreateSuiteSheet } from './CreateSuiteSheet.js';
+import { EvalBudgetCard, useEvalBudget, useIsOwner } from './EvalBudget.js';
 import { SuiteDetail } from './SuiteDetail.js';
 
 export interface EvaluationPageProps {
@@ -29,9 +30,10 @@ export interface EvaluationPageProps {
  * components/evaluation/EvaluationPage (S10 E3-1a, coordinator fork 7 = a): 治理 → 评测 — the
  * workspace's evaluation suites (`list_eval_suites`) as a master-detail page (`kit/master-detail`,
  * like 任务): the list, and one suite's detail (`SuiteDetail`). Every person reads them (an auditor
- * included); a builder or the owner creates one (`CreateSuiteSheet`) and changes it. Cases (E3-1b)
- * and evaluation runs (E3-2) will join a suite here; the route already carries a tab segment
- * (`#/govern/evaluation/suites/<id>`) for them.
+ * included); a builder or the owner creates one (`CreateSuiteSheet`) and changes it. A suite's cases
+ * (E3-1b) and their 试跑 (E3-2a, in a case's sheet) are in its detail; the month's evaluation
+ * budget (`EvalBudgetCard`, E3-2a) heads the page. The route already carries a tab segment
+ * (`#/govern/evaluation/suites/<id>`) for the draft runs E3-2b adds.
  *
  * Worker names come from `list_worker_definitions{kind:'worker'}` (published rows, every version)
  * — the same list the create form picks from and a repin chooses a version in.
@@ -62,6 +64,8 @@ export function EvaluationPage({ http, suiteId, onSelectSuite }: EvaluationPageP
   }, [http]);
   const definitions = useResource(loadDefinitions);
   const principalNames = usePrincipalNames(http);
+  const budget = useEvalBudget(http);
+  const isOwner = useIsOwner(http);
   const [creating, setCreating] = useState(false);
 
   const rows = suites.state.status === 'ready' ? suites.state.data : [];
@@ -101,7 +105,10 @@ export function EvaluationPage({ http, suiteId, onSelectSuite }: EvaluationPageP
               variant="ghost"
               aria-busy={suites.state.status === 'ready' && suites.state.refreshing}
               disabled={suites.state.status === 'ready' && suites.state.refreshing}
-              onClick={() => void suites.reload()}
+              onClick={() => {
+                void suites.reload();
+                void budget.reload();
+              }}
             >
               {t('刷新', 'Refresh')}
             </Button>
@@ -117,6 +124,8 @@ export function EvaluationPage({ http, suiteId, onSelectSuite }: EvaluationPageP
           </>
         }
       />
+
+      <EvalBudgetCard budget={budget} isOwner={isOwner} />
 
       <MasterDetail
         list={

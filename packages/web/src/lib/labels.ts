@@ -60,6 +60,33 @@ export function principalKindLabel(kind: PrincipalKind, t: Translate): string {
   return label(PRINCIPAL_KIND_LABELS[kind], t);
 }
 
+/** The kernel's reserved display names (`members-handlers.ts` `INTERNAL_PRINCIPAL_DISPLAY_NAME_PATTERN`):
+ *  two underscores at each end mark one of the platform's own internal service Principals, and no
+ *  member can take such a name (`create_principal` refuses it with `reserved_name`). */
+export const RESERVED_PRINCIPAL_DISPLAY_NAME = /^__.+__$/;
+
+const INTERNAL_PRINCIPAL_LABELS: Readonly<Record<string, BilingualLabel>> = {
+  __evaluation_service__: { zh: '评测服务', en: 'Evaluation service' },
+  __gatekeeper_service__: { zh: '门观测服务', en: 'Gate observation service' },
+  __draft_reaper__: { zh: '草稿清理服务', en: 'Draft cleanup service' },
+};
+
+/**
+ * A Principal's name as the console shows it: its display name, except for the platform's own
+ * internal service Principals, whose reserved `__…__` names are plumbing — those read as what they
+ * are (「评测服务」, …), and an internal one this console does not know as 「平台内部服务」.
+ * `null` stays `null` (the caller falls back to the id).
+ */
+export function principalShownName(
+  displayName: string | null | undefined,
+  t: Translate,
+): string | null {
+  if (displayName === null || displayName === undefined) return null;
+  if (!RESERVED_PRINCIPAL_DISPLAY_NAME.test(displayName)) return displayName;
+  const known = ownEntry(INTERNAL_PRINCIPAL_LABELS, displayName);
+  return known ? label(known, t) : t('平台内部服务', 'Platform internal service');
+}
+
 // -------------------------------------------------------------------------------------------
 // WorkerDefinition kind (`@nexttime/shared` `WORKER_DEFINITION_KIND_VALUES`) — the catalog's
 // Workers tab tag (audit S14's literal "entry" example).
@@ -142,6 +169,7 @@ export const AUDIT_RESOURCE_TYPE_LABELS: Readonly<Record<AuditResourceType, Bili
   connection_request: { zh: '连接申请', en: 'Connection request' },
   decision: { zh: '决策', en: 'Decision' },
   eval_case: { zh: '用例', en: 'Evaluation case' },
+  eval_run: { zh: '评测运行', en: 'Evaluation run' },
   eval_suite: { zh: '用例集', en: 'Evaluation suite' },
   fact: { zh: '事实', en: 'Fact' },
   // Legacy sweep (console batch, 2026-10-16): `gatekeeper` reads 门 now that `gate_instance` (the

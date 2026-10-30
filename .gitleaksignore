@@ -1,0 +1,7 @@
+# Findings gitleaks may report that are known false positives, one fingerprint per line
+# (commit:path:rule:line). Prefer the content-matched allowlist in .gitleaks.toml for synthetic
+# values that stay in the tree; use this file only for a finding pinned to one commit.
+#
+# #822 (S10 E3-2a): a synthetic `apiToken` value in the fixture-call redaction test of the PR's
+# first commit; the next commit replaced it with a short value below the generic-api-key length.
+62476d5a09c0eed136a8d7044b5b835814b30d43:packages/kernel/src/application/gateway/eval-runs.integration.test.ts:generic-api-key:604
