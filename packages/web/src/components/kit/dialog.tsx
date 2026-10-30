@@ -1,12 +1,12 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { type ComponentPropsWithoutRef, type ElementRef, forwardRef } from 'react';
 import { cn } from '../../lib/cn.js';
+import { GuardedDialogContent, type GuardedDialogContentProps } from './discard-guard.js';
 
 /**
  * components/kit/dialog (S8 W1-A0, docs/development-tasks.md §5e decision F3): a centred modal on
  * Radix Dialog — focus trap, Escape, focus return and the portal all come from the primitive
  * (`components/ui/Drawer` hand-rolls the same behaviour for the existing side-drawer pattern).
- * Not wired into any page yet — see this dir's own risk note in the PR description (risk ①).
  */
 export const Dialog = DialogPrimitive.Root;
 export const DialogTrigger = DialogPrimitive.Trigger;
@@ -26,14 +26,16 @@ export const DialogOverlay = forwardRef<
   );
 });
 
+/** Legacy 497, extended to dialogs (#794 UX P3-2, coordinator 2026-10-30): an edited form asks
+ *  「放弃未保存的内容？」 before Escape, an outside click or its 取消 drop it, as in a drawer. */
 export const DialogContent = forwardRef<
   ElementRef<typeof DialogPrimitive.Content>,
-  ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
+  GuardedDialogContentProps
 >(function DialogContent({ className, children, ...rest }, ref) {
   return (
     <DialogPortal>
       <DialogOverlay />
-      <DialogPrimitive.Content
+      <GuardedDialogContent
         ref={ref}
         className={cn(
           'fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2',
@@ -47,7 +49,7 @@ export const DialogContent = forwardRef<
         {...rest}
       >
         {children}
-      </DialogPrimitive.Content>
+      </GuardedDialogContent>
     </DialogPortal>
   );
 });

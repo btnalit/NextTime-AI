@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { GuardedCancelButton } from '../kit/discard-guard.js';
 import { Drawer } from './Drawer.js';
@@ -69,5 +69,32 @@ describe('ui/Drawer discard guard (legacy 497)', () => {
     fireEvent.click(await screen.findByTestId('discard-confirm-keep'));
     await waitFor(() => expect(screen.queryByTestId('discard-confirm')).toBeNull());
     expect(document.activeElement).toBe(input);
+  });
+
+  it('hands focus back to what opened it, even when the form inside focuses its own field (#794 UX P3-3)', async () => {
+    function AutoFocused() {
+      const ref = useRef<HTMLInputElement>(null);
+      useEffect(() => ref.current?.focus(), []);
+      return <input ref={ref} aria-label="first" />;
+    }
+    function Page() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            new
+          </button>
+          <Drawer open={open} onClose={() => setOpen(false)} title="New">
+            {open ? <AutoFocused /> : null}
+          </Drawer>
+        </>
+      );
+    }
+    render(<Page />);
+    const opener = screen.getByRole('button', { name: 'new' });
+    opener.focus();
+    fireEvent.click(opener);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(document.activeElement).toBe(opener));
   });
 });
