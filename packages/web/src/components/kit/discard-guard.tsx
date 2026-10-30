@@ -47,7 +47,7 @@ function asField(target: EventTarget | null): FieldElement | null {
   return target;
 }
 
-function valueOf(field: FieldElement): string {
+function fieldValue(field: FieldElement): string {
   if (field instanceof HTMLInputElement && (field.type === 'checkbox' || field.type === 'radio')) {
     return String(field.checked);
   }
@@ -85,7 +85,7 @@ export function useDiscardGuard(): DiscardGuard {
     for (const element of fields) {
       const field = asField(element);
       if (field !== null && !touched.current.has(field) && !before.current.has(field)) {
-        before.current.set(field, valueOf(field));
+        before.current.set(field, fieldValue(field));
       }
     }
   }, []);
@@ -109,7 +109,7 @@ export function useDiscardGuard(): DiscardGuard {
       const onFocus = (event: Event) => {
         const field = asField(event.target);
         if (field !== null && !touched.current.has(field))
-          before.current.set(field, valueOf(field));
+          before.current.set(field, fieldValue(field));
       };
       const onEdit = (event: Event) => {
         const field = asField(event.target);
@@ -131,7 +131,7 @@ export function useDiscardGuard(): DiscardGuard {
   const edited = useCallback(
     () =>
       [...touched.current].some(
-        (field) => field.isConnected && valueOf(field) !== before.current.get(field),
+        (field) => field.isConnected && fieldValue(field) !== before.current.get(field),
       ),
     [],
   );
