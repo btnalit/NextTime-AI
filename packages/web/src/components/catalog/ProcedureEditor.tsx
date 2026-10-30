@@ -1,5 +1,6 @@
 import { type FormEvent, useMemo, useRef, useState } from 'react';
 import { byData, useFocusAfterRender } from '../../hooks/useFocusAfterRender.js';
+import { useFocusWhenLost } from '../../hooks/useFocusWhenLost.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import {
@@ -30,6 +31,11 @@ import {
 } from '../../lib/procedure-template.js';
 import { hrefs } from '../../lib/router.js';
 import { emptySchemaDraft } from '../../lib/schema-fields.js';
+import {
+  type StepReferenceRefusal,
+  stepReferenceReasonText,
+  stepReferenceRefusalOf,
+} from '../../lib/step-reference.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import {
   definitionVersions,
@@ -116,6 +122,9 @@ export function ProcedureEditor({
   const [errors, setErrors] = useState<FieldErrors>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
+  // Legacy 500: the submit button is disabled while it runs, so a refusal left focus on <body>
+  // and its banner, above the pinned action row, below the fold — focus goes to the banner.
+  const submitErrorRef = useFocusWhenLost<HTMLDivElement>(error);
   const [proposed, setProposed] = useState<ProposedDraft | null>(null);
   const content = useMemo(() => procedureContentFromForm(form), [form]);
   // Legacy 485: a step can only run a `kind='worker'` definition (the kernel's `invoke.ts` and
@@ -230,6 +239,17 @@ export function ProcedureEditor({
       onProposed(result);
     } catch (err) {
       if (isForbiddenError(err)) permissions.markDenied('propose_procedure');
+      // Legacy 493: a step whose Operation or Worker does not resolve is said on that step's
+      // field, focused, rather than as one sentence above the form.
+      const refusal = stepReferenceRefusalOf(err);
+      const field = refusal ? stepReferenceField(refusal) : null;
+      if (refusal !== null && field !== null) {
+        setErrors({ [field.error]: stepReferenceReasonText(refusal, t) });
+        focusAfterRender(() =>
+          formRef.current?.querySelector<HTMLElement>(`[id="${field.control}"]`),
+        );
+        return;
+      }
       setError(err);
     } finally {
       setBusy(false);
@@ -742,23 +762,27 @@ export function ProcedureEditor({
       )}
 
       {error !== null ? (
-        <ErrorBanner
-          error={error}
-          title={t('无法创建草稿', 'Could not propose the draft')}
-          action={
-            nextVersionOf && onShowPendingDraft && describeError(error).code === 'draft_pending' ? (
-              <Button
-                variant="secondary"
-                size="s"
-                onClick={onShowPendingDraft}
-                data-testid="procedure-show-pending-draft"
-              >
-                {t('查看那份草稿', 'Show that draft')}
-              </Button>
-            ) : undefined
-          }
-          testId="procedure-editor-error"
-        />
+        <div ref={submitErrorRef} tabIndex={-1}>
+          <ErrorBanner
+            error={error}
+            title={t('无法创建草稿', 'Could not propose the draft')}
+            action={
+              nextVersionOf &&
+              onShowPendingDraft &&
+              describeError(error).code === 'draft_pending' ? (
+                <Button
+                  variant="secondary"
+                  size="s"
+                  onClick={onShowPendingDraft}
+                  data-testid="procedure-show-pending-draft"
+                >
+                  {t('查看那份草稿', 'Show that draft')}
+                </Button>
+              ) : undefined
+            }
+            testId="procedure-editor-error"
+          />
+        </div>
       ) : null}
 
       <div className="row overlay-actions">
@@ -779,4 +803,20 @@ function entryStepText(t: Translate): string {
     '入口定义不能作为流程步骤：流程的步骤只能交给 Worker 执行，请换一个 Worker 定义。',
     'An entry definition cannot be a step: a Procedure step runs on a Worker. Choose a Worker definition.',
   );
+}
+
+/** Legacy 493: the field a step-reference refusal is about — its error path and its control's id —
+ *  or `null` when the refusal names no step this form shows a field for. */
+function stepReferenceField(
+  refusal: StepReferenceRefusal,
+): { readonly error: string; readonly control: string } | null {
+  if (refusal.stepIndex === null || refusal.reason === 'unresolved') return null;
+  const prefix = `steps.${refusal.stepIndex}`;
+  const field =
+    refusal.reason === 'operation_not_published'
+      ? { name: 'operationName', control: 'operation' }
+      : refusal.reason === 'worker_not_published'
+        ? { name: 'version', control: 'version' }
+        : { name: 'definitionId', control: 'definition' };
+  return { error: `${prefix}.${field.name}`, control: `${prefix}-${field.control}` };
 }

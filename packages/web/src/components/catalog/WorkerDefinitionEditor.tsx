@@ -5,6 +5,7 @@ import {
 } from '@nexttime/shared';
 import { type FormEvent, type ReactNode, useMemo, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
+import { useFocusWhenLost } from '../../hooks/useFocusWhenLost.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import { actionHint, actionLabel } from '../../lib/capability-labels.js';
@@ -373,6 +374,9 @@ export function WorkerDefinitionEditor({
   const [errors, setErrors] = useState<FieldErrors>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
+  // Legacy 500: the submit button is disabled while it runs, so a refusal left focus on <body>
+  // and its banner, above the pinned action row, below the fold — focus goes to the banner.
+  const submitErrorRef = useFocusWhenLost<HTMLDivElement>(error);
   const [proposed, setProposed] = useState<ProposedDraft | null>(null);
   /** The last egress-deny normalization's rewrites, shown under the field until the next edit. */
   const [egressChanges, setEgressChanges] = useState<EgressDenyNormalization['changes']>([]);
@@ -830,11 +834,13 @@ export function WorkerDefinitionEditor({
       )}
 
       {error !== null ? (
-        <ErrorBanner
-          error={error}
-          title={t('无法创建草稿', 'Could not propose the draft')}
-          testId="worker-editor-error"
-        />
+        <div ref={submitErrorRef} tabIndex={-1}>
+          <ErrorBanner
+            error={error}
+            title={t('无法创建草稿', 'Could not propose the draft')}
+            testId="worker-editor-error"
+          />
+        </div>
       ) : null}
 
       <div className="row overlay-actions">

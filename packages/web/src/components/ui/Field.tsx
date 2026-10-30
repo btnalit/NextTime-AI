@@ -5,6 +5,7 @@ import {
   type TextareaHTMLAttributes,
   forwardRef,
 } from 'react';
+import { FieldDescriptionContext, useFieldDescribedBy } from '../kit/field-description.js';
 
 export interface FieldProps {
   /** The control's `id`; the label points at it and hint/error ids derive from it. */
@@ -49,7 +50,11 @@ export function Field({
           </span>
         ) : null}
       </label>
-      {children}
+      <FieldDescriptionContext.Provider
+        value={{ controlId: id, describedBy: describedBy(id, hint !== undefined, !!error) }}
+      >
+        {children}
+      </FieldDescriptionContext.Provider>
       {hint !== undefined ? (
         <p className="field-hint" id={`${id}-hint`}>
           {hint}
@@ -74,12 +79,14 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   { invalid, mono, className, ...rest },
   ref,
 ) {
+  const described = useFieldDescribedBy(rest.id, rest['aria-describedby']);
   return (
     <input
       ref={ref}
       className={`input${mono ? ' input-mono' : ''}${className ? ` ${className}` : ''}`}
       aria-invalid={invalid || undefined}
       {...rest}
+      aria-describedby={described}
     />
   );
 });
@@ -92,12 +99,14 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
   { invalid, className, children, ...rest },
   ref,
 ) {
+  const described = useFieldDescribedBy(rest.id, rest['aria-describedby']);
   return (
     <select
       ref={ref}
       className={`select${className ? ` ${className}` : ''}`}
       aria-invalid={invalid || undefined}
       {...rest}
+      aria-describedby={described}
     >
       {children}
     </select>
@@ -113,12 +122,14 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(function 
   { invalid, mono, className, ...rest },
   ref,
 ) {
+  const described = useFieldDescribedBy(rest.id, rest['aria-describedby']);
   return (
     <textarea
       ref={ref}
       className={`textarea${mono ? ' textarea-mono' : ''}${className ? ` ${className}` : ''}`}
       aria-invalid={invalid || undefined}
       {...rest}
+      aria-describedby={described}
     />
   );
 });

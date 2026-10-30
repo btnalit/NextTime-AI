@@ -1,5 +1,6 @@
 import type { OperationSummaryWire, PublishManifestResultWire } from '@nexttime/shared';
 import { useState } from 'react';
+import { useFocusWhenLost } from '../hooks/useFocusWhenLost.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import {
   CONNECTION_KIND_VALUES,
@@ -93,6 +94,9 @@ export function OnboardingWizard({
   const [connection, setConnection] = useState<CreateConnectionResult | null>(null);
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<unknown | null>(null);
+  // Legacy 500: the submit button is disabled while it runs, so a refusal left focus on <body>
+  // and its banner, above the pinned action row, below the fold — focus goes to the banner.
+  const submitErrorRef = useFocusWhenLost<HTMLDivElement>(publishError);
   const [published, setPublished] = useState<PublishManifestResultWire | null>(null);
   // Review #493 on #592: the drafts step ③ lists, as read — exactly what 「发布清单」 publishes.
   const [drafts, setDrafts] = useState<readonly DraftAsRead[] | null>(null);
@@ -271,10 +275,12 @@ export function OnboardingWizard({
             />
           ) : null}
           {publishError !== null ? (
-            <ErrorBanner
-              error={publishError}
-              title={t('无法发布清单', 'Could not publish the manifest')}
-            />
+            <div ref={submitErrorRef} tabIndex={-1}>
+              <ErrorBanner
+                error={publishError}
+                title={t('无法发布清单', 'Could not publish the manifest')}
+              />
+            </div>
           ) : null}
           <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
             <Button variant="ghost" onClick={() => setStep('review')}>

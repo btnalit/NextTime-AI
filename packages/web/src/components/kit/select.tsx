@@ -1,5 +1,6 @@
 import { type ReactNode, type SelectHTMLAttributes, forwardRef } from 'react';
 import { cn } from '../../lib/cn.js';
+import { useFieldDescribedBy } from './field-description.js';
 
 type SelectBaseProps = Omit<
   SelectHTMLAttributes<HTMLSelectElement>,
@@ -38,6 +39,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
     readonly id?: string;
   };
   const domProps = rest as Omit<SelectHTMLAttributes<HTMLSelectElement>, 'id' | 'className'>;
+  const described = useFieldDescribedBy(id, domProps['aria-describedby']);
 
   const select = (
     <select
@@ -46,6 +48,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
       className={cn('select', className)}
       aria-invalid={invalid || undefined}
       {...domProps}
+      aria-describedby={described}
     >
       {children}
     </select>

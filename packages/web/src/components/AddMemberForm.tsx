@@ -1,5 +1,6 @@
 import { ROLE_VALUES, type Role } from '@nexttime/shared';
 import { type FormEvent, useEffect, useRef, useState } from 'react';
+import { useFocusWhenLost } from '../hooks/useFocusWhenLost.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
@@ -16,7 +17,7 @@ import { platformErrorMessage } from '../lib/platform-errors.js';
 import { useUserDirectoryTap } from '../lib/users-directory.js';
 import { Button } from './kit/button.js';
 import { ErrorBanner } from './kit/error-banner.js';
-import { Field } from './kit/field.js';
+import { Field, describedBy } from './kit/field.js';
 import { Select } from './kit/select.js';
 import { StillNeeded } from './kit/still-needed.js';
 import { UserPicker } from './platform/UserPicker.js';
@@ -95,6 +96,9 @@ export function AddMemberForm({
   const [role, setRole] = useState<Role>('member');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
+  // Legacy 500: the submit button is disabled while it runs, so a refusal left focus on <body>
+  // and its banner, above the pinned action row, below the fold — focus goes to the banner.
+  const submitErrorRef = useFocusWhenLost<HTMLDivElement>(error);
 
   // Read inside the probe's callback: a reader who already started typing keeps their text box.
   const loginRef = useRef(login);
@@ -231,6 +235,11 @@ export function AddMemberForm({
               onBlur={() => setLogin(normalizeLoginInput(login))}
               disabled={submitting}
               aria-invalid={typedLoginError !== null || undefined}
+              aria-describedby={describedBy(
+                'am-login',
+                typedHint !== undefined,
+                typedLoginError !== null,
+              )}
               autoComplete="off"
               spellCheck={false}
             />
@@ -288,11 +297,13 @@ export function AddMemberForm({
           {inline}
         </p>
       ) : error !== null ? (
-        <ErrorBanner
-          error={error}
-          title={t('无法添加成员', 'Could not add this member')}
-          testId="add-member-error"
-        />
+        <div ref={submitErrorRef} tabIndex={-1}>
+          <ErrorBanner
+            error={error}
+            title={t('无法添加成员', 'Could not add this member')}
+            testId="add-member-error"
+          />
+        </div>
       ) : null}
 
       <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>

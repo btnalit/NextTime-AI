@@ -8,6 +8,7 @@ import type {
 } from '@nexttime/shared';
 import { LLM_PROVIDER_PROBE_MAX_MODELS } from '@nexttime/shared';
 import { type FormEvent, useMemo, useRef, useState } from 'react';
+import { useFocusWhenLost } from '../../../hooks/useFocusWhenLost.js';
 import { presentError } from '../../../lib/errors.js';
 import { useT } from '../../../lib/i18n.js';
 import {
@@ -210,6 +211,9 @@ export function ProviderForm({
   const [testAfterSave, setTestAfterSave] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  // Legacy 500: the submit button is disabled while it runs, so a refusal left focus on <body>
+  // and its banner, above the pinned action row, below the fold — focus goes to the banner.
+  const submitErrorRef = useFocusWhenLost<HTMLDivElement>(error);
 
   const normalizedBase = normalizeBaseUrl(baseUrl).value;
   const preset: ProviderPreset | undefined =
@@ -1078,15 +1082,17 @@ export function ProviderForm({
       </div>
 
       {error !== null ? (
-        mapped !== null ? (
-          <InlineError error={error} testId="provider-form-error" />
-        ) : (
-          <ErrorBanner
-            error={error}
-            title={t('保存失败', 'Could not save the provider')}
-            testId="provider-form-error"
-          />
-        )
+        <div ref={submitErrorRef} tabIndex={-1}>
+          {mapped !== null ? (
+            <InlineError error={error} testId="provider-form-error" />
+          ) : (
+            <ErrorBanner
+              error={error}
+              title={t('保存失败', 'Could not save the provider')}
+              testId="provider-form-error"
+            />
+          )}
+        </div>
       ) : null}
 
       <div className="row-wrap overlay-actions">

@@ -747,6 +747,7 @@ export function VerifyCheckFields({
             onChange={(event) => onChange({ checkKey: event.target.value })}
             disabled={busy}
             aria-invalid={keyError !== null || undefined}
+            aria-describedby={describedBy(`${id}-key`, true, keyError !== null)}
             data-testid="procedure-step-check-key"
           />
         </Field>

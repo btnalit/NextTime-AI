@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useMediaQuery } from '../../hooks/useMediaQuery.js';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from './sheet.js';
@@ -50,6 +50,14 @@ export interface MasterDetailProps {
   /** `data-testid` shared by both hosts (the wide pane and the sheet content) — a page's tests
    *  find "the detail, however it is currently mounted" through this one id. */
   readonly detailTestId: string;
+  /** Narrow layout: where focus goes when the sheet closes and what opened it is gone — the row
+   *  it was opened from left the list (deprecated, discarded) while it was open. Focus otherwise
+   *  goes back to what opened the sheet, never to <body> (UX acceptance of #782, R-1). */
+  readonly closeFocusFallback?: () => HTMLElement | null | undefined;
+  /** Narrow layout: Escape and a click outside leave the sheet open — while it holds an editor,
+   *  whose half-filled form closes only through its own 取消 or by submitting, as in the wide
+   *  layout, where the editor is a pane nothing dismisses (legacy 497). */
+  readonly holdOpen?: boolean;
 }
 
 /**
@@ -82,6 +90,8 @@ export function MasterDetail({
   onClose,
   sheetTitle,
   detailTestId,
+  closeFocusFallback,
+  holdOpen = false,
 }: MasterDetailProps) {
   const isNarrowViewport = useMediaQuery(NARROW_MASTER_DETAIL_QUERY);
   // Decided while rendering the crossing, so the sheet never mounts over the overlay first.
@@ -119,6 +129,8 @@ export function MasterDetail({
     [host],
   );
   const showDetail = isNarrow ? open : detail !== null;
+  // What had focus as the sheet opened — where the sheet hands it back on close.
+  const opener = useRef<Element | null>(null);
 
   return (
     <>
@@ -142,7 +154,32 @@ export function MasterDetail({
             if (!next) onClose();
           }}
         >
-          <SheetContent data-testid={detailTestId}>
+          <SheetContent
+            data-testid={detailTestId}
+            onEscapeKeyDown={(event) => {
+              if (holdOpen) event.preventDefault();
+            }}
+            onInteractOutside={(event) => {
+              if (holdOpen) event.preventDefault();
+            }}
+            onOpenAutoFocus={() => {
+              opener.current = document.activeElement;
+            }}
+            onCloseAutoFocus={(event) => {
+              // Radix hands focus back to a `Dialog.Trigger`, which this sheet has none of, so it
+              // landed on <body>: back to what opened it instead, or — that row having left the
+              // list while the sheet was open — the page's fallback.
+              const back = opener.current;
+              opener.current = null;
+              const target =
+                back instanceof HTMLElement && back !== document.body && back.isConnected
+                  ? back
+                  : closeFocusFallback?.();
+              if (!target) return;
+              event.preventDefault();
+              target.focus();
+            }}
+          >
             <SheetHeader>
               <SheetTitle>{sheetTitle}</SheetTitle>
             </SheetHeader>

@@ -831,8 +831,8 @@ function runEnvironmentRows(
           <span
             className="text-3"
             title={t(
-              'Worker 定义和请求人都没有指定模型，用的是运行时 models.json 里的默认模型。',
-              'Neither the Worker definition nor the requester named a model: the runtime’s default from models.json.',
+              'Worker 定义和请求人都没有指定模型，用的是平台模型配置里的默认模型。',
+              'Neither the Worker definition nor the requester named a model: the default in the platform’s model configuration.',
             )}
           >
             {t(
@@ -901,8 +901,8 @@ function runEnvironmentRows(
         ) : (
           <span className="text-3" data-testid="run-environment-digest">
             {t(
-              '无法确定：运行时没有上报，或用了默认模型而 models.json 没有读到',
-              'Unknown: the runtime reported nothing, or the run used the default model and models.json could not be read',
+              '无法确定：运行时没有上报，或用了默认模型、平台没读到模型配置',
+              'Unknown: the runtime reported nothing, or the run used the default model and the platform could not read its model configuration',
             )}
           </span>
         ),

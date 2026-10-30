@@ -5,6 +5,7 @@ import {
   useCapability,
   useCapabilityList,
 } from '../../hooks/useCapability.js';
+import { useFocusWhenLost } from '../../hooks/useFocusWhenLost.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -439,6 +440,11 @@ function LinkValidateTool({ http, linkType, signatures, t }: LinkValidateToolPro
   const [sourceType, setSourceType] = useState(signatures[0]?.domain ?? '');
   const [targetType, setTargetType] = useState(signatures[0]?.range ?? '');
   const [result, setResult] = useState<ValidateResult>({ status: 'idle' });
+  // Legacy 500: the submit button is disabled while it runs, so a refusal left focus on <body>
+  // and its banner, above the pinned action row, below the fold — focus goes to the banner.
+  const submitErrorRef = useFocusWhenLost<HTMLDivElement>(
+    result.status === 'error' ? result.error : null,
+  );
   // console-ux-3: both ends are ObjectTypes, so they are picked from the published ontology (the
   // same `list_types{}` read the list view makes — served from its cache) instead of typed. Free
   // entry stays: checking a type the ontology does not declare is a legitimate question.
@@ -590,11 +596,13 @@ function LinkValidateTool({ http, linkType, signatures, t }: LinkValidateToolPro
         </div>
       ) : null}
       {result.status === 'error' ? (
-        <ErrorBanner
-          error={result.error}
-          title={t('校验失败', 'Validation failed')}
-          testId="graph-type-validate-error"
-        />
+        <div ref={submitErrorRef} tabIndex={-1}>
+          <ErrorBanner
+            error={result.error}
+            title={t('校验失败', 'Validation failed')}
+            testId="graph-type-validate-error"
+          />
+        </div>
       ) : null}
     </div>
   );

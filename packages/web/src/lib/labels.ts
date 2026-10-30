@@ -6,6 +6,7 @@ import type {
   GateTransportKindWire,
   OutcomeBasis,
   PrincipalKind,
+  ProcedureFailurePlace,
   TaskFailureCategory,
   TaskFailureReason,
   TaskRefusal,
@@ -653,4 +654,26 @@ const TASK_REFUSAL_LABELS: Readonly<Record<TaskRefusal, BilingualLabel>> = {
 
 export function taskRefusalLabel(refusal: TaskRefusal, t: Translate): string {
   return lookup(TASK_REFUSAL_LABELS, refusal, t);
+}
+
+/** S11 W1a E2-2: where a goal made from a Procedure went wrong (`ProcedureFailurePlace`); a
+ *  Procedure step is named by its key. */
+export function procedureFailurePlaceLabel(
+  place: ProcedureFailurePlace,
+  stepKey: string | null,
+  t: Translate,
+): string {
+  switch (place) {
+    case 'procedure_step':
+      return t(`步骤 ${stepKey ?? '?'}`, `Step ${stepKey ?? '?'}`);
+    case 'revised_step':
+      return t('修订计划后加入的步骤', 'A step a plan revision added');
+    case 'acceptance_check':
+      return t('目标验收没有通过', 'The goal’s acceptance checks did not pass');
+    case 'requester':
+      return t(
+        '请求人结束或取消，没有失败的步骤',
+        'The requester ended or cancelled it; no step failed',
+      );
+  }
 }

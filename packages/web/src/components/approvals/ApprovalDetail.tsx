@@ -1,6 +1,7 @@
 import { visibleLines } from '@nexttime/shared';
 import { useId, useRef, useState } from 'react';
 import { useCanOpen } from '../../hooks/useCanOpen.js';
+import { useFocusWhenLost } from '../../hooks/useFocusWhenLost.js';
 import { isDecidable } from '../../lib/action-card.js';
 import {
   alwaysAllowOffer,
@@ -114,6 +115,9 @@ export function ApprovalDetail({
   pending,
   onPendingChange,
 }: ApprovalDetailProps) {
+  // Legacy 500: the decision buttons are disabled while it runs, so a refusal left focus on <body>
+  // — focus goes to the banner that says why.
+  const submitErrorRef = useFocusWhenLost<HTMLDivElement>(error);
   const t = useT();
   const [reason, setReason] = useState('');
   const reasonCount = decisionReasonCountText(reason.length, t);
@@ -730,7 +734,9 @@ export function ApprovalDetail({
 
       {/* A 400 credentials_review_required is answered by the confirmation it opened above. */}
       {error !== null && error !== undefined && credentialReviewCount(error) === null ? (
-        <ErrorBanner error={error} testId="approval-decision-error" />
+        <div ref={submitErrorRef} tabIndex={-1}>
+          <ErrorBanner error={error} testId="approval-decision-error" />
+        </div>
       ) : null}
     </div>
   );

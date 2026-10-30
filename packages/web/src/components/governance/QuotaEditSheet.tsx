@@ -5,7 +5,7 @@ import { useT } from '../../lib/i18n.js';
 import { QUOTA_KEY_INFO, type QuotaKey } from '../../lib/quotas.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
-import { Field } from '../kit/field.js';
+import { Field, describedBy } from '../kit/field.js';
 import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '../kit/sheet.js';
 import { StillNeeded } from '../kit/still-needed.js';
 
@@ -159,6 +159,8 @@ export function QuotaEditSheet({ http, open, onOpenChange, row, onSaved }: Quota
               disabled={submitting}
               inputMode={info.integer ? 'numeric' : 'decimal'}
               placeholder={info.nullable ? t('不限', 'Unlimited') : info.unit}
+              aria-invalid={valueError !== null || undefined}
+              aria-describedby={describedBy('qe-value', valueError === null, valueError !== null)}
             />
           </Field>
 

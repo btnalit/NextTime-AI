@@ -437,6 +437,13 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '统计一个 Skill 各版本的运行次数、Task 结果、达成率和失败分组。',
     enHint: "Counts a skill's runs, Task results, attainment and failure groups per version.",
   },
+  get_procedure_stats: {
+    zh: '流程使用情况',
+    en: 'Procedure usage',
+    zhHint: '统计一个流程各版本生成的目标、达成率、自报按它做的对话轮和失败分组。',
+    enHint:
+      'Counts the goals each version of a procedure made, their attainment, the turns that said they followed it, and failure groups.',
+  },
   list_procedures: {
     zh: '查看流程列表',
     en: 'List procedures',

@@ -5,6 +5,7 @@ import {
   type OperationGovernanceChangeWire,
 } from '@nexttime/shared';
 import { useCallback, useRef, useState } from 'react';
+import { useFocusWhenLost } from '../hooks/useFocusWhenLost.js';
 import { useResource } from '../hooks/useResource.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../lib/clients.js';
@@ -325,6 +326,9 @@ function OperationReviewRow({
   const [autoApprovable, setAutoApprovable] = useState(row.autoApprovable);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
+  // Legacy 500: the submit button is disabled while it runs, so a refusal left focus on <body>
+  // and its banner, above the pinned action row, below the fold — focus goes to the banner.
+  const submitErrorRef = useFocusWhenLost<HTMLDivElement>(error);
   // R-19 (D-17): the proposed draft's change, waiting for the confirm before it is published.
   const [pendingChange, setPendingChange] = useState<OperationGovernanceChangeWire | null>(null);
   // Review #493 on #583: the draft this Submit proposed — published only if it is still that draft
@@ -545,13 +549,15 @@ function OperationReviewRow({
                 </label>
               </div>
               {error !== null ? (
-                <ErrorBanner
-                  error={error}
-                  title={t(
-                    '无法提出/发布这次重分类',
-                    'Could not propose/publish this reclassification',
-                  )}
-                />
+                <div ref={submitErrorRef} tabIndex={-1}>
+                  <ErrorBanner
+                    error={error}
+                    title={t(
+                      '无法提出/发布这次重分类',
+                      'Could not propose/publish this reclassification',
+                    )}
+                  />
+                </div>
               ) : null}
               <CredentialReview
                 count={credentialReview.count}

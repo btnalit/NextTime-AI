@@ -7,6 +7,7 @@ import {
   useRef,
 } from 'react';
 import { cn } from '../../lib/cn.js';
+import { useFieldDescribedBy } from './field-description.js';
 
 type TextareaBaseProps = Omit<
   TextareaHTMLAttributes<HTMLTextAreaElement>,
@@ -61,6 +62,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
       ...rest
     } = props as TextareaProps & { readonly label?: ReactNode; readonly id?: string };
     const innerRef = useRef<HTMLTextAreaElement | null>(null);
+    const described = useFieldDescribedBy(id, rest['aria-describedby']);
 
     function resize(): void {
       const el = innerRef.current;
@@ -102,6 +104,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
           resize();
         }}
         {...rest}
+        aria-describedby={described}
       />
     );
 

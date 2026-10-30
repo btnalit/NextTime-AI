@@ -17,6 +17,7 @@ import { ErrorBanner } from '../kit/error-banner.js';
 import { KeyValue, type KeyValueItem } from '../kit/key-value.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
+import { AttainmentValue, versionList } from './usage-common.js';
 
 /**
  * components/catalog/SkillUsage (S11 W1a E2-1): 「使用情况」 on a Skill's detail — how each version
@@ -110,18 +111,14 @@ function UsageBody({ stats, t }: { readonly stats: SkillStatsWire; readonly t: T
       {neverLoaded.length > 0 ? (
         <span className="text-3 text-small" data-testid="skill-usage-never-loaded">
           {t(
-            `${versionList(neverLoaded, '、')} 还没有被运行加载过。`,
-            `${versionList(neverLoaded, ', ')}: not loaded by any run yet.`,
+            `${versionList(neverLoaded, t)} 还没有被运行加载过。`,
+            `${versionList(neverLoaded, t)}: not loaded by any run yet.`,
           )}
         </span>
       ) : null}
       <FailureGroups groups={stats.failureGroups} t={t} />
     </div>
   );
-}
-
-function versionList(versions: readonly SkillVersionStatsWire[], separator: string): string {
-  return versions.map((version) => `v${version.version}`).join(separator);
 }
 
 function ReviewSuggested({
@@ -223,8 +220,8 @@ function SegmentBlock({
         ) : (
           <span
             title={t(
-              '运行时没有上报，或用了默认模型而 models.json 没有读到',
-              'The runtime reported nothing, or the run used the default model and models.json could not be read',
+              '运行时没有上报，或用了默认模型、平台没读到模型配置',
+              'The runtime reported nothing, or the run used the default model and the platform could not read its model configuration',
             )}
           >
             {t('环境未知', 'Environment unknown')}
@@ -237,10 +234,6 @@ function SegmentBlock({
       <KeyValue items={numbersOf(segment.usage, segment.outcomes, t)} />
     </div>
   );
-}
-
-function percent(rate: number): string {
-  return `${Math.round(rate * 100)}%`;
 }
 
 /** The same rows for a version and for one of its segments. */
@@ -271,17 +264,7 @@ function numbersOf(
     {
       key: 'attainment',
       label: t('达成率', 'Attainment'),
-      value:
-        primary.attainment !== null ? (
-          <span data-testid="skill-usage-attainment">
-            {t(
-              `${percent(primary.attainment)}（${primary.achieved} / ${primary.total}）`,
-              `${percent(primary.attainment)} (${primary.achieved} of ${primary.total})`,
-            )}
-          </span>
-        ) : (
-          <span className="text-3">{t('还没有结果', 'No outcomes yet')}</span>
-        ),
+      value: <AttainmentValue primary={primary} t={t} testId="skill-usage-attainment" />,
     },
   ];
   if (proxy.total > 0) {

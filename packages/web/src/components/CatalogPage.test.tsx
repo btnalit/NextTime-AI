@@ -2587,9 +2587,12 @@ describe('CatalogPage editors (S6-A A2)', () => {
         '# Steps\n\n1. restart',
       ),
     );
+    (document.activeElement as HTMLElement | null)?.blur();
     fireEvent.click(within(drawer).getByTestId('skill-submit'));
     const banner = await within(drawer).findByTestId('skill-editor-error');
     expect(banner.getAttribute('data-error-code')).toBe('draft_pending');
+    // Legacy 500: focus goes to the refusal, not left on <body>.
+    await waitFor(() => expect(document.activeElement).toBe(banner.parentElement));
     expect(banner.textContent).toContain('先发布那份草稿，或由它的提议者丢弃');
     fireEvent.click(within(banner).getByTestId('skill-show-pending-draft'));
     await waitFor(() =>
@@ -2811,6 +2814,36 @@ describe('CatalogPage editors (S6-A A2)', () => {
     });
   });
 
+  it('at a narrow width, Escape leaves a half-filled Procedure editor open (legacy 497)', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({
+        matches: true,
+        media: '',
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    try {
+      const http = scriptedHttp({ list_procedures: () => ({ items: [] }) });
+      renderPage(http, 'procedures');
+      await screen.findByTestId('catalog-empty');
+      fireEvent.click(screen.getByTestId('procedures-new-draft'));
+      const drawer = await screen.findByTestId('procedure-editor-drawer');
+      expect(drawer.getAttribute('role')).toBe('dialog');
+      const name = within(drawer).getByLabelText(/^名称/) as HTMLInputElement;
+      fireEvent.change(name, { target: { value: 'Deploy' } });
+      fireEvent.keyDown(name, { key: 'Escape' });
+      expect(screen.getByTestId('procedure-editor-drawer')).toBe(drawer);
+      expect(name.value).toBe('Deploy');
+      // Its own 取消 still closes it.
+      fireEvent.click(within(drawer).getByRole('button', { name: /^取消$/ }));
+      await waitFor(() => expect(screen.queryByTestId('procedure-editor-drawer')).toBeNull());
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('hides "New draft" once propose_* has been refused for the session', async () => {
     const http = scriptedHttp({
       list_procedures: () => ({ items: [] }),
@@ -2825,9 +2858,13 @@ describe('CatalogPage editors (S6-A A2)', () => {
     fireEvent.change(within(drawer).getByLabelText(/^描述/), {
       target: { value: 'Deploy web' },
     });
+    // Legacy 500: the submit button, disabled while it runs, drops focus to <body> in a browser.
+    (document.activeElement as HTMLElement | null)?.blur();
     fireEvent.click(within(drawer).getByTestId('procedure-submit'));
     const banner = await within(drawer).findByTestId('procedure-editor-error');
     expect(banner.getAttribute('data-error-code')).toBe('forbidden');
+    // Focus goes to the refusal, not left on <body>.
+    await waitFor(() => expect(document.activeElement).toBe(banner.parentElement));
     fireEvent.click(within(drawer).getByRole('button', { name: /取消/ }));
     await waitFor(() => expect(screen.queryByTestId('procedures-new-draft')).toBeNull());
   });
@@ -3782,6 +3819,235 @@ describe('CatalogPage — reject a pending draft (E2-0b)', () => {
   });
 });
 
+describe('legacy 493 and the deprecated Operation’s detail (UX acceptance of #776)', () => {
+  it('a Procedure publish refused for a step’s Worker says which step, which Worker and why, next to Publish', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => ({
+        id: 'ws-1',
+        name: 'Acme',
+        createdAt: '2026-01-01T00:00:00Z',
+        principalCount: 1,
+        gatekeeperCount: 0,
+        caller: { id: 'p-owner', role: 'owner', displayName: 'Owner', kind: 'human' },
+      }),
+      list_procedures: () => ({
+        items: [
+          {
+            id: 'pr-9',
+            version: 1,
+            status: 'draft',
+            name: 'stock-check',
+            description: 'd',
+            draftDigest: 'sha256:d',
+            steps: [
+              { kind: 'approval', description: 'sign off' },
+              { kind: 'worker', definitionId: 'wd-1', version: 2 },
+            ],
+          },
+        ],
+      }),
+      resolve_refs: () => ({
+        items: [{ id: 'wd-1', kind: 'workerDefinition', name: 'Fixer', typeName: 'worker' }],
+      }),
+      publish_procedure: () => {
+        throw new HttpError(
+          'capability_error',
+          'Procedure step 1 does not resolve: WorkerDefinition wd-1@2 is not published: WorkerDefinition is deprecated',
+          'invalid_step_reference',
+        );
+      },
+    });
+    renderPage(http, 'procedures');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    fireEvent.click(within(detail).getByRole('button', { name: /^发布$/ }));
+    const problem = await within(detail).findByTestId('procedure-publish-step-reference');
+    await waitFor(() => expect(document.activeElement).toBe(problem));
+    expect(problem.textContent).toMatch(/有一步现在用不了，所以没有发布/);
+    expect(problem.textContent).toMatch(/第 2 步/);
+    expect(problem.textContent).toMatch(/v2 没有发布，或已弃用、已丢弃/);
+    await waitFor(() => expect(within(problem).getByText('Fixer')).toBeTruthy());
+    expect(screen.queryByTestId('toast')).toBeNull();
+  });
+
+  it('deprecating an Operation keeps its detail open on the deprecated version, focus on its title', async () => {
+    let deprecated = false;
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'docker.restart',
+            status: deprecated ? 'deprecated' : 'published',
+            version: 1,
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      deprecate_operation: () => {
+        deprecated = true;
+        return {};
+      },
+    });
+    renderPage(http);
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    const deprecate = within(detail).getByRole('button', { name: /弃用/ });
+    deprecate.focus();
+    fireEvent.click(deprecate);
+    const confirm = await screen.findByTestId('operation-deprecate-confirm-gk-1::docker.restart');
+    expect(confirm.textContent).toMatch(/弃用不能撤销：以后要再用，需要重新提议并发布/);
+    expect(confirm.textContent).not.toMatch(/随时可以重新发布恢复/);
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() =>
+      expect(screen.getByTestId('operation-detail').getAttribute('data-operation-key')).toBe(
+        'gk-1::docker.restart@v1',
+      ),
+    );
+    expect(screen.queryByTestId('catalog-detail-missing')).toBeNull();
+    expect(screen.getAllByTestId('catalog-row')[0]?.getAttribute('aria-current')).toBe('true');
+    // Legacy 501: no way back is offered, and the detail says what brings it back.
+    expect(screen.getByTestId('operation-deprecated-note').textContent).toMatch(/弃用不能撤销/);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByTestId('operation-detail').querySelector('.catalog-detail-title'),
+      ),
+    );
+  });
+
+  it('deprecating a Skill no longer listed closes its detail, focus on the Skills tab', async () => {
+    let deprecated = false;
+    const http = scriptedHttp({
+      list_skills: () => ({
+        items: deprecated
+          ? []
+          : [
+              {
+                id: 'sk-1',
+                version: 2,
+                status: 'published',
+                name: 'diagnose-net',
+                description: 'd',
+              },
+            ],
+      }),
+      deprecate_skill: () => {
+        deprecated = true;
+        return {};
+      },
+    });
+    renderPage(http, 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    const deprecate = within(detail).getByRole('button', { name: /弃用/ });
+    deprecate.focus();
+    fireEvent.click(deprecate);
+    const confirm = await screen.findByTestId('skill-deprecate-confirm-sk-1');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() => expect(screen.queryByTestId('catalog-row')).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId('catalog-detail')).toBeNull());
+    expect(screen.queryByTestId('catalog-detail-missing')).toBeNull();
+    await waitFor(() => expect(document.activeElement?.getAttribute('aria-selected')).toBe('true'));
+    expect(document.activeElement?.getAttribute('role')).toBe('tab');
+  });
+
+  it('at a narrow width, deprecating a Skill no longer listed closes the sheet with focus on the Skills tab (UX acceptance of #782, R-1)', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({
+        matches: true,
+        media: '',
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    try {
+      let deprecated = false;
+      const http = scriptedHttp({
+        list_skills: () => ({
+          items: deprecated
+            ? []
+            : [
+                {
+                  id: 'sk-1',
+                  version: 2,
+                  status: 'published',
+                  name: 'diagnose-net',
+                  description: 'd',
+                },
+              ],
+        }),
+        deprecate_skill: () => {
+          deprecated = true;
+          return {};
+        },
+      });
+      renderPage(http, 'skills');
+      const row = await screen.findByTestId('catalog-row');
+      row.focus();
+      const detail = await selectRow(row);
+      expect(detail.getAttribute('role')).toBe('dialog');
+      fireEvent.click(within(detail).getByRole('button', { name: /弃用/ }));
+      const confirm = await screen.findByTestId('skill-deprecate-confirm-sk-1');
+      fireEvent.click(within(confirm).getByTestId('confirm-button'));
+      await waitFor(() => expect(screen.queryByTestId('catalog-detail')).toBeNull());
+      await waitFor(() => expect(document.activeElement?.getAttribute('role')).toBe('tab'));
+      expect(document.activeElement?.getAttribute('aria-selected')).toBe('true');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('deprecating a Procedure whose earlier published version is still listed keeps that detail open', async () => {
+    let deprecated = false;
+    const http = scriptedHttp({
+      list_procedures: () => ({
+        items: [
+          {
+            id: 'pr-1',
+            version: deprecated ? 1 : 2,
+            status: 'published',
+            name: 'restart-verify',
+            description: 'd',
+          },
+        ],
+      }),
+      deprecate_procedure: () => {
+        deprecated = true;
+        return {};
+      },
+    });
+    renderPage(http, 'procedures');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    fireEvent.click(within(detail).getByRole('button', { name: /弃用/ }));
+    const confirm = await screen.findByTestId('procedure-deprecate-confirm-pr-1');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() =>
+      expect(http.calls.some((c) => c.name === 'deprecate_procedure')).toBe(true),
+    );
+    await waitFor(() =>
+      expect(http.calls.filter((c) => c.name === 'list_procedures').length).toBeGreaterThan(1),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('catalog-row').getAttribute('aria-current')).toBe('true'),
+    );
+    expect(screen.getByTestId('catalog-detail')).toBeTruthy();
+    expect(screen.queryByTestId('catalog-detail-missing')).toBeNull();
+  });
+
+  it('a link to an Operation whose status changed since still opens it', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [{ gatekeeperId: 'gk-1', name: 'docker.restart', status: 'deprecated', version: 3 }],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+    });
+    renderPage(http, 'operations', 'gk-1::docker.restart');
+    const detail = await screen.findByTestId('operation-detail');
+    expect(detail.getAttribute('data-operation-key')).toBe('gk-1::docker.restart@v3');
+    expect(screen.queryByTestId('catalog-detail-missing')).toBeNull();
+    // The row shown is the row marked in the list.
+    expect(screen.getByTestId('catalog-row').getAttribute('aria-current')).toBe('true');
+  });
+});
+
 describe('CatalogPage — Skill usage (S11 W1a E2-1)', () => {
   function workspaceAs(role: string) {
     return {
@@ -3861,5 +4127,92 @@ describe('CatalogPage — Skill usage (S11 W1a E2-1)', () => {
     await within(detail).findByTestId('skill-detail-body');
     expect(within(detail).queryByTestId('skill-usage')).toBeNull();
     expect(http.calls.some((call) => call.name === 'get_skill_stats')).toBe(false);
+  });
+});
+
+describe('CatalogPage — Procedure usage (S11 W1a E2-2)', () => {
+  function workspaceAs(role: string) {
+    return {
+      id: 'ws-1',
+      name: 'Acme',
+      createdAt: '2026-01-01T00:00:00Z',
+      principalCount: 1,
+      gatekeeperCount: 0,
+      caller: { id: 'p-me', role, displayName: 'Me', kind: 'human' },
+    };
+  }
+
+  function catalog(role: string) {
+    return scriptedHttp({
+      get_workspace: () => workspaceAs(role),
+      list_procedures: () => ({
+        items: [
+          {
+            id: 'pr-1',
+            version: 1,
+            status: 'published',
+            name: 'restart-verify',
+            description: 'd',
+            steps: [{ kind: 'approval', description: 'A person agrees.' }],
+          },
+        ],
+      }),
+      get_procedure_stats: () => ({
+        procedureId: 'pr-1',
+        name: 'restart-verify',
+        reviewStreak: 3,
+        versions: [
+          {
+            version: 1,
+            status: 'published',
+            usage: {
+              goals: 4,
+              byStatus: { proposed: 0, inProgress: 1, completed: 3, cancelled: 0, failed: 0 },
+              lastUsedAt: new Date().toISOString(),
+            },
+            outcomes: {
+              primary: { achieved: 2, notAchieved: 1, total: 3, attainment: 2 / 3 },
+              proxy: { achieved: 0, notAchieved: 0, total: 0, attainment: null },
+              byBasis: [
+                { basis: 'verified_by_check', achieved: 1, notAchieved: 0 },
+                { basis: 'requester', achieved: 1, notAchieved: 1 },
+                { basis: 'reviewer_assessed', achieved: 0, notAchieved: 0 },
+                { basis: 'agent_reported', achieved: 0, notAchieved: 0 },
+              ],
+            },
+            claims: { turns: 0, achieved: 0, notAchieved: 0, lastClaimedAt: null },
+            reviewSuggested: false,
+            segments: [],
+          },
+        ],
+        failureGroups: [],
+      }),
+    });
+  }
+
+  it('a builder sees the family’s usage on the Procedure’s detail', async () => {
+    const http = catalog('builder');
+    renderPage(http, 'procedures');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    const usage = await within(detail).findByTestId('procedure-usage-version-1');
+    expect(usage.textContent).toContain('进行中 1 · 已结束 3');
+    expect(within(usage).getByTestId('procedure-usage-attainment').textContent).toBe(
+      '67%（2 / 3）',
+    );
+    expect(http.calls.find((call) => call.name === 'get_procedure_stats')?.params).toEqual({
+      procedureId: 'pr-1',
+    });
+  });
+
+  it('a member’s Procedure detail has no usage and asks for none', async () => {
+    const http = catalog('member');
+    renderPage(http, 'procedures');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    await within(detail).findByTestId('procedure-detail');
+    await waitFor(() =>
+      expect(http.calls.some((call) => call.name === 'get_workspace')).toBe(true),
+    );
+    expect(within(detail).queryByTestId('procedure-usage')).toBeNull();
+    expect(http.calls.some((call) => call.name === 'get_procedure_stats')).toBe(false);
   });
 });
