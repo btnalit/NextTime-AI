@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.51.0](https://github.com/btnalit/NextTime-AI/compare/v0.50.0...v0.51.0) (2026-10-30)
+
+
+### Features
+
+* **eval,web:** evaluate a Skill draft through regression, mechanism and confirm stages (S10 E3-2b) ([#833](https://github.com/btnalit/NextTime-AI/issues/833)) ([2b4d285](https://github.com/btnalit/NextTime-AI/commit/2b4d285310b96325fa2e4d37b766e37b9d5ea534))
+* **kernel,shared,web:** try an evaluation case once against its fixtures (S10 E3-2a) ([#822](https://github.com/btnalit/NextTime-AI/issues/822)) ([91db629](https://github.com/btnalit/NextTime-AI/commit/91db6298664bf025b35a1c4acc2d9e194959f0db))
+
+
+### Bug Fixes
+
+* **deps:** migrate to zod 4 and cap capability params at 128 Ki values ([#829](https://github.com/btnalit/NextTime-AI/issues/829)) ([15a8b9a](https://github.com/btnalit/NextTime-AI/commit/15a8b9a5e28589c6b301f7c04b501a1b6c49542c))
+
 ## [0.50.0](https://github.com/btnalit/NextTime-AI/compare/v0.49.0...v0.50.0) (2026-10-30)
 
 
