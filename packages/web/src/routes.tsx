@@ -376,8 +376,9 @@ export function Routed({
       page = (
         <EvaluationPage
           http={session.http}
-          suiteId={route.suiteId}
-          onSelectSuite={(id) => navigate(hrefs.evaluation(route.tab, id ?? undefined))}
+          tab={route.tab}
+          itemId={route.itemId}
+          onNavigate={(tab, id) => navigate(hrefs.evaluation(tab, id ?? undefined))}
         />
       );
       break;

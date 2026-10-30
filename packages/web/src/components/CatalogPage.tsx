@@ -97,6 +97,7 @@ import { ProcedureEditorHost } from './catalog/ProcedureEditorHost.js';
 import { ProcedureTemplateView } from './catalog/ProcedureTemplateView.js';
 import { ProcedureUsageSection } from './catalog/ProcedureUsage.js';
 import { RejectedDrafts } from './catalog/RejectedDrafts.js';
+import { SkillDraftEvaluations } from './catalog/SkillDraftEvaluations.js';
 import { SkillEditor } from './catalog/SkillEditor.js';
 import { SkillUsageSection } from './catalog/SkillUsage.js';
 import { WorkerEditorHost } from './catalog/WorkerEditorHost.js';
@@ -2173,6 +2174,9 @@ function SkillDetailView({
 
       {/* S11 W1a E2-1: the family's statistics — builders and up only (the section decides). */}
       <SkillUsageSection http={http} skillId={row.id} />
+
+      {/* S10 E3-2b: this version's draft evaluations, and 「评测」 on a draft. */}
+      <SkillDraftEvaluations http={http} skill={row} inUseVersion={inUseVersion} />
 
       {canPublish && row.status === 'draft' ? (
         <PublishCredentialSlot

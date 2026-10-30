@@ -57,7 +57,7 @@ export function workerChoices(rows: readonly WorkerDefinitionSummary[]): readonl
 /** A suite's pinned Worker as one line: its name (when the directory has it) and version. */
 export function pinnedWorkerName(
   rows: readonly WorkerDefinitionSummary[] | undefined,
-  pin: EvalSuiteSummaryWire['workerDefinition'],
+  pin: Pick<EvalSuiteSummaryWire['workerDefinition'], 'id' | 'version'>,
 ): string | undefined {
   const name = distinctDefinitionName(rows, pin.id, pin.version);
   return name === undefined ? undefined : shownName(name);

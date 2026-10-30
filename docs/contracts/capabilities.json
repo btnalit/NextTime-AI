@@ -2846,6 +2846,944 @@
     "sideEffects": true
   },
   {
+    "actsForPerson": true,
+    "channel": "human",
+    "group": "evaluation",
+    "minRole": "builder",
+    "mode": "write",
+    "name": "cancel_draft_evaluation",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "evaluationId": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "evaluationId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "baseline": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "skillId": {
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "skillId",
+                "version",
+                "name"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "baselineContent": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "description": {
+                  "type": "string"
+                },
+                "markdown": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "description",
+                "markdown"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cancelledBy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "candidate": {
+          "additionalProperties": false,
+          "properties": {
+            "draftDigest": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "skillId": {
+              "type": "string"
+            },
+            "version": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "skillId",
+            "version",
+            "name",
+            "draftDigest"
+          ],
+          "type": "object"
+        },
+        "candidateContent": {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "type": "string"
+            },
+            "markdown": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "description",
+            "markdown"
+          ],
+          "type": "object"
+        },
+        "costUsd": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "createdBy": {
+          "type": "string"
+        },
+        "decidedBy": {
+          "anyOf": [
+            {
+              "enum": [
+                "regression",
+                "mechanism",
+                "confirm"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "environments": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "baselineTrials": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "candidateTrials": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "environment": {
+                "additionalProperties": false,
+                "properties": {
+                  "definition": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "version": {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "version"
+                    ],
+                    "type": "object"
+                  },
+                  "environmentDigest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "image": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "kernelVersion": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "runtime": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "builtFrom": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "imageId": {
+                            "type": "string"
+                          },
+                          "imageRef": {
+                            "type": "string"
+                          },
+                          "modelsConfigDigest": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "piVersion": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "platformExtensionVersion": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "imageRef",
+                          "imageId",
+                          "piVersion",
+                          "platformExtensionVersion",
+                          "builtFrom",
+                          "modelsConfigDigest"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "systemPromptDigest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "definition",
+                  "model",
+                  "image",
+                  "systemPromptDigest",
+                  "kernelVersion",
+                  "runtime",
+                  "environmentDigest"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "environment",
+              "baselineTrials",
+              "candidateTrials"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "finishedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "mechanism": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "otherSkills": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "skillId": {
+                "type": "string"
+              },
+              "version": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "skillId",
+              "version",
+              "name"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "regression_case_lost",
+                "mechanism_not_shown",
+                "below_margin",
+                "above_baseline",
+                "within_margin",
+                "too_few_trials",
+                "holdout_disagrees",
+                "no_holdout_cases",
+                "no_confirm_cases",
+                "errored_trials",
+                "budget",
+                "environment_differs",
+                "environment_unknown",
+                "content_withheld",
+                "canary_reported"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stage": {
+          "anyOf": [
+            {
+              "enum": [
+                "regression",
+                "mechanism",
+                "confirm"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stages": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "baseline": {
+                "additionalProperties": false,
+                "properties": {
+                  "costUsd": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "errored": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "failed": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "open": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "passed": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "tokens": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "trials": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "trials",
+                  "passed",
+                  "failed",
+                  "errored",
+                  "open",
+                  "costUsd",
+                  "tokens"
+                ],
+                "type": "object"
+              },
+              "candidate": {
+                "additionalProperties": false,
+                "properties": {
+                  "costUsd": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "errored": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "failed": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "open": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "passed": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "tokens": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "trials": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "trials",
+                  "passed",
+                  "failed",
+                  "errored",
+                  "open",
+                  "costUsd",
+                  "tokens"
+                ],
+                "type": "object"
+              },
+              "caseCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "cases": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "baseline": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "costUsd": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "errored": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "failed": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "open": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "passed": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "tokens": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "trials": {
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "trials",
+                        "passed",
+                        "failed",
+                        "errored",
+                        "open",
+                        "costUsd",
+                        "tokens"
+                      ],
+                      "type": "object"
+                    },
+                    "candidate": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "costUsd": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "errored": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "failed": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "open": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "passed": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "tokens": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "trials": {
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "trials",
+                        "passed",
+                        "failed",
+                        "errored",
+                        "open",
+                        "costUsd",
+                        "tokens"
+                      ],
+                      "type": "object"
+                    },
+                    "caseId": {
+                      "type": "string"
+                    },
+                    "split": {
+                      "enum": [
+                        "dev",
+                        "holdout"
+                      ],
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "caseId",
+                    "title",
+                    "split",
+                    "baseline",
+                    "candidate"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "estimateUsd": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "k": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "measure": {
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "lostCaseIds": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "stage": {
+                            "const": "regression",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "stage",
+                          "lostCaseIds"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "baselineMaxPassed": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "baselinePassed": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "baselineTrials": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "candidatePassed": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "candidateTrials": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "stage": {
+                            "const": "mechanism",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "stage",
+                          "candidatePassed",
+                          "candidateTrials",
+                          "baselinePassed",
+                          "baselineTrials",
+                          "baselineMaxPassed"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "confidence": {
+                            "type": "number"
+                          },
+                          "delta": {
+                            "type": "number"
+                          },
+                          "dev": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "baselinePassed": {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "baselineTrials": {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "candidatePassed": {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "candidateTrials": {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "difference": {
+                                "type": [
+                                  "number",
+                                  "null"
+                                ]
+                              },
+                              "lowerBound": {
+                                "type": [
+                                  "number",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "candidatePassed",
+                              "candidateTrials",
+                              "baselinePassed",
+                              "baselineTrials",
+                              "difference",
+                              "lowerBound"
+                            ],
+                            "type": "object"
+                          },
+                          "holdout": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "baselinePassed": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "baselineTrials": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "candidatePassed": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "candidateTrials": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "difference": {
+                                    "type": [
+                                      "number",
+                                      "null"
+                                    ]
+                                  },
+                                  "lowerBound": {
+                                    "type": [
+                                      "number",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "candidatePassed",
+                                  "candidateTrials",
+                                  "baselinePassed",
+                                  "baselineTrials",
+                                  "difference",
+                                  "lowerBound"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "stage": {
+                            "const": "confirm",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "stage",
+                          "delta",
+                          "confidence",
+                          "dev",
+                          "holdout"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "runId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "skipReason": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "no_cases",
+                      "no_mechanism",
+                      "budget"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "stage": {
+                "enum": [
+                  "regression",
+                  "mechanism",
+                  "confirm"
+                ],
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "waiting",
+                  "running",
+                  "ended",
+                  "skipped",
+                  "not_run",
+                  "cancelled"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "stage",
+              "status",
+              "skipReason",
+              "runId",
+              "caseCount",
+              "k",
+              "estimateUsd",
+              "baseline",
+              "candidate",
+              "cases",
+              "measure"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "running",
+            "finished",
+            "cancelled"
+          ],
+          "type": "string"
+        },
+        "suite": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "version": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "version"
+          ],
+          "type": "object"
+        },
+        "verdict": {
+          "anyOf": [
+            {
+              "enum": [
+                "regressed",
+                "refuted",
+                "worse",
+                "better",
+                "non_inferior",
+                "inconclusive",
+                "unmeasured",
+                "contaminated"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workerDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "version": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "version"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "stage",
+        "verdict",
+        "reason",
+        "decidedBy",
+        "costUsd",
+        "createdBy",
+        "createdAt",
+        "finishedAt",
+        "cancelledBy",
+        "suite",
+        "workerDefinition",
+        "candidate",
+        "baseline",
+        "mechanism",
+        "otherSkills",
+        "candidateContent",
+        "baselineContent",
+        "stages",
+        "environments"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
     "channel": "human",
     "group": "goal",
     "minRole": "member",
@@ -12138,6 +13076,944 @@
     "sideEffects": false
   },
   {
+    "actsForPerson": true,
+    "channel": "human",
+    "group": "evaluation",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "get_draft_evaluation",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "evaluationId": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "evaluationId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "baseline": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "skillId": {
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "skillId",
+                "version",
+                "name"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "baselineContent": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "description": {
+                  "type": "string"
+                },
+                "markdown": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "description",
+                "markdown"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cancelledBy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "candidate": {
+          "additionalProperties": false,
+          "properties": {
+            "draftDigest": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "skillId": {
+              "type": "string"
+            },
+            "version": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "skillId",
+            "version",
+            "name",
+            "draftDigest"
+          ],
+          "type": "object"
+        },
+        "candidateContent": {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "type": "string"
+            },
+            "markdown": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "description",
+            "markdown"
+          ],
+          "type": "object"
+        },
+        "costUsd": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "createdBy": {
+          "type": "string"
+        },
+        "decidedBy": {
+          "anyOf": [
+            {
+              "enum": [
+                "regression",
+                "mechanism",
+                "confirm"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "environments": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "baselineTrials": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "candidateTrials": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "environment": {
+                "additionalProperties": false,
+                "properties": {
+                  "definition": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "version": {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "version"
+                    ],
+                    "type": "object"
+                  },
+                  "environmentDigest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "image": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "kernelVersion": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "runtime": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "builtFrom": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "imageId": {
+                            "type": "string"
+                          },
+                          "imageRef": {
+                            "type": "string"
+                          },
+                          "modelsConfigDigest": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "piVersion": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "platformExtensionVersion": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "imageRef",
+                          "imageId",
+                          "piVersion",
+                          "platformExtensionVersion",
+                          "builtFrom",
+                          "modelsConfigDigest"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "systemPromptDigest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "definition",
+                  "model",
+                  "image",
+                  "systemPromptDigest",
+                  "kernelVersion",
+                  "runtime",
+                  "environmentDigest"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "environment",
+              "baselineTrials",
+              "candidateTrials"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "finishedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "mechanism": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "otherSkills": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "skillId": {
+                "type": "string"
+              },
+              "version": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "skillId",
+              "version",
+              "name"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "regression_case_lost",
+                "mechanism_not_shown",
+                "below_margin",
+                "above_baseline",
+                "within_margin",
+                "too_few_trials",
+                "holdout_disagrees",
+                "no_holdout_cases",
+                "no_confirm_cases",
+                "errored_trials",
+                "budget",
+                "environment_differs",
+                "environment_unknown",
+                "content_withheld",
+                "canary_reported"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stage": {
+          "anyOf": [
+            {
+              "enum": [
+                "regression",
+                "mechanism",
+                "confirm"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stages": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "baseline": {
+                "additionalProperties": false,
+                "properties": {
+                  "costUsd": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "errored": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "failed": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "open": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "passed": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "tokens": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "trials": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "trials",
+                  "passed",
+                  "failed",
+                  "errored",
+                  "open",
+                  "costUsd",
+                  "tokens"
+                ],
+                "type": "object"
+              },
+              "candidate": {
+                "additionalProperties": false,
+                "properties": {
+                  "costUsd": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "errored": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "failed": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "open": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "passed": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "tokens": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "trials": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "trials",
+                  "passed",
+                  "failed",
+                  "errored",
+                  "open",
+                  "costUsd",
+                  "tokens"
+                ],
+                "type": "object"
+              },
+              "caseCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "cases": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "baseline": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "costUsd": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "errored": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "failed": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "open": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "passed": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "tokens": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "trials": {
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "trials",
+                        "passed",
+                        "failed",
+                        "errored",
+                        "open",
+                        "costUsd",
+                        "tokens"
+                      ],
+                      "type": "object"
+                    },
+                    "candidate": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "costUsd": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "errored": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "failed": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "open": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "passed": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "tokens": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "trials": {
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "trials",
+                        "passed",
+                        "failed",
+                        "errored",
+                        "open",
+                        "costUsd",
+                        "tokens"
+                      ],
+                      "type": "object"
+                    },
+                    "caseId": {
+                      "type": "string"
+                    },
+                    "split": {
+                      "enum": [
+                        "dev",
+                        "holdout"
+                      ],
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "caseId",
+                    "title",
+                    "split",
+                    "baseline",
+                    "candidate"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "estimateUsd": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "k": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "measure": {
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "lostCaseIds": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "stage": {
+                            "const": "regression",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "stage",
+                          "lostCaseIds"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "baselineMaxPassed": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "baselinePassed": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "baselineTrials": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "candidatePassed": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "candidateTrials": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "stage": {
+                            "const": "mechanism",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "stage",
+                          "candidatePassed",
+                          "candidateTrials",
+                          "baselinePassed",
+                          "baselineTrials",
+                          "baselineMaxPassed"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "confidence": {
+                            "type": "number"
+                          },
+                          "delta": {
+                            "type": "number"
+                          },
+                          "dev": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "baselinePassed": {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "baselineTrials": {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "candidatePassed": {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "candidateTrials": {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "difference": {
+                                "type": [
+                                  "number",
+                                  "null"
+                                ]
+                              },
+                              "lowerBound": {
+                                "type": [
+                                  "number",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "candidatePassed",
+                              "candidateTrials",
+                              "baselinePassed",
+                              "baselineTrials",
+                              "difference",
+                              "lowerBound"
+                            ],
+                            "type": "object"
+                          },
+                          "holdout": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "baselinePassed": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "baselineTrials": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "candidatePassed": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "candidateTrials": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "difference": {
+                                    "type": [
+                                      "number",
+                                      "null"
+                                    ]
+                                  },
+                                  "lowerBound": {
+                                    "type": [
+                                      "number",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "candidatePassed",
+                                  "candidateTrials",
+                                  "baselinePassed",
+                                  "baselineTrials",
+                                  "difference",
+                                  "lowerBound"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "stage": {
+                            "const": "confirm",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "stage",
+                          "delta",
+                          "confidence",
+                          "dev",
+                          "holdout"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "runId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "skipReason": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "no_cases",
+                      "no_mechanism",
+                      "budget"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "stage": {
+                "enum": [
+                  "regression",
+                  "mechanism",
+                  "confirm"
+                ],
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "waiting",
+                  "running",
+                  "ended",
+                  "skipped",
+                  "not_run",
+                  "cancelled"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "stage",
+              "status",
+              "skipReason",
+              "runId",
+              "caseCount",
+              "k",
+              "estimateUsd",
+              "baseline",
+              "candidate",
+              "cases",
+              "measure"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "running",
+            "finished",
+            "cancelled"
+          ],
+          "type": "string"
+        },
+        "suite": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "version": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "version"
+          ],
+          "type": "object"
+        },
+        "verdict": {
+          "anyOf": [
+            {
+              "enum": [
+                "regressed",
+                "refuted",
+                "worse",
+                "better",
+                "non_inferior",
+                "inconclusive",
+                "unmeasured",
+                "contaminated"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workerDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "version": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "version"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "stage",
+        "verdict",
+        "reason",
+        "decidedBy",
+        "costUsd",
+        "createdBy",
+        "createdAt",
+        "finishedAt",
+        "cancelledBy",
+        "suite",
+        "workerDefinition",
+        "candidate",
+        "baseline",
+        "mechanism",
+        "otherSkills",
+        "candidateContent",
+        "baselineContent",
+        "stages",
+        "environments"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
     "channel": "handle",
     "group": "task",
     "minRole": "member",
@@ -12979,6 +14855,12 @@
         "createdBy": {
           "type": "string"
         },
+        "draftEvaluationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "finishedAt": {
           "type": [
             "string",
@@ -12994,9 +14876,25 @@
         },
         "kind": {
           "enum": [
-            "case_trial"
+            "case_trial",
+            "draft"
           ],
           "type": "string"
+        },
+        "stage": {
+          "anyOf": [
+            {
+              "enum": [
+                "regression",
+                "mechanism",
+                "confirm"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "status": {
           "enum": [
@@ -13018,7 +14916,8 @@
             "properties": {
               "arm": {
                 "enum": [
-                  "baseline"
+                  "baseline",
+                  "candidate"
                 ],
                 "type": "string"
               },
@@ -13133,6 +15032,12 @@
                   "null"
                 ]
               },
+              "environmentDigest": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "error": {
                 "anyOf": [
                   {
@@ -13170,10 +15075,14 @@
               },
               "result": {},
               "startedAt": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "status": {
                 "enum": [
+                  "queued",
                   "running",
                   "scored",
                   "errored"
@@ -13219,6 +15128,7 @@
               "calls",
               "costUsd",
               "tokens",
+              "environmentDigest",
               "startedAt",
               "finishedAt"
             ],
@@ -13252,6 +15162,8 @@
         "workerDefinition",
         "k",
         "status",
+        "draftEvaluationId",
+        "stage",
         "createdBy",
         "createdAt",
         "finishedAt",
@@ -26010,6 +27922,283 @@
     "sideEffects": false
   },
   {
+    "actsForPerson": true,
+    "channel": "human",
+    "group": "evaluation",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "list_draft_evaluations",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "skillId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "suiteId": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "baseline": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "skillId": {
+                        "type": "string"
+                      },
+                      "version": {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "skillId",
+                      "version",
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "cancelledBy": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "candidate": {
+                "additionalProperties": false,
+                "properties": {
+                  "draftDigest": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "skillId": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "skillId",
+                  "version",
+                  "name",
+                  "draftDigest"
+                ],
+                "type": "object"
+              },
+              "costUsd": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "createdBy": {
+                "type": "string"
+              },
+              "decidedBy": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "regression",
+                      "mechanism",
+                      "confirm"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "finishedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "mechanism": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reason": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "regression_case_lost",
+                      "mechanism_not_shown",
+                      "below_margin",
+                      "above_baseline",
+                      "within_margin",
+                      "too_few_trials",
+                      "holdout_disagrees",
+                      "no_holdout_cases",
+                      "no_confirm_cases",
+                      "errored_trials",
+                      "budget",
+                      "environment_differs",
+                      "environment_unknown",
+                      "content_withheld",
+                      "canary_reported"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "stage": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "regression",
+                      "mechanism",
+                      "confirm"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "enum": [
+                  "running",
+                  "finished",
+                  "cancelled"
+                ],
+                "type": "string"
+              },
+              "suite": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "version"
+                ],
+                "type": "object"
+              },
+              "verdict": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "regressed",
+                      "refuted",
+                      "worse",
+                      "better",
+                      "non_inferior",
+                      "inconclusive",
+                      "unmeasured",
+                      "contaminated"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "workerDefinition": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "id",
+                  "version"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "id",
+              "status",
+              "stage",
+              "verdict",
+              "reason",
+              "decidedBy",
+              "costUsd",
+              "createdBy",
+              "createdAt",
+              "finishedAt",
+              "cancelledBy",
+              "suite",
+              "workerDefinition",
+              "candidate",
+              "baseline",
+              "mechanism"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
     "channel": "human",
     "group": "worker",
     "minRole": "member",
@@ -26103,6 +28292,13 @@
           "format": "uuid",
           "type": "string"
         },
+        "kind": {
+          "enum": [
+            "case_trial",
+            "draft"
+          ],
+          "type": "string"
+        },
         "suiteId": {
           "format": "uuid",
           "type": "string"
@@ -26139,6 +28335,12 @@
               "createdBy": {
                 "type": "string"
               },
+              "draftEvaluationId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "errored": {
                 "minimum": 0,
                 "type": "integer"
@@ -26162,7 +28364,8 @@
               },
               "kind": {
                 "enum": [
-                  "case_trial"
+                  "case_trial",
+                  "draft"
                 ],
                 "type": "string"
               },
@@ -26170,9 +28373,28 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "queued": {
+                "minimum": 0,
+                "type": "integer"
+              },
               "running": {
                 "minimum": 0,
                 "type": "integer"
+              },
+              "stage": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "regression",
+                      "mechanism",
+                      "confirm"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "status": {
                 "enum": [
@@ -26214,6 +28436,8 @@
               "workerDefinition",
               "k",
               "status",
+              "draftEvaluationId",
+              "stage",
               "createdBy",
               "createdAt",
               "finishedAt",
@@ -26222,6 +28446,7 @@
               "failed",
               "errored",
               "running",
+              "queued",
               "costUsd"
             ],
             "type": "object"
@@ -51690,6 +53915,969 @@
     "group": "evaluation",
     "minRole": "builder",
     "mode": "execute",
+    "name": "start_draft_evaluation",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "draftDigest": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "mechanism": {
+          "maxLength": 120,
+          "minLength": 1,
+          "type": "string"
+        },
+        "skillId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "suiteId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "suiteVersion": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "skillId",
+        "version",
+        "draftDigest",
+        "suiteId",
+        "suiteVersion"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "baseline": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "skillId": {
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "skillId",
+                "version",
+                "name"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "baselineContent": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "description": {
+                  "type": "string"
+                },
+                "markdown": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "description",
+                "markdown"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cancelledBy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "candidate": {
+          "additionalProperties": false,
+          "properties": {
+            "draftDigest": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "skillId": {
+              "type": "string"
+            },
+            "version": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "skillId",
+            "version",
+            "name",
+            "draftDigest"
+          ],
+          "type": "object"
+        },
+        "candidateContent": {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "type": "string"
+            },
+            "markdown": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "description",
+            "markdown"
+          ],
+          "type": "object"
+        },
+        "costUsd": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "createdBy": {
+          "type": "string"
+        },
+        "decidedBy": {
+          "anyOf": [
+            {
+              "enum": [
+                "regression",
+                "mechanism",
+                "confirm"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "environments": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "baselineTrials": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "candidateTrials": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "environment": {
+                "additionalProperties": false,
+                "properties": {
+                  "definition": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "version": {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "version"
+                    ],
+                    "type": "object"
+                  },
+                  "environmentDigest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "image": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "kernelVersion": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "runtime": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "builtFrom": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "imageId": {
+                            "type": "string"
+                          },
+                          "imageRef": {
+                            "type": "string"
+                          },
+                          "modelsConfigDigest": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "piVersion": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "platformExtensionVersion": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "imageRef",
+                          "imageId",
+                          "piVersion",
+                          "platformExtensionVersion",
+                          "builtFrom",
+                          "modelsConfigDigest"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "systemPromptDigest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "definition",
+                  "model",
+                  "image",
+                  "systemPromptDigest",
+                  "kernelVersion",
+                  "runtime",
+                  "environmentDigest"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "environment",
+              "baselineTrials",
+              "candidateTrials"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "finishedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "mechanism": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "otherSkills": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "skillId": {
+                "type": "string"
+              },
+              "version": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "skillId",
+              "version",
+              "name"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "regression_case_lost",
+                "mechanism_not_shown",
+                "below_margin",
+                "above_baseline",
+                "within_margin",
+                "too_few_trials",
+                "holdout_disagrees",
+                "no_holdout_cases",
+                "no_confirm_cases",
+                "errored_trials",
+                "budget",
+                "environment_differs",
+                "environment_unknown",
+                "content_withheld",
+                "canary_reported"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stage": {
+          "anyOf": [
+            {
+              "enum": [
+                "regression",
+                "mechanism",
+                "confirm"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stages": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "baseline": {
+                "additionalProperties": false,
+                "properties": {
+                  "costUsd": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "errored": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "failed": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "open": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "passed": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "tokens": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "trials": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "trials",
+                  "passed",
+                  "failed",
+                  "errored",
+                  "open",
+                  "costUsd",
+                  "tokens"
+                ],
+                "type": "object"
+              },
+              "candidate": {
+                "additionalProperties": false,
+                "properties": {
+                  "costUsd": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "errored": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "failed": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "open": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "passed": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "tokens": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "trials": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "trials",
+                  "passed",
+                  "failed",
+                  "errored",
+                  "open",
+                  "costUsd",
+                  "tokens"
+                ],
+                "type": "object"
+              },
+              "caseCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "cases": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "baseline": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "costUsd": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "errored": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "failed": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "open": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "passed": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "tokens": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "trials": {
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "trials",
+                        "passed",
+                        "failed",
+                        "errored",
+                        "open",
+                        "costUsd",
+                        "tokens"
+                      ],
+                      "type": "object"
+                    },
+                    "candidate": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "costUsd": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "errored": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "failed": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "open": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "passed": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "tokens": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "trials": {
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "trials",
+                        "passed",
+                        "failed",
+                        "errored",
+                        "open",
+                        "costUsd",
+                        "tokens"
+                      ],
+                      "type": "object"
+                    },
+                    "caseId": {
+                      "type": "string"
+                    },
+                    "split": {
+                      "enum": [
+                        "dev",
+                        "holdout"
+                      ],
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "caseId",
+                    "title",
+                    "split",
+                    "baseline",
+                    "candidate"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "estimateUsd": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "k": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "measure": {
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "lostCaseIds": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "stage": {
+                            "const": "regression",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "stage",
+                          "lostCaseIds"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "baselineMaxPassed": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "baselinePassed": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "baselineTrials": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "candidatePassed": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "candidateTrials": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "stage": {
+                            "const": "mechanism",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "stage",
+                          "candidatePassed",
+                          "candidateTrials",
+                          "baselinePassed",
+                          "baselineTrials",
+                          "baselineMaxPassed"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "confidence": {
+                            "type": "number"
+                          },
+                          "delta": {
+                            "type": "number"
+                          },
+                          "dev": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "baselinePassed": {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "baselineTrials": {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "candidatePassed": {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "candidateTrials": {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "difference": {
+                                "type": [
+                                  "number",
+                                  "null"
+                                ]
+                              },
+                              "lowerBound": {
+                                "type": [
+                                  "number",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "candidatePassed",
+                              "candidateTrials",
+                              "baselinePassed",
+                              "baselineTrials",
+                              "difference",
+                              "lowerBound"
+                            ],
+                            "type": "object"
+                          },
+                          "holdout": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "baselinePassed": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "baselineTrials": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "candidatePassed": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "candidateTrials": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "difference": {
+                                    "type": [
+                                      "number",
+                                      "null"
+                                    ]
+                                  },
+                                  "lowerBound": {
+                                    "type": [
+                                      "number",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "candidatePassed",
+                                  "candidateTrials",
+                                  "baselinePassed",
+                                  "baselineTrials",
+                                  "difference",
+                                  "lowerBound"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "stage": {
+                            "const": "confirm",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "stage",
+                          "delta",
+                          "confidence",
+                          "dev",
+                          "holdout"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "runId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "skipReason": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "no_cases",
+                      "no_mechanism",
+                      "budget"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "stage": {
+                "enum": [
+                  "regression",
+                  "mechanism",
+                  "confirm"
+                ],
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "waiting",
+                  "running",
+                  "ended",
+                  "skipped",
+                  "not_run",
+                  "cancelled"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "stage",
+              "status",
+              "skipReason",
+              "runId",
+              "caseCount",
+              "k",
+              "estimateUsd",
+              "baseline",
+              "candidate",
+              "cases",
+              "measure"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "running",
+            "finished",
+            "cancelled"
+          ],
+          "type": "string"
+        },
+        "suite": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "version": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "version"
+          ],
+          "type": "object"
+        },
+        "verdict": {
+          "anyOf": [
+            {
+              "enum": [
+                "regressed",
+                "refuted",
+                "worse",
+                "better",
+                "non_inferior",
+                "inconclusive",
+                "unmeasured",
+                "contaminated"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workerDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "version": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "version"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "stage",
+        "verdict",
+        "reason",
+        "decidedBy",
+        "costUsd",
+        "createdBy",
+        "createdAt",
+        "finishedAt",
+        "cancelledBy",
+        "suite",
+        "workerDefinition",
+        "candidate",
+        "baseline",
+        "mechanism",
+        "otherSkills",
+        "candidateContent",
+        "baselineContent",
+        "stages",
+        "environments"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
+    "actsForPerson": true,
+    "channel": "human",
+    "group": "evaluation",
+    "minRole": "builder",
+    "mode": "execute",
     "name": "start_eval_case_trial",
     "params": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -51725,6 +54913,12 @@
         "createdBy": {
           "type": "string"
         },
+        "draftEvaluationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "finishedAt": {
           "type": [
             "string",
@@ -51740,9 +54934,25 @@
         },
         "kind": {
           "enum": [
-            "case_trial"
+            "case_trial",
+            "draft"
           ],
           "type": "string"
+        },
+        "stage": {
+          "anyOf": [
+            {
+              "enum": [
+                "regression",
+                "mechanism",
+                "confirm"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "status": {
           "enum": [
@@ -51764,7 +54974,8 @@
             "properties": {
               "arm": {
                 "enum": [
-                  "baseline"
+                  "baseline",
+                  "candidate"
                 ],
                 "type": "string"
               },
@@ -51879,6 +55090,12 @@
                   "null"
                 ]
               },
+              "environmentDigest": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "error": {
                 "anyOf": [
                   {
@@ -51916,10 +55133,14 @@
               },
               "result": {},
               "startedAt": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "status": {
                 "enum": [
+                  "queued",
                   "running",
                   "scored",
                   "errored"
@@ -51965,6 +55186,7 @@
               "calls",
               "costUsd",
               "tokens",
+              "environmentDigest",
               "startedAt",
               "finishedAt"
             ],
@@ -51998,6 +55220,8 @@
         "workerDefinition",
         "k",
         "status",
+        "draftEvaluationId",
+        "stage",
         "createdBy",
         "createdAt",
         "finishedAt",

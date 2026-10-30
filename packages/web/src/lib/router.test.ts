@@ -73,9 +73,25 @@ describe('routeFromHash', () => {
     expect(routeFromHash('#/govern/evaluation/suites/s-1')).toEqual({
       kind: 'evaluation',
       tab: 'suites',
-      suiteId: 's-1',
+      itemId: 's-1',
     });
-    expect(sectionOf({ kind: 'evaluation', tab: 'suites', suiteId: 's-1' })).toBe('evaluation');
+    expect(sectionOf({ kind: 'evaluation', tab: 'suites', itemId: 's-1' })).toBe('evaluation');
+  });
+
+  it('S10 E3-2b: 草稿评测 is a tab of 评测 carrying an evaluation id; an unknown tab drops the id', () => {
+    expect(routeFromHash('#/govern/evaluation/drafts')).toEqual({
+      kind: 'evaluation',
+      tab: 'drafts',
+    });
+    expect(routeFromHash('#/govern/evaluation/drafts/e-1')).toEqual({
+      kind: 'evaluation',
+      tab: 'drafts',
+      itemId: 'e-1',
+    });
+    expect(routeFromHash('#/govern/evaluation/runs/e-1')).toEqual({
+      kind: 'evaluation',
+      tab: 'suites',
+    });
   });
 
   it('S11 P1-C: the 能力包 tab, and the 模块 tab it replaced still lands on it', () => {
@@ -190,7 +206,9 @@ describe('hrefs', () => {
       { kind: 'catalog', tab: 'skills', itemId: 'skill-1' },
       { kind: 'catalog', tab: 'workers', itemId: 'new' },
       { kind: 'evaluation', tab: 'suites' },
-      { kind: 'evaluation', tab: 'suites', suiteId: 's-1' },
+      { kind: 'evaluation', tab: 'suites', itemId: 's-1' },
+      { kind: 'evaluation', tab: 'drafts' },
+      { kind: 'evaluation', tab: 'drafts', itemId: 'e-1' },
       { kind: 'models' },
       { kind: 'audit' },
       { kind: 'graph' },
@@ -240,7 +258,7 @@ function hrefFor(route: Route): string {
     case 'catalog':
       return hrefs.catalog(route.tab, route.itemId);
     case 'evaluation':
-      return hrefs.evaluation(route.tab, route.suiteId);
+      return hrefs.evaluation(route.tab, route.itemId);
     case 'models':
       return hrefs.models();
     case 'audit':

@@ -201,13 +201,14 @@ function handlers(role: string, current: () => EvalSuiteWire, cases: () => EvalC
     }),
     list_principals: () => ({ items: [{ id: 'p-me', displayName: 'alice', kind: 'human', role }] }),
     resolve_refs: () => ({ items: [] }),
+    list_draft_evaluations: () => ({ items: [] }),
   };
 }
 
 function renderDetail(http: CapabilityCaller) {
   render(
     <PermissionsProvider>
-      <EvaluationPage http={http} suiteId="s-1" onSelectSuite={vi.fn()} />
+      <EvaluationPage http={http} tab="suites" itemId="s-1" onNavigate={vi.fn()} />
     </PermissionsProvider>,
   );
 }
@@ -740,6 +741,7 @@ function trialOf(extra: Partial<EvalTrialWire> = {}): EvalTrialWire {
     ],
     costUsd: 0.37,
     tokens: 12345,
+    environmentDigest: 'v1:env',
     startedAt: AT,
     finishedAt: '2026-10-30T00:01:30.000Z',
     ...extra,
@@ -756,6 +758,8 @@ function runOf(trial: Partial<EvalTrialWire> = {}, extra: Partial<EvalRunWire> =
     workerDefinition: { id: WD, version: 1 },
     k: 1,
     status: whole.status === 'running' ? 'running' : 'finished',
+    draftEvaluationId: null,
+    stage: null,
     createdBy: 'p-me',
     createdAt: AT,
     finishedAt: whole.finishedAt,
@@ -779,6 +783,7 @@ function summaryOfRun(run: EvalRunWire): EvalRunSummaryWire {
     failed: count('failed'),
     errored: count('errored'),
     running: count('running'),
+    queued: count('queued'),
     costUsd: trials[0]?.costUsd ?? null,
   };
 }

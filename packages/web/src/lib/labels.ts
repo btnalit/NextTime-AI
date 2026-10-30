@@ -168,6 +168,7 @@ export const AUDIT_RESOURCE_TYPE_LABELS: Readonly<Record<AuditResourceType, Bili
   conflict: { zh: '冲突', en: 'Conflict' },
   connection_request: { zh: '连接申请', en: 'Connection request' },
   decision: { zh: '决策', en: 'Decision' },
+  draft_evaluation: { zh: '草稿评测', en: 'Draft evaluation' },
   eval_case: { zh: '用例', en: 'Evaluation case' },
   eval_run: { zh: '评测运行', en: 'Evaluation run' },
   eval_suite: { zh: '用例集', en: 'Evaluation suite' },

@@ -140,13 +140,19 @@ function baseHandlers(role = 'builder', current: () => EvalSuiteWire = () => sui
       items: [{ id: 'p-me', displayName: 'alice', kind: 'human', role }],
     }),
     resolve_refs: () => ({ items: [] }),
+    list_draft_evaluations: () => ({ items: [] }),
   };
 }
 
 function renderPage(http: CapabilityCaller, suiteId?: string, onSelectSuite = vi.fn()) {
   render(
     <PermissionsProvider>
-      <EvaluationPage http={http} suiteId={suiteId} onSelectSuite={onSelectSuite} />
+      <EvaluationPage
+        http={http}
+        tab="suites"
+        itemId={suiteId}
+        onNavigate={(_tab, id) => onSelectSuite(id)}
+      />
     </PermissionsProvider>,
   );
   return onSelectSuite;

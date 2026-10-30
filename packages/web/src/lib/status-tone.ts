@@ -5,6 +5,8 @@ import type {
   ChangeSegmentStatus,
   ConnectionRequestStatus,
   ConnectorModeWire,
+  DraftEvaluationStageStatus,
+  DraftEvaluationVerdict,
   GateInstanceStatusWire,
   GateTrustWire,
   GoalAcceptanceCheckStatus,
@@ -35,6 +37,8 @@ import {
   CHANGE_SEGMENT_STATUS_VALUES,
   CONNECTION_REQUEST_STATUS_VALUES,
   ConnectorModeWireSchema,
+  DRAFT_EVALUATION_STAGE_STATUS_VALUES,
+  DRAFT_EVALUATION_VERDICT_VALUES,
   GOAL_ACCEPTANCE_CHECK_STATUS_VALUES,
   GOAL_RUN_STATUS_VALUES,
   GRANT_STATUS_VALUES,
@@ -142,7 +146,9 @@ export type StatusMachine =
   | 'planRevision'
   | 'packRequirement'
   | 'evalTrial'
-  | 'evalAssertion';
+  | 'evalAssertion'
+  | 'draftEvaluation'
+  | 'draftEvaluationStage';
 
 export const ACTION_REQUEST_TONES: Readonly<Record<ActionRequestStatus, ChipStyle>> = {
   proposed: { tone: 'neutral', label: { zh: '已提议', en: 'Proposed' } },
@@ -474,12 +480,19 @@ export const PACK_REQUIREMENT_TONES: Readonly<Record<PackRequirementState, ChipS
   needs_platform: { tone: 'danger', label: { zh: '平台未提供', en: 'Not offered' } },
 };
 
-/** S10 E3-2a: how an evaluation trial came out — `running`, its verdict once `scored`, or
- *  `errored` (`EvalTrialWire`'s `status` and `verdict` read together, `lib/eval-runs.ts`
- *  `trialOutcomeStatus`). */
-export const EVAL_TRIAL_OUTCOME_VALUES = ['running', 'passed', 'failed', 'errored'] as const;
+/** S10 E3-2a: how an evaluation trial came out — `queued` (E3-2b: a draft evaluation's trial
+ *  waiting its turn), `running`, its verdict once `scored`, or `errored` (`EvalTrialWire`'s
+ *  `status` and `verdict` read together, `lib/eval-runs.ts` `trialOutcomeStatus`). */
+export const EVAL_TRIAL_OUTCOME_VALUES = [
+  'queued',
+  'running',
+  'passed',
+  'failed',
+  'errored',
+] as const;
 export type EvalTrialOutcome = (typeof EVAL_TRIAL_OUTCOME_VALUES)[number];
 export const EVAL_TRIAL_TONES: Readonly<Record<EvalTrialOutcome, ChipStyle>> = {
+  queued: { tone: 'neutral', label: { zh: '排队中', en: 'Queued' }, live: true },
   running: { tone: 'info', label: { zh: '运行中', en: 'Running' }, live: true },
   passed: { tone: 'ok', label: { zh: '通过', en: 'Passed' } },
   failed: { tone: 'danger', label: { zh: '未通过', en: 'Failed' } },
@@ -495,6 +508,40 @@ export const EVAL_ASSERTION_TONES: Readonly<
   unsatisfied: { tone: 'danger', label: { zh: '不成立', en: 'Does not hold' } },
   undetermined: { tone: 'warn', label: { zh: '无法判断', en: 'Undetermined' } },
 };
+
+/** S10 E3-2b: where a draft evaluation stands — `running`, `cancelled`, or once it finished its
+ *  verdict (`DraftEvaluationSummaryWire`'s `status` and `verdict` read together,
+ *  `lib/draft-evaluations.ts` `draftEvaluationOutcome`). */
+export const DRAFT_EVALUATION_OUTCOME_VALUES = [
+  'running',
+  'cancelled',
+  ...DRAFT_EVALUATION_VERDICT_VALUES,
+] as const;
+export type DraftEvaluationOutcome = 'running' | 'cancelled' | DraftEvaluationVerdict;
+export const DRAFT_EVALUATION_TONES: Readonly<Record<DraftEvaluationOutcome, ChipStyle>> = {
+  running: { tone: 'info', label: { zh: '评测中', en: 'Evaluating' }, live: true },
+  cancelled: { tone: 'neutral', label: { zh: '已取消', en: 'Cancelled' } },
+  better: { tone: 'ok', label: { zh: '优于基线', en: 'Better' } },
+  non_inferior: { tone: 'ok', label: { zh: '不差于基线', en: 'Non-inferior' } },
+  inconclusive: { tone: 'warn', label: { zh: '没有定论', en: 'Inconclusive' } },
+  unmeasured: { tone: 'warn', label: { zh: '无法比较', en: 'Unmeasured' } },
+  regressed: { tone: 'danger', label: { zh: '有回归', en: 'Regressed' } },
+  refuted: { tone: 'danger', label: { zh: '机制未证实', en: 'Refuted' } },
+  worse: { tone: 'danger', label: { zh: '差于基线', en: 'Worse' } },
+  contaminated: { tone: 'danger', label: { zh: '受污染', en: 'Contaminated' } },
+};
+
+/** S10 E3-2b: one stage of a draft evaluation (`DraftEvaluationStageWire.status`). Whether an
+ *  ended stage passed is the evaluation's `decidedBy` — the stage card says that beside the chip. */
+export const DRAFT_EVALUATION_STAGE_TONES: Readonly<Record<DraftEvaluationStageStatus, ChipStyle>> =
+  {
+    waiting: { tone: 'neutral', label: { zh: '等待中', en: 'Waiting' } },
+    running: { tone: 'info', label: { zh: '运行中', en: 'Running' }, live: true },
+    ended: { tone: 'neutral', label: { zh: '已跑完', en: 'Ended' } },
+    skipped: { tone: 'neutral', label: { zh: '已跳过', en: 'Skipped' } },
+    not_run: { tone: 'neutral', label: { zh: '未运行', en: 'Not run' } },
+    cancelled: { tone: 'neutral', label: { zh: '已取消', en: 'Cancelled' } },
+  };
 
 const MACHINES: Readonly<
   Record<StatusMachine, { values: readonly string[]; tones: Readonly<Record<string, ChipStyle>> }>
@@ -542,6 +589,11 @@ const MACHINES: Readonly<
   packRequirement: { values: PACK_REQUIREMENT_STATE_VALUES, tones: PACK_REQUIREMENT_TONES },
   evalTrial: { values: EVAL_TRIAL_OUTCOME_VALUES, tones: EVAL_TRIAL_TONES },
   evalAssertion: { values: EVAL_ASSERTION_OUTCOME_VALUES, tones: EVAL_ASSERTION_TONES },
+  draftEvaluation: { values: DRAFT_EVALUATION_OUTCOME_VALUES, tones: DRAFT_EVALUATION_TONES },
+  draftEvaluationStage: {
+    values: DRAFT_EVALUATION_STAGE_STATUS_VALUES,
+    tones: DRAFT_EVALUATION_STAGE_TONES,
+  },
 };
 
 export interface ResolvedChipStyle extends ChipStyle {

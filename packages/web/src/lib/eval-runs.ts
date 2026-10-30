@@ -27,6 +27,7 @@ export function formatUsd(amount: number): string {
 export function trialOutcomeStatus(
   trial: Pick<EvalTrialWire, 'status' | 'verdict'>,
 ): EvalTrialOutcome {
+  if (trial.status === 'queued') return 'queued';
   if (trial.status === 'running') return 'running';
   if (trial.status === 'errored') return 'errored';
   return trial.verdict === 'passed' ? 'passed' : 'failed';
