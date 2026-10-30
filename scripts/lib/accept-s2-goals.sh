@@ -702,7 +702,8 @@ goal_s10_budget() {
 # response headers before holding it (llm-proxy cuts an upstream that sends none within 10 s) and
 # answers it by itself after 120 s, so nothing here can leave a Worker waiting longer than that.
 # A terminated Worker's held request stays listed until it is released: llm-proxy does not pass
-# its client's going away on to fake-llm.
+# its client's going away on to fake-llm. So a listed hold does not say its Worker still waits on
+# it; goal_release_running and goal_task_reported (below) check the Worker's side.
 
 GOAL_HOLDS=""
 
@@ -811,6 +812,37 @@ goal_step_task() {
 # goal_task_status <taskId>: the Task's status.
 goal_task_status() {
   psql_ws "select status from tasks where workspace_id = '$WORKSPACE_ID' and id = '$1'"
+}
+
+# A held turn's answer reaching its Worker (S12, S2). fake-llm's counts see only llm-proxy's side of
+# a held call: a Worker whose own call to llm-proxy is cut ends its Task by itself (its fallback
+# summary) while fake-llm still holds the request llm-proxy made, which answers nobody once
+# released. So a held goal step's turn is released only while its Task still reads running
+# (goal_release_running), and once the Task has ended its stored summary must be the one fake-llm
+# scripts for that report (goal_task_reported) — review #493 on #817.
+
+# goal_release_running <check> <goalRunId> <hold> <taskId> [<lock>]: releases the turn held under
+# <hold> once its Task <taskId> still reads running; fails <check> — ending <lock> first — when it
+# does not, or when other than one request answered.
+goal_release_running() {
+  grr_status=$(goal_task_status "$4")
+  if [ "$grr_status" != "running" ]; then
+    [ -z "${5:-}" ] || goal_row_lock_release "$5" >/dev/null
+    goal_fail "$1" "$2" "Task $4 reads '$grr_status' just before its held turn ($3) is released, expected running: its Worker ended without that turn's answer"
+  fi
+  grr_released=$(fake_llm_release "$3")
+  if [ "$grr_released" != "1" ]; then
+    [ -z "${5:-}" ] || goal_row_lock_release "$5" >/dev/null
+    goal_fail "$1" "$2" "releasing the turn held under $3 released '$grr_released' request(s), expected 1"
+  fi
+}
+
+# goal_task_reported <taskId> <nonce>: `ok` when the Task's stored summary is the one fake-llm
+# scripts for a goal step's report (goalStepScenario: `accept_s2: goal step <nonce> done; …`),
+# else the summary it stored.
+goal_task_reported() {
+  gtr_summary=$(psql_ws "select coalesce(result->>'summary', '(none)') from tasks where workspace_id = '$WORKSPACE_ID' and id = '$1'")
+  [ "$gtr_summary" = "accept_s2: goal step $2 done; the platform checks the stock API itself." ] && echo ok || echo "$gtr_summary"
 }
 
 # goal_one_task_per_attempt <goalRunId>: `ok` when every attempt of every step of the run has
@@ -929,8 +961,7 @@ goal_s12_lost_wake() {
   goal_row_lock_take "$lock" goal_runs "$S12_GOAL_ID" 90 || goal_fail "s12-locked" "$S12_GOAL_ID" "could not lock goal $S12_GOAL_ID's row within 10s (an advance holding it?)"
   pass "s12-locked" "goal $S12_GOAL_ID's row is locked (for no key update, its own transaction) while a's Worker is held mid model call, its Task $task running"
 
-  released=$(fake_llm_release "$hold")
-  [ "$released" = "1" ] || { goal_row_lock_release "$lock" >/dev/null; goal_fail "s12-wake-lost" "$S12_GOAL_ID" "releasing a's held turn released '$released' request(s), expected 1"; }
+  goal_release_running s12-wake-lost "$S12_GOAL_ID" "$hold" "$task" "$lock"
   ended=""
   saw=""
   gone=""
@@ -954,6 +985,8 @@ goal_s12_lost_wake() {
     goal_row_lock_release "$lock" >/dev/null
     goal_fail "s12-wake-lost" "$S12_GOAL_ID" "45s after a's turn was released: Task completed '${ended:-no}', the wake's update seen waiting on the row '${saw:-no}', given up '${gone:-no}', TaskUpdated dispatched '${sent:-no}', lock still held '$held' — expected all, with the lock held throughout"
   fi
+  reported=$(goal_task_reported "$task" "$n")
+  [ "$reported" = "ok" ] || { goal_row_lock_release "$lock" >/dev/null; goal_fail "s12-wake-lost" "$S12_GOAL_ID" "a's Task $task completed with summary '$reported', expected fake-llm's scripted report: the held turn's answer did not reach its Worker"; }
   took=$(psql_ws "select round(extract(epoch from dispatched_at - created_at)::numeric, 1) from outbox where workspace_id='$WORKSPACE_ID' and event_type='TaskUpdated' and payload->>'taskId'='$task' and payload->>'status'='completed'")
   tick=$(psql_ws "select coalesce(round(extract(epoch from next_tick_at - now()))::text, 'none') from goal_runs where workspace_id='$WORKSPACE_ID' and id='$S12_GOAL_ID'")
   ended_locks=$(goal_row_lock_release "$lock")
@@ -963,7 +996,7 @@ goal_s12_lost_wake() {
     none) : ;;
     *) [ "$tick" -ge 120 ] 2>/dev/null || goal_fail "s12-wake-lost" "$S12_GOAL_ID" "the run's next tick is ${tick}s away, expected none or its wall-clock deadline (an advance due this soon would move a on without the scan)" ;;
   esac
-  pass "s12-wake-lost" "a's Task $task completed while the row was held; its TaskUpdated took ${took}s to dispatch — the wake's update waited on the row and gave up (seen waiting, then gone, the lock still held) — and the run's next tick was ${tick}s away (its wall-clock deadline); lock ended ($ended_locks)"
+  pass "s12-wake-lost" "a's Task $task completed with the held turn's report while the row was held; its TaskUpdated took ${took}s to dispatch — the wake's update waited on the row and gave up (seen waiting, then gone, the lock still held) — and the run's next tick was ${tick}s away (its wall-clock deadline); lock ended ($ended_locks)"
 
   a_expr="(() => { const s = Object.fromEntries(d.result.steps.map((x) => [x.stepKey, x])); return [s.a.status, s.a.attempts.length].join(','); })()"
   goal_wait "$S12_GOAL_ID" 90 "$a_expr" 'succeeded,*' 'failed,*' \
@@ -1198,8 +1231,7 @@ goal_s2_restarts() {
   # 180 s: up to 45 s below, the kernel's restart (up to 120 s) and the checks after it pass with it
   # held — it must not end on its own while the kernel is down (review #488 on #817).
   goal_row_lock_take "$lock" step_runs "$b_row" 180 || goal_fail "s2-kernel-killed-advance" "$S2_GOAL_ID" "could not lock b's StepRun row $b_row within 10s"
-  released=$(fake_llm_release "$hold_a")
-  [ "$released" = "1" ] || { goal_row_lock_release "$lock" >/dev/null; goal_fail "s2-kernel-killed-advance" "$S2_GOAL_ID" "releasing a's held turn released '$released' request(s), expected 1"; }
+  goal_release_running s2-kernel-killed-advance "$S2_GOAL_ID" "$hold_a" "$task_a" "$lock"
   # Both: a's Task completed and an advance waiting on b's row — the one its end set off (the run
   # has nothing else to advance for: its next tick is its wall-clock deadline).
   deadline=$(($(date +%s) + 45))
@@ -1213,6 +1245,8 @@ goal_s2_restarts() {
     fi
     sleep 1
   done
+  reported=$(goal_task_reported "$task_a" "$n")
+  [ "$reported" = "ok" ] || { goal_row_lock_release "$lock" >/dev/null; goal_fail "s2-kernel-killed-advance" "$S2_GOAL_ID" "a's Task $task_a completed with summary '$reported', expected fake-llm's scripted report: the held turn's answer did not reach its Worker"; }
   goal_kernel_kill_restart s2-kernel-killed-advance
   # A session blocked on a row lock does not notice that its client is gone, so the dead kernel's
   # advance still waits there (with the run's own row, which it locked first) until it gets the row.
@@ -1223,7 +1257,7 @@ goal_s2_restarts() {
   ended=$(goal_row_lock_release "$lock")
   [ "$held|$zombie" = "1|1" ] || goal_fail "s2-kernel-killed-advance" "$S2_GOAL_ID" "with the kernel back, the lock on b's row read held '$held' with $zombie session(s) waiting on it — expected it still held and the dead advance's session still waiting there"
   [ "$b_before" = "0" ] || goal_fail "s2-kernel-killed-advance" "$S2_GOAL_ID" "b has $b_before Task(s) before the lock on its row ended, expected none (the advance that would start it was stopped on that row)"
-  pass "s2-kernel-killed-advance" "the advance a's end set off stopped on b's locked row with its transaction open; the kernel was killed in it and healthy again in ${GOAL_RESTART_SECONDS}s; the dead advance still waited on the row ($zombie waiting) until the lock was ended ($ended); b had no Task"
+  pass "s2-kernel-killed-advance" "a's Task completed with its held turn's report; the advance its end set off stopped on b's locked row with its transaction open; the kernel was killed in it and healthy again in ${GOAL_RESTART_SECONDS}s; the dead advance still waited on the row ($zombie waiting) until the lock was ended ($ended); b had no Task"
 
   fake_llm_wait_hold "$hold_b" 150 || goal_fail "s2-advance-redone" "$S2_GOAL_ID" "b's Worker did not reach its held turn within 150s of the lock's end (the dead claim's lease is 60s; fake-llm holds '$(fake_llm_holds)')"
   took=$(($(date +%s) - unlocked))
@@ -1246,15 +1280,16 @@ goal_s2_restarts() {
   [ "$after" = "running,running,2" ] || goal_fail "s2-supervisor-restarted" "$S2_GOAL_ID" "35s after worker-supervisor was back, b's Task $task_b, its WorkerRun $run_b and the run's Task count read '$after', expected the same Task and WorkerRun still running and two Tasks"
   pass "s2-supervisor-restarted" "worker-supervisor restarted while b's Worker was held and answered /healthz in ${GOAL_RESTART_SECONDS}s; 35s later (past one Task-reaper look) b's Task $task_b and its WorkerRun $run_b are the same, still running"
 
-  [ "$(fake_llm_release "$hold_b")" = "1" ] || goal_fail "s2-achieved" "$S2_GOAL_ID" "releasing b's held turn did not release exactly one request"
+  goal_release_running s2-achieved "$S2_GOAL_ID" "$hold_b" "$task_b"
   goal_wait "$S2_GOAL_ID" 300 "$GOAL_END_EXPR" 'completed,*' 'paused,*' 'cancelled,*' 'failed,*' \
     || goal_fail "s2-achieved" "$S2_GOAL_ID" "goal $S2_GOAL_ID did not settle within 300s of b's release (last '$GOAL_WAIT_VALUE')"
   steps=$(goal_get "$S2_GOAL_ID" "d.result.steps.map((s) => s.stepKey + ':' + s.status + ':' + s.attempts.length).sort().join(',')")
   order=$(goal_get "$S2_GOAL_ID" "(() => { const s = Object.fromEntries(d.result.steps.map((x) => [x.stepKey, x])); const start = (k) => Date.parse(s[k].attempts[0].createdAt); const end = (k) => Date.parse(s[k].endedAt); return start('b') >= end('a') && start('c') >= end('b') ? 'in-turn' : 'out-of-turn'; })()")
   per=$(goal_one_task_per_attempt "$S2_GOAL_ID")
-  [ "$GOAL_WAIT_VALUE|$steps|$order|$per" = "completed,achieved,verified_by_check,|a:succeeded:1,b:succeeded:1,c:succeeded:1|in-turn|ok" ] \
-    || goal_fail "s2-achieved" "$S2_GOAL_ID" "goal '$GOAL_WAIT_VALUE', steps '$steps', order '$order', Tasks per attempt '$per' — expected completed(achieved), every step succeeded on one attempt in turn, one Task each"
-  pass "s2-achieved" "goal $S2_GOAL_ID completed(achieved) through two kernel crashes and a worker-supervisor restart: a, b, c each succeeded on one attempt, each after the one before, one Task each"
+  reported=$(goal_task_reported "$task_b" "$n")
+  [ "$GOAL_WAIT_VALUE|$steps|$order|$per|$reported" = "completed,achieved,verified_by_check,|a:succeeded:1,b:succeeded:1,c:succeeded:1|in-turn|ok|ok" ] \
+    || goal_fail "s2-achieved" "$S2_GOAL_ID" "goal '$GOAL_WAIT_VALUE', steps '$steps', order '$order', Tasks per attempt '$per', b's summary '$reported' — expected completed(achieved), every step succeeded on one attempt in turn, one Task each, b's Task $task_b with fake-llm's scripted report"
+  pass "s2-achieved" "goal $S2_GOAL_ID completed(achieved) through two kernel crashes and a worker-supervisor restart: a, b, c each succeeded on one attempt, each after the one before, one Task each; b's Task $task_b completed with its held turn's report"
 }
 
 # goal_scenarios_step: the scenarios, in the order the header explains; S12 and S2 only with
