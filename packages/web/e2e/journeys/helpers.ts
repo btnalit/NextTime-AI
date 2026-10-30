@@ -82,6 +82,7 @@ const NAV_TESTID_BY_LABEL: Readonly<Record<string, string>> = {
   // Console redesign P2: 访问 merged into 系统与授权 — one nav item, one testid.
   系统与授权: 'systems',
   能力目录: 'catalog',
+  评测: 'evaluation',
   模型与配额: 'models',
   审计: 'audit',
   概览: 'platformOverview',

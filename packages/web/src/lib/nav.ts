@@ -104,6 +104,15 @@ export const GOVERN_NAV: readonly NavItem[] = [
     href: hrefs.systems(),
   },
   { section: 'catalog', label: '能力目录', sub: 'Catalog', icon: 'inbox', href: hrefs.catalog() },
+  // S10 E3-1a: evaluation suites — what a Worker version is measured against, open to every person
+  // (`list_eval_suites`), never to an agent.
+  {
+    section: 'evaluation',
+    label: '评测',
+    sub: 'Evaluation',
+    icon: 'flask',
+    href: hrefs.evaluation(),
+  },
   { section: 'models', label: '模型与配额', sub: 'Models', icon: 'sparkle', href: hrefs.models() },
   {
     section: 'audit',

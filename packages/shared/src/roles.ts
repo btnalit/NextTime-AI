@@ -87,6 +87,9 @@ export const AUDITOR_READ_CAPABILITIES: ReadonlySet<string> = new Set<Capability
   // the packs this deployment ships and what the workspace has of each (S11 P1-C); the install
   // preview, like the rollback preview, is an owner's
   'list_packs',
+  // S10 E3-1a: evaluation suites are open to every person (§5.6 "auditor 只读")
+  'list_eval_suites',
+  'get_eval_suite',
   // the workspace and the auditor itself
   'get_workspace',
   'list_models',
