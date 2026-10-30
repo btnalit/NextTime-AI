@@ -431,7 +431,11 @@ export interface WorkerRunUsageTokens {
  *  triggered via `budget_warned_at`, mirroring `governance/llm-usage/service.ts`'s own workspace-
  *  level crossing check); at ≥100% marks the Task `failed: budget_exhausted` and best-effort
  *  terminates every still-running WorkerRun under it (design doc I18: "到 100% 时 ... Task 进入
- *  failed: budget_exhausted"). Must be called on the same `client`/transaction the llm-usage
+ *  failed: budget_exhausted"). A Task `waiting_approval` counts as live here like a `running` one:
+ *  its Worker still holds its Handle and goes on calling the model once an `await_decision` gate
+ *  call comes back `pending_approval`, and the usage of the very answer that raised the request is
+ *  reported after the request has moved the Task (S11 GO7a, accept_s2 S10: a goal attempt capped
+ *  at one token spent past it unstopped). Must be called on the same `client`/transaction the llm-usage
  *  INSERT itself ran on (`interfaces/http/internal/llm-usage.ts`'s own doc comment) — this
  *  function opens no transaction of its own.
  */
@@ -464,7 +468,12 @@ export async function recordWorkerRunUsage(
   if (!taskRow) return;
   const task = mapTaskRow(taskRow);
 
-  if (task.tokenBudget === null || task.status !== 'running') return;
+  if (
+    task.tokenBudget === null ||
+    (task.status !== 'running' && task.status !== 'waiting_approval')
+  ) {
+    return;
+  }
   const percent = task.tokenBudget > 0 ? (task.tokensUsed / task.tokenBudget) * 100 : 100;
 
   if (percent >= 100) {

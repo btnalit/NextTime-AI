@@ -621,9 +621,11 @@ goal_s9_authority_lost() {
 # (advance.ts startSteps, step-attempt.ts). The fake model's first answer spends more; once
 # llm-proxy reports the usage (every ~2s) the kernel fails the Task budget_exhausted and terminates
 # its Worker (recordWorkerRunUsage), and the next advance finds the goal's tokens spent and pauses
-# the run budget_exhausted. A goal_ledger step, so the attempt is still running when the usage
-# lands: its write has usually reached the gate by then and holds the step waiting(approval) — the
-# run pauses all the same, the write is left to the person, and the cancel at the end withdraws it.
+# the run budget_exhausted. A goal_ledger step, so the attempt is still live when the usage lands:
+# its write (await_decision) has usually reached the gate by then, moved the Task to
+# waiting_approval and holds the step waiting(approval) — a waiting Task is stopped all the same
+# (the third rehearsal of GO7a-2 caught the kernel letting it run on: it judged only running
+# Tasks), the run pauses, the write is left to the person, and the cancel at the end withdraws it.
 # Should the Worker be stopped before its write reaches the gate, the step fails transient instead,
 # under the same pause. Either way: not failed, not completed, the next step never started.
 

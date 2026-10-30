@@ -1846,6 +1846,60 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     expect(workerRunAfter?.status).toBe('terminated');
   });
 
+  // S11 GO7a (accept_s2 S10): the usage of the answer that raised an approval is reported after
+  // the request moved the Task to `waiting_approval`, and the Worker goes on calling the model once
+  // an `await_decision` call comes back `pending_approval` — the Task is still live, so 100% stops
+  // it there too, and its WorkerRun (never suspended meanwhile) is terminated.
+  it('budget 100% while the Task is waiting_approval also fails it budget_exhausted and terminates the WorkerRun', async () => {
+    const sessionId = await insertSession('entry', ownerId, ownerId);
+    const issued = await issueTestHandle(sessionId, entryScope());
+    const supervisorClient = new FakeTaskSupervisorClient();
+    const runtimeDeps = deps(supervisorClient);
+
+    const spawnResult = await invokeWorker(
+      workspaceId,
+      { principalId: ownerId, channel: 'handle', claims: claimsFromIssued(issued) },
+      { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+      runtimeDeps,
+    );
+    await inTx(ownerId, (client) =>
+      client.query(
+        `update tasks set token_budget = 1, tokens_used = 0, status = 'waiting_approval'
+         where workspace_id = $1 and id = $2`,
+        [workspaceId, spawnResult.taskId],
+      ),
+    );
+    const workerRun = await inTx(ownerId, (client) =>
+      readWorkerRunRow(client, workspaceId, spawnResult.workerRunId),
+    );
+    expect(workerRun?.status).toBe('running');
+    const childSessionId = workerRun?.sessionId as string;
+
+    const { configureTaskRuntime, resetTaskRuntimeForTests } = await import('./runtime.js');
+    configureTaskRuntime(runtimeDeps);
+    try {
+      await inTx(ownerId, (client) =>
+        recordWorkerRunUsage(client, workspaceId, childSessionId, {
+          inputTokens: 30,
+          outputTokens: 12,
+        }),
+      );
+    } finally {
+      resetTaskRuntimeForTests();
+    }
+
+    const task = await inTx(ownerId, (client) =>
+      readTaskRow(client, workspaceId, spawnResult.taskId),
+    );
+    expect(task?.status).toBe('failed');
+    expect(task?.failureReason).toBe('budget_exhausted');
+    expect(task?.tokensUsed).toBe(42);
+    const workerRunAfter = await inTx(ownerId, (client) =>
+      readWorkerRunRow(client, workspaceId, spawnResult.workerRunId),
+    );
+    expect(workerRunAfter?.status).toBe('terminated');
+  });
+
   it('80% budget warning fires exactly once (budget_warned_at set)', async () => {
     const sessionId = await insertSession('entry', ownerId, ownerId);
     const issued = await issueTestHandle(sessionId, entryScope());
