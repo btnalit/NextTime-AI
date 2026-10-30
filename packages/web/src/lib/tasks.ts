@@ -64,6 +64,9 @@ export interface TaskSummary {
   readonly outputSchema?: OutputSchema | null;
   readonly rejectedOutput?: RejectedOutputWire | null;
   readonly reworkOf?: ReworkOfWire | null;
+  /** S11 GO11: the only gatekeepers this Task's Workers may read through, fixed at creation (`[]` =
+   *  none). `null` = the Task sets no scope; absent from a kernel that predates GO11. */
+  readonly observeScope?: readonly string[] | null;
 }
 
 /** `list_worker_definitions` row (`toWireWorkerDefinition`, handlers.ts) — only what the Tasks

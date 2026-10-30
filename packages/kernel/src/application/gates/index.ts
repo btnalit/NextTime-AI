@@ -92,14 +92,17 @@ export {
 export type {
   ObserveExclusions,
   ObserveGateExclusion,
+  ObserveGateRefusal,
   ObserveRefusal,
   ObserveTarget,
+  TaskObserveScope,
 } from './observe-access.js';
 export {
   NO_OBSERVE_EXCLUSIONS,
   observableGatekeeperIds,
   observeExclusionsOf,
   observeGateExclusion,
+  observeGateRefusal,
   observeRefusal,
   readObserveExclusions,
 } from './observe-access.js';

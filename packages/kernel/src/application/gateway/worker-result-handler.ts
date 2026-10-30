@@ -10,6 +10,7 @@ import {
   TaskOutputRejectedError,
   findWorkerRunBySessionId,
   postWorkerResult,
+  readHandleObserveExclusions,
   readTaskOutputContract,
 } from '../../application/task/index.js';
 import {
@@ -29,7 +30,6 @@ import {
   operationPlatformStatus,
   readExecuteAccess,
   readGatekeeperPlatformPolicies,
-  readObserveExclusions,
 } from '../gates/index.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
@@ -396,7 +396,8 @@ function toWireOperation(
  *     that `observeRefusal` (application/gates/observe-access.ts — the predicate
  *     `observe_operation` / `request_action` enforce) accepts for the Handle's member: no Grant
  *     needed (decision D4 revoked 2026-09-27, "只读调用不需要授权"), but a gate the AgentPolicy cap
- *     or the member's own AgentProfile excludes, or an Operation on the platform deny list, is not
+ *     or the member's own AgentProfile excludes, a gate outside the observation scope of the Task
+ *     a calling Worker runs (S11 GO11), or an Operation on the platform deny list, is not
  *     listed. This is what makes an ungranted system visible to the entry agent, a Worker and an
  *     MCP client alike — without it enforcement would allow a call no tool exists for.
  *   - **execute-class**: the published execute Operations of the Gatekeepers in the Handle's own
@@ -432,7 +433,11 @@ export const listAllowedOperationsHandler: CapabilityHandler = async (
     gates.map((gate) => gate.gatekeeperId),
   );
   const platformPolicies = await readGatekeeperPlatformPolicies(client, workspaceId);
-  const exclusions = await readObserveExclusions(client, workspaceId, principalId);
+  // S11 GO11: a Worker of a scoped Task is listed only the observe tools of the gates its Task names.
+  const exclusions = await readHandleObserveExclusions(client, workspaceId, {
+    principalId,
+    sessionId: ctx.claims?.sid,
+  });
 
   // One `getGatekeeper` per gate (not per Operation): its display name, and — the same lookup
   // `observe_operation` 404s on — whether the gate counts as enabled for `observeRefusal`.

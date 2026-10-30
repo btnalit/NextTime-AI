@@ -544,3 +544,44 @@ describe('TaskDetail', () => {
     expect(screen.queryByTestId('task-output-contract')).toBeNull();
   });
 });
+
+/** S11 GO11: a Task's observation scope, fixed at creation. */
+describe('TaskDetail observation scope', () => {
+  const GATE = '11111111-2222-4333-8444-555555555555';
+
+  it('names the only gatekeepers the Task’s Workers can read through', async () => {
+    renderDetail(
+      { observeScope: [GATE] },
+      scriptedHttp({
+        list_action_requests: () => ({ items: [] }),
+        resolve_refs: () => ({
+          items: [{ kind: 'gatekeeper', id: GATE, name: 'Fixture CMDB', typeName: 'Gatekeeper' }],
+        }),
+      }),
+    );
+    const scope = await screen.findByTestId('task-observe-scope');
+    expect(screen.getByText('观察范围')).toBeTruthy();
+    await waitFor(() => expect(scope.textContent).toContain('Fixture CMDB'));
+    expect(within(scope).getAllByTestId('task-observe-scope-gate')).toHaveLength(1);
+    expect(scope.textContent).toContain('只能读取这些门');
+    expect(scope.textContent).toContain('不会改变');
+  });
+
+  it('an empty scope says the Workers can read through no gatekeeper', async () => {
+    renderDetail({ observeScope: [] });
+    const scope = await screen.findByTestId('task-observe-scope');
+    expect(scope.textContent).toContain('不能读取任何门');
+    expect(within(scope).queryAllByTestId('task-observe-scope-gate')).toEqual([]);
+  });
+
+  it('a Task that sets no scope, or a kernel that predates it, shows no row', async () => {
+    renderDetail({ observeScope: null });
+    await screen.findByTestId('task-detail');
+    expect(screen.queryByTestId('task-observe-scope')).toBeNull();
+    cleanup();
+    renderDetail();
+    await screen.findByTestId('task-detail');
+    expect(screen.queryByTestId('task-observe-scope')).toBeNull();
+    expect(screen.queryByText('观察范围')).toBeNull();
+  });
+});
