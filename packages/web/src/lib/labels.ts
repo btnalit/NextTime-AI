@@ -171,6 +171,7 @@ export const AUDIT_RESOURCE_TYPE_LABELS: Readonly<Record<AuditResourceType, Bili
   draft_evaluation: { zh: '草稿评测', en: 'Draft evaluation' },
   eval_case: { zh: '用例', en: 'Evaluation case' },
   eval_run: { zh: '评测运行', en: 'Evaluation run' },
+  eval_seal_hold: { zh: '评测防泄漏暂停', en: 'Evaluation seal pause' },
   eval_suite: { zh: '用例集', en: 'Evaluation suite' },
   fact: { zh: '事实', en: 'Fact' },
   // Legacy sweep (console batch, 2026-10-16): `gatekeeper` reads 门 now that `gate_instance` (the

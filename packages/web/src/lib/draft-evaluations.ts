@@ -15,7 +15,7 @@ import {
   mechanismBaselineMaxPassed,
 } from '@nexttime/shared';
 import type { ErrorOverrides } from './errors.js';
-import { formatUsd } from './eval-runs.js';
+import { evaluationPausedStartText, formatUsd } from './eval-runs.js';
 import { HttpError } from './http-client.js';
 import type { Translate } from './i18n.js';
 import type { DraftEvaluationOutcome } from './status-tone.js';
@@ -405,6 +405,7 @@ export function draftEvaluationPlan(
 /** What a start's refusals say in the evaluate dialog, beyond the kernel's own text. */
 export function draftEvaluationStartErrors(t: Translate): ErrorOverrides {
   return {
+    evaluation_probe_hold: evaluationPausedStartText(t),
     not_a_draft: t(
       '这个版本已经不是草稿了（发布了，或被丢弃、拒绝），只有草稿能评测，什么也没有启动。刷新后看它现在的状态。',
       'This version is no longer a draft (it was published, discarded or rejected); only a draft can be evaluated, and nothing was started. Refresh to see its current state.',

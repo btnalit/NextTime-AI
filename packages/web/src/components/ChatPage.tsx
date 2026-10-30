@@ -11,6 +11,7 @@ import {
 } from '../lib/errors.js';
 import { useT } from '../lib/i18n.js';
 import { liveOutputPaused } from '../lib/live-stream.js';
+import { hrefs } from '../lib/router.js';
 import { goalRunIdsIn, latestGoalStatuses } from '../lib/system-status.js';
 import { persistedToolCallIds, threadItems } from '../lib/tool-call-record.js';
 import type { WsClient } from '../lib/ws-client.js';
@@ -28,6 +29,7 @@ import { useChatMessages } from './chat/useChatMessages.js';
 import { useChatSummary } from './chat/useChatSummary.js';
 import { useComposer } from './chat/useComposer.js';
 import { useTurnAttributions } from './chat/useTurnAttributions.js';
+import { RouteLink } from './kit/route-link.js';
 import { Textarea } from './kit/textarea.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -332,6 +334,16 @@ export function ChatPage({
                       >
                         {t('移除看不见的字符', 'Remove invisible characters')}
                       </Button>
+                    ) : describeError(sendError).code === 'evaluation_probe_hold' &&
+                      can('list_eval_seal_holds') === true ? (
+                      // #838 UX P3: whoever can see the pauses goes straight to them.
+                      <RouteLink
+                        href={hrefs.evaluation()}
+                        className="link-inline"
+                        testId="composer-probe-hold-open"
+                      >
+                        {t('去「治理 → 评测」查看暂停', 'See the pause under Govern → Evaluation')}
+                      </RouteLink>
                     ) : undefined
                   }
                 />

@@ -806,9 +806,22 @@ describe('EvaluationPage — the evaluation seal’s pauses (S10 E3-2c, legacy 5
       status: 'active',
     });
     expect(within(notice).queryByTestId('eval-seal-holds-owner-only')).toBeNull();
+    // Each row opens the seal's own refusals for whoever it paused (#838 UX P2-1).
+    const bobAudit = within(rows[0] as HTMLElement).getByTestId('eval-seal-hold-audit');
+    expect(bobAudit.getAttribute('href')).toBe(
+      '#/govern/audit?actorPrincipalId=p-bob&action=evaluation.content_withheld',
+    );
+    expect(
+      within(rows[1] as HTMLElement)
+        .getByTestId('eval-seal-hold-audit')
+        .getAttribute('href'),
+    ).toContain('actorPrincipalId=p-eval');
 
     fireEvent.click(within(rows[1] as HTMLElement).getByTestId('eval-seal-hold-release'));
     const confirm = await screen.findByTestId(`eval-seal-hold-release-${EVAL_HOLD.id}`);
+    expect(within(confirm).getByTestId('eval-seal-hold-release-audit').getAttribute('href')).toBe(
+      '#/govern/audit?actorPrincipalId=p-eval&action=evaluation.content_withheld',
+    );
     expect(within(confirm).getByTestId('confirm-impact').textContent).toContain(
       '排队中的试跑开始运行',
     );
@@ -840,6 +853,44 @@ describe('EvaluationPage — the evaluation seal’s pauses (S10 E3-2c, legacy 5
         draftReads,
       ),
     );
+  });
+
+  it('the owner’s own pause reads as theirs, and a pause released meanwhile re-reads the list once the dialog closes', async () => {
+    const mine = hold({
+      principal: { id: 'p-me', kind: 'human', displayName: 'Me', evaluation: false },
+    });
+    let active: EvalSealHoldWire[] = [mine];
+    const http = scriptedHttp({
+      ...baseHandlers('owner'),
+      list_eval_seal_holds: () => ({ items: active }),
+      release_eval_seal_hold: () => {
+        active = [];
+        throw kernelError('conflict', 'hold already released');
+      },
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('eval-seal-hold-row');
+    expect(row.textContent).toContain('你名下的智能体');
+    expect(row.textContent).not.toContain('Me 名下');
+
+    fireEvent.click(within(row).getByTestId('eval-seal-hold-release'));
+    const confirm = await screen.findByTestId(`eval-seal-hold-release-${mine.id}`);
+    expect(within(confirm).getByTestId('confirm-target').textContent).toBe('你名下的智能体');
+    fireEvent.change(within(confirm).getByTestId('eval-seal-hold-release-reason'), {
+      target: { value: 'my own Skill, retired' },
+    });
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    expect((await within(confirm).findByTestId('confirm-error')).textContent).toContain(
+      '这个暂停已经被解除了',
+    );
+    const reads = http.calls.filter((c) => c.name === 'list_eval_seal_holds').length;
+    fireEvent.click(within(confirm).getByTestId('confirm-cancel'));
+    // The reason typed is asked about before it is dropped.
+    fireEvent.click(await screen.findByTestId('discard-confirm-discard'));
+    await waitFor(() =>
+      expect(http.calls.filter((c) => c.name === 'list_eval_seal_holds').length).toBe(reads + 1),
+    );
+    await waitFor(() => expect(screen.queryByTestId('eval-seal-holds')).toBeNull());
   });
 
   it('an auditor sees the pauses but cannot release them', async () => {

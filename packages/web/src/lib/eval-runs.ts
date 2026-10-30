@@ -130,8 +130,18 @@ export function budgetStanding(budget: EvalBudgetWire, trials = 1): BudgetStandi
 }
 
 /** What a 试跑's refusals say on the console, beyond the kernel's own text. */
+/** S10 E3-2c (#838 UX P3): a start refused because the evaluation seal paused the evaluation's
+ *  own agents — whose agents, and who releases them (the generic note speaks of "these agents"). */
+export function evaluationPausedStartText(t: Translate): string {
+  return t(
+    '评测自己的智能体（替所有评测跑试跑的那些）已被评测防泄漏暂停，所以什么也没有启动，暂停期间不能开始试跑或草稿评测。工作区所有者在「治理 → 评测」查看并解除后再试。',
+    'The evaluation’s own agents (the ones that run every evaluation’s trials) are paused by the evaluation seal, so nothing was started; no trial or draft evaluation starts while they are paused. Try again once a workspace owner reviews and releases the pause under Govern → Evaluation.',
+  );
+}
+
 export function trialStartErrors(t: Translate): ErrorOverrides {
   return {
+    evaluation_probe_hold: evaluationPausedStartText(t),
     version_changed: t(
       '用例集在你打开之后被改过，什么也没有启动。已重新读取最新内容，看过后再试跑。',
       'The suite changed after you opened it, and nothing was started. The latest version has been loaded; look it over and try again.',

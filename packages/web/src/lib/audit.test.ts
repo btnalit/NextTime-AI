@@ -76,6 +76,11 @@ describe('audit entry links', () => {
     expect(resourceHref('eval_suite', 's-1', () => false)).toBeUndefined();
   });
 
+  it('S10 E3-2c: a seal pause opens 治理 → 评测, where the active ones are listed', () => {
+    expect(AUDIT_RESOURCE_TYPES).toContain('eval_seal_hold');
+    expect(resourceHref('eval_seal_hold', 'h-1')).toBe('#/govern/evaluation/suites');
+  });
+
   it('S11 P1-B: an install record opens 安装历史; a change item opens the record it belongs to', () => {
     expect(resourceHref('change_segment', 'seg-1')).toBe('#/govern/catalog/changes/seg-1');
     expect(resourceHref('change_item', 'item-1', () => true, { segmentId: 'seg-1' })).toBe(
