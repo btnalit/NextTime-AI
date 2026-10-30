@@ -17,8 +17,12 @@
 --     keys stand — principals are disabled, never deleted.
 --
 -- Backfill: the rejections made before this migration, from their AuditRecords (`reject_draft`
--- with the handler's `rejectedDraft` payload). Those never recorded the draft's name, so `name`
--- is NULL there. Re-running inserts nothing twice.
+-- with the handler's `rejectedDraft` payload). Those never recorded the draft's name; `name` is
+-- taken from the version of the same family just below it — exact for a Skill (a family keeps its
+-- name, `SkillFamilyNameChangedError`), the name the Procedure had before that draft for a
+-- Procedure (a draft could have renamed it) — and is NULL when the family has no such version
+-- left. No released version has `reject_draft` (#772), so only pre-release databases carry such
+-- rows. Re-running inserts nothing twice.
 --
 -- Reversible: a new table nothing earlier reads or writes; the previous release runs on this
 -- schema unchanged (its rejections then simply leave no row here).
@@ -67,7 +71,19 @@ insert into draft_rejections
   (workspace_id, kind, family_id, version, name, proposed_by, rejected_by, reason, draft_digest,
    rejected_at)
 select a.workspace_id, a.resource_type, a.resource_id,
-       (a.payload -> 'params' ->> 'version')::int, null,
+       (a.payload -> 'params' ->> 'version')::int,
+       case a.resource_type
+         when 'skill' then (
+           select s.name from skills s
+            where s.workspace_id = a.workspace_id and s.id = a.resource_id
+              and s.version < (a.payload -> 'params' ->> 'version')::int
+            order by s.version desc limit 1)
+         else (
+           select p.name from procedures p
+            where p.workspace_id = a.workspace_id and p.id = a.resource_id
+              and p.version < (a.payload -> 'params' ->> 'version')::int
+            order by p.version desc limit 1)
+       end,
        (a.payload -> 'rejectedDraft' ->> 'proposedBy')::uuid, a.actor_principal_id,
        a.payload -> 'params' ->> 'reason', a.payload -> 'params' ->> 'draftDigest', a.created_at
   from audit_records a

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { DraftRejectionWire } from '@nexttime/shared';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -75,6 +75,7 @@ describe('RejectedDrafts (legacy 491)', () => {
     expect(item?.textContent).toContain('restart-web');
     expect(item?.textContent).toContain('v2');
     await waitFor(() => expect(item?.textContent).toContain('Olivia'));
+    expect(item?.textContent).toContain('拒绝人');
     expect(item?.textContent).toContain('5 分钟前');
     const reason = within(item as HTMLElement).getByTestId('skill-rejected-drafts-reason');
     expect(reason.textContent?.startsWith('原因：')).toBe(true);
@@ -127,14 +128,19 @@ describe('RejectedDrafts (legacy 491)', () => {
     expect(screen.queryByTestId('skill-rejected-drafts-error')).toBeNull();
   });
 
-  it('a failed read says so', async () => {
+  it('a failed read says so, and 重试 reads again (UX acceptance of #792, P3-3)', async () => {
+    let fail = true;
     const http = scriptedHttp(() => {
-      throw new HttpError('capability_error', 'boom', 'internal');
+      if (fail) throw new HttpError('capability_error', 'boom', 'internal');
+      return { items: [rejection()] };
     });
     show(http);
-    expect((await screen.findByTestId('skill-rejected-drafts-error')).textContent).toContain(
-      '无法读取被拒绝的草稿',
-    );
+    const banner = await screen.findByTestId('skill-rejected-drafts-error');
+    expect(banner.textContent).toContain('无法读取被拒绝的草稿');
+    fail = false;
+    fireEvent.click(within(banner).getByRole('button', { name: /重试/ }));
+    expect(await screen.findByTestId('skill-rejected-drafts-item')).toBeTruthy();
+    expect(screen.queryByTestId('skill-rejected-drafts-error')).toBeNull();
   });
 
   it('a new reloadKey reads again', async () => {

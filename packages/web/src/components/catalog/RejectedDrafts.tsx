@@ -50,6 +50,7 @@ export function RejectedDrafts({
       <ErrorBanner
         error={state.error}
         title={t('无法读取被拒绝的草稿', 'Could not read your rejected drafts')}
+        onRetry={() => void reload()}
         testId={`${testId}-error`}
       />
     );
@@ -73,26 +74,20 @@ export function RejectedDrafts({
               'Procedure drafts you proposed (including those your Workers proposed for you) that a reviewer rejected. The draft itself is gone; propose it again once it is fixed.',
             )}
       </p>
-      <ul className="stack-s">
+      <ul className="rejected-drafts">
         {items.map((item) => (
-          <li
-            key={`${item.id}@${item.version}:${item.rejectedAt}`}
-            className="stack-s"
-            data-testid={`${testId}-item`}
-          >
+          <li key={`${item.id}@${item.version}:${item.rejectedAt}`} data-testid={`${testId}-item`}>
             <span className="row-wrap" style={{ minWidth: 0 }}>
               <span className="wrap-anywhere" data-testid={`${testId}-name`}>
                 {item.name ?? t('（拒绝时未记下名字）', '(name not recorded)')}
               </span>
               <span className="text-3">v{item.version}</span>
-              <span className="text-3">·</span>
+            </span>
+            <span className="rejected-drafts-meta text-3 text-small">
+              <span>{t('拒绝人', 'Rejected by')}</span>
               <RefChip kind="principal" id={item.rejectedBy} http={http} size="s" />
-              <span className="text-3">·</span>
-              <time
-                className="text-3"
-                dateTime={item.rejectedAt}
-                title={formatDateTime(item.rejectedAt)}
-              >
+              <span>·</span>
+              <time dateTime={item.rejectedAt} title={formatDateTime(item.rejectedAt)}>
                 {formatRelative(item.rejectedAt)}
               </time>
             </span>

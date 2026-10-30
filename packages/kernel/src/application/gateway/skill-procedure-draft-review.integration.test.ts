@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Role } from '@nexttime/shared';
@@ -905,6 +906,78 @@ describe.runIf(DATABASE_URL !== undefined)(
           }),
         ).rejects.toThrow(NotProposerError);
         expect(await rejectionsOf(memberId, 'member', skillId)).toEqual([]);
+      });
+
+      it('worker/0006’s backfill rebuilds them from the reject_draft audit records, the name from the family’s version below', async () => {
+        // A next version rejected (the family keeps v1) and a first version rejected (nothing left).
+        const skill = {
+          name: `backfill-${randomUUID().slice(0, 8)}`,
+          description: 'One.',
+          markdown: '# One',
+        };
+        const v1 = await call<{ id: string; draftDigest: string }>(
+          builderId,
+          'builder',
+          'propose_skill',
+          { skill },
+        );
+        await call(builderId, 'builder', 'publish_skill', {
+          skillId: v1.id,
+          version: 1,
+          draftDigest: v1.draftDigest,
+        });
+        const v2 = await call<{ draftDigest: string }>(otherBuilderId, 'builder', 'propose_skill', {
+          skill: { ...skill, markdown: '# Two' },
+          skillId: v1.id,
+        });
+        await call(builderId, 'builder', 'reject_draft', {
+          kind: 'skill',
+          id: v1.id,
+          version: 2,
+          draftDigest: v2.draftDigest,
+          reason: 'Not yet.',
+        });
+        const firstOnly = await workerProposedSkillOfMember();
+        await call(ownerId, 'owner', 'reject_draft', {
+          kind: 'skill',
+          id: firstOnly,
+          version: 1,
+          draftDigest: await reviewedSkillDigest(ownerId, 'owner', firstOnly),
+          reason: 'No.',
+        });
+
+        const migration = readFileSync(
+          path.join(KERNEL_ROOT, 'migrations', 'worker', '0006_draft_rejections.sql'),
+          'utf8',
+        );
+        const backfill = migration.slice(migration.indexOf('insert into draft_rejections'));
+        const columns =
+          'kind, family_id, version, name, proposed_by, rejected_by, reason, draft_digest, rejected_at';
+        const client = await pool.connect();
+        try {
+          await client.query('begin');
+          const rows = async () =>
+            (
+              await client.query(
+                `select ${columns} from draft_rejections
+                  where workspace_id = $1 and family_id = any($2::uuid[]) order by version`,
+                [workspaceId, [v1.id, firstOnly]],
+              )
+            ).rows;
+          const live = await rows();
+          expect(live.map((row) => row.name)).toEqual([expect.any(String), skill.name]);
+          await client.query('delete from draft_rejections where workspace_id = $1', [workspaceId]);
+          await client.query(backfill);
+          const rebuilt = await rows();
+          // Everything as written live — the name too where the family still has a version below;
+          // the first version, whose family went with it, has none.
+          expect(rebuilt).toEqual(live.map((row, i) => (i === 0 ? { ...row, name: null } : row)));
+          await client.query(backfill);
+          expect(await rows()).toHaveLength(2);
+        } finally {
+          await client.query('rollback');
+          client.release();
+        }
       });
     });
   },
