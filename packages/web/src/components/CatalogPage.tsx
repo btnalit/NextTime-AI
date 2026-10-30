@@ -116,13 +116,13 @@ import { Confirm } from './kit/confirm.js';
 import { CredentialReview } from './kit/credential-review.js';
 import {
   Dialog,
-  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from './kit/dialog.js';
+import { GuardedCancelButton } from './kit/discard-guard.js';
 import { EmptyState } from './kit/empty-state.js';
 import { ErrorBanner } from './kit/error-banner.js';
 import { Field, describedBy } from './kit/field.js';
@@ -1838,6 +1838,8 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
               invalid={descriptionError !== null}
               aria-describedby={describedBy(descriptionFieldId, true, descriptionError !== null)}
               data-testid="operation-description-textarea"
+              // One field, no <form>: still unsaved work the dialog asks about (legacy 497 rule).
+              data-discard-guard
             />
           </Field>
           <DialogFooter>
@@ -1852,11 +1854,14 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
             >
               {t('保存', 'Save')}
             </Button>
-            <DialogClose asChild>
-              <Button variant="ghost" size="s" disabled={savingDescription}>
-                {t('取消', 'Cancel')}
-              </Button>
-            </DialogClose>
+            <GuardedCancelButton
+              variant="ghost"
+              size="s"
+              disabled={savingDescription}
+              onCancel={closeDescriptionEditor}
+            >
+              {t('取消', 'Cancel')}
+            </GuardedCancelButton>
           </DialogFooter>
         </DialogContent>
       </Dialog>

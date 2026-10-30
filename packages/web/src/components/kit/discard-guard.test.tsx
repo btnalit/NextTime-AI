@@ -114,4 +114,29 @@ describe('kit/discard-guard in kit/sheet (legacy 497)', () => {
     await waitFor(() => expect(screen.getByTestId('state').textContent).toBe('closed'));
     expect(screen.queryByTestId('discard-confirm')).toBeNull();
   });
+
+  it('hands focus back to the plain button that opened the sheet, not <body> (#794 UX P3-3)', async () => {
+    function Page() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            edit
+          </button>
+          <Sheet open={open} onOpenChange={setOpen}>
+            <SheetContent data-testid="sheet">
+              <SheetTitle>Edit</SheetTitle>
+            </SheetContent>
+          </Sheet>
+        </>
+      );
+    }
+    render(<Page />);
+    const opener = screen.getByRole('button', { name: 'edit' });
+    opener.focus();
+    fireEvent.click(opener);
+    fireEvent.keyDown(await screen.findByTestId('sheet'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('sheet')).toBeNull());
+    expect(document.activeElement).toBe(opener);
+  });
 });
