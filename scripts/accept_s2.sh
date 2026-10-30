@@ -9,6 +9,7 @@
 #
 # Usage:
 #   sh scripts/accept_s2.sh [--keep]
+#   ACCEPT_DISRUPTIVE=1 sh scripts/accept_s2.sh [--keep]   # also goal scenarios S12 and S2, which interrupt service
 #   sh scripts/accept_s2.sh --real <provider/model> [--runs N] [--extended] [--keep]   # W7 real-model mode
 #   ssh <TARGET_HOST> 'cd <CODE_DIR> && sh scripts/accept_s2.sh' </dev/null
 #
@@ -19,6 +20,11 @@
 # --extended (with --real): also the scenarios in the "--extended" section — memory across an
 # entry-container restart, stop mid-Turn, a rejected approval, docker observe, a Worker's own
 # egress, two principals at once — each --runs times. Roughly triples the real-model spend.
+#
+# ACCEPT_DISRUPTIVE=1: the fake path also runs goal scenarios S12 (locks a goal's row for up to
+# 90 s) and S2 (SIGKILLs the kernel twice, restarts worker-supervisor); without it they are left
+# out with one NOTE line. scripts/staging-rehearsal.sh sets it; on the production host only in the
+# window, once victor has agreed on the spot (docs/runbooks/host-accept-s2.md §2).
 #
 # --keep skips removing the accept-s2 fixture containers (leaves the fixtures/gates/workspace up
 # for inspection). --keep does not skip the fake-provider restore below — the EXIT trap always
@@ -118,9 +124,11 @@ if [ -z "${NEXTTIME_DATA:-}" ] || [ -z "${KERNEL_BIND_ADDR:-}" ]; then
 fi
 
 . "$(dirname "$0")/lib/accept-common.sh"
-# S11 GO7a: goal scenarios S1, S4–S7, S9–S11 (goal_scenarios_step, after step 9), the cleanup of
-# every goal they start and of the grants S9 gives bob, and with --real keeping their test ledger
-# out of the published manifest — see that file's own header comment.
+# S11 GO7a: goal scenarios S1, S2, S4–S12 (goal_scenarios_step, after step 9; S12 and S2 only with
+# ACCEPT_DISRUPTIVE=1), the cleanup of
+# every goal they start, of the grants S9 gives bob and of the row locks, held turns and killed
+# service S12, S8 and S2 may leave, and with --real keeping their test ledger out of the published
+# manifest — see that file's own header comment.
 . "$(dirname "$0")/lib/accept-s2-goals.sh"
 require_driver
 
@@ -1379,6 +1387,10 @@ cleanup_step() {
   # Set here, not only in on_exit: the explicit end-of-run call must also disarm the EXIT trap,
   # or cleanup runs (and reports PASS) a second time on the normal exit.
   CLEANUP_DONE=1
+  # First, --keep or not: a service the goal scenarios' S2 killed is started again (everything
+  # below calls the kernel), a row lock S12 or S2 still holds is ended and a turn fake-llm still
+  # holds is released — none of them is a fixture to keep (goal_cleanup_live_work).
+  goal_cleanup_live_work
   if [ "$KEEP" -eq 1 ]; then
     echo "cleanup: --keep set, leaving accept-s2 fixtures/gates/workspace up"
     return

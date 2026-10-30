@@ -393,7 +393,7 @@ for s in 3 1 2 4; do
   rc=$?
   nfail=$(grep -c '^FAIL' "$slog")
   echo "STEP S$s exit=$rc pass=$(grep -c '^PASS' "$slog") fail=$nfail log=$slog"
-  grep -E '^FAIL|^S4 (gate|NOTE|OK|FAIL)' "$slog" | sort -u | head -n 8
+  grep -E '^FAIL|^S4 (gate|NOTE|OK|FAIL)|^NOTE goal-disruptive' "$slog" | sort -u | head -n 8
   if [ "$rc" -ne 0 ] || [ "$nfail" -gt 0 ]; then failures=$((failures + 1)); fi
 done
 docker compose --profile test stop fake-llm >/dev/null 2>&1 ||
