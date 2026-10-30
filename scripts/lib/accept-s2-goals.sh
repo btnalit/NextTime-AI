@@ -697,9 +697,12 @@ goal_s10_budget() {
 #
 # Held turns: a goal step whose input carries `HOLD=<name>` has its Worker's scripted model turn
 # kept back by fake-llm until the script releases that name (deploy/fake-llm/server.mjs "Held
-# turns"): while it is listed the Worker is alive and mid model call, its Task running, and the
-# script decides what happens before the Worker reports or writes again. fake-llm answers a turn
-# by itself after 120 s, so nothing here can leave a Worker waiting longer than that.
+# turns"): once it is listed the Worker is mid model call, its Task running, and the script
+# decides what happens before the Worker reports or writes again. fake-llm sends the turn's
+# response headers before holding it (llm-proxy cuts an upstream that sends none within 10 s) and
+# answers it by itself after 120 s, so nothing here can leave a Worker waiting longer than that.
+# A terminated Worker's held request stays listed until it is released: llm-proxy does not pass
+# its client's going away on to fake-llm.
 
 GOAL_HOLDS=""
 
@@ -710,8 +713,8 @@ fake_llm_holds() {
 }
 
 # fake_llm_hold_counts <name>: `held=<n> dropped=<n>` — how many requests fake-llm held under <name>
-# and how many of those lost their client while held (a model call cut and asked again holds the
-# name twice, one dropped); `unknown` when fake-llm did not answer.
+# and how many of those had their connection close while held (a model call cut and asked again
+# holds the name twice, one dropped); `unknown` when fake-llm did not answer.
 fake_llm_hold_counts() {
   compose_accept --profile test exec -T fake-llm node -e "fetch('http://127.0.0.1:8090/accept-s2/holds').then((r) => r.json()).then((d) => { const c = d.counts[process.argv[1]] || {held: 0, dropped: 0}; console.log('held=' + c.held + ' dropped=' + c.dropped); })" "$1" </dev/null 2>/dev/null || echo unknown
 }
@@ -1178,19 +1181,17 @@ goal_s2_restarts() {
   task_a=$(goal_step_task "$S2_GOAL_ID" a 1)
   run_a=$(psql_ws "select id from worker_runs where workspace_id='$WORKSPACE_ID' and task_id='$task_a'")
   goal_kernel_kill_restart s2-kernel-killed-task
-  # The Worker has to come through the kill; its model call need not: one cut while the kernel was
-  # down is asked again by the Worker's own SDK and held again under the same name — fake-llm's
-  # counts tell the two apart, and the PASS line says which (first staging run: not held 8 s after
-  # the kill, held again a moment later).
-  fake_llm_wait_hold "$hold_a" 60 || goal_fail "s2-kernel-killed-task" "$S2_GOAL_ID" "fake-llm does not hold a's turn 60s after the kernel was back (${GOAL_RESTART_SECONDS}s after the kill; fake-llm's counts for it: $(fake_llm_hold_counts "$hold_a"); a's Task reads '$(goal_task_status "$task_a")')"
+  # A Worker's model call goes to llm-proxy, not through the kernel: the kill must not cut it.
+  # fake-llm's counts for a's turn say whether it did — one request held, none dropped. (Staging
+  # runs one and two saw it dropped 10 s after it began: llm-proxy's wait for an upstream's
+  # response headers, which fake-llm now sends before holding.) The wait covers fake-llm being slow
+  # to answer `docker compose exec` right after the restart.
+  fake_llm_wait_hold "$hold_a" 30 || goal_fail "s2-kernel-killed-task" "$S2_GOAL_ID" "fake-llm does not hold a's turn ${GOAL_RESTART_SECONDS}s after the kill (its counts for it: $(fake_llm_hold_counts "$hold_a"); a's Task reads '$(goal_task_status "$task_a")')"
   counts_a=$(fake_llm_hold_counts "$hold_a")
+  [ "$counts_a" = "held=1 dropped=0" ] || goal_fail "s2-kernel-killed-task" "$S2_GOAL_ID" "fake-llm's counts for a's turn read '$counts_a' after the kill, expected held=1 dropped=0: a's model call goes to llm-proxy, not through the kernel, and the kill must not cut it (a's Task reads '$(goal_task_status "$task_a")')"
   after="$(goal_task_status "$task_a"),$(psql_ws "select status from worker_runs where workspace_id='$WORKSPACE_ID' and id='$run_a'"),$(goal_tasks "$S2_GOAL_ID")"
-  [ "$after" = "running,running,1" ] || goal_fail "s2-kernel-killed-task" "$S2_GOAL_ID" "with the kernel back, a's Task $task_a, its WorkerRun $run_a and the run's Task count read '$after', expected the same Task and WorkerRun still running and one Task (fake-llm's counts for a's turn: $counts_a)"
-  case "$counts_a" in
-    "held=1 dropped=0") call_a="its model call stayed held throughout" ;;
-    *) call_a="its model call was cut while the kernel was down and asked again ($counts_a)" ;;
-  esac
-  pass "s2-kernel-killed-task" "the kernel was killed (SIGKILL) while a's Worker was held mid model call and was healthy again in ${GOAL_RESTART_SECONDS}s: a's Task $task_a and its WorkerRun $run_a are the same, still running, the run has one Task; $call_a"
+  [ "$after" = "running,running,1" ] || goal_fail "s2-kernel-killed-task" "$S2_GOAL_ID" "with the kernel back, a's Task $task_a, its WorkerRun $run_a and the run's Task count read '$after', expected the same Task and WorkerRun still running and one Task"
+  pass "s2-kernel-killed-task" "the kernel was killed (SIGKILL) while a's Worker was held mid model call and was healthy again in ${GOAL_RESTART_SECONDS}s: a's Task $task_a and its WorkerRun $run_a are the same, still running, the run has one Task; its model call stayed held throughout ($counts_a)"
 
   # (b) The advance a's end sets off stops on b's locked row; the kernel crashes inside it.
   b_row=$(psql_ws "select id from step_runs where workspace_id='$WORKSPACE_ID' and goal_run_id='$S2_GOAL_ID' and step_key='b'")

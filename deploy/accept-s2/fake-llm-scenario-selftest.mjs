@@ -932,9 +932,9 @@ async function main() {
     }
 
     // 6n. S11 GO7a-3 held turns: a goal step with HOLD=<name> is not answered until the name is
-    //     released; while held it is listed; once released it never holds again; a turn asked again
-    //     past the end of the script (the clamp) is not held; a held request whose client went
-    //     away drops off the list.
+    //     released; while held it is listed and its response headers are already out (its body
+    //     waits); once released it never holds again; a turn asked again past the end of the script
+    //     (the clamp) is not held; a held request whose client went away drops off the list.
     {
       const holdsBody = async () => (await fetch(`http://127.0.0.1:${PORT}/accept-s2/holds`)).json();
       const holds = async () => (await holdsBody()).holds;
@@ -961,6 +961,51 @@ async function main() {
       const again = toolCallOf((await post([input, begin])).json);
       check('held-turn-once', again?.name === 'report_result', 'a released name must answer at once');
       check('held-turn-release-none', (await release('never-held')) === 0, 'releasing an unknown name releases nothing');
+
+      // Headers first: llm-proxy answers its client 502 when an upstream sends no response headers
+      // within 10 s (UPSTREAM_CONNECT_TIMEOUT_MS), so a held turn has its status and content type
+      // at once, streamed or not, and only its body waits for the release.
+      for (const [stream, nonce, type] of [
+        [true, 'h45', 'text/event-stream'],
+        [false, 'h46', 'application/json'],
+      ]) {
+        const label = stream ? 'stream' : 'json';
+        const name = `s12-${nonce}-a`;
+        const res = await Promise.race([
+          fetch(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              model: 'fake-echo',
+              stream,
+              messages: [{ role: 'custom', content: `### Task input\nACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=${nonce} STEP=a HOLD=${name}` }, begin],
+            }),
+          }),
+          new Promise((resolve) => setTimeout(() => resolve(undefined), 2000)),
+        ]);
+        const heldNow = (await holds()).includes(name);
+        check(
+          `held-turn-headers-first-${label}`,
+          res?.status === 200 && (res.headers.get('content-type') ?? '').startsWith(type) && heldNow,
+          JSON.stringify({ status: res?.status, type: res?.headers.get('content-type'), heldNow }),
+        );
+        if (!res) continue;
+        let bodyDone = false;
+        const body = res.text().then((text) => {
+          bodyDone = true;
+          return text;
+        });
+        await settle();
+        check(`held-turn-body-waits-${label}`, !bodyDone, 'the body must wait for the release');
+        check(`held-turn-headers-first-release-${label}`, (await release(name)) === 1, 'expected one request released');
+        const text = await body;
+        const answered = stream
+          ? text.includes('"report_result"') && text.includes('data: [DONE]')
+          : toolCallOf(JSON.parse(text))?.name === 'report_result';
+        check(`held-turn-body-after-release-${label}`, answered, text.slice(0, 300));
+        const counts = (await holdsBody()).counts[name];
+        check(`held-turn-headers-first-counts-${label}`, counts?.held === 1 && counts.dropped === 0, JSON.stringify(counts));
+      }
 
       // The clamp: one assistant message already answered the script's only turn.
       const clampInput = { role: 'custom', content: '### Task input\nACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=h43 STEP=a HOLD=s12-h43-a' };

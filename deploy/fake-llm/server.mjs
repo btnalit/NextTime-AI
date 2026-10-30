@@ -23,8 +23,8 @@
 //                                (docs/development-tasks.md S1.7 acceptance).
 //   GET  /accept-s2/holds    -> {holds:[name...], counts:{name:{held, dropped}}}: the scripted
 //                                turns held right now, and per name how many requests it held and
-//                                how many of those lost their client while held (S11 GO7a-3, see
-//                                "Held turns" below).
+//                                how many of those had their connection close while held (S11
+//                                GO7a-3, see "Held turns" below).
 //   POST /accept-s2/holds/<name>/release -> {released:<n>}: lets the turns held under <name> answer.
 //
 // Tool-call trigger (this task's own deliverable text: "when the prompt contains a tool-use
@@ -62,6 +62,12 @@ import { createServer } from 'node:http';
 const PORT = Number(process.env.PORT ?? 8090);
 const MODEL_ID = 'fake-echo';
 const TOOL_TRIGGER_WORD = 'search';
+
+const SSE_HEADERS = {
+  'content-type': 'text/event-stream',
+  'cache-control': 'no-cache',
+  connection: 'keep-alive',
+};
 
 function sendJson(res, status, body) {
   const payload = JSON.stringify(body);
@@ -902,11 +908,20 @@ function matchScenarioStep(messages, tools) {
 // restart, a row lock, a revision, each before the Worker reports or writes again. Bounded either
 // way: a turn is held at most HOLD_MAX_MS, so a script that died never leaves a Worker waiting on
 // this double for longer; a name held once — released or timed out — is never held again (a
-// retried attempt answers at once); a request whose client went away while held (a terminated
-// Worker) is dropped from the list and never answered. Each name also keeps counts — how many
-// requests it held and how many of those were dropped that way — so the script can tell a turn
-// held throughout from one whose model call was cut and asked again (S2's kernel kill). In memory
-// only: a restarted fake-llm forgets every hold, and the held requests' connections go with it.
+// retried attempt answers at once); a request whose connection closed while held is dropped from
+// the list and never answered. Each name also keeps counts — how many requests it held and how
+// many of those were dropped that way — so S2 can show a Worker's model call was held throughout
+// the kernel's kill, not cut and asked again. In memory only: a restarted fake-llm forgets every
+// hold, and the held requests' connections go with it.
+//
+// A held turn's response headers go out before the hold, its body after: llm-proxy gives an
+// upstream UPSTREAM_CONNECT_TIMEOUT_MS (10 s) to answer with headers and UPSTREAM_IDLE_TIMEOUT_MS
+// (300 s) between body chunks, and answers its client 502 when the first runs out. A turn held
+// before its headers was cut there after 10 s and the Worker's turn ended in that error (the
+// second staging run of #817: S2's held turn dropped 10 s after it began, the Worker reported
+// without it). A real provider streaming its answer sends headers at once and is slow after them,
+// which is what a held turn now looks like. llm-proxy does not pass its client going away on to
+// the upstream, so through it a terminated Worker's held request stays listed until released.
 // -------------------------------------------------------------------------------------------
 
 const HOLD_MAX_MS = 120_000;
@@ -943,6 +958,12 @@ function holdTurn(name, res) {
   });
 }
 
+/** Sends a held turn's response headers now — its body follows the release (see above). */
+function sendHeldHeaders(res, stream) {
+  res.writeHead(200, stream ? SSE_HEADERS : { 'content-type': 'application/json' });
+  res.flushHeaders();
+}
+
 /** Releases every request held under `name`; returns how many there were. */
 function releaseHold(name) {
   RELEASED.add(name);
@@ -976,22 +997,21 @@ function sendScenarioStep(res, step, stream) {
           ],
         }
       : { role: 'assistant', content: text };
-    sendJson(res, 200, {
+    const body = {
       id,
       object: 'chat.completion',
       created,
       model: MODEL_ID,
       choices: [{ index: 0, message, finish_reason: isTool ? 'tool_calls' : 'stop' }],
       usage,
-    });
+    };
+    // A held turn's headers are already out (sendHeldHeaders): only the body is left.
+    if (res.headersSent) res.end(JSON.stringify(body));
+    else sendJson(res, 200, body);
     return;
   }
 
-  res.writeHead(200, {
-    'content-type': 'text/event-stream',
-    'cache-control': 'no-cache',
-    connection: 'keep-alive',
-  });
+  if (!res.headersSent) res.writeHead(200, SSE_HEADERS);
 
   writeSse(res, {
     ...baseChunk(id, created),
@@ -1066,9 +1086,10 @@ async function handleChatCompletions(req, res) {
   // the original, untouched search/echo behavior for every other request.
   const scenarioStep = matchScenarioStep(parsed.messages, parsed.tools);
   if (scenarioStep) {
-    if (scenarioStep.hold !== undefined) {
+    if (scenarioStep.hold !== undefined && !RELEASED.has(scenarioStep.hold)) {
+      sendHeldHeaders(res, parsed.stream === true);
       await holdTurn(scenarioStep.hold, res);
-      // Its client went away while it was held (a terminated Worker): nobody to answer.
+      // Its connection closed while it was held: nobody to answer.
       if (res.destroyed) return;
     }
     sendScenarioStep(res, scenarioStep, parsed.stream === true);
