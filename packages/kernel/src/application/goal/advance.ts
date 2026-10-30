@@ -39,6 +39,7 @@ import {
   type AbsenceBaselineCheck,
   type AbsenceBaselineRow,
   NEVER_SEEN_PRESENT,
+  PRESENCE_NOT_CONFIRMED,
   ensureAbsenceBaselines,
   requiredAbsenceChecks,
 } from './absence-baselines.js';
@@ -245,6 +246,10 @@ function unseenBaseline(
     return afterWork
       ? `${named}: the platform first looked after the goal's steps had started (the plan changed the check) and the gate answered that the thing is not there (${NEVER_SEEN_PRESENT}) — an earlier step may have removed it, or the params name something else; either way the check could never show this goal removed it`
       : `${named}: before the goal's work the gate already answered that the thing is not there (${NEVER_SEEN_PRESENT}), so the check could never show this goal removed it`;
+  }
+  if (baseline.lastError === PRESENCE_NOT_CONFIRMED) {
+    // Legacy 507: the gate answered, with data that does not show the thing.
+    return `${named}: before the goal's work ${afterWork ? 'went on' : 'started'} the gate answered with data that does not show the thing there (${PRESENCE_NOT_CONFIRMED}: an empty result, or not the shape the Operation's result mapping declares) — the params may name nothing, so the check could never show this goal removed it`;
   }
   return `${named}: the platform could not look before the goal's work ${afterWork ? 'went on' : 'started'} (${baseline.lastError ?? 'no reason recorded'})`;
 }

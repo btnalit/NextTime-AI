@@ -79,9 +79,15 @@ import { getWorkerDefinition } from '../worker/index.js';
  *     identity (I-G4: Gatekeeper, Operation, params — the step's request matches only when all
  *     three are the same, `request-action.ts`'s `stepIdempotencyKey`), `check` an observe-class
  *     Operation, its params and a predicate over its result (`@nexttime/shared`
- *     `ObservationCheck`). A satisfied check records `effect_seen` for the action and the step goes
- *     on; anything else leaves the finding to a person (`reconcile-check.ts`). One declaration per
- *     action identity;
+ *     `ObservationCheck`) — or, for an action that removes something (S11 「门确认不存在」), an
+ *     absence call with no predicate (`ObservationAbsenceCheck`), met only when the gate confirms the
+ *     thing is not there, as an `observe_absent` check is. A satisfied check records `effect_seen`
+ *     for the action and the step goes on; anything else leaves the finding to a person
+ *     (`reconcile-check.ts`). One declaration per action identity. An absence call must be the call
+ *     of an `observe_absent` acceptance check of the step or of the goal: "not there" shows the
+ *     removal took effect only against that check's baseline — the platform saw the thing there
+ *     before the action (I-AB1; the database holds the platform's `effect_seen` to it,
+ *     governance/0029);
  *   - `acceptance` (S11 GO4b, plan §4.5, §4.6) — what has to hold once the step's work is done
  *     before the step succeeds and the steps after it may start: `observe_predicate`,
  *     `observe_absent` and `fact_predicate` checks (the goal's kinds, below; a step's acceptance
@@ -232,7 +238,7 @@ export function parsePlan(plan: unknown): GoalPlan {
   const byStepKey = new Map(shaped.steps.map((step) => [step.key, step]));
   for (const step of shaped.steps) {
     problems.push(...bindingProblems(step, byStepKey));
-    problems.push(...reconcileShapeProblems(step, lintBudget));
+    problems.push(...reconcileShapeProblems(step, shaped.acceptance ?? [], lintBudget));
     problems.push(
       ...acceptanceShapeProblems(step.acceptance ?? [], lintBudget, `step "${step.key}": `),
     );
@@ -445,9 +451,12 @@ export function writtenValueAt(input: Record<string, unknown>, to: string): stri
 }
 
 /** A step's reconcile declarations: one per action identity, each predicate accepted by the lint
- *  (spending from the plan's `lintBudget`). */
+ *  (spending from the plan's `lintBudget`); an absence call (no predicate) only as the call of an
+ *  `observe_absent` acceptance check of the step or of the goal (`goalAcceptance`), whose baseline
+ *  is what its "not there" is weighed against. */
 function reconcileShapeProblems(
   step: PlanStep,
+  goalAcceptance: readonly AcceptanceCheck[],
   lintBudget: PredicateLintBudget,
 ): readonly string[] {
   const problems: string[] = [];
@@ -461,10 +470,26 @@ function reconcileShapeProblems(
         isDeepStrictEqual(other.action.params ?? {}, declaration.action.params ?? {}),
     );
     if (same !== index) problems.push(`${where}: declares the same action as reconcile[${same}]`);
-    for (const problem of lintPredicate(declaration.check.expect, lintBudget)) {
+    const { check } = declaration;
+    if (!('expect' in check)) {
+      // S11 「门确认不存在」 reconcile: "not there" shows the removal took effect only if the platform
+      // saw the thing there before the action (I-AB1) — the baseline of an absence acceptance check
+      // with the same call, taken before the step starts (`absence-baselines.ts`, governance/0029).
+      const baselined = [...(step.acceptance ?? []), ...goalAcceptance].some(
+        (accepted) =>
+          accepted.kind === 'observe_absent' && isDeepStrictEqual(accepted.check, check),
+      );
+      if (!baselined) {
+        problems.push(
+          `${where}: an absence check shows the action took effect only if the platform saw the thing there before it — make the same call (Gatekeeper, Operation and params) in an observe_absent acceptance check of this step or of the goal: the platform looks with it before the step starts`,
+        );
+      }
+      return;
+    }
+    for (const problem of lintPredicate(check.expect, lintBudget)) {
       problems.push(`${where}: ${problem}`);
     }
-    for (const problem of predicateCredentialProblems(declaration.check.expect)) {
+    for (const problem of predicateCredentialProblems(check.expect)) {
       problems.push(`${where}: ${problem}`);
     }
   });
