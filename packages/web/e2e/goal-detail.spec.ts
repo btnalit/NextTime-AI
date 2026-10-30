@@ -809,8 +809,15 @@ test.describe('S11 「门确认不存在」 B: absence checks on a goal (stand-i
       await expect(stepLook).toContainText('所以目标暂停，没有往下做');
       await expect(stepLook).not.toContainText('开始前');
       await removeOld.locator('summary', { hasText: '结果不明时平台怎么核对' }).click();
-      await expect(removeOld.getByTestId('goal-reconcile-absence')).toHaveText(
-        '门回答它不在，就算这个动作生效了。前提是动作之前平台看到过它在：用的是这一步的验收检查「binding-gone」那次事先查看。',
+      const reconcileNote =
+        '门回答它不在，就算这个动作生效了。前提是动作之前平台看到过它在：用的是这一步的验收检查「binding-gone」那次事先查看。';
+      await expect(removeOld.getByTestId('goal-reconcile-absence')).toHaveText(reconcileNote);
+      // #799 UX P2-1: the note is a line of its own under what the platform asks — the rendered
+      // text breaks before it, so it cannot run on from the sentence above.
+      const declaration = removeOld.getByTestId('goal-reconcile-declaration');
+      await expect(declaration).toHaveText(
+        `对门「cert-gate」上的 binding.delete：在门「cert-gate」上以参数 {"host":"web-1"} 调用 binding.get，看要查的东西还在不在\n${reconcileNote}`,
+        { useInnerText: true },
       );
       await page.screenshot({
         path: testInfo.outputPath(`goal-absence-${width}.png`),

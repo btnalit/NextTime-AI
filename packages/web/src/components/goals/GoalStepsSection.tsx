@@ -23,6 +23,7 @@ import {
   planHintKey,
   planHintText,
   reconcileAbsenceCheckOf,
+  reconcileCheckSentence,
   reconciliationLabel,
   stepAcceptanceLabel,
   stepFailureText,
@@ -333,18 +334,23 @@ function StepItem({
           <div className="disclosure-body">
             <ul className="stack-s">
               {planStep.reconcile.map((declaration, index) => (
+                // Its own stack: the note under an absence call is a line of its own (#799 UX P2-1).
                 <li
                   key={`${declaration.action.gatekeeperId}-${declaration.action.operation}-${index}`}
+                  className="stack-s"
+                  data-testid="goal-reconcile-declaration"
                 >
-                  {t(
-                    `对门「${gateLabel(gateNames, declaration.action.gatekeeperId)}」上的 ${declaration.action.operation}：`,
-                    `For ${declaration.action.operation} on gate “${gateLabel(gateNames, declaration.action.gatekeeperId)}”: `,
-                  )}
-                  {observationSentence(
-                    declaration.check,
-                    gateNames.get(declaration.check.gatekeeperId) ?? null,
-                    t,
-                  )}
+                  <span>
+                    {t(
+                      `对门「${gateLabel(gateNames, declaration.action.gatekeeperId)}」上的 ${declaration.action.operation}：`,
+                      `For ${declaration.action.operation} on gate “${gateLabel(gateNames, declaration.action.gatekeeperId)}”: `,
+                    )}
+                    {reconcileCheckSentence(
+                      declaration.check,
+                      gateNames.get(declaration.check.gatekeeperId) ?? null,
+                      t,
+                    )}
+                  </span>
                   <ReconcileAbsenceNote
                     goalAcceptance={detail?.planRevision.plan.acceptance ?? []}
                     stepAcceptance={planStep.acceptance ?? []}
@@ -385,7 +391,7 @@ function ReconcileAbsenceNote({
   const by = reconcileAbsenceCheckOf(goalAcceptance, stepAcceptance, check);
   if (!by) return null;
   return (
-    <span className="w-full text-small text-3" data-testid="goal-reconcile-absence">
+    <span className="text-small text-3" data-testid="goal-reconcile-absence">
       {by.ofGoal
         ? t(
             `门回答它不在，就算这个动作生效了。前提是动作之前平台看到过它在：用的是目标的验收检查「${by.key}」那次事先查看。`,

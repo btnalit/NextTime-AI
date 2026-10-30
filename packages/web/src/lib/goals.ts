@@ -793,12 +793,7 @@ export function observationSentence(
   t: Translate,
 ): string {
   const gate = gateName ?? shortId(check.gatekeeperId);
-  // Two checks of one operation differ only in their params, so the sentence names them —
-  // secret-named fields masked, though the kernel has masked them already.
-  const params =
-    check.params && Object.keys(check.params).length > 0
-      ? visibleText(clipMiddle(JSON.stringify(redactSensitive(check.params)), OBSERVE_PARAMS_MAX))
-      : null;
+  const params = observeParamsText(check);
   if (!('expect' in check)) {
     return params === null
       ? t(
@@ -819,6 +814,37 @@ export function observationSentence(
     : t(
         `在门「${gate}」上以参数 ${params} 观察 ${check.operation}，期望 ${expect}`,
         `Observe ${check.operation} with ${params} on gate “${gate}”, expecting ${expect}`,
+      );
+}
+
+/** Two checks of one operation differ only in their params, so a sentence names them —
+ *  secret-named fields masked, though the kernel has masked them already. */
+function observeParamsText(check: ObservationCheck | ObservationAbsenceCheck): string | null {
+  return check.params && Object.keys(check.params).length > 0
+    ? visibleText(clipMiddle(JSON.stringify(redactSensitive(check.params)), OBSERVE_PARAMS_MAX))
+    : null;
+}
+
+/** A step's reconcile declaration check (S11 GO3d), read as what the platform looks at when the
+ *  action's outcome is unknown. A predicate reads as any observation; an absence call (S11
+ *  「门确认不存在」 reconcile) says what it asks — not the acceptance check's "passes only when":
+ *  what "not there" counts for is the note under it (#799 UX P3-2). */
+export function reconcileCheckSentence(
+  check: ObservationCheck | ObservationAbsenceCheck,
+  gateName: string | null,
+  t: Translate,
+): string {
+  if ('expect' in check) return observationSentence(check, gateName, t);
+  const gate = gateName ?? shortId(check.gatekeeperId);
+  const params = observeParamsText(check);
+  return params === null
+    ? t(
+        `在门「${gate}」上调用 ${check.operation}，看要查的东西还在不在`,
+        `Call ${check.operation} on gate “${gate}” to see whether the thing looked up is still there`,
+      )
+    : t(
+        `在门「${gate}」上以参数 ${params} 调用 ${check.operation}，看要查的东西还在不在`,
+        `Call ${check.operation} with ${params} on gate “${gate}” to see whether the thing looked up is still there`,
       );
 }
 
@@ -1359,6 +1385,19 @@ function completedNote(goal: GoalRunWire, t: Translate): GoalStateNote | null {
 /** What one unresolved action still needs, and — when its step declared one — where the
  *  platform's own check of it stands. `paused`: the goal is paused or held, so no check runs
  *  (GO3d: a pending check waits for the goal to go on). */
+/** The line under an unresolved action's check sentence naming the platform check's last error —
+ *  none where that sentence already says what the code means: `never_seen_present` there is the
+ *  runner not asking the gate at all, which the acceptance-check label would contradict (#799 UX
+ *  P2-2). */
+export function unresolvedCheckErrorText(
+  action: UnresolvedGoalActionWire,
+  t: Translate,
+): string | null {
+  const code = action.platformCheck?.lastError;
+  if (!code || code === 'never_seen_present') return null;
+  return checkErrorLabel(code, t);
+}
+
 export function unresolvedActionText(
   action: UnresolvedGoalActionWire,
   paused: boolean,

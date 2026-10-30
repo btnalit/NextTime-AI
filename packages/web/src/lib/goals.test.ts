@@ -33,8 +33,10 @@ import {
   planHintText,
   predicateSentence,
   reconcileAbsenceCheckOf,
+  reconcileCheckSentence,
   stepHintChipLabel,
   unresolvedActionText,
+  unresolvedCheckErrorText,
 } from './goals.js';
 import type { Translate } from './i18n.js';
 
@@ -404,6 +406,29 @@ describe('lib/goals', () => {
     );
     expect(unresolvedActionText(check('gate_unreachable'), false, zh).check).toMatch(
       /^平台核对不了（观察被拒绝或一直没有答复）/,
+    );
+    // #799 UX P2-2: the line under it names the code only where the sentence has not said it —
+    // never_seen_present there is the runner not asking the gate, not an acceptance check's look.
+    expect(unresolvedCheckErrorText(check('never_seen_present'), zh)).toBeNull();
+    expect(unresolvedCheckErrorText(check('gate_unreachable'), zh)).toBe(
+      checkErrorLabel('gate_unreachable', zh),
+    );
+    expect(unresolvedCheckErrorText(unresolved(), zh)).toBeNull();
+  });
+
+  it('reads a reconcile absence call as what it asks, a predicate as an observation (#799 UX P3-2)', () => {
+    const gatekeeperId = '66000000-0000-4000-8000-0000000000d1';
+    const absence = { gatekeeperId, operation: 'vm.get', params: { name: 'old' } };
+    expect(reconcileCheckSentence(absence, 'vm-gate', zh)).toBe(
+      '在门「vm-gate」上以参数 {"name":"old"} 调用 vm.get，看要查的东西还在不在',
+    );
+    expect(reconcileCheckSentence({ gatekeeperId, operation: 'vm.get' }, 'vm-gate', zh)).toBe(
+      '在门「vm-gate」上调用 vm.get，看要查的东西还在不在',
+    );
+    expect(reconcileCheckSentence(absence, 'vm-gate', zh)).not.toMatch(/才算通过/);
+    const predicate = { ...absence, expect: { path: 'state', op: 'eq' as const, value: 'gone' } };
+    expect(reconcileCheckSentence(predicate, 'vm-gate', zh)).toBe(
+      observationSentence(predicate, 'vm-gate', zh),
     );
   });
 

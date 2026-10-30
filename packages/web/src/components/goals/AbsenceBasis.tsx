@@ -241,12 +241,12 @@ export function AbsenceBaselineLine({
           >
             {afterWork
               ? t(
-                  `目标往下做之前平台看了，门也回答了，但回答里看不出它在${take}（空结果，或者不符合 Operation 声明的结果映射）：参数可能没指向要删的东西。所以目标暂停，没有往下做。核对参数后修订计划，或者继续运行再看一次。`,
-                  `Before the goal went on the platform looked and the gate answered, but its answer does not show the thing there${take} (an empty result, or not the shape the Operation’s result mapping declares): the params may name nothing to remove. So the goal paused and did not go on. Check the params and revise the plan, or resume to look again.`,
+                  `目标往下做之前平台看了${take}，门也回答了，但回答里看不出它在（空结果，或者不符合 Operation 声明的结果映射）：参数可能没指向要删的东西。所以目标暂停，没有往下做。核对参数后修订计划，或者继续运行再看一次。`,
+                  `Before the goal went on the platform looked${take} and the gate answered, but its answer does not show the thing there (an empty result, or not the shape the Operation’s result mapping declares): the params may name nothing to remove. So the goal paused and did not go on. Check the params and revise the plan, or resume to look again.`,
                 )
               : t(
-                  `开始前平台看了，门也回答了，但回答里看不出它在${take}（空结果，或者不符合 Operation 声明的结果映射）：参数可能没指向要删的东西。所以目标暂停，步骤没有开始。核对参数后修订计划，或者继续运行再看一次。`,
-                  `Before the work the platform looked and the gate answered, but its answer does not show the thing there${take} (an empty result, or not the shape the Operation’s result mapping declares): the params may name nothing to remove. So the goal paused before any step. Check the params and revise the plan, or resume to look again.`,
+                  `开始前平台看了${take}，门也回答了，但回答里看不出它在（空结果，或者不符合 Operation 声明的结果映射）：参数可能没指向要删的东西。所以目标暂停，步骤没有开始。核对参数后修订计划，或者继续运行再看一次。`,
+                  `Before the work the platform looked${take} and the gate answered, but its answer does not show the thing there (an empty result, or not the shape the Operation’s result mapping declares): the params may name nothing to remove. So the goal paused before any step. Check the params and revise the plan, or resume to look again.`,
                 )}
           </span>
         );
