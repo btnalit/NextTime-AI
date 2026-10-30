@@ -61,9 +61,23 @@ jobs:
     with:
       tag: ${{ needs.release-please.outputs.tag_name }}
 
+  # Trivy on the digests publish-images just pushed. A sibling of release-channel, not one of its
+  # needs: the scan only reports, so it must never hold the channel back (v0.50.0's stuck leg).
+  scan-images:
+    name: scan-images
+    needs: [release-please, publish-images]
+    if: ${{ !cancelled() && needs.release-please.outputs.release_created == 'true' }}
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/scan-images.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}
+
   # S10 U1: announce the release on the rolling `channel` feed only once its images are
-  # published — a host's update reminder must never point at a release it cannot pull yet. The
-  # pi half of the record is carried over from the previous one (pi-drift.yml writes it nightly).
+  # published (publish-images = build, push and sign; the scan runs beside this job) — a host's
+  # update reminder must never point at a release it cannot pull yet. The pi half of the record
+  # is carried over from the previous one (pi-drift.yml writes it nightly).
   release-channel:
     name: release-channel
     needs: [release-please, publish-images]
