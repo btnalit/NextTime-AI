@@ -614,17 +614,21 @@ S1（用户不再发消息）、S2（服务重启）、S3（重复事件）、S4
 | # | 场景 | 断言 |
 |---|---|---|
 | S1 | 用户发起目标（A、B 并行，C 依赖 A、B）并确认后不再发消息 | 三步全部完成；期间没有产生新的 `TurnStarted`；对话里出现里程碑消息 |
-| S2 | 某步 Task 运行中、推进事务进行中分别杀掉内核；另跑一次重启 worker-supervisor | 重启后继续；每步每次尝试恰好一个 Task；没有步骤被跳过 |
+| S2 | 某步 Task 运行中、推进事务进行中分别杀掉内核；另跑一次重启 worker-supervisor | 重启后继续；每步每次尝试恰好一个 Task；没有步骤被跳过。主机脚本里：内核用 `SIGKILL` 杀（模拟崩溃）；"Task 运行中"是 fake-llm 扣住那个 Worker 的一轮模型回答时；"推进事务进行中"是先锁住下一步的 StepRun 行，让上一步结束触发的那次推进卡在这行锁上、事务开着时再杀，死掉的推进回滚，新内核在认领租期（60 s）过后接手 |
 | S3 | 同一 `TaskUpdated` / `ActionRequestUpdated` 事件投递两次；同一 `propose_goal` / `confirm_goal` 以同一幂等键重发 | 不重复建 Task、不重复推进；不重复建 GoalRun、不重复确认 |
 | S4 | 夹具门执行成功但丢掉响应，且门的幂等重放也返回 `apply_outcome_unknown`（绕过 R-48 重放，否则走不到核对路径） | 步骤进入 `waiting(reconcile)`；核对观察看到效果后判成功；门侧该动作执行计数为 1。反向：核对观察按重试上限重试后仍看不到效果 → `paused(awaiting_reconcile)`，等人记录核对结果（`reconcile_goal_action`），不自动重新执行，门侧计数仍为 1 |
 | S5 | 一步含需审批的执行动作，审批时间超过 Task 时长上限（测试里调短）；`await_decision` 为 true 与 false 各跑一次 | Worker 退出后步骤 `waiting(approval)`，目标不失败；批准并执行后，名下动作都到终态、步骤验收通过才判成功，下一步自动开始 |
 | S6 | 各步都报告成功，但验收观察为假 | 目标不进入 `completed(achieved)`；暂停并附证据；人选"按未达成结束"后为 `completed(not_achieved)` |
 | S7 | 运行中取消目标，此时有一条待审批动作（在门队列队头）、一条已批准还在门队列里排队的动作；另一次取消时，有一条动作处于 `executing` 且结果不明 | 不再开新 Task；运行中的被终止；两条动作都变 `withdrawn`，门侧执行计数为 0；同门里别的目标的后续动作随即被排水，不等周期 tick。另一次：目标停在 `cancelling`，截止后为 `cleanup_pending` 并列出那条 `executing` 动作；它按 R-48 收尾，结果入审计。这一次只由 `advancer.integration.test.ts` 覆盖：取消截止时间默认 30 分钟、没有配置项，过期 `executing` 回收器会先把那条动作收尾，所以主机与 staging 上只能看到 `cancelling → cancelled` |
-| S8 | 人改计划移除一个运行中的步骤；另一次对该步骤选"让它跑完"，并在确认修订时放行一条已提交的动作 | 默认：其 Task 与子孙被终止、动作撤回；"让它跑完"：结果入库入审计但不推进，它和它的嵌套子 Task 的新 `request_action` 被拒绝；放行的那条照常走审批与执行，其余变 `withdrawn` |
+| S8 | 人改计划移除一个运行中的步骤；另一次对该步骤选"让它跑完"，并在确认修订时放行一条已提交的动作 | 默认：其 Task 与子孙被终止、动作撤回；"让它跑完"：结果入库入审计但不推进，它和它的嵌套子 Task 的新 `request_action` 被拒绝；放行的那条照常走审批与执行，其余变 `withdrawn`。嵌套子 Task 与修订时已在 `executing` 的请求只由 `advancer.integration.test.ts` 覆盖：主机上的 fake Worker 不派子 Task，门收到批准的写入就立即执行 |
 | S9 | 运行中把请求者降为无该门授权的角色 | 下一步不开始，目标 `paused(authority_lost)` |
 | S10 | 累计 token 超出目标预算 | 目标 `paused(budget_exhausted)`，不是失败 |
 | S11 | 一步的执行动作被拒绝；另一次审批过期 | 步骤与目标进入需要决定，不自动重试同一动作 |
-| S12 | 丢掉一个 `TaskUpdated`（让消费者失败直到进死信） | 周期对账在一个扫描周期内发现并推进；目标不卡住 |
+| S12 | 丢掉一个 `TaskUpdated` 的唤醒。唤醒消费者从不抛错（抛错会把事件重投给它的每个消费者），失败的唤醒直接丢弃、不重试、不进死信；主机脚本用一把持有超过消费者 `lock_timeout`（5 s）的目标行锁让它失败 | 周期对账在一个扫描周期内发现并推进；目标不卡住 |
+
+S2 与 S12 会中断服务（杀内核、重启 worker-supervisor、锁住目标的行），主机验收脚本默认不跑，环境变量
+`ACCEPT_DISRUPTIVE=1` 时才跑：staging 预演每次都跑；生产主机上只在维护窗口里、victor 当场同意之后才跑
+（`docs/runbooks/host-accept-s2.md` §2）。
 
 真实模型：W1 的 S1–S12 全部可在 fake-llm 上跑；合入后按惯例做一次付费真实模型回归，需维护者届时在线程里亲口批准。
 

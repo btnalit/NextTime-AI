@@ -26,7 +26,7 @@
 | 迁移 | `migrate.js` | 同 |
 | 运营者一次性状态 | 建 `staging` 工作区；`ops-assets-v1/v2` 放进 `config/ontology/` 并 `seed-domain-pack`；`issue-service-handle` 写采集器 token；`config/egress-sources.json` 交给 uid 10001；docker 门实例 `discovered → enabled` | `add-domain-pack.md`、`host-collector.md` §1–2、`host-worker-runtime.md` §4、集成页启用门实例 |
 | 基线 | `--from` 自己的 S3 → S1 → S2 → S4（让待测迁移面对非空表，也证明这台主机本身等价） | 主机上次发版时的验收 |
-| apply | 与 `release.md` §3 同一入口：`git show <to>:scripts/apply-release.sh` 取出**目标版本自己的**副本，在检出根目录跑 `sh <副本> [--pull] <to>`：dump → 检出 → 镜像（tag：先 `sh <副本> --prefetch <to>` 预拉，apply 的拉取随后全部复用、只重新验签，`STEP apply images <n> of <m> reused from the prefetch`；否则源码构建）→ 迁移 → up → 目标版本 S3 → S1 → S2 → S4 → backup / 保留策略 | `release.md` §3 |
+| apply | 与 `release.md` §3 同一入口：`git show <to>:scripts/apply-release.sh` 取出**目标版本自己的**副本，在检出根目录跑 `sh <副本> [--pull] <to>`：dump → 检出 → 镜像（tag：先 `sh <副本> --prefetch <to>` 预拉，apply 的拉取随后全部复用、只重新验签，`STEP apply images <n> of <m> reused from the prefetch`；否则源码构建）→ 迁移 → up → 目标版本 S3 → S1 → S2 → S4 → backup / 保留策略。预演脚本 `export ACCEPT_DISRUPTIVE=1`，目标版本的 S2 因此也跑会中断服务的目标场景 S12、S2（锁行、杀内核、重启 worker-supervisor） | `release.md` §3；主机上这两个场景默认不跑，只在窗口里 victor 当场同意后跑（`host-accept-s2.md` §2） |
 | 控制台 file probe | 一次性平台管理员经 caddy 登录 → `issue_llm_admin_token`；假供应商写进 `config/llm-providers.yaml`、假 key 文件放进 `secrets/llm-provider-keys/`，llm-proxy 须列出它（`source: file`、读到 key）且 `gen-models` 输出它，随后恢复原样（零 token） | `README.md` ①、`host-env-init.sh` |
 | 真实模型（可选） | 走控制台路径加供应商（管理员登录 → `issue_llm_admin_token` → `/api/llm-admin` 建供应商、设 key → llm-proxy 重写 models.json → 控制台"测试"）→ `accept_s2/s3.sh --real` | `host-accept-real-model.md` |
 

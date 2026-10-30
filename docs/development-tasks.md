@@ -4357,6 +4357,14 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - S10 在 staging 上查出 `recordWorkerRunUsage` 只判 `running` 的 Task，本 PR 修了：未结束的 Task 都判，已结束的终止仍活着的 Worker；同类排查结论在 PR 说明里；
   - S7 运行中 Worker 被终止、S7 第二种、S9 降角色与禁用只由集成测试覆盖；
   - 下一步 GO7a-3：S2、S8、S12（S12 的 psql 加锁只加行锁、带超时、失败时确保释放）。
+- 实现说明（GO7a-3，#817，2026-10-30 合入，97452a5；无迁移，GO7a 完成）：
+  - fake-llm 扣住回答：`HOLD=`，`/accept-s2/holds`（含每个名字的 `held` / `dropped` 计数），最多 120 秒；扣住前先发响应头，因为 llm-proxy 等上游响应头只等 10 秒。
+  - 行锁辅助：只能锁 `goal_runs` / `step_runs` 的一行；`lock_timeout` 5 秒，持有上限由场景给（S12 90 秒、S2 180 秒，限制在 300 秒内），`statement_timeout` 为上限加 15 秒，`client_connection_check_interval` 1 秒；用 materialized CTE 结束会话。
+  - S2 用 `SIGKILL` 杀内核，用一把步骤行锁让推进停在事务中间；内核回来后断言锁仍在、死掉的推进仍在等。
+  - 被扣住的回答是否到了 Worker，从 Worker 一侧确认：放行前 Task 仍 running，结束后存下的 summary 是 fake-llm 写好的那句（fake-llm 的计数只看得到 llm-proxy 那一段；#493 审查 P2 本 PR 修）。
+  - `ACCEPT_DISRUPTIVE=1` 才跑 S12、S2；`staging-rehearsal.sh` 打开，`apply-release.sh` 不设，只在 S2 摘要里显示 NOTE 行。
+  - 计划 §7.2 的 S12 不再写死信：失败的唤醒直接丢弃，由周期扫描兜底。
+  - **下一步** GO7b：主机窗口里跑（破坏性场景需维护者当场同意，见 STATUS 的 GO7b 主机窗口待办）。
 
 ### W1a — 统计车道（与 W1 并行）
 
