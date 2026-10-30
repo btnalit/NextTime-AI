@@ -5,7 +5,7 @@
 > 拆解与实现说明在 `development-tasks.md`，评估在 `retrospective-*.md` / `code-review-*.md`，
 > 本文只链接不复制。与代码冲突时以代码为准，并修正本文。
 
-最后更新：2026-10-30（**依赖修复分叉，v0.50.0 带一条已知风险发版**：协调线程定 v0.50.0 只等第一个依赖修复 PR（除 zod 外的 high，含 worker-runtime 镜像里的 undici），合入即发版；zod 3 的 high（GHSA-mrhx-c7xc-m3w5，只有 zod 4 有修复）作为已知风险随版发出，登记遗留 522，zod 4 迁移与遗留 438 的元素数上限同一个 PR、目标下一版）。 上一版 2026-10-30（**主机窗口开启，目标 v0.50.0**：维护者 10-30 开窗口，要求先发 v0.50.0 正式版，再由他本机的会话做主机完整升级与 GO7b 验证。发版前 `pnpm audit --prod` 查出 10 条 high（undici、zod、body-parser），协调线程定先修再发，依赖修复 PR 合入后发 v0.50.0；`release.md` §3.27 窗口清单已刷新为 v0.46.0 → v0.50.0。W1a #822 等发版后再合）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
+最后更新：2026-10-30（**发版前依赖修复合入（#827，90949bb，未发版）**：`pnpm audit --prod` 从 10 条 high 降到 1 条，剩下的是 zod（遗留 522，随 v0.50.0 作为已知风险发出）；#488 审查通过，门与 gatekeeper 只有 patch 升级、无行为变化。新遗留 523、524。下一步 release-please #568 跑 CI 后发 v0.50.0）。 上一版 2026-10-30（**依赖修复分叉，v0.50.0 带一条已知风险发版**：协调线程定 v0.50.0 只等第一个依赖修复 PR（除 zod 外的 high，含 worker-runtime 镜像里的 undici），合入即发版；zod 3 的 high（GHSA-mrhx-c7xc-m3w5，只有 zod 4 有修复）作为已知风险随版发出，登记遗留 522，zod 4 迁移与遗留 438 的元素数上限同一个 PR、目标下一版）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
 
 ## 1. 入口指引
 
@@ -254,6 +254,7 @@
 | 2026-10-30 | 遗留 513 关闭（#821，8e1c1e7，无迁移，未发版；新遗留 520、521）：门新增路由 `gate/credential-presence`（只认 `gate_token`，只回模式与布尔，边缘不发布、访问回 404）；内核只在服务人的读里问门，答案只在内存、按白名单回给人；门挂住时不再按申请人逐个等门回答、拖慢审批页与目标页（#493、#501 审查 P2 本 PR 修）。控制台：目标页、确认框、审批详情、对话里的审批卡（UX P2 本 PR 修）标出「该成员未连接此账户」并链接到「系统与授权」。契约增量：`StepActionWire.failureCode` 必填可空，`ActionRequestWire.onBehalfOfAccount` 可选，新增 PlanHint code。审查 #493、#501（xhigh）含增量复审通过，UX 验收与复验通过 | #821 |
 | 2026-10-30 | 主机窗口开启，目标 v0.50.0（维护者 10-30 决定，结束 10-16 起的暂缓）：先发 v0.50.0 正式版，再由维护者本机的会话按 `release.md` §3.27（已刷新为 v0.46.0 → v0.50.0，汇总 §3.28–§3.74 的窗口前、应用后与回滚要点）做主机完整升级与 GO7b 验证；破坏性场景 S2、S12 需维护者当场同意。发版前 `pnpm audit --prod` 在 main 上查出 high 10 条（undici 7.x / 8.x、zod、body-parser），协调线程定先修再发 | 本 PR |
 | 2026-10-30 | 计划变更（协调线程定）：依赖修复拆成两个 PR。v0.50.0 只等第一个（undici 7.x / 8.x、body-parser 等除 zod 外的 high，含 worker-runtime 镜像里的 undici），合入后即发版；zod 3 的 high（GHSA-mrhx-c7xc-m3w5）只有 zod 4.6.6 起才有修复，作为已知风险随 v0.50.0 发出，`#568` 升级须知写明，登记遗留 522；zod 4 迁移连同遗留 438 的元素数上限由依赖线程另开 PR，目标下一版 | 本 PR |
+| 2026-10-30 | 发版前依赖修复合入（#827，90949bb，无迁移，未发版；新遗留 523、524）：直接依赖 gatekeeper-base 的 `undici` 7.30.1，gatekeeper-base、kernel、worker-supervisor 的 `fastify` ^5.12.6，根目录 `vitest` ^4.1.12；`pnpm-workspace.yaml` 的 `overrides` 按受影响范围处理 undici 8、body-parser、qs、ip-address、@hono/node-server、fast-uri；worker-runtime 镜像锁文件用 npm override 把 undici 抬到 8.12.3。`pnpm audit --prod` 10 high → 1 high（zod，遗留 522）。#488 审查通过：overrides 都落在上游声明的范围内，`--frozen-lockfile` 通过，镜像里 `npm ls` 显示 `undici@8.12.3 overridden`；门侧 undici 7.30.1 只把主机名不匹配从 assert 改成普通错误，fastify 只改 QUERY 方法空 body（仓库没有 QUERY 路由）。`pi-upgrade.md` §3 补了 pi 升级时检查 undici 下限的步骤 | #827 |
 | 2026-10-16 | 控制台文案第二批合入（#628，25bfdfe，无迁移，只改控制台，未发版；遗留 335、359、360、361、362、363 关闭）：对话输入框因 U+0000 被拒后，提示旁有「移除看不见的字符」按钮，移除后消息不会自动发出（335）；清除预览与审计资源类型统一为「动作请求」「授权」（359）；下一步文案里的 builder 改为「构建者」（360）；错误文案与成员页统一为「最后一位有效的所有者」「人类用户」，capability 名称为「API key 轮换」（i18n 守卫不允许中文短标签以英文结尾）（361）；服务凭证表单输入时就提示保留名规则（362）；640px 以下对话页头部改为两行（363）。另含一个只改测试的提交：旅程③窄屏用例按 Escape 后先等抽屉关上再点下一行（#625 种子行排到第一位后暴露的时序问题）。只改控制台，不需要内核审查（协调线程定）；UX 验收首轮 1 条 P2（390 宽度错误条被按钮挤窄）在本 PR 内修好，复验 PASS（`console-ux/acceptance-628.md`），CI 全绿合入；无主机动作 | PR #628 |
 
 ### 2.2 验收证明了什么，没证明什么
@@ -729,6 +730,8 @@
 | 520 | 「未连接此账户」提示里的「去「系统与授权」」链接落在页面顶部，没有直接到那扇门的「录入我的凭证」行（#821 UX P3） | P3 | 控制台 | 开放（#821 UX 记录） |
 | 521 | 自己接入、按成员连接账户的门，控制台里没有「录入我的凭证」（`issue_gate_credential_token` 只给托管实例），但这类门也会出「未连接此账户」提示，提示里的那一步做不到；作者认为与 520 要一起定门级入口，需要动内核的凭证签发能力（#821 UX P3） | P3 | 内核 + 控制台 | 开放（#821 UX 记录） |
 | 522 | `zod` 3.x 高危 GHSA-mrhx-c7xc-m3w5：校验超大的受约束集合时可耗尽内存，只有 zod 4.6.6 起才有修复。kernel、shared、gatekeeper-base、egress-proxy、llm-proxy、worker-supervisor、platform-extension 都直接依赖 zod 3，MCP SDK、pi-ai 等也间接带它（`pnpm audit --prod`）。v0.50.0 带着它发版（协调线程定）；kernel 入口现有缓解是 Handle 认证、限流与 1 MiB 请求上限（`/api/cap` 的 `bodyLimit`、`/mcp`、WS `maxPayload`），与 438 同类。修法：zod 4 迁移，与 438 的元素数上限同一个 PR，由依赖线程做 | P2 | 全部包 | 开放（目标 v0.50.0 之后的下一版） |
+| 523 | worker-runtime 镜像里 pi CLI 是 esbuild bundle，内联了 `undici` 8.10.2（4 条 high），pi 1.1.0 到 1.4.0 都钉死这个版本；#827 的 override 只改了 `/opt/pi/node_modules`，pi 实际执行的仍是 8.10.2，pi 进程的全局 fetch（含 extension 的请求）也走它。暴露面：extension 只经内部 HTTP 访问 kernel，出站只去内部 llm-proxy；结论的前提是镜像保留 `PI_OFFLINE=1`，少了它 pi 启动时会经 `HTTPS_PROXY` 用 TLS 访问 pi.dev，TLS 那两条通告就适用（#488 审查）。#827 正文说「bash 发请求走的不是 undici」不准确：bash 里跑 node 的 fetch 用 Node 自带的 undici，只是不是内联的那份（#488 P3）。修法：等 pi 上游发版不再钉 8.10.2，按 `pi-upgrade.md` §3 升级 pi 并删掉两处 override | P3 | worker-runtime | 开放（等 pi 上游） |
+| 524 | `pnpm-workspace.yaml` 的 override 键 `ip-address@<10.7.4` 没有下界，将来树里出现 9.x 会被抬到 10.x；建议改成 `>=10.0.0 <10.7.4`。现在树里只有 10.x，没有实际影响（#827 #488 P3） | P3 | 依赖 | 开放（随 zod 4 迁移 PR 顺手改） |
 
 ## 5. 更新规则
 
