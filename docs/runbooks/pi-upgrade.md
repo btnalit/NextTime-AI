@@ -377,6 +377,13 @@ S10 方案写的目标是 1.0.2；开工时 npm `latest` 已是 **1.1.0**（1.0.
   `deploy/worker-runtime/pi/` 的依赖与锁文件、Dockerfile 是否还在读 `pi.version`）永远一致——`pnpm ci:guards` 与 CI 的 `guards` job
   都跑它，任何一处漏改都会直接挂红，不会静默漂移。
 
+依赖安全下限（2026-10-30，v0.50.0 发版前审计）：pi 1.1.0 到 1.4.0 都把 `undici` 钉死在 8.10.2，这个版本有 4 条
+high 通告。`deploy/worker-runtime/pi/package.json` 的 `overrides` 与根目录 `pnpm-workspace.yaml` 的 `overrides` 把它抬到
+`^8.12.2`。注意这只改了 `/opt/pi/node_modules` 和 pnpm 树里的那份；pi CLI 实际执行的 undici 是 esbuild 打进
+`dist/bundle/chunks/` 的那份，仍是 pi 构建时的 8.10.2，只有 pi 上游发版才能换掉。每次升级 pi：看新版
+`package.json` 的 `undici` 是否已经不低于 8.12.2，是的话删掉这两处 override；在 bundle 里
+`grep -l 'node_modules/undici/' dist/bundle/chunks/*` 确认它是否仍内联 undici。
+
 这也是为什么没有用派发文字建议的"Dockerfile ARG"方案：ARG 的默认值仍然是硬编码字面量（除非
 再改 `docker-compose.yml` 的 build args，把版本号从 shell 传进去），并没有真正减少一份拷贝，
 反而多了一条"构建调用方式必须同步改"的隐性契约，且 Dockerfile 头部注释已经明确"本机无 Docker，

@@ -23,3 +23,18 @@ allowBuilds:
   esbuild: true
   protobufjs: false
   ssh2: false
+# Security floors for transitive dependencies (v0.50.0 pre-release audit, 2026-10-30). Each key
+# only matches the vulnerable range, so the override stops applying once the upstream range moves
+# past it and can then be deleted. undici 8 is pinned exactly by @earendil-works/pi-coding-agent
+# (1.1.0 through 1.4.0 all pin 8.10.2); the rest are in range of their parents and only need a
+# floor so the lockfile cannot fall back. deploy/worker-runtime/pi/package.json carries the same
+# undici floor for the worker-runtime image. The pi CLI itself runs an esbuild bundle with its own
+# inlined undici 8.10.2, which only an upstream pi release can replace (docs/runbooks/pi-upgrade.md §3).
+overrides:
+  'undici@>=8.0.0 <8.12.2': ^8.12.2
+  'body-parser@>=2.0.0 <2.4.0': ^2.4.0
+  'qs@>=6.7.0 <6.16.1': ^6.16.1
+  'ip-address@<10.7.4': ^10.7.4
+  '@hono/node-server@>=2.0.0 <2.1.3': ^2.1.3
+  'fast-uri@>=3.0.0 <3.1.9': ^3.1.9
+  'fast-uri@>=4.0.0 <4.2.3': ^4.2.3
