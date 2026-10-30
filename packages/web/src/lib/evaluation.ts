@@ -1,4 +1,5 @@
 import {
+  type EvalCasePartition,
   type EvalFixtureGateLiveState,
   type EvalFixtureOperationWire,
   type EvalSuiteChangeWire,
@@ -6,6 +7,7 @@ import {
   type EvalSuiteWire,
   visibleText,
 } from '@nexttime/shared';
+import type { ErrorOverrides } from './errors.js';
 import { actionKindTagText } from './format.js';
 import type { Translate } from './i18n.js';
 import { type WorkerDefinitionSummary, distinctDefinitionName } from './tasks.js';
@@ -63,8 +65,31 @@ export function pinnedWorkerName(
 
 /** What `get_eval_suite` returns, as a list row (`list_eval_suites`' shape). */
 export function suiteSummaryOf(suite: EvalSuiteWire): EvalSuiteSummaryWire {
-  const { canary: _canary, fixtureGates: _gates, history: _history, ...summary } = suite;
+  const {
+    canary: _canary,
+    fixtureGates: _gates,
+    cases: _cases,
+    history: _history,
+    ...summary
+  } = suite;
   return summary;
+}
+
+/** 「用例集版本 v2 → v3」: what every change does to the suite's version. */
+export function suiteVersionStep(version: number, t: Translate): string {
+  const next = version + 1;
+  return t(`用例集版本 v${version} → v${next}`, `Suite version v${version} → v${next}`);
+}
+
+/** Every write names the suite version the reader saw (`suiteVersion`); another change in between
+ *  is refused (409 `version_changed`) and nothing is written. The detail re-reads the suite then. */
+export function writeErrors(t: Translate): ErrorOverrides {
+  return {
+    version_changed: t(
+      '用例集在你打开之后被改过，什么也没有保存。已重新读取最新内容，看过后再操作。',
+      'The suite changed after you opened it, and nothing was saved. The latest version has been loaded; look it over and try again.',
+    ),
+  };
 }
 
 /** One change in a suite's history, in a sentence (the version and who made it are shown beside
@@ -95,7 +120,43 @@ export function suiteChangeText(change: EvalSuiteChangeWire, t: Translate): stri
         `Synced fixture gate ${gate}${parts.length > 0 ? `: ${parts.join('; ')}` : ''}`,
       );
     }
+    case 'case_added': {
+      const what = caseChangeName(change, t);
+      return t(`添加用例 ${what}`, `Added case ${what}`);
+    }
+    case 'case_edited': {
+      const what = caseChangeName(change, t);
+      return t(`编辑用例 ${what}`, `Edited case ${what}`);
+    }
+    case 'case_retired': {
+      const what = caseChangeName(change, t);
+      return t(`退役用例 ${what}`, `Retired case ${what}`);
+    }
   }
+}
+
+const PARTITION: Readonly<Record<EvalCasePartition, readonly [string, string]>> = {
+  regression: ['回归', 'Regression'],
+  mechanism: ['机制', 'Mechanism'],
+  full: ['全量', 'Full'],
+};
+
+/** A case's partition as the pages name it. */
+export function partitionLabel(partition: EvalCasePartition, t: Translate): string {
+  const [zh, en] = PARTITION[partition];
+  return t(zh, en);
+}
+
+/** 「「标题」（回归 · holdout）」: a case as its change names it. */
+function caseChangeName(
+  change: Extract<EvalSuiteChangeWire, { readonly caseId: string }>,
+  t: Translate,
+): string {
+  const partition = partitionLabel(change.partition, t);
+  return t(
+    `「${change.title}」（${partition} · ${change.split}）`,
+    `“${change.title}” (${partition} · ${change.split})`,
+  );
 }
 
 export interface OperationDiff {

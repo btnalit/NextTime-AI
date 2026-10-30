@@ -57,6 +57,7 @@ function gate(extra: Partial<EvalFixtureGateWire> = {}): EvalFixtureGateWire {
         mode: 'observe',
         description: 'list hosts',
         paramsSchema: {},
+        answersAbsent: false,
       },
     ],
     snapshotDigest: `sha256:${'0'.repeat(64)}`,
@@ -77,11 +78,14 @@ function suite(extra: Partial<EvalSuiteWire> = {}): EvalSuiteWire {
     version: 2,
     fixtureGateCount: 1,
     fixtureGatesNeedingAttention: 0,
+    caseCount: 0,
+    casesNeedingAttention: 0,
     createdBy: 'p-me',
     createdAt: '2026-10-30T00:00:00.000Z',
     updatedAt: '2026-10-30T00:00:00.000Z',
     canary: CANARY,
     fixtureGates: [gate()],
+    cases: [],
     history: [
       {
         version: 1,
@@ -503,7 +507,14 @@ describe('EvaluationPage (S10 E3-1a)', () => {
           gateName,
           liveState: 'changed',
           operations: [
-            { name: spoofed, version: 1, mode: 'execute', description: null, paramsSchema: {} },
+            {
+              name: spoofed,
+              version: 1,
+              mode: 'execute',
+              description: null,
+              paramsSchema: {},
+              answersAbsent: false,
+            },
           ],
         }),
       ],

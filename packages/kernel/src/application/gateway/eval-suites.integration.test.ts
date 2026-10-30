@@ -398,6 +398,7 @@ describe.runIf(DATABASE_URL !== undefined)(
               mode: 'observe',
               description: 'reads hosts.list',
               paramsSchema: { type: 'object', properties: { host: { type: 'string' } } },
+              answersAbsent: false,
             },
           ],
           snapshotDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),

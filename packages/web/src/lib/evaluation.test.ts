@@ -126,15 +126,20 @@ describe('lib/evaluation (S10 E3-1a)', () => {
       version: 1,
       fixtureGateCount: 0,
       fixtureGatesNeedingAttention: 0,
+      caseCount: 0,
+      casesNeedingAttention: 0,
       createdBy: 'p',
       createdAt: 'x',
       updatedAt: 'x',
       canary: `NTEVAL-${'0'.repeat(32)}`,
       fixtureGates: [],
+      cases: [],
       history: [],
     } satisfies EvalSuiteWire;
     expect(Object.keys(suiteSummaryOf(suite)).sort()).toEqual(
       [
+        'caseCount',
+        'casesNeedingAttention',
         'createdAt',
         'createdBy',
         'description',

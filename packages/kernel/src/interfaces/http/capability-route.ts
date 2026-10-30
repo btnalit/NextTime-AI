@@ -24,6 +24,7 @@ import {
 } from '../../application/chat/index.js';
 // S10 E3-1a: an evaluation suite's refusals — imported directly like the domain errors around.
 import {
+  EvalFixtureGateInUseError,
   EvalSuiteInputError,
   EvalSuiteNameTakenError,
   EvalSuiteNotFoundError,
@@ -799,6 +800,18 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof EvalSuiteNameTakenError) {
     return { status: 409, code: err.code, message: err.message };
+  }
+  // E3-1b: cases the suite holds still answer through the gate to remove — `details` names them.
+  if (err instanceof EvalFixtureGateInUseError) {
+    return {
+      status: 409,
+      code: err.code,
+      message: err.message,
+      details: {
+        caseCount: err.details.caseCount,
+        cases: err.details.cases.map((c) => ({ ...c })),
+      },
+    };
   }
   // S10 E1 (application/task/attribution.ts): an objective outcome given by someone who may see
   // the Turn / Task but may not judge it (403), or one its state forbids — not finished yet, or its

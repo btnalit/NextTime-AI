@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto';
 import { canonicalJson } from '@nexttime/gatekeeper-base';
-import type { EvalFixtureGateLiveState, EvalFixtureOperationWire } from '@nexttime/shared';
+import {
+  type EvalFixtureGateLiveState,
+  type EvalFixtureOperationWire,
+  type Operation,
+  operationAbsentAnswers,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   getGatekeeper,
@@ -91,6 +96,12 @@ export function diffSnapshots(
   return { addedOperations, removedOperations, changedOperations };
 }
 
+/** Whether `operation` (a frozen definition) declares answers that mean "not there" — only such an
+ *  Operation's calls may a case answer with `absent`, as in production. */
+export function declaresAbsence(operation: Record<string, unknown>): boolean {
+  return operationAbsentAnswers(operation as unknown as Operation) !== undefined;
+}
+
 /** One frozen Operation as the console shows it. */
 export function fixtureOperationWire(op: FixtureOperationSnapshot): EvalFixtureOperationWire {
   const definition = op.operation;
@@ -105,5 +116,6 @@ export function fixtureOperationWire(op: FixtureOperationSnapshot): EvalFixtureO
       params !== null && typeof params === 'object' && !Array.isArray(params)
         ? (params as Record<string, unknown>)
         : {},
+    answersAbsent: declaresAbsence(definition),
   };
 }
