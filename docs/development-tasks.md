@@ -4599,6 +4599,12 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **holdout 读路径**：用例内容只存在 `eval_cases`，唯一读路径是人调用 `get_eval_case`；`Capability.auditWithheldParamKeys`（值固定 `[withheld]`，payload 列 `withheldParams`）与凭据规则 `redactedParamKeys` 分开；控制台审计页说明内容在「治理 → 评测」查看。变异检查：去掉省略逻辑后测试在 `audit_records` 里找到 7 个标记。
   - **摘要**：`get_eval_suite` 的 `cases` 摘要带 `fixtureOperations`，不读用例内容（#493 审查 P3 本 PR 修）；`fixture_gate_in_use` 的 `details` 带用例标题，只回给调用人、不进审计。
   - **下一步**：E3-1c holdout 防泄漏扫描；runs / trials 在 E3-2。
+- 实现说明（E3-1c holdout 防泄漏扫描，#813，2026-10-30 合入，d2b848a；无迁移）：
+  - **范围**：只拦原样复制（规范化后连续 40 字或 canary），改写、翻译、拆字段能绕过（分叉 (a)）；新模块 `application/eval-seal/`（`span-index.ts`、`seal.ts`、`record.ts`），不放在 `application/eval/` 下，因为 depcruise 规定那里只给人工通道的 handler 用。
+  - **索引**：两个模 2^31 以下素数的滚动哈希拼成 53 位键，快照不存文字、只在 kernel 内存、最多缓存 256 个工作区；行只增不改，计数变了就重建，多副本一致。收标题、机制说明、输入、断言与夹具 `when` 条件（`jsonb_path_query_array(fixtures, '$[*].when')`），不收夹具应答数据，否则真实门返回同样数据时生产调用会被整笔回滚。
+  - **接入**：dispatch（Handle 通道，结果、错误与 `afterCommit` 结果）、`spawnWorkerRun`、`sendChatMessage`、`AgentHostRuntime.startTurn`（系统提示词改由 `startTurn` 拼好，扫描和发出的是同一个值）；检查本身失败时一律按拒绝处理，日志不写内容。
+  - **返回与审计**：403 `evaluation_content_withheld` / WS `-32018`，只有 `code`、`where`、`rolledBack` 和固定文案；审计 `evaluation.content_withheld` 按 `where` 区分能力结果、能力错误（`capability_error`）、Worker 启动（`worker_start`）、对话消息（`entry_turn`）、入口启动（`entry_start`），不写调用参数。
+  - **后续**：探针风险（遗留 514）在 E3-2 加命中次数阈值时修；回放生成用例与 holdout 的冲突（遗留 517）在做回放生成前定；下一步 E3-2 runs / trials。
 - 2026-10-23 设计输入（victor 定分叉 2 = b，与自进化闭环审查 §2.3–§2.5、§7.1）：回归断言失败或判 `worse` 时，发布人要逐条确认失败项并写理由，记审计（同 10-09「已核对凭据」）；`inconclusive` 只显示、不加确认（避免确认疲劳）；按每月测试额度，MVP 主力是确定性回归棘轮 + 大效应机制筛，样本不够判 `inconclusive`，不显示成「在噪声内」；δ 与 k 改为在夹具上做 A/A 重跑校准（主机只有验收账号，遗留 230）。
 
 **GO16 — 沉淀提议：WorkerSpec 组合提议为 WorkerDefinition**（见 `global-roadmap-2026-10-16.md` §4）
