@@ -80,6 +80,22 @@ export function partitionHint(partition: EvalCasePartition, t: Translate): strin
   }
 }
 
+/** How many characters in a row of a holdout case's text (normalized: NFKC, lower case, blanks
+ *  folded) the kernel treats as a copy of it and withholds from agents — `SEAL_SPAN_CHARS` in the
+ *  kernel's `application/eval-seal/span-index.ts` (S10 E3-1c). */
+export const HOLDOUT_SEAL_SPAN_CHARS = 40;
+
+/** Legacy 516 (#813's note): holdout text is withheld from agents wherever it turns up, so a stock
+ *  phrase or a passage copied from real data in a holdout case also stops the same text in real
+ *  work. Fixture answer data is not indexed, so it is not named. */
+export function holdoutTextNotice(t: Translate): string {
+  const n = HOLDOUT_SEAL_SPAN_CHARS;
+  return t(
+    `holdout 用例的文字（标题、机制、输入、规则的条件和断言）会对智能体封闭：交给智能体的任何内容里，只要原样出现其中连续 ${n} 个字符，就会被拦下。所以要写得具体，不要用常见套话或通用说明，也不要整段照抄真实数据或日志，否则真实工作里出现同样的文字也会被拦。夹具应答的数据不算在内。`,
+    `A holdout case’s text (title, mechanism, input, rule conditions and assertions) is withheld from agents: anything an agent is given that carries ${n} characters of it in a row is stopped. Write it specifically — no stock phrases or generic instructions, and no passages copied whole from real data or logs — or the same text in real work is stopped too. Fixture answer data does not count.`,
+  );
+}
+
 export function splitHint(split: EvalCaseSplit, t: Translate): string {
   return split === 'dev'
     ? t(
