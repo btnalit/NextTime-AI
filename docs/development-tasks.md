@@ -4383,7 +4383,12 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **GO11 — 任务级观察范围**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（#796，W1a 车道记为 E3-0，2026-10-30 合入，7368b25；迁移 task/0010）：协调线程 10-29 定先做通用机制，评测 Task（`purpose=evaluation`，E3-2）是第一个使用者，WorkerSpec 到 GO8 接上；E3 的评测 Task 用 GO11 的观察范围。
+  - **判定**：错误码沿用 `excluded_by_policy`（S10 I-E1「复用现有谓词」），`observeGateRefusal` 带来源（`agent_policy` / `task_scope` 加 `taskId`）；两者同时排除时先报 Task 范围（所有者也放不开）；`ObserveExclusions` 只多 `taskScope`，`observeRefusal` 顺序不变；`readObserveExclusions` 第 4 个参数必传。
+  - **身份**：Handle 调用方一律用 `readHandleObserveExclusions`（`application/task/observe-scope.ts`：会话 `sid` → WorkerRun → Task，与 `report_task_result`、`request_action` 相同），用于 `observe_operation`、`request_action` 观察分支、`list_allowed_operations`、`find_procedures`；成员读模型与平台验收观察传 `null`。范围不进 Handle，按会话从 Task 上读。
+  - **继承**：`invoke.ts` 在建 Task 的加锁事务里与调用方 Task 范围取交集（`InvokeWorkerTaskOptions{observeScope}`，handler 不传，生产代码暂无调用方），`worker_runs` 触发器兜底；范围里的门 id 不校验存在（只会收窄）。
+  - **`find_operations`**：`reachability` 注解跳过所有 WorkerRun 会话。
+  - **测试**：`observe-access.test.ts` 3 条，`task-observe-scope.integration.test.ts` 9 条（两个假门 HTTP 服务，四组变异对照），`TaskDetail.test.tsx` 3 条。
 
 **GO12 — 按「门 × 目标资源」的执行队列**（见 `global-roadmap-2026-10-16.md` §4）
 
