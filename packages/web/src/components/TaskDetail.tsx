@@ -187,6 +187,43 @@ export function TaskDetail({
       ),
     },
   ];
+  // S11 GO11: a Task that fixes what its Workers may read says so; one that sets no scope shows no row.
+  if (task.observeScope) {
+    const scope = task.observeScope;
+    overviewItems.push({
+      key: 'observeScope',
+      label: t('观察范围', 'Observation scope'),
+      value: (
+        <span className="stack-s" data-testid="task-observe-scope">
+          {scope.length > 0 ? (
+            <span className="row-wrap">
+              {scope.map((gatekeeperId) => (
+                <RefChip
+                  key={gatekeeperId}
+                  kind="gatekeeper"
+                  id={gatekeeperId}
+                  http={http}
+                  size="s"
+                  testId="task-observe-scope-gate"
+                />
+              ))}
+            </span>
+          ) : null}
+          <span className="text-3 text-small">
+            {scope.length > 0
+              ? t(
+                  '这个任务的 Worker 只能读取这些门，创建任务时定下，不会改变。',
+                  "This task's Workers can read only through these gatekeepers. Set when the task was created; it never changes.",
+                )
+              : t(
+                  '这个任务的 Worker 不能读取任何门，创建任务时定下，不会改变。',
+                  "This task's Workers cannot read through any gatekeeper. Set when the task was created; it never changes.",
+                )}
+          </span>
+        </span>
+      ),
+    });
+  }
   if (task.failureReason) {
     overviewItems.push({
       key: 'failure',

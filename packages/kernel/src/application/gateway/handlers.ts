@@ -47,6 +47,7 @@ import {
   type WorkerRunRow,
   findOperations,
   findProcedures,
+  findWorkerRunBySessionId,
   findWorkers,
   getConfiguredTaskRuntime,
   getTaskVisibleTo,
@@ -54,6 +55,7 @@ import {
   invokeWorkerCreate,
   listQuotas,
   listTasksForPrincipal,
+  readHandleObserveExclusions,
   readProcedureOutcomeHints,
   readTaskAttributions,
   resolveParentAuthority,
@@ -141,7 +143,6 @@ import {
   SqlGraphStore,
   objectDisplayName,
 } from '../../substrate/graph/index.js';
-import { readObserveExclusions } from '../gates/index.js';
 import {
   listRuntimeImagesHandler,
   piDriftHandler,
@@ -2047,6 +2048,7 @@ function toWireTask(
             : null,
         }
       : null,
+    observeScope: task.observeScope === null ? null : [...task.observeScope],
   };
 }
 
@@ -2185,9 +2187,16 @@ const findOperationsHandler: CapabilityHandler = async (client, workspaceId, par
   // Console redesign M3: for the entry agent (a root Handle — no `par`), each candidate says how
   // that agent can actually reach it, so "I can see kb.list but have no tool for it" becomes an
   // explicit `unreachable` + reason instead of a guess. A Worker's own child Handle is what counts
-  // for a Worker caller, so it gets no annotation.
+  // for a Worker caller, so it gets no annotation — nor does a Worker whose Handle has no parent
+  // (a goal step's attempt, started by the advancer): the annotation is the member's entry agent's
+  // view, and would also leave out the Worker's Task observation scope (S11 GO11).
   const principalId = ctx?.principalId;
-  if (!principalId || !ctx?.claims || ctx.claims.par !== undefined) {
+  if (
+    !principalId ||
+    !ctx?.claims ||
+    ctx.claims.par !== undefined ||
+    (await findWorkerRunBySessionId(client, workspaceId, ctx.claims.sid)) !== null
+  ) {
     return { result: { items: result.map(toWireObject) } };
   }
   const reach = await computeCapabilityReachability(client, workspaceId, principalId);
@@ -2217,11 +2226,15 @@ const findProceduresHandler: CapabilityHandler = async (client, workspaceId, par
     claims: ctx?.claims,
   });
   // A Handle caller's observe steps go through the one observe predicate (its member's AgentPolicy
-  // cap / AgentProfile exclusions, no Grant — application/gates/observe-access.ts); a human caller
-  // keeps the human channel's rule, so it gets none.
+  // cap / AgentProfile exclusions and, for a Worker of a scoped Task, that Task's observation scope
+  // — S11 GO11; no Grant — application/gates/observe-access.ts); a human caller keeps the human
+  // channel's rule, so it gets none.
   const observeExclusions =
     ctx?.claims && ctx.principalId
-      ? await readObserveExclusions(client, workspaceId, ctx.principalId)
+      ? await readHandleObserveExclusions(client, workspaceId, {
+          principalId: ctx.principalId,
+          sessionId: ctx.claims.sid,
+        })
       : undefined;
   const result = await findProcedures(
     client,

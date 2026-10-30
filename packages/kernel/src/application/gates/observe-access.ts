@@ -20,7 +20,10 @@ import {
  *      has always refused in);
  *   3. the Operation is published and observe-class;
  *   4. the gate is not left out by the workspace AgentPolicy gate cap, nor excluded by the calling
- *      member's own AgentProfile (the Handle's `obo` — for a Worker, the member it acts for).
+ *      member's own AgentProfile (the Handle's `obo` — for a Worker, the member it acts for), nor —
+ *      for a Worker whose Task sets an observation scope (S11 GO11, S10 I-E1) — outside that
+ *      scope. The Task scope is one more source of exclusions for the same condition, never another
+ *      predicate: a Task scope only narrows what the member's agent may observe.
  *
  * No gate Grant, no `resources.gatekeeper`: a Handle's gate scope now means *execute* authority
  * only (Grant-derived, attenuated per Worker) and never decides observation. The human channel
@@ -41,25 +44,44 @@ import {
  * (`observableGatekeeperIds` below, application/gateway/agent-profile-handlers.ts), and S11 GO3d's
  * reconcile checks — a goal plan's declared check, validated with `NO_OBSERVE_EXCLUSIONS`
  * (application/goal/plan.ts), and the platform's observation itself, made for the requester with
- * their agent exclusions (application/goal/reconcile-check.ts).
+ * their agent exclusions (application/goal/reconcile-check.ts). The Handle-caller consumers read
+ * their exclusions with `readHandleObserveExclusions` (application/task/observe-scope.ts), which
+ * adds the session's Task scope; the member-level read models (execution readiness, My Agent) and
+ * the platform's observation describe no Task.
  */
 
-/** The two inputs condition 4 needs, read once per caller. */
+/** S11 GO11: the observation scope of the Task a calling Worker runs (`tasks.observe_scope`,
+ *  migrations/task/0010) — only these gates. Read per call from the Handle's session
+ *  (`readSessionTaskObserveScope`, application/task/observe-scope.ts), never from the Handle. */
+export interface TaskObserveScope {
+  readonly taskId: string;
+  readonly gatekeeperIds: readonly string[];
+}
+
+/** The inputs condition 4 needs, read once per caller. */
 export interface ObserveExclusions {
   /** `AgentPolicy.allowedGatekeepers` — `[]` means no cap (S3.13 "上限集合（空 = 不限制）"). */
   readonly policyAllowedGatekeepers: readonly string[];
   /** The calling member's own `AgentProfile.excludedGatekeepers` (governance 0012). */
   readonly profileExcludedGatekeepers: readonly string[];
+  /** S11 GO11: the calling Worker's Task's observation scope — unlike the policy cap, `[]` here
+   *  means no gate at all. `null`: the caller is not a Worker of a scoped Task (a member's agent
+   *  outside any Task, the human channel, the platform observing for a requester). */
+  readonly taskScope: TaskObserveScope | null;
 }
 
-/** No cap and no exclusion — the human channel (a person's own reads), and "readable by anyone in
- *  the workspace" before a member's own agent settings narrow it (`observableGatekeeperIds`). */
+/** No cap, no exclusion and no Task — the human channel (a person's own reads), and "readable by
+ *  anyone in the workspace" before a member's own agent settings narrow it
+ *  (`observableGatekeeperIds`). */
 export const NO_OBSERVE_EXCLUSIONS: ObserveExclusions = Object.freeze({
   policyAllowedGatekeepers: [],
   profileExcludedGatekeepers: [],
+  taskScope: null,
 });
 
-/** From rows a caller already read (`computeCapabilityReachability` reads both anyway). */
+/** A member's agent as such, from rows a caller already read (`computeCapabilityReachability`
+ *  reads both anyway) — the member-level read models (execution readiness, My Agent), which
+ *  describe no Task and so carry no Task scope. */
 export function observeExclusionsOf(
   profile: AgentProfileRow | undefined,
   policy: AgentPolicyRow,
@@ -67,21 +89,60 @@ export function observeExclusionsOf(
   return {
     policyAllowedGatekeepers: policy.allowedGatekeepers,
     profileExcludedGatekeepers: profile?.excludedGatekeepers ?? [],
+    taskScope: null,
   };
 }
 
+/** `taskScope` is required, so each caller states whether a Task narrows this observation: a
+ *  Handle caller passes its session's (application/task/observe-scope.ts's
+ *  `readHandleObserveExclusions` does both reads), the platform's own observation passes `null`. */
 export async function readObserveExclusions(
   client: PoolClient,
   workspaceId: string,
   principalId: string,
+  taskScope: TaskObserveScope | null,
 ): Promise<ObserveExclusions> {
   // One client, one query at a time (pg rejects concurrent queries on a client).
   const profile = await readAgentProfile(client, workspaceId, principalId);
   const policy = await readAgentPolicy(client, workspaceId);
-  return observeExclusionsOf(profile, policy);
+  return { ...observeExclusionsOf(profile, policy), taskScope };
 }
 
 export type ObserveGateExclusion = 'excluded_by_policy' | 'excluded_by_profile';
+
+/** Which policy an `excluded_by_policy` comes from — the workspace AgentPolicy gate cap (an owner
+ *  changes it on Models & Quotas) or the calling Worker's Task's observation scope (fixed when the
+ *  Task was created). Same reason code either way (S10 I-E1 "复用现有谓词，不新造判定"); the error
+ *  text says which. */
+export type ObserveGateRefusal =
+  | { readonly reason: 'excluded_by_policy'; readonly policy: 'agent_policy' }
+  | {
+      readonly reason: 'excluded_by_policy';
+      readonly policy: 'task_scope';
+      readonly taskId: string;
+    }
+  | { readonly reason: 'excluded_by_profile' };
+
+/** Condition 4 with where it comes from. The Task's scope first: a Worker of a scoped Task is told
+ *  about the bound its Task fixed — no owner can lift it for this Task — before the workspace cap,
+ *  then the member's own exclusion. */
+export function observeGateRefusal(
+  exclusions: ObserveExclusions,
+  gatekeeperId: string,
+): ObserveGateRefusal | undefined {
+  const task = exclusions.taskScope;
+  if (task !== null && !task.gatekeeperIds.includes(gatekeeperId)) {
+    return { reason: 'excluded_by_policy', policy: 'task_scope', taskId: task.taskId };
+  }
+  const cap = exclusions.policyAllowedGatekeepers;
+  if (cap.length > 0 && !cap.includes(gatekeeperId)) {
+    return { reason: 'excluded_by_policy', policy: 'agent_policy' };
+  }
+  if (exclusions.profileExcludedGatekeepers.includes(gatekeeperId)) {
+    return { reason: 'excluded_by_profile' };
+  }
+  return undefined;
+}
 
 /** Condition 4 alone — the gate-level half of `observeRefusal`, exposed so the reachability read
  *  model can flag a gate as excluded without an Operation in hand. Same rule
@@ -91,10 +152,7 @@ export function observeGateExclusion(
   exclusions: ObserveExclusions,
   gatekeeperId: string,
 ): ObserveGateExclusion | undefined {
-  const cap = exclusions.policyAllowedGatekeepers;
-  if (cap.length > 0 && !cap.includes(gatekeeperId)) return 'excluded_by_policy';
-  if (exclusions.profileExcludedGatekeepers.includes(gatekeeperId)) return 'excluded_by_profile';
-  return undefined;
+  return observeGateRefusal(exclusions, gatekeeperId)?.reason;
 }
 
 /** The facts about one (gate, Operation) pair the predicate decides on — every consumer already
@@ -120,7 +178,7 @@ export type ObserveRefusal =
     }
   | { readonly reason: 'no_published_operation' }
   | { readonly reason: 'not_observe_class'; readonly mode: string }
-  | { readonly reason: ObserveGateExclusion };
+  | ObserveGateRefusal;
 
 /** `undefined` = the caller may observe; otherwise the first unmet condition, in the order above
  *  (the order enforcement has always refused in, so error shapes are unchanged). */
@@ -141,8 +199,7 @@ export function observeRefusal(
   if (target.publishedMode !== 'observe') {
     return { reason: 'not_observe_class', mode: target.publishedMode };
   }
-  const exclusion = observeGateExclusion(exclusions, target.gatekeeperId);
-  return exclusion === undefined ? undefined : { reason: exclusion };
+  return observeGateRefusal(exclusions, target.gatekeeperId);
 }
 
 /**

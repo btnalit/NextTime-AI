@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../kit/dialog.js';
+import { GuardedCancelButton } from '../kit/discard-guard.js';
 import { Field, describedBy } from '../kit/field.js';
 import { InlineError } from '../kit/inline-error.js';
 import { Notice } from '../kit/notice.js';
@@ -169,40 +170,42 @@ export function SupersedeFactDialog({
           </DialogTitle>
           <DialogDescription className="mono">{factLabel}</DialogDescription>
         </DialogHeader>
-        {step === 'edit' ? (
-          <div className="stack">
-            <Notice>
-              {t(
-                '写入一条新事实（同样两个对象、同一关系），由你本人断言；原事实保留为「已取代」。',
-                'Writes a new Fact on the same two Objects and relation, asserted by you; the current one is kept as superseded.',
-              )}
-            </Notice>
-            <Field
+        {/* Kept mounted (hidden) while reviewing: the typed value is still unsaved there, and the
+            dialog asks before Escape drops it (legacy 497 rule). */}
+        <div className="stack" hidden={step !== 'edit'}>
+          <Notice>
+            {t(
+              '写入一条新事实（同样两个对象、同一关系），由你本人断言；原事实保留为「已取代」。',
+              'Writes a new Fact on the same two Objects and relation, asserted by you; the current one is kept as superseded.',
+            )}
+          </Notice>
+          <Field
+            id={valueId}
+            label={t('新值（JSON 对象）', 'New value (JSON object)')}
+            required
+            hint={t(
+              '该事实的属性。只能改值，不能改对象或关系。',
+              "The Fact's properties. Only the value changes — never the Objects or the relation.",
+            )}
+            error={valueError}
+          >
+            <Textarea
               id={valueId}
-              label={t('新值（JSON 对象）', 'New value (JSON object)')}
-              required
-              hint={t(
-                '该事实的属性。只能改值，不能改对象或关系。',
-                "The Fact's properties. Only the value changes — never the Objects or the relation.",
-              )}
-              error={valueError}
-            >
-              <Textarea
-                id={valueId}
-                aria-label={t('新值', 'New value')}
-                className="mono"
-                value={text}
-                onChange={(event) => setText(event.target.value)}
-                minRows={4}
-                maxRows={12}
-                spellCheck={false}
-                invalid={valueError !== null}
-                aria-describedby={describedBy(valueId, true, valueError !== null)}
-                data-testid="supersede-fact-value"
-              />
-            </Field>
-          </div>
-        ) : (
+              aria-label={t('新值', 'New value')}
+              className="mono"
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+              minRows={4}
+              maxRows={12}
+              spellCheck={false}
+              invalid={valueError !== null}
+              aria-describedby={describedBy(valueId, true, valueError !== null)}
+              data-testid="supersede-fact-value"
+              data-discard-guard
+            />
+          </Field>
+        </div>
+        {step === 'review' ? (
           <div className="stack">
             <div className="stack-s">
               <span className="section-title">
@@ -248,7 +251,7 @@ export function SupersedeFactDialog({
             </div>
             <InlineError error={error} testId="supersede-fact-error" />
           </div>
-        )}
+        ) : null}
         <DialogFooter>
           {step === 'edit' ? (
             <>
@@ -262,9 +265,9 @@ export function SupersedeFactDialog({
               >
                 {t('检查变更', 'Review changes')}
               </Button>
-              <Button variant="ghost" size="s" onClick={onClose}>
+              <GuardedCancelButton variant="ghost" size="s" onCancel={onClose}>
                 {t('取消', 'Cancel')}
-              </Button>
+              </GuardedCancelButton>
             </>
           ) : (
             <>

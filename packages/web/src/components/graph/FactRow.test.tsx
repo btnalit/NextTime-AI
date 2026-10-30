@@ -313,3 +313,21 @@ describe('dialog helpers', () => {
     ]);
   });
 });
+
+describe('FactRow — focus after a menu-opened surface closes (#798 UX P3)', () => {
+  // The menu item that opened the surface unmounts with its menu; focus goes back to 更多操作.
+  it.each([
+    ['graph-fact-attest', 'attest-fact-dialog'],
+    ['graph-fact-supersede', 'supersede-fact-dialog'],
+    ['graph-fact-invalidate', 'graph-fact-invalidate-confirm'],
+  ])('%s hands focus back to the menu trigger', async (item, surface) => {
+    renderRow({ http: scriptedHttp({}) });
+    openMenu();
+    const menuItem = await screen.findByTestId(item);
+    menuItem.focus();
+    fireEvent.click(menuItem);
+    fireEvent.keyDown(await screen.findByTestId(surface), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId(surface)).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('graph-fact-menu')));
+  });
+});

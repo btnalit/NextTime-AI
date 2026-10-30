@@ -1,14 +1,8 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { type VariantProps, cva } from 'class-variance-authority';
-import {
-  type ComponentPropsWithoutRef,
-  type ElementRef,
-  forwardRef,
-  useCallback,
-  useRef,
-} from 'react';
+import { type ComponentPropsWithoutRef, type ElementRef, forwardRef } from 'react';
 import { cn } from '../../lib/cn.js';
-import { type DiscardGuard, GuardedCloseProvider, useDiscardGuard } from './discard-guard.js';
+import { GuardedDialogContent, type GuardedDialogContentProps } from './discard-guard.js';
 
 /**
  * components/kit/sheet (S8 W1-A0, docs/development-tasks.md §5e decision F3): a side drawer on
@@ -67,83 +61,23 @@ const sheetVariants = cva(
 );
 
 export interface SheetContentProps
-  extends ComponentPropsWithoutRef<typeof DialogPrimitive.Content>,
-    VariantProps<typeof sheetVariants> {
-  /** The guard to use — for a caller that hands it to content it renders elsewhere (a portal,
-   *  `kit/master-detail`); by default the sheet keeps its own. */
-  readonly discardGuard?: DiscardGuard;
-}
+  extends GuardedDialogContentProps,
+    VariantProps<typeof sheetVariants> {}
 
-/**
- * Legacy 497: an edited form in the sheet is not lost to a stray Escape or outside click — the
- * sheet asks 「放弃未保存的内容？」 first (`kit/discard-guard`), and a form's own 取消 asks the same
- * through `useGuardedClose`. A sheet nothing was typed into closes as before. A caller's own
- * `onEscapeKeyDown` / `onInteractOutside` runs first; one that prevents the close keeps it.
- */
+/** Legacy 497: an edited form in the sheet asks before Escape, an outside click or its 取消 drop
+ *  it (`kit/discard-guard`'s `GuardedDialogContent`); one nothing was typed into closes as before. */
 export const SheetContent = forwardRef<
   ElementRef<typeof DialogPrimitive.Content>,
   SheetContentProps
->(function SheetContent(
-  {
-    side,
-    className,
-    children,
-    onEscapeKeyDown,
-    onInteractOutside,
-    onOpenAutoFocus,
-    discardGuard,
-    ...rest
-  },
-  ref,
-) {
-  const own = useDiscardGuard();
-  const discard = discardGuard ?? own;
-  // The sheet's own close, as its Close button would — the Root's `onOpenChange(false)`.
-  const closeRef = useRef<HTMLButtonElement>(null);
-  const close = () => closeRef.current?.click();
-  // The guard watches the sheet's element itself: a detail portaled into it is outside its React
-  // tree, so React's own events would not see its edits.
-  const detach = useRef<{ el: HTMLElement; off: () => void } | null>(null);
-  const attach = discard.attach;
-  const contentRef = useCallback(
-    (el: HTMLDivElement | null) => {
-      if (detach.current?.el !== el) {
-        detach.current?.off();
-        detach.current = el === null ? null : { el, off: attach(el) };
-      }
-      if (typeof ref === 'function') ref(el);
-      else if (ref) ref.current = el;
-    },
-    [ref, attach],
-  );
+>(function SheetContent({ side, className, ...rest }, ref) {
   return (
     <SheetPortal>
       <SheetOverlay />
-      <DialogPrimitive.Content
-        ref={contentRef}
+      <GuardedDialogContent
+        ref={ref}
         className={cn(sheetVariants({ side }), className)}
         {...rest}
-        onOpenAutoFocus={(event) => {
-          discard.reset();
-          onOpenAutoFocus?.(event);
-        }}
-        onEscapeKeyDown={(event) => {
-          onEscapeKeyDown?.(event);
-          if (event.defaultPrevented || !discard.edited()) return;
-          event.preventDefault();
-          discard.guard(close);
-        }}
-        onInteractOutside={(event) => {
-          onInteractOutside?.(event);
-          if (event.defaultPrevented || !discard.edited()) return;
-          event.preventDefault();
-          discard.guard(close);
-        }}
-      >
-        <GuardedCloseProvider guard={discard.guard}>{children}</GuardedCloseProvider>
-        <DialogPrimitive.Close ref={closeRef} hidden tabIndex={-1} aria-hidden />
-        {discard.confirm}
-      </DialogPrimitive.Content>
+      />
     </SheetPortal>
   );
 });
