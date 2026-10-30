@@ -152,10 +152,22 @@ export type HealthResponse = z.infer<typeof HealthResponseSchema>;
 
 // -------------------------------------------------------------------------------------------
 // connected-accounts (S2.13, design doc §5.1.4 ConnectedAccount, §11 "凭证只在门"): a write-only
-// store keyed by `onBehalfOf` — no `GET`/read endpoint exists or ever should (server.ts's own doc
+// store keyed by `onBehalfOf` — no endpoint ever reads a credential back out (server.ts's own doc
 // comment). The kernel's `create_connection`/`connect_gatekeeper` capability handlers
-// (application/gateway/connection-handlers.ts) are the only intended caller.
+// (application/gateway/connection-handlers.ts) are the only intended caller. Legacy 513 adds one
+// kernel-only question on its own path, `credential-presence`: which credential mode the gate
+// runs in and, in `connected_account` mode, whether a slot holds anything — a boolean, nothing
+// of what it holds.
 // -------------------------------------------------------------------------------------------
+
+export const CredentialPresenceRequestSchema = z.object({ onBehalfOf: z.string().min(1) }).strict();
+export type CredentialPresenceRequest = z.infer<typeof CredentialPresenceRequestSchema>;
+
+export const CredentialPresenceResponseSchema = z.discriminatedUnion('credentialMode', [
+  z.object({ credentialMode: z.literal('shared') }).strict(),
+  z.object({ credentialMode: z.literal('connected_account'), present: z.boolean() }).strict(),
+]);
+export type CredentialPresenceResponse = z.infer<typeof CredentialPresenceResponseSchema>;
 
 export const StoreConnectedAccountRequestSchema = z.object({
   onBehalfOf: z.string().min(1),

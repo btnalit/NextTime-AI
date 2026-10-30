@@ -164,11 +164,16 @@ export function ChatMessageRow({
 }
 
 /** The governance fields a chat message's card lacks (`lib/action-card`): whether it may be
- *  self-decided, which definition it was made under, and (legacy 245 d) the policy that sent it
- *  to approval — `system.action_pending` carries none of them. */
+ *  self-decided, which definition it was made under, (legacy 245 d) the policy that sent it to
+ *  approval, and (legacy 513) whether the requester has connected their own account on the gate
+ *  — `system.action_pending` carries none of them. */
 type CardGovernance = Pick<
   ActionRequestRowLike,
-  'onBehalfOf' | 'requesterCanApprove' | 'publishedDefinition' | 'policyDecision'
+  | 'onBehalfOf'
+  | 'requesterCanApprove'
+  | 'publishedDefinition'
+  | 'policyDecision'
+  | 'onBehalfOfAccount'
 >;
 
 /**
@@ -202,6 +207,7 @@ function ChatActionCard({
             ? { publishedDefinition: row.publishedDefinition }
             : {}),
           ...(row.policyDecision ? { policyDecision: row.policyDecision } : {}),
+          ...(row.onBehalfOfAccount ? { onBehalfOfAccount: row.onBehalfOfAccount } : {}),
         });
       })
       // Unreadable: the card keeps its decisions, offers no "总是允许", and links to the page.
@@ -225,6 +231,9 @@ function ChatActionCard({
                 ? { publishedDefinition: governance.publishedDefinition }
                 : {}),
               policyDecision: card.policyDecision ?? governance.policyDecision,
+              ...(governance.onBehalfOfAccount
+                ? { onBehalfOfAccount: governance.onBehalfOfAccount }
+                : {}),
             }
           : card
       }

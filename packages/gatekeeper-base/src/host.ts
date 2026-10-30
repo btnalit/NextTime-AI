@@ -338,6 +338,7 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
       const forced = forcedSlot.get(request);
       return {
         connectedAccountStore: instance.store,
+        credentialMode: instance.definition.credentialMode,
         ...(forced !== undefined ? { forcedOnBehalfOf: forced } : {}),
         afterStore: (slot) => afterCredentialStored(instance, slot),
       };

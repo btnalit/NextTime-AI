@@ -777,6 +777,78 @@ describe('createGateHost (P-B2a)', () => {
       expect(toolsListCalls()).toHaveLength(listsBefore);
     });
 
+    it('credential-presence: the kernel learns only whether a member connected, the browser token gets nothing (legacy 513)', async () => {
+      state.items = [
+        {
+          ...DEMO_MCP_ITEM,
+          definition: {
+            ...DEMO_MCP_ITEM.definition,
+            credentialMode: 'connected_account' as const,
+          },
+        },
+      ];
+      const gateHost = await createGateHost({
+        env,
+        fetchImpl: makeFetch(state),
+        listen: false,
+        log: () => {},
+      });
+      host = gateHost;
+      await gateHost.tick();
+      const ask = (authorization: string) =>
+        gateHost.app.inject({
+          method: 'POST',
+          url: '/i/demo-mcp/gate/credential-presence',
+          headers: { authorization },
+          payload: { onBehalfOf: 'principal-1' },
+        });
+      expect((await ask(`Bearer ${GATE_TOKEN}`)).json()).toEqual({
+        ok: true,
+        result: { credentialMode: 'connected_account', present: false },
+      });
+
+      const { token } = await mintGateHostToken({
+        privateKey,
+        gateId: 'demo-mcp',
+        onBehalfOf: 'principal-1',
+        subject: 'principal-1',
+      });
+      await gateHost.app.inject({
+        method: 'POST',
+        url: '/i/demo-mcp/gate/connected-accounts',
+        headers: { authorization: `Bearer ${token}` },
+        payload: { onBehalfOf: 'principal-1', credential: { token: 'member-secret' } },
+      });
+      const after = await ask(`Bearer ${GATE_TOKEN}`);
+      expect(after.json()).toEqual({
+        ok: true,
+        result: { credentialMode: 'connected_account', present: true },
+      });
+      expect(after.body).not.toContain('member-secret');
+
+      // The member's own platform token opens the credential route, never this one.
+      const withPlatformToken = await ask(`Bearer ${token}`);
+      expect(withPlatformToken.statusCode).toBe(401);
+      expect(withPlatformToken.body).not.toContain('present');
+    });
+
+    it('credential-presence on a shared instance says shared (legacy 513)', async () => {
+      host = await createGateHost({
+        env,
+        fetchImpl: makeFetch(state),
+        listen: false,
+        log: () => {},
+      });
+      await host.tick();
+      const resp = await host.app.inject({
+        method: 'POST',
+        url: '/i/demo-mcp/gate/credential-presence',
+        headers: { authorization: `Bearer ${GATE_TOKEN}` },
+        payload: { onBehalfOf: 'principal-1' },
+      });
+      expect(resp.json()).toEqual({ ok: true, result: { credentialMode: 'shared' } });
+    });
+
     it('a credential for a gate this host does not list is still 404 gate_not_found', async () => {
       host = await createGateHost({
         env,

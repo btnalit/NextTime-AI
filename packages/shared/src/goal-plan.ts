@@ -201,7 +201,12 @@ export type GoalPlan = z.infer<typeof GoalPlanSchema>;
  *         on (`gatekeeperIds`);
  *       - `step_capability_not_held` — it declares an execute-class capability the requester's own
  *         scope does not hold (`capabilityNames`);
- *       - `step_definition_excluded` — the requester's AgentProfile excludes the WorkerDefinition.
+ *       - `step_definition_excluded` — the requester's AgentProfile excludes the WorkerDefinition;
+ *       - legacy 513, `step_account_not_connected` — the step's WorkerDefinition declares gates
+ *         that run in `connected_account` mode on which the requester has not connected their own
+ *         account (`gatekeeperIds`): the gate would refuse the step's calls
+ *         (`credential_unavailable`). Asked of the gate, and only in a read served to a person —
+ *         never in a result an agent or a Handle receives.
  */
 export const PLAN_HINT_CODE_VALUES = [
   'requester_confirm_only',
@@ -209,6 +214,7 @@ export const PLAN_HINT_CODE_VALUES = [
   'step_gate_not_held',
   'step_capability_not_held',
   'step_definition_excluded',
+  'step_account_not_connected',
 ] as const;
 export type PlanHintCode = (typeof PLAN_HINT_CODE_VALUES)[number];
 export const PlanHintCodeSchema = z.enum(PLAN_HINT_CODE_VALUES);
@@ -219,7 +225,8 @@ export const PlanHintSchema = z
     message: z.string(),
     /** The step the hint is about (the `step_*` codes). */
     stepKey: StepKeySchema.optional(),
-    /** The gates a `step_gate_not_held` step declares and the requester cannot act on. */
+    /** The gates a `step_gate_not_held` step declares and the requester cannot act on; for
+     *  `step_account_not_connected`, those on which the requester has not connected an account. */
     gatekeeperIds: z.array(z.string().uuid()).optional(),
     /** The execute-class capabilities a `step_capability_not_held` step declares and the
      *  requester does not hold. */

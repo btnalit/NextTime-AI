@@ -131,6 +131,9 @@ export interface CreateGoalRunInput {
    *  ({@link ProposedGoalLimitError}) — `propose_goal` passes
    *  {@link maxProposedGoalsPerRequester}; none for a direct caller, which has no cap. */
   readonly maxProposed?: number;
+  /** Legacy 513: the result is served to a person — its hints also say on which gates the
+   *  requester has not connected their own account (`planAuthorityHints`' `checkAccounts`). */
+  readonly checkAccounts?: boolean;
 }
 
 export interface CreatedGoalRun {
@@ -234,6 +237,7 @@ async function replayProposal(
   client: PoolClient,
   workspaceId: string,
   run: { readonly goalRunId: string; readonly requesterId: string; readonly status: GoalRunStatus },
+  checkAccounts: boolean,
 ): Promise<CreatedGoalRun> {
   const revision = await client.query<{ id: string; plan: unknown }>(
     `select id, plan from plan_revisions
@@ -253,7 +257,9 @@ async function replayProposal(
     hints: [
       ...planHints(parsed.data),
       ...(run.status === 'proposed'
-        ? await planAuthorityHints(client, workspaceId, run.requesterId, parsed.data)
+        ? await planAuthorityHints(client, workspaceId, run.requesterId, parsed.data, {
+            checkAccounts,
+          })
         : []),
     ],
     status: run.status,
@@ -297,7 +303,8 @@ export async function createGoalRun(
     const existing = await proposedRunOfKey(client, workspaceId, input.idempotencyKey, {
       afterConflict: false,
     });
-    if (existing) return replayProposal(client, workspaceId, existing);
+    if (existing)
+      return replayProposal(client, workspaceId, existing, input.checkAccounts === true);
   }
   if (input.maxProposed !== undefined) {
     const proposed = await proposedRunsOf(client, workspaceId, input.requesterId);
@@ -330,7 +337,7 @@ export async function createGoalRun(
       });
       // The violation means a committed run holds the key; not finding it would contradict that.
       if (!existing) throw err;
-      return replayProposal(client, workspaceId, existing);
+      return replayProposal(client, workspaceId, existing, input.checkAccounts === true);
     }
   }
   return insertGoalRun(client, workspaceId, input, plan, hints, source);
@@ -403,7 +410,12 @@ async function insertGoalRun(
     goalRunId,
     planRevisionId,
     plan,
-    hints: [...hints, ...(await planAuthorityHints(client, workspaceId, input.requesterId, plan))],
+    hints: [
+      ...hints,
+      ...(await planAuthorityHints(client, workspaceId, input.requesterId, plan, {
+        checkAccounts: input.checkAccounts === true,
+      })),
+    ],
     status: 'proposed',
     changed: true,
   };

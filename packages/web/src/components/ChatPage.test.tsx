@@ -235,6 +235,53 @@ describe('ChatPage inline approval card (C8)', () => {
     await waitFor(() => expect(within(card).getByTestId('approval-policy')).toBeTruthy());
   });
 
+  it('legacy 513: the card says the requester has not connected their own account on the gate, read from its row (UX acceptance of #821)', async () => {
+    const fake = fakeClient();
+    const http = scriptedHttp({
+      get_action: () => ({
+        id: 'ar-1',
+        onBehalfOf: 'someone-else',
+        requesterCanApprove: null,
+        publishedDefinition: { version: 1, requestIsCurrent: true },
+        onBehalfOfAccount: 'not_connected',
+      }),
+    });
+    renderChat(fake.client, http);
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => {
+      fake.deliver(pendingCardMessage(1, 'ar-1'));
+      fake.caughtUp();
+    });
+    const card = await screen.findByTestId('action-request-card');
+    const notice = await within(card).findByTestId('action-card-requester-account');
+    expect(notice.textContent).toMatch(/申请人还没有在这个门上连接自己的账户/);
+    expect(within(notice).getByTestId('action-card-requester-account-connect')).toBeTruthy();
+  });
+
+  it('legacy 513: no notice when the row says the requester’s account is connected', async () => {
+    const fake = fakeClient();
+    const http = scriptedHttp({
+      get_action: () => ({
+        id: 'ar-1',
+        onBehalfOf: 'someone-else',
+        requesterCanApprove: null,
+        publishedDefinition: { version: 1, requestIsCurrent: true },
+        policyDecision: 'require_approval',
+        onBehalfOfAccount: 'connected',
+      }),
+    });
+    renderChat(fake.client, http);
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => {
+      fake.deliver(pendingCardMessage(1, 'ar-1'));
+      fake.caughtUp();
+    });
+    const card = await screen.findByTestId('action-request-card');
+    // The row has landed once its policy shows; the account notice stays away.
+    await waitFor(() => expect(within(card).getByTestId('approval-policy')).toBeTruthy());
+    expect(within(card).queryByTestId('action-card-requester-account')).toBeNull();
+  });
+
   it('a refused "always allow" says why in the toast — not only that no rule was written (UX acceptance of #592)', async () => {
     const fake = fakeClient();
     const http = scriptedHttp({

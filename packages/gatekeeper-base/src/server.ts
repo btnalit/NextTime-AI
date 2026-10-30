@@ -27,6 +27,7 @@ import { type GateMetrics, createGateMetrics } from './metrics.js';
 import {
   ApplyLookupRequestSchema,
   ApplyRequestSchema,
+  CredentialPresenceRequestSchema,
   DeleteConnectedAccountRequestSchema,
   DescribeOperationsResponseSchema,
   ObserveRequestSchema,
@@ -58,6 +59,13 @@ import {
  * (`credentials/shared-env.ts`) has nowhere to write one, and both routes 501
  * (`ConnectedAccountStoreNotConfiguredError`) rather than silently accepting and discarding a
  * credential.
+ *
+ * Legacy 513: `POST /gate/credential-presence` — the kernel asks which credential mode this gate
+ * runs in and, in `connected_account` mode, whether a member's slot holds a credential, so a goal
+ * or an approval can say "not connected" before the gate refuses the call. The answer is the mode
+ * and a boolean (`ConnectedAccountStore.has` reads the record keys, never decrypts); its own path,
+ * so the gate host authenticates it as every other kernel call (`gate_token`), never as the
+ * browser's credential route.
  */
 
 interface ErrorMapping {
@@ -144,6 +152,9 @@ export interface CredentialRouteContext {
    *  instance with the credential it just received). Must not throw — the credential is stored
    *  whatever happens next, and the response says exactly that. */
   readonly afterStore?: (slot: string) => Promise<void>;
+  /** The gate's credential mode (gate host: the instance's definition). Absent: `connected_account`
+   *  exactly when a store is configured, as a single gate is started (`index.ts`). */
+  readonly credentialMode?: 'shared' | 'connected_account';
 }
 
 /** What one `/gate/*` request operates on. */
@@ -415,6 +426,29 @@ export function registerGateRoutes(app: FastifyInstance, options: RegisterGateRo
       await ctx.connectedAccountStore.set(slot, parsed.data.credential);
       await ctx.afterStore?.(slot);
       return ok(reply, { stored: true });
+    } catch (err) {
+      return fail(reply, err);
+    }
+  });
+
+  app.post(`${prefix}/gate/credential-presence`, async (request, reply) => {
+    const ctx = resolveCredentialRoute(request);
+    if (!ctx) return notFound(reply);
+    const parsed = CredentialPresenceRequestSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      reply.code(400);
+      return {
+        ok: false,
+        error: { code: 'invalid_params', message: 'invalid credential-presence request' },
+      };
+    }
+    try {
+      const mode =
+        ctx.credentialMode ?? (ctx.connectedAccountStore ? 'connected_account' : 'shared');
+      if (mode === 'shared') return ok(reply, { credentialMode: 'shared' });
+      if (!ctx.connectedAccountStore) throw new ConnectedAccountStoreNotConfiguredError();
+      const present = await ctx.connectedAccountStore.has(parsed.data.onBehalfOf);
+      return ok(reply, { credentialMode: 'connected_account', present });
     } catch (err) {
       return fail(reply, err);
     }
