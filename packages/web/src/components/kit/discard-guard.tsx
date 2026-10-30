@@ -15,6 +15,7 @@ import {
 import { cn } from '../../lib/cn.js';
 import { useT } from '../../lib/i18n.js';
 import { Button, type ButtonProps } from './button.js';
+import { focusOrigin } from './focus-origin.js';
 
 /**
  * components/kit/discard-guard (legacy 497, coordinator's rule of 2026-10-29): a drawer whose form
@@ -292,10 +293,7 @@ export const GuardedDialogContent = forwardRef<
   // What had focus as this opened, read on its first render (before a form inside focuses its
   // first field): Radix hands focus back only to a `Dialog.Trigger`, and a drawer or dialog opened
   // from a plain button has none, so focus would land on <body> (#794 UX P3-3).
-  const [opener] = useState(() => {
-    const active = document.activeElement;
-    return active instanceof HTMLElement && active !== document.body ? active : null;
-  });
+  const [opener] = useState(focusOrigin);
   const own = useDiscardGuard();
   const discard = discardGuard ?? own;
   // The content's own close, as its Close button would — the Root's `onOpenChange(false)`.

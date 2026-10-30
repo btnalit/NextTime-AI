@@ -5,6 +5,7 @@ import { cn } from '../../lib/cn.js';
 import { type ErrorOverrides, errorToastText } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
 import { Button } from './button.js';
+import { focusOrigin } from './focus-origin.js';
 import { InlineError } from './inline-error.js';
 
 /** §5.9 principle 4 — confirmation by impact, folded to three renderable tiers (S8 W1-A7, audit
@@ -343,12 +344,12 @@ function ConfirmActions({
  *  sometimes a wrapper around a control this file cannot reach directly, e.g. a shared card's own
  *  button — see the module doc comment), so this does the same job generically off whatever
  *  `document.activeElement` was at open time, which in every real caller is the element the user
- *  just clicked. */
+ *  just clicked — or, for a menu item, its menu's trigger (`kit/focus-origin`). */
 function useRestoreFocusOnClose(open: boolean): void {
   const restoreRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (open) {
-      restoreRef.current = document.activeElement as HTMLElement | null;
+      restoreRef.current = focusOrigin();
       return;
     }
     restoreRef.current?.focus?.();

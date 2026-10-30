@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { GuardedCloseProvider, useDiscardGuard } from '../kit/discard-guard.js';
+import { focusOrigin } from '../kit/focus-origin.js';
 import { Button } from './Button.js';
 
 export interface DrawerProps {
@@ -36,11 +37,11 @@ export function Drawer({
   // What had focus as the drawer opened — where focus goes back on close. Read while rendering the
   // opening: by the time an effect here runs, a form inside may already have focused its first
   // field, and focus would go back to that field, gone with the drawer (#794 UX P3-3).
-  const [opener, setOpener] = useState<HTMLElement | null>(() => (open ? focusedElement() : null));
+  const [opener, setOpener] = useState<HTMLElement | null>(() => (open ? focusOrigin() : null));
   const [wasOpen, setWasOpen] = useState(open);
   if (open !== wasOpen) {
     setWasOpen(open);
-    if (open) setOpener(focusedElement());
+    if (open) setOpener(focusOrigin());
   }
   // Legacy 497: an edited form asks 「放弃未保存的内容？」 before Escape, the overlay or × close
   // it (`kit/discard-guard`, as `kit/sheet` does); the form's own 取消 asks via `useGuardedClose`.
@@ -143,9 +144,4 @@ export function Drawer({
       {discard.confirm}
     </>
   );
-}
-
-function focusedElement(): HTMLElement | null {
-  const active = document.activeElement;
-  return active instanceof HTMLElement && active !== document.body ? active : null;
 }
