@@ -17,6 +17,7 @@ import {
   stepIdempotencyKey,
 } from '../../governance/approval/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
+import { writeProbeHoldRefusal } from '../eval-seal/index.js';
 import {
   type LiveGoalTask,
   type PreparedStepAttempt,
@@ -169,7 +170,9 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *      refusal leaves the step `ready`: the requester's concurrency quota retries after
  *      {@link DEFAULT_QUOTA_RETRY_MS}; the daily cost quota pauses `budget_exhausted`; lost
  *      authority pauses `authority_lost` (S9, I-G7); a pinned component no longer published
- *      pauses `needs_decision`.
+ *      pauses `needs_decision`, and so does an evaluation seal pause of the requester's agents
+ *      (S10 E3-2c: their Worker start would be refused — a person decides once the workspace
+ *      owner released it).
  *   E. **Stuck** (running only; legacy 393). No live step is ready, running or waiting, none failed
  *      `transient` or due its rework (phase B starts those or pauses), and one failed for a
  *      person — a category the advancer never retries (or a contract violation after its rework):
@@ -399,6 +402,7 @@ export function refusalPause(refusal: StepAttemptRefusal): GoalRunPauseReason | 
     case 'authority_lost':
       return 'authority_lost';
     case 'unavailable':
+    case 'paused':
       return 'needs_decision';
     case 'quota':
       if (refusal.code === 'concurrency_exceeded') return null;
@@ -1212,6 +1216,14 @@ class Advance {
       durationCapSec: Math.max(1, Math.floor((this.deadline - this.now.getTime()) / 1000)),
     });
     if (result.kind === 'refused') {
+      if (result.refusal.kind === 'paused') {
+        // The refusal's own audit row, as on every other path a pause refuses (S10 E3-2c).
+        await writeProbeHoldRefusal(this.client, {
+          workspaceId: this.ws,
+          principalId: this.requester,
+          path: 'worker_start',
+        });
+      }
       const pause = refusalPause(result.refusal);
       if (pause) {
         await this.pause(pause, `step ${step.stepKey}: ${result.refusal.detail}`);

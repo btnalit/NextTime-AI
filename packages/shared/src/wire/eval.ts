@@ -302,11 +302,14 @@ export const EVAL_TRIAL_VERDICT_VALUES = ['passed', 'failed'] as const;
 export const EvalTrialVerdictSchema = z.enum(EVAL_TRIAL_VERDICT_VALUES);
 export type EvalTrialVerdict = z.infer<typeof EvalTrialVerdictSchema>;
 
-/** How an `errored` trial ended: its Task's failure reason, `cancelled`, or `withheld`. */
+/** How an `errored` trial ended: its Task's failure reason, `cancelled`, `withheld`, or `paused` —
+ *  the evaluation seal paused the evaluation's agents while the trial ran (S10 E3-2c), so what it
+ *  ended with says nothing about the arm. */
 export const EVAL_TRIAL_ERROR_VALUES = [
   ...TASK_FAILURE_REASON_VALUES,
   'cancelled',
   'withheld',
+  'paused',
 ] as const;
 export const EvalTrialErrorSchema = z.enum(EVAL_TRIAL_ERROR_VALUES);
 export type EvalTrialError = z.infer<typeof EvalTrialErrorSchema>;

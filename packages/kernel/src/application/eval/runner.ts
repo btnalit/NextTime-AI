@@ -9,6 +9,7 @@ import type { PoolClient } from 'pg';
 import { type PoolLike, withWorkspace } from '../../adapters/db/pool.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { evaluatePredicate } from '../../substrate/epistemic/index.js';
+import { terminateTask } from '../task/index.js';
 import { dispatchEvalTrials } from './dispatch.js';
 import { settleDraftStage } from './draft-evaluations.js';
 
@@ -28,6 +29,14 @@ import { settleDraftStage } from './draft-evaluations.js';
  *     on the Task, `evaluation.content_withheld`); a reason outside the known set reads
  *     `worker_failed`.
  *   - `cancelled`: `errored`, `cancelled`.
+ *   - in place of any of these but `withheld`: `errored`, `paused`, when the evaluation seal
+ *     paused the evaluation's agents while the trial ran (S10 E3-2c: a pause of the Task's
+ *     Principal opened before the Task ended and not released before the trial started). Its
+ *     calls were refused meanwhile, so neither a failure nor a report says anything about the arm
+ *     — and a failed baseline would favour the draft. No outcome (`trialHasOutcome`, shared
+ *     draft-evaluation.ts). `withheld` still wins: that start was a refusal, maybe the one that
+ *     opened the pause. The tick terminates a paused trial's Task as soon as it sees the pause,
+ *     rather than let it run on refused calls.
  *
  * With either, what the trial's model calls cost — the `llm_usage` rows of its Task's runs: `null`
  * when one of them has no price — and their tokens. A call recorded after this (the proxy reports
@@ -92,13 +101,63 @@ export interface EvalTrialTickOptions {
   ) => void;
 }
 
-/** Scores every trial whose Task has ended, then starts queued trials. Returns how many ended
- *  trials it looked at. */
+/** Running trials whose Task is still going while the evaluation seal pauses the Principal it runs
+ *  for (S10 E3-2c): each of its calls is refused, so it runs on for nothing. */
+async function listPausedTrialTasks(
+  pool: PoolLike,
+  limit: number,
+): Promise<
+  ReadonlyArray<{
+    readonly workspaceId: string;
+    readonly taskId: string;
+    readonly principalId: string;
+  }>
+> {
+  const client = await pool.connect();
+  try {
+    const result = await client.query<{
+      workspace_id: string;
+      task_id: string;
+      on_behalf_of: string;
+    }>(
+      `select tr.workspace_id, tr.task_id, t.on_behalf_of
+         from eval_trials tr
+         join tasks t on t.workspace_id = tr.workspace_id and t.id = tr.task_id
+        where tr.status = 'running' and t.status not in ('completed', 'failed', 'cancelled')
+          and exists (
+            select 1 from eval_seal_holds h
+             where h.workspace_id = t.workspace_id and h.principal_id = t.on_behalf_of
+               and h.status = 'active')
+        order by tr.started_at, tr.id
+        limit $1`,
+      [limit],
+    );
+    return result.rows.map((row) => ({
+      workspaceId: row.workspace_id,
+      taskId: row.task_id,
+      principalId: row.on_behalf_of,
+    }));
+  } finally {
+    client.release();
+  }
+}
+
+/** Terminates the Tasks of trials the evaluation seal paused, scores every trial whose Task has
+ *  ended, then starts queued trials. Returns how many ended trials it looked at. */
 export async function runEvalTrialTick(
   pool: PoolLike,
   options: EvalTrialTickOptions = {},
 ): Promise<number> {
-  const ended = await listEndedTrials(pool, options.limit ?? DEFAULT_TRIAL_BATCH);
+  const limit = options.limit ?? DEFAULT_TRIAL_BATCH;
+  for (const paused of await listPausedTrialTasks(pool, limit)) {
+    try {
+      // As the evaluation Principal the Task runs for; the trial then reads `paused` (`endTrial`).
+      await terminateTask(paused.workspaceId, paused.principalId, paused.taskId);
+    } catch (err) {
+      options.onError?.(err, { workspaceId: paused.workspaceId });
+    }
+  }
+  const ended = await listEndedTrials(pool, limit);
   for (const trial of ended) {
     try {
       await withWorkspace(
@@ -154,13 +213,19 @@ export async function endTrial(
   const task = tasks.rows[0];
   if (!task || !['completed', 'failed', 'cancelled'].includes(task.status)) return 'skipped';
 
+  // `withheld` first: the arm itself carries evaluation content, whatever else happened — and a
+  // withheld start is a refusal that counts, so it may be the one that opened the pause.
   let end: TrialEnd;
-  if (task.status === 'completed') {
+  if (task.status === 'failed' && (await startWithheld(client, workspaceId, trial.task_id))) {
+    end = { status: 'errored', error: 'withheld' };
+  } else if (await pausedWhileRunning(client, workspaceId, trialId)) {
+    end = { status: 'errored', error: 'paused' };
+  } else if (task.status === 'completed') {
     end = await score(client, workspaceId, trialId, trial.case_id, task.result);
   } else if (task.status === 'cancelled') {
     end = { status: 'errored', error: 'cancelled' };
   } else {
-    end = { status: 'errored', error: await failureOf(client, workspaceId, trial.task_id, task) };
+    end = { status: 'errored', error: failureOf(task) };
   }
 
   const usage = await client.query<{ cost: number | null; unpriced: string; tokens: string }>(
@@ -298,13 +363,12 @@ async function score(
 
 const KNOWN_ERRORS: ReadonlySet<string> = new Set(EVAL_TRIAL_ERROR_VALUES);
 
-/** How a failed Task's trial reads: `withheld` when the seal stopped its Worker's start. */
-async function failureOf(
+/** Whether the seal stopped the trial's Worker's start (its own audit row on the Task). */
+async function startWithheld(
   client: PoolClient,
   workspaceId: string,
   taskId: string,
-  task: { readonly failure_reason: string | null },
-): Promise<EvalTrialError> {
+): Promise<boolean> {
   const withheld = await client.query(
     `select 1 from audit_records
       where workspace_id = $1 and action = 'evaluation.content_withheld'
@@ -312,12 +376,39 @@ async function failureOf(
       limit 1`,
     [workspaceId, taskId],
   );
-  if ((withheld.rowCount ?? 0) > 0) return 'withheld';
+  return (withheld.rowCount ?? 0) > 0;
+}
+
+/** Whether the evaluation seal paused the Principal the trial's Task ran for while it ran: a pause
+ *  opened before the Task ended and not released before the trial started (S10 E3-2c). */
+async function pausedWhileRunning(
+  client: PoolClient,
+  workspaceId: string,
+  trialId: string,
+): Promise<boolean> {
+  const paused = await client.query(
+    `select 1
+       from eval_trials tr
+       join tasks t on t.workspace_id = tr.workspace_id and t.id = tr.task_id
+       join eval_seal_holds h on h.workspace_id = t.workspace_id and h.principal_id = t.on_behalf_of
+      where tr.workspace_id = $1 and tr.id = $2
+        and h.opened_at <= coalesce(t.completed_at, t.failed_at, t.cancelled_at, t.updated_at)
+        and (h.released_at is null or h.released_at >= tr.started_at)
+      limit 1`,
+    [workspaceId, trialId],
+  );
+  return (paused.rowCount ?? 0) > 0;
+}
+
+/** How a failed Task's trial reads otherwise: its failure reason, or `worker_failed` for one
+ *  outside the known set. */
+function failureOf(task: { readonly failure_reason: string | null }): EvalTrialError {
   const reason = task.failure_reason;
   return reason !== null &&
     KNOWN_ERRORS.has(reason) &&
     reason !== 'cancelled' &&
-    reason !== 'withheld'
+    reason !== 'withheld' &&
+    reason !== 'paused'
     ? (reason as EvalTrialError)
     : 'worker_failed';
 }

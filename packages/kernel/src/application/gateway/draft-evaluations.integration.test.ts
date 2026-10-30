@@ -1087,6 +1087,94 @@ describe.runIf(DATABASE_URL !== undefined)(
       await runEvalTrialTick(pool);
     });
 
+    // #838 review (P2): a trial that ran while the evaluation Principal was paused has its calls
+    // refused, so its failure or report says nothing about its arm — and a failed baseline would
+    // favour the draft. It ends `paused`, with no outcome.
+    it('a trial that ran while the evaluation Principal was paused has no outcome, never a failure; the tick stops its Worker; no evaluation starts meanwhile', async () => {
+      const started = await start();
+      const confirming = await drive(started.id, allPass, (e) => e.stage === 'confirm');
+      const runId = stageOf(confirming, 'confirm').runId as string;
+      const trials = async () =>
+        (await call<EvalRunWire>(person('builder'), 'get_eval_run', { runId })).trials;
+      const evaluationPrincipalId = await asApp((client) =>
+        getOrCreateEvaluationPrincipal(client, workspaceId),
+      );
+      const pause = () =>
+        asApp(async (client) => {
+          const inserted = await client.query<{ id: string }>(
+            `insert into eval_seal_holds (workspace_id, principal_id, hits, places)
+             values ($1, $2, 5, '{"capabilityResult": 5, "capabilityError": 0, "workerStart": 0}')
+             returning id`,
+            [workspaceId, evaluationPrincipalId],
+          );
+          return inserted.rows[0]?.id as string;
+        });
+      const release = (holdId: string) =>
+        call(person('owner'), 'release_eval_seal_hold', {
+          holdId,
+          reason: 'The trial Worker echoed a fixture; not a probe.',
+        });
+      const ended = async (ids: readonly string[]) =>
+        (await trials()).filter((t) => ids.includes(t.id));
+
+      // A short pause the tick never saw: the Workers' calls were refused meanwhile, and what they
+      // report after the release — here, nothing done, which would fail the case — is not scored.
+      const first = (await trials()).filter((t) => t.status === 'running');
+      expect(first).toHaveLength(5);
+      const brief = await pause();
+      expect(
+        await rejection(
+          call(
+            { channel: 'handle', claims: workerClaims(spawnOf(first[0]?.taskId ?? null)) },
+            'report_task_result',
+            { summary: 'Restarted web-1 once.' },
+          ),
+        ),
+      ).toBeInstanceOf(EvaluationProbeHoldError);
+      await release(brief);
+      for (const trial of first) {
+        acted.add(trial.id);
+        await act(trial, 'fail');
+      }
+      await runEvalTrialTick(pool);
+      expect(
+        (await ended(first.map((t) => t.id))).map((t) => [t.status, t.verdict, t.error]),
+      ).toEqual(first.map(() => ['errored', null, 'paused']));
+
+      // Paused while trials run: the tick terminates their Workers, and they end `paused` too —
+      // not `cancelled`, and not the `timeout` they would have come to on refused calls.
+      const second = (await trials()).filter((t) => t.status === 'running');
+      expect(second).toHaveLength(5);
+      const hold = await pause();
+      await runEvalTrialTick(pool);
+      expect(supervisor.terminated).toEqual(
+        expect.arrayContaining(second.map((t) => spawnOf(t.taskId).workerRunId)),
+      );
+      expect((await ended(second.map((t) => t.id))).map((t) => [t.status, t.error])).toEqual(
+        second.map(() => ['errored', 'paused']),
+      );
+      expect((await trials()).filter((t) => t.status === 'queued')).toHaveLength(2);
+      // None of the ten reads as failed in either arm.
+      const confirm = stageOf(await readEvaluation(started.id), 'confirm');
+      expect(confirm.baseline.failed + confirm.candidate.failed).toBe(0);
+      expect(confirm.baseline.errored + confirm.candidate.errored).toBe(10);
+
+      // No evaluation starts while paused (#838 review): with this one cancelled, a new start is
+      // refused, and nothing is written.
+      await call(person('builder'), 'cancel_draft_evaluation', { evaluationId: started.id });
+      const evaluations = await count(
+        'select 1 from eval_draft_evaluations where workspace_id = $1',
+      );
+      const refused = await rejection(start());
+      expect(refused).toBeInstanceOf(EvaluationProbeHoldError);
+      expect((refused as EvaluationProbeHoldError).subject).toBe('evaluation');
+      expect(await count('select 1 from eval_draft_evaluations where workspace_id = $1')).toBe(
+        evaluations,
+      );
+      await release(hold);
+      await runEvalTrialTick(pool);
+    });
+
     it('cancelling cancels the trials not started and terminates the running ones; it ends with no verdict and the draft can go', async () => {
       const started = await start();
       expect(stageOf(started, 'mechanism')).toMatchObject({

@@ -7,6 +7,7 @@ import {
   readEffectiveAgentProfile,
 } from '../../governance/agent-profile/index.js';
 import { WORKER_CEILING_CAPABILITIES, entryScope } from '../../governance/capability/index.js';
+import { hasActiveSealHold } from '../eval-seal/index.js';
 import { entryGatekeeperIds, readExecuteAccess } from '../gates/execute-access.js';
 import {
   composeSystemPrompt,
@@ -74,6 +75,11 @@ import {
  *
  * The attempt's Task budget is the workspace default capped by what is left of the goal's
  * (`tokenCap`, `durationCapSec`), so one attempt cannot spend far past the GoalRun's I-G6 budget.
+ *
+ * S10 E3-2c (legacy 514): no attempt starts while the evaluation seal pauses the agents acting for
+ * the requester (`paused`) — the Worker start would be refused anyway (`spawnWorkerRun`), and that
+ * failure would read transient and spend the step's attempts. A person decides once the workspace
+ * owner released the pause; nothing resumes by itself.
  */
 
 export type StepAttemptRefusal =
@@ -97,7 +103,10 @@ export type StepAttemptRefusal =
       readonly detail: string;
     }
   /** An I18 quota: `concurrency_exceeded` clears by itself, `daily_cost_exceeded` with the day. */
-  | { readonly kind: 'quota'; readonly code: QuotaViolationCode; readonly detail: string };
+  | { readonly kind: 'quota'; readonly code: QuotaViolationCode; readonly detail: string }
+  /** The evaluation seal pauses every agent acting for the requester until the workspace owner
+   *  releases it (S10 E3-2c). The detail never says where the seal's refusals were. */
+  | { readonly kind: 'paused'; readonly detail: string };
 
 export interface CreateStepAttemptInput {
   readonly goalRunId: string;
@@ -130,6 +139,11 @@ export interface PreparedStepAttempt {
 export type CreateStepAttemptResult =
   | { readonly kind: 'created'; readonly attempt: PreparedStepAttempt }
   | { readonly kind: 'refused'; readonly refusal: StepAttemptRefusal };
+
+/** Why an attempt does not start while the evaluation seal pauses the requester's agents — the
+ *  same whichever refusals opened the pause. */
+export const STEP_ATTEMPT_PAUSED_DETAIL =
+  'the evaluation seal paused the agents acting for the requester, so no Worker starts for them until the workspace owner releases the pause';
 
 /** Capabilities a step's Handle carries only when its plan entry declares `nested`. */
 const DERIVATION_CAPABILITIES: ReadonlySet<string> = new Set(['invoke_worker', 'find_workers']);
@@ -318,6 +332,10 @@ export async function createStepAttemptTask(
     kind: 'refused',
     refusal,
   });
+
+  if (await hasActiveSealHold(client, workspaceId, requesterId)) {
+    return refused({ kind: 'paused', detail: STEP_ATTEMPT_PAUSED_DETAIL });
+  }
 
   const ref = input.previous
     ? { definitionId: input.previous.definition.id, version: input.previous.definition.version }

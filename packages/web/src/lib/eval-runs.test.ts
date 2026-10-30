@@ -76,6 +76,8 @@ describe('eval-runs (S10 E3-2a)', () => {
     expect(trialErrorText('withheld', zhT)).toMatch(/holdout 原文或用例集的 canary/);
     expect(trialErrorText('withheld', zhT)).toMatch(/系统提示词/);
     expect(trialErrorText('no_result', zhT)).toMatch(/没有汇报结果/);
+    expect(trialErrorText('paused', zhT)).toMatch(/评测防泄漏暂停了评测自己的智能体/);
+    expect(trialErrorText('paused', zhT)).toMatch(/不算这一边没通过/);
     // Any other: the Task's own failure reason, short and in detail.
     expect(trialErrorText('timeout', zhT)).toContain('：');
   });

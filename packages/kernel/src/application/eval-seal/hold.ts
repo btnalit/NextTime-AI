@@ -159,10 +159,37 @@ export interface ProbeHoldRefusal {
 }
 
 /**
- * Writes the audit row of a refusal because of a pause (`SEAL_HOLD_REFUSED_ACTION`), in its own
- * transaction — the refused one is rolled back. Says what was refused and for whom, not the call's
- * params. Not counted towards a pause. Best effort: a failure to write it is logged and never
- * replaces the refusal.
+ * The audit row of a refusal because of a pause (`SEAL_HOLD_REFUSED_ACTION`), in the caller's
+ * transaction — for a refusal that commits what it decided instead (a goal step's attempt: the
+ * goal pauses). Says what was refused and for whom, not the call's params. Not counted towards a
+ * pause.
+ */
+export async function writeProbeHoldRefusal(
+  client: PoolClient,
+  refusal: ProbeHoldRefusal,
+): Promise<void> {
+  await writeAudit(client, {
+    workspaceId: refusal.workspaceId,
+    actorPrincipalId: refusal.principalId,
+    action: SEAL_HOLD_REFUSED_ACTION,
+    resourceType: refusal.taskId !== undefined ? 'task' : undefined,
+    resourceId: refusal.taskId,
+    payload: {
+      ...(refusal.channel !== undefined ? { channel: refusal.channel } : {}),
+      onBehalfOf: refusal.principalId,
+      ...(refusal.heldPrincipalId !== undefined
+        ? { heldPrincipalId: refusal.heldPrincipalId }
+        : {}),
+      path: refusal.path,
+      ...(refusal.capability !== undefined ? { capability: refusal.capability } : {}),
+      outcome: 'refused',
+    },
+  });
+}
+
+/**
+ * {@link writeProbeHoldRefusal} in its own transaction — the refused one is rolled back. Best
+ * effort: a failure to write it is logged and never replaces the refusal.
  */
 export async function recordProbeHoldRefusal(
   pool: PoolLike,
@@ -172,24 +199,7 @@ export async function recordProbeHoldRefusal(
     await withWorkspace(
       pool,
       { workspaceId: refusal.workspaceId, principalId: refusal.principalId },
-      (client) =>
-        writeAudit(client, {
-          workspaceId: refusal.workspaceId,
-          actorPrincipalId: refusal.principalId,
-          action: SEAL_HOLD_REFUSED_ACTION,
-          resourceType: refusal.taskId !== undefined ? 'task' : undefined,
-          resourceId: refusal.taskId,
-          payload: {
-            ...(refusal.channel !== undefined ? { channel: refusal.channel } : {}),
-            onBehalfOf: refusal.principalId,
-            ...(refusal.heldPrincipalId !== undefined
-              ? { heldPrincipalId: refusal.heldPrincipalId }
-              : {}),
-            path: refusal.path,
-            ...(refusal.capability !== undefined ? { capability: refusal.capability } : {}),
-            outcome: 'refused',
-          },
-        }),
+      (client) => writeProbeHoldRefusal(client, refusal),
     );
   } catch (auditErr) {
     const detail = auditErr instanceof Error ? auditErr.message : String(auditErr);

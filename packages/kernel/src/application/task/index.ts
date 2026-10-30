@@ -82,6 +82,7 @@ export {
   type CreateStepAttemptInput,
   type CreateStepAttemptResult,
   type PreparedStepAttempt,
+  STEP_ATTEMPT_PAUSED_DETAIL,
   type StepAttemptRefusal,
   type StepAuthority,
   createStepAttemptTask,

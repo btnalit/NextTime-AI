@@ -15170,7 +15170,8 @@
                       "budget_exhausted",
                       "terminated",
                       "cancelled",
-                      "withheld"
+                      "withheld",
+                      "paused"
                     ],
                     "type": "string"
                   },
@@ -55572,7 +55573,8 @@
                       "budget_exhausted",
                       "terminated",
                       "cancelled",
-                      "withheld"
+                      "withheld",
+                      "paused"
                     ],
                     "type": "string"
                   },

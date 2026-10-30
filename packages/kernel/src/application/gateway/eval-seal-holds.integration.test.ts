@@ -38,7 +38,9 @@ import {
 import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 import { ForbiddenError } from './authorize.js';
+import type { CapabilityHandler } from './capability-handler.js';
 import { InvalidCapabilityParamsError, dispatchCapability } from './dispatch.js';
+import { CAPABILITY_HANDLERS } from './handlers.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
 /**
@@ -561,6 +563,70 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(paused.rows[0]?.hits).toBeGreaterThanOrEqual(5);
       expect(await hits(people.operator)).toBe(3 + withheld.length);
       await releaseAny(people.operator);
+
+      // #838 review: the two that make it five, at once. Counted one after the other (the lock),
+      // the second sees the first; without it each would see four and neither open the pause.
+      await probeTimes(agent, 3);
+      const pair = await Promise.all([probe(agent), probe(agent)]);
+      for (const err of pair) expect(err).toBeInstanceOf(EvaluationContentWithheldError);
+      expect(await activeHoldOf(people.operator)).toMatchObject({ hits: 5 });
+      await releaseAny(people.operator);
+    });
+
+    // #838 review: the other two places that count — a call's error, and what a Worker would
+    // start with — count the same as a call's result, towards one pause.
+    it("a call's error and a Worker's start count like a call's result", async () => {
+      const agent = await agentOf('builder');
+      const handlers = CAPABILITY_HANDLERS as Map<string, CapabilityHandler>;
+      const original = handlers.get('get_object') as CapabilityHandler;
+      try {
+        // A gate or a Worker answering with an error that quotes the case, stood in for by
+        // `get_object`'s handler.
+        handlers.set('get_object', async () => {
+          throw new Error(`upstream said: ${HOLDOUT_RUN} (status 502)`);
+        });
+        for (let i = 0; i < 2; i += 1) {
+          const err = await rejection(call(agent, 'get_object', { objectId: randomUUID() }));
+          expect(err).toBeInstanceOf(EvaluationContentWithheldError);
+          expect((err as EvaluationContentWithheldError).where).toBe('capability_error');
+        }
+      } finally {
+        handlers.set('get_object', original);
+      }
+      const spawned = supervisor.spawnCalls.length;
+      for (let i = 0; i < 2; i += 1) {
+        const err = await rejection(
+          call(agent, 'invoke_worker', {
+            definitionId: workerDefinitionId,
+            version: 1,
+            input: { brief: `Do this: ${HOLDOUT_RUN}` },
+            wait: false,
+          }),
+        );
+        expect(err).toBeInstanceOf(EvaluationContentWithheldError);
+        expect((err as EvaluationContentWithheldError).where).toBe('worker_start');
+      }
+      expect(supervisor.spawnCalls).toHaveLength(spawned);
+      expect(await activeHoldOf(people.builder)).toBeUndefined();
+
+      expect(await probe(agent)).toBeInstanceOf(EvaluationContentWithheldError);
+      expect(await activeHoldOf(people.builder)).toMatchObject({
+        hits: 5,
+        places: { capabilityResult: 1, capabilityError: 2, workerStart: 2 },
+      });
+      // Paused, an ordinary Worker start is refused like any call, before it creates anything.
+      expectPlaceAgnostic(
+        await rejection(
+          call(agent, 'invoke_worker', {
+            definitionId: workerDefinitionId,
+            version: 1,
+            input: { brief: HARMLESS },
+            wait: false,
+          }),
+        ),
+      );
+      expect(supervisor.spawnCalls).toHaveLength(spawned);
+      await releaseAny(people.builder);
     });
 
     it('the evaluation Principal is paused the same way: no evaluation starts, and a trial whose start meets the pause fails to start', async () => {

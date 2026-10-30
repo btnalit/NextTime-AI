@@ -48,6 +48,11 @@ export function trialErrorText(error: EvalTrialError, t: Translate): string {
         'Worker 没有启动：要交给它的内容里有评测保留的部分（别的用例的 holdout 原文或用例集的 canary），平台拦下了它。检查钉住的 Worker 的系统提示词和它加载的 Skill。',
         'The Worker was not started: what it would start with held text evaluation keeps back (another case’s holdout text or a suite’s canary), so the platform stopped it. Check the pinned Worker’s system prompt and the Skills it loads.',
       );
+    case 'paused':
+      return t(
+        '跑的时候评测防泄漏暂停了评测自己的智能体，它的调用被拦下，所以没有判分，也不算这一边没通过。',
+        'The evaluation seal paused the evaluation’s own agents while this ran and its calls were refused, so it was not scored and does not count against its side.',
+      );
     case 'no_result':
       return t(
         'Worker 结束了，但没有汇报结果，所以没法用断言判分。',

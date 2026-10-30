@@ -31,6 +31,7 @@ export {
   hasActiveSealHold,
   isCountedSealPlace,
   recordProbeHoldRefusal,
+  writeProbeHoldRefusal,
 } from './hold.js';
 export {
   EVALUATION_WITHHELD_ACTION,

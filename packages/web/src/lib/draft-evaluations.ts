@@ -133,8 +133,8 @@ export function verdictReasonText(reason: DraftEvaluationReason, t: Translate): 
       );
     case 'errored_trials':
       return t(
-        `有试跑没有结果（没能启动、中途丢失、被终止或崩溃）：一组里超过 ${points(RULES.maxErroredShare)}% 是这样，或者它们正好能改变某条用例或这个阶段的判定，所以这次说明不了什么。超时、没交汇报、用完了 token 额度算作没通过，不算没有结果。看那些试跑为什么没有结果，再评测一次。`,
-        `Some trials have no outcome (they did not start, or were lost, terminated or crashed): over ${points(RULES.maxErroredShare)}% of an arm, or enough to change how a case or the stage is judged, so this proves nothing. A timeout, a missing report or a spent token budget counts as not passing, not as no outcome. Look at why those trials have none, then evaluate again.`,
+        `有试跑没有结果（没能启动、中途丢失、被终止或崩溃，或者跑的时候评测防泄漏暂停了评测自己的智能体）：一组里超过 ${points(RULES.maxErroredShare)}% 是这样，或者它们正好能改变某条用例或这个阶段的判定，所以这次说明不了什么。超时、没交汇报、用完了 token 额度算作没通过，不算没有结果。看那些试跑为什么没有结果，再评测一次。`,
+        `Some trials have no outcome (they did not start, or were lost, terminated or crashed, or the evaluation seal paused the evaluation’s own agents while they ran): over ${points(RULES.maxErroredShare)}% of an arm, or enough to change how a case or the stage is judged, so this proves nothing. A timeout, a missing report or a spent token budget counts as not passing, not as no outcome. Look at why those trials have none, then evaluate again.`,
       );
     case 'budget':
       return t(
