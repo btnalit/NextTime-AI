@@ -1,4 +1,8 @@
-import type { ActionRequestReconcileCheckStatus, ObservationCheck } from '@nexttime/shared';
+import type {
+  ActionRequestReconcileCheckStatus,
+  ObservationAbsenceCheck,
+  ObservationCheck,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { writeAudit } from '../../substrate/audit/index.js';
 
@@ -23,7 +27,9 @@ export interface ReconcileCheckRow {
   readonly workspaceId: string;
   readonly actionRequestId: string;
   readonly status: ActionRequestReconcileCheckStatus;
-  readonly observationCheck: ObservationCheck;
+  /** The declared check: an observation and its predicate, or an absence call (S11
+   *  「门确认不存在」: the gate confirming the thing is gone shows a removal took effect). */
+  readonly observationCheck: ObservationCheck | ObservationAbsenceCheck;
   readonly attempts: number;
   /** When the first attempt was claimed — `null` before it. The retries' duration cap counts
    *  from here (`application/goal/reconcile-check.ts`). */
@@ -40,7 +46,7 @@ interface ReconcileCheckDbRow {
   workspace_id: string;
   action_request_id: string;
   status: ActionRequestReconcileCheckStatus;
-  observation_check: ObservationCheck;
+  observation_check: ObservationCheck | ObservationAbsenceCheck;
   attempts: number;
   first_attempt_at: Date | null;
   next_attempt_at: Date;
@@ -81,7 +87,10 @@ export const RECONCILE_CHECK_ERROR_MAX = 200;
 export async function ensureReconcileCheck(
   client: PoolClient,
   workspaceId: string,
-  input: { readonly actionRequestId: string; readonly observationCheck: ObservationCheck },
+  input: {
+    readonly actionRequestId: string;
+    readonly observationCheck: ObservationCheck | ObservationAbsenceCheck;
+  },
 ): Promise<ReconcileCheckRow> {
   await client.query(
     `insert into action_request_reconcile_checks (workspace_id, action_request_id, observation_check)

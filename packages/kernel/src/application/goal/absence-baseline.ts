@@ -1,8 +1,10 @@
-import type { GateAbsence } from '@nexttime/shared';
+import type { GateAbsence, Operation } from '@nexttime/shared';
+import jmespath from 'jmespath';
 import { type PoolLike, withWorkspace } from '../../adapters/db/pool.js';
 import type { OperationAbsentAnswersReview } from '../../governance/gatekeepers/index.js';
 import {
   type AbsenceBaselineRow,
+  PRESENCE_NOT_CONFIRMED,
   claimAbsenceBaseline,
   deferAbsenceBaseline,
   lockAbsenceBaseline,
@@ -33,8 +35,14 @@ import { lockGoalRun } from './service.js';
  * (`GOAL_ACCEPTANCE_CHECK_MAX_ATTEMPTS` / `_MAX_DURATION_MS`), and settles at once on what the gate
  * answers:
  *
- *   - **data** — the thing is there: `seen_present`, on the Observation. Only such a baseline lets
- *     the check pass later (I-AB1).
+ *   - **data that shows the thing** — it is there: `seen_present`, on the Observation. Only such a
+ *     baseline lets the check pass later (I-AB1). Data back is not enough by itself (legacy 507): a
+ *     target can answer a lookup of something it does not have with a 200 and an empty result, which
+ *     no Operation can declare as "not there". So the answer must show the thing
+ *     ({@link presenceShown}): the shape the Operation's `result_mapping` declares — an item with
+ *     its identity — or, without one, a result that is not empty. Data that does not show it
+ *     settles `unavailable` (`presence_not_confirmed`) at once: the params may name nothing, and a
+ *     retry would ask the same.
  *   - **absent**, in an answer the published Operation declares means so — it is not there before
  *     the goal did anything: `never_seen_present`, on the Observation. The check could never show
  *     this goal removed it; the advance pauses the run for the requester.
@@ -59,6 +67,57 @@ import { lockGoalRun } from './service.js';
  */
 
 const BASELINE_ACTIVITY_KIND = 'goal_absence_baseline';
+
+/**
+ * Whether an observe answer (`data`, the gate answering with data rather than absent) shows that
+ * the thing looked up is there — what a baseline settles `seen_present` on (legacy 507):
+ *
+ *   - when the Operation declares a `result_mapping` — the shape of what it finds, the same the
+ *     gate maps its answers into observed Facts by (`@nexttime/gatekeeper-base` `result-mapping.ts`)
+ *     — at least one item its `jmes_path` matches is an object carrying every `identity_keys` field
+ *     with a value (neither missing, null nor an empty string);
+ *   - otherwise, a result that is not empty: not null, not a blank string, not `false` or `0`, and
+ *     not an array or object that is empty or whose every member is (`[]`, `{}`,
+ *     `{"items": [], "total": 0}`, `{"found": false}`) — the shapes a target gives for "nothing
+ *     matched" with a 200.
+ *
+ * The rule errs towards "not shown": a thing it misses pauses the run for the requester, who
+ * resumes to look again or revises the check; a thing it wrongly took as there would let a later
+ * "not there" pass as this goal's doing.
+ */
+export function presenceShown(
+  operation: Pick<Operation, 'result_mapping'>,
+  data: unknown,
+): boolean {
+  const mapping = operation.result_mapping;
+  if (!mapping) return !isEmptyResult(data);
+  let matched: unknown;
+  try {
+    matched = jmespath.search(data as never, mapping.jmes_path);
+  } catch {
+    return false;
+  }
+  const items =
+    matched === null || matched === undefined ? [] : Array.isArray(matched) ? matched : [matched];
+  return items.some(
+    (item) =>
+      typeof item === 'object' &&
+      item !== null &&
+      !Array.isArray(item) &&
+      mapping.identity_keys.every((key) => {
+        const value = (item as Record<string, unknown>)[key];
+        return value !== undefined && value !== null && value !== '';
+      }),
+  );
+}
+
+function isEmptyResult(value: unknown): boolean {
+  if (value === null || value === undefined || value === false || value === 0) return true;
+  if (typeof value === 'string') return value.trim() === '';
+  if (Array.isArray(value)) return value.every(isEmptyResult);
+  if (typeof value === 'object') return Object.values(value).every(isEmptyResult);
+  return false;
+}
 
 /** A due take, as the tick found it. */
 export interface DueAbsenceBaseline {
@@ -202,6 +261,9 @@ export async function runAbsenceBaseline(
     claimed.call,
     prepared,
   );
+  if (answer.kind === 'data' && !answer.absent && !presenceShown(prepared.operation, answer.data)) {
+    return settle(deps, due, claimed, { kind: 'unavailable', code: PRESENCE_NOT_CONFIRMED });
+  }
   if (answer.kind === 'data') {
     return settle(deps, due, claimed, {
       kind: 'observed',

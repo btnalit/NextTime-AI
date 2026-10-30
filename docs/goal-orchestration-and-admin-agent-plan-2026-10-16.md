@@ -288,6 +288,10 @@ apply_failed（本段整体回滚）→ verifying → verified | verification_fa
 - 「不存在」不等于「被删掉了」（B-c，goal/0012）：参数指向本来就没有的东西，门同样回答“不存在”。所以目标开工前（第一步开始前），平台对计划里每条
   `observe_absent`（目标的和未结束步骤的）用同样的调用先看一次，记成基线（`goal_absence_baselines`，每看一次一行，证据是 Observation）。
   - 看到它在（`seen_present`）：步骤才开始；之后这条检查只能在比基线更晚的“不存在”上通过（I-AB1，数据库触发器 + I-G5 检查器）。
+    “看到它在”要从门的回答里看得出来（遗留 507）：Operation 声明了 `result_mapping` 时，按它至少匹配到一个带全部 identity 字段的对象；
+    没声明时，结果不能是空的（null、空串、false、0、空数组或空对象，以及成员全空的容器，如 `{"items": [], "total": 0}`）。看不出就记
+    `unavailable`（`presence_not_confirmed`），照样暂停。这条规则在内核里判（数据库判不了 JMESPath）；要求匹配到的 identity 等于参数、或给
+    Operation 加专门的“存在”声明，留作以后。
   - 门说它本来就不在（`never_seen_present`）或没能看（`unavailable`）：`paused(needs_decision)`，请求人核对参数后修订、继续（再看一次）或取消。
   - 暂停时没看完的基线作废，继续时重看；修订保留同一调用时沿用已看到的基线（东西可能已被本目标删掉，重看会误判成“本来就不在”），改了调用就重看。
   - 步骤开始后才由修订加上或改了调用的检查，基线在目标往下做之前看，而不是开工前。这时门说不在，可能是前面的步骤已经删掉了它：照样暂停（这条检查证明不了），暂停说明和控制台都说明这次看是在步骤开始之后，可能是前面步骤删的，而不是只让人核对参数。
@@ -320,6 +324,11 @@ apply_failed（本段整体回滚）→ verifying → verified | verification_fa
 `sid` 换成 `step_run_id`。同一步骤里同一 Operation 有结果不明的动作时，同类新请求先等核对完成。"重新执行"标记由人或 W2 的已接受修订
 产生。门侧的幂等存储继续按 ActionRequest id 工作，不需要改协议。核对用的观察可以在 Operation 上声明（新增可选的 `reconcileWith`，指向
 一个观察类 Operation 与判定式），W1 先由步骤或验收检查提供。
+
+删除类动作的核对（「门确认不存在」reconcile，governance/0029）：步骤的 reconcile 声明可以用不存在调用（没有判定式），门按 Operation 声明回答
+“不存在”就记 `effect_seen`。前提是“动作之前平台看到过它在”：这个调用必须和这一步或目标的一条 `observe_absent` 验收检查完全相同（计划校验），
+沿用那条检查的基线；只有同一目标里同一调用有一次 `seen_present` 基线、而且这次看早于动作请求，“不存在”才算生效。执行器调门前先查，没有就
+直接 `unavailable`（`never_seen_present`）交给人；数据库在 `action_requests` 上单独一个触发器兜底，I-G5 检查器补同样的条件。
 
 **一层重试 + 配置快照**：推进器建的 Task 关掉 Task 内部的崩溃重试，尝试只在 StepRun 一层，避免 StepRun × Task × WorkerRun 三层叠加；
 "读快照"与"按当前授权铸 Handle"因此只在一处实现。每个 Task 写 RunConfigSnapshot；新一次尝试读快照（Skill 版本、模型、指令摘要、镜像 digest

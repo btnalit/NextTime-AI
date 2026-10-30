@@ -22,6 +22,7 @@ import {
   observationSentence,
   planHintKey,
   planHintText,
+  reconcileAbsenceCheckOf,
   reconciliationLabel,
   stepAcceptanceLabel,
   stepFailureText,
@@ -344,6 +345,12 @@ function StepItem({
                     gateNames.get(declaration.check.gatekeeperId) ?? null,
                     t,
                   )}
+                  <ReconcileAbsenceNote
+                    goalAcceptance={detail?.planRevision.plan.acceptance ?? []}
+                    stepAcceptance={planStep.acceptance ?? []}
+                    check={declaration.check}
+                    t={t}
+                  />
                 </li>
               ))}
             </ul>
@@ -359,6 +366,36 @@ function StepItem({
         </details>
       ) : null}
     </li>
+  );
+}
+
+/** S11 「门确认不存在」 reconcile: under a reconcile declaration whose check is an absence call, what
+ *  "not there" counts for and whose look it goes by. */
+function ReconcileAbsenceNote({
+  goalAcceptance,
+  stepAcceptance,
+  check,
+  t,
+}: {
+  readonly goalAcceptance: Parameters<typeof reconcileAbsenceCheckOf>[0];
+  readonly stepAcceptance: Parameters<typeof reconcileAbsenceCheckOf>[1];
+  readonly check: Parameters<typeof reconcileAbsenceCheckOf>[2];
+  readonly t: Translate;
+}) {
+  const by = reconcileAbsenceCheckOf(goalAcceptance, stepAcceptance, check);
+  if (!by) return null;
+  return (
+    <span className="w-full text-small text-3" data-testid="goal-reconcile-absence">
+      {by.ofGoal
+        ? t(
+            `门回答它不在，就算这个动作生效了。前提是动作之前平台看到过它在：用的是目标的验收检查「${by.key}」那次事先查看。`,
+            `The gate answering that it is not there counts as this action having taken effect, provided the platform saw it there before the action: the look taken for the goal’s check “${by.key}”.`,
+          )
+        : t(
+            `门回答它不在，就算这个动作生效了。前提是动作之前平台看到过它在：用的是这一步的验收检查「${by.key}」那次事先查看。`,
+            `The gate answering that it is not there counts as this action having taken effect, provided the platform saw it there before the action: the look taken for this step’s check “${by.key}”.`,
+          )}
+    </span>
   );
 }
 

@@ -658,6 +658,13 @@ test.describe('S11 「门确认不存在」 B: absence checks on a goal (stand-i
             check: { gatekeeperId: GATE, operation: 'binding.get', params: { host: 'web-1' } },
           },
         ],
+        // S11 「门确认不存在」 reconcile: a lost removal is checked with the same call.
+        reconcile: [
+          {
+            action: { gatekeeperId: GATE, operation: 'binding.delete', params: { host: 'web-1' } },
+            check: { gatekeeperId: GATE, operation: 'binding.get', params: { host: 'web-1' } },
+          },
+        ],
       },
     ],
     acceptance: [
@@ -800,6 +807,10 @@ test.describe('S11 「门确认不存在」 B: absence checks on a goal (stand-i
       await expect(stepLook).toContainText('平台没能看它在不在：');
       await expect(stepLook).toContainText('所以目标暂停，没有往下做');
       await expect(stepLook).not.toContainText('开始前');
+      await removeOld.getByText(/结果不明时平台怎么核对/).click();
+      await expect(removeOld.getByTestId('goal-reconcile-absence')).toHaveText(
+        '门回答它不在，就算这个动作生效了。前提是动作之前平台看到过它在：用的是这一步的验收检查「binding-gone」那次事先查看。',
+      );
       await page.screenshot({
         path: testInfo.outputPath(`goal-absence-${width}.png`),
         fullPage: true,
