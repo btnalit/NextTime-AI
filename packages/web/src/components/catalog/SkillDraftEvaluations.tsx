@@ -4,7 +4,7 @@ import type {
   EvalSuiteSummaryWire,
   EvalSuiteWire,
 } from '@nexttime/shared';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useCapability } from '../../hooks/useCapability.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -58,6 +58,9 @@ import { StillNeeded } from '../kit/still-needed.js';
 /** How many of this version's evaluations the section lists (the 草稿评测 tab has them all). */
 const SHOWN = 5;
 
+/** How often the list is read again while one of its evaluations runs (as the 草稿评测 tab). */
+const RUNNING_POLL_MS = 3000;
+
 export interface SkillDraftEvaluationsProps {
   readonly http: CapabilityCaller;
   readonly skill: {
@@ -70,6 +73,9 @@ export interface SkillDraftEvaluationsProps {
   };
   /** The version the draft would replace (`undefined`: a new Skill). */
   readonly inUseVersion: number | undefined;
+  /** Told whether one of this version's evaluations runs now — the draft's 丢弃 / 拒绝 are held
+   *  meanwhile (#833 UX P3-1). */
+  readonly onEvaluatingChange?: (evaluating: boolean) => void;
 }
 
 /**
@@ -77,10 +83,16 @@ export interface SkillDraftEvaluationsProps {
  * version's draft evaluations (`list_draft_evaluations{skillId}`), each with its state or verdict
  * and a link to it under 评测 → 草稿评测, and on a draft, 「评测」 (a builder or the owner), which
  * opens `StartDraftEvaluationSheet`. While one runs the draft cannot be discarded or rejected; the
- * section says so above those buttons. A published version shows the evaluations it had as a
- * draft, if any — evidence beside it, never a gate on publishing.
+ * section says so above those buttons, and reads the list again every few seconds until it ends
+ * (#833 UX P2-1). A published version shows the evaluations it had as a draft, if any — evidence
+ * beside it, never a gate on publishing.
  */
-export function SkillDraftEvaluations({ http, skill, inUseVersion }: SkillDraftEvaluationsProps) {
+export function SkillDraftEvaluations({
+  http,
+  skill,
+  inUseVersion,
+  onEvaluatingChange,
+}: SkillDraftEvaluationsProps) {
   const t = useT();
   const can = useRoleCan(http);
   const allowed = can('list_draft_evaluations') !== false;
@@ -95,15 +107,26 @@ export function SkillDraftEvaluations({ http, skill, inUseVersion }: SkillDraftE
   const canStart =
     isDraft && skill.draftDigest !== undefined && can('start_draft_evaluation') !== false;
   const state = list.state;
-  if (!allowed || (state.status === 'error' && isForbiddenError(state.error))) return null;
   const rows =
     state.status === 'ready'
       ? state.data.items.filter((row) => row.candidate.version === skill.version)
       : [];
   const running = rows.find((row) => row.status === 'running');
+  const evaluating = running !== undefined;
+  const reload = list.reload;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: each read, or failed re-read, of the list arms the next one
+  useEffect(() => {
+    if (!evaluating) return;
+    const timer = window.setTimeout(() => void reload(), RUNNING_POLL_MS);
+    return () => window.clearTimeout(timer);
+  }, [evaluating, reload, state]);
+  useEffect(() => {
+    onEvaluatingChange?.(evaluating);
+  }, [evaluating, onEvaluatingChange]);
+  if (!allowed || (state.status === 'error' && isForbiddenError(state.error))) return null;
   const baselineText =
     inUseVersion !== undefined
-      ? t(`在用的 v${inUseVersion}`, `v${inUseVersion}, the one in use`)
+      ? t(`在用的 v${inUseVersion}`, `v${inUseVersion} (the one in use)`)
       : t('不加载它的 Worker', 'the Worker without it');
   // A published version without evaluations has nothing to show here.
   if (!isDraft && rows.length === 0) return null;
@@ -553,6 +576,8 @@ function StartDraftEvaluationSheet({
 }
 
 function PlanView({ plan, t }: { readonly plan: DraftEvaluationPlan; readonly t: Translate }) {
+  // The first stage that runs is checked at the start: short there, the start is refused.
+  const firstRun = plan.stages.find((stage) => stage.skip === null)?.stage;
   return (
     <div className="stack-s" data-testid="draft-eval-start-plan">
       <span className="text-2" style={{ fontWeight: 600 }}>
@@ -581,7 +606,9 @@ function PlanView({ plan, t }: { readonly plan: DraftEvaluationPlan; readonly t:
               )}
               {stage.covered === false ? (
                 <span className="text-warn text-small" data-testid="draft-eval-start-stage-short">
-                  {t('预算可能不够', 'budget may not cover it')}
+                  {stage.stage === firstRun
+                    ? t('预算不够', 'budget does not cover it')
+                    : t('预算可能不够', 'budget may not cover it')}
                 </span>
               ) : null}
             </span>

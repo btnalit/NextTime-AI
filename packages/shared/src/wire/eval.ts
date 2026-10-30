@@ -548,7 +548,10 @@ export const DraftEvaluationArmTallyWireSchema = z
     trials: z.number().int().nonnegative(),
     passed: z.number().int().nonnegative(),
     failed: z.number().int().nonnegative(),
+    /** Ended without a verdict after it started. */
     errored: z.number().int().nonnegative(),
+    /** Never started: the evaluation was cancelled while it was queued (`trialVoided`). */
+    voided: z.number().int().nonnegative(),
     /** Queued or running. */
     open: z.number().int().nonnegative(),
     /** `null` while a trial with no price has ended. */

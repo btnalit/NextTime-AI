@@ -55,6 +55,16 @@ export function trialHasOutcome(trial: {
   );
 }
 
+/** Whether a trial was voided: the evaluation was cancelled while it waited its turn, so it never
+ *  started — no Task, no cost (#833 UX P3-2). A trial cancelled while running ran: it is errored. */
+export function trialVoided(trial: {
+  readonly status: string;
+  readonly error: string | null;
+  readonly taskId: string | null;
+}): boolean {
+  return trial.status === 'errored' && trial.error === 'cancelled' && trial.taskId === null;
+}
+
 /** How many times a stage tries each of its cases, per arm — 0 for a stage with no case. */
 export function draftEvaluationStageK(stage: DraftEvaluationStageName, caseCount: number): number {
   if (caseCount <= 0) return 0;

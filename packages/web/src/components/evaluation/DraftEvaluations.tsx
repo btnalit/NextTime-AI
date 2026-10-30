@@ -121,6 +121,7 @@ export function DraftEvaluationsTab({
   onEvaluationChanged,
 }: DraftEvaluationsTabProps) {
   const t = useT();
+  const can = useRoleCan(http);
   const rows = evaluations.state.status === 'ready' ? evaluations.state.data : [];
   const mutate = evaluations.mutate;
   const onChanged = useCallback(
@@ -145,6 +146,7 @@ export function DraftEvaluationsTab({
           rows={rows}
           selectedId={evaluationId}
           onSelect={onSelect}
+          canStart={can('start_draft_evaluation') !== false}
         />
       }
       detail={
@@ -183,12 +185,15 @@ function EvaluationsList({
   rows,
   selectedId,
   onSelect,
+  canStart,
 }: {
   readonly t: Translate;
   readonly evaluations: Resource<readonly DraftEvaluationSummaryWire[]>;
   readonly rows: readonly DraftEvaluationSummaryWire[];
   readonly selectedId: string | undefined;
   readonly onSelect: (evaluationId: string | null) => void;
+  /** Whether the reader may start one: only then does the empty state point at the catalog. */
+  readonly canStart: boolean;
 }) {
   if (evaluations.state.status === 'loading') {
     return (
@@ -214,15 +219,22 @@ function EvaluationsList({
       <EmptyState
         title={t('还没有草稿评测', 'No draft evaluation yet')}
         body={
-          <>
-            {t(
-              '在能力目录打开一个 Skill 草稿，点「评测」，用一个用例集把它和要替换的版本比一比。你能看到的草稿的评测会列在这里。',
-              'Open a Skill draft in the catalog and choose Evaluate to compare it with the version it would replace on a suite. Evaluations of drafts you can see are listed here.',
-            )}{' '}
-            <RouteLink href={hrefs.catalog('skills')} className="link-inline">
-              {t('去能力目录', 'Go to the catalog')}
-            </RouteLink>
-          </>
+          canStart ? (
+            <>
+              {t(
+                '在能力目录打开一个 Skill 草稿，点「评测」，用一个用例集把它和要替换的版本比一比。你能看到的草稿的评测会列在这里。',
+                'Open a Skill draft in the catalog and choose Evaluate to compare it with the version it would replace on a suite. Evaluations of drafts you can see are listed here.',
+              )}{' '}
+              <RouteLink href={hrefs.catalog('skills')} className="link-inline">
+                {t('去能力目录', 'Go to the catalog')}
+              </RouteLink>
+            </>
+          ) : (
+            t(
+              '评测由构建者或工作区所有者从 Skill 草稿发起；你能看到的草稿的评测会列在这里。',
+              'A builder or the workspace owner starts an evaluation from a Skill draft; evaluations of drafts you can see are listed here.',
+            )
+          )
         }
         testId="draft-evals-empty"
       />
@@ -568,6 +580,7 @@ function tallyText(tally: DraftEvaluationArmTallyWire, t: Translate): string {
     t(`${tally.passed}/${tally.trials} 通过`, `${tally.passed}/${tally.trials} passed`),
   ];
   if (tally.errored > 0) parts.push(t(`${tally.errored} 出错`, `${tally.errored} errored`));
+  if (tally.voided > 0) parts.push(t(`${tally.voided} 作废`, `${tally.voided} voided`));
   if (tally.open > 0) parts.push(t(`${tally.open} 未结束`, `${tally.open} not ended`));
   return parts.join(' · ');
 }
@@ -739,6 +752,7 @@ function cellText(tally: DraftEvaluationArmTallyWire, t: Translate): string {
   const base = `${tally.passed}/${tally.trials}`;
   const extra = [
     tally.errored > 0 ? t(`${tally.errored} 出错`, `${tally.errored} errored`) : null,
+    tally.voided > 0 ? t(`${tally.voided} 作废`, `${tally.voided} voided`) : null,
     tally.open > 0 ? t(`${tally.open} 未结束`, `${tally.open} open`) : null,
   ].filter((part): part is string => part !== null);
   return extra.length === 0 ? base : `${base} (${extra.join(', ')})`;
@@ -763,7 +777,9 @@ function CaseMatrix({
   const [openCaseId, setOpenCaseId] = useState<string | null>(null);
   // The stage's run, read when a case row opens — and again when the stage's tallies move.
   const revision = [stage.baseline, stage.candidate]
-    .map((tally) => `${tally.passed}.${tally.failed}.${tally.errored}.${tally.open}`)
+    .map(
+      (tally) => `${tally.passed}.${tally.failed}.${tally.errored}.${tally.voided}.${tally.open}`,
+    )
     .join('|');
   const runId = stage.runId;
   const run = useLoadWhen(
@@ -917,7 +933,26 @@ function CaseStageTrials({
     ]);
     return { evalCase, gates: suite.fixtureGates };
   });
-  const opened: EvalTrialWire | undefined = trials.find((trial) => trial.id === openTrialId);
+  // The opened trial shows under its own row, not after the whole list (a mechanism stage runs
+  // 20 tries — the content must appear where it was asked for).
+  const openedContent = (trial: EvalTrialWire) =>
+    detail.status === 'ready' && detail.data !== undefined ? (
+      <TrialView
+        trial={trial}
+        runAt={run.createdAt}
+        evalCase={detail.data.evalCase}
+        gates={detail.data.gates}
+        isOwner={isOwner}
+      />
+    ) : detail.status === 'error' ? (
+      <ErrorBanner
+        error={detail.error}
+        title={t('无法读取这条用例', 'Could not load this case')}
+        testId="draft-eval-trial-case-error"
+      />
+    ) : (
+      <SkeletonRows count={2} label={t('正在读取用例', 'Loading the case')} />
+    );
   return (
     <div className="stack-s" data-testid="draft-eval-case-trials">
       <ul className="eval-suite-history">
@@ -942,28 +977,10 @@ function CaseStageTrials({
                 {trial.id === openTrialId ? t('收起', 'Hide') : t('查看', 'Open')}
               </Button>
             </span>
+            {trial.id === openTrialId ? openedContent(trial) : null}
           </li>
         ))}
       </ul>
-      {opened !== undefined ? (
-        detail.status === 'ready' && detail.data !== undefined ? (
-          <TrialView
-            trial={opened}
-            runAt={run.createdAt}
-            evalCase={detail.data.evalCase}
-            gates={detail.data.gates}
-            isOwner={isOwner}
-          />
-        ) : detail.status === 'error' ? (
-          <ErrorBanner
-            error={detail.error}
-            title={t('无法读取这条用例', 'Could not load this case')}
-            testId="draft-eval-trial-case-error"
-          />
-        ) : (
-          <SkeletonRows count={2} label={t('正在读取用例', 'Loading the case')} />
-        )
-      ) : null}
     </div>
   );
 }
@@ -978,6 +995,8 @@ function Environments({
   readonly t: Translate;
 }) {
   const environments = evaluation.environments;
+  // As the kernel reads them: an environment not fully reported is checked before a second one.
+  const unknown = environments.some((entry) => entry.environment.environmentDigest === null);
   return (
     <section className="stack-s" data-testid="draft-eval-environments">
       <span className="section-title">{t('运行环境', 'Environment')}</span>
@@ -985,6 +1004,16 @@ function Environments({
         <p className="text-3 text-small">
           {t('还没有试跑报告运行环境。', 'No trial has reported its environment yet.')}
         </p>
+      ) : unknown ? (
+        <Notice tone="warn" testId="draft-eval-environments-unknown">
+          {t(
+            '有试跑没有完整上报运行环境（看下面的环境指纹），没法确认两组是在同一个环境里跑的。',
+            'Some trials did not fully report their environment (see the environment fingerprint below), so the two arms cannot be shown to have run in one environment.',
+          )}
+          {evaluation.reason === 'environment_unknown'
+            ? t('所以结论是「无法比较」。', ' That is why the verdict is Unmeasured.')
+            : ''}
+        </Notice>
       ) : environments.length > 1 ? (
         <Notice tone="warn" testId="draft-eval-environments-differ">
           {t(

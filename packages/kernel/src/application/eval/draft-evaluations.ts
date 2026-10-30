@@ -14,6 +14,7 @@ import {
   type Role,
   draftEvaluationStageK,
   draftEvaluationStageTrials,
+  trialVoided,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { type PoolLike, withWorkspace } from '../../adapters/db/pool.js';
@@ -868,6 +869,7 @@ function emptyTally(): {
   passed: number;
   failed: number;
   errored: number;
+  voided: number;
   open: number;
   costUsd: number | null;
   tokens: number;
@@ -878,6 +880,7 @@ function emptyTally(): {
     passed: 0,
     failed: 0,
     errored: 0,
+    voided: 0,
     open: 0,
     costUsd: 0,
     tokens: 0,
@@ -891,7 +894,9 @@ function tally(trials: readonly TrialRow[]): DraftEvaluationArmTallyWire {
     t.trials += 1;
     if (trial.status === 'scored' && trial.verdict === 'passed') t.passed += 1;
     else if (trial.status === 'scored') t.failed += 1;
-    else if (trial.status === 'errored') t.errored += 1;
+    else if (trialVoided({ status: trial.status, error: trial.error, taskId: trial.task_id })) {
+      t.voided += 1;
+    } else if (trial.status === 'errored') t.errored += 1;
     else t.open += 1;
     t.tokens += Number(trial.tokens);
     if (ENDED.has(trial.status) && trial.task_id !== null) {
@@ -904,6 +909,7 @@ function tally(trials: readonly TrialRow[]): DraftEvaluationArmTallyWire {
     passed: t.passed,
     failed: t.failed,
     errored: t.errored,
+    voided: t.voided,
     open: t.open,
     costUsd: t.unpriced > 0 ? null : t.costUsd,
     tokens: t.tokens,

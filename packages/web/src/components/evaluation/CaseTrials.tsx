@@ -406,7 +406,7 @@ export function TrialView({
           <time title={formatDateTime(runAt)}>{formatRelative(runAt)}</time>
           {' · '}
           {formatDuration(trial.startedAt, trial.finishedAt ?? undefined)}
-          {trial.finishedAt !== null ? (
+          {trial.finishedAt !== null && status !== 'voided' ? (
             <>
               {' · '}
               <span className="tabular" data-testid="eval-case-trial-cost">
@@ -448,7 +448,14 @@ export function TrialView({
           )}
         </p>
       ) : null}
-      {trial.status === 'errored' && trial.error !== null ? (
+      {status === 'voided' ? (
+        <p className="text-3 text-small" data-testid="eval-case-trial-voided">
+          {t(
+            '作废：评测被取消时它还在排队，没有开始，也没有花费。',
+            'Voided: it was still queued when the evaluation was cancelled, so it never started and cost nothing.',
+          )}
+        </p>
+      ) : trial.status === 'errored' && trial.error !== null ? (
         <Notice tone="warn" testId="eval-case-trial-errored">
           {trialErrorText(trial.error, t)}
         </Notice>

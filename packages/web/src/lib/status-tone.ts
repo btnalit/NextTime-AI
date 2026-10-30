@@ -481,14 +481,16 @@ export const PACK_REQUIREMENT_TONES: Readonly<Record<PackRequirementState, ChipS
 };
 
 /** S10 E3-2a: how an evaluation trial came out — `queued` (E3-2b: a draft evaluation's trial
- *  waiting its turn), `running`, its verdict once `scored`, or `errored` (`EvalTrialWire`'s
- *  `status` and `verdict` read together, `lib/eval-runs.ts` `trialOutcomeStatus`). */
+ *  waiting its turn), `running`, its verdict once `scored`, `errored`, or `voided` (E3-2b: its
+ *  evaluation was cancelled before it started, `trialVoided`) — `EvalTrialWire`'s `status`,
+ *  `verdict` and `error` read together, `lib/eval-runs.ts` `trialOutcomeStatus`. */
 export const EVAL_TRIAL_OUTCOME_VALUES = [
   'queued',
   'running',
   'passed',
   'failed',
   'errored',
+  'voided',
 ] as const;
 export type EvalTrialOutcome = (typeof EVAL_TRIAL_OUTCOME_VALUES)[number];
 export const EVAL_TRIAL_TONES: Readonly<Record<EvalTrialOutcome, ChipStyle>> = {
@@ -497,6 +499,7 @@ export const EVAL_TRIAL_TONES: Readonly<Record<EvalTrialOutcome, ChipStyle>> = {
   passed: { tone: 'ok', label: { zh: '通过', en: 'Passed' } },
   failed: { tone: 'danger', label: { zh: '未通过', en: 'Failed' } },
   errored: { tone: 'warn', label: { zh: '出错', en: 'Errored' } },
+  voided: { tone: 'neutral', label: { zh: '已作废', en: 'Voided' } },
 };
 
 /** S10 E3-2a: one assertion of a case, as a trial judged it (`EvalAssertionResultWire.outcome`). */

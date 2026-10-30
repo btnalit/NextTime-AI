@@ -52,10 +52,23 @@ describe('eval-runs (S10 E3-2a)', () => {
   });
 
   it('reads a trial’s outcome as one status', () => {
-    expect(trialOutcomeStatus({ status: 'running', verdict: null })).toBe('running');
-    expect(trialOutcomeStatus({ status: 'errored', verdict: null })).toBe('errored');
-    expect(trialOutcomeStatus({ status: 'scored', verdict: 'passed' })).toBe('passed');
-    expect(trialOutcomeStatus({ status: 'scored', verdict: 'failed' })).toBe('failed');
+    const ran = { error: null, taskId: 'task-1' };
+    expect(trialOutcomeStatus({ ...ran, status: 'queued', verdict: null, taskId: null })).toBe(
+      'queued',
+    );
+    expect(trialOutcomeStatus({ ...ran, status: 'running', verdict: null })).toBe('running');
+    expect(trialOutcomeStatus({ ...ran, status: 'errored', verdict: null, error: 'timeout' })).toBe(
+      'errored',
+    );
+    expect(trialOutcomeStatus({ ...ran, status: 'scored', verdict: 'passed' })).toBe('passed');
+    expect(trialOutcomeStatus({ ...ran, status: 'scored', verdict: 'failed' })).toBe('failed');
+    // Cancelled while queued: it never ran — voided. Cancelled while running: it ran — errored.
+    expect(
+      trialOutcomeStatus({ status: 'errored', verdict: null, error: 'cancelled', taskId: null }),
+    ).toBe('voided');
+    expect(
+      trialOutcomeStatus({ ...ran, status: 'errored', verdict: null, error: 'cancelled' }),
+    ).toBe('errored');
   });
 
   it('says why a trial ended without a verdict', () => {

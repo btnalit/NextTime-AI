@@ -55,6 +55,7 @@ const tally = (passed: number, trials: number, extra: Partial<DraftEvaluationArm
     passed,
     failed: trials - passed,
     errored: 0,
+    voided: 0,
     open: 0,
     costUsd: trials * 0.01,
     tokens: trials * 100,
@@ -333,14 +334,30 @@ describe('草稿评测 (S10 E3-2b)', () => {
     expect(onNavigate).toHaveBeenCalledWith('suites', null);
   });
 
-  it('says where an evaluation starts when there is none', async () => {
-    const http = scriptedHttp({
+  it('says where an evaluation starts when there is none — and who starts one, to a member', async () => {
+    const builder = scriptedHttp({
+      ...handlers('builder', () => evaluation()),
+      list_draft_evaluations: () => ({ items: [] }),
+    });
+    renderPage(builder);
+    const empty = await screen.findByTestId('draft-evals-empty');
+    await waitFor(() => expect(empty.textContent).toContain('在能力目录打开一个 Skill 草稿'));
+    expect(within(empty).getByRole('link').getAttribute('href')).toBe('#/govern/catalog/skills');
+    cleanup();
+
+    // A member cannot start one: not sent to the catalog to do it (#833 UX P3-3).
+    const member = scriptedHttp({
       ...handlers('member', () => evaluation()),
       list_draft_evaluations: () => ({ items: [] }),
     });
-    renderPage(http);
-    const empty = await screen.findByTestId('draft-evals-empty');
-    expect(empty.textContent).toContain('在能力目录打开一个 Skill 草稿');
+    renderPage(member);
+    const told = await screen.findByTestId('draft-evals-empty');
+    await waitFor(() =>
+      expect(told.textContent).toContain(
+        '评测由构建者或工作区所有者从 Skill 草稿发起；你能看到的草稿的评测会列在这里。',
+      ),
+    );
+    expect(within(told).queryByRole('link')).toBeNull();
   });
 
   it('shows a finished evaluation whole: the verdict and why, each stage, the matrix and a trial', async () => {
@@ -390,6 +407,8 @@ describe('草稿评测 (S10 E3-2b)', () => {
     fireEvent.click(within(trials[0] as HTMLElement).getByTestId('draft-eval-trial-open'));
     const opened = await within(matrix).findByTestId('eval-case-trial');
     expect(opened.textContent).toContain('Restarted web without checking.');
+    // It opens under its own row, not after the whole list (#833 UX P2-3).
+    expect((trials[0] as HTMLElement).contains(opened)).toBe(true);
     expect(http.calls.find((c) => c.name === 'get_eval_case')?.params).toEqual({
       suiteId: 's-1',
       caseId: 'c-1',
@@ -481,6 +500,104 @@ describe('草稿评测 (S10 E3-2b)', () => {
     expect(warning.textContent).toContain('2 个运行环境');
     expect(screen.getAllByTestId('draft-eval-environment')).toHaveLength(2);
     expect(screen.getByTestId('draft-eval-reason').textContent).toContain('不全在同一个运行环境');
+  });
+
+  it('says the environment is unknown, not shared, when a trial did not report it (#833 UX P2-2)', async () => {
+    const unreported: RunEnvironmentWire = {
+      ...environment(),
+      runtime: null,
+      environmentDigest: null,
+    };
+    const http = scriptedHttp(
+      handlers('member', () =>
+        evaluation({
+          verdict: 'unmeasured',
+          reason: 'environment_unknown',
+          decidedBy: 'regression',
+          environments: [{ environment: unreported, baselineTrials: 2, candidateTrials: 2 }],
+        }),
+      ),
+    );
+    renderPage(http, 'e-1');
+    const warning = await screen.findByTestId('draft-eval-environments-unknown');
+    expect(warning.textContent).toContain('没法确认两组是在同一个环境里跑的');
+    expect(warning.textContent).toContain('所以结论是「无法比较」');
+    expect(screen.queryByText('两组的所有试跑都在同一个运行环境里。')).toBeNull();
+    expect(screen.queryByTestId('draft-eval-environments-differ')).toBeNull();
+  });
+
+  it('trials a cancel voided read voided, not errored, and cost nothing (#833 UX P3-2)', async () => {
+    const voided = tally(0, 3, { failed: 1, voided: 2, costUsd: 0.01, tokens: 100 });
+    const http = scriptedHttp({
+      ...handlers('member', () =>
+        evaluation({
+          status: 'cancelled',
+          verdict: null,
+          reason: null,
+          decidedBy: null,
+          cancelledBy: 'p-me',
+          stages: [
+            stage('regression', {
+              status: 'cancelled',
+              k: 3,
+              baseline: voided,
+              candidate: voided,
+              cases: [
+                {
+                  caseId: 'c-1',
+                  title: 'check dependants first',
+                  split: 'dev',
+                  baseline: voided,
+                  candidate: voided,
+                },
+              ],
+            }),
+          ],
+        }),
+      ),
+      get_eval_run: () => ({
+        ...RUN,
+        trials: [
+          trial(),
+          trial({
+            id: 't-2',
+            rep: 2,
+            status: 'errored',
+            verdict: null,
+            error: 'cancelled',
+            taskId: null,
+            assertions: [],
+            result: null,
+            costUsd: null,
+            tokens: 0,
+            environmentDigest: null,
+            startedAt: null,
+          }),
+        ],
+      }),
+    });
+    renderPage(http, 'e-1');
+    const stageCard = (await screen.findAllByTestId('draft-eval-stage'))[0] as HTMLElement;
+    expect(within(stageCard).getByTestId('draft-eval-stage-tally').textContent).toBe(
+      '基线组 0/3 通过 · 2 作废；草稿组 0/3 通过 · 2 作废',
+    );
+    const matrix = within(stageCard).getByTestId('draft-eval-matrix');
+    expect(within(matrix).getByTestId('draft-eval-matrix-row').textContent).toContain(
+      '0/3 (2 作废)',
+    );
+    fireEvent.click(within(matrix).getByTestId('draft-eval-matrix-open'));
+    const trials = await within(matrix).findAllByTestId('draft-eval-trial');
+    const second = trials[1] as HTMLElement;
+    expect(second.textContent).toContain('已作废');
+    expect(second.textContent).not.toContain('$');
+    fireEvent.click(within(second).getByTestId('draft-eval-trial-open'));
+    const opened = await within(second).findByTestId('eval-case-trial');
+    expect(opened.getAttribute('data-status')).toBe('voided');
+    expect(within(opened).getByTestId('eval-case-trial-voided').textContent).toContain(
+      '没有开始，也没有花费',
+    );
+    expect(within(opened).queryByTestId('eval-case-trial-cost')).toBeNull();
+    expect(within(opened).queryByTestId('eval-case-trial-errored')).toBeNull();
   });
 
   it('a builder cancels a running evaluation; it then reads cancelled, with no verdict', async () => {

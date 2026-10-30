@@ -1064,6 +1064,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       const neverStarted = after.trials.filter((t) => t.taskId === null);
       expect(neverStarted).toHaveLength(7);
       expect(neverStarted.every((t) => t.startedAt === null)).toBe(true);
+      // The seven that never started are voided, not errored; the five it terminated ran.
+      const stopped = stageOf(await readEvaluation(started.id), 'confirm');
+      expect(stopped.baseline.voided + stopped.candidate.voided).toBe(7);
+      expect(stopped.baseline.errored + stopped.candidate.errored).toBe(5);
       // Nothing started after the cancel.
       expect(
         await count("select 1 from eval_trials where workspace_id = $1 and status = 'queued'"),

@@ -3252,6 +3252,10 @@
                   "trials": {
                     "minimum": 0,
                     "type": "integer"
+                  },
+                  "voided": {
+                    "minimum": 0,
+                    "type": "integer"
                   }
                 },
                 "required": [
@@ -3259,6 +3263,7 @@
                   "passed",
                   "failed",
                   "errored",
+                  "voided",
                   "open",
                   "costUsd",
                   "tokens"
@@ -3297,6 +3302,10 @@
                   "trials": {
                     "minimum": 0,
                     "type": "integer"
+                  },
+                  "voided": {
+                    "minimum": 0,
+                    "type": "integer"
                   }
                 },
                 "required": [
@@ -3304,6 +3313,7 @@
                   "passed",
                   "failed",
                   "errored",
+                  "voided",
                   "open",
                   "costUsd",
                   "tokens"
@@ -3350,6 +3360,10 @@
                         "trials": {
                           "minimum": 0,
                           "type": "integer"
+                        },
+                        "voided": {
+                          "minimum": 0,
+                          "type": "integer"
                         }
                       },
                       "required": [
@@ -3357,6 +3371,7 @@
                         "passed",
                         "failed",
                         "errored",
+                        "voided",
                         "open",
                         "costUsd",
                         "tokens"
@@ -3395,6 +3410,10 @@
                         "trials": {
                           "minimum": 0,
                           "type": "integer"
+                        },
+                        "voided": {
+                          "minimum": 0,
+                          "type": "integer"
                         }
                       },
                       "required": [
@@ -3402,6 +3421,7 @@
                         "passed",
                         "failed",
                         "errored",
+                        "voided",
                         "open",
                         "costUsd",
                         "tokens"
@@ -13519,6 +13539,10 @@
                   "trials": {
                     "minimum": 0,
                     "type": "integer"
+                  },
+                  "voided": {
+                    "minimum": 0,
+                    "type": "integer"
                   }
                 },
                 "required": [
@@ -13526,6 +13550,7 @@
                   "passed",
                   "failed",
                   "errored",
+                  "voided",
                   "open",
                   "costUsd",
                   "tokens"
@@ -13564,6 +13589,10 @@
                   "trials": {
                     "minimum": 0,
                     "type": "integer"
+                  },
+                  "voided": {
+                    "minimum": 0,
+                    "type": "integer"
                   }
                 },
                 "required": [
@@ -13571,6 +13600,7 @@
                   "passed",
                   "failed",
                   "errored",
+                  "voided",
                   "open",
                   "costUsd",
                   "tokens"
@@ -13617,6 +13647,10 @@
                         "trials": {
                           "minimum": 0,
                           "type": "integer"
+                        },
+                        "voided": {
+                          "minimum": 0,
+                          "type": "integer"
                         }
                       },
                       "required": [
@@ -13624,6 +13658,7 @@
                         "passed",
                         "failed",
                         "errored",
+                        "voided",
                         "open",
                         "costUsd",
                         "tokens"
@@ -13662,6 +13697,10 @@
                         "trials": {
                           "minimum": 0,
                           "type": "integer"
+                        },
+                        "voided": {
+                          "minimum": 0,
+                          "type": "integer"
                         }
                       },
                       "required": [
@@ -13669,6 +13708,7 @@
                         "passed",
                         "failed",
                         "errored",
+                        "voided",
                         "open",
                         "costUsd",
                         "tokens"
@@ -54420,6 +54460,10 @@
                   "trials": {
                     "minimum": 0,
                     "type": "integer"
+                  },
+                  "voided": {
+                    "minimum": 0,
+                    "type": "integer"
                   }
                 },
                 "required": [
@@ -54427,6 +54471,7 @@
                   "passed",
                   "failed",
                   "errored",
+                  "voided",
                   "open",
                   "costUsd",
                   "tokens"
@@ -54465,6 +54510,10 @@
                   "trials": {
                     "minimum": 0,
                     "type": "integer"
+                  },
+                  "voided": {
+                    "minimum": 0,
+                    "type": "integer"
                   }
                 },
                 "required": [
@@ -54472,6 +54521,7 @@
                   "passed",
                   "failed",
                   "errored",
+                  "voided",
                   "open",
                   "costUsd",
                   "tokens"
@@ -54518,6 +54568,10 @@
                         "trials": {
                           "minimum": 0,
                           "type": "integer"
+                        },
+                        "voided": {
+                          "minimum": 0,
+                          "type": "integer"
                         }
                       },
                       "required": [
@@ -54525,6 +54579,7 @@
                         "passed",
                         "failed",
                         "errored",
+                        "voided",
                         "open",
                         "costUsd",
                         "tokens"
@@ -54563,6 +54618,10 @@
                         "trials": {
                           "minimum": 0,
                           "type": "integer"
+                        },
+                        "voided": {
+                          "minimum": 0,
+                          "type": "integer"
                         }
                       },
                       "required": [
@@ -54570,6 +54629,7 @@
                         "passed",
                         "failed",
                         "errored",
+                        "voided",
                         "open",
                         "costUsd",
                         "tokens"

@@ -6,7 +6,7 @@ import type {
   EvalSuiteSummaryWire,
   EvalSuiteWire,
 } from '@nexttime/shared';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -145,10 +145,16 @@ function renderSection(
   http: CapabilityCaller,
   skill = DRAFT,
   inUseVersion: number | undefined = 1,
+  onEvaluatingChange?: (evaluating: boolean) => void,
 ) {
   render(
     <PermissionsProvider>
-      <SkillDraftEvaluations http={http} skill={skill} inUseVersion={inUseVersion} />
+      <SkillDraftEvaluations
+        http={http}
+        skill={skill}
+        inUseVersion={inUseVersion}
+        onEvaluatingChange={onEvaluatingChange}
+      />
     </PermissionsProvider>,
   );
 }
@@ -248,7 +254,12 @@ describe('SkillDraftEvaluations (S10 E3-2b)', () => {
     expect(within(sheet).getByTestId('draft-eval-start-short').textContent).toContain(
       '不够跑第一个阶段',
     );
-    expect(within(sheet).getAllByTestId('draft-eval-start-stage-short')).toHaveLength(2);
+    // The first stage is checked at the start: it does not fit. A later one may not, by then.
+    expect(
+      within(sheet)
+        .getAllByTestId('draft-eval-start-stage-short')
+        .map((node) => node.textContent),
+    ).toEqual(['预算不够', '预算可能不够']);
     expect(
       (within(sheet).getByTestId('draft-eval-start-submit') as HTMLButtonElement).disabled,
     ).toBe(true);
@@ -277,6 +288,53 @@ describe('SkillDraftEvaluations (S10 E3-2b)', () => {
     await waitFor(() =>
       expect((screen.getByTestId('skill-draft-evaluate') as HTMLButtonElement).disabled).toBe(true),
     );
+  });
+
+  it('reads the list again while one runs, until it ends — then it may start again and the draft may go', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const running = summary({
+        status: 'running',
+        stage: 'confirm',
+        verdict: null,
+        reason: null,
+        decidedBy: null,
+        finishedAt: null,
+      });
+      let reads = 0;
+      const http = scriptedHttp(
+        handlers('builder', {
+          list_draft_evaluations: () => {
+            reads += 1;
+            return { items: [reads === 1 ? running : summary()] };
+          },
+        }),
+      );
+      const evaluating = vi.fn();
+      renderSection(http, DRAFT, 1, evaluating);
+      await screen.findByTestId('skill-draft-evaluating');
+      await waitFor(() => expect(evaluating).toHaveBeenLastCalledWith(true));
+
+      await act(async () => {
+        vi.advanceTimersByTime(3000);
+      });
+      await waitFor(() => expect(screen.queryByTestId('skill-draft-evaluating')).toBeNull());
+      expect(screen.getByTestId('skill-draft-evaluation').textContent).toContain('有回归');
+      await waitFor(() =>
+        expect((screen.getByTestId('skill-draft-evaluate') as HTMLButtonElement).disabled).toBe(
+          false,
+        ),
+      );
+      expect(evaluating).toHaveBeenLastCalledWith(false);
+
+      // Ended: no more reads.
+      await act(async () => {
+        vi.advanceTimersByTime(9000);
+      });
+      expect(reads).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a member reads the evaluations but is told who starts one; a published version without any shows nothing', async () => {

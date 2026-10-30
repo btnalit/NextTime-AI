@@ -1,8 +1,9 @@
-import type {
-  EvalBudgetWire,
-  EvalTrialCallWire,
-  EvalTrialError,
-  EvalTrialWire,
+import {
+  type EvalBudgetWire,
+  type EvalTrialCallWire,
+  type EvalTrialError,
+  type EvalTrialWire,
+  trialVoided,
 } from '@nexttime/shared';
 import type { ErrorOverrides } from './errors.js';
 import { shownName } from './evaluation.js';
@@ -25,10 +26,11 @@ export function formatUsd(amount: number): string {
 
 /** A trial's outcome as one status (`kit/status-chip`'s `evalTrial` machine). */
 export function trialOutcomeStatus(
-  trial: Pick<EvalTrialWire, 'status' | 'verdict'>,
+  trial: Pick<EvalTrialWire, 'status' | 'verdict' | 'error' | 'taskId'>,
 ): EvalTrialOutcome {
   if (trial.status === 'queued') return 'queued';
   if (trial.status === 'running') return 'running';
+  if (trialVoided(trial)) return 'voided';
   if (trial.status === 'errored') return 'errored';
   return trial.verdict === 'passed' ? 'passed' : 'failed';
 }
