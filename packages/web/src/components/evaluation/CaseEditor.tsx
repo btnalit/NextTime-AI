@@ -32,6 +32,7 @@ import {
   emptyRule,
   fixtureOperation,
   fixtureProblemText,
+  holdoutTextNotice,
   operationParams,
   partitionHint,
   sameContent,
@@ -321,6 +322,12 @@ export function CaseEditor({ gates, editing, onSave, onCancel }: CaseEditorProps
             </p>
           </div>
         )}
+
+        {(editing?.split ?? draft.split) === 'holdout' ? (
+          <Notice tone="info" testId="eval-case-holdout-notice">
+            {holdoutTextNotice(t)}
+          </Notice>
+        ) : null}
 
         <fieldset className="stack-s" data-testid="eval-case-input-section">
           <legend className="section-title">{t('输入', 'Input')}</legend>
