@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useId, useRef } from 'react';
+import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { GuardedCloseProvider, useDiscardGuard } from '../kit/discard-guard.js';
 import { Button } from './Button.js';
 
@@ -33,6 +33,15 @@ export function Drawer({
 }: DrawerProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
+  // What had focus as the drawer opened — where focus goes back on close. Read while rendering the
+  // opening: by the time an effect here runs, a form inside may already have focused its first
+  // field, and focus would go back to that field, gone with the drawer (#794 UX P3-3).
+  const [opener, setOpener] = useState<HTMLElement | null>(() => (open ? focusedElement() : null));
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) setOpener(focusedElement());
+  }
   // Legacy 497: an edited form asks 「放弃未保存的内容？」 before Escape, the overlay or × close
   // it (`kit/discard-guard`, as `kit/sheet` does); the form's own 取消 asks via `useGuardedClose`.
   const discard = useDiscardGuard();
@@ -49,7 +58,6 @@ export function Drawer({
 
   useEffect(() => {
     if (!open) return;
-    const opener = document.activeElement as HTMLElement | null;
     const panel = panelRef.current;
     const first = panel?.querySelector<HTMLElement>(FOCUSABLE);
     (first ?? panel)?.focus();
@@ -86,9 +94,9 @@ export function Drawer({
     return () => {
       document.removeEventListener('keydown', onKeyDown);
       document.body.style.overflow = previousOverflow;
-      opener?.focus?.();
+      if (opener?.isConnected) opener.focus();
     };
-  }, [open]);
+  }, [open, opener]);
 
   if (!open) return null;
 
@@ -135,4 +143,9 @@ export function Drawer({
       {discard.confirm}
     </>
   );
+}
+
+function focusedElement(): HTMLElement | null {
+  const active = document.activeElement;
+  return active instanceof HTMLElement && active !== document.body ? active : null;
 }

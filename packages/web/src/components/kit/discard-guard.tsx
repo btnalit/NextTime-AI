@@ -1,7 +1,11 @@
 import * as AlertDialogPrimitive from '@radix-ui/react-alert-dialog';
+import * as DialogPrimitive from '@radix-ui/react-dialog';
 import {
+  type ComponentPropsWithoutRef,
+  type ElementRef,
   type ReactNode,
   createContext,
+  forwardRef,
   useCallback,
   useContext,
   useMemo,
@@ -256,3 +260,92 @@ export function GuardedCancelButton({
   const guarded = useGuardedClose();
   return <Button {...rest} onClick={() => guarded(onCancel)} />;
 }
+
+export interface GuardedDialogContentProps
+  extends ComponentPropsWithoutRef<typeof DialogPrimitive.Content> {
+  /** The guard to use — for a caller that hands it to content it renders elsewhere (a portal,
+   *  `kit/master-detail`); by default the content keeps its own. */
+  readonly discardGuard?: DiscardGuard;
+}
+
+/**
+ * A Radix `Dialog.Content` with the rule above: `kit/sheet`'s `SheetContent` and `kit/dialog`'s
+ * `DialogContent` both render it. An edited form is not lost to a stray Escape or outside click —
+ * it asks first — and a form's own 取消 asks the same through `useGuardedClose`. A caller's own
+ * `onEscapeKeyDown` / `onInteractOutside` runs first; one that prevents the close keeps it.
+ */
+export const GuardedDialogContent = forwardRef<
+  ElementRef<typeof DialogPrimitive.Content>,
+  GuardedDialogContentProps
+>(function GuardedDialogContent(
+  {
+    children,
+    onEscapeKeyDown,
+    onInteractOutside,
+    onOpenAutoFocus,
+    onCloseAutoFocus,
+    discardGuard,
+    ...rest
+  },
+  ref,
+) {
+  // What had focus as this opened, read on its first render (before a form inside focuses its
+  // first field): Radix hands focus back only to a `Dialog.Trigger`, and a drawer or dialog opened
+  // from a plain button has none, so focus would land on <body> (#794 UX P3-3).
+  const [opener] = useState(() => {
+    const active = document.activeElement;
+    return active instanceof HTMLElement && active !== document.body ? active : null;
+  });
+  const own = useDiscardGuard();
+  const discard = discardGuard ?? own;
+  // The content's own close, as its Close button would — the Root's `onOpenChange(false)`.
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const close = () => closeRef.current?.click();
+  // The guard watches the content's element itself: a detail portaled into it is outside its
+  // React tree, so React's own events would not see its edits.
+  const detach = useRef<{ el: HTMLElement; off: () => void } | null>(null);
+  const attach = discard.attach;
+  const contentRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      if (detach.current?.el !== el) {
+        detach.current?.off();
+        detach.current = el === null ? null : { el, off: attach(el) };
+      }
+      if (typeof ref === 'function') ref(el);
+      else if (ref) ref.current = el;
+    },
+    [ref, attach],
+  );
+  return (
+    <DialogPrimitive.Content
+      ref={contentRef}
+      {...rest}
+      onOpenAutoFocus={(event) => {
+        discard.reset();
+        onOpenAutoFocus?.(event);
+      }}
+      onCloseAutoFocus={(event) => {
+        onCloseAutoFocus?.(event);
+        if (event.defaultPrevented || opener === null || !opener.isConnected) return;
+        event.preventDefault();
+        opener.focus();
+      }}
+      onEscapeKeyDown={(event) => {
+        onEscapeKeyDown?.(event);
+        if (event.defaultPrevented || !discard.edited()) return;
+        event.preventDefault();
+        discard.guard(close);
+      }}
+      onInteractOutside={(event) => {
+        onInteractOutside?.(event);
+        if (event.defaultPrevented || !discard.edited()) return;
+        event.preventDefault();
+        discard.guard(close);
+      }}
+    >
+      <GuardedCloseProvider guard={discard.guard}>{children}</GuardedCloseProvider>
+      <DialogPrimitive.Close ref={closeRef} hidden tabIndex={-1} aria-hidden />
+      {discard.confirm}
+    </DialogPrimitive.Content>
+  );
+});
