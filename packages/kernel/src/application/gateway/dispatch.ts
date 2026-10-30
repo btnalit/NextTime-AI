@@ -30,6 +30,7 @@ import {
   recordRejectedOutput,
 } from '../task/index.js';
 import { ForbiddenError, assertActsForPerson, authorizeCapabilityCall } from './authorize.js';
+import type { CapabilityHandlerContext } from './capability-handler.js';
 import {
   type EvaluationSession,
   evaluationAuditAction,
@@ -749,7 +750,7 @@ export async function dispatchCapability(
         evaluation = await readEvaluationSession(client, workspaceId, caller.claims.sid);
         if (evaluation) sealOptions = { allow: evaluationSealAllowance(evaluation) };
       }
-      const handlerCtx: Parameters<typeof handler>[3] = {
+      const handlerCtx: CapabilityHandlerContext = {
         channel: caller.channel,
         principalId,
         scope: caller.channel === 'handle' ? caller.claims.scope : undefined,
@@ -791,6 +792,9 @@ export async function dispatchCapability(
             handlerCtx,
           )
         : null;
+      // Checked again where it is called (CodeQL js/unvalidated-dynamic-method-call): the check
+      // after the lookup is in the enclosing function, not this callback.
+      if (typeof handler !== 'function') throw new CapabilityNotImplementedError(name);
       const result = answered ?? (await handler(client, workspaceId, parsed.data, handlerCtx));
       // S10 E3-1c (I-E4): nothing a Handle gets back carries evaluation content — a suite's
       // canary or a verbatim run of a holdout case. Checked inside the call's own transaction, so
