@@ -705,6 +705,18 @@ describe('EvaluationPage — the month’s evaluation budget (S10 E3-2a)', () =>
     await waitFor(() => expect(within(exhausted).getByTestId('eval-budget-raise')).toBeTruthy());
   });
 
+  it('a budget of $0 reads as evaluation turned off, not a month used up (#822 UX P3-3)', async () => {
+    const http = scriptedHttp({
+      ...baseHandlers('owner'),
+      get_eval_budget: () => ({ ...BUDGET, monthlyBudgetUsd: 0, spentUsd: 0 }),
+    });
+    renderPage(http);
+    const card = await screen.findByTestId('eval-budget');
+    const exhausted = await within(card).findByTestId('eval-budget-exhausted');
+    expect(exhausted.textContent).toMatch(/本月评测预算是 \$0，不能试跑/);
+    expect(exhausted.textContent).not.toContain('用完');
+  });
+
   it('a budget it cannot read is an error with a retry, the page still usable', async () => {
     let fail = true;
     const http = scriptedHttp({

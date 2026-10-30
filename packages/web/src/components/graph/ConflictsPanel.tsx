@@ -12,7 +12,7 @@ import {
   conflictValueRows,
 } from '../../lib/graph-view.js';
 import { useT } from '../../lib/i18n.js';
-import { conflictTypeLabel, epistemicStatusLabel } from '../../lib/labels.js';
+import { conflictTypeLabel, epistemicStatusLabel, principalShownName } from '../../lib/labels.js';
 import { LocalizedError } from '../../lib/localized-error.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
@@ -301,7 +301,7 @@ function ConflictSide({
             ) : null}
             {side.assertedBy ? (
               <span className="meta-sep">
-                {t('断言者', 'Asserted by')} {side.assertedBy}
+                {t('断言者', 'Asserted by')} {principalShownName(side.assertedBy, t)}
               </span>
             ) : null}
           </div>

@@ -222,7 +222,8 @@ export async function endTrial(
       status: end.status,
       ...(end.status === 'scored' ? { verdict: end.verdict } : { error: end.error }),
       costUsd,
-      tokens,
+      // Not `tokens`: an audit reader masks a key by that name as if it held a credential.
+      tokenCount: tokens,
       runFinished,
     },
   });

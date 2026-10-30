@@ -28,6 +28,7 @@ import {
   decisionStatusLabel,
   objectTypeLabel,
   ontologyTypeKindLabel,
+  principalShownName,
   roleLabel,
   transportKindLabel,
   workerDefinitionKindLabel,
@@ -100,6 +101,7 @@ function withQuery(base: Record<string, unknown>, key: string, query: string) {
 async function resolveNames(
   http: CapabilityCaller,
   ids: readonly string[],
+  t: Translate,
 ): Promise<ReadonlyMap<string, string>> {
   if (ids.length === 0) return new Map();
   try {
@@ -107,7 +109,14 @@ async function resolveNames(
       ids: ids.slice(0, AUDIT_SCAN_LIMIT),
     });
     const names = new Map<string, string>();
-    for (const ref of page.items) if (ref.name) names.set(ref.id, ref.name);
+    for (const ref of page.items) {
+      if (!ref.name) continue;
+      // An internal service Principal by what it is, never its reserved `__…__` name.
+      names.set(
+        ref.id,
+        ref.kind === 'principal' ? (principalShownName(ref.name, t) ?? ref.name) : ref.name,
+      );
+    }
     return names;
   } catch {
     return new Map();
@@ -133,7 +142,11 @@ export function auditRecentSource(resourceType: string, t: Translate): PickerSou
         limit: AUDIT_SCAN_LIMIT,
       });
       const rows = page.items.filter((row) => row.resourceId);
-      const names = await resolveNames(http, [...new Set(rows.map((row) => row.resourceId ?? ''))]);
+      const names = await resolveNames(
+        http,
+        [...new Set(rows.map((row) => row.resourceId ?? ''))],
+        t,
+      );
       return dedupe(
         rows.map((row) => {
           const id = row.resourceId ?? '';
@@ -163,7 +176,7 @@ export function auditActorSource(t: Translate): PickerSource {
         limit: AUDIT_SCAN_LIMIT,
       });
       const ids = [...new Set(page.items.map((row) => row.actorPrincipalId))];
-      const names = await resolveNames(http, ids);
+      const names = await resolveNames(http, ids, t);
       return withSameNameIds(
         dedupe(
           page.items.map((row) => ({
@@ -376,7 +389,7 @@ const RESOURCE_SOURCES: Readonly<Record<string, SourceFactory>> = {
     { limit: PICKER_LIMIT },
     (principal, t) => ({
       id: principal.id,
-      label: principal.displayName ?? principal.id.slice(0, 8),
+      label: principalShownName(principal.displayName, t) ?? principal.id.slice(0, 8),
       detail: roleLabel(principal.role, t),
     }),
     'q',

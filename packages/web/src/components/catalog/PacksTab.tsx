@@ -20,6 +20,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { describeError, isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
+import { principalShownName } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
 import { PACK_REQUIREMENT_TONES, labelText } from '../../lib/status-tone.js';
 import { Button } from '../kit/button.js';
@@ -732,7 +733,8 @@ function ComponentView({
           <span>
             {provenance.channel === 'platform'
               ? t('创建工作区时由平台安装', 'Installed by the platform with the workspace')
-              : (provenance.appliedBy.displayName ?? shortId(provenance.appliedBy.id))}
+              : (principalShownName(provenance.appliedBy.displayName, t) ??
+                shortId(provenance.appliedBy.id))}
             {' · '}
             <time
               className="text-3"

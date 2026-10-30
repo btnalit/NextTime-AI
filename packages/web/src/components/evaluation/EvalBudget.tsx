@@ -47,6 +47,20 @@ export function trialEstimateLine(budget: EvalBudgetWire, t: Translate): string 
       );
 }
 
+/** Why no trial can start once the budget is spent. A budget of $0 is an owner turning evaluation
+ *  off, not a month used up, so it says that instead. */
+export function budgetSpentText(budget: EvalBudgetWire, t: Translate): string {
+  return budget.monthlyBudgetUsd === 0
+    ? t(
+        '本月评测预算是 $0，不能试跑。',
+        'This month’s evaluation budget is $0, so no trial can start.',
+      )
+    : t(
+        '本月的评测预算已经用完，下个月（UTC）重置前不能再试跑。',
+        'This month’s evaluation budget is spent; no trial can start until it resets next month (UTC).',
+      );
+}
+
 /** Where an owner raises the budget, or whom a reader asks. */
 export function RaiseBudgetHint({ isOwner }: { readonly isOwner: boolean }) {
   const t = useT();
@@ -146,11 +160,7 @@ function BudgetBody({
       ) : null}
       {standing.exhausted ? (
         <Notice tone="warn" testId="eval-budget-exhausted">
-          {t(
-            '本月的评测预算已经用完，试跑在下个月重置前都不能开始。',
-            'This month’s evaluation budget is spent; no trial can start until it resets next month.',
-          )}{' '}
-          <RaiseBudgetHint isOwner={isOwner} />
+          {budgetSpentText(budget, t)} <RaiseBudgetHint isOwner={isOwner} />
         </Notice>
       ) : isOwner ? (
         <span className="text-3 text-small">

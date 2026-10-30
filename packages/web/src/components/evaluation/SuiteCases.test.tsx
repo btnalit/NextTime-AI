@@ -941,8 +941,9 @@ describe('CaseTrials (S10 E3-2a 试跑)', () => {
     expect(within(trials).getByTestId('eval-case-trial-calls').textContent).toMatch(
       /没有调用夹具门/,
     );
-    // A member reads trials and starts none.
+    // A member reads trials and starts none, and is told who does (#822 UX P3-4).
     expect(within(trials).queryByTestId('eval-case-trial-start')).toBeNull();
+    await waitFor(() => expect(trials.textContent).toContain('试跑由构建者或工作区所有者发起。'));
   });
 
   it('a spent budget turns 试跑 off before anything starts, and says where it is raised', async () => {
@@ -961,6 +962,27 @@ describe('CaseTrials (S10 E3-2a 试跑)', () => {
     expect(
       (within(trials).getByTestId('eval-case-trial-start') as HTMLButtonElement).disabled,
     ).toBe(true);
+    // A builder starts trials, so is not told who does.
+    expect(trials.textContent).not.toContain('试跑由构建者或工作区所有者发起');
+  });
+
+  it('a budget of $0 says evaluation is off, not that the month is used up (#822 UX P3-3)', async () => {
+    const cases = [wholeCase()];
+    const http = scriptedHttp({
+      ...handlers(
+        'builder',
+        () => suite(cases),
+        () => cases,
+      ),
+      get_eval_budget: () => ({ ...BUDGET, monthlyBudgetUsd: 0, spentUsd: 0 }),
+    });
+    const trials = await openCaseTrials(http);
+    const exhausted = await within(trials).findByTestId('eval-case-trial-exhausted');
+    expect(exhausted.textContent).toMatch(/本月评测预算是 \$0，不能试跑/);
+    expect(exhausted.textContent).not.toContain('用完');
+    const start = within(trials).getByTestId('eval-case-trial-start') as HTMLButtonElement;
+    expect(start.disabled).toBe(true);
+    expect(start.title).toBe('本月评测预算是 $0，不能试跑。');
   });
 
   it('too little left for the estimate is said in the confirm, not refused', async () => {

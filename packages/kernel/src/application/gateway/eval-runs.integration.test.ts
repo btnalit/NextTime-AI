@@ -869,10 +869,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         taskId: passing.taskId,
         status: 'scored',
         verdict: 'passed',
-        tokens: 1550,
+        tokenCount: 1550,
         runFinished: true,
       });
       expect(JSON.stringify(ends.rows[0]?.payload)).not.toContain('web-1');
+      expect(ends.rows[0]?.payload).not.toHaveProperty('tokens');
 
       // A second tick finds nothing more to score for these, and a call after the end is refused.
       await runEvalTrialTick(pool);

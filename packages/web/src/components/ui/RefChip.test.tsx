@@ -29,6 +29,18 @@ describe('RefChip', () => {
     expect(screen.getByRole('button', { name: /^复制成员 id$/ })).toBeTruthy();
   });
 
+  it('names an internal service Principal by what it is, never by its __…__ name (#822 UX P2-1)', () => {
+    render(
+      <>
+        <RefChip kind="principal" id="p-eval" name="__evaluation_service__" testId="principal" />
+        <RefChip kind="object" id="o-1" name="__evaluation_service__" testId="object" />
+      </>,
+    );
+    expect(screen.getByTestId('principal').textContent).toContain('评测服务');
+    expect(screen.getByTestId('principal').getAttribute('title')).not.toContain('__');
+    expect(screen.getByTestId('object').textContent).toContain('__evaluation_service__');
+  });
+
   it('falls back to the grey bare id when the name is unknown', () => {
     const { container } = render(<RefChip kind="gatekeeper" id="gk-1" testId="ref" />);
     const chip = screen.getByTestId('ref');

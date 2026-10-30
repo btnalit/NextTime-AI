@@ -17,7 +17,7 @@ import {
   ontologyProposalDiff,
 } from '../../lib/graph-view.js';
 import { type Translate, useT } from '../../lib/i18n.js';
-import { ontologyTypeKindLabel } from '../../lib/labels.js';
+import { ontologyTypeKindLabel, principalShownName } from '../../lib/labels.js';
 import { DiscardReasonField } from '../catalog/DiscardReasonField.js';
 import { Button } from '../kit/button.js';
 import { Combobox } from '../kit/combobox.js';
@@ -672,7 +672,7 @@ function ProposalsListView({ http, onSelect }: ProposalsListViewProps) {
                  *  TasksPage.tsx's own `nameOfPrincipal` doc comment: "the full chip belongs in
                  *  the detail, this is the row"). */}
                 <span className="text-13 font-medium text-text">
-                  {row.proposedBy.displayName ?? shortId(row.proposedBy.id)}
+                  {principalShownName(row.proposedBy.displayName, t) ?? shortId(row.proposedBy.id)}
                 </span>
                 <StatusChip machine="publishable" status={row.status} size="s" />
               </span>

@@ -39,6 +39,7 @@ import { StatusChip } from '../kit/status-chip.js';
 import {
   RaiseBudgetHint,
   budgetLine,
+  budgetSpentText,
   trialEstimateLine,
   useEvalBudget,
   useIsOwner,
@@ -110,8 +111,8 @@ export function CaseTrials({ http, suite, evalCase }: CaseTrialsProps) {
                 size="s"
                 disabled={standing === null || standing.exhausted}
                 title={
-                  standing?.exhausted
-                    ? t('本月评测预算已用完', 'This month’s evaluation budget is spent')
+                  standing?.exhausted && budgetData !== null
+                    ? budgetSpentText(budgetData, t)
                     : standing === null
                       ? budget.state.status === 'error'
                         ? t(
@@ -186,7 +187,13 @@ export function CaseTrials({ http, suite, evalCase }: CaseTrialsProps) {
           ? t(
               '试跑用钉住的 Worker 版本把这条用例跑一次：调用夹具门由夹具规则作答，不调用真实系统，不能出网；跑完用断言判分。会花模型费用，计入本月评测预算。',
               'A trial runs this case once with the pinned Worker version: calls to the fixture gates are answered by the fixture rules, no real system is called and there is no network access; the assertions then judge it. It spends model cost against this month’s evaluation budget.',
-            )
+            ) +
+            (canStart
+              ? ''
+              : t(
+                  '试跑由构建者或工作区所有者发起。',
+                  ' A builder or a workspace owner starts trials.',
+                ))
           : t(
               '这条用例已经不在用例集里，不能再试跑；下面是它之前的试跑。',
               'This case is no longer in the suite and cannot be tried again; its earlier trials are below.',
@@ -194,7 +201,9 @@ export function CaseTrials({ http, suite, evalCase }: CaseTrialsProps) {
       </p>
       {live && budgetData !== null ? (
         <p className="text-3 text-small tabular" data-testid="eval-case-trial-budget">
-          {budgetLine(budgetData, t)}。{trialEstimateLine(budgetData, t)}
+          {budgetLine(budgetData, t)}
+          {t('。', '. ')}
+          {trialEstimateLine(budgetData, t)}
         </p>
       ) : null}
       {live && budget.state.status === 'error' ? (
@@ -210,10 +219,7 @@ export function CaseTrials({ http, suite, evalCase }: CaseTrialsProps) {
       ) : null}
       {canStart && standing?.exhausted ? (
         <Notice tone="warn" testId="eval-case-trial-exhausted">
-          {t(
-            '本月的评测预算已经用完，下个月（UTC）重置前不能再试跑。',
-            'This month’s evaluation budget is spent; no trial can start until it resets next month (UTC).',
-          )}{' '}
+          {budgetData !== null ? budgetSpentText(budgetData, t) : null}{' '}
           <RaiseBudgetHint isOwner={isOwner} />
         </Notice>
       ) : null}

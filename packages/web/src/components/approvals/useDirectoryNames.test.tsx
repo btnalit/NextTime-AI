@@ -2,11 +2,12 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import type { GatekeeperListRow } from '../../lib/governance.js';
+import type { GatekeeperListRow, PrincipalRow } from '../../lib/governance.js';
 import {
   resourceScopeLabel,
   useGatekeeperDirectory,
   useGatekeeperNames,
+  usePrincipalDirectory,
 } from './useDirectoryNames.js';
 
 /**
@@ -88,6 +89,56 @@ describe('useGatekeeperDirectory / useGatekeeperNames', () => {
     render(<NamesOnlyProbe http={http} />);
     await waitFor(() => expect(screen.getByTestId('names-probe').textContent).toBe('RagFlow'));
     expect(http.calls).toEqual(['list_gatekeepers']);
+  });
+});
+
+function principal(overrides: Partial<PrincipalRow> = {}): PrincipalRow {
+  return {
+    id: 'p-1',
+    kind: 'human',
+    role: 'owner',
+    displayName: 'Ada',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    hasApiKey: false,
+    internal: false,
+    ...overrides,
+  };
+}
+
+function PrincipalProbe({ http }: { readonly http: CapabilityCaller }) {
+  const { rows, names, same } = usePrincipalDirectory(http);
+  if (rows === undefined) return <div data-testid="principal-probe">loading</div>;
+  return (
+    <div data-testid="principal-probe">
+      {rows.map((row) => `${names.get(row.id) ?? '?'}${same.has(row.id) ? '*' : ''}`).join(' | ')}
+    </div>
+  );
+}
+
+describe('usePrincipalDirectory', () => {
+  it('names an internal service Principal by what it is — every page’s principal chips and rows read through here (#822 UX P2-1)', async () => {
+    const rows = [
+      principal(),
+      principal({
+        id: 'p-eval',
+        kind: 'service',
+        displayName: '__evaluation_service__',
+        internal: true,
+      }),
+      principal({ id: 'p-svc', kind: 'service', displayName: '评测服务' }),
+    ];
+    const http: CapabilityCaller = {
+      call: vi.fn(async (name: string) => {
+        if (name === 'get_workspace') return { caller: { id: 'p-1', role: 'owner' } };
+        if (name !== 'list_principals') throw new Error(`unscripted capability ${name}`);
+        return { items: rows };
+      }) as CapabilityCaller['call'],
+    };
+    render(<PrincipalProbe http={http} />);
+    // A member who names themselves 「评测服务」 is told apart from the platform's own one.
+    await waitFor(() =>
+      expect(screen.getByTestId('principal-probe').textContent).toBe('Ada | 评测服务* | 评测服务*'),
+    );
   });
 });
 

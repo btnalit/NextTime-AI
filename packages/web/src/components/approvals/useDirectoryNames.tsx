@@ -6,6 +6,8 @@ import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import type { GatekeeperListRow, PrincipalRow } from '../../lib/governance.js';
+import { useT } from '../../lib/i18n.js';
+import { principalShownName } from '../../lib/labels.js';
 import { sameNameIds } from '../../lib/same-name.js';
 import { useRefNames } from '../ui/RefChip.js';
 
@@ -78,15 +80,17 @@ export function usePrincipalDirectory(http: CapabilityCaller): PrincipalDirector
   }, [http, reads, markDenied]);
   const principals = useResource(load);
   const loaded = principals.state.status === 'ready' ? principals.state.data : undefined;
-  const names = useRefNames(loaded?.items);
+  // An internal service Principal reads by what it is (「评测服务」), never by its reserved
+  // `__…__` name — the one place every page's principal chips resolve through.
+  const t = useT();
+  const shown = useCallback(
+    (row: PrincipalRow) => principalShownName(row.displayName, t) ?? undefined,
+    [t],
+  );
+  const names = useRefNames(loaded?.items, shown);
   const same = useMemo(
-    () =>
-      sameNameIds(
-        loaded?.items,
-        (row) => row.id,
-        (row) => row.displayName,
-      ),
-    [loaded?.items],
+    () => sameNameIds(loaded?.items, (row) => row.id, shown),
+    [loaded?.items, shown],
   );
   return { rows: loaded?.items, names, same, failed: loaded?.failed ?? false };
 }
