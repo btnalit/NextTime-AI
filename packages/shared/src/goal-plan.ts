@@ -56,7 +56,10 @@ const RESERVED_FIELD_NAMES: ReadonlySet<string> = new Set([
 
 export const StepKeySchema = z.string().regex(STEP_KEY_PATTERN);
 
-/** S11 GO3d: how the platform reconciles one action of the step. */
+/** S11 GO3d: how the platform reconciles one action of the step. Its check is an observation and
+ *  a predicate over the result, or — S11 「门确认不存在」, for an action that removes something — an
+ *  absence call with no predicate: the gate confirming the thing is not there shows the removal
+ *  took effect. */
 export const StepReconcileSchema = z
   .object({
     action: z
@@ -66,7 +69,7 @@ export const StepReconcileSchema = z
         params: z.record(z.unknown()).optional(),
       })
       .strict(),
-    check: ObservationCheckSchema,
+    check: z.union([ObservationCheckSchema, ObservationAbsenceCheckSchema]),
   })
   .strict();
 

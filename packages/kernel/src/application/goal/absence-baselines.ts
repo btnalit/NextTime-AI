@@ -43,6 +43,10 @@ import type { StepRunRow } from './types.js';
  *  show was this goal's doing. */
 export const NEVER_SEEN_PRESENT = 'never_seen_present';
 
+/** The `last_error` of a take settled `unavailable` because the gate answered with data that does
+ *  not show the thing there (`absence-baseline.ts` `presenceShown`, legacy 507). */
+export const PRESENCE_NOT_CONFIRMED = 'presence_not_confirmed';
+
 /** A step that ended needs no baseline any more: it passed its checks, or will not be verified. */
 const ENDED_STEP_STATUSES: ReadonlySet<StepRunStatus> = new Set([
   'succeeded',
@@ -507,6 +511,25 @@ export async function absenceSeenBefore(
               (select s.step_key from step_runs s where s.workspace_id = $1 and s.id = $3::uuid),
               $4, $5::jsonb, now()), false) as seen`,
     [workspaceId, check.goalRunId, check.stepRunId, check.checkKey, JSON.stringify(check.call)],
+  );
+  return result.rows[0]?.seen === true;
+}
+
+/** Whether the run saw what a reconcile check's absence call looks for before the action it
+ *  reconciles was raised — a `seen_present` baseline, of the action's step or of the goal, with the
+ *  same call, on an Observation older than the ActionRequest (governance/0029's
+ *  `action_request_absence_seen_before`, the rule the database holds the platform's `effect_seen`
+ *  on a "not there" answer to — I-AB1). A plan makes such a call only as an `observe_absent`
+ *  acceptance check's (`plan.ts`), so its baseline was taken before the step started. */
+export async function absenceSeenBeforeAction(
+  client: PoolClient,
+  workspaceId: string,
+  actionRequestId: string,
+  call: ObservationAbsenceCheck,
+): Promise<boolean> {
+  const result = await client.query<{ seen: boolean }>(
+    'select coalesce(action_request_absence_seen_before($1, $2, $3::jsonb), false) as seen',
+    [workspaceId, actionRequestId, JSON.stringify(call)],
   );
   return result.rows[0]?.seen === true;
 }

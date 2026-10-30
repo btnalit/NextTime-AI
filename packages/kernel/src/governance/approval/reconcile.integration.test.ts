@@ -1075,5 +1075,129 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
       });
     });
+
+    describe('the platform’s finding on a "not there" answer (S11 「门确认不存在」 reconcile, governance/0029, I-AB1)', () => {
+      const ABSENT = () => ({ gatekeeperId, operation: 'inventory.get', params: { sku: 'old' } });
+      const REVIEW = () => ({ reviewedBy: ownerId, reviewedAt: new Date().toISOString() });
+      const observed = (id: string, observationId: string, sourceId: string) =>
+        as(requesterId, (client) =>
+          recordObservedReconciliation(client, workspaceId, {
+            actionRequestId: id,
+            observationId,
+            sourceId,
+            actorPrincipalId: requesterId,
+          }),
+        );
+      const NOT_BASELINED =
+        /the platform's effect_seen on a "not there" answer rests on the request's own reconcile check making that absence call, under a version whose answers a person confirmed, and on an earlier baseline of the call that saw the thing before the action \(I-AB1\)/;
+
+      interface AbsentCase {
+        /** The baseline: of the step (default), the goal's (`null`), another step's, or none. */
+        readonly baselineStepKey?: string | null | 'none';
+        readonly baselineCall?: Record<string, unknown>;
+        /** Look after the request was raised instead of before. */
+        readonly baselineAfter?: boolean;
+        /** What the request's reconcile check declares. */
+        readonly declared?: Record<string, unknown>;
+        /** What the Observation the finding rests on records, beside the defaults. */
+        readonly evidence?: Record<string, unknown>;
+      }
+
+      /** A lost request of a goal step whose run has (or lacks) a baseline, its reconcile check
+       *  making an absence call, and the platform's finding on a "not there" answer. */
+      async function absentFinding(options: AbsentCase = {}) {
+        const stepRunId = await step();
+        const [stepRow] = await raw<{ goal_run_id: string }>(
+          'select goal_run_id from step_runs where workspace_id = $1 and id = $2',
+          [workspaceId, stepRunId],
+        );
+        const goalRunId = stepRow?.goal_run_id as string;
+        const source = await gateSource();
+        const baseline = async () => {
+          if (options.baselineStepKey === 'none') return;
+          const looked = await observation(source, {
+            purpose: 'absence_baseline',
+            goalRunId,
+            outcome: 'satisfied',
+          });
+          await raw(
+            `insert into goal_absence_baselines
+               (workspace_id, goal_run_id, step_key, check_key, take, observation_check, status,
+                attempts, first_attempt_at, observation_id, settled_at)
+             values ($1, $2, $3, 'gone', 1, $4::jsonb, 'seen_present', 1, now(), $5, now())`,
+            [
+              workspaceId,
+              goalRunId,
+              options.baselineStepKey === undefined ? 's' : options.baselineStepKey,
+              JSON.stringify(options.baselineCall ?? ABSENT()),
+              looked,
+            ],
+          );
+        };
+        if (!options.baselineAfter) await baseline();
+        const created = await request(stepRunId, { sku: 'old', n: randomUUID() });
+        await inDoubt(created.id);
+        if (options.baselineAfter) await baseline();
+        await asOwner((client) =>
+          ensureReconcileCheck(client, workspaceId, {
+            actionRequestId: created.id,
+            observationCheck: (options.declared ?? ABSENT()) as ReturnType<typeof ABSENT>,
+          }),
+        );
+        const call = options.declared ?? ABSENT();
+        const evidence = await observation(source, {
+          actionRequestId: created.id,
+          gatekeeperId: call.gatekeeperId,
+          operation: call.operation,
+          outcome: 'satisfied',
+          absent: { status: 404 },
+          absentAnswersReview: REVIEW(),
+          ...options.evidence,
+        });
+        return () => observed(created.id, evidence, source);
+      }
+
+      it('records effect_seen on the step’s or the goal’s baseline of the same call taken before the action', async () => {
+        const onStep = await (await absentFinding())();
+        expect(onStep.actionRequest.reconciliation).toBe('effect_seen');
+        const onGoal = await (await absentFinding({ baselineStepKey: null }))();
+        expect(onGoal.actionRequest.reconciliation).toBe('effect_seen');
+      });
+
+      it('refuses it with no baseline, a later one, one of another call or another step, an unconfirmed version (or a blank confirmation), or a check with a predicate', async () => {
+        const refused: [string, AbsentCase][] = [
+          ['no baseline', { baselineStepKey: 'none' }],
+          ['looked after the action', { baselineAfter: true }],
+          ['another call', { baselineCall: { ...ABSENT(), params: { sku: 'other' } } }],
+          ['another step', { baselineStepKey: 'other' }],
+          ['no confirmation', { evidence: { absentAnswersReview: undefined } }],
+          [
+            'a blank confirmation',
+            { evidence: { absentAnswersReview: { reviewedBy: '', reviewedAt: '' } } },
+          ],
+          ['another operation', { evidence: { operation: 'inventory.list' } }],
+          [
+            'a predicate',
+            {
+              declared: { ...ABSENT(), expect: { path: 'sku', op: 'eq', value: 'old' } },
+              evidence: { expect: { path: 'sku', op: 'eq', value: 'old' } },
+            },
+          ],
+        ];
+        for (const [label, options] of refused) {
+          const finding = await absentFinding(options);
+          await expect(finding(), label).rejects.toThrow(NOT_BASELINED);
+        }
+      });
+
+      it('leaves a finding on data alone, and a person’s on whatever they saw', async () => {
+        // A person's finding: theirs to make, whatever the run's baselines say.
+        const stepRunId = await step();
+        const created = await request(stepRunId, { sku: 'old', n: randomUUID() });
+        await inDoubt(created.id);
+        await reconcile(requesterId, { actionRequestId: created.id, verdict: 'effect_seen' });
+        expect((await row(created.id)).reconciliation).toBe('effect_seen');
+      });
+    });
   },
 );

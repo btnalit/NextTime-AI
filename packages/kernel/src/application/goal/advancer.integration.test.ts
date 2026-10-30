@@ -3920,6 +3920,23 @@ describe.runIf(DATABASE_URL !== undefined)(
             blast_radius: 'low',
             auto_approvable: true,
           };
+          /** S11 「门确认不存在」 reconcile: removing a service, and looking one up — the target's
+           *  404 to the lookup means it has no such service. */
+          const REMOVE: Operation = {
+            ...RESTART,
+            name: 'svc.remove',
+            binding: { kind: 'http', method: 'DELETE', path: '/services/{name}' },
+          };
+          const LOOKUP: Operation = {
+            ...STATUS,
+            name: 'svc.lookup',
+            binding: {
+              kind: 'http',
+              method: 'GET',
+              path: '/services/{name}',
+              absent_statuses: [404],
+            },
+          };
 
           beforeAll(async () => {
             gate = await admin(async (client) => {
@@ -3938,16 +3955,23 @@ describe.runIf(DATABASE_URL !== undefined)(
               });
               await importManifest(client, workspaceId, {
                 gatekeeperId: registered.gatekeeperId,
-                operations: [RESTART, STATUS],
+                operations: [RESTART, STATUS, REMOVE, LOOKUP],
                 proposedBy: { id: ownerId, kind: 'human' },
                 activityId: activity.id,
               });
-              for (const operation of [RESTART, STATUS]) {
+              for (const operation of [RESTART, STATUS, REMOVE]) {
                 await publishOperation(client, workspaceId, {
                   gatekeeperId: registered.gatekeeperId,
                   name: operation.name,
                 });
               }
+              // S11 「门确认不存在」 B-a: a person publishes LOOKUP, confirming its declared 404.
+              await publishOperation(client, workspaceId, {
+                gatekeeperId: registered.gatekeeperId,
+                name: LOOKUP.name,
+                actor: { principalId: ownerId, role: 'owner' },
+                absentAnswersReviewed: true,
+              });
               return registered.gatekeeperId;
             });
           });
@@ -4752,6 +4776,141 @@ describe.runIf(DATABASE_URL !== undefined)(
               },
             });
             expect(await propose([base])).toMatchObject({ goalRunId: expect.any(String) });
+          });
+
+          describe('a removal reconciled by the gate confirming the thing is gone (S11 「门确认不存在」 reconcile, I-AB1)', () => {
+            // Functions: `gate` is set in `beforeAll`, after this block is collected.
+            const lookup = () => ({
+              gatekeeperId: gate,
+              operation: 'svc.lookup',
+              params: { name: 'web' },
+            });
+            const removal = () => ({
+              action: { gatekeeperId: gate, operation: 'svc.remove', params: { name: 'web' } },
+              check: lookup(),
+            });
+            const GONE = async () => ({ data: null, absent: { status: 404 as const } });
+            const THERE = async () => ({ data: { name: 'web', state: 'running' } });
+
+            /** A goal whose step `a` removes `web` and reconciles that with the lookup its own
+             *  absence check `gone` makes; the baseline sees `web` before `a` starts; `a`'s
+             *  removal is approved, starts and is lost; the Worker reports; one advance. */
+            async function lostRemoval(requester: string) {
+              const goalRunId = await startGoal(requester, [
+                {
+                  key: 'a',
+                  reconcile: [removal()],
+                  acceptance: [{ kind: 'observe_absent', key: 'gone', check: lookup() }],
+                },
+                { key: 'b', dependsOn: ['a'] },
+              ]);
+              await advance(goalRunId, requester);
+              expect(await seeAbsenceBaselines(goalRunId, gateClient)).toBe(1);
+              await advance(goalRunId, requester);
+              const stepA = (await stepsOf(goalRunId)).a as StepRunRow;
+              const asked = await ask(gate, stepA.id, requester, 'svc.remove', { name: 'web' });
+              await admin((client) =>
+                approveActionRequest(client, workspaceId, {
+                  actionRequestId: asked.id,
+                  approverPrincipalId: ownerId,
+                  approverRole: 'owner',
+                }),
+              );
+              await admin((client) => startActionRequestExecution(client, workspaceId, asked.id));
+              await lose(asked.id);
+              await completeStep(stepA.id, requester);
+              await advance(goalRunId, requester);
+              return { goalRunId, stepA, action: asked.id };
+            }
+
+            it('the gate’s 404 after a baseline that saw the service records effect_seen; the step goes on to its own check without running the removal again', async () => {
+              const requester = await newPrincipal();
+              const { goalRunId, stepA, action } = await lostRemoval(requester);
+              expect((await stepsOf(goalRunId)).a).toMatchObject({
+                status: 'waiting',
+                waitingReason: 'reconcile',
+              });
+              expect(await checkOf(action)).toMatchObject({
+                status: 'pending',
+                observationCheck: lookup(),
+              });
+
+              gateClient.answer = GONE;
+              const calls = gateClient.calls.length;
+              expect(await runReconcileCheck(checkDeps(), await mustBeDue(action))).toBe('seen');
+              expect(gateClient.calls.slice(calls)).toHaveLength(1);
+              const found = await admin((client) => getActionRequest(client, workspaceId, action));
+              expect(found?.reconciliation).toBe('effect_seen');
+              const [evidence] = await evidenceOf(action);
+              expect(evidence?.content).toMatchObject({
+                actionRequestId: action,
+                operation: 'svc.lookup',
+                outcome: 'satisfied',
+                absent: { status: 404 },
+                absentAnswersReview: { reviewedBy: ownerId, reviewedAt: expect.any(String) },
+              });
+              expect(evidence?.content).not.toHaveProperty('expect');
+
+              await advance(goalRunId, requester);
+              // The action counts as executed: the step's own absence check is next.
+              expect((await stepsOf(goalRunId)).a).toMatchObject({
+                status: 'waiting',
+                waitingReason: 'acceptance',
+              });
+              expect(await requestsOf(stepA.id)).toBe(1);
+              expect((await goalOf(goalRunId)).status).toBe('running');
+            });
+
+            it('the service still there is tried again (target_still_present), then leaves the finding to a person', async () => {
+              const requester = await newPrincipal();
+              const { goalRunId, action } = await lostRemoval(requester);
+              gateClient.answer = THERE;
+              expect(await runReconcileCheck(checkDeps(), await mustBeDue(action))).toBe('retry');
+              expect(await checkOf(action)).toMatchObject({
+                status: 'pending',
+                lastError: 'target_still_present',
+              });
+              await dueNow(action);
+              expect(
+                await runReconcileCheck(checkDeps({ maxAttempts: 2 }), await mustBeDue(action)),
+              ).toBe('not_seen');
+              expect(
+                (await admin((client) => getActionRequest(client, workspaceId, action)))
+                  ?.reconciliation,
+              ).toBeNull();
+              await advance(goalRunId, requester);
+              expect(await goalOf(goalRunId)).toMatchObject({
+                status: 'paused',
+                pauseReason: 'awaiting_reconcile',
+              });
+            });
+
+            it('without a baseline that saw the service before the removal, the check asks nothing and leaves the finding to a person (never_seen_present)', async () => {
+              const requester = await newPrincipal();
+              const { goalRunId, action } = await lostRemoval(requester);
+              // Data no write path makes: the look recorded after the request was raised.
+              await raw(
+                `update observations set created_at = now() + interval '1 minute'
+                  where workspace_id = $1 and id = (
+                    select observation_id from goal_absence_baselines
+                     where workspace_id = $1 and goal_run_id = $2)`,
+                [workspaceId, goalRunId],
+              );
+              gateClient.answer = GONE;
+              const calls = gateClient.calls.length;
+              expect(await runReconcileCheck(checkDeps(), await mustBeDue(action))).toBe(
+                'unavailable',
+              );
+              expect(gateClient.calls).toHaveLength(calls);
+              expect(await checkOf(action)).toMatchObject({
+                status: 'unavailable',
+                lastError: 'never_seen_present',
+              });
+              expect(
+                (await admin((client) => getActionRequest(client, workspaceId, action)))
+                  ?.reconciliation,
+              ).toBeNull();
+            });
           });
         });
       });
@@ -6064,6 +6223,40 @@ describe.runIf(DATABASE_URL !== undefined)(
           [3, 'unavailable'],
           [4, 'seen_present'],
         ]);
+      });
+
+      it('legacy 507: a 200 whose data does not show the thing — an empty result — is no look that saw it: unavailable at once, nothing recorded as seen, and the run pauses saying why', async () => {
+        const requester = await newPrincipal();
+        const { goalRunId } = await proposeWith(requester, [absence()]);
+        await advance(goalRunId, requester);
+        const calls = observeClient.calls.length;
+        expect(
+          await lookBefore(goalRunId, async () => ({ data: { items: [], total: 0 } })),
+        ).toEqual(['unavailable']);
+        expect(observeClient.calls.length).toBe(calls + 1);
+        expect(await baselinesOf(goalRunId)).toMatchObject([
+          {
+            take: 1,
+            status: 'unavailable',
+            observationId: null,
+            lastError: 'presence_not_confirmed',
+          },
+        ]);
+        expect(await baselineEvidenceOf(goalRunId)).toEqual([]);
+        await advance(goalRunId, requester);
+        expect(await attemptsOfA(goalRunId)).toEqual([]);
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'needs_decision',
+        });
+        expect(await pauseDetail(goalRunId)).toBe(
+          "acceptance check gone: before the goal's work started the gate answered with data that does not show the thing there (presence_not_confirmed: an empty result, or not the shape the Operation's result mapping declares) — the params may name nothing, so the check could never show this goal removed it; revise the check's params or the plan, resume to look again, or cancel",
+        );
+        // Resumed, the thing shows: seen, and the step starts.
+        await resumeAs(goalRunId, requester);
+        expect(await lookBefore(goalRunId, RUNNING)).toEqual(['seen_present']);
+        await advance(goalRunId, requester);
+        expect(await attemptsOfA(goalRunId)).toHaveLength(1);
       });
 
       it('S11 「门确认不存在」 B-c: a pause supersedes a take not yet made and the resume opens another; a revision that keeps a check’s call keeps what was seen, one that changes it looks again', async () => {

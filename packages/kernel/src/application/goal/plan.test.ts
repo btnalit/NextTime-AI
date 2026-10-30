@@ -145,14 +145,19 @@ describe('parsePlan — reconcile declarations (S11 GO3d)', () => {
     expect(plan.steps[0]?.reconcile).toHaveLength(2);
   });
 
-  it('refuses an empty list, unknown fields, a missing predicate and the same action twice', () => {
+  it('refuses an empty list, unknown fields and the same action twice', () => {
     expect(problemsOf({ steps: [step('a', { reconcile: [] })] })).toHaveLength(1);
     expect(
       problemsOf({ steps: [step('a', { reconcile: [{ ...declaration(), mode: 'auto' }] })] }),
     ).toHaveLength(1);
-    const { expect: _missing, ...noPredicate } = declaration().check;
     expect(
-      problemsOf({ steps: [step('a', { reconcile: [{ ...declaration(), check: noPredicate }] })] }),
+      problemsOf({
+        steps: [
+          step('a', {
+            reconcile: [{ ...declaration(), check: { ...declaration().check, absent: true } }],
+          }),
+        ],
+      }),
     ).toHaveLength(1);
     // The same identity, params in another order: one declaration per action.
     const reordered = {
@@ -224,6 +229,67 @@ describe('parsePlan — reconcile declarations (S11 GO3d)', () => {
       expect(() =>
         parsePlan({ steps: [step('a', { reconcile: [declaration(expect_)] })] }),
       ).not.toThrow();
+    }
+  });
+});
+
+describe('parsePlan — reconcile declarations with an absence call (S11 「门确认不存在」 reconcile)', () => {
+  const gate = randomUUID();
+  const action = { gatekeeperId: gate, operation: 'vm.delete', params: { name: 'old-web' } };
+  const call = { gatekeeperId: gate, operation: 'vm.get', params: { name: 'old-web' } };
+  const absent = (key: string, check: unknown = call) => ({ kind: 'observe_absent', key, check });
+  const message =
+    'step "a": reconcile[0]: an absence check shows the action took effect only if the platform saw the thing there before it — make the same call (Gatekeeper, Operation and params) in an observe_absent acceptance check of this step or of the goal: the platform looks with it before the step starts';
+
+  it("accepts one whose call is an observe_absent check's — the step's own or the goal's", () => {
+    const own = parsePlan({
+      steps: [step('a', { reconcile: [{ action, check: call }], acceptance: [absent('gone')] })],
+    });
+    expect(own.steps[0]?.reconcile?.[0]?.check).toEqual(call);
+    expect(() =>
+      parsePlan({
+        steps: [step('a', { reconcile: [{ action, check: call }] })],
+        acceptance: [absent('gone')],
+      }),
+    ).not.toThrow();
+  });
+
+  it('refuses one with no such check, or whose check makes another call', () => {
+    expect(problemsOf({ steps: [step('a', { reconcile: [{ action, check: call }] })] })).toEqual([
+      message,
+    ]);
+    // Other params, another step's check, or an observation with a predicate: not the baseline.
+    for (const plan of [
+      {
+        steps: [
+          step('a', {
+            reconcile: [{ action, check: call }],
+            acceptance: [absent('gone', { ...call, params: { name: 'old-db' } })],
+          }),
+        ],
+      },
+      {
+        steps: [
+          step('a', { reconcile: [{ action, check: call }] }),
+          step('b', { acceptance: [absent('gone')] }),
+        ],
+      },
+      {
+        steps: [
+          step('a', {
+            reconcile: [{ action, check: call }],
+            acceptance: [
+              {
+                kind: 'observe_predicate',
+                key: 'gone',
+                check: { ...call, expect: { path: 'state', op: 'eq', value: 'deleted' } },
+              },
+            ],
+          }),
+        ],
+      },
+    ]) {
+      expect(problemsOf(plan), JSON.stringify(plan)).toEqual([message]);
     }
   });
 });

@@ -11,7 +11,10 @@ import {
   recordObservedReconciliation,
   settleReconcileCheck,
 } from '../../governance/approval/index.js';
+import type { OperationAbsentAnswersReview } from '../../governance/gatekeepers/index.js';
 import type { PredicateOutcome } from '../../substrate/epistemic/index.js';
+import { NEVER_SEEN_PRESENT, absenceSeenBeforeAction } from './absence-baselines.js';
+import { TARGET_STILL_PRESENT } from './acceptance-checks.js';
 import { markGoalRunDue } from './advancer.js';
 import {
   PLATFORM_OBSERVATION_MAX_BACKOFF_MS,
@@ -19,6 +22,7 @@ import {
   type PlatformObservationAnswer,
   callPlatformObservation,
   defaultPlatformObservationBackoffMs,
+  expectsAbsence,
   platformObservationRetryDelayMs,
   preparePlatformObservation,
   recordPlatformObservation,
@@ -45,6 +49,16 @@ import { lockGoalRun } from './service.js';
  *     next advance pauses the run `awaiting_reconcile` for a person. The platform never records
  *     `effect_absent`: an observation that does not show the effect may be early, or watch the
  *     wrong thing — only the direction that lets the step go on is the platform's.
+ *   - **an absence call** (S11 「门确认不存在」, for an action that removes something) — satisfied
+ *     exactly when the gate confirms the thing is not there (`platform-observation.ts`); data back
+ *     is the thing still there (`target_still_present`), tried again as above. Asked only when the
+ *     run has a baseline of the same call that saw the thing before the action was raised
+ *     (`absenceSeenBeforeAction`, I-AB1; a plan makes the call only as an `observe_absent`
+ *     acceptance check's, `plan.ts`, so that baseline was taken before the step started): without
+ *     one, "not there" could be params that never named anything, so the check settles
+ *     `unavailable` (`never_seen_present`) at once, without a call, and a person reconciles. The
+ *     database holds the platform's `effect_seen` on a "not there" answer to the same rule
+ *     (governance/0029).
  *   - **no answer** (the network, a timeout, a 5xx, a 429 — `adapters/gatekeeper-client`'s
  *     `gateFailureRetry`: `transient`) — tried again under the same caps; at the last, `not_seen`
  *     on the latest Observation if an earlier attempt made one, else `unavailable`.
@@ -257,6 +271,9 @@ type Settlement =
       readonly absent?: GateAbsence;
       readonly operationDigest: string;
       readonly credentialReview: Record<string, unknown>;
+      /** An absence call's: the published version's confirmation (`PreparedPlatformObservation`),
+       *  which the Observation records and governance/0029 holds `effect_seen` on it to. */
+      readonly absentAnswersReview?: OperationAbsentAnswersReview;
     }
   /** Nothing a retry could change. */
   | { readonly kind: 'unavailable'; readonly code: string; readonly error?: string | null }
@@ -297,6 +314,16 @@ export async function runReconcileCheck(
   }
 
   const check = claimed.observationCheck;
+  if (expectsAbsence(check)) {
+    // An absence call shows a removal took effect only against a baseline that saw the thing
+    // before the action (I-AB1, governance/0029): without one there is nothing to ask the gate.
+    const seenBefore = await withWorkspace(deps.pool, context, (client) =>
+      absenceSeenBeforeAction(client, due.workspaceId, due.actionRequestId, check),
+    );
+    if (!seenBefore) {
+      return settle(deps, due, claimed, { kind: 'unavailable', code: NEVER_SEEN_PRESENT });
+    }
+  }
   const prepared = await withWorkspace(deps.pool, context, (client) =>
     preparePlatformObservation(client, due.workspaceId, due.requesterId, check),
   );
@@ -317,6 +344,9 @@ export async function runReconcileCheck(
       ...(answer.absent ? { absent: answer.absent } : {}),
       operationDigest: prepared.operationDigest,
       credentialReview: prepared.credentialReview,
+      ...(prepared.absentAnswersReview
+        ? { absentAnswersReview: prepared.absentAnswersReview }
+        : {}),
     });
   }
   return settle(deps, due, claimed, {
@@ -430,6 +460,9 @@ async function recordObservation(
     ...(settlement.absent ? { absent: settlement.absent } : {}),
     operationDigest: settlement.operationDigest,
     credentialReview: settlement.credentialReview,
+    ...(settlement.absentAnswersReview
+      ? { absentAnswersReview: settlement.absentAnswersReview }
+      : {}),
   });
 
   if (evaluation.outcome === 'satisfied') {
@@ -450,7 +483,9 @@ async function recordObservation(
       check,
       {
         delayMs: retryDelayMs,
-        lastError: notSeenCode(evaluation.outcome),
+        lastError: expectsAbsence(check.observationCheck)
+          ? TARGET_STILL_PRESENT
+          : notSeenCode(evaluation.outcome),
         observationId,
       },
       audit,

@@ -1127,6 +1127,126 @@ describe.runIf(DATABASE_URL !== undefined)(
         }
       });
 
+      it('counts the platform’s effect_seen on a "not there" answer without the request’s own absence reconcile check under a confirmed version and a look before the action that saw the thing (S11 「门确认不存在」 reconcile, I-AB1)', async () => {
+        const CALL = { gatekeeperId: randomUUID(), operation: 'vm.get', params: { name: 'old' } };
+        const REVIEW = { reviewedBy: randomUUID(), reviewedAt: new Date().toISOString() };
+        const observation = async (content: Record<string, unknown>, ago: string) => {
+          const rows = await raw<{ id: string }>(
+            `insert into observations (workspace_id, source_id, activity_id, content, created_at)
+             values ($1, $2, $3, $4::jsonb, now() - $5::interval) returning id`,
+            [workspaceId, randomUUID(), randomUUID(), JSON.stringify(content), ago],
+          );
+          return rows[0]?.id as string;
+        };
+        interface Case {
+          /** The look that saw the thing (`null`: none); by default the step's, before the request
+           *  (raised 20 minutes ago). */
+          readonly baseline?: {
+            readonly stepKey?: string | null;
+            readonly call?: unknown;
+            readonly ago?: string;
+          } | null;
+          /** What the request's reconcile check declares (`null`: no check). */
+          readonly declared?: unknown;
+          readonly evidence?: Record<string, unknown>;
+        }
+        /** Each case its own run: a look of the goal's own check vouches for all its steps. */
+        const reconciled = async (c: Case = {}) => {
+          const goalRunId = await goal();
+          await revision(goalRunId, 1, ['s']);
+          const stepKey = `r${randomUUID().slice(0, 8)}`;
+          const stepRunId = await step(goalRunId, stepKey, { status: 'waiting' });
+          if (c.baseline !== null) {
+            const baseline = c.baseline ?? {};
+            const looked = await observation(
+              { purpose: 'absence_baseline', goalRunId, outcome: 'unsatisfied' },
+              baseline.ago ?? '30 minutes',
+            );
+            await raw(
+              `insert into goal_absence_baselines (workspace_id, goal_run_id, step_key, check_key,
+                 take, observation_check, status, attempts, first_attempt_at, observation_id,
+                 settled_at)
+               values ($1, $2, $3, 'gone', 1, $4::jsonb, 'seen_present', 1, now(), $5, now())`,
+              [
+                workspaceId,
+                goalRunId,
+                baseline.stepKey === undefined ? stepKey : baseline.stepKey,
+                JSON.stringify(baseline.call ?? CALL),
+                looked,
+              ],
+            );
+          }
+          const requestId = await request({ status: 'executed', stepRunId });
+          if (c.declared !== null) {
+            await raw(
+              `insert into action_request_reconcile_checks
+                 (workspace_id, action_request_id, observation_check)
+               values ($1, $2, $3::jsonb)`,
+              [workspaceId, requestId, JSON.stringify(c.declared ?? CALL)],
+            );
+          }
+          const evidence = await observation(
+            {
+              purpose: 'reconcile_check',
+              actionRequestId: requestId,
+              gatekeeperId: CALL.gatekeeperId,
+              operation: CALL.operation,
+              outcome: 'satisfied',
+              absent: { status: 404 },
+              absentAnswersReview: REVIEW,
+              ...c.evidence,
+            },
+            '0 seconds',
+          );
+          const [found] = await raw<{ id: string }>(
+            `insert into decisions (workspace_id, status, activity_id, rationale, decided_by,
+               decided_at)
+             values ($1, 'approved', $2, $3::jsonb, null, now()) returning id`,
+            [
+              workspaceId,
+              randomUUID(),
+              JSON.stringify({
+                decision: 'reconcile',
+                actionRequestId: requestId,
+                verdict: 'effect_seen',
+                basis: 'observation',
+                observationId: evidence,
+              }),
+            ],
+          );
+          await raw(
+            `update action_requests
+                set status = 'failed', failure_kind = 'outcome_unknown', failed_at = now(),
+                    reconciliation = 'effect_seen', reconciliation_decision_id = $3
+              where workspace_id = $1 and id = $2`,
+            [workspaceId, requestId, found?.id],
+          );
+          return requestId;
+        };
+
+        const healthy = await reconciled();
+        const onGoalLook = await reconciled({ baseline: { stepKey: null } });
+        const breaches = [
+          await reconciled({ baseline: null }),
+          await reconciled({ baseline: { ago: '0 seconds' } }),
+          await reconciled({ baseline: { call: { ...CALL, params: { name: 'new' } } } }),
+          await reconciled({ baseline: { stepKey: 'another' } }),
+          await reconciled({ declared: null }),
+          await reconciled({
+            declared: { ...CALL, expect: { path: 'state', op: 'eq', value: 'x' } },
+          }),
+          await reconciled({ evidence: { absentAnswersReview: undefined } }),
+          await reconciled({ evidence: { operation: 'vm.list' } }),
+        ];
+
+        const result = await check((client) => checkIG5(client, ALL));
+        expect(mentioned(result, healthy)).toBe(false);
+        expect(mentioned(result, onGoalLook)).toBe(false);
+        for (const id of breaches) {
+          expect(flagged(result, 'reconciled-absent-unbaselined', id), id).toBe(true);
+        }
+      });
+
       it('counts a passed fact check whose Fact is not the Link it names; a run achieved on a Fact alone is achieved by a check the platform made (S11 GO4c)', async () => {
         const type = `test.go4c.${randomUUID().slice(0, 8)}`;
         const web = await object(`${type}.Service`, { name: 'web' });

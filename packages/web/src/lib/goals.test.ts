@@ -32,8 +32,11 @@ import {
   planHintKey,
   planHintText,
   predicateSentence,
+  reconcileAbsenceCheckOf,
+  reconcileCheckSentence,
   stepHintChipLabel,
   unresolvedActionText,
+  unresolvedCheckErrorText,
 } from './goals.js';
 import type { Translate } from './i18n.js';
 
@@ -374,13 +377,82 @@ describe('lib/goals', () => {
     expect(unresolvedActionText(action, false, zh).check).toMatch(/^平台核对中/);
   });
 
-  it('an action with no platform check says why a person checks it (a deletion leaves nothing to see)', () => {
+  it('an action with no platform check says a person checks it, and how a removal could be checked by the platform', () => {
     const text = unresolvedActionText(unresolved(), false, zh);
     expect(text.needs).toMatch(/生效了吗/);
-    expect(text.check).toMatch(/删除/);
+    expect(text.check).toMatch(
+      /^这一步没有为它声明平台核对，只能由人核对。删除这类动作也能交给平台核对：在这一步加一条核对声明/,
+    );
+    // #799 review #501 P3-2: both halves — the step's own reconcile declaration and the check.
+    expect(text.check).toMatch(/计划里还要有同一个调用的“不存在”验收检查/);
     expect(unresolvedActionText(unresolved({ needs: 'decision' }), false, zh).needs).toMatch(
       /重新执行，或者改计划/,
     );
+  });
+
+  it('a platform check that never saw the thing before the action says so (S11 「门确认不存在」 reconcile)', () => {
+    const check = (lastError: string) =>
+      unresolved({
+        platformCheck: {
+          status: 'unavailable',
+          attempts: 0,
+          lastError,
+          observationId: null,
+          nextAttemptAt: null,
+        },
+      });
+    expect(unresolvedActionText(check('never_seen_present'), false, zh).check).toBe(
+      '平台核对不了：动作之前平台没有看到过它在，就算门回答它不在，也证明不了是这个动作删掉的，所以平台没有去问门。要有人核对后记下结果。',
+    );
+    expect(unresolvedActionText(check('gate_unreachable'), false, zh).check).toMatch(
+      /^平台核对不了（观察被拒绝或一直没有答复）/,
+    );
+    // #799 UX P2-2: the line under it names the code only where the sentence has not said it —
+    // never_seen_present there is the runner not asking the gate, not an acceptance check's look.
+    expect(unresolvedCheckErrorText(check('never_seen_present'), zh)).toBeNull();
+    expect(unresolvedCheckErrorText(check('gate_unreachable'), zh)).toBe(
+      checkErrorLabel('gate_unreachable', zh),
+    );
+    expect(unresolvedCheckErrorText(unresolved(), zh)).toBeNull();
+  });
+
+  it('reads a reconcile absence call as what it asks, a predicate as an observation (#799 UX P3-2)', () => {
+    const gatekeeperId = '66000000-0000-4000-8000-0000000000d1';
+    const absence = { gatekeeperId, operation: 'vm.get', params: { name: 'old' } };
+    expect(reconcileCheckSentence(absence, 'vm-gate', zh)).toBe(
+      '在门「vm-gate」上以参数 {"name":"old"} 调用 vm.get，看要查的东西还在不在',
+    );
+    expect(reconcileCheckSentence({ gatekeeperId, operation: 'vm.get' }, 'vm-gate', zh)).toBe(
+      '在门「vm-gate」上调用 vm.get，看要查的东西还在不在',
+    );
+    expect(reconcileCheckSentence(absence, 'vm-gate', zh)).not.toMatch(/才算通过/);
+    const predicate = { ...absence, expect: { path: 'state', op: 'eq' as const, value: 'gone' } };
+    expect(reconcileCheckSentence(predicate, 'vm-gate', zh)).toBe(
+      observationSentence(predicate, 'vm-gate', zh),
+    );
+  });
+
+  it('names the absence check whose look a reconcile absence call goes by — the step’s, else the goal’s', () => {
+    const gatekeeperId = '66000000-0000-4000-8000-0000000000d1';
+    const call = { gatekeeperId, operation: 'vm.get', params: { name: 'old', zone: 'a' } };
+    // The same call, its params in another order.
+    const reordered = { params: { zone: 'a', name: 'old' }, operation: 'vm.get', gatekeeperId };
+    const goalCheck = { kind: 'observe_absent' as const, key: 'gone', check: reordered };
+    const stepCheck = { kind: 'observe_absent' as const, key: 'removed', check: call };
+    expect(reconcileAbsenceCheckOf([goalCheck], [stepCheck], call)).toEqual({
+      key: 'removed',
+      ofGoal: false,
+    });
+    expect(reconcileAbsenceCheckOf([goalCheck], [], call)).toEqual({ key: 'gone', ofGoal: true });
+    expect(
+      reconcileAbsenceCheckOf([goalCheck], [], { ...call, params: { name: 'other' } }),
+    ).toBeNull();
+    expect(
+      reconcileAbsenceCheckOf([goalCheck], [stepCheck], {
+        ...call,
+        expect: { path: 'state', op: 'eq', value: 'gone' },
+      }),
+    ).toBeNull();
   });
 
   it('names an observation’s params, a secret-named field masked', () => {
@@ -418,6 +490,9 @@ describe('lib/goals', () => {
     ).toMatch(/^在门「svc-gate」上调用 svc\.lookup，门回答/);
     expect(checkKindLabel('observe_absent', zh)).toBe('平台确认不存在');
     expect(checkKindLabel('observe_absent', en)).toBe('Platform confirms it is not there');
+    expect(checkErrorLabel('presence_not_confirmed', zh)).toBe(
+      '门回答了，但回答里看不出它在（空结果，或者不符合 Operation 声明的结果映射）',
+    );
     expect(checkErrorLabel('target_still_present', zh)).toBe(
       '它还在：门返回了它，而不是回答它不存在',
     );
