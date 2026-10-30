@@ -493,6 +493,32 @@ describe.runIf(DATABASE_URL !== undefined)(
            returning id`,
           [workspaceId, randomUUID(), requesterId, stepRunId],
         );
+        // Legacy 513: two the gate refused — one for a credential the requester never connected,
+        // one with a reason that starts with no code — and their audited reasons.
+        const refused = async (reason: string) => {
+          const [row] = await raw<{ id: string }>(
+            `insert into action_requests (workspace_id, gatekeeper_id, action_kind, blast_radius,
+                                          on_behalf_of, actor_runtime, step_run_id, status,
+                                          policy_decision, failure_kind, failed_at)
+             values ($1, $2, 'fixture.act', 'low', $3, 'worker', $4, 'failed', 'allow', 'refused',
+                     now())
+             returning id`,
+            [workspaceId, randomUUID(), requesterId, stepRunId],
+          );
+          if (!row) throw new Error('no fixture row');
+          await raw(
+            `insert into audit_records (workspace_id, actor_principal_id, action, resource_type,
+                                        resource_id, payload)
+             values ($1, $2, 'action_request.fail', 'action_request', $3,
+                     jsonb_build_object('reason', $4::text))`,
+            [workspaceId, requesterId, row.id, reason],
+          );
+          return row.id;
+        };
+        const noCredential = await refused(
+          `credential_unavailable: no connected account for ${requesterId}`,
+        );
+        const noCode = await refused('the gate said no');
 
         const result = GoalDetailWireSchema.parse(
           await call(human(ownerId, 'owner'), 'get_goal', { goalRunId }),
@@ -517,10 +543,21 @@ describe.runIf(DATABASE_URL !== undefined)(
               actionRequestId: action?.id,
               status: 'proposed',
               failureKind: null,
+              failureCode: null,
               reconciliation: null,
             },
+            {
+              actionRequestId: noCredential,
+              status: 'failed',
+              failureKind: 'refused',
+              // The code, never the reason's text (which names the requester here).
+              failureCode: 'credential_unavailable',
+              reconciliation: null,
+            },
+            { actionRequestId: noCode, failureKind: 'refused', failureCode: null },
           ],
         });
+        expect(JSON.stringify(stepA?.actions)).not.toContain('no connected account');
         expect(stepA?.attempts).toHaveLength(1);
         expect(stepA?.attempts[0]).toMatchObject({ attempt: 1 });
         expect(stepB).toMatchObject({ stepKey: 'b', status: 'pending', attempts: [], actions: [] });

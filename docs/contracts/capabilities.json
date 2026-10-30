@@ -2139,6 +2139,13 @@
         "onBehalfOf": {
           "type": "string"
         },
+        "onBehalfOfAccount": {
+          "enum": [
+            "connected",
+            "not_connected"
+          ],
+          "type": "string"
+        },
         "outcomeInDoubt": {
           "anyOf": [
             {
@@ -10306,6 +10313,13 @@
         "onBehalfOf": {
           "type": "string"
         },
+        "onBehalfOfAccount": {
+          "enum": [
+            "connected",
+            "not_connected"
+          ],
+          "type": "string"
+        },
         "outcomeInDoubt": {
           "anyOf": [
             {
@@ -16175,7 +16189,8 @@
                       "requester_cannot_start_workers",
                       "step_gate_not_held",
                       "step_capability_not_held",
-                      "step_definition_excluded"
+                      "step_definition_excluded",
+                      "step_account_not_connected"
                     ],
                     "type": "string"
                   },
@@ -17688,6 +17703,34 @@
                     "actionRequestId": {
                       "type": "string"
                     },
+                    "failureCode": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "gate_unreachable",
+                            "gate_token_unavailable",
+                            "connection_secret_missing",
+                            "gate_not_found",
+                            "apply_not_received",
+                            "operation_disabled",
+                            "operation_definition_unavailable",
+                            "target_refused",
+                            "redirect_refused",
+                            "unauthorized",
+                            "operation_not_found",
+                            "invalid_params",
+                            "invalid_operation_schema",
+                            "operation_definition_mismatch",
+                            "operation_refused",
+                            "credential_unavailable"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "failureKind": {
                       "anyOf": [
                         {
@@ -17741,6 +17784,7 @@
                     "actionRequestId",
                     "status",
                     "failureKind",
+                    "failureCode",
                     "reconciliation"
                   ],
                   "type": "object"
@@ -18152,7 +18196,8 @@
                   "requester_cannot_start_workers",
                   "step_gate_not_held",
                   "step_capability_not_held",
-                  "step_definition_excluded"
+                  "step_definition_excluded",
+                  "step_account_not_connected"
                 ],
                 "type": "string"
               },
@@ -24134,6 +24179,13 @@
               "onBehalfOf": {
                 "type": "string"
               },
+              "onBehalfOfAccount": {
+                "enum": [
+                  "connected",
+                  "not_connected"
+                ],
+                "type": "string"
+              },
               "outcomeInDoubt": {
                 "anyOf": [
                   {
@@ -29274,6 +29326,13 @@
                 "type": "string"
               },
               "onBehalfOf": {
+                "type": "string"
+              },
+              "onBehalfOfAccount": {
+                "enum": [
+                  "connected",
+                  "not_connected"
+                ],
                 "type": "string"
               },
               "outcomeInDoubt": {
@@ -39596,7 +39655,8 @@
                   "requester_cannot_start_workers",
                   "step_gate_not_held",
                   "step_capability_not_held",
-                  "step_definition_excluded"
+                  "step_definition_excluded",
+                  "step_account_not_connected"
                 ],
                 "type": "string"
               },
@@ -42418,6 +42478,13 @@
           "type": "string"
         },
         "onBehalfOf": {
+          "type": "string"
+        },
+        "onBehalfOfAccount": {
+          "enum": [
+            "connected",
+            "not_connected"
+          ],
           "type": "string"
         },
         "outcomeInDoubt": {
@@ -45242,6 +45309,13 @@
             "onBehalfOf": {
               "type": "string"
             },
+            "onBehalfOfAccount": {
+              "enum": [
+                "connected",
+                "not_connected"
+              ],
+              "type": "string"
+            },
             "outcomeInDoubt": {
               "anyOf": [
                 {
@@ -48047,7 +48121,8 @@
                   "requester_cannot_start_workers",
                   "step_gate_not_held",
                   "step_capability_not_held",
-                  "step_definition_excluded"
+                  "step_definition_excluded",
+                  "step_account_not_connected"
                 ],
                 "type": "string"
               },

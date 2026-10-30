@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import {
   type ApplyResponse,
+  type CredentialPresenceResponse,
+  CredentialPresenceResponseSchema,
   DEFAULT_GATE_TOKEN_FILE,
   type DescribeOperationsResponse,
   type HealthResponse,
@@ -354,6 +356,11 @@ export interface GatekeeperClient {
   ): Promise<void>;
   /** S2.13: removes a ConnectedAccount credential from the gate instance. */
   deleteConnectedAccount(target: GateTarget, onBehalfOf: string): Promise<void>;
+  /** Legacy 513: `gate/credential-presence` — the gate's credential mode and, in
+   *  `connected_account` mode, whether `onBehalfOf`'s slot holds a credential. A boolean, never the
+   *  credential: the answer is parsed strictly, so a gate that sent anything more is refused.
+   *  Optional — a client without it (a test fake) is a gate that cannot say. */
+  credentialPresence?(target: GateTarget, onBehalfOf: string): Promise<CredentialPresenceResponse>;
 }
 
 export interface HttpGatekeeperClientOptions {
@@ -378,6 +385,9 @@ export interface HttpGatekeeperClientOptions {
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000;
+/** Legacy 513: a presence answer only adds a note to a page a person is reading — never worth
+ *  holding that read (and its pool connection) the way a real call may. */
+const PRESENCE_TIMEOUT_MS = 3_000;
 const DEFAULT_APPLY_TIMEOUT_MS = 60_000;
 /** R-49: the most bytes one gate response body may have. Above the gate's own 10 MiB exec output
  *  buffer (`@nexttime/gatekeeper-base` `kinds/ssh.ts` / `kinds/cli.ts`) with room for JSON
@@ -741,5 +751,29 @@ export class HttpGatekeeperClient implements GatekeeperClient {
 
   async deleteConnectedAccount(target: GateTarget, onBehalfOf: string): Promise<void> {
     await this.request(target, 'gate/connected-accounts', 'DELETE', { onBehalfOf });
+  }
+
+  async credentialPresence(
+    target: GateTarget,
+    onBehalfOf: string,
+  ): Promise<CredentialPresenceResponse> {
+    const result = await this.request(
+      target,
+      'gate/credential-presence',
+      'POST',
+      { onBehalfOf },
+      PRESENCE_TIMEOUT_MS,
+    );
+    const parsed = CredentialPresenceResponseSchema.safeParse(result);
+    if (!parsed.success) {
+      throw new GatekeeperClientError(
+        'gatekeeper client: gate/credential-presence answered out of shape',
+        {
+          code: 'invalid_response',
+          status: 200,
+        },
+      );
+    }
+    return parsed.data;
   }
 }

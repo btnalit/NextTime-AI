@@ -158,6 +158,13 @@ export class ConnectedAccountStore {
     return JSON.parse(plaintext) as ResolvedCredential;
   }
 
+  /** Whether a credential is stored for `onBehalfOf` — read from the record keys alone, never
+   *  decrypted (legacy 513: the kernel asks only whether a member has connected the account). */
+  async has(onBehalfOf: string): Promise<boolean> {
+    const records = await loadRecordsMap(this.filePath);
+    return records.has(onBehalfOf);
+  }
+
   /** Stores (overwriting any existing) credential for `onBehalfOf`. */
   async set(onBehalfOf: string, credential: ResolvedCredential): Promise<void> {
     return this.enqueueWrite(async () => {

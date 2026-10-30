@@ -15,6 +15,8 @@ import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { newConnectionSecretSalt } from '../../adapters/gatekeeper-client/connection-secret.js';
+import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
 import { setAgentProfile } from '../../governance/agent-profile/index.js';
 import { WORKER_CEILING_CAPABILITIES, entryScope } from '../../governance/capability/index.js';
 import { registerGatekeeper } from '../../governance/gatekeepers/index.js';
@@ -22,6 +24,7 @@ import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { createGoalRun } from '../goal/index.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
+import { PRESENCE_TTL_MS, setCredentialPresenceDeps } from './credential-presence.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
@@ -1035,6 +1038,106 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(
           hintCodes((await readProposal(human(member, 'member'), proposed.goalRunId)).hints),
         ).toEqual(['requester_confirm_only']);
+      });
+
+      it('legacy 513: a step on a gate where the requester has not connected their own account — said only to a person, asked of the gate, never kept', async () => {
+        const member = await newPrincipal('member');
+        const gatekeeperId = await admin(async (client) => {
+          const activity = await startActivity(client, workspaceId, {
+            kind: 'test.connection',
+            principalId: ownerId,
+          });
+          const registered = await registerGatekeeper(client, workspaceId, {
+            name: `l513-gate-${randomUUID().slice(0, 8)}`,
+            transportKind: 'http',
+            target: 'example-system',
+            endpoint: 'http://127.0.0.1:9',
+            connectionSecretSalt: newConnectionSecretSalt(),
+            activityId: activity.id,
+            registeredBy: { id: ownerId, kind: 'human' },
+          });
+          await client.query(
+            `insert into capability_grants (workspace_id, principal_id, resource_type, resource_id, granted_by)
+             values ($1, $2, 'gatekeeper', $3::uuid, $4)`,
+            [workspaceId, member, registered.gatekeeperId, ownerId],
+          );
+          return registered.gatekeeperId;
+        });
+        const gated = await publish({
+          systemPrompt: 'You act on a gate.',
+          capabilities: ['request_action'],
+          gates: [gatekeeperId],
+        });
+        const plan = {
+          steps: [
+            { key: 'look', worker },
+            { key: 'act', worker: gated, dependsOn: ['look'] },
+          ],
+        };
+        // The gate the fake answers for: who asked, and whether the member's slot holds a credential.
+        const asked: string[] = [];
+        let present = false;
+        let clock = 1_000_000;
+        setCredentialPresenceDeps({
+          gatekeeperClient: {
+            credentialPresence: async (_target, onBehalfOf) => {
+              asked.push(onBehalfOf);
+              return { credentialMode: 'connected_account', present };
+            },
+          } as Pick<GatekeeperClient, 'credentialPresence'> as GatekeeperClient,
+          now: () => clock,
+        });
+        try {
+          // The entry agent proposes: its result never says who connected which account.
+          const proposed = await propose(entryAgent(member), proposalOf('act on my account', plan));
+          expect(hintCodes(proposed.hints)).toEqual(['requester_confirm_only']);
+          expect(asked).toEqual([]);
+
+          // The person reading the proposal — the requester, or the owner — is told, by step and gate.
+          const forMember = (await readProposal(human(member, 'member'), proposed.goalRunId)).hints;
+          expect(hintCodes(forMember)).toEqual([
+            'requester_confirm_only',
+            'step_account_not_connected',
+          ]);
+          expect(forMember[1]).toMatchObject({ stepKey: 'act', gatekeeperIds: [gatekeeperId] });
+          expect(forMember[1]?.message).toMatch(/^step "act": .*credential_unavailable/);
+          const detail = GoalDetailWireSchema.parse(
+            await call(human(ownerId, 'owner'), 'get_goal', { goalRunId: proposed.goalRunId }),
+          );
+          expect(detail.planRevision.hints).toEqual(forMember);
+          // Always the requester's account, whoever reads; the second read within the TTL is not asked.
+          expect(asked).toEqual([member]);
+
+          // The member connects: shown once the short-lived answer runs out — nothing else kept it.
+          present = true;
+          clock += PRESENCE_TTL_MS + 1;
+          expect(
+            hintCodes((await readProposal(human(member, 'member'), proposed.goalRunId)).hints),
+          ).toEqual(['requester_confirm_only']);
+
+          // A gate that does not answer, or holds one shared credential, says nothing.
+          clock += PRESENCE_TTL_MS + 1;
+          setCredentialPresenceDeps({
+            gatekeeperClient: {
+              credentialPresence: async () => {
+                throw new Error('gate down');
+              },
+            } as Pick<GatekeeperClient, 'credentialPresence'> as GatekeeperClient,
+          });
+          expect(
+            hintCodes((await readProposal(human(member, 'member'), proposed.goalRunId)).hints),
+          ).toEqual(['requester_confirm_only']);
+          setCredentialPresenceDeps({
+            gatekeeperClient: {
+              credentialPresence: async () => ({ credentialMode: 'shared' }),
+            } as Pick<GatekeeperClient, 'credentialPresence'> as GatekeeperClient,
+          });
+          expect(
+            hintCodes((await readProposal(human(member, 'member'), proposed.goalRunId)).hints),
+          ).toEqual(['requester_confirm_only']);
+        } finally {
+          setCredentialPresenceDeps({});
+        }
       });
 
       it('a step whose Worker needs a capability the requester does not hold; confirming is not refused for it', async () => {

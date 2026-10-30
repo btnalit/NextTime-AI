@@ -12,6 +12,7 @@ import {
   type StepView,
   absenceBaselineOf,
   absenceOperationKey,
+  actionFailureCodeText,
   actionFailureLabel,
   bindingSentence,
   checkKindLabel,
@@ -88,6 +89,15 @@ export function GoalStepsSection({
           {authorityHints.map((hint) => (
             <Notice key={planHintKey(hint)} tone="warn" testId="goal-step-hint">
               {planHintText(hint, t, gateNames)}
+              {/* Legacy 513: where the requester connects their own account. */}
+              {hint.code === 'step_account_not_connected' ? (
+                <>
+                  {' '}
+                  <a href={hrefs.systems()} data-testid="goal-step-hint-connect">
+                    {t('去「系统与授权」', 'Open Systems & access')}
+                  </a>
+                </>
+              ) : null}
             </Notice>
           ))}
         </div>
@@ -514,6 +524,12 @@ function Actions({
               <StatusChip machine="actionRequest" status={action.status} size="s" />
               {action.failureKind ? (
                 <span className="text-danger">{actionFailureLabel(action.failureKind, t)}</span>
+              ) : null}
+              {/* Legacy 513: why, by its code — the reason's text is on the request's page. */}
+              {action.failureCode ? (
+                <span className="text-2" data-testid="goal-step-action-reason">
+                  {actionFailureCodeText(action.failureCode, t)}
+                </span>
               ) : null}
             </>
           )}

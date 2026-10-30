@@ -25,6 +25,7 @@ import {
   PlanHintSchema,
   StepRemovalsSchema,
 } from '../goal-plan.js';
+import { ACTION_FAILURE_CODE_VALUES } from '../action-failure-reason.js';
 import { OutputProblemSchema } from '../output-schema.js';
 import {
   FactCheckSchema,
@@ -187,6 +188,10 @@ export const StepActionWireSchema = z
     actionRequestId: z.string(),
     status: ActionRequestStatusSchema,
     failureKind: ActionRequestFailureKindSchema.nullable(),
+    /** Legacy 513: on a request that failed `refused` or `not_delivered`, the code its reason
+     *  starts with when it is one of the whitelisted codes (`ACTION_FAILURE_CODE_VALUES`) — e.g.
+     *  `credential_unavailable`. Never the reason text. */
+    failureCode: z.enum(ACTION_FAILURE_CODE_VALUES).nullable(),
     reconciliation: ActionRequestReconciliationSchema.nullable(),
   })
   .strict();
@@ -482,7 +487,8 @@ export type EndGoalResultWire = z.infer<typeof EndGoalResultWireSchema>;
  *  Decision) and whether the requester decided to run it again (its Decision). The run's status
  *  does not change: it was set due, and stays paused until the requester resumes it. */
 export const ReconcileGoalActionResultWireSchema = GoalOperationResultWireSchema.extend({
-  action: StepActionWireSchema.extend({
+  // Only an action whose outcome was unknown is reconciled, so it has no refusal code.
+  action: StepActionWireSchema.omit({ failureCode: true }).extend({
     reconciliationDecisionId: z.string().nullable(),
     reexecuteDecisionId: z.string().nullable(),
   }).strict(),

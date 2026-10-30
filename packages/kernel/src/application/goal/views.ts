@@ -1,16 +1,19 @@
 import {
+  type ActionFailureCode,
   type GoalPlan,
   GoalPlanSchema,
   type GoalRunStatus,
   type PlanHint,
   STEP_RUN_STATUS_VALUES,
   type StepRunStatus,
+  failureCodeOfReason,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   type ExecutingStepAction,
   type StepActionOutcome,
   listStepsActionOutcomes,
+  readActionRequestFailureReasons,
 } from '../../governance/approval/index.js';
 import { type GoalStepAttempt, listGoalRunStepAttempts, readGoalRunsUsage } from '../task/index.js';
 import { getProcedure } from '../worker/index.js';
@@ -307,11 +310,17 @@ export interface PlanRevisionView {
   readonly source: PlanSourceView | null;
 }
 
+/** Legacy 513: what a read served to a person adds — see `planAuthorityHints`' `checkAccounts`. */
+export interface GoalReadOptions {
+  readonly checkAccounts?: boolean;
+}
+
 async function planRevisionView(
   client: PoolClient,
   workspaceId: string,
   goal: GoalRunRow,
   revision: PlanRevisionRow,
+  options: GoalReadOptions,
 ): Promise<PlanRevisionView> {
   // Every stored plan passed `parsePlan` when its revision was made (`service.ts`, `revise.ts`).
   const parsed = GoalPlanSchema.safeParse(revision.plan);
@@ -329,7 +338,11 @@ async function planRevisionView(
     plan: planAsRead(plan),
     hints: [
       ...planHints(plan),
-      ...(proposal ? await planAuthorityHints(client, workspaceId, goal.onBehalfOf, plan) : []),
+      ...(proposal
+        ? await planAuthorityHints(client, workspaceId, goal.onBehalfOf, plan, {
+            checkAccounts: options.checkAccounts === true,
+          })
+        : []),
     ],
     source: await planSourceOf(client, workspaceId, revision),
   };
@@ -368,18 +381,25 @@ export async function readPlanRevisionVisibleTo(
   viewer: GoalViewer,
   goalRunId: string,
   revision: number,
+  options: GoalReadOptions = {},
 ): Promise<PlanRevisionView> {
   const goal = await getGoalRunVisibleTo(client, workspaceId, viewer, goalRunId);
   const row = await getPlanRevision(client, workspaceId, goalRunId, revision);
   if (!row) throw new GoalRevisionNotFoundError(goalRunId, revision);
-  return planRevisionView(client, workspaceId, goal, row);
+  return planRevisionView(client, workspaceId, goal, row, options);
+}
+
+/** A request a step raised, as the goal page shows it — legacy 513: with the whitelisted code of
+ *  why one that was refused or not delivered failed (`failureCodeOfReason`), never the text. */
+export interface GoalStepActionView extends StepActionOutcome {
+  readonly failureCode: ActionFailureCode | null;
 }
 
 /** One StepRun with its attempts (the Tasks) and the requests it raised, oldest first. */
 export interface GoalRunStepView {
   readonly step: StepRunRow;
   readonly attempts: readonly GoalStepAttempt[];
-  readonly actions: readonly StepActionOutcome[];
+  readonly actions: readonly GoalStepActionView[];
 }
 
 /** What a cancel still waits for, or left behind (`cancelling.ts`). */
@@ -408,6 +428,7 @@ export async function readGoalRunDetail(
   workspaceId: string,
   viewer: GoalViewer,
   goalRunId: string,
+  options: GoalReadOptions = {},
 ): Promise<GoalRunDetail> {
   const goal = await getGoalRunVisibleTo(client, workspaceId, viewer, goalRunId);
   const [summary] = await summarizeGoalRuns(client, workspaceId, [goal]);
@@ -417,13 +438,20 @@ export async function readGoalRunDetail(
   if (!summary || !inForce || !acceptance) {
     throw new Error(`goal run ${goalRunId}: its revision in force or its acceptance did not read`);
   }
-  const planView = await planRevisionView(client, workspaceId, goal, inForce);
+  const planView = await planRevisionView(client, workspaceId, goal, inForce, options);
   const stepRuns = inPlanOrder(await listStepRuns(client, workspaceId, goalRunId), planView.plan);
   const attempts = await listGoalRunStepAttempts(client, workspaceId, goalRunId);
   const actions = await listStepsActionOutcomes(
     client,
     workspaceId,
     stepRuns.map((step) => step.id),
+  );
+  const failureReasons = await readActionRequestFailureReasons(
+    client,
+    workspaceId,
+    actions.filter(
+      (action) => action.failureKind === 'refused' || action.failureKind === 'not_delivered',
+    ),
   );
   const leftovers =
     goal.status === 'cancelling' || goal.cleanupPending
@@ -446,7 +474,10 @@ export async function readGoalRunDetail(
       attempts: attempts.filter((attempt) => attempt.stepRunId === step.id),
       actions: actions
         .filter((action) => action.stepRunId === step.id)
-        .map(({ stepRunId: _stepRunId, ...action }) => action),
+        .map(({ stepRunId: _stepRunId, ...action }) => ({
+          ...action,
+          failureCode: failureCodeOfReason(failureReasons.get(action.id)?.text),
+        })),
     })),
     acceptance: redactedAcceptance({
       ...acceptance,

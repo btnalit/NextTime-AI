@@ -23,6 +23,7 @@ import { useT } from '../lib/i18n.js';
 import { actorRuntimeLabel, policyDecisionLabel } from '../lib/labels.js';
 import { capabilityHolders } from '../lib/role-holders.js';
 import { hrefs } from '../lib/router.js';
+import { RequesterAccountNotice } from './approvals/RequesterAccountNotice.js';
 import { Confirm } from './kit/confirm.js';
 import { ApprovalCard } from './ui/ApprovalCard.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
@@ -190,6 +191,12 @@ export function ActionRequestCard({
         <p className="field-hint" data-testid="action-card-always-allow-unpublished">
           {alwaysAllowUnpublishedText(t, card.actionKindTag)}
         </p>
+      ) : null}
+      {decidable && card.onBehalfOfAccount === 'not_connected' ? (
+        <RequesterAccountNotice
+          own={callerPrincipalId != null && card.onBehalfOf === callerPrincipalId}
+          testId="action-card-requester-account"
+        />
       ) : null}
       {decidable && !canDecide ? (
         <Notice testId="action-card-awaits-approver">

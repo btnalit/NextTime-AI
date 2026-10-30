@@ -197,6 +197,7 @@ describe('lib/goal-plan-draft', () => {
               actionRequestId: 'ar-1',
               status: 'pending_approval',
               failureKind: null,
+              failureCode: null,
               reconciliation: null,
             },
           ],

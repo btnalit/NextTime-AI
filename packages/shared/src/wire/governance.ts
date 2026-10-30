@@ -131,6 +131,13 @@ export const ActionRequestWireSchema = z
       .object({ version: z.number().int().positive().nullable(), requestIsCurrent: z.boolean() })
       .strict()
       .optional(),
+    // Legacy 513: on a `pending_approval` row read by a person (`get_action`, `list_pending`),
+    // whether the requester (`onBehalfOf`) has connected their own account on the request's gate
+    // when that gate runs in `connected_account` mode — asked of the gate, a yes or no and nothing
+    // else. `not_connected`: approving it, the gate would refuse the call
+    // (`credential_unavailable`). Absent for a shared-credential gate, a gate that did not answer,
+    // any other status, and every read an agent or a Handle makes.
+    onBehalfOfAccount: z.enum(['connected', 'not_connected']).optional(),
   })
   .strict();
 export type ActionRequestWire = z.infer<typeof ActionRequestWireSchema>;

@@ -67,6 +67,7 @@ import { findAttributableTurn } from '../../application/host-bridge/index.js';
 import { shownFreeText, shownFreeTextIn } from '../../governance/redaction/index.js';
 import { hashStableParams, scopeExplicitIdempotencyKey } from './action-executor.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
+import { servesPerson } from './credential-presence.js';
 
 /**
  * application/gateway/goal-handlers (S11 GO5a): the `goal` reads — `get_goal`, `list_goals`,
@@ -268,6 +269,7 @@ function toWireStepRun(view: GoalRunStepView): StepRunWire {
       actionRequestId: action.id,
       status: action.status,
       failureKind: action.failureKind,
+      failureCode: action.failureCode,
       reconciliation: action.reconciliation,
     })),
     output: stepOutput(view),
@@ -395,7 +397,9 @@ function toWireUnresolvedAction(action: UnresolvedGoalAction): UnresolvedGoalAct
 export const getGoalHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { goalRunId } = params as { goalRunId: string };
   const viewer = await goalViewer(client, ctx);
-  const detail = await readGoalRunDetail(client, workspaceId, viewer, goalRunId);
+  const detail = await readGoalRunDetail(client, workspaceId, viewer, goalRunId, {
+    checkAccounts: servesPerson(ctx),
+  });
   return { result: toWireGoalDetail(detail), resourceType: 'goal_run', resourceId: goalRunId };
 };
 
@@ -428,7 +432,9 @@ export const getGoalRevisionHandler: CapabilityHandler = async (
 ) => {
   const { goalRunId, revision } = params as { goalRunId: string; revision: number };
   const viewer = await goalViewer(client, ctx);
-  const view = await readPlanRevisionVisibleTo(client, workspaceId, viewer, goalRunId, revision);
+  const view = await readPlanRevisionVisibleTo(client, workspaceId, viewer, goalRunId, revision, {
+    checkAccounts: servesPerson(ctx),
+  });
   return { result: toWirePlanRevision(view), resourceType: 'goal_run', resourceId: goalRunId };
 };
 
@@ -515,6 +521,8 @@ export const proposeGoalHandler: CapabilityHandler = async (client, workspaceId,
     budget: input.budget,
     idempotencyKey,
     maxProposed: maxProposedGoalsPerRequester(process.env.GOAL_MAX_PROPOSED_PER_REQUESTER),
+    // Legacy 513: an agent proposing through its Handle never learns who connected which account.
+    checkAccounts: servesPerson(ctx),
     ...(turn?.wasRunning ? { originatedInTurnId: turn.id } : {}),
   });
   const result: ProposeGoalResultWire = {
@@ -622,6 +630,7 @@ export const reviseGoalHandler: CapabilityHandler = async (client, workspaceId, 
     ...(input.reason !== undefined ? { reason: input.reason } : {}),
     ...(input.budget !== undefined ? { budget: input.budget } : {}),
     ...(input.removals !== undefined ? { removals: input.removals } : {}),
+    checkAccounts: servesPerson(ctx),
   });
   const result: ReviseGoalResultWire = {
     goalRunId: input.goalRunId,

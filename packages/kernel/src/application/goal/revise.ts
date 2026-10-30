@@ -85,6 +85,8 @@ export interface ReviseGoalRunInput {
   readonly budget?: GoalRunBudget;
   /** Per removed step: what happens to its work (see the module doc comment). */
   readonly removals?: unknown;
+  /** Legacy 513: the result is served to a person — see `CreateGoalRunInput.checkAccounts`. */
+  readonly checkAccounts?: boolean;
 }
 
 export interface RevisedGoalRun {
@@ -326,10 +328,13 @@ export async function reviseGoalRun(
     // starts again.
     hints: [
       ...planHints(plan),
-      ...(await planAuthorityHints(client, workspaceId, goal.onBehalfOf, {
-        ...plan,
-        steps: plan.steps.filter((entry) => !endedKeys.has(entry.key)),
-      })),
+      ...(await planAuthorityHints(
+        client,
+        workspaceId,
+        goal.onBehalfOf,
+        { ...plan, steps: plan.steps.filter((entry) => !endedKeys.has(entry.key)) },
+        { checkAccounts: input.checkAccounts === true },
+      )),
     ],
   };
 }

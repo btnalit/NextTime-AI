@@ -111,6 +111,28 @@ describe('ActionRequestCard', () => {
     expect(screen.getByTestId('action-card-own-request').textContent).toMatch(/另一位有审批权的人/);
   });
 
+  it('legacy 513: a pending card whose requester has not connected their account on the gate says so; a decided one, or a connected account, says nothing', () => {
+    renderCard({
+      card: baseCard({ onBehalfOf: 'principal-a', onBehalfOfAccount: 'not_connected' }),
+      callerPrincipalId: 'principal-b',
+    });
+    expect(screen.getByTestId('action-card-requester-account').textContent).toMatch(
+      /申请人还没有在这个门上连接自己的账户/,
+    );
+    cleanup();
+    renderCard({
+      card: baseCard({ onBehalfOf: 'me', onBehalfOfAccount: 'not_connected' }),
+      callerPrincipalId: 'me',
+    });
+    expect(screen.getByTestId('action-card-requester-account').textContent).toMatch(/^你还没有/);
+    cleanup();
+    renderCard({ card: baseCard({ onBehalfOfAccount: 'connected' }) });
+    expect(screen.queryByTestId('action-card-requester-account')).toBeNull();
+    cleanup();
+    renderCard({ card: baseCard({ onBehalfOfAccount: 'not_connected', status: 'executed' }) });
+    expect(screen.queryByTestId('action-card-requester-account')).toBeNull();
+  });
+
   it('renders the shared card — kind, target, blast radius, description, decision buttons and the approvals link — for a holder-pending card', () => {
     renderCard();
     expect(screen.getByTestId('action-request-card')).toBeTruthy();
