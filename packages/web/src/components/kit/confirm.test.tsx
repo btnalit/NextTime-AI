@@ -538,3 +538,71 @@ describe('kit/Confirm — irreversible', () => {
     }
   });
 });
+
+describe('kit/Confirm — a field the caller collects asks before it is lost (discard rule)', () => {
+  /** An uncontrolled reason box — what the caller collects in `children`. */
+  const reason = <textarea aria-label="原因" data-testid="reason" />;
+
+  it.each(['medium', 'irreversible'] as const)(
+    '%s: closes on Escape when nothing was typed',
+    async (tier) => {
+      renderTier(tier, { children: reason });
+      fireEvent.click(screen.getByTestId('trigger'));
+      fireEvent.keyDown(await screen.findByTestId('confirm'), { key: 'Escape' });
+      await waitFor(() => expect(screen.queryByTestId('confirm')).toBeNull());
+      expect(screen.queryByTestId('discard-confirm')).toBeNull();
+    },
+  );
+
+  it.each(['medium', 'irreversible'] as const)(
+    '%s: an edited reason asks on Escape and Cancel; Keep editing keeps it, Discard closes',
+    async (tier) => {
+      renderTier(tier, { children: reason });
+      screen.getByTestId('trigger').focus();
+      fireEvent.click(screen.getByTestId('trigger'));
+      const field = (await screen.findByTestId('reason')) as HTMLTextAreaElement;
+      field.focus();
+      fireEvent.input(field, { target: { value: '上周已下线' } });
+
+      fireEvent.keyDown(field, { key: 'Escape' });
+      fireEvent.click(await screen.findByTestId('discard-confirm-keep'));
+      await waitFor(() => expect(screen.queryByTestId('discard-confirm')).toBeNull());
+      expect(screen.getByTestId('confirm')).toBeTruthy();
+      expect((screen.getByTestId('reason') as HTMLTextAreaElement).value).toBe('上周已下线');
+      await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('reason')));
+
+      fireEvent.click(screen.getByTestId('confirm-cancel'));
+      fireEvent.click(await screen.findByTestId('discard-confirm-discard'));
+      await waitFor(() => expect(screen.queryByTestId('confirm')).toBeNull());
+      await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('trigger')));
+    },
+  );
+
+  it('medium: an outside click on an edited reason asks too', async () => {
+    renderTier('medium', { children: reason });
+    fireEvent.click(screen.getByTestId('trigger'));
+    fireEvent.input(await screen.findByTestId('reason'), { target: { value: 'x' } });
+    // Radix listens for the outside pointer only from the tick after it opens.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const outside = document.body.appendChild(document.createElement('div'));
+    // jsdom's pointer has no type, which Radix handles on the click that follows.
+    fireEvent.pointerDown(outside);
+    fireEvent.pointerUp(outside);
+    fireEvent.click(outside);
+    expect(await screen.findByTestId('discard-confirm')).toBeTruthy();
+    expect(screen.getByTestId('confirm')).toBeTruthy();
+    outside.remove();
+  });
+
+  it('irreversible: the typed name and the acknowledgement alone are not unsaved content', async () => {
+    renderTier('irreversible');
+    fireEvent.click(screen.getByTestId('trigger'));
+    fireEvent.input(await screen.findByTestId('confirm-typed-name'), {
+      target: { value: 'acme-prod' },
+    });
+    fireEvent.click(screen.getByTestId('confirm-acknowledge'));
+    fireEvent.click(screen.getByTestId('confirm-cancel'));
+    await waitFor(() => expect(screen.queryByTestId('confirm')).toBeNull());
+    expect(screen.queryByTestId('discard-confirm')).toBeNull();
+  });
+});

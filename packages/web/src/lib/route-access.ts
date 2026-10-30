@@ -30,6 +30,7 @@ export const ROUTE_REQUIRES: Readonly<Partial<Record<Route['kind'], RouteRequire
   approvals: { capability: 'list_pending' },
   members: { capability: 'list_principals' },
   audit: { capability: 'audit_query' },
+  evaluation: { capability: 'list_eval_suites' },
   platformOverview: PLATFORM,
   platformUsers: PLATFORM,
   platformWorkspaces: PLATFORM,

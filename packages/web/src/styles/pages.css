@@ -1995,3 +1995,34 @@ html:has(.md-layout--wide .md-detail-pane .overlay-actions),
 .capability-change-list > li[data-change="removed"] {
   border-left-color: var(--danger);
 }
+
+/* #802 UX P3-3 (as legacy 491's 「被拒绝的草稿」): a suite's history and a fixture gate's operations
+   start at their section's edge, with a rule between history entries so a reason stays with its
+   own change. */
+.eval-suite-history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.eval-suite-history > li {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--border);
+}
+
+.eval-suite-history > li:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.eval-fixture-operations {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}

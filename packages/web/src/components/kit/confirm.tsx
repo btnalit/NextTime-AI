@@ -5,6 +5,7 @@ import { cn } from '../../lib/cn.js';
 import { type ErrorOverrides, errorToastText } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
 import { Button } from './button.js';
+import { useDiscardGuard, useGuardedElement } from './discard-guard.js';
 import { focusOrigin } from './focus-origin.js';
 import { InlineError } from './inline-error.js';
 
@@ -94,6 +95,10 @@ export interface ConfirmProps {
  *   action gets the viewport's full attention regardless of where the trigger sits). The danger
  *   button stays disabled until the target name is retyped (skipped when `target` is omitted —
  *   a batch action with no single name to type) and the acknowledgement is checked.
+ *
+ * Both visible tiers follow `kit/discard-guard`'s rule for what the caller collects in `children`
+ * (legacy 512): once a reason or a choice there was changed, Escape, an outside click and 取消
+ * ask 「放弃未保存的内容？」 first instead of dropping it.
  */
 export function Confirm(props: ConfirmProps) {
   if (props.tier === 'low') return <LowTier {...props} />;
@@ -260,6 +265,11 @@ function ConfirmBody({
         padding === 'l' ? 'p-5' : 'p-4',
       )}
       data-testid="confirm-body"
+      // A field the caller collects in `children` (a reason, a choice) is unsaved content: an
+      // edited one is not lost to a stray Escape, outside click or 取消 (`kit/discard-guard`). The
+      // irreversible tier's typed name and acknowledgement sit outside the body — they are the
+      // confirmation itself, and Escape there means "don't".
+      data-discard-guard
     >
       {children}
       {/* Legacy 404 (UX acceptance of #653 P3-1): a cut-off body said so only through a half-shown
@@ -388,6 +398,9 @@ function MediumTier({
   const resolvedCancelLabel = cancelLabel ?? t('取消', 'Cancel');
   const { busy, error, run } = useConfirmRun(open, onConfirm, () => onOpenChange(false));
   useRestoreFocusOnClose(open);
+  const discard = useDiscardGuard();
+  const contentRef = useGuardedElement<HTMLDivElement>(discard);
+  const close = () => onOpenChange(false);
   const titleId = useId();
   const confirmRef = useRef<HTMLButtonElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
@@ -437,6 +450,7 @@ function MediumTier({
             // cannot provide without losing all of that — the same trade-off `components/ui/
             // Drawer.tsx` already makes for its own hand-rolled dialog pattern.
             role="dialog"
+            ref={contentRef}
             aria-labelledby={titleId}
             side={beside ?? 'bottom'}
             align={beside === null ? 'end' : 'center'}
@@ -447,6 +461,7 @@ function MediumTier({
             data-beside={beside ?? undefined}
             onOpenAutoFocus={(event) => {
               event.preventDefault();
+              discard.reset();
               // Legacy 405 (UX acceptance of #653 P3-2): a `danger` confirm (loosening an
               // approval, disabling, discarding) opens on 取消, so an Enter typed out of habit
               // never runs it; the irreversible tier's AlertDialog already does (Radix).
@@ -463,12 +478,20 @@ function MediumTier({
               // drawer wrapped around it too (both would otherwise see the same keydown).
               event.stopPropagation();
               if (busy) event.preventDefault();
+              else if (discard.edited()) {
+                event.preventDefault();
+                discard.guard(close);
+              }
             }}
             onPointerDownOutside={(event) => {
               if (busy) event.preventDefault();
             }}
             onInteractOutside={(event) => {
               if (busy) event.preventDefault();
+              else if (discard.edited()) {
+                event.preventDefault();
+                discard.guard(close);
+              }
             }}
             // UX acceptance of #612 (MUST-1): a tall confirm (a long impact list, a loosening
             // warning) never runs off the viewport where nothing can scroll it back — it is capped
@@ -511,7 +534,7 @@ function MediumTier({
                   ref={cancelRef}
                   variant="ghost"
                   size="s"
-                  onClick={() => onOpenChange(false)}
+                  onClick={() => discard.guard(close)}
                   disabled={busy}
                   data-testid="confirm-cancel"
                 >
@@ -519,6 +542,7 @@ function MediumTier({
                 </Button>
               </div>
             </ConfirmActions>
+            {discard.confirm}
           </PopoverPrimitive.Content>
         </PopoverPrimitive.Portal>
       ) : null}
@@ -547,6 +571,9 @@ function IrreversibleTier({
   const resolvedCancelLabel = cancelLabel ?? t('取消', 'Cancel');
   const { busy, error, run } = useConfirmRun(open, onConfirm, () => onOpenChange(false));
   useRestoreFocusOnClose(open);
+  const discard = useDiscardGuard();
+  const contentRef = useGuardedElement<HTMLDivElement>(discard);
+  const close = () => onOpenChange(false);
   const [typed, setTyped] = useState('');
   const [acknowledged, setAcknowledged] = useState(false);
   // R-44 (review 2026-10-02): this tier stays mounted for as long as its caller renders it (only
@@ -581,15 +608,21 @@ function IrreversibleTier({
         <AlertDialogPrimitive.Portal>
           <AlertDialogPrimitive.Overlay className="fixed inset-0 z-50 bg-overlay" />
           <AlertDialogPrimitive.Content
+            ref={contentRef}
             data-testid={testId}
             data-tier="irreversible"
             aria-labelledby={titleId}
             aria-describedby={descriptionId}
+            onOpenAutoFocus={() => discard.reset()}
             onEscapeKeyDown={(event) => {
               // See the same guard in `MediumTier` above — stops Escape from also reaching a
               // legacy `components/ui/Drawer` this dialog might be rendered inside.
               event.stopPropagation();
               if (busy) event.preventDefault();
+              else if (discard.edited()) {
+                event.preventDefault();
+                discard.guard(close);
+              }
             }}
             className={cn(
               'fixed left-1/2 top-1/2 z-50 flex w-full max-w-md -translate-x-1/2 -translate-y-1/2',
@@ -669,12 +702,23 @@ function IrreversibleTier({
                   {resolvedConfirmLabel}
                 </Button>
                 <AlertDialogPrimitive.Cancel asChild>
-                  <Button variant="ghost" size="s" disabled={busy} data-testid="confirm-cancel">
+                  <Button
+                    variant="ghost"
+                    size="s"
+                    disabled={busy}
+                    onClick={(event) => {
+                      if (!discard.edited()) return;
+                      event.preventDefault();
+                      discard.guard(close);
+                    }}
+                    data-testid="confirm-cancel"
+                  >
                     {resolvedCancelLabel}
                   </Button>
                 </AlertDialogPrimitive.Cancel>
               </div>
             </ConfirmActions>
+            {discard.confirm}
           </AlertDialogPrimitive.Content>
         </AlertDialogPrimitive.Portal>
       ) : null}

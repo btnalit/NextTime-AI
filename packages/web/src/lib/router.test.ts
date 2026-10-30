@@ -64,6 +64,20 @@ describe('routeFromHash', () => {
     });
   });
 
+  it('S10 E3-1a: 评测 lands on 用例集, with or without a tab, and carries a suite id', () => {
+    expect(routeFromHash('#/govern/evaluation')).toEqual({ kind: 'evaluation', tab: 'suites' });
+    expect(routeFromHash('#/govern/evaluation/not-a-tab')).toEqual({
+      kind: 'evaluation',
+      tab: 'suites',
+    });
+    expect(routeFromHash('#/govern/evaluation/suites/s-1')).toEqual({
+      kind: 'evaluation',
+      tab: 'suites',
+      suiteId: 's-1',
+    });
+    expect(sectionOf({ kind: 'evaluation', tab: 'suites', suiteId: 's-1' })).toBe('evaluation');
+  });
+
   it('S11 P1-C: the 能力包 tab, and the 模块 tab it replaced still lands on it', () => {
     expect(routeFromHash('#/govern/catalog/packs/ops-assets')).toEqual({
       kind: 'catalog',
@@ -175,6 +189,8 @@ describe('hrefs', () => {
       { kind: 'catalog', tab: 'workers' },
       { kind: 'catalog', tab: 'skills', itemId: 'skill-1' },
       { kind: 'catalog', tab: 'workers', itemId: 'new' },
+      { kind: 'evaluation', tab: 'suites' },
+      { kind: 'evaluation', tab: 'suites', suiteId: 's-1' },
       { kind: 'models' },
       { kind: 'audit' },
       { kind: 'graph' },
@@ -223,6 +239,8 @@ function hrefFor(route: Route): string {
       return route.gatekeeperId ? hrefs.gatekeeper(route.gatekeeperId) : hrefs.systems();
     case 'catalog':
       return hrefs.catalog(route.tab, route.itemId);
+    case 'evaluation':
+      return hrefs.evaluation(route.tab, route.suiteId);
     case 'models':
       return hrefs.models();
     case 'audit':

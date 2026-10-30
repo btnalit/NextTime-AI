@@ -187,6 +187,14 @@ export const SURFACES: readonly Surface[] = [
     ready: (page) => heading(page, '能力目录'),
   },
   {
+    // S10 E3-1a: 评测 — the evaluation suites (none in CI: nothing seeds one).
+    id: 'evaluation',
+    labelZh: '评测',
+    hash: '#/govern/evaluation',
+    role: 'owner',
+    ready: (page) => page.getByTestId('eval-suites-empty').or(page.getByTestId('eval-suites-list')), // evaluation/EvaluationPage.tsx
+  },
+  {
     id: 'models',
     labelZh: '模型与配额',
     hash: '#/govern/models',

@@ -22,6 +22,13 @@ import {
   ChatNotFoundError,
   TurnAlreadyRunningError,
 } from '../../application/chat/index.js';
+// S10 E3-1a: an evaluation suite's refusals — imported directly like the domain errors around.
+import {
+  EvalSuiteInputError,
+  EvalSuiteNameTakenError,
+  EvalSuiteNotFoundError,
+  EvalSuiteStateError,
+} from '../../application/eval/index.js';
 import { GateInstanceNotAvailableError } from '../../application/gateway/gate-instance-handlers.js';
 // NoActiveTurnError/TurnNotFoundError are exported from handlers.ts itself but not re-exported by
 // application/gateway/index.ts's curated public surface (adding them there is a one-line change
@@ -776,6 +783,22 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
       message: err.message,
       details: { problems: [...err.problems] },
     };
+  }
+  // S10 E3-1a (application/eval): a suite that is not there (404); a pin or gate no suite state
+  // would take (400); a suite already as asked, or without the gate named (409 conflict); a name
+  // another suite has (409 eval_suite_name_taken). A change made against another suite version is
+  // `ReviewedVersionChangedError` (409 version_changed) above.
+  if (err instanceof EvalSuiteNotFoundError) {
+    return { status: 404, code: 'not_found', message: err.message };
+  }
+  if (err instanceof EvalSuiteInputError) {
+    return { status: 400, code: 'invalid_params', message: err.message };
+  }
+  if (err instanceof EvalSuiteStateError) {
+    return { status: 409, code: 'conflict', message: err.message };
+  }
+  if (err instanceof EvalSuiteNameTakenError) {
+    return { status: 409, code: err.code, message: err.message };
   }
   // S10 E1 (application/task/attribution.ts): an objective outcome given by someone who may see
   // the Turn / Task but may not judge it (403), or one its state forbids — not finished yet, or its

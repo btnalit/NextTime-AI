@@ -97,7 +97,9 @@ export function CredentialReview({
           {where}
         </p>
       ) : null}
-      <label className="flex items-start gap-2 text-13 text-text">
+      {/* An acknowledgement, not content: ticking it leaves nothing unsaved to lose (the
+       *  irreversible confirm's own acknowledgement is the same, `kit/discard-guard`). */}
+      <label className="flex items-start gap-2 text-13 text-text" data-no-discard-guard>
         <input
           type="checkbox"
           checked={checked}
