@@ -14,6 +14,7 @@ import {
   transition,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { supersedePendingAbsenceBaselines } from './absence-baselines.js';
 import {
   supersedePendingAcceptanceChecks,
   supersedePendingStepAcceptanceChecks,
@@ -152,7 +153,8 @@ export interface GoalMove {
  *  `verifying` supersedes the round's pending acceptance checks in the same transaction (S11 GO4a:
  *  nothing is observed for a run that is not verifying, and no row of an ended round stays
  *  pending); a move out of `running` its steps' pending ones (S11 GO4b: nothing is observed for a
- *  step of a run that is not running — resuming it verifies the step in a new round). */
+ *  step of a run that is not running — resuming it verifies the step in a new round) and its
+ *  absence checks' pending baselines (S11 「门确认不存在」 B-c: resuming it takes them again). */
 export async function moveGoalRun(
   client: PoolClient,
   actor: GoalMoveActor,
@@ -208,6 +210,14 @@ export async function moveGoalRun(
             reason: 'goal_moved',
           })
         : 0;
+  const supersededBaselines =
+    from === 'running'
+      ? await supersedePendingAbsenceBaselines(client, goal.workspaceId, {
+          goalRunId: goal.id,
+          actorPrincipalId: actor.principalId,
+          reason: 'goal_moved',
+        })
+      : 0;
   await recordGoalRunTransition(client, goal.workspaceId, {
     actorPrincipalId: actor.principalId,
     change: event,
@@ -224,6 +234,7 @@ export async function moveGoalRun(
           }
         : {}),
       ...(supersededChecks > 0 ? { supersededAcceptanceChecks: supersededChecks } : {}),
+      ...(supersededBaselines > 0 ? { supersededAbsenceBaselines: supersededBaselines } : {}),
       ...move.audit,
     },
   });

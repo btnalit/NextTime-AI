@@ -1,21 +1,25 @@
 import {
   GOAL_RUN_CHANGE_VALUES,
+  type GoalDetailWire,
   type GoalPlan,
   type OutputSchema,
+  type StepAttemptWire,
   type UnresolvedGoalActionWire,
   outputContractProblems,
   validateOutput,
 } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
-import { goalRun } from '../components/goals/goal-fixtures.test-helpers.js';
+import { goalRun, stepRun } from '../components/goals/goal-fixtures.test-helpers.js';
 import {
   type GoalMilestone,
   absenceOperationKey,
   checkErrorLabel,
+  checkErrorReason,
   checkKindLabel,
   exhaustedBudget,
   factCheckSentence,
   goalBudgetRows,
+  goalFirstAttemptAt,
   goalMilestoneText,
   goalStateNote,
   goalStepProgress,
@@ -249,6 +253,93 @@ describe('lib/goals', () => {
     );
   });
 
+  it('a decision pause on a look before the work that did not see the thing says so (S11 「门确认不存在」 B-c)', () => {
+    const goal = goalRun({ status: 'paused', pauseReason: 'needs_decision' });
+    const budget = goalBudgetRows(goal, zh);
+    const look = (status: 'seen_present' | 'never_seen_present' | 'unavailable') => ({
+      stepKey: null,
+      checkKey: 'gone',
+      take: 1,
+      look: 1,
+      status,
+      attempts: 1,
+      lastError: null,
+      observationId: null,
+      createdAt: '2026-10-20T00:00:00.000Z',
+      settledAt: '2026-10-20T00:01:00.000Z',
+    });
+    const acceptance = (status: 'seen_present' | 'never_seen_present' | 'unavailable') => ({
+      rounds: [],
+      steps: [],
+      absenceBaselines: [look(status)],
+      overriddenChecks: [],
+    });
+    for (const status of ['never_seen_present', 'unavailable'] as const) {
+      expect(
+        goalStateNote({ ...goal, acceptance: acceptance(status) }, undefined, budget, zh)?.text,
+      ).toMatch(/^需要人决定：平台事先看某条“不存在”检查要删的东西时，没看到它在/);
+    }
+    for (const read of [goal, { ...goal, acceptance: acceptance('seen_present') }]) {
+      expect(goalStateNote(read, undefined, budget, zh)?.text).toMatch(/^需要人决定：验收没通过/);
+    }
+  });
+
+  it('when the run’s first attempt started — of any step, superseded ones too — or null before any (#786 review #501)', () => {
+    const [first] = stepRun().attempts;
+    const attempt = (createdAt: string) => ({ ...(first as StepAttemptWire), createdAt });
+    expect(goalFirstAttemptAt({ steps: [] })).toBeNull();
+    expect(goalFirstAttemptAt({ steps: [stepRun({ attempts: [] })] })).toBeNull();
+    expect(
+      goalFirstAttemptAt({
+        steps: [
+          stepRun({ attempts: [attempt('2026-10-20T00:05:00.000Z')] }),
+          stepRun({
+            supersededInRevision: 2,
+            attempts: [attempt('2026-10-20T00:09:00.000Z'), attempt('2026-10-20T00:02:00.000Z')],
+          }),
+        ],
+      }),
+    ).toBe('2026-10-20T00:02:00.000Z');
+  });
+
+  it('a decision pause on the goal’s own checks points at Acceptance, not at steps none of which is marked (#780 UX P3-5)', () => {
+    const goal = goalRun({ status: 'paused', pauseReason: 'needs_decision' });
+    const budget = goalBudgetRows(goal, zh);
+    const round = (status: 'failed' | 'unavailable' | 'passed') => ({
+      round: 1,
+      planRevision: 1,
+      openedAt: '2026-10-20T01:00:00.000Z',
+      checks: [{ checkKey: 'keep', kind: 'observe_absent' as const, status }],
+    });
+    const acceptance = (status: 'failed' | 'unavailable' | 'passed') =>
+      ({
+        rounds: [round(status)],
+        steps: [],
+        absenceBaselines: [],
+        overriddenChecks: [],
+      }) as unknown as GoalDetailWire['acceptance'];
+    for (const status of ['failed', 'unavailable'] as const) {
+      expect(
+        goalStateNote({ ...goal, acceptance: acceptance(status), steps: [] }, undefined, budget, zh)
+          ?.text,
+      ).toBe('需要人决定：目标的验收检查没通过，或者做不了。见下面「验收」里标出的检查。');
+    }
+    // A failed step is what the person decides on: the steps are marked.
+    const failedStep = { status: 'failed' } as unknown as GoalDetailWire['steps'][number];
+    expect(
+      goalStateNote(
+        { ...goal, acceptance: acceptance('failed'), steps: [failedStep] },
+        undefined,
+        budget,
+        zh,
+      )?.text,
+    ).toMatch(/^需要人决定：验收没通过/);
+    expect(
+      goalStateNote({ ...goal, acceptance: acceptance('passed'), steps: [] }, undefined, budget, zh)
+        ?.text,
+    ).toMatch(/^需要人决定：验收没通过/);
+  });
+
   it('a budget pause names the dimension used up', () => {
     const goal = goalRun({
       status: 'paused',
@@ -370,6 +461,10 @@ describe('lib/goals', () => {
     expect(checkErrorLabel('predicate_unsatisfied', zh)).toBe('结果不符合期望');
     expect(checkErrorLabel('fact_not_observed', zh)).toMatch(/^没看到能作证据的事实/);
     expect(checkErrorLabel('gate_timeout', zh)).toBe('上次没成功（代码 gate_timeout）');
+    // #786 UX P3: inside a sentence that already says the try failed, only why.
+    expect(checkErrorReason('gate_timeout', en)).toBe('code gate_timeout');
+    expect(checkErrorReason('gate_unreachable', zh)).toBe('连不上门');
+    expect(checkErrorLabel('gate_unreachable', zh)).toBe('连不上门');
   });
 });
 

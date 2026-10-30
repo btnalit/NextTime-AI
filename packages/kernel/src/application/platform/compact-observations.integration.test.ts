@@ -21,6 +21,7 @@ import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { publishOntologyDomainPack } from '../../substrate/ontology/index.js';
 import { dispatchCapability } from '../gateway/dispatch.js';
 import type { ResolvedCaller } from '../gateway/resolve-caller.js';
+import { listAbsenceBaselines } from '../goal/absence-baselines.js';
 import {
   listAcceptanceChecks,
   listStepAcceptanceChecks,
@@ -1090,6 +1091,129 @@ describe.runIf(DATABASE_URL !== undefined)(
         listStepAcceptanceChecks(client, workspaceId, goalRunId),
       );
       expect(settled).toMatchObject({ stepRunId, status: 'failed', observationId: evidence });
+    });
+  },
+);
+
+/**
+ * S11 「门确认不存在」 B-c (goal/0012): `goal_absence_baselines.observation_id` is one more foreign
+ * key into `observations` — the previous release's compaction refuses to run on it
+ * (`reversibility-deltas.json`), this one runs, and condition (a) keeps the Observation an absence
+ * check's baseline rests on. The evidence is an ingest marker on purpose, as above (the row is a
+ * fixture written past the table's guard, which would hold it to a baseline's own Observation).
+ */
+describe.runIf(DATABASE_URL !== undefined)(
+  'compactObservations and an absence baseline (integration, real Postgres) — S11 「门确认不存在」 B-c',
+  () => {
+    let pool: Pool;
+    const workspaceId = randomUUID();
+    const ownerId = randomUUID();
+    const DAY_SECONDS = 24 * 60 * 60;
+
+    const asLogin = <T>(fn: (client: PoolClient) => Promise<T>): Promise<T> =>
+      withWorkspace(pool, { workspaceId, principalId: ownerId }, fn, { skipRoleSwitch: true });
+    /** Fixture rows the goal's guards would only let the platform write (the GO2 suites' way). */
+    const raw = <T>(sql: string, params: readonly unknown[]): Promise<T[]> =>
+      asLogin(async (client) => {
+        await client.query('set local session_replication_role = replica');
+        return (await client.query(sql, [...params])).rows as T[];
+      });
+
+    beforeAll(async () => {
+      pool = createPool();
+      await runMigrations(pool, MIGRATIONS_DIR);
+      await asLogin(async (client) => {
+        await client.query('insert into workspaces (id, name) values ($1, $2)', [
+          workspaceId,
+          `compact-absence-baseline-${workspaceId.slice(0, 8)}`,
+        ]);
+        await client.query(
+          `insert into principals (workspace_id, id, kind, role, display_name)
+           values ($1, $2, 'human', 'owner', 'owner')`,
+          [workspaceId, ownerId],
+        );
+      });
+    });
+
+    afterAll(async () => {
+      await pool.end();
+    });
+
+    it('runs on a schema where an absence baseline references an Observation, and never deletes the one the baseline rests on', async () => {
+      const { sourceId, activityId, laterActivityId } = await asLogin(async (client) => {
+        const source = await registerSource(client, workspaceId, {
+          kind: 'test.compact-absence-baseline',
+          ownerPrincipalId: ownerId,
+          visibility: 'workspace',
+        });
+        const activity = await startActivity(client, workspaceId, {
+          kind: 'test.compact-absence-baseline',
+          principalId: ownerId,
+        });
+        const later = await startActivity(client, workspaceId, {
+          kind: 'test.compact-absence-baseline',
+          principalId: ownerId,
+        });
+        return { sourceId: source.id, activityId: activity.id, laterActivityId: later.id };
+      });
+      const observe = async (activity: string, offsetSeconds: number) =>
+        (
+          await raw<{ id: string }>(
+            `insert into observations (workspace_id, source_id, activity_id, content, created_at)
+             values ($1, $2, $3, '{}', now() + make_interval(secs => $4)) returning id`,
+            [workspaceId, sourceId, activity, offsetSeconds],
+          )
+        )[0]?.id as string;
+      const evidence = await observe(activityId, -40 * DAY_SECONDS - 30);
+      const older = await observe(activityId, -40 * DAY_SECONDS - 20);
+      const old = await observe(activityId, -40 * DAY_SECONDS - 10);
+      const newest = await observe(laterActivityId, 0);
+
+      const [goal] = await raw<{ id: string }>(
+        `insert into goal_runs (workspace_id, status, on_behalf_of, statement, current_revision,
+           confirmed_at, budget_max_tokens, budget_max_steps, budget_max_revisions,
+           budget_max_wall_clock_seconds)
+         values ($1, 'running', $2, 'a goal', 1, now(), 100000, 10, 5, 3600) returning id`,
+        [workspaceId, ownerId],
+      );
+      const goalRunId = goal?.id as string;
+      await raw(
+        `insert into goal_absence_baselines
+           (workspace_id, goal_run_id, check_key, take, observation_check, status, attempts,
+            first_attempt_at, observation_id, settled_at)
+         values ($1, $2, 'gone', 1, $3::jsonb, 'seen_present', 1, now(), $4, now())`,
+        [
+          workspaceId,
+          goalRunId,
+          JSON.stringify({ gatekeeperId: randomUUID(), operation: 'svc.lookup' }),
+          evidence,
+        ],
+      );
+
+      const dryRun = await compactObservations(pool, { confirm: false, workspaceId });
+      expect(dryRun.workspaces.find((w) => w.workspaceId === workspaceId)).toMatchObject({
+        examined: 3,
+        keptReferenced: 1,
+        deleted: 2,
+      });
+
+      const executed = await compactObservations(pool, { confirm: true, workspaceId });
+      expect(executed.workspaces.find((w) => w.workspaceId === workspaceId)).toMatchObject({
+        examined: 3,
+        keptReferenced: 1,
+        deleted: 2,
+      });
+      const left = await asLogin((client) =>
+        client.query<{ id: string }>(
+          'select id from observations where workspace_id = $1 and id = any($2::uuid[])',
+          [workspaceId, [evidence, older, old, newest]],
+        ),
+      );
+      expect(new Set(left.rows.map((row) => row.id))).toEqual(new Set([evidence, newest]));
+      const [baseline] = await asLogin((client) =>
+        listAbsenceBaselines(client, workspaceId, goalRunId),
+      );
+      expect(baseline).toMatchObject({ status: 'seen_present', observationId: evidence });
     });
   },
 );

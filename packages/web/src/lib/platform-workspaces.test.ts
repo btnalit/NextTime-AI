@@ -108,8 +108,8 @@ describe('platform-workspaces', () => {
   // `discoverWorkspaceScopedSchema`), read from the migrations that create it.
   it('every workspace-scoped table in the kernel migrations has a purge count label', () => {
     const tables = workspaceScopedTables();
-    // The parser reads what the purge preview shows today, S11 GO1's, GO4a's and GO4b's tables
-    // included.
+    // The parser reads what the purge preview shows today, S11 GO1's, GO4a's, GO4b's and
+    // 「门确认不存在」 B-c's tables included.
     expect(tables).toEqual(
       expect.arrayContaining([
         'goal_runs',
@@ -117,6 +117,7 @@ describe('platform-workspaces', () => {
         'step_runs',
         'goal_acceptance_checks',
         'step_acceptance_checks',
+        'goal_absence_baselines',
       ]),
     );
     const unlabelled = tables

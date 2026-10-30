@@ -9944,6 +9944,79 @@
         "acceptance": {
           "additionalProperties": false,
           "properties": {
+            "absenceBaselines": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "attempts": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "checkKey": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "lastError": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "look": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "observationId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "settledAt": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "status": {
+                    "enum": [
+                      "pending",
+                      "seen_present",
+                      "never_seen_present",
+                      "unavailable",
+                      "superseded"
+                    ],
+                    "type": "string"
+                  },
+                  "stepKey": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "take": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "stepKey",
+                  "checkKey",
+                  "take",
+                  "look",
+                  "status",
+                  "attempts",
+                  "lastError",
+                  "observationId",
+                  "createdAt",
+                  "settledAt"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
             "overriddenChecks": {
               "items": {
                 "additionalProperties": false,
@@ -10981,6 +11054,7 @@
           "required": [
             "rounds",
             "steps",
+            "absenceBaselines",
             "overriddenChecks"
           ],
           "type": "object"

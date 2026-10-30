@@ -4,6 +4,7 @@ import {
   ActionRequestReconcileCheckStatusSchema,
   ActionRequestReconciliationSchema,
   ActionRequestStatusSchema,
+  GoalAbsenceBaselineStatusSchema,
   GoalAcceptanceCheckKindSchema,
   GoalAcceptanceCheckStatusSchema,
   GoalOutcomeBasisSchema,
@@ -299,12 +300,40 @@ export const OverriddenAcceptanceCheckWireSchema = z
   .strict();
 export type OverriddenAcceptanceCheckWire = z.infer<typeof OverriddenAcceptanceCheckWireSchema>;
 
+/** S11 「门确认不存在」 B-c (goal/0012): the baseline an absence check (`observe_absent`) goes by —
+ *  the platform's look, with the check's call, before the goal's work started (for a check a
+ *  revision added or re-called once steps had started, before the run went on — a look whose
+ *  `createdAt` is after an attempt's came after the work began). The goal's own check
+ *  has `stepKey` `null`. Only a baseline of the call the plan in force makes is listed (its latest
+ *  take); a check with none listed has not been looked at since the run last started running or its
+ *  call changed. `take` counts the check's takes (as the audit does); `look` is which look with this
+ *  call it is — the earlier looks with the same call, ones superseded before they settled not
+ *  counted, plus one — so the first look after the call changed is look 1 (#786 UX P3).
+ *  `lastError`: why it is `unavailable`, or why it was tried again. */
+export const GoalAbsenceBaselineWireSchema = z
+  .object({
+    stepKey: z.string().nullable(),
+    checkKey: z.string(),
+    take: z.number().int().positive(),
+    look: z.number().int().positive(),
+    status: GoalAbsenceBaselineStatusSchema,
+    attempts: z.number().int().nonnegative(),
+    lastError: z.string().nullable(),
+    observationId: z.string().nullable(),
+    createdAt: z.string(),
+    settledAt: z.string().nullable(),
+  })
+  .strict();
+export type GoalAbsenceBaselineWire = z.infer<typeof GoalAbsenceBaselineWireSchema>;
+
 /** The run's verification: its rounds (the goal's acceptance checks), the steps that verify their
- *  own work, and — on an `achieved` resting on the requester's word — the checks it overrode. */
+ *  own work, the baselines its absence checks go by, and — on an `achieved` resting on the
+ *  requester's word — the checks it overrode. */
 export const GoalAcceptanceWireSchema = z
   .object({
     rounds: z.array(GoalAcceptanceRoundWireSchema),
     steps: z.array(StepAcceptanceWireSchema),
+    absenceBaselines: z.array(GoalAbsenceBaselineWireSchema),
     overriddenChecks: z.array(OverriddenAcceptanceCheckWireSchema),
   })
   .strict();
