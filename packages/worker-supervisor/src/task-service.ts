@@ -714,9 +714,11 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
             try {
               await terminateOne(workerRunId, entry, 'egress_registration_failed');
             } catch (err) {
-              // Docker refused the stop: the run stays until its timeout's own terminate. An
-              // address with no entry is denied by egress-proxy meanwhile (EGRESS_DENY_UNKNOWN_SOURCE,
-              // on by default).
+              // Docker refused the stop: the run stays until its timeout's own terminate (whose
+              // reason, `timeout`, then replaces this one). `terminateOne` already unbound its
+              // Handle, and the failed write left the file as it was: the deny-all entry written at
+              // spawn if the file still has it, else no entry, which egress-proxy denies
+              // (EGRESS_DENY_UNKNOWN_SOURCE, on by default).
               console.error(
                 JSON.stringify({
                   level: 'error',
