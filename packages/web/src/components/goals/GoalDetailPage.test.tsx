@@ -737,6 +737,99 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     expect(stepLine.textContent).toContain('继续运行会再看一次');
   });
 
+  it('a look whose answer did not show the thing says so (legacy 507); a reconcile absence call names the look it goes by (S11 「门确认不存在」 reconcile)', async () => {
+    const base = goalDetail();
+    const [fetch, apply] = base.planRevision.plan.steps as [
+      (typeof base.planRevision.plan.steps)[number],
+      (typeof base.planRevision.plan.steps)[number],
+    ];
+    const lookup = (name: string) => ({
+      gatekeeperId: GATE_ID,
+      operation: 'svc.lookup',
+      params: { name },
+    });
+    const detail = goalDetail({
+      status: 'paused',
+      planRevision: {
+        ...base.planRevision,
+        plan: {
+          steps: [
+            fetch,
+            {
+              ...apply,
+              acceptance: [{ kind: 'observe_absent', key: 'removed', check: lookup('web') }],
+              reconcile: [
+                {
+                  action: {
+                    gatekeeperId: GATE_ID,
+                    operation: 'svc.remove',
+                    params: { name: 'web' },
+                  },
+                  check: lookup('web'),
+                },
+                {
+                  action: {
+                    gatekeeperId: GATE_ID,
+                    operation: 'svc.remove',
+                    params: { name: 'db' },
+                  },
+                  check: lookup('db'),
+                },
+              ],
+            },
+          ],
+          acceptance: [{ kind: 'observe_absent', key: 'gone', check: lookup('db') }],
+        },
+      },
+      steps: base.steps.map((step) => ({ ...step, attemptCount: 0, attempts: [] })),
+      acceptance: {
+        ...base.acceptance,
+        absenceBaselines: [
+          {
+            stepKey: null,
+            checkKey: 'gone',
+            take: 2,
+            look: 2,
+            status: 'unavailable',
+            attempts: 1,
+            lastError: 'presence_not_confirmed',
+            observationId: null,
+            createdAt: '2026-10-29T00:00:00.000Z',
+            settledAt: '2026-10-29T00:01:00.000Z',
+          },
+        ],
+      },
+    });
+    renderPage(scriptedHttp({ ...baseHandlers(detail), list_operations: () => ({ items: [] }) }));
+
+    const acceptance = await screen.findByTestId('goal-acceptance');
+    const line = within(acceptance).getByTestId('goal-absence-baseline');
+    expect(line.getAttribute('data-baseline')).toBe('unavailable');
+    expect(line.textContent).toBe(
+      // The look count beside the look, not stacked on the parenthesis (#799 UX P3-1).
+      '开始前平台看了（第 2 次看），门也回答了，但回答里看不出它在（空结果，或者不符合 Operation 声明的结果映射）：参数可能没指向要删的东西。所以目标暂停，步骤没有开始。核对参数后修订计划，或者继续运行再看一次。',
+    );
+
+    const step = (await screen.findAllByTestId('goal-step'))[1] as HTMLElement;
+    // Each declaration: what the platform asks on one line, what "not there" counts for on the
+    // next — two elements, not one run of text (#799 UX P2-1, P3-2).
+    const declarations = within(step).getAllByTestId('goal-reconcile-declaration');
+    await waitFor(() =>
+      expect(declarations[0]?.firstElementChild?.textContent).toBe(
+        '对门「cert-gate」上的 svc.remove：在门「cert-gate」上以参数 {"name":"web"} 调用 svc.lookup，看要查的东西还在不在',
+      ),
+    );
+    expect(declarations[0]?.className).toContain('stack-s');
+    expect(declarations[0]?.lastElementChild?.getAttribute('data-testid')).toBe(
+      'goal-reconcile-absence',
+    );
+    const notes = within(step).getAllByTestId('goal-reconcile-absence');
+    expect(notes.map((note) => note.textContent)).toEqual([
+      '门回答它不在，就算这个动作生效了。前提是动作之前平台看到过它在：用的是这一步的验收检查「removed」那次事先查看。',
+      '门回答它不在，就算这个动作生效了。前提是动作之前平台看到过它在：用的是目标的验收检查「gone」那次事先查看。',
+    ]);
+  });
+
   it('a look made once the goal’s steps had started — a revision changed the check — says so, and that a thing not there may be an earlier step’s doing (#786 review #501)', async () => {
     const base = goalDetail();
     const absence = (key: string) => ({

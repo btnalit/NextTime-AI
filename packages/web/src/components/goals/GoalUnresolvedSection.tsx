@@ -2,7 +2,7 @@ import type { UnresolvedGoalActionWire } from '@nexttime/shared';
 import type { ReactNode } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { actionKindTagText, formatDateTime, formatRelative } from '../../lib/format.js';
-import { checkErrorLabel, unresolvedActionText } from '../../lib/goals.js';
+import { unresolvedActionText, unresolvedCheckErrorText } from '../../lib/goals.js';
 import { useT } from '../../lib/i18n.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { RefChip } from '../kit/ref-chip.js';
@@ -54,6 +54,7 @@ export function GoalUnresolvedSection({
         <ul className="stack">
           {state.items.map((action) => {
             const text = unresolvedActionText(action, paused, t);
+            const lastError = unresolvedCheckErrorText(action, t);
             return (
               <li
                 key={action.actionRequestId}
@@ -83,11 +84,7 @@ export function GoalUnresolvedSection({
                 <span className="text-small text-3" data-testid="goal-unresolved-check">
                   {text.check}
                 </span>
-                {action.platformCheck?.lastError ? (
-                  <span className="text-small text-3">
-                    {checkErrorLabel(action.platformCheck.lastError, t)}
-                  </span>
-                ) : null}
+                {lastError ? <span className="text-small text-3">{lastError}</span> : null}
                 {controls?.(action)}
               </li>
             );

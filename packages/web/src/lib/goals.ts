@@ -793,12 +793,7 @@ export function observationSentence(
   t: Translate,
 ): string {
   const gate = gateName ?? shortId(check.gatekeeperId);
-  // Two checks of one operation differ only in their params, so the sentence names them —
-  // secret-named fields masked, though the kernel has masked them already.
-  const params =
-    check.params && Object.keys(check.params).length > 0
-      ? visibleText(clipMiddle(JSON.stringify(redactSensitive(check.params)), OBSERVE_PARAMS_MAX))
-      : null;
+  const params = observeParamsText(check);
   if (!('expect' in check)) {
     return params === null
       ? t(
@@ -819,6 +814,37 @@ export function observationSentence(
     : t(
         `在门「${gate}」上以参数 ${params} 观察 ${check.operation}，期望 ${expect}`,
         `Observe ${check.operation} with ${params} on gate “${gate}”, expecting ${expect}`,
+      );
+}
+
+/** Two checks of one operation differ only in their params, so a sentence names them —
+ *  secret-named fields masked, though the kernel has masked them already. */
+function observeParamsText(check: ObservationCheck | ObservationAbsenceCheck): string | null {
+  return check.params && Object.keys(check.params).length > 0
+    ? visibleText(clipMiddle(JSON.stringify(redactSensitive(check.params)), OBSERVE_PARAMS_MAX))
+    : null;
+}
+
+/** A step's reconcile declaration check (S11 GO3d), read as what the platform looks at when the
+ *  action's outcome is unknown. A predicate reads as any observation; an absence call (S11
+ *  「门确认不存在」 reconcile) says what it asks — not the acceptance check's "passes only when":
+ *  what "not there" counts for is the note under it (#799 UX P3-2). */
+export function reconcileCheckSentence(
+  check: ObservationCheck | ObservationAbsenceCheck,
+  gateName: string | null,
+  t: Translate,
+): string {
+  if ('expect' in check) return observationSentence(check, gateName, t);
+  const gate = gateName ?? shortId(check.gatekeeperId);
+  const params = observeParamsText(check);
+  return params === null
+    ? t(
+        `在门「${gate}」上调用 ${check.operation}，看要查的东西还在不在`,
+        `Call ${check.operation} on gate “${gate}” to see whether the thing looked up is still there`,
+      )
+    : t(
+        `在门「${gate}」上以参数 ${params} 调用 ${check.operation}，看要查的东西还在不在`,
+        `Call ${check.operation} with ${params} on gate “${gate}” to see whether the thing looked up is still there`,
       );
 }
 
@@ -860,6 +886,11 @@ const CHECK_ERROR: Readonly<Record<string, readonly [string, string]>> = {
     'The connection to the gate dropped before it answered',
   ],
   operation_refused: ['门拒绝了这次调用', 'The gate refused the call'],
+  // Legacy 507: a look before the work whose answer did not show the thing.
+  presence_not_confirmed: [
+    '门回答了，但回答里看不出它在（空结果，或者不符合 Operation 声明的结果映射）',
+    'The gate answered, but its answer does not show the thing there (an empty result, or not the shape the Operation’s result mapping declares)',
+  ],
   // S11 「门确认不存在」 B-c.
   never_seen_present: [
     '平台用同样的调用没有一次看到过它在：现在它不在，证明不了是这个目标删掉的，检查不做',
@@ -999,6 +1030,41 @@ export function absenceBaselineOf(
   return detail.acceptance.absenceBaselines.find(
     (baseline) => baseline.stepKey === stepKey && baseline.checkKey === checkKey,
   );
+}
+
+/** S11 「门确认不存在」 reconcile: the absence check whose look a step's reconcile declaration goes
+ *  by when its check is an absence call — the step's own `observe_absent` check with the same call,
+ *  else the goal's (the kernel refuses a plan with neither) — or `null` for a declaration with a
+ *  predicate, or none found. */
+export function reconcileAbsenceCheckOf(
+  goalAcceptance: readonly AcceptanceCheck[],
+  stepAcceptance: readonly {
+    readonly kind: string;
+    readonly key: string;
+    readonly check?: unknown;
+  }[],
+  check: ObservationCheck | ObservationAbsenceCheck,
+): { readonly key: string; readonly ofGoal: boolean } | null {
+  if ('expect' in check) return null;
+  const same = (candidate: { readonly kind: string; readonly check?: unknown }) =>
+    candidate.kind === 'observe_absent' && canonicalJson(candidate.check) === canonicalJson(check);
+  const own = stepAcceptance.find(same);
+  if (own) return { key: own.key, ofGoal: false };
+  const goal = goalAcceptance.find(same);
+  return goal ? { key: goal.key, ofGoal: true } : null;
+}
+
+/** `value` as JSON with object keys sorted — two calls compare equal whatever order their params
+ *  were written in, as the kernel compares them. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value)
+      .filter(([, member]) => member !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([key, member]) => `${JSON.stringify(key)}:${canonicalJson(member)}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
 }
 
 /** S11 「门确认不存在」 B-c (#786 review #501): when the run's first attempt started — of any step,
@@ -1319,6 +1385,19 @@ function completedNote(goal: GoalRunWire, t: Translate): GoalStateNote | null {
 /** What one unresolved action still needs, and — when its step declared one — where the
  *  platform's own check of it stands. `paused`: the goal is paused or held, so no check runs
  *  (GO3d: a pending check waits for the goal to go on). */
+/** The line under an unresolved action's check sentence naming the platform check's last error —
+ *  none where that sentence already says what the code means: `never_seen_present` there is the
+ *  runner not asking the gate at all, which the acceptance-check label would contradict (#799 UX
+ *  P2-2). */
+export function unresolvedCheckErrorText(
+  action: UnresolvedGoalActionWire,
+  t: Translate,
+): string | null {
+  const code = action.platformCheck?.lastError;
+  if (!code || code === 'never_seen_present') return null;
+  return checkErrorLabel(code, t);
+}
+
 export function unresolvedActionText(
   action: UnresolvedGoalActionWire,
   paused: boolean,
@@ -1339,8 +1418,8 @@ export function unresolvedActionText(
     return {
       needs,
       check: t(
-        '这一步没有声明平台核对，只能由人核对。像删除这样的动作，效果是“查不到”，平台不把“查不到”当成证据，所以总是交给人核对。',
-        'This step declared no platform check, so only a person can check it. An action like a deletion leaves only “nothing found”, which the platform does not take as evidence, so it always goes to a person.',
+        '这一步没有为它声明平台核对，只能由人核对。删除这类动作也能交给平台核对：在这一步加一条核对声明，用门查“不存在”的调用；计划里还要有同一个调用的“不存在”验收检查，平台在动作之前用它看到过它在，之后门回答不在才算生效。',
+        'This step declared no platform check for it, so only a person can check it. A removal can be checked by the platform too: give this step a reconcile declaration that asks the gate whether the thing is gone, and give the plan an absence check with the same call. The platform looks with that check before the action, and the gate answering "not there" counts as the action having taken effect only if that look saw the thing there.',
       ),
     };
   }
@@ -1368,10 +1447,16 @@ export function unresolvedActionText(
     case 'unavailable':
       return {
         needs,
-        check: t(
-          '平台核对不了（观察被拒绝或一直没有答复）：要有人核对后记下结果。',
-          'The platform could not check (the observation was refused or never answered): a person records what they find.',
-        ),
+        check:
+          check.lastError === 'never_seen_present'
+            ? t(
+                '平台核对不了：动作之前平台没有看到过它在，就算门回答它不在，也证明不了是这个动作删掉的，所以平台没有去问门。要有人核对后记下结果。',
+                'The platform could not check: it never saw the thing there before the action, so even the gate answering that it is not there would not show this action removed it, and the platform did not ask the gate. A person records what they find.',
+              )
+            : t(
+                '平台核对不了（观察被拒绝或一直没有答复）：要有人核对后记下结果。',
+                'The platform could not check (the observation was refused or never answered): a person records what they find.',
+              ),
       };
     case 'preempted':
       return { needs, check: t('已由人核对。', 'A person recorded a finding first.') };

@@ -4304,6 +4304,12 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **I-AB1**：两张验收表各一个触发器（排在原有 guard 之后），`observe_absent` passed 须有同一目标、同一检查、同一调用、Observation 更早的 `seen_present` 基线；基线表 guard 只建 pending 且只在 running、只为当前计划声明且调用一致的检查、take 连续、只结算一次、`seen_present` / `never_seen_present` 落在本次门答复的 Observation 上；I-G5 检查器同步。基线引用的 Observation 不被压缩删除。
   - **控制台**：每条「不存在」检查下 `goal-absence-baseline` 行；步骤开始后才看的基线按 `goalFirstAttemptAt` 区分说法；目标级检查失败的暂停说明指向「验收」（遗留 499）。
   - **不在本 PR**：reconcile 检查用门确认不存在（goal 0013 小 PR）；按响应体判断不存在（遗留 507）。
+- 实现说明（「门确认不存在」reconcile，#799，2026-10-30 合入，661cbfd；迁移 governance/0029；关闭遗留 507）：
+  - **计划**：reconcile 声明的 `check` 可以是不存在调用，计划校验要求它与这一步或目标的一条 `observe_absent` 检查同一调用（同门、同 Operation、同 params）；判定式检查与别的步骤的检查都拒绝。
+  - **执行**：`reconcile-check.ts` 调门前用 `absenceSeenBeforeAction` 查基线，没有早于动作的 `seen_present` 就记 `unavailable`（`never_seen_present`）、不调门；门说还在时错误码 `target_still_present`，按有界重试，试满后 `not_seen` 停到 `paused(awaiting_reconcile)`。Settlement 带上 `absentAnswersReview`。
+  - **数据库**：governance/0029 的函数 `action_request_absence_seen_before` 与触发器 `action_requests_reconciliation_seen_before` 兜底（确认人 / 时间空串检查与 goal/0011、I-G5 写法一致）；I-G5 检查器新条件 `reconciled-absent-unbaselined`。
+  - **遗留 507**：`absence-baseline.ts` 的 `presenceShown`（方案 A）：有 `result_mapping` 时按映射看 identity；没有映射时，回答没有内容（没有响应体、空白响应体、cli / ssh 什么都没打印）以成功状态码 / 退出码为准算看到；看不出记 `unavailable`（`presence_not_confirmed`）并在开工前暂停，继续后重看。剩下的边角见遗留 510。
+  - **控制台**：步骤卡核对声明下单独一行说明（`goal-reconcile-absence`），待核对动作在 `never_seen_present` 时说明平台没有去问门，基线行与暂停说明有 `presence_not_confirmed` 的中英文说法。
 - 实现说明（安全修复：观察型写入不能改写平台元本体对象，#759，2026-10-24 合入，a431d79；无迁移；关闭遗留 478）：Operation Object 本身就是已发布的定义（审批读的 mode、binding、`auto_approvable`、`blast_radius` 都在 `properties` 里），而 `upsertObject` 按 identity 合并属性，`submit_observations` 与门回写的 observedFacts 原先都能就地改写已发布版本。修复收口在图写入的唯一入口 `SqlGraphStore.upsertObject`：元本体类型只接受 `kernelAuthored` 写入；`submit_observations` 校验阶段整批拒收；`writeObservedFacts` 跳过并记 `refusedObservedObjectTypes`（apply 时动作已执行，不整单拒绝）；`ResultMappingSchema` 拒绝指向元本体类型。写入口清单（`meta-objects.ts` 6 处带 `kernelAuthored`、`registry.ts` 写 `ConnectedSystem`、`resolveObjectRef` 前有 `checkObjectRef`、原生 SQL 写 `objects` 的都是内核写）见 PR 正文与 #493 审查。不在本 PR：门摘要覆盖影响审批的字段（遗留 482）。
 - 实现说明（遗留 482：已发布 Operation 由数据库守护，#765，2026-10-29 合入，c7710cb）：遗留原文要把 `auto_approvable`、`await_decision`、http `blast_radius` 纳入门的 `operationDefinitionDigest`；协调线程 2026-10-29 改选数据库守护，门协议不动（「门做下限」会改授权模型，留给维护者）。迁移 `core/0047_operation_version_guard`：BEFORE UPDATE 触发器 `objects_operation_version_guard`（离开草稿的行只许改 `status` 沿生命周期、`description` 与治理字段；identity 用 `is distinct from` 比较；status 缺失按草稿补齐；core 0016 回填补 `version` 是唯一例外，判断不出时按不成立处理；禁止改类型进出 Operation）与提交时检查的约束触发器 `objects_operation_governance_audited`（治理字段改动须有同事务、同 Operation 的 `operation.governance_refreshed` 审计，`payload.after` 是对象并写明每个改动字段的新值）。`refreshOperationGovernance` 每次就地写入后自己写审计，`gate-instance-handlers.ts` 不再写。草稿仍可整行重写；发布时可在翻状态的同一条语句里盖簿记戳（#757 的 `absentAnswersReviewed*`）。测试：`operation-version-guard.integration.test.ts`（真库 18 条，含工作区角色与登录角色、审查 F1 的两步改写探针）、`manifest.test.ts`（每次就地写入一条前后值审计）、`operation-governance.integration.test.ts`（每个 Operation 恰一条）。INSERT 规则延后为遗留 484。
 - 来自 GO4a（#664）的输入：`confirm_goal_acceptance` 和 `end_goal` 是请求人的成员能力，永远不进 Handle scope（membership-not-in-handle 守卫）；`createGoalRun` 和 `reviseGoalRun` 返回的 `hints` 原样带到能力结果里；如需 owner hold 期间也禁止请求人结束目标，在能力层加一道。
@@ -4341,6 +4347,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 **GO7 — 验收与真实数据（主机 S1–S12、维护者日常旅程、一次付费回归）**（见 `global-roadmap-2026-10-16.md` §4）
 
 - 实现说明：（未开工）
+- 计划变更（协调线程 2026-10-30 定）：拆成两段。**GO7a**（主机窗口前）：staging 上用夹具门 + fake-llm 跑 S1–S12 里能在部署环境跑的目标场景；内核线程从最新 main 开分支，审查 #488 + #493。**GO7b**（主机窗口）：主机实跑、遗留 230 的真实目标、一次付费真实模型回归。
 
 ### W1a — 统计车道（与 W1 并行）
 
