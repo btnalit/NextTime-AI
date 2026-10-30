@@ -118,9 +118,10 @@ if [ -z "${NEXTTIME_DATA:-}" ] || [ -z "${KERNEL_BIND_ADDR:-}" ]; then
 fi
 
 . "$(dirname "$0")/lib/accept-common.sh"
-# S11 GO7a: goal scenarios S1, S4–S7, S9–S11 (goal_scenarios_step, after step 9), the cleanup of
-# every goal they start and of the grants S9 gives bob, and with --real keeping their test ledger
-# out of the published manifest — see that file's own header comment.
+# S11 GO7a: goal scenarios S1, S2, S4–S12 (goal_scenarios_step, after step 9), the cleanup of
+# every goal they start, of the grants S9 gives bob and of the row locks, held turns and killed
+# service S12, S8 and S2 may leave, and with --real keeping their test ledger out of the published
+# manifest — see that file's own header comment.
 . "$(dirname "$0")/lib/accept-s2-goals.sh"
 require_driver
 
@@ -1379,6 +1380,10 @@ cleanup_step() {
   # Set here, not only in on_exit: the explicit end-of-run call must also disarm the EXIT trap,
   # or cleanup runs (and reports PASS) a second time on the normal exit.
   CLEANUP_DONE=1
+  # First, --keep or not: a service the goal scenarios' S2 killed is started again (everything
+  # below calls the kernel), a row lock S12 or S2 still holds is ended and a turn fake-llm still
+  # holds is released — none of them is a fixture to keep (goal_cleanup_live_work).
+  goal_cleanup_live_work
   if [ "$KEEP" -eq 1 ]; then
     echo "cleanup: --keep set, leaving accept-s2 fixtures/gates/workspace up"
     return

@@ -21,6 +21,9 @@
 //                                pi always streams, but this is also exercised directly by
 //                                packages/llm-proxy's own byte-for-byte SSE passthrough tests
 //                                (docs/development-tasks.md S1.7 acceptance).
+//   GET  /accept-s2/holds    -> {holds:[name...]}: the scripted turns held right now (S11 GO7a-3,
+//                                see "Held turns" below).
+//   POST /accept-s2/holds/<name>/release -> {released:<n>}: lets the turns held under <name> answer.
 //
 // Tool-call trigger (this task's own deliverable text: "when the prompt contains a tool-use
 // trigger word, emits one tool_calls delta so tool-call rows appear"): when the last user
@@ -271,6 +274,29 @@ function findToolResultText(messages, toolName) {
     return resultMessage ? toolMessageText(resultMessage) : undefined;
   }
   return undefined;
+}
+
+/** Every `toolName` call so far, oldest first, with the plain text of its result (`undefined`
+ *  while it has none) — for a scenario that makes the same call several times and reports each
+ *  answer (`goalThreeWritesScenario`). */
+function allToolResults(messages, toolName) {
+  if (!Array.isArray(messages)) return [];
+  const found = [];
+  for (const message of messages) {
+    if (!message || message.role !== 'assistant' || !Array.isArray(message.tool_calls)) continue;
+    for (const call of message.tool_calls) {
+      if (call?.function?.name !== toolName) continue;
+      let args;
+      try {
+        args = JSON.parse(call.function.arguments ?? '{}');
+      } catch {
+        args = {};
+      }
+      const resultMessage = messages.find((r) => r?.role === 'tool' && r.tool_call_id === call.id);
+      found.push({ args, text: resultMessage ? toolMessageText(resultMessage) : undefined });
+    }
+  }
+  return found;
 }
 
 /** The serialized newest message carrying `marker` — where a chat scenario reads the markers of
@@ -626,12 +652,17 @@ function entryGoalChatScenario(messages) {
 
 /** S11 GO5e-1: the *Worker* half of `entryGoalChatScenario` — the goal's one step. Reports back
  *  with no Fact: the goal is accepted on the platform's own observation of the stock API, which a
- *  Worker's report could not stand in for. */
+ *  Worker's report could not stand in for. S11 GO7a-3 (S2, S12): with `HOLD=<name>` in its input
+ *  the report is held until accept_s2.sh releases it ("Held turns" below) — the Worker stays alive
+ *  and mid model call, its Task running, for as long as the script needs. */
 function goalStepScenario(messages) {
   const blob = JSON.stringify(messages);
   const nonce = extractMarker(blob, 'GOAL_NONCE') ?? 'none';
+  // S11 GO7a-3: `HOLD=<name>` keeps the report back until accept_s2.sh releases it ("Held turns").
+  const hold = extractMarker(blob, 'HOLD');
   return [
     {
+      ...(hold ? { hold } : {}),
       tool: {
         name: 'report_result',
         args: {
@@ -749,6 +780,41 @@ function goalLedgerStepScenario(messages) {
   ];
 }
 
+/** S11 GO7a-3 (scripts/lib/accept-s2-goals.sh S8, plan §7.2 S8): a goal step whose Worker makes
+ *  three governed writes to the test ledger — `<k>-1`, `<k>-2`, then `<k>-3` (`LEDGER_KEY=<k>`) —
+ *  and reports what each came back with. Like `goalLedgerStepScenario`'s, each write waits for a
+ *  decision up to the kernel's await budget and comes back `pending_approval` when nobody decided.
+ *  The turn that asks for the third write is held (`HOLD=<name>`, "Held turns" below) until
+ *  accept_s2.sh releases it: in between the script pauses the goal and revises this step away,
+ *  so the third write meets a step that takes no new work (I-G9) when the revision let it finish,
+ *  and is never asked at all when it terminated the Worker. */
+function goalThreeWritesScenario(messages) {
+  const blob = JSON.stringify(messages);
+  const key = extractMarker(blob, 'LEDGER_KEY') ?? 'none';
+  const hold = extractMarker(blob, 'HOLD');
+  const write = (n) => ({ tool: { name: 'accept_s2_api_ledger_add', args: { key: `${key}-${n}` } } });
+  const answers = allToolResults(messages, 'accept_s2_api_ledger_add').map(
+    (call) => `${call.args?.key}: ${(call.text ?? 'no answer').slice(0, 200)}`,
+  );
+  return [
+    write(1),
+    write(2),
+    { ...(hold ? { hold } : {}), ...write(3) },
+    {
+      tool: {
+        name: 'report_result',
+        args: {
+          summary: `accept_s2: asked the test ledger for three entries under ${key}; the platform answered each (findings).`,
+          findings: answers.length > 0 ? answers : [`no ledger.add answered under ${key}`],
+          factsToAssert: [],
+          evidence: [{ kind: 'accept_s2_worker_note', content: { key } }],
+          artifacts: [],
+        },
+      },
+    },
+  ];
+}
+
 // Order matters: the entry-chat scenarios must be tested first. Once the entry agent has called
 // `invoke_worker`, its own message history contains the Worker marker (inside the tool-call
 // arguments' `input`), so a Worker-marker-first table would hand the *entry* agent the Worker's
@@ -764,6 +830,7 @@ const SCENARIOS = [
   { marker: 'ACCEPT_S2_SCENARIO=ssh_run', build: sshRunScenario, chat: false },
   { marker: 'ACCEPT_S2_SCENARIO=goal_step', build: goalStepScenario, chat: false },
   { marker: 'ACCEPT_S2_SCENARIO=goal_ledger', build: goalLedgerStepScenario, chat: false },
+  { marker: 'ACCEPT_S2_SCENARIO=goal_three_writes', build: goalThreeWritesScenario, chat: false },
 ];
 
 /**
@@ -815,8 +882,62 @@ function matchScenarioStep(messages, tools) {
       }
     }
   }
-  const index = Math.min(assistantMessageCount(counted), steps.length - 1);
-  return steps[index];
+  const answered = assistantMessageCount(counted);
+  const step = steps[Math.min(answered, steps.length - 1)];
+  // A turn asked again past the end of the script (the clamp) is never held a second time.
+  if (answered >= steps.length && step.hold !== undefined) {
+    const { hold: _again, ...rest } = step;
+    return rest;
+  }
+  return step;
+}
+
+// -------------------------------------------------------------------------------------------
+// Held turns (S11 GO7a-3; scripts/lib/accept-s2-goals.sh S2, S8, S12). A scripted step carrying
+// `hold: '<name>'` (its input's `HOLD=<name>` marker) is not answered until accept_s2.sh releases
+// that name — `POST /accept-s2/holds/<name>/release` — so the script knows the Worker is alive
+// and mid model call (`GET /accept-s2/holds`), and chooses when its next move happens: a service
+// restart, a row lock, a revision, each before the Worker reports or writes again. Bounded either
+// way: a turn is held at most HOLD_MAX_MS, so a script that died never leaves a Worker waiting on
+// this double for longer; a name held once — released or timed out — is never held again (a
+// retried attempt answers at once); a request whose client went away while held (a terminated
+// Worker) is dropped from the list and never answered. In memory only: a restarted fake-llm
+// forgets every hold, and the held requests' connections go with it.
+// -------------------------------------------------------------------------------------------
+
+const HOLD_MAX_MS = 120_000;
+/** name -> the release functions of the requests held under it. */
+const HELD = new Map();
+/** Names released or timed out: never held again. */
+const RELEASED = new Set();
+
+/** Resolves once `name` is released, HOLD_MAX_MS has passed, or `res`'s client went away. */
+function holdTurn(name, res) {
+  if (RELEASED.has(name)) return Promise.resolve();
+  return new Promise((resolve) => {
+    const waiting = HELD.get(name) ?? new Set();
+    HELD.set(name, waiting);
+    const release = () => {
+      clearTimeout(timer);
+      res.off('close', release);
+      waiting.delete(release);
+      if (waiting.size === 0 && HELD.get(name) === waiting) HELD.delete(name);
+      resolve();
+    };
+    const timer = setTimeout(() => releaseHold(name), HOLD_MAX_MS);
+    res.on('close', release);
+    waiting.add(release);
+  });
+}
+
+/** Releases every request held under `name`; returns how many there were. */
+function releaseHold(name) {
+  RELEASED.add(name);
+  const waiting = HELD.get(name);
+  if (!waiting) return 0;
+  const releases = [...waiting];
+  for (const release of releases) release();
+  return releases.length;
 }
 
 function sendScenarioStep(res, step, stream) {
@@ -932,6 +1053,11 @@ async function handleChatCompletions(req, res) {
   // the original, untouched search/echo behavior for every other request.
   const scenarioStep = matchScenarioStep(parsed.messages, parsed.tools);
   if (scenarioStep) {
+    if (scenarioStep.hold !== undefined) {
+      await holdTurn(scenarioStep.hold, res);
+      // Its client went away while it was held (a terminated Worker): nobody to answer.
+      if (res.destroyed) return;
+    }
     sendScenarioStep(res, scenarioStep, parsed.stream === true);
     return;
   }
@@ -1057,6 +1183,15 @@ const server = createServer((req, res) => {
   }
   if (req.method === 'GET' && url.pathname === '/v1/models') {
     respondModels(res);
+    return;
+  }
+  if (req.method === 'GET' && url.pathname === '/accept-s2/holds') {
+    sendJson(res, 200, { holds: [...HELD.keys()].sort() });
+    return;
+  }
+  const releasing = /^\/accept-s2\/holds\/([A-Za-z0-9_.:-]+)\/release$/.exec(url.pathname);
+  if (req.method === 'POST' && releasing) {
+    sendJson(res, 200, { released: releaseHold(releasing[1]) });
     return;
   }
   if (req.method === 'POST' && url.pathname === '/v1/chat/completions') {

@@ -1,4 +1,4 @@
-# scripts/lib/accept-s2-goals.sh — S11 GO7a: goal scenarios S1, S4, S5, S6, S7, S9, S10 and S11 of
+# scripts/lib/accept-s2-goals.sh — S11 GO7a: goal scenarios S1, S2 and S4 to S12 of
 # docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §7.2, run by scripts/accept_s2.sh in
 # its fake-provider path after step 9 (which covers proposing from chat, confirming, the platform's
 # acceptance and S3's idempotent propose/confirm). Sourced by accept_s2.sh right after
@@ -12,21 +12,31 @@
 # rather than the platform's own record of it; under a `lose-` key it adds the entry and drops the
 # answer (S4). No credential is involved beyond the fixture token accept_s2.sh already generates.
 #
+# S2, S8 and S12 need a Worker kept alive at a moment the script picks: a step's input may carry
+# `HOLD=<name>`, and fake-llm then keeps that Worker's model turn back until the script releases
+# the name (fake_llm_release; fake-llm answers by itself after 120 s). S12 and S2 also lock one row
+# of their own goal the way an advance does (goal_row_lock_take: goal_runs or step_runs, a row
+# lock only, bounded in time, ended by the scenario and again by cleanup_step), and S2 kills the
+# kernel (SIGKILL) twice and restarts worker-supervisor.
+#
 # Each scenario's polls are bounded and each failure carries the goal's own evidence (status,
 # pause reason, every step with its attempts and actions, every acceptance check with its attempts
 # and last error, every action with the reason its failure was audited with) in the FAIL line.
 # Every goal proposed here is recorded in GOALS_STARTED, and cleanup_step ends whichever is still
 # live (proposed: rejected; running, paused or verifying: cancelled — alice is the owner, so bob's
 # too) before the gates go, the same way it ends step 9's, and revokes any gate S9 granted bob and
-# did not get to revoke itself.
+# did not get to revoke itself. Before any of that — with --keep too — it starts again a service S2
+# left down, ends every row lock still held and releases every held turn (goal_cleanup_live_work).
 #
 # Order (`goal_scenarios_step`): S6's goal and the reverse half of S4 start first and wait in the
 # background on checks that fail on purpose — the platform retries an unmet acceptance check
 # (GOAL_ACCEPTANCE_CHECK_MAX_ATTEMPTS / _MAX_DURATION_MS) and an unmet reconcile check
 # (GOAL_RECONCILE_CHECK_MAX_ATTEMPTS / _MAX_DURATION_MS) with backoff, by default 5 attempts within
-# about 7.5 minutes, before it pauses the run — while S1, S11, S5, S4, S7, S9 and S10 run one after
-# the other; S6 and the reverse S4 are finished last. No two scenarios have a Worker running at the
-# same time, and no two have a write at the http gate at the same time (S7 reads the gate's queue).
+# about 7.5 minutes, before it pauses the run — while S1, S11, S5, S4, S7, S9, S10, S12 and S8 run
+# one after the other; S6 and the reverse S4 are finished next, and S2 runs last, alone: the
+# kernel's restarts would drop a background goal's checks and every connection to the kernel. No
+# two scenarios have a Worker running at the same time, and no two have a write at the http gate at
+# the same time (S7 reads the gate's queue).
 #
 # With --real none of these scenarios runs, and the ledger is discarded before the http gate's
 # manifest is published (goal_ledger_discard_real / goal_ledger_withheld_check_real, called from
@@ -39,8 +49,11 @@
 #   - S7's Task still running at the cancel and its second variant (an `executing` action holding
 #     the run in `cancelling` past the deadline, `cleanup_pending`): see goal_s7_cancel_drain;
 #     advancer.integration.test.ts covers both.
-#   - S2, S8 and S12 (restarts, a revision removing a running step, a lost wake): the next PR of
-#     GO7a.
+#   - S8's nested child Tasks and a request already executing when the revision comes: the fake
+#     Worker raises no child Task and the gate runs a write at once; advancer.integration.test.ts
+#     covers both.
+#   - S12 "until dead letter": a wake that fails is dropped, never retried or dead-lettered (see
+#     goal_s12_lost_wake); what S12 shows is the reconcile scan bringing the run back.
 
 GOALS_STARTED=""
 
@@ -668,6 +681,539 @@ goal_s10_budget() {
   pass "s10-cancelled" "alice cancelled goal $S10_GOAL_ID, the decision a spent budget leaves to a person: $s10_write, nothing written (ledger count 0 at the gate)"
 }
 
+# --- Held turns, row locks and service restarts (S11 GO7a-3: S12, S8, S2) -----------------------
+#
+# Held turns: a goal step whose input carries `HOLD=<name>` has its Worker's scripted model turn
+# kept back by fake-llm until the script releases that name (deploy/fake-llm/server.mjs "Held
+# turns"): while it is listed the Worker is alive and mid model call, its Task running, and the
+# script decides what happens before the Worker reports or writes again. fake-llm answers a turn
+# by itself after 120 s, so nothing here can leave a Worker waiting longer than that.
+
+GOAL_HOLDS=""
+
+# fake_llm_holds: the names fake-llm is holding right now, comma-separated; empty when none (or
+# when fake-llm did not answer).
+fake_llm_holds() {
+  compose_accept --profile test exec -T fake-llm node -e "fetch('http://127.0.0.1:8090/accept-s2/holds').then((r) => r.json()).then((d) => console.log(d.holds.join(',')))" </dev/null 2>/dev/null
+}
+
+# fake_llm_release <name>: lets the turns held under <name> answer; prints how many there were.
+fake_llm_release() {
+  compose_accept --profile test exec -T fake-llm node -e "fetch('http://127.0.0.1:8090/accept-s2/holds/' + process.argv[1] + '/release', {method: 'POST'}).then((r) => r.json()).then((d) => console.log(d.released))" "$1" </dev/null 2>/dev/null
+}
+
+# fake_llm_wait_hold <name> <seconds>: waits until fake-llm holds <name>; 1 when the time ran out.
+fake_llm_wait_hold() {
+  fwh_deadline=$(($(date +%s) + $2))
+  while :; do
+    case ",$(fake_llm_holds)," in *",$1,"*) return 0 ;; esac
+    [ "$(date +%s)" -lt "$fwh_deadline" ] || return 1
+    sleep 2
+  done
+}
+
+# Row locks (S12's lost wake, S2's killed advance): one row of a goal this script proposed —
+# goal_runs or step_runs, nothing else — locked the way an advance holds it (`select … for no key
+# update`), in a transaction of its own on a connection of its own: psql in the postgres container,
+# in the background, named by application_name `accept_s2_lock_<name>` so it can be found and
+# ended. It is a row lock and nothing more: the only table-level lock it takes is the ROW SHARE
+# every `select … for update` takes, which conflicts with DDL alone (EXCLUSIVE, ACCESS EXCLUSIVE),
+# never with a read or a write; foreign-key checks (`for key share`) pass it too. Bounded four ways:
+#   - taking it waits at most 5 s (`lock_timeout`), so it never queues behind an advance for long;
+#   - it holds for at most GOAL_LOCK_MAX_SECONDS (`pg_sleep`, with a `statement_timeout` above it)
+#     and then commits, even when this script was killed outright and no trap ran;
+#   - the scenario ends it as soon as it has seen what it needs (goal_row_lock_release:
+#     pg_terminate_backend on that application_name, which rolls the transaction back), and
+#     cleanup_step ends any still held before anything else, with --keep too;
+#   - a psql client that goes away mid-hold has it aborted within a second
+#     (`client_connection_check_interval`).
+
+GOAL_LOCK_MAX_SECONDS=60
+GOAL_LOCKS=""
+
+# goal_row_lock_take <name> <goal_runs|step_runs> <rowId>: takes the lock in the background and
+# returns once it is held (its holder in pg_sleep); 1 when it was not held within 10 s.
+goal_row_lock_take() {
+  case "$2" in
+    goal_runs | step_runs) : ;;
+    *) echo "goal_row_lock_take: table '$2' is not one this script may lock" >&2; return 1 ;;
+  esac
+  grl_app="accept_s2_lock_$1"
+  GOAL_LOCKS="$GOAL_LOCKS $1"
+  docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 -tAc \
+    "set application_name = '$grl_app'; set client_connection_check_interval = '1s'; begin; set local lock_timeout = '5s'; set local statement_timeout = '$((GOAL_LOCK_MAX_SECONDS + 15))s'; select 1 from $2 where workspace_id = '$WORKSPACE_ID' and id = '$3' for no key update; select pg_sleep($GOAL_LOCK_MAX_SECONDS); commit;" \
+    </dev/null >/dev/null 2>&1 &
+  grl_deadline=$(($(date +%s) + 10))
+  while :; do
+    [ "$(goal_row_lock_held "$1")" = "1" ] && return 0
+    [ "$(date +%s)" -lt "$grl_deadline" ] || return 1
+    sleep 1
+  done
+}
+
+# goal_row_lock_held <name>: 1 while the lock is held (its holder sleeping in its transaction), else 0.
+goal_row_lock_held() {
+  psql_ws "select count(*) from pg_stat_activity where application_name = 'accept_s2_lock_$1' and wait_event = 'PgSleep'"
+}
+
+# goal_row_lock_waiters <name> <query text>: how many sessions are waiting on the lock right now —
+# blocked by its holder — with a current query containing <query text>.
+goal_row_lock_waiters() {
+  psql_ws "select count(*) from pg_stat_activity w where strpos(w.query, '$2') > 0 and exists (select 1 from pg_stat_activity h where h.application_name = 'accept_s2_lock_$1' and h.pid = any(pg_blocking_pids(w.pid)))"
+}
+
+# goal_row_lock_release <name>: ends the lock now — pg_terminate_backend, waiting up to 5 s for the
+# holder to be gone, rolls its transaction back; prints how many holders it ended (0 once the lock
+# had already ended on its own). The holder's pid is picked first, in a materialized CTE: in a
+# plain WHERE the planner may call pg_terminate_backend on rows before the application_name test
+# filters them — tried on Postgres 16, it ended every session it reached, its own included.
+goal_row_lock_release() {
+  psql_ws "with holder as materialized (select pid from pg_stat_activity where application_name = 'accept_s2_lock_$1' and datname = current_database() and pid <> pg_backend_pid()) select count(*) from holder where pg_terminate_backend(pid, 5000)"
+}
+
+# goal_step_task <goalRunId> <stepKey> <attempt>: the Task of that attempt of that step.
+goal_step_task() {
+  psql_ws "select t.id from tasks t join step_runs s on s.workspace_id = t.workspace_id and s.id = t.step_run_id where t.workspace_id = '$WORKSPACE_ID' and t.goal_run_id = '$1' and s.step_key = '$2' and t.step_attempt = $3"
+}
+
+# goal_task_status <taskId>: the Task's status.
+goal_task_status() {
+  psql_ws "select status from tasks where workspace_id = '$WORKSPACE_ID' and id = '$1'"
+}
+
+# goal_one_task_per_attempt <goalRunId>: `ok` when every attempt of every step of the run has
+# exactly one Task (I-G1) — the Tasks number the attempts and no attempt has two — else what differs.
+goal_one_task_per_attempt() {
+  psql_ws "select case when d.doubled = 0 and d.tasks = d.attempts then 'ok' else d.tasks || ' Task(s) for ' || d.attempts || ' attempt(s), ' || d.doubled || ' attempt(s) with more than one' end from (select (select count(*) from tasks where workspace_id = '$WORKSPACE_ID' and goal_run_id = '$1') as tasks, (select coalesce(sum(attempt_count), 0) from step_runs where workspace_id = '$WORKSPACE_ID' and goal_run_id = '$1') as attempts, (select count(*) from (select 1 from tasks where workspace_id = '$WORKSPACE_ID' and goal_run_id = '$1' group by step_run_id, step_attempt having count(*) > 1) x) as doubled) d"
+}
+
+# Service restarts (S2): the kernel killed (SIGKILL — a crash, not a shutdown) and started again,
+# worker-supervisor restarted. GOAL_SERVICE_DOWN names a service killed and not yet back, for
+# cleanup_step to start it again before it calls the kernel.
+
+GOAL_SERVICE_DOWN=""
+
+# goal_started_at <service>: when the service's container last started.
+goal_started_at() {
+  docker inspect --format '{{.State.StartedAt}}' "$(compose_accept ps -q "$1" 2>/dev/null)" 2>/dev/null
+}
+
+# goal_kernel_kill_restart <name>: SIGKILLs the kernel, starts it again and waits — at most 120 s —
+# until the new container passes its healthcheck. GOAL_RESTART_SECONDS: how long it was gone.
+# Never called in $(…): its fail must end the script, and GOAL_SERVICE_DOWN must reach cleanup.
+goal_kernel_kill_restart() {
+  gkr_before=$(goal_started_at kernel)
+  gkr_t0=$(date +%s)
+  GOAL_SERVICE_DOWN=kernel
+  gkr_out=$(compose_accept kill -s SIGKILL kernel 2>&1) || fail "$1" "docker compose kill -s SIGKILL kernel failed: $gkr_out"
+  gkr_out=$(compose_accept start kernel 2>&1) || fail "$1" "docker compose start kernel failed: $gkr_out"
+  gkr_deadline=$((gkr_t0 + 120))
+  while :; do
+    gkr_id=$(compose_accept ps -q kernel 2>/dev/null)
+    if [ -n "$gkr_id" ] && [ "$(goal_started_at kernel)" != "$gkr_before" ] \
+      && [ "$(docker inspect --format '{{.State.Health.Status}}' "$gkr_id" 2>/dev/null)" = "healthy" ]; then
+      break
+    fi
+    [ "$(date +%s)" -lt "$gkr_deadline" ] || fail "$1" "the kernel was not healthy again within 120s of the kill: $(compose_accept ps kernel 2>&1 | tail -1)"
+    sleep 2
+  done
+  GOAL_SERVICE_DOWN=""
+  GOAL_RESTART_SECONDS=$(($(date +%s) - gkr_t0))
+}
+
+# goal_supervisor_restart <name>: restarts worker-supervisor (its own SIGTERM shutdown, which leaves
+# Task containers running) and waits — at most 90 s — until the new process answers /healthz, which
+# it serves only after its startup reconcile has re-adopted the running Task containers.
+# GOAL_RESTART_SECONDS: how long it took. Not in $(…) either.
+goal_supervisor_restart() {
+  gsr_before=$(goal_started_at worker-supervisor)
+  gsr_t0=$(date +%s)
+  GOAL_SERVICE_DOWN=worker-supervisor
+  gsr_out=$(compose_accept restart worker-supervisor 2>&1) || fail "$1" "docker compose restart worker-supervisor failed: $gsr_out"
+  gsr_deadline=$((gsr_t0 + 90))
+  while :; do
+    if [ "$(goal_started_at worker-supervisor)" != "$gsr_before" ] \
+      && compose_accept exec -T worker-supervisor node -e "fetch('http://127.0.0.1:8081/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))" </dev/null >/dev/null 2>&1; then
+      break
+    fi
+    [ "$(date +%s)" -lt "$gsr_deadline" ] || fail "$1" "worker-supervisor did not answer /healthz within 90s of its restart: $(compose_accept ps worker-supervisor 2>&1 | tail -1)"
+    sleep 2
+  done
+  GOAL_SERVICE_DOWN=""
+  GOAL_RESTART_SECONDS=$(($(date +%s) - gsr_t0))
+}
+
+# goal_cleanup_live_work: for cleanup_step, first — a service S2 killed is started again, every row
+# lock still held is ended, every held turn released; prints one line each, never fails.
+goal_cleanup_live_work() {
+  if [ -n "$GOAL_SERVICE_DOWN" ]; then
+    gcl_out=$(compose_accept start "$GOAL_SERVICE_DOWN" 2>&1)
+    echo "cleanup: $GOAL_SERVICE_DOWN was down after S2 — docker compose start answered: $gcl_out"
+    gcl_deadline=$(($(date +%s) + 120))
+    while [ "$GOAL_SERVICE_DOWN" = "kernel" ] && [ "$(date +%s)" -lt "$gcl_deadline" ]; do
+      [ "$(docker inspect --format '{{.State.Health.Status}}' "$(compose_accept ps -q kernel 2>/dev/null)" 2>/dev/null)" = "healthy" ] && break
+      sleep 2
+    done
+    GOAL_SERVICE_DOWN=""
+  fi
+  for gcl_lock in $GOAL_LOCKS; do
+    gcl_ended=$(goal_row_lock_release "$gcl_lock")
+    [ "$gcl_ended" = "0" ] || echo "cleanup: row lock $gcl_lock was still held — ended ($gcl_ended)"
+  done
+  for gcl_hold in $GOAL_HOLDS; do
+    gcl_released=$(fake_llm_release "$gcl_hold")
+    case "$gcl_released" in 0 | "") : ;; *) echo "cleanup: fake-llm still held turn $gcl_hold — released ($gcl_released)" ;; esac
+  done
+}
+
+# --- S12: a lost wake; the periodic reconcile scan finds the run and moves it on ----------------
+#
+# The wake consumer (application/goal/advancer.ts registerGoalWakeConsumer) never throws — a throw
+# would redeliver the event to every consumer of it — so a wake that fails is dropped: no retry, no
+# dead letter. What brings the run back is the reconcile scan (markReconcileDue, every 60 s). To
+# lose one: a's Worker is held at fake-llm, its Task running; the GoalRun's row is locked the way an
+# advance holds it; the hold is released, a's Task completes and its TaskUpdated is dispatched while
+# the row is held; the wake's update (`update goal_runs set next_tick_at = now() …`) waits on the
+# row for its own lock_timeout (5 s), gives up — seen waiting, blocked by this lock, then gone — and
+# only then is the lock released. That TaskUpdated is the only event a's Task ends with, and the
+# run's next tick is its wall-clock deadline: a moving on is the scan's doing, within one scan
+# period (plus the advancer's 1 s tick and this script's 3 s poll).
+
+goal_s12_lost_wake() {
+  n=$(real_token)
+  hold="s12-$n-a"
+  lock="s12-$n"
+  a=$(goal_step_json a "ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=$n STEP=a HOLD=$hold")
+  b=$(goal_step_json b "ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=$n STEP=b" '"dependsOn":["a"]')
+  GOAL_HOLDS="$GOAL_HOLDS $hold"
+  goal_propose_confirm s12 "{\"statement\":\"accept_s2 S12 $n: two ops-runner steps report one after the other; the wake for the first one's end is lost on purpose.\",\"plan\":{\"steps\":[$a,$b],\"acceptance\":[$(goal_observe_check_json stock-visible stock.get '{}' symbol '"NXT"')]},\"budget\":$GOAL_BUDGET,\"idempotencyKey\":\"accept-s2-goal-s12-$n\"}"
+  S12_GOAL_ID=$GOAL_RUN_ID
+  pass "s12-confirmed" "alice proposed and confirmed goal $S12_GOAL_ID (a, held at fake-llm until released, then b after a)"
+
+  fake_llm_wait_hold "$hold" 180 || goal_fail "s12-locked" "$S12_GOAL_ID" "a's Worker did not reach its held turn within 180s (fake-llm holds '$(fake_llm_holds)')"
+  task=$(goal_step_task "$S12_GOAL_ID" a 1)
+  [ "$(goal_task_status "$task")" = "running" ] || goal_fail "s12-locked" "$S12_GOAL_ID" "a's Task '$task' reads '$(goal_task_status "$task")' while its Worker is held, expected running"
+  goal_row_lock_take "$lock" goal_runs "$S12_GOAL_ID" || goal_fail "s12-locked" "$S12_GOAL_ID" "could not lock goal $S12_GOAL_ID's row within 10s (an advance holding it?)"
+  pass "s12-locked" "goal $S12_GOAL_ID's row is locked (for no key update, its own transaction) while a's Worker is held mid model call, its Task $task running"
+
+  released=$(fake_llm_release "$hold")
+  [ "$released" = "1" ] || { goal_row_lock_release "$lock" >/dev/null; goal_fail "s12-wake-lost" "$S12_GOAL_ID" "releasing a's held turn released '$released' request(s), expected 1"; }
+  ended=""
+  saw=""
+  gone=""
+  sent=""
+  deadline=$(($(date +%s) + 45))
+  while :; do
+    [ -n "$ended" ] || { [ "$(goal_task_status "$task")" = "completed" ] && ended=$(date +%s); }
+    waiting=$(goal_row_lock_waiters "$lock" 'update goal_runs set next_tick_at = now()')
+    if [ "$waiting" != "0" ]; then
+      [ -n "$saw" ] || saw=$(date +%s)
+    elif [ -n "$saw" ] && [ -z "$gone" ]; then
+      gone=$(date +%s)
+    fi
+    [ -n "$sent" ] || { [ "$(psql_ws "select count(*) from outbox where workspace_id='$WORKSPACE_ID' and event_type='TaskUpdated' and payload->>'taskId'='$task' and payload->>'status'='completed' and dispatched_at is not null")" = "1" ] && sent=$(date +%s); }
+    [ -n "$gone" ] && [ -n "$sent" ] && break
+    [ "$(date +%s)" -lt "$deadline" ] || break
+    sleep 1
+  done
+  held=$(goal_row_lock_held "$lock")
+  if [ -z "$ended" ] || [ -z "$gone" ] || [ -z "$sent" ] || [ "$held" != "1" ]; then
+    goal_row_lock_release "$lock" >/dev/null
+    goal_fail "s12-wake-lost" "$S12_GOAL_ID" "45s after a's turn was released: Task completed '${ended:-no}', the wake's update seen waiting on the row '${saw:-no}', given up '${gone:-no}', TaskUpdated dispatched '${sent:-no}', lock still held '$held' — expected all, with the lock held throughout"
+  fi
+  took=$(psql_ws "select round(extract(epoch from dispatched_at - created_at)::numeric, 1) from outbox where workspace_id='$WORKSPACE_ID' and event_type='TaskUpdated' and payload->>'taskId'='$task' and payload->>'status'='completed'")
+  tick=$(psql_ws "select coalesce(round(extract(epoch from next_tick_at - now()))::text, 'none') from goal_runs where workspace_id='$WORKSPACE_ID' and id='$S12_GOAL_ID'")
+  ended_locks=$(goal_row_lock_release "$lock")
+  unlocked=$(date +%s)
+  # Nothing but the scan may bring the run back in the window judged below.
+  case "$tick" in
+    none) : ;;
+    *) [ "$tick" -ge 120 ] 2>/dev/null || goal_fail "s12-wake-lost" "$S12_GOAL_ID" "the run's next tick is ${tick}s away, expected none or its wall-clock deadline (an advance due this soon would move a on without the scan)" ;;
+  esac
+  pass "s12-wake-lost" "a's Task $task completed while the row was held; its TaskUpdated took ${took}s to dispatch — the wake's update waited on the row and gave up (seen waiting, then gone, the lock still held) — and the run's next tick was ${tick}s away (its wall-clock deadline); lock ended ($ended_locks)"
+
+  a_expr="(() => { const s = Object.fromEntries(d.result.steps.map((x) => [x.stepKey, x])); return [s.a.status, s.a.attempts.length].join(','); })()"
+  goal_wait "$S12_GOAL_ID" 90 "$a_expr" 'succeeded,*' 'failed,*' \
+    || goal_fail "s12-reconciled" "$S12_GOAL_ID" "a did not move on within 90s of the lock's end (last '$GOAL_WAIT_VALUE'); one reconcile scan period is 60s"
+  moved=$(($(date +%s) - unlocked))
+  finished=$(psql_ws "select count(*) from outbox where workspace_id='$WORKSPACE_ID' and event_type='TaskUpdated' and payload->>'taskId'='$task' and payload->>'status' in ('completed','failed','cancelled')")
+  [ "$GOAL_WAIT_VALUE|$finished" = "succeeded,1|1" ] \
+    || goal_fail "s12-reconciled" "$S12_GOAL_ID" "a reads '$GOAL_WAIT_VALUE' with $finished TaskUpdated event(s) ending its Task, expected succeeded on its one attempt with only the lost one"
+  [ "$moved" -le 75 ] || goal_fail "s12-reconciled" "$S12_GOAL_ID" "a moved on ${moved}s after the lock's end, expected within one reconcile scan (60s) and the polls"
+  pass "s12-reconciled" "the reconcile scan found the run: a succeeded ${moved}s after the lock ended (one scan period is 60s), its Task having ended with that one, lost, TaskUpdated"
+
+  goal_wait "$S12_GOAL_ID" 240 "$GOAL_END_EXPR" 'completed,*' 'paused,*' 'cancelled,*' 'failed,*' \
+    || goal_fail "s12-achieved" "$S12_GOAL_ID" "goal $S12_GOAL_ID did not settle within 240s (last '$GOAL_WAIT_VALUE')"
+  [ "$GOAL_WAIT_VALUE" = "completed,achieved,verified_by_check," ] || goal_fail "s12-achieved" "$S12_GOAL_ID" "goal $S12_GOAL_ID ended '$GOAL_WAIT_VALUE', expected completed,achieved,verified_by_check"
+  steps=$(goal_get "$S12_GOAL_ID" "d.result.steps.map((s) => s.stepKey + ':' + s.status + ':' + s.attempts.length).sort().join(',')")
+  per=$(goal_one_task_per_attempt "$S12_GOAL_ID")
+  [ "$steps|$per" = "a:succeeded:1,b:succeeded:1|ok" ] || goal_fail "s12-achieved" "$S12_GOAL_ID" "steps '$steps', Tasks per attempt '$per' — expected both succeeded on one attempt, one Task each"
+  pass "s12-achieved" "goal $S12_GOAL_ID completed(achieved) on its own: b ran after a, one attempt and one Task each"
+}
+
+# --- S8: a revision removes a running step ----------------------------------------------------
+#
+# Plan: a asks for three test-ledger writes — <k>-1, <k>-2, then <k>-3 (goal_three_writes in
+# fake-llm) — and b runs after a. The first two each wait out the kernel's await budget and stay
+# pending; the turn that would ask for the third is held at fake-llm, so a's Worker is alive and its
+# Task running when alice pauses the goal (a revision needs it paused) and revises the plan to one
+# new step c, dropping a and b:
+#   - s8t, a terminated (the default): its Task is terminated and both pending writes withdrawn in
+#     the revision; the third is never asked; nothing is written. Resumed, c runs and the goal
+#     completes.
+#   - s8l, a let finish, <k>-1 released: <k>-2 is withdrawn, <k>-1 kept for alice to decide. The
+#     hold is released: a's Worker asks for <k>-3 and the kernel refuses it (I-G9: a superseded step
+#     takes no new work), then reports; a's Task completes with its result recorded, and a stays
+#     superseded — its result moves nothing. Resumed, c runs, but the run does not verify while the
+#     released <k>-1 still awaits a decision; alice approves it, it runs once, the goal completes.
+# Not covered here (advancer.integration.test.ts covers both): nested child Tasks of a — the fake
+# Worker raises none — and a request already executing when the revision comes.
+
+# goal_s8_start <variant>: proposes and confirms the plan, waits until a's Worker has its two writes
+# pending and is held before the third, then pauses the goal. Sets S8_GOAL_ID, S8_KEY, S8_HOLD,
+# S8_NONCE, S8_TASK, S8_AR1, S8_AR2.
+goal_s8_start() {
+  S8_NONCE=$(real_token)
+  S8_KEY="$1-$S8_NONCE"
+  S8_HOLD="$1-$S8_NONCE-a"
+  a=$(goal_step_json a "ACCEPT_S2_SCENARIO=goal_three_writes LEDGER_KEY=$S8_KEY HOLD=$S8_HOLD")
+  b=$(goal_step_json b "ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=$S8_NONCE STEP=b" '"dependsOn":["a"]')
+  GOAL_HOLDS="$GOAL_HOLDS $S8_HOLD"
+  goal_propose_confirm "$1" "{\"statement\":\"accept_s2 S8 $S8_NONCE ($1): one ops-runner step asks for three test-ledger entries, another runs after it; the plan is revised while the first one runs.\",\"plan\":{\"steps\":[$a,$b],\"acceptance\":[$(goal_observe_check_json stock-visible stock.get '{}' symbol '"NXT"')]},\"budget\":$GOAL_BUDGET,\"idempotencyKey\":\"accept-s2-goal-$1-$S8_NONCE\"}"
+  S8_GOAL_ID=$GOAL_RUN_ID
+  pass "$1-confirmed" "alice proposed and confirmed goal $S8_GOAL_ID (a asks for $S8_KEY-1, -2, -3; b after a)"
+
+  # Each of the first two writes waits out the kernel's await budget (about 25s) before the next turn.
+  fake_llm_wait_hold "$S8_HOLD" 240 || goal_fail "$1-running" "$S8_GOAL_ID" "a's Worker did not reach its held third turn within 240s (fake-llm holds '$(fake_llm_holds)')"
+  S8_TASK=$(goal_step_task "$S8_GOAL_ID" a 1)
+  run=$(goal_get "$S8_GOAL_ID" "(() => { const s = Object.fromEntries(d.result.steps.map((x) => [x.stepKey, x])); return [d.result.status, s.a.status, s.a.actions.map((x) => x.status).join('+'), s.b.attempts.length].join(','); })()")
+  task_status=$(goal_task_status "$S8_TASK")
+  case "$task_status" in running | waiting_approval) : ;; *) task_status="$task_status (not live)" ;; esac
+  [ "$run|$task_status" = "running,running,pending_approval+pending_approval,0|running" ] || [ "$run|$task_status" = "running,running,pending_approval+pending_approval,0|waiting_approval" ] \
+    || goal_fail "$1-running" "$S8_GOAL_ID" "read '$run' with a's Task '$task_status', expected the run and a running, a's two writes pending approval, b not started, a's Task live"
+  S8_AR1=$(goal_get "$S8_GOAL_ID" "d.result.steps.find((x) => x.stepKey === 'a').actions[0].actionRequestId")
+  S8_AR2=$(goal_get "$S8_GOAL_ID" "d.result.steps.find((x) => x.stepKey === 'a').actions[1].actionRequestId")
+  pass "$1-running" "a's Worker asked for $S8_KEY-1 ($S8_AR1) and $S8_KEY-2 ($S8_AR2), both pending approval, and is held before the third; its Task $S8_TASK is $task_status"
+
+  out=$(cap "$ALICE_KEY" pause_goal "{\"goalRunId\":\"$S8_GOAL_ID\"}" "[d.result.status, d.result.changed].join(',')")
+  [ "$(parse_kv "$out" HTTP_STATUS)|$(parse_kv "$out" EXTRACTED)" = "200|paused,true" ] \
+    || goal_fail "$1-revised" "$S8_GOAL_ID" "pause_goal answered HTTP $(parse_kv "$out" HTTP_STATUS) '$(parse_kv "$out" EXTRACTED)', expected 200 paused,true: $(parse_kv "$out" BODY)"
+}
+
+# goal_s8_revise <variant> [removals JSON]: revises the paused goal to the single new step c, a
+# and b dropped. Leaves revise_goal's answer — revision, how many StepRuns it superseded and
+# created, the requests it withdrew and released (sorted) — in S8_REVISED.
+goal_s8_revise() {
+  c=$(goal_step_json c "ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=$S8_NONCE STEP=c")
+  out=$(cap "$ALICE_KEY" revise_goal "{\"goalRunId\":\"$S8_GOAL_ID\",\"basedOnRevision\":1,\"plan\":{\"steps\":[$c],\"acceptance\":[$(goal_observe_check_json stock-visible stock.get '{}' symbol '"NXT"')]},\"reason\":\"accept_s2 S8: a and b dropped while a runs\"${2:+,\"removals\":$2}}" \
+    "[d.result.revision, d.result.supersededStepRunIds.length, d.result.createdStepRunIds.length, d.result.withdrawnActionRequestIds.slice().sort().join('+'), d.result.releasedActionRequestIds.slice().sort().join('+')].join(',')")
+  [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] || goal_fail "$1-revised" "$S8_GOAL_ID" "revise_goal HTTP $(parse_kv "$out" HTTP_STATUS): $(parse_kv "$out" BODY)"
+  S8_REVISED=$(parse_kv "$out" EXTRACTED)
+}
+
+# goal_s8_resume <variant>: alice resumes the goal.
+goal_s8_resume() {
+  out=$(cap "$ALICE_KEY" resume_goal "{\"goalRunId\":\"$S8_GOAL_ID\"}" "d.result.status")
+  [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] || goal_fail "$1-achieved" "$S8_GOAL_ID" "resume_goal HTTP $(parse_kv "$out" HTTP_STATUS): $(parse_kv "$out" BODY)"
+}
+
+goal_s8_terminate() {
+  goal_s8_start s8t
+  goal_s8_revise s8t
+  case "$S8_REVISED" in
+    "2,2,1,$S8_AR1+$S8_AR2," | "2,2,1,$S8_AR2+$S8_AR1,") : ;;
+    *) goal_fail "s8t-revised" "$S8_GOAL_ID" "revise_goal answered '$S8_REVISED' (revision, superseded, created, withdrawn, released), expected revision 2, a and b superseded, c created, both $S8_AR1 and $S8_AR2 withdrawn, none released" ;;
+  esac
+  pass "s8t-revised" "alice paused goal $S8_GOAL_ID and revised it to c alone: a and b superseded, a's writes $S8_AR1 and $S8_AR2 withdrawn in the same revision"
+
+  # The revision sets the paused run due at once; that advance terminates a's Task after its commit
+  # — the Task first, then (once worker-supervisor has stopped it) its WorkerRun.
+  deadline=$(($(date +%s) + 60))
+  while :; do
+    task_status=$(goal_task_status "$S8_TASK")
+    runs=$(psql_ws "select coalesce(string_agg(status, ','), 'none') from worker_runs where workspace_id='$WORKSPACE_ID' and task_id='$S8_TASK'")
+    [ "$task_status|$runs" = "cancelled|terminated" ] && break
+    case "$task_status" in completed | failed) break ;; esac
+    [ "$(date +%s)" -lt "$deadline" ] || break
+    sleep 2
+  done
+  [ "$task_status|$runs" = "cancelled|terminated" ] || goal_fail "s8t-terminated" "$S8_GOAL_ID" "60s after the revision a's Task $S8_TASK reads '$task_status' with WorkerRun(s) '$runs', expected cancelled with its WorkerRun terminated"
+  fake_llm_release "$S8_HOLD" >/dev/null
+  sleep 5
+  counts="$(ledger_count "$S8_KEY-1"),$(ledger_count "$S8_KEY-2"),$(ledger_count "$S8_KEY-3")"
+  writes=$(psql_ws "select count(*) from action_requests where workspace_id='$WORKSPACE_ID' and step_run_id=(select id from step_runs where workspace_id='$WORKSPACE_ID' and goal_run_id='$S8_GOAL_ID' and step_key='a')")
+  a=$(goal_get "$S8_GOAL_ID" "(() => { const s = d.result.steps.find((x) => x.stepKey === 'a'); return [s.status, s.attempts.map((t) => t.status).join('+'), s.actions.map((x) => x.status).join('+')].join(','); })()")
+  [ "$a|$writes|$counts" = "superseded,cancelled,withdrawn+withdrawn|2|0,0,0" ] \
+    || goal_fail "s8t-terminated" "$S8_GOAL_ID" "a reads '$a' with $writes request(s), ledger counts (-1,-2,-3) '$counts' — expected superseded, its one attempt cancelled, its two writes withdrawn, no third request, nothing written"
+  pass "s8t-terminated" "a's Task $S8_TASK was terminated (cancelled, WorkerRun terminated) while its Worker was held; its two writes stay withdrawn, it never asked for the third, the ledger holds nothing under $S8_KEY"
+
+  goal_s8_resume s8t
+  goal_wait "$S8_GOAL_ID" 240 "$GOAL_END_EXPR" 'completed,*' 'paused,*' 'cancelled,*' 'failed,*' \
+    || goal_fail "s8t-achieved" "$S8_GOAL_ID" "goal $S8_GOAL_ID did not settle within 240s of resume_goal (last '$GOAL_WAIT_VALUE')"
+  steps=$(goal_get "$S8_GOAL_ID" "d.result.steps.map((s) => s.stepKey + ':' + s.status + ':' + s.attempts.length).sort().join(',')")
+  per=$(goal_one_task_per_attempt "$S8_GOAL_ID")
+  [ "$GOAL_WAIT_VALUE|$steps|$per" = "completed,achieved,verified_by_check,|a:superseded:1,b:superseded:0,c:succeeded:1|ok" ] \
+    || goal_fail "s8t-achieved" "$S8_GOAL_ID" "goal '$GOAL_WAIT_VALUE', steps '$steps', Tasks per attempt '$per' — expected completed(achieved) on c alone, a and b superseded, b never started"
+  pass "s8t-achieved" "alice resumed goal $S8_GOAL_ID; it completed(achieved) on c alone — a superseded after its one attempt, b never started"
+}
+
+goal_s8_let_finish() {
+  goal_s8_start s8l
+  goal_s8_revise s8l "{\"a\":{\"mode\":\"let_finish\",\"release\":[\"$S8_AR1\"]}}"
+  [ "$S8_REVISED" = "2,2,1,$S8_AR2,$S8_AR1" ] || goal_fail "s8l-revised" "$S8_GOAL_ID" "revise_goal answered '$S8_REVISED', expected '2,2,1,$S8_AR2,$S8_AR1' (revision 2, a and b superseded, c created, $S8_KEY-2 withdrawn, $S8_KEY-1 released)"
+  released_audit=$(psql_ws "select count(*) from audit_records where workspace_id='$WORKSPACE_ID' and resource_type='action_request' and resource_id='$S8_AR1' and action='action_request.release'")
+  [ "$released_audit" = "1" ] || goal_fail "s8l-revised" "$S8_GOAL_ID" "the release of $S8_AR1 has $released_audit audit row(s), expected 1"
+  pass "s8l-revised" "alice paused goal $S8_GOAL_ID and revised it to c alone, letting a finish: $S8_KEY-2 ($S8_AR2) withdrawn, $S8_KEY-1 ($S8_AR1) released and audited"
+
+  [ "$(fake_llm_release "$S8_HOLD")" = "1" ] || goal_fail "s8l-finished" "$S8_GOAL_ID" "releasing a's held turn did not release exactly one request (its Worker gone?)"
+  deadline=$(($(date +%s) + 90))
+  while :; do
+    task_status=$(goal_task_status "$S8_TASK")
+    case "$task_status" in completed | failed | cancelled) break ;; esac
+    [ "$(date +%s)" -lt "$deadline" ] || break
+    sleep 2
+  done
+  step_a=$(psql_ws "select id from step_runs where workspace_id='$WORKSPACE_ID' and goal_run_id='$S8_GOAL_ID' and step_key='a'")
+  # The kernel's own record of the refusal (gateway/dispatch.ts auditGoalStepClosed): the call
+  # rolled back, so this audit row is all that is left of it.
+  refused=$(psql_ws "select count(*) from audit_records where workspace_id='$WORKSPACE_ID' and resource_type='step_run' and resource_id='$step_a' and action='request_action' and payload->>'outcome'='refused' and payload->'refusal'->>'code'='goal_step_closed' and payload->'refusal'->>'stepStatus'='superseded'")
+  recorded=$(psql_ws "select count(*) from audit_records where workspace_id='$WORKSPACE_ID' and resource_type='task' and resource_id='$S8_TASK' and action='task.complete'")
+  writes=$(psql_ws "select count(*) from action_requests where workspace_id='$WORKSPACE_ID' and step_run_id='$step_a'")
+  a=$(goal_get "$S8_GOAL_ID" "(() => { const s = d.result.steps.find((x) => x.stepKey === 'a'); return [s.status, s.attempts.map((t) => t.status).join('+'), s.actions.map((x) => x.status).join('+')].join(','); })()")
+  [ "$task_status|$recorded|$refused|$a|$writes" = "completed|1|1|superseded,completed,pending_approval+withdrawn|2" ] \
+    || goal_fail "s8l-finished" "$S8_GOAL_ID" "after the release a's Task reads '$task_status' (completion audited $recorded time(s)), $refused refused request_action audited on a, a '$a' with $writes request(s) — expected the Task completed and audited, one request_action refused because a is superseded (I-G9), a still superseded, $S8_KEY-1 pending, $S8_KEY-2 withdrawn, no third request"
+  # What the Worker was told, as it reported it (evidence only; the audit row above is the check).
+  third=$(psql_ws "select coalesce((select left(f, 160) from jsonb_array_elements_text(result->'findings') f where f like '$S8_KEY-3: %' limit 1), 'not in its report') from tasks where workspace_id='$WORKSPACE_ID' and id='$S8_TASK'")
+  pass "s8l-finished" "a's Worker asked for $S8_KEY-3 after the revision and the kernel refused it (I-G9, audited on a; the Worker reported '${third#"$S8_KEY-3: "}'); its Task completed with its result recorded, a stays superseded with no third request"
+
+  goal_s8_resume s8l
+  c_expr="(() => { const s = Object.fromEntries(d.result.steps.map((x) => [x.stepKey, x])); return [d.result.status, s.c.status].join(','); })()"
+  goal_wait "$S8_GOAL_ID" 180 "$c_expr" '*,succeeded' '*,failed' 'paused,*' 'cancelled,*' 'failed,*' 'completed,*' \
+    || goal_fail "s8l-released-holds" "$S8_GOAL_ID" "c did not settle within 180s of resume_goal (last '$GOAL_WAIT_VALUE')"
+  sleep 10
+  run=$(goal_get "$S8_GOAL_ID" "(() => { const s = Object.fromEntries(d.result.steps.map((x) => [x.stepKey, x])); return [d.result.status, s.c.status, s.a.actions.map((x) => x.status).join('+')].join(','); })()")
+  [ "$run|$(ledger_count "$S8_KEY-1")" = "running,succeeded,pending_approval+withdrawn|0" ] \
+    || goal_fail "s8l-released-holds" "$S8_GOAL_ID" "10s after c succeeded the goal reads '$run' with ledger count under $S8_KEY-1 '$(ledger_count "$S8_KEY-1")', expected still running (not verifying) on the released write, pending, nothing written"
+  pass "s8l-released-holds" "c succeeded, and the goal stays running: it does not verify while the released $S8_KEY-1 still awaits a decision"
+
+  out=$(cap "$ALICE_KEY" approve "{\"actionRequestId\":\"$S8_AR1\"}" "d.result.status")
+  [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] || goal_fail "s8l-achieved" "$S8_GOAL_ID" "approve($S8_AR1) HTTP $(parse_kv "$out" HTTP_STATUS): $(parse_kv "$out" BODY)"
+  goal_wait "$S8_GOAL_ID" 240 "$GOAL_END_EXPR" 'completed,*' 'paused,*' 'cancelled,*' 'failed,*' \
+    || goal_fail "s8l-achieved" "$S8_GOAL_ID" "goal $S8_GOAL_ID did not settle within 240s of the approval (last '$GOAL_WAIT_VALUE')"
+  counts="$(ledger_count "$S8_KEY-1"),$(ledger_count "$S8_KEY-2"),$(ledger_count "$S8_KEY-3")"
+  steps=$(goal_get "$S8_GOAL_ID" "d.result.steps.map((s) => s.stepKey + ':' + s.status + ':' + s.attempts.length + ':' + s.actions.map((x) => x.status).join('+')).sort().join(',')")
+  per=$(goal_one_task_per_attempt "$S8_GOAL_ID")
+  [ "$GOAL_WAIT_VALUE|$steps|$counts|$per" = "completed,achieved,verified_by_check,|a:superseded:1:executed+withdrawn,b:superseded:0:,c:succeeded:1:|1,0,0|ok" ] \
+    || goal_fail "s8l-achieved" "$S8_GOAL_ID" "goal '$GOAL_WAIT_VALUE', steps '$steps', ledger counts (-1,-2,-3) '$counts', Tasks per attempt '$per' — expected completed(achieved), the released write run once, the withdrawn one and the refused one never"
+  pass "s8l-achieved" "alice approved the released $S8_KEY-1; it ran once (ledger 1 at the gate) and goal $S8_GOAL_ID completed(achieved); $S8_KEY-2 and $S8_KEY-3 never ran (ledger 0 and 0)"
+}
+
+# --- S2: the kernel crashes, twice, and worker-supervisor restarts while a goal runs -------------
+#
+# Plan: a, then b, then c, each after the one before, each step's Worker reporting done; a's and
+# b's model turns are held at fake-llm until the script releases them.
+#   (a) The kernel is killed (SIGKILL: a crash, not a shutdown) and started again while a's Worker
+#       is held mid model call: when the kernel is back, a's Task and WorkerRun are the same ones,
+#       still running. Released, a's Worker reports to the new kernel.
+#   (b) The kernel is killed in the middle of an advance: before a's turn is released, b's StepRun
+#       row is locked (goal_row_lock_take), so the advance a's end sets off — it locks the run's
+#       row, then every step's row in order — stops on b's, its transaction open, the run's row
+#       held. The kernel is killed in that state and started again; then the lock is ended, the dead
+#       advance's transaction rolls back (its backend finds its client gone once it is granted the
+#       row and tries to answer), and the new kernel's advancer takes the run when the dead claim's
+#       lease runs out (60 s): b starts once — one attempt, one Task.
+#   (c) worker-supervisor is restarted while b's Worker is held: once it answers /healthz again (it
+#       re-adopts running Task containers before it listens) and the kernel's Task reaper has looked
+#       at least once (every 30 s), b's Task and WorkerRun are the same ones, still running.
+#       Released, b reports; c runs; the goal completes(achieved).
+# Throughout: every attempt has exactly one Task (I-G1), no step is skipped, each starts after the
+# one before it ended. S2 runs last: the kernel's restarts drop every connection to it (the entry
+# agents' included), and nothing after it but cleanup_step needs them.
+
+goal_s2_restarts() {
+  n=$(real_token)
+  hold_a="s2-$n-a"
+  hold_b="s2-$n-b"
+  lock="s2-$n-b"
+  a=$(goal_step_json a "ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=$n STEP=a HOLD=$hold_a")
+  b=$(goal_step_json b "ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=$n STEP=b HOLD=$hold_b" '"dependsOn":["a"]')
+  c=$(goal_step_json c "ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=$n STEP=c" '"dependsOn":["b"]')
+  GOAL_HOLDS="$GOAL_HOLDS $hold_a $hold_b"
+  goal_propose_confirm s2 "{\"statement\":\"accept_s2 S2 $n: three ops-runner steps report one after the other while the kernel is killed twice and worker-supervisor restarted.\",\"plan\":{\"steps\":[$a,$b,$c],\"acceptance\":[$(goal_observe_check_json stock-visible stock.get '{}' symbol '"NXT"')]},\"budget\":$GOAL_BUDGET,\"idempotencyKey\":\"accept-s2-goal-s2-$n\"}"
+  S2_GOAL_ID=$GOAL_RUN_ID
+  pass "s2-confirmed" "alice proposed and confirmed goal $S2_GOAL_ID (a, b, c in turn; a and b held at fake-llm until released)"
+
+  # (a) a's Worker held mid model call; the kernel crashes and comes back.
+  fake_llm_wait_hold "$hold_a" 180 || goal_fail "s2-kernel-killed-task" "$S2_GOAL_ID" "a's Worker did not reach its held turn within 180s (fake-llm holds '$(fake_llm_holds)')"
+  task_a=$(goal_step_task "$S2_GOAL_ID" a 1)
+  run_a=$(psql_ws "select id from worker_runs where workspace_id='$WORKSPACE_ID' and task_id='$task_a'")
+  goal_kernel_kill_restart s2-kernel-killed-task
+  after="$(goal_task_status "$task_a"),$(psql_ws "select status from worker_runs where workspace_id='$WORKSPACE_ID' and id='$run_a'"),$(goal_tasks "$S2_GOAL_ID")"
+  case ",$(fake_llm_holds)," in
+    *",$hold_a,"*) : ;;
+    *) goal_fail "s2-kernel-killed-task" "$S2_GOAL_ID" "fake-llm no longer holds a's turn ${GOAL_RESTART_SECONDS}s after the kill (it answers a held turn itself after 120s; a's Task reads '$(goal_task_status "$task_a")')" ;;
+  esac
+  [ "$after" = "running,running,1" ] || goal_fail "s2-kernel-killed-task" "$S2_GOAL_ID" "with the kernel back, a's Task $task_a, its WorkerRun $run_a and the run's Task count read '$after', expected the same Task and WorkerRun still running and one Task"
+  pass "s2-kernel-killed-task" "the kernel was killed (SIGKILL) while a's Worker was held mid model call and was healthy again in ${GOAL_RESTART_SECONDS}s: a's Task $task_a and its WorkerRun $run_a are the same, still running, the run has one Task"
+
+  # (b) The advance a's end sets off stops on b's locked row; the kernel crashes inside it.
+  b_row=$(psql_ws "select id from step_runs where workspace_id='$WORKSPACE_ID' and goal_run_id='$S2_GOAL_ID' and step_key='b'")
+  goal_row_lock_take "$lock" step_runs "$b_row" || goal_fail "s2-kernel-killed-advance" "$S2_GOAL_ID" "could not lock b's StepRun row $b_row within 10s"
+  released=$(fake_llm_release "$hold_a")
+  [ "$released" = "1" ] || { goal_row_lock_release "$lock" >/dev/null; goal_fail "s2-kernel-killed-advance" "$S2_GOAL_ID" "releasing a's held turn released '$released' request(s), expected 1"; }
+  # Both: a's Task completed and an advance waiting on b's row — the one its end set off (the run
+  # has nothing else to advance for: its next tick is its wall-clock deadline).
+  deadline=$(($(date +%s) + 45))
+  while :; do
+    waiting=$(goal_row_lock_waiters "$lock" 'from step_runs')
+    task_a_status=$(goal_task_status "$task_a")
+    [ "$waiting|$task_a_status" = "1|completed" ] && break
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      goal_row_lock_release "$lock" >/dev/null
+      goal_fail "s2-kernel-killed-advance" "$S2_GOAL_ID" "45s after a's turn was released: $waiting session(s) waiting on b's locked row, a's Task '$task_a_status' — expected one advance waiting there and a's Task completed"
+    fi
+    sleep 1
+  done
+  goal_kernel_kill_restart s2-kernel-killed-advance
+  zombie=$(goal_row_lock_waiters "$lock" 'from step_runs')
+  b_before=$(psql_ws "select count(*) from tasks where workspace_id='$WORKSPACE_ID' and step_run_id='$b_row'")
+  unlocked=$(date +%s)
+  ended=$(goal_row_lock_release "$lock")
+  [ "$b_before" = "0" ] || goal_fail "s2-kernel-killed-advance" "$S2_GOAL_ID" "b has $b_before Task(s) before the lock on its row ended, expected none (the advance that would start it was stopped on that row)"
+  pass "s2-kernel-killed-advance" "the advance a's end set off stopped on b's locked row with its transaction open; the kernel was killed in it and healthy again in ${GOAL_RESTART_SECONDS}s; the dead advance still waited on the row ($zombie waiting) until the lock was ended ($ended); b had no Task"
+
+  fake_llm_wait_hold "$hold_b" 150 || goal_fail "s2-advance-redone" "$S2_GOAL_ID" "b's Worker did not reach its held turn within 150s of the lock's end (the dead claim's lease is 60s; fake-llm holds '$(fake_llm_holds)')"
+  took=$(($(date +%s) - unlocked))
+  task_b=$(goal_step_task "$S2_GOAL_ID" b 1)
+  steps=$(goal_get "$S2_GOAL_ID" "['a', 'b', 'c'].map((k) => { const s = d.result.steps.find((x) => x.stepKey === k); return k + ':' + s.status + ':' + s.attempts.length; }).join(',')")
+  per=$(goal_one_task_per_attempt "$S2_GOAL_ID")
+  [ "$steps|$per" = "a:succeeded:1,b:running:1,c:pending:0|ok" ] \
+    || goal_fail "s2-advance-redone" "$S2_GOAL_ID" "steps '$steps', Tasks per attempt '$per' — expected a succeeded on its one attempt, b running its first, c not started, one Task per attempt"
+  pass "s2-advance-redone" "the new kernel advanced the run ${took}s after the lock ended: a succeeded on its one attempt, b started once (Task $task_b), one Task per attempt"
+
+  # (c) b's Worker held; worker-supervisor restarts.
+  run_b=$(psql_ws "select id from worker_runs where workspace_id='$WORKSPACE_ID' and task_id='$task_b'")
+  goal_supervisor_restart s2-supervisor-restarted
+  sleep 35
+  after="$(goal_task_status "$task_b"),$(psql_ws "select status from worker_runs where workspace_id='$WORKSPACE_ID' and id='$run_b'"),$(goal_tasks "$S2_GOAL_ID")"
+  case ",$(fake_llm_holds)," in
+    *",$hold_b,"*) : ;;
+    *) goal_fail "s2-supervisor-restarted" "$S2_GOAL_ID" "fake-llm no longer holds b's turn after the restart (it answers a held turn itself after 120s; b's Task reads '$(goal_task_status "$task_b")')" ;;
+  esac
+  [ "$after" = "running,running,2" ] || goal_fail "s2-supervisor-restarted" "$S2_GOAL_ID" "35s after worker-supervisor was back, b's Task $task_b, its WorkerRun $run_b and the run's Task count read '$after', expected the same Task and WorkerRun still running and two Tasks"
+  pass "s2-supervisor-restarted" "worker-supervisor restarted while b's Worker was held and answered /healthz in ${GOAL_RESTART_SECONDS}s; 35s later (past one Task-reaper look) b's Task $task_b and its WorkerRun $run_b are the same, still running"
+
+  [ "$(fake_llm_release "$hold_b")" = "1" ] || goal_fail "s2-achieved" "$S2_GOAL_ID" "releasing b's held turn did not release exactly one request"
+  goal_wait "$S2_GOAL_ID" 300 "$GOAL_END_EXPR" 'completed,*' 'paused,*' 'cancelled,*' 'failed,*' \
+    || goal_fail "s2-achieved" "$S2_GOAL_ID" "goal $S2_GOAL_ID did not settle within 300s of b's release (last '$GOAL_WAIT_VALUE')"
+  steps=$(goal_get "$S2_GOAL_ID" "d.result.steps.map((s) => s.stepKey + ':' + s.status + ':' + s.attempts.length).sort().join(',')")
+  order=$(goal_get "$S2_GOAL_ID" "(() => { const s = Object.fromEntries(d.result.steps.map((x) => [x.stepKey, x])); const start = (k) => Date.parse(s[k].attempts[0].createdAt); const end = (k) => Date.parse(s[k].endedAt); return start('b') >= end('a') && start('c') >= end('b') ? 'in-turn' : 'out-of-turn'; })()")
+  per=$(goal_one_task_per_attempt "$S2_GOAL_ID")
+  [ "$GOAL_WAIT_VALUE|$steps|$order|$per" = "completed,achieved,verified_by_check,|a:succeeded:1,b:succeeded:1,c:succeeded:1|in-turn|ok" ] \
+    || goal_fail "s2-achieved" "$S2_GOAL_ID" "goal '$GOAL_WAIT_VALUE', steps '$steps', order '$order', Tasks per attempt '$per' — expected completed(achieved), every step succeeded on one attempt in turn, one Task each"
+  pass "s2-achieved" "goal $S2_GOAL_ID completed(achieved) through two kernel crashes and a worker-supervisor restart: a, b, c each succeeded on one attempt, each after the one before, one Task each"
+}
+
 # goal_scenarios_step: the scenarios, in the order the header explains.
 goal_scenarios_step() {
   goal_s6_start
@@ -679,8 +1225,12 @@ goal_scenarios_step() {
   goal_s7_cancel_drain
   goal_s9_authority_lost
   goal_s10_budget
+  goal_s12_lost_wake
+  goal_s8_terminate
+  goal_s8_let_finish
   goal_s6_finish
   goal_s4_unseen_finish
+  goal_s2_restarts
 }
 
 # --- --real: the test ledger stays out of a real model's tools (review #488 on #806) ------------

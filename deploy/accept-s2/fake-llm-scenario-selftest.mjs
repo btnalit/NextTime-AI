@@ -931,6 +931,112 @@ async function main() {
       }
     }
 
+    // 6n. S11 GO7a-3 held turns: a goal step with HOLD=<name> is not answered until the name is
+    //     released; while held it is listed; once released it never holds again; a turn asked again
+    //     past the end of the script (the clamp) is not held; a held request whose client went
+    //     away drops off the list.
+    {
+      const holds = async () => (await (await fetch(`http://127.0.0.1:${PORT}/accept-s2/holds`)).json()).holds;
+      const release = async (name) =>
+        (await (await fetch(`http://127.0.0.1:${PORT}/accept-s2/holds/${name}/release`, { method: 'POST' })).json()).released;
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 300));
+      const input = { role: 'custom', content: '### Task input\nACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=h42 STEP=a HOLD=s12-h42-a' };
+      const begin = { role: 'user', content: 'Begin working on your assigned Task now' };
+      let answered = false;
+      const pending = post([input, begin]).then((reply) => {
+        answered = true;
+        return reply;
+      });
+      await settle();
+      const listed = await holds();
+      check('held-turn-listed', !answered && listed.includes('s12-h42-a'), JSON.stringify({ answered, listed }));
+      check('held-turn-release-count', (await release('s12-h42-a')) === 1, 'expected one request released');
+      const { json } = await pending;
+      const call = toolCallOf(json);
+      check('held-turn-answered', call?.name === 'report_result' && call.args.summary.includes('h42'), JSON.stringify(json.choices[0]));
+      check('held-turn-unlisted', (await holds()).length === 0, 'expected no hold left');
+      const again = toolCallOf((await post([input, begin])).json);
+      check('held-turn-once', again?.name === 'report_result', 'a released name must answer at once');
+      check('held-turn-release-none', (await release('never-held')) === 0, 'releasing an unknown name releases nothing');
+
+      // The clamp: one assistant message already answered the script's only turn.
+      const clampInput = { role: 'custom', content: '### Task input\nACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=h43 STEP=a HOLD=s12-h43-a' };
+      const reported = {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{ id: 'call_rr', type: 'function', function: { name: 'report_result', arguments: '{}' } }],
+      };
+      const clamped = toolCallOf((await post([clampInput, begin, reported, { role: 'tool', tool_call_id: 'call_rr', content: '{}' }])).json);
+      check('held-turn-clamp-not-held', clamped?.name === 'report_result' && (await holds()).length === 0, JSON.stringify(clamped));
+
+      // A client that goes away while held.
+      const goneInput = { role: 'custom', content: '### Task input\nACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=h44 STEP=a HOLD=s12-h44-a' };
+      const controller = new AbortController();
+      const gone = fetch(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'fake-echo', messages: [goneInput, begin] }),
+        signal: controller.signal,
+      }).catch(() => 'aborted');
+      await settle();
+      const before = await holds();
+      controller.abort();
+      await gone;
+      await settle();
+      const after = await holds();
+      check('held-turn-client-gone', before.includes('s12-h44-a') && !after.includes('s12-h44-a'), JSON.stringify({ before, after }));
+    }
+
+    // 6o. S11 GO7a-3 goalThreeWritesScenario: three ledger writes under <k>-1..3, the third asked
+    //     only once its hold is released, then a report naming each answer.
+    {
+      const input = { role: 'custom', content: '### Task input\nACCEPT_S2_SCENARIO=goal_three_writes LEDGER_KEY=s8l-t42 HOLD=s8l-t42-a' };
+      const begin = { role: 'user', content: 'Begin working on your assigned Task now' };
+      const wrote = (id, key, answer) => [
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id, type: 'function', function: { name: 'accept_s2_api_ledger_add', arguments: JSON.stringify({ key }) } }],
+        },
+        { role: 'tool', tool_call_id: id, content: answer },
+      ];
+      const first = toolCallOf((await post([input, begin])).json);
+      check('three-writes-turn1', first?.name === 'accept_s2_api_ledger_add' && first.args.key === 's8l-t42-1', JSON.stringify(first));
+      const one = wrote('call_w1', 's8l-t42-1', '{"status":"pending_approval","actionRequestId":"ar-1"}');
+      const second = toolCallOf((await post([input, begin, ...one])).json);
+      check('three-writes-turn2', second?.name === 'accept_s2_api_ledger_add' && second.args.key === 's8l-t42-2', JSON.stringify(second));
+      const two = wrote('call_w2', 's8l-t42-2', '{"status":"pending_approval","actionRequestId":"ar-2"}');
+      let answered = false;
+      const pending = post([input, begin, ...one, ...two]).then((reply) => {
+        answered = true;
+        return reply;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const listed = (await (await fetch(`http://127.0.0.1:${PORT}/accept-s2/holds`)).json()).holds;
+      check('three-writes-third-held', !answered && listed.includes('s8l-t42-a'), JSON.stringify({ answered, listed }));
+      await fetch(`http://127.0.0.1:${PORT}/accept-s2/holds/s8l-t42-a/release`, { method: 'POST' });
+      const third = toolCallOf((await pending).json);
+      check('three-writes-turn3', third?.name === 'accept_s2_api_ledger_add' && third.args.key === 's8l-t42-3', JSON.stringify(third));
+      const three = wrote('call_w3', 's8l-t42-3', 'illegal_transition: request_action: goal step sr-1 is superseded and takes no new work (I-G9)');
+      const report = toolCallOf((await post([input, begin, ...one, ...two, ...three])).json);
+      check(
+        'three-writes-report',
+        report?.name === 'report_result' &&
+          report.args.factsToAssert.length === 0 &&
+          report.args.findings.length === 3 &&
+          report.args.findings[0].startsWith('s8l-t42-1: ') &&
+          report.args.findings[2].startsWith('s8l-t42-3: ') &&
+          report.args.findings[2].includes('superseded'),
+        JSON.stringify(report),
+      );
+      checkToolCallAgainstRegistry('three-writes-report', report);
+      // Not mistaken for goal_ledger's script (whose marker it does not contain), nor the reverse.
+      const ledger = toolCallOf(
+        (await post([{ role: 'custom', content: '### Task input\nACCEPT_S2_SCENARIO=goal_ledger GOAL_NONCE=l43 LEDGER_KEY=s5-l43' }, begin])).json,
+      );
+      check('three-writes-not-goal-ledger', ledger?.args?.key === 's5-l43', JSON.stringify(ledger));
+    }
+
     // 7. Streaming mode also honors scenarios (SSE contains the scripted tool name).
     {
       const { sse } = await post(
