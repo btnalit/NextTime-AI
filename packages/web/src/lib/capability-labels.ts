@@ -1899,6 +1899,15 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '提出的计划被驳回。',
     enHint: 'A proposed plan was rejected.',
   },
+  // S10 E3-1c (kernel application/eval-seal): evaluation content stopped on its way to an agent.
+  'evaluation.content_withheld': {
+    zh: '评测内容被拦下',
+    en: 'Evaluation content withheld',
+    zhHint:
+      '要交给智能体的内容里有评测用例集保留的部分，已拦下：调用结果没有返回、Worker 没有启动，或聊天消息没有发出。',
+    enHint:
+      'Content on its way to an agent held text an evaluation suite keeps back, so it was stopped: a call’s result was not returned, a Worker was not started, or a chat message was not sent.',
+  },
   'task.budget_handed_down': {
     zh: '任务预算已分给步骤',
     en: 'Task budget handed down',

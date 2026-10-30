@@ -19,6 +19,11 @@ import {
 } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import {
+  EvaluationContentWithheldError,
+  recordEvaluationWithheld,
+  sealWithholds,
+} from '../eval-seal/index.js';
+import {
   GoalStepClosedError,
   TaskOutputRejectedError,
   recordRejectedOutput,
@@ -333,6 +338,86 @@ async function auditGateRefusal(
       ),
     );
   }
+}
+
+/**
+ * S10 E3-1c: a call refused by the evaluation seal (`EvaluationContentWithheldError`) leaves the
+ * seal's own audit row (`recordEvaluationWithheld`: where, for whom, which capability) — never the
+ * call's params or result, either of which may be the very content. Once per refusal: one already
+ * recorded where it was raised (a Worker start) is left as it is.
+ */
+async function auditEvaluationWithheld(
+  deps: DispatchDeps,
+  call: {
+    readonly workspaceId: string;
+    readonly principalId: string;
+    readonly channel: string;
+    readonly name: string;
+    readonly err: unknown;
+  },
+): Promise<void> {
+  if (!(call.err instanceof EvaluationContentWithheldError) || call.err.recorded) return;
+  call.err.recorded = true;
+  await recordEvaluationWithheld(deps.pool, {
+    workspaceId: call.workspaceId,
+    principalId: call.principalId,
+    channel: call.channel,
+    where: call.err.where,
+    capability: call.name,
+    ...(call.err.where === 'capability_result' ? { rolledBack: call.err.rolledBack } : {}),
+  });
+}
+
+/**
+ * S10 E3-1c: the error a Handle's call failed with, checked like a result — its message and
+ * details can carry what a gate or a Worker answered. Returns what to throw: the seal's refusal
+ * (audited) when that text carries evaluation content, else `err` itself. A check that cannot run
+ * fails closed, as a result's does: `err` is not handed on, a fixed error takes its place, and the
+ * log line names the capability and why the check failed — never `err`'s text.
+ */
+/** What a Handle's call fails with when the error it failed with could not be checked. */
+export const UNCHECKED_ERROR_MESSAGE =
+  'the call failed, and its error could not be checked for content reserved for evaluation, so it was withheld';
+
+async function sealedError(
+  deps: DispatchDeps,
+  call: {
+    readonly workspaceId: string;
+    readonly principalId: string;
+    readonly channel: string;
+    readonly name: string;
+  },
+  err: unknown,
+): Promise<unknown> {
+  if (
+    call.channel !== 'handle' ||
+    !(err instanceof Error) ||
+    err instanceof EvaluationContentWithheldError
+  ) {
+    return err;
+  }
+  const text = { message: err.message, details: (err as { details?: unknown }).details };
+  let carries: boolean;
+  try {
+    carries = await withWorkspace(
+      deps.pool,
+      { workspaceId: call.workspaceId, principalId: call.principalId },
+      (client) => sealWithholds(client, call.workspaceId, text),
+    );
+  } catch (checkErr) {
+    const why = checkErr instanceof Error ? checkErr.message : String(checkErr);
+    console.error(
+      `[kernel] evaluation seal: could not check the error of a failed ${call.name} call, so it was withheld: ${why}`.replace(
+        /\n|\r/g,
+        '',
+      ),
+    );
+    return new Error(UNCHECKED_ERROR_MESSAGE);
+  }
+  if (!carries) return err;
+  const withheld = new EvaluationContentWithheldError('capability_error');
+  await auditEvaluationWithheld(deps, { ...call, err: withheld });
+  return withheld;
 }
 
 /**
@@ -668,6 +753,16 @@ export async function dispatchCapability(
           ? { consoleUser: { platformRole: caller.user.platformRole } }
           : {}),
       });
+      // S10 E3-1c (I-E4): nothing a Handle gets back carries evaluation content — a suite's
+      // canary or a verbatim run of a holdout case. Checked inside the call's own transaction, so
+      // what a refused call wrote is rolled back as well as its result withheld (a result produced
+      // after commit is checked below).
+      if (
+        caller.channel === 'handle' &&
+        (await sealWithholds(client, workspaceId, result.result))
+      ) {
+        throw new EvaluationContentWithheldError('capability_result');
+      }
       const resourceRef = auditResourceRef(result.resourceId);
       await writeAudit(client, {
         workspaceId,
@@ -699,15 +794,32 @@ export async function dispatchCapability(
       err,
     };
     await auditGateRefusal(deps, refused);
+    await auditEvaluationWithheld(deps, refused);
     await auditUnknownOperation(deps, refused);
     await auditGoalStepClosed(deps, refused);
     await recordRefusedOutput(deps, refused);
-    throw err;
+    throw await sealedError(deps, refused, err);
   });
 
+  const sealed = { workspaceId, principalId, channel: caller.channel, name };
   const finalResult = handlerResult.afterCommit
-    ? await handlerResult.afterCommit(deps.pool)
+    ? await handlerResult.afterCommit(deps.pool).catch(async (err: unknown) => {
+        throw await sealedError(deps, sealed, err);
+      })
     : handlerResult.result;
+  // S10 E3-1c: a result produced after the call committed (`invoke_worker`'s `wait`, the Worker's
+  // outcome) — withheld the same way, though the call itself stands.
+  if (
+    caller.channel === 'handle' &&
+    handlerResult.afterCommit &&
+    (await withWorkspace(deps.pool, { workspaceId, principalId }, (client) =>
+      sealWithholds(client, workspaceId, finalResult),
+    ))
+  ) {
+    const withheld = new EvaluationContentWithheldError('capability_result', false);
+    await auditEvaluationWithheld(deps, { ...sealed, err: withheld });
+    throw withheld;
+  }
   validateResultAgainstSchema(capability, name, finalResult);
   return finalResult;
 }

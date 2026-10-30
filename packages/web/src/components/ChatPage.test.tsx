@@ -611,6 +611,34 @@ describe('ChatPage send and stream (C22)', () => {
   });
 });
 
+// S10 E3-1c (UX acceptance of #813, P3): the evaluation seal stops a chat message only at the
+// entry agent's Turn, so the composer's note names the message and nothing about a Worker.
+describe('ChatPage send refused for evaluation content (S10 E3-1c)', () => {
+  it('says the message was neither sent nor saved, and nothing about a Worker or the audit log', async () => {
+    const fake = fakeClient();
+    (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new RpcError(
+        -32018,
+        'this message carries content reserved for evaluation, which no agent may read, so it was not sent — nothing was saved',
+      ),
+    );
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => fake.caughtUp());
+
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'pasted case' } });
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+    const banner = await screen.findByRole('alert');
+    const body = banner.querySelector('.error-banner-message')?.textContent ?? '';
+    expect(banner.textContent).toContain('含评测保留的内容');
+    expect(body).toContain('这条消息没有发出，也没有保存');
+    expect(body).toContain('去掉那一段再试');
+    expect(body).not.toContain('Worker');
+    expect(body).not.toContain('审计');
+    expect(body).not.toContain('权限');
+  });
+});
+
 // Legacy 334 (UX review of #605, P3-2): U+0000 in what the person typed is named as the message,
 // not the wire param `text`, and without the sentence about an agent's call.
 describe('ChatPage send refused for U+0000 (legacy 334)', () => {

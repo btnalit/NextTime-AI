@@ -8,6 +8,11 @@ import type {
 import { revokeSession } from '../../governance/capability/index.js';
 import { currentCorrelationId } from '../../substrate/correlation/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
+import {
+  EvaluationContentWithheldError,
+  recordEvaluationWithheld,
+  sealWithholds,
+} from '../eval-seal/index.js';
 import { ensureWorkerAgentPrincipal } from './agent-principal.js';
 import type { LoadedSkillRef } from './definition-content.js';
 import {
@@ -158,6 +163,21 @@ export async function spawnWorkerRun(
         throw new IllegalTransition(TASK_TRANSITIONS.machine, taskStatus ?? 'missing', 'start');
       }
 
+      // S10 E3-1c (I-E4): a Worker never starts with evaluation content — what it is handed (its
+      // Task input; the system prompt and Skills forwarded to the supervisor below) carrying a
+      // suite's canary or a verbatim run of a holdout case's text. Checked before anything is
+      // created, so the refusal leaves nothing behind; every caller then fails the Task as for any
+      // other failed start. Covers the initial spawn and the requeue alike.
+      if (
+        await sealWithholds(client, workspaceId, {
+          input: input.task.input,
+          systemPrompt: input.systemPrompt,
+          skillsInline: input.skillsInline,
+        })
+      ) {
+        throw new EvaluationContentWithheldError('worker_start');
+      }
+
       // One agent principal per (workspace, WorkerDefinition) — resolved/created idempotently
       // before the WorkerRun row exists so its id can be stamped on the row in the same INSERT
       // (agent-principal.ts's own doc comment has the full "why this identity, why not per-run"
@@ -241,7 +261,20 @@ export async function spawnWorkerRun(
 
       return { workerRun, handleToken: issuedHandle.token };
     },
-  );
+  ).catch(async (err: unknown) => {
+    // The seal's audit row, in its own transaction (this one rolled back). Marked recorded, so a
+    // dispatch the refusal passes back through does not write a second.
+    if (err instanceof EvaluationContentWithheldError && !err.recorded) {
+      err.recorded = true;
+      await recordEvaluationWithheld(deps.pool, {
+        workspaceId,
+        principalId: input.onBehalfOf,
+        where: err.where,
+        taskId: input.task.id,
+      });
+    }
+    throw err;
+  });
 
   // Leftover 87: the id this WorkerRun inherits (worker-supervisor puts it into the container's
   // `NEXTTIME_CORRELATION_ID`, the Worker's platform extension sends it on every kernel call): the

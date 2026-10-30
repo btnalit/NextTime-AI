@@ -23,6 +23,7 @@ import {
 } from '../../application/change-plan/index.js';
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
 import { ChatArchivedError } from '../../application/chat/index.js';
+import { EvaluationContentWithheldError } from '../../application/eval-seal/index.js';
 import { EvalFixtureGateInUseError } from '../../application/eval/index.js';
 import { GatekeeperLandingRefusedError } from '../../application/gates/index.js';
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
@@ -728,6 +729,22 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
         new NotProposerError('reject_draft', 'Skill skill-1@2', 'only the workspace owner …'),
       ),
     ).toMatchObject({ status: 403, code: 'not_proposer' });
+  });
+
+  it('EvaluationContentWithheldError (S10 E3-1c) → 403 evaluation_content_withheld, its message only — no details', () => {
+    for (const err of [
+      new EvaluationContentWithheldError('capability_result'),
+      new EvaluationContentWithheldError('capability_result', false),
+      new EvaluationContentWithheldError('capability_error'),
+      new EvaluationContentWithheldError('worker_start'),
+      new EvaluationContentWithheldError('entry_turn'),
+    ]) {
+      expect(mapCapabilityError(err)).toEqual({
+        status: 403,
+        code: 'evaluation_content_withheld',
+        message: err.message,
+      });
+    }
   });
 
   it('ConflictNotFoundError (resolve_conflict/list_conflicts) → 404 not_found, not 500', () => {

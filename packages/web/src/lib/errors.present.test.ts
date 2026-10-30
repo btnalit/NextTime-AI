@@ -40,6 +40,33 @@ describe('presentError', () => {
     expect(presentError(err, en).title).toBe('Text holds a character that cannot be stored');
   });
 
+  // S10 E3-1c: the evaluation seal's refusal reads the same over HTTP and over WS, and never as
+  // "not permitted". Outside the chat composer (which says it its own way) a person's call meets
+  // it only where a Worker would start, so the note says that and nothing about a message.
+  it('evaluation_content_withheld says what was stopped and what to do, over HTTP and WS alike', () => {
+    const message =
+      'what this Worker would start with carries content reserved for evaluation, so it was not started';
+    for (const err of [
+      new HttpError('capability_error', message, 'evaluation_content_withheld'),
+      new RpcError(-32018, message),
+    ]) {
+      const shown = presentError(err, zh);
+      expect(shown).toMatchObject({
+        code: 'evaluation_content_withheld',
+        title: '含评测保留的内容',
+        curated: true,
+      });
+      expect(shown.message).toContain('Worker 没有启动');
+      expect(shown.message).toContain('去掉那一段再试');
+      expect(shown.message).not.toContain('权限');
+      expect(shown.message).not.toContain('消息');
+      expect(shown.message).not.toContain('审计');
+      expect(shown.raw).toBe(message);
+      expect(presentError(err, en).title).toBe('Reserved for evaluation');
+      expect(presentError(err, en).message).toContain('Remove that part and try again');
+    }
+  });
+
   // UX acceptance of #602 (P2-1): the note names the field the kernel names, says the character
   // cannot be seen, and says how to get rid of it — the same over HTTP and over WS (the composer).
   it('legacy 320: the unstorable_text note names the field and how to remove an invisible character', () => {

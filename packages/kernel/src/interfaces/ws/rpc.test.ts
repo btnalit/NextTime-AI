@@ -10,6 +10,7 @@ import {
   ChangeSegmentNotFoundError,
   ChangeSegmentRolledBackError,
 } from '../../application/change-plan/index.js';
+import { EvaluationContentWithheldError } from '../../application/eval-seal/index.js';
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
 import {
   ConflictNotFoundError,
@@ -178,6 +179,15 @@ describe('mapDispatchError — legacy 232 unknown operation', () => {
     expect(WS_ERROR_CODES.UNSTORABLE_TEXT).toBe(-32017);
     expect(mapDispatchError(err)).toEqual({
       code: WS_ERROR_CODES.UNSTORABLE_TEXT,
+      message: err.message,
+    });
+  });
+
+  it('EvaluationContentWithheldError (S10 E3-1c) maps to its own EVALUATION_CONTENT_WITHHELD (-32018), not FORBIDDEN', () => {
+    const err = new EvaluationContentWithheldError('entry_turn');
+    expect(WS_ERROR_CODES.EVALUATION_CONTENT_WITHHELD).toBe(-32018);
+    expect(mapDispatchError(err)).toEqual({
+      code: WS_ERROR_CODES.EVALUATION_CONTENT_WITHHELD,
       message: err.message,
     });
   });

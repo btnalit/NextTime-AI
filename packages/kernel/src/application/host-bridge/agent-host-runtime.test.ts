@@ -3,7 +3,7 @@ import type { AgentHostToKernelFrame, KernelToAgentHostFrame, Role } from '@next
 import { AGENT_HOST_SPAWN_TIMEOUT_MS, AGENT_HOST_TURN_STARTUP_MS } from '@nexttime/shared';
 import type { CryptoKey } from 'jose';
 import type { PoolClient } from 'pg';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { generateEphemeralHandleKeyPair } from '../../governance/capability/keys.js';
 import {
@@ -73,6 +73,10 @@ interface FakePublishedSkill {
   readonly id: string;
   readonly name: string;
 }
+
+/** S10 E3-1c: what the evaluation seal's count query answers (`application/eval-seal`) — no
+ *  suites (nothing to check) unless a test sets it, and `'throw'` for a check that cannot run. */
+let sealCounts: { suites: number; holdout: number } | 'throw' = { suites: 0, holdout: 0 };
 
 function createFakePool(
   publishedEntryDefinitions: ReadonlyMap<string, FakeEntryDefinitionRow> = new Map(),
@@ -307,6 +311,12 @@ function createFakePool(
       };
     }
 
+    // S10 E3-1c: application/eval-seal's sealWithholds, called by startWithheld.
+    if (sql.startsWith('select (select count(*) from eval_suites')) {
+      if (sealCounts === 'throw') throw new Error('connection terminated unexpectedly');
+      return { rows: [sealCounts], rowCount: 1 };
+    }
+
     if (sql.startsWith('insert into capability_handles')) {
       // (workspace_id, jti, session_id, on_behalf_of, parent_jti, scope, expires_at) —
       // governance/capability/handles.ts's issueHandle; on_behalf_of is index 3, not jti (index 1).
@@ -395,6 +405,82 @@ describe('AgentHostRuntime — startTurn with no agent-host connected', () => {
         principalId: input.principalId,
       },
     ]);
+  });
+});
+
+// S10 E3-1c (review #493 of #813): what the entry agent starts with goes through the evaluation
+// seal, and a check that cannot run starts nothing (the hit itself is proven on real Postgres, in
+// application/gateway/eval-seal.integration.test.ts).
+describe('AgentHostRuntime — startTurn and the evaluation seal', () => {
+  afterEach(() => {
+    sealCounts = { suites: 0, holdout: 0 };
+  });
+
+  it('fails closed: a seal check that cannot run ends the Turn failed, sends nothing, and logs no prompt', async () => {
+    const workspaceId = randomUUID();
+    const { pool } = createFakePool(
+      new Map([
+        [
+          workspaceId,
+          { systemPrompt: 'You are the entry agent of this workspace, answer plainly.' },
+        ],
+      ]),
+    );
+    const { sink, events } = createFakeSink();
+    const lines: string[] = [];
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey: await ephemeralPrivateKey(),
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: (line) => lines.push(line),
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+    sealCounts = 'throw';
+
+    const input = startTurnInput({ workspaceId });
+    await runtime.startTurn(input);
+
+    expect(sent).toEqual([]);
+    expect(events).toEqual([
+      {
+        type: 'turnEnded',
+        status: 'failed',
+        workspaceId,
+        chatId: input.chatId,
+        turnId: input.turnId,
+        principalId: input.principalId,
+      },
+    ]);
+    expect(lines.some((line) => line.includes('content reserved for evaluation'))).toBe(true);
+    for (const line of lines) expect(line).not.toContain('entry agent of this workspace');
+  });
+
+  it('a workspace without suites starts the Turn as before', async () => {
+    const workspaceId = randomUUID();
+    const { pool } = createFakePool(
+      new Map([
+        [
+          workspaceId,
+          { systemPrompt: 'You are the entry agent of this workspace, answer plainly.' },
+        ],
+      ]),
+    );
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink: createFakeSink().sink,
+      privateKey: await ephemeralPrivateKey(),
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const input = startTurnInput({ workspaceId });
+    await runtime.startTurn(input);
+    expect(sent).toHaveLength(1);
+    runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });
   });
 });
 

@@ -28,6 +28,48 @@ function namesAt(record: Readonly<Record<string, unknown>>, key: string): string
   return names.length > 0 ? names : undefined;
 }
 
+/** S10 E3-1c: where the evaluation seal stopped content on its way to an agent
+ *  (`evaluation.content_withheld`'s `where`, kernel `application/eval-seal`) and what that left. */
+function sealNote(
+  record: Readonly<Record<string, unknown>>,
+): { readonly zh: string; readonly en: string } | undefined {
+  if (record.outcome !== 'withheld') return undefined;
+  switch (record.where) {
+    case 'capability_result':
+      return record.rolledBack === false
+        ? {
+            zh: '这次调用的结果里有评测用例集保留的内容，没有交给智能体；调用本身已经生效。',
+            en: 'The call’s result held content an evaluation suite keeps back, so it was not handed to the agent; the call itself took effect.',
+          }
+        : {
+            zh: '这次调用的结果里有评测用例集保留的内容，没有交给智能体；调用写进平台的内容已撤回。',
+            en: 'The call’s result held content an evaluation suite keeps back, so it was not handed to the agent; what the call wrote to the platform was rolled back.',
+          };
+    case 'capability_error':
+      return {
+        zh: '这次调用失败了，它的错误信息里有评测用例集保留的内容，没有交给智能体。',
+        en: 'The call failed, and its error held content an evaluation suite keeps back, so the error was not handed to the agent.',
+      };
+    case 'worker_start':
+      return {
+        zh: '这个任务的 Worker 要拿到的内容（任务输入、系统提示词或技能）里有评测用例集保留的内容，Worker 没有启动，任务记为启动失败。',
+        en: 'What this task’s Worker would have started with (its input, system prompt or Skills) held content an evaluation suite keeps back, so the Worker was not started and the task failed to start.',
+      };
+    case 'entry_turn':
+      return {
+        zh: '这条聊天消息里有评测用例集保留的内容，没有发给智能体，也没有保存。',
+        en: 'This chat message held content an evaluation suite keeps back, so it was neither sent to the agent nor saved.',
+      };
+    case 'entry_start':
+      return {
+        zh: '入口智能体这一轮要读的系统提示词或技能里有评测用例集保留的内容，这一轮没有开始。',
+        en: 'The system prompt or Skills the entry agent would have started this turn with held content an evaluation suite keeps back, so the turn did not start.',
+      };
+    default:
+      return undefined;
+  }
+}
+
 function asRecord(value: unknown): Readonly<Record<string, unknown>> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Readonly<Record<string, unknown>>)
@@ -45,8 +87,9 @@ function asRecord(value: unknown): Readonly<Record<string, unknown>> | undefined
  * already account for it — text the kernel reads out masked (an Operation description's before /
  * after, a row written before the params copy was redacted) or a value under a secret-named field
  * the console masks (`auditPayloadShown`, what the page shows below the notes). S10 E3-1b: and
- * which params the record leaves out (`withheldParams`, an evaluation case's content). Renders
- * nothing when the payload has none of them.
+ * which params the record leaves out (`withheldParams`, an evaluation case's content). S10 E3-1c:
+ * and, on an `evaluation.content_withheld` row, where the seal stopped the content and what that
+ * left. Renders nothing when the payload has none of them.
  */
 export function AuditPayloadNotes({ payload }: { readonly payload: unknown }) {
   const t = useT();
@@ -57,6 +100,7 @@ export function AuditPayloadNotes({ payload }: { readonly payload: unknown }) {
   const redacted = countAt(record, 'redactedValues');
   const revokedHandles = countAt(record, 'revokedHandleCount');
   const withheld = namesAt(record, 'withheldParams');
+  const sealed = sealNote(record);
   // Looked for in what the page shows below.
   const { params, ...rest } = auditPayloadShown(record) as Record<string, unknown>;
   const masked = showsRedaction(rest) || (redacted === undefined && showsRedaction(params));
@@ -65,6 +109,7 @@ export function AuditPayloadNotes({ payload }: { readonly payload: unknown }) {
     redacted === undefined &&
     revokedHandles === undefined &&
     withheld === undefined &&
+    sealed === undefined &&
     !masked
   ) {
     return null;
@@ -99,7 +144,15 @@ export function AuditPayloadNotes({ payload }: { readonly payload: unknown }) {
         <li data-testid="audit-withheld-params">
           {t(
             `评测用例的${withheld.map((name) => (Object.hasOwn(WITHHELD_PARAM_LABELS, name) ? WITHHELD_PARAM_LABELS[name]?.zh : name)).join('、')}不写进审计记录，只存在用例集里（智能体读不到），在「治理 → 评测」打开用例查看。`,
-            `The evaluation case's ${withheld.map((name) => (Object.hasOwn(WITHHELD_PARAM_LABELS, name) ? WITHHELD_PARAM_LABELS[name]?.en : name)).join(', ')} are not kept in the audit record: they live in the suite only (no agent reads them); open the case under Governance → Evaluation.`,
+            `The evaluation case's ${withheld.map((name) => (Object.hasOwn(WITHHELD_PARAM_LABELS, name) ? WITHHELD_PARAM_LABELS[name]?.en : name)).join(', ')} are not kept in the audit record: they live in the suite only (no agent reads them); open the case under Govern → Evaluation.`,
+          )}
+        </li>
+      ) : null}
+      {sealed !== undefined ? (
+        <li data-testid="audit-evaluation-withheld">
+          {t(
+            `${sealed.zh}记录里不写拦下的是哪段内容、属于哪个用例。`,
+            `${sealed.en} The record never says which text it was or which case it belongs to.`,
           )}
         </li>
       ) : null}

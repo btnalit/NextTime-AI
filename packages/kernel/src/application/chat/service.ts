@@ -4,6 +4,7 @@ import { redactedForAudit } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
+import { EvaluationContentWithheldError, sealWithholds } from '../eval-seal/index.js';
 import { publishChatPushEvent } from './push.js';
 
 /**
@@ -538,6 +539,12 @@ export async function sendChatMessage(
 ): Promise<SendChatMessageResult> {
   const chat = await requireChatAccess(client, workspaceId, input.chatId);
   if (chat.archivedAt !== null) throw new ChatArchivedError(input.chatId);
+  // S10 E3-1c (I-E4): a person's message is the entry agent's prompt — one carrying a suite's
+  // canary or a verbatim run of a holdout case's text is refused before anything is saved (the
+  // dispatch it came through writes the audit row).
+  if (await sealWithholds(client, workspaceId, input.text)) {
+    throw new EvaluationContentWithheldError('entry_turn');
+  }
 
   // leftover 64 (docs/STATUS.md §4): `roll_entry_containers` (`application/platform/runtime.ts`)
   // takes the *same* session-scoped advisory lock, keyed identically
