@@ -14,6 +14,16 @@ export class EvalSuiteNotFoundError extends Error {
   }
 }
 
+/** 404 not_found: the suite has no case row with this id (E3-1b). An `EvalSuiteNotFoundError`,
+ *  so every place that maps that one maps this one the same way. */
+export class EvalCaseNotFoundError extends EvalSuiteNotFoundError {
+  constructor(caseId: string) {
+    super(caseId);
+    this.message = `evaluation case ${caseId} not found in this suite`;
+    this.name = 'EvalCaseNotFoundError';
+  }
+}
+
 /** 400 invalid_params: the pin is not a published worker-kind version, the gate is not there or
  *  publishes nothing — whatever the suite's state. */
 export class EvalSuiteInputError extends Error {
@@ -24,7 +34,8 @@ export class EvalSuiteInputError extends Error {
 }
 
 /** 409 conflict: the suite already is as asked (the version pinned now, a gate it already has, a
- *  gate that still matches) or does not have the gate named. */
+ *  gate that still matches, a case that already reads so) or does not have the gate or the live
+ *  case named, or a case it holds still answers calls through the gate to remove. */
 export class EvalSuiteStateError extends Error {
   constructor(message: string) {
     super(message);

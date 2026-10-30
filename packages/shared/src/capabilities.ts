@@ -17,6 +17,7 @@ import {
 } from './enums.js';
 import type { CapabilityChannel, Role } from './enums.js';
 import { listEnvelope } from './envelope.js';
+import { evalCaseContentFields, evalCaseKindFields } from './eval-case.js';
 import {
   GoalBudgetSchema,
   GoalPlanSchema,
@@ -206,7 +207,21 @@ export interface Capability {
    * means the parsed params are audited verbatim, exactly as before this field existed.
    */
   readonly redactedParamKeys?: readonly string[];
+  /**
+   * S10 E3-1b (docs/s10-evolution-plan-2026-10-04.md §3.3 I-E4, 评测对人透明、对 agent 封闭):
+   * top-level param field names whose values `application/gateway/dispatch.ts` leaves out of this
+   * capability's `audit_records.payload` — replaced whole by {@link AUDIT_WITHHELD_VALUE}, and named
+   * in the payload's `withheldParams`. An evaluation case's content lives in `eval_cases` only, so
+   * its one read path is `get_eval_case`, a person's: nothing that reads the audit trail can carry a
+   * holdout case anywhere else. Not a credential rule (that is `redactedParamKeys`): the values are
+   * not secrets, and the record says what was left out instead of counting masked values.
+   */
+  readonly auditWithheldParamKeys?: readonly string[];
 }
+
+/** What the audit copy of a call's params holds in place of a value its capability withholds
+ *  (`Capability.auditWithheldParamKeys`). */
+export const AUDIT_WITHHELD_VALUE = '[withheld]';
 
 const id = z.string().min(1);
 const jsonRecord = z.record(z.string(), z.unknown());
@@ -4506,6 +4521,15 @@ const goalCapabilities = [
 // version_changed and nothing is written.
 const EVAL_SUITE_CHANGE_RULE =
   'suiteVersion is the suite version you looked at: when the suite has changed since, 409 version_changed and nothing is written. Each change is a new suite version, recorded in its history with who made it and when. A suite that is not there is 404 not_found.';
+// S10 E3-1b: a case's content and its mechanism stay out of the audit copy of a case write
+// (`auditWithheldParamKeys`); its partition and split, the reason and the ids are kept.
+const EVAL_CASE_CONTENT_KEYS: readonly string[] = [
+  'mechanism',
+  ...Object.keys(evalCaseContentFields),
+];
+// S10 E3-1b: what every case write checks of the content.
+const EVAL_CASE_CONTENT_RULE =
+  'Whatever the suite’s state, 400 invalid_params for: a mechanism given without a mechanism partition or missing with one, a fixture rule naming a gate the suite does not have or an Operation it does not publish, an absent answer the Operation does not declare, a path that does not compile or (for an assertion) reads neither result nor calls, an invisible character, or a case larger than 64 KiB. No part of it may carry a credential (400 credentials_in_text) or a masked [redacted] mark (400 redacted_text_submitted).';
 const evalSuiteId = z.string().uuid();
 const evalSuiteVersion = z.number().int().positive();
 const evalReason = z.string().trim().min(1).max(500);
@@ -4533,7 +4557,19 @@ const evaluationCapabilities = [
     paramsSchema: z.object({ suiteId: evalSuiteId }).strict(),
     resultSchema: wire.EvalSuiteWireSchema,
     description:
-      'Read one evaluation suite: its pinned WorkerDefinition version, its canary, its fixture gates — each with the gate’s name and published Operations as frozen when added, and whether the gate still matches (liveState same / changed / unavailable) — and its history, every version’s change with who made it, when and why. People only. 404 not_found for a suite that is not there.',
+      'Read one evaluation suite: its pinned WorkerDefinition version, its canary, its fixture gates — each with the gate’s name and published Operations as frozen when added, and whether the gate still matches (liveState same / changed / unavailable) — the cases it holds now, each in brief (title, partition, split, mechanism, how many fixture rules and assertions, and fixtureProblems: rules a fixture gate change left without a match) — and its history, every version’s change with who made it, when and why. People only. 404 not_found for a suite that is not there.',
+  },
+  {
+    name: 'get_eval_case',
+    group: 'evaluation',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    actsForPerson: true,
+    paramsSchema: z.object({ suiteId: evalSuiteId, caseId: z.string().uuid() }).strict(),
+    resultSchema: wire.EvalCaseWireSchema,
+    description:
+      'Read one case of an evaluation suite whole — its input, fixture rules and assertions — whether the suite holds it now or an edit or a retirement took it out (retiredInVersion, retireReason, supersededBy). People only. 404 not_found for a suite or case that is not there.',
   },
   {
     name: 'create_eval_suite',
@@ -4622,7 +4658,64 @@ const evaluationCapabilities = [
       })
       .strict(),
     resultSchema: wire.EvalSuiteWireSchema,
-    description: `Remove a fixture gate from the suite, with a reason (kept in its history). Earlier suite versions still hold it. A gate the suite does not have is 409 conflict. ${EVAL_SUITE_CHANGE_RULE}`,
+    description: `Remove a fixture gate from the suite, with a reason (kept in its history). Earlier suite versions still hold it. A gate the suite does not have, or one a case the suite holds answers calls to (edit or retire those cases first), is 409 conflict. ${EVAL_SUITE_CHANGE_RULE}`,
+  },
+  {
+    name: 'add_eval_case',
+    group: 'evaluation',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'builder',
+    actsForPerson: true,
+    paramsSchema: z
+      .object({
+        suiteId: evalSuiteId,
+        suiteVersion: evalSuiteVersion,
+        ...evalCaseKindFields,
+        ...evalCaseContentFields,
+      })
+      .strict(),
+    resultSchema: wire.EvalSuiteWireSchema,
+    auditWithheldParamKeys: EVAL_CASE_CONTENT_KEYS,
+    description: `Add a case to the suite. partition (regression / mechanism / full), split (dev / holdout) and, for a mechanism case only, the mechanism it aims at are fixed for good. input is what the evaluated Worker is given. fixtures answer its calls: each rule names a fixture gate of the suite and one of its frozen Operations, optionally a when predicate on the call's params, and an answer — data, absent (only for an observe-class Operation that declares "not there" answers) or error; the first matching rule answers. assertions (at least one) are predicates on {result, calls}: result is the Worker's reported result contract, calls every fixture call it made ({gatekeeperId, gate, operation, mode, params, answer}); paths must read result or calls. ${EVAL_CASE_CONTENT_RULE} ${EVAL_SUITE_CHANGE_RULE}`,
+  },
+  {
+    name: 'edit_eval_case',
+    group: 'evaluation',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'builder',
+    actsForPerson: true,
+    paramsSchema: z
+      .object({
+        suiteId: evalSuiteId,
+        suiteVersion: evalSuiteVersion,
+        caseId: z.string().uuid(),
+        reason: evalReason,
+        ...evalCaseContentFields,
+      })
+      .strict(),
+    resultSchema: wire.EvalSuiteWireSchema,
+    auditWithheldParamKeys: EVAL_CASE_CONTENT_KEYS,
+    description: `Change a case the suite holds, with a reason: its row is retired and a new one, with the same partition, split and mechanism, takes its place (supersedes) — so earlier suite versions keep the case as it was. Content the same as now, or a case already retired, is 409 conflict; a case that is not in the suite is 404 not_found. ${EVAL_CASE_CONTENT_RULE} ${EVAL_SUITE_CHANGE_RULE}`,
+  },
+  {
+    name: 'retire_eval_case',
+    group: 'evaluation',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'builder',
+    actsForPerson: true,
+    paramsSchema: z
+      .object({
+        suiteId: evalSuiteId,
+        suiteVersion: evalSuiteVersion,
+        caseId: z.string().uuid(),
+        reason: evalReason,
+      })
+      .strict(),
+    resultSchema: wire.EvalSuiteWireSchema,
+    description: `Take a case out of the suite from the next version on, with a reason (kept in its history) — a person's decision, whatever its partition: a regression case is never dropped otherwise. Earlier suite versions still hold it; it is never deleted. A case the suite does not hold now is 409 conflict; one that is not there is 404 not_found. ${EVAL_SUITE_CHANGE_RULE}`,
   },
 ] as const satisfies readonly Capability[];
 
@@ -4733,6 +4826,11 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   'add_eval_fixture_gate',
   'sync_eval_fixture_gate',
   'remove_eval_fixture_gate',
+  // S10 E3-1b: so is every case.
+  'get_eval_case',
+  'add_eval_case',
+  'edit_eval_case',
+  'retire_eval_case',
   'audit_query',
   'reconstruct',
   'export_prov',

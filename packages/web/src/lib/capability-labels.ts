@@ -867,6 +867,33 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     enHint:
       'Removes a fixture gate from the suite with a reason; earlier suite versions still hold it.',
   },
+  get_eval_case: {
+    zh: '查看用例',
+    en: 'Read evaluation case',
+    zhHint: '查看用例集里的一条用例：输入、夹具规则和断言，以及它是否已被编辑或退役。',
+    enHint:
+      'Reads one case of a suite: its input, fixture rules and assertions, and whether it was since edited or retired.',
+  },
+  add_eval_case: {
+    zh: '添加用例',
+    en: 'Add evaluation case',
+    zhHint: '给用例集加一条用例，分区和 dev / holdout 在添加时定下，之后不能改；用例集版本加 1。',
+    enHint:
+      'Adds a case to a suite; its partition and dev / holdout split are fixed when added. The suite moves one version on.',
+  },
+  edit_eval_case: {
+    zh: '编辑用例',
+    en: 'Edit evaluation case',
+    zhHint: '带原因改一条用例的内容：旧的一条退役，新的一条接替它，分区和 dev / holdout 不变。',
+    enHint:
+      'Changes a case’s content with a reason: the old row is retired and a new one replaces it, partition and split kept.',
+  },
+  retire_eval_case: {
+    zh: '退役用例',
+    en: 'Retire evaluation case',
+    zhHint: '带原因把一条用例移出用例集；之前的用例集版本仍保留它。',
+    enHint: 'Takes a case out of the suite with a reason; earlier suite versions still hold it.',
+  },
 
   // -----------------------------------------------------------------------------------------
   // Capabilities — Worker definitions and drafts

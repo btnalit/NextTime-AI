@@ -794,6 +794,37 @@ export function bindingPathProblems(path: string): readonly string[] {
   return [];
 }
 
+/**
+ * S10 E3-1b: a path judged on a document whose top-level fields are fixed — an evaluation case's
+ * assertion, read on `{result, calls}` (`@nexttime/shared` eval-case.ts). {@link bindingPathProblems}'
+ * rules, and every place it reads starts at one of `roots`: not the document itself (`@`,
+ * `keys(@)`, `[0]`, `*`), not a field the document never has (a misspelt root makes an assertion
+ * that never holds, or always does under `not`). The anchoring and probes of the lint are not
+ * applied: an assertion may test an absence ("this Operation was not called"), which is a fair
+ * thing for a case to require. `[]` when there is no problem.
+ */
+export function documentPathProblems(path: string, roots: readonly string[]): readonly string[] {
+  const basic = bindingPathProblems(path);
+  if (basic.length > 0)
+    return basic.map((problem) => problem.replace('the output', 'the document'));
+  const ast = compilePath(path) as PathNode;
+  const { reads, out } = reach(ast);
+  const unknown = new Set<string>();
+  for (const place of [...reads, ...out]) {
+    const [first] = place;
+    if (first === undefined || typeof first === 'string') {
+      return [`path "${path}" reads the document itself — start it at ${roots.join(' or ')}`];
+    }
+    if (!roots.includes(first.field)) unknown.add(first.field);
+  }
+  if (unknown.size > 0) {
+    return [
+      `path "${path}" reads ${[...unknown].map((name) => JSON.stringify(name)).join(', ')} — the document has only ${roots.join(' and ')}`,
+    ];
+  }
+  return [];
+}
+
 /** A step of a plain path: a named field, or a position in a list. */
 type ChainStep = { readonly field: string } | { readonly index: number };
 

@@ -1,23 +1,29 @@
+import type { EvalCaseContent, EvalCaseKind } from '@nexttime/shared';
 import {
   type EvalSuiteActor,
+  addEvalCase,
   addEvalFixtureGate,
   createEvalSuite,
+  editEvalCase,
+  getEvalCase,
   getEvalSuite,
   listEvalSuites,
   removeEvalFixtureGate,
   repinEvalSuite,
+  retireEvalCase,
   syncEvalFixtureGate,
 } from '../eval/index.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 
 /**
- * application/gateway/eval-handlers: the `evaluation` capabilities (S10 E3-1a) — an evaluation
- * suite's reads and the changes that make its versions (`application/eval`, which holds every
- * rule). The only gateway file allowed to import `application/eval` (`.dependency-cruiser.cjs`):
+ * application/gateway/eval-handlers: the `evaluation` capabilities (S10 E3-1a, cases E3-1b) — an
+ * evaluation suite's reads and the changes that make its versions (`application/eval`, which holds
+ * every rule). The only gateway file allowed to import `application/eval` (`.dependency-cruiser.cjs`):
  * every capability here is human-channel and made for a person (I-E4), so the registry and dispatch
  * have already refused a Handle, an agent and a service Principal before a handler runs. dispatch's
- * per-call AuditRecord carries the params (a reason redacted like every audited param); the suite's
- * own history is `eval_suite_changes`.
+ * per-call AuditRecord carries the params (a reason redacted like every audited param) but for a
+ * case's content, which it withholds (`auditWithheldParamKeys`: a case is read through
+ * `get_eval_case` only); the suite's own history is `eval_suite_changes`.
  */
 
 function personOf(capability: string, ctx: CapabilityHandlerContext | undefined): EvalSuiteActor {
@@ -142,6 +148,52 @@ export const removeEvalFixtureGateHandler: CapabilityHandler = async (
     client,
     workspaceId,
     personOf('remove_eval_fixture_gate', ctx),
+    target,
+  );
+  return suiteResult(suite, suite);
+};
+
+export const getEvalCaseHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  personOf('get_eval_case', ctx);
+  const { suiteId, caseId } = params as { suiteId: string; caseId: string };
+  const evalCase = await getEvalCase(client, workspaceId, suiteId, caseId);
+  return { result: evalCase, resourceType: 'eval_case', resourceId: evalCase.id };
+};
+
+export const addEvalCaseHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const target = params as { suiteId: string; suiteVersion: number } & EvalCaseKind &
+    EvalCaseContent;
+  const suite = await addEvalCase(client, workspaceId, personOf('add_eval_case', ctx), target);
+  return suiteResult(suite, suite);
+};
+
+export const editEvalCaseHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const target = params as {
+    suiteId: string;
+    suiteVersion: number;
+    caseId: string;
+    reason: string;
+  } & EvalCaseContent;
+  const suite = await editEvalCase(client, workspaceId, personOf('edit_eval_case', ctx), target);
+  return suiteResult(suite, suite);
+};
+
+export const retireEvalCaseHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const target = params as {
+    suiteId: string;
+    suiteVersion: number;
+    caseId: string;
+    reason: string;
+  };
+  const suite = await retireEvalCase(
+    client,
+    workspaceId,
+    personOf('retire_eval_case', ctx),
     target,
   );
   return suiteResult(suite, suite);

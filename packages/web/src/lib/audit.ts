@@ -82,7 +82,7 @@ export function isEmptyEntry(entry: AuditEntry): boolean {
  * (`platform-modules-handlers.ts`) are written on workspace rows too; S11 P1: `change_item`
  * (`application/change-plan`); P1-B: `change_segment` (`roll_back_change_segment`); S11 GO6: `goal_run`,
  * `plan_revision`, `step_run` (`application/goal`, written since GO1); S10 E3-1a: `eval_suite`
- * (`eval-handlers.ts`).
+ * (`eval-handlers.ts`); E3-1b: `eval_case` (`get_eval_case`).
  */
 export const AUDIT_RESOURCE_TYPES = [
   'action_request',
@@ -96,6 +96,7 @@ export const AUDIT_RESOURCE_TYPES = [
   'conflict',
   'connection_request',
   'decision',
+  'eval_case',
   'eval_suite',
   'fact',
   'gate_instance',

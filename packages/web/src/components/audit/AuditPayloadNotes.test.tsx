@@ -42,6 +42,22 @@ describe('AuditPayloadNotes (legacy 159, 178)', () => {
     expect(screen.getByTestId('audit-revoked-handles').textContent).toContain('吊销了 4 个凭证');
   });
 
+  it('S10 E3-1b: names what an evaluation case write keeps out of the record, and where to read it', () => {
+    render(
+      <AuditPayloadNotes
+        payload={{
+          params: { suiteId: 's', input: '[withheld]', assertions: '[withheld]' },
+          withheldParams: ['input', 'assertions'],
+        }}
+      />,
+    );
+    const note = screen.getByTestId('audit-withheld-params').textContent;
+    expect(note).toContain('评测用例的输入、断言不写进审计记录');
+    expect(note).toContain('治理 → 评测');
+    // Not a credential note: nothing was masked.
+    expect(screen.queryByTestId('audit-redacted-values')).toBeNull();
+  });
+
   it('says how many values were hidden from the parameters', () => {
     render(<AuditPayloadNotes payload={{ redactedValues: 3 }} />);
     const note = screen.getByTestId('audit-redacted-values').textContent;

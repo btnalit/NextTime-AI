@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Capability, PrincipalKind } from '@nexttime/shared';
 import {
+  AUDIT_WITHHELD_VALUE,
   UnstorableTextError,
   findUnstorableText,
   getCapability,
@@ -224,6 +225,7 @@ function auditParams(
   params: Record<string, unknown>,
 ): {
   readonly params: Record<string, unknown>;
+  readonly withheldParams?: readonly string[];
   readonly redactedValues?: number;
   readonly unstorableEscaped?: number;
 } {
@@ -236,6 +238,13 @@ function auditParams(
       if (key in audited) audited[key] = '[redacted]';
     }
   }
+  // S10 E3-1b: content the capability keeps out of the audit trail altogether (an evaluation
+  // case's), replaced whole and named, so the record says what it does not hold.
+  const withheld = (capability.auditWithheldParamKeys ?? []).filter((key) => key in audited);
+  if (withheld.length > 0) {
+    audited = { ...audited };
+    for (const key of withheld) audited[key] = AUDIT_WITHHELD_VALUE;
+  }
   // Legacy 320: only a capability in `HANDLERS_SETTLING_UNSTORABLE_TEXT` gets here with U+0000 in
   // its params (every other one was refused); the audit copy stores it as `\u{0}` and says how
   // many, so the row records the call instead of failing it.
@@ -243,6 +252,7 @@ function auditParams(
   audited = storable.value;
   return {
     params: audited,
+    ...(withheld.length > 0 ? { withheldParams: withheld } : {}),
     ...(redacted.count > 0 ? { redactedValues: redacted.count } : {}),
     ...(storable.escaped > 0 ? { unstorableEscaped: storable.escaped } : {}),
   };
