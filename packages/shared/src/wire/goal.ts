@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ACTION_FAILURE_CODE_VALUES } from '../action-failure-reason.js';
 import {
   ActionRequestFailureKindSchema,
   ActionRequestReconcileCheckStatusSchema,
@@ -25,7 +26,6 @@ import {
   PlanHintSchema,
   StepRemovalsSchema,
 } from '../goal-plan.js';
-import { ACTION_FAILURE_CODE_VALUES } from '../action-failure-reason.js';
 import { OutputProblemSchema } from '../output-schema.js';
 import {
   FactCheckSchema,
@@ -488,9 +488,11 @@ export type EndGoalResultWire = z.infer<typeof EndGoalResultWireSchema>;
  *  does not change: it was set due, and stays paused until the requester resumes it. */
 export const ReconcileGoalActionResultWireSchema = GoalOperationResultWireSchema.extend({
   // Only an action whose outcome was unknown is reconciled, so it has no refusal code.
-  action: StepActionWireSchema.omit({ failureCode: true }).extend({
-    reconciliationDecisionId: z.string().nullable(),
-    reexecuteDecisionId: z.string().nullable(),
-  }).strict(),
+  action: StepActionWireSchema.omit({ failureCode: true })
+    .extend({
+      reconciliationDecisionId: z.string().nullable(),
+      reexecuteDecisionId: z.string().nullable(),
+    })
+    .strict(),
 }).strict();
 export type ReconcileGoalActionResultWire = z.infer<typeof ReconcileGoalActionResultWireSchema>;
