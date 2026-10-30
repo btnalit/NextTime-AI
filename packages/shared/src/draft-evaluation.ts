@@ -24,9 +24,36 @@ export const DRAFT_EVALUATION_RULES = {
   /** The one-sided confidence of the pass-rate difference's lower bound (Newcombe's hybrid score
    *  interval). */
   confidence: 0.95,
-  /** A stage with a larger share of its trials errored proves nothing: `inconclusive`. */
+  /** An arm with a larger share of a stage's trials ended without an outcome
+   *  (`trialHasOutcome`) proves nothing: `inconclusive`. Counted per arm, so trials lost in one
+   *  arm alone cannot tilt the comparison. */
   maxErroredShare: 0.25,
 } as const;
+
+/**
+ * Errors that are the arm's own outcome: its Worker ran and did not finish the task — it ran out
+ * of time, ended without reporting, or spent its token budget. Such a trial counts as not passed.
+ * Any other error (it could not start, was lost or terminated, its Worker crashed) says nothing of
+ * the Skill: the trial has no outcome, and a verdict must hold whichever way it would have gone.
+ */
+export const DRAFT_EVALUATION_FAILING_ERRORS = [
+  'timeout',
+  'no_result',
+  'budget_exhausted',
+] as const;
+
+/** Whether an ended trial has an outcome a verdict may read: scored, or errored in a way that is
+ *  the arm's own failure (`DRAFT_EVALUATION_FAILING_ERRORS`). */
+export function trialHasOutcome(trial: {
+  readonly status: string;
+  readonly error: string | null;
+}): boolean {
+  if (trial.status === 'scored') return true;
+  return (
+    trial.status === 'errored' &&
+    (DRAFT_EVALUATION_FAILING_ERRORS as readonly (string | null)[]).includes(trial.error)
+  );
+}
 
 /** How many times a stage tries each of its cases, per arm — 0 for a stage with no case. */
 export function draftEvaluationStageK(stage: DraftEvaluationStageName, caseCount: number): number {

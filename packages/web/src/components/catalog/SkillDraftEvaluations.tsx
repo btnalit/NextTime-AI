@@ -11,6 +11,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import {
   type DraftEvaluationPlan,
   budgetShortfallOf,
+  budgetShortfallText,
   draftCheckProblemText,
   draftCheckProblemsOf,
   draftEvaluationOutcome,
@@ -520,11 +521,7 @@ function StartDraftEvaluationSheet({
             </Notice>
           ) : shortfall !== null ? (
             <Notice tone="warn" testId="draft-eval-start-insufficient">
-              {t(
-                `第一个阶段预估 ${formatUsd(shortfall.estimateUsd)}，本月评测预算 ${formatUsd(shortfall.budgetUsd)} 已用 ${formatUsd(shortfall.spentUsd)}，不够，什么也没有启动。`,
-                `The first stage is estimated at ${formatUsd(shortfall.estimateUsd)} and ${formatUsd(shortfall.spentUsd)} of the ${formatUsd(shortfall.budgetUsd)} monthly evaluation budget is spent, so nothing was started.`,
-              )}{' '}
-              <RaiseBudgetHint isOwner={isOwner} />
+              {budgetShortfallText(shortfall, t)} <RaiseBudgetHint isOwner={isOwner} />
             </Notice>
           ) : error !== null ? (
             <InlineError

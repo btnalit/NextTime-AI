@@ -130,22 +130,24 @@ export class DraftCheckFailedError extends Error {
   }
 }
 
-/** 429 evaluation_budget_insufficient (E3-2b): what is left of this month's evaluation budget does
- *  not cover the first stage the evaluation would run (its trials × the recent cost of a trial).
- *  `details` carries the budget, what was spent and the estimate, in USD. */
+/** 429 evaluation_budget_insufficient (E3-2b): what is left of this month's evaluation budget —
+ *  after what is spent and what the trials not ended yet are expected to cost — does not cover the
+ *  first stage the evaluation would run (its trials × the recent cost of a trial). `details`
+ *  carries the budget, what was spent, what is committed and the estimate, in USD. */
 export class EvaluationBudgetInsufficientError extends Error {
   readonly code = 'evaluation_budget_insufficient' as const;
   readonly details: {
     readonly budgetUsd: number;
     readonly spentUsd: number;
+    readonly committedUsd: number;
     readonly estimateUsd: number;
   };
-  constructor(budgetUsd: number, spentUsd: number, estimateUsd: number) {
+  constructor(budgetUsd: number, spentUsd: number, committedUsd: number, estimateUsd: number) {
     super(
-      `this month's evaluation budget ($${budgetUsd.toFixed(2)}, $${spentUsd.toFixed(2)} spent) does not cover the first stage (about $${estimateUsd.toFixed(2)}) — nothing was started; an owner can raise evaluation.monthly_cost_budget_usd, or wait for the next UTC month`,
+      `this month's evaluation budget ($${budgetUsd.toFixed(2)}, $${spentUsd.toFixed(2)} spent, about $${committedUsd.toFixed(2)} committed to trials not ended yet) does not cover the first stage (about $${estimateUsd.toFixed(2)}) — nothing was started; wait for running evaluations to end, an owner can raise evaluation.monthly_cost_budget_usd, or wait for the next UTC month`,
     );
     this.name = 'EvaluationBudgetInsufficientError';
-    this.details = { budgetUsd, spentUsd, estimateUsd };
+    this.details = { budgetUsd, spentUsd, committedUsd, estimateUsd };
   }
 }
 

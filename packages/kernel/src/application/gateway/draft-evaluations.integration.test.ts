@@ -712,7 +712,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(stageOf(ended, 'regression')).toMatchObject({
         baseline: { trials: 2, passed: 2, failed: 0, errored: 0, open: 0 },
         candidate: { trials: 2, passed: 2 },
-        measure: { stage: 'regression', lostCaseIds: [] },
+        measure: { stage: 'regression', lostCaseIds: [], unsettledCaseIds: [] },
       });
       expect(stageOf(ended, 'mechanism')).toMatchObject({
         baseline: { trials: 10, passed: 0, failed: 10 },
@@ -801,6 +801,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(stageOf(ended, 'regression').measure).toEqual({
         stage: 'regression',
         lostCaseIds: [caseIds.regression],
+        unsettledCaseIds: [],
       });
       expect(stageOf(ended, 'mechanism').runId).toBeNull();
     });
@@ -901,6 +902,45 @@ describe.runIf(DATABASE_URL !== undefined)(
         // Spent: refused before anything is weighed.
         await setBudget((await budget()).spentUsd);
         expect(await rejection(start())).toBeInstanceOf(EvaluationBudgetExhaustedError);
+      } finally {
+        await setBudget(10);
+      }
+    });
+
+    it('trials not ended yet count against the budget: two evaluations cannot both count on the same money (#833 review)', async () => {
+      const before = await budget();
+      expect(before.trialCostUsd).toBeCloseTo(TRIAL_COST, 6);
+      try {
+        // Room for one regression stage (four trials), not for two.
+        await setBudget(before.spentUsd + before.committedUsd + 6 * TRIAL_COST);
+        const first = await start({ suite: regressionOnly });
+        const committed = await budget();
+        expect(committed.committedUsd - before.committedUsd).toBeCloseTo(4 * TRIAL_COST, 6);
+
+        const other = await skill('builder', {
+          name: 'other-helper',
+          description: 'Restarts a hung host and says so.',
+          markdown: '# Other\n\nRestart the hung host once, then report what was done.',
+        });
+        const second = await rejection(
+          call(person('builder'), 'start_draft_evaluation', {
+            skillId: other.id,
+            version: other.version,
+            draftDigest: other.digest,
+            suiteId: regressionOnly.id,
+            suiteVersion: regressionOnly.version,
+          }),
+        );
+        expect(second).toBeInstanceOf(EvaluationBudgetInsufficientError);
+        const details = (second as EvaluationBudgetInsufficientError).details;
+        expect(details.committedUsd).toBeCloseTo(committed.committedUsd, 6);
+        expect(details.estimateUsd).toBeCloseTo(4 * TRIAL_COST, 6);
+
+        // Once the first has ended, what it ran is spent and no longer committed.
+        await drive(first.id, allPass);
+        const after = await budget();
+        expect(after.committedUsd).toBeCloseTo(before.committedUsd, 6);
+        expect(after.spentUsd - before.spentUsd).toBeCloseTo(4 * TRIAL_COST, 6);
       } finally {
         await setBudget(10);
       }
@@ -1194,6 +1234,51 @@ describe.runIf(DATABASE_URL !== undefined)(
           [workspaceId, queuedId],
         ),
       ).rejects.toThrow(/a queued trial starts or is cancelled/);
+
+      // The stage that decided read its own finished run (#833 review): here the mechanism stage
+      // was skipped. Probed with every trial and run ended, in a savepoint undone after.
+      await asOwnerRole(async (client) => {
+        await client.query('savepoint probe');
+        await client.query(
+          `update eval_trials tr set status = 'errored', error = 'cancelled', finished_at = now()
+             from eval_runs r
+            where r.workspace_id = tr.workspace_id and r.id = tr.run_id
+              and tr.workspace_id = $1 and r.draft_evaluation_id = $2
+              and tr.status in ('queued', 'running')`,
+          [workspaceId, running.id],
+        );
+        await client.query(
+          `update eval_runs set status = 'finished', finished_at = now()
+            where workspace_id = $1 and draft_evaluation_id = $2 and status = 'running'`,
+          [workspaceId, running.id],
+        );
+        const finish = async (verdict: string, reason: string, decidedBy: string) => {
+          await client.query('savepoint verdict');
+          try {
+            await client.query(
+              `update eval_draft_evaluations
+                  set status = 'finished', stage = null, verdict = $3, reason = $4,
+                      decided_by = $5, finished_at = now()
+                where workspace_id = $1 and id = $2`,
+              [workspaceId, running.id, verdict, reason, decidedBy],
+            );
+            return 'accepted';
+          } catch (err) {
+            return (err as Error).message;
+          } finally {
+            await client.query('rollback to savepoint verdict');
+          }
+        };
+        expect(await finish('refuted', 'mechanism_not_shown', 'mechanism')).toMatch(
+          /given by the finished run of the stage that decided it \(mechanism has none\)/,
+        );
+        expect(await finish('inconclusive', 'budget', 'regression')).toMatch(
+          /a budget verdict is given by a regression stage that did not run/,
+        );
+        expect(await finish('better', 'above_baseline', 'confirm')).toBe('accepted');
+        await client.query('rollback to savepoint probe');
+      });
+
       await call(person('builder'), 'cancel_draft_evaluation', { evaluationId: running.id });
       await runEvalTrialTick(pool);
     });

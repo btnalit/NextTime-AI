@@ -34,6 +34,10 @@ export interface EvalBudget {
   readonly periodEnd: Date;
   readonly trialCostUsd: number | null;
   readonly unpricedTrials: number;
+  /** What the trials not ended yet (queued or running, of every evaluation) are expected to cost:
+   *  their count × `trialCostUsd`, 0 while that is unknown. Not yet in `spentUsd` — or only
+   *  partly, for a running one, so it is counted twice in part: on the safe side. */
+  readonly committedUsd: number;
 }
 
 export async function readEvalBudget(
@@ -61,13 +65,20 @@ export async function readEvalBudget(
               limit $2) recent`,
     [workspaceId, TRIAL_COST_SAMPLE],
   );
+  const open = await client.query<{ open: number }>(
+    `select count(*)::int as open from eval_trials
+      where workspace_id = $1 and status in ('queued', 'running')`,
+    [workspaceId],
+  );
+  const trialCostUsd = trialCost.rows[0]?.average ?? null;
   return {
     monthlyBudgetUsd: quotas.evaluationMonthlyCostBudgetUsd,
     spentUsd: usage.rows[0]?.spent ?? 0,
     periodStart: start,
     periodEnd: end,
-    trialCostUsd: trialCost.rows[0]?.average ?? null,
+    trialCostUsd,
     unpricedTrials: Number(usage.rows[0]?.unpriced ?? 0),
+    committedUsd: trialCostUsd === null ? 0 : (open.rows[0]?.open ?? 0) * trialCostUsd,
   };
 }
 
@@ -79,5 +90,6 @@ export function evalBudgetWire(budget: EvalBudget): EvalBudgetWire {
     periodEnd: budget.periodEnd.toISOString(),
     trialCostUsd: budget.trialCostUsd,
     unpricedTrials: budget.unpricedTrials,
+    committedUsd: budget.committedUsd,
   };
 }

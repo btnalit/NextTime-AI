@@ -3464,11 +3464,18 @@
                           "stage": {
                             "const": "regression",
                             "type": "string"
+                          },
+                          "unsettledCaseIds": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
                           }
                         },
                         "required": [
                           "stage",
-                          "lostCaseIds"
+                          "lostCaseIds",
+                          "unsettledCaseIds"
                         ],
                         "type": "object"
                       },
@@ -3479,11 +3486,19 @@
                             "minimum": 0,
                             "type": "integer"
                           },
+                          "baselineNoOutcome": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
                           "baselinePassed": {
                             "minimum": 0,
                             "type": "integer"
                           },
                           "baselineTrials": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "candidateNoOutcome": {
                             "minimum": 0,
                             "type": "integer"
                           },
@@ -3504,8 +3519,10 @@
                           "stage",
                           "candidatePassed",
                           "candidateTrials",
+                          "candidateNoOutcome",
                           "baselinePassed",
                           "baselineTrials",
+                          "baselineNoOutcome",
                           "baselineMaxPassed"
                         ],
                         "type": "object"
@@ -3522,11 +3539,19 @@
                           "dev": {
                             "additionalProperties": false,
                             "properties": {
+                              "baselineNoOutcome": {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
                               "baselinePassed": {
                                 "minimum": 0,
                                 "type": "integer"
                               },
                               "baselineTrials": {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "candidateNoOutcome": {
                                 "minimum": 0,
                                 "type": "integer"
                               },
@@ -3554,8 +3579,10 @@
                             "required": [
                               "candidatePassed",
                               "candidateTrials",
+                              "candidateNoOutcome",
                               "baselinePassed",
                               "baselineTrials",
+                              "baselineNoOutcome",
                               "difference",
                               "lowerBound"
                             ],
@@ -3566,11 +3593,19 @@
                               {
                                 "additionalProperties": false,
                                 "properties": {
+                                  "baselineNoOutcome": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
                                   "baselinePassed": {
                                     "minimum": 0,
                                     "type": "integer"
                                   },
                                   "baselineTrials": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "candidateNoOutcome": {
                                     "minimum": 0,
                                     "type": "integer"
                                   },
@@ -3598,8 +3633,10 @@
                                 "required": [
                                   "candidatePassed",
                                   "candidateTrials",
+                                  "candidateNoOutcome",
                                   "baselinePassed",
                                   "baselineTrials",
+                                  "baselineNoOutcome",
                                   "difference",
                                   "lowerBound"
                                 ],
@@ -13694,11 +13731,18 @@
                           "stage": {
                             "const": "regression",
                             "type": "string"
+                          },
+                          "unsettledCaseIds": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
                           }
                         },
                         "required": [
                           "stage",
-                          "lostCaseIds"
+                          "lostCaseIds",
+                          "unsettledCaseIds"
                         ],
                         "type": "object"
                       },
@@ -13709,11 +13753,19 @@
                             "minimum": 0,
                             "type": "integer"
                           },
+                          "baselineNoOutcome": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
                           "baselinePassed": {
                             "minimum": 0,
                             "type": "integer"
                           },
                           "baselineTrials": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "candidateNoOutcome": {
                             "minimum": 0,
                             "type": "integer"
                           },
@@ -13734,8 +13786,10 @@
                           "stage",
                           "candidatePassed",
                           "candidateTrials",
+                          "candidateNoOutcome",
                           "baselinePassed",
                           "baselineTrials",
+                          "baselineNoOutcome",
                           "baselineMaxPassed"
                         ],
                         "type": "object"
@@ -13752,11 +13806,19 @@
                           "dev": {
                             "additionalProperties": false,
                             "properties": {
+                              "baselineNoOutcome": {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
                               "baselinePassed": {
                                 "minimum": 0,
                                 "type": "integer"
                               },
                               "baselineTrials": {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "candidateNoOutcome": {
                                 "minimum": 0,
                                 "type": "integer"
                               },
@@ -13784,8 +13846,10 @@
                             "required": [
                               "candidatePassed",
                               "candidateTrials",
+                              "candidateNoOutcome",
                               "baselinePassed",
                               "baselineTrials",
+                              "baselineNoOutcome",
                               "difference",
                               "lowerBound"
                             ],
@@ -13796,11 +13860,19 @@
                               {
                                 "additionalProperties": false,
                                 "properties": {
+                                  "baselineNoOutcome": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
                                   "baselinePassed": {
                                     "minimum": 0,
                                     "type": "integer"
                                   },
                                   "baselineTrials": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "candidateNoOutcome": {
                                     "minimum": 0,
                                     "type": "integer"
                                   },
@@ -13828,8 +13900,10 @@
                                 "required": [
                                   "candidatePassed",
                                   "candidateTrials",
+                                  "candidateNoOutcome",
                                   "baselinePassed",
                                   "baselineTrials",
+                                  "baselineNoOutcome",
                                   "difference",
                                   "lowerBound"
                                 ],
@@ -14318,6 +14392,10 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "committedUsd": {
+          "minimum": 0,
+          "type": "number"
+        },
         "monthlyBudgetUsd": {
           "minimum": 0,
           "type": "number"
@@ -14354,7 +14432,8 @@
         "periodStart",
         "periodEnd",
         "trialCostUsd",
-        "unpricedTrials"
+        "unpricedTrials",
+        "committedUsd"
       ],
       "type": "object"
     },
@@ -54553,11 +54632,18 @@
                           "stage": {
                             "const": "regression",
                             "type": "string"
+                          },
+                          "unsettledCaseIds": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
                           }
                         },
                         "required": [
                           "stage",
-                          "lostCaseIds"
+                          "lostCaseIds",
+                          "unsettledCaseIds"
                         ],
                         "type": "object"
                       },
@@ -54568,11 +54654,19 @@
                             "minimum": 0,
                             "type": "integer"
                           },
+                          "baselineNoOutcome": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
                           "baselinePassed": {
                             "minimum": 0,
                             "type": "integer"
                           },
                           "baselineTrials": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "candidateNoOutcome": {
                             "minimum": 0,
                             "type": "integer"
                           },
@@ -54593,8 +54687,10 @@
                           "stage",
                           "candidatePassed",
                           "candidateTrials",
+                          "candidateNoOutcome",
                           "baselinePassed",
                           "baselineTrials",
+                          "baselineNoOutcome",
                           "baselineMaxPassed"
                         ],
                         "type": "object"
@@ -54611,11 +54707,19 @@
                           "dev": {
                             "additionalProperties": false,
                             "properties": {
+                              "baselineNoOutcome": {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
                               "baselinePassed": {
                                 "minimum": 0,
                                 "type": "integer"
                               },
                               "baselineTrials": {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "candidateNoOutcome": {
                                 "minimum": 0,
                                 "type": "integer"
                               },
@@ -54643,8 +54747,10 @@
                             "required": [
                               "candidatePassed",
                               "candidateTrials",
+                              "candidateNoOutcome",
                               "baselinePassed",
                               "baselineTrials",
+                              "baselineNoOutcome",
                               "difference",
                               "lowerBound"
                             ],
@@ -54655,11 +54761,19 @@
                               {
                                 "additionalProperties": false,
                                 "properties": {
+                                  "baselineNoOutcome": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
                                   "baselinePassed": {
                                     "minimum": 0,
                                     "type": "integer"
                                   },
                                   "baselineTrials": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "candidateNoOutcome": {
                                     "minimum": 0,
                                     "type": "integer"
                                   },
@@ -54687,8 +54801,10 @@
                                 "required": [
                                   "candidatePassed",
                                   "candidateTrials",
+                                  "candidateNoOutcome",
                                   "baselinePassed",
                                   "baselineTrials",
+                                  "baselineNoOutcome",
                                   "difference",
                                   "lowerBound"
                                 ],

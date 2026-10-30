@@ -7,7 +7,9 @@ import {
 } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
+  type BudgetShortfall,
   budgetShortfallOf,
+  budgetShortfallText,
   draftCheckProblemText,
   draftCheckProblemsOf,
   draftEvaluationOutcome,
@@ -33,9 +35,10 @@ const regression = (): CaseRow => ({ partition: 'regression', mechanism: null })
 const full = (): CaseRow => ({ partition: 'full', mechanism: null });
 const aimed = (mechanism: string): CaseRow => ({ partition: 'mechanism', mechanism });
 
-const budget = (spentUsd: number, trialCostUsd: number | null = 0.01) => ({
+const budget = (spentUsd: number, trialCostUsd: number | null = 0.01, committedUsd = 0) => ({
   monthlyBudgetUsd: 1,
   spentUsd,
+  committedUsd,
   trialCostUsd,
 });
 
@@ -108,6 +111,15 @@ describe('draftEvaluationPlan', () => {
     expect(unknown.stages.every((stage) => stage.covered === null)).toBe(true);
     expect(unknown.firstNotCovered).toBe(false);
   });
+
+  it('pays the trials not ended yet first, as the kernel does (#833 review)', () => {
+    // 1 − 0.5 spent − 0.45 held = 0.05 free: not enough for regression's 0.08.
+    const held = draftEvaluationPlan(cases, 'asks first', budget(0.5, 0.01, 0.45));
+    expect(held.stages[0]?.covered).toBe(false);
+    expect(held.firstNotCovered).toBe(true);
+    // The same spending with nothing held covers every stage.
+    expect(draftEvaluationPlan(cases, 'asks first', budget(0.5)).firstNotCovered).toBe(false);
+  });
 });
 
 describe('suiteMechanisms', () => {
@@ -141,13 +153,26 @@ describe('refusals', () => {
     expect(draftCheckProblemsOf(new Error('x'))).toBeNull();
   });
 
-  it('reads an evaluation_budget_insufficient’s numbers', () => {
+  it('reads an evaluation_budget_insufficient’s numbers, and says what the unended trials hold', () => {
     const err = new HttpError('capability_error', 'x', 'evaluation_budget_insufficient', {
       budgetUsd: 10,
-      spentUsd: 9.9,
+      spentUsd: 9.5,
+      committedUsd: 0.3,
       estimateUsd: 0.4,
     });
-    expect(budgetShortfallOf(err)).toEqual({ budgetUsd: 10, spentUsd: 9.9, estimateUsd: 0.4 });
+    const shortfall = budgetShortfallOf(err);
+    expect(shortfall).toEqual({
+      budgetUsd: 10,
+      spentUsd: 9.5,
+      committedUsd: 0.3,
+      estimateUsd: 0.4,
+    });
+    expect(budgetShortfallText(shortfall as BudgetShortfall, zhT)).toBe(
+      '第一个阶段预估 $0.40，本月评测预算 $10.00 已用 $9.50，还没跑完的试跑约占 $0.30，不够，什么也没有启动。等那些试跑结束后再看剩多少。',
+    );
+    expect(
+      budgetShortfallText({ ...(shortfall as BudgetShortfall), committedUsd: 0 }, zhT),
+    ).not.toMatch(/还没跑完/);
     expect(
       budgetShortfallOf(new HttpError('capability_error', 'x', 'evaluation_budget_insufficient')),
     ).toBeNull();

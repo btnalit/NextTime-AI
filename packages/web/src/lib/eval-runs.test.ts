@@ -23,6 +23,7 @@ function budget(extra: Partial<EvalBudgetWire> = {}): EvalBudgetWire {
     periodEnd: '2026-11-01T00:00:00.000Z',
     trialCostUsd: 0.4,
     unpricedTrials: 0,
+    committedUsd: 0,
     ...extra,
   };
 }
@@ -92,6 +93,7 @@ describe('eval-runs (S10 E3-2a)', () => {
   it('stands the budget against a start: left, spent, and too little left for the estimate', () => {
     expect(budgetStanding(budget())).toEqual({
       remainingUsd: 7.5,
+      freeUsd: 7.5,
       exhausted: false,
       trialEstimateUsd: 0.4,
       short: false,
@@ -115,6 +117,15 @@ describe('eval-runs (S10 E3-2a)', () => {
     });
     // A budget of 0 is spent before anything runs.
     expect(budgetStanding(budget({ monthlyBudgetUsd: 0, spentUsd: 0 })).exhausted).toBe(true);
+    // Trials not ended yet are paid first: 0.5 left, 0.3 of it theirs, so 0.4 more is short.
+    expect(budgetStanding(budget({ spentUsd: 9.5, committedUsd: 0.3 }))).toMatchObject({
+      remainingUsd: expect.closeTo(0.5, 9),
+      freeUsd: expect.closeTo(0.2, 9),
+      exhausted: false,
+      short: true,
+    });
+    // More held than is left: nothing free, never below 0.
+    expect(budgetStanding(budget({ spentUsd: 9.5, committedUsd: 2 })).freeUsd).toBe(0);
   });
 
   it('words a refused start beyond the kernel’s text', () => {

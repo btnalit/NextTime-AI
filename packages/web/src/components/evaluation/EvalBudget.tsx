@@ -25,12 +25,22 @@ export function useIsOwner(http: CapabilityCaller): boolean {
   return identity.role.kind === 'known' && identity.role.role === 'owner';
 }
 
-/** "Spent $x of $y, $z left" — one line. */
+/** "Spent $x of $y, $z left" — one line; and how much of what is left the trials not ended yet
+ *  will take, when any are waiting or running. */
 export function budgetLine(budget: EvalBudgetWire, t: Translate): string {
   const standing = budgetStanding(budget);
-  return t(
+  const line = t(
     `本月已用 ${formatUsd(budget.spentUsd)} / ${formatUsd(budget.monthlyBudgetUsd)}，剩余 ${formatUsd(standing.remainingUsd)}`,
     `${formatUsd(budget.spentUsd)} of ${formatUsd(budget.monthlyBudgetUsd)} spent this month, ${formatUsd(standing.remainingUsd)} left`,
+  );
+  if (budget.committedUsd <= 0) return line;
+  const committed = formatUsd(budget.committedUsd);
+  return (
+    line +
+    t(
+      `，其中约 ${committed} 留给还没跑完的试跑`,
+      `, about ${committed} of it held for trials not ended yet`,
+    )
   );
 }
 

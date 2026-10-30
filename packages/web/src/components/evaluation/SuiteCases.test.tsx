@@ -83,6 +83,7 @@ const BUDGET: EvalBudgetWire = {
   periodEnd: '2026-11-01T00:00:00.000Z',
   trialCostUsd: 0.4,
   unpricedTrials: 0,
+  committedUsd: 0,
 };
 
 function wholeCase(extra: Partial<EvalCaseWire> = {}): EvalCaseWire {

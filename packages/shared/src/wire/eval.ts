@@ -424,6 +424,10 @@ export const EvalBudgetWireSchema = z
     periodEnd: z.string(),
     trialCostUsd: z.number().nonnegative().nullable(),
     unpricedTrials: z.number().int().nonnegative(),
+    /** What the trials not ended yet (queued or running, of every evaluation) are expected to
+     *  cost: their count × `trialCostUsd`, 0 while that is unknown. A draft evaluation's stage
+     *  starts only when spent + this + its estimate fits the budget (S10 E3-2b). */
+    committedUsd: z.number().nonnegative(),
   })
   .strict();
 export type EvalBudgetWire = z.infer<typeof EvalBudgetWireSchema>;
@@ -451,13 +455,18 @@ export type EvalBudgetWire = z.infer<typeof EvalBudgetWireSchema>;
  *      `non_inferior` also need `holdout` to point the same way (holdout difference ≥ 0, ≥ −δ), and
  *      a suite with no holdout case cannot give them.
  *
- * Errored trials count as not passed, in either arm. Any stage ends the evaluation `contaminated`
- * when a trial's Worker was withheld evaluation content or reported a canary, `unmeasured` when its
- * trials did not all run in one environment (I-E2), `inconclusive` when more than a quarter of its
- * trials errored. Before a stage starts its cost is estimated (its trials × the recent cost of a
- * trial); a stage the month's evaluation budget cannot cover is not run and the evaluation ends
- * `inconclusive` (`budget`) — it never stops part-way through a stage. A stage with no cases is
- * skipped; with all three skipped nothing would run, and the start is refused.
+ * A trial that errored because its Worker ran out of time, ended without reporting or spent its
+ * token budget counts as not passed; one that could not start, was lost, terminated or crashed has
+ * no outcome (`trialHasOutcome`), and a verdict must hold whichever way such trials would have gone
+ * — else `inconclusive` (`errored_trials`); confirm leaves them out of its rates. Any stage ends the
+ * evaluation `contaminated` when a trial's Worker was withheld evaluation content or reported a
+ * canary, `unmeasured` when its trials did not all run in one environment (I-E2), `inconclusive`
+ * when more than a quarter of either arm's trials have no outcome. Before a stage starts its cost
+ * is estimated (its trials × the recent cost of a trial); a stage the month's evaluation budget
+ * cannot cover — after what is spent and what the trials not ended yet are expected to cost — is
+ * not run and the evaluation ends `inconclusive` (`budget`): it never stops part-way through a
+ * stage. A stage with no cases is skipped; with all three skipped nothing would run, and the start
+ * is refused.
  *
  * `running` while a stage runs; then `finished`, with a verdict, why (`reason`), and the stage that
  * decided it — or `cancelled` by a person (no verdict). While it runs the draft cannot be discarded,
@@ -486,7 +495,8 @@ export type DraftEvaluationVerdict = z.infer<typeof DraftEvaluationVerdictSchema
  *   - `refuted`: `mechanism_not_shown`;
  *   - `worse`: `below_margin`; `better`: `above_baseline`; `non_inferior`: `within_margin`;
  *   - `inconclusive`: `too_few_trials` (the lower bound not above −δ), `holdout_disagrees`,
- *     `no_holdout_cases`, `no_confirm_cases`, `errored_trials`, `budget`;
+ *     `no_holdout_cases`, `no_confirm_cases`, `errored_trials` (an arm with over a quarter of its
+ *     trials without an outcome, or such trials that could tip the stage's rule), `budget`;
  *   - `unmeasured`: `environment_differs`, `environment_unknown` (a trial's environment is not
  *     known — its run reported nothing);
  *   - `contaminated`: `content_withheld`, `canary_reported`. */
@@ -561,13 +571,17 @@ export const DraftEvaluationCaseRowWireSchema = z
 export type DraftEvaluationCaseRowWire = z.infer<typeof DraftEvaluationCaseRowWireSchema>;
 
 /** Passes out of tries, per arm, on one split of the confirm stage — and the difference
- *  (candidate − baseline) with its one-sided lower bound; `null` without a try in either arm. */
+ *  (candidate − baseline) with its one-sided lower bound; `null` without a try in either arm.
+ *  Tries are those with an outcome (`trialHasOutcome`); `…NoOutcome` counts the others, left out
+ *  of the rates. */
 export const DraftEvaluationSplitMeasureWireSchema = z
   .object({
     candidatePassed: z.number().int().nonnegative(),
     candidateTrials: z.number().int().nonnegative(),
+    candidateNoOutcome: z.number().int().nonnegative(),
     baselinePassed: z.number().int().nonnegative(),
     baselineTrials: z.number().int().nonnegative(),
+    baselineNoOutcome: z.number().int().nonnegative(),
     difference: z.number().nullable(),
     lowerBound: z.number().nullable(),
   })
@@ -579,18 +593,25 @@ export const DraftEvaluationMeasureWireSchema = z.discriminatedUnion('stage', [
   z
     .object({
       stage: z.literal('regression'),
-      /** Cases the candidate passed fewer times than the baseline. */
+      /** Cases the candidate passed fewer times than the baseline, even had each of its tries
+       *  without an outcome passed. */
       lostCaseIds: z.array(z.string()),
+      /** Cases neither lost nor held: tries without an outcome (in either arm) could tip them. */
+      unsettledCaseIds: z.array(z.string()),
     })
     .strict(),
   z
     .object({
       stage: z.literal('mechanism'),
+      /** Passes out of the arm's tries with an outcome (`trialHasOutcome`); `…NoOutcome` counts
+       *  the others — as the confirm stage's splits count them. */
       candidatePassed: z.number().int().nonnegative(),
       candidateTrials: z.number().int().nonnegative(),
+      candidateNoOutcome: z.number().int().nonnegative(),
       baselinePassed: z.number().int().nonnegative(),
       baselineTrials: z.number().int().nonnegative(),
-      /** The most the baseline may pass. */
+      baselineNoOutcome: z.number().int().nonnegative(),
+      /** The most the baseline may pass, of every try it ran. */
       baselineMaxPassed: z.number().int().nonnegative(),
     })
     .strict(),

@@ -3,7 +3,8 @@ import { type VerdictTrial, differenceLowerBound, measureStage, stageOutcome } f
 
 /**
  * application/eval/verdict: how a draft evaluation's stage reads its trials (S10 E3-2b) — the
- * order of the checks (contaminated, unmeasured, errored, the stage's rule) and each rule's numbers.
+ * order of the checks (contaminated, unmeasured, trials without an outcome, the stage's rule), each
+ * rule's numbers, and how trials without an outcome leave a verdict open.
  */
 
 function trial(
@@ -70,6 +71,7 @@ describe('stageOutcome', () => {
     expect(measureStage('regression', lost)).toEqual({
       stage: 'regression',
       lostCaseIds: ['case-a'],
+      unsettledCaseIds: [],
     });
   });
 
@@ -163,35 +165,169 @@ describe('stageOutcome', () => {
       verdict: 'unmeasured',
       reason: 'environment_differs',
     });
-    // An errored trial has no environment to compare; more than a quarter errored proves nothing.
-    const errored = (n: number) =>
+    // An errored trial has no environment to compare; more than a quarter of an arm's trials
+    // without an outcome proves nothing — counted per arm, so one arm's losses are not diluted.
+    const lostTrials = (n: number, arm: 'baseline' | 'candidate' = 'candidate') =>
       times(n, () =>
-        trial('candidate', false, {
-          status: 'errored',
-          error: 'spawn_failed',
-          environmentDigest: null,
-        }),
+        trial(arm, false, { status: 'errored', error: 'spawn_failed', environmentDigest: null }),
       );
     expect(
       decided(
         [
-          ...times(3, () => trial('baseline', true)),
-          ...times(3, () => trial('candidate', true)),
-          ...errored(3),
+          ...times(9, () => trial('baseline', true)),
+          ...times(6, () => trial('candidate', true)),
+          ...lostTrials(3),
         ],
         'regression',
       ),
     ).toMatchObject({ verdict: 'inconclusive', reason: 'errored_trials' });
-    // Exactly a quarter is not more than a quarter: errored counts as not passed.
+    // Exactly a quarter of the arm is not more than a quarter; the baseline failed both tries, so
+    // the candidate holds the case whichever way its lost try would have gone.
     expect(
       decided(
         [
-          ...times(3, () => trial('baseline', false)),
+          ...times(4, () => trial('baseline', false)),
           ...times(3, () => trial('candidate', true)),
-          ...errored(2),
+          ...lostTrials(1),
         ],
         'regression',
       ),
     ).toEqual({ kind: 'passed' });
+  });
+
+  // #833 review (#493 P2-2): a trial that could not start, was lost or crashed says nothing of the
+  // Skill — a verdict holds only whichever way it would have gone.
+  describe('trials without an outcome', () => {
+    const lost = (arm: 'baseline' | 'candidate', extra: Partial<VerdictTrial> = {}) =>
+      trial(arm, false, {
+        status: 'errored',
+        error: 'spawn_failed',
+        environmentDigest: null,
+        ...extra,
+      });
+
+    it('regression: one candidate try that did not start leaves the case unsettled, not lost', () => {
+      // 4 cases × 2 tries, the baseline passes all; the candidate passes all but one that did not
+      // start (1 of 8 in its arm).
+      const cases = ['a', 'b', 'c', 'd'];
+      const trials = cases.flatMap((caseId) => [
+        trial('baseline', true, { caseId }),
+        trial('baseline', true, { caseId }),
+        trial('candidate', true, { caseId }),
+        caseId === 'a' ? lost('candidate', { caseId }) : trial('candidate', true, { caseId }),
+      ]);
+      expect(decided(trials, 'regression')).toEqual({
+        kind: 'decided',
+        verdict: 'inconclusive',
+        reason: 'errored_trials',
+      });
+      expect(measureStage('regression', trials)).toEqual({
+        stage: 'regression',
+        lostCaseIds: [],
+        unsettledCaseIds: ['a'],
+      });
+      // The same try timing out is the candidate's own failure: the case is lost.
+      const timedOut = trials.map((t) =>
+        t.status === 'errored' ? { ...t, error: 'timeout', environmentDigest: 'v1:env' } : t,
+      );
+      expect(decided(timedOut, 'regression')).toMatchObject({ verdict: 'regressed' });
+      // A case the candidate loses even had its lost try passed is lost.
+      const clearlyLost = [
+        trial('baseline', true),
+        trial('baseline', true),
+        trial('candidate', false),
+        lost('candidate'),
+        ...times(6, () => trial('baseline', true, { caseId: 'b' })),
+        ...times(6, () => trial('candidate', true, { caseId: 'b' })),
+      ];
+      expect(decided(clearlyLost, 'regression')).toMatchObject({ verdict: 'regressed' });
+      // A lost baseline try could tip a case the candidate only matched.
+      const baselineLost = [
+        trial('baseline', true),
+        lost('baseline'),
+        trial('candidate', true),
+        trial('candidate', false),
+        ...times(6, () => trial('baseline', true, { caseId: 'b' })),
+        ...times(6, () => trial('candidate', true, { caseId: 'b' })),
+      ];
+      expect(decided(baselineLost, 'regression')).toMatchObject({
+        verdict: 'inconclusive',
+        reason: 'errored_trials',
+      });
+    });
+
+    it('mechanism: a candidate try that did not start is not a refutation', () => {
+      const oneLost = [
+        ...times(9, () => trial('candidate', true)),
+        lost('candidate'),
+        ...times(10, () => trial('baseline', false)),
+      ];
+      expect(decided(oneLost, 'mechanism')).toEqual({
+        kind: 'decided',
+        verdict: 'inconclusive',
+        reason: 'errored_trials',
+      });
+      expect(measureStage('mechanism', oneLost)).toMatchObject({
+        candidatePassed: 9,
+        candidateTrials: 9,
+        candidateNoOutcome: 1,
+        baselineMaxPassed: 4,
+      });
+      // Its own failure (no report) refutes it.
+      const noReport = [
+        ...times(9, () => trial('candidate', true)),
+        lost('candidate', { error: 'no_result' }),
+        ...times(10, () => trial('baseline', false)),
+      ];
+      expect(decided(noReport, 'mechanism')).toMatchObject({ verdict: 'refuted' });
+      // Lost baseline tries that could have passed past the limit leave it open.
+      const baselineOpen = [
+        ...times(10, () => trial('candidate', true)),
+        ...times(4, () => trial('baseline', true)),
+        ...times(2, () => lost('baseline')),
+        ...times(4, () => trial('baseline', false)),
+      ];
+      expect(decided(baselineOpen, 'mechanism')).toMatchObject({ reason: 'errored_trials' });
+    });
+
+    it('confirm: lost trials leave the rates, so losses in the baseline alone cannot read as better', () => {
+      // Both arms pass everything they ran. 14 of 72 trials did not start, all in the baseline
+      // (14 of 36 — over a quarter of that arm, though under a quarter of the stage).
+      const arm = (a: 'baseline' | 'candidate', passed: number, none: number, split = 'dev') => [
+        ...times(passed, () => trial(a, true, { split: split as 'dev' | 'holdout' })),
+        ...times(none, () => lost(a, { split: split as 'dev' | 'holdout' })),
+      ];
+      const skewed = [
+        ...arm('candidate', 30, 0),
+        ...arm('baseline', 16, 14),
+        ...arm('candidate', 6, 0, 'holdout'),
+        ...arm('baseline', 6, 0, 'holdout'),
+      ];
+      expect(decided(skewed, 'confirm')).toEqual({
+        kind: 'decided',
+        verdict: 'inconclusive',
+        reason: 'errored_trials',
+      });
+      // Under the arm's limit, the lost trials are left out of the rate rather than counted as
+      // failures: equal arms read as equal.
+      const fewLost = [
+        ...arm('candidate', 30, 0),
+        ...arm('baseline', 24, 6),
+        ...arm('candidate', 6, 0, 'holdout'),
+        ...arm('baseline', 6, 0, 'holdout'),
+      ];
+      expect(decided(fewLost, 'confirm')).not.toMatchObject({ verdict: 'better' });
+      expect(measureStage('confirm', fewLost)).toMatchObject({
+        dev: {
+          candidatePassed: 30,
+          candidateTrials: 30,
+          candidateNoOutcome: 0,
+          baselinePassed: 24,
+          baselineTrials: 24,
+          baselineNoOutcome: 6,
+          difference: 0,
+        },
+      });
+    });
   });
 });

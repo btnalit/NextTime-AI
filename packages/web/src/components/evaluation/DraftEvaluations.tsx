@@ -647,6 +647,9 @@ function StageCard({
           suiteId={evaluation.suite.id}
           isOwner={isOwner}
           lostCaseIds={stage.measure?.stage === 'regression' ? stage.measure.lostCaseIds : []}
+          unsettledCaseIds={
+            stage.measure?.stage === 'regression' ? stage.measure.unsettledCaseIds : []
+          }
         />
       ) : null}
     </section>
@@ -664,37 +667,48 @@ function Measure({
 }) {
   switch (measure.stage) {
     case 'regression': {
-      const titles = measure.lostCaseIds.map(
-        (id) => stage.cases.find((row) => row.caseId === id)?.title ?? shortId(id),
-      );
+      const titleOf = (id: string) =>
+        stage.cases.find((row) => row.caseId === id)?.title ?? shortId(id);
+      const lost = measure.lostCaseIds.map(titleOf);
+      const unsettled = measure.unsettledCaseIds.map(titleOf);
       return (
-        <p className="text-small" data-testid="draft-eval-measure">
-          {titles.length === 0
-            ? t(
-                '没有一条回归用例草稿比基线通过得少。',
-                'On no regression case did the draft pass fewer times than the baseline.',
-              )
-            : t(
-                `草稿比基线通过得少的回归用例：${titles.join('、')}`,
-                `Regression cases the draft passed fewer times than the baseline: ${titles.join(', ')}`,
+        <div className="text-small stack-s" data-testid="draft-eval-measure">
+          <p>
+            {lost.length === 0
+              ? t(
+                  '没有一条回归用例草稿比基线通过得少。',
+                  'On no regression case did the draft pass fewer times than the baseline.',
+                )
+              : t(
+                  `草稿比基线通过得少的回归用例：${lost.join('、')}`,
+                  `Regression cases the draft passed fewer times than the baseline: ${lost.join(', ')}`,
+                )}
+          </p>
+          {unsettled.length > 0 ? (
+            <p data-testid="draft-eval-measure-unsettled">
+              {t(
+                `定不下来的回归用例（没有结果的试跑能让它倒向任何一边）：${unsettled.join('、')}`,
+                `Regression cases left open (trials without an outcome could tip them either way): ${unsettled.join(', ')}`,
               )}
-        </p>
+            </p>
+          ) : null}
+        </div>
       );
     }
     case 'mechanism':
       return (
         <p className="text-small tabular" data-testid="draft-eval-measure">
           {t(
-            `草稿组 ${passRateText(measure.candidatePassed, measure.candidateTrials)}（要求全部通过），基线组 ${passRateText(measure.baselinePassed, measure.baselineTrials)}（最多 ${measure.baselineMaxPassed} 次）。`,
-            `Draft ${passRateText(measure.candidatePassed, measure.candidateTrials)} (every try must pass); baseline ${passRateText(measure.baselinePassed, measure.baselineTrials)} (at most ${measure.baselineMaxPassed}).`,
+            `草稿组 ${passRateText(measure.candidatePassed, measure.candidateTrials)}${noOutcomeText(measure.candidateNoOutcome, t)}（要求全部通过），基线组 ${passRateText(measure.baselinePassed, measure.baselineTrials)}${noOutcomeText(measure.baselineNoOutcome, t)}（最多 ${measure.baselineMaxPassed} 次）。`,
+            `Draft ${passRateText(measure.candidatePassed, measure.candidateTrials)}${noOutcomeText(measure.candidateNoOutcome, t)} (every try must pass); baseline ${passRateText(measure.baselinePassed, measure.baselineTrials)}${noOutcomeText(measure.baselineNoOutcome, t)} (at most ${measure.baselineMaxPassed}).`,
           )}
         </p>
       );
     case 'confirm': {
       const split = (label: string, value: typeof measure.dev) =>
         t(
-          `${label}：草稿 ${passRateText(value.candidatePassed, value.candidateTrials)}，基线 ${passRateText(value.baselinePassed, value.baselineTrials)}，差 ${pointsText(value.difference)} 个百分点，下界 ${pointsText(value.lowerBound)}`,
-          `${label}: draft ${passRateText(value.candidatePassed, value.candidateTrials)}, baseline ${passRateText(value.baselinePassed, value.baselineTrials)}, difference ${pointsText(value.difference)} points, lower bound ${pointsText(value.lowerBound)}`,
+          `${label}：草稿 ${passRateText(value.candidatePassed, value.candidateTrials)}${noOutcomeText(value.candidateNoOutcome, t)}，基线 ${passRateText(value.baselinePassed, value.baselineTrials)}${noOutcomeText(value.baselineNoOutcome, t)}，差 ${pointsText(value.difference)} 个百分点，下界 ${pointsText(value.lowerBound)}`,
+          `${label}: draft ${passRateText(value.candidatePassed, value.candidateTrials)}${noOutcomeText(value.candidateNoOutcome, t)}, baseline ${passRateText(value.baselinePassed, value.baselineTrials)}${noOutcomeText(value.baselineNoOutcome, t)}, difference ${pointsText(value.difference)} points, lower bound ${pointsText(value.lowerBound)}`,
         );
       return (
         <ul className="text-small tabular stack-s" data-testid="draft-eval-measure">
@@ -716,6 +730,11 @@ function Measure({
   }
 }
 
+/** "; n more without an outcome" after a pass rate — rates count the trials with one. */
+function noOutcomeText(none: number, t: Translate): string {
+  return none === 0 ? '' : t(`，另 ${none} 次没有结果`, `, ${none} more without an outcome`);
+}
+
 function cellText(tally: DraftEvaluationArmTallyWire, t: Translate): string {
   const base = `${tally.passed}/${tally.trials}`;
   const extra = [
@@ -731,12 +750,14 @@ function CaseMatrix({
   suiteId,
   isOwner,
   lostCaseIds,
+  unsettledCaseIds,
 }: {
   readonly http: CapabilityCaller;
   readonly stage: DraftEvaluationStageWire;
   readonly suiteId: string;
   readonly isOwner: boolean;
   readonly lostCaseIds: readonly string[];
+  readonly unsettledCaseIds: readonly string[];
 }) {
   const t = useT();
   const [openCaseId, setOpenCaseId] = useState<string | null>(null);
@@ -765,13 +786,17 @@ function CaseMatrix({
         <tbody>
           {stage.cases.map((row) => {
             const open = openCaseId === row.caseId;
-            const lost = lostCaseIds.includes(row.caseId);
+            const mark = lostCaseIds.includes(row.caseId)
+              ? 'lost'
+              : unsettledCaseIds.includes(row.caseId)
+                ? 'unsettled'
+                : null;
             return (
               <MatrixRow
                 key={row.caseId}
                 row={row}
                 open={open}
-                lost={lost}
+                mark={mark}
                 onToggle={() => setOpenCaseId(open ? null : row.caseId)}
                 t={t}
               >
@@ -806,14 +831,15 @@ function CaseMatrix({
 function MatrixRow({
   row,
   open,
-  lost,
+  mark,
   onToggle,
   t,
   children,
 }: {
   readonly row: DraftEvaluationCaseRowWire;
   readonly open: boolean;
-  readonly lost: boolean;
+  /** How the regression rule read the case: lost, or left open by trials without an outcome. */
+  readonly mark: 'lost' | 'unsettled' | null;
   readonly onToggle: () => void;
   readonly t: Translate;
   readonly children: ReactNode;
@@ -823,14 +849,17 @@ function MatrixRow({
       <tr
         data-testid="draft-eval-matrix-row"
         data-case-id={row.caseId}
-        data-lost={lost || undefined}
+        data-lost={mark === 'lost' || undefined}
+        data-unsettled={mark === 'unsettled' || undefined}
       >
         <td>
           <span className="row-wrap">
             <span className="wrap-anywhere">{row.title}</span>
             <span className="tag">{row.split}</span>
-            {lost ? (
+            {mark === 'lost' ? (
               <span className="text-warn text-small">{t('比基线少', 'fewer than baseline')}</span>
+            ) : mark === 'unsettled' ? (
+              <span className="text-3 text-small">{t('定不下来', 'left open')}</span>
             ) : null}
           </span>
         </td>

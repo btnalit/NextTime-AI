@@ -8,6 +8,7 @@ import {
   type EvalArm,
   type EvalCaseSplit,
   mechanismBaselineMaxPassed,
+  trialHasOutcome,
 } from '@nexttime/shared';
 
 /**
@@ -22,10 +23,14 @@ import {
  *   2. `unmeasured` — a scored trial's environment is unknown (`environment_unknown`), or the
  *      evaluation's scored trials ran in more than one (`environment_differs`, I-E2: the two arms
  *      are compared only within one environment);
- *   3. `inconclusive`/`errored_trials` — more than a quarter of the stage's trials errored;
+ *   3. `inconclusive`/`errored_trials` — more than a quarter of either arm's trials in the stage
+ *      have no outcome (`trialHasOutcome`: it could not start, was lost, terminated or crashed);
  *   4. the stage's own rule (regression, mechanism, confirm — `@nexttime/shared`
- *      draft-evaluation.ts holds their numbers). An errored trial counts as not passed, in either
- *      arm.
+ *      draft-evaluation.ts holds their numbers). A trial errored by its own Worker (timeout, no
+ *      report, token budget) counts as not passed. A trial without an outcome could have gone
+ *      either way: regression and mechanism decide only what holds whichever way it would have
+ *      gone, else `inconclusive`/`errored_trials` (#833 review: one container that did not start
+ *      must not read as a regression); confirm leaves it out of its rates.
  * A stage that passes its rule moves the evaluation on; confirm always decides.
  */
 
@@ -49,6 +54,25 @@ export type StageOutcome =
       readonly verdict: DraftEvaluationVerdict;
       readonly reason: DraftEvaluationReason;
     };
+
+/** How a verdict reads one ended trial: passed, not passed, or no outcome. */
+type TrialReading = 'passed' | 'failed' | 'none';
+
+function readingOf(trial: VerdictTrial): TrialReading {
+  if (!trialHasOutcome(trial)) return 'none';
+  return trial.status === 'scored' && trial.passed ? 'passed' : 'failed';
+}
+
+/** Passes, failures and trials without an outcome among `trials`. */
+function count(trials: readonly VerdictTrial[]): {
+  passed: number;
+  failed: number;
+  none: number;
+} {
+  const counts = { passed: 0, failed: 0, none: 0 };
+  for (const trial of trials) counts[readingOf(trial)] += 1;
+  return counts;
+}
 
 /** z for a one-sided bound at `confidence` (0.95 → 1.6449). Only the confidence the rules name. */
 function oneSidedZ(confidence: number): number {
@@ -90,29 +114,33 @@ export function differenceLowerBound(
   return p1 - p2 - Math.sqrt((p1 - w1.lower) ** 2 + (w2.upper - p2) ** 2);
 }
 
+/** One split of the confirm stage, over the trials with an outcome: those without one are left
+ *  out of the rates (counted apart), so trials lost in one arm cannot tilt the difference. */
 function splitMeasure(
   trials: readonly VerdictTrial[],
   split: EvalCaseSplit,
 ): DraftEvaluationSplitMeasureWire {
-  const of = (arm: EvalArm) => trials.filter((t) => t.arm === arm && t.split === split);
+  const of = (arm: EvalArm) => count(trials.filter((t) => t.arm === arm && t.split === split));
   const candidate = of('candidate');
   const baseline = of('baseline');
-  const candidatePassed = candidate.filter((t) => t.passed).length;
-  const baselinePassed = baseline.filter((t) => t.passed).length;
-  const measurable = candidate.length > 0 && baseline.length > 0;
+  const candidateTrials = candidate.passed + candidate.failed;
+  const baselineTrials = baseline.passed + baseline.failed;
+  const measurable = candidateTrials > 0 && baselineTrials > 0;
   return {
-    candidatePassed,
-    candidateTrials: candidate.length,
-    baselinePassed,
-    baselineTrials: baseline.length,
+    candidatePassed: candidate.passed,
+    candidateTrials,
+    candidateNoOutcome: candidate.none,
+    baselinePassed: baseline.passed,
+    baselineTrials,
+    baselineNoOutcome: baseline.none,
     difference: measurable
-      ? candidatePassed / candidate.length - baselinePassed / baseline.length
+      ? candidate.passed / candidateTrials - baseline.passed / baselineTrials
       : null,
     lowerBound: differenceLowerBound(
-      candidatePassed,
-      candidate.length,
-      baselinePassed,
-      baseline.length,
+      candidate.passed,
+      candidateTrials,
+      baseline.passed,
+      baselineTrials,
       DRAFT_EVALUATION_RULES.confidence,
     ),
   };
@@ -124,29 +152,39 @@ export function measureStage(
   trials: readonly VerdictTrial[],
 ): DraftEvaluationMeasureWire {
   if (stage === 'regression') {
-    const passes = new Map<string, { baseline: number; candidate: number }>();
+    const byCase = new Map<string, { baseline: VerdictTrial[]; candidate: VerdictTrial[] }>();
     for (const trial of trials) {
-      const entry = passes.get(trial.caseId) ?? { baseline: 0, candidate: 0 };
-      if (trial.passed) entry[trial.arm] += 1;
-      passes.set(trial.caseId, entry);
+      const entry = byCase.get(trial.caseId) ?? { baseline: [], candidate: [] };
+      entry[trial.arm].push(trial);
+      byCase.set(trial.caseId, entry);
     }
-    return {
-      stage,
-      lostCaseIds: [...passes.entries()]
-        .filter(([, entry]) => entry.candidate < entry.baseline)
-        .map(([caseId]) => caseId),
-    };
+    const lostCaseIds: string[] = [];
+    const unsettledCaseIds: string[] = [];
+    for (const [caseId, entry] of byCase) {
+      const candidate = count(entry.candidate);
+      const baseline = count(entry.baseline);
+      // Lost even had each candidate try without an outcome passed; held even had each baseline
+      // one passed; anything between is the trials without an outcome's to tip.
+      if (candidate.passed + candidate.none < baseline.passed) lostCaseIds.push(caseId);
+      else if (candidate.passed < baseline.passed + baseline.none) unsettledCaseIds.push(caseId);
+    }
+    return { stage, lostCaseIds, unsettledCaseIds };
   }
   if (stage === 'mechanism') {
-    const candidate = trials.filter((t) => t.arm === 'candidate');
-    const baseline = trials.filter((t) => t.arm === 'baseline');
+    const candidate = count(trials.filter((t) => t.arm === 'candidate'));
+    const baseline = count(trials.filter((t) => t.arm === 'baseline'));
     return {
       stage,
-      candidatePassed: candidate.filter((t) => t.passed).length,
-      candidateTrials: candidate.length,
-      baselinePassed: baseline.filter((t) => t.passed).length,
-      baselineTrials: baseline.length,
-      baselineMaxPassed: mechanismBaselineMaxPassed(baseline.length),
+      candidatePassed: candidate.passed,
+      candidateTrials: candidate.passed + candidate.failed,
+      candidateNoOutcome: candidate.none,
+      baselinePassed: baseline.passed,
+      baselineTrials: baseline.passed + baseline.failed,
+      baselineNoOutcome: baseline.none,
+      // The limit is of every try the arm ran, with an outcome or not.
+      baselineMaxPassed: mechanismBaselineMaxPassed(
+        baseline.passed + baseline.failed + baseline.none,
+      ),
     };
   }
   const hasHoldout = trials.some((t) => t.split === 'holdout');
@@ -162,18 +200,31 @@ export function measureStage(
 /** How the stage's rule reads its measure. */
 function ruleOutcome(measure: DraftEvaluationMeasureWire): StageOutcome {
   if (measure.stage === 'regression') {
-    return measure.lostCaseIds.length > 0
-      ? { kind: 'decided', verdict: 'regressed', reason: 'regression_case_lost' }
+    if (measure.lostCaseIds.length > 0) {
+      return { kind: 'decided', verdict: 'regressed', reason: 'regression_case_lost' };
+    }
+    return measure.unsettledCaseIds.length > 0
+      ? { kind: 'decided', verdict: 'inconclusive', reason: 'errored_trials' }
       : { kind: 'passed' };
   }
   if (measure.stage === 'mechanism') {
+    if (measure.candidateTrials + measure.candidateNoOutcome === 0) {
+      return { kind: 'decided', verdict: 'inconclusive', reason: 'too_few_trials' };
+    }
+    // Not shown whichever way the trials without an outcome would have gone: the candidate failed
+    // a try, or the baseline passed more than it may even with each of its others failed.
+    if (
+      measure.candidatePassed < measure.candidateTrials ||
+      measure.baselinePassed > measure.baselineMaxPassed
+    ) {
+      return { kind: 'decided', verdict: 'refuted', reason: 'mechanism_not_shown' };
+    }
     const shown =
-      measure.candidateTrials > 0 &&
-      measure.candidatePassed === measure.candidateTrials &&
-      measure.baselinePassed <= measure.baselineMaxPassed;
+      measure.candidateNoOutcome === 0 &&
+      measure.baselinePassed + measure.baselineNoOutcome <= measure.baselineMaxPassed;
     return shown
       ? { kind: 'passed' }
-      : { kind: 'decided', verdict: 'refuted', reason: 'mechanism_not_shown' };
+      : { kind: 'decided', verdict: 'inconclusive', reason: 'errored_trials' };
   }
   const { dev, holdout, delta } = measure;
   if (dev.difference === null || dev.lowerBound === null) {
@@ -221,12 +272,12 @@ export function stageOutcome(
   if (new Set(scored.map((t) => t.environmentDigest)).size > 1) {
     return { kind: 'decided', verdict: 'unmeasured', reason: 'environment_differs' };
   }
-  const errored = stageTrials.filter((t) => t.status === 'errored').length;
-  if (
-    stageTrials.length > 0 &&
-    errored / stageTrials.length > DRAFT_EVALUATION_RULES.maxErroredShare
-  ) {
-    return { kind: 'decided', verdict: 'inconclusive', reason: 'errored_trials' };
+  for (const arm of ['baseline', 'candidate'] as const) {
+    const armTrials = stageTrials.filter((t) => t.arm === arm);
+    const none = count(armTrials).none;
+    if (armTrials.length > 0 && none / armTrials.length > DRAFT_EVALUATION_RULES.maxErroredShare) {
+      return { kind: 'decided', verdict: 'inconclusive', reason: 'errored_trials' };
+    }
   }
   return ruleOutcome(measureStage(stage, stageTrials));
 }

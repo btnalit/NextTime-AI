@@ -26,8 +26,10 @@
 --   * an evaluation starts `running` at its first stage; what it compares and the case rows each
 --     stage runs never change; its stage only moves forward; it ends once — `finished` with a
 --     verdict, a reason that verdict can have and the stage that decided it, only when every stage
---     it ran is a finished run (§5.5 账本恒等式, as goal 0005's `goal_runs_status_guard` holds a
---     verdict's evidence whole) — or `cancelled` by a person, with no verdict; nothing changes
+--     it ran is a finished run and the deciding stage is one of them — unless the budget did not
+--     cover it or confirm had no case, when it has no run (§5.5 账本恒等式, as goal 0005's
+--     `goal_runs_status_guard` holds a verdict's evidence whole) — or `cancelled` by a person, with
+--     no verdict; nothing changes
 --     after; a note once written is kept; one running evaluation per draft;
 --   * a draft run belongs to a running evaluation, holds both arms, and is that stage's only run;
 --     a run finishes only when no trial is queued or running;
@@ -236,6 +238,7 @@ declare
   stages constant text[] := array['regression', 'mechanism', 'confirm'];
   key text;
   unfinished int;
+  decided_runs int;
 begin
   if tg_op = 'DELETE' then
     raise exception 'eval_draft_evaluations: an evaluation is kept, never deleted';
@@ -292,6 +295,21 @@ begin
     if unfinished <> 0 then
       raise exception 'eval_draft_evaluations: a verdict is written only when every stage it ran has finished (% still running)',
         unfinished;
+    end if;
+    -- The stage that decided read its own finished run (#833 review) — except a stage the budget
+    -- did not cover, or a confirm with no case, which decide by not running at all.
+    select count(*)::int into decided_runs
+      from eval_runs
+     where workspace_id = new.workspace_id and draft_evaluation_id = new.id
+       and stage = new.decided_by and status = 'finished';
+    if new.reason in ('budget', 'no_confirm_cases') then
+      if decided_runs <> 0 then
+        raise exception 'eval_draft_evaluations: a % verdict is given by a % stage that did not run',
+          new.reason, new.decided_by;
+      end if;
+    elsif decided_runs <> 1 then
+      raise exception 'eval_draft_evaluations: a verdict is given by the finished run of the stage that decided it (% has none)',
+        new.decided_by;
     end if;
   end if;
   return new;

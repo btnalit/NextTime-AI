@@ -121,6 +121,7 @@ const BUDGET: EvalBudgetWire = {
   periodEnd: '2026-11-01T00:00:00.000Z',
   trialCostUsd: 0.4,
   unpricedTrials: 0,
+  committedUsd: 0,
 };
 
 function summaryOf(full: EvalSuiteWire): EvalSuiteSummaryWire {
@@ -695,6 +696,20 @@ describe('EvaluationPage — the month’s evaluation budget (S10 E3-2a)', () =>
     expect(within(card).queryByTestId('eval-budget-exhausted')).toBeNull();
     // Only the owner sets it.
     expect(within(card).queryByTestId('eval-budget-raise')).toBeNull();
+  });
+
+  it('says how much of what is left the trials not ended yet hold (#833 review)', async () => {
+    const http = scriptedHttp({
+      ...baseHandlers(),
+      get_eval_budget: () => ({ ...BUDGET, committedUsd: 1.2 }),
+    });
+    renderPage(http);
+    const card = await screen.findByTestId('eval-budget');
+    await waitFor(() =>
+      expect(within(card).getByTestId('eval-budget-line').textContent).toBe(
+        '本月已用 $2.50 / $10.00，剩余 $7.50，其中约 $1.20 留给还没跑完的试跑',
+      ),
+    );
   });
 
   it('once it is spent, says nothing can start, and points the owner to where it is raised', async () => {

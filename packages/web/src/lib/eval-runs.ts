@@ -94,25 +94,31 @@ export function reportSummary(result: unknown): string | null {
 export interface BudgetStanding {
   /** What is left this month (never below 0). */
   readonly remainingUsd: number;
+  /** What is left once the trials not ended yet are paid for (never below 0) — what a start
+   *  can count on. */
+  readonly freeUsd: number;
   /** The month's budget is spent: nothing can start. */
   readonly exhausted: boolean;
   /** What one trial costs on average, when the workspace has priced trials. */
   readonly trialEstimateUsd: number | null;
-  /** What is left is less than one trial costs on average: a start may go over. */
+  /** What is free is less than `trials` trials cost on average: a start may go over. */
   readonly short: boolean;
 }
 
-/** The budget as a start sees it: spent, or too little left for `trials` trials. */
+/** The budget as a start sees it: spent, or too little left for `trials` trials once the trials
+ *  not ended yet (`committedUsd`) are paid for. */
 export function budgetStanding(budget: EvalBudgetWire, trials = 1): BudgetStanding {
   const remainingUsd = Math.max(0, budget.monthlyBudgetUsd - budget.spentUsd);
+  const freeUsd = Math.max(0, remainingUsd - budget.committedUsd);
   const exhausted = budget.spentUsd >= budget.monthlyBudgetUsd;
   const trialEstimateUsd =
     budget.trialCostUsd === null ? null : budget.trialCostUsd * Math.max(1, trials);
   return {
     remainingUsd,
+    freeUsd,
     exhausted,
     trialEstimateUsd,
-    short: !exhausted && trialEstimateUsd !== null && trialEstimateUsd > remainingUsd,
+    short: !exhausted && trialEstimateUsd !== null && trialEstimateUsd > freeUsd,
   };
 }
 

@@ -46,6 +46,7 @@ const BUDGET: EvalBudgetWire = {
   periodEnd: '2026-11-01T00:00:00.000Z',
   trialCostUsd: 0.01,
   unpricedTrials: 0,
+  committedUsd: 0,
 };
 
 const tally = (passed: number, trials: number, extra: Partial<DraftEvaluationArmTallyWire> = {}) =>
@@ -137,7 +138,9 @@ function evaluation(extra: Partial<DraftEvaluationWire> = {}): DraftEvaluationWi
       markdown: '# Restart',
     },
     stages: [
-      stage('regression', { measure: { stage: 'regression', lostCaseIds: [] } }),
+      stage('regression', {
+        measure: { stage: 'regression', lostCaseIds: [], unsettledCaseIds: [] },
+      }),
       stage('mechanism', {
         k: 10,
         baseline: tally(4, 10),
@@ -147,8 +150,10 @@ function evaluation(extra: Partial<DraftEvaluationWire> = {}): DraftEvaluationWi
           stage: 'mechanism',
           candidatePassed: 10,
           candidateTrials: 10,
+          candidateNoOutcome: 0,
           baselinePassed: 4,
           baselineTrials: 10,
+          baselineNoOutcome: 0,
           baselineMaxPassed: 4,
         },
       }),
@@ -162,8 +167,10 @@ function evaluation(extra: Partial<DraftEvaluationWire> = {}): DraftEvaluationWi
           dev: {
             candidatePassed: 28,
             candidateTrials: 30,
+            candidateNoOutcome: 0,
             baselinePassed: 10,
             baselineTrials: 30,
+            baselineNoOutcome: 0,
             difference: 0.6,
             lowerBound: 0.4,
           },
@@ -394,6 +401,65 @@ describe('草稿评测 (S10 E3-2b)', () => {
     // One environment.
     expect(screen.queryByTestId('draft-eval-environments-differ')).toBeNull();
     expect(screen.getAllByTestId('draft-eval-environment')).toHaveLength(1);
+  });
+
+  it('trials without an outcome: the case they leave open is named, and rates count them apart (#833 review)', async () => {
+    const http = scriptedHttp(
+      handlers('member', () =>
+        evaluation({
+          verdict: 'inconclusive',
+          reason: 'errored_trials',
+          decidedBy: 'regression',
+          stages: [
+            stage('regression', {
+              baseline: tally(2, 2),
+              candidate: tally(1, 2, { errored: 1, failed: 0 }),
+              cases: [
+                {
+                  caseId: 'c-1',
+                  title: 'check dependants first',
+                  split: 'dev',
+                  baseline: tally(2, 2),
+                  candidate: tally(1, 2, { errored: 1, failed: 0 }),
+                },
+              ],
+              measure: { stage: 'regression', lostCaseIds: [], unsettledCaseIds: ['c-1'] },
+            }),
+            stage('mechanism', {
+              k: 10,
+              baseline: tally(3, 10),
+              candidate: tally(9, 10),
+              cases: [],
+              measure: {
+                stage: 'mechanism',
+                candidatePassed: 9,
+                candidateTrials: 9,
+                candidateNoOutcome: 1,
+                baselinePassed: 3,
+                baselineTrials: 10,
+                baselineNoOutcome: 0,
+                baselineMaxPassed: 4,
+              },
+            }),
+          ],
+        }),
+      ),
+    );
+    renderPage(http, 'e-1');
+    const detail = await screen.findByTestId('draft-eval-detail');
+    expect(within(detail).getByTestId('draft-eval-reason').textContent).toContain('没有结果');
+    const stages = within(detail).getAllByTestId('draft-eval-stage');
+    const regression = stages[0] as HTMLElement;
+    expect(within(regression).getByTestId('draft-eval-measure-unsettled').textContent).toMatch(
+      /^定不下来的回归用例（没有结果的试跑能让它倒向任何一边）：check dependants first$/,
+    );
+    const row = within(regression).getByTestId('draft-eval-matrix-row');
+    expect(row.getAttribute('data-unsettled')).toBe('true');
+    expect(row.getAttribute('data-lost')).toBeNull();
+    expect(row.textContent).toContain('定不下来');
+    expect(
+      within(stages[1] as HTMLElement).getByTestId('draft-eval-measure').textContent,
+    ).toContain('草稿组 9/9 (100%)，另 1 次没有结果（要求全部通过）');
   });
 
   it('warns when the trials ran in more than one environment', async () => {

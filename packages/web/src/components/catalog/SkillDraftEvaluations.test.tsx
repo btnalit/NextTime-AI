@@ -41,6 +41,7 @@ const budget = (extra: Partial<EvalBudgetWire> = {}): EvalBudgetWire => ({
   periodEnd: '2026-11-01T00:00:00.000Z',
   trialCostUsd: 0.01,
   unpricedTrials: 0,
+  committedUsd: 0,
   ...extra,
 });
 

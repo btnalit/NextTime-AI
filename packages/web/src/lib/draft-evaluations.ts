@@ -15,6 +15,7 @@ import {
   mechanismBaselineMaxPassed,
 } from '@nexttime/shared';
 import type { ErrorOverrides } from './errors.js';
+import { formatUsd } from './eval-runs.js';
 import { HttpError } from './http-client.js';
 import type { Translate } from './i18n.js';
 import type { DraftEvaluationOutcome } from './status-tone.js';
@@ -132,8 +133,8 @@ export function verdictReasonText(reason: DraftEvaluationReason, t: Translate): 
       );
     case 'errored_trials':
       return t(
-        `一个阶段里超过 ${points(RULES.maxErroredShare)}% 的试跑出错了，这样的结果说明不了什么。看出错的试跑是什么原因。`,
-        `More than ${points(RULES.maxErroredShare)}% of a stage’s trials errored, which proves nothing. Look at why those trials errored.`,
+        `有试跑没有结果（没能启动、中途丢失、被终止或崩溃）：一组里超过 ${points(RULES.maxErroredShare)}% 是这样，或者它们正好能改变某条用例或这个阶段的判定，所以这次说明不了什么。超时、没交汇报、用完了 token 额度算作没通过，不算没有结果。看那些试跑为什么没有结果，再评测一次。`,
+        `Some trials have no outcome (they did not start, or were lost, terminated or crashed): over ${points(RULES.maxErroredShare)}% of an arm, or enough to change how a case or the stage is judged, so this proves nothing. A timeout, a missing report or a spent token budget counts as not passing, not as no outcome. Look at why those trials have none, then evaluate again.`,
       );
     case 'budget':
       return t(
@@ -239,20 +240,46 @@ export function draftCheckProblemsOf(err: unknown): readonly DraftCheckProblemWi
   });
 }
 
+export interface BudgetShortfall {
+  readonly budgetUsd: number;
+  readonly spentUsd: number;
+  /** What the trials not ended yet will take. */
+  readonly committedUsd: number;
+  readonly estimateUsd: number;
+}
+
 /** What a refused start's `evaluation_budget_insufficient` carried, or `null` for another error. */
-export function budgetShortfallOf(
-  err: unknown,
-): { readonly budgetUsd: number; readonly spentUsd: number; readonly estimateUsd: number } | null {
+export function budgetShortfallOf(err: unknown): BudgetShortfall | null {
   if (!(err instanceof HttpError) || err.code !== 'evaluation_budget_insufficient') return null;
-  const { budgetUsd, spentUsd, estimateUsd } = err.details ?? {};
+  const { budgetUsd, spentUsd, committedUsd, estimateUsd } = err.details ?? {};
   if (
     typeof budgetUsd !== 'number' ||
     typeof spentUsd !== 'number' ||
+    typeof committedUsd !== 'number' ||
     typeof estimateUsd !== 'number'
   ) {
     return null;
   }
-  return { budgetUsd, spentUsd, estimateUsd };
+  return { budgetUsd, spentUsd, committedUsd, estimateUsd };
+}
+
+/** Why a start was refused for the budget, in a sentence — with what the trials not ended yet
+ *  hold of it, when they hold any. */
+export function budgetShortfallText(shortfall: BudgetShortfall, t: Translate): string {
+  const estimate = formatUsd(shortfall.estimateUsd);
+  const budget = formatUsd(shortfall.budgetUsd);
+  const spent = formatUsd(shortfall.spentUsd);
+  if (shortfall.committedUsd <= 0) {
+    return t(
+      `第一个阶段预估 ${estimate}，本月评测预算 ${budget} 已用 ${spent}，不够，什么也没有启动。`,
+      `The first stage is estimated at ${estimate} and ${spent} of the ${budget} monthly evaluation budget is spent, so nothing was started.`,
+    );
+  }
+  const committed = formatUsd(shortfall.committedUsd);
+  return t(
+    `第一个阶段预估 ${estimate}，本月评测预算 ${budget} 已用 ${spent}，还没跑完的试跑约占 ${committed}，不够，什么也没有启动。等那些试跑结束后再看剩多少。`,
+    `The first stage is estimated at ${estimate}; ${spent} of the ${budget} monthly evaluation budget is spent and about ${committed} is held for trials not ended yet, so nothing was started. See what is left once those trials end.`,
+  );
 }
 
 /** The mechanisms a suite's mechanism cases name, each with how many cases name it, in the order
@@ -301,13 +328,17 @@ export interface DraftEvaluationPlan {
 /**
  * What a start would run on a suite's `cases` (its current version) with `mechanism` chosen (or
  * none), as the kernel plans it (`application/eval` draft-evaluations `planFrom`): each stage's
- * cases, k and trials, and its estimate against `budget`. The kernel checks each stage against the
- * budget as it reaches it; this assumes the stages before it cost what they were estimated to.
+ * cases, k and trials, and its estimate against `budget` — what is left once the trials not ended
+ * yet are paid for. The kernel checks each stage against the budget as it reaches it; this assumes
+ * the stages before it cost what they were estimated to.
  */
 export function draftEvaluationPlan(
   cases: readonly Pick<EvalCaseSummaryWire, 'partition' | 'mechanism'>[],
   mechanism: string | null,
-  budget: Pick<EvalBudgetWire, 'monthlyBudgetUsd' | 'spentUsd' | 'trialCostUsd'> | null,
+  budget: Pick<
+    EvalBudgetWire,
+    'monthlyBudgetUsd' | 'spentUsd' | 'committedUsd' | 'trialCostUsd'
+  > | null,
 ): DraftEvaluationPlan {
   const counts: Record<DraftEvaluationStageName, number> = {
     regression: cases.filter((row) => row.partition === 'regression').length,
@@ -320,7 +351,9 @@ export function draftEvaluationPlan(
     confirm: cases.filter((row) => row.partition === 'full').length,
   };
   const trialCost = budget?.trialCostUsd ?? null;
-  const left = budget === null ? null : budget.monthlyBudgetUsd - budget.spentUsd;
+  // What a start can count on: the trials not ended yet (this one's or another's) are paid first.
+  const left =
+    budget === null ? null : budget.monthlyBudgetUsd - budget.spentUsd - budget.committedUsd;
   let spent = 0;
   let trials = 0;
   let estimateUsd: number | null = trialCost === null ? null : 0;

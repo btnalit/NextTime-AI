@@ -244,11 +244,17 @@ function estimateStage(
     : draftEvaluationStageTrials(stage, caseCount) * budget.trialCostUsd;
 }
 
-/** Whether the month's evaluation budget covers `estimateUsd` now. An unknown estimate is let
- *  through while anything is left: a trial's cost is learned from the first priced ones. */
+/** Whether the month's evaluation budget covers `estimateUsd` now, after what is spent and what
+ *  the trials not ended yet — this and every other evaluation's — are expected to cost (#833
+ *  review: two evaluations started one after the other must not both count on the same money). An
+ *  unknown estimate is let through while anything is left: a trial's cost is learned from the
+ *  first priced ones. */
 function budgetCovers(budget: EvalBudget, estimateUsd: number | null): boolean {
   if (budget.spentUsd >= budget.monthlyBudgetUsd) return false;
-  return estimateUsd === null || budget.spentUsd + estimateUsd <= budget.monthlyBudgetUsd;
+  return (
+    estimateUsd === null ||
+    budget.spentUsd + budget.committedUsd + estimateUsd <= budget.monthlyBudgetUsd + 1e-9
+  );
 }
 
 /**
@@ -512,6 +518,7 @@ export async function startDraftEvaluation(
       throw new EvaluationBudgetInsufficientError(
         budget.monthlyBudgetUsd,
         budget.spentUsd,
+        budget.committedUsd,
         plan.estimateUsd,
       );
     }
