@@ -78,8 +78,11 @@ export class CapabilityNotFoundError extends Error {
 
 export class InvalidCapabilityParamsError extends Error {
   readonly issues: unknown;
-  constructor(name: string, issues: unknown) {
-    super(`invalid params for capability "${name}"`);
+  /** `reason`, when given, is appended to the message: Zod's issues stay in the kernel, so a refusal
+   *  the caller could not otherwise explain (the value budget) says why in the message itself. */
+  constructor(name: string, issues: unknown, reason?: string) {
+    const message = `invalid params for capability "${name}"`;
+    super(reason === undefined ? message : `${message}: ${reason}`);
     this.name = 'InvalidCapabilityParamsError';
     this.issues = issues;
   }
@@ -635,14 +638,12 @@ export async function dispatchCapability(
 
   // Before Zod: an oversized collection would cost one issue per element (params-budget.ts).
   if (exceedsValueBudget(rawParams)) {
-    throw new InvalidCapabilityParamsError(name, [
-      {
-        code: 'too_big',
-        path: [],
-        maximum: MAX_PARAMS_VALUES,
-        message: `params hold more than ${MAX_PARAMS_VALUES} values`,
-      },
-    ]);
+    const reason = `params hold more than ${MAX_PARAMS_VALUES} values (array elements and object members)`;
+    throw new InvalidCapabilityParamsError(
+      name,
+      [{ code: 'too_big', path: [], maximum: MAX_PARAMS_VALUES, message: reason }],
+      reason,
+    );
   }
   const parsed = capability.paramsSchema.safeParse(rawParams ?? {});
   if (!parsed.success) throw new InvalidCapabilityParamsError(name, parsed.error.issues);

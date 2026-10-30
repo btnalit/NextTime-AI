@@ -1,7 +1,7 @@
 import {
-  PREDICATE_PATH_MAX,
   type EvalCaseWire,
   type EvalFixtureGateWire,
+  PREDICATE_PATH_MAX,
   evalCallCountPath,
   evalOutputFieldPath,
 } from '@nexttime/shared';

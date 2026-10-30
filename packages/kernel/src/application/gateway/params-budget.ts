@@ -6,9 +6,11 @@
  * counts a call's JSON values before Zod sees them and refuses the call past it, so no call can make
  * more issues than that.
  *
- * 128 Ki values: a real call body averaging 8 bytes or more per value reaches the 1 MiB body limit
- * (`/api/cap/*`, `/mcp`, the WS frame limit) before it reaches the budget, so the budget refuses
- * nothing a body could carry today; it caps an attack at about a quarter of the old cost.
+ * 128 Ki values sits under the 1 MiB body limit (`/api/cap/*`, `/mcp`, the WS frame limit), so a
+ * dense body that fits that limit can still be refused: a 400 KB array of numbers or a 980 KB table
+ * of small rows holds over 200,000 values. Such a call is new to refusal, so the refusal names the
+ * budget in the error message the caller sees. It is a mitigation, not a cure: the worst call within
+ * the budget still costs about 170 ms and 107 MB, against about 905 ms and 218 MB without it.
  */
 export const MAX_PARAMS_VALUES = 128 * 1024;
 

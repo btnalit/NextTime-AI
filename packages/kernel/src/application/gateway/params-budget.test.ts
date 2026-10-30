@@ -51,10 +51,15 @@ describe('exceedsValueBudget', () => {
     expect(err.issues).toEqual([
       expect.objectContaining({ code: 'too_big', path: [], maximum: MAX_PARAMS_VALUES }),
     ]);
+    // Issues stay in the kernel, so the message the caller sees names the budget.
+    expect(err.message).toBe(
+      `invalid params for capability "list_goals": params hold more than ${MAX_PARAMS_VALUES} values (array elements and object members)`,
+    );
   });
 
   it('leaves a call within the budget to the schema, which still names every bad element', async () => {
     const err = await refusal({ status: [0, 1, 2] });
     expect(err.issues).toHaveLength(3);
+    expect(err.message).toBe('invalid params for capability "list_goals"');
   });
 });
