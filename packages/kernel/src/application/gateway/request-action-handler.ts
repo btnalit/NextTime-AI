@@ -12,6 +12,7 @@ import { type GatekeeperClient, gateAbsenceOf } from '../../adapters/gatekeeper-
 import {
   findWorkerRunBySessionId,
   lockGoalStepForNewWork,
+  readHandleObserveExclusions,
   readTaskGoalStep,
   recordWorkerGateObservation,
 } from '../../application/task/index.js';
@@ -72,7 +73,6 @@ import {
   platformTrustOf,
   readExecuteAccess,
   readGatekeeperPlatformPolicy,
-  readObserveExclusions,
 } from '../gates/index.js';
 import type { WithTransactionFn } from './action-executor.js';
 import {
@@ -1343,7 +1343,8 @@ async function resolveRequesterScope(
  *
  *   - **handle**: any Handle in the workspace may observe a registered gate's published,
  *     not-platform-disabled observe-class Operation unless the workspace AgentPolicy gate cap or
- *     the calling member's own AgentProfile excludes the gate — and unless the member's role may
+ *     the calling member's own AgentProfile excludes the gate, or — a Worker of a Task that sets an
+ *     observation scope (S11 GO11) — the gate is outside that scope; and unless the member's role may
  *     not reach a Gatekeeper at all (R-35: an `auditor`'s agent never does, whatever its Handle
  *     carries; `assertRoleMayReachGatekeeper`, both channels). A Worker's call (worker mode routes
  *     observe-class tools here, leftover 98) is also recorded on its WorkerRun
@@ -1385,9 +1386,14 @@ export const observeOperationHandler: CapabilityHandler = async (
   const gatekeeper = await getGatekeeper(client, workspaceId, gatekeeperId);
   const platformPolicy = await readGatekeeperPlatformPolicy(client, workspaceId, gatekeeperId);
   const published = await getPublishedOperation(client, workspaceId, gatekeeperId, operationName);
+  // A Handle caller's exclusions include its session's Task scope (S11 GO11): a Worker of a scoped
+  // Task observes only the gates that Task names.
   const exclusions =
     channel === 'handle'
-      ? await readObserveExclusions(client, workspaceId, onBehalfOf)
+      ? await readHandleObserveExclusions(client, workspaceId, {
+          principalId: onBehalfOf,
+          sessionId: ctx?.claims?.sid,
+        })
       : NO_OBSERVE_EXCLUSIONS;
   const refusal = observeRefusal(exclusions, {
     gatekeeperId,
@@ -1518,10 +1524,15 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
     // (application/gates/observe-access.ts; D4 revoked 2026-09-27), the same predicate
     // `observe_operation` and `list_allowed_operations` use. Gate enabled, not platform-disabled
     // and published observe-class are already established above, so for a Handle caller only the
-    // AgentPolicy cap / AgentProfile exclusion can refuse here; a human caller (leftover 97) reads
-    // with no Grant and no agent exclusions — the same rule `observe_operation` applies.
+    // AgentPolicy cap / AgentProfile exclusion — or, for a Worker of a scoped Task, that Task's
+    // observation scope (S11 GO11) — can refuse here; a human caller (leftover 97) reads with no
+    // Grant and no agent exclusions — the same rule `observe_operation` applies.
     if (channel === 'handle') {
-      const refusal = observeRefusal(await readObserveExclusions(client, workspaceId, onBehalfOf), {
+      const exclusions = await readHandleObserveExclusions(client, workspaceId, {
+        principalId: onBehalfOf,
+        sessionId: sid,
+      });
+      const refusal = observeRefusal(exclusions, {
         gatekeeperId,
         gateEnabled: true,
         operationName,
@@ -1658,9 +1669,9 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
 
 /** `observeRefusal`'s answer as the error each condition has always surfaced as (404 for an
  *  unknown gate / unpublished Operation, 403 `operation_disabled` for the platform deny list, 403
- *  for an execute-class Operation) — plus the two exclusions, 403 naming the reason code the
+ *  for an execute-class Operation) — plus the exclusions, 403 naming the reason code the
  *  reachability read model reports for the same gate (`excluded_by_policy` / `excluded_by_profile`,
- *  capability-reachability.ts). */
+ *  capability-reachability.ts); a Task scope's is `excluded_by_policy` too (S11 GO11). */
 function observeRefusalError(
   refusal: ObserveRefusal,
   gatekeeperId: string,
@@ -1678,9 +1689,15 @@ function observeRefusalError(
         `observe_operation: ${quotedName(operationName)} on gatekeeper ${gatekeeperId} is ${refusal.mode}-class — delegate it through invoke_worker (a Worker requests it via request_action)`,
       );
     case 'excluded_by_policy':
-      return new ForbiddenError(
-        `excluded_by_policy: gatekeeper ${gatekeeperId} is left out by this workspace's AgentPolicy gate limit — a workspace owner changes it on Models & Quotas`,
-      );
+      // S11 GO11: same code for the Task's observation scope — the text says which policy applies,
+      // and that nobody lifts the Task's for this Task.
+      return refusal.policy === 'task_scope'
+        ? new ForbiddenError(
+            `excluded_by_policy: gatekeeper ${gatekeeperId} is outside the observation scope of Task ${refusal.taskId}, which this Worker runs — the scope is fixed when the Task is created`,
+          )
+        : new ForbiddenError(
+            `excluded_by_policy: gatekeeper ${gatekeeperId} is left out by this workspace's AgentPolicy gate limit — a workspace owner changes it on Models & Quotas`,
+          );
     case 'excluded_by_profile':
       return new ForbiddenError(
         `excluded_by_profile: gatekeeper ${gatekeeperId} is unticked in the calling member's own AgentProfile (My Agent)`,

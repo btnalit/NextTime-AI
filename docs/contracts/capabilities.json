@@ -16200,6 +16200,19 @@
             }
           ]
         },
+        "observeScope": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "onBehalfOf": {
           "type": "string"
         },
@@ -16763,7 +16776,8 @@
         "objectiveOutcome",
         "outputSchema",
         "rejectedOutput",
-        "reworkOf"
+        "reworkOf",
+        "observeScope"
       ],
       "type": "object"
     },
@@ -26783,6 +26797,19 @@
                   }
                 ]
               },
+              "observeScope": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "onBehalfOf": {
                 "type": "string"
               },
@@ -27346,7 +27373,8 @@
               "objectiveOutcome",
               "outputSchema",
               "rejectedOutput",
-              "reworkOf"
+              "reworkOf",
+              "observeScope"
             ],
             "type": "object"
           },

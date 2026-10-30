@@ -30,6 +30,7 @@ import {
 } from './handle-mint.js';
 import type { DeclaredGateRecord, MintWorkerRunHandleInput } from './handle-mint.js';
 import { failTaskAndReapWorkerRuns, reactToSupervisorStatus } from './lifecycle.js';
+import { narrowObserveScope, readTaskObserveScope } from './observe-scope.js';
 import { assertTaskQuotas, lockTaskQuotas } from './quota-check.js';
 import type { TaskRuntimeDeps } from './runtime.js';
 import { spawnWorkerRun } from './spawn.js';
@@ -159,6 +160,18 @@ export interface InvokeWorkerInput {
    * such as tests and `fake-invoke-worker.ts`), nothing is deduped — the behaviour before R-54.
    */
   readonly idempotencyKey?: string;
+}
+
+/**
+ * Kernel-internal choices about the Task `invokeWorkerCreate` creates — never a wire param: the
+ * capability handler (`invokeWorkerHandler`) never passes them, whatever `invoke_worker`'s params
+ * carry.
+ */
+export interface InvokeWorkerTaskOptions {
+  /** S11 GO11: the only Gatekeepers the Task's Workers may observe through (application/task/
+   *  observe-scope.ts). Narrowed by the caller's own Task scope when the caller is a Worker of a
+   *  scoped Task; omitted, the Task takes that scope as it is, or none. */
+  readonly observeScope?: readonly string[];
 }
 
 /** D-12: the prefix `invokeWorkerHandler` puts on a key the caller did not supply. Must match the
@@ -328,6 +341,7 @@ async function insertQueuedTaskWithQuotaCheck(
     readonly input: unknown;
     readonly idempotencyKey?: string;
   },
+  options: InvokeWorkerTaskOptions,
   deps: TaskRuntimeDeps,
 ): Promise<
   | { readonly kind: 'replay'; readonly task: TaskRow }
@@ -428,12 +442,21 @@ async function insertQueuedTaskWithQuotaCheck(
         fromCaller = allotted.fromCaller;
       }
 
+      // S11 GO11: a Worker of a scoped Task gives the Task it invokes that scope (narrowed by any
+      // asked for) — task 0010's `worker_runs` trigger refuses the spawn otherwise.
+      const observeScope = narrowObserveScope(
+        callerWorkerRun
+          ? await readTaskObserveScope(client, workspaceId, callerWorkerRun.taskId)
+          : null,
+        options.observeScope ?? null,
+      );
+
       const taskResult = await client.query(
         `insert into tasks (
            workspace_id, status, on_behalf_of, created_by_activity_id, worker_definition_id,
            worker_definition_version, input, token_budget, duration_limit_sec, idempotency_key,
-           goal_run_id, step_run_id, plan_revision
-         ) values ($1, 'queued', $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12)
+           goal_run_id, step_run_id, plan_revision, observe_scope
+         ) values ($1, 'queued', $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13::uuid[])
          returning ${TASK_ROW_COLUMNS}`,
         [
           workspaceId,
@@ -448,6 +471,7 @@ async function insertQueuedTaskWithQuotaCheck(
           goalStep?.goalRunId ?? null,
           goalStep?.stepRunId ?? null,
           goalStep?.planRevision ?? null,
+          observeScope,
         ],
       );
       const row = taskResult.rows[0];
@@ -498,6 +522,7 @@ export async function invokeWorkerCreate(
   caller: InvokeWorkerCallerCtx,
   input: InvokeWorkerInput,
   deps: TaskRuntimeDeps,
+  options: InvokeWorkerTaskOptions = {},
 ): Promise<InvokeWorkerResult> {
   const definition = await withWorkspace(
     deps.pool,
@@ -621,7 +646,7 @@ export async function invokeWorkerCreate(
   // review job 652a4abc) for the full "why one shared locked transaction, not per-call" rationale.
   // R-54: a call whose idempotency key matches an existing Task gets that Task back, never a
   // second Worker.
-  const inserted = await insertQueuedTaskWithQuotaCheck(workspaceId, caller, input, deps);
+  const inserted = await insertQueuedTaskWithQuotaCheck(workspaceId, caller, input, options, deps);
   if (inserted.kind === 'replay') {
     return replayExistingTask(deps, workspaceId, caller.principalId, inserted.task.id);
   }
@@ -704,8 +729,9 @@ export async function invokeWorker(
   caller: InvokeWorkerCallerCtx,
   input: InvokeWorkerInput,
   deps: TaskRuntimeDeps,
+  options: InvokeWorkerTaskOptions = {},
 ): Promise<InvokeWorkerResult> {
-  const created = await invokeWorkerCreate(workspaceId, caller, input, deps);
+  const created = await invokeWorkerCreate(workspaceId, caller, input, deps, options);
   if (!input.wait) return created;
   return waitForOutcome(
     deps,

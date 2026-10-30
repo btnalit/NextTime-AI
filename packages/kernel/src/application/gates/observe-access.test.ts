@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type { AgentPolicyRow } from '../../governance/agent-profile/index.js';
 import {
   NO_OBSERVE_EXCLUSIONS,
+  type ObserveExclusions,
   type ObserveTarget,
   observeExclusionsOf,
   observeGateExclusion,
+  observeGateRefusal,
   observeRefusal,
 } from './observe-access.js';
 import type { GatekeeperPlatformPolicy } from './store.js';
@@ -63,7 +65,11 @@ describe('observeRefusal', () => {
   });
 
   it('refuses in enforcement order: gate → platform deny list → published → observe-class → exclusions', () => {
-    const excluded = { policyAllowedGatekeepers: [], profileExcludedGatekeepers: [GATE] };
+    const excluded: ObserveExclusions = {
+      policyAllowedGatekeepers: [],
+      profileExcludedGatekeepers: [GATE],
+      taskScope: null,
+    };
     expect(
       observeRefusal(
         excluded,
@@ -147,5 +153,62 @@ describe('observeGateExclusion', () => {
     expect(observeGateExclusion(observeExclusionsOf(profile, policy(['other'])), GATE)).toBe(
       'excluded_by_policy',
     );
+  });
+});
+
+describe('the Task observation scope (S11 GO11)', () => {
+  const TASK = 'task-1';
+  function scoped(gatekeeperIds: readonly string[], base = NO_OBSERVE_EXCLUSIONS) {
+    return { ...base, taskScope: { taskId: TASK, gatekeeperIds } };
+  }
+
+  it('leaves out every gate it does not name as excluded_by_policy, naming the Task; [] means no gate at all', () => {
+    expect(observeRefusal(scoped(['other']), target())).toEqual({
+      reason: 'excluded_by_policy',
+      policy: 'task_scope',
+      taskId: TASK,
+    });
+    expect(observeRefusal(scoped([]), target())).toEqual({
+      reason: 'excluded_by_policy',
+      policy: 'task_scope',
+      taskId: TASK,
+    });
+    expect(observeRefusal(scoped([GATE, 'other']), target())).toBeUndefined();
+    // The member-level read models carry none.
+    expect(observeExclusionsOf(undefined, policy([])).taskScope).toBeNull();
+    expect(NO_OBSERVE_EXCLUSIONS.taskScope).toBeNull();
+  });
+
+  it('only narrows: a gate the scope names is still refused by the AgentPolicy cap or the member’s own exclusion', () => {
+    expect(
+      observeRefusal(scoped([GATE], observeExclusionsOf(undefined, policy(['other']))), target()),
+    ).toEqual({
+      reason: 'excluded_by_policy',
+      policy: 'agent_policy',
+    });
+    const excludedByMember: ObserveExclusions = {
+      policyAllowedGatekeepers: [],
+      profileExcludedGatekeepers: [GATE],
+      taskScope: { taskId: TASK, gatekeeperIds: [GATE] },
+    };
+    expect(observeRefusal(excludedByMember, target())).toEqual({ reason: 'excluded_by_profile' });
+  });
+
+  it('is reported before the AgentPolicy cap when both leave the gate out, and after the gate, platform, published and mode conditions', () => {
+    const both = scoped(['third'], observeExclusionsOf(undefined, policy(['other'])));
+    expect(observeGateRefusal(both, GATE)).toEqual({
+      reason: 'excluded_by_policy',
+      policy: 'task_scope',
+      taskId: TASK,
+    });
+    expect(observeGateExclusion(both, GATE)).toBe('excluded_by_policy');
+    // Gate, platform, published and mode still come first (unchanged error shapes).
+    expect(observeRefusal(scoped([]), target({ publishedMode: 'execute' }))).toEqual({
+      reason: 'not_observe_class',
+      mode: 'execute',
+    });
+    expect(observeRefusal(scoped([]), target({ gateEnabled: false }))).toEqual({
+      reason: 'gate_not_enabled',
+    });
   });
 });

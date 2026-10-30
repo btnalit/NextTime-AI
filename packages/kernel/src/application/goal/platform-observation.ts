@@ -197,7 +197,9 @@ export async function preparePlatformObservation(
   const gatekeeper = await getGatekeeper(client, ws, check.gatekeeperId);
   const platformPolicy = await readGatekeeperPlatformPolicy(client, ws, check.gatekeeperId);
   const published = await getPublishedOperation(client, ws, check.gatekeeperId, check.operation);
-  const refusal = observeRefusal(await readObserveExclusions(client, ws, requesterId), {
+  // The platform observes for the requester, not as a Worker of a Task: no Task scope (S11 GO11).
+  const exclusions = await readObserveExclusions(client, ws, requesterId, null);
+  const refusal = observeRefusal(exclusions, {
     gatekeeperId: check.gatekeeperId,
     gateEnabled: gatekeeper !== null,
     operationName: check.operation,
