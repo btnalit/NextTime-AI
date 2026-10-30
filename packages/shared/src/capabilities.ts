@@ -250,7 +250,7 @@ export const ATTEST_FACT_LINK_MAX_LENGTH = 2048;
 const gateObserveResultSchema = z
   .object({
     status: z.literal('ok'),
-    data: z.unknown(),
+    data: z.unknown().optional(),
     observedFactCount: z.number().int().nonnegative(),
     absent: GateAbsenceSchema.optional(),
   })
@@ -1671,8 +1671,8 @@ const epistemicCapabilities = [
     paramsSchema: z
       .object({
         summary: z.string(),
-        relatedFactIds: z.array(z.string().uuid()).optional(),
-        relatedTaskId: z.string().uuid().optional(),
+        relatedFactIds: z.array(z.guid()).optional(),
+        relatedTaskId: z.guid().optional(),
       })
       .strict(),
     resultSchema: z.object({ id, status: z.string(), turnId: z.string() }).strict(),
@@ -2128,7 +2128,7 @@ const governanceCapabilities = [
     mode: 'execute',
     channel: 'human',
     minRole: 'owner',
-    paramsSchema: z.object({ key: z.string(), value: z.unknown() }).strict(),
+    paramsSchema: z.object({ key: z.string(), value: z.unknown().optional() }).strict(),
     resultSchema: wire.QuotaWireSchema,
     description:
       'Set an I18 quota (invoke_worker depth, concurrency, token/time, daily cost) or the monthly evaluation budget (evaluation.monthly_cost_budget_usd, a number of USD, never null).',
@@ -2424,7 +2424,7 @@ const taskCapabilities = [
       .object({
         definitionId: id,
         version: z.number().int().positive(),
-        input: z.unknown(),
+        input: z.unknown().optional(),
         wait: z.boolean().optional(),
         // Seconds, not ms — matches the design doc's own prose ("默认 90 秒", §8.2). Clamped to
         // INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS (fix/invoke-worker-wait-and-outbox-prune) — a
@@ -2512,7 +2512,7 @@ const taskCapabilities = [
           // `toWireOperation` passes `record.operation` straight through untyped
           // (`listPublishedOperationsForGatekeepers`'s own row shape), so this is honestly what
           // the handler returns today, not a guaranteed-valid `Operation`.
-          operation: z.unknown(),
+          operation: z.unknown().optional(),
         })
         .strict(),
     ),
@@ -3852,7 +3852,7 @@ const platformCapabilities = [
     paramsSchema: z
       .object({
         connector: z.string().min(1).max(64).optional(),
-        workspaceId: z.string().uuid().optional(),
+        workspaceId: z.guid().optional(),
       })
       .strict(),
     resultSchema: listEnvelope(wire.SelfConnectionWireSchema),
@@ -3867,8 +3867,8 @@ const platformCapabilities = [
     scope: 'platform',
     paramsSchema: z
       .object({
-        workspaceId: z.string().uuid(),
-        gatekeeperId: z.string().uuid(),
+        workspaceId: z.guid(),
+        gatekeeperId: z.guid(),
         reason: z.string().trim().min(1).max(500).optional(),
       })
       .strict(),
@@ -3882,9 +3882,7 @@ const platformCapabilities = [
     mode: 'write',
     channel: 'human',
     scope: 'platform',
-    paramsSchema: z
-      .object({ workspaceId: z.string().uuid(), gatekeeperId: z.string().uuid() })
-      .strict(),
+    paramsSchema: z.object({ workspaceId: z.guid(), gatekeeperId: z.guid() }).strict(),
     resultSchema: wire.SelfConnectionWireSchema,
     description:
       'Lift the platform’s suspension of a self-connected gate: its published Operations run again from the next call, and the workspace’s entry-agent Handles are re-issued. Resuming one that is not suspended changes nothing.',
@@ -4142,7 +4140,7 @@ const modulesCapabilities = [
     mode: 'observe',
     channel: 'human',
     minRole: 'member',
-    paramsSchema: z.object({ segmentId: z.string().uuid() }).strict(),
+    paramsSchema: z.object({ segmentId: z.guid() }).strict(),
     resultSchema: wire.ChangeSegmentDetailWireSchema,
     description:
       'One applied ChangePlan segment with its items in order — a version of an ontology family, a Skill or a Worker (WorkerDefinition) published, or a revision of an Operation’s governance (its description, risk level, auto-approval, wait-for-decision, reads and writes — never what the gate runs): each item’s target, state before and after (for an Operation, the fields it changed), authority classification and who confirmed it, and whether what it wrote is still in effect now; and its latest verification (verify_change_segment), null when never verified. 404 change_segment_not_found.',
@@ -4153,7 +4151,7 @@ const modulesCapabilities = [
     mode: 'observe',
     channel: 'human',
     minRole: 'owner',
-    paramsSchema: z.object({ segmentId: z.string().uuid() }).strict(),
+    paramsSchema: z.object({ segmentId: z.guid() }).strict(),
     resultSchema: wire.ChangeRollbackPreviewWireSchema,
     description:
       'Dry run of roll_back_change_segment, writing nothing: per item (in reverse order) the state it would return to, the rollback’s own authority classification, the ontology types it takes out, and why it cannot be rolled back now (changed again since — roll that change back first —, gone, or a type name another family has taken); plus how many objects and active Facts use the types taken out (kept, never removed). 404 change_segment_not_found.',
@@ -4166,7 +4164,7 @@ const modulesCapabilities = [
     minRole: 'owner',
     paramsSchema: z
       .object({
-        segmentId: z.string().uuid(),
+        segmentId: z.guid(),
         /** The ordinals of the rollback items `preview_roll_back_change_segment` classifies
          *  `authority_widening`, each confirmed by the person rolling back (I-A4) — a person
          *  only: from a service Principal, 403. */
@@ -4183,7 +4181,7 @@ const modulesCapabilities = [
     mode: 'write',
     channel: 'human',
     minRole: 'owner',
-    paramsSchema: z.object({ segmentId: z.string().uuid() }).strict(),
+    paramsSchema: z.object({ segmentId: z.guid() }).strict(),
     resultSchema: wire.ChangeVerificationResultWireSchema,
     description:
       'Verify one applied ChangePlan segment now and record the result on it (S11 P1-E): whether what each item wrote is still in effect, and whether each system its source needs (a pack version’s requiredConnectors) is connected in this workspace — with each of its gates’ live health, probed through the gate’s own health endpoint, the probe get_gatekeeper makes; no Operation is run — and (S11 P1-F) whether each pack it builds on (requiredPacks) is still installed here at the version it needs (dependencies). Passes when every item is in effect, every needed system is connected with at least one healthy gate, every pack it builds on is installed at that version or later, and the source version is still in this deployment; the segment becomes verified or verification_failed. One change_segment.verify audit row. Refuses, probing and writing nothing: 409 change_segment_superseded when a later segment of the same source is in effect (details.supersededBy — verify that one), 409 change_segment_rolled_back, 429 change_verification_cooldown within 60 seconds of the segment’s last verification (details.retryAfterSeconds), 404 change_segment_not_found.',
@@ -4283,7 +4281,7 @@ const modulesCapabilities = [
 export const GOAL_LIST_DEFAULT_LIMIT = 50;
 export const GOAL_LIST_MAX_LIMIT = 200;
 
-const goalRunId = z.string().uuid();
+const goalRunId = z.guid();
 const goalNote = z.string().max(MAX_GOAL_NOTE_CHARS).optional();
 const GOAL_OPERATION_REFUSALS =
   ' Who cannot read the run gets 404 not_found (like get_goal); who can but may not do this, 403 forbidden.';
@@ -4296,7 +4294,7 @@ const goalCapabilities = [
     mode: 'observe',
     channel: 'handle',
     minRole: 'member',
-    paramsSchema: z.object({ goalRunId: z.string().uuid() }).strict(),
+    paramsSchema: z.object({ goalRunId: z.guid() }).strict(),
     resultSchema: wire.GoalDetailWireSchema,
     description:
       'Read one GoalRun: its status and budget with what it has spent, the plan revision in force (revision 1 until it is confirmed) with the suspected credentials in its parameters (step inputs, reconcile and observation params) redacted, its revision history, every StepRun with its attempts (the Tasks: each with why it failed, whether it redid one that ended without an accepted result, and the places its last refused output broke the step’s output schema), the output of its current attempt and its actions (the ActionRequests), its acceptance rounds, for each absence check (observe_absent) the platform’s look with the same call before the work it judges — before the first step, or for a check a revision added or re-called, before the run went on (absenceBaselines: pending, seen_present — only then can the check pass —, never_seen_present or unavailable, which pause the run for the requester, or superseded), and — while cancelling, or cancelled with cleanupPending — the Tasks and executing actions left. Visible to the workspace owner and the requester; for anyone else it is not found (404 not_found), exactly like an unknown id. A Handle reads as its obo, and only that principal’s own runs — an owner’s too.',
@@ -4310,7 +4308,7 @@ const goalCapabilities = [
     paramsSchema: z
       .object({
         status: z.array(GoalRunStatusSchema).min(1).optional(),
-        onBehalfOf: z.string().uuid().optional(),
+        onBehalfOf: z.guid().optional(),
         limit: z.number().int().positive().optional(),
         cursor: z.string().optional(),
       })
@@ -4324,9 +4322,7 @@ const goalCapabilities = [
     mode: 'observe',
     channel: 'handle',
     minRole: 'member',
-    paramsSchema: z
-      .object({ goalRunId: z.string().uuid(), revision: z.number().int().positive() })
-      .strict(),
+    paramsSchema: z.object({ goalRunId: z.guid(), revision: z.number().int().positive() }).strict(),
     resultSchema: wire.PlanRevisionWireSchema,
     description:
       'Read one revision of a GoalRun’s plan — the plan as that revision holds it (the suspected credentials in its parameters redacted), who made it and why, what it decided about the steps it removed, and its hints. Same visibility as get_goal; an unknown revision is 404 not_found too.',
@@ -4337,7 +4333,7 @@ const goalCapabilities = [
     mode: 'observe',
     channel: 'handle',
     minRole: 'member',
-    paramsSchema: z.object({ goalRunId: z.string().uuid() }).strict(),
+    paramsSchema: z.object({ goalRunId: z.guid() }).strict(),
     resultSchema: listEnvelope(wire.UnresolvedGoalActionWireSchema),
     description:
       'List the actions of a GoalRun whose outcome is unknown and that still need a person — a finding (did it take effect?) or, found not to have, a decision (run it again or change the plan) — with the platform’s own check of each where its step declared one. Every step counts, revised-away and cancelled ones included. Same visibility as get_goal.',
@@ -4493,7 +4489,7 @@ const goalCapabilities = [
     paramsSchema: z
       .object({
         goalRunId,
-        actionRequestId: z.string().uuid(),
+        actionRequestId: z.guid(),
         verdict: ActionRequestReconciliationSchema.optional(),
         reexecute: z.boolean().optional(),
         note: goalNote,
@@ -4531,7 +4527,7 @@ const EVAL_CASE_CONTENT_KEYS: readonly string[] = [
 // S10 E3-1b: what every case write checks of the content.
 const EVAL_CASE_CONTENT_RULE =
   'Whatever the suite’s state, 400 invalid_params for: a mechanism given without a mechanism partition or missing with one, a fixture rule naming a gate the suite does not have or an Operation it does not publish, an absent answer the Operation does not declare, a path that does not compile or (for an assertion) reads neither result nor calls, an invisible character, or a case larger than 64 KiB. No part of it may carry a credential (400 credentials_in_text) or a masked [redacted] mark (400 redacted_text_submitted).';
-const evalSuiteId = z.string().uuid();
+const evalSuiteId = z.guid();
 const evalSuiteVersion = z.number().int().positive();
 const evalReason = z.string().trim().min(1).max(500);
 
@@ -4567,7 +4563,7 @@ const evaluationCapabilities = [
     channel: 'human',
     minRole: 'member',
     actsForPerson: true,
-    paramsSchema: z.object({ suiteId: evalSuiteId, caseId: z.string().uuid() }).strict(),
+    paramsSchema: z.object({ suiteId: evalSuiteId, caseId: z.guid() }).strict(),
     resultSchema: wire.EvalCaseWireSchema,
     description:
       'Read one case of an evaluation suite whole — its input, fixture rules and assertions — whether the suite holds it now or an edit or a retirement took it out (retiredInVersion, retireReason, supersededBy). People only. 404 not_found for a suite or case that is not there.',
@@ -4583,7 +4579,7 @@ const evaluationCapabilities = [
       .object({
         name: z.string().trim().min(1).max(120),
         description: z.string().trim().max(2000).optional(),
-        workerDefinitionId: z.string().uuid(),
+        workerDefinitionId: z.guid(),
         workerDefinitionVersion: z.number().int().positive(),
       })
       .strict(),
@@ -4620,7 +4616,7 @@ const evaluationCapabilities = [
       .object({
         suiteId: evalSuiteId,
         suiteVersion: evalSuiteVersion,
-        gatekeeperId: z.string().uuid(),
+        gatekeeperId: z.guid(),
       })
       .strict(),
     resultSchema: wire.EvalSuiteWireSchema,
@@ -4637,7 +4633,7 @@ const evaluationCapabilities = [
       .object({
         suiteId: evalSuiteId,
         suiteVersion: evalSuiteVersion,
-        gatekeeperId: z.string().uuid(),
+        gatekeeperId: z.guid(),
       })
       .strict(),
     resultSchema: wire.EvalSuiteWireSchema,
@@ -4654,7 +4650,7 @@ const evaluationCapabilities = [
       .object({
         suiteId: evalSuiteId,
         suiteVersion: evalSuiteVersion,
-        gatekeeperId: z.string().uuid(),
+        gatekeeperId: z.guid(),
         reason: evalReason,
       })
       .strict(),
@@ -4691,7 +4687,7 @@ const evaluationCapabilities = [
       .object({
         suiteId: evalSuiteId,
         suiteVersion: evalSuiteVersion,
-        caseId: z.string().uuid(),
+        caseId: z.guid(),
         reason: evalReason,
         ...evalCaseContentFields,
       })
@@ -4711,7 +4707,7 @@ const evaluationCapabilities = [
       .object({
         suiteId: evalSuiteId,
         suiteVersion: evalSuiteVersion,
-        caseId: z.string().uuid(),
+        caseId: z.guid(),
         reason: evalReason,
       })
       .strict(),
@@ -4729,7 +4725,7 @@ const evaluationCapabilities = [
     minRole: 'builder',
     actsForPerson: true,
     paramsSchema: z
-      .object({ suiteId: evalSuiteId, suiteVersion: evalSuiteVersion, caseId: z.string().uuid() })
+      .object({ suiteId: evalSuiteId, suiteVersion: evalSuiteVersion, caseId: z.guid() })
       .strict(),
     resultSchema: wire.EvalRunWireSchema,
     description:
@@ -4742,7 +4738,7 @@ const evaluationCapabilities = [
     channel: 'human',
     minRole: 'member',
     actsForPerson: true,
-    paramsSchema: z.object({ runId: z.string().uuid() }).strict(),
+    paramsSchema: z.object({ runId: z.guid() }).strict(),
     resultSchema: wire.EvalRunWireSchema,
     description:
       'Read one evaluation run whole: the suite version and WorkerDefinition version it ran, and each trial — its status, verdict or error, each assertion’s outcome, the result its Worker reported, every fixture call it made with the rule that answered it, its cost and tokens, and its evaluation Task. People only. 404 not_found for a run that is not there — and for a draft evaluation’s stage you may not see (as get_draft_evaluation).',
@@ -4757,7 +4753,7 @@ const evaluationCapabilities = [
     paramsSchema: z
       .object({
         suiteId: evalSuiteId,
-        caseId: z.string().uuid().optional(),
+        caseId: z.guid().optional(),
         kind: wire.EvalRunKindSchema.optional(),
       })
       .strict(),
@@ -4789,7 +4785,7 @@ const evaluationCapabilities = [
     actsForPerson: true,
     paramsSchema: z
       .object({
-        skillId: z.string().uuid(),
+        skillId: z.guid(),
         version: z.number().int().positive(),
         // The draft as the caller read it (SkillSummaryWire.draftDigest).
         draftDigest: z.string().min(1),
@@ -4810,7 +4806,7 @@ const evaluationCapabilities = [
     channel: 'human',
     minRole: 'member',
     actsForPerson: true,
-    paramsSchema: z.object({ evaluationId: z.string().uuid() }).strict(),
+    paramsSchema: z.object({ evaluationId: z.guid() }).strict(),
     resultSchema: wire.DraftEvaluationWireSchema,
     description:
       'Read one draft evaluation whole: what it compares (suite version, WorkerDefinition version, the draft and the baseline, the other Skills, both contents), each stage — its state, its run (get_eval_run reads its trials), its estimate, each arm’s trials and cost, the case × arm matrix and what it measured — the verdict, why and which stage decided it, and every environment its trials ran in. People who may see the draft only — the draft’s proposer and the workspace’s draft reviewers (owner, builders), or anyone once that draft is published as it was evaluated: 404 not_found otherwise, as for an evaluation that is not there.',
@@ -4823,7 +4819,7 @@ const evaluationCapabilities = [
     minRole: 'member',
     actsForPerson: true,
     paramsSchema: z
-      .object({ skillId: z.string().uuid().optional(), suiteId: evalSuiteId.optional() })
+      .object({ skillId: z.guid().optional(), suiteId: evalSuiteId.optional() })
       .strict(),
     resultSchema: listEnvelope(wire.DraftEvaluationSummaryWireSchema),
     description:
@@ -4836,7 +4832,7 @@ const evaluationCapabilities = [
     channel: 'human',
     minRole: 'builder',
     actsForPerson: true,
-    paramsSchema: z.object({ evaluationId: z.string().uuid() }).strict(),
+    paramsSchema: z.object({ evaluationId: z.guid() }).strict(),
     resultSchema: wire.DraftEvaluationWireSchema,
     description:
       'Cancel a running draft evaluation: its trials not started yet are cancelled, its running evaluation Tasks are terminated, no later stage starts, and it ends cancelled, with no verdict. What its trials already measured stays readable. One that has ended is 409 conflict; one that is not there or whose draft the caller may not see is 404 not_found. People only.',

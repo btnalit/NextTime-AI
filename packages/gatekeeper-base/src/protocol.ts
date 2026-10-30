@@ -53,7 +53,7 @@ export const ObserveRequestSchema = z.object({
 export type ObserveRequest = z.infer<typeof ObserveRequestSchema>;
 
 export const ObserveResponseSchema = z.object({
-  data: z.unknown(),
+  data: z.unknown().optional(),
   observedFacts: z.array(ObservedFactCandidateSchema).optional(),
   /** S11 「门确认不存在」: the target answered with what the Operation declares means "does not
    *  exist" (`GatekeeperBase`'s `declaredAbsence`) — on the envelope only, never inside `data`;
@@ -112,7 +112,7 @@ export const ApplyLookupRequestSchema = ApplyRequestSchema.omit({ operationDiges
 export type ApplyLookupRequest = z.infer<typeof ApplyLookupRequestSchema>;
 
 export const ApplyResponseSchema = z.object({
-  data: z.unknown(),
+  data: z.unknown().optional(),
   observedFacts: z.array(ObservedFactCandidateSchema).optional(),
   /** `true` when this response was served from the idempotency store rather than freshly
    *  executed (a repeat `apply` for the same `actionRequestId`). */
@@ -136,7 +136,7 @@ export const RevertRequestSchema = z.object({
 export type RevertRequest = z.infer<typeof RevertRequestSchema>;
 
 export const RevertResponseSchema = z.object({
-  data: z.unknown(),
+  data: z.unknown().optional(),
 });
 export type RevertResponse = z.infer<typeof RevertResponseSchema>;
 

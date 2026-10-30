@@ -21,7 +21,7 @@ import {
   parseEvalCallCountPath,
   parseEvalOutputFieldPath,
 } from '@nexttime/shared';
-import { type FieldErrors, fieldErrorsFromIssues } from './catalog.js';
+import { type FieldErrors, fieldErrorsFromIssues, issueMessage } from './catalog.js';
 import type { ErrorOverrides } from './errors.js';
 import { shownName, writeErrors } from './evaluation.js';
 import { actionKindTagText } from './format.js';
@@ -501,10 +501,12 @@ function leafOf(
   leaf: { readonly path: string; readonly op: PredicateOp; readonly value: unknown },
   at: string,
   errors: Record<string, string>,
+  t: Translate,
 ): Predicate | null {
   const parsed = PredicateSchema.safeParse(leaf);
   if (parsed.success) return parsed.data;
-  errors[at] = parsed.error.issues[0]?.message ?? '';
+  const issue = parsed.error.issues[0];
+  errors[at] = issue === undefined ? '' : issueMessage(issue, t);
   return null;
 }
 
@@ -522,7 +524,7 @@ function whenOf(
       if (rule.whenOp === 'exists') return { path, op: 'exists' };
       const at = `${rule.uid}.whenValue`;
       const value = comparedValue(rule.whenValueKind, rule.whenValueText, at, errors, t);
-      return value === undefined ? null : leafOf({ path, op: rule.whenOp, value }, at, errors);
+      return value === undefined ? null : leafOf({ path, op: rule.whenOp, value }, at, errors, t);
     }
     case 'predicate':
       return predicateOf(rule.whenPredicate, `${rule.uid}.when`, errors, t) ?? null;
@@ -588,7 +590,7 @@ function expectOf(
       const at = `${assertion.uid}.value`;
       const value = comparedValue(assertion.valueKind, assertion.valueText, at, errors, t);
       if (field === '' || value === undefined) return null;
-      return leafOf({ path: evalOutputFieldPath(field), op: 'eq', value }, at, errors);
+      return leafOf({ path: evalOutputFieldPath(field), op: 'eq', value }, at, errors, t);
     }
     case 'called':
     case 'not_called':

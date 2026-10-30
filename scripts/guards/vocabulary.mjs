@@ -18,20 +18,6 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { ignoreOverride, zodToJsonSchema } from 'zod-to-json-schema';
-
-// S11 GO5e: a schema that contains itself (a predicate's `all` / `any` / `not`, an output schema's
-// `properties` — `z.lazy` in @nexttime/shared) is written as `{}` the second time, exactly what the
-// library writes with `$refStrategy: 'none'`, without the warning it logs for every occurrence
-// (about a hundred lines per run since the goal plan schemas). Same test the library makes: the
-// schema is already open on the path being written.
-function recursionAsAny(_def, refs, seen) {
-  return seen !== undefined &&
-    seen.path.length < refs.currentPath.length &&
-    seen.path.every((segment, index) => refs.currentPath[index] === segment)
-    ? {}
-    : ignoreOverride;
-}
 
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 
@@ -259,7 +245,7 @@ export function isSnakeCaseViolation(key) {
   return SNAKE_CASE_PATTERN.test(key);
 }
 
-/** Walks a `zod-to-json-schema` JSON Schema tree, collecting every object-`properties` key
+/** Walks a JSON Schema tree (`toJsonSchema`, @nexttime/shared), collecting every object-`properties` key
  *  anywhere in it (nested objects, array items, union branches). */
 export function collectPropertyKeys(node, out = []) {
   if (!node || typeof node !== 'object') return out;
@@ -284,7 +270,6 @@ export function collectPropertyKeys(node, out = []) {
 }
 
 function checkSnakeCaseKeys(registry) {
-  const jsonSchemaOptions = { $refStrategy: 'none', override: recursionAsAny };
   for (const capability of registry.CAPABILITY_REGISTRY) {
     const schemas = [
       ['paramsSchema', capability.paramsSchema],
@@ -292,7 +277,7 @@ function checkSnakeCaseKeys(registry) {
     ];
     for (const [field, schema] of schemas) {
       if (!schema) continue;
-      const keys = collectPropertyKeys(zodToJsonSchema(schema, jsonSchemaOptions));
+      const keys = collectPropertyKeys(registry.toJsonSchema(schema));
       for (const key of keys) {
         if (isSnakeCaseViolation(key)) {
           fail(
@@ -331,14 +316,13 @@ export function isListShapedName(name) {
 }
 
 function checkListEnvelopeVocabulary(registry) {
-  const jsonSchemaOptions = { $refStrategy: 'none', override: recursionAsAny };
   for (const capability of registry.CAPABILITY_REGISTRY) {
     if (!isListShapedName(capability.name)) continue;
     if (!capability.resultSchema) {
       fail('(e) listEnvelope', `${capability.name}: list-shaped name but no resultSchema at all`);
       continue;
     }
-    const jsonSchema = zodToJsonSchema(capability.resultSchema, jsonSchemaOptions);
+    const jsonSchema = registry.toJsonSchema(capability.resultSchema);
     if (!isListEnvelopeShape(jsonSchema)) {
       fail(
         '(e) listEnvelope',

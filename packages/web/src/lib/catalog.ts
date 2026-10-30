@@ -65,15 +65,25 @@ import { OPS_RUNNER_WORKER_TEMPLATE } from './templates/ops-runner.js';
 export type FieldErrors = Readonly<Record<string, string>>;
 
 interface IssueLike {
-  readonly path: readonly (string | number)[];
+  readonly path: readonly PropertyKey[];
   readonly message: string;
   readonly code?: string;
-  readonly type?: string;
+  /** What a size issue measured: `string`, `array`, `number`, ... */
+  readonly origin?: string;
   readonly minimum?: unknown;
   readonly maximum?: unknown;
-  readonly received?: unknown;
-  readonly validation?: unknown;
-  readonly options?: readonly unknown[];
+  /** Present only when the parse was asked to report it. */
+  readonly input?: unknown;
+  readonly format?: string;
+  readonly values?: readonly unknown[];
+}
+
+/** An `invalid_type` issue for a value that is not there at all. Zod names what it received
+ *  only in the message unless the parse reported its input. */
+function isMissing(issue: IssueLike): boolean {
+  return 'input' in issue
+    ? issue.input === undefined || issue.input === null
+    : /received (undefined|null)$/.test(issue.message);
 }
 
 /** The shared schemas' only `custom` issues are a Worker definition's `egressDeny` entries
@@ -109,7 +119,7 @@ function customIssueMessage(message: string, t: Translate): string {
 }
 
 /** One schema issue as a sentence in the viewer's language (console audit P1-1 follow-up): the
- *  shared schemas carry zod's default English ("String must contain at least 1 character(s)"),
+ *  shared schemas carry zod's default English ("Too small: expected string to have >=1 characters"),
  *  which an editor field must not show as is. A rule-specific refinement keeps its own words
  *  after a Chinese lead, since they name what exactly was refused. */
 export function issueMessage(issue: IssueLike, t: Translate): string {
@@ -123,29 +133,27 @@ export function issueMessage(issue: IssueLike, t: Translate): string {
       : null;
   switch (issue.code) {
     case 'invalid_type':
-      return issue.received === 'undefined' || issue.received === 'null'
-        ? t('必填', 'Required')
-        : t('格式不对', 'Wrong format');
+      return isMissing(issue) ? t('必填', 'Required') : t('格式不对', 'Wrong format');
     case 'too_small':
-      if (issue.type === 'string') {
+      if (issue.origin === 'string') {
         return min !== null && min <= 1
           ? t('必填', 'Required')
           : t(`至少 ${min} 个字符`, `At least ${min} characters`);
       }
-      if (issue.type === 'array') {
+      if (issue.origin === 'array') {
         return t(`至少 ${min} 项`, `At least ${min} items`);
       }
       return t(`不能小于 ${min}`, `Must be at least ${min}`);
     case 'too_big':
-      if (issue.type === 'string') return t(`最多 ${max} 个字符`, `At most ${max} characters`);
-      if (issue.type === 'array') return t(`最多 ${max} 项`, `At most ${max} items`);
+      if (issue.origin === 'string') return t(`最多 ${max} 个字符`, `At most ${max} characters`);
+      if (issue.origin === 'array') return t(`最多 ${max} 项`, `At most ${max} items`);
       return t(`不能大于 ${max}`, `Must be at most ${max}`);
-    case 'invalid_enum_value': {
-      const options = (issue.options ?? []).map(String).join('、');
+    case 'invalid_value': {
+      const options = (issue.values ?? []).map(String).join('、');
       return t(`只能是：${options}`, `Must be one of: ${options}`);
     }
-    case 'invalid_string':
-      return issue.validation === 'url'
+    case 'invalid_format':
+      return issue.format === 'url'
         ? t('不是合法的网址', 'Not a valid URL')
         : t('格式不对', 'Wrong format');
     case 'custom':

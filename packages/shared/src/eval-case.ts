@@ -95,7 +95,7 @@ export type EvalFixtureAnswerKind = EvalFixtureAnswer['kind'];
  *  (its paths read the params object: `container`, `filters.name`). */
 export const EvalFixtureRuleSchema = z
   .object({
-    gatekeeperId: z.string().uuid(),
+    gatekeeperId: z.guid(),
     operation: z.string().min(1).max(OPERATION_NAME_MAX),
     when: PredicateSchema.optional(),
     answer: EvalFixtureAnswerSchema,

@@ -252,7 +252,7 @@ const MAX_SCHEMA_DOCUMENT_DEPTH = OUTPUT_SCHEMA_MAX_DEPTH * 2 + 4;
 
 /** A step's output schema (`PlanStep.outputSchema`): an {@link OutputSchema} whose root is an
  *  object, within the bounds of the module comment. */
-export const StepOutputSchemaSchema: z.ZodType<OutputSchema, z.ZodTypeDef, unknown> = z
+export const StepOutputSchemaSchema: z.ZodType<OutputSchema, unknown> = z
   .unknown()
   .superRefine((value, ctx) => {
     if (nestingDepth(value, MAX_SCHEMA_DOCUMENT_DEPTH) > MAX_SCHEMA_DOCUMENT_DEPTH) {

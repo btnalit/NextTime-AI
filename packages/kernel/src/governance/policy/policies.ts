@@ -218,7 +218,7 @@ export async function listPolicies(
 // rule is workspace-wide and may only require approval (`setPolicy`).
 export const SetPolicyPayloadSchema = z
   .object({
-    gatekeeperId: z.string().uuid().optional(),
+    gatekeeperId: z.guid().optional(),
     actionKindTag: z.string().min(1),
     blastRadius: BlastRadiusSchema.optional(),
     autoApprove: z.boolean(),

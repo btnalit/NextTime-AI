@@ -38,7 +38,7 @@ export const CSRF_HEADER_VALUE = 'nexttime';
 export const WORKSPACE_HEADER = 'x-workspace-id';
 export const WORKSPACE_COOKIE = 'nexttime_workspace';
 
-const uuidClaim = z.string().uuid();
+const uuidClaim = z.guid();
 
 export const ConsoleSessionClaimsSchema = z
   .object({

@@ -30,6 +30,7 @@ export * from './predicate.js';
 export * from './draft-evaluation.js';
 export * from './eval-case.js';
 export * from './output-schema.js';
+export * from './json-schema.js';
 export * from './outcome-basis.js';
 export * from './skill-stats.js';
 export * from './goal-plan.js';

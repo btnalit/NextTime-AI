@@ -63,7 +63,7 @@ function buildGateTool(
     label,
     description: gateToolDescription(op, label),
     // An Operation's params_schema is already a JSON Schema object (imported from OpenAPI/MCP/
-    // hand-written YAML, `@nexttime/shared`'s OperationSchema) — no zod-to-json-schema
+    // hand-written YAML, `@nexttime/shared`'s OperationSchema) — no Zod-to-JSON-Schema
     // conversion, only the W7 object-schema normalization (tool-schema.ts `gateToolParameters`).
     parameters: gateToolParameters(op.operation.params_schema) as ToolDefinition['parameters'],
     // Leftover 98: an observe-class Operation calls `observe_operation` (as entry / interactive

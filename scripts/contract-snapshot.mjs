@@ -20,11 +20,11 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ignoreOverride, zodToJsonSchema } from 'zod-to-json-schema';
 import {
   CAPABILITY_REGISTRY,
   PlatformEventSchema,
   capabilityHasSideEffects,
+  toJsonSchema,
 } from '../packages/shared/dist/index.js';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -34,7 +34,7 @@ const EVENTS_FILE = path.join(CONTRACTS_DIR, 'events.json');
 
 /** Recursively sorts every plain object's own keys (alphabetically) so the JSON output never
  *  drifts on insertion order alone — arrays keep their own order (semantically meaningful:
- *  `required`, `enum`, `anyOf`, ...). `zod-to-json-schema`'s output is plain JSON-shaped data
+ *  `required`, `enum`, `anyOf`, ...). `toJsonSchema`'s output is plain JSON-shaped data
  *  (objects/arrays/primitives) — no need to special-case any other value kind. */
 function sortKeysDeep(value) {
   if (Array.isArray(value)) return value.map(sortKeysDeep);
@@ -46,20 +46,11 @@ function sortKeysDeep(value) {
   return value;
 }
 
-// S11 GO5e: a schema that contains itself (a predicate's `all` / `any` / `not`, an output schema's
-// `properties` — `z.lazy` in @nexttime/shared) is written as `{}` the second time, exactly what the
-// library writes with `$refStrategy: 'none'`, without the warning it logs for every occurrence
-// (about a hundred lines per run since the goal plan schemas). Same test the library makes: the
-// schema is already open on the path being written.
-function recursionAsAny(_def, refs, seen) {
-  return seen !== undefined &&
-    seen.path.length < refs.currentPath.length &&
-    seen.path.every((segment, index) => refs.currentPath[index] === segment)
-    ? {}
-    : ignoreOverride;
+// `toJsonSchema` (@nexttime/shared) is the conversion the MCP catalog and pi tools use too; the
+// snapshot also names the draft each document is written in.
+function snapshotSchema(schema) {
+  return { $schema: 'http://json-schema.org/draft-07/schema#', ...toJsonSchema(schema) };
 }
-
-const JSON_SCHEMA_OPTIONS = { $refStrategy: 'none', override: recursionAsAny };
 
 function buildCapabilitiesSnapshot() {
   const entries = CAPABILITY_REGISTRY.map((capability) => ({
@@ -73,19 +64,17 @@ function buildCapabilitiesSnapshot() {
     ...(capability.minRole !== undefined ? { minRole: capability.minRole } : {}),
     // S11 GO5c: made only for a person (dispatch refuses any other Principal kind).
     ...(capability.actsForPerson ? { actsForPerson: true } : {}),
-    params: zodToJsonSchema(capability.paramsSchema, JSON_SCHEMA_OPTIONS),
+    params: snapshotSchema(capability.paramsSchema),
     // Every registry entry carries one as of S3.7 (packages/shared/src/capabilities.ts's own
     // module doc comment) — `null` is defensive only, never expected in practice.
-    result: capability.resultSchema
-      ? zodToJsonSchema(capability.resultSchema, JSON_SCHEMA_OPTIONS)
-      : null,
+    result: capability.resultSchema ? snapshotSchema(capability.resultSchema) : null,
   }));
   entries.sort((a, b) => a.name.localeCompare(b.name));
   return sortKeysDeep(entries);
 }
 
 function buildEventsSnapshot() {
-  return sortKeysDeep(zodToJsonSchema(PlatformEventSchema, JSON_SCHEMA_OPTIONS));
+  return sortKeysDeep(snapshotSchema(PlatformEventSchema));
 }
 
 function renderJson(value) {

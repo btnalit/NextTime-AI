@@ -160,7 +160,7 @@ export function usesPlanTemplateFields(content: {
  *  {@link OUTPUT_MAX_CHARS} characters, like a step's output. */
 export const GoalFromProcedureSchema = z
   .object({
-    procedureId: z.string().uuid(),
+    procedureId: z.guid(),
     version: z.number().int().positive().optional(),
     parameters: z
       .record(z.string(), z.unknown())

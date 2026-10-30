@@ -34,9 +34,9 @@ import { enqueue } from '../../substrate/outbox/index.js';
  */
 export const LlmUsageRecordSchema = z
   .object({
-    workspaceId: z.string().uuid(),
-    sessionId: z.string().uuid(),
-    jti: z.string().uuid(),
+    workspaceId: z.guid(),
+    sessionId: z.guid(),
+    jti: z.guid(),
     provider: z.string().min(1),
     model: z.string().min(1),
     inputTokens: z.number().int().nonnegative(),
@@ -56,7 +56,7 @@ export const LlmUsageRecordSchema = z
      *  identity (`llm_usage.request_id`, migrations/llm-usage/0002). Absent from an llm-proxy that
      *  predates R-67: such a record falls back to the `(workspace_id, jti, started_at)` key, see
      *  `recordUsage`. */
-    requestId: z.string().uuid().optional(),
+    requestId: z.guid().optional(),
   })
   .strict();
 export type LlmUsageRecord = z.infer<typeof LlmUsageRecordSchema>;

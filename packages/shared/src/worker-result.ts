@@ -20,7 +20,7 @@ import { ProposeSkillContentSchema } from './skill.js';
  *     sees or controls its own session file's path).
  */
 
-const id = z.string().uuid();
+const id = z.guid();
 const jsonRecord = z.record(z.string(), z.unknown());
 
 /**

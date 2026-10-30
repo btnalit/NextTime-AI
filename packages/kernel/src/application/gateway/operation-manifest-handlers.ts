@@ -74,7 +74,7 @@ import { type CapabilityHandler, publishActorOf } from './capability-handler.js'
 
 const ProposeOperationParamsSchema = z.object({
   gatekeeperId: z.string().min(1),
-  operation: z.unknown(),
+  operation: z.unknown().optional(),
 });
 
 export const proposeOperationHandler: CapabilityHandler = async (

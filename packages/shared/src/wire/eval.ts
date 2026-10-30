@@ -226,7 +226,7 @@ export type EvalCaseSummaryWire = z.infer<typeof EvalCaseSummaryWireSchema>;
  *  shows free text. */
 export const EvalCaseWireSchema = EvalCaseSummaryWireSchema.extend({
   suiteId: z.string(),
-  input: z.unknown(),
+  input: z.unknown().optional(),
   fixtures: z.array(EvalFixtureRuleSchema),
   assertions: z.array(EvalAssertionSchema),
   /** `sha256:` over the case's content and fixed fields — the same in every read of the row. */
@@ -356,7 +356,7 @@ export const EvalTrialWireSchema = z
     assertions: z.array(EvalAssertionResultWireSchema),
     /** The result the Worker reported (its `summary`, `output`, …), as kept — `null` until it
      *  reports, or when it never did. */
-    result: z.unknown(),
+    result: z.unknown().optional(),
     calls: z.array(EvalTrialCallWireSchema),
     /** What its model calls cost, where the model has a price; `null` while none is known. */
     costUsd: z.number().nullable(),
