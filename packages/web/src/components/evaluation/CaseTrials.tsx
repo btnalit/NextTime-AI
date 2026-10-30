@@ -415,6 +415,7 @@ function TrialView({
         {isOwner && trial.taskId !== null ? (
           <RouteLink
             href={hrefs.task(trial.taskId)}
+            className="link-inline"
             whenRefused="hide"
             testId="eval-case-trial-task"
           >

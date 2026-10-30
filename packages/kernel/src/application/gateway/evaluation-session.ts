@@ -124,8 +124,8 @@ async function fixtureCall(
 }
 
 /**
- * Runs one call of an evaluation session. `ownHandler` is the capability's own handler, used for
- * `get_task` once the id is the session's own Task.
+ * Runs one call of an evaluation session. `null` means the capability's own handler answers: only
+ * `get_task`, once the id is the session's own Task (dispatch.ts calls it, as for any call).
  */
 export async function runEvaluationSessionCall(
   client: PoolClient,
@@ -134,8 +134,7 @@ export async function runEvaluationSessionCall(
   name: string,
   params: unknown,
   ctx: Parameters<CapabilityHandler>[3],
-  ownHandler: CapabilityHandler,
-): Promise<CapabilityHandlerResult> {
+): Promise<CapabilityHandlerResult | null> {
   if (!EVALUATION_SESSION_CAPABILITIES.has(name)) {
     throw new ForbiddenError(
       `evaluation_run_capability_refused: an evaluation run's Worker reads its own Task, its tools and its fixtures and reports its result — "${name}" is not one of those`,
@@ -145,7 +144,7 @@ export async function runEvaluationSessionCall(
     case 'get_task': {
       const { taskId } = params as { taskId: string };
       if (taskId !== session.taskId) throw new TaskNotFoundError(workspaceId, taskId);
-      return ownHandler(client, workspaceId, params, ctx);
+      return null;
     }
     case 'list_allowed_operations':
       return { result: await listFixtureOperations(client, workspaceId, session) };

@@ -601,7 +601,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         call(trial.worker, 'observe_operation', {
           gatekeeperId: gate,
           operation: 'hosts.get',
-          params: { host: 'web-1', apiToken: 'tok-123456789' },
+          params: { host: 'web-1', apiToken: 'hunter2' },
         }),
       ).resolves.toEqual({
         status: 'ok',
@@ -681,7 +681,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       // The recorded params keep a secret-named field's value out.
       expect(calls[0]?.params.host).toBe('web-1');
-      expect(JSON.stringify(calls[0]?.params)).not.toContain('tok-123456789');
+      expect(JSON.stringify(calls[0]?.params)).not.toContain('hunter2');
 
       // Audited as evaluation calls — none as a call a gate answered or refused.
       const fixtureAudits = await asOwnerRole((client) =>

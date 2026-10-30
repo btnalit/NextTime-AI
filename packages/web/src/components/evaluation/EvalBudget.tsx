@@ -53,7 +53,7 @@ export function RaiseBudgetHint({ isOwner }: { readonly isOwner: boolean }) {
   return isOwner ? (
     <span>
       {t('可以在', 'Raise it under ')}
-      <RouteLink href={hrefs.models()} testId="eval-budget-raise">
+      <RouteLink href={hrefs.models()} className="link-inline" testId="eval-budget-raise">
         {t('「模型与配额」', 'Models')}
       </RouteLink>
       {t('调高「评测月度预算」。', ' (Monthly evaluation budget).')}

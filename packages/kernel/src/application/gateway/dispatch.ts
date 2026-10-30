@@ -778,7 +778,9 @@ export async function dispatchCapability(
           ? { consoleUser: { platformRole: caller.user.platformRole } }
           : {}),
       };
-      const result = evaluation
+      // An evaluation session's call is answered by application/eval-session, except `get_task`
+      // of its own Task, which the capability's own handler answers like any other call.
+      const answered = evaluation
         ? await runEvaluationSessionCall(
             client,
             workspaceId,
@@ -786,9 +788,9 @@ export async function dispatchCapability(
             name,
             parsed.data,
             handlerCtx,
-            handler,
           )
-        : await handler(client, workspaceId, parsed.data, handlerCtx);
+        : null;
+      const result = answered ?? (await handler(client, workspaceId, parsed.data, handlerCtx));
       // S10 E3-1c (I-E4): nothing a Handle gets back carries evaluation content — a suite's
       // canary or a verbatim run of a holdout case. Checked inside the call's own transaction, so
       // what a refused call wrote is rolled back as well as its result withheld (a result produced
