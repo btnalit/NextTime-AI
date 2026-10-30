@@ -140,7 +140,9 @@ export const resolveRefsHandler: CapabilityHandler = async (client, workspaceId,
   // workerDefinition — latest version per id (a WorkerDefinition id names a family across
   // versions, `application/worker/definitions.ts`); any status, not published-only — an id
   // referenced from somewhere the caller can already see (a Task, an audit row) should resolve to
-  // a name even if the definition was since deprecated.
+  // a name even if the definition was since deprecated. Of the versions the caller sees (legacy
+  // 492, I16): another principal's draft is not there for them, so its name never shows and a
+  // family only drafted by someone else does not resolve.
   // -----------------------------------------------------------------------------------------
   const definitionsResult = await client.query<{
     id: string;
@@ -149,8 +151,9 @@ export const resolveRefsHandler: CapabilityHandler = async (client, workspaceId,
   }>(
     `select distinct on (id) id, kind, definition from worker_definitions
      where workspace_id = $1 and id = any($2::uuid[])
+       and (status <> 'draft' or proposed_by = $3)
      order by id, version desc`,
-    [workspaceId, uniqueIds],
+    [workspaceId, uniqueIds, ctx.principal.id],
   );
   for (const row of definitionsResult.rows) {
     const name = row.definition.name;

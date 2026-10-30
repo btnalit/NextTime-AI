@@ -1935,6 +1935,39 @@ html:has(.md-layout--wide .md-detail-pane .overlay-actions),
   color: var(--text-3);
 }
 
+/* Legacy 491 (UX acceptance of #792, P3-1): 「被拒绝的草稿」 under a catalog list — no list indent
+   in the narrow list column, a rule between rejections, and who rejected it and when on a line of
+   their own so the time never drops to a line by itself. */
+.rejected-drafts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.rejected-drafts > li {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--border);
+}
+
+.rejected-drafts > li:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.rejected-drafts-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  white-space: nowrap;
+}
+
 /* UX acceptance of #747 (P2-1): the capabilities an entry version change adds and takes out. The
  * `+` / `−` mark and the group heading carry the meaning; the edge colour only helps scanning. */
 .capability-change-list {

@@ -314,7 +314,7 @@ export async function createGoalRun(
     written = made.plan;
     source = made.source;
   }
-  const plan = await validatePlan(client, workspaceId, written);
+  const plan = await validatePlan(client, workspaceId, written, input.requesterId);
   const hints = planHints(plan);
   if (input.idempotencyKey !== undefined) {
     await client.query('SAVEPOINT create_goal_run_insert');
@@ -481,7 +481,7 @@ export async function confirmGoalRun(
   if (stored?.status !== 'proposed') {
     throw new GoalRunStateError(`goal run ${goal.id} has no proposed revision 1`);
   }
-  const plan = await validatePlan(client, workspaceId, stored.plan);
+  const plan = await validatePlan(client, workspaceId, stored.plan, goal.onBehalfOf);
 
   await client.query(
     `update plan_revisions set status = 'accepted', decided_by = $3, decided_at = now()

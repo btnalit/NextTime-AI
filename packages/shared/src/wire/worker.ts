@@ -191,3 +191,30 @@ export const RejectDraftResultWireSchema = z
   })
   .strict();
 export type RejectDraftResultWire = z.infer<typeof RejectDraftResultWireSchema>;
+
+/** One rejection of a draft the caller proposed (legacy 491, `list_draft_rejections`): what was
+ *  rejected — the family `id`, the `version` and the draft's `name` (`null` for a rejection made
+ *  before the name was recorded) — who rejected it, when, and why. `reason` is the reviewer's text
+ *  as shown (suspected secrets masked). */
+export const DraftRejectionWireSchema = z
+  .object({
+    kind: RejectableDraftKindSchema,
+    id: z.string(),
+    version: z.number().int().positive(),
+    name: z.string().nullable(),
+    reason: z.string(),
+    rejectedBy: z.string(),
+    rejectedAt: z.string(),
+  })
+  .strict();
+export type DraftRejectionWire = z.infer<typeof DraftRejectionWireSchema>;
+
+/** `list_draft_rejections`'s result: the caller's own, newest first, at most
+ *  {@link DRAFT_REJECTIONS_LIMIT}. */
+export const ListDraftRejectionsResultWireSchema = z
+  .object({ items: z.array(DraftRejectionWireSchema) })
+  .strict();
+export type ListDraftRejectionsResultWire = z.infer<typeof ListDraftRejectionsResultWireSchema>;
+
+/** How many of a proposer's rejections `list_draft_rejections` returns, newest first. */
+export const DRAFT_REJECTIONS_LIMIT = 50;

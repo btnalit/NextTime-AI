@@ -124,3 +124,5 @@ export type {
   RejectableDraftRef,
   RejectedDraft,
 } from './draft-lifecycle.js';
+export { listDraftRejections, recordDraftRejection } from './draft-rejections.js';
+export type { DraftRejectionInput, DraftRejectionRow } from './draft-rejections.js';

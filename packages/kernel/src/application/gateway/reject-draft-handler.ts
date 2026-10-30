@@ -15,16 +15,18 @@ interface RejectDraftParams {
   readonly id: string;
   readonly version: number;
   readonly draftDigest: string;
+  readonly reason: string;
 }
 
 export const rejectDraftHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
-  const { kind, id, version, draftDigest } = params as RejectDraftParams;
+  const { kind, id, version, draftDigest, reason } = params as RejectDraftParams;
   const rejected = await rejectDraft(
     client,
     workspaceId,
     publishActorOf('reject_draft', ctx),
     { kind, id, version },
     draftDigest,
+    reason,
   );
   return {
     result: { kind: rejected.kind, id: rejected.id, version: rejected.version },
