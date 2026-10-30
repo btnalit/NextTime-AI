@@ -1,10 +1,12 @@
-import type {
-  EvalFixtureGateLiveState,
-  EvalFixtureOperationWire,
-  EvalSuiteChangeWire,
-  EvalSuiteSummaryWire,
-  EvalSuiteWire,
+import {
+  type EvalFixtureGateLiveState,
+  type EvalFixtureOperationWire,
+  type EvalSuiteChangeWire,
+  type EvalSuiteSummaryWire,
+  type EvalSuiteWire,
+  visibleText,
 } from '@nexttime/shared';
+import { actionKindTagText } from './format.js';
 import type { Translate } from './i18n.js';
 import { type WorkerDefinitionSummary, distinctDefinitionName } from './tasks.js';
 
@@ -12,7 +14,17 @@ import { type WorkerDefinitionSummary, distinctDefinitionName } from './tasks.js
  * lib/evaluation (S10 E3-1a): the data shaping behind 治理 → 评测's 用例集 pages — which Workers a
  * suite can pin (picked, never typed), what each change in a suite's history says, what a fixture
  * gate's live state asks of the reader, and what syncing one would change.
+ *
+ * A gate's, an Operation's and a Worker's name come from definitions a connector or an agent may
+ * have written; every place these pages show one makes what a reader cannot see (a bidi override,
+ * a zero-width or control character) visible as `\u{XXXX}` (legacy 232, #802 UX P2-1), so an
+ * execute Operation never reads as another name.
  */
+
+/** A gate's or a Worker's name as these pages show it (legacy 232). */
+export function shownName(name: string): string {
+  return visibleText(name);
+}
 
 export interface WorkerChoice {
   readonly id: string;
@@ -33,7 +45,7 @@ export function workerChoices(rows: readonly WorkerDefinitionSummary[]): readonl
       const newest = Math.max(...versions);
       return {
         id,
-        name: distinctDefinitionName(published, id, newest) ?? id,
+        name: shownName(distinctDefinitionName(published, id, newest) ?? id),
         versions: [...versions].sort((a, b) => b - a),
       };
     })
@@ -45,7 +57,8 @@ export function pinnedWorkerName(
   rows: readonly WorkerDefinitionSummary[] | undefined,
   pin: EvalSuiteSummaryWire['workerDefinition'],
 ): string | undefined {
-  return distinctDefinitionName(rows, pin.id, pin.version);
+  const name = distinctDefinitionName(rows, pin.id, pin.version);
+  return name === undefined ? undefined : shownName(name);
 }
 
 /** What `get_eval_suite` returns, as a list row (`list_eval_suites`' shape). */
@@ -66,15 +79,20 @@ export function suiteChangeText(change: EvalSuiteChangeWire, t: Translate): stri
       const [from, to] = [change.fromVersion, change.toVersion];
       return t(`钉住的 Worker 版本 v${from} → v${to}`, `Pinned Worker version v${from} → v${to}`);
     }
-    case 'fixture_gate_added':
-      return t(`添加夹具门 ${change.gateName}`, `Added fixture gate ${change.gateName}`);
-    case 'fixture_gate_removed':
-      return t(`移除夹具门 ${change.gateName}`, `Removed fixture gate ${change.gateName}`);
+    case 'fixture_gate_added': {
+      const gate = shownName(change.gateName);
+      return t(`添加夹具门 ${gate}`, `Added fixture gate ${gate}`);
+    }
+    case 'fixture_gate_removed': {
+      const gate = shownName(change.gateName);
+      return t(`移除夹具门 ${gate}`, `Removed fixture gate ${gate}`);
+    }
     case 'fixture_gate_synced': {
+      const gate = shownName(change.gateName);
       const parts = operationDiffParts(change, t);
       return t(
-        `同步夹具门 ${change.gateName}${parts.length > 0 ? `：${parts.join('；')}` : ''}`,
-        `Synced fixture gate ${change.gateName}${parts.length > 0 ? `: ${parts.join('; ')}` : ''}`,
+        `同步夹具门 ${gate}${parts.length > 0 ? `：${parts.join('；')}` : ''}`,
+        `Synced fixture gate ${gate}${parts.length > 0 ? `: ${parts.join('; ')}` : ''}`,
       );
     }
   }
@@ -86,9 +104,10 @@ export interface OperationDiff {
   readonly changedOperations: readonly string[];
 }
 
-/** 「新增 a、b」「移除 c」「变更 d」, the empty ones left out. */
+/** 「新增 a、b」「移除 c」「变更 d」, the empty ones left out; each name as `actionKindTagText`
+ *  shows it. */
 export function operationDiffParts(diff: OperationDiff, t: Translate): readonly string[] {
-  const list = (names: readonly string[]) => names.join(t('、', ', '));
+  const list = (names: readonly string[]) => names.map(actionKindTagText).join(t('、', ', '));
   return [
     diff.addedOperations.length > 0
       ? t(`新增 ${list(diff.addedOperations)}`, `added ${list(diff.addedOperations)}`)

@@ -4,7 +4,7 @@ import type {
   GatekeeperSummaryWire,
   OperationSummaryWire,
 } from '@nexttime/shared';
-import { useCallback, useEffect, useState } from 'react';
+import { type RefObject, useCallback, useEffect, useRef, useState } from 'react';
 import { useResource } from '../../hooks/useResource.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import { workerItemId } from '../../lib/catalog.js';
@@ -14,10 +14,11 @@ import {
   liveStateNotice,
   operationDiffParts,
   pinnedWorkerName,
+  shownName,
   suiteChangeText,
   syncPreview,
 } from '../../lib/evaluation.js';
-import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
+import { actionKindTagText, formatDateTime, formatRelative } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
@@ -88,6 +89,8 @@ export function SuiteDetail({
   );
   const suite = useResource(load);
   const mutate = suite.mutate;
+  // A removed gate takes its card, and the 移除 that had focus, with it.
+  const [gatesSection, focusGatesSection] = useFocusAfterChange<HTMLElement>();
 
   const reread = useCallback(async () => {
     const fresh = await http.call<EvalSuiteWire>('get_eval_suite', { suiteId });
@@ -268,7 +271,13 @@ export function SuiteDetail({
         ) : null}
       </section>
 
-      <section className="stack-s" data-testid="eval-suite-fixture-gates">
+      <section
+        ref={gatesSection}
+        tabIndex={-1}
+        aria-label={t('夹具门', 'Fixture gates')}
+        className="stack-s"
+        data-testid="eval-suite-fixture-gates"
+      >
         <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
           <span className="section-title">{t('夹具门', 'Fixture gates')}</span>
           {can('add_eval_fixture_gate') !== false ? (
@@ -315,14 +324,16 @@ export function SuiteDetail({
               }
               onRemove={
                 can('remove_eval_fixture_gate') !== false
-                  ? (reason) =>
-                      change(() =>
+                  ? async (reason) => {
+                      await change(() =>
                         http.call<EvalSuiteWire>('remove_eval_fixture_gate', {
                           ...at,
                           gatekeeperId: gate.gatekeeperId,
                           reason,
                         }),
-                      )
+                      );
+                      focusGatesSection();
+                    }
                   : undefined
               }
             />
@@ -332,13 +343,12 @@ export function SuiteDetail({
 
       <section className="stack-s" data-testid="eval-suite-history">
         <span className="section-title">{t('变更记录', 'History')}</span>
-        <ol className="stack-s">
+        <ol className="eval-suite-history">
           {[...data.history]
             .sort((a, b) => b.version - a.version)
             .map((entry) => (
               <li
                 key={entry.version}
-                className="stack-s"
                 data-testid="eval-suite-history-entry"
                 data-version={entry.version}
               >
@@ -347,7 +357,14 @@ export function SuiteDetail({
                   <span>{suiteChangeText(entry, t)}</span>
                 </span>
                 <span className="row-wrap text-3 text-small">
-                  <span>{principalNames.get(entry.actorId) ?? shortId(entry.actorId)}</span>
+                  <RefChip
+                    kind="principal"
+                    id={entry.actorId}
+                    name={principalNames.get(entry.actorId) ?? null}
+                    http={http}
+                    size="s"
+                    testId="eval-suite-history-actor"
+                  />
                   <span className="meta-sep" />
                   <time title={formatDateTime(entry.createdAt)}>
                     {formatRelative(entry.createdAt)}
@@ -402,6 +419,27 @@ function useLoadWhen<T>(
     };
   }, [key]);
   return state.key === key ? state : { status: key === null ? 'idle' : 'loading' };
+}
+
+/** A change that takes away the control that had focus — the 同步 that leaves with its gate's
+ *  mismatch, a removed gate's whole card (#802 UX P3-2) — hands focus to `target` instead of the
+ *  page. `request` once the change is made; the move waits for the closing confirm's own focus
+ *  return, which finds its control gone, and leaves alone any focus the reader has moved on to. */
+function useFocusAfterChange<T extends HTMLElement>(): readonly [RefObject<T>, () => void] {
+  const target = useRef<T>(null);
+  const [requested, setRequested] = useState(0);
+  useEffect(() => {
+    if (requested === 0) return;
+    const timer = window.setTimeout(() => {
+      const active = document.activeElement;
+      if (active === null || active === document.body || !active.isConnected) {
+        target.current?.focus();
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [requested]);
+  const request = useCallback(() => setRequested((n) => n + 1), []);
+  return [target, request];
 }
 
 /** The gate's published Operations as `list_operations` shows the reader now (by name). */
@@ -588,7 +626,7 @@ function AddFixtureGateConfirm({
         '把这个门的名字和它现在已发布的操作冻结进用例集。之后门再变，夹具门不跟着变，需要时再同步。',
         'Freezes the gate’s name and the operations it publishes now into the suite. Later changes to the gate do not follow; sync it when needed.',
       )}
-      target={chosen?.name}
+      target={chosen === undefined ? undefined : shownName(chosen.name)}
       impact={[suiteVersionStep(suiteVersion, t)]}
       confirmLabel={t('添加', 'Add')}
       confirmDisabled={missing.length > 0 || operations.status !== 'ready'}
@@ -622,7 +660,7 @@ function AddFixtureGateConfirm({
             </option>
             {choices.map((gate) => (
               <option key={gate.id} value={gate.id}>
-                {gate.name}
+                {shownName(gate.name)}
               </option>
             ))}
           </Select>
@@ -664,11 +702,13 @@ function OperationList({
   }[];
 }) {
   return (
-    <ul className="stack-s" data-testid="eval-fixture-operations">
+    <ul className="stack-s eval-fixture-operations" data-testid="eval-fixture-operations">
       {operations.map((op) => (
         <li key={op.name} className="stack-s" data-testid="eval-fixture-operation">
           <span className="row-wrap">
-            <span className="mono">{op.name}</span>
+            <span className="mono wrap-anywhere" data-testid="eval-fixture-operation-name">
+              {actionKindTagText(op.name)}
+            </span>
             <span className="text-3 text-small tabular">v{op.version}</span>
             <StatusChip machine="operationMode" status={op.mode} size="s" />
           </span>
@@ -697,8 +737,14 @@ function FixtureGateCard({
 }) {
   const t = useT();
   const notice = liveStateNotice(gate.liveState, t);
+  const gateName = shownName(gate.gateName);
+  // A sync that brings the gate back in line takes its 同步 button away.
+  const [card, focusCard] = useFocusAfterChange<HTMLDivElement>();
   return (
     <div
+      ref={card}
+      tabIndex={-1}
+      aria-label={t(`夹具门 ${gateName}`, `Fixture gate ${gateName}`)}
       className="stack-s rounded-m border border-border p-3"
       data-testid="eval-fixture-gate"
       data-gate-id={gate.gatekeeperId}
@@ -709,15 +755,21 @@ function FixtureGateCard({
           <RefChip
             kind="gatekeeper"
             id={gate.gatekeeperId}
-            name={gate.gateName}
+            name={gateName}
             href={hrefs.gatekeeper(gate.gatekeeperId)}
             size="s"
           />
           <span className="text-3 text-small">
-            {t(`v${gate.addedInVersion} 冻结`, `frozen at v${gate.addedInVersion}`)}
-            {' · '}
-            {principalNames.get(gate.addedBy) ?? shortId(gate.addedBy)}
+            {t(`用例集 v${gate.addedInVersion} 时冻结`, `frozen at suite v${gate.addedInVersion}`)}
           </span>
+          <RefChip
+            kind="principal"
+            id={gate.addedBy}
+            name={principalNames.get(gate.addedBy) ?? null}
+            http={http}
+            size="s"
+            testId="eval-fixture-gate-added-by"
+          />
         </span>
         <span className="row-wrap">
           {onSync !== undefined && gate.liveState === 'changed' ? (
@@ -725,7 +777,10 @@ function FixtureGateCard({
               http={http}
               gate={gate}
               suiteVersion={suiteVersion}
-              onSync={onSync}
+              onSync={async () => {
+                await onSync();
+                focusCard();
+              }}
             />
           ) : null}
           {onRemove !== undefined ? (
@@ -760,6 +815,7 @@ function SyncFixtureGateConfirm({
     publishedOperations(http, gate.gatekeeperId),
   );
   const preview = now.status === 'ready' ? syncPreview(gate.operations, now.data ?? []) : null;
+  const gateName = shownName(gate.gateName);
   const parts = preview === null ? [] : operationDiffParts(preview, t);
   return (
     <Confirm
@@ -776,12 +832,12 @@ function SyncFixtureGateConfirm({
           {t('同步', 'Sync')}
         </Button>
       }
-      title={t(`同步夹具门 ${gate.gateName}`, `Sync fixture gate ${gate.gateName}`)}
+      title={t(`同步夹具门 ${gateName}`, `Sync fixture gate ${gateName}`)}
       description={t(
         '按门现在已发布的操作重新冻结。之前的用例集版本仍保留原来冻结的定义。',
         'Freezes the gate again from the operations it publishes now. Earlier suite versions keep the definitions frozen before.',
       )}
-      target={gate.gateName}
+      target={gateName}
       impact={[...parts, suiteVersionStep(suiteVersion, t)]}
       confirmLabel={t('同步', 'Sync')}
       onConfirm={onSync}
@@ -816,6 +872,7 @@ function RemoveFixtureGateConfirm({
   const [reason, setReason] = useState('');
   const trimmed = reason.trim();
   const reasonId = `eval-fixture-gate-remove-reason-${gate.gatekeeperId}`;
+  const gateName = shownName(gate.gateName);
   return (
     <Confirm
       tier="medium"
@@ -834,12 +891,12 @@ function RemoveFixtureGateConfirm({
           {t('移除', 'Remove')}
         </Button>
       }
-      title={t(`移除夹具门 ${gate.gateName}`, `Remove fixture gate ${gate.gateName}`)}
+      title={t(`移除夹具门 ${gateName}`, `Remove fixture gate ${gateName}`)}
       description={t(
         '之后的评测不再有这个门的工具；之前的用例集版本仍保留它。原因记入变更记录。',
         'Later evaluation has none of this gate’s tools; earlier suite versions still hold it. The reason is kept in the history.',
       )}
-      target={gate.gateName}
+      target={gateName}
       impact={[suiteVersionStep(suiteVersion, t)]}
       confirmLabel={t('移除', 'Remove')}
       danger

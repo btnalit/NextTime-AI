@@ -166,14 +166,29 @@ describe('EvaluationPage (S10 E3-1a)', () => {
     expect(entries[0]?.textContent).toMatch(/添加夹具门 inventory/);
   });
 
-  it('an auditor reads everything and is offered no change', async () => {
-    const http = scriptedHttp(baseHandlers('auditor'));
+  it('an auditor reads everything, people by name, and is offered no change', async () => {
+    const http = scriptedHttp({
+      ...baseHandlers('auditor'),
+      // An auditor may not list principals; names come through resolve_refs, as 创建 does.
+      list_principals: () => {
+        throw kernelError('forbidden', 'list_principals needs operator');
+      },
+      resolve_refs: () => ({ items: [{ id: 'p-me', kind: 'principal', name: 'alice' }] }),
+    });
     renderPage(http, 's-1');
-    await screen.findByTestId('eval-suite-detail');
+    const detail = await screen.findByTestId('eval-suite-detail');
     await waitFor(() => expect(screen.queryByTestId('eval-suite-create-open')).toBeNull());
     expect(screen.queryByTestId('eval-suite-repin-trigger')).toBeNull();
     expect(screen.queryByTestId('eval-suite-add-gate-trigger')).toBeNull();
     expect(screen.queryByTestId('eval-fixture-gate-remove-trigger')).toBeNull();
+    await waitFor(() =>
+      expect(within(detail).getByTestId('eval-fixture-gate-added-by').textContent).toContain(
+        'alice',
+      ),
+    );
+    for (const actor of within(detail).getAllByTestId('eval-suite-history-actor')) {
+      expect(actor.textContent).toContain('alice');
+    }
   });
 
   it('creating a suite picks the Worker and its version, never a typed id', async () => {
@@ -276,6 +291,10 @@ describe('EvaluationPage (S10 E3-1a)', () => {
     expect(ok.disabled).toBe(false);
     fireEvent.click(ok);
     await waitFor(() => expect(screen.getByTestId('eval-suite-fixture-gates-empty')).toBeTruthy());
+    // The card and its 移除 are gone; focus stays in the suite, not on the page.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByTestId('eval-suite-fixture-gates')),
+    );
     expect(http.calls.find((c) => c.name === 'remove_eval_fixture_gate')?.params).toEqual({
       suiteId: 's-1',
       suiteVersion: 2,
@@ -467,6 +486,107 @@ describe('EvaluationPage (S10 E3-1a)', () => {
         gatekeeperId: GATE_A,
       }),
     );
+    // The gate matches again, so 同步 is gone; focus moves to its card, not to the page.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByTestId('eval-fixture-gate')),
+    );
+    expect(screen.queryByTestId('eval-fixture-gate-sync-trigger')).toBeNull();
+  });
+
+  it('a name carrying a bidi override or an invisible character is shown with it made visible', async () => {
+    const spoofed = 'restart\u202Egnp.exe';
+    const gateName = 'inv\u200Bentory';
+    const shown = /restart\\u\{202E\}gnp\.exe/;
+    const changed = suite({
+      fixtureGates: [
+        gate({
+          gateName,
+          liveState: 'changed',
+          operations: [
+            { name: spoofed, version: 1, mode: 'execute', description: null, paramsSchema: {} },
+          ],
+        }),
+      ],
+      history: [
+        ...suite().history,
+        {
+          version: 3,
+          kind: 'fixture_gate_synced',
+          actorId: 'p-me',
+          reason: null,
+          createdAt: '2026-10-30T00:00:00.000Z',
+          gatekeeperId: GATE_A,
+          gateName,
+          addedOperations: [spoofed],
+          removedOperations: [],
+          changedOperations: [],
+        },
+      ],
+      version: 3,
+    });
+    const http = scriptedHttp({
+      ...baseHandlers('builder', () => changed),
+      list_gatekeepers: () => ({
+        items: [
+          {
+            id: GATE_B,
+            name: 'tick\u202Eets',
+            kind: 'http',
+            status: 'active',
+            operationCount: 1,
+            createdAt: 'x',
+          },
+        ],
+      }),
+      list_operations: (params) => ({
+        items: [
+          {
+            gatekeeperId: (params as { gatekeeperId: string }).gatekeeperId,
+            name: `${spoofed}.v2`,
+            mode: 'execute',
+            blastRadius: 'low',
+            autoApprovable: false,
+            version: 1,
+            status: 'published',
+          },
+        ],
+      }),
+    });
+    renderPage(http, 's-1');
+    const card = await screen.findByTestId('eval-fixture-gate');
+    const opName = within(card).getByTestId('eval-fixture-operation-name').textContent ?? '';
+    expect(opName).toMatch(shown);
+    expect(opName).not.toContain('\u202E');
+    expect(card.textContent).toMatch(/inv\\u\{200B\}entory/);
+    const synced = screen.getAllByTestId('eval-suite-history-entry')[0]?.textContent ?? '';
+    expect(synced).toMatch(shown);
+    expect(synced).toMatch(/inv\\u\{200B\}entory/);
+    expect(synced).not.toMatch(/[\u202E\u200B]/);
+
+    // The sync preview names what moves the same way.
+    fireEvent.click(within(card).getByTestId('eval-fixture-gate-sync-trigger'));
+    const sync = await screen.findByTestId('eval-fixture-gate-sync');
+    await waitFor(() =>
+      expect(within(sync).getByTestId('confirm-impact').textContent).toMatch(
+        /新增 restart\\u\{202E\}gnp\.exe\.v2/,
+      ),
+    );
+    expect(sync.textContent).not.toMatch(/[\u202E\u200B]/);
+    fireEvent.click(within(sync).getByTestId('confirm-cancel'));
+    await waitFor(() => expect(screen.queryByTestId('eval-fixture-gate-sync')).toBeNull());
+
+    // And so do the gates and the operations offered for a new fixture gate.
+    fireEvent.click(screen.getByTestId('eval-suite-add-gate-trigger'));
+    const add = await screen.findByTestId('eval-suite-add-gate');
+    const select = (await within(add).findByTestId(
+      'eval-suite-add-gate-select',
+    )) as HTMLSelectElement;
+    await waitFor(() => expect(select.disabled).toBe(false));
+    expect(select.options[1]?.textContent).toMatch(/tick\\u\{202E\}ets/);
+    fireEvent.change(select, { target: { value: GATE_B } });
+    const preview = await within(add).findByTestId('eval-suite-add-gate-preview');
+    expect(preview.textContent).toMatch(shown);
+    expect(add.textContent).not.toMatch(/[\u202E\u200B]/);
   });
 
   it('repinning offers the Worker’s other published versions and an optional reason', async () => {
