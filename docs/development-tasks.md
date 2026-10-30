@@ -4617,6 +4617,13 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - egress-proxy 来源条目新增 `denyAll`（拒绝原因 `source-deny-all`）；worker-supervisor `/task/spawn` 新增可选 `egressDenyAll`，容器带标签 `nexttime.egress-deny-all=true`，reconcile 兜底按标签重新登记；登记失败的路径一律不让评测运行在没有登记的情况下跑。
   - 运维前提：主机 Docker Engine ≥ 26.0.0（CVE-2024-29018，否则 internal 网络经内嵌 DNS 可解析外网名字），见 release.md §3.73；回滚 supervisor 前先终止带标签的 Task（遗留 518）。启动到写入条目之间的毫秒级窗口是原有问题（遗留 519）。
   - **下一步**：E3-2a（评测运行首次设置 `egressDenyAll`）。
+- 实现说明（E3-2a 单条用例试跑，#822，2026-10-30 合入，91db629；迁移 task/0011、worker/0009 可逆）：
+  - **评测 Task**：`tasks.purpose = 'evaluation'`，数据库约束 purpose 不可改、只由工作区的评测服务主体（kind `service`、role member、首次使用时创建）发起、该主体只在评测 Task 里行动、带观察范围（用例集的夹具门）、不是目标步骤、WorkerRun 为根运行。
+  - **封闭 Handle**：Worker 的 Handle 只带 `get_task`、`list_allowed_operations`、`observe_operation`、`request_action`、`report_task_result`；网关把评测会话的每次调用都经 `application/eval-session`，其余一律 `evaluation_run_capability_refused`（扩大的 claim 也在这里停）。防泄漏封条放行用例自己的输入与夹具应答。
+  - **夹具应答**：`observe_operation` / `request_action` 不到门、不建 ActionRequest、不写 Observation / Fact / Activity，按第一条匹配的规则回数据、不存在、模拟执行或错误，无匹配回 502；调用记 `eval_trial_calls`（参数同审计脱敏）并审计 `evaluation.fixture_call`；只在 Task 运行中应答，报告后回 `evaluation_run_ended`；运行、试跑、调用有账本守卫。
+  - **打分与预算**：`report_task_result` 只完成 Task，runner tick 再按断言打分并记 `evaluation.trial_end`；失败或取消判 `errored` 并写原因，评测 Task 从不重排；成本取 `llm_usage`。配额 `evaluation.monthly_cost_budget_usd` 默认 $10、owner 才能改、不能不限，按 UTC 月只计评测 Task，同时计入工作区日预算；超出回 429 `evaluation_budget_exhausted`。评测运行不计入 Skill / Procedure 用量统计。
+  - **审查**：#488（P2、P3 进 release.md §3.75 回滚）、#493（held-out 用例的夹具应答被封条挡住、报告后的夹具调用仍被应答、守卫无测试，均在 PR 修）、UX（内部服务主体名、文案等 P2 / P3 在 PR 修；既有问题记遗留 525、526）。
+  - **下一步**：E3-2b 草稿评测（#833），E3-2c 探针阈值（遗留 514）；真实模型核对并入最后一轮。
 - 2026-10-23 设计输入（victor 定分叉 2 = b，与自进化闭环审查 §2.3–§2.5、§7.1）：回归断言失败或判 `worse` 时，发布人要逐条确认失败项并写理由，记审计（同 10-09「已核对凭据」）；`inconclusive` 只显示、不加确认（避免确认疲劳）；按每月测试额度，MVP 主力是确定性回归棘轮 + 大效应机制筛，样本不够判 `inconclusive`，不显示成「在噪声内」；δ 与 k 改为在夹具上做 A/A 重跑校准（主机只有验收账号，遗留 230）。
 
 **GO16 — 沉淀提议：WorkerSpec 组合提议为 WorkerDefinition**（见 `global-roadmap-2026-10-16.md` §4）

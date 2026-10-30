@@ -1863,6 +1863,30 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：提目标、确认、审批时，如果申请人在某扇按成员连接账户的门上没有自己的凭证，目标页、确认框、审批详情和对话里的审批卡会提前标出「该成员未连接此账户」，不用等批准后被门拒绝才知道。
 - **回滚**：回退代码即可，库不用恢复。旧内核不调新路由；旧门不认新路由也不影响新内核。
 
+### 3.75 评测用例试跑（#822，S10 E3-2a，v0.50.0 之后的下一版起）
+
+迁移 task `0011`（`tasks.purpose` 与约束）和 worker `0009`（`eval_runs`、`eval_trials`、`eval_trial_calls` 与账本守卫），都只新增、不回填。新配额键 `evaluation.monthly_cost_budget_usd`，默认 $10。不改 compose。
+
+- **窗口前只读检查**：无新增。§3.73 的 Docker Engine ≥ 26.0.0 从本版起真正用上：评测容器带 `nexttime.egress-deny-all=true` 标签。
+- **发版说明可写**：「治理 → 评测」的单条用例试跑；新能力 `start_eval_case_trial`、`get_eval_run`、`list_eval_runs`、`get_eval_budget`；`TaskWire.purpose`；新配额键 `evaluation.monthly_cost_budget_usd`（默认 $10）；新错误 429 `evaluation_budget_exhausted`、403 `evaluation_run_ended`（Worker 报告后的夹具调用）；审计动作 `evaluation.fixture_call`、`evaluation.trial_end`（负载：suite、trial、Task、status、verdict 或 error、`costUsd`、`tokenCount`、`runFinished`）。
+- **回滚**：
+  - 把内核回滚到本版之前，先让所有在跑的评测 Task 结束或取消。只读检查 `select count(*) from tasks where purpose = 'evaluation' and status not in ('completed','failed','cancelled')` 必须为 0。
+  - 新内核停下后、旧内核启动前再查一次（#488 P2）；不为 0 就把新内核重新启动，取消这些 Task，再回滚。原因：旧内核不再对评测 Task 的 Handle 做第二次拒绝，门调用也不再由夹具应答；旧内核还会重排崩溃的评测 Task，而重起的容器不带出网全拒。
+  - 同一遍里核对 `select count(*) from eval_trials where status = 'running'` 为 0（#488 P3）。
+  - worker-supervisor 回滚照 §3.73 执行（遗留 518）：从本版起才有带 `nexttime.egress-deny-all=true` 标签的评测容器。
+
+### 3.76 zod 4 与能力入参值上限（#829，v0.50.0 之后的下一版起）
+
+没有迁移，不改 compose，契约快照不变。消除 v0.50.0 带出去的 zod 3 高危 GHSA-mrhx（遗留 522）。
+
+- **窗口前只读检查**：无新增。
+- **发版说明照写（行为变化）**：
+  - 入参里的值（数组元素与对象成员）超过 131072 个的调用被拒绝，HTTP 400 / WS / MCP 回 `invalid_params`，信息为 `invalid params for capability "<name>": params hold more than 131072 values (array elements and object members)`。1 MiB 以内的密集 body 也可能被拒，例如 400 KB 的数字数组或 980 KB 的小行表。
+  - 校验失败的英文文案变了（issue 不出 kernel，但 `propose_goal` 的计划错误文字会带上新文案，模型能看到）。
+  - `z.string().datetime()` 不再接受只精确到分钟的时间；现有生产方都带秒，不受影响。
+  - `.int()` 字段拒绝超出安全整数范围的整数（如 2^53+2）。
+- **回滚**：回退代码即可，库不用恢复。回滚后 GHSA-mrhx 回来，入参值上限消失。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -2007,6 +2031,8 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.50.0 | governance `0029_reconcile_absence_seen_before`（#799，S11「门确认不存在」reconcile）：函数 `action_request_absence_seen_before` 与 `action_requests` 触发器，不改表、不回填 | 可逆 | 上一发布 v0.49.0 没有目标代码，不跑 reconcile；中间版本的旧执行器写 `effect_seen` 不带 `absentAnswersReview` 会被拒，试满后记 `unavailable` 交人核对，见 §3.72 |
 | v0.50.0 | worker `0007_eval_suites`（#802，S10 E3-1a）：新表 `eval_suites`、`eval_suite_changes`、`eval_fixture_gates` 与守卫触发器，无 DELETE 授权，不回填 | 可逆 | 只新增表，上一版不读不写，在新结构上照常运行；`purge_workspace` 按 `workspace_id` 清掉这三张表（有集成测试） |
 | v0.50.0 | worker `0008_eval_cases`（#810，S10 E3-1b）：新表 `eval_cases` 与守卫触发器，`eval_suite_changes` kind 检查多收 `case_added` / `case_edited` / `case_retired`，无 DELETE 授权，不回填 | 可逆，**必须与 worker `0007` 同一版本发布** | 只新增表；上一发布 v0.49.0 不读不写评测表。假如有只带 0007 的版本，回滚到它后不认识三种新 kind，读写过用例的用例集历史会失败，所以两者不能分版本发布；`purge_workspace` 按 `workspace_id` 清理（有集成测试） |
+| v0.51.0 | task `0011_task_purpose`（#822，S10 E3-2a）：`tasks.purpose` 列与约束（不可改、评测 Task 只由评测服务主体发起、带观察范围、不是目标步骤，WorkerRun 为根运行），不回填 | 可逆 | 只新增列与约束，旧代码不写 `purpose`；回滚前评测 Task 必须全部结束（§3.75） |
+| v0.51.0 | worker `0009_eval_runs`（#822，S10 E3-2a）：新表 `eval_runs`、`eval_trials`、`eval_trial_calls` 与账本守卫，不回填 | 可逆 | 只新增表，旧代码不读不写；`purge_workspace` 清理新表（有集成测试） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
