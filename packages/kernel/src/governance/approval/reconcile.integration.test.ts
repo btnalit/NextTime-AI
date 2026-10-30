@@ -1164,13 +1164,17 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(onGoal.actionRequest.reconciliation).toBe('effect_seen');
       });
 
-      it('refuses it with no baseline, a later one, one of another call or another step, an unconfirmed version, or a check with a predicate', async () => {
+      it('refuses it with no baseline, a later one, one of another call or another step, an unconfirmed version (or a blank confirmation), or a check with a predicate', async () => {
         const refused: [string, AbsentCase][] = [
           ['no baseline', { baselineStepKey: 'none' }],
           ['looked after the action', { baselineAfter: true }],
           ['another call', { baselineCall: { ...ABSENT(), params: { sku: 'other' } } }],
           ['another step', { baselineStepKey: 'other' }],
           ['no confirmation', { evidence: { absentAnswersReview: undefined } }],
+          [
+            'a blank confirmation',
+            { evidence: { absentAnswersReview: { reviewedBy: '', reviewedAt: '' } } },
+          ],
           ['another operation', { evidence: { operation: 'inventory.list' } }],
           [
             'a predicate',

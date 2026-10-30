@@ -80,6 +80,8 @@ begin
      or evidence ->> 'operation' is distinct from declared ->> 'operation'
      or jsonb_typeof(evidence #> '{absentAnswersReview,reviewedBy}') is distinct from 'string'
      or jsonb_typeof(evidence #> '{absentAnswersReview,reviewedAt}') is distinct from 'string'
+     or evidence #>> '{absentAnswersReview,reviewedBy}' = ''
+     or evidence #>> '{absentAnswersReview,reviewedAt}' = ''
      or not coalesce(action_request_absence_seen_before(new.workspace_id, new.id, declared), false)
   then
     raise exception 'action_requests: the platform''s effect_seen on a "not there" answer rests on the request''s own reconcile check making that absence call, under a version whose answers a person confirmed, and on an earlier baseline of the call that saw the thing before the action (I-AB1)';

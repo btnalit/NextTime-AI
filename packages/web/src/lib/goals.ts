@@ -1379,8 +1379,8 @@ export function unresolvedActionText(
     return {
       needs,
       check: t(
-        '这一步没有为它声明平台核对，只能由人核对。删除这类动作也能让平台核对：门确认“不存在”就算生效，前提是平台在动作之前看到过它在（计划里要有同一个调用的“不存在”验收检查）。',
-        'This step declared no platform check for it, so only a person can check it. A removal can be checked by the platform too: the gate confirming the thing is not there counts as the action having taken effect, provided the platform saw it there before the action (the plan needs an absence check with the same call).',
+        '这一步没有为它声明平台核对，只能由人核对。删除这类动作也能交给平台核对：在这一步加一条核对声明，用门查“不存在”的调用；计划里还要有同一个调用的“不存在”验收检查，平台在动作之前用它看到过它在，之后门回答不在才算生效。',
+        'This step declared no platform check for it, so only a person can check it. A removal can be checked by the platform too: give this step a reconcile declaration that asks the gate whether the thing is gone, and give the plan an absence check with the same call. The platform looks with that check before the action, and the gate answering "not there" counts as the action having taken effect only if that look saw the thing there.',
       ),
     };
   }
@@ -1411,8 +1411,8 @@ export function unresolvedActionText(
         check:
           check.lastError === 'never_seen_present'
             ? t(
-                '平台核对不了：动作之前平台没有看到过它在，现在门说它不在，也证明不了是这个动作删掉的。要有人核对后记下结果。',
-                'The platform could not check: it never saw the thing there before the action, so the gate saying it is not there now does not show this action removed it. A person records what they find.',
+                '平台核对不了：动作之前平台没有看到过它在，就算门回答它不在，也证明不了是这个动作删掉的，所以平台没有去问门。要有人核对后记下结果。',
+                'The platform could not check: it never saw the thing there before the action, so even the gate answering that it is not there would not show this action removed it, and the platform did not ask the gate. A person records what they find.',
               )
             : t(
                 '平台核对不了（观察被拒绝或一直没有答复）：要有人核对后记下结果。',

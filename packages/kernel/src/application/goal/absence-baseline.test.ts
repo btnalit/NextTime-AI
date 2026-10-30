@@ -21,12 +21,26 @@ describe('presenceShown (legacy 507)', () => {
     }
   });
 
-  it('without a result mapping, does not take an empty answer — a 200 for "nothing matched"', () => {
+  it('without a result mapping, takes an answer with no content by its success status or exit code', () => {
+    // An http response with no body (HEAD, 204) or a blank one; a cli / ssh run that printed
+    // nothing (`test -e`, `grep -q`) — review #501 on #799.
     for (const data of [
-      null,
       undefined,
       '',
       '   ',
+      { stdout: '', stderr: '' },
+      { stdout: ' \n', stderr: '' },
+    ]) {
+      expect(presenceShown(unmapped, data), JSON.stringify(data)).toBe(true);
+    }
+    // A command that printed something is there too: its output is content, and not empty.
+    expect(presenceShown(unmapped, { stdout: 'web\n', stderr: '' })).toBe(true);
+    expect(presenceShown(unmapped, { stdout: '', stderr: 'warning: cached' })).toBe(true);
+  });
+
+  it('without a result mapping, does not take an empty answer — a 200 for "nothing matched"', () => {
+    for (const data of [
+      null,
       false,
       0,
       [],
@@ -41,7 +55,7 @@ describe('presenceShown (legacy 507)', () => {
     }
   });
 
-  it('with a result mapping, takes only an item of the declared shape with its identity', () => {
+  it('with a result mapping, takes only an item of the declared shape with its identity — no content is not that shape', () => {
     const mapping = {
       result_mapping: { jmes_path: 'items', object_type: 'Service', identity_keys: ['name'] },
     };
@@ -49,6 +63,8 @@ describe('presenceShown (legacy 507)', () => {
     expect(presenceShown(mapping, { items: [{ name: 0 }] })).toBe(true);
     expect(presenceShown(mapping, { items: [{ state: 'up' }, { name: 'web' }] })).toBe(true);
     for (const data of [
+      undefined,
+      { stdout: '', stderr: '' },
       { items: [] },
       { items: null },
       {},

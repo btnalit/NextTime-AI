@@ -57,6 +57,18 @@ describe.runIf(DATABASE_URL !== undefined)(
       return id;
     }
 
+    /** STATUS.md 遗留 25's cause, as in `interfaces/ws/server.test.ts`: files that ran earlier
+     *  against the shared database leave their outbox rows undelivered (they deliver events by
+     *  hand, with no dispatcher), and `pollOnce()` works through every workspace's rows in id
+     *  order, 20 at a time, before reaching this file's own. Once the full suite left a few
+     *  thousand of them, the drain took longer than a test's 5 s (#799; a backlog of 6000 rows
+     *  fails these tests every time). Those rows are no part of this file: each test marks them
+     *  delivered before it enqueues its own row, which still has to be claimed and delivered
+     *  through the dispatcher. */
+    async function skipEarlierRows(): Promise<void> {
+      await pool.query('update outbox set dispatched_at = now() where dispatched_at is null');
+    }
+
     beforeAll(async () => {
       pool = createPool();
       await runMigrations(pool, MIGRATIONS_DIR);
@@ -73,6 +85,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       // The producer's own transaction (substrate/outbox's single write path) commits durably —
       // this is the part of §13's story that is *not* lost on a crash.
+      await skipEarlierRows();
       await withWorkspace(pool, { workspaceId, principalId }, async (client) => {
         await enqueue(client, {
           type: 'FactAsserted',
@@ -98,8 +111,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       // `outbox.id` is one global `bigserial` column shared by every workspace
       // (migrations/core/0005_outbox.sql), and `pollOnce()` drains at most `batchSize` (20) rows
       // per call, oldest-`id`-first. Under Vitest's default cross-file parallelism, other
-      // concurrently-running integration test files can enqueue enough of their own rows to push
-      // this test's single row past that first 20-row window — a single `pollOnce()` call is not
+      // concurrently-running integration test files can still enqueue rows between
+      // `skipEarlierRows()` and this test's own, pushing it past that first 20-row window — a single `pollOnce()` call is not
       // guaranteed to reach it. Loop until this row is delivered or the queue is genuinely empty
       // (capped, so a real regression still fails instead of hanging).
       let delivered = 0;
@@ -132,6 +145,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     it('lane-1 P2 fix: attempts is durably incremented across a real rollback, and a dead-lettered row stops being claimed', async () => {
       const factId = randomUUID();
 
+      await skipEarlierRows();
       await withWorkspace(pool, { workspaceId, principalId }, async (client) => {
         await enqueue(client, {
           type: 'FactAsserted',
@@ -182,6 +196,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     it('pruneDispatched deletes only dispatched rows past the cutoff, never an undelivered/dead-lettered one', async () => {
       const factId = randomUUID();
 
+      await skipEarlierRows();
       await withWorkspace(pool, { workspaceId, principalId }, async (client) => {
         await enqueue(client, {
           type: 'FactAsserted',

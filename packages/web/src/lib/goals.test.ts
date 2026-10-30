@@ -379,8 +379,10 @@ describe('lib/goals', () => {
     const text = unresolvedActionText(unresolved(), false, zh);
     expect(text.needs).toMatch(/生效了吗/);
     expect(text.check).toMatch(
-      /^这一步没有为它声明平台核对，只能由人核对。删除这类动作也能让平台核对/,
+      /^这一步没有为它声明平台核对，只能由人核对。删除这类动作也能交给平台核对：在这一步加一条核对声明/,
     );
+    // #799 review #501 P3-2: both halves — the step's own reconcile declaration and the check.
+    expect(text.check).toMatch(/计划里还要有同一个调用的“不存在”验收检查/);
     expect(unresolvedActionText(unresolved({ needs: 'decision' }), false, zh).needs).toMatch(
       /重新执行，或者改计划/,
     );
@@ -398,7 +400,7 @@ describe('lib/goals', () => {
         },
       });
     expect(unresolvedActionText(check('never_seen_present'), false, zh).check).toBe(
-      '平台核对不了：动作之前平台没有看到过它在，现在门说它不在，也证明不了是这个动作删掉的。要有人核对后记下结果。',
+      '平台核对不了：动作之前平台没有看到过它在，就算门回答它不在，也证明不了是这个动作删掉的，所以平台没有去问门。要有人核对后记下结果。',
     );
     expect(unresolvedActionText(check('gate_unreachable'), false, zh).check).toMatch(
       /^平台核对不了（观察被拒绝或一直没有答复）/,

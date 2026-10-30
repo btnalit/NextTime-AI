@@ -40,7 +40,8 @@ import { lockGoalRun } from './service.js';
  *     target can answer a lookup of something it does not have with a 200 and an empty result, which
  *     no Operation can declare as "not there". So the answer must show the thing
  *     ({@link presenceShown}): the shape the Operation's `result_mapping` declares — an item with
- *     its identity — or, without one, a result that is not empty. Data that does not show it
+ *     its identity — or, without one, a result that is not empty; an answer with no content at all
+ *     (no body, nothing printed) goes by its success status or exit code. Data that does not show it
  *     settles `unavailable` (`presence_not_confirmed`) at once: the params may name nothing, and a
  *     retry would ask the same.
  *   - **absent**, in an answer the published Operation declares means so — it is not there before
@@ -76,10 +77,14 @@ const BASELINE_ACTIVITY_KIND = 'goal_absence_baseline';
  *     gate maps its answers into observed Facts by (`@nexttime/gatekeeper-base` `result-mapping.ts`)
  *     — at least one item its `jmes_path` matches is an object carrying every `identity_keys` field
  *     with a value (neither missing, null nor an empty string);
- *   - otherwise, a result that is not empty: not null, not a blank string, not `false` or `0`, and
- *     not an array or object that is empty or whose every member is (`[]`, `{}`,
- *     `{"items": [], "total": 0}`, `{"found": false}`) — the shapes a target gives for "nothing
- *     matched" with a 200.
+ *   - otherwise, an answer with no content at all is the thing there: an http response with no
+ *     body (a HEAD lookup, a 204) or a blank one, or a cli / ssh run that printed nothing
+ *     (`test -e`, `grep -q`, a wrapper script that exits 0 quietly). Its success status or exit
+ *     code is the whole answer, and the gate answers with data only on success (review #501 on
+ *     #799: these lookups worked before legacy 507 and must not stall);
+ *   - an answer with content must not be empty: not null, not `false` or `0`, and not an array or
+ *     object that is empty or whose every member is (`[]`, `{}`, `{"items": [], "total": 0}`,
+ *     `{"found": false}`) — the shapes a target gives for "nothing matched" with a 200.
  *
  * The rule errs towards "not shown": a thing it misses pauses the run for the requester, who
  * resumes to look again or revises the check; a thing it wrongly took as there would let a later
@@ -90,7 +95,7 @@ export function presenceShown(
   data: unknown,
 ): boolean {
   const mapping = operation.result_mapping;
-  if (!mapping) return !isEmptyResult(data);
+  if (!mapping) return noContent(data) || !isEmptyResult(data);
   let matched: unknown;
   try {
     matched = jmespath.search(data as never, mapping.jmes_path);
@@ -108,6 +113,25 @@ export function presenceShown(
         const value = (item as Record<string, unknown>)[key];
         return value !== undefined && value !== null && value !== '';
       }),
+  );
+}
+
+/** No content at all: no body (`undefined` — the gate's http kind sends no `data` for an empty
+ *  one), a blank text body, or a command's output with nothing on stdout or stderr. */
+function noContent(data: unknown): boolean {
+  if (data === undefined) return true;
+  if (typeof data === 'string') return data.trim() === '';
+  return isCommandOutput(data) && data.stdout.trim() === '' && data.stderr.trim() === '';
+}
+
+/** A cli / ssh observe answer: `{ stdout, stderr }` and nothing else. */
+function isCommandOutput(data: unknown): data is { stdout: string; stderr: string } {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return false;
+  const fields = data as Record<string, unknown>;
+  return (
+    Object.keys(fields).length === 2 &&
+    typeof fields.stdout === 'string' &&
+    typeof fields.stderr === 'string'
   );
 }
 

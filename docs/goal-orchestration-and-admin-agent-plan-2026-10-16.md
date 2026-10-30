@@ -289,7 +289,8 @@ apply_failed（本段整体回滚）→ verifying → verified | verification_fa
   `observe_absent`（目标的和未结束步骤的）用同样的调用先看一次，记成基线（`goal_absence_baselines`，每看一次一行，证据是 Observation）。
   - 看到它在（`seen_present`）：步骤才开始；之后这条检查只能在比基线更晚的“不存在”上通过（I-AB1，数据库触发器 + I-G5 检查器）。
     “看到它在”要从门的回答里看得出来（遗留 507）：Operation 声明了 `result_mapping` 时，按它至少匹配到一个带全部 identity 字段的对象；
-    没声明时，结果不能是空的（null、空串、false、0、空数组或空对象，以及成员全空的容器，如 `{"items": [], "total": 0}`）。看不出就记
+    没声明时，回答完全没有内容（http 没有响应体或响应体是空白、cli / ssh 什么都没打印）就以成功状态码 / 退出码为准，算看到；有内容时内容不能是空的
+    （null、false、0、空数组或空对象，以及成员全空的容器，如 `{"items": [], "total": 0}`）。看不出就记
     `unavailable`（`presence_not_confirmed`），照样暂停。这条规则在内核里判（数据库判不了 JMESPath）；要求匹配到的 identity 等于参数、或给
     Operation 加专门的“存在”声明，留作以后。
   - 门说它本来就不在（`never_seen_present`）或没能看（`unavailable`）：`paused(needs_decision)`，请求人核对参数后修订、继续（再看一次）或取消。

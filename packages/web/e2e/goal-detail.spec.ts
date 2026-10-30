@@ -797,7 +797,8 @@ test.describe('S11 「门确认不存在」 B: absence checks on a goal (stand-i
         '之后门回答它不在，就说明是在目标运行期间删掉的。',
       );
       const removeOld = page.locator('[data-testid="goal-step"][data-step-key="remove-old"]');
-      await removeOld.getByText(/这一步的验收检查/).click();
+      // The summary, not the reconcile note below that names this step's check too.
+      await removeOld.locator('summary', { hasText: '这一步的验收检查' }).click();
       const stepBasis = removeOld.getByTestId('goal-absence-basis');
       await expect(stepBasis).toHaveAttribute('data-basis', 'unconfirmed');
       await expect(stepBasis).toContainText('所以平台不做这条检查。');
@@ -807,7 +808,7 @@ test.describe('S11 「门确认不存在」 B: absence checks on a goal (stand-i
       await expect(stepLook).toContainText('平台没能看它在不在：');
       await expect(stepLook).toContainText('所以目标暂停，没有往下做');
       await expect(stepLook).not.toContainText('开始前');
-      await removeOld.getByText(/结果不明时平台怎么核对/).click();
+      await removeOld.locator('summary', { hasText: '结果不明时平台怎么核对' }).click();
       await expect(removeOld.getByTestId('goal-reconcile-absence')).toHaveText(
         '门回答它不在，就算这个动作生效了。前提是动作之前平台看到过它在：用的是这一步的验收检查「binding-gone」那次事先查看。',
       );
