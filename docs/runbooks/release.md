@@ -1980,6 +1980,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **窗口里的变化**：S1 / S2 / S3 的 fake 路径现在会在进入和退出时各重启一次 kernel（读验收的模型目录），窗口里跑验收时 kernel 有两次短暂重启。验收的 models.json 在 `${NEXTTIME_DATA}/accept/models/`，只读挂给 kernel 的 `/data/models`；不挂整个 accept 目录（llm-proxy 的 `keys.json` 在那里）。
 - **为什么**：#848 起 kernel 发布 WorkerDefinition 时按它挂载的模型目录校验模型，原来验收只把 llm-proxy 与 worker-supervisor 切到 fake 目录，S2 的 `ops-runner-publish` 会 400。
 - **注意**：退出时的 restore 也重建 kernel，这一步失败按 P1 处理（遗留 548 会写进 runbook）；带 `spec.model` 的生产目标运行在验收期间可能暂停（遗留 545）。
+- **#862 起（同一下一版）**：两次 kernel 重启之后脚本都会等 agent-host 重新连上（日志 `kernel-link: connected`，最多 `ACCEPT_KERNEL_LINK_WAIT_S` 秒，默认 60）；恢复失败或链路没回来打 `accept: P1 — …`、退出码为 1，做法见 `accept-s1.md` §1（遗留 545、548 已关）。
 
 ### 3.85 重试的模型回落与「版本不再发布」的提示（#857，遗留 543、544，v0.53.0 之后的下一版起）
 
