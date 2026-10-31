@@ -28,10 +28,11 @@ import {
  * gates and capabilities as the requester's authority (`resolveStepAuthority` with the WorkerSpec),
  * then its components (`workerSpecComponentRefusals`): a draft Skill it names (the step would wait
  * for a person's approval), a deprecated one, or a model the workspace does not allow or — with a
- * `modelCatalog`, a paused run's read — the llm-proxy catalog no longer offers (refused), one hint
- * each. A Skill that is not there is not a hint: the plan no longer validates. A step of a
- * paused run waiting to be tried again (`retried`) is checked the way a later attempt is: its
- * authority and its model, never its Skills — that attempt reuses the ones its first one mounted.
+ * `modelCatalog`, a read of a proposal or of a paused run — the llm-proxy catalog no longer offers
+ * (refused; confirming the proposal would fail its validation), one hint each. A Skill that is not
+ * there is not a hint: the plan no longer validates. A step of a paused run waiting to be tried
+ * again (`retried`) is checked the way a later attempt is: its authority and its model, never its
+ * Skills — that attempt reuses the ones its first one mounted.
  *
  * Legacy 513: a read served to a person (`checkAccounts`) also asks each gate a step that would
  * start declares whether the requester has connected their own account there
@@ -122,8 +123,9 @@ export interface PlanAuthorityHintOptions {
   readonly retried?: ReadonlySet<string>;
   /** S11 GO8a: the llm-proxy catalog a WorkerSpec's model is checked against — read once, only
    *  when a step checked sets a model; `null` from it (unreadable) or absent: not checked. A plan
-   *  is validated against it when proposed, confirmed or revised (`validatePlan`), so only a paused
-   *  run's read passes it, for a catalog that changed since. */
+   *  is validated against it when proposed, confirmed or revised (`validatePlan`), so only a read
+   *  passes it — of a proposal (confirming it would be refused, UX on #853) or of a paused run —
+   *  for a catalog that changed since. */
   readonly modelCatalog?: () => Promise<ReadonlySet<string> | null>;
 }
 

@@ -339,6 +339,35 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
       /平台管理员可以在「平台 → 工作区」里允许它，或者在对话里让入口智能体修订计划换掉它，或者在「修订计划…」里移除这一步。$/,
     );
     expect(hint?.textContent).not.toContain('驳回');
+    expect(hint?.textContent).toContain('这一步不会开始，');
+  });
+
+  it('S11 GO8a: a step waiting to be tried again is said, in the pause and in its note, not to be tried again (UX on #853)', async () => {
+    const detail = goalDetail({
+      status: 'paused',
+      pauseReason: 'needs_decision',
+      steps: [stepRun({ status: 'ready', attemptCount: 1 })],
+      planRevision: {
+        ...goalDetail().planRevision,
+        hints: [
+          {
+            code: 'step_model_not_offered',
+            message: 'step "fetch": …',
+            stepKey: 'fetch',
+            model: 'gone-model',
+          },
+        ],
+      },
+    });
+    renderPage(scriptedHttp(baseHandlers(detail)));
+    expect((await screen.findByTestId('goal-state-note')).textContent).toContain(
+      '这一步没有再试。',
+    );
+    const [hint] = screen.getAllByTestId('goal-step-hint');
+    expect(hint?.textContent).toContain(
+      '已经不在模型目录里：这一步不会再试，目标会停在这里等人处理。',
+    );
+    expect(hint?.textContent).not.toContain('不会开始');
   });
 
   it('legacy 513: a step on a gate where the requester has not connected their account says so, with where to connect it; a refused action says why', async () => {

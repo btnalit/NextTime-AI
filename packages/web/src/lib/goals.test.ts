@@ -35,6 +35,7 @@ import {
   predicateSentence,
   reconcileAbsenceCheckOf,
   reconcileCheckSentence,
+  retriedStepKeys,
   skillRefShown,
   stepHintChipLabel,
   unresolvedActionText,
@@ -230,6 +231,30 @@ describe('lib/goals', () => {
     expect(planHintText(notOffered, en, new Map(), 'revision')).toMatch(
       /which the model catalog no longer offers — .* under Platform → Models & providers, or ask the entry agent/,
     );
+    // On a proposal (the catalog dropped it since it was proposed): confirming would be refused
+    // (UX P3-5 on #853).
+    expect(planHintText(notOffered, zh)).toBe(
+      '步骤「think」给 Worker 设定的模型「big-model」已经不在模型目录里：现在确认会被拒绝。平台管理员可以在「平台 → 模型与供应商」里重新提供它再确认，或者驳回，让助手换个做法。',
+    );
+    expect(planHintText(notOffered, en)).toMatch(
+      /no longer offers — confirming would be refused now\. .* before you confirm, or turn the plan down/,
+    );
+    // A step waiting to be tried again would not be tried again, as the pause note says (UX P3-6).
+    expect(planHintText(model, zh, new Map(), 'revision', true)).toMatch(
+      /不在这个工作区允许的模型里：这一步不会再试，目标会停在这里等人处理。/,
+    );
+    expect(planHintText(model, en, new Map(), 'revision', true)).toMatch(
+      /does not allow — the step would not be tried again, and the goal would pause there/,
+    );
+    expect(
+      planHintText(
+        { code: 'step_gate_not_held', message: 'm', stepKey: 'a', gatekeeperIds: ['g'] },
+        zh,
+        new Map([['g', '防火墙']]),
+        'revision',
+        true,
+      ),
+    ).toMatch(/请求人现在没有这个门的权限：这一步不会再试，/);
 
     // Each is a step's hint, with its own chip; none shows a code.
     for (const hint of [draft, deprecated, model, notOffered]) {
@@ -348,6 +373,23 @@ describe('lib/goals', () => {
     expect(goalStateNote(retried, undefined, budget, en)?.text).toMatch(
       /which the model catalog no longer offers, so the step was not tried again\./,
     );
+    // The steps card says the same of the step (UX P3-6): ready after an attempt, in force.
+    expect([...retriedStepKeys(retried)]).toEqual(['a']);
+    expect([
+      ...retriedStepKeys({
+        steps: [
+          stepRun({ id: 'sr-a', stepKey: 'a', status: 'ready', attemptCount: 0, attempts: [] }),
+          stepRun({ id: 'sr-b', stepKey: 'b', status: 'running', attemptCount: 1 }),
+          stepRun({
+            id: 'sr-c',
+            stepKey: 'c',
+            status: 'ready',
+            attemptCount: 1,
+            supersededInRevision: 2,
+          }),
+        ],
+      }),
+    ]).toEqual([]);
     expect(
       goalStateNote(
         paused('needs_decision', [

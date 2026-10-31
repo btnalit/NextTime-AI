@@ -548,7 +548,7 @@ function modelCatalog(): Promise<ReadonlySet<string>> {
   return readModelCatalogIds();
 }
 
-/** S11 GO8a: the catalog a paused run's hints are worked out against — a read, so an unreadable
+/** S11 GO8a: the catalog the hints of a proposal and of a paused run are worked out against — a read, so an unreadable
  *  catalog leaves the model unchecked there instead of failing it (the attempt checks it). */
 async function hintModelCatalog(): Promise<ReadonlySet<string> | null> {
   try {

@@ -26,6 +26,7 @@ import {
   reconcileAbsenceCheckOf,
   reconcileCheckSentence,
   reconciliationLabel,
+  retriedStepKeys,
   stepAcceptanceLabel,
   stepFailureText,
   stepHintChipLabel,
@@ -82,6 +83,8 @@ export function GoalStepsSection({
   const authorityHints = detail.planRevision.hints.filter(isStepAuthorityHint);
   // A proposal can still be turned down; a paused run's revision is in force, revised again.
   const hintContext = detail.status === 'proposed' ? 'proposal' : 'revision';
+  // S11 GO8a: a step waiting to be tried again would not be tried again (UX on #853).
+  const retried = retriedStepKeys(detail);
   const hintsByStep = new Map<string, PlanHint[]>();
   for (const hint of authorityHints) {
     if (hint.stepKey === undefined) continue;
@@ -93,7 +96,13 @@ export function GoalStepsSection({
         <div className="stack-s">
           {authorityHints.map((hint) => (
             <Notice key={planHintKey(hint)} tone="warn" testId="goal-step-hint">
-              {planHintText(hint, t, gateNames, hintContext)}
+              {planHintText(
+                hint,
+                t,
+                gateNames,
+                hintContext,
+                hint.stepKey !== undefined && retried.has(hint.stepKey),
+              )}
               {/* Legacy 513: where the requester connects their own account. */}
               {hint.code === 'step_account_not_connected' ? (
                 <>

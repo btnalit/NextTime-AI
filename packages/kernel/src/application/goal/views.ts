@@ -313,8 +313,8 @@ export interface PlanRevisionView {
 /** Legacy 513: what a read served to a person adds — see `planAuthorityHints`' `checkAccounts`. */
 export interface GoalReadOptions {
   readonly checkAccounts?: boolean;
-  /** S11 GO8a: the llm-proxy catalog a paused run's steps are hinted against — see
-   *  `planAuthorityHints`' `modelCatalog`. */
+  /** S11 GO8a: the llm-proxy catalog the steps of a proposal and of a paused run are hinted
+   *  against — see `planAuthorityHints`' `modelCatalog`. */
   readonly modelCatalog?: () => Promise<ReadonlySet<string> | null>;
 }
 
@@ -337,7 +337,7 @@ async function planRevisionView(
   // the requester's authority would stop now, worked out on every read (`precheck.ts`). S11 GO8a:
   // so is the revision in force of a paused run, for the steps that have not started an attempt or
   // wait to be tried again — the pause then says which step would not start, and why (a draft
-  // Skill waiting for a person, a gate the requester lost, a model no longer allowed).
+  // Skill waiting for a person, a gate the requester lost, a model no longer allowed or offered).
   const { steps: checked, retried } = await stepsToCheck(client, workspaceId, goal, revision, plan);
   return {
     revision,
@@ -353,9 +353,10 @@ async function planRevisionView(
             {
               checkAccounts: options.checkAccounts === true,
               retried,
-              ...(goal.status === 'paused' && options.modelCatalog
-                ? { modelCatalog: options.modelCatalog }
-                : {}),
+              // A plan is validated against the catalog when proposed, confirmed or revised: a
+              // read says what changed since — confirming would be refused (UX on #853), or the
+              // next attempt would be.
+              ...(options.modelCatalog ? { modelCatalog: options.modelCatalog } : {}),
             },
           )
         : []),

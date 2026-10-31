@@ -775,6 +775,30 @@ describe.runIf(DATABASE_URL !== undefined)(
         ]);
       });
 
+      it('a proposal whose model the catalog dropped since says so on its read, and confirming it is refused (UX on #853)', async () => {
+        const requester = await newPrincipal();
+        const { goalRunId } = await propose(
+          requester,
+          [{ key: 'a', spec: { model: 'p/m1' } }],
+          async () => new Set(['p/m1']),
+        );
+        expect(stepHints(await detailHints(goalRunId, requester, ['p/m1']))).toEqual([]);
+        expect(stepHints(await detailHints(goalRunId, requester, ['p/other']))).toEqual([
+          expect.objectContaining({ code: 'step_model_not_offered', stepKey: 'a', model: 'p/m1' }),
+        ]);
+        await expect(
+          asRequester(requester, (client) =>
+            confirmGoalRun(client, workspaceId, {
+              goalRunId,
+              revision: 1,
+              confirmedBy: requester,
+              modelCatalog: async () => new Set(['p/other']),
+            }),
+          ),
+        ).rejects.toBeInstanceOf(GoalPlanValidationError);
+        expect(await goalOf(goalRunId)).toMatchObject({ status: 'proposed' });
+      });
+
       it('a retry is refused once the catalog drops the model — not offered comes before not allowed', async () => {
         const requester = await newPrincipal();
         const goalRunId = await startGoal(requester, [{ key: 'a', spec: { model: 'p/m1' } }]);
