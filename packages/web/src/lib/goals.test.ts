@@ -9,7 +9,7 @@ import {
   validateOutput,
 } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
-import { goalRun, stepRun } from '../components/goals/goal-fixtures.test-helpers.js';
+import { goalDetail, goalRun, stepRun } from '../components/goals/goal-fixtures.test-helpers.js';
 import {
   type GoalMilestone,
   absenceOperationKey,
@@ -17,6 +17,7 @@ import {
   checkErrorLabel,
   checkErrorReason,
   checkKindLabel,
+  confirmRefusedText,
   exhaustedBudget,
   factCheckSentence,
   goalBudgetRows,
@@ -35,9 +36,14 @@ import {
   predicateSentence,
   reconcileAbsenceCheckOf,
   reconcileCheckSentence,
+  retriedStepKeys,
+  skillRefShown,
   stepHintChipLabel,
   unresolvedActionText,
   unresolvedCheckErrorText,
+  workerSpecCombination,
+  workerSpecFields,
+  workerSpecSummary,
 } from './goals.js';
 import type { Translate } from './i18n.js';
 
@@ -161,6 +167,314 @@ describe('lib/goals', () => {
     );
     expect(isStepAuthorityHint(hint)).toBe(true);
     expect(stepHintChipLabel(hint, zh)).toBe('请求人未连接账户');
+  });
+
+  it('S11 GO8a: what the admission of a step’s WorkerSpec says, with what to do next where it is read', () => {
+    const draft = {
+      code: 'step_skill_draft' as const,
+      message: 'step "draft": …',
+      stepKey: 'draft',
+      skillRefs: ['cert-rotation', '33333333-4444-4555-8666-777777777777'],
+    };
+    const proposal = planHintText(draft, zh);
+    // Each Skill as the plan names it, an id cut short; the step would not start; who moves it.
+    expect(proposal).toMatch(
+      /^步骤「draft」的 Worker 要用 Skill「cert-rotation」、「33333333」，它们还只是草稿，没有发布：这一步不会开始，/,
+    );
+    expect(proposal).not.toContain('33333333-4444-4555-8666-777777777777');
+    expect(proposal).toContain('有发布权的人可以先在「能力目录」发布它们再确认，或者驳回');
+    const revised = planHintText(
+      { ...draft, skillRefs: ['cert-rotation'] },
+      zh,
+      new Map(),
+      'revision',
+    );
+    expect(revised).toContain('它还只是草稿');
+    // The console's 「修订计划…」 keeps a WorkerSpec as it is: the entry agent changes it (UX P3-3).
+    expect(revised).toContain(
+      '发布它，或者在对话里让入口智能体修订计划换掉它，或者在「修订计划…」里移除这一步。',
+    );
+    expect(revised).not.toContain('驳回');
+    expect(planHintText(draft, en)).toMatch(
+      /^Step “draft”: its Worker uses Skills “cert-rotation”, “33333333”, which are only drafts, not published — .* in Catalog before you confirm, or turn the plan down/,
+    );
+
+    const deprecated = {
+      code: 'step_skill_deprecated' as const,
+      message: 'm',
+      stepKey: 'old',
+      skillRefs: ['legacy-scan'],
+    };
+    expect(planHintText(deprecated, zh)).toMatch(
+      /^步骤「old」的 Worker 要用的 Skill「legacy-scan」已经弃用，没有能用的版本：这一步不会开始，.*可以驳回，让助手换一个已发布的 Skill。$/,
+    );
+    expect(planHintText(deprecated, zh, new Map(), 'revision')).toMatch(
+      /可以在对话里让入口智能体修订计划，换一个已发布的 Skill，或者在「修订计划…」里移除这一步。$/,
+    );
+
+    const model = {
+      code: 'step_model_not_allowed' as const,
+      message: 'm',
+      stepKey: 'think',
+      model: 'big-model',
+    };
+    expect(planHintText(model, zh)).toMatch(
+      /^步骤「think」给 Worker 设定的模型「big-model」不在这个工作区允许的模型里：.*平台管理员可以在「平台 → 工作区」里允许它，或者驳回/,
+    );
+    expect(planHintText(model, en, new Map(), 'revision')).toMatch(
+      /Platform → Workspaces, or ask the entry agent in chat to revise the plan and change it, or remove the step under “Revise plan…”\.$/,
+    );
+    // A model the catalog no longer offers (a paused run's read): offered again, or the plan changes.
+    const notOffered = { ...model, code: 'step_model_not_offered' as const };
+    expect(planHintText(notOffered, zh, new Map(), 'revision')).toMatch(
+      /^步骤「think」给 Worker 设定的模型「big-model」已经不在模型目录里：这一步不会开始，.*平台管理员可以在「平台 → 模型与供应商」里重新提供它，或者在对话里让入口智能体修订计划换掉它/,
+    );
+    expect(planHintText(notOffered, en, new Map(), 'revision')).toMatch(
+      /which the model catalog no longer offers — .* under Platform → Models & providers, or ask the entry agent/,
+    );
+    // On a proposal (the catalog dropped it since it was proposed): confirming would be refused
+    // (UX P3-5 on #853).
+    expect(planHintText(notOffered, zh)).toBe(
+      '步骤「think」给 Worker 设定的模型「big-model」已经不在模型目录里：现在确认会被拒绝。平台管理员可以在「平台 → 模型与供应商」里重新提供它再确认，或者驳回，让助手换个做法。',
+    );
+    expect(planHintText(notOffered, en)).toMatch(
+      /no longer offers — confirming would be refused now\. .* before you confirm, or turn the plan down/,
+    );
+    // Confirming it refused: the models named once, offered again it can be confirmed; nothing
+    // to say for a refusal the hints do not explain.
+    expect(confirmRefusedText([notOffered, { ...notOffered, stepKey: 'other' }], en)).toBe(
+      'The plan sets model “big-model”, which the model catalog does not offer now, so confirming was refused. Once a platform administrator offers it again under Platform → Models & providers, confirm again; or turn the plan down so the assistant tries another way.',
+    );
+    expect(confirmRefusedText([model, draft], zh)).toBeNull();
+    // A step waiting to be tried again would not be tried again, as the pause note says (UX P3-6).
+    expect(planHintText(model, zh, new Map(), 'revision', true)).toMatch(
+      /不在这个工作区允许的模型里：这一步不会再试，目标会停在这里等人处理。/,
+    );
+    expect(planHintText(model, en, new Map(), 'revision', true)).toMatch(
+      /does not allow — the step would not be tried again, and the goal would pause there/,
+    );
+    expect(
+      planHintText(
+        { code: 'step_gate_not_held', message: 'm', stepKey: 'a', gatekeeperIds: ['g'] },
+        zh,
+        new Map([['g', '防火墙']]),
+        'revision',
+        true,
+      ),
+    ).toMatch(/请求人现在没有这个门的权限：这一步不会再试，/);
+
+    // Each is a step's hint, with its own chip; none shows a code.
+    for (const hint of [draft, deprecated, model, notOffered]) {
+      expect(isStepAuthorityHint(hint)).toBe(true);
+      expect(planHintText(hint, zh)).not.toMatch(/step_|skill_draft|model_not_/);
+    }
+    expect(stepHintChipLabel(notOffered, zh)).toBe('模型不在目录里');
+    expect(stepHintChipLabel(draft, zh)).toBe('Skill 还是草稿');
+    expect(stepHintChipLabel(deprecated, zh)).toBe('Skill 已弃用');
+    expect(stepHintChipLabel(model, en)).toBe('Model not allowed');
+    expect(skillRefShown('cert-rotation')).toBe('cert-rotation');
+  });
+
+  it('S11 GO8a: what a step’s WorkerSpec sets, in the order a reader takes it in', () => {
+    const spec = { tokenBudget: 5000, instructions: 'Rotate only the expiring ones.', skills: [] };
+    expect(workerSpecFields(spec)).toEqual(['instructions', 'skills', 'tokenBudget']);
+    expect(workerSpecSummary(spec, zh)).toBe(
+      '这一步对 Worker 的调整：职责说明、Skill、每次尝试的 Token 上限',
+    );
+    expect(workerSpecSummary(spec, en)).toBe(
+      'Set differently for this step: Responsibility, Skills, Token cap per attempt',
+    );
+    // How it combines with the Worker: said only of the fields set (UX P3-1).
+    expect(workerSpecCombination(spec, zh)).toBe(
+      'Skill 替换 Worker 原有的设定；职责说明加在 Worker 原有的系统提示之后；Token 上限不会超出目标剩下的预算。',
+    );
+    expect(workerSpecCombination({ model: 'p/m1' }, zh)).toBe('模型替换 Worker 原有的设定。');
+    expect(workerSpecCombination({ model: 'p/m1' }, en)).toBe(
+      'The model replaces the Worker’s own.',
+    );
+    expect(
+      workerSpecCombination(
+        { gates: [], capabilities: ['observe_operation'], observeScope: [] },
+        en,
+      ),
+    ).toBe(
+      'The gates and the capabilities replace the Worker’s own; the observation scope is the gatekeepers this step’s task may read through; what the step may do never goes past what a Worker may hold and what the requester holds now.',
+    );
+  });
+
+  it('S11 GO8a: a paused run names the step that did not start, and why', () => {
+    const budget = goalBudgetRows(goalRun(), zh);
+    const paused = (
+      reason: 'needs_decision' | 'authority_lost',
+      hints: GoalDetailWire['planRevision']['hints'],
+      steps = [
+        stepRun({ id: 'sr-a', stepKey: 'a', status: 'ready', attemptCount: 0, attempts: [] }),
+      ],
+    ) => {
+      const detail = goalDetail();
+      return {
+        ...detail,
+        status: 'paused' as const,
+        pauseReason: reason,
+        steps,
+        planRevision: { ...detail.planRevision, hints },
+      };
+    };
+    const draft = {
+      code: 'step_skill_draft' as const,
+      message: 'm',
+      stepKey: 'a',
+      skillRefs: ['cert-rotation'],
+    };
+    expect(goalStateNote(paused('needs_decision', [draft]), undefined, budget, zh)?.text).toBe(
+      '需要人决定：步骤「a」的 Worker 要用的 Skill「cert-rotation」还只是草稿，这一步没有开始。在「能力目录」发布之后按「继续」，或者在对话里让入口智能体修订计划换掉它，见下面「步骤」里的说明。',
+    );
+    expect(goalStateNote(paused('needs_decision', [draft]), undefined, budget, en)?.text).toMatch(
+      /^A person must decide: the Worker of step “a” uses Skill “cert-rotation”, still a draft, so the step did not start\./,
+    );
+    expect(
+      goalStateNote(
+        paused('needs_decision', [
+          { code: 'step_model_not_allowed', message: 'm', stepKey: 'a', model: 'big-model' },
+        ]),
+        undefined,
+        budget,
+        en,
+      )?.text,
+    ).toMatch(/^A person must decide: step “a” sets its Worker’s model to “big-model”/);
+    expect(
+      goalStateNote(
+        paused('needs_decision', [{ ...draft, code: 'step_skill_deprecated' }]),
+        undefined,
+        budget,
+        zh,
+      )?.text,
+    ).toMatch(
+      /Skill「cert-rotation」已经弃用，这一步没有开始。在对话里让入口智能体修订计划，换一个已发布的 Skill/,
+    );
+    // One step with several reasons: every one named, not only the one its attempt was refused for
+    // (UX P3-2).
+    expect(
+      goalStateNote(
+        paused('needs_decision', [
+          { code: 'step_model_not_allowed', message: 'm', stepKey: 'a', model: 'big-model' },
+          draft,
+        ]),
+        undefined,
+        budget,
+        zh,
+      )?.text,
+    ).toBe(
+      '需要人决定：步骤「a」不能照计划往下做：模型不允许、Skill 还是草稿。见下面「步骤」里的说明。',
+    );
+    // A step waiting to be tried again (review #493 P2): its model is checked again, and the note
+    // says it was not tried again.
+    const retried = paused(
+      'needs_decision',
+      [{ code: 'step_model_not_offered', message: 'm', stepKey: 'a', model: 'gone-model' }],
+      [stepRun({ id: 'sr-a', stepKey: 'a', status: 'ready', attemptCount: 1 })],
+    );
+    expect(goalStateNote(retried, undefined, budget, zh)?.text).toBe(
+      '需要人决定：步骤「a」给 Worker 设定的模型「gone-model」已经不在模型目录里，这一步没有再试。见下面「步骤」里的说明。',
+    );
+    expect(goalStateNote(retried, undefined, budget, en)?.text).toMatch(
+      /which the model catalog no longer offers, so the step was not tried again\./,
+    );
+    // The steps card says the same of the step (UX P3-6): ready after an attempt, in force.
+    expect([...retriedStepKeys(retried)]).toEqual(['a']);
+    expect([
+      ...retriedStepKeys({
+        steps: [
+          stepRun({ id: 'sr-a', stepKey: 'a', status: 'ready', attemptCount: 0, attempts: [] }),
+          stepRun({ id: 'sr-b', stepKey: 'b', status: 'running', attemptCount: 1 }),
+          stepRun({
+            id: 'sr-c',
+            stepKey: 'c',
+            status: 'ready',
+            attemptCount: 1,
+            supersededInRevision: 2,
+          }),
+        ],
+      }),
+    ]).toEqual([]);
+    expect(
+      goalStateNote(
+        paused('needs_decision', [
+          { code: 'step_definition_excluded', message: 'm', stepKey: 'a' },
+        ]),
+        undefined,
+        budget,
+        zh,
+      )?.text,
+    ).toMatch(/^需要人决定：请求人的智能体设置排除了步骤「a」的 Worker/);
+    // Two steps that would not start: both named, the notes under Steps say why.
+    const two = paused(
+      'needs_decision',
+      [draft, { ...draft, stepKey: 'b' }],
+      [
+        stepRun({ id: 'sr-a', stepKey: 'a', status: 'ready', attemptCount: 0, attempts: [] }),
+        stepRun({ id: 'sr-b', stepKey: 'b', status: 'ready', attemptCount: 0, attempts: [] }),
+      ],
+    );
+    expect(goalStateNote(two, undefined, budget, zh)?.text).toBe(
+      '需要人决定：步骤「a」、「b」不能照计划往下做。见下面「步骤」里的说明。',
+    );
+    // A step still waiting for others is not why the run paused: the general note stays.
+    const pending = paused(
+      'needs_decision',
+      [draft],
+      [stepRun({ id: 'sr-a', stepKey: 'a', status: 'pending', attemptCount: 0, attempts: [] })],
+    );
+    expect(goalStateNote(pending, undefined, budget, zh)?.text).toMatch(
+      /^需要人决定：验收没通过、动作被拒绝或过期/,
+    );
+    // Nor is a draft while another step failed.
+    const failed = paused(
+      'needs_decision',
+      [draft],
+      [
+        stepRun({ id: 'sr-a', stepKey: 'a', status: 'ready', attemptCount: 0, attempts: [] }),
+        stepRun({ id: 'sr-b', stepKey: 'b', status: 'failed', failureCategory: 'action_refused' }),
+      ],
+    );
+    expect(goalStateNote(failed, undefined, budget, zh)?.text).toMatch(
+      /^需要人决定：验收没通过、动作被拒绝或过期/,
+    );
+
+    // authority_lost: the step whose gate the requester lost, or the requester as a whole.
+    const gate = {
+      code: 'step_gate_not_held' as const,
+      message: 'm',
+      stepKey: 'a',
+      gatekeeperIds: ['11111111-2222-4333-8444-555555555555'],
+    };
+    expect(goalStateNote(paused('authority_lost', [gate]), undefined, budget, zh)?.text).toBe(
+      '请求人已经没有步骤「a」需要的授权，这一步没有开始，目标暂停了。授权恢复或改计划之后才能继续，见下面「步骤」里的说明。',
+    );
+    expect(
+      goalStateNote(
+        paused(
+          'authority_lost',
+          [gate],
+          [stepRun({ id: 'sr-a', stepKey: 'a', status: 'ready', attemptCount: 2 })],
+        ),
+        undefined,
+        budget,
+        en,
+      )?.text,
+    ).toMatch(/needs, so it was not tried again and the goal is paused/);
+    expect(
+      goalStateNote(
+        paused('authority_lost', [{ code: 'requester_cannot_start_workers', message: 'm' }]),
+        undefined,
+        budget,
+        zh,
+      )?.text,
+    ).toMatch(/^请求人现在不能启动 Worker（角色不允许，或已被停用），目标暂停了。/);
+    // Read without the plan (a list row), or with no hint: the general note.
+    expect(goalStateNote(paused('authority_lost', []), undefined, budget, zh)?.text).toBe(
+      '请求人已经没有下一步需要的授权，目标暂停了。授权恢复或改计划之后才能继续。',
+    );
   });
 
   it("legacy 513: a step's refused action reads by its code, never as the code itself", () => {

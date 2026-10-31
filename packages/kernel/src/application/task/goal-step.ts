@@ -88,30 +88,44 @@ export async function lockGoalStepForNewWork(
  * platform's instance instructions (platform policy is always current; only their digest is kept)
  * and the attempt's budget (what is left of the goal's).
  *
- * Never credentials: ids, versions, a model id, an image reference, a digest, capability names and
+ * Never credentials: ids, versions, a model id, an image reference, digests, capability names and
  * gatekeeper ids.
  */
-export const RunConfigSnapshotSchema = z
-  .object({
-    v: z.literal(1),
-    definition: z.object({ id: z.string(), version: z.number().int().positive() }).strict(),
-    skills: z.array(
-      z.object({ skillId: z.string(), version: z.number().int().positive() }).strict(),
-    ),
-    model: z.string().nullable(),
-    image: z.string().nullable(),
-    systemPromptDigest: z.string().nullable(),
-    handle: z
-      .object({ capabilities: z.array(z.string()), gatekeepers: z.array(z.string()) })
-      .strict(),
-    budget: z
-      .object({
-        tokenBudget: z.number().int().positive().nullable(),
-        durationLimitSec: z.number().int().positive(),
-      })
-      .strict(),
-  })
-  .strict();
+const RUN_CONFIG_SNAPSHOT_FIELDS = {
+  definition: z.object({ id: z.string(), version: z.number().int().positive() }).strict(),
+  skills: z.array(z.object({ skillId: z.string(), version: z.number().int().positive() }).strict()),
+  model: z.string().nullable(),
+  image: z.string().nullable(),
+  systemPromptDigest: z.string().nullable(),
+  handle: z
+    .object({ capabilities: z.array(z.string()), gatekeepers: z.array(z.string()) })
+    .strict(),
+  budget: z
+    .object({
+      tokenBudget: z.number().int().positive().nullable(),
+      durationLimitSec: z.number().int().positive(),
+    })
+    .strict(),
+} as const;
+
+/**
+ * Version 2 (S11 GO8a) adds `spec`: the digest of the step's WorkerSpec the first attempt was
+ * admitted with (`null`: the plan entry sets none — the Worker as its definition is). Its
+ * components are the snapshot's own fields — the model, the Skill versions, the Handle — so only
+ * the digest is kept: a later attempt starts only for the same WorkerSpec (a revision that changes
+ * it is a new StepRun, admitted afresh). Version 1 snapshots, written before, still read; the
+ * advancer writes version 2 only.
+ */
+export const RunConfigSnapshotSchema = z.discriminatedUnion('v', [
+  z.object({ v: z.literal(1), ...RUN_CONFIG_SNAPSHOT_FIELDS }).strict(),
+  z
+    .object({
+      v: z.literal(2),
+      ...RUN_CONFIG_SNAPSHOT_FIELDS,
+      spec: z.object({ digest: z.string() }).strict().nullable(),
+    })
+    .strict(),
+]);
 
 export type RunConfigSnapshot = z.infer<typeof RunConfigSnapshotSchema>;
 

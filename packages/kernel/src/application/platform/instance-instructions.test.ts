@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   INSTANCE_INSTRUCTIONS_MARKER,
   PROMPT_ADDENDUM_MARKER,
+  STEP_INSTRUCTIONS_MARKER,
   composeSystemPrompt,
 } from './instance-instructions.js';
 
@@ -78,5 +79,19 @@ describe('composeSystemPrompt', () => {
     expect(composeSystemPrompt({ base: undefined, promptAddendum: ADDENDUM })).toBe(
       `${PROMPT_ADDENDUM_MARKER}\n${ADDENDUM}`,
     );
+  });
+});
+
+describe('composeSystemPrompt — a goal step’s responsibility (S11 GO8a)', () => {
+  it('adds a WorkerSpec’s instructions after the definition’s prompt, marked, before the platform’s', () => {
+    const prompt = composeSystemPrompt({
+      base: BASE,
+      stepInstructions: '  Only the backups.  ',
+      instanceInstructions: INSTRUCTIONS,
+    });
+    expect(prompt).toBe(
+      `${BASE}\n\n${STEP_INSTRUCTIONS_MARKER}\nOnly the backups.\n\n${INSTANCE_INSTRUCTIONS_MARKER}\n${INSTRUCTIONS}`,
+    );
+    expect(composeSystemPrompt({ base: BASE, stepInstructions: ' \n ' })).toBe(BASE);
   });
 });

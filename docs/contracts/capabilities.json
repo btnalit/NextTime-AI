@@ -18634,7 +18634,11 @@
                       "step_gate_not_held",
                       "step_capability_not_held",
                       "step_definition_excluded",
-                      "step_account_not_connected"
+                      "step_account_not_connected",
+                      "step_skill_draft",
+                      "step_skill_deprecated",
+                      "step_model_not_offered",
+                      "step_model_not_allowed"
                     ],
                     "type": "string"
                   },
@@ -18647,6 +18651,15 @@
                   },
                   "message": {
                     "type": "string"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "skillRefs": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
                   },
                   "stepKey": {
                     "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
@@ -19791,6 +19804,61 @@
                         "minItems": 1,
                         "type": "array"
                       },
+                      "spec": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "capabilities": {
+                            "items": {
+                              "maxLength": 200,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "maxItems": 64,
+                            "type": "array"
+                          },
+                          "gates": {
+                            "items": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "maxItems": 64,
+                            "type": "array"
+                          },
+                          "instructions": {
+                            "maxLength": 8000,
+                            "pattern": "\\S",
+                            "type": "string"
+                          },
+                          "model": {
+                            "maxLength": 200,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "observeScope": {
+                            "items": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "maxItems": 64,
+                            "type": "array"
+                          },
+                          "skills": {
+                            "items": {
+                              "maxLength": 200,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "maxItems": 64,
+                            "type": "array"
+                          },
+                          "tokenBudget": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 10000000,
+                            "type": "integer"
+                          }
+                        },
+                        "type": "object"
+                      },
                       "worker": {
                         "additionalProperties": false,
                         "properties": {
@@ -20641,7 +20709,11 @@
                   "step_gate_not_held",
                   "step_capability_not_held",
                   "step_definition_excluded",
-                  "step_account_not_connected"
+                  "step_account_not_connected",
+                  "step_skill_draft",
+                  "step_skill_deprecated",
+                  "step_model_not_offered",
+                  "step_model_not_allowed"
                 ],
                 "type": "string"
               },
@@ -20654,6 +20726,15 @@
               },
               "message": {
                 "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "skillRefs": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               "stepKey": {
                 "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
@@ -21797,6 +21878,61 @@
                     "maxItems": 8,
                     "minItems": 1,
                     "type": "array"
+                  },
+                  "spec": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "capabilities": {
+                        "items": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 64,
+                        "type": "array"
+                      },
+                      "gates": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 64,
+                        "type": "array"
+                      },
+                      "instructions": {
+                        "maxLength": 8000,
+                        "pattern": "\\S",
+                        "type": "string"
+                      },
+                      "model": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "observeScope": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 64,
+                        "type": "array"
+                      },
+                      "skills": {
+                        "items": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 64,
+                        "type": "array"
+                      },
+                      "tokenBudget": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 10000000,
+                        "type": "integer"
+                      }
+                    },
+                    "type": "object"
                   },
                   "worker": {
                     "additionalProperties": false,
@@ -44114,6 +44250,61 @@
                     "minItems": 1,
                     "type": "array"
                   },
+                  "spec": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "capabilities": {
+                        "items": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 64,
+                        "type": "array"
+                      },
+                      "gates": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 64,
+                        "type": "array"
+                      },
+                      "instructions": {
+                        "maxLength": 8000,
+                        "pattern": "\\S",
+                        "type": "string"
+                      },
+                      "model": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "observeScope": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 64,
+                        "type": "array"
+                      },
+                      "skills": {
+                        "items": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 64,
+                        "type": "array"
+                      },
+                      "tokenBudget": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 10000000,
+                        "type": "integer"
+                      }
+                    },
+                    "type": "object"
+                  },
                   "worker": {
                     "additionalProperties": false,
                     "properties": {
@@ -44188,7 +44379,11 @@
                   "step_gate_not_held",
                   "step_capability_not_held",
                   "step_definition_excluded",
-                  "step_account_not_connected"
+                  "step_account_not_connected",
+                  "step_skill_draft",
+                  "step_skill_deprecated",
+                  "step_model_not_offered",
+                  "step_model_not_allowed"
                 ],
                 "type": "string"
               },
@@ -44201,6 +44396,15 @@
               },
               "message": {
                 "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "skillRefs": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               "stepKey": {
                 "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
@@ -52730,6 +52934,61 @@
                     "minItems": 1,
                     "type": "array"
                   },
+                  "spec": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "capabilities": {
+                        "items": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 64,
+                        "type": "array"
+                      },
+                      "gates": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 64,
+                        "type": "array"
+                      },
+                      "instructions": {
+                        "maxLength": 8000,
+                        "pattern": "\\S",
+                        "type": "string"
+                      },
+                      "model": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "observeScope": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 64,
+                        "type": "array"
+                      },
+                      "skills": {
+                        "items": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 64,
+                        "type": "array"
+                      },
+                      "tokenBudget": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 10000000,
+                        "type": "integer"
+                      }
+                    },
+                    "type": "object"
+                  },
                   "worker": {
                     "additionalProperties": false,
                     "properties": {
@@ -52838,7 +53097,11 @@
                   "step_gate_not_held",
                   "step_capability_not_held",
                   "step_definition_excluded",
-                  "step_account_not_connected"
+                  "step_account_not_connected",
+                  "step_skill_draft",
+                  "step_skill_deprecated",
+                  "step_model_not_offered",
+                  "step_model_not_allowed"
                 ],
                 "type": "string"
               },
@@ -52851,6 +53114,15 @@
               },
               "message": {
                 "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "skillRefs": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               "stepKey": {
                 "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",

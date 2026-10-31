@@ -69,6 +69,7 @@ export type { SystemPromptParts } from './instance-instructions.js';
 export {
   INSTANCE_INSTRUCTIONS_MARKER,
   PROMPT_ADDENDUM_MARKER,
+  STEP_INSTRUCTIONS_MARKER,
   composeSystemPrompt,
   readInstanceInstructions,
 } from './instance-instructions.js';

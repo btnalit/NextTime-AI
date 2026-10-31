@@ -68,6 +68,7 @@ import { shownFreeText, shownFreeTextIn } from '../../governance/redaction/index
 import { hashStableParams, scopeExplicitIdempotencyKey } from './action-executor.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 import { servesPerson } from './credential-presence.js';
+import { readModelCatalogIds } from './models-catalog-handler.js';
 
 /**
  * application/gateway/goal-handlers (S11 GO5a): the `goal` reads — `get_goal`, `list_goals`,
@@ -226,14 +227,17 @@ function toWirePlanRevision(view: PlanRevisionView): PlanRevisionWire {
   };
 }
 
-/** A plan hint on the wire — S11 GO5c's carry the step and the gates they are about. */
-function toWirePlanHint(hint: PlanHint): PlanHint {
+/** A plan hint on the wire — S11 GO5c's carry the step and the gates they are about; S11 GO8a's
+ *  the Skills or the model its WorkerSpec names (UX on #853: dropped here, the console showed none). */
+export function toWirePlanHint(hint: PlanHint): PlanHint {
   return {
     code: hint.code,
     message: hint.message,
     ...(hint.stepKey !== undefined ? { stepKey: hint.stepKey } : {}),
     ...(hint.gatekeeperIds !== undefined ? { gatekeeperIds: [...hint.gatekeeperIds] } : {}),
     ...(hint.capabilityNames !== undefined ? { capabilityNames: [...hint.capabilityNames] } : {}),
+    ...(hint.skillRefs !== undefined ? { skillRefs: [...hint.skillRefs] } : {}),
+    ...(hint.model !== undefined ? { model: hint.model } : {}),
   };
 }
 
@@ -399,6 +403,7 @@ export const getGoalHandler: CapabilityHandler = async (client, workspaceId, par
   const viewer = await goalViewer(client, ctx);
   const detail = await readGoalRunDetail(client, workspaceId, viewer, goalRunId, {
     checkAccounts: servesPerson(ctx),
+    modelCatalog: hintModelCatalog,
   });
   return { result: toWireGoalDetail(detail), resourceType: 'goal_run', resourceId: goalRunId };
 };
@@ -434,6 +439,7 @@ export const getGoalRevisionHandler: CapabilityHandler = async (
   const viewer = await goalViewer(client, ctx);
   const view = await readPlanRevisionVisibleTo(client, workspaceId, viewer, goalRunId, revision, {
     checkAccounts: servesPerson(ctx),
+    modelCatalog: hintModelCatalog,
   });
   return { result: toWirePlanRevision(view), resourceType: 'goal_run', resourceId: goalRunId };
 };
@@ -523,6 +529,7 @@ export const proposeGoalHandler: CapabilityHandler = async (client, workspaceId,
     maxProposed: maxProposedGoalsPerRequester(process.env.GOAL_MAX_PROPOSED_PER_REQUESTER),
     // Legacy 513: an agent proposing through its Handle never learns who connected which account.
     checkAccounts: servesPerson(ctx),
+    modelCatalog,
     ...(turn?.wasRunning ? { originatedInTurnId: turn.id } : {}),
   });
   const result: ProposeGoalResultWire = {
@@ -535,6 +542,22 @@ export const proposeGoalHandler: CapabilityHandler = async (client, workspaceId,
   return { result, ...onRun(proposed.goalRunId) };
 };
 
+/** S11 GO8a: the models a step's WorkerSpec may set — the llm-proxy catalog, read the way legacy
+ *  302's publish check reads it (unreadable: 503, never stored unchecked). */
+function modelCatalog(): Promise<ReadonlySet<string>> {
+  return readModelCatalogIds();
+}
+
+/** S11 GO8a: the catalog the hints of a proposal and of a paused run are worked out against — a read, so an unreadable
+ *  catalog leaves the model unchecked there instead of failing it (the attempt checks it). */
+async function hintModelCatalog(): Promise<ReadonlySet<string> | null> {
+  try {
+    return await readModelCatalogIds();
+  } catch {
+    return null;
+  }
+}
+
 export const confirmGoalHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { goalRunId, revision } = params as { goalRunId: string; revision: number };
   const actor = await actorOnVisibleRun(client, workspaceId, 'confirm_goal', ctx, goalRunId);
@@ -542,6 +565,7 @@ export const confirmGoalHandler: CapabilityHandler = async (client, workspaceId,
     goalRunId,
     revision,
     confirmedBy: actor.principalId,
+    modelCatalog,
   });
   const result: ConfirmGoalResultWire = {
     goalRunId,
@@ -631,6 +655,7 @@ export const reviseGoalHandler: CapabilityHandler = async (client, workspaceId, 
     ...(input.budget !== undefined ? { budget: input.budget } : {}),
     ...(input.removals !== undefined ? { removals: input.removals } : {}),
     checkAccounts: servesPerson(ctx),
+    modelCatalog,
   });
   const result: ReviseGoalResultWire = {
     goalRunId: input.goalRunId,

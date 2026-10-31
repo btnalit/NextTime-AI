@@ -22,6 +22,7 @@ import {
 } from '../../lib/goal-actions.js';
 import {
   confirmCheckOrigin,
+  confirmRefusedText,
   goalBudgetRows,
   goalPlanSource,
   planHintText,
@@ -247,10 +248,14 @@ export function GoalOperationsBar({
           : {})}
         errorOverrides={{
           ...errors,
-          invalid_params: t(
-            '计划复查没通过（比如用到的 Worker 已经停用），具体问题见技术细节。这个提议不能再确认了，请在对话里让入口智能体重新提一个目标。',
-            'The plan no longer passes its checks (a Worker it uses was deprecated, for example); the problems are under technical details. This proposal cannot be confirmed any more: ask the entry agent in a chat for a new goal.',
-          ),
+          // S11 GO8a: a model the catalog dropped since the proposal can be offered again, and the
+          // proposal confirmed then — not "cannot be confirmed any more" (UX on #853).
+          invalid_params:
+            confirmRefusedText(goal.planRevision.hints, t) ??
+            t(
+              '计划复查没通过（比如用到的 Worker 已经停用），具体问题见技术细节。这个提议不能再确认了，请在对话里让入口智能体重新提一个目标。',
+              'The plan no longer passes its checks (a Worker it uses was deprecated, for example); the problems are under technical details. This proposal cannot be confirmed any more: ask the entry agent in a chat for a new goal.',
+            ),
         }}
         onConfirm={() =>
           run(

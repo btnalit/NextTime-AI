@@ -26,6 +26,7 @@ import {
   reconcileAbsenceCheckOf,
   reconcileCheckSentence,
   reconciliationLabel,
+  retriedStepKeys,
   stepAcceptanceLabel,
   stepFailureText,
   stepHintChipLabel,
@@ -42,6 +43,7 @@ import { StatusChip } from '../kit/status-chip.js';
 import { AbsenceBaselineLine, AbsenceBasis } from './AbsenceBasis.js';
 import { ActionChip } from './ActionChip.js';
 import { OutputContractFields, OutputProblemList } from './OutputContract.js';
+import { WorkerSpecFields } from './WorkerSpecFields.js';
 import type { AbsenceOperations } from './useAbsenceOperations.js';
 
 export interface GoalStepsSectionProps {
@@ -64,7 +66,9 @@ export interface GoalStepsSectionProps {
  * rework and where its last refused report broke the contract. Steps a revision
  * replaced are listed under their own disclosure, oldest first. While the run is proposed, what the
  * requester's authority would stop now (S11 GO5c hints) heads the card, and each step it names
- * carries a chip.
+ * carries a chip — and, S11 GO8a, so does what would stop a paused run's steps that have not
+ * started, with what the admission of a step's WorkerSpec says; a step with a WorkerSpec shows
+ * what it sets differently for its Worker (`WorkerSpecFields`).
  */
 export function GoalStepsSection({
   detail,
@@ -77,6 +81,10 @@ export function GoalStepsSection({
   const { current, superseded } = goalSteps(detail);
   const acceptanceByRun = new Map(detail.acceptance.steps.map((step) => [step.stepRunId, step]));
   const authorityHints = detail.planRevision.hints.filter(isStepAuthorityHint);
+  // A proposal can still be turned down; a paused run's revision is in force, revised again.
+  const hintContext = detail.status === 'proposed' ? 'proposal' : 'revision';
+  // S11 GO8a: a step waiting to be tried again would not be tried again (UX on #853).
+  const retried = retriedStepKeys(detail);
   const hintsByStep = new Map<string, PlanHint[]>();
   for (const hint of authorityHints) {
     if (hint.stepKey === undefined) continue;
@@ -88,7 +96,13 @@ export function GoalStepsSection({
         <div className="stack-s">
           {authorityHints.map((hint) => (
             <Notice key={planHintKey(hint)} tone="warn" testId="goal-step-hint">
-              {planHintText(hint, t, gateNames)}
+              {planHintText(
+                hint,
+                t,
+                gateNames,
+                hintContext,
+                hint.stepKey !== undefined && retried.has(hint.stepKey),
+              )}
               {/* Legacy 513: where the requester connects their own account. */}
               {hint.code === 'step_account_not_connected' ? (
                 <>
@@ -228,6 +242,10 @@ function StepItem({
             )
           : ''}
       </span>
+
+      {planStep?.spec ? (
+        <WorkerSpecFields spec={planStep.spec} http={http} gateNames={gateNames} t={t} />
+      ) : null}
 
       {planStep?.bindings ? (
         <ul className="stack-s" data-testid="goal-step-bindings">

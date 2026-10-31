@@ -827,6 +827,57 @@ export async function resolvePublishedSkills(
   return result.rows.map(mapRow);
 }
 
+/** S11 GO8a: what a WorkerSpec's Skill references (names or ids, as a WorkerDefinition names them)
+ *  are for `viewer`, each in the first place it fits: `published` — a published version, what a
+ *  run mounts ({@link resolvePublishedSkills}); `drafts` — no published version, but a draft the
+ *  viewer may see (its proposer, or a draft reviewer: `draftVisibleTo`); `deprecated` — its versions
+ *  were all deprecated; `missing` — nothing by that name or id the viewer may see (a draft someone
+ *  else proposed reads as missing, as everywhere else). Each ref as written, at most once. */
+export interface SkillRefStatus {
+  readonly published: readonly string[];
+  readonly drafts: readonly string[];
+  readonly deprecated: readonly string[];
+  readonly missing: readonly string[];
+}
+
+export async function classifySkillRefs(
+  client: PoolClient,
+  workspaceId: string,
+  viewer: DraftViewer,
+  refs: readonly string[],
+): Promise<SkillRefStatus> {
+  const unique = [...new Set(refs)];
+  if (unique.length === 0) return { published: [], drafts: [], deprecated: [], missing: [] };
+  const visibility = draftVisibilityBinds(viewer);
+  const result = await client.query<{ id: string; name: string; status: PublishableStatus }>(
+    `select id, name, status from skills
+     where workspace_id = $1
+       and (id::text = any($2::text[]) or name = any($2::text[]))
+       and (status <> 'draft' or $3::boolean or proposed_by = $4)`,
+    [workspaceId, unique, visibility.seesEveryDraft, visibility.principalId],
+  );
+  const statuses = new Map<string, Set<PublishableStatus>>();
+  for (const row of result.rows) {
+    for (const ref of [row.id, row.name]) {
+      const seen = statuses.get(ref) ?? new Set<PublishableStatus>();
+      seen.add(row.status);
+      statuses.set(ref, seen);
+    }
+  }
+  const published: string[] = [];
+  const drafts: string[] = [];
+  const deprecated: string[] = [];
+  const missing: string[] = [];
+  for (const ref of unique) {
+    const seen = statuses.get(ref);
+    if (seen?.has('published')) published.push(ref);
+    else if (seen?.has('draft')) drafts.push(ref);
+    else if (seen?.has('deprecated')) deprecated.push(ref);
+    else missing.push(ref);
+  }
+  return { published, drafts, deprecated, missing };
+}
+
 /** The exact Skill versions `refs` names, whatever their status (S11 GO2: a goal step's later
  *  attempt mounts the versions its first attempt loaded, and refuses to start when one is no longer
  *  published) — a ref with no such row is simply absent from the result. */
