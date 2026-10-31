@@ -38,6 +38,7 @@ import {
   reconcileCheckSentence,
   retriedStepKeys,
   skillRefShown,
+  skillVersionShown,
   stepHintChipLabel,
   unresolvedActionText,
   unresolvedCheckErrorText,
@@ -474,6 +475,74 @@ describe('lib/goals', () => {
     // Read without the plan (a list row), or with no hint: the general note.
     expect(goalStateNote(paused('authority_lost', []), undefined, budget, zh)?.text).toBe(
       '请求人已经没有下一步需要的授权，目标暂停了。授权恢复或改计划之后才能继续。',
+    );
+  });
+
+  it('legacy 544: a step pinned to a Worker or Skill version no longer published is named', () => {
+    const worker = { code: 'step_worker_unavailable' as const, message: 'm', stepKey: 'scan' };
+    expect(planHintText(worker, zh)).toBe(
+      '步骤「scan」用的 Worker 版本已经不再发布（弃用了，或者不存在）：现在确认会被拒绝。可以驳回，让助手换一个已发布的 Worker。',
+    );
+    expect(planHintText(worker, en, new Map(), 'revision')).toMatch(
+      /^Step “scan” uses a Worker version that is no longer published \(deprecated, or not there\) — the step would not start, and the goal would pause there for a person\. You can ask the entry agent in chat to revise the plan and change it/,
+    );
+    expect(stepHintChipLabel(worker, zh)).toBe('Worker 已不再发布');
+    expect(stepHintChipLabel(worker, en)).toBe('Worker no longer published');
+    // Confirming it was refused: the proposal cannot be confirmed any more, whatever else it says.
+    expect(confirmRefusedText([worker], zh)).toBe(
+      '步骤「scan」用的 Worker 版本已经不再发布，确认没有通过，这个提议不能再确认了。驳回它，或者在对话里让入口智能体重新提一个目标。',
+    );
+    expect(
+      confirmRefusedText(
+        [
+          worker,
+          { ...worker, stepKey: 'fix' },
+          { code: 'step_model_not_offered', message: 'm', stepKey: 'x', model: 'gone' },
+        ],
+        en,
+      ),
+    ).toMatch(
+      /^Steps “scan”, “fix” use Worker versions no longer published, so confirming was refused/,
+    );
+
+    // A step tried again mounts its last attempt's Skill versions, named by name and version — a
+    // version whose row is gone by its id, cut short.
+    const version = {
+      code: 'step_skill_version_unavailable' as const,
+      message: 'm',
+      stepKey: 'scan',
+      skillRefs: ['cert-rotation v2', '11111111-2222-4333-8444-555555555555 v1'],
+    };
+    expect(skillVersionShown('cert-rotation v2')).toBe('cert-rotation v2');
+    expect(skillVersionShown('11111111-2222-4333-8444-555555555555 v1')).toBe('11111111 v1');
+    expect(skillVersionShown('11111111-2222-4333-8444-555555555555')).toBe('11111111');
+    expect(planHintText(version, zh, new Map(), 'revision', true)).toBe(
+      '步骤「scan」上一次尝试用的 Skill「cert-rotation v2」、「11111111 v1」现在不能再用了（已弃用，或者试用的草稿改过、被丢弃或弃用）。重试要用同一个版本，所以这一步不会再试，目标会停在这里等人处理。在对话里让入口智能体修订计划改动这一步，它会按现在的 Skill 重新开始；或者在「修订计划…」里移除这一步。',
+    );
+    expect(planHintText(version, en, new Map(), 'revision', true)).toMatch(
+      /^Step “scan”: the Skill versions “cert-rotation v2”, “11111111 v1” its last attempt used can no longer be used .* A retry uses the same versions, so the step would not be tried again/,
+    );
+    expect(stepHintChipLabel(version, zh)).toBe('上次的 Skill 版本不可用');
+    expect(confirmRefusedText([version], zh)).toBeNull();
+
+    // The pause names them, one reason each, or every reason of one step.
+    const budget = goalBudgetRows(goalRun(), zh);
+    const detail = goalDetail();
+    const paused = (hints: GoalDetailWire['planRevision']['hints']) => ({
+      ...detail,
+      status: 'paused' as const,
+      pauseReason: 'needs_decision' as const,
+      steps: [stepRun({ id: 'sr-a', stepKey: 'scan', status: 'ready', attemptCount: 1 })],
+      planRevision: { ...detail.planRevision, hints },
+    });
+    expect(goalStateNote(paused([version]), undefined, budget, zh)?.text).toBe(
+      '需要人决定：步骤「scan」上一次尝试用的 Skill「cert-rotation v2」、「11111111 v1」现在不能再用了，重试要用同一个版本，所以这一步没有再试。在对话里让入口智能体修订计划改动这一步，它会按现在的 Skill 重新开始；或者在「修订计划…」里移除这一步，见下面「步骤」里的说明。',
+    );
+    expect(goalStateNote(paused([worker]), undefined, budget, en)?.text).toBe(
+      'A person must decide: step “scan” uses a Worker version that is no longer published, so the step was not tried again. Ask the entry agent in chat to revise the plan to a published Worker, or remove the step under “Revise plan…”. See the note under Steps.',
+    );
+    expect(goalStateNote(paused([worker, version]), undefined, budget, zh)?.text).toBe(
+      '需要人决定：步骤「scan」不能照计划往下做：Worker 已不再发布、上次用的 Skill 版本不可用。见下面「步骤」里的说明。',
     );
   });
 

@@ -622,6 +622,19 @@ describe.runIf(DATABASE_URL !== undefined)(
           status: 'paused',
           pause_reason: 'needs_decision',
         });
+        // Legacy 544: the read names the step and the draft version its retry would mount — its
+        // rows gone, by the name it was approved under.
+        expect(
+          (await getGoal(goalRunId, builderId)).planRevision.hints.filter(
+            (hint) => hint.stepKey !== undefined,
+          ),
+        ).toEqual([
+          expect.objectContaining({
+            code: 'step_skill_version_unavailable',
+            stepKey: 'a',
+            skillRefs: [`${draft.name} v1`],
+          }),
+        ]);
       });
 
       it('an approval made on the proposal is for the StepRun its confirmation creates, named when its first attempt starts', async () => {

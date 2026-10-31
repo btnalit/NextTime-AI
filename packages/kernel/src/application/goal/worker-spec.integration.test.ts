@@ -235,12 +235,14 @@ describe.runIf(DATABASE_URL !== undefined)(
       readonly key: string;
       readonly spec?: WorkerSpec;
       readonly dependsOn?: readonly string[];
+      /** The Worker version the step pins; the suite's own unless given. */
+      readonly worker?: { readonly definitionId: string; readonly version: number };
     }
 
     const planOf = (steps: readonly StepOf[]) => ({
       steps: steps.map((step) => ({
         key: step.key,
-        worker,
+        worker: step.worker ?? worker,
         input: { step: step.key },
         ...(step.spec !== undefined ? { spec: step.spec } : {}),
         ...(step.dependsOn ? { dependsOn: step.dependsOn } : {}),
@@ -930,10 +932,82 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(await attemptTasks(stepA.id)).toHaveLength(1);
         expect(await stepOf(goalRunId, 'a')).toMatchObject({ status: 'ready', attemptCount: 1 });
         expect(await stepOf(goalRunId, 'b')).toMatchObject({ status: 'pending', attemptCount: 0 });
-        // The retry is checked as a later attempt is — its Skills are the pinned ones, checked
-        // there; the step not started is checked as a first attempt, and would not start.
+        // The retry is checked as a later attempt is — its Skills are the pinned versions, named
+        // (legacy 544); the step not started is checked as a first attempt, and would not start.
         expect(stepHints(await detailHints(goalRunId, requester))).toEqual([
+          expect.objectContaining({
+            code: 'step_skill_version_unavailable',
+            stepKey: 'a',
+            skillRefs: [`${skill.name} v1`],
+          }),
           expect.objectContaining({ code: 'step_skill_deprecated', stepKey: 'b' }),
+        ]);
+      });
+    });
+
+    describe('a step pinned to what is no longer published is named (legacy 544)', () => {
+      const deprecateWorker = (definitionId: string) =>
+        admin((client) =>
+          client.query(
+            "update worker_definitions set status = 'deprecated' where workspace_id = $1 and id = $2",
+            [workspaceId, definitionId],
+          ),
+        );
+
+      it('a Worker version deprecated since: a proposal says confirming would be refused, and a run pauses naming the step', async () => {
+        const requester = await newPrincipal();
+        const pinned = await publish({ systemPrompt: 'A version about to be deprecated.' });
+        const { goalRunId: proposal } = await propose(requester, [{ key: 'a', worker: pinned }]);
+        const running = await startGoal(requester, [{ key: 'a', worker: pinned }]);
+        await deprecateWorker(pinned.definitionId);
+
+        const unavailable = expect.objectContaining({
+          code: 'step_worker_unavailable',
+          stepKey: 'a',
+          message: expect.stringMatching(/is deprecated/),
+        });
+        expect(stepHints(await detailHints(proposal, requester))).toEqual([unavailable]);
+        await expect(
+          asRequester(requester, (client) =>
+            confirmGoalRun(client, workspaceId, {
+              goalRunId: proposal,
+              revision: 1,
+              confirmedBy: requester,
+            }),
+          ),
+        ).rejects.toBeInstanceOf(GoalPlanValidationError);
+
+        await advance(running, requester);
+        expect(await goalOf(running)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'needs_decision',
+        });
+        expect(await attemptTasks((await stepOf(running, 'a')).id)).toEqual([]);
+        expect(stepHints(await detailHints(running, requester))).toEqual([unavailable]);
+      });
+
+      it('a step tried again after its Worker version was deprecated is named for that, not its Skills', async () => {
+        const requester = await newPrincipal();
+        const skill = await seedSkill('published');
+        const pinned = await publish({ systemPrompt: 'Another version about to be deprecated.' });
+        const goalRunId = await startGoal(requester, [
+          { key: 'a', worker: pinned, spec: { skills: [skill.name] } },
+        ]);
+        await advance(goalRunId, requester);
+        const stepA = await stepOf(goalRunId, 'a');
+        await failStep(stepA.id, requester, 'spawn_lost');
+        await deprecateWorker(pinned.definitionId);
+        await admin((client) =>
+          client.query(
+            `update skills set status = 'deprecated' where workspace_id = $1 and id = $2`,
+            [workspaceId, skill.id],
+          ),
+        );
+        await advance(goalRunId, requester);
+        expect(await goalOf(goalRunId)).toMatchObject({ status: 'paused' });
+        expect(await attemptTasks(stepA.id)).toHaveLength(1);
+        expect(stepHints(await detailHints(goalRunId, requester))).toEqual([
+          expect.objectContaining({ code: 'step_worker_unavailable', stepKey: 'a' }),
         ]);
       });
     });

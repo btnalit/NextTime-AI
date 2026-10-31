@@ -17,8 +17,10 @@ import {
 } from '../../governance/approval/index.js';
 import {
   type GoalStepAttempt,
+  type RunConfigSnapshot,
   listGoalRunStepAttempts,
   readGoalRunsUsage,
+  readStepAttemptTask,
   workerSpecDigest,
 } from '../task/index.js';
 import { getProcedure } from '../worker/index.js';
@@ -371,6 +373,15 @@ async function planRevisionView(
         ),
       ]),
   );
+  // Legacy 544: a step waiting to be tried again mounts what its last attempt did — read from that
+  // attempt's snapshot, so the pause can name a pinned Skill version that is gone.
+  const previousAttempts = new Map<string, RunConfigSnapshot>();
+  for (const key of retried) {
+    const step = live.get(key);
+    if (!step) continue;
+    const last = await readStepAttemptTask(client, workspaceId, step.id, step.attemptCount);
+    if (last?.runConfig) previousAttempts.set(key, last.runConfig);
+  }
   return {
     revision,
     plan: planAsRead(plan),
@@ -386,6 +397,12 @@ async function planRevisionView(
               checkAccounts: options.checkAccounts === true,
               retried,
               trialApprovals,
+              previousAttempts,
+              knownSkillNames: new Map(
+                approvals.flatMap((approval) =>
+                  approval.drafts.map((draft) => [draft.skillId, draft.name] as const),
+                ),
+              ),
               // A plan is validated against the catalog when proposed, confirmed or revised: a
               // read says what changed since — confirming would be refused (UX on #853), or the
               // next attempt would be.

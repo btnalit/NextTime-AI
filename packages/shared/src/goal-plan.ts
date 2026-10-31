@@ -298,6 +298,14 @@ export type StepTrialDraftInfo = z.infer<typeof StepTrialDraftInfoSchema>;
  *         or the plan names another;
  *       - `step_model_not_allowed` — the model it sets is not one the workspace allows (`model`):
  *         refused until the plan names another.
+ *   - legacy 544, what keeps a step from starting (or being tried again) as the plan pins it:
+ *       - `step_worker_unavailable` — the WorkerDefinition version the step names is no longer
+ *         published (deprecated, or not there): refused until the plan names another;
+ *       - `step_skill_version_unavailable` — a step waiting to be tried again: a Skill version its
+ *         previous attempt mounted, which a later attempt mounts again, can no longer be (a
+ *         published version deprecated since; a draft whose trial was approved changed, discarded
+ *         or deprecated since) — `skillRefs` names each as 「name v<version>」: refused until the
+ *         plan is revised (the step then starts afresh, admitted as a first attempt).
  *     Worked out on every read like the others: authority and Skills change, and the attempt's own
  *     admission when the step starts decides (`application/task/step-attempt.ts`).
  *   Where they appear: every hint but `requester_confirm_only` is on the proposal of a run still
@@ -315,6 +323,8 @@ export const PLAN_HINT_CODE_VALUES = [
   'step_skill_deprecated',
   'step_model_not_offered',
   'step_model_not_allowed',
+  'step_worker_unavailable',
+  'step_skill_version_unavailable',
 ] as const;
 export type PlanHintCode = (typeof PLAN_HINT_CODE_VALUES)[number];
 export const PlanHintCodeSchema = z.enum(PLAN_HINT_CODE_VALUES);
@@ -332,7 +342,8 @@ export const PlanHintSchema = z
      *  requester does not hold. */
     capabilityNames: z.array(z.string()).optional(),
     /** S11 GO8a: the Skills a `step_skill_draft` / `step_skill_deprecated` step's WorkerSpec names,
-     *  as it names them. */
+     *  as it names them; legacy 544, on `step_skill_version_unavailable`, the Skill versions a
+     *  retry would mount and cannot, each 「name v<version>」. */
     skillRefs: z.array(z.string()).optional(),
     /** S11 GO8a: the model a `step_model_not_offered` / `step_model_not_allowed` step's WorkerSpec
      *  sets. */

@@ -3,8 +3,10 @@ import type { GoalPlan, PlanHint, PlanStep } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { connectedAccountPresence } from '../gateway/credential-presence.js';
 import {
+  type RunConfigSnapshot,
   type StepAttemptRefusal,
   type StepTrialApprovalCandidate,
+  previousAttemptSkillsRefusal,
   resolveStepAuthority,
   trialDraftsMatch,
   workerSpecComponentRefusals,
@@ -34,8 +36,15 @@ import {
  * `modelCatalog`, a read of a proposal or of a paused run — the llm-proxy catalog no longer offers
  * (refused; confirming the proposal would fail its validation), one hint each. A Skill that is not
  * there is not a hint: the plan no longer validates. A step of a paused run waiting to be tried
- * again (`retried`) is checked the way a later attempt is: its authority and its model, never its
- * Skills — that attempt reuses the ones its first one mounted.
+ * again (`retried`) is checked the way a later attempt is: its authority and its model, and the
+ * Skills it would mount again — the ones its last attempt mounted (`previousAttempts`, that
+ * attempt's snapshot), not the ones its WorkerSpec names.
+ *
+ * Legacy 544: a step whose WorkerDefinition version is no longer published (deprecated, or not
+ * there) is hinted too (`step_worker_unavailable`) — the plan no longer validates, so a proposal's
+ * confirmation would be refused, and a paused run's step would not start — and so is a retried
+ * step whose pinned Skill versions can no longer be mounted (`step_skill_version_unavailable`,
+ * named 「name v<version>」): the pause and the card say which step, and why.
  *
  * S11 GO8b: a step that would wait for a person's approval of its draft Skills says what one trial
  * of it would mount (`trial`: its WorkerSpec digest and each draft, its content digest) — what
@@ -79,6 +88,21 @@ function stepHint(step: PlanStep, refusal: StepAttemptRefusal): PlanHint | null 
       code: 'step_definition_excluded',
       message: `step "${key}": the requester's agent profile excludes its Worker — ${consequence}`,
       stepKey: key,
+    };
+  }
+  if (refusal.kind === 'unavailable' && refusal.reason === 'definition') {
+    return {
+      code: 'step_worker_unavailable',
+      message: `step "${key}": ${refusal.detail} — ${consequence}; a plan naming it is refused when confirmed or revised, so it names another Worker or drops the step`,
+      stepKey: key,
+    };
+  }
+  if (refusal.kind === 'unavailable' && refusal.reason === 'skills') {
+    return {
+      code: 'step_skill_version_unavailable',
+      message: `step "${key}": ${refusal.detail}, which trying it again would mount — ${consequence}; revising the plan starts the step afresh`,
+      stepKey: key,
+      skillRefs: [...(refusal.skillRefs ?? [])],
     };
   }
   if (refusal.kind === 'admission') {
@@ -127,9 +151,8 @@ function stepHint(step: PlanStep, refusal: StepAttemptRefusal): PlanHint | null 
       ...(refusal.model !== undefined ? { model: refusal.model } : {}),
     };
   }
-  // A WorkerDefinition no longer published, or a Skill a WorkerSpec names that is not there: the
-  // plan no longer validates — confirming and revising refuse it with the problem named
-  // (`validatePlan`), so it is not a hint.
+  // A Skill a WorkerSpec names that is not there: the plan no longer validates — confirming and
+  // revising refuse it with the problem named (`validatePlan`), so it is not a hint.
   return null;
 }
 
@@ -180,6 +203,13 @@ export interface PlanAuthorityHintOptions {
   /** S11 GO8b: by step key, the approvals of a trial its first attempt would start with
    *  (`trialApprovalsFor`) — the module comment. */
   readonly trialApprovals?: ReadonlyMap<string, readonly StepTrialApprovalCandidate[]>;
+  /** Legacy 544: by the key of a `retried` step, its last attempt's snapshot — the Skills a later
+   *  attempt would mount again (`previousAttemptSkillsRefusal`). A retried step without one is
+   *  not checked for its Skills (the advancer pauses it for its unreadable snapshot). */
+  readonly previousAttempts?: ReadonlyMap<string, RunConfigSnapshot>;
+  /** Legacy 544: by Skill id, the names the drafts of the run's approved trials had — a discarded
+   *  draft's rows are gone, and a retry's hint still names it. */
+  readonly knownSkillNames?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -215,10 +245,22 @@ export async function planAuthorityHints(
       seen.set(key, checked);
     }
     const approvals = retried ? [] : (options.trialApprovals?.get(step.key) ?? []);
-    const refusals =
+    const refusals: StepAttemptRefusal[] =
       checked.kind === 'refused'
         ? checked.refusals.filter((refusal) => !approvedTrial(refusal, approvals))
         : [];
+    // A later attempt mounts what its last one did: checked per step, past the shared check (two
+    // steps pinned alike ran apart). Only once its authority would let it start at all.
+    const previous = retried ? options.previousAttempts?.get(step.key) : undefined;
+    if (previous && !refusals.some((refusal) => refusal.kind !== 'admission')) {
+      const pinned = await previousAttemptSkillsRefusal(
+        client,
+        workspaceId,
+        previous,
+        options.knownSkillNames,
+      );
+      if (pinned) refusals.push(pinned);
+    }
     if (refusals.length === 0) {
       if (checked.gatekeeperIds.length > 0) {
         startingGates.push({ stepKey: step.key, gatekeeperIds: checked.gatekeeperIds });

@@ -142,6 +142,9 @@ export type StepAttemptRefusal =
       readonly kind: 'unavailable';
       readonly reason: 'definition' | 'skills' | 'excluded' | 'spec';
       readonly detail: string;
+      /** Legacy 544, `skills` of a later attempt: the Skill versions it would mount and cannot, each
+       *  「name v<version>」 ({@link pinnedSkillsRefusal}). */
+      readonly skillRefs?: readonly string[];
     }
   /** S11 GO8a (I-G8): what the step's WorkerSpec admits does not run as it is — it names Skills
    *  that are only drafts (`skill_draft`, `needs_approval`: a person approves one trial, S11 GO8b,
@@ -623,6 +626,68 @@ function approvedTrial(
 }
 
 /**
+ * Legacy 544: why a later attempt cannot mount the Skill versions its first attempt pinned —
+ * published ones no longer published (`published`), or the drafts of a trial a person approved
+ * changed, discarded or deprecated since (`trial`) — with each version named as a person reads it
+ * (`skillRefs`, 「name v<version>」: its family's name; one whose rows are all gone — a draft
+ * discarded — the name it had where the caller knew it, `knownNames`, else its id), so the pause
+ * and the hint name them. Reads only.
+ */
+export async function pinnedSkillsRefusal(
+  client: PoolClient,
+  workspaceId: string,
+  pinned: 'published' | 'trial',
+  refs: readonly { readonly skillId: string; readonly version: number }[],
+  knownNames: ReadonlyMap<string, string> = new Map(),
+): Promise<StepAttemptRefusal> {
+  const named = await client.query<{ id: string; name: string }>(
+    `select distinct on (id) id, name from skills
+      where workspace_id = $1 and id = any($2::uuid[])
+      order by id, version desc`,
+    [workspaceId, [...new Set(refs.map((ref) => ref.skillId))]],
+  );
+  const names = new Map(named.rows.map((row) => [row.id, row.name] as const));
+  const ids = refs.map((skill) => `${skill.skillId}@${skill.version}`).join(', ');
+  return {
+    kind: 'unavailable',
+    reason: 'skills',
+    detail:
+      pinned === 'published'
+        ? `Skill version(s) no longer published: ${ids}`
+        : `draft Skill version(s) the trial was approved for were changed, discarded or deprecated since: ${ids}`,
+    skillRefs: refs.map(
+      (ref) =>
+        `${names.get(ref.skillId) ?? knownNames.get(ref.skillId) ?? ref.skillId} v${ref.version}`,
+    ),
+  };
+}
+
+/**
+ * Legacy 544: whether a later attempt after `previous` (its last attempt's snapshot) could mount
+ * the Skills that attempt pinned, as {@link createStepAttemptTask} mounts them — its published
+ * versions, then the drafts of its approved trial — for a paused run's check (`application/goal`'s
+ * `planAuthorityHints`; `knownNames` as {@link pinnedSkillsRefusal}'s). `null` when it could.
+ * Reads only.
+ */
+export async function previousAttemptSkillsRefusal(
+  client: PoolClient,
+  workspaceId: string,
+  previous: RunConfigSnapshot,
+  knownNames: ReadonlyMap<string, string> = new Map(),
+): Promise<StepAttemptRefusal | null> {
+  const pinned = await resolvePinnedSkillsInline(client, workspaceId, previous.skills);
+  if (pinned.kind === 'unavailable') {
+    return pinnedSkillsRefusal(client, workspaceId, 'published', pinned.refs, knownNames);
+  }
+  const trial = previous.v === 2 ? (previous.trial ?? null) : null;
+  if (!trial) return null;
+  const drafts = await resolveTrialDraftsInline(client, workspaceId, trial.drafts);
+  return drafts.kind === 'unavailable'
+    ? pinnedSkillsRefusal(client, workspaceId, 'trial', drafts.refs, knownNames)
+    : null;
+}
+
+/**
  * Half 1 — see the module doc comment. Runs in the caller's transaction (`client`, bound to the
  * requester's workspace). Returns `refused` without writing anything; throws only on a database
  * error or an unreadable model catalog (`modelCatalog`; the caller's transaction then rolls back
@@ -708,13 +773,7 @@ export async function createStepAttemptTask(
   if (input.previous) {
     const pinned = await resolvePinnedSkillsInline(client, workspaceId, input.previous.skills);
     if (pinned.kind === 'unavailable') {
-      return refused({
-        kind: 'unavailable',
-        reason: 'skills',
-        detail: `Skill version(s) no longer published: ${pinned.refs
-          .map((skill) => `${skill.skillId}@${skill.version}`)
-          .join(', ')}`,
-      });
+      return refused(await pinnedSkillsRefusal(client, workspaceId, 'published', pinned.refs));
     }
     skills = pinned.skills;
   } else {
@@ -727,13 +786,7 @@ export async function createStepAttemptTask(
   if (trial) {
     const drafts = await resolveTrialDraftsInline(client, workspaceId, trial.drafts);
     if (drafts.kind === 'unavailable') {
-      return refused({
-        kind: 'unavailable',
-        reason: 'skills',
-        detail: `draft Skill version(s) the trial was approved for were changed, discarded or deprecated since: ${drafts.refs
-          .map((skill) => `${skill.skillId}@${skill.version}`)
-          .join(', ')}`,
-      });
+      return refused(await pinnedSkillsRefusal(client, workspaceId, 'trial', drafts.refs));
     }
     skills = { ...skills, skillsInline: [...skills.skillsInline, ...drafts.skillsInline] };
   }
