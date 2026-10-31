@@ -1957,6 +1957,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：发布 Worker 定义时会检查它引用的能力、门、Skill 和模型都存在；控制台在「发布」旁逐个字段写明哪里不对，并可以直接改一版。
 - **回滚**：只回退代码即可，无数据变化；回退后发布不再校验引用。
 
+### 3.82 步骤用 WorkerSpec 组建 Worker 并准入（#853，S11 GO8a，v0.52.0 之后的下一版起）
+
+无迁移（快照是 jsonb，`observe_scope` 列 task/0010 已有）、不改 compose、无单独主机步骤、无新环境变量（推进器读已有的 `MODELS_JSON_FILE`）；窗口前只读检查：无。
+
+- **发版说明可写**：目标的每一步可以在已发布的 Worker 定义上调整职责、Skill、门、能力、模型、观察范围和 Token 上限，开工前平台会检查，不会超出 Worker 的上限和请求人的权限；引用草稿 Skill 的步骤会停下等人处理；模型每次尝试都要在模型目录里、并且是工作区允许的。契约：`PlanStep.spec`（可选）与四个新提示码（`step_skill_draft`、`step_skill_deprecated`、`step_model_not_offered`、`step_model_not_allowed`），`PlanHint` 多 `skillRefs` / `model`；旧计划不受影响。
+- **快照**：运行配置快照升 v2（多 `spec`），v1 照样能读。
+- **回滚**：只回退代码即可，无数据变化。**回退到本版之前时，旧代码读不出 v2 快照，有过尝试的步骤会暂停 `needs_decision`（"no readable configuration snapshot"）**：安全失败，不起 Worker；重新应用本版后可「继续」。发版说明里提一句。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
