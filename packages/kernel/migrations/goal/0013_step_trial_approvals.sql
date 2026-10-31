@@ -45,8 +45,11 @@
 -- an attempt's snapshot as unreadable and pauses the run `needs_decision` for a person. The
 -- table's foreign keys point at `goal_runs`, `step_runs` and `principals` only (nothing points at
 -- it), so purging a workspace orders it before them. To drop the schema too: `drop table
--- goal_step_trial_approvals` (its trigger with it), then `drop function
--- goal_step_trial_approvals_guard()`.
+-- goal_step_trial_approvals` (its trigger with it), `drop function
+-- goal_step_trial_approvals_guard()`, and `delete from schema_migrations where module = 'goal' and
+-- version = 13`, or upgrading again skips this migration and the table is never made again. Not
+-- dropping it is harmless; dropping it loses the approvals (their `step_trial.approve` audit records
+-- stay).
 --
 -- Cross-process bootstrap lock: same `goal`-module key as 0001–0012.
 select pg_advisory_xact_lock(7241000701);
