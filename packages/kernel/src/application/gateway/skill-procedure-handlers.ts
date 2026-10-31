@@ -14,6 +14,7 @@ import {
   proposeSkill,
   publishProcedure,
   publishSkill,
+  readSkillDraftVerdicts,
   skillDraftDigest,
   skillReviewContent,
 } from '../../application/worker/index.js';
@@ -188,6 +189,21 @@ const getSkillStatsHandler: CapabilityHandler = async (client, workspaceId, para
   return { result: stats, resourceType: 'skill', resourceId: skillId };
 };
 
+// S10 E3-3 (I-E4, §5.5 封闭): the dev verdicts of the evaluations of the caller's own drafts of one
+// Skill — on a Handle, its obo's (`draftViewerOf`), whatever their role: no one is told of another's
+// drafts here (application/worker/draft-verdicts.ts).
+const getSkillDraftVerdictsHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const { skillId } = params as { skillId: string };
+  const viewer = await draftViewerOf(client, workspaceId, ctx);
+  const result = await readSkillDraftVerdicts(client, workspaceId, viewer.principalId, skillId);
+  return { result, resourceType: 'skill', resourceId: skillId };
+};
+
 // S11 W1a E2-2: a Procedure family's statistics, counted when read
 // (application/task/procedure-stats.ts) — the same audience and reasoning as `get_skill_stats`.
 const getProcedureStatsHandler: CapabilityHandler = async (client, workspaceId, params) => {
@@ -311,6 +327,7 @@ export {
   listSkillsHandler,
   getSkillHandler,
   getSkillStatsHandler,
+  getSkillDraftVerdictsHandler,
   proposeProcedureHandler,
   publishProcedureHandler,
   deprecateProcedureHandler,

@@ -117,6 +117,7 @@ function evaluation(extra: Partial<DraftEvaluationWire> = {}): DraftEvaluationWi
     verdict: 'better',
     reason: 'above_baseline',
     decidedBy: 'confirm',
+    devVerdict: 'better',
     costUsd: 0.36,
     createdBy: 'p-me',
     createdAt: AT,
@@ -422,6 +423,36 @@ describe('草稿评测 (S10 E3-2b)', () => {
     expect(screen.getAllByTestId('draft-eval-environment')).toHaveLength(1);
   });
 
+  it('says what the proposer’s agent is told — the dev reading, apart from the verdict (S10 E3-3)', async () => {
+    // Holdout disagreed: people see Inconclusive, the agent is told how dev alone reads.
+    renderPage(
+      scriptedHttp(
+        handlers('member', () =>
+          evaluation({
+            verdict: 'inconclusive',
+            reason: 'holdout_disagrees',
+            devVerdict: 'better',
+          }),
+        ),
+      ),
+      'e-1',
+    );
+    const detail = await screen.findByTestId('draft-eval-detail');
+    expect(within(detail).getByTestId('draft-eval-outcome').textContent).toContain('没有定论');
+    const told = within(detail).getByTestId('draft-eval-dev-verdict');
+    expect(told.getAttribute('data-dev-verdict')).toBe('better');
+    expect(told.textContent).toBe(
+      '提议者的 agent 看到的结论：优于基线（只按 dev 用例，不含通过数）',
+    );
+    cleanup();
+
+    // Finished before it was kept: the agent is told nothing of it, and the line says so.
+    renderPage(scriptedHttp(handlers('member', () => evaluation({ devVerdict: null }))), 'e-1');
+    const none = await screen.findByTestId('draft-eval-dev-verdict');
+    expect(none.getAttribute('data-dev-verdict')).toBe('none');
+    expect(none.textContent).toContain('它读不到这次的结论');
+  });
+
   it('trials without an outcome: the case they leave open is named, and rates count them apart (#833 review)', async () => {
     const http = scriptedHttp(
       handlers('member', () =>
@@ -535,6 +566,7 @@ describe('草稿评测 (S10 E3-2b)', () => {
           verdict: null,
           reason: null,
           decidedBy: null,
+          devVerdict: null,
           cancelledBy: 'p-me',
           stages: [
             stage('regression', {
@@ -607,6 +639,7 @@ describe('草稿评测 (S10 E3-2b)', () => {
       verdict: null,
       reason: null,
       decidedBy: null,
+      devVerdict: null,
       finishedAt: null,
       stages: [
         stage('regression'),
@@ -664,5 +697,7 @@ describe('草稿评测 (S10 E3-2b)', () => {
     await screen.findByTestId('draft-eval-cancelled');
     expect(screen.getByTestId('draft-eval-outcome').textContent).toContain('已取消');
     expect(screen.queryByTestId('draft-eval-cancel')).toBeNull();
+    // A cancelled evaluation tells the proposer's agent nothing (S10 E3-3).
+    expect(screen.queryByTestId('draft-eval-dev-verdict')).toBeNull();
   });
 });

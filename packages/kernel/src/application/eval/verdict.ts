@@ -1,5 +1,7 @@
 import {
   DRAFT_EVALUATION_RULES,
+  DRAFT_EVALUATION_STAGE_VALUES,
+  type DraftEvaluationDevVerdict,
   type DraftEvaluationMeasureWire,
   type DraftEvaluationReason,
   type DraftEvaluationSplitMeasureWire,
@@ -197,6 +199,32 @@ export function measureStage(
   };
 }
 
+/** What the confirmation's `dev` split says alone: below the baseline by more than δ is `worse`;
+ *  the difference's lower bound above 0 leans `better`, above −δ `non_inferior`; anything else —
+ *  no try in an arm, or a bound not above −δ — does not decide. The rule below adds the holdout
+ *  check to a leaning; {@link devVerdictOf} gives it as it is. */
+function confirmOnDev(
+  dev: DraftEvaluationSplitMeasureWire,
+  delta: number,
+): 'worse' | 'better' | 'non_inferior' | 'inconclusive' {
+  if (dev.difference === null || dev.lowerBound === null) return 'inconclusive';
+  if (dev.difference < -delta) return 'worse';
+  if (dev.lowerBound > 0) return 'better';
+  return dev.lowerBound > -delta ? 'non_inferior' : 'inconclusive';
+}
+
+/** Whether more than a quarter of either arm's `trials` have no outcome. */
+function tooManyWithoutOutcome(trials: readonly VerdictTrial[]): boolean {
+  for (const arm of ['baseline', 'candidate'] as const) {
+    const armTrials = trials.filter((t) => t.arm === arm);
+    const none = count(armTrials).none;
+    if (armTrials.length > 0 && none / armTrials.length > DRAFT_EVALUATION_RULES.maxErroredShare) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** How the stage's rule reads its measure. */
 function ruleOutcome(measure: DraftEvaluationMeasureWire): StageOutcome {
   if (measure.stage === 'regression') {
@@ -227,15 +255,11 @@ function ruleOutcome(measure: DraftEvaluationMeasureWire): StageOutcome {
       : { kind: 'decided', verdict: 'inconclusive', reason: 'errored_trials' };
   }
   const { dev, holdout, delta } = measure;
-  if (dev.difference === null || dev.lowerBound === null) {
-    return { kind: 'decided', verdict: 'inconclusive', reason: 'too_few_trials' };
-  }
-  if (dev.difference < -delta) {
+  const leaning = confirmOnDev(dev, delta);
+  if (leaning === 'worse') {
     return { kind: 'decided', verdict: 'worse', reason: 'below_margin' };
   }
-  const leaning: 'better' | 'non_inferior' | null =
-    dev.lowerBound > 0 ? 'better' : dev.lowerBound > -delta ? 'non_inferior' : null;
-  if (leaning === null) {
+  if (leaning === 'inconclusive') {
     return { kind: 'decided', verdict: 'inconclusive', reason: 'too_few_trials' };
   }
   if (holdout === null || holdout.difference === null) {
@@ -272,14 +296,48 @@ export function stageOutcome(
   if (new Set(scored.map((t) => t.environmentDigest)).size > 1) {
     return { kind: 'decided', verdict: 'unmeasured', reason: 'environment_differs' };
   }
-  for (const arm of ['baseline', 'candidate'] as const) {
-    const armTrials = stageTrials.filter((t) => t.arm === arm);
-    const none = count(armTrials).none;
-    if (armTrials.length > 0 && none / armTrials.length > DRAFT_EVALUATION_RULES.maxErroredShare) {
-      return { kind: 'decided', verdict: 'inconclusive', reason: 'errored_trials' };
-    }
+  if (tooManyWithoutOutcome(stageTrials)) {
+    return { kind: 'decided', verdict: 'inconclusive', reason: 'errored_trials' };
   }
   return ruleOutcome(measureStage(stage, stageTrials));
+}
+
+/**
+ * What the draft's proposer is told of an evaluation that finished with `verdict` (S10 E3-3; §3.3
+ * I-E4, §5.5 封闭 — `@nexttime/shared` wire/eval.ts `DraftEvaluationDevVerdict` says what it
+ * means): the stages it ran, read again in order on their `dev` trials alone, by the rules above —
+ * more than a quarter of an arm's without an outcome, then the stage's rule — with the
+ * confirmation read on `dev` as it is ({@link confirmOnDev}), no holdout check. A stage with no
+ * `dev` trial (not run, skipped, or every case held out) is passed over; reaching the end without
+ * a confirmation read on `dev` does not decide. Nothing a `holdout` trial did enters: a held-out
+ * case lost, the holdout disagreeing, a suite with no holdout case — each reads as the `dev` cases
+ * say, or `inconclusive` where they say nothing (the same as a budget that ended it early).
+ *
+ * The evaluation's own `contaminated` is `inconclusive` here: it means the draft carried a suite's
+ * canary or a held-out case's text, and saying so would answer a probe for one. `unmeasured` (its
+ * trials did not run in one known environment, I-E2) is `unmeasured`: nothing about the cases.
+ *
+ * `stageTrials`: each stage's ended trials, both splits (this keeps the `dev` ones).
+ */
+export function devVerdictOf(
+  verdict: DraftEvaluationVerdict,
+  stageTrials: Readonly<Partial<Record<DraftEvaluationStageName, readonly VerdictTrial[]>>>,
+): DraftEvaluationDevVerdict {
+  if (verdict === 'unmeasured') return 'unmeasured';
+  if (verdict === 'contaminated') return 'inconclusive';
+  for (const stage of DRAFT_EVALUATION_STAGE_VALUES) {
+    const dev = (stageTrials[stage] ?? []).filter((t) => t.split === 'dev');
+    if (dev.length === 0) continue;
+    if (tooManyWithoutOutcome(dev)) return 'inconclusive';
+    const measure = measureStage(stage, dev);
+    if (measure.stage === 'confirm') return confirmOnDev(measure.dev, measure.delta);
+    const outcome = ruleOutcome(measure);
+    if (outcome.kind === 'passed') continue;
+    return outcome.verdict === 'regressed' || outcome.verdict === 'refuted'
+      ? outcome.verdict
+      : 'inconclusive';
+  }
+  return 'inconclusive';
 }
 
 /**

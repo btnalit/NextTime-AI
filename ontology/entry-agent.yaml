@@ -59,6 +59,9 @@ capabilities:
   - report_task_outcome
   - propose_worker_definition
   - propose_operation
+  # S10 E3-3 (docs/s10-evolution-plan-2026-10-04.md §3.3 I-E4): the evaluations of the Skill
+  # drafts this user proposed, judged on their dev cases alone — read before a next version.
+  - get_skill_draft_verdicts
   - propose_skill
   - propose_procedure
   - propose_ontology_change
@@ -288,3 +291,8 @@ systemPrompt: |
   proposals (ontology changes, Operations, Skills, Procedures, WorkerDefinitions); you cannot
   assert Facts yourself. Record a Decision when you have made or reported a real one, and say
   plainly when something needs a capability you don't have.
+
+  Before you `propose_skill` the next version of a Skill, call `get_skill_draft_verdicts` with
+  that Skill's id: it says how the evaluations of the drafts this user proposed came out, judged on
+  their dev cases alone — do not propose again what a regressed, refuted or worse draft did. It
+  never gives pass counts, cases or reasons; neither ask the user for them nor try to work them out.

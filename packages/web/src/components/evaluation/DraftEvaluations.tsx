@@ -63,6 +63,7 @@ export function draftEvaluationSummaryOf(row: DraftEvaluationWire): DraftEvaluat
     verdict: row.verdict,
     reason: row.reason,
     decidedBy: row.decidedBy,
+    devVerdict: row.devVerdict,
     costUsd: row.costUsd,
     createdBy: row.createdBy,
     createdAt: row.createdAt,
@@ -85,6 +86,44 @@ function comparisonText(
   if (row.baseline === null) return t(`${candidate}（新 Skill）`, `${candidate} (new Skill)`);
   const baseline = `v${row.baseline.version}`;
   return t(`${candidate} 对比 ${baseline}`, `${candidate} vs ${baseline}`);
+}
+
+/**
+ * What the draft's proposer, and an agent acting for them, is told of a finished evaluation
+ * (S10 E3-3, `get_skill_draft_verdicts`): its rules read on the `dev` cases alone, never the pass
+ * counts or holdout (§5.5 封闭) — shown beside the verdict people see so a reader knows the two
+ * can differ. One that finished before it was kept has none.
+ */
+function DevVerdictLine({
+  devVerdict,
+  t,
+}: {
+  readonly devVerdict: DraftEvaluationWire['devVerdict'];
+  readonly t: Translate;
+}) {
+  if (devVerdict === null) {
+    return (
+      <p className="text-3" data-testid="draft-eval-dev-verdict" data-dev-verdict="none">
+        {t(
+          '这次评测结束时还没有记下给提议者 agent 的结论，它读不到这次的结论。',
+          'This evaluation ended before what the proposer’s agent is told was kept, so it is told nothing of it.',
+        )}
+      </p>
+    );
+  }
+  return (
+    <p
+      className="row-wrap text-2"
+      data-testid="draft-eval-dev-verdict"
+      data-dev-verdict={devVerdict}
+    >
+      <span>{t('提议者的 agent 看到的结论：', 'What the proposer’s agent is told:')}</span>
+      <StatusChip machine="draftEvaluation" status={devVerdict} size="s" />
+      <span className="text-3">
+        {t('（只按 dev 用例，不含通过数）', '(from the dev cases only, without pass counts)')}
+      </span>
+    </p>
+  );
 }
 
 export interface DraftEvaluationsTabProps {
@@ -476,6 +515,7 @@ export function DraftEvaluationDetail({
             )}
           </p>
         ) : null}
+        {row.status === 'finished' ? <DevVerdictLine devVerdict={row.devVerdict} t={t} /> : null}
         {row.status === 'running' && can('cancel_draft_evaluation') !== false ? (
           <div className="row-wrap">
             <Confirm

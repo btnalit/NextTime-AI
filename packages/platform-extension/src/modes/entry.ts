@@ -89,6 +89,10 @@ const ENTRY_TOOL_CAPABILITY_NAMES = [
   'report_task_outcome',
   'propose_worker_definition',
   'propose_operation',
+  // S10 E3-3 (docs/s10-evolution-plan-2026-10-04.md §3.3 I-E4): the evaluations of the Skill
+  // drafts this person proposed — the verdict on `dev` alone, never pass counts — read before
+  // proposing a Skill's next version.
+  'get_skill_draft_verdicts',
   'propose_skill',
   'propose_procedure',
   'propose_ontology_change',

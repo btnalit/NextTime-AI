@@ -108,6 +108,8 @@ export type { FamilyKind } from './family-version.js';
 export { lockWorkerRegistry } from './registry-lock.js';
 
 export { DraftEvaluatingError } from './draft-evaluating.js';
+// S10 E3-3: what a draft's proposer (and their agent) is told of its evaluations.
+export { readSkillDraftVerdicts } from './draft-verdicts.js';
 export {
   DEFAULT_DRAFT_EXPIRY_DAYS,
   DraftNotDiscardableError,

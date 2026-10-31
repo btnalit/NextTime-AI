@@ -524,6 +524,33 @@ export const DRAFT_EVALUATION_REASON_VALUES = [
 export const DraftEvaluationReasonSchema = z.enum(DRAFT_EVALUATION_REASON_VALUES);
 export type DraftEvaluationReason = z.infer<typeof DraftEvaluationReasonSchema>;
 
+/**
+ * What the draft's proposer is told of an evaluation (S10 E3-3; §3.3 I-E4, §5.5 封闭: the Handle
+ * sees the verdict on `dev` only, never the pass counts): the evaluation's own rules read on its
+ * `dev` cases alone, written when it ends. The stages it ran are read in order — regression,
+ * mechanism, confirm — each on its `dev` trials (a stage with none is passed over); confirm gives
+ * the verdict from `dev` with no holdout check (`better` above 0, `non_inferior` above −δ, `worse`
+ * below −δ). Nothing a `holdout` case did changes it:
+ *   - `inconclusive` whenever the `dev` cases do not decide — too few trials, too many without an
+ *     outcome, or the evaluation ended before its confirmation ran (whatever ended it: a held-out
+ *     case lost, the budget, a confirmation with no case) — and for a `contaminated` evaluation
+ *     (what made it so is the draft carrying evaluation content: telling would answer a probe);
+ *   - `unmeasured` only when its trials did not run in one known environment (I-E2).
+ * People see it beside the verdict (`DraftEvaluationSummaryWire.devVerdict`); an agent reads it
+ * through `get_skill_draft_verdicts`, for the drafts its person proposed.
+ */
+export const DRAFT_EVALUATION_DEV_VERDICT_VALUES = [
+  'regressed',
+  'refuted',
+  'worse',
+  'better',
+  'non_inferior',
+  'inconclusive',
+  'unmeasured',
+] as const;
+export const DraftEvaluationDevVerdictSchema = z.enum(DRAFT_EVALUATION_DEV_VERDICT_VALUES);
+export type DraftEvaluationDevVerdict = z.infer<typeof DraftEvaluationDevVerdictSchema>;
+
 /** A stage's state: `waiting` (a later stage of a running evaluation), `running`, `ended` (it ran
  *  every trial; the evaluation's `decidedBy` says whether it ended the evaluation), `skipped`
  *  (`skipReason` — a later stage reads so already when it will be, for no mechanism or no case;
@@ -682,6 +709,9 @@ const DraftEvaluationStateFields = {
   reason: DraftEvaluationReasonSchema.nullable(),
   /** The stage whose outcome gave the verdict. */
   decidedBy: DraftEvaluationStageNameSchema.nullable(),
+  /** What the draft's proposer is told ({@link DraftEvaluationDevVerdictSchema}): `null` until it
+   *  finishes, when it is cancelled, and for one that finished before this was kept. */
+  devVerdict: DraftEvaluationDevVerdictSchema.nullable(),
   /** What its trials cost so far; `null` while a trial with no price has ended. */
   costUsd: z.number().nullable(),
   createdBy: z.string(),
@@ -890,6 +920,37 @@ export const PublishEvaluationReviewSchema = z
   })
   .strict();
 export type PublishEvaluationReview = z.infer<typeof PublishEvaluationReviewSchema>;
+
+// ----- what the proposer's agent sees (S10 E3-3) ----------------------------------------------
+
+/**
+ * One evaluation of a Skill draft, as its proposer — and an agent acting for them — sees it
+ * (`get_skill_draft_verdicts`; §3.3 I-E4, §5.5 封闭): which draft (`version`, `draftDigest`, the
+ * content it evaluated), whether it still runs, and once it finished its {@link
+ * DraftEvaluationDevVerdictSchema}. Nothing else: no pass counts, no case, no reason, no stage,
+ * no time — how long it ran would say which stages did.
+ */
+export const SkillDraftVerdictWireSchema = z
+  .object({
+    version: z.number().int().positive(),
+    draftDigest: z.string(),
+    status: z.enum(['running', 'finished']),
+    /** `null` while it runs. */
+    devVerdict: DraftEvaluationDevVerdictSchema.nullable(),
+  })
+  .strict();
+export type SkillDraftVerdictWire = z.infer<typeof SkillDraftVerdictWireSchema>;
+
+/** At most this many, newest first (`get_skill_draft_verdicts`; `truncated` when more). */
+export const SKILL_DRAFT_VERDICTS_LIMIT = 20;
+
+export const SkillDraftVerdictsWireSchema = z
+  .object({
+    items: z.array(SkillDraftVerdictWireSchema),
+    truncated: z.literal(true).optional(),
+  })
+  .strict();
+export type SkillDraftVerdictsWire = z.infer<typeof SkillDraftVerdictsWireSchema>;
 
 // ----- seal holds (S10 E3-2c) -----------------------------------------------------------------
 

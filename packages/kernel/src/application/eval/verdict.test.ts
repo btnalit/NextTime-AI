@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   type VerdictTrial,
   casesToAcknowledge,
+  devVerdictOf,
   differenceLowerBound,
   measureStage,
   stageOutcome,
@@ -335,6 +336,176 @@ describe('stageOutcome', () => {
         },
       });
     });
+  });
+});
+
+describe('devVerdictOf (S10 E3-3: what the proposer’s agent is told — dev alone)', () => {
+  const arm = (
+    a: 'baseline' | 'candidate',
+    passed: number,
+    of: number,
+    extra: Partial<VerdictTrial> = {},
+  ) => Array.from({ length: of }, (_, i) => trial(a, i < passed, extra));
+  const held = { split: 'holdout' as const, caseId: 'case-h' };
+  // Two regression cases, one held out; both kept unless a test loses one.
+  const regressionKept = [
+    ...arm('candidate', 2, 2),
+    ...arm('baseline', 2, 2),
+    ...arm('candidate', 2, 2, held),
+    ...arm('baseline', 1, 2, held),
+  ];
+  const mechanismShown = [...arm('candidate', 10, 10), ...arm('baseline', 2, 10)];
+  const confirmDev = (c: number, b: number) => [
+    ...arm('candidate', c, 30),
+    ...arm('baseline', b, 30),
+  ];
+  const confirmHoldout = (c: number, b: number) => [
+    ...arm('candidate', c, 10, held),
+    ...arm('baseline', b, 10, held),
+  ];
+  const run = (stages: Partial<Record<'regression' | 'mechanism' | 'confirm', VerdictTrial[]>>) => {
+    // The evaluation's own verdict, as the stages give it in order.
+    for (const stage of ['regression', 'mechanism', 'confirm'] as const) {
+      const trials = stages[stage];
+      if (trials === undefined) continue;
+      const outcome = decided(trials, stage);
+      if (outcome.kind === 'decided') return { verdict: outcome.verdict, reason: outcome.reason };
+    }
+    throw new Error('no stage decided');
+  };
+
+  it('a lost held-out regression case reads as inconclusive — the dev case was kept', () => {
+    const lost = [
+      ...arm('candidate', 2, 2),
+      ...arm('baseline', 2, 2),
+      ...arm('candidate', 0, 2, held),
+      ...arm('baseline', 2, 2, held),
+    ];
+    const stages = { regression: lost };
+    expect(run(stages)).toEqual({ verdict: 'regressed', reason: 'regression_case_lost' });
+    expect(devVerdictOf('regressed', stages)).toBe('inconclusive');
+    // The same as any other evaluation that stopped before its confirmation: a budget, trials
+    // without an outcome — the agent cannot tell which (the residual bit, PR notes).
+    expect(devVerdictOf('inconclusive', { regression: regressionKept })).toBe('inconclusive');
+  });
+
+  it('a lost dev regression case reads as regressed; an unsettled one as inconclusive', () => {
+    const lost = [...arm('candidate', 0, 2), ...arm('baseline', 2, 2)];
+    expect(devVerdictOf('regressed', { regression: lost })).toBe('regressed');
+    const unsettled = [
+      ...arm('candidate', 1, 1),
+      trial('candidate', false, {
+        status: 'errored',
+        error: 'spawn_failed',
+        environmentDigest: null,
+      }),
+      ...arm('baseline', 2, 2),
+      // Enough settled cases that the arm's share without an outcome stays within the limit.
+      ...arm('candidate', 2, 2, { caseId: 'case-b' }),
+      ...arm('baseline', 2, 2, { caseId: 'case-b' }),
+    ];
+    expect(devVerdictOf('inconclusive', { regression: unsettled })).toBe('inconclusive');
+  });
+
+  it('a mechanism refuted on its dev cases reads as refuted; one held out entirely is passed over', () => {
+    const refuted = [...arm('candidate', 7, 10), ...arm('baseline', 2, 10)];
+    expect(devVerdictOf('refuted', { regression: regressionKept, mechanism: refuted })).toBe(
+      'refuted',
+    );
+    // Every mechanism case held out: the evaluation is refuted on them, and the dev reading has
+    // no mechanism case to read — nor a confirmation, which a refuted evaluation never runs.
+    const heldMechanism = [...arm('candidate', 7, 10, held), ...arm('baseline', 2, 10, held)];
+    const stages = { regression: regressionKept, mechanism: heldMechanism };
+    expect(run(stages)).toMatchObject({ verdict: 'refuted' });
+    expect(devVerdictOf('refuted', stages)).toBe('inconclusive');
+  });
+
+  it('the confirmation on dev alone: the holdout disagreeing or missing changes nothing told', () => {
+    const better = { regression: regressionKept, mechanism: mechanismShown };
+    const agrees = { ...better, confirm: [...confirmDev(28, 10), ...confirmHoldout(8, 5)] };
+    const disagrees = { ...better, confirm: [...confirmDev(28, 10), ...confirmHoldout(4, 6)] };
+    const none = { ...better, confirm: confirmDev(28, 10) };
+    expect(run(agrees)).toMatchObject({ verdict: 'better' });
+    expect(run(disagrees)).toMatchObject({ verdict: 'inconclusive', reason: 'holdout_disagrees' });
+    expect(run(none)).toMatchObject({ verdict: 'inconclusive', reason: 'no_holdout_cases' });
+    expect(devVerdictOf('better', agrees)).toBe('better');
+    expect(devVerdictOf('inconclusive', disagrees)).toBe('better');
+    expect(devVerdictOf('inconclusive', none)).toBe('better');
+
+    const worse = { ...better, confirm: [...confirmDev(5, 20), ...confirmHoldout(9, 1)] };
+    expect(run(worse)).toMatchObject({ verdict: 'worse' });
+    expect(devVerdictOf('worse', worse)).toBe('worse');
+    const level = {
+      ...better,
+      confirm: [
+        ...arm('candidate', 290, 300),
+        ...arm('baseline', 290, 300),
+        ...confirmHoldout(1, 9),
+      ],
+    };
+    expect(devVerdictOf('inconclusive', level)).toBe('non_inferior');
+    const few = { ...better, confirm: [...arm('candidate', 2, 3), ...arm('baseline', 2, 3)] };
+    expect(devVerdictOf('inconclusive', few)).toBe('inconclusive');
+  });
+
+  it('dev trials without an outcome past the limit read as inconclusive; held-out ones do not count', () => {
+    const lostDev = [
+      ...arm('candidate', 2, 6),
+      ...Array.from({ length: 4 }, () =>
+        trial('candidate', false, {
+          status: 'errored',
+          error: 'spawn_failed',
+          environmentDigest: null,
+        }),
+      ),
+      ...arm('baseline', 2, 10),
+    ];
+    expect(devVerdictOf('inconclusive', { regression: lostDev })).toBe('inconclusive');
+    // Held-out trials without an outcome: the evaluation stops (errored_trials) at that stage, and
+    // the dev reading has no later stage to read.
+    const lostHeld = [
+      ...arm('candidate', 2, 2),
+      ...arm('baseline', 2, 2),
+      ...Array.from({ length: 4 }, () =>
+        trial('candidate', false, {
+          ...held,
+          status: 'errored',
+          error: 'spawn_failed',
+          environmentDigest: null,
+        }),
+      ),
+      ...arm('baseline', 2, 4, held),
+    ];
+    expect(run({ regression: lostHeld })).toMatchObject({ reason: 'errored_trials' });
+    expect(devVerdictOf('inconclusive', { regression: lostHeld })).toBe('inconclusive');
+  });
+
+  it('contaminated is told as inconclusive, unmeasured as unmeasured — whatever dev says', () => {
+    const better = {
+      regression: regressionKept,
+      mechanism: mechanismShown,
+      confirm: confirmDev(28, 10),
+    };
+    expect(devVerdictOf('contaminated', better)).toBe('inconclusive');
+    expect(devVerdictOf('contaminated', { regression: regressionKept })).toBe('inconclusive');
+    expect(devVerdictOf('unmeasured', better)).toBe('unmeasured');
+  });
+
+  it('with no dev trial to read, only inconclusive or unmeasured is told', () => {
+    const told = new Set<string>();
+    for (const verdict of [
+      'regressed',
+      'refuted',
+      'worse',
+      'better',
+      'non_inferior',
+      'inconclusive',
+      'unmeasured',
+      'contaminated',
+    ] as const) {
+      told.add(devVerdictOf(verdict, {}));
+    }
+    expect([...told].sort()).toEqual(['inconclusive', 'unmeasured']);
   });
 });
 

@@ -1389,6 +1389,27 @@ describe.runIf(DATABASE_URL !== undefined)(
         })(),
       );
       const confirming = await drive(running.id, allPass, (e) => e.stage === 'confirm');
+      // S10 E3-3 (worker/0012): the dev verdict and the summary Observation come together, and only
+      // with the finish — a running evaluation carries neither.
+      const someSummary = await asOwnerRole((client) =>
+        client.query<{ id: string }>(
+          `select summary_observation_id as id from eval_draft_evaluations
+            where workspace_id = $1 and summary_observation_id is not null limit 1`,
+          [workspaceId],
+        ),
+      );
+      for (const set of [
+        `dev_verdict = 'better', summary_observation_id = '${someSummary.rows[0]?.id}'`,
+        "dev_verdict = 'better'",
+        `summary_observation_id = '${someSummary.rows[0]?.id}'`,
+      ]) {
+        await expect(
+          write(`update eval_draft_evaluations set ${set} where workspace_id = $1 and id = $2`, [
+            workspaceId,
+            running.id,
+          ]),
+        ).rejects.toThrow(/eval_draft_evaluations_summary/);
+      }
       const queued = await asOwnerRole((client) =>
         client.query<{ id: string }>(
           `select id from eval_trials where workspace_id = $1 and run_id = $2 and status = 'queued' limit 1`,
@@ -1661,10 +1682,19 @@ describe.runIf(DATABASE_URL !== undefined)(
         acknowledgedFailures: 2,
         params: { evaluationReview: { evaluationId: worse.id, acknowledgements: reasons } },
       });
+      // S10 E3-3: and names the evaluation's summary Observation, its Evidence in the graph.
+      const summary = await asOwnerRole((client) =>
+        client.query<{ id: string | null }>(
+          'select summary_observation_id as id from eval_draft_evaluations where workspace_id = $1 and id = $2',
+          [workspaceId, worse.id],
+        ),
+      );
+      expect(summary.rows[0]?.id).toEqual(expect.any(String));
       expect(audit.rows[0]?.payload.evaluation).toEqual({
         id: worse.id,
         verdict: 'worse',
         reason: 'below_margin',
+        observationId: summary.rows[0]?.id,
       });
       // Published as evaluated: everyone sees its evidence now.
       expect((await evidence('member')).evaluations.map((e) => e.id)).toEqual([
@@ -1853,6 +1883,295 @@ describe.runIf(DATABASE_URL !== undefined)(
         [regressed.id, 'published'],
       ]);
     }, 180_000);
+
+    it('each finished evaluation leaves one summary Observation no agent and no person reads, and its proposer is told the dev verdict alone (S10 E3-3)', async () => {
+      const evaluationPrincipal = await asApp((client) =>
+        getOrCreateEvaluationPrincipal(client, workspaceId),
+      );
+      const rows = (
+        await asOwnerRole((client) =>
+          client.query<{
+            id: string;
+            status: string;
+            verdict: string | null;
+            dev_verdict: string | null;
+            summary_observation_id: string | null;
+            skill_id: string;
+            skill_version: number;
+            draft_digest: string;
+            candidate_proposed_by: string;
+            suite_id: string;
+            suite_version: number;
+          }>(
+            `select id, status, verdict, dev_verdict, summary_observation_id, skill_id, skill_version,
+                    draft_digest, candidate_proposed_by, suite_id, suite_version
+               from eval_draft_evaluations where workspace_id = $1 order by created_at, id`,
+            [workspaceId],
+          ),
+        )
+      ).rows;
+      const finished = rows.filter((row) => row.status === 'finished');
+      const cancelled = rows.filter((row) => row.status === 'cancelled');
+      expect(finished.length).toBeGreaterThan(20);
+      expect(cancelled.length).toBeGreaterThan(0);
+      expect(rows.filter((row) => row.status === 'running')).toEqual([]);
+      // Every finished one has both; a cancelled one neither.
+      for (const row of finished) {
+        expect(row.dev_verdict).not.toBeNull();
+        expect(row.summary_observation_id).not.toBeNull();
+      }
+      for (const row of cancelled) {
+        expect([row.dev_verdict, row.summary_observation_id]).toEqual([null, null]);
+      }
+      // How the evaluations above read on dev: the same where dev decided, contaminated told as
+      // inconclusive, an environment that differed as unmeasured.
+      const readings = new Set(finished.map((row) => `${row.verdict}:${row.dev_verdict}`));
+      for (const reading of [
+        'better:better',
+        'regressed:regressed',
+        'refuted:refuted',
+        'worse:worse',
+        'unmeasured:unmeasured',
+        'contaminated:inconclusive',
+        'inconclusive:inconclusive',
+      ]) {
+        expect(readings).toContain(reading);
+      }
+      expect([...readings].filter((r) => r.startsWith('contaminated:'))).toEqual([
+        'contaminated:inconclusive',
+      ]);
+
+      // The Observation: under the evaluation Source, private to the evaluation Principal, from an
+      // Activity of kind `evaluation` it started — ids, the digest and verdicts, no case content.
+      const ids = finished.map((row) => row.summary_observation_id as string);
+      const observations = (
+        await asOwnerRole((client) =>
+          client.query<{
+            id: string;
+            content: Record<string, unknown>;
+            source_kind: string;
+            visibility: string;
+            owner_principal_id: string;
+            source_id: string;
+            activity_id: string;
+            activity_kind: string;
+            started_by: string;
+            metadata: Record<string, unknown>;
+            activity_status: string;
+          }>(
+            `select o.id, o.content, o.source_id, o.activity_id, s.kind as source_kind, s.visibility,
+                    s.owner_principal_id, a.kind as activity_kind, a.started_by, a.metadata,
+                    a.status as activity_status
+               from observations o
+               join sources s on s.workspace_id = o.workspace_id and s.id = o.source_id
+               join activities a on a.workspace_id = o.workspace_id and a.id = o.activity_id
+              where o.workspace_id = $1 and o.id = any($2::uuid[])`,
+            [workspaceId, ids],
+          ),
+        )
+      ).rows;
+      expect(observations).toHaveLength(ids.length);
+      expect(new Set(observations.map((o) => o.source_id)).size).toBe(1);
+      expect(new Set(observations.map((o) => o.activity_id)).size).toBe(ids.length);
+      const byId = new Map(observations.map((o) => [o.id, o]));
+      for (const row of finished) {
+        const observation = byId.get(row.summary_observation_id as string);
+        expect(observation).toMatchObject({
+          source_kind: 'evaluation',
+          visibility: 'private',
+          owner_principal_id: evaluationPrincipal,
+          activity_kind: 'evaluation',
+          started_by: evaluationPrincipal,
+          activity_status: 'completed',
+          metadata: { draftEvaluationId: row.id },
+        });
+        expect(Object.keys(observation?.metadata ?? {})).toEqual(['draftEvaluationId']);
+        expect(observation?.content).toMatchObject({
+          purpose: 'draft_evaluation',
+          evaluationId: row.id,
+          kind: 'skill',
+          skillId: row.skill_id,
+          version: row.skill_version,
+          draftDigest: row.draft_digest,
+          suiteId: row.suite_id,
+          suiteVersion: row.suite_version,
+          verdict: row.verdict,
+          devVerdict: row.dev_verdict,
+        });
+        expect(Object.keys(observation?.content ?? {}).sort()).toEqual(
+          [
+            'decidedBy',
+            'devVerdict',
+            'draftDigest',
+            'evaluationId',
+            'kind',
+            'purpose',
+            'reason',
+            'skillId',
+            'suiteId',
+            'suiteVersion',
+            'verdict',
+            'version',
+          ].sort(),
+        );
+      }
+      const written = JSON.stringify(observations.map((o) => o.content));
+      for (const content of [
+        REGRESSION_INPUT,
+        MECHANISM_INPUT,
+        CONFIRM_DEV_INPUT,
+        CONFIRM_HOLDOUT_INPUT,
+        suite.canary,
+        caseIds.holdout,
+      ]) {
+        expect(written.includes(content)).toBe(false);
+      }
+      const sourceId = observations[0]?.source_id as string;
+      const activityId = observations[0]?.activity_id as string;
+
+      // RLS: the row is the evaluation Principal's alone — every person's transaction, and so every
+      // agent's (a Handle's acts for its person), reads neither the Observations nor their Source.
+      const seenBy = async (principalId: string) =>
+        withWorkspace(pool, { workspaceId, principalId }, async (client) => {
+          const o = await client.query<{ n: number }>(
+            'select count(*)::int as n from observations where workspace_id = $1 and id = any($2::uuid[])',
+            [workspaceId, ids],
+          );
+          const src = await client.query<{ n: number }>(
+            'select count(*)::int as n from sources where workspace_id = $1 and id = $2',
+            [workspaceId, sourceId],
+          );
+          return [o.rows[0]?.n, src.rows[0]?.n];
+        });
+      for (const role of ['owner', 'builder', 'member'] as const) {
+        expect(await seenBy(people[role])).toEqual([0, 0]);
+      }
+      expect(await seenBy(evaluationPrincipal)).toEqual([ids.length, 1]);
+
+      // An agent acting for the draft's proposer: `explain` of the Activity shows the evaluation's
+      // id and no Observation; `search` finds no case.
+      const agentFor = (role: keyof typeof people): ResolvedCaller => {
+        const now = Math.floor(Date.now() / 1000);
+        return {
+          channel: 'handle',
+          claims: {
+            ws: workspaceId,
+            sid: randomUUID(),
+            obo: people[role],
+            scope: {
+              capabilities: ['get_skill_draft_verdicts', 'search', 'explain'],
+              resources: {},
+            },
+            jti: randomUUID(),
+            iat: now,
+            exp: now + 600,
+          },
+        };
+      };
+      const explained = await call<{
+        nodeType: string;
+        activity: { kind: string; observations: unknown[]; metadata: Record<string, unknown> };
+      }>(agentFor('builder'), 'explain', { nodeId: activityId });
+      expect(explained).toMatchObject({
+        nodeType: 'activity',
+        activity: { kind: 'evaluation', observations: [] },
+      });
+      expect(explained.activity.metadata).toEqual({
+        draftEvaluationId: observations[0]?.content.evaluationId,
+      });
+      // The Observation itself is no node an agent can explain.
+      expect(
+        await rejection(
+          call(agentFor('builder'), 'explain', { nodeId: observations[0]?.id as string }),
+        ),
+      ).toBeInstanceOf(Error);
+      for (const query of ['web-1', 'batch host', 'draft_evaluation', 'restart']) {
+        const found = JSON.stringify(
+          await call(agentFor('builder'), 'search', { query, limit: 50 }),
+        );
+        for (const content of [CONFIRM_HOLDOUT_INPUT, CONFIRM_DEV_INPUT, suite.canary]) {
+          expect(found.includes(content)).toBe(false);
+        }
+        expect(found.includes(sourceId)).toBe(false);
+      }
+      // An evaluation Task's Worker — the one agent acting as the evaluation Principal — reaches
+      // none of these reads (application/eval-session: its own Task, its tools, its result).
+      const trialSpawn = supervisor.spawnCalls[0] as TaskSpawnInput;
+      const trialAgent: ResolvedCaller = { channel: 'handle', claims: workerClaims(trialSpawn) };
+      expect(trialAgent.channel === 'handle' && trialAgent.claims.obo).toBe(evaluationPrincipal);
+      for (const [capability, params] of [
+        ['explain', { nodeId: activityId }],
+        ['search', { query: 'web-1' }],
+        ['get_skill_draft_verdicts', { skillId: helperId }],
+      ] as const) {
+        expect(await rejection(call(trialAgent, capability, params))).toBeInstanceOf(
+          ForbiddenError,
+        );
+      }
+
+      // `get_skill_draft_verdicts`: the caller's own drafts only, newest first, at most 20; for
+      // each the version, the digest, running or finished, and the dev verdict — nothing else.
+      type Verdicts = {
+        items: Array<{ version: number; draftDigest: string; status: string; devVerdict: string }>;
+        truncated?: true;
+      };
+      const expected = (proposer: string, skillId: string) =>
+        finished
+          .filter((row) => row.candidate_proposed_by === proposer && row.skill_id === skillId)
+          .reverse()
+          .map((row) => ({
+            version: row.skill_version,
+            draftDigest: row.draft_digest,
+            status: 'finished',
+            devVerdict: row.dev_verdict,
+          }));
+      const helper = await call<Verdicts>(person('builder'), 'get_skill_draft_verdicts', {
+        skillId: helperId,
+      });
+      const helperExpected = expected(people.builder, helperId);
+      expect(helperExpected.length).toBeGreaterThan(0);
+      expect(helperExpected.length).toBeLessThanOrEqual(20);
+      expect(helper).toEqual({ items: helperExpected });
+      // The same through the builder's agent.
+      expect(
+        await call<Verdicts>(agentFor('builder'), 'get_skill_draft_verdicts', {
+          skillId: helperId,
+        }),
+      ).toEqual(helper);
+      for (const item of helper.items) {
+        expect(Object.keys(item).sort()).toEqual([
+          'devVerdict',
+          'draftDigest',
+          'status',
+          'version',
+        ]);
+      }
+      // More than 20: the newest 20, said to be cut.
+      const notes = await call<Verdicts>(agentFor('builder'), 'get_skill_draft_verdicts', {
+        skillId: notesId,
+      });
+      const notesExpected = expected(people.builder, notesId);
+      expect(notesExpected.length).toBeGreaterThan(20);
+      expect(notes).toEqual({ items: notesExpected.slice(0, 20), truncated: true });
+      // The owner, who may see every draft, is told only of the ones they proposed; a member who
+      // proposed none, of none.
+      const ownerNotes = await call<Verdicts>(agentFor('owner'), 'get_skill_draft_verdicts', {
+        skillId: notesId,
+      });
+      expect(ownerNotes).toEqual({ items: expected(people.owner, notesId) });
+      expect(ownerNotes.items.length).toBeGreaterThan(0);
+      expect(
+        await call<Verdicts>(agentFor('owner'), 'get_skill_draft_verdicts', { skillId: helperId }),
+      ).toEqual({ items: [] });
+      expect(
+        await call<Verdicts>(agentFor('member'), 'get_skill_draft_verdicts', { skillId: notesId }),
+      ).toEqual({ items: [] });
+      expect(
+        await call<Verdicts>(agentFor('builder'), 'get_skill_draft_verdicts', {
+          skillId: randomUUID(),
+        }),
+      ).toEqual({ items: [] });
+    }, 60_000);
 
     // Last: it removes this test's workspace, the evaluations with it.
     it('the workspace purge removes draft evaluations with their runs and trials', async () => {

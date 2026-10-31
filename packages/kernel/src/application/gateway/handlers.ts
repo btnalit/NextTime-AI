@@ -391,6 +391,7 @@ import {
   deprecateProcedureHandler,
   deprecateSkillHandler,
   getProcedureStatsHandler,
+  getSkillDraftVerdictsHandler,
   getSkillHandler,
   getSkillStatsHandler,
   listProceduresHandler,
@@ -2566,6 +2567,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['get_skill', getSkillHandler],
   // S11 W1a E2-1 — read-time Skill statistics (application/task/skill-stats.ts).
   ['get_skill_stats', getSkillStatsHandler],
+  // S10 E3-3 — the dev verdicts of the caller's own drafts (application/worker/draft-verdicts.ts).
+  ['get_skill_draft_verdicts', getSkillDraftVerdictsHandler],
   ['propose_procedure', proposeProcedureHandler],
   ['publish_procedure', publishProcedureHandler],
   ['deprecate_procedure', deprecateProcedureHandler],
