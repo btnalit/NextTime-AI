@@ -105,7 +105,7 @@ function DevVerdictLine({
     return (
       <p className="text-3" data-testid="draft-eval-dev-verdict" data-dev-verdict="none">
         {t(
-          '这次评测结束时还没有记下给提议者 agent 的结论，它读不到这次的结论。',
+          '这次评测结束时还没有给提议者的智能体记下结论，它读不到这次的结论。',
           'This evaluation ended before what the proposer’s agent is told was kept, so it is told nothing of it.',
         )}
       </p>
@@ -117,7 +117,7 @@ function DevVerdictLine({
       data-testid="draft-eval-dev-verdict"
       data-dev-verdict={devVerdict}
     >
-      <span>{t('提议者的 agent 看到的结论：', 'What the proposer’s agent is told:')}</span>
+      <span>{t('提议者的智能体看到的结论：', 'What the proposer’s agent is told:')}</span>
       <StatusChip machine="draftEvaluation" status={devVerdict} size="s" />
       <span className="text-3">
         {t('（只按 dev 用例，不含通过数）', '(from the dev cases only, without pass counts)')}

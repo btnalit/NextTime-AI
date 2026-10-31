@@ -442,7 +442,7 @@ describe('草稿评测 (S10 E3-2b)', () => {
     const told = within(detail).getByTestId('draft-eval-dev-verdict');
     expect(told.getAttribute('data-dev-verdict')).toBe('better');
     expect(told.textContent).toBe(
-      '提议者的 agent 看到的结论：优于基线（只按 dev 用例，不含通过数）',
+      '提议者的智能体看到的结论：优于基线（只按 dev 用例，不含通过数）',
     );
     cleanup();
 

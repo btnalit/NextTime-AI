@@ -444,7 +444,7 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     en: 'My draft verdicts',
     zhHint: '列出你提议的 Skill 草稿的评测结论，只按 dev 用例判，不含通过数和用例内容。',
     enHint:
-      'Lists the evaluation verdicts of the skill drafts you proposed, judged on the dev cases only, without pass counts or case content.',
+      'Lists the evaluation verdicts of the Skill drafts you proposed, judged on the dev cases only, without pass counts or case content.',
   },
   get_procedure_stats: {
     zh: '流程使用情况',
