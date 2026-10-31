@@ -2,8 +2,10 @@ import {
   type ActionFailureCode,
   type GoalPlan,
   GoalPlanSchema,
+  type GoalPlannerMode,
   type GoalRunStatus,
   type PlanHint,
+  type PlanRevisionProposer,
   STEP_RUN_STATUS_VALUES,
   type StepRunStatus,
   failureCodeOfReason,
@@ -18,6 +20,7 @@ import {
 import {
   type GoalStepAttempt,
   type RunConfigSnapshot,
+  findGoalPlannerPrincipal,
   listGoalRunStepAttempts,
   readGoalRunsUsage,
   readStepAttemptTask,
@@ -32,6 +35,11 @@ import {
 import { readCancelLeftovers } from './cancelling.js';
 import { procedureConfirmCheck } from './from-procedure.js';
 import { paramsAsRead, planAsRead, planHints, procedureParametersAsRead } from './plan.js';
+import {
+  type PlanningRoundRow,
+  listPlanningRounds,
+  readGoalPlannerMode,
+} from './planning-rounds.js';
 import { planAuthorityHints } from './precheck.js';
 import { getGoalRun, getPlanRevision, listPlanRevisions, listStepRuns } from './reads.js';
 import { type UnresolvedGoalAction, listGoalRunUnresolvedActions } from './reconcile.js';
@@ -313,10 +321,27 @@ async function planSourceOf(
   };
 }
 
+/** A revision as a read shows it — S11 GO9a: with who proposed it, a person or the workspace's
+ *  goal planner (`planner.ts`), whose Principal `proposedBy` then names. */
+export type PlanRevisionRead = PlanRevisionRow & { readonly proposer: PlanRevisionProposer };
+
+/** `rows` with their proposer — the goal planner when its Principal proposed one. */
+async function withProposers(
+  client: PoolClient,
+  workspaceId: string,
+  rows: readonly PlanRevisionRow[],
+): Promise<readonly PlanRevisionRead[]> {
+  const plannerId = rows.length > 0 ? await findGoalPlannerPrincipal(client, workspaceId) : null;
+  return rows.map((row) => ({
+    ...row,
+    proposer: plannerId !== null && row.proposedBy === plannerId ? 'planner' : 'person',
+  }));
+}
+
 /** A revision of a plan as a reader gets it: the plan as every read shows it (`planAsRead`), and
  *  the hints for the person confirming it. */
 export interface PlanRevisionView {
-  readonly revision: PlanRevisionRow;
+  readonly revision: PlanRevisionRead;
   readonly plan: GoalPlan;
   readonly hints: readonly PlanHint[];
   /** S11 GO5d-2: see {@link PlanSourceView}. */
@@ -335,7 +360,7 @@ async function planRevisionView(
   client: PoolClient,
   workspaceId: string,
   goal: GoalRunRow,
-  revision: PlanRevisionRow,
+  revision: PlanRevisionRead,
   options: GoalReadOptions,
 ): Promise<PlanRevisionView> {
   // Every stored plan passed `parsePlan` when its revision was made (`service.ts`, `revise.ts`).
@@ -489,7 +514,9 @@ export async function readPlanRevisionVisibleTo(
   const goal = await getGoalRunVisibleTo(client, workspaceId, viewer, goalRunId);
   const row = await getPlanRevision(client, workspaceId, goalRunId, revision);
   if (!row) throw new GoalRevisionNotFoundError(goalRunId, revision);
-  return planRevisionView(client, workspaceId, goal, row, options);
+  const [read] = await withProposers(client, workspaceId, [row]);
+  if (!read) throw new GoalRevisionNotFoundError(goalRunId, revision);
+  return planRevisionView(client, workspaceId, goal, read, options);
 }
 
 /** A request a step raised, as the goal page shows it — legacy 513: with the whitelisted code of
@@ -514,7 +541,7 @@ export interface GoalRunLeftoversView {
 export interface GoalRunDetail extends GoalRunSummary {
   /** The revision in force — revision 1 until the run is confirmed (and on one cancelled before). */
   readonly planRevision: PlanRevisionView;
-  readonly revisions: readonly PlanRevisionRow[];
+  readonly revisions: readonly PlanRevisionRead[];
   /** S11 GO5d-2: the Procedure revision 1's plan was made from — the one revision that may have
    *  one (goal/0009); `null` for a plan written out. */
   readonly planSource: PlanSourceView | null;
@@ -526,6 +553,10 @@ export interface GoalRunDetail extends GoalRunSummary {
   /** S11 GO8b: every approval of a trial of a step's draft Skills, with where it stands, oldest
    *  first (`readStepTrialApprovals`). */
   readonly trialApprovals: readonly StepTrialApprovalView[];
+  /** S11 GO9a: the leave the requester gave the goal planner when confirming (`null`: none), and
+   *  every planning round of the run, oldest first (`planning-rounds.ts`). */
+  readonly planner: GoalPlannerMode | null;
+  readonly planningRounds: readonly PlanningRoundRow[];
 }
 
 /** `get_goal`: everything the goal page shows of a run `viewer` may read. */
@@ -538,7 +569,11 @@ export async function readGoalRunDetail(
 ): Promise<GoalRunDetail> {
   const goal = await getGoalRunVisibleTo(client, workspaceId, viewer, goalRunId);
   const [summary] = await summarizeGoalRuns(client, workspaceId, [goal]);
-  const revisions = await listPlanRevisions(client, workspaceId, goalRunId);
+  const revisions = await withProposers(
+    client,
+    workspaceId,
+    await listPlanRevisions(client, workspaceId, goalRunId),
+  );
   const inForce = revisions.find((row) => row.revision === (goal.currentRevision ?? 1));
   const acceptance = await readGoalAcceptance(client, workspaceId, goalRunId);
   if (!summary || !inForce || !acceptance) {
@@ -602,6 +637,8 @@ export async function readGoalRunDetail(
       stepRuns,
       attempts,
     ),
+    planner: await readGoalPlannerMode(client, workspaceId, goalRunId),
+    planningRounds: await listPlanningRounds(client, workspaceId, goalRunId),
   };
 }
 

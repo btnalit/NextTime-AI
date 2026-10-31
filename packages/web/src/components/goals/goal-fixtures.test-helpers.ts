@@ -105,6 +105,7 @@ export function goalDetail(overrides: Partial<GoalDetailWire> = {}): GoalDetailW
         ],
       },
       proposedBy: 'p-agent',
+      proposer: 'person',
       reason: null,
       decidedBy: 'p-alice',
       decidedAt: '2026-10-20T00:01:00.000Z',
@@ -121,6 +122,7 @@ export function goalDetail(overrides: Partial<GoalDetailWire> = {}): GoalDetailW
         status: 'accepted',
         basedOnRevision: null,
         proposedBy: 'p-agent',
+        proposer: 'person',
         reason: null,
         decidedBy: 'p-alice',
         decidedAt: '2026-10-20T00:01:00.000Z',
@@ -142,6 +144,8 @@ export function goalDetail(overrides: Partial<GoalDetailWire> = {}): GoalDetailW
     acceptance: { rounds: [], steps: [], absenceBaselines: [], overriddenChecks: [] },
     leftovers: null,
     trialApprovals: [],
+    planner: null,
+    planningRounds: [],
     ...overrides,
   };
 }

@@ -823,6 +823,14 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     enHint:
       'Records whether an action whose outcome is unknown took effect (the requester or the workspace owner), or the requester decides to run it again.',
   },
+  decide_plan_revision: {
+    zh: '决定规划器的修订',
+    en: 'Decide planner revision',
+    zhHint:
+      '目标的请求人接受或拒绝目标规划器为暂停中的目标提的修订；接受时可以同时让目标继续。只有请求人能决定。',
+    enHint:
+      'The goal’s requester accepts or rejects a revision the goal planner proposed for the paused goal, and may resume it on accepting. Only the requester decides.',
+  },
   approve_step_trial: {
     zh: '批准 Skill 试用',
     en: 'Approve draft Skill trial',
@@ -1997,6 +2005,36 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     en: 'Plan revision rejected',
     zhHint: '提出的计划被驳回。',
     enHint: 'A proposed plan was rejected.',
+  },
+  // S11 GO9a (kernel application/goal/planning-rounds.ts, planner.ts).
+  'goal_run.planner_granted': {
+    zh: '已允许目标规划器',
+    en: 'Goal planner allowed',
+    zhHint: '请求人确认目标时，允许目标规划器在步骤失败、需要人决定时提修订（只提议）。',
+    enHint:
+      'On confirming the goal, its requester let the goal planner propose a revision when a step fails for a person (proposals only).',
+  },
+  'goal_planning_round.open': {
+    zh: '规划器开始一轮规划',
+    en: 'Planning round opened',
+    zhHint: '一个步骤失败、需要人决定，目标规划器开始为它拟修订，或因预算、权限等原因没能开始。',
+    enHint:
+      'A step failed for a person and the goal planner started on a revision for it, or could not start (budget, authority).',
+  },
+  'goal_planning_round.settle': {
+    zh: '一轮规划结束',
+    en: 'Planning round settled',
+    zhHint:
+      '目标规划器的一轮规划结束：提了修订、认为无需修订、没有结果，或因目标已不在暂停中而作废。',
+    enHint:
+      'A round of the goal planner ended: it proposed a revision, found none would help, had no result, or was dropped because the goal left its pause.',
+  },
+  'plan_revision.propose': {
+    zh: '规划器提了修订',
+    en: 'Planner proposed a revision',
+    zhHint: '目标规划器为暂停中的目标提了一版计划，等请求人接受或拒绝。',
+    enHint:
+      'The goal planner proposed a plan revision for the paused goal, for its requester to accept or reject.',
   },
   // S11 GO8b (kernel application/goal/trial-approvals.ts).
   'step_trial.approve': {

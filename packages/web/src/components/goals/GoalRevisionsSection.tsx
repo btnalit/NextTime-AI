@@ -80,16 +80,28 @@ function RevisionItem({
       </span>
       <span className="row-wrap text-small">
         <span className="text-3">
-          {revision.revision === 1 ? t('提出', 'Proposed by') : t('修订', 'Revised by')}
+          {revision.proposer === 'planner'
+            ? t('提议', 'Proposed by')
+            : revision.revision === 1
+              ? t('提出', 'Proposed by')
+              : t('修订', 'Revised by')}
         </span>
+        {/* S11 GO9a: the goal planner's Principal reads as 「目标规划器」 (`lib/labels.ts`). */}
         <RefChip kind="principal" id={revision.proposedBy} http={http} size="s" />
+        {revision.proposer === 'planner' ? (
+          <span className="chip chip-s" data-testid="goal-revision-planner">
+            {t('规划器提议', 'Planner proposal')}
+          </span>
+        ) : null}
         {revision.decidedBy ? (
           <>
             <span className="meta-sep" />
             <span className="text-3">
               {revision.status === 'rejected'
                 ? t('拒绝', 'Rejected by')
-                : t('确认', 'Confirmed by')}
+                : revision.proposer === 'planner'
+                  ? t('接受', 'Accepted by')
+                  : t('确认', 'Confirmed by')}
             </span>
             <RefChip kind="principal" id={revision.decidedBy} http={http} size="s" />
             {revision.decidedAt ? (
@@ -108,6 +120,19 @@ function RevisionItem({
             source={revision.fromProcedure}
             testId="goal-revision-parameters"
           />
+        </span>
+      ) : null}
+      {revision.status === 'proposed' && revision.proposer === 'planner' ? (
+        <span className="text-small text-3">
+          {revision.basedOnRevision === current
+            ? t(
+                '等请求人在上面的「目标规划器」里决定。',
+                'Waiting for the requester to decide, under Goal planner above.',
+              )
+            : t(
+                '它基于的版本已经不在用了，不能再接受。',
+                'The revision it was based on is no longer in force, so it can no longer be accepted.',
+              )}
         </span>
       ) : null}
       {revision.reason ? (

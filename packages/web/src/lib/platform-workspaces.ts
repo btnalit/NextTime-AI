@@ -120,6 +120,9 @@ const PURGE_COUNT_LABELS = {
     en: 'Absence checks’ looks beforehand',
   },
   goalStepTrialApprovals: { zh: '步骤试用批准', en: 'Step trial approvals' },
+  // S11 GO9a (goal/0014).
+  goalPlannerDelegations: { zh: '目标规划器授权', en: 'Goal planner leaves' },
+  goalPlanningRounds: { zh: '规划轮次', en: 'Planning rounds' },
   chats: { zh: '对话', en: 'Chats' },
   chatMessages: { zh: '消息', en: 'Messages' },
   activities: { zh: '活动', en: 'Activities' },

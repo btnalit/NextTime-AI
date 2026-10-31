@@ -20,6 +20,7 @@ import { writeAudit } from '../../substrate/audit/index.js';
 import { writeProbeHoldRefusal } from '../eval-seal/index.js';
 import {
   type LiveGoalTask,
+  type PlannerTemplate,
   type PreparedStepAttempt,
   type ReworkOf,
   type RunConfigSnapshot,
@@ -66,6 +67,7 @@ import {
   roundAcceptance,
   samePlanEntry,
 } from './plan.js';
+import { runPlanningPhase } from './planner.js';
 import { getPlanRevision, lockStepRuns } from './reads.js';
 import { lockGoalRun } from './service.js';
 import { nameTrialStepRun, trialApprovalCandidates } from './trial-approvals.js';
@@ -206,11 +208,20 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *      while verifying: an observation is bounded by its own attempts and duration, and waiting
  *      for the requester spends nothing.
  *
+ *   P. **Planning** (running, paused or verifying; S11 GO9a, `planner.ts`). Last: a planning round
+ *      the run is no longer paused for is abandoned — its Task terminated after the commit, like
+ *      the Task of every round no longer running — and one whose Task ended is settled (a plan
+ *      that passes every check of a person's revision becomes the planner's `proposed` revision).
+ *      Then, for a run paused `needs_decision` whose requester gave the planner leave when they
+ *      confirmed it, a round opens for the latest failed step the platform does not retry on its
+ *      own, once per failed attempt; its planner Task is started after the commit. The requester's
+ *      concurrency quota only delays it: a paused run is due again then.
+ *
  * A paused GoalRun keeps its first reason (the guard refuses changing it while paused); a further
  * cause is in the audit log (`goal_run.pause_noted`, once per pause for each reason and detail),
  * not on the row. The advance ends by writing `next_tick_at`: the earliest retry, quota retry,
- * blocked-retry re-check or wall-clock deadline while running, otherwise
- * `null` — then only an event (`TaskUpdated`, `ActionRequestUpdated`), the reconcile scan or a
+ * blocked-retry re-check or wall-clock deadline while running, the planner's quota retry while
+ * paused, otherwise `null` — then only an event (`TaskUpdated`, `ActionRequestUpdated`), the reconcile scan or a
  * person moves the run. Attempts are started (`startStepAttemptTask`: the WorkerRun spawned, the
  * Task `running`) after the transaction commits, so the Worker's Handle is committed before its
  * container uses it; a kernel that dies in between leaves a `queued` Task that the reaper fails
@@ -305,6 +316,8 @@ export interface GoalAdvanceDeps {
   /** S11 GO8a: the llm-proxy catalog a step's WorkerSpec model is checked against when an attempt
    *  starts (`createStepAttemptTask`'s `modelCatalog`). Absent: not checked. */
   readonly modelCatalog?: () => Promise<ReadonlySet<string>>;
+  /** S11 GO9a: the goal planner's template (`planner.ts`); default `ontology/goal-planner.yaml`. */
+  readonly plannerTemplate?: () => Promise<PlannerTemplate>;
 }
 
 export interface GoalAdvanceTarget {
@@ -322,6 +335,9 @@ export interface GoalAdvanceOutcome {
   readonly startedTaskIds: readonly string[];
   /** A cancelling run's Tasks this advance terminates after the commit. */
   readonly terminatedTaskIds: readonly string[];
+  /** S11 GO9a: the planner Task of the planning round this advance opened (started after the
+   *  commit), if it opened one. */
+  readonly planningTaskId?: string;
   readonly nextTickAt: Date | null;
 }
 
@@ -466,7 +482,10 @@ export async function advanceGoalRun(
           attempts: [],
         };
       }
-      const advance = new Advance(client, goal, now, deps.options ?? {}, deps.modelCatalog);
+      const advance = new Advance(client, goal, now, deps.options ?? {}, {
+        ...(deps.modelCatalog ? { modelCatalog: deps.modelCatalog } : {}),
+        ...(deps.plannerTemplate ? { plannerTemplate: deps.plannerTemplate } : {}),
+      });
       return advance.run();
     },
   );
@@ -529,22 +548,32 @@ class Advance {
   /** The run's live Tasks as the advance began. Only phase D creates Tasks, after its last read. */
   private liveTasks: readonly LiveGoalTask[] = [];
   private readonly modelCatalog: (() => Promise<ReadonlySet<string>>) | undefined;
+  private readonly plannerTemplate: (() => Promise<PlannerTemplate>) | undefined;
+  /** The run's pause reason as the advance leaves it: its own, or one this advance paused it for. */
+  private pauseReason: GoalRunPauseReason | null;
+  /** S11 GO9a: the planner Task phase P created, started after the commit. */
+  private planning: PreparedStepAttempt | null = null;
 
   constructor(
     client: PoolClient,
     goal: GoalRunRow,
     now: Date,
     options: GoalAdvancerOptions,
-    modelCatalog?: () => Promise<ReadonlySet<string>>,
+    sources: {
+      readonly modelCatalog?: () => Promise<ReadonlySet<string>>;
+      readonly plannerTemplate?: () => Promise<PlannerTemplate>;
+    } = {},
   ) {
     this.client = client;
-    this.modelCatalog = modelCatalog;
+    this.modelCatalog = sources.modelCatalog;
+    this.plannerTemplate = sources.plannerTemplate;
     this.goal = goal;
     this.now = now;
     this.retryBackoffMs = options.retryBackoffMs ?? defaultRetryBackoffMs;
     this.quotaRetryMs = options.quotaRetryMs ?? DEFAULT_QUOTA_RETRY_MS;
     this.blockedRetryRecheckMs = options.blockedRetryRecheckMs ?? DEFAULT_BLOCKED_RETRY_RECHECK_MS;
     this.status = goal.status;
+    this.pauseReason = goal.pauseReason;
   }
 
   private get ws(): string {
@@ -585,19 +614,52 @@ class Advance {
       }
       if (this.status === 'running') await this.pauseIfStuck(await this.lockSteps());
     }
+    const planningRetry = await this.planningPhase();
 
     const nextTickAt =
-      this.status === 'running' ? new Date(Math.min(this.deadline, ...this.timers)) : null;
+      this.status === 'running'
+        ? new Date(Math.min(this.deadline, ...this.timers))
+        : planningRetry !== null
+          ? new Date(planningRetry)
+          : null;
     await writeNextTick(this.client, this.goal, nextTickAt);
     return {
       outcome: {
         status: this.status,
         startedTaskIds: this.started.map((attempt) => attempt.task.id),
         terminatedTaskIds: this.terminated,
+        ...(this.planning ? { planningTaskId: this.planning.task.id } : {}),
         nextTickAt,
       },
-      attempts: this.started,
+      attempts: this.planning ? [...this.started, this.planning] : this.started,
     };
+  }
+
+  // ----- P ------------------------------------------------------------------------------------
+
+  /** S11 GO9a, phase P (`planner.ts`): the run's planning rounds, after every other phase — a
+   *  round the run left is abandoned, a finished one settled, a new one opened for a run paused on
+   *  a step only a person (or a plan change) resolves. Returns when the requester's concurrency
+   *  quota may let the planner start (epoch ms), or `null`. */
+  private async planningPhase(): Promise<number | null> {
+    if (this.status !== 'running' && this.status !== 'paused' && this.status !== 'verifying') {
+      return null;
+    }
+    const phase = await runPlanningPhase({
+      client: this.client,
+      goal: this.goal,
+      status: this.status,
+      pauseReason: this.status === 'paused' ? this.pauseReason : null,
+      steps: await this.lockSteps(),
+      now: this.now,
+      quotaRetryMs: this.quotaRetryMs,
+      entry: (step) => this.entry(step),
+      inCurrentPlan: (step) => this.inCurrentPlan(step),
+      ...(this.plannerTemplate ? { plannerTemplate: this.plannerTemplate } : {}),
+    });
+    this.terminated.push(...phase.terminate.filter((id) => !this.terminated.includes(id)));
+    this.planning = phase.start;
+    return phase.retryAt;
   }
 
   /** Every StepRun of the run, superseded ones included, locked after the GoalRun row (lock order:
@@ -1443,5 +1505,6 @@ class Advance {
       ...(pauseReason ? { pauseReason } : {}),
       audit,
     });
+    if (event === 'pause') this.pauseReason = pauseReason;
   }
 }

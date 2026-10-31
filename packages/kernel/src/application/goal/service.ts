@@ -18,6 +18,7 @@ import {
   refusePlanCredentials,
   validatePlan,
 } from './plan.js';
+import { grantGoalPlanner } from './planning-rounds.js';
 import { planAuthorityHints } from './precheck.js';
 import { getGoalRun } from './reads.js';
 import { recordGoalRunTransition, recordStepRunTransition } from './transition-log.js';
@@ -448,6 +449,9 @@ export interface ConfirmGoalRunInput {
   readonly confirmedBy: string;
   /** S11 GO8a: see `CreateGoalRunInput.modelCatalog`. */
   readonly modelCatalog?: PlanReferenceSources['modelCatalog'];
+  /** S11 GO9a: the requester lets the goal planner propose revisions of the run
+   *  (`planning-rounds.ts` `grantGoalPlanner`). Given with the confirmation only. */
+  readonly planner?: boolean;
 }
 
 export interface ConfirmedGoalRun {
@@ -518,6 +522,10 @@ export async function confirmGoalRun(
     resourceId: stored.id,
     payload: { goalRunId: goal.id, revision: 1 },
   });
+  // S11 GO9a: while the run is still proposed (the leave's guard), from its requester.
+  if (input.planner === true) {
+    await grantGoalPlanner(client, workspaceId, goal.id, input.confirmedBy);
+  }
   await client.query(
     `update goal_runs
         set status = 'running', current_revision = 1, confirmed_at = now(), updated_at = now(),

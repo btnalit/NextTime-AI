@@ -31,6 +31,7 @@ import {
   StepRemovalsSchema,
   StepTrialDraftSchema,
 } from './goal-plan.js';
+import { PlanRevisionDecisionSchema } from './goal-planner.js';
 import { CapabilityScopeSchema } from './handle-token.js';
 import { OntologyDefinitionSchema } from './ontology-definition.js';
 import { GoalFromProcedureSchema } from './procedure.js';
@@ -4396,9 +4397,16 @@ const goalCapabilities = [
     mode: 'execute',
     channel: 'human',
     minRole: 'member',
-    paramsSchema: z.object({ goalRunId, revision: z.number().int().positive() }).strict(),
+    paramsSchema: z
+      .object({
+        goalRunId,
+        revision: z.number().int().positive(),
+        /** S11 GO9a: let the goal planner propose a revision when a step fails for a person. */
+        planner: z.boolean().optional(),
+      })
+      .strict(),
     resultSchema: wire.ConfirmGoalResultWireSchema,
-    description: `Confirm a proposed GoalRun — the requester alone, on the revision they read (its proposal, revision 1): the plan is checked again (400 invalid_params with details.problems when it no longer passes, e.g. a WorkerDefinition deprecated since), accepted and put in force; the run starts with every step pending, and from then on spends and acts with the requester’s authority. Sent again once confirmed, it changes nothing (changed: false). 409 illegal_transition when the run is no longer proposed or the revision is not its proposal.${GOAL_OPERATION_REFUSALS}`,
+    description: `Confirm a proposed GoalRun — the requester alone, on the revision they read (its proposal, revision 1): the plan is checked again (400 invalid_params with details.problems when it no longer passes, e.g. a WorkerDefinition deprecated since), accepted and put in force; the run starts with every step pending, and from then on spends and acts with the requester’s authority. planner: true lets the workspace's goal planner propose a revision whenever a step fails in a way that pauses the run for the requester (its contract still broken after a rework, a transient failure past its attempts, an action refused, a verification failed): the planner acts for the requester, observes nothing, does nothing but propose, and its tokens count against the goal's budget; what it proposes waits for the requester (decide_plan_revision). Given once, with the confirmation; absent or false: no planner. Sent again once confirmed, it changes nothing (changed: false). 409 illegal_transition when the run is no longer proposed or the revision is not its proposal.${GOAL_OPERATION_REFUSALS}`,
   },
   {
     name: 'reject_goal',
@@ -4434,7 +4442,7 @@ const goalCapabilities = [
       })
       .strict(),
     resultSchema: wire.ResumeGoalResultWireSchema,
-    description: `Resume a paused GoalRun — the requester alone, and not while the workspace owner holds it (409 illegal_transition until release_goal_hold): it is due at once, its budget and plan checked again. retrySteps lists failed steps to send back to ready, each by key (there is no "retry all"), each only with no request of it in flight or of unknown outcome, none of its Tasks running, and still in the current plan (409 illegal_transition otherwise); a failed step not listed stays failed. Already running, with no retrySteps: changes nothing.${GOAL_OPERATION_REFUSALS}`,
+    description: `Resume a paused GoalRun — the requester alone, and not while the workspace owner holds it (409 illegal_transition until release_goal_hold): it is due at once, its budget and plan checked again. retrySteps lists failed steps to send back to ready, each by key (there is no "retry all"), each only with no request of it in flight or of unknown outcome, none of its Tasks running, and still in the current plan (409 illegal_transition otherwise); a failed step not listed stays failed. Resuming ends the goal planner's work on the pause: a planning round still running is abandoned and its Task stopped, and a revision it proposed and nobody decided is rejected. Already running, with no retrySteps: changes nothing.${GOAL_OPERATION_REFUSALS}`,
   },
   {
     name: 'cancel_goal',
@@ -4444,7 +4452,7 @@ const goalCapabilities = [
     minRole: 'member',
     paramsSchema: z.object({ goalRunId }).strict(),
     resultSchema: wire.CancelGoalResultWireSchema,
-    description: `Cancel a GoalRun — the requester, or the workspace owner: in one transaction every step not yet ended is cancelled and every request of its steps not yet started is withdrawn; the run is cancelling until its Tasks are terminated and its executing requests have ended. Already cancelling or cancelled: changes nothing. A proposed run is rejected (reject_goal), not cancelled, and an ended one is 409 illegal_transition.${GOAL_OPERATION_REFUSALS}`,
+    description: `Cancel a GoalRun — the requester, or the workspace owner: in one transaction every step not yet ended is cancelled, every request of its steps not yet started is withdrawn, and the goal planner's work ends (a running round abandoned, a proposal nobody decided rejected); the run is cancelling until its Tasks are terminated and its executing requests have ended. Already cancelling or cancelled: changes nothing. A proposed run is rejected (reject_goal), not cancelled, and an ended one is 409 illegal_transition.${GOAL_OPERATION_REFUSALS}`,
   },
   {
     name: 'release_goal_hold',
@@ -4478,7 +4486,37 @@ const goalCapabilities = [
       })
       .strict(),
     resultSchema: wire.ReviseGoalResultWireSchema,
-    description: `Revise the plan of a paused GoalRun — the requester alone — based on its current revision (409 illegal_transition when another was accepted since, I-G3) and within its revision budget, or the budget the revision brings: the new plan is checked (400 invalid_params with details.problems), accepted and in force at once. Every live step it drops or changes is superseded (removals, per step: terminate — the default — or let_finish, releasing listed requests), every new or changed key gets a pending StepRun, and the superseded steps’ requests not yet started are withdrawn. The run stays paused for the requester to resume. reason (at most ${MAX_REVISION_REASON_CHARS} characters) is shown on the revision as written. The plan and the reason must not carry credentials — refused, nothing written (400 credentials_in_text with details.field and, for the plan, details.suspectedSecretPaths) — nor the [redacted] mark a read shows where one stood (400 redacted_text_submitted with details.field and, for the plan, details.paths): write that part again. A call sent exactly as get_goal_revision shows it is unchanged: it keeps what is stored (a masked value, an invisible character shown as \\u{XXXX}), and only what is written anew is checked. A call is a step's Worker with its input (same step key), a reconcile action or check (same step key, as many reconcile declarations as read, same place), an acceptance check (same key, the step's or the plan's), or a step's outputSchema or its bindings (same step key) — each whole, its target included; another key's read never brings that entry's value along. A call changed anywhere — another Worker, gate or operation, a value — keeps every value as sent, so a [redacted] left in it is refused; fields outside a call (maxAttempts, dependsOn, nested) do not decide it.${GOAL_OPERATION_REFUSALS}`,
+    description: `Revise the plan of a paused GoalRun — the requester alone — based on its current revision (409 illegal_transition when another was accepted since, I-G3) and within its revision budget, or the budget the revision brings: the new plan is checked (400 invalid_params with details.problems), accepted and in force at once. Every live step it drops or changes is superseded (removals, per step: terminate — the default — or let_finish, releasing listed requests), every new or changed key gets a pending StepRun, and the superseded steps’ requests not yet started are withdrawn. A revision the goal planner proposed and nobody decided is rejected, and a planning round still running is abandoned. The run stays paused for the requester to resume. reason (at most ${MAX_REVISION_REASON_CHARS} characters) is shown on the revision as written. The plan and the reason must not carry credentials — refused, nothing written (400 credentials_in_text with details.field and, for the plan, details.suspectedSecretPaths) — nor the [redacted] mark a read shows where one stood (400 redacted_text_submitted with details.field and, for the plan, details.paths): write that part again. A call sent exactly as get_goal_revision shows it is unchanged: it keeps what is stored (a masked value, an invisible character shown as \\u{XXXX}), and only what is written anew is checked. A call is a step's Worker with its input (same step key), a reconcile action or check (same step key, as many reconcile declarations as read, same place), an acceptance check (same key, the step's or the plan's), or a step's outputSchema or its bindings (same step key) — each whole, its target included; another key's read never brings that entry's value along. A call changed anywhere — another Worker, gate or operation, a value — keeps every value as sent, so a [redacted] left in it is refused; fields outside a call (maxAttempts, dependsOn, nested) do not decide it.${GOAL_OPERATION_REFUSALS}`,
+  },
+  // S11 GO9a (plan §4.3, I-P1, I-P5): the requester decides about a revision the goal planner
+  // proposed — the planner proposes, only the person it acts for puts a plan in force.
+  {
+    name: 'decide_plan_revision',
+    group: 'goal',
+    mode: 'execute',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z
+      .object({
+        goalRunId,
+        /** The proposed revision, as get_goal lists it. */
+        revision: z.number().int().positive(),
+        decision: PlanRevisionDecisionSchema,
+        /** With accept: resume the run in the same transaction (resume_goal without retrySteps). */
+        resume: z.boolean().optional(),
+      })
+      .strict()
+      .superRefine((value, ctx) => {
+        if (value.resume === true && value.decision !== 'accept') {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['resume'],
+            message: 'resumes only with decision accept',
+          });
+        }
+      }),
+    resultSchema: wire.DecidePlanRevisionResultWireSchema,
+    description: `Decide about a revision the goal planner proposed for a paused GoalRun — the requester alone. accept: the proposal is checked again exactly like a revision the requester writes (400 invalid_params with details.problems when it no longer passes) and within the revision budget, then accepted and in force like revise_goal's (every live step it drops or changes superseded and terminated, its requests not yet started withdrawn, new or changed keys pending); resume: true also resumes the run, as resume_goal would — refused while the workspace owner holds it (409 illegal_transition). reject: the proposal is turned down and nothing else changes; the run stays paused, and the planner is not asked again about the same failed attempt. Only a proposed revision based on the revision in force (409 illegal_transition once another revision was accepted, the run left its pause or the proposal was decided), only while the run is paused. The same decision again changes nothing (changed: false).${GOAL_OPERATION_REFUSALS}`,
   },
   {
     name: 'confirm_goal_acceptance',
@@ -5101,6 +5139,8 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   'cancel_goal',
   'release_goal_hold',
   'revise_goal',
+  // S11 GO9a: the requester decides about the goal planner's proposal.
+  'decide_plan_revision',
   'confirm_goal_acceptance',
   'end_goal',
   'reconcile_goal_action',

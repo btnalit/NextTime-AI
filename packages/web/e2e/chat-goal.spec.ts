@@ -88,6 +88,7 @@ function proposedGoal(requester: string) {
       basedOnRevision: null,
       plan: PLAN,
       proposedBy: requester,
+      proposer: 'person',
       reason: null,
       decidedBy: null,
       decidedAt: null,
@@ -101,6 +102,8 @@ function proposedGoal(requester: string) {
     acceptance: { rounds: [], steps: [], absenceBaselines: [], overriddenChecks: [] },
     leftovers: null,
     trialApprovals: [],
+    planner: null,
+    planningRounds: [],
   };
 }
 

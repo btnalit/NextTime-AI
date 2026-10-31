@@ -9,11 +9,16 @@ import {
   GoalAcceptanceCheckKindSchema,
   GoalAcceptanceCheckStatusSchema,
   GoalOutcomeBasisSchema,
+  GoalPlannerModeSchema,
   GoalRunPauseAuthoritySchema,
   GoalRunPauseReasonSchema,
   GoalRunStatusSchema,
   ObjectiveOutcomeSchema,
+  PlanRevisionProposerSchema,
   PlanRevisionStatusSchema,
+  PlanningFailureCategorySchema,
+  PlanningRoundOutcomeReasonSchema,
+  PlanningRoundStatusSchema,
   STEP_RUN_STATUS_VALUES,
   StepRunFailureCategorySchema,
   StepRunStatusSchema,
@@ -27,6 +32,7 @@ import {
   StepRemovalsSchema,
   StepTrialDraftInfoSchema,
 } from '../goal-plan.js';
+import { PlanRevisionDecisionSchema } from '../goal-planner.js';
 import { OutputProblemSchema } from '../output-schema.js';
 import {
   FactCheckSchema,
@@ -131,9 +137,11 @@ export type PlanSourceProcedureWire = z.infer<typeof PlanSourceProcedureWireSche
 
 /** One revision of a run's plan (`get_goal_revision`, and `get_goal`'s `planRevision`): revision 1
  *  is the proposal the requester confirmed (or has yet to); a later one is a revision the
- *  requester made of a paused run, accepted as made. `removals`: what it decided about each step
- *  it removed (a removed step not listed was terminated). `hints`: what the person confirming
- *  should know that does not stop the plan. */
+ *  requester made of a paused run, accepted as made, or — S11 GO9a — one the goal planner
+ *  proposed (`proposer: 'planner'`), `proposed` until the requester accepts or rejects it
+ *  (`decide_plan_revision`). `removals`: what it decided about each step it removed (a removed
+ *  step not listed was terminated). `hints`: what the person confirming should know that does not
+ *  stop the plan. */
 export const PlanRevisionWireSchema = z
   .object({
     id: z.string(),
@@ -143,6 +151,8 @@ export const PlanRevisionWireSchema = z
     basedOnRevision: z.number().int().positive().nullable(),
     plan: GoalPlanSchema,
     proposedBy: z.string(),
+    /** S11 GO9a: who `proposedBy` is — a person, or the workspace's goal planner. */
+    proposer: PlanRevisionProposerSchema,
     reason: z.string().nullable(),
     decidedBy: z.string().nullable(),
     decidedAt: z.string().nullable(),
@@ -403,12 +413,38 @@ export const StepTrialApprovalWireSchema = z
   .strict();
 export type StepTrialApprovalWire = z.infer<typeof StepTrialApprovalWireSchema>;
 
+/** S11 GO9a: one planning round of the run — the goal planner asked once about one failed attempt
+ *  of a step (`stepKey`, `stepAttempt`, why it failed), on the revision then in force
+ *  (`basedOnRevision`). `taskId`: the planner's Task (`get_task` reads it), `null` for a round that
+ *  never started one. `revision`: what it proposed, once `proposed`. `outcomeReason`: why it
+ *  `failed` or was `abandoned`. `detail`: for `no_revision`, the planner's reason as it wrote it;
+ *  for `failed`, what the platform found. */
+export const PlanningRoundWireSchema = z
+  .object({
+    id: z.string(),
+    status: PlanningRoundStatusSchema,
+    basedOnRevision: z.number().int().positive(),
+    stepRunId: z.string(),
+    stepKey: z.string(),
+    stepAttempt: z.number().int().positive(),
+    failureCategory: PlanningFailureCategorySchema,
+    taskId: z.string().nullable(),
+    revision: z.number().int().positive().nullable(),
+    outcomeReason: PlanningRoundOutcomeReasonSchema.nullable(),
+    detail: z.string().nullable(),
+    createdAt: z.string(),
+    settledAt: z.string().nullable(),
+  })
+  .strict();
+export type PlanningRoundWire = z.infer<typeof PlanningRoundWireSchema>;
+
 /** `get_goal`'s result: the run, the revision in force (revision 1 until confirmed, and on a run
  *  cancelled before it was), its revision history oldest first, every StepRun (superseded ones
  *  included) in plan order — by when it was created, then by its place in the plan in force — its
  *  verification (steps in the same order), and — while cancelling or `cleanupPending` — what is
  *  left. S11 GO8b: `trialApprovals`, every approval of a step's trial of draft Skills, oldest
- *  first. */
+ *  first. S11 GO9a: `planner` — how far the requester let the goal planner go when they confirmed
+ *  the run (`null`: not at all); `planningRounds`, every round of it, oldest first. */
 export const GoalDetailWireSchema = GoalRunWireSchema.extend({
   planRevision: PlanRevisionWireSchema,
   revisions: z.array(PlanRevisionSummaryWireSchema),
@@ -416,6 +452,8 @@ export const GoalDetailWireSchema = GoalRunWireSchema.extend({
   acceptance: GoalAcceptanceWireSchema,
   leftovers: GoalLeftoversWireSchema.nullable(),
   trialApprovals: z.array(StepTrialApprovalWireSchema),
+  planner: GoalPlannerModeSchema.nullable(),
+  planningRounds: z.array(PlanningRoundWireSchema),
 }).strict();
 export type GoalDetailWire = z.infer<typeof GoalDetailWireSchema>;
 
@@ -546,3 +584,12 @@ export const ApproveStepTrialResultWireSchema = GoalOperationResultWireSchema.ex
   approvalId: z.string(),
 }).strict();
 export type ApproveStepTrialResultWire = z.infer<typeof ApproveStepTrialResultWireSchema>;
+
+/** S11 GO9a `decide_plan_revision`: the planner's revision as decided. Accepted, it is in force
+ *  like a revision the requester made (`revise_goal`'s fields), and `resumed` says whether the run
+ *  was resumed with it; rejected, nothing else changed. */
+export const DecidePlanRevisionResultWireSchema = ReviseGoalResultWireSchema.extend({
+  decision: PlanRevisionDecisionSchema,
+  resumed: z.boolean(),
+}).strict();
+export type DecidePlanRevisionResultWire = z.infer<typeof DecidePlanRevisionResultWireSchema>;

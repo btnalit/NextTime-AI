@@ -135,6 +135,7 @@ function revision(n: 1 | 2) {
     basedOnRevision: n === 1 ? null : 1,
     plan: n === 1 ? PLAN_V1 : PLAN_V2,
     proposedBy: n === 1 ? AGENT : ALICE,
+    proposer: 'person',
     reason: n === 1 ? null : '通知改成人工发；旧证书要在换完后删掉',
     decidedBy: ALICE,
     decidedAt: n === 1 ? T1 : T2,
@@ -275,6 +276,8 @@ const DETAIL = {
   acceptance: { rounds: [], steps: [], absenceBaselines: [], overriddenChecks: [] },
   leftovers: null,
   trialApprovals: [],
+  planner: null,
+  planningRounds: [],
 };
 
 const UNRESOLVED = [

@@ -267,6 +267,7 @@ import {
   cancelGoalHandler,
   confirmGoalAcceptanceHandler,
   confirmGoalHandler,
+  decidePlanRevisionHandler,
   endGoalHandler,
   getGoalHandler,
   getGoalRevisionHandler,
@@ -2463,6 +2464,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['end_goal', endGoalHandler],
   ['reconcile_goal_action', reconcileGoalActionHandler],
   ['approve_step_trial', approveStepTrialHandler],
+  ['decide_plan_revision', decidePlanRevisionHandler],
   // S10 E3-1a evaluation suites (eval-handlers.ts)
   ['list_eval_suites', listEvalSuitesHandler],
   ['get_eval_suite', getEvalSuiteHandler],

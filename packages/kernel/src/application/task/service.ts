@@ -30,6 +30,7 @@ import {
   defaultWorkerCapabilities,
 } from './handle-mint.js';
 import { failTaskRow, readTaskRow, readWorkerRunRow, terminateWorkerRunRow } from './lifecycle.js';
+import { findGoalPlannerPrincipal } from './planning-task.js';
 import { type TaskRuntimeDeps, getConfiguredTaskRuntime } from './runtime.js';
 import { recordTaskTransition } from './transition-log.js';
 import {
@@ -643,6 +644,7 @@ export async function findWorkers(
   need: string,
   limit?: number,
 ): Promise<readonly WorkerDefinitionMatch[]> {
+  let plannerId: string | null | undefined;
   return collectUsable(
     (page) => findWorkerDefinitionCandidates(client, workspaceId, { need, ...page }),
     async (candidate) => {
@@ -656,6 +658,10 @@ export async function findWorkers(
         version: match.version,
       });
       if (!definition || definition.status !== 'published') return undefined;
+      // S11 GO9a: the goal planner's definition is the platform's, run only for a planning round
+      // (`planning-task.ts`) — never a Worker an agent delegates to.
+      plannerId ??= await findGoalPlannerPrincipal(client, workspaceId);
+      if (plannerId !== null && definition.proposedBy === plannerId) return undefined;
 
       const content = definition.definition as { capabilities?: string[]; gates?: string[] };
       try {

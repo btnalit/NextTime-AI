@@ -818,9 +818,12 @@ function reviewStep(
  * Fields outside the calls (`dependsOn`, `nested`, `maxAttempts`) are as sent and decide nothing
  * here. Then {@link refusePlanCredentials} checks only what this writer wrote, at its place in the
  * submitted plan. Nothing stored is revealed, and nothing moves between keys. Returns the plan to
- * validate, compare with the revisions before it (`samePlanEntry`) and store. Only the requester
- * revises; were revisions written by others (a planner, an admin agent), this rule needs another
- * look — a stored value given back in a new context would carry it there.
+ * validate, compare with the revisions before it (`samePlanEntry`) and store. The requester
+ * revises, and — S11 GO9a — the goal planner proposes for them (`planner.ts`): it reads the plan as
+ * read too and is held to this same rule, so a stored value it gives back stays in the call it was
+ * stored in, unchanged, and what it proposes runs only once the requester accepts it
+ * (`decide.ts`). Were others to write revisions (an admin agent), this rule needs another look — a
+ * stored value given back in a new context would carry it there.
  */
 export function reviewRevisedPlan(submitted: GoalPlan, stored: GoalPlan): GoalPlan {
   const read = planAsRead(stored);

@@ -23,8 +23,9 @@ import {
   samePlanEntry,
   validatePlan,
 } from './plan.js';
+import { closePlanning } from './planning-rounds.js';
 import { planAuthorityHints } from './precheck.js';
-import { getPlanRevision, lockStepRuns } from './reads.js';
+import { getPlanRevision, listStepRuns, lockStepRuns } from './reads.js';
 import {
   GoalRunForbiddenError,
   GoalRunInputError,
@@ -33,7 +34,13 @@ import {
   lockGoalRun,
 } from './service.js';
 import { recordGoalRunTransition, recordStepRunTransition } from './transition-log.js';
-import type { GoalControlActor, GoalRunBudget, StepRemoval, StepRunRow } from './types.js';
+import type {
+  GoalControlActor,
+  GoalRunBudget,
+  GoalRunRow,
+  StepRemoval,
+  StepRunRow,
+} from './types.js';
 
 /**
  * application/goal/revise (S11 GO3b; plan §4.3, §4.8, I-G2, I-G3, I-G9; scenario S8): the requester
@@ -111,6 +118,13 @@ export const MAX_REVISION_REASON_LENGTH = MAX_REVISION_REASON_CHARS;
 /** Why a superseded step's requests were withdrawn — in each withdrawal's audit payload. */
 export const GOAL_REVISED_WITHDRAW_REASON = 'its step was revised away';
 
+/** A request of a superseded step the person let run on (`removals[key].release`). */
+export interface ReleasedRequest {
+  readonly id: string;
+  readonly stepRunId: string;
+  readonly status: string;
+}
+
 /** A step that ended keeps its row whatever later revisions say: it cannot be superseded. */
 const ENDED_STEP_STATUSES: ReadonlySet<StepRunStatus> = new Set([
   'succeeded',
@@ -128,17 +142,7 @@ export async function reviseGoalRun(
   if (goal.onBehalfOf !== input.actor.principalId) {
     throw new GoalRunForbiddenError('only the requester revises a goal run');
   }
-  if (goal.status !== 'paused') {
-    throw new GoalRunStateError(
-      `goal run ${goal.id} is ${goal.status}; a plan is revised while the run is paused`,
-    );
-  }
-  const current = goal.currentRevision;
-  if (current === null || input.basedOnRevision !== current) {
-    throw new GoalRunStateError(
-      `goal run ${goal.id}: the revision is based on ${input.basedOnRevision}, but the current revision is ${current ?? 'none'} (I-G3)`,
-    );
-  }
+  assertRevisable(goal, input.basedOnRevision);
   if (input.reason !== undefined && [...input.reason].length > MAX_REVISION_REASON_LENGTH) {
     throw new GoalRunInputError(
       `a revision reason is at most ${MAX_REVISION_REASON_LENGTH} characters`,
@@ -151,13 +155,104 @@ export async function reviseGoalRun(
   // (`reviewRevisedPlan`).
   refuseRedactedText('reason', input.reason);
   refuseCredentialText('reason', input.reason);
+  const candidate = await checkRevisionCandidate(client, workspaceId, goal, {
+    plan: input.plan,
+    lock: true,
+    ...(input.budget !== undefined ? { budget: input.budget } : {}),
+    ...(input.removals !== undefined ? { removals: input.removals } : {}),
+    ...(input.modelCatalog ? { modelCatalog: input.modelCatalog } : {}),
+  });
+  // S11 GO9a: the person's own revision ends the planning of the pause — a round still running is
+  // abandoned, and a revision the planner proposed and nobody decided is rejected (I-P4).
+  await closePlanning(client, workspaceId, goal.id, input.actor.principalId, 'plan_revised');
+  return adoptRevision(client, workspaceId, goal, candidate, {
+    actorId: input.actor.principalId,
+    reason: input.reason ?? null,
+    budgetChanged: input.budget !== undefined,
+    checkAccounts: input.checkAccounts === true,
+  });
+}
+
+/** A revision is adopted only while the run is paused and only on the revision in force (I-G3). */
+export function assertRevisable(goal: GoalRunRow, basedOnRevision: number): void {
+  if (goal.status !== 'paused') {
+    throw new GoalRunStateError(
+      `goal run ${goal.id} is ${goal.status}; a plan is revised while the run is paused`,
+    );
+  }
+  const current = goal.currentRevision;
+  if (current === null || basedOnRevision !== current) {
+    throw new GoalRunStateError(
+      `goal run ${goal.id}: the revision is based on ${basedOnRevision}, but the current revision is ${current ?? 'none'} (I-G3)`,
+    );
+  }
+}
+
+/** The plan of the revision in force, as stored — what a revision is based on. */
+export async function readBasePlan(
+  client: PoolClient,
+  workspaceId: string,
+  goal: GoalRunRow,
+): Promise<GoalPlan> {
+  const current = goal.currentRevision;
+  if (current === null) throw new Error(`goal run ${goal.id} has no revision in force`);
   const currentRow = await getPlanRevision(client, workspaceId, goal.id, current);
-  if (!currentRow) throw new Error(`reviseGoalRun: current revision ${current} is unreadable`);
+  if (!currentRow)
+    throw new Error(`goal run ${goal.id}: current revision ${current} is unreadable`);
   const stored = GoalPlanSchema.safeParse(currentRow.plan);
   if (!stored.success) {
-    throw new Error(`reviseGoalRun: the plan of current revision ${current} no longer parses`);
+    throw new Error(
+      `goal run ${goal.id}: the plan of current revision ${current} no longer parses`,
+    );
   }
-  const submitted = reviewRevisedPlan(planShape(input.plan), stored.data);
+  return stored.data;
+}
+
+/** A plan checked as a revision of the run as it stands — what adopting it changes. */
+export interface RevisionCandidate {
+  /** The plan to store: what was sent, with each call left as read keeping what is stored. */
+  readonly plan: GoalPlan;
+  /** The budget in force once it is adopted. */
+  readonly budget: GoalRunBudget;
+  /** The number a new revision gets. */
+  readonly nextRevision: number;
+  readonly superseded: readonly StepRunRow[];
+  readonly kept: ReadonlySet<string>;
+  /** Kept steps that ended: they never start again. */
+  readonly endedKeys: ReadonlySet<string>;
+  readonly removals: Readonly<Record<string, StepRemoval>>;
+  readonly releases: readonly ReleasedRequest[];
+}
+
+export interface RevisionCandidateInput {
+  /** The plan as sent (a person's editor, the planner's report). */
+  readonly plan: unknown;
+  readonly budget?: GoalRunBudget;
+  readonly removals?: unknown;
+  readonly modelCatalog?: PlanReferenceSources['modelCatalog'];
+  /** Lock the run's StepRuns and the released requests, for a caller that adopts the revision in
+   *  this transaction; a check alone (the planner's report) reads them and releases nothing. */
+  readonly lock: boolean;
+}
+
+/**
+ * Every check a revision of `goal` must pass (the module comment, step 1 and the refusals of steps
+ * 2 and 4): its plan reviewed against the revision in force (`reviewRevisedPlan`: what is left as
+ * read keeps what is stored, what was written carries no credential), the revision budget (the
+ * budget the revision brings, when it brings one), the plan's validation, and which steps it keeps
+ * and supersedes — a step that ended cannot change under its key. Throws the error a writer refuses
+ * with; writes nothing. `goal` is the run as read under its lock (or, for a check alone, as read).
+ */
+export async function checkRevisionCandidate(
+  client: PoolClient,
+  workspaceId: string,
+  goal: GoalRunRow,
+  input: RevisionCandidateInput,
+): Promise<RevisionCandidate> {
+  const submitted = reviewRevisedPlan(
+    planShape(input.plan),
+    await readBasePlan(client, workspaceId, goal),
+  );
   const budget = parseBudget(input.budget) ?? goal.budget;
   const accepted = await client.query<{ accepted: number; next: number }>(
     `select count(*) filter (where status = 'accepted')::int as accepted,
@@ -166,19 +261,20 @@ export async function reviseGoalRun(
     [workspaceId, goal.id],
   );
   const counts = accepted.rows[0];
-  if (!counts) throw new Error('reviseGoalRun: counting the revisions returned no row');
+  if (!counts) throw new Error('checkRevisionCandidate: counting the revisions returned no row');
   // Revision 1 is the confirmed plan; each accepted one after it counts against the budget.
   if (counts.accepted > budget.maxRevisions) {
     throw new GoalRunStateError(
       `goal run ${goal.id}: ${counts.accepted - 1} of ${budget.maxRevisions} revisions already made`,
     );
   }
-  const revision = counts.next;
   const plan = await validatePlan(client, workspaceId, submitted, goal.onBehalfOf, {
     ...(input.modelCatalog ? { modelCatalog: input.modelCatalog } : {}),
   });
 
-  const steps = await lockStepRuns(client, workspaceId, goal.id);
+  const steps = input.lock
+    ? await lockStepRuns(client, workspaceId, goal.id)
+    : await listStepRuns(client, workspaceId, goal.id);
   const { superseded, kept } = await splitSteps(client, workspaceId, goal.id, steps, plan);
   const endedKeys = new Set(
     steps
@@ -186,47 +282,120 @@ export async function reviseGoalRun(
       .map((step) => step.stepKey),
   );
   const removals = parseRemovals(input.removals, superseded);
-  const releases = await lockReleases(client, workspaceId, superseded, removals);
-
-  const inserted = await client.query<{ id: string }>(
-    `insert into plan_revisions (
-       workspace_id, goal_run_id, revision, based_on_revision, plan, proposed_by, reason,
-       validation, removals
-     ) values ($1, $2, $3, $4, $5::jsonb, $6, $7, $8::jsonb, $9::jsonb)
-     returning id`,
-    [
-      workspaceId,
-      goal.id,
-      revision,
-      current,
-      JSON.stringify(plan),
-      input.actor.principalId,
-      input.reason ?? null,
-      JSON.stringify({
-        valid: true,
-        steps: plan.steps.length,
-        superseded: superseded.map((step) => step.stepKey),
-        hints: planHints(plan),
-      }),
-      JSON.stringify(removals),
-    ],
-  );
-  const planRevisionId = inserted.rows[0]?.id;
-  if (!planRevisionId) {
-    throw new Error('reviseGoalRun: plan_revisions INSERT ... RETURNING produced no row');
+  const releases = input.lock ? await lockReleases(client, workspaceId, superseded, removals) : [];
+  if (
+    !input.lock &&
+    Object.values(removals).some((removal) => (removal.release ?? []).length > 0)
+  ) {
+    throw new Error('checkRevisionCandidate: requests are released only by a writer that locks');
   }
-  await client.query(
-    `update plan_revisions set status = 'accepted', decided_by = $3, decided_at = now()
-      where workspace_id = $1 and id = $2`,
-    [workspaceId, planRevisionId, input.actor.principalId],
-  );
+  return {
+    plan,
+    budget,
+    nextRevision: counts.next,
+    superseded,
+    kept,
+    endedKeys,
+    removals,
+    releases,
+  };
+}
+
+/** What a revision's validation records (`plan_revisions.validation`). */
+export function revisionValidation(candidate: RevisionCandidate): Record<string, unknown> {
+  return {
+    valid: true,
+    steps: candidate.plan.steps.length,
+    superseded: candidate.superseded.map((step) => step.stepKey),
+    hints: planHints(candidate.plan),
+  };
+}
+
+export interface AdoptRevisionOptions {
+  /** The requester, who decides the revision (theirs, or the planner's they accept). */
+  readonly actorId: string;
+  /** A new revision's reason; ignored for a proposal, whose reason is stored. */
+  readonly reason: string | null;
+  /** The revision brings its own budget (audited). */
+  readonly budgetChanged: boolean;
+  readonly checkAccounts: boolean;
+  /** S11 GO9a: the planner's proposed revision this adopts (`decide_plan_revision`), instead of
+   *  inserting a new one. Its plan is the one `candidate` checked. */
+  readonly proposal?: { readonly id: string; readonly revision: number };
+}
+
+/**
+ * Adopts a checked revision — the module comment, steps 1 to 4: inserted (or, for the planner's
+ * proposal, decided), accepted by the requester and made the run's current revision, accept before
+ * adopt; superseded steps moved, new ones created, their requests withdrawn but the released ones.
+ */
+export async function adoptRevision(
+  client: PoolClient,
+  workspaceId: string,
+  goal: GoalRunRow,
+  candidate: RevisionCandidate,
+  options: AdoptRevisionOptions,
+): Promise<RevisedGoalRun> {
+  const current = goal.currentRevision;
+  if (current === null) throw new Error(`adoptRevision: goal run ${goal.id} has no revision`);
+  const { plan, superseded, kept, removals, releases, budget } = candidate;
+  let revision: number;
+  let planRevisionId: string;
+  if (options.proposal) {
+    revision = options.proposal.revision;
+    planRevisionId = options.proposal.id;
+    const decided = await client.query(
+      `update plan_revisions
+          set validation = $3::jsonb, status = 'accepted', decided_by = $4, decided_at = now()
+        where workspace_id = $1 and id = $2 and status = 'proposed'`,
+      [workspaceId, planRevisionId, JSON.stringify(revisionValidation(candidate)), options.actorId],
+    );
+    if ((decided.rowCount ?? 0) === 0) {
+      throw new GoalRunStateError(
+        `goal run ${goal.id}: revision ${revision} is no longer proposed`,
+      );
+    }
+  } else {
+    revision = candidate.nextRevision;
+    const inserted = await client.query<{ id: string }>(
+      `insert into plan_revisions (
+         workspace_id, goal_run_id, revision, based_on_revision, plan, proposed_by, reason,
+         validation, removals
+       ) values ($1, $2, $3, $4, $5::jsonb, $6, $7, $8::jsonb, $9::jsonb)
+       returning id`,
+      [
+        workspaceId,
+        goal.id,
+        revision,
+        current,
+        JSON.stringify(plan),
+        options.actorId,
+        options.reason,
+        JSON.stringify(revisionValidation(candidate)),
+        JSON.stringify(removals),
+      ],
+    );
+    const id = inserted.rows[0]?.id;
+    if (!id) throw new Error('adoptRevision: plan_revisions INSERT ... RETURNING produced no row');
+    planRevisionId = id;
+    await client.query(
+      `update plan_revisions set status = 'accepted', decided_by = $3, decided_at = now()
+        where workspace_id = $1 and id = $2`,
+      [workspaceId, planRevisionId, options.actorId],
+    );
+  }
   await writeAudit(client, {
     workspaceId,
-    actorPrincipalId: input.actor.principalId,
+    actorPrincipalId: options.actorId,
     action: 'plan_revision.accept',
     resourceType: 'plan_revision',
     resourceId: planRevisionId,
-    payload: { goalRunId: goal.id, revision, basedOnRevision: current },
+    payload: {
+      goalRunId: goal.id,
+      revision,
+      basedOnRevision: current,
+      ...(options.proposal ? { proposer: 'planner' } : {}),
+    },
   });
   // A revision is a change of the run (`updated_at`), not a transition: it stays paused. Like a
   // resume, a person's revision starts the count of failed advances again (legacy 356): past the
@@ -249,7 +418,7 @@ export async function reviseGoalRun(
     ],
   );
 
-  const actor = { principalId: input.actor.principalId, by: 'person' } as const;
+  const actor = { principalId: options.actorId, by: 'person' } as const;
   for (const step of superseded) {
     await moveStepRun(client, actor, step, 'supersede', {
       supersededInRevision: revision,
@@ -267,9 +436,9 @@ export async function reviseGoalRun(
     );
     const stepRunId = row.rows[0]?.id;
     if (!stepRunId)
-      throw new Error('reviseGoalRun: step_runs INSERT ... RETURNING produced no row');
+      throw new Error('adoptRevision: step_runs INSERT ... RETURNING produced no row');
     await recordStepRunTransition(client, workspaceId, {
-      actorPrincipalId: input.actor.principalId,
+      actorPrincipalId: options.actorId,
       action: 'step_run.create',
       goalRunId: goal.id,
       stepRunId,
@@ -284,7 +453,7 @@ export async function reviseGoalRun(
     workspaceId,
     superseded.map((step) => step.id),
     {
-      actorPrincipalId: input.actor.principalId,
+      actorPrincipalId: options.actorId,
       reason: GOAL_REVISED_WITHDRAW_REASON,
       keep: released,
     },
@@ -292,7 +461,7 @@ export async function reviseGoalRun(
   for (const release of releases) {
     await writeAudit(client, {
       workspaceId,
-      actorPrincipalId: input.actor.principalId,
+      actorPrincipalId: options.actorId,
       action: 'action_request.release',
       resourceType: 'action_request',
       resourceId: release.id,
@@ -305,7 +474,7 @@ export async function reviseGoalRun(
     });
   }
   await recordGoalRunTransition(client, workspaceId, {
-    actorPrincipalId: input.actor.principalId,
+    actorPrincipalId: options.actorId,
     change: 'revise',
     goalRunId: goal.id,
     resultingStatus: 'paused',
@@ -318,7 +487,8 @@ export async function reviseGoalRun(
       letFinish: Object.keys(removals).filter((key) => removals[key]?.mode === 'let_finish'),
       withdrawn: withdrawn.length,
       released: released.length,
-      ...(input.budget ? { budget } : {}),
+      ...(options.budgetChanged ? { budget } : {}),
+      ...(options.proposal ? { proposer: 'planner' } : {}),
     },
   });
   return {
@@ -337,8 +507,8 @@ export async function reviseGoalRun(
         client,
         workspaceId,
         goal.onBehalfOf,
-        { ...plan, steps: plan.steps.filter((entry) => !endedKeys.has(entry.key)) },
-        { checkAccounts: input.checkAccounts === true },
+        { ...plan, steps: plan.steps.filter((entry) => !candidate.endedKeys.has(entry.key)) },
+        { checkAccounts: options.checkAccounts },
       )),
     ],
   };
@@ -433,7 +603,7 @@ async function lockReleases(
   workspaceId: string,
   superseded: readonly StepRunRow[],
   removals: Readonly<Record<string, StepRemoval>>,
-): Promise<readonly { id: string; stepRunId: string; status: string }[]> {
+): Promise<readonly ReleasedRequest[]> {
   const releasing = superseded.filter((step) => (removals[step.stepKey]?.release ?? []).length > 0);
   if (releasing.length === 0) return [];
   const withdrawable = await lockWithdrawableStepActions(
@@ -441,7 +611,7 @@ async function lockReleases(
     workspaceId,
     releasing.map((step) => step.id),
   );
-  const releases: { id: string; stepRunId: string; status: string }[] = [];
+  const releases: ReleasedRequest[] = [];
   for (const step of releasing) {
     for (const id of removals[step.stepKey]?.release ?? []) {
       const row = withdrawable.find((action) => action.id === id && action.stepRunId === step.id);

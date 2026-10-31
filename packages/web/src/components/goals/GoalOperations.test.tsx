@@ -88,10 +88,14 @@ describe('goal operations on the goal page (S11 GO6)', () => {
       expect(http.calls.find((call) => call.name === 'confirm_goal')?.params).toEqual({
         goalRunId: 'goal-1',
         revision: 1,
+        // S11 GO9a: the goal planner's leave, ticked by default on the confirm card.
+        planner: true,
       }),
     );
     await waitFor(() => expect(reads(http)).toBe(2));
-    expect((await screen.findByTestId('goal-op-done')).textContent).toBe('目标已确认，开始执行');
+    expect((await screen.findByTestId('goal-op-done')).textContent).toBe(
+      '目标已确认，开始执行。步骤失败、需要你决定时，目标规划器会先提一个修订给你看。',
+    );
   });
 
   it('the confirmation card lists each absence check with what its “not there” rests on (S11 「门确认不存在」 B)', async () => {

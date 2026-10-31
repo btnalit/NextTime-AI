@@ -319,8 +319,12 @@ export async function spawnWorkerRun(
         skillsInline: input.skillsInline,
         timeoutSec: durationLimitSec,
         egressDeny: input.egressDeny,
-        // S10 E3-2a: from what the Task is for, whoever spawns it (the trial runner today).
-        ...(input.task.purpose === 'evaluation' ? { egressDenyAll: true } : {}),
+        // S10 E3-2a: from what the Task is for, whoever spawns it (the trial runner today). S11
+        // GO9a: a goal planner observes nothing and only reports (`planning-task.ts`), so it has
+        // no egress either.
+        ...(input.task.purpose === 'evaluation' || input.task.purpose === 'planning'
+          ? { egressDenyAll: true }
+          : {}),
         systemPrompt: input.systemPrompt,
         image: input.image,
       },

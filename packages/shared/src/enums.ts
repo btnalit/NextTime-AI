@@ -237,9 +237,12 @@ export const TaskStatusSchema = asEnum(TASK_STATUS_VALUES);
  * is created). `evaluation`: a run of an evaluation case — the kernel starts it for the workspace's
  * evaluation service principal, its Worker's Handle is closed (its own Task, its tool list, its
  * gate calls, its report), every gate call is answered from the case's fixtures and its egress is
- * denied. `null` on the wire: ordinary work.
+ * denied. S11 GO9a `planning`: a goal planner's run for one planning round of a GoalRun — it acts
+ * for the goal's requester, observes nothing, its Handle holds its own Task, its (empty) tool list
+ * and its report, and what it reports is a proposal the requester decides on. `null` on the wire:
+ * ordinary work.
  */
-export const TASK_PURPOSE_VALUES = ['evaluation'] as const;
+export const TASK_PURPOSE_VALUES = ['evaluation', 'planning'] as const;
 export type TaskPurpose = (typeof TASK_PURPOSE_VALUES)[number];
 export const TaskPurposeSchema = asEnum(TASK_PURPOSE_VALUES);
 
@@ -625,6 +628,80 @@ export const STEP_RUN_FAILURE_CATEGORY_VALUES = [
 ] as const;
 export type StepRunFailureCategory = (typeof STEP_RUN_FAILURE_CATEGORY_VALUES)[number];
 export const StepRunFailureCategorySchema = asEnum(STEP_RUN_FAILURE_CATEGORY_VALUES);
+
+// ---------------------------------------------------------------------------------------------
+// S11 GO9a goal planning (docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §4.1, §4.3)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * How far the requester lets the goal planner go on a GoalRun, given when they confirm it
+ * (`goal_planner_delegations`, goal/0014). `propose`: when a step fails for a person, the planner
+ * proposes a revision of the plan and the requester decides on it. No row: the planner is not
+ * asked.
+ */
+export const GOAL_PLANNER_MODE_VALUES = ['propose'] as const;
+export type GoalPlannerMode = (typeof GOAL_PLANNER_MODE_VALUES)[number];
+export const GoalPlannerModeSchema = asEnum(GOAL_PLANNER_MODE_VALUES);
+
+/** The step failures a planning round opens for — the four that pause a GoalRun for a person's
+ *  judgement on the plan: `contract_violation` after its rework, `transient` past the step's
+ *  attempts, `action_refused`, `verification_failed`. */
+export const PLANNING_FAILURE_CATEGORY_VALUES = [
+  'contract_violation',
+  'transient',
+  'action_refused',
+  'verification_failed',
+] as const satisfies readonly StepRunFailureCategory[];
+export type PlanningFailureCategory = (typeof PLANNING_FAILURE_CATEGORY_VALUES)[number];
+export const PlanningFailureCategorySchema = asEnum(PLANNING_FAILURE_CATEGORY_VALUES);
+
+/**
+ * A planning round (goal/0014 `goal_planning_rounds`): one planner run at one failed attempt of a
+ * step. `running → proposed` (its revision waits for the requester) `| no_revision` (the planner
+ * found no plan change that helps) `| failed` (no usable result, or no planner could run) `|
+ * abandoned` (the run left the pause the round was for, or its plan was revised).
+ */
+export const PLANNING_ROUND_STATUS_VALUES = [
+  'running',
+  'proposed',
+  'no_revision',
+  'failed',
+  'abandoned',
+] as const;
+export type PlanningRoundStatus = (typeof PLANNING_ROUND_STATUS_VALUES)[number];
+export const PlanningRoundStatusSchema = asEnum(PLANNING_ROUND_STATUS_VALUES);
+
+/**
+ * Why a planning round `failed` or was `abandoned` — set exactly then:
+ *   - `revision_budget_exhausted`: the run has made every revision its budget allows;
+ *   - `token_budget_exhausted`: what is left of the goal's tokens is too little for a planner;
+ *   - `planner_unavailable`: the workspace has no published planner WorkerDefinition (a workspace
+ *     owner deprecated it);
+ *   - `requester_cannot_start`: the requester cannot start a Worker now (disabled, a role that does
+ *     not, the evaluation seal pausing their agents, a daily quota);
+ *   - `task_failed`: the planner's Task ended without a result;
+ *   - `invalid_revision`: what it proposed no longer passes the platform's checks;
+ *   - `run_left_pause`: the run was resumed, cancelled or held by a workspace owner;
+ *   - `plan_revised`: another revision was put in force.
+ */
+export const PLANNING_ROUND_OUTCOME_REASON_VALUES = [
+  'revision_budget_exhausted',
+  'token_budget_exhausted',
+  'planner_unavailable',
+  'requester_cannot_start',
+  'task_failed',
+  'invalid_revision',
+  'run_left_pause',
+  'plan_revised',
+] as const;
+export type PlanningRoundOutcomeReason = (typeof PLANNING_ROUND_OUTCOME_REASON_VALUES)[number];
+export const PlanningRoundOutcomeReasonSchema = asEnum(PLANNING_ROUND_OUTCOME_REASON_VALUES);
+
+/** Who proposed a plan revision: a person (the requester's own revision, or the proposal they
+ *  confirmed) or the goal planner (GO9a: always `proposed` until the requester decides). */
+export const PLAN_REVISION_PROPOSER_VALUES = ['person', 'planner'] as const;
+export type PlanRevisionProposer = (typeof PLAN_REVISION_PROPOSER_VALUES)[number];
+export const PlanRevisionProposerSchema = asEnum(PLAN_REVISION_PROPOSER_VALUES);
 
 // ---------------------------------------------------------------------------------------------
 // S11 P1 ChangePlan (docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §3.1, §3.4, §5.4)

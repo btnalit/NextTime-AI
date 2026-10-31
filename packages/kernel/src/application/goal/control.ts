@@ -7,6 +7,7 @@ import { GOAL_CANCELLED_WITHDRAW_REASON } from './cancelling.js';
 import { actionDisposition, stepActionEffect } from './disposition.js';
 import { type GoalMoveActor, moveGoalRun, moveStepRun } from './moves.js';
 import { samePlanEntry } from './plan.js';
+import { closePlanning } from './planning-rounds.js';
 import { getPlanRevision, lockStepRuns } from './reads.js';
 import {
   GoalRunForbiddenError,
@@ -40,6 +41,8 @@ import type { GoalControlActor, GoalRunRow, StepRunRow } from './types.js';
  *     decided and run (cancel is what stops those). An owner pausing someone else's run that is
  *     already paused — by the advancer or by its requester — places the hold on it (the run and
  *     its pause reason stay as they are).
+ *     S11 GO9a: a hold abandons the goal planner's running round (`planning-rounds.ts`), and the
+ *     run is due so the advance terminates its Task; a revision it proposed stays undecided.
  *   - {@link releaseGoalRunHold}: a workspace owner lifts the hold; the run stays paused, for the
  *     requester to resume (or to revise, `revise.ts`, or cancel).
  *   - {@link resumeGoalRun}: `paused → running`, due at once, unless a workspace owner holds the
@@ -52,12 +55,15 @@ import type { GoalControlActor, GoalRunRow, StepRunRow } from './types.js';
  *     advance pauses it `needs_decision` again (legacy 393, `advance.ts` phase E) rather than let
  *     it wait for its wall clock. The run's absence checks (S11 「门确认不存在」 B-c) get a new
  *     baseline where the last one did not see the thing, so the platform looks again before any
- *     step starts.
+ *     step starts. S11 GO9a: resuming ends the planning of the pause (`closePlanning`): a round
+ *     still running is abandoned, and a revision the planner proposed that nobody decided is
+ *     rejected on the requester's behalf.
  *   - {@link cancelGoalRun}: `running | paused | verifying → cancelling`, due at once. In the same
  *     transaction every step not yet ended is `cancelled` and every request of the run's steps that
  *     has not started is `withdrawn` (I-G9) — read under its row lock, so one the drainer started
  *     meanwhile stays `executing` and ends the R-48 way. The advance of the cancelling run
- *     (`cancelling.ts`) terminates the Tasks and waits for the executing requests.
+ *     (`cancelling.ts`) terminates the Tasks and waits for the executing requests. Its planning
+ *     ends as on a resume.
  *
  * A call that finds the run already where it asks for (paused, cancelling or cancelled) changes
  * nothing; any other status it does not apply to is a {@link GoalRunStateError}, and a caller who
@@ -143,6 +149,22 @@ export async function pauseGoalRun(
         previousAuthority: goal.pausedByAuthority,
       },
     });
+    // S11 GO9a: a hold stops the planner too — its round is abandoned and the run due, so the
+    // advance terminates its Task now. A revision it proposed stays for the requester to decide.
+    const closed = await closePlanning(
+      client,
+      workspaceId,
+      goal.id,
+      input.actor.principalId,
+      'run_left_pause',
+      { rejectProposals: false },
+    );
+    if (closed.abandonedRoundIds.length > 0) {
+      await client.query(
+        "update goal_runs set next_tick_at = now() where workspace_id = $1 and id = $2 and status = 'paused'",
+        [goal.workspaceId, goal.id],
+      );
+    }
     return { status: goal.status, changed: true };
   }
   if (goal.status !== 'running' && goal.status !== 'verifying') {
@@ -227,6 +249,8 @@ export async function resumeGoalRun(
     due: 'now',
     audit: { pauseReason: goal.pauseReason, retriedSteps: [...new Set(input.retrySteps ?? [])] },
   });
+  // S11 GO9a: the run leaves the pause its planning was for (I-P4).
+  await closePlanning(client, workspaceId, goal.id, input.actor.principalId, 'run_left_pause');
   await retakeAbsenceBaselines(client, goal, input.actor.principalId);
   return { status, changed: true, retriedStepRunIds: retried };
 }
@@ -330,6 +354,8 @@ export async function cancelGoalRun(
   }
   const actor = personOf(input);
   const status = await moveGoalRun(client, actor, goal, goal.status, 'cancel', { due: 'now' });
+  // S11 GO9a: its planning ends with it; the cancelling run terminates the planner's Task.
+  await closePlanning(client, workspaceId, goal.id, input.actor.principalId, 'run_left_pause');
   const steps = await lockStepRuns(client, workspaceId, goal.id);
   const cancelled: string[] = [];
   for (const step of steps) {

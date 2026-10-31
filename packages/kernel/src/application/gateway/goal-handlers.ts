@@ -4,6 +4,7 @@ import {
   type CancelGoalResultWire,
   type ConfirmGoalAcceptanceResultWire,
   type ConfirmGoalResultWire,
+  type DecidePlanRevisionResultWire,
   type EndGoalResultWire,
   GOAL_LIST_DEFAULT_LIMIT,
   GOAL_LIST_MAX_LIMIT,
@@ -19,8 +20,10 @@ import {
   type ObjectiveOutcome,
   type OutputProblem,
   type PlanHint,
+  type PlanRevisionDecision,
   type PlanRevisionSummaryWire,
   type PlanRevisionWire,
+  type PlanningRoundWire,
   type ProposeGoalResultWire,
   type ReconcileGoalActionResultWire,
   type ResumeGoalResultWire,
@@ -43,9 +46,10 @@ import {
   type GoalRunStepView,
   type GoalRunSummary,
   type GoalViewer,
-  type PlanRevisionRow,
+  type PlanRevisionRead,
   type PlanRevisionView,
   type PlanSourceView,
+  type PlanningRoundRow,
   type StepTrialApprovalView,
   type UnresolvedGoalAction,
   approveStepTrial,
@@ -53,6 +57,7 @@ import {
   confirmGoalAcceptance,
   confirmGoalRun,
   createGoalRun,
+  decidePlanRevision,
   endGoalRun,
   getGoalRun,
   getGoalRunVisibleTo,
@@ -182,7 +187,7 @@ function toWireGoalRun(summary: GoalRunSummary): GoalRunWire {
 
 /** `source`: the Procedure `row`'s plan was made from (S11 GO5d-2), as the reader got it. */
 function toWirePlanRevisionSummary(
-  row: PlanRevisionRow,
+  row: PlanRevisionRead,
   source: PlanSourceView | null,
 ): PlanRevisionSummaryWire {
   return {
@@ -192,6 +197,7 @@ function toWirePlanRevisionSummary(
     status: row.status,
     basedOnRevision: row.basedOnRevision,
     proposedBy: row.proposedBy,
+    proposer: row.proposer,
     // Legacy 420: as `statement` above (`revise_goal` refuses a credential in it since GO5b).
     reason: shownFreeText(row.reason),
     decidedBy: row.decidedBy,
@@ -399,6 +405,28 @@ function toWireGoalDetail(detail: GoalRunDetail): GoalDetailWire {
         }
       : null,
     trialApprovals: detail.trialApprovals.map(toWireTrialApproval),
+    planner: detail.planner,
+    planningRounds: detail.planningRounds.map(toWirePlanningRound),
+  };
+}
+
+/** S11 GO9a: a planning round on the wire. `detail` is what the planner or the platform wrote —
+ *  free text, read as every read shows it (legacy 420). */
+function toWirePlanningRound(round: PlanningRoundRow): PlanningRoundWire {
+  return {
+    id: round.id,
+    status: round.status,
+    basedOnRevision: round.basedOnRevision,
+    stepRunId: round.stepRunId,
+    stepKey: round.stepKey,
+    stepAttempt: round.stepAttempt,
+    failureCategory: round.failureCategory,
+    taskId: round.task?.id ?? null,
+    revision: round.revision,
+    outcomeReason: round.outcomeReason,
+    detail: round.detail === null ? null : shownFreeText(round.detail),
+    createdAt: round.createdAt.toISOString(),
+    settledAt: iso(round.settledAt),
   };
 }
 
@@ -607,13 +635,19 @@ async function hintModelCatalog(): Promise<ReadonlySet<string> | null> {
 }
 
 export const confirmGoalHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
-  const { goalRunId, revision } = params as { goalRunId: string; revision: number };
+  const { goalRunId, revision, planner } = params as {
+    goalRunId: string;
+    revision: number;
+    planner?: boolean;
+  };
   const actor = await actorOnVisibleRun(client, workspaceId, 'confirm_goal', ctx, goalRunId);
   const confirmed = await confirmGoalRun(client, workspaceId, {
     goalRunId,
     revision,
     confirmedBy: actor.principalId,
     modelCatalog,
+    // S11 GO9a: the leave is the requester's, written once with their confirmation.
+    ...(planner !== undefined ? { planner } : {}),
   });
   const result: ConfirmGoalResultWire = {
     goalRunId,
@@ -717,6 +751,52 @@ export const reviseGoalHandler: CapabilityHandler = async (client, workspaceId, 
     withdrawnActionRequestIds: [...revised.withdrawnActionRequestIds],
     releasedActionRequestIds: [...revised.releasedActionRequestIds],
     hints: revised.hints.map(toWirePlanHint),
+  };
+  return { result, ...onRun(input.goalRunId) };
+};
+
+/** S11 GO9a: the requester's decision about the goal planner's proposal (`decide.ts`). */
+export const decidePlanRevisionHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const input = params as {
+    goalRunId: string;
+    revision: number;
+    decision: PlanRevisionDecision;
+    resume?: boolean;
+  };
+  const actor = await actorOnVisibleRun(
+    client,
+    workspaceId,
+    'decide_plan_revision',
+    ctx,
+    input.goalRunId,
+  );
+  const decided = await decidePlanRevision(client, workspaceId, {
+    goalRunId: input.goalRunId,
+    revision: input.revision,
+    decision: input.decision,
+    ...(input.resume !== undefined ? { resume: input.resume } : {}),
+    actor,
+    checkAccounts: servesPerson(ctx),
+    modelCatalog,
+  });
+  const result: DecidePlanRevisionResultWire = {
+    goalRunId: input.goalRunId,
+    status: decided.status,
+    changed: decided.changed,
+    revision: decided.revision,
+    planRevisionId: decided.planRevisionId,
+    supersededStepRunIds: [...decided.supersededStepRunIds],
+    createdStepRunIds: [...decided.createdStepRunIds],
+    withdrawnActionRequestIds: [...decided.withdrawnActionRequestIds],
+    releasedActionRequestIds: [...decided.releasedActionRequestIds],
+    hints: decided.hints.map(toWirePlanHint),
+    decision: decided.decision,
+    resumed: decided.resumed,
   };
   return { result, ...onRun(input.goalRunId) };
 };

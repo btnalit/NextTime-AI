@@ -134,6 +134,9 @@ export function GoalOperationsBar({
   );
   const ops = goalOperations(goal, viewer, t);
   const [open, setOpen] = useState<OpenOp>(null);
+  // S11 GO9a: let the goal planner propose a revision when a step fails — on by default here (an
+  // API caller that omits it gets none); given once, with the confirmation.
+  const [planner, setPlanner] = useState(true);
   const errors = goalOperationErrors(t);
   const goalRunId = goal.id;
   const run = useOperationDone(onDone, goal);
@@ -234,18 +237,6 @@ export function GoalOperationsBar({
           ),
         ]}
         confirmLabel={t('确认并开始', 'Confirm and start')}
-        {...(absenceOperations
-          ? {
-              children: (
-                <AbsenceChecksBasis
-                  http={http}
-                  plan={goal.planRevision.plan}
-                  gateNames={gateNames}
-                  absenceOperations={absenceOperations}
-                />
-              ),
-            }
-          : {})}
         errorOverrides={{
           ...errors,
           // S11 GO8a: a model the catalog dropped since the proposal can be offered again, and the
@@ -262,11 +253,28 @@ export function GoalOperationsBar({
             http.call<GoalOperationResultWire>('confirm_goal', {
               goalRunId,
               revision: goal.planRevision.revision,
+              planner,
             }),
-            () => t('目标已确认，开始执行', 'Goal confirmed: it is starting'),
+            () =>
+              planner
+                ? t(
+                    '目标已确认，开始执行。步骤失败、需要你决定时，目标规划器会先提一个修订给你看。',
+                    'Goal confirmed: it is starting. When a step fails and the goal waits for you, the goal planner proposes a revision for you to look at first.',
+                  )
+                : t('目标已确认，开始执行', 'Goal confirmed: it is starting'),
           )
         }
-      />
+      >
+        <PlannerChoice checked={planner} onChange={setPlanner} />
+        {absenceOperations ? (
+          <AbsenceChecksBasis
+            http={http}
+            plan={goal.planRevision.plan}
+            gateNames={gateNames}
+            absenceOperations={absenceOperations}
+          />
+        ) : null}
+      </Confirm>
     ));
   }
 
@@ -668,6 +676,42 @@ function NoteConfirm({
     >
       {note.field}
     </Confirm>
+  );
+}
+
+/** S11 GO9a: the confirm card's goal planner choice — what saying yes lets it do, and what not. */
+function PlannerChoice({
+  checked,
+  onChange,
+}: {
+  readonly checked: boolean;
+  readonly onChange: (checked: boolean) => void;
+}) {
+  const t = useT();
+  const hintId = useId();
+  return (
+    <div className="stack-s" data-testid="goal-op-confirm-planner">
+      <label className="row-wrap">
+        <input
+          type="checkbox"
+          checked={checked}
+          aria-describedby={hintId}
+          onChange={(event) => onChange(event.target.checked)}
+        />
+        <span>
+          {t(
+            '步骤失败、需要我决定时，让目标规划器提一个修订',
+            'When a step fails and the goal waits for me, let the goal planner propose a revision',
+          )}
+        </span>
+      </label>
+      <span id={hintId} className="text-small text-3">
+        {t(
+          '规划器只提议、不执行：它看不到外部系统，也不能发起动作；它提的修订要你接受才生效。它用掉的 token 计入这个目标的预算。确认后不能再改这个选择。',
+          'The planner only proposes and runs nothing: it sees no outside system and cannot act; what it proposes takes effect only once you accept it. The tokens it uses count against this goal’s budget. This choice cannot be changed after confirming.',
+        )}
+      </span>
+    </div>
   );
 }
 

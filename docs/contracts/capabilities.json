@@ -5484,6 +5484,9 @@
           "format": "uuid",
           "type": "string"
         },
+        "planner": {
+          "type": "boolean"
+        },
         "revision": {
           "exclusiveMinimum": 0,
           "type": "integer"
@@ -7712,6 +7715,230 @@
         "memberCount",
         "owners",
         "createdAt"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
+    "channel": "human",
+    "group": "goal",
+    "minRole": "member",
+    "mode": "execute",
+    "name": "decide_plan_revision",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "enum": [
+            "accept",
+            "reject"
+          ],
+          "type": "string"
+        },
+        "goalRunId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "resume": {
+          "type": "boolean"
+        },
+        "revision": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "goalRunId",
+        "revision",
+        "decision"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "changed": {
+          "type": "boolean"
+        },
+        "createdStepRunIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "decision": {
+          "enum": [
+            "accept",
+            "reject"
+          ],
+          "type": "string"
+        },
+        "goalRunId": {
+          "type": "string"
+        },
+        "hints": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "capabilityNames": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "code": {
+                "enum": [
+                  "requester_confirm_only",
+                  "requester_cannot_start_workers",
+                  "step_gate_not_held",
+                  "step_capability_not_held",
+                  "step_definition_excluded",
+                  "step_account_not_connected",
+                  "step_skill_draft",
+                  "step_skill_deprecated",
+                  "step_model_not_offered",
+                  "step_model_not_allowed",
+                  "step_worker_unavailable",
+                  "step_skill_version_unavailable"
+                ],
+                "type": "string"
+              },
+              "gatekeeperIds": {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "message": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "skillRefs": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "stepKey": {
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                "type": "string"
+              },
+              "trial": {
+                "additionalProperties": false,
+                "properties": {
+                  "drafts": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "draftDigest": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "proposedBy": {
+                          "type": "string"
+                        },
+                        "skillId": {
+                          "type": "string"
+                        },
+                        "version": {
+                          "exclusiveMinimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "skillId",
+                        "version",
+                        "name",
+                        "draftDigest",
+                        "proposedBy"
+                      ],
+                      "type": "object"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "specDigest": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "specDigest",
+                  "drafts"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "planRevisionId": {
+          "type": "string"
+        },
+        "releasedActionRequestIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "resumed": {
+          "type": "boolean"
+        },
+        "revision": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "running",
+            "paused",
+            "verifying",
+            "completed",
+            "cancelling",
+            "cancelled",
+            "failed"
+          ],
+          "type": "string"
+        },
+        "supersededStepRunIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "withdrawnActionRequestIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "goalRunId",
+        "status",
+        "changed",
+        "revision",
+        "planRevisionId",
+        "supersededStepRunIds",
+        "createdStepRunIds",
+        "withdrawnActionRequestIds",
+        "releasedActionRequestIds",
+        "hints",
+        "decision",
+        "resumed"
       ],
       "type": "object"
     },
@@ -20045,6 +20272,13 @@
             "proposedBy": {
               "type": "string"
             },
+            "proposer": {
+              "enum": [
+                "person",
+                "planner"
+              ],
+              "type": "string"
+            },
             "reason": {
               "type": [
                 "string",
@@ -20100,6 +20334,7 @@
             "basedOnRevision",
             "plan",
             "proposedBy",
+            "proposer",
             "reason",
             "decidedBy",
             "decidedAt",
@@ -20109,6 +20344,131 @@
             "fromProcedure"
           ],
           "type": "object"
+        },
+        "planner": {
+          "anyOf": [
+            {
+              "enum": [
+                "propose"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "planningRounds": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "basedOnRevision": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "detail": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "failureCategory": {
+                "enum": [
+                  "contract_violation",
+                  "transient",
+                  "action_refused",
+                  "verification_failed"
+                ],
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "outcomeReason": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "revision_budget_exhausted",
+                      "token_budget_exhausted",
+                      "planner_unavailable",
+                      "requester_cannot_start",
+                      "task_failed",
+                      "invalid_revision",
+                      "run_left_pause",
+                      "plan_revised"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "revision": {
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "settledAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "enum": [
+                  "running",
+                  "proposed",
+                  "no_revision",
+                  "failed",
+                  "abandoned"
+                ],
+                "type": "string"
+              },
+              "stepAttempt": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "stepKey": {
+                "type": "string"
+              },
+              "stepRunId": {
+                "type": "string"
+              },
+              "taskId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "status",
+              "basedOnRevision",
+              "stepRunId",
+              "stepKey",
+              "stepAttempt",
+              "failureCategory",
+              "taskId",
+              "revision",
+              "outcomeReason",
+              "detail",
+              "createdAt",
+              "settledAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
         },
         "revisions": {
           "items": {
@@ -20218,6 +20578,13 @@
               "proposedBy": {
                 "type": "string"
               },
+              "proposer": {
+                "enum": [
+                  "person",
+                  "planner"
+                ],
+                "type": "string"
+              },
               "reason": {
                 "type": [
                   "string",
@@ -20272,6 +20639,7 @@
               "status",
               "basedOnRevision",
               "proposedBy",
+              "proposer",
               "reason",
               "decidedBy",
               "decidedAt",
@@ -20817,7 +21185,9 @@
         "steps",
         "acceptance",
         "leftovers",
-        "trialApprovals"
+        "trialApprovals",
+        "planner",
+        "planningRounds"
       ],
       "type": "object"
     },
@@ -22278,6 +22648,13 @@
         "proposedBy": {
           "type": "string"
         },
+        "proposer": {
+          "enum": [
+            "person",
+            "planner"
+          ],
+          "type": "string"
+        },
         "reason": {
           "type": [
             "string",
@@ -22333,6 +22710,7 @@
         "basedOnRevision",
         "plan",
         "proposedBy",
+        "proposer",
         "reason",
         "decidedBy",
         "decidedAt",
@@ -25451,7 +25829,8 @@
           "anyOf": [
             {
               "enum": [
-                "evaluation"
+                "evaluation",
+                "planning"
               ],
               "type": "string"
             },
@@ -36833,7 +37212,8 @@
                 "anyOf": [
                   {
                     "enum": [
-                      "evaluation"
+                      "evaluation",
+                      "planning"
                     ],
                     "type": "string"
                   },
