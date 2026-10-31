@@ -21,7 +21,8 @@
 #   - `docker compose up -d` (or at least: postgres kernel llm-proxy egress-proxy worker-supervisor
 #     agent-host docker-socket-proxy-collector) already running. The script switches llm-proxy /
 #     worker-supervisor / fake-llm to the fake provider itself via
-#     deploy/accept/docker-compose.fake.yml and restores production wiring from an EXIT trap, so
+#     deploy/accept/docker-compose.fake.yml (and restarts the kernel on its catalog, which the
+#     kernel's model checks read) and restores production wiring from an EXIT trap, so
 #     ${NEXTTIME_DATA}/config/llm-providers.yaml and ${NEXTTIME_DATA}/models/models.json are
 #     never modified — no manual provider switch is needed before or after.
 #   - `${NEXTTIME_DATA}/secrets/gate_token` and the other host-bootstrap secrets already exist
@@ -160,7 +161,7 @@ if [ "$REAL" -eq 0 ]; then
   trap on_exit EXIT
   trap 'exit 130' INT TERM HUP PIPE
   accept_provider_up || fail "preflight-fake-provider" "could not switch the stack to the fake provider (deploy/accept/docker-compose.fake.yml)"
-  pass "preflight-fake-provider" "llm-proxy / worker-supervisor / fake-llm recreated on deploy/accept/docker-compose.fake.yml; production provider config untouched"
+  pass "preflight-fake-provider" "llm-proxy / worker-supervisor / fake-llm / kernel recreated on deploy/accept/docker-compose.fake.yml; production provider config untouched"
 else
   # W7 real-model mode (same contract as accept_s2.sh --real): deployed provider untouched, the
   # entry agent pinned to $REAL_MODEL, the dependency chat repeated --runs times and judged on

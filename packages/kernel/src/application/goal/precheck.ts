@@ -4,8 +4,11 @@ import type { PoolClient } from 'pg';
 import { connectedAccountPresence } from '../gateway/credential-presence.js';
 import {
   type StepAttemptRefusal,
+  type StepTrialApprovalCandidate,
   resolveStepAuthority,
+  trialDraftsMatch,
   workerSpecComponentRefusals,
+  workerSpecDigest,
   workerSpecModelRefusal,
 } from '../task/index.js';
 
@@ -34,6 +37,13 @@ import {
  * again (`retried`) is checked the way a later attempt is: its authority and its model, never its
  * Skills — that attempt reuses the ones its first one mounted.
  *
+ * S11 GO8b: a step that would wait for a person's approval of its draft Skills says what one trial
+ * of it would mount (`trial`: its WorkerSpec digest and each draft, its content digest) — what
+ * `approve_step_trial` approves. A step with no single trial to approve (a reference naming more
+ * than one draft, two drafts of one name, a draft named like a published Skill) says why instead.
+ * A step whose trial a person approved (`trialApprovals`) and still is what it was approved for
+ * is not hinted: its first attempt starts with that approval.
+ *
  * Legacy 513: a read served to a person (`checkAccounts`) also asks each gate a step that would
  * start declares whether the requester has connected their own account there
  * (`application/gateway/credential-presence.ts`): on a `connected_account` gate without one, the
@@ -43,7 +53,8 @@ import {
 
 const consequence = 'the step would not start, and the goal would pause there for a person';
 
-function stepHint(key: string, refusal: StepAttemptRefusal): PlanHint | null {
+function stepHint(step: PlanStep, refusal: StepAttemptRefusal): PlanHint | null {
+  const key = step.key;
   if (refusal.kind === 'authority_lost') {
     if (refusal.reason === 'gates') {
       return {
@@ -72,11 +83,30 @@ function stepHint(key: string, refusal: StepAttemptRefusal): PlanHint | null {
   }
   if (refusal.kind === 'admission') {
     if (refusal.reason === 'skill_draft') {
+      const trial = refusal.trial;
+      const specDigest = workerSpecDigest(step.spec ?? null);
       return {
         code: 'step_skill_draft',
-        message: `step "${key}": ${refusal.detail} — the step would not start until a person approves, and the goal would pause there`,
+        message:
+          trial?.kind === 'none'
+            ? `step "${key}": ${refusal.detail} — ${trial.detail}, so no trial of it can be approved; the step would not start, and the goal would pause there`
+            : `step "${key}": ${refusal.detail} — the step would not start until a person approves, and the goal would pause there`,
         stepKey: key,
         skillRefs: [...(refusal.skillRefs ?? [])],
+        ...(trial?.kind === 'drafts' && specDigest !== null
+          ? {
+              trial: {
+                specDigest,
+                drafts: trial.drafts.map((draft) => ({
+                  skillId: draft.skillId,
+                  version: draft.version,
+                  name: draft.name,
+                  draftDigest: draft.draftDigest,
+                  proposedBy: draft.proposedBy,
+                })),
+              },
+            }
+          : {}),
       };
     }
     if (refusal.reason === 'skill_deprecated') {
@@ -109,10 +139,30 @@ function checkKey(step: PlanStep, retried: boolean): string {
   return `${retried ? 'later' : 'first'}:${step.worker.definitionId}@${step.worker.version}:${step.nested === true}:${canonicalJson(step.spec ?? null)}`;
 }
 
-/** What a step's check found: the gates an attempt would start on, or why it would not. */
+/** What a step's check found: the gates an attempt would start on, or why it would not (with the
+ *  gates it would start on when only its WorkerSpec's components stop it — GO8b: a trial approved
+ *  lifts the draft refusal). */
 type StepCheck =
   | { readonly kind: 'starts'; readonly gatekeeperIds: readonly string[] }
-  | { readonly kind: 'refused'; readonly refusals: readonly StepAttemptRefusal[] };
+  | {
+      readonly kind: 'refused';
+      readonly refusals: readonly StepAttemptRefusal[];
+      readonly gatekeeperIds: readonly string[];
+    };
+
+/** Whether `refusal` is a step's draft Skills waiting for a person, and one of `approvals` is for
+ *  the trial it would mount now — `createStepAttemptTask` starts the attempt with that approval. */
+function approvedTrial(
+  refusal: StepAttemptRefusal,
+  approvals: readonly StepTrialApprovalCandidate[],
+): boolean {
+  if (refusal.kind !== 'admission' || refusal.reason !== 'skill_draft') return false;
+  const current = refusal.trial;
+  return (
+    current?.kind === 'drafts' &&
+    approvals.some((approval) => trialDraftsMatch(approval.drafts, current.drafts))
+  );
+}
 
 export interface PlanAuthorityHintOptions {
   /** Legacy 513: also ask the gates about the requester's own accounts — only on a read served to
@@ -127,6 +177,9 @@ export interface PlanAuthorityHintOptions {
    *  passes it — of a proposal (confirming it would be refused, UX on #853) or of a paused run —
    *  for a catalog that changed since. */
   readonly modelCatalog?: () => Promise<ReadonlySet<string> | null>;
+  /** S11 GO8b: by step key, the approvals of a trial its first attempt would start with
+   *  (`trialApprovalsFor`) — the module comment. */
+  readonly trialApprovals?: ReadonlyMap<string, readonly StepTrialApprovalCandidate[]>;
 }
 
 /**
@@ -161,13 +214,18 @@ export async function planAuthorityHints(
       checked = await checkStep(client, workspaceId, requesterId, step, retried, offered);
       seen.set(key, checked);
     }
-    if (checked.kind === 'starts') {
+    const approvals = retried ? [] : (options.trialApprovals?.get(step.key) ?? []);
+    const refusals =
+      checked.kind === 'refused'
+        ? checked.refusals.filter((refusal) => !approvedTrial(refusal, approvals))
+        : [];
+    if (refusals.length === 0) {
       if (checked.gatekeeperIds.length > 0) {
         startingGates.push({ stepKey: step.key, gatekeeperIds: checked.gatekeeperIds });
       }
       continue;
     }
-    for (const refusal of checked.refusals) {
+    for (const refusal of refusals) {
       if (refusal.kind === 'authority_lost' && refusal.reason === 'requester') {
         return [
           {
@@ -176,7 +234,7 @@ export async function planAuthorityHints(
           },
         ];
       }
-      const hint = stepHint(step.key, refusal);
+      const hint = stepHint(step, refusal);
       if (hint) hints.push(hint);
     }
   }
@@ -221,7 +279,9 @@ async function checkStep(
     step.nested === true,
     spec,
   );
-  if (authority.kind === 'refused') return { kind: 'refused', refusals: [authority.refusal] };
+  if (authority.kind === 'refused') {
+    return { kind: 'refused', refusals: [authority.refusal], gatekeeperIds: [] };
+  }
   const model = retried ? workerSpecModelRefusal(authority.parent, spec, offered) : null;
   const refusals = retried
     ? model
@@ -229,6 +289,6 @@ async function checkStep(
       : []
     : await workerSpecComponentRefusals(client, workspaceId, authority.parent, spec, offered);
   return refusals.length > 0
-    ? { kind: 'refused', refusals }
+    ? { kind: 'refused', refusals, gatekeeperIds: authority.declaredGates }
     : { kind: 'starts', gatekeeperIds: authority.declaredGates };
 }

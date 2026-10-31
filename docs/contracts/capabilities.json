@@ -2340,6 +2340,106 @@
     "sideEffects": true
   },
   {
+    "actsForPerson": true,
+    "channel": "human",
+    "group": "goal",
+    "minRole": "builder",
+    "mode": "execute",
+    "name": "approve_step_trial",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "credentialsReviewed": {
+          "type": "boolean"
+        },
+        "drafts": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "draftDigest": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "skillId": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "version": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "skillId",
+              "version",
+              "draftDigest"
+            ],
+            "type": "object"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array"
+        },
+        "goalRunId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "specDigest": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "stepKey": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "goalRunId",
+        "stepKey",
+        "specDigest",
+        "drafts"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "approvalId": {
+          "type": "string"
+        },
+        "changed": {
+          "type": "boolean"
+        },
+        "goalRunId": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "running",
+            "paused",
+            "verifying",
+            "completed",
+            "cancelling",
+            "cancelled",
+            "failed"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "goalRunId",
+        "status",
+        "changed",
+        "approvalId"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
     "channel": "human",
     "group": "chat",
     "minRole": "member",
@@ -18664,6 +18764,52 @@
                   "stepKey": {
                     "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
                     "type": "string"
+                  },
+                  "trial": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "drafts": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "draftDigest": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "proposedBy": {
+                              "type": "string"
+                            },
+                            "skillId": {
+                              "type": "string"
+                            },
+                            "version": {
+                              "exclusiveMinimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "skillId",
+                            "version",
+                            "name",
+                            "draftDigest",
+                            "proposedBy"
+                          ],
+                          "type": "object"
+                        },
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "specDigest": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "specDigest",
+                      "drafts"
+                    ],
+                    "type": "object"
                   }
                 },
                 "required": [
@@ -20501,6 +20647,115 @@
           },
           "type": "array"
         },
+        "trialApprovals": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "approvedAt": {
+                "type": "string"
+              },
+              "approvedBy": {
+                "type": "string"
+              },
+              "drafts": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "draftDigest": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "proposedBy": {
+                      "type": "string"
+                    },
+                    "skillId": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "exclusiveMinimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "skillId",
+                    "version",
+                    "name",
+                    "draftDigest",
+                    "proposedBy"
+                  ],
+                  "type": "object"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              "id": {
+                "type": "string"
+              },
+              "lapsedBecause": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "draft_changed",
+                      "step_changed",
+                      "run_ended"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "planRevision": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "specDigest": {
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "pending",
+                  "used",
+                  "lapsed"
+                ],
+                "type": "string"
+              },
+              "stepKey": {
+                "type": "string"
+              },
+              "stepRunId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "usedByTaskId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "stepKey",
+              "stepRunId",
+              "planRevision",
+              "specDigest",
+              "drafts",
+              "approvedBy",
+              "approvedAt",
+              "state",
+              "lapsedBecause",
+              "usedByTaskId"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "turnId": {
           "type": [
             "string",
@@ -20559,7 +20814,8 @@
         "revisions",
         "steps",
         "acceptance",
-        "leftovers"
+        "leftovers",
+        "trialApprovals"
       ],
       "type": "object"
     },
@@ -20739,6 +20995,52 @@
               "stepKey": {
                 "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
                 "type": "string"
+              },
+              "trial": {
+                "additionalProperties": false,
+                "properties": {
+                  "drafts": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "draftDigest": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "proposedBy": {
+                          "type": "string"
+                        },
+                        "skillId": {
+                          "type": "string"
+                        },
+                        "version": {
+                          "exclusiveMinimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "skillId",
+                        "version",
+                        "name",
+                        "draftDigest",
+                        "proposedBy"
+                      ],
+                      "type": "object"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "specDigest": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "specDigest",
+                  "drafts"
+                ],
+                "type": "object"
               }
             },
             "required": [
@@ -44409,6 +44711,52 @@
               "stepKey": {
                 "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
                 "type": "string"
+              },
+              "trial": {
+                "additionalProperties": false,
+                "properties": {
+                  "drafts": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "draftDigest": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "proposedBy": {
+                          "type": "string"
+                        },
+                        "skillId": {
+                          "type": "string"
+                        },
+                        "version": {
+                          "exclusiveMinimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "skillId",
+                        "version",
+                        "name",
+                        "draftDigest",
+                        "proposedBy"
+                      ],
+                      "type": "object"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "specDigest": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "specDigest",
+                  "drafts"
+                ],
+                "type": "object"
               }
             },
             "required": [
@@ -53127,6 +53475,52 @@
               "stepKey": {
                 "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
                 "type": "string"
+              },
+              "trial": {
+                "additionalProperties": false,
+                "properties": {
+                  "drafts": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "draftDigest": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "proposedBy": {
+                          "type": "string"
+                        },
+                        "skillId": {
+                          "type": "string"
+                        },
+                        "version": {
+                          "exclusiveMinimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "skillId",
+                        "version",
+                        "name",
+                        "draftDigest",
+                        "proposedBy"
+                      ],
+                      "type": "object"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "specDigest": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "specDigest",
+                  "drafts"
+                ],
+                "type": "object"
               }
             },
             "required": [

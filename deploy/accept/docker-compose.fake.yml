@@ -14,16 +14,24 @@
 #     replaced, not added to) and gets FAKE_LLM_API_KEY inline — fake-llm never validates it, and
 #     it is not a secret, so it need not live in secrets/llm-proxy.env.
 #   - worker-supervisor points every container it spawns at a separately generated models.json
-#     (${NEXTTIME_DATA}/accept/models.json, written by `accept_provider_up` from the fake provider
-#     file through this same override) via MODELS_JSON_HOST_PATH, so the production
+#     (${NEXTTIME_DATA}/accept/models/models.json, written by `accept_provider_up` from the fake
+#     provider file through this same override) via MODELS_JSON_HOST_PATH, so the production
 #     ${NEXTTIME_DATA}/models/models.json (S7-A, docs/STATUS.md 维护者决定 2026-09-22 ⑤ — moved
 #     out of config/) is never rewritten.
+#   - the kernel reads that same catalog: ${NEXTTIME_DATA}/accept/models replaces its read-only
+#     /data/models mount (same container path). The kernel checks a model against the catalog
+#     when a WorkerDefinition is published (legacy 302), a WorkerSpec is admitted (S11 GO8a), or
+#     an agent profile or allowed model is set; on the production catalog it refused the fake
+#     model every container of the run uses (`fake/fake-echo`). Only that directory, never
+#     ${NEXTTIME_DATA}/accept itself: that one is llm-proxy's /data/state too, where keys.json
+#     lives, and the kernel never holds a credential.
 #   - llm-proxy's /data/state (the S6-B console-managed providers.json) is ${NEXTTIME_DATA}/accept
 #     instead of ${NEXTTIME_DATA}/llm-proxy, emptied per run by `accept_provider_up`, so the
 #     acceptance stack never reads or writes the production provider store.
 #
-# Restoring production wiring is a plain `docker compose up -d --force-recreate llm-proxy
-# worker-supervisor` (no override) — `accept_provider_restore`, run from the scripts' EXIT trap.
+# Restoring production wiring is a plain `docker compose up -d --force-recreate --wait llm-proxy
+# worker-supervisor kernel` (no override) — `accept_provider_restore`, run from the scripts' EXIT
+# trap.
 # Before W6 every acceptance run copied the fake yaml over the production one, regenerated
 # models.json, and restored both at the end; a script that died half-way left the host on the fake
 # provider until someone noticed.
@@ -33,8 +41,9 @@ services:
       - ./config/llm-providers.fake.example.yaml:/data/config/llm-providers.yaml:ro
       # S6-B: the admin API rewrites models.json after every provider mutation. Under this override
       # it writes the acceptance copy (the same file worker-supervisor's MODELS_JSON_HOST_PATH
-      # points at below), so an admin mutation during an acceptance run can never touch the
-      # production ${NEXTTIME_DATA}/models/models.json (startup already never writes it).
+      # points at, and the kernel reads, below), so an admin mutation during an acceptance run can
+      # never touch the production ${NEXTTIME_DATA}/models/models.json (startup already never
+      # writes it).
       - "${NEXTTIME_DATA:?}/accept:/data/accept"
       # S6-B: the console-managed provider store (providers.json) lives in /data/state. Replacing
       # that mount (same container path) keeps the production ${NEXTTIME_DATA}/llm-proxy out of the
@@ -45,8 +54,13 @@ services:
       - "${NEXTTIME_DATA:?}/accept:/data/state"
     environment:
       FAKE_LLM_API_KEY: fake
-      MODELS_JSON_OUT_FILE: /data/accept/models.json
+      MODELS_JSON_OUT_FILE: /data/accept/models/models.json
       LLM_PROVIDER_STORE_FILE: /data/state/providers.json
   worker-supervisor:
     environment:
-      MODELS_JSON_HOST_PATH: "${NEXTTIME_DATA:?}/accept/models.json"
+      MODELS_JSON_HOST_PATH: "${NEXTTIME_DATA:?}/accept/models/models.json"
+  kernel:
+    volumes:
+      # Replaces the base "${NEXTTIME_DATA}/models:/data/models:ro": the catalog `list_models` and
+      # every model check read is the one the run's llm-proxy serves.
+      - "${NEXTTIME_DATA:?}/accept/models:/data/models:ro"

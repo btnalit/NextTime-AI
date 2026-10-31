@@ -26,8 +26,10 @@ import {
   MAX_GOAL_STATEMENT_CHARS,
   MAX_PLAN_STEPS,
   MAX_REVISION_REASON_CHARS,
+  MAX_WORKER_SPEC_LIST,
   StepKeySchema,
   StepRemovalsSchema,
+  StepTrialDraftSchema,
 } from './goal-plan.js';
 import { CapabilityScopeSchema } from './handle-token.js';
 import { OntologyDefinitionSchema } from './ontology-definition.js';
@@ -4526,6 +4528,31 @@ const goalCapabilities = [
     resultSchema: wire.ReconcileGoalActionResultWireSchema,
     description: `Settle an action of a GoalRun whose outcome is unknown: record what was found — verdict effect_seen (it took effect: counts as executed) or effect_absent (no effect) — the requester or the workspace owner, as a person, whatever became of the run; and/or decide to run it again (reexecute: true) — the requester alone, after or with effect_absent, while the run can still run and the step is still in the plan; the new request is approved like any other. Each is recorded once: the same again changes nothing, a different finding is 409 illegal_transition. The run is set due and stays paused until the requester resumes it. ${GOAL_NOTE_RULE} An action not of this run is 404 not_found.${GOAL_OPERATION_REFUSALS}`,
   },
+  // S11 GO8b (plan §3.1, I-G8): a person approves one trial of a step whose WorkerSpec names draft
+  // Skills — the decision that lets a draft run in a Worker before it is published, so made only by
+  // a person who could publish it (`actsForPerson`: a service Principal's API key is refused too;
+  // human channel and HUMAN_ONLY_CAPABILITY_NAMES: no Handle, hence no agent, ever carries it).
+  {
+    name: 'approve_step_trial',
+    group: 'goal',
+    mode: 'execute',
+    channel: 'human',
+    minRole: 'builder',
+    actsForPerson: true,
+    paramsSchema: z
+      .object({
+        goalRunId,
+        stepKey: StepKeySchema,
+        /** The step's WorkerSpec digest, as the `step_skill_draft` hint's `trial` gives it. */
+        specDigest: z.string().min(1),
+        /** Every draft the trial mounts, as that hint gives them. */
+        drafts: z.array(StepTrialDraftSchema).min(1).max(MAX_WORKER_SPEC_LIST),
+        credentialsReviewed: z.boolean().optional(),
+      })
+      .strict(),
+    resultSchema: wire.ApproveStepTrialResultWireSchema,
+    description: `Approve one trial of a GoalRun step whose WorkerSpec names Skills that are only drafts (the step_skill_draft hint): its first attempt then starts with those draft versions mounted, and its retries mount the same ones while each is unchanged. Only while the run is proposed (for the step of its proposal) or paused (for the step's StepRun in the revision in force, before its first attempt) — 409 illegal_transition while it runs, for a step not in the plan, one that has started, or one that names no draft now. specDigest and drafts are the hint's trial as you read it: a step whose WorkerSpec or drafts are another now — a draft discarded, proposed again or published since — is 409 draft_changed and nothing is written. Whoever approves could publish every draft now: its proposer, or the workspace owner (builder floor; another principal's draft is 403 not_proposer); a person, never a service Principal (403). When a draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise. One trial is one StepRun: a revision that replaces the step, or a WorkerSpec that differs, needs another approval, and an approval a draft change made stale is never used. It does not resume the run: a paused run stays paused for its requester to resume. The same trial approved again changes nothing (changed: false).${GOAL_OPERATION_REFUSALS}`,
+  },
 ] as const satisfies readonly Capability[];
 
 // S10 E3-1a (docs/s10-evolution-plan-2026-10-04.md §3.1 EvalSuite, §3.3 I-E4, §5.5, §5.6): an
@@ -5077,6 +5104,8 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   'confirm_goal_acceptance',
   'end_goal',
   'reconcile_goal_action',
+  // S11 GO8b: a person who could publish the drafts approves a step's trial of them.
+  'approve_step_trial',
   // S11 P1-B: a workspace's ChangePlan records and their rollback — the owner's configuration
   // management (§5.4: a workspace segment's contents are read and acted on only by people in that
   // workspace; the admin agent proposes, I-A1). Never a Handle-scope member.

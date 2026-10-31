@@ -163,6 +163,17 @@ export {
 } from './revise.js';
 
 export {
+  type ApproveStepTrialInput,
+  type ApprovedStepTrial,
+  StepTrialChangedError,
+  type StepTrialApprovalRow,
+  type StepTrialApprovalView,
+  approveStepTrial,
+  listStepTrialApprovals,
+  readStepTrialApprovals,
+} from './trial-approvals.js';
+
+export {
   type ReconcileGoalActionInput,
   type ReconciledGoalAction,
   type UnresolvedGoalAction,

@@ -141,6 +141,7 @@ export function goalDetail(overrides: Partial<GoalDetailWire> = {}): GoalDetailW
     ],
     acceptance: { rounds: [], steps: [], absenceBaselines: [], overriddenChecks: [] },
     leftovers: null,
+    trialApprovals: [],
     ...overrides,
   };
 }

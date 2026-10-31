@@ -1,5 +1,6 @@
 import {
   type ActionRequestReconciliation,
+  type ApproveStepTrialResultWire,
   type CancelGoalResultWire,
   type ConfirmGoalAcceptanceResultWire,
   type ConfirmGoalResultWire,
@@ -26,6 +27,8 @@ import {
   type ReviseGoalResultWire,
   type StepRemoval,
   type StepRunWire,
+  type StepTrialApprovalWire,
+  type StepTrialDraft,
   type UnresolvedGoalActionWire,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
@@ -43,7 +46,9 @@ import {
   type PlanRevisionRow,
   type PlanRevisionView,
   type PlanSourceView,
+  type StepTrialApprovalView,
   type UnresolvedGoalAction,
+  approveStepTrial,
   cancelGoalRun,
   confirmGoalAcceptance,
   confirmGoalRun,
@@ -91,6 +96,10 @@ import { readModelCatalogIds } from './models-catalog-handler.js';
  * `auto:<sid|requester>:<hash of statement, plan and budget>`, which dedupes only while that run is
  * still proposed. A proposal made on a Handle during a running Turn records it as the run's
  * origin (`originated_in_turn_id`), as `invoke_worker` records the Turn that generated a Task.
+ *
+ * S11 GO8b: `approve_step_trial` — a person's approval of one trial of a step's draft Skills
+ * (`application/goal/trial-approvals.ts`); a person only, never a service Principal (the registry's
+ * `actsForPerson`, this handler, and goal/0013's guard each refuse one).
  */
 
 /** The caller as a goal viewer: the human channel's resolved Principal — every run when it is the
@@ -238,6 +247,21 @@ export function toWirePlanHint(hint: PlanHint): PlanHint {
     ...(hint.capabilityNames !== undefined ? { capabilityNames: [...hint.capabilityNames] } : {}),
     ...(hint.skillRefs !== undefined ? { skillRefs: [...hint.skillRefs] } : {}),
     ...(hint.model !== undefined ? { model: hint.model } : {}),
+    // S11 GO8b: what one trial of the step mounts — what `approve_step_trial` approves.
+    ...(hint.trial !== undefined
+      ? {
+          trial: {
+            specDigest: hint.trial.specDigest,
+            drafts: hint.trial.drafts.map((draft) => ({
+              skillId: draft.skillId,
+              version: draft.version,
+              name: shownFreeText(draft.name),
+              draftDigest: draft.draftDigest,
+              proposedBy: draft.proposedBy,
+            })),
+          },
+        }
+      : {}),
   };
 }
 
@@ -374,6 +398,30 @@ function toWireGoalDetail(detail: GoalRunDetail): GoalDetailWire {
           })),
         }
       : null,
+    trialApprovals: detail.trialApprovals.map(toWireTrialApproval),
+  };
+}
+
+function toWireTrialApproval(view: StepTrialApprovalView): StepTrialApprovalWire {
+  return {
+    id: view.id,
+    stepKey: view.stepKey,
+    stepRunId: view.stepRunId,
+    planRevision: view.planRevision,
+    specDigest: view.specDigest,
+    // A draft's name is free text, read as every read shows it (legacy 420).
+    drafts: view.drafts.map((draft) => ({
+      skillId: draft.skillId,
+      version: draft.version,
+      name: shownFreeText(draft.name),
+      draftDigest: draft.draftDigest,
+      proposedBy: draft.proposedBy,
+    })),
+    approvedBy: view.approvedBy,
+    approvedAt: view.approvedAt.toISOString(),
+    state: view.state,
+    lapsedBecause: view.lapsedBecause,
+    usedByTaskId: view.usedByTaskId,
   };
 }
 
@@ -777,6 +825,50 @@ export const reconcileGoalActionHandler: CapabilityHandler = async (
       reconciliationDecisionId: action.reconciliationDecisionId,
       reexecuteDecisionId: action.reexecuteDecisionId,
     },
+  };
+  return { result, ...onRun(input.goalRunId) };
+};
+
+export const approveStepTrialHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const input = params as {
+    goalRunId: string;
+    stepKey: string;
+    specDigest: string;
+    drafts: StepTrialDraft[];
+    credentialsReviewed?: boolean;
+  };
+  if (ctx?.channel !== 'human' || ctx.principal?.kind !== 'human') {
+    // The registry makes it human-channel and `actsForPerson`; reaching here without a person is a
+    // wiring bug, not a caller to serve (goal/0013's guard refuses one too).
+    throw new Error('approve_step_trial: no person in context (a trial is approved by a person)');
+  }
+  const actor = await actorOnVisibleRun(
+    client,
+    workspaceId,
+    'approve_step_trial',
+    ctx,
+    input.goalRunId,
+  );
+  const approved = await approveStepTrial(client, workspaceId, {
+    goalRunId: input.goalRunId,
+    stepKey: input.stepKey,
+    specDigest: input.specDigest,
+    drafts: input.drafts,
+    ...(input.credentialsReviewed !== undefined
+      ? { credentialsReviewed: input.credentialsReviewed }
+      : {}),
+    actor,
+  });
+  const result: ApproveStepTrialResultWire = {
+    goalRunId: input.goalRunId,
+    status: approved.status,
+    changed: approved.changed,
+    approvalId: approved.approvalId,
   };
   return { result, ...onRun(input.goalRunId) };
 };

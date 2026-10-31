@@ -227,6 +227,8 @@ export const AUDIT_LIFECYCLE_ACTIONS = [
   'step_run.skip',
   'plan_revision.accept',
   'plan_revision.reject',
+  // S11 GO8b: a person approving one trial of a step's draft Skills (`trial-approvals.ts`).
+  'step_trial.approve',
   'task.budget_handed_down',
   'action_request.release',
   'action_request.reconcile',

@@ -119,6 +119,7 @@ const PURGE_COUNT_LABELS = {
     zh: '不存在检查的事先查看',
     en: 'Absence checks’ looks beforehand',
   },
+  goalStepTrialApprovals: { zh: '步骤试用批准', en: 'Step trial approvals' },
   chats: { zh: '对话', en: 'Chats' },
   chatMessages: { zh: '消息', en: 'Messages' },
   activities: { zh: '活动', en: 'Activities' },

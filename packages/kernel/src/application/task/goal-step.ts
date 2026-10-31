@@ -115,6 +115,12 @@ const RUN_CONFIG_SNAPSHOT_FIELDS = {
  * the digest is kept: a later attempt starts only for the same WorkerSpec (a revision that changes
  * it is a new StepRun, admitted afresh). Version 1 snapshots, written before, still read; the
  * advancer writes version 2 only.
+ *
+ * S11 GO8b adds `trial` to version 2, present only on an attempt of a step whose trial of draft
+ * Skills a person approved (goal/0013): the approval and the draft versions it mounted, each with
+ * its content digest. `skills` stays the published versions (`worker_run_skills` keys those); a
+ * later attempt mounts the same drafts while each is that content (`resolveTrialDraftsInline`)
+ * and carries `trial` on.
  */
 export const RunConfigSnapshotSchema = z.discriminatedUnion('v', [
   z.object({ v: z.literal(1), ...RUN_CONFIG_SNAPSHOT_FIELDS }).strict(),
@@ -123,6 +129,23 @@ export const RunConfigSnapshotSchema = z.discriminatedUnion('v', [
       v: z.literal(2),
       ...RUN_CONFIG_SNAPSHOT_FIELDS,
       spec: z.object({ digest: z.string() }).strict().nullable(),
+      trial: z
+        .object({
+          approvalId: z.string(),
+          drafts: z
+            .array(
+              z
+                .object({
+                  skillId: z.string(),
+                  version: z.number().int().positive(),
+                  draftDigest: z.string(),
+                })
+                .strict(),
+            )
+            .min(1),
+        })
+        .strict()
+        .optional(),
     })
     .strict(),
 ]);
@@ -251,6 +274,9 @@ export interface GoalStepAttempt {
   readonly rework: boolean;
   readonly rejectedOutput: RejectedOutput | null;
   readonly output: Record<string, unknown> | null;
+  /** S11 GO8b: the approval of the step's trial of draft Skills the attempt ran with (its
+   *  snapshot's `trial`; `null`: none). */
+  readonly trialApprovalId: string | null;
 }
 
 /** Every step attempt of `goalRunId` — the Tasks with a `step_attempt`, not their nested child
@@ -270,10 +296,12 @@ export async function listGoalRunStepAttempts(
     rework: boolean;
     rejected_output: unknown;
     output: unknown;
+    trial_approval_id: string | null;
   }>(
     `select step_run_id, step_attempt, id, status, created_at, failure_reason,
             rework_of is not null as rework, rejected_output,
-            case when status = 'completed' then result -> 'output' end as output
+            case when status = 'completed' then result -> 'output' end as output,
+            run_config_snapshot -> 'trial' ->> 'approvalId' as trial_approval_id
        from tasks
       where workspace_id = $1 and goal_run_id = $2 and step_attempt is not null
       order by step_run_id, step_attempt`,
@@ -292,6 +320,7 @@ export async function listGoalRunStepAttempts(
       row.output !== null && typeof row.output === 'object' && !Array.isArray(row.output)
         ? (row.output as Record<string, unknown>)
         : null,
+    trialApprovalId: row.trial_approval_id,
   }));
 }
 

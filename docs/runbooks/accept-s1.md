@@ -10,7 +10,9 @@
 - 目标主机上 `docker compose --profile test` 全部服务已起（`postgres kernel caddy llm-proxy
   egress-proxy worker-supervisor agent-host fake-llm`）——脚本第一步只检查，不负责拉起。
 - 不需要手动切换 provider：脚本自己会通过 `deploy/accept/docker-compose.fake.yml` 把 llm-proxy /
-  worker-supervisor / fake-llm 切到 fake provider，并在退出时用 EXIT trap 恢复生产配置——
+  worker-supervisor / fake-llm 切到 fake provider，kernel 也随之重启到 fake 的模型目录（发布
+  WorkerDefinition、设模型时 kernel 按目录校验模型，legacy 302），并在退出时用 EXIT trap 恢复生产配置
+  （kernel 再重启一次）——
   `${NEXTTIME_DATA}/config/llm-providers.yaml` 与 `${NEXTTIME_DATA}/models/models.json`
   全程不会被改动，跑前跑后都不用重跑
   `make gen-models`。同一个 EXIT trap（`on_exit`）现在也在恢复 provider 之前先跑一次

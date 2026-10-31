@@ -823,6 +823,14 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     enHint:
       'Records whether an action whose outcome is unknown took effect (the requester or the workspace owner), or the requester decides to run it again.',
   },
+  approve_step_trial: {
+    zh: '批准 Skill 试用',
+    en: 'Approve draft Skill trial',
+    zhHint:
+      '目标的某一步用到还是草稿的 Skill 时，能发布这些草稿的人（提议人或工作区所有者）批准这一步试用一次：它的第一次尝试和重试都挂这些草稿版本；草稿一改，没用上的批准就失效。批准后目标不会自己继续。',
+    enHint:
+      'When a goal step uses Skills that are still drafts, someone who could publish them (their proposer or the workspace owner) approves one trial of the step: its first attempt and its retries mount those draft versions; a draft change voids an approval not used yet. The goal does not resume by itself.',
+  },
 
   // -----------------------------------------------------------------------------------------
   // Capabilities — evaluation (S10 E3-1a: evaluation suites, people only)
@@ -1989,6 +1997,15 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     en: 'Plan revision rejected',
     zhHint: '提出的计划被驳回。',
     enHint: 'A proposed plan was rejected.',
+  },
+  // S11 GO8b (kernel application/goal/trial-approvals.ts).
+  'step_trial.approve': {
+    zh: '已批准 Skill 试用',
+    en: 'Draft Skill trial approved',
+    zhHint:
+      '有人批准了目标某一步试用尚未发布的 Skill 草稿：只对这一步的这一次运行有效，草稿改动后批准失效。',
+    enHint:
+      'A person approved one step of a goal trying Skills that are still drafts: it holds for that step’s one run only, and lapses if a draft changes.',
   },
   // S10 E3-2a (kernel application/eval-session, application/eval): an evaluation trial's Worker
   // calling a fixture gate, and the trial ending.

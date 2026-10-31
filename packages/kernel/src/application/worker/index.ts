@@ -63,6 +63,7 @@ export type {
 } from './definitions.js';
 
 export {
+  assertMayPublishSkillDraft,
   assertNoPendingSkillDraft,
   assertSkillNameAvailable,
   deprecatePublishedSkillVersion,
@@ -77,6 +78,7 @@ export {
   proposeSkill,
   publishSkill,
   readSkillVersions,
+  readVisibleSkillDrafts,
   renderSkillMarkdownFile,
   skillDraftDigest,
   skillReviewContent,

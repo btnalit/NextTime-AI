@@ -235,6 +235,35 @@ export const GoalPlanSchema = z
 export type GoalPlan = z.infer<typeof GoalPlanSchema>;
 
 /**
+ * S11 GO8b (I-G8): one draft Skill version a trial of a step mounts — what a person approves
+ * (`approve_step_trial`), named by id and version and bound to its content by `draftDigest`
+ * (`SkillSummaryWire.draftDigest`: a discarded draft's version is taken again by the next
+ * proposal, so the version alone does not name what was read).
+ */
+export const StepTrialDraftSchema = z
+  .object({
+    skillId: z.guid(),
+    version: z.number().int().positive(),
+    draftDigest: z.string().min(1),
+  })
+  .strict();
+export type StepTrialDraft = z.infer<typeof StepTrialDraftSchema>;
+
+/** S11 GO8b: a draft a trial would mount, as a hint names it — with its name and who proposed it
+ *  (whoever may publish it may approve its trial: its proposer when a builder, or the workspace
+ *  owner). */
+export const StepTrialDraftInfoSchema = z
+  .object({
+    skillId: z.string(),
+    version: z.number().int().positive(),
+    name: z.string(),
+    draftDigest: z.string(),
+    proposedBy: z.string(),
+  })
+  .strict();
+export type StepTrialDraftInfo = z.infer<typeof StepTrialDraftInfoSchema>;
+
+/**
  * What a person confirming a plan should know that does not stop it:
  *   - `requester_confirm_only` (the kernel's `planHints`) — no check the platform makes, so the
  *     goal is achieved only on the requester's word;
@@ -258,7 +287,10 @@ export type GoalPlan = z.infer<typeof GoalPlanSchema>;
  *     `step_capability_not_held` above cover the gates and capabilities its WorkerSpec sets, and
  *     besides:
  *       - `step_skill_draft` — it names Skills that are only drafts (`skillRefs`): the step waits
- *         for approval and does not start (S11 GO8b approves one trial);
+ *         for approval and does not start. S11 GO8b: `trial` names what a person approves for
+ *         one trial of the step (`approve_step_trial`) — the digest of its WorkerSpec and each
+ *         draft version — when every draft Skill it names is exactly one draft; a step whose
+ *         trial is approved, and still matches, has no such hint;
  *       - `step_skill_deprecated` — it names Skills whose published versions were all deprecated
  *         (`skillRefs`): refused until the plan names others;
  *       - `step_model_not_offered` — the model it sets is not in the llm-proxy catalog any more
@@ -305,6 +337,15 @@ export const PlanHintSchema = z
     /** S11 GO8a: the model a `step_model_not_offered` / `step_model_not_allowed` step's WorkerSpec
      *  sets. */
     model: z.string().optional(),
+    /** S11 GO8b: on `step_skill_draft`, what one trial of the step would run and a person approves
+     *  — the step's WorkerSpec digest and the draft versions it would mount. */
+    trial: z
+      .object({
+        specDigest: z.string(),
+        drafts: z.array(StepTrialDraftInfoSchema).min(1),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type PlanHint = z.infer<typeof PlanHintSchema>;

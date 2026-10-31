@@ -38,6 +38,7 @@ import type {
 import { visibleText } from '@nexttime/shared';
 import { actionLabel } from './capability-labels.js';
 import { clipMiddle, redactSensitive, shortId } from './format.js';
+import { pendingTrialStepKeys } from './goal-trials.js';
 import { isUuidLike } from './graph-view.js';
 import type { Translate } from './i18n.js';
 
@@ -579,6 +580,8 @@ interface PlanHintArgs {
   readonly model: string;
   /** What would happen to the step: it would not start, or not be tried again. */
   readonly consequence: readonly [string, string];
+  /** S11 GO8b: whether a `step_skill_draft` step has one trial a person may approve (`trial`). */
+  readonly trial: boolean;
 }
 
 /** S11 GO8a: how the plan changes when what a step's WorkerSpec names cannot be used — a proposal
@@ -642,15 +645,21 @@ const PLAN_HINT: Readonly<
       `Step “${step}” acts on ${gates.length === 1 ? 'gate' : 'gates'} ${en} with the requester’s own account, which they have not connected there: once the step starts, the gate refuses its calls for want of a credential, and no approval changes that. ${accountNext[1]}`,
     ];
   },
-  // S11 GO8a: what the admission of a step's WorkerSpec says. A draft waits for a person; until a
-  // trial can be approved (GO8b), publishing the Skill or changing the plan is what moves it.
-  step_skill_draft: ({ step, skills, context, consequence }) => {
+  // S11 GO8a: what the admission of a step's WorkerSpec says. A draft waits for a person: publishing
+  // the Skill or changing the plan moves it — and, S11 GO8b, approving one trial of the step.
+  step_skill_draft: ({ step, skills, context, consequence, trial }) => {
     const [zh, en] = namesIn(skills);
     const one = skills.length === 1;
     const [changeZh, changeEn] = CHANGE_PLAN[context];
+    if (trial) {
+      return [
+        `步骤「${step}」的 Worker 要用 Skill${zh}，${one ? '它' : '它们'}还只是草稿，没有发布：没人批准的话，${consequence[0]}能发布${one ? '它' : '它们'}的人（提议者或工作区所有者）可以在「步骤」里这一步的提示下批准试用，只让这一步用草稿试一次；也可以先在「能力目录」发布，或者${changeZh}。`,
+        `Step “${step}”: its Worker uses ${one ? 'Skill' : 'Skills'} ${en}, ${one ? 'which is only a draft' : 'which are only drafts'}, not published — unless someone approves, ${consequence[1]} Someone who may publish ${one ? 'it' : 'them'} (the proposer or a workspace owner) can approve a trial from the step’s note in Steps, for this step to try the ${one ? 'draft' : 'drafts'} once; or publish in Catalog first, or ${changeEn}.`,
+      ];
+    }
     return [
-      `步骤「${step}」的 Worker 要用 Skill${zh}，${one ? '它' : '它们'}还只是草稿，没有发布：${consequence[0]}有发布权的人可以先在「能力目录」发布${one ? '它' : '它们'}${context === 'proposal' ? '再确认' : ''}，或者${changeZh}。`,
-      `Step “${step}”: its Worker uses ${one ? 'Skill' : 'Skills'} ${en}, ${one ? 'which is only a draft' : 'which are only drafts'}, not published — ${consequence[1]} Someone who may publish ${one ? 'it' : 'them'} can do so in Catalog${context === 'proposal' ? ' before you confirm' : ''}, or ${changeEn}.`,
+      `步骤「${step}」的 Worker 要用 Skill${zh}，${one ? '它' : '它们'}还只是草稿，没有发布：${consequence[0]}这一步没法只批准试用一次（一个引用对上了不止一份草稿，或者草稿和已发布的 Skill 同名）。有发布权的人可以先在「能力目录」发布${one ? '它' : '它们'}${context === 'proposal' ? '再确认' : ''}，或者${changeZh}。`,
+      `Step “${step}”: its Worker uses ${one ? 'Skill' : 'Skills'} ${en}, ${one ? 'which is only a draft' : 'which are only drafts'}, not published — ${consequence[1]} No single trial of it can be approved (a reference matches more than one draft, or a draft is named like a published Skill). Someone who may publish ${one ? 'it' : 'them'} can do so in Catalog${context === 'proposal' ? ' before you confirm' : ''}, or ${changeEn}.`,
     ];
   },
   step_skill_deprecated: ({ step, skills, context, consequence }) => {
@@ -711,6 +720,7 @@ export function planHintText(
     skills: (hint.skillRefs ?? []).map(skillRefShown),
     model: hint.model ?? '',
     consequence: STEP_HINT_CONSEQUENCE[retried ? 'retried' : 'first'],
+    trial: hint.trial !== undefined,
   });
   return t(zh, en);
 }
@@ -1426,7 +1436,8 @@ export interface GoalStateNote {
  * carries the hints of its steps that have not started).
  */
 export function goalStateNote(
-  goal: GoalRunWire & Partial<Pick<GoalDetailWire, 'acceptance' | 'steps' | 'planRevision'>>,
+  goal: GoalRunWire &
+    Partial<Pick<GoalDetailWire, 'acceptance' | 'steps' | 'planRevision' | 'trialApprovals'>>,
   unresolved: readonly UnresolvedGoalActionWire[] | undefined,
   budget: readonly BudgetRow[],
   t: Translate,
@@ -1484,7 +1495,8 @@ export function goalStateNote(
 }
 
 function pausedNote(
-  goal: GoalRunWire & Partial<Pick<GoalDetailWire, 'acceptance' | 'steps' | 'planRevision'>>,
+  goal: GoalRunWire &
+    Partial<Pick<GoalDetailWire, 'acceptance' | 'steps' | 'planRevision' | 'trialApprovals'>>,
   unresolved: readonly UnresolvedGoalActionWire[] | undefined,
   budget: readonly BudgetRow[],
   t: Translate,
@@ -1599,6 +1611,18 @@ function pausedNote(
       if (!goal.steps?.some((step) => step.status === 'failed')) {
         const admission = admissionPauseText(goal, pauseHints(goal, ADMISSION_PAUSE_HINTS), t);
         if (admission) return { tone: 'warn', text: admission };
+        // S11 GO8b: nothing stops the step any more but the pause — approving never resumes.
+        const approved = pendingTrialStepKeys(goal);
+        if (approved.length > 0) {
+          const [zh, en] = namesIn(approved);
+          return {
+            tone: 'info',
+            text: t(
+              `步骤${zh}的 Skill 草稿已批准试用。目标不会自己继续：请求人按「继续」后，${approved.length === 1 ? '这一步' : '这些步骤'}用批准的草稿开始。`,
+              `The trial of step ${en}’s draft Skills is approved. The goal does not go on by itself: once the requester resumes it, ${approved.length === 1 ? 'the step starts' : 'the steps start'} with the drafts approved.`,
+            ),
+          };
+        }
       }
       return {
         tone: 'warn',
@@ -1733,10 +1757,15 @@ function admissionPauseText(
   const [skillsZh, skillsEn] = namesIn((hint.skillRefs ?? []).map(skillRefShown));
   switch (hint.code) {
     case 'step_skill_draft':
-      return t(
-        `需要人决定：步骤「${step}」的 Worker 要用的 Skill${skillsZh}还只是草稿，这一步${held.zh}。在「能力目录」发布之后按「继续」，或者在对话里让入口智能体修订计划换掉它，见下面「步骤」里的说明。`,
-        `A person must decide: the Worker of step “${step}” uses Skill ${skillsEn}, still a draft, so the step ${heldEn}. Once it is published in Catalog, resume the goal, or ask the entry agent in chat to revise the plan and change it. See the note under Steps.`,
-      );
+      return hint.trial !== undefined
+        ? t(
+            `需要人决定：步骤「${step}」的 Worker 要用的 Skill${skillsZh}还只是草稿，这一步${held.zh}。能发布它的人可以在下面「步骤」里这一步的提示下批准试用，之后请求人按「继续」；也可以在「能力目录」发布之后按「继续」，或者在对话里让入口智能体修订计划换掉它。`,
+            `A person must decide: the Worker of step “${step}” uses Skill ${skillsEn}, still a draft, so the step ${heldEn}. Someone who may publish it can approve a trial from the step’s note under Steps, and the requester then resumes; or publish it in Catalog and resume, or ask the entry agent in chat to revise the plan and change it.`,
+          )
+        : t(
+            `需要人决定：步骤「${step}」的 Worker 要用的 Skill${skillsZh}还只是草稿，这一步${held.zh}。在「能力目录」发布之后按「继续」，或者在对话里让入口智能体修订计划换掉它，见下面「步骤」里的说明。`,
+            `A person must decide: the Worker of step “${step}” uses Skill ${skillsEn}, still a draft, so the step ${heldEn}. Once it is published in Catalog, resume the goal, or ask the entry agent in chat to revise the plan and change it. See the note under Steps.`,
+          );
     case 'step_skill_deprecated':
       return t(
         `需要人决定：步骤「${step}」的 Worker 要用的 Skill${skillsZh}已经弃用，这一步${held.zh}。在对话里让入口智能体修订计划，换一个已发布的 Skill 之后才能继续，见下面「步骤」里的说明。`,

@@ -91,6 +91,7 @@ import {
   GoalRunNotFoundError,
   GoalRunStateError,
   ProposedGoalLimitError,
+  StepTrialChangedError,
 } from '../../application/goal/index.js';
 // S11 P1-C: a domain module's error, imported directly like the two above.
 import { PackDependencyUnmetError, PackNotFoundError } from '../../application/packs/index.js';
@@ -654,6 +655,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   // S11 GO5c: mirrors HTTP 409 `proposed_goal_limit` (the message names the count and the cap).
   if (err instanceof GoalRunStateError || err instanceof ProposedGoalLimitError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // S11 GO8b: mirrors HTTP 409 `draft_changed` (capability-route.ts).
+  if (err instanceof StepTrialChangedError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   if (err instanceof GoalRunInputError || err instanceof GoalPlanValidationError) {

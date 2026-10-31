@@ -100,6 +100,7 @@ function proposedGoal(requester: string) {
     steps: [],
     acceptance: { rounds: [], steps: [], absenceBaselines: [], overriddenChecks: [] },
     leftovers: null,
+    trialApprovals: [],
   };
 }
 

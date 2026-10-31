@@ -8,9 +8,9 @@
 ## 1. 目的
 
 `scripts/accept_s2.sh`/`scripts/accept_s3.sh` 默认路径把 llm-proxy/worker-supervisor/fake-llm
-切到 fake provider，用脚本化场景（scripted tool sequence）逐字节断言"入口 agent 依次调了哪些
-工具、参数是什么"——这条路径证明的是**内核/门/供应线路的接线是对的**：只要工具真的按预期顺序被
-调用，网关、审批、执行、审计这一整条链路就是通的。它证明不了"一个真实模型面对这句中文提问，
+（以及 kernel 读的模型目录）切到 fake provider，用脚本化场景（scripted tool sequence）逐字节
+断言"入口 agent 依次调了哪些工具、参数是什么"——这条路径证明的是**内核/门/供应线路的接线是对的**：
+只要工具真的按预期顺序被调用，网关、审批、执行、审计这一整条链路就是通的。它证明不了"一个真实模型面对这句中文提问，
 真的会自己选中正确的工具"——fake provider 从不做决策，只是回放。
 
 W7（本 runbook 覆盖的部分）反过来：保留主机上已部署的**真实**供应商/模型，让真实模型在同一批
