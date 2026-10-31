@@ -551,8 +551,8 @@ export const DRAFT_EVALUATION_STAGE_TONES: Readonly<Record<DraftEvaluationStageS
 
 /** S10 E3-3a (#842 UX P2-1): what became of the draft another version's unfavourable evaluation
  *  evaluated (`SkillPublishFamilyEntryWire.candidateState`) — its version still holds that content
- *  (draft, published, deprecated: `PUBLISHABLE_TONES`), or a reviewer rejected it or its proposer
- *  discarded it. Neither is alarming in itself, so both stay neutral. */
+ *  (draft, published, deprecated: `PUBLISHABLE_TONES`), or a reviewer rejected it, or its
+ *  proposer discarded it or it expired. Neither is alarming in itself, so both stay neutral. */
 export const SKILL_PUBLISH_CANDIDATE_TONES: Readonly<
   Record<SkillPublishCandidateState, ChipStyle>
 > = {

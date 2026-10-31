@@ -281,7 +281,12 @@ describe.runIf(DATABASE_URL !== undefined)(
     /** A Skill version proposed by `proposer`; published by the owner when `publish`. */
     async function skill(
       proposer: keyof typeof people,
-      content: { name: string; description: string; markdown: string },
+      content: {
+        name: string;
+        description: string;
+        markdown: string;
+        applicable?: { gateKinds?: string[]; objectTypes?: string[] };
+      },
       options: { skillId?: string; publish?: boolean } = {},
     ): Promise<{ id: string; version: number; digest: string }> {
       const row = await asApp((client) =>
@@ -1807,7 +1812,47 @@ describe.runIf(DATABASE_URL !== undefined)(
         [worse.id, 'published'],
         [regressed.id, 'published'],
       ]);
-    }, 120_000);
+
+      // Review #493 on #842: the same text under another `applicable` is another draft — the
+      // evaluation of the discarded one is not this one's, so it is not called a draft.
+      const lostLast = await drive(
+        (
+          await call<DraftEvaluationWire>(person('builder'), 'start_draft_evaluation', {
+            skillId: notesId,
+            version: last.version,
+            draftDigest: last.digest,
+            suiteId: regressionOnly.id,
+            suiteVersion: regressionOnly.version,
+          })
+        ).id,
+        ({ arm }) => (arm === 'baseline' ? 'pass' : 'fail'),
+      );
+      expect(lostLast).toMatchObject({ verdict: 'regressed' });
+      await call(person('owner'), 'discard_draft', {
+        kind: 'skill',
+        id: notesId,
+        version: last.version,
+      });
+      const rescoped = await skill(
+        'owner',
+        {
+          name: 'notes',
+          description: 'Keeps notes of what was done.',
+          markdown: '# Notes\n\nWrite down each step briefly.',
+          applicable: { gateKinds: ['docker'] },
+        },
+        { skillId: notesId },
+      );
+      expect(rescoped.version).toBe(last.version);
+      expect(rescoped.digest).not.toBe(last.digest);
+      expect(await familyOf(rescoped)).toEqual([
+        [lostLast.id, 'discarded'],
+        [lostAgain.id, 'rejected'],
+        [lost.id, 'discarded'],
+        [worse.id, 'published'],
+        [regressed.id, 'published'],
+      ]);
+    }, 180_000);
 
     // Last: it removes this test's workspace, the evaluations with it.
     it('the workspace purge removes draft evaluations with their runs and trials', async () => {

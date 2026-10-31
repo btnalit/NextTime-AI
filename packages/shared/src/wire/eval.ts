@@ -821,9 +821,9 @@ export const PublishAcknowledgementItemWireSchema = z
   .strict();
 export type PublishAcknowledgementItemWire = z.infer<typeof PublishAcknowledgementItemWireSchema>;
 
-/** What became of the draft an evaluation evaluated: its version still holds that very content
- *  (`draft`, `published`, `deprecated`), or the draft is gone — `rejected` by a reviewer
- *  (`reject_draft`) or `discarded` by its proposer. */
+/** What became of the draft an evaluation evaluated: its version still holds that very content,
+ *  the same draft digest (`draft`, `published`, `deprecated`), or the draft is gone — `rejected`
+ *  by a reviewer (`reject_draft`), else `discarded` by its proposer or expired. */
 export const SKILL_PUBLISH_CANDIDATE_STATE_VALUES = [
   'draft',
   'published',

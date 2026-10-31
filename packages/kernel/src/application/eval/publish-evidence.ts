@@ -8,6 +8,8 @@ import {
   FAMILY_HISTORY_VERDICTS,
   type PublishAcknowledgementItemWire,
   type PublishEvaluationReview,
+  type PublishableStatus,
+  type SkillApplicable,
   type SkillPublishCandidateState,
   type SkillPublishEvidenceWire,
   type SkillPublishFamilyEntryWire,
@@ -15,6 +17,7 @@ import {
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { seesEveryDraft } from '../../governance/capability/index.js';
+import { skillDraftDigest } from '../worker/index.js';
 import {
   DRAFT_EVALUATION_VISIBLE_TO,
   type DraftEvaluationActor,
@@ -227,34 +230,63 @@ export async function readSkillPublishEvidence(
   };
 }
 
-/** Each evaluation with what became of the draft it evaluated (#842 UX P2-1): its version, if that
- *  very content is still there — a draft, or published (and maybe deprecated) since — else
- *  `rejected` when a rejection of that content is recorded (`draft_rejections`), else `discarded`
- *  by its proposer. */
+/** Each evaluation with what became of the draft it evaluated (#842 UX P2-1): its version's
+ *  status when that version still holds that very content — the same draft digest, every field
+ *  it covers (review #493 on #842: `applicable` too, not the text alone) — a draft, or published
+ *  (and maybe deprecated) since; else `rejected` when a rejection of that content is recorded
+ *  (`draft_rejections`); else `discarded` — by its proposer, or expired. */
 async function withCandidateState(
   client: PoolClient,
   workspaceId: string,
   evaluations: readonly DraftEvaluationSummaryWire[],
 ): Promise<SkillPublishFamilyEntryWire[]> {
   if (evaluations.length === 0) return [];
-  const states = await client.query<{ id: string; state: SkillPublishCandidateState }>(
-    `select e.id,
-            coalesce(v.status,
-                     case when exists (
-                       select 1 from draft_rejections r
-                        where r.workspace_id = e.workspace_id and r.kind = 'skill'
-                          and r.family_id = e.skill_id and r.version = e.skill_version
-                          and r.draft_digest = e.draft_digest)
-                     then 'rejected' else 'discarded' end) as state
+  const rows = await client.query<{
+    evaluation_id: string;
+    id: string | null;
+    version: number | null;
+    status: PublishableStatus | null;
+    name: string | null;
+    description: string | null;
+    markdown: string | null;
+    applicable: SkillApplicable | null;
+    proposed_by: string | null;
+    rejected: boolean;
+  }>(
+    `select e.id as evaluation_id, v.id, v.version, v.status, v.name, v.description, v.markdown,
+            v.applicable, v.proposed_by,
+            exists (select 1 from draft_rejections r
+                     where r.workspace_id = e.workspace_id and r.kind = 'skill'
+                       and r.family_id = e.skill_id and r.version = e.skill_version
+                       and r.draft_digest = e.draft_digest) as rejected
        from eval_draft_evaluations e
        left join skills v on v.workspace_id = e.workspace_id and v.id = e.skill_id
-        and v.version = e.skill_version and v.proposed_by = e.candidate_proposed_by
-        and v.name = e.candidate_name and v.description = e.candidate_description
-        and v.markdown = e.candidate_markdown
+        and v.version = e.skill_version
       where e.workspace_id = $1 and e.id = any($2::uuid[])`,
     [workspaceId, evaluations.map((e) => e.id)],
   );
-  const stateOf = new Map(states.rows.map((r) => [r.id, r.state] as const));
+  const stateOf = new Map<string, SkillPublishCandidateState>();
+  for (const row of rows.rows) {
+    const evaluation = evaluations.find((e) => e.id === row.evaluation_id);
+    if (evaluation === undefined) continue;
+    const same =
+      row.id !== null &&
+      row.version !== null &&
+      row.status !== null &&
+      skillDraftDigest({
+        id: row.id,
+        version: row.version,
+        name: row.name ?? '',
+        description: row.description ?? '',
+        markdown: row.markdown ?? '',
+        applicable: row.applicable ?? {},
+        proposedBy: row.proposed_by ?? '',
+      }) === evaluation.candidate.draftDigest;
+    stateOf.set(
+      row.evaluation_id,
+      same && row.status !== null ? row.status : row.rejected ? 'rejected' : 'discarded',
+    );
+  }
   return evaluations.map((e) => ({ ...e, candidateState: stateOf.get(e.id) ?? 'discarded' }));
 }
 
