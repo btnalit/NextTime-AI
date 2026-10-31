@@ -924,19 +924,17 @@ export type PublishEvaluationReview = z.infer<typeof PublishEvaluationReviewSche
 // ----- what the proposer's agent sees (S10 E3-3) ----------------------------------------------
 
 /**
- * One evaluation of a Skill draft, as its proposer — and an agent acting for them — sees it
- * (`get_skill_draft_verdicts`; §3.3 I-E4, §5.5 封闭): which draft (`version`, `draftDigest`, the
- * content it evaluated), whether it still runs, and once it finished its {@link
- * DraftEvaluationDevVerdictSchema}. Nothing else: no pass counts, no case, no reason, no stage,
- * no time — how long it ran would say which stages did.
+ * One finished evaluation of a Skill draft, as its proposer — and an agent acting for them — sees
+ * it (`get_skill_draft_verdicts`; §3.3 I-E4, §5.5 封闭): which draft (`version`, `draftDigest`, the
+ * content it evaluated) and its {@link DraftEvaluationDevVerdictSchema}. Nothing else: no pass
+ * counts, no case, no reason, no stage, no time, and not one that still runs — how long it ran,
+ * read off its times or by polling until it is listed finished, would say which stages did.
  */
 export const SkillDraftVerdictWireSchema = z
   .object({
     version: z.number().int().positive(),
     draftDigest: z.string(),
-    status: z.enum(['running', 'finished']),
-    /** `null` while it runs. */
-    devVerdict: DraftEvaluationDevVerdictSchema.nullable(),
+    devVerdict: DraftEvaluationDevVerdictSchema,
   })
   .strict();
 export type SkillDraftVerdictWire = z.infer<typeof SkillDraftVerdictWireSchema>;

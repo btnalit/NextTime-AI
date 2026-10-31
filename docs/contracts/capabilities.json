@@ -22953,32 +22953,18 @@
             "additionalProperties": false,
             "properties": {
               "devVerdict": {
-                "anyOf": [
-                  {
-                    "enum": [
-                      "regressed",
-                      "refuted",
-                      "worse",
-                      "better",
-                      "non_inferior",
-                      "inconclusive",
-                      "unmeasured"
-                    ],
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "draftDigest": {
+                "enum": [
+                  "regressed",
+                  "refuted",
+                  "worse",
+                  "better",
+                  "non_inferior",
+                  "inconclusive",
+                  "unmeasured"
+                ],
                 "type": "string"
               },
-              "status": {
-                "enum": [
-                  "running",
-                  "finished"
-                ],
+              "draftDigest": {
                 "type": "string"
               },
               "version": {
@@ -22989,7 +22975,6 @@
             "required": [
               "version",
               "draftDigest",
-              "status",
               "devVerdict"
             ],
             "type": "object"

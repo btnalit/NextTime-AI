@@ -2109,10 +2109,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
       }
 
-      // `get_skill_draft_verdicts`: the caller's own drafts only, newest first, at most 20; for
-      // each the version, the digest, running or finished, and the dev verdict — nothing else.
+      // `get_skill_draft_verdicts`: the caller's own drafts' finished evaluations only, newest
+      // first, at most 20; for each the version, the digest and the dev verdict — nothing else.
       type Verdicts = {
-        items: Array<{ version: number; draftDigest: string; status: string; devVerdict: string }>;
+        items: Array<{ version: number; draftDigest: string; devVerdict: string }>;
         truncated?: true;
       };
       const expected = (proposer: string, skillId: string) =>
@@ -2122,7 +2122,6 @@ describe.runIf(DATABASE_URL !== undefined)(
           .map((row) => ({
             version: row.skill_version,
             draftDigest: row.draft_digest,
-            status: 'finished',
             devVerdict: row.dev_verdict,
           }));
       const helper = await call<Verdicts>(person('builder'), 'get_skill_draft_verdicts', {
@@ -2139,13 +2138,28 @@ describe.runIf(DATABASE_URL !== undefined)(
         }),
       ).toEqual(helper);
       for (const item of helper.items) {
-        expect(Object.keys(item).sort()).toEqual([
-          'devVerdict',
-          'draftDigest',
-          'status',
-          'version',
-        ]);
+        expect(Object.keys(item).sort()).toEqual(['devVerdict', 'draftDigest', 'version']);
       }
+      // One still running is not listed — polling until it shows up finished would time it — nor,
+      // once cancelled, is it.
+      const fresh = await skill('builder', {
+        name: 'tidy',
+        description: 'Tidies up after a change.',
+        markdown: '# Tidy\n\nRemove what the change left behind.',
+      });
+      const running = await call<DraftEvaluationWire>(person('builder'), 'start_draft_evaluation', {
+        skillId: fresh.id,
+        version: fresh.version,
+        draftDigest: fresh.digest,
+        suiteId: suite.id,
+        suiteVersion: suite.version,
+      });
+      expect(running.status).toBe('running');
+      const freshVerdicts = () =>
+        call<Verdicts>(agentFor('builder'), 'get_skill_draft_verdicts', { skillId: fresh.id });
+      expect(await freshVerdicts()).toEqual({ items: [] });
+      await call(person('builder'), 'cancel_draft_evaluation', { evaluationId: running.id });
+      expect(await freshVerdicts()).toEqual({ items: [] });
       // More than 20: the newest 20, said to be cut.
       const notes = await call<Verdicts>(agentFor('builder'), 'get_skill_draft_verdicts', {
         skillId: notesId,
