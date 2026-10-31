@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.52.0](https://github.com/btnalit/NextTime-AI/compare/v0.51.0...v0.52.0) (2026-10-31)
+
+
+### Features
+
+* **eval,web:** pause agents that keep provoking the evaluation seal (legacy 514) ([#838](https://github.com/btnalit/NextTime-AI/issues/838)) ([4db80d5](https://github.com/btnalit/NextTime-AI/commit/4db80d5c6568ee2b702095648871a821389c223f))
+* **eval:** name the evaluation evidence on publish and acknowledge each failure (S10 E3-3a) ([#842](https://github.com/btnalit/NextTime-AI/issues/842)) ([50f9be5](https://github.com/btnalit/NextTime-AI/commit/50f9be5fd310f811b8999b549e2b743707915a49))
+* **eval:** record the graph summary of a draft evaluation and tell the proposer's agent its dev verdict (S10 E3-3b) ([#845](https://github.com/btnalit/NextTime-AI/issues/845)) ([6e3b0d9](https://github.com/btnalit/NextTime-AI/commit/6e3b0d92fa961c3f03bdb69d73f75b995f8e05f6))
+
 ## [0.51.0](https://github.com/btnalit/NextTime-AI/compare/v0.50.0...v0.51.0) (2026-10-30)
 
 
