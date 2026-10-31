@@ -1,5 +1,4 @@
 import type {
-  DraftEvaluationArmTallyWire,
   DraftEvaluationCaseRowWire,
   DraftEvaluationMeasureWire,
   DraftEvaluationStageWire,
@@ -15,13 +14,17 @@ import { type Resource, useResource } from '../../hooks/useResource.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import {
+  cellText,
+  costText,
   draftEvaluationOutcome,
+  noOutcomeText,
   passRateText,
   pointsText,
   skipReasonText,
   stageName,
   stageResult,
   stageRuleText,
+  tallyText,
   verdictReasonText,
 } from '../../lib/draft-evaluations.js';
 import { formatUsd, trialOutcomeStatus } from '../../lib/eval-runs.js';
@@ -82,12 +85,6 @@ function comparisonText(
   if (row.baseline === null) return t(`${candidate}（新 Skill）`, `${candidate} (new Skill)`);
   const baseline = `v${row.baseline.version}`;
   return t(`${candidate} 对比 ${baseline}`, `${candidate} vs ${baseline}`);
-}
-
-function costText(costUsd: number | null, t: Translate): string {
-  return costUsd === null
-    ? t('费用未知（有模型没有价格）', 'cost unknown (a model has no price)')
-    : formatUsd(costUsd);
 }
 
 export interface DraftEvaluationsTabProps {
@@ -467,8 +464,8 @@ export function DraftEvaluationDetail({
                 )
               : null}{' '}
             {t(
-              '评测结束或取消之前，这个草稿不能丢弃或拒绝。',
-              'Until it ends or is cancelled, the draft cannot be discarded or rejected.',
+              '评测结束或取消之前，这个草稿不能发布、丢弃或拒绝。',
+              'Until it ends or is cancelled, the draft cannot be published, discarded or rejected.',
             )}
           </p>
         ) : row.status === 'cancelled' ? (
@@ -575,16 +572,6 @@ export function DraftEvaluationDetail({
   );
 }
 
-function tallyText(tally: DraftEvaluationArmTallyWire, t: Translate): string {
-  const parts = [
-    t(`${tally.passed}/${tally.trials} 通过`, `${tally.passed}/${tally.trials} passed`),
-  ];
-  if (tally.errored > 0) parts.push(t(`${tally.errored} 出错`, `${tally.errored} errored`));
-  if (tally.voided > 0) parts.push(t(`${tally.voided} 作废`, `${tally.voided} voided`));
-  if (tally.open > 0) parts.push(t(`${tally.open} 未结束`, `${tally.open} not ended`));
-  return parts.join(' · ');
-}
-
 function StageCard({
   http,
   index,
@@ -652,7 +639,9 @@ function StageCard({
           {t('；草稿组', '; draft')} {tallyText(stage.candidate, t)}
         </p>
       ) : null}
-      {stage.measure !== null ? <Measure measure={stage.measure} stage={stage} t={t} /> : null}
+      {stage.measure !== null ? (
+        <DraftEvaluationMeasure measure={stage.measure} stage={stage} t={t} />
+      ) : null}
       {stage.cases.length > 0 && ran ? (
         <CaseMatrix
           http={http}
@@ -669,7 +658,9 @@ function StageCard({
   );
 }
 
-function Measure({
+/** What a stage's rule measured, in its own terms (also the publish review's evidence card,
+ *  `catalog/SkillPublishReview`). */
+export function DraftEvaluationMeasure({
   measure,
   stage,
   t,
@@ -741,21 +732,6 @@ function Measure({
       );
     }
   }
-}
-
-/** "; n more without an outcome" after a pass rate — rates count the trials with one. */
-function noOutcomeText(none: number, t: Translate): string {
-  return none === 0 ? '' : t(`，另 ${none} 次没有结果`, `, ${none} more without an outcome`);
-}
-
-function cellText(tally: DraftEvaluationArmTallyWire, t: Translate): string {
-  const base = `${tally.passed}/${tally.trials}`;
-  const extra = [
-    tally.errored > 0 ? t(`${tally.errored} 出错`, `${tally.errored} errored`) : null,
-    tally.voided > 0 ? t(`${tally.voided} 作废`, `${tally.voided} voided`) : null,
-    tally.open > 0 ? t(`${tally.open} 未结束`, `${tally.open} open`) : null,
-  ].filter((part): part is string => part !== null);
-  return extra.length === 0 ? base : `${base} (${extra.join(', ')})`;
 }
 
 function CaseMatrix({

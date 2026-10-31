@@ -23,6 +23,7 @@ import type {
   PlatformUpdateFeedStatusWire,
   PublishableStatus,
   Role,
+  SkillPublishCandidateState,
   StepRunStatus,
   TaskStatus,
   UserStatusWire,
@@ -56,6 +57,7 @@ import {
   PlatformRoleWireSchema,
   PlatformUpdateFeedStatusWireSchema,
   ROLE_VALUES,
+  SKILL_PUBLISH_CANDIDATE_STATE_VALUES,
   STEP_RUN_STATUS_VALUES,
   ServiceHealthWireSchema,
   TASK_STATUS_VALUES,
@@ -148,7 +150,8 @@ export type StatusMachine =
   | 'evalTrial'
   | 'evalAssertion'
   | 'draftEvaluation'
-  | 'draftEvaluationStage';
+  | 'draftEvaluationStage'
+  | 'skillPublishCandidate';
 
 export const ACTION_REQUEST_TONES: Readonly<Record<ActionRequestStatus, ChipStyle>> = {
   proposed: { tone: 'neutral', label: { zh: '已提议', en: 'Proposed' } },
@@ -546,6 +549,18 @@ export const DRAFT_EVALUATION_STAGE_TONES: Readonly<Record<DraftEvaluationStageS
     cancelled: { tone: 'neutral', label: { zh: '已取消', en: 'Cancelled' } },
   };
 
+/** S10 E3-3a (#842 UX P2-1): what became of the draft another version's unfavourable evaluation
+ *  evaluated (`SkillPublishFamilyEntryWire.candidateState`) — its version still holds that content
+ *  (draft, published, deprecated: `PUBLISHABLE_TONES`), or a reviewer rejected it, or its
+ *  proposer discarded it or it expired. Neither is alarming in itself, so both stay neutral. */
+export const SKILL_PUBLISH_CANDIDATE_TONES: Readonly<
+  Record<SkillPublishCandidateState, ChipStyle>
+> = {
+  ...PUBLISHABLE_TONES,
+  rejected: { tone: 'neutral', label: { zh: '已拒绝', en: 'Rejected' } },
+  discarded: { tone: 'neutral', label: { zh: '已丢弃', en: 'Discarded' } },
+};
+
 const MACHINES: Readonly<
   Record<StatusMachine, { values: readonly string[]; tones: Readonly<Record<string, ChipStyle>> }>
 > = {
@@ -596,6 +611,10 @@ const MACHINES: Readonly<
   draftEvaluationStage: {
     values: DRAFT_EVALUATION_STAGE_STATUS_VALUES,
     tones: DRAFT_EVALUATION_STAGE_TONES,
+  },
+  skillPublishCandidate: {
+    values: SKILL_PUBLISH_CANDIDATE_STATE_VALUES,
+    tones: SKILL_PUBLISH_CANDIDATE_TONES,
   },
 };
 

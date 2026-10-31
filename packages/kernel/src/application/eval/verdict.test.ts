@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { type VerdictTrial, differenceLowerBound, measureStage, stageOutcome } from './verdict.js';
+import {
+  type VerdictTrial,
+  casesToAcknowledge,
+  differenceLowerBound,
+  measureStage,
+  stageOutcome,
+} from './verdict.js';
 
 /**
  * application/eval/verdict: how a draft evaluation's stage reads its trials (S10 E3-2b) — the
@@ -329,5 +335,79 @@ describe('stageOutcome', () => {
         },
       });
     });
+  });
+});
+
+describe('casesToAcknowledge (S10 E3-3: what a publisher acknowledges one by one)', () => {
+  const on = (caseId: string, split: 'dev' | 'holdout' = 'dev') => ({ caseId, split });
+
+  it('regressed: the regression cases lost, in the stage order; held and unsettled ones are not', () => {
+    const trials = [
+      // case-b lost: 0 of 2 against 2 of 2.
+      trial('baseline', true, on('case-b')),
+      trial('baseline', true, on('case-b')),
+      trial('candidate', false, on('case-b')),
+      trial('candidate', false, on('case-b')),
+      // case-a lost too.
+      trial('baseline', true, on('case-a')),
+      trial('candidate', false, on('case-a')),
+      // case-c held.
+      trial('baseline', true, on('case-c')),
+      trial('candidate', true, on('case-c')),
+      // case-d unsettled: the candidate's try had no outcome.
+      trial('baseline', true, on('case-d')),
+      trial('candidate', false, { ...on('case-d'), status: 'errored', error: 'lost' }),
+    ];
+    expect(
+      casesToAcknowledge('regressed', ['case-a', 'case-b', 'case-c', 'case-d'], trials),
+    ).toEqual(['case-a', 'case-b']);
+  });
+
+  it('worse: the dev cases the candidate passed at a lower rate; holdout and equal ones are not', () => {
+    const trials = [
+      ...times(3, () => trial('baseline', true, on('case-a'))),
+      ...times(3, () => trial('candidate', false, on('case-a'))),
+      ...times(3, () => trial('baseline', true, on('case-b'))),
+      ...times(3, () => trial('candidate', true, on('case-b'))),
+      // A holdout case the candidate lost: not acknowledged — dev decided.
+      ...times(3, () => trial('baseline', true, on('case-h', 'holdout'))),
+      ...times(3, () => trial('candidate', false, on('case-h', 'holdout'))),
+    ];
+    expect(casesToAcknowledge('worse', ['case-a', 'case-b', 'case-h'], trials)).toEqual(['case-a']);
+  });
+
+  it('worse with no case lower on its own: every dev case the candidate failed', () => {
+    // case-a: the candidate's one try with an outcome passed, its two others had none; the baseline
+    // 2 of 3 — higher for the candidate. case-b: both 1 of 3. The total can still read lower.
+    const trials = [
+      trial('candidate', true, on('case-a')),
+      ...times(2, () =>
+        trial('candidate', false, { ...on('case-a'), status: 'errored', error: 'lost' }),
+      ),
+      trial('baseline', true, on('case-a')),
+      trial('baseline', true, on('case-a')),
+      trial('baseline', false, on('case-a')),
+      trial('candidate', true, on('case-b')),
+      trial('candidate', false, on('case-b')),
+      trial('candidate', false, on('case-b')),
+      trial('baseline', true, on('case-b')),
+      trial('baseline', false, on('case-b')),
+      trial('baseline', false, on('case-b')),
+    ];
+    expect(casesToAcknowledge('worse', ['case-a', 'case-b'], trials)).toEqual(['case-b']);
+  });
+
+  it('every other verdict asks for nothing', () => {
+    const trials = [trial('baseline', true), trial('candidate', false)];
+    for (const verdict of [
+      'refuted',
+      'better',
+      'non_inferior',
+      'inconclusive',
+      'unmeasured',
+      'contaminated',
+    ] as const) {
+      expect(casesToAcknowledge(verdict, ['case-a'], trials)).toEqual([]);
+    }
   });
 });

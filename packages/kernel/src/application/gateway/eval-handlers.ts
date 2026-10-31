@@ -3,6 +3,7 @@ import type {
   EvalCaseKind,
   EvalRunKind,
   EvalSealHoldStatus,
+  PublishEvaluationReview,
 } from '@nexttime/shared';
 import {
   type DraftEvaluationActor,
@@ -12,6 +13,7 @@ import {
   afterDraftEvaluationCancel,
   afterDraftEvaluationStart,
   cancelDraftEvaluation,
+  checkPublishEvidence,
   createEvalSuite,
   dispatchEvalTrials,
   editEvalCase,
@@ -25,6 +27,7 @@ import {
   listEvalSuites,
   listSealHolds,
   readEvalBudget,
+  readSkillPublishEvidence,
   releaseSealHold,
   removeEvalFixtureGate,
   repinEvalSuite,
@@ -34,7 +37,12 @@ import {
   startDraftEvaluation,
   syncEvalFixtureGate,
 } from '../eval/index.js';
-import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
+import { ForbiddenError } from './authorize.js';
+import {
+  type CapabilityHandler,
+  type CapabilityHandlerContext,
+  publishActorOf,
+} from './capability-handler.js';
 
 /**
  * application/gateway/eval-handlers: the `evaluation` capabilities (S10 E3-1a, cases E3-1b) — an
@@ -50,7 +58,10 @@ import type { CapabilityHandler, CapabilityHandlerContext } from './capability-h
  * evaluation is started (its first trials started after the commit), read and cancelled (its
  * running Tasks terminated after the commit) here; who may see one is `application/eval`'s rule,
  * by the caller's role. E3-2c: the evaluation seal's pauses are listed (the owner and auditors, by
- * the registry's minRole) and released (the owner) here.
+ * the registry's minRole) and released (the owner) here. E3-3: a Skill draft's evaluations are
+ * read as the evidence for its publish (`get_skill_publish_evidence`), and `publish_skill` — not
+ * an evaluation capability, so open to a service Principal too — is wrapped here
+ * (`withPublishEvidence`) to check what its caller reviewed against them.
  */
 
 function personOf(capability: string, ctx: CapabilityHandlerContext | undefined): EvalSuiteActor {
@@ -337,8 +348,12 @@ export const listDraftEvaluationsHandler: CapabilityHandler = async (
   ctx,
 ) => {
   const viewer = viewerOf('list_draft_evaluations', ctx);
-  const filter = params as { skillId?: string; suiteId?: string };
-  return { result: { items: await listDraftEvaluations(client, workspaceId, viewer, filter) } };
+  const { skillId, suiteId } = params as { skillId?: string; suiteId?: string };
+  return {
+    result: {
+      items: await listDraftEvaluations(client, workspaceId, viewer, { skillId, suiteId }),
+    },
+  };
 };
 
 export const cancelDraftEvaluationHandler: CapabilityHandler = async (
@@ -396,3 +411,58 @@ export const releaseEvalSealHoldHandler: CapabilityHandler = async (
       : {}),
   };
 };
+
+export const getSkillPublishEvidenceHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const viewer = viewerOf('get_skill_publish_evidence', ctx);
+  const target = params as { skillId: string; version: number; draftDigest: string };
+  return {
+    result: await readSkillPublishEvidence(client, workspaceId, viewer, target),
+    resourceType: 'skill',
+    resourceId: target.skillId,
+  };
+};
+
+/**
+ * S10 E3-3 (§5.5 结果去哪, I-E3): `publish_skill` with the draft's evaluations as the evidence it
+ * names. `publish` (skill-procedure-handlers.ts) publishes first — the draft's row locked, none of
+ * its evaluations running (application/worker `publishSkill`) — then, in the same transaction,
+ * what the caller reviewed (`evaluationReview`) is checked against the evidence now
+ * (application/eval `checkPublishEvidence`): a throw rolls the publish back. Only a person
+ * acknowledges an evaluation's failures — a service Principal's API key also authenticates on the
+ * human channel (the `absentAnswersReviewed` rule, operation-manifest-handlers.ts). The audit
+ * record adds the evidence (`evaluation`: its id, verdict, reason, how many failures were
+ * acknowledged); the acknowledgements and their reasons are in its params.
+ */
+export function withPublishEvidence(publish: CapabilityHandler): CapabilityHandler {
+  return async (client, workspaceId, params, ctx) => {
+    const { skillId, version, draftDigest, evaluationReview } = params as {
+      skillId: string;
+      version: number;
+      draftDigest: string;
+      evaluationReview?: PublishEvaluationReview;
+    };
+    if (
+      (evaluationReview?.acknowledgements?.length ?? 0) > 0 &&
+      (ctx?.channel !== 'human' || ctx.principal?.kind !== 'human')
+    ) {
+      throw new ForbiddenError(
+        "publish_skill: only a person (a human Principal on the human channel) acknowledges an evaluation's failures (evaluationReview.acknowledgements)",
+      );
+    }
+    const published = await publish(client, workspaceId, params, ctx);
+    const publisher = publishActorOf('publish_skill', ctx);
+    const audit = await checkPublishEvidence(
+      client,
+      workspaceId,
+      { principalId: publisher.principalId, role: publisher.role },
+      { skillId, version, draftDigest },
+      evaluationReview,
+    );
+    return { ...published, auditPayload: { ...published.auditPayload, ...audit } };
+  };
+}

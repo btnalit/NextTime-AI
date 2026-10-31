@@ -1416,11 +1416,14 @@ const metaCapabilities = [
         version: z.number().int().positive(),
         draftDigest: z.string().min(1),
         credentialsReviewed: z.boolean().optional(),
+        // S10 E3-3 (§5.5 结果去哪, I-E3): the draft's evaluations as the caller reviewed them
+        // (get_skill_publish_evidence) — absent is `{evaluationId: null}`, "I saw none".
+        evaluationReview: wire.PublishEvaluationReviewSchema.optional(),
       })
       .strict(),
     resultSchema: wire.SkillPublishResultWireSchema,
     description:
-      'Publish your draft Skill (I16) — the latest version under skillId, which must be the version given (the one reviewed): a newer version under skillId since is 409 version_changed and nothing is published. draftDigest is the draftDigest list_skills / get_skill / propose_skill gave for that draft: a draft discarded and proposed again under the same version since is 409 draft_changed and nothing is published. Builder floor; the workspace owner may publish anyone’s draft (e.g. one a member’s Worker proposed); another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise. A name another Skill family already has published refuses 409 skill_name_conflict (a Worker mounts Skills by name, so one name has one Skill) — deprecate that one or rename the draft.',
+      'Publish your draft Skill (I16) — the latest version under skillId, which must be the version given (the one reviewed): a newer version under skillId since is 409 version_changed and nothing is published. draftDigest is the draftDigest list_skills / get_skill / propose_skill gave for that draft: a draft discarded and proposed again under the same version since is 409 draft_changed and nothing is published. Builder floor; the workspace owner may publish anyone’s draft (e.g. one a member’s Worker proposed); another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise. A name another Skill family already has published refuses 409 skill_name_conflict (a Worker mounts Skills by name, so one name has one Skill) — deprecate that one or rename the draft. Evaluation is evidence, never a gate, but the publish names the evidence reviewed: evaluationReview.evaluationId is the first of get_skill_publish_evidence’s evaluations for this draft (null, or evaluationReview omitted: none) — another finished since is 409 evaluation_changed (details: evaluationId, the latest now) and nothing is published; while one of the draft’s evaluations runs, 409 draft_evaluating. Each failure in its acknowledge list (the cases a regressed or worse evaluation of this draft lost) needs an acknowledgement with a reason (evaluationReview.acknowledgements: [{evaluationId, caseId, reason}]), given by a person (a service Principal’s is 403) — 400 evaluation_review_required (details: items [{evaluationId, caseId}] not acknowledged) otherwise; one naming no such failure, or one twice, is 400 invalid_params. The audit record keeps the evidence’s id, verdict and reason, and each acknowledgement with its reason.',
   },
   {
     name: 'publish_procedure',
@@ -4797,7 +4800,7 @@ const evaluationCapabilities = [
       .strict(),
     resultSchema: wire.DraftEvaluationWireSchema,
     description:
-      'Evaluate a Skill draft against a suite: the candidate (the draft) and the baseline (the published version of its family it would replace; for a new Skill, the suite’s pinned WorkerDefinition without it) run the suite’s cases as evaluation Tasks — every gate call answered from fixtures, egress denied — through three stages in order: regression (each regression case twice per arm: the candidate must pass each as often as the baseline, else regressed), mechanism (the cases aimed at mechanism, 10 tries per arm in all: the candidate must pass all and the baseline at most 4 in 10, else refuted; skipped without mechanism), confirm (each full case 3 times per arm: dev pass rates against δ = 0.1 → worse, better, non_inferior or inconclusive; holdout must agree). A trial that could not start, was lost, terminated or crashed has no outcome: a verdict must hold whichever way it would have gone, else inconclusive (errored_trials), as is an arm with over a quarter of a stage’s trials without one. Both arms load the same other Skills, pinned now. Read progress and the verdict with get_draft_evaluation. Before anything runs the draft is checked: a credential-like value, a platform-shaped id, text over 20000 characters, no change from the baseline, more than 200 changed lines, or a canary or held-out case text refuses the start with 400 draft_check_failed (details.problems: [{check, count, limit}]). A stage the month’s evaluation budget cannot cover — after what is spent and what the trials not ended yet, of any evaluation, are expected to cost (get_eval_budget committedUsd) — is not run (the verdict is inconclusive, reason budget); when even the first stage’s estimate does not fit, 429 evaluation_budget_insufficient (details: budgetUsd, spentUsd, committedUsd, estimateUsd) and nothing starts; a spent budget is 429 evaluation_budget_exhausted. Refused too: a draft that is not there or not visible (404 not_found), one that is no longer a draft (409 not_a_draft), one changed since it was read (409 draft_changed), one already being evaluated (409 draft_evaluating), a suite at another version (409 version_changed), a mechanism the suite’s cases do not name, a suite with no case to run or a draft whose name another loaded Skill has (409 conflict), the evaluation seal having paused the evaluation Principal’s agents (403 evaluation_probe_hold; list_eval_seal_holds). A stage whose trials are waiting while such a pause opens keeps them waiting until the owner releases it. While it runs the draft cannot be discarded, rejected or expired. People only.',
+      'Evaluate a Skill draft against a suite: the candidate (the draft) and the baseline (the published version of its family it would replace; for a new Skill, the suite’s pinned WorkerDefinition without it) run the suite’s cases as evaluation Tasks — every gate call answered from fixtures, egress denied — through three stages in order: regression (each regression case twice per arm: the candidate must pass each as often as the baseline, else regressed), mechanism (the cases aimed at mechanism, 10 tries per arm in all: the candidate must pass all and the baseline at most 4 in 10, else refuted; skipped without mechanism), confirm (each full case 3 times per arm: dev pass rates against δ = 0.1 → worse, better, non_inferior or inconclusive; holdout must agree). A trial that could not start, was lost, terminated or crashed has no outcome: a verdict must hold whichever way it would have gone, else inconclusive (errored_trials), as is an arm with over a quarter of a stage’s trials without one. Both arms load the same other Skills, pinned now. Read progress and the verdict with get_draft_evaluation. Before anything runs the draft is checked: a credential-like value, a platform-shaped id, text over 20000 characters, no change from the baseline, more than 200 changed lines, or a canary or held-out case text refuses the start with 400 draft_check_failed (details.problems: [{check, count, limit}]). A stage the month’s evaluation budget cannot cover — after what is spent and what the trials not ended yet, of any evaluation, are expected to cost (get_eval_budget committedUsd) — is not run (the verdict is inconclusive, reason budget); when even the first stage’s estimate does not fit, 429 evaluation_budget_insufficient (details: budgetUsd, spentUsd, committedUsd, estimateUsd) and nothing starts; a spent budget is 429 evaluation_budget_exhausted. Refused too: a draft that is not there or not visible (404 not_found), one that is no longer a draft (409 not_a_draft), one changed since it was read (409 draft_changed), one already being evaluated (409 draft_evaluating), a suite at another version (409 version_changed), a mechanism the suite’s cases do not name, a suite with no case to run or a draft whose name another loaded Skill has (409 conflict), the evaluation seal having paused the evaluation Principal’s agents (403 evaluation_probe_hold; list_eval_seal_holds). A stage whose trials are waiting while such a pause opens keeps them waiting until the owner releases it. While it runs the draft cannot be published, discarded, rejected or expired. People only.',
   },
   {
     name: 'get_draft_evaluation',
@@ -4836,6 +4839,25 @@ const evaluationCapabilities = [
     resultSchema: wire.DraftEvaluationWireSchema,
     description:
       'Cancel a running draft evaluation: its trials not started yet are cancelled, its running evaluation Tasks are terminated, no later stage starts, and it ends cancelled, with no verdict. What its trials already measured stays readable. One that has ended is 409 conflict; one that is not there or whose draft the caller may not see is 404 not_found. People only.',
+  },
+  // S10 E3-3 (§5.6 发布审阅): what a Skill draft's evaluations say to whoever publishes it.
+  {
+    name: 'get_skill_publish_evidence',
+    group: 'evaluation',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    actsForPerson: true,
+    paramsSchema: z
+      .object({
+        skillId: z.guid(),
+        version: z.number().int().positive(),
+        draftDigest: z.string().min(1),
+      })
+      .strict(),
+    resultSchema: wire.SkillPublishEvidenceWireSchema,
+    description:
+      'What a Skill draft’s evaluations say to whoever publishes it, for the draft as read (skillId, version, draftDigest — list_skills / get_skill give the digest), so each evaluated exactly this content: its finished evaluations, newest first — the first is the evidence publish_skill names (evaluationReview.evaluationId) — each with the stage that decided its verdict (each case’s tries, what the rule measured) and both arms’ trials, cost and tokens over every stage; the one running now, if any (publish_skill waits for it); every failure to acknowledge when publishing — each case a regressed evaluation lost, or a worse one’s confirmation passed less often than the baseline, with both arms’ tries; and the family’s other drafts an evaluation found refuted, regressed or worse (the last 10). Only evaluations whose draft the caller may see (as get_draft_evaluation). People only.',
   },
   // S10 E3-2c (legacy 514): the pauses the evaluation seal puts on the agents of a Principal it
   // keeps refusing — the pattern of an agent probing which texts are held out.
@@ -4989,6 +5011,7 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   'get_draft_evaluation',
   'list_draft_evaluations',
   'cancel_draft_evaluation',
+  'get_skill_publish_evidence',
   // S10 E3-2c: and the seal's pauses.
   'list_eval_seal_holds',
   'release_eval_seal_hold',

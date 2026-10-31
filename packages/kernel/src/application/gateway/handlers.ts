@@ -224,6 +224,7 @@ import {
   getEvalCaseHandler,
   getEvalRunHandler,
   getEvalSuiteHandler,
+  getSkillPublishEvidenceHandler,
   listDraftEvaluationsHandler,
   listEvalRunsHandler,
   listEvalSealHoldsHandler,
@@ -235,6 +236,7 @@ import {
   startDraftEvaluationHandler,
   startEvalCaseTrialHandler,
   syncEvalFixtureGateHandler,
+  withPublishEvidence,
 } from './eval-handlers.js';
 // S8 W1-C (F6) — execution_readiness / resolve_refs, split into their own files (same
 // one-capability(-family)-per-file convention `export-prov-handler.ts`/`operation-manifest-
@@ -2474,6 +2476,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['get_draft_evaluation', getDraftEvaluationHandler],
   ['list_draft_evaluations', listDraftEvaluationsHandler],
   ['cancel_draft_evaluation', cancelDraftEvaluationHandler],
+  // S10 E3-3: a Skill draft's evaluations as its publish's evidence (eval-handlers.ts).
+  ['get_skill_publish_evidence', getSkillPublishEvidenceHandler],
   // S11 P1-C packs (pack-handlers.ts)
   ['list_packs', listPacksHandler],
   ['preview_pack_install', previewPackInstallHandler],
@@ -2555,7 +2559,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['update_operation_description', updateOperationDescriptionHandler],
   // S2.14 (docs/development-tasks.md S2.14) — skill-procedure-handlers.ts.
   ['propose_skill', proposeSkillHandler],
-  ['publish_skill', publishSkillHandler],
+  // S10 E3-3: the publish checks the evidence its caller reviewed (eval-handlers.ts).
+  ['publish_skill', withPublishEvidence(publishSkillHandler)],
   ['deprecate_skill', deprecateSkillHandler],
   ['list_skills', listSkillsHandler],
   ['get_skill', getSkillHandler],

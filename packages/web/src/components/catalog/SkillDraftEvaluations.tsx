@@ -4,7 +4,7 @@ import type {
   EvalSuiteSummaryWire,
   EvalSuiteWire,
 } from '@nexttime/shared';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useCapability } from '../../hooks/useCapability.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -76,22 +76,27 @@ export interface SkillDraftEvaluationsProps {
   /** Told whether one of this version's evaluations runs now — the draft's 丢弃 / 拒绝 are held
    *  meanwhile (#833 UX P3-1). */
   readonly onEvaluatingChange?: (evaluating: boolean) => void;
+  /** Changed when the list may have moved on unseen — a publish refused because an evaluation
+   *  ended or started since (#842 UX P3-1): the list is read again. */
+  readonly refreshKey?: number;
 }
 
 /**
  * components/catalog/SkillDraftEvaluations (S10 E3-2b): 「评测」 on a Skill's detail — this
  * version's draft evaluations (`list_draft_evaluations{skillId}`), each with its state or verdict
  * and a link to it under 评测 → 草稿评测, and on a draft, 「评测」 (a builder or the owner), which
- * opens `StartDraftEvaluationSheet`. While one runs the draft cannot be discarded or rejected; the
- * section says so above those buttons, and reads the list again every few seconds until it ends
- * (#833 UX P2-1). A published version shows the evaluations it had as a draft, if any — evidence
- * beside it, never a gate on publishing.
+ * opens `StartDraftEvaluationSheet`. While one runs the draft cannot be published, discarded or
+ * rejected; the section says so above those buttons, and reads the list again every few seconds
+ * until it ends (#833 UX P2-1). A published version shows the evaluations it had as a draft, if
+ * any — evidence beside it, never a gate on publishing (what a publish names of them is
+ * `SkillPublishReview`'s, S10 E3-3a).
  */
 export function SkillDraftEvaluations({
   http,
   skill,
   inUseVersion,
   onEvaluatingChange,
+  refreshKey,
 }: SkillDraftEvaluationsProps) {
   const t = useT();
   const can = useRoleCan(http);
@@ -123,6 +128,12 @@ export function SkillDraftEvaluations({
   useEffect(() => {
     onEvaluatingChange?.(evaluating);
   }, [evaluating, onEvaluatingChange]);
+  const refreshSeen = useRef(refreshKey);
+  useEffect(() => {
+    if (refreshSeen.current === refreshKey) return;
+    refreshSeen.current = refreshKey;
+    if (allowed) void reload();
+  }, [refreshKey, allowed, reload]);
   if (!allowed || (state.status === 'error' && isForbiddenError(state.error))) return null;
   const baselineText =
     inUseVersion !== undefined
@@ -155,8 +166,8 @@ export function SkillDraftEvaluations({
       {isDraft ? (
         <p className="text-3 text-small">
           {t(
-            `用一个用例集把这个草稿和${baselineText}比一比：依次跑回归检查、机制检验、确认对比，哪一阶段不过就停。结果是给发布的人看的证据，不拦发布。`,
-            `Compare this draft with ${baselineText} on an evaluation suite: a regression check, a mechanism test and a confirmation, stopping at the first that fails. The result is evidence for whoever publishes, never a gate.`,
+            `用一个用例集把这个草稿和${baselineText} 比一比：依次跑回归检查、机制检验、确认对比，哪一阶段不过就停。结果是给发布的人看的证据，不拦发布；判为「有回归」或「差于基线」时，发布前要逐条写下为什么仍然发布。`,
+            `Compare this draft with ${baselineText} on an evaluation suite: a regression check, a mechanism test and a confirmation, stopping at the first that fails. The result is evidence for whoever publishes, never a gate; when it finds the draft Regressed or Worse, each failure is acknowledged with a reason before publishing.`,
           )}
           {isDraft && !canStart && can('start_draft_evaluation') === false
             ? t('评测由构建者或工作区所有者发起。', ' A builder or a workspace owner starts one.')
@@ -166,8 +177,8 @@ export function SkillDraftEvaluations({
       {running !== undefined ? (
         <Notice testId="skill-draft-evaluating">
           {t(
-            '评测进行中：结束或取消之前，这个草稿不能丢弃或拒绝。',
-            'Being evaluated: until the evaluation ends or is cancelled, this draft cannot be discarded or rejected.',
+            '评测进行中：结束或取消之前，这个草稿不能发布、丢弃或拒绝。',
+            'Being evaluated: until the evaluation ends or is cancelled, this draft cannot be published, discarded or rejected.',
           )}{' '}
           <RouteLink href={hrefs.evaluation('drafts', running.id)} className="link-inline">
             {t('查看进度', 'See its progress')}
@@ -517,8 +528,8 @@ function StartDraftEvaluationSheet({
 
           <p className="text-3 text-small">
             {t(
-              '评测期间这个草稿不能丢弃、拒绝，也不会过期；评测会留下它当时的内容。',
-              'While it runs the draft cannot be discarded, rejected or expire; the evaluation keeps its content as it was.',
+              '评测期间这个草稿不能发布、丢弃、拒绝，也不会过期；评测会留下它当时的内容。',
+              'While it runs the draft cannot be published, discarded, rejected or expire; the evaluation keeps its content as it was.',
             )}
           </p>
 

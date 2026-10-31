@@ -3,6 +3,7 @@ import {
   DRAFT_EVALUATION_STAGE_VALUES,
   type DraftCheckProblemWire,
   DraftCheckProblemWireSchema,
+  type DraftEvaluationArmTallyWire,
   type DraftEvaluationReason,
   type DraftEvaluationSkip,
   type DraftEvaluationStageName,
@@ -444,4 +445,38 @@ export function pointsText(share: number | null): string {
   if (share === null) return '—';
   const value = Math.round(share * 1000) / 10;
   return `${value > 0 ? '+' : value < 0 ? '−' : ''}${Math.abs(value).toFixed(1)}`;
+}
+
+/** An evaluation's cost so far, or why it is not known. */
+export function costText(costUsd: number | null, t: Translate): string {
+  return costUsd === null
+    ? t('费用未知（有模型没有价格）', 'cost unknown (a model has no price)')
+    : formatUsd(costUsd);
+}
+
+/** One arm's trials as "n/m passed · e errored · …". */
+export function tallyText(tally: DraftEvaluationArmTallyWire, t: Translate): string {
+  const parts = [
+    t(`${tally.passed}/${tally.trials} 通过`, `${tally.passed}/${tally.trials} passed`),
+  ];
+  if (tally.errored > 0) parts.push(t(`${tally.errored} 出错`, `${tally.errored} errored`));
+  if (tally.voided > 0) parts.push(t(`${tally.voided} 作废`, `${tally.voided} voided`));
+  if (tally.open > 0) parts.push(t(`${tally.open} 未结束`, `${tally.open} not ended`));
+  return parts.join(' · ');
+}
+
+/** One arm's tries on one case, compact: "n/m (e errored, …)". */
+export function cellText(tally: DraftEvaluationArmTallyWire, t: Translate): string {
+  const base = `${tally.passed}/${tally.trials}`;
+  const extra = [
+    tally.errored > 0 ? t(`${tally.errored} 出错`, `${tally.errored} errored`) : null,
+    tally.voided > 0 ? t(`${tally.voided} 作废`, `${tally.voided} voided`) : null,
+    tally.open > 0 ? t(`${tally.open} 未结束`, `${tally.open} open`) : null,
+  ].filter((part): part is string => part !== null);
+  return extra.length === 0 ? base : `${base} (${extra.join(', ')})`;
+}
+
+/** "; n more without an outcome" after a pass rate — rates count the trials with one. */
+export function noOutcomeText(none: number, t: Translate): string {
+  return none === 0 ? '' : t(`，另 ${none} 次没有结果`, `, ${none} more without an outcome`);
 }

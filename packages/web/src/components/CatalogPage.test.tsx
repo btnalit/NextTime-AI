@@ -17,6 +17,13 @@ const EDITOR_SUGGESTION_READS: Record<string, unknown> = {
   list_types: { items: [] },
   // Legacy 491: 「被拒绝的草稿」 under the Skills / Procedures list — none unless a test says so.
   list_draft_rejections: { items: [] },
+  // S10 E3-3a: a Skill draft's publish evidence — never evaluated unless a test says so.
+  get_skill_publish_evidence: {
+    evaluations: [],
+    runningEvaluationId: null,
+    acknowledge: [],
+    familyHistory: [],
+  },
 };
 
 function scriptedHttp(
@@ -2164,12 +2171,19 @@ describe('CatalogPage', () => {
     await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
     await waitFor(() => expect(within(detail).queryByRole('button', { name: /丢弃/ })).toBeNull());
 
-    fireEvent.click(within(detail).getByRole('button', { name: /发布/ }));
+    // S10 E3-3a: Publish waits for the draft's evaluation evidence, and names it (none here).
+    const publish = within(detail).getByTestId('skill-publish') as HTMLButtonElement;
+    await waitFor(() => expect(publish.disabled).toBe(false));
+    expect(within(detail).getByTestId('skill-publish-review-none').textContent).toContain(
+      '没有评测过',
+    );
+    fireEvent.click(publish);
     await waitFor(() =>
       expect(http.calls.find((c) => c.name === 'publish_skill')?.params).toEqual({
         skillId: 'sk-9',
         version: 1,
         draftDigest: 'sha256:reviewed',
+        evaluationReview: { evaluationId: null },
       }),
     );
   });
@@ -4331,5 +4345,222 @@ describe('CatalogPage — Procedure usage (S11 W1a E2-2)', () => {
     );
     expect(within(detail).queryByTestId('procedure-usage')).toBeNull();
     expect(http.calls.some((call) => call.name === 'get_procedure_stats')).toBe(false);
+  });
+});
+
+describe('CatalogPage — publish review on a Skill draft (S10 E3-3a)', () => {
+  const OWNER = {
+    id: 'ws-1',
+    name: 'Acme',
+    createdAt: '2026-01-01T00:00:00Z',
+    principalCount: 2,
+    gatekeeperCount: 0,
+    caller: { id: 'p-me', role: 'owner', displayName: 'Me', kind: 'human' },
+  };
+  const EVALUATION = '55555555-5555-4555-8555-555555555555';
+  const NEWER = '66666666-6666-4666-8666-666666666666';
+  const CASE = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const draft = {
+    id: 'sk-1',
+    version: 2,
+    status: 'draft',
+    name: 'restart-web',
+    description: 'Restart web',
+    proposedBy: 'p-me',
+    draftDigest: 'sha256:v2',
+  };
+  const tally = (passed: number, trials = 3) => ({
+    trials,
+    passed,
+    failed: trials - passed,
+    errored: 0,
+    voided: 0,
+    open: 0,
+    costUsd: 0.03,
+    tokens: 3000,
+  });
+  const evaluation = (id: string) => ({
+    id,
+    status: 'finished',
+    stage: null,
+    verdict: 'worse',
+    reason: 'below_margin',
+    decidedBy: 'confirm',
+    costUsd: 0.06,
+    createdBy: 'p-me',
+    createdAt: '2026-10-30T00:00:00.000Z',
+    finishedAt: '2026-10-30T00:10:00.000Z',
+    cancelledBy: null,
+    suite: { id: 's-1', name: 'restart drills', version: 3 },
+    workerDefinition: { id: 'wd-1', version: 1 },
+    candidate: { skillId: 'sk-1', version: 2, name: 'restart-web', draftDigest: 'sha256:v2' },
+    baseline: { skillId: 'sk-1', version: 1, name: 'restart-web' },
+    mechanism: null,
+    decidingStage: null,
+    baselineTotal: tally(3),
+    candidateTotal: tally(0),
+  });
+  const evidence = (id: string, running: string | null = null) => ({
+    evaluations: [evaluation(id)],
+    runningEvaluationId: running,
+    acknowledge: [
+      {
+        evaluationId: id,
+        caseId: CASE,
+        title: 'restart the web tier',
+        split: 'dev',
+        stage: 'confirm',
+        baseline: tally(3),
+        candidate: tally(0),
+      },
+    ],
+    familyHistory: [],
+  });
+
+  it('a worse evaluation: Publish opens the acknowledgement; the publish names the evidence and each reason', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => OWNER,
+      list_skills: () => ({ items: [draft] }),
+      get_skill: () => null,
+      list_draft_evaluations: () => ({ items: [] }),
+      get_skill_publish_evidence: () => evidence(EVALUATION),
+      publish_skill: () => ({ id: 'sk-1', version: 2, status: 'published' }),
+    });
+    renderPage(http, 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    await within(detail).findByTestId('skill-publish-evidence');
+    expect(http.calls.find((c) => c.name === 'get_skill_publish_evidence')?.params).toEqual({
+      skillId: 'sk-1',
+      version: 2,
+      draftDigest: 'sha256:v2',
+    });
+    const publish = within(detail).getByTestId('skill-publish') as HTMLButtonElement;
+    await waitFor(() => expect(publish.disabled).toBe(false));
+    fireEvent.click(publish);
+    const sheet = await screen.findByTestId('publish-acknowledge');
+    expect(http.calls.some((c) => c.name === 'publish_skill')).toBe(false);
+    fireEvent.change(within(sheet).getByTestId('publish-acknowledge-reason'), {
+      target: { value: 'the fixture is stale' },
+    });
+    fireEvent.click(within(sheet).getByTestId('publish-acknowledge-submit'));
+    await waitFor(() =>
+      expect(http.calls.find((c) => c.name === 'publish_skill')?.params).toEqual({
+        skillId: 'sk-1',
+        version: 2,
+        draftDigest: 'sha256:v2',
+        evaluationReview: {
+          evaluationId: EVALUATION,
+          acknowledgements: [
+            { evaluationId: EVALUATION, caseId: CASE, reason: 'the fixture is stale' },
+          ],
+        },
+      }),
+    );
+    await waitFor(() => expect(screen.queryByTestId('publish-acknowledge')).toBeNull());
+  });
+
+  it('evidence that moved on while the acknowledgement sheet is open: nothing is published, both sections are read again and the sheet says what changed', async () => {
+    let reads = 0;
+    const http = scriptedHttp({
+      get_workspace: () => OWNER,
+      list_skills: () => ({ items: [draft] }),
+      get_skill: () => null,
+      list_draft_evaluations: () => ({ items: [] }),
+      get_skill_publish_evidence: () => {
+        reads += 1;
+        return evidence(reads === 1 ? EVALUATION : NEWER);
+      },
+      publish_skill: () =>
+        Promise.reject(
+          new HttpError('capability_error', 'another evaluation ended', 'evaluation_changed', {
+            evaluationId: NEWER,
+          }),
+        ),
+    });
+    renderPage(http, 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    const publish = (await within(detail).findByTestId('skill-publish')) as HTMLButtonElement;
+    await waitFor(() => expect(publish.disabled).toBe(false));
+    const listReads = () => http.calls.filter((c) => c.name === 'list_draft_evaluations').length;
+    const listedBefore = listReads();
+    fireEvent.click(publish);
+    const sheet = await screen.findByTestId('publish-acknowledge');
+    fireEvent.change(within(sheet).getByTestId('publish-acknowledge-reason'), {
+      target: { value: 'known' },
+    });
+    fireEvent.click(within(sheet).getByTestId('publish-acknowledge-submit'));
+    // #842 UX P3-2: said in the sheet, not in a toast over its button.
+    const notice = await within(screen.getByTestId('publish-acknowledge')).findByTestId(
+      'publish-acknowledge-changed',
+    );
+    expect(notice.textContent).toContain('又有一次评测结束，结论是「差于基线」');
+    expect(screen.queryByTestId('toast')).toBeNull();
+    expect(
+      within(screen.getByTestId('publish-acknowledge'))
+        .getByTestId('publish-acknowledge-evaluation')
+        .getAttribute('data-evaluation-id'),
+    ).toBe(NEWER);
+    expect(reads).toBe(2);
+    // #842 UX P3-1: 「评测」 is read again too, so it says the same as 发布审阅.
+    await waitFor(() => expect(listReads()).toBeGreaterThan(listedBefore));
+  });
+
+  it('evidence that moved on with nothing to acknowledge: the toast says so and both sections are read again', async () => {
+    let reads = 0;
+    const settled = (id: string) => ({
+      ...evidence(id),
+      evaluations: [{ ...evaluation(id), verdict: 'non_inferior', reason: null }],
+      acknowledge: [],
+    });
+    const http = scriptedHttp({
+      get_workspace: () => OWNER,
+      list_skills: () => ({ items: [draft] }),
+      get_skill: () => null,
+      list_draft_evaluations: () => ({ items: [] }),
+      get_skill_publish_evidence: () => {
+        reads += 1;
+        return settled(reads === 1 ? EVALUATION : NEWER);
+      },
+      publish_skill: () =>
+        Promise.reject(
+          new HttpError('capability_error', 'another evaluation ended', 'evaluation_changed', {
+            evaluationId: NEWER,
+          }),
+        ),
+    });
+    renderPage(http, 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    const publish = (await within(detail).findByTestId('skill-publish')) as HTMLButtonElement;
+    await waitFor(() => expect(publish.disabled).toBe(false));
+    const listReads = () => http.calls.filter((c) => c.name === 'list_draft_evaluations').length;
+    const listedBefore = listReads();
+    fireEvent.click(publish);
+    const toast = await screen.findByTestId('toast');
+    expect(toast.textContent).toContain('评测证据在你看过之后变了');
+    expect(screen.queryByTestId('publish-acknowledge')).toBeNull();
+    await waitFor(() =>
+      expect(
+        within(detail).getByTestId('skill-publish-evidence').getAttribute('data-evaluation-id'),
+      ).toBe(NEWER),
+    );
+    await waitFor(() => expect(listReads()).toBeGreaterThan(listedBefore));
+  });
+
+  it('while one of its evaluations runs, Publish waits for it', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => OWNER,
+      list_skills: () => ({ items: [draft] }),
+      get_skill: () => null,
+      list_draft_evaluations: () => ({ items: [] }),
+      get_skill_publish_evidence: () => ({
+        ...evidence(EVALUATION, NEWER),
+      }),
+    });
+    renderPage(http, 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    await within(detail).findByTestId('skill-publish-evidence');
+    const publish = within(detail).getByTestId('skill-publish') as HTMLButtonElement;
+    expect(publish.disabled).toBe(true);
+    expect(publish.title).toContain('评测进行中');
   });
 });

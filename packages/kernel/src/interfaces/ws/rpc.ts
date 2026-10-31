@@ -38,6 +38,8 @@ import {
   EvalSuiteStateError,
   EvaluationBudgetExhaustedError,
   EvaluationBudgetInsufficientError,
+  EvaluationChangedError,
+  EvaluationReviewRequiredError,
 } from '../../application/eval/index.js';
 // NoActiveTurnError/TurnNotFoundError: see capability-route.ts's own comment on this same import
 // — exported by handlers.ts but not re-exported by gateway/index.ts's curated surface; that one-
@@ -662,10 +664,15 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   ) {
     return { code: WS_ERROR_CODES.QUOTA_EXCEEDED, message: err.message };
   }
-  if (err instanceof EvalSuiteInputError || err instanceof DraftCheckFailedError) {
+  if (
+    err instanceof EvalSuiteInputError ||
+    err instanceof DraftCheckFailedError ||
+    err instanceof EvaluationReviewRequiredError
+  ) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   if (
+    err instanceof EvaluationChangedError ||
     err instanceof EvalSkillNotADraftError ||
     err instanceof EvalSuiteStateError ||
     err instanceof EvalSuiteNameTakenError ||

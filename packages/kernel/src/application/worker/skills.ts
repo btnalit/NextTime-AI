@@ -19,6 +19,7 @@ import { assertDraftCredentialsReviewed } from '../../governance/redaction/index
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { projectSkillObject } from '../../substrate/ontology/index.js';
+import { assertDraftNotEvaluating } from './draft-evaluating.js';
 import { type DraftViewer, draftVisibilityBinds, draftVisibleTo } from './draft-visibility.js';
 import { assertNoPendingDraft, familyVersionDigest, readFamilyHead } from './family-version.js';
 import { assertFamilyPublishAuthority } from './publish-family.js';
@@ -392,7 +393,8 @@ export function skillReviewContent(row: SkillRow): unknown {
  *  (`SkillNameConflictError`), sets `published_by`/`published_at`, and projects the Skill into the
  *  graph (`substrate/ontology`'s `projectSkillObject`) so `find_procedures`/`list_skills` and a
  *  future WorkerDefinition's `uses` resolution (`application/task/spawn.ts`) have something to
- *  find. Under `lockWorkerRegistry`, taken first.
+ *  find. Refuses (`DraftEvaluatingError`) while an evaluation of the draft runs. Under
+ *  `lockWorkerRegistry`, taken first.
  *
  *  `actor` (D-24): the `publish_skill` caller — `actor.principalId` is `publisherPrincipalId` —
  *  checked against the locked row (`requireSkillAuthority`) and against the family's live
@@ -418,6 +420,9 @@ export async function publishSkill(
     skillDraftDigest(row),
   );
   transition(PUBLISHABLE_TRANSITIONS, row.status, 'publish');
+  // S10 E3-3: an evaluation of this draft still running has not given its evidence yet — publish
+  // once it ends, or cancel it (as discard and reject wait).
+  await assertDraftNotEvaluating(client, workspaceId, row);
   await assertFamilyPublishAuthority(client, workspaceId, {
     table: 'skills',
     action: 'publish_skill',

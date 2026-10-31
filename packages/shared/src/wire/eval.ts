@@ -767,6 +767,130 @@ export const DraftCheckProblemWireSchema = z
   .strict();
 export type DraftCheckProblemWire = z.infer<typeof DraftCheckProblemWireSchema>;
 
+// ----- publish evidence (S10 E3-3) ------------------------------------------------------------
+
+/**
+ * The verdicts whose failures whoever publishes the draft acknowledges one by one, each with a
+ * reason, kept in the publish's audit record (docs/s10-evolution-plan-2026-10-04.md §5.5 结果去哪,
+ * victor 2026-10-23 分叉 2 = b, as 「已核对凭据」): `regressed` — the regression cases it lost;
+ * `worse` — the dev cases of the confirmation it passed less often than the baseline. Every other
+ * verdict is shown, never confirmed (`inconclusive` says the evidence cannot show it is no worse).
+ * Evaluation gives evidence; it never publishes, nor stops anyone publishing.
+ */
+export const PUBLISH_ACKNOWLEDGED_VERDICTS = [
+  'regressed',
+  'worse',
+] as const satisfies readonly DraftEvaluationVerdict[];
+
+/** Whether whoever publishes acknowledges the failures of an evaluation with `verdict`. */
+export function publishAcknowledgesVerdict(verdict: DraftEvaluationVerdict | null): boolean {
+  return verdict !== null && (PUBLISH_ACKNOWLEDGED_VERDICTS as readonly string[]).includes(verdict);
+}
+
+/** The verdicts a family's history of drafts that did not hold shows (`familyHistory`). */
+export const FAMILY_HISTORY_VERDICTS = [
+  'refuted',
+  'regressed',
+  'worse',
+] as const satisfies readonly DraftEvaluationVerdict[];
+
+/** A finished evaluation of the draft as its publish review reads it: in brief, with the stage
+ *  that decided its verdict (each case's tries, what the stage's rule measured) and both arms'
+ *  trials over every stage that ran (their cost and tokens: what the draft costs against the
+ *  baseline). */
+export const DraftEvaluationEvidenceWireSchema = DraftEvaluationSummaryWireSchema.extend({
+  /** `null` only when the evaluation names no deciding stage. */
+  decidingStage: DraftEvaluationStageWireSchema.nullable(),
+  baselineTotal: DraftEvaluationArmTallyWireSchema,
+  candidateTotal: DraftEvaluationArmTallyWireSchema,
+}).strict();
+export type DraftEvaluationEvidenceWire = z.infer<typeof DraftEvaluationEvidenceWireSchema>;
+
+/** One failure whoever publishes acknowledges (`PUBLISH_ACKNOWLEDGED_VERDICTS`): a case of the
+ *  stage that decided `evaluationId`'s verdict, and both arms' tries on it. */
+export const PublishAcknowledgementItemWireSchema = z
+  .object({
+    evaluationId: z.string(),
+    caseId: z.string(),
+    title: z.string(),
+    split: EvalCaseSplitSchema,
+    stage: z.enum(['regression', 'confirm']),
+    baseline: DraftEvaluationArmTallyWireSchema,
+    candidate: DraftEvaluationArmTallyWireSchema,
+  })
+  .strict();
+export type PublishAcknowledgementItemWire = z.infer<typeof PublishAcknowledgementItemWireSchema>;
+
+/** What became of the draft an evaluation evaluated: its version still holds that very content,
+ *  the same draft digest (`draft`, `published`, `deprecated`), or the draft is gone — `rejected`
+ *  by a reviewer (`reject_draft`), else `discarded` by its proposer or expired. */
+export const SKILL_PUBLISH_CANDIDATE_STATE_VALUES = [
+  'draft',
+  'published',
+  'deprecated',
+  'rejected',
+  'discarded',
+] as const;
+export const SkillPublishCandidateStateSchema = z.enum(SKILL_PUBLISH_CANDIDATE_STATE_VALUES);
+export type SkillPublishCandidateState = z.infer<typeof SkillPublishCandidateStateSchema>;
+
+/** An evaluation of another version of the family, in a publish's evidence. */
+export const SkillPublishFamilyEntryWireSchema = DraftEvaluationSummaryWireSchema.extend({
+  candidateState: SkillPublishCandidateStateSchema,
+}).strict();
+export type SkillPublishFamilyEntryWire = z.infer<typeof SkillPublishFamilyEntryWireSchema>;
+
+/**
+ * What a Skill draft's evaluations say to whoever publishes it (§5.6 发布审阅) — read with
+ * `get_skill_publish_evidence` for the draft as reviewed, `(skillId, version, draftDigest)`, so
+ * every evaluation here evaluated exactly this content (I-E3). `publish_skill` reads it again when
+ * it publishes, and checks what the caller reviewed against it.
+ */
+export const SkillPublishEvidenceWireSchema = z
+  .object({
+    /** The draft's finished evaluations, newest first: the last 20, and every older one whose
+     *  verdict is in `PUBLISH_ACKNOWLEDGED_VERDICTS` (its failures are still acknowledged). The
+     *  first is the evidence, the one `publish_skill`'s `evaluationReview.evaluationId` names. */
+    evaluations: z.array(DraftEvaluationEvidenceWireSchema),
+    /** One of the draft's evaluations runs now: `publish_skill` refuses (409 draft_evaluating)
+     *  until it ends or is cancelled. */
+    runningEvaluationId: z.string().nullable(),
+    /** Every failure to acknowledge: each case of each evaluation above whose verdict is in
+     *  `PUBLISH_ACKNOWLEDGED_VERDICTS` — a later evaluation of the same content does not take an
+     *  earlier one's failures away. */
+    acknowledge: z.array(PublishAcknowledgementItemWireSchema),
+    /** The evaluations that found another version of the family `refuted`, `regressed` or
+     *  `worse` (`FAMILY_HISTORY_VERDICTS`), newest first (the last 10), each with what became of
+     *  the draft it evaluated — published versions included (#842 UX P2-1). */
+    familyHistory: z.array(SkillPublishFamilyEntryWireSchema),
+  })
+  .strict();
+export type SkillPublishEvidenceWire = z.infer<typeof SkillPublishEvidenceWireSchema>;
+
+/** One acknowledged failure in `publish_skill`'s `evaluationReview`: the case, and why the draft
+ *  is published anyway — kept in the audit record. */
+export const PublishAcknowledgementSchema = z
+  .object({
+    evaluationId: z.guid(),
+    caseId: z.guid(),
+    reason: z.string().trim().min(1).max(500),
+  })
+  .strict();
+export type PublishAcknowledgement = z.infer<typeof PublishAcknowledgementSchema>;
+
+/** `publish_skill`'s `evaluationReview`: the evidence the caller reviewed — the first of
+ *  `SkillPublishEvidenceWire.evaluations`, `null` for none — and its failures acknowledged. The
+ *  acknowledgements have no count of their own: the evidence decides how many there are, and a cap
+ *  here would leave a draft with more failures than it unpublishable (the request's size limit is
+ *  the only bound). */
+export const PublishEvaluationReviewSchema = z
+  .object({
+    evaluationId: z.guid().nullable(),
+    acknowledgements: z.array(PublishAcknowledgementSchema).optional(),
+  })
+  .strict();
+export type PublishEvaluationReview = z.infer<typeof PublishEvaluationReviewSchema>;
+
 // ----- seal holds (S10 E3-2c) -----------------------------------------------------------------
 
 /**

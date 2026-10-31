@@ -204,6 +204,8 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   evaluation_budget_insufficient: 'Not enough evaluation budget',
   draft_check_failed: 'The draft did not pass the check',
   draft_evaluating: 'The draft is being evaluated',
+  evaluation_changed: 'The evaluation evidence changed',
+  evaluation_review_required: 'Failures to acknowledge first',
   // `PrincipalOperationRefusedError`'s reasons (`principalRefusalCode`); `last_owner` and
   // `self_disable` are platform-plane codes too.
   ...PRINCIPAL_REFUSAL_TITLES,
@@ -299,6 +301,8 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   evaluation_budget_insufficient: '评测预算不够',
   draft_check_failed: '草稿没有通过检查',
   draft_evaluating: '草稿正在评测',
+  evaluation_changed: '评测证据变了',
+  evaluation_review_required: '有失败要先逐条确认',
   ...PRINCIPAL_REFUSAL_TITLES_ZH,
   unknown: '出错了',
 };
@@ -698,8 +702,18 @@ export const ERROR_NEXT_STEPS: Readonly<
     en: 'The draft did not pass the check before an evaluation (a credential-like value, a platform id, too long, the same as its baseline, too many changes, or text evaluation keeps back), so nothing was started. Open Evaluate on the Skill draft to see which, fix the draft, then evaluate it again.',
   },
   draft_evaluating: {
-    zh: '这个草稿正在评测，评测结束或取消之前不能丢弃、拒绝它，也不能再开一次评测，什么也没有改。到「评测 → 草稿评测」查看进度，需要的话在那里取消。',
-    en: 'This draft is being evaluated: until the evaluation ends or is cancelled it cannot be discarded, rejected or evaluated again, and nothing changed. See its progress under Evaluation → Draft evaluations, and cancel it there if you need to.',
+    zh: '这个草稿正在评测，评测结束或取消之前不能发布、丢弃、拒绝它，也不能再开一次评测，什么也没有改。到「评测 → 草稿评测」查看进度，需要的话在那里取消。',
+    en: 'This draft is being evaluated: until the evaluation ends or is cancelled it cannot be published, discarded, rejected or evaluated again, and nothing changed. See its progress under Evaluation → Draft evaluations, and cancel it there if you need to.',
+  },
+  // S10 E3-3a: the publish named evidence that is no longer the draft's newest evaluation, or left
+  // a failure of a regressed / worse evaluation unacknowledged.
+  evaluation_changed: {
+    zh: '这份草稿的评测证据在你看过之后变了（又有一次评测结束），没有发布。看过 Skill 草稿详情「发布审阅」里最新的评测证据后再发布。',
+    en: 'This draft’s evaluation evidence changed after you looked at it (another evaluation ended), so nothing was published. Look over the newest evidence under Publish review on the Skill draft, then publish.',
+  },
+  evaluation_review_required: {
+    zh: '这份草稿的评测发现了失败（「有回归」或「差于基线」），发布前要逐条写下为什么仍然发布，没有发布。在 Skill 草稿详情点「发布」，逐条写好理由后再发布。',
+    en: 'This draft’s evaluations found failures (Regressed or Worse): each is acknowledged with why it is published anyway before a publish, so nothing was published. Use Publish on the Skill draft, give each a reason, then publish.',
   },
   ...PRINCIPAL_REFUSAL_NEXT_STEPS,
 };
@@ -1033,6 +1047,14 @@ export function isDraftChangedError(err: unknown): boolean {
  *  now (`version_changed`) — nothing was written, and the reader needs the current one. */
 export function isVersionChangedError(err: unknown): boolean {
   return describeError(err).code === 'version_changed';
+}
+
+/** S10 E3-3a: a Skill publish refused because the draft's evaluation evidence moved on after it
+ *  was reviewed — another evaluation ended (`evaluation_changed`) or one runs now
+ *  (`draft_evaluating`). Nothing was published; the evidence is read again. */
+export function isEvidenceMovedError(err: unknown): boolean {
+  const code = describeError(err).code;
+  return code === 'evaluation_changed' || code === 'draft_evaluating';
 }
 
 /** `gatekeeper_timeout` → `Gatekeeper timeout` for codes this file has no curated title for. */

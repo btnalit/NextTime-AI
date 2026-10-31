@@ -38,6 +38,8 @@ import {
   EvalSuiteStateError,
   EvaluationBudgetExhaustedError,
   EvaluationBudgetInsufficientError,
+  EvaluationChangedError,
+  EvaluationReviewRequiredError,
 } from '../../application/eval/index.js';
 import { GateInstanceNotAvailableError } from '../../application/gateway/gate-instance-handlers.js';
 // NoActiveTurnError/TurnNotFoundError are exported from handlers.ts itself but not re-exported by
@@ -837,6 +839,19 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof EvalSkillNotADraftError) {
     return { status: 409, code: err.code, message: err.message };
+  }
+  // E3-3: a publish made on other evidence than the draft has now — the latest evaluation in
+  // `details`; failures of a regressed / worse evaluation not acknowledged — each in `details.items`.
+  if (err instanceof EvaluationChangedError) {
+    return { status: 409, code: err.code, message: err.message, details: { ...err.details } };
+  }
+  if (err instanceof EvaluationReviewRequiredError) {
+    return {
+      status: 400,
+      code: err.code,
+      message: err.message,
+      details: { items: err.details.items.map((item) => ({ ...item })) },
+    };
   }
   if (err instanceof EvalSuiteStateError) {
     return { status: 409, code: 'conflict', message: err.message };
