@@ -134,6 +134,51 @@ export const StepBindingSchema = z
 
 export type StepBinding = z.infer<typeof StepBindingSchema>;
 
+/** S11 GO8a: the longest responsibility statement a WorkerSpec adds to its base's prompt. */
+export const MAX_WORKER_SPEC_INSTRUCTIONS_CHARS = 8000;
+/** S11 GO8a: entries one WorkerSpec list (Skills, gates, capabilities, observation scope) holds at
+ *  most. */
+export const MAX_WORKER_SPEC_LIST = 64;
+/** S11 GO8a: the most tokens a WorkerSpec may cap one attempt of its step at. */
+export const MAX_WORKER_SPEC_TOKEN_BUDGET = 10_000_000;
+
+const WorkerSpecRefSchema = z.string().trim().min(1).max(200);
+
+/**
+ * S11 GO8a (plan §3.1, §4.4, I-G8): the Worker one step wants this time — its plan entry's
+ * `worker` (a published WorkerDefinition) as the base, with what this step sets differently. Each
+ * field present replaces the base's: `instructions` is added after the base's system prompt (it
+ * never replaces it); `skills` (published names or ids, as a WorkerDefinition names them),
+ * `gates`, `capabilities` and `model` replace the base's lists and model; `observeScope` is the
+ * gates the step's Task may observe (S11 GO11, `tasks.observe_scope`); `tokenBudget` caps each
+ * attempt of the step below what is left of the goal's budget.
+ *
+ * A WorkerSpec is never published and never reused: GO16 proposes a combination that kept working
+ * as a WorkerDefinition. Whether a step with one may start is the kernel's admission
+ * (`application/task/step-attempt.ts`): what it runs with never goes beyond the Worker ceiling and
+ * what the requester holds, whatever the WorkerSpec says.
+ */
+export const WorkerSpecSchema = z
+  .object({
+    instructions: z
+      .string()
+      .max(MAX_WORKER_SPEC_INSTRUCTIONS_CHARS)
+      .regex(/\S/, 'says nothing')
+      .optional(),
+    skills: z.array(WorkerSpecRefSchema).max(MAX_WORKER_SPEC_LIST).optional(),
+    gates: z.array(z.guid()).max(MAX_WORKER_SPEC_LIST).optional(),
+    capabilities: z.array(WorkerSpecRefSchema).max(MAX_WORKER_SPEC_LIST).optional(),
+    model: WorkerSpecRefSchema.optional(),
+    observeScope: z.array(z.guid()).max(MAX_WORKER_SPEC_LIST).optional(),
+    tokenBudget: z.number().int().positive().max(MAX_WORKER_SPEC_TOKEN_BUDGET).optional(),
+  })
+  .strict()
+  .refine((spec) => Object.values(spec).some((value) => value !== undefined), {
+    message: 'sets nothing — leave the spec out to run the Worker as it is',
+  });
+
+export type WorkerSpec = z.infer<typeof WorkerSpecSchema>;
+
 export const PlanStepSchema = z
   .object({
     key: StepKeySchema,
@@ -143,6 +188,8 @@ export const PlanStepSchema = z
         version: z.number().int().positive(),
       })
       .strict(),
+    /** S11 GO8a: what this step's Worker sets differently from `worker`. */
+    spec: WorkerSpecSchema.optional(),
     input: z.unknown().optional(),
     dependsOn: z.array(StepKeySchema).max(MAX_PLAN_STEPS).optional(),
     nested: z.boolean().optional(),
@@ -206,7 +253,21 @@ export type GoalPlan = z.infer<typeof GoalPlanSchema>;
  *         that run in `connected_account` mode on which the requester has not connected their own
  *         account (`gatekeeperIds`): the gate would refuse the step's calls
  *         (`credential_unavailable`). Asked of the gate, and only in a read served to a person —
- *         never in a result an agent or a Handle receives.
+ *         never in a result an agent or a Handle receives;
+ *   - S11 GO8a, what the admission of a step's WorkerSpec says (I-G8): `step_gate_not_held` and
+ *     `step_capability_not_held` above cover the gates and capabilities its WorkerSpec sets, and
+ *     besides:
+ *       - `step_skill_draft` — it names Skills that are only drafts (`skillRefs`): the step waits
+ *         for approval and does not start (S11 GO8b approves one trial);
+ *       - `step_skill_deprecated` — it names Skills whose published versions were all deprecated
+ *         (`skillRefs`): refused until the plan names others;
+ *       - `step_model_not_allowed` — the model it sets is not one the workspace allows (`model`):
+ *         refused until the plan names another.
+ *     Worked out on every read like the others: authority and Skills change, and the attempt's own
+ *     admission when the step starts decides (`application/task/step-attempt.ts`).
+ *   Where they appear: every hint but `requester_confirm_only` is on the proposal of a run still
+ *   proposed and — S11 GO8a — on the current revision of a paused run, for its steps that have not
+ *   started an attempt, so a pause can say which step would not start and why.
  */
 export const PLAN_HINT_CODE_VALUES = [
   'requester_confirm_only',
@@ -215,6 +276,9 @@ export const PLAN_HINT_CODE_VALUES = [
   'step_capability_not_held',
   'step_definition_excluded',
   'step_account_not_connected',
+  'step_skill_draft',
+  'step_skill_deprecated',
+  'step_model_not_allowed',
 ] as const;
 export type PlanHintCode = (typeof PLAN_HINT_CODE_VALUES)[number];
 export const PlanHintCodeSchema = z.enum(PLAN_HINT_CODE_VALUES);
@@ -231,6 +295,11 @@ export const PlanHintSchema = z
     /** The execute-class capabilities a `step_capability_not_held` step declares and the
      *  requester does not hold. */
     capabilityNames: z.array(z.string()).optional(),
+    /** S11 GO8a: the Skills a `step_skill_draft` / `step_skill_deprecated` step's WorkerSpec names,
+     *  as it names them. */
+    skillRefs: z.array(z.string()).optional(),
+    /** S11 GO8a: the model a `step_model_not_allowed` step's WorkerSpec sets. */
+    model: z.string().optional(),
   })
   .strict();
 export type PlanHint = z.infer<typeof PlanHintSchema>;

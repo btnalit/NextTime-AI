@@ -67,6 +67,7 @@ export {
   assertSkillNameAvailable,
   deprecatePublishedSkillVersion,
   deprecateSkill,
+  classifySkillRefs,
   getSkill,
   latestPublishedSkills,
   listPublishedSkillIds,
@@ -86,7 +87,13 @@ export {
   SkillNotFoundError,
   SkillValidationError,
 } from './skills.js';
-export type { ListSkillsFilter, ProposeSkillInput, SkillRow, SkillsPage } from './skills.js';
+export type {
+  ListSkillsFilter,
+  ProposeSkillInput,
+  SkillRefStatus,
+  SkillRow,
+  SkillsPage,
+} from './skills.js';
 
 export {
   deprecateProcedure,

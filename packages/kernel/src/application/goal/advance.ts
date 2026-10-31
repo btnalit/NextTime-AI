@@ -172,7 +172,9 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *      authority pauses `authority_lost` (S9, I-G7); a pinned component no longer published
  *      pauses `needs_decision`, and so does an evaluation seal pause of the requester's agents
  *      (S10 E3-2c: their Worker start would be refused — a person decides once the workspace
- *      owner released it).
+ *      owner released it), and so does a WorkerSpec its admission does not let run (S11 GO8a: a
+ *      draft Skill waits for a person's approval, a deprecated Skill or a model the workspace
+ *      does not allow is refused until the plan changes).
  *   E. **Stuck** (running only; legacy 393). No live step is ready, running or waiting, none failed
  *      `transient` or due its rework (phase B starts those or pauses), and one failed for a
  *      person — a category the advancer never retries (or a contract violation after its rework):
@@ -402,6 +404,7 @@ export function refusalPause(refusal: StepAttemptRefusal): GoalRunPauseReason | 
     case 'authority_lost':
       return 'authority_lost';
     case 'unavailable':
+    case 'admission':
     case 'paused':
       return 'needs_decision';
     case 'quota':
@@ -1207,6 +1210,7 @@ class Advance {
       planRevision: currentRevision,
       stepAttempt: attempt,
       worker: entry.worker,
+      spec: entry.spec ?? null,
       input: input.input,
       outputSchema: entry.outputSchema ?? null,
       reworkOf,

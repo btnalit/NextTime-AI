@@ -68,6 +68,7 @@ import { shownFreeText, shownFreeTextIn } from '../../governance/redaction/index
 import { hashStableParams, scopeExplicitIdempotencyKey } from './action-executor.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 import { servesPerson } from './credential-presence.js';
+import { readModelCatalog } from './models-catalog-handler.js';
 
 /**
  * application/gateway/goal-handlers (S11 GO5a): the `goal` reads — `get_goal`, `list_goals`,
@@ -523,6 +524,7 @@ export const proposeGoalHandler: CapabilityHandler = async (client, workspaceId,
     maxProposed: maxProposedGoalsPerRequester(process.env.GOAL_MAX_PROPOSED_PER_REQUESTER),
     // Legacy 513: an agent proposing through its Handle never learns who connected which account.
     checkAccounts: servesPerson(ctx),
+    modelCatalog,
     ...(turn?.wasRunning ? { originatedInTurnId: turn.id } : {}),
   });
   const result: ProposeGoalResultWire = {
@@ -535,6 +537,14 @@ export const proposeGoalHandler: CapabilityHandler = async (client, workspaceId,
   return { result, ...onRun(proposed.goalRunId) };
 };
 
+/** S11 GO8a: the models a step's WorkerSpec may set — the llm-proxy catalog, read the way legacy
+ *  302's publish check reads it (unreadable: 503, never stored unchecked). */
+async function modelCatalog(): Promise<ReadonlySet<string>> {
+  return new Set(
+    (await readModelCatalog(process.env, { withHealth: false })).map((entry) => entry.id),
+  );
+}
+
 export const confirmGoalHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { goalRunId, revision } = params as { goalRunId: string; revision: number };
   const actor = await actorOnVisibleRun(client, workspaceId, 'confirm_goal', ctx, goalRunId);
@@ -542,6 +552,7 @@ export const confirmGoalHandler: CapabilityHandler = async (client, workspaceId,
     goalRunId,
     revision,
     confirmedBy: actor.principalId,
+    modelCatalog,
   });
   const result: ConfirmGoalResultWire = {
     goalRunId,
@@ -631,6 +642,7 @@ export const reviseGoalHandler: CapabilityHandler = async (client, workspaceId, 
     ...(input.budget !== undefined ? { budget: input.budget } : {}),
     ...(input.removals !== undefined ? { removals: input.removals } : {}),
     checkAccounts: servesPerson(ctx),
+    modelCatalog,
   });
   const result: ReviseGoalResultWire = {
     goalRunId: input.goalRunId,

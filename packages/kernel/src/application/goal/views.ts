@@ -331,21 +331,50 @@ async function planRevisionView(
   }
   const plan = parsed.data;
   // S11 GO5c: the proposal of a run still proposed is what the confirmation card shows — with what
-  // the requester's authority would stop now, worked out on every read (`precheck.ts`).
-  const proposal = goal.status === 'proposed' && revision.revision === 1;
+  // the requester's authority would stop now, worked out on every read (`precheck.ts`). S11 GO8a:
+  // so is the revision in force of a paused run, for the steps that have not started an attempt —
+  // the pause then says which step would not start, and why (a draft Skill waiting for a person,
+  // a gate the requester lost).
+  const checked = await stepsToCheck(client, workspaceId, goal, revision, plan);
   return {
     revision,
     plan: planAsRead(plan),
     hints: [
       ...planHints(plan),
-      ...(proposal
-        ? await planAuthorityHints(client, workspaceId, goal.onBehalfOf, plan, {
-            checkAccounts: options.checkAccounts === true,
-          })
+      ...(checked.length > 0
+        ? await planAuthorityHints(
+            client,
+            workspaceId,
+            goal.onBehalfOf,
+            { ...plan, steps: checked },
+            { checkAccounts: options.checkAccounts === true },
+          )
         : []),
     ],
     source: await planSourceOf(client, workspaceId, revision),
   };
+}
+
+/** The steps of `plan` whose authority and admission a read of `revision` works out: every step of
+ *  a run's proposal while it is proposed; for a paused run's revision in force, the steps whose
+ *  StepRun there has not started an attempt (`pending` or `ready`); none otherwise. */
+async function stepsToCheck(
+  client: PoolClient,
+  workspaceId: string,
+  goal: GoalRunRow,
+  revision: PlanRevisionRow,
+  plan: GoalPlan,
+): Promise<GoalPlan['steps']> {
+  if (goal.status === 'proposed') return revision.revision === 1 ? plan.steps : [];
+  if (goal.status !== 'paused' || revision.revision !== goal.currentRevision) return [];
+  const notStarted = new Set(
+    (await listStepRuns(client, workspaceId, goal.id))
+      .filter(
+        (step) => step.attemptCount === 0 && (step.status === 'pending' || step.status === 'ready'),
+      )
+      .map((step) => step.stepKey),
+  );
+  return plan.steps.filter((step) => notStarted.has(step.key));
 }
 
 /** `params` with each suspected credential replaced — see the module comment. */
