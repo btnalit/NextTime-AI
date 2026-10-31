@@ -4646,6 +4646,13 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **控制台**：草稿详情「发布审阅」区（证据卡、早前待确认评测、同族不利评测）；有失败时发布先开确认框，按评测分组、每条写理由；被拒时确认框与已写理由保留并原地说明证据怎么变了；评测进行中提交等待；凭据确认在确认框里回答。
   - **审查**：#493 通过（O1 `acknowledged` 移到外层、P3 `candidateState` 改按摘要匹配，均在 PR 修）；UX 有条件通过后复验通过（同族历史把已发布版本算作没站住的改法的 P2 与四条 P3 在 PR 修；遗留 539）。PR 里的五条默认协调线程 10-31 确认，无改动。
   - **下一步**：E3-3b（图上一条评测摘要 Observation 作为草稿的 Evidence，agent 侧只看 dev 的结论）。不需要真实模型核对。
+- 实现说明（E3-3b 评测摘要进图与 agent 侧 dev 结论，#845，2026-10-31 合入，6e3b0d9；迁移 worker/0012 可逆）：
+  - **迁移**：`eval_draft_evaluations.summary_observation_id`（外键 → `observations`）与 `dev_verdict`，同有同无、只有 `finished` 能有值；0010 守卫已禁止结束后再改，所以只有结束评测的那次 update 写它们；不要求已结束的行有值（不回填，上一版也不写），迁移可逆。新外键加进 `compact-observations.ts` 的条件 (a)，配部分索引与压缩测试，`reversibility-deltas.json` 声明只回退代码时上一版压缩拒绝运行（8 条上一版压缩测试在新 schema 上因此失败，本地已复现）。
+  - **dev 结论**（`verdict.ts` `devVerdictOf`）：按实际跑过的阶段依次只取 dev 试跑重读；先查任一组无结果超 1/4，再按阶段规则判（回归输掉 dev 回归用例 `regressed`，机制没证实 `refuted`，确认段 `confirmOnDev` 判 worse / better / non_inferior / inconclusive，不做 holdout 一步）；无 dev 试跑的阶段略过；评测 `unmeasured` 时 dev 也是 `unmeasured`，`contaminated` 时 dev 给 `inconclusive`（协调同意的偏离）。`ruleOutcome` 的确认分支改为复用 `confirmOnDev`，人看到的结论不变。
+  - **摘要 Observation**（`eval/summary.ts`）：结束评测的同一事务里由试跑 tick 以评测服务主体写，Activity `kind=evaluation`，Source 为工作区私有的 `evaluation` Source；取消与单条试跑不写。
+  - **`get_skill_draft_verdicts`**：Handle 通道，读在 `application/worker/draft-verdicts.ts`、只读 0012 的列，不经 `application/eval`（depcruise 不改）；只列 `candidate_proposed_by` 为调用方（或它代表的人）且已结束、有 dev 结论的评测，最新 20 条带 `truncated`，不带时间、不列进行中（#493 P3：轮询 running 能推出跑到哪一阶段）。残余信息（`inconclusive` 可能意味着在确认段前因 holdout、污染或预算停下）#493 已审接受。
+  - **审查**：#488 通过（只看 worker/0012 回滚面）、#493 通过、UX 通过（「智能体」用词与英文大小写两条 P3 在 PR 修）。无新遗留。
+  - **下一步**：E3-3 完成（#842 + #845），切 v0.52.0；主机暂不升级（维护者 10-31）。
 - 2026-10-23 设计输入（victor 定分叉 2 = b，与自进化闭环审查 §2.3–§2.5、§7.1）：回归断言失败或判 `worse` 时，发布人要逐条确认失败项并写理由，记审计（同 10-09「已核对凭据」）；`inconclusive` 只显示、不加确认（避免确认疲劳）；按每月测试额度，MVP 主力是确定性回归棘轮 + 大效应机制筛，样本不够判 `inconclusive`，不显示成「在噪声内」；δ 与 k 改为在夹具上做 A/A 重跑校准（主机只有验收账号，遗留 230）。
 
 **GO16 — 沉淀提议：WorkerSpec 组合提议为 WorkerDefinition**（见 `global-roadmap-2026-10-16.md` §4）
