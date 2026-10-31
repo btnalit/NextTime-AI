@@ -35,17 +35,18 @@
 --
 -- No backfill: no release before this one admits a draft Skill (GO8a refuses it, `needs_approval`).
 --
--- Rolling back (docs/runbooks/release.md §6): code only. The previous release never reads or writes
--- the new table, and its admission refuses every draft Skill as before, so a step approved here
--- waits for a person again (`needs_approval`) after a code-only rollback; one whose attempt already
--- started under this release keeps running, and its retries are refused there — that release
--- mounts only published Skill versions from a snapshot (`resolvePinnedSkillsInline`), and the goal
--- pauses `needs_decision` for a person. The previous release's snapshot parser is strict and does
--- not know the snapshot's new `trial` field, so it reads such an attempt's snapshot as unreadable
--- and pauses the run the same way. The table's foreign keys point at `goal_runs`, `step_runs` and
--- `principals` only (nothing points at it), so purging a workspace orders it before them. To drop
--- the schema too: `drop table goal_step_trial_approvals` (its trigger and function with it, then
--- `drop function goal_step_trial_approvals_guard()`).
+-- Rolling back (docs/runbooks/release.md §6): code only. Code without this migration never reads or
+-- writes the new table and never mounts a draft Skill (with GO8a, its admission refuses one,
+-- `needs_approval`; before GO8a a step has no WorkerSpec — see GO8a's own rollback note), so a step
+-- approved here and not started yet never mounts its drafts after a code-only rollback. One whose
+-- attempt already started under this release keeps running, and its retries are refused there:
+-- that code mounts only published Skill versions from a snapshot (`resolvePinnedSkillsInline`),
+-- and its strict snapshot parser does not know the snapshot's new `trial` field, so it reads such
+-- an attempt's snapshot as unreadable and pauses the run `needs_decision` for a person. The
+-- table's foreign keys point at `goal_runs`, `step_runs` and `principals` only (nothing points at
+-- it), so purging a workspace orders it before them. To drop the schema too: `drop table
+-- goal_step_trial_approvals` (its trigger with it), then `drop function
+-- goal_step_trial_approvals_guard()`.
 --
 -- Cross-process bootstrap lock: same `goal`-module key as 0001–0012.
 select pg_advisory_xact_lock(7241000701);
