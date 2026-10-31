@@ -1965,6 +1965,22 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **快照**：运行配置快照升 v2（多 `spec`），v1 照样能读。
 - **回滚**：只回退代码即可，无数据变化。**回退到本版之前时，旧代码读不出 v2 快照，有过尝试的步骤会暂停 `needs_decision`（"no readable configuration snapshot"）**：安全失败，不起 Worker；重新应用本版后可「继续」。发版说明里提一句。
 
+### 3.83 草稿 Skill 试用批准（#855，goal 0013，S11 GO8b，v0.52.0 之后的下一版起）
+
+带一个 goal 迁移（`0013_step_trial_approvals`），随 `apply-release.sh` 的迁移步骤自动应用；不改 compose、无单独主机步骤、无新环境变量；窗口前只读检查：无。
+
+- **迁移做什么**：新表 `goal_step_trial_approvals`（一次批准一行，只追加、不删除），外键指向 `goal_runs`、`step_runs`、`principals`，没有表指向它；guard 触发器限定只能在目标 `proposed` / `paused` 时、由本工作区未停用的人写入，之后冻结（提议时的批准只在第一次尝试开始时补一次 StepRun）。不回填：之前的版本一律拒绝草稿 Skill。
+- **发版说明可写**：目标的某一步用到还只是草稿的 Skill 时，能发布这些草稿的人（提议人或工作区所有者）可以在目标页「批准试用」：这一步的第一次尝试与重试挂载批准的草稿版本，草稿一改、修订替换这一步或目标结束则批准失效；批准不会让目标继续，仍由请求人按「继续」。新能力 `approve_step_trial`（人工通道，builder 起，agent 与服务账号不能调用），`get_goal` 新增 `trialApprovals`，新审计动作 `step_trial.approve`。
+- **回滚**：只回退代码即可（§6）。GO8a 与本项进同一版，回退到 v0.52.0 时 §3.82 的说明照样适用。不带本项的代码不读写新表，也不会让草稿 Skill 进 Worker（有 GO8a 时准入照旧 `needs_approval`），所以已批准、还没开始的步骤不会挂草稿；已经在本版用草稿开始的尝试继续跑完，它的重试在回退后被拒（只从快照挂已发布版本，且不认识快照里的 `trial` 字段），目标暂停为「需要决定」。清除工作区时新表排在三个父表之前。要连 schema 一起撤：`drop table goal_step_trial_approvals`（触发器随表删除）、`drop function goal_step_trial_approvals_guard()`，并 `delete from schema_migrations where module = 'goal' and version = 13`（不撤也无害；撤表会丢掉批准记录，`audit_records` 里的 `step_trial.approve` 仍在）。
+
+### 3.84 验收的 fake 路径让 kernel 读验收模型目录（#855 带入的验收修复，原 #856）
+
+不改生产 compose、无迁移、无新环境变量。
+
+- **窗口里的变化**：S1 / S2 / S3 的 fake 路径现在会在进入和退出时各重启一次 kernel（读验收的模型目录），窗口里跑验收时 kernel 有两次短暂重启。验收的 models.json 在 `${NEXTTIME_DATA}/accept/models/`，只读挂给 kernel 的 `/data/models`；不挂整个 accept 目录（llm-proxy 的 `keys.json` 在那里）。
+- **为什么**：#848 起 kernel 发布 WorkerDefinition 时按它挂载的模型目录校验模型，原来验收只把 llm-proxy 与 worker-supervisor 切到 fake 目录，S2 的 `ops-runner-publish` 会 400。
+- **注意**：退出时的 restore 也重建 kernel，这一步失败按 P1 处理（遗留 548 会写进 runbook）；带 `spec.model` 的生产目标运行在验收期间可能暂停（遗留 545）。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -2114,6 +2130,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.51.0 | worker `0010_draft_evaluations`（#833，S10 E3-2b）：新表 `eval_draft_evaluations`，`eval_runs.kind` 加 `draft`、`eval_trials.status` 加 `queued`，账本守卫与保护评测中草稿的触发器，不回填 | 可逆 | 只新增表与取值，旧代码读不了 `draft` 运行；回滚前草稿评测与排队、在跑试跑必须为 0（§3.77）；`purge_workspace` 清理新表 |
 | v0.52.0 | worker `0011_eval_seal_holds`（#838，S10 E3-2c）：新表 `eval_seal_hits`、`eval_seal_holds` 与守卫触发器，不回填 | 可逆 | 旧内核照常运行但不再执行生效中的暂停；回滚前按 §3.78 的顺序先处理 `active` 暂停；`purge_workspace` 清理两张新表 |
 | v0.52.0 | worker `0012_draft_evaluation_summary`（#845，S10 E3-3b）：`eval_draft_evaluations` 加 `summary_observation_id`（外键指向 `observations`）与 `dev_verdict` 两个可空列、两条约束与一个部分索引，不回填 | 可逆（代码回退期间观察压缩报 degraded） | 上一版不读写新列；代码回退期间 observations-compaction 安全失败、不删任何东西，重新应用后恢复（§3.80）；差异已在 `reversibility-deltas.json` 声明 |
+| v0.53.0 | goal `0013_step_trial_approvals`（#855，S11 GO8b）：新表 `goal_step_trial_approvals`（一次批准一行，只追加）与 guard 触发器，外键指向 `goal_runs`、`step_runs`、`principals`，不回填 | 可逆 | 回退后，用草稿开始过尝试的步骤再尝试时暂停 `needs_decision`（安全失败）；撤 schema：`drop table goal_step_trial_approvals`、`drop function goal_step_trial_approvals_guard()`，并 `delete from schema_migrations where module = 'goal' and version = 13`（§3.83） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
