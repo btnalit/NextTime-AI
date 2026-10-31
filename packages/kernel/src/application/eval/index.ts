@@ -11,8 +11,8 @@
  * (`draft-evaluations.ts`): a Skill draft against the version it would replace, stage by stage,
  * after a check of the draft (`draft-check.ts`); each stage's trials queued and started by
  * `dispatch.ts`, judged by `verdict.ts`. E3-2c adds the human side of the evaluation seal's pauses
- * (`seal-holds.ts`: list and release; `application/eval-seal` opens and checks them). Using a
- * verdict when publishing comes with E3-3.
+ * (`seal-holds.ts`: list and release; `application/eval-seal` opens and checks them). E3-3 makes a
+ * draft's evaluations the evidence its publish names and acknowledges (`publish-evidence.ts`).
  *
  * It owns `eval_suites`, `eval_suite_changes`, `eval_fixture_gates` (migrations/worker/0007 —
  * in the `worker` migration module only because they reference `worker_definitions` and modules
@@ -63,7 +63,12 @@ export {
   EvalSealHoldReleasedError,
   EvalSuiteStateError,
   EvaluationBudgetExhaustedError,
+  EvaluationChangedError,
+  EvaluationReviewRequiredError,
+  PublishAcknowledgementInputError,
 } from './errors.js';
+export type { PublishEvidenceAudit, PublishEvidenceTarget } from './publish-evidence.js';
+export { checkPublishEvidence, readSkillPublishEvidence } from './publish-evidence.js';
 export { EVALUATION_PRINCIPAL_DISPLAY_NAME } from './principal.js';
 export type { EvalTrialTickOptions } from './runner.js';
 export { EVALUATION_TRIAL_END_ACTION, runEvalTrialTick } from './runner.js';

@@ -187,3 +187,44 @@ export class EvalSealHoldReleasedError extends EvalSuiteStateError {
     this.name = 'EvalSealHoldReleasedError';
   }
 }
+
+/** 409 evaluation_changed (S10 E3-3, I-E3): the publish named other evidence than the draft has
+ *  now — an evaluation of it finished since it was reviewed. `details.evaluationId` is the latest
+ *  now (`null`: none). Nothing was published. */
+export class EvaluationChangedError extends Error {
+  readonly code = 'evaluation_changed' as const;
+  readonly details: { readonly evaluationId: string | null };
+  constructor(reviewed: string | null, current: string | null) {
+    super(
+      `the draft's evaluations changed since they were reviewed (reviewed ${reviewed ?? 'none'}, latest ${current ?? 'none'}) — read get_skill_publish_evidence again; nothing was published`,
+    );
+    this.name = 'EvaluationChangedError';
+    this.details = { evaluationId: current };
+  }
+}
+
+/** 400 evaluation_review_required (S10 E3-3, §5.5 逐条确认): failures of a `regressed` / `worse`
+ *  evaluation of the draft were not acknowledged with a reason — `details.items` names each. Nothing
+ *  was published. */
+export class EvaluationReviewRequiredError extends Error {
+  readonly code = 'evaluation_review_required' as const;
+  readonly details: {
+    readonly items: readonly { readonly evaluationId: string; readonly caseId: string }[];
+  };
+  constructor(items: readonly { readonly evaluationId: string; readonly caseId: string }[]) {
+    super(
+      `${items.length} failure(s) of the draft's evaluations need an acknowledgement with a reason (evaluationReview.acknowledgements) — nothing was published`,
+    );
+    this.name = 'EvaluationReviewRequiredError';
+    this.details = { items };
+  }
+}
+
+/** 400 invalid_params (S10 E3-3): an acknowledgement names no failure the draft's evaluations have,
+ *  or the same one twice. An `EvalSuiteInputError`, mapped as one. */
+export class PublishAcknowledgementInputError extends EvalSuiteInputError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PublishAcknowledgementInputError';
+  }
+}

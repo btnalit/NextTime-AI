@@ -22885,6 +22885,1308 @@
     "sideEffects": false
   },
   {
+    "actsForPerson": true,
+    "channel": "human",
+    "group": "evaluation",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "get_skill_publish_evidence",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "draftDigest": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "skillId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "skillId",
+        "version",
+        "draftDigest"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "acknowledge": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "baseline": {
+                "additionalProperties": false,
+                "properties": {
+                  "costUsd": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "errored": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "failed": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "open": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "passed": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "tokens": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "trials": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "voided": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "trials",
+                  "passed",
+                  "failed",
+                  "errored",
+                  "voided",
+                  "open",
+                  "costUsd",
+                  "tokens"
+                ],
+                "type": "object"
+              },
+              "candidate": {
+                "additionalProperties": false,
+                "properties": {
+                  "costUsd": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "errored": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "failed": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "open": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "passed": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "tokens": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "trials": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "voided": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "trials",
+                  "passed",
+                  "failed",
+                  "errored",
+                  "voided",
+                  "open",
+                  "costUsd",
+                  "tokens"
+                ],
+                "type": "object"
+              },
+              "caseId": {
+                "type": "string"
+              },
+              "evaluationId": {
+                "type": "string"
+              },
+              "split": {
+                "enum": [
+                  "dev",
+                  "holdout"
+                ],
+                "type": "string"
+              },
+              "stage": {
+                "enum": [
+                  "regression",
+                  "confirm"
+                ],
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "evaluationId",
+              "caseId",
+              "title",
+              "split",
+              "stage",
+              "baseline",
+              "candidate"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "evaluations": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "baseline": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "skillId": {
+                        "type": "string"
+                      },
+                      "version": {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "skillId",
+                      "version",
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "baselineTotal": {
+                "additionalProperties": false,
+                "properties": {
+                  "costUsd": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "errored": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "failed": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "open": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "passed": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "tokens": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "trials": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "voided": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "trials",
+                  "passed",
+                  "failed",
+                  "errored",
+                  "voided",
+                  "open",
+                  "costUsd",
+                  "tokens"
+                ],
+                "type": "object"
+              },
+              "cancelledBy": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "candidate": {
+                "additionalProperties": false,
+                "properties": {
+                  "draftDigest": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "skillId": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "skillId",
+                  "version",
+                  "name",
+                  "draftDigest"
+                ],
+                "type": "object"
+              },
+              "candidateTotal": {
+                "additionalProperties": false,
+                "properties": {
+                  "costUsd": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "errored": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "failed": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "open": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "passed": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "tokens": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "trials": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "voided": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "trials",
+                  "passed",
+                  "failed",
+                  "errored",
+                  "voided",
+                  "open",
+                  "costUsd",
+                  "tokens"
+                ],
+                "type": "object"
+              },
+              "costUsd": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "createdBy": {
+                "type": "string"
+              },
+              "decidedBy": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "regression",
+                      "mechanism",
+                      "confirm"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "decidingStage": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "baseline": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "costUsd": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "errored": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "failed": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "open": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "passed": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "tokens": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "trials": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "voided": {
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "trials",
+                          "passed",
+                          "failed",
+                          "errored",
+                          "voided",
+                          "open",
+                          "costUsd",
+                          "tokens"
+                        ],
+                        "type": "object"
+                      },
+                      "candidate": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "costUsd": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "errored": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "failed": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "open": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "passed": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "tokens": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "trials": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "voided": {
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "trials",
+                          "passed",
+                          "failed",
+                          "errored",
+                          "voided",
+                          "open",
+                          "costUsd",
+                          "tokens"
+                        ],
+                        "type": "object"
+                      },
+                      "caseCount": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "cases": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "baseline": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "costUsd": {
+                                  "type": [
+                                    "number",
+                                    "null"
+                                  ]
+                                },
+                                "errored": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "failed": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "open": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "passed": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "tokens": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "trials": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "voided": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "trials",
+                                "passed",
+                                "failed",
+                                "errored",
+                                "voided",
+                                "open",
+                                "costUsd",
+                                "tokens"
+                              ],
+                              "type": "object"
+                            },
+                            "candidate": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "costUsd": {
+                                  "type": [
+                                    "number",
+                                    "null"
+                                  ]
+                                },
+                                "errored": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "failed": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "open": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "passed": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "tokens": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "trials": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "voided": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "trials",
+                                "passed",
+                                "failed",
+                                "errored",
+                                "voided",
+                                "open",
+                                "costUsd",
+                                "tokens"
+                              ],
+                              "type": "object"
+                            },
+                            "caseId": {
+                              "type": "string"
+                            },
+                            "split": {
+                              "enum": [
+                                "dev",
+                                "holdout"
+                              ],
+                              "type": "string"
+                            },
+                            "title": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "caseId",
+                            "title",
+                            "split",
+                            "baseline",
+                            "candidate"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "estimateUsd": {
+                        "anyOf": [
+                          {
+                            "minimum": 0,
+                            "type": "number"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "k": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "measure": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "lostCaseIds": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  },
+                                  "stage": {
+                                    "const": "regression",
+                                    "type": "string"
+                                  },
+                                  "unsettledCaseIds": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "stage",
+                                  "lostCaseIds",
+                                  "unsettledCaseIds"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "baselineMaxPassed": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "baselineNoOutcome": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "baselinePassed": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "baselineTrials": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "candidateNoOutcome": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "candidatePassed": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "candidateTrials": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "stage": {
+                                    "const": "mechanism",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "stage",
+                                  "candidatePassed",
+                                  "candidateTrials",
+                                  "candidateNoOutcome",
+                                  "baselinePassed",
+                                  "baselineTrials",
+                                  "baselineNoOutcome",
+                                  "baselineMaxPassed"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "confidence": {
+                                    "type": "number"
+                                  },
+                                  "delta": {
+                                    "type": "number"
+                                  },
+                                  "dev": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "baselineNoOutcome": {
+                                        "minimum": 0,
+                                        "type": "integer"
+                                      },
+                                      "baselinePassed": {
+                                        "minimum": 0,
+                                        "type": "integer"
+                                      },
+                                      "baselineTrials": {
+                                        "minimum": 0,
+                                        "type": "integer"
+                                      },
+                                      "candidateNoOutcome": {
+                                        "minimum": 0,
+                                        "type": "integer"
+                                      },
+                                      "candidatePassed": {
+                                        "minimum": 0,
+                                        "type": "integer"
+                                      },
+                                      "candidateTrials": {
+                                        "minimum": 0,
+                                        "type": "integer"
+                                      },
+                                      "difference": {
+                                        "type": [
+                                          "number",
+                                          "null"
+                                        ]
+                                      },
+                                      "lowerBound": {
+                                        "type": [
+                                          "number",
+                                          "null"
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "candidatePassed",
+                                      "candidateTrials",
+                                      "candidateNoOutcome",
+                                      "baselinePassed",
+                                      "baselineTrials",
+                                      "baselineNoOutcome",
+                                      "difference",
+                                      "lowerBound"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "holdout": {
+                                    "anyOf": [
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "baselineNoOutcome": {
+                                            "minimum": 0,
+                                            "type": "integer"
+                                          },
+                                          "baselinePassed": {
+                                            "minimum": 0,
+                                            "type": "integer"
+                                          },
+                                          "baselineTrials": {
+                                            "minimum": 0,
+                                            "type": "integer"
+                                          },
+                                          "candidateNoOutcome": {
+                                            "minimum": 0,
+                                            "type": "integer"
+                                          },
+                                          "candidatePassed": {
+                                            "minimum": 0,
+                                            "type": "integer"
+                                          },
+                                          "candidateTrials": {
+                                            "minimum": 0,
+                                            "type": "integer"
+                                          },
+                                          "difference": {
+                                            "type": [
+                                              "number",
+                                              "null"
+                                            ]
+                                          },
+                                          "lowerBound": {
+                                            "type": [
+                                              "number",
+                                              "null"
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "candidatePassed",
+                                          "candidateTrials",
+                                          "candidateNoOutcome",
+                                          "baselinePassed",
+                                          "baselineTrials",
+                                          "baselineNoOutcome",
+                                          "difference",
+                                          "lowerBound"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "stage": {
+                                    "const": "confirm",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "stage",
+                                  "delta",
+                                  "confidence",
+                                  "dev",
+                                  "holdout"
+                                ],
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "runId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "skipReason": {
+                        "anyOf": [
+                          {
+                            "enum": [
+                              "no_cases",
+                              "no_mechanism",
+                              "budget"
+                            ],
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "stage": {
+                        "enum": [
+                          "regression",
+                          "mechanism",
+                          "confirm"
+                        ],
+                        "type": "string"
+                      },
+                      "status": {
+                        "enum": [
+                          "waiting",
+                          "running",
+                          "ended",
+                          "skipped",
+                          "not_run",
+                          "cancelled"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "stage",
+                      "status",
+                      "skipReason",
+                      "runId",
+                      "caseCount",
+                      "k",
+                      "estimateUsd",
+                      "baseline",
+                      "candidate",
+                      "cases",
+                      "measure"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "finishedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "mechanism": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reason": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "regression_case_lost",
+                      "mechanism_not_shown",
+                      "below_margin",
+                      "above_baseline",
+                      "within_margin",
+                      "too_few_trials",
+                      "holdout_disagrees",
+                      "no_holdout_cases",
+                      "no_confirm_cases",
+                      "errored_trials",
+                      "budget",
+                      "environment_differs",
+                      "environment_unknown",
+                      "content_withheld",
+                      "canary_reported"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "stage": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "regression",
+                      "mechanism",
+                      "confirm"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "enum": [
+                  "running",
+                  "finished",
+                  "cancelled"
+                ],
+                "type": "string"
+              },
+              "suite": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "version"
+                ],
+                "type": "object"
+              },
+              "verdict": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "regressed",
+                      "refuted",
+                      "worse",
+                      "better",
+                      "non_inferior",
+                      "inconclusive",
+                      "unmeasured",
+                      "contaminated"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "workerDefinition": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "id",
+                  "version"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "id",
+              "status",
+              "stage",
+              "verdict",
+              "reason",
+              "decidedBy",
+              "costUsd",
+              "createdBy",
+              "createdAt",
+              "finishedAt",
+              "cancelledBy",
+              "suite",
+              "workerDefinition",
+              "candidate",
+              "baseline",
+              "mechanism",
+              "decidingStage",
+              "baselineTotal",
+              "candidateTotal"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "familyHistory": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "baseline": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "skillId": {
+                        "type": "string"
+                      },
+                      "version": {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "skillId",
+                      "version",
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "cancelledBy": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "candidate": {
+                "additionalProperties": false,
+                "properties": {
+                  "draftDigest": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "skillId": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "skillId",
+                  "version",
+                  "name",
+                  "draftDigest"
+                ],
+                "type": "object"
+              },
+              "costUsd": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "createdBy": {
+                "type": "string"
+              },
+              "decidedBy": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "regression",
+                      "mechanism",
+                      "confirm"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "finishedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "mechanism": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reason": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "regression_case_lost",
+                      "mechanism_not_shown",
+                      "below_margin",
+                      "above_baseline",
+                      "within_margin",
+                      "too_few_trials",
+                      "holdout_disagrees",
+                      "no_holdout_cases",
+                      "no_confirm_cases",
+                      "errored_trials",
+                      "budget",
+                      "environment_differs",
+                      "environment_unknown",
+                      "content_withheld",
+                      "canary_reported"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "stage": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "regression",
+                      "mechanism",
+                      "confirm"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "enum": [
+                  "running",
+                  "finished",
+                  "cancelled"
+                ],
+                "type": "string"
+              },
+              "suite": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "version"
+                ],
+                "type": "object"
+              },
+              "verdict": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "regressed",
+                      "refuted",
+                      "worse",
+                      "better",
+                      "non_inferior",
+                      "inconclusive",
+                      "unmeasured",
+                      "contaminated"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "workerDefinition": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "id",
+                  "version"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "id",
+              "status",
+              "stage",
+              "verdict",
+              "reason",
+              "decidedBy",
+              "costUsd",
+              "createdBy",
+              "createdAt",
+              "finishedAt",
+              "cancelledBy",
+              "suite",
+              "workerDefinition",
+              "candidate",
+              "baseline",
+              "mechanism"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "runningEvaluationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "evaluations",
+        "runningEvaluationId",
+        "acknowledge",
+        "familyHistory"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
     "channel": "human",
     "group": "meta",
     "minRole": "builder",
@@ -44059,6 +45361,54 @@
         "draftDigest": {
           "minLength": 1,
           "type": "string"
+        },
+        "evaluationReview": {
+          "additionalProperties": false,
+          "properties": {
+            "acknowledgements": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "caseId": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "evaluationId": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "maxLength": 500,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "evaluationId",
+                  "caseId",
+                  "reason"
+                ],
+                "type": "object"
+              },
+              "maxItems": 200,
+              "type": "array"
+            },
+            "evaluationId": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "evaluationId"
+          ],
+          "type": "object"
         },
         "skillId": {
           "minLength": 1,

@@ -14,6 +14,7 @@ import {
   type HandleClaims,
   type Operation,
   type Role,
+  type SkillPublishEvidenceWire,
   evalCallCountPath,
 } from '@nexttime/shared';
 import { decodeJwt } from 'jose';
@@ -45,6 +46,9 @@ import {
   EvalSuiteStateError,
   EvaluationBudgetExhaustedError,
   EvaluationBudgetInsufficientError,
+  EvaluationChangedError,
+  EvaluationReviewRequiredError,
+  PublishAcknowledgementInputError,
   runEvalTrialTick,
 } from '../eval/index.js';
 import { getOrCreateEvaluationPrincipal } from '../eval/principal.js';
@@ -59,7 +63,7 @@ import {
   skillDraftDigest,
 } from '../worker/index.js';
 import { ForbiddenError } from './authorize.js';
-import { dispatchCapability } from './dispatch.js';
+import { InvalidCapabilityParamsError, dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
 /**
@@ -1446,6 +1450,238 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       await call(person('builder'), 'cancel_draft_evaluation', { evaluationId: running.id });
       await runEvalTrialTick(pool);
+    });
+
+    it('publishing names the evidence and acknowledges each failure of a regressed or worse evaluation, with a reason; anything else refuses and publishes nothing (S10 E3-3)', async () => {
+      const notesDraft = await skill(
+        'builder',
+        {
+          name: 'notes',
+          description: 'Keeps notes of what was done.',
+          markdown: '# Notes\n\nWrite down each step.\nSay which host each step touched.',
+        },
+        { skillId: notesId },
+      );
+      expect(notesDraft.version).toBe(2);
+      const target = { skillId: notesId, version: 2, draftDigest: notesDraft.digest };
+      const evidence = (who: keyof typeof people = 'builder') =>
+        call<SkillPublishEvidenceWire>(person(who), 'get_skill_publish_evidence', target);
+      const startNotes = () =>
+        call<DraftEvaluationWire>(person('builder'), 'start_draft_evaluation', {
+          ...target,
+          suiteId: suite.id,
+          suiteVersion: suite.version,
+        });
+      const publish = (
+        extra: Record<string, unknown> = {},
+        who: ResolvedCaller = person('owner'),
+      ) => call(who, 'publish_skill', { ...target, ...extra });
+      const stillDraft = () =>
+        count(
+          "select 1 from skills where workspace_id = $1 and id = $2 and version = 2 and status = 'draft'",
+          [workspaceId, notesId],
+        );
+
+      // No evaluation yet: nothing to name, nothing to acknowledge.
+      expect(await evidence()).toEqual({
+        evaluations: [],
+        runningEvaluationId: null,
+        acknowledge: [],
+        familyHistory: [],
+      });
+
+      // The first evaluation loses the regression case.
+      const regressed = await drive((await startNotes()).id, ({ arm }) =>
+        arm === 'baseline' ? 'pass' : 'fail',
+      );
+      expect(regressed).toMatchObject({ verdict: 'regressed', decidedBy: 'regression' });
+
+      // The second runs: the evidence says so, and the publish waits for it.
+      const running = await startNotes();
+      expect((await evidence()).runningEvaluationId).toBe(running.id);
+      expect(
+        await rejection(publish({ evaluationReview: { evaluationId: regressed.id } })),
+      ).toBeInstanceOf(DraftEvaluatingError);
+      // It holds the regression case and is worse on the confirmation's dev case.
+      const worse = await drive(running.id, ({ stage, arm }) =>
+        stage === 'regression' || arm === 'baseline' ? 'pass' : 'fail',
+      );
+      expect(worse).toMatchObject({
+        verdict: 'worse',
+        reason: 'below_margin',
+        decidedBy: 'confirm',
+      });
+
+      const read = await evidence();
+      expect(read.runningEvaluationId).toBeNull();
+      expect(read.evaluations.map((e) => [e.id, e.verdict])).toEqual([
+        [worse.id, 'worse'],
+        [regressed.id, 'regressed'],
+      ]);
+      // The newest's deciding stage and both arms over every stage it ran.
+      expect(read.evaluations[0]).toMatchObject({
+        decidingStage: { stage: 'confirm', measure: { stage: 'confirm', dev: { difference: -1 } } },
+        // Regression: one case twice; confirm: two cases three times — per arm.
+        baselineTotal: { trials: 8, passed: 8 },
+        candidateTotal: { trials: 8, passed: 2, failed: 6 },
+      });
+      expect(read.evaluations[0]?.candidateTotal.costUsd).toBeCloseTo(8 * TRIAL_COST, 6);
+      expect(read.evaluations[1]?.decidingStage).toMatchObject({
+        stage: 'regression',
+        measure: { lostCaseIds: [caseIds.regression] },
+      });
+      // Both evaluations' failures, the newest's first: the dev case only — holdout did not
+      // decide; the earlier evaluation's lost case still counts.
+      expect(read.acknowledge).toEqual([
+        {
+          evaluationId: worse.id,
+          caseId: caseIds.dev,
+          title: 'Bring web-1 back',
+          split: 'dev',
+          stage: 'confirm',
+          baseline: expect.objectContaining({ trials: 3, passed: 3 }),
+          candidate: expect.objectContaining({ trials: 3, failed: 3 }),
+        },
+        {
+          evaluationId: regressed.id,
+          caseId: caseIds.regression,
+          title: 'Restart web-1',
+          split: 'dev',
+          stage: 'regression',
+          baseline: expect.objectContaining({ trials: 2, passed: 2 }),
+          candidate: expect.objectContaining({ trials: 2, failed: 2 }),
+        },
+      ]);
+      // A member does not see another's draft's evaluations.
+      expect((await evidence('member')).evaluations).toEqual([]);
+
+      // Evidence other than the latest, or none named, is stale.
+      const stale = await rejection(publish({ evaluationReview: { evaluationId: regressed.id } }));
+      expect(stale).toBeInstanceOf(EvaluationChangedError);
+      expect((stale as EvaluationChangedError).details).toEqual({ evaluationId: worse.id });
+      expect(await rejection(publish())).toBeInstanceOf(EvaluationChangedError);
+
+      const reasons = [
+        {
+          evaluationId: worse.id,
+          caseId: caseIds.dev,
+          reason: 'The dev case asks for a host this Skill no longer restarts.',
+        },
+        {
+          evaluationId: regressed.id,
+          caseId: caseIds.regression,
+          reason: 'Fixed in this version: the second evaluation keeps the case.',
+        },
+      ];
+      // Each failure needs its acknowledgement.
+      const none = await rejection(publish({ evaluationReview: { evaluationId: worse.id } }));
+      expect(none).toBeInstanceOf(EvaluationReviewRequiredError);
+      expect((none as EvaluationReviewRequiredError).details.items).toEqual([
+        { evaluationId: worse.id, caseId: caseIds.dev },
+        { evaluationId: regressed.id, caseId: caseIds.regression },
+      ]);
+      const one = await rejection(
+        publish({ evaluationReview: { evaluationId: worse.id, acknowledgements: [reasons[0]] } }),
+      );
+      expect((one as EvaluationReviewRequiredError).details.items).toEqual([
+        { evaluationId: regressed.id, caseId: caseIds.regression },
+      ]);
+      // An acknowledgement of no failure (the holdout case), one twice, or a blank reason.
+      for (const acknowledgements of [
+        [...reasons, { evaluationId: worse.id, caseId: caseIds.holdout, reason: 'n/a' }],
+        [...reasons, reasons[0]],
+      ]) {
+        expect(
+          await rejection(
+            publish({ evaluationReview: { evaluationId: worse.id, acknowledgements } }),
+          ),
+        ).toBeInstanceOf(PublishAcknowledgementInputError);
+      }
+      expect(
+        await rejection(
+          publish({
+            evaluationReview: {
+              evaluationId: worse.id,
+              acknowledgements: [reasons[0], { ...reasons[1], reason: '   ' }],
+            },
+          }),
+        ),
+      ).toBeInstanceOf(InvalidCapabilityParamsError);
+      // Only a person acknowledges: a service Principal's API key is refused.
+      const serviceId = randomUUID();
+      await asOwnerRole((client) =>
+        client.query(
+          `insert into principals (workspace_id, id, kind, role, display_name)
+           values ($1, $2, 'service', 'owner', 'e3-3-automation')`,
+          [workspaceId, serviceId],
+        ),
+      );
+      const owner = person('owner');
+      if (owner.channel !== 'human') throw new Error('a person calls on the human channel');
+      const service: ResolvedCaller = {
+        ...owner,
+        principal: {
+          workspaceId,
+          id: serviceId,
+          kind: 'service',
+          role: 'owner',
+          displayName: 'e3-3-automation',
+        },
+      };
+      expect(
+        await rejection(
+          publish(
+            { evaluationReview: { evaluationId: worse.id, acknowledgements: reasons } },
+            service,
+          ),
+        ),
+      ).toBeInstanceOf(ForbiddenError);
+      // Nothing of the above published.
+      expect(await stillDraft()).toBe(1);
+
+      // The evidence named and every failure acknowledged: published; the audit record keeps the
+      // evidence and each acknowledgement with its reason.
+      await publish({ evaluationReview: { evaluationId: worse.id, acknowledgements: reasons } });
+      expect(await stillDraft()).toBe(0);
+      const audit = await asOwnerRole((client) =>
+        client.query<{ payload: Record<string, unknown> }>(
+          `select payload from audit_records
+            where workspace_id = $1 and action = 'publish_skill' and resource_id = $2
+            order by created_at desc limit 1`,
+          [workspaceId, notesId],
+        ),
+      );
+      expect(audit.rows[0]?.payload).toMatchObject({
+        evaluation: { id: worse.id, verdict: 'worse', reason: 'below_margin', acknowledged: 2 },
+        params: { evaluationReview: { evaluationId: worse.id, acknowledgements: reasons } },
+      });
+      // Published as evaluated: everyone sees its evidence now.
+      expect((await evidence('member')).evaluations.map((e) => e.id)).toEqual([
+        worse.id,
+        regressed.id,
+      ]);
+
+      // The family's next draft sees what was tried before and did not hold.
+      const next = await skill(
+        'builder',
+        {
+          name: 'notes',
+          description: 'Keeps notes of what was done.',
+          markdown:
+            '# Notes\n\nWrite down each step.\nSay which host each step touched.\nKeep it short.',
+        },
+        { skillId: notesId },
+      );
+      const history = await call<SkillPublishEvidenceWire>(
+        person('builder'),
+        'get_skill_publish_evidence',
+        { skillId: notesId, version: next.version, draftDigest: next.digest },
+      );
+      expect(history.evaluations).toEqual([]);
+      expect(history.familyHistory.map((e) => [e.id, e.verdict, e.candidate.version])).toEqual([
+        [worse.id, 'worse', 2],
+        [regressed.id, 'regressed', 2],
+      ]);
     });
 
     // Last: it removes this test's workspace, the evaluations with it.

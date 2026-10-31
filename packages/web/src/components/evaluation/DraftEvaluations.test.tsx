@@ -649,7 +649,7 @@ describe('草稿评测 (S10 E3-2b)', () => {
     renderPage(http, 'e-1');
     const running = await screen.findByTestId('draft-eval-running');
     expect(running.textContent).toContain('正在跑确认对比');
-    expect(running.textContent).toContain('不能丢弃或拒绝');
+    expect(running.textContent).toContain('不能发布、丢弃或拒绝');
     const skipped = screen
       .getAllByTestId('draft-eval-stage')
       .find((node) => node.getAttribute('data-stage') === 'mechanism') as HTMLElement;

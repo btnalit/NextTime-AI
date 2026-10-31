@@ -398,8 +398,10 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   publish_skill: {
     zh: '发布 Skill 草稿',
     en: 'Publish skill',
-    zhHint: '发布你的 Skill 草稿；所有者可发布任何人的草稿。',
-    enHint: "Publishes your skill draft; the owner may publish anyone's.",
+    zhHint:
+      '发布你的 Skill 草稿；所有者可发布任何人的草稿。评测判为有回归或差于基线时，要逐条写下为什么仍然发布。',
+    enHint:
+      "Publishes your skill draft; the owner may publish anyone's. When an evaluation found it Regressed or Worse, each failure is acknowledged with a reason first.",
   },
   publish_procedure: {
     zh: '发布流程',
@@ -928,9 +930,9 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zh: '评测 Skill 草稿',
     en: 'Evaluate Skill draft',
     zhHint:
-      '用一个用例集对比 Skill 草稿和它要替换的已发布版本：依次跑回归检查、机制检验、确认对比，每一阶段不过就停；不调用真实系统，花费计入本月评测预算。评测期间草稿不能丢弃或拒绝。',
+      '用一个用例集对比 Skill 草稿和它要替换的已发布版本：依次跑回归检查、机制检验、确认对比，每一阶段不过就停；不调用真实系统，花费计入本月评测预算。评测期间草稿不能发布、丢弃或拒绝。',
     enHint:
-      'Compares a Skill draft with the published version it would replace on a suite: regression check, mechanism test, then confirmation, stopping at the first stage that fails. No real system is called, and the cost counts against this month’s evaluation budget. The draft cannot be discarded or rejected while it runs.',
+      'Compares a Skill draft with the published version it would replace on a suite: regression check, mechanism test, then confirmation, stopping at the first stage that fails. No real system is called, and the cost counts against this month’s evaluation budget. The draft cannot be published, discarded or rejected while it runs.',
   },
   get_draft_evaluation: {
     zh: '查看草稿评测',
@@ -951,6 +953,15 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '停止一次进行中的草稿评测：排队的试跑作废，正在跑的评测任务被终止，没有结论。',
     enHint:
       'Stops a running draft evaluation: queued trials are dropped and running evaluation tasks are terminated; it ends with no verdict.',
+  },
+  // S10 E3-3a: what a Skill draft's evaluations say to whoever publishes it.
+  get_skill_publish_evidence: {
+    zh: '查看发布审阅的评测证据',
+    en: 'Get publish evidence',
+    zhHint:
+      '读一份 Skill 草稿的评测证据：评测正是这份内容的那几次的判定与数字、发布前要逐条确认的失败，和这个 Skill 以前没站住的草稿。',
+    enHint:
+      'Reads what the evaluations of exactly this Skill draft’s content found, the failures to acknowledge before publishing, and the family’s earlier drafts that did not hold up.',
   },
   // S10 E3-2c (legacy 514): the evaluation seal's pauses.
   list_eval_seal_holds: {

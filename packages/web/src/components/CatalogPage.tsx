@@ -1,6 +1,7 @@
 import type {
   EntryTemplateStatusWire,
   GateOwnedParamWire,
+  PublishEvaluationReview,
   SkillDetailWire,
 } from '@nexttime/shared';
 import { visibleText } from '@nexttime/shared';
@@ -99,6 +100,12 @@ import { ProcedureUsageSection } from './catalog/ProcedureUsage.js';
 import { RejectedDrafts } from './catalog/RejectedDrafts.js';
 import { SkillDraftEvaluations } from './catalog/SkillDraftEvaluations.js';
 import { SkillEditor } from './catalog/SkillEditor.js';
+import {
+  PublishAcknowledgeSheet,
+  SkillPublishReview,
+  evaluationReviewOf,
+  useSkillPublishEvidence,
+} from './catalog/SkillPublishReview.js';
 import { SkillUsageSection } from './catalog/SkillUsage.js';
 import { WorkerEditorHost } from './catalog/WorkerEditorHost.js';
 import { gateOwnedParamsText } from './connect/GateOwnedParams.js';
@@ -2093,7 +2100,9 @@ function SkillDetailView({
   readonly onEditAsNewVersion: () => void;
   /** 「另存为新的 Skill」: a copy proposed as a new Skill. */
   readonly onSaveAsNew: () => void;
-  readonly onPublish: () => Promise<void>;
+  /** S10 E3-3a: publishes this draft naming the evidence reviewed (`review`; none read for a
+   *  row without a draft digest); `true` once published. */
+  readonly onPublish: (review: PublishEvaluationReview | undefined) => Promise<boolean>;
   readonly onDeprecate: () => Promise<void>;
   readonly onDiscard: (reason: string | undefined) => Promise<void>;
   /** E2-0b: 「拒绝」 on this pending draft (`offersReject`). */
@@ -2111,6 +2120,61 @@ function SkillDetailView({
         'Being evaluated: it cannot be discarded or rejected until the evaluation ends or is cancelled',
       )
     : undefined;
+  // S10 E3-3a: whoever may publish the draft sees what its evaluations say first (发布审阅), and
+  // the publish names that evidence; a failure of a regressed / worse evaluation is acknowledged
+  // with a reason first. Read again when an evaluation of it starts or ends, and after a refused
+  // publish (the evidence may have moved on).
+  const roleCan = useRoleCan(http);
+  const reviewing =
+    canPublish &&
+    row.status === 'draft' &&
+    row.draftDigest !== undefined &&
+    roleCan('get_skill_publish_evidence') !== false;
+  const evidence = useSkillPublishEvidence(
+    http,
+    reviewing && row.draftDigest !== undefined
+      ? { skillId: row.id, version: row.version, draftDigest: row.draftDigest }
+      : null,
+  );
+  const reloadEvidence = evidence.reload;
+  const evaluatingSeen = useRef(evaluating);
+  useEffect(() => {
+    if (evaluatingSeen.current === evaluating) return;
+    evaluatingSeen.current = evaluating;
+    if (reviewing) void reloadEvidence();
+  }, [evaluating, reviewing, reloadEvidence]);
+  const [acknowledging, setAcknowledging] = useState(false);
+  const evidenceData = evidence.state.status === 'ready' ? evidence.state.data : undefined;
+  const publishHeld =
+    evaluating || (evidenceData !== undefined && evidenceData.runningEvaluationId !== null)
+      ? t(
+          '评测进行中：结束或取消之前不能发布',
+          'Being evaluated: it cannot be published until the evaluation ends or is cancelled',
+        )
+      : reviewing && evidenceData === undefined
+        ? evidence.state.status === 'error'
+          ? t(
+              '评测证据没有读到：重新读取后再发布',
+              'The evaluation evidence could not be read: read it again, then publish',
+            )
+          : t('正在读取评测证据', 'Loading the evaluation evidence')
+        : undefined;
+
+  async function publish(review: PublishEvaluationReview | undefined): Promise<boolean> {
+    const published = await onPublish(review);
+    if (!published && reviewing) void reloadEvidence();
+    return published;
+  }
+
+  function startPublish(): void {
+    if (!reviewing) {
+      void publish(undefined);
+      return;
+    }
+    if (evidenceData === undefined) return;
+    if (evidenceData.acknowledge.length > 0) setAcknowledging(true);
+    else void publish(evaluationReviewOf(evidenceData));
+  }
   // Best-effort read of the current version's full body — degrades to "—" on error/while loading
   // rather than blocking the rest of the detail (same convention `get_operation_stats` uses on the
   // Operations tab above). `get_skill` already exists and is already called from this same file
@@ -2199,7 +2263,10 @@ function SkillDetailView({
         onEvaluatingChange={setEvaluating}
       />
 
-      {canPublish && row.status === 'draft' ? (
+      {reviewing ? <SkillPublishReview evidence={evidence} /> : null}
+
+      {/* While the acknowledgement sheet is open the credential question shows inside it. */}
+      {canPublish && row.status === 'draft' && !acknowledging ? (
         <PublishCredentialSlot
           review={credentialReview}
           busy={busy}
@@ -2228,9 +2295,11 @@ function SkillDetailView({
           <Button
             variant="primary"
             size="s"
-            disabled={busy || credentialReview.blocked}
+            disabled={busy || credentialReview.blocked || publishHeld !== undefined}
+            title={publishHeld}
             aria-busy={busy || undefined}
-            onClick={() => void onPublish()}
+            onClick={startPublish}
+            data-testid="skill-publish"
           >
             {t('发布', 'Publish')}
           </Button>
@@ -2265,6 +2334,24 @@ function SkillDetailView({
           />
         ) : null}
       </div>
+      {reviewing && evidenceData !== undefined ? (
+        <PublishAcknowledgeSheet
+          open={acknowledging}
+          onOpenChange={setAcknowledging}
+          target={`${row.name} v${row.version}`}
+          evidence={evidenceData}
+          busy={busy}
+          credentialSlot={
+            <PublishCredentialSlot
+              review={credentialReview}
+              busy={busy}
+              fieldNames={reviewFieldNames('skill', t)}
+            />
+          }
+          credentialBlocked={credentialReview.blocked}
+          onConfirm={publish}
+        />
+      ) : null}
     </div>
   );
 }
@@ -2343,7 +2430,12 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     setInUseOf(inUse ? id : null);
   }
 
-  async function act(row: SkillRow, action: 'publish_skill' | 'deprecate_skill') {
+  /** `true` once it took effect. `review` (S10 E3-3a): the evaluation evidence a publish names. */
+  async function act(
+    row: SkillRow,
+    action: 'publish_skill' | 'deprecate_skill',
+    review?: PublishEvaluationReview,
+  ): Promise<boolean> {
     setBusy(row.id);
     try {
       await http.call(action, {
@@ -2352,7 +2444,11 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         // Legacy 300: the version this detail shows, not a newer one proposed since — and
         // (review #493 on #764, F1) its content, not another draft proposed under that version.
         ...(action === 'publish_skill'
-          ? { version: row.version, draftDigest: row.draftDigest }
+          ? {
+              version: row.version,
+              draftDigest: row.draftDigest,
+              ...(review !== undefined ? { evaluationReview: review } : {}),
+            }
           : {}),
       });
       toast.push({
@@ -2361,9 +2457,10 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       });
       if (action === 'deprecate_skill') closeIfRetired(row.id);
       refresh();
+      return true;
     } catch (err) {
       // The kernel's credential question — answered next to Publish, not as a failure toast.
-      if (action === 'publish_skill' && credentialReview.capture(err)) return;
+      if (action === 'publish_skill' && credentialReview.capture(err)) return false;
       if (isForbiddenError(err)) permissions.markDenied(action);
       // The toast says it was reloaded: show what is there now.
       if (isVersionChangedError(err) || isDraftChangedError(err)) refresh();
@@ -2377,6 +2474,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
             : t(`无法弃用 ${row.name}`, `Could not deprecate ${row.name}`),
         description: errorToastText(err, t),
       });
+      return false;
     } finally {
       setBusy(null);
     }
@@ -2593,7 +2691,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       onTitleFocused={() => setFocusFamily(null)}
       onEditAsNewVersion={() => undefined}
       onSaveAsNew={() => undefined}
-      onPublish={async () => undefined}
+      onPublish={async () => false}
       onDeprecate={async () => undefined}
       onDiscard={async () => undefined}
       onReject={async () => undefined}
@@ -2630,8 +2728,10 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       onTitleFocused={() => setFocusFamily(null)}
       onEditAsNewVersion={() => openEditor({ kind: 'version', row: selected })}
       onSaveAsNew={() => openEditor({ kind: 'copy', row: selected })}
-      onPublish={() => act(selected, 'publish_skill')}
-      onDeprecate={() => act(selected, 'deprecate_skill')}
+      onPublish={(review) => act(selected, 'publish_skill', review)}
+      onDeprecate={async () => {
+        await act(selected, 'deprecate_skill');
+      }}
       onDiscard={(reason) => discardSkillDraft(selected, reason)}
       onReject={(reason) => rejectSkillDraft(selected, reason)}
     />

@@ -107,9 +107,9 @@ export type { FamilyKind } from './family-version.js';
 
 export { lockWorkerRegistry } from './registry-lock.js';
 
+export { DraftEvaluatingError } from './draft-evaluating.js';
 export {
   DEFAULT_DRAFT_EXPIRY_DAYS,
-  DraftEvaluatingError,
   DraftNotDiscardableError,
   DraftNotRejectableError,
   discardDraft,

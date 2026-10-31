@@ -265,7 +265,7 @@ describe('SkillDraftEvaluations (S10 E3-2b)', () => {
     ).toBe(true);
   });
 
-  it('while one runs: no second start, and the draft says it cannot be discarded or rejected', async () => {
+  it('while one runs: no second start, and the draft says it cannot be published, discarded or rejected', async () => {
     const http = scriptedHttp(
       handlers('builder', {
         list_draft_evaluations: () => ({
@@ -284,7 +284,7 @@ describe('SkillDraftEvaluations (S10 E3-2b)', () => {
     );
     renderSection(http);
     const note = await screen.findByTestId('skill-draft-evaluating');
-    expect(note.textContent).toContain('不能丢弃或拒绝');
+    expect(note.textContent).toContain('不能发布、丢弃或拒绝');
     await waitFor(() =>
       expect((screen.getByTestId('skill-draft-evaluate') as HTMLButtonElement).disabled).toBe(true),
     );

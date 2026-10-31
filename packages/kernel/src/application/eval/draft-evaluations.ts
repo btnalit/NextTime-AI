@@ -678,6 +678,18 @@ function verdictTrial(row: TrialRow, canary: string | null): VerdictTrial {
 
 const ENDED = new Set(['scored', 'errored']);
 
+/** The trials of evaluation `evaluationId`'s `stage` as its verdict read them — what a publish's
+ *  acknowledgements are of (`publish-evidence.ts`). */
+export async function readStageVerdictTrials(
+  client: PoolClient,
+  workspaceId: string,
+  evaluationId: string,
+  stage: DraftEvaluationStageName,
+): Promise<readonly VerdictTrial[]> {
+  const trials = await readTrials(client, workspaceId, evaluationId, false);
+  return trials.filter((t) => t.stage === stage).map((t) => verdictTrial(t, null));
+}
+
 /**
  * After the trial tick finished draft run `runId` (same transaction): reads its stage and ends the
  * evaluation, or starts its next stage. Does nothing when the evaluation is no longer running

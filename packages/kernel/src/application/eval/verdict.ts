@@ -281,3 +281,43 @@ export function stageOutcome(
   }
   return ruleOutcome(measureStage(stage, stageTrials));
 }
+
+/**
+ * The cases whoever publishes the draft acknowledges one by one (S10 E3-3; §5.5 结果去哪) when
+ * `verdict` came from this stage's `trials`, in the order of `caseIds` (the stage's):
+ *   - `regressed`: the regression cases lost (the measure's `lostCaseIds`);
+ *   - `worse`: the confirmation's dev cases the candidate passed at a lower rate than the baseline,
+ *     over the tries with an outcome as the rates are — or, should none be lower case by case
+ *     (tries without an outcome spread unevenly over cases can tip the total alone), every dev
+ *     case the candidate failed;
+ *   - any other verdict: none — it is shown, not confirmed.
+ */
+export function casesToAcknowledge(
+  verdict: DraftEvaluationVerdict,
+  caseIds: readonly string[],
+  trials: readonly VerdictTrial[],
+): string[] {
+  if (verdict === 'regressed') {
+    const measure = measureStage('regression', trials);
+    if (measure.stage !== 'regression') return [];
+    const lost = new Set(measure.lostCaseIds);
+    return caseIds.filter((caseId) => lost.has(caseId));
+  }
+  if (verdict !== 'worse') return [];
+  const dev = trials.filter((t) => t.split === 'dev');
+  const rate = (caseId: string, arm: EvalArm): number | null => {
+    const c = count(dev.filter((t) => t.caseId === caseId && t.arm === arm));
+    const tries = c.passed + c.failed;
+    return tries === 0 ? null : c.passed / tries;
+  };
+  const devCaseIds = caseIds.filter((caseId) => dev.some((t) => t.caseId === caseId));
+  const lower = devCaseIds.filter((caseId) => {
+    const candidate = rate(caseId, 'candidate');
+    const baseline = rate(caseId, 'baseline');
+    return candidate !== null && baseline !== null && candidate < baseline;
+  });
+  if (lower.length > 0) return lower;
+  return devCaseIds.filter((caseId) =>
+    dev.some((t) => t.caseId === caseId && t.arm === 'candidate' && readingOf(t) === 'failed'),
+  );
+}

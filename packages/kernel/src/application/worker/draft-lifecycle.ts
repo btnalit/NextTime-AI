@@ -11,6 +11,7 @@ import { redactedForAudit } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { OntologyDraftNotFoundError } from '../../substrate/ontology/index.js';
 import { WorkerDefinitionNotFoundError } from './definitions.js';
+import { assertDraftNotEvaluating } from './draft-evaluating.js';
 import { recordDraftRejection } from './draft-rejections.js';
 import {
   ProcedureNotFoundError,
@@ -107,40 +108,8 @@ export class DraftNotDiscardableError extends Error {
   }
 }
 
-/** 409 draft_evaluating (S10 E3-2b, §3.4 草稿的评测子状态): a draft evaluation of this Skill draft
- *  is running, so the draft stays until it ends (or someone cancels it) — not discarded, rejected
- *  or expired. `application/eval` refuses a second evaluation of it with the same error. The
- *  database holds it too (migrations/worker/0010's `skills_keep_evaluating_draft`). */
-export class DraftEvaluatingError extends Error {
-  readonly code = 'draft_evaluating' as const;
-  constructor(id: string, version: number) {
-    super(
-      `Skill ${id}@${version} is being evaluated — wait for the evaluation to end, or cancel it, first; nothing was changed`,
-    );
-    this.name = 'DraftEvaluatingError';
-  }
-}
-
 /** The SQLSTATE `skills_keep_evaluating_draft` raises (object_in_use). */
 const DRAFT_EVALUATING_SQLSTATE = '55006';
-
-/** Refuses with `DraftEvaluatingError` while a draft evaluation of the Skill draft runs (worker/0010
- *  `eval_draft_evaluations`, read here as `eval-seal` reads `eval_suites`: one row's existence, no
- *  content). Other kinds have no evaluation. */
-async function assertDraftNotEvaluating(
-  client: PoolClient,
-  workspaceId: string,
-  ref: DraftRef,
-): Promise<void> {
-  if (ref.kind !== 'skill') return;
-  const running = await client.query(
-    `select 1 from eval_draft_evaluations
-      where workspace_id = $1 and skill_id = $2 and skill_version = $3 and status = 'running'
-      limit 1`,
-    [workspaceId, ref.id, ref.version],
-  );
-  if ((running.rowCount ?? 0) > 0) throw new DraftEvaluatingError(ref.id, ref.version);
-}
 
 interface DraftLookupRow {
   readonly status: string;
@@ -260,7 +229,7 @@ export async function discardDraft(
   if (row.status !== 'draft') {
     throw new DraftNotDiscardableError(ref.kind, ref.id, ref.version, row.status);
   }
-  await assertDraftNotEvaluating(client, workspaceId, ref);
+  if (ref.kind === 'skill') await assertDraftNotEvaluating(client, workspaceId, ref);
   await deleteDraftRow(client, workspaceId, ref);
   return { kind: ref.kind, id: ref.id, version: ref.version, name: row.name };
 }
@@ -339,7 +308,7 @@ export async function rejectDraft(
   });
   const draftDigest = await draftDigestOf(client, workspaceId, ref);
   assertReviewedDraft('reject_draft', subject, reviewedDraftDigest, draftDigest);
-  await assertDraftNotEvaluating(client, workspaceId, ref);
+  if (ref.kind === 'skill') await assertDraftNotEvaluating(client, workspaceId, ref);
   await deleteDraftRow(client, workspaceId, ref);
   await recordDraftRejection(client, workspaceId, {
     kind: ref.kind,
