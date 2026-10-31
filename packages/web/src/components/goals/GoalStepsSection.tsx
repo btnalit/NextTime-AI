@@ -1,4 +1,10 @@
-import type { GoalDetailWire, PlanHint, StepAcceptanceWire, StepRunWire } from '@nexttime/shared';
+import type {
+  GoalDetailWire,
+  PlanHint,
+  StepAcceptanceWire,
+  StepRunWire,
+  StepTrialApprovalWire,
+} from '@nexttime/shared';
 import { DEFAULT_MAX_ATTEMPTS } from '@nexttime/shared';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import {
@@ -8,6 +14,8 @@ import {
   redactSensitive,
   shortId,
 } from '../../lib/format.js';
+import type { GoalViewer } from '../../lib/goal-actions.js';
+import { hintTrial, stepTrialApprovals, trialApprovalText } from '../../lib/goal-trials.js';
 import {
   type StepView,
   absenceBaselineOf,
@@ -42,7 +50,9 @@ import { DashboardCard } from '../kit/section.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { AbsenceBaselineLine, AbsenceBasis } from './AbsenceBasis.js';
 import { ActionChip } from './ActionChip.js';
+import type { GoalOperationOutcome } from './GoalOperationsBar.js';
 import { OutputContractFields, OutputProblemList } from './OutputContract.js';
+import { StepTrialApproval } from './StepTrialApproval.js';
 import { WorkerSpecFields } from './WorkerSpecFields.js';
 import type { AbsenceOperations } from './useAbsenceOperations.js';
 
@@ -54,6 +64,10 @@ export interface GoalStepsSectionProps {
   readonly objectNames?: ReadonlyMap<string, string>;
   /** S11 「门确认不存在」 B: what each absence check rests on (`useAbsenceOperations`). */
   readonly absenceOperations?: AbsenceOperations;
+  /** S11 GO8b: who reads the page, and what the page does after an approval of a step's trial —
+   *  the 「批准试用」 button shows only when both are given. */
+  readonly viewer?: GoalViewer;
+  readonly onDone?: (outcome: GoalOperationOutcome) => void;
 }
 
 /**
@@ -68,7 +82,9 @@ export interface GoalStepsSectionProps {
  * requester's authority would stop now (S11 GO5c hints) heads the card, and each step it names
  * carries a chip — and, S11 GO8a, so does what would stop a paused run's steps that have not
  * started, with what the admission of a step's WorkerSpec says; a step with a WorkerSpec shows
- * what it sets differently for its Worker (`WorkerSpecFields`).
+ * what it sets differently for its Worker (`WorkerSpecFields`). S11 GO8b: a step whose Worker would
+ * use draft Skills offers 「批准试用」 under its hint (`StepTrialApproval`), and each step lists the
+ * approvals of its trial and where they stand.
  */
 export function GoalStepsSection({
   detail,
@@ -76,6 +92,8 @@ export function GoalStepsSection({
   gateNames,
   objectNames,
   absenceOperations,
+  viewer,
+  onDone,
 }: GoalStepsSectionProps) {
   const t = useT();
   const { current, superseded } = goalSteps(detail);
@@ -112,6 +130,22 @@ export function GoalStepsSection({
                   </a>
                 </>
               ) : null}
+              {/* S11 GO8b: one trial of the step, approved by someone who may publish its drafts. */}
+              {(() => {
+                const trial = hintTrial(hint);
+                return trial && hint.stepKey !== undefined && viewer && onDone ? (
+                  <div className="row-wrap" style={{ marginTop: 'var(--space-2, 8px)' }}>
+                    <StepTrialApproval
+                      goal={detail}
+                      stepKey={hint.stepKey}
+                      trial={trial}
+                      viewer={viewer}
+                      http={http}
+                      onDone={onDone}
+                    />
+                  </div>
+                ) : null;
+              })()}
             </Notice>
           ))}
         </div>
@@ -123,6 +157,7 @@ export function GoalStepsSection({
             view={view}
             acceptance={view.run ? acceptanceByRun.get(view.run.id) : undefined}
             hints={hintsByStep.get(view.key) ?? []}
+            trials={stepTrialApprovals(detail, view.key, view.run ?? null)}
             http={http}
             gateNames={gateNames}
             objectNames={objectNames}
@@ -148,6 +183,7 @@ export function GoalStepsSection({
                   view={{ key: run.stepKey, planStep: null, run }}
                   acceptance={acceptanceByRun.get(run.id)}
                   hints={[]}
+                  trials={stepTrialApprovals(detail, run.stepKey, run)}
                   http={http}
                   gateNames={gateNames}
                   objectNames={objectNames}
@@ -167,6 +203,8 @@ interface StepItemProps {
   readonly acceptance: StepAcceptanceWire | undefined;
   /** The step's own authority hints (S11 GO5c), shown as chips by its status. */
   readonly hints: readonly PlanHint[];
+  /** S11 GO8b: the approvals of a trial of the step's draft Skills (`stepTrialApprovals`). */
+  readonly trials: readonly StepTrialApprovalWire[];
   readonly http: CapabilityCaller;
   readonly gateNames: ReadonlyMap<string, string>;
   readonly objectNames: ReadonlyMap<string, string> | undefined;
@@ -182,6 +220,7 @@ function StepItem({
   view,
   acceptance,
   hints,
+  trials,
   http,
   gateNames,
   objectNames,
@@ -260,6 +299,24 @@ function StepItem({
           ))}
         </ul>
       ) : null}
+
+      {trials.length > 0
+        ? trials.map((approval) => (
+            <span
+              key={approval.id}
+              className={`row-wrap text-small ${approval.state === 'lapsed' ? 'text-3' : ''}`}
+              data-testid="goal-step-trial"
+              data-trial-state={approval.state}
+            >
+              <span>{trialApprovalText(approval, t)}</span>
+              <span className="text-3">{t('批准人', 'Approved by')}</span>
+              <RefChip kind="principal" id={approval.approvedBy} http={http} size="s" />
+              <time className="text-3" title={formatDateTime(approval.approvedAt)}>
+                {formatRelative(approval.approvedAt)}
+              </time>
+            </span>
+          ))
+        : null}
 
       {run?.waitingReason ? (
         <span className="text-small text-warn" data-testid="goal-step-waiting">

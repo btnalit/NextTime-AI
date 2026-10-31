@@ -114,6 +114,7 @@ import {
   GoalRunNotFoundError,
   GoalRunStateError,
   ProposedGoalLimitError,
+  StepTrialChangedError,
 } from '../../application/goal/index.js';
 import {
   CSRF_HEADER,
@@ -801,6 +802,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof GoalRunStateError) {
     return { status: 409, code: 'illegal_transition', message: err.message };
+  }
+  // S11 GO8b: `approve_step_trial` named a trial that is not the step's now — its WorkerSpec, or a
+  // draft it mounts (discarded, proposed again, published since); nothing was approved.
+  if (err instanceof StepTrialChangedError) {
+    return { status: 409, code: err.code, message: err.message };
   }
   // S11 GO5c: the requester already has as many goals waiting to be confirmed as one may —
   // `details.limit` and `details.proposed`; nothing was proposed.

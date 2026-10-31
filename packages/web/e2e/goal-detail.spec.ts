@@ -274,6 +274,7 @@ const DETAIL = {
   ],
   acceptance: { rounds: [], steps: [], absenceBaselines: [], overriddenChecks: [] },
   leftovers: null,
+  trialApprovals: [],
 };
 
 const UNRESOLVED = [

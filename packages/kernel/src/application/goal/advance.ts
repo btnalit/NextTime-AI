@@ -35,6 +35,7 @@ import {
   readStepAttemptTask,
   startStepAttemptTask,
   terminateTaskWith,
+  workerSpecDigest,
 } from '../task/index.js';
 import {
   type AbsenceBaselineCheck,
@@ -67,6 +68,7 @@ import {
 } from './plan.js';
 import { getPlanRevision, lockStepRuns } from './reads.js';
 import { lockGoalRun } from './service.js';
+import { nameTrialStepRun, trialApprovalCandidates } from './trial-approvals.js';
 import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
 
 /**
@@ -1215,6 +1217,18 @@ class Advance {
     if (currentRevision === null)
       throw new Error('advanceGoalRun: a running goal run has no revision');
     const attempt = step.attemptCount + 1;
+    // GO8b: a first attempt may start with a person's approval of a trial of the step's draft
+    // Skills (`approve_step_trial`); later ones keep what the first mounted (its snapshot).
+    const trialApprovals =
+      step.attemptCount === 0
+        ? await trialApprovalCandidates(
+            this.client,
+            this.ws,
+            this.goal,
+            step,
+            workerSpecDigest(entry.spec ?? null),
+          )
+        : [];
     const result = await createStepAttemptTask(this.client, this.ws, this.requester, {
       goalRunId: this.goal.id,
       stepRunId: step.id,
@@ -1230,6 +1244,7 @@ class Advance {
       tokenCap,
       durationCapSec: Math.max(1, Math.floor((this.deadline - this.now.getTime()) / 1000)),
       ...(this.modelCatalog ? { modelCatalog: this.modelCatalog } : {}),
+      ...(trialApprovals.length > 0 ? { trialApprovals } : {}),
     });
     if (result.kind === 'refused') {
       if (result.refusal.kind === 'paused') {
@@ -1248,11 +1263,16 @@ class Advance {
       }
       return false;
     }
+    if (result.trialApprovalId) {
+      // An approval made on the proposal names this StepRun now: one trial is one StepRun.
+      await nameTrialStepRun(this.client, this.ws, result.trialApprovalId, step.id);
+    }
     await this.moveStep(step, 'start', {
       audit: {
         taskId: result.attempt.task.id,
         attempt,
         ...(reworkOf ? { reworkOf: reworkOf.taskId } : {}),
+        ...(result.trialApprovalId ? { trialApproval: result.trialApprovalId } : {}),
         ...((entry.bindings ?? []).length > 0 ? { bound: (entry.bindings ?? []).length } : {}),
       },
     });

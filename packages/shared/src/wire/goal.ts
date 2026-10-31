@@ -25,6 +25,7 @@ import {
   GoalPlanSchema,
   PlanHintSchema,
   StepRemovalsSchema,
+  StepTrialDraftInfoSchema,
 } from '../goal-plan.js';
 import { OutputProblemSchema } from '../output-schema.js';
 import {
@@ -363,17 +364,58 @@ export const GoalLeftoversWireSchema = z
   .strict();
 export type GoalLeftoversWire = z.infer<typeof GoalLeftoversWireSchema>;
 
+/**
+ * S11 GO8b (goal/0013): a person's approval of one trial of a step whose WorkerSpec names draft
+ * Skills — the step's WorkerSpec (`specDigest`) and the draft versions it mounts (`drafts`, each
+ * bound to its content by `draftDigest`, named as it was approved), approved by someone who could
+ * publish every one of them then. One trial is one StepRun — its first attempt and the retries of
+ * that attempt: approved on a paused run, for the StepRun of its key that has not started
+ * (`stepRunId`); on a proposal, for the StepRun its confirmation creates (`stepRunId` `null` until
+ * its first attempt runs with it). `state`: `pending` (the step's first attempt has not started;
+ * it starts with this approval while it matches), `used` (that attempt ran with it —
+ * `usedByTaskId`) or `lapsed`, never used: `lapsedBecause` `draft_changed` (a draft it names was
+ * changed, discarded or published since — approve again), `step_changed` (the step's WorkerSpec
+ * or its StepRun is another one now, or the step started without it) or `run_ended`.
+ */
+export const STEP_TRIAL_APPROVAL_STATE_VALUES = ['pending', 'used', 'lapsed'] as const;
+export type StepTrialApprovalState = (typeof STEP_TRIAL_APPROVAL_STATE_VALUES)[number];
+export const STEP_TRIAL_APPROVAL_LAPSE_VALUES = [
+  'draft_changed',
+  'step_changed',
+  'run_ended',
+] as const;
+export type StepTrialApprovalLapse = (typeof STEP_TRIAL_APPROVAL_LAPSE_VALUES)[number];
+
+export const StepTrialApprovalWireSchema = z
+  .object({
+    id: z.string(),
+    stepKey: z.string(),
+    stepRunId: z.string().nullable(),
+    planRevision: z.number().int().positive(),
+    specDigest: z.string(),
+    drafts: z.array(StepTrialDraftInfoSchema).min(1),
+    approvedBy: z.string(),
+    approvedAt: z.string(),
+    state: z.enum(STEP_TRIAL_APPROVAL_STATE_VALUES),
+    lapsedBecause: z.enum(STEP_TRIAL_APPROVAL_LAPSE_VALUES).nullable(),
+    usedByTaskId: z.string().nullable(),
+  })
+  .strict();
+export type StepTrialApprovalWire = z.infer<typeof StepTrialApprovalWireSchema>;
+
 /** `get_goal`'s result: the run, the revision in force (revision 1 until confirmed, and on a run
  *  cancelled before it was), its revision history oldest first, every StepRun (superseded ones
  *  included) in plan order — by when it was created, then by its place in the plan in force — its
  *  verification (steps in the same order), and — while cancelling or `cleanupPending` — what is
- *  left. */
+ *  left. S11 GO8b: `trialApprovals`, every approval of a step's trial of draft Skills, oldest
+ *  first. */
 export const GoalDetailWireSchema = GoalRunWireSchema.extend({
   planRevision: PlanRevisionWireSchema,
   revisions: z.array(PlanRevisionSummaryWireSchema),
   steps: z.array(StepRunWireSchema),
   acceptance: GoalAcceptanceWireSchema,
   leftovers: GoalLeftoversWireSchema.nullable(),
+  trialApprovals: z.array(StepTrialApprovalWireSchema),
 }).strict();
 export type GoalDetailWire = z.infer<typeof GoalDetailWireSchema>;
 
@@ -496,3 +538,11 @@ export const ReconcileGoalActionResultWireSchema = GoalOperationResultWireSchema
     .strict(),
 }).strict();
 export type ReconcileGoalActionResultWire = z.infer<typeof ReconcileGoalActionResultWireSchema>;
+
+/** S11 GO8b `approve_step_trial`: the approval — the one made, or (`changed: false`) the pending
+ *  one that already approves the same trial. The run's status does not change: a paused run stays
+ *  paused for its requester to resume. */
+export const ApproveStepTrialResultWireSchema = GoalOperationResultWireSchema.extend({
+  approvalId: z.string(),
+}).strict();
+export type ApproveStepTrialResultWire = z.infer<typeof ApproveStepTrialResultWireSchema>;

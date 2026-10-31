@@ -376,6 +376,46 @@ function requireSkillAuthority(
   );
 }
 
+/**
+ * S11 GO8b: the publish authority over a draft, applied to a decision that lets it run before it is
+ * published — `approve_step_trial`: whoever could publish `row` now (D-24: its proposer, or the
+ * workspace owner — the builder floor is the capability's), under the family rule
+ * (`assertFamilyPublishAuthority`: over a live version someone else proposed, that proposer or the
+ * owner). Refuses `NotProposerError` (403 `not_proposer`); a draft `actor` cannot see is not found,
+ * as for `publish_skill`. Returns the suspected credentials its content carries, which the actor
+ * confirmed (`credentialsReviewed`; 400 `credentials_review_required` otherwise) — as a publish
+ * would. Reads only.
+ */
+export async function assertMayPublishSkillDraft(
+  client: PoolClient,
+  workspaceId: string,
+  action: string,
+  actor: PublishActor,
+  row: SkillRow,
+): Promise<number> {
+  const subject = `Skill ${row.id}@${row.version}`;
+  assertPublishAuthority(
+    action,
+    actor,
+    row,
+    subject,
+    !draftVisibleTo(actor, row) ? () => new SkillNotFoundError(row.workspaceId, row.id) : undefined,
+  );
+  await assertFamilyPublishAuthority(client, workspaceId, {
+    table: 'skills',
+    action,
+    familyId: row.id,
+    subject,
+    actor,
+  });
+  return assertDraftCredentialsReviewed(
+    'skill',
+    `${row.id}@${row.version}`,
+    skillReviewContent(row),
+    actor,
+  );
+}
+
 /** What a Skill makes take effect when published — the content `publish_skill`'s suspected-
  *  credential count reads (governance/redaction/credential-review.ts). */
 export function skillReviewContent(row: SkillRow): unknown {
@@ -876,6 +916,37 @@ export async function classifySkillRefs(
     else missing.push(ref);
   }
   return { published, drafts, deprecated, missing };
+}
+
+/** S11 GO8b: for each of `refs` (names or ids, as a WorkerSpec names them), the draft versions
+ *  `viewer` may see that it names — by id or name, in any family. A trial of a step mounts the one
+ *  draft each of its draft refs names ({@link classifySkillRefs}' `drafts`); a ref that names
+ *  several (two families' drafts under one name) has no single draft to try. A family has at most
+ *  one draft (its latest version, `assertNoPendingDraft`), so each row is a family's draft. */
+export async function readVisibleSkillDrafts(
+  client: PoolClient,
+  workspaceId: string,
+  viewer: DraftViewer,
+  refs: readonly string[],
+): Promise<ReadonlyMap<string, readonly SkillRow[]>> {
+  const unique = [...new Set(refs)];
+  const byRef = new Map<string, SkillRow[]>(unique.map((ref) => [ref, []]));
+  if (unique.length === 0) return byRef;
+  const visibility = draftVisibilityBinds(viewer);
+  const result = await client.query<SkillDbRow>(
+    `select ${SELECT_COLUMNS} from skills
+     where workspace_id = $1 and status = 'draft'
+       and (id::text = any($2::text[]) or name = any($2::text[]))
+       and ($3::boolean or proposed_by = $4)
+     order by id, version`,
+    [workspaceId, unique, visibility.seesEveryDraft, visibility.principalId],
+  );
+  for (const row of result.rows.map(mapRow)) {
+    for (const ref of unique) {
+      if (ref === row.id || ref === row.name) byRef.get(ref)?.push(row);
+    }
+  }
+  return byRef;
 }
 
 /** The exact Skill versions `refs` names, whatever their status (S11 GO2: a goal step's later

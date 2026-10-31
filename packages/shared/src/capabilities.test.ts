@@ -121,6 +121,7 @@ const HUMAN_ONLY_NAMES = [
   'set_quota',
   'issue_handle',
   'attest_fact',
+  'approve_step_trial',
 ];
 
 describe('CAPABILITY_REGISTRY', () => {

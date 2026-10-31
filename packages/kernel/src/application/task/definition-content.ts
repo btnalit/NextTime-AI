@@ -4,6 +4,7 @@ import {
   readSkillVersions,
   renderSkillMarkdownFile,
   resolvePublishedSkills,
+  skillDraftDigest,
 } from '../worker/index.js';
 
 /**
@@ -150,5 +151,54 @@ export async function resolvePinnedSkillsInline(
       })),
       loadedSkills: ordered.map((skill) => ({ skillId: skill.id, version: skill.version })),
     },
+  };
+}
+
+/** S11 GO8b: one draft Skill version a step's trial mounts, as approved — its content bound by
+ *  `draftDigest` (`skillDraftDigest`). */
+export interface TrialDraftRef {
+  readonly skillId: string;
+  readonly version: number;
+  readonly draftDigest: string;
+}
+
+/**
+ * S11 GO8b: mounts exactly the draft Skill versions a step's trial was approved for — the first
+ * attempt's, and every retry's (`RunConfigSnapshot.trial`). Each must still be that content
+ * (`draftDigest`) and a draft, or published since (the same row, the same content); a version
+ * discarded, rejected or proposed again with other content, or deprecated, is returned instead of
+ * anything being mounted: the trial approved that content and no other. Mounted in `skillsInline`
+ * only, never in `loadedSkills`: `worker_run_skills` keys published rows (worker/0004), and a
+ * draft is deleted when discarded — the same rule a draft evaluation's arm follows.
+ */
+export async function resolveTrialDraftsInline(
+  client: PoolClient,
+  workspaceId: string,
+  refs: readonly TrialDraftRef[],
+): Promise<
+  | { readonly kind: 'resolved'; readonly skillsInline: readonly TaskSkillInlineMountInput[] }
+  | { readonly kind: 'unavailable'; readonly refs: readonly TrialDraftRef[] }
+> {
+  const rows = await readSkillVersions(
+    client,
+    workspaceId,
+    refs.map((ref) => ({ skillId: ref.skillId, version: ref.version })),
+  );
+  const byRef = new Map(rows.map((row) => [`${row.id}@${row.version}`, row] as const));
+  const unavailable = refs.filter((ref) => {
+    const row = byRef.get(`${ref.skillId}@${ref.version}`);
+    return (
+      !row ||
+      (row.status !== 'draft' && row.status !== 'published') ||
+      skillDraftDigest(row) !== ref.draftDigest
+    );
+  });
+  if (unavailable.length > 0) return { kind: 'unavailable', refs: unavailable };
+  return {
+    kind: 'resolved',
+    skillsInline: refs.flatMap((ref) => {
+      const row = byRef.get(`${ref.skillId}@${ref.version}`);
+      return row ? [{ name: row.name, files: { 'SKILL.md': renderSkillMarkdownFile(row) } }] : [];
+    }),
   };
 }

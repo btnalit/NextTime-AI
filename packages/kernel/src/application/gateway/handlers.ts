@@ -263,6 +263,7 @@ import {
 // S11 GO5a: the `goal` reads; S11 GO5b: a person's operations on a run; S11 GO5c: proposing one
 // (goal-handlers.ts).
 import {
+  approveStepTrialHandler,
   cancelGoalHandler,
   confirmGoalAcceptanceHandler,
   confirmGoalHandler,
@@ -2461,6 +2462,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['confirm_goal_acceptance', confirmGoalAcceptanceHandler],
   ['end_goal', endGoalHandler],
   ['reconcile_goal_action', reconcileGoalActionHandler],
+  ['approve_step_trial', approveStepTrialHandler],
   // S10 E3-1a evaluation suites (eval-handlers.ts)
   ['list_eval_suites', listEvalSuitesHandler],
   ['get_eval_suite', getEvalSuiteHandler],

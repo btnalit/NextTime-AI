@@ -360,6 +360,8 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
         gateNames={gateNames}
         objectNames={objectNames}
         absenceOperations={absenceOperations}
+        viewer={viewer}
+        onDone={onDone}
       />
       <GoalAcceptanceSection
         detail={goal}

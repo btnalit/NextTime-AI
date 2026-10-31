@@ -15,9 +15,10 @@ export interface CredentialReviewProps {
   /** The console's names for the content's top-level fields (`lib/credential-review.ts`
    *  `reviewFieldNames`), so a path reads as the editor's own label. */
   readonly fieldNames?: Readonly<Record<string, string>>;
-  /** What takes effect: the copy differs for an approval (params run as they are) and a publish
-   *  (the content goes live for every agent that uses it). */
-  readonly subject: 'approve' | 'publish';
+  /** What takes effect: the copy differs for an approval (params run as they are), a publish
+   *  (the content goes live for every agent that uses it) and — S11 GO8b — a trial (a draft's
+   *  content goes to one goal step's Worker). */
+  readonly subject: 'approve' | 'publish' | 'trial';
   /** Where the person checks the content, when it is not on this screen (e.g. a link to the
    *  draft's detail). */
   readonly where?: ReactNode;
@@ -65,10 +66,15 @@ export function CredentialReview({
               '下列参数字段的值看起来像密钥、令牌或密码，批准后会原样用于执行。按字段名识别的值在参数里显示为 [redacted]，不显示原文。',
               'These parameter fields hold values that look like a key, token or password; approving runs them as they are. Values recognised by their field name show as [redacted] in the parameters, never in full.',
             )
-          : t(
-              '内容中下列位置的值看起来像密钥、令牌或密码，发布后会原样提供给使用它的 agent。',
-              'These places in the content hold values that look like a key, token or password; publishing gives them as they are to every agent that uses it.',
-            )}
+          : subject === 'trial'
+            ? t(
+                '草稿内容中下列位置的值看起来像密钥、令牌或密码，批准试用后会原样交给这一步的 Worker。',
+                'These places in the draft’s content hold values that look like a key, token or password; approving the trial gives them as they are to this step’s Worker.',
+              )
+            : t(
+                '内容中下列位置的值看起来像密钥、令牌或密码，发布后会原样提供给使用它的 agent。',
+                'These places in the content hold values that look like a key, token or password; publishing gives them as they are to every agent that uses it.',
+              )}
       </p>
       {paths.length > 0 ? (
         <ul

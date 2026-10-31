@@ -85,10 +85,15 @@ export {
   STEP_ATTEMPT_PAUSED_DETAIL,
   type StepAttemptRefusal,
   type StepAuthority,
+  type StepTrialApprovalCandidate,
+  type StepTrialDraft,
+  type StepTrialDrafts,
   type WorkerSpecAdmissionReason,
   createStepAttemptTask,
   resolveStepAuthority,
   startStepAttemptTask,
+  stepTrialDrafts,
+  trialDraftsMatch,
   workerSpecComponentRefusals,
   workerSpecModelRefusal,
   workerSpecDigest,
@@ -224,7 +229,7 @@ export {
   reportTaskOutcome,
 } from './attribution.js';
 
-export type { LoadedSkillRef, ResolvedRunSkills } from './definition-content.js';
+export type { LoadedSkillRef, ResolvedRunSkills, TrialDraftRef } from './definition-content.js';
 export { readDefinitionContent } from './definition-content.js';
 export {
   type RunEnvironment,

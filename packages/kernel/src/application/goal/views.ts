@@ -15,7 +15,12 @@ import {
   listStepsActionOutcomes,
   readActionRequestFailureReasons,
 } from '../../governance/approval/index.js';
-import { type GoalStepAttempt, listGoalRunStepAttempts, readGoalRunsUsage } from '../task/index.js';
+import {
+  type GoalStepAttempt,
+  listGoalRunStepAttempts,
+  readGoalRunsUsage,
+  workerSpecDigest,
+} from '../task/index.js';
 import { getProcedure } from '../worker/index.js';
 import {
   type GoalAcceptanceCheckView,
@@ -29,6 +34,12 @@ import { planAuthorityHints } from './precheck.js';
 import { getGoalRun, getPlanRevision, listPlanRevisions, listStepRuns } from './reads.js';
 import { type UnresolvedGoalAction, listGoalRunUnresolvedActions } from './reconcile.js';
 import { GoalRunNotFoundError } from './service.js';
+import {
+  type StepTrialApprovalView,
+  listStepTrialApprovals,
+  readStepTrialApprovals,
+  trialApprovalsFor,
+} from './trial-approvals.js';
 import {
   GOAL_RUN_ROW_COLUMNS,
   type GoalRunDbRow,
@@ -338,7 +349,28 @@ async function planRevisionView(
   // so is the revision in force of a paused run, for the steps that have not started an attempt or
   // wait to be tried again — the pause then says which step would not start, and why (a draft
   // Skill waiting for a person, a gate the requester lost, a model no longer allowed or offered).
-  const { steps: checked, retried } = await stepsToCheck(client, workspaceId, goal, revision, plan);
+  const {
+    steps: checked,
+    retried,
+    live,
+  } = await stepsToCheck(client, workspaceId, goal, revision, plan);
+  // S11 GO8b: a step whose trial a person approved starts with that approval — not hinted.
+  const approvals =
+    checked.length > 0 ? await listStepTrialApprovals(client, workspaceId, goal.id) : [];
+  const trialApprovals = new Map(
+    checked
+      .filter((step) => !retried.has(step.key))
+      .map((step) => [
+        step.key,
+        trialApprovalsFor(
+          approvals,
+          goal,
+          step.key,
+          live.get(step.key) ?? null,
+          workerSpecDigest(step.spec ?? null),
+        ),
+      ]),
+  );
   return {
     revision,
     plan: planAsRead(plan),
@@ -353,6 +385,7 @@ async function planRevisionView(
             {
               checkAccounts: options.checkAccounts === true,
               retried,
+              trialApprovals,
               // A plan is validated against the catalog when proposed, confirmed or revised: a
               // read says what changed since — confirming would be refused (UX on #853), or the
               // next attempt would be.
@@ -369,31 +402,36 @@ async function planRevisionView(
  *  a run's proposal while it is proposed; for a paused run's revision in force, the steps whose
  *  StepRun there has not started an attempt (`pending` or `ready`) and the ones `ready` to be tried
  *  again (`retried`: checked as a later attempt is, `precheck.ts`); none otherwise. A step running,
- *  waiting or ended has no next attempt to admit. */
+ *  waiting or ended has no next attempt to admit. `live`: the StepRuns of a paused run's steps
+ *  checked, by key (none for a proposal — its confirmation creates them). */
 async function stepsToCheck(
   client: PoolClient,
   workspaceId: string,
   goal: GoalRunRow,
   revision: PlanRevisionRow,
   plan: GoalPlan,
-): Promise<{ readonly steps: GoalPlan['steps']; readonly retried: ReadonlySet<string> }> {
+): Promise<{
+  readonly steps: GoalPlan['steps'];
+  readonly retried: ReadonlySet<string>;
+  readonly live: ReadonlyMap<string, StepRunRow>;
+}> {
   const retried = new Set<string>();
+  const live = new Map<string, StepRunRow>();
   if (goal.status === 'proposed') {
-    return { steps: revision.revision === 1 ? plan.steps : [], retried };
+    return { steps: revision.revision === 1 ? plan.steps : [], retried, live };
   }
   if (goal.status !== 'paused' || revision.revision !== goal.currentRevision) {
-    return { steps: [], retried };
+    return { steps: [], retried, live };
   }
-  const next = new Set<string>();
   for (const step of await listStepRuns(client, workspaceId, goal.id)) {
     if (step.attemptCount === 0 && (step.status === 'pending' || step.status === 'ready')) {
-      next.add(step.stepKey);
+      live.set(step.stepKey, step);
     } else if (step.attemptCount > 0 && step.status === 'ready') {
-      next.add(step.stepKey);
+      live.set(step.stepKey, step);
       retried.add(step.stepKey);
     }
   }
-  return { steps: plan.steps.filter((step) => next.has(step.key)), retried };
+  return { steps: plan.steps.filter((step) => live.has(step.key)), retried, live };
 }
 
 /** `params` with each suspected credential replaced — see the module comment. */
@@ -468,6 +506,9 @@ export interface GoalRunDetail extends GoalRunSummary {
   readonly acceptance: GoalAcceptanceView;
   /** Only while `cancelling`, or cancelled with `cleanupPending`. */
   readonly leftovers: GoalRunLeftoversView | null;
+  /** S11 GO8b: every approval of a trial of a step's draft Skills, with where it stands, oldest
+   *  first (`readStepTrialApprovals`). */
+  readonly trialApprovals: readonly StepTrialApprovalView[];
 }
 
 /** `get_goal`: everything the goal page shows of a run `viewer` may read. */
@@ -536,6 +577,14 @@ export async function readGoalRunDetail(
     leftovers: leftovers
       ? { liveTaskIds: leftovers.liveTaskIds, executingActions: leftovers.executingActions }
       : null,
+    trialApprovals: await readStepTrialApprovals(
+      client,
+      workspaceId,
+      goal,
+      inForce.plan,
+      stepRuns,
+      attempts,
+    ),
   };
 }
 

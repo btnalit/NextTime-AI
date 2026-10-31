@@ -20,12 +20,16 @@ import {
   type WorkerDefinitionRow,
   classifySkillRefs,
   getWorkerDefinition,
+  readVisibleSkillDrafts,
+  skillDraftDigest,
 } from '../worker/index.js';
 import {
   type ResolvedRunSkills,
+  type TrialDraftRef,
   readDefinitionContent,
   resolvePinnedSkillsInline,
   resolveSkillsInline,
+  resolveTrialDraftsInline,
 } from './definition-content.js';
 import type { RunConfigSnapshot } from './goal-step.js';
 import { computeChildHandleScope, defaultWorkerCapabilities } from './handle-mint.js';
@@ -100,6 +104,16 @@ import {
  * resolved without admitting them again; its authority and its model ({@link
  * workerSpecModelRefusal}: offered and allowed now) are checked every time.
  *
+ * S11 GO8b (I-G8): a person who could publish the drafts approves one trial of the step
+ * (`application/goal/trial-approvals.ts`, goal/0013) — the advancer hands the step's approvals in
+ * (`trialApprovals`), and its first attempt is admitted with the first one whose drafts are the
+ * ones its WorkerSpec names now ({@link stepTrialDrafts}), each still that content: the draft
+ * versions mount beside its published Skills, and the snapshot records the approval and the drafts
+ * (`trial`). The retries of that attempt mount the same drafts while each is unchanged
+ * ({@link resolveTrialDraftsInline}); a draft discarded, proposed again or deprecated refuses them
+ * (`unavailable`). An approval that no longer matches admits nothing: the step waits for a person
+ * again (`needs_approval`, said so).
+ *
  * S10 E3-2c (legacy 514): no attempt starts while the evaluation seal pauses the agents acting for
  * the requester (`paused`) — the Worker start would be refused anyway (`spawnWorkerRun`), and that
  * failure would read transient and spend the step's attempts. A person decides once the workspace
@@ -143,12 +157,34 @@ export type StepAttemptRefusal =
       readonly skillRefs?: readonly string[];
       /** `model_not_offered` / `model_not_allowed`: the model the WorkerSpec sets. */
       readonly model?: string;
+      /** S11 GO8b, `skill_draft`: what a trial of the step would mount ({@link stepTrialDrafts}). */
+      readonly trial?: StepTrialDrafts;
     }
   /** An I18 quota: `concurrency_exceeded` clears by itself, `daily_cost_exceeded` with the day. */
   | { readonly kind: 'quota'; readonly code: QuotaViolationCode; readonly detail: string }
   /** The evaluation seal pauses every agent acting for the requester until the workspace owner
    *  releases it (S10 E3-2c). The detail never says where the seal's refusals were. */
   | { readonly kind: 'paused'; readonly detail: string };
+
+/** S11 GO8b: one draft Skill version a trial of a step mounts — with its name and proposer, as a
+ *  hint and an approval name it. */
+export interface StepTrialDraft extends TrialDraftRef {
+  readonly name: string;
+  readonly proposedBy: string;
+}
+
+/** S11 GO8b: what one trial of a step would mount — its draft refs each naming exactly one draft
+ *  (`drafts`, in the WorkerSpec's order) — or why there is no single trial to approve. */
+export type StepTrialDrafts =
+  | { readonly kind: 'drafts'; readonly drafts: readonly StepTrialDraft[] }
+  | { readonly kind: 'none'; readonly detail: string };
+
+/** S11 GO8b: an approval of a trial of the step, as the advancer hands it in — the drafts it
+ *  approved. */
+export interface StepTrialApprovalCandidate {
+  readonly approvalId: string;
+  readonly drafts: readonly TrialDraftRef[];
+}
 
 /** Why a WorkerSpec's admission does not say `run` — see {@link StepAttemptRefusal}. */
 export type WorkerSpecAdmissionReason =
@@ -183,6 +219,10 @@ export interface CreateStepAttemptInput {
    *  when the step's WorkerSpec sets a model (unreadable: it throws, and the advance with it).
    *  Absent: the catalog is not checked, `allowedModels` still is. */
   readonly modelCatalog?: () => Promise<ReadonlySet<string>>;
+  /** S11 GO8b: for the step's first attempt, the approvals of a trial of it made for this StepRun
+   *  and its WorkerSpec, newest first (`application/goal/trial-approvals.ts`); the first whose
+   *  drafts match admits the attempt. Ignored for a later attempt (its snapshot says). */
+  readonly trialApprovals?: readonly StepTrialApprovalCandidate[];
 }
 
 /** Everything {@link startStepAttemptTask} needs after the creating transaction commits. */
@@ -192,7 +232,13 @@ export interface PreparedStepAttempt {
 }
 
 export type CreateStepAttemptResult =
-  | { readonly kind: 'created'; readonly attempt: PreparedStepAttempt }
+  | {
+      readonly kind: 'created';
+      readonly attempt: PreparedStepAttempt;
+      /** S11 GO8b: the approval a first attempt was admitted with (`null`: none) — the caller
+       *  names this StepRun on it, in the same transaction, when it does not yet. */
+      readonly trialApprovalId: string | null;
+    }
   | { readonly kind: 'refused'; readonly refusal: StepAttemptRefusal };
 
 /** Why an attempt does not start while the evaluation seal pauses the requester's agents — the
@@ -445,9 +491,77 @@ export async function workerSpecComponentRefusals(
       reason: 'skill_draft',
       detail: `the step's WorkerSpec names Skill(s) that are only drafts, which a person approves for a trial before the step starts: ${skills.drafts.join(', ')}`,
       skillRefs: skills.drafts,
+      trial: await stepTrialDrafts(client, workspaceId, parent.viewer, skills.drafts),
     });
   }
   return refusals;
+}
+
+/**
+ * S11 GO8b: the draft versions one trial of a step would mount — for each of `draftRefs` (the
+ * WorkerSpec's Skills that are only drafts for `viewer`, the requester: `classifySkillRefs`), the
+ * one draft it names. None when a ref names several drafts (two families' drafts under one name —
+ * name it by id), when two drafts share a name or a published Skill already has a draft's name (a
+ * Worker mounts Skills by name, so one name is one Skill — and such a draft could not be
+ * published either). Reads only.
+ */
+export async function stepTrialDrafts(
+  client: PoolClient,
+  workspaceId: string,
+  viewer: DraftViewer,
+  draftRefs: readonly string[],
+): Promise<StepTrialDrafts> {
+  const byRef = await readVisibleSkillDrafts(client, workspaceId, viewer, draftRefs);
+  const drafts: StepTrialDraft[] = [];
+  for (const ref of new Set(draftRefs)) {
+    const rows = byRef.get(ref) ?? [];
+    const [row] = rows;
+    if (rows.length !== 1 || !row) {
+      return {
+        kind: 'none',
+        detail:
+          rows.length === 0
+            ? `Skill "${ref}" is not a draft the requester may see`
+            : `"${ref}" names ${rows.length} draft Skills — name the one to try by its id`,
+      };
+    }
+    if (drafts.some((draft) => draft.skillId === row.id)) continue;
+    if (drafts.some((draft) => draft.name === row.name)) {
+      return { kind: 'none', detail: `two draft Skills it names are both called "${row.name}"` };
+    }
+    drafts.push({
+      skillId: row.id,
+      version: row.version,
+      draftDigest: skillDraftDigest(row),
+      name: row.name,
+      proposedBy: row.proposedBy,
+    });
+  }
+  const taken = await client.query<{ name: string }>(
+    `select distinct name from skills
+      where workspace_id = $1 and status = 'published' and name = any($2::text[])`,
+    [workspaceId, drafts.map((draft) => draft.name)],
+  );
+  const [name] = taken.rows;
+  if (name) {
+    return {
+      kind: 'none',
+      detail: `a published Skill is already called "${name.name}", so the draft by that name is not tried`,
+    };
+  }
+  return { kind: 'drafts', drafts };
+}
+
+/** S11 GO8b: whether an approval's drafts are exactly the ones a trial of the step would mount
+ *  now — the same versions with the same content. */
+export function trialDraftsMatch(
+  approved: readonly TrialDraftRef[],
+  current: readonly TrialDraftRef[],
+): boolean {
+  const key = (draft: TrialDraftRef) => `${draft.skillId}@${draft.version}#${draft.draftDigest}`;
+  const now = new Set(current.map(key));
+  const then = new Set(approved.map(key));
+  return now.size === then.size && [...then].every((entry) => now.has(entry));
 }
 
 /**
@@ -484,6 +598,23 @@ export function workerSpecModelRefusal(
     detail: `the step's WorkerSpec sets model "${model}", which this workspace does not allow`,
     model,
   };
+}
+
+/**
+ * S11 GO8b: the approval that admits a first attempt whose admission refused `refusal` — only a
+ * `skill_draft` refusal (every other reason is worse and comes first), and only an approval whose
+ * drafts are the trial's now ({@link trialDraftsMatch}). `none`: there is nothing a trial approval
+ * could admit, or no approval; `stale`: there are approvals, none matching.
+ */
+function approvedTrial(
+  refusal: StepAttemptRefusal,
+  approvals: readonly StepTrialApprovalCandidate[],
+): StepTrialApprovalCandidate | 'none' | 'stale' {
+  if (refusal.kind !== 'admission' || refusal.reason !== 'skill_draft') return 'none';
+  if (approvals.length === 0) return 'none';
+  const current = refusal.trial;
+  if (current?.kind !== 'drafts') return 'stale';
+  return approvals.find((approval) => trialDraftsMatch(approval.drafts, current.drafts)) ?? 'stale';
 }
 
 /**
@@ -538,6 +669,10 @@ export async function createStepAttemptTask(
     authority;
   const offered =
     input.spec?.model !== undefined && input.modelCatalog ? await input.modelCatalog() : null;
+  // S11 GO8b: the trial a person approved — the approval admitting the first attempt, or the one
+  // the previous attempt ran (`trial` of its snapshot).
+  let trial: { readonly approvalId: string; readonly drafts: readonly TrialDraftRef[] } | null =
+    null;
   if (!input.previous) {
     const [refusal] = await workerSpecComponentRefusals(
       client,
@@ -546,11 +681,22 @@ export async function createStepAttemptTask(
       input.spec,
       offered,
     );
-    if (refusal) return refused(refusal);
+    if (refusal) {
+      const approval = approvedTrial(refusal, input.trialApprovals ?? []);
+      if (approval === 'none') return refused(refusal);
+      if (approval === 'stale') {
+        return refused({
+          ...refusal,
+          detail: `${refusal.detail} — the approval of its trial does not match it any more (a draft changed, or another one is named), so a person approves again`,
+        });
+      }
+      trial = approval;
+    }
   } else {
     // A later attempt reuses its first attempt's Skills; its model is checked as it stands now.
     const refusal = workerSpecModelRefusal(parent, input.spec, offered);
     if (refusal) return refused(refusal);
+    trial = input.previous.v === 2 ? (input.previous.trial ?? null) : null;
   }
 
   let skills: ResolvedRunSkills;
@@ -572,6 +718,19 @@ export async function createStepAttemptTask(
       workspaceId,
       input.spec?.skills ?? content.skills ?? [],
     );
+  }
+  if (trial) {
+    const drafts = await resolveTrialDraftsInline(client, workspaceId, trial.drafts);
+    if (drafts.kind === 'unavailable') {
+      return refused({
+        kind: 'unavailable',
+        reason: 'skills',
+        detail: `draft Skill version(s) the trial was approved for were changed, discarded or deprecated since: ${drafts.refs
+          .map((skill) => `${skill.skillId}@${skill.version}`)
+          .join(', ')}`,
+      });
+    }
+    skills = { ...skills, skillsInline: [...skills.skillsInline, ...drafts.skillsInline] };
   }
 
   const model = input.previous
@@ -629,6 +788,18 @@ export async function createStepAttemptTask(
     },
     budget: { tokenBudget, durationLimitSec },
     spec: specDigest === null ? null : { digest: specDigest },
+    ...(trial
+      ? {
+          trial: {
+            approvalId: trial.approvalId,
+            drafts: trial.drafts.map((draft) => ({
+              skillId: draft.skillId,
+              version: draft.version,
+              draftDigest: draft.draftDigest,
+            })),
+          },
+        }
+      : {}),
   };
 
   const inserted = await client.query(
@@ -675,6 +846,15 @@ export async function createStepAttemptTask(
       ...(input.spec !== null
         ? { workerSpec: { digest: specDigest, fields: Object.keys(input.spec).sort() } }
         : {}),
+      // GO8b: the trial a person approved, and the draft versions it mounts.
+      ...(trial
+        ? {
+            trial: {
+              approvalId: trial.approvalId,
+              drafts: trial.drafts.map((draft) => `${draft.skillId}@${draft.version}`),
+            },
+          }
+        : {}),
     },
   });
 
@@ -682,6 +862,7 @@ export async function createStepAttemptTask(
     typeof definition.definition.name === 'string' ? definition.definition.name : definition.id;
   return {
     kind: 'created',
+    trialApprovalId: !input.previous && trial ? trial.approvalId : null,
     attempt: {
       task,
       spawn: {
