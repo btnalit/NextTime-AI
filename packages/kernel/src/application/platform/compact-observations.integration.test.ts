@@ -1217,3 +1217,116 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
   },
 );
+
+/**
+ * S10 E3-3 (worker/0012): `eval_draft_evaluations.summary_observation_id` is one more foreign key
+ * into `observations` — the previous release's compaction refuses to run on it
+ * (`reversibility-deltas.json`), this one runs, and condition (a) keeps the Observation a finished
+ * draft evaluation's summary is. The summary is an ingest marker here on purpose, as above (a real
+ * one carries a payload, which (d) keeps anyway); the evaluation row is a fixture written past the
+ * table's guards.
+ */
+describe.runIf(DATABASE_URL !== undefined)(
+  'compactObservations and a draft evaluation summary (integration, real Postgres) — S10 E3-3',
+  () => {
+    let pool: Pool;
+    const workspaceId = randomUUID();
+    const ownerId = randomUUID();
+    const DAY_SECONDS = 24 * 60 * 60;
+
+    const asLogin = <T>(fn: (client: PoolClient) => Promise<T>): Promise<T> =>
+      withWorkspace(pool, { workspaceId, principalId: ownerId }, fn, { skipRoleSwitch: true });
+    const raw = <T>(sql: string, params: readonly unknown[]): Promise<T[]> =>
+      asLogin(async (client) => {
+        await client.query('set local session_replication_role = replica');
+        return (await client.query(sql, [...params])).rows as T[];
+      });
+
+    beforeAll(async () => {
+      pool = createPool();
+      await runMigrations(pool, MIGRATIONS_DIR);
+      await asLogin(async (client) => {
+        await client.query('insert into workspaces (id, name) values ($1, $2)', [
+          workspaceId,
+          `compact-draft-evaluation-${workspaceId.slice(0, 8)}`,
+        ]);
+        await client.query(
+          `insert into principals (workspace_id, id, kind, role, display_name)
+           values ($1, $2, 'human', 'owner', 'owner')`,
+          [workspaceId, ownerId],
+        );
+      });
+    });
+
+    afterAll(async () => {
+      await pool.end();
+    });
+
+    it('runs on a schema where a draft evaluation’s summary references an Observation, and never deletes it', async () => {
+      const { sourceId, activityId, laterActivityId } = await asLogin(async (client) => {
+        const source = await registerSource(client, workspaceId, {
+          kind: 'test.compact-draft-evaluation',
+          ownerPrincipalId: ownerId,
+          visibility: 'workspace',
+        });
+        const activity = await startActivity(client, workspaceId, {
+          kind: 'test.compact-draft-evaluation',
+          principalId: ownerId,
+        });
+        const later = await startActivity(client, workspaceId, {
+          kind: 'test.compact-draft-evaluation',
+          principalId: ownerId,
+        });
+        return { sourceId: source.id, activityId: activity.id, laterActivityId: later.id };
+      });
+      const observe = async (activity: string, offsetSeconds: number) =>
+        (
+          await raw<{ id: string }>(
+            `insert into observations (workspace_id, source_id, activity_id, content, created_at)
+             values ($1, $2, $3, '{}', now() + make_interval(secs => $4)) returning id`,
+            [workspaceId, sourceId, activity, offsetSeconds],
+          )
+        )[0]?.id as string;
+      const summary = await observe(activityId, -40 * DAY_SECONDS - 30);
+      const older = await observe(activityId, -40 * DAY_SECONDS - 20);
+      const old = await observe(activityId, -40 * DAY_SECONDS - 10);
+      const newest = await observe(laterActivityId, 0);
+
+      const [evaluation] = await raw<{ id: string }>(
+        `insert into eval_draft_evaluations
+           (workspace_id, suite_id, suite_version, worker_definition_id, worker_definition_version,
+            skill_id, skill_version, draft_digest, candidate_proposed_by, candidate_name,
+            candidate_description, candidate_markdown, baseline_version, other_skills,
+            regression_case_ids, mechanism_case_ids, confirm_case_ids, status, verdict, reason,
+            decided_by, created_by, finished_at, dev_verdict, summary_observation_id)
+         values ($1, $2, 1, $3, 1, $4, 2, 'sha256:d', $5, 'restart-helper', 'Restarts a host.',
+                 '# Restart', 1, '[]'::jsonb, array[$6]::uuid[], '{}', '{}', 'finished',
+                 'regressed', 'regression_case_lost', 'regression', $5, now(), 'regressed', $7)
+         returning id`,
+        [workspaceId, randomUUID(), randomUUID(), randomUUID(), ownerId, randomUUID(), summary],
+      );
+      expect(evaluation?.id).toEqual(expect.any(String));
+
+      const dryRun = await compactObservations(pool, { confirm: false, workspaceId });
+      expect(dryRun.workspaces.find((w) => w.workspaceId === workspaceId)).toMatchObject({
+        examined: 3,
+        keptReferenced: 1,
+        deleted: 2,
+      });
+
+      const executed = await compactObservations(pool, { confirm: true, workspaceId });
+      expect(executed.workspaces.find((w) => w.workspaceId === workspaceId)).toMatchObject({
+        examined: 3,
+        keptReferenced: 1,
+        deleted: 2,
+      });
+      const left = await asLogin((client) =>
+        client.query<{ id: string }>(
+          'select id from observations where workspace_id = $1 and id = any($2::uuid[])',
+          [workspaceId, [summary, older, old, newest]],
+        ),
+      );
+      expect(new Set(left.rows.map((row) => row.id))).toEqual(new Set([summary, newest]));
+    });
+  },
+);

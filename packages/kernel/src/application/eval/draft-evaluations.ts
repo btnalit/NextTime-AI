@@ -1,6 +1,7 @@
 import {
   DRAFT_EVALUATION_STAGE_VALUES,
   type DraftEvaluationArmTallyWire,
+  type DraftEvaluationDevVerdict,
   type DraftEvaluationEnvironmentWire,
   type DraftEvaluationReason,
   type DraftEvaluationSkip,
@@ -55,7 +56,8 @@ import {
   EvaluationBudgetInsufficientError,
 } from './errors.js';
 import { getOrCreateEvaluationPrincipal } from './principal.js';
-import { type VerdictTrial, measureStage, stageOutcome } from './verdict.js';
+import { recordEvaluationSummary } from './summary.js';
+import { type VerdictTrial, devVerdictOf, measureStage, stageOutcome } from './verdict.js';
 
 /**
  * application/eval/draft-evaluations: a Skill draft evaluated against what it would replace (S10
@@ -135,6 +137,7 @@ interface EvaluationRow {
   readonly verdict: DraftEvaluationVerdict | null;
   readonly reason: DraftEvaluationReason | null;
   readonly decided_by: DraftEvaluationStageName | null;
+  readonly dev_verdict: DraftEvaluationDevVerdict | null;
   readonly stage_notes: StageNotes;
   readonly created_by: string;
   readonly created_at: Date;
@@ -147,7 +150,7 @@ const EVALUATION_COLUMNS = `e.id, e.suite_id, e.suite_version, s.name as suite_n
   e.candidate_proposed_by, e.candidate_name, e.candidate_description, e.candidate_markdown,
   e.baseline_version, b.name as baseline_name, e.other_skills, e.mechanism, e.regression_case_ids,
   e.mechanism_case_ids, e.confirm_case_ids, e.status, e.stage, e.verdict, e.reason, e.decided_by,
-  e.stage_notes, e.created_by, e.created_at, e.finished_at, e.cancelled_by`;
+  e.dev_verdict, e.stage_notes, e.created_by, e.created_at, e.finished_at, e.cancelled_by`;
 
 const EVALUATION_FROM = `eval_draft_evaluations e
   join eval_suites s on s.workspace_id = e.workspace_id and s.id = e.suite_id
@@ -723,12 +726,21 @@ export async function settleDraftStage(
     stageTrials,
     trials.map((t) => verdictTrial(t, canary)),
   );
+  // What each stage that ran read — the dev verdict reads them again on `dev` alone.
+  const byStage: Partial<Record<DraftEvaluationStageName, VerdictTrial[]>> = {};
+  for (const t of trials) {
+    if (t.stage === null) continue;
+    const of = byStage[t.stage] ?? [];
+    of.push(verdictTrial(t, canary));
+    byStage[t.stage] = of;
+  }
   if (outcome.kind === 'decided') {
     await finishEvaluation(client, workspaceId, row, actorPrincipalId, {
       verdict: outcome.verdict,
       reason: outcome.reason,
       decidedBy: run.stage,
       notes: {},
+      stageTrials: byStage,
     });
     return;
   }
@@ -755,6 +767,7 @@ export async function settleDraftStage(
       reason: plan.reason,
       decidedBy: plan.decidedBy,
       notes: plan.notes,
+      stageTrials: byStage,
     });
     return;
   }
@@ -796,14 +809,40 @@ async function finishEvaluation(
     readonly reason: DraftEvaluationReason;
     readonly decidedBy: DraftEvaluationStageName;
     readonly notes: StageNotes;
+    /** Each stage's ended trials, for the dev verdict. */
+    readonly stageTrials: Partial<Record<DraftEvaluationStageName, readonly VerdictTrial[]>>;
   },
 ): Promise<void> {
+  // S10 E3-3: what the proposer is told, and the one Observation the graph holds of it.
+  const devVerdict = devVerdictOf(end.verdict, end.stageTrials);
+  const observationId = await recordEvaluationSummary(client, workspaceId, {
+    evaluationId: row.id,
+    skillId: row.skill_id,
+    version: row.skill_version,
+    draftDigest: row.draft_digest,
+    suiteId: row.suite_id,
+    suiteVersion: row.suite_version,
+    verdict: end.verdict,
+    reason: end.reason,
+    decidedBy: end.decidedBy,
+    devVerdict,
+  });
   await client.query(
     `update eval_draft_evaluations
         set status = 'finished', stage = null, verdict = $3, reason = $4, decided_by = $5,
-            stage_notes = stage_notes || $6::jsonb, finished_at = now()
+            stage_notes = stage_notes || $6::jsonb, finished_at = now(), dev_verdict = $7,
+            summary_observation_id = $8
       where workspace_id = $1 and id = $2`,
-    [workspaceId, row.id, end.verdict, end.reason, end.decidedBy, JSON.stringify(end.notes)],
+    [
+      workspaceId,
+      row.id,
+      end.verdict,
+      end.reason,
+      end.decidedBy,
+      JSON.stringify(end.notes),
+      devVerdict,
+      observationId,
+    ],
   );
   await writeAudit(client, {
     workspaceId,
@@ -818,6 +857,8 @@ async function finishEvaluation(
       verdict: end.verdict,
       reason: end.reason,
       decidedBy: end.decidedBy,
+      devVerdict,
+      observationId,
     },
   });
 }
@@ -939,6 +980,7 @@ function summaryOf(row: EvaluationRow, costUsd: number | null): DraftEvaluationS
     verdict: row.verdict,
     reason: row.reason,
     decidedBy: row.decided_by,
+    devVerdict: row.dev_verdict,
     costUsd,
     createdBy: row.created_by,
     createdAt: row.created_at.toISOString(),

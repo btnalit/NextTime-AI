@@ -148,6 +148,7 @@ interface ContentEvaluationRow {
   readonly status: 'running' | 'finished';
   readonly verdict: DraftEvaluationVerdict | null;
   readonly reason: DraftEvaluationReason | null;
+  readonly summary_observation_id: string | null;
 }
 
 /** Every evaluation of exactly the draft's content that `viewer` may see and that runs or
@@ -160,7 +161,8 @@ async function readContentEvaluations(
   target: PublishEvidenceTarget,
 ): Promise<readonly ContentEvaluationRow[]> {
   const rows = await client.query<ContentEvaluationRow>(
-    `select e.id, e.status, e.verdict, e.reason from eval_draft_evaluations e
+    `select e.id, e.status, e.verdict, e.reason, e.summary_observation_id
+       from eval_draft_evaluations e
       where e.workspace_id = $1 and e.skill_id = $4 and e.skill_version = $5
         and e.draft_digest = $6 and e.status in ('running', 'finished')
         and ${DRAFT_EVALUATION_VISIBLE_TO('$2', '$3')}
@@ -299,6 +301,9 @@ export interface PublishEvidenceAudit {
     readonly id: string;
     readonly verdict: string | null;
     readonly reason: string | null;
+    /** S10 E3-3: the graph's summary Observation of it (`summary.ts`) — the publish review's
+     *  Evidence; `null` for one that finished before it was kept. */
+    readonly observationId: string | null;
   } | null;
   readonly acknowledgedFailures: number;
 }
@@ -356,7 +361,14 @@ export async function checkPublishEvidence(
     );
   }
   return {
-    evaluation: latest ? { id: latest.id, verdict: latest.verdict, reason: latest.reason } : null,
+    evaluation: latest
+      ? {
+          id: latest.id,
+          verdict: latest.verdict,
+          reason: latest.reason,
+          observationId: latest.summary_observation_id,
+        }
+      : null,
     acknowledgedFailures: given.size,
   };
 }

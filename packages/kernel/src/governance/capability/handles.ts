@@ -157,6 +157,9 @@ const ENTRY_CEILING_EXTRA_CAPABILITY_NAMES = [
   'list_goals',
   'get_goal_revision',
   'list_goal_unresolved_actions',
+  // S10 E3-3 (I-E4, §5.5 封闭 / 防噪): how the evaluations of its person's own Skill drafts came
+  // out, on the dev cases only — read before proposing a Skill's next version.
+  'get_skill_draft_verdicts',
 ] as const;
 
 /**
@@ -233,6 +236,9 @@ const WORKER_CEILING_EXTRA_CAPABILITY_NAMES = [
   // `observeRefusal` (application/gates/observe-access.ts), never by a gate scope — so a Worker of a
   // member holding no Grant can still read. Also infrastructure — see below.
   'observe_operation',
+  // S10 E3-3: a Worker proposes Skills too (propose_skill) — the dev verdicts of its person's own
+  // drafts, as in the entry ceiling.
+  'get_skill_draft_verdicts',
 ] as const;
 
 const WORKER_CEILING_GATE_EXECUTE_CAPABILITY_NAME = '<gate>.<op>:execute';

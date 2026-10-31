@@ -84,6 +84,7 @@ describe('registerInteractiveMode', () => {
       'record_decision',
       'propose_worker_definition',
       'propose_operation',
+      'get_skill_draft_verdicts',
       'propose_skill',
       'propose_procedure',
       'propose_ontology_change',

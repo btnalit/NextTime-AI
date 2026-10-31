@@ -52,6 +52,7 @@ function summary(extra: Partial<DraftEvaluationSummaryWire> = {}): DraftEvaluati
     verdict: 'worse',
     reason: 'below_margin',
     decidedBy: 'confirm',
+    devVerdict: 'worse',
     costUsd: 0.14,
     createdBy: 'p-me',
     createdAt: AT,

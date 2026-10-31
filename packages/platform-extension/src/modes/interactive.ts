@@ -80,6 +80,8 @@ const INTERACTIVE_TOOL_CAPABILITY_NAMES = [
   'record_decision',
   'propose_worker_definition',
   'propose_operation',
+  // S10 E3-3: the dev-only verdicts of this member's own Skill drafts, as in entry mode.
+  'get_skill_draft_verdicts',
   'propose_skill',
   'propose_procedure',
   'propose_ontology_change',

@@ -3003,6 +3003,25 @@
             }
           ]
         },
+        "devVerdict": {
+          "anyOf": [
+            {
+              "enum": [
+                "regressed",
+                "refuted",
+                "worse",
+                "better",
+                "non_inferior",
+                "inconclusive",
+                "unmeasured"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "environments": {
           "items": {
             "additionalProperties": false,
@@ -3820,6 +3839,7 @@
         "verdict",
         "reason",
         "decidedBy",
+        "devVerdict",
         "costUsd",
         "createdBy",
         "createdAt",
@@ -13290,6 +13310,25 @@
             }
           ]
         },
+        "devVerdict": {
+          "anyOf": [
+            {
+              "enum": [
+                "regressed",
+                "refuted",
+                "worse",
+                "better",
+                "non_inferior",
+                "inconclusive",
+                "unmeasured"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "environments": {
           "items": {
             "additionalProperties": false,
@@ -14107,6 +14146,7 @@
         "verdict",
         "reason",
         "decidedBy",
+        "devVerdict",
         "costUsd",
         "createdBy",
         "createdAt",
@@ -22885,6 +22925,75 @@
     "sideEffects": false
   },
   {
+    "channel": "handle",
+    "group": "meta",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "get_skill_draft_verdicts",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "skillId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "skillId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "devVerdict": {
+                "enum": [
+                  "regressed",
+                  "refuted",
+                  "worse",
+                  "better",
+                  "non_inferior",
+                  "inconclusive",
+                  "unmeasured"
+                ],
+                "type": "string"
+              },
+              "draftDigest": {
+                "type": "string"
+              },
+              "version": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "version",
+              "draftDigest",
+              "devVerdict"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
     "actsForPerson": true,
     "channel": "human",
     "group": "evaluation",
@@ -23784,6 +23893,25 @@
                   }
                 ]
               },
+              "devVerdict": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "regressed",
+                      "refuted",
+                      "worse",
+                      "better",
+                      "non_inferior",
+                      "inconclusive",
+                      "unmeasured"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "finishedAt": {
                 "type": [
                   "string",
@@ -23915,6 +24043,7 @@
               "verdict",
               "reason",
               "decidedBy",
+              "devVerdict",
               "costUsd",
               "createdBy",
               "createdAt",
@@ -24033,6 +24162,25 @@
                   }
                 ]
               },
+              "devVerdict": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "regressed",
+                      "refuted",
+                      "worse",
+                      "better",
+                      "non_inferior",
+                      "inconclusive",
+                      "unmeasured"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "finishedAt": {
                 "type": [
                   "string",
@@ -24164,6 +24312,7 @@
               "verdict",
               "reason",
               "decidedBy",
+              "devVerdict",
               "costUsd",
               "createdBy",
               "createdAt",
@@ -29470,6 +29619,25 @@
                   }
                 ]
               },
+              "devVerdict": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "regressed",
+                      "refuted",
+                      "worse",
+                      "better",
+                      "non_inferior",
+                      "inconclusive",
+                      "unmeasured"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "finishedAt": {
                 "type": [
                   "string",
@@ -29601,6 +29769,7 @@
               "verdict",
               "reason",
               "decidedBy",
+              "devVerdict",
               "costUsd",
               "createdBy",
               "createdAt",
@@ -55859,6 +56028,25 @@
             }
           ]
         },
+        "devVerdict": {
+          "anyOf": [
+            {
+              "enum": [
+                "regressed",
+                "refuted",
+                "worse",
+                "better",
+                "non_inferior",
+                "inconclusive",
+                "unmeasured"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "environments": {
           "items": {
             "additionalProperties": false,
@@ -56676,6 +56864,7 @@
         "verdict",
         "reason",
         "decidedBy",
+        "devVerdict",
         "costUsd",
         "createdBy",
         "createdAt",

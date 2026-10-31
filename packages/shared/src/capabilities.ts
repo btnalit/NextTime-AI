@@ -1530,6 +1530,23 @@ const metaCapabilities = [
       'How each version of a Skill family has done: WorkerRuns that loaded it; Tasks completed / failed / cancelled / in progress under the version their last run loaded; the attainment rate (requester and verified_by_check outcomes) with proxy outcomes (agent_reported, reviewer_assessed) apart; the same per run environment (environmentDigest, null = unknown), each segment marked reviewSuggested when its latest reviewStreak primary outcomes were all not achieved; and failed Tasks grouped by WorkerDefinition version × failure category × what refused them. Numbers only. Builder floor; null for an unknown skillId.',
   },
   {
+    // S10 E3-3 (§3.3 I-E4, §5.5 封闭 / 防噪): what the proposer — and an agent acting for them —
+    // is told of the evaluations of their drafts of one Skill: the verdict on the dev cases only
+    // (`DraftEvaluationDevVerdict`, written when the evaluation ends), never a pass count, a case
+    // or a reason. Handle channel; the caller's own proposals only, whatever their role (on a
+    // Handle, its obo's). Read from one column of the evaluation's row — the scoring module stays
+    // the human-channel handlers' alone (`.dependency-cruiser.cjs`).
+    name: 'get_skill_draft_verdicts',
+    group: 'meta',
+    mode: 'observe',
+    channel: 'handle',
+    minRole: 'member',
+    paramsSchema: z.object({ skillId: id }).strict(),
+    resultSchema: wire.SkillDraftVerdictsWireSchema,
+    description:
+      'How the finished evaluations of the drafts you proposed of one Skill came out, newest first (at most 20; truncated when there are more): each draft’s version and draftDigest, and its devVerdict — the evaluation’s rules read on its dev cases only: regressed (a regression case it kept passing is now lost), refuted (the failure it aimed at is not shown fixed), worse, better or non_inferior against the version it would replace, inconclusive (those cases do not decide), or unmeasured. Read it before proposing the next version (propose_skill with skillId): a draft found regressed, refuted or worse is not a direction to repeat. Pass counts, the cases, why and when are not given, nor an evaluation still running. Drafts someone else proposed are not listed; an unknown skillId lists none.',
+  },
+  {
     name: 'list_procedures',
     group: 'meta',
     mode: 'observe',

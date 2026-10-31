@@ -104,6 +104,7 @@ function summary(extra: Partial<DraftEvaluationSummaryWire> = {}): DraftEvaluati
     verdict: 'regressed',
     reason: 'regression_case_lost',
     decidedBy: 'regression',
+    devVerdict: 'regressed',
     costUsd: 0.08,
     createdBy: 'p-me',
     createdAt: AT,
@@ -276,6 +277,7 @@ describe('SkillDraftEvaluations (S10 E3-2b)', () => {
               verdict: null,
               reason: null,
               decidedBy: null,
+              devVerdict: null,
               finishedAt: null,
             }),
           ],
@@ -299,6 +301,7 @@ describe('SkillDraftEvaluations (S10 E3-2b)', () => {
         verdict: null,
         reason: null,
         decidedBy: null,
+        devVerdict: null,
         finishedAt: null,
       });
       let reads = 0;
