@@ -2,12 +2,15 @@ import {
   type DraftEvaluationArmTallyWire,
   type DraftEvaluationEvidenceWire,
   type DraftEvaluationReason,
+  type DraftEvaluationSummaryWire,
   type DraftEvaluationVerdict,
   type DraftEvaluationWire,
   FAMILY_HISTORY_VERDICTS,
   type PublishAcknowledgementItemWire,
   type PublishEvaluationReview,
+  type SkillPublishCandidateState,
   type SkillPublishEvidenceWire,
+  type SkillPublishFamilyEntryWire,
   publishAcknowledgesVerdict,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
@@ -211,27 +214,61 @@ export async function readSkillPublishEvidence(
     evaluations: evaluations.map(evidenceOf),
     runningEvaluationId: rows.find((r) => r.status === 'running')?.id ?? null,
     acknowledge: await acknowledgementsOver(client, workspaceId, evaluations),
-    familyHistory: [
-      ...(await listDraftEvaluations(client, workspaceId, viewer, {
+    familyHistory: await withCandidateState(
+      client,
+      workspaceId,
+      await listDraftEvaluations(client, workspaceId, viewer, {
         skillId: target.skillId,
         verdicts: FAMILY_HISTORY_VERDICTS,
         notContent: { version: target.version, draftDigest: target.draftDigest },
         limit: FAMILY_HISTORY_LIMIT,
-      })),
-    ],
+      }),
+    ),
   };
 }
 
+/** Each evaluation with what became of the draft it evaluated (#842 UX P2-1): its version, if that
+ *  very content is still there — a draft, or published (and maybe deprecated) since — else
+ *  `rejected` when a rejection of that content is recorded (`draft_rejections`), else `discarded`
+ *  by its proposer. */
+async function withCandidateState(
+  client: PoolClient,
+  workspaceId: string,
+  evaluations: readonly DraftEvaluationSummaryWire[],
+): Promise<SkillPublishFamilyEntryWire[]> {
+  if (evaluations.length === 0) return [];
+  const states = await client.query<{ id: string; state: SkillPublishCandidateState }>(
+    `select e.id,
+            coalesce(v.status,
+                     case when exists (
+                       select 1 from draft_rejections r
+                        where r.workspace_id = e.workspace_id and r.kind = 'skill'
+                          and r.family_id = e.skill_id and r.version = e.skill_version
+                          and r.draft_digest = e.draft_digest)
+                     then 'rejected' else 'discarded' end) as state
+       from eval_draft_evaluations e
+       left join skills v on v.workspace_id = e.workspace_id and v.id = e.skill_id
+        and v.version = e.skill_version and v.proposed_by = e.candidate_proposed_by
+        and v.name = e.candidate_name and v.description = e.candidate_description
+        and v.markdown = e.candidate_markdown
+      where e.workspace_id = $1 and e.id = any($2::uuid[])`,
+    [workspaceId, evaluations.map((e) => e.id)],
+  );
+  const stateOf = new Map(states.rows.map((r) => [r.id, r.state] as const));
+  return evaluations.map((e) => ({ ...e, candidateState: stateOf.get(e.id) ?? 'discarded' }));
+}
+
 /** What the publish's audit record says of its evidence: the evaluation it was made on (`null`:
- *  none), its verdict and why, and how many failures it acknowledged — the acknowledgements
- *  themselves, with their reasons, are in its params. */
+ *  none) with its verdict and why, and how many failures the publish acknowledged — over every
+ *  evaluation of the content that asks for them, not only that one (review #493 on #842, O1); the
+ *  acknowledgements themselves, each with its evaluation and reason, are in its params. */
 export interface PublishEvidenceAudit {
   readonly evaluation: {
     readonly id: string;
     readonly verdict: string | null;
     readonly reason: string | null;
-    readonly acknowledged: number;
   } | null;
+  readonly acknowledgedFailures: number;
 }
 
 /**
@@ -287,13 +324,7 @@ export async function checkPublishEvidence(
     );
   }
   return {
-    evaluation: latest
-      ? {
-          id: latest.id,
-          verdict: latest.verdict,
-          reason: latest.reason,
-          acknowledged: given.size,
-        }
-      : null,
+    evaluation: latest ? { id: latest.id, verdict: latest.verdict, reason: latest.reason } : null,
+    acknowledgedFailures: given.size,
   };
 }

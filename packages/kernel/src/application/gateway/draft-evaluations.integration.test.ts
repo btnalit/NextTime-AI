@@ -1652,8 +1652,14 @@ describe.runIf(DATABASE_URL !== undefined)(
         ),
       );
       expect(audit.rows[0]?.payload).toMatchObject({
-        evaluation: { id: worse.id, verdict: 'worse', reason: 'below_margin', acknowledged: 2 },
+        // The count is the publish's, over both evaluations — not the named one's (#842 O1).
+        acknowledgedFailures: 2,
         params: { evaluationReview: { evaluationId: worse.id, acknowledgements: reasons } },
+      });
+      expect(audit.rows[0]?.payload.evaluation).toEqual({
+        id: worse.id,
+        verdict: 'worse',
+        reason: 'below_margin',
       });
       // Published as evaluated: everyone sees its evidence now.
       expect((await evidence('member')).evaluations.map((e) => e.id)).toEqual([
@@ -1678,9 +1684,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         { skillId: notesId, version: next.version, draftDigest: next.digest },
       );
       expect(history.evaluations).toEqual([]);
-      expect(history.familyHistory.map((e) => [e.id, e.verdict, e.candidate.version])).toEqual([
-        [worse.id, 'worse', 2],
-        [regressed.id, 'regressed', 2],
+      // Published since, after its failures were acknowledged — not a change that was dropped.
+      expect(
+        history.familyHistory.map((e) => [e.id, e.verdict, e.candidate.version, e.candidateState]),
+      ).toEqual([
+        [worse.id, 'worse', 2, 'published'],
+        [regressed.id, 'regressed', 2, 'published'],
       ]);
 
       // Running the same content again, more often than the evidence shows the newest of, does
@@ -1722,7 +1731,83 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect((unacknowledged as EvaluationReviewRequiredError).details.items).toEqual([
         { evaluationId: lost.id, caseId: regressionOnly.cases[0]?.id },
       ]);
-    }, 60_000);
+
+      // What became of each version the family history shows: a draft still pending, one its
+      // proposer discarded, one a reviewer rejected.
+      const familyOf = async (draftOf: { version: number; digest: string }) =>
+        (
+          await call<SkillPublishEvidenceWire>(person('builder'), 'get_skill_publish_evidence', {
+            skillId: notesId,
+            version: draftOf.version,
+            draftDigest: draftOf.digest,
+          })
+        ).familyHistory.map((e) => [e.id, e.candidateState]);
+      await call(person('builder'), 'discard_draft', {
+        kind: 'skill',
+        id: notesId,
+        version: next.version,
+      });
+      const another = await skill(
+        'builder',
+        {
+          name: 'notes',
+          description: 'Keeps notes of what was done.',
+          markdown: '# Notes\n\nWrite down each step.\nName the host.',
+        },
+        { skillId: notesId },
+      );
+      const lostAgain = await drive(
+        (
+          await call<DraftEvaluationWire>(person('builder'), 'start_draft_evaluation', {
+            skillId: notesId,
+            version: another.version,
+            draftDigest: another.digest,
+            suiteId: regressionOnly.id,
+            suiteVersion: regressionOnly.version,
+          })
+        ).id,
+        ({ arm }) => (arm === 'baseline' ? 'pass' : 'fail'),
+      );
+      expect(lostAgain).toMatchObject({ verdict: 'regressed' });
+      const third = await skill(
+        'owner',
+        {
+          name: 'notes',
+          description: 'Keeps notes of what was done.',
+          markdown: '# Notes\n\nWrite down each step briefly.',
+        },
+        { skillId: notesId },
+      ).catch((err: unknown) => err);
+      // One pending draft per family: the next is proposed once this one is rejected.
+      expect(third).toBeInstanceOf(Error);
+      expect(await familyOf(another)).toEqual([
+        [lost.id, 'discarded'],
+        [worse.id, 'published'],
+        [regressed.id, 'published'],
+      ]);
+      await call(person('owner'), 'reject_draft', {
+        kind: 'skill',
+        id: notesId,
+        version: another.version,
+        draftDigest: another.digest,
+        reason: 'Restarting is out of scope for notes.',
+      });
+      const last = await skill(
+        'owner',
+        {
+          name: 'notes',
+          description: 'Keeps notes of what was done.',
+          markdown: '# Notes\n\nWrite down each step briefly.',
+        },
+        { skillId: notesId },
+      );
+      expect(await familyOf(last)).toEqual([
+        [lostAgain.id, 'rejected'],
+        [lost.id, 'discarded'],
+        [worse.id, 'published'],
+        [regressed.id, 'published'],
+      ]);
+    }, 120_000);
 
     // Last: it removes this test's workspace, the evaluations with it.
     it('the workspace purge removes draft evaluations with their runs and trials', async () => {

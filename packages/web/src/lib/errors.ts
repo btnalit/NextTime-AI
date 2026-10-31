@@ -1049,6 +1049,14 @@ export function isVersionChangedError(err: unknown): boolean {
   return describeError(err).code === 'version_changed';
 }
 
+/** S10 E3-3a: a Skill publish refused because the draft's evaluation evidence moved on after it
+ *  was reviewed — another evaluation ended (`evaluation_changed`) or one runs now
+ *  (`draft_evaluating`). Nothing was published; the evidence is read again. */
+export function isEvidenceMovedError(err: unknown): boolean {
+  const code = describeError(err).code;
+  return code === 'evaluation_changed' || code === 'draft_evaluating';
+}
+
 /** `gatekeeper_timeout` → `Gatekeeper timeout` for codes this file has no curated title for. */
 function titleFromCode(code: string): string {
   const words = code.replace(/[_-]+/g, ' ').trim();

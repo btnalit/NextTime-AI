@@ -4459,7 +4459,7 @@ describe('CatalogPage — publish review on a Skill draft (S10 E3-3a)', () => {
     await waitFor(() => expect(screen.queryByTestId('publish-acknowledge')).toBeNull());
   });
 
-  it('evidence that moved on since it was read: nothing is published, it is read again and the toast says so', async () => {
+  it('evidence that moved on while the acknowledgement sheet is open: nothing is published, both sections are read again and the sheet says what changed', async () => {
     let reads = 0;
     const http = scriptedHttp({
       get_workspace: () => OWNER,
@@ -4481,22 +4481,69 @@ describe('CatalogPage — publish review on a Skill draft (S10 E3-3a)', () => {
     const detail = await selectRow(await screen.findByTestId('catalog-row'));
     const publish = (await within(detail).findByTestId('skill-publish')) as HTMLButtonElement;
     await waitFor(() => expect(publish.disabled).toBe(false));
+    const listReads = () => http.calls.filter((c) => c.name === 'list_draft_evaluations').length;
+    const listedBefore = listReads();
     fireEvent.click(publish);
     const sheet = await screen.findByTestId('publish-acknowledge');
     fireEvent.change(within(sheet).getByTestId('publish-acknowledge-reason'), {
       target: { value: 'known' },
     });
     fireEvent.click(within(sheet).getByTestId('publish-acknowledge-submit'));
+    // #842 UX P3-2: said in the sheet, not in a toast over its button.
+    const notice = await within(screen.getByTestId('publish-acknowledge')).findByTestId(
+      'publish-acknowledge-changed',
+    );
+    expect(notice.textContent).toContain('又有一次评测结束，结论是「差于基线」');
+    expect(screen.queryByTestId('toast')).toBeNull();
+    expect(
+      within(screen.getByTestId('publish-acknowledge'))
+        .getByTestId('publish-acknowledge-evaluation')
+        .getAttribute('data-evaluation-id'),
+    ).toBe(NEWER);
+    expect(reads).toBe(2);
+    // #842 UX P3-1: 「评测」 is read again too, so it says the same as 发布审阅.
+    await waitFor(() => expect(listReads()).toBeGreaterThan(listedBefore));
+  });
+
+  it('evidence that moved on with nothing to acknowledge: the toast says so and both sections are read again', async () => {
+    let reads = 0;
+    const settled = (id: string) => ({
+      ...evidence(id),
+      evaluations: [{ ...evaluation(id), verdict: 'non_inferior', reason: null }],
+      acknowledge: [],
+    });
+    const http = scriptedHttp({
+      get_workspace: () => OWNER,
+      list_skills: () => ({ items: [draft] }),
+      get_skill: () => null,
+      list_draft_evaluations: () => ({ items: [] }),
+      get_skill_publish_evidence: () => {
+        reads += 1;
+        return settled(reads === 1 ? EVALUATION : NEWER);
+      },
+      publish_skill: () =>
+        Promise.reject(
+          new HttpError('capability_error', 'another evaluation ended', 'evaluation_changed', {
+            evaluationId: NEWER,
+          }),
+        ),
+    });
+    renderPage(http, 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    const publish = (await within(detail).findByTestId('skill-publish')) as HTMLButtonElement;
+    await waitFor(() => expect(publish.disabled).toBe(false));
+    const listReads = () => http.calls.filter((c) => c.name === 'list_draft_evaluations').length;
+    const listedBefore = listReads();
+    fireEvent.click(publish);
     const toast = await screen.findByTestId('toast');
     expect(toast.textContent).toContain('评测证据在你看过之后变了');
+    expect(screen.queryByTestId('publish-acknowledge')).toBeNull();
     await waitFor(() =>
       expect(
-        within(screen.getByTestId('publish-acknowledge'))
-          .getByTestId('publish-acknowledge-evaluation')
-          .getAttribute('data-evaluation-id'),
+        within(detail).getByTestId('skill-publish-evidence').getAttribute('data-evaluation-id'),
       ).toBe(NEWER),
     );
-    expect(reads).toBe(2);
+    await waitFor(() => expect(listReads()).toBeGreaterThan(listedBefore));
   });
 
   it('while one of its evaluations runs, Publish waits for it', async () => {

@@ -10,7 +10,11 @@ import type {
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Resource } from '../../hooks/useResource.js';
-import { PublishAcknowledgeSheet, SkillPublishReview } from './SkillPublishReview.js';
+import {
+  PublishAcknowledgeSheet,
+  type PublishAcknowledgeSheetProps,
+  SkillPublishReview,
+} from './SkillPublishReview.js';
 
 afterEach(cleanup);
 
@@ -19,6 +23,8 @@ const SKILL = '44444444-4444-4444-8444-444444444444';
 const LATEST = '55555555-5555-4555-8555-555555555555';
 const EARLIER = '66666666-6666-4666-8666-666666666666';
 const OLD_DRAFT = '77777777-7777-4777-8777-777777777777';
+const PASSED = '88888888-8888-4888-8888-888888888888';
+const NEWER = '99999999-9999-4999-8999-999999999999';
 const CASE_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const CASE_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const CASE_R = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
@@ -148,13 +154,21 @@ function evidence(extra: Partial<SkillPublishEvidenceWire> = {}): SkillPublishEv
     runningEvaluationId: null,
     acknowledge: [ITEM_A, ITEM_R],
     familyHistory: [
-      summary({
-        id: OLD_DRAFT,
-        verdict: 'refuted',
-        reason: 'mechanism_not_shown',
-        decidedBy: 'mechanism',
-        candidate: { skillId: SKILL, version: 1, name: 'restart-helper', draftDigest: 'sha256:o' },
-      }),
+      {
+        ...summary({
+          id: OLD_DRAFT,
+          verdict: 'refuted',
+          reason: 'mechanism_not_shown',
+          decidedBy: 'mechanism',
+          candidate: {
+            skillId: SKILL,
+            version: 1,
+            name: 'restart-helper',
+            draftDigest: 'sha256:o',
+          },
+        }),
+        candidateState: 'published',
+      },
     ],
     ...extra,
   };
@@ -189,6 +203,7 @@ describe('SkillPublishReview (S10 E3-3a)', () => {
     const cases = within(card).getAllByTestId('skill-publish-evidence-case');
     expect(cases.map((row) => row.getAttribute('data-acknowledge'))).toEqual(['true', null]);
     expect(cases[0]?.textContent).toContain('发布前要确认');
+    expect(card.textContent).toContain('两组合计（各阶段）');
     const totals = within(card).getByTestId('skill-publish-evidence-totals').textContent ?? '';
     expect(totals).toContain('8/8 通过');
     expect(totals).toContain('5/8 通过');
@@ -205,10 +220,60 @@ describe('SkillPublishReview (S10 E3-3a)', () => {
     );
     const earlier = screen.getAllByTestId('skill-publish-review-earlier-row');
     expect(earlier.map((row) => row.getAttribute('data-evaluation-id'))).toEqual([EARLIER]);
-    expect(earlier[0]?.textContent).toContain('1 条失败要确认');
+    expect(earlier[0]?.textContent).toContain('要确认：');
+    expect(earlier[0]?.textContent).toContain(ITEM_R.title);
+    // #842 UX P2-1: another version's unfavourable evaluation says where that version stands now,
+    // under a neutral title — a published version is not a change that "did not hold up".
+    const section = screen.getByTestId('skill-publish-review-history');
+    expect(section.textContent).toContain('这个 Skill 其他版本的不利评测');
+    expect(section.textContent).not.toContain('没站住');
     const history = screen.getAllByTestId('skill-publish-review-history-row');
     expect(history[0]?.textContent).toContain('v1');
     expect(history[0]?.textContent).toContain('机制未证实');
+    const state = within(history[0] as HTMLElement).getByTestId(
+      'skill-publish-review-history-state',
+    );
+    expect(state.getAttribute('data-status')).toBe('published');
+    expect(state.textContent).toBe('已发布');
+  });
+
+  it('lists only the earlier evaluations that still have failures to acknowledge (#842 UX P3-4)', () => {
+    const passed: DraftEvaluationEvidenceWire = {
+      ...summary({ id: PASSED, verdict: 'non_inferior', reason: null }),
+      decidingStage: null,
+      baselineTotal: tally(),
+      candidateTotal: tally(),
+    };
+    const base = evidence();
+    render(
+      <SkillPublishReview
+        evidence={ready({ ...base, evaluations: [...base.evaluations, passed] })}
+      />,
+    );
+    const earlier = screen.getAllByTestId('skill-publish-review-earlier-row');
+    expect(earlier.map((row) => row.getAttribute('data-evaluation-id'))).toEqual([EARLIER]);
+  });
+
+  it('every state another version can be in has its label', () => {
+    const states = ['draft', 'published', 'deprecated', 'rejected', 'discarded'] as const;
+    const base = evidence();
+    const history = base.familyHistory[0];
+    if (history === undefined) throw new Error('fixture');
+    render(
+      <SkillPublishReview
+        evidence={ready({
+          ...base,
+          familyHistory: states.map((candidateState, index) => ({
+            ...history,
+            id: `7777777${index}-7777-4777-8777-777777777777`,
+            candidateState,
+          })),
+        })}
+      />,
+    );
+    expect(
+      screen.getAllByTestId('skill-publish-review-history-state').map((chip) => chip.textContent),
+    ).toEqual(['草稿', '已发布', '已弃用', '已拒绝', '已丢弃']);
   });
 
   it('inconclusive says the evidence cannot show the draft is no worse; nothing to acknowledge', () => {
@@ -246,21 +311,36 @@ describe('SkillPublishReview (S10 E3-3a)', () => {
 });
 
 describe('PublishAcknowledgeSheet (S10 E3-3a)', () => {
-  function renderSheet(onConfirm: (review: PublishEvaluationReview) => Promise<boolean>) {
+  function renderSheet(
+    onConfirm: (review: PublishEvaluationReview) => Promise<boolean>,
+    extra: Partial<PublishAcknowledgeSheetProps> = {},
+  ) {
     const onOpenChange = vi.fn();
-    render(
-      <PublishAcknowledgeSheet
-        open
-        onOpenChange={onOpenChange}
-        target="restart-helper v2"
-        evidence={evidence()}
-        busy={false}
-        credentialSlot={null}
-        credentialBlocked={false}
-        onConfirm={onConfirm}
-      />,
-    );
-    return { onOpenChange, sheet: screen.getByTestId('publish-acknowledge') };
+    const props: PublishAcknowledgeSheetProps = {
+      open: true,
+      onOpenChange,
+      target: 'restart-helper v2',
+      evidence: evidence(),
+      busy: false,
+      evaluating: false,
+      credentialSlot: null,
+      credentialBlocked: false,
+      onConfirm,
+      ...extra,
+    };
+    const view = render(<PublishAcknowledgeSheet {...props} />);
+    return {
+      onOpenChange,
+      sheet: screen.getByTestId('publish-acknowledge'),
+      rerender: (next: Partial<PublishAcknowledgeSheetProps>) =>
+        view.rerender(<PublishAcknowledgeSheet {...props} {...next} />),
+    };
+  }
+
+  function fillEveryReason(sheet: HTMLElement): void {
+    for (const reason of within(sheet).getAllByTestId('publish-acknowledge-reason')) {
+      fireEvent.change(reason, { target: { value: 'known' } });
+    }
   }
 
   it('each failure, grouped by its evaluation, needs a reason; the publish names the newest evaluation and every acknowledgement', async () => {
@@ -311,22 +391,91 @@ describe('PublishAcknowledgeSheet (S10 E3-3a)', () => {
         .getAllByTestId('publish-acknowledge-reason')
         .map((el) => (el as HTMLTextAreaElement).value),
     ).toEqual(['known', 'known']);
+    // The evidence read again is the same: nothing moved, so nothing to say.
+    expect(screen.queryByTestId('publish-acknowledge-changed')).toBeNull();
+  });
+
+  it('says in place what moved when the evidence read again after a refusal differs (#842 UX P3-2)', async () => {
+    const onConfirm = vi.fn(async () => false);
+    const { sheet, rerender } = renderSheet(onConfirm);
+    fillEveryReason(sheet);
+    fireEvent.click(screen.getByTestId('publish-acknowledge-submit'));
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
+    const base = evidence();
+    const unmeasured: DraftEvaluationEvidenceWire = {
+      ...summary({ id: NEWER, verdict: 'unmeasured', reason: null }),
+      decidingStage: null,
+      baselineTotal: tally(),
+      candidateTotal: tally(),
+    };
+    rerender({ evidence: { ...base, evaluations: [unmeasured, ...base.evaluations] } });
+    const notice = within(sheet).getByTestId('publish-acknowledge-changed');
+    expect(notice.textContent).toContain('这次没有发布');
+    expect(notice.textContent).toContain('又有一次评测结束，结论是「无法比较」');
+    expect(notice.textContent).toContain('要确认的失败没有变');
+    // The reasons typed stay with their failures, so it can be submitted again as it is.
+    expect((screen.getByTestId('publish-acknowledge-submit') as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
+
+  it('a new failure to acknowledge is counted in the notice and needs its reason', async () => {
+    const onConfirm = vi.fn(async () => false);
+    const { sheet, rerender } = renderSheet(onConfirm);
+    fillEveryReason(sheet);
+    fireEvent.click(screen.getByTestId('publish-acknowledge-submit'));
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
+    const base = evidence();
+    const regressed: DraftEvaluationEvidenceWire = {
+      ...summary({
+        id: NEWER,
+        verdict: 'regressed',
+        reason: 'regression_case_lost',
+        decidedBy: 'regression',
+      }),
+      decidingStage: null,
+      baselineTotal: tally({ trials: 2, passed: 2 }),
+      candidateTotal: tally({ trials: 2, passed: 0, failed: 2 }),
+    };
+    rerender({
+      evidence: {
+        ...base,
+        evaluations: [regressed, ...base.evaluations],
+        acknowledge: [{ ...ITEM_R, evaluationId: NEWER }, ...base.acknowledge],
+      },
+    });
+    expect(within(sheet).getByTestId('publish-acknowledge-changed').textContent).toContain(
+      '要确认的失败多了 1 条',
+    );
+    expect(screen.getByTestId('publish-acknowledge-missing').textContent).toContain(
+      '为 1 条失败写下理由',
+    );
+  });
+
+  it('an evaluation running now holds the publish and is named in the notice', async () => {
+    const onConfirm = vi.fn(async () => false);
+    const { sheet, rerender } = renderSheet(onConfirm);
+    fillEveryReason(sheet);
+    fireEvent.click(screen.getByTestId('publish-acknowledge-submit'));
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
+    rerender({ evidence: evidence({ runningEvaluationId: NEWER }), evaluating: true });
+    expect(within(sheet).getByTestId('publish-acknowledge-changed').textContent).toContain(
+      '又有一次评测开始了，结束或取消之前不能发布',
+    );
+    expect((screen.getByTestId('publish-acknowledge-submit') as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect(screen.getByTestId('publish-acknowledge-missing').textContent).toContain(
+      '等正在跑的评测结束或取消',
+    );
   });
 
   it('an open credential question holds the publish', () => {
-    render(
-      <PublishAcknowledgeSheet
-        open
-        onOpenChange={() => undefined}
-        target="restart-helper v2"
-        evidence={evidence({ acknowledge: [ITEM_A] })}
-        busy={false}
-        credentialSlot={<p data-testid="credential-slot">confirm</p>}
-        credentialBlocked
-        onConfirm={async () => true}
-      />,
-    );
-    const sheet = screen.getByTestId('publish-acknowledge');
+    const { sheet } = renderSheet(async () => true, {
+      evidence: evidence({ acknowledge: [ITEM_A] }),
+      credentialSlot: <p data-testid="credential-slot">confirm</p>,
+      credentialBlocked: true,
+    });
     expect(within(sheet).getByTestId('credential-slot')).toBeTruthy();
     fireEvent.change(within(sheet).getByTestId('publish-acknowledge-reason'), {
       target: { value: 'known' },

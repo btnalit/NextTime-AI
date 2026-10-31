@@ -4,6 +4,7 @@ import type {
   DraftEvaluationSummaryWire,
   PublishAcknowledgementItemWire,
   PublishEvaluationReview,
+  SkillPublishCandidateState,
   SkillPublishEvidenceWire,
 } from '@nexttime/shared';
 import { type ReactNode, useState } from 'react';
@@ -23,6 +24,7 @@ import { formatUsd } from '../../lib/eval-runs.js';
 import { formatRelative } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
+import { labelText, statusChipStyle } from '../../lib/status-tone.js';
 import { DraftEvaluationMeasure } from '../evaluation/DraftEvaluations.js';
 import { Button } from '../kit/button.js';
 import { GuardedCancelButton } from '../kit/discard-guard.js';
@@ -49,8 +51,10 @@ import { Textarea } from '../kit/textarea.js';
  * `get_skill_publish_evidence` for the draft as shown, so every evaluation here evaluated exactly
  * this content (I-E3). The newest is the evidence card: its verdict and why, the stage that gave
  * it and what that stage measured, each case's tries, both arms' cost and tokens, and a link to it
- * under 评测 → 草稿评测. Then the same content's earlier evaluations, and the family's earlier
- * drafts that an evaluation found refuted, regressed or worse.
+ * under 评测 → 草稿评测. Then the same content's earlier evaluations that still have failures to
+ * acknowledge (the rest are in 「评测」 above, #842 UX P3-4), and the evaluations that found
+ * another version of the Skill refuted, regressed or worse, each with where that version stands
+ * now (#842 UX P2-1).
  *
  * Evaluation gives evidence; it never publishes, nor stops anyone publishing. But a publish names
  * the evidence it was made on (`evaluationReview.evaluationId`), and each failure of a `regressed`
@@ -74,6 +78,12 @@ export function useSkillPublishEvidence(
   return useCapability<SkillPublishEvidenceWire>(http, 'get_skill_publish_evidence', target ?? {}, {
     enabled: target !== null && can('get_skill_publish_evidence') === true,
   });
+}
+
+/** How a Skill publish was asked for. */
+export interface PublishOptions {
+  /** From `PublishAcknowledgeSheet`, which says itself that the evidence moved on (#842 UX P3-2). */
+  readonly inSheet?: boolean;
 }
 
 /** What a publish of the draft names of `evidence`, with no acknowledgement. */
@@ -123,6 +133,49 @@ function suiteText(row: Pick<DraftEvaluationSummaryWire, 'suite'>): string {
   return `${row.suite.name} v${row.suite.version}`;
 }
 
+/**
+ * #842 UX P3-2: what moved in the evidence between a refused submit (`before`) and the evidence
+ * read again since (`now`) — another evaluation ended, with its verdict, or one started — and
+ * whether the failures to acknowledge grew. `null` while nothing moved (yet).
+ */
+export function evidenceChangeText(
+  before: SkillPublishEvidenceWire,
+  now: SkillPublishEvidenceWire,
+  t: Translate,
+): string | null {
+  const latest = now.evaluations[0];
+  const ended = latest !== undefined && latest.id !== before.evaluations[0]?.id;
+  const started =
+    now.runningEvaluationId !== null && now.runningEvaluationId !== before.runningEvaluationId;
+  if (!ended && !started) return null;
+  const known = new Set(before.acknowledge.map(itemKey));
+  const added = now.acknowledge.filter((item) => !known.has(itemKey(item))).length;
+  const parts = [
+    ended && latest !== undefined
+      ? t(
+          `又有一次评测结束，结论是「${labelText(statusChipStyle('draftEvaluation', draftEvaluationOutcome(latest)), t)}」`,
+          `another evaluation ended: ${labelText(statusChipStyle('draftEvaluation', draftEvaluationOutcome(latest)), t)}`,
+        )
+      : null,
+    started
+      ? t(
+          '又有一次评测开始了，结束或取消之前不能发布',
+          'another evaluation started, and the draft cannot be published until it ends or is cancelled',
+        )
+      : null,
+    added > 0
+      ? t(
+          `要确认的失败多了 ${added} 条，见下面`,
+          `${added} more failure${added === 1 ? '' : 's'} to acknowledge, below`,
+        )
+      : t('要确认的失败没有变', 'the failures to acknowledge are the same'),
+  ].filter((part): part is string => part !== null);
+  return t(
+    `评测证据在提交前变了，这次没有发布，证据已重新读取：${parts.join('；')}。`,
+    `The evaluation evidence changed before the submit, so nothing was published; it has been read again: ${parts.join('; ')}.`,
+  );
+}
+
 export interface SkillPublishReviewProps {
   readonly evidence: Resource<SkillPublishEvidenceWire>;
 }
@@ -164,8 +217,11 @@ function EvidenceBody({
   readonly evidence: SkillPublishEvidenceWire;
   readonly t: Translate;
 }) {
-  const [latest, ...earlier] = evidence.evaluations;
+  const [latest, ...rest] = evidence.evaluations;
   const pending = (id: string) => evidence.acknowledge.filter((item) => item.evaluationId === id);
+  // #842 UX P3-4: 「评测」 above lists every evaluation of this version; here only the earlier
+  // ones whose failures a publish still acknowledges.
+  const earlier = rest.filter((row) => pending(row.id).length > 0);
   return (
     <>
       {latest === undefined ? (
@@ -194,21 +250,30 @@ function EvidenceBody({
       {earlier.length > 0 ? (
         <div className="stack-s" data-testid="skill-publish-review-earlier">
           <span className="text-2" style={{ fontWeight: 600 }}>
-            {t('这份内容更早的评测', 'Earlier evaluations of this content')}
+            {t(
+              '这份内容更早的、有失败要确认的评测',
+              'Earlier evaluations of this content with failures to acknowledge',
+            )}
           </span>
+          <p className="text-3 text-small">
+            {t(
+              '同一内容的其他评测都在上面的「评测」里。',
+              'The other evaluations of this content are under Evaluations above.',
+            )}
+          </p>
           <ul className="eval-suite-history">
             {earlier.map((row) => (
               <EvaluationLine
                 key={row.id}
                 row={row}
-                note={
-                  pending(row.id).length > 0
-                    ? t(
-                        `${pending(row.id).length} 条失败要确认`,
-                        `${pending(row.id).length} failure${pending(row.id).length === 1 ? '' : 's'} to acknowledge`,
-                      )
-                    : null
-                }
+                note={t(
+                  `要确认：${pending(row.id)
+                    .map((item) => item.title)
+                    .join('、')}`,
+                  `To acknowledge: ${pending(row.id)
+                    .map((item) => item.title)
+                    .join(', ')}`,
+                )}
                 testId="skill-publish-review-earlier-row"
               />
             ))}
@@ -218,12 +283,15 @@ function EvidenceBody({
       {evidence.familyHistory.length > 0 ? (
         <div className="stack-s" data-testid="skill-publish-review-history">
           <span className="text-2" style={{ fontWeight: 600 }}>
-            {t('这个 Skill 以前没站住的草稿', 'Earlier drafts of this Skill that did not hold up')}
+            {t(
+              '这个 Skill 其他版本的不利评测',
+              'Unfavourable evaluations of this Skill’s other versions',
+            )}
           </span>
           <p className="text-3 text-small">
             {t(
-              '评测判为「机制未证实」「有回归」或「差于基线」的其他草稿：之前试过、没有成立的改法。',
-              'Other drafts an evaluation found Refuted, Regressed or Worse: changes tried before that did not hold up.',
+              '评测判为「机制未证实」「有回归」或「差于基线」的其他版本，以及每个版本现在的状态。',
+              'Other versions an evaluation found Refuted, Regressed or Worse, and where each of them stands now.',
             )}
           </p>
           <ul className="eval-suite-history">
@@ -232,6 +300,7 @@ function EvidenceBody({
                 key={row.id}
                 row={row}
                 label={`v${row.candidate.version}`}
+                state={row.candidateState}
                 note={row.reason !== null ? verdictReasonText(row.reason, t) : null}
                 testId="skill-publish-review-history-row"
               />
@@ -246,11 +315,14 @@ function EvidenceBody({
 function EvaluationLine({
   row,
   label,
+  state,
   note,
   testId,
 }: {
   readonly row: DraftEvaluationSummaryWire;
   readonly label?: string;
+  /** What became of the draft it evaluated, for another version's evaluation. */
+  readonly state?: SkillPublishCandidateState;
   readonly note: string | null;
   readonly testId: string;
 }) {
@@ -259,6 +331,14 @@ function EvaluationLine({
       <span className="row-wrap">
         <StatusChip machine="draftEvaluation" status={draftEvaluationOutcome(row)} size="s" />
         {label !== undefined ? <span style={{ fontWeight: 600 }}>{label}</span> : null}
+        {state !== undefined ? (
+          <StatusChip
+            machine="skillPublishCandidate"
+            status={state}
+            size="s"
+            testId="skill-publish-review-history-state"
+          />
+        ) : null}
         <RouteLink href={hrefs.evaluation('drafts', row.id)} className="link-inline">
           {suiteText(row)}
         </RouteLink>
@@ -389,19 +469,25 @@ function EvidenceCard({
           ) : null}
         </div>
       ) : null}
-      <ul className="text-small tabular stack-s" data-testid="skill-publish-evidence-totals">
-        <li>
-          {t('基线组（各阶段合计）：', 'Baseline (every stage that ran): ')}
-          {armTotalText(evidence.baselineTotal, t)}
-        </li>
-        <li>
-          {t('草稿组（各阶段合计）：', 'Draft (every stage that ran): ')}
-          {armTotalText(evidence.candidateTotal, t)}
-        </li>
-        {difference !== null ? (
-          <li data-testid="skill-publish-evidence-difference">{difference}</li>
-        ) : null}
-      </ul>
+      {/* #842 UX P3-3: a title of its own, so the totals do not read as part of the folded cases. */}
+      <div className="stack-s">
+        <span className="text-2 text-small">
+          {t('两组合计（各阶段）', 'Both arms, every stage that ran')}
+        </span>
+        <ul className="text-small tabular stack-s" data-testid="skill-publish-evidence-totals">
+          <li>
+            {t('基线组：', 'Baseline: ')}
+            {armTotalText(evidence.baselineTotal, t)}
+          </li>
+          <li>
+            {t('草稿组：', 'Draft: ')}
+            {armTotalText(evidence.candidateTotal, t)}
+          </li>
+          {difference !== null ? (
+            <li data-testid="skill-publish-evidence-difference">{difference}</li>
+          ) : null}
+        </ul>
+      </div>
     </section>
   );
 }
@@ -412,11 +498,14 @@ export interface PublishAcknowledgeSheetProps {
   readonly target: string;
   readonly evidence: SkillPublishEvidenceWire;
   readonly busy: boolean;
+  /** One of the draft's evaluations runs now — the publish waits for it to end or be cancelled. */
+  readonly evaluating: boolean;
   /** The kernel's credential question, when a publish raised it (`PublishCredentialSlot`) —
    *  answered here, where the person is. */
   readonly credentialSlot: ReactNode;
   readonly credentialBlocked: boolean;
-  /** Publishes with `review`; `true` once published (the sheet closes). */
+  /** Publishes with `review`; `true` once published (the sheet closes). A refusal because the
+   *  evidence moved on is said here (`evidenceChangeText`), not in a toast over the button. */
   readonly onConfirm: (review: PublishEvaluationReview) => Promise<boolean>;
 }
 
@@ -426,7 +515,8 @@ export interface PublishAcknowledgeSheetProps {
  * required reason — why the draft is published anyway. The reasons go in `publish_skill`'s
  * `evaluationReview.acknowledgements` and are kept in the publish's audit record. A refusal (the
  * evidence changed meanwhile, a credential question) leaves the sheet open with the reasons typed;
- * the evidence is read again, so a reason belongs to a failure still listed.
+ * the evidence is read again, so a reason belongs to a failure still listed, and the sheet says
+ * what changed (#842 UX P3-2).
  */
 export function PublishAcknowledgeSheet({
   open,
@@ -434,12 +524,16 @@ export function PublishAcknowledgeSheet({
   target,
   evidence,
   busy,
+  evaluating,
   credentialSlot,
   credentialBlocked,
   onConfirm,
 }: PublishAcknowledgeSheetProps) {
   const t = useT();
   const [reasons, setReasons] = useState<Readonly<Record<string, string>>>({});
+  // The evidence a refused submit was made on — what the evidence read since is compared with.
+  const [refusedOn, setRefusedOn] = useState<SkillPublishEvidenceWire | null>(null);
+  const change = refusedOn !== null ? evidenceChangeText(refusedOn, evidence, t) : null;
   const items = evidence.acknowledge;
   const reasonOf = (item: PublishAcknowledgementItemWire) => (reasons[itemKey(item)] ?? '').trim();
   const missing = items.filter((item) => reasonOf(item) === '').length;
@@ -451,6 +545,9 @@ export function PublishAcknowledgeSheet({
         )
       : null,
     credentialBlocked ? t('确认凭证提示', 'answer the credential question') : null,
+    evaluating
+      ? t('等正在跑的评测结束或取消', 'the evaluation running now to end or be cancelled')
+      : null,
   ].filter((item): item is string => item !== null);
   const ready = items.length > 0 && stillNeeded.length === 0;
   const groups = evidence.evaluations.flatMap((evaluation) => {
@@ -460,11 +557,14 @@ export function PublishAcknowledgeSheet({
 
   function close(): void {
     setReasons({});
+    setRefusedOn(null);
     onOpenChange(false);
   }
 
   async function submit(): Promise<void> {
     if (!ready || busy) return;
+    const submittedOn = evidence;
+    setRefusedOn(null);
     const published = await onConfirm({
       ...evaluationReviewOf(evidence),
       acknowledgements: items.map((item) => ({
@@ -474,6 +574,7 @@ export function PublishAcknowledgeSheet({
       })),
     });
     if (published) close();
+    else setRefusedOn(submittedOn);
   }
 
   return (
@@ -496,6 +597,11 @@ export function PublishAcknowledgeSheet({
             void submit();
           }}
         >
+          {change !== null ? (
+            <Notice tone="warn" testId="publish-acknowledge-changed">
+              {change}
+            </Notice>
+          ) : null}
           {groups.map((group) => (
             <section
               key={group.evaluation.id}

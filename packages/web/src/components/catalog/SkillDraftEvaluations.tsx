@@ -4,7 +4,7 @@ import type {
   EvalSuiteSummaryWire,
   EvalSuiteWire,
 } from '@nexttime/shared';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useCapability } from '../../hooks/useCapability.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -76,6 +76,9 @@ export interface SkillDraftEvaluationsProps {
   /** Told whether one of this version's evaluations runs now — the draft's 丢弃 / 拒绝 are held
    *  meanwhile (#833 UX P3-1). */
   readonly onEvaluatingChange?: (evaluating: boolean) => void;
+  /** Changed when the list may have moved on unseen — a publish refused because an evaluation
+   *  ended or started since (#842 UX P3-1): the list is read again. */
+  readonly refreshKey?: number;
 }
 
 /**
@@ -93,6 +96,7 @@ export function SkillDraftEvaluations({
   skill,
   inUseVersion,
   onEvaluatingChange,
+  refreshKey,
 }: SkillDraftEvaluationsProps) {
   const t = useT();
   const can = useRoleCan(http);
@@ -124,6 +128,12 @@ export function SkillDraftEvaluations({
   useEffect(() => {
     onEvaluatingChange?.(evaluating);
   }, [evaluating, onEvaluatingChange]);
+  const refreshSeen = useRef(refreshKey);
+  useEffect(() => {
+    if (refreshSeen.current === refreshKey) return;
+    refreshSeen.current = refreshKey;
+    if (allowed) void reload();
+  }, [refreshKey, allowed, reload]);
   if (!allowed || (state.status === 'error' && isForbiddenError(state.error))) return null;
   const baselineText =
     inUseVersion !== undefined
@@ -156,7 +166,7 @@ export function SkillDraftEvaluations({
       {isDraft ? (
         <p className="text-3 text-small">
           {t(
-            `用一个用例集把这个草稿和${baselineText}比一比：依次跑回归检查、机制检验、确认对比，哪一阶段不过就停。结果是给发布的人看的证据，不拦发布；判为「有回归」或「差于基线」时，发布前要逐条写下为什么仍然发布。`,
+            `用一个用例集把这个草稿和${baselineText} 比一比：依次跑回归检查、机制检验、确认对比，哪一阶段不过就停。结果是给发布的人看的证据，不拦发布；判为「有回归」或「差于基线」时，发布前要逐条写下为什么仍然发布。`,
             `Compare this draft with ${baselineText} on an evaluation suite: a regression check, a mechanism test and a confirmation, stopping at the first that fails. The result is evidence for whoever publishes, never a gate; when it finds the draft Regressed or Worse, each failure is acknowledged with a reason before publishing.`,
           )}
           {isDraft && !canStart && can('start_draft_evaluation') === false

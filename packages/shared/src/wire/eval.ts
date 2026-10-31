@@ -821,6 +821,25 @@ export const PublishAcknowledgementItemWireSchema = z
   .strict();
 export type PublishAcknowledgementItemWire = z.infer<typeof PublishAcknowledgementItemWireSchema>;
 
+/** What became of the draft an evaluation evaluated: its version still holds that very content
+ *  (`draft`, `published`, `deprecated`), or the draft is gone — `rejected` by a reviewer
+ *  (`reject_draft`) or `discarded` by its proposer. */
+export const SKILL_PUBLISH_CANDIDATE_STATE_VALUES = [
+  'draft',
+  'published',
+  'deprecated',
+  'rejected',
+  'discarded',
+] as const;
+export const SkillPublishCandidateStateSchema = z.enum(SKILL_PUBLISH_CANDIDATE_STATE_VALUES);
+export type SkillPublishCandidateState = z.infer<typeof SkillPublishCandidateStateSchema>;
+
+/** An evaluation of another version of the family, in a publish's evidence. */
+export const SkillPublishFamilyEntryWireSchema = DraftEvaluationSummaryWireSchema.extend({
+  candidateState: SkillPublishCandidateStateSchema,
+}).strict();
+export type SkillPublishFamilyEntryWire = z.infer<typeof SkillPublishFamilyEntryWireSchema>;
+
 /**
  * What a Skill draft's evaluations say to whoever publishes it (§5.6 发布审阅) — read with
  * `get_skill_publish_evidence` for the draft as reviewed, `(skillId, version, draftDigest)`, so
@@ -840,10 +859,10 @@ export const SkillPublishEvidenceWireSchema = z
      *  `PUBLISH_ACKNOWLEDGED_VERDICTS` — a later evaluation of the same content does not take an
      *  earlier one's failures away. */
     acknowledge: z.array(PublishAcknowledgementItemWireSchema),
-    /** The family's other drafts that an evaluation found `refuted`, `regressed` or `worse`
-     *  (`FAMILY_HISTORY_VERDICTS`), newest first (the last 10) — what was tried before and did
-     *  not hold. */
-    familyHistory: z.array(DraftEvaluationSummaryWireSchema),
+    /** The evaluations that found another version of the family `refuted`, `regressed` or
+     *  `worse` (`FAMILY_HISTORY_VERDICTS`), newest first (the last 10), each with what became of
+     *  the draft it evaluated — published versions included (#842 UX P2-1). */
+    familyHistory: z.array(SkillPublishFamilyEntryWireSchema),
   })
   .strict();
 export type SkillPublishEvidenceWire = z.infer<typeof SkillPublishEvidenceWireSchema>;

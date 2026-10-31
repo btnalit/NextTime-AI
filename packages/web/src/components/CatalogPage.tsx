@@ -24,6 +24,7 @@ import { entryCapabilitiesOf, entryPromptOf } from '../lib/entry-template.js';
 import {
   errorToastText,
   isDraftChangedError,
+  isEvidenceMovedError,
   isForbiddenError,
   isVersionChangedError,
 } from '../lib/errors.js';
@@ -102,6 +103,7 @@ import { SkillDraftEvaluations } from './catalog/SkillDraftEvaluations.js';
 import { SkillEditor } from './catalog/SkillEditor.js';
 import {
   PublishAcknowledgeSheet,
+  type PublishOptions,
   SkillPublishReview,
   evaluationReviewOf,
   useSkillPublishEvidence,
@@ -2101,8 +2103,12 @@ function SkillDetailView({
   /** 「另存为新的 Skill」: a copy proposed as a new Skill. */
   readonly onSaveAsNew: () => void;
   /** S10 E3-3a: publishes this draft naming the evidence reviewed (`review`; none read for a
-   *  row without a draft digest); `true` once published. */
-  readonly onPublish: (review: PublishEvaluationReview | undefined) => Promise<boolean>;
+   *  row without a draft digest); `true` once published. `inSheet`: from the acknowledgement
+   *  sheet, which says itself that the evidence moved on (#842 UX P3-2). */
+  readonly onPublish: (
+    review: PublishEvaluationReview | undefined,
+    options?: PublishOptions,
+  ) => Promise<boolean>;
   readonly onDeprecate: () => Promise<void>;
   readonly onDiscard: (reason: string | undefined) => Promise<void>;
   /** E2-0b: 「拒绝」 on this pending draft (`offersReject`). */
@@ -2144,25 +2150,34 @@ function SkillDetailView({
     if (reviewing) void reloadEvidence();
   }, [evaluating, reviewing, reloadEvidence]);
   const [acknowledging, setAcknowledging] = useState(false);
+  // #842 UX P3-1: a refused publish reads 「评测」 again too, so both sections say the same.
+  const [evaluationsKey, setEvaluationsKey] = useState(0);
   const evidenceData = evidence.state.status === 'ready' ? evidence.state.data : undefined;
-  const publishHeld =
-    evaluating || (evidenceData !== undefined && evidenceData.runningEvaluationId !== null)
-      ? t(
-          '评测进行中：结束或取消之前不能发布',
-          'Being evaluated: it cannot be published until the evaluation ends or is cancelled',
-        )
-      : reviewing && evidenceData === undefined
-        ? evidence.state.status === 'error'
-          ? t(
-              '评测证据没有读到：重新读取后再发布',
-              'The evaluation evidence could not be read: read it again, then publish',
-            )
-          : t('正在读取评测证据', 'Loading the evaluation evidence')
-        : undefined;
+  const beingEvaluated =
+    evaluating || (evidenceData !== undefined && evidenceData.runningEvaluationId !== null);
+  const publishHeld = beingEvaluated
+    ? t(
+        '评测进行中：结束或取消之前不能发布',
+        'Being evaluated: it cannot be published until the evaluation ends or is cancelled',
+      )
+    : reviewing && evidenceData === undefined
+      ? evidence.state.status === 'error'
+        ? t(
+            '评测证据没有读到：重新读取后再发布',
+            'The evaluation evidence could not be read: read it again, then publish',
+          )
+        : t('正在读取评测证据', 'Loading the evaluation evidence')
+      : undefined;
 
-  async function publish(review: PublishEvaluationReview | undefined): Promise<boolean> {
-    const published = await onPublish(review);
-    if (!published && reviewing) void reloadEvidence();
+  async function publish(
+    review: PublishEvaluationReview | undefined,
+    options?: PublishOptions,
+  ): Promise<boolean> {
+    const published = await onPublish(review, options);
+    if (!published && reviewing) {
+      void reloadEvidence();
+      setEvaluationsKey((key) => key + 1);
+    }
     return published;
   }
 
@@ -2261,6 +2276,7 @@ function SkillDetailView({
         skill={row}
         inUseVersion={inUseVersion}
         onEvaluatingChange={setEvaluating}
+        refreshKey={evaluationsKey}
       />
 
       {reviewing ? <SkillPublishReview evidence={evidence} /> : null}
@@ -2341,6 +2357,7 @@ function SkillDetailView({
           target={`${row.name} v${row.version}`}
           evidence={evidenceData}
           busy={busy}
+          evaluating={beingEvaluated}
           credentialSlot={
             <PublishCredentialSlot
               review={credentialReview}
@@ -2349,7 +2366,7 @@ function SkillDetailView({
             />
           }
           credentialBlocked={credentialReview.blocked}
-          onConfirm={publish}
+          onConfirm={(review) => publish(review, { inSheet: true })}
         />
       ) : null}
     </div>
@@ -2435,6 +2452,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     row: SkillRow,
     action: 'publish_skill' | 'deprecate_skill',
     review?: PublishEvaluationReview,
+    options?: PublishOptions,
   ): Promise<boolean> {
     setBusy(row.id);
     try {
@@ -2462,6 +2480,9 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       // The kernel's credential question — answered next to Publish, not as a failure toast.
       if (action === 'publish_skill' && credentialReview.capture(err)) return false;
       if (isForbiddenError(err)) permissions.markDenied(action);
+      // #842 UX P3-2: the acknowledgement sheet says in place what changed in the evidence — no
+      // toast over its button.
+      if (options?.inSheet === true && isEvidenceMovedError(err)) return false;
       // The toast says it was reloaded: show what is there now.
       if (isVersionChangedError(err) || isDraftChangedError(err)) refresh();
       // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
@@ -2728,7 +2749,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       onTitleFocused={() => setFocusFamily(null)}
       onEditAsNewVersion={() => openEditor({ kind: 'version', row: selected })}
       onSaveAsNew={() => openEditor({ kind: 'copy', row: selected })}
-      onPublish={(review) => act(selected, 'publish_skill', review)}
+      onPublish={(review, options) => act(selected, 'publish_skill', review, options)}
       onDeprecate={async () => {
         await act(selected, 'deprecate_skill');
       }}

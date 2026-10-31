@@ -23996,6 +23996,16 @@
                 ],
                 "type": "object"
               },
+              "candidateState": {
+                "enum": [
+                  "draft",
+                  "published",
+                  "deprecated",
+                  "rejected",
+                  "discarded"
+                ],
+                "type": "string"
+              },
               "costUsd": {
                 "type": [
                   "number",
@@ -24163,7 +24173,8 @@
               "workerDefinition",
               "candidate",
               "baseline",
-              "mechanism"
+              "mechanism",
+              "candidateState"
             ],
             "type": "object"
           },
