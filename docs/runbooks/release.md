@@ -1947,6 +1947,16 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：草稿评测结束后在图上记一条只对评测服务主体可见的摘要；提议者的智能体可以读到自己草稿只按 dev 用例判的结论（新能力 `get_skill_draft_verdicts`，Handle 通道，member 起）；控制台草稿评测详情显示这条结论。契约：`DraftEvaluation*Wire` 新增 `devVerdict`，`publish_skill` 审计的 `evaluation` 新增 `observationId`，`evaluation.draft_verdict` 审计多带 `devVerdict`、`observationId`。
 - **回滚**：只回退代码即可（§6）。上一版不读写新列，新结束的评测不再记摘要与 dev 结论，已写的保留。**代码回退到上一版后，apply-release 的 observations-compaction 步骤会报 degraded**：上一版的压缩看到 0012 指向 `observations` 的新外键就拒绝运行（安全失败，不删任何东西），重新应用带 0012 的版本后恢复；与 §3.39、§3.41 同类，回退期间这一条 degraded 可以忽略（`reversibility-deltas.json` 已声明）。
 
+### 3.81 发布 WorkerDefinition 时校验引用（#848，遗留 302，v0.52.0 之后的下一版起）
+
+无迁移、不改 compose、无单独主机步骤、无新环境变量；窗口前只读检查：无。
+
+- **行为变化（要告诉 owner）**：`publish_worker_definition` 现在拒绝引用不存在的能力（Worker 能力上限之外）、本工作区没有的门、没有已发布版本的 Skill，以及人发布时不在模型目录里的模型：返回 400 `unresolved_references`，`details.unresolved` 按字段列出，版本留在草稿；模型目录读不到时，写了模型的版本返回 503，什么也不发布（与 `set_agent_profile` 相同）。WS 通道映射为 `INVALID_PARAMS`。控制台在「发布」旁逐字段写明原因与改法。
+- **能力包安装**：包里的 Worker 引用的 Skill 已弃用、或沿用的门不在工作区时，整次安装被拒且不写入，控制台逐字段说在工作区里怎么修。建工作区不受影响（只发布入口定义）。
+- **不回溯**：升级前已发布的版本保持原样，照常运行；组建时的准入检查属于 GO8。
+- **发版说明可写**：发布 Worker 定义时会检查它引用的能力、门、Skill 和模型都存在；控制台在「发布」旁逐个字段写明哪里不对，并可以直接改一版。
+- **回滚**：只回退代码即可，无数据变化；回退后发布不再校验引用。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
