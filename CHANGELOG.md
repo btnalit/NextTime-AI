@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.52.1](https://github.com/btnalit/NextTime-AI/compare/v0.52.0...v0.52.1) (2026-10-31)
+
+
+### Bug Fixes
+
+* **kernel:** refuse publishing a WorkerDefinition that names what is not there (legacy 302) ([#848](https://github.com/btnalit/NextTime-AI/issues/848)) ([4e5ec7c](https://github.com/btnalit/NextTime-AI/commit/4e5ec7cd924443361eaf91b0b9fc99dc3cfbb689))
+
 ## [0.52.0](https://github.com/btnalit/NextTime-AI/compare/v0.51.0...v0.52.0) (2026-10-31)
 
 
