@@ -12,6 +12,7 @@ import type {
   TaskSupervisorClientPort,
   TaskSupervisorStatus,
 } from '../../adapters/supervisor-client/index.js';
+import { setAgentProfile } from '../../governance/agent-profile/index.js';
 import {
   WORKER_CEILING_CAPABILITIES,
   generateEphemeralHandleKeyPair,
@@ -234,12 +235,14 @@ describe.runIf(DATABASE_URL !== undefined)(
       readonly key: string;
       readonly spec?: WorkerSpec;
       readonly dependsOn?: readonly string[];
+      /** The Worker version the step pins; the suite's own unless given. */
+      readonly worker?: { readonly definitionId: string; readonly version: number };
     }
 
     const planOf = (steps: readonly StepOf[]) => ({
       steps: steps.map((step) => ({
         key: step.key,
-        worker,
+        worker: step.worker ?? worker,
         input: { step: step.key },
         ...(step.spec !== undefined ? { spec: step.spec } : {}),
         ...(step.dependsOn ? { dependsOn: step.dependsOn } : {}),
@@ -754,6 +757,89 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
+    describe("a retry on the requester's own model (legacy 543, P-A2)", () => {
+      const queueAudit = (taskId: string) =>
+        admin(async (client) => {
+          const result = await client.query<{ payload: Record<string, unknown> }>(
+            `select payload from audit_records
+              where workspace_id = $1 and action = 'task.queue' and resource_id = $2`,
+            [workspaceId, taskId],
+          );
+          return result.rows.map((row) => row.payload);
+        });
+
+      it('keeps a model still allowed, and falls back to the entry model once the workspace stops allowing it', async () => {
+        const requester = await newPrincipal();
+        await admin((client) =>
+          setAgentProfile(client, workspaceId, requester, ownerId, { model: 'p/mine' }),
+        );
+        const goalRunId = await startGoal(requester, [{ key: 'a' }]);
+        await advance(goalRunId, requester);
+        const stepA = await stepOf(goalRunId, 'a');
+        const first = await latestAttempt(stepA.id);
+        expect(spawnOf(first.id).model).toBe('p/mine');
+
+        // The profile changes, the model it chose first is still allowed: the retry keeps it.
+        await admin((client) =>
+          setAgentProfile(client, workspaceId, requester, ownerId, { model: 'p/later' }),
+        );
+        await setAllowedModels(['p/entry', 'p/mine', 'p/later'], 'p/entry');
+        try {
+          await failStep(stepA.id, requester, 'spawn_lost');
+          await advance(goalRunId, requester);
+          const second = await latestAttempt(stepA.id);
+          expect(second.step_attempt).toBe(2);
+          expect(spawnOf(second.id).model).toBe('p/mine');
+          expect((await queueAudit(second.id))[0]).not.toHaveProperty('modelFallback');
+
+          // Narrowed past it: the next retry starts on what the profile resolves to under the cap
+          // now, recorded on its snapshot and its queue audit, never on the model it lost.
+          await setAllowedModels(['p/entry'], 'p/entry');
+          await failStep(stepA.id, requester, 'spawn_lost');
+          await advance(goalRunId, requester);
+          const third = await latestAttempt(stepA.id);
+          expect(third.step_attempt).toBe(3);
+          expect(await goalOf(goalRunId)).toMatchObject({ status: 'running' });
+          expect(spawnOf(third.id).model).toBe('p/entry');
+          expect(snapshotOf(third)).toMatchObject({ model: 'p/entry' });
+          expect((await queueAudit(third.id))[0]).toMatchObject({
+            modelFallback: { from: 'p/mine', to: 'p/entry' },
+          });
+        } finally {
+          await setAllowedModels([], null);
+        }
+      });
+
+      it("never replaces the model a step's WorkerDefinition sets itself (review #493 on #857)", async () => {
+        const requester = await newPrincipal();
+        await admin((client) =>
+          setAgentProfile(client, workspaceId, requester, ownerId, { model: 'p/mine' }),
+        );
+        const own = await publish({ systemPrompt: 'A Worker with its own model.', model: 'p/own' });
+        const goalRunId = await startGoal(requester, [{ key: 'a', worker: own }]);
+        await advance(goalRunId, requester);
+        const stepA = await stepOf(goalRunId, 'a');
+        const first = await latestAttempt(stepA.id);
+        expect(spawnOf(first.id).model).toBe('p/own');
+
+        // The workspace stops allowing it: the retry still runs on the Worker's own model, as a
+        // first attempt would — the profile's fallback is for a model the profile chose.
+        await setAllowedModels(['p/entry'], 'p/entry');
+        try {
+          await failStep(stepA.id, requester, 'spawn_lost');
+          await advance(goalRunId, requester);
+          const second = await latestAttempt(stepA.id);
+          expect(second.step_attempt).toBe(2);
+          expect(await goalOf(goalRunId)).toMatchObject({ status: 'running' });
+          expect(spawnOf(second.id).model).toBe('p/own');
+          expect(snapshotOf(second)).toMatchObject({ model: 'p/own' });
+          expect((await queueAudit(second.id))[0]).not.toHaveProperty('modelFallback');
+        } finally {
+          await setAllowedModels([], null);
+        }
+      });
+    });
+
     describe('the model as the llm-proxy catalog offers it now (coordinator on #853)', () => {
       it('with no allowedModels, a model the catalog does not offer is refused when the first attempt starts', async () => {
         const requester = await newPrincipal();
@@ -875,10 +961,82 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(await attemptTasks(stepA.id)).toHaveLength(1);
         expect(await stepOf(goalRunId, 'a')).toMatchObject({ status: 'ready', attemptCount: 1 });
         expect(await stepOf(goalRunId, 'b')).toMatchObject({ status: 'pending', attemptCount: 0 });
-        // The retry is checked as a later attempt is — its Skills are the pinned ones, checked
-        // there; the step not started is checked as a first attempt, and would not start.
+        // The retry is checked as a later attempt is — its Skills are the pinned versions, named
+        // (legacy 544); the step not started is checked as a first attempt, and would not start.
         expect(stepHints(await detailHints(goalRunId, requester))).toEqual([
+          expect.objectContaining({
+            code: 'step_skill_version_unavailable',
+            stepKey: 'a',
+            skillRefs: [`${skill.name} v1`],
+          }),
           expect.objectContaining({ code: 'step_skill_deprecated', stepKey: 'b' }),
+        ]);
+      });
+    });
+
+    describe('a step pinned to what is no longer published is named (legacy 544)', () => {
+      const deprecateWorker = (definitionId: string) =>
+        admin((client) =>
+          client.query(
+            "update worker_definitions set status = 'deprecated' where workspace_id = $1 and id = $2",
+            [workspaceId, definitionId],
+          ),
+        );
+
+      it('a Worker version deprecated since: a proposal says confirming would be refused, and a run pauses naming the step', async () => {
+        const requester = await newPrincipal();
+        const pinned = await publish({ systemPrompt: 'A version about to be deprecated.' });
+        const { goalRunId: proposal } = await propose(requester, [{ key: 'a', worker: pinned }]);
+        const running = await startGoal(requester, [{ key: 'a', worker: pinned }]);
+        await deprecateWorker(pinned.definitionId);
+
+        const unavailable = expect.objectContaining({
+          code: 'step_worker_unavailable',
+          stepKey: 'a',
+          message: expect.stringMatching(/is deprecated/),
+        });
+        expect(stepHints(await detailHints(proposal, requester))).toEqual([unavailable]);
+        await expect(
+          asRequester(requester, (client) =>
+            confirmGoalRun(client, workspaceId, {
+              goalRunId: proposal,
+              revision: 1,
+              confirmedBy: requester,
+            }),
+          ),
+        ).rejects.toBeInstanceOf(GoalPlanValidationError);
+
+        await advance(running, requester);
+        expect(await goalOf(running)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'needs_decision',
+        });
+        expect(await attemptTasks((await stepOf(running, 'a')).id)).toEqual([]);
+        expect(stepHints(await detailHints(running, requester))).toEqual([unavailable]);
+      });
+
+      it('a step tried again after its Worker version was deprecated is named for that, not its Skills', async () => {
+        const requester = await newPrincipal();
+        const skill = await seedSkill('published');
+        const pinned = await publish({ systemPrompt: 'Another version about to be deprecated.' });
+        const goalRunId = await startGoal(requester, [
+          { key: 'a', worker: pinned, spec: { skills: [skill.name] } },
+        ]);
+        await advance(goalRunId, requester);
+        const stepA = await stepOf(goalRunId, 'a');
+        await failStep(stepA.id, requester, 'spawn_lost');
+        await deprecateWorker(pinned.definitionId);
+        await admin((client) =>
+          client.query(
+            `update skills set status = 'deprecated' where workspace_id = $1 and id = $2`,
+            [workspaceId, skill.id],
+          ),
+        );
+        await advance(goalRunId, requester);
+        expect(await goalOf(goalRunId)).toMatchObject({ status: 'paused' });
+        expect(await attemptTasks(stepA.id)).toHaveLength(1);
+        expect(stepHints(await detailHints(goalRunId, requester))).toEqual([
+          expect.objectContaining({ code: 'step_worker_unavailable', stepKey: 'a' }),
         ]);
       });
     });

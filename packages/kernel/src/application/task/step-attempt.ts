@@ -142,6 +142,9 @@ export type StepAttemptRefusal =
       readonly kind: 'unavailable';
       readonly reason: 'definition' | 'skills' | 'excluded' | 'spec';
       readonly detail: string;
+      /** Legacy 544, `skills` of a later attempt: the Skill versions it would mount and cannot, each
+       *  「name v<version>」 ({@link pinnedSkillsRefusal}). */
+      readonly skillRefs?: readonly string[];
     }
   /** S11 GO8a (I-G8): what the step's WorkerSpec admits does not run as it is — it names Skills
    *  that are only drafts (`skill_draft`, `needs_approval`: a person approves one trial, S11 GO8b,
@@ -497,6 +500,11 @@ export async function workerSpecComponentRefusals(
   return refusals;
 }
 
+/** P-A2: whether the workspace's `allowedModels` lets `model` run (`[]`: unrestricted). */
+function modelAllowed(allowedModels: readonly string[], model: string): boolean {
+  return allowedModels.length === 0 || allowedModels.includes(model);
+}
+
 /**
  * S11 GO8b: the draft versions one trial of a step would mount — for each of `draftRefs` (the
  * WorkerSpec's Skills that are only drafts for `viewer`, the requester: `classifySkillRefs`), the
@@ -590,7 +598,7 @@ export function workerSpecModelRefusal(
       model,
     };
   }
-  if (parent.allowedModels.length === 0 || parent.allowedModels.includes(model)) return null;
+  if (modelAllowed(parent.allowedModels, model)) return null;
   return {
     kind: 'admission',
     verdict: 'rejected',
@@ -615,6 +623,68 @@ function approvedTrial(
   const current = refusal.trial;
   if (current?.kind !== 'drafts') return 'stale';
   return approvals.find((approval) => trialDraftsMatch(approval.drafts, current.drafts)) ?? 'stale';
+}
+
+/**
+ * Legacy 544: why a later attempt cannot mount the Skill versions its first attempt pinned —
+ * published ones no longer published (`published`), or the drafts of a trial a person approved
+ * changed, discarded or deprecated since (`trial`) — with each version named as a person reads it
+ * (`skillRefs`, 「name v<version>」: its family's name; one whose rows are all gone — a draft
+ * discarded — the name it had where the caller knew it, `knownNames`, else its id), so the pause
+ * and the hint name them. Reads only.
+ */
+export async function pinnedSkillsRefusal(
+  client: PoolClient,
+  workspaceId: string,
+  pinned: 'published' | 'trial',
+  refs: readonly { readonly skillId: string; readonly version: number }[],
+  knownNames: ReadonlyMap<string, string> = new Map(),
+): Promise<StepAttemptRefusal> {
+  const named = await client.query<{ id: string; name: string }>(
+    `select distinct on (id) id, name from skills
+      where workspace_id = $1 and id = any($2::uuid[])
+      order by id, version desc`,
+    [workspaceId, [...new Set(refs.map((ref) => ref.skillId))]],
+  );
+  const names = new Map(named.rows.map((row) => [row.id, row.name] as const));
+  const ids = refs.map((skill) => `${skill.skillId}@${skill.version}`).join(', ');
+  return {
+    kind: 'unavailable',
+    reason: 'skills',
+    detail:
+      pinned === 'published'
+        ? `Skill version(s) no longer published: ${ids}`
+        : `draft Skill version(s) the trial was approved for were changed, discarded or deprecated since: ${ids}`,
+    skillRefs: refs.map(
+      (ref) =>
+        `${names.get(ref.skillId) ?? knownNames.get(ref.skillId) ?? ref.skillId} v${ref.version}`,
+    ),
+  };
+}
+
+/**
+ * Legacy 544: whether a later attempt after `previous` (its last attempt's snapshot) could mount
+ * the Skills that attempt pinned, as {@link createStepAttemptTask} mounts them — its published
+ * versions, then the drafts of its approved trial — for a paused run's check (`application/goal`'s
+ * `planAuthorityHints`; `knownNames` as {@link pinnedSkillsRefusal}'s). `null` when it could.
+ * Reads only.
+ */
+export async function previousAttemptSkillsRefusal(
+  client: PoolClient,
+  workspaceId: string,
+  previous: RunConfigSnapshot,
+  knownNames: ReadonlyMap<string, string> = new Map(),
+): Promise<StepAttemptRefusal | null> {
+  const pinned = await resolvePinnedSkillsInline(client, workspaceId, previous.skills);
+  if (pinned.kind === 'unavailable') {
+    return pinnedSkillsRefusal(client, workspaceId, 'published', pinned.refs, knownNames);
+  }
+  const trial = previous.v === 2 ? (previous.trial ?? null) : null;
+  if (!trial) return null;
+  const drafts = await resolveTrialDraftsInline(client, workspaceId, trial.drafts);
+  return drafts.kind === 'unavailable'
+    ? pinnedSkillsRefusal(client, workspaceId, 'trial', drafts.refs, knownNames)
+    : null;
 }
 
 /**
@@ -703,13 +773,7 @@ export async function createStepAttemptTask(
   if (input.previous) {
     const pinned = await resolvePinnedSkillsInline(client, workspaceId, input.previous.skills);
     if (pinned.kind === 'unavailable') {
-      return refused({
-        kind: 'unavailable',
-        reason: 'skills',
-        detail: `Skill version(s) no longer published: ${pinned.refs
-          .map((skill) => `${skill.skillId}@${skill.version}`)
-          .join(', ')}`,
-      });
+      return refused(await pinnedSkillsRefusal(client, workspaceId, 'published', pinned.refs));
     }
     skills = pinned.skills;
   } else {
@@ -722,22 +786,38 @@ export async function createStepAttemptTask(
   if (trial) {
     const drafts = await resolveTrialDraftsInline(client, workspaceId, trial.drafts);
     if (drafts.kind === 'unavailable') {
-      return refused({
-        kind: 'unavailable',
-        reason: 'skills',
-        detail: `draft Skill version(s) the trial was approved for were changed, discarded or deprecated since: ${drafts.refs
-          .map((skill) => `${skill.skillId}@${skill.version}`)
-          .join(', ')}`,
-      });
+      return refused(await pinnedSkillsRefusal(client, workspaceId, 'trial', drafts.refs));
     }
     skills = { ...skills, skillsInline: [...skills.skillsInline, ...drafts.skillsInline] };
   }
 
-  const model = input.previous
-    ? (input.previous.model ?? undefined)
-    : (input.spec?.model ??
+  // Legacy 543 (P-A2): a later attempt keeps its first attempt's model — but one taken from the
+  // requester's AgentProfile (neither the WorkerSpec nor the WorkerDefinition sets a model) is held
+  // to `allowedModels` as it stands now, the cap that model is under: narrowed past it, the attempt
+  // falls back the way the profile's model does on any new run (the entry model, when allowed).
+  // A WorkerSpec's model is refused instead (`workerSpecModelRefusal`); a WorkerDefinition's own
+  // model is not under the cap on a first attempt either.
+  let model: string | undefined;
+  let modelFallback: { readonly from: string; readonly to: string | null } | null = null;
+  if (input.previous) {
+    model = input.previous.model ?? undefined;
+    if (
+      model !== undefined &&
+      input.spec?.model === undefined &&
+      content.model === undefined &&
+      !modelAllowed(parent.allowedModels, model)
+    ) {
+      const fallback =
+        (await readEffectiveAgentProfile(client, workspaceId, requesterId)).model || undefined;
+      modelFallback = { from: model, to: fallback ?? null };
+      model = fallback;
+    }
+  } else {
+    model =
+      input.spec?.model ??
       content.model ??
-      ((await readEffectiveAgentProfile(client, workspaceId, requesterId)).model || undefined));
+      ((await readEffectiveAgentProfile(client, workspaceId, requesterId)).model || undefined);
+  }
   const image = input.previous
     ? (input.previous.image ?? undefined)
     : await resolveActiveRuntimeImage(client);
@@ -855,6 +935,8 @@ export async function createStepAttemptTask(
             },
           }
         : {}),
+      // Legacy 543: the model the previous attempt ran on is no longer allowed, and this one's.
+      ...(modelFallback !== null ? { modelFallback } : {}),
     },
   });
 

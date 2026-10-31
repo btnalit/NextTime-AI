@@ -357,6 +357,33 @@ describe('approving a trial of a step’s draft Skills (S11 GO8b)', () => {
     expect(lines[1]?.textContent).toMatch(/这一步的第一次尝试用上了它（重试沿用同一份草稿）/);
   });
 
+  it('a lapsed approval asks for another one only while the step has not been tried (UX P3-1 on #857)', async () => {
+    const lapsed = approval({ id: 'appr-old', state: 'lapsed', lapsedBecause: 'draft_changed' });
+    const notTried = scriptedHttp(
+      handlers(() => pausedAtDraft([draftHint()], [lapsed]), workspace('p-alice', 'builder')),
+    );
+    const first = renderPage(notTried);
+    expect((await screen.findByTestId('goal-step-trial')).textContent).toMatch(
+      /批准不再适用，要用就得重新批准。/,
+    );
+    first.unmount();
+
+    // Waiting to be tried again: a trial is for a first attempt, so the plan has to change.
+    const tried = scriptedHttp(
+      handlers(
+        () => ({
+          ...pausedAtDraft([], [lapsed]),
+          steps: [stepRun({ status: 'ready', attemptCount: 1 })],
+        }),
+        workspace('p-alice', 'builder'),
+      ),
+    );
+    renderPage(tried);
+    const line = (await screen.findByTestId('goal-step-trial')).textContent ?? '';
+    expect(line).toMatch(/这一步已经尝试过，重新批准也用不上：要再试，先修订计划改动这一步。/);
+    expect(line).not.toMatch(/要用就得重新批准/);
+  });
+
   it('every approval lapsed: the step title says so', async () => {
     const http = scriptedHttp(
       handlers(

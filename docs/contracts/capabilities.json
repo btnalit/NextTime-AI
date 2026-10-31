@@ -18738,7 +18738,9 @@
                       "step_skill_draft",
                       "step_skill_deprecated",
                       "step_model_not_offered",
-                      "step_model_not_allowed"
+                      "step_model_not_allowed",
+                      "step_worker_unavailable",
+                      "step_skill_version_unavailable"
                     ],
                     "type": "string"
                   },
@@ -20969,7 +20971,9 @@
                   "step_skill_draft",
                   "step_skill_deprecated",
                   "step_model_not_offered",
-                  "step_model_not_allowed"
+                  "step_model_not_allowed",
+                  "step_worker_unavailable",
+                  "step_skill_version_unavailable"
                 ],
                 "type": "string"
               },
@@ -44685,7 +44689,9 @@
                   "step_skill_draft",
                   "step_skill_deprecated",
                   "step_model_not_offered",
-                  "step_model_not_allowed"
+                  "step_model_not_allowed",
+                  "step_worker_unavailable",
+                  "step_skill_version_unavailable"
                 ],
                 "type": "string"
               },
@@ -53449,7 +53455,9 @@
                   "step_skill_draft",
                   "step_skill_deprecated",
                   "step_model_not_offered",
-                  "step_model_not_allowed"
+                  "step_model_not_allowed",
+                  "step_worker_unavailable",
+                  "step_skill_version_unavailable"
                 ],
                 "type": "string"
               },

@@ -90,6 +90,8 @@ export {
   type StepTrialDrafts,
   type WorkerSpecAdmissionReason,
   createStepAttemptTask,
+  pinnedSkillsRefusal,
+  previousAttemptSkillsRefusal,
   resolveStepAuthority,
   startStepAttemptTask,
   stepTrialDrafts,

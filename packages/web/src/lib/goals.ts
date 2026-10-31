@@ -574,7 +574,8 @@ interface PlanHintArgs {
   readonly gates: readonly string[];
   /** The execute permissions a `step_capability_not_held` step needs, by their console names. */
   readonly capabilities: readonly (readonly [string, string])[];
-  /** S11 GO8a: the Skills a `step_skill_draft` / `step_skill_deprecated` step names, as shown. */
+  /** S11 GO8a: the Skills a `step_skill_draft` / `step_skill_deprecated` step names, as shown;
+   *  legacy 544, the Skill versions a `step_skill_version_unavailable` step would mount again. */
   readonly skills: readonly string[];
   /** S11 GO8a: the model a `step_model_not_offered` / `step_model_not_allowed` step sets. */
   readonly model: string;
@@ -670,6 +671,32 @@ const PLAN_HINT: Readonly<
       `Step “${step}”: its Worker uses ${one ? 'Skill' : 'Skills'} ${en}, deprecated with no version left to use — ${consequence[1]} ${context === 'proposal' ? 'Turn the plan down so the assistant picks a published Skill.' : 'Ask the entry agent in chat to revise the plan to a published Skill, or remove the step under “Revise plan…”.'}`,
     ];
   },
+  // Legacy 544: the Worker version a step is pinned to is no longer published — a plan naming it
+  // does not validate, so a proposal cannot be confirmed and a revision has to change or drop it.
+  step_worker_unavailable: ({ step, context, consequence }) => {
+    if (context === 'proposal') {
+      return [
+        `步骤「${step}」用的 Worker 版本已经不再发布（弃用了，或者不存在）：现在确认会被拒绝。可以驳回，让助手换一个已发布的 Worker。`,
+        `Step “${step}” uses a Worker version that is no longer published (deprecated, or not there) — confirming would be refused now. Turn the plan down so the assistant picks a published Worker.`,
+      ];
+    }
+    const [changeZh, changeEn] = CHANGE_PLAN[context];
+    return [
+      `步骤「${step}」用的 Worker 版本已经不再发布（弃用了，或者不存在）：${consequence[0]}可以${changeZh}。`,
+      `Step “${step}” uses a Worker version that is no longer published (deprecated, or not there) — ${consequence[1]} You can ${changeEn}.`,
+    ];
+  },
+  // Legacy 544: a step tried again mounts the Skill versions its last attempt did — one gone since
+  // (deprecated, or a trial's draft changed, discarded or deprecated) holds it until the plan
+  // changes the step, which then starts afresh with the Skills as they are now.
+  step_skill_version_unavailable: ({ step, skills, consequence }) => {
+    const [zh, en] = namesIn(skills);
+    const one = skills.length === 1;
+    return [
+      `步骤「${step}」上一次尝试用的 Skill${zh}现在不能再用了（已弃用，或者试用的草稿改过、被丢弃或弃用）。重试要用同一个版本，所以${consequence[0]}在对话里让入口智能体修订计划改动这一步，它会按现在的 Skill 重新开始；或者在「修订计划…」里移除这一步。`,
+      `Step “${step}”: ${one ? 'the Skill version' : 'the Skill versions'} ${en} its last attempt used can no longer be used (deprecated, or a trial’s draft changed, discarded or deprecated). A retry uses the same ${one ? 'version' : 'versions'}, so ${consequence[1]} Ask the entry agent in chat to revise the plan and change the step, which then starts afresh with the Skills as they are now; or remove the step under “Revise plan…”.`,
+    ];
+  },
   // A plan is validated against the catalog when proposed, confirmed or revised: the hint says the
   // catalog dropped the model since — confirming the proposal would be refused (UX on #853).
   step_model_not_offered: ({ step, model, context, consequence }) => {
@@ -717,7 +744,7 @@ export function planHintText(
     capabilities: (hint.capabilityNames ?? []).map(
       (name) => [actionLabel(name, inZh), actionLabel(name, inEn)] as const,
     ),
-    skills: (hint.skillRefs ?? []).map(skillRefShown),
+    skills: hintSkillsShown(hint),
     model: hint.model ?? '',
     consequence: STEP_HINT_CONSEQUENCE[retried ? 'retried' : 'first'],
     trial: hint.trial !== undefined,
@@ -727,8 +754,19 @@ export function planHintText(
 
 /** S11 GO8a: why confirming a proposal was refused, when its read already said so — a model the
  *  catalog no longer offers (`step_model_not_offered`): offered again, it can be confirmed (UX on
- *  #853). `null` otherwise: the plan's other problems are under technical details. */
+ *  #853); legacy 544, a step's Worker version no longer published (`step_worker_unavailable`),
+ *  which no one can bring back for this proposal. `null` otherwise: the plan's other problems are
+ *  under technical details. */
 export function confirmRefusedText(hints: readonly PlanHint[], t: Translate): string | null {
+  const workerSteps = stepKeysOf(hints.filter((hint) => hint.code === 'step_worker_unavailable'));
+  if (workerSteps.length > 0) {
+    const [zh, en] = namesIn(workerSteps);
+    const one = workerSteps.length === 1;
+    return t(
+      `步骤${zh}用的 Worker 版本已经不再发布，确认没有通过，这个提议不能再确认了。驳回它，或者在对话里让入口智能体重新提一个目标。`,
+      `${one ? 'Step' : 'Steps'} ${en} ${one ? 'uses a Worker version' : 'use Worker versions'} no longer published, so confirming was refused and this proposal cannot be confirmed any more. Turn it down, or ask the entry agent in a chat for a new goal.`,
+    );
+  }
   const models = [
     ...new Set(
       hints.flatMap((hint) =>
@@ -782,6 +820,10 @@ export function stepHintChipLabel(hint: PlanHint, t: Translate): string | null {
       return t('模型不在目录里', 'Model not in catalog');
     case 'step_model_not_allowed':
       return t('模型不允许', 'Model not allowed');
+    case 'step_worker_unavailable':
+      return t('Worker 已不再发布', 'Worker no longer published');
+    case 'step_skill_version_unavailable':
+      return t('上次的 Skill 版本不可用', 'Last Skill version gone');
     default:
       return null;
   }
@@ -790,6 +832,20 @@ export function stepHintChipLabel(hint: PlanHint, t: Translate): string | null {
 /** S11 GO8a: a Skill as a WorkerSpec names it — a name as written, an id cut short (never bare). */
 export function skillRefShown(ref: string): string {
   return isUuidLike(ref) ? shortId(ref) : ref;
+}
+
+/** Legacy 544: a pinned Skill version as the kernel names it, 「name v<version>」 — its name part
+ *  shown as {@link skillRefShown} shows a reference (an id when the version's row is gone). */
+export function skillVersionShown(ref: string): string {
+  const match = /^(.*) v(\d+)$/.exec(ref);
+  return match ? `${skillRefShown(match[1] ?? '')} v${match[2]}` : skillRefShown(ref);
+}
+
+/** A hint's Skills as shown: references as a WorkerSpec names them, or pinned versions. */
+function hintSkillsShown(hint: PlanHint): readonly string[] {
+  return (hint.skillRefs ?? []).map(
+    hint.code === 'step_skill_version_unavailable' ? skillVersionShown : skillRefShown,
+  );
 }
 
 /** S11 GO8a: what a step's WorkerSpec sets differently from its Worker, in the order a reader
@@ -1667,6 +1723,8 @@ const ADMISSION_PAUSE_HINTS: ReadonlySet<PlanHint['code']> = new Set([
   'step_model_not_offered',
   'step_model_not_allowed',
   'step_definition_excluded',
+  'step_worker_unavailable',
+  'step_skill_version_unavailable',
 ]);
 
 /** Why a step did not go on, as a pause note lists several reasons of one step (UX on #853 P3-2):
@@ -1677,6 +1735,11 @@ const ADMISSION_REASON: Readonly<Partial<Record<PlanHint['code'], readonly [stri
   step_model_not_offered: ['模型不在目录里', 'its model is not in the catalog'],
   step_model_not_allowed: ['模型不允许', 'its model is not allowed'],
   step_definition_excluded: ['智能体设置已排除', 'the agent settings exclude its Worker'],
+  step_worker_unavailable: ['Worker 已不再发布', 'its Worker is no longer published'],
+  step_skill_version_unavailable: [
+    '上次用的 Skill 版本不可用',
+    'a Skill version its last attempt used is gone',
+  ],
 };
 
 /** How a pause note says the steps it names were held: before their first attempt (`没有开始`),
@@ -1754,7 +1817,7 @@ function admissionPauseText(
   }
   const held = heldWording(goal, [step]);
   const heldEn = held.en(false);
-  const [skillsZh, skillsEn] = namesIn((hint.skillRefs ?? []).map(skillRefShown));
+  const [skillsZh, skillsEn] = namesIn(hintSkillsShown(hint));
   switch (hint.code) {
     case 'step_skill_draft':
       return hint.trial !== undefined
@@ -1770,6 +1833,16 @@ function admissionPauseText(
       return t(
         `需要人决定：步骤「${step}」的 Worker 要用的 Skill${skillsZh}已经弃用，这一步${held.zh}。在对话里让入口智能体修订计划，换一个已发布的 Skill 之后才能继续，见下面「步骤」里的说明。`,
         `A person must decide: the Worker of step “${step}” uses Skill ${skillsEn}, which was deprecated, so the step ${heldEn}. It goes on once the entry agent, asked in chat, revises the plan to a published Skill. See the note under Steps.`,
+      );
+    case 'step_worker_unavailable':
+      return t(
+        `需要人决定：步骤「${step}」用的 Worker 版本已经不再发布，这一步${held.zh}。在对话里让入口智能体修订计划换一个已发布的 Worker，或者在「修订计划…」里移除这一步，见下面「步骤」里的说明。`,
+        `A person must decide: step “${step}” uses a Worker version that is no longer published, so the step ${heldEn}. Ask the entry agent in chat to revise the plan to a published Worker, or remove the step under “Revise plan…”. See the note under Steps.`,
+      );
+    case 'step_skill_version_unavailable':
+      return t(
+        `需要人决定：步骤「${step}」上一次尝试用的 Skill${skillsZh}现在不能再用了，重试要用同一个版本，所以这一步${held.zh}。在对话里让入口智能体修订计划改动这一步，它会按现在的 Skill 重新开始；或者在「修订计划…」里移除这一步，见下面「步骤」里的说明。`,
+        `A person must decide: the Skill ${skillsEn} the last attempt of step “${step}” used can no longer be used, and a retry uses the same version, so the step ${heldEn}. Ask the entry agent in chat to revise the plan and change the step, which then starts afresh with the Skills as they are now; or remove the step under “Revise plan…”. See the note under Steps.`,
       );
     case 'step_model_not_offered':
       return t(

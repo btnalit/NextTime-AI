@@ -310,7 +310,7 @@ function StepItem({
               data-testid="goal-step-trial"
               data-trial-state={approval.state}
             >
-              <span>{trialApprovalText(approval, t)}</span>
+              <span>{trialApprovalText(approval, t, (run?.attemptCount ?? 0) > 0)}</span>
               <span className="text-3">{t('批准人', 'Approved by')}</span>
               <RefChip kind="principal" id={approval.approvedBy} http={http} size="s" />
               <time className="text-3" title={formatDateTime(approval.approvedAt)}>
