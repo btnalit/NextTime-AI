@@ -33,8 +33,9 @@
 # Preconditions (see docs/runbooks/host-accept-s2.md for the full walkthrough):
 #   - `docker compose --profile test up -d` already running plus `docker compose up -d
 #     gatekeeper-docker`. The script switches llm-proxy / worker-supervisor / fake-llm to the fake
-#     provider itself via deploy/accept/docker-compose.fake.yml and restores production wiring
-#     from an EXIT trap, so ${NEXTTIME_DATA}/config/llm-providers.yaml and
+#     provider itself via deploy/accept/docker-compose.fake.yml (and restarts the kernel on its
+#     catalog: publishing the ops-runner checks its model there, legacy 302) and restores
+#     production wiring from an EXIT trap, so ${NEXTTIME_DATA}/config/llm-providers.yaml and
 #     ${NEXTTIME_DATA}/models/models.json are never modified — no manual provider switch is
 #     needed before or after.
 #   - this release's gate-host image is on the host (scripts/pull-images.sh or build-images.sh);
@@ -169,7 +170,7 @@ trap 'exit 130' INT TERM HUP PIPE
 
 if [ "$REAL" -eq 0 ]; then
   accept_provider_up || fail "preflight-fake-provider" "could not switch the stack to the fake provider (deploy/accept/docker-compose.fake.yml)"
-  pass "preflight-fake-provider" "llm-proxy / worker-supervisor / fake-llm recreated on deploy/accept/docker-compose.fake.yml; production provider config untouched"
+  pass "preflight-fake-provider" "llm-proxy / worker-supervisor / fake-llm / kernel recreated on deploy/accept/docker-compose.fake.yml; production provider config untouched"
 else
   # W7 real-model mode: the stack stays on whatever provider is deployed; every entry agent and
   # Worker this script creates is pinned to $REAL_MODEL (must be one of that provider's
