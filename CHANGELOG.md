@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.53.0](https://github.com/btnalit/NextTime-AI/compare/v0.52.0...v0.53.0) (2026-10-31)
+
+
+### Features
+
+* **goal:** approve one trial of a step's draft Skills (S11 GO8b) ([#855](https://github.com/btnalit/NextTime-AI/issues/855)) ([fae85cb](https://github.com/btnalit/NextTime-AI/commit/fae85cb5f7c8888926e34aa3f7c5f3fdc67ed5ee))
+* **goal:** compose a step's Worker from a WorkerSpec and admit it (S11 GO8a) ([#853](https://github.com/btnalit/NextTime-AI/issues/853)) ([0f77552](https://github.com/btnalit/NextTime-AI/commit/0f7755204ec0c375728654fb19727fa3941b2521))
+
+
+### Bug Fixes
+
+* **kernel:** refuse publishing a WorkerDefinition that names what is not there (legacy 302) ([#848](https://github.com/btnalit/NextTime-AI/issues/848)) ([4e5ec7c](https://github.com/btnalit/NextTime-AI/commit/4e5ec7cd924443361eaf91b0b9fc99dc3cfbb689))
+
 ## [0.52.0](https://github.com/btnalit/NextTime-AI/compare/v0.51.0...v0.52.0) (2026-10-31)
 
 
