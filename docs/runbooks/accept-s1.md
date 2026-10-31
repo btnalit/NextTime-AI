@@ -18,6 +18,22 @@
   `make gen-models`。同一个 EXIT trap（`on_exit`）现在也在恢复 provider 之前先跑一次
   `cleanup_step`——不止是脚本跑完时，任何一步 `fail()` 提前退出、或收到 INT/TERM/HUP/PIPE，都会
   经它回收 alice/bob 的入口容器（见 §7"验收残留自动清理"）。
+- 切换和恢复都会重启 kernel。两次重启之后，脚本都会等 agent-host 重新连上 kernel（日志里出现
+  `kernel-link: connected`），最多等 `ACCEPT_KERNEL_LINK_WAIT_S` 秒，默认 60。`--wait` 只等到
+  kernel 自己健康；agent-host 重连的退避最长 30 秒，没连上之前 kernel 开始的每个 Turn 都会立刻失败
+  （kernel 日志 `startTurn with no agent-host connected`）。
+  - 切换后等不到：`preflight-fake-provider` 判 FAIL，并说明是链路没回来。
+  - 恢复后等不到：打印一行 `accept: P1 — …`。生产 provider 已经恢复，但链路回来之前对话都会失败。
+    先看 `docker compose ps agent-host` 和它的日志，一直不回来就 `docker compose restart agent-host`。
+- **切换期间 kernel 按 fake 模型目录校验模型**（遗留 545）。这段时间里，生产工作区如果有在跑的目标，
+  它的步骤用 WorkerSpec 指定了模型（`spec.model`）而这个模型不在 fake 目录里，这一步不会开始，目标停在
+  `needs_decision`，平台不会自己继续。跑验收之前，先在控制台「目标」页看有没有在跑的生产目标：有就等
+  它跑完，或者先暂停它；已经被停下的，恢复之后由请求人在目标页按「继续」。
+- **恢复失败按 P1 处理**（遗留 548）。退出时的恢复会重建 llm-proxy、worker-supervisor 和 kernel；
+  失败时 kernel 可能没起来，或者还挂着 fake 目录，整个控制台都不能用。看到
+  `accept: P1 — restoring the production provider failed` 就立刻按报错里给的命令手动恢复
+  （`docker compose up -d --force-recreate --wait llm-proxy worker-supervisor kernel`），
+  再确认 agent-host 日志里出现 `kernel-link: connected`。
 - 迁移已跑到最新（`make migrate` 或已随 `kernel` 容器启动流程跑过）。
 - 主机上有 `docker`、`curl`；**没有** `node`/`corepack`（`scripts/accept_s1.sh` 因此把每一次
   JSON-RPC 交互都放进一次性的 kernel 镜像容器里跑，见脚本头注释）。

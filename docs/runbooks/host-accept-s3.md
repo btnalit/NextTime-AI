@@ -17,6 +17,7 @@ Handle）、`docs/runbooks/host-explorer.md`（Explorer 九个端点里本脚本
   `${NEXTTIME_DATA}/config/llm-providers.yaml` 与 `${NEXTTIME_DATA}/models/models.json`
   全程不会被改动，跑前跑后都不用重跑
   `make gen-models`；唯一要求是 llm-proxy、worker-supervisor、fake-llm 镜像已经构建好。
+- 切换和恢复之后脚本会等 agent-host 重新连上 kernel；切换期间生产目标里指定了模型的步骤会停下（遗留 545）；恢复失败按 P1 处理（遗留 548）。三条的做法见 accept-s1.md §1。
 - `fake-llm` 镜像不用手动重建：脚本切 fake provider 时（`accept_provider_up`）先用当前检出
   `docker compose --profile test build fake-llm`，再重建容器，所以"哪个服务依赖哪个"这类
   `deploy/fake-llm/server.mjs` 里的场景总是当前代码的版本（见 host-accept-s2.md §1）。

@@ -254,9 +254,43 @@ retry_http_code() {
 
 ACCEPT_FAKE_OVERRIDE="${ACCEPT_FAKE_OVERRIDE:-$PWD/deploy/accept/docker-compose.fake.yml}"
 ACCEPT_PROVIDER_SWITCHED=0
+# How long to wait for agent-host's link to the recreated kernel, and how often to look (#856
+# review #488 P2).
+ACCEPT_KERNEL_LINK_WAIT_S="${ACCEPT_KERNEL_LINK_WAIT_S:-60}"
+ACCEPT_KERNEL_LINK_POLL_S="${ACCEPT_KERNEL_LINK_POLL_S:-2}"
 
 compose_accept() {
   docker compose -f docker-compose.yml -f "$ACCEPT_FAKE_OVERRIDE" "$@"
+}
+
+# accept_utc_now: the current time as RFC 3339 UTC, to second precision (what
+# `docker compose logs --since` takes).
+accept_utc_now() {
+  date -u +%Y-%m-%dT%H:%M:%SZ
+}
+
+# wait_kernel_link <since>: waits until agent-host logs `kernel-link: connected` at or after
+# <since> (from accept_utc_now), looking every ACCEPT_KERNEL_LINK_POLL_S seconds for up to
+# ACCEPT_KERNEL_LINK_WAIT_S. `--wait` only waits for the kernel's own healthcheck: agent-host
+# redials with a backoff of up to 30 s (packages/agent-host/src/kernel-link.ts), and until it is
+# back every Turn the kernel starts ends `failed` at once (`startTurn with no agent-host
+# connected`). Returns 0 once the line is there, 1 when the wait runs out.
+wait_kernel_link() {
+  wkl_since="$1"
+  wkl_waited=0
+  while :; do
+    if docker compose logs --no-log-prefix --since "$wkl_since" agent-host </dev/null 2>/dev/null \
+        | grep -qF 'kernel-link: connected'; then
+      return 0
+    fi
+    if [ "$wkl_waited" -ge "$ACCEPT_KERNEL_LINK_WAIT_S" ]; then
+      return 1
+    fi
+    sleep "$ACCEPT_KERNEL_LINK_POLL_S"
+    wkl_waited=$((wkl_waited + ACCEPT_KERNEL_LINK_POLL_S))
+    # A poll interval of 0 (the unit test's) still ends: count each look as one second.
+    [ "$ACCEPT_KERNEL_LINK_POLL_S" -gt 0 ] || wkl_waited=$((wkl_waited + 1))
+  done
 }
 
 # Generates ${NEXTTIME_DATA}/accept/models/models.json from the fake provider file (the override
@@ -309,24 +343,39 @@ accept_provider_up() {
   # still restore whatever did get recreated onto the override.
   ACCEPT_PROVIDER_SWITCHED=1
   # --wait: the kernel restarts here, and the caller's next step calls it.
+  up_since=$(accept_utc_now)
   if ! up_out=$(compose_accept --profile test up -d --force-recreate --wait llm-proxy worker-supervisor fake-llm kernel </dev/null 2>&1); then
     echo "accept: bringing up the fake provider failed: $(printf '%s' "$up_out" | tail -10)" >&2
+    return 1
+  fi
+  # The run's first Turn needs agent-host linked to the restarted kernel, not just the kernel up.
+  if ! wait_kernel_link "$up_since"; then
+    echo "accept: the kernel restarted on the fake provider, but agent-host did not reconnect to it within ${ACCEPT_KERNEL_LINK_WAIT_S} s (no 'kernel-link: connected' in 'docker compose logs agent-host' since $up_since) — every Turn would fail with 'startTurn with no agent-host connected'; check 'docker compose ps agent-host' and its log" >&2
     return 1
   fi
   return 0
 }
 
 # Recreates llm-proxy, worker-supervisor and the kernel from the root compose file alone
-# (production provider config, production models.json path) and waits until they are healthy.
-# Idempotent; a no-op if accept_provider_up never succeeded. fake-llm is left running — it is
-# harmless and `--profile test` only.
+# (production provider config, production models.json path), waits until they are healthy and
+# agent-host is linked to the kernel again — the time production is back. Idempotent; a no-op if
+# accept_provider_up never succeeded. fake-llm is left running — it is harmless and
+# `--profile test` only. A failure here is P1 (docs/runbooks/accept-s1.md §1): the kernel may be
+# down or still on the fake catalog, and the console with it.
 accept_provider_restore() {
   [ "$ACCEPT_PROVIDER_SWITCHED" -eq 1 ] || return 0
+  restore_since=$(accept_utc_now)
   if ! restore_out=$(docker compose up -d --force-recreate --wait llm-proxy worker-supervisor kernel </dev/null 2>&1); then
-    echo "accept: restoring the production provider failed — run 'docker compose up -d --force-recreate --wait llm-proxy worker-supervisor kernel' by hand: $(printf '%s' "$restore_out" | tail -10)" >&2
+    echo "accept: P1 — restoring the production provider failed, and the kernel may be down or still on the fake catalog — run 'docker compose up -d --force-recreate --wait llm-proxy worker-supervisor kernel' by hand now: $(printf '%s' "$restore_out" | tail -10)" >&2
     return 1
   fi
+  # Restored either way: the services run on the production files, so running this again would
+  # not help with the link.
   ACCEPT_PROVIDER_SWITCHED=0
+  if ! wait_kernel_link "$restore_since"; then
+    echo "accept: P1 — the production provider is restored, but agent-host did not reconnect to the kernel within ${ACCEPT_KERNEL_LINK_WAIT_S} s (no 'kernel-link: connected' in 'docker compose logs agent-host' since $restore_since), so chats fail until it does — check 'docker compose ps agent-host' and its log, and 'docker compose restart agent-host' if it stays down" >&2
+    return 1
+  fi
   return 0
 }
 
