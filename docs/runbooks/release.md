@@ -1981,6 +1981,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **为什么**：#848 起 kernel 发布 WorkerDefinition 时按它挂载的模型目录校验模型，原来验收只把 llm-proxy 与 worker-supervisor 切到 fake 目录，S2 的 `ops-runner-publish` 会 400。
 - **注意**：退出时的 restore 也重建 kernel，这一步失败按 P1 处理（遗留 548 会写进 runbook）；带 `spec.model` 的生产目标运行在验收期间可能暂停（遗留 545）。
 
+### 3.85 重试的模型回落与「版本不再发布」的提示（#857，遗留 543、544，v0.53.0 之后的下一版起）
+
+无迁移、不改 compose、无单独主机步骤、无新环境变量；窗口前只读检查：无。
+
+- **行为变化（要告诉 owner）**：目标步骤的模型取自请求人的智能体设置时，admin 收窄 `allowedModels` 之后，这一步的重试会按上限回落到允许的模型（审计 `task.queue` 记 `modelFallback {from, to}`），不再沿用被收窄掉的模型；WorkerSpec 或 WorkerDefinition 明确设的模型不回落。
+- **发版说明可写**：步骤钉住的 Worker 版本或上一次尝试用过的 Skill 版本不再发布时，目标页会点名这一步并说明下一步。契约：两个新计划提示码 `step_worker_unavailable`、`step_skill_version_unavailable`。
+- **回滚**：只回退代码即可，无数据变化；回退后重试照旧沿用第一次尝试的模型，提示回到原来的说法。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
