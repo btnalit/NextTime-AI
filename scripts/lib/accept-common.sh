@@ -274,14 +274,29 @@ accept_utc_now() {
 # ACCEPT_KERNEL_LINK_WAIT_S. `--wait` only waits for the kernel's own healthcheck: agent-host
 # redials with a backoff of up to 30 s (packages/agent-host/src/kernel-link.ts), and until it is
 # back every Turn the kernel starts ends `failed` at once (`startTurn with no agent-host
-# connected`). Returns 0 once the line is there, 1 when the wait runs out.
+# connected`). Returns 0 once the line is there, 1 when the wait runs out or cannot run; then
+# WKL_PROBLEM says why, when there is more to say than "the line never came": the two settings
+# are not whole seconds, or `docker compose logs agent-host` itself failed the last time
+# (a log driver it cannot read, say) — so a timeout does not point at the link when the log was
+# never readable.
 wait_kernel_link() {
   wkl_since="$1"
   wkl_waited=0
+  WKL_PROBLEM=""
+  case "$ACCEPT_KERNEL_LINK_WAIT_S:$ACCEPT_KERNEL_LINK_POLL_S" in
+    *[!0-9:]* | :* | *:)
+      WKL_PROBLEM="ACCEPT_KERNEL_LINK_WAIT_S and ACCEPT_KERNEL_LINK_POLL_S must be whole seconds (got '$ACCEPT_KERNEL_LINK_WAIT_S' and '$ACCEPT_KERNEL_LINK_POLL_S'), so the link was not waited for"
+      return 1
+      ;;
+  esac
   while :; do
-    if docker compose logs --no-log-prefix --since "$wkl_since" agent-host </dev/null 2>/dev/null \
-        | grep -qF 'kernel-link: connected'; then
-      return 0
+    if wkl_log=$(docker compose logs --no-log-prefix --since "$wkl_since" agent-host </dev/null 2>&1); then
+      WKL_PROBLEM=""
+      if printf '%s\n' "$wkl_log" | grep -qF 'kernel-link: connected'; then
+        return 0
+      fi
+    else
+      WKL_PROBLEM="'docker compose logs agent-host' itself failed the last time it was asked: $(printf '%s' "$wkl_log" | tail -3)"
     fi
     if [ "$wkl_waited" -ge "$ACCEPT_KERNEL_LINK_WAIT_S" ]; then
       return 1
@@ -350,7 +365,7 @@ accept_provider_up() {
   fi
   # The run's first Turn needs agent-host linked to the restarted kernel, not just the kernel up.
   if ! wait_kernel_link "$up_since"; then
-    echo "accept: the kernel restarted on the fake provider, but agent-host did not reconnect to it within ${ACCEPT_KERNEL_LINK_WAIT_S} s (no 'kernel-link: connected' in 'docker compose logs agent-host' since $up_since) — every Turn would fail with 'startTurn with no agent-host connected'; check 'docker compose ps agent-host' and its log" >&2
+    echo "accept: the kernel restarted on the fake provider, but agent-host did not reconnect to it within ${ACCEPT_KERNEL_LINK_WAIT_S} s (no 'kernel-link: connected' in 'docker compose logs agent-host' since $up_since) — every Turn would fail with 'startTurn with no agent-host connected'; check 'docker compose ps agent-host' and its log${WKL_PROBLEM:+ ($WKL_PROBLEM)}" >&2
     return 1
   fi
   return 0
@@ -373,7 +388,7 @@ accept_provider_restore() {
   # not help with the link.
   ACCEPT_PROVIDER_SWITCHED=0
   if ! wait_kernel_link "$restore_since"; then
-    echo "accept: P1 — the production provider is restored, but agent-host did not reconnect to the kernel within ${ACCEPT_KERNEL_LINK_WAIT_S} s (no 'kernel-link: connected' in 'docker compose logs agent-host' since $restore_since), so chats fail until it does — check 'docker compose ps agent-host' and its log, and 'docker compose restart agent-host' if it stays down" >&2
+    echo "accept: P1 — the production provider is restored, but agent-host did not reconnect to the kernel within ${ACCEPT_KERNEL_LINK_WAIT_S} s (no 'kernel-link: connected' in 'docker compose logs agent-host' since $restore_since), so chats fail until it does — check 'docker compose ps agent-host' and its log, and 'docker compose restart agent-host' if it stays down${WKL_PROBLEM:+ ($WKL_PROBLEM)}" >&2
     return 1
   fi
   return 0

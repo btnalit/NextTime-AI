@@ -148,8 +148,11 @@ on_exit() {
     cleanup_step
   fi
   accept_s3_cleanup_token
-  if [ "$REAL" -eq 0 ]; then
-    accept_provider_restore
+  # A restore that did not finish is P1: a FAIL line and a non-zero exit, so a rehearsal that
+  # counts only those sees it (review #488 on #862).
+  if [ "$REAL" -eq 0 ] && ! accept_provider_restore; then
+    printf 'FAIL %s %s\n' restore-provider "restoring the production provider did not finish — see the 'accept: P1' line above (docs/runbooks/accept-s1.md §1)" >&2
+    [ "$rc" -ne 0 ] || rc=1
   fi
   exit "$rc"
 }

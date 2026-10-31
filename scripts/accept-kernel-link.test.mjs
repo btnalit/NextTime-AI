@@ -13,9 +13,10 @@ import { test } from 'node:test';
 /**
  * Runs `wait_kernel_link <since>` with a fake `docker`: each call appends its arguments to
  * `calls`, and from call number `connectedFrom` on (1-based; 0 = never) prints a log that has the
- * connected line. Returns the exit status and the recorded calls.
+ * connected line — or, with `logsFail`, fails like a log driver `docker compose logs` cannot read.
+ * Returns the exit status, the recorded calls and what `WKL_PROBLEM` said.
  */
-function waitKernelLink({ connectedFrom, waitSeconds }) {
+function waitKernelLink({ connectedFrom, waitSeconds, pollSeconds = '0', logsFail = false }) {
   const dir = mkdtempSync(path.join(tmpdir(), 'accept-kernel-link-'));
   try {
     const calls = path.join(dir, 'calls');
@@ -26,6 +27,10 @@ function waitKernelLink({ connectedFrom, waitSeconds }) {
       `#!/bin/sh
 printf '%s\\n' "$*" >> "${calls}"
 n=$(wc -l < "${calls}")
+if [ ${logsFail ? 1 : 0} -eq 1 ]; then
+  echo 'Error response from daemon: configured logging driver does not support reading' >&2
+  exit 1
+fi
 printf '%s\\n' '{"level":"warn","msg":"kernel-link: disconnected — will reconnect","code":1006}'
 if [ ${connectedFrom} -gt 0 ] && [ "$n" -ge ${connectedFrom} ]; then
   printf '%s\\n' '{"level":"info","msg":"kernel-link: connected","instanceId":"x","replaying":0}'
@@ -35,20 +40,26 @@ fi
     chmodSync(docker, 0o755);
     const result = spawnSync(
       'sh',
-      ['-c', '. scripts/lib/accept-common.sh && wait_kernel_link "$1"', 'sh', '2026-10-31T17:50:00Z'],
+      [
+        '-c',
+        '. scripts/lib/accept-common.sh && { wait_kernel_link "$1"; rc=$?; printf "%s" "$WKL_PROBLEM"; exit $rc; }',
+        'sh',
+        '2026-10-31T17:50:00Z',
+      ],
       {
         encoding: 'utf8',
         env: {
           ...process.env,
           PATH: `${dir}:${process.env.PATH}`,
           ACCEPT_KERNEL_LINK_WAIT_S: String(waitSeconds),
-          ACCEPT_KERNEL_LINK_POLL_S: '0',
+          ACCEPT_KERNEL_LINK_POLL_S: pollSeconds,
         },
       },
     );
     return {
       status: result.status,
       calls: readFileSync(calls, 'utf8').trim().split('\n').filter(Boolean),
+      problem: result.stdout,
     };
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -75,4 +86,33 @@ test('wait_kernel_link: already linked on the first look', () => {
   const { status, calls } = waitKernelLink({ connectedFrom: 1, waitSeconds: 0 });
   assert.equal(status, 0);
   assert.equal(calls.length, 1);
+});
+
+test('wait_kernel_link: settings that are not whole seconds refuse at once, saying so', () => {
+  for (const [waitSeconds, pollSeconds] of [
+    ['abc', '2'],
+    ['60', '1.5'],
+    ['-1', '2'],
+  ]) {
+    const { status, calls, problem } = waitKernelLink({
+      connectedFrom: 1,
+      waitSeconds,
+      pollSeconds,
+    });
+    assert.equal(status, 1, `${waitSeconds}:${pollSeconds}`);
+    assert.equal(calls.length, 0, 'it never looks at the log');
+    assert.match(problem, /must be whole seconds/);
+  }
+});
+
+test('wait_kernel_link: a log it cannot read is reported as that, not as a missing link', () => {
+  const { status, calls, problem } = waitKernelLink({
+    connectedFrom: 1,
+    waitSeconds: 2,
+    logsFail: true,
+  });
+  assert.equal(status, 1);
+  assert.equal(calls.length, 3);
+  assert.match(problem, /'docker compose logs agent-host' itself failed/);
+  assert.match(problem, /logging driver does not support reading/);
 });

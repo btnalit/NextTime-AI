@@ -25,6 +25,8 @@
   - 切换后等不到：`preflight-fake-provider` 判 FAIL，并说明是链路没回来。
   - 恢复后等不到：打印一行 `accept: P1 — …`。生产 provider 已经恢复，但链路回来之前对话都会失败。
     先看 `docker compose ps agent-host` 和它的日志，一直不回来就 `docker compose restart agent-host`。
+  - `docker compose logs agent-host` 本身读不到（比如 daemon 的日志驱动不支持读取）时，报错会带上
+    它最后一次的错误，不会只说链路没回来。两个等待参数必须是整秒数，不是就直接报错、不等。
 - **切换期间 kernel 按 fake 模型目录校验模型**（遗留 545）。这段时间里，生产工作区如果有在跑的目标，
   它的步骤用 WorkerSpec 指定了模型（`spec.model`）而这个模型不在 fake 目录里，这一步不会开始，目标停在
   `needs_decision`，平台不会自己继续。跑验收之前，先在控制台「目标」页看有没有在跑的生产目标：有就等
@@ -33,7 +35,9 @@
   失败时 kernel 可能没起来，或者还挂着 fake 目录，整个控制台都不能用。看到
   `accept: P1 — restoring the production provider failed` 就立刻按报错里给的命令手动恢复
   （`docker compose up -d --force-recreate --wait llm-proxy worker-supervisor kernel`），
-  再确认 agent-host 日志里出现 `kernel-link: connected`。
+  再确认 agent-host 日志里出现 `kernel-link: connected`。恢复没做完时（重建失败，或者链路没回来），
+  脚本还会打一行 `FAIL restore-provider`，并以非零退出码结束，即使前面的场景都通过了。
+  `staging-rehearsal.sh` 按退出码和 `FAIL` 行判断，所以这次会被算作失败。
 - 迁移已跑到最新（`make migrate` 或已随 `kernel` 容器启动流程跑过）。
 - 主机上有 `docker`、`curl`；**没有** `node`/`corepack`（`scripts/accept_s1.sh` 因此把每一次
   JSON-RPC 交互都放进一次性的 kernel 镜像容器里跑，见脚本头注释）。
