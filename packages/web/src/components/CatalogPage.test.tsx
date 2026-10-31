@@ -3129,6 +3129,75 @@ describe('CatalogPage — credential confirmation on Publish', () => {
   });
 });
 
+// Legacy 302: a Worker draft that names what is not there is not published. The refusal says, next
+// to Publish, each field by the editor's label with its values and what to do — not a toast — and
+// 「按这份草稿改一版」 opens the editor on the next version with those same fields marked.
+describe('CatalogPage — a Worker draft naming what is not there (legacy 302)', () => {
+  it('Publish refused: the fields are named beside Publish, and the fix opens the editor with them marked', async () => {
+    const draft = {
+      id: 'wd-3',
+      version: 1,
+      kind: 'worker',
+      status: 'draft',
+      definition: {
+        name: 'Patcher',
+        systemPrompt: 'You patch things.',
+        gates: ['gk-gone'],
+        skills: ['draft-only'],
+        model: 'fake/gone',
+      },
+    };
+    const http = scriptedHttp({
+      list_worker_definitions: (params) => {
+        const { includeOwnDrafts } = (params ?? {}) as { includeOwnDrafts?: boolean };
+        return { items: includeOwnDrafts ? [draft] : [] };
+      },
+      list_capability_names: () => ({ items: [] }),
+      list_models: () => ({ items: [] }),
+      list_skills: () => ({ items: [] }),
+      publish_worker_definition: () =>
+        Promise.reject(
+          new HttpError(
+            'capability_error',
+            'WorkerDefinition wd-3@1 names what is not there, so it is not published (...)',
+            'unresolved_references',
+            {
+              unresolved: { gates: ['gk-gone'], skills: ['draft-only'], model: ['fake/gone'] },
+            },
+          ),
+        ),
+    });
+    renderPage(http, 'workers');
+    const section = await screen.findByTestId('workers-my-drafts-section');
+    const detail = await selectRow(within(section).getByTestId('workers-my-draft-row'));
+    fireEvent.click(within(detail).getByTestId('worker-draft-publish'));
+
+    const problem = await within(detail).findByTestId('worker-publish-references');
+    await waitFor(() => expect(document.activeElement).toBe(problem));
+    expect(within(problem).getByTestId('worker-publish-references-model').textContent).toContain(
+      '「fake/gone」 不在模型目录里',
+    );
+    expect(within(problem).getByTestId('worker-publish-references-gates').textContent).toContain(
+      '这个工作区没有 「gk-gone」 这个门',
+    );
+    expect(within(problem).getByTestId('worker-publish-references-skills').textContent).toContain(
+      '「draft-only」 没有已发布的版本',
+    );
+    expect(within(problem).queryByTestId('worker-publish-references-capabilities')).toBeNull();
+    // Said beside Publish, not in a toast too.
+    expect(screen.queryByTestId('toast')).toBeNull();
+
+    fireEvent.click(within(problem).getByTestId('worker-publish-references-fix'));
+    const drawer = await screen.findByTestId('worker-editor-drawer');
+    expect(within(drawer).getByTestId('worker-unresolved-notice').textContent).toContain(
+      'v1 引用了不存在的东西',
+    );
+    expect(drawer.textContent).toContain('「draft-only」 没有已发布的版本');
+    expect(drawer.textContent).toContain('这个工作区没有 「gk-gone」 这个门');
+    expect(drawer.textContent).toContain('「fake/gone」 不在模型目录里');
+  });
+});
+
 // S11 「门确认不存在」 B-a: an observe draft that declares answers meaning "does not exist" publishes
 // only with the person's confirmation that the gate's credentials can see what it looks up. The
 // row says the draft declares some, so the question is in front of Publish before the first click.

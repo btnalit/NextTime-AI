@@ -20,6 +20,13 @@ import {
   reviewFieldNames,
   usePublishCredentialReview,
 } from '../lib/credential-review.js';
+import {
+  DEFINITION_REFERENCE_FIELDS,
+  type DefinitionReferenceRefusal,
+  definitionReferenceFieldLabel,
+  definitionReferenceFieldText,
+  definitionReferenceRefusalOf,
+} from '../lib/definition-reference.js';
 import { entryCapabilitiesOf, entryPromptOf } from '../lib/entry-template.js';
 import {
   errorToastText,
@@ -724,6 +731,73 @@ function PublishStepReferenceProblem({
       ) : (
         <span>{stepReferenceText(refusal, t)}</span>
       )}
+    </div>
+  );
+}
+
+/** Legacy 302: why publishing this Worker draft was refused — it names what is not there — next to
+ *  Publish, focused when it appears: each field by the editor's label, its values and what to do,
+ *  and the way to fix it (a version proposed from this draft, the same fields marked). */
+function PublishReferenceProblem({
+  refusal,
+  onFix,
+}: {
+  readonly refusal: DefinitionReferenceRefusal;
+  /** Opens the editor on a next version of this draft; absent when the reader cannot propose. */
+  readonly onFix?: () => void;
+}) {
+  const t = useT();
+  const ref = useRef<HTMLDivElement>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: focus again on each new refusal.
+  useEffect(() => {
+    ref.current?.focus();
+  }, [refusal]);
+  return (
+    <div
+      ref={ref}
+      tabIndex={-1}
+      role="alert"
+      className="field-error stack-s"
+      data-testid="worker-publish-references"
+    >
+      <strong>
+        {t(
+          '这份草稿引用了不存在的东西，所以没有发布。',
+          'This draft names what is not there, so it was not published.',
+        )}
+      </strong>
+      <ul className="stack-s">
+        {DEFINITION_REFERENCE_FIELDS.flatMap((field) => {
+          const values = refusal[field];
+          return values && values.length > 0
+            ? [
+                <li key={field} data-testid={`worker-publish-references-${field}`}>
+                  <strong>{definitionReferenceFieldLabel(field, t)}</strong>
+                  {t('：', ': ')}
+                  {definitionReferenceFieldText(field, values, t)}
+                </li>,
+              ]
+            : [];
+        })}
+      </ul>
+      {onFix ? (
+        <span className="row-wrap">
+          <Button
+            variant="secondary"
+            size="s"
+            onClick={onFix}
+            data-testid="worker-publish-references-fix"
+          >
+            {t('按这份草稿改一版', 'Fix it in a new version')}
+          </Button>
+          <span className="text-3 text-small">
+            {t(
+              '会打开编辑器，标出要改的字段；提议的新版本发布后，这份草稿可以丢弃。',
+              'Opens the editor with these fields marked; once the new version is published, this draft can be discarded.',
+            )}
+          </span>
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -3424,7 +3498,12 @@ type CatalogWorkerRow = WorkerDefinitionSummary & { readonly proposedBy?: string
 
 type WorkerEditorState =
   | { readonly kind: 'new' }
-  | { readonly kind: 'copy'; readonly row: WorkerDefinitionSummary }
+  | {
+      readonly kind: 'copy';
+      readonly row: WorkerDefinitionSummary;
+      /** Legacy 302: opened from a refused publish — the fields it named start marked. */
+      readonly unresolved?: DefinitionReferenceRefusal;
+    }
   | { readonly kind: 'template' }
   | null;
 
@@ -3598,11 +3677,13 @@ function WorkerDetailView({
   canDiscard,
   busy,
   credentialReview,
+  publishReferences,
   entryNotice,
   versionNote,
   focusTitle,
   onTitleFocused,
   onEditAsNewVersion,
+  onFixReferences,
   onPublish,
   onDeprecate,
   onDiscard,
@@ -3618,6 +3699,9 @@ function WorkerDetailView({
   readonly canDiscard: boolean;
   readonly busy: boolean;
   readonly credentialReview: PublishCredentialReview;
+  /** Legacy 302: what the kernel said the last publish of this version names that is not there,
+   *  or `null`. */
+  readonly publishReferences: DefinitionReferenceRefusal | null;
   /** Legacy 145: on the entry version in use, how it stands against the platform's template; on
    *  an entry draft, what publishing it changes against the version in use. */
   readonly entryNotice: ReactNode;
@@ -3629,6 +3713,9 @@ function WorkerDetailView({
   readonly focusTitle: boolean;
   readonly onTitleFocused: () => void;
   readonly onEditAsNewVersion: () => void;
+  /** Legacy 302: the editor on a next version of this draft, the refused fields marked; absent
+   *  when the reader cannot propose. */
+  readonly onFixReferences?: () => void;
   readonly onPublish: () => Promise<void>;
   readonly onDeprecate: () => Promise<void>;
   readonly onDiscard: (reason: string | undefined) => Promise<void>;
@@ -3718,6 +3805,9 @@ function WorkerDetailView({
 
       {isMyDraft && canPublish ? (
         <PublishCredentialSlot review={credentialReview} busy={busy} />
+      ) : null}
+      {isMyDraft && publishReferences ? (
+        <PublishReferenceProblem refusal={publishReferences} onFix={onFixReferences} />
       ) : null}
       <div className="row-wrap">
         {isMyDraft ? (
@@ -3819,6 +3909,11 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       : [];
   const [busy, setBusy] = useState<string | null>(null);
   const [editor, setEditor] = useState<WorkerEditorState>(null);
+  // Legacy 302: the last publish refused for naming what is not there, by `workerKey`.
+  const [publishRefusal, setPublishRefusal] = useState<{
+    readonly key: string;
+    readonly refusal: DefinitionReferenceRefusal;
+  } | null>(null);
   // UX acceptance of #747 (P3-1): the row whose detail title takes focus when it shows.
   const [focusKey, setFocusKey] = useState<string | null>(null);
 
@@ -3852,6 +3947,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         version: row.version,
         ...credentialReview.params(),
       });
+      setPublishRefusal(null);
       toast.push({
         tone: 'ok',
         title: `${workerLabel(row, t)} ${t('已发布', 'published')}`,
@@ -3861,6 +3957,12 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     } catch (err) {
       // The kernel's credential question — answered next to Publish, not as a failure toast.
       if (credentialReview.capture(err)) return;
+      // Legacy 302: what it names that is not there — said next to Publish, field by field.
+      const refusal = definitionReferenceRefusalOf(err);
+      if (refusal !== null) {
+        setPublishRefusal({ key: workerKey(row), refusal });
+        return;
+      }
       if (isForbiddenError(err)) permissions.markDenied('publish_worker_definition');
       toast.push({
         tone: 'danger',
@@ -3952,6 +4054,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         key={editor.kind === 'copy' ? `${editor.row.id}@${editor.row.version}` : editor.kind}
         http={http}
         newVersionOf={editor.kind === 'copy' ? editor.row : undefined}
+        unresolved={editor.kind === 'copy' ? editor.unresolved : undefined}
         initialForm={
           editor.kind === 'template' && capabilityNames.state.status === 'ready'
             ? opsRunnerTemplateForm(capabilityNames.state.data.items, grantedGateIds)
@@ -4286,6 +4389,11 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       canDiscard={canDiscard}
       busy={busy === workerKey(selected)}
       credentialReview={credentialReview}
+      publishReferences={
+        publishRefusal !== null && publishRefusal.key === workerKey(selected)
+          ? publishRefusal.refusal
+          : null
+      }
       focusTitle={focusKey === workerKey(selected)}
       onTitleFocused={() => setFocusKey(null)}
       versionNote={
@@ -4330,6 +4438,11 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         ) : null
       }
       onEditAsNewVersion={() => openEditor({ kind: 'copy', row: selected })}
+      onFixReferences={
+        canPropose && publishRefusal !== null && publishRefusal.key === workerKey(selected)
+          ? () => openEditor({ kind: 'copy', row: selected, unresolved: publishRefusal.refusal })
+          : undefined
+      }
       onPublish={() => publishDraft(selected)}
       onDeprecate={() => deprecate(selected)}
       onDiscard={(reason) => discardWorkerDraft(selected, reason)}

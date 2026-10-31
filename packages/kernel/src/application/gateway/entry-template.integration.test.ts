@@ -103,6 +103,8 @@ describe.runIf(DATABASE_URL !== undefined)(
     let memberId: string;
     let newerDir: string;
     let savedOntologyDir: string | undefined;
+    let modelsDir: string;
+    let savedModelsJsonFile: string | undefined;
 
     const as = <T>(principalId: string, fn: (client: PoolClient) => Promise<T>) =>
       withWorkspace(pool, { workspaceId, principalId }, fn);
@@ -131,6 +133,25 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     beforeAll(async () => {
       savedOntologyDir = process.env.ONTOLOGY_DIR;
+      // The owner publishes through `publish_worker_definition`, which checks the version's model
+      // against the catalog (legacy 302): one that offers MODEL.
+      savedModelsJsonFile = process.env.MODELS_JSON_FILE;
+      modelsDir = await mkdtemp(path.join(os.tmpdir(), 'entry-template-models-'));
+      const [provider, model] = MODEL.split('/');
+      await writeFile(
+        path.join(modelsDir, 'models.json'),
+        JSON.stringify({
+          providers: {
+            [provider as string]: {
+              baseUrl: 'http://llm-proxy:8082/anthropic',
+              apiKey: '$CAPABILITY_HANDLE',
+              api: 'anthropic-messages',
+              models: [{ id: model }],
+            },
+          },
+        }),
+      );
+      process.env.MODELS_JSON_FILE = path.join(modelsDir, 'models.json');
       pool = createPool();
       await runMigrations(pool, MIGRATIONS_DIR);
       const created = await createWorkspaceWithOwner(pool, {
@@ -168,8 +189,14 @@ describe.runIf(DATABASE_URL !== undefined)(
     afterAll(async () => {
       await pool.end();
       await rm(newerDir, { recursive: true, force: true });
+      await rm(modelsDir, { recursive: true, force: true });
       if (savedOntologyDir === undefined) Reflect.deleteProperty(process.env, 'ONTOLOGY_DIR');
       else process.env.ONTOLOGY_DIR = savedOntologyDir;
+      if (savedModelsJsonFile === undefined) {
+        Reflect.deleteProperty(process.env, 'MODELS_JSON_FILE');
+      } else {
+        process.env.MODELS_JSON_FILE = savedModelsJsonFile;
+      }
     });
 
     it('a new workspace is on the template it was made from: nothing differs, nothing to propose', async () => {

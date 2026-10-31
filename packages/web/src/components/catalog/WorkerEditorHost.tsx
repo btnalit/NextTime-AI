@@ -1,6 +1,7 @@
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { WorkerDefinitionForm } from '../../lib/catalog.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import type { DefinitionReferenceRefusal } from '../../lib/definition-reference.js';
 import type { CapabilityNameRow, ModelRow, SkillRow } from '../../lib/governance.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import { useGatekeeperDirectory } from '../approvals/useDirectoryNames.js';
@@ -18,6 +19,7 @@ import { WorkerDefinitionEditor } from './WorkerDefinitionEditor.js';
 export function WorkerEditorHost({
   http,
   newVersionOf,
+  unresolved,
   initialForm,
   capabilityNames,
   onProposed,
@@ -26,6 +28,8 @@ export function WorkerEditorHost({
 }: {
   readonly http: CapabilityCaller;
   readonly newVersionOf?: WorkerDefinitionSummary;
+  /** Legacy 302: as `WorkerDefinitionEditor`'s. */
+  readonly unresolved?: DefinitionReferenceRefusal;
   readonly initialForm?: WorkerDefinitionForm;
   readonly capabilityNames?: readonly CapabilityNameRow[];
   readonly onProposed: () => void;
@@ -41,6 +45,7 @@ export function WorkerEditorHost({
     <WorkerDefinitionEditor
       http={http}
       newVersionOf={newVersionOf}
+      unresolved={unresolved}
       initialForm={initialForm}
       models={models.state.status === 'ready' ? models.state.data.items : undefined}
       capabilityNames={capabilityNames}

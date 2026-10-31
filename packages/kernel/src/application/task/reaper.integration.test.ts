@@ -359,13 +359,20 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       it("excludes a worker definition the caller could never actually invoke (execute-class needs it doesn't hold)", async () => {
         await inTx(ownerId, async (client) => {
+          // A Gatekeeper of this workspace (legacy 302: a published Worker names only gates that
+          // are there).
+          const gate = await graphStore.upsertObject(client, workspaceId, {
+            objectType: 'Gatekeeper',
+            kernelAuthored: true,
+            properties: { transportKind: 'ssh' },
+          });
           const executeNeeding = await proposeWorkerDefinition(client, workspaceId, ownerId, {
             kind: 'worker',
             definition: {
               systemPrompt: 'You need real gate access.',
               name: 'gate-execute-worker-unique-xyz',
               capabilities: ['<gate>.<op>:execute'],
-              gates: ['gk-somewhere'],
+              gates: [gate.id],
             },
           });
           await publishWorkerDefinition(client, workspaceId, ownerId, {

@@ -4,6 +4,7 @@ import {
   PRINCIPAL_REFUSAL_REASON_VALUES,
   type PrincipalRefusalReason,
 } from '@nexttime/shared';
+import { definitionReferenceRefusalOf, definitionReferenceText } from './definition-reference.js';
 import { HttpError } from './http-client.js';
 import { type Translate, sentenceGap } from './i18n.js';
 import { LlmAdminError, llmAdminErrorMessage } from './llm-admin.js';
@@ -131,6 +132,7 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   not_proposer: 'Not the proposer',
   not_published: 'Not published',
   invalid_step_reference: 'Invalid reference',
+  unresolved_references: 'Names what is not there',
   unknown_quota_key: 'Unknown quota key',
   // S11 P1 / P1-B: the ChangePlan core's refusals (module installs, install record rollback).
   change_confirmation_required: 'Needs confirming item by item',
@@ -231,6 +233,7 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   not_proposer: '不是提议人',
   not_published: '尚未发布',
   invalid_step_reference: '引用无效',
+  unresolved_references: '引用了不存在的东西',
   unknown_quota_key: '未知的配额项',
   change_confirmation_required: '需要逐项确认',
   change_plan_changed: '在你查看之后有了变化',
@@ -584,6 +587,11 @@ export const ERROR_NEXT_STEPS: Readonly<
     zh: '流程有一步引用的 Operation 或 Worker 现在用不了：没有发布、已不存在，或不是 Worker。逐步检查各步引用的 Operation 和 Worker 定义。',
     en: 'An Operation or Worker a step of this Procedure refers to cannot be used now: it is not published, no longer exists, or is not a Worker. Check what each step refers to.',
   },
+  // Legacy 302: `definitionReferenceText` names each field and value when the kernel's details do.
+  unresolved_references: {
+    zh: '这份 Worker 定义引用的能力、门、Skill 或模型有的不存在，所以没有发布。按它改一版、去掉或换掉这些引用，再发布新的草稿。',
+    en: 'A capability, gate, Skill or model this Worker definition names is not there, so it was not published. Propose a version without them, then publish that.',
+  },
   unknown_quota_key: {
     zh: '这个配额项不存在。刷新页面后重新选择。',
     en: 'No such quota key. Reload the page and choose again.',
@@ -755,6 +763,7 @@ export function presentError(
     llmAdminErrorMessage(err, t) ??
     transportErrorMessage(err, t) ??
     stepReferenceMessage(err, t) ??
+    definitionReferenceMessage(err, t) ??
     (described.code === 'unstorable_text'
       ? unstorableTextNextStep(described.message, t)
       : step
@@ -781,6 +790,12 @@ export function presentError(
 function stepReferenceMessage(err: unknown, t: Translate): string | null {
   const refusal = stepReferenceRefusalOf(err);
   return refusal === null || refusal.reason === 'unresolved' ? null : stepReferenceText(refusal, t);
+}
+
+/** Legacy 302: an `unresolved_references` whose fields and values the kernel's details say. */
+function definitionReferenceMessage(err: unknown, t: Translate): string | null {
+  const refusal = definitionReferenceRefusalOf(err);
+  return refusal === null ? null : definitionReferenceText(refusal, t);
 }
 
 /** One line for a toast, which has no room for the 「技术细节」 disclosure: the readable body,

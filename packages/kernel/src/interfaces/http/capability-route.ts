@@ -163,6 +163,7 @@ import {
   WorkerDefinitionKindMismatchError,
   WorkerDefinitionNotFoundError,
   WorkerDefinitionNotPublishedError,
+  WorkerDefinitionReferenceError,
   WorkerDefinitionValidationError,
 } from '../../application/worker/index.js';
 import {
@@ -493,6 +494,15 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
       message: err.message,
       details: { params: err.details.params.map((entry) => ({ ...entry })) },
     };
+  }
+  // Legacy 302 (application/worker/definition-references.ts): `publish_worker_definition` on a
+  // version naming what is not there — `details.unresolved` lists each field's values.
+  if (err instanceof WorkerDefinitionReferenceError) {
+    const unresolved: Record<string, string[]> = {};
+    for (const [field, values] of Object.entries(err.details.unresolved)) {
+      if (values) unresolved[field] = [...values];
+    }
+    return { status: 400, code: err.code, message: err.message, details: { unresolved } };
   }
   // S11 「门确认不存在」 B-a (governance/gatekeepers/absent-answers-review.ts): `publish_operation`
   // on an observe Operation declaring answers that mean "does not exist", without

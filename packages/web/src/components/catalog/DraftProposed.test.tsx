@@ -81,6 +81,34 @@ describe('DraftProposed — credential confirmation (decision 2026-10-09 "二次
   });
 });
 
+describe('DraftProposed — a Worker draft naming what is not there (legacy 302)', () => {
+  it('the banner names each field and its values, and no credential question opens', async () => {
+    const onPublish = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new HttpError(
+          'capability_error',
+          'WorkerDefinition wd-1@1 names what is not there, so it is not published (...)',
+          'unresolved_references',
+          { unresolved: { skills: ['draft-only'], capabilities: ['no_such_capability'] } },
+        ),
+      );
+    render(
+      <DraftProposed
+        kindLabel="Worker 定义"
+        draft={{ id: 'wd-1', version: 1, status: 'draft' }}
+        onPublish={onPublish}
+        onDone={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('draft-publish'));
+    const banner = await screen.findByTestId('draft-publish-error');
+    expect(banner.textContent).toContain('「draft-only」 没有已发布的版本');
+    expect(banner.textContent).toContain('「no_such_capability」 不是 Worker 能持有的能力');
+    expect(screen.queryByTestId('credential-review')).toBeNull();
+  });
+});
+
 describe('DraftProposed — the page refreshes on publish (#541 acceptance must-fix 1)', () => {
   it('calls onPublished once the publish succeeded, not on a refusal', async () => {
     const onPublished = vi.fn();

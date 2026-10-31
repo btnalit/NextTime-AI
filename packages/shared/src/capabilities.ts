@@ -2682,7 +2682,7 @@ const workerCapabilities = [
       .strict(),
     resultSchema: wire.WorkerDefinitionWireSchema,
     description:
-      'Publish your draft WorkerDefinition version (I12: immutable once published). Builder floor; the workspace owner may publish anyone’s draft, anyone else’s draft reads as not found. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise.',
+      'Publish your draft WorkerDefinition version (I12: immutable once published). Builder floor; the workspace owner may publish anyone’s draft, anyone else’s draft reads as not found. What the version names must be there — a worker’s capabilities within the worker ceiling, its gates Gatekeepers of this workspace, its skills published Skills (by id or name), and a model the llm-proxy catalog offers (list_models; 503 when the catalog cannot be read) — 400 unresolved_references (details: unresolved, each field’s values that do not resolve: capabilities, gates, skills, model) otherwise, every one at once, and nothing is published. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise.',
   },
   {
     name: 'deprecate_worker_definition',

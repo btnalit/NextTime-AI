@@ -129,6 +129,7 @@ import {
   WorkerDefinitionKindMismatchError,
   WorkerDefinitionNotFoundError,
   WorkerDefinitionNotPublishedError,
+  WorkerDefinitionReferenceError,
   WorkerDefinitionValidationError,
 } from '../../application/worker/index.js';
 import {
@@ -426,6 +427,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   // An Operation declaring a gate-owned param, not published (see capability-route.ts's own mapping).
   if (err instanceof OperationDeclaresGateOwnedParamsError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  // Legacy 302: mirrors HTTP 400 `unresolved_references` (capability-route.ts).
+  if (err instanceof WorkerDefinitionReferenceError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   // S11 「门确认不存在」 B-a: mirrors HTTP 400 `absent_answers_review_required` (capability-route.ts).

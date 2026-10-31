@@ -74,6 +74,7 @@ import {
   SkillValidationError,
   WorkerDefinitionNotFoundError,
   WorkerDefinitionNotPublishedError,
+  WorkerDefinitionReferenceError,
 } from '../../application/worker/index.js';
 import { ApprovalReasonRequiredError } from '../../governance/approval/index.js';
 import {
@@ -255,6 +256,28 @@ describe('mapCapabilityError — legacy 232 unknown operation (unit)', () => {
       status: 404,
       code: 'unknown_operation',
       details: { gatekeeperId: 'gk-1', operationStatus: 'none' },
+    });
+  });
+
+  it('WorkerDefinitionReferenceError (legacy 302) maps to 400 unresolved_references with each field it names', () => {
+    const mapped = mapCapabilityError(
+      new WorkerDefinitionReferenceError('WorkerDefinition wd-1@2', {
+        capabilities: ['no_such_capability'],
+        skills: ['draft-only', 'gone'],
+        model: ['fake/gone'],
+      }),
+    );
+    expect(mapped).toEqual({
+      status: 400,
+      code: 'unresolved_references',
+      message: expect.stringContaining('"no_such_capability"'),
+      details: {
+        unresolved: {
+          capabilities: ['no_such_capability'],
+          skills: ['draft-only', 'gone'],
+          model: ['fake/gone'],
+        },
+      },
     });
   });
 

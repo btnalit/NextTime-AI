@@ -27,6 +27,11 @@ import {
   workerItemId,
 } from '../../lib/catalog.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import {
+  DEFINITION_REFERENCE_FIELDS,
+  type DefinitionReferenceRefusal,
+  definitionReferenceFieldText,
+} from '../../lib/definition-reference.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import type {
   CapabilityNameRow,
@@ -34,7 +39,7 @@ import type {
   ModelRow,
   SkillRow,
 } from '../../lib/governance.js';
-import { useT } from '../../lib/i18n.js';
+import { type Translate, useT } from '../../lib/i18n.js';
 import { workerDefinitionKindLabel } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
 import { sameNameIds } from '../../lib/same-name.js';
@@ -56,6 +61,10 @@ export interface WorkerDefinitionEditorProps {
   /** "编辑（生成新草稿版本）": `propose_worker_definition{definitionId}` proposes the next version
    *  under this family — `kind` is immutable per family and locked here. */
   readonly newVersionOf?: WorkerDefinitionSummary;
+  /** Legacy 302: opened from a publish the kernel refused for naming what is not there — each
+   *  field it named starts marked with what to change (`definitionReferenceFieldText`), and a
+   *  notice above the form says why. */
+  readonly unresolved?: DefinitionReferenceRefusal;
   /** J7/CW1 "从模板创建（ops-runner）": prefills a brand-new draft (`lib/catalog.ts`'s
    *  `opsRunnerTemplateForm()`) instead of starting blank. Ignored when `newVersionOf` is given —
    *  editing an existing family always prefills from that row, never from a template. */
@@ -77,6 +86,16 @@ export interface WorkerDefinitionEditorProps {
 }
 
 type View = 'form' | 'json';
+
+/** Legacy 302: a refused publish's fields as the form's field errors (same keys as the form). */
+function unresolvedFieldErrors(unresolved: DefinitionReferenceRefusal, t: Translate): FieldErrors {
+  const errors: Record<string, string> = {};
+  for (const field of DEFINITION_REFERENCE_FIELDS) {
+    const values = unresolved[field];
+    if (values && values.length > 0) errors[field] = definitionReferenceFieldText(field, values, t);
+  }
+  return errors;
+}
 
 function toggleListItem(list: readonly string[], value: string): readonly string[] {
   return list.includes(value) ? list.filter((item) => item !== value) : [...list, value];
@@ -344,6 +363,7 @@ function CapabilityPickerField({
 export function WorkerDefinitionEditor({
   http,
   newVersionOf,
+  unresolved,
   initialForm,
   models,
   capabilityNames,
@@ -376,7 +396,10 @@ export function WorkerDefinitionEditor({
       : (initialForm ?? EMPTY_WORKER_DEFINITION_FORM),
   );
   const [view, setView] = useState<View>('form');
-  const [errors, setErrors] = useState<FieldErrors>({});
+  // Legacy 302: the fields a refused publish named start marked.
+  const [errors, setErrors] = useState<FieldErrors>(() =>
+    unresolved ? unresolvedFieldErrors(unresolved, t) : {},
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
   // Legacy 500: the submit button is disabled while it runs, so a refusal left focus on <body>
@@ -543,6 +566,14 @@ export function WorkerDefinitionEditor({
               )}
         </Notice>
       )}
+      {unresolved ? (
+        <Notice tone="warn" testId="worker-unresolved-notice">
+          {t(
+            `v${newVersionOf?.version ?? ''} 引用了不存在的东西，没能发布。下面标出了要改的字段：改好后保存为新版本草稿，再发布。`,
+            `v${newVersionOf?.version ?? ''} names what is not there and was not published. The fields to change are marked below: fix them, save the new version draft, then publish it.`,
+          )}
+        </Notice>
+      ) : null}
 
       <Tabs<View>
         ariaLabel={t('Worker 定义视图', 'Worker definition view')}

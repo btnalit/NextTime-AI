@@ -164,7 +164,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const excluded = await publishedWorker(`${need}excluded`);
       await publishedWorker(`${need}execute`, {
         capabilities: ['<gate>.<op>:execute'],
-        gates: ['gk-somewhere'],
+        gates: [gatekeeperId],
       });
       const deprecated = await publishedWorker(`${need}deprecated`);
       await inTx((client) =>
@@ -223,7 +223,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const observeOp = await publishedOperation('observe', `${need}.observestep`);
       const executeWorker = await publishedWorker(`${need}executeworker`, {
         capabilities: ['<gate>.<op>:execute'],
-        gates: ['gk-somewhere'],
+        gates: [gatekeeperId],
       });
 
       const usable = await inTx((client) =>

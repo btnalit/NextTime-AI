@@ -493,7 +493,10 @@ interface ReferencingWorkerDefinitionRow {
  * retroactively (as soon as this Skill publishes); one published *after* is covered by
  * S2.6/S2.7's own `find_workers`-style discovery instead — not a gap this function needs to close
  * (design doc has no "retroactive" requirement either way; this is simply what "scan what's already
- * published, right now" naturally covers).
+ * published, right now" naturally covers). Since legacy 302 a WorkerDefinition publishes only once
+ * the Skills it names are published (`definition-references.ts`), so the definitions this scan
+ * finds name a Skill whose earlier version they were published against; the link drawn is to this
+ * version. Nothing reads `uses` today.
  */
 async function linkPublishedWorkerDefinitionsUsingSkill(
   client: PoolClient,
