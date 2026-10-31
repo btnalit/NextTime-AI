@@ -241,9 +241,10 @@ retry_http_code() {
 
 # --------------------------------------------------------------------------------------------
 # Fake provider via compose override (W6, retrospective §5.3). `accept_provider_up` generates the
-# fake-provider models.json into ${NEXTTIME_DATA}/accept/ and recreates llm-proxy /
-# worker-supervisor / fake-llm with deploy/accept/docker-compose.fake.yml merged in;
-# `accept_provider_restore` recreates the two production services from the root file alone.
+# fake-provider models.json into ${NEXTTIME_DATA}/accept/models/ and recreates llm-proxy /
+# worker-supervisor / fake-llm / kernel with deploy/accept/docker-compose.fake.yml merged in (the
+# kernel so its model checks read the catalog the run's llm-proxy serves);
+# `accept_provider_restore` recreates the three production services from the root file alone.
 # The production ${NEXTTIME_DATA}/config/llm-providers.yaml and
 # ${NEXTTIME_DATA}/models/models.json are never touched.
 # Scripts install `trap accept_provider_restore EXIT` (plus INT/TERM/HUP/PIPE handlers that
@@ -258,9 +259,10 @@ compose_accept() {
   docker compose -f docker-compose.yml -f "$ACCEPT_FAKE_OVERRIDE" "$@"
 }
 
-# Generates ${NEXTTIME_DATA}/accept/models.json from the fake provider file (the override mounts
-# it into llm-proxy, so gen-models reads it) and brings the three services up on the override.
-# Prints nothing on success; returns non-zero with a message on stderr otherwise.
+# Generates ${NEXTTIME_DATA}/accept/models/models.json from the fake provider file (the override
+# mounts it into llm-proxy, so gen-models reads it) and brings the four services up on the
+# override, waiting until they are healthy (the kernel restarts on it). Prints nothing on success;
+# returns non-zero with a message on stderr otherwise.
 accept_provider_up() {
   if [ ! -r "$ACCEPT_FAKE_OVERRIDE" ]; then
     echo "accept: override not found at $ACCEPT_FAKE_OVERRIDE — run from the checkout root" >&2
@@ -275,15 +277,22 @@ accept_provider_up() {
   chmod 0755 "$NEXTTIME_DATA/accept" || return 1
   # The override mounts this directory as llm-proxy's /data/state: an empty provider store per run.
   rm -f "$NEXTTIME_DATA/accept/providers.json"
+  # The catalog has a directory of its own: the kernel mounts it read-only as /data/models, and
+  # nothing else of ${NEXTTIME_DATA}/accept — llm-proxy's state, keys.json among it — reaches the
+  # kernel. Where the file was before (accept/models.json) is no longer read.
+  rm -f "$NEXTTIME_DATA/accept/models.json"
+  mkdir -p "$NEXTTIME_DATA/accept/models" || return 1
+  chmod 0755 "$NEXTTIME_DATA/accept/models" || return 1
   if ! compose_accept run --rm --no-deps -T llm-proxy node dist/cli/gen-models.js \
-      </dev/null >"$NEXTTIME_DATA/accept/models.json.tmp" 2>"$NEXTTIME_DATA/accept/gen-models.err"; then
+      </dev/null >"$NEXTTIME_DATA/accept/models/models.json.tmp" 2>"$NEXTTIME_DATA/accept/gen-models.err"; then
     echo "accept: gen-models (fake provider) failed: $(tail -5 "$NEXTTIME_DATA/accept/gen-models.err")" >&2
-    rm -f "$NEXTTIME_DATA/accept/models.json.tmp"
+    rm -f "$NEXTTIME_DATA/accept/models/models.json.tmp"
     return 1
   fi
-  mv "$NEXTTIME_DATA/accept/models.json.tmp" "$NEXTTIME_DATA/accept/models.json" || return 1
-  # Read inside spawned containers as uid 10001 (see require_driver for the same reasoning).
-  chmod a+r "$NEXTTIME_DATA/accept/models.json"
+  mv "$NEXTTIME_DATA/accept/models/models.json.tmp" "$NEXTTIME_DATA/accept/models/models.json" || return 1
+  # Read inside spawned containers and the kernel as uid 10001 (see require_driver for the same
+  # reasoning).
+  chmod a+r "$NEXTTIME_DATA/accept/models/models.json"
   # fake-llm is a test fixture no release ships and build-images.sh never builds (profile test),
   # and `up` builds a service only when it has no image yet: a host — and a rehearsal's apply
   # phase, after the baseline built it from the previous release — kept answering with whichever
@@ -299,20 +308,22 @@ accept_provider_up() {
   # worker-supervisor, and the caller's EXIT trap (installed before calling this function) must
   # still restore whatever did get recreated onto the override.
   ACCEPT_PROVIDER_SWITCHED=1
-  if ! up_out=$(compose_accept --profile test up -d --force-recreate llm-proxy worker-supervisor fake-llm </dev/null 2>&1); then
+  # --wait: the kernel restarts here, and the caller's next step calls it.
+  if ! up_out=$(compose_accept --profile test up -d --force-recreate --wait llm-proxy worker-supervisor fake-llm kernel </dev/null 2>&1); then
     echo "accept: bringing up the fake provider failed: $(printf '%s' "$up_out" | tail -10)" >&2
     return 1
   fi
   return 0
 }
 
-# Recreates llm-proxy and worker-supervisor from the root compose file alone (production
-# provider config, production models.json path). Idempotent; a no-op if accept_provider_up never
-# succeeded. fake-llm is left running — it is harmless and `--profile test` only.
+# Recreates llm-proxy, worker-supervisor and the kernel from the root compose file alone
+# (production provider config, production models.json path) and waits until they are healthy.
+# Idempotent; a no-op if accept_provider_up never succeeded. fake-llm is left running — it is
+# harmless and `--profile test` only.
 accept_provider_restore() {
   [ "$ACCEPT_PROVIDER_SWITCHED" -eq 1 ] || return 0
-  if ! restore_out=$(docker compose up -d --force-recreate llm-proxy worker-supervisor </dev/null 2>&1); then
-    echo "accept: restoring the production provider failed — run 'docker compose up -d --force-recreate llm-proxy worker-supervisor' by hand: $(printf '%s' "$restore_out" | tail -10)" >&2
+  if ! restore_out=$(docker compose up -d --force-recreate --wait llm-proxy worker-supervisor kernel </dev/null 2>&1); then
+    echo "accept: restoring the production provider failed — run 'docker compose up -d --force-recreate --wait llm-proxy worker-supervisor kernel' by hand: $(printf '%s' "$restore_out" | tail -10)" >&2
     return 1
   fi
   ACCEPT_PROVIDER_SWITCHED=0

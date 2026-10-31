@@ -19,7 +19,8 @@
 # target host remains the S1 acceptance of record; --lite is the regression net in CI.
 #
 # The script switches llm-proxy / worker-supervisor / fake-llm to the fake provider itself via
-# deploy/accept/docker-compose.fake.yml and restores production wiring from an EXIT trap, so
+# deploy/accept/docker-compose.fake.yml (and restarts the kernel on its catalog, which the kernel's
+# model checks read) and restores production wiring from an EXIT trap, so
 # ${NEXTTIME_DATA}/config/llm-providers.yaml and ${NEXTTIME_DATA}/models/models.json are never
 # modified — no manual provider switch is needed before or after this script runs.
 #
@@ -120,7 +121,7 @@ if [ "$LITE" -eq 0 ]; then
   trap on_exit EXIT
   trap 'exit 130' INT TERM HUP PIPE
   accept_provider_up || fail "preflight-fake-provider" "could not switch the stack to the fake provider (deploy/accept/docker-compose.fake.yml)"
-  pass "preflight-fake-provider" "llm-proxy / worker-supervisor / fake-llm recreated on deploy/accept/docker-compose.fake.yml; production provider config untouched"
+  pass "preflight-fake-provider" "llm-proxy / worker-supervisor / fake-llm / kernel recreated on deploy/accept/docker-compose.fake.yml; production provider config untouched"
 else
   skip "preflight-fake-provider" "--lite: the stack is already on the fake provider / fake agent runtime"
 fi
