@@ -715,6 +715,26 @@ export function planHintText(
   return t(zh, en);
 }
 
+/** S11 GO8a: why confirming a proposal was refused, when its read already said so — a model the
+ *  catalog no longer offers (`step_model_not_offered`): offered again, it can be confirmed (UX on
+ *  #853). `null` otherwise: the plan's other problems are under technical details. */
+export function confirmRefusedText(hints: readonly PlanHint[], t: Translate): string | null {
+  const models = [
+    ...new Set(
+      hints.flatMap((hint) =>
+        hint.code === 'step_model_not_offered' && hint.model !== undefined ? [hint.model] : [],
+      ),
+    ),
+  ];
+  if (models.length === 0) return null;
+  const [zh, en] = namesIn(models);
+  const one = models.length === 1;
+  return t(
+    `计划用到的模型${zh}现在不在模型目录里，确认没有通过。平台管理员在「平台 → 模型与供应商」里重新提供${one ? '它' : '它们'}之后，可以再确认；也可以驳回，让助手换个做法。`,
+    `The plan sets ${one ? 'model' : 'models'} ${en}, which the model catalog does not offer now, so confirming was refused. Once a platform administrator offers ${one ? 'it' : 'them'} again under Platform → Models & providers, confirm again; or turn the plan down so the assistant tries another way.`,
+  );
+}
+
 /** S11 GO8a: the keys of a run's steps waiting to be tried again — `ready` after an attempt, in the
  *  revision in force; a paused run's read hints them as a later attempt is admitted (`views.ts`). */
 export function retriedStepKeys(goal: Partial<Pick<GoalDetailWire, 'steps'>>): ReadonlySet<string> {

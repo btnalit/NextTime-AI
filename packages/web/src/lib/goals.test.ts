@@ -17,6 +17,7 @@ import {
   checkErrorLabel,
   checkErrorReason,
   checkKindLabel,
+  confirmRefusedText,
   exhaustedBudget,
   factCheckSentence,
   goalBudgetRows,
@@ -239,6 +240,12 @@ describe('lib/goals', () => {
     expect(planHintText(notOffered, en)).toMatch(
       /no longer offers — confirming would be refused now\. .* before you confirm, or turn the plan down/,
     );
+    // Confirming it refused: the models named once, offered again it can be confirmed; nothing
+    // to say for a refusal the hints do not explain.
+    expect(confirmRefusedText([notOffered, { ...notOffered, stepKey: 'other' }], en)).toBe(
+      'The plan sets model “big-model”, which the model catalog does not offer now, so confirming was refused. Once a platform administrator offers it again under Platform → Models & providers, confirm again; or turn the plan down so the assistant tries another way.',
+    );
+    expect(confirmRefusedText([model, draft], zh)).toBeNull();
     // A step waiting to be tried again would not be tried again, as the pause note says (UX P3-6).
     expect(planHintText(model, zh, new Map(), 'revision', true)).toMatch(
       /不在这个工作区允许的模型里：这一步不会再试，目标会停在这里等人处理。/,
