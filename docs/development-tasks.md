@@ -4640,6 +4640,12 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **账本**：`eval_seal_hits` 只追加；`eval_seal_holds` 每个主体只有一条 active（部分唯一索引），守卫触发器保证只从 active 到 released 一次、三个解除字段齐全、打开原因不变、不删；RLS 用 `app_workspace()`，`purge_workspace` 清两张表。
   - **审查**：#493 首审 CHANGES REQUESTED（1 个 P2、3 个 P3）在 PR 修后复审通过；#488 通过（回滚顺序进 release.md §3.78，P3 记遗留 536、537）；UX 有条件通过后复验通过（审计链接 P2 与五条 P3 在 PR 修，观察记遗留 538）。
   - **下一步**：E3-2 完成，W1a 下一步 E3-3（证据卡、I-E3、逐条确认、图摘要、agent 侧判定）。不需要真实模型核对。
+- 实现说明（E3-3a 发布审阅，#842，2026-10-31 合入，50f9be5；无迁移）：
+  - **证据**：`get_skill_publish_evidence{skillId, version, draftDigest}` 返回同一版本、同一内容摘要的已结束评测（最新 20 次，加上所有更早的 `regressed` / `worse`）、正在跑的评测、待确认的失败，以及同族其他版本被判 `refuted` / `regressed` / `worse` 的评测（最近 10 次，各带 `candidateState`：草稿、已发布、已弃用、已拒绝、已丢弃，按内容摘要匹配）。可见性同 `get_draft_evaluation`，只走人的通道，服务主体 403。
+  - **发布绑定**：`publish_skill.evaluationReview{evaluationId, acknowledgements?}`；`evaluationId` 是展示的最新评测（无则 `null`），之后又有评测结束回 409 `evaluation_changed`（`details.evaluationId`）。失败的取法：`regressed` 取输掉的回归用例（`lostCaseIds`）；`worse` 取确认段里草稿通过率低于基线的 dev 用例，没有则取草稿有失败的 dev 用例；holdout 从不列出。同一内容的每次不利评测都要确认，重跑不消除。每条 `{evaluationId, caseId, reason}`，理由 1–500 字，缺了 400 `evaluation_review_required`（`details.items`），名不副实或重复 400 `invalid_params`，服务主体 403。评测进行中 409 `draft_evaluating`。审计 `evaluation: {id, verdict, reason}`（无评测 `null`）与 `acknowledgedFailures`，理由在参数里。
+  - **控制台**：草稿详情「发布审阅」区（证据卡、早前待确认评测、同族不利评测）；有失败时发布先开确认框，按评测分组、每条写理由；被拒时确认框与已写理由保留并原地说明证据怎么变了；评测进行中提交等待；凭据确认在确认框里回答。
+  - **审查**：#493 通过（O1 `acknowledged` 移到外层、P3 `candidateState` 改按摘要匹配，均在 PR 修）；UX 有条件通过后复验通过（同族历史把已发布版本算作没站住的改法的 P2 与四条 P3 在 PR 修；遗留 539）。PR 里的五条默认待协调线程确认。
+  - **下一步**：E3-3b（图上一条评测摘要 Observation 作为草稿的 Evidence，agent 侧只看 dev 的结论）。不需要真实模型核对。
 - 2026-10-23 设计输入（victor 定分叉 2 = b，与自进化闭环审查 §2.3–§2.5、§7.1）：回归断言失败或判 `worse` 时，发布人要逐条确认失败项并写理由，记审计（同 10-09「已核对凭据」）；`inconclusive` 只显示、不加确认（避免确认疲劳）；按每月测试额度，MVP 主力是确定性回归棘轮 + 大效应机制筛，样本不够判 `inconclusive`，不显示成「在噪声内」；δ 与 k 改为在夹具上做 A/A 重跑校准（主机只有验收账号，遗留 230）。
 
 **GO16 — 沉淀提议：WorkerSpec 组合提议为 WorkerDefinition**（见 `global-roadmap-2026-10-16.md` §4）
