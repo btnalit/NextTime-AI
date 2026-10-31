@@ -17,10 +17,15 @@ import { useRoleCan } from '../../hooks/useRoleCan.js';
 import { actionLabel as capabilityLabel } from '../../lib/capability-labels.js';
 import { workerItemId } from '../../lib/catalog.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import {
+  definitionReferenceRefusalOf,
+  packInstallReferenceText,
+} from '../../lib/definition-reference.js';
 import { describeError, isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { principalShownName } from '../../lib/labels.js';
+import { LocalizedError } from '../../lib/localized-error.js';
 import { hrefs } from '../../lib/router.js';
 import { PACK_REQUIREMENT_TONES, labelText } from '../../lib/status-tone.js';
 import { Button } from '../kit/button.js';
@@ -992,6 +997,15 @@ function InstallPack({
       if (STALE_CODES.has(describeError(error).code)) {
         setRound((n) => n + 1);
         onStale();
+      }
+      // Legacy 302: a Worker of the pack names what the workspace does not have (a Skill
+      // deprecated by hand, say) — said as what to fix here, not as a draft to revise.
+      const refusal = definitionReferenceRefusalOf(error);
+      if (refusal !== null) {
+        throw new LocalizedError(packInstallReferenceText(refusal, t), {
+          code: 'unresolved_references',
+          detail: describeError(error).message,
+        });
       }
       throw error;
     }

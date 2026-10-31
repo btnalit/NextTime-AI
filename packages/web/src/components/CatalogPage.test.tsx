@@ -3175,13 +3175,13 @@ describe('CatalogPage — a Worker draft naming what is not there (legacy 302)',
     const problem = await within(detail).findByTestId('worker-publish-references');
     await waitFor(() => expect(document.activeElement).toBe(problem));
     expect(within(problem).getByTestId('worker-publish-references-model').textContent).toContain(
-      '「fake/gone」 不在模型目录里',
+      '「fake/gone」不在模型目录里',
     );
     expect(within(problem).getByTestId('worker-publish-references-gates').textContent).toContain(
-      '这个工作区没有 「gk-gone」 这个门',
+      '这个工作区没有「gk-gone」这个门',
     );
     expect(within(problem).getByTestId('worker-publish-references-skills').textContent).toContain(
-      '「draft-only」 没有已发布的版本',
+      '「draft-only」没有已发布的版本',
     );
     expect(within(problem).queryByTestId('worker-publish-references-capabilities')).toBeNull();
     // Said beside Publish, not in a toast too.
@@ -3192,9 +3192,9 @@ describe('CatalogPage — a Worker draft naming what is not there (legacy 302)',
     expect(within(drawer).getByTestId('worker-unresolved-notice').textContent).toContain(
       'v1 引用了不存在的东西',
     );
-    expect(drawer.textContent).toContain('「draft-only」 没有已发布的版本');
-    expect(drawer.textContent).toContain('这个工作区没有 「gk-gone」 这个门');
-    expect(drawer.textContent).toContain('「fake/gone」 不在模型目录里');
+    expect(drawer.textContent).toContain('「draft-only」没有已发布的版本');
+    expect(drawer.textContent).toContain('这个工作区没有「gk-gone」这个门');
+    expect(drawer.textContent).toContain('「fake/gone」不在模型目录里');
   });
 });
 

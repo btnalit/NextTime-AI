@@ -4,7 +4,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HttpError } from '../../lib/http-client.js';
 import { DraftProposed } from './DraftProposed.js';
 
-afterEach(cleanup);
+// `DraftProposed` still toasts through the legacy `ui/Toast`; mocked here (as FactRow.test does)
+// so a test can say no toast went up without rendering the legacy provider.
+const pushToast = vi.fn();
+vi.mock('../ui/Toast.js', () => ({
+  useToast: () => ({ push: pushToast, dismiss: () => undefined }),
+}));
+
+afterEach(() => {
+  cleanup();
+  pushToast.mockClear();
+});
 
 const refused = (count: number) =>
   new HttpError(
@@ -82,7 +92,7 @@ describe('DraftProposed — credential confirmation (decision 2026-10-09 "二次
 });
 
 describe('DraftProposed — a Worker draft naming what is not there (legacy 302)', () => {
-  it('the banner names each field and its values, and no credential question opens', async () => {
+  it('each field on its own line next to Publish, focused — no toast, no credential question', async () => {
     const onPublish = vi
       .fn()
       .mockRejectedValueOnce(
@@ -102,9 +112,18 @@ describe('DraftProposed — a Worker draft naming what is not there (legacy 302)
       />,
     );
     fireEvent.click(screen.getByTestId('draft-publish'));
-    const banner = await screen.findByTestId('draft-publish-error');
-    expect(banner.textContent).toContain('「draft-only」 没有已发布的版本');
-    expect(banner.textContent).toContain('「no_such_capability」 不是 Worker 能持有的能力');
+    const problem = await screen.findByTestId('worker-publish-references');
+    await waitFor(() => expect(document.activeElement).toBe(problem));
+    expect(screen.getByTestId('worker-publish-references-skills').textContent).toContain(
+      '「draft-only」没有已发布的版本',
+    );
+    expect(screen.getByTestId('worker-publish-references-capabilities').textContent).toContain(
+      '「no_such_capability」不是 Worker 能持有的能力',
+    );
+    // There is no editor here to open: no fix button.
+    expect(screen.queryByTestId('worker-publish-references-fix')).toBeNull();
+    expect(screen.queryByTestId('draft-publish-error')).toBeNull();
+    expect(pushToast).not.toHaveBeenCalled();
     expect(screen.queryByTestId('credential-review')).toBeNull();
   });
 });

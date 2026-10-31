@@ -404,6 +404,44 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
     expect(screen.queryByTestId('catalog-pack-installed')).toBeNull();
   });
 
+  it('legacy 302: a Worker of the pack naming what the workspace does not have reads as what to fix there', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_packs: () => ({ items: [pack({ status: 'not_installed', installedVersion: null })] }),
+      preview_pack_install: () =>
+        preview({
+          pack: pack({ status: 'not_installed', installedVersion: null }),
+          breaking: false,
+          items: [item({ before: null })],
+        }),
+      install_pack: () =>
+        Promise.reject(
+          new HttpError(
+            'capability_error',
+            'WorkerDefinition wd-1@2 names what is not there, so it is not published (...)',
+            'unresolved_references',
+            { unresolved: { skills: ['crew-fix'] } },
+          ),
+        ),
+    });
+    renderTab(http, 'ops-assets');
+
+    fireEvent.click(await screen.findByTestId('catalog-pack-install-trigger'));
+    await screen.findByTestId('catalog-pack-preview');
+    fireEvent.click(screen.getByRole('button', { name: '安装' }));
+
+    const error = await screen.findByTestId('confirm-error');
+    expect(error.textContent).toContain(
+      '这个能力包要发布的 Worker 引用了工作区里现在没有的东西，所以整次安装都没有写入。',
+    );
+    expect(error.textContent).toContain(
+      '使用的 Skill：「crew-fix」没有已发布的版本（可能在 Skill 页被弃用了）。先在 Skill 页让它有一个已发布的版本，再来安装。',
+    );
+    expect(error.textContent).not.toContain('按它改一版');
+    expect(error.textContent).toContain('unresolved_references');
+    expect(screen.queryByTestId('catalog-pack-installed')).toBeNull();
+  });
+
   it('a name another ontology already holds reads as its own sentence in the review', async () => {
     const http = scriptedHttp({
       get_workspace: () => OWNER_WORKSPACE,
