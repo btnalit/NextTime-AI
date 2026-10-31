@@ -79,8 +79,14 @@ const LAPSE: Readonly<Record<StepTrialApprovalLapse, readonly [string, string]>>
   run_ended: ['目标已经结束，批准没有用上。', 'the goal ended before it was used.'],
 };
 
-/** Where an approval stands, as one line (the approver and the time are shown beside it). */
-export function trialApprovalText(approval: StepTrialApprovalWire, t: Translate): string {
+/** Where an approval stands, as one line (the approver and the time are shown beside it).
+ *  `tried`: the step has had an attempt — a trial is approved for a first attempt only, so a lapsed
+ *  approval is not approved again: a retry needs the plan to change the step (UX P3-1 on #857). */
+export function trialApprovalText(
+  approval: StepTrialApprovalWire,
+  t: Translate,
+  tried = false,
+): string {
   const drafts = approval.drafts.map(trialDraftLabel);
   const [zh, en] = [drafts.map((name) => `「${name}」`).join('、'), drafts.join(', ')];
   const skillsEn = drafts.length === 1 ? 'draft Skill' : 'draft Skills';
@@ -96,7 +102,14 @@ export function trialApprovalText(approval: StepTrialApprovalWire, t: Translate)
         `Trial of ${skillsEn} ${en} approved and used by this step’s first attempt (its retries mount the same ${drafts.length === 1 ? 'draft' : 'drafts'}).`,
       );
     case 'lapsed': {
-      const [whyZh, whyEn] = LAPSE[approval.lapsedBecause ?? 'step_changed'];
+      const because = approval.lapsedBecause ?? 'step_changed';
+      if (because === 'draft_changed' && tried) {
+        return t(
+          `曾批准试用 Skill 草稿${zh}，但草稿改过了（被丢弃、重新提议或已发布），批准不再适用。这一步已经尝试过，重新批准也用不上：要再试，先修订计划改动这一步。`,
+          `Trial of ${skillsEn} ${en} was approved, but a draft changed since (discarded, proposed again, or published), so it no longer applies. The step has been tried already, so approving again would not help: to try it again, revise the plan to change the step.`,
+        );
+      }
+      const [whyZh, whyEn] = LAPSE[because];
       return t(
         `曾批准试用 Skill 草稿${zh}，但${whyZh}`,
         `Trial of ${skillsEn} ${en} was approved, but ${whyEn}`,

@@ -809,6 +809,35 @@ describe.runIf(DATABASE_URL !== undefined)(
           await setAllowedModels([], null);
         }
       });
+
+      it("never replaces the model a step's WorkerDefinition sets itself (review #493 on #857)", async () => {
+        const requester = await newPrincipal();
+        await admin((client) =>
+          setAgentProfile(client, workspaceId, requester, ownerId, { model: 'p/mine' }),
+        );
+        const own = await publish({ systemPrompt: 'A Worker with its own model.', model: 'p/own' });
+        const goalRunId = await startGoal(requester, [{ key: 'a', worker: own }]);
+        await advance(goalRunId, requester);
+        const stepA = await stepOf(goalRunId, 'a');
+        const first = await latestAttempt(stepA.id);
+        expect(spawnOf(first.id).model).toBe('p/own');
+
+        // The workspace stops allowing it: the retry still runs on the Worker's own model, as a
+        // first attempt would — the profile's fallback is for a model the profile chose.
+        await setAllowedModels(['p/entry'], 'p/entry');
+        try {
+          await failStep(stepA.id, requester, 'spawn_lost');
+          await advance(goalRunId, requester);
+          const second = await latestAttempt(stepA.id);
+          expect(second.step_attempt).toBe(2);
+          expect(await goalOf(goalRunId)).toMatchObject({ status: 'running' });
+          expect(spawnOf(second.id).model).toBe('p/own');
+          expect(snapshotOf(second)).toMatchObject({ model: 'p/own' });
+          expect((await queueAudit(second.id))[0]).not.toHaveProperty('modelFallback');
+        } finally {
+          await setAllowedModels([], null);
+        }
+      });
     });
 
     describe('the model as the llm-proxy catalog offers it now (coordinator on #853)', () => {
