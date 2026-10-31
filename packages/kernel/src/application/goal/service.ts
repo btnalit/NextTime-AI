@@ -12,6 +12,7 @@ import { moveGoalRun } from './moves.js';
 import {
   type GoalPlan,
   type PlanHint,
+  type PlanReferenceSources,
   planHints,
   planShape,
   refusePlanCredentials,
@@ -134,6 +135,9 @@ export interface CreateGoalRunInput {
   /** Legacy 513: the result is served to a person — its hints also say on which gates the
    *  requester has not connected their own account (`planAuthorityHints`' `checkAccounts`). */
   readonly checkAccounts?: boolean;
+  /** S11 GO8a: the model catalog a step's WorkerSpec model is checked against (`validatePlan`'s
+   *  sources); none: not checked. */
+  readonly modelCatalog?: PlanReferenceSources['modelCatalog'];
 }
 
 export interface CreatedGoalRun {
@@ -321,7 +325,9 @@ export async function createGoalRun(
     written = made.plan;
     source = made.source;
   }
-  const plan = await validatePlan(client, workspaceId, written, input.requesterId);
+  const plan = await validatePlan(client, workspaceId, written, input.requesterId, {
+    ...(input.modelCatalog ? { modelCatalog: input.modelCatalog } : {}),
+  });
   const hints = planHints(plan);
   if (input.idempotencyKey !== undefined) {
     await client.query('SAVEPOINT create_goal_run_insert');
@@ -440,6 +446,8 @@ export interface ConfirmGoalRunInput {
   /** The revision the requester read on the confirmation card: the proposal, revision 1. */
   readonly revision: number;
   readonly confirmedBy: string;
+  /** S11 GO8a: see `CreateGoalRunInput.modelCatalog`. */
+  readonly modelCatalog?: PlanReferenceSources['modelCatalog'];
 }
 
 export interface ConfirmedGoalRun {
@@ -493,7 +501,9 @@ export async function confirmGoalRun(
   if (stored?.status !== 'proposed') {
     throw new GoalRunStateError(`goal run ${goal.id} has no proposed revision 1`);
   }
-  const plan = await validatePlan(client, workspaceId, stored.plan, goal.onBehalfOf);
+  const plan = await validatePlan(client, workspaceId, stored.plan, goal.onBehalfOf, {
+    ...(input.modelCatalog ? { modelCatalog: input.modelCatalog } : {}),
+  });
 
   await client.query(
     `update plan_revisions set status = 'accepted', decided_by = $3, decided_at = now()

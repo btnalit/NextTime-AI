@@ -172,7 +172,9 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *      authority pauses `authority_lost` (S9, I-G7); a pinned component no longer published
  *      pauses `needs_decision`, and so does an evaluation seal pause of the requester's agents
  *      (S10 E3-2c: their Worker start would be refused — a person decides once the workspace
- *      owner released it).
+ *      owner released it), and so does a WorkerSpec its admission does not let run (S11 GO8a: a
+ *      draft Skill waits for a person's approval, a deprecated Skill or a model the workspace
+ *      does not allow is refused until the plan changes).
  *   E. **Stuck** (running only; legacy 393). No live step is ready, running or waiting, none failed
  *      `transient` or due its rework (phase B starts those or pauses), and one failed for a
  *      person — a category the advancer never retries (or a contract violation after its rework):
@@ -298,6 +300,9 @@ export interface GoalAdvanceDeps {
    *  `startStepAttemptTask` turns into a failed Task itself), or when terminating a cancelled
    *  run's Task fails (the next advance tries again). */
   readonly onStartError?: (error: unknown) => void;
+  /** S11 GO8a: the llm-proxy catalog a step's WorkerSpec model is checked against when an attempt
+   *  starts (`createStepAttemptTask`'s `modelCatalog`). Absent: not checked. */
+  readonly modelCatalog?: () => Promise<ReadonlySet<string>>;
 }
 
 export interface GoalAdvanceTarget {
@@ -402,6 +407,7 @@ export function refusalPause(refusal: StepAttemptRefusal): GoalRunPauseReason | 
     case 'authority_lost':
       return 'authority_lost';
     case 'unavailable':
+    case 'admission':
     case 'paused':
       return 'needs_decision';
     case 'quota':
@@ -458,7 +464,7 @@ export async function advanceGoalRun(
           attempts: [],
         };
       }
-      const advance = new Advance(client, goal, now, deps.options ?? {});
+      const advance = new Advance(client, goal, now, deps.options ?? {}, deps.modelCatalog);
       return advance.run();
     },
   );
@@ -520,9 +526,17 @@ class Advance {
   private readonly revisions = new Map<number, PlanRevisionRow | null>();
   /** The run's live Tasks as the advance began. Only phase D creates Tasks, after its last read. */
   private liveTasks: readonly LiveGoalTask[] = [];
+  private readonly modelCatalog: (() => Promise<ReadonlySet<string>>) | undefined;
 
-  constructor(client: PoolClient, goal: GoalRunRow, now: Date, options: GoalAdvancerOptions) {
+  constructor(
+    client: PoolClient,
+    goal: GoalRunRow,
+    now: Date,
+    options: GoalAdvancerOptions,
+    modelCatalog?: () => Promise<ReadonlySet<string>>,
+  ) {
     this.client = client;
+    this.modelCatalog = modelCatalog;
     this.goal = goal;
     this.now = now;
     this.retryBackoffMs = options.retryBackoffMs ?? defaultRetryBackoffMs;
@@ -1207,6 +1221,7 @@ class Advance {
       planRevision: currentRevision,
       stepAttempt: attempt,
       worker: entry.worker,
+      spec: entry.spec ?? null,
       input: input.input,
       outputSchema: entry.outputSchema ?? null,
       reworkOf,
@@ -1214,6 +1229,7 @@ class Advance {
       previous,
       tokenCap,
       durationCapSec: Math.max(1, Math.floor((this.deadline - this.now.getTime()) / 1000)),
+      ...(this.modelCatalog ? { modelCatalog: this.modelCatalog } : {}),
     });
     if (result.kind === 'refused') {
       if (result.refusal.kind === 'paused') {

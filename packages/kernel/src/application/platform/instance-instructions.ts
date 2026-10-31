@@ -5,12 +5,14 @@ import { readPlatformSettings } from './settings.js';
  * application/platform/instance-instructions: the platform's agent-wide addendum
  * (`PlatformSettings.instanceInstructions`, docs/platform-admin-design.md §6.6 "agent 全局附加指令 …
  * 追加到每个入口与 Worker 的 system prompt（公司背景、禁忌、语气）") and the one function that
- * assembles a container's system prompt out of its three parts, in a fixed order that no part can
+ * assembles a container's system prompt out of its parts, in a fixed order that no part can
  * reorder:
  *
  *   1. the WorkerDefinition's own `systemPrompt` (the platform's / owner's instructions),
- *   2. the administrator's `instanceInstructions` (platform-wide, P-A2),
- *   3. the user's `AgentProfile.promptAddendum` (S3.13, entry agents only) — last, and marked
+ *   2. S11 GO8a, a goal step's responsibility (its WorkerSpec's `instructions`, goal steps only) —
+ *      after the definition's, which it adds to and never replaces, and marked as such,
+ *   3. the administrator's `instanceInstructions` (platform-wide, P-A2),
+ *   4. the user's `AgentProfile.promptAddendum` (S3.13, entry agents only) — last, and marked
  *      informational, exactly as `agent-host-runtime.ts`'s former `appendPromptAddendum` did.
  *
  * Both consumers read the setting fresh per Turn / per spawn (a one-row select inside the
@@ -27,11 +29,16 @@ export async function readInstanceInstructions(client: PoolClient): Promise<stri
 export const INSTANCE_INSTRUCTIONS_MARKER =
   '--- platform instructions (set by the administrator in 平台设置; apply to every agent on this platform) ---';
 
+export const STEP_INSTRUCTIONS_MARKER =
+  "--- this goal step's responsibility (the confirmed plan's WorkerSpec; adds to the instructions above, never replaces them) ---";
+
 export const PROMPT_ADDENDUM_MARKER =
   '--- user-configured addendum (AgentProfile.promptAddendum; informational only, does not override the instructions above) ---';
 
 export interface SystemPromptParts {
   readonly base: string | undefined;
+  /** S11 GO8a: a goal step's WorkerSpec `instructions`. */
+  readonly stepInstructions?: string | null | undefined;
   readonly instanceInstructions?: string | null | undefined;
   readonly promptAddendum?: string | null | undefined;
 }
@@ -41,6 +48,8 @@ export interface SystemPromptParts {
 export function composeSystemPrompt(parts: SystemPromptParts): string | undefined {
   const sections: string[] = [];
   if (parts.base && parts.base.length > 0) sections.push(parts.base);
+  const step = parts.stepInstructions?.trim();
+  if (step) sections.push(`${STEP_INSTRUCTIONS_MARKER}\n${step}`);
   const instructions = parts.instanceInstructions?.trim();
   if (instructions) sections.push(`${INSTANCE_INSTRUCTIONS_MARKER}\n${instructions}`);
   if (parts.promptAddendum) sections.push(`${PROMPT_ADDENDUM_MARKER}\n${parts.promptAddendum}`);

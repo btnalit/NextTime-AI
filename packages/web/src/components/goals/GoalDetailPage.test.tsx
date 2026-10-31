@@ -220,6 +220,156 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     ]);
   });
 
+  it('S11 GO8a: a step with a WorkerSpec shows what it sets for its Worker, and the confirmation card what its admission says', async () => {
+    const base = goalDetail();
+    const OBSERVE_ID = '44444444-4444-4444-8444-444444444444';
+    const detail = goalDetail({
+      status: 'proposed',
+      planRevision: {
+        ...base.planRevision,
+        status: 'proposed',
+        plan: {
+          ...base.planRevision.plan,
+          steps: [
+            {
+              key: 'fetch',
+              worker: {
+                definitionId: base.planRevision.plan.steps[0]?.worker.definitionId ?? '',
+                version: 2,
+              },
+              spec: {
+                instructions: 'Only the hosts in the input.',
+                skills: ['cert-rotation'],
+                gates: [GATE_ID],
+                capabilities: ['request_action'],
+                model: 'small-model',
+                observeScope: [OBSERVE_ID],
+                tokenBudget: 5000,
+              },
+            },
+            ...base.planRevision.plan.steps.slice(1),
+          ],
+        },
+        hints: [
+          {
+            code: 'step_skill_draft',
+            message: 'step "fetch": …',
+            stepKey: 'fetch',
+            skillRefs: ['cert-rotation'],
+          },
+        ],
+      },
+    });
+    renderPage(scriptedHttp(baseHandlers(detail)));
+    const spec = await screen.findByTestId('goal-step-spec');
+    expect(spec.textContent).toContain(
+      '这一步对 Worker 的调整：职责说明、Skill、门、能力范围、模型、观察范围、每次尝试的 Token 上限',
+    );
+    expect(within(spec).getByTestId('goal-step-spec-instructions').textContent).toBe(
+      'Only the hosts in the input.',
+    );
+    expect(within(spec).getByTestId('goal-step-spec-skills').textContent).toBe('cert-rotation');
+    // A capability by its console name, never as the code; a gate by its name.
+    expect(within(spec).getByTestId('goal-step-spec-capabilities').textContent).toBe(
+      '发起动作请求',
+    );
+    await waitFor(() =>
+      expect(within(spec).getByTestId('goal-step-spec-gate').textContent).toContain('cert-gate'),
+    );
+    expect(within(spec).getByTestId('goal-step-spec-model').textContent).toBe('small-model');
+    expect(within(spec).getAllByTestId('goal-step-spec-observe-gate')).toHaveLength(1);
+    expect(within(spec).getByTestId('goal-step-spec-token-budget').textContent).toBe(
+      (5000).toLocaleString(),
+    );
+    expect(within(spec).getByTestId('goal-step-spec-combination').textContent).toBe(
+      'Skill、门、能力范围、模型替换 Worker 原有的设定；职责说明加在 Worker 原有的系统提示之后；观察范围限定这一步的任务能读取哪些门；这一步能做的不会超出 Worker 能有的上限和请求人现在的权限；Token 上限不会超出目标剩下的预算。',
+    );
+    // The step without one shows none.
+    const apply = screen
+      .getAllByTestId('goal-step')
+      .find((row) => row.dataset.stepKey === 'apply') as HTMLElement;
+    expect(within(apply).queryByTestId('goal-step-spec')).toBeNull();
+    // What its admission says heads the card — a proposal can be turned down — with a chip.
+    const [hint] = screen.getAllByTestId('goal-step-hint');
+    expect(hint?.textContent).toMatch(
+      /^步骤「fetch」的 Worker 要用 Skill「cert-rotation」，它还只是草稿，没有发布：.*发布它再确认，或者驳回/,
+    );
+    const fetch = screen
+      .getAllByTestId('goal-step')
+      .find((row) => row.dataset.stepKey === 'fetch') as HTMLElement;
+    expect(
+      within(fetch)
+        .getAllByTestId('goal-step-hint-chip')
+        .map((chip) => chip.textContent),
+    ).toEqual(['Skill 还是草稿']);
+  });
+
+  it('S11 GO8a: a run paused at a step that did not start says which step and why, the step’s note worded for a plan in force', async () => {
+    const detail = goalDetail({
+      status: 'paused',
+      pauseReason: 'needs_decision',
+      steps: [
+        stepRun({ status: 'ready', attemptCount: 0, attempts: [] }),
+        stepRun({
+          id: 'sr-apply',
+          stepKey: 'apply',
+          status: 'pending',
+          attemptCount: 0,
+          attempts: [],
+        }),
+      ],
+      planRevision: {
+        ...goalDetail().planRevision,
+        hints: [
+          {
+            code: 'step_model_not_allowed',
+            message: 'step "fetch": …',
+            stepKey: 'fetch',
+            model: 'big-model',
+          },
+        ],
+      },
+    });
+    renderPage(scriptedHttp(baseHandlers(detail)));
+    expect((await screen.findByTestId('goal-state-note')).textContent).toBe(
+      '需要人决定：步骤「fetch」给 Worker 设定的模型「big-model」不在这个工作区允许的模型里，这一步没有开始。见下面「步骤」里的说明。',
+    );
+    const [hint] = screen.getAllByTestId('goal-step-hint');
+    expect(hint?.textContent).toMatch(
+      /平台管理员可以在「平台 → 工作区」里允许它，或者在对话里让入口智能体修订计划换掉它，或者在「修订计划…」里移除这一步。$/,
+    );
+    expect(hint?.textContent).not.toContain('驳回');
+    expect(hint?.textContent).toContain('这一步不会开始，');
+  });
+
+  it('S11 GO8a: a step waiting to be tried again is said, in the pause and in its note, not to be tried again (UX on #853)', async () => {
+    const detail = goalDetail({
+      status: 'paused',
+      pauseReason: 'needs_decision',
+      steps: [stepRun({ status: 'ready', attemptCount: 1 })],
+      planRevision: {
+        ...goalDetail().planRevision,
+        hints: [
+          {
+            code: 'step_model_not_offered',
+            message: 'step "fetch": …',
+            stepKey: 'fetch',
+            model: 'gone-model',
+          },
+        ],
+      },
+    });
+    renderPage(scriptedHttp(baseHandlers(detail)));
+    expect((await screen.findByTestId('goal-state-note')).textContent).toContain(
+      '这一步没有再试。',
+    );
+    const [hint] = screen.getAllByTestId('goal-step-hint');
+    expect(hint?.textContent).toContain(
+      '已经不在模型目录里：这一步不会再试，目标会停在这里等人处理。',
+    );
+    expect(hint?.textContent).not.toContain('不会开始');
+  });
+
   it('legacy 513: a step on a gate where the requester has not connected their account says so, with where to connect it; a refused action says why', async () => {
     const base = goalDetail();
     const proposal = goalDetail({

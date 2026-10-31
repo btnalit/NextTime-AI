@@ -243,8 +243,8 @@ export function GoalPlanEditor({
             `The plan is now v${result.revision}. The goal is still paused: resume it to go on.`,
           ),
         // S11 GO5c: a step still to start that the requester's authority would not start pauses
-        // the run when it gets there. Only this result says so: a read of a run past its proposal
-        // carries the plan's own hints, which the acceptance card already shows.
+        // the run when it gets there. This result says so for every such step; a read of a run
+        // past its proposal says it only while the run is paused (S11 GO8a), in the steps card.
         (result) =>
           result.hints
             .filter(isStepAuthorityHint)
@@ -743,6 +743,10 @@ function StepEditor({
       (!other.removed || step.dependsOn.includes(other.key)),
   );
   const kept = [
+    // S11 GO8a: its WorkerSpec rides along unchanged — the kernel admits it afresh if it changes.
+    step.original?.spec
+      ? t('这一步对 Worker 的调整', 'the step’s adjustments to its Worker')
+      : null,
     step.original?.reconcile
       ? t(
           `${step.original.reconcile.length} 条动作核对声明`,

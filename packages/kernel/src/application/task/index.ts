@@ -85,9 +85,13 @@ export {
   STEP_ATTEMPT_PAUSED_DETAIL,
   type StepAttemptRefusal,
   type StepAuthority,
+  type WorkerSpecAdmissionReason,
   createStepAttemptTask,
   resolveStepAuthority,
   startStepAttemptTask,
+  workerSpecComponentRefusals,
+  workerSpecModelRefusal,
+  workerSpecDigest,
 } from './step-attempt.js';
 
 export {

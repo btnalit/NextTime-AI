@@ -1237,3 +1237,62 @@ describe('parsePlan — output schemas and input bindings (S11 GO5d-1)', () => {
     });
   });
 });
+
+describe('a step’s WorkerSpec (S11 GO8a)', () => {
+  /** Synthetic — `.gitleaks.toml` allows fixtures spelled out from the alphabet. */
+  const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
+
+  it('takes what a step sets differently, and refuses one that sets nothing or a field it does not know', () => {
+    expect(
+      parsePlan({
+        steps: [step('a', { spec: { instructions: 'Only the backups.', tokenBudget: 4000 } })],
+      }).steps[0]?.spec,
+    ).toEqual({ instructions: 'Only the backups.', tokenBudget: 4000 });
+    expect(problemsOf({ steps: [step('a', { spec: {} })] }).join(' ')).toMatch(/sets nothing/);
+    // Its fields are the only ones: a prompt of its own would replace the definition's.
+    expect(problemsOf({ steps: [step('a', { spec: { systemPrompt: 'x' } })] }).join(' ')).toMatch(
+      /systemPrompt/,
+    );
+    expect(problemsOf({ steps: [step('a', { spec: { instructions: '   ' } })] })).toHaveLength(1);
+    expect(problemsOf({ steps: [step('a', { spec: { gates: ['not-a-gate-id'] } })] })).toHaveLength(
+      1,
+    );
+    expect(problemsOf({ steps: [step('a', { spec: { tokenBudget: 0 } })] })).toHaveLength(1);
+  });
+
+  it('refuses a suspected credential in its instructions at its place', () => {
+    try {
+      refusePlanCredentials(
+        planShape({ steps: [step('a', { spec: { instructions: `PGPASSWORD=${FAKE}` } })] }),
+      );
+      throw new Error('expected the plan to be refused');
+    } catch (err) {
+      expect(err).toBeInstanceOf(TextCarriesCredentialsError);
+      expect((err as TextCarriesCredentialsError).details).toMatchObject({
+        field: 'plan.steps.0.spec.instructions',
+        suspectedSecretValues: 1,
+      });
+    }
+  });
+
+  it('is part of the step: a change to it is another step (invariant 2 — admitted afresh)', () => {
+    const before = { steps: [step('a', { spec: { tokenBudget: 4000 } })] };
+    const after = { steps: [step('a', { spec: { tokenBudget: 3000 } })] };
+    expect(samePlanEntry(before, before, 'a')).toBe(true);
+    expect(samePlanEntry(before, after, 'a')).toBe(false);
+    expect(samePlanEntry({ steps: [step('a')] }, before, 'a')).toBe(false);
+  });
+
+  it('sent back as read keeps what is stored; changed, it is as sent', () => {
+    const stored = planShape({
+      steps: [step('a', { spec: { instructions: 'family \u{1F468}‍\u{1F469} photos' } })],
+    });
+    const [readA] = planAsRead(stored).steps as [PlanStep];
+    expect(JSON.stringify(readA.spec)).toContain('\\u{200D}');
+    expect(reviewRevisedPlan(planShape({ steps: [readA] }), stored)).toEqual(stored);
+    const changed = { ...readA, spec: { ...readA.spec, tokenBudget: 10 } };
+    expect(reviewRevisedPlan(planShape({ steps: [changed] }), stored).steps[0]?.spec).toEqual(
+      changed.spec,
+    );
+  });
+});

@@ -38,6 +38,7 @@ import {
   setRequestActionDeps,
 } from './application/gateway/index.js';
 import type { GatekeeperActionExecutorDeps } from './application/gateway/index.js';
+import { readModelCatalogIds } from './application/gateway/models-catalog-handler.js';
 import {
   type AcceptanceCheckOptions,
   DEFAULT_ACCEPTANCE_CHECK_INTERVAL_MS,
@@ -1032,6 +1033,8 @@ export function createBackgroundServices(
           taskRuntime: taskDeps,
           options: options.goalAdvancerOptions,
           onStartError: onGoalAdvancerError,
+          // S11 GO8a: a step's WorkerSpec model is checked against the catalog on every attempt.
+          modelCatalog: () => readModelCatalogIds(),
         };
         const goalAdvancerTick = (): void => {
           if (goalAdvancerRunning) return;

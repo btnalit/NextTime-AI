@@ -27,10 +27,16 @@ import {
   type StepBinding,
   type StepReconcile,
   StepReconcileSchema,
+  type WorkerSpec,
   operationAbsentAnswers,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { getGatekeeper, getPublishedOperation } from '../../governance/gatekeepers/index.js';
+import { WORKER_CEILING_CAPABILITIES } from '../../governance/capability/index.js';
+import {
+  existingGatekeeperIds,
+  getGatekeeper,
+  getPublishedOperation,
+} from '../../governance/gatekeepers/index.js';
 import {
   RedactedTextSubmittedError,
   type SuspectedSecrets,
@@ -54,7 +60,7 @@ import {
   observeRefusal,
   readGatekeeperPlatformPolicy,
 } from '../gates/index.js';
-import { getWorkerDefinition } from '../worker/index.js';
+import { type DraftViewer, classifySkillRefs, getWorkerDefinition } from '../worker/index.js';
 
 /**
  * application/goal/plan (S11 GO2; plan §4.3, I-G3): what a step of a plan is, and the checks a plan
@@ -782,6 +788,13 @@ function reviewStep(
     value.bindings = bindings.value;
     written.bindings = bindings.written;
   }
+  // S11 GO8a: its WorkerSpec, one call — its instructions are free text a read spells out
+  // differently, kept as stored unless the writer changed the WorkerSpec.
+  if (step.spec !== undefined) {
+    const spec = reviewCall(step.spec, shown.spec, original.spec);
+    value.spec = spec.value;
+    written.spec = spec.written;
+  }
   return { value: value as PlanStep, written: written as PlanStep };
 }
 
@@ -800,7 +813,7 @@ function reviewStep(
  *   sent. The read shows every masked value as the same `[redacted]`, so a value given back on
  *   its own would follow a row or a declaration deleted or moved, or go to another host, gate or
  *   Worker; a `[redacted]` left in a changed call is refused at its place. A step's `outputSchema`
- *   and its `bindings` are each one call too (GO5d-1).
+ *   and its `bindings` are each one call too (GO5d-1), and so is its WorkerSpec (GO8a).
  *
  * Fields outside the calls (`dependsOn`, `nested`, `maxAttempts`) are as sent and decide nothing
  * here. Then {@link refusePlanCredentials} checks only what this writer wrote, at its place in the
@@ -853,18 +866,31 @@ function findCycle(steps: readonly PlanStep[]): readonly string[] | null {
   return null;
 }
 
+/** What plan validation reads beyond the workspace's own rows. */
+export interface PlanReferenceSources {
+  /** The model ids a step's WorkerSpec `model` may name (the llm-proxy catalog, as legacy 302's
+   *  publish check reads it); read only when one sets a model. Absent: not checked. */
+  readonly modelCatalog?: () => Promise<ReadonlySet<string>>;
+}
+
 /** {@link parsePlan}, then every step's worker must be a published `kind='worker'` version in the
  *  workspace — what `invoke_worker` would accept today. `requester` (legacy 492): the goal's
  *  requester, whom the problems are for — another principal's WorkerDefinition draft does not
- *  exist for them (I16), so neither its status nor its kind is named. */
+ *  exist for them (I16), so neither its status nor its kind is named.
+ *
+ *  S11 GO8a: a step's WorkerSpec names only what is there ({@link workerSpecProblems}) — what the
+ *  requester may hold of it, and whether its Skills are published, is its admission's
+ *  (`application/task/step-attempt.ts`): hints on the confirmation card, a pause when it starts. */
 export async function validatePlan(
   client: PoolClient,
   workspaceId: string,
   plan: unknown,
   requester: string,
+  sources: PlanReferenceSources = {},
 ): Promise<GoalPlan> {
   const parsed = parsePlan(plan);
   const problems: string[] = [];
+  let viewer: DraftViewer | null | undefined;
   for (const step of parsed.steps) {
     const definition = await getWorkerDefinition(client, workspaceId, step.worker);
     const ref = `${step.worker.definitionId}@${step.worker.version}`;
@@ -874,6 +900,18 @@ export async function validatePlan(
       problems.push(`step "${step.key}": WorkerDefinition ${ref} is ${definition.kind}-kind`);
     } else if (definition.status !== 'published') {
       problems.push(`step "${step.key}": WorkerDefinition ${ref} is ${definition.status}`);
+    }
+    if (step.spec !== undefined) {
+      viewer ??= await planViewer(client, workspaceId, requester);
+      for (const problem of await workerSpecProblems(
+        client,
+        workspaceId,
+        viewer,
+        step.spec,
+        sources,
+      )) {
+        problems.push(`step "${step.key}": spec: ${problem}`);
+      }
     }
     for (const [index, declaration] of (step.reconcile ?? []).entries()) {
       const where = `step "${step.key}": reconcile[${index}]`;
@@ -896,6 +934,72 @@ export async function validatePlan(
   }
   if (problems.length > 0) throw new GoalPlanValidationError(problems);
   return parsed;
+}
+
+/** Who reads the Skill registry for the plan's requester (`null`: they are not a principal of the
+ *  workspace — every Skill a WorkerSpec names then reads as not there). */
+async function planViewer(
+  client: PoolClient,
+  workspaceId: string,
+  requester: string,
+): Promise<DraftViewer | null> {
+  const result = await client.query<{ role: DraftViewer['role'] }>(
+    'select role from principals where workspace_id = $1 and id = $2',
+    [workspaceId, requester],
+  );
+  const role = result.rows[0]?.role;
+  return role === undefined ? null : { principalId: requester, role };
+}
+
+const WORKER_CEILING: ReadonlySet<string> = new Set(WORKER_CEILING_CAPABILITIES);
+
+/**
+ * S11 GO8a: what a step's WorkerSpec names that is not there, field by field — refused with the
+ * plan (400), the way legacy 302 refuses a WorkerDefinition that names what is not there:
+ *   - `capabilities`: a name a Worker can never hold (outside the Worker ceiling);
+ *   - `gates`, `observeScope`: a Gatekeeper this workspace does not have;
+ *   - `skills`: a Skill not there for the requester — none by that name or id, or a draft someone
+ *     else proposed (I16; a draft they may see, or a deprecated Skill, is the admission's);
+ *   - `model`: a model the llm-proxy catalog does not offer, when `sources` reads it.
+ * Its `instructions` are free text the plan's credential review already reads
+ * (`refusePlanCredentials`).
+ */
+export async function workerSpecProblems(
+  client: PoolClient,
+  workspaceId: string,
+  viewer: DraftViewer | null,
+  spec: WorkerSpec,
+  sources: PlanReferenceSources = {},
+): Promise<readonly string[]> {
+  const problems: string[] = [];
+  const quoted = (values: readonly string[]) =>
+    values.map((value) => JSON.stringify(value)).join(', ');
+  const outside = [...new Set(spec.capabilities ?? [])].filter((name) => !WORKER_CEILING.has(name));
+  if (outside.length > 0) {
+    problems.push(`capabilities a Worker can never hold: ${quoted(outside)}`);
+  }
+  const gateRefs = [...new Set([...(spec.gates ?? []), ...(spec.observeScope ?? [])])];
+  const gatekeepers = await existingGatekeeperIds(client, workspaceId, gateRefs);
+  for (const field of ['gates', 'observeScope'] as const) {
+    const missing = [...new Set(spec[field] ?? [])].filter((id) => !gatekeepers.has(id));
+    if (missing.length > 0) {
+      problems.push(`${field} — Gatekeepers this workspace does not have: ${quoted(missing)}`);
+    }
+  }
+  if (spec.skills !== undefined) {
+    const missing =
+      viewer === null
+        ? [...new Set(spec.skills)]
+        : (await classifySkillRefs(client, workspaceId, viewer, spec.skills)).missing;
+    if (missing.length > 0) problems.push(`skills that are not there: ${quoted(missing)}`);
+  }
+  if (spec.model !== undefined && sources.modelCatalog) {
+    const offered = await sources.modelCatalog();
+    if (!offered.has(spec.model)) {
+      problems.push(`model — one the llm-proxy catalog does not offer: ${quoted([spec.model])}`);
+    }
+  }
+  return problems;
 }
 
 /** What an acceptance check refers to, as of now: an observation's what

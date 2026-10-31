@@ -16,6 +16,7 @@ import { moveStepRun } from './moves.js';
 import {
   type GoalPlan,
   type PlanHint,
+  type PlanReferenceSources,
   planHints,
   planShape,
   reviewRevisedPlan,
@@ -87,6 +88,8 @@ export interface ReviseGoalRunInput {
   readonly removals?: unknown;
   /** Legacy 513: the result is served to a person — see `CreateGoalRunInput.checkAccounts`. */
   readonly checkAccounts?: boolean;
+  /** S11 GO8a: see `CreateGoalRunInput.modelCatalog`. */
+  readonly modelCatalog?: PlanReferenceSources['modelCatalog'];
 }
 
 export interface RevisedGoalRun {
@@ -171,7 +174,9 @@ export async function reviseGoalRun(
     );
   }
   const revision = counts.next;
-  const plan = await validatePlan(client, workspaceId, submitted, goal.onBehalfOf);
+  const plan = await validatePlan(client, workspaceId, submitted, goal.onBehalfOf, {
+    ...(input.modelCatalog ? { modelCatalog: input.modelCatalog } : {}),
+  });
 
   const steps = await lockStepRuns(client, workspaceId, goal.id);
   const { superseded, kept } = await splitSteps(client, workspaceId, goal.id, steps, plan);

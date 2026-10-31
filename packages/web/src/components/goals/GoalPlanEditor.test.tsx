@@ -245,6 +245,71 @@ describe('the plan editor on the goal page (S11 GO6, revise_goal)', () => {
     await waitFor(() => expect(document.activeElement?.contains(done)).toBe(true));
   });
 
+  it('S11 GO8a: keeps a step’s WorkerSpec as it is, and says so', async () => {
+    const spec = { instructions: 'Only the hosts in the input.', skills: ['cert-rotation'] };
+    const withSpec = paused({
+      planRevision: {
+        ...goalDetail().planRevision,
+        plan: {
+          ...goalDetail().planRevision.plan,
+          steps: [
+            {
+              key: 'fetch',
+              worker: { definitionId: WORKER_ID, version: 2 },
+              input: { hosts: 3 },
+              spec,
+            },
+            ...goalDetail().planRevision.plan.steps.slice(1),
+          ],
+        },
+      },
+    });
+    const http = scriptedHttp(
+      handlers(withSpec, workspace('p-alice', 'member'), {
+        revise_goal: () => ({
+          goalRunId: 'goal-1',
+          status: 'paused',
+          changed: true,
+          revision: 2,
+          planRevisionId: 'rev-2',
+          supersededStepRunIds: ['sr-fetch'],
+          createdStepRunIds: ['sr-fetch-2'],
+          withdrawnActionRequestIds: [],
+          releasedActionRequestIds: [],
+          hints: [],
+        }),
+      }),
+    );
+    renderPage(http);
+    await openEditor();
+    const fetch = step('fetch');
+    expect(fetch.textContent).toContain('这一步对 Worker 的调整保持不变');
+    await waitFor(() =>
+      expect((within(fetch).getByTestId('goal-plan-step-worker') as HTMLSelectElement).value).toBe(
+        WORKER_ID,
+      ),
+    );
+    fireEvent.change(within(fetch).getByTestId('goal-plan-step-version'), {
+      target: { value: '3' },
+    });
+    fireEvent.change(screen.getByTestId('goal-plan-reason'), { target: { value: '换用新版本' } });
+    await send();
+    await waitFor(() =>
+      expect(
+        (
+          http.calls.find((call) => call.name === 'revise_goal')?.params as {
+            plan: GoalDetailWire['planRevision']['plan'];
+          }
+        ).plan.steps[0],
+      ).toEqual({
+        key: 'fetch',
+        worker: { definitionId: WORKER_ID, version: 3 },
+        input: { hosts: 3 },
+        spec,
+      }),
+    );
+  });
+
   it('keeps a masked input left alone, and holds one changed with the mark still in it', async () => {
     const http = scriptedHttp(
       handlers(masked(), workspace('p-alice', 'member'), {

@@ -186,6 +186,50 @@ describe('goal operations on the goal page (S11 GO6)', () => {
     );
   });
 
+  it('S11 GO8a: confirming a proposal whose model the catalog dropped since says it can be confirmed once offered again (UX on #853)', async () => {
+    const base = goalDetail();
+    const detail = goalDetail({
+      status: 'proposed',
+      currentRevision: null,
+      confirmedAt: null,
+      planRevision: {
+        ...base.planRevision,
+        status: 'proposed',
+        hints: [
+          {
+            code: 'step_model_not_offered',
+            message: 'step "apply": …',
+            stepKey: 'apply',
+            model: 'gone-model',
+          },
+        ],
+      },
+    });
+    renderPage(
+      scriptedHttp(
+        handlers(detail, workspace('p-alice', 'member'), {
+          confirm_goal: () => {
+            throw new HttpError('capability_error', 'plan: model not offered', 'invalid_params');
+          },
+        }),
+      ),
+    );
+    fireEvent.click(await screen.findByTestId('goal-op-confirm'));
+    const confirm = await screen.findByTestId('goal-op-confirm-confirm');
+    await waitFor(() =>
+      expect(within(confirm).getByTestId('confirm-impact').textContent).toMatch(
+        /注意：步骤「apply」给 Worker 设定的模型「gone-model」已经不在模型目录里：现在确认会被拒绝。/,
+      ),
+    );
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() =>
+      expect(confirm.textContent).toContain(
+        '计划用到的模型「gone-model」现在不在模型目录里，确认没有通过。平台管理员在「平台 → 模型与供应商」里重新提供它之后，可以再确认；也可以驳回，让助手换个做法。',
+      ),
+    );
+    expect(confirm.textContent).not.toContain('不能再确认了');
+  });
+
   it('the confirmation card says what a plan made from a Procedure was started with, and which check comes back to the requester (legacy 454)', async () => {
     const base = goalDetail();
     const source = {

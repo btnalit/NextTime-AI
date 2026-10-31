@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import type { CapabilityScope, OutputSchema } from '@nexttime/shared';
+import { canonicalJson } from '@nexttime/gatekeeper-base';
+import type { CapabilityScope, OutputSchema, WorkerSpec } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import {
@@ -14,7 +15,12 @@ import {
   readInstanceInstructions,
 } from '../platform/instance-instructions.js';
 import { resolveActiveRuntimeImage } from '../platform/runtime.js';
-import { type WorkerDefinitionRow, getWorkerDefinition } from '../worker/index.js';
+import {
+  type DraftViewer,
+  type WorkerDefinitionRow,
+  classifySkillRefs,
+  getWorkerDefinition,
+} from '../worker/index.js';
 import {
   type ResolvedRunSkills,
   readDefinitionContent,
@@ -24,6 +30,7 @@ import {
 import type { RunConfigSnapshot } from './goal-step.js';
 import { computeChildHandleScope, defaultWorkerCapabilities } from './handle-mint.js';
 import { failTaskAndReapWorkerRuns } from './lifecycle.js';
+import { normalizeObserveScope } from './observe-scope.js';
 import type { ReworkOf } from './output-contract.js';
 import { assertTaskQuotas, lockTaskQuotas } from './quota-check.js';
 import type { TaskRuntimeDeps } from './runtime.js';
@@ -76,6 +83,23 @@ import {
  * The attempt's Task budget is the workspace default capped by what is left of the goal's
  * (`tokenCap`, `durationCapSec`), so one attempt cannot spend far past the GoalRun's I-G6 budget.
  *
+ * S11 GO8a (plan §3.1, I-G8): a plan entry may carry a WorkerSpec (`spec`) — the definition as a
+ * base with what the step sets differently. Its `capabilities` and `gates` replace the
+ * definition's declaration before the Handle is narrowed, so they meet the same check as a
+ * definition's: within the Worker ceiling and the requester's scope now, an execute-class one or a
+ * gate they lack refusing the attempt (`authority_lost`) — a WorkerSpec only ever narrows what the
+ * attempt may hold. Its components are admitted when the first attempt starts
+ * ({@link workerSpecComponentRefusals}, the one rule the confirmation card's hints apply too):
+ * every Skill it names published (a draft one waits for a person — `needs_approval`, approved by
+ * S11 GO8b; a deprecated one is refused), its model one the llm-proxy catalog offers and the
+ * workspace allows (legacy 302's rule for a WorkerDefinition's model, and `allowedModels`); then its
+ * `instructions` follow the definition's prompt (`composeSystemPrompt`), its `tokenBudget` caps the
+ * attempt's, and its `observeScope` is the Task's observation scope (S11 GO11). The snapshot keeps
+ * the WorkerSpec's digest (version 2): a later attempt starts only for the same WorkerSpec — a
+ * revision that changes it is a new StepRun, admitted afresh — and reuses the Skills the first one
+ * resolved without admitting them again; its authority and its model ({@link
+ * workerSpecModelRefusal}: offered and allowed now) are checked every time.
+ *
  * S10 E3-2c (legacy 514): no attempt starts while the evaluation seal pauses the agents acting for
  * the requester (`paused`) — the Worker start would be refused anyway (`spawnWorkerRun`), and that
  * failure would read transient and spend the step's attempts. A person decides once the workspace
@@ -95,18 +119,43 @@ export type StepAttemptRefusal =
       readonly capabilityNames?: readonly string[];
     }
   /** What the step is pinned to cannot run: the WorkerDefinition (`definition`) or a Skill version
-   *  (`skills`) is no longer published, or the requester's own AgentProfile excludes the definition
-   *  (`excluded`). A person decides. */
+   *  (`skills`) is no longer published — or, for its first attempt, a Skill its WorkerSpec names
+   *  is not there — or the requester's own AgentProfile excludes the definition (`excluded`), or
+   *  the step's WorkerSpec is not the one its first attempt was admitted with (`spec` — a revision
+   *  that changes it starts a new StepRun, so this never happens but by a defect). A person
+   *  decides. */
   | {
       readonly kind: 'unavailable';
-      readonly reason: 'definition' | 'skills' | 'excluded';
+      readonly reason: 'definition' | 'skills' | 'excluded' | 'spec';
       readonly detail: string;
+    }
+  /** S11 GO8a (I-G8): what the step's WorkerSpec admits does not run as it is — it names Skills
+   *  that are only drafts (`skill_draft`, `needs_approval`: a person approves one trial, S11 GO8b,
+   *  never the platform by itself), Skills whose versions were all deprecated (`skill_deprecated`,
+   *  `rejected`), a model the llm-proxy catalog does not offer (`model_not_offered`, `rejected`) or
+   *  one the workspace does not allow (`model_not_allowed`, `rejected`). */
+  | {
+      readonly kind: 'admission';
+      readonly verdict: 'needs_approval' | 'rejected';
+      readonly reason: WorkerSpecAdmissionReason;
+      readonly detail: string;
+      /** `skill_draft` / `skill_deprecated`: the Skills, as the WorkerSpec names them. */
+      readonly skillRefs?: readonly string[];
+      /** `model_not_offered` / `model_not_allowed`: the model the WorkerSpec sets. */
+      readonly model?: string;
     }
   /** An I18 quota: `concurrency_exceeded` clears by itself, `daily_cost_exceeded` with the day. */
   | { readonly kind: 'quota'; readonly code: QuotaViolationCode; readonly detail: string }
   /** The evaluation seal pauses every agent acting for the requester until the workspace owner
    *  releases it (S10 E3-2c). The detail never says where the seal's refusals were. */
   | { readonly kind: 'paused'; readonly detail: string };
+
+/** Why a WorkerSpec's admission does not say `run` — see {@link StepAttemptRefusal}. */
+export type WorkerSpecAdmissionReason =
+  | 'skill_draft'
+  | 'skill_deprecated'
+  | 'model_not_offered'
+  | 'model_not_allowed';
 
 export interface CreateStepAttemptInput {
   readonly goalRunId: string;
@@ -115,6 +164,8 @@ export interface CreateStepAttemptInput {
   /** The attempt number this Task carries — the StepRun's `attempt_count` after this start. */
   readonly stepAttempt: number;
   readonly worker: { readonly definitionId: string; readonly version: number };
+  /** S11 GO8a: the plan entry's WorkerSpec (`null`: it sets none). */
+  readonly spec: WorkerSpec | null;
   readonly input: unknown;
   readonly nested: boolean;
   /** S11 GO5d-1: the step's output schema the attempt's result is held to (`null`: none). */
@@ -128,6 +179,10 @@ export interface CreateStepAttemptInput {
   readonly tokenCap: number | null;
   /** What is left of the goal's wall-clock budget, in seconds. */
   readonly durationCapSec: number;
+  /** S11 GO8a: the model ids a WorkerSpec's `model` may name — the llm-proxy catalog, read only
+   *  when the step's WorkerSpec sets a model (unreadable: it throws, and the advance with it).
+   *  Absent: the catalog is not checked, `allowedModels` still is. */
+  readonly modelCatalog?: () => Promise<ReadonlySet<string>>;
 }
 
 /** Everything {@link startStepAttemptTask} needs after the creating transaction commits. */
@@ -169,13 +224,21 @@ async function requesterDisabled(
   return result.rows[0]?.disabled ?? true;
 }
 
-/** The parent scope of a step's Handle — see the module doc comment (I-G7). */
+/** The parent scope of a step's Handle — see the module doc comment (I-G7) — with who reads the
+ *  Skill registry for the requester and the models their workspace allows (S11 GO8a). */
+interface StepParent {
+  readonly scope: CapabilityScope;
+  readonly viewer: DraftViewer;
+  /** AgentPolicy `allowedModels` (`[]`: unrestricted). */
+  readonly allowedModels: readonly string[];
+}
+
 async function stepParentScope(
   client: PoolClient,
   workspaceId: string,
   requesterId: string,
   nested: boolean,
-): Promise<{ readonly scope: CapabilityScope } | { readonly refusal: StepAttemptRefusal }> {
+): Promise<StepParent | { readonly refusal: StepAttemptRefusal }> {
   if (await requesterDisabled(client, workspaceId, requesterId)) {
     return {
       refusal: { kind: 'authority_lost', reason: 'requester', detail: 'the requester is disabled' },
@@ -212,7 +275,14 @@ async function stepParentScope(
         : entry.capabilities.filter((name) => !DERIVATION_CAPABILITIES.has(name)),
       resources: entry.resources,
     },
+    viewer: { principalId: requesterId, role: access.role },
+    allowedModels: access.policy.allowedModels,
   };
+}
+
+/** S11 GO8a: the digest a RunConfigSnapshot keeps of a step's WorkerSpec (`null`: none). */
+export function workerSpecDigest(spec: WorkerSpec | null): string | null {
+  return spec === null ? null : sha256(canonicalJson(spec));
 }
 
 function sha256(text: string): string {
@@ -227,8 +297,9 @@ export interface StepAuthority {
   readonly content: ReturnType<typeof readDefinitionContent>;
   readonly declaredCapabilities: readonly string[];
   readonly declaredGates: readonly string[];
-  /** The parent of the attempt's Handle: the requester's entry scope now (I-G7). */
-  readonly parent: { readonly scope: CapabilityScope };
+  /** The parent of the attempt's Handle: the requester's entry scope now (I-G7), with who reads
+   *  the Skill registry for them and the models their workspace allows. */
+  readonly parent: StepParent;
   readonly childScope: CapabilityScope;
 }
 
@@ -239,6 +310,10 @@ export interface StepAuthority {
  * the definition declares and every execute-class capability it declares
  * (`computeChildHandleScope`). The one definition both {@link createStepAttemptTask} and the
  * confirmation card's check (`application/goal`'s `planAuthorityHints`, S11 GO5c) use. Reads only.
+ *
+ * S11 GO8a: the step's WorkerSpec (`spec`) replaces the definition's declared `capabilities` and
+ * `gates` with its own when it sets them — declared needs, narrowed the same way (the Worker
+ * ceiling, the requester's scope now), so a WorkerSpec cannot reach past either.
  */
 export async function resolveStepAuthority(
   client: PoolClient,
@@ -246,6 +321,7 @@ export async function resolveStepAuthority(
   requesterId: string,
   ref: { readonly definitionId: string; readonly version: number },
   nested: boolean,
+  spec: WorkerSpec | null = null,
 ): Promise<StepAuthority | { readonly kind: 'refused'; readonly refusal: StepAttemptRefusal }> {
   const refused = (refusal: StepAttemptRefusal) => ({ kind: 'refused' as const, refusal });
   const definition = await getWorkerDefinition(client, workspaceId, ref);
@@ -271,8 +347,10 @@ export async function resolveStepAuthority(
 
   const content = readDefinitionContent(definition.definition);
   const declaredCapabilities =
-    content.capabilities ?? defaultWorkerCapabilities(WORKER_CEILING_CAPABILITIES);
-  const declaredGates = content.gates ?? [];
+    spec?.capabilities ??
+    content.capabilities ??
+    defaultWorkerCapabilities(WORKER_CEILING_CAPABILITIES);
+  const declaredGates = spec?.gates ?? content.gates ?? [];
 
   const parent = await stepParentScope(client, workspaceId, requesterId, nested);
   if ('refusal' in parent) return refused(parent.refusal);
@@ -318,9 +396,101 @@ export async function resolveStepAuthority(
 }
 
 /**
+ * S11 GO8a (I-G8): what keeps a step's WorkerSpec from running with the components it names, worst
+ * first — empty when its admission says `run` as far as components go (its gates and capabilities
+ * are the requester's authority, {@link resolveStepAuthority}):
+ *   1. Skills not there for the requester (a draft someone else proposed included) — `unavailable`;
+ *   2. Skills whose versions were all deprecated — `rejected` (`skill_deprecated`);
+ *   3. a model the llm-proxy catalog does not offer, or outside the workspace's AgentPolicy
+ *      `allowedModels` — `rejected` ({@link workerSpecModelRefusal});
+ *   4. Skills that are only drafts the requester may see — `needs_approval` (`skill_draft`).
+ * The first one is why an attempt does not start; the confirmation card hints every one. A step
+ * without a WorkerSpec, or one that sets neither Skills nor a model, has none: the definition's
+ * own Skills mount as before (published ones, best effort). Reads only.
+ */
+export async function workerSpecComponentRefusals(
+  client: PoolClient,
+  workspaceId: string,
+  parent: Pick<StepParent, 'viewer' | 'allowedModels'>,
+  spec: WorkerSpec | null,
+  offered: ReadonlySet<string> | null,
+): Promise<readonly StepAttemptRefusal[]> {
+  if (spec === null) return [];
+  const refusals: StepAttemptRefusal[] = [];
+  const skills = spec.skills
+    ? await classifySkillRefs(client, workspaceId, parent.viewer, spec.skills)
+    : null;
+  if (skills && skills.missing.length > 0) {
+    refusals.push({
+      kind: 'unavailable',
+      reason: 'skills',
+      detail: `the step's WorkerSpec names Skill(s) that are not there: ${skills.missing.join(', ')}`,
+    });
+  }
+  if (skills && skills.deprecated.length > 0) {
+    refusals.push({
+      kind: 'admission',
+      verdict: 'rejected',
+      reason: 'skill_deprecated',
+      detail: `the step's WorkerSpec names Skill(s) whose versions were all deprecated: ${skills.deprecated.join(', ')}`,
+      skillRefs: skills.deprecated,
+    });
+  }
+  const model = workerSpecModelRefusal(parent, spec, offered);
+  if (model) refusals.push(model);
+  if (skills && skills.drafts.length > 0) {
+    refusals.push({
+      kind: 'admission',
+      verdict: 'needs_approval',
+      reason: 'skill_draft',
+      detail: `the step's WorkerSpec names Skill(s) that are only drafts, which a person approves for a trial before the step starts: ${skills.drafts.join(', ')}`,
+      skillRefs: skills.drafts,
+    });
+  }
+  return refusals;
+}
+
+/**
+ * S11 GO8a (I-G8): why a WorkerSpec's model does not run now — `rejected` either way:
+ *   - `model_not_offered`: the llm-proxy catalog (`offered`; `null`: not checked) does not offer
+ *     it — the rule legacy 302 holds a WorkerDefinition's model to when it is published, and what
+ *     the plan was validated against when it was proposed, confirmed or revised;
+ *   - `model_not_allowed`: the workspace's AgentPolicy `allowedModels` leaves it out (an empty list
+ *     allows every model the catalog offers).
+ * Unlike its Skills, checked for every attempt (review #493 on #853): a model the catalog dropped,
+ * or an admin narrowed `allowedModels` past, after the first attempt started is not spawned again.
+ */
+export function workerSpecModelRefusal(
+  parent: Pick<StepParent, 'allowedModels'>,
+  spec: WorkerSpec | null,
+  offered: ReadonlySet<string> | null,
+): StepAttemptRefusal | null {
+  const model = spec?.model;
+  if (model === undefined) return null;
+  if (offered !== null && !offered.has(model)) {
+    return {
+      kind: 'admission',
+      verdict: 'rejected',
+      reason: 'model_not_offered',
+      detail: `the step's WorkerSpec sets model "${model}", which the llm-proxy catalog does not offer`,
+      model,
+    };
+  }
+  if (parent.allowedModels.length === 0 || parent.allowedModels.includes(model)) return null;
+  return {
+    kind: 'admission',
+    verdict: 'rejected',
+    reason: 'model_not_allowed',
+    detail: `the step's WorkerSpec sets model "${model}", which this workspace does not allow`,
+    model,
+  };
+}
+
+/**
  * Half 1 — see the module doc comment. Runs in the caller's transaction (`client`, bound to the
  * requester's workspace). Returns `refused` without writing anything; throws only on a database
- * error (the caller's transaction then rolls back whole).
+ * error or an unreadable model catalog (`modelCatalog`; the caller's transaction then rolls back
+ * whole).
  */
 export async function createStepAttemptTask(
   client: PoolClient,
@@ -340,10 +510,48 @@ export async function createStepAttemptTask(
   const ref = input.previous
     ? { definitionId: input.previous.definition.id, version: input.previous.definition.version }
     : input.worker;
-  const authority = await resolveStepAuthority(client, workspaceId, requesterId, ref, input.nested);
+  const specDigest = workerSpecDigest(input.spec);
+  if (input.previous) {
+    // GO8a invariant: a later attempt runs the WorkerSpec its first attempt was admitted with. A
+    // revision that changes the entry supersedes the StepRun (`samePlanEntry`), so the new one
+    // starts at attempt 1 and is admitted afresh; a mismatch here is a defect, never a reuse.
+    const admitted = input.previous.v === 2 ? (input.previous.spec?.digest ?? null) : null;
+    if (admitted !== specDigest) {
+      return refused({
+        kind: 'unavailable',
+        reason: 'spec',
+        detail:
+          "the step's WorkerSpec is not the one its first attempt was admitted with, so no later attempt starts from that one",
+      });
+    }
+  }
+  const authority = await resolveStepAuthority(
+    client,
+    workspaceId,
+    requesterId,
+    ref,
+    input.nested,
+    input.spec,
+  );
   if (authority.kind === 'refused') return refused(authority.refusal);
   const { definition, content, declaredCapabilities, declaredGates, parent, childScope } =
     authority;
+  const offered =
+    input.spec?.model !== undefined && input.modelCatalog ? await input.modelCatalog() : null;
+  if (!input.previous) {
+    const [refusal] = await workerSpecComponentRefusals(
+      client,
+      workspaceId,
+      parent,
+      input.spec,
+      offered,
+    );
+    if (refusal) return refused(refusal);
+  } else {
+    // A later attempt reuses its first attempt's Skills; its model is checked as it stands now.
+    const refusal = workerSpecModelRefusal(parent, input.spec, offered);
+    if (refusal) return refused(refusal);
+  }
 
   let skills: ResolvedRunSkills;
   if (input.previous) {
@@ -359,18 +567,24 @@ export async function createStepAttemptTask(
     }
     skills = pinned.skills;
   } else {
-    skills = await resolveSkillsInline(client, workspaceId, content.skills ?? []);
+    skills = await resolveSkillsInline(
+      client,
+      workspaceId,
+      input.spec?.skills ?? content.skills ?? [],
+    );
   }
 
   const model = input.previous
     ? (input.previous.model ?? undefined)
-    : (content.model ??
+    : (input.spec?.model ??
+      content.model ??
       ((await readEffectiveAgentProfile(client, workspaceId, requesterId)).model || undefined));
   const image = input.previous
     ? (input.previous.image ?? undefined)
     : await resolveActiveRuntimeImage(client);
   const systemPrompt = composeSystemPrompt({
     base: content.systemPrompt,
+    stepInstructions: input.spec?.instructions,
     instanceInstructions: await readInstanceInstructions(client),
   });
 
@@ -385,19 +599,22 @@ export async function createStepAttemptTask(
     throw err;
   }
 
-  const tokenBudget =
-    quotas.defaultTokenBudget === null
-      ? input.tokenCap
-      : input.tokenCap === null
-        ? quotas.defaultTokenBudget
-        : Math.min(quotas.defaultTokenBudget, input.tokenCap);
+  // The least of the workspace default, what is left of the goal's and the WorkerSpec's own cap.
+  const caps = [quotas.defaultTokenBudget, input.tokenCap, input.spec?.tokenBudget ?? null].filter(
+    (cap): cap is number => cap !== null,
+  );
+  const tokenBudget = caps.length === 0 ? null : Math.min(...caps);
+  // GO11: the gates the step's Task may observe — only narrowing what the requester's agent may.
+  const observeScope = input.spec?.observeScope
+    ? normalizeObserveScope(input.spec.observeScope)
+    : null;
   const durationLimitSec = Math.max(
     1,
     Math.min(quotas.defaultDurationLimitSec, Math.floor(input.durationCapSec)),
   );
 
   const snapshot: RunConfigSnapshot = {
-    v: 1,
+    v: 2,
     definition: { id: definition.id, version: definition.version },
     skills: skills.loadedSkills.map((skill) => ({
       skillId: skill.skillId,
@@ -411,6 +628,7 @@ export async function createStepAttemptTask(
       gatekeepers: [...(childScope.resources.gatekeeper ?? [])],
     },
     budget: { tokenBudget, durationLimitSec },
+    spec: specDigest === null ? null : { digest: specDigest },
   };
 
   const inserted = await client.query(
@@ -418,9 +636,9 @@ export async function createStepAttemptTask(
        workspace_id, status, on_behalf_of, created_by_activity_id, worker_definition_id,
        worker_definition_version, input, token_budget, duration_limit_sec,
        goal_run_id, step_run_id, plan_revision, step_attempt, run_config_snapshot,
-       output_schema, rework_of
+       output_schema, rework_of, observe_scope
      ) values ($1, 'queued', $2, null, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, $11, $12::jsonb,
-       $13::jsonb, $14::jsonb)
+       $13::jsonb, $14::jsonb, $15::uuid[])
      returning ${TASK_ROW_COLUMNS}`,
     [
       workspaceId,
@@ -437,6 +655,7 @@ export async function createStepAttemptTask(
       JSON.stringify(snapshot),
       input.outputSchema === null ? null : JSON.stringify(input.outputSchema),
       input.reworkOf === null ? null : JSON.stringify(input.reworkOf),
+      observeScope,
     ],
   );
   const row = inserted.rows[0];
@@ -452,6 +671,10 @@ export async function createStepAttemptTask(
       stepRunId: input.stepRunId,
       stepAttempt: input.stepAttempt,
       ...(input.reworkOf !== null ? { reworkOfTaskId: input.reworkOf.taskId } : {}),
+      // GO8a: which WorkerSpec the attempt was admitted with, and what of it was set.
+      ...(input.spec !== null
+        ? { workerSpec: { digest: specDigest, fields: Object.keys(input.spec).sort() } }
+        : {}),
     },
   });
 

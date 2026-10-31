@@ -33,10 +33,12 @@ import type {
   StepRunWaitingReason,
   StepRunWire,
   UnresolvedGoalActionWire,
+  WorkerSpec,
 } from '@nexttime/shared';
 import { visibleText } from '@nexttime/shared';
 import { actionLabel } from './capability-labels.js';
 import { clipMiddle, redactSensitive, shortId } from './format.js';
+import { isUuidLike } from './graph-view.js';
 import type { Translate } from './i18n.js';
 
 /**
@@ -505,11 +507,19 @@ export function stepAcceptanceLabel(state: StepAcceptanceState, t: Translate): s
   return t(zh, en);
 }
 
-/** What a step's hint (S11 GO5c) says would happen — the run pauses at the step for a person. */
-const STEP_HINT_CONSEQUENCE = [
-  '这一步不会开始，目标会停在这里等人处理。',
-  'the step would not start, and the goal would pause there for a person.',
-] as const;
+/** What a step's hint (S11 GO5c) says would happen — the run pauses at the step for a person.
+ *  S11 GO8a: a step of a paused run waiting to be tried again would not be tried again (UX on
+ *  #853 — the pause note says the same, `heldWording`). */
+const STEP_HINT_CONSEQUENCE = {
+  first: [
+    '这一步不会开始，目标会停在这里等人处理。',
+    'the step would not start, and the goal would pause there for a person.',
+  ],
+  retried: [
+    '这一步不会再试，目标会停在这里等人处理。',
+    'the step would not be tried again, and the goal would pause there for a person.',
+  ],
+} as const satisfies Record<string, readonly [string, string]>;
 
 /** Where a plan hint is read: on the card that confirms a proposal, or under a revision the
  *  requester made, which is in force already and has nothing to turn down. */
@@ -553,6 +563,8 @@ function namesIn(names: readonly string[]): readonly [string, string] {
 
 interface PlanHintArgs {
   readonly step: string;
+  /** Where the hint is read: a proposal can be turned down, a revision is in force already. */
+  readonly context: PlanHintContext;
   /** What to do about a missing grant, where the hint is read. */
   readonly next: readonly [string, string];
   /** What to do about an account the requester has not connected, where the hint is read. */
@@ -561,7 +573,24 @@ interface PlanHintArgs {
   readonly gates: readonly string[];
   /** The execute permissions a `step_capability_not_held` step needs, by their console names. */
   readonly capabilities: readonly (readonly [string, string])[];
+  /** S11 GO8a: the Skills a `step_skill_draft` / `step_skill_deprecated` step names, as shown. */
+  readonly skills: readonly string[];
+  /** S11 GO8a: the model a `step_model_not_offered` / `step_model_not_allowed` step sets. */
+  readonly model: string;
+  /** What would happen to the step: it would not start, or not be tried again. */
+  readonly consequence: readonly [string, string];
 }
+
+/** S11 GO8a: how the plan changes when what a step's WorkerSpec names cannot be used — a proposal
+ *  is turned down for another; a revision is revised again, by the entry agent in chat for the
+ *  WorkerSpec (the console's 「修订计划…」 keeps it as it is, UX on #853) or there without the step. */
+const CHANGE_PLAN: Readonly<Record<PlanHintContext, readonly [string, string]>> = {
+  proposal: ['驳回，让助手换个做法', 'turn the plan down so the assistant tries another way'],
+  revision: [
+    '在对话里让入口智能体修订计划换掉它，或者在「修订计划…」里移除这一步',
+    'ask the entry agent in chat to revise the plan and change it, or remove the step under “Revise plan…”',
+  ],
+};
 
 /**
  * A plan hint as a sentence. `requester_confirm_only` is about the plan; the S11 GO5c codes are the
@@ -579,30 +608,30 @@ const PLAN_HINT: Readonly<
     '请求人现在不能启动 Worker（角色不允许，或已被停用）：这个计划的步骤都不会开始，目标会在第一步就停下等人处理。可以请工作区所有者在「成员与授权」查看请求人的角色和状态。',
     'The requester cannot start Workers now (their role, or they are disabled): no step of this plan would start, and the goal would pause at its first step for a person. A workspace owner can check the requester’s role and status in Members.',
   ],
-  step_gate_not_held: ({ step, gates, next }) => {
+  step_gate_not_held: ({ step, gates, next, consequence }) => {
     const [zh, en] = namesIn(gates);
     return [
-      `步骤「${step}」的 Worker 要操作门${zh}，请求人现在没有${gates.length === 1 ? '这个门' : '这些门'}的权限：${STEP_HINT_CONSEQUENCE[0]}${next[0]}`,
-      `Step “${step}”: its Worker acts on ${gates.length === 1 ? 'gate' : 'gates'} ${en}, which the requester cannot act on now — ${STEP_HINT_CONSEQUENCE[1]} ${next[1]}`,
+      `步骤「${step}」的 Worker 要操作门${zh}，请求人现在没有${gates.length === 1 ? '这个门' : '这些门'}的权限：${consequence[0]}${next[0]}`,
+      `Step “${step}”: its Worker acts on ${gates.length === 1 ? 'gate' : 'gates'} ${en}, which the requester cannot act on now — ${consequence[1]} ${next[1]}`,
     ];
   },
-  step_capability_not_held: ({ step, capabilities, next }) => {
+  step_capability_not_held: ({ step, capabilities, next, consequence }) => {
     if (capabilities.length === 0) {
       return [
-        `步骤「${step}」的 Worker 需要请求人现在没有的执行权限：${STEP_HINT_CONSEQUENCE[0]}${next[0]}`,
-        `Step “${step}”: its Worker needs an execute permission the requester does not hold now — ${STEP_HINT_CONSEQUENCE[1]} ${next[1]}`,
+        `步骤「${step}」的 Worker 需要请求人现在没有的执行权限：${consequence[0]}${next[0]}`,
+        `Step “${step}”: its Worker needs an execute permission the requester does not hold now — ${consequence[1]} ${next[1]}`,
       ];
     }
     const [zh] = namesIn(capabilities.map(([name]) => name));
     const [, en] = namesIn(capabilities.map(([, name]) => name));
     return [
-      `步骤「${step}」的 Worker 需要执行权限${zh}，请求人现在没有：${STEP_HINT_CONSEQUENCE[0]}${next[0]}`,
-      `Step “${step}”: its Worker needs the execute ${capabilities.length === 1 ? 'permission' : 'permissions'} ${en}, which the requester does not hold now — ${STEP_HINT_CONSEQUENCE[1]} ${next[1]}`,
+      `步骤「${step}」的 Worker 需要执行权限${zh}，请求人现在没有：${consequence[0]}${next[0]}`,
+      `Step “${step}”: its Worker needs the execute ${capabilities.length === 1 ? 'permission' : 'permissions'} ${en}, which the requester does not hold now — ${consequence[1]} ${next[1]}`,
     ];
   },
-  step_definition_excluded: ({ step }) => [
-    `请求人的智能体设置排除了步骤「${step}」的 Worker：${STEP_HINT_CONSEQUENCE[0]}请求人可以在「我的智能体」里调整设置。`,
-    `The requester’s agent profile excludes the Worker of step “${step}” — ${STEP_HINT_CONSEQUENCE[1]} The requester can change it in My Agent.`,
+  step_definition_excluded: ({ step, consequence }) => [
+    `请求人的智能体设置排除了步骤「${step}」的 Worker：${consequence[0]}请求人可以在「我的智能体」里调整设置。`,
+    `The requester’s agent profile excludes the Worker of step “${step}” — ${consequence[1]} The requester can change it in My Agent.`,
   ],
   // Legacy 513: asked of the gate when a person reads the proposal — the step would start, and the
   // gate would refuse its calls for want of the requester's own credential.
@@ -613,29 +642,110 @@ const PLAN_HINT: Readonly<
       `Step “${step}” acts on ${gates.length === 1 ? 'gate' : 'gates'} ${en} with the requester’s own account, which they have not connected there: once the step starts, the gate refuses its calls for want of a credential, and no approval changes that. ${accountNext[1]}`,
     ];
   },
+  // S11 GO8a: what the admission of a step's WorkerSpec says. A draft waits for a person; until a
+  // trial can be approved (GO8b), publishing the Skill or changing the plan is what moves it.
+  step_skill_draft: ({ step, skills, context, consequence }) => {
+    const [zh, en] = namesIn(skills);
+    const one = skills.length === 1;
+    const [changeZh, changeEn] = CHANGE_PLAN[context];
+    return [
+      `步骤「${step}」的 Worker 要用 Skill${zh}，${one ? '它' : '它们'}还只是草稿，没有发布：${consequence[0]}有发布权的人可以先在「能力目录」发布${one ? '它' : '它们'}${context === 'proposal' ? '再确认' : ''}，或者${changeZh}。`,
+      `Step “${step}”: its Worker uses ${one ? 'Skill' : 'Skills'} ${en}, ${one ? 'which is only a draft' : 'which are only drafts'}, not published — ${consequence[1]} Someone who may publish ${one ? 'it' : 'them'} can do so in Catalog${context === 'proposal' ? ' before you confirm' : ''}, or ${changeEn}.`,
+    ];
+  },
+  step_skill_deprecated: ({ step, skills, context, consequence }) => {
+    const [zh, en] = namesIn(skills);
+    const one = skills.length === 1;
+    return [
+      `步骤「${step}」的 Worker 要用的 Skill${zh}已经弃用，没有能用的版本：${consequence[0]}${context === 'proposal' ? '可以驳回，让助手换一个已发布的 Skill。' : '可以在对话里让入口智能体修订计划，换一个已发布的 Skill，或者在「修订计划…」里移除这一步。'}`,
+      `Step “${step}”: its Worker uses ${one ? 'Skill' : 'Skills'} ${en}, deprecated with no version left to use — ${consequence[1]} ${context === 'proposal' ? 'Turn the plan down so the assistant picks a published Skill.' : 'Ask the entry agent in chat to revise the plan to a published Skill, or remove the step under “Revise plan…”.'}`,
+    ];
+  },
+  // A plan is validated against the catalog when proposed, confirmed or revised: the hint says the
+  // catalog dropped the model since — confirming the proposal would be refused (UX on #853).
+  step_model_not_offered: ({ step, model, context, consequence }) => {
+    if (context === 'proposal') {
+      return [
+        `步骤「${step}」给 Worker 设定的模型「${model}」已经不在模型目录里：现在确认会被拒绝。平台管理员可以在「平台 → 模型与供应商」里重新提供它再确认，或者驳回，让助手换个做法。`,
+        `Step “${step}” sets its Worker’s model to “${model}”, which the model catalog no longer offers — confirming would be refused now. A platform administrator can offer it again under Platform → Models & providers before you confirm, or turn the plan down so the assistant tries another way.`,
+      ];
+    }
+    const [changeZh, changeEn] = CHANGE_PLAN[context];
+    return [
+      `步骤「${step}」给 Worker 设定的模型「${model}」已经不在模型目录里：${consequence[0]}平台管理员可以在「平台 → 模型与供应商」里重新提供它，或者${changeZh}。`,
+      `Step “${step}” sets its Worker’s model to “${model}”, which the model catalog no longer offers — ${consequence[1]} A platform administrator can offer it again under Platform → Models & providers, or ${changeEn}.`,
+    ];
+  },
+  step_model_not_allowed: ({ step, model, context, consequence }) => {
+    const [changeZh, changeEn] = CHANGE_PLAN[context];
+    return [
+      `步骤「${step}」给 Worker 设定的模型「${model}」不在这个工作区允许的模型里：${consequence[0]}平台管理员可以在「平台 → 工作区」里允许它，或者${changeZh}。`,
+      `Step “${step}” sets its Worker’s model to “${model}”, which this workspace does not allow — ${consequence[1]} A platform administrator can allow it under Platform → Workspaces, or ${changeEn}.`,
+    ];
+  },
 };
 
 const inZh: Translate = (zh) => zh;
 const inEn: Translate = (_, en) => en;
 
+/** `retried`: the hint is about a step of a paused run waiting to be tried again
+ *  (`retriedStepKeys`) — it would not be tried again, rather than not start. */
 export function planHintText(
   hint: PlanHint,
   t: Translate,
   gateNames: ReadonlyMap<string, string> = new Map(),
   context: PlanHintContext = 'proposal',
+  retried = false,
 ): string {
   const entry = PLAN_HINT[hint.code];
   if (!entry) return hint.message;
   const [zh, en] = entry({
     step: hint.stepKey ?? '',
+    context,
     next: GRANT_NEXT_STEP[context],
     accountNext: ACCOUNT_NEXT_STEP[context],
     gates: (hint.gatekeeperIds ?? []).map((id) => gateNames.get(id) ?? shortId(id)),
     capabilities: (hint.capabilityNames ?? []).map(
       (name) => [actionLabel(name, inZh), actionLabel(name, inEn)] as const,
     ),
+    skills: (hint.skillRefs ?? []).map(skillRefShown),
+    model: hint.model ?? '',
+    consequence: STEP_HINT_CONSEQUENCE[retried ? 'retried' : 'first'],
   });
   return t(zh, en);
+}
+
+/** S11 GO8a: why confirming a proposal was refused, when its read already said so — a model the
+ *  catalog no longer offers (`step_model_not_offered`): offered again, it can be confirmed (UX on
+ *  #853). `null` otherwise: the plan's other problems are under technical details. */
+export function confirmRefusedText(hints: readonly PlanHint[], t: Translate): string | null {
+  const models = [
+    ...new Set(
+      hints.flatMap((hint) =>
+        hint.code === 'step_model_not_offered' && hint.model !== undefined ? [hint.model] : [],
+      ),
+    ),
+  ];
+  if (models.length === 0) return null;
+  const [zh, en] = namesIn(models);
+  const one = models.length === 1;
+  return t(
+    `计划用到的模型${zh}现在不在模型目录里，确认没有通过。平台管理员在「平台 → 模型与供应商」里重新提供${one ? '它' : '它们'}之后，可以再确认；也可以驳回，让助手换个做法。`,
+    `The plan sets ${one ? 'model' : 'models'} ${en}, which the model catalog does not offer now, so confirming was refused. Once a platform administrator offers ${one ? 'it' : 'them'} again under Platform → Models & providers, confirm again; or turn the plan down so the assistant tries another way.`,
+  );
+}
+
+/** S11 GO8a: the keys of a run's steps waiting to be tried again — `ready` after an attempt, in the
+ *  revision in force; a paused run's read hints them as a later attempt is admitted (`views.ts`). */
+export function retriedStepKeys(goal: Partial<Pick<GoalDetailWire, 'steps'>>): ReadonlySet<string> {
+  return new Set(
+    (goal.steps ?? [])
+      .filter(
+        (step) =>
+          step.status === 'ready' && step.attemptCount > 0 && step.supersededInRevision === null,
+      )
+      .map((step) => step.stepKey),
+  );
 }
 
 /** Whether a plan hint is about the requester's authority over a step (S11 GO5c) — the steps card
@@ -654,9 +764,103 @@ export function stepHintChipLabel(hint: PlanHint, t: Translate): string | null {
       return t('智能体设置已排除', 'Excluded by agent settings');
     case 'step_account_not_connected':
       return t('请求人未连接账户', 'Requester’s account not connected');
+    case 'step_skill_draft':
+      return t('Skill 还是草稿', 'Draft Skill');
+    case 'step_skill_deprecated':
+      return t('Skill 已弃用', 'Skill deprecated');
+    case 'step_model_not_offered':
+      return t('模型不在目录里', 'Model not in catalog');
+    case 'step_model_not_allowed':
+      return t('模型不允许', 'Model not allowed');
     default:
       return null;
   }
+}
+
+/** S11 GO8a: a Skill as a WorkerSpec names it — a name as written, an id cut short (never bare). */
+export function skillRefShown(ref: string): string {
+  return isUuidLike(ref) ? shortId(ref) : ref;
+}
+
+/** S11 GO8a: what a step's WorkerSpec sets differently from its Worker, in the order a reader
+ *  takes it in — the fields set, each named as the console names it. */
+const WORKER_SPEC_FIELD: Readonly<Record<keyof WorkerSpec, readonly [string, string]>> = {
+  instructions: ['职责说明', 'Responsibility'],
+  skills: ['Skill', 'Skills'],
+  gates: ['门', 'Gates'],
+  capabilities: ['能力范围', 'Capabilities'],
+  model: ['模型', 'Model'],
+  observeScope: ['观察范围', 'Observation scope'],
+  tokenBudget: ['每次尝试的 Token 上限', 'Token cap per attempt'],
+};
+const WORKER_SPEC_FIELD_ORDER = Object.keys(WORKER_SPEC_FIELD) as readonly (keyof WorkerSpec)[];
+
+export function workerSpecFields(spec: WorkerSpec): readonly (keyof WorkerSpec)[] {
+  return WORKER_SPEC_FIELD_ORDER.filter((field) => spec[field] !== undefined);
+}
+
+export function workerSpecFieldLabel(field: keyof WorkerSpec, t: Translate): string {
+  const [zh, en] = WORKER_SPEC_FIELD[field];
+  return t(zh, en);
+}
+
+/** 「这一步对 Worker 的调整：职责说明、Skill」 — what a step's WorkerSpec sets, in a line. */
+export function workerSpecSummary(spec: WorkerSpec, t: Translate): string {
+  const fields = workerSpecFields(spec).map((field) => workerSpecFieldLabel(field, t));
+  return t(
+    `这一步对 Worker 的调整：${fields.join('、')}`,
+    `Set differently for this step: ${fields.join(', ')}`,
+  );
+}
+
+/** The fields a WorkerSpec replaces outright, as a sentence names them (en). */
+const REPLACED_FIELD_EN: Readonly<Partial<Record<keyof WorkerSpec, string>>> = {
+  skills: 'the Skills',
+  gates: 'the gates',
+  capabilities: 'the capabilities',
+  model: 'the model',
+};
+
+/** S11 GO8a (UX on #853 P3-1): how what a step's WorkerSpec sets combines with its Worker — said
+ *  only of the fields it sets. */
+export function workerSpecCombination(spec: WorkerSpec, t: Translate): string {
+  const fields = workerSpecFields(spec);
+  const replaced = fields.filter((field) => REPLACED_FIELD_EN[field] !== undefined);
+  const zh: string[] = [];
+  const en: string[] = [];
+  if (replaced.length > 0) {
+    const listedZh = replaced.map((field) => WORKER_SPEC_FIELD[field][0]).join('、');
+    // A Latin word before Chinese takes a space (「Skill 替换」), as the console writes it elsewhere.
+    zh.push(`${listedZh}${/[A-Za-z]$/.test(listedZh) ? ' ' : ''}替换 Worker 原有的设定`);
+    const names = replaced.map((field) => REPLACED_FIELD_EN[field] as string);
+    const listed =
+      names.length === 1
+        ? (names[0] as string)
+        : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+    en.push(
+      `${listed} ${replaced.length === 1 && replaced[0] === 'model' ? 'replaces' : 'replace'} the Worker’s own`,
+    );
+  }
+  if (spec.instructions !== undefined) {
+    zh.push('职责说明加在 Worker 原有的系统提示之后');
+    en.push('the responsibility is added after the Worker’s system prompt');
+  }
+  if (spec.observeScope !== undefined) {
+    zh.push('观察范围限定这一步的任务能读取哪些门');
+    en.push('the observation scope is the gatekeepers this step’s task may read through');
+  }
+  if (spec.gates !== undefined || spec.capabilities !== undefined) {
+    zh.push('这一步能做的不会超出 Worker 能有的上限和请求人现在的权限');
+    en.push(
+      'what the step may do never goes past what a Worker may hold and what the requester holds now',
+    );
+  }
+  if (spec.tokenBudget !== undefined) {
+    zh.push('Token 上限不会超出目标剩下的预算');
+    en.push('its token cap never goes past what is left of the goal’s budget');
+  }
+  const sentence = en.join('; ');
+  return t(`${zh.join('；')}。`, `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}.`);
 }
 
 /** A key for a plan hint in a list: a step's hints share their code. */
@@ -1217,10 +1421,12 @@ export interface GoalStateNote {
  * `list_goal_unresolved_actions` when it was read (`undefined` while loading or refused): with it,
  * a goal paused for a check whose findings are all recorded says it can go on. With the run's
  * `acceptance` (get_goal), a goal paused because the platform's look before its work did not see
- * what an absence check removes says so (S11 「门确认不存在」 B-c).
+ * what an absence check removes says so (S11 「门确认不存在」 B-c). With its `planRevision`, a goal
+ * paused at a step that would not start says which step and why (S11 GO8a: a paused run's read
+ * carries the hints of its steps that have not started).
  */
 export function goalStateNote(
-  goal: GoalRunWire & Partial<Pick<GoalDetailWire, 'acceptance' | 'steps'>>,
+  goal: GoalRunWire & Partial<Pick<GoalDetailWire, 'acceptance' | 'steps' | 'planRevision'>>,
   unresolved: readonly UnresolvedGoalActionWire[] | undefined,
   budget: readonly BudgetRow[],
   t: Translate,
@@ -1278,7 +1484,7 @@ export function goalStateNote(
 }
 
 function pausedNote(
-  goal: GoalRunWire & Partial<Pick<GoalDetailWire, 'acceptance' | 'steps'>>,
+  goal: GoalRunWire & Partial<Pick<GoalDetailWire, 'acceptance' | 'steps' | 'planRevision'>>,
   unresolved: readonly UnresolvedGoalActionWire[] | undefined,
   budget: readonly BudgetRow[],
   t: Translate,
@@ -1325,7 +1531,30 @@ function pausedNote(
           'Several rounds made no progress, so the platform paused it; a person decides what next.',
         ),
       };
-    case 'authority_lost':
+    case 'authority_lost': {
+      const hints = pauseHints(goal, AUTHORITY_PAUSE_HINTS);
+      if (hints.some((hint) => hint.code === 'requester_cannot_start_workers')) {
+        return {
+          tone: 'warn',
+          text: t(
+            '请求人现在不能启动 Worker（角色不允许，或已被停用），目标暂停了。可以请工作区所有者在「成员与授权」查看请求人的角色和状态；恢复之后才能继续。',
+            'The requester cannot start Workers now (their role, or they are disabled), so the goal is paused. A workspace owner can check their role and status in Members; it goes on once that is back.',
+          ),
+        };
+      }
+      const steps = stepKeysOf(hints);
+      if (steps.length > 0) {
+        const [zh, en] = namesIn(steps);
+        const one = steps.length === 1;
+        const held = heldWording(goal, steps);
+        return {
+          tone: 'warn',
+          text: t(
+            `请求人已经没有步骤${zh}需要的授权，${one ? '这一步' : '这些步骤'}${held.zh}，目标暂停了。授权恢复或改计划之后才能继续，见下面「步骤」里的说明。`,
+            `The requester no longer holds what ${one ? 'step' : 'steps'} ${en} ${one ? 'needs, so it' : 'need, so they'} ${held.en(!one)} and the goal is paused until that authority is back or the plan changes. See the notes under Steps.`,
+          ),
+        };
+      }
       return {
         tone: 'warn',
         text: t(
@@ -1333,7 +1562,8 @@ function pausedNote(
           'The requester no longer holds what the next step needs; the goal is paused until that authority is back or the plan changes.',
         ),
       };
-    case 'needs_decision':
+    }
+    case 'needs_decision': {
       if (
         goal.acceptance?.absenceBaselines.some(
           (baseline) =>
@@ -1364,6 +1594,12 @@ function pausedNote(
           ),
         };
       }
+      // S11 GO8a: a step that would not start as the plan has it — what its WorkerSpec names cannot
+      // be used, or the requester's agent settings exclude its Worker — while no step failed.
+      if (!goal.steps?.some((step) => step.status === 'failed')) {
+        const admission = admissionPauseText(goal, pauseHints(goal, ADMISSION_PAUSE_HINTS), t);
+        if (admission) return { tone: 'warn', text: admission };
+      }
       return {
         tone: 'warn',
         text: t(
@@ -1371,6 +1607,7 @@ function pausedNote(
           'A person must decide: a check did not pass, an action was rejected or expired, or a check found an action did not take effect. See the steps marked below.',
         ),
       };
+    }
     case 'awaiting_reconcile': {
       const findingsLeft = unresolved?.filter((action) => action.needs === 'finding').length;
       if (findingsLeft === 0) {
@@ -1389,6 +1626,137 @@ function pausedNote(
     }
     default:
       return { tone: 'warn', text: t('目标已暂停。', 'The goal is paused.') };
+  }
+}
+
+/** The hints a pause of `authority_lost` names (S11 GO8a): the requester's authority over a step. */
+const AUTHORITY_PAUSE_HINTS: ReadonlySet<PlanHint['code']> = new Set([
+  'requester_cannot_start_workers',
+  'step_gate_not_held',
+  'step_capability_not_held',
+]);
+
+/** The hints a pause of `needs_decision` names (S11 GO8a): a step that would not start as it is. */
+const ADMISSION_PAUSE_HINTS: ReadonlySet<PlanHint['code']> = new Set([
+  'step_skill_draft',
+  'step_skill_deprecated',
+  'step_model_not_offered',
+  'step_model_not_allowed',
+  'step_definition_excluded',
+]);
+
+/** Why a step did not go on, as a pause note lists several reasons of one step (UX on #853 P3-2):
+ *  the step's chip (zh) and a clause (en). */
+const ADMISSION_REASON: Readonly<Partial<Record<PlanHint['code'], readonly [string, string]>>> = {
+  step_skill_draft: ['Skill 还是草稿', 'a Skill is still a draft'],
+  step_skill_deprecated: ['Skill 已弃用', 'a Skill was deprecated'],
+  step_model_not_offered: ['模型不在目录里', 'its model is not in the catalog'],
+  step_model_not_allowed: ['模型不允许', 'its model is not allowed'],
+  step_definition_excluded: ['智能体设置已排除', 'the agent settings exclude its Worker'],
+};
+
+/** How a pause note says the steps it names were held: before their first attempt (`没有开始`),
+ *  or before being tried again (`没有再试` — a later attempt is admitted too, its authority and
+ *  its model; `views.ts` hints those steps). */
+function heldWording(
+  goal: Partial<Pick<GoalDetailWire, 'steps'>>,
+  stepKeys: readonly string[],
+): { readonly zh: string; readonly en: (plural: boolean) => string } {
+  const tried = stepKeys.map(
+    (key) =>
+      (goal.steps ?? []).find((step) => step.stepKey === key && step.supersededInRevision === null)
+        ?.attemptCount ?? 0,
+  );
+  if (tried.every((count) => count === 0)) {
+    return { zh: '没有开始', en: () => 'did not start' };
+  }
+  if (tried.every((count) => count > 0)) {
+    return {
+      zh: '没有再试',
+      en: (plural) => (plural ? 'were not tried again' : 'was not tried again'),
+    };
+  }
+  return { zh: '没有往下做', en: () => 'did not go on' };
+}
+
+/** The hints of `codes` that say why the run paused: of the steps the advancer tried to start —
+ *  `ready`, in the revision in force — or about the requester as a whole. A step still pending
+ *  waits for others first: its hint is in the steps card, not the reason for this pause. */
+function pauseHints(
+  goal: Partial<Pick<GoalDetailWire, 'steps' | 'planRevision'>>,
+  codes: ReadonlySet<PlanHint['code']>,
+): readonly PlanHint[] {
+  const ready = new Set(
+    (goal.steps ?? [])
+      .filter((step) => step.status === 'ready' && step.supersededInRevision === null)
+      .map((step) => step.stepKey),
+  );
+  return (goal.planRevision?.hints ?? []).filter(
+    (hint) => codes.has(hint.code) && (hint.stepKey === undefined ? true : ready.has(hint.stepKey)),
+  );
+}
+
+function stepKeysOf(hints: readonly PlanHint[]): readonly string[] {
+  return [...new Set(hints.flatMap((hint) => (hint.stepKey === undefined ? [] : [hint.stepKey])))];
+}
+
+/** Why a step did not start (or was not tried again) as the plan has it, for a run paused
+ *  `needs_decision` (S11 GO8a): the one step and its reason, every reason when it has several. */
+function admissionPauseText(
+  goal: Partial<Pick<GoalDetailWire, 'steps'>>,
+  hints: readonly PlanHint[],
+  t: Translate,
+): string | null {
+  const steps = stepKeysOf(hints);
+  if (steps.length === 0) return null;
+  const [hint] = hints;
+  if (steps.length > 1 || hint === undefined) {
+    const [zh, en] = namesIn(steps);
+    return t(
+      `需要人决定：步骤${zh}不能照计划往下做。见下面「步骤」里的说明。`,
+      `A person must decide: steps ${en} cannot go on as the plan has them. See the notes under Steps.`,
+    );
+  }
+  const step = hint.stepKey ?? '';
+  if (hints.length > 1) {
+    const reasons = hints.flatMap((each) => {
+      const reason = ADMISSION_REASON[each.code];
+      return reason ? [reason] : [];
+    });
+    return t(
+      `需要人决定：步骤「${step}」不能照计划往下做：${reasons.map(([zh]) => zh).join('、')}。见下面「步骤」里的说明。`,
+      `A person must decide: step “${step}” cannot go on as the plan has it: ${reasons.map(([, en]) => en).join(', ')}. See the notes under Steps.`,
+    );
+  }
+  const held = heldWording(goal, [step]);
+  const heldEn = held.en(false);
+  const [skillsZh, skillsEn] = namesIn((hint.skillRefs ?? []).map(skillRefShown));
+  switch (hint.code) {
+    case 'step_skill_draft':
+      return t(
+        `需要人决定：步骤「${step}」的 Worker 要用的 Skill${skillsZh}还只是草稿，这一步${held.zh}。在「能力目录」发布之后按「继续」，或者在对话里让入口智能体修订计划换掉它，见下面「步骤」里的说明。`,
+        `A person must decide: the Worker of step “${step}” uses Skill ${skillsEn}, still a draft, so the step ${heldEn}. Once it is published in Catalog, resume the goal, or ask the entry agent in chat to revise the plan and change it. See the note under Steps.`,
+      );
+    case 'step_skill_deprecated':
+      return t(
+        `需要人决定：步骤「${step}」的 Worker 要用的 Skill${skillsZh}已经弃用，这一步${held.zh}。在对话里让入口智能体修订计划，换一个已发布的 Skill 之后才能继续，见下面「步骤」里的说明。`,
+        `A person must decide: the Worker of step “${step}” uses Skill ${skillsEn}, which was deprecated, so the step ${heldEn}. It goes on once the entry agent, asked in chat, revises the plan to a published Skill. See the note under Steps.`,
+      );
+    case 'step_model_not_offered':
+      return t(
+        `需要人决定：步骤「${step}」给 Worker 设定的模型「${hint.model ?? ''}」已经不在模型目录里，这一步${held.zh}。见下面「步骤」里的说明。`,
+        `A person must decide: step “${step}” sets its Worker’s model to “${hint.model ?? ''}”, which the model catalog no longer offers, so the step ${heldEn}. See the note under Steps.`,
+      );
+    case 'step_model_not_allowed':
+      return t(
+        `需要人决定：步骤「${step}」给 Worker 设定的模型「${hint.model ?? ''}」不在这个工作区允许的模型里，这一步${held.zh}。见下面「步骤」里的说明。`,
+        `A person must decide: step “${step}” sets its Worker’s model to “${hint.model ?? ''}”, which this workspace does not allow, so the step ${heldEn}. See the note under Steps.`,
+      );
+    default:
+      return t(
+        `需要人决定：请求人的智能体设置排除了步骤「${step}」的 Worker，这一步${held.zh}。见下面「步骤」里的说明。`,
+        `A person must decide: the requester’s agent settings exclude the Worker of step “${step}”, so the step ${heldEn}. See the note under Steps.`,
+      );
   }
 }
 
