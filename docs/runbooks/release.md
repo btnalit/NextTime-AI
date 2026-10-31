@@ -1938,6 +1938,15 @@ where object_type = 'Operation' and properties->>'status' = 'published'
   - 直接调 API 的脚本：发布有不利评测的草稿必须带 `evaluationReview`，否则 400。
 - **回滚**：旧内核的参数校验是严格的，会拒绝新控制台带的 `evaluationReview`，所以内核与控制台一起回滚（发版回滚本来就一起）。期间发布的版本保留审计行。
 
+### 3.80 评测摘要进图与 agent 侧 dev 结论（#845，worker 0012，S10 E3-3b，v0.51.0 之后的下一版起）
+
+带一个 worker 迁移（`0012_draft_evaluation_summary`），随 `apply-release.sh` 的迁移步骤自动应用；不改 compose、无单独主机步骤、无新环境变量；窗口前只读检查：无。
+
+- **迁移做什么**：`eval_draft_evaluations` 加两个可空列 `summary_observation_id`（外键指向 `observations`）与 `dev_verdict`，两条约束（两列同有同无、只有 `finished` 的评测能有值），一个部分索引 `eval_draft_evaluations_summary_observation_idx`（供 Observation 压缩条件 (a) 查询）。迁移前结束的评测不回填，`get_skill_draft_verdicts` 不列它们。
+- **入口 agent**：入口 Handle 的能力范围是固定上限，已有工作区升级后入口 agent 马上能调 `get_skill_draft_verdicts`；系统提示里「提议下一版前先读」的说明要等 owner 对齐入口模板（§3.61 的做法）后才有。
+- **发版说明可写**：草稿评测结束后在图上记一条只对评测服务主体可见的摘要；提议者的智能体可以读到自己草稿只按 dev 用例判的结论（新能力 `get_skill_draft_verdicts`，Handle 通道，member 起）；控制台草稿评测详情显示这条结论。契约：`DraftEvaluation*Wire` 新增 `devVerdict`，`publish_skill` 审计的 `evaluation` 新增 `observationId`，`evaluation.draft_verdict` 审计多带 `devVerdict`、`observationId`。
+- **回滚**：只回退代码即可（§6）。上一版不读写新列，新结束的评测不再记摘要与 dev 结论，已写的保留。**代码回退到上一版后，apply-release 的 observations-compaction 步骤会报 degraded**：上一版的压缩看到 0012 指向 `observations` 的新外键就拒绝运行（安全失败，不删任何东西），重新应用带 0012 的版本后恢复；与 §3.39、§3.41 同类，回退期间这一条 degraded 可以忽略（`reversibility-deltas.json` 已声明）。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -2086,6 +2095,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.51.0 | worker `0009_eval_runs`（#822，S10 E3-2a）：新表 `eval_runs`、`eval_trials`、`eval_trial_calls` 与账本守卫，不回填 | 可逆 | 只新增表，旧代码不读不写；`purge_workspace` 清理新表（有集成测试） |
 | v0.51.0 | worker `0010_draft_evaluations`（#833，S10 E3-2b）：新表 `eval_draft_evaluations`，`eval_runs.kind` 加 `draft`、`eval_trials.status` 加 `queued`，账本守卫与保护评测中草稿的触发器，不回填 | 可逆 | 只新增表与取值，旧代码读不了 `draft` 运行；回滚前草稿评测与排队、在跑试跑必须为 0（§3.77）；`purge_workspace` 清理新表 |
 | v0.52.0 | worker `0011_eval_seal_holds`（#838，S10 E3-2c）：新表 `eval_seal_hits`、`eval_seal_holds` 与守卫触发器，不回填 | 可逆 | 旧内核照常运行但不再执行生效中的暂停；回滚前按 §3.78 的顺序先处理 `active` 暂停；`purge_workspace` 清理两张新表 |
+| v0.52.0 | worker `0012_draft_evaluation_summary`（#845，S10 E3-3b）：`eval_draft_evaluations` 加 `summary_observation_id`（外键指向 `observations`）与 `dev_verdict` 两个可空列、两条约束与一个部分索引，不回填 | 可逆（代码回退期间观察压缩报 degraded） | 上一版不读写新列；代码回退期间 observations-compaction 安全失败、不删任何东西，重新应用后恢复（§3.80）；差异已在 `reversibility-deltas.json` 声明 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
