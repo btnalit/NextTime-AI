@@ -497,6 +497,11 @@ export async function workerSpecComponentRefusals(
   return refusals;
 }
 
+/** P-A2: whether the workspace's `allowedModels` lets `model` run (`[]`: unrestricted). */
+function modelAllowed(allowedModels: readonly string[], model: string): boolean {
+  return allowedModels.length === 0 || allowedModels.includes(model);
+}
+
 /**
  * S11 GO8b: the draft versions one trial of a step would mount — for each of `draftRefs` (the
  * WorkerSpec's Skills that are only drafts for `viewer`, the requester: `classifySkillRefs`), the
@@ -590,7 +595,7 @@ export function workerSpecModelRefusal(
       model,
     };
   }
-  if (parent.allowedModels.length === 0 || parent.allowedModels.includes(model)) return null;
+  if (modelAllowed(parent.allowedModels, model)) return null;
   return {
     kind: 'admission',
     verdict: 'rejected',
@@ -733,11 +738,33 @@ export async function createStepAttemptTask(
     skills = { ...skills, skillsInline: [...skills.skillsInline, ...drafts.skillsInline] };
   }
 
-  const model = input.previous
-    ? (input.previous.model ?? undefined)
-    : (input.spec?.model ??
+  // Legacy 543 (P-A2): a later attempt keeps its first attempt's model — but one taken from the
+  // requester's AgentProfile (neither the WorkerSpec nor the WorkerDefinition sets a model) is held
+  // to `allowedModels` as it stands now, the cap that model is under: narrowed past it, the attempt
+  // falls back the way the profile's model does on any new run (the entry model, when allowed).
+  // A WorkerSpec's model is refused instead (`workerSpecModelRefusal`); a WorkerDefinition's own
+  // model is not under the cap on a first attempt either.
+  let model: string | undefined;
+  let modelFallback: { readonly from: string; readonly to: string | null } | null = null;
+  if (input.previous) {
+    model = input.previous.model ?? undefined;
+    if (
+      model !== undefined &&
+      input.spec?.model === undefined &&
+      content.model === undefined &&
+      !modelAllowed(parent.allowedModels, model)
+    ) {
+      const fallback =
+        (await readEffectiveAgentProfile(client, workspaceId, requesterId)).model || undefined;
+      modelFallback = { from: model, to: fallback ?? null };
+      model = fallback;
+    }
+  } else {
+    model =
+      input.spec?.model ??
       content.model ??
-      ((await readEffectiveAgentProfile(client, workspaceId, requesterId)).model || undefined));
+      ((await readEffectiveAgentProfile(client, workspaceId, requesterId)).model || undefined);
+  }
   const image = input.previous
     ? (input.previous.image ?? undefined)
     : await resolveActiveRuntimeImage(client);
@@ -855,6 +882,8 @@ export async function createStepAttemptTask(
             },
           }
         : {}),
+      // Legacy 543: the model the previous attempt ran on is no longer allowed, and this one's.
+      ...(modelFallback !== null ? { modelFallback } : {}),
     },
   });
 

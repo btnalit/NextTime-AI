@@ -12,6 +12,7 @@ import type {
   TaskSupervisorClientPort,
   TaskSupervisorStatus,
 } from '../../adapters/supervisor-client/index.js';
+import { setAgentProfile } from '../../governance/agent-profile/index.js';
 import {
   WORKER_CEILING_CAPABILITIES,
   generateEphemeralHandleKeyPair,
@@ -748,6 +749,60 @@ describe.runIf(DATABASE_URL !== undefined)(
           const retried = await latestAttempt(stepA.id);
           expect(retried.step_attempt).toBe(2);
           expect(spawnOf(retried.id).model).toBe('p/m1');
+        } finally {
+          await setAllowedModels([], null);
+        }
+      });
+    });
+
+    describe("a retry on the requester's own model (legacy 543, P-A2)", () => {
+      const queueAudit = (taskId: string) =>
+        admin(async (client) => {
+          const result = await client.query<{ payload: Record<string, unknown> }>(
+            `select payload from audit_records
+              where workspace_id = $1 and action = 'task.queue' and resource_id = $2`,
+            [workspaceId, taskId],
+          );
+          return result.rows.map((row) => row.payload);
+        });
+
+      it('keeps a model still allowed, and falls back to the entry model once the workspace stops allowing it', async () => {
+        const requester = await newPrincipal();
+        await admin((client) =>
+          setAgentProfile(client, workspaceId, requester, ownerId, { model: 'p/mine' }),
+        );
+        const goalRunId = await startGoal(requester, [{ key: 'a' }]);
+        await advance(goalRunId, requester);
+        const stepA = await stepOf(goalRunId, 'a');
+        const first = await latestAttempt(stepA.id);
+        expect(spawnOf(first.id).model).toBe('p/mine');
+
+        // The profile changes, the model it chose first is still allowed: the retry keeps it.
+        await admin((client) =>
+          setAgentProfile(client, workspaceId, requester, ownerId, { model: 'p/later' }),
+        );
+        await setAllowedModels(['p/entry', 'p/mine', 'p/later'], 'p/entry');
+        try {
+          await failStep(stepA.id, requester, 'spawn_lost');
+          await advance(goalRunId, requester);
+          const second = await latestAttempt(stepA.id);
+          expect(second.step_attempt).toBe(2);
+          expect(spawnOf(second.id).model).toBe('p/mine');
+          expect((await queueAudit(second.id))[0]).not.toHaveProperty('modelFallback');
+
+          // Narrowed past it: the next retry starts on what the profile resolves to under the cap
+          // now, recorded on its snapshot and its queue audit, never on the model it lost.
+          await setAllowedModels(['p/entry'], 'p/entry');
+          await failStep(stepA.id, requester, 'spawn_lost');
+          await advance(goalRunId, requester);
+          const third = await latestAttempt(stepA.id);
+          expect(third.step_attempt).toBe(3);
+          expect(await goalOf(goalRunId)).toMatchObject({ status: 'running' });
+          expect(spawnOf(third.id).model).toBe('p/entry');
+          expect(snapshotOf(third)).toMatchObject({ model: 'p/entry' });
+          expect((await queueAudit(third.id))[0]).toMatchObject({
+            modelFallback: { from: 'p/mine', to: 'p/entry' },
+          });
         } finally {
           await setAllowedModels([], null);
         }
