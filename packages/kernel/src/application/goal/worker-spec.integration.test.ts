@@ -850,6 +850,39 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
+    describe('a step waiting to be tried again and one not started, with the same Worker and WorkerSpec (review #493 N11 on #853)', () => {
+      it('are checked apart: only the one not started is hinted for a Skill deprecated since', async () => {
+        const requester = await newPrincipal();
+        const skill = await seedSkill('published');
+        const spec: WorkerSpec = { skills: [skill.name] };
+        const goalRunId = await startGoal(requester, [
+          { key: 'a', spec },
+          { key: 'b', spec, dependsOn: ['a'] },
+        ]);
+        await advance(goalRunId, requester);
+        const stepA = await stepOf(goalRunId, 'a');
+        await failStep(stepA.id, requester, 'spawn_lost');
+        await admin((client) =>
+          client.query(
+            `update skills set status = 'deprecated' where workspace_id = $1 and id = $2`,
+            [workspaceId, skill.id],
+          ),
+        );
+        // The retry is refused for the version its first attempt pinned, which is no longer
+        // published: the run pauses with `a` waiting to be tried again and `b` not started.
+        await advance(goalRunId, requester);
+        expect(await goalOf(goalRunId)).toMatchObject({ status: 'paused' });
+        expect(await attemptTasks(stepA.id)).toHaveLength(1);
+        expect(await stepOf(goalRunId, 'a')).toMatchObject({ status: 'ready', attemptCount: 1 });
+        expect(await stepOf(goalRunId, 'b')).toMatchObject({ status: 'pending', attemptCount: 0 });
+        // The retry is checked as a later attempt is — its Skills are the pinned ones, checked
+        // there; the step not started is checked as a first attempt, and would not start.
+        expect(stepHints(await detailHints(goalRunId, requester))).toEqual([
+          expect.objectContaining({ code: 'step_skill_deprecated', stepKey: 'b' }),
+        ]);
+      });
+    });
+
     describe('invariant 2: a revision that changes a WorkerSpec is admitted afresh', () => {
       it('a step revised to name a draft Skill does not start, though its earlier attempt ran', async () => {
         const requester = await newPrincipal();
