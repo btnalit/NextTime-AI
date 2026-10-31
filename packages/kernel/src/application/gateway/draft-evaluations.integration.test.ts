@@ -1682,7 +1682,47 @@ describe.runIf(DATABASE_URL !== undefined)(
         [worse.id, 'worse', 2],
         [regressed.id, 'regressed', 2],
       ]);
-    });
+
+      // Running the same content again, more often than the evidence shows the newest of, does
+      // not take a failure away: the regressed evaluation is still shown and still acknowledged.
+      const nextTarget = { skillId: notesId, version: next.version, draftDigest: next.digest };
+      const startNext = () =>
+        call<DraftEvaluationWire>(person('builder'), 'start_draft_evaluation', {
+          ...nextTarget,
+          suiteId: regressionOnly.id,
+          suiteVersion: regressionOnly.version,
+        });
+      const lost = await drive((await startNext()).id, ({ arm }) =>
+        arm === 'baseline' ? 'pass' : 'fail',
+      );
+      expect(lost).toMatchObject({ verdict: 'regressed' });
+      const reruns: string[] = [];
+      for (let run = 0; run < 20; run += 1) {
+        const held = await drive((await startNext()).id, () => 'pass');
+        expect(held).toMatchObject({ verdict: 'inconclusive' });
+        reruns.unshift(held.id);
+      }
+      const later = await call<SkillPublishEvidenceWire>(
+        person('builder'),
+        'get_skill_publish_evidence',
+        nextTarget,
+      );
+      expect(later.evaluations.map((e) => e.id)).toEqual([...reruns, lost.id]);
+      expect(later.acknowledge.map((item) => [item.evaluationId, item.caseId])).toEqual([
+        [lost.id, regressionOnly.cases[0]?.id],
+      ]);
+      // The family's history still finds the earlier draft's evaluations past this draft's own.
+      expect(later.familyHistory.map((e) => e.id)).toEqual([worse.id, regressed.id]);
+      const unacknowledged = await rejection(
+        call(person('owner'), 'publish_skill', {
+          ...nextTarget,
+          evaluationReview: { evaluationId: reruns[0] },
+        }),
+      );
+      expect((unacknowledged as EvaluationReviewRequiredError).details.items).toEqual([
+        { evaluationId: lost.id, caseId: regressionOnly.cases[0]?.id },
+      ]);
+    }, 60_000);
 
     // Last: it removes this test's workspace, the evaluations with it.
     it('the workspace purge removes draft evaluations with their runs and trials', async () => {

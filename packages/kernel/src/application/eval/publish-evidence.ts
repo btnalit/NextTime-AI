@@ -1,6 +1,8 @@
 import {
   type DraftEvaluationArmTallyWire,
   type DraftEvaluationEvidenceWire,
+  type DraftEvaluationReason,
+  type DraftEvaluationVerdict,
   type DraftEvaluationWire,
   FAMILY_HISTORY_VERDICTS,
   type PublishAcknowledgementItemWire,
@@ -34,10 +36,11 @@ import { casesToAcknowledge } from './verdict.js';
  * The evidence is the draft's own evaluations — those of exactly its `(skillId, version,
  * draftDigest)`, so of the content being published — that finished; the newest is the one a
  * publish names. Every `regressed` / `worse` one among them asks for its failures to be
- * acknowledged, not only the newest: running the same content again does not take a failure away.
- * `publish_skill` reads it again in its own transaction, after the draft's row is locked and its
- * not-running check passed (application/worker `publishSkill`): no evaluation of the draft starts
- * or ends meanwhile, so what is checked is what is published on.
+ * acknowledged, not only the newest, however many evaluations ran since: running the same content
+ * again does not take a failure away. `publish_skill` checks it again in its own transaction,
+ * after the draft's row is locked and its not-running check passed (application/worker
+ * `publishSkill`): no evaluation of the draft starts or ends meanwhile, so what is checked is what
+ * is published on.
  */
 
 /** The draft as reviewed. */
@@ -47,10 +50,11 @@ export interface PublishEvidenceTarget {
   readonly draftDigest: string;
 }
 
-/** How many of the draft's finished evaluations the evidence holds. */
+/** How many of the draft's newest finished evaluations the evidence shows (with every older one
+ *  whose failures are still acknowledged). */
 const EVIDENCE_LIMIT = 20;
 
-/** How many of the family's other drafts that did not hold `familyHistory` shows. */
+/** How many evaluations of the family's other drafts that did not hold `familyHistory` shows. */
 const FAMILY_HISTORY_LIMIT = 10;
 
 /** Two arms' tallies added up — `costUsd` `null` when either's is. */
@@ -132,6 +136,60 @@ async function acknowledgementsOf(
   });
 }
 
+/** One of the draft's evaluations of exactly this content, in brief. */
+interface ContentEvaluationRow {
+  readonly id: string;
+  readonly status: 'running' | 'finished';
+  readonly verdict: DraftEvaluationVerdict | null;
+  readonly reason: DraftEvaluationReason | null;
+}
+
+/** Every evaluation of exactly the draft's content that `viewer` may see and that runs or
+ *  finished, newest first — ids and verdicts only, so all of them, however many: an old one's
+ *  failures are acknowledged as much as the newest's. */
+async function readContentEvaluations(
+  client: PoolClient,
+  workspaceId: string,
+  viewer: DraftEvaluationActor,
+  target: PublishEvidenceTarget,
+): Promise<readonly ContentEvaluationRow[]> {
+  const rows = await client.query<ContentEvaluationRow>(
+    `select e.id, e.status, e.verdict, e.reason from eval_draft_evaluations e
+      where e.workspace_id = $1 and e.skill_id = $4 and e.skill_version = $5
+        and e.draft_digest = $6 and e.status in ('running', 'finished')
+        and ${DRAFT_EVALUATION_VISIBLE_TO('$2', '$3')}
+      order by e.created_at desc, e.id desc`,
+    [
+      workspaceId,
+      seesEveryDraft(viewer.role),
+      viewer.principalId,
+      target.skillId,
+      target.version,
+      target.draftDigest,
+    ],
+  );
+  return rows.rows;
+}
+
+function acknowledged(row: ContentEvaluationRow): boolean {
+  return (
+    row.status === 'finished' && row.verdict !== null && publishAcknowledgesVerdict(row.verdict)
+  );
+}
+
+/** The failures to acknowledge over `evaluations`, in their order. */
+async function acknowledgementsOver(
+  client: PoolClient,
+  workspaceId: string,
+  evaluations: Iterable<DraftEvaluationWire>,
+): Promise<PublishAcknowledgementItemWire[]> {
+  const items: PublishAcknowledgementItemWire[] = [];
+  for (const evaluation of evaluations) {
+    items.push(...(await acknowledgementsOf(client, workspaceId, evaluation)));
+  }
+  return items;
+}
+
 /** What the draft's evaluations say to whoever publishes it — those `viewer` may see (as
  *  `get_draft_evaluation`), so nothing for a draft they may not see. */
 export async function readSkillPublishEvidence(
@@ -140,51 +198,27 @@ export async function readSkillPublishEvidence(
   viewer: DraftEvaluationActor,
   target: PublishEvidenceTarget,
 ): Promise<SkillPublishEvidenceWire> {
-  const rows = await client.query<{ id: string; status: 'running' | 'finished' }>(
-    `select e.id, e.status from eval_draft_evaluations e
-      where e.workspace_id = $1 and e.skill_id = $4 and e.skill_version = $5
-        and e.draft_digest = $6 and e.status in ('running', 'finished')
-        and ${DRAFT_EVALUATION_VISIBLE_TO('$2', '$3')}
-      order by e.created_at desc, e.id desc
-      limit $7`,
-    [
-      workspaceId,
-      seesEveryDraft(viewer.role),
-      viewer.principalId,
-      target.skillId,
-      target.version,
-      target.draftDigest,
-      // One runs at a time.
-      EVIDENCE_LIMIT + 1,
-    ],
-  );
-  const finished = rows.rows.filter((r) => r.status === 'finished').slice(0, EVIDENCE_LIMIT);
+  const rows = await readContentEvaluations(client, workspaceId, viewer, target);
+  // The newest EVIDENCE_LIMIT, and every older one whose failures are still acknowledged.
+  const shown = rows
+    .filter((r) => r.status === 'finished')
+    .filter((r, index) => index < EVIDENCE_LIMIT || acknowledged(r));
   const evaluations: DraftEvaluationWire[] = [];
-  for (const row of finished) {
+  for (const row of shown) {
     evaluations.push(await getDraftEvaluation(client, workspaceId, viewer, row.id));
   }
-  const acknowledge: PublishAcknowledgementItemWire[] = [];
-  for (const evaluation of evaluations) {
-    acknowledge.push(...(await acknowledgementsOf(client, workspaceId, evaluation)));
-  }
-  const family = await listDraftEvaluations(client, workspaceId, viewer, {
-    skillId: target.skillId,
-  });
   return {
     evaluations: evaluations.map(evidenceOf),
-    runningEvaluationId: rows.rows.find((r) => r.status === 'running')?.id ?? null,
-    acknowledge,
-    familyHistory: family
-      .filter(
-        (e) =>
-          e.status === 'finished' &&
-          e.verdict !== null &&
-          (FAMILY_HISTORY_VERDICTS as readonly string[]).includes(e.verdict) &&
-          !(
-            e.candidate.version === target.version && e.candidate.draftDigest === target.draftDigest
-          ),
-      )
-      .slice(0, FAMILY_HISTORY_LIMIT),
+    runningEvaluationId: rows.find((r) => r.status === 'running')?.id ?? null,
+    acknowledge: await acknowledgementsOver(client, workspaceId, evaluations),
+    familyHistory: [
+      ...(await listDraftEvaluations(client, workspaceId, viewer, {
+        skillId: target.skillId,
+        verdicts: FAMILY_HISTORY_VERDICTS,
+        notContent: { version: target.version, draftDigest: target.draftDigest },
+        limit: FAMILY_HISTORY_LIMIT,
+      })),
+    ],
   };
 }
 
@@ -215,15 +249,22 @@ export async function checkPublishEvidence(
   target: PublishEvidenceTarget,
   review: PublishEvaluationReview | undefined,
 ): Promise<PublishEvidenceAudit> {
-  const evidence = await readSkillPublishEvidence(client, workspaceId, publisher, target);
-  const latest = evidence.evaluations[0] ?? null;
+  // Not the whole evidence: the newest evaluation's id and verdict, and the failures of those that
+  // ask for them — read under the registry lock `publishSkill` holds, so no more than that.
+  const rows = await readContentEvaluations(client, workspaceId, publisher, target);
+  const latest = rows.find((r) => r.status === 'finished') ?? null;
   const reviewed = review?.evaluationId ?? null;
   if (reviewed !== (latest?.id ?? null)) {
     throw new EvaluationChangedError(reviewed, latest?.id ?? null);
   }
+  const asking: DraftEvaluationWire[] = [];
+  for (const row of rows.filter(acknowledged)) {
+    asking.push(await getDraftEvaluation(client, workspaceId, publisher, row.id));
+  }
+  const acknowledge = await acknowledgementsOver(client, workspaceId, asking);
   const key = (item: { readonly evaluationId: string; readonly caseId: string }) =>
     `${item.evaluationId}/${item.caseId}`;
-  const needed = new Set(evidence.acknowledge.map(key));
+  const needed = new Set(acknowledge.map(key));
   const given = new Set<string>();
   for (const acknowledgement of review?.acknowledgements ?? []) {
     const k = key(acknowledgement);
@@ -239,7 +280,7 @@ export async function checkPublishEvidence(
     }
     given.add(k);
   }
-  const missing = evidence.acknowledge.filter((item) => !given.has(key(item)));
+  const missing = acknowledge.filter((item) => !given.has(key(item)));
   if (missing.length > 0) {
     throw new EvaluationReviewRequiredError(
       missing.map((item) => ({ evaluationId: item.evaluationId, caseId: item.caseId })),

@@ -1155,12 +1155,20 @@ export async function getDraftEvaluation(
 /** How many evaluations `listDraftEvaluations` returns. */
 const LIST_DRAFT_EVALUATIONS_LIMIT = 50;
 
-/** The draft evaluations the viewer may see, newest first, in brief; by Skill family and/or suite. */
+/** The draft evaluations the viewer may see, newest first, in brief; by Skill family and/or suite
+ *  — and, for a publish's family history (`publish-evidence.ts`), only finished ones with one of
+ *  `verdicts`, none of the draft `notContent` (its version and content digest), at most `limit`. */
 export async function listDraftEvaluations(
   client: PoolClient,
   workspaceId: string,
   viewer: DraftEvaluationActor,
-  filter: { readonly skillId?: string; readonly suiteId?: string },
+  filter: {
+    readonly skillId?: string;
+    readonly suiteId?: string;
+    readonly verdicts?: readonly DraftEvaluationVerdict[];
+    readonly notContent?: { readonly version: number; readonly draftDigest: string };
+    readonly limit?: number;
+  },
 ): Promise<readonly DraftEvaluationSummaryWire[]> {
   const result = await client.query<EvaluationRow & { cost_usd: number | null; unpriced: string }>(
     `select ${EVALUATION_COLUMNS},
@@ -1176,6 +1184,8 @@ export async function listDraftEvaluations(
       where e.workspace_id = $1
         and ($4::uuid is null or e.skill_id = $4)
         and ($5::uuid is null or e.suite_id = $5)
+        and ($7::text[] is null or (e.status = 'finished' and e.verdict = any($7::text[])))
+        and ($8::int is null or not (e.skill_version = $8 and e.draft_digest = $9))
         and ${VISIBLE_TO('$2', '$3')}
       order by e.created_at desc, e.id desc
       limit $6`,
@@ -1185,7 +1195,10 @@ export async function listDraftEvaluations(
       viewer.principalId,
       filter.skillId ?? null,
       filter.suiteId ?? null,
-      LIST_DRAFT_EVALUATIONS_LIMIT,
+      Math.min(filter.limit ?? LIST_DRAFT_EVALUATIONS_LIMIT, LIST_DRAFT_EVALUATIONS_LIMIT),
+      filter.verdicts ?? null,
+      filter.notContent?.version ?? null,
+      filter.notContent?.draftDigest ?? null,
     ],
   );
   return result.rows.map((row) =>

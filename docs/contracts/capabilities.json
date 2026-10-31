@@ -45390,7 +45390,6 @@
                 ],
                 "type": "object"
               },
-              "maxItems": 200,
               "type": "array"
             },
             "evaluationId": {

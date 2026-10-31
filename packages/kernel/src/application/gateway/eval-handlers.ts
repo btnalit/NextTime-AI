@@ -348,8 +348,12 @@ export const listDraftEvaluationsHandler: CapabilityHandler = async (
   ctx,
 ) => {
   const viewer = viewerOf('list_draft_evaluations', ctx);
-  const filter = params as { skillId?: string; suiteId?: string };
-  return { result: { items: await listDraftEvaluations(client, workspaceId, viewer, filter) } };
+  const { skillId, suiteId } = params as { skillId?: string; suiteId?: string };
+  return {
+    result: {
+      items: await listDraftEvaluations(client, workspaceId, viewer, { skillId, suiteId }),
+    },
+  };
 };
 
 export const cancelDraftEvaluationHandler: CapabilityHandler = async (

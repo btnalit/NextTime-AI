@@ -829,8 +829,9 @@ export type PublishAcknowledgementItemWire = z.infer<typeof PublishAcknowledgeme
  */
 export const SkillPublishEvidenceWireSchema = z
   .object({
-    /** The draft's finished evaluations, newest first (the last 20): the first is the evidence,
-     *  the one `publish_skill`'s `evaluationReview.evaluationId` names. */
+    /** The draft's finished evaluations, newest first: the last 20, and every older one whose
+     *  verdict is in `PUBLISH_ACKNOWLEDGED_VERDICTS` (its failures are still acknowledged). The
+     *  first is the evidence, the one `publish_skill`'s `evaluationReview.evaluationId` names. */
     evaluations: z.array(DraftEvaluationEvidenceWireSchema),
     /** One of the draft's evaluations runs now: `publish_skill` refuses (409 draft_evaluating)
      *  until it ends or is cancelled. */
@@ -859,11 +860,14 @@ export const PublishAcknowledgementSchema = z
 export type PublishAcknowledgement = z.infer<typeof PublishAcknowledgementSchema>;
 
 /** `publish_skill`'s `evaluationReview`: the evidence the caller reviewed — the first of
- *  `SkillPublishEvidenceWire.evaluations`, `null` for none — and its failures acknowledged. */
+ *  `SkillPublishEvidenceWire.evaluations`, `null` for none — and its failures acknowledged. The
+ *  acknowledgements have no count of their own: the evidence decides how many there are, and a cap
+ *  here would leave a draft with more failures than it unpublishable (the request's size limit is
+ *  the only bound). */
 export const PublishEvaluationReviewSchema = z
   .object({
     evaluationId: z.guid().nullable(),
-    acknowledgements: z.array(PublishAcknowledgementSchema).max(200).optional(),
+    acknowledgements: z.array(PublishAcknowledgementSchema).optional(),
   })
   .strict();
 export type PublishEvaluationReview = z.infer<typeof PublishEvaluationReviewSchema>;
