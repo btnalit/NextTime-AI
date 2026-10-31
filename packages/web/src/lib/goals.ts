@@ -653,8 +653,8 @@ const PLAN_HINT: Readonly<
     const [changeZh, changeEn] = CHANGE_PLAN[context];
     if (trial) {
       return [
-        `步骤「${step}」的 Worker 要用 Skill${zh}，${one ? '它' : '它们'}还只是草稿，没有发布：没人批准的话，${consequence[0]}能发布${one ? '它' : '它们'}的人（提议者或工作区所有者）可以在「步骤」里这一步下面「批准试用」，只让这一步用草稿试一次；也可以先在「能力目录」发布，或者${changeZh}。`,
-        `Step “${step}”: its Worker uses ${one ? 'Skill' : 'Skills'} ${en}, ${one ? 'which is only a draft' : 'which are only drafts'}, not published — unless someone approves, ${consequence[1]} Someone who may publish ${one ? 'it' : 'them'} (the proposer or a workspace owner) can “Approve trial” under the step in Steps, for this step to try the ${one ? 'draft' : 'drafts'} once; or publish in Catalog first, or ${changeEn}.`,
+        `步骤「${step}」的 Worker 要用 Skill${zh}，${one ? '它' : '它们'}还只是草稿，没有发布：没人批准的话，${consequence[0]}能发布${one ? '它' : '它们'}的人（提议者或工作区所有者）可以在「步骤」里这一步的提示下批准试用，只让这一步用草稿试一次；也可以先在「能力目录」发布，或者${changeZh}。`,
+        `Step “${step}”: its Worker uses ${one ? 'Skill' : 'Skills'} ${en}, ${one ? 'which is only a draft' : 'which are only drafts'}, not published — unless someone approves, ${consequence[1]} Someone who may publish ${one ? 'it' : 'them'} (the proposer or a workspace owner) can approve a trial from the step’s note in Steps, for this step to try the ${one ? 'draft' : 'drafts'} once; or publish in Catalog first, or ${changeEn}.`,
       ];
     }
     return [
@@ -1759,8 +1759,8 @@ function admissionPauseText(
     case 'step_skill_draft':
       return hint.trial !== undefined
         ? t(
-            `需要人决定：步骤「${step}」的 Worker 要用的 Skill${skillsZh}还只是草稿，这一步${held.zh}。能发布它的人可以在下面「步骤」里「批准试用」，之后请求人按「继续」；也可以在「能力目录」发布之后按「继续」，或者在对话里让入口智能体修订计划换掉它。`,
-            `A person must decide: the Worker of step “${step}” uses Skill ${skillsEn}, still a draft, so the step ${heldEn}. Someone who may publish it can “Approve trial” under Steps, and the requester then resumes; or publish it in Catalog and resume, or ask the entry agent in chat to revise the plan and change it.`,
+            `需要人决定：步骤「${step}」的 Worker 要用的 Skill${skillsZh}还只是草稿，这一步${held.zh}。能发布它的人可以在下面「步骤」里这一步的提示下批准试用，之后请求人按「继续」；也可以在「能力目录」发布之后按「继续」，或者在对话里让入口智能体修订计划换掉它。`,
+            `A person must decide: the Worker of step “${step}” uses Skill ${skillsEn}, still a draft, so the step ${heldEn}. Someone who may publish it can approve a trial from the step’s note under Steps, and the requester then resumes; or publish it in Catalog and resume, or ask the entry agent in chat to revise the plan and change it.`,
           )
         : t(
             `需要人决定：步骤「${step}」的 Worker 要用的 Skill${skillsZh}还只是草稿，这一步${held.zh}。在「能力目录」发布之后按「继续」，或者在对话里让入口智能体修订计划换掉它，见下面「步骤」里的说明。`,

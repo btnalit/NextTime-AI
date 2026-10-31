@@ -7,8 +7,8 @@ import type { GoalViewer } from '../../lib/goal-actions.js';
 import {
   type StepTrial,
   mayApproveTrial,
-  trialApproverText,
   trialDraftLabel,
+  trialProposer,
 } from '../../lib/goal-trials.js';
 import { HttpError } from '../../lib/http-client.js';
 import { useT } from '../../lib/i18n.js';
@@ -16,6 +16,7 @@ import { hrefs } from '../../lib/router.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
 import { CredentialReview } from '../kit/credential-review.js';
+import { RefChip } from '../kit/ref-chip.js';
 import { RouteLink } from '../kit/route-link.js';
 import {
   type GoalOperationOutcome,
@@ -40,7 +41,10 @@ export interface StepTrialApprovalProps {
  * these exact drafts once, lapses if a draft changes, and does not resume a paused goal (its
  * requester does). A draft carrying suspected credentials asks the approver to confirm them, as a
  * publish would (`kit/credential-review`). Shown to the workspace owner, or to the person who
- * proposed every draft (`mayApproveTrial`); to anyone else, who may approve instead.
+ * proposed every draft (`mayApproveTrial`); to anyone else, who may approve instead — that person
+ * by name, and each draft as a link (UX on #855). A draft that changed while the confirm was open
+ * closes it (409 `draft_changed`): the next approval comes from a confirm opened on what the page
+ * reads now, never from the one that showed the old content (UX P2-1 on #855).
  */
 export function StepTrialApproval({
   goal,
@@ -57,14 +61,45 @@ export function StepTrialApproval({
   const credentialReview = usePublishCredentialReview(
     `${goal.id}:${stepKey}:${trial.specDigest}:${trial.drafts.map((draft) => draft.draftDigest).join(',')}`,
   );
+  const one = trial.drafts.length === 1;
+  const draftLinks = trial.drafts.map((draft) => (
+    <RouteLink
+      key={draft.skillId}
+      href={hrefs.catalog('skills', draft.skillId)}
+      className="link-inline"
+      testId="goal-step-trial-draft"
+    >
+      {trialDraftLabel(draft)}
+    </RouteLink>
+  ));
   if (can('approve_step_trial') === false || !mayApproveTrial(trial, viewer)) {
+    const proposer = trialProposer(trial);
     return (
-      <span className="text-small text-3" data-testid="goal-step-trial-approver">
-        {trialApproverText(trial, t)}
+      <span className="row-wrap text-small text-3" data-testid="goal-step-trial-approver">
+        {proposer !== null ? (
+          <>
+            <span>{t('能批准试用的是', 'The trial can be approved by')}</span>
+            <RefChip kind="principal" id={proposer} http={http} size="s" />
+            <span>
+              {t(
+                `（${one ? '这份草稿' : '这些草稿'}的提议者）或工作区所有者。`,
+                `(who proposed ${one ? 'the draft' : 'the drafts'}) or a workspace owner.`,
+              )}
+            </span>
+          </>
+        ) : (
+          <span>
+            {t(
+              '这些草稿是不同的人提议的，只有工作区所有者能批准试用。',
+              'Different people proposed these drafts, so only a workspace owner can approve the trial.',
+            )}
+          </span>
+        )}
+        <span>{one ? t('草稿：', 'Draft:') : t('草稿：', 'Drafts:')}</span>
+        {draftLinks}
       </span>
     );
   }
-  const one = trial.drafts.length === 1;
   const anchor = (
     <Button
       variant="secondary"
@@ -89,11 +124,12 @@ export function StepTrialApproval({
           })),
           ...credentialReview.params(),
         }),
+        // A paused run's own note says the requester resumes (`pendingTrialStepKeys`).
         () =>
           goal.status === 'paused'
             ? t(
-                `已批准步骤「${stepKey}」试用 Skill 草稿。目标不会自己继续：请求人按「继续」后这一步开始。`,
-                `Trial approved for step “${stepKey}”. The goal does not go on by itself: once its requester resumes it, the step starts.`,
+                `已批准步骤「${stepKey}」试用 Skill 草稿。`,
+                `Trial approved for step “${stepKey}”.`,
               )
             : t(
                 `已批准步骤「${stepKey}」试用 Skill 草稿：确认目标后，这一步用批准的草稿开始。`,
@@ -101,17 +137,20 @@ export function StepTrialApproval({
               ),
       );
     } catch (err) {
-      // The kernel's credential question — answered in this confirm, which stays open.
-      credentialReview.capture(err);
+      // What this confirm showed is not the step's trial any more: it closes, and the page reads
+      // the goal again — approving the drafts as they are now takes a confirm opened on them.
       if (err instanceof HttpError && err.code === 'draft_changed') {
         onDone({
           kind: 'done',
           message: t(
-            `步骤「${stepKey}」的草稿或设定在你打开之后改过了，什么也没批准。页面已刷新，请在「步骤」里重新查看。`,
-            `Step “${stepKey}”’s drafts or settings changed since you opened it, so nothing was approved. The page has been refreshed; look again under Steps.`,
+            `步骤「${stepKey}」的草稿或设定在你打开之后改过了，什么也没批准。页面已刷新，请在「步骤」里重新查看，要批准就再点一次「批准试用」。`,
+            `Step “${stepKey}”’s drafts or settings changed since you opened it, so nothing was approved. The page has been refreshed: look again under Steps, and approve again from there if you still mean to.`,
           ),
         });
+        return;
       }
+      // The kernel's credential question — answered in this confirm, which stays open.
+      credentialReview.capture(err);
       throw err;
     }
   }
@@ -123,7 +162,7 @@ export function StepTrialApproval({
       anchor={anchor}
       title={t(
         `批准步骤「${stepKey}」试用 Skill 草稿`,
-        `Approve step “${stepKey}” trying draft Skills`,
+        `Approve step “${stepKey}” trying ${one ? 'a draft Skill' : 'draft Skills'}`,
       )}
       description={t(
         `这一步的 Worker 会用下面${one ? '这份还没发布的草稿' : '这些还没发布的草稿'}运行一次（失败重试沿用同一份）。`,
@@ -153,10 +192,6 @@ export function StepTrialApproval({
           '草稿内容里有疑似凭据：核对下面列出的位置，勾选确认后再批准。',
           'A draft’s content looks like it carries credentials: check the places listed below, tick the confirmation and approve again.',
         ),
-        draft_changed: t(
-          '草稿或这一步的设定已经变了，什么也没批准。关掉这个框，在刷新后的「步骤」里重新查看。',
-          'The drafts or the step’s settings changed, so nothing was approved. Close this and look again under Steps, now refreshed.',
-        ),
         not_proposer: t(
           '只有每份草稿的提议者或工作区所有者能批准试用，什么也没批准。',
           'Only the proposer of every draft, or a workspace owner, can approve the trial; nothing was approved.',
@@ -166,16 +201,10 @@ export function StepTrialApproval({
       testId="goal-step-trial-confirm"
     >
       <ul className="stack-s m-0 p-0 list-none" data-testid="goal-step-trial-drafts">
-        {trial.drafts.map((draft) => (
+        {trial.drafts.map((draft, index) => (
           <li key={draft.skillId} className="row-wrap text-small">
             <span className="chip chip-warn chip-s">{t('草稿', 'Draft')}</span>
-            <RouteLink
-              href={hrefs.catalog('skills', draft.skillId)}
-              className="link-inline"
-              testId="goal-step-trial-draft"
-            >
-              {trialDraftLabel(draft)}
-            </RouteLink>
+            {draftLinks[index]}
           </li>
         ))}
       </ul>

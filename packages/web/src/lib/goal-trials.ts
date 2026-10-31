@@ -37,13 +37,12 @@ export function mayApproveTrial(trial: StepTrial, viewer: GoalViewer): boolean {
   return trial.drafts.every((draft) => draft.proposedBy === viewer.principalId);
 }
 
-/** Who may approve a trial the reader may not — said in place of the button. */
-export function trialApproverText(trial: StepTrial, t: Translate): string {
-  const one = trial.drafts.length === 1;
-  return t(
-    `能批准试用的是${one ? '这份草稿' : '这些草稿'}的提议者（构建者）或工作区所有者。`,
-    `The ${one ? 'draft’s proposer' : 'drafts’ proposer'} (a builder) or a workspace owner can approve the trial.`,
-  );
+/** Who besides a workspace owner may approve `trial` — the one person who proposed every draft
+ *  (`publish_skill`'s rule for each), or `null` when different people proposed them. */
+export function trialProposer(trial: StepTrial): string | null {
+  const proposers = new Set(trial.drafts.map((draft) => draft.proposedBy));
+  const [only] = proposers;
+  return proposers.size === 1 && only !== undefined ? only : null;
 }
 
 /** A draft as the approval names it: 「名称 v1」. */
@@ -84,22 +83,23 @@ const LAPSE: Readonly<Record<StepTrialApprovalLapse, readonly [string, string]>>
 export function trialApprovalText(approval: StepTrialApprovalWire, t: Translate): string {
   const drafts = approval.drafts.map(trialDraftLabel);
   const [zh, en] = [drafts.map((name) => `「${name}」`).join('、'), drafts.join(', ')];
+  const skillsEn = drafts.length === 1 ? 'draft Skill' : 'draft Skills';
   switch (approval.state) {
     case 'pending':
       return t(
-        `已批准试用 Skill 草稿 ${zh}：只对这一步的下一次运行有效，草稿改动后失效。`,
-        `Trial of draft Skill ${en} approved: it holds for this step’s next run only, and lapses if a draft changes.`,
+        `已批准试用 Skill 草稿${zh}：只对这一步的下一次运行有效，草稿改动后失效。`,
+        `Trial of ${skillsEn} ${en} approved: it holds for this step’s next run only, and lapses if a draft changes.`,
       );
     case 'used':
       return t(
-        `已批准试用 Skill 草稿 ${zh}，这一步的第一次尝试用上了它（重试沿用同一份草稿）。`,
-        `Trial of draft Skill ${en} approved and used by this step’s first attempt (its retries mount the same drafts).`,
+        `已批准试用 Skill 草稿${zh}，这一步的第一次尝试用上了它（重试沿用同一份草稿）。`,
+        `Trial of ${skillsEn} ${en} approved and used by this step’s first attempt (its retries mount the same ${drafts.length === 1 ? 'draft' : 'drafts'}).`,
       );
     case 'lapsed': {
       const [whyZh, whyEn] = LAPSE[approval.lapsedBecause ?? 'step_changed'];
       return t(
-        `曾批准试用 Skill 草稿 ${zh}，但${whyZh}`,
-        `Trial of draft Skill ${en} was approved, but ${whyEn}`,
+        `曾批准试用 Skill 草稿${zh}，但${whyZh}`,
+        `Trial of ${skillsEn} ${en} was approved, but ${whyEn}`,
       );
     }
   }

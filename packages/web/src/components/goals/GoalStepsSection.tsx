@@ -262,6 +262,8 @@ function StepItem({
               </span>
             ) : null,
           )}
+          {/* S11 GO8b (UX P3-4 on #855): a trial approved and waiting, or one that lapsed. */}
+          {trialChip(trials, t)}
           {run ? (
             <StatusChip machine="stepRun" status={run.status} size="s" />
           ) : (
@@ -615,4 +617,24 @@ function Actions({
       ))}
     </div>
   );
+}
+
+/** The chip a step's title carries for the approvals of its trial: one waiting to be used, else —
+ *  none used either — the newest lapsed. Nothing once one was used: the line under it says so. */
+function trialChip(trials: readonly StepTrialApprovalWire[], t: Translate) {
+  if (trials.some((approval) => approval.state === 'pending')) {
+    return (
+      <span className="chip chip-info chip-s" data-testid="goal-step-trial-chip">
+        {t('已批准试用', 'Trial approved')}
+      </span>
+    );
+  }
+  if (trials.length > 0 && trials.every((approval) => approval.state === 'lapsed')) {
+    return (
+      <span className="chip chip-neutral chip-s" data-testid="goal-step-trial-chip">
+        {t('批准已失效', 'Approval lapsed')}
+      </span>
+    );
+  }
+  return null;
 }

@@ -485,7 +485,6 @@ export async function readStepTrialApprovals(
       !entry ||
       (goal.status !== 'proposed' && !step) ||
       !trialApprovalAppliesTo(approval, goal, step) ||
-      (step !== null && step.attemptCount > 0) ||
       workerSpecDigest(entry.spec ?? null) !== approval.specDigest
     ) {
       views.push(lapsed('step_changed'));
@@ -496,8 +495,14 @@ export async function readStepTrialApprovals(
       trial = viewer ? await currentTrial(client, workspaceId, viewer, entry) : null;
       trials.set(approval.stepKey, trial);
     }
+    // A draft changed is what made it lapse even once the step started without it (with a later
+    // approval, say): a reader is told the first reason, not one that came after (UX P3-5 on #855).
     if (trial?.kind !== 'drafts' || !trialDraftsMatch(approval.drafts, trial.drafts)) {
       views.push(lapsed('draft_changed'));
+      continue;
+    }
+    if (step !== null && step.attemptCount > 0) {
+      views.push(lapsed('step_changed'));
       continue;
     }
     views.push({ ...approval, state: 'pending', lapsedBecause: null, usedByTaskId: null });

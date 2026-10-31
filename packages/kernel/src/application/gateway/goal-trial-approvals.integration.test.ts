@@ -361,6 +361,77 @@ describe.runIf(DATABASE_URL !== undefined)(
         [workspaceId, goalRunId],
       );
 
+    /** The details the advancer paused (or noted a pause of) the run with, oldest first. */
+    const pauseDetails = async (goalRunId: string) =>
+      (
+        await raw<{ detail: string }>(
+          `select payload ->> 'detail' as detail from audit_records
+            where workspace_id = $1 and resource_id = $2
+              and action in ('goal_run.pause', 'goal_run.pause_noted')
+            order by created_at`,
+          [workspaceId, goalRunId],
+        )
+      ).map((row) => row.detail);
+
+    /** A row written straight into the table as the application's role, past the gateway. */
+    const insertApproval = (
+      goalRunId: string,
+      stepRunId: string | null,
+      trial: TrialHint,
+      approvedBy: string = builderId,
+    ) =>
+      asApp(approvedBy, (client) =>
+        client.query(
+          `insert into goal_step_trial_approvals
+             (workspace_id, goal_run_id, step_key, plan_revision, step_run_id, spec_digest,
+              drafts, approved_by)
+           values ($1, $2, 'a', 1, $3, $4, $5::jsonb, $6)`,
+          [
+            workspaceId,
+            goalRunId,
+            stepRunId,
+            trial.specDigest,
+            JSON.stringify(trial.drafts),
+            approvedBy,
+          ],
+        ),
+      );
+
+    const nameStepRun = (approvalId: string, stepRunId: string) =>
+      asApp(builderId, (client) =>
+        client.query(
+          'update goal_step_trial_approvals set step_run_id = $3 where workspace_id = $1 and id = $2',
+          [workspaceId, approvalId, stepRunId],
+        ),
+      );
+
+    /** Started with an approval of its trial (made on the paused run) and running its first
+     *  attempt, which then fails as `spawn_lost` — so the next advance tries it again. */
+    async function trialStartedThenLost(draft: { id: string; name: string }) {
+      const goalRunId = await pausedAtDraft(builderId, [{ key: 'a', skills: [draft.name] }]);
+      const approved = ApproveStepTrialResultWireSchema.parse(
+        await approve(human(builderId), goalRunId, await trialOf(goalRunId, builderId)),
+      );
+      await call(human(builderId), 'resume_goal', { goalRunId });
+      await advanceOnce(goalRunId, builderId);
+      const step = await liveStep(goalRunId);
+      const [first] = await attemptTasks(step.id);
+      if (!first) throw new Error('the first attempt did not start');
+      expect(RunConfigSnapshotSchema.parse(first.run_config_snapshot)).toMatchObject({
+        trial: { approvalId: approved.approvalId },
+      });
+      const lose = async (taskId: string) =>
+        failTaskAndReapWorkerRuns(
+          { pool, privateKey, supervisorClient: supervisor },
+          workspaceId,
+          builderId,
+          taskId,
+          'spawn_lost',
+        );
+      await lose(first.id);
+      return { goalRunId, step, lose };
+    }
+
     const spawnOf = (taskId: string): TaskSpawnInput => {
       const spawned = supervisor.spawnCalls.find((input) => input.taskId === taskId);
       if (!spawned) throw new Error(`no spawn for Task ${taskId}`);
@@ -860,6 +931,127 @@ describe.runIf(DATABASE_URL !== undefined)(
         const step = await liveStep(goalRunId);
         expect(await attemptTasks(step.id)).toEqual([]);
         expect(step.attempt_count).toBe(0);
+        // Refused by the admission (the draft waits for a person), the approval named as stale —
+        // not let in and then refused for a draft it cannot mount (review #493 T10 on #855).
+        expect((await pauseDetails(goalRunId)).at(-1)).toMatch(
+          /only drafts.*the approval of its trial does not match it any more/,
+        );
+      });
+    });
+
+    describe('a retry mounts exactly what was approved (review #493 on #855)', () => {
+      it('not a draft discarded and proposed again under its version, with other content: the retry does not start', async () => {
+        const draft = await seedDraft(builderId);
+        const { goalRunId, step } = await trialStartedThenLost(draft);
+        await reproposeDraft(draft, builderId);
+        await advanceOnce(goalRunId, builderId);
+        expect(await attemptTasks(step.id)).toHaveLength(1);
+        expect(await goalRow(goalRunId)).toMatchObject({
+          status: 'paused',
+          pause_reason: 'needs_decision',
+        });
+        expect((await pauseDetails(goalRunId)).at(-1)).toMatch(
+          /trial was approved for were changed, discarded or deprecated since/,
+        );
+      });
+
+      it('a draft published since is mounted again (its content unchanged); deprecated after, it is not', async () => {
+        const draft = await seedDraft(builderId);
+        const { goalRunId, step, lose } = await trialStartedThenLost(draft);
+        await raw(
+          `update skills set status = 'published', published_by = $3, published_at = now()
+            where workspace_id = $1 and id = $2`,
+          [workspaceId, draft.id, ownerId],
+        );
+        await advanceOnce(goalRunId, builderId);
+        const [, second] = await attemptTasks(step.id);
+        if (!second) throw new Error('the retry did not start');
+        expect(spawnOf(second.id).skillsInline?.map((mount) => mount.name)).toEqual([draft.name]);
+
+        await lose(second.id);
+        await raw(`update skills set status = 'deprecated' where workspace_id = $1 and id = $2`, [
+          workspaceId,
+          draft.id,
+        ]);
+        await advanceOnce(goalRunId, builderId);
+        expect(await attemptTasks(step.id)).toHaveLength(2);
+        expect(await goalRow(goalRunId)).toMatchObject({
+          status: 'paused',
+          pause_reason: 'needs_decision',
+        });
+      });
+    });
+
+    describe('the guard, below the gateway (review #493 on #855)', () => {
+      it('an approval made on a proposal names, once, a StepRun of its own run while it runs — the one its confirmation created', async () => {
+        const draft = await seedDraft(builderId);
+        const goalRunId = await proposeGoal(builderId, [{ key: 'a', skills: [draft.name] }]);
+        const approved = ApproveStepTrialResultWireSchema.parse(
+          await approve(human(builderId), goalRunId, await trialOf(goalRunId, builderId)),
+        );
+        await call(human(builderId), 'confirm_goal', { goalRunId, revision: 1 });
+        const step = await liveStep(goalRunId);
+        const names =
+          /names, once, the StepRun of its step that the proposal's confirmation created/;
+
+        // Another run's StepRun, running too.
+        const other = await proposeGoal(builderId, [{ key: 'a', skills: [draft.name] }]);
+        await call(human(builderId), 'confirm_goal', { goalRunId: other, revision: 1 });
+        expect(
+          await dbRefusal(nameStepRun(approved.approvalId, (await liveStep(other)).id)),
+        ).toMatch(names);
+
+        // Its own StepRun, while the run is paused.
+        await call(human(builderId), 'pause_goal', { goalRunId });
+        expect(await dbRefusal(nameStepRun(approved.approvalId, step.id))).toMatch(names);
+
+        // A StepRun a revision brought in (the same WorkerSpec, another input), the run running.
+        await call(human(builderId), 'revise_goal', {
+          goalRunId,
+          basedOnRevision: 1,
+          plan: planOf([{ key: 'a', skills: [draft.name], input: { step: 'a', again: true } }]),
+        });
+        const revised = await liveStep(goalRunId);
+        expect(revised.id).not.toBe(step.id);
+        await call(human(builderId), 'resume_goal', { goalRunId });
+        expect(await dbRefusal(nameStepRun(approved.approvalId, revised.id))).toMatch(names);
+        // Nor does the advancer take it for that StepRun: the step waits for a person.
+        await advanceOnce(goalRunId, builderId);
+        expect(await goalRow(goalRunId)).toMatchObject({
+          status: 'paused',
+          pause_reason: 'needs_decision',
+        });
+        expect(await attemptTasks(revised.id)).toEqual([]);
+        expect(await approvalRows(goalRunId)).toEqual([
+          expect.objectContaining({ id: approved.approvalId, step_run_id: null }),
+        ]);
+      });
+
+      it('on a paused run, a row names the live StepRun of its own run that has not started an attempt', async () => {
+        const draft = await seedDraft(builderId);
+        const goalRunId = await pausedAtDraft(builderId, [{ key: 'a', skills: [draft.name] }]);
+        const trial = await trialOf(goalRunId, builderId);
+        const live =
+          /a trial is approved for the live StepRun of the step that has not started an attempt/;
+
+        // Another run's StepRun.
+        const other = await proposeGoal(builderId, [{ key: 'a', skills: [draft.name] }]);
+        await call(human(builderId), 'confirm_goal', { goalRunId: other, revision: 1 });
+        expect(
+          await dbRefusal(insertApproval(goalRunId, (await liveStep(other)).id, trial)),
+        ).toMatch(live);
+
+        // Its own run's StepRun, once an attempt of it started.
+        const started = await proposeGoal(builderId, [{ key: 'a' }]);
+        await call(human(builderId), 'confirm_goal', { goalRunId: started, revision: 1 });
+        await advanceOnce(started, builderId);
+        const startedStep = await liveStep(started);
+        expect(startedStep.attempt_count).toBe(1);
+        await call(human(builderId), 'pause_goal', { goalRunId: started });
+        expect(await goalRow(started)).toMatchObject({ status: 'paused' });
+        expect(await dbRefusal(insertApproval(started, startedStep.id, trial))).toMatch(live);
+        expect(await approvalRows(goalRunId)).toEqual([]);
+        expect(await approvalRows(started)).toEqual([]);
       });
     });
 
