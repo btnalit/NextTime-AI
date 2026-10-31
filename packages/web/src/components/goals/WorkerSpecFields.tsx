@@ -3,6 +3,7 @@ import { actionLabel } from '../../lib/capability-labels.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import {
   skillRefShown,
+  workerSpecCombination,
   workerSpecFieldLabel,
   workerSpecFields,
   workerSpecSummary,
@@ -104,11 +105,8 @@ export function WorkerSpecFields({ spec, http, gateNames, t }: WorkerSpecFieldsP
         }))}
         testId="goal-step-spec-fields"
       />
-      <span className="text-3 text-small">
-        {t(
-          'Skill、门、能力范围和模型替换 Worker 原有的设定，职责说明加在它原有的系统提示之后，观察范围限定这一步的任务能读取哪些门。这一步能做的不会超出 Worker 能有的上限和请求人现在的权限，Token 上限也不会超出目标剩下的预算。',
-          'Skills, gates, capabilities and the model replace the Worker’s own; the responsibility is added after its system prompt; the observation scope is the gatekeepers this step’s task may read through. What the step may do never goes past what a Worker may hold and what the requester holds now, and its token cap never past what is left of the goal’s budget.',
-        )}
+      <span className="text-3 text-small" data-testid="goal-step-spec-combination">
+        {workerSpecCombination(spec, t)}
       </span>
     </div>
   );

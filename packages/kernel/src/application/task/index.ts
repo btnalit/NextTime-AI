@@ -90,6 +90,7 @@ export {
   resolveStepAuthority,
   startStepAttemptTask,
   workerSpecComponentRefusals,
+  workerSpecModelRefusal,
   workerSpecDigest,
 } from './step-attempt.js';
 

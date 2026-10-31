@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -1197,6 +1199,109 @@ describe.runIf(DATABASE_URL !== undefined)(
           'requester_cannot_start_workers',
         ]);
         expect(hints[1]).not.toHaveProperty('stepKey');
+      });
+    });
+
+    describe('S11 GO8a: what a WorkerSpec names reaches the wire with its hint (UX on #853)', () => {
+      /** Runs `fn` with `MODELS_JSON_FILE` naming a catalog that offers `models`, or a file that is
+       *  not there (`null`). */
+      async function withCatalog<T>(models: readonly string[] | null, fn: () => Promise<T>) {
+        const saved = process.env.MODELS_JSON_FILE;
+        const dir = await mkdtemp(path.join(os.tmpdir(), 'go8a-models-'));
+        const file = path.join(dir, 'models.json');
+        if (models !== null) {
+          const providers: Record<string, { models: { id: string }[] }> = {};
+          for (const ref of models) {
+            const [provider, model] = ref.split('/') as [string, string];
+            providers[provider] ??= { models: [] };
+            providers[provider].models.push({ id: model });
+          }
+          await writeFile(file, JSON.stringify({ providers }));
+        }
+        process.env.MODELS_JSON_FILE = file;
+        try {
+          return await fn();
+        } finally {
+          if (saved === undefined) Reflect.deleteProperty(process.env, 'MODELS_JSON_FILE');
+          else process.env.MODELS_JSON_FILE = saved;
+        }
+      }
+
+      const setAllowedModels = (models: readonly string[]) =>
+        admin((client) =>
+          client.query(
+            `insert into agent_policies (workspace_id, allowed_models, default_model, updated_by)
+             values ($1, $2::jsonb, null, $3)
+             on conflict (workspace_id) do update set allowed_models = excluded.allowed_models`,
+            [workspaceId, JSON.stringify(models), ownerId],
+          ),
+        );
+
+      it('the Skills and the model on the proposal’s hints, and a paused run hinted against the catalog as it is now', async () => {
+        const member = await newPrincipal('member');
+        const draftName = `go8a-draft-${randomUUID().slice(0, 8)}`;
+        await admin((client) =>
+          client.query(
+            `insert into skills (workspace_id, id, version, status, name, description, markdown, proposed_by)
+             values ($1, $2, 1, 'draft', $3, 'a skill', '# Do it', $4)`,
+            [workspaceId, randomUUID(), draftName, member],
+          ),
+        );
+        const plan = {
+          steps: [
+            { key: 'draft', worker, spec: { skills: [draftName] } },
+            { key: 'model', worker, spec: { model: 'p/m1' }, dependsOn: ['draft'] },
+          ],
+        };
+        await setAllowedModels(['p/m2']);
+        try {
+          const proposed = await withCatalog(['p/m1', 'p/m2'], () =>
+            propose(human(member, 'member'), proposalOf('compose the Workers', plan)),
+          );
+          const expected = [
+            expect.objectContaining({
+              code: 'step_skill_draft',
+              stepKey: 'draft',
+              skillRefs: [draftName],
+            }),
+            expect.objectContaining({
+              code: 'step_model_not_allowed',
+              stepKey: 'model',
+              model: 'p/m1',
+            }),
+          ];
+          const stepHints = (hints: readonly { stepKey?: string }[]) =>
+            hints.filter((hint) => hint.stepKey !== undefined);
+          expect(stepHints(proposed.hints)).toEqual(expected);
+          expect(
+            stepHints((await readProposal(human(member, 'member'), proposed.goalRunId)).hints),
+          ).toEqual(expected);
+
+          // Paused, the steps that have not started are hinted — against the catalog as it is
+          // now, which no longer offers p/m1; unreadable, the model goes unchecked there.
+          const goalRunId = proposed.goalRunId;
+          await withCatalog(['p/m1', 'p/m2'], () =>
+            call(human(member, 'member'), 'confirm_goal', { goalRunId, revision: 1 }),
+          );
+          await call(human(member, 'member'), 'pause_goal', { goalRunId });
+          const pausedHints = async () =>
+            stepHints(
+              GoalDetailWireSchema.parse(
+                await call(human(member, 'member'), 'get_goal', { goalRunId }),
+              ).planRevision.hints,
+            );
+          expect(await withCatalog(['p/m2'], pausedHints)).toEqual([
+            expected[0],
+            expect.objectContaining({
+              code: 'step_model_not_offered',
+              stepKey: 'model',
+              model: 'p/m1',
+            }),
+          ]);
+          expect(await withCatalog(null, pausedHints)).toEqual(expected);
+        } finally {
+          await setAllowedModels([]);
+        }
       });
     });
 

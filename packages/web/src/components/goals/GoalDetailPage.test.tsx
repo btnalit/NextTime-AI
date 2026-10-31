@@ -281,7 +281,9 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     expect(within(spec).getByTestId('goal-step-spec-token-budget').textContent).toBe(
       (5000).toLocaleString(),
     );
-    expect(spec.textContent).toContain('不会超出 Worker 能有的上限和请求人现在的权限');
+    expect(within(spec).getByTestId('goal-step-spec-combination').textContent).toBe(
+      'Skill、门、能力范围、模型替换 Worker 原有的设定；职责说明加在 Worker 原有的系统提示之后；观察范围限定这一步的任务能读取哪些门；这一步能做的不会超出 Worker 能有的上限和请求人现在的权限；Token 上限不会超出目标剩下的预算。',
+    );
     // The step without one shows none.
     const apply = screen
       .getAllByTestId('goal-step')
@@ -334,7 +336,7 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     );
     const [hint] = screen.getAllByTestId('goal-step-hint');
     expect(hint?.textContent).toMatch(
-      /平台管理员可以在「平台 → 工作区」里允许它，或者再修订计划，换掉它或移除这一步。$/,
+      /平台管理员可以在「平台 → 工作区」里允许它，或者在对话里让入口智能体修订计划换掉它，或者在「修订计划…」里移除这一步。$/,
     );
     expect(hint?.textContent).not.toContain('驳回');
   });

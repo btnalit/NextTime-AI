@@ -270,13 +270,16 @@ describe.runIf(DATABASE_URL !== undefined)(
       return goalRunId;
     }
 
-    const advance = (goalRunId: string, requesterId: string) =>
+    /** One advance; `catalog`: the llm-proxy catalog the attempts check a WorkerSpec model
+     *  against (absent: not checked). */
+    const advance = (goalRunId: string, requesterId: string, catalog?: readonly string[]) =>
       advanceGoalRun(
         {
           pool,
           taskRuntime: taskRuntime(),
           options: NO_BACKOFF,
           onStartError: (err) => startErrors.push(err),
+          ...(catalog ? { modelCatalog: async () => new Set(catalog) } : {}),
         },
         { workspaceId, goalRunId, requesterId },
       );
@@ -334,7 +337,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       return call;
     };
 
-    const detailHints = async (goalRunId: string, requesterId: string) =>
+    const detailHints = async (
+      goalRunId: string,
+      requesterId: string,
+      catalog?: readonly string[],
+    ) =>
       (
         await asRequester(requesterId, (client) =>
           readGoalRunDetail(
@@ -342,6 +349,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             workspaceId,
             { principalId: requesterId, seesEveryRun: false },
             goalRunId,
+            catalog ? { modelCatalog: async () => new Set(catalog) } : {},
           ),
         )
       ).planRevision.hints;
@@ -562,6 +570,25 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(retried.observe_scope).toEqual([gate]);
       });
 
+      it('a Skill with a published version and a newer draft is published: no hint, the published one mounts', async () => {
+        const requester = await newPrincipal();
+        const skill = await seedSkill('published');
+        await seedSkill('draft', requester, { id: skill.id, name: skill.name, version: 2 });
+        const created = await propose(requester, [{ key: 'a', spec: { skills: [skill.name] } }]);
+        expect(stepHints(created.hints)).toEqual([]);
+        await asRequester(requester, (client) =>
+          confirmGoalRun(client, workspaceId, {
+            goalRunId: created.goalRunId,
+            revision: 1,
+            confirmedBy: requester,
+          }),
+        );
+        await advance(created.goalRunId, requester);
+        const task = await latestAttempt((await stepOf(created.goalRunId, 'a')).id);
+        expect(snapshotOf(task).skills).toEqual([{ skillId: skill.id, version: 1 }]);
+        expect(spawnOf(task.id).skillsInline?.map((mount) => mount.name)).toEqual([skill.name]);
+      });
+
       it('the WorkerSpec budget never lifts the goal’s cap', async () => {
         const requester = await newPrincipal();
         const { goalRunId } = await asRequester(requester, (client) =>
@@ -679,6 +706,123 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(snapshotOf(task)).toMatchObject({ v: 2, spec: null });
         expect(task.observe_scope).toBeNull();
         expect(spawnOf(task.id).systemPrompt).toBe(BASE_PROMPT);
+      });
+    });
+
+    describe('every attempt: what the workspace allows now (review #493 on #853)', () => {
+      it('a retry is refused for a model the workspace stopped allowing, and the pause says which step', async () => {
+        const requester = await newPrincipal();
+        const goalRunId = await startGoal(requester, [{ key: 'a', spec: { model: 'p/m1' } }]);
+        await advance(goalRunId, requester);
+        const stepA = await stepOf(goalRunId, 'a');
+        const first = await latestAttempt(stepA.id);
+        expect(spawnOf(first.id).model).toBe('p/m1');
+
+        await setAllowedModels(['p/allowed'], 'p/allowed');
+        try {
+          const spawned = supervisor.spawnCalls.length;
+          await failStep(stepA.id, requester, 'spawn_lost');
+          await advance(goalRunId, requester);
+          expect(await goalOf(goalRunId)).toMatchObject({
+            status: 'paused',
+            pauseReason: 'needs_decision',
+          });
+          expect(await stepOf(goalRunId, 'a')).toMatchObject({ status: 'ready', attemptCount: 1 });
+          expect(await attemptTasks(stepA.id)).toHaveLength(1);
+          expect(supervisor.spawnCalls).toHaveLength(spawned);
+          // The step waits to be tried again: hinted as that attempt is admitted.
+          expect(stepHints(await detailHints(goalRunId, requester))).toEqual([
+            expect.objectContaining({
+              code: 'step_model_not_allowed',
+              stepKey: 'a',
+              model: 'p/m1',
+            }),
+          ]);
+
+          // Allowed again, the retry starts with the model it was admitted with.
+          await setAllowedModels(['p/allowed', 'p/m1'], 'p/allowed');
+          await asRequester(requester, (client) =>
+            resumeGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
+          );
+          await advance(goalRunId, requester);
+          const retried = await latestAttempt(stepA.id);
+          expect(retried.step_attempt).toBe(2);
+          expect(spawnOf(retried.id).model).toBe('p/m1');
+        } finally {
+          await setAllowedModels([], null);
+        }
+      });
+    });
+
+    describe('the model as the llm-proxy catalog offers it now (coordinator on #853)', () => {
+      it('with no allowedModels, a model the catalog does not offer is refused when the first attempt starts', async () => {
+        const requester = await newPrincipal();
+        const goalRunId = await startGoal(requester, [{ key: 'a', spec: { model: 'p/gone' } }]);
+        const spawned = supervisor.spawnCalls.length;
+        await advance(goalRunId, requester, ['p/m1']);
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'needs_decision',
+        });
+        expect(await attemptTasks((await stepOf(goalRunId, 'a')).id)).toEqual([]);
+        expect(supervisor.spawnCalls).toHaveLength(spawned);
+        expect(stepHints(await detailHints(goalRunId, requester, ['p/m1']))).toEqual([
+          expect.objectContaining({
+            code: 'step_model_not_offered',
+            stepKey: 'a',
+            model: 'p/gone',
+          }),
+        ]);
+      });
+
+      it('a retry is refused once the catalog drops the model — not offered comes before not allowed', async () => {
+        const requester = await newPrincipal();
+        const goalRunId = await startGoal(requester, [{ key: 'a', spec: { model: 'p/m1' } }]);
+        await advance(goalRunId, requester, ['p/m1']);
+        const stepA = await stepOf(goalRunId, 'a');
+        expect(await attemptTasks(stepA.id)).toHaveLength(1);
+        await setAllowedModels(['p/allowed'], 'p/allowed');
+        try {
+          await failStep(stepA.id, requester, 'spawn_lost');
+          await advance(goalRunId, requester, ['p/allowed']);
+          expect(await goalOf(goalRunId)).toMatchObject({ pauseReason: 'needs_decision' });
+          expect(await attemptTasks(stepA.id)).toHaveLength(1);
+          expect(stepHints(await detailHints(goalRunId, requester, ['p/allowed']))).toEqual([
+            expect.objectContaining({ code: 'step_model_not_offered', model: 'p/m1' }),
+          ]);
+        } finally {
+          await setAllowedModels([], null);
+        }
+      });
+    });
+
+    describe('which steps a read of the run hints', () => {
+      it('none while the run is running; once paused, only the steps whose attempt has not started', async () => {
+        const requester = await newPrincipal();
+        const gate = await newGate([requester]);
+        const spec: WorkerSpec = { gates: [gate], capabilities: ['request_action'] };
+        const goalRunId = await startGoal(requester, [
+          { key: 'a', spec },
+          { key: 'b', spec, dependsOn: ['a'] },
+        ]);
+        await advance(goalRunId, requester);
+        expect(await stepOf(goalRunId, 'a')).toMatchObject({ status: 'running', attemptCount: 1 });
+        expect(await stepOf(goalRunId, 'b')).toMatchObject({ status: 'pending', attemptCount: 0 });
+
+        await revokeGrants(requester);
+        expect(await goalOf(goalRunId)).toMatchObject({ status: 'running' });
+        expect(stepHints(await detailHints(goalRunId, requester))).toEqual([]);
+
+        await asRequester(requester, (client) =>
+          pauseGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
+        );
+        expect(stepHints(await detailHints(goalRunId, requester))).toEqual([
+          expect.objectContaining({
+            code: 'step_gate_not_held',
+            stepKey: 'b',
+            gatekeeperIds: [gate],
+          }),
+        ]);
       });
     });
 

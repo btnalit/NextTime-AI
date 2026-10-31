@@ -91,12 +91,14 @@ import {
  * attempt may hold. Its components are admitted when the first attempt starts
  * ({@link workerSpecComponentRefusals}, the one rule the confirmation card's hints apply too):
  * every Skill it names published (a draft one waits for a person — `needs_approval`, approved by
- * S11 GO8b; a deprecated one is refused), its model one the workspace allows; then its
+ * S11 GO8b; a deprecated one is refused), its model one the llm-proxy catalog offers and the
+ * workspace allows (legacy 302's rule for a WorkerDefinition's model, and `allowedModels`); then its
  * `instructions` follow the definition's prompt (`composeSystemPrompt`), its `tokenBudget` caps the
  * attempt's, and its `observeScope` is the Task's observation scope (S11 GO11). The snapshot keeps
  * the WorkerSpec's digest (version 2): a later attempt starts only for the same WorkerSpec — a
- * revision that changes it is a new StepRun, admitted afresh — and reuses what the first one
- * resolved without admitting its components again; its authority is checked every time.
+ * revision that changes it is a new StepRun, admitted afresh — and reuses the Skills the first one
+ * resolved without admitting them again; its authority and its model ({@link
+ * workerSpecModelRefusal}: offered and allowed now) are checked every time.
  *
  * S10 E3-2c (legacy 514): no attempt starts while the evaluation seal pauses the agents acting for
  * the requester (`paused`) — the Worker start would be refused anyway (`spawnWorkerRun`), and that
@@ -130,7 +132,8 @@ export type StepAttemptRefusal =
   /** S11 GO8a (I-G8): what the step's WorkerSpec admits does not run as it is — it names Skills
    *  that are only drafts (`skill_draft`, `needs_approval`: a person approves one trial, S11 GO8b,
    *  never the platform by itself), Skills whose versions were all deprecated (`skill_deprecated`,
-   *  `rejected`), or a model the workspace does not allow (`model_not_allowed`, `rejected`). */
+   *  `rejected`), a model the llm-proxy catalog does not offer (`model_not_offered`, `rejected`) or
+   *  one the workspace does not allow (`model_not_allowed`, `rejected`). */
   | {
       readonly kind: 'admission';
       readonly verdict: 'needs_approval' | 'rejected';
@@ -138,7 +141,7 @@ export type StepAttemptRefusal =
       readonly detail: string;
       /** `skill_draft` / `skill_deprecated`: the Skills, as the WorkerSpec names them. */
       readonly skillRefs?: readonly string[];
-      /** `model_not_allowed`: the model the WorkerSpec sets. */
+      /** `model_not_offered` / `model_not_allowed`: the model the WorkerSpec sets. */
       readonly model?: string;
     }
   /** An I18 quota: `concurrency_exceeded` clears by itself, `daily_cost_exceeded` with the day. */
@@ -148,7 +151,11 @@ export type StepAttemptRefusal =
   | { readonly kind: 'paused'; readonly detail: string };
 
 /** Why a WorkerSpec's admission does not say `run` — see {@link StepAttemptRefusal}. */
-export type WorkerSpecAdmissionReason = 'skill_draft' | 'skill_deprecated' | 'model_not_allowed';
+export type WorkerSpecAdmissionReason =
+  | 'skill_draft'
+  | 'skill_deprecated'
+  | 'model_not_offered'
+  | 'model_not_allowed';
 
 export interface CreateStepAttemptInput {
   readonly goalRunId: string;
@@ -172,6 +179,10 @@ export interface CreateStepAttemptInput {
   readonly tokenCap: number | null;
   /** What is left of the goal's wall-clock budget, in seconds. */
   readonly durationCapSec: number;
+  /** S11 GO8a: the model ids a WorkerSpec's `model` may name — the llm-proxy catalog, read only
+   *  when the step's WorkerSpec sets a model (unreadable: it throws, and the advance with it).
+   *  Absent: the catalog is not checked, `allowedModels` still is. */
+  readonly modelCatalog?: () => Promise<ReadonlySet<string>>;
 }
 
 /** Everything {@link startStepAttemptTask} needs after the creating transaction commits. */
@@ -390,8 +401,8 @@ export async function resolveStepAuthority(
  * are the requester's authority, {@link resolveStepAuthority}):
  *   1. Skills not there for the requester (a draft someone else proposed included) — `unavailable`;
  *   2. Skills whose versions were all deprecated — `rejected` (`skill_deprecated`);
- *   3. a model outside the workspace's AgentPolicy `allowedModels` — `rejected`
- *      (`model_not_allowed`);
+ *   3. a model the llm-proxy catalog does not offer, or outside the workspace's AgentPolicy
+ *      `allowedModels` — `rejected` ({@link workerSpecModelRefusal});
  *   4. Skills that are only drafts the requester may see — `needs_approval` (`skill_draft`).
  * The first one is why an attempt does not start; the confirmation card hints every one. A step
  * without a WorkerSpec, or one that sets neither Skills nor a model, has none: the definition's
@@ -402,6 +413,7 @@ export async function workerSpecComponentRefusals(
   workspaceId: string,
   parent: Pick<StepParent, 'viewer' | 'allowedModels'>,
   spec: WorkerSpec | null,
+  offered: ReadonlySet<string> | null,
 ): Promise<readonly StepAttemptRefusal[]> {
   if (spec === null) return [];
   const refusals: StepAttemptRefusal[] = [];
@@ -424,19 +436,8 @@ export async function workerSpecComponentRefusals(
       skillRefs: skills.deprecated,
     });
   }
-  if (
-    spec.model !== undefined &&
-    parent.allowedModels.length > 0 &&
-    !parent.allowedModels.includes(spec.model)
-  ) {
-    refusals.push({
-      kind: 'admission',
-      verdict: 'rejected',
-      reason: 'model_not_allowed',
-      detail: `the step's WorkerSpec sets model "${spec.model}", which this workspace does not allow`,
-      model: spec.model,
-    });
-  }
+  const model = workerSpecModelRefusal(parent, spec, offered);
+  if (model) refusals.push(model);
   if (skills && skills.drafts.length > 0) {
     refusals.push({
       kind: 'admission',
@@ -450,9 +451,46 @@ export async function workerSpecComponentRefusals(
 }
 
 /**
+ * S11 GO8a (I-G8): why a WorkerSpec's model does not run now — `rejected` either way:
+ *   - `model_not_offered`: the llm-proxy catalog (`offered`; `null`: not checked) does not offer
+ *     it — the rule legacy 302 holds a WorkerDefinition's model to when it is published, and what
+ *     the plan was validated against when it was proposed, confirmed or revised;
+ *   - `model_not_allowed`: the workspace's AgentPolicy `allowedModels` leaves it out (an empty list
+ *     allows every model the catalog offers).
+ * Unlike its Skills, checked for every attempt (review #493 on #853): a model the catalog dropped,
+ * or an admin narrowed `allowedModels` past, after the first attempt started is not spawned again.
+ */
+export function workerSpecModelRefusal(
+  parent: Pick<StepParent, 'allowedModels'>,
+  spec: WorkerSpec | null,
+  offered: ReadonlySet<string> | null,
+): StepAttemptRefusal | null {
+  const model = spec?.model;
+  if (model === undefined) return null;
+  if (offered !== null && !offered.has(model)) {
+    return {
+      kind: 'admission',
+      verdict: 'rejected',
+      reason: 'model_not_offered',
+      detail: `the step's WorkerSpec sets model "${model}", which the llm-proxy catalog does not offer`,
+      model,
+    };
+  }
+  if (parent.allowedModels.length === 0 || parent.allowedModels.includes(model)) return null;
+  return {
+    kind: 'admission',
+    verdict: 'rejected',
+    reason: 'model_not_allowed',
+    detail: `the step's WorkerSpec sets model "${model}", which this workspace does not allow`,
+    model,
+  };
+}
+
+/**
  * Half 1 — see the module doc comment. Runs in the caller's transaction (`client`, bound to the
  * requester's workspace). Returns `refused` without writing anything; throws only on a database
- * error (the caller's transaction then rolls back whole).
+ * error or an unreadable model catalog (`modelCatalog`; the caller's transaction then rolls back
+ * whole).
  */
 export async function createStepAttemptTask(
   client: PoolClient,
@@ -498,8 +536,20 @@ export async function createStepAttemptTask(
   if (authority.kind === 'refused') return refused(authority.refusal);
   const { definition, content, declaredCapabilities, declaredGates, parent, childScope } =
     authority;
+  const offered =
+    input.spec?.model !== undefined && input.modelCatalog ? await input.modelCatalog() : null;
   if (!input.previous) {
-    const [refusal] = await workerSpecComponentRefusals(client, workspaceId, parent, input.spec);
+    const [refusal] = await workerSpecComponentRefusals(
+      client,
+      workspaceId,
+      parent,
+      input.spec,
+      offered,
+    );
+    if (refusal) return refused(refusal);
+  } else {
+    // A later attempt reuses its first attempt's Skills; its model is checked as it stands now.
+    const refusal = workerSpecModelRefusal(parent, input.spec, offered);
     if (refusal) return refused(refusal);
   }
 

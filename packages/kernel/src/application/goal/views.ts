@@ -313,6 +313,9 @@ export interface PlanRevisionView {
 /** Legacy 513: what a read served to a person adds — see `planAuthorityHints`' `checkAccounts`. */
 export interface GoalReadOptions {
   readonly checkAccounts?: boolean;
+  /** S11 GO8a: the llm-proxy catalog a paused run's steps are hinted against — see
+   *  `planAuthorityHints`' `modelCatalog`. */
+  readonly modelCatalog?: () => Promise<ReadonlySet<string> | null>;
 }
 
 async function planRevisionView(
@@ -332,10 +335,10 @@ async function planRevisionView(
   const plan = parsed.data;
   // S11 GO5c: the proposal of a run still proposed is what the confirmation card shows — with what
   // the requester's authority would stop now, worked out on every read (`precheck.ts`). S11 GO8a:
-  // so is the revision in force of a paused run, for the steps that have not started an attempt —
-  // the pause then says which step would not start, and why (a draft Skill waiting for a person,
-  // a gate the requester lost).
-  const checked = await stepsToCheck(client, workspaceId, goal, revision, plan);
+  // so is the revision in force of a paused run, for the steps that have not started an attempt or
+  // wait to be tried again — the pause then says which step would not start, and why (a draft
+  // Skill waiting for a person, a gate the requester lost, a model no longer allowed).
+  const { steps: checked, retried } = await stepsToCheck(client, workspaceId, goal, revision, plan);
   return {
     revision,
     plan: planAsRead(plan),
@@ -347,7 +350,13 @@ async function planRevisionView(
             workspaceId,
             goal.onBehalfOf,
             { ...plan, steps: checked },
-            { checkAccounts: options.checkAccounts === true },
+            {
+              checkAccounts: options.checkAccounts === true,
+              retried,
+              ...(goal.status === 'paused' && options.modelCatalog
+                ? { modelCatalog: options.modelCatalog }
+                : {}),
+            },
           )
         : []),
     ],
@@ -357,24 +366,33 @@ async function planRevisionView(
 
 /** The steps of `plan` whose authority and admission a read of `revision` works out: every step of
  *  a run's proposal while it is proposed; for a paused run's revision in force, the steps whose
- *  StepRun there has not started an attempt (`pending` or `ready`); none otherwise. */
+ *  StepRun there has not started an attempt (`pending` or `ready`) and the ones `ready` to be tried
+ *  again (`retried`: checked as a later attempt is, `precheck.ts`); none otherwise. A step running,
+ *  waiting or ended has no next attempt to admit. */
 async function stepsToCheck(
   client: PoolClient,
   workspaceId: string,
   goal: GoalRunRow,
   revision: PlanRevisionRow,
   plan: GoalPlan,
-): Promise<GoalPlan['steps']> {
-  if (goal.status === 'proposed') return revision.revision === 1 ? plan.steps : [];
-  if (goal.status !== 'paused' || revision.revision !== goal.currentRevision) return [];
-  const notStarted = new Set(
-    (await listStepRuns(client, workspaceId, goal.id))
-      .filter(
-        (step) => step.attemptCount === 0 && (step.status === 'pending' || step.status === 'ready'),
-      )
-      .map((step) => step.stepKey),
-  );
-  return plan.steps.filter((step) => notStarted.has(step.key));
+): Promise<{ readonly steps: GoalPlan['steps']; readonly retried: ReadonlySet<string> }> {
+  const retried = new Set<string>();
+  if (goal.status === 'proposed') {
+    return { steps: revision.revision === 1 ? plan.steps : [], retried };
+  }
+  if (goal.status !== 'paused' || revision.revision !== goal.currentRevision) {
+    return { steps: [], retried };
+  }
+  const next = new Set<string>();
+  for (const step of await listStepRuns(client, workspaceId, goal.id)) {
+    if (step.attemptCount === 0 && (step.status === 'pending' || step.status === 'ready')) {
+      next.add(step.stepKey);
+    } else if (step.attemptCount > 0 && step.status === 'ready') {
+      next.add(step.stepKey);
+      retried.add(step.stepKey);
+    }
+  }
+  return { steps: plan.steps.filter((step) => next.has(step.key)), retried };
 }
 
 /** `params` with each suspected credential replaced — see the module comment. */

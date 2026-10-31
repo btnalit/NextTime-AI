@@ -18637,6 +18637,7 @@
                       "step_account_not_connected",
                       "step_skill_draft",
                       "step_skill_deprecated",
+                      "step_model_not_offered",
                       "step_model_not_allowed"
                     ],
                     "type": "string"
@@ -20711,6 +20712,7 @@
                   "step_account_not_connected",
                   "step_skill_draft",
                   "step_skill_deprecated",
+                  "step_model_not_offered",
                   "step_model_not_allowed"
                 ],
                 "type": "string"
@@ -44380,6 +44382,7 @@
                   "step_account_not_connected",
                   "step_skill_draft",
                   "step_skill_deprecated",
+                  "step_model_not_offered",
                   "step_model_not_allowed"
                 ],
                 "type": "string"
@@ -53097,6 +53100,7 @@
                   "step_account_not_connected",
                   "step_skill_draft",
                   "step_skill_deprecated",
+                  "step_model_not_offered",
                   "step_model_not_allowed"
                 ],
                 "type": "string"

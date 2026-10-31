@@ -6,6 +6,7 @@ import {
   type StepAttemptRefusal,
   resolveStepAuthority,
   workerSpecComponentRefusals,
+  workerSpecModelRefusal,
 } from '../task/index.js';
 
 /**
@@ -26,8 +27,11 @@ import {
  * S11 GO8a: a step's WorkerSpec is checked the way its first attempt's admission checks it — its
  * gates and capabilities as the requester's authority (`resolveStepAuthority` with the WorkerSpec),
  * then its components (`workerSpecComponentRefusals`): a draft Skill it names (the step would wait
- * for a person's approval), a deprecated one or a model the workspace does not allow (refused), one
- * hint each. A Skill that is not there is not a hint: the plan no longer validates.
+ * for a person's approval), a deprecated one, or a model the workspace does not allow or — with a
+ * `modelCatalog`, a paused run's read — the llm-proxy catalog no longer offers (refused), one hint
+ * each. A Skill that is not there is not a hint: the plan no longer validates. A step of a
+ * paused run waiting to be tried again (`retried`) is checked the way a later attempt is: its
+ * authority and its model, never its Skills — that attempt reuses the ones its first one mounted.
  *
  * Legacy 513: a read served to a person (`checkAccounts`) also asks each gate a step that would
  * start declares whether the requester has connected their own account there
@@ -83,7 +87,10 @@ function stepHint(key: string, refusal: StepAttemptRefusal): PlanHint | null {
       };
     }
     return {
-      code: 'step_model_not_allowed',
+      code:
+        refusal.reason === 'model_not_offered'
+          ? 'step_model_not_offered'
+          : 'step_model_not_allowed',
       message: `step "${key}": ${refusal.detail} — ${consequence}`,
       stepKey: key,
       ...(refusal.model !== undefined ? { model: refusal.model } : {}),
@@ -95,9 +102,10 @@ function stepHint(key: string, refusal: StepAttemptRefusal): PlanHint | null {
   return null;
 }
 
-/** What one step is checked as: its Worker version, whether it is nested, its WorkerSpec. */
-function checkKey(step: PlanStep): string {
-  return `${step.worker.definitionId}@${step.worker.version}:${step.nested === true}:${canonicalJson(step.spec ?? null)}`;
+/** What one step is checked as: as a first or a later attempt, its Worker version, whether it is
+ *  nested, its WorkerSpec. */
+function checkKey(step: PlanStep, retried: boolean): string {
+  return `${retried ? 'later' : 'first'}:${step.worker.definitionId}@${step.worker.version}:${step.nested === true}:${canonicalJson(step.spec ?? null)}`;
 }
 
 /** What a step's check found: the gates an attempt would start on, or why it would not. */
@@ -109,6 +117,14 @@ export interface PlanAuthorityHintOptions {
   /** Legacy 513: also ask the gates about the requester's own accounts — only on a read served to
    *  a person (`servesPerson`). */
   readonly checkAccounts?: boolean;
+  /** S11 GO8a: the keys of `plan`'s steps whose next attempt is a later one — checked as that
+   *  attempt is admitted (the module comment). */
+  readonly retried?: ReadonlySet<string>;
+  /** S11 GO8a: the llm-proxy catalog a WorkerSpec's model is checked against — read once, only
+   *  when a step checked sets a model; `null` from it (unreadable) or absent: not checked. A plan
+   *  is validated against it when proposed, confirmed or revised (`validatePlan`), so only a paused
+   *  run's read passes it, for a catalog that changed since. */
+  readonly modelCatalog?: () => Promise<ReadonlySet<string> | null>;
 }
 
 /**
@@ -118,7 +134,7 @@ export interface PlanAuthorityHintOptions {
  * `checkAccounts`, one per step that would start on a gate where the requester has not connected
  * their account. Steps pinned to the same Worker version with the same WorkerSpec are checked
  * once. `plan`'s steps are the ones checked (`views.ts` passes a paused run's steps that have not
- * started).
+ * started, or wait to be tried again).
  */
 export async function planAuthorityHints(
   client: PoolClient,
@@ -131,11 +147,16 @@ export async function planAuthorityHints(
   const startingGates: { readonly stepKey: string; readonly gatekeeperIds: readonly string[] }[] =
     [];
   const seen = new Map<string, StepCheck>();
+  const offered =
+    options.modelCatalog && plan.steps.some((step) => step.spec?.model !== undefined)
+      ? await options.modelCatalog()
+      : null;
   for (const step of plan.steps) {
-    const key = checkKey(step);
+    const retried = options.retried?.has(step.key) === true;
+    const key = checkKey(step, retried);
     let checked = seen.get(key);
     if (checked === undefined) {
-      checked = await checkStep(client, workspaceId, requesterId, step);
+      checked = await checkStep(client, workspaceId, requesterId, step, retried, offered);
       seen.set(key, checked);
     }
     if (checked.kind === 'starts') {
@@ -178,13 +199,16 @@ export async function planAuthorityHints(
   return hints;
 }
 
-/** One step as its first attempt would be admitted now: the requester's authority over what it
- *  declares (with its WorkerSpec), then its WorkerSpec's components. */
+/** One step as its next attempt would be admitted now: the requester's authority over what it
+ *  declares (with its WorkerSpec), then its WorkerSpec's components — for a later attempt
+ *  (`retried`), its model only (`createStepAttemptTask`). */
 async function checkStep(
   client: PoolClient,
   workspaceId: string,
   requesterId: string,
   step: PlanStep,
+  retried: boolean,
+  offered: ReadonlySet<string> | null,
 ): Promise<StepCheck> {
   const spec = step.spec ?? null;
   const authority = await resolveStepAuthority(
@@ -196,7 +220,12 @@ async function checkStep(
     spec,
   );
   if (authority.kind === 'refused') return { kind: 'refused', refusals: [authority.refusal] };
-  const refusals = await workerSpecComponentRefusals(client, workspaceId, authority.parent, spec);
+  const model = retried ? workerSpecModelRefusal(authority.parent, spec, offered) : null;
+  const refusals = retried
+    ? model
+      ? [model]
+      : []
+    : await workerSpecComponentRefusals(client, workspaceId, authority.parent, spec, offered);
   return refusals.length > 0
     ? { kind: 'refused', refusals }
     : { kind: 'starts', gatekeeperIds: authority.declaredGates };

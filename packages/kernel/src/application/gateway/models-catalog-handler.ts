@@ -207,6 +207,14 @@ export async function readModelCatalog(
   return (await readModelCatalogWithHealth(env)).items;
 }
 
+/** The catalog's model ids — the membership a model reference is checked against (legacy 302's
+ *  WorkerDefinition model, S11 GO8a's WorkerSpec model). Unreadable: `ModelsCatalogUnavailableError`. */
+export async function readModelCatalogIds(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<ReadonlySet<string>> {
+  return new Set((await readModelCatalog(env, { withHealth: false })).map((entry) => entry.id));
+}
+
 export const listModelsHandler: CapabilityHandler = async () => {
   const items = await readModelCatalog();
   return { result: { items } };

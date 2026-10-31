@@ -261,6 +261,9 @@ export type GoalPlan = z.infer<typeof GoalPlanSchema>;
  *         for approval and does not start (S11 GO8b approves one trial);
  *       - `step_skill_deprecated` — it names Skills whose published versions were all deprecated
  *         (`skillRefs`): refused until the plan names others;
+ *       - `step_model_not_offered` — the model it sets is not in the llm-proxy catalog any more
+ *         (`model`; the plan was validated against it): refused until the catalog offers it again
+ *         or the plan names another;
  *       - `step_model_not_allowed` — the model it sets is not one the workspace allows (`model`):
  *         refused until the plan names another.
  *     Worked out on every read like the others: authority and Skills change, and the attempt's own
@@ -278,6 +281,7 @@ export const PLAN_HINT_CODE_VALUES = [
   'step_account_not_connected',
   'step_skill_draft',
   'step_skill_deprecated',
+  'step_model_not_offered',
   'step_model_not_allowed',
 ] as const;
 export type PlanHintCode = (typeof PLAN_HINT_CODE_VALUES)[number];
@@ -298,7 +302,8 @@ export const PlanHintSchema = z
     /** S11 GO8a: the Skills a `step_skill_draft` / `step_skill_deprecated` step's WorkerSpec names,
      *  as it names them. */
     skillRefs: z.array(z.string()).optional(),
-    /** S11 GO8a: the model a `step_model_not_allowed` step's WorkerSpec sets. */
+    /** S11 GO8a: the model a `step_model_not_offered` / `step_model_not_allowed` step's WorkerSpec
+     *  sets. */
     model: z.string().optional(),
   })
   .strict();

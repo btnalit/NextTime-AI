@@ -300,6 +300,9 @@ export interface GoalAdvanceDeps {
    *  `startStepAttemptTask` turns into a failed Task itself), or when terminating a cancelled
    *  run's Task fails (the next advance tries again). */
   readonly onStartError?: (error: unknown) => void;
+  /** S11 GO8a: the llm-proxy catalog a step's WorkerSpec model is checked against when an attempt
+   *  starts (`createStepAttemptTask`'s `modelCatalog`). Absent: not checked. */
+  readonly modelCatalog?: () => Promise<ReadonlySet<string>>;
 }
 
 export interface GoalAdvanceTarget {
@@ -461,7 +464,7 @@ export async function advanceGoalRun(
           attempts: [],
         };
       }
-      const advance = new Advance(client, goal, now, deps.options ?? {});
+      const advance = new Advance(client, goal, now, deps.options ?? {}, deps.modelCatalog);
       return advance.run();
     },
   );
@@ -523,9 +526,17 @@ class Advance {
   private readonly revisions = new Map<number, PlanRevisionRow | null>();
   /** The run's live Tasks as the advance began. Only phase D creates Tasks, after its last read. */
   private liveTasks: readonly LiveGoalTask[] = [];
+  private readonly modelCatalog: (() => Promise<ReadonlySet<string>>) | undefined;
 
-  constructor(client: PoolClient, goal: GoalRunRow, now: Date, options: GoalAdvancerOptions) {
+  constructor(
+    client: PoolClient,
+    goal: GoalRunRow,
+    now: Date,
+    options: GoalAdvancerOptions,
+    modelCatalog?: () => Promise<ReadonlySet<string>>,
+  ) {
     this.client = client;
+    this.modelCatalog = modelCatalog;
     this.goal = goal;
     this.now = now;
     this.retryBackoffMs = options.retryBackoffMs ?? defaultRetryBackoffMs;
@@ -1218,6 +1229,7 @@ class Advance {
       previous,
       tokenCap,
       durationCapSec: Math.max(1, Math.floor((this.deadline - this.now.getTime()) / 1000)),
+      ...(this.modelCatalog ? { modelCatalog: this.modelCatalog } : {}),
     });
     if (result.kind === 'refused') {
       if (result.refusal.kind === 'paused') {
