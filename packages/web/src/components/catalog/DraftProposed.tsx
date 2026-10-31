@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useFocusWhenKeyLost } from '../../hooks/useFocusWhenLost.js';
 import { usePublishCredentialReview } from '../../lib/credential-review.js';
+import { definitionReferenceRefusalOf } from '../../lib/definition-reference.js';
 import { errorToastText } from '../../lib/errors.js';
 import { actionKindTagText, actionKindTagToastText } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
@@ -11,6 +12,7 @@ import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Notice } from '../ui/Notice.js';
 import { StatusChip } from '../ui/StatusChip.js';
 import { useToast } from '../ui/Toast.js';
+import { PublishReferenceProblem } from './PublishReferenceProblem.js';
 
 export interface ProposedDraft {
   readonly id: string;
@@ -114,6 +116,9 @@ export function DraftProposed({
       // The kernel's credential question — answered next to Publish, not as a failure.
       if (credentialReview.capture(err)) return;
       setError(err);
+      // Legacy 302: a Worker draft naming what is not there — said field by field next to
+      // Publish, as on the catalog's draft detail, not again in a toast.
+      if (definitionReferenceRefusalOf(err) !== null) return;
       toast.push({
         tone: 'danger',
         title: t(`无法发布 ${shownName}`, `Could not publish ${shownName}`),
@@ -124,6 +129,7 @@ export function DraftProposed({
     }
   }
 
+  const references = error !== null ? definitionReferenceRefusalOf(error) : null;
   return (
     <div className="stack" data-testid="draft-proposed" data-draft-id={draft.id}>
       <div className="row-wrap">
@@ -155,7 +161,11 @@ export function DraftProposed({
           ? ` ${unpublishedConsequence}`
           : ''}
       </Notice>
-      {error !== null ? <ErrorBanner error={error} testId="draft-publish-error" /> : null}
+      {references !== null ? (
+        <PublishReferenceProblem refusal={references} />
+      ) : error !== null ? (
+        <ErrorBanner error={error} testId="draft-publish-error" />
+      ) : null}
       {status === 'draft' && onPublish ? (
         <CredentialReview
           count={credentialReview.count}

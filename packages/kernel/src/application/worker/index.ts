@@ -30,6 +30,16 @@ export {
   WorkerDefinitionValidationError,
 } from './definitions.js';
 export {
+  unresolvedWorkerDefinitionReferences,
+  WORKER_DEFINITION_REFERENCE_FIELDS,
+  WorkerDefinitionReferenceError,
+} from './definition-references.js';
+export type {
+  UnresolvedWorkerDefinitionReferences,
+  WorkerDefinitionReferenceField,
+  WorkerDefinitionReferenceSources,
+} from './definition-references.js';
+export {
   EntryTemplateChangedError,
   EntryTemplateCurrentError,
   entryTemplateDigest,

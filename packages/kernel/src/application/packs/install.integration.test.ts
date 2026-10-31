@@ -449,6 +449,31 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect((await preview(ws, 'crew')).plan.unchanged).toBe(true);
     });
 
+    it('legacy 302: a fresh install publishes a Worker mounting Skills the same install creates', async () => {
+      // Nothing of crew is there yet: its two Skills and the Worker that mounts both are written
+      // in the one install transaction, Skills first, and the Worker's publish sees them.
+      const ws = await newWorkspace();
+      const dryRun = await preview(ws, 'crew');
+      expect(dryRun.plan.items.map((item) => [item.ordinal, item.kind])).toEqual([
+        [1, 'skill_version'],
+        [2, 'skill_version'],
+        [3, 'worker_definition_version'],
+      ]);
+      await install(ws, {
+        name: 'crew',
+        version: 2,
+        reviewedDigest: dryRun.plan.digest,
+        confirmedOrdinals: [1, 2, 3],
+      });
+      expect(
+        await rows(
+          ws,
+          `select definition -> 'skills' as skills, status from worker_definitions
+           where workspace_id = $1 and kind = 'worker' order by version`,
+        ),
+      ).toEqual([{ skills: ['crew-fix', 'crew-check'], status: 'published' }]);
+    });
+
     it('a Skill name the workspace already uses: the preview is refused (409 skill_name_conflict)', async () => {
       const ws = await newWorkspace();
       await inWorkspace(ws, async (client) => {

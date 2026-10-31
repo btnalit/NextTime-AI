@@ -40,6 +40,7 @@ import {
   FamilyDraftPendingError,
   SkillFamilyNameChangedError,
   SkillNameConflictError,
+  WorkerDefinitionReferenceError,
 } from '../../application/worker/index.js';
 import { ApprovalReasonRequiredError } from '../../governance/approval/index.js';
 import {
@@ -239,6 +240,16 @@ describe('mapDispatchError — legacy 175 observe params', () => {
       'target',
       'carries what looks like a credential',
     );
+    expect(mapDispatchError(err)).toEqual({
+      code: WS_ERROR_CODES.INVALID_PARAMS,
+      message: err.message,
+    });
+  });
+
+  it('WorkerDefinitionReferenceError (legacy 302) maps to INVALID_PARAMS with its message', () => {
+    const err = new WorkerDefinitionReferenceError('WorkerDefinition wd-1@2', {
+      gates: ['gk-gone'],
+    });
     expect(mapDispatchError(err)).toEqual({
       code: WS_ERROR_CODES.INVALID_PARAMS,
       message: err.message,

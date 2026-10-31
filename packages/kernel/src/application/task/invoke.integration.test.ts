@@ -22,6 +22,7 @@ import {
   generateEphemeralHandleKeyPair,
   issueHandle,
 } from '../../governance/capability/index.js';
+import { registerGatekeeper } from '../../governance/gatekeepers/registry.js';
 import { withAdminClient } from '../gateway/auth.js';
 import { composeSystemPrompt, updatePlatformSettings } from '../platform/index.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
@@ -683,10 +684,27 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
   });
 
   it('入口 Handle 请求含 execute 的子 Handle 被拒 — attenuation rejection, no Task row left running', async () => {
+    // A gate this workspace has (legacy 302: a published Worker names only Gatekeepers that are
+    // there).
+    const gatekeeperId = await inTx(ownerId, async (client) => {
+      const activity = await client.query<{ id: string }>(
+        `insert into activities (workspace_id, kind, status, started_by) values ($1, 'test.invoke-worker', 'running', $2) returning id`,
+        [workspaceId, ownerId],
+      );
+      const gate = await registerGatekeeper(client, workspaceId, {
+        name: 'invoke-needs-grant-gate',
+        transportKind: 'http',
+        target: 'needs-grant-system',
+        endpoint: 'https://needs-grant-gate.example.invalid',
+        activityId: activity.rows[0]?.id ?? '',
+        registeredBy: { id: ownerId, kind: 'human' },
+      });
+      return gate.gatekeeperId;
+    });
     const definition = await publishWorkerDef({
       systemPrompt: 'You are an execute-needing worker.',
       capabilities: ['get_object', '<gate>.<op>:execute'],
-      gates: ['gk-needs-grant'],
+      gates: [gatekeeperId],
     });
     const sessionId = await insertSession('entry', ownerId, ownerId);
     const issued = await issueTestHandle(sessionId, entryScope()); // never holds execute-class caps

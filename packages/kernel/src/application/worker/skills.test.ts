@@ -264,6 +264,13 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('links an already-published WorkerDefinition that declares this Skill in its skills[]', async () => {
         const skillName = `linked-skill-${randomUUID()}`;
 
+        // A WorkerDefinition publishes only once the Skills it names are published (legacy 302),
+        // so the one already published when a Skill publishes names an earlier version of it.
+        const skillV1 = await inTx(proposerId, (client) =>
+          proposeSkill(client, workspaceId, proposerId, { ...VALID_SKILL, name: skillName }),
+        );
+        await inTx(ownerId, (client) => publishSkill(client, workspaceId, ownerId, skillV1.id));
+
         const workerDraft = await inTx(ownerId, (client) =>
           proposeWorkerDefinition(client, workspaceId, ownerId, {
             kind: 'worker',
@@ -277,10 +284,15 @@ describe.runIf(DATABASE_URL !== undefined)(
           }),
         );
 
-        const skillDraft = await inTx(proposerId, (client) =>
-          proposeSkill(client, workspaceId, proposerId, { ...VALID_SKILL, name: skillName }),
+        const skillV2 = await inTx(proposerId, (client) =>
+          proposeSkill(client, workspaceId, proposerId, {
+            ...VALID_SKILL,
+            skillId: skillV1.id,
+            name: skillName,
+            markdown: `${VALID_SKILL.markdown}\n\nNow with more care.`,
+          }),
         );
-        await inTx(ownerId, (client) => publishSkill(client, workspaceId, ownerId, skillDraft.id));
+        await inTx(ownerId, (client) => publishSkill(client, workspaceId, ownerId, skillV2.id));
 
         const workerDefObject = await inTx(ownerId, (client) =>
           graphStore.getObjectByIdentity(client, workspaceId, 'WorkerDefinition', {

@@ -306,7 +306,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           definition: {
             systemPrompt: 'You need real gate access.',
             capabilities: ['<gate>.<op>:execute'],
-            gates: ['gk-somewhere'],
+            gates: [gatekeeperId],
           },
         }),
       );

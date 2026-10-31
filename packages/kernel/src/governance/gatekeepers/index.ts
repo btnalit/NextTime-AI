@@ -23,6 +23,7 @@ export {
   normalizeGateEndpoint,
   setGatekeeperConnectionSecretSalt,
   findGatekeeperIdByConnectionSecretSalt,
+  existingGatekeeperIds,
   GatekeeperNotFoundError,
 } from './registry.js';
 export type {

@@ -262,6 +262,25 @@ export async function listGatekeepers(
   });
 }
 
+/** Which of `ids` name a Gatekeeper Object of `workspaceId`, exactly as written (legacy 302: a
+ *  WorkerDefinition's `gates` must name Gatekeepers that are there before it is published). A
+ *  Gatekeeper is there when its Object is, whatever its connection config holds (`listGatekeepers`
+ *  lists every one, so a gate the console offers is never refused here). Compared as text, so an id
+ *  that is not a uuid, or one spelled in another case than the stored id, is simply not there. */
+export async function existingGatekeeperIds(
+  client: PoolClient,
+  workspaceId: string,
+  ids: readonly string[],
+): Promise<ReadonlySet<string>> {
+  if (ids.length === 0) return new Set();
+  const result = await client.query<{ id: string }>(
+    `select id::text as id from objects
+     where workspace_id = $1 and object_type = 'Gatekeeper' and id::text = any($2::text[])`,
+    [workspaceId, [...ids]],
+  );
+  return new Set(result.rows.map((row) => row.id));
+}
+
 /** Every named Gatekeeper's name as reads show it (`displayedGatekeeperName`), by Gatekeeper id —
  *  what `find_operations` matches a need's tokens against (legacy 387: a token that matched the
  *  stored name could say a credential written there before legacy 186 exists). A Gatekeeper with

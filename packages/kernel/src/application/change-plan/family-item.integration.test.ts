@@ -265,6 +265,16 @@ describe.runIf(DATABASE_URL !== undefined)(
       const definitionId = randomUUID();
       const w1 = { name: 'fixer', systemPrompt: 'You fix things.' };
       const w2 = { ...w1, systemPrompt: 'You fix things carefully.', skills: ['fix-it'] };
+      // What v2 mounts is there: publishing a version that names a Skill with no published
+      // version is refused (legacy 302).
+      await inWorkspace(ws, async (client) => {
+        const draft = await proposeSkill(client, ws.workspaceId, ws.ownerId, {
+          name: 'fix-it',
+          description: 'Fix the thing.',
+          markdown: 'body',
+        });
+        await publishSkill(client, ws.workspaceId, ws.ownerId, draft.id);
+      });
 
       expect((await plan(ws, workerSegment(definitionId, w1))).items[0]).toMatchObject({
         kind: 'worker_definition_version',

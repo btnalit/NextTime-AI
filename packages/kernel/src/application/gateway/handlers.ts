@@ -296,7 +296,7 @@ import {
   rotateApiKeyHandler,
   setPrincipalRoleHandler,
 } from './members-handlers.js';
-import { listModelsHandler } from './models-catalog-handler.js';
+import { listModelsHandler, readModelCatalog } from './models-catalog-handler.js';
 import {
   getTypeHandler,
   listOntologyVersionsHandler,
@@ -1215,6 +1215,14 @@ const publishWorkerDefinitionHandler: CapabilityHandler = async (client, workspa
     caller.id,
     { definitionId, version },
     { principalId: caller.id, role: caller.role, credentialsReviewed },
+    // Legacy 302: a model the version names is one the llm-proxy catalog offers — read as
+    // `set_agent_profile` reads it (unreadable: 503, never published unchecked).
+    {
+      modelCatalog: async () =>
+        new Set(
+          (await readModelCatalog(process.env, { withHealth: false })).map((entry) => entry.id),
+        ),
+    },
   );
   return {
     result: toWireWorkerDefinition(row),

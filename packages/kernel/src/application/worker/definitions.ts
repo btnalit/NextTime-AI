@@ -14,6 +14,10 @@ import {
 } from '../../governance/capability/index.js';
 import { assertDraftCredentialsReviewed } from '../../governance/redaction/index.js';
 import { projectWorkerDefinitionObject } from '../../substrate/ontology/index.js';
+import {
+  type WorkerDefinitionReferenceSources,
+  assertWorkerDefinitionReferencesResolve,
+} from './definition-references.js';
 import { assertFamilyPublishAuthority } from './publish-family.js';
 import { lockWorkerRegistry } from './registry-lock.js';
 
@@ -341,13 +345,19 @@ function requireWorkerDefinitionAuthority(
  *  `publisherPrincipalId` — checked against the locked row and the family's live version it would
  *  supersede (`assertFamilyPublishAuthority`); omitted by internal callers (workspace creation's
  *  default entry definition, a ChangePlan item installing a pack's Worker). Under
- *  `lockWorkerRegistry`, taken first. */
+ *  `lockWorkerRegistry`, taken first.
+ *
+ *  Legacy 302: what the version names must be there — every reference that is not refuses the
+ *  publish at once (`WorkerDefinitionReferenceError`, `definition-references.ts`). `references`
+ *  carries what that check reads beyond the workspace's rows (the model catalog, for a person's
+ *  publish). */
 export async function publishWorkerDefinition(
   client: PoolClient,
   workspaceId: string,
   publisherPrincipalId: string,
   ref: WorkerDefinitionVersionRef,
   actor?: PublishActor,
+  references?: WorkerDefinitionReferenceSources,
 ): Promise<WorkerDefinitionRow> {
   await lockWorkerRegistry(client, workspaceId);
   const row = await getForUpdate(client, workspaceId, ref);
@@ -362,6 +372,16 @@ export async function publishWorkerDefinition(
   });
 
   validateWorkerDefinitionContent(row.kind, row.definition);
+  // Before the credential question: a version naming what is not there is not published whatever
+  // the answer, and the fix is a new version.
+  await assertWorkerDefinitionReferencesResolve(
+    client,
+    workspaceId,
+    `WorkerDefinition ${row.id}@${row.version}`,
+    row.kind,
+    row.definition,
+    references,
+  );
   // Decision 2026-10-09 "二次确认": the definition (its prompt, its settings) is what a Worker runs
   // with; a value under a secret-named field counts too.
   assertDraftCredentialsReviewed(
