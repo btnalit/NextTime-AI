@@ -4396,6 +4396,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 **GO8 — WorkerSpec 组合与准入（随之决定遗留 288）**（见 `global-roadmap-2026-10-16.md` §4）
 
 - 实现说明：（未开工）
+- 前置实现说明（遗留 302，#848，2026-10-31 合入，4e5ec7c；无迁移）：`application/worker/definition-references.ts` 的 `unresolvedWorkerDefinitionReferences` / `assertWorkerDefinitionReferencesResolve` 在 `publishWorkerDefinition` 内容校验之后、凭据确认之前调用（注册表锁内，读取走调用方 `PoolClient`，同事务刚写的 Gatekeeper 与 Skill 可见）；门用新增的 `existingGatekeeperIds`（`governance/gatekeepers/registry.ts`）。能力按 `WORKER_CEILING_CAPABILITIES`（含 `<gate>.<op>` 模式）；Skill 按 id 或名字匹配已发布版本，与 `resolveSkillsInline` 一致；模型只在 `publishWorkerDefinitionHandler` 传入目录时查（`readModelCatalog(…, {withHealth:false})`，只在版本写了模型时读），建工作区（`application/workspace/create.ts`）与能力包安装（`change-plan/family-item.ts`，`WORKSPACE_OWNED_WORKER_FIELDS`）不传。入口定义的能力仍由 `validateWorkerDefinitionContent` 按入口上限检查；门与 Skill 只对 kind `worker`。错误映射：HTTP `capability-route.ts`（`details.unresolved` 只含版本自己写的值），WS `rpc.ts`。控制台：`lib/definition-reference.ts`（解析与 zh/en 文案，`packInstallReferenceText`）、`catalog/PublishReferenceProblem.tsx`（`CatalogPage` 与 `DraftProposed` 共用）、`PacksTab`、`WorkerDefinitionEditor`（`unresolved` 作初始字段错误与 `worker-unresolved-notice`）。不回溯已发布版本；组建时准入留给 GO8 本体。遗留 540（`uses` 链接）、541、542 另记。
 
 **GO9 — 规划 Worker 与自主修订**（见 `global-roadmap-2026-10-16.md` §4）
 
