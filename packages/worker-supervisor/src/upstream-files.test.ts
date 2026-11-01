@@ -24,7 +24,7 @@ import { createTaskService } from './task-service.js';
 import { TASK_ID_LABEL } from './task-spawn-spec.js';
 import { createFakeDockerClient } from './test-support/fake-docker-client.js';
 import { memoryHandleBindings } from './test-support/memory-handle-bindings.js';
-import { UpstreamFilesUnavailableError } from './upstream-files.js';
+import { TaskAlreadySpawnedError, UpstreamFilesUnavailableError } from './upstream-files.js';
 
 /**
  * S11 GO14 (`upstream-files.ts`): a goal step's handoff directory, its owner marker, the read-only
@@ -138,6 +138,43 @@ describe('a goal step’s own directories', () => {
     await service.spawn(spawnInput(UP_TASK, UP_RUN));
     expect(existsSync(join(workspaceDir(UP_TASK), 'out'))).toBe(false);
     expect(existsSync(join(platformDir(UP_TASK), 'owner.json'))).toBe(false);
+  });
+
+  it('a goal step’s Task is spawned once: once it has run, another spawn of it is refused before anything is written, with or without its goal run', async () => {
+    const ctx = setup();
+    await finishedUpstream(ctx);
+    const creates = ctx.docker.createCalls.length;
+    const marker = readFileSync(join(platformDir(UP_TASK), 'owner.json'), 'utf8');
+    for (const extra of [{ goalRunId: GOAL }, {}]) {
+      const err = await ctx.service.spawn(spawnInput(UP_TASK, DOWN_RUN, extra)).then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      expect(err).toBeInstanceOf(TaskAlreadySpawnedError);
+    }
+    expect(ctx.docker.createCalls).toHaveLength(creates);
+    // What the step left is as it was, and the downstream step still reads it.
+    expect(readFileSync(join(workspaceDir(UP_TASK), 'out', 'report.txt'), 'utf8')).toBe(
+      'from step a',
+    );
+    expect(readFileSync(join(platformDir(UP_TASK), 'owner.json'), 'utf8')).toBe(marker);
+    await ctx.service.spawn(downstream());
+
+    // A marker of any kind counts — a link is not followed to decide.
+    const linked = '99999999-9999-4999-8999-999999999999';
+    mkdirSync(platformDir(linked), { recursive: true });
+    symlinkSync(join(dir, 'nowhere'), join(platformDir(linked), 'owner.json'));
+    await expect(ctx.service.spawn(spawnInput(linked, UP_RUN))).rejects.toBeInstanceOf(
+      TaskAlreadySpawnedError,
+    );
+  });
+
+  it('a Task outside a goal is still requeued under the same Task', async () => {
+    const { service, docker } = setup();
+    await service.spawn(spawnInput(UP_TASK, UP_RUN));
+    await service.terminate(UP_RUN);
+    await service.spawn(spawnInput(UP_TASK, DOWN_RUN));
+    expect(docker.createCalls).toHaveLength(2);
   });
 });
 

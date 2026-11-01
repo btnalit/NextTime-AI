@@ -95,7 +95,7 @@ import {
 import type { ResidentService } from './resident-service.js';
 import { RuntimeImageIncompatibleError } from './runtime-contract.js';
 import type { TaskService } from './task-service.js';
-import { UpstreamFilesUnavailableError } from './upstream-files.js';
+import { TaskAlreadySpawnedError, UpstreamFilesUnavailableError } from './upstream-files.js';
 
 export interface CreateServerOptions {
   readonly residentService: ResidentService;
@@ -386,6 +386,16 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
             state: err.state,
           },
         };
+      }
+      // S11 GO14: a goal step's Task spawned a second time — the kernel never does this, so it
+      // is logged as an error; nothing of the spawn was written.
+      if (err instanceof TaskAlreadySpawnedError) {
+        request.log?.error?.(
+          { taskId: err.taskId },
+          'task/spawn refused: goal task spawned before',
+        );
+        reply.code(409);
+        return { error: { code: err.code, message: err.message } };
       }
       request.log?.error?.(err, 'task/spawn failed');
       reply.code(500);

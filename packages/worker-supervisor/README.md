@@ -250,7 +250,10 @@ resident 模式自己的 `SpawnRequestSchema`/`StopRequestSchema`（`workspaceId
   `owner.json` 的工作区与目标就是读的这个 Task 的（否则 `not_owned`）；`out` 按 `lstat` 是目录、不是
   符号链接、FIFO 或文件，且它的 realpath 正好是工作目录的 realpath 加 `out`（否则 `not_a_directory`）。
   原因：Docker 在宿主机上解析绑定源的符号链接，上游 Worker 拥有自己的 `/workspace`，`out` 可能指向宿主机
-  上任何地方。检查通过后没有任何东西还能改它（上游容器已经退出）。`out` **里面**的链接在下游容器里解析，
+  上任何地方。检查通过后没有任何东西还能改它：上游容器已经退出，也不会再起来。内核从不 spawn 已结束的
+  Task（目标步骤的尝试不 requeue），本服务也不只靠这一点：平台目录里已经有 `owner.json`（任何形式，链接
+  也算、不跟随）的 Task 再 spawn 一律 409 `goal_task_spawned`，打 error 日志，什么都没写、什么都没起。
+  目标之外的 Task 没有这个标记，崩溃后照常在同一个 Task 下 requeue。`out` **里面**的链接在下游容器里解析，
   只能指到下游容器自己的文件。
 - **`POST /task-dirs/keep`**（内核内部令牌；`{tasks: [{taskId, workspaceId, goalRunId}]}`，至多 500 个）：
   逐个回答上面的状态（`kept` 或不能挂的原因），只给 `kept` 的两个目录刷新 mtime，让退休清理放过它们。

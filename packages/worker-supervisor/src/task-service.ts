@@ -83,8 +83,10 @@ import {
   taskContainerName,
 } from './task-spawn-spec.js';
 import {
+  TaskAlreadySpawnedError,
   type UpstreamFilesState,
   UpstreamFilesUnavailableError,
+  hasTaskOwnerMarker,
   prepareGoalTaskDirs,
   upstreamFilesState,
 } from './upstream-files.js';
@@ -508,6 +510,12 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
 
       // Refused before anything is written (runtime-contract.ts).
       await assertRuntimeContract(imagesDocker, image, { mode: 'task', taskId, workerRunId });
+
+      // S11 GO14 (review #493 on #884): a goal step's Task is spawned once — the one whose platform
+      // directory already holds an owner marker is refused, so a handoff directory checked for a
+      // later step is never written by a Worker again (`upstream-files.ts`). A Task outside a goal
+      // has no marker, and its crash requeue is unaffected.
+      if (hasTaskOwnerMarker(paths)) throw new TaskAlreadySpawnedError(taskId);
 
       // S11 GO14: every earlier step's handoff directory is checked before anything is written
       // (`upstream-files.ts` has why these checks). Running is asked of Docker as well as of the

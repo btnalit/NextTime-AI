@@ -26,7 +26,11 @@
  * only when (1) no container of that Task is running, so nothing but this service writes there
  * any more; (2) `out` is, by `lstat`, a directory and not a link, a FIFO or a file; (3) its real
  * path is its parent's real path plus `out`. Between that check and the mount nothing can change
- * it. A link *inside* `out` is resolved in the downstream container, where it can only reach that
+ * it, because no container of that Task will ever start again: the kernel never spawns a Task
+ * that has ended (a goal step's attempt is not requeued), and this service does not rely on that
+ * alone — a Task whose platform directory holds an owner marker has been spawned once, and
+ * `spawn()` refuses it again (`TaskAlreadySpawnedError`, 409 `goal_task_spawned`). A link
+ * *inside* `out` is resolved in the downstream container, where it can only reach that
  * container's own files.
  */
 
@@ -87,6 +91,17 @@ export function prepareGoalTaskDirs(paths: TaskPaths, owner: TaskOwner): void {
     'utf8',
   );
   mkdirSync(taskHandoffPaths(paths).local, { recursive: true });
+}
+
+/** Whether the Task's platform directory holds an owner marker of any kind (`lstat`: a link or
+ *  a FIFO counts, and is not followed) — a goal step's Task that has been spawned before. */
+export function hasTaskOwnerMarker(paths: TaskPaths): boolean {
+  try {
+    lstatSync(posixPath.join(paths.localPlatformDir, TASK_OWNER_FILE_NAME));
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
 }
 
 /** The owner marker, read through one descriptor: opened without following a link
@@ -166,5 +181,19 @@ export class UpstreamFilesUnavailableError extends Error {
     this.stepKey = stepKey;
     this.taskId = taskId;
     this.state = state;
+  }
+}
+
+/** Thrown by `spawn()` for a Task whose platform directory already holds an owner marker: a goal
+ *  step's Task is spawned once, so its handoff directory, once checked for a later step, is never
+ *  written by a Worker again (this module's doc comment). `server.ts` answers 409
+ *  `goal_task_spawned`. Nothing of the spawn has been written. */
+export class TaskAlreadySpawnedError extends Error {
+  readonly code = 'goal_task_spawned';
+  readonly taskId: string;
+  constructor(taskId: string) {
+    super(`task ${taskId} is a goal step's Task that was spawned before; it is not spawned again`);
+    this.name = 'TaskAlreadySpawnedError';
+    this.taskId = taskId;
   }
 }
