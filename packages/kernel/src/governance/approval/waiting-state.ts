@@ -24,13 +24,15 @@ import {
  *     — `recordActionRequestInDoubt` wrote an `action_request.outcome_in_doubt` audit row with the
  *     reason, and the stale-executing reaper asks the gate (`gate/apply_lookup`) once the row is
  *     past `DEFAULT_STALE_EXECUTING_TIMEOUT_MS`.
- *   - Queued behind: an `approved` / `auto_approved` row that has not run because an earlier row
- *     on the same Gatekeeper it conflicts with holds it back (`drainer.ts`: a `pending_approval`
- *     row awaiting a human, or an `executing` one — R-50's barrier, often in doubt), directly or
- *     through rows in between (S11 GO12, `queue.ts`). Only the blocking row's status, whether it
- *     is in doubt and whether it holds this row back on its instance or on the whole Gatekeeper
- *     are given, never its id or content: the caller may not be allowed to see that row (I14),
- *     only that something ahead of theirs holds the queue.
+ *   - Queued behind: an `approved` / `auto_approved` row that has not run because another row on
+ *     the same Gatekeeper it conflicts with holds it back (`drainer.ts`): a `pending_approval` row
+ *     ahead of it awaiting a human, directly or through rows in between (S11 GO12, `queue.ts`), or
+ *     an `executing` one — R-50's barrier, often in doubt — usually ahead of it, but behind it when
+ *     that one started before this row's request committed (STATUS legacy 565: mutual exclusion,
+ *     not `requested_at` order). Only the blocking row's status, whether it is in doubt and whether
+ *     it holds this row back on its instance or on the whole Gatekeeper are given, never its id or
+ *     content: the caller may not be allowed to see that row (I14), only that something holds
+ *     theirs back.
  *
  * Both are derived on read, never stored on the row: the audit row is the record (I11), and the
  * queue position changes with every transition on the Gatekeeper.
@@ -44,8 +46,9 @@ export interface ActionRequestInDoubt {
   readonly reason: string | null;
 }
 
-/** The row ahead of a waiting one on its Gatekeeper that holds it back (`QueueHold.root`), and
- *  whether on its instance or on the whole Gatekeeper (`QueueHold.scope`). */
+/** The row on a waiting one's Gatekeeper that holds it back (`QueueHold.root`: one ahead of it, or
+ *  an `executing` one behind it — legacy 565), and whether on its instance or on the whole
+ *  Gatekeeper (`QueueHold.scope`). */
 export interface ActionRequestQueueBlocker {
   readonly id: string;
   readonly status: 'pending_approval' | 'executing';

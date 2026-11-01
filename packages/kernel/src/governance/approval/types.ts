@@ -279,6 +279,12 @@ export class ActionRequestConcurrentTransitionError extends IllegalTransition {
  *  `executing` beside a conflicting `executing` row of its Gatekeeper (STATUS legacy 565). */
 export const EXECUTION_CONFLICT_SQLSTATE = 'NTQ01';
 
+/** SQLSTATE the same guard raises for a start in a transaction that is not READ COMMITTED, where
+ *  its read could miss a start committed while it waited for the lock (review #493 on #881). Not
+ *  mapped: a database or role `default_transaction_isolation` to fix, not a race to retry, so
+ *  the drain fails loudly instead of reading the queue again. */
+export const EXECUTION_ISOLATION_SQLSTATE = 'NTQ02';
+
 /**
  * STATUS legacy 565: the row may not start now — another request of its Gatekeeper that conflicts
  * with it (I-Q1) is `executing`, a fact only the database sees in time (`governance/0031`'s

@@ -33,6 +33,14 @@
 --      `IllegalTransition`, so the drainer reads the queue again, where `planGatekeeperQueue` now
 --      holds a row back by any conflicting `executing` row, ahead of it or behind.
 --
+--      The read after the lock sees every start committed before it only because, under READ
+--      COMMITTED (the kernel's default; no caller sets another), each statement takes a new
+--      snapshot. Under REPEATABLE READ or SERIALIZABLE it would read the transaction's first
+--      snapshot and miss a start that committed while this one waited for the lock, so the guard
+--      refuses a start in such a transaction (SQLSTATE `NTQ02`, review #493 on #881) rather than
+--      let it through unchecked. The kernel does not map that code: it is a setting to fix (a
+--      `default_transaction_isolation` on the database or role), not a race to retry.
+--
 -- What this keeps and what it does not: two conflicting requests of one Gatekeeper are never
 -- `executing` together (mutual exclusion). It does not make them run in `requested_at` order: a
 -- row that commits after a conflicting later-stamped one has started runs after it. No Gatekeeper
@@ -108,6 +116,13 @@ begin
   -- Only a row entering `executing`: an update of a row already there starts nothing.
   if tg_op = 'UPDATE' and old.status = 'executing' then
     return new;
+  end if;
+  -- The read below needs a snapshot per statement (READ COMMITTED; Postgres runs READ
+  -- UNCOMMITTED as READ COMMITTED). Any other level would miss a start committed during the wait.
+  if current_setting('transaction_isolation') not in ('read committed', 'read uncommitted') then
+    raise exception 'action_requests: % may start only in a read committed transaction, not %',
+      new.id, current_setting('transaction_isolation')
+      using errcode = 'NTQ02';
   end if;
   perform action_request_execution_lock(new.workspace_id, new.gatekeeper_id);
   -- Read after the lock: every start on this Gatekeeper before this one has committed.

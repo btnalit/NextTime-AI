@@ -12,7 +12,11 @@ import { type ActionExecutor, ApprovalDrainer } from './drainer.js';
 import { markActionRequestExecuted, startActionRequestExecution } from './execution.js';
 import { getActionRequest } from './reads.js';
 import { requestAction } from './request-action.js';
-import { ActionRequestExecutionConflictError, type ActionRequestRow } from './types.js';
+import {
+  ActionRequestExecutionConflictError,
+  type ActionRequestRow,
+  EXECUTION_ISOLATION_SQLSTATE,
+} from './types.js';
 
 /**
  * governance/approval/execution-guard.integration (STATUS legacy 565): two conflicting requests
@@ -274,6 +278,42 @@ describe.runIf(DATABASE_URL !== undefined)(
       for (const row of [web, db]) {
         await asOwner((client) => markActionRequestExecuted(client, workspaceId, row.id));
       }
+    });
+
+    it('a start in a repeatable read or serializable transaction is refused; read committed goes through (#493 on #881)', async () => {
+      const gatekeeperId = await insertGatekeeperObject();
+      const a = await asOwner((client) => requestOn(client, gatekeeperId, 'test.guard.a', 'web'));
+
+      // Each level is the connection's default, the way a database or role setting would give it.
+      for (const level of ['repeatable\\ read', 'serializable']) {
+        const other = createPool({
+          poolConfig: { max: 1, options: `-c default_transaction_isolation=${level}` },
+        });
+        try {
+          const refused = await withWorkspace(
+            other,
+            { workspaceId, principalId: ownerId },
+            async (client) => {
+              const shown = await client.query<{ level: string }>(
+                "select current_setting('transaction_isolation') as level",
+              );
+              expect(shown.rows[0]?.level).toBe(level.replace('\\ ', ' '));
+              return startActionRequestExecution(client, workspaceId, a.id);
+            },
+          ).catch((err: unknown) => err);
+          expect((refused as { code?: unknown }).code).toBe(EXECUTION_ISOLATION_SQLSTATE);
+          expect(refused).not.toBeInstanceOf(IllegalTransition);
+        } finally {
+          await other.end();
+        }
+        expect(await statusOf(a.id)).toBe('auto_approved');
+      }
+
+      const started = await asOwner((client) =>
+        startActionRequestExecution(client, workspaceId, a.id),
+      );
+      expect(started.status).toBe('executing');
+      await asOwner((client) => markActionRequestExecuted(client, workspaceId, a.id));
     });
 
     it('starts on another Gatekeeper do not wait for the lock', async () => {
