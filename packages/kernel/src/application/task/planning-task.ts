@@ -147,6 +147,34 @@ export function loadPlannerTemplate(
   return loaded;
 }
 
+/** The WorkerDefinition family the planner Principal first proposed — the planner's, whoever
+ *  published its later versions. */
+async function plannerFamilyOf(
+  client: PoolClient,
+  workspaceId: string,
+  plannerId: string,
+): Promise<string | undefined> {
+  const family = await client.query<{ id: string }>(
+    `select id from worker_definitions
+      where workspace_id = $1 and proposed_by = $2 and kind = 'worker'
+      order by created_at, version
+      limit 1`,
+    [workspaceId, plannerId],
+  );
+  return family.rows[0]?.id;
+}
+
+/** The goal planner's WorkerDefinition family in the workspace, or `null` when the workspace has
+ *  none yet. Read only: never creates the planner Principal. */
+export async function findGoalPlannerFamily(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<string | null> {
+  const plannerId = await findGoalPlannerPrincipal(client, workspaceId);
+  if (plannerId === null) return null;
+  return (await plannerFamilyOf(client, workspaceId, plannerId)) ?? null;
+}
+
 /**
  * The planner WorkerDefinition a round runs: the latest published version of the family the
  * planner Principal first proposed. The first time, the kernel proposes and publishes the template
@@ -161,14 +189,7 @@ export async function ensurePlannerDefinition(
   template: PlannerTemplate,
 ): Promise<WorkerDefinitionRow | null> {
   const plannerId = await getOrCreateGoalPlannerPrincipal(client, workspaceId);
-  const family = await client.query<{ id: string }>(
-    `select id from worker_definitions
-      where workspace_id = $1 and proposed_by = $2 and kind = 'worker'
-      order by created_at, version
-      limit 1`,
-    [workspaceId, plannerId],
-  );
-  const familyId = family.rows[0]?.id;
+  const familyId = await plannerFamilyOf(client, workspaceId, plannerId);
   const publish = async (definitionId: string | undefined): Promise<WorkerDefinitionRow> => {
     const proposed = await proposeWorkerDefinition(client, workspaceId, plannerId, {
       ...(definitionId !== undefined ? { definitionId } : {}),

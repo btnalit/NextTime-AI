@@ -23,7 +23,8 @@
 -- its columns on every insert and select of `tasks` and never writes this one; its goal Tasks are
 -- step Tasks (a step and no round), its purposes `NULL` or `evaluation`, so its inserts pass every
 -- check here. A planning Task left running when rolled back is a Task of no step to that release:
--- its report moves no step, and its lifecycle may retry its Worker once after a crash —
+-- its report moves no step, and it is not retried after a crash (that release retries only Tasks
+-- with no purpose), so it never restarts outside the deny-all egress it was spawned with —
 -- release.md says to let a run's planning end first.
 --
 -- Runner ordering: `goal` sorts before `task`, so goal/0014's rounds exist when this runs.

@@ -25,6 +25,7 @@ import { advanceGoalRun } from '../goal/advance.js';
 import { createGoalRun } from '../goal/index.js';
 import { PLANNER_HANDLE_CAPABILITIES } from '../task/index.js';
 import { failTaskAndReapWorkerRuns } from '../task/lifecycle.js';
+import { findGoalPlannerFamily } from '../task/planning-task.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
@@ -787,6 +788,36 @@ describe.runIf(DATABASE_URL !== undefined)(
           ),
         ),
       ).toBeTruthy();
+    });
+
+    it('find_workers never offers the planner’s family, not even a version a workspace owner published in it', async () => {
+      const requester = await newPrincipal('member');
+      await failedForPerson(requester);
+      const family = await asApp(ownerId, (client) => findGoalPlannerFamily(client, workspaceId));
+      if (family === null) throw new Error('no planner family');
+      const mine = await asApp(ownerId, (client) =>
+        proposeWorkerDefinition(client, workspaceId, ownerId, {
+          definitionId: family,
+          kind: 'worker',
+          definition: {
+            name: 'Goal planner',
+            description: 'Plans goals the owner’s way.',
+            systemPrompt: 'You plan a goal the owner’s way.',
+          },
+        }),
+      );
+      await asApp(ownerId, (client) =>
+        publishWorkerDefinition(client, workspaceId, ownerId, {
+          definitionId: family,
+          version: mine.version,
+        }),
+      );
+      for (const by of [ownerId, requester]) {
+        const found = (await call(human(by), 'find_workers', { need: 'goal planner' })) as {
+          items: readonly { definitionId: string }[];
+        };
+        expect(found.items.map((item) => item.definitionId)).not.toContain(family);
+      }
     });
   },
 );
