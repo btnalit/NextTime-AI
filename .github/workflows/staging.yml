@@ -92,7 +92,7 @@ on:
       token_budget:
         description: 'Hard cap: LLM_DAILY_TOKEN_BUDGET per acceptance workspace during the real-model runs (1-10000000)'
         type: string
-        default: '3000000'
+        default: '8000000'
       extended:
         description: 'With real_model: also accept_s2 --extended (memory, stop, reject, docker observe, Worker egress, concurrency; about 3x the spend)'
         type: boolean
@@ -137,7 +137,7 @@ jobs:
           REAL: ${{ inputs.real_model || false }}
           RUNS: ${{ inputs.runs || '3' }}
           EXTENDED: ${{ inputs.extended || false }}
-          BUDGET: ${{ inputs.token_budget || '3000000' }}
+          BUDGET: ${{ inputs.token_budget || '8000000' }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -309,7 +309,7 @@ jobs:
           RUNTIME: ${{ inputs.worker_runtime || 'auto' }}
           SEED: ${{ github.event_name != 'workflow_dispatch' || inputs.seed }}
           REAL: ${{ steps.real.outputs.enabled || 'false' }}
-          BUDGET: ${{ inputs.token_budget || '3000000' }}
+          BUDGET: ${{ inputs.token_budget || '8000000' }}
           RUNS: ${{ inputs.runs || '3' }}
           EXTENDED: ${{ inputs.extended || false }}
         run: |
