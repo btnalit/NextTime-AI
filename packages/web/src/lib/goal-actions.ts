@@ -160,10 +160,15 @@ export function goalOperations(
               `Steps still run or wait (${live.join(', ')}): wait for them to stop, or cancel the goal.`,
             )
           : planning !== null
-            ? t(
-                `目标规划器正在看步骤 ${planning.stepKey} 的失败：等它给出结果再结束，或者取消目标。`,
-                `The goal planner is looking at the failure of step ${planning.stepKey}: end the goal once it is done, or cancel the goal.`,
-              )
+            ? planning.point === 'goal_acceptance'
+              ? t(
+                  `目标规划器正在看目标第 ${planning.acceptanceRound} 轮验收为什么没通过：等它给出结果再结束，或者取消目标。`,
+                  `The goal planner is looking at why the goal’s verification round ${planning.acceptanceRound} did not pass: end the goal once it is done, or cancel the goal.`,
+                )
+              : t(
+                  `目标规划器正在看步骤 ${planning.stepKey} 的失败：等它给出结果再结束，或者取消目标。`,
+                  `The goal planner is looking at the failure of step ${planning.stepKey}: end the goal once it is done, or cancel the goal.`,
+                )
             : null,
     };
   }
@@ -225,6 +230,21 @@ export function retryableStepKeys(detail: GoalDetailWire): string[] {
   return detail.steps
     .filter((step) => step.supersededInRevision === null && step.status === 'failed')
     .map((step) => step.stepKey);
+}
+
+/** UX P2-1 on #872: the verification round resuming starts, when every step of the plan in force
+ *  is done (succeeded or skipped) and the goal's latest verification round did not pass — resuming
+ *  then verifies the goal again, in the next round, and runs no step. `null` otherwise. */
+export function verificationRoundOnResume(detail: GoalDetailWire): number | null {
+  const latest = detail.acceptance?.rounds.at(-1);
+  if (
+    !latest?.checks.some((check) => check.status === 'failed' || check.status === 'unavailable')
+  ) {
+    return null;
+  }
+  const live = detail.steps.filter((step) => step.supersededInRevision === null);
+  const done = live.every((step) => step.status === 'succeeded' || step.status === 'skipped');
+  return live.length > 0 && done ? latest.round + 1 : null;
 }
 
 /** The step statuses after which an action of the step is not run again. */

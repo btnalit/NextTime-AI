@@ -43,10 +43,12 @@ function round(overrides: Partial<PlanningRoundWire> = {}): PlanningRoundWire {
     status: 'proposed',
     kind: 'proposal',
     basedOnRevision: 1,
+    point: 'step_failure',
     stepRunId: 'sr-fetch',
     stepKey: 'fetch',
     stepAttempt: 2,
     failureCategory: 'transient',
+    acceptanceRound: null,
     taskId: 'task-plan-1',
     revision: 2,
     outcomeReason: null,
@@ -348,7 +350,7 @@ describe('goal planner on the goal page (S11 GO9a)', () => {
     // UX P3-2 on #870: one rule a line.
     expect(
       within(confirm).getByTestId('goal-op-confirm-planner-rules').querySelectorAll('li'),
-    ).toHaveLength(7);
+    ).toHaveLength(8);
     fireEvent.click(within(confirm).getByTestId('goal-op-confirm-planner-propose'));
     expect(within(confirm).getByTestId('goal-op-confirm-planner').textContent).toContain(
       '规划器最多跑 3 轮，上限和计划修订次数相同',
@@ -696,7 +698,9 @@ describe('the planner card after the UX review of #864', () => {
       scriptedHttp(handlers(goalDetail({ planner: 'propose' }), workspace('p-alice', 'member'))),
     );
     const card = await screen.findByTestId('goal-planner');
-    expect(card.textContent).toContain('还没有步骤失败到要人决定，规划器还没跑过。');
+    expect(card.textContent).toContain(
+      '还没有步骤失败到要人决定，目标的验收也没有不通过，规划器还没跑过。',
+    );
     expect(placedFirst()).toBe(false);
   });
 
@@ -1071,7 +1075,152 @@ describe('the planner card after the UX review of #866', () => {
       ),
     );
     expect((await screen.findByTestId('goal-planner-none')).textContent).toBe(
-      '还没有步骤失败，规划器还没跑过。',
+      '还没有步骤失败，目标的验收也没有不通过，规划器还没跑过。',
+    );
+  });
+});
+
+describe('the planner when the goal’s acceptance did not pass (S11 GO10b)', () => {
+  /** Every step succeeded; the goal's verification round 1 did not pass and the run waits. */
+  const verificationFailed = (
+    rounds: readonly PlanningRoundWire[],
+    overrides: Partial<GoalDetailWire> = {},
+  ) =>
+    goalDetail({
+      status: 'paused',
+      pauseReason: 'needs_decision',
+      planner: 'propose',
+      planningRounds: [...rounds],
+      steps: [
+        stepRun({ status: 'succeeded', attemptCount: 1 }),
+        stepRun({ id: 'sr-apply', stepKey: 'apply', status: 'succeeded', attemptCount: 1 }),
+      ],
+      acceptance: {
+        rounds: [
+          {
+            round: 1,
+            planRevision: 1,
+            openedAt: '2026-10-20T00:04:00.000Z',
+            checks: [],
+          },
+        ],
+        steps: [],
+        absenceBaselines: [],
+        overriddenChecks: [],
+      } as unknown as GoalDetailWire['acceptance'],
+      ...overrides,
+    });
+  const acceptanceRound = (overrides: Partial<PlanningRoundWire> = {}) =>
+    round({
+      point: 'goal_acceptance',
+      stepRunId: null,
+      stepKey: null,
+      stepAttempt: null,
+      failureCategory: null,
+      acceptanceRound: 1,
+      ...overrides,
+    });
+
+  it('a running round says the goal’s verification round did not pass; ending waits for it; the page top says so', async () => {
+    const detail = verificationFailed([
+      acceptanceRound({ status: 'running', revision: null, settledAt: null }),
+    ]);
+    renderPage(scriptedHttp(handlers(detail, workspace('p-alice', 'member'))));
+    const running = await screen.findByTestId('goal-planner-running');
+    expect(running.textContent).toContain(
+      '所有步骤都成功了，但目标第 1 轮验收没通过。规划器正在看为什么，准备提一个修订：加一步、换个方式重做，或改验收检查。',
+    );
+    const subject = screen.getByTestId('goal-planner-round-subject');
+    expect(subject.getAttribute('data-point')).toBe('goal_acceptance');
+    expect(subject.textContent).toBe('目标第 1 轮验收没通过');
+    expect(screen.getByTestId('goal-state-note').textContent).toContain(
+      '需要人决定：目标第 1 轮验收没通过，目标规划器正在看为什么',
+    );
+    expect(
+      screen
+        .getAllByTestId('goal-op-wait')
+        .map((p) => p.textContent)
+        .join(),
+    ).toContain('目标规划器正在看目标第 1 轮验收为什么没通过：等它给出结果再结束，或者取消目标。');
+  });
+
+  it('a proposal for it says what it is for; accepting says the goal is verified again; rejecting says what is left', async () => {
+    const base = verificationFailed([acceptanceRound()]);
+    const proposed = proposedDetail();
+    const detail = { ...base, revisions: proposed.revisions };
+    renderPage(scriptedHttp(handlers(detail, workspace('p-alice', 'member'))));
+    const proposal = await screen.findByTestId('goal-planner-proposal');
+    expect(within(proposal).getByTestId('goal-planner-proposal-for').textContent).toBe(
+      '针对目标第 1 轮验收没通过。',
+    );
+    expect(screen.getByTestId('goal-state-note').textContent).toContain(
+      '需要人决定：目标第 1 轮验收没通过，目标规划器为此提了第 2 版修订',
+    );
+    fireEvent.click(within(proposal).getByTestId('goal-planner-acceptResume'));
+    const accept = await screen.findByTestId('goal-planner-acceptResume-confirm');
+    expect(within(accept).getByTestId('confirm-impact').textContent).toContain(
+      '所有步骤都完成后，平台重新验收目标（新的一轮）',
+    );
+    fireEvent.click(within(accept).getByText('取消'));
+    fireEvent.click(within(proposal).getByTestId('goal-planner-reject'));
+    const reject = await screen.findByTestId('goal-planner-reject-confirm');
+    expect(within(reject).getByTestId('confirm-impact').textContent).toContain(
+      '规划器不会为这一轮验收再提修订：之后由你继续以再验收一次、自己修订计划或结束目标',
+    );
+  });
+
+  it('a round that found no revision concludes this pause while its verification round is the latest', async () => {
+    const settled = acceptanceRound({
+      status: 'no_revision',
+      revision: null,
+      detail: 'The site reads the old certificate; a person must look.',
+    });
+    renderPage(
+      scriptedHttp(handlers(verificationFailed([settled]), workspace('p-alice', 'member'))),
+    );
+    const conclusion = await screen.findByTestId('goal-planner-conclusion');
+    expect(conclusion.textContent).toContain(
+      '规划器看过目标第 1 轮验收为什么没通过，没有可行的修订。接下来由请求人决定：继续以再验收一次、自己修订计划，或结束目标。',
+    );
+    cleanup();
+    // Verified again since (round 2): the round was about an earlier pause.
+    const later = verificationFailed([settled], {
+      acceptance: {
+        rounds: [
+          { round: 1, planRevision: 1, openedAt: '2026-10-20T00:04:00.000Z', checks: [] },
+          { round: 2, planRevision: 1, openedAt: '2026-10-20T00:09:00.000Z', checks: [] },
+        ],
+        steps: [],
+        absenceBaselines: [],
+        overriddenChecks: [],
+      } as unknown as GoalDetailWire['acceptance'],
+    });
+    renderPage(scriptedHttp(handlers(later, workspace('p-alice', 'member'))));
+    await screen.findByTestId('goal-planner');
+    expect(screen.queryByTestId('goal-planner-conclusion')).toBeNull();
+  });
+
+  it('the planner rounds used up say so for the verification round, on the card and atop the page', async () => {
+    const ran = (id: string) =>
+      acceptanceRound({ id, status: 'no_revision', revision: null, taskId: `task-${id}` });
+    const usedUp = acceptanceRound({
+      id: 'r-d',
+      status: 'failed',
+      revision: null,
+      taskId: null,
+      outcomeReason: 'revision_budget_exhausted',
+      detail: '3 of 3 planner rounds already run',
+    });
+    const detail = verificationFailed([ran('r-a'), ran('r-b'), ran('r-c'), usedUp], {
+      budget: { ...goalDetail().budget, maxRevisions: 3 },
+    });
+    renderPage(scriptedHttp(handlers(detail, workspace('p-alice', 'member'))));
+    const conclusion = await screen.findByTestId('goal-planner-conclusion');
+    expect(conclusion.textContent).toContain(
+      '规划器轮数已用完（3/3），目标第 1 轮验收没通过，规划器没有运行。接下来由请求人决定：继续以再验收一次、自己修订计划，或结束目标。',
+    );
+    expect(screen.getByTestId('goal-state-note').textContent).toBe(
+      '需要人决定：规划器轮数已用完（3/3），目标第 1 轮验收没通过，平台不再为它运行规划器。可以继续以再验收一次、自己修订计划或结束目标。',
     );
   });
 });

@@ -234,11 +234,17 @@ export function plannerWorkDropped(goal: GoalDetailWire, t: Translate): string[]
   const lines: string[] = [];
   const proposal = pendingPlannerProposal(goal);
   if (proposal) {
+    // S11 GO10b: a proposal for a verification round the goal did not pass is for that round.
     lines.push(
-      t(
-        `规划器提的第 ${proposal.revision} 版修订会被拒绝，规划器不会再为这次失败提修订`,
-        `The planner’s proposed v${proposal.revision} is rejected, and the planner proposes nothing more for this failure`,
-      ),
+      roundOfRevision(goal, proposal.revision)?.point === 'goal_acceptance'
+        ? t(
+            `规划器提的第 ${proposal.revision} 版修订会被拒绝，规划器不会再为这一轮验收提修订`,
+            `The planner’s proposed v${proposal.revision} is rejected, and the planner proposes nothing more for this verification round`,
+          )
+        : t(
+            `规划器提的第 ${proposal.revision} 版修订会被拒绝，规划器不会再为这次失败提修订`,
+            `The planner’s proposed v${proposal.revision} is rejected, and the planner proposes nothing more for this failure`,
+          ),
     );
   }
   if (runningPlanningRound(goal)) {
@@ -256,13 +262,19 @@ export function plannerWorkDropped(goal: GoalDetailWire, t: Translate): string[]
  *  the latest round, ended without a proposal, on the revision in force, while the run is paused.
  *  `null` otherwise (a round running or a proposal waiting say so themselves). */
 export function currentPlanningConclusion(
-  goal: Pick<GoalDetailWire, 'status' | 'currentRevision' | 'planningRounds' | 'steps'>,
+  goal: Pick<GoalDetailWire, 'status' | 'currentRevision' | 'planningRounds' | 'steps'> &
+    Partial<Pick<GoalDetailWire, 'acceptance'>>,
 ): PlanningRoundWire | null {
   if (goal.status !== 'paused') return null;
   const latest = goal.planningRounds.at(-1);
   if (!latest) return null;
   if (latest.status !== 'no_revision' && latest.status !== 'failed') return null;
   if (latest.basedOnRevision !== goal.currentRevision) return null;
+  // S11 GO10b: the pause it answered is its verification round's, while that is still the goal's
+  // latest (resuming verifies again, in a new round).
+  if (latest.point === 'goal_acceptance') {
+    return goal.acceptance?.rounds.at(-1)?.round === latest.acceptanceRound ? latest : null;
+  }
   // The pause it answered: its step still failed on the attempt it planned for (a retry since, or a
   // later failure the planner did not get to, is another pause).
   const step = goal.steps.find((candidate) => candidate.id === latest.stepRunId);
