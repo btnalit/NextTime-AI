@@ -307,6 +307,62 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
       });
 
+      it('S11 GO12: a target the gate now declares is aligned in place as a loosening, and the catalog row says it', async () => {
+        const op = testOperation({
+          name: `gov.restart.${randomUUID()}`,
+          binding: { kind: 'http', method: 'POST', path: '/things/{id}/restart' },
+          params_schema: {
+            type: 'object',
+            properties: { id: { type: 'string', 'x-in': 'path' } },
+            required: ['id'],
+          },
+          mode: 'execute',
+          blast_radius: 'medium',
+          auto_approvable: false,
+          writes: ['Thing'],
+        });
+        const announced: Operation = { ...op, target: { object_type: 'Thing', params: ['id'] } };
+        const { gatekeeperId, gateId } = await seedLinkedGatekeeper([op], [announced]);
+
+        const result = await callAs<{
+          refreshed: readonly {
+            name: string;
+            before: unknown;
+            after: unknown;
+            direction: string;
+          }[];
+          revisionDrafts: readonly unknown[];
+        }>(ownerId, 'owner', 'refresh_operation_governance', {
+          gatekeeperId,
+          manifestDigest: await digestOf(gateId),
+        });
+        // `target` is a governance field, not part of the definition: aligned in place.
+        expect(result.revisionDrafts).toEqual([]);
+        expect(result.refreshed).toEqual([
+          expect.objectContaining({
+            name: op.name,
+            direction: 'loosened',
+            before: expect.objectContaining({ target: null }),
+            after: expect.objectContaining({ target: { objectType: 'Thing', params: ['id'] } }),
+          }),
+        ]);
+        const persisted = await inTx((client) =>
+          getPublishedOperation(client, workspaceId, gatekeeperId, op.name),
+        );
+        expect(persisted?.operation.target).toEqual({ object_type: 'Thing', params: ['id'] });
+
+        const listed = await callAs<{ items: { name: string; target?: unknown }[] }>(
+          ownerId,
+          'owner',
+          'list_operations',
+          { gatekeeperId },
+        );
+        expect(listed.items.find((row) => row.name === op.name)?.target).toEqual({
+          objectType: 'Thing',
+          params: ['id'],
+        });
+      });
+
       it('a member (non-owner) is refused with ForbiddenError, nothing is written', async () => {
         const op = testOperation({ name: `gov.forbidden.${randomUUID()}`, auto_approvable: false });
         const announced = { ...op, auto_approvable: true };

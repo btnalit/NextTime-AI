@@ -309,6 +309,46 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(properties).not.toHaveProperty('destructive_hint');
       });
 
+      it('S11 GO12 (core 0048): `target` is a governance field — changed only with the record stating it as the wire does', async () => {
+        const { id } = await seedOperation(testOperation(), { publish: true });
+        const declared = { object_type: 'Thing', params: ['id'] };
+
+        // No record, or one stating the stored shape instead of the wire's: refused.
+        await expect(
+          inTx((client) => mergeProperties(client, id, { target: declared })),
+        ).rejects.toThrow(/governance \(target\) changes only with/);
+        await expect(
+          inTx(async (client) => {
+            await mergeProperties(client, id, { target: declared });
+            await governanceAudit(client, id, { target: declared });
+          }),
+        ).rejects.toThrow(/governance \(target\) changes only with/);
+        expect(await propertiesOf(id)).not.toHaveProperty('target');
+
+        // Stated as the wire states it: it goes through, and so does removing it again.
+        await inTx(async (client) => {
+          await mergeProperties(client, id, { target: declared });
+          await governanceAudit(client, id, { target: { objectType: 'Thing', params: ['id'] } });
+        });
+        expect((await propertiesOf(id)).target).toEqual(declared);
+        await expect(
+          inTx((client) =>
+            client.query(
+              `update objects set properties = properties - 'target' where workspace_id = $1 and id = $2`,
+              [workspaceId, id],
+            ),
+          ),
+        ).rejects.toThrow(/governance \(target\) changes only with/);
+        await inTx(async (client) => {
+          await client.query(
+            `update objects set properties = properties - 'target' where workspace_id = $1 and id = $2`,
+            [workspaceId, id],
+          );
+          await governanceAudit(client, id, { target: null });
+        });
+        expect(await propertiesOf(id)).not.toHaveProperty('target');
+      });
+
       it('a deprecated version is held the same way', async () => {
         const operation = testOperation();
         const { gatekeeperId, id } = await seedOperation(operation, { publish: true });
