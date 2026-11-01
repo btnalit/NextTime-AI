@@ -20386,6 +20386,17 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "acceptanceRound": {
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "basedOnRevision": {
                 "exclusiveMinimum": 0,
                 "type": "integer"
@@ -20443,13 +20454,20 @@
                 ]
               },
               "failureCategory": {
-                "enum": [
-                  "contract_violation",
-                  "transient",
-                  "action_refused",
-                  "verification_failed"
-                ],
-                "type": "string"
+                "anyOf": [
+                  {
+                    "enum": [
+                      "contract_violation",
+                      "transient",
+                      "action_refused",
+                      "verification_failed"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "id": {
                 "type": "string"
@@ -20482,6 +20500,13 @@
                     "type": "null"
                   }
                 ]
+              },
+              "point": {
+                "enum": [
+                  "step_failure",
+                  "goal_acceptance"
+                ],
+                "type": "string"
               },
               "revision": {
                 "anyOf": [
@@ -20526,14 +20551,27 @@
                 "type": "string"
               },
               "stepAttempt": {
-                "exclusiveMinimum": 0,
-                "type": "integer"
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "stepKey": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "stepRunId": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "taskId": {
                 "type": [
@@ -20547,10 +20585,12 @@
               "status",
               "kind",
               "basedOnRevision",
+              "point",
               "stepRunId",
               "stepKey",
               "stepAttempt",
               "failureCategory",
+              "acceptanceRound",
               "taskId",
               "revision",
               "revisionClass",

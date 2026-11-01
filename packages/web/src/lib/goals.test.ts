@@ -695,10 +695,12 @@ describe('lib/goals', () => {
       status: 'applied' as const,
       kind: 'autonomous' as const,
       basedOnRevision: 1,
+      point: 'step_failure' as const,
       stepRunId: `sr-${stepKey}`,
       stepKey,
       stepAttempt: 1,
       failureCategory: 'transient' as const,
+      acceptanceRound: null,
       taskId,
       revision: 2,
       revisionClass: 'minor' as const,
@@ -742,10 +744,12 @@ describe('lib/goals', () => {
       status: taskId === null ? ('failed' as const) : ('no_revision' as const),
       kind: 'proposal' as const,
       basedOnRevision: 1,
+      point: 'step_failure' as const,
       stepRunId: 'sr-fetch',
       stepKey: 'fetch',
       stepAttempt: 2,
       failureCategory: 'transient' as const,
+      acceptanceRound: null,
       taskId,
       revision: null,
       revisionClass: null,
@@ -773,6 +777,80 @@ describe('lib/goals', () => {
     );
     expect(goalStateNote(goal, undefined, budget, en)?.text).toBe(
       'A person must decide: the planner rounds are used up (3/3), so no planner runs for the failure of step fetch’s attempt 2. Retry the step, revise the plan yourself or end the goal.',
+    );
+  });
+
+  it('S11 GO10b: atop the page, the planner’s work on the goal’s verification round that did not pass, in English too', () => {
+    const acceptanceRound = (
+      id: string,
+      status: 'running' | 'proposed' | 'no_revision' | 'failed',
+      taskId: string | null,
+    ) => ({
+      id,
+      status,
+      kind: 'proposal' as const,
+      basedOnRevision: 1,
+      point: 'goal_acceptance' as const,
+      stepRunId: null,
+      stepKey: null,
+      stepAttempt: null,
+      failureCategory: null,
+      acceptanceRound: 1,
+      taskId,
+      revision: status === 'proposed' ? 2 : null,
+      revisionClass: null,
+      classReasons: [],
+      outcomeReason: taskId === null ? ('revision_budget_exhausted' as const) : null,
+      detail: null,
+      createdAt: '2026-10-20T00:05:00.000Z',
+      settledAt: status === 'running' ? null : '2026-10-20T00:06:00.000Z',
+    });
+    const paused = (planningRounds: ReturnType<typeof acceptanceRound>[]) =>
+      goalDetail({
+        status: 'paused',
+        pauseReason: 'needs_decision',
+        planner: 'propose',
+        planningRounds,
+        steps: [stepRun({ status: 'succeeded', attemptCount: 1 })],
+        acceptance: {
+          rounds: [{ round: 1, planRevision: 1, openedAt: '2026-10-20T00:04:00.000Z', checks: [] }],
+          steps: [],
+          absenceBaselines: [],
+          overriddenChecks: [],
+        } as unknown as GoalDetailWire['acceptance'],
+      });
+    const note = (goal: GoalDetailWire) =>
+      goalStateNote(goal, undefined, goalBudgetRows(goal, en), en)?.text;
+    expect(note(paused([acceptanceRound('r-a', 'running', 'task-a')]))).toBe(
+      'A person must decide: the goal’s verification round 1 did not pass; the goal planner is looking at why, to propose a revision, which shows under Goal planner below.',
+    );
+    const proposed = paused([acceptanceRound('r-a', 'proposed', 'task-a')]);
+    expect(
+      note({
+        ...proposed,
+        revisions: [
+          ...proposed.revisions,
+          {
+            ...proposed.revisions[0],
+            id: 'rev-2',
+            revision: 2,
+            status: 'proposed',
+            basedOnRevision: 1,
+            proposer: 'planner',
+          } as GoalDetailWire['revisions'][number],
+        ],
+      }),
+    ).toBe(
+      'A person must decide: the goal’s verification round 1 did not pass and the goal planner proposed v2 for it; accept or reject it under Goal planner below.',
+    );
+    const usedUp = paused([
+      acceptanceRound('r-a', 'no_revision', 'task-a'),
+      acceptanceRound('r-b', 'no_revision', 'task-b'),
+      acceptanceRound('r-c', 'no_revision', 'task-c'),
+      acceptanceRound('r-d', 'failed', null),
+    ]);
+    expect(note(usedUp)).toBe(
+      'A person must decide: the planner rounds are used up (3/3), so no planner runs for the goal’s verification round 1, which did not pass. Resume to verify again, revise the plan yourself or end the goal.',
     );
   });
 

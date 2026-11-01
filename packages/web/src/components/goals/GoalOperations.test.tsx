@@ -94,7 +94,7 @@ describe('goal operations on the goal page (S11 GO6)', () => {
     );
     await waitFor(() => expect(reads(http)).toBe(2));
     expect((await screen.findByTestId('goal-op-done')).textContent).toBe(
-      '目标已确认，开始执行。步骤失败、需要你决定时，目标规划器会先提一个修订给你看。',
+      '目标已确认，开始执行。步骤失败、需要你决定，或验收没通过时，目标规划器会先提一个修订给你看。',
     );
   });
 

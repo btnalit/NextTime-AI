@@ -93,7 +93,8 @@ import type { GoalRunRow, StepRunRow } from './types.js';
  *   3. **Open** a round when the run is paused `needs_decision`, no owner holds it, the requester
  *      gave the leave, no round runs and no revision the planner proposed waits for a decision —
  *      for the latest live failed step of the plan in force whose failure the platform does not
- *      retry on its own ({@link plannableFailure}), at most once per failed attempt. When no planner
+ *      retry on its own ({@link plannableFailure}), at most once per failed attempt (or, S11 GO10b
+ *      below, for the verification round the goal did not pass). When no planner
  *      can run for it, the round is recorded `failed` with why (no revision or token budget left, no
  *      planner definition, a requester who cannot start Workers now); the requester's concurrency
  *      quota only delays it ({@link PlanningPhaseResult.retryAt}). The planner Task is created
@@ -132,6 +133,19 @@ import type { GoalRunRow, StepRunRow } from './types.js';
  *     (rounds that started a planning Task, whatever they came to) have run
  *     (`revision_budget_exhausted`). `maxRevisions` caps them and the revisions made each — two
  *     counts, one limit; `usage.plannerRounds` reads the first.
+ *
+ * S11 GO10b (`s11-w2/go10b-default-plan.md`; goal/0016): a second judgment point. When every step
+ * succeeded and the goal's own acceptance did not pass, the run is paused `needs_decision` as
+ * before; with no failed step to plan for, phase P opens a `proposal` round for that verification
+ * round instead ({@link failedAcceptanceRound}): the run's latest, on the revision in force, with
+ * a check the platform made that `failed` (a round of only `unavailable` checks is no judgment
+ * point — the platform could not look), at most once per verification round, and not one the
+ * requester already resumed the run from. It is always a proposal round, `apply_minor` leave or
+ * not (I-P6, the DB holds it): the run is paused for it already, and the platform never changes a
+ * plan on its own after the goal did not pass. The planner reads which checks did not pass — key,
+ * kind, status, the code of why — never what they observed (I-P7). The limits above hold for it
+ * like any round: it counts as a planner round, and only autonomous rounds count towards no
+ * progress.
  *
  * Every round settles once (goal/0014), and its audit row (`goal_planning_round.open`,
  * `goal_planning_round.settle`) carries `by: 'advancer'` with the requester as actor, like every
@@ -627,17 +641,147 @@ async function openRound(
       break;
     }
   }
-  if (!target) return none;
+  if (!target) {
+    // S11 GO10b: no failed step to plan for — under a pause, the goal's own acceptance may be what
+    // did not pass (a proposal round only, I-P6).
+    if (kind !== 'proposal') return none;
+    const acceptance = await failedAcceptanceRound(ctx, rounds);
+    if (!acceptance) return none;
+    return openPlannerRound(ctx, rounds, kind, {
+      goalRunId: goal.id,
+      basedOnRevision: base,
+      point: 'goal_acceptance',
+      stepRunId: null,
+      stepAttempt: null,
+      failureCategory: null,
+      acceptanceRound: acceptance.round,
+      kind,
+      failed: acceptance,
+    });
+  }
   const { step, category } = target;
   if (rounded(step)) return none;
-  const opening = {
+  return openPlannerRound(ctx, rounds, kind, {
     goalRunId: goal.id,
     basedOnRevision: base,
+    point: 'step_failure',
     stepRunId: step.id,
     stepAttempt: step.attemptCount,
     failureCategory: category,
+    acceptanceRound: null,
     kind,
+    failed: { step, category },
+  });
+}
+
+/** What a round is opened for, as `insertRound` writes it, with what the planner is told failed. */
+type RoundOpening = {
+  readonly goalRunId: string;
+  readonly basedOnRevision: number;
+  readonly kind: PlanningRoundKind;
+} & (
+  | {
+      readonly point: 'step_failure';
+      readonly stepRunId: string;
+      readonly stepAttempt: number;
+      readonly failureCategory: PlanningFailureCategory;
+      readonly acceptanceRound: null;
+      readonly failed: { readonly step: StepRunRow; readonly category: PlanningFailureCategory };
+    }
+  | {
+      readonly point: 'goal_acceptance';
+      readonly stepRunId: null;
+      readonly stepAttempt: null;
+      readonly failureCategory: null;
+      readonly acceptanceRound: number;
+      readonly failed: FailedAcceptanceRound;
+    }
+);
+
+/** S11 GO10b: a verification round of the goal the planner may be asked about. */
+interface FailedAcceptanceRound {
+  readonly round: number;
+  /** Its checks that did not pass — the platform's, `failed` or `unavailable` — key, kind, status
+   *  and why (`lastError`): never what an observation saw (I-P7). */
+  readonly unmet: readonly {
+    readonly key: string;
+    readonly kind: string;
+    readonly status: string;
+    readonly lastError: string | null;
+  }[];
+}
+
+/**
+ * S11 GO10b (goal/0016): the verification round the run is paused for, when a check of it the
+ * platform made `failed` — `null` otherwise. It is the run's latest round, on the revision in
+ * force, with no planning round yet (one per verification round), and the run has not been resumed
+ * since it was opened: a resume verifies again in a new round, so an older round is no longer what
+ * the run waits on — not even while another pause holds it before it verifies again (I-P4). A round
+ * of only `unavailable` checks is none: the platform could not look, and a revision would not help.
+ */
+async function failedAcceptanceRound(
+  ctx: PlanningPhaseContext,
+  rounds: readonly PlanningRoundRow[],
+): Promise<FailedAcceptanceRound | null> {
+  const { client, goal } = ctx;
+  const ws = goal.workspaceId;
+  const latest = await client.query<{
+    round: number;
+    check_key: string;
+    kind: string;
+    status: string;
+    last_error: string | null;
+    plan_revision: number;
+    opened_at: Date;
+  }>(
+    `select c.round, c.check_key, c.kind, c.status, c.last_error, c.plan_revision,
+            min(c.created_at) over () as opened_at
+       from goal_acceptance_checks c
+      where c.workspace_id = $1 and c.goal_run_id = $2
+        and c.round = (select max(round) from goal_acceptance_checks
+                        where workspace_id = $1 and goal_run_id = $2)
+      order by c.check_key`,
+    [ws, goal.id],
+  );
+  const checks = latest.rows;
+  const first = checks[0];
+  if (!first) return null;
+  if (checks.some((check) => check.plan_revision !== goal.currentRevision)) return null;
+  if (!checks.some((check) => check.status === 'failed')) return null;
+  if (rounds.some((round) => round.acceptanceRound === first.round)) return null;
+  const resumed = await client.query<{ at: Date | null }>(
+    `select max(created_at) as at from audit_records
+      where workspace_id = $1 and resource_id = $2 and action = 'goal_run.resume'`,
+    [ws, goal.id],
+  );
+  // A resume in the transaction that opened the round (one `now()`) came before it.
+  const resumedAt = resumed.rows[0]?.at ?? null;
+  if (resumedAt !== null && resumedAt.getTime() > first.opened_at.getTime()) return null;
+  return {
+    round: first.round,
+    unmet: checks
+      .filter((check) => check.status === 'failed' || check.status === 'unavailable')
+      .map((check) => ({
+        key: check.check_key,
+        kind: check.kind,
+        status: check.status,
+        lastError: check.last_error,
+      })),
   };
+}
+
+/** Opens a round for `opening` — or records it failed when no planner can run for it, pausing an
+ *  autonomous run's step for a person. */
+async function openPlannerRound(
+  ctx: PlanningPhaseContext,
+  rounds: readonly PlanningRoundRow[],
+  kind: PlanningRoundKind,
+  opening: RoundOpening,
+): Promise<Omit<PlanningPhaseResult, 'terminate' | 'due'>> {
+  const none = { start: null, retryAt: null, pause: null } as const;
+  const { client, goal } = ctx;
+  const ws = goal.workspaceId;
+  const base = opening.basedOnRevision;
   const failRound = async (
     reason:
       | 'revision_budget_exhausted'
@@ -651,16 +795,17 @@ async function openRound(
     return {
       ...none,
       pause:
-        kind === 'autonomous'
+        opening.point === 'step_failure' && kind === 'autonomous'
           ? {
               reason: 'needs_decision' as const,
-              detail: `step ${step.stepKey}: attempt ${step.attemptCount} failed (${category}); the platform does not plan it on its own now (${reason}: ${boundDetail(detail)}) — retry the step, revise the plan or cancel`,
+              detail: `step ${opening.failed.step.stepKey}: attempt ${opening.failed.step.attemptCount} failed (${opening.failed.category}); the platform does not plan it on its own now (${reason}: ${boundDetail(detail)}) — retry the step, revise the plan or cancel`,
             }
           : null,
     };
   };
 
-  if (kind === 'autonomous') {
+  if (opening.point === 'step_failure' && kind === 'autonomous') {
+    const { step, category } = opening.failed;
     // S11 GO10: the breaker — no round, and no round row: the run waits for a person, who may
     // retry, revise or end it (it never ends on its own).
     const stalled = await roundsWithoutProgress(ctx, rounds);
@@ -727,7 +872,7 @@ async function openRound(
 
   await client.query('savepoint goal_planning_round');
   const roundId = await insertRound(client, ws, goal.onBehalfOf, opening, null);
-  const input = await plannerInput(ctx, step, category, base);
+  const input = await plannerInput(ctx, opening, rounds, base);
   const created = await createPlanningTask(client, ws, {
     definition,
     requesterId: goal.onBehalfOf,
@@ -769,22 +914,15 @@ async function insertRound(
   client: PoolClient,
   workspaceId: string,
   requesterId: string,
-  opening: {
-    readonly goalRunId: string;
-    readonly basedOnRevision: number;
-    readonly stepRunId: string;
-    readonly stepAttempt: number;
-    readonly failureCategory: PlanningFailureCategory;
-    readonly kind: PlanningRoundKind;
-  },
+  opening: RoundOpening,
   failed: { readonly reason: string; readonly detail: string } | null,
 ): Promise<string> {
   const inserted = await client.query<{ id: string }>(
     `insert into goal_planning_rounds (
        workspace_id, goal_run_id, based_on_revision, step_run_id, step_attempt, failure_category,
-       status, outcome_reason, detail, settled_at, kind
-     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-               case when $7 = 'running' then null else now() end, $10)
+       acceptance_round, status, outcome_reason, detail, settled_at, kind
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+               case when $8 = 'running' then null else now() end, $11)
      returning id`,
     [
       workspaceId,
@@ -793,6 +931,7 @@ async function insertRound(
       opening.stepRunId,
       opening.stepAttempt,
       opening.failureCategory,
+      opening.acceptanceRound,
       failed ? 'failed' : 'running',
       failed?.reason ?? null,
       failed ? boundDetail(failed.detail) : null,
@@ -811,9 +950,11 @@ async function insertRound(
       by: 'advancer',
       planningRoundId: id,
       basedOnRevision: opening.basedOnRevision,
+      point: opening.point,
       stepRunId: opening.stepRunId,
       stepAttempt: opening.stepAttempt,
       failureCategory: opening.failureCategory,
+      acceptanceRound: opening.acceptanceRound,
       kind: opening.kind,
       status: failed ? 'failed' : 'running',
       ...(failed ? { reason: failed.reason } : {}),
@@ -830,8 +971,8 @@ async function insertRound(
  *  outputs and failure texts are what Workers wrote: data for the planner, not instructions. */
 async function plannerInput(
   ctx: PlanningPhaseContext,
-  failedStep: StepRunRow,
-  category: PlanningFailureCategory,
+  opening: RoundOpening,
+  rounds: readonly PlanningRoundRow[],
   base: number,
 ): Promise<Record<string, unknown>> {
   const { client, goal } = ctx;
@@ -867,7 +1008,23 @@ async function plannerInput(
         failureCategory: step.failureCategory,
         waitingReason: step.waitingReason,
       })),
-      failedStep: await failedStepFacts(client, ws, failedStep, category),
+      ...(opening.point === 'step_failure'
+        ? {
+            failedStep: await failedStepFacts(
+              client,
+              ws,
+              opening.failed.step,
+              opening.failed.category,
+            ),
+          }
+        : {
+            // S11 GO10b: every step succeeded, the goal's acceptance did not pass — the checks
+            // that did not (their definitions are in the plan), never what was observed (I-P7).
+            failedAcceptance: {
+              round: opening.failed.round,
+              checks: opening.failed.unmet.map((check) => ({ ...check })),
+            },
+          }),
       outputs,
       budget: {
         tokensLeft: Math.max(0, goal.budget.maxTokens - usage.tokens),
@@ -875,6 +1032,11 @@ async function plannerInput(
         revisionsLeft: Math.max(
           0,
           goal.budget.maxRevisions - ((accepted.rows[0]?.accepted ?? 1) - 1),
+        ),
+        // S11 GO10b: the other count `maxRevisions` caps (GO10) — this round is one of them.
+        plannerRoundsLeft: Math.max(
+          0,
+          goal.budget.maxRevisions - rounds.filter((round) => round.task !== null).length - 1,
         ),
         wallClockSecondsLeft: wallClockLeft,
       },

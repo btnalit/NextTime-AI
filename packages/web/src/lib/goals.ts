@@ -24,6 +24,7 @@ import type {
   PlanHint,
   PlanSourceProcedureWire,
   PlanStep,
+  PlanningRoundWire,
   Predicate,
   PredicateJsonValue,
   StepAcceptanceState,
@@ -1541,6 +1542,12 @@ export interface GoalStateNote {
   readonly text: string;
 }
 
+/** S11 GO10b: the goal's verification round a planning round was for, when it was for one (the
+ *  goal's acceptance did not pass); `null` for a step's round or none. */
+function acceptanceRoundOf(round: PlanningRoundWire | undefined): number | null {
+  return round?.point === 'goal_acceptance' ? round.acceptanceRound : null;
+}
+
 /**
  * What the goal is doing or waiting on, for the top of its page. `unresolved` is
  * `list_goal_unresolved_actions` when it was read (`undefined` while loading or refused): with it,
@@ -1666,7 +1673,10 @@ function pausedNote(
       const stalled = (goal.planningRounds ?? [])
         .filter((round) => round.kind === 'autonomous' && round.taskId !== null)
         .slice(-GOAL_PLANNER_NO_PROGRESS_LIMIT);
-      const keys = [...new Set(stalled.map((round) => round.stepKey))];
+      // An autonomous round is always a step's (S11 GO10b: I-P6).
+      const keys = [
+        ...new Set(stalled.flatMap((round) => (round.stepKey === null ? [] : [round.stepKey]))),
+      ];
       if (keys.length > 0) {
         const [zh, en] = namesIn(keys);
         return {
@@ -1726,21 +1736,39 @@ function pausedNote(
           revision.basedOnRevision === goal.currentRevision,
       );
       if (proposal) {
+        // S11 GO10b: for the goal's own acceptance not passing, the round names it.
+        const verification = acceptanceRoundOf(
+          goal.planningRounds?.find((round) => round.revision === proposal.revision),
+        );
         return {
           tone: 'info',
-          text: t(
-            `需要人决定：目标规划器为这次失败提了第 ${proposal.revision} 版修订，在下面「目标规划器」里决定接受还是拒绝。`,
-            `A person must decide: the goal planner proposed v${proposal.revision} for this failure; accept or reject it under Goal planner below.`,
-          ),
+          text:
+            verification !== null
+              ? t(
+                  `需要人决定：目标第 ${verification} 轮验收没通过，目标规划器为此提了第 ${proposal.revision} 版修订，在下面「目标规划器」里决定接受还是拒绝。`,
+                  `A person must decide: the goal’s verification round ${verification} did not pass and the goal planner proposed v${proposal.revision} for it; accept or reject it under Goal planner below.`,
+                )
+              : t(
+                  `需要人决定：目标规划器为这次失败提了第 ${proposal.revision} 版修订，在下面「目标规划器」里决定接受还是拒绝。`,
+                  `A person must decide: the goal planner proposed v${proposal.revision} for this failure; accept or reject it under Goal planner below.`,
+                ),
         };
       }
-      if (goal.planningRounds?.some((round) => round.status === 'running')) {
+      const running = goal.planningRounds?.find((round) => round.status === 'running');
+      if (running) {
+        const verification = acceptanceRoundOf(running);
         return {
           tone: 'info',
-          text: t(
-            '需要人决定：目标规划器正在看这次失败，准备提一个修订，结果会出现在下面「目标规划器」里。',
-            'A person must decide: the goal planner is looking at this failure to propose a revision; it shows under Goal planner below.',
-          ),
+          text:
+            verification !== null
+              ? t(
+                  `需要人决定：目标第 ${verification} 轮验收没通过，目标规划器正在看为什么，准备提一个修订，结果会出现在下面「目标规划器」里。`,
+                  `A person must decide: the goal’s verification round ${verification} did not pass; the goal planner is looking at why, to propose a revision, which shows under Goal planner below.`,
+                )
+              : t(
+                  '需要人决定：目标规划器正在看这次失败，准备提一个修订，结果会出现在下面「目标规划器」里。',
+                  'A person must decide: the goal planner is looking at this failure to propose a revision; it shows under Goal planner below.',
+                ),
         };
       }
       // S11 GO10 (UX P2-1 on #870): the planner's round for this failure stopped without a
@@ -1756,30 +1784,54 @@ function pausedNote(
           : null;
       if (conclusion?.status === 'failed' && goal.planningRounds) {
         const rounds = { planningRounds: goal.planningRounds, budget: goal.budget };
+        const verification = acceptanceRoundOf(conclusion);
         const attempt = t(
           `步骤「${conclusion.stepKey}」第 ${conclusion.stepAttempt} 次尝试`,
           `step ${conclusion.stepKey}’s attempt ${conclusion.stepAttempt}`,
         );
+        // S11 GO10b: what is left to do after the goal's acceptance did not pass, or a step failed.
+        const next =
+          verification !== null
+            ? t(
+                '可以继续以再验收一次、自己修订计划或结束目标',
+                'Resume to verify again, revise the plan yourself or end the goal',
+              )
+            : t(
+                '可以重试步骤、自己修订计划或结束目标',
+                'Retry the step, revise the plan yourself or end the goal',
+              );
         const usedUp = plannerRoundsUsedUpText(rounds, conclusion, t);
         if (usedUp) {
           // Mid-sentence after the colon in English: "the planner rounds…", not "The…".
           const usedUpMid = usedUp.charAt(0).toLowerCase() + usedUp.slice(1);
           return {
             tone: 'warn',
-            text: t(
-              `需要人决定：${usedUp}，平台不再为${attempt}的失败运行规划器。可以重试步骤、自己修订计划或结束目标。`,
-              `A person must decide: ${usedUpMid}, so no planner runs for the failure of ${attempt}. Retry the step, revise the plan yourself or end the goal.`,
-            ),
+            text:
+              verification !== null
+                ? t(
+                    `需要人决定：${usedUp}，目标第 ${verification} 轮验收没通过，平台不再为它运行规划器。${next}。`,
+                    `A person must decide: ${usedUpMid}, so no planner runs for the goal’s verification round ${verification}, which did not pass. ${next}.`,
+                  )
+                : t(
+                    `需要人决定：${usedUp}，平台不再为${attempt}的失败运行规划器。${next}。`,
+                    `A person must decide: ${usedUpMid}, so no planner runs for the failure of ${attempt}. ${next}.`,
+                  ),
           };
         }
         const outcome = planningOutcomeText(conclusion, t, rounds);
         if (outcome) {
           return {
             tone: 'warn',
-            text: t(
-              `需要人决定：${attempt}失败了，目标规划器这次没有给出修订：${outcome}可以重试步骤、自己修订计划或结束目标，见下面「目标规划器」。`,
-              `A person must decide: ${attempt} failed and the goal planner gave no revision this time: ${outcome} Retry the step, revise the plan yourself or end the goal; see Goal planner below.`,
-            ),
+            text:
+              verification !== null
+                ? t(
+                    `需要人决定：目标第 ${verification} 轮验收没通过，目标规划器这次没有给出修订：${outcome}${next}，见下面「目标规划器」。`,
+                    `A person must decide: the goal’s verification round ${verification} did not pass and the goal planner gave no revision this time: ${outcome} ${next}; see Goal planner below.`,
+                  )
+                : t(
+                    `需要人决定：${attempt}失败了，目标规划器这次没有给出修订：${outcome}${next}，见下面「目标规划器」。`,
+                    `A person must decide: ${attempt} failed and the goal planner gave no revision this time: ${outcome} ${next}; see Goal planner below.`,
+                  ),
           };
         }
       }

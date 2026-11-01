@@ -20,6 +20,7 @@ import {
   PlannerRevisionClassSchema,
   PlannerRevisionMajorReasonSchema,
   PlanningFailureCategorySchema,
+  PlanningPointSchema,
   PlanningRoundKindSchema,
   PlanningRoundOutcomeReasonSchema,
   PlanningRoundStatusSchema,
@@ -442,7 +443,10 @@ export type PlannerRevisionClassReasonWire = z.infer<typeof PlannerRevisionClass
 
 /** S11 GO9a: one planning round of the run — the goal planner asked once about one failed attempt
  *  of a step (`stepKey`, `stepAttempt`, why it failed), on the revision then in force
- *  (`basedOnRevision`). `taskId`: the planner's Task (`get_task` reads it), `null` for a round that
+ *  (`basedOnRevision`). S11 GO10b: `point` — what it was asked about: a step's failed attempt
+ *  (`step_failure`, the step fields set, `acceptanceRound` null) or a verification round of the
+ *  goal whose acceptance did not pass (`goal_acceptance`: `acceptanceRound` set, the step fields
+ *  `null`). `taskId`: the planner's Task (`get_task` reads it), `null` for a round that
  *  never started one. `revision`: what it proposed, once `proposed` (or `applied`). `outcomeReason`:
  *  why it `failed` or was `abandoned`. `detail`: for `no_revision`, the planner's reason as it
  *  wrote it; for `failed`, what the platform found. S11 GO9b: `kind` — opened under a pause (the
@@ -456,10 +460,12 @@ export const PlanningRoundWireSchema = z
     status: PlanningRoundStatusSchema,
     kind: PlanningRoundKindSchema,
     basedOnRevision: z.number().int().positive(),
-    stepRunId: z.string(),
-    stepKey: z.string(),
-    stepAttempt: z.number().int().positive(),
-    failureCategory: PlanningFailureCategorySchema,
+    point: PlanningPointSchema,
+    stepRunId: z.string().nullable(),
+    stepKey: z.string().nullable(),
+    stepAttempt: z.number().int().positive().nullable(),
+    failureCategory: PlanningFailureCategorySchema.nullable(),
+    acceptanceRound: z.number().int().positive().nullable(),
     taskId: z.string().nullable(),
     revision: z.number().int().positive().nullable(),
     revisionClass: PlannerRevisionClassSchema.nullable(),

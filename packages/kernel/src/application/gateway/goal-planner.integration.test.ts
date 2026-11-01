@@ -7,6 +7,7 @@ import {
   GoalDetailWireSchema,
   type GoalPlannerMode,
   type HandleClaims,
+  type Operation,
   PLANNER_OUTPUT_SCHEMA,
   type Role,
 } from '@nexttime/shared';
@@ -21,7 +22,11 @@ import type {
   TaskSupervisorStatus,
 } from '../../adapters/supervisor-client/index.js';
 import { generateEphemeralHandleKeyPair } from '../../governance/capability/index.js';
-import { registerGatekeeper } from '../../governance/gatekeepers/index.js';
+import {
+  importManifest,
+  publishOperation,
+  registerGatekeeper,
+} from '../../governance/gatekeepers/index.js';
 import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { advanceGoalRun } from '../goal/advance.js';
@@ -2393,6 +2398,455 @@ describe.runIf(DATABASE_URL !== undefined)(
           ),
         ),
       ).toMatch(/a proposal round is abandoned because its run left the pause/);
+    });
+
+    // ----- S11 GO10b: the planner when the goal's acceptance did not pass ----------------------
+
+    const STATUS_OPERATION: Operation = {
+      name: 'svc.status',
+      binding: { kind: 'http', method: 'GET', path: '/status' },
+      params_schema: {},
+      mode: 'observe',
+      blast_radius: 'low',
+      reversibility: false,
+      auto_approvable: true,
+      await_decision: false,
+      reads: [],
+      writes: [],
+    };
+    let statusGate: string | undefined;
+
+    /** A gate with a published observe-class `svc.status`, for the goal's acceptance check. */
+    async function acceptanceGate(): Promise<string> {
+      if (statusGate) return statusGate;
+      statusGate = await admin(async (client) => {
+        const activity = await startActivity(client, workspaceId, {
+          kind: 'test.connection',
+          principalId: ownerId,
+        });
+        const registered = await registerGatekeeper(client, workspaceId, {
+          name: `go10b-gate-${randomUUID().slice(0, 8)}`,
+          transportKind: 'http',
+          target: 'example-system',
+          endpoint: 'http://127.0.0.1:9',
+          connectionSecretSalt: 'go10b-salt',
+          activityId: activity.id,
+          registeredBy: { id: ownerId, kind: 'human' },
+        });
+        await importManifest(client, workspaceId, {
+          gatekeeperId: registered.gatekeeperId,
+          operations: [STATUS_OPERATION],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: activity.id,
+        });
+        await publishOperation(client, workspaceId, {
+          gatekeeperId: registered.gatekeeperId,
+          name: STATUS_OPERATION.name,
+          actor: { principalId: ownerId, role: 'owner' },
+        });
+        return registered.gatekeeperId;
+      });
+      return statusGate;
+    }
+
+    /** One step `renew`, and one check the platform makes of the goal: `served`. */
+    const checkedPlan = async () => ({
+      ...planOf([{ key: 'renew' }]),
+      acceptance: [
+        {
+          kind: 'observe_predicate',
+          key: 'served',
+          check: {
+            gatekeeperId: await acceptanceGate(),
+            operation: 'svc.status',
+            params: {},
+            expect: { path: 'state', op: 'eq', value: 'serving' },
+          },
+        },
+      ],
+    });
+
+    /** The live step `key`'s last attempt reports success. */
+    async function succeed(goalRunId: string, key: string, requesterId: string) {
+      const attempt = await lastAttempt((await liveStep(goalRunId, key)).id);
+      await dispatchCapability({ pool }, await workerOf(attempt.id), 'report_task_result', {
+        summary: `${key} done`,
+      });
+      await advanceOnce(goalRunId, requesterId);
+    }
+
+    /** The executor's verdict on a check of the latest verification round, written as it would
+     *  (an Observation that did not satisfy the predicate, or none at all) — no gate is called. */
+    async function settleCheck(
+      goalRunId: string,
+      status: 'passed' | 'failed' | 'unavailable',
+      checkKey = 'served',
+    ) {
+      const settled = await raw<{ round: number; observation_id: string | null }>(
+        `update goal_acceptance_checks
+            set status = $3, attempts = 1, first_attempt_at = now(), settled_at = now(),
+                observation_id = case when $3 = 'unavailable' then null else gen_random_uuid() end,
+                last_error = case $3 when 'failed' then 'predicate_unsatisfied'
+                                     when 'unavailable' then 'gatekeeper_unreachable' end
+          where workspace_id = $1 and goal_run_id = $2 and check_key = $4 and status = 'pending'
+            and round = (select max(round) from goal_acceptance_checks
+                          where workspace_id = $1 and goal_run_id = $2)
+          returning round, observation_id::text`,
+        [workspaceId, goalRunId, status, checkKey],
+      );
+      const row = settled[0];
+      if (!row) throw new Error(`no pending check ${checkKey}`);
+      return row;
+    }
+
+    /** Started with the leave in `planner`, its step done, the goal being verified (round 1). */
+    async function verifying(requesterId: string, planner: GoalPlannerMode | false = 'propose') {
+      const goalRunId = await startGoal(requesterId, planner, await checkedPlan());
+      await succeed(goalRunId, 'renew', requesterId);
+      expect((await goalRow(goalRunId)).status).toBe('verifying');
+      return goalRunId;
+    }
+
+    const acceptanceRounds = (goalRunId: string) =>
+      raw<{
+        id: string;
+        kind: string;
+        status: string;
+        acceptance_round: number | null;
+        step_run_id: string | null;
+        outcome_reason: string | null;
+        detail: string | null;
+        revision: number | null;
+      }>(
+        `select id, kind, status, acceptance_round, step_run_id, outcome_reason, detail, revision
+           from goal_planning_rounds where workspace_id = $1 and goal_run_id = $2
+          order by created_at`,
+        [workspaceId, goalRunId],
+      );
+
+    const setQuota = (value: number | null) =>
+      value === null
+        ? raw(
+            `delete from quotas where workspace_id = $1
+               and key = 'task.max_concurrent_worker_runs_per_user'`,
+            [workspaceId],
+          )
+        : raw(
+            `insert into quotas (workspace_id, key, value)
+             values ($1, 'task.max_concurrent_worker_runs_per_user', $2)
+             on conflict (workspace_id, key) do update set value = excluded.value`,
+            [workspaceId, value],
+          );
+
+    it('the goal’s acceptance not passing opens a proposal round for it; the planner adds a step, the requester accepts, the goal is achieved (S11 GO10b)', async () => {
+      const requester = await newPrincipal('member');
+      const goalRunId = await verifying(requester);
+      const failed = await settleCheck(goalRunId, 'failed');
+      await advanceOnce(goalRunId, requester);
+      expect(await goalRow(goalRunId)).toMatchObject({
+        status: 'paused',
+        pause_reason: 'needs_decision',
+      });
+      const [round, ...more] = await acceptanceRounds(goalRunId);
+      expect(more).toEqual([]);
+      expect(round).toMatchObject({
+        kind: 'proposal',
+        status: 'running',
+        acceptance_round: 1,
+        step_run_id: null,
+      });
+      if (!round) throw new Error('no round');
+
+      // What the planner reads: the checks that did not pass, never what they observed (I-P7).
+      const task = await plannerTask(round.id);
+      expect(task.input.failedStep).toBeUndefined();
+      expect(task.input.failedAcceptance).toEqual({
+        round: 1,
+        checks: [
+          {
+            key: 'served',
+            kind: 'observe_predicate',
+            status: 'failed',
+            lastError: 'predicate_unsatisfied',
+          },
+        ],
+      });
+      expect(JSON.stringify(task.input)).not.toContain(failed.observation_id as string);
+      expect(task.input.budget).toMatchObject({ plannerRoundsLeft: BUDGET.maxRevisions - 1 });
+
+      const before = await getGoal(goalRunId, requester);
+      expect(before.planningRounds).toMatchObject([
+        {
+          id: round.id,
+          point: 'goal_acceptance',
+          acceptanceRound: 1,
+          stepRunId: null,
+          stepKey: null,
+          stepAttempt: null,
+          failureCategory: null,
+          kind: 'proposal',
+          status: 'running',
+          taskId: task.id,
+        },
+      ]);
+
+      await report(task.id, {
+        decision: 'revise',
+        plan: {
+          ...before.planRevision.plan,
+          steps: [
+            ...(before.planRevision.plan.steps as Record<string, unknown>[]),
+            { key: 'reload', worker, input: { step: 'reload' }, maxAttempts: 1 },
+          ],
+        },
+        reason: 'The certificate is renewed but the site still serves the old one; reload it.',
+      });
+      await advanceOnce(goalRunId, requester);
+      expect(await acceptanceRounds(goalRunId)).toMatchObject([
+        { status: 'proposed', revision: 2 },
+      ]);
+      expect((await goalRow(goalRunId)).status).toBe('paused');
+
+      await call(human(requester), 'decide_plan_revision', {
+        goalRunId,
+        revision: 2,
+        decision: 'accept',
+        resume: true,
+      });
+      await advanceOnce(goalRunId, requester);
+      // The step that succeeded stands; only the new one runs.
+      expect((await liveStep(goalRunId, 'renew')).attempt_count).toBe(1);
+      await succeed(goalRunId, 'reload', requester);
+      expect((await goalRow(goalRunId)).status).toBe('verifying');
+      expect(await settleCheck(goalRunId, 'passed')).toMatchObject({ round: 2 });
+      await advanceOnce(goalRunId, requester);
+      expect((await goalRow(goalRunId)).status).toBe('completed');
+      expect(await acceptanceRounds(goalRunId)).toHaveLength(1);
+    });
+
+    it('one round per verification round: none again for the same one, its own for the next after a resume, counted as a planner round (S11 GO10b)', async () => {
+      const requester = await newPrincipal('member');
+      const goalRunId = await verifying(requester);
+      await settleCheck(goalRunId, 'failed');
+      await advanceOnce(goalRunId, requester);
+      const [first] = await acceptanceRounds(goalRunId);
+      if (!first) throw new Error('no round');
+      await report((await plannerTask(first.id)).id, {
+        decision: 'no_revision',
+        reason: 'The check reads the site; a person must look at why it still fails.',
+      });
+      await advanceOnce(goalRunId, requester);
+      await advanceOnce(goalRunId, requester);
+      expect((await acceptanceRounds(goalRunId)).map((round) => round.status)).toEqual([
+        'no_revision',
+      ]);
+
+      await call(human(requester), 'resume_goal', { goalRunId });
+      await advanceOnce(goalRunId, requester);
+      expect((await goalRow(goalRunId)).status).toBe('verifying');
+      await settleCheck(goalRunId, 'failed');
+      await advanceOnce(goalRunId, requester);
+      const all = await acceptanceRounds(goalRunId);
+      expect(all.map((round) => [round.acceptance_round, round.status])).toEqual([
+        [1, 'no_revision'],
+        [2, 'running'],
+      ]);
+      const second = await plannerTask(all[1]?.id as string);
+      expect(second.input.budget).toMatchObject({ plannerRoundsLeft: BUDGET.maxRevisions - 2 });
+      expect((await getGoal(goalRunId, requester)).usage.plannerRounds).toBe(2);
+    });
+
+    it('no round for a verification round of only unavailable checks, without the leave, or with no planner rounds left (S11 GO10b)', async () => {
+      const requester = await newPrincipal('member');
+      const unavailable = await verifying(requester);
+      await settleCheck(unavailable, 'unavailable');
+      await advanceOnce(unavailable, requester);
+      expect(await goalRow(unavailable)).toMatchObject({
+        status: 'paused',
+        pause_reason: 'needs_decision',
+      });
+      expect(await acceptanceRounds(unavailable)).toEqual([]);
+
+      const noLeave = await verifying(requester, false);
+      await settleCheck(noLeave, 'failed');
+      await advanceOnce(noLeave, requester);
+      expect((await goalRow(noLeave)).pause_reason).toBe('needs_decision');
+      expect(await acceptanceRounds(noLeave)).toEqual([]);
+
+      const usedUp = await verifying(requester);
+      await raw(
+        'update goal_runs set budget_max_revisions = 0 where workspace_id = $1 and id = $2',
+        [workspaceId, usedUp],
+      );
+      await settleCheck(usedUp, 'failed');
+      await advanceOnce(usedUp, requester);
+      await advanceOnce(usedUp, requester);
+      expect(await acceptanceRounds(usedUp)).toMatchObject([
+        {
+          kind: 'proposal',
+          status: 'failed',
+          acceptance_round: 1,
+          outcome_reason: 'revision_budget_exhausted',
+          detail: '0 of 0 planner rounds already run',
+        },
+      ]);
+    });
+
+    it('no round for a verification round the plan or the run has moved on from (S11 GO10b)', async () => {
+      const requester = await newPrincipal('member');
+      const revised = await verifying(requester);
+      const resumed = await verifying(requester);
+      // The planner cannot start yet (the requester's concurrency): no round, the run waits.
+      await setQuota(0);
+      try {
+        await settleCheck(revised, 'failed');
+        await advanceOnce(revised, requester);
+        expect(await acceptanceRounds(revised)).toEqual([]);
+        // The requester revises the plan meanwhile: the checks are of an older revision.
+        const goal = await getGoal(revised, requester);
+        await call(human(requester), 'revise_goal', {
+          goalRunId: revised,
+          basedOnRevision: 1,
+          plan: {
+            ...goal.planRevision.plan,
+            steps: [
+              ...(goal.planRevision.plan.steps as Record<string, unknown>[]),
+              { key: 'reload', worker, input: { step: 'reload' }, maxAttempts: 1 },
+            ],
+          },
+        });
+        await settleCheck(resumed, 'failed');
+        await advanceOnce(resumed, requester);
+        await call(human(requester), 'resume_goal', { goalRunId: resumed });
+        // Paused for a decision again before verifying anew (what an advance in between could
+        // do): the round the requester resumed from is no judgment point any more.
+        await raw(
+          `update goal_runs set status = 'paused', pause_reason = 'needs_decision'
+            where workspace_id = $1 and id = $2`,
+          [workspaceId, resumed],
+        );
+        await setQuota(null);
+        await advanceOnce(revised, requester);
+        await advanceOnce(resumed, requester);
+        expect(await acceptanceRounds(revised)).toEqual([]);
+        expect(await acceptanceRounds(resumed)).toEqual([]);
+      } finally {
+        await setQuota(null);
+      }
+    });
+
+    it('under apply_minor the goal’s acceptance not passing gets a proposal round, never one the platform applies (S11 GO10b, I-P6)', async () => {
+      const requester = await newPrincipal('member');
+      const goalRunId = await verifying(requester, 'apply_minor');
+      await settleCheck(goalRunId, 'failed');
+      await advanceOnce(goalRunId, requester);
+      const [round] = await acceptanceRounds(goalRunId);
+      expect(round).toMatchObject({ kind: 'proposal', status: 'running', acceptance_round: 1 });
+      if (!round) throw new Error('no round');
+      const goal = await getGoal(goalRunId, requester);
+      // The same step's Worker set up another way: what a step's round would apply as minor.
+      await report((await plannerTask(round.id)).id, {
+        decision: 'revise',
+        plan: {
+          ...goal.planRevision.plan,
+          steps: [
+            ...(goal.planRevision.plan.steps as Record<string, unknown>[]),
+            { key: 'renew-again', worker, input: { step: 'renew' }, maxAttempts: 1 },
+          ],
+        },
+        reason: 'Renew again; the first renewal did not reach the site.',
+      });
+      await advanceOnce(goalRunId, requester);
+      expect(await acceptanceRounds(goalRunId)).toMatchObject([
+        { kind: 'proposal', status: 'proposed', revision: 2 },
+      ]);
+      expect(await goalRow(goalRunId)).toMatchObject({ status: 'paused', current_revision: 1 });
+      expect(await revisionRow(goalRunId, 2)).toMatchObject({ status: 'proposed' });
+    });
+
+    it('the database holds a round to one anchor, a verification round to a proposal round, the latest round with a check that failed (S11 GO10b, goal/0016)', async () => {
+      const requester = await newPrincipal('member');
+      // Still verifying: no round opens for a run that is not paused for a decision.
+      const still = await verifying(requester, false);
+      await grantAsRaw(still, requester);
+      const insertSql = (columns: string, values: string) =>
+        `insert into goal_planning_rounds (workspace_id, goal_run_id, based_on_revision, ${columns})
+         values ($1, $2, 1, ${values})`;
+      /** As the kernel writes a round: the guard and the table's constraints. */
+      const open = (goalRunId: string, columns: string, values: string) =>
+        asApp(requester, (client) =>
+          client.query(insertSql(columns, values), [workspaceId, goalRunId]),
+        );
+      /** The table's own constraints only (triggers off). */
+      const unguardedOpen = (goalRunId: string, columns: string, values: string) =>
+        raw(insertSql(columns, values), [workspaceId, goalRunId]);
+      expect(await dbRefusal(open(still, 'acceptance_round', '1'))).toMatch(
+        /paused for a decision and no owner holds it/,
+      );
+
+      const goalRunId = await verifying(requester, false);
+      await settleCheck(goalRunId, 'failed');
+      await advanceOnce(goalRunId, requester);
+      expect(await acceptanceRounds(goalRunId)).toEqual([]);
+      await grantAsRaw(goalRunId, requester);
+      const step = await liveStep(goalRunId, 'renew');
+
+      // The table's own constraints, the guard aside.
+      const unguarded = (columns: string, values: string) =>
+        unguardedOpen(goalRunId, columns, values);
+      expect(
+        await dbRefusal(
+          unguarded(
+            'step_run_id, step_attempt, failure_category, acceptance_round',
+            `'${step.id}', 1, 'transient', 1`,
+          ),
+        ),
+      ).toMatch(/goal_planning_rounds_anchor/);
+      expect(await dbRefusal(unguarded('step_attempt', '1'))).toMatch(
+        /goal_planning_rounds_anchor/,
+      );
+      expect(await dbRefusal(unguarded('acceptance_round', '0'))).toMatch(
+        /goal_planning_rounds_anchor/,
+      );
+      expect(await dbRefusal(unguarded('acceptance_round, kind', "1, 'autonomous'"))).toMatch(
+        /goal_planning_rounds_acceptance_kind/,
+      );
+
+      // The guard.
+      expect(await dbRefusal(open(goalRunId, 'acceptance_round', '2'))).toMatch(
+        /latest verification round of its goal run \(1\), not 2/,
+      );
+      await open(
+        goalRunId,
+        'acceptance_round, status, outcome_reason, detail, settled_at',
+        "1, 'failed', 'planner_unavailable', 'no planner', now()",
+      );
+      expect(await dbRefusal(open(goalRunId, 'acceptance_round', '1'))).toMatch(
+        /goal_planning_rounds_acceptance_uidx/,
+      );
+      const [round] = await acceptanceRounds(goalRunId);
+      if (!round) throw new Error('no round');
+      expect(
+        await dbRefusal(
+          asApp(requester, (client) =>
+            client.query(
+              `update goal_planning_rounds set acceptance_round = 2
+                where workspace_id = $1 and id = $2`,
+              [workspaceId, round.id],
+            ),
+          ),
+        ),
+      ).toMatch(/what a round was opened for never changes/);
+
+      // A round of only unavailable checks is no judgment point, for the database either.
+      const unavailable = await verifying(requester, false);
+      await grantAsRaw(unavailable, requester);
+      await settleCheck(unavailable, 'unavailable');
+      await advanceOnce(unavailable, requester);
+      expect(await acceptanceRounds(unavailable)).toEqual([]);
+      expect(await dbRefusal(open(unavailable, 'acceptance_round', '1'))).toMatch(
+        /a verification round with a check that failed/,
+      );
     });
   },
 );
