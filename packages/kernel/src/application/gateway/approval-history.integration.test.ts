@@ -396,7 +396,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).rejects.toThrow();
     });
 
-    it('legacy 338: an in-doubt reason reads like a failure reason — redacted, clipped, unseen characters shown — on get_action and the list alike', async () => {
+    it('legacy 338: an in-doubt reason reads like a failure reason — redacted, clipped, unseen characters shown — on get_action and the list alike, each in-doubt call on a gate of its own (legacy 565)', async () => {
       const owner = humanCaller(workspaceId, ownerId, 'owner');
       const id = await seedPendingActionRequest({
         blastRadius: 'medium',

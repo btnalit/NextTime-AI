@@ -207,6 +207,22 @@
         }
       ],
       "rationale": "docs/runbooks/release.md §6, worker 0012: 0012 adds a foreign key from eval_draft_evaluations.summary_observation_id into observations, the same kind of change as governance 0024 and goal 0005, 0006 and 0012 (declared separately so it stays declared whichever release ships first). The previous release's observation compaction refuses to run when the catalog shows a foreign key into observations it does not check (its fail-closed guard) — every one of its compaction tests, the earlier references' included, fails for that one reason — so after a code-only rollback scripts/apply-release.sh reports the observations-compaction step degraded until the release carrying 0012 is applied again. Nothing is deleted, and the rest of the previous release's suite passes on the new schema. HEAD's compaction knows the key, and condition (a) keeps the Observation a draft evaluation's summary is."
+    },
+    {
+      "migration": "governance/0031_action_request_execution_guard.sql",
+      "baseTests": [
+        {
+          "file": "src/application/gateway/approval-history.integration.test.ts",
+          "fullName": "S6-A approve.reason (C25) and list_action_requests taskId / parentWorkerRunId (C28) (integration, real Postgres) legacy 338: an in-doubt reason reads like a failure reason — redacted, clipped, unseen characters shown — on get_action and the list alike"
+        }
+      ],
+      "replacedBy": [
+        {
+          "file": "src/application/gateway/approval-history.integration.test.ts",
+          "fullName": "S6-A approve.reason (C25) and list_action_requests taskId / parentWorkerRunId (C28) (integration, real Postgres) legacy 338: an in-doubt reason reads like a failure reason — redacted, clipped, unseen characters shown — on get_action and the list alike, each in-doubt call on a gate of its own (legacy 565)"
+        }
+      ],
+      "rationale": "docs/runbooks/release.md §6, governance 0031 row (legacy 565): the BASE test seeds two requests on one Gatekeeper that both act on the whole gate and starts both, so both are executing at once — the state 0031's guard exists to refuse (I-Q1). Nothing in BASE's product code means to reach it: its drainer starts a request only when no conflicting one is executing, and where its read misses one (the legacy 565 gap) the start is now refused with NTQ01 and the request starts after the other ends. The replacement keeps every assertion, with the second request on a gate of its own."
     }
   ]
 }
