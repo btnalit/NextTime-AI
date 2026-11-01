@@ -1142,6 +1142,59 @@ async function main() {
       checkToolCallAgainstRegistry('handoff-read-report', readReport);
     }
 
+    // 6q. S11 GO9a/GO10b goalPlannerScenario (S13, and S6 for legacy 560): the planner's Task
+    //     input as the kernel writes it (`### Task input` then the JSON, `kind: goal_planning`). A
+    //     failed ledger step with `report-runner` among the workers: `revise`, the step moved onto
+    //     it. A round for the goal's own acceptance (`failedAcceptance`, no `failedStep`):
+    //     `no_revision`, naming the verification round. Both reports pass the Worker result contract
+    //     and their `output` the planner's own schema.
+    {
+      const begin = { role: 'user', content: 'Begin working on your assigned Task now' };
+      const plannerInput = (rest) => ({
+        role: 'custom',
+        content: `## NextTime worker context\n\n### Task input\n${JSON.stringify({ kind: 'goal_planning', basedOnRevision: 1, ...rest })}\n\n### Rules\nreport_result once.`,
+      });
+      const plan = {
+        steps: [
+          { key: 'write', worker: { definitionId: 'd-ops', version: 1 }, input: 'ACCEPT_S2_SCENARIO=goal_ledger LEDGER_KEY=s13a-p42', maxAttempts: 1 },
+        ],
+        acceptance: [{ kind: 'observe_predicate', key: 'stock-visible', check: {} }],
+      };
+      const workers = [{ name: 'report-runner', definitionId: 'd-rr', version: 3 }];
+      const revise = toolCallOf((await post([plannerInput({ plan, failedStep: { key: 'write' }, workers }), begin])).json);
+      const revised = revise?.args?.output?.plan?.steps?.[0];
+      check(
+        'goal-planner-revise',
+        revise?.name === 'report_result' &&
+          revise.args.output.decision === 'revise' &&
+          revised?.key === 'write' &&
+          revised.worker?.definitionId === 'd-rr' &&
+          revised.worker.version === 3 &&
+          revised.input === 'ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=s13a-p42' &&
+          JSON.stringify(revise.args.output.plan.acceptance) === JSON.stringify(plan.acceptance),
+        JSON.stringify(revise),
+      );
+      checkToolCallAgainstRegistry('goal-planner-revise', revise);
+      const reviseOutput = shared.PlannerOutputSchema.safeParse(revise?.args?.output);
+      check('goal-planner-revise-output', reviseOutput.success, reviseOutput.success ? '' : JSON.stringify(reviseOutput.error.issues));
+
+      const accepted = { ...plan, steps: [{ key: 'report', worker: { definitionId: 'd-ops', version: 1 }, input: 'ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=s6-p42 STEP=report' }] };
+      const none = toolCallOf(
+        (await post([plannerInput({ plan: accepted, failedAcceptance: { round: 2, checks: [{ key: 'stock-unseen', kind: 'observe_predicate', status: 'failed' }] }, workers }), begin])).json,
+      );
+      check(
+        'goal-planner-acceptance-no-revision',
+        none?.name === 'report_result' &&
+          none.args.output.decision === 'no_revision' &&
+          none.args.output.reason.includes("the goal's acceptance round 2 ") &&
+          !none.args.output.reason.includes('(unknown)'),
+        JSON.stringify(none),
+      );
+      checkToolCallAgainstRegistry('goal-planner-acceptance-no-revision', none);
+      const noneOutput = shared.PlannerOutputSchema.safeParse(none?.args?.output);
+      check('goal-planner-acceptance-no-revision-output', noneOutput.success, noneOutput.success ? '' : JSON.stringify(noneOutput.error.issues));
+    }
+
     // 7. Streaming mode also honors scenarios (SSE contains the scripted tool name).
     {
       const { sse } = await post(
