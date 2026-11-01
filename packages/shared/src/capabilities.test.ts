@@ -482,6 +482,9 @@ describe('platform_state: what an admin agent reads of the platform (S11 AA2)', 
       'platform_state_audit',
       'platform_state_connectors',
       'platform_state_gates',
+      'platform_state_invariants',
+      'platform_state_runtime',
+      'platform_state_updates',
     ]);
     const flagged = CAPABILITY_REGISTRY.filter((capability) => capability.adminAgentOnly);
     expect(flagged.map((capability) => capability.name).sort()).toEqual(

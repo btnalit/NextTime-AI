@@ -27,14 +27,11 @@ import {
   type PlatformStatePendingManifestWire,
   capabilityHasSideEffects,
   isGenericConnector,
-  isIpLiteral,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import type { z } from 'zod';
 import { withPlatform } from '../../adapters/db/platform-context.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { ADMIN_AGENT_SESSION_KIND } from '../../governance/capability/index.js';
-import { findSuspectedSecrets } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { listConnectors, listGateInstances } from '../gates/index.js';
 import {
@@ -43,6 +40,7 @@ import {
   adminAgentRefusalOf,
   readAdminAgentAuthorityFacts,
 } from './identity.js';
+import { count, lengthOf, member, shaped, timestamp } from './platform-state-shapes.js';
 
 /**
  * application/admin-agent/platform-state (S11 AA2; docs/goal-orchestration-and-admin-agent-plan-
@@ -127,42 +125,6 @@ export async function readPlatformStateForAdminAgent<T>(
     }),
   );
   return done.result;
-}
-
-// -------------------------------------------------------------------------------------------
-// shapes
-// -------------------------------------------------------------------------------------------
-
-const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/;
-
-/** `value` when it is a string of `pattern`'s shape that is neither an IP literal nor looks like
- *  a credential (the redactor's value patterns) — a dotted address or a vendor key can be a plain
- *  identifier too — else `null`. */
-function shaped(value: unknown, pattern: RegExp): string | null {
-  return typeof value === 'string' &&
-    pattern.test(value) &&
-    !isIpLiteral(value) &&
-    findSuspectedSecrets(value).count === 0
-    ? value
-    : null;
-}
-
-function timestamp(value: unknown): string | null {
-  return shaped(value, ISO_TIMESTAMP);
-}
-
-/** `value` when `schema` (an enum) accepts it, else `null`. */
-function member<T extends string>(schema: z.ZodType<T>, value: unknown): T | null {
-  const parsed = schema.safeParse(value);
-  return parsed.success ? parsed.data : null;
-}
-
-function count(value: unknown): number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
-}
-
-function lengthOf(value: unknown): number {
-  return Array.isArray(value) ? value.length : 0;
 }
 
 // -------------------------------------------------------------------------------------------

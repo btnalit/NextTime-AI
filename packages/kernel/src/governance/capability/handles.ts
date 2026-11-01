@@ -465,6 +465,9 @@ const ADMIN_AGENT_CEILING_CAPABILITY_NAMES = [
   'platform_state_gates',
   'platform_state_connectors',
   'platform_state_audit',
+  'platform_state_runtime',
+  'platform_state_updates',
+  'platform_state_invariants',
 ] as const;
 
 /** The registry groups an admin-agent capability may come from. `governance` (`request_action`),

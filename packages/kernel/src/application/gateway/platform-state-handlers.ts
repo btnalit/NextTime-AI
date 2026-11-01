@@ -1,11 +1,17 @@
 import type { PoolClient } from 'pg';
+import type { InvariantMetricsSnapshot } from '../../substrate/audit/index.js';
 import {
   type PlatformStateRead,
+  projectInvariantsState,
+  projectRuntimeState,
+  projectUpdatesState,
   readAuditState,
   readConnectorsState,
   readGatesState,
   readPlatformStateForAdminAgent,
 } from '../admin-agent/index.js';
+import { probePlatformServiceHealth, readRuntimeInventory } from '../platform/runtime.js';
+import { readPlatformUpdates } from '../platform/updates.js';
 import type {
   CapabilityHandler,
   CapabilityHandlerContext,
@@ -70,4 +76,47 @@ export const platformStateConnectorsHandler = platformStateHandler(
 export const platformStateAuditHandler = platformStateHandler(
   'platform_state_audit',
   (client, agent, checkedAt) => readAuditState(client, agent.userId, checkedAt),
+);
+
+export const platformStateRuntimeHandler = platformStateHandler(
+  'platform_state_runtime',
+  async (client, _agent, checkedAt) => {
+    // The inventory's one DB read (the active-image setting) and worker-supervisor's two lists,
+    // then the service probes — awaited in turn: `client` runs one query at a time.
+    const inventory = await readRuntimeInventory(client);
+    const services = await probePlatformServiceHealth();
+    const result = projectRuntimeState(inventory, services, checkedAt);
+    return { result, returned: result.images.length };
+  },
+);
+
+export const platformStateUpdatesHandler = platformStateHandler(
+  'platform_state_updates',
+  async (client, _agent, checkedAt) => {
+    const result = projectUpdatesState(
+      await readPlatformUpdates(client, new Date(checkedAt)),
+      checkedAt,
+    );
+    return { result, returned: result.platform?.newerReleases.length ?? 0 };
+  },
+);
+
+/** Where the kernel keeps its latest invariant check (`InvariantMetricsStore`, set by
+ *  packages/kernel/src/index.ts's `createBackgroundServices` — the same seam as
+ *  `setAgentRuntimeForHandlers`). Unset: nothing runs the checks in this process, and
+ *  `platform_state_invariants` says `not_run`. */
+let invariantMetrics: { snapshot(): InvariantMetricsSnapshot } | undefined;
+
+export function setInvariantMetricsForHandlers(
+  store: { snapshot(): InvariantMetricsSnapshot } | undefined,
+): void {
+  invariantMetrics = store;
+}
+
+export const platformStateInvariantsHandler = platformStateHandler(
+  'platform_state_invariants',
+  async (_client, _agent, checkedAt) => {
+    const result = projectInvariantsState(invariantMetrics?.snapshot(), checkedAt);
+    return { result, returned: result.checks.length };
+  },
 );

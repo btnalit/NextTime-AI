@@ -11,6 +11,7 @@ import {
   comparePlatformVersions,
   platformVersionFromKernelVersion,
 } from '@nexttime/shared';
+import type { PoolClient } from 'pg';
 import type { CapabilityHandler } from '../gateway/capability-handler.js';
 import { UnsafeFileError, readSmallRegularFile } from '../safe-file-read.js';
 import { readPiVersions } from './runtime.js';
@@ -351,20 +352,27 @@ export function derivePlatformUpdates(input: PlatformUpdatesInput): PlatformUpda
   };
 }
 
-export const platformUpdatesHandler: CapabilityHandler = async (client) => {
-  const now = new Date();
+/** `platform_updates`' result: also what an admin agent's `platform_state_updates` projects
+ *  (application/admin-agent, S11 AA2b). */
+export async function readPlatformUpdates(
+  client: PoolClient,
+  now: Date,
+): Promise<PlatformUpdatesWire> {
   const read = await readReleaseChannel(
     resolveUpdateFeedFile(process.env),
     now,
     resolveUpdateFeedRepo(process.env),
   );
   const { pinnedPiVersion, activeImagePiVersion } = await readPiVersions(client);
-  const result = derivePlatformUpdates({
+  return derivePlatformUpdates({
     read,
     kernelVersion: process.env.KERNEL_VERSION ?? 'dev',
     pinnedPiVersion,
     activeImagePiVersion,
     now,
   });
-  return { result };
-};
+}
+
+export const platformUpdatesHandler: CapabilityHandler = async (client) => ({
+  result: await readPlatformUpdates(client, new Date()),
+});

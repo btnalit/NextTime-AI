@@ -247,7 +247,9 @@ function findImage(
 // runtime_inventory / list_runtime_images
 // -------------------------------------------------------------------------------------------
 
-export const runtimeInventoryHandler: CapabilityHandler = async (client) => {
+/** `runtime_inventory`'s result: also what an admin agent's `platform_state_runtime` projects
+ *  (application/admin-agent, S11 AA2b). */
+export async function readRuntimeInventory(client: PoolClient): Promise<RuntimeInventoryWire> {
   const { settings } = await readPlatformSettings(client);
   const [imagesResult, residents] = await Promise.all([tryListImages(), tryListResidents()]);
   const { activeImage, activeImageSource } = resolveActiveImage(
@@ -286,8 +288,12 @@ export const runtimeInventoryHandler: CapabilityHandler = async (client) => {
     residentContainers,
     checkedAt: new Date().toISOString(),
   };
-  return { result };
-};
+  return result;
+}
+
+export const runtimeInventoryHandler: CapabilityHandler = async (client) => ({
+  result: await readRuntimeInventory(client),
+});
 
 /** Unlike `runtime_inventory`, this is the *only* thing the call is for — a supervisor failure
  *  must surface as a real error (`TaskRuntimeNotConfiguredError`/`TaskSupervisorError`, both
@@ -801,30 +807,19 @@ async function sumLlmUsage30Days(client: PoolClient): Promise<PlatformStatusLlmU
   };
 }
 
-export const platformStatusHandler: CapabilityHandler = async (client) => {
+/** The platform's own services as `platform_status` reports them (its gates aside) — also what an
+ *  admin agent's `platform_state_runtime` projects. Called inside a platform transaction: if
+ *  postgres were unreachable the caller would not have got this far (same convention
+ *  `platformOverviewHandler` already uses). The two HTTP healthz probes touch no DB connection. */
+export async function probePlatformServiceHealth(): Promise<ServiceHealthWire[]> {
   const llmProxyUrl = process.env.KERNEL_LLM_URL ?? 'http://llm-proxy:8082';
   const supervisorUrl = process.env.SUPERVISOR_URL ?? 'http://worker-supervisor:8081';
-
-  // The two HTTP healthz probes touch no DB connection and run concurrently; the three DB reads
-  // below all share this handler's single `client` (one Postgres connection/transaction) — a
-  // `PoolClient` can only run one query at a time, so those three must be awaited in sequence,
-  // never combined into the same `Promise.all` (a real bug this handler shipped with once,
-  // caught by vitest.setup.ts's pg-concurrent-query guard under a real database — see the PR's
-  // own history for this fix).
   const [llmProxyHealth, supervisorHealth] = await Promise.all([
     probeHttpHealthz('llm-proxy', llmProxyUrl),
     probeHttpHealthz('worker-supervisor', supervisorUrl),
   ]);
-  const gateInstances = await listGateInstances(client);
-  const llmUsage30d = await sumLlmUsage30Days(client);
-  const recentAudit = await queryRecentPlatformWrites(client, 50);
-  // D-28: the backup service's mounted `last-success` marker — never throws (backup-status.ts).
-  const backup = await readBackupStatus(resolveBackupLastSuccessFile(process.env));
-
-  const health: ServiceHealthWire[] = [
+  return [
     { service: 'kernel', status: 'ok' },
-    // Inside a transaction on an already-open connection — if postgres were unreachable, nothing
-    // above this point would have run (same convention `platformOverviewHandler` already uses).
     { service: 'postgres', status: 'ok' },
     llmProxyHealth,
     supervisorHealth,
@@ -834,6 +829,24 @@ export const platformStatusHandler: CapabilityHandler = async (client) => {
       detail:
         'healthz is loopback-only by design (packages/egress-proxy/src/index.ts — an isolation boundary this capability does not weaken) — not probed',
     },
+  ];
+}
+
+export const platformStatusHandler: CapabilityHandler = async (client) => {
+  // The HTTP probes run first; the three DB reads below all share this handler's single `client`
+  // (one Postgres connection/transaction) — a `PoolClient` can only run one query at a time, so
+  // those three must be awaited in sequence, never combined into the same `Promise.all` (a real
+  // bug this handler shipped with once, caught by vitest.setup.ts's pg-concurrent-query guard
+  // under a real database — see the PR's own history for this fix).
+  const services = await probePlatformServiceHealth();
+  const gateInstances = await listGateInstances(client);
+  const llmUsage30d = await sumLlmUsage30Days(client);
+  const recentAudit = await queryRecentPlatformWrites(client, 50);
+  // D-28: the backup service's mounted `last-success` marker — never throws (backup-status.ts).
+  const backup = await readBackupStatus(resolveBackupLastSuccessFile(process.env));
+
+  const health: ServiceHealthWire[] = [
+    ...services,
     ...gateInstances.map(
       (instance): ServiceHealthWire => ({
         service: `gate:${instance.displayName || instance.gateId}`,

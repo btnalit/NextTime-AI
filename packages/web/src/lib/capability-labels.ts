@@ -1520,6 +1520,27 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     enHint:
       "An admin agent reads the platform's recent changes by action and time, without params or logins.",
   },
+  platform_state_runtime: {
+    zh: '智能体查看运行层',
+    en: 'Agent reads the runtime layer',
+    zhHint: '管理员智能体查看运行镜像的摘要与版本、入口容器计数和服务状态，不含镜像标签与地址。',
+    enHint:
+      'An admin agent reads runtime image digests and versions, entry container counts and service status, without image tags or addresses.',
+  },
+  platform_state_updates: {
+    zh: '智能体查看版本提醒',
+    en: 'Agent reads update reminders',
+    zhHint: '管理员智能体查看可用的新版本、迁移数和 pi 兼容情况，不含链接与主机命令。',
+    enHint:
+      'An admin agent reads newer releases, their migrations and pi compatibility, without links or host commands.',
+  },
+  platform_state_invariants: {
+    zh: '智能体查看不变量检查',
+    en: 'Agent reads invariant checks',
+    zhHint: '管理员智能体查看最近一次不变量检查各项的违规数，不含违规记录本身。',
+    enHint:
+      "An admin agent reads the latest invariant check's violation counts, without the violating records.",
+  },
   platform_status: {
     zh: '查看服务状态',
     en: 'Service status',

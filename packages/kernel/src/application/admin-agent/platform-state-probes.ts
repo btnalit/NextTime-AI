@@ -7,14 +7,21 @@ import { isIpLiteral } from '@nexttime/shared';
  * they do not.
  *
  * A string is address-like when it holds `://`, a `user@host`, an IP literal (with or without a
- * port or brackets), a `name.name:port`, or an absolute POSIX path.
+ * port or brackets), a `name.name:port`, or an absolute POSIX path. Two token shapes the shorthand
+ * IPv4 reading also takes for addresses are not counted, because results carry them as what they
+ * are (S11 AA2b): a bare integer (`2026`, a migration's number) and a three-part version (`0.73.1`,
+ * a pi or extension version). A dotted quad, a two-part number, hex forms and IPv6 still count.
  */
+
+const BARE_INTEGER = /^\d+$/;
+const THREE_PART_VERSION = /^\d{1,4}\.\d{1,4}\.\d{1,6}(?:-[0-9A-Za-z.-]{1,32})?$/;
 
 const HOST_PORT = /[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+:\d{1,5}\b/;
 const USER_AT_HOST = /[^\s@]+@[A-Za-z0-9-]+\.[A-Za-z0-9.-]+/;
 const ABSOLUTE_PATH = /(?:^|[\s"'=(])\/[A-Za-z0-9._~-]+/;
 
 function tokenIsIp(token: string): boolean {
+  if (BARE_INTEGER.test(token) || THREE_PART_VERSION.test(token)) return false;
   const bare = token.replace(/^\[|\]$/g, '');
   if (isIpLiteral(bare)) return true;
   // `a.b.c.d:port` and `[v6]:port`

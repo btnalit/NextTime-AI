@@ -41567,6 +41567,624 @@
     "sideEffects": false
   },
   {
+    "adminAgentOnly": true,
+    "channel": "handle",
+    "group": "platform_state",
+    "mode": "observe",
+    "name": "platform_state_invariants",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "checkedAt": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "checks": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "invariant": {
+                "pattern": "^(?:I[0-9A-Z-]{1,15}|ops\\.[a-z][a-z_]{0,39})$",
+                "type": "string"
+              },
+              "violations": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "invariant",
+              "violations"
+            ],
+            "type": "object"
+          },
+          "maxItems": 100,
+          "type": "array"
+        },
+        "lastRunAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "enum": [
+            "not_run",
+            "clean",
+            "violations"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "lastRunAt",
+        "checks",
+        "checkedAt"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "adminAgentOnly": true,
+    "channel": "handle",
+    "group": "platform_state",
+    "mode": "observe",
+    "name": "platform_state_runtime",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "activeImage": {
+          "additionalProperties": false,
+          "properties": {
+            "builtFrom": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:dev|[0-9a-f]{7,40})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "piVersion": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:dev|\\d{1,4}\\.\\d{1,4}\\.\\d{1,6}(?:-[0-9A-Za-z.-]{1,32})?)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "platformExtensionVersion": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:dev|\\d{1,4}\\.\\d{1,4}\\.\\d{1,6}(?:-[0-9A-Za-z.-]{1,32})?)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "runtimeCompatible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "source": {
+              "enum": [
+                "setting",
+                "env_default",
+                "unknown"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "digest",
+            "piVersion",
+            "platformExtensionVersion",
+            "builtFrom",
+            "runtimeCompatible"
+          ],
+          "type": "object"
+        },
+        "checkedAt": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "entryContainers": {
+          "additionalProperties": false,
+          "properties": {
+            "needsRebuild": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "running": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "total": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "total",
+            "running",
+            "needsRebuild"
+          ],
+          "type": "object"
+        },
+        "imageCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "images": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "allowed": {
+                "type": "boolean"
+              },
+              "builtFrom": {
+                "anyOf": [
+                  {
+                    "pattern": "^(?:dev|[0-9a-f]{7,40})$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdAt": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "digest": {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "piVersion": {
+                "anyOf": [
+                  {
+                    "pattern": "^(?:dev|\\d{1,4}\\.\\d{1,4}\\.\\d{1,6}(?:-[0-9A-Za-z.-]{1,32})?)$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "platformExtensionVersion": {
+                "anyOf": [
+                  {
+                    "pattern": "^(?:dev|\\d{1,4}\\.\\d{1,4}\\.\\d{1,6}(?:-[0-9A-Za-z.-]{1,32})?)$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "runtimeCompatible": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "digest",
+              "createdAt",
+              "piVersion",
+              "platformExtensionVersion",
+              "builtFrom",
+              "allowed",
+              "runtimeCompatible",
+              "active"
+            ],
+            "type": "object"
+          },
+          "maxItems": 50,
+          "type": "array"
+        },
+        "services": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "service": {
+                "enum": [
+                  "kernel",
+                  "postgres",
+                  "llm-proxy",
+                  "worker-supervisor",
+                  "egress-proxy"
+                ],
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "ok",
+                  "degraded",
+                  "down",
+                  "unknown"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "service",
+              "status"
+            ],
+            "type": "object"
+          },
+          "maxItems": 5,
+          "type": "array"
+        }
+      },
+      "required": [
+        "activeImage",
+        "images",
+        "imageCount",
+        "entryContainers",
+        "services",
+        "checkedAt"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "adminAgentOnly": true,
+    "channel": "handle",
+    "group": "platform_state",
+    "mode": "observe",
+    "name": "platform_state_updates",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "checkedAt": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "feed": {
+          "additionalProperties": false,
+          "properties": {
+            "fetchedAt": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "generatedAt": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "maxAgeHours": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "staleCause": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "download",
+                    "ci"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "status": {
+              "enum": [
+                "fresh",
+                "stale",
+                "missing",
+                "invalid"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "staleCause",
+            "fetchedAt",
+            "generatedAt",
+            "maxAgeHours"
+          ],
+          "type": "object"
+        },
+        "pi": {
+          "additionalProperties": false,
+          "properties": {
+            "activeImageVersion": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:dev|\\d{1,4}\\.\\d{1,4}\\.\\d{1,6}(?:-[0-9A-Za-z.-]{1,32})?)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "bundledIn": {
+              "anyOf": [
+                {
+                  "pattern": "^v(\\d{1,4})\\.(\\d{1,4})\\.(\\d{1,6})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "bundledVersion": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:dev|\\d{1,4}\\.\\d{1,4}\\.\\d{1,6}(?:-[0-9A-Za-z.-]{1,32})?)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "checkedAt": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "sdkSuite": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "pass",
+                    "fail"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "state": {
+              "enum": [
+                "up_to_date",
+                "pending_release",
+                "incompatible",
+                "released",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            "upstreamLatest": {
+              "anyOf": [
+                {
+                  "pattern": "^(\\d{1,4})\\.(\\d{1,4})\\.(\\d{1,6})(?:-([0-9A-Za-z.-]{1,32}))?$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "state",
+            "bundledVersion",
+            "activeImageVersion",
+            "upstreamLatest",
+            "sdkSuite",
+            "bundledIn",
+            "checkedAt"
+          ],
+          "type": "object"
+        },
+        "platform": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "available": {
+                  "type": "boolean"
+                },
+                "breaking": {
+                  "type": "boolean"
+                },
+                "currentVersion": {
+                  "anyOf": [
+                    {
+                      "pattern": "^v(\\d{1,4})\\.(\\d{1,4})\\.(\\d{1,6})$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "latestVersion": {
+                  "anyOf": [
+                    {
+                      "pattern": "^v(\\d{1,4})\\.(\\d{1,4})\\.(\\d{1,6})$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "migrationCount": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "migrationsIncomplete": {
+                  "type": "boolean"
+                },
+                "migrationsPending": {
+                  "items": {
+                    "pattern": "^[a-z][a-z-]{0,31} \\d{4}$",
+                    "type": "string"
+                  },
+                  "maxItems": 500,
+                  "type": "array"
+                },
+                "newerReleases": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "breaking": {
+                        "type": "boolean"
+                      },
+                      "migrationCount": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "pi": {
+                        "anyOf": [
+                          {
+                            "pattern": "^(\\d{1,4})\\.(\\d{1,4})\\.(\\d{1,6})(?:-([0-9A-Za-z.-]{1,32}))?$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "publishedAt": {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      "version": {
+                        "pattern": "^v(\\d{1,4})\\.(\\d{1,4})\\.(\\d{1,6})$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "version",
+                      "publishedAt",
+                      "breaking",
+                      "pi",
+                      "migrationCount"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                "rollbackVersion": {
+                  "anyOf": [
+                    {
+                      "pattern": "^v(\\d{1,4})\\.(\\d{1,4})\\.(\\d{1,6})$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "currentVersion",
+                "latestVersion",
+                "available",
+                "breaking",
+                "migrationsPending",
+                "migrationCount",
+                "migrationsIncomplete",
+                "newerReleases",
+                "rollbackVersion"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "platform",
+        "pi",
+        "feed",
+        "checkedAt"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
     "channel": "human",
     "group": "platform",
     "mode": "observe",

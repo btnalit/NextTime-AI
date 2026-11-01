@@ -40,6 +40,7 @@ import {
 } from './application/gateway/index.js';
 import type { GatekeeperActionExecutorDeps } from './application/gateway/index.js';
 import { readModelCatalogIds } from './application/gateway/models-catalog-handler.js';
+import { setInvariantMetricsForHandlers } from './application/gateway/platform-state-handlers.js';
 import {
   type AcceptanceCheckOptions,
   DEFAULT_ACCEPTANCE_CHECK_INTERVAL_MS,
@@ -121,7 +122,7 @@ import {
   registerWsRoute,
   setAgentHostRuntimeForWsRoute,
 } from './interfaces/ws/index.js';
-import type { InvariantCheckResult } from './substrate/audit/index.js';
+import type { InvariantCheckResult, InvariantMetricsSnapshot } from './substrate/audit/index.js';
 import { renderInvariantMetricsPrometheus, runInvariantChecks } from './substrate/audit/index.js';
 
 /**
@@ -748,6 +749,9 @@ export interface InvariantMetricsStore {
    *  before the first tick has completed (renders the "never run yet" `0` timestamp — see
    *  `renderInvariantMetricsPrometheus`'s own doc comment). */
   renderMetrics(): string;
+  /** The stored snapshot itself — what an admin agent's `platform_state_invariants` projects (S11
+   *  AA2b; counts only). `lastRunAt` is `null` before the first tick. */
+  snapshot(): InvariantMetricsSnapshot;
 }
 
 export function createInvariantMetricsStore(): InvariantMetricsStore {
@@ -761,6 +765,9 @@ export function createInvariantMetricsStore(): InvariantMetricsStore {
     renderMetrics() {
       return renderInvariantMetricsPrometheus(lastResults, lastRunAt);
     },
+    snapshot() {
+      return { results: lastResults, lastRunAt: lastRunAt ?? null };
+    },
   };
 }
 
@@ -772,6 +779,8 @@ export function createBackgroundServices(
 
   setAgentRuntimeForHandlers(runtime);
   if (runtime instanceof AgentHostRuntime) setAgentHostRuntimeForWsRoute(runtime);
+  // S11 AA2b: an admin agent's `platform_state_invariants` reads the scheduler tick's snapshot.
+  setInvariantMetricsForHandlers(options.invariantMetrics);
 
   // lane-1 P2 fix: TurnStarted now carries a chat_messages reference (chatMessageId), not the
   // prompt text inline (see shared/src/events.ts's TurnStartedEvent doc comment) — this is the
