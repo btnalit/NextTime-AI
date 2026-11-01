@@ -14,7 +14,11 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 // `\.test\.tsx?$`) — this one import lets the S3.12 "publish Activity records supersedes"
 // assertions exercise the real capability handler (Activity creation lives there, not in
 // `publishOperation` itself) without standing up a full `dispatchCapability` fixture.
-import { publishOperationHandler } from '../../application/gateway/operation-manifest-handlers.js';
+import {
+  proposeOperationHandler,
+  publishOperationHandler,
+} from '../../application/gateway/operation-manifest-handlers.js';
+import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
 import { findOperationCandidates } from '../../substrate/graph/index.js';
 import { setOperationStatusObject } from '../../substrate/ontology/index.js';
 import { operationDraftDigest } from './definition.js';
@@ -30,6 +34,7 @@ import {
   OperationIdentityConflictError,
   OperationNameInvalidError,
   OperationNotFoundError,
+  OperationTargetInvalidError,
   countOperationsByGatekeeper,
   deprecateOperation,
   discardOperationDraft,
@@ -1518,6 +1523,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
         readOnlyHint: null,
         destructiveHint: null,
         idempotentHint: null,
+        target: null,
       };
       expect(entry?.before).toEqual({
         ...undeclared,
@@ -1893,6 +1899,184 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
         }),
       );
       expect(again).toMatchObject({ revisionDrafts: [], unchanged: [draftOnly.name] });
+    });
+  });
+
+  describe('S11 GO12 (I-Q4): a target declaration the rules refuse is refused with its reason', () => {
+    /** An execute-class call on one Container, named by its required string param `id`. */
+    function restartOn(name: string, overrides: Partial<Operation> = {}): Operation {
+      return testOperation({
+        name,
+        binding: { kind: 'http', method: 'POST', path: '/restart' },
+        params_schema: {
+          type: 'object',
+          properties: { id: { type: 'string' }, timeout: { type: 'integer' } },
+          required: ['id'],
+        },
+        mode: 'execute',
+        blast_radius: 'medium',
+        auto_approvable: false,
+        reads: [],
+        writes: ['Container'],
+        target: { object_type: 'Container', params: ['id'] },
+        ...overrides,
+      });
+    }
+    const asOwner = {
+      channel: 'human' as const,
+      principalId: '',
+      principal: { id: '', kind: 'human' as const, role: 'owner' as const, displayName: null },
+    };
+
+    it('importManifest refuses each rule by its code, before writing any of the manifest', async () => {
+      const cases: [Partial<Operation>, string, (string | number)[]][] = [
+        [{ mode: 'observe', writes: [], reads: ['Container'] }, 'target_not_execute', ['target']],
+        [
+          { writes: ['Container', 'Volume'] },
+          'target_type_not_sole_written',
+          ['target', 'object_type'],
+        ],
+        [
+          { target: { object_type: 'Container', params: ['id', 'id'] } },
+          'target_params_duplicate',
+          ['target', 'params', 1],
+        ],
+        [
+          { target: { object_type: 'Container', params: ['timeout'] } },
+          'target_param_not_required_scalar',
+          ['target', 'params', 0],
+        ],
+        [
+          {
+            params_schema: {
+              type: 'object',
+              properties: { id: { type: 'string' }, password: { type: 'string' } },
+              required: ['id', 'password'],
+            },
+            target: { object_type: 'Container', params: ['id', 'password'] },
+          },
+          'target_param_secret',
+          ['target', 'params', 1],
+        ],
+      ];
+      for (const [overrides, reason, place] of cases) {
+        const good = restartOn(`q4.good.${randomUUID()}`);
+        const bad = restartOn(`q4.bad.${randomUUID()}`, overrides);
+        const act = await newActivity();
+        const refused = await inTx((client) =>
+          importManifest(client, workspaceId, {
+            gatekeeperId,
+            operations: [good, bad],
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: act,
+          }),
+        ).catch((err: unknown) => err);
+        expect(refused, reason).toBeInstanceOf(OperationTargetInvalidError);
+        expect((refused as OperationTargetInvalidError).code).toBe('invalid_operation_target');
+        expect((refused as OperationTargetInvalidError).details).toEqual({
+          reason,
+          operation: bad.name,
+          path: place,
+        });
+        expect((refused as Error).message).toContain(reason);
+        for (const op of [good, bad]) {
+          expect(
+            await inTx((client) => getOperation(client, workspaceId, gatekeeperId, op.name)),
+          ).toBeNull();
+        }
+      }
+    });
+
+    it('two Operations naming one type by different numbers of params are refused as target_arity_inconsistent', async () => {
+      const restart = restartOn(`q4.restart.${randomUUID()}`);
+      const stop = restartOn(`q4.stop.${randomUUID()}`, {
+        params_schema: {
+          type: 'object',
+          properties: { id: { type: 'string' }, host: { type: 'integer' } },
+          required: ['id', 'host'],
+        },
+        target: { object_type: 'Container', params: ['host', 'id'] },
+      });
+      const act = await newActivity();
+      const refused = await inTx((client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [restart, stop],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: act,
+        }),
+      ).catch((err: unknown) => err);
+      expect(refused).toBeInstanceOf(OperationTargetInvalidError);
+      expect((refused as OperationTargetInvalidError).details).toEqual({
+        reason: 'target_arity_inconsistent',
+        operation: stop.name,
+        path: ['target', 'params'],
+      });
+      expect(
+        await inTx((client) => getOperation(client, workspaceId, gatekeeperId, restart.name)),
+      ).toBeNull();
+    });
+
+    it('a valid declaration is imported, published and read back as declared', async () => {
+      const restart = restartOn(`q4.valid.${randomUUID()}`);
+      const act = await newActivity();
+      await inTx((client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [restart],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: act,
+        }),
+      );
+      await inTx((client) => publishAsRead(client, gatekeeperId));
+      const published = await inTx((client) =>
+        getPublishedOperation(client, workspaceId, gatekeeperId, restart.name),
+      );
+      expect(published?.operation.target).toEqual({ object_type: 'Container', params: ['id'] });
+      expect(operationGovernanceFieldsOf(published?.operation as Operation).target).toEqual({
+        objectType: 'Container',
+        params: ['id'],
+      });
+    });
+
+    it('propose_operation refuses a declaration by its code (400 invalid_operation_target), writing nothing', async () => {
+      const ctx = {
+        ...asOwner,
+        principalId: ownerId,
+        principal: { ...asOwner.principal, id: ownerId },
+      };
+      const bad = restartOn(`q4.proposed.${randomUUID()}`, {
+        target: { object_type: 'Container', params: ['timeout'] },
+      });
+      const refused = await inTx((client) =>
+        proposeOperationHandler(client, workspaceId, { gatekeeperId, operation: bad }, ctx),
+      ).catch((err: unknown) => err);
+      expect(refused).toBeInstanceOf(OperationTargetInvalidError);
+      expect(mapCapabilityError(refused)).toEqual({
+        status: 400,
+        code: 'invalid_operation_target',
+        message: (refused as Error).message,
+        details: {
+          reason: 'target_param_not_required_scalar',
+          operation: bad.name,
+          path: ['target', 'params', 0],
+        },
+      });
+      expect(
+        await inTx((client) => getOperation(client, workspaceId, gatekeeperId, bad.name)),
+      ).toBeNull();
+      // Any other problem of the definition is refused as it was before.
+      const { target: _target, ...undeclared } = bad;
+      const other = await inTx((client) =>
+        proposeOperationHandler(
+          client,
+          workspaceId,
+          { gatekeeperId, operation: { ...undeclared, mode: 'sometimes' } },
+          ctx,
+        ),
+      ).catch((err: unknown) => err);
+      expect(other).toBeInstanceOf(Error);
+      expect(other).not.toBeInstanceOf(OperationTargetInvalidError);
     });
   });
 

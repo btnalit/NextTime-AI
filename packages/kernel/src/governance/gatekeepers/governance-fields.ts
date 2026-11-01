@@ -1,5 +1,12 @@
-import type { Operation } from '@nexttime/shared';
-import { ANY_CHANGE, type FieldRule, listRule, rankOf, strictness } from '../field-rules/index.js';
+import { type Operation, operationTargetProblems } from '@nexttime/shared';
+import {
+  ANY_CHANGE,
+  type FieldRule,
+  listRule,
+  rankOf,
+  sameValue,
+  strictness,
+} from '../field-rules/index.js';
 
 /**
  * governance/gatekeepers/governance-fields: what an Operation's governance is, and which way a
@@ -64,12 +71,26 @@ export const OPERATION_FIELD_RULES: Readonly<Record<keyof Operation, FieldRule>>
   idempotent_hint: strictness((value) =>
     value === true ? 0 : value === false || value === undefined ? 1 : undefined,
   ),
+  // S11 GO12: the instance a call is queued against. Declared, a call no longer waits for the
+  // gate's calls on other instances — less ordering, reviewed; changed, it is ordered against
+  // other calls than before, not proven either way; dropped, it waits for every call of its gate
+  // again, as strict as the queue gets.
+  target: (before, after) => {
+    if (sameValue(before, after) || after === undefined) return null;
+    return before === undefined ? 'loosened' : 'changed';
+  },
 };
+
+/** S11 GO12: `Operation.target` as a governance field reads it (camelCase, as on the wire). */
+export interface OperationGovernanceTarget {
+  readonly objectType: string;
+  readonly params: string[];
+}
 
 /**
  * An Operation's governance: everything about how a call of it is reviewed (`@nexttime/shared`
  * `OperationGovernanceFieldsWire` is this shape on the wire). `reads` / `writes` compare as sets;
- * a hint the Operation does not declare is `null`.
+ * a hint the Operation does not declare is `null`, and so is a `target` it does not declare.
  */
 export interface OperationGovernanceFields {
   readonly mode: Operation['mode'];
@@ -81,6 +102,7 @@ export interface OperationGovernanceFields {
   readonly readOnlyHint: boolean | null;
   readonly destructiveHint: boolean | null;
   readonly idempotentHint: boolean | null;
+  readonly target: OperationGovernanceTarget | null;
 }
 
 export type OperationGovernanceFieldName = keyof OperationGovernanceFields;
@@ -96,6 +118,7 @@ const GOVERNANCE_FIELD_KEYS = {
   readOnlyHint: 'read_only_hint',
   destructiveHint: 'destructive_hint',
   idempotentHint: 'idempotent_hint',
+  target: 'target',
 } as const satisfies Record<OperationGovernanceFieldName, keyof Operation>;
 
 const GOVERNANCE_FIELD_NAMES = Object.keys(GOVERNANCE_FIELD_KEYS) as OperationGovernanceFieldName[];
@@ -117,11 +140,14 @@ export function operationGovernanceFieldsOf(operation: Operation): OperationGove
     readOnlyHint: operation.read_only_hint ?? null,
     destructiveHint: operation.destructive_hint ?? null,
     idempotentHint: operation.idempotent_hint ?? null,
+    target: operation.target
+      ? { objectType: operation.target.object_type, params: [...operation.target.params] }
+      : null,
   };
 }
 
-/** `fields` as the Operation properties they are stored as — a hint that is `null` is left out
- *  (`removed`), as an Operation that declares none has no key for it. */
+/** `fields` as the Operation properties they are stored as — a hint (or `target`) that is `null`
+ *  is left out (`removed`), as an Operation that declares none has no key for it. */
 export function operationGovernanceProperties(fields: OperationGovernanceFields): {
   readonly set: Readonly<Record<string, unknown>>;
   readonly removed: readonly string[];
@@ -132,6 +158,9 @@ export function operationGovernanceProperties(fields: OperationGovernanceFields)
     const value = fields[field];
     if (value === null) removed.push(GOVERNANCE_FIELD_KEYS[field]);
     else set[GOVERNANCE_FIELD_KEYS[field]] = value;
+  }
+  if (fields.target !== null) {
+    set.target = { object_type: fields.target.objectType, params: [...fields.target.params] };
   }
   return { set, removed };
 }
@@ -145,6 +174,18 @@ export function withOperationGovernance(
   const next: Record<string, unknown> = { ...operation, ...set };
   for (const key of removed) delete next[key];
   return next as Operation;
+}
+
+/** S11 GO12: whether `fields` written in place onto `operation` leave a valid Operation — a
+ *  `target` names params of `operation`'s own `params_schema` (I-Q4), which an in-place write
+ *  does not change. Announced governance is valid with its own definition; one whose `target`
+ *  names a param only that definition has is carried by a revision instead, with the definition
+ *  it fits (`refreshOperationGovernance`, and the align preview that says so beforehand). */
+export function governanceFitsDefinition(
+  operation: Operation,
+  fields: OperationGovernanceFields,
+): boolean {
+  return operationTargetProblems(withOperationGovernance(operation, fields)).length === 0;
 }
 
 /** The value `OPERATION_FIELD_RULES` reads for `field` (a hint left out is `undefined`). */
@@ -168,6 +209,7 @@ function fieldDiffers(
   announced: OperationGovernanceFields,
 ): boolean {
   if (field === 'reads' || field === 'writes') return !sameSet(existing[field], announced[field]);
+  if (field === 'target') return !sameValue(existing.target, announced.target);
   return existing[field] !== announced[field];
 }
 

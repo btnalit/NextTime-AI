@@ -10,10 +10,14 @@ import {
   OPERATION_NAME_MAX,
   OPERATION_TRANSITIONS,
   type OperationNameProblem,
+  type OperationTargetProblem,
   UNSTORABLE_CHAR,
   UnstorableTextError,
   findUnstorableText,
+  manifestTargetProblems,
   operationNameProblem,
+  operationTargetProblems,
+  operationTargetRefusalOf,
   storableText,
   transition,
 } from '@nexttime/shared';
@@ -35,6 +39,7 @@ import {
 import { type PublishActor, assertPublishAuthority, seesEveryDraft } from '../capability/index.js';
 import {
   assertDraftCredentialsReviewed,
+  boundedEcho,
   quotedName,
   refuseCredentialText,
   refuseRedactedText,
@@ -66,6 +71,7 @@ import {
   type OperationGovernanceFields,
   classifyOperationGovernanceChange,
   diffOperationGovernanceFields,
+  governanceFitsDefinition,
   operationGovernanceFieldsOf,
   operationGovernanceProperties,
   withOperationGovernance,
@@ -319,6 +325,57 @@ export interface ImportManifestInput {
   readonly activityId: string;
 }
 
+/** S11 GO12 (I-Q4): an Operation's `target` declaration the rules refuse
+ *  (`@nexttime/shared` `OPERATION_TARGET_REFUSAL_VALUES`) — thrown by `importManifest` before any
+ *  write, for one Operation's own declaration or, across the Operations imported together, two that
+ *  name one type by different numbers of params (`target_arity_inconsistent`). An Operation parsed
+ *  with `OperationSchema` (a proposal, a manifest file, an announcement) is refused with the same
+ *  reason as its issue's first word. 400 `invalid_operation_target`; `details.reason` is the rule. */
+export class OperationTargetInvalidError extends Error {
+  readonly code = 'invalid_operation_target' as const;
+  readonly details: {
+    readonly reason: OperationTargetProblem['reason'];
+    readonly operation: string;
+    readonly path: readonly (string | number)[];
+  };
+  constructor(operation: string, problem: OperationTargetProblem) {
+    super(
+      `Operation ${quotedName(operation)}: its target declaration is refused (${problem.reason}: ${problem.message}) — nothing was written.`,
+    );
+    this.name = 'OperationTargetInvalidError';
+    // The name as an echo (bounded, visible): a proposal's or announcement's name is the caller's.
+    this.details = {
+      reason: problem.reason,
+      operation: boundedEcho(operation),
+      path: [...problem.path],
+    };
+  }
+
+  /** The refusal a failed `OperationSchema` parse carries (`operationTargetRefusalOf`), naming the
+   *  Operation by `nameAt(at)` — where it sits in what was parsed; `undefined` when no issue refuses
+   *  a target, so the caller's own handling of other issues stays as it was. */
+  static fromIssues(
+    issues: Parameters<typeof operationTargetRefusalOf>[0],
+    nameAt: (at: readonly PropertyKey[]) => unknown,
+  ): OperationTargetInvalidError | undefined {
+    const refusal = operationTargetRefusalOf(issues);
+    if (refusal === undefined) return undefined;
+    const name = nameAt(refusal.at);
+    return new OperationTargetInvalidError(typeof name === 'string' ? name : '', refusal);
+  }
+}
+
+/** S11 GO12: refuses `operations` imported together when one's `target` is refused, or two name one
+ *  type by different numbers of params ({@link OperationTargetInvalidError}). */
+export function assertOperationTargets(operations: readonly Operation[]): void {
+  for (const operation of operations) {
+    const [problem] = operationTargetProblems(operation);
+    if (problem) throw new OperationTargetInvalidError(operation.name, problem);
+  }
+  const [inconsistent] = manifestTargetProblems(operations);
+  if (inconsistent) throw new OperationTargetInvalidError(inconsistent.operation, inconsistent);
+}
+
 /** Legacy 232 (review #493): a *new* Operation name that breaks `operationNameProblem`'s rule
  *  (`@nexttime/shared`) — empty, longer than `OPERATION_NAME_MAX`, or carrying an invisible or
  *  reordering character (an agent could otherwise dress a draft's name up on the approval card).
@@ -415,6 +472,8 @@ export async function importManifest(
   input: ImportManifestInput,
 ): Promise<ImportManifestResult> {
   const operations = input.operations.map(storableManifestOperation);
+  // S11 GO12: nor does a refused target declaration (I-Q4), before any write.
+  assertOperationTargets(operations);
   // Legacy 232: a new name breaking the name rule imports nothing — validated before any write,
   // so a manifest with one bad entry imports nothing rather than a confusing partial import.
   for (const operation of operations) {
@@ -2008,8 +2067,13 @@ export async function refreshOperationGovernance(
     const direction = diff.differs
       ? classifyOperationGovernanceChange(before, after, diff.changedFields)
       : null;
-    // Review #493 on #612 (M1): a loosening from an unreviewed source waits for a publish.
-    const byRevision = direction !== null && governanceChangeNeedsRevision(source, direction);
+    // Review #493 on #612 (M1): a loosening from an unreviewed source waits for a publish. S11
+    // GO12: so does a change that would not fit the deployed definition in place (a `target`
+    // naming a param only the announced definition has).
+    const byRevision =
+      direction !== null &&
+      (governanceChangeNeedsRevision(source, direction) ||
+        !governanceFitsDefinition(existingRecord.operation, after));
     const inPlace = direction !== null && !byRevision;
     if (inPlace) {
       await setOperationGovernanceFieldsObject(

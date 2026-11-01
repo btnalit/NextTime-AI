@@ -1,6 +1,7 @@
 import { OperationSchema } from '@nexttime/shared';
 import { z } from 'zod';
 import {
+  OperationTargetInvalidError,
   absentAnswersOfDefinition,
   deprecateOperation,
   discardOperationDraft,
@@ -84,7 +85,18 @@ export const proposeOperationHandler: CapabilityHandler = async (
   ctx,
 ) => {
   const { gatekeeperId, operation: rawOperation } = ProposeOperationParamsSchema.parse(params);
-  const operation = OperationSchema.parse(rawOperation);
+  const parsedOperation = OperationSchema.safeParse(rawOperation);
+  if (!parsedOperation.success) {
+    // S11 GO12 (I-Q4): a refused `target` declaration answers 400 `invalid_operation_target` with
+    // its reason, as an import or announcement of it does; any other issue is thrown as before.
+    throw (
+      OperationTargetInvalidError.fromIssues(
+        parsedOperation.error.issues,
+        () => (rawOperation as { readonly name?: unknown } | undefined)?.name,
+      ) ?? parsedOperation.error
+    );
+  }
+  const operation = parsedOperation.data;
   const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
   // propose_operation is a `channel:'handle'` capability (packages/shared/src/capabilities.ts) —
   // its normal caller is an agent/Worker session, but `authorizeCapabilityCall` also permits a

@@ -191,6 +191,7 @@ import {
   OperationIdentityConflictError,
   OperationNameInvalidError,
   OperationNotFoundError,
+  OperationTargetInvalidError,
 } from '../../governance/gatekeepers/index.js';
 import {
   HighBlastRadiusAutoApproveError,
@@ -514,6 +515,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // Legacy 232 (review #493): a new Operation name that is empty, too long, or carries an
   // invisible / reordering character — 400 with its own code and `details` (problem, maxLength).
   if (err instanceof OperationNameInvalidError) {
+    return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
+  }
+  // S11 GO12 (I-Q4): an imported or announced target declaration refused — 400 with its own code
+  // and `details` (reason, operation, path).
+  if (err instanceof OperationTargetInvalidError) {
     return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
   }
   // Legacy 232: `request_action` naming nothing the gate could run — 404 with its own code and

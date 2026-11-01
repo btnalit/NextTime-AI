@@ -38,6 +38,52 @@ describe('parseManifestJson (review lane 5, P3 batch)', () => {
     );
   });
 
+  describe('S11 GO12 (I-Q4): target declarations', () => {
+    const onContainer = (name: string, params: string[]) => ({
+      ...validOperation,
+      name,
+      binding: { kind: 'http', method: 'POST', path: '/restart' },
+      params_schema: {
+        type: 'object',
+        properties: { id: { type: 'string' }, host: { type: 'string' } },
+        required: ['id', 'host'],
+      },
+      mode: 'execute',
+      auto_approvable: false,
+      writes: ['Container'],
+      target: { object_type: 'Container', params },
+    });
+
+    it('keeps a valid declaration', () => {
+      const [restart] = parseManifestJson(
+        JSON.stringify([onContainer('container.restart', ['id'])]),
+        'test.json',
+      );
+      expect(restart?.target).toEqual({ object_type: 'Container', params: ['id'] });
+    });
+
+    it("refuses one entry's declaration with its reason code", () => {
+      expect(() =>
+        parseManifestJson(
+          JSON.stringify([{ ...onContainer('container.restart', ['id']), mode: 'observe' }]),
+          'test.json',
+        ),
+      ).toThrow(/entry 0 \(name: container\.restart\)[\s\S]*target_not_execute/);
+    });
+
+    it('refuses two entries naming one type by different numbers of params as target_arity_inconsistent', () => {
+      expect(() =>
+        parseManifestJson(
+          JSON.stringify([
+            onContainer('container.restart', ['id']),
+            onContainer('container.move', ['host', 'id']),
+          ]),
+          'test.json',
+        ),
+      ).toThrow(/entry 1 \(name: container\.move\).*target_arity_inconsistent/);
+    });
+  });
+
   it('throws for an entry missing required fields entirely', () => {
     expect(() => parseManifestJson(JSON.stringify([{ name: 'x' }]), 'test.json')).toThrow(
       /entry 0/,

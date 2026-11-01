@@ -309,6 +309,84 @@ describe('waitingReason / waitingShortLabel', () => {
     ).toBe('Queued: an earlier request on this system awaits approval');
   });
 
+  it('S11 GO12: says whether it waits on the same target or on a request on the whole system', () => {
+    const target = { objectType: 'Container', identity: ['c1'] };
+    const behind = (
+      scope: 'target' | 'gate',
+      status: 'pending_approval' | 'executing',
+      outcomeInDoubt: boolean,
+      t: Translate = zh,
+      on: typeof target | null = target,
+    ) =>
+      waitingReason(
+        { status: 'approved', target: on, queuedBehind: { status, outcomeInDoubt, scope } },
+        t,
+      )?.message;
+    // The same target, named when the row says what it acts on.
+    expect(behind('target', 'pending_approval', false)).toBe(
+      '同一个目标（Container「c1」）上更早的一条请求还在等审批。同一个目标上的请求按提出顺序执行，它有了决定后这条才会执行；别的目标上的请求不受影响。',
+    );
+    expect(behind('target', 'pending_approval', false, en)).toContain(
+      'An earlier request on the same target (Container “c1”) is still awaiting approval.',
+    );
+    expect(behind('target', 'executing', true)).toContain(
+      '同一个目标（Container「c1」）上更早的一条请求结果不明',
+    );
+    expect(behind('target', 'executing', false)).toContain(
+      '同一个目标（Container「c1」）上更早的一条请求正在执行',
+    );
+    // A request on the whole system is in the way, or this one is on the whole system.
+    for (const on of [target, null]) {
+      const pending = behind('gate', 'pending_approval', false, zh, on);
+      expect(pending).toContain('同一个系统上更早的一条请求还在等审批');
+      expect(pending).toContain('作用于整个系统的请求不和这个系统上的其他请求同时执行');
+    }
+    expect(behind('gate', 'executing', true)).toContain('结果不明');
+    expect(behind('gate', 'executing', false, en)).toContain(
+      'A request on the whole system never runs alongside other requests on it',
+    );
+    // The list's few words: the same target, or the system as before.
+    const label = (scope: 'target' | 'gate' | undefined, t: Translate = zh) =>
+      waitingShortLabel(
+        {
+          status: 'approved',
+          queuedBehind: {
+            status: 'pending_approval',
+            outcomeInDoubt: false,
+            ...(scope ? { scope } : {}),
+          },
+        },
+        t,
+      )?.label;
+    expect(label('target')).toBe('排队中：同一目标上更早的请求在等审批');
+    expect(label('target', en)).toBe(
+      'Queued: an earlier request on the same target awaits approval',
+    );
+    expect(label('gate')).toBe('排队中：同一系统上更早的请求在等审批');
+    expect(label(undefined)).toBe('排队中：同一系统上更早的请求在等审批');
+    // No raw enum value anywhere.
+    for (const text of [behind('target', 'pending_approval', false), label('target')]) {
+      expect(text).not.toMatch(/pending_approval|executing|target|gate/);
+    }
+  });
+
+  it('S11 GO12: an executing row in doubt on one target holds back only that target and the whole system', () => {
+    const message = (target: { objectType: string; identity: string[] } | null | undefined) =>
+      waitingReason(
+        {
+          status: 'executing',
+          outcomeInDoubt: { since, reason: null },
+          ...(target !== undefined ? { target } : {}),
+        },
+        zh,
+      )?.message;
+    expect(message({ objectType: 'Container', identity: ['c1'] })).toContain(
+      '同一个目标（Container「c1」）上排在它后面的请求和作用于整个系统的请求会等它，别的目标上的请求照常执行',
+    );
+    expect(message(null)).toContain('同一个系统上排在它后面的请求都会等它');
+    expect(message(undefined)).toContain('同一个系统上排在它后面的请求都会等它');
+  });
+
   it('says nothing for a row that is not waiting, or a field on the wrong status', () => {
     expect(waitingReason({ status: 'executing' }, zh)).toBeNull();
     expect(waitingReason({ status: 'executing', outcomeInDoubt: null }, zh)).toBeNull();

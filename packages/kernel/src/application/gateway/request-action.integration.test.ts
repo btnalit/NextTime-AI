@@ -3188,7 +3188,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(waiting.get(behind)).toEqual({
           status: 'auto_approved',
           outcomeInDoubt: null,
-          queuedBehind: { status: 'executing', outcomeInDoubt: true },
+          queuedBehind: { status: 'executing', outcomeInDoubt: true, scope: 'gate' },
         });
 
         // The same connection loss on the reaper's lookup is no answer either.
@@ -3296,7 +3296,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(waiting.get(behind)).toEqual({
           status: 'auto_approved',
           outcomeInDoubt: null,
-          queuedBehind: { status: 'pending_approval', outcomeInDoubt: false },
+          queuedBehind: { status: 'pending_approval', outcomeInDoubt: false, scope: 'gate' },
         });
 
         await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>

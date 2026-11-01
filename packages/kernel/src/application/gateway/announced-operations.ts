@@ -10,6 +10,7 @@ import {
   gateOwnedParamsOfDefinition,
   getOperation,
   governanceChangeNeedsRevision,
+  governanceFitsDefinition,
   importDraftDiffersFromAnnounced,
   operationDefinitionDiffers,
   operationGovernanceChangeDirection,
@@ -152,7 +153,10 @@ export async function compareAnnouncedOperations(
       // Review #493 on #612 (M1): the write's own judgment — this change is not applied in place
       // but opens a revision on a published row; on a deprecated row nothing is written at all
       // (legacy 345 — the console reads `existing.status` for that).
-      ...(governanceChangeNeedsRevision(source, direction)
+      // S11 GO12: as is one that does not fit the deployed definition in place.
+      ...(direction !== 'neutral' &&
+      (governanceChangeNeedsRevision(source, direction) ||
+        !governanceFitsDefinition(existingRecord.operation, announced))
         ? { governanceByRevision: true as const }
         : {}),
       // Review #501 on #571 ③: the revision an align opens for this entry is held back when the

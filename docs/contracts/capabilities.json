@@ -2229,6 +2229,13 @@
                 "outcomeInDoubt": {
                   "type": "boolean"
                 },
+                "scope": {
+                  "enum": [
+                    "target",
+                    "gate"
+                  ],
+                  "type": "string"
+                },
                 "status": {
                   "enum": [
                     "pending_approval",
@@ -2312,6 +2319,39 @@
         "suspectedSecretValues": {
           "exclusiveMinimum": 0,
           "type": "integer"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "identity": {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                "objectType": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "objectType",
+                "identity"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -5164,6 +5204,32 @@
                             },
                             "type": "array"
                           },
+                          "target": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "objectType": {
+                                    "type": "string"
+                                  },
+                                  "params": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "objectType",
+                                  "params"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "writes": {
                             "items": {
                               "type": "string"
@@ -5180,7 +5246,8 @@
                           "writes",
                           "readOnlyHint",
                           "destructiveHint",
-                          "idempotentHint"
+                          "idempotentHint",
+                          "target"
                         ],
                         "type": "object"
                       },
@@ -5232,6 +5299,32 @@
                             },
                             "type": "array"
                           },
+                          "target": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "objectType": {
+                                    "type": "string"
+                                  },
+                                  "params": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "objectType",
+                                  "params"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "writes": {
                             "items": {
                               "type": "string"
@@ -5248,7 +5341,8 @@
                           "writes",
                           "readOnlyHint",
                           "destructiveHint",
-                          "idempotentHint"
+                          "idempotentHint",
+                          "target"
                         ],
                         "type": "object"
                       },
@@ -6950,6 +7044,32 @@
                             },
                             "type": "array"
                           },
+                          "target": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "objectType": {
+                                    "type": "string"
+                                  },
+                                  "params": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "objectType",
+                                  "params"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "writes": {
                             "items": {
                               "type": "string"
@@ -6966,7 +7086,8 @@
                           "writes",
                           "readOnlyHint",
                           "destructiveHint",
-                          "idempotentHint"
+                          "idempotentHint",
+                          "target"
                         ],
                         "type": "object"
                       },
@@ -7018,6 +7139,32 @@
                             },
                             "type": "array"
                           },
+                          "target": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "objectType": {
+                                    "type": "string"
+                                  },
+                                  "params": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "objectType",
+                                  "params"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "writes": {
                             "items": {
                               "type": "string"
@@ -7034,7 +7181,8 @@
                           "writes",
                           "readOnlyHint",
                           "destructiveHint",
-                          "idempotentHint"
+                          "idempotentHint",
+                          "target"
                         ],
                         "type": "object"
                       },
@@ -11753,6 +11901,13 @@
                 "outcomeInDoubt": {
                   "type": "boolean"
                 },
+                "scope": {
+                  "enum": [
+                    "target",
+                    "gate"
+                  ],
+                  "type": "string"
+                },
                 "status": {
                   "enum": [
                     "pending_approval",
@@ -11836,6 +11991,39 @@
         "suspectedSecretValues": {
           "exclusiveMinimum": 0,
           "type": "integer"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "identity": {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                "objectType": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "objectType",
+                "identity"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -16764,6 +16952,32 @@
                             },
                             "type": "array"
                           },
+                          "target": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "objectType": {
+                                    "type": "string"
+                                  },
+                                  "params": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "objectType",
+                                  "params"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "writes": {
                             "items": {
                               "type": "string"
@@ -16780,7 +16994,8 @@
                           "writes",
                           "readOnlyHint",
                           "destructiveHint",
-                          "idempotentHint"
+                          "idempotentHint",
+                          "target"
                         ],
                         "type": "object"
                       },
@@ -16832,6 +17047,32 @@
                             },
                             "type": "array"
                           },
+                          "target": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "objectType": {
+                                    "type": "string"
+                                  },
+                                  "params": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "objectType",
+                                  "params"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "writes": {
                             "items": {
                               "type": "string"
@@ -16848,7 +17089,8 @@
                           "writes",
                           "readOnlyHint",
                           "destructiveHint",
-                          "idempotentHint"
+                          "idempotentHint",
+                          "target"
                         ],
                         "type": "object"
                       },
@@ -17352,6 +17594,32 @@
                         },
                         "type": "array"
                       },
+                      "target": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "objectType": {
+                                "type": "string"
+                              },
+                              "params": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "objectType",
+                              "params"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "writes": {
                         "items": {
                           "type": "string"
@@ -17368,7 +17636,8 @@
                       "writes",
                       "readOnlyHint",
                       "destructiveHint",
-                      "idempotentHint"
+                      "idempotentHint",
+                      "target"
                     ],
                     "type": "object"
                   },
@@ -17420,6 +17689,32 @@
                         },
                         "type": "array"
                       },
+                      "target": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "objectType": {
+                                "type": "string"
+                              },
+                              "params": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "objectType",
+                              "params"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "writes": {
                         "items": {
                           "type": "string"
@@ -17436,7 +17731,8 @@
                       "writes",
                       "readOnlyHint",
                       "destructiveHint",
-                      "idempotentHint"
+                      "idempotentHint",
+                      "target"
                     ],
                     "type": "object"
                   },
@@ -17485,6 +17781,25 @@
                   "deprecated"
                 ],
                 "type": "string"
+              },
+              "target": {
+                "additionalProperties": false,
+                "properties": {
+                  "objectType": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "objectType",
+                  "params"
+                ],
+                "type": "object"
               },
               "version": {
                 "exclusiveMinimum": 0,
@@ -29144,6 +29459,13 @@
                       "outcomeInDoubt": {
                         "type": "boolean"
                       },
+                      "scope": {
+                        "enum": [
+                          "target",
+                          "gate"
+                        ],
+                        "type": "string"
+                      },
                       "status": {
                         "enum": [
                           "pending_approval",
@@ -29227,6 +29549,39 @@
               "suspectedSecretValues": {
                 "exclusiveMinimum": 0,
                 "type": "integer"
+              },
+              "target": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "identity": {
+                        "items": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "integer"
+                            }
+                          ]
+                        },
+                        "type": "array"
+                      },
+                      "objectType": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "objectType",
+                      "identity"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
@@ -31986,6 +32341,32 @@
                                   },
                                   "type": "array"
                                 },
+                                "target": {
+                                  "anyOf": [
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "objectType": {
+                                          "type": "string"
+                                        },
+                                        "params": {
+                                          "items": {
+                                            "type": "string"
+                                          },
+                                          "type": "array"
+                                        }
+                                      },
+                                      "required": [
+                                        "objectType",
+                                        "params"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "writes": {
                                   "items": {
                                     "type": "string"
@@ -32002,7 +32383,8 @@
                                 "writes",
                                 "readOnlyHint",
                                 "destructiveHint",
-                                "idempotentHint"
+                                "idempotentHint",
+                                "target"
                               ],
                               "type": "object"
                             },
@@ -32054,6 +32436,32 @@
                                   },
                                   "type": "array"
                                 },
+                                "target": {
+                                  "anyOf": [
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "objectType": {
+                                          "type": "string"
+                                        },
+                                        "params": {
+                                          "items": {
+                                            "type": "string"
+                                          },
+                                          "type": "array"
+                                        }
+                                      },
+                                      "required": [
+                                        "objectType",
+                                        "params"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "writes": {
                                   "items": {
                                     "type": "string"
@@ -32070,7 +32478,8 @@
                                 "writes",
                                 "readOnlyHint",
                                 "destructiveHint",
-                                "idempotentHint"
+                                "idempotentHint",
+                                "target"
                               ],
                               "type": "object"
                             },
@@ -33760,6 +34169,32 @@
                         },
                         "type": "array"
                       },
+                      "target": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "objectType": {
+                                "type": "string"
+                              },
+                              "params": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "objectType",
+                              "params"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "writes": {
                         "items": {
                           "type": "string"
@@ -33776,7 +34211,8 @@
                       "writes",
                       "readOnlyHint",
                       "destructiveHint",
-                      "idempotentHint"
+                      "idempotentHint",
+                      "target"
                     ],
                     "type": "object"
                   },
@@ -33828,6 +34264,32 @@
                         },
                         "type": "array"
                       },
+                      "target": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "objectType": {
+                                "type": "string"
+                              },
+                              "params": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "objectType",
+                              "params"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "writes": {
                         "items": {
                           "type": "string"
@@ -33844,7 +34306,8 @@
                       "writes",
                       "readOnlyHint",
                       "destructiveHint",
-                      "idempotentHint"
+                      "idempotentHint",
+                      "target"
                     ],
                     "type": "object"
                   },
@@ -33893,6 +34356,25 @@
                   "deprecated"
                 ],
                 "type": "string"
+              },
+              "target": {
+                "additionalProperties": false,
+                "properties": {
+                  "objectType": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "objectType",
+                  "params"
+                ],
+                "type": "object"
               },
               "version": {
                 "exclusiveMinimum": 0,
@@ -34941,6 +35423,13 @@
                       "outcomeInDoubt": {
                         "type": "boolean"
                       },
+                      "scope": {
+                        "enum": [
+                          "target",
+                          "gate"
+                        ],
+                        "type": "string"
+                      },
                       "status": {
                         "enum": [
                           "pending_approval",
@@ -35024,6 +35513,39 @@
               "suspectedSecretValues": {
                 "exclusiveMinimum": 0,
                 "type": "integer"
+              },
+              "target": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "identity": {
+                        "items": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "integer"
+                            }
+                          ]
+                        },
+                        "type": "array"
+                      },
+                      "objectType": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "objectType",
+                      "identity"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
@@ -40654,6 +41176,32 @@
                     },
                     "type": "array"
                   },
+                  "target": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "objectType": {
+                            "type": "string"
+                          },
+                          "params": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "objectType",
+                          "params"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "writes": {
                     "items": {
                       "type": "string"
@@ -40670,7 +41218,8 @@
                   "writes",
                   "readOnlyHint",
                   "destructiveHint",
-                  "idempotentHint"
+                  "idempotentHint",
+                  "target"
                 ],
                 "type": "object"
               },
@@ -40745,6 +41294,32 @@
                     ],
                     "type": "string"
                   },
+                  "target": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "objectType": {
+                            "type": "string"
+                          },
+                          "params": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "objectType",
+                          "params"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "writes": {
                     "items": {
                       "type": "string"
@@ -40762,6 +41337,7 @@
                   "readOnlyHint",
                   "destructiveHint",
                   "idempotentHint",
+                  "target",
                   "status"
                 ],
                 "type": "object"
@@ -41100,6 +41676,32 @@
                     },
                     "type": "array"
                   },
+                  "target": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "objectType": {
+                            "type": "string"
+                          },
+                          "params": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "objectType",
+                          "params"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "writes": {
                     "items": {
                       "type": "string"
@@ -41116,7 +41718,8 @@
                   "writes",
                   "readOnlyHint",
                   "destructiveHint",
-                  "idempotentHint"
+                  "idempotentHint",
+                  "target"
                 ],
                 "type": "object"
               },
@@ -41191,6 +41794,32 @@
                     ],
                     "type": "string"
                   },
+                  "target": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "objectType": {
+                            "type": "string"
+                          },
+                          "params": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "objectType",
+                          "params"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "writes": {
                     "items": {
                       "type": "string"
@@ -41208,6 +41837,7 @@
                   "readOnlyHint",
                   "destructiveHint",
                   "idempotentHint",
+                  "target",
                   "status"
                 ],
                 "type": "object"
@@ -45646,6 +46276,32 @@
                       },
                       "type": "array"
                     },
+                    "target": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "objectType": {
+                              "type": "string"
+                            },
+                            "params": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "objectType",
+                            "params"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "writes": {
                       "items": {
                         "type": "string"
@@ -45662,7 +46318,8 @@
                     "writes",
                     "readOnlyHint",
                     "destructiveHint",
-                    "idempotentHint"
+                    "idempotentHint",
+                    "target"
                   ],
                   "type": "object"
                 },
@@ -45714,6 +46371,32 @@
                       },
                       "type": "array"
                     },
+                    "target": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "objectType": {
+                              "type": "string"
+                            },
+                            "params": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "objectType",
+                            "params"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "writes": {
                       "items": {
                         "type": "string"
@@ -45730,7 +46413,8 @@
                     "writes",
                     "readOnlyHint",
                     "destructiveHint",
-                    "idempotentHint"
+                    "idempotentHint",
+                    "target"
                   ],
                   "type": "object"
                 },
@@ -46498,6 +47182,29 @@
             },
             "reversibility": {
               "type": "boolean"
+            },
+            "target": {
+              "additionalProperties": false,
+              "properties": {
+                "object_type": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "params": {
+                  "items": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 8,
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "object_type",
+                "params"
+              ],
+              "type": "object"
             },
             "writes": {
               "items": {
@@ -47834,6 +48541,32 @@
                     },
                     "type": "array"
                   },
+                  "target": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "objectType": {
+                            "type": "string"
+                          },
+                          "params": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "objectType",
+                          "params"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "writes": {
                     "items": {
                       "type": "string"
@@ -47850,7 +48583,8 @@
                   "writes",
                   "readOnlyHint",
                   "destructiveHint",
-                  "idempotentHint"
+                  "idempotentHint",
+                  "target"
                 ],
                 "type": "object"
               },
@@ -47902,6 +48636,32 @@
                     },
                     "type": "array"
                   },
+                  "target": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "objectType": {
+                            "type": "string"
+                          },
+                          "params": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "objectType",
+                          "params"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "writes": {
                     "items": {
                       "type": "string"
@@ -47918,7 +48678,8 @@
                   "writes",
                   "readOnlyHint",
                   "destructiveHint",
-                  "idempotentHint"
+                  "idempotentHint",
+                  "target"
                 ],
                 "type": "object"
               },
@@ -48287,6 +49048,13 @@
                 "outcomeInDoubt": {
                   "type": "boolean"
                 },
+                "scope": {
+                  "enum": [
+                    "target",
+                    "gate"
+                  ],
+                  "type": "string"
+                },
                 "status": {
                   "enum": [
                     "pending_approval",
@@ -48370,6 +49138,39 @@
         "suspectedSecretValues": {
           "exclusiveMinimum": 0,
           "type": "integer"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "identity": {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                "objectType": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "objectType",
+                "identity"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -50808,6 +51609,29 @@
                   "reversibility": {
                     "type": "boolean"
                   },
+                  "target": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "object_type": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "params": {
+                        "items": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "object_type",
+                      "params"
+                    ],
+                    "type": "object"
+                  },
                   "writes": {
                     "items": {
                       "type": "string"
@@ -51253,6 +52077,13 @@
                     "outcomeInDoubt": {
                       "type": "boolean"
                     },
+                    "scope": {
+                      "enum": [
+                        "target",
+                        "gate"
+                      ],
+                      "type": "string"
+                    },
                     "status": {
                       "enum": [
                         "pending_approval",
@@ -51337,6 +52168,39 @@
             "suspectedSecretValues": {
               "exclusiveMinimum": 0,
               "type": "integer"
+            },
+            "target": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "identity": {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "integer"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    "objectType": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "objectType",
+                    "identity"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -51401,6 +52265,13 @@
               "properties": {
                 "outcomeInDoubt": {
                   "type": "boolean"
+                },
+                "scope": {
+                  "enum": [
+                    "target",
+                    "gate"
+                  ],
+                  "type": "string"
                 },
                 "status": {
                   "enum": [
@@ -60623,6 +61494,32 @@
                             },
                             "type": "array"
                           },
+                          "target": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "objectType": {
+                                    "type": "string"
+                                  },
+                                  "params": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "objectType",
+                                  "params"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "writes": {
                             "items": {
                               "type": "string"
@@ -60639,7 +61536,8 @@
                           "writes",
                           "readOnlyHint",
                           "destructiveHint",
-                          "idempotentHint"
+                          "idempotentHint",
+                          "target"
                         ],
                         "type": "object"
                       },
@@ -60691,6 +61589,32 @@
                             },
                             "type": "array"
                           },
+                          "target": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "objectType": {
+                                    "type": "string"
+                                  },
+                                  "params": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "objectType",
+                                  "params"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "writes": {
                             "items": {
                               "type": "string"
@@ -60707,7 +61631,8 @@
                           "writes",
                           "readOnlyHint",
                           "destructiveHint",
-                          "idempotentHint"
+                          "idempotentHint",
+                          "target"
                         ],
                         "type": "object"
                       },

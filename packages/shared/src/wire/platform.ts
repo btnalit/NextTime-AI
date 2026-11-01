@@ -629,6 +629,13 @@ export const OperationGovernanceFieldsWireSchema = z
     readOnlyHint: z.boolean().nullable(),
     destructiveHint: z.boolean().nullable(),
     idempotentHint: z.boolean().nullable(),
+    /** S11 GO12: the one instance a call acts on — `objectType`, and the params whose values, in
+     *  order, are its identity (`@nexttime/shared` `OperationTargetSchema`). `null`: a call is
+     *  ordered against every call of its Gatekeeper. */
+    target: z
+      .object({ objectType: z.string(), params: z.array(z.string()) })
+      .strict()
+      .nullable(),
   })
   .strict();
 export type OperationGovernanceFieldsWire = z.infer<typeof OperationGovernanceFieldsWireSchema>;

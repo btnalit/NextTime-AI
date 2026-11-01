@@ -146,7 +146,7 @@ export function ApprovalCard({
       </header>
 
       <dl className="definition-list">
-        <dt>{t('目标', 'Target')}</dt>
+        <dt>{t('审批范围', 'Approval scope')}</dt>
         <dd data-testid="approval-target">{target}</dd>
         {gatekeeper ? (
           <>

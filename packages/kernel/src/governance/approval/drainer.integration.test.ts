@@ -103,9 +103,21 @@ describe.runIf(DATABASE_URL !== undefined)(
       return withWorkspace(pool, { workspaceId: ws, principalId }, fn);
     }
 
+    /** S11 GO12: a call on Container `id` (`params: {id}`, target from that param), or — no
+     *  `container` — on the whole Gatekeeper, as every request before GO12. */
+    function onContainer(container?: string) {
+      return container === undefined
+        ? {}
+        : {
+            params: { id: container },
+            target: { type: 'Container', params: ['id'], identity: [container] },
+          };
+    }
+
     async function createAutoApproved(
       gatekeeperId: string,
       actionKind: string,
+      container?: string,
     ): Promise<ActionRequestRow> {
       return withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         requestAction(client, workspaceId, {
@@ -117,6 +129,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           onBehalfOf: ownerId,
           actorRuntime: 'pi',
           requesterScope: scopeCovering(gatekeeperId),
+          ...onContainer(container),
         }),
       );
     }
@@ -124,6 +137,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     async function createPending(
       gatekeeperId: string,
       actionKind: string,
+      container?: string,
     ): Promise<ActionRequestRow> {
       return withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         requestAction(client, workspaceId, {
@@ -135,8 +149,16 @@ describe.runIf(DATABASE_URL !== undefined)(
           onBehalfOf: ownerId,
           actorRuntime: 'pi',
           requesterScope: scopeCovering(gatekeeperId),
+          ...onContainer(container),
         }),
       );
+    }
+
+    async function statusOf(id: string): Promise<string | undefined> {
+      const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        getActionRequest(client, workspaceId, id),
+      );
+      return row?.status;
     }
 
     beforeAll(async () => {
@@ -408,6 +430,256 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(after?.status).toBe('executed');
       }
+    });
+
+    // S11 GO12 (I-Q1), the roadmap's acceptance: a request awaiting approval holds back only what
+    // conflicts with it — the requests on its own instance and those on the whole Gatekeeper.
+    describe('ordered by target (S11 GO12, I-Q1)', () => {
+      it('the same gate and the same target stay serial: a pending row holds back the later row on its container', async () => {
+        const gatekeeperId = await insertGatekeeperObject();
+        const pending = await createPending(gatekeeperId, 'test.target.pending-web', 'web');
+        const later = await createAutoApproved(gatekeeperId, 'test.target.later-web', 'web');
+        expect(pending.status).toBe('pending_approval');
+
+        const calls: string[] = [];
+        const drainer = new ApprovalDrainer({ executor: fakeExecutor({}, calls), withTransaction });
+        const result = await drainer.drainGatekeeper(workspaceId, ownerId, gatekeeperId);
+
+        expect(result).toMatchObject({ processed: 0, stoppedAtPending: true });
+        expect(calls).toEqual([]);
+        expect(await statusOf(later.id)).toBe('auto_approved');
+      });
+
+      it('the same gate and another target do not wait: a pending row on one container lets the other run', async () => {
+        const gatekeeperId = await insertGatekeeperObject();
+        const pending = await createPending(gatekeeperId, 'test.target.pending-web', 'web');
+        const behindWeb = await createAutoApproved(gatekeeperId, 'test.target.behind-web', 'web');
+        const db = await createAutoApproved(gatekeeperId, 'test.target.db', 'db');
+
+        const calls: string[] = [];
+        const drainer = new ApprovalDrainer({ executor: fakeExecutor({}, calls), withTransaction });
+        const result = await drainer.drainGatekeeper(workspaceId, ownerId, gatekeeperId);
+
+        expect(result).toMatchObject({ processed: 1, stoppedAtPending: true });
+        expect(calls).toEqual(['test.target.db']);
+        expect(await statusOf(db.id)).toBe('executed');
+        expect(await statusOf(pending.id)).toBe('pending_approval');
+        expect(await statusOf(behindWeb.id)).toBe('auto_approved');
+      });
+
+      it('a request on the whole gate conflicts with every target, both ways', async () => {
+        // Pending on the whole gate: no container's request passes it.
+        const gate1 = await insertGatekeeperObject();
+        await createPending(gate1, 'test.target.pending-gate');
+        const web = await createAutoApproved(gate1, 'test.target.web', 'web');
+        const calls1: string[] = [];
+        const drainer1 = new ApprovalDrainer({
+          executor: fakeExecutor({}, calls1),
+          withTransaction,
+        });
+        expect(await drainer1.drainGatekeeper(workspaceId, ownerId, gate1)).toMatchObject({
+          processed: 0,
+          stoppedAtPending: true,
+        });
+        expect(calls1).toEqual([]);
+        expect(await statusOf(web.id)).toBe('auto_approved');
+
+        // Pending on one container: a whole-gate request behind it waits, and so does every
+        // container's request behind that one — nothing passes the whole-gate row. A container's
+        // request ahead of it still runs.
+        const gate2 = await insertGatekeeperObject();
+        await createPending(gate2, 'test.target.pending-web', 'web');
+        const dbAhead = await createAutoApproved(gate2, 'test.target.db-ahead', 'db');
+        const whole = await createAutoApproved(gate2, 'test.target.whole-gate');
+        const dbBehind = await createAutoApproved(gate2, 'test.target.db-behind', 'db');
+        const calls2: string[] = [];
+        const drainer2 = new ApprovalDrainer({
+          executor: fakeExecutor({}, calls2),
+          withTransaction,
+        });
+        expect(await drainer2.drainGatekeeper(workspaceId, ownerId, gate2)).toMatchObject({
+          processed: 1,
+          stoppedAtPending: true,
+        });
+        expect(calls2).toEqual(['test.target.db-ahead']);
+        expect(await statusOf(dbAhead.id)).toBe('executed');
+        expect(await statusOf(whole.id)).toBe('auto_approved');
+        expect(await statusOf(dbBehind.id)).toBe('auto_approved');
+      });
+
+      it('an outcome unknown on one container holds back that container only; the drain goes on', async () => {
+        const gatekeeperId = await insertGatekeeperObject();
+        const unknown = await createAutoApproved(gatekeeperId, 'test.target.unknown-web', 'web');
+        const behindWeb = await createAutoApproved(gatekeeperId, 'test.target.behind-web', 'web');
+        const db = await createAutoApproved(gatekeeperId, 'test.target.db', 'db');
+
+        const calls: string[] = [];
+        const executor = fakeExecutor(
+          { 'test.target.unknown-web': { ok: false, indeterminate: true, reason: 'timeout' } },
+          calls,
+        );
+        const drainer = new ApprovalDrainer({ executor, withTransaction });
+        const result = await drainer.drainGatekeeper(workspaceId, ownerId, gatekeeperId);
+
+        expect(result).toMatchObject({ processed: 2, stoppedAtExecuting: true });
+        expect(calls).toEqual(['test.target.unknown-web', 'test.target.db']);
+        expect(await statusOf(unknown.id)).toBe('executing');
+        expect(await statusOf(behindWeb.id)).toBe('auto_approved');
+        expect(await statusOf(db.id)).toBe('executed');
+      });
+
+      it('across drainer instances: while one applies a container, another starts a different container, never the first one again', async () => {
+        const gatekeeperId = await insertGatekeeperObject();
+        const web1 = await createAutoApproved(gatekeeperId, 'test.target.web-1', 'web');
+
+        let releaseWeb1: (() => void) | undefined;
+        const web1Running = new Promise<void>((resolve) => {
+          releaseWeb1 = resolve;
+        });
+        let web1Started: (() => void) | undefined;
+        const web1HasStarted = new Promise<void>((resolve) => {
+          web1Started = resolve;
+        });
+        const firstCalls: string[] = [];
+        const firstDrainer = new ApprovalDrainer({
+          executor: {
+            async execute(actionRequest) {
+              firstCalls.push(actionRequest.actionKind);
+              if (actionRequest.id === web1.id) {
+                web1Started?.();
+                await web1Running;
+              }
+              return { ok: true };
+            },
+          },
+          withTransaction,
+        });
+        const firstDrain = firstDrainer.drainGatekeeper(workspaceId, ownerId, gatekeeperId);
+        await web1HasStarted;
+
+        const web2 = await createAutoApproved(gatekeeperId, 'test.target.web-2', 'web');
+        const db = await createAutoApproved(gatekeeperId, 'test.target.db', 'db');
+        const secondCalls: string[] = [];
+        const secondDrainer = new ApprovalDrainer({
+          executor: fakeExecutor({}, secondCalls),
+          withTransaction,
+        });
+        const secondResult = await secondDrainer.drainGatekeeper(
+          workspaceId,
+          ownerId,
+          gatekeeperId,
+        );
+        expect(secondResult).toMatchObject({ processed: 1, stoppedAtExecuting: true });
+        expect(secondCalls).toEqual(['test.target.db']);
+        expect(await statusOf(web2.id)).toBe('auto_approved');
+
+        releaseWeb1?.();
+        expect(await firstDrain).toMatchObject({ processed: 2, stoppedAtExecuting: false });
+        expect(firstCalls).toEqual(['test.target.web-1', 'test.target.web-2']);
+        for (const row of [web1, web2, db]) expect(await statusOf(row.id)).toBe('executed');
+      });
+
+      it('the database keeps a request on its own instance, written once (I-Q2)', async () => {
+        const gatekeeperId = await insertGatekeeperObject();
+        const web = await createAutoApproved(gatekeeperId, 'test.target.web', 'web');
+        expect(web.target).toEqual({ type: 'Container', params: ['id'], identity: ['web'] });
+
+        const refused = (sql: string, args: unknown[]) =>
+          withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+            client.query(sql, args),
+          );
+        // Never moved to another instance, nor to the whole gate.
+        await expect(
+          refused(
+            `update action_requests set target = '{"type":"Container","params":["id"],"identity":["db"]}'::jsonb where id = $1`,
+            [web.id],
+          ),
+        ).rejects.toThrow(/never changes/);
+        await expect(
+          refused('update action_requests set target = null where id = $1', [web.id]),
+        ).rejects.toThrow(/never changes/);
+        // An instance its own params do not name is refused at insert.
+        await expect(
+          withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+            requestAction(client, workspaceId, {
+              gatekeeperId,
+              actionKind: 'test.target.forged',
+              blastRadius: 'low',
+              operationAutoApprovable: true,
+              awaitDecision: false,
+              onBehalfOf: ownerId,
+              actorRuntime: 'pi',
+              requesterScope: scopeCovering(gatekeeperId),
+              params: { id: 'web' },
+              target: { type: 'Container', params: ['id'], identity: ['db'] },
+            }),
+          ),
+        ).rejects.toThrow(/its own params name \(param id\)/);
+        // Its shape (the CHECK alone, triggers off): equal-length non-empty arrays, params named
+        // by strings, identity of strings or integers, a type, no other key.
+        for (const target of [
+          { type: 'Container', params: ['id'], identity: [] },
+          { type: 'Container', params: [], identity: [] },
+          { type: 'Container', params: ['id'], identity: [1.5] },
+          { type: 'Container', params: ['id'], identity: [{ id: 'web' }] },
+          { type: 'Container', params: ['id'], identity: [true] },
+          { type: '', params: ['id'], identity: ['web'] },
+          { params: ['id'], identity: ['web'] },
+          { type: 'Container', params: [7], identity: ['web'] },
+          { type: 'Container', params: 'id', identity: 'web' },
+          { type: 'Container', params: ['id'], identity: ['web'], scope: 'gate' },
+          ['Container', 'web'],
+        ]) {
+          await expect(
+            withWorkspace(
+              pool,
+              { workspaceId, principalId: ownerId },
+              async (client) => {
+                await client.query('set local session_replication_role = replica');
+                await client.query(
+                  `insert into action_requests (workspace_id, status, gatekeeper_id, action_kind,
+                     blast_radius, policy_decision, await_decision, on_behalf_of, actor_runtime,
+                     params, target)
+                   values ($1, 'auto_approved', $2, 'test.target.shape', 'low', 'allow', false, $3,
+                     'pi', '{"id":"web"}'::jsonb, $4::jsonb)`,
+                  [workspaceId, gatekeeperId, ownerId, JSON.stringify(target)],
+                );
+              },
+              { skipRoleSwitch: true },
+            ),
+            JSON.stringify(target),
+          ).rejects.toThrow(/action_requests_target_shape/);
+        }
+        // With the trigger on, a malformed shape is the CHECK's to refuse too.
+        await expect(
+          refused(
+            `insert into action_requests (workspace_id, status, gatekeeper_id, action_kind, blast_radius,
+               policy_decision, await_decision, on_behalf_of, actor_runtime, params, target)
+             values ($1, 'auto_approved', $2, 'test.target.shape', 'low', 'allow', false, $3, 'pi',
+               '{"id":"web"}'::jsonb, '{"type":"Container","params":["id"],"identity":[]}'::jsonb)`,
+            [workspaceId, gatekeeperId, ownerId],
+          ),
+        ).rejects.toThrow(/action_requests_target_shape/);
+        // An integer identity matches an integer param.
+        const numbered = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          (client) =>
+            requestAction(client, workspaceId, {
+              gatekeeperId,
+              actionKind: 'test.target.numbered',
+              blastRadius: 'low',
+              operationAutoApprovable: true,
+              awaitDecision: false,
+              onBehalfOf: ownerId,
+              actorRuntime: 'pi',
+              requesterScope: scopeCovering(gatekeeperId),
+              params: { n: 5 },
+              target: { type: 'Host', params: ['n'], identity: [5] },
+            }),
+        );
+        expect(numbered.target).toEqual({ type: 'Host', params: ['n'], identity: [5] });
+      });
     });
 
     it('single-flight: a concurrent drain call for the same gatekeeper is skipped, not queued', async () => {

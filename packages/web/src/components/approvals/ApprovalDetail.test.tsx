@@ -227,6 +227,51 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     expect(screen.getByTestId('approval-detail').textContent).not.toContain(gatekeeperId);
   });
 
+  it('S11 GO12: a queue scope row, beside the approval scope row, names the instance the request queues on, or the whole system, and what waits for it while it has not finished', () => {
+    // A row from before GO12 (no `target` on the wire) has no queue scope row.
+    const before = renderDetail();
+    expect(screen.queryByTestId('approval-queue-target')).toBeNull();
+    before.unmount();
+    const { unmount } = renderDetail({ target: { objectType: 'Container', identity: ['c1'] } });
+    // The approval scope row still shows the request's resource scope, labelled so that 「目标」
+    // is only ever the instance the queue scope row names.
+    expect(screen.getByTestId('approval-target').textContent).toBe('web-1');
+    const labels = [...screen.getByTestId('approval-detail').querySelectorAll('dt')].map(
+      (dt) => dt.textContent,
+    );
+    expect(labels).toContain('审批范围');
+    expect(labels).toContain('排队范围');
+    expect(labels).not.toContain('目标');
+    expect(screen.getByTestId('approval-queue-target').textContent).toBe('Container「c1」');
+    expect(screen.getByTestId('approval-queue-holds').textContent).toBe(
+      '同一个 Container 上后来的请求要等它有了结果再执行；别的 Container 上的请求不等它。',
+    );
+    unmount();
+    const whole = renderDetail({ target: null });
+    expect(screen.getByTestId('approval-queue-target').textContent).toBe('整个系统');
+    expect(screen.getByTestId('approval-queue-holds').textContent).toBe(
+      '这个系统上后来的请求都要等它有了结果再执行。',
+    );
+    whole.unmount();
+    // Once it has finished, nothing waits for it.
+    const done = renderDetail({
+      status: 'executed',
+      target: { objectType: 'Container', identity: ['c1'] },
+    });
+    expect(screen.getByTestId('approval-queue-target').textContent).toBe('Container「c1」');
+    expect(screen.queryByTestId('approval-queue-holds')).toBeNull();
+    done.unmount();
+    // The queue's own scope says the same in the waiting notice.
+    renderDetail({
+      status: 'approved',
+      target: { objectType: 'Container', identity: ['c2'] },
+      queuedBehind: { status: 'pending_approval', outcomeInDoubt: false, scope: 'target' },
+    });
+    expect(screen.getByTestId('approval-waiting').textContent).toContain(
+      '同一个目标（Container「c2」）上更早的一条请求还在等审批',
+    );
+  });
+
   it('reports the decision with the reason and the always-allow choice; Reject opens a confirm carrying the reason (S8 W1-A7: every Reject confirms)', async () => {
     const { onApprove, onReject } = renderDetail();
     fireEvent.change(screen.getByTestId('approval-reason'), { target: { value: ' why ' } });

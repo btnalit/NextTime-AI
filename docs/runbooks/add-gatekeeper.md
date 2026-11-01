@@ -262,6 +262,7 @@ TLS/错误信封处理（README"RAGFlow 的 `{code, data}` 错误信封对协议
 | `await_decision` | `true`：调用方等到有决定（或超时）才返回；`false`：立即返回 `pending_approval` + `simulate`，调用方下一轮再看结果。执行类操作默认建议 `true`（更保守，`docs/runbooks/host-gatekeepers.md`"已知偏离"里 `compose.up`/`compose.down` 的选择） |
 | `reversibility` | 是否实现了 `/gate/revert`（门自己的 transport 是否提供 `revert`） |
 | `reads`/`writes` | 该 Operation 观察/影响哪些图 ObjectType——若这些类型还不存在，先走 `docs/runbooks/add-domain-pack.md` |
+| `target`（可选，只对 `execute`） | 一次调用作用于哪一个实例：`{"object_type": "Container", "params": ["id"]}`。声明了，同门的请求只和同一实例、整门的请求排队；不声明就和这个门上的所有请求排队。规则见 §6.1 |
 | `binding` | 与门自己的 `GATE_TRANSPORT_KIND` 匹配：`http` → `{method,path}`；`mcp` → `{tool_name}`；`cli` → `{command_template}`；`ssh` → `{command_template}` 或 `{command_pattern}`。`http` 的 `path` 拼在 base URL 自己的路径之后（base URL 带前缀也保留）；`{param}` 路径参数只能是**一个路径段**——空值、`.`、`..`、含 `/` 或反斜杠（任何一层百分号编码后也算）一律在发请求前拒绝（R-22），所以模板不能被参数带到未发布的上级端点 |
 | `binding.absent_statuses` / `binding.absent_exit_codes`（可选，只对 `observe`） | 目标的哪些回答表示「要查的东西不存在」：`http` 只能写 `404`、`410`；`cli` / `ssh` 写退出码 1–125（最多 8 个；0、126、127、信号、ssh 自己的 255 都不行）；`mcp` 不能写。目标回答其中之一时，这次观察记为「不存在」（`absent`），不算调用失败；目标的响应体从不参与判断，没声明的回答照旧算失败。声明是 `binding` 的一部分，改了会改摘要，要重新审核发布。`execute` 的 Operation 不能写（清单会被拒绝）。控制台目录里的 Operation 详情会写出这些回答。**只能声明「在门用的凭据下，只有东西不存在时才会给」的回答**，见表后的说明 |
 
@@ -278,6 +279,38 @@ TLS/错误信封处理（README"RAGFlow 的 `{code, data}` 错误信封对协议
 - 发布出的版本记下确认人和时间，目录的 Operation 详情里显示确认人和「确认于 N 前」；需要确认之前发布的版本显示没有人确认过。
 - 整批发布（`publish_manifest`、`enable_gate_instance`）不发布这种草稿，把它们留作草稿，结果里的 `absentAnswerDrafts` 列出名字和回答，控制台给出逐个去目录发布的链接。
 - 清单、`propose_operation` 写进定义里的确认字段一律丢掉：确认只能由发布时的人给出。所以提议出的修订草稿（比如接入向导里的重分类）发布时要重新确认。变更计划（ChangePlan）里的 Operation 修订不改定义，沿用当前版本的确认；当前版本没有确认时，修订出的版本也没有。
+
+### 6.1 目标声明（`target`，可选，只对 `execute`；S11 GO12）
+
+同一个门的执行请求默认排成一条队：每个请求都要等这个门上所有更早的请求结束，一个等审批的请求会挡住这个门上的其他所有动作。`execute` 的 Operation 可以声明一次调用作用于哪一个实例，平台就只让作用于同一实例的请求互相等待：
+
+```json
+"target": { "object_type": "Container", "params": ["id"] }
+```
+
+- **冲突规则**：同门两个请求，只要任一个作用于整个门（没有声明），或者两个作用于同一实例（同一 `object_type`，`params` 的值按声明顺序逐个相等），后到的就要等先到的结束。别的实例上的请求照常执行，等审批的请求只挡同一实例和作用于整个门的请求。
+- **请求记下目标**：发起请求时按当时**已发布**的版本和这次调用的参数记下实例，之后发布的修订不会挪动已在队里的请求。草稿调用、参数缺失或类型不对的调用作用于整个门。
+- **治理字段**：`target` 和 `reads` / `writes` 一样是治理字段，不进定义摘要。新增或换一个声明算放宽，要人确认；去掉算收紧。控制台目录的 Operation 详情会写出「排队范围」。
+
+**机器检查的规则**：不合法的声明在导入清单、门公告、`propose_operation`、门自己读清单文件时都会被拒绝，并给出原因码。前三个入口回 400 `invalid_operation_target`，`details.reason` 是原因码：
+
+| 原因码 | 规则 |
+|---|---|
+| `target_not_execute` | 只有 `execute` 的 Operation 能声明 |
+| `target_type_not_sole_written` | `writes` 必须包含 `object_type`，`reads` / `writes` 里不能有别的类型（碰到别的类型的调用可能和那个类型上的调用冲突，而声明说不出来） |
+| `target_params_duplicate` | 同一个参数写了两次 |
+| `target_param_not_required_scalar` | 参数必须在 `params_schema.required` 里，类型是 `string` 或 `integer`（数组或对象指的不是一个实例） |
+| `target_param_secret` | 参数名像秘密字段（`password`、`token`、`apiKey` 之类，规则同 `namesASecretField`）：请求会原样保存目标的值，并在审批详情和等待说明里显示，那里不做脱敏 |
+| `target_arity_inconsistent` | 同一个门里，指同一个 `object_type` 的声明参数个数不同 |
+
+**机器查不了、由声明者负责的部分**：
+
+1. **身份参数要是规范身份。**同一个实例只能有一种写法。平台在发起请求时按调用给的参数值逐字比较，门在执行时才把别名解析成实例，帮不上排队。比如 docker 的 `id` 既收容器名也收容器 id，`restart("web")` 和 `restart("3f2a…")` 可能是同一个容器，平台看来是两个实例，两条请求可能同时执行（见 `gatekeepers/docker/README.md`）。所以：
+   - 能让 `params_schema` 只收规范写法（比如完整 id 的 `pattern`）就这样做；
+   - 做不到的，在门的 README 写明这个限制，请调用方每次用同一种写法；
+   - 删除、覆盖这类两次并发执行后果严重的 Operation，身份规范不了就不要声明 `target`。
+2. **一个调用作用于多个实例就不声明。**比如 `compose.down` 停一个项目下的所有容器，或者批量操作。不声明就是作用于整个门，和所有请求冲突，所以永远安全。
+3. **同一个门里，指同一类型时身份参数的顺序一致。**比如两个 Operation 都用 `["zone", "id"]`，不要一个写 `["id", "zone"]`。
 
 `importOpenApi(document)`/`importMcpTools(toolsListResponse)`（`@nexttime/gatekeeper-base`）能从一
 份 OpenAPI 3.x 文档或 MCP `tools/list` 响应**自动**推导出草稿清单（`GET`/`readOnlyHint` →

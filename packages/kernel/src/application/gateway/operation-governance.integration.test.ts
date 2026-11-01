@@ -307,6 +307,123 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
       });
 
+      it('S11 GO12: a target the gate now declares is aligned in place as a loosening, and the catalog row says it', async () => {
+        const op = testOperation({
+          name: `gov.restart.${randomUUID()}`,
+          binding: { kind: 'http', method: 'POST', path: '/things/{id}/restart' },
+          params_schema: {
+            type: 'object',
+            properties: { id: { type: 'string', 'x-in': 'path' } },
+            required: ['id'],
+          },
+          mode: 'execute',
+          blast_radius: 'medium',
+          auto_approvable: false,
+          writes: ['Thing'],
+        });
+        const announced: Operation = { ...op, target: { object_type: 'Thing', params: ['id'] } };
+        const { gatekeeperId, gateId } = await seedLinkedGatekeeper([op], [announced]);
+
+        const result = await callAs<{
+          refreshed: readonly {
+            name: string;
+            before: unknown;
+            after: unknown;
+            direction: string;
+          }[];
+          revisionDrafts: readonly unknown[];
+        }>(ownerId, 'owner', 'refresh_operation_governance', {
+          gatekeeperId,
+          manifestDigest: await digestOf(gateId),
+        });
+        // `target` is a governance field, not part of the definition: aligned in place.
+        expect(result.revisionDrafts).toEqual([]);
+        expect(result.refreshed).toEqual([
+          expect.objectContaining({
+            name: op.name,
+            direction: 'loosened',
+            before: expect.objectContaining({ target: null }),
+            after: expect.objectContaining({ target: { objectType: 'Thing', params: ['id'] } }),
+          }),
+        ]);
+        const persisted = await inTx((client) =>
+          getPublishedOperation(client, workspaceId, gatekeeperId, op.name),
+        );
+        expect(persisted?.operation.target).toEqual({ object_type: 'Thing', params: ['id'] });
+
+        const listed = await callAs<{ items: { name: string; target?: unknown }[] }>(
+          ownerId,
+          'owner',
+          'list_operations',
+          { gatekeeperId },
+        );
+        expect(listed.items.find((row) => row.name === op.name)?.target).toEqual({
+          objectType: 'Thing',
+          params: ['id'],
+        });
+      });
+
+      it('S11 GO12 (review #493 on #876 P3-1): a target naming a param only the announced definition has waits for a publish, and the published version keeps no target', async () => {
+        const op = testOperation({
+          name: `gov.restart-slot.${randomUUID()}`,
+          binding: { kind: 'http', method: 'POST', path: '/things/{id}/restart' },
+          params_schema: {
+            type: 'object',
+            properties: { id: { type: 'string', 'x-in': 'path' } },
+            required: ['id'],
+          },
+          mode: 'execute',
+          blast_radius: 'medium',
+          auto_approvable: false,
+          writes: ['Thing'],
+        });
+        // The gate now takes a required `slot` and names the instance by it: valid against its own
+        // definition, but not against the deployed one, which has no `slot` to read.
+        const announced: Operation = {
+          ...op,
+          params_schema: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', 'x-in': 'path' },
+              slot: { type: 'string', 'x-in': 'query' },
+            },
+            required: ['id', 'slot'],
+          },
+          target: { object_type: 'Thing', params: ['slot'] },
+        };
+        const { gatekeeperId, gateId } = await seedLinkedGatekeeper([op], [announced]);
+
+        const result = await callAs<{
+          refreshed: readonly { name: string }[];
+          revisionDrafts: readonly { name: string; version: number }[];
+        }>(ownerId, 'owner', 'refresh_operation_governance', {
+          gatekeeperId,
+          manifestDigest: await digestOf(gateId),
+        });
+        expect(result.refreshed.map((row) => row.name)).not.toContain(op.name);
+        expect(result.revisionDrafts).toEqual([
+          expect.objectContaining({ name: op.name, version: 2 }),
+        ]);
+
+        const published = await inTx((client) =>
+          getPublishedOperation(client, workspaceId, gatekeeperId, op.name),
+        );
+        expect(published?.version).toBe(1);
+        expect(published?.operation.target).toBeUndefined();
+        const draft = await inTx((client) =>
+          getOperation(client, workspaceId, gatekeeperId, op.name),
+        );
+        expect(draft).toMatchObject({ status: 'draft', version: 2 });
+        expect(draft?.operation.target).toEqual({ object_type: 'Thing', params: ['slot'] });
+        // No in-place record was written for it.
+        const rows = await inTx((client) =>
+          queryAudit(client, workspaceId, { action: 'operation.governance_refreshed' }),
+        );
+        expect(
+          rows.filter((row) => (row.payload as { name?: string } | null)?.name === op.name),
+        ).toEqual([]);
+      });
+
       it('a member (non-owner) is refused with ForbiddenError, nothing is written', async () => {
         const op = testOperation({ name: `gov.forbidden.${randomUUID()}`, auto_approvable: false });
         const announced = { ...op, auto_approvable: true };

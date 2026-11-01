@@ -26,6 +26,7 @@ import {
   redactConnectionAddress,
 } from '../../governance/connections/index.js';
 import {
+  assertOperationTargets,
   isOperationDisabled,
   storableManifestOperation,
 } from '../../governance/gatekeepers/index.js';
@@ -78,7 +79,8 @@ export type AnnounceBody = z.infer<typeof AnnounceBodySchema>;
 
 /**
  * Legacy 320: an announcement made storable, or refused (`UnstorableTextError`, or
- * `OperationNameInvalidError` for an Operation name — both 400, nothing written). Postgres cannot
+ * `OperationNameInvalidError` for an Operation name, or `OperationTargetInvalidError` for target
+ * declarations (S11 GO12) — all 400, nothing written). Postgres cannot
  * store U+0000, and a heartbeat that fails on it would leave the instance to go `lost`. The display
  * name is a label for a reader, so U+0000 there is stored as the visible `\u{0}`; the addresses
  * (`target`, `endpoint`, `healthEndpoint`) are settings the kernel acts on and refuse; each
@@ -91,6 +93,9 @@ export function storableAnnouncement(body: AnnounceBody): AnnounceBody {
   if (unstorable !== undefined) {
     throw new UnstorableTextError('gates/announce', unstorable, 'the field');
   }
+  // S11 GO12 (I-Q4): two Operations naming one type by different numbers of params are refused
+  // as a manifest an import would refuse (`OperationTargetInvalidError`, 400, nothing written).
+  assertOperationTargets(operations);
   return {
     ...body,
     ...(displayName !== undefined ? { displayName: storableValue(displayName).value } : {}),

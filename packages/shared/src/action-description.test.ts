@@ -1,12 +1,18 @@
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import {
   ActionDescriptionSchema,
   GateAbsenceSchema,
   OPERATION_NAME_MAX,
+  OPERATION_TARGET_REFUSAL_VALUES,
   OperationSchema,
+  actionTargetOf,
+  actionTargetsConflict,
   isDeclaredAbsence,
+  manifestTargetProblems,
   operationAbsentAnswers,
   operationNameProblem,
+  operationTargetRefusalOf,
 } from './action-description.js';
 import type { ActionDescription, Operation } from './action-description.js';
 
@@ -298,5 +304,211 @@ describe('absence declarations (S11 「门确认不存在」 A)', () => {
     expect(GateAbsenceSchema.safeParse({ status: '404' }).success).toBe(false);
     expect(GateAbsenceSchema.safeParse({ status: 404, note: 'x' }).success).toBe(false);
     expect(GateAbsenceSchema.safeParse({}).success).toBe(false);
+  });
+});
+
+describe('target declarations (S11 GO12)', () => {
+  const restart: Operation = {
+    name: 'container.restart',
+    binding: { kind: 'cli', command_template: 'docker restart {{id}}' },
+    params_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        timeoutSeconds: { type: 'integer' },
+        tags: { type: 'array' },
+      },
+      required: ['id'],
+    },
+    mode: 'execute',
+    blast_radius: 'medium',
+    reversibility: false,
+    auto_approvable: false,
+    await_decision: false,
+    reads: ['Container'],
+    writes: ['Container'],
+    target: { object_type: 'Container', params: ['id'] },
+  };
+  /** The reason codes a parse of `operation` refuses it with, in issue order. */
+  const refusals = (operation: unknown): string[] => {
+    const result = OperationSchema.safeParse(operation);
+    if (result.success) return [];
+    return result.error.issues.map((issue) => {
+      const reason = (issue as { params?: { reason?: string } }).params?.reason;
+      expect(issue.message.startsWith(`${reason}: `)).toBe(true);
+      return reason ?? issue.code;
+    });
+  };
+
+  it('parses a valid declaration and keeps it; an Operation without one parses as before', () => {
+    expect(OperationSchema.parse(restart).target).toEqual({
+      object_type: 'Container',
+      params: ['id'],
+    });
+    const { target: _target, ...none } = restart;
+    expect(OperationSchema.parse(none).target).toBeUndefined();
+  });
+
+  it('refuses each rule with its own reason code', () => {
+    expect(refusals({ ...restart, mode: 'observe', writes: [] })).toContain('target_not_execute');
+    // Writes another type too, reads another type, or does not write the declared one.
+    expect(refusals({ ...restart, writes: ['Container', 'Volume'] })).toEqual([
+      'target_type_not_sole_written',
+    ]);
+    expect(refusals({ ...restart, reads: ['Container', 'Host'] })).toEqual([
+      'target_type_not_sole_written',
+    ]);
+    expect(refusals({ ...restart, target: { object_type: 'Volume', params: ['id'] } })).toEqual([
+      'target_type_not_sole_written',
+    ]);
+    expect(
+      refusals({ ...restart, target: { object_type: 'Container', params: ['id', 'id'] } }),
+    ).toEqual(['target_params_duplicate']);
+    // Not required, an array, absent from the schema.
+    expect(
+      refusals({ ...restart, target: { object_type: 'Container', params: ['timeoutSeconds'] } }),
+    ).toEqual(['target_param_not_required_scalar']);
+    expect(
+      refusals({
+        ...restart,
+        params_schema: { ...restart.params_schema, required: ['id', 'tags'] },
+        target: { object_type: 'Container', params: ['tags'] },
+      }),
+    ).toEqual(['target_param_not_required_scalar']);
+    expect(
+      refusals({ ...restart, target: { object_type: 'Container', params: ['name'] } }),
+    ).toEqual(['target_param_not_required_scalar']);
+    // A param whose name names a secret, though required and a string: its value would be kept
+    // and shown as the request's target.
+    expect(
+      refusals({
+        ...restart,
+        params_schema: {
+          type: 'object',
+          properties: { id: { type: 'string' }, accessToken: { type: 'string' } },
+          required: ['id', 'accessToken'],
+        },
+        target: { object_type: 'Container', params: ['id', 'accessToken'] },
+      }),
+    ).toEqual(['target_param_secret']);
+    expect(OPERATION_TARGET_REFUSAL_VALUES).toContain('target_param_secret');
+    // Its shape: no params, an unknown key.
+    expect(
+      OperationSchema.safeParse({ ...restart, target: { object_type: 'Container', params: [] } })
+        .success,
+    ).toBe(false);
+    expect(
+      OperationSchema.safeParse({
+        ...restart,
+        target: { object_type: 'Container', params: ['id'], scope: 'x' },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('a manifest naming one type by two arities is refused as target_arity_inconsistent', () => {
+    const stop = {
+      name: 'container.stop',
+      target: { object_type: 'Container', params: ['host', 'id'] },
+    };
+    expect(manifestTargetProblems([restart, { name: 'compose.down' }, stop])).toEqual([
+      {
+        operation: 'container.stop',
+        reason: 'target_arity_inconsistent',
+        path: ['target', 'params'],
+        message: 'container.stop names Container by 2 params, container.restart by 1',
+      },
+    ]);
+    expect(
+      manifestTargetProblems([
+        restart,
+        { name: 'container.stop', target: { object_type: 'Container', params: ['container_id'] } },
+      ]),
+    ).toEqual([]);
+    expect(OPERATION_TARGET_REFUSAL_VALUES).toContain('target_arity_inconsistent');
+  });
+
+  it('operationTargetRefusalOf recovers the reason and places from a parse, alone or nested', () => {
+    const alone = OperationSchema.safeParse({
+      ...restart,
+      target: { object_type: 'Container', params: ['timeoutSeconds'] },
+    });
+    expect(alone.success).toBe(false);
+    expect(operationTargetRefusalOf(alone.error?.issues ?? [])).toEqual({
+      reason: 'target_param_not_required_scalar',
+      at: [],
+      path: ['target', 'params', 0],
+      message:
+        'param "timeoutSeconds" must be required and of type string or integer (type: integer, required: false)',
+    });
+    const nested = z
+      .object({ target: z.string(), operations: z.array(OperationSchema) })
+      .safeParse({
+        target: 'docker',
+        operations: [restart, { ...restart, mode: 'observe', reads: ['Container'], writes: [] }],
+      });
+    const refusal = operationTargetRefusalOf(nested.error?.issues ?? []);
+    expect(refusal?.reason).toBe('target_not_execute');
+    expect(refusal?.at).toEqual(['operations', 1]);
+    // An issue that is not a target refusal is not one.
+    const other = OperationSchema.safeParse({ ...restart, name: 7 });
+    expect(operationTargetRefusalOf(other.error?.issues ?? [])).toBeUndefined();
+  });
+
+  it('a call’s target: the declared values of their schema type, in order; anything else is the whole gate', () => {
+    expect(actionTargetOf(restart, { id: 'web', timeoutSeconds: 5 })).toEqual({
+      type: 'Container',
+      params: ['id'],
+      identity: ['web'],
+    });
+    const byNumber: Operation = {
+      ...restart,
+      params_schema: {
+        type: 'object',
+        properties: { host: { type: 'integer' }, id: { type: 'string' } },
+        required: ['host', 'id'],
+      },
+      target: { object_type: 'Container', params: ['host', 'id'] },
+    };
+    expect(actionTargetOf(byNumber, { id: 'web', host: 3 })?.identity).toEqual([3, 'web']);
+    // A string for an integer param, a number for a string one, a missing one, a fraction.
+    expect(actionTargetOf(byNumber, { id: 'web', host: '3' })).toBeNull();
+    expect(actionTargetOf(restart, { id: 7 })).toBeNull();
+    expect(actionTargetOf(restart, {})).toBeNull();
+    expect(actionTargetOf(byNumber, { id: 'web', host: 3.5 })).toBeNull();
+    const { target: _target, ...none } = restart;
+    expect(actionTargetOf(none, { id: 'web' })).toBeNull();
+  });
+
+  it('I-Q1: the whole gate conflicts with everything; a target only with the same instance', () => {
+    const container = (params: string[], identity: (string | number)[]) => ({
+      type: 'Container',
+      params,
+      identity,
+    });
+    const web = container(['id'], ['web']);
+    expect(actionTargetsConflict(null, null)).toBe(true);
+    expect(actionTargetsConflict(null, web)).toBe(true);
+    expect(actionTargetsConflict(web, null)).toBe(true);
+    expect(actionTargetsConflict(web, container(['id'], ['web']))).toBe(true);
+    expect(actionTargetsConflict(web, container(['id'], ['db']))).toBe(false);
+    expect(actionTargetsConflict(web, { type: 'Volume', params: ['id'], identity: ['web'] })).toBe(
+      false,
+    );
+    // Named by other params, or by more of them: may be the same instance, so ordered.
+    expect(actionTargetsConflict(web, container(['name'], ['db']))).toBe(true);
+    expect(actionTargetsConflict(web, container(['id', 'ns'], ['db', 1]))).toBe(true);
+    // 5 and "5" (one param typed two ways by two Operations) may be one instance to the gate.
+    expect(
+      actionTargetsConflict(
+        { type: 'Host', params: ['n'], identity: [5] },
+        { type: 'Host', params: ['n'], identity: ['5'] },
+      ),
+    ).toBe(true);
+    expect(
+      actionTargetsConflict(
+        { type: 'Host', params: ['n'], identity: [5] },
+        { type: 'Host', params: ['n'], identity: [6] },
+      ),
+    ).toBe(false);
   });
 });

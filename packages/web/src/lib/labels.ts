@@ -386,6 +386,7 @@ export const OPERATION_FIELD_LABELS: Readonly<Record<string, BilingualLabel>> = 
   read_only_hint: { zh: '只读提示', en: 'Read-only hint' },
   destructive_hint: { zh: '破坏性提示', en: 'Destructive hint' },
   idempotent_hint: { zh: '幂等提示', en: 'Idempotent hint' },
+  target: { zh: '排队范围', en: 'Queue scope' },
 };
 
 export function operationFieldLabel(field: string, t: Translate): string {

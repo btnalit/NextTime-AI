@@ -22,7 +22,7 @@ import type { z } from 'zod';
  *   - `blast_radius`, for an ssh binding only, where the gate enforces it as a ceiling on the
  *     classified command.
  *
- * Governance-only fields (`auto_approvable`, `await_decision`, `reads`, `writes`, the MCP hints,
+ * Governance-only fields (`auto_approvable`, `await_decision`, `reads`, `writes`, `target`, the MCP hints,
  * `description`, and `blast_radius` elsewhere) are left out. They change what the kernel decides,
  * not what the gate does, and the kernel revises them in place (`refresh_operation_governance`).
  *

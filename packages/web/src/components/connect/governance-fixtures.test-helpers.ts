@@ -14,6 +14,7 @@ export function governanceFields(
     readOnlyHint: null,
     destructiveHint: null,
     idempotentHint: null,
+    target: null,
     ...fields,
   };
 }

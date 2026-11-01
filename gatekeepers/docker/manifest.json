@@ -110,6 +110,7 @@
     "await_decision": false,
     "reads": ["Container"],
     "writes": ["Container"],
+    "target": { "object_type": "Container", "params": ["id"] },
     "result_mapping": {
       "jmes_path": "@",
       "object_type": "Container",

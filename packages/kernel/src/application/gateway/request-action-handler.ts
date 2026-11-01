@@ -1,7 +1,13 @@
-import { IllegalTransition, getCapability, namesASecretField } from '@nexttime/shared';
+import {
+  IllegalTransition,
+  actionTargetOf,
+  getCapability,
+  namesASecretField,
+} from '@nexttime/shared';
 import type {
   ActionRequestFailureKind,
   ActionRequestStatus,
+  ActionTarget,
   CapabilityChannel,
   CapabilityScope,
   Role,
@@ -32,6 +38,7 @@ import {
   awaitActionRequestResolution,
   getActionRequest,
   readActionRequestWaitingStates,
+  readQueueBlockers,
   requestAction,
   shownAuditReason,
 } from '../../governance/approval/index.js';
@@ -643,14 +650,16 @@ async function awaitConcurrentExecution(
  *
  *   - `executed`/`verified`/`failed` → the drain (by us or a racer) already finished it; read the
  *     stored outcome back (`readTerminalOutcome`), never re-`apply`.
- *   - `approved`/`auto_approved` and the drain stopped at an earlier `pending_approval` row
- *     (§8.1) → nothing is currently executing this row; report its status as-is rather than
- *     waiting for something that has not started — the already-wired async drain paths (the
- *     outbox consumer, the periodic tick) pick it up once the blocking row resolves.
- *   - otherwise (`executing`, or still `approved`/`auto_approved` with no `stoppedAtPending`
- *     signal — a concurrent execution is actively in flight, or the drainer's own single-flight
- *     lock skipped this call while another in-flight drain handles it) → `awaitConcurrentExecution`
- *     waits briefly for that winner to finish, rather than retrying `apply` itself.
+ *   - `approved`/`auto_approved` and held back by an earlier `pending_approval` row it conflicts
+ *     with, directly or through rows in between (§8.1; S11 GO12, `readQueueBlockers`) → nothing
+ *     is currently executing this row; report its status as-is rather than waiting for something
+ *     that has not started — the already-wired async drain paths (the outbox consumer, the
+ *     periodic tick) pick it up once the blocking row resolves.
+ *   - otherwise (`executing`, or still `approved`/`auto_approved` held back by an `executing` row
+ *     or by none — a concurrent execution is actively in flight, or the drainer's own
+ *     single-flight lock skipped this call while another in-flight drain handles it) →
+ *     `awaitConcurrentExecution` waits briefly for that winner to finish, rather than retrying
+ *     `apply` itself.
  */
 async function tryExecuteInline(
   drainer: ApprovalDrainer,
@@ -666,7 +675,6 @@ async function tryExecuteInline(
   // per-call timeout. Wait for it only until `deadline` (the caller's own `request_action`
   // budget); past it, report the row's actual status (`executing`/`approved` — honest since P2-8)
   // and let the drain finish in the background. Its rejection is captured here, never unhandled.
-  let stoppedAtPending = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const drain = drainer
     .drainGatekeeper(workspaceId, systemActorId, gatekeeperId)
@@ -677,9 +685,7 @@ async function tryExecuteInline(
   });
   const settled = await Promise.race([drain, budgetExpired]);
   clearTimeout(timer);
-  if (settled.kind === 'done') {
-    stoppedAtPending = settled.result.stoppedAtPending;
-  } else if (settled.kind === 'error' && !(settled.err instanceof IllegalTransition)) {
+  if (settled.kind === 'error' && !(settled.err instanceof IllegalTransition)) {
     throw settled.err;
   }
   // 'error' with IllegalTransition: benign race — see this function's own doc comment; 'timeout':
@@ -708,8 +714,13 @@ async function tryExecuteInline(
     return failedOutcome(row, outcome.reason);
   }
   if (row?.status === 'withdrawn') return { status: 'withdrawn' };
-  if ((row?.status === 'approved' || row?.status === 'auto_approved') && stoppedAtPending) {
-    return { status: row.status };
+  if (row?.status === 'approved' || row?.status === 'auto_approved') {
+    // S11 GO12: what holds this row back, as its own queue plans it — not whether the drain met
+    // a pending row somewhere: one on another instance holds nothing of this row's back.
+    const blocker = await withTransaction(workspaceId, systemActorId, async (client) =>
+      (await readQueueBlockers(client, workspaceId, [actionRequestId])).get(actionRequestId),
+    );
+    if (blocker?.status === 'pending_approval') return { status: row.status };
   }
   if (Date.now() >= deadline) {
     return { status: row?.status ?? 'executing' };
@@ -828,6 +839,11 @@ interface RunGovernedRequestArgs {
    *  workspace holds no definition of it at all. Stored on the ActionRequest
    *  (`operation_digest`) for the executor, and sent with the simulate call below. */
   readonly operationDigest: string | undefined;
+  /** S11 GO12: the one instance the call acts on, from the published Operation's declaration and
+   *  the call's params (`actionTargetOf`); `null` — the whole Gatekeeper — for an unpublished
+   *  Operation (I17: a declaration nobody reviewed never narrows the order), or one that declares
+   *  none, or a call whose declared params are missing or not of their schema's type (I-Q3). */
+  readonly target: ActionTarget | null;
 }
 
 /** Best-effort — see `gate-observation.ts`'s own doc comment. Unlike the observe path
@@ -949,6 +965,7 @@ async function runGovernedRequest(
     ...(goalStep ? { stepRunId: goalStep.stepRunId } : {}),
     principalAutoApproveLowEnabled: args.principalAutoApproveLowEnabled,
     ...(args.operationDigest !== undefined ? { operationDigest: args.operationDigest } : {}),
+    target: args.target,
   });
 
   switch (actionRequest.status) {
@@ -1621,6 +1638,7 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
     }
     return runGovernedRequest(client, workspaceId, {
       operationDigest: draft !== null ? operationRecordDigest(draft) : NO_OPERATION_DEFINITION,
+      target: null,
       gatekeeper,
       operationName,
       operationParams: resolvedParams,
@@ -1650,6 +1668,7 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
     });
   return runGovernedRequest(client, workspaceId, {
     operationDigest: operationRecordDigest(published),
+    target: actionTargetOf(operation, resolvedParams),
     gatekeeper,
     operationName,
     operationParams: resolvedParams,

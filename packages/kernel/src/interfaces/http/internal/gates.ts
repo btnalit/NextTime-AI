@@ -12,7 +12,10 @@ import {
   upsertAnnouncement,
   withPresetOperations,
 } from '../../../application/gates/index.js';
-import { OperationNameInvalidError } from '../../../governance/gatekeepers/index.js';
+import {
+  OperationNameInvalidError,
+  OperationTargetInvalidError,
+} from '../../../governance/gatekeepers/index.js';
 
 /**
  * interfaces/http/internal/gates: `POST /internal/gates/announce` (P-B1; docs/platform-admin-
@@ -57,6 +60,18 @@ export interface GatesRoutesDeps {
 
 const ADMIN_PLACEHOLDER = '00000000-0000-0000-0000-000000000000';
 
+/** The `name` of the Operation at `at` (`['operations', i]`) in an announcement body as sent. */
+function operationNameAt(body: unknown, at: readonly PropertyKey[]): unknown {
+  let value: unknown = body;
+  for (const key of at) {
+    if (value === null || typeof value !== 'object') return undefined;
+    value = (value as Record<PropertyKey, unknown>)[key];
+  }
+  return value !== null && typeof value === 'object'
+    ? (value as { readonly name?: unknown }).name
+    : undefined;
+}
+
 export async function registerGatesRoutes(
   app: FastifyInstance,
   deps: GatesRoutesDeps,
@@ -72,6 +87,17 @@ export async function registerGatesRoutes(
     }
     const parsed = AnnounceBodySchema.safeParse(request.body);
     if (!parsed.success) {
+      // S11 GO12 (I-Q4): an Operation whose `target` declaration is refused answers with its own
+      // code and reason, as an import of it would; any other issue keeps `invalid_params`.
+      const refused = OperationTargetInvalidError.fromIssues(parsed.error.issues, (at) =>
+        operationNameAt(request.body, at),
+      );
+      if (refused) {
+        return reply.status(400).send({
+          ok: false,
+          error: { code: refused.code, message: refused.message, details: refused.details },
+        });
+      }
       return reply.status(400).send({
         ok: false,
         error: {
@@ -84,7 +110,13 @@ export async function registerGatesRoutes(
     try {
       announcement = storableAnnouncement(parsed.data);
     } catch (err) {
-      if (!(err instanceof UnstorableTextError || err instanceof OperationNameInvalidError)) {
+      if (
+        !(
+          err instanceof UnstorableTextError ||
+          err instanceof OperationNameInvalidError ||
+          err instanceof OperationTargetInvalidError
+        )
+      ) {
         throw err;
       }
       // Legacy 320: U+0000 in a field the kernel acts on — refused with where, nothing written.

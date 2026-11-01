@@ -5,6 +5,7 @@ import type {
 import { actionKindRaw, actionKindTagText } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { operationFieldLabel } from '../../lib/labels.js';
+import { operationQueueScopeShortText } from '../../lib/queue-scope.js';
 import { labelText, statusChipStyle } from '../../lib/status-tone.js';
 import { StatusChip } from '../kit/status-chip.js';
 
@@ -130,9 +131,56 @@ function otherValueText(value: OtherGovernanceValue, t: Translate): string {
   return value.length > 0 ? value.join(t('、', ', ')) : t('无', 'none');
 }
 
+type GovernanceTarget = OperationGovernanceFieldsWire['target'];
+
+/** S11 GO12: the same declaration — type and params, in order (the params' order is the
+ *  identity's). */
+function sameTarget(a: GovernanceTarget, b: GovernanceTarget): boolean {
+  if (a === null || b === null) return a === b;
+  return (
+    a.objectType === b.objectType &&
+    a.params.length === b.params.length &&
+    a.params.every((param, index) => b.params[index] === param)
+  );
+}
+
+/** S11 GO12: the queue scope, when it changes — removing it is a tightening, said next to it. */
+function targetFieldChange(
+  before: OperationGovernanceFieldsWire,
+  after: OperationGovernanceFieldsWire,
+  t: Translate,
+): FieldChange[] {
+  // `target` is absent from a kernel older than GO12: nothing to compare.
+  if (before.target === undefined || after.target === undefined) return [];
+  if (sameTarget(before.target, after.target)) return [];
+  return [
+    {
+      label: operationFieldLabel('target', t),
+      before: operationQueueScopeShortText(before.target, t),
+      after: operationQueueScopeShortText(after.target, t),
+      ...(after.target === null
+        ? {
+            note: t(
+              '改回整个系统一个队列：这个系统上的所有请求又按提出顺序逐个执行',
+              'back to one queue for the whole system: every request on this system again runs one at a time, in order',
+            ),
+          }
+        : {}),
+    },
+  ];
+}
+
 /** The changed governance fields beyond the classification — listed only when they change, so a
  *  confirm for a mode change is not a wall of unchanged rows. */
 function otherFieldChanges(
+  before: OperationGovernanceFieldsWire,
+  after: OperationGovernanceFieldsWire,
+  t: Translate,
+): FieldChange[] {
+  return [...otherListedFieldChanges(before, after, t), ...targetFieldChange(before, after, t)];
+}
+
+function otherListedFieldChanges(
   before: OperationGovernanceFieldsWire,
   after: OperationGovernanceFieldsWire,
   t: Translate,
@@ -329,6 +377,26 @@ export function governanceConsequences(
         : t(
             `${zhName}的 MCP 提示放宽了，但还不满足自动批准的条件（要同时声明不具破坏性、幂等）`,
             `${name}'s MCP hints loosen, but not yet enough for auto-approval (it must declare both not destructive and idempotent)`,
+          ),
+    );
+  }
+  // S11 GO12: declaring a target (or another one) lets calls on other instances run past it.
+  const target = after.target;
+  if (
+    target !== undefined &&
+    target !== null &&
+    before.target !== undefined &&
+    !sameTarget(before.target, target)
+  ) {
+    lines.push(
+      before.target === null
+        ? t(
+            `${zhName}改为按 ${target.objectType} 排队：同一系统上别的 ${target.objectType} 的请求不再排在它后面，它等审批时也只挡同一个 ${target.objectType} 和作用于整个系统的请求`,
+            `${name} queues per ${target.objectType}: requests on another ${target.objectType} of the same system no longer wait behind it, and while it awaits approval it holds back only the same ${target.objectType} and requests on the whole system`,
+          )
+        : t(
+            `${zhName}的排队范围改为${operationQueueScopeShortText(target, t)}：之后按新的参数判断两次调用是不是同一个 ${target.objectType}，已经在排队的请求不变`,
+            `${name}'s queue scope becomes ${operationQueueScopeShortText(target, t)}: from now on the new params decide whether two calls are on the same ${target.objectType}; requests already queued keep theirs`,
           ),
     );
   }

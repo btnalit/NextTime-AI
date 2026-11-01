@@ -157,6 +157,7 @@ import {
   OperationIdentityConflictError,
   OperationNameInvalidError,
   OperationNotFoundError,
+  OperationTargetInvalidError,
 } from '../../governance/gatekeepers/index.js';
 import {
   HighBlastRadiusAutoApproveError,
@@ -440,6 +441,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   // Legacy 232: mirrors HTTP 400 `invalid_operation_name` (capability-route.ts).
   if (err instanceof OperationNameInvalidError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  // S11 GO12: mirrors HTTP 400 `invalid_operation_target` (capability-route.ts).
+  if (err instanceof OperationTargetInvalidError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   // Legacy 232: mirrors HTTP 404 `unknown_operation` (capability-route.ts).

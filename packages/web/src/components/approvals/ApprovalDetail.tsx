@@ -24,6 +24,7 @@ import {
 import type { ActionRequestRow } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { actorRuntimeLabel, policyDecisionLabel } from '../../lib/labels.js';
+import { actionTargetHoldsText, actionTargetOrSystemText } from '../../lib/queue-scope.js';
 import { labelText, statusChipStyle } from '../../lib/status-tone.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
@@ -232,7 +233,9 @@ export function ApprovalDetail({
   }
 
   // L8a-10: a gate-scoped request (the kernel's only writer stores the gate's id as the scope) reads
-  // as "the whole gate", never as the gate's raw id posing as the action's target.
+  // as "the whole gate", never as the gate's raw id posing as the action's target. S11 GO12: this
+  // row is the request's approval scope (what auto-approval and always-allow match on), labelled so
+  // — 「目标」 is the instance the queue scope row below names.
   const scopeLabel = resourceScopeLabel(row, gatekeeperNames);
   const actionItems: KeyValueItem[] = [
     {
@@ -243,7 +246,7 @@ export function ApprovalDetail({
     },
     {
       key: 'target',
-      label: t('目标', 'Target'),
+      label: t('审批范围', 'Approval scope'),
       value: scopeLabel ? (
         <span className="mono" data-testid="approval-target" data-volatile="">
           {scopeLabel}
@@ -256,6 +259,30 @@ export function ApprovalDetail({
         </span>
       ),
     },
+    // S11 GO12: what the gate's queue orders it against — one instance, or the whole system — and,
+    // while it has not finished, which later requests wait for it: an approver can tell whether
+    // deciding it lets the requests behind it go. Its own row: the resource scope above is a
+    // different thing (what auto-approval and always-allow match on).
+    ...(row.target !== undefined
+      ? [
+          {
+            key: 'queueScope',
+            label: t('排队范围', 'Queue scope'),
+            value: (
+              <span className="stack-s">
+                <span data-testid="approval-queue-target">
+                  {actionTargetOrSystemText(row.target, t)}
+                </span>
+                {UNFINISHED_STATUSES.has(row.status) ? (
+                  <span className="text-12 text-text-2" data-testid="approval-queue-holds">
+                    {actionTargetHoldsText(row.target, t)}
+                  </span>
+                ) : null}
+              </span>
+            ),
+          },
+        ]
+      : []),
     {
       key: 'gatekeeper',
       label: t('门', 'Gatekeeper'),
@@ -750,6 +777,14 @@ export function ApprovalDetail({
   );
 }
 
+/** S11 GO12: the statuses in which a request still holds back the requests behind it. */
+const UNFINISHED_STATUSES: ReadonlySet<string> = new Set([
+  'pending_approval',
+  'approved',
+  'auto_approved',
+  'executing',
+]);
+
 /** The confirm's impact lines (§5.8 "Approve 高影响时确认文案列出目标资源"). A pure helper, not a
  *  component — takes `t` from its caller. */
 function confirmImpact(
@@ -761,7 +796,7 @@ function confirmImpact(
 ): readonly string[] {
   const lines: string[] = [
     `${t('动作', 'Action')}: ${actionKindTagText(row.actionKindTag)}`,
-    `${t('目标资源', 'Target')}: ${
+    `${t('审批范围', 'Approval scope')}: ${
       resourceScopeLabel(row, gatekeeperNames) ??
       (row.resourceScope ? t('整个门', 'the whole gate') : t('未限定', 'no resource scope'))
     }`,

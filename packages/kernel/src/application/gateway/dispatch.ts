@@ -3,8 +3,10 @@ import type { Capability, PrincipalKind } from '@nexttime/shared';
 import {
   AUDIT_WITHHELD_VALUE,
   UnstorableTextError,
+  boundedEcho,
   findUnstorableText,
   getCapability,
+  operationTargetRefusalOf,
   storableValue,
 } from '@nexttime/shared';
 import { withPlatform } from '../../adapters/db/platform-context.js';
@@ -98,6 +100,18 @@ export class InvalidCapabilityParamsError extends Error {
     this.name = 'InvalidCapabilityParamsError';
     this.issues = issues;
   }
+}
+
+/** S11 GO12 (I-Q4): params carrying an Operation (`report_task_result`'s `proposedOperations[]`)
+ *  whose `target` declaration is refused — the reason, where, and why, in the message, since the
+ *  issues stay in the kernel; `undefined` for any other params problem. */
+function targetRefusalReason(
+  issues: Parameters<typeof operationTargetRefusalOf>[0],
+): string | undefined {
+  const refusal = operationTargetRefusalOf(issues);
+  if (refusal === undefined) return undefined;
+  const where = [...refusal.at, ...refusal.path].map(String).join('.');
+  return `${where}: ${refusal.reason} (${boundedEcho(refusal.message, 300)})`;
 }
 
 /**
@@ -697,7 +711,13 @@ export async function dispatchCapability(
     );
   }
   const parsed = capability.paramsSchema.safeParse(rawParams ?? {});
-  if (!parsed.success) throw new InvalidCapabilityParamsError(name, parsed.error.issues);
+  if (!parsed.success) {
+    throw new InvalidCapabilityParamsError(
+      name,
+      parsed.error.issues,
+      targetRefusalReason(parsed.error.issues),
+    );
+  }
   if (!HANDLERS_SETTLING_UNSTORABLE_TEXT.has(name)) {
     const unstorable = findUnstorableText(parsed.data);
     if (unstorable) throw new UnstorableTextError(`capability "${name}"`, unstorable);

@@ -42,9 +42,25 @@ export const ActionRequestQueuedBehindWireSchema = z
   .object({
     status: z.enum(['pending_approval', 'executing']),
     outcomeInDoubt: z.boolean(),
+    /** S11 GO12: `target` — the row that holds it back acts on the same instance (or holds back a
+     *  row on it); `gate` — a row that acts on the whole Gatekeeper is in the way, or this row
+     *  itself acts on the whole Gatekeeper. Optional for a reader of an older kernel. */
+    scope: z.enum(['target', 'gate']).optional(),
   })
   .strict();
 export type ActionRequestQueuedBehindWire = z.infer<typeof ActionRequestQueuedBehindWireSchema>;
+
+/** S11 GO12: the one instance an ActionRequest acts on, recorded when it was made from the
+ *  Operation version then published (`@nexttime/shared` `actionTargetOf`): it waits only for
+ *  earlier requests on the same instance and for those on the whole Gatekeeper. `null` on the
+ *  request: it acts on the whole Gatekeeper and waits for every earlier one. */
+export const ActionRequestTargetWireSchema = z
+  .object({
+    objectType: z.string(),
+    identity: z.array(z.union([z.string(), z.number().int()])),
+  })
+  .strict();
+export type ActionRequestTargetWire = z.infer<typeof ActionRequestTargetWireSchema>;
 
 /** S11 GO3c: what was found about a `failed` + `outcome_unknown` ActionRequest
  *  (`ACTION_REQUEST_RECONCILIATION_VALUES`), and whether its requester then decided to run the same
@@ -66,6 +82,9 @@ export const ActionRequestWireSchema = z
     gatekeeperId: z.string(),
     actionKindTag: z.string(),
     resourceScope: z.string().nullable(),
+    // S11 GO12: what it is queued against (`ActionRequestTargetWireSchema`). Optional for a
+    // reader of an older kernel; absent there means the whole Gatekeeper.
+    target: ActionRequestTargetWireSchema.nullable().optional(),
     blastRadius: BlastRadiusSchema,
     policyDecision: PolicyDecisionSchema.nullable(),
     approvalDecisionId: z.string().nullable(),

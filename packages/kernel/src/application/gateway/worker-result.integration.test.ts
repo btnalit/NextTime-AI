@@ -1393,6 +1393,29 @@ describe.runIf(DATABASE_URL !== undefined)(
           );
         }
 
+        it('S11 GO12 (I-Q4): a proposal whose target declaration is refused fails the report with the rule in the message — nothing written, the Task not completed', async () => {
+          const marker = randomUUID().slice(0, 8);
+          const gatekeeperId = await registerTestGate(marker);
+          const { taskId, claims } = await spawnWorkerRun();
+          const caller: ResolvedCaller = { channel: 'handle', claims };
+          const declared = {
+            ...proposalOperation(`demo.target.${marker}`),
+            target: { object_type: 'Container', params: ['id'] },
+          };
+          await expect(
+            dispatchCapability({ pool }, caller, 'report_task_result', {
+              summary: 'a refused target',
+              factsToAssert: [validFact()],
+              proposedOperations: [{ gatekeeperId, operation: declared }],
+            }),
+          ).rejects.toThrow(
+            /proposedOperations\.0\.operation\.target: target_not_execute \(only an execute-class call is queued \(this one is observe\)\)/,
+          );
+          const stored = await readProposalOutcome(taskId, gatekeeperId);
+          expect(stored.task?.status).not.toBe('completed');
+          expect(stored.operations).toEqual([]);
+        });
+
         it('report_task_result: bad new names and a name held by another principal’s draft are refused per entry; the good proposal and the facts land; the Task completes', async () => {
           const marker = randomUUID().slice(0, 8);
           const gatekeeperId = await registerTestGate(marker);

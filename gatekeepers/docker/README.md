@@ -35,12 +35,30 @@ only; it is never executed.
 | `container.inspect` | observe | low | true | false | → one `Container` fact |
 | `compose.ls` | observe | low | true | false | groups containers by `com.docker.compose.project` label |
 | `container.logs_tail` | observe | low | true | false | de-multiplexed stdout+stderr text |
-| `container.restart` | execute | medium | **false** | **false** | `simulate` returns the target container; idempotent `apply` |
+| `container.restart` | execute | medium | **false** | **false** | `simulate` returns the target container; idempotent `apply`; queued per container (`target`, see below) |
 | `compose.up` | execute | high | **false** | true | starts existing stopped containers in the named project (see below) |
 | `compose.down` | execute | high | **false** | true | stops running containers in the named project |
 
 `reads`/`writes` on every Operation carry `Container` — the S2.6 meta-ontology `reads`/`writes`
 LinkTypes this Gatekeeper's Operation objects expose.
+
+### Queue target of `container.restart` (S11 GO12)
+
+`container.restart` declares `"target": {"object_type": "Container", "params": ["id"]}`: the
+platform orders a restart only behind earlier requests on the same `id` and behind requests on
+the whole gate (`compose.up`, `compose.down`, which act on every container of a project and so
+declare no target). A restart of one container no longer waits for a restart of another one that
+is awaiting approval. See `docs/runbooks/add-gatekeeper.md` §6.1.
+
+**Alias risk.** `id` accepts a full id, an id prefix or a name. The platform compares the values
+as given, so `restart("web")` and `restart("3f2a…")` on the same container are two instances to
+it, and the two requests may run at the same time: the container is restarted twice in quick
+succession instead of once after the other. Callers that need a strict order on one container
+should name it the same way every time, preferably by the full `id` that `containers.list` and
+`container.inspect` return (the form the gate itself acts on after resolving the param).
+
+The declaration takes effect in a workspace once its owner aligns the gate's Operations
+(resync); an upgrade alone changes no published Operation.
 
 ### Platform agent containers are out of reach (R-04)
 
