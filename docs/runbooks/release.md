@@ -2162,6 +2162,13 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：平台有了"管理员智能体"身份：它没有自己的 Principal，会话种类是 `admin_agent`，属于管理员本人在该工作区的 human Principal；Handle 只由容器持有，上限是 28 个只读能力，再按此人在工作区的角色收窄；每次调用都重新检查此人仍是有效平台管理员、工作区启用、开关打开，拒绝也记审计；经它的每条审计都带 `sessionKind: 'admin_agent'` 和 `sessionId`。approve、apply、rollback 与逐项确认只走人的控制台通道，管理员智能体的 Handle 一律拒绝。管理员被降为普通用户时，立即吊销其管理员智能体会话与 Handle。服务 API key 不能再装包、装模块或写 ChangePlan 分段（遗留 407）。
 - **回滚**：先查 `select count(*) from sessions where kind = 'admin_agent'`。为 0（这一版总是如此）时可以连 schema 一起撤：按 0001 的五个值重建约束，再 `delete from schema_migrations where module = 'core' and version = 49`。不为 0 时保留 core/0049、只回退代码（这些会话被 `capability_handles`、`llm_usage`、`tasks` 以 restrict 外键引用，删掉会丢用量与 Task 历史）。**AA4 之后**回退到 AA1 之前的代码，要先吊销管理员智能体的 Handle（旧代码把它当 bearer、不做逐次的平台角色检查），语句见 0049 文件头：`update capability_handles set revoked_at = now() where session_id in (select id from sessions where kind = 'admin_agent') and revoked_at is null`。
 
+### 3.98 管理员智能体读平台门、连接器与近期变更（#900，S11 AA2a，0.59.0 起）
+
+只读。没有迁移，不改 compose，没有新环境变量，主机不需要操作。管理员智能体的开关 `ADMIN_AGENT_ENABLED` 仍默认关（§3.97），这一版也没有运行时会启动它。
+
+- **发版说明可写**：新增三个只有管理员智能体会话能调用的只读能力 `platform_state_gates`、`platform_state_connectors`、`platform_state_audit`（能力上的新标记 `adminAgentOnly`，契约快照随之增加）。每次调用分两段：先在调用方工作区里做派发检查并写工作区审计，再在只读平台事务里以管理员身份重查权限后读取；随后写一条平台审计（谁、哪个会话、哪个工作区、读了哪一区、返回多少条，不含内容），这一条写不进去就不返回结果。返回内容按形状白名单投影：不合形状、像 IP 或像密钥的值丢弃或只计数。服务 Handle、CLI 和非管理员智能体会话都调不到这三个能力（403 `forbidden`，审计记 `admin_agent_only`）。
+- **回滚**：只回退代码，随时可以。三个能力只读，平台审计里留下的读记录照常可查。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
