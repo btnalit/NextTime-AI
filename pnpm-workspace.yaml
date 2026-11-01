@@ -30,6 +30,9 @@ allowBuilds:
 # floor so the lockfile cannot fall back. deploy/worker-runtime/pi/package.json carries the same
 # undici floor for the worker-runtime image. The pi CLI itself runs an esbuild bundle with its own
 # inlined undici 8.10.2, which only an upstream pi release can replace (docs/runbooks/pi-upgrade.md §3).
+# minimatch (GHSA-g3hv-75wg-m249, globparts amplification DoS, 2026-11-01 pre-release audit) has no
+# patched 10.x; pi-coding-agent 1.1.0 pins exactly 10.2.6, so the floor lifts it to 11, whose `minimatch`
+# named export is unchanged. The pi bundle inlines its own copy, like undici above.
 overrides:
   'undici@>=8.0.0 <8.12.2': ^8.12.2
   'body-parser@>=2.0.0 <2.4.0': ^2.4.0
@@ -38,3 +41,4 @@ overrides:
   '@hono/node-server@>=2.0.0 <2.1.3': ^2.1.3
   'fast-uri@>=3.0.0 <3.1.9': ^3.1.9
   'fast-uri@>=4.0.0 <4.2.3': ^4.2.3
+  'minimatch@>=10.0.0 <11.0.1': ^11.0.1
