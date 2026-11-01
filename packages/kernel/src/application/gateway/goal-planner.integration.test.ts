@@ -1547,5 +1547,164 @@ describe.runIf(DATABASE_URL !== undefined)(
         ),
       ).toMatch(/autonomous/);
     });
+
+    // ----- #493's surviving code mutants: the rules other checks would otherwise mask ----------
+
+    const setMaxRevisions = (goalRunId: string, max: number) =>
+      raw('update goal_runs set budget_max_revisions = $3 where workspace_id = $1 and id = $2', [
+        workspaceId,
+        goalRunId,
+        max,
+      ]);
+
+    it('the revision budget is checked again when the round settles and when the requester accepts (C16, C5)', async () => {
+      const requester = await newPrincipal('member');
+      // Settling: the budget ran out after the planner reported.
+      const settling = await failedForPerson(requester);
+      const [round] = await rounds(settling.goalRunId);
+      if (!round) throw new Error('no round');
+      const before = await getGoal(settling.goalRunId, requester);
+      await report((await plannerTask(round.id)).id, {
+        decision: 'revise',
+        plan: reroute(before),
+        reason: 'another Worker',
+      });
+      await setMaxRevisions(settling.goalRunId, 0);
+      await advanceOnce(settling.goalRunId, requester);
+      const [settled] = await rounds(settling.goalRunId);
+      expect(settled).toMatchObject({ status: 'failed', outcome_reason: 'invalid_revision' });
+      expect(settled?.detail).toContain('revisions already made');
+      expect((await goalRow(settling.goalRunId)).current_revision).toBe(1);
+
+      // Accepting: the budget ran out while the proposal waited.
+      const { goalRunId } = await proposed(requester);
+      await setMaxRevisions(goalRunId, 0);
+      const refused = await refusal(
+        call(human(requester), 'decide_plan_revision', {
+          goalRunId,
+          revision: 2,
+          decision: 'accept',
+        }),
+      );
+      expect(refused.status).toBe(409);
+      expect(refused.message).toContain('revisions already made');
+      expect(await revisionRow(goalRunId, 2)).toMatchObject({ status: 'proposed' });
+      expect((await goalRow(goalRunId)).current_revision).toBe(1);
+    });
+
+    it('no second round opens while the planner’s proposal waits, even for a later failure (C12)', async () => {
+      const requester = await newPrincipal('member');
+      const { goalRunId, step } = await proposed(requester);
+      // As if the step failed again: a round for that attempt would otherwise be due.
+      await raw('update step_runs set attempt_count = 2 where workspace_id = $1 and id = $2', [
+        workspaceId,
+        step.id,
+      ]);
+      await advanceOnce(goalRunId, requester);
+      expect((await rounds(goalRunId)).map((row) => row.status)).toEqual(['proposed']);
+    });
+
+    it('the planner does not start for a requester the seal holds or who cannot start Workers (C23, C24)', async () => {
+      const held = await newPrincipal('member');
+      const heldGoal = await startGoal(held);
+      const heldStep = await liveStep(heldGoal, 'renew');
+      await raw(
+        `insert into eval_seal_holds (workspace_id, principal_id, hits, places)
+         values ($1, $2, 5, '{"capabilityResult": 5, "capabilityError": 0, "workerStart": 0}')`,
+        [workspaceId, held],
+      );
+      await loseTask((await lastAttempt(heldStep.id)).id, held);
+      await advanceOnce(heldGoal, held);
+      const [heldRound] = await rounds(heldGoal);
+      expect(heldRound).toMatchObject({
+        status: 'failed',
+        outcome_reason: 'requester_cannot_start',
+      });
+      expect(
+        await raw('select 1 from tasks where workspace_id = $1 and planning_round_id = $2', [
+          workspaceId,
+          heldRound?.id,
+        ]),
+      ).toEqual([]);
+
+      const disabled = await newPrincipal('member');
+      const disabledGoal = await startGoal(disabled);
+      const disabledStep = await liveStep(disabledGoal, 'renew');
+      await raw('update principals set disabled_at = now() where workspace_id = $1 and id = $2', [
+        workspaceId,
+        disabled,
+      ]);
+      await loseTask((await lastAttempt(disabledStep.id)).id, disabled);
+      await advanceOnce(disabledGoal, disabled);
+      const [disabledRound] = await rounds(disabledGoal);
+      expect(disabledRound).toMatchObject({
+        status: 'failed',
+        outcome_reason: 'requester_cannot_start',
+      });
+      expect(disabledRound?.detail).toContain('disabled');
+    });
+
+    it('a report after its round stopped running is not held to a plan it no longer revises (C28)', async () => {
+      const requester = await newPrincipal('member');
+      const { goalRunId } = await failedForPerson(requester);
+      const [round] = await rounds(goalRunId);
+      if (!round) throw new Error('no round');
+      const task = await plannerTask(round.id);
+      // An owner hold drops the running round; the run stays paused on the same revision.
+      await call(human(ownerId), 'pause_goal', { goalRunId });
+      expect(await rounds(goalRunId)).toMatchObject([
+        { status: 'abandoned', outcome_reason: 'run_left_pause' },
+      ]);
+      // A plan that would not pass (an unknown Worker) is no longer the planner's to fix.
+      await report(task.id, {
+        decision: 'revise',
+        plan: {
+          steps: [
+            {
+              key: 'nowhere',
+              worker: { definitionId: randomUUID(), version: 1 },
+              input: {},
+              maxAttempts: 1,
+            },
+          ],
+        },
+        reason: 'late',
+      });
+      await advanceOnce(goalRunId, requester);
+      expect(await rounds(goalRunId)).toMatchObject([{ status: 'abandoned' }]);
+      expect(await goalRow(goalRunId)).toMatchObject({ status: 'paused', current_revision: 1 });
+    });
+
+    it('the advance abandons a round its run left without a person closing it (C10, C11)', async () => {
+      const requester = await newPrincipal('member');
+      // The run left its pause by a path that did not close the planning (an owner hold here).
+      const left = await failedForPerson(requester);
+      const [leftRound] = await rounds(left.goalRunId);
+      if (!leftRound) throw new Error('no round');
+      await raw(
+        `update goal_runs set paused_by = $3, paused_by_authority = 'owner'
+          where workspace_id = $1 and id = $2`,
+        [workspaceId, left.goalRunId, ownerId],
+      );
+      await advanceOnce(left.goalRunId, requester);
+      expect(await rounds(left.goalRunId)).toMatchObject([
+        { status: 'abandoned', outcome_reason: 'run_left_pause' },
+      ]);
+      expect((await plannerTask(leftRound.id)).status).toBe('cancelled');
+
+      // The round planned on a revision no longer in force.
+      const stale = await failedForPerson(requester);
+      const [staleRound] = await rounds(stale.goalRunId);
+      if (!staleRound) throw new Error('no round');
+      await raw(
+        'update goal_planning_rounds set based_on_revision = 2 where workspace_id = $1 and id = $2',
+        [workspaceId, staleRound.id],
+      );
+      await advanceOnce(stale.goalRunId, requester);
+      expect((await rounds(stale.goalRunId))[0]).toMatchObject({
+        status: 'abandoned',
+        outcome_reason: 'plan_revised',
+      });
+    });
   },
 );
