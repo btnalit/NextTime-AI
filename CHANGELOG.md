@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.57.0](https://github.com/btnalit/NextTime-AI/compare/v0.56.0...v0.57.0) (2026-11-01)
+
+
+### Features
+
+* **goal:** a step reads the files an earlier step left (S11 GO14) ([#884](https://github.com/btnalit/NextTime-AI/issues/884)) ([a10d716](https://github.com/btnalit/NextTime-AI/commit/a10d716025fb687872a2297254ba61b100e8ce5e))
+
 ## [0.56.0](https://github.com/btnalit/NextTime-AI/compare/v0.55.0...v0.56.0) (2026-11-01)
 
 
