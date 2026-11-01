@@ -17,6 +17,7 @@
   `${NEXTTIME_DATA}/config/llm-providers.yaml` 与 `${NEXTTIME_DATA}/models/models.json`
   全程不会被改动，跑前跑后都不用重跑
   `make gen-models`（同 accept-s1.md §1）。
+- 切换和恢复之后脚本会等 agent-host 重新连上 kernel；切换期间生产目标里指定了模型的步骤会停下（遗留 545）；恢复失败按 P1 处理（遗留 548）。三条的做法见 accept-s1.md §1。
 - `fake-llm` 镜像不用手动重建：`deploy/fake-llm/server.mjs` 的脚本化场景烤在镜像里，脚本切 fake provider 时（`accept_provider_up`）先用当前检出 `docker compose --profile test build fake-llm`，再重建容器。之前要手动重建，`apply-release.sh` 也不建它（`build-images.sh` 不建 `test` profile），主机和预发的 apply 阶段会一直用最早那次构建的镜像，新增的场景匹配不上，入口 agent 只会回 echo（#728 第 9 步在预发上就是这样失败的）。
 - 迁移已跑到最新。
 - `docker compose --profile build-only build worker-runtime` 已跑过一次，产出
