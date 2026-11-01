@@ -3,6 +3,7 @@ import {
   type CancelGoalResultWire,
   type GoalDetailWire,
   type GoalOperationResultWire,
+  type GoalPlannerMode,
   MAX_GOAL_NOTE_CHARS,
   type ResumeGoalResultWire,
 } from '@nexttime/shared';
@@ -20,7 +21,7 @@ import {
   retryableStepKeys,
   revisionsSince,
 } from '../../lib/goal-actions.js';
-import { plannerWorkDropped } from '../../lib/goal-planner.js';
+import { plannerWorkDropped, runningPlanningRound } from '../../lib/goal-planner.js';
 import {
   confirmCheckOrigin,
   confirmRefusedText,
@@ -136,8 +137,9 @@ export function GoalOperationsBar({
   const ops = goalOperations(goal, viewer, t);
   const [open, setOpen] = useState<OpenOp>(null);
   // S11 GO9a: let the goal planner propose a revision when a step fails — on by default here (an
-  // API caller that omits it gets none); given once, with the confirmation.
-  const [planner, setPlanner] = useState(true);
+  // API caller that omits it gets none); given once, with the confirmation. GO9b: or let the
+  // platform apply its minor revisions for the requester while the goal keeps running.
+  const [planner, setPlanner] = useState<PlannerChoiceValue>('propose');
   const errors = goalOperationErrors(t);
   const goalRunId = goal.id;
   const run = useOperationDone(onDone, goal);
@@ -254,19 +256,24 @@ export function GoalOperationsBar({
             http.call<GoalOperationResultWire>('confirm_goal', {
               goalRunId,
               revision: goal.planRevision.revision,
-              ...(planner ? { planner: 'propose' } : {}),
+              ...(planner !== 'off' ? { planner } : {}),
             }),
             () =>
-              planner
+              planner === 'propose'
                 ? t(
                     '目标已确认，开始执行。步骤失败、需要你决定时，目标规划器会先提一个修订给你看。',
                     'Goal confirmed: it is starting. When a step fails and the goal waits for you, the goal planner proposes a revision for you to look at first.',
                   )
-                : t('目标已确认，开始执行', 'Goal confirmed: it is starting'),
+                : planner === 'apply_minor'
+                  ? t(
+                      '目标已确认，开始执行。步骤失败时，目标规划器会先换一条路；小修订由平台按你的授权采用，其余的修订等你决定。',
+                      'Goal confirmed: it is starting. When a step fails, the goal planner looks for another way first; minor revisions are adopted by the platform on your leave, any other waits for your decision.',
+                    )
+                  : t('目标已确认，开始执行', 'Goal confirmed: it is starting'),
           )
         }
       >
-        <PlannerChoice checked={planner} onChange={setPlanner} />
+        <PlannerChoice value={planner} onChange={setPlanner} />
         {absenceOperations ? (
           <AbsenceChecksBasis
             http={http}
@@ -413,6 +420,8 @@ export function GoalOperationsBar({
               '不再开始新的步骤尝试；正在运行的会跑完并记录，它们发起的动作照常审批和执行',
               'No new step attempt starts; running ones finish and are recorded, their actions still approved and run',
             ),
+            // UX P2-3 on #866: pausing drops the planner's round under way, as resuming does.
+            ...plannerWorkDropped(goal, t),
             ...(holds
               ? [
                   t(
@@ -449,6 +458,16 @@ export function GoalOperationsBar({
             'The goal is already paused; once held, its requester cannot resume it until a workspace owner lifts the hold',
           ),
           t('请求人仍可改计划、结束或取消', 'Its requester can still revise, end or cancel it'),
+          // UX P2-3 on #866: a hold drops the planner's round under way too (its proposal, once
+          // made, the requester may still accept).
+          ...(runningPlanningRound(goal)
+            ? [
+                t(
+                  '正在进行的这一轮规划会作废，它的规划任务会停下',
+                  'The planning round under way is dropped, and its planning task stopped',
+                ),
+              ]
+            : []),
         ]}
         confirmLabel={t('锁定', 'Hold')}
         onConfirm={() =>
@@ -682,40 +701,78 @@ function NoteConfirm({
   );
 }
 
-/** S11 GO9a: the confirm card's goal planner choice — what saying yes lets it do, and what not. */
+type PlannerChoiceValue = 'off' | GoalPlannerMode;
+
+/** S11 GO9a: the confirm card's goal planner choice — what saying yes lets it do, and what not.
+ *  GO9b: three ways — no planner, its proposals for the requester to decide, or minor revisions
+ *  the platform adopts for them (`@nexttime/shared` `GOAL_PLANNER_MODE_VALUES`). */
 function PlannerChoice({
-  checked,
+  value,
   onChange,
 }: {
-  readonly checked: boolean;
-  readonly onChange: (checked: boolean) => void;
+  readonly value: PlannerChoiceValue;
+  readonly onChange: (value: PlannerChoiceValue) => void;
 }) {
   const t = useT();
+  const name = useId();
   const hintId = useId();
+  const options: readonly { value: PlannerChoiceValue; label: string }[] = [
+    {
+      value: 'off',
+      label: t(
+        '不用目标规划器：步骤失败时由我自己处理',
+        'No goal planner: I handle a failed step myself',
+      ),
+    },
+    {
+      value: 'propose',
+      label: t(
+        '步骤失败、需要我决定时，让目标规划器提一个修订，由我决定',
+        'When a step fails and the goal waits for me, let the goal planner propose a revision for me to decide',
+      ),
+    },
+    {
+      value: 'apply_minor',
+      label: t(
+        '步骤失败时让目标规划器换一条路，小修订由平台替我采用、目标不停',
+        'When a step fails, let the goal planner find another way, and the platform adopt minor revisions for me without stopping the goal',
+      ),
+    },
+  ];
   return (
-    <div className="stack-s" data-testid="goal-op-confirm-planner">
-      {/* UX P3-6 on #864: box and sentence on one line at phone width, the sentence wrapping. */}
-      <label className="checkbox">
-        <input
-          type="checkbox"
-          checked={checked}
-          aria-describedby={hintId}
-          onChange={(event) => onChange(event.target.checked)}
-        />
-        <span>
-          {t(
-            '步骤失败、需要我决定时，让目标规划器提一个修订',
-            'When a step fails and the goal waits for me, let the goal planner propose a revision',
-          )}
-        </span>
-      </label>
+    <fieldset className="stack-s" data-testid="goal-op-confirm-planner" aria-describedby={hintId}>
+      <legend className="text-small">{t('目标规划器', 'Goal planner')}</legend>
+      {/* UX P3-6 on #864: each choice on one line with its control at phone width, wrapping. */}
+      {options.map((option) => (
+        <label key={option.value} className="radio-option text-small">
+          <input
+            type="radio"
+            name={name}
+            value={option.value}
+            checked={value === option.value}
+            onChange={() => onChange(option.value)}
+            data-testid={`goal-op-confirm-planner-${option.value}`}
+          />
+          <span>{option.label}</span>
+        </label>
+      ))}
       <span id={hintId} className="text-small text-3">
-        {t(
-          '规划器只提议、不执行：它看不到外部系统，也不能发起动作；它提的修订要你接受才生效。它用掉的 token 计入这个目标的预算。确认后不能再改这个选择。',
-          'The planner only proposes and runs nothing: it sees no outside system and cannot act; what it proposes takes effect only once you accept it. The tokens it uses count against this goal’s budget. This choice cannot be changed after confirming.',
-        )}
+        {value === 'apply_minor'
+          ? t(
+              '小修订只换 Worker、输入、顺序或重试次数，做的事只读、思考和汇报，验收不变；凡是改验收、新增能执行动作的步骤、让步骤用到原来没有的 gate（哪怕只是读取）、需要有人批准才能开始、或会停下还在跑的工作的修订，都会暂停目标等你决定。同一步的工作平台最多替你改两次，换了步骤名也算同一步。规划器看不到外部系统，也不能发起动作；它用掉的 token 计入这个目标的预算。确认后不能再改这个选择。',
+              'A minor revision only changes the Worker, input, order or retry limit of work that reads, thinks and reports, on unchanged checks. A revision that changes acceptance, adds a step that can act, gives a step a gate it did not reach (even only to read), needs a person to start, or would stop work still running pauses the goal for your decision. The platform changes the work of one step at most twice for you, under a new step key too. The planner sees no outside system and cannot act; the tokens it uses count against this goal’s budget. This choice cannot be changed after confirming.',
+            )
+          : value === 'propose'
+            ? t(
+                '规划器只提议、不执行：它看不到外部系统，也不能发起动作；它提的修订要你接受才生效。它用掉的 token 计入这个目标的预算。确认后不能再改这个选择。',
+                'The planner only proposes and runs nothing: it sees no outside system and cannot act; what it proposes takes effect only once you accept it. The tokens it uses count against this goal’s budget. This choice cannot be changed after confirming.',
+              )
+            : t(
+                '步骤失败、需要人决定时，目标暂停，由你自己重试、修订或取消。确认后不能再改这个选择。',
+                'When a step fails and a person must decide, the goal pauses for you to retry, revise or cancel it yourself. This choice cannot be changed after confirming.',
+              )}
       </span>
-    </div>
+    </fieldset>
   );
 }
 

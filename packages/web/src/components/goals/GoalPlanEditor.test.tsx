@@ -157,6 +157,7 @@ describe('the plan editor while the goal planner has a say (UX P2-1, P2-4 on #86
       planningRounds: [
         {
           id: 'round-1',
+          kind: 'proposal' as const,
           status: 'proposed' as const,
           basedOnRevision: 1,
           stepRunId: 'sr-fetch',
@@ -165,6 +166,8 @@ describe('the plan editor while the goal planner has a say (UX P2-1, P2-4 on #86
           failureCategory: 'transient' as const,
           taskId: 'task-plan-1',
           revision: 2,
+          revisionClass: 'minor' as const,
+          classReasons: [],
           outcomeReason: null,
           detail: null,
           createdAt: '2026-10-20T00:05:00.000Z',
@@ -181,6 +184,7 @@ describe('the plan editor while the goal planner has a say (UX P2-1, P2-4 on #86
           basedOnRevision: 1,
           proposedBy: 'p-planner',
           proposer: 'planner' as const,
+          acceptedBy: null,
           reason: 'another Worker',
           decidedBy: null,
           decidedAt: null,

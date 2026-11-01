@@ -2,9 +2,11 @@ import {
   DEFAULT_MAX_ATTEMPTS,
   type DecidePlanRevisionResultWire,
   type GoalDetailWire,
+  type GoalPlan,
   type PlanRevisionSummaryWire,
   type PlanRevisionWire,
   type PlanStep,
+  type PlannerRevisionClassReasonWire,
   type PlanningRoundWire,
   visibleLines,
 } from '@nexttime/shared';
@@ -17,24 +19,31 @@ import {
   formatRelative,
   prettyJsonVisible,
   redactSensitive,
+  shortId,
 } from '../../lib/format.js';
 import type { GoalViewer } from '../../lib/goal-actions.js';
 import {
+  adoptedRoundInForce,
   currentPlanningConclusion,
+  majorReasonTexts,
   mayDecidePlannerProposal,
   pendingPlannerProposal,
   planningOutcomeText,
   runningPlanningRound,
   showsRoundDetail,
+  stepMajorReasons,
 } from '../../lib/goal-planner.js';
 import {
+  type AcceptanceDiff,
   type PlanDiff,
+  acceptanceDiff,
   bindingSentence,
   checkKindLabel,
   isStepAuthorityHint,
   planCheckSentence,
   planDiff,
   planHintText,
+  reconcileCheckSentence,
   stepFailureText,
 } from '../../lib/goals.js';
 import { type Translate, useT } from '../../lib/i18n.js';
@@ -71,7 +80,9 @@ export interface GoalPlannerSectionProps {
  * requester's decision about it (`decide_plan_revision`: 接受并继续, 只接受, 拒绝); then every
  * round so far, each with why it ended as it did. Nothing here runs anything by itself: what the
  * planner proposes takes effect only once the requester accepts it, and anyone else reads who
- * decides.
+ * decides. GO9b: under an `apply_minor` leave the platform adopts a minor revision for the
+ * requester while the goal runs (the round reads 已按授权采用); a revision it leaves to them says
+ * why (`classReasons`).
  */
 export function GoalPlannerSection({
   goal,
@@ -85,17 +96,30 @@ export function GoalPlannerSection({
   const proposal = pendingPlannerProposal(goal);
   const running = runningPlanningRound(goal);
   const conclusion = currentPlanningConclusion(goal);
+  const adopted = adoptedRoundInForce(goal);
   const rounds = [...goal.planningRounds].reverse();
   return (
     <DashboardCard title={t('目标规划器', 'Goal planner')} data-testid="goal-planner">
       <div className="stack">
-        <span className="text-small text-3">
-          {t(
-            '确认这个目标时，请求人允许目标规划器在步骤失败、需要人决定时提一个修订。规划器只提议：它看不到外部系统，也不能发起动作；它提的修订要请求人接受才生效，用掉的 token 计入目标的预算。',
-            'When confirming this goal, its requester let the goal planner propose a revision when a step fails and a person must decide. The planner only proposes: it sees no outside system and cannot act; what it proposes takes effect only once the requester accepts it, and the tokens it uses count against the goal’s budget.',
-          )}
+        <span
+          className="text-small text-3"
+          data-testid="goal-planner-mode"
+          data-mode={goal.planner ?? 'none'}
+        >
+          {goal.planner === 'apply_minor'
+            ? t(
+                '确认这个目标时，请求人允许目标规划器在步骤失败时换一条路，并允许平台替自己采用小修订：只换 Worker、输入、顺序或重试次数、验收不变的修订，目标不停；其余的修订暂停目标，等请求人决定。规划器看不到外部系统，也不能发起动作；用掉的 token 计入目标的预算。',
+                'When confirming this goal, its requester let the goal planner find another way when a step fails, and the platform adopt minor revisions for them: one that only changes the Worker, input, order or retry limit, on unchanged checks, goes on without stopping the goal; any other pauses the goal for the requester to decide. The planner sees no outside system and cannot act; the tokens it uses count against the goal’s budget.',
+              )
+            : t(
+                '确认这个目标时，请求人允许目标规划器在步骤失败、需要人决定时提一个修订。规划器只提议：它看不到外部系统，也不能发起动作；它提的修订要请求人接受才生效，用掉的 token 计入目标的预算。',
+                'When confirming this goal, its requester let the goal planner propose a revision when a step fails and a person must decide. The planner only proposes: it sees no outside system and cannot act; what it proposes takes effect only once the requester accepts it, and the tokens it uses count against the goal’s budget.',
+              )}
         </span>
         {running ? <RunningRound round={running} http={http} t={t} /> : null}
+        {adopted ? (
+          <AdoptedRevision goal={goal} round={adopted} http={http} gateNames={gateNames} t={t} />
+        ) : null}
         {conclusion ? <Conclusion round={conclusion} t={t} /> : null}
         {proposal ? (
           <PlannerProposal
@@ -121,10 +145,16 @@ export function GoalPlannerSection({
           </details>
         ) : (
           <span className="text-small text-3" data-testid="goal-planner-none">
-            {t(
-              '还没有步骤失败到要人决定，规划器还没跑过。',
-              'No step has failed to the point of a person deciding yet, so the planner has not run.',
-            )}
+            {/* UX P3-2 on #866: under apply_minor the planner runs on any failure it can take. */}
+            {goal.planner === 'apply_minor'
+              ? t(
+                  '还没有步骤失败，规划器还没跑过。',
+                  'No step has failed yet, so the planner has not run.',
+                )
+              : t(
+                  '还没有步骤失败到要人决定，规划器还没跑过。',
+                  'No step has failed to the point of a person deciding yet, so the planner has not run.',
+                )}
           </span>
         )}
       </div>
@@ -153,10 +183,15 @@ function RunningRound({
     <Notice tone="info" testId="goal-planner-running">
       <span className="stack-s">
         <span>
-          {t(
-            `规划器正在看${failedStepText(round, t)}为什么失败，准备提一个修订。它跑完前你也可以自己继续、修订或取消，那样这一轮就作废。`,
-            `The planner is looking at why ${failedStepText(round, t)} failed, to propose a revision. You may still resume, revise or cancel the goal yourself meanwhile; this round is then dropped.`,
-          )}
+          {round.kind === 'autonomous'
+            ? t(
+                `规划器正在为${failedStepText(round, t)}换一条路，这期间不开始新的尝试，已经在跑的照常进行。小修订平台会替请求人采用，其余的修订暂停目标等请求人决定。你也可以暂停或取消目标，那样这一轮就作废。`,
+                `The planner is looking for another way past ${failedStepText(round, t)}; meanwhile no new attempt starts, and those already running go on. A minor revision the platform adopts for the requester; any other pauses the goal for them to decide. You may pause or cancel the goal meanwhile; this round is then dropped.`,
+              )
+            : t(
+                `规划器正在看${failedStepText(round, t)}为什么失败，准备提一个修订。它跑完前你也可以自己继续、修订或取消，那样这一轮就作废。`,
+                `The planner is looking at why ${failedStepText(round, t)} failed, to propose a revision. You may still resume, revise or cancel the goal yourself meanwhile; this round is then dropped.`,
+              )}
         </span>
         {round.taskId ? (
           <span className="row-wrap text-small">
@@ -205,6 +240,93 @@ function Conclusion({ round, t }: { readonly round: PlanningRoundWire; readonly 
         ) : null}
       </span>
     </Notice>
+  );
+}
+
+/** UX P2-2 on #866: the revision the platform adopted for the requester, while it is the plan in
+ *  force — shown open, as a proposal is: what the planner said, what it changed against the plan
+ *  it replaced (each step added or redefined as it runs), and what a person who disagrees does. */
+function AdoptedRevision({
+  goal,
+  round,
+  http,
+  gateNames,
+  t,
+}: {
+  readonly goal: GoalDetailWire;
+  readonly round: PlanningRoundWire;
+  readonly http: CapabilityCaller;
+  readonly gateNames: ReadonlyMap<string, string>;
+  readonly t: Translate;
+}) {
+  const revision = round.revision ?? goal.currentRevision;
+  const load = useCallback(
+    () =>
+      Promise.all([
+        http.call<PlanRevisionWire>('get_goal_revision', { goalRunId: goal.id, revision }),
+        http.call<PlanRevisionWire>('get_goal_revision', {
+          goalRunId: goal.id,
+          revision: round.basedOnRevision,
+        }),
+      ]),
+    [http, goal.id, revision, round.basedOnRevision],
+  );
+  const plans = useResource(load);
+  return (
+    <section className="stack-s" data-testid="goal-planner-adopted" data-revision={revision}>
+      <span className="row-wrap">
+        <strong>
+          {t(
+            `平台按请求人的授权采用了规划器的第 ${revision} 版修订`,
+            `The platform adopted the planner’s v${revision} on the requester’s leave`,
+          )}
+        </strong>
+        <StatusChip machine="planningRound" status="applied" size="s" />
+        {round.settledAt ? (
+          <time className="text-3 text-small" title={formatDateTime(round.settledAt)}>
+            {formatRelative(round.settledAt)}
+          </time>
+        ) : null}
+      </span>
+      <span className="text-small text-3">
+        {t(
+          `针对${failedStepText(round, t)}的失败；这是小修订，目标没有停。`,
+          `For the failure of ${failedStepText(round, t)}; a minor revision, so the goal did not stop.`,
+        )}
+      </span>
+      {plans.state.status === 'ready' ? (
+        <>
+          {plans.state.data[0].reason ? (
+            <p className="pre-wrap" data-testid="goal-planner-adopted-reason">
+              {visibleLines(plans.state.data[0].reason)}
+            </p>
+          ) : null}
+          <ProposalChanges
+            diff={planDiff(plans.state.data[1].plan, plans.state.data[0].plan)}
+            before={plans.state.data[1].plan}
+            plan={plans.state.data[0]}
+            reasons={[]}
+            http={http}
+            gateNames={gateNames}
+            t={t}
+          />
+        </>
+      ) : plans.state.status === 'error' ? (
+        <ErrorBanner
+          error={plans.state.error}
+          title={t('无法读取平台采用的计划', 'Could not read the adopted plan')}
+          onRetry={() => void plans.reload()}
+        />
+      ) : (
+        <SkeletonRows count={2} label={t('正在读取平台采用的计划', 'Loading the adopted plan')} />
+      )}
+      <span className="text-small text-3" data-testid="goal-planner-adopted-disagree">
+        {t(
+          '如果不同意，可以暂停目标后修订计划。',
+          'To undo it, pause the goal and revise the plan.',
+        )}
+      </span>
+    </section>
   );
 }
 
@@ -265,6 +387,14 @@ function RoundItem({
                 `Proposed revision v${round.revision} (${fate.en}).`,
               )
             : t(`提了第 ${round.revision} 版修订。`, `Proposed revision v${round.revision}.`)}
+        </span>
+      ) : null}
+      {round.status === 'applied' && round.revision !== null ? (
+        <span className="text-small" data-testid="goal-planner-round-applied">
+          {t(
+            `提了第 ${round.revision} 版修订，是小修订，平台按请求人的授权采用了它，目标没有停。`,
+            `Proposed revision v${round.revision}, a minor one: the platform adopted it on the requester’s leave, and the goal did not stop.`,
+          )}
         </span>
       ) : null}
       {outcome ? <span className="text-small text-3">{outcome}</span> : null}
@@ -359,7 +489,16 @@ function PlannerProposal({
     errorOverrides: errors,
     testId: `goal-planner-${decision}-confirm`,
   });
-  const changeLines = diff ? diffImpact(diff, goal, t) : [];
+  const changeLines =
+    diff && proposed.state.status === 'ready'
+      ? diffImpact(
+          diff,
+          acceptanceDiff(goal.planRevision.plan, proposed.state.data.plan),
+          goal,
+          gateNames,
+          t,
+        )
+      : [];
   const anchor = (decision: Decision, label: string, variant: 'primary' | 'secondary') => (
     <Button
       variant={variant}
@@ -484,6 +623,23 @@ function PlannerProposal({
           )}
         </span>
       ) : null}
+      {round && round.revisionClass === 'major' && round.classReasons.length > 0 ? (
+        <div className="stack-s" data-testid="goal-planner-major-reasons">
+          <span className="text-small">
+            {round.kind === 'autonomous'
+              ? t(
+                  '这不是小修订，平台没有替请求人采用，目标为此暂停：',
+                  'This is not a minor revision, so the platform did not adopt it for the requester and the goal paused for it:',
+                )
+              : t('接受前请留意：', 'Before accepting, note:')}
+          </span>
+          <ul className="text-small">
+            {majorReasonTexts(round.classReasons, t, gateNames).map((text) => (
+              <li key={text}>{text}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       {proposal.reason ? (
         <p className="pre-wrap" data-testid="goal-planner-reason">
           {visibleLines(proposal.reason)}
@@ -492,7 +648,9 @@ function PlannerProposal({
       {proposed.state.status === 'ready' && diff ? (
         <ProposalChanges
           diff={diff}
+          before={goal.planRevision.plan}
           plan={proposed.state.data}
+          reasons={round?.revisionClass === 'major' ? round.classReasons : []}
           http={http}
           gateNames={gateNames}
           t={t}
@@ -512,9 +670,15 @@ function PlannerProposal({
 }
 
 /** What accepting changes, one confirm line each: the step keys added, removed (naming the ones
- *  whose work is still running and stops — UX P3-5 on #864) and redefined, and whether the goal's
- *  acceptance checks changed. */
-function diffImpact(diff: PlanDiff, goal: GoalDetailWire, t: Translate): string[] {
+ *  whose work is still running and stops — UX P3-5 on #864) and redefined, and each acceptance
+ *  check of the goal added, dropped or changed (UX P2-1 on #866). */
+function diffImpact(
+  diff: PlanDiff,
+  acceptance: AcceptanceDiff,
+  goal: GoalDetailWire,
+  gateNames: ReadonlyMap<string, string>,
+  t: Translate,
+): string[] {
   const lines: string[] = [];
   if (diff.added.length > 0)
     lines.push(t(`新增步骤：${diff.added.join('、')}`, `Steps added: ${diff.added.join(', ')}`));
@@ -543,20 +707,50 @@ function diffImpact(diff: PlanDiff, goal: GoalDetailWire, t: Translate): string[
         `Steps redefined: ${diff.changed.join(', ')} (they start over as redefined)`,
       ),
     );
-  if (diff.acceptanceChanged)
-    lines.push(t('目标的验收检查也改了', 'The goal’s acceptance checks change too'));
+  if (diff.acceptanceChanged) lines.push(...acceptanceLines(acceptance, gateNames, t));
   return lines;
+}
+
+/** UX P2-1 on #866: each acceptance check of the goal a revision added, dropped or changed, as
+ *  its sentence (a changed one before and after). */
+function acceptanceLines(
+  acceptance: AcceptanceDiff,
+  gateNames: ReadonlyMap<string, string>,
+  t: Translate,
+): string[] {
+  const sentence = (check: AcceptanceDiff['added'][number]) =>
+    planCheckSentence(check, gateNames, t);
+  return [
+    ...acceptance.added.map((check) =>
+      t(`目标的验收新增：${sentence(check)}`, `Goal check added: ${sentence(check)}`),
+    ),
+    ...acceptance.removed.map((check) =>
+      t(`目标的验收去掉：${sentence(check)}`, `Goal check dropped: ${sentence(check)}`),
+    ),
+    ...acceptance.changed.map(({ before, after }) =>
+      t(
+        `目标的验收 ${after.key} 改了：原来「${sentence(before)}」，改为「${sentence(after)}」`,
+        `Goal check ${after.key} changed: was “${sentence(before)}”, now “${sentence(after)}”`,
+      ),
+    ),
+  ];
 }
 
 function ProposalChanges({
   diff,
+  before,
   plan,
+  reasons,
   http,
   gateNames,
   t,
 }: {
   readonly diff: PlanDiff;
+  /** The plan the revision replaces, for what it changed in the goal's checks. */
+  readonly before: GoalPlan;
   readonly plan: PlanRevisionWire;
+  /** Why the platform classed it major (none for a minor one), each shown on its step. */
+  readonly reasons: readonly PlannerRevisionClassReasonWire[];
   readonly http: CapabilityCaller;
   readonly gateNames: ReadonlyMap<string, string>;
   readonly t: Translate;
@@ -603,7 +797,16 @@ function ProposalChanges({
             </li>
           ))}
           {diff.acceptanceChanged ? (
-            <li>{t('目标的验收检查改了。', 'The goal’s acceptance checks changed.')}</li>
+            <li className="stack-s" data-diff="acceptance">
+              <span className="text-3">
+                {t('目标的验收检查改了：', 'The goal’s acceptance checks changed:')}
+              </span>
+              <ul className="stack-s" data-testid="goal-planner-acceptance-diff">
+                {acceptanceLines(acceptanceDiff(before, plan.plan), gateNames, t).map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            </li>
           ) : null}
         </ul>
       )}
@@ -612,7 +815,14 @@ function ProposalChanges({
       {[...diff.added, ...diff.changed].map((key) => {
         const step = steps.get(key);
         return step ? (
-          <ProposedStep key={key} step={step} http={http} gateNames={gateNames} t={t} />
+          <ProposedStep
+            key={key}
+            step={step}
+            reasons={stepMajorReasons(reasons, key)}
+            http={http}
+            gateNames={gateNames}
+            t={t}
+          />
         ) : null;
       })}
       {plan.hints.map((hint) => (
@@ -626,14 +836,17 @@ function ProposalChanges({
 
 /** One step of the proposed plan as the platform would run it: what it waits for, its Worker's
  *  settings, the inputs it takes from earlier steps, its output contract, its checks and its
- *  input (UX P2-3 on #864). */
+ *  input (UX P2-3 on #864). UX P2-1 on #866: first, what in it made the revision major, and what
+ *  lets it act — child Workers (`nested`), actions the platform reconciles (`reconcile`). */
 function ProposedStep({
   step,
+  reasons,
   http,
   gateNames,
   t,
 }: {
   readonly step: PlanStep;
+  readonly reasons: readonly PlannerRevisionClassReasonWire[];
   readonly http: CapabilityCaller;
   readonly gateNames: ReadonlyMap<string, string>;
   readonly t: Translate;
@@ -652,6 +865,57 @@ function ProposedStep({
             ` · at most ${step.maxAttempts ?? DEFAULT_MAX_ATTEMPTS} attempts`,
           )}
         </span>
+        {reasons.length > 0 ? (
+          <div className="stack-s" data-testid="goal-planner-step-reasons">
+            <span className="text-3">
+              {t(
+                '平台没有替请求人采用，因为这一步：',
+                'The platform did not adopt it, as this step:',
+              )}
+            </span>
+            <ul className="stack-s">
+              {majorReasonTexts(reasons, t, gateNames).map((text) => (
+                <li key={text}>{text}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {step.nested === true ? (
+          <span data-testid="goal-planner-step-nested">
+            {t(
+              '可以起子 Worker：它的 Worker 能让别的 Worker 替它做事',
+              'Starts child Workers: its Worker may have other Workers work for it',
+            )}
+          </span>
+        ) : null}
+        {step.reconcile && step.reconcile.length > 0 ? (
+          <div className="stack-s" data-testid="goal-planner-step-reconcile">
+            <span>
+              {t(
+                '会发起动作（带核对）：结果不明时平台这样核对',
+                'Requests actions (reconciled): when an outcome is unknown the platform checks',
+              )}
+            </span>
+            <ul className="stack-s">
+              {step.reconcile.map((declaration, index) => (
+                <li
+                  key={`${declaration.action.gatekeeperId}-${declaration.action.operation}-${index}`}
+                  className="text-3"
+                >
+                  {t(
+                    `对门「${gateNames.get(declaration.action.gatekeeperId) ?? shortId(declaration.action.gatekeeperId)}」上的 ${declaration.action.operation}：`,
+                    `For ${declaration.action.operation} on gate “${gateNames.get(declaration.action.gatekeeperId) ?? shortId(declaration.action.gatekeeperId)}”: `,
+                  )}
+                  {reconcileCheckSentence(
+                    declaration.check,
+                    gateNames.get(declaration.check.gatekeeperId) ?? null,
+                    t,
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         {step.spec ? (
           <WorkerSpecFields spec={step.spec} http={http} gateNames={gateNames} t={t} />
         ) : null}

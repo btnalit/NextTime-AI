@@ -199,6 +199,7 @@ function toWirePlanRevisionSummary(
     basedOnRevision: row.basedOnRevision,
     proposedBy: row.proposedBy,
     proposer: row.proposer,
+    acceptedBy: row.acceptedBy,
     // Legacy 420: as `statement` above (`revise_goal` refuses a credential in it since GO5b).
     reason: shownFreeText(row.reason),
     decidedBy: row.decidedBy,
@@ -417,6 +418,7 @@ function toWirePlanningRound(round: PlanningRoundRow): PlanningRoundWire {
   return {
     id: round.id,
     status: round.status,
+    kind: round.kind,
     basedOnRevision: round.basedOnRevision,
     stepRunId: round.stepRunId,
     stepKey: round.stepKey,
@@ -424,6 +426,8 @@ function toWirePlanningRound(round: PlanningRoundRow): PlanningRoundWire {
     failureCategory: round.failureCategory,
     taskId: round.task?.id ?? null,
     revision: round.revision,
+    revisionClass: round.revisionClass,
+    classReasons: round.classReasons.map((reason) => ({ ...reason })),
     outcomeReason: round.outcomeReason,
     detail: round.detail === null ? null : shownFreeText(round.detail),
     createdAt: round.createdAt.toISOString(),
