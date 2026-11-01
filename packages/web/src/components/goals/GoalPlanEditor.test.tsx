@@ -389,6 +389,127 @@ describe('the plan editor on the goal page (S11 GO6, revise_goal)', () => {
     );
   });
 
+  it('S11 GO13: 沿用 Worker 的输出约定 takes the picked version’s contract onto a step without one, and only there', async () => {
+    const REPORT = {
+      type: 'object',
+      properties: { summary: { type: 'string', description: 'What was done' } },
+      required: ['summary'],
+    };
+    const withContract = {
+      items: [
+        { ...WORKERS.items[0], definition: { name: 'cert-worker', outputSchema: REPORT } },
+        WORKERS.items[1],
+      ],
+    };
+    const [fetchStep, applyStep] = goalDetail().planRevision.plan.steps as [
+      GoalDetailWire['planRevision']['plan']['steps'][number],
+      GoalDetailWire['planRevision']['plan']['steps'][number],
+    ];
+    const withOwn = paused({
+      planRevision: {
+        ...goalDetail().planRevision,
+        plan: {
+          ...goalDetail().planRevision.plan,
+          steps: [
+            fetchStep,
+            {
+              ...applyStep,
+              worker: { definitionId: WORKER_ID, version: 3 },
+              outputSchema: { type: 'object' },
+            },
+          ],
+        },
+      },
+    });
+    const http = scriptedHttp(
+      handlers(withOwn, workspace('p-alice', 'member'), {
+        list_worker_definitions: () => withContract,
+        revise_goal: () => ({
+          goalRunId: 'goal-1',
+          status: 'paused',
+          changed: true,
+          revision: 2,
+          planRevisionId: 'rev-2',
+          supersededStepRunIds: ['sr-fetch'],
+          createdStepRunIds: ['sr-fetch-2'],
+          withdrawnActionRequestIds: [],
+          releasedActionRequestIds: [],
+          hints: [],
+        }),
+      }),
+    );
+    renderPage(http);
+    await openEditor();
+    const fetch = step('fetch');
+    await waitFor(() =>
+      expect((within(fetch).getByTestId('goal-plan-step-worker') as HTMLSelectElement).value).toBe(
+        WORKER_ID,
+      ),
+    );
+    // v2 declares no contract: nothing to adopt.
+    expect(within(fetch).queryByTestId('goal-plan-step-adopt-output')).toBeNull();
+    // A step with its own contract keeps it, and is offered none.
+    const apply = step('apply');
+    expect(within(apply).queryByTestId('goal-plan-step-adopt-output')).toBeNull();
+    expect(apply.textContent).toContain('这一步的输出约定保持不变');
+    fireEvent.change(within(fetch).getByTestId('goal-plan-step-version'), {
+      target: { value: '3' },
+    });
+    fireEvent.click(await within(fetch).findByTestId('goal-plan-step-adopt-output'));
+    const adopted = within(fetch).getByTestId('goal-plan-step-adopted-output');
+    expect(adopted.textContent).toContain('summary');
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(fetch).getByTestId('goal-plan-step-drop-output')),
+    );
+    // Not adopting again, then picking another version, leaves nothing taken.
+    fireEvent.click(within(fetch).getByTestId('goal-plan-step-drop-output'));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(fetch).getByTestId('goal-plan-step-adopt-output')),
+    );
+    // Let go by hand: nothing to explain.
+    expect(within(fetch).queryByTestId('goal-plan-step-adoption-dropped')).toBeNull();
+    fireEvent.click(within(fetch).getByTestId('goal-plan-step-adopt-output'));
+    fireEvent.change(within(fetch).getByTestId('goal-plan-step-version'), {
+      target: { value: '2' },
+    });
+    expect(within(fetch).queryByTestId('goal-plan-step-adopted-output')).toBeNull();
+    // Let go by the version change (UX on #880): the step says so, and that v2 declares none.
+    expect(within(fetch).getByTestId('goal-plan-step-adoption-dropped').textContent).toContain(
+      '原来沿用的输出约定已去掉（那是原来版本的约定）。现在选的版本没有声明输出约定',
+    );
+    fireEvent.change(within(fetch).getByTestId('goal-plan-step-version'), {
+      target: { value: '3' },
+    });
+    expect(within(fetch).getByTestId('goal-plan-step-adoption-dropped').textContent).toContain(
+      '要用现在这个版本的，再沿用一次',
+    );
+    fireEvent.click(within(fetch).getByTestId('goal-plan-step-adopt-output'));
+    expect(within(fetch).queryByTestId('goal-plan-step-adoption-dropped')).toBeNull();
+    fireEvent.change(screen.getByTestId('goal-plan-reason'), { target: { value: '检查输出' } });
+    // The confirmation says what the revision adopts (UX on #880); nothing is left unused here.
+    const submit = screen.getByTestId('goal-plan-submit') as HTMLButtonElement;
+    await waitFor(() => expect(submit.disabled).toBe(false));
+    fireEvent.click(submit);
+    const confirm = await screen.findByTestId('goal-plan-confirm');
+    expect(confirm.textContent).toContain('沿用 Worker 的输出约定：fetch（输出按约定检查');
+    expect(confirm.textContent).not.toContain('声明了输出约定，步骤里没有设置');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() =>
+      expect(
+        (
+          http.calls.find((call) => call.name === 'revise_goal')?.params as {
+            plan: GoalDetailWire['planRevision']['plan'];
+          }
+        ).plan.steps[0],
+      ).toEqual({
+        key: 'fetch',
+        worker: { definitionId: WORKER_ID, version: 3 },
+        input: { hosts: 3 },
+        outputSchema: REPORT,
+      }),
+    );
+  });
+
   it('keeps a masked input left alone, and holds one changed with the mark still in it', async () => {
     const http = scriptedHttp(
       handlers(masked(), workspace('p-alice', 'member'), {

@@ -5,6 +5,7 @@ import {
   schemaDraftAsFields,
   schemaDraftAsJson,
   schemaDraftFrom,
+  schemaDraftMatches,
   schemaFieldNames,
   schemaFromDraft,
   schemaRowProblems,
@@ -85,5 +86,46 @@ describe('schema-fields (legacy 453)', () => {
       [1, '字段名 a 重复了'],
       [2, '字段要有名字'],
     ]);
+  });
+
+  it('S11 GO13 (UX on #880): a contract taken from a Worker matches it until changed; order alone is no change', () => {
+    const declared = {
+      type: 'object',
+      properties: { total: { type: 'integer' }, ok: { type: 'boolean', description: 'All fine' } },
+      required: ['total', 'ok'],
+    };
+    const taken = schemaDraftFrom(declared);
+    expect(schemaDraftMatches(taken, declared)).toBe(true);
+    expect(
+      schemaDraftMatches(taken, {
+        required: ['ok', 'total'],
+        properties: {
+          ok: { description: 'All fine', type: 'boolean' },
+          total: { type: 'integer' },
+        },
+        type: 'object',
+      }),
+    ).toBe(true);
+    expect(
+      schemaDraftMatches(taken, {
+        type: 'object',
+        properties: { items: { type: 'array' } },
+        required: ['items'],
+      }),
+    ).toBe(false);
+    if (taken.mode !== 'fields') throw new Error('expected the list');
+    const renamed = {
+      ...taken,
+      rows: taken.rows.map((row, index) => (index === 0 ? { ...row, name: 'count' } : row)),
+    };
+    expect(schemaDraftMatches(renamed, declared)).toBe(false);
+    // JSON being typed that does not parse yet: nothing to compare.
+    expect(schemaDraftMatches({ mode: 'json', text: '{"type": ' }, declared)).toBe(true);
+    // A schema the list cannot say stays JSON on both sides and still compares.
+    const nested = {
+      type: 'object',
+      properties: { a: { type: 'object', properties: { b: { type: 'string' } } } },
+    };
+    expect(schemaDraftMatches(schemaDraftFrom(nested), nested)).toBe(true);
   });
 });

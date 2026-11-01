@@ -12,6 +12,7 @@ import {
 } from '../../governance/approval/index.js';
 import { refuseCredentialText, refuseRedactedText } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
+import { planContractHints } from './contract-hints.js';
 import { moveStepRun } from './moves.js';
 import {
   type GoalPlan,
@@ -527,6 +528,12 @@ export async function adoptRevision(
     // starts again.
     hints: [
       ...planHints(plan),
+      // S11 GO13: and what its steps still to start leave out of, or do not meet in, their
+      // Workers' contracts (`contract-hints.ts`) — advice; they start as the plan says.
+      ...(await planContractHints(client, workspaceId, {
+        ...plan,
+        steps: plan.steps.filter((entry) => !candidate.endedKeys.has(entry.key)),
+      })),
       ...(await planAuthorityHints(
         client,
         workspaceId,

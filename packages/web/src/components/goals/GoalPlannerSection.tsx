@@ -41,6 +41,7 @@ import {
   bindingSentence,
   checkKindLabel,
   isStepAuthorityHint,
+  isStepContractHint,
   planCheckSentence,
   planDiff,
   planHintText,
@@ -559,7 +560,7 @@ function PlannerProposal({
               ),
       (result) =>
         result.hints
-          .filter(isStepAuthorityHint)
+          .filter((hint) => isStepAuthorityHint(hint) || isStepContractHint(hint))
           .map((hint) => planHintText(hint, t, gateNames, 'revision')),
     );
   const openProps = (decision: Decision) => ({

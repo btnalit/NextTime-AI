@@ -28,6 +28,7 @@ import {
   goalFirstAttemptAt,
   goalSteps,
   isStepAuthorityHint,
+  isStepContractHint,
   observationSentence,
   planHintKey,
   planHintText,
@@ -99,12 +100,14 @@ export function GoalStepsSection({
   const { current, superseded } = goalSteps(detail);
   const acceptanceByRun = new Map(detail.acceptance.steps.map((step) => [step.stepRunId, step]));
   const authorityHints = detail.planRevision.hints.filter(isStepAuthorityHint);
+  // S11 GO13: advice about a step and its Worker's contract — the step starts as planned.
+  const contractHints = detail.planRevision.hints.filter(isStepContractHint);
   // A proposal can still be turned down; a paused run's revision is in force, revised again.
   const hintContext = detail.status === 'proposed' ? 'proposal' : 'revision';
   // S11 GO8a: a step waiting to be tried again would not be tried again (UX on #853).
   const retried = retriedStepKeys(detail);
   const hintsByStep = new Map<string, PlanHint[]>();
-  for (const hint of authorityHints) {
+  for (const hint of [...authorityHints, ...contractHints]) {
     if (hint.stepKey === undefined) continue;
     hintsByStep.set(hint.stepKey, [...(hintsByStep.get(hint.stepKey) ?? []), hint]);
   }
@@ -146,6 +149,15 @@ export function GoalStepsSection({
                   </div>
                 ) : null;
               })()}
+            </Notice>
+          ))}
+        </div>
+      ) : null}
+      {contractHints.length > 0 ? (
+        <div className="stack-s">
+          {contractHints.map((hint) => (
+            <Notice key={planHintKey(hint)} tone="info" testId="goal-step-contract-hint">
+              {planHintText(hint, t, gateNames, hintContext)}
             </Notice>
           ))}
         </div>
@@ -255,9 +267,17 @@ function StepItem({
           ) : null}
         </span>
         <span className="row-wrap">
-          {[...new Set(hints.map((hint) => stepHintChipLabel(hint, t)))].map((label) =>
+          {[
+            ...new Map(
+              hints.map((hint) => [stepHintChipLabel(hint, t), isStepContractHint(hint)] as const),
+            ),
+          ].map(([label, advice]) =>
             label ? (
-              <span key={label} className="chip chip-warn chip-s" data-testid="goal-step-hint-chip">
+              <span
+                key={label}
+                className={`chip ${advice ? 'chip-info' : 'chip-warn'} chip-s`}
+                data-testid={advice ? 'goal-step-contract-chip' : 'goal-step-hint-chip'}
+              >
                 {label}
               </span>
             ) : null,

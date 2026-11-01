@@ -13,7 +13,7 @@ import { useResource } from '../hooks/useResource.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import { actionLabel } from '../lib/capability-labels.js';
-import { opsRunnerTemplateForm, workerItemId } from '../lib/catalog.js';
+import { opsRunnerTemplateForm, workerContractOf, workerItemId } from '../lib/catalog.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import {
   type PublishCredentialReview,
@@ -127,6 +127,7 @@ import {
   governanceFieldsText,
   isLoosening,
 } from './connect/GovernanceChange.js';
+import { OutputContractFields } from './goals/OutputContract.js';
 import { Button } from './kit/button.js';
 import { Confirm } from './kit/confirm.js';
 import { CredentialReview } from './kit/credential-review.js';
@@ -3516,6 +3517,48 @@ function definitionItems(row: WorkerDefinitionSummary, t: Translate): KeyValueIt
           </ul>
         ),
     });
+  }
+  if (row.kind === 'worker') {
+    // S11 GO13: the contract the Worker declares — what it takes and what it reports. Declared
+    // only: a plan step's output is checked by the step's own output contract.
+    const contract = workerContractOf(row.definition);
+    const declared = (key: 'inputSchema' | 'outputSchema') => {
+      const schema = contract[key];
+      return schema === undefined ? (
+        <span className="text-3">{t('没有声明', 'Not declared')}</span>
+      ) : (
+        <OutputContractFields
+          schema={schema}
+          t={t}
+          explain={false}
+          testId={`worker-detail-${key}`}
+        />
+      );
+    };
+    items.push(
+      {
+        key: 'inputSchema',
+        label: t('输入约定', 'Input contract'),
+        value: declared('inputSchema'),
+      },
+      {
+        key: 'outputSchema',
+        label: t('输出约定', 'Output contract'),
+        value: (
+          <div className="stack-s">
+            {declared('outputSchema')}
+            {contract.outputSchema !== undefined ? (
+              <span className="text-small text-3">
+                {t(
+                  '只是声明：计划里的步骤要按它检查输出、让后面的步骤绑定，要在步骤上沿用这份约定。',
+                  'Declared only: for a plan step’s output to be checked against it and bound by later steps, the step adopts this contract.',
+                )}
+              </span>
+            ) : null}
+          </div>
+        ),
+      },
+    );
   }
   const egress = Array.isArray(row.definition.egressDeny)
     ? row.definition.egressDeny.filter((host): host is string => typeof host === 'string')

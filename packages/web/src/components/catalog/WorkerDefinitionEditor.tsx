@@ -3,8 +3,9 @@ import {
   WORKER_DEFINITION_KIND_VALUES,
   type WorkerDefinitionKind,
 } from '@nexttime/shared';
-import { type FormEvent, type ReactNode, useMemo, useState } from 'react';
+import { type FormEvent, type ReactNode, useMemo, useRef, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
+import { useFocusAfterRender } from '../../hooks/useFocusAfterRender.js';
 import { useFocusWhenLost } from '../../hooks/useFocusWhenLost.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
@@ -19,6 +20,7 @@ import {
   EMPTY_WORKER_DEFINITION_FORM,
   type FieldErrors,
   type WorkerDefinitionForm,
+  errorsUnder,
   joinList,
   splitList,
   validateWorkerDefinition,
@@ -43,6 +45,7 @@ import { type Translate, useT } from '../../lib/i18n.js';
 import { workerDefinitionKindLabel } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
 import { sameNameIds } from '../../lib/same-name.js';
+import { type SchemaDraft, emptySchemaDraft } from '../../lib/schema-fields.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import { definitionName, unnamedDefinitionLabel } from '../../lib/tasks.js';
 import { useGuardedClose } from '../kit/discard-guard.js';
@@ -55,6 +58,7 @@ import { Notice } from '../ui/Notice.js';
 import { Tabs } from '../ui/Tabs.js';
 import { DraftProposed, type ProposedDraft } from './DraftProposed.js';
 import { JsonEditor } from './JsonEditor.js';
+import { SchemaFieldsEditor } from './SchemaFieldsEditor.js';
 
 export interface WorkerDefinitionEditorProps {
   readonly http: CapabilityCaller;
@@ -339,6 +343,101 @@ function CapabilityPickerField({
 }
 
 /**
+ * S11 GO13: a Worker's contract — the input it expects and what it reports — in the field list
+ * (or JSON) a step's output contract is written in. A declaration only: a step is held to an
+ * output only by its own outputSchema (the plan editor can copy this one), and a step's input that
+ * does not match is a hint on the confirmation card, never a refusal.
+ */
+function ContractFields({
+  form,
+  errors,
+  busy,
+  onChange,
+}: {
+  readonly form: WorkerDefinitionForm;
+  readonly errors: FieldErrors;
+  readonly busy: boolean;
+  readonly onChange: (key: 'inputSchema' | 'outputSchema', value: SchemaDraft | null) => void;
+}) {
+  const t = useT();
+  // Adding a contract hands focus to its 添加字段; dropping one, to the button that adds it back.
+  const root = useRef<HTMLDivElement>(null);
+  const focusAfterRender = useFocusAfterRender();
+  const focus = (testId: string) =>
+    focusAfterRender(() => root.current?.querySelector<HTMLElement>(`[data-testid="${testId}"]`));
+  const parts = [
+    {
+      key: 'inputSchema' as const,
+      legend: t('输入约定', 'Input contract'),
+      explanation: t(
+        '这个 Worker 期望收到的输入。计划里没有输入绑定的步骤，输入对不上时确认卡片会提示；不会拒绝。',
+        'The input this Worker expects. A plan step without input bindings whose input does not match is flagged on the confirmation card; it is never refused.',
+      ),
+      add: t('添加输入约定', 'Add an input contract'),
+      remove: t('去掉输入约定', 'Drop the input contract'),
+      placeholder: t('这个输入是做什么的（可空）', 'What this input is for (optional)'),
+    },
+    {
+      key: 'outputSchema' as const,
+      legend: t('输出约定', 'Output contract'),
+      explanation: t(
+        '这个 Worker 报告的结果。只有计划步骤自己设置了输出约定，它的输出才会被检查、后面的步骤才能绑定；计划编辑器里可以一键沿用这里的约定。',
+        'What this Worker reports. A plan step’s output is checked, and later steps can bind to it, only when the step sets an output contract itself; the plan editor can copy this one in one click.',
+      ),
+      add: t('添加输出约定', 'Add an output contract'),
+      remove: t('去掉输出约定', 'Drop the output contract'),
+      placeholder: t('这个字段报告什么（可空）', 'What this field reports (optional)'),
+    },
+  ];
+  return (
+    <div ref={root} className="stack-m" data-testid="wd-contracts">
+      {parts.map((part) => {
+        const draft = form[part.key];
+        return draft ? (
+          <SchemaFieldsEditor
+            key={part.key}
+            id={`wd-${part.key}`}
+            legend={part.legend}
+            explanation={part.explanation}
+            draft={draft}
+            errors={errorsUnder(errors, part.key)}
+            busy={busy}
+            descriptionPlaceholder={part.placeholder}
+            onChange={(next) => onChange(part.key, next)}
+            onRemove={() => {
+              focus(`wd-add-${part.key}`);
+              onChange(part.key, null);
+            }}
+            removeLabel={part.remove}
+            testId={`wd-${part.key}`}
+          />
+        ) : (
+          <div key={part.key} className="stack-s">
+            <span className="text-small">{part.legend}</span>
+            <span className="text-small text-3">{part.explanation}</span>
+            <div>
+              <Button
+                variant="secondary"
+                size="s"
+                icon="plus"
+                disabled={busy}
+                onClick={() => {
+                  focus(`wd-${part.key}-add-field`);
+                  onChange(part.key, emptySchemaDraft());
+                }}
+                data-testid={`wd-add-${part.key}`}
+              >
+                {part.add}
+              </Button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
  * components/catalog/WorkerDefinitionEditor (S6-A A2 — docs/console-completion-plan.md §5.3;
  * S8 W2 U2, audit J7/R6/CW1): `kind` (entry / worker) plus the kind-specific `definition` record
  * (packages/shared/src/worker-definition.ts — systemPrompt, model, name, description,
@@ -433,6 +532,16 @@ export function WorkerDefinitionEditor({
   function update<K extends keyof WorkerDefinitionForm>(key: K, value: WorkerDefinitionForm[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
     if (errors[key]) setErrors((prev) => ({ ...prev, [key]: '' }));
+  }
+
+  /** S11 GO13: a contract's draft changed (or was added / removed) — its errors go with it. */
+  function updateContract(key: 'inputSchema' | 'outputSchema', value: SchemaDraft | null): void {
+    setForm((prev) => ({ ...prev, [key]: value }));
+    setErrors((prev) =>
+      Object.fromEntries(
+        Object.entries(prev).filter(([path]) => path !== key && !path.startsWith(`${key}.`)),
+      ),
+    );
   }
 
   function applyJson(value: Record<string, unknown>): void {
@@ -872,6 +981,9 @@ export function WorkerDefinitionEditor({
                 emptyHint={t('还没有已发布的 Skill。', 'No published Skills yet.')}
               />
             </div>
+          ) : null}
+          {isWorker ? (
+            <ContractFields form={form} errors={errors} busy={busy} onChange={updateContract} />
           ) : null}
         </>
       )}
