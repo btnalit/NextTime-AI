@@ -164,6 +164,8 @@
 
 ### 页首更新记录（2026-10-04 精简时移出，原文照搬）
 
+上一版 2026-10-31（**遗留 545、548 合入（#862，73a1cd5，无迁移，未发版）**：验收切换与恢复 provider 重启 kernel 之后，等 agent-host 日志重新出现 `kernel-link: connected` 才继续；恢复失败或链路没回来按 P1 报并让退出码为 1；runbook 写明切换期间带 `spec.model` 的生产目标会暂停）。
+
 上一版 2026-10-31（**遗留 543、544 合入（#857，0dcc347，无迁移，未发版）**：重试时取自 AgentProfile 的模型按现在的 `allowedModels` 判断，被收窄就按 P-A2 回落并审计；钉住的 Worker 或 Skill 版本不再发布时，提示点名这一步（新提示码 `step_worker_unavailable`、`step_skill_version_unavailable`））。
 
 上一版 2026-10-31（**v0.53.0 发布（#850，tag 在 c8a9c16；主机未应用，停在 v0.50.0）**：遗留 302 发布引用校验（#848）、S11 GO8a WorkerSpec 组建与准入（#853）、GO8b 草稿 Skill 试用批准（#855，含验收修复），迁移 goal/0013，升级按 `release.md` §3.81–§3.84。发布流水线 11 个镜像构建签名与扫描全部成功，release channel 已发）。
