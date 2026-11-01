@@ -1762,11 +1762,13 @@ function pausedNote(
         );
         const usedUp = plannerRoundsUsedUpText(rounds, conclusion, t);
         if (usedUp) {
+          // Mid-sentence after the colon in English: "the planner rounds…", not "The…".
+          const usedUpMid = usedUp.charAt(0).toLowerCase() + usedUp.slice(1);
           return {
             tone: 'warn',
             text: t(
               `需要人决定：${usedUp}，平台不再为${attempt}的失败运行规划器。可以重试步骤、自己修订计划或结束目标。`,
-              `A person must decide: ${usedUp}, so no planner runs for the failure of ${attempt}. Retry the step, revise the plan yourself or end the goal.`,
+              `A person must decide: ${usedUpMid}, so no planner runs for the failure of ${attempt}. Retry the step, revise the plan yourself or end the goal.`,
             ),
           };
         }

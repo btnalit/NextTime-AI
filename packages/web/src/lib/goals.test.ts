@@ -736,6 +736,46 @@ describe('lib/goals', () => {
     );
   });
 
+  it('UX on #870: the planner rounds used up read mid-sentence atop the page in English', () => {
+    const ranRound = (id: string, taskId: string | null) => ({
+      id,
+      status: taskId === null ? ('failed' as const) : ('no_revision' as const),
+      kind: 'proposal' as const,
+      basedOnRevision: 1,
+      stepRunId: 'sr-fetch',
+      stepKey: 'fetch',
+      stepAttempt: 2,
+      failureCategory: 'transient' as const,
+      taskId,
+      revision: null,
+      revisionClass: null,
+      classReasons: [],
+      outcomeReason: taskId === null ? ('revision_budget_exhausted' as const) : null,
+      detail: taskId === null ? '3 of 3 planner rounds already run' : null,
+      createdAt: '2026-10-20T00:05:00.000Z',
+      settledAt: '2026-10-20T00:06:00.000Z',
+    });
+    const goal = goalDetail({
+      status: 'paused',
+      pauseReason: 'needs_decision',
+      planner: 'propose',
+      planningRounds: [
+        ranRound('r-a', 'task-a'),
+        ranRound('r-b', 'task-b'),
+        ranRound('r-c', 'task-c'),
+        ranRound('r-d', null),
+      ],
+      steps: [stepRun({ status: 'failed', attemptCount: 2, failureCategory: 'transient' })],
+    });
+    const budget = goalBudgetRows(goal, zh);
+    expect(goalStateNote(goal, undefined, budget, zh)?.text).toBe(
+      '需要人决定：规划器轮数已用完（3/3），平台不再为步骤「fetch」第 2 次尝试的失败运行规划器。可以重试步骤、自己修订计划或结束目标。',
+    );
+    expect(goalStateNote(goal, undefined, budget, en)?.text).toBe(
+      'A person must decide: the planner rounds are used up (3/3), so no planner runs for the failure of step fetch’s attempt 2. Retry the step, revise the plan yourself or end the goal.',
+    );
+  });
+
   it('a goal paused for a check says it can go on once every finding is recorded', () => {
     const goal = goalRun({ status: 'paused', pauseReason: 'awaiting_reconcile' });
     const budget = goalBudgetRows(goal, zh);
