@@ -15,6 +15,7 @@ import {
   goalFirstAttemptAt,
   goalPlanSource,
   isStepAuthorityHint,
+  isStepContractHint,
   planCheckSentence,
   planHintKey,
   planHintText,
@@ -70,7 +71,7 @@ export function GoalAcceptanceSection({
         {/* What the plan's checks leave to the requester's word; hints about a step's authority
             (S11 GO5c) are the steps card's. */}
         {detail.planRevision.hints
-          .filter((hint) => !isStepAuthorityHint(hint))
+          .filter((hint) => !isStepAuthorityHint(hint) && !isStepContractHint(hint))
           .map((hint) => (
             <Notice key={planHintKey(hint)} tone="warn" testId="goal-plan-hint">
               {planHintText(hint, t, gateNames)}

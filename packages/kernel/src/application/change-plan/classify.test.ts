@@ -267,6 +267,22 @@ describe('classifySkillChange / classifyWorkerDefinitionChange (P1-D)', () => {
     expect(
       classifyWorkerDefinitionChange(WORKER, { ...WORKER, name: 'other', description: 'd' }),
     ).toEqual([]);
+    // S11 GO13: a contract only describes the Worker's input and report — what it may do does
+    // not change with it, so declaring, changing or removing one widens nothing.
+    const report = { type: 'object', properties: { summary: { type: 'string' } } };
+    expect(
+      classifyWorkerDefinitionChange(WORKER, {
+        ...WORKER,
+        inputSchema: report,
+        outputSchema: report,
+      }),
+    ).toEqual([]);
+    expect(
+      classifyWorkerDefinitionChange(
+        { ...WORKER, outputSchema: report },
+        { ...WORKER, outputSchema: { type: 'object', properties: {} } },
+      ),
+    ).toEqual([]);
     // Skills and gates: more is wider (absent is none); fewer is not.
     expect(classifyWorkerDefinitionChange(WORKER, { ...WORKER, skills: ['a'] })).toEqual([
       { path: 'worker.skills', reason: 'loosened' },

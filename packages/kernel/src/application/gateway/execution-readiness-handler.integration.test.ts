@@ -243,8 +243,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           gatekeeperIds.length > 0 ? { resources: { gatekeeper: gatekeeperIds } } : {},
           { role },
         );
-        const matches = await findWorkers(client, workspaceId, { parentAuthority }, '');
-        return matches.some((match) => match.definitionId === definitionId);
+        const { items } = await findWorkers(client, workspaceId, { parentAuthority }, '');
+        return items.some((match) => match.definitionId === definitionId);
       });
     }
 

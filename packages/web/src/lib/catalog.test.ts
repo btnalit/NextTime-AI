@@ -16,6 +16,7 @@ import {
   validateWorkerDefinition,
   withPlanKeyRenamed,
   withPlanKeysKept,
+  workerContractOf,
   workerDefinitionContentFromForm,
   workerDefinitionFormFromWire,
 } from './catalog.js';
@@ -193,6 +194,8 @@ describe('worker definition form → propose_worker_definition{definition}', () 
         gates: 'gk-1',
         skills: 's',
         egressDeny: '',
+        inputSchema: null,
+        outputSchema: null,
       }),
     ).toEqual({ systemPrompt: 'You are the entry agent.', capabilities: [] });
     expect(
@@ -206,6 +209,8 @@ describe('worker definition form → propose_worker_definition{definition}', () 
         gates: 'gk-1',
         skills: '',
         egressDeny: '.internal',
+        inputSchema: null,
+        outputSchema: null,
       }),
     ).toEqual({
       systemPrompt: 'p',
@@ -230,6 +235,84 @@ describe('worker definition form → propose_worker_definition{definition}', () 
     const invalid = validateWorkerDefinition({ ...form, systemPrompt: '' }, zhT);
     expect(invalid.ok).toBe(false);
     if (!invalid.ok) expect(Object.keys(invalid.errors)).toEqual(['systemPrompt']);
+  });
+
+  it('S11 GO13: a worker’s contracts round-trip wire → form → wire; an entry form carries none', () => {
+    const inputSchema = {
+      type: 'object',
+      properties: { host: { type: 'string', description: 'Which host' } },
+      required: ['host'],
+    };
+    // A shape the field list cannot say stays JSON, and comes back as it came.
+    const outputSchema = {
+      type: 'object',
+      properties: { items: { type: 'array', items: { type: 'string' } } },
+    };
+    const form = workerDefinitionFormFromWire('worker', {
+      systemPrompt: 'p',
+      inputSchema,
+      outputSchema,
+    });
+    expect(form.inputSchema?.mode).toBe('fields');
+    expect(form.outputSchema?.mode).toBe('json');
+    expect(workerDefinitionContentFromForm(form)).toEqual({
+      systemPrompt: 'p',
+      inputSchema,
+      outputSchema,
+    });
+    expect(validateWorkerDefinition(form, zhT).ok).toBe(true);
+    const entry = workerDefinitionFormFromWire('entry', { systemPrompt: 'p', inputSchema });
+    expect(entry.inputSchema).toBeNull();
+    expect(
+      workerDefinitionContentFromForm({ ...entry, capabilities: 'search' }),
+    ).not.toHaveProperty('inputSchema');
+  });
+
+  it('S11 GO13: a contract the form cannot send is marked where it is — JSON that does not parse, a field without a name, a schema the platform refuses', () => {
+    const base = workerDefinitionFormFromWire('worker', { systemPrompt: 'p' });
+    const broken = validateWorkerDefinition(
+      {
+        ...base,
+        inputSchema: { mode: 'json', text: '{"type": ' },
+        outputSchema: {
+          mode: 'fields',
+          rows: [{ uid: 'r1', name: '', kind: 'string', required: false, description: '' }],
+          hadProperties: false,
+          hadRequired: false,
+        },
+      },
+      zhT,
+    );
+    expect(broken.ok).toBe(false);
+    if (!broken.ok) {
+      expect(broken.errors.inputSchema).toMatch(/^不是合法的 JSON$/);
+      expect(Object.keys(broken.errors)).toContain('outputSchema.fields.0');
+    }
+    // `pattern` is not a keyword a contract may use (the step output schema rules).
+    const refused = validateWorkerDefinition(
+      {
+        ...base,
+        inputSchema: {
+          mode: 'json',
+          text: JSON.stringify({
+            type: 'object',
+            properties: { h: { type: 'string', pattern: 'x' } },
+          }),
+        },
+      },
+      zhT,
+    );
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(Object.keys(refused.errors).some((key) => key.startsWith('inputSchema'))).toBe(true);
+    }
+  });
+
+  it('S11 GO13: workerContractOf reads only a contract that parses as one', () => {
+    const outputSchema = { type: 'object', properties: { ok: { type: 'boolean' } } };
+    expect(workerContractOf({ systemPrompt: 'p', outputSchema })).toEqual({ outputSchema });
+    expect(workerContractOf({ inputSchema: { type: 'string' }, outputSchema: 'nope' })).toEqual({});
+    expect(workerContractOf({})).toEqual({});
   });
 });
 

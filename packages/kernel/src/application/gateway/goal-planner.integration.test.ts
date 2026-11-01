@@ -8,11 +8,12 @@ import {
   type GoalPlannerMode,
   type HandleClaims,
   type Operation,
+  type OutputSchema,
   PLANNER_OUTPUT_SCHEMA,
   type Role,
 } from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import type {
@@ -31,6 +32,7 @@ import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { advanceGoalRun } from '../goal/advance.js';
 import { createGoalRun } from '../goal/index.js';
+import { PLANNER_WORKERS_MAX_BYTES } from '../goal/planner.js';
 import { adoptRevision, checkRevisionCandidate } from '../goal/revise.js';
 import { lockGoalRun } from '../goal/service.js';
 import { PLANNER_HANDLE_CAPABILITIES, PLANNER_MIN_TOKEN_BUDGET } from '../task/index.js';
@@ -2926,6 +2928,161 @@ describe.runIf(DATABASE_URL !== undefined)(
           ),
         ),
       ).toMatch(/a verification round of the revision in force/);
+    });
+
+    // Last in the file: its large Workers are retired at its end, so no other test reads them.
+    it('S11 GO13: the planner reads whether each Worker would start for the requester, its contract and its hints; past 64 KiB the contracts go, last first, and the kernel logs it', async () => {
+      const publishWith = async (definition: Record<string, unknown>) => {
+        const proposed = await asApp(ownerId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, ownerId, { kind: 'worker', definition }),
+        );
+        await asApp(ownerId, (client) =>
+          publishWorkerDefinition(client, workspaceId, ownerId, {
+            definitionId: proposed.id,
+            version: proposed.version,
+          }),
+        );
+        return proposed.id;
+      };
+      const input: OutputSchema = {
+        type: 'object',
+        properties: { host: { type: 'string' } },
+        required: ['host'],
+      };
+      const report: OutputSchema = {
+        type: 'object',
+        properties: { summary: { type: 'string' } },
+        required: ['summary'],
+      };
+      const contracted = await publishWith({
+        systemPrompt: 'You report on a host.',
+        inputSchema: input,
+        outputSchema: report,
+      });
+      // `request_action` is execute-class, and a member with no gate holds none.
+      const acting = await publishWith({
+        systemPrompt: 'You restart a host.',
+        capabilities: ['request_action'],
+      });
+
+      const requester = await newPrincipal('member');
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const { goalRunId } = await failedForPerson(requester);
+        const [round] = await rounds(goalRunId);
+        if (!round) throw new Error('no round');
+        const task = await plannerTask(round.id);
+        const workers = task.input.workers as Record<string, unknown>[];
+        const byId = new Map(workers.map((entry) => [entry.definitionId, entry]));
+        expect(byId.get(contracted)).toEqual({
+          definitionId: contracted,
+          version: 1,
+          name: null,
+          description: null,
+          gates: [],
+          inputSchema: input,
+          outputSchema: report,
+          startable: true,
+          hints: {
+            windowDays: 90,
+            minSample: 5,
+            cost: { medianTokens: null, tasks: 0, sufficient: false },
+            outcomes: { achieved: 0, total: 0, sufficient: false },
+          },
+        });
+        expect(byId.get(acting)).toMatchObject({
+          startable: false,
+          why: 'capability',
+          capabilityNames: ['request_action'],
+        });
+        // The step Worker's lost attempts (this goal's among them) are in its hints.
+        expect(
+          (byId.get(worker.definitionId)?.hints as { cost: { tasks: number } }).cost.tasks,
+        ).toBeGreaterThan(0);
+        // The planner's family is never offered (as find_workers).
+        const plannerFamily = await asApp(requester, (client) =>
+          findGoalPlannerFamily(client, workspaceId),
+        );
+        expect(byId.has(plannerFamily)).toBe(false);
+        expect(task.input.rules).toEqual(
+          expect.arrayContaining([expect.stringContaining('not a ranking')]),
+        );
+        expect(warn).not.toHaveBeenCalledWith(
+          expect.stringContaining('goal_planner.workers_contracts_omitted'),
+        );
+
+        // Three Workers with a contract near its 16 KiB bound each way: past 64 KiB together.
+        const wide: OutputSchema = {
+          type: 'object',
+          properties: Object.fromEntries(
+            Array.from({ length: 26 }, (_, index) => [
+              `field${index}`,
+              { type: 'string', description: 'd'.repeat(500) },
+            ]),
+          ),
+        };
+        const large: string[] = [];
+        for (const name of ['a', 'b', 'c']) {
+          large.push(
+            await publishWith({
+              systemPrompt: `You report widely (${name}).`,
+              inputSchema: wide,
+              outputSchema: wide,
+            }),
+          );
+        }
+        const second = await failedForPerson(requester);
+        const [secondRound] = await rounds(second.goalRunId);
+        if (!secondRound) throw new Error('no round');
+        const secondTask = await plannerTask(secondRound.id);
+        const fitted = secondTask.input.workers as Record<string, unknown>[];
+        expect(Buffer.byteLength(JSON.stringify(fitted), 'utf8')).toBeLessThanOrEqual(
+          PLANNER_WORKERS_MAX_BYTES,
+        );
+        // Every Worker is still offered; those whose contract went are marked, the last first.
+        expect(fitted.map((entry) => entry.definitionId)).toEqual(
+          expect.arrayContaining([...large, contracted, acting, worker.definitionId]),
+        );
+        const omittedAt = fitted.flatMap((entry, index) => (entry.contractOmitted ? [index] : []));
+        expect(omittedAt.length).toBeGreaterThan(0);
+        for (const index of omittedAt) {
+          expect(fitted[index]).not.toHaveProperty('inputSchema');
+          expect(fitted[index]).not.toHaveProperty('outputSchema');
+          expect(fitted[index]).toHaveProperty('startable');
+          expect(fitted[index]).toHaveProperty('hints');
+        }
+        // No Worker after the first one marked keeps a contract.
+        const firstOmitted = Math.min(...omittedAt);
+        for (const entry of fitted.slice(firstOmitted)) {
+          expect(entry.inputSchema === undefined && entry.outputSchema === undefined).toBe(true);
+        }
+        const logged = warn.mock.calls
+          .map(([line]) => (typeof line === 'string' ? line : ''))
+          .filter((line) => line.includes('goal_planner.workers_contracts_omitted'))
+          .map((line) => JSON.parse(line) as Record<string, unknown>);
+        expect(logged).toEqual([
+          expect.objectContaining({
+            event: 'goal_planner.workers_contracts_omitted',
+            workspaceId,
+            goalRunId: second.goalRunId,
+            basedOnRevision: 1,
+            workers: fitted.length,
+            omitted: omittedAt.length,
+            limit: PLANNER_WORKERS_MAX_BYTES,
+          }),
+        ]);
+        const line = logged[0] as { bytes: number; bytesAfter: number };
+        expect(line.bytes).toBeGreaterThan(PLANNER_WORKERS_MAX_BYTES);
+        expect(line.bytesAfter).toBeLessThanOrEqual(PLANNER_WORKERS_MAX_BYTES);
+      } finally {
+        warn.mockRestore();
+        await raw(
+          `update worker_definitions set status = 'deprecated'
+            where workspace_id = $1 and status = 'published'
+              and definition->>'systemPrompt' like 'You report widely%'`,
+          [workspaceId],
+        );
+      }
     });
   },
 );

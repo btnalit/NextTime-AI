@@ -34,6 +34,7 @@ import {
   readGoalAcceptance,
 } from './acceptance.js';
 import { readCancelLeftovers } from './cancelling.js';
+import { planContractHints } from './contract-hints.js';
 import { procedureConfirmCheck } from './from-procedure.js';
 import { paramsAsRead, planAsRead, planHints, procedureParametersAsRead } from './plan.js';
 import {
@@ -442,6 +443,10 @@ async function planRevisionView(
     plan: planAsRead(plan),
     hints: [
       ...planHints(plan),
+      // S11 GO13: the same steps' contract advice (`contract-hints.ts`).
+      ...(checked.length > 0
+        ? await planContractHints(client, workspaceId, { ...plan, steps: checked })
+        : []),
       ...(checked.length > 0
         ? await planAuthorityHints(
             client,

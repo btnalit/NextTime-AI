@@ -101,6 +101,38 @@ describe('validateWorkerDefinitionContent (pure)', () => {
     ).not.toThrow();
   });
 
+  it('S11 GO13: accepts a worker contract; refuses one a step’s outputSchema would refuse, naming the field', () => {
+    const report = { type: 'object', properties: { summary: { type: 'string' } } };
+    expect(() =>
+      validateWorkerDefinitionContent('worker', {
+        systemPrompt: 'hi',
+        inputSchema: report,
+        outputSchema: report,
+      }),
+    ).not.toThrow();
+    for (const field of ['inputSchema', 'outputSchema']) {
+      let thrown: unknown;
+      try {
+        validateWorkerDefinitionContent('worker', {
+          systemPrompt: 'hi',
+          [field]: { type: 'string' },
+        });
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(WorkerDefinitionValidationError);
+      expect((thrown as Error).message).toContain(`"${field}"`);
+    }
+    // Not an entry definition's field.
+    expect(() =>
+      validateWorkerDefinitionContent('entry', {
+        systemPrompt: 'hi',
+        capabilities: [],
+        outputSchema: report,
+      }),
+    ).toThrow(WorkerDefinitionValidationError);
+  });
+
   it('every capability the entry ceiling actually contains still validates (sanity)', () => {
     expect(() =>
       validateWorkerDefinitionContent('entry', {

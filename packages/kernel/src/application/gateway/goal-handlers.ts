@@ -255,6 +255,10 @@ export function toWirePlanHint(hint: PlanHint): PlanHint {
     ...(hint.capabilityNames !== undefined ? { capabilityNames: [...hint.capabilityNames] } : {}),
     ...(hint.skillRefs !== undefined ? { skillRefs: [...hint.skillRefs] } : {}),
     ...(hint.model !== undefined ? { model: hint.model } : {}),
+    // S11 GO13: where a step's input does not match its Worker's input contract — places only.
+    ...(hint.inputProblems !== undefined
+      ? { inputProblems: hint.inputProblems.map((problem) => ({ ...problem })) }
+      : {}),
     // S11 GO8b: what one trial of the step mounts — what `approve_step_trial` approves.
     ...(hint.trial !== undefined
       ? {

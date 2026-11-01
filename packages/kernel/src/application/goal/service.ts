@@ -8,6 +8,7 @@ import {
 import type { PoolClient } from 'pg';
 import { refuseCredentialText, refuseRedactedText } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
+import { planContractHints } from './contract-hints.js';
 import { type PlanSource, planFromProcedure, refuseProcedureParameters } from './from-procedure.js';
 import { moveGoalRun } from './moves.js';
 import {
@@ -263,9 +264,12 @@ async function replayProposal(
     hints: [
       ...planHints(parsed.data),
       ...(run.status === 'proposed'
-        ? await planAuthorityHints(client, workspaceId, run.requesterId, parsed.data, {
-            checkAccounts,
-          })
+        ? [
+            ...(await planContractHints(client, workspaceId, parsed.data)),
+            ...(await planAuthorityHints(client, workspaceId, run.requesterId, parsed.data, {
+              checkAccounts,
+            })),
+          ]
         : []),
     ],
     status: run.status,
@@ -420,6 +424,7 @@ async function insertGoalRun(
     plan,
     hints: [
       ...hints,
+      ...(await planContractHints(client, workspaceId, plan)),
       ...(await planAuthorityHints(client, workspaceId, input.requesterId, plan, {
         checkAccounts: input.checkAccounts === true,
       })),

@@ -220,6 +220,58 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     ]);
   });
 
+  it('S11 GO13: a contract hint is a note on the steps card and an advice chip on its step, not a step that would not start', async () => {
+    const base = goalDetail();
+    const detail = goalDetail({
+      status: 'proposed',
+      planRevision: {
+        ...base.planRevision,
+        status: 'proposed',
+        hints: [
+          {
+            code: 'step_output_contract_unused',
+            message: 'step "fetch": …',
+            stepKey: 'fetch',
+          },
+          {
+            code: 'step_input_mismatch',
+            message: 'step "apply": …',
+            stepKey: 'apply',
+            inputProblems: [{ path: 'input.host', message: 'required' }],
+            inputProblemCount: 1,
+          },
+        ],
+      },
+    });
+    renderPage(scriptedHttp(baseHandlers(detail)));
+    const notes = await screen.findAllByTestId('goal-step-contract-hint');
+    expect(notes.map((note) => note.textContent)).toEqual([
+      expect.stringContaining('步骤「fetch」的 Worker 声明了输出约定，这一步没有设置'),
+      expect.stringContaining(
+        '步骤「apply」的输入和它的 Worker 声明的输入约定对不上（1 处：「host」）',
+      ),
+    ]);
+    for (const note of notes) expect(screen.getByTestId('goal-steps').contains(note)).toBe(true);
+    // Not the authority list, not acceptance.
+    expect(screen.queryAllByTestId('goal-step-hint')).toEqual([]);
+    expect(screen.queryAllByTestId('goal-plan-hint')).toEqual([]);
+    const row = (key: string) =>
+      screen
+        .getAllByTestId('goal-step')
+        .find((step) => step.dataset.stepKey === key) as HTMLElement;
+    expect(within(row('fetch')).queryAllByTestId('goal-step-hint-chip')).toEqual([]);
+    expect(
+      within(row('fetch'))
+        .getAllByTestId('goal-step-contract-chip')
+        .map((chip) => chip.textContent),
+    ).toEqual(['未用输出约定']);
+    expect(
+      within(row('apply'))
+        .getAllByTestId('goal-step-contract-chip')
+        .map((chip) => chip.textContent),
+    ).toEqual(['输入与约定不符']);
+  });
+
   it('S11 GO8a: a step with a WorkerSpec shows what it sets for its Worker, and the confirmation card what its admission says', async () => {
     const base = goalDetail();
     const OBSERVE_ID = '44444444-4444-4444-8444-444444444444';

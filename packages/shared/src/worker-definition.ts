@@ -6,6 +6,7 @@ import {
   normalizeDenyHostPattern,
   normalizeHostname,
 } from './net-address.js';
+import { StepOutputSchemaSchema } from './output-schema.js';
 
 /**
  * worker-definition: the Zod shape of `worker_definitions.definition` (design doc §5.1.4
@@ -143,6 +144,20 @@ export const WorkerWorkerDefinitionContentSchema = WorkerDefinitionContentBaseSc
   capabilities: z.array(z.string().min(1)).optional(),
   gates: z.array(z.string().min(1)).optional(),
   egressDeny: EgressDenyListSchema.optional(),
+  /**
+   * S11 GO13 (plan §4.12): the Worker's contract — what input it expects and what structured
+   * output it reports, in the JSON Schema subset a step's `outputSchema` uses (`output-schema.ts`,
+   * root `type: 'object'`, the same bounds and validator). A declaration the author makes so a
+   * planner can choose a Worker and wire steps to it, frozen with the version like the rest of
+   * its content; never authority (the ChangePlan classifier: not widening) and never in force by
+   * itself. A plan holds a step to an output contract only by writing it in the step's own
+   * `outputSchema` (the requester confirms what is in force — GO13 fork F1 = A): a plan's check
+   * hints when a step leaves out the Worker's (`step_output_contract_unused`), and when a step's
+   * static input does not match `inputSchema` (`step_input_mismatch`, F2 = A). `invoke_worker`
+   * does not check either. Optional; a definition with neither declares no contract.
+   */
+  inputSchema: StepOutputSchemaSchema.optional(),
+  outputSchema: StepOutputSchemaSchema.optional(),
 }).strict();
 export type WorkerWorkerDefinitionContent = z.infer<typeof WorkerWorkerDefinitionContentSchema>;
 

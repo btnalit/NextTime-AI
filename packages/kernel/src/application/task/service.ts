@@ -1,8 +1,11 @@
 import {
+  type FindWorkersEmptyReasonWire,
   type ProcedureStep,
   TASK_TRANSITIONS,
   type TaskEvent,
   type TaskStatus,
+  type WorkerGateAccessWire,
+  type WorkerHintsWire,
   transition,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
@@ -22,7 +25,11 @@ import {
 import type { FindMeansInput, GraphObject } from '../../substrate/graph/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
 import type { ObserveExclusions } from '../gates/index.js';
-import { observeRefusal, readGatekeeperPlatformPolicy } from '../gates/index.js';
+import {
+  NO_OBSERVE_EXCLUSIONS,
+  observeRefusal,
+  readGatekeeperPlatformPolicy,
+} from '../gates/index.js';
 import { getProcedure, getWorkerDefinition } from '../worker/index.js';
 import {
   type ParentAuthority,
@@ -43,6 +50,15 @@ import {
   mapTaskRow,
   mapWorkerRunRow,
 } from './types.js';
+import {
+  type WorkerContract,
+  emptyWorkerHints,
+  readGateAccessContext,
+  readWorkerHints,
+  workerContractOf,
+  workerGateAccess,
+  workerRefKey,
+} from './worker-discovery.js';
 
 /**
  * application/task/service: `get_task`/`cancel_task`/`terminate` (terminateTask), per-Task token
@@ -548,6 +564,19 @@ export interface WorkerDefinitionMatch {
   readonly description?: string;
 }
 
+/** S11 GO13: a `find_workers` result — the match, its contract, its gates as the caller would
+ *  reach them, and its hints (`worker-discovery.ts`). */
+export interface FoundWorker extends WorkerDefinitionMatch, WorkerContract {
+  readonly gates: readonly WorkerGateAccessWire[];
+  readonly hints: WorkerHintsWire;
+}
+
+/** S11 GO13: `find_workers`' result; `emptyReason` only when `items` is empty. */
+export interface FindWorkersResult {
+  readonly items: readonly FoundWorker[];
+  readonly emptyReason?: FindWorkersEmptyReasonWire;
+}
+
 function toWorkerDefinitionMatch(object: GraphObject): WorkerDefinitionMatch | undefined {
   const identity = object.identityKey;
   const definitionId =
@@ -643,15 +672,20 @@ export async function findWorkers(
   caller: FindMeansCaller,
   need: string,
   limit?: number,
-): Promise<readonly WorkerDefinitionMatch[]> {
+): Promise<FindWorkersResult> {
+  // Nothing asked for, nothing read — and so no reason for an empty result either.
+  if (limit !== undefined && limit <= 0) return { items: [] };
   let plannerFamily: string | null | undefined;
-  return collectUsable(
+  // S11 GO13: why a match was not usable, counted as the candidates are read — exact when the
+  // result is empty (every candidate was read); the planner's family, an entry definition and a
+  // version no longer published are not matches at all.
+  let notDelegable = 0;
+  let excludedByProfile = 0;
+  const usable = await collectUsable(
     (page) => findWorkerDefinitionCandidates(client, workspaceId, { need, ...page }),
     async (candidate) => {
       const match = toWorkerDefinitionMatch(candidate);
       if (!match || match.kind !== 'worker') return undefined;
-      // Cheapest check first: an excluded definition needs no read.
-      if (!isWorkerDefinitionEnabledForCaller(caller, match.definitionId)) return undefined;
 
       const definition = await getWorkerDefinition(client, workspaceId, {
         definitionId: match.definitionId,
@@ -663,26 +697,66 @@ export async function findWorkers(
       // a workspace owner's too (review #488 on #864).
       plannerFamily ??= await findGoalPlannerFamily(client, workspaceId);
       if (plannerFamily !== null && match.definitionId === plannerFamily) return undefined;
+      if (!isWorkerDefinitionEnabledForCaller(caller, match.definitionId)) {
+        excludedByProfile += 1;
+        return undefined;
+      }
 
-      const content = definition.definition as { capabilities?: string[]; gates?: string[] };
+      const content = definition.definition as {
+        capabilities?: string[];
+        gates?: string[];
+      } & Record<string, unknown>;
+      const declaredGates = content.gates ?? [];
       try {
         // Same default as invoke.ts's own minting path (handle-mint.ts's `defaultWorkerCapabilities`
         // — see its own doc comment for why the two must never independently guess at this) — a
         // definition declaring no `capabilities` needs the full observe/propose ceiling, not none.
-        computeChildHandleScope({
+        const childScope = computeChildHandleScope({
           parentAuthority: caller.parentAuthority,
           declaredCapabilities:
             content.capabilities ?? defaultWorkerCapabilities(WORKER_CEILING_CAPABILITIES),
-          declaredGates: content.gates ?? [],
+          declaredGates,
         });
+        return { match, contract: workerContractOf(content), declaredGates, childScope };
       } catch (err) {
-        if (err instanceof InvokeWorkerAttenuationError) return undefined;
+        if (err instanceof InvokeWorkerAttenuationError) {
+          notDelegable += 1;
+          return undefined;
+        }
         throw err;
       }
-      return match;
     },
     limit,
   );
+  if (usable.length === 0) {
+    return {
+      items: [],
+      emptyReason:
+        notDelegable + excludedByProfile === 0
+          ? { kind: 'no_match' }
+          : { kind: 'all_filtered', notDelegable, excludedByProfile },
+    };
+  }
+  const gateContext = usable.some((entry) => entry.declaredGates.length > 0)
+    ? await readGateAccessContext(
+        client,
+        workspaceId,
+        caller.observeExclusions ?? NO_OBSERVE_EXCLUSIONS,
+      )
+    : null;
+  const hints = await readWorkerHints(
+    client,
+    workspaceId,
+    usable.map((entry) => entry.match),
+  );
+  return {
+    items: usable.map(({ match, contract, declaredGates, childScope }) => ({
+      ...match,
+      ...contract,
+      gates: gateContext ? workerGateAccess(gateContext, declaredGates, childScope) : [],
+      hints: hints.get(workerRefKey(match)) ?? emptyWorkerHints(),
+    })),
+  };
 }
 
 /**

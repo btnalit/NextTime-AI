@@ -30,7 +30,13 @@ import {
   procedureBindingIssue,
   procedureWorkersByKey,
 } from '../../lib/procedure-template.js';
-import { type SchemaDraft, emptySchemaDraft, schemaFieldNames } from '../../lib/schema-fields.js';
+import {
+  type SchemaDraft,
+  emptySchemaDraft,
+  schemaDraftFrom,
+  schemaDraftMatches,
+  schemaFieldNames,
+} from '../../lib/schema-fields.js';
 import { AbsenceBasis } from '../goals/AbsenceBasis.js';
 import { useAbsenceOperations } from '../goals/useAbsenceOperations.js';
 import { useObjectLabels } from '../graph/useObjectLabels.js';
@@ -99,6 +105,7 @@ export function WorkerPlanFields({
   steps,
   parameters,
   context,
+  workerOutputSchema,
   errors,
   busy,
   onChange,
@@ -109,6 +116,9 @@ export function WorkerPlanFields({
   readonly steps: readonly ProcedureStepForm[];
   readonly parameters: SchemaDraft | null;
   readonly context: ProcedurePlanContext;
+  /** S11 GO13: the output contract the step's Worker version declares, when it declares one —
+   *  what 「沿用 Worker 的输出约定」 takes onto a step without one. */
+  readonly workerOutputSchema?: OutputSchema;
   readonly errors: FieldErrors;
   readonly busy: boolean;
   readonly onChange: (patch: Partial<ProcedureStepForm>) => void;
@@ -585,27 +595,52 @@ export function WorkerPlanFields({
         </fieldset>
 
         {step.outputSchema !== null ? (
-          <SchemaFieldsEditor
-            id={`${id}-output`}
-            legend={t('输出约定', 'Output contract')}
-            explanation={t(
-              'Worker 交回结果时要带上符合这份约定的 output；后面的步骤只能绑定声明过的输出。',
-              'The Worker’s result carries an output that meets this contract; later steps bind only a declared output.',
-            )}
-            draft={step.outputSchema}
-            errors={errorsUnder(errors, `${prefix}.outputSchema`)}
-            busy={busy}
-            descriptionPlaceholder={t('这个字段是什么（可空）', 'What this field is (optional)')}
-            onChange={(outputSchema) => onChange({ outputSchema })}
-            onRemove={() => {
-              focusAfterRender(() => find('[data-testid="procedure-step-add-output"]'));
-              onChange({ outputSchema: null });
-            }}
-            removeLabel={t('去掉输出约定', 'Drop the output contract')}
-            testId="procedure-step-output"
-          />
+          <>
+            <SchemaFieldsEditor
+              id={`${id}-output`}
+              legend={t('输出约定', 'Output contract')}
+              explanation={t(
+                'Worker 交回结果时要带上符合这份约定的 output；后面的步骤只能绑定声明过的输出。',
+                'The Worker’s result carries an output that meets this contract; later steps bind only a declared output.',
+              )}
+              draft={step.outputSchema}
+              errors={errorsUnder(errors, `${prefix}.outputSchema`)}
+              busy={busy}
+              descriptionPlaceholder={t('这个字段是什么（可空）', 'What this field is (optional)')}
+              onChange={(outputSchema) => onChange({ outputSchema })}
+              onRemove={() => {
+                focusAfterRender(() => find('[data-testid="procedure-step-add-output"]'));
+                onChange({ outputSchema: null });
+              }}
+              removeLabel={t('去掉输出约定', 'Drop the output contract')}
+              testId="procedure-step-output"
+            />
+            {workerOutputSchema !== undefined &&
+            !schemaDraftMatches(step.outputSchema, workerOutputSchema) ? (
+              <div className="row-wrap" data-testid="procedure-step-output-differs">
+                <span className="text-small text-3">
+                  {t(
+                    `这一步的输出约定和所选 Worker 版本 v${step.version} 声明的不同：这一步的输出按这里的约定检查，Worker 照它自己的约定交回的输出可能通不过。`,
+                    `This step’s output contract differs from the one Worker version v${step.version} declares: the step’s output is checked against the contract here, so output the Worker returns under its own contract may not pass.`,
+                  )}
+                </span>
+                <Button
+                  variant="secondary"
+                  size="s"
+                  disabled={busy}
+                  onClick={() => {
+                    focusAfterRender(() => find('[data-testid="procedure-step-output-add-field"]'));
+                    onChange({ outputSchema: schemaDraftFrom(workerOutputSchema) });
+                  }}
+                  data-testid="procedure-step-use-worker-output"
+                >
+                  {t(`改用 v${step.version} 的约定`, `Use v${step.version}’s contract`)}
+                </Button>
+              </div>
+            ) : null}
+          </>
         ) : (
-          <div>
+          <div className="row-wrap">
             <Button
               variant="secondary"
               size="s"
@@ -618,6 +653,28 @@ export function WorkerPlanFields({
             >
               {t('添加输出约定', 'Add an output contract')}
             </Button>
+            {workerOutputSchema !== undefined ? (
+              <>
+                <Button
+                  variant="secondary"
+                  size="s"
+                  disabled={busy}
+                  onClick={() => {
+                    focusAfterRender(() => find('[data-testid="procedure-step-output-add-field"]'));
+                    onChange({ outputSchema: schemaDraftFrom(workerOutputSchema) });
+                  }}
+                  data-testid="procedure-step-adopt-output"
+                >
+                  {t('沿用 Worker 的输出约定', 'Adopt the Worker’s output contract')}
+                </Button>
+                <span className="text-small text-3">
+                  {t(
+                    '这个 Worker 声明了输出约定：沿用后这一步的输出按它检查，后面的步骤可以绑定它的输出。',
+                    'This Worker declares an output contract: adopted, the step’s output is checked against it and later steps can bind to it.',
+                  )}
+                </span>
+              </>
+            ) : null}
           </div>
         )}
       </div>

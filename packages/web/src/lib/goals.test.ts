@@ -26,6 +26,7 @@ import {
   goalStateNote,
   goalStepProgress,
   isStepAuthorityHint,
+  isStepContractHint,
   observationSentence,
   outputProblemText,
   planAbsenceChecks,
@@ -68,6 +69,94 @@ function unresolved(overrides: Partial<UnresolvedGoalActionWire> = {}): Unresolv
 const en: Translate = (_zhText, enText) => enText;
 
 describe('lib/goals', () => {
+  it('S11 GO13: a contract hint is advice, never a step that would not start; places, not values', () => {
+    const unused = {
+      code: 'step_output_contract_unused' as const,
+      message: 'm',
+      stepKey: 'scan',
+    };
+    expect(planHintText(unused, zh)).toMatch(
+      /^步骤「scan」的 Worker 声明了输出约定，这一步没有设置：它的输出不会被检查，后面的步骤也不能绑定它的输出。这只是提示，步骤照常开始。要用这个约定，可以驳回/,
+    );
+    expect(planHintText(unused, zh, new Map(), 'revision')).toMatch(
+      /在「修订计划…」里给这一步沿用 Worker 的输出约定。$/,
+    );
+    expect(planHintText(unused, en)).toMatch(
+      /^Step “scan”: its Worker declares an output contract/,
+    );
+    const mismatch = {
+      code: 'step_input_mismatch' as const,
+      message: 'm',
+      stepKey: 'probe',
+      inputProblems: [
+        { path: 'input.host', message: 'required' },
+        { path: 'input.port', message: 'expected number' },
+        { path: 'input.port', message: 'again' },
+        { path: 'input', message: 'extra' },
+      ],
+      inputProblemCount: 25,
+    };
+    // The exact count, the places once each (the input itself as a whole), never a value.
+    expect(planHintText(mismatch, zh)).toMatch(
+      /^步骤「probe」的输入和它的 Worker 声明的输入约定对不上（25 处：「host」、「port」、整个输入 等）：Worker 可能做不了这一步要它做的事。这只是提示，步骤照常开始；/,
+    );
+    expect(planHintText(mismatch, en, new Map(), 'revision')).toMatch(
+      /^Step “probe”: its input does not match its Worker’s input contract \(25 places: “host”, “port”, the whole input, and more\)/,
+    );
+    // Without the count (an older read), the listed places stand for it.
+    const { inputProblemCount: _, ...older } = mismatch;
+    expect(planHintText(older, zh)).toContain('（4 处：');
+    for (const hint of [unused, mismatch]) {
+      expect(isStepContractHint(hint)).toBe(true);
+      expect(isStepAuthorityHint(hint)).toBe(false);
+    }
+    expect(isStepContractHint({ code: 'step_gate_not_held', message: 'm' })).toBe(false);
+    expect(stepHintChipLabel(unused, zh)).toBe('未用输出约定');
+    expect(stepHintChipLabel(mismatch, en)).toBe('Input off contract');
+  });
+
+  it('S11 GO13 (UX on #880): an input mismatch says what is wrong at each place it can, never the value', () => {
+    const mismatch = {
+      code: 'step_input_mismatch' as const,
+      message: 'm',
+      stepKey: 'probe',
+      inputProblems: [
+        { path: 'input.host', message: 'required, missing' },
+        { path: 'input.count', message: 'expected integer, got string' },
+        {
+          path: 'input.mode',
+          message: 'not declared by the schema (additionalProperties is false)',
+        },
+        { path: 'input.port', message: 'expected integer or null, got number' },
+        { path: 'input.name', message: 'shorter than 3 characters' },
+      ],
+      inputProblemCount: 5,
+    };
+    expect(planHintText(mismatch, zh)).toContain(
+      '（5 处：「host」缺少（必填）、「count」应为整数、「mode」约定里没有这个字段 等）',
+    );
+    expect(planHintText(mismatch, en)).toContain(
+      '(5 places: “host” is missing (required), “count” should be an integer, “mode” is not a field of the contract, and more)',
+    );
+    // Past the first three, and for words the hint does not repeat, the place alone.
+    const later = {
+      ...mismatch,
+      inputProblems: mismatch.inputProblems.slice(3),
+      inputProblemCount: 2,
+    };
+    expect(planHintText(later, zh)).toContain('（2 处：「port」应为整数或空值、「name」）');
+    expect(planHintText(later, en)).toContain(
+      '(2 places: “port” should be an integer or null, “name”)',
+    );
+    // An unknown type name in the validator's words: the place alone, not a half reason.
+    const odd = {
+      ...mismatch,
+      inputProblems: [{ path: 'input.x', message: 'expected decimal, got string' }],
+      inputProblemCount: 1,
+    };
+    expect(planHintText(odd, zh)).toContain('（1 处：「x」）');
+  });
+
   it("reads the confirmation card's hints by step, a gate by its name where known", () => {
     const gateNames = new Map([['11111111-2222-4333-8444-555555555555', 'prod-cert-gate']]);
     const gate = {

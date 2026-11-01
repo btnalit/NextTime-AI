@@ -27,8 +27,10 @@ import {
   PLANNER_MIN_TOKEN_BUDGET,
   type PlannerTemplate,
   type PreparedStepAttempt,
+  type StepAttemptRefusal,
   countStepAttemptsWithoutResult,
   createPlanningTask,
+  emptyWorkerHints,
   ensurePlannerDefinition,
   findGoalPlannerFamily,
   findGoalPlannerPrincipal,
@@ -39,6 +41,10 @@ import {
   readGoalRunUsage,
   readStepAttemptTask,
   readTaskPlanningRound,
+  readWorkerHints,
+  resolveStepAuthority,
+  workerContractOf,
+  workerRefKey,
 } from '../task/index.js';
 import {
   DEFAULT_MAX_ATTEMPTS,
@@ -159,6 +165,9 @@ export const PLANNER_INPUT_KIND = 'goal_planning';
 export const PLANNER_OUTPUT_PREVIEW_CHARS = 4000;
 /** At most this many Worker versions are offered to the planner. */
 export const PLANNER_MAX_WORKERS = 50;
+/** S11 GO13: the planner's `workers` past this many bytes of JSON drop their contracts, last
+ *  first, each marked `contractOmitted` (their names, startability and hints stay). */
+export const PLANNER_WORKERS_MAX_BYTES = 64 * 1024;
 /** S11 GO9b: past this many revisions the platform applied on its own for one step's work
  *  ({@link platformAppliedLineage}), a further failure of it is the requester's
  *  (`step_keeps_failing`). */
@@ -201,6 +210,9 @@ const PLANNER_RULES: readonly string[] = [
   'a step that succeeded, was skipped or cancelled cannot change under its key: keep it exactly as it is, or give new work a new key',
   'a value shown as [redacted] is kept only when the whole call it is in (a step worker with its input, a reconcile action or check, an acceptance check) is left exactly as read; anywhere else it is refused',
   'name only Worker versions listed in workers',
+  'a Worker with startable false would not start for the requester now (why says why): a step naming it pauses the goal there',
+  'a Worker’s inputSchema is the input it expects; its outputSchema is what it reports — a step is held to an output, and a later step can bind to it, only when the step sets outputSchema itself (copy the Worker’s); contractOmitted means the Worker declares a contract left out here for size',
+  'workers[].hints are platform statistics over each version’s own recent Tasks (median tokens, primary outcomes), not a ranking: choose a Worker for what it does and its contract, and give little weight to a hint whose sufficient is false',
   'never write a credential: a gate authenticates with the credentials configured on it',
   'the budget does not change with a revision',
 ];
@@ -1040,7 +1052,7 @@ async function plannerInput(
         ),
         wallClockSecondsLeft: wallClockLeft,
       },
-      workers: await plannerWorkers(client, ws),
+      workers: await plannerWorkers(client, ws, goal, base),
       rules: PLANNER_RULES,
     },
     { maxNodes: Number.POSITIVE_INFINITY },
@@ -1129,23 +1141,34 @@ async function failedStepFacts(
   };
 }
 
-/** The Worker versions a step may name: the latest published version of each family of the
- *  workspace, the planner's own family left out (every version of it, a workspace owner's too —
- *  as `find_workers` does). */
+/**
+ * The Worker versions a step may name: the latest published version of each family of the
+ * workspace, the planner's own family left out (every version of it, a workspace owner's too —
+ * as `find_workers` does).
+ *
+ * S11 GO13 (fork F5 = A): each with its contract (`inputSchema` / `outputSchema`), whether a step
+ * naming it would start for the requester now — `resolveStepAuthority`, the one definition a step's
+ * attempt is admitted by (a top-level step without a WorkerSpec) — and its hints
+ * (`readWorkerHints`). A Worker that would not start is still offered, marked (`startable: false`
+ * and `why`), since a person can fix some reasons before the step is reached. Past
+ * {@link PLANNER_WORKERS_MAX_BYTES} the contracts are dropped, last Worker first, each marked
+ * `contractOmitted`, and the kernel says so in its log — the planning Task's stored input keeps
+ * the marks.
+ */
 async function plannerWorkers(
   client: PoolClient,
   workspaceId: string,
+  goal: GoalRunRow,
+  basedOnRevision: number,
 ): Promise<readonly Record<string, unknown>[]> {
   // Not the planner's own family, whoever published a version of it (as `find_workers`).
   const plannerFamily = await findGoalPlannerFamily(client, workspaceId);
   const result = await client.query<{
     id: string;
     version: number;
-    name: unknown;
-    description: unknown;
+    definition: Record<string, unknown>;
   }>(
-    `select distinct on (id) id, version, definition -> 'name' as name,
-            definition -> 'description' as description
+    `select distinct on (id) id, version, definition
        from worker_definitions
       where workspace_id = $1 and kind = 'worker' and status = 'published'
         and id is distinct from $2
@@ -1153,12 +1176,83 @@ async function plannerWorkers(
       limit $3`,
     [workspaceId, plannerFamily, PLANNER_MAX_WORKERS],
   );
-  return result.rows.map((row) => ({
-    definitionId: row.id,
-    version: row.version,
-    name: typeof row.name === 'string' ? row.name : null,
-    description: typeof row.description === 'string' ? row.description : null,
-  }));
+  const refs = result.rows.map((row) => ({ definitionId: row.id, version: row.version }));
+  const hints = await readWorkerHints(client, workspaceId, refs);
+  const workers: Record<string, unknown>[] = [];
+  for (const row of result.rows) {
+    const ref = { definitionId: row.id, version: row.version };
+    // One client, one query at a time: each Worker's admission is read in turn.
+    const authority = await resolveStepAuthority(client, workspaceId, goal.onBehalfOf, ref, false);
+    const content = row.definition;
+    workers.push({
+      definitionId: row.id,
+      version: row.version,
+      name: typeof content.name === 'string' ? content.name : null,
+      description: typeof content.description === 'string' ? content.description : null,
+      gates: Array.isArray(content.gates) ? content.gates : [],
+      ...workerContractOf(content),
+      ...(authority.kind === 'ok' ? { startable: true } : notStartable(authority.refusal)),
+      hints: hints.get(workerRefKey(ref)) ?? emptyWorkerHints(),
+    });
+  }
+  const fitted = fitPlannerWorkers(workers);
+  if (fitted.omitted > 0) {
+    console.warn(
+      JSON.stringify({
+        event: 'goal_planner.workers_contracts_omitted',
+        workspaceId,
+        goalRunId: goal.id,
+        basedOnRevision,
+        workers: workers.length,
+        omitted: fitted.omitted,
+        bytes: fitted.bytesBefore,
+        bytesAfter: fitted.bytesAfter,
+        limit: PLANNER_WORKERS_MAX_BYTES,
+      }),
+    );
+  }
+  return fitted.workers;
+}
+
+/** Why a step naming a Worker would not start for the requester now, as the planner reads it:
+ *  the refusal's reason, and the gates or capabilities it names. */
+function notStartable(refusal: StepAttemptRefusal): Record<string, unknown> {
+  if (refusal.kind === 'authority_lost') {
+    return {
+      startable: false,
+      why: refusal.reason,
+      ...(refusal.gatekeeperIds ? { gatekeeperIds: [...refusal.gatekeeperIds] } : {}),
+      ...(refusal.capabilityNames ? { capabilityNames: [...refusal.capabilityNames] } : {}),
+    };
+  }
+  return { startable: false, why: 'reason' in refusal ? refusal.reason : refusal.kind };
+}
+
+function jsonBytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value), 'utf8');
+}
+
+/** `workers` within {@link PLANNER_WORKERS_MAX_BYTES}: the contracts dropped from the last Worker
+ *  back until it fits, each such Worker marked `contractOmitted: true`. Exported for its test. */
+export function fitPlannerWorkers(workers: readonly Record<string, unknown>[]): {
+  readonly workers: readonly Record<string, unknown>[];
+  readonly omitted: number;
+  readonly bytesBefore: number;
+  readonly bytesAfter: number;
+} {
+  const fitted = [...workers];
+  const bytesBefore = jsonBytes(fitted);
+  let bytes = bytesBefore;
+  let omitted = 0;
+  for (let index = fitted.length - 1; index >= 0 && bytes > PLANNER_WORKERS_MAX_BYTES; index -= 1) {
+    const entry = fitted[index];
+    if (!entry || (entry.inputSchema === undefined && entry.outputSchema === undefined)) continue;
+    const { inputSchema: _input, outputSchema: _output, ...rest } = entry;
+    fitted[index] = { ...rest, contractOmitted: true };
+    omitted += 1;
+    bytes = jsonBytes(fitted);
+  }
+  return { workers: fitted, omitted, bytesBefore, bytesAfter: bytes };
 }
 
 // ----- the planner's report -----------------------------------------------------------------

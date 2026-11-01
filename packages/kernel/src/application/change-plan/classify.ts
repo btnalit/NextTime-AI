@@ -274,6 +274,11 @@ export const WORKER_DEFINITION_FIELD_RULES: Readonly<
   gates: listRule('grows', true),
   // A host taken off the deny list is egress allowed again.
   egressDeny: listRule('shrinks', true),
+  // S11 GO13: the Worker's declared contract — what a planner reads to choose it and wire a step;
+  // never in force by itself (a step holds an output to it only by its own `outputSchema`, which
+  // the requester confirms) and grants nothing.
+  inputSchema: NOT_WIDENING,
+  outputSchema: NOT_WIDENING,
 };
 
 /** One version's content against another, as `compareEntry` does for a type, under `path`. An item

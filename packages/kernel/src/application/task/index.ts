@@ -130,6 +130,8 @@ export {
 
 export {
   type FindMeansCaller,
+  type FindWorkersResult,
+  type FoundWorker,
   type ListTasksFilter,
   type TasksPage,
   type TaskViewer,
@@ -264,3 +266,15 @@ export {
 // S11 W1a E2-1 — `get_skill_stats`, read-time aggregation over the records the work left.
 export { readProcedureOutcomeHints, readProcedureStats } from './procedure-stats.js';
 export { readSkillStats } from './skill-stats.js';
+
+export {
+  type GateAccessContext,
+  type WorkerContract,
+  type WorkerRef,
+  emptyWorkerHints,
+  readGateAccessContext,
+  readWorkerHints,
+  workerContractOf,
+  workerGateAccess,
+  workerRefKey,
+} from './worker-discovery.js';
