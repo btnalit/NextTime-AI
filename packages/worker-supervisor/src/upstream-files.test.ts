@@ -191,6 +191,22 @@ describe('mounting an earlier step’s files', () => {
     expect((await refusal(ctx.service.spawn(downstream()))).state).toBe('not_owned');
   });
 
+  it('refuses an owner marker that is a link or a FIFO, without waiting on the FIFO', async () => {
+    const ctx = setup();
+    await finishedUpstream(ctx);
+    const marker = join(platformDir(UP_TASK), 'owner.json');
+    const copy = join(dir, 'owner-copy.json');
+    writeFileSync(copy, readFileSync(marker, 'utf8'));
+    rmSync(marker);
+    symlinkSync(copy, marker);
+    expect((await refusal(ctx.service.spawn(downstream()))).state).toBe('not_owned');
+
+    rmSync(marker);
+    execFileSync('mkfifo', [marker]);
+    expect(statSync(marker).isFIFO()).toBe(true);
+    expect((await refusal(ctx.service.spawn(downstream()))).state).toBe('not_owned');
+  });
+
   it('refuses when the handoff directory or the whole Task directory is gone', async () => {
     const ctx = setup();
     await finishedUpstream(ctx);

@@ -30,7 +30,17 @@
  * container's own files.
  */
 
-import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  constants as fsConstants,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import { posix as posixPath } from 'node:path';
 import type { StepFilesState } from '@nexttime/shared';
 import { z } from 'zod';
@@ -79,14 +89,22 @@ export function prepareGoalTaskDirs(paths: TaskPaths, owner: TaskOwner): void {
   mkdirSync(taskHandoffPaths(paths).local, { recursive: true });
 }
 
+/** The owner marker, read through one descriptor: opened without following a link
+ *  (`O_NOFOLLOW`) or waiting on a FIFO (`O_NONBLOCK`), checked to be a regular file by `fstat` on
+ *  that descriptor, and read from it — so what is checked is what is read (CodeQL
+ *  js/file-system-race). Anything else, or a marker that does not parse, is no marker. */
 function readTaskOwner(paths: TaskPaths): TaskOwner | undefined {
   const file = posixPath.join(paths.localPlatformDir, TASK_OWNER_FILE_NAME);
+  let fd: number | undefined;
   try {
-    if (!lstatSync(file).isFile()) return undefined;
-    const parsed = TaskOwnerSchema.safeParse(JSON.parse(readFileSync(file, 'utf8')));
+    fd = openSync(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+    if (!fstatSync(fd).isFile()) return undefined;
+    const parsed = TaskOwnerSchema.safeParse(JSON.parse(readFileSync(fd, 'utf8')));
     return parsed.success ? parsed.data : undefined;
   } catch {
     return undefined;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
 }
 
