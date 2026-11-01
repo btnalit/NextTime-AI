@@ -4405,10 +4405,11 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 **GO9 — 规划 Worker 与自主修订**（见 `global-roadmap-2026-10-16.md` §4）
 
 - 实现说明（GO9a，#864，2026-11-01 合入，3ef3ae5；迁移 goal/0014、task/0012）：默认值见项目共享计划 `s11-w2/go9-default-plan.md` §6（项目文件，不入库）。`goal/planner.ts`（推进器的规划阶段：开轮、拒绝原因、作废、报告复查）、`goal/planning-rounds.ts`（读写与 `closePlanning`）、`task/planning-task.ts`（规划任务：`observe_scope '{}'`、`egressDenyAll`、必须带输出契约、不做崩溃重试，Handle 只有 `get_task` / `list_allowed_operations` / `report_task_result`，token 上限取规划器默认值、目标余量、工作区默认值的最小者，`find_workers` 按族排除规划器）、`goal/decide.ts`（`decide_plan_revision`，只有请求人）、`revise.ts` 抽出 `checkRevisionCandidate` / `adoptRevision`（人与规划器同一套检查与采用；人自己修订时未决定的规划器修订被拒）。规划器报告在 `report_task_result` 当场复查（`TaskOutputRejectedError`）；接受时不再重新复查（报告时已在同一基准复查，二次复查对脱敏值不幂等，#493 P2-1）。规划器这一族不能当步骤的 Worker（计划校验点名哪一步，规划任务的 `input.workers` 也不列它）。契约：`confirm_goal.planner`（模式枚举，GO9a 只有 `'propose'`）、`GoalDetailWire.planner` / `planningRounds`、`PlanRevisionSummaryWire.proposer`、`WorkerDefinitionWire.goalPlanner`，审计 `goal_run.planner_granted`、`goal_planning_round.open` / `settle`、`plan_revision.propose`。控制台 `GoalPlannerSection`、确认卡 `goal-op-confirm-planner`。下一步 GO9b：`apply_minor` 模式（平台替请求人采用小修订）。
+- 实现说明（GO9b，#866，2026-11-01 合入，a1ada5c；迁移 goal/0015）：`confirm_goal.planner` 增加 `'apply_minor'`；推进器在 `apply_minor` 的目标上把「需要决定」的暂停换成 `kind = autonomous` 的规划轮（期间不开新尝试），规划器报告复查通过后由平台分级（`revision-class.ts`，原因 `class_reasons` 带可选 `capabilities` / `gates`，`get_goal` 原样读回），小修订按授权采用（`acceptedBy` 记授权人，轮记 `applied`），大修订暂停交请求人；同一份工作按来历最多替改两次，第三次 `step_keeps_failing`；任何暂停以 `run_left_pause` 作废自主轮，非运行态以 `run_not_running` 作废（只限 autonomous）。契约：`PlanningRoundWire.kind` / `revisionClass` / `classReasons`、`PlanRevisionSummaryWire.acceptedBy`。控制台：确认卡三选一、规划器卡片的自主轮与分级原因、计划版本「平台代为接受（授权人 …）」chip。遗留 552–557。下一步 GO10（#870）。
 
 **GO10 — 目标预算全量**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（GO10，#870，2026-11-01 合入，2cef7c6；无迁移）：默认值与协调线程的决定见项目共享计划 `s11-w2/go10-default-plan.md` §3、§7（项目文件，不入库）。推进器规划阶段加无进展熔断（自上次确认、继续或步骤成功以来已自主规划 3 轮时不开新轮，暂停 `paused(no_progress)`，原因只写审计、不写规划轮）；开轮前检查两个计数各对 `maxRevisions`：计划修订（已接受）与规划器轮数（拉起过规划任务的轮，`goal-step.ts` 按去重的 `planning_round_id` 计 `planner_rounds`），到上限记 `failed` / `revision_budget_exhausted`。契约 `GoalUsageWire.plannerTokens`（规划任务 `tokens_used` 之和，已含在 `tokens`）、`plannerRounds`。控制台预算卡、规划器卡片、确认卡规则与 `no_progress` 暂停说明。术语统一为「规划器轮数 / planner rounds」。下一步 GO10b（#872，goal/0016，验收未通过时的规划轮）。
 
 **GO11 — 任务级观察范围**（见 `global-roadmap-2026-10-16.md` §4）
 
