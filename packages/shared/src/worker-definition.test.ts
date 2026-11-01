@@ -103,6 +103,67 @@ describe('worker-definition content schemas', () => {
       });
       expect(result.success).toBe(true);
     });
+
+    // S11 GO13: a Worker declares what input it expects and what it reports, in the one schema
+    // language a step's outputSchema is written in.
+    describe('inputSchema / outputSchema (S11 GO13)', () => {
+      const report = {
+        type: 'object',
+        properties: { summary: { type: 'string' } },
+        required: ['summary'],
+      };
+
+      it('accepts a contract either way, or both', () => {
+        for (const contract of [
+          { inputSchema: report },
+          { outputSchema: report },
+          { inputSchema: report, outputSchema: report },
+        ]) {
+          const result = WorkerWorkerDefinitionContentSchema.safeParse({
+            systemPrompt: 'hi',
+            ...contract,
+          });
+          expect(result.success).toBe(true);
+        }
+      });
+
+      it('refuses a contract a step’s outputSchema would refuse, with the field in the path', () => {
+        const refused = [
+          { type: 'string' },
+          { type: 'object', properties: { id: { type: 'string', pattern: '^a' } } },
+          {
+            type: 'object',
+            properties: Object.fromEntries(
+              Array.from({ length: 40 }, (_, index) => [
+                `field${index}`,
+                { type: 'string', description: 'd'.repeat(500) },
+              ]),
+            ),
+          },
+        ];
+        for (const schema of refused) {
+          for (const field of ['inputSchema', 'outputSchema'] as const) {
+            const result = WorkerWorkerDefinitionContentSchema.safeParse({
+              systemPrompt: 'hi',
+              [field]: schema,
+            });
+            expect(result.success).toBe(false);
+            expect(result.error?.issues[0]?.path[0]).toBe(field);
+          }
+        }
+      });
+
+      it('is a worker-only field: an entry definition refuses it', () => {
+        for (const field of ['inputSchema', 'outputSchema']) {
+          const result = EntryWorkerDefinitionContentSchema.safeParse({
+            systemPrompt: 'hi',
+            capabilities: [],
+            [field]: report,
+          });
+          expect(result.success).toBe(false);
+        }
+      });
+    });
   });
 
   // fix/egress-suffix-match: the documented `.suffix` form was a silent no-op in the egress proxy;

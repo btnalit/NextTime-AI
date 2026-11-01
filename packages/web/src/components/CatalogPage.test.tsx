@@ -1354,6 +1354,51 @@ describe('CatalogPage', () => {
     expect(within(detail).getByTestId('worker-detail-egress').textContent).toBe('internal.example');
   });
 
+  it('S11 GO13: a Worker’s detail lists the contract it declares, field by field, and says it is declared only', async () => {
+    const http = scriptedHttp({
+      list_worker_definitions: () => ({
+        items: [
+          {
+            id: 'wd-scan',
+            version: 1,
+            kind: 'worker',
+            status: 'published',
+            definition: {
+              name: 'Scanner',
+              systemPrompt: 'Scan.',
+              outputSchema: {
+                type: 'object',
+                properties: { hosts: { type: 'array', description: 'Hosts found' } },
+                required: ['hosts'],
+              },
+            },
+          },
+          {
+            id: 'wd-entry',
+            version: 1,
+            kind: 'entry',
+            status: 'published',
+            definition: { systemPrompt: 'Entry.', capabilities: [] },
+          },
+        ],
+      }),
+    });
+    renderPage(http, 'workers');
+    const rows = await screen.findAllByTestId('catalog-row');
+    const scanRow = rows.find((row) => row.textContent?.includes('Scanner')) as HTMLElement;
+    const detail = await selectRow(scanRow);
+    expect(detail.textContent).toContain('输入约定没有声明');
+    const output = within(detail).getByTestId('worker-detail-outputSchema');
+    const [field] = within(output).getAllByTestId('output-contract-field');
+    expect(field?.textContent).toMatch(/^hosts.*必填.*Hosts found$/);
+    expect(detail.textContent).toContain('只是声明：计划里的步骤要按它检查输出');
+    // An entry definition has no contract to show.
+    const entryRow = rows.find((row) => row !== scanRow) as HTMLElement;
+    const entry = await selectRow(entryRow);
+    expect(entry.textContent).not.toContain('输入约定');
+    expect(entry.textContent).not.toContain('输出约定');
+  });
+
   it("Workers tab: the entry version in use and a Worker's newest version read apart (legacy 481)", async () => {
     const entry = (version: number, publishedAt: string) => ({
       id: 'wd-entry',

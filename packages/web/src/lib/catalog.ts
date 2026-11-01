@@ -1,10 +1,12 @@
 import {
+  type OutputSchema,
   type ProcedureStep,
   type ProposeProcedureContent,
   ProposeProcedureContentSchema,
   type ProposeSkillContent,
   ProposeSkillContentSchema,
   PublishedSkillNameSchema,
+  StepOutputSchemaSchema,
   type WorkerDefinitionKind,
   workerDefinitionContentSchemaFor,
 } from '@nexttime/shared';
@@ -838,6 +840,10 @@ export interface WorkerDefinitionForm {
   readonly skills: string;
   /** One per line: hostnames / `.suffix` entries (`egressDeny`). */
   readonly egressDeny: string;
+  /** S11 GO13 (worker only): the input the Worker expects (`inputSchema`); `null` = none declared. */
+  readonly inputSchema: SchemaDraft | null;
+  /** S11 GO13 (worker only): what the Worker reports (`outputSchema`); `null` = none declared. */
+  readonly outputSchema: SchemaDraft | null;
 }
 
 /** A 「Worker」 tab row's item id — the tab lists each published version of a definition as its
@@ -856,6 +862,8 @@ export const EMPTY_WORKER_DEFINITION_FORM: WorkerDefinitionForm = {
   gates: '',
   skills: '',
   egressDeny: '',
+  inputSchema: null,
+  outputSchema: null,
 };
 
 export function workerDefinitionFormFromWire(
@@ -878,6 +886,14 @@ export function workerDefinitionFormFromWire(
     gates: list('gates'),
     skills: list('skills'),
     egressDeny: list('egressDeny'),
+    inputSchema:
+      kind === 'worker' && definition.inputSchema !== undefined
+        ? schemaDraftFrom(definition.inputSchema)
+        : null,
+    outputSchema:
+      kind === 'worker' && definition.outputSchema !== undefined
+        ? schemaDraftFrom(definition.outputSchema)
+        : null,
   };
 }
 
@@ -953,21 +969,75 @@ export function workerDefinitionContentFromForm(
     const skills = splitList(form.skills);
     if (gates.length > 0) definition.gates = gates;
     if (skills.length > 0) definition.skills = skills;
+    // S11 GO13: the contract, as the schema the draft says (JSON that does not parse stands as
+    // its text, so validation says where).
+    if (form.inputSchema) definition.inputSchema = schemaValue(form.inputSchema);
+    if (form.outputSchema) definition.outputSchema = schemaValue(form.outputSchema);
   }
   if (egressDeny.length > 0) definition.egressDeny = egressDeny;
   return definition;
+}
+
+/** S11 GO13: what a `worker` WorkerDefinition version declares as its contract — read from its
+ *  content as the kernel reads it (`workerContractOf`, application/task/worker-discovery.ts): a
+ *  field that does not parse as a contract is left out, never shown as if it were one. */
+export interface WorkerContract {
+  readonly inputSchema?: OutputSchema;
+  readonly outputSchema?: OutputSchema;
+}
+
+export function workerContractOf(definition: Readonly<Record<string, unknown>>): WorkerContract {
+  const read = (value: unknown): OutputSchema | undefined => {
+    if (value === undefined) return undefined;
+    const parsed = StepOutputSchemaSchema.safeParse(value);
+    return parsed.success ? parsed.data : undefined;
+  };
+  const inputSchema = read(definition.inputSchema);
+  const outputSchema = read(definition.outputSchema);
+  return {
+    ...(inputSchema ? { inputSchema } : {}),
+    ...(outputSchema ? { outputSchema } : {}),
+  };
+}
+
+/** S11 GO13: what the form can tell about a Worker's contract before the schema does — JSON that
+ *  does not parse, a list row without a name or with one used twice (`inputSchema.fields.<row>`). */
+function workerContractProblems(form: WorkerDefinitionForm, t: Translate): Record<string, string> {
+  const problems: Record<string, string> = {};
+  if (form.kind !== 'worker') return problems;
+  for (const path of ['inputSchema', 'outputSchema'] as const) {
+    const draft = form[path];
+    if (!draft) continue;
+    if (draft.mode === 'json' && !schemaFromDraft(draft).ok) {
+      problems[path] = t('不是合法的 JSON', 'Not valid JSON');
+    }
+    for (const [row, problem] of schemaRowProblems(draft, t)) {
+      problems[`${path}.fields.${row}`] = problem;
+    }
+  }
+  return problems;
 }
 
 export function validateWorkerDefinition(
   form: WorkerDefinitionForm,
   t: Translate,
 ): ValidationResult<Record<string, unknown>> {
+  const problems = workerContractProblems(form, t);
   const parsed = workerDefinitionContentSchemaFor(form.kind).safeParse(
     workerDefinitionContentFromForm(form),
   );
-  return parsed.success
-    ? { ok: true, value: parsed.data as Record<string, unknown> }
-    : { ok: false, errors: fieldErrorsFromIssues(parsed.error.issues, t) };
+  if (parsed.success && Object.keys(problems).length === 0) {
+    return { ok: true, value: parsed.data as Record<string, unknown> };
+  }
+  // The form's own problem at a place wins over the schema's complaint about the same place.
+  const errors: Record<string, string> = { ...problems };
+  const schemaErrors = parsed.success ? {} : fieldErrorsFromIssues(parsed.error.issues, t);
+  for (const [path, message] of Object.entries(schemaErrors)) {
+    if (!Object.keys(problems).some((own) => path === own || path.startsWith(`${own}.`))) {
+      errors[path] = message;
+    }
+  }
+  return { ok: false, errors };
 }
 
 // -------------------------------------------------------------------------------------------

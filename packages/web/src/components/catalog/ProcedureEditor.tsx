@@ -1,3 +1,4 @@
+import type { OutputSchema } from '@nexttime/shared';
 import { type FormEvent, useMemo, useRef, useState } from 'react';
 import { byData, useFocusAfterRender } from '../../hooks/useFocusAfterRender.js';
 import { useFocusWhenLost } from '../../hooks/useFocusWhenLost.js';
@@ -18,6 +19,7 @@ import {
   validateProcedure,
   withPlanKeyRenamed,
   withPlanKeysKept,
+  workerContractOf,
 } from '../../lib/catalog.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { reviewFieldNames } from '../../lib/credential-review.js';
@@ -658,6 +660,11 @@ export function ProcedureEditor({
                       steps={form.steps}
                       parameters={form.parameters ?? null}
                       context={context}
+                      workerOutputSchema={workerOutputSchemaOf(
+                        workerDefinitions,
+                        step.definitionId,
+                        step.version,
+                      )}
                       errors={errors}
                       busy={busy}
                       onChange={(patch) => updateStep(index, patch)}
@@ -801,6 +808,22 @@ export function ProcedureEditor({
 }
 
 /** Legacy 485: why a step cannot name an entry definition. */
+/** S11 GO13: the output contract a step's picked Worker version declares — `undefined` when the
+ *  version is not among those read, or declares none. */
+function workerOutputSchemaOf(
+  definitions: readonly WorkerDefinitionSummary[] | undefined,
+  definitionId: string,
+  version: string,
+): OutputSchema | undefined {
+  const row = definitions?.find(
+    (definition) =>
+      definition.kind === 'worker' &&
+      definition.id === definitionId &&
+      String(definition.version) === version,
+  );
+  return row ? workerContractOf(row.definition).outputSchema : undefined;
+}
+
 function entryStepText(t: Translate): string {
   return t(
     '入口定义不能作为流程步骤：流程的步骤只能交给 Worker 执行，请换一个 Worker 定义。',

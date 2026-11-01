@@ -589,6 +589,11 @@ interface PlanHintArgs {
   readonly consequence: readonly [string, string];
   /** S11 GO8b: whether a `step_skill_draft` step has one trial a person may approve (`trial`). */
   readonly trial: boolean;
+  /** S11 GO13: where a `step_input_mismatch` step's input does not match its Worker's input
+   *  contract — the places below the input (`host`, `target.zone`), never the values — and how
+   *  many there are. */
+  readonly inputPlaces: readonly (readonly [string, string])[];
+  readonly inputProblemCount: number;
 }
 
 /** S11 GO8a: how the plan changes when what a step's WorkerSpec names cannot be used — a proposal
@@ -725,7 +730,30 @@ const PLAN_HINT: Readonly<
       `Step “${step}” sets its Worker’s model to “${model}”, which this workspace does not allow — ${consequence[1]} A platform administrator can allow it under Platform → Workspaces, or ${changeEn}.`,
     ];
   },
+  // S11 GO13: advice about a step and its Worker's contract — the step starts as the plan says.
+  step_output_contract_unused: ({ step, context }) => [
+    `步骤「${step}」的 Worker 声明了输出约定，这一步没有设置：它的输出不会被检查，后面的步骤也不能绑定它的输出。这只是提示，步骤照常开始。${context === 'proposal' ? '要用这个约定，可以驳回，让助手给这一步设置同样的输出约定。' : '要用这个约定，在「修订计划…」里给这一步沿用 Worker 的输出约定。'}`,
+    `Step “${step}”: its Worker declares an output contract the step does not set — its output is not checked and no later step can bind to it. This is only a note; the step starts as planned. ${context === 'proposal' ? 'To use the contract, turn the plan down so the assistant sets the same output contract on the step.' : 'To use the contract, copy the Worker’s output contract onto the step under “Revise plan…”.'}`,
+  ],
+  step_input_mismatch: ({ step, context, inputPlaces, inputProblemCount }) => {
+    const shown = inputPlaces.slice(0, 3);
+    const more = inputProblemCount > shown.length;
+    const zh = shown.map(([place]) => place).join('、');
+    const en = shown.map(([, place]) => place).join(', ');
+    return [
+      `步骤「${step}」的输入和它的 Worker 声明的输入约定对不上（${inputProblemCount} 处：${zh}${more ? ' 等' : ''}）：Worker 可能做不了这一步要它做的事。这只是提示，步骤照常开始；${context === 'proposal' ? '可以驳回，让助手按约定改输入或换一个 Worker。' : '可以在「修订计划…」里按约定改输入，或者换一个 Worker。'}`,
+      `Step “${step}”: its input does not match its Worker’s input contract (${inputProblemCount} ${inputProblemCount === 1 ? 'place' : 'places'}: ${en}${more ? ', and more' : ''}) — the Worker may not do what the step asks. This is only a note; the step starts as planned. ${context === 'proposal' ? 'Turn the plan down so the assistant fixes the input or picks another Worker.' : 'Under “Revise plan…”, fix the input to the contract or pick another Worker.'}`,
+    ];
+  },
 };
+
+/** S11 GO13: an input problem's place below the step's input, as the hint names it — a field by
+ *  its path (`input.target.zone` as 「target.zone」), the input itself as a whole. */
+function inputPlace(path: string): readonly [string, string] {
+  if (path === 'input') return ['整个输入', 'the whole input'];
+  const place = path.startsWith('input.') ? path.slice('input.'.length) : path;
+  return [`「${place}」`, `“${place}”`];
+}
 
 const inZh: Translate = (zh) => zh;
 const inEn: Translate = (_, en) => en;
@@ -754,6 +782,10 @@ export function planHintText(
     model: hint.model ?? '',
     consequence: STEP_HINT_CONSEQUENCE[retried ? 'retried' : 'first'],
     trial: hint.trial !== undefined,
+    inputPlaces: [...new Set((hint.inputProblems ?? []).map((problem) => problem.path))].map(
+      inputPlace,
+    ),
+    inputProblemCount: hint.inputProblemCount ?? hint.inputProblems?.length ?? 0,
   });
   return t(zh, en);
 }
@@ -802,10 +834,16 @@ export function retriedStepKeys(goal: Partial<Pick<GoalDetailWire, 'steps'>>): R
   );
 }
 
+/** S11 GO13: a hint about a step and its Worker's contract — advice; the step starts as planned. */
+export function isStepContractHint(hint: PlanHint): boolean {
+  return hint.code === 'step_output_contract_unused' || hint.code === 'step_input_mismatch';
+}
+
 /** Whether a plan hint is about the requester's authority over a step (S11 GO5c) — the steps card
- *  shows those; `requester_confirm_only`, about how the goal is verified, stays with acceptance. */
+ *  shows those; `requester_confirm_only`, about how the goal is verified, stays with acceptance;
+ *  a contract hint (S11 GO13) is advice the steps card shows apart. */
 export function isStepAuthorityHint(hint: PlanHint): boolean {
-  return hint.code !== 'requester_confirm_only';
+  return hint.code !== 'requester_confirm_only' && !isStepContractHint(hint);
 }
 
 /** The chip a step row carries for its own authority hint. */
@@ -830,6 +868,10 @@ export function stepHintChipLabel(hint: PlanHint, t: Translate): string | null {
       return t('Worker 已不再发布', 'Worker no longer published');
     case 'step_skill_version_unavailable':
       return t('上次的 Skill 版本不可用', 'Last Skill version gone');
+    case 'step_output_contract_unused':
+      return t('未用输出约定', 'Output contract unused');
+    case 'step_input_mismatch':
+      return t('输入与约定不符', 'Input off contract');
     default:
       return null;
   }

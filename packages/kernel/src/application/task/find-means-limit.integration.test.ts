@@ -181,7 +181,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         ),
       );
 
-      expect(matches.map((m) => m.definitionId).sort()).toEqual([usableA, usableB].sort());
+      expect(matches.items.map((m) => m.definitionId).sort()).toEqual([usableA, usableB].sort());
     });
 
     it('find_workers: a usable match behind more than one candidate page of filtered ones is still found', async () => {
@@ -201,7 +201,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         ),
       );
 
-      expect(matches.map((m) => m.definitionId)).toEqual([usable]);
+      expect(matches.items.map((m) => m.definitionId)).toEqual([usable]);
     });
 
     it('find_operations: execute Operations outside the caller scope do not take result slots', async () => {
@@ -264,7 +264,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const matches = await inTx((client) =>
         findWorkers(client, workspaceId, { parentAuthority: entryScope() }, '', 0),
       );
-      expect(matches).toEqual([]);
+      expect(matches).toEqual({ items: [] });
     });
   },
 );

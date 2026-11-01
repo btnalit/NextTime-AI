@@ -2252,16 +2252,27 @@ const findWorkersHandler: CapabilityHandler = async (client, workspaceId, params
   const agentProfile = ctx?.principalId
     ? await readAgentProfile(client, workspaceId, ctx.principalId)
     : undefined;
+  // S11 GO13: a delegated Worker's gate access is decided by the one observe predicate — the
+  // caller's member's AgentPolicy cap and AgentProfile exclusions and, for a Worker of a scoped
+  // Task (which its nested Task inherits, GO11), that Task's observation scope.
+  const observeExclusions =
+    ctx?.claims && ctx.principalId
+      ? await readHandleObserveExclusions(client, workspaceId, {
+          principalId: ctx.principalId,
+          sessionId: ctx.claims.sid,
+        })
+      : undefined;
   const result = await findWorkers(
     client,
     workspaceId,
     {
       parentAuthority,
       excludedWorkerDefinitionIds: agentProfile?.excludedWorkerDefinitions ?? [],
+      ...(observeExclusions ? { observeExclusions } : {}),
     },
     need,
   );
-  return { result: { items: result } };
+  return { result };
 };
 
 const findOperationsHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {

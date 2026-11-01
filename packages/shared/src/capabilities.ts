@@ -743,20 +743,24 @@ const graphCapabilities = [
     channel: 'handle',
     minRole: 'member',
     paramsSchema: z.object({ need: z.string() }).strict(),
-    resultSchema: listEnvelope(
-      z
-        .object({
-          definitionId: id,
-          version: z.number().int().positive(),
-          kind: z.string(),
-          name: z.string().optional(),
-          description: z.string().optional(),
-        })
-        .strict(),
-    ),
+    // S11 GO13: each result's contract, gate access and hints; why none was found.
+    resultSchema: listEnvelope(wire.FindWorkerItemWireSchema).extend({
+      emptyReason: wire.FindWorkersEmptyReasonWireSchema.optional(),
+    }),
     description:
-      'Find published WorkerDefinition@version whose name/description matches any keyword in ' +
-      '`need` (space/punctuation-separated; a blank need lists every candidate).',
+      'Find published WorkerDefinition@version you could delegate to now (invoke_worker) whose ' +
+      'name/description matches any keyword in `need` (space/punctuation-separated; a blank need ' +
+      'lists every candidate). Each result carries its contract when it declares one — ' +
+      'inputSchema (the input it expects) and outputSchema (the structured output it reports; a ' +
+      'plan step holds it to that only when the step sets the same outputSchema itself) — gates: ' +
+      'each gate it declares and what it could do there for you now (act, observe, or none with ' +
+      'the reason), and hints {windowDays, minSample, cost {medianTokens, tasks, sufficient}, ' +
+      'outcomes {achieved, total, sufficient}}: platform statistics over that version’s Tasks of ' +
+      'the last windowDays days. Hints are not what results are ordered by; with sufficient false ' +
+      'they say little. An empty result carries emptyReason: no_match (no published Worker ' +
+      'matches) or all_filtered with how many matched and you could not delegate to ' +
+      '(notDelegable: needs an execute-class capability you do not hold; excludedByProfile: left ' +
+      'out by your agent settings).',
   },
   {
     name: 'find_procedures',

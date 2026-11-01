@@ -353,8 +353,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           findWorkers(client, workspaceId, { parentAuthority: entryScope() }, 'RouterOS'),
         );
 
-        expect(matches.some((m) => m.name === 'routeros-restarter')).toBe(true);
-        expect(matches.every((m) => m.kind === 'worker')).toBe(true);
+        expect(matches.items.some((m) => m.name === 'routeros-restarter')).toBe(true);
+        expect(matches.items.every((m) => m.kind === 'worker')).toBe(true);
       });
 
       it("excludes a worker definition the caller could never actually invoke (execute-class needs it doesn't hold)", async () => {
@@ -390,7 +390,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           ),
         );
 
-        expect(matches.some((m) => m.name === 'gate-execute-worker-unique-xyz')).toBe(false);
+        expect(matches.items.some((m) => m.name === 'gate-execute-worker-unique-xyz')).toBe(false);
       });
     });
 

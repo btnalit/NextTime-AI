@@ -10,6 +10,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import { byData, useFocusAfterRender } from '../../hooks/useFocusAfterRender.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
+import { workerContractOf } from '../../lib/catalog.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import {
   type CheckDraft,
@@ -43,6 +44,7 @@ import {
   goalBudgetRows,
   goalPlanSource,
   isStepAuthorityHint,
+  isStepContractHint,
   planCheckSentence,
   planDiff,
   planHintText,
@@ -72,6 +74,7 @@ import {
   goalOperationErrors,
   useOperationDone,
 } from './GoalOperationsBar.js';
+import { OutputContractFields } from './OutputContract.js';
 
 export interface GoalPlanEditorProps {
   readonly goal: GoalDetailWire;
@@ -250,7 +253,7 @@ export function GoalPlanEditor({
         // past its proposal says it only while the run is paused (S11 GO8a), in the steps card.
         (result) =>
           result.hints
-            .filter(isStepAuthorityHint)
+            .filter((hint) => isStepAuthorityHint(hint) || isStepContractHint(hint))
             .map((hint) => planHintText(hint, t, gateNames, 'revision')),
       );
     } catch (error) {
@@ -772,6 +775,8 @@ function StepEditor({
           `${step.original.acceptance.length} step acceptance check(s)`,
         )
       : null,
+    // S11 GO13: a step's own output contract stays — the editor only adds one to a step without.
+    step.original?.outputSchema ? t('这一步的输出约定', 'the step’s output contract') : null,
   ].filter((part): part is string => part !== null);
   const inputError = errorOf(`step:${step.uid}:input`);
   return (
@@ -861,6 +866,9 @@ function StepEditor({
             error={errorOf(`step:${step.uid}:worker`)}
             onChange={onChange}
           />
+          {step.original?.outputSchema === undefined ? (
+            <AdoptOutputContract step={step} definitions={definitions} onChange={onChange} />
+          ) : null}
           <fieldset className="stack-s" data-testid="goal-plan-step-depends">
             <legend className="text-small">{t('在这些步骤之后', 'After these steps')}</legend>
             {others.length === 0 ? (
@@ -989,9 +997,11 @@ function WorkerPicker({
           value={step.definitionId}
           onChange={(event) => {
             const newest = definitionVersions(rows, event.target.value)[0];
+            // S11 GO13: a contract taken from the Worker was that version's — picking another drops it.
             onChange({
               definitionId: event.target.value,
               version: newest ? String(newest.version) : '',
+              adoptedOutputSchema: null,
             });
           }}
           invalid={error !== null}
@@ -1024,7 +1034,7 @@ function WorkerPicker({
           id={`${id}-version`}
           aria-label={t('版本', 'Version')}
           value={step.version}
-          onChange={(event) => onChange({ version: event.target.value })}
+          onChange={(event) => onChange({ version: event.target.value, adoptedOutputSchema: null })}
           data-testid="goal-plan-step-version"
         >
           {step.definitionId === '' ? (
@@ -1045,6 +1055,81 @@ function WorkerPicker({
           ))}
         </Select>
       </Field>
+    </div>
+  );
+}
+
+/**
+ * S11 GO13 (plan §4.3, fork F1 = A): a Worker's output contract is declared only — a step's output
+ * is checked, and bound by later steps, by the step's own. For a step without one whose Worker
+ * version declares one, this takes the Worker's onto the step in one press (never typed by hand),
+ * shows what it took, and lets it go again.
+ */
+function AdoptOutputContract({
+  step,
+  definitions,
+  onChange,
+}: {
+  readonly step: StepDraft;
+  readonly definitions: readonly WorkerDefinitionSummary[] | undefined;
+  readonly onChange: (patch: Partial<StepDraft>) => void;
+}) {
+  const t = useT();
+  const ref = useRef<HTMLDivElement>(null);
+  const focusAfterRender = useFocusAfterRender();
+  const focus = (testId: string) =>
+    focusAfterRender(() => ref.current?.querySelector<HTMLElement>(`[data-testid="${testId}"]`));
+  if (step.adoptedOutputSchema !== null) {
+    return (
+      <div className="stack-s" ref={ref} data-testid="goal-plan-step-adopted-output">
+        <span className="text-small">
+          {t(
+            '这一步沿用 Worker 的输出约定：它的输出会按这份约定检查，后面的步骤可以绑定它的输出。',
+            'This step adopts its Worker’s output contract: its output is checked against it, and later steps can bind to it.',
+          )}
+        </span>
+        <OutputContractFields schema={step.adoptedOutputSchema} t={t} explain={false} />
+        <div>
+          <Button
+            variant="ghost"
+            size="s"
+            onClick={() => {
+              focus('goal-plan-step-adopt-output');
+              onChange({ adoptedOutputSchema: null });
+            }}
+            data-testid="goal-plan-step-drop-output"
+          >
+            {t('不沿用', 'Do not adopt')}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+  const row = (definitions ?? []).find(
+    (definition) =>
+      definition.id === step.definitionId && String(definition.version) === step.version,
+  );
+  const declared = row ? workerContractOf(row.definition).outputSchema : undefined;
+  if (declared === undefined) return null;
+  return (
+    <div className="row-wrap" ref={ref}>
+      <Button
+        variant="secondary"
+        size="s"
+        onClick={() => {
+          focus('goal-plan-step-drop-output');
+          onChange({ adoptedOutputSchema: declared });
+        }}
+        data-testid="goal-plan-step-adopt-output"
+      >
+        {t('沿用 Worker 的输出约定', 'Adopt the Worker’s output contract')}
+      </Button>
+      <span className="text-small text-3">
+        {t(
+          '这个 Worker 声明了输出约定，这一步还没有：不沿用，它的输出不检查，后面的步骤也不能绑定它的输出。',
+          'This Worker declares an output contract the step does not have yet: without it, the step’s output is not checked and no later step can bind to it.',
+        )}
+      </span>
     </div>
   );
 }

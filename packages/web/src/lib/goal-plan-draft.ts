@@ -6,6 +6,7 @@ import {
   type GoalPlan,
   MAX_ACCEPTANCE_PROMPT_CHARS,
   MAX_REVISION_REASON_CHARS,
+  type OutputSchema,
   type PlanStep,
   SECRET_FIELD_MASK,
   STEP_KEY_PATTERN,
@@ -58,6 +59,9 @@ export interface StepDraft {
   readonly maxAttempts: string;
   /** The input as JSON text; `''`: no input. */
   readonly inputText: string;
+  /** S11 GO13: the output contract this revision gives a step that has none — its Worker's, taken
+   *  by 「沿用 Worker 的输出约定」; `null` when none is taken (the step keeps what it has). */
+  readonly adoptedOutputSchema: OutputSchema | null;
   readonly removed: boolean;
 }
 
@@ -133,6 +137,7 @@ export function draftFromDetail(detail: GoalDetailWire): PlanDraft {
       dependsOn: step.dependsOn ?? [],
       maxAttempts: step.maxAttempts === undefined ? '' : String(step.maxAttempts),
       inputText: prettyInput(step.input),
+      adoptedOutputSchema: null,
       removed: false,
     })),
     acceptance: (plan.acceptance ?? []).map((check) => ({
@@ -163,6 +168,7 @@ export function emptyStep(): StepDraft {
     dependsOn: [],
     maxAttempts: '',
     inputText: '',
+    adoptedOutputSchema: null,
     removed: false,
   };
 }
@@ -276,6 +282,7 @@ export function planOf(draft: PlanDraft): GoalPlan | null {
         next.input = parsed.value;
       }
     }
+    if (step.adoptedOutputSchema !== null) next.outputSchema = step.adoptedOutputSchema;
     steps.push(next as PlanStep);
   }
   const acceptance: AcceptanceCheck[] = draft.acceptance

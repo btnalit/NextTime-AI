@@ -184,6 +184,8 @@ describe('WorkerDefinitionEditor (S6-A A2, S8 W2 U2)', () => {
           gates: '',
           skills: '',
           egressDeny: '',
+          inputSchema: null,
+          outputSchema: null,
         }}
         onProposed={vi.fn()}
         onDone={vi.fn()}
@@ -218,6 +220,104 @@ describe('WorkerDefinitionEditor (S6-A A2, S8 W2 U2)', () => {
     fireEvent.click(screen.getByTestId('worker-json-apply'));
     expect((screen.getByLabelText(/系统提示词/) as HTMLTextAreaElement).value).toBe('From JSON');
     expect((screen.getByLabelText(/出网拒绝/) as HTMLTextAreaElement).value).toBe('.internal');
+  });
+
+  it('S11 GO13: a Worker’s input and output contracts are edited field by field, survive the JSON view, are sent with the definition, and a broken one is marked on its section', async () => {
+    const { caller, calls } = http({
+      propose_worker_definition: () => ({ id: 'wd-c', version: 1, status: 'draft' }),
+    });
+    render(<WorkerDefinitionEditor http={caller} onProposed={vi.fn()} onDone={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText(/系统提示词/), { target: { value: 'P' } });
+    // Adding a contract hands focus to its 添加字段.
+    fireEvent.click(screen.getByTestId('wd-add-outputSchema'));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByTestId('wd-outputSchema-add-field')),
+    );
+    fireEvent.click(screen.getByTestId('wd-outputSchema-add-field'));
+    const output = screen.getByTestId('wd-outputSchema');
+    fireEvent.change(within(output).getByTestId('wd-outputSchema-field-name'), {
+      target: { value: 'summary' },
+    });
+    fireEvent.click(within(output).getByTestId('wd-outputSchema-field-required'));
+    fireEvent.click(screen.getByTestId('wd-add-inputSchema'));
+    // The input contract in JSON, the way an author may paste one.
+    fireEvent.click(
+      within(screen.getByTestId('wd-inputSchema')).getByTestId('wd-inputSchema-as-json'),
+    );
+    fireEvent.change(screen.getByTestId('wd-inputSchema-json'), {
+      target: { value: '{"type": "object", "properties": {"host": {"type": "string"}' },
+    });
+    fireEvent.click(screen.getByTestId('worker-submit'));
+    // JSON that does not parse is the input contract's problem, and nothing is sent.
+    expect(screen.getByTestId('wd-inputSchema-errors').textContent).toMatch(/不是合法的 JSON/);
+    expect(calls).toEqual([]);
+    fireEvent.change(screen.getByTestId('wd-inputSchema-json'), {
+      target: { value: '{"type": "object", "properties": {"host": {"type": "string"}}}' },
+    });
+    // Through the definition's own JSON view and back, nothing is lost.
+    fireEvent.click(screen.getByTestId('worker-view-json'));
+    fireEvent.click(screen.getByTestId('worker-json-apply'));
+    fireEvent.click(screen.getByTestId('worker-view-form'));
+    expect(
+      (
+        within(screen.getByTestId('wd-outputSchema')).getByTestId(
+          'wd-outputSchema-field-name',
+        ) as HTMLInputElement
+      ).value,
+    ).toBe('summary');
+    fireEvent.click(screen.getByTestId('worker-submit'));
+    await screen.findByTestId('draft-proposed');
+    expect(calls[0]?.params).toEqual({
+      kind: 'worker',
+      definition: {
+        systemPrompt: 'P',
+        inputSchema: { type: 'object', properties: { host: { type: 'string' } } },
+        outputSchema: {
+          type: 'object',
+          properties: { summary: { type: 'string' } },
+          required: ['summary'],
+        },
+      },
+    });
+  });
+
+  it('S11 GO13: dropping a contract leaves it out of the definition and hands focus to the button that adds it back', async () => {
+    const { caller, calls } = http({
+      propose_worker_definition: () => ({ id: 'wd-d', version: 2, status: 'draft' }),
+    });
+    render(
+      <WorkerDefinitionEditor
+        http={caller}
+        newVersionOf={{
+          id: 'wd-d',
+          version: 1,
+          kind: 'worker',
+          status: 'published',
+          definition: {
+            systemPrompt: 'P',
+            outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+          },
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    // The next version starts from the published one's contract, as fields.
+    const output = screen.getByTestId('wd-outputSchema');
+    expect(
+      (within(output).getByTestId('wd-outputSchema-field-name') as HTMLInputElement).value,
+    ).toBe('ok');
+    fireEvent.click(within(output).getByTestId('wd-outputSchema-remove'));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByTestId('wd-add-outputSchema')),
+    );
+    fireEvent.click(screen.getByTestId('worker-submit'));
+    await screen.findByTestId('draft-proposed');
+    expect(calls[0]?.params).toEqual({
+      definitionId: 'wd-d',
+      kind: 'worker',
+      definition: { systemPrompt: 'P' },
+    });
   });
 
   it('reduces pasted URLs, ports and wildcard prefixes in the egress deny list to the bare host the proxy matches', async () => {

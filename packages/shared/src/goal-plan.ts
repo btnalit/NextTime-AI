@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { StepOutputSchemaSchema } from './output-schema.js';
+import {
+  MAX_OUTPUT_PROBLEMS,
+  OutputProblemSchema,
+  StepOutputSchemaSchema,
+} from './output-schema.js';
 import {
   FactCheckSchema,
   ObservationAbsenceCheckSchema,
@@ -312,6 +316,15 @@ export type StepTrialDraftInfo = z.infer<typeof StepTrialDraftInfoSchema>;
  *         plan is revised (the step then starts afresh, admitted as a first attempt).
  *     Worked out on every read like the others: authority and Skills change, and the attempt's own
  *     admission when the step starts decides (`application/task/step-attempt.ts`).
+ *   - S11 GO13, what the step's Worker declares as its contract (`WorkerWorkerDefinitionContent`
+ *     `inputSchema` / `outputSchema`) and the step does not use or meet. Advice, never what stops a
+ *     step: a step starts and is judged as the plan says (fork F1 = A — only the step's own
+ *     `outputSchema` is in force):
+ *       - `step_output_contract_unused` — the Worker declares an output contract and the step
+ *         sets no `outputSchema`: its output is not checked, and no later step can bind to it;
+ *       - `step_input_mismatch` — a step with no `bindings` whose `input` does not match the
+ *         Worker's `inputSchema`; `inputProblems` names the places (`input.…`, never the values).
+ *     Read from the step's pinned WorkerDefinition version, which does not change.
  *   Where they appear: every hint but `requester_confirm_only` is on the proposal of a run still
  *   proposed and — S11 GO8a — on the current revision of a paused run, for its steps that have not
  *   started an attempt, so a pause can say which step would not start and why.
@@ -329,6 +342,8 @@ export const PLAN_HINT_CODE_VALUES = [
   'step_model_not_allowed',
   'step_worker_unavailable',
   'step_skill_version_unavailable',
+  'step_output_contract_unused',
+  'step_input_mismatch',
 ] as const;
 export type PlanHintCode = (typeof PLAN_HINT_CODE_VALUES)[number];
 export const PlanHintCodeSchema = z.enum(PLAN_HINT_CODE_VALUES);
@@ -352,6 +367,12 @@ export const PlanHintSchema = z
     /** S11 GO8a: the model a `step_model_not_offered` / `step_model_not_allowed` step's WorkerSpec
      *  sets. */
     model: z.string().optional(),
+    /** S11 GO13: on `step_input_mismatch`, where the step's `input` does not match its Worker's
+     *  `inputSchema` — places only, never values (`output-schema.ts`). */
+    inputProblems: z.array(OutputProblemSchema).min(1).max(MAX_OUTPUT_PROBLEMS).optional(),
+    /** S11 GO13: with `inputProblems`, how many places there are in all — exact when more than the
+     *  {@link MAX_OUTPUT_PROBLEMS} listed. */
+    inputProblemCount: z.number().int().positive().optional(),
     /** S11 GO8b: on `step_skill_draft`, what one trial of the step would run and a person approves
      *  — the step's WorkerSpec digest and the draft versions it would mount. */
     trial: z

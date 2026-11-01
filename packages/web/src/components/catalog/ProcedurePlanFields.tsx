@@ -30,7 +30,12 @@ import {
   procedureBindingIssue,
   procedureWorkersByKey,
 } from '../../lib/procedure-template.js';
-import { type SchemaDraft, emptySchemaDraft, schemaFieldNames } from '../../lib/schema-fields.js';
+import {
+  type SchemaDraft,
+  emptySchemaDraft,
+  schemaDraftFrom,
+  schemaFieldNames,
+} from '../../lib/schema-fields.js';
 import { AbsenceBasis } from '../goals/AbsenceBasis.js';
 import { useAbsenceOperations } from '../goals/useAbsenceOperations.js';
 import { useObjectLabels } from '../graph/useObjectLabels.js';
@@ -99,6 +104,7 @@ export function WorkerPlanFields({
   steps,
   parameters,
   context,
+  workerOutputSchema,
   errors,
   busy,
   onChange,
@@ -109,6 +115,9 @@ export function WorkerPlanFields({
   readonly steps: readonly ProcedureStepForm[];
   readonly parameters: SchemaDraft | null;
   readonly context: ProcedurePlanContext;
+  /** S11 GO13: the output contract the step's Worker version declares, when it declares one —
+   *  what 「沿用 Worker 的输出约定」 takes onto a step without one. */
+  readonly workerOutputSchema?: OutputSchema;
   readonly errors: FieldErrors;
   readonly busy: boolean;
   readonly onChange: (patch: Partial<ProcedureStepForm>) => void;
@@ -605,7 +614,7 @@ export function WorkerPlanFields({
             testId="procedure-step-output"
           />
         ) : (
-          <div>
+          <div className="row-wrap">
             <Button
               variant="secondary"
               size="s"
@@ -618,6 +627,28 @@ export function WorkerPlanFields({
             >
               {t('添加输出约定', 'Add an output contract')}
             </Button>
+            {workerOutputSchema !== undefined ? (
+              <>
+                <Button
+                  variant="secondary"
+                  size="s"
+                  disabled={busy}
+                  onClick={() => {
+                    focusAfterRender(() => find('[data-testid="procedure-step-output-add-field"]'));
+                    onChange({ outputSchema: schemaDraftFrom(workerOutputSchema) });
+                  }}
+                  data-testid="procedure-step-adopt-output"
+                >
+                  {t('沿用 Worker 的输出约定', 'Adopt the Worker’s output contract')}
+                </Button>
+                <span className="text-small text-3">
+                  {t(
+                    '这个 Worker 声明了输出约定：沿用后这一步的输出按它检查，后面的步骤可以绑定它的输出。',
+                    'This Worker declares an output contract: adopted, the step’s output is checked against it and later steps can bind to it.',
+                  )}
+                </span>
+              </>
+            ) : null}
           </div>
         )}
       </div>

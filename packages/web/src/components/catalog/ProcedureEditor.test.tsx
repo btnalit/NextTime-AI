@@ -569,6 +569,73 @@ describe('ProcedureEditor (S6-A A2)', () => {
     });
   });
 
+  it('S11 GO13: a worker step without an output contract can adopt its Worker version’s, field by field, in one press', async () => {
+    const { caller, calls } = http({
+      propose_procedure: () => ({ id: 'pr-6', version: 1, status: 'draft', name: 'Scan' }),
+    });
+    render(
+      <ProcedureEditor
+        http={caller}
+        workerDefinitions={[
+          {
+            id: 'wd-1',
+            version: 2,
+            kind: 'worker',
+            status: 'published',
+            definition: {
+              name: 'Scanner',
+              outputSchema: {
+                type: 'object',
+                properties: { hosts: { type: 'array' } },
+                required: ['hosts'],
+              },
+            },
+          },
+          {
+            id: 'wd-1',
+            version: 1,
+            kind: 'worker',
+            status: 'published',
+            definition: { name: 'Scanner' },
+          },
+        ]}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/^名称/), { target: { value: 'Scan' } });
+    fireEvent.change(screen.getByLabelText(/^描述/), { target: { value: 'Scan hosts' } });
+    fireEvent.click(screen.getByTestId('procedure-add-step'));
+    const scan = screen.getByTestId('procedure-step');
+    fireEvent.change(within(scan).getByTestId('procedure-step-kind'), {
+      target: { value: 'worker' },
+    });
+    fireEvent.change(within(scan).getByLabelText(/Worker 定义/), { target: { value: 'wd-1' } });
+    // The newest version, which declares one, is picked: adopt it.
+    expect((within(scan).getByTestId('steps.0-version') as HTMLSelectElement).value).toBe('2');
+    fireEvent.click(within(scan).getByTestId('procedure-step-adopt-output'));
+    expect(
+      (within(scan).getByTestId('procedure-step-output-field-name') as HTMLInputElement).value,
+    ).toBe('hosts');
+    // Once the step has a contract, there is nothing to adopt; v1 declares none either.
+    expect(within(scan).queryByTestId('procedure-step-adopt-output')).toBeNull();
+    fireEvent.click(within(scan).getByTestId('procedure-step-output-remove'));
+    fireEvent.change(within(scan).getByTestId('steps.0-version'), { target: { value: '1' } });
+    expect(within(scan).queryByTestId('procedure-step-adopt-output')).toBeNull();
+    fireEvent.change(within(scan).getByTestId('steps.0-version'), { target: { value: '2' } });
+    fireEvent.click(within(scan).getByTestId('procedure-step-adopt-output'));
+    fireEvent.click(screen.getByTestId('procedure-submit'));
+    await screen.findByTestId('draft-proposed');
+    const proposed = calls.find((call) => call.name === 'propose_procedure')?.params as {
+      procedure: { steps: { outputSchema?: unknown }[] };
+    };
+    expect(proposed.procedure.steps[0]?.outputSchema).toEqual({
+      type: 'object',
+      properties: { hosts: { type: 'array' } },
+      required: ['hosts'],
+    });
+  });
+
   it('a renamed key is followed by what named it, and a removal keeps a named step’s key (legacy 453)', async () => {
     const { caller, calls } = http({
       propose_procedure: () => ({ id: 'pr-6', version: 1, status: 'draft', name: 'Two' }),
