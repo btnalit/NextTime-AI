@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.54.0](https://github.com/btnalit/NextTime-AI/compare/v0.53.0...v0.54.0) (2026-11-01)
+
+
+### Features
+
+* **goal:** goal planner proposes a revision when a step fails for the requester (S11 GO9a) ([#864](https://github.com/btnalit/NextTime-AI/issues/864)) ([3ef3ae5](https://github.com/btnalit/NextTime-AI/commit/3ef3ae54bf5ab4fe65149628b49afdb6aa88c78b))
+* **goal:** the platform adopts the planner's minor revisions for the requester (GO9b) ([#866](https://github.com/btnalit/NextTime-AI/issues/866)) ([a1ada5c](https://github.com/btnalit/NextTime-AI/commit/a1ada5c245be970447cfb9a2b8d31bc13b15aa6d))
+
+
+### Bug Fixes
+
+* **accept:** wait for agent-host to reconnect after the kernel restarts (legacy 545, 548) ([#862](https://github.com/btnalit/NextTime-AI/issues/862)) ([73a1cd5](https://github.com/btnalit/NextTime-AI/commit/73a1cd59dd18600b28fd72541535fb549e8d578e))
+* **deps:** floor minimatch at 11.0.1 for pi-coding-agent (GHSA-g3hv-75wg-m249) ([#869](https://github.com/btnalit/NextTime-AI/issues/869)) ([a6263d8](https://github.com/btnalit/NextTime-AI/commit/a6263d81c9fe78c6f31a85c877af8a03c016fccc))
+* **goal:** hold retries to allowed models and name steps pinned to unpublished versions (legacy 543, 544) ([#857](https://github.com/btnalit/NextTime-AI/issues/857)) ([0dcc347](https://github.com/btnalit/NextTime-AI/commit/0dcc34701f8fb036b7f00fc762e5634a35c9f45d))
+
 ## [0.53.0](https://github.com/btnalit/NextTime-AI/compare/v0.52.0...v0.53.0) (2026-10-31)
 
 
