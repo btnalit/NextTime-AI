@@ -31,7 +31,7 @@ allowBuilds:
 # undici floor for the worker-runtime image. The pi CLI itself runs an esbuild bundle with its own
 # inlined undici 8.10.2, which only an upstream pi release can replace (docs/runbooks/pi-upgrade.md §3).
 # minimatch (GHSA-g3hv-75wg-m249, globparts amplification DoS, 2026-11-01 pre-release audit) has no
-# patched 10.x; pi-coding-agent 1.1.0 asks for ^10, so the floor lifts it to 11, whose `minimatch`
+# patched 10.x; pi-coding-agent 1.1.0 pins exactly 10.2.6, so the floor lifts it to 11, whose `minimatch`
 # named export is unchanged. The pi bundle inlines its own copy, like undici above.
 overrides:
   'undici@>=8.0.0 <8.12.2': ^8.12.2
