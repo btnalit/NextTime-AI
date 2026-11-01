@@ -14,10 +14,12 @@ import type {
 } from '../../application/task/index.js';
 import {
   TaskOutputRejectedError,
+  failTaskForModelRefusal,
   findWorkerRunBySessionId,
   postWorkerResult,
   readHandleObserveExclusions,
   readTaskOutputContract,
+  workerModelRefusal,
 } from '../../application/task/index.js';
 import {
   OperationIdentityConflictError,
@@ -298,6 +300,34 @@ export const reportTaskResultHandler: CapabilityHandler = async (
   const onBehalfOf = ctx?.principalId;
   if (!onBehalfOf) {
     throw new Error('report_task_result: caller context is required (dispatch.ts must supply it)');
+  }
+
+  // Legacy 589: the model never answered — llm-proxy refused every call the session made for a
+  // spent budget — so this report is the one worker mode synthesized from nothing. The Task fails
+  // `model_refused`; nothing of the report is stored or checked (an output contract would refuse
+  // the empty report and leave the Task running until its run exits `no_result`).
+  const modelRefusal = await workerModelRefusal(client, workspaceId, sessionId);
+  if (modelRefusal) {
+    if (!workerRun.activityId) {
+      throw new Error(
+        `report_task_result: WorkerRun ${workerRun.id} has no Activity — cannot report for it`,
+      );
+    }
+    const task = await failTaskForModelRefusal(
+      client,
+      workspaceId,
+      onBehalfOf,
+      workerRun.taskId,
+      workerRun.id,
+    );
+    return {
+      result: { id: task.id, status: task.status, activityId: workerRun.activityId, factIds: [] },
+      resourceType: 'task',
+      resourceId: task.id,
+      auditPayload: {
+        modelRefused: { scope: modelRefusal.scope, refusedCalls: modelRefusal.refusedCalls },
+      },
+    };
   }
 
   const sent = params as WorkerResultCapabilityParams;

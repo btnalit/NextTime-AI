@@ -969,6 +969,202 @@ describe('createProxyServer — S6-B budget-exhausted refusal (leftover 19) and 
     expect(upstreamHits).toBe(1);
   });
 
+  // Legacy 589: the refusal is metered, and reaches the kernel before the Worker sees the 402.
+  describe('refused calls are recorded before the 402 (legacy 589)', () => {
+    const exhaustedFor = (blocked: string) => (workspaceId: string) =>
+      workspaceId === blocked
+        ? {
+            workspaceId,
+            scope: 'workspace_daily_tokens' as const,
+            budget: 3_000_000,
+            spent: 3_000_100,
+            until: '2099-01-01T00:00:00.000Z',
+          }
+        : undefined;
+
+    it("delivers a refused record for the Handle's session and the model asked for, and answers only after it is delivered", async () => {
+      let upstreamHits = 0;
+      const upstream = http.createServer((_req, res) => {
+        upstreamHits += 1;
+        res.end();
+      });
+      const upstreamPort = await listen(upstream);
+      cleanup.push(() => closeServer(upstream));
+      const { privateKey, publicKey } = await ephemeralKeyPair();
+      const blockedWorkspace = randomUUID();
+      const delivered: Array<{
+        record: LlmUsageRecord;
+        correlationId?: string;
+        timeoutMs: number;
+      }> = [];
+      let finishDelivery: ((value: boolean) => void) | undefined;
+      const recorded: LlmUsageRecord[] = [];
+      const proxy = createProxyServer({
+        providers: { openai: openAiProvider(upstreamPort) },
+        publicKey,
+        isRevoked: () => false,
+        isBudgetExhausted: exhaustedFor(blockedWorkspace),
+        reporter: {
+          record: (record) => recorded.push(record),
+          deliver: (record, context, timeoutMs) => {
+            delivered.push({ record, correlationId: context.correlationId, timeoutMs });
+            return new Promise<boolean>((resolve) => {
+              finishDelivery = resolve;
+            });
+          },
+        },
+        maxRequestBodyBytes: 1_000_000,
+        upstreamConnectTimeoutMs: 2000,
+        upstreamIdleTimeoutMs: 2000,
+        resolveApiKey,
+        log: () => {},
+      });
+      const proxyPort = await listen(proxy);
+      cleanup.push(() => closeServer(proxy));
+
+      const sessionId = randomUUID();
+      const jti = randomUUID();
+      const handle = await signHandle(privateKey, { ws: blockedWorkspace, sid: sessionId, jti });
+      let answered = false;
+      const response = rawRequest({
+        port: proxyPort,
+        method: 'POST',
+        path: '/openai/v1/chat/completions',
+        headers: {
+          authorization: `Bearer ${handle}`,
+          'content-type': 'application/json',
+          'x-correlation-id': 'turn-refused-0001',
+        },
+        body: JSON.stringify({ model: 'gpt-example', stream: true }),
+      }).then((res) => {
+        answered = true;
+        return res;
+      });
+
+      await waitUntil(() => delivered.length > 0);
+      // Held until the kernel has the record: a Worker that reports on the 402 finds it there.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(answered).toBe(false);
+      expect(delivered).toHaveLength(1);
+      expect(delivered[0]?.timeoutMs).toBe(5000);
+      expect(delivered[0]?.correlationId).toBe('turn-refused-0001');
+      expect(delivered[0]?.record).toEqual({
+        workspaceId: blockedWorkspace,
+        sessionId,
+        jti,
+        provider: 'openai',
+        model: 'gpt-example',
+        inputTokens: 0,
+        outputTokens: 0,
+        costUsd: 0,
+        startedAt: expect.any(String),
+        finishedAt: expect.any(String),
+        status: 'refused',
+        refusalScope: 'workspace_daily_tokens',
+        requestId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      });
+      expect(recorded).toEqual([]); // delivered, not also recorded
+
+      finishDelivery?.(true);
+      const res = await response;
+      expect(res.status).toBe(402);
+      expect(JSON.parse(res.body.toString('utf8')).error.code).toBe('budget_exhausted');
+      expect(upstreamHits).toBe(0);
+    });
+
+    it('on a delivery timeout still answers 402, logs it, counts it, and keeps the record queued for the background resend', async () => {
+      const { privateKey, publicKey } = await ephemeralKeyPair();
+      const blockedWorkspace = randomUUID();
+      const lines: string[] = [];
+      // The kernel is down: every flush fails, so the record is requeued and never settled.
+      const kernelCalls: string[] = [];
+      const reporter = new LlmUsageReporter({
+        log: () => {},
+        kernelUrl: 'http://kernel.internal:8080',
+        fetchImpl: async (url) => {
+          kernelCalls.push(String(url));
+          throw new Error('connection refused');
+        },
+        flushIntervalMs: 60_000,
+      });
+      cleanup.push(async () => reporter.close());
+      const metrics = createLlmProxyMetrics();
+      const proxy = createProxyServer({
+        providers: { openai: openAiProvider(1) },
+        publicKey,
+        isRevoked: () => false,
+        isBudgetExhausted: exhaustedFor(blockedWorkspace),
+        reporter,
+        refusalDeliveryTimeoutMs: 100,
+        maxRequestBodyBytes: 1_000_000,
+        upstreamConnectTimeoutMs: 2000,
+        upstreamIdleTimeoutMs: 2000,
+        resolveApiKey,
+        log: (line) => lines.push(line),
+        metrics,
+      });
+      const proxyPort = await listen(proxy);
+      cleanup.push(() => closeServer(proxy));
+
+      const handle = await signHandle(privateKey, { ws: blockedWorkspace });
+      const res = await rawRequest({
+        port: proxyPort,
+        method: 'POST',
+        path: '/openai/v1/chat/completions',
+        headers: { authorization: `Bearer ${handle}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'gpt-example', stream: true }),
+      });
+      expect(res.status).toBe(402);
+      expect(JSON.parse(res.body.toString('utf8')).error.code).toBe('budget_exhausted');
+      expect(kernelCalls.length).toBeGreaterThanOrEqual(1); // the deliver's own flush was tried
+      const timedOut = lines
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((line) => String(line.msg).includes('refusal delivery timed out'));
+      expect(timedOut).toEqual([
+        expect.objectContaining({
+          level: 'warn',
+          provider: 'openai',
+          workspaceId: blockedWorkspace,
+          scope: 'workspace_daily_tokens',
+        }),
+      ]);
+      expect(metrics.render()).toContain(
+        'nexttime_llm_proxy_refusal_delivery_timeouts_total{provider="openai"} 1',
+      );
+      expect(reporter.pending).toBe(1);
+    });
+
+    it('an exhausted workspace asking for a model off the allowlist still gets 403, and nothing is metered', async () => {
+      const { privateKey, publicKey } = await ephemeralKeyPair();
+      const blockedWorkspace = randomUUID();
+      const recorded: LlmUsageRecord[] = [];
+      const proxy = createProxyServer({
+        providers: { openai: openAiProvider(1) },
+        publicKey,
+        isRevoked: () => false,
+        isBudgetExhausted: exhaustedFor(blockedWorkspace),
+        reporter: { record: (record) => recorded.push(record) },
+        maxRequestBodyBytes: 1_000_000,
+        upstreamConnectTimeoutMs: 2000,
+        upstreamIdleTimeoutMs: 2000,
+        resolveApiKey,
+        log: () => {},
+      });
+      const proxyPort = await listen(proxy);
+      cleanup.push(() => closeServer(proxy));
+      const handle = await signHandle(privateKey, { ws: blockedWorkspace });
+      const res = await rawRequest({
+        port: proxyPort,
+        method: 'POST',
+        path: '/openai/v1/chat/completions',
+        headers: { authorization: `Bearer ${handle}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'not-allowlisted', stream: true }),
+      });
+      expect(res.status).toBe(403);
+      expect(recorded).toEqual([]);
+    });
+  });
+
   it('a function-shaped providers option is consulted per request (a provider added later routes without restart)', async () => {
     const upstream = startFakeUpstream({
       sseBody: OPENAI_SSE_BODY,

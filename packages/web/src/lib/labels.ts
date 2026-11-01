@@ -458,6 +458,13 @@ export const TASK_FAILURE_REASON_LABELS: Readonly<
       en: 'The runtime ended the Worker run.',
     },
   },
+  model_refused: {
+    short: { zh: '模型调用被平台拒绝', en: 'Model calls refused' },
+    detail: {
+      zh: '工作区当天的模型预算用完了，平台拒绝了这个 Worker 的每一次模型调用，它什么都没做。预算在 UTC 0 点重置，管理员也可以提高预算。',
+      en: 'The workspace’s daily model budget was spent, so the platform refused every model call this Worker made and it did nothing. The budget resets at 00:00 UTC, or an administrator can raise it.',
+    },
+  },
 };
 
 /** A failed Task's reason as a short label and one sentence. A value an earlier release wrote and

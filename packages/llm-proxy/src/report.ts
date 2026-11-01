@@ -19,7 +19,16 @@
  * session or Handle no longer exists) is dropped with a warn line. A response without per-group
  * results (an older kernel, a network error, any other failure) requeues the whole batch, as
  * before — safe, because every record carries its `requestId` and the kernel skips a replay.
+ *
+ * Delivering a refusal first (legacy 589): `deliver` queues a record and resolves once the kernel
+ * has settled the batch that carried it (or after a timeout). proxy.ts awaits it for a `refused`
+ * record before it answers the 402, so the kernel already holds the refusal — and, the queue
+ * being FIFO and settled per workspace, every earlier record of that workspace — when the Worker
+ * sees the 402 and reports. Calls within one session are sequential, so the kernel's "every model
+ * call of this session was refused" check at report time reads a complete set. On a timeout the
+ * record stays queued and is resent in the background like any other.
  */
+import type { LlmRefusalScope } from '@nexttime/shared';
 
 export interface LlmUsageRecord {
   readonly workspaceId: string;
@@ -34,8 +43,12 @@ export interface LlmUsageRecord {
   readonly costUsd?: number;
   readonly startedAt: string;
   readonly finishedAt?: string;
-  /** `'completed'` or `'error'` — see index.ts's call sites for exactly when each is used. */
+  /** `'completed'`, `'error'` or `'refused'` — see proxy.ts's call sites for exactly when each is
+   *  used. `refused` (legacy 589): this proxy answered the request 402 `budget_exhausted` without
+   *  forwarding it; 0 tokens, cost 0, and `refusalScope` names the budget. */
   readonly status: string;
+  /** Legacy 589: on a `refused` record only — which workspace budget ran out. */
+  readonly refusalScope?: LlmRefusalScope;
   /** R-67: a UUID minted for the one upstream request this record meters (proxy.ts), resent
    *  unchanged on every retry — the kernel's dedupe key, so concurrent requests under one Handle
    *  that start in the same millisecond stay separate records. */
@@ -126,6 +139,10 @@ export class LlmUsageReporter {
   private readonly log: (line: string) => void;
   private timer: NodeJS.Timeout | undefined;
   private flushing = false;
+  /** `deliver` callers waiting on their record's batch to settle, by record identity. */
+  private readonly waiters = new Map<LlmUsageRecord, () => void>();
+  /** A `deliver` arrived while a flush was in flight: flush again as soon as it ends. */
+  private flushAgain = false;
 
   constructor(options: LlmUsageReporterOptions = {}) {
     this.kernelUrl = options.kernelUrl;
@@ -152,6 +169,65 @@ export class LlmUsageReporter {
     }
     this.queue.push(record);
     this.scheduleFlush(this.currentFlushIntervalMs);
+  }
+
+  /**
+   * Legacy 589: `record`, then flush at once and resolve `true` once the kernel has settled the
+   * batch carrying `record` (recorded, or refused for good because its workspace / session /
+   * Handle is gone), or `false` after `timeoutMs` — the record then stays queued and is resent in
+   * the background like any other. Resolves `true` at once with no kernel configured (nothing to
+   * deliver to). Never rejects.
+   */
+  deliver(
+    record: LlmUsageRecord,
+    context: LlmUsageRecordContext,
+    timeoutMs: number,
+  ): Promise<boolean> {
+    this.record(record, context);
+    if (!this.kernelUrl) return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        this.waiters.delete(record);
+        resolve(false);
+      }, timeoutMs);
+      timer.unref?.();
+      this.waiters.set(record, () => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+      this.flushSoon();
+    });
+  }
+
+  /** Flushes now instead of on the timer — or right after the flush in flight, whose batch was
+   *  taken before the record this is for was queued. A failed flush's backoff still applies. */
+  private flushSoon(): void {
+    if (this.flushing) {
+      this.flushAgain = true;
+      return;
+    }
+    if (this.currentFlushIntervalMs > this.baseFlushIntervalMs) return; // backing off: the timer is set
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    }
+    void this.flush();
+  }
+
+  /** Resolves the `deliver` waiters of every record in `batch` that is not in `unsettled`. */
+  private settleWaiters(
+    batch: readonly LlmUsageRecord[],
+    unsettled: readonly LlmUsageRecord[],
+  ): void {
+    if (this.waiters.size === 0) return;
+    const pending = new Set(unsettled);
+    for (const record of batch) {
+      if (pending.has(record)) continue;
+      const waiter = this.waiters.get(record);
+      if (!waiter) continue;
+      this.waiters.delete(record);
+      waiter();
+    }
   }
 
   /** Queued-but-not-yet-flushed record count. Test/observability hook. */
@@ -199,6 +275,7 @@ export class LlmUsageReporter {
         );
         unsettled = batch.filter((record) => !settled.has(record.workspaceId));
       }
+      this.settleWaiters(batch, unsettled);
       if (unsettled.length === 0) {
         this.currentFlushIntervalMs = this.baseFlushIntervalMs;
         return;
@@ -222,6 +299,10 @@ export class LlmUsageReporter {
       this.scheduleFlush(this.currentFlushIntervalMs);
     } finally {
       this.flushing = false;
+      if (this.flushAgain) {
+        this.flushAgain = false;
+        if (this.queue.length > 0) this.flushSoon();
+      }
     }
   }
 

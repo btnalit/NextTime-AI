@@ -410,6 +410,7 @@ function failVerdict(category: StepRunFailureCategory): AttemptVerdict {
  * | failed | `fail(action_refused)` or `fail(outcome_unknown)` | failed with that category — a person decides, whatever became of the Task (GO3c: an action found to have had no effect is never retried on its own) |
  * | failed `no_result` | otherwise | failed `contract_violation` — the step's first such attempt is reworked once (§4.7, legacy 358: phase B, no pause); after that, a person |
  * | failed `budget_exhausted` | otherwise | failed `transient`, GoalRun paused `budget_exhausted` — the attempt's budget is what was left of the goal's |
+ * | failed `model_refused` | otherwise | failed `transient`, GoalRun paused `model_refused` — llm-proxy refused every model call for a spent workspace budget (legacy 589); a retry would spawn a Worker for nothing until it resets or is raised |
  * | failed, any other reason | otherwise | failed `transient` — spawn failed or lost, run lost, Worker crashed, timed out or terminated |
  * | cancelled | any | failed `transient`, GoalRun paused `needs_decision` — someone stopped the Task outside the goal |
  */
@@ -435,6 +436,9 @@ export function judgeFinishedAttempt(
   }
   if (task.failureReason === 'budget_exhausted') {
     return { kind: 'fail', category: 'transient', pause: 'budget_exhausted' };
+  }
+  if (task.failureReason === 'model_refused') {
+    return { kind: 'fail', category: 'transient', pause: 'model_refused' };
   }
   return failVerdict('transient');
 }

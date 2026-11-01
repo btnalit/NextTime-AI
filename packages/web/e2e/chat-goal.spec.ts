@@ -1,6 +1,12 @@
-import { SystemMessageContentSchema, getCapability } from '@nexttime/shared';
-import { type Locator, type Page, expect, test } from '@playwright/test';
+import { getCapability } from '@nexttime/shared';
+import { type Locator, expect, test } from '@playwright/test';
 import { OWNER_API_KEY, loginAsOwner, signedInOwner } from './lib/auth.js';
+import {
+  appendToChatHistory,
+  expectNoSidewaysScroll,
+  openNewChat,
+  systemMessage,
+} from './lib/chat-stand-ins.js';
 
 /**
  * e2e/chat-goal.spec.ts (S11 GO5e-2): a goal in the chat it was proposed from — the proposal as a
@@ -137,20 +143,6 @@ function answer(name: string, result: unknown) {
 
 /** A goal milestone (or its step's Task) as the kernel writes it — checked against the shared
  *  `system.*` content schema, so a renamed field fails here. */
-function systemMessage(sequence: number, at: string, content: Record<string, unknown>) {
-  const parsed = SystemMessageContentSchema.parse(content);
-  return {
-    id: `stand-in-${sequence}`,
-    role: 'system',
-    text: parsed.text,
-    createdAt: at,
-    sequence,
-    kind: parsed.kind,
-    content: parsed,
-    turnId: null,
-  };
-}
-
 const goalUpdate = (
   sequence: number,
   at: string,
@@ -163,18 +155,6 @@ const goalUpdate = (
     goalRunId,
     ...fields,
   });
-
-/** Neither the line nor the page scrolls sideways: a long statement is cut with its whole text as
- *  the title, the milestone itself wraps. */
-async function expectNoSidewaysScroll(page: Page): Promise<void> {
-  const lines = page.getByTestId('system-status-line');
-  for (const line of await lines.all()) {
-    expect(await line.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
-  }
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
-    true,
-  );
-}
 
 /** #737 UX P2-3: a goal's line says which goal on a row of its own under what happened, as wide as
  *  the line allows — never a column of a few characters beside the sentence — and what happened
@@ -194,55 +174,6 @@ async function expectGoalRowUnder(line: Locator): Promise<void> {
     const box = await part.boundingBox();
     if (box) expect(box.width).toBeGreaterThan(box.height);
   }
-}
-
-/** Appends `extra(lastSequence)` to the last page of every chat history the page reads over the
- *  socket; every other frame passes through unchanged, both ways. */
-async function appendToChatHistory(
-  page: Page,
-  extra: (lastSequence: number) => readonly ReturnType<typeof systemMessage>[],
-): Promise<void> {
-  await page.routeWebSocket(/\/ws(\?.*)?$/, (ws) => {
-    const server = ws.connectToServer();
-    const historyCalls = new Set<unknown>();
-    ws.onMessage((message) => {
-      try {
-        const frame = JSON.parse(String(message)) as { id?: unknown; method?: string };
-        if (frame.method === 'get_chat_history') historyCalls.add(frame.id);
-      } catch {
-        // Not JSON: forwarded as it is.
-      }
-      server.send(message);
-    });
-    server.onMessage((message) => {
-      let frame: {
-        id?: unknown;
-        result?: { items: { sequence: number }[]; nextCursor?: string };
-      };
-      try {
-        frame = JSON.parse(String(message));
-      } catch {
-        ws.send(message);
-        return;
-      }
-      if (!historyCalls.has(frame.id) || !frame.result) {
-        ws.send(message);
-        return;
-      }
-      historyCalls.delete(frame.id);
-      if (frame.result.nextCursor === undefined) {
-        const last = frame.result.items.at(-1)?.sequence ?? 0;
-        frame.result.items = [...frame.result.items, ...extra(last)];
-      }
-      ws.send(JSON.stringify(frame));
-    });
-  });
-}
-
-async function openNewChat(page: Page): Promise<void> {
-  await page.goto('/#/work/chats');
-  await page.locator('header').getByRole('button', { name: '新对话' }).click();
-  await expect(page.getByRole('button', { name: '返回对话列表' })).toBeVisible();
 }
 
 test.describe('S11 GO5e-2: a goal in its chat (stand-in messages)', () => {

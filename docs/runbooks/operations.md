@@ -477,6 +477,29 @@ llm-proxy | grep '"level":"audit"'`），和内核平台审计一行（llm-proxy
 对 429 自动重试）。每行带 `until`（下一个 UTC 零点），内核不可达时代理沿用上次集合但到点自动放行。内核事后止损
 （Task `failed: budget_exhausted` + 撤销 Handle → 401）仍是兜底。
 
+**遗留 589（被拒的调用记成用量，模型一个字没答的结果不算数）**：
+- **记录**：llm-proxy 每回一个 402 `budget_exhausted`，都先把这次调用记成一条 `llm_usage.status = 'refused'`
+  的用量：0 token、0 费用，`refusal_scope` 是 `workspace_daily_tokens` 或 `workspace_daily_cost`，带
+  `requestId` 和请求的模型（migrations/llm-usage/0003）。它立刻把记录送给内核，等内核收下（最多 5 s）
+  才回 402。模型不在白名单的 403 照旧不计量。
+- **判定「只被拒」**：至少一条 `refused`，且没有一条 `completed`；`error` 两边都不算。Worker 按它自己的会话
+  判；入口 Turn 只看这个 Turn 自己的调用，而且只看入口会话的（Worker 替同一个人干活，它的调用也挂在这个
+  Turn 上，不算）。命中后：
+  - Worker Task：`report_task_result` 时 Task 失败 `model_refused`（平台失败），WorkerRun 终止、Handle 撤销，
+    这次上报什么都不存；审计带 `modelRefused {scope, refusedCalls}`。
+  - 评测试跑：`errored`，原因 `model_refused`，不判分，也不算哪一边没通过。
+  - 目标：步骤 Task 这样失败后 GoalRun 暂停 `model_refused`（goal/0017）。不会自动恢复，预算重置或调高后
+    由请求者继续。
+  - 入口 Turn：结束为 `failed`，`metadata.modelRefused` 记下预算和次数，对话里写一条 `system.model_refused`
+    系统消息（哪个预算、什么时候重置）。用户先点了停止的，照旧是 `interrupted`。
+- **统计**：`refused` 行不进 Task 的 token 数、预算和试跑费用；平台「运行状态」的调用次数不算它们；
+  `scripts/report-usage.sh` 把它们单列在 `refused` 一栏，`calls` 只数真正发给供应商的。
+- **送达超时**：5 s 内没送到，llm-proxy 照样回 402，打一行 warn `llm-proxy: refusal delivery timed out;
+  answering 402, the record is resent in the background`，计数器
+  `nexttime_llm_proxy_refusal_delivery_timeouts_total{provider}` 加一，记录留在队列里后台重送。这时内核可能
+  已经按旧判定收下了结果：Task `completed`、试跑按空答案判分、Turn `completed` 却没有回复。迟到的
+  `refused` 行只入库，不改已经结束的 Task / 试跑 / Turn。这里有意不做对账，先靠计数器和日志发现。
+
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | 页面顶部「状态目录不可写」 / 写入 503 `store_unwritable` | `${NEXTTIME_DATA}/llm-proxy` 不存在或不归 10001（Docker 代建的是 root） | 运行 `scripts/host-llm-proxy-init.sh`，`--force-recreate llm-proxy` |
@@ -486,6 +509,8 @@ llm-proxy | grep '"level":"audit"'`），和内核平台审计一行（llm-proxy
 | 新供应商在工作区「模型与配额」里看不到 | models.json 未重写（见 `modelsJsonError`）或浏览器缓存 | 刷新平台页看 `models.json 已于 … 重写`；内核每次调用都重读该文件，无需重启 |
 | `/api/llm-admin/*` 403 | 缺 `X-Requested-With` 头（非控制台调用） | 只有控制台会调这些端点；脚本化管理请用 `issue_llm_admin_token` 拿令牌并带上该头 |
 | `/api/llm-admin/*` 401 `token_expired` | 令牌 5 分钟到期 | 控制台自动重取一次；持续 401 检查 caddy → llm-proxy 与 `config/handle.pub` 是否同一密钥对 |
+| Task 失败「模型调用被平台拒绝」（`model_refused`）/ 目标暂停 `model_refused` / 对话里「模型调用被平台拒绝」 | 工作区当天的 token 或费用配额用完了，llm-proxy 拒绝了这次的每一个模型调用（遗留 589） | 等下一个 UTC 零点重置，或调高配额：费用配额在工作区「模型与配额」；`LLM_DAILY_TOKEN_BUDGET` 在 kernel.env，改它是主机变更。暂停的目标由请求者继续 |
+| `nexttime_llm_proxy_refusal_delivery_timeouts_total` 在涨 / llm-proxy 日志 `refusal delivery timed out` | llm-proxy 5 s 内没能把拒绝记录交给内核（内核慢或连不上） | 先查内核健康和 `/internal/llm-usage` 有没有报错；同一时段结束的 Task、试跑、Turn 可能按旧判定收了空结果，对照 `llm_usage` 里该工作区 `status = 'refused'` 的行人工复核 |
 | 从旧版本升级后密钥表单一直显示「待配置」 | 主机仍是升级前的目录布局（`models.json` 还在 `config/` 下） | 按 `docs/runbooks/release.md` §3.2 做一次性目录迁移 |
 
 ## 13. 运行层（S7-E，P-C；docs/platform-admin-design.md §6.5 / §6.7）

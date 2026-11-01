@@ -6,6 +6,7 @@ import {
   GoalOutcomeBasisSchema,
   GoalRunPauseReasonSchema,
   GoalRunStatusSchema,
+  LlmRefusalScopeSchema,
   ObjectiveOutcomeSchema,
   TaskStatusSchema,
 } from './enums.js';
@@ -16,7 +17,8 @@ import { GOAL_RUN_CHANGE_VALUES } from './transitions.js';
  * Chat message `kind`/`content` vocabulary for the system-message kinds `application/linkage`
  * (kernel) writes into `chat_messages` (docs/development-tasks.md S2.11 deliverable 1: "message
  * kinds: system.task_update, system.action_pending, system.action_update; extend the chat message
- * schema/enum in the existing style"; S11 GO5e-2 adds `system.goal_update`).
+ * schema/enum in the existing style"; S11 GO5e-2 adds `system.goal_update`; legacy 589 adds
+ * `system.model_refused`, which `application/chat` writes when it ends a Turn).
  *
  * `chat_messages.role` (migrations/core/0008_chat_messages.sql) already reserves `'system'` for
  * exactly this future case (that migration's own comment says so) — this file is the "existing
@@ -38,6 +40,7 @@ export const SYSTEM_MESSAGE_KIND_VALUES = [
   'system.action_pending',
   'system.action_update',
   'system.goal_update',
+  'system.model_refused',
 ] as const;
 export type SystemMessageKind = (typeof SYSTEM_MESSAGE_KIND_VALUES)[number];
 
@@ -111,11 +114,28 @@ const SystemGoalUpdateContent = z.object({
   revision: z.number().int().positive().optional(),
 });
 
+/**
+ * Legacy 589: the platform refused every model call of an entry Turn — llm-proxy answered 402
+ * `budget_exhausted` because a workspace budget ran out, and no call of the Turn succeeded — so
+ * the Turn ended `failed` with no reply. Written into that Turn's chat (`turnId`) by the kernel when
+ * it ends the Turn, from llm-proxy's own `refused` usage records, never from what the agent said.
+ * `scope` is which budget (`LlmRefusalScope`), `resetsAt` when it resets (the next UTC midnight
+ * after the refusal, ISO 8601).
+ */
+const SystemModelRefusedContent = z.object({
+  kind: z.literal('system.model_refused'),
+  text: z.string(),
+  turnId: z.string(),
+  scope: LlmRefusalScopeSchema,
+  resetsAt: z.string(),
+});
+
 export const SystemMessageContentSchema = z.discriminatedUnion('kind', [
   SystemTaskUpdateContent,
   SystemActionPendingContent,
   SystemActionUpdateContent,
   SystemGoalUpdateContent,
+  SystemModelRefusedContent,
 ]);
 export type SystemMessageContent = z.infer<typeof SystemMessageContentSchema>;
 

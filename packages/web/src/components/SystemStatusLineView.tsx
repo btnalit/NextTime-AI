@@ -2,7 +2,7 @@ import { failureReading } from '../lib/action-outcome.js';
 import { goalMilestoneText } from '../lib/goals.js';
 import { useT } from '../lib/i18n.js';
 import { taskFailureReasonText } from '../lib/labels.js';
-import type { SystemStatusLineData } from '../lib/system-status.js';
+import { type SystemStatusLineData, modelRefusedText } from '../lib/system-status.js';
 import { Icon } from './ui/Icon.js';
 import { StatusChip } from './ui/StatusChip.js';
 
@@ -19,6 +19,8 @@ const OPEN_TITLE = {
   action_update: ['打开审批', 'Open approval'],
   task_update: ['打开任务', 'Open task'],
   goal_update: ['打开目标', 'Open goal'],
+  // Never opened: the Turn it is about is the message right above it.
+  model_refused: ['', ''],
 } as const;
 
 /** components/SystemStatusLineView: the compact inline notice for `system.action_update`/
@@ -29,6 +31,22 @@ const OPEN_TITLE = {
  *  the kernel's line. */
 export function SystemStatusLineView({ line, onOpen, goalLabel }: SystemStatusLineViewProps) {
   const t = useT();
+  // Legacy 589: no chip and nothing to open — what happened and what to do, in the reader's
+  // language, after a short warning label that is never cut.
+  if (line.variant === 'model_refused') {
+    return (
+      <div
+        className="system-status-line"
+        data-testid="system-status-line"
+        data-variant={line.variant}
+      >
+        <span className="system-status-failure text-danger" data-testid="system-status-failure">
+          {t('模型调用被平台拒绝', 'Model calls refused')}
+        </span>
+        <span className="system-status-text">{modelRefusedText(line, t)}</span>
+      </div>
+    );
+  }
   const failure = line.variant === 'action_update' ? failureReading(line, t) : null;
   const chip =
     line.variant === 'action_update' ? (

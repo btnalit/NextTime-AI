@@ -73,6 +73,9 @@ describe('eval-runs (S10 E3-2a)', () => {
 
   it('says why a trial ended without a verdict', () => {
     expect(trialErrorText('cancelled', zhT)).toMatch(/被取消/);
+    // Legacy 589: a spent workspace budget is the platform's doing, not the Worker's.
+    expect(trialErrorText('model_refused', zhT)).toMatch(/平台拒绝了 Worker 的每一次模型调用/);
+    expect(trialErrorText('model_refused', zhT)).toMatch(/没有判分，也不算这一边没通过/);
     expect(trialErrorText('withheld', zhT)).toMatch(/holdout 原文或用例集的 canary/);
     expect(trialErrorText('withheld', zhT)).toMatch(/系统提示词/);
     expect(trialErrorText('no_result', zhT)).toMatch(/没有汇报结果/);

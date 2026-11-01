@@ -250,7 +250,19 @@ export interface ProxyServerOptions {
     res: http.ServerResponse,
     remainderPath: string,
   ) => Promise<void>;
-  readonly reporter: { record(record: LlmUsageRecord, context?: LlmUsageRecordContext): void };
+  readonly reporter: {
+    record(record: LlmUsageRecord, context?: LlmUsageRecordContext): void;
+    /** Legacy 589 (report.ts `LlmUsageReporter.deliver`): records and resolves once the kernel
+     *  holds the record, `false` after `timeoutMs`. Absent (tests): a refusal is only `record`ed. */
+    deliver?(
+      record: LlmUsageRecord,
+      context: LlmUsageRecordContext,
+      timeoutMs: number,
+    ): Promise<boolean>;
+  };
+  /** Legacy 589: how long a budget refusal waits for its `refused` record to reach the kernel
+   *  before answering the 402 anyway. Default {@link REFUSAL_DELIVERY_TIMEOUT_MS}. */
+  readonly refusalDeliveryTimeoutMs?: number;
   readonly maxRequestBodyBytes: number;
   /** Ceiling for establishing the upstream connection / receiving response headers. */
   readonly upstreamConnectTimeoutMs: number;
@@ -287,6 +299,17 @@ export interface ProxyServerOptions {
  * here uses, plus the scope / numbers the kernel reported so the message is concrete.
  */
 export const BUDGET_EXHAUSTED_STATUS = 402;
+
+/**
+ * Legacy 589: the longest a budget refusal waits for its `refused` usage record to reach the
+ * kernel before the 402 goes out. The kernel fails a Task whose every model call was refused
+ * (`model_refused`) by reading those records when the Worker reports — which it does as soon as
+ * it sees the 402 — so the record has to be there first. Past this the 402 is answered anyway, a
+ * `refusal delivery timed out` warn line and `nexttime_llm_proxy_refusal_delivery_timeouts_total`
+ * say so, and the record is resent in the background; a report that beats it is judged without
+ * the refusal (the kernel's earlier behaviour: the run's result is taken as it is).
+ */
+export const REFUSAL_DELIVERY_TIMEOUT_MS = 5000;
 
 export function createProxyServer(options: ProxyServerOptions): http.Server {
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -439,35 +462,8 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
       throw err;
     }
 
-    // S6-B leftover 19 (design doc I18 "到 100% 时 llm-proxy 返回预算耗尽错误"): refused after the
-    // Handle is verified (an unauthenticated caller learns nothing about a workspace's budget)
-    // and before the request body is read, let alone forwarded — no upstream spend at all. The
-    // model list stays answerable: it is synthesized locally and costs nothing.
-    const exhausted = isBudgetExhausted(claims.ws);
-    if (exhausted && !(req.method === 'GET' && remainderPath === '/v1/models')) {
-      log(
-        JSON.stringify({
-          level: 'warn',
-          msg: 'llm-proxy: refused, workspace budget exhausted',
-          correlationId,
-          provider: providerName,
-          workspaceId: claims.ws,
-          scope: exhausted.scope,
-        }),
-      );
-      sendJson(res, BUDGET_EXHAUSTED_STATUS, {
-        error: {
-          code: 'budget_exhausted',
-          message: `workspace budget exhausted (${exhausted.scope}: ${exhausted.spent} of ${exhausted.budget}); resets at ${exhausted.until}`,
-          scope: exhausted.scope,
-          budget: exhausted.budget,
-          spent: exhausted.spent,
-          resetsAt: exhausted.until,
-        },
-      });
-      return;
-    }
-
+    // The model list is synthesized locally and costs nothing: it stays answerable whatever the
+    // workspace's budget (the refusal below comes after it).
     if (req.method === 'GET' && remainderPath === '/v1/models') {
       respondModelsList(res, providerName, provider);
       return;
@@ -519,6 +515,74 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
       return;
     }
     observed.model = modelId;
+
+    // S6-B leftover 19 (design doc I18 "到 100% 时 llm-proxy 返回预算耗尽错误"): refused after the
+    // Handle is verified (an unauthenticated caller learns nothing about a workspace's budget) and
+    // before anything is forwarded — no upstream spend at all. Legacy 589: after the model is
+    // known and allowlisted, so the refusal is recorded against the model that was asked for, and
+    // recorded *before* the 402 goes out (`REFUSAL_DELIVERY_TIMEOUT_MS`).
+    const exhausted = isBudgetExhausted(claims.ws);
+    if (exhausted) {
+      log(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'llm-proxy: refused, workspace budget exhausted',
+          correlationId,
+          provider: providerName,
+          workspaceId: claims.ws,
+          scope: exhausted.scope,
+        }),
+      );
+      const refusedAt = new Date().toISOString();
+      const refusal: LlmUsageRecord = {
+        workspaceId: claims.ws,
+        sessionId: claims.sid,
+        jti: claims.jti,
+        provider: providerName,
+        model: modelId,
+        inputTokens: 0,
+        outputTokens: 0,
+        costUsd: 0,
+        startedAt: startedAt.toISOString(),
+        finishedAt: refusedAt,
+        status: 'refused',
+        refusalScope: exhausted.scope,
+        requestId: randomUUID(),
+      };
+      if (options.reporter.deliver) {
+        const delivered = await options.reporter.deliver(
+          refusal,
+          { correlationId },
+          options.refusalDeliveryTimeoutMs ?? REFUSAL_DELIVERY_TIMEOUT_MS,
+        );
+        if (!delivered) {
+          metrics.recordRefusalDeliveryTimeout(providerName);
+          log(
+            JSON.stringify({
+              level: 'warn',
+              msg: 'llm-proxy: refusal delivery timed out; answering 402, the record is resent in the background',
+              correlationId,
+              provider: providerName,
+              workspaceId: claims.ws,
+              scope: exhausted.scope,
+            }),
+          );
+        }
+      } else {
+        options.reporter.record(refusal, { correlationId });
+      }
+      sendJson(res, BUDGET_EXHAUSTED_STATUS, {
+        error: {
+          code: 'budget_exhausted',
+          message: `workspace budget exhausted (${exhausted.scope}: ${exhausted.spent} of ${exhausted.budget}); resets at ${exhausted.until}`,
+          scope: exhausted.scope,
+          budget: exhausted.budget,
+          spent: exhausted.spent,
+          resetsAt: exhausted.until,
+        },
+      });
+      return;
+    }
 
     // S7-A resolution order: a console key for this provider id, then the env var named by
     // `api_key_env` (now optional — a store provider may have none), else no key at all.

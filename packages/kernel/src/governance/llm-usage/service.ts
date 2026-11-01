@@ -1,3 +1,4 @@
+import { type LlmRefusalScope, LlmRefusalScopeSchema } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { enqueue } from '../../substrate/outbox/index.js';
@@ -24,6 +25,11 @@ import { enqueue } from '../../substrate/outbox/index.js';
 // Wire shape
 // -------------------------------------------------------------------------------------------
 
+/** `llm_usage.status` of a call llm-proxy refused for a spent workspace budget (legacy 589). */
+export const REFUSED_USAGE_STATUS = 'refused';
+/** `llm_usage.status` of a call the provider answered. */
+export const COMPLETED_USAGE_STATUS = 'completed';
+
 /**
  * One normalized usage record, as POSTed (as a JSON array, batched) to `/internal/llm-usage` by
  * `llm-proxy`. Field names are camelCase, matching this codebase's established wire-schema
@@ -49,8 +55,12 @@ export const LlmUsageRecordSchema = z
     startedAt: z.string().datetime(),
     finishedAt: z.string().datetime().optional(),
     /** Free-text outcome (no shared enum — see the migration's own header comment for why);
-     *  `packages/llm-proxy` documents the values it actually writes (`completed`/`error`). */
+     *  `packages/llm-proxy` documents the values it actually writes (`completed` / `error` /
+     *  `refused`). `refused` (legacy 589, migrations/llm-usage/0003): llm-proxy answered the call
+     *  402 because the workspace's daily budget was spent — it never reached the provider. */
     status: z.string().min(1),
+    /** Which budget refused the call — set exactly when `status` is `refused` (legacy 589). */
+    refusalScope: LlmRefusalScopeSchema.optional(),
     /** R-67: llm-proxy's id for the one upstream request this record meters, minted per request
      *  (never taken from the caller) and identical on every replay of the record — the record's
      *  identity (`llm_usage.request_id`, migrations/llm-usage/0002). Absent from an llm-proxy that
@@ -58,7 +68,33 @@ export const LlmUsageRecordSchema = z
      *  `recordUsage`. */
     requestId: z.guid().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((record, ctx) => {
+    const refused = record.status === REFUSED_USAGE_STATUS;
+    if (refused !== (record.refusalScope !== undefined)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['refusalScope'],
+        message: 'refusalScope is set exactly when status is "refused"',
+      });
+    }
+    // A refusal never reached the provider: it must not move a budget, a Task's token count or a
+    // trial's cost (the `llm_usage_refusal` CHECK holds the same rule).
+    if (
+      refused &&
+      (record.inputTokens !== 0 ||
+        record.outputTokens !== 0 ||
+        (record.cacheReadTokens ?? 0) !== 0 ||
+        (record.cacheWriteTokens ?? 0) !== 0 ||
+        (record.costUsd ?? 0) !== 0)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['status'],
+        message: 'a refused record carries no tokens and no cost',
+      });
+    }
+  });
 export type LlmUsageRecord = z.infer<typeof LlmUsageRecordSchema>;
 
 /** A batch POSTed to `/internal/llm-usage` — a bare JSON array (S1.7 task brief: "JSON array of
@@ -191,12 +227,12 @@ const INSERT_USAGE_SQL = `
   insert into llm_usage (
     workspace_id, session_id, jti, turn_id, provider, model,
     input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd,
-    started_at, finished_at, status, request_id
+    started_at, finished_at, status, request_id, refusal_scope
   )
   select $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::text, $6::text,
          $7::bigint, $8::bigint, $9::bigint, $10::bigint, $11::numeric,
          $12::timestamptz + $16::int * interval '1 microsecond', $13::timestamptz, $14::text,
-         $15::uuid
+         $15::uuid, $17::text
    where exists (select 1 from sessions s where s.workspace_id = $1::uuid and s.id = $2::uuid)
      and exists (
        select 1 from capability_handles h where h.workspace_id = $1::uuid and h.jti = $3::uuid
@@ -252,6 +288,7 @@ async function insertUsageRecord(
       record.status,
       record.requestId ?? null,
       offsetMicros,
+      record.refusalScope ?? null,
     ]);
     if ((insert.rowCount ?? 0) > 0) return 'inserted';
 
@@ -416,4 +453,115 @@ export function nextUtcMidnight(now: Date = new Date()): Date {
   return new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0, 0),
   );
+}
+
+// -------------------------------------------------------------------------------------------
+// Legacy 589 — a session whose model never answered (migrations/llm-usage/0003).
+// -------------------------------------------------------------------------------------------
+
+/** A session (or one Turn of it) whose model calls llm-proxy all refused for a spent budget. */
+export interface RefusedOnlyUsage {
+  /** Refused calls counted. */
+  readonly refusedCalls: number;
+  /** The budget that refused the latest of them. */
+  readonly scope: LlmRefusalScope;
+  /** When the latest of them started. */
+  readonly lastRefusedAt: Date;
+}
+
+/**
+ * Whether `sessionId`'s model never answered: at least one call llm-proxy refused for a spent
+ * workspace budget (`status = 'refused'`) and none the provider answered (`status = 'completed'`)
+ * — `null` otherwise, including a session with no usage at all (a run that never called the model
+ * is judged by its result, as before). An upstream error row (`error`) is no answer either, so it
+ * neither makes nor breaks the verdict. `turnId` narrows both counts to the rows attributed to one
+ * Turn — the entry agent's session is one per person and reused across Turns, so a Turn is judged
+ * by its own calls only.
+ *
+ * Exact only if every row of the session's calls so far is in the table: llm-proxy hands a refusal
+ * to the kernel before it answers the 402 (packages/llm-proxy/src/proxy.ts `deliver`), and a
+ * session's calls are sequential, so a Worker that saw its call refused reports only after the
+ * row landed. When that hand-off timed out, the row arrives later and the verdict here is `null`
+ * — the result is then judged as before (docs/runbooks/operations.md, legacy 589 under legacy 19).
+ */
+export async function sessionRefusedOnly(
+  client: PoolClient,
+  workspaceId: string,
+  sessionId: string,
+  options: { readonly turnId?: string } = {},
+): Promise<RefusedOnlyUsage | null> {
+  const turnId = options.turnId ?? null;
+  // The partial index `llm_usage_refused_session_idx` answers the first query; the second runs
+  // only for a session that had a refusal.
+  const refused = await client.query<{
+    refused_calls: string;
+    scope: LlmRefusalScope | null;
+    last_refused_at: Date | null;
+  }>(
+    `select count(*) as refused_calls,
+            (array_agg(refusal_scope order by started_at desc))[1] as scope,
+            max(started_at) as last_refused_at
+       from llm_usage
+      where workspace_id = $1 and session_id = $2 and status = '${REFUSED_USAGE_STATUS}'
+        and ($3::uuid is null or turn_id = $3::uuid)`,
+    [workspaceId, sessionId, turnId],
+  );
+  const row = refused.rows[0];
+  const refusedCalls = Number(row?.refused_calls ?? 0);
+  if (refusedCalls === 0 || !row?.scope || !row.last_refused_at) return null;
+  const answered = await client.query(
+    `select 1 from llm_usage
+      where workspace_id = $1 and session_id = $2 and status = '${COMPLETED_USAGE_STATUS}'
+        and ($3::uuid is null or turn_id = $3::uuid)
+      limit 1`,
+    [workspaceId, sessionId, turnId],
+  );
+  if ((answered.rowCount ?? 0) > 0) return null;
+  return { refusedCalls, scope: row.scope, lastRefusedAt: row.last_refused_at };
+}
+
+/**
+ * `sessionRefusedOnly` for one entry-agent Turn: the rows attributed to `turnId` that an `entry`
+ * session metered — refused calls and no answered one, or `null`. Only the entry agent's own
+ * calls count: a Worker's session acts for the same person, so its calls during the Turn carry
+ * the person's running Turn as `turn_id` too (`interfaces/http/internal/llm-usage.ts` "Turn
+ * attribution"), and a Worker answered or refused says nothing about whether the agent did.
+ *
+ * Runs at every Turn's end: the first query reads only refused rows (the partial index
+ * `llm_usage_refused_session_idx`, workspace prefix); the second runs only for a Turn that had a
+ * refusal.
+ */
+export async function entryTurnRefusedOnly(
+  client: PoolClient,
+  workspaceId: string,
+  turnId: string,
+): Promise<RefusedOnlyUsage | null> {
+  const refused = await client.query<{
+    refused_calls: string;
+    scope: LlmRefusalScope | null;
+    last_refused_at: Date | null;
+  }>(
+    `select count(*) as refused_calls,
+            (array_agg(u.refusal_scope order by u.started_at desc))[1] as scope,
+            max(u.started_at) as last_refused_at
+       from llm_usage u
+       join sessions s on s.workspace_id = u.workspace_id and s.id = u.session_id
+      where u.workspace_id = $1 and u.status = '${REFUSED_USAGE_STATUS}' and u.turn_id = $2
+        and s.kind = 'entry'`,
+    [workspaceId, turnId],
+  );
+  const row = refused.rows[0];
+  const refusedCalls = Number(row?.refused_calls ?? 0);
+  if (refusedCalls === 0 || !row?.scope || !row.last_refused_at) return null;
+  const answered = await client.query(
+    `select 1
+       from llm_usage u
+       join sessions s on s.workspace_id = u.workspace_id and s.id = u.session_id
+      where u.workspace_id = $1 and u.status = '${COMPLETED_USAGE_STATUS}' and u.turn_id = $2
+        and s.kind = 'entry'
+      limit 1`,
+    [workspaceId, turnId],
+  );
+  if ((answered.rowCount ?? 0) > 0) return null;
+  return { refusedCalls, scope: row.scope, lastRefusedAt: row.last_refused_at };
 }

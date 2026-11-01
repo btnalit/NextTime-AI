@@ -275,6 +275,145 @@ describe('LlmUsageReporter', () => {
     reporter.close();
   });
 
+  // Legacy 589: a refusal is in the kernel before the 402 goes out.
+  describe('deliver', () => {
+    function refused(overrides: Partial<LlmUsageRecord> = {}): LlmUsageRecord {
+      return record({
+        inputTokens: 0,
+        outputTokens: 0,
+        costUsd: 0,
+        status: 'refused',
+        refusalScope: 'workspace_daily_tokens',
+        requestId: 'refused-1',
+        ...overrides,
+      });
+    }
+
+    it('flushes at once with everything queued before it and resolves true once the kernel settles it', async () => {
+      const fetchImpl = vi.fn().mockResolvedValue({ ok: true } as Response);
+      const reporter = new LlmUsageReporter({
+        log: () => {},
+        kernelUrl: 'http://kernel.internal:8080',
+        fetchImpl,
+        flushIntervalMs: 2000,
+      });
+      reporter.record(record({ requestId: 'earlier' }));
+      const delivered = reporter.deliver(refused(), {}, 5000);
+
+      // No timer has run: the flush is the deliver's own.
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(delivered).resolves.toBe(true);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+      const body = JSON.parse(String(init.body)) as LlmUsageRecord[];
+      expect(body.map((r) => r.requestId)).toEqual(['earlier', 'refused-1']);
+      expect(body[1]).toMatchObject({ status: 'refused', refusalScope: 'workspace_daily_tokens' });
+      expect(reporter.pending).toBe(0);
+      reporter.close();
+    });
+
+    it('also resolves true when the kernel refuses the record for good (its workspace is gone)', async () => {
+      const fetchImpl = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: async () => ({
+          ok: false,
+          error: {
+            code: 'internal_error',
+            message: 'x',
+            details: {
+              groups: [{ workspaceId: 'ws-1', outcome: 'rejected', reason: 'workspace_not_found' }],
+            },
+          },
+        }),
+      } as unknown as Response);
+      const reporter = new LlmUsageReporter({
+        log: () => {},
+        kernelUrl: 'http://kernel.internal:8080',
+        fetchImpl,
+        flushIntervalMs: 100,
+      });
+      const delivered = reporter.deliver(refused(), {}, 5000);
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(delivered).resolves.toBe(true);
+      expect(reporter.pending).toBe(0);
+      reporter.close();
+    });
+
+    it('resolves false after the timeout while the kernel is down, keeps the record and resends it in the background', async () => {
+      let kernelUp = false;
+      const fetchImpl = vi.fn(async () => {
+        if (!kernelUp) throw new Error('connection refused');
+        return { ok: true } as Response;
+      });
+      const reporter = new LlmUsageReporter({
+        log: () => {},
+        kernelUrl: 'http://kernel.internal:8080',
+        fetchImpl,
+        flushIntervalMs: 2000,
+        maxFlushIntervalMs: 8000,
+      });
+      let settled: boolean | undefined;
+      void reporter.deliver(refused(), {}, 5000).then((value) => {
+        settled = value;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(settled).toBeUndefined();
+      expect(reporter.pending).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(settled).toBe(false);
+      expect(reporter.pending).toBe(1); // still queued, not dropped with the waiter
+
+      kernelUp = true;
+      await vi.advanceTimersByTimeAsync(8000); // the backoff timer resends it
+      expect(reporter.pending).toBe(0);
+      const [, init] = fetchImpl.mock.calls.at(-1) as unknown as [string, RequestInit];
+      expect((JSON.parse(String(init.body)) as LlmUsageRecord[])[0]?.requestId).toBe('refused-1');
+      reporter.close();
+    });
+
+    it('a deliver that arrives during a flush rides the next flush right after it, not the timer', async () => {
+      let release: (() => void) | undefined;
+      const fetchImpl = vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise<Response>((resolve) => {
+              release = () => resolve({ ok: true } as Response);
+            }),
+        )
+        .mockResolvedValue({ ok: true } as Response);
+      const reporter = new LlmUsageReporter({
+        log: () => {},
+        kernelUrl: 'http://kernel.internal:8080',
+        fetchImpl,
+        flushIntervalMs: 60_000,
+      });
+      reporter.record(record({ requestId: 'in-flight' }));
+      const first = reporter.flush();
+      const delivered = reporter.deliver(refused(), {}, 5000);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      release?.();
+      await first;
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(delivered).resolves.toBe(true);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      const [, init] = fetchImpl.mock.calls[1] as [string, RequestInit];
+      expect((JSON.parse(String(init.body)) as LlmUsageRecord[]).map((r) => r.requestId)).toEqual([
+        'refused-1',
+      ]);
+      reporter.close();
+    });
+
+    it('resolves true at once with no kernel configured', async () => {
+      const reporter = new LlmUsageReporter({ log: () => {} });
+      await expect(reporter.deliver(refused(), {}, 5000)).resolves.toBe(true);
+    });
+  });
+
   it('drops the oldest entries once the bounded queue is full', async () => {
     const fetchImpl = vi.fn().mockResolvedValue({ ok: true } as Response);
     const reporter = new LlmUsageReporter({

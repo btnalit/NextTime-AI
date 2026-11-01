@@ -7,6 +7,7 @@ import { recordWorkerRunUsage } from '../../../application/task/index.js';
 import {
   LlmUsageBatchSchema,
   type LlmUsageRecord,
+  REFUSED_USAGE_STATUS,
   type RecordUsageOptions,
   type RecordUsageResult,
   recordUsage,
@@ -194,13 +195,16 @@ export async function registerLlmUsageRoutes(
             // See module doc "Per-Task budget accounting" — same client/transaction as the
             // insert(s) it is reacting to; only ever called for a record `recordUsage` actually
             // inserted (not a replayed duplicate — see that function's own doc comment).
-            const onRecordInserted = (usageRecord: LlmUsageRecord): Promise<void> =>
-              recordWorkerRunUsage(client, workspaceId, usageRecord.sessionId, {
+            // A refused call (legacy 589) metered nothing: it does not touch the Task's count.
+            const onRecordInserted = async (usageRecord: LlmUsageRecord): Promise<void> => {
+              if (usageRecord.status === REFUSED_USAGE_STATUS) return;
+              await recordWorkerRunUsage(client, workspaceId, usageRecord.sessionId, {
                 inputTokens: usageRecord.inputTokens,
                 outputTokens: usageRecord.outputTokens,
                 cacheReadTokens: usageRecord.cacheReadTokens,
                 cacheWriteTokens: usageRecord.cacheWriteTokens,
               });
+            };
             return record(client, records, { resolveTurnId, onRecordInserted });
           },
         );
