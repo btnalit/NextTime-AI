@@ -8374,6 +8374,9 @@
           "additionalProperties": {},
           "type": "object"
         },
+        "goalPlanner": {
+          "type": "boolean"
+        },
         "id": {
           "type": "string"
         },
@@ -8421,7 +8424,8 @@
         "proposedBy",
         "publishedBy",
         "createdAt",
-        "publishedAt"
+        "publishedAt",
+        "goalPlanner"
       ],
       "type": "object"
     },
@@ -38278,6 +38282,9 @@
                 "additionalProperties": {},
                 "type": "object"
               },
+              "goalPlanner": {
+                "type": "boolean"
+              },
               "id": {
                 "type": "string"
               },
@@ -38325,7 +38332,8 @@
               "proposedBy",
               "publishedBy",
               "createdAt",
-              "publishedAt"
+              "publishedAt",
+              "goalPlanner"
             ],
             "type": "object"
           },
@@ -43681,6 +43689,9 @@
               "additionalProperties": {},
               "type": "object"
             },
+            "goalPlanner": {
+              "type": "boolean"
+            },
             "id": {
               "type": "string"
             },
@@ -43728,7 +43739,8 @@
             "proposedBy",
             "publishedBy",
             "createdAt",
-            "publishedAt"
+            "publishedAt",
+            "goalPlanner"
           ],
           "type": "object"
         },
@@ -45761,6 +45773,9 @@
           "additionalProperties": {},
           "type": "object"
         },
+        "goalPlanner": {
+          "type": "boolean"
+        },
         "id": {
           "type": "string"
         },
@@ -45808,7 +45823,8 @@
         "proposedBy",
         "publishedBy",
         "createdAt",
-        "publishedAt"
+        "publishedAt",
+        "goalPlanner"
       ],
       "type": "object"
     },
@@ -46614,6 +46630,9 @@
           "additionalProperties": {},
           "type": "object"
         },
+        "goalPlanner": {
+          "type": "boolean"
+        },
         "id": {
           "type": "string"
         },
@@ -46661,7 +46680,8 @@
         "proposedBy",
         "publishedBy",
         "createdAt",
-        "publishedAt"
+        "publishedAt",
+        "goalPlanner"
       ],
       "type": "object"
     },

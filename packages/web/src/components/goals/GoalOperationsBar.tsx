@@ -20,6 +20,7 @@ import {
   retryableStepKeys,
   revisionsSince,
 } from '../../lib/goal-actions.js';
+import { plannerWorkDropped } from '../../lib/goal-planner.js';
 import {
   confirmCheckOrigin,
   confirmRefusedText,
@@ -527,6 +528,7 @@ export function GoalOperationsBar({
             '取消后不能恢复；需要时重新提一个目标',
             'Cannot be undone — propose a new goal if needed',
           ),
+          ...plannerWorkDropped(goal, t),
         ]}
         confirmLabel={t('取消目标', 'Cancel goal')}
         onConfirm={() =>
@@ -691,7 +693,8 @@ function PlannerChoice({
   const hintId = useId();
   return (
     <div className="stack-s" data-testid="goal-op-confirm-planner">
-      <label className="row-wrap">
+      {/* UX P3-6 on #864: box and sentence on one line at phone width, the sentence wrapping. */}
+      <label className="checkbox">
         <input
           type="checkbox"
           checked={checked}
@@ -725,6 +728,8 @@ function ResumeConfirm({
 }) {
   const t = useT();
   const failed = retryableStepKeys(goal);
+  // UX P2-1 on #864: resuming drops what the planner is doing for this pause.
+  const dropped = plannerWorkDropped(goal, t);
   const [retry, setRetry] = useState<ReadonlySet<string>>(new Set());
   const toggle = (key: string) =>
     setRetry((current) => {
@@ -742,6 +747,7 @@ function ResumeConfirm({
         '目标马上继续推进，以你的授权花费预算、发起动作；继续前会再检查一遍预算和计划。',
         'The goal moves on at once, spending its budget and acting with your authority; its budget and plan are checked again first.',
       )}
+      {...(dropped.length > 0 ? { impact: dropped } : {})}
       confirmLabel={t('继续', 'Resume')}
       onConfirm={() => onResume(failed.filter((key) => retry.has(key)))}
     >

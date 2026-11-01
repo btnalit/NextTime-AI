@@ -3416,6 +3416,8 @@ function workerKey(row: Pick<WorkerDefinitionSummary, 'id' | 'version'>): string
  *  one kind are told apart by the short id the list shows beside them (`sameNameDefinitionIds`).
  *  Never a raw UUID in a title — the copy guard rejects one. */
 function workerLabel(row: WorkerDefinitionSummary, t: Translate): string {
+  // UX P3-1 on #864: the platform's goal planner reads by what it is, in the reader's language.
+  if (row.goalPlanner === true) return t('目标规划器', 'Goal planner');
   return definitionName([row], row.id, row.version) ?? unnamedDefinitionLabel(row.kind, t);
 }
 
@@ -4236,6 +4238,14 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                   <span className="row-wrap">
                     <span className="truncate">{workerLabel(row, t)}</span>
                     <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
+                    {row.goalPlanner === true ? (
+                      <span className="chip chip-s" data-testid="worker-goal-planner">
+                        {t(
+                          '平台的目标规划器（不用于步骤）',
+                          'The platform’s goal planner (not for steps)',
+                        )}
+                      </span>
+                    ) : null}
                   </span>
                   <StatusChip machine="publishable" status={row.status} size="s" />
                 </span>

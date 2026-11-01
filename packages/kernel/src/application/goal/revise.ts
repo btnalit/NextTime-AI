@@ -233,6 +233,11 @@ export interface RevisionCandidateInput {
   /** Lock the run's StepRuns and the released requests, for a caller that adopts the revision in
    *  this transaction; a check alone (the planner's report) reads them and releases nothing. */
   readonly lock: boolean;
+  /** The plan is one stored already reviewed against the revision in force — the planner's
+   *  proposal the requester accepts (it was reviewed when the planner reported it, on the base
+   *  I-G3 keeps in force): it is not reviewed again. Reviewing is not idempotent — a value left
+   *  as read is stored restored, and would read as written the second time. */
+  readonly reviewed?: boolean;
 }
 
 /**
@@ -249,10 +254,10 @@ export async function checkRevisionCandidate(
   goal: GoalRunRow,
   input: RevisionCandidateInput,
 ): Promise<RevisionCandidate> {
-  const submitted = reviewRevisedPlan(
-    planShape(input.plan),
-    await readBasePlan(client, workspaceId, goal),
-  );
+  const submitted =
+    input.reviewed === true
+      ? planShape(input.plan)
+      : reviewRevisedPlan(planShape(input.plan), await readBasePlan(client, workspaceId, goal));
   const budget = parseBudget(input.budget) ?? goal.budget;
   const accepted = await client.query<{ accepted: number; next: number }>(
     `select count(*) filter (where status = 'accepted')::int as accepted,

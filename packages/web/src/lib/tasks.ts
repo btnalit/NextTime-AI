@@ -83,6 +83,8 @@ export interface WorkerDefinitionSummary {
   readonly definition: Readonly<Record<string, unknown>>;
   /** When it was published (ISO); `null` for a draft. Absent where a caller built the row itself. */
   readonly publishedAt?: string | null;
+  /** S11 GO9a: a version of the workspace's goal planner family — no step runs it. */
+  readonly goalPlanner?: boolean;
 }
 
 /** A Task can be cancelled iff `TASK_TRANSITIONS` has a `cancel` edge out of its status. The

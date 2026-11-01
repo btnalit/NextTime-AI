@@ -128,9 +128,11 @@ export async function decidePlanRevision(
     return { ...unchanged(), changed: true };
   }
 
+  // Reviewed when the planner reported it, on the base in force (I-G3, checked above).
   const candidate = await checkRevisionCandidate(client, workspaceId, goal, {
     plan: proposal.plan,
     lock: true,
+    reviewed: true,
     ...(input.modelCatalog ? { modelCatalog: input.modelCatalog } : {}),
   });
   await closePlanning(client, workspaceId, goal.id, input.actor.principalId, 'plan_revised', {

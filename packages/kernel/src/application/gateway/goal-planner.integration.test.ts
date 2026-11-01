@@ -23,7 +23,7 @@ import { generateEphemeralHandleKeyPair } from '../../governance/capability/inde
 import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
 import { advanceGoalRun } from '../goal/advance.js';
 import { createGoalRun } from '../goal/index.js';
-import { PLANNER_HANDLE_CAPABILITIES } from '../task/index.js';
+import { PLANNER_HANDLE_CAPABILITIES, PLANNER_MIN_TOKEN_BUDGET } from '../task/index.js';
 import { failTaskAndReapWorkerRuns } from '../task/lifecycle.js';
 import { findGoalPlannerFamily } from '../task/planning-task.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
@@ -818,6 +818,390 @@ describe.runIf(DATABASE_URL !== undefined)(
         };
         expect(found.items.map((item) => item.definitionId)).not.toContain(family);
       }
+      // Nor does a plan run it as a step (it plans goals), and a planner is not offered its own.
+      const asStep = await refusal(
+        asApp(requester, (client) =>
+          createGoalRun(client, workspaceId, {
+            requesterId: requester,
+            proposedBy: requester,
+            statement: 'plan with the planner',
+            plan: planOf([
+              { key: 'plan', worker: { definitionId: family, version: mine.version } },
+            ]),
+            budget: BUDGET,
+          }),
+        ),
+      );
+      expect(asStep).toMatchObject({ status: 400 });
+      expect(asStep.message).toContain("is the goal planner's; it plans goals");
+      const next = await failedForPerson(requester);
+      const [round] = await rounds(next.goalRunId);
+      if (!round) throw new Error('no round');
+      const offered = (await plannerTask(round.id)).input.workers as readonly {
+        definitionId: string;
+      }[];
+      expect(offered.map((item) => item.definitionId)).toEqual(
+        expect.arrayContaining([worker.definitionId, otherWorker.definitionId]),
+      );
+      expect(offered.map((item) => item.definitionId)).not.toContain(family);
+    });
+
+    // ----- #493's probes: what the database and the rules refuse, one by one -----------------
+
+    const insertRound = (
+      by: string,
+      goalRunId: string,
+      stepRunId: string,
+      attempt: number,
+      base: number,
+      settled = "'running', null, null, null",
+    ) =>
+      asApp(by, (client) =>
+        client.query(
+          `insert into goal_planning_rounds (workspace_id, goal_run_id, based_on_revision,
+             step_run_id, step_attempt, failure_category, status, outcome_reason, detail, settled_at)
+           values ($1, $2, $3, $4, $5, 'transient', ${settled})`,
+          [workspaceId, goalRunId, base, stepRunId, attempt],
+        ),
+      );
+    const grantAsRaw = (goalRunId: string, by: string) =>
+      raw(
+        `insert into goal_planner_delegations (workspace_id, goal_run_id, mode, granted_by)
+         values ($1, $2, 'propose', $3)`,
+        [workspaceId, goalRunId, by],
+      );
+    const grantAs = (goalRunId: string, by: string) =>
+      asApp(by, (client) =>
+        client.query(
+          `insert into goal_planner_delegations (workspace_id, goal_run_id, mode, granted_by)
+           values ($1, $2, 'propose', $3)`,
+          [workspaceId, goalRunId, by],
+        ),
+      );
+
+    /** A failed step's round proposed revision 2 (its step given the other Worker). */
+    async function proposed(requesterId: string) {
+      const failed = await failedForPerson(requesterId);
+      const [round] = await rounds(failed.goalRunId);
+      if (!round) throw new Error('no round');
+      const before = await getGoal(failed.goalRunId, requesterId);
+      await report((await plannerTask(round.id)).id, {
+        decision: 'revise',
+        plan: reroute(before),
+        reason: 'another Worker renews the same way',
+      });
+      await advanceOnce(failed.goalRunId, requesterId);
+      expect((await rounds(failed.goalRunId)).map((row) => row.status)).toEqual(['proposed']);
+      return { ...failed, round };
+    }
+
+    const revisionRow = async (goalRunId: string, revision: number) => {
+      const [row] = await raw<{ status: string; decided_by: string | null; plan: unknown }>(
+        `select status, decided_by, plan from plan_revisions
+          where workspace_id = $1 and goal_run_id = $2 and revision = $3`,
+        [workspaceId, goalRunId, revision],
+      );
+      if (!row) throw new Error(`no revision ${revision}`);
+      return row;
+    };
+
+    it('only the requester accepts the planner’s revision, even adopting it in the same transaction', async () => {
+      const requester = await newPrincipal('member');
+      const other = await newPrincipal('member');
+      const { goalRunId } = await proposed(requester);
+      const refused = await dbRefusal(
+        asApp(other, async (client) => {
+          await client.query(
+            `update plan_revisions set status = 'accepted', decided_by = $3, decided_at = now()
+              where workspace_id = $1 and goal_run_id = $2 and revision = 2`,
+            [workspaceId, goalRunId, other],
+          );
+          await client.query(
+            `update goal_runs set current_revision = 2, updated_at = now()
+              where workspace_id = $1 and id = $2`,
+            [workspaceId, goalRunId],
+          );
+        }),
+      );
+      expect(refused).toMatch(/accepted by the requester/);
+    });
+
+    it('a round opens only with the requester’s leave, on a failed attempt, the revision in force and no owner hold', async () => {
+      const requester = await newPrincipal('member');
+      const noLeave = await failedForPerson(requester, false);
+      expect(await rounds(noLeave.goalRunId)).toEqual([]);
+      const open = (attempt: number, base: number) =>
+        insertRound(requester, noLeave.goalRunId, noLeave.step.id, attempt, base);
+      expect(await dbRefusal(open(1, 1))).toMatch(/did not let the planner/);
+      await grantAsRaw(noLeave.goalRunId, requester);
+      expect(await dbRefusal(open(2, 1))).toMatch(/failed attempt of a live step/);
+      expect(
+        await dbRefusal(
+          insertRound(
+            requester,
+            noLeave.goalRunId,
+            noLeave.step.id,
+            1,
+            1,
+            "'no_revision', null, 'x', now()",
+          ),
+        ),
+      ).toMatch(/opened running, or recorded failed/);
+      await call(human(ownerId), 'pause_goal', { goalRunId: noLeave.goalRunId });
+      expect(await dbRefusal(open(1, 1))).toMatch(/no owner holds it/);
+
+      const revised = await failedForPerson(requester, false);
+      await grantAsRaw(revised.goalRunId, requester);
+      const goal = await getGoal(revised.goalRunId, requester);
+      await call(human(requester), 'revise_goal', {
+        goalRunId: revised.goalRunId,
+        basedOnRevision: 1,
+        plan: reroute(goal),
+      });
+      expect((await goalRow(revised.goalRunId)).current_revision).toBe(2);
+      expect(
+        await dbRefusal(insertRound(requester, revised.goalRunId, revised.step.id, 1, 1)),
+      ).toMatch(/based on the revision in force/);
+    });
+
+    it('a round settles once, proposing only a planner revision, failing only for a reason that fits', async () => {
+      const requester = await newPrincipal('member');
+      const { goalRunId } = await failedForPerson(requester);
+      const [round] = await rounds(goalRunId);
+      if (!round) throw new Error('no round');
+      const settle = (set: string) =>
+        asApp(requester, (client) =>
+          client.query(
+            `update goal_planning_rounds set ${set} where workspace_id = $1 and id = $2`,
+            [workspaceId, round.id],
+          ),
+        );
+      expect(
+        await dbRefusal(settle("status = 'proposed', revision = 1, settled_at = now()")),
+      ).toMatch(/a revision the planner proposed/);
+      expect(
+        await dbRefusal(
+          settle("status = 'failed', outcome_reason = 'planner_unavailable', settled_at = now()"),
+        ),
+      ).toMatch(/gave no usable result/);
+      await report((await plannerTask(round.id)).id, { decision: 'no_revision', reason: 'none' });
+      await advanceOnce(goalRunId, requester);
+      expect((await rounds(goalRunId)).map((row) => row.status)).toEqual(['no_revision']);
+      expect(
+        await dbRefusal(settle("status = 'failed', outcome_reason = 'task_failed', detail = null")),
+      ).toMatch(/settles once/);
+    });
+
+    it('the leave is given by the requester only, while the goal is proposed', async () => {
+      const requester = await newPrincipal('member');
+      const other = await newPrincipal('member');
+      const started = await startGoal(requester, false);
+      expect(await dbRefusal(grantAs(started, requester))).toMatch(
+        /when the goal run is confirmed/,
+      );
+      const created = await asApp(requester, (client) =>
+        createGoalRun(client, workspaceId, {
+          requesterId: requester,
+          proposedBy: requester,
+          statement: 'renew the certificate of the site',
+          plan: planOf([{ key: 'renew' }]),
+          budget: BUDGET,
+        }),
+      );
+      expect(await dbRefusal(grantAs(created.goalRunId, other))).toMatch(/only the requester/);
+    });
+
+    it('a planning Task keeps the requester and its empty observation scope', async () => {
+      const requester = await newPrincipal('member');
+      const other = await newPrincipal('member');
+      const { goalRunId } = await failedForPerson(requester);
+      const [round] = await rounds(goalRunId);
+      if (!round) throw new Error('no round');
+      const task = await plannerTask(round.id);
+      const change = (set: string, params: readonly unknown[] = []) =>
+        asApp(requester, (client) =>
+          client.query(`update tasks set ${set} where workspace_id = $1 and id = $2`, [
+            workspaceId,
+            task.id,
+            ...params,
+          ]),
+        );
+      expect(await dbRefusal(change('on_behalf_of = $3', [other]))).toMatch(
+        /acts for the requester/,
+      );
+      expect(await dbRefusal(change('observe_scope = null'))).toMatch(
+        /observation scope|tasks_planning_shape/,
+      );
+    });
+
+    it('a planner report writing Facts or evidence is refused, each field named, and writes nothing', async () => {
+      const requester = await newPrincipal('member');
+      const { goalRunId } = await failedForPerson(requester);
+      const [round] = await rounds(goalRunId);
+      if (!round) throw new Error('no round');
+      const task = await plannerTask(round.id);
+      // A Fact is a link, asserted with its evidence.
+      const facts = async () =>
+        (
+          await raw<{ n: number }>(
+            `select ((select count(*) from links where workspace_id = $1)
+                   + (select count(*) from evidence where workspace_id = $1))::int as n`,
+            [workspaceId],
+          )
+        )[0]?.n;
+      const before = await facts();
+      const refused = await refusal(
+        dispatchCapability({ pool }, await workerOf(task.id), 'report_task_result', {
+          summary: 'planned',
+          output: { decision: 'no_revision', reason: 'nothing to change' },
+          factsToAssert: [
+            {
+              linkType: 'runs_on',
+              source: { objectType: 'Host', identity: { name: 'web-1' } },
+              target: { objectType: 'Host', identity: { name: 'rack-1' } },
+            },
+          ],
+          evidence: [{ kind: 'note', content: { text: 'planner note' } }],
+        }),
+      );
+      expect(refused).toMatchObject({ status: 400 });
+      expect(refused.message).toContain("what the goal planner's report must be");
+      expect(refused.message).toContain('factsToAssert:');
+      expect(refused.message).toContain('evidence:');
+      expect(await facts()).toBe(before);
+      expect((await plannerTask(round.id)).status).toBe('running');
+    });
+
+    it('a rejected proposal stays rejected: no accepting it after, no new round for the same failure', async () => {
+      const requester = await newPrincipal('member');
+      const { goalRunId } = await proposed(requester);
+      const decide = (decision: 'accept' | 'reject') =>
+        call(human(requester), 'decide_plan_revision', { goalRunId, revision: 2, decision });
+      expect(await decide('reject')).toMatchObject({ changed: true, decision: 'reject' });
+      expect(await decide('reject')).toMatchObject({ changed: false });
+      expect(await refusal(decide('accept'))).toMatchObject({ status: 409 });
+      await advanceOnce(goalRunId, requester);
+      expect((await rounds(goalRunId)).map((row) => row.status)).toEqual(['proposed']);
+      expect(await goalRow(goalRunId)).toMatchObject({
+        status: 'paused',
+        pause_reason: 'needs_decision',
+        current_revision: 1,
+      });
+      expect(await revisionRow(goalRunId, 2)).toMatchObject({
+        status: 'rejected',
+        decided_by: requester,
+      });
+    });
+
+    it('resuming the goal rejects the planner’s pending proposal (I-P4)', async () => {
+      const requester = await newPrincipal('member');
+      const { goalRunId } = await proposed(requester);
+      await call(human(requester), 'resume_goal', { goalRunId, retrySteps: ['renew'] });
+      expect(await revisionRow(goalRunId, 2)).toMatchObject({
+        status: 'rejected',
+        decided_by: requester,
+      });
+    });
+
+    it('no round runs on a goal with no revision or too few tokens left', async () => {
+      const requester = await newPrincipal('member');
+      const failedWith = async (budget: typeof BUDGET) => {
+        const created = await asApp(requester, (client) =>
+          createGoalRun(client, workspaceId, {
+            requesterId: requester,
+            proposedBy: requester,
+            statement: 'renew the certificate of the site',
+            plan: planOf([{ key: 'renew' }]),
+            budget,
+          }),
+        );
+        const goalRunId = created.goalRunId;
+        await call(human(requester), 'confirm_goal', {
+          goalRunId,
+          revision: 1,
+          planner: 'propose',
+        });
+        await advanceOnce(goalRunId, requester);
+        const step = await liveStep(goalRunId, 'renew');
+        await loseTask((await lastAttempt(step.id)).id, requester);
+        await advanceOnce(goalRunId, requester);
+        return rounds(goalRunId);
+      };
+      expect(await failedWith({ ...BUDGET, maxRevisions: 0 })).toEqual([
+        expect.objectContaining({ status: 'failed', outcome_reason: 'revision_budget_exhausted' }),
+      ]);
+      expect(await failedWith({ ...BUDGET, maxTokens: PLANNER_MIN_TOKEN_BUDGET - 1 })).toEqual([
+        expect.objectContaining({ status: 'failed', outcome_reason: 'token_budget_exhausted' }),
+      ]);
+    });
+
+    it('accepting a proposal that kept a value of an older plan as read takes it as kept (#493 P2-1)', async () => {
+      const requester = await newPrincipal('member');
+      const created = await asApp(requester, (client) =>
+        createGoalRun(client, workspaceId, {
+          requesterId: requester,
+          proposedBy: requester,
+          statement: 'renew then notify',
+          plan: {
+            steps: [
+              { key: 'renew', worker, input: { step: 'renew' }, maxAttempts: 1 },
+              {
+                key: 'notify',
+                worker,
+                input: { step: 'notify' },
+                maxAttempts: 1,
+                dependsOn: ['renew'],
+              },
+            ],
+          },
+          budget: BUDGET,
+        }),
+      );
+      const goalRunId = created.goalRunId;
+      // A plan stored before GO5c refused credentials in a plan: it reads masked ever since.
+      await raw(
+        `update plan_revisions
+            set plan = jsonb_set(plan, '{steps,1,input,password}', '"legacy-pass-1234"')
+          where workspace_id = $1 and goal_run_id = $2 and revision = 1`,
+        [workspaceId, goalRunId],
+      );
+      await call(human(requester), 'confirm_goal', { goalRunId, revision: 1, planner: 'propose' });
+      await advanceOnce(goalRunId, requester);
+      const step = await liveStep(goalRunId, 'renew');
+      await loseTask((await lastAttempt(step.id)).id, requester);
+      await advanceOnce(goalRunId, requester);
+      const [round] = await rounds(goalRunId);
+      if (!round) throw new Error('no round');
+      const task = await plannerTask(round.id);
+      const read = task.input.plan as { steps: Record<string, unknown>[] };
+      const notify = read.steps[1] as { input: Record<string, unknown> };
+      expect(notify.input.password).not.toBe('legacy-pass-1234');
+      await report(task.id, {
+        decision: 'revise',
+        plan: {
+          steps: [
+            { key: 'renew-other', worker: otherWorker, input: { step: 'renew' }, maxAttempts: 1 },
+            { ...notify, dependsOn: ['renew-other'] },
+          ],
+        },
+        reason: 'another Worker renews the same way',
+      });
+      await advanceOnce(goalRunId, requester);
+      const stored = (await revisionRow(goalRunId, 2)).plan as {
+        steps: { input: Record<string, unknown> }[];
+      };
+      expect(stored.steps[1]?.input.password).toBe('legacy-pass-1234');
+      expect(
+        await call(human(requester), 'decide_plan_revision', {
+          goalRunId,
+          revision: 2,
+          decision: 'accept',
+        }),
+      ).toMatchObject({ changed: true, decision: 'accept' });
+      expect(await goalRow(goalRunId)).toMatchObject({ current_revision: 2 });
+      expect(
+        ((await revisionRow(goalRunId, 2)).plan as typeof stored).steps[1]?.input.password,
+      ).toBe('legacy-pass-1234');
     });
   },
 );

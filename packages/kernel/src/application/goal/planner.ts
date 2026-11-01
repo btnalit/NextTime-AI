@@ -27,6 +27,7 @@ import {
   countStepAttemptsWithoutResult,
   createPlanningTask,
   ensurePlannerDefinition,
+  findGoalPlannerFamily,
   findGoalPlannerPrincipal,
   getOrCreateGoalPlannerPrincipal,
   loadPlannerTemplate,
@@ -673,7 +674,8 @@ async function plannerWorkers(
   client: PoolClient,
   workspaceId: string,
 ): Promise<readonly Record<string, unknown>[]> {
-  const plannerId = await findGoalPlannerPrincipal(client, workspaceId);
+  // Not the planner's own family, whoever published a version of it (as `find_workers`).
+  const plannerFamily = await findGoalPlannerFamily(client, workspaceId);
   const result = await client.query<{
     id: string;
     version: number;
@@ -684,10 +686,10 @@ async function plannerWorkers(
             definition -> 'description' as description
        from worker_definitions
       where workspace_id = $1 and kind = 'worker' and status = 'published'
-        and proposed_by is distinct from $2
+        and id is distinct from $2
       order by id, version desc
       limit $3`,
-    [workspaceId, plannerId, PLANNER_MAX_WORKERS],
+    [workspaceId, plannerFamily, PLANNER_MAX_WORKERS],
   );
   return result.rows.map((row) => ({
     definitionId: row.id,

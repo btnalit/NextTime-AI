@@ -148,6 +148,79 @@ async function send() {
   fireEvent.click(within(confirm).getByTestId('confirm-button'));
 }
 
+describe('the plan editor while the goal planner has a say (UX P2-1, P2-4 on #864)', () => {
+  const PLANNER_ID = '44444444-4444-4444-8444-444444444444';
+  const withProposal = () => {
+    const base = paused({ pauseReason: 'needs_decision', pausedBy: null, planner: 'propose' });
+    return {
+      ...base,
+      planningRounds: [
+        {
+          id: 'round-1',
+          status: 'proposed' as const,
+          basedOnRevision: 1,
+          stepRunId: 'sr-fetch',
+          stepKey: 'fetch',
+          stepAttempt: 1,
+          failureCategory: 'transient' as const,
+          taskId: 'task-plan-1',
+          revision: 2,
+          outcomeReason: null,
+          detail: null,
+          createdAt: '2026-10-20T00:05:00.000Z',
+          settledAt: '2026-10-20T00:06:00.000Z',
+        },
+      ],
+      revisions: [
+        ...base.revisions,
+        {
+          ...base.revisions[0],
+          id: 'rev-2',
+          revision: 2,
+          status: 'proposed' as const,
+          basedOnRevision: 1,
+          proposedBy: 'p-planner',
+          proposer: 'planner' as const,
+          reason: 'another Worker',
+          decidedBy: null,
+          decidedAt: null,
+        },
+      ],
+    } as GoalDetailWire;
+  };
+
+  it('says the planner’s proposal is rejected by this revision, and offers no planner Worker for a step', async () => {
+    const http = scriptedHttp(
+      handlers(withProposal(), workspace('p-alice', 'member'), {
+        list_worker_definitions: () => ({
+          items: [
+            ...WORKERS.items.map((row) => ({ ...row, goalPlanner: false })),
+            {
+              id: PLANNER_ID,
+              version: 1,
+              kind: 'worker',
+              status: 'published',
+              goalPlanner: true,
+              definition: { name: 'goal-planner' },
+            },
+          ],
+        }),
+      }),
+    );
+    renderPage(http);
+    await openEditor();
+    expect((await screen.findByTestId('goal-plan-planner')).textContent).toContain(
+      '规划器提的第 2 版修订会被拒绝',
+    );
+    const fetch = step('fetch');
+    const select = within(fetch).getByTestId('goal-plan-step-worker') as HTMLSelectElement;
+    await waitFor(() => expect(select.value).toBe(WORKER_ID));
+    const values = [...select.options].map((option) => option.value);
+    expect(values).toContain(WORKER_ID);
+    expect(values).not.toContain(PLANNER_ID);
+  });
+});
+
 describe('the plan editor on the goal page (S11 GO6, revise_goal)', () => {
   it('is offered to the requester of a paused goal only', async () => {
     renderPage(scriptedHttp(handlers(paused(), workspace('p-alice', 'member'))));

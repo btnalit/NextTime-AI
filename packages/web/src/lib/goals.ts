@@ -1493,7 +1493,12 @@ export interface GoalStateNote {
  */
 export function goalStateNote(
   goal: GoalRunWire &
-    Partial<Pick<GoalDetailWire, 'acceptance' | 'steps' | 'planRevision' | 'trialApprovals'>>,
+    Partial<
+      Pick<
+        GoalDetailWire,
+        'acceptance' | 'steps' | 'planRevision' | 'trialApprovals' | 'revisions' | 'planningRounds'
+      >
+    >,
   unresolved: readonly UnresolvedGoalActionWire[] | undefined,
   budget: readonly BudgetRow[],
   t: Translate,
@@ -1552,7 +1557,12 @@ export function goalStateNote(
 
 function pausedNote(
   goal: GoalRunWire &
-    Partial<Pick<GoalDetailWire, 'acceptance' | 'steps' | 'planRevision' | 'trialApprovals'>>,
+    Partial<
+      Pick<
+        GoalDetailWire,
+        'acceptance' | 'steps' | 'planRevision' | 'trialApprovals' | 'revisions' | 'planningRounds'
+      >
+    >,
   unresolved: readonly UnresolvedGoalActionWire[] | undefined,
   budget: readonly BudgetRow[],
   t: Translate,
@@ -1632,6 +1642,31 @@ function pausedNote(
       };
     }
     case 'needs_decision': {
+      // UX P2-1 on #864: the planner's work on this pause is where the decision is made.
+      const proposal = goal.revisions?.find(
+        (revision) =>
+          revision.proposer === 'planner' &&
+          revision.status === 'proposed' &&
+          revision.basedOnRevision === goal.currentRevision,
+      );
+      if (proposal) {
+        return {
+          tone: 'info',
+          text: t(
+            `需要人决定：目标规划器为这次失败提了第 ${proposal.revision} 版修订，在下面「目标规划器」里决定接受还是拒绝。`,
+            `A person must decide: the goal planner proposed v${proposal.revision} for this failure; accept or reject it under Goal planner below.`,
+          ),
+        };
+      }
+      if (goal.planningRounds?.some((round) => round.status === 'running')) {
+        return {
+          tone: 'info',
+          text: t(
+            '需要人决定：目标规划器正在看这次失败，准备提一个修订，结果会出现在下面「目标规划器」里。',
+            'A person must decide: the goal planner is looking at this failure to propose a revision; it shows under Goal planner below.',
+          ),
+        };
+      }
       if (
         goal.acceptance?.absenceBaselines.some(
           (baseline) =>

@@ -12,6 +12,7 @@ import { auditHref } from '../../lib/audit.js';
 import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
 import { describeError } from '../../lib/errors.js';
 import { actionKindTagText, excerpt, formatDateTime, formatRelative } from '../../lib/format.js';
+import { plannerNeedsAttention } from '../../lib/goal-planner.js';
 import {
   goalBudgetRows,
   goalCheckObjectIds,
@@ -48,6 +49,7 @@ import {
 } from './GoalOperationsBar.js';
 import { GoalPlanEditor } from './GoalPlanEditor.js';
 import { GoalPlannerSection } from './GoalPlannerSection.js';
+
 import { GoalReconcileControls } from './GoalReconcileControls.js';
 import { GoalRevisionsSection } from './GoalRevisionsSection.js';
 import { GoalStepsSection } from './GoalStepsSection.js';
@@ -248,6 +250,16 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
       </div>
     );
   }
+  const plannerFirst = plannerNeedsAttention(goal);
+  const planner = (
+    <GoalPlannerSection
+      goal={goal}
+      viewer={viewer}
+      http={http}
+      gateNames={gateNames}
+      onDone={onDone}
+    />
+  );
   return (
     <div className="page goal-page stack" data-testid="goal-detail" data-goal-id={goal.id}>
       {header(excerpt(goal.statement, 80) ?? t('目标', 'Goal'))}
@@ -304,18 +316,13 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
           : null}
       </output>
       {/* S11 GO9a: the planner's proposal is a decision the requester makes now — above the
-          overview, next to the page's other decisions. */}
-      <GoalPlannerSection
-        goal={goal}
-        viewer={viewer}
-        http={http}
-        gateNames={gateNames}
-        onDone={onDone}
-      />
+          overview, next to the page's other decisions; with nothing to act on, below it. */}
+      {plannerFirst ? planner : null}
 
       <DashboardCard title={t('概览', 'Overview')} data-testid="goal-overview">
         <KeyValue items={overviewItems(goal, http, t)} />
       </DashboardCard>
+      {plannerFirst ? null : planner}
 
       <DashboardCard title={t('预算', 'Budget')} data-testid="goal-budget">
         <KeyValue

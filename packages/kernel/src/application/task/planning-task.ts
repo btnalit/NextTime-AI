@@ -232,7 +232,7 @@ export interface CreatePlanningTaskInput {
   readonly input: unknown;
   /** What is left of the goal's tokens for it. */
   readonly tokenCap: number;
-  /** What is left of the goal's wall clock, in seconds. */
+  /** How long it may run, in seconds (the planner's own cap; the workspace default may lower it). */
   readonly durationCapSec: number;
 }
 

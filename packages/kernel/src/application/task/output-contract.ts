@@ -2,6 +2,7 @@ import {
   MAX_OUTPUT_PROBLEMS,
   type OutputProblem,
   type OutputSchema,
+  type TaskPurpose,
   type TaskStatus,
   boundedEcho,
 } from '@nexttime/shared';
@@ -89,6 +90,9 @@ export class TaskOutputRejectedError extends Error {
     readonly output: Record<string, unknown> | null;
     readonly problems: readonly OutputProblem[];
     readonly problemCount: number;
+    /** What the output is held to: a goal step's output contract (the default), or — S11 GO9a —
+     *  what a goal planner's report must be (its output contract and its proposal's checks). */
+    readonly heldTo?: 'step' | 'planner';
   }) {
     const listed = input.problems
       .slice(0, MAX_OUTPUT_PROBLEMS)
@@ -98,8 +102,12 @@ export class TaskOutputRejectedError extends Error {
       input.problemCount > input.problems.length
         ? `; and ${input.problemCount - input.problems.length} more`
         : '';
+    const contract =
+      input.heldTo === 'planner'
+        ? "what the goal planner's report must be"
+        : "this step's output contract";
     super(
-      `report_task_result: the output does not meet this step's output contract (${input.problemCount} problem${input.problemCount === 1 ? '' : 's'}) — ${listed}${more}. Fix the output and report the result again.`,
+      `report_task_result: the output does not meet ${contract} (${input.problemCount} problem${input.problemCount === 1 ? '' : 's'}) — ${listed}${more}. Fix the output and report the result again.`,
     );
     this.name = 'TaskOutputRejectedError';
     this.taskId = input.taskId;
@@ -116,16 +124,25 @@ export async function readTaskOutputContract(
   client: PoolClient,
   workspaceId: string,
   taskId: string,
-): Promise<{ readonly status: TaskStatus; readonly outputSchema: OutputSchema | null } | null> {
-  const result = await client.query<{ status: TaskStatus; output_schema: unknown }>(
-    'select status, output_schema from tasks where workspace_id = $1 and id = $2',
-    [workspaceId, taskId],
-  );
+): Promise<{
+  readonly status: TaskStatus;
+  readonly outputSchema: OutputSchema | null;
+  readonly purpose: TaskPurpose | null;
+} | null> {
+  const result = await client.query<{
+    status: TaskStatus;
+    output_schema: unknown;
+    purpose: TaskPurpose | null;
+  }>('select status, output_schema, purpose from tasks where workspace_id = $1 and id = $2', [
+    workspaceId,
+    taskId,
+  ]);
   const row = result.rows[0];
   if (!row) return null;
   return {
     status: row.status,
     outputSchema: isRecord(row.output_schema) ? (row.output_schema as OutputSchema) : null,
+    purpose: row.purpose,
   };
 }
 
