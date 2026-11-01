@@ -4410,6 +4410,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 **GO10 — 目标预算全量**（见 `global-roadmap-2026-10-16.md` §4）
 
 - 实现说明（GO10，#870，2026-11-01 合入，2cef7c6；无迁移）：默认值与协调线程的决定见项目共享计划 `s11-w2/go10-default-plan.md` §3、§7（项目文件，不入库）。推进器规划阶段加无进展熔断（自上次确认、继续或步骤成功以来已自主规划 3 轮时不开新轮，暂停 `paused(no_progress)`，原因只写审计、不写规划轮）；开轮前检查两个计数各对 `maxRevisions`：计划修订（已接受）与规划器轮数（拉起过规划任务的轮，`goal-step.ts` 按去重的 `planning_round_id` 计 `planner_rounds`），到上限记 `failed` / `revision_budget_exhausted`。契约 `GoalUsageWire.plannerTokens`（规划任务 `tokens_used` 之和，已含在 `tokens`）、`plannerRounds`。控制台预算卡、规划器卡片、确认卡规则与 `no_progress` 暂停说明。术语统一为「规划器轮数 / planner rounds」。下一步 GO10b（#872，goal/0016，验收未通过时的规划轮）。
+- 实现说明（GO10b，#872，2026-11-01 合入，0f3eaf3；迁移 goal/0016）：默认方案见项目共享计划 `s11-w2/go10b-default-plan.md`（F1-A、F2–F6 按推荐）。`shared` 加 `PLANNING_POINT_VALUES = ['step_failure', 'goal_acceptance']`，`PlanningRoundWire` 加 `point`、`acceptanceRound`、步骤字段可空。`goal/planner.ts`：`RoundOpening` 为两种锚的联合，`failedAcceptanceRound` 找判断点（最近一轮、都在现行修订、至少一个 `failed`、还没有规划轮、这一轮最早 `created_at` 之后没有 `goal_run.resume`）；`openPlannerRound` 两种锚共用 GO10 的检查顺序（规划器轮数，然后修订次数），验收锚只开提议轮，熔断与同一份工作改两次不适用；验收锚的轮计入规划器轮数、不计入无进展熔断。`plannerInput` 加 `failedAcceptance`（检查的 `key` / `kind` / `status` / `lastError` 代码，不给观察值）与 `plannerRoundsLeft`。读取 `planning-rounds.ts`、`goal-handlers.ts` 对 `step_runs` 改 left join。`ontology/goal-planner.yaml` 写明第二个判断点（已成功的步骤留原处；只在检查没写对目标意思时才改检查）。遗留 560、561。下一步 GO12（Operation 目标冲突域）。
 
 **GO11 — 任务级观察范围**（见 `global-roadmap-2026-10-16.md` §4）
 
