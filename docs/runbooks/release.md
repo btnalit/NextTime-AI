@@ -2152,6 +2152,16 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：在目标的「修订计划…」里，每一步多了「对 Worker 的调整」折叠区，可以用选择器调整这一步的 Skill、门、观察范围、能力、模型和职责说明（只能收窄，提交后由内核重新准入）；没有调整的步骤原样带回。Skill 草稿只有一版时标明要有人批准试用才会开始，已弃用的不列；模型按请求人的智能体设置允许的范围列出。暂停说明遇到 Skill 草稿、弃用、版本不可用或 Worker 版本不可用时，指向控制台里能走通的入口，不再让人去对话里找入口智能体。
 - **回滚**：只回退代码，随时可以。已经用新编辑器提交的修订是普通的计划修订，旧版本照常读取。
 
+### 3.97 管理员智能体的身份、上限与逐次调用检查；服务 key 不再能装包或写分段（#897，S11 AA1 + 遗留 407，0.59.0 起）
+
+带一个迁移（core `0049_admin_agent_sessions`），随 `apply-release.sh` 的迁移步骤自动应用。新环境变量 `ADMIN_AGENT_ENABLED`，默认关；这一版没有任何东西会启动管理员智能体（AA4 的运行时才会），所以主机不用设它。
+
+- **迁移**：core/0049 只把 `sessions.kind` 的 CHECK 放宽一个值 `admin_agent`，不回填。旧代码从不写这个值。
+- **开关**：`ADMIN_AGENT_ENABLED` 不设就是关，`1` / `true` 是开；**写成别的值，内核启动时直接报错退出**。升级前确认主机 `.env` 里没有这个变量，或者值合法。
+- **行为变化（遗留 407）**：`install_pack`、`install_module`、`upgrade_module`、`roll_back_change_segment`、`verify_change_segment` 改为只能代表人调用（`actsForPerson`）；ChangePlan 引擎应用与回滚分段前再查一次，不是 human Principal、或不在 human / platform 通道就返回 403 `forbidden`，什么都不写。**服务 API key 调这五个能力现在得到 403**。主机脚本不用服务 key 调它们，不受影响；排障见 `operations.md` 的排障表与「核验」一节。
+- **发版说明可写**：平台有了"管理员智能体"身份：它没有自己的 Principal，会话种类是 `admin_agent`，属于管理员本人在该工作区的 human Principal；Handle 只由容器持有，上限是 28 个只读能力，再按此人在工作区的角色收窄；每次调用都重新检查此人仍是有效平台管理员、工作区启用、开关打开，拒绝也记审计；经它的每条审计都带 `sessionKind: 'admin_agent'` 和 `sessionId`。approve、apply、rollback 与逐项确认只走人的控制台通道，管理员智能体的 Handle 一律拒绝。管理员被降为普通用户时，立即吊销其管理员智能体会话与 Handle。服务 API key 不能再装包、装模块或写 ChangePlan 分段（遗留 407）。
+- **回滚**：先查 `select count(*) from sessions where kind = 'admin_agent'`。为 0（这一版总是如此）时可以连 schema 一起撤：按 0001 的五个值重建约束，再 `delete from schema_migrations where module = 'core' and version = 49`。不为 0 时保留 core/0049、只回退代码（这些会话被 `capability_handles`、`llm_usage`、`tasks` 以 restrict 外键引用，删掉会丢用量与 Task 历史）。**AA4 之后**回退到 AA1 之前的代码，要先吊销管理员智能体的 Handle（旧代码把它当 bearer、不做逐次的平台角色检查），语句见 0049 文件头：`update capability_handles set revoked_at = now() where session_id in (select id from sessions where kind = 'admin_agent') and revoked_at is null`。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -2309,6 +2319,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.56.0 | governance `0030_action_request_target`（#876，S11 GO12）：`action_requests.target jsonb`（可空，不回填，不加索引），CHECK `action_requests_target_shape`，触发器 `action_requests_target_guard`（只写一次；`params` 指名的参数值必须等于 `identity`） | 可逆 | 只回退代码随时可以（旧代码不读写 `target`，排得比现在更严，遇 `executing` 就停）；撤 schema：**先撤 governance 0031（本表 0031 行）**，停 kernel、单事务，删触发器与函数 → 删 `target` 列 → 删 `schema_migrations` 的 governance 30 行（§3.90、§3.93） |
 | v0.56.0 | core `0048_operation_target_governance`（#876，S11 GO12）：改写 core/0047 的两个函数，允许治理刷新在已发布 Operation 版本上写 `target` | 可逆 | 只回退代码随时可以；撤 schema：重跑 core/0047 的两条 `create or replace function`，删 `schema_migrations` 的 core 48 行，已带 `target` 的已发布版本保留（§3.91） |
 | v0.56.0 | governance `0031_action_request_execution_guard`（#881，遗留 565）：函数 `action_request_identity_text`、`action_request_targets_conflict`、`action_request_execution_lock`，触发器 `action_requests_execution_guard`（进入 `executing` 前取门级锁，同门有冲突的执行中请求就拒绝，SQLSTATE `NTQ01`；开始事务不是 READ COMMITTED 时拒绝，SQLSTATE `NTQ02`） | 可逆 | 只回退代码随时可以（触发器留着；旧排水器偶尔收到 `NTQ01`：后台排水停一次，`request_action` 那次调用返回内部错误但请求照常执行一次）；撤 schema：**先于 0030**，停 kernel、单事务删触发器与四个函数，删 `schema_migrations` 的 governance 31 行，再做 0030 的步骤（§3.93） |
+| v0.58.0 之后的下一版 | core `0049_admin_agent_sessions`（#897，S11 AA1）：`sessions.kind` 的 CHECK 放宽一个值 `admin_agent`，不回填 | 可逆 | 只放宽：满足旧约束的行都满足新约束，重新加约束校验既有行无需回填；旧代码从不写 `admin_agent`，这一版也没有东西会签发管理员智能体的 Handle（开关默认关，AA4 之前没有运行时） | 先查 `admin_agent` 会话数：为 0 时可按 0001 的五个值重建约束并删掉 `schema_migrations` 的 core 49；不为 0 时保留 0049、只回退代码（restrict 外键）。AA4 之后回退到 AA1 之前的代码，先吊销管理员智能体 Handle（见 §3.97、0049 文件头） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
