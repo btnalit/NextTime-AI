@@ -77,6 +77,7 @@ import {
   useOperationDone,
 } from './GoalOperationsBar.js';
 import { OutputContractFields } from './OutputContract.js';
+import { StepSpecEditor } from './StepSpecEditor.js';
 
 export interface GoalPlanEditorProps {
   readonly goal: GoalDetailWire;
@@ -328,6 +329,7 @@ export function GoalPlanEditor({
               run={step.original ? runs.get(step.original.key) : undefined}
               definitions={published}
               allDefinitions={defs}
+              http={http}
               errorOf={errorOf}
               onChange={(patch) => changeStep(step.uid, patch)}
               onRemove={() => {
@@ -768,6 +770,7 @@ function StepEditor({
   run,
   definitions,
   allDefinitions,
+  http,
   errorOf,
   onChange,
   onRemove,
@@ -779,6 +782,7 @@ function StepEditor({
   /** The published Worker definitions (`undefined` until read, or when they could not be). */
   readonly definitions: readonly WorkerDefinitionSummary[] | undefined;
   readonly allDefinitions: readonly WorkerDefinitionSummary[] | undefined;
+  readonly http: CapabilityCaller;
   readonly errorOf: (key: FieldKey) => string | null;
   readonly onChange: (patch: Partial<StepDraft>) => void;
   readonly onRemove: () => void;
@@ -814,11 +818,8 @@ function StepEditor({
       other.key !== '' &&
       (!other.removed || step.dependsOn.includes(other.key)),
   );
+  // S11 GO15b: its WorkerSpec is edited under 「对 Worker 的调整」 — no longer among what stays.
   const kept = [
-    // S11 GO8a: its WorkerSpec rides along unchanged — the kernel admits it afresh if it changes.
-    step.original?.spec
-      ? t('这一步对 Worker 的调整', 'the step’s adjustments to its Worker')
-      : null,
     step.original?.reconcile
       ? t(
           `${step.original.reconcile.length} 条动作核对声明`,
@@ -928,6 +929,13 @@ function StepEditor({
           {step.original?.outputSchema === undefined ? (
             <AdoptOutputContract step={step} definitions={definitions} onChange={onChange} />
           ) : null}
+          <StepSpecEditor
+            id={id}
+            step={step}
+            http={http}
+            errorOf={errorOf}
+            onChange={(spec) => onChange({ spec })}
+          />
           <fieldset className="stack-s" data-testid="goal-plan-step-depends">
             <legend className="text-small">{t('在这些步骤之后', 'After these steps')}</legend>
             {others.length === 0 ? (

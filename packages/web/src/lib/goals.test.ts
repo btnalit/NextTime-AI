@@ -281,10 +281,12 @@ describe('lib/goals', () => {
       'revision',
     );
     expect(revised).toContain('它还只是草稿');
-    // The console's 「修订计划…」 keeps a WorkerSpec as it is: the entry agent changes it (UX P3-3).
+    // S11 GO15b: the console's 「修订计划…」 changes a WorkerSpec (it kept it as it was before,
+    // UX P3-3 on #853), so a revision is pointed there — never at a chat.
     expect(revised).toContain(
-      '发布它，或者在对话里让入口智能体修订计划换掉它，或者在「修订计划…」里移除这一步。',
+      '发布它，或者在「修订计划…」里改这一步对 Worker 的调整把它换掉，或者移除这一步。',
     );
+    expect(revised).not.toContain('对话');
     expect(revised).not.toContain('驳回');
     expect(planHintText(draft, en)).toMatch(
       /^Step “draft”: its Worker uses Skills “cert-rotation”, “33333333”, which are only drafts, not published — .* in Catalog before you confirm, or turn the plan down/,
@@ -300,7 +302,7 @@ describe('lib/goals', () => {
       /^步骤「old」的 Worker 要用的 Skill「legacy-scan」已经弃用，没有能用的版本：这一步不会开始，.*可以驳回，让助手换一个已发布的 Skill。$/,
     );
     expect(planHintText(deprecated, zh, new Map(), 'revision')).toMatch(
-      /可以在对话里让入口智能体修订计划，换一个已发布的 Skill，或者在「修订计划…」里移除这一步。$/,
+      /可以在「修订计划…」里改这一步对 Worker 的调整，换一个已发布的 Skill，或者移除这一步。$/,
     );
 
     const model = {
@@ -313,15 +315,15 @@ describe('lib/goals', () => {
       /^步骤「think」给 Worker 设定的模型「big-model」不在这个工作区允许的模型里：.*平台管理员可以在「平台 → 工作区」里允许它，或者驳回/,
     );
     expect(planHintText(model, en, new Map(), 'revision')).toMatch(
-      /Platform → Workspaces, or ask the entry agent in chat to revise the plan and change it, or remove the step under “Revise plan…”\.$/,
+      /Platform → Workspaces, or change the step’s adjustments to its Worker under “Revise plan…” to replace it, or remove the step there\.$/,
     );
     // A model the catalog no longer offers (a paused run's read): offered again, or the plan changes.
     const notOffered = { ...model, code: 'step_model_not_offered' as const };
     expect(planHintText(notOffered, zh, new Map(), 'revision')).toMatch(
-      /^步骤「think」给 Worker 设定的模型「big-model」已经不在模型目录里：这一步不会开始，.*平台管理员可以在「平台 → 模型与供应商」里重新提供它，或者在对话里让入口智能体修订计划换掉它/,
+      /^步骤「think」给 Worker 设定的模型「big-model」已经不在模型目录里：这一步不会开始，.*平台管理员可以在「平台 → 模型与供应商」里重新提供它，或者在「修订计划…」里改这一步对 Worker 的调整把它换掉/,
     );
     expect(planHintText(notOffered, en, new Map(), 'revision')).toMatch(
-      /which the model catalog no longer offers — .* under Platform → Models & providers, or ask the entry agent/,
+      /which the model catalog no longer offers — .* under Platform → Models & providers, or change the step’s adjustments to its Worker/,
     );
     // On a proposal (the catalog dropped it since it was proposed): confirming would be refused
     // (UX P3-5 on #853).
@@ -473,7 +475,7 @@ describe('lib/goals', () => {
       skillRefs: ['cert-rotation'],
     };
     expect(goalStateNote(paused('needs_decision', [draft]), undefined, budget, zh)?.text).toBe(
-      '需要人决定：步骤「a」的 Worker 要用的 Skill「cert-rotation」还只是草稿，这一步没有开始。在「能力目录」发布之后按「继续」，或者在对话里让入口智能体修订计划换掉它，见下面「步骤」里的说明。',
+      '需要人决定：步骤「a」的 Worker 要用的 Skill「cert-rotation」还只是草稿，这一步没有开始。在「能力目录」发布之后按「继续」，或者在「修订计划…」里改这一步对 Worker 的调整把它换掉，见下面「步骤」里的说明。',
     );
     expect(goalStateNote(paused('needs_decision', [draft]), undefined, budget, en)?.text).toMatch(
       /^A person must decide: the Worker of step “a” uses Skill “cert-rotation”, still a draft, so the step did not start\./,
@@ -496,7 +498,7 @@ describe('lib/goals', () => {
         zh,
       )?.text,
     ).toMatch(
-      /Skill「cert-rotation」已经弃用，这一步没有开始。在对话里让入口智能体修订计划，换一个已发布的 Skill/,
+      /Skill「cert-rotation」已经弃用，这一步没有开始。在「修订计划…」里改这一步对 Worker 的调整，换一个已发布的 Skill/,
     );
     // One step with several reasons: every one named, not only the one its attempt was refused for
     // (UX P3-2).
@@ -629,7 +631,7 @@ describe('lib/goals', () => {
       '步骤「scan」用的 Worker 版本已经不再发布（弃用了，或者不存在）：现在确认会被拒绝。可以驳回，让助手换一个已发布的 Worker。',
     );
     expect(planHintText(worker, en, new Map(), 'revision')).toMatch(
-      /^Step “scan” uses a Worker version that is no longer published \(deprecated, or not there\) — the step would not start, and the goal would pause there for a person\. You can ask the entry agent in chat to revise the plan and change it/,
+      /^Step “scan” uses a Worker version that is no longer published \(deprecated, or not there\) — the step would not start, and the goal would pause there for a person\. You can pick a published Worker version for the step under “Revise plan…”, or remove the step there\.$/,
     );
     expect(stepHintChipLabel(worker, zh)).toBe('Worker 已不再发布');
     expect(stepHintChipLabel(worker, en)).toBe('Worker no longer published');
@@ -662,7 +664,7 @@ describe('lib/goals', () => {
     expect(skillVersionShown('11111111-2222-4333-8444-555555555555 v1')).toBe('11111111 v1');
     expect(skillVersionShown('11111111-2222-4333-8444-555555555555')).toBe('11111111');
     expect(planHintText(version, zh, new Map(), 'revision', true)).toBe(
-      '步骤「scan」上一次尝试用的 Skill「cert-rotation v2」、「11111111 v1」现在不能再用了（已弃用，或者试用的草稿改过、被丢弃或弃用）。重试要用同一个版本，所以这一步不会再试，目标会停在这里等人处理。在对话里让入口智能体修订计划改动这一步，它会按现在的 Skill 重新开始；或者在「修订计划…」里移除这一步。',
+      '步骤「scan」上一次尝试用的 Skill「cert-rotation v2」、「11111111 v1」现在不能再用了（已弃用，或者试用的草稿改过、被丢弃或弃用）。重试要用同一个版本，所以这一步不会再试，目标会停在这里等人处理。在「修订计划…」里改动这一步（比如改它对 Worker 的调整），它会按现在的 Skill 重新开始；或者移除这一步。',
     );
     expect(planHintText(version, en, new Map(), 'revision', true)).toMatch(
       /^Step “scan”: the Skill versions “cert-rotation v2”, “11111111 v1” its last attempt used can no longer be used .* A retry uses the same versions, so the step would not be tried again/,
@@ -681,10 +683,10 @@ describe('lib/goals', () => {
       planRevision: { ...detail.planRevision, hints },
     });
     expect(goalStateNote(paused([version]), undefined, budget, zh)?.text).toBe(
-      '需要人决定：步骤「scan」上一次尝试用的 Skill「cert-rotation v2」、「11111111 v1」现在不能再用了，重试要用同一个版本，所以这一步没有再试。在对话里让入口智能体修订计划改动这一步，它会按现在的 Skill 重新开始；或者在「修订计划…」里移除这一步，见下面「步骤」里的说明。',
+      '需要人决定：步骤「scan」上一次尝试用的 Skill「cert-rotation v2」、「11111111 v1」现在不能再用了，重试要用同一个版本，所以这一步没有再试。在「修订计划…」里改动这一步（比如改它对 Worker 的调整），它会按现在的 Skill 重新开始；或者移除这一步，见下面「步骤」里的说明。',
     );
     expect(goalStateNote(paused([worker]), undefined, budget, en)?.text).toBe(
-      'A person must decide: step “scan” uses a Worker version that is no longer published, so the step was not tried again. Ask the entry agent in chat to revise the plan to a published Worker, or remove the step under “Revise plan…”. See the note under Steps.',
+      'A person must decide: step “scan” uses a Worker version that is no longer published, so the step was not tried again. Pick a published Worker version for the step under “Revise plan…”, or remove the step there. See the note under Steps.',
     );
     expect(goalStateNote(paused([worker, version]), undefined, budget, zh)?.text).toBe(
       '需要人决定：步骤「scan」不能照计划往下做：Worker 已不再发布、上次用的 Skill 版本不可用。见下面「步骤」里的说明。',

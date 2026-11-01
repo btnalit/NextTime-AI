@@ -7,12 +7,16 @@ import {
   MAX_ACCEPTANCE_PROMPT_CHARS,
   MAX_REVISION_REASON_CHARS,
   MAX_STEP_FILES_FROM,
+  MAX_WORKER_SPEC_INSTRUCTIONS_CHARS,
+  MAX_WORKER_SPEC_LIST,
+  MAX_WORKER_SPEC_TOKEN_BUDGET,
   type OutputSchema,
   type PlanStep,
   SECRET_FIELD_MASK,
   STEP_KEY_PATTERN,
   type StepRemoval,
   type StepRunWire,
+  type WorkerSpec,
   validateOutput,
 } from '@nexttime/shared';
 import { workerContractOf } from './catalog.js';
@@ -37,11 +41,29 @@ import type { WorkerDefinitionSummary } from './tasks.js';
  * The draft is made against one revision — the one the page showed when the editor opened — and
  * stays made against it: a re-read of the goal while editing moves the steps' states, never the
  * base (`basedOnRevision`), so a newer revision meanwhile is refused (409) rather than overwritten.
+ *
+ * S11 GO15b: a step's WorkerSpec — what it sets differently from its Worker — is edited here too,
+ * field by field (`SpecDraft`): each list, the model and the observation scope either keep the
+ * Worker's (「沿用定义」) or are picked from the directories; only the step's responsibility is
+ * typed, and the token cap is a number.
  */
+
+/** S11 GO15b: the WorkerSpec fields the editor offers (all of them). */
+export const SPEC_FIELDS = [
+  'instructions',
+  'skills',
+  'gates',
+  'capabilities',
+  'model',
+  'observeScope',
+  'tokenBudget',
+] as const satisfies readonly (keyof WorkerSpec)[];
+export type SpecField = (typeof SPEC_FIELDS)[number];
 
 /** Where a problem shows: one field of the editor, or the plan as a whole. */
 export type FieldKey =
   | `step:${string}:${'key' | 'worker' | 'dependsOn' | 'filesFrom' | 'maxAttempts' | 'input'}`
+  | `step:${string}:spec.${SpecField}`
   | `step:${string}`
   | `check:${string}:prompt`
   | `check:${string}`
@@ -73,7 +95,102 @@ export interface StepDraft {
    *  Worker or version changed (it was the old version's) — the editor says so until the step
    *  adopts again. Editor state only; never part of the plan. */
   readonly adoptionDropped: boolean;
+  /** S11 GO15b: what the step sets differently from its Worker. */
+  readonly spec: SpecDraft;
   readonly removed: boolean;
+}
+
+/**
+ * S11 GO15b: a step's WorkerSpec as the editor holds it. A list, the model and the observation
+ * scope are `null` while the step keeps what its Worker has (the model: `''`; the scope: no limit);
+ * a list set is what replaces the Worker's — empty is a list too (no Skill, no gate). The
+ * responsibility and the token cap are typed (`''`: none).
+ */
+export interface SpecDraft {
+  readonly instructions: string;
+  readonly skills: readonly string[] | null;
+  readonly gates: readonly string[] | null;
+  readonly capabilities: readonly string[] | null;
+  readonly model: string;
+  readonly observeScope: readonly string[] | null;
+  readonly tokenBudget: string;
+}
+
+export const EMPTY_SPEC_DRAFT: SpecDraft = {
+  instructions: '',
+  skills: null,
+  gates: null,
+  capabilities: null,
+  model: '',
+  observeScope: null,
+  tokenBudget: '',
+};
+
+export function specDraftOf(spec: WorkerSpec | undefined): SpecDraft {
+  if (spec === undefined) return EMPTY_SPEC_DRAFT;
+  return {
+    instructions: spec.instructions ?? '',
+    skills: spec.skills ?? null,
+    gates: spec.gates ?? null,
+    capabilities: spec.capabilities ?? null,
+    model: spec.model ?? '',
+    observeScope: spec.observeScope ?? null,
+    tokenBudget: spec.tokenBudget === undefined ? '' : String(spec.tokenBudget),
+  };
+}
+
+/** The fields a spec draft sets (in `SPEC_FIELDS` order). */
+export function specFieldsSet(spec: SpecDraft): readonly SpecField[] {
+  return SPEC_FIELDS.filter((field) => {
+    const value = spec[field];
+    return typeof value === 'string' ? value !== '' : value !== null;
+  });
+}
+
+/**
+ * The WorkerSpec a draft stands for — `undefined` when it sets nothing (the step runs its Worker as
+ * it is). A list with the same items as the plan in force has keeps that list's order, and a draft
+ * that comes back to the plan's WorkerSpec is that very object: the kernel takes a WorkerSpec sent
+ * as read as unchanged (one call, GO5c), keeping what a read only showed of its responsibility.
+ * `null` while the token cap is not a whole number (`draftProblems` says so).
+ */
+export function specOf(
+  spec: SpecDraft,
+  original: WorkerSpec | undefined,
+): WorkerSpec | undefined | null {
+  if (spec.tokenBudget !== '' && !/^\d+$/.test(spec.tokenBudget.trim())) return null;
+  const next: Record<string, unknown> = {};
+  for (const field of SPEC_FIELDS) {
+    const value = spec[field];
+    if (value === null || value === '') continue;
+    if (field === 'tokenBudget') next[field] = Number(spec.tokenBudget.trim());
+    else if (typeof value === 'string') next[field] = value;
+    else {
+      const before = original?.[field];
+      next[field] = Array.isArray(before) && sameSet(value, before) ? before : [...value];
+    }
+  }
+  if (Object.keys(next).length === 0) return undefined;
+  if (original !== undefined && sameSpec(next, original)) return original;
+  return next as WorkerSpec;
+}
+
+function sameSpec(a: WorkerSpec, b: WorkerSpec): boolean {
+  return SPEC_FIELDS.every((field) => {
+    const x = a[field];
+    const y = b[field];
+    if (Array.isArray(x) && Array.isArray(y)) {
+      return x.length === y.length && x.every((item, i) => item === y[i]);
+    }
+    return x === y;
+  });
+}
+
+/** Whether a step of the plan in force now sets its WorkerSpec differently (a new step: no). */
+export function specChanged(step: StepDraft): boolean {
+  if (step.original === null) return false;
+  const spec = specOf(step.spec, step.original.spec);
+  return spec !== step.original.spec;
 }
 
 export interface CheckDraft {
@@ -151,6 +268,7 @@ export function draftFromDetail(detail: GoalDetailWire): PlanDraft {
       inputText: prettyInput(step.input),
       adoptedOutputSchema: null,
       adoptionDropped: false,
+      spec: specDraftOf(step.spec),
       removed: false,
     })),
     acceptance: (plan.acceptance ?? []).map((check) => ({
@@ -184,6 +302,7 @@ export function emptyStep(): StepDraft {
     inputText: '',
     adoptedOutputSchema: null,
     adoptionDropped: false,
+    spec: EMPTY_SPEC_DRAFT,
     removed: false,
   };
 }
@@ -328,8 +447,8 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((item) => b.includes(item));
 }
 
-/** The plan the draft stands for — `null` while an input is not JSON (`draftProblems` says
- *  where). */
+/** The plan the draft stands for — `null` while an input is not JSON or a WorkerSpec's token cap
+ *  is not a whole number (`draftProblems` says where). */
 export function planOf(draft: PlanDraft): GoalPlan | null {
   const steps: PlanStep[] = [];
   for (const step of draft.steps) {
@@ -357,6 +476,9 @@ export function planOf(draft: PlanDraft): GoalPlan | null {
       }
     }
     if (step.adoptedOutputSchema !== null) next.outputSchema = step.adoptedOutputSchema;
+    const spec = specOf(step.spec, step.original?.spec);
+    if (spec === null) return null;
+    next.spec = spec;
     steps.push(next as PlanStep);
   }
   const acceptance: AcceptanceCheck[] = draft.acceptance
@@ -560,6 +682,9 @@ export function draftProblems(
         );
       }
     }
+    for (const [field, problem] of specProblems(step, rewrite, t)) {
+      problems.set(`step:${step.uid}:spec.${field}`, problem);
+    }
   }
   const cycle = dependencyCycle(kept);
   if (cycle !== null) {
@@ -652,6 +777,88 @@ export function draftProblems(
   return problems;
 }
 
+/**
+ * S11 GO15b: what in a step's WorkerSpec would certainly be refused (`WorkerSpecSchema`): a token cap
+ * that is not a whole number above 0 or is over the limit, a responsibility that says nothing or is
+ * too long, a list longer than the limit — and the responsibility as read holding what a read only
+ * showed (`shownOnly`): the WorkerSpec is one call (GO5c), so with any of its fields changed the
+ * responsibility left as read counts as written anew, and changed it is held to the same rule.
+ */
+function specProblems(
+  step: StepDraft,
+  rewrite: (kind: 'mask' | 'escape') => string,
+  t: Translate,
+): ReadonlyMap<SpecField, string> {
+  const problems = new Map<SpecField, string>();
+  const { spec } = step;
+  const cap = spec.tokenBudget.trim();
+  if (cap !== '') {
+    if (!/^\d+$/.test(cap) || Number(cap) <= 0) {
+      problems.set(
+        'tokenBudget',
+        t('填一个大于 0 的整数，或者清空。', 'A whole number above 0, or blank.'),
+      );
+    } else if (Number(cap) > MAX_WORKER_SPEC_TOKEN_BUDGET) {
+      problems.set(
+        'tokenBudget',
+        t(
+          `最多 ${MAX_WORKER_SPEC_TOKEN_BUDGET.toLocaleString()}。`,
+          `At most ${MAX_WORKER_SPEC_TOKEN_BUDGET.toLocaleString()}.`,
+        ),
+      );
+    }
+  }
+  for (const field of ['skills', 'gates', 'capabilities', 'observeScope'] as const) {
+    if ((spec[field]?.length ?? 0) > MAX_WORKER_SPEC_LIST) {
+      problems.set(
+        field,
+        t(`最多选 ${MAX_WORKER_SPEC_LIST} 个。`, `Pick at most ${MAX_WORKER_SPEC_LIST}.`),
+      );
+    }
+  }
+  const original = step.original?.spec?.instructions ?? '';
+  if (spec.instructions !== '' && spec.instructions.trim() === '') {
+    problems.set(
+      'instructions',
+      t(
+        '只有空白：写上这一步的说明，或者清空。',
+        'Only blanks: say what the step does, or clear it.',
+      ),
+    );
+  } else if (spec.instructions.length > MAX_WORKER_SPEC_INSTRUCTIONS_CHARS) {
+    problems.set(
+      'instructions',
+      t(
+        `最多 ${MAX_WORKER_SPEC_INSTRUCTIONS_CHARS} 个字符。`,
+        `At most ${MAX_WORKER_SPEC_INSTRUCTIONS_CHARS} characters.`,
+      ),
+    );
+  } else if (spec.instructions !== original) {
+    const shown = shownOnly(spec.instructions);
+    if (shown !== null) problems.set('instructions', rewrite(shown));
+  } else if (spec.instructions !== '' && specChanged(step)) {
+    const shown = shownOnly(original);
+    if (shown !== null) {
+      problems.set(
+        'instructions',
+        // The person changed another field of the WorkerSpec: say what to do with this one only.
+        `${t(
+          '改了这一步对 Worker 的调整，这一段说明就按新写的算，读出时的遮蔽不会再换回原文。',
+          'With the step’s adjustments to its Worker changed, this text counts as written anew, and what the read masked is no longer put back.',
+        )}${
+          shown === 'mask'
+            ? t('请把它重新写成不带凭据的说明。', ' Write it again, without the credential.')
+            : t(
+                '请把显示成 \\u{…} 的字符删掉或换成真正的字符。',
+                ' Delete the characters shown as \\u{…}, or type the real ones.',
+              )
+        }`,
+      );
+    }
+  }
+  return problems;
+}
+
 /** Whether a step of the plan in force now names another Worker or version (a new step: no). */
 export function workerChanged(step: StepDraft): boolean {
   return (
@@ -710,6 +917,9 @@ export function fieldOfRefusal(field: string, draft: PlanDraft): FieldKey {
     if (rest.startsWith('input')) return `step:${sent.uid}:input`;
     if (rest === 'key') return `step:${sent.uid}:key`;
     if (rest.startsWith('filesFrom')) return `step:${sent.uid}:filesFrom`;
+    // S11 GO15b: a WorkerSpec field (`spec.instructions`, `spec.skills.0`) lands on its field.
+    const spec = rest.startsWith('spec.') ? specFieldOf(rest) : null;
+    if (spec !== null) return `step:${sent.uid}:spec.${spec}`;
     return `step:${sent.uid}`;
   }
   const check = /^(?:plan\.)?acceptance(?:\.|\[)(\d+)\]?(?:\.(.*))?$/.exec(field);
@@ -719,6 +929,13 @@ export function fieldOfRefusal(field: string, draft: PlanDraft): FieldKey {
     return check[2]?.startsWith('prompt') ? `check:${sent.uid}:prompt` : `check:${sent.uid}`;
   }
   return 'plan';
+}
+
+/** The WorkerSpec field a path below a step names (`spec.model`, `spec.skills.0`), or a bare field
+ *  name; `null` for anything else. */
+function specFieldOf(path: string): SpecField | null {
+  const name = path.startsWith('spec.') ? (path.slice('spec.'.length).split('.')[0] ?? '') : path;
+  return (SPEC_FIELDS as readonly string[]).includes(name) ? (name as SpecField) : null;
 }
 
 /** Where one of the kernel's plan problems (`details.problems`, `path: message`) belongs: the
@@ -738,6 +955,10 @@ export function fieldOfProblem(problem: string, draft: PlanDraft): FieldKey {
     const step = draft.steps.find((item) => !item.removed && item.key === named[1]);
     // S11 GO14: `step "<key>": filesFrom[<i>] …` is about what the step reads.
     if (step && /^step "[^"]+": filesFrom\[/.test(problem)) return `step:${step.uid}:filesFrom`;
+    // S11 GO15b: `step "<key>": spec: <field> …` (`workerSpecProblems`) is about that field.
+    const spec = /^step "[^"]+": spec: (\w+)/.exec(problem);
+    const field = spec?.[1] === undefined ? null : specFieldOf(spec[1]);
+    if (step && field !== null) return `step:${step.uid}:spec.${field}`;
     if (step) return `step:${step.uid}`;
   }
   return 'plan';
