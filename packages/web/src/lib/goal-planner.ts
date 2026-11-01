@@ -100,7 +100,7 @@ const MAJOR_REASON: Readonly<Record<PlannerRevisionMajorReason, readonly [string
   goal_acceptance_changed: ['改了目标的验收', 'It changes what the goal is accepted on'],
   step_acceptance_changed: ['去掉或放宽了一步的验收', 'It drops or loosens a check of a step'],
   execution_step: [
-    '新增或改动的步骤能执行动作或启动别的 Worker',
+    '新增或改动的步骤能执行动作，或能让别的 Worker 替它做事',
     'A step it adds or changes can act or start Workers of its own',
   ],
   admission_blocked: [

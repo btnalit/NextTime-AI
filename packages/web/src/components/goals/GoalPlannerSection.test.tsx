@@ -460,7 +460,7 @@ describe('minor revisions the platform adopts (S11 GO9b)', () => {
         .map((item) => item.textContent),
     ).toEqual([
       '改了目标的验收',
-      '新增或改动的步骤能执行动作或启动别的 Worker（步骤 fetch-other）',
+      '新增或改动的步骤能执行动作，或能让别的 Worker 替它做事（步骤 fetch-other）',
     ]);
   });
 });
