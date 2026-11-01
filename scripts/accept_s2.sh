@@ -16,7 +16,9 @@
 # --real <provider/model>: leave the deployed (real) provider in place, pin the entry agent and
 # the ops-runner Worker to that models.json id, and replace the fake-scripted steps 2/3/4/5/7
 # with outcome-judged scenarios repeated --runs times (default 3) — see the "W7 real-model mode"
-# section below and docs/runbooks/host-accept-real-model.md. Never defaults the model.
+# section below and docs/runbooks/host-accept-real-model.md. Never defaults the model. Proposing
+# a goal from chat, one evaluation trial and one draft evaluation run there too
+# (scripts/lib/accept-s2-real-goal-eval.sh).
 # --extended (with --real): also the scenarios in the "--extended" section — memory across an
 # entry-container restart, stop mid-Turn, a rejected approval, docker observe, a Worker's own
 # egress, two principals at once — each --runs times. Roughly triples the real-model spend.
@@ -132,6 +134,9 @@ fi
 # service S12, S8 and S2 may leave, and with --real keeping their test ledger out of the published
 # manifest — see that file's own header comment.
 . "$(dirname "$0")/lib/accept-s2-goals.sh"
+# --real only: a goal proposed from chat (#829), evaluation trials (#822) and one draft evaluation
+# (#833) under the real model — see that file's own header comment.
+. "$(dirname "$0")/lib/accept-s2-real-goal-eval.sh"
 require_driver
 
 # `set -u` is active from the top of this script — pre-set every variable cleanup_step reads so
@@ -1960,6 +1965,13 @@ real_scenarios_step() {
   pass "real-always-allow" "gate policy: ssh.run_command on the ssh gate auto-approved from now on"
   real_ssh_run 1 auto
 
+  # A goal proposed from chat, then the evaluation scenarios (accept-s2-real-goal-eval.sh).
+  i=1
+  while [ "$i" -le "$RUNS" ]; do real_goal_run "$i"; i=$((i + 1)); done
+  real_eval_setup_step
+  real_eval_trials_step
+  real_eval_draft_step
+
   [ "$EXTENDED" -eq 1 ] || return 0
   REAL_LEAK=0
   for scenario in memory stop docker_observe worker_egress concurrent; do
@@ -1987,7 +1999,7 @@ real_evidence_step() {
 
 real_summary_step() {
   zero=0
-  keys="docker observe ssh_approve ssh_auto"
+  keys="docker observe ssh_approve ssh_auto goal eval_trial eval_draft"
   [ "$EXTENDED" -eq 1 ] && keys="$keys deny memory stop docker_observe worker_egress concurrent"
   for key in $keys; do
     eval "n=\${REAL_N_$key:-0}; ok=\${REAL_OK_$key:-0}; tc=\${REAL_TC_$key:-0}; te=\${REAL_TE_$key:-0}; wc=\${REAL_WC_$key:-0}; we=\${REAL_WE_$key:-0}"

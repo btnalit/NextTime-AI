@@ -4580,7 +4580,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **AA1 — 管理员 Agent 身份与上限**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（#897，2026-11-01 合入，c51352b；迁移 core/0049；同时关闭遗留 407）：设计见 `goal-orchestration-and-admin-agent-plan-2026-10-16.md` §5.2、§5.7（I-A1–I-A4），四个分叉 F1–F4 经协调同意，F1 另加两条硬约束（审计与 provenance 带会话种类，提议者不显示成管理员本人；approve / apply / rollback / 逐项确认只走人的控制台通道，管理员智能体 Handle 一律拒绝）。身份：没有独立 Principal，`sessions.kind = admin_agent`（core/0049 只放宽 CHECK），会话属于管理员在该工作区的 human Principal，Handle 只由容器持有（I19）。上限：`ADMIN_AGENT_CEILING_CAPABILITIES` 为 28 个 handle 通道、非平台、observe 类能力的字面量列表，模块加载时检查，带副作用的能力进上限必须显式列名；再按工作区角色收窄，`issueHandle` 拒绝超上限的范围。I-A3：`authenticateHandle` 与 `dispatchCapability` 每次重查（human 且未停用、工作区启用、用户 active、有效平台管理员（环境变量名单优先）、开关打开），拒绝记审计带原因。开关 `ADMIN_AGENT_ENABLED`：不设为关，`1` / `true` 为开，其他值启动即退出。`update_user` 把 admin 降为 user 时吊销其管理员智能体会话与 Handle。遗留 407：`install_pack`、`install_module`、`upgrade_module`、`roll_back_change_segment`、`verify_change_segment` 改 `actsForPerson`，ChangePlan 引擎应用 / 回滚分段前复查。测试：`application/admin-agent/admin-agent.integration.test.ts` 10 项。遗留 583–585。
 
 **AA2 — 平台状态只读投影**（见 `global-roadmap-2026-10-16.md` §4）
 
