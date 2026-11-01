@@ -2008,6 +2008,8 @@ real_summary_step() {
     # summary must never report success for zero real-model runs.
     [ "$ok" -gt 0 ] || zero=1
   done
+  # Before judging the counts: a refusal for the workspace budget voids them (legacy 586).
+  real_budget_check "real-budget"
   [ "$zero" -eq 0 ] || fail "real-summary" "at least one scenario had zero successful runs (see REAL lines)"
   pass "real-summary" "every scenario succeeded at least once under model=$REAL_MODEL"
 }

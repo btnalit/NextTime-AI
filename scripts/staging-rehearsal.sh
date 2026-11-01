@@ -45,7 +45,7 @@
 #                       the console's provider test on the model, and
 #                       run accept_s2.sh/accept_s3.sh --real <provider/model> --runs N (default 3).
 #                       Costs real tokens; the kernel's own per-workspace daily cap
-#                       LLM_DAILY_TOKEN_BUDGET is set to --real-token-budget (default 3000000) first,
+#                       LLM_DAILY_TOKEN_BUDGET is set to --real-token-budget (default 8000000) first,
 #                       so a runaway scenario is refused by the platform, not by luck. The model id and provider names are never printed by
 #                       this script; the accept scripts do print the model id — callers scrub logs
 #                       before publishing them (staging.yml does). --real-extended adds
@@ -65,7 +65,7 @@ set -u
 die() { echo "staging-rehearsal: $*" >&2; exit 2; }
 
 disposable=0 FROM= TO= WORK= RUNTIME= seed=1 verify_flag= allow_baseline=0
-REAL_MODEL= REAL_PROVIDERS= REAL_ENV= RUNS=3 BUDGET=3000000 REAL_EXTENDED=
+REAL_MODEL= REAL_PROVIDERS= REAL_ENV= RUNS=3 BUDGET=8000000 REAL_EXTENDED=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --disposable-host) disposable=1 ;;

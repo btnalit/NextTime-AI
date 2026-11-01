@@ -193,6 +193,9 @@ real_eval_trials_step() {
   REAL_EVAL_PLATFORM_DEFECT=0
   i=1
   while [ "$i" -le "$RUNS" ]; do real_eval_trial_run "$i"; i=$((i + 1)); done
+  # A trial whose model calls were refused for the workspace budget is the round's budget, not a
+  # platform defect: name that first (legacy 586).
+  [ "$REAL_EVAL_PLATFORM_DEFECT" -eq 0 ] || real_budget_check "real-budget"
   [ "$REAL_EVAL_PLATFORM_DEFECT" -eq 0 ] || fail "real-eval-trial" "an evaluation trial was refused or errored for a reason that is not its Worker's (see RUN scenario=eval_trial lines)"
   pass "real-eval-trial" "no evaluation trial was refused or errored for a reason that is not its Worker's ($RUNS runs)"
 }

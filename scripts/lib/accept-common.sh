@@ -394,6 +394,29 @@ accept_provider_restore() {
   return 0
 }
 
+# real_budget_check <step>: fails <step> when llm-proxy refused a model call of this run's
+# workspace ($WORKSPACE_ID) because a budget ran out (legacy 586). From the first refusal on, every
+# Turn and Worker run of the workspace fails at its first model call, so the REAL lines after it
+# measure the budget, not the model: the round is void. Raise the budget (staging.yml
+# `token_budget`, staging-rehearsal.sh --real-token-budget, or LLM_DAILY_TOKEN_BUDGET on a host) and
+# run again. Reads llm-proxy's own refusal line (`llm-proxy: refused, workspace budget exhausted`,
+# which carries workspaceId and scope), so the evidence is the proxy's, not a scenario's guess. A
+# log that cannot be read is a SKIP, never a pass.
+real_budget_check() {
+  if ! rbc_log=$(docker compose logs --no-color --no-log-prefix llm-proxy </dev/null 2>&1); then
+    skip "$1" "'docker compose logs llm-proxy' failed, so budget refusals were not checked: $(printf '%s' "$rbc_log" | tail -1)"
+    return 0
+  fi
+  rbc_lines=$(printf '%s\n' "$rbc_log" | grep -F 'refused, workspace budget exhausted' | grep -F "\"workspaceId\":\"$WORKSPACE_ID\"")
+  if [ -z "$rbc_lines" ]; then
+    pass "$1" "llm-proxy refused no model call of workspace $WORKSPACE_ID for a budget"
+    return 0
+  fi
+  rbc_n=$(printf '%s\n' "$rbc_lines" | wc -l | tr -d ' ')
+  rbc_scopes=$(printf '%s\n' "$rbc_lines" | sed -n 's/.*"scope":"\([a-z_]*\)".*/\1/p' | sort -u | tr '\n' ' ')
+  fail "$1" "llm-proxy refused $rbc_n model call(s) of workspace $WORKSPACE_ID (scope: ${rbc_scopes% }): the budget ran out mid-run, so the REAL lines measure the budget, not the model; raise it and run again (docs/runbooks/host-accept-real-model.md §8)"
+}
+
 # chat_assistant_text <token> <chatId>: every assistant message of the chat, joined with spaces
 # and lower-cased, printed on one line. Polls get-history until the text stops changing (up to
 # ~10s): the Turn's `completed` metadata can reach the driver before the last assistant message

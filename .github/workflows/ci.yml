@@ -110,6 +110,9 @@ jobs:
       - name: Acceptance kernel-link wait unit tests (scripts/lib/accept-common.sh)
         run: node --test scripts/accept-kernel-link.test.mjs
 
+      - name: Acceptance real-model budget check unit tests (scripts/lib/accept-common.sh, legacy 586)
+        run: node --test scripts/accept-real-budget.test.mjs
+
       - name: CSS token guard detector unit tests (S6-A0)
         run: node --test scripts/guards/css-tokens.test.mjs
 
