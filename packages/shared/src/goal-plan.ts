@@ -366,7 +366,10 @@ export const PlanHintSchema = z
 export type PlanHint = z.infer<typeof PlanHintSchema>;
 
 /** A GoalRun's budget (I-G6; goal/0001's `budget_*` columns and their CHECKs): tokens and step
- *  attempts spent, revisions made after the first, wall-clock seconds from confirmation. */
+ *  attempts spent, revisions made after the first, wall-clock seconds from confirmation.
+ *  S11 GO10: `maxRevisions` also caps the goal planner's rounds (`usage.plannerRounds`, the
+ *  planning rounds that started a planning Task) — two counts, each against the same limit: a
+ *  person's own revision runs no planner round, a planner round need not make a revision. */
 export const GoalBudgetSchema = z
   .object({
     maxTokens: z.number().int().positive(),

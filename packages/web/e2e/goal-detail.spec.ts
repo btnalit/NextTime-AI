@@ -55,7 +55,7 @@ function run(overrides: Record<string, unknown> = {}) {
     statement: '把三台主机的证书都换成新签发的，旧证书确认不再使用后删除',
     currentRevision: 2,
     budget: { maxTokens: 200000, maxSteps: 12, maxRevisions: 3, maxWallClockSeconds: 14400 },
-    usage: { tokens: 48200, steps: 3, revisions: 1, plannerTokens: 0 },
+    usage: { tokens: 48200, steps: 3, revisions: 1, plannerTokens: 0, plannerRounds: 0 },
     stepCounts: {
       pending: 1,
       ready: 0,
@@ -304,7 +304,7 @@ const GOALS = [
     outcomeBasis: 'verified_by_check',
     statement: '给备份库加一块盘并确认挂载',
     currentRevision: 1,
-    usage: { tokens: 9100, steps: 2, revisions: 0, plannerTokens: 0 },
+    usage: { tokens: 9100, steps: 2, revisions: 0, plannerTokens: 0, plannerRounds: 0 },
     stepCounts: { ...run().stepCounts, pending: 0, waiting: 0, succeeded: 2, superseded: 0 },
     endedAt: T3,
   }),
@@ -315,7 +315,7 @@ const GOALS = [
     onBehalfOf: BOB,
     statement: '升级数据库到下一个小版本',
     currentRevision: 1,
-    usage: { tokens: 1200, steps: 1, revisions: 0, plannerTokens: 0 },
+    usage: { tokens: 1200, steps: 1, revisions: 0, plannerTokens: 0, plannerRounds: 0 },
   }),
 ];
 
@@ -578,7 +578,7 @@ test.describe('S11 GO6: operations on a goal (stand-in reads and operations)', (
           { ...summary(1), status: 'proposed', acceptedBy: null, decidedBy: null, decidedAt: null },
         ],
         steps: [],
-        usage: { tokens: 0, steps: 0, revisions: 0, plannerTokens: 0 },
+        usage: { tokens: 0, steps: 0, revisions: 0, plannerTokens: 0, plannerRounds: 0 },
       });
       await page.goto(`/#/work/goals/${GOAL}`);
       await page.getByTestId('goal-op-confirm').click({ timeout: 15_000 });
@@ -757,7 +757,7 @@ test.describe('S11 「门确认不存在」 B: absence checks on a goal (stand-i
                     },
                   ],
                   steps: [],
-                  usage: { tokens: 0, steps: 0, revisions: 0, plannerTokens: 0 },
+                  usage: { tokens: 0, steps: 0, revisions: 0, plannerTokens: 0, plannerRounds: 0 },
                 }
               : {
                   ...DETAIL,

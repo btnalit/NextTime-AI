@@ -38,6 +38,11 @@ import type {
 import { GOAL_PLANNER_NO_PROGRESS_LIMIT, visibleText } from '@nexttime/shared';
 import { actionLabel } from './capability-labels.js';
 import { clipMiddle, redactSensitive, shortId } from './format.js';
+import {
+  currentPlanningConclusion,
+  plannerRoundsUsedUpText,
+  planningOutcomeText,
+} from './goal-planner.js';
 import { pendingTrialStepKeys } from './goal-trials.js';
 import { isUuidLike } from './graph-view.js';
 import type { Translate } from './i18n.js';
@@ -1033,6 +1038,27 @@ export function goalBudgetRows(
   ];
 }
 
+/** S11 GO10 (coordinator on #870): the goal planner's rounds — rounds that started a planning
+ *  Task, whatever they came to — against `maxRevisions`, a row of the budget card beside the plan
+ *  revisions: two counts, one limit. Not a budget dimension of {@link goalBudgetRows} (reaching it
+ *  stops the planner, it does not pause the goal `budget_exhausted`). `null` for a goal its
+ *  requester did not let the planner near and that never ran one. */
+export interface PlannerRoundsRow extends Omit<BudgetRow, 'key'> {
+  readonly key: 'plannerRounds';
+}
+
+export function plannerRoundsRow(goal: GoalDetailWire, t: Translate): PlannerRoundsRow | null {
+  if (goal.planner === null && goal.usage.plannerRounds === 0) return null;
+  return {
+    key: 'plannerRounds',
+    label: t('规划器轮数', 'Planner rounds'),
+    used: goal.usage.plannerRounds,
+    max: goal.budget.maxRevisions,
+    usedText: String(goal.usage.plannerRounds),
+    maxText: String(goal.budget.maxRevisions),
+  };
+}
+
 /** The budget dimensions used up (`used ≥ max`; a revision budget of 0 is not "used up" — it only
  *  means no revision is allowed). */
 export function exhaustedBudget(rows: readonly BudgetRow[]): readonly BudgetRow[] {
@@ -1716,6 +1742,44 @@ function pausedNote(
             'A person must decide: the goal planner is looking at this failure to propose a revision; it shows under Goal planner below.',
           ),
         };
+      }
+      // S11 GO10 (UX P2-1 on #870): the planner's round for this failure stopped without a
+      // revision — the pause is about that, in the planner card's words (the planner rounds used
+      // up, with their count), not the general sentence below.
+      const conclusion =
+        goal.planningRounds && goal.steps
+          ? currentPlanningConclusion({
+              ...goal,
+              planningRounds: goal.planningRounds,
+              steps: goal.steps,
+            })
+          : null;
+      if (conclusion?.status === 'failed' && goal.planningRounds) {
+        const rounds = { planningRounds: goal.planningRounds, budget: goal.budget };
+        const attempt = t(
+          `步骤「${conclusion.stepKey}」第 ${conclusion.stepAttempt} 次尝试`,
+          `step ${conclusion.stepKey}’s attempt ${conclusion.stepAttempt}`,
+        );
+        const usedUp = plannerRoundsUsedUpText(rounds, conclusion, t);
+        if (usedUp) {
+          return {
+            tone: 'warn',
+            text: t(
+              `需要人决定：${usedUp}，平台不再为${attempt}的失败运行规划器。可以重试步骤、自己修订计划或结束目标。`,
+              `A person must decide: ${usedUp}, so no planner runs for the failure of ${attempt}. Retry the step, revise the plan yourself or end the goal.`,
+            ),
+          };
+        }
+        const outcome = planningOutcomeText(conclusion, t, rounds);
+        if (outcome) {
+          return {
+            tone: 'warn',
+            text: t(
+              `需要人决定：${attempt}失败了，目标规划器这次没有给出修订：${outcome}可以重试步骤、自己修订计划或结束目标，见下面「目标规划器」。`,
+              `A person must decide: ${attempt} failed and the goal planner gave no revision this time: ${outcome} Retry the step, revise the plan yourself or end the goal; see Goal planner below.`,
+            ),
+          };
+        }
       }
       if (
         goal.acceptance?.absenceBaselines.some(

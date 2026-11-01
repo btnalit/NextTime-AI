@@ -342,10 +342,16 @@ describe('goal planner on the goal page (S11 GO9a)', () => {
     expect(hint).toContain('同一步的工作平台最多替你改两次');
     // S11 GO10: the breaker, and the rounds the revision limit allows.
     expect(hint).toContain('连续 3 轮换路都没让任何一步成功时，目标暂停，等你决定');
-    expect(hint).toContain('规划器最多规划 3 轮，和计划修订次数共用上限，被拒或没提出修订的轮也算');
+    expect(hint).toContain(
+      '规划器最多跑 3 轮，上限和计划修订次数相同，两者各自计数；被拒或没提出修订的轮也算一轮。',
+    );
+    // UX P3-2 on #870: one rule a line.
+    expect(
+      within(confirm).getByTestId('goal-op-confirm-planner-rules').querySelectorAll('li'),
+    ).toHaveLength(7);
     fireEvent.click(within(confirm).getByTestId('goal-op-confirm-planner-propose'));
     expect(within(confirm).getByTestId('goal-op-confirm-planner').textContent).toContain(
-      '规划器最多规划 3 轮',
+      '规划器最多跑 3 轮，上限和计划修订次数相同',
     );
     fireEvent.click(within(confirm).getByTestId('goal-op-confirm-planner-apply_minor'));
     fireEvent.click(within(confirm).getByTestId('confirm-button'));
@@ -370,7 +376,20 @@ describe('goal planner on the goal page (S11 GO9a)', () => {
     fireEvent.click(await screen.findByTestId('goal-op-confirm'));
     const confirm = await screen.findByTestId('goal-op-confirm-confirm');
     expect(within(confirm).getByTestId('goal-op-confirm-planner').textContent).toContain(
-      '这个目标的计划修订上限是 0，规划器不会运行',
+      '这个目标的计划修订上限是 0，规划器不会运行，所以只能选「不用目标规划器」',
+    );
+    // UX P3-3 on #870: "no planner" is chosen, and the two that would not run are not offered.
+    const radio = (value: string) =>
+      within(confirm).getByTestId(`goal-op-confirm-planner-${value}`) as HTMLInputElement;
+    expect(radio('off').checked).toBe(true);
+    expect(radio('propose').disabled).toBe(true);
+    expect(radio('apply_minor').disabled).toBe(true);
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() =>
+      expect(http.calls.find((call) => call.name === 'confirm_goal')?.params).toEqual({
+        goalRunId: 'goal-1',
+        revision: 1,
+      }),
     );
   });
 
@@ -378,7 +397,7 @@ describe('goal planner on the goal page (S11 GO9a)', () => {
     const base = proposedDetail();
     const detail: GoalDetailWire = {
       ...base,
-      usage: { ...base.usage, tokens: 52000, plannerTokens: 31000 },
+      usage: { ...base.usage, tokens: 52000, plannerTokens: 31000, plannerRounds: 1 },
       planningRounds: [
         round({ id: 'round-0', status: 'failed', revision: null, taskId: null }),
         ...base.planningRounds,
@@ -389,10 +408,13 @@ describe('goal planner on the goal page (S11 GO9a)', () => {
     const card = await screen.findByTestId('goal-planner');
     // A round recorded failed before it ran a planner does not count.
     expect(within(card).getByTestId('goal-planner-spent').textContent).toBe(
-      '到目前规划器跑了 1 轮（最多 3 轮，和计划修订次数共用上限），用了 31,000 token。',
+      '到目前规划器跑了 1 轮（最多 3 轮，上限和计划修订次数相同），用了 31,000 token。',
     );
     const budget = await screen.findByTestId('goal-budget');
     expect(budget.textContent).toContain('52,000（其中规划器 31,000） / 100,000');
+    // Coordinator on #870: the planner rounds have a row of their own, after the revisions.
+    expect(within(budget).getByTestId('goal-budget-plannerRounds').textContent).toBe('1 / 3');
+    expect(budget.textContent).toMatch(/计划修订.*规划器轮数.*用时/);
   });
 
   it('the revision list marks the planner’s proposal', async () => {
@@ -578,6 +600,85 @@ describe('the planner card after the UX review of #864', () => {
     expect(conclusion.textContent).toContain('规划器的任务没有交回可用的结果');
     expect(screen.queryByTestId('goal-planner-round-detail')).toBeNull();
     expect(document.body.textContent).not.toContain('SIGKILL');
+  });
+
+  it('UX P2-1 on #870: the planner rounds used up say so with their count, on the card, in the rounds and atop the page', async () => {
+    const ran = (id: string) =>
+      round({ id, status: 'no_revision', stepAttempt: 1, revision: null, taskId: `task-${id}` });
+    const base = failedFetch([
+      ran('round-a'),
+      ran('round-b'),
+      ran('round-c'),
+      round({
+        id: 'round-d',
+        status: 'failed',
+        revision: null,
+        taskId: null,
+        outcomeReason: 'revision_budget_exhausted',
+        detail: '3 of 3 planner rounds already run',
+      }),
+    ]);
+    const detail = { ...base, usage: { ...base.usage, revisions: 1, plannerRounds: 3 } };
+    renderPage(scriptedHttp(handlers(detail, workspace('p-alice', 'member'))));
+    const conclusion = await screen.findByTestId('goal-planner-conclusion');
+    expect(conclusion.textContent).toBe(
+      '规划器轮数已用完（3/3），规划器没有为步骤 fetch 第 2 次尝试（运行出错）的失败运行。接下来由请求人重试失败的步骤、自己修订计划或取消。',
+    );
+    expect(screen.getByTestId('goal-planner').textContent).toContain(
+      '规划器轮数已用完（3/3），这一轮没有运行规划器。',
+    );
+    expect(screen.getByTestId('goal-state-note').textContent).toContain(
+      '需要人决定：规划器轮数已用完（3/3），平台不再为步骤「fetch」第 2 次尝试的失败运行规划器。可以重试步骤、自己修订计划或结束目标。',
+    );
+    // Not the revisions, which the budget card counts apart; not the kernel's own words.
+    const budget = screen.getByTestId('goal-budget');
+    expect(within(budget).getByTestId('goal-budget-revisions').textContent).toBe('1 / 3');
+    expect(within(budget).getByTestId('goal-budget-plannerRounds').textContent).toBe('3 / 3');
+    expect(document.body.textContent).not.toContain('修订次数已经用完');
+    expect(document.body.textContent).not.toContain('planner rounds already run');
+    expect(document.body.textContent).not.toContain('平台发现');
+  });
+
+  it('UX P2-1 on #870: the revisions used up, with planner rounds left, still say the revisions', async () => {
+    const detail = failedFetch([
+      round({ id: 'round-a', status: 'no_revision', stepAttempt: 1, revision: null }),
+      round({
+        id: 'round-b',
+        status: 'failed',
+        revision: null,
+        taskId: null,
+        outcomeReason: 'revision_budget_exhausted',
+        detail: '3 of 3 revisions already made',
+      }),
+    ]);
+    renderPage(scriptedHttp(handlers(detail, workspace('p-alice', 'member'))));
+    const conclusion = await screen.findByTestId('goal-planner-conclusion');
+    expect(conclusion.textContent).toContain('这个目标的修订次数已经用完，规划器不再提修订。');
+    expect(screen.getByTestId('goal-state-note').textContent).toBe(
+      '需要人决定：步骤「fetch」第 2 次尝试失败了，目标规划器这次没有给出修订：这个目标的修订次数已经用完，规划器不再提修订。可以重试步骤、自己修订计划或结束目标，见下面「目标规划器」。',
+    );
+    expect(document.body.textContent).not.toContain('规划器轮数已用完');
+    expect(document.body.textContent).not.toContain('revisions already made');
+  });
+
+  it('UX P3-4 on #870: resuming a goal paused for no progress says what the planner does next', async () => {
+    const paused = (plannerRounds: number) => {
+      const base = failedFetch([], { pauseReason: 'no_progress', planner: 'apply_minor' });
+      return { ...base, usage: { ...base.usage, plannerRounds } };
+    };
+    renderPage(scriptedHttp(handlers(paused(2), workspace('p-alice', 'member'))));
+    fireEvent.click(await screen.findByTestId('goal-op-resume'));
+    const resume = await screen.findByTestId('goal-op-resume-confirm');
+    expect(within(resume).getByTestId('confirm-impact').textContent).toContain(
+      '继续后重新计数：步骤再失败时，规划器还会换路，还能跑 1 轮',
+    );
+    cleanup();
+    renderPage(scriptedHttp(handlers(paused(3), workspace('p-alice', 'member'))));
+    fireEvent.click(await screen.findByTestId('goal-op-resume'));
+    const spent = await screen.findByTestId('goal-op-resume-confirm');
+    expect(within(spent).getByTestId('confirm-impact').textContent).toContain(
+      '规划器轮数已用完（3/3）：继续后步骤再失败时，规划器不再运行，目标暂停等你决定',
+    );
   });
 
   it('P3-7: a conclusion about an earlier attempt is not this pause’s; the card sits below the overview', async () => {

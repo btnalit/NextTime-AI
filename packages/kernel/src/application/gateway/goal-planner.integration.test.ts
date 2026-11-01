@@ -1918,7 +1918,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         outcome_reason: 'revision_budget_exhausted',
         step_attempt: 2,
       });
-      expect(second?.detail).toBe('1 of 1 planning rounds already run');
+      expect(second?.detail).toBe('1 of 1 planner rounds already run');
       expect(await goalRow(goalRunId)).toMatchObject({
         status: 'paused',
         pause_reason: 'needs_decision',
@@ -1942,6 +1942,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(await rounds(goalRunId)).toEqual([
         expect.objectContaining({ status: 'failed', outcome_reason: 'token_budget_exhausted' }),
       ]);
+      expect((await getGoal(goalRunId, requester)).usage.plannerRounds).toBe(0);
       expect(
         await raw(
           `select id from tasks where workspace_id = $1 and goal_run_id = $2 and purpose = 'planning'`,
@@ -1957,6 +1958,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const [, second, ...more] = await rounds(goalRunId);
       expect(more).toEqual([]);
       expect(second).toMatchObject({ status: 'running', step_attempt: 2 });
+      expect((await getGoal(goalRunId, requester)).usage.plannerRounds).toBe(1);
     });
 
     it('the goal’s usage names the planner’s tokens, already part of its tokens (S11 GO10)', async () => {
@@ -1965,7 +1967,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const [round] = await rounds(goalRunId);
       if (!round) throw new Error('no round');
       const before = (await getGoal(goalRunId, requester)).usage;
-      expect(before.plannerTokens).toBe(0);
+      expect(before).toMatchObject({ plannerTokens: 0, plannerRounds: 1, revisions: 0 });
       const spend = (taskId: string, tokens: number) =>
         raw('update tasks set tokens_used = $3 where workspace_id = $1 and id = $2', [
           workspaceId,

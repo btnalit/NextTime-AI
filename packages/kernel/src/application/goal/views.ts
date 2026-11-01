@@ -126,6 +126,9 @@ export interface GoalRunUsageView {
   readonly revisions: number;
   /** S11 GO10: the part of `tokens` the goal planner used. */
   readonly plannerTokens: number;
+  /** S11 GO10: the planner rounds run — planning rounds that started a planning Task, whatever
+   *  they came to. `maxRevisions` caps them and `revisions` apart: two counts, one limit. */
+  readonly plannerRounds: number;
 }
 
 /** A run with what it has spent and its StepRuns counted by status (superseded ones included). */
@@ -174,6 +177,7 @@ export async function summarizeGoalRuns(
       // Revision 1 is the confirmed plan; each accepted one after it counts (`revise.ts`).
       revisions: Math.max((accepted.get(goal.id) ?? 0) - 1, 0),
       plannerTokens: usage.get(goal.id)?.plannerTokens ?? 0,
+      plannerRounds: usage.get(goal.id)?.plannerRounds ?? 0,
     },
     stepCounts: counts.get(goal.id) ?? emptyStepCounts(),
   }));

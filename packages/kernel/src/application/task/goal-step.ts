@@ -218,11 +218,13 @@ export async function listTaskWorkerRunTree(
 /** A GoalRun's usage as I-G6 counts it: tokens are the sum of its Tasks' `tokens_used` (nested
  *  child Tasks included), steps the attempts the advancer started (Tasks with a `step_attempt`).
  *  S11 GO10: `plannerTokens`, the part of `tokens` its goal planner's Tasks used (`purpose =
- *  'planning'`). */
+ *  'planning'`); `plannerRounds`, its planner rounds — the planning rounds that started a planning
+ *  Task, whatever they came to: the count `maxRevisions` caps, apart from its revisions. */
 export interface GoalRunUsage {
   readonly tokens: number;
   readonly steps: number;
   readonly plannerTokens: number;
+  readonly plannerRounds: number;
 }
 
 export async function readGoalRunUsage(
@@ -235,6 +237,7 @@ export async function readGoalRunUsage(
       tokens: 0,
       steps: 0,
       plannerTokens: 0,
+      plannerRounds: 0,
     }
   );
 }
@@ -252,11 +255,13 @@ export async function readGoalRunsUsage(
     tokens: string;
     steps: string;
     planner_tokens: string;
+    planner_rounds: string;
   }>(
     `select goal_run_id,
             coalesce(sum(tokens_used), 0)::bigint as tokens,
             count(*) filter (where step_attempt is not null)::bigint as steps,
-            coalesce(sum(tokens_used) filter (where purpose = 'planning'), 0)::bigint as planner_tokens
+            coalesce(sum(tokens_used) filter (where purpose = 'planning'), 0)::bigint as planner_tokens,
+            count(distinct planning_round_id) filter (where purpose = 'planning')::bigint as planner_rounds
        from tasks
       where workspace_id = $1 and goal_run_id = any($2::uuid[])
       group by goal_run_id`,
@@ -269,6 +274,7 @@ export async function readGoalRunsUsage(
         tokens: Number(row.tokens),
         steps: Number(row.steps),
         plannerTokens: Number(row.planner_tokens),
+        plannerRounds: Number(row.planner_rounds),
       },
     ]),
   );

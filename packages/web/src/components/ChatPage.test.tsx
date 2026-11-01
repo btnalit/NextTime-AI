@@ -1221,7 +1221,7 @@ describe('ChatPage goal card and milestones (S11 GO5e-2)', () => {
     status: 'proposed',
     onBehalfOf: 'p-me',
     confirmedAt: null,
-    usage: { tokens: 0, steps: 0, revisions: 0, plannerTokens: 0 },
+    usage: { tokens: 0, steps: 0, revisions: 0, plannerTokens: 0, plannerRounds: 0 },
   });
 
   it('a proposal is a card the requester opens to confirm; the statement comes from get_goal', async () => {

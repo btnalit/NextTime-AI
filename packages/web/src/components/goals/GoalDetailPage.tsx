@@ -22,6 +22,7 @@ import {
   outcomeBasisLabel,
   planAbsenceChecks,
   planSourceParameters,
+  plannerRoundsRow,
 } from '../../lib/goals.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
@@ -232,6 +233,12 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
   const unresolvedItems = unresolved.state.status === 'ready' ? unresolved.state.data : undefined;
   const budget = goalBudgetRows(goal, t);
   const note = goalStateNote(goal, unresolvedItems, budget, t);
+  // S11 GO10 (coordinator on #870): the planner rounds, right after the plan revisions they share
+  // a limit with — a count of their own on the card, not a budget dimension.
+  const plannerRounds = plannerRoundsRow(goal, t);
+  const budgetCard = plannerRounds
+    ? budget.flatMap((row) => (row.key === 'revisions' ? [row, plannerRounds] : [row]))
+    : budget;
   if (revising) {
     return (
       <div className="page goal-page stack" data-testid="goal-detail" data-goal-id={goal.id}>
@@ -326,7 +333,7 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
 
       <DashboardCard title={t('预算', 'Budget')} data-testid="goal-budget">
         <KeyValue
-          items={budget.map((row) => {
+          items={budgetCard.map((row) => {
             const pct = row.max > 0 ? Math.min(100, Math.round((row.used / row.max) * 100)) : 0;
             return {
               key: row.key,

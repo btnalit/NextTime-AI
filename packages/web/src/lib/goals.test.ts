@@ -33,6 +33,7 @@ import {
   planDiff,
   planHintKey,
   planHintText,
+  plannerRoundsRow,
   predicateSentence,
   reconcileAbsenceCheckOf,
   reconcileCheckSentence,
@@ -654,7 +655,9 @@ describe('lib/goals', () => {
   it('S11 GO10: the token row names the planner’s share only when it spent any', () => {
     const rows = (plannerTokens: number) =>
       goalBudgetRows(
-        goalRun({ usage: { tokens: 9000, steps: 2, revisions: 0, plannerTokens } }),
+        goalRun({
+          usage: { tokens: 9000, steps: 2, revisions: 0, plannerTokens, plannerRounds: 0 },
+        }),
         zh,
       );
     expect(rows(0).find((row) => row.key === 'tokens')?.usedText).toBe('9,000');
@@ -664,10 +667,26 @@ describe('lib/goals', () => {
     expect(row?.used).toBe(9000);
     expect(
       goalBudgetRows(
-        goalRun({ usage: { tokens: 9000, steps: 2, revisions: 0, plannerTokens: 4000 } }),
+        goalRun({
+          usage: { tokens: 9000, steps: 2, revisions: 0, plannerTokens: 4000, plannerRounds: 2 },
+        }),
         en,
       ).find((item) => item.key === 'tokens')?.usedText,
     ).toBe('9,000 (planner 4,000)');
+  });
+
+  it('S11 GO10 (coordinator on #870): the planner rounds are a row of their own, against the revision limit', () => {
+    const usage = { tokens: 0, steps: 0, revisions: 1, plannerTokens: 0, plannerRounds: 2 };
+    expect(plannerRoundsRow(goalDetail({ planner: 'apply_minor', usage }), zh)).toMatchObject({
+      key: 'plannerRounds',
+      label: '规划器轮数',
+      usedText: '2',
+      maxText: '3',
+    });
+    // Not offered a planner and never ran one: no row.
+    expect(plannerRoundsRow(goalDetail({ planner: null }), zh)).toBeNull();
+    // Not a budget dimension: the rows a budget pause reads stay four.
+    expect(goalBudgetRows(goalDetail({ planner: 'apply_minor', usage }), zh)).toHaveLength(4);
   });
 
   it('S11 GO10: a no-progress pause names the steps of the planner’s latest rounds', () => {
@@ -832,7 +851,7 @@ describe('lib/goals', () => {
     const goal = goalRun({
       status: 'paused',
       pauseReason: 'budget_exhausted',
-      usage: { tokens: 100000, steps: 2, revisions: 0, plannerTokens: 0 },
+      usage: { tokens: 100000, steps: 2, revisions: 0, plannerTokens: 0, plannerRounds: 0 },
     });
     // Half an hour after confirmation: the two hours of wall clock are not used up.
     const budget = goalBudgetRows(goal, zh, Date.parse('2026-10-20T00:31:00.000Z'));

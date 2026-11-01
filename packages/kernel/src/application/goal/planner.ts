@@ -128,8 +128,10 @@ import type { GoalRunRow, StepRunRow } from './types.js';
  *     the run pauses `no_progress` instead, with no round row, for a person to retry, revise or
  *     end it. It is the goal-wide counterpart of the per-step limit above: that one stops one
  *     step's work being redone over and over, this one stops failures moving from step to step.
- *   - **Rounds against the revision budget**: a round of either kind is not opened once as many
- *     rounds as `maxRevisions` ran a planner, whatever they came to (`revision_budget_exhausted`).
+ *   - **Planner rounds**: a round of either kind is not opened once `maxRevisions` planner rounds
+ *     (rounds that started a planning Task, whatever they came to) have run
+ *     (`revision_budget_exhausted`). `maxRevisions` caps them and the revisions made each — two
+ *     counts, one limit; `usage.plannerRounds` reads the first.
  *
  * Every round settles once (goal/0014), and its audit row (`goal_planning_round.open`,
  * `goal_planning_round.settle`) carries `by: 'advancer'` with the requester as actor, like every
@@ -680,13 +682,14 @@ async function openRound(
       );
     }
   }
-  // S11 GO10: every round that ran a planner counts against the revision budget, whatever it
-  // came to (rejected, no revision, failed) — it spent the goal's tokens all the same.
+  // S11 GO10: the planner rounds — every round that started a planning Task, whatever it came to
+  // (rejected, no revision, failed), since it spent the goal's tokens all the same — are capped by
+  // `maxRevisions`, counted apart from the revisions made (two counts, one limit).
   const planned = rounds.filter((round) => round.task !== null).length;
   if (planned >= goal.budget.maxRevisions) {
     return failRound(
       'revision_budget_exhausted',
-      `${planned} of ${goal.budget.maxRevisions} planning rounds already run`,
+      `${planned} of ${goal.budget.maxRevisions} planner rounds already run`,
     );
   }
   const revisions = await client.query<{ accepted: number }>(

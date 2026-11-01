@@ -92,10 +92,57 @@ const OUTCOME: Readonly<Record<PlanningRoundOutcomeReason, readonly [string, str
   ],
 };
 
+/** What the planner-round helpers read of a goal. */
+type RoundsOfGoal = Pick<GoalDetailWire, 'planningRounds' | 'budget'>;
+
+/** S11 GO10 (UX P2-1 on #870): whether `round` was recorded `revision_budget_exhausted` because
+ *  the planner rounds ran out, not the plan revisions. The kernel checks the rounds first: a round
+ *  that started no planner, opened once as many rounds before it as `maxRevisions` allows had
+ *  started one. */
+export function plannerRoundsRanOut(goal: RoundsOfGoal, round: PlanningRoundWire): boolean {
+  return plannerRoundsBefore(goal, round) !== null;
+}
+
+/** The planner rounds run before `round` when they had run out by it ({@link
+ *  plannerRoundsRanOut}); `null` otherwise. */
+function plannerRoundsBefore(goal: RoundsOfGoal, round: PlanningRoundWire): number | null {
+  if (round.outcomeReason !== 'revision_budget_exhausted' || round.taskId !== null) return null;
+  const index = goal.planningRounds.findIndex((candidate) => candidate.id === round.id);
+  const before = goal.planningRounds
+    .slice(0, index < 0 ? goal.planningRounds.length : index)
+    .filter((candidate) => candidate.taskId !== null).length;
+  return before >= goal.budget.maxRevisions ? before : null;
+}
+
+/** S11 GO10 (coordinator on #870): "规划器轮数已用完（x/上限）" for a round the planner rounds
+ *  running out stopped — the same words on the planner card and atop the page; `null` for any
+ *  other round. */
+export function plannerRoundsUsedUpText(
+  goal: RoundsOfGoal,
+  round: PlanningRoundWire,
+  t: Translate,
+): string | null {
+  const before = plannerRoundsBefore(goal, round);
+  if (before === null) return null;
+  return t(
+    `规划器轮数已用完（${before}/${goal.budget.maxRevisions}）`,
+    `The planner rounds are used up (${before}/${goal.budget.maxRevisions})`,
+  );
+}
+
 /** Why a round ended the way it did, in a sentence — `null` for a round that has no reason (one
- *  running, one that proposed, one that found nothing to change). */
-export function planningOutcomeText(round: PlanningRoundWire, t: Translate): string | null {
+ *  running, one that proposed, one that found nothing to change). Given its `goal`, a round the
+ *  planner rounds running out stopped says so, with the count (UX P2-1 on #870), not that the
+ *  revisions ran out. */
+export function planningOutcomeText(
+  round: PlanningRoundWire,
+  t: Translate,
+  goal?: RoundsOfGoal,
+): string | null {
   if (round.outcomeReason === null) return null;
+  const usedUp = goal ? plannerRoundsUsedUpText(goal, round, t) : null;
+  if (usedUp)
+    return t(`${usedUp}，这一轮没有运行规划器。`, `${usedUp}, so this round ran no planner.`);
   const entry = OUTCOME[round.outcomeReason];
   return t(entry[0], entry[1]);
 }
@@ -208,7 +255,9 @@ export function plannerWorkDropped(goal: GoalDetailWire, t: Translate): string[]
 /** UX P2-2 on #864: the planner's last word on the pause the run is in, when it proposed nothing —
  *  the latest round, ended without a proposal, on the revision in force, while the run is paused.
  *  `null` otherwise (a round running or a proposal waiting say so themselves). */
-export function currentPlanningConclusion(goal: GoalDetailWire): PlanningRoundWire | null {
+export function currentPlanningConclusion(
+  goal: Pick<GoalDetailWire, 'status' | 'currentRevision' | 'planningRounds' | 'steps'>,
+): PlanningRoundWire | null {
   if (goal.status !== 'paused') return null;
   const latest = goal.planningRounds.at(-1);
   if (!latest) return null;
@@ -234,9 +283,14 @@ export function plannerNeedsAttention(goal: GoalDetailWire): boolean {
 }
 
 /** UX P3-3 on #864: whether a settled round's `detail` is worth showing — the platform's own note
- *  on a planning Task that failed only repeats its outcome, in the kernel's words. */
+ *  on a planning Task that failed only repeats its outcome, in the kernel's words; so does its note
+ *  on a budget used up (UX P2-1 on #870: the outcome and the budget card say it, with the count). */
 export function showsRoundDetail(round: PlanningRoundWire): boolean {
   return (
-    round.detail !== null && !(round.status === 'failed' && round.outcomeReason === 'task_failed')
+    round.detail !== null &&
+    !(
+      round.status === 'failed' &&
+      (round.outcomeReason === 'task_failed' || round.outcomeReason === 'revision_budget_exhausted')
+    )
   );
 }
