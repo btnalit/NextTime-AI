@@ -2040,7 +2040,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
     5. `delete from schema_migrations where module = 'goal' and version = 15`。
   - 撤 schema 的顺序：先撤 0015，再撤 0014 和 task/0012。
 
-### 3.88 目标预算全量：无进展熔断与规划器轮数（#870，S11 GO10，v0.54.0 之后的下一版起）
+### 3.88 目标预算全量：无进展熔断与规划器轮数（#870，S11 GO10，v0.55.0 起）
 
 无迁移、不改 compose、无单独主机步骤、无新环境变量；窗口前只读检查：无。
 
@@ -2048,6 +2048,22 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **行为变化**：`apply_minor` 下，自上次确认、继续或有步骤成功以来平台已自主规划 3 轮，再有一步失败时不开第 4 轮，目标暂停为「连续没有进展」（`paused(no_progress)`），等人重试步骤、修订计划或结束目标；人继续之后重新计数，暂停期间规划器不提议。
 - **发版说明可写**：目标用量单列规划器（`GoalUsageWire.plannerTokens`，已包含在 `tokens` 里；`plannerRounds`），控制台预算卡与规划器卡片显示规划器用了多少 token、跑了几轮。
 - **回滚**：只回退代码即可，无数据变化。回退后 `maxRevisions` 回到只限制被接受的修订，没有无进展熔断；处于 `paused(no_progress)` 的目标在旧代码里按普通暂停处理，人可继续。
+
+### 3.89 目标验收未通过时的规划轮（#872，goal 0016，S11 GO10b，v0.55.0 起）
+
+带一个迁移（goal `0016_planning_acceptance_anchor`），随 `apply-release.sh` 的迁移步骤自动应用。不改 compose，没有单独的主机步骤，没有新环境变量。
+
+- **发版说明可写**：所有步骤都成功、目标验收没通过时，如果请求人让规划器参与，规划器为这一轮验收提一个修订，由请求人决定；`apply_minor` 也只提议，平台不自己改计划。
+- **只回退代码的前提**：`select count(*) from goal_planning_rounds where acceptance_round is not null and status = 'running'` 为 0。不为 0 时，先等那一轮结算，或者让请求人对那个 run 继续或结束目标，再回退。
+- **原因**：v0.54.0 及更早的代码（以及含 GO10、不含 GO10b 的构建）经 inner join 读规划轮的步骤，看不到验收轮。
+  - 还在 running 的验收轮永不结算，规划器的结果不会落地。它的规划 Task 结束后，到期查询（不 join 步骤）仍看得到这一轮，这个 run 每个 tick 都被空推进，直到有人操作它（继续、结束、取消、修订计划或所有者锁定会把它放弃为 `run_left_pause`）。
+  - 已结算的验收轮无害：控制台规划器卡片不显示它，它提出的修订照样作为提议让请求人决定；若回退到只含 GO10 的构建，它的规划器轮数上限检查不再数它（`usage.plannerRounds` 照数），这样的目标之后可能多跑相应轮数（v0.54.0 没有规划器轮数上限，不涉及）。
+- **连 schema 一起回退**：不带 `status` 的同一计数必须为 0（第 3 步 `set not null` 会自己拒绝）。停 kernel，单事务执行：
+  1. 先恢复 goal/0015 的 `goal_planning_rounds_guard`（0016 的守卫读 `acceptance_round`）；
+  2. 删约束 `goal_planning_rounds_anchor`、`goal_planning_rounds_acceptance_kind` 和索引 `goal_planning_rounds_acceptance_uidx`；
+  3. 删 `acceptance_round` 列，`step_run_id`、`step_attempt`、`failure_category` 恢复 `not null`；
+  4. 删 `schema_migrations` 里 goal 16。
+- **回退到哪一版**：回退目标是 v0.54.0（GO10 #870 与 GO10b 同版发布）；不论退到只含 GO10 的构建还是更早的版本，前提相同。GO10 没有迁移，goal/0015 及更早的迁移不受 goal/0016 影响；迁移文件头有同样步骤。
 
 ## 4. Hotfix 流程
 
@@ -2202,6 +2218,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.54.0 | goal `0014_planning_rounds`（#864，S11 GO9a）：新表 `goal_planner_delegations`、`goal_planning_rounds` 与 guard 触发器，`plan_revisions` 新增触发器 `plan_revisions_planner`，不回填 | 可逆 | 回退前先让在跑的规划结束（窗口前 `select count(*) from goal_planning_rounds where status = 'running'` 为 0）；回退后的代码不读写新表；撤 schema 须先撤 task `0012`，再 `drop table goal_planning_rounds, goal_planner_delegations`、`drop trigger plan_revisions_planner on plan_revisions` 并删迁移里的函数，最后删 `schema_migrations` 的 goal 14 行（§3.86） |
 | v0.54.0 | task `0012_task_planning`（#864，S11 GO9a）：`tasks` 新列 `planning_round_id`（外键指向规划轮），`tasks_purpose` 增加 `planning`，重建 `tasks_purpose` / `tasks_goal_step_ref` / `tasks_output_schema` 三个 CHECK（全表校验时短暂持有 `ACCESS EXCLUSIVE`），新增 `tasks_planning_shape`、部分唯一索引与两个触发器，不回填 | 可逆 | 回退后的代码只对 `purpose` 为空的任务做崩溃重试，规划任务不会在 deny-all 之外重启；旧 `TaskWire.purpose` 枚举没有 `planning`，生产不校验结果，控制台把它当普通任务显示；撤 schema 先于 goal `0014`：删 `tasks_planning_shape`、`tasks_planning_round_fkey`、`tasks_planning_round_uidx`、触发器与函数 `tasks_planning_guard`、`worker_runs_planning_root`、列 `planning_round_id`，把三个 CHECK 恢复成 task/0011 的写法（如有 `planning` 行先处理），最后删 `schema_migrations` 的 task 12 行（§3.86） |
 | v0.54.0 | goal `0015_planner_apply_minor`（#866，S11 GO9b）：`goal_planner_delegations.mode` 增加 `apply_minor`；`goal_planning_rounds` 新列 `kind`（默认 `proposal`）、`revision_class`、`class_reasons`，状态增加 `applied`、原因增加 `step_keeps_failing` / `run_not_running`；新函数 `goal_planning_class_reasons_valid`，改写 `goal_planning_rounds_guard` 与 `plan_revisions_planner`；只有列默认值 | 可逆 | 回退目标是 v0.53.0（GO9a、GO9b 同版），只回退代码即可；窗口前 `select count(*) from goal_planning_rounds where status = 'running'` 为 0；撤 schema 前提是没有 `applied` 的轮、没有带新原因的轮、没有 `apply_minor` 授权，先于 goal `0014` 与 task `0012`，最后删 `schema_migrations` 的 goal 15 行（§3.87） |
+| v0.55.0 | goal `0016_planning_acceptance_anchor`（#872，S11 GO10b）：`goal_planning_rounds` 的 `step_run_id` / `step_attempt` / `failure_category` 改为可空，新列 `acceptance_round`，约束 `goal_planning_rounds_anchor`（恰好一个锚）、`goal_planning_rounds_acceptance_kind`（验收锚只能是 `proposal`），唯一索引 `goal_planning_rounds_acceptance_uidx`，重写 `goal_planning_rounds_guard`；不回填 | 可逆（有前提） | 只回退代码：窗口前 `select count(*) from goal_planning_rounds where acceptance_round is not null and status = 'running'` 为 0（否则先等结算，或让请求人继续或结束目标）；回退目标 v0.54.0（与 GO10 同版）。撤 schema：不带 `status` 的同一计数为 0，停 kernel、单事务：恢复 goal/0015 的守卫 → 删两个约束和索引 → 删 `acceptance_round`、三列恢复 `not null` → 删 `schema_migrations` 的 goal 16 行（§3.89） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
