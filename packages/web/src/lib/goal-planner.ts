@@ -15,9 +15,11 @@ import type { Translate } from './i18n.js';
  */
 
 /** The planner's proposal the requester may decide now: proposed by the planner, still
- *  `proposed`, based on the revision in force. At most one (a new round opens only once none
- *  waits); `null` when there is none. */
+ *  `proposed`, based on the revision in force, on a paused run (UX P2-5 on #864: only a pause
+ *  waits for it). At most one (a new round opens only once none waits); `null` when there is
+ *  none. */
 export function pendingPlannerProposal(goal: GoalDetailWire): PlanRevisionSummaryWire | null {
+  if (goal.status !== 'paused') return null;
   return (
     goal.revisions.find(
       (revision) =>
@@ -69,8 +71,8 @@ const OUTCOME: Readonly<Record<PlanningRoundOutcomeReason, readonly [string, str
     'What the planner proposed did not pass the platform’s checks, so it was not kept.',
   ],
   run_left_pause: [
-    '目标已经不在这次暂停里（继续、取消或被所有者锁定），这一轮作废。',
-    'The goal left the pause this round was for (resumed, cancelled or held by an owner), so the round was dropped.',
+    '目标已经不在这次暂停里（继续、结束、取消或被所有者锁定），这一轮作废。',
+    'The goal left the pause this round was for (resumed, ended, cancelled or held by an owner), so the round was dropped.',
   ],
   plan_revised: [
     '计划已经换成另一个版本，这一轮作废。',

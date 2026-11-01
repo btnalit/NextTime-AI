@@ -543,4 +543,50 @@ describe('the planner card after the UX review of #864', () => {
       '规划器提的第 2 版修订会被拒绝',
     );
   });
+
+  it('P2-5: ending says the planner’s proposal is rejected; an ended goal’s proposal no longer waits', async () => {
+    const steps = failedFetch([]).steps;
+    renderPage(scriptedHttp(handlers(proposedDetail({ steps }), workspace('p-alice', 'member'))));
+    fireEvent.click(await screen.findByTestId('goal-op-end'));
+    const end = await screen.findByTestId('goal-op-end-confirm');
+    expect(within(end).getByTestId('confirm-impact').textContent).toContain(
+      '规划器提的第 2 版修订会被拒绝',
+    );
+    cleanup();
+
+    // A proposal an earlier release left `proposed` on a goal that has ended since.
+    renderPage(
+      scriptedHttp(
+        handlers(
+          proposedDetail({
+            steps,
+            status: 'completed',
+            pauseReason: null,
+            outcome: 'not_achieved',
+          }),
+          workspace('p-alice', 'member'),
+        ),
+      ),
+    );
+    const card = await screen.findByTestId('goal-planner');
+    expect(within(card).queryByTestId('goal-planner-proposal')).toBeNull();
+    const listed = screen
+      .getAllByTestId('goal-revision')
+      .find((item) => item.getAttribute('data-revision') === '2');
+    expect(listed?.textContent).toContain('目标已经不在暂停中，不能再接受。');
+    expect(listed?.textContent).not.toContain('等请求人');
+  });
+
+  it('P2-5: while the planner works on the pause, ending waits for it and says why', async () => {
+    const detail = failedFetch([round({ status: 'running', revision: null, settledAt: null })]);
+    renderPage(scriptedHttp(handlers(detail, workspace('p-alice', 'member'))));
+    const end = (await screen.findByTestId('goal-op-end')) as HTMLButtonElement;
+    expect(end.disabled).toBe(true);
+    expect(
+      screen
+        .getAllByTestId('goal-op-wait')
+        .map((p) => p.textContent)
+        .join(),
+    ).toContain('目标规划器正在看步骤 fetch 的失败：等它给出结果再结束，或者取消目标。');
+  });
 });

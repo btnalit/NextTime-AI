@@ -16,8 +16,8 @@ import { findGoalPlannerPrincipal } from '../task/index.js';
  * action on a paused run applies to them: {@link closePlanning}. What opens and settles a round is
  * the advancer's (`planner.ts`, phase P of `advance.ts`).
  *
- * A round belongs to one pause (I-P4): once the run leaves it — resumed, cancelled, held by a
- * workspace owner — or its plan is revised, a round still running is `abandoned` (its Task is
+ * A round belongs to one pause (I-P4): once the run leaves it — resumed, ended, cancelled, held
+ * by a workspace owner — or its plan is revised, a round still running is `abandoned` (its Task is
  * terminated by the next advance, or by the cancelling run's), and a revision the planner proposed
  * that nobody decided is `rejected` on the person's behalf: it was made for a plan and a pause that
  * are no more. Accepting the planner's revision is such an action too, for every other round.

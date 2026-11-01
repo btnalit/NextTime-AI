@@ -33,6 +33,7 @@ import { markGoalRunDue } from './advancer.js';
 import { actionDisposition } from './disposition.js';
 import { moveGoalRun, moveStepRun } from './moves.js';
 import { isPlatformAcceptanceCheck, roundAcceptance } from './plan.js';
+import { closePlanning, listPlanningRounds } from './planning-rounds.js';
 import { getGoalRun, getPlanRevision, listStepRuns, lockStepRuns } from './reads.js';
 import {
   GoalRunForbiddenError,
@@ -65,8 +66,10 @@ import type { GoalControlActor, GoalRunRow } from './types.js';
  *     Decision, the transition's audit row and {@link readGoalAcceptance} name every overridden
  *     check with its evidence (the Observation it rests on, what went wrong). Nothing of the run
  *     may still run: no step running or waiting, no Task live, no request in flight (one could
- *     still execute after the end — cancel the run instead, which withdraws them). Steps not
- *     started (`pending`, `ready`) are skipped; a failed step stays failed — that is what it was.
+ *     still execute after the end — cancel the run instead, which withdraws them), the goal
+ *     planner's Task included. Steps not started (`pending`, `ready`) are skipped; a failed step
+ *     stays failed — that is what it was. The run's planning ends with it (S11 GO9a,
+ *     `planning-rounds.ts` `closePlanning`): a revision the planner proposed is rejected.
  *   - {@link readGoalAcceptance}: the verification rounds and their checks, the baselines its
  *     absence checks go by (S11 「门确认不存在」 B-c), and what the outcome rests on — the read model
  *     the console tells "the platform's checks passed" from "checks did not pass, the requester
@@ -275,9 +278,19 @@ export async function endGoalRun(
       `goal run ${goal.id}: step ${busy.stepKey} is ${busy.status}; wait for it, or cancel the run`,
     );
   }
-  if ((await listGoalRunLiveTaskSteps(client, workspaceId, goal.id)).length > 0) {
+  const liveTasks = await listGoalRunLiveTaskSteps(client, workspaceId, goal.id);
+  if (liveTasks.length > 0) {
+    // S11 GO9a (UX P2-5 on #864): the goal planner's Task is the run's too; say it is the planner.
+    const planning = (await listPlanningRounds(client, workspaceId, goal.id)).find(
+      (round) =>
+        round.status === 'running' &&
+        round.task !== null &&
+        liveTasks.some((task) => task.taskId === round.task?.id),
+    );
     throw new GoalRunStateError(
-      `goal run ${goal.id}: a Task of it still runs; wait for it, or cancel the run`,
+      planning && liveTasks.every((task) => task.stepRunId === null)
+        ? `goal run ${goal.id}: the goal planner is still looking at the failure of step ${planning.stepKey}; wait for what it proposes, or cancel the run`
+        : `goal run ${goal.id}: a Task of it still runs; wait for it, or cancel the run`,
     );
   }
   for (const step of steps) {
@@ -307,6 +320,10 @@ export async function endGoalRun(
     await moveStepRun(client, actor, step, 'skip', { audit: { reason: 'goal_ended' } });
     skipped.push(step.id);
   }
+  // S11 GO9a (UX P2-5 on #864): ending leaves the pause like resuming or cancelling does — a
+  // revision the planner proposed for it is rejected on the requester's behalf, and a round whose
+  // Task already ended (none can still run, above) is abandoned.
+  await closePlanning(client, workspaceId, goal.id, input.actor.principalId, 'run_left_pause');
   const status = await moveGoalRun(client, actor, goal, goal.status, 'complete', {
     outcome: { outcome: input.outcome, basis: 'requester', decisionId },
     audit: {
