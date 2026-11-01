@@ -1141,7 +1141,10 @@ describe('lib/goals', () => {
     const note = goalStateNote(goal, undefined, budget, zh);
     expect(note?.tone).toBe('warn');
     expect(note?.text).toMatch(/平台拒绝了这一步 Worker 的每一次模型调用，目标暂停了，这不是失败/);
-    expect(note?.text).toMatch(/之后继续这个目标即可/);
+    expect(note?.text).toMatch(
+      /预算每天 UTC 0 点（本地 \d\d:\d\d）重置；费用预算可以由工作区所有者在「模型与配额」里调高/,
+    );
+    expect(note?.text).toMatch(/之后继续这个目标即可。$/);
     expect(goalPauseReasonLabel('model_refused', zh)).toBe('模型调用被平台拒绝');
   });
 

@@ -297,6 +297,13 @@ export interface ProxyServerOptions {
  * the structured `budget_exhausted` body on the first attempt and can relay it (design doc I18:
  * "入口 agent 得知"). The body keeps the `{error: {code, message}}` shape every other refusal
  * here uses, plus the scope / numbers the kernel reported so the message is concrete.
+ *
+ * The message opens with "out of budget" (legacy 589): pi's own turn retry classifies a failed
+ * call by substrings of its error text (pi-ai `isRetryableAssistantError`), and "500", "502",
+ * "503", "504", "520" or "524" inside a spent or budget figure would read as a transient server
+ * error and retry a call that can only be refused again — each retry one more refused usage row,
+ * and a call answered after a mid-retry budget raise would follow a refusal in the same session.
+ * "out of budget" is on pi's non-retryable list, which it checks first.
  */
 export const BUDGET_EXHAUSTED_STATUS = 402;
 
@@ -574,7 +581,7 @@ export function createProxyServer(options: ProxyServerOptions): http.Server {
       sendJson(res, BUDGET_EXHAUSTED_STATUS, {
         error: {
           code: 'budget_exhausted',
-          message: `workspace budget exhausted (${exhausted.scope}: ${exhausted.spent} of ${exhausted.budget}); resets at ${exhausted.until}`,
+          message: `out of budget: workspace budget exhausted (${exhausted.scope}: ${exhausted.spent} of ${exhausted.budget}); resets at ${exhausted.until}`,
           scope: exhausted.scope,
           budget: exhausted.budget,
           spent: exhausted.spent,

@@ -16,6 +16,7 @@ import type {
 import { outcomeBasisTier } from '@nexttime/shared';
 import type { AuditResourceType, PlatformAuditResourceType } from './audit.js';
 import type { Translate } from './i18n.js';
+import { dailyBudgetsResetText } from './model-refused.js';
 import { ownEntry } from './own.js';
 import { labelText, statusChipStyle } from './status-tone.js';
 
@@ -461,8 +462,9 @@ export const TASK_FAILURE_REASON_LABELS: Readonly<
   model_refused: {
     short: { zh: '模型调用被平台拒绝', en: 'Model calls refused' },
     detail: {
-      zh: '工作区当天的模型预算用完了，平台拒绝了这个 Worker 的每一次模型调用，它什么都没做。预算在 UTC 0 点重置，管理员也可以提高预算。',
-      en: 'The workspace’s daily model budget was spent, so the platform refused every model call this Worker made and it did nothing. The budget resets at 00:00 UTC, or an administrator can raise it.',
+      // The reset and who raises which follow at read time (`taskFailureReasonText`).
+      zh: '工作区当天的模型预算用完了，平台拒绝了这个 Worker 的每一次模型调用，它什么都没做。',
+      en: 'The workspace’s daily model budget was spent, so the platform refused every model call this Worker made and it did nothing.',
     },
   },
 };
@@ -474,6 +476,13 @@ export function taskFailureReasonText(
   t: Translate,
 ): { readonly short: string; readonly detail: string } {
   const entry = ownEntry(TASK_FAILURE_REASON_LABELS, reason);
+  if (entry && reason === 'model_refused') {
+    // Legacy 589: when the budgets reset on the reader's clock, and who raises which.
+    return {
+      short: label(entry.short, t),
+      detail: `${label(entry.detail, t)}${t('', ' ')}${dailyBudgetsResetText(t)}`,
+    };
+  }
   if (entry) return { short: label(entry.short, t), detail: label(entry.detail, t) };
   return {
     short: t('其他原因', 'Another reason'),

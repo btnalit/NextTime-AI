@@ -944,6 +944,9 @@ describe('createProxyServer — S6-B budget-exhausted refusal (leftover 19) and 
     expect(body.error.code).toBe('budget_exhausted');
     expect(body.error.scope).toBe('workspace_daily_cost');
     expect(body.error.resetsAt).toBe('2099-01-01T00:00:00.000Z');
+    // Legacy 589: pi's turn retry checks its non-retryable list ("out of budget") before the
+    // transient one, whose "500" / "502" … a spent figure could contain.
+    expect(body.error.message).toMatch(/^out of budget: /);
     expect(upstreamHits).toBe(0);
     expect(logLines.some((line) => line.includes('workspace budget exhausted'))).toBe(true);
 

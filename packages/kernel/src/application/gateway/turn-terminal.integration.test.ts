@@ -819,6 +819,27 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(await systemMessages(chatId)).toEqual([]);
     });
 
+    it('legacy 589: a Worker’s answered calls carrying the person’s Turn are no answer from the entry agent — its refused-only Turn still fails', async () => {
+      const { chatId, turnId } = await startTurn();
+      const entry = await meteredSession('entry');
+      await meter(entry, turnId, 'workspace_daily_tokens');
+      // A Worker from an earlier Turn, still running for the same person, was answered before the
+      // budget ran out: its rows carry this Turn too.
+      const worker = await meteredSession('worker_run');
+      await meter(worker, turnId, 'completed');
+      await sink.handle(turnEnded(chatId, turnId, 'completed'));
+
+      const row = await turnRow(turnId);
+      expect(row?.status).toBe('failed');
+      expect(row?.metadata.modelRefused).toEqual({
+        scope: 'workspace_daily_tokens',
+        refusedCalls: 1,
+      });
+      expect((await systemMessages(chatId)).map((message) => message.kind)).toEqual([
+        'system.model_refused',
+      ]);
+    });
+
     it('legacy 589: Stop still comes first — a stopped Turn whose calls were refused ends interrupted, with no message', async () => {
       setAgentRuntimeForHandlers({ startTurn: async () => {}, stopTurn: async () => true });
       const { chatId, turnId } = await startTurn();

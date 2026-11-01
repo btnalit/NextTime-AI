@@ -76,15 +76,25 @@ test.describe('legacy 589: a message the platform refused (stand-in messages)', 
       await expect(cost.getByTestId('system-status-failure')).toHaveText('模型调用被平台拒绝');
       await expect(cost).toContainText('工作区当天的模型费用预算用完了');
       await expect(cost).toContainText('所以没有回复');
-      await expect(cost).toContainText('管理员也可以提高预算');
+      await expect(cost).toContainText(
+        '工作区所有者也可以在「模型与配额」里调高「每工作区日成本」',
+      );
       // In the reader's language, never the kernel's English, and nothing to open.
       await expect(cost).not.toContainText('The platform refused');
       await expect(cost.getByRole('button')).toHaveCount(0);
 
-      await expect(unknown).toContainText('工作区当天的模型预算用完了');
-      await expect(unknown).toContainText('预算每天 UTC 0 点重置');
+      // A budget this console does not know: no period, no setting.
+      await expect(unknown).toContainText('工作区的模型预算用完了');
+      await expect(unknown).toContainText('等预算重置，或者管理员调高它之后再发');
+      await expect(unknown).not.toContainText('每天');
       await expect(unknown).not.toContainText('workspace_monthly_tokens');
 
+      // UX acceptance of #910: the whole sentence is on the page — wrapped under the label, never
+      // cut — at both widths (text in the DOM is not text a person can read).
+      for (const text of await lines.locator('.system-status-text').all()) {
+        expect(await text.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+        expect(await text.evaluate((el) => getComputedStyle(el).whiteSpace)).toBe('normal');
+      }
       await expectNoSidewaysScroll(page);
       await page.screenshot({
         path: testInfo.outputPath(`chat-model-refused-${width}.png`),

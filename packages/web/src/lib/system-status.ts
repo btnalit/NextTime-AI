@@ -14,6 +14,7 @@ import {
 } from '@nexttime/shared';
 import { formatDateTime } from './format.js';
 import type { Translate } from './i18n.js';
+import { budgetRaiseText, localTimeOfUtcMidnight } from './model-refused.js';
 import type { ChatMessage } from './ws-client.js';
 
 /**
@@ -176,25 +177,34 @@ export function systemStatusLineFromMessage(
   return undefined;
 }
 
-/** Legacy 589: why a Turn has no reply, in the reader's language — which budget ran out and when
- *  it resets (local time, zone labelled). */
-export function modelRefusedText(line: ModelRefusedStatusLine, t: Translate): string {
+/** Legacy 589: why a Turn has no reply, in the reader's language — which budget ran out, when it
+ *  resets (the kernel's `resetsAt`, local time with its zone; else the daily budgets' 00:00 UTC on
+ *  the reader's clock), and who can raise it where (`lib/model-refused.ts`). A budget this console
+ *  does not know names no period: it may not be a daily one. */
+export function modelRefusedText(
+  line: ModelRefusedStatusLine,
+  t: Translate,
+  now: number = Date.now(),
+): string {
   const [budgetZh, budgetEn] =
     line.scope === 'workspace_daily_cost'
       ? ['当天的模型费用预算', 'daily model cost budget']
       : line.scope === 'workspace_daily_tokens'
         ? ['当天的模型 token 预算', 'daily model token budget']
-        : ['当天的模型预算', 'daily model budget'];
-  const resets = line.resetsAt ? formatDateTime(line.resetsAt) : null;
-  return resets
-    ? t(
-        `工作区${budgetZh}用完了，平台拒绝了这条消息的模型调用，所以没有回复。预算在 ${resets} 重置，管理员也可以提高预算。`,
-        `The workspace’s ${budgetEn} is spent, so the platform refused the model calls for this message and there is no reply. It resets at ${resets}, or an administrator can raise it.`,
-      )
-    : t(
-        `工作区${budgetZh}用完了，平台拒绝了这条消息的模型调用，所以没有回复。预算每天 UTC 0 点重置，管理员也可以提高预算。`,
-        `The workspace’s ${budgetEn} is spent, so the platform refused the model calls for this message and there is no reply. It resets at 00:00 UTC, or an administrator can raise it.`,
-      );
+        : ['的模型预算', 'model budget'];
+  const head = t(
+    `工作区${budgetZh}用完了，平台拒绝了这条消息的模型调用，所以没有回复。`,
+    `The workspace’s ${budgetEn} is spent, so the platform refused the model calls for this message and there is no reply. `,
+  );
+  if (line.resetsAt) {
+    const resets = formatDateTime(line.resetsAt, now);
+    return `${head}${t(`预算在 ${resets} 重置；`, `It resets at ${resets}. `)}${budgetRaiseText(line.scope, t)}`;
+  }
+  if (line.scope) {
+    const local = localTimeOfUtcMidnight(now);
+    return `${head}${t(`预算每天 UTC 0 点（本地 ${local}）重置；`, `It resets every day at 00:00 UTC (${local} local). `)}${budgetRaiseText(line.scope, t)}`;
+  }
+  return `${head}${t('等预算重置，或者管理员调高它之后再发。', 'Send it again once the budget resets or an administrator raises it.')}`;
 }
 
 /** A goal's status, and how it ended once it has, as its latest milestone in a chat says. */

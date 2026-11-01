@@ -693,6 +693,22 @@
   white-space: normal;
 }
 
+/* Legacy 589 (UX acceptance of #910): a refused Turn's sentence is the point of the line — why
+   there is no reply, when the budget resets, who can raise it — so it is never cut: it wraps on
+   the rows under its label, and the line reads as a box rather than a pill. */
+.system-status-line[data-variant="model_refused"] {
+  flex-wrap: wrap;
+  align-items: baseline;
+  row-gap: 2px;
+  padding: 6px 12px;
+  border-radius: 14px;
+  text-align: left;
+}
+
+.system-status-line[data-variant="model_refused"] .system-status-text {
+  white-space: normal;
+}
+
 /* #737 UX P2-3: what happened (the step, the sentence, why a step failed — wrapping after one
    another), and under it which goal, on a row with the line's whole width to itself. */
 .system-status-main {

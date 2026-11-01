@@ -47,6 +47,7 @@ import {
 import { pendingTrialStepKeys } from './goal-trials.js';
 import { isUuidLike } from './graph-view.js';
 import type { Translate } from './i18n.js';
+import { dailyBudgetsResetText } from './model-refused.js';
 
 /**
  * lib/goals (S11 GO6): what the console's goal pages (`components/goals/*`) read out of the
@@ -1771,10 +1772,10 @@ function pausedNote(
     case 'model_refused':
       return {
         tone: 'warn',
-        text: t(
-          '工作区当天的模型预算用完了，平台拒绝了这一步 Worker 的每一次模型调用，目标暂停了，这不是失败。预算在 UTC 0 点重置，管理员也可以提高预算；之后继续这个目标即可。',
-          'The workspace’s daily model budget was spent, so the platform refused every model call of this step’s Worker and the goal is paused, not failed. The budget resets at 00:00 UTC, or an administrator can raise it; then resume the goal.',
-        ),
+        text: `${t(
+          '工作区当天的模型预算用完了，平台拒绝了这一步 Worker 的每一次模型调用，目标暂停了，这不是失败。',
+          'The workspace’s daily model budget was spent, so the platform refused every model call of this step’s Worker and the goal is paused, not failed. ',
+        )}${dailyBudgetsResetText(t)}${t('之后继续这个目标即可。', ' Then resume the goal.')}`,
       };
     case 'no_progress': {
       // S11 GO10: the goal planner's latest rounds that ran — the ones the platform's breaker

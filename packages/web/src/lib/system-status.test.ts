@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { formatDateTime } from './format.js';
 import type { Translate } from './i18n.js';
+import { localTimeOfUtcMidnight } from './model-refused.js';
 import {
   type ModelRefusedStatusLine,
   goalRunIdsIn,
@@ -230,27 +231,41 @@ describe('system.model_refused (legacy 589)', () => {
     ...overrides,
   });
 
-  it('says which budget ran out and when it resets, in the reader’s language', () => {
+  it('says which budget ran out, when it resets and who can raise it where, in the reader’s language', () => {
     const resets = formatDateTime(RESETS_AT);
     expect(modelRefusedText(line({}), zh)).toBe(
-      `工作区当天的模型 token 预算用完了，平台拒绝了这条消息的模型调用，所以没有回复。预算在 ${resets} 重置，管理员也可以提高预算。`,
+      `工作区当天的模型 token 预算用完了，平台拒绝了这条消息的模型调用，所以没有回复。预算在 ${resets} 重置；平台管理员也可以调高它。`,
     );
-    expect(modelRefusedText(line({ scope: 'workspace_daily_cost' }), zh)).toContain(
-      '当天的模型费用预算',
+    expect(modelRefusedText(line({ scope: 'workspace_daily_cost' }), zh)).toBe(
+      `工作区当天的模型费用预算用完了，平台拒绝了这条消息的模型调用，所以没有回复。预算在 ${resets} 重置；工作区所有者也可以在「模型与配额」里调高「每工作区日成本」。`,
     );
     expect(modelRefusedText(line({ scope: 'workspace_daily_cost' }), en)).toBe(
-      `The workspace’s daily model cost budget is spent, so the platform refused the model calls for this message and there is no reply. It resets at ${resets}, or an administrator can raise it.`,
+      `The workspace’s daily model cost budget is spent, so the platform refused the model calls for this message and there is no reply. It resets at ${resets}. A workspace owner can also raise the daily cost budget under Models.`,
     );
     // Never the kernel's English text.
     expect(modelRefusedText(line({}), zh)).not.toContain('kernel text');
   });
 
-  it('an unknown budget or a missing reset time still reads as a whole sentence', () => {
-    expect(modelRefusedText(line({ scope: null, resetsAt: null }), zh)).toBe(
-      '工作区当天的模型预算用完了，平台拒绝了这条消息的模型调用，所以没有回复。预算每天 UTC 0 点重置，管理员也可以提高预算。',
+  it('without a reset time a daily budget names 00:00 UTC on the reader’s clock', () => {
+    const local = localTimeOfUtcMidnight();
+    expect(modelRefusedText(line({ resetsAt: null }), zh)).toBe(
+      `工作区当天的模型 token 预算用完了，平台拒绝了这条消息的模型调用，所以没有回复。预算每天 UTC 0 点（本地 ${local}）重置；平台管理员也可以调高它。`,
     );
-    expect(modelRefusedText(line({ scope: null, resetsAt: null }), en)).toContain(
-      'daily model budget is spent',
+    expect(modelRefusedText(line({ resetsAt: null }), en)).toContain(
+      `It resets every day at 00:00 UTC (${local} local). A platform administrator can also raise it.`,
+    );
+  });
+
+  it('a budget this console does not know names no period and no setting', () => {
+    expect(modelRefusedText(line({ scope: null, resetsAt: null }), zh)).toBe(
+      '工作区的模型预算用完了，平台拒绝了这条消息的模型调用，所以没有回复。等预算重置，或者管理员调高它之后再发。',
+    );
+    expect(modelRefusedText(line({ scope: null, resetsAt: null }), en)).toBe(
+      'The workspace’s model budget is spent, so the platform refused the model calls for this message and there is no reply. Send it again once the budget resets or an administrator raises it.',
+    );
+    const resets = formatDateTime(RESETS_AT);
+    expect(modelRefusedText(line({ scope: null }), zh)).toBe(
+      `工作区的模型预算用完了，平台拒绝了这条消息的模型调用，所以没有回复。预算在 ${resets} 重置；管理员也可以调高它。`,
     );
   });
 });

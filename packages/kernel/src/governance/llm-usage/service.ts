@@ -474,9 +474,8 @@ export interface RefusedOnlyUsage {
  * workspace budget (`status = 'refused'`) and none the provider answered (`status = 'completed'`)
  * — `null` otherwise, including a session with no usage at all (a run that never called the model
  * is judged by its result, as before). An upstream error row (`error`) is no answer either, so it
- * neither makes nor breaks the verdict. `turnId` narrows both counts to the rows attributed to one
- * Turn — the entry agent's session is one per person and reused across Turns, so a Turn is judged
- * by its own calls only.
+ * neither makes nor breaks the verdict. A Worker's session is its run's own; the entry agent's is
+ * one per person and reused across Turns, so a Turn is judged by `entryTurnRefusedOnly`.
  *
  * Exact only if every row of the session's calls so far is in the table: llm-proxy hands a refusal
  * to the kernel before it answers the 402 (packages/llm-proxy/src/proxy.ts `deliver`), and a
@@ -488,9 +487,7 @@ export async function sessionRefusedOnly(
   client: PoolClient,
   workspaceId: string,
   sessionId: string,
-  options: { readonly turnId?: string } = {},
 ): Promise<RefusedOnlyUsage | null> {
-  const turnId = options.turnId ?? null;
   // The partial index `llm_usage_refused_session_idx` answers the first query; the second runs
   // only for a session that had a refusal.
   const refused = await client.query<{
@@ -502,9 +499,8 @@ export async function sessionRefusedOnly(
             (array_agg(refusal_scope order by started_at desc))[1] as scope,
             max(started_at) as last_refused_at
        from llm_usage
-      where workspace_id = $1 and session_id = $2 and status = '${REFUSED_USAGE_STATUS}'
-        and ($3::uuid is null or turn_id = $3::uuid)`,
-    [workspaceId, sessionId, turnId],
+      where workspace_id = $1 and session_id = $2 and status = '${REFUSED_USAGE_STATUS}'`,
+    [workspaceId, sessionId],
   );
   const row = refused.rows[0];
   const refusedCalls = Number(row?.refused_calls ?? 0);
@@ -512,9 +508,8 @@ export async function sessionRefusedOnly(
   const answered = await client.query(
     `select 1 from llm_usage
       where workspace_id = $1 and session_id = $2 and status = '${COMPLETED_USAGE_STATUS}'
-        and ($3::uuid is null or turn_id = $3::uuid)
       limit 1`,
-    [workspaceId, sessionId, turnId],
+    [workspaceId, sessionId],
   );
   if ((answered.rowCount ?? 0) > 0) return null;
   return { refusedCalls, scope: row.scope, lastRefusedAt: row.last_refused_at };
