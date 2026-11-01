@@ -435,6 +435,65 @@ describe('goal operations on the goal page (S11 GO6)', () => {
     );
   });
 
+  it('S11 GO14 (UX P3-2, P3-3 on #884): the confirm card names a step reading another’s files; resuming a handoff pause says it may pause there again', async () => {
+    const base = goalDetail();
+    const plan = base.planRevision.plan;
+    const withFiles = (overrides: Partial<GoalDetailWire>) =>
+      goalDetail({
+        planRevision: {
+          ...base.planRevision,
+          plan: {
+            ...plan,
+            steps: [
+              plan.steps[0] as (typeof plan.steps)[number],
+              { ...(plan.steps[1] as (typeof plan.steps)[number]), filesFrom: ['fetch'] },
+            ],
+          },
+        },
+        ...overrides,
+      });
+    const proposed = scriptedHttp(
+      handlers(
+        withFiles({ status: 'proposed', currentRevision: null, confirmedAt: null }),
+        workspace('p-alice', 'member'),
+      ),
+    );
+    const first = renderPage(proposed);
+    fireEvent.click(await screen.findByTestId('goal-op-confirm'));
+    const confirm = await screen.findByTestId('goal-op-confirm-confirm');
+    expect(within(confirm).getByTestId('confirm-impact').textContent).toContain(
+      '步骤 apply 读取步骤 fetch 留下的文件（只读）',
+    );
+    first.unmount();
+
+    const pausedAt = scriptedHttp(
+      handlers(
+        withFiles({
+          status: 'paused',
+          pauseReason: 'needs_decision',
+          pausedBy: null,
+          steps: [
+            stepRun({ status: 'succeeded', attemptCount: 1, attempts: [] }),
+            stepRun({
+              id: 'sr-apply',
+              stepKey: 'apply',
+              status: 'ready',
+              attemptCount: 0,
+              attempts: [],
+            }),
+          ],
+        }),
+        workspace('p-alice', 'member'),
+      ),
+    );
+    renderPage(pausedAt);
+    fireEvent.click(await screen.findByTestId('goal-op-resume'));
+    const resume = await screen.findByTestId('goal-op-resume-confirm');
+    expect(within(resume).getByTestId('confirm-impact').textContent).toContain(
+      '步骤「apply」要读的文件仍然交不出去时，会在这一步再次暂停；要换一份文件，用「修订计划…」',
+    );
+  });
+
   it('a note refused for carrying a credential says how to rewrite it, and keeps the note', async () => {
     const http = scriptedHttp(
       handlers(

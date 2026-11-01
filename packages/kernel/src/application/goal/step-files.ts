@@ -56,6 +56,13 @@ export type StepFilesSources =
   /** Why the attempt cannot start — the pause's detail. */
   | { readonly kind: 'blocked'; readonly detail: string };
 
+/** What a person can do about a step whose files cannot be had: an ended step does not run
+ *  again, so a revision adds one that makes the files anew and has the reader read that one's
+ *  (`filesFrom` is a minor change, and the console's plan editor ticks it), or reads none. */
+function remedy(readerKey: string): string {
+  return `revise the plan: add a step that makes the files again and have step ${readerKey} read that step's instead (or none), or cancel`;
+}
+
 /** The directories `entry`'s attempt reads — see the module comment. `steps` are the run's
  *  StepRuns (superseded ones included); the one a name reads from is the live StepRun of its key. */
 export async function resolveStepFilesSources(
@@ -73,14 +80,14 @@ export async function resolveStepFilesSources(
     if (!from || from.status !== 'succeeded') {
       return {
         kind: 'blocked',
-        detail: `${where}: step ${key} ${from?.status === 'skipped' ? 'was skipped' : 'has not succeeded'}, so it left no files to read — revise the plan or cancel`,
+        detail: `${where}: step ${key} ${from?.status === 'skipped' ? 'was skipped' : 'has not succeeded'}, so it left no files to read — ${remedy(entry.key)}`,
       };
     }
     const task = await readStepAttemptTask(client, workspaceId, from.id, from.attemptCount);
     if (!task || task.status !== 'completed') {
       return {
         kind: 'blocked',
-        detail: `${where}: attempt ${from.attemptCount} of step ${key} has no completed Task — revise the plan or cancel`,
+        detail: `${where}: attempt ${from.attemptCount} of step ${key} has no completed Task — ${remedy(entry.key)}`,
       };
     }
     sources.push({ stepKey: key, taskId: task.id, attempt: from.attemptCount });
@@ -104,11 +111,11 @@ function unavailableDetail(
   const where = `step ${readerKey}: the files of step ${source.stepKey} (attempt ${source.attempt})`;
   switch (state) {
     case 'missing':
-      return `${where} are no longer there — revise the plan to run step ${source.stepKey} again, or cancel`;
+      return `${where} are no longer there — ${remedy(readerKey)}`;
     case 'not_owned':
-      return `${where} are not marked as this goal run's, so they are not handed on — revise the plan to run step ${source.stepKey} again, or cancel`;
+      return `${where} are not marked as this goal run's, so they are not handed on — ${remedy(readerKey)}`;
     case 'not_a_directory':
-      return `${where} cannot be handed on: its Worker replaced its handoff directory with something else — revise the plan to run step ${source.stepKey} again, or cancel`;
+      return `${where} cannot be handed on: its Worker replaced its handoff directory with something else — ${remedy(readerKey)}`;
   }
 }
 

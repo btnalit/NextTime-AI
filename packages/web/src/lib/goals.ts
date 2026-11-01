@@ -206,7 +206,7 @@ export function bindingSentence(binding: StepBinding, t: Translate): string {
 export function filesFromSentence(keys: readonly string[], t: Translate): string {
   return t(
     `读取步骤 ${keys.join('、')} 留下的文件`,
-    `Reads the files step${keys.length > 1 ? 's' : ''} ${keys.join(', ')} left`,
+    `Reads the files left by step${keys.length > 1 ? 's' : ''} ${keys.length > 1 ? `${keys.slice(0, -1).join(', ')} and ${keys.at(-1)}` : keys.join('')}`,
   );
 }
 
@@ -2084,6 +2084,33 @@ function heldWording(
   return { zh: '没有往下做', en: () => 'did not go on' };
 }
 
+/** S11 GO14: the first step of the plan in force that reads earlier steps' files (`filesFrom`)
+ *  and that the advancer tried to start (`ready`, not superseded) — where a run paused
+ *  `needs_decision` with no step failed stopped for those files. */
+function stepFilesReaderEntry(
+  goal: Partial<Pick<GoalDetailWire, 'steps' | 'planRevision'>>,
+): PlanStep | undefined {
+  const ready = new Set(
+    (goal.steps ?? [])
+      .filter((step) => step.supersededInRevision === null && step.status === 'ready')
+      .map((step) => step.stepKey),
+  );
+  return (goal.planRevision?.plan.steps ?? []).find(
+    (entry) => (entry.filesFrom ?? []).length > 0 && ready.has(entry.key),
+  );
+}
+
+/** S11 GO14 (UX P3-3 on #884): the step a resumed run would pause at again if the files it reads
+ *  still cannot be handed on — the run paused for a person, no step failed, and a step that reads
+ *  files is the one waiting to start. `null` otherwise. */
+export function stepFilesPauseStep(
+  goal: Partial<Pick<GoalDetailWire, 'status' | 'pauseReason' | 'steps' | 'planRevision'>>,
+): string | null {
+  if (goal.status !== 'paused' || goal.pauseReason !== 'needs_decision') return null;
+  if (goal.steps?.some((step) => step.status === 'failed')) return null;
+  return stepFilesReaderEntry(goal)?.key ?? null;
+}
+
 /**
  * S11 GO14: why a run paused `needs_decision` at a step that reads earlier steps' files (`filesFrom`)
  * — the first such step the advancer tried to start (`ready`, in the revision in force). A source
@@ -2102,37 +2129,45 @@ function stepFilesPauseText(
       .filter((step) => step.supersededInRevision === null)
       .map((step) => [step.stepKey, step] as const),
   );
-  for (const entry of goal.planRevision?.plan.steps ?? []) {
+  const entry = stepFilesReaderEntry(goal);
+  if (entry) {
     const filesFrom = entry.filesFrom ?? [];
-    if (filesFrom.length === 0 || live.get(entry.key)?.status !== 'ready') continue;
     const skipped = filesFrom.filter((key) => live.get(key)?.status === 'skipped');
     const unfinished = filesFrom.filter(
       (key) => !skipped.includes(key) && live.get(key)?.status !== 'succeeded',
     );
     const step = entry.key;
+    const by = (keys: readonly string[], en: string) => `step${keys.length > 1 ? 's' : ''} ${en}`;
+    // An ended step does not run again: the way on is a revision that adds a step making the files
+    // anew and has this one read that step's instead (its 「读取这些步骤留下的文件」 ticks) — or
+    // reads none.
+    const way = t(
+      `修订计划：加一步重新生成这些文件，让「${step}」改读那一步的（或者不再读），或者结束目标。`,
+      `Revise the plan: add a step that makes the files again and have “${step}” read that one’s instead (or none), or end the goal.`,
+    );
     if (skipped.length > 0) {
       const [zh, en] = namesIn(skipped);
       return t(
-        `需要人决定：步骤「${step}」要读步骤${zh}留下的文件，但${skipped.length === 1 ? '那一步' : '这些步骤'}被跳过了，没有留下文件。修订计划（让${skipped.length === 1 ? '它' : '它们'}再跑，或者不再读它的文件），或者结束目标。`,
-        `A person must decide: step “${step}” reads the files step ${en} left, but ${skipped.length === 1 ? 'it was' : 'they were'} skipped and left none. Revise the plan (run ${skipped.length === 1 ? 'it' : 'them'} again, or stop reading ${skipped.length === 1 ? 'its' : 'their'} files), or end the goal.`,
+        `需要人决定：步骤「${step}」要读步骤${zh}留下的文件，但${skipped.length === 1 ? '那一步' : '这些步骤'}被跳过了，没有留下文件。${way}`,
+        `A person must decide: step “${step}” reads the files left by ${by(skipped, en)}, but ${skipped.length === 1 ? 'it was' : 'they were'} skipped and left none. ${way}`,
       );
     }
     if (unfinished.length > 0) {
       const [zh, en] = namesIn(unfinished);
       return t(
         `需要人决定：步骤「${step}」要读步骤${zh}留下的文件，但${unfinished.length === 1 ? '那一步' : '这些步骤'}没有成功，没有可交的文件。修订计划，或者结束目标。`,
-        `A person must decide: step “${step}” reads the files step ${en} left, but ${unfinished.length === 1 ? 'it has' : 'they have'} not succeeded, so there are none to hand on. Revise the plan, or end the goal.`,
+        `A person must decide: step “${step}” reads the files left by ${by(unfinished, en)}, but ${unfinished.length === 1 ? 'it has' : 'they have'} not succeeded, so there are none to hand on. Revise the plan, or end the goal.`,
       );
     }
     const [zh, en] = namesIn(filesFrom);
     return entry.bindings && entry.bindings.length > 0
       ? t(
-          `需要人决定：步骤「${step}」开始不了：它从前面步骤取的值，或步骤${zh}留下的文件，现在拿不到。修订计划让上游步骤再跑一次，或者结束目标。`,
-          `A person must decide: step “${step}” cannot start: the values it takes from earlier steps, or the files step ${en} left, cannot be had now. Revise the plan to run the earlier step again, or end the goal.`,
+          `需要人决定：步骤「${step}」开始不了：它从前面步骤取的值，或步骤${zh}留下的文件，现在拿不到。修订计划：加一步重新生成，让「${step}」改从那一步取值、读那一步的文件；或者结束目标。`,
+          `A person must decide: step “${step}” cannot start: the values it takes from earlier steps, or the files left by ${by(filesFrom, en)}, cannot be had now. Revise the plan: add a step that makes them again and have “${step}” take its values and read its files from that one; or end the goal.`,
         )
       : t(
-          `需要人决定：步骤「${step}」要读步骤${zh}留下的文件，平台现在交不出去（文件不在了，或不能确认属于这个目标）。修订计划让${filesFrom.length === 1 ? '那一步' : '这些步骤'}再跑一次，或者结束目标。`,
-          `A person must decide: step “${step}” reads the files step ${en} left, and the platform cannot hand them on now (they are gone, or not known to be this goal’s). Revise the plan to run ${filesFrom.length === 1 ? 'that step' : 'those steps'} again, or end the goal.`,
+          `需要人决定：步骤「${step}」要读步骤${zh}留下的文件，平台现在交不出去（文件不在了，或不能确认属于这个目标）。${way}`,
+          `A person must decide: step “${step}” reads the files left by ${by(filesFrom, en)}, and the platform cannot hand them on now (they are gone, or not known to be this goal’s). ${way}`,
         );
   }
   return null;

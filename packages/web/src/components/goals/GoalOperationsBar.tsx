@@ -27,11 +27,13 @@ import { plannerWorkDropped, runningPlanningRound } from '../../lib/goal-planner
 import {
   confirmCheckOrigin,
   confirmRefusedText,
+  filesFromSentence,
   goalBudgetRows,
   goalPlanSource,
   planHintText,
   planSourceParameterText,
   planSourceParameters,
+  stepFilesPauseStep,
 } from '../../lib/goals.js';
 import { HttpError } from '../../lib/http-client.js';
 import { type Translate, useT } from '../../lib/i18n.js';
@@ -216,6 +218,15 @@ export function GoalOperationsBar({
             `预算上限：${budget.map((row) => `${row.label} ${row.maxText}`).join('，')}`,
             `Budget: ${budget.map((row) => `${row.label} ${row.maxText}`).join(', ')}`,
           ),
+          // S11 GO14 (UX P3-2 on #884): one Worker's output handed to another to read.
+          ...goal.planRevision.plan.steps
+            .filter((step) => (step.filesFrom ?? []).length > 0)
+            .map((step) =>
+              t(
+                `步骤 ${step.key} ${filesFromSentence(step.filesFrom ?? [], t)}（只读）`,
+                `Step ${step.key} ${filesFromSentence(step.filesFrom ?? [], (_zh, en) => en).replace(/^R/, 'r')} (read-only)`,
+              ),
+            ),
           ...(source && parameters.length > 0
             ? [
                 t(
@@ -859,6 +870,7 @@ function ResumeConfirm({
   const left = Math.max(goal.budget.maxRevisions - goal.usage.plannerRounds, 0);
   // UX P2-1 on #872: after the goal's verification did not pass, what resuming does.
   const verification = verificationRoundOnResume(goal);
+  const filesStep = stepFilesPauseStep(goal);
   const dropped = [
     ...(verification !== null
       ? [
@@ -869,6 +881,15 @@ function ResumeConfirm({
         ]
       : []),
     ...plannerWorkDropped(goal, t),
+    // S11 GO14 (UX P3-3 on #884): resuming does not make the files there.
+    ...(filesStep !== null
+      ? [
+          t(
+            `步骤「${filesStep}」要读的文件仍然交不出去时，会在这一步再次暂停；要换一份文件，用「修订计划…」`,
+            `If the files step “${filesStep}” reads still cannot be handed on, the goal pauses at that step again; for other files, use “Revise plan…”`,
+          ),
+        ]
+      : []),
     ...(goal.pauseReason === 'no_progress'
       ? [
           left > 0
