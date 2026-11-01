@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.59.0](https://github.com/btnalit/NextTime-AI/compare/v0.58.0...v0.59.0) (2026-11-01)
+
+
+### Features
+
+* **kernel:** admin agent identity, ceiling and per-call authority (S11 AA1) ([#897](https://github.com/btnalit/NextTime-AI/issues/897)) ([c51352b](https://github.com/btnalit/NextTime-AI/commit/c51352b61204399bc34aa128388926ff6c0dc26b))
+* **kernel:** admin agent reads platform gates, connectors and recent changes (S11 AA2a) ([#900](https://github.com/btnalit/NextTime-AI/issues/900)) ([2bf46f7](https://github.com/btnalit/NextTime-AI/commit/2bf46f74c0c91cb208f7b98bc23965b48d0781ca))
+
 ## [0.58.0](https://github.com/btnalit/NextTime-AI/compare/v0.57.0...v0.58.0) (2026-11-01)
 
 
