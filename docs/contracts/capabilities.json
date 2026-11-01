@@ -16131,6 +16131,7 @@
                       "run_lost",
                       "budget_exhausted",
                       "terminated",
+                      "model_refused",
                       "cancelled",
                       "withheld",
                       "paused"
@@ -19536,7 +19537,8 @@
                 "no_progress",
                 "authority_lost",
                 "needs_decision",
-                "awaiting_reconcile"
+                "awaiting_reconcile",
+                "model_refused"
               ],
               "type": "string"
             },
@@ -33670,7 +33672,8 @@
                       "no_progress",
                       "authority_lost",
                       "needs_decision",
-                      "awaiting_reconcile"
+                      "awaiting_reconcile",
+                      "model_refused"
                     ],
                     "type": "string"
                   },
@@ -60982,6 +60985,7 @@
                       "run_lost",
                       "budget_exhausted",
                       "terminated",
+                      "model_refused",
                       "cancelled",
                       "withheld",
                       "paused"

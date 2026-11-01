@@ -783,7 +783,8 @@ async function sumLlmUsage30Days(client: PoolClient): Promise<PlatformStatusLlmU
       `select sum(cost_usd)::text as cost_usd_sum,
               sum(input_tokens)::text as input_tokens_sum,
               sum(output_tokens)::text as output_tokens_sum,
-              count(*)::text as n
+              -- A call llm-proxy refused for a spent budget (legacy 589) never reached a provider.
+              count(*) filter (where status <> 'refused')::text as n
          from llm_usage
         where workspace_id = $1 and started_at >= now() - interval '30 days'`,
       [workspace.id],

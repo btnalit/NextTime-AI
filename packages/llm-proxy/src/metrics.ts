@@ -11,9 +11,12 @@ import { MetricsRegistry, PROMETHEUS_TEXT_CONTENT_TYPE } from '@nexttime/shared'
  *   nexttime_llm_proxy_requests_total{provider,model,status}                counter
  *   nexttime_llm_proxy_upstream_duration_seconds{provider,model,outcome}    histogram
  *   nexttime_llm_proxy_tokens_total{provider,model,direction}               counter
+ *   nexttime_llm_proxy_refusal_delivery_timeouts_total{provider}           counter
  *
  * `outcome` ∈ completed | error (upstream non-2xx, a broken stream, or no connection at all);
- * `direction` ∈ input | output. Only model-traffic requests are counted — not `/healthz`,
+ * `direction` ∈ input | output. A refusal delivery timeout (legacy 589, proxy.ts
+ * `REFUSAL_DELIVERY_TIMEOUT_MS`) is a budget refusal answered before its `refused` record reached
+ * the kernel. Only model-traffic requests are counted — not `/healthz`,
  * `/internal/metrics` or the provider-admin API.
  */
 
@@ -21,6 +24,7 @@ export interface LlmProxyMetrics {
   recordRequest(provider: string, model: string, status: number): void;
   observeUpstream(provider: string, model: string, outcome: string, seconds: number): void;
   recordTokens(provider: string, model: string, input: number, output: number): void;
+  recordRefusalDeliveryTimeout(provider: string): void;
   render(): string;
 }
 
@@ -41,6 +45,11 @@ export function createLlmProxyMetrics(): LlmProxyMetrics {
     'Tokens reported by upstream providers, by direction.',
     ['provider', 'model', 'direction'],
   );
+  const refusalDeliveryTimeouts = registry.counter(
+    'nexttime_llm_proxy_refusal_delivery_timeouts_total',
+    'Budget refusals answered before their refused usage record reached the kernel.',
+    ['provider'],
+  );
   return {
     recordRequest(provider, model, status) {
       requests.inc({ provider, model, status: String(status) });
@@ -51,6 +60,9 @@ export function createLlmProxyMetrics(): LlmProxyMetrics {
     recordTokens(provider, model, input, output) {
       if (input > 0) tokens.inc({ provider, model, direction: 'input' }, input);
       if (output > 0) tokens.inc({ provider, model, direction: 'output' }, output);
+    },
+    recordRefusalDeliveryTimeout(provider) {
+      refusalDeliveryTimeouts.inc({ provider });
     },
     render: () => registry.render(),
   };

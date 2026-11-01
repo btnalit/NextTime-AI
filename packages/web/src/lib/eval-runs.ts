@@ -10,6 +10,7 @@ import { shownName } from './evaluation.js';
 import { actionKindTagText } from './format.js';
 import type { Translate } from './i18n.js';
 import { taskFailureReasonText } from './labels.js';
+import { dailyBudgetsResetText } from './model-refused.js';
 import type { EvalTrialOutcome } from './status-tone.js';
 
 /**
@@ -58,6 +59,11 @@ export function trialErrorText(error: EvalTrialError, t: Translate): string {
         'Worker 结束了，但没有汇报结果，所以没法用断言判分。',
         'The Worker ended without reporting a result, so the assertions had nothing to judge.',
       );
+    case 'model_refused':
+      return `${t(
+        '工作区当天的模型预算用完了，平台拒绝了 Worker 的每一次模型调用，所以没有判分，也不算未通过。',
+        'The workspace’s daily model budget was spent, so the platform refused every model call of the Worker: it was not scored and does not count as a failure. ',
+      )}${dailyBudgetsResetText(t)}${t('之后再跑一次。', ' Then run it again.')}`;
     default: {
       const reason = taskFailureReasonText(error, t);
       return `${reason.short}：${reason.detail}`;

@@ -47,6 +47,7 @@ import {
 import { pendingTrialStepKeys } from './goal-trials.js';
 import { isUuidLike } from './graph-view.js';
 import type { Translate } from './i18n.js';
+import { dailyBudgetsResetText } from './model-refused.js';
 
 /**
  * lib/goals (S11 GO6): what the console's goal pages (`components/goals/*`) read out of the
@@ -107,6 +108,7 @@ const PAUSE_REASON: Readonly<Record<GoalRunPauseReason, readonly [string, string
   authority_lost: ['请求人缺少授权', 'Requester lacks authority'],
   needs_decision: ['需要人决定', 'Needs a decision'],
   awaiting_reconcile: ['等人核对', 'Waiting for a check'],
+  model_refused: ['模型调用被平台拒绝', 'Model calls refused'],
 };
 
 /** Why a goal is paused, in a few words (the list row, the chip beside the status). */
@@ -1767,6 +1769,14 @@ function pausedNote(
             ),
       };
     }
+    case 'model_refused':
+      return {
+        tone: 'warn',
+        text: `${t(
+          '工作区当天的模型预算用完了，平台拒绝了这一步 Worker 的每一次模型调用，目标暂停了，这不是失败。',
+          'The workspace’s daily model budget was spent, so the platform refused every model call of this step’s Worker and the goal is paused, not failed. ',
+        )}${dailyBudgetsResetText(t)}${t('之后继续这个目标即可。', ' Then resume the goal.')}`,
+      };
     case 'no_progress': {
       // S11 GO10: the goal planner's latest rounds that ran — the ones the platform's breaker
       // counted — name the steps they were for.

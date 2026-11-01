@@ -128,7 +128,9 @@ export function ChatMessageRow({
               : undefined
             : statusLine.variant === 'goal_update'
               ? () => onOpenGoal(statusLine.goalRunId)
-              : () => onOpenTask(statusLine.taskId)
+              : statusLine.variant === 'task_update'
+                ? () => onOpenTask(statusLine.taskId)
+                : undefined
         }
       />
     );

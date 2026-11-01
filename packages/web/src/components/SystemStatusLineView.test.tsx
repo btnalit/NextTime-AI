@@ -1,11 +1,38 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { formatDateTime } from '../lib/format.js';
 import { SystemStatusLineView } from './SystemStatusLineView.js';
 
 afterEach(cleanup);
 
 describe('SystemStatusLineView', () => {
+  it('legacy 589: a refused Turn reads as a warning with what happened and when the budget resets, and opens nothing', () => {
+    const onOpen = vi.fn();
+    render(
+      <SystemStatusLineView
+        line={{
+          variant: 'model_refused',
+          text: 'The platform refused the model calls for this message',
+          turnId: 'turn-1',
+          scope: 'workspace_daily_cost',
+          resetsAt: '2026-11-02T00:00:00.000Z',
+        }}
+        onOpen={onOpen}
+      />,
+    );
+    const row = screen.getByTestId('system-status-line');
+    expect(row.getAttribute('data-variant')).toBe('model_refused');
+    const label = screen.getByTestId('system-status-failure');
+    expect(label.textContent).toBe('模型调用被平台拒绝');
+    expect(label.className).toContain('text-danger');
+    expect(row.textContent).toContain('当天的模型费用预算用完了');
+    expect(row.textContent).toContain(formatDateTime('2026-11-02T00:00:00.000Z'));
+    expect(row.textContent).not.toContain('The platform refused');
+    expect(document.querySelector('.chip')).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
   it('renders status badge and text for an action_update line', () => {
     render(
       <SystemStatusLineView

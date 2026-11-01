@@ -23,6 +23,7 @@ import {
   goalBudgetRows,
   goalFirstAttemptAt,
   goalMilestoneText,
+  goalPauseReasonLabel,
   goalStateNote,
   goalStepProgress,
   isStepAuthorityHint,
@@ -1130,6 +1131,21 @@ describe('lib/goals', () => {
     expect(budget.find((row) => row.key === 'wallClock')?.usedText).toBe('30 分钟');
     expect(exhaustedBudget(budget).map((row) => row.key)).toEqual(['tokens']);
     expect(goalStateNote(goal, undefined, budget, zh)?.text).toMatch(/^预算用完（Token）/);
+  });
+
+  it('legacy 589: a goal paused because the platform refused its step’s model calls says it is not a failure and how to go on', () => {
+    const goal = goalRun({ status: 'paused', pauseReason: 'model_refused' });
+    // Half an hour after confirmation: no budget of the goal's own is used up.
+    const budget = goalBudgetRows(goal, zh, Date.parse('2026-10-20T00:31:00.000Z'));
+    expect(exhaustedBudget(budget)).toEqual([]);
+    const note = goalStateNote(goal, undefined, budget, zh);
+    expect(note?.tone).toBe('warn');
+    expect(note?.text).toMatch(/平台拒绝了这一步 Worker 的每一次模型调用，目标暂停了，这不是失败/);
+    expect(note?.text).toMatch(
+      /预算每天 UTC 0 点（本地 \d\d:\d\d）重置；费用预算可以由工作区所有者在「模型与配额」里调高/,
+    );
+    expect(note?.text).toMatch(/之后继续这个目标即可。$/);
+    expect(goalPauseReasonLabel('model_refused', zh)).toBe('模型调用被平台拒绝');
   });
 
   it('a cancel that left work running says so; a clean cancel says nothing', () => {

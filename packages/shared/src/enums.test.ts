@@ -173,6 +173,7 @@ const enumsUnderTest = [
       'run_lost',
       'budget_exhausted',
       'terminated',
+      'model_refused',
     ],
   ],
   [
@@ -266,6 +267,7 @@ const enumsUnderTest = [
       'authority_lost',
       'needs_decision',
       'awaiting_reconcile',
+      'model_refused',
     ],
   ],
   [

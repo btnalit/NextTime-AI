@@ -7,9 +7,14 @@ import {
   type GoalRunChange,
   type GoalRunPauseReason,
   type GoalRunStatus,
+  LLM_REFUSAL_SCOPE_VALUES,
+  type LlmRefusalScope,
   OBJECTIVE_OUTCOME_VALUES,
   type ObjectiveOutcome,
 } from '@nexttime/shared';
+import { formatDateTime } from './format.js';
+import type { Translate } from './i18n.js';
+import { budgetRaiseText, localTimeOfUtcMidnight } from './model-refused.js';
 import type { ChatMessage } from './ws-client.js';
 
 /**
@@ -66,10 +71,25 @@ export interface GoalUpdateStatusLine {
   readonly revision: number | null;
 }
 
+/** Legacy 589: the platform refused every model call of a Turn (a workspace's daily budget was
+ *  spent), so the Turn ended with no reply. Worded in the reader's language from `scope` and
+ *  `resetsAt` (`modelRefusedText`); the kernel's English `text` is kept for a kind this console
+ *  cannot read. */
+export interface ModelRefusedStatusLine {
+  readonly variant: 'model_refused';
+  readonly text: string;
+  readonly turnId: string;
+  /** Which budget; `null` for a value this console does not know. */
+  readonly scope: LlmRefusalScope | null;
+  /** When it resets (ISO 8601); `null` when missing. */
+  readonly resetsAt: string | null;
+}
+
 export type SystemStatusLineData =
   | ActionUpdateStatusLine
   | TaskUpdateStatusLine
-  | GoalUpdateStatusLine;
+  | GoalUpdateStatusLine
+  | ModelRefusedStatusLine;
 
 function oneOf<T extends string>(values: readonly T[], value: unknown): T | null {
   return typeof value === 'string' && (values as readonly string[]).includes(value)
@@ -142,7 +162,49 @@ export function systemStatusLineFromMessage(
     };
   }
 
+  if (content.kind === 'system.model_refused') {
+    const turnId = content.turnId;
+    if (typeof turnId !== 'string') return undefined;
+    return {
+      variant: 'model_refused',
+      text: typeof content.text === 'string' ? content.text : message.text,
+      turnId,
+      scope: oneOf(LLM_REFUSAL_SCOPE_VALUES, content.scope),
+      resetsAt: typeof content.resetsAt === 'string' ? content.resetsAt : null,
+    };
+  }
+
   return undefined;
+}
+
+/** Legacy 589: why a Turn has no reply, in the reader's language — which budget ran out, when it
+ *  resets (the kernel's `resetsAt`, local time with its zone; else the daily budgets' 00:00 UTC on
+ *  the reader's clock), and who can raise it where (`lib/model-refused.ts`). A budget this console
+ *  does not know names no period: it may not be a daily one. */
+export function modelRefusedText(
+  line: ModelRefusedStatusLine,
+  t: Translate,
+  now: number = Date.now(),
+): string {
+  const [budgetZh, budgetEn] =
+    line.scope === 'workspace_daily_cost'
+      ? ['当天的模型费用预算', 'daily model cost budget']
+      : line.scope === 'workspace_daily_tokens'
+        ? ['当天的模型 token 预算', 'daily model token budget']
+        : ['的模型预算', 'model budget'];
+  const head = t(
+    `工作区${budgetZh}用完了，平台拒绝了这条消息的模型调用，所以没有回复。`,
+    `The workspace’s ${budgetEn} is spent, so the platform refused the model calls for this message and there is no reply. `,
+  );
+  if (line.resetsAt) {
+    const resets = formatDateTime(line.resetsAt, now);
+    return `${head}${t(`预算在 ${resets} 重置；`, `It resets at ${resets}. `)}${budgetRaiseText(line.scope, t)}`;
+  }
+  if (line.scope) {
+    const local = localTimeOfUtcMidnight(now);
+    return `${head}${t(`预算每天 UTC 0 点（本地 ${local}）重置；`, `It resets every day at 00:00 UTC (${local} local). `)}${budgetRaiseText(line.scope, t)}`;
+  }
+  return `${head}${t('等预算重置，或者管理员调高它之后再发。', 'Send it again once the budget resets or an administrator raises it.')}`;
 }
 
 /** A goal's status, and how it ended once it has, as its latest milestone in a chat says. */

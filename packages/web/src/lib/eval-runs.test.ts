@@ -73,6 +73,14 @@ describe('eval-runs (S10 E3-2a)', () => {
 
   it('says why a trial ended without a verdict', () => {
     expect(trialErrorText('cancelled', zhT)).toMatch(/被取消/);
+    // Legacy 589: a spent workspace budget is the platform's doing, not the Worker's.
+    expect(trialErrorText('model_refused', zhT)).toMatch(/平台拒绝了 Worker 的每一次模型调用/);
+    expect(trialErrorText('model_refused', zhT)).toMatch(/所以没有判分，也不算未通过。/);
+    // UX acceptance of #910: when the budgets reset on the reader's clock, who raises which, then
+    // what to do — no aside inside the sentence.
+    expect(trialErrorText('model_refused', zhT)).toMatch(
+      /预算每天 UTC 0 点（本地 \d\d:\d\d）重置；费用预算可以由工作区所有者在「模型与配额」里调高「每工作区日成本」，token 预算由平台管理员调高。之后再跑一次。$/,
+    );
     expect(trialErrorText('withheld', zhT)).toMatch(/holdout 原文或用例集的 canary/);
     expect(trialErrorText('withheld', zhT)).toMatch(/系统提示词/);
     expect(trialErrorText('no_result', zhT)).toMatch(/没有汇报结果/);

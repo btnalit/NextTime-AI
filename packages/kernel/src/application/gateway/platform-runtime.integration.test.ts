@@ -24,7 +24,11 @@ import type {
   TaskSupervisorClientPort,
   TaskSupervisorStatus,
 } from '../../adapters/supervisor-client/index.js';
-import { generateEphemeralHandleKeyPair } from '../../governance/capability/index.js';
+import {
+  entryScope,
+  generateEphemeralHandleKeyPair,
+  issueHandle,
+} from '../../governance/capability/index.js';
 import { newChat, sendChatMessage } from '../chat/index.js';
 import { createPlatformAdmin } from '../identity/index.js';
 import type { UserRow } from '../identity/index.js';
@@ -1058,6 +1062,62 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(result.llmUsage30d.totalInputTokens).toBeGreaterThanOrEqual(0);
         expect(result.llmUsage30d.totalOutputTokens).toBeGreaterThanOrEqual(0);
         expect(Array.isArray(result.recentAudit)).toBe(true);
+      }, 15_000);
+
+      it('legacy 589: llmUsage30d counts the calls a provider was asked, not the ones llm-proxy refused', async () => {
+        const principalId = await insertHumanPrincipal(workspaceId, 'usage-caller');
+        const before = (await callAsAdmin<PlatformStatusWire>('platform_status')).llmUsage30d;
+        await withWorkspace(
+          pool,
+          { workspaceId, principalId },
+          async (client) => {
+            const session = await client.query<{ id: string }>(
+              `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+               values ($1, $2, 'entry', $2, 'active') returning id`,
+              [workspaceId, principalId],
+            );
+            const sessionId = session.rows[0]?.id as string;
+            const { privateKey } = await generateEphemeralHandleKeyPair();
+            const issued = await issueHandle(client, {
+              sessionId,
+              scope: entryScope(),
+              ttlSeconds: 3600,
+              privateKey,
+            });
+            // Two refusals (no tokens, no cost) and one answered call.
+            for (const [secondsAgo, status, scope, input, output, cost] of [
+              [30, 'refused', 'workspace_daily_tokens', 0, 0, 0],
+              [20, 'refused', 'workspace_daily_cost', 0, 0, 0],
+              [10, 'completed', null, 100, 20, 0.001],
+            ] as const) {
+              await client.query(
+                `insert into llm_usage (
+                   workspace_id, session_id, jti, provider, model, input_tokens, output_tokens,
+                   cost_usd, started_at, finished_at, status, request_id, refusal_scope
+                 ) values ($1, $2, $3, 'example-provider', 'example-model', $4, $5, $6,
+                           now() - make_interval(secs => $7), now(), $8, $9, $10)`,
+                [
+                  workspaceId,
+                  sessionId,
+                  issued.jti,
+                  input,
+                  output,
+                  cost,
+                  secondsAgo,
+                  status,
+                  randomUUID(),
+                  scope,
+                ],
+              );
+            }
+          },
+          { skipRoleSwitch: true },
+        );
+
+        const after = (await callAsAdmin<PlatformStatusWire>('platform_status')).llmUsage30d;
+        expect(after.callCount).toBe(before.callCount + 1);
+        expect(after.totalInputTokens).toBe(before.totalInputTokens + 100);
+        expect(after.totalOutputTokens).toBe(before.totalOutputTokens + 20);
       }, 15_000);
 
       it('a missing marker is an explicit unknown, and the call still succeeds', async () => {
