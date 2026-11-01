@@ -64,7 +64,8 @@ const ONTOLOGY_DIR = path.join(KERNEL_ROOT, '..', '..', 'ontology');
 // Built at run time: no address literal sits in the source (the CI guard reads tests too).
 const PRIVATE_V4 = [10, 20, 30, 40].join('.');
 const PRIVATE_V4_B = [192, 168, 77, 5].join('.');
-const VENDOR_KEY = ['sk', 'ant', 'api03', 'Zq8x7Rw2Tk9mPv4Ls6Nd1Hy3Bf5Gc0Ja'].join('-');
+// A vendor-key shape spelled from the alphabet (the synthetic value .gitleaks.toml allows).
+const VENDOR_KEY = ['sk', 'ant', 'abcdefghijklmnopqrstuvwxyz'].join('-');
 
 const GATE_ID = 'aa2-fixture-gate';
 const CONNECTOR = 'aa2-fixture';

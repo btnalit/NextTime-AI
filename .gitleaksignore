@@ -5,3 +5,7 @@
 # #822 (S10 E3-2a): a synthetic `apiToken` value in the fixture-call redaction test of the PR's
 # first commit; the next commit replaced it with a short value below the generic-api-key length.
 62476d5a09c0eed136a8d7044b5b835814b30d43:packages/kernel/src/application/gateway/eval-runs.integration.test.ts:generic-api-key:604
+#
+# #900 (S11 AA2a): a synthetic vendor-key value in the platform-state integration fixture of the
+# PR's first commit; the next commit spelled it from the alphabet (the .gitleaks.toml allowlist).
+c09e53aa57a177781658c44d47f10ab2abfd6c05:packages/kernel/src/application/admin-agent/platform-state.integration.test.ts:generic-api-key:67
