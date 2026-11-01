@@ -1038,6 +1038,8 @@ directories not marked as their goal run's` 是 error：某个目录的 `owner.j
 - 内核和 worker-supervisor 必须同一次升级、同一次回退。新内核给每个目标步骤的 spawn 带 `goalRunId`，老
   supervisor 的 `TaskSpawnRequestSchema` 是 strict 的，会拒绝它们，所有目标步骤都起不来；反过来，老内核
   不调 `/task-dirs/keep`，新 supervisor 照常工作，但一步要读文件时没有续租。
+- 两者之间没有启动依赖。升级时一次重建两者；若新内核先起、老 supervisor 还在，这段时间里目标步骤的 spawn
+  会得到 400，那次尝试失败。回退时先停内核（`docker compose stop kernel`），换好两者的版本后再一起起。
 - 回退前先查有没有计划用到 `filesFrom`（只读）：
 
   ```bash
@@ -1048,5 +1050,6 @@ directories not marked as their goal run's` 是 error：某个目录的 `owner.j
       where jsonb_path_exists(r.plan, '\$.steps[*].filesFrom');"
   ```
 
-  老内核不认识 `filesFrom`，读不了这些计划。有行时：没结束的目标先由请求人取消再回退；已结束的目标回退后
-  读不出详情，直到再升级回来。
+  老内核不认识 `filesFrom`，读不了这些计划。有行时：`goal_status` 还没结束（不是 `completed`、`failed`、
+  `cancelled`，包括还没确认的 `proposed`）的目标先由请求人取消再回退；`status` 是 `proposed` 的待决修订
+  先拒绝；已结束的目标回退后读不出详情，直到再升级回来。
