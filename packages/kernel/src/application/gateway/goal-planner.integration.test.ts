@@ -2624,6 +2624,53 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(await acceptanceRounds(goalRunId)).toHaveLength(1);
     });
 
+    it('the planner reads the checks that failed or were unavailable, never one that passed nor what any observed (S11 GO10b, #493 P3 on #872)', async () => {
+      const requester = await newPrincipal('member');
+      const plan = await checkedPlan();
+      const goalRunId = await startGoal(requester, 'propose', {
+        ...plan,
+        acceptance: plan.acceptance.flatMap((check) => [
+          check,
+          { ...check, key: 'ok' },
+          { ...check, key: 'down' },
+        ]),
+      });
+      await succeed(goalRunId, 'renew', requester);
+      expect((await goalRow(goalRunId)).status).toBe('verifying');
+      const settled = [
+        await settleCheck(goalRunId, 'passed', 'ok'),
+        await settleCheck(goalRunId, 'failed', 'served'),
+        await settleCheck(goalRunId, 'unavailable', 'down'),
+      ];
+      await advanceOnce(goalRunId, requester);
+      const [round] = await acceptanceRounds(goalRunId);
+      expect(round).toMatchObject({ kind: 'proposal', status: 'running', acceptance_round: 1 });
+      if (!round) throw new Error('no round');
+      const task = await plannerTask(round.id);
+      expect(task.input.failedAcceptance).toEqual({
+        round: 1,
+        checks: [
+          {
+            key: 'down',
+            kind: 'observe_predicate',
+            status: 'unavailable',
+            lastError: 'gatekeeper_unreachable',
+          },
+          {
+            key: 'served',
+            kind: 'observe_predicate',
+            status: 'failed',
+            lastError: 'predicate_unsatisfied',
+          },
+        ],
+      });
+      const observed = settled.flatMap((check) =>
+        check.observation_id ? [check.observation_id] : [],
+      );
+      expect(observed).toHaveLength(2);
+      for (const id of observed) expect(JSON.stringify(task.input)).not.toContain(id);
+    });
+
     it('one round per verification round: none again for the same one, its own for the next after a resume, counted as a planner round (S11 GO10b)', async () => {
       const requester = await newPrincipal('member');
       const goalRunId = await verifying(requester);
@@ -2847,6 +2894,38 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(await dbRefusal(open(unavailable, 'acceptance_round', '1'))).toMatch(
         /a verification round with a check that failed/,
       );
+
+      // A verification round of an older revision (#493 P3 on #872): the requester revised the
+      // plan after it, so it is no judgment point, on the revision now in force either.
+      const revisedRun = await verifying(requester, false);
+      await settleCheck(revisedRun, 'failed');
+      await advanceOnce(revisedRun, requester);
+      await grantAsRaw(revisedRun, requester);
+      const revisedGoal = await getGoal(revisedRun, requester);
+      await call(human(requester), 'revise_goal', {
+        goalRunId: revisedRun,
+        basedOnRevision: 1,
+        plan: {
+          ...revisedGoal.planRevision.plan,
+          steps: [
+            ...(revisedGoal.planRevision.plan.steps as Record<string, unknown>[]),
+            { key: 'reload', worker, input: { step: 'reload' }, maxAttempts: 1 },
+          ],
+        },
+      });
+      expect(await goalRow(revisedRun)).toMatchObject({ status: 'paused', current_revision: 2 });
+      expect(
+        await dbRefusal(
+          asApp(requester, (client) =>
+            client.query(
+              `insert into goal_planning_rounds (workspace_id, goal_run_id, based_on_revision,
+                                                 acceptance_round)
+               values ($1, $2, 2, 1)`,
+              [workspaceId, revisedRun],
+            ),
+          ),
+        ),
+      ).toMatch(/a verification round of the revision in force/);
     });
   },
 );
