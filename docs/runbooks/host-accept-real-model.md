@@ -224,8 +224,10 @@ llm-proxy 自己的拒绝日志（`refused, workspace budget exhausted`），有
 | accept-s3 | 20 | 约 0.6M | dependency_chat 10 次 |
 
 所以 `--runs 10` 时 accept-s2 的配额至少要 6M，staging 默认 8M（`staging-rehearsal.md`「成本上限」）。
-主机上 `LLM_DAILY_TOKEN_BUDGET` 低于这个量级时，例行回归前先临时调大，跑完改回；同一工作区当天已有的用量
-也算在内。带 `--extended` 时约三倍。
+主机上 `LLM_DAILY_TOKEN_BUDGET` 低于这个量级时，回归前要临时调大、跑完改回；同一工作区当天已有的用量
+也算在内。带 `--extended` 时约三倍。调配额是主机变更，不是验收脚本的日常步骤：须维护者现场同意，再改
+`${NEXTTIME_DATA}/secrets/kernel.env` 里的这一项并重建 kernel（`docker compose up -d --force-recreate kernel`），
+改回时同样重建。
 
 **(4) 把 (2)/(3) 的原始输出填进 `docs/private/real-model-<date>.md`**（模板见 §9；文件已在
 `.gitignore` 里，不进任何入库文件）。
