@@ -156,7 +156,7 @@ export async function pauseGoalRun(
       workspaceId,
       goal.id,
       input.actor.principalId,
-      'run_left_pause',
+      'run_left',
       { rejectProposals: false },
     );
     if (closed.abandonedRoundIds.length > 0) {
@@ -176,6 +176,24 @@ export async function pauseGoalRun(
     pauseReason: 'requested',
     pausedBy: { principalId: input.actor.principalId, authority },
   });
+  // S11 GO9b: the planning an `apply_minor` run was doing while it ran ends with the running (its
+  // round abandoned `run_not_running`), and the run is due so the advance terminates its Task.
+  const closed = await closePlanning(
+    client,
+    workspaceId,
+    goal.id,
+    input.actor.principalId,
+    'run_left',
+    {
+      rejectProposals: false,
+    },
+  );
+  if (closed.abandonedRoundIds.length > 0) {
+    await client.query(
+      "update goal_runs set next_tick_at = now() where workspace_id = $1 and id = $2 and status = 'paused'",
+      [goal.workspaceId, goal.id],
+    );
+  }
   return { status, changed: true };
 }
 
@@ -250,7 +268,7 @@ export async function resumeGoalRun(
     audit: { pauseReason: goal.pauseReason, retriedSteps: [...new Set(input.retrySteps ?? [])] },
   });
   // S11 GO9a: the run leaves the pause its planning was for (I-P4).
-  await closePlanning(client, workspaceId, goal.id, input.actor.principalId, 'run_left_pause');
+  await closePlanning(client, workspaceId, goal.id, input.actor.principalId, 'run_left');
   await retakeAbsenceBaselines(client, goal, input.actor.principalId);
   return { status, changed: true, retriedStepRunIds: retried };
 }
@@ -355,7 +373,7 @@ export async function cancelGoalRun(
   const actor = personOf(input);
   const status = await moveGoalRun(client, actor, goal, goal.status, 'cancel', { due: 'now' });
   // S11 GO9a: its planning ends with it; the cancelling run terminates the planner's Task.
-  await closePlanning(client, workspaceId, goal.id, input.actor.principalId, 'run_left_pause');
+  await closePlanning(client, workspaceId, goal.id, input.actor.principalId, 'run_left');
   const steps = await lockStepRuns(client, workspaceId, goal.id);
   const cancelled: string[] = [];
   for (const step of steps) {

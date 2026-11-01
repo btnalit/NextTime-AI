@@ -136,6 +136,7 @@ function revision(n: 1 | 2) {
     plan: n === 1 ? PLAN_V1 : PLAN_V2,
     proposedBy: n === 1 ? AGENT : ALICE,
     proposer: 'person',
+    acceptedBy: 'person',
     reason: n === 1 ? null : '通知改成人工发；旧证书要在换完后删掉',
     decidedBy: ALICE,
     decidedAt: n === 1 ? T1 : T2,
@@ -561,13 +562,21 @@ test.describe('S11 GO6: operations on a goal (stand-in reads and operations)', (
       await loginAsOwner(page);
 
       // 1. The owner's own proposal: the confirm card says what confirming starts.
-      const proposal = { ...revision(1), status: 'proposed', decidedBy: null, decidedAt: null };
+      const proposal = {
+        ...revision(1),
+        status: 'proposed',
+        acceptedBy: null,
+        decidedBy: null,
+        decidedAt: null,
+      };
       detail = (ownerId) => ({
         ...DETAIL,
         ...run({ status: 'proposed', pauseReason: null, currentRevision: null, confirmedAt: null }),
         onBehalfOf: ownerId,
         planRevision: proposal,
-        revisions: [{ ...summary(1), status: 'proposed', decidedBy: null, decidedAt: null }],
+        revisions: [
+          { ...summary(1), status: 'proposed', acceptedBy: null, decidedBy: null, decidedAt: null },
+        ],
         steps: [],
         usage: { tokens: 0, steps: 0, revisions: 0 },
       });
@@ -582,10 +591,12 @@ test.describe('S11 GO6: operations on a goal (stand-in reads and operations)', (
         '要你亲自确认「证书看起来对」（验收检查 looks-right），来自流程第 2 步',
       );
       await expect(page.getByTestId('goal-op-reject')).toBeVisible();
-      // S11 GO9a: the goal planner's leave is offered on the confirm card, on by default.
-      await expect(
-        confirm.getByTestId('goal-op-confirm-planner').getByRole('checkbox'),
-      ).toBeChecked();
+      // S11 GO9a/GO9b: the goal planner's leave is offered on the confirm card, as three choices;
+      // proposals for the requester to decide is the default.
+      await expect(confirm.getByTestId('goal-op-confirm-planner').getByRole('radio')).toHaveCount(
+        3,
+      );
+      await expect(confirm.getByTestId('goal-op-confirm-planner-propose')).toBeChecked();
       await page.screenshot({
         path: testInfo.outputPath(`goal-confirm-${width}.png`),
         fullPage: true,
@@ -730,13 +741,20 @@ test.describe('S11 「门确认不存在」 B: absence checks on a goal (stand-i
                     revision: 1,
                     basedOnRevision: null,
                     status: 'proposed',
+                    acceptedBy: null,
                     decidedBy: null,
                     decidedAt: null,
                     removals: {},
                     fromProcedure: null,
                   },
                   revisions: [
-                    { ...summary(1), status: 'proposed', decidedBy: null, decidedAt: null },
+                    {
+                      ...summary(1),
+                      status: 'proposed',
+                      acceptedBy: null,
+                      decidedBy: null,
+                      decidedAt: null,
+                    },
                   ],
                   steps: [],
                   usage: { tokens: 0, steps: 0, revisions: 0 },

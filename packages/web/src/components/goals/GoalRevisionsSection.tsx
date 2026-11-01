@@ -99,11 +99,22 @@ function RevisionItem({
             <span className="text-3">
               {revision.status === 'rejected'
                 ? t('拒绝', 'Rejected by')
-                : revision.proposer === 'planner'
-                  ? t('接受', 'Accepted by')
-                  : t('确认', 'Confirmed by')}
+                : revision.acceptedBy === 'platform'
+                  ? t('代为接受，授权人', 'Accepted on the leave of')
+                  : revision.proposer === 'planner'
+                    ? t('接受', 'Accepted by')
+                    : t('确认', 'Confirmed by')}
             </span>
             <RefChip kind="principal" id={revision.decidedBy} http={http} size="s" />
+            {/* S11 GO9b: the platform accepted it for the requester, under their apply_minor leave. */}
+            {revision.acceptedBy === 'platform' ? (
+              <span className="chip chip-s" data-testid="goal-revision-platform">
+                {t(
+                  '小修订，平台按请求人的授权采用',
+                  'Minor revision, adopted by the platform on the requester’s leave',
+                )}
+              </span>
+            ) : null}
             {revision.decidedAt ? (
               <time className="text-3" title={formatDateTime(revision.decidedAt)}>
                 {formatRelative(revision.decidedAt)}

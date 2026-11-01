@@ -1,6 +1,8 @@
 import type {
   GoalDetailWire,
   PlanRevisionSummaryWire,
+  PlannerRevisionClassReasonWire,
+  PlannerRevisionMajorReason,
   PlanningRoundOutcomeReason,
   PlanningRoundWire,
 } from '@nexttime/shared';
@@ -72,6 +74,14 @@ const OUTCOME: Readonly<Record<PlanningRoundOutcomeReason, readonly [string, str
     '目标已经不在这次暂停里（继续、取消或被所有者锁定），这一轮作废。',
     'The goal left the pause this round was for (resumed, cancelled or held by an owner), so the round was dropped.',
   ],
+  run_not_running: [
+    '目标已经不在运行（被暂停、锁定或取消），这一轮作废。',
+    'The goal stopped running (paused, held or cancelled), so the round was dropped.',
+  ],
+  step_keeps_failing: [
+    '平台已经替你改过这一步两次，它还是失败；这次不再自动换路，等你决定。',
+    'The platform already changed this step twice for you and it still fails, so it does not try another way on its own this time: it waits for your decision.',
+  ],
   plan_revised: [
     '计划已经换成另一个版本，这一轮作废。',
     'Another revision was put in force, so the round was dropped.',
@@ -84,4 +94,42 @@ export function planningOutcomeText(round: PlanningRoundWire, t: Translate): str
   if (round.outcomeReason === null) return null;
   const entry = OUTCOME[round.outcomeReason];
   return t(entry[0], entry[1]);
+}
+
+const MAJOR_REASON: Readonly<Record<PlannerRevisionMajorReason, readonly [string, string]>> = {
+  goal_acceptance_changed: ['改了目标的验收', 'It changes what the goal is accepted on'],
+  step_acceptance_changed: ['去掉或放宽了一步的验收', 'It drops or loosens a check of a step'],
+  execution_step: [
+    '新增或改动的步骤能执行动作或启动别的 Worker',
+    'A step it adds or changes can act or start Workers of its own',
+  ],
+  admission_blocked: [
+    '新增或改动的步骤要有人批准才能开始',
+    'A step it adds or changes would need a person before it starts',
+  ],
+  stops_live_work: ['会停下还在运行的工作', 'It would stop work that is still running'],
+  unresolvable: [
+    '平台判断不了新增或改动的步骤能做什么',
+    'The platform could not work out what a step it adds or changes could do',
+  ],
+};
+
+/** S11 GO9b: why the platform left a planner revision for the requester to decide, one line per
+ *  reason, naming the step a reason is about. */
+export function majorReasonTexts(
+  reasons: readonly PlannerRevisionClassReasonWire[],
+  t: Translate,
+): readonly string[] {
+  return reasons.map((reason) => {
+    const entry = MAJOR_REASON[reason.code];
+    const text = t(entry[0], entry[1]);
+    return reason.stepKey === null
+      ? text
+      : t(`${text}（步骤 ${reason.stepKey}）`, `${text} (step ${reason.stepKey})`);
+  });
+}
+
+/** S11 GO9b: the round that proposed `revision`, if a planning round did. */
+export function roundOfRevision(goal: GoalDetailWire, revision: number): PlanningRoundWire | null {
+  return goal.planningRounds.find((round) => round.revision === revision) ?? null;
 }

@@ -14,9 +14,13 @@ import {
   GoalRunPauseReasonSchema,
   GoalRunStatusSchema,
   ObjectiveOutcomeSchema,
+  PlanRevisionAcceptorSchema,
   PlanRevisionProposerSchema,
   PlanRevisionStatusSchema,
+  PlannerRevisionClassSchema,
+  PlannerRevisionMajorReasonSchema,
   PlanningFailureCategorySchema,
+  PlanningRoundKindSchema,
   PlanningRoundOutcomeReasonSchema,
   PlanningRoundStatusSchema,
   STEP_RUN_STATUS_VALUES,
@@ -153,6 +157,9 @@ export const PlanRevisionWireSchema = z
     proposedBy: z.string(),
     /** S11 GO9a: who `proposedBy` is — a person, or the workspace's goal planner. */
     proposer: PlanRevisionProposerSchema,
+    /** S11 GO9b: who accepted it (`null` while not accepted) — a person, or the platform for the
+     *  requester under their `apply_minor` leave (`decidedBy` is then the requester). */
+    acceptedBy: PlanRevisionAcceptorSchema.nullable(),
     reason: z.string().nullable(),
     decidedBy: z.string().nullable(),
     decidedAt: z.string().nullable(),
@@ -413,16 +420,31 @@ export const StepTrialApprovalWireSchema = z
   .strict();
 export type StepTrialApprovalWire = z.infer<typeof StepTrialApprovalWireSchema>;
 
+/** S11 GO9b: one reason a planner revision is `major` — the step it is about, when it is about
+ *  one (`stepKey`; none for `goal_acceptance_changed`). */
+export const PlannerRevisionClassReasonWireSchema = z
+  .object({
+    code: PlannerRevisionMajorReasonSchema,
+    stepKey: z.string().nullable(),
+  })
+  .strict();
+export type PlannerRevisionClassReasonWire = z.infer<typeof PlannerRevisionClassReasonWireSchema>;
+
 /** S11 GO9a: one planning round of the run — the goal planner asked once about one failed attempt
  *  of a step (`stepKey`, `stepAttempt`, why it failed), on the revision then in force
  *  (`basedOnRevision`). `taskId`: the planner's Task (`get_task` reads it), `null` for a round that
- *  never started one. `revision`: what it proposed, once `proposed`. `outcomeReason`: why it
- *  `failed` or was `abandoned`. `detail`: for `no_revision`, the planner's reason as it wrote it;
- *  for `failed`, what the platform found. */
+ *  never started one. `revision`: what it proposed, once `proposed` (or `applied`). `outcomeReason`:
+ *  why it `failed` or was `abandoned`. `detail`: for `no_revision`, the planner's reason as it
+ *  wrote it; for `failed`, what the platform found. S11 GO9b: `kind` — opened under a pause (the
+ *  requester decides) or while the run kept running (`autonomous`: a minor revision is `applied`
+ *  for them); `revisionClass` and `classReasons` — how the platform classed what it proposed, and
+ *  why a `major` one needs the requester (`null` / empty for a round that proposed nothing, or one
+ *  settled before the platform classed revisions). */
 export const PlanningRoundWireSchema = z
   .object({
     id: z.string(),
     status: PlanningRoundStatusSchema,
+    kind: PlanningRoundKindSchema,
     basedOnRevision: z.number().int().positive(),
     stepRunId: z.string(),
     stepKey: z.string(),
@@ -430,6 +452,8 @@ export const PlanningRoundWireSchema = z
     failureCategory: PlanningFailureCategorySchema,
     taskId: z.string().nullable(),
     revision: z.number().int().positive().nullable(),
+    revisionClass: PlannerRevisionClassSchema.nullable(),
+    classReasons: z.array(PlannerRevisionClassReasonWireSchema),
     outcomeReason: PlanningRoundOutcomeReasonSchema.nullable(),
     detail: z.string().nullable(),
     createdAt: z.string(),

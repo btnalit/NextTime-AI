@@ -635,11 +635,15 @@ export const StepRunFailureCategorySchema = asEnum(STEP_RUN_FAILURE_CATEGORY_VAL
 
 /**
  * How far the requester lets the goal planner go on a GoalRun, given when they confirm it
- * (`goal_planner_delegations`, goal/0014). `propose`: when a step fails for a person, the planner
- * proposes a revision of the plan and the requester decides on it. No row: the planner is not
- * asked.
+ * (`goal_planner_delegations`, goal/0014, goal/0015). No row: the planner is not asked.
+ *   - `propose`: when a step fails for a person, the run pauses, the planner proposes a revision of
+ *     the plan and the requester decides on it (GO9a).
+ *   - `apply_minor` (S11 GO9b): when a step fails for a person, the run keeps running while the
+ *     planner proposes a revision; a minor one (`PlannerRevisionClass`) the platform accepts for
+ *     the requester and the run goes on, a major one pauses the run for the requester to decide, as
+ *     `propose` does. Under a pause the planner only proposes, as with `propose`.
  */
-export const GOAL_PLANNER_MODE_VALUES = ['propose'] as const;
+export const GOAL_PLANNER_MODE_VALUES = ['propose', 'apply_minor'] as const;
 export type GoalPlannerMode = (typeof GOAL_PLANNER_MODE_VALUES)[number];
 export const GoalPlannerModeSchema = asEnum(GOAL_PLANNER_MODE_VALUES);
 
@@ -656,20 +660,67 @@ export type PlanningFailureCategory = (typeof PLANNING_FAILURE_CATEGORY_VALUES)[
 export const PlanningFailureCategorySchema = asEnum(PLANNING_FAILURE_CATEGORY_VALUES);
 
 /**
+ * When a planning round was opened, which decides who settles what it proposes (goal/0015
+ * `goal_planning_rounds.kind`):
+ *   - `proposal`: the run was paused `needs_decision` — the requester decides (GO9a);
+ *   - `autonomous` (S11 GO9b): the run kept running under an `apply_minor` leave — a minor revision
+ *     is accepted by the platform for the requester, a major one pauses the run for them.
+ */
+export const PLANNING_ROUND_KIND_VALUES = ['proposal', 'autonomous'] as const;
+export type PlanningRoundKind = (typeof PLANNING_ROUND_KIND_VALUES)[number];
+export const PlanningRoundKindSchema = asEnum(PLANNING_ROUND_KIND_VALUES);
+
+/**
  * A planning round (goal/0014 `goal_planning_rounds`): one planner run at one failed attempt of a
- * step. `running → proposed` (its revision waits for the requester) `| no_revision` (the planner
- * found no plan change that helps) `| failed` (no usable result, or no planner could run) `|
- * abandoned` (the run left the pause the round was for, or its plan was revised).
+ * step. `running → proposed` (its revision waits for the requester) `| applied` (S11 GO9b: an
+ * `autonomous` round's minor revision, accepted by the platform for the requester) `|
+ * no_revision` (the planner found no plan change that helps) `| failed` (no usable result, or no
+ * planner could run) `| abandoned` (the run left the pause — or, for an `autonomous` round, the
+ * running — the round was for, or its plan was revised).
  */
 export const PLANNING_ROUND_STATUS_VALUES = [
   'running',
   'proposed',
+  'applied',
   'no_revision',
   'failed',
   'abandoned',
 ] as const;
 export type PlanningRoundStatus = (typeof PLANNING_ROUND_STATUS_VALUES)[number];
 export const PlanningRoundStatusSchema = asEnum(PLANNING_ROUND_STATUS_VALUES);
+
+/**
+ * S11 GO9b: how much of a person's judgement a revision the planner proposed needs — the
+ * platform's own rule over the plan, never the planner's say (`classifyPlannerRevision`). `major`
+ * when any of {@link PLANNER_REVISION_MAJOR_REASON_VALUES} holds, otherwise `minor`. Only an
+ * `autonomous` round's `minor` revision is accepted without the requester.
+ */
+export const PLANNER_REVISION_CLASS_VALUES = ['minor', 'major'] as const;
+export type PlannerRevisionClass = (typeof PLANNER_REVISION_CLASS_VALUES)[number];
+export const PlannerRevisionClassSchema = asEnum(PLANNER_REVISION_CLASS_VALUES);
+
+/**
+ * S11 GO9b: why a planner revision is `major`:
+ *   - `goal_acceptance_changed`: what has to hold for the goal to be achieved changed;
+ *   - `step_acceptance_changed`: a step not yet ended had its acceptance checks changed, or was
+ *     removed with checks of its own;
+ *   - `execution_step`: a new or changed step can act — its Worker may request actions, start
+ *     Workers of its own (`nested`) or declares reconcile checks;
+ *   - `admission_blocked`: a new or changed step would not start without a person (a draft Skill
+ *     to approve, a gate or capability the requester lacks, an excluded or unavailable Worker);
+ *   - `stops_live_work`: a changed or removed step still has a Task running or an action in flight;
+ *   - `unresolvable`: the platform could not work out what a step would be able to do.
+ */
+export const PLANNER_REVISION_MAJOR_REASON_VALUES = [
+  'goal_acceptance_changed',
+  'step_acceptance_changed',
+  'execution_step',
+  'admission_blocked',
+  'stops_live_work',
+  'unresolvable',
+] as const;
+export type PlannerRevisionMajorReason = (typeof PLANNER_REVISION_MAJOR_REASON_VALUES)[number];
+export const PlannerRevisionMajorReasonSchema = asEnum(PLANNER_REVISION_MAJOR_REASON_VALUES);
 
 /**
  * Why a planning round `failed` or was `abandoned` — set exactly then:
@@ -679,9 +730,13 @@ export const PlanningRoundStatusSchema = asEnum(PLANNING_ROUND_STATUS_VALUES);
  *     owner deprecated it);
  *   - `requester_cannot_start`: the requester cannot start a Worker now (disabled, a role that does
  *     not, the evaluation seal pausing their agents, a daily quota);
+ *   - `step_keeps_failing` (S11 GO9b): the step failed again after two revisions the platform
+ *     accepted for it, so the platform stops changing the plan on its own and asks the requester;
  *   - `task_failed`: the planner's Task ended without a result;
  *   - `invalid_revision`: what it proposed no longer passes the platform's checks;
  *   - `run_left_pause`: the run was resumed, cancelled or held by a workspace owner;
+ *   - `run_not_running` (S11 GO9b): an `autonomous` round's run stopped running — paused, held or
+ *     cancelled;
  *   - `plan_revised`: another revision was put in force.
  */
 export const PLANNING_ROUND_OUTCOME_REASON_VALUES = [
@@ -689,19 +744,29 @@ export const PLANNING_ROUND_OUTCOME_REASON_VALUES = [
   'token_budget_exhausted',
   'planner_unavailable',
   'requester_cannot_start',
+  'step_keeps_failing',
   'task_failed',
   'invalid_revision',
   'run_left_pause',
+  'run_not_running',
   'plan_revised',
 ] as const;
 export type PlanningRoundOutcomeReason = (typeof PLANNING_ROUND_OUTCOME_REASON_VALUES)[number];
 export const PlanningRoundOutcomeReasonSchema = asEnum(PLANNING_ROUND_OUTCOME_REASON_VALUES);
 
 /** Who proposed a plan revision: a person (the requester's own revision, or the proposal they
- *  confirmed) or the goal planner (GO9a: always `proposed` until the requester decides). */
+ *  confirmed) or the goal planner (`proposed` until the requester decides — or, GO9b, until the
+ *  platform accepts a minor one for them). */
 export const PLAN_REVISION_PROPOSER_VALUES = ['person', 'planner'] as const;
 export type PlanRevisionProposer = (typeof PLAN_REVISION_PROPOSER_VALUES)[number];
 export const PlanRevisionProposerSchema = asEnum(PLAN_REVISION_PROPOSER_VALUES);
+
+/** S11 GO9b: who accepted a plan revision — a person (`decidedBy`, by their own act), or the
+ *  platform for the requester, under the `apply_minor` leave they gave when they confirmed the run
+ *  (an `applied` planning round; `decidedBy` is then the requester whose leave it was). */
+export const PLAN_REVISION_ACCEPTOR_VALUES = ['person', 'platform'] as const;
+export type PlanRevisionAcceptor = (typeof PLAN_REVISION_ACCEPTOR_VALUES)[number];
+export const PlanRevisionAcceptorSchema = asEnum(PLAN_REVISION_ACCEPTOR_VALUES);
 
 // ---------------------------------------------------------------------------------------------
 // S11 P1 ChangePlan (docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §3.1, §3.4, §5.4)

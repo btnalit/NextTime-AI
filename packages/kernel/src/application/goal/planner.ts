@@ -4,7 +4,9 @@ import {
   type OutputProblem,
   PLANNING_FAILURE_CATEGORY_VALUES,
   PlannerOutputSchema,
+  type PlannerRevisionClassReasonWire,
   type PlanningFailureCategory,
+  type PlanningRoundKind,
   type WorkerResultCapabilityParams,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
@@ -27,6 +29,7 @@ import {
   countStepAttemptsWithoutResult,
   createPlanningTask,
   ensurePlannerDefinition,
+  findGoalPlannerFamily,
   findGoalPlannerPrincipal,
   getOrCreateGoalPlannerPrincipal,
   loadPlannerTemplate,
@@ -46,6 +49,7 @@ import {
   type PlanningActor,
   type PlanningRoundRow,
   boundDetail,
+  leftReason,
   listPlanningRounds,
   readGoalPlannerMode,
   settlePlanningRound,
@@ -53,10 +57,12 @@ import {
 import { getGoalRun, getPlanRevision } from './reads.js';
 import {
   type RevisionCandidate,
+  adoptRevision,
   checkRevisionCandidate,
   readBasePlan,
   revisionValidation,
 } from './revise.js';
+import { classifyPlannerRevision, plannerRevisionFacts } from './revision-class.js';
 import { GoalRunInputError, GoalRunStateError } from './service.js';
 import type { GoalRunRow, StepRunRow } from './types.js';
 
@@ -92,6 +98,27 @@ import type { GoalRunRow, StepRunRow } from './types.js';
  *      quota only delays it ({@link PlanningPhaseResult.retryAt}). The planner Task is created
  *      here and started after the commit.
  *
+ * S11 GO9b (plan §4.3; `s11-w2/go9-default-plan.md` §7): under the requester's `apply_minor`
+ * leave the same failure need not pause the run. The advance leaves it to the planner instead
+ * (`advance.ts` asks {@link autonomousPlanning} where it would pause) and starts no new attempt
+ * while that is pending; phase P then runs an `autonomous` round while the run keeps running:
+ *
+ *   - **Abandoned** once the run stops running (`run_not_running`: any pause, a hold, a cancel) or
+ *     its plan is revised (`plan_revised`); a person's pause or hold settles it at once.
+ *   - **Opened** for the latest live failed step of the plan in force whose failed attempt has no
+ *     round yet and whose failure is plannable — unless a planner revision waits for a decision.
+ *     A step the platform already applied {@link AUTONOMY_MAX_APPLIED_PER_STEP} revisions for is
+ *     not planned again (`step_keeps_failing`); like a planner that cannot run, that records the
+ *     round `failed` and pauses the run `needs_decision` for the requester.
+ *   - **Settled**: the revision is classed (`revision-class.ts`, the platform's rule, never the
+ *     planner's say). A `minor` one the platform accepts for the requester and adopts in the same
+ *     transaction (`adoptRevision` with `autonomy`), the round `applied`, the run due at once; a
+ *     `major` one is left `proposed` and the run pauses for the requester to decide (GO9a's card).
+ *     A `no_revision` or failed round pauses the run too, with what the planner said.
+ *
+ * A proposal round's revision is classed as well, for the requester to read; who decides does not
+ * change.
+ *
  * Every round settles once (goal/0014), and its audit row (`goal_planning_round.open`,
  * `goal_planning_round.settle`) carries `by: 'advancer'` with the requester as actor, like every
  * other move of the advance.
@@ -104,6 +131,9 @@ export const PLANNER_INPUT_KIND = 'goal_planning';
 export const PLANNER_OUTPUT_PREVIEW_CHARS = 4000;
 /** At most this many Worker versions are offered to the planner. */
 export const PLANNER_MAX_WORKERS = 50;
+/** S11 GO9b: past this many revisions the platform applied for failures of one step key, a further
+ *  failure of it is the requester's (`step_keeps_failing`). */
+export const AUTONOMY_MAX_APPLIED_PER_STEP = 2;
 
 /** What the platform refuses in a revision, as the planner's input states it. */
 const PLANNER_RULES: readonly string[] = [
@@ -141,6 +171,11 @@ export interface PlanningPhaseResult {
   readonly start: PreparedStepAttempt | null;
   /** When the requester's concurrency quota may let the planner start (epoch ms). */
   readonly retryAt: number | null;
+  /** S11 GO9b: why a running run pauses `needs_decision` now — an autonomous round's outcome the
+   *  platform does not apply, or a planner that cannot run — or `null`. */
+  readonly pause: string | null;
+  /** S11 GO9b: the platform adopted a revision for the requester: the run is due at once. */
+  readonly due: boolean;
 }
 
 const FINISHED: ReadonlySet<string> = new Set(['completed', 'failed', 'cancelled']);
@@ -154,7 +189,10 @@ export async function runPlanningPhase(ctx: PlanningPhaseContext): Promise<Plann
     ctx.status === 'paused' &&
     ctx.pauseReason === 'needs_decision' &&
     goal.pausedByAuthority !== 'owner';
+  const running = ctx.status === 'running';
   const terminate: string[] = [];
+  let pause: string | null = null;
+  let due = false;
   let rounds = await listPlanningRounds(client, ws, goal.id);
   for (const round of rounds) {
     const live = round.task !== null && !FINISHED.has(round.task.status);
@@ -162,52 +200,78 @@ export async function runPlanningPhase(ctx: PlanningPhaseContext): Promise<Plann
       if (live && round.task) terminate.push(round.task.id);
       continue;
     }
-    if (!inPause || round.basedOnRevision !== goal.currentRevision) {
+    const stays = round.kind === 'autonomous' ? running : inPause;
+    if (!stays || round.basedOnRevision !== goal.currentRevision) {
       await settlePlanningRound(client, ws, actor, round, {
         status: 'abandoned',
-        reason: round.basedOnRevision !== goal.currentRevision ? 'plan_revised' : 'run_left_pause',
+        reason:
+          round.basedOnRevision !== goal.currentRevision ? 'plan_revised' : leftReason(round.kind),
       });
       if (live && round.task) terminate.push(round.task.id);
       continue;
     }
     if (round.task === null) {
+      const detail = 'the round has no planner Task';
       await settlePlanningRound(client, ws, actor, round, {
         status: 'failed',
         reason: 'task_failed',
-        detail: 'the round has no planner Task',
+        detail,
       });
+      if (round.kind === 'autonomous')
+        pause ??= roundPause(ctx, round, `its round failed (${detail})`);
       continue;
     }
     if (live) continue;
-    await settleFinishedRound(client, goal, actor, round);
+    const settled = await settleFinishedRound(ctx, actor, round);
+    if (settled.pause !== null) pause ??= settled.pause;
+    if (settled.due) due = true;
   }
-  if (!inPause) return { terminate, start: null, retryAt: null };
+  const idle = { terminate, start: null, retryAt: null, pause, due };
+  // A revision adopted, or a pause to make: the next advance works on what is now in force.
+  if (due || pause !== null) return idle;
+  const autonomy = running && (await readGoalPlannerMode(client, ws, goal.id)) === 'apply_minor';
+  if (!inPause && !autonomy) return idle;
   rounds = await listPlanningRounds(client, ws, goal.id);
-  if (rounds.some((round) => round.status === 'running')) {
-    return { terminate, start: null, retryAt: null };
-  }
-  const opened = await openRound(ctx, rounds);
-  return { terminate, ...opened };
+  if (rounds.some((round) => round.status === 'running')) return idle;
+  const opened = await openRound(ctx, rounds, inPause ? 'proposal' : 'autonomous');
+  return { terminate, due: false, ...opened };
+}
+
+/** The pause an autonomous round's outcome makes, naming the step it was for. */
+function roundPause(ctx: PlanningPhaseContext, round: PlanningRoundRow, outcome: string): string {
+  const key = ctx.steps.find((step) => step.id === round.stepRunId)?.stepKey ?? round.stepRunId;
+  return `step ${key}: attempt ${round.stepAttempt} failed (${round.failureCategory}); the goal planner ${outcome} — retry the step, revise the plan or cancel`;
 }
 
 // ----- settle -------------------------------------------------------------------------------
 
+interface SettledRound {
+  readonly pause: string | null;
+  readonly due: boolean;
+}
+
 async function settleFinishedRound(
-  client: PoolClient,
-  goal: GoalRunRow,
+  ctx: PlanningPhaseContext,
   actor: PlanningActor,
   round: PlanningRoundRow,
-): Promise<void> {
+): Promise<SettledRound> {
+  const { client, goal } = ctx;
   const ws = goal.workspaceId;
   const task = round.task;
-  if (!task) return;
+  const autonomous = round.kind === 'autonomous';
+  const settled = (outcome: string): SettledRound => ({
+    pause: autonomous ? roundPause(ctx, round, outcome) : null,
+    due: false,
+  });
+  if (!task) return { pause: null, due: false };
   if (task.status !== 'completed') {
+    const detail = `the planner's Task ${task.status}${task.failureReason ? ` (${task.failureReason})` : ''}`;
     await settlePlanningRound(client, ws, actor, round, {
       status: 'failed',
       reason: 'task_failed',
-      detail: `the planner's Task ${task.status}${task.failureReason ? ` (${task.failureReason})` : ''}`,
+      detail,
     });
-    return;
+    return settled(`round failed (${detail})`);
   }
   const output = PlannerOutputSchema.safeParse(
     task.result !== null && typeof task.result === 'object'
@@ -215,37 +279,40 @@ async function settleFinishedRound(
       : undefined,
   );
   if (!output.success) {
+    const detail = "the planner's report is not a planner's proposal";
     await settlePlanningRound(client, ws, actor, round, {
       status: 'failed',
       reason: 'task_failed',
-      detail: "the planner's report is not a planner's proposal",
+      detail,
     });
-    return;
+    return settled(`round failed (${detail})`);
   }
   if (output.data.decision === 'no_revision') {
     await settlePlanningRound(client, ws, actor, round, {
       status: 'no_revision',
       detail: output.data.reason,
     });
-    return;
+    return settled(`proposed no revision (${boundDetail(output.data.reason)})`);
   }
   let candidate: RevisionCandidate;
   try {
     refuseRedactedText('reason', output.data.reason);
     refuseCredentialText('reason', output.data.reason);
+    // An autonomous round's revision may be adopted in this transaction: checked as its writer.
     candidate = await checkRevisionCandidate(client, ws, goal, {
       plan: output.data.plan,
-      lock: false,
+      lock: autonomous,
     });
   } catch (err) {
     const problems = revisionProblems(err);
     if (!problems) throw err;
+    const detail = problems.map((problem) => `${problem.path}: ${problem.message}`).join('; ');
     await settlePlanningRound(client, ws, actor, round, {
       status: 'failed',
       reason: 'invalid_revision',
-      detail: problems.map((problem) => `${problem.path}: ${problem.message}`).join('; '),
+      detail,
     });
-    return;
+    return settled(`proposed a revision that no longer passes (${boundDetail(detail)})`);
   }
   const plannerId = await getOrCreateGoalPlannerPrincipal(client, ws);
   const inserted = await client.query<{ id: string }>(
@@ -285,10 +352,49 @@ async function settleFinishedRound(
       onBehalfOf: goal.onBehalfOf,
     },
   });
+  const base = await readBasePlan(client, ws, goal);
+  const classification = classifyPlannerRevision({
+    base,
+    candidate: candidate.plan,
+    ...(await plannerRevisionFacts(client, ws, goal, base, candidate.plan)),
+  });
+  const classed = {
+    revisionClass: classification.revisionClass,
+    classReasons: classification.reasons,
+  };
+  if (autonomous && classification.revisionClass === 'minor') {
+    await adoptRevision(client, ws, goal, candidate, {
+      actorId: goal.onBehalfOf,
+      reason: null,
+      budgetChanged: false,
+      checkAccounts: false,
+      proposal: { id: planRevisionId, revision: candidate.nextRevision },
+      autonomy: { planningRoundId: round.id },
+    });
+    await settlePlanningRound(client, ws, actor, round, {
+      status: 'applied',
+      revision: candidate.nextRevision,
+      ...classed,
+    });
+    return { pause: null, due: true };
+  }
   await settlePlanningRound(client, ws, actor, round, {
     status: 'proposed',
     revision: candidate.nextRevision,
+    ...classed,
   });
+  if (!autonomous) return { pause: null, due: false };
+  const key = ctx.steps.find((step) => step.id === round.stepRunId)?.stepKey ?? round.stepRunId;
+  return {
+    pause: `step ${key}: the goal planner proposed revision ${candidate.nextRevision}, which needs your decision (${majorReasons(classification.reasons)}) — accept or reject it, or revise the plan or cancel`,
+    due: false,
+  };
+}
+
+function majorReasons(reasons: readonly PlannerRevisionClassReasonWire[]): string {
+  return reasons
+    .map((reason) => (reason.stepKey ? `${reason.code} at step ${reason.stepKey}` : reason.code))
+    .join(', ');
 }
 
 /** The places a revision fails at, from the error a revision check throws — `null` for an error
@@ -337,31 +443,88 @@ export async function plannableFailure(
   return plannable;
 }
 
+/**
+ * S11 GO9b: what the planning of an `apply_minor` run does about `step`'s failure, read now — the
+ * advance asks where it would pause for a person (`advance.ts`), and before it starts attempts.
+ * `'open'`: the platform does not move the step on its own ({@link plannableFailure}), no round
+ * was opened for its failed attempt and no planner revision waits for a decision — phase P opens an
+ * autonomous round for it; `'running'`: the autonomous round for that attempt runs; `null`: the
+ * planner has nothing to do with it now (the run pauses for a person as it would without the
+ * leave). The caller checks the leave, that the run runs and that `step` is in the plan in force.
+ */
+export async function autonomousPlanning(
+  client: PoolClient,
+  workspaceId: string,
+  step: StepRunRow,
+  entry: PlanStep,
+): Promise<'open' | 'running' | null> {
+  if (!(await plannableFailure(client, workspaceId, step, entry))) return null;
+  const round = await client.query<{ status: string; kind: PlanningRoundKind }>(
+    `select status, kind from goal_planning_rounds
+      where workspace_id = $1 and goal_run_id = $2 and step_run_id = $3 and step_attempt = $4`,
+    [workspaceId, step.goalRunId, step.id, step.attemptCount],
+  );
+  const existing = round.rows[0];
+  if (existing) {
+    return existing.status === 'running' && existing.kind === 'autonomous' ? 'running' : null;
+  }
+  return (await plannerRevisionWaits(client, workspaceId, step.goalRunId)) ? null : 'open';
+}
+
+/** Whether a revision the planner proposed for the run waits for the requester's decision. */
+async function plannerRevisionWaits(
+  client: PoolClient,
+  workspaceId: string,
+  goalRunId: string,
+): Promise<boolean> {
+  const plannerId = await findGoalPlannerPrincipal(client, workspaceId);
+  if (plannerId === null) return false;
+  const waiting = await client.query(
+    `select 1 from plan_revisions
+      where workspace_id = $1 and goal_run_id = $2 and proposed_by = $3 and status = 'proposed'
+      limit 1`,
+    [workspaceId, goalRunId, plannerId],
+  );
+  return (waiting.rowCount ?? 0) > 0;
+}
+
+/** Whether an autonomous round of the run is running. */
+export async function autonomousRoundRuns(
+  client: PoolClient,
+  workspaceId: string,
+  goalRunId: string,
+): Promise<boolean> {
+  const running = await client.query(
+    `select 1 from goal_planning_rounds
+      where workspace_id = $1 and goal_run_id = $2 and status = 'running' and kind = 'autonomous'
+      limit 1`,
+    [workspaceId, goalRunId],
+  );
+  return (running.rowCount ?? 0) > 0;
+}
+
 async function openRound(
   ctx: PlanningPhaseContext,
   rounds: readonly PlanningRoundRow[],
-): Promise<Omit<PlanningPhaseResult, 'terminate'>> {
-  const none = { start: null, retryAt: null };
+  kind: PlanningRoundKind,
+): Promise<Omit<PlanningPhaseResult, 'terminate' | 'due'>> {
+  const none = { start: null, retryAt: null, pause: null };
   const { client, goal } = ctx;
   const ws = goal.workspaceId;
   const base = goal.currentRevision;
   if (base === null) return none;
   if ((await readGoalPlannerMode(client, ws, goal.id)) === null) return none;
-  const plannerId = await findGoalPlannerPrincipal(client, ws);
-  if (plannerId !== null) {
-    const waiting = await client.query(
-      `select 1 from plan_revisions
-        where workspace_id = $1 and goal_run_id = $2 and proposed_by = $3 and status = 'proposed'
-        limit 1`,
-      [ws, goal.id, plannerId],
-    );
-    if ((waiting.rowCount ?? 0) > 0) return none;
-  }
+  if (await plannerRevisionWaits(client, ws, goal.id)) return none;
+  const rounded = (step: StepRunRow) =>
+    rounds.some((round) => round.stepRunId === step.id && round.stepAttempt === step.attemptCount);
+  // A pause gets one round, for its latest failure; a running run's planning takes the latest
+  // failure that has none yet (an earlier one's round may have been abandoned by a pause).
   let target: { step: StepRunRow; category: PlanningFailureCategory } | null = null;
   const failed = ctx.steps
     .filter((step) => step.status === 'failed' && step.supersededInRevision === null)
     .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
   for (const step of failed) {
+    if (kind === 'autonomous' && rounded(step)) continue;
     const entry = await ctx.entry(step);
     if (!entry || !(await ctx.inCurrentPlan(step))) continue;
     const category = await plannableFailure(client, ws, step, entry);
@@ -372,30 +535,46 @@ async function openRound(
   }
   if (!target) return none;
   const { step, category } = target;
-  if (
-    rounds.some((round) => round.stepRunId === step.id && round.stepAttempt === step.attemptCount)
-  ) {
-    return none;
-  }
+  if (rounded(step)) return none;
   const opening = {
     goalRunId: goal.id,
     basedOnRevision: base,
     stepRunId: step.id,
     stepAttempt: step.attemptCount,
     failureCategory: category,
+    kind,
   };
   const failRound = async (
     reason:
       | 'revision_budget_exhausted'
       | 'token_budget_exhausted'
       | 'planner_unavailable'
-      | 'requester_cannot_start',
+      | 'requester_cannot_start'
+      | 'step_keeps_failing',
     detail: string,
   ) => {
     await insertRound(client, ws, goal.onBehalfOf, opening, { reason, detail });
-    return none;
+    return {
+      ...none,
+      pause:
+        kind === 'autonomous'
+          ? `step ${step.stepKey}: attempt ${step.attemptCount} failed (${category}); the platform does not plan it on its own now (${reason}: ${boundDetail(detail)}) — retry the step, revise the plan or cancel`
+          : null,
+    };
   };
 
+  if (kind === 'autonomous') {
+    const keyOf = new Map(ctx.steps.map((row) => [row.id, row.stepKey]));
+    const applied = rounds.filter(
+      (round) => round.status === 'applied' && keyOf.get(round.stepRunId) === step.stepKey,
+    ).length;
+    if (applied >= AUTONOMY_MAX_APPLIED_PER_STEP) {
+      return failRound(
+        'step_keeps_failing',
+        `the platform already applied ${applied} planner revisions for step ${step.stepKey}`,
+      );
+    }
+  }
   const revisions = await client.query<{ accepted: number }>(
     `select count(*) filter (where status = 'accepted')::int as accepted
        from plan_revisions where workspace_id = $1 and goal_run_id = $2`,
@@ -444,12 +623,12 @@ async function openRound(
   });
   if (created.kind === 'created') {
     await client.query('release savepoint goal_planning_round');
-    return { start: created.prepared, retryAt: null };
+    return { ...none, start: created.prepared };
   }
   await client.query('rollback to savepoint goal_planning_round');
   const { refusal } = created;
   if (refusal.kind === 'quota' && refusal.code === 'concurrency_exceeded') {
-    return { start: null, retryAt: ctx.now.getTime() + ctx.quotaRetryMs };
+    return { ...none, retryAt: ctx.now.getTime() + ctx.quotaRetryMs };
   }
   if (refusal.kind === 'paused') {
     await writeProbeHoldRefusal(client, {
@@ -479,14 +658,16 @@ async function insertRound(
     readonly stepRunId: string;
     readonly stepAttempt: number;
     readonly failureCategory: PlanningFailureCategory;
+    readonly kind: PlanningRoundKind;
   },
   failed: { readonly reason: string; readonly detail: string } | null,
 ): Promise<string> {
   const inserted = await client.query<{ id: string }>(
     `insert into goal_planning_rounds (
        workspace_id, goal_run_id, based_on_revision, step_run_id, step_attempt, failure_category,
-       status, outcome_reason, detail, settled_at
-     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, case when $7 = 'running' then null else now() end)
+       status, outcome_reason, detail, settled_at, kind
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+               case when $7 = 'running' then null else now() end, $10)
      returning id`,
     [
       workspaceId,
@@ -498,6 +679,7 @@ async function insertRound(
       failed ? 'failed' : 'running',
       failed?.reason ?? null,
       failed ? boundDetail(failed.detail) : null,
+      opening.kind,
     ],
   );
   const id = inserted.rows[0]?.id;
@@ -515,6 +697,7 @@ async function insertRound(
       stepRunId: opening.stepRunId,
       stepAttempt: opening.stepAttempt,
       failureCategory: opening.failureCategory,
+      kind: opening.kind,
       status: failed ? 'failed' : 'running',
       ...(failed ? { reason: failed.reason } : {}),
     },
@@ -668,12 +851,13 @@ async function failedStepFacts(
 }
 
 /** The Worker versions a step may name: the latest published version of each family of the
- *  workspace, the planner's own left out. */
+ *  workspace, the planner's own family left out (every version of it, a workspace owner's too —
+ *  as `find_workers` does). */
 async function plannerWorkers(
   client: PoolClient,
   workspaceId: string,
 ): Promise<readonly Record<string, unknown>[]> {
-  const plannerId = await findGoalPlannerPrincipal(client, workspaceId);
+  const plannerFamily = await findGoalPlannerFamily(client, workspaceId);
   const result = await client.query<{
     id: string;
     version: number;
@@ -684,10 +868,10 @@ async function plannerWorkers(
             definition -> 'description' as description
        from worker_definitions
       where workspace_id = $1 and kind = 'worker' and status = 'published'
-        and proposed_by is distinct from $2
+        and id is distinct from $2
       order by id, version desc
       limit $3`,
-    [workspaceId, plannerId, PLANNER_MAX_WORKERS],
+    [workspaceId, plannerFamily, PLANNER_MAX_WORKERS],
   );
   return result.rows.map((row) => ({
     definitionId: row.id,
@@ -724,8 +908,12 @@ export async function plannerReportProblems(
 ): Promise<readonly OutputProblem[]> {
   const planning = await readTaskPlanningRound(client, workspaceId, taskId);
   if (!planning) return [];
-  const round = await client.query<{ status: string; based_on_revision: number }>(
-    `select status, based_on_revision from goal_planning_rounds
+  const round = await client.query<{
+    status: string;
+    based_on_revision: number;
+    kind: PlanningRoundKind;
+  }>(
+    `select status, based_on_revision, kind from goal_planning_rounds
       where workspace_id = $1 and id = $2`,
     [workspaceId, planning.planningRoundId],
   );
@@ -767,9 +955,11 @@ export async function plannerReportProblems(
   }
   if (output.data.decision === 'revise') {
     const goal = await getGoalRun(client, workspaceId, planning.goalRunId);
-    // A run that left the round's pause, or whose plan changed, abandons the round at its next
-    // advance: the report moves nothing then, and is not held to a plan it no longer revises.
-    if (goal?.status !== 'paused' || goal.currentRevision !== row.based_on_revision) {
+    // A run that left the round's pause (GO9b: stopped running, for an autonomous round), or whose
+    // plan changed, abandons the round at its next advance: the report moves nothing then, and is
+    // not held to a plan it no longer revises.
+    const stays = row.kind === 'autonomous' ? 'running' : 'paused';
+    if (goal?.status !== stays || goal.currentRevision !== row.based_on_revision) {
       return problems;
     }
     try {

@@ -1,4 +1,5 @@
 import type {
+  GoalPlannerMode,
   GoalRunEvent,
   GoalRunPauseReason,
   GoalRunStatus,
@@ -67,7 +68,8 @@ import {
   roundAcceptance,
   samePlanEntry,
 } from './plan.js';
-import { runPlanningPhase } from './planner.js';
+import { autonomousPlanning, autonomousRoundRuns, runPlanningPhase } from './planner.js';
+import { readGoalPlannerMode } from './planning-rounds.js';
 import { getPlanRevision, lockStepRuns } from './reads.js';
 import { lockGoalRun } from './service.js';
 import { nameTrialStepRun, trialApprovalCandidates } from './trial-approvals.js';
@@ -553,6 +555,8 @@ class Advance {
   private pauseReason: GoalRunPauseReason | null;
   /** S11 GO9a: the planner Task phase P created, started after the commit. */
   private planning: PreparedStepAttempt | null = null;
+  /** S11 GO9b: the requester's planner leave, read once (it never changes after confirming). */
+  private plannerMode: GoalPlannerMode | null | undefined;
 
   constructor(
     client: PoolClient,
@@ -614,13 +618,20 @@ class Advance {
       }
       if (this.status === 'running') await this.pauseIfStuck(await this.lockSteps());
     }
-    const planningRetry = await this.planningPhase();
+    const planning = await this.planningPhase();
+    if (planning.pause !== null) await this.pause('needs_decision', planning.pause);
+    if (this.status === 'running') {
+      // GO9b: a revision the platform adopted is worked on at once; a planner held back by the
+      // requester's concurrency quota is tried again when it may start.
+      if (planning.due) this.timers.push(this.now.getTime());
+      if (planning.retryAt !== null) this.timers.push(planning.retryAt);
+    }
 
     const nextTickAt =
       this.status === 'running'
         ? new Date(Math.min(this.deadline, ...this.timers))
-        : planningRetry !== null
-          ? new Date(planningRetry)
+        : planning.retryAt !== null
+          ? new Date(planning.retryAt)
           : null;
     await writeNextTick(this.client, this.goal, nextTickAt);
     return {
@@ -639,11 +650,17 @@ class Advance {
 
   /** S11 GO9a, phase P (`planner.ts`): the run's planning rounds, after every other phase — a
    *  round the run left is abandoned, a finished one settled, a new one opened for a run paused on
-   *  a step only a person (or a plan change) resolves. Returns when the requester's concurrency
-   *  quota may let the planner start (epoch ms), or `null`. */
-  private async planningPhase(): Promise<number | null> {
+   *  a step only a person (or a plan change) resolves, or (GO9b) for a running run under the
+   *  requester's `apply_minor` leave whose failure the advance left to the planner. Returns when
+   *  the requester's concurrency quota may let the planner start (epoch ms), why the run pauses
+   *  now and whether the platform adopted a revision. */
+  private async planningPhase(): Promise<{
+    readonly retryAt: number | null;
+    readonly pause: string | null;
+    readonly due: boolean;
+  }> {
     if (this.status !== 'running' && this.status !== 'paused' && this.status !== 'verifying') {
-      return null;
+      return { retryAt: null, pause: null, due: false };
     }
     const phase = await runPlanningPhase({
       client: this.client,
@@ -659,7 +676,39 @@ class Advance {
     });
     this.terminated.push(...phase.terminate.filter((id) => !this.terminated.includes(id)));
     this.planning = phase.start;
-    return phase.retryAt;
+    return { retryAt: phase.retryAt, pause: phase.pause, due: phase.due };
+  }
+
+  /** S11 GO9b: the requester's planner leave. */
+  private async plannerLeave(): Promise<GoalPlannerMode | null> {
+    if (this.plannerMode === undefined) {
+      this.plannerMode = await readGoalPlannerMode(this.client, this.ws, this.goal.id);
+    }
+    return this.plannerMode;
+  }
+
+  /** S11 GO9b — see the module comment: under the requester's `apply_minor` leave, a running
+   *  run leaves `step`'s failure (the step already `failed`) to the goal planner instead of
+   *  pausing — the failure is one the planner may take now (`planner.ts` `autonomousPlanning`). */
+  private async deferToPlanner(step: StepRunRow): Promise<boolean> {
+    if (this.status !== 'running' || (await this.plannerLeave()) !== 'apply_minor') return false;
+    const entry = await this.entry(step);
+    if (!entry || !(await this.inCurrentPlan(step))) return false;
+    return (await autonomousPlanning(this.client, this.ws, step, entry)) !== null;
+  }
+
+  /** S11 GO9b: no new attempt starts while the planner takes a failure of the run — its round
+   *  runs, or phase P is to open it. */
+  private async planningHolds(steps: readonly StepRunRow[]): Promise<boolean> {
+    if ((await this.plannerLeave()) !== 'apply_minor') return false;
+    if (await autonomousRoundRuns(this.client, this.ws, this.goal.id)) return true;
+    for (const step of steps) {
+      if (step.status !== 'failed' || step.supersededInRevision !== null) continue;
+      const entry = await this.entry(step);
+      if (!entry || !(await this.inCurrentPlan(step))) continue;
+      if ((await autonomousPlanning(this.client, this.ws, step, entry)) === 'open') return true;
+    }
+    return false;
   }
 
   /** Every StepRun of the run, superseded ones included, locked after the GoalRun row (lock order:
@@ -795,11 +844,20 @@ class Advance {
       await this.moveStep(step, 'succeed', { audit });
       return;
     }
-    await this.moveStep(step, 'fail', {
+    const failed = await this.moveStep(step, 'fail', {
       failureCategory: verdict.category,
       audit:
         verdict.category === 'contract_violation' ? { ...audit, rework: !verdict.pause } : audit,
     });
+    // GO9b: a failure the goal planner takes for the requester does not pause the run — but not
+    // a Task someone cancelled (that was a person's doing).
+    if (
+      verdict.pause === 'needs_decision' &&
+      task.status !== 'cancelled' &&
+      (await this.deferToPlanner(failed))
+    ) {
+      return;
+    }
     if (verdict.pause) {
       await this.pause(
         verdict.pause,
@@ -926,7 +984,11 @@ class Advance {
           `acceptance check ${check.checkKey}: could not be made (${check.lastError ?? 'no reason recorded'})`),
     );
     if (failed.length > 0) {
-      await this.moveStep(step, 'fail', { failureCategory: 'verification_failed', audit });
+      const row = await this.moveStep(step, 'fail', {
+        failureCategory: 'verification_failed',
+        audit,
+      });
+      if (await this.deferToPlanner(row)) return;
       await this.pause(
         'needs_decision',
         `step ${step.stepKey}: attempt ${step.attemptCount}: ${named.join('; ')}; retry the step (its work is done again), revise the plan or cancel`,
@@ -978,6 +1040,7 @@ class Advance {
     }
     const maxAttempts = entry.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
     if (step.attemptCount >= maxAttempts) {
+      if (await this.deferToPlanner(step)) return;
       await this.pause(
         'needs_decision',
         `step ${step.stepKey}: ${step.attemptCount} of ${maxAttempts} attempts failed`,
@@ -1112,6 +1175,13 @@ class Advance {
         'budget_exhausted',
         `tokens: ${usage.tokens} of ${this.goal.budget.maxTokens}`,
       );
+      return;
+    }
+    // GO9b: while the planner takes a failure, attempts already running go on but none starts —
+    // the plan they would run may be about to change. The round's end wakes the run; the re-check
+    // bounds a lost wake.
+    if (await this.planningHolds(steps)) {
+      this.timers.push(this.now.getTime() + this.blockedRetryRecheckMs);
       return;
     }
     const ready = live.filter((step) => step.status === 'ready');
@@ -1357,6 +1427,8 @@ class Advance {
       if (moving) break;
       moving = await this.reworkDue(step);
     }
+    // GO9b: a failure the planner takes is moving too: its round's outcome pauses the run if need be.
+    if (!moving) moving = await this.planningHolds(steps);
     // By key, so the same run always reads the same.
     const failed = live
       .filter((step) => step.status === 'failed')

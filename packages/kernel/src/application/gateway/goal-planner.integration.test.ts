@@ -5,6 +5,7 @@ import {
   DecidePlanRevisionResultWireSchema,
   type GoalDetailWire,
   GoalDetailWireSchema,
+  type GoalPlannerMode,
   type HandleClaims,
   PLANNER_OUTPUT_SCHEMA,
   type Role,
@@ -199,14 +200,19 @@ describe.runIf(DATABASE_URL !== undefined)(
       })),
     });
 
-    /** Proposed, confirmed (with the planner's leave unless `planner` is false) and started. */
-    async function startGoal(requesterId: string, planner = true) {
+    /** Proposed, confirmed (with the planner's leave in mode `planner` unless it is false) and
+     *  started. */
+    async function startGoal(
+      requesterId: string,
+      planner: GoalPlannerMode | false = 'propose',
+      plan: Record<string, unknown> = planOf([{ key: 'renew' }]),
+    ) {
       const created = await asApp(requesterId, (client) =>
         createGoalRun(client, workspaceId, {
           requesterId,
           proposedBy: requesterId,
           statement: 'renew the certificate of the site',
-          plan: planOf([{ key: 'renew' }]),
+          plan,
           budget: BUDGET,
         }),
       );
@@ -214,7 +220,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       await call(human(requesterId), 'confirm_goal', {
         goalRunId,
         revision: 1,
-        ...(planner ? { planner: 'propose' } : {}),
+        ...(planner ? { planner } : {}),
       });
       await advanceOnce(goalRunId, requesterId);
       return goalRunId;
@@ -251,7 +257,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
 
     /** Started, its one step's only attempt lost: paused `needs_decision`, a round opened. */
-    async function failedForPerson(requesterId: string, planner = true) {
+    async function failedForPerson(
+      requesterId: string,
+      planner: GoalPlannerMode | false = 'propose',
+    ) {
       const goalRunId = await startGoal(requesterId, planner);
       const step = await liveStep(goalRunId, 'renew');
       await loseTask((await lastAttempt(step.id)).id, requesterId);
@@ -818,6 +827,341 @@ describe.runIf(DATABASE_URL !== undefined)(
         };
         expect(found.items.map((item) => item.definitionId)).not.toContain(family);
       }
+    });
+
+    // ----- S11 GO9b: apply_minor ----------------------------------------------------------------
+
+    const autonomyRounds = (goalRunId: string) =>
+      raw<{
+        id: string;
+        kind: string;
+        status: string;
+        revision: number | null;
+        revision_class: string | null;
+        class_reasons: { code: string; stepKey: string | null }[];
+        outcome_reason: string | null;
+        step_run_id: string;
+        step_attempt: number;
+      }>(
+        `select id, kind, status, revision, revision_class, class_reasons, outcome_reason,
+                step_run_id, step_attempt
+           from goal_planning_rounds where workspace_id = $1 and goal_run_id = $2
+          order by created_at`,
+        [workspaceId, goalRunId],
+      );
+
+    /** Under `apply_minor`: started, its one step's only attempt lost — the run keeps running and
+     *  an autonomous round runs for the failure. */
+    async function failedRunning(requesterId: string) {
+      const goalRunId = await startGoal(requesterId, 'apply_minor');
+      const step = await liveStep(goalRunId, 'renew');
+      await loseTask((await lastAttempt(step.id)).id, requesterId);
+      await advanceOnce(goalRunId, requesterId);
+      return { goalRunId, step };
+    }
+
+    async function onlyRound(goalRunId: string) {
+      const [round, ...more] = await autonomyRounds(goalRunId);
+      expect(more).toEqual([]);
+      if (!round) throw new Error('no round');
+      return round;
+    }
+
+    /** `goal`'s plan in force with the step `key` given `change`, every other step as read. */
+    const changeStep = (
+      goal: GoalDetailWire,
+      key: string,
+      change: (step: Record<string, unknown>) => Record<string, unknown>,
+    ) => ({
+      ...goal.planRevision.plan,
+      steps: (goal.planRevision.plan.steps as Record<string, unknown>[]).map((step) =>
+        step.key === key ? change(step) : step,
+      ),
+    });
+
+    it('under apply_minor a failed step does not pause the run; the minor revision is applied for the requester and the goal reaches done', async () => {
+      const requester = await newPrincipal('member');
+      const { goalRunId, step } = await failedRunning(requester);
+      expect(await goalRow(goalRunId)).toMatchObject({ status: 'running', current_revision: 1 });
+      const round = await onlyRound(goalRunId);
+      expect(round).toMatchObject({
+        kind: 'autonomous',
+        status: 'running',
+        step_run_id: step.id,
+        step_attempt: 1,
+      });
+      // While it plans, the run waits: no new attempt, no second round.
+      await advanceOnce(goalRunId, requester);
+      expect(await goalRow(goalRunId)).toMatchObject({ status: 'running' });
+      expect(await autonomyRounds(goalRunId)).toHaveLength(1);
+      expect(await liveStep(goalRunId, 'renew')).toMatchObject({
+        id: step.id,
+        status: 'failed',
+        attempt_count: 1,
+      });
+
+      const before = await getGoal(goalRunId, requester);
+      expect(before.planner).toBe('apply_minor');
+      await report((await plannerTask(round.id)).id, {
+        decision: 'revise',
+        plan: reroute(before),
+        reason: 'The first Worker lost its run; the other Worker renews the same way.',
+      });
+      await advanceOnce(goalRunId, requester);
+      expect(await onlyRound(goalRunId)).toMatchObject({
+        status: 'applied',
+        revision: 2,
+        revision_class: 'minor',
+        class_reasons: [],
+      });
+      expect(await goalRow(goalRunId)).toMatchObject({ status: 'running', current_revision: 2 });
+      const applied = await getGoal(goalRunId, requester);
+      expect(applied.revisions.at(-1)).toMatchObject({
+        revision: 2,
+        status: 'accepted',
+        proposer: 'planner',
+        acceptedBy: 'platform',
+        decidedBy: requester,
+      });
+      expect(applied.revisions[0]).toMatchObject({ revision: 1, acceptedBy: 'person' });
+      expect(applied.planningRounds).toMatchObject([
+        { kind: 'autonomous', status: 'applied', revisionClass: 'minor', classReasons: [] },
+      ]);
+      const [accept] = await raw<{ payload: Record<string, unknown> }>(
+        `select payload from audit_records
+          where workspace_id = $1 and action = 'plan_revision.accept'
+            and payload ->> 'goalRunId' = $2 and payload ->> 'revision' = '2'`,
+        [workspaceId, goalRunId],
+      );
+      expect(accept?.payload).toMatchObject({
+        revision: 2,
+        by: 'advancer',
+        basis: 'autonomy',
+        planningRoundId: round.id,
+      });
+
+      await advanceOnce(goalRunId, requester);
+      const other = await liveStep(goalRunId, 'renew-other');
+      await dispatchCapability(
+        { pool },
+        await workerOf((await lastAttempt(other.id)).id),
+        'report_task_result',
+        {
+          summary: 'renewed',
+        },
+      );
+      await advanceOnce(goalRunId, requester);
+      expect((await goalRow(goalRunId)).status).toBe('verifying');
+      await call(human(requester), 'confirm_goal_acceptance', { goalRunId });
+      await advanceOnce(goalRunId, requester);
+      expect((await goalRow(goalRunId)).status).toBe('completed');
+    });
+
+    it('while the planner takes a failure no attempt starts; attempts already running go on', async () => {
+      const requester = await newPrincipal('member');
+      const plan = {
+        steps: [
+          { key: 'renew', worker, input: { step: 'renew' }, maxAttempts: 1 },
+          { key: 'prep', worker, input: { step: 'prep' }, maxAttempts: 1 },
+          { key: 'later', worker, input: { step: 'later' }, dependsOn: ['prep'], maxAttempts: 1 },
+        ],
+      };
+      const goalRunId = await startGoal(requester, 'apply_minor', plan);
+      const renew = await liveStep(goalRunId, 'renew');
+      const prep = await liveStep(goalRunId, 'prep');
+      await loseTask((await lastAttempt(renew.id)).id, requester);
+      await dispatchCapability(
+        { pool },
+        await workerOf((await lastAttempt(prep.id)).id),
+        'report_task_result',
+        {
+          summary: 'prepared',
+        },
+      );
+      await advanceOnce(goalRunId, requester);
+      expect(await goalRow(goalRunId)).toMatchObject({ status: 'running' });
+      expect((await liveStep(goalRunId, 'prep')).status).toBe('succeeded');
+      // `later` is ready, held while the round runs.
+      const later = await liveStep(goalRunId, 'later');
+      expect(later).toMatchObject({ status: 'ready', attempt_count: 0 });
+      await advanceOnce(goalRunId, requester);
+      expect(await liveStep(goalRunId, 'later')).toMatchObject({
+        status: 'ready',
+        attempt_count: 0,
+      });
+
+      const round = await onlyRound(goalRunId);
+      const goal = await getGoal(goalRunId, requester);
+      await report((await plannerTask(round.id)).id, {
+        decision: 'revise',
+        plan: changeStep(goal, 'renew', (entry) => ({ ...entry, worker: otherWorker })),
+        reason: 'The other Worker renews the same way.',
+      });
+      await advanceOnce(goalRunId, requester);
+      expect(await onlyRound(goalRunId)).toMatchObject({
+        status: 'applied',
+        revision_class: 'minor',
+      });
+      await advanceOnce(goalRunId, requester);
+      expect((await liveStep(goalRunId, 'later')).attempt_count).toBe(1);
+      expect((await liveStep(goalRunId, 'renew')).attempt_count).toBe(1);
+      expect((await liveStep(goalRunId, 'renew')).id).not.toBe(renew.id);
+    });
+
+    it('a major revision pauses the run for the requester, who decides it on the same card', async () => {
+      const requester = await newPrincipal('member');
+      const { goalRunId } = await failedRunning(requester);
+      const round = await onlyRound(goalRunId);
+      const goal = await getGoal(goalRunId, requester);
+      await report((await plannerTask(round.id)).id, {
+        decision: 'revise',
+        plan: {
+          ...goal.planRevision.plan,
+          steps: [
+            {
+              key: 'renew-team',
+              worker: otherWorker,
+              input: { step: 'renew' },
+              nested: true,
+              maxAttempts: 1,
+            },
+          ],
+        },
+        reason: 'A team of Workers renews it.',
+      });
+      await advanceOnce(goalRunId, requester);
+      expect(await onlyRound(goalRunId)).toMatchObject({
+        status: 'proposed',
+        revision: 2,
+        revision_class: 'major',
+        class_reasons: [{ code: 'execution_step', stepKey: 'renew-team' }],
+      });
+      expect(await goalRow(goalRunId)).toMatchObject({
+        status: 'paused',
+        pause_reason: 'needs_decision',
+        current_revision: 1,
+      });
+      const paused = await getGoal(goalRunId, requester);
+      expect(paused.planningRounds).toMatchObject([
+        {
+          kind: 'autonomous',
+          status: 'proposed',
+          revisionClass: 'major',
+          classReasons: [{ code: 'execution_step', stepKey: 'renew-team' }],
+        },
+      ]);
+      expect(paused.revisions.at(-1)).toMatchObject({ status: 'proposed', acceptedBy: null });
+      // The pause opens no proposal round of its own: the failed attempt had its round.
+      await advanceOnce(goalRunId, requester);
+      expect(await autonomyRounds(goalRunId)).toHaveLength(1);
+
+      await call(human(requester), 'decide_plan_revision', {
+        goalRunId,
+        revision: 2,
+        decision: 'accept',
+        resume: true,
+      });
+      expect(await goalRow(goalRunId)).toMatchObject({ status: 'running', current_revision: 2 });
+      expect((await getGoal(goalRunId, requester)).revisions.at(-1)).toMatchObject({
+        revision: 2,
+        acceptedBy: 'person',
+      });
+    });
+
+    it('a planner with no revision pauses the run; a person pausing the run drops the running round', async () => {
+      const requester = await newPrincipal('member');
+      const first = await failedRunning(requester);
+      const round = await onlyRound(first.goalRunId);
+      await report((await plannerTask(round.id)).id, {
+        decision: 'no_revision',
+        reason: 'Nothing in the plan would get past this.',
+      });
+      await advanceOnce(first.goalRunId, requester);
+      expect(await onlyRound(first.goalRunId)).toMatchObject({ status: 'no_revision' });
+      expect(await goalRow(first.goalRunId)).toMatchObject({
+        status: 'paused',
+        pause_reason: 'needs_decision',
+      });
+      await advanceOnce(first.goalRunId, requester);
+      expect(await autonomyRounds(first.goalRunId)).toHaveLength(1);
+
+      const second = await failedRunning(requester);
+      const running = await onlyRound(second.goalRunId);
+      const task = await plannerTask(running.id);
+      await call(human(requester), 'pause_goal', { goalRunId: second.goalRunId });
+      expect(await onlyRound(second.goalRunId)).toMatchObject({
+        status: 'abandoned',
+        outcome_reason: 'run_not_running',
+      });
+      await advanceOnce(second.goalRunId, requester);
+      expect((await plannerTask(running.id)).status).not.toBe('running');
+      expect(task.id).toBe((await plannerTask(running.id)).id);
+    });
+
+    it('the platform stops planning a step it already changed twice', async () => {
+      const requester = await newPrincipal('member');
+      const { goalRunId } = await failedRunning(requester);
+      for (const next of [otherWorker, worker]) {
+        const round = (await autonomyRounds(goalRunId)).at(-1);
+        if (!round) throw new Error('no round');
+        const goal = await getGoal(goalRunId, requester);
+        await report((await plannerTask(round.id)).id, {
+          decision: 'revise',
+          plan: changeStep(goal, 'renew', (entry) => ({ ...entry, worker: next })),
+          reason: 'Another Worker for the same step.',
+        });
+        await advanceOnce(goalRunId, requester);
+        expect((await autonomyRounds(goalRunId)).at(-1)).toMatchObject({ status: 'applied' });
+        await advanceOnce(goalRunId, requester);
+        const step = await liveStep(goalRunId, 'renew');
+        await loseTask((await lastAttempt(step.id)).id, requester);
+        await advanceOnce(goalRunId, requester);
+      }
+      const all = await autonomyRounds(goalRunId);
+      expect(all.map((round) => round.status)).toEqual(['applied', 'applied', 'failed']);
+      expect(all.at(-1)).toMatchObject({ outcome_reason: 'step_keeps_failing' });
+      expect(await goalRow(goalRunId)).toMatchObject({
+        status: 'paused',
+        pause_reason: 'needs_decision',
+      });
+    });
+
+    it('the database refuses an autonomous round under a propose leave and an applied proposal round', async () => {
+      const requester = await newPrincipal('member');
+      const goalRunId = await startGoal(requester, 'propose');
+      const step = await liveStep(goalRunId, 'renew');
+      await loseTask((await lastAttempt(step.id)).id, requester);
+      await raw(
+        `update step_runs set status = 'failed', failure_category = 'transient'
+          where workspace_id = $1 and id = $2`,
+        [workspaceId, step.id],
+      );
+      expect(
+        await dbRefusal(
+          asApp(requester, (client) =>
+            client.query(
+              `insert into goal_planning_rounds (workspace_id, goal_run_id, based_on_revision,
+                 step_run_id, step_attempt, failure_category, kind)
+               values ($1, $2, 1, $3, 1, 'transient', 'autonomous')`,
+              [workspaceId, goalRunId, step.id],
+            ),
+          ),
+        ),
+      ).toMatch(/apply_minor/);
+      const paused = await failedForPerson(requester);
+      const round = await onlyRound(paused.goalRunId);
+      expect(
+        await dbRefusal(
+          asApp(requester, (client) =>
+            client.query(
+              `update goal_planning_rounds set status = 'applied', revision = 1,
+                 revision_class = 'minor', settled_at = now()
+               where workspace_id = $1 and id = $2`,
+              [workspaceId, round.id],
+            ),
+          ),
+        ),
+      ).toMatch(/autonomous/);
     });
   },
 );

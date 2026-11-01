@@ -112,6 +112,7 @@ export {
   type PlannerTemplate,
   createPlanningTask,
   ensurePlannerDefinition,
+  findGoalPlannerFamily,
   findGoalPlannerPrincipal,
   getOrCreateGoalPlannerPrincipal,
   loadPlannerTemplate,

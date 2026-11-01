@@ -5486,7 +5486,8 @@
         },
         "planner": {
           "enum": [
-            "propose"
+            "propose",
+            "apply_minor"
           ],
           "type": "string"
         },
@@ -18849,6 +18850,20 @@
         "planRevision": {
           "additionalProperties": false,
           "properties": {
+            "acceptedBy": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "person",
+                    "platform"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "basedOnRevision": {
               "anyOf": [
                 {
@@ -20338,6 +20353,7 @@
             "plan",
             "proposedBy",
             "proposer",
+            "acceptedBy",
             "reason",
             "decidedBy",
             "decidedAt",
@@ -20352,7 +20368,8 @@
           "anyOf": [
             {
               "enum": [
-                "propose"
+                "propose",
+                "apply_minor"
               ],
               "type": "string"
             },
@@ -20368,6 +20385,36 @@
               "basedOnRevision": {
                 "exclusiveMinimum": 0,
                 "type": "integer"
+              },
+              "classReasons": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "enum": [
+                        "goal_acceptance_changed",
+                        "step_acceptance_changed",
+                        "execution_step",
+                        "admission_blocked",
+                        "stops_live_work",
+                        "unresolvable"
+                      ],
+                      "type": "string"
+                    },
+                    "stepKey": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "stepKey"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
               },
               "createdAt": {
                 "type": "string"
@@ -20390,6 +20437,13 @@
               "id": {
                 "type": "string"
               },
+              "kind": {
+                "enum": [
+                  "proposal",
+                  "autonomous"
+                ],
+                "type": "string"
+              },
               "outcomeReason": {
                 "anyOf": [
                   {
@@ -20398,9 +20452,11 @@
                       "token_budget_exhausted",
                       "planner_unavailable",
                       "requester_cannot_start",
+                      "step_keeps_failing",
                       "task_failed",
                       "invalid_revision",
                       "run_left_pause",
+                      "run_not_running",
                       "plan_revised"
                     ],
                     "type": "string"
@@ -20421,6 +20477,20 @@
                   }
                 ]
               },
+              "revisionClass": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "minor",
+                      "major"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "settledAt": {
                 "type": [
                   "string",
@@ -20431,6 +20501,7 @@
                 "enum": [
                   "running",
                   "proposed",
+                  "applied",
                   "no_revision",
                   "failed",
                   "abandoned"
@@ -20457,6 +20528,7 @@
             "required": [
               "id",
               "status",
+              "kind",
               "basedOnRevision",
               "stepRunId",
               "stepKey",
@@ -20464,6 +20536,8 @@
               "failureCategory",
               "taskId",
               "revision",
+              "revisionClass",
+              "classReasons",
               "outcomeReason",
               "detail",
               "createdAt",
@@ -20477,6 +20551,20 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "acceptedBy": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "person",
+                      "platform"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "basedOnRevision": {
                 "anyOf": [
                   {
@@ -20643,6 +20731,7 @@
               "basedOnRevision",
               "proposedBy",
               "proposer",
+              "acceptedBy",
               "reason",
               "decidedBy",
               "decidedAt",
@@ -21225,6 +21314,20 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "acceptedBy": {
+          "anyOf": [
+            {
+              "enum": [
+                "person",
+                "platform"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "basedOnRevision": {
           "anyOf": [
             {
@@ -22714,6 +22817,7 @@
         "plan",
         "proposedBy",
         "proposer",
+        "acceptedBy",
         "reason",
         "decidedBy",
         "decidedAt",

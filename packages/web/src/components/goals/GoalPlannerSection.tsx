@@ -13,6 +13,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import type { GoalViewer } from '../../lib/goal-actions.js';
 import {
+  majorReasonTexts,
   mayDecidePlannerProposal,
   pendingPlannerProposal,
   planningOutcomeText,
@@ -57,7 +58,9 @@ export interface GoalPlannerSectionProps {
  * requester's decision about it (`decide_plan_revision`: 接受并继续, 只接受, 拒绝); then every
  * round so far, each with why it ended as it did. Nothing here runs anything by itself: what the
  * planner proposes takes effect only once the requester accepts it, and anyone else reads who
- * decides.
+ * decides. GO9b: under an `apply_minor` leave the platform adopts a minor revision for the
+ * requester while the goal runs (the round reads 已按授权采用); a revision it leaves to them says
+ * why (`classReasons`).
  */
 export function GoalPlannerSection({
   goal,
@@ -74,11 +77,20 @@ export function GoalPlannerSection({
   return (
     <DashboardCard title={t('目标规划器', 'Goal planner')} data-testid="goal-planner">
       <div className="stack">
-        <span className="text-small text-3">
-          {t(
-            '确认这个目标时，请求人允许目标规划器在步骤失败、需要人决定时提一个修订。规划器只提议：它看不到外部系统，也不能发起动作；它提的修订要请求人接受才生效，用掉的 token 计入目标的预算。',
-            'When confirming this goal, its requester let the goal planner propose a revision when a step fails and a person must decide. The planner only proposes: it sees no outside system and cannot act; what it proposes takes effect only once the requester accepts it, and the tokens it uses count against the goal’s budget.',
-          )}
+        <span
+          className="text-small text-3"
+          data-testid="goal-planner-mode"
+          data-mode={goal.planner ?? 'none'}
+        >
+          {goal.planner === 'apply_minor'
+            ? t(
+                '确认这个目标时，请求人允许目标规划器在步骤失败时换一条路，并允许平台替自己采用小修订：只换 Worker、输入、顺序或重试次数、验收不变的修订，目标不停；其余的修订暂停目标，等请求人决定。规划器看不到外部系统，也不能发起动作；用掉的 token 计入目标的预算。',
+                'When confirming this goal, its requester let the goal planner find another way when a step fails, and the platform adopt minor revisions for them: one that only changes the Worker, input, order or retry limit, on unchanged checks, goes on without stopping the goal; any other pauses the goal for the requester to decide. The planner sees no outside system and cannot act; the tokens it uses count against the goal’s budget.',
+              )
+            : t(
+                '确认这个目标时，请求人允许目标规划器在步骤失败、需要人决定时提一个修订。规划器只提议：它看不到外部系统，也不能发起动作；它提的修订要请求人接受才生效，用掉的 token 计入目标的预算。',
+                'When confirming this goal, its requester let the goal planner propose a revision when a step fails and a person must decide. The planner only proposes: it sees no outside system and cannot act; what it proposes takes effect only once the requester accepts it, and the tokens it uses count against the goal’s budget.',
+              )}
         </span>
         {running ? <RunningRound round={running} http={http} t={t} /> : null}
         {proposal ? (
@@ -137,10 +149,15 @@ function RunningRound({
     <Notice tone="info" testId="goal-planner-running">
       <span className="stack-s">
         <span>
-          {t(
-            `规划器正在看${failedStepText(round, t)}为什么失败，准备提一个修订。它跑完前你也可以自己继续、修订或取消，那样这一轮就作废。`,
-            `The planner is looking at why ${failedStepText(round, t)} failed, to propose a revision. You may still resume, revise or cancel the goal yourself meanwhile; this round is then dropped.`,
-          )}
+          {round.kind === 'autonomous'
+            ? t(
+                `规划器正在为${failedStepText(round, t)}换一条路，这期间不开始新的尝试，已经在跑的照常进行。小修订平台会替请求人采用，其余的修订暂停目标等请求人决定。你也可以暂停或取消目标，那样这一轮就作废。`,
+                `The planner is looking for another way past ${failedStepText(round, t)}; meanwhile no new attempt starts, and those already running go on. A minor revision the platform adopts for the requester; any other pauses the goal for them to decide. You may pause or cancel the goal meanwhile; this round is then dropped.`,
+              )
+            : t(
+                `规划器正在看${failedStepText(round, t)}为什么失败，准备提一个修订。它跑完前你也可以自己继续、修订或取消，那样这一轮就作废。`,
+                `The planner is looking at why ${failedStepText(round, t)} failed, to propose a revision. You may still resume, revise or cancel the goal yourself meanwhile; this round is then dropped.`,
+              )}
         </span>
         {round.taskId ? (
           <span className="row-wrap text-small">
@@ -194,6 +211,14 @@ function RoundItem({
       {round.status === 'proposed' && round.revision !== null ? (
         <span className="text-small">
           {t(`提了第 ${round.revision} 版修订。`, `Proposed revision v${round.revision}.`)}
+        </span>
+      ) : null}
+      {round.status === 'applied' && round.revision !== null ? (
+        <span className="text-small" data-testid="goal-planner-round-applied">
+          {t(
+            `提了第 ${round.revision} 版修订，是小修订，平台按请求人的授权采用了它，目标没有停。`,
+            `Proposed revision v${round.revision}, a minor one: the platform adopted it on the requester’s leave, and the goal did not stop.`,
+          )}
         </span>
       ) : null}
       {outcome ? <span className="text-small text-3">{outcome}</span> : null}
@@ -407,6 +432,23 @@ function PlannerProposal({
             `For the failure of ${failedStepText(round, t)}.`,
           )}
         </span>
+      ) : null}
+      {round && round.revisionClass === 'major' && round.classReasons.length > 0 ? (
+        <div className="stack-s" data-testid="goal-planner-major-reasons">
+          <span className="text-small">
+            {round.kind === 'autonomous'
+              ? t(
+                  '这不是小修订，平台没有替请求人采用，目标为此暂停：',
+                  'This is not a minor revision, so the platform did not adopt it for the requester and the goal paused for it:',
+                )
+              : t('接受前请留意：', 'Before accepting, note:')}
+          </span>
+          <ul className="text-small">
+            {majorReasonTexts(round.classReasons, t).map((text) => (
+              <li key={text}>{text}</li>
+            ))}
+          </ul>
+        </div>
       ) : null}
       {proposal.reason ? (
         <p className="pre-wrap" data-testid="goal-planner-reason">
