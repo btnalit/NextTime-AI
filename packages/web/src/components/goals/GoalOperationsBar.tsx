@@ -21,7 +21,7 @@ import {
   retryableStepKeys,
   revisionsSince,
 } from '../../lib/goal-actions.js';
-import { plannerWorkDropped } from '../../lib/goal-planner.js';
+import { plannerWorkDropped, runningPlanningRound } from '../../lib/goal-planner.js';
 import {
   confirmCheckOrigin,
   confirmRefusedText,
@@ -420,6 +420,8 @@ export function GoalOperationsBar({
               '不再开始新的步骤尝试；正在运行的会跑完并记录，它们发起的动作照常审批和执行',
               'No new step attempt starts; running ones finish and are recorded, their actions still approved and run',
             ),
+            // UX P2-3 on #866: pausing drops the planner's round under way, as resuming does.
+            ...plannerWorkDropped(goal, t),
             ...(holds
               ? [
                   t(
@@ -456,6 +458,16 @@ export function GoalOperationsBar({
             'The goal is already paused; once held, its requester cannot resume it until a workspace owner lifts the hold',
           ),
           t('请求人仍可改计划、结束或取消', 'Its requester can still revise, end or cancel it'),
+          // UX P2-3 on #866: a hold drops the planner's round under way too (its proposal, once
+          // made, the requester may still accept).
+          ...(runningPlanningRound(goal)
+            ? [
+                t(
+                  '正在进行的这一轮规划会作废，它的规划任务会停下',
+                  'The planning round under way is dropped, and its planning task stopped',
+                ),
+              ]
+            : []),
         ]}
         confirmLabel={t('锁定', 'Hold')}
         onConfirm={() =>
@@ -500,6 +512,7 @@ export function GoalOperationsBar({
         anchor={anchor}
         achievedAllowed={endOp.achieved}
         overridden={checksOverriddenByEnding(goal, gateNames, t, objectNames)}
+        plannerDropped={plannerWorkDropped(goal, t)}
         onEnd={(outcome, note) =>
           run(
             http.call<GoalOperationResultWire>('end_goal', { goalRunId, outcome, ...note }),
@@ -746,13 +759,18 @@ function PlannerChoice({
       <span id={hintId} className="text-small text-3">
         {value === 'apply_minor'
           ? t(
-              '小修订只换 Worker、输入、顺序或重试次数，做的事只读、思考和汇报，验收不变；凡是改验收、新增能执行动作的步骤、需要有人批准才能开始、或会停下还在跑的工作的修订，都会暂停目标等你决定。同一步平台最多替你改两次。规划器看不到外部系统，也不能发起动作；它用掉的 token 计入这个目标的预算。确认后不能再改这个选择。',
-              'A minor revision only changes the Worker, input, order or retry limit of work that reads, thinks and reports, on unchanged checks. A revision that changes acceptance, adds a step that can act, needs a person to start, or would stop work still running pauses the goal for your decision. The platform changes one step at most twice for you. The planner sees no outside system and cannot act; the tokens it uses count against this goal’s budget. This choice cannot be changed after confirming.',
+              '小修订只换 Worker、输入、顺序或重试次数，做的事只读、思考和汇报，验收不变；凡是改验收、新增能执行动作的步骤、让步骤用到原来没有的 gate（哪怕只是读取）、需要有人批准才能开始、或会停下还在跑的工作的修订，都会暂停目标等你决定。同一步的工作平台最多替你改两次，换了步骤名也算同一步。规划器看不到外部系统，也不能发起动作；它用掉的 token 计入这个目标的预算。确认后不能再改这个选择。',
+              'A minor revision only changes the Worker, input, order or retry limit of work that reads, thinks and reports, on unchanged checks. A revision that changes acceptance, adds a step that can act, gives a step a gate it did not reach (even only to read), needs a person to start, or would stop work still running pauses the goal for your decision. The platform changes the work of one step at most twice for you, under a new step key too. The planner sees no outside system and cannot act; the tokens it uses count against this goal’s budget. This choice cannot be changed after confirming.',
             )
-          : t(
-              '规划器只提议、不执行：它看不到外部系统，也不能发起动作；它提的修订要你接受才生效。它用掉的 token 计入这个目标的预算。确认后不能再改这个选择。',
-              'The planner only proposes and runs nothing: it sees no outside system and cannot act; what it proposes takes effect only once you accept it. The tokens it uses count against this goal’s budget. This choice cannot be changed after confirming.',
-            )}
+          : value === 'propose'
+            ? t(
+                '规划器只提议、不执行：它看不到外部系统，也不能发起动作；它提的修订要你接受才生效。它用掉的 token 计入这个目标的预算。确认后不能再改这个选择。',
+                'The planner only proposes and runs nothing: it sees no outside system and cannot act; what it proposes takes effect only once you accept it. The tokens it uses count against this goal’s budget. This choice cannot be changed after confirming.',
+              )
+            : t(
+                '步骤失败、需要人决定时，目标暂停，由你自己重试、修订或取消。确认后不能再改这个选择。',
+                'When a step fails and a person must decide, the goal pauses for you to retry, revise or cancel it yourself. This choice cannot be changed after confirming.',
+              )}
       </span>
     </fieldset>
   );
@@ -816,12 +834,15 @@ type EndOutcome = 'not_achieved' | 'achieved';
 function EndConfirm({
   achievedAllowed,
   overridden,
+  plannerDropped,
   onEnd,
   ...control
 }: OpenControl & {
   readonly achievedAllowed: boolean;
   /** The acceptance checks that ending as achieved records as the requester's decision. */
   readonly overridden: readonly OverriddenCheck[];
+  /** UX P2-5 on #864: what ending does to the planner's work for this pause. */
+  readonly plannerDropped: readonly string[];
   readonly onEnd: (outcome: EndOutcome, note: { note?: string }) => Promise<void>;
 }) {
   const t = useT();
@@ -848,6 +869,7 @@ function EndConfirm({
                 : t('验收检查都已通过', 'Every acceptance check has passed'),
             ]
           : []),
+        ...plannerDropped,
       ]}
       confirmLabel={t('结束目标', 'End goal')}
       confirmDisabled={note.tooLong}

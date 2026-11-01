@@ -96,16 +96,25 @@ function RevisionItem({
         {revision.decidedBy ? (
           <>
             <span className="meta-sep" />
-            <span className="text-3">
-              {revision.status === 'rejected'
-                ? t('拒绝', 'Rejected by')
-                : revision.acceptedBy === 'platform'
-                  ? t('代为接受，授权人', 'Accepted on the leave of')
-                  : revision.proposer === 'planner'
-                    ? t('接受', 'Accepted by')
-                    : t('确认', 'Confirmed by')}
-            </span>
-            <RefChip kind="principal" id={revision.decidedBy} http={http} size="s" />
+            {/* UX P3-3 on #866: the platform accepted, the requester gave the leave. */}
+            {revision.acceptedBy === 'platform' && revision.status !== 'rejected' ? (
+              <span className="row-wrap text-3" data-testid="goal-revision-platform-decider">
+                {t('平台代为接受（授权人', 'Accepted by the platform (leave of')}
+                <RefChip kind="principal" id={revision.decidedBy} http={http} size="s" />
+                {t('）', ')')}
+              </span>
+            ) : (
+              <>
+                <span className="text-3">
+                  {revision.status === 'rejected'
+                    ? t('拒绝', 'Rejected by')
+                    : revision.proposer === 'planner'
+                      ? t('接受', 'Accepted by')
+                      : t('确认', 'Confirmed by')}
+                </span>
+                <RefChip kind="principal" id={revision.decidedBy} http={http} size="s" />
+              </>
+            )}
             {/* S11 GO9b: the platform accepted it for the requester, under their apply_minor leave. */}
             {revision.acceptedBy === 'platform' ? (
               <span className="chip chip-s" data-testid="goal-revision-platform">
@@ -135,15 +144,21 @@ function RevisionItem({
       ) : null}
       {revision.status === 'proposed' && revision.proposer === 'planner' ? (
         <span className="text-small text-3">
-          {revision.basedOnRevision === current
+          {revision.basedOnRevision !== current
             ? t(
-                '等请求人在上面的「目标规划器」里决定。',
-                'Waiting for the requester to decide, under Goal planner above.',
-              )
-            : t(
                 '它基于的版本已经不在用了，不能再接受。',
                 'The revision it was based on is no longer in force, so it can no longer be accepted.',
-              )}
+              )
+            : detail.status === 'paused'
+              ? t(
+                  '等请求人在上面的「目标规划器」里决定。',
+                  'Waiting for the requester to decide, under Goal planner above.',
+                )
+              : t(
+                  // UX P2-5 on #864: only a paused goal can take it.
+                  '目标已经不在暂停中，不能再接受。',
+                  'The goal is no longer paused, so it can no longer be accepted.',
+                )}
         </span>
       ) : null}
       {revision.reason ? (

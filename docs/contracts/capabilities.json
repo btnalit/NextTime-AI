@@ -20394,16 +20394,29 @@
                 "items": {
                   "additionalProperties": false,
                   "properties": {
+                    "capabilities": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
                     "code": {
                       "enum": [
                         "goal_acceptance_changed",
                         "step_acceptance_changed",
                         "execution_step",
+                        "gate_added",
                         "admission_blocked",
                         "stops_live_work",
                         "unresolvable"
                       ],
                       "type": "string"
+                    },
+                    "gates": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
                     },
                     "stepKey": {
                       "type": [

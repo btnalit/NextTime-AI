@@ -107,9 +107,10 @@ import type { GoalRunRow, StepRunRow } from './types.js';
  *     its plan is revised (`plan_revised`); a person's pause or hold settles it at once.
  *   - **Opened** for the latest live failed step of the plan in force whose failed attempt has no
  *     round yet and whose failure is plannable — unless a planner revision waits for a decision.
- *     A step the platform already applied {@link AUTONOMY_MAX_APPLIED_PER_STEP} revisions for is
- *     not planned again (`step_keeps_failing`); like a planner that cannot run, that records the
- *     round `failed` and pauses the run `needs_decision` for the requester.
+ *     A step whose work the platform already applied {@link AUTONOMY_MAX_APPLIED_PER_STEP}
+ *     revisions for ({@link platformAppliedLineage}: by where the step came from, so a new key
+ *     does not start over) is not planned again (`step_keeps_failing`); like a planner that cannot
+ *     run, that records the round `failed` and pauses the run `needs_decision` for the requester.
  *   - **Settled**: the revision is classed (`revision-class.ts`, the platform's rule, never the
  *     planner's say). A `minor` one the platform accepts for the requester and adopts in the same
  *     transaction (`adoptRevision` with `autonomy`), the round `applied`, the run due at once; a
@@ -131,9 +132,41 @@ export const PLANNER_INPUT_KIND = 'goal_planning';
 export const PLANNER_OUTPUT_PREVIEW_CHARS = 4000;
 /** At most this many Worker versions are offered to the planner. */
 export const PLANNER_MAX_WORKERS = 50;
-/** S11 GO9b: past this many revisions the platform applied for failures of one step key, a further
- *  failure of it is the requester's (`step_keeps_failing`). */
+/** S11 GO9b: past this many revisions the platform applied on its own for one step's work
+ *  ({@link platformAppliedLineage}), a further failure of it is the requester's
+ *  (`step_keeps_failing`). */
 export const AUTONOMY_MAX_APPLIED_PER_STEP = 2;
+
+/**
+ * S11 GO9b (review #493 P2-1 on #866): how many revisions the platform applied on its own on the
+ * way to `step` — counted by where the step came from, not by its key. A step is the platform's
+ * when the revision that introduced it as it stands was one an `autonomous` round applied; that
+ * round was for another step's failure (or an earlier run of this key), whose own count goes on.
+ * So a planner that drops the failing step and adds the same work back under a new key, or
+ * redefines it under its key, keeps the count; a step a person introduced or redefined
+ * (`revise_goal`, accepting a proposal) starts it again. A step the platform's revision added
+ * beside the one it replaced counts too — sooner back to the requester, never later.
+ */
+export function platformAppliedLineage(
+  step: StepRunRow,
+  steps: readonly StepRunRow[],
+  rounds: readonly Pick<PlanningRoundRow, 'status' | 'revision' | 'stepRunId'>[],
+): number {
+  let count = 0;
+  const seen = new Set<string>();
+  let current: StepRunRow | undefined = step;
+  while (current !== undefined && !seen.has(current.id)) {
+    seen.add(current.id);
+    const introducedIn: number = current.introducedInRevision;
+    const round = rounds.find(
+      (candidate) => candidate.status === 'applied' && candidate.revision === introducedIn,
+    );
+    if (!round) break;
+    count += 1;
+    current = steps.find((candidate) => candidate.id === round.stepRunId);
+  }
+  return count;
+}
 
 /** What the platform refuses in a revision, as the planner's input states it. */
 const PLANNER_RULES: readonly string[] = [
@@ -564,14 +597,11 @@ async function openRound(
   };
 
   if (kind === 'autonomous') {
-    const keyOf = new Map(ctx.steps.map((row) => [row.id, row.stepKey]));
-    const applied = rounds.filter(
-      (round) => round.status === 'applied' && keyOf.get(round.stepRunId) === step.stepKey,
-    ).length;
+    const applied = platformAppliedLineage(step, ctx.steps, rounds);
     if (applied >= AUTONOMY_MAX_APPLIED_PER_STEP) {
       return failRound(
         'step_keeps_failing',
-        `the platform already applied ${applied} planner revisions for step ${step.stepKey}`,
+        `the platform already applied ${applied} planner revisions on its own for the work of step ${step.stepKey}`,
       );
     }
   }

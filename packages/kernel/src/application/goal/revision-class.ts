@@ -10,7 +10,12 @@ import type {
 import type { PoolClient } from 'pg';
 import { listStepActionOutcomes } from '../../governance/approval/index.js';
 import { isExecuteClassCapability } from '../../governance/capability/index.js';
-import { listGoalRunLiveTaskSteps, resolveStepAuthority } from '../task/index.js';
+import {
+  listGoalRunLiveTaskSteps,
+  readDefinitionContent,
+  resolveStepAuthority,
+} from '../task/index.js';
+import { getWorkerDefinition } from '../worker/index.js';
 import { stepActionEffect } from './disposition.js';
 import { planAuthorityHints } from './precheck.js';
 import { listStepRuns } from './reads.js';
@@ -35,7 +40,13 @@ import type { GoalRunRow } from './types.js';
  *   - `execution_step`: a step the revision adds or changes can act — it declares `nested`
  *     (Workers of its own), `reconcile` checks (it raises actions), or its Worker would hold an
  *     execute-class capability with the requester's authority (`resolveStepAuthority`,
- *     `isExecuteClassCapability`: `request_action`, a gate's execute Operations);
+ *     `isExecuteClassCapability`: `request_action`, a gate's execute Operations), named on the
+ *     reason (`capabilities`);
+ *   - `gate_added`: a step the revision adds or changes declares a gate (its WorkerSpec's, else its
+ *     Worker's) that the plan in force's step under the same key did not — a new key had none —
+ *     even one the requester holds and only reads through (the coordinator's call on #866: what
+ *     the platform adopts on its own never widens what the run reads or calls); the gates are
+ *     named on the reason (`gates`);
  *   - `admission_blocked`: a step it adds or changes would not start without a person
  *     (`planAuthorityHints`: a gate or capability the requester lacks, an excluded or unavailable
  *     Worker, a draft or deprecated Skill, a model not allowed), or the requester cannot start
@@ -55,8 +66,10 @@ import type { GoalRunRow } from './types.js';
 export type StepAbility =
   | {
       readonly kind: 'resolved';
-      /** Its Worker would hold an execute-class capability. */
-      readonly executes: boolean;
+      /** The execute-class capabilities its Worker would hold (none: it cannot act through one). */
+      readonly executeCapabilities: readonly string[];
+      /** The gates it declares that the plan in force's step under its key did not. */
+      readonly addedGates: readonly string[];
       /** It would not start without a person. */
       readonly blocked: boolean;
     }
@@ -104,12 +117,33 @@ export function classifyPlannerRevision(
 ): PlannerRevisionClassification {
   const { base, candidate, running, abilities } = input;
   const reasons: PlannerRevisionClassReasonWire[] = [];
-  const seen = new Set<string>();
-  const add = (code: PlannerRevisionMajorReason, stepKey: string | null) => {
+  const seen = new Map<string, number>();
+  const add = (
+    code: PlannerRevisionMajorReason,
+    stepKey: string | null,
+    found: { readonly capabilities?: readonly string[]; readonly gates?: readonly string[] } = {},
+  ) => {
     const id = `${code}\u0000${stepKey ?? ''}`;
-    if (seen.has(id)) return;
-    seen.add(id);
-    reasons.push({ code, stepKey });
+    const at = seen.get(id);
+    const prior = at === undefined ? undefined : reasons[at];
+    const merge = (before: readonly string[] | undefined, more: readonly string[] | undefined) => {
+      const all = [...new Set([...(before ?? []), ...(more ?? [])])].sort();
+      return all.length > 0 ? all : undefined;
+    };
+    const capabilities = merge(prior?.capabilities, found.capabilities);
+    const gates = merge(prior?.gates, found.gates);
+    const reason: PlannerRevisionClassReasonWire = {
+      code,
+      stepKey,
+      ...(capabilities ? { capabilities } : {}),
+      ...(gates ? { gates } : {}),
+    };
+    if (at === undefined) {
+      seen.set(id, reasons.length);
+      reasons.push(reason);
+    } else {
+      reasons[at] = reason;
+    }
   };
 
   if (canonicalJson(base.acceptance ?? null) !== canonicalJson(candidate.acceptance ?? null)) {
@@ -147,7 +181,10 @@ export function classifyPlannerRevision(
       add('unresolvable', step.key);
       continue;
     }
-    if (ability.executes) add('execution_step', step.key);
+    if (ability.executeCapabilities.length > 0) {
+      add('execution_step', step.key, { capabilities: ability.executeCapabilities });
+    }
+    if (ability.addedGates.length > 0) add('gate_added', step.key, { gates: ability.addedGates });
     if (ability.blocked) add('admission_blocked', step.key);
   }
   if (input.requesterBlocked === true && changed.size > 0) add('admission_blocked', null);
@@ -195,8 +232,14 @@ export async function plannerRevisionFacts(
     steps: touched,
   });
   const requesterBlocked = hints.some((hint) => hint.code === 'requester_cannot_start_workers');
+  const baseByKey = new Map(base.steps.map((step) => [step.key, step]));
   for (const step of touched) {
     const blocked = hints.some((hint) => hint.stepKey === step.key);
+    const before = baseByKey.get(step.key);
+    const beforeGates = new Set(before ? await declaredGatesOf(client, workspaceId, before) : []);
+    const addedGates = (await declaredGatesOf(client, workspaceId, step)).filter(
+      (gate) => !beforeGates.has(gate),
+    );
     const authority = await resolveStepAuthority(
       client,
       workspaceId,
@@ -207,14 +250,34 @@ export async function plannerRevisionFacts(
     );
     if (authority.kind === 'refused') {
       // It would not start as it stands: a person's to decide. Whether it would act is not known.
-      abilities.set(step.key, { kind: 'resolved', executes: false, blocked: true });
+      abilities.set(step.key, {
+        kind: 'resolved',
+        executeCapabilities: [],
+        addedGates,
+        blocked: true,
+      });
       continue;
     }
     abilities.set(step.key, {
       kind: 'resolved',
-      executes: authority.childScope.capabilities.some(isExecuteClassCapability),
+      executeCapabilities: authority.childScope.capabilities.filter(isExecuteClassCapability),
+      addedGates,
       blocked,
     });
   }
   return { running, abilities, requesterBlocked };
+}
+
+/** The gates a plan step declares — its WorkerSpec's when it sets them, else its Worker
+ *  definition's (`resolveStepAuthority`'s reading) — whatever the requester holds now; none for a
+ *  definition that is not there. */
+async function declaredGatesOf(
+  client: PoolClient,
+  workspaceId: string,
+  step: PlanStep,
+): Promise<readonly string[]> {
+  if (step.spec?.gates !== undefined) return step.spec.gates;
+  const definition = await getWorkerDefinition(client, workspaceId, step.worker);
+  if (!definition) return [];
+  return readDefinitionContent(definition.definition).gates ?? [];
 }

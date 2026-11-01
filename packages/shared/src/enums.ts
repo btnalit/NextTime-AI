@@ -706,6 +706,9 @@ export const PlannerRevisionClassSchema = asEnum(PLANNER_REVISION_CLASS_VALUES);
  *     removed with checks of its own;
  *   - `execution_step`: a new or changed step can act — its Worker may request actions, start
  *     Workers of its own (`nested`) or declares reconcile checks;
+ *   - `gate_added`: a new or changed step reaches a gate the step it replaces (the same key in the
+ *     plan in force) did not — even one the requester holds, even only to read: a revision the
+ *     platform adopts on its own never widens what the run reads or calls;
  *   - `admission_blocked`: a new or changed step would not start without a person (a draft Skill
  *     to approve, a gate or capability the requester lacks, an excluded or unavailable Worker);
  *   - `stops_live_work`: a changed or removed step still has a Task running or an action in flight;
@@ -715,6 +718,7 @@ export const PLANNER_REVISION_MAJOR_REASON_VALUES = [
   'goal_acceptance_changed',
   'step_acceptance_changed',
   'execution_step',
+  'gate_added',
   'admission_blocked',
   'stops_live_work',
   'unresolvable',
