@@ -51,6 +51,7 @@ import {
   planHintText,
   stepRemovalText,
 } from '../../lib/goals.js';
+import type { SkillRow } from '../../lib/governance.js';
 import { HttpError } from '../../lib/http-client.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { planStepDiff, stepChangeLine } from '../../lib/plan-step-diff.js';
@@ -77,6 +78,7 @@ import {
   useOperationDone,
 } from './GoalOperationsBar.js';
 import { OutputContractFields } from './OutputContract.js';
+import { type SkillDirectory, StepSpecEditor } from './StepSpecEditor.js';
 
 export interface GoalPlanEditorProps {
   readonly goal: GoalDetailWire;
@@ -153,11 +155,27 @@ export function GoalPlanEditor({
     { kind: 'worker' },
     { autoLoadAll: true },
   );
+  // The Skill directory a step's WorkerSpec picks from — read once, when someone first opens a
+  // step's adjustments, and shared by every step (UX P2-1 on #889: a Skill it names is checked
+  // against it, once it is read in full).
+  const [specOpened, setSpecOpened] = useState(false);
+  const skillDirectory = useCapabilityList<SkillRow>(
+    http,
+    'list_skills',
+    {},
+    { autoLoadAll: true, enabled: specOpened },
+  );
+  const skills: SkillDirectory = {
+    rows: skillDirectory.state.status === 'ready' ? skillDirectory.state.data.items : [],
+    complete:
+      skillDirectory.state.status === 'ready' && skillDirectory.state.data.nextCursor === undefined,
+    loading: specOpened && skillDirectory.state.status === 'loading',
+  };
   const run = useOperationDone(onDone, latest);
   const runs = useMemo(() => liveRuns(goal), [goal]);
   if (can('revise_goal') === false) return null;
 
-  const problems = draftProblems(draft, goal, t);
+  const problems = draftProblems(draft, goal, t, skills.complete ? skills.rows : null);
   const errorOf = (key: FieldKey): string | null => refused.get(key) ?? problems.get(key) ?? null;
   /** A change to the draft; it clears the kernel's refusals on what it touches (`scope`: a field
    *  key, or a step's / check's key prefix) and the one about the plan as a whole. */
@@ -328,6 +346,9 @@ export function GoalPlanEditor({
               run={step.original ? runs.get(step.original.key) : undefined}
               definitions={published}
               allDefinitions={defs}
+              http={http}
+              skills={skills}
+              onSpecOpen={() => setSpecOpened(true)}
               errorOf={errorOf}
               onChange={(patch) => changeStep(step.uid, patch)}
               onRemove={() => {
@@ -768,6 +789,9 @@ function StepEditor({
   run,
   definitions,
   allDefinitions,
+  http,
+  skills,
+  onSpecOpen,
   errorOf,
   onChange,
   onRemove,
@@ -779,6 +803,9 @@ function StepEditor({
   /** The published Worker definitions (`undefined` until read, or when they could not be). */
   readonly definitions: readonly WorkerDefinitionSummary[] | undefined;
   readonly allDefinitions: readonly WorkerDefinitionSummary[] | undefined;
+  readonly http: CapabilityCaller;
+  readonly skills: SkillDirectory;
+  readonly onSpecOpen: () => void;
   readonly errorOf: (key: FieldKey) => string | null;
   readonly onChange: (patch: Partial<StepDraft>) => void;
   readonly onRemove: () => void;
@@ -814,11 +841,8 @@ function StepEditor({
       other.key !== '' &&
       (!other.removed || step.dependsOn.includes(other.key)),
   );
+  // S11 GO15b: its WorkerSpec is edited under 「对 Worker 的调整」 — no longer among what stays.
   const kept = [
-    // S11 GO8a: its WorkerSpec rides along unchanged — the kernel admits it afresh if it changes.
-    step.original?.spec
-      ? t('这一步对 Worker 的调整', 'the step’s adjustments to its Worker')
-      : null,
     step.original?.reconcile
       ? t(
           `${step.original.reconcile.length} 条动作核对声明`,
@@ -928,6 +952,15 @@ function StepEditor({
           {step.original?.outputSchema === undefined ? (
             <AdoptOutputContract step={step} definitions={definitions} onChange={onChange} />
           ) : null}
+          <StepSpecEditor
+            id={id}
+            step={step}
+            http={http}
+            skills={skills}
+            onOpen={onSpecOpen}
+            errorOf={errorOf}
+            onChange={(spec) => onChange({ spec })}
+          />
           <fieldset className="stack-s" data-testid="goal-plan-step-depends">
             <legend className="text-small">{t('在这些步骤之后', 'After these steps')}</legend>
             {others.length === 0 ? (

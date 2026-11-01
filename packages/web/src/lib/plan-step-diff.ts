@@ -277,38 +277,61 @@ function listItemsShown(
   }
 }
 
+/** UX P3-2 on #889: what a list set to nothing means for the step, field by field. */
+function specListEmpty(field: SpecListField, t: Translate): string {
+  switch (field) {
+    case 'skills':
+      return t('这一步不装载 Skill', 'the step mounts no Skill');
+    case 'gates':
+      return t('这一步不作用于任何门', 'the step acts on no gatekeeper');
+    case 'capabilities':
+      return t(
+        '这一步只有每个 Worker 都有的几项基础能力',
+        'the step holds only what every Worker has',
+      );
+    case 'observeScope':
+      return t('这一步不能观察任何门', 'the step may observe no gatekeeper');
+  }
+}
+
 function specListText(
   change: Extract<StepFieldChange, { kind: 'specList' }>,
   names: StepChangeNames,
   t: Translate,
 ): string {
-  const [zh, en] = SPEC_LIST_LABEL[change.field];
+  const [label, en] = SPEC_LIST_LABEL[change.field];
+  // A Latin label (Skill) keeps the space before Chinese that follows it; a Chinese one takes none.
+  const zh = /[A-Za-z]$/.test(label) ? `${label} ` : label;
+  const empty = specListEmpty(change.field, t);
   const shown = (items: readonly string[]) => listItemsShown(change.field, items, names, t);
   const scope = change.field === 'observeScope';
   if (change.after === undefined) {
     return scope
       ? t('观察范围改回不限', 'Observation scope lifted: no limit')
-      : t(`${zh} 改回沿用 Worker 定义`, `${en} back to the Worker’s own`);
+      : t(`${zh}改回沿用 Worker 定义`, `${en} back to the Worker’s own`);
   }
   if (change.before === undefined) {
-    if (scope) {
-      return change.after.length === 0
-        ? t('观察范围改为不读取任何门', 'Observation scope set to no gatekeeper')
-        : t(
-            `观察范围限定为门 ${joinZh(shown(change.after))}（原来不限）`,
-            `Observation scope limited to ${joinEn(shown(change.after))} (no limit before)`,
-          );
+    if (change.after.length === 0) {
+      return scope
+        ? `${t('观察范围改为空：', 'Observation scope set to none: ')}${empty}${t('（原来不限）', ' (no limit before)')}`
+        : `${t(`${zh}改为空：`, `${en} set to none: `)}${empty}${t('（原来沿用 Worker 定义）', ' (the Worker’s own before)')}`;
     }
-    return change.after.length === 0
-      ? t(`${zh} 改为不用（原来沿用 Worker 定义）`, `${en} set to none (the Worker’s own before)`)
+    return scope
+      ? t(
+          `观察范围限定为门 ${joinZh(shown(change.after))}（原来不限）`,
+          `Observation scope limited to ${joinEn(shown(change.after))} (no limit before)`,
+        )
       : t(
-          `${zh} 改为 ${joinZh(shown(change.after))}（原来沿用 Worker 定义）`,
+          `${zh}改为 ${joinZh(shown(change.after))}（原来沿用 Worker 定义）`,
           `${en} set to ${joinEn(shown(change.after))} (the Worker’s own before)`,
         );
   }
+  if (change.after.length === 0) {
+    return `${t(`${zh}改为空：`, `${en} set to none: `)}${empty}`;
+  }
   const { added, removed } = listDiff(change.before, change.after);
   if (added.length === 0 && removed.length === 0) {
-    return t(`${zh} 的顺序改了`, `${en} reordered`);
+    return t(`${zh}的顺序改了`, `${en} reordered`);
   }
   const zhParts = [
     ...(added.length > 0 ? [`加上 ${joinZh(shown(added))}`] : []),
@@ -318,7 +341,7 @@ function specListText(
     ...(added.length > 0 ? [`adds ${joinEn(shown(added))}`] : []),
     ...(removed.length > 0 ? [`drops ${joinEn(shown(removed))}`] : []),
   ];
-  return t(`${zh} ${zhParts.join('，')}`, `${en}: ${enParts.join('; ')}`);
+  return t(`${zh}${zhParts.join('，')}`, `${en}: ${enParts.join('; ')}`);
 }
 
 function workerShown(ref: PlanStep['worker'], names: StepChangeNames): string {

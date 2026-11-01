@@ -17,6 +17,10 @@ import {
   planOf,
   removalsOf,
   requesterConfirmDraft,
+  skillRefUse,
+  specChanged,
+  specDraftOf,
+  specOf,
   supersededLiveSteps,
 } from './goal-plan-draft.js';
 import { planDiff } from './goals.js';
@@ -514,5 +518,136 @@ describe('lib/goal-plan-draft', () => {
     expect(fieldOfProblem('step "apply": filesFrom[0] "x" is not a step of the plan', draft)).toBe(
       `step:${apply.uid}:filesFrom`,
     );
+  });
+
+  it('S11 GO15b: a WorkerSpec draft stands for the WorkerSpec it sets, keeping what is left as read', () => {
+    const original = {
+      instructions: 'Only the hosts.',
+      skills: ['b', 'a'],
+      observeScope: [GATE_ID],
+      tokenBudget: 1000,
+    };
+    const draft = specDraftOf(original);
+    expect(draft).toEqual({
+      instructions: 'Only the hosts.',
+      skills: ['b', 'a'],
+      gates: null,
+      capabilities: null,
+      model: '',
+      observeScope: [GATE_ID],
+      tokenBudget: '1000',
+    });
+    // Come back to as read — the very object, whatever order its lists were ticked in.
+    expect(specOf(draft, original)).toBe(original);
+    expect(specOf({ ...draft, skills: ['a', 'b'] }, original)).toBe(original);
+    // A list kept as a set keeps the plan's order; a changed one is as ticked; empty is a list.
+    expect(specOf({ ...draft, model: 'model-b', skills: ['a', 'b'] }, original)).toEqual({
+      ...original,
+      model: 'model-b',
+    });
+    expect(specOf({ ...draft, skills: ['a', 'b'] }, original)?.skills).toEqual(['b', 'a']);
+    expect(specOf({ ...draft, gates: [] }, original)).toEqual({ ...original, gates: [] });
+    // Nothing set: no WorkerSpec at all; a cap not a whole number: no plan yet.
+    expect(specOf(specDraftOf(undefined), original)).toBeUndefined();
+    expect(specOf({ ...draft, tokenBudget: '1.5' }, original)).toBeNull();
+  });
+
+  it('S11 GO15b: a changed WorkerSpec is sent, and a step with one is held where the kernel would refuse it', () => {
+    const spec = { instructions: 'Use token [redacted] only.', skills: ['cert-rotation'] };
+    const detail = paused({
+      planRevision: {
+        ...goalDetail().planRevision,
+        plan: {
+          ...goalDetail().planRevision.plan,
+          steps: [
+            { key: 'fetch', worker: { definitionId: WORKER_ID, version: 2 }, spec },
+            ...goalDetail().planRevision.plan.steps.slice(1),
+          ],
+        },
+      },
+    });
+    const draft = draftFromDetail(detail);
+    const [fetch] = draft.steps;
+    if (!fetch) throw new Error('no fetch');
+    expect(planOf(draft)?.steps[0]?.spec).toBe(spec);
+    expect(specChanged(fetch)).toBe(false);
+    expect(draftProblems(draft, detail, zh).size).toBe(0);
+    // Another field changed: the masked responsibility left as read counts as written anew.
+    const model = withStep(draft, 'fetch', { spec: { ...fetch.spec, model: 'model-b' } });
+    const problems = draftProblems(model, detail, zh);
+    expect(problems.get(`step:${fetch.uid}:spec.instructions`)).toMatch(
+      /^改了这一步对 Worker 的调整，这一段说明就按新写的算/,
+    );
+    expect(planOf(model)?.steps[0]?.spec).toEqual({ ...spec, model: 'model-b' });
+    // Written anew without the mark: nothing held.
+    const rewritten = withStep(draft, 'fetch', {
+      spec: { ...fetch.spec, model: 'model-b', instructions: 'Use the deploy token only.' },
+    });
+    expect(draftProblems(rewritten, detail, zh).has(`step:${fetch.uid}:spec.instructions`)).toBe(
+      false,
+    );
+    // A cap that is not a whole number above 0, or over the limit; a responsibility of blanks.
+    const capped = (tokenBudget: string) =>
+      draftProblems(
+        withStep(draft, 'fetch', { spec: { ...fetch.spec, tokenBudget } }),
+        detail,
+        zh,
+      ).get(`step:${fetch.uid}:spec.tokenBudget`);
+    expect(capped('0')).toBe('填一个大于 0 的整数，或者清空。');
+    expect(capped('abc')).toBe('填一个大于 0 的整数，或者清空。');
+    expect(capped('20000000')).toMatch(/^最多 /);
+    expect(capped('2000')).toBeUndefined();
+    const blank = withStep(draft, 'fetch', { spec: { ...fetch.spec, instructions: '   ' } });
+    expect(draftProblems(blank, detail, zh).get(`step:${fetch.uid}:spec.instructions`)).toBe(
+      '只有空白：写上这一步的说明，或者清空。',
+    );
+  });
+
+  it('S11 GO15b: what the kernel finds in a WorkerSpec lands on that field', () => {
+    const draft = draftFromDetail(paused());
+    const [fetch] = draft.steps;
+    if (!fetch) throw new Error('no fetch');
+    expect(fieldOfProblem('step "fetch": spec: skills that are not there: "x"', draft)).toBe(
+      `step:${fetch.uid}:spec.skills`,
+    );
+    expect(
+      fieldOfProblem(
+        'step "fetch": spec: observeScope — Gatekeepers this workspace does not have: "g"',
+        draft,
+      ),
+    ).toBe(`step:${fetch.uid}:spec.observeScope`);
+    expect(
+      fieldOfProblem('step "fetch": spec: capabilities a Worker can never hold: "x"', draft),
+    ).toBe(`step:${fetch.uid}:spec.capabilities`);
+    // Unknown wording stays on the step.
+    expect(fieldOfProblem('step "fetch": spec: something else', draft)).toBe(`step:${fetch.uid}`);
+    expect(fieldOfProblem('steps.0.spec.tokenBudget: Too big', draft)).toBe(
+      `step:${fetch.uid}:spec.tokenBudget`,
+    );
+    expect(fieldOfRefusal('plan.steps.0.spec.instructions', draft)).toBe(
+      `step:${fetch.uid}:spec.instructions`,
+    );
+    expect(fieldOfRefusal('plan.steps.0.spec', draft)).toBe(`step:${fetch.uid}`);
+  });
+
+  it('classes a Skill reference as the kernel does when a step starts (UX P2-1 on #889)', () => {
+    const published = { id: 'f-1', name: 'triage', status: 'published' };
+    // A family whose latest is a draft still has its published version (`inUse`).
+    const pending = {
+      id: 'f-2',
+      name: 'renew',
+      status: 'draft',
+      inUse: { id: 'f-2', name: 'renew', status: 'published', version: 1, description: '' },
+    };
+    const draftOnly = { id: 'f-3', name: 'scan', status: 'draft' };
+    const rows = [published, pending, draftOnly];
+    expect(skillRefUse(rows, 'triage')).toBe('published');
+    expect(skillRefUse(rows, 'f-1')).toBe('published');
+    expect(skillRefUse(rows, 'renew')).toBe('published');
+    expect(skillRefUse(rows, 'scan')).toBe('draft');
+    expect(skillRefUse(rows, 'f-3')).toBe('draft');
+    // Not listed (its versions deprecated, or gone): a step naming it does not start.
+    expect(skillRefUse(rows, 'legacy')).toBe('unusable');
+    expect(skillRefUse([{ id: 'f-4', name: 'old', status: 'deprecated' }], 'old')).toBe('unusable');
   });
 });

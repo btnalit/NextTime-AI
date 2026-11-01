@@ -3,19 +3,14 @@ import {
   WORKER_DEFINITION_KIND_VALUES,
   type WorkerDefinitionKind,
 } from '@nexttime/shared';
-import { type FormEvent, type ReactNode, useMemo, useRef, useState } from 'react';
+import { type FormEvent, useMemo, useRef, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import { useFocusAfterRender } from '../../hooks/useFocusAfterRender.js';
 import { useFocusWhenLost } from '../../hooks/useFocusWhenLost.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
-import { actionHint, actionLabel } from '../../lib/capability-labels.js';
 import { type EgressDenyNormalization, normalizeEgressDenyText } from '../../lib/catalog-input.js';
-import {
-  capabilityModeLabel,
-  egressHostSuggestions,
-  groupCapabilitiesByMode,
-} from '../../lib/catalog-pickers.js';
+import { egressHostSuggestions } from '../../lib/catalog-pickers.js';
 import {
   EMPTY_WORKER_DEFINITION_FORM,
   type FieldErrors,
@@ -56,6 +51,7 @@ import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Field, Input, Select, Textarea, describedBy } from '../ui/Field.js';
 import { Notice } from '../ui/Notice.js';
 import { Tabs } from '../ui/Tabs.js';
+import { CapabilityPickerField, CheckboxListField, toggleListItem } from './DirectoryPickers.js';
 import { DraftProposed, type ProposedDraft } from './DraftProposed.js';
 import { JsonEditor } from './JsonEditor.js';
 import { SchemaFieldsEditor } from './SchemaFieldsEditor.js';
@@ -99,247 +95,6 @@ function unresolvedFieldErrors(unresolved: DefinitionReferenceRefusal, t: Transl
     if (values && values.length > 0) errors[field] = definitionReferenceFieldText(field, values, t);
   }
   return errors;
-}
-
-function toggleListItem(list: readonly string[], value: string): readonly string[] {
-  return list.includes(value) ? list.filter((item) => item !== value) : [...list, value];
-}
-
-interface CheckboxOption {
-  readonly id: string;
-  readonly label: ReactNode;
-}
-
-/** A `<fieldset>` of checkboxes over a directory list (capabilities / gates / skills) — the same
- *  "checklist + own inherit-less selection" shape `AgentProfileForm.tsx`'s local `ChecklistField`
- *  already established for exactly this kind of picker, minus the "inherit workspace default"
- *  toggle (no such semantics exist for a WorkerDefinition's own declared needs). Never silently
- *  drops an already-selected id/name just because the loaded directory does not carry it (still
- *  loading, a 403, or a value the directory no longer lists) — `extra` appends it after the
- *  directory's own options, labeled with the raw value itself, so a pre-filled selection is always
- *  visible and never lost on submit. */
-function CheckboxListField({
-  legend,
-  hint,
-  error,
-  required,
-  options,
-  selected,
-  onToggle,
-  disabled,
-  testId,
-  emptyHint,
-}: {
-  readonly legend: ReactNode;
-  readonly hint?: ReactNode;
-  readonly error?: string | null;
-  readonly required?: boolean;
-  readonly options: readonly CheckboxOption[];
-  readonly selected: readonly string[];
-  readonly onToggle: (value: string) => void;
-  readonly disabled?: boolean;
-  readonly testId: string;
-  readonly emptyHint: ReactNode;
-}) {
-  const known = new Set(options.map((option) => option.id));
-  const extra = selected.filter((id) => !known.has(id)).map((id) => ({ id, label: id }));
-  const rendered = [...options, ...extra];
-  return (
-    <div className="field" data-testid={testId}>
-      <span className="field-label">
-        {legend}
-        {required ? (
-          <span className="field-required" aria-hidden>
-            *
-          </span>
-        ) : null}
-      </span>
-      {rendered.length === 0 ? (
-        <p className="text-3 text-small">{emptyHint}</p>
-      ) : (
-        <fieldset className="stack-s" aria-label={typeof legend === 'string' ? legend : testId}>
-          {rendered.map((option) => (
-            <label className="checkbox" key={option.id}>
-              <input
-                type="checkbox"
-                checked={selected.includes(option.id)}
-                onChange={() => onToggle(option.id)}
-                disabled={disabled}
-              />
-              <span>{option.label}</span>
-            </label>
-          ))}
-        </fieldset>
-      )}
-      {hint !== undefined && !error ? <p className="field-hint">{hint}</p> : null}
-      {error ? (
-        <p className="field-error" role="alert">
-          {error}
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * The capability checklist (console-ux-3): `list_capability_names` returns 100+ names, so they are
- * grouped by the `mode` each row already carries (observe / write / propose / execute), with a
- * name filter and a "select all" per group that acts on the rows the filter leaves visible.
- * Selected names outside the directory are kept in their own group, as `CheckboxListField` does.
- */
-function CapabilityPickerField({
-  hint,
-  error,
-  required,
-  rows,
-  selected,
-  onChange,
-  disabled,
-  emptyHint,
-}: {
-  readonly hint?: ReactNode;
-  readonly error?: string | null;
-  readonly required?: boolean;
-  readonly rows: readonly CapabilityNameRow[];
-  readonly selected: readonly string[];
-  readonly onChange: (next: readonly string[]) => void;
-  readonly disabled?: boolean;
-  readonly emptyHint: ReactNode;
-}) {
-  const t = useT();
-  const [filter, setFilter] = useState('');
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
-  const known = new Set(rows.map((row) => row.name));
-  const extraRows = selected
-    .filter((name) => !known.has(name))
-    .map((name) => ({ name, mode: '__unlisted__' }));
-  const groups = groupCapabilitiesByMode([...rows, ...extraRows], filter, (name) =>
-    actionLabel(name, t),
-  );
-  const filtering = filter.trim() !== '';
-
-  function setGroup(names: readonly string[], on: boolean): void {
-    if (on) onChange([...selected, ...names.filter((name) => !selected.includes(name))]);
-    else onChange(selected.filter((name) => !names.includes(name)));
-  }
-
-  function toggleCollapsed(mode: string): void {
-    setCollapsed((current) => {
-      const next = new Set(current);
-      if (next.has(mode)) next.delete(mode);
-      else next.add(mode);
-      return next;
-    });
-  }
-
-  return (
-    <div className="field" data-testid="wd-capabilities">
-      <span className="field-label">
-        {t('能力', 'capabilities')}
-        {required ? (
-          <span className="field-required" aria-hidden>
-            *
-          </span>
-        ) : null}
-      </span>
-      {rows.length + extraRows.length === 0 ? (
-        <p className="text-3 text-small">{emptyHint}</p>
-      ) : (
-        <>
-          <div className="row-wrap">
-            <Input
-              id="wd-capabilities-filter"
-              aria-label={t('筛选能力', 'Filter capabilities')}
-              value={filter}
-              onChange={(event) => setFilter(event.target.value)}
-              placeholder={t('按名称筛选…', 'Filter by name…')}
-              mono
-              data-testid="wd-capabilities-filter"
-              // Narrows the list, saves nothing: not an edit to ask about (legacy 497 rule).
-              data-no-discard-guard
-            />
-            <span className="text-3 text-small" data-testid="wd-capabilities-count">
-              {t(`已选 ${selected.length} 个`, `${selected.length} selected`)}
-            </span>
-          </div>
-          {groups.length === 0 ? (
-            <p className="text-3 text-small" data-testid="wd-capabilities-no-match">
-              {t('没有名称匹配的能力。', 'No capability name matches.')}
-            </p>
-          ) : null}
-          {groups.map((group) => {
-            const names = group.rows.map((row) => row.name);
-            const allOn = names.every((name) => selected.includes(name));
-            const pickedInGroup = names.filter((name) => selected.includes(name)).length;
-            const groupLabel =
-              group.mode === '__unlisted__'
-                ? t('目录外（已选）', 'Not in the directory (selected)')
-                : capabilityModeLabel(group.mode, t);
-            const open = filtering || !collapsed.has(group.mode);
-            return (
-              <fieldset
-                key={group.mode}
-                className="stack-s"
-                aria-label={groupLabel}
-                data-testid={`wd-capabilities-group-${group.mode}`}
-              >
-                <div className="row-wrap">
-                  <Button
-                    variant="ghost"
-                    size="s"
-                    onClick={() => toggleCollapsed(group.mode)}
-                    aria-expanded={open}
-                    disabled={filtering}
-                  >
-                    {open ? '▾' : '▸'} {groupLabel} ({pickedInGroup}/{names.length})
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="s"
-                    onClick={() => setGroup(names, !allOn)}
-                    disabled={disabled}
-                    data-testid={`wd-capabilities-group-toggle-${group.mode}`}
-                  >
-                    {allOn
-                      ? filtering
-                        ? t('取消选择筛选结果', 'Clear the filtered ones')
-                        : t('取消本组', 'Clear group')
-                      : filtering
-                        ? t('全选筛选结果', 'Select the filtered ones')
-                        : t('全选本组', 'Select group')}
-                  </Button>
-                </div>
-                {open
-                  ? group.rows.map((row) => (
-                      <label className="checkbox" key={row.name}>
-                        <input
-                          type="checkbox"
-                          checked={selected.includes(row.name)}
-                          onChange={() => setGroup([row.name], !selected.includes(row.name))}
-                          disabled={disabled}
-                        />
-                        {/* Audit P1-8: what it does first, the registry name as the secondary
-                         *  text a builder recognizes from docs and errors. */}
-                        <span title={actionHint(row.name, t) ?? undefined}>
-                          {actionLabel(row.name, t)}{' '}
-                          <span className="mono text-3 text-small">{row.name}</span>
-                        </span>
-                      </label>
-                    ))
-                  : null}
-              </fieldset>
-            );
-          })}
-        </>
-      )}
-      {hint !== undefined && !error ? <p className="field-hint">{hint}</p> : null}
-      {error ? (
-        <p className="field-error" role="alert">
-          {error}
-        </p>
-      ) : null}
-    </div>
-  );
 }
 
 /**

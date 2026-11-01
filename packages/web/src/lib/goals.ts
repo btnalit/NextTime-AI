@@ -606,15 +606,20 @@ interface PlanHintArgs {
 }
 
 /** S11 GO8a: how the plan changes when what a step's WorkerSpec names cannot be used — a proposal
- *  is turned down for another; a revision is revised again, by the entry agent in chat for the
- *  WorkerSpec (the console's 「修订计划…」 keeps it as it is, UX on #853) or there without the step. */
+ *  is turned down for another; a revision is revised again under 「修订计划…」, where — S11 GO15b —
+ *  the step's adjustments to its Worker change (they stayed as they were there before, UX on #853),
+ *  or the step goes. Legacy 544: a Worker version no longer published is swapped there too. */
 const CHANGE_PLAN: Readonly<Record<PlanHintContext, readonly [string, string]>> = {
   proposal: ['驳回，让助手换个做法', 'turn the plan down so the assistant tries another way'],
   revision: [
-    '在对话里让入口智能体修订计划换掉它，或者在「修订计划…」里移除这一步',
-    'ask the entry agent in chat to revise the plan and change it, or remove the step under “Revise plan…”',
+    '在「修订计划…」里改这一步对 Worker 的调整把它换掉，或者移除这一步',
+    'change the step’s adjustments to its Worker under “Revise plan…” to replace it, or remove the step there',
   ],
 };
+const CHANGE_WORKER: readonly [string, string] = [
+  '在「修订计划…」里给这一步换一个已发布的 Worker 版本，或者移除这一步',
+  'pick a published Worker version for the step under “Revise plan…”, or remove the step there',
+];
 
 /**
  * A plan hint as a sentence. `requester_confirm_only` is about the plan; the S11 GO5c codes are the
@@ -687,8 +692,8 @@ const PLAN_HINT: Readonly<
     const [zh, en] = namesIn(skills);
     const one = skills.length === 1;
     return [
-      `步骤「${step}」的 Worker 要用的 Skill${zh}已经弃用，没有能用的版本：${consequence[0]}${context === 'proposal' ? '可以驳回，让助手换一个已发布的 Skill。' : '可以在对话里让入口智能体修订计划，换一个已发布的 Skill，或者在「修订计划…」里移除这一步。'}`,
-      `Step “${step}”: its Worker uses ${one ? 'Skill' : 'Skills'} ${en}, deprecated with no version left to use — ${consequence[1]} ${context === 'proposal' ? 'Turn the plan down so the assistant picks a published Skill.' : 'Ask the entry agent in chat to revise the plan to a published Skill, or remove the step under “Revise plan…”.'}`,
+      `步骤「${step}」的 Worker 要用的 Skill${zh}已经弃用，没有能用的版本：${consequence[0]}${context === 'proposal' ? '可以驳回，让助手换一个已发布的 Skill。' : '可以在「修订计划…」里改这一步对 Worker 的调整，换一个已发布的 Skill，或者移除这一步。'}`,
+      `Step “${step}”: its Worker uses ${one ? 'Skill' : 'Skills'} ${en}, deprecated with no version left to use — ${consequence[1]} ${context === 'proposal' ? 'Turn the plan down so the assistant picks a published Skill.' : 'Under “Revise plan…”, change the step’s adjustments to its Worker to a published Skill, or remove the step.'}`,
     ];
   },
   // Legacy 544: the Worker version a step is pinned to is no longer published — a plan naming it
@@ -700,7 +705,7 @@ const PLAN_HINT: Readonly<
         `Step “${step}” uses a Worker version that is no longer published (deprecated, or not there) — confirming would be refused now. Turn the plan down so the assistant picks a published Worker.`,
       ];
     }
-    const [changeZh, changeEn] = CHANGE_PLAN[context];
+    const [changeZh, changeEn] = CHANGE_WORKER;
     return [
       `步骤「${step}」用的 Worker 版本已经不再发布（弃用了，或者不存在）：${consequence[0]}可以${changeZh}。`,
       `Step “${step}” uses a Worker version that is no longer published (deprecated, or not there) — ${consequence[1]} You can ${changeEn}.`,
@@ -713,8 +718,8 @@ const PLAN_HINT: Readonly<
     const [zh, en] = namesIn(skills);
     const one = skills.length === 1;
     return [
-      `步骤「${step}」上一次尝试用的 Skill${zh}现在不能再用了（已弃用，或者试用的草稿改过、被丢弃或弃用）。重试要用同一个版本，所以${consequence[0]}在对话里让入口智能体修订计划改动这一步，它会按现在的 Skill 重新开始；或者在「修订计划…」里移除这一步。`,
-      `Step “${step}”: ${one ? 'the Skill version' : 'the Skill versions'} ${en} its last attempt used can no longer be used (deprecated, or a trial’s draft changed, discarded or deprecated). A retry uses the same ${one ? 'version' : 'versions'}, so ${consequence[1]} Ask the entry agent in chat to revise the plan and change the step, which then starts afresh with the Skills as they are now; or remove the step under “Revise plan…”.`,
+      `步骤「${step}」上一次尝试用的 Skill${zh}现在不能再用了（已弃用，或者试用的草稿改过、被丢弃或弃用）。重试要用同一个版本，所以${consequence[0]}在「修订计划…」里改动这一步（比如改它对 Worker 的调整），它会按现在的 Skill 重新开始；或者移除这一步。`,
+      `Step “${step}”: ${one ? 'the Skill version' : 'the Skill versions'} ${en} its last attempt used can no longer be used (deprecated, or a trial’s draft changed, discarded or deprecated). A retry uses the same ${one ? 'version' : 'versions'}, so ${consequence[1]} Under “Revise plan…”, change the step (its adjustments to its Worker, say), which then starts afresh with the Skills as they are now; or remove the step there.`,
     ];
   },
   // A plan is validated against the catalog when proposed, confirmed or revised: the hint says the
@@ -2229,27 +2234,27 @@ function admissionPauseText(
     case 'step_skill_draft':
       return hint.trial !== undefined
         ? t(
-            `需要人决定：步骤「${step}」的 Worker 要用的 Skill${skillsZh}还只是草稿，这一步${held.zh}。能发布它的人可以在下面「步骤」里这一步的提示下批准试用，之后请求人按「继续」；也可以在「能力目录」发布之后按「继续」，或者在对话里让入口智能体修订计划换掉它。`,
-            `A person must decide: the Worker of step “${step}” uses Skill ${skillsEn}, still a draft, so the step ${heldEn}. Someone who may publish it can approve a trial from the step’s note under Steps, and the requester then resumes; or publish it in Catalog and resume, or ask the entry agent in chat to revise the plan and change it.`,
+            `需要人决定：步骤「${step}」的 Worker 要用的 Skill${skillsZh}还只是草稿，这一步${held.zh}。能发布它的人可以在下面「步骤」里这一步的提示下批准试用，之后请求人按「继续」；也可以在「能力目录」发布之后按「继续」，或者在「修订计划…」里改这一步对 Worker 的调整把它换掉。`,
+            `A person must decide: the Worker of step “${step}” uses Skill ${skillsEn}, still a draft, so the step ${heldEn}. Someone who may publish it can approve a trial from the step’s note under Steps, and the requester then resumes; or publish it in Catalog and resume, or change the step’s adjustments to its Worker under “Revise plan…” to replace it.`,
           )
         : t(
-            `需要人决定：步骤「${step}」的 Worker 要用的 Skill${skillsZh}还只是草稿，这一步${held.zh}。在「能力目录」发布之后按「继续」，或者在对话里让入口智能体修订计划换掉它，见下面「步骤」里的说明。`,
-            `A person must decide: the Worker of step “${step}” uses Skill ${skillsEn}, still a draft, so the step ${heldEn}. Once it is published in Catalog, resume the goal, or ask the entry agent in chat to revise the plan and change it. See the note under Steps.`,
+            `需要人决定：步骤「${step}」的 Worker 要用的 Skill${skillsZh}还只是草稿，这一步${held.zh}。在「能力目录」发布之后按「继续」，或者在「修订计划…」里改这一步对 Worker 的调整把它换掉，见下面「步骤」里的说明。`,
+            `A person must decide: the Worker of step “${step}” uses Skill ${skillsEn}, still a draft, so the step ${heldEn}. Once it is published in Catalog, resume the goal, or change the step’s adjustments to its Worker under “Revise plan…” to replace it. See the note under Steps.`,
           );
     case 'step_skill_deprecated':
       return t(
-        `需要人决定：步骤「${step}」的 Worker 要用的 Skill${skillsZh}已经弃用，这一步${held.zh}。在对话里让入口智能体修订计划，换一个已发布的 Skill 之后才能继续，见下面「步骤」里的说明。`,
-        `A person must decide: the Worker of step “${step}” uses Skill ${skillsEn}, which was deprecated, so the step ${heldEn}. It goes on once the entry agent, asked in chat, revises the plan to a published Skill. See the note under Steps.`,
+        `需要人决定：步骤「${step}」的 Worker 要用的 Skill${skillsZh}已经弃用，这一步${held.zh}。在「修订计划…」里改这一步对 Worker 的调整，换一个已发布的 Skill 之后才能继续，见下面「步骤」里的说明。`,
+        `A person must decide: the Worker of step “${step}” uses Skill ${skillsEn}, which was deprecated, so the step ${heldEn}. It goes on once the step’s adjustments to its Worker are changed to a published Skill under “Revise plan…”. See the note under Steps.`,
       );
     case 'step_worker_unavailable':
       return t(
-        `需要人决定：步骤「${step}」用的 Worker 版本已经不再发布，这一步${held.zh}。在对话里让入口智能体修订计划换一个已发布的 Worker，或者在「修订计划…」里移除这一步，见下面「步骤」里的说明。`,
-        `A person must decide: step “${step}” uses a Worker version that is no longer published, so the step ${heldEn}. Ask the entry agent in chat to revise the plan to a published Worker, or remove the step under “Revise plan…”. See the note under Steps.`,
+        `需要人决定：步骤「${step}」用的 Worker 版本已经不再发布，这一步${held.zh}。在「修订计划…」里给这一步换一个已发布的 Worker 版本，或者移除这一步，见下面「步骤」里的说明。`,
+        `A person must decide: step “${step}” uses a Worker version that is no longer published, so the step ${heldEn}. Pick a published Worker version for the step under “Revise plan…”, or remove the step there. See the note under Steps.`,
       );
     case 'step_skill_version_unavailable':
       return t(
-        `需要人决定：步骤「${step}」上一次尝试用的 Skill${skillsZh}现在不能再用了，重试要用同一个版本，所以这一步${held.zh}。在对话里让入口智能体修订计划改动这一步，它会按现在的 Skill 重新开始；或者在「修订计划…」里移除这一步，见下面「步骤」里的说明。`,
-        `A person must decide: the Skill ${skillsEn} the last attempt of step “${step}” used can no longer be used, and a retry uses the same version, so the step ${heldEn}. Ask the entry agent in chat to revise the plan and change the step, which then starts afresh with the Skills as they are now; or remove the step under “Revise plan…”. See the note under Steps.`,
+        `需要人决定：步骤「${step}」上一次尝试用的 Skill${skillsZh}现在不能再用了，重试要用同一个版本，所以这一步${held.zh}。在「修订计划…」里改动这一步（比如改它对 Worker 的调整），它会按现在的 Skill 重新开始；或者移除这一步，见下面「步骤」里的说明。`,
+        `A person must decide: the Skill ${skillsEn} the last attempt of step “${step}” used can no longer be used, and a retry uses the same version, so the step ${heldEn}. Under “Revise plan…”, change the step (its adjustments to its Worker, say), which then starts afresh with the Skills as they are now; or remove the step there. See the note under Steps.`,
       );
     case 'step_model_not_offered':
       return t(
