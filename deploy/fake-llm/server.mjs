@@ -909,11 +909,20 @@ function plannerTaskInput(messages) {
  *      steps and the goal's acceptance checks as they are. By the platform's rules that is a
  *      minor revision: under `propose` the requester decides it, under `apply_minor` the platform
  *      adopts it for them;
- *    - anything else: `no_revision`, so a goal no scenario here plans for pauses for a person. */
+ *    - anything else: `no_revision`, so a goal no scenario here plans for pauses for a person —
+ *      among them S6's (legacy 560): a round for the goal's own acceptance (S11 GO10b, the input
+ *      carries `failedAcceptance` instead of `failedStep`), whose reason names the verification
+ *      round it was told about, so the script can tell the planner read what failed. */
 function goalPlannerScenario(messages) {
   const input = plannerTaskInput(messages);
   const plan = input?.plan;
   const failedKey = input?.failedStep?.key;
+  const acceptanceRound =
+    typeof input?.failedAcceptance?.round === 'number' ? input.failedAcceptance.round : undefined;
+  const subject =
+    acceptanceRound !== undefined
+      ? `the goal's acceptance round ${acceptanceRound}`
+      : `step ${failedKey ?? '(unknown)'}`;
   const failed = Array.isArray(plan?.steps)
     ? plan.steps.find((step) => step && step.key === failedKey)
     : undefined;
@@ -947,14 +956,14 @@ function goalPlannerScenario(messages) {
         }
       : {
           decision: 'no_revision',
-          reason: `accept_s2: no scripted revision for step ${failedKey ?? '(unknown)'} — a person decides.`,
+          reason: `accept_s2: no scripted revision for ${subject} — a person decides.`,
         };
   return [
     {
       tool: {
         name: 'report_result',
         args: {
-          summary: `accept_s2: the goal planner ${output.decision === 'revise' ? 'proposes moving' : 'has no revision for'} step ${failedKey ?? '(unknown)'}.`,
+          summary: `accept_s2: the goal planner ${output.decision === 'revise' ? `proposes moving step ${failedKey}` : `has no revision for ${subject}`}.`,
           findings: [output.reason],
           // A planner's report is its proposal and nothing else: no Facts, evidence or artifacts
           // (packages/kernel/src/application/goal/planner.ts `PLANNER_REPORT_FORBIDDEN`).
