@@ -13,11 +13,18 @@
 -- without a backfill, and code from before this migration never writes the new kind.
 --
 -- Rolling back (docs/runbooks/release.md §6). Code without this migration never writes
--- `admin_agent`, so code alone may roll back at any time; the admin agent is off unless the host
--- sets `ADMIN_AGENT_ENABLED`, and nothing in this release starts one. To drop the schema too:
--- revoke and delete any `admin_agent` session first (`update capability_handles set revoked_at =
--- now() …`, then the session rows), re-add the constraint with 0001's five values, then
--- `delete from schema_migrations where module = 'core' and version = 49`.
+-- `admin_agent`, and nothing in this release issues an admin-agent Handle (the agent is off unless
+-- the host sets `ADMIN_AGENT_ENABLED`, and no runtime starts one before AA4), so code alone may
+-- roll back; the widened constraint works unchanged for older code. Once an admin-agent Handle has
+-- been issued (from AA4 on), revoke them first — older code has no per-call platform-role check:
+-- `update capability_handles set revoked_at = now() where session_id in (select id from sessions
+-- where kind = 'admin_agent') and revoked_at is null`.
+-- Drop the schema too only when `select count(*) from sessions where kind = 'admin_agent'` is 0
+-- (always so in this release): re-add the constraint with 0001's five values, then
+-- `delete from schema_migrations where module = 'core' and version = 49`. If it is not 0, keep
+-- core/0049 and roll back code only — those rows are referenced by `capability_handles`,
+-- `llm_usage` and `tasks` (restrict foreign keys), and deleting them would delete usage and Task
+-- history.
 --
 -- Cross-process bootstrap lock: see 0001_identity.sql — the first statement of every file in this
 -- module.

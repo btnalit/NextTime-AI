@@ -742,6 +742,7 @@ pnpm --filter @nexttime/kernel exec vitest run src/application/packs/registry.te
 | 「能力包」页、「模块」页都报「内核出错」，设了默认模块时新建工作区也失败 | `packs/` 整体校验不过（清单字段错、版本跳号、目录名与清单不一致、一个族出现在两个包、后一版丢了前一版的族、`domainPack` 文件不存在）——整份注册表一起拒绝，不会半装 | 内核日志里有具体是哪个文件哪条规则；修正后按 §14.1 第 3 步本机校验再重建。仓库里的 `packs/` 由 CI 的同一组测试把关，正常发布的镜像不会出现 |
 | `install_module`/`upgrade_module` 返回 400 `module_confirm_required` | 该工作区当前是「已定制」，或从当前已装版本到最新版本之间（含最新版本本身）存在 `breaking: true` 的版本 | 控制台走「能力包」页的审阅即可；CLI/脚本自己带上 `confirm: true` 重试 |
 | `install_module`/`upgrade_module` 返回 400 `change_confirmation_required` | 这一版会改变权限边界（例如新增、去掉或放宽动作类型），要逐项确认，这两个能力做不到 | 改用控制台「能力包」页（或 `preview_pack_install` + `install_pack` 带 `confirmedOrdinals`）；只有人能确认，服务账号带确认会 403 |
+| 服务账号（API key）调 `install_pack` / `install_module` / `upgrade_module` / `roll_back_change_segment` / `verify_change_segment` 返回 403 `forbidden` | 这五个能力只能由人执行（遗留 407）：安装、升级、撤销、核验都要落到一个人的名下，服务 Principal 的 key 不再能代替 | 改用人的会话：控制台「能力包」页 / 「安装历史」，或 owner 自己的会话调用 |
 | 升级后版本号（`installedVersion`）没变 | 目标（最新）版本文件内容与当前已装内容完全一致（哈希相同），不新增 `ontology_versions` 行，也不留安装记录 | 预期行为，不是 bug；要真正推进，改文件内容后发布成新版本 |
 | 一个工作区显示「已定制」 | 有人绕过 `install_module`/`upgrade_module`，直接用 `propose_ontology_change`/`publish_ontology_version` 发到了这个模块 family 的 id（`deriveOntologyPackId(name)`），或同一索引版本的内容被重复发布导致 `ontology_versions.version`（DB 发布计数）与索引版本号不再一一对应——两者本来就是两套编号，见 §14 开头 | 预期能检测到的情况，不是错误；「已装版本」显示的是按哈希匹配到的**索引**版本（匹配不上就是 `null`/已定制），不是 `ontology_versions` 的行号；owner 升级时会被要求 confirm |
 | 安装 / 升级返回 409 `skill_name_conflict`，控制台说「这个能力包里有一个 Skill 和工作区里另一个已发布的 Skill 同名」 | 工作区里已经有一个不是这个包装的、同名且已发布的 Skill（Worker 按名字挂载 Skill，已发布的 Skill 名在工作区内唯一；包里的 Skill 有自己固定的 id，和手建的那个不是同一个）；`details.skillName` 是哪个名字 | 先在「能力目录 → Skill」里停用那个 Skill，再回来安装；不想动它就别装这个包 |
@@ -815,7 +816,7 @@ requires:
 
 **不阻止安装**：没接好也能装，审阅框会说明；装完会马上核验一次。
 
-**核验**（`verify_change_segment`，只有 owner；控制台「安装历史」每条记录底部「核验」/「再核验一次」）检查四件事，
+**核验**（`verify_change_segment`，只有 owner 本人——服务账号的 key 返回 403 `forbidden`；控制台「安装历史」每条记录底部「核验」/「再核验一次」）检查四件事，
 都满足才算通过，记录变成「已核验」，否则「核验未通过」：
 1. 这次写入的每一项都还在生效（没被后来的改动替换、没被撤销）；
 2. 记录对应的能力包版本还在这个部署里（找不到就不知道它要哪些系统，判不通过）；
