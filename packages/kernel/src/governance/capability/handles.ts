@@ -408,8 +408,11 @@ export interface EntryScopeOptions {
  * definitions an administrator works on (Skills, Procedures, ontology types and versions,
  * WorkerDefinitions — plan §5.2 "读定义类能力"), the goals it may read (on a Handle only its
  * person's own runs, application/goal views.ts), and observe-class gate calls (decided per call by
- * `observeRefusal`, as for the entry agent). Two rules hold it there, both checked when the module
- * loads (`buildAdminAgentCeiling`):
+ * `observeRefusal`, as for the entry agent). Those two gate calls are the only ones with side
+ * effects (`ADMIN_AGENT_CEILING_SIDE_EFFECTS`): an observation records what it saw — an Activity
+ * and the observed Facts, under the person's Principal as the entry agent's do; only the audit row
+ * carries the session kind until the observation's own record does (STATUS legacy, before AA4).
+ * Two rules hold it there, both checked when the module loads (`buildAdminAgentCeiling`):
  *
  *   a) What the agent writes must never read as its person's own: a record it proposed carries the
  *      session kind beside the Principal (plan I-A7, STATUS legacy 293 — drafts gain their
@@ -472,6 +475,14 @@ const ADMIN_AGENT_CEILING_GROUPS: ReadonlySet<string> = new Set([
   'gate',
 ]);
 
+/** The ceiling's capabilities that write anything at all (`sideEffects: true`): the observe-class
+ *  gate calls, which record their observation. A literal list as the ceiling is — another
+ *  observe-class capability with side effects joins only by being named here. */
+const ADMIN_AGENT_CEILING_SIDE_EFFECTS: ReadonlySet<string> = new Set([
+  'observe_operation',
+  ENTRY_CEILING_GATE_OBSERVE_CAPABILITY_NAME,
+]);
+
 /** Thrown while the module loads when `ADMIN_AGENT_CEILING_CAPABILITY_NAMES` breaks a rule of the
  *  ceiling — the kernel does not start with an admin agent ceiling wider than its rules allow. */
 export class AdminAgentCeilingError extends Error {
@@ -511,6 +522,12 @@ export function buildAdminAgentCeiling(names: readonly string[]): readonly strin
       throw new AdminAgentCeilingError(
         name,
         `has mode "${capability.mode}": a write joins the ceiling only with provenance that records the admin agent's session kind (legacy 293)`,
+      );
+    }
+    if (capability.sideEffects && !ADMIN_AGENT_CEILING_SIDE_EFFECTS.has(name)) {
+      throw new AdminAgentCeilingError(
+        name,
+        'has side effects: an observe-class capability that writes joins only by being named in ADMIN_AGENT_CEILING_SIDE_EFFECTS',
       );
     }
   }

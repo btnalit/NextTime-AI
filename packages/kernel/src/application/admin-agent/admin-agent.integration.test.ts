@@ -22,7 +22,12 @@ import { HandlePresentationRefused, authenticateHandle } from '../gateway/handle
 import type { ResolvedCaller } from '../gateway/resolve-caller.js';
 import { type UserRow, createUser } from '../identity/index.js';
 import { createWorkspaceWithOwner } from '../workspace/index.js';
-import { type AdminAgentRefusalReason, AdminAgentRefused, issueAdminAgentHandle } from './index.js';
+import {
+  ADMIN_AGENT_HANDLE_MAX_TTL_SECONDS,
+  type AdminAgentRefusalReason,
+  AdminAgentRefused,
+  issueAdminAgentHandle,
+} from './index.js';
 
 /**
  * application/admin-agent integration (S11 AA1; real Postgres, auto-skip without DATABASE_URL):
@@ -403,6 +408,75 @@ describe.runIf(DATABASE_URL !== undefined)(
         client.query('update principals set disabled_at = now() where id = $1', [pausedId]),
       );
       expect(await issueRefusal(pausedId)).toBe('principal_disabled');
+    });
+
+    it('a workspace role change revokes the admin agent at once: its scope was narrowed by the old role', async () => {
+      const tag = randomUUID().slice(0, 8);
+      const builder = await createUser(pool, {
+        login: `aa1-builder-${tag}`,
+        displayName: 'Builder Admin',
+        platformRole: 'admin',
+      });
+      const builderId = await insertPrincipal('human', 'builder', builder.id);
+      const issued = await issue(builderId);
+      // The per-call check does not re-read the workspace role (I-A3 checks the platform role),
+      // so this revocation is what keeps the builder's narrowing from outliving the change.
+      await dispatchCapability({ pool }, personCaller(), 'set_principal_role', {
+        principalId: builderId,
+        role: 'auditor',
+      });
+      const handle = await withAdminClient(pool, (client) =>
+        client.query<{ revoked_at: Date | null }>(
+          'select revoked_at from capability_handles where jti = $1',
+          [issued.jti],
+        ),
+      );
+      expect(handle.rows[0]?.revoked_at).not.toBeNull();
+      await expect(
+        authenticateHandle(pool, issued.token, { publicKey }, 'source'),
+      ).rejects.toBeInstanceOf(HandleRevoked);
+    });
+
+    it('refuses to issue in a disabled workspace, and a Handle that lives longer than an hour or not at all', async () => {
+      const tag = randomUUID().slice(0, 8);
+      const owner = await createUser(pool, {
+        login: `aa1-off-${tag}`,
+        displayName: 'Off Workspace Admin',
+        platformRole: 'admin',
+      });
+      const off = await createWorkspaceWithOwner(pool, {
+        name: `aa1-off-${tag}`,
+        owner: { userId: owner.id, displayName: 'Off Workspace Admin' },
+        ontologyDir: ONTOLOGY_DIR,
+      });
+      await withAdminClient(pool, (client) =>
+        client.query("update workspaces set status = 'disabled' where id = $1", [off.workspaceId]),
+      );
+      const thrown = await withWorkspace(
+        pool,
+        { workspaceId: off.workspaceId, principalId: off.ownerPrincipalId },
+        (client) =>
+          issueAdminAgentHandle(client, {
+            workspaceId: off.workspaceId,
+            principalId: off.ownerPrincipalId,
+            ttlSeconds: 600,
+            privateKey,
+          }),
+      ).then(
+        () => null,
+        (err: unknown) => err,
+      );
+      expect(thrown).toBeInstanceOf(AdminAgentRefused);
+      expect((thrown as AdminAgentRefused).reason).toBe('workspace_disabled');
+
+      for (const ttlSeconds of [ADMIN_AGENT_HANDLE_MAX_TTL_SECONDS + 1, 0, Number.NaN]) {
+        await expect(issue(adminPrincipalId, ttlSeconds), String(ttlSeconds)).rejects.toThrow(
+          RangeError,
+        );
+      }
+      await expect(
+        issue(adminPrincipalId, ADMIN_AGENT_HANDLE_MAX_TTL_SECONDS),
+      ).resolves.toBeDefined();
     });
 
     it('an administrator who is an auditor in the workspace gets the ceiling narrowed to the auditor’s reads', async () => {

@@ -871,6 +871,8 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1)', () => {
       ['<gate>.<op>:execute', 'execute-class'],
       ['propose_skill', 'has mode "propose"'],
       ['invoke_worker', 'has mode'],
+      // Observe-class but writes, and not one of the gate observations it names.
+      ['get_entry_context', 'has side effects'],
     ] as const) {
       expect(() => buildAdminAgentCeiling([name]), name).toThrow(AdminAgentCeilingError);
       expect(() => buildAdminAgentCeiling([name]), name).toThrow(rule);
