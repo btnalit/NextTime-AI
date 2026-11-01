@@ -212,8 +212,13 @@ export function projectGateInstances(
 // -------------------------------------------------------------------------------------------
 
 /** One connector as an admin agent sees it, or `null` when its name, kind or mode is out of
- *  shape. */
-export function projectConnector(connector: ConnectorWire): PlatformStateConnectorWire | null {
+ *  shape. `announced` is the Operation names its instances announce: a disabled name is listed only
+ *  when it is one of them — an administrator can disable any string (`set_connector_mode`), and a
+ *  bare host name fits the identifier shape too — else only counted. */
+export function projectConnector(
+  connector: ConnectorWire,
+  announced: ReadonlySet<string> = new Set(),
+): PlatformStateConnectorWire | null {
   const name = shaped(connector.name, CONNECTOR_NAME_PATTERN);
   const kind = member(GateTransportKindWireSchema, connector.kind);
   const mode = member(ConnectorModeWireSchema, connector.mode);
@@ -228,7 +233,7 @@ export function projectConnector(connector: ConnectorWire): PlatformStateConnect
     disabledOperationCount: disabled.length,
     disabledOperations: disabled
       .map((operation) => shaped(operation, PLATFORM_STATE_OPERATION_NAME_PATTERN))
-      .filter((operation): operation is string => operation !== null)
+      .filter((operation): operation is string => operation !== null && announced.has(operation))
       .slice(0, PLATFORM_STATE_DISABLED_OPERATIONS_LIMIT),
     operationCount: count(connector.operationCount),
     instanceCount: count(connector.instanceCount),
@@ -238,14 +243,16 @@ export function projectConnector(connector: ConnectorWire): PlatformStateConnect
   };
 }
 
-/** `platform_state_connectors`' result, in the order given. */
+/** `platform_state_connectors`' result, in the order given. `announced` maps a connector's name to
+ *  the Operation names its instances announce. */
 export function projectConnectors(
   connectors: readonly ConnectorWire[],
+  announced: ReadonlyMap<string, ReadonlySet<string>>,
   checkedAt: string,
 ): PlatformStateConnectorsWire {
   return {
     connectors: connectors
-      .map(projectConnector)
+      .map((connector) => projectConnector(connector, announced.get(connector.name)))
       .filter((connector): connector is PlatformStateConnectorWire => connector !== null),
     checkedAt,
   };
@@ -338,7 +345,16 @@ export async function readConnectorsState(
   client: PoolClient,
   checkedAt: string,
 ): Promise<PlatformStateRead<PlatformStateConnectorsWire>> {
-  const result = projectConnectors(await listConnectors(client), checkedAt);
+  const announcedRows = await client.query<{ connector: string; names: string[] }>(
+    `select g.connector, array_agg(distinct op->>'name') as names
+       from gate_instances g, jsonb_array_elements(g.operations) op
+      where op->>'name' is not null
+      group by g.connector`,
+  );
+  const announced = new Map(
+    announcedRows.rows.map((row) => [row.connector, new Set(row.names)] as const),
+  );
+  const result = projectConnectors(await listConnectors(client), announced, checkedAt);
   return { result, returned: result.connectors.length };
 }
 
@@ -357,9 +373,12 @@ export async function readAuditState(
        from audit_records a
       where a.workspace_id is null
         and a.created_at > now() - make_interval(hours => $1)
+        -- reads go before the limit: each platform_state_* call writes a platform audit row of
+        -- its own, and an agent reading often would otherwise push the writes out of the scan
+        and a.action <> all($3::text[])
       order by a.created_at desc, a.id desc
       limit $2`,
-    [PLATFORM_STATE_AUDIT_WINDOW_HOURS, PLATFORM_STATE_AUDIT_SCAN_ROWS + 1],
+    [PLATFORM_STATE_AUDIT_WINDOW_HOURS, PLATFORM_STATE_AUDIT_SCAN_ROWS + 1, [...READ_ACTIONS]],
   );
   const result = summarizePlatformAudit(
     rows.rows.map((row) => ({

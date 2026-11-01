@@ -1482,6 +1482,18 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(issued.scope.capabilities.slice().sort()).toEqual(['list_goals', 'search']);
       });
+
+      it('leaves out a capability only an admin agent reads (S11 AA2: platform_state_*), whatever the role', async () => {
+        const ownerKeyId = await insertServicePrincipal('owner', 'aa2 owner key');
+        const issued = await callAsOwner<{ scope: { capabilities: string[] } }>(
+          'issue_service_handle',
+          {
+            principalId: ownerKeyId,
+            scope: ['search', 'platform_state_gates', 'platform_state_audit', 'list_goals'],
+          },
+        );
+        expect(issued.scope.capabilities.slice().sort()).toEqual(['list_goals', 'search']);
+      });
     });
 
     describe('external runtimes', () => {

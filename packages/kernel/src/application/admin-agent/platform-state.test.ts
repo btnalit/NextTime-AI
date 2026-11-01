@@ -111,6 +111,9 @@ function hostileConnector(overrides: Partial<ConnectorWire> = {}): ConnectorWire
     disabledOperations: [
       'docs.search',
       'dataset_list',
+      // identifier-shaped, but no instance announces them: bare host names an administrator typed
+      'nas.internal.lan',
+      'db01',
       ...HOSTILE_STRINGS,
       'fetch https canary-connectors-op',
       'a/b',
@@ -275,9 +278,19 @@ describe('platform_state_gates projection', () => {
   });
 });
 
+/** What the fixture's instances announce: every disabled name in identifier shape is listed here
+ *  but the host names, so only those that are both announced and in shape are listed. */
+const ANNOUNCED: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['ragflow', new Set(['docs.search', 'dataset_list', 'dataset_create'])],
+]);
+
 describe('platform_state_connectors projection', () => {
-  it('keeps mode and counts; disabled Operation names only in plain identifier shape', () => {
-    const out = projectConnectors([hostileConnector(), hostileConnector({ name: 'http' })], T1);
+  it('keeps mode and counts; disabled Operation names only when announced and in identifier shape', () => {
+    const out = projectConnectors(
+      [hostileConnector(), hostileConnector({ name: 'http' })],
+      ANNOUNCED,
+      T1,
+    );
     expectClean('platform_state_connectors', out);
     expect(out.connectors[0]).toEqual({
       name: 'ragflow',
@@ -285,7 +298,7 @@ describe('platform_state_connectors projection', () => {
       packaged: false,
       generic: false,
       mode: 'platform_preset',
-      disabledOperationCount: 2 + HOSTILE_STRINGS.length + 2,
+      disabledOperationCount: 4 + HOSTILE_STRINGS.length + 2,
       disabledOperations: ['docs.search', 'dataset_list'],
       operationCount: 7,
       instanceCount: 1,
@@ -294,6 +307,17 @@ describe('platform_state_connectors projection', () => {
       updatedAt: T1,
     });
     expect(out.connectors[1]?.generic).toBe(true);
+    // the generic `http` connector announces nothing here: every disabled name is only counted
+    expect(out.connectors[1]?.disabledOperations).toEqual([]);
+    expect(out.connectors[1]?.disabledOperationCount).toBe(4 + HOSTILE_STRINGS.length + 2);
+  });
+
+  it('lists a disabled name only when an instance of that connector announces it', () => {
+    expect(projectConnector(hostileConnector())?.disabledOperations).toEqual([]);
+    expect(
+      projectConnector(hostileConnector(), new Set(['nas.internal.lan', 'db01']))
+        ?.disabledOperations,
+    ).toEqual(['nas.internal.lan', 'db01']);
   });
 
   it('drops a connector whose name, kind or mode is out of shape', () => {

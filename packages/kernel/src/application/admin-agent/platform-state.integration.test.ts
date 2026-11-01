@@ -5,17 +5,18 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type {
-  HandleClaims,
-  Operation,
-  PlatformStateAuditWire,
-  PlatformStateConnectorsWire,
-  PlatformStateGatesWire,
-  PlatformStateInvariantsWire,
-  PlatformStateRuntimeWire,
-  PlatformStateUpdatesWire,
-  PrincipalKind,
-  ReleaseChannel,
+import {
+  type HandleClaims,
+  type Operation,
+  PLATFORM_STATE_AUDIT_SCAN_ROWS,
+  type PlatformStateAuditWire,
+  type PlatformStateConnectorsWire,
+  type PlatformStateGatesWire,
+  type PlatformStateInvariantsWire,
+  type PlatformStateRuntimeWire,
+  type PlatformStateUpdatesWire,
+  type PrincipalKind,
+  type ReleaseChannel,
 } from '@nexttime/shared';
 import { generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
@@ -444,7 +445,14 @@ describe.runIf(DATABASE_URL !== undefined)(
       await withAdminClient(pool, (client) =>
         client.query('update connectors set disabled_operations = $2::jsonb where name = $1', [
           CONNECTOR,
-          JSON.stringify(['docs.search', PRIVATE_V4, VENDOR_KEY, `/etc/${CONNECTOR}`]),
+          JSON.stringify([
+            'docs.search',
+            // in identifier shape, but the gate does not announce it: a host name typed in
+            'nas.internal.lan',
+            PRIVATE_V4,
+            VENDOR_KEY,
+            `/etc/${CONNECTOR}`,
+          ]),
         ]),
       );
 
@@ -544,7 +552,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
-    it('platform_state_connectors: disabled Operation names only in identifier shape, the rest counted', async () => {
+    it('platform_state_connectors: disabled Operation names only when announced and in identifier shape, the rest counted', async () => {
       const { caller } = await agent();
       const { outcome } = await call(caller, 'platform_state_connectors');
       const { connectors } = outcome as PlatformStateConnectorsWire;
@@ -554,7 +562,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           kind: 'mcp',
           packaged: true,
           generic: false,
-          disabledOperationCount: 4,
+          disabledOperationCount: 5,
           disabledOperations: ['docs.search'],
           operationCount: 2,
           instanceCount: 1,
@@ -595,6 +603,28 @@ describe.runIf(DATABASE_URL !== undefined)(
       expectClean(summary);
       expect(JSON.stringify(summary)).not.toContain(otherAdmin.login);
       expect(JSON.stringify(summary)).not.toContain(admin.login);
+    });
+
+    it('platform_state_audit: reads go before the scan limit, so a flood of them pushes no write out', async () => {
+      const { caller } = await agent();
+      await withAdminClient(pool, (client) =>
+        client.query(
+          `insert into audit_records (workspace_id, actor_user_id, action, payload)
+           select null, $1, 'platform_state_gates', '{}'::jsonb from generate_series(1, $2)`,
+          [admin.id, PLATFORM_STATE_AUDIT_SCAN_ROWS + 5],
+        ),
+      );
+      const { outcome } = await call(caller, 'platform_state_audit');
+      const summary = outcome as PlatformStateAuditWire;
+      expect(summary.truncated).toBe(false);
+      expect(summary.scannedRows).toBeLessThan(PLATFORM_STATE_AUDIT_SCAN_ROWS);
+      expect(summary.writesByAction).toEqual(
+        expect.arrayContaining([
+          { action: 'cli.workspace_created', count: 1 },
+          { action: 'update_connector', count: 1 },
+          { action: 'update_gate_instance', count: 1 },
+        ]),
+      );
     });
 
     it('the read runs in a read-only platform transaction', async () => {
