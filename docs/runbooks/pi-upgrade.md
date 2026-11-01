@@ -384,6 +384,12 @@ high 通告。`deploy/worker-runtime/pi/package.json` 的 `overrides` 与根目�
 `package.json` 的 `undici` 是否已经不低于 8.12.2，是的话删掉这两处 override；在 bundle 里
 `grep -l 'node_modules/undici/' dist/bundle/chunks/*` 确认它是否仍内联 undici。
 
+同样的下限还有 `minimatch`（2026-11-01，v0.54.0 发版前审计，#869）：pi 1.1.0 把它钉死在 10.2.6，有一条 moderate 通告
+GHSA-g3hv-75wg-m249（globparts 放大导致 DoS），10.x 没有修复版，两处 `overrides` 把它抬到 `^11.0.1`（pi 只用具名导出
+`minimatch`，11 没变）。bundle 里内联的那份仍是 10.2.6：攻击者要能控制 glob 模式才能触发，pi 的模式来自配置，最坏是单个
+Worker 容器内的 CPU DoS。每次升级 pi：看新版 `package.json` 的 `minimatch` 是否已经不低于 11.0.1，是的话删掉这两处
+override；在 bundle 里 `grep -l 'GLOBSTAR' dist/bundle/chunks/*` 确认它是否仍内联 minimatch。
+
 这也是为什么没有用派发文字建议的"Dockerfile ARG"方案：ARG 的默认值仍然是硬编码字面量（除非
 再改 `docker-compose.yml` 的 build args，把版本号从 shell 传进去），并没有真正减少一份拷贝，
 反而多了一条"构建调用方式必须同步改"的隐性契约，且 Dockerfile 头部注释已经明确"本机无 Docker，
