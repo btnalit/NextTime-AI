@@ -79,9 +79,10 @@ sh scripts/accept_s2.sh --keep
 跑完后切回来。用法、每个场景判定什么、怎么读 `RUN`/`REAL` 输出，见专门的
 `docs/runbooks/host-accept-real-model.md`。
 
-fake 路径在第 9 步之后还跑目标场景 S1、S2、S4–S12（S11 GO7a，`scripts/lib/accept-s2-goals.sh`），
-比以前多 20 到 25 分钟：S6 的验收检查和 S4 反向的核对检查故意不成立，平台按各自的重试上限（默认 5 次、
-约 7.5 分钟）重试完才暂停，S1、S11、S5、S4、S7、S9、S10、S12、S8 在这段时间里依次跑完；S2 最后单独跑。
+fake 路径在第 9 步之后还跑目标场景 S1、S2、S4–S13（S11 GO7a，`scripts/lib/accept-s2-goals.sh`；S13 是 GO9a/GO9b
+的目标规划器，遗留 549），比以前多 20 到 25 分钟：S6 的验收检查和 S4 反向的核对检查故意不成立，平台按各自的
+重试上限（默认 5 次、约 7.5 分钟）重试完才暂停，S1、S11、S13、S5、S4、S7、S9、S10、S12、S8 在这段时间里依次
+跑完；S2 最后单独跑。
 
 **S12 和 S2 会中断服务，默认不跑，只在环境变量 `ACCEPT_DISRUPTIVE=1` 时跑。** S2 `SIGKILL` 内核两次、重启
 `worker-supervisor` 一次（都是本项目自己的服务，脚本随即拉起并等健康检查通过，每次中断约 20 秒：这期间控制台和
@@ -217,6 +218,21 @@ PASS s11-rejected alice rejected the step's write <uuid>
 PASS s11-needs-decision goal <uuid> paused needs_decision; the step failed action_refused
 PASS s11-no-retry 15s later still paused: one attempt, one Task, the write still rejected; the ledger holds nothing under s11-<hex> (the gate never ran it)
 PASS s11-cancelled alice cancelled goal <uuid>, the decision S11 leaves to a person
+PASS s13-report-runner report-runner@1 published (<uuid>): no gate, nothing it can execute
+PASS s13-planner-model alice's AgentProfile model set to fake/fake-echo, the model her goal planner runs on
+PASS s13a-confirmed alice confirmed goal <uuid> with the planner's leave 'propose' (one step writing to the test ledger under s13a-<hex>)
+PASS s13a-rejected alice rejected the step's write <uuid>
+PASS s13a-proposed goal <uuid> paused needs_decision; the planner proposed revision 2 (minor), which waits for alice
+PASS s13a-accepted alice accepted the planner's revision 2 and resumed the run in one call
+PASS s13a-achieved goal <uuid> completed achieved, verified by the platform's own check, the planner's way
+PASS s13a-planner-task one planner Task on goal <uuid>: purpose planning, completed, observing nothing
+PASS s13a-other-way the step ran on ops-runner (its write refused), then on report-runner; the ledger holds nothing under s13a-<hex>
+PASS s13b-confirmed alice confirmed goal <uuid> with the planner's leave 'apply_minor' (one step writing to the test ledger under s13b-<hex>)
+PASS s13b-rejected alice rejected the step's write <uuid>
+PASS s13b-applied goal <uuid> never paused: an autonomous round's minor revision 2 was adopted by the platform for alice, and the goal completed achieved
+PASS s13b-planner-task one planner Task on goal <uuid>: purpose planning, completed, observing nothing
+PASS s13b-other-way the step ran on ops-runner (its write refused), then on report-runner; the ledger holds nothing under s13b-<hex>
+PASS s13-planner-model-reset alice's AgentProfile model back to the workspace's
 PASS s5-confirmed alice proposed and confirmed goal <uuid> (write to the test ledger under s5-<hex>, then a step after it)
 PASS s5-waiting-approval the Worker exited with its write still pending: step waiting(approval), goal still running, the next step not started, the ledger empty (1 Task)
 PASS s5-approved alice approved the write <uuid> after its Worker had gone ('approved')
@@ -305,6 +321,7 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
 | `step9-*` | S11 GO5e-1：前后依赖、要在对话之外跑完的一串委派步骤，在对话里发起成目标（`docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md`） | 真实 chat 驱动链路：`entryGoalChatScenario`（fake-llm）驱动入口 agent 依次调 `find_workers` → `find_operations('stock')` → `propose_goal`（一步跑在 ops-runner 上；验收是平台自己对 http 门 `stock.get` 的观察 `observe_predicate`，`symbol` 等于 `NXT`；带 `idempotencyKey`），再自己试一次 `confirm_goal`。`agent-cannot-confirm`：回复里 `CONFIRM_GOAL=unavailable`，且 `get_goal` 读到的仍是 `proposed`、未确认、来源 Turn 就是这一轮——入口模式不注册 `confirm_goal`，内核对任何 Handle 也拒绝它（仅人通道）；`idempotent`：同一对话再问一次，回同一个目标、`changed=false`，`list_goals` 里这次请求只有一个目标；`confirm`：alice 以人通道确认（一个 StepRun），再确认一次 `changed=false`；`achieved`：轮询 `get_goal` 至 `completed / achieved / verified_by_check`，唯一一步成功、首次尝试，`stock-visible` 检查 `passed` 且有 Observation——Worker 不写任何 Fact，验收不靠它的话；`one-task`：`tasks` 里这个目标恰好一行；`milestones`（S11 GO5e-2）：发起目标的那个对话里依次出现 `propose`、`confirm`、`verify`、`complete` 四条 `system.goal_update` 状态行，最后一条带 `completed / achieved / verified_by_check`；那一步的 Task 在同一个对话里报告，带 `stepKey`=`report`；除发起那条之外的三条在这个对话下一轮的上下文里等着，那一步的 Task 不进上下文 |
 | `s1-*` | S11 §7.2 S1：用户发起目标（a、b 并行，c 依赖 a、b）并确认后不再发消息（GO7a，`scripts/lib/accept-s2-goals.sh`） | 新对话里发「发起三步验收目标 GOAL_NONCE=…」，`entryGoalDagChatScenario`（fake-llm）驱动入口 agent `find_workers` → `find_operations('stock')` → `propose_goal`（三步都跑 ops-runner 的 `goal_step` 剧本，c 的 `dependsOn` 是 a、b；验收同第 9 步）。`proposed`：计划读出来 a、b 无依赖、c 依赖两者；`confirmed`：alice 在对话外以人通道确认，一次建出三个 StepRun；`achieved`：轮询至多 360s 到 `completed / achieved / verified_by_check`，三步各成功一次、各一个 Task；`order`：c 的尝试建于 a、b 都结束之后（a、b 是否真的重叠取决于请求者的并发配额，只报告不判定）；`no-new-turn`：从确认到结束，整个 workspace 没有新的 `agent_turn` Activity；`milestones`：发起对话里依次是 `propose`、`confirm`、`verify`、`complete`，a、b、c 各一条完成的 Task 状态行 |
 | `s11-*` | S11 §7.2 S11：一步的执行动作被拒绝 → 步骤与目标进入需要决定，不自动重试同一动作 | alice 以人通道提一步目标（ops-runner 的 `goal_ledger` 剧本：经 http 门调 `ledger.add` 往夹具账本写一条，`await_decision: true`；`maxAttempts` 2，留一次尝试不用），确认；等这条写入 `pending_approval` 后 alice `reject`。`needs-decision`：目标 `paused(needs_decision)`，步骤 `failed / action_refused`、一次尝试、那条写入 `rejected`；`no-retry`：15s 后状态不变、仍一次尝试一个 Task，夹具账本在这个键下计数 0（门侧根本没执行）；`cancelled`：alice `cancel_goal` 收尾 |
+| `s13*-*` | S11 GO9a/GO9b（遗留 549）：一步的执行动作被拒绝后，目标规划器换一条路；只提议（`propose`）时请求人决定，`apply_minor` 时平台按请求人的授权采用小修订、目标不停 | `report-runner`：alice 发布一个没有门、不能执行任何动作的 Worker（不写 `capabilities` 即 Worker 上限去掉所有执行类能力）；`planner-model`：把 alice 的 AgentProfile 模型设成 fake 模型——规划器自己不定模型、跑请求人的模型，accept_s2 只给入口定义钉了模型，不设的话规划器会跑在栈的默认提供方上（主机上是真实模型），S13 结束时设回 `null`。两个目标都是一步 `write`（ops-runner 的 `goal_ledger` 剧本，`maxAttempts` 1），验收同第 9 步；确认时带规划器授权；写入 `pending_approval` 后 alice `reject`。规划器跑 fake-llm 的 `goalPlannerScenario`：从任务输入（`kind: goal_planning`）里取失败的步骤和 `workers`，把这一步换到 `report-runner` 上、输入换成 `goal_step` 剧本，其余不变——按平台规则是小修订。`s13a`（`propose`）：`proposed`：目标 `paused(needs_decision)`，一轮 `proposal` 规划提了修订 2、分级 `minor`，修订 2 由规划器提出、等人决定；`accepted`：alice `decide_plan_revision`（accept、resume）一次接受并恢复，修订 2 `acceptedBy` 为 `person`；`achieved`：到 `completed / achieved / verified_by_check`。`s13b`（`apply_minor`）：`applied`：没人再操作，目标走到 `completed / achieved / verified_by_check`；一轮 `autonomous` 规划 `applied` 修订 2、分级 `minor`，修订 2 `acceptedBy` 为 `platform`，审计里这个目标没有一次进入 `paused`。两个都查：`planner-task`：目标上恰好一个 `purpose = planning` 的 Task，`completed`，`observe_scope` 为空（什么都不观察）；`other-way`：这一步的 Task 依次是 ops-runner（写入被拒）、report-runner，都 `completed`，账本在这个键下计数 0（门侧从没执行） |
 | `s5-*` | S11 §7.2 S5：一步含需审批的执行动作，审批晚于 Worker 退出 → 步骤 `waiting(approval)`，目标不失败；批准并执行后，步骤验收通过才判成功，下一步自动开始 | 两步：`write`（`goal_ledger`，步骤验收是平台对 `ledger.get` 的观察 `count` 等于 1）与 `after`（`goal_step`，依赖 `write`）。Worker 的写入等决定到内核的等待上限（25s）后拿到 `pending_approval`、报告、退出；`waiting-approval`：此时目标 `running`、`write` 是 `waiting(approval)` 且那条写入仍 `pending_approval`、`after` 仍 `pending` 未开始、账本计数 0；alice 批准；`achieved`：轮询至多 300s 到 `completed / achieved / verified_by_check`，`write` 一次尝试、写入 `executed`、步骤检查 `passed` 且有 Observation，`after` 的尝试建于 `write` 结束之后并成功，账本计数 1（门侧恰好执行一次） |
 | `s6-*` | S11 §7.2 S6：各步都报告成功，但验收观察为假 → 不进入 `completed(achieved)`；暂停并附证据；人选「按未达成结束」后为 `completed(not_achieved)` | 一步 `goal_step`，验收是 `stock.get` 的 `symbol` 等于一个它永远不会返回的值。`verifying`：最先启动，步骤成功后目标进入 `verifying`；平台按重试上限在后台重试这条检查，期间跑 S1、S11、S5、S4、S7、S9、S10、S12、S8；`not-achieved`：最后回来，轮询至多 960s（默认上限 15 分钟加余量）到 `paused(needs_decision)`、无结果，检查 `failed` 且有 Observation、至少重试过一次；`ended-not-achieved`：alice `end_goal(not_achieved)` 后为 `completed / not_achieved` |
 | `s4-*` / `s4u-*` | S11 §7.2 S4：门执行了写入但丢掉响应，且门的幂等重放也答 `apply_outcome_unknown` → 步骤 `waiting(reconcile)`；核对观察看到效果后判成功，门侧计数 1。反向：看不到效果 → `paused(awaiting_reconcile)`，不自动重新执行，门侧计数仍为 1 | 一步 `goal_ledger`，键以 `lose-` 开头：夹具记下这一条后不回答、直接断开连接，门无法判断是否执行，把这次调用记成结果不明，同一幂等键的重放也这样回答（R-51）。步骤声明了怎么核对（`reconcile`：观察 `ledger.get` 同一个键的 `count`）。alice 在 Worker 等决定时批准；`approved`：那条写入 `failed / outcome_unknown`。`s4u` 最先启动（与 S6 一起在后台），核对检查要 `count` 等于 2，永远不成立：`waiting-reconcile`：目标仍 `running`、步骤 `waiting(reconcile)`；最后回来，`awaiting-reconcile`：轮询至多 960s 到 `paused(awaiting_reconcile)`，写入仍只是结果不明、平台什么都没记下，核对检查 `not_seen` 且有 Observation、重试过，一个 Task，账本计数仍 1；`cancelled`：alice 取消。`s4` 在中间跑，核对要 `count` 等于 1：`reconciled`：轮询至多 300s 到 `completed / achieved / verified_by_check`，写入 `failed / outcome_unknown / effect_seen`，核对检查 `seen` 且有 Observation，一次尝试、一个 Task，账本计数 1 |

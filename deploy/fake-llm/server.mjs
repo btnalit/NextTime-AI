@@ -823,6 +823,98 @@ function goalThreeWritesScenario(messages) {
   ];
 }
 
+/** The goal planner's Task input (`kind: goal_planning`, see `goalPlannerScenario`) as the Worker
+ *  context shows it: under "### Task input", JSON pretty-printed with two-space indents
+ *  (packages/platform-extension/src/modes/worker.ts `renderWorkerContext`), so it holds no blank
+ *  line and ends at the first one. `undefined` when no message carries one. */
+function plannerTaskInput(messages) {
+  for (const message of messages) {
+    if (!message) continue;
+    const text = toolMessageText(message);
+    const at = text.indexOf('### Task input\n');
+    if (at < 0) continue;
+    const rest = text.slice(at + '### Task input\n'.length);
+    const end = rest.indexOf('\n\n');
+    try {
+      const input = JSON.parse(end < 0 ? rest : rest.slice(0, end));
+      if (input && typeof input === 'object' && input.kind === 'goal_planning') return input;
+    } catch {
+      // Not the planner's input: look further.
+    }
+  }
+  return undefined;
+}
+
+/** S11 GO9a/GO9b (scripts/lib/accept-s2-goals.sh `goal_s13_planner`, legacy 549): the goal
+ *  planner — the Worker the platform starts for a goal whose step failed for its requester
+ *  (ontology/goal-planner.yaml). Selected by `goal_planning`, which only the planner's Task input
+ *  and prompt carry; listed before the step scenarios because that input shows the plan, and with
+ *  it every step's own marker. One turn: `report_result` with the planner's output
+ *  (`PLANNER_OUTPUT_SCHEMA`), every id taken from the input, never guessed:
+ *    - the failed step (`failedStep.key`) asked the test ledger for a write (`LEDGER_KEY=<k>` in
+ *      its input, S13) and the input's `workers` lists one named `report-runner` (a Worker with no
+ *      gate, which can execute nothing): `revise` — the plan in force with that step alone moved
+ *      onto `report-runner` and given goal_step's input (`GOAL_NONCE=<k>`), its key, the other
+ *      steps and the goal's acceptance checks as they are. By the platform's rules that is a
+ *      minor revision: under `propose` the requester decides it, under `apply_minor` the platform
+ *      adopts it for them;
+ *    - anything else: `no_revision`, so a goal no scenario here plans for pauses for a person. */
+function goalPlannerScenario(messages) {
+  const input = plannerTaskInput(messages);
+  const plan = input?.plan;
+  const failedKey = input?.failedStep?.key;
+  const failed = Array.isArray(plan?.steps)
+    ? plan.steps.find((step) => step && step.key === failedKey)
+    : undefined;
+  const ledgerKey =
+    typeof failed?.input === 'string' ? /LEDGER_KEY=(\S+)/.exec(failed.input)?.[1] : undefined;
+  const runner = Array.isArray(input?.workers)
+    ? input.workers.find(
+        (worker) =>
+          worker?.name === 'report-runner' &&
+          typeof worker.definitionId === 'string' &&
+          typeof worker.version === 'number',
+      )
+    : undefined;
+  const output =
+    failed && ledgerKey && runner
+      ? {
+          decision: 'revise',
+          plan: {
+            ...plan,
+            steps: plan.steps.map((step) =>
+              step.key === failedKey
+                ? {
+                    ...step,
+                    worker: { definitionId: runner.definitionId, version: runner.version },
+                    input: `ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=${ledgerKey}`,
+                  }
+                : step,
+            ),
+          },
+          reason: `Step ${failedKey}'s write to the test ledger was refused; report-runner reports instead and the goal's own check still decides.`,
+        }
+      : {
+          decision: 'no_revision',
+          reason: `accept_s2: no scripted revision for step ${failedKey ?? '(unknown)'} — a person decides.`,
+        };
+  return [
+    {
+      tool: {
+        name: 'report_result',
+        args: {
+          summary: `accept_s2: the goal planner ${output.decision === 'revise' ? 'proposes moving' : 'has no revision for'} step ${failedKey ?? '(unknown)'}.`,
+          findings: [output.reason],
+          factsToAssert: [],
+          evidence: [{ kind: 'accept_s2_worker_note', content: { step: failedKey ?? null } }],
+          artifacts: [],
+          output,
+        },
+      },
+    },
+  ];
+}
+
 // Order matters: the entry-chat scenarios must be tested first. Once the entry agent has called
 // `invoke_worker`, its own message history contains the Worker marker (inside the tool-call
 // arguments' `input`), so a Worker-marker-first table would hand the *entry* agent the Worker's
@@ -834,6 +926,7 @@ const SCENARIOS = [
   { marker: '哪个服务依赖哪个', build: entryDependencyChatScenario, chat: true },
   { marker: '发起验收目标', build: entryGoalChatScenario, chat: true },
   { marker: '发起三步验收目标', build: entryGoalDagChatScenario, chat: true },
+  { marker: 'goal_planning', build: goalPlannerScenario, chat: false },
   { marker: 'ACCEPT_S2_SCENARIO=docker_restart', build: dockerRestartScenario, chat: false },
   { marker: 'ACCEPT_S2_SCENARIO=ssh_run', build: sshRunScenario, chat: false },
   { marker: 'ACCEPT_S2_SCENARIO=goal_step', build: goalStepScenario, chat: false },
