@@ -94,6 +94,9 @@ dependency` 判定脚本本身失败的条件（§5）；`1 ≤ k < 8` 不会让
 | `api_observe`（accept_s2.sh，`real_api_observe_run`） | "测试 API 的 GET 返回什么" → 入口 agent 走观察类 gate 工具（`observe_operation`，不建 Task/ActionRequest）→ 回复文本里带真实返回的 payload | Turn `completed` 且回复文本含真实 payload 的可识别片段（`NXT`）且 `audit_records.action='observe_operation'` 新增一行且 `tasks` 表行数前后不变 |
 | `ssh_run_approve`（accept_s2.sh，`real_ssh_run i approve`） | Worker 在连接的 SSH 主机上跑一条未分类命令 → 产生一张卡片 → **脚本自己**（不是驱动）轮询 `list_pending`/`approve` 批准 → 执行 → Task completed | ActionRequest 走到 `executed`、期间确实观察到过 `pending_approval`、Task 终态 `completed` |
 | `ssh_run_auto`（accept_s2.sh，`real_ssh_run 1 auto`） | 在 `set_auto_approved_action_kind('ssh.run_command')` 之后再触发同一条命令，验证"总是允许"生效——**这一次必须全程不出现任何卡片，直接自动批准** | ActionRequest 走到 `executed`、期间**从未**观察到 `pending_approval`、`policy_decision='allow'`、Task 终态 `completed` |
+| `goal`（accept_s2.sh，`real_goal_run`，S11 / #829） | 新开 Chat 请入口 agent **只提议不确认**一个目标：ops-runner 读一次测试库存并报告，验收由平台读测试 API 看 symbol 是不是 `NXT` → 入口 agent 自己找 Worker、写计划、调 `propose_goal`。RUN 行带本 Turn 的 `propose_goal` 调用数、其中失败的次数（zod 4 的错误文案回给了模型）、第一次失败的错误码，以及 `retried=1`（失败后又提成了） | Turn `completed` 且有一条 `originated_in_turn_id` 是本 Turn 的 GoalRun 处于 `proposed`。每次跑完马上 `reject_goal`，免得 `--runs` 次提议碰到每人提议上限 |
+| `eval_trial`（accept_s2.sh，`real_eval_trial_run`，S10 E3-2a / #822） | 用例集钉住本脚本发布的 ops-runner 版本（`$REAL_MODEL`），夹具门是 http 门（`stock.get`），对回归用例 `start_eval_case_trial` → 评测 Task、夹具应答、出网全拒 → 打分 | 试跑 `scored` 且 `passed`（调过 `stock.get`，报告的 summary 含夹具的 symbol）。试跑被拒、没结束，或以非 Worker 自身原因 `errored`（起不来、丢失、被终止、崩溃、被封条挡下）**出现一次脚本就失败**（`real-eval-trial`：平台缺陷，不是模型没做好） |
+| `eval_draft`（accept_s2.sh，`real_eval_draft_step`，S10 E3-2b / #833，跑一次） | 一个 Skill：已发布的 v1 让 Worker 在 summary 末尾写一个样式标记，草稿 v2 写另一个；两个版本都经 `issue_handle` → `/mcp` 的 `propose_skill` 提议、alice 发布 v1。对用例集（回归 1 条、full dev 1 条、full holdout 1 条）`start_draft_evaluation`：回归 2 次 × 两臂，再确认 3 次 × 两臂 × 2 条，最多 16 次试跑 | 评测 `finished`，判定来自某一段的规则（不是 `unmeasured`、`contaminated`，也不是因 `errored_trials` 或 `budget` 的 `inconclusive`），且 baseline 臂的每个 WorkerRun 都挂了 v1、candidate 臂的没有一个挂 v1（`worker_run_skills`；草稿是内联挂载，不成行）。**报告里出现另一臂的标记，脚本直接失败**（`real-eval-arms`：这一臂加载错了 Skill 版本）；各臂报告带本臂标记的次数只报告不判定（模型可能不读 Skill） |
 | `deny`（accept_s2.sh `--extended`，`real_deny_run`，在"总是允许"之前跑） | Worker 申请一条 ssh 命令 → 脚本以 alice 身份 `reject`（带 reason）→ Worker 收到拒绝后自行收尾 | ActionRequest 终态 `rejected`、本次没有任何 `executing`/`executed`、Task 到达终态（completed 或 failed 都算——拒绝后 Worker 怎么报告由它决定）。只数本 Task 自己的 WorkerRun 发出的请求。**被拒的请求仍被执行或离开 `rejected`，出现一次脚本就失败**（`real-deny-boundary`：审批边界被突破是平台缺陷，不是模型没做好） |
 | `memory`（accept_s2.sh `--extended`，`real_memory_run`） | 第一轮告诉入口 agent 一个随机暗号 → 停掉 alice 的入口容器 → 同一 Chat 第二轮问暗号；随后 bob 新开 Chat 问同一个暗号 | worker-supervisor 对停止返回 200、停止后容器确实不在运行、第二轮跑在新启动的容器里（`StartedAt` 变了），两轮都 `completed`，第二轮（只看最后一条助手消息）含暗号，bob 的回复不含暗号。bob 命中记 `leaked_to_bob=1`，本次判 fail 待查，但不单独让脚本失败——agent 自己写进工作区记忆的内容按设计对成员共享 |
 | `stop`（accept_s2.sh `--extended`，`real_stop_run`） | 长文请求发出 5 秒后 `stop_agent` → 该 Turn 结束 → 同一 Chat 再发一句 | `stop_agent` 返回 `stopped=true`、被停的 Turn（`activities` 行）终态 `interrupted`、下一轮 `completed` 且回复含本次随机标记 |
@@ -196,7 +199,8 @@ sh scripts/report-usage.sh --workspace "$WS_S3" --by turn --markdown
 **怎么把两份输出拼进一条记录**——`report-usage.sh` 完全不知道"哪一行属于哪个场景"（`llm_usage`
 表里没有场景这个概念，见 `scripts/report-usage.sh` 自己的头注释）；场景边界只存在于 accept 脚本
 自己的执行顺序里。两个真实场景批次都是**逐场景顺序跑完 `--runs` 次再进下一个场景**（S2：
-`docker_restart` → `api_observe` → `ssh_run_approve` → `ssh_run_auto`，各 10 次；S3：
+`docker_restart` → `api_observe` → `ssh_run_approve` → `ssh_run_auto` → `goal`，各 10 次——之后的
+`eval_trial` / `eval_draft` 只有评测 Task 的 Worker 用量，不带 `turn_id`，不进按 Turn 的区块；S3：
 `dependency_chat` 单独 10 次），所以 `--by turn --markdown` 按 `first_started_at` 排序的输出，
 天然分成与场景顺序一一对应的连续区块：S2 的前 10 行 Turn 属于 `docker_restart`、接下来 10 行属于
 `api_observe`，以此类推；S3 的 10 行全属于 `dependency_chat`。按场景取出对应区块，对
@@ -251,6 +255,9 @@ sh scripts/delete-workspaces-matching.sh --expired --yes
 | api_observe | k/10 | | | | |
 | ssh_run_approve | k/10 | | | | |
 | ssh_run_auto | k/10 | | | | |
+| goal | k/10 | | | | |
+| eval_trial | k/10 | | | | |
+| eval_draft | k/1 | | | | |
 | dependency_chat | k/10 | | | | |
 | make demo（第六场景） | k/1 | | | | |
 
@@ -273,6 +280,6 @@ sh scripts/delete-workspaces-matching.sh --expired --yes
 
 ## 进 STATUS §2.2 的摘要行（只有次数）
 
-docker_restart k/10、api_observe k/10、ssh_run_approve k/10、ssh_run_auto k/10、
-dependency_chat k/10、make demo k/1（`docs/private/real-model-<date>.md`）
+docker_restart k/10、api_observe k/10、ssh_run_approve k/10、ssh_run_auto k/10、goal k/10、
+eval_trial k/10、eval_draft k/1、dependency_chat k/10、make demo k/1（`docs/private/real-model-<date>.md`）
 ````
