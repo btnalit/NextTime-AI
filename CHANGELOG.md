@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.56.0](https://github.com/btnalit/NextTime-AI/compare/v0.55.0...v0.56.0) (2026-11-01)
+
+
+### Features
+
+* **goal:** Worker contracts and what find_workers says about a Worker (S11 GO13) ([#880](https://github.com/btnalit/NextTime-AI/issues/880)) ([4258441](https://github.com/btnalit/NextTime-AI/commit/4258441c00036cbff02ed109b5cc8545c498ddce))
+* **governance:** order a gate's queue by target resource (S11 GO12) ([#876](https://github.com/btnalit/NextTime-AI/issues/876)) ([4de22d8](https://github.com/btnalit/NextTime-AI/commit/4de22d81378773f5b3d9fad03f273cbc92255630))
+
+
+### Bug Fixes
+
+* **governance:** never start two conflicting requests of one gate together (legacy 565) ([#881](https://github.com/btnalit/NextTime-AI/issues/881)) ([a5cb0a2](https://github.com/btnalit/NextTime-AI/commit/a5cb0a22ee0468a98275cbf67bdbaa70ee36ae78))
+
 ## [0.55.0](https://github.com/btnalit/NextTime-AI/compare/v0.54.0...v0.55.0) (2026-11-01)
 
 
