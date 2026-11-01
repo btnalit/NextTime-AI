@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { OutputSchema } from '@nexttime/shared';
+import { MAX_OUTPUT_PROBLEMS, type OutputSchema } from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
@@ -137,6 +137,26 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(hint).toHaveProperty('inputProblemCount', 2);
       expect(JSON.stringify(hint)).not.toContain('eighty');
       expect(JSON.stringify(hint)).not.toContain('secret-looking value');
+    });
+
+    it('past the listed places, the count is still exact (#493 on #880)', async () => {
+      const names = Array.from({ length: MAX_OUTPUT_PROBLEMS + 5 }, (_, index) => `f${index}`);
+      const many = await publish({
+        systemPrompt: 'You need many fields.',
+        inputSchema: {
+          type: 'object',
+          properties: Object.fromEntries(names.map((name) => [name, { type: 'string' }])),
+          required: names,
+        },
+      });
+      const created = await propose([{ key: 'bare', worker: many, input: {} }]);
+      const [hint, ...more] = contractHints(created.hints);
+      expect(more).toEqual([]);
+      expect(hint).toMatchObject({ code: 'step_input_mismatch', stepKey: 'bare' });
+      expect((hint as { inputProblems?: unknown[] }).inputProblems).toHaveLength(
+        MAX_OUTPUT_PROBLEMS,
+      );
+      expect(hint).toHaveProperty('inputProblemCount', names.length);
     });
 
     it('a step with bindings is not checked against the input contract (its input is assembled when it starts)', async () => {

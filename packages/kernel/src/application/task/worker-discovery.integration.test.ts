@@ -372,6 +372,33 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
       });
 
+      it('exactly the minimum sample is enough: the median is given (#493 on #880)', async () => {
+        const worker = await publishedWorker(uniqueNeed('edge'));
+        const tokens = [10, 20, 30, 40, 50].slice(0, WORKER_HINT_MIN_SAMPLE);
+        for (const [index, used] of tokens.entries()) {
+          await task({
+            definitionId: worker,
+            status: 'completed',
+            tokens: used,
+            // One short of the sample for outcomes: that side stays insufficient.
+            ...(index > 0 ? { turnOutcome: 'achieved' as const } : {}),
+          });
+        }
+        const hints = await inTx((client) =>
+          readWorkerHints(client, workspaceId, [{ definitionId: worker, version: 1 }]),
+        );
+        expect(hints.get(`${worker}@1`)).toEqual({
+          windowDays: WORKER_HINT_WINDOW_DAYS,
+          minSample: WORKER_HINT_MIN_SAMPLE,
+          cost: { medianTokens: 30, tasks: WORKER_HINT_MIN_SAMPLE, sufficient: true },
+          outcomes: {
+            achieved: WORKER_HINT_MIN_SAMPLE - 1,
+            total: WORKER_HINT_MIN_SAMPLE - 1,
+            sufficient: false,
+          },
+        });
+      });
+
       it('below the minimum sample: marked insufficient, and no median', async () => {
         const need = uniqueNeed('sparse');
         const worker = await publishedWorker(need);
