@@ -37,6 +37,7 @@ import {
   taskLive,
   workerChanged,
 } from '../../lib/goal-plan-draft.js';
+import { plannerWorkDropped } from '../../lib/goal-planner.js';
 import {
   confirmCheckOrigin,
   goalBudgetRows,
@@ -221,7 +222,9 @@ export function GoalPlanEditor({
           : null;
   const planProblem = errorOf('plan');
   const defs = definitions.state.status === 'ready' ? definitions.state.data.items : undefined;
-  const published = defs?.filter((row) => row.status === 'published');
+  // UX P2-4 on #864: the goal planner's Worker plans goals; no step runs it.
+  const published = defs?.filter((row) => row.status === 'published' && row.goalPlanner !== true);
+  const dropped = plannerWorkDropped(latest, t);
 
   const submit = async () => {
     if (plan === null) return;
@@ -277,6 +280,16 @@ export function GoalPlanEditor({
             'Once sent, the new version is in force at once and the goal stays paused; resume it on the goal page to go on. Steps left as they were keep their progress.',
           )}
         </Notice>
+        {dropped.length > 0 ? (
+          <Notice tone="warn" testId="goal-plan-planner">
+            {t('提交这份修订时：', 'Sending this revision:')}
+            <ul>
+              {dropped.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          </Notice>
+        ) : null}
         {newer !== null ? (
           <Notice tone="warn" testId="goal-plan-newer">
             {t(
@@ -495,7 +508,7 @@ export function GoalPlanEditor({
               </Button>
             }
             title={t('提交这次修订', 'Send this revision')}
-            impact={impactLines(draft, goal, t)}
+            impact={[...impactLines(draft, goal, t), ...dropped]}
             confirmLabel={t('提交修订', 'Send revision')}
             errorOverrides={{
               ...goalOperationErrors(t),

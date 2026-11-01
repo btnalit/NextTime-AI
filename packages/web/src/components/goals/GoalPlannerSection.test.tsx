@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import { type CapabilityCaller, SILENT_PUSH_SOURCE } from '../../lib/clients.js';
 import { GoalDetailPage } from './GoalDetailPage.js';
-import { GATE_ID, goalDetail } from './goal-fixtures.test-helpers.js';
+import { GATE_ID, goalDetail, stepRun } from './goal-fixtures.test-helpers.js';
 
 afterEach(cleanup);
 
@@ -462,5 +462,220 @@ describe('minor revisions the platform adopts (S11 GO9b)', () => {
       '改了目标的验收',
       '新增或改动的步骤能执行动作，或能让别的 Worker 替它做事（步骤 fetch-other）',
     ]);
+  });
+});
+
+describe('the planner card after the UX review of #864', () => {
+  /** `fetch` failed on its 2nd attempt and the run waits for a person. */
+  const failedFetch = (
+    rounds: readonly PlanningRoundWire[],
+    overrides: Partial<GoalDetailWire> = {},
+  ) =>
+    goalDetail({
+      status: 'paused',
+      pauseReason: 'needs_decision',
+      planner: 'propose',
+      planningRounds: [...rounds],
+      steps: [
+        stepRun({ status: 'failed', attemptCount: 2, failureCategory: 'transient' }),
+        stepRun({
+          id: 'sr-apply',
+          stepKey: 'apply',
+          status: 'pending',
+          attemptCount: 0,
+          attempts: [],
+        }),
+      ],
+      ...overrides,
+    });
+  const placedFirst = () => {
+    const planner = screen.getByTestId('goal-planner');
+    const overview = screen.getByTestId('goal-overview');
+    return Boolean(planner.compareDocumentPosition(overview) & Node.DOCUMENT_POSITION_FOLLOWING);
+  };
+
+  it('P2-2: a round that found no revision says so on its own, with the planner’s word, above the overview', async () => {
+    const detail = failedFetch([
+      round({
+        status: 'no_revision',
+        revision: null,
+        detail: 'The DNS record has to be fixed by a person.',
+      }),
+    ]);
+    renderPage(scriptedHttp(handlers(detail, workspace('p-alice', 'member'))));
+    const conclusion = await screen.findByTestId('goal-planner-conclusion');
+    expect(conclusion.textContent).toContain(
+      '规划器看过步骤 fetch 第 2 次尝试（运行出错）的失败，没有可行的修订',
+    );
+    expect(conclusion.textContent).toContain('接下来由请求人重试失败的步骤、自己修订计划或取消');
+    expect(within(conclusion).getByTestId('goal-planner-conclusion-detail').textContent).toMatch(
+      /^规划器的说明：The DNS record has to be fixed by a person\.$/,
+    );
+    expect(placedFirst()).toBe(true);
+  });
+
+  it('P3-3: a planning Task’s own failure text stays out of the card; the outcome says what happened', async () => {
+    const detail = failedFetch([
+      round({
+        status: 'failed',
+        revision: null,
+        outcomeReason: 'task_failed',
+        detail: 'worker exited: SIGKILL (oom) at /srv/run/abc',
+      }),
+    ]);
+    renderPage(scriptedHttp(handlers(detail, workspace('p-alice', 'member'))));
+    const conclusion = await screen.findByTestId('goal-planner-conclusion');
+    expect(conclusion.textContent).toContain(
+      '规划器没能为步骤 fetch 第 2 次尝试（运行出错）的失败给出修订',
+    );
+    expect(within(conclusion).queryByTestId('goal-planner-conclusion-detail')).toBeNull();
+    expect(conclusion.textContent).toContain('规划器的任务没有交回可用的结果');
+    expect(screen.queryByTestId('goal-planner-round-detail')).toBeNull();
+    expect(document.body.textContent).not.toContain('SIGKILL');
+  });
+
+  it('P3-7: a conclusion about an earlier attempt is not this pause’s; the card sits below the overview', async () => {
+    const detail = failedFetch([
+      round({ status: 'no_revision', stepAttempt: 1, revision: null, detail: 'old' }),
+    ]);
+    renderPage(scriptedHttp(handlers(detail, workspace('p-alice', 'member'))));
+    await screen.findByTestId('goal-planner');
+    expect(screen.queryByTestId('goal-planner-conclusion')).toBeNull();
+    expect(placedFirst()).toBe(false);
+  });
+
+  it('P3-7: with no round yet the card says why, below the overview', async () => {
+    renderPage(
+      scriptedHttp(handlers(goalDetail({ planner: 'propose' }), workspace('p-alice', 'member'))),
+    );
+    const card = await screen.findByTestId('goal-planner');
+    expect(card.textContent).toContain('还没有步骤失败到要人决定，规划器还没跑过。');
+    expect(placedFirst()).toBe(false);
+  });
+
+  it('P3-8 and P3-4: the proposal says whose decision it waits for, and its round says what became of it', async () => {
+    renderPage(scriptedHttp(handlers(proposedDetail(), workspace('p-alice', 'member'))));
+    expect((await screen.findByTestId('goal-planner-proposal-state')).textContent).toBe('等你决定');
+    expect(screen.getByTestId('goal-planner-round-proposed').textContent).toBe(
+      '提了第 2 版修订（等请求人决定）。',
+    );
+    expect(placedFirst()).toBe(true);
+    cleanup();
+
+    renderPage(scriptedHttp(handlers(proposedDetail(), workspace('p-owner', 'owner'))));
+    expect((await screen.findByTestId('goal-planner-proposal-state')).textContent).toBe(
+      '等请求人决定',
+    );
+    cleanup();
+
+    const settled = proposedDetail({ status: 'running', pauseReason: null, currentRevision: 2 });
+    const rejected = {
+      ...settled,
+      revisions: settled.revisions.map((row) =>
+        row.revision === 2 ? { ...row, status: 'rejected' as const } : row,
+      ),
+    };
+    renderPage(scriptedHttp(handlers(rejected, workspace('p-alice', 'member'))));
+    expect((await screen.findByTestId('goal-planner-round-proposed')).textContent).toBe(
+      '提了第 2 版修订（已拒绝）。',
+    );
+  });
+
+  it('P2-3: each step the proposal adds is shown as it would run', async () => {
+    const detail = proposedDetail();
+    const http = scriptedHttp(
+      handlers(detail, workspace('p-alice', 'member'), {
+        get_goal_revision: () => {
+          const plan = proposedPlan(detail);
+          return {
+            ...plan,
+            plan: {
+              ...plan.plan,
+              steps: plan.plan.steps.map((step) =>
+                step.key === 'fetch-other'
+                  ? {
+                      ...step,
+                      maxAttempts: 4,
+                      input: { hosts: 3, token: 'abc' },
+                      acceptance: [
+                        {
+                          kind: 'observe_predicate',
+                          key: 'renewed',
+                          check: {
+                            gatekeeperId: GATE_ID,
+                            operation: 'cert.list',
+                            expect: { path: 'expiring', op: 'eq', value: 0 },
+                          },
+                        },
+                      ],
+                    }
+                  : step,
+              ),
+            },
+          };
+        },
+      }),
+    );
+    renderPage(http);
+    const proposal = await screen.findByTestId('goal-planner-proposal');
+    const added = await within(proposal).findByTestId('goal-planner-step');
+    expect(added.getAttribute('data-step-key')).toBe('fetch-other');
+    expect(added.textContent).toContain('没有前置步骤');
+    expect(added.textContent).toContain('最多尝试 4 次');
+    expect(within(added).getByTestId('goal-planner-step-checks').textContent).toContain(
+      'cert-gate',
+    );
+    const input = within(added).getByTestId('goal-planner-step-input').textContent ?? '';
+    expect(input).toContain('"hosts": 3');
+    expect(input).not.toContain('abc');
+  });
+
+  it('P3-5: the confirm names a removed step as stopping only while it still runs', async () => {
+    const detail = proposedDetail({
+      steps: [
+        stepRun({ status: 'failed', attemptCount: 2 }),
+        stepRun({
+          id: 'sr-apply',
+          stepKey: 'apply',
+          status: 'pending',
+          attemptCount: 0,
+          attempts: [],
+        }),
+      ],
+    });
+    renderPage(scriptedHttp(handlers(detail, workspace('p-alice', 'member'))));
+    await screen.findByTestId('goal-planner-changes');
+    fireEvent.click(screen.getByTestId('goal-planner-accept'));
+    const confirm = await screen.findByTestId('goal-planner-accept-confirm');
+    const impact = within(confirm).getByTestId('confirm-impact').textContent ?? '';
+    expect(impact).toMatch(/去掉步骤：fetch/);
+    expect(impact).not.toContain('还在运行');
+    cleanup();
+
+    renderPage(scriptedHttp(handlers(proposedDetail(), workspace('p-alice', 'member'))));
+    await screen.findByTestId('goal-planner-changes');
+    fireEvent.click(screen.getByTestId('goal-planner-accept'));
+    const running = await screen.findByTestId('goal-planner-accept-confirm');
+    expect(within(running).getByTestId('confirm-impact').textContent).toContain(
+      '去掉步骤：fetch（fetch 还在运行，会停下）',
+    );
+  });
+
+  it('P2-1: resuming or cancelling says the planner’s proposal is rejected; the pause note points at the card', async () => {
+    renderPage(scriptedHttp(handlers(proposedDetail(), workspace('p-alice', 'member'))));
+    expect((await screen.findByTestId('goal-state-note')).textContent).toContain(
+      '目标规划器为这次失败提了第 2 版修订',
+    );
+    fireEvent.click(screen.getByTestId('goal-op-resume'));
+    const resume = await screen.findByTestId('goal-op-resume-confirm');
+    expect(within(resume).getByTestId('confirm-impact').textContent).toContain(
+      '规划器提的第 2 版修订会被拒绝',
+    );
+    fireEvent.click(within(resume).getByRole('button', { name: /取消|返回/ }));
+    fireEvent.click(screen.getByTestId('goal-op-cancel'));
+    const cancel = await screen.findByTestId('goal-op-cancel-confirm');
+    expect(within(cancel).getByTestId('confirm-impact').textContent).toContain(
+      '规划器提的第 2 版修订会被拒绝',
+    );
   });
 });

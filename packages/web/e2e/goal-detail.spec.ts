@@ -908,6 +908,7 @@ test.describe('S11 GO6: revising the plan (stand-in reads, refusals and revision
     publishedBy: ALICE,
     createdAt: T0,
     publishedAt: T0,
+    goalPlanner: false,
   });
   /** The error `kit/field` shows under a control, by the control's id. */
   const fieldError = async (page: Page, control: ReturnType<Page['getByTestId']>) =>

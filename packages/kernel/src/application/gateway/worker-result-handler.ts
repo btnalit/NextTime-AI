@@ -329,6 +329,7 @@ export const reportTaskResultHandler: CapabilityHandler = async (
         output: contract.output ?? null,
         problems: check.problems,
         problemCount: check.problemCount,
+        ...(outputContract.purpose === 'planning' ? { heldTo: 'planner' as const } : {}),
       });
     }
     // S11 GO9a: a goal planner's report is its proposal and nothing else, and the plan it
@@ -340,6 +341,7 @@ export const reportTaskResultHandler: CapabilityHandler = async (
         output: contract.output ?? null,
         problems: planner.slice(0, MAX_OUTPUT_PROBLEMS),
         problemCount: planner.length,
+        heldTo: 'planner',
       });
     }
   }

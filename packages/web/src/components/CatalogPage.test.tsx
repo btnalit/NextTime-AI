@@ -1760,6 +1760,42 @@ describe('CatalogPage', () => {
     expect(within(workerDetail).getByRole('button', { name: /弃用/ })).toBeTruthy();
   });
 
+  // UX P2-4 on #864 (S11 GO9a): the goal planner's family reads as the platform's planner, marked as
+  // not for steps — never an unnamed Worker someone might pick.
+  it('Workers tab: the goal planner reads as the platform’s planner, not for steps', async () => {
+    const http = scriptedHttp({
+      list_worker_definitions: () => ({
+        items: [
+          {
+            id: 'wd-planner',
+            version: 1,
+            kind: 'worker',
+            status: 'published',
+            goalPlanner: true,
+            definition: { name: 'goal-planner' },
+          },
+          {
+            id: 'wd-1',
+            version: 1,
+            kind: 'worker',
+            status: 'published',
+            goalPlanner: false,
+            definition: { name: 'Fixer' },
+          },
+        ],
+      }),
+    });
+    renderPage(http, 'workers');
+    const section = await screen.findByTestId('workers-worker-section');
+    const rows = within(section).getAllByTestId('catalog-row');
+    const planner = rows.find((row) => within(row).queryByTestId('worker-goal-planner'));
+    expect(planner?.textContent).toContain('目标规划器');
+    expect(within(planner as HTMLElement).getByTestId('worker-goal-planner').textContent).toBe(
+      '平台的目标规划器（不用于步骤）',
+    );
+    expect(rows.filter((row) => within(row).queryByTestId('worker-goal-planner'))).toHaveLength(1);
+  });
+
   // P3-5 copy-guard regression: an entry definition with no name used to title its row with the
   // raw UUID; legacy 472: it reads as 「入口 agent」, not 「未命名 · <short id>」.
   it('Workers tab: an unnamed entry definition reads as the entry agent, never the raw UUID (legacy 472)', async () => {

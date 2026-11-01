@@ -45,6 +45,7 @@ import {
   type TaskRow,
   type TaskViewer,
   type WorkerRunRow,
+  findGoalPlannerFamily,
   findOperations,
   findProcedures,
   findWorkerRunBySessionId,
@@ -1103,7 +1104,9 @@ const recordDecisionHandler: CapabilityHandler = async (client, workspaceId, par
 // fields are projected to ISO strings for the wire, same convention as `toWireChatMessage` above.
 // -------------------------------------------------------------------------------------------
 
-function toWireWorkerDefinition(row: WorkerDefinitionRow) {
+/** `plannerFamily`: the workspace's goal planner family (`findGoalPlannerFamily`), so a version of
+ *  it reads as the planner's (S11 GO9a). */
+function toWireWorkerDefinition(row: WorkerDefinitionRow, plannerFamily: string | null) {
   return {
     id: row.id,
     version: row.version,
@@ -1114,6 +1117,7 @@ function toWireWorkerDefinition(row: WorkerDefinitionRow) {
     publishedBy: row.publishedBy,
     createdAt: row.createdAt.toISOString(),
     publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
+    goalPlanner: row.id === plannerFamily,
   };
 }
 
@@ -1130,7 +1134,7 @@ const proposeWorkerDefinitionHandler: CapabilityHandler = async (client, workspa
     definition,
   });
   return {
-    result: toWireWorkerDefinition(row),
+    result: toWireWorkerDefinition(row, await findGoalPlannerFamily(client, workspaceId)),
     resourceType: 'worker_definition',
     resourceId: row.id,
   };
@@ -1183,7 +1187,10 @@ const proposeEntryTemplateUpgradeHandler: CapabilityHandler = async (
   );
   return {
     result: {
-      draft: toWireWorkerDefinition(upgrade.draft),
+      draft: toWireWorkerDefinition(
+        upgrade.draft,
+        await findGoalPlannerFamily(client, workspaceId),
+      ),
       templateDigest: upgrade.templateDigest,
       basedOn: upgrade.basedOn,
       differs: [...upgrade.differs],
@@ -1227,7 +1234,7 @@ const publishWorkerDefinitionHandler: CapabilityHandler = async (client, workspa
     },
   );
   return {
-    result: toWireWorkerDefinition(row),
+    result: toWireWorkerDefinition(row, await findGoalPlannerFamily(client, workspaceId)),
     resourceType: 'worker_definition',
     resourceId: row.id,
     auditPayload: credentialReviewAudit(
@@ -1246,7 +1253,7 @@ const deprecateWorkerDefinitionHandler: CapabilityHandler = async (client, works
     { principalId: caller.id, role: caller.role },
   );
   return {
-    result: toWireWorkerDefinition(row),
+    result: toWireWorkerDefinition(row, await findGoalPlannerFamily(client, workspaceId)),
     resourceType: 'worker_definition',
     resourceId: row.id,
   };
@@ -1273,9 +1280,10 @@ const listWorkerDefinitionsHandler: CapabilityHandler = async (client, workspace
     cursor,
     includeOwnDrafts,
   });
+  const plannerFamily = await findGoalPlannerFamily(client, workspaceId);
   return {
     result: {
-      items: page.items.map(toWireWorkerDefinition),
+      items: page.items.map((row) => toWireWorkerDefinition(row, plannerFamily)),
       ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
       ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),
     },

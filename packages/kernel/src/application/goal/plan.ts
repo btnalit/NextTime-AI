@@ -60,6 +60,7 @@ import {
   observeRefusal,
   readGatekeeperPlatformPolicy,
 } from '../gates/index.js';
+import { findGoalPlannerFamily } from '../task/index.js';
 import { type DraftViewer, classifySkillRefs, getWorkerDefinition } from '../worker/index.js';
 
 /**
@@ -894,11 +895,18 @@ export async function validatePlan(
   const parsed = parsePlan(plan);
   const problems: string[] = [];
   let viewer: DraftViewer | null | undefined;
+  // S11 GO9a: the goal planner's family is the platform's, for planning rounds only — its Worker
+  // reads a planning Task's input, so as a step it could do nothing useful.
+  const plannerFamily = await findGoalPlannerFamily(client, workspaceId);
   for (const step of parsed.steps) {
     const definition = await getWorkerDefinition(client, workspaceId, step.worker);
     const ref = `${step.worker.definitionId}@${step.worker.version}`;
     if (!definition || (definition.status === 'draft' && definition.proposedBy !== requester)) {
       problems.push(`step "${step.key}": WorkerDefinition ${ref} does not exist`);
+    } else if (step.worker.definitionId === plannerFamily) {
+      problems.push(
+        `step "${step.key}": WorkerDefinition ${ref} is the goal planner's; it plans goals and does not run a step`,
+      );
     } else if (definition.kind !== 'worker') {
       problems.push(`step "${step.key}": WorkerDefinition ${ref} is ${definition.kind}-kind`);
     } else if (definition.status !== 'published') {

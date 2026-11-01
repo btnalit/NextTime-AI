@@ -1,8 +1,10 @@
 import {
+  DEFAULT_MAX_ATTEMPTS,
   type DecidePlanRevisionResultWire,
   type GoalDetailWire,
   type PlanRevisionSummaryWire,
   type PlanRevisionWire,
+  type PlanStep,
   type PlanningRoundWire,
   visibleLines,
 } from '@nexttime/shared';
@@ -10,18 +12,28 @@ import { type ReactNode, useCallback, useState } from 'react';
 import { useResource } from '../../hooks/useResource.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { formatDateTime, formatRelative } from '../../lib/format.js';
+import {
+  formatDateTime,
+  formatRelative,
+  prettyJsonVisible,
+  redactSensitive,
+} from '../../lib/format.js';
 import type { GoalViewer } from '../../lib/goal-actions.js';
 import {
+  currentPlanningConclusion,
   majorReasonTexts,
   mayDecidePlannerProposal,
   pendingPlannerProposal,
   planningOutcomeText,
   runningPlanningRound,
+  showsRoundDetail,
 } from '../../lib/goal-planner.js';
 import {
   type PlanDiff,
+  bindingSentence,
+  checkKindLabel,
   isStepAuthorityHint,
+  planCheckSentence,
   planDiff,
   planHintText,
   stepFailureText,
@@ -41,6 +53,8 @@ import {
   goalOperationErrors,
   useOperationDone,
 } from './GoalOperationsBar.js';
+import { OutputContractFields } from './OutputContract.js';
+import { WorkerSpecFields } from './WorkerSpecFields.js';
 
 export interface GoalPlannerSectionProps {
   readonly goal: GoalDetailWire;
@@ -73,6 +87,7 @@ export function GoalPlannerSection({
   if (goal.planner === null && goal.planningRounds.length === 0) return null;
   const proposal = pendingPlannerProposal(goal);
   const running = runningPlanningRound(goal);
+  const conclusion = currentPlanningConclusion(goal);
   const rounds = [...goal.planningRounds].reverse();
   return (
     <DashboardCard title={t('目标规划器', 'Goal planner')} data-testid="goal-planner">
@@ -93,6 +108,7 @@ export function GoalPlannerSection({
               )}
         </span>
         {running ? <RunningRound round={running} http={http} t={t} /> : null}
+        {conclusion ? <Conclusion round={conclusion} t={t} /> : null}
         {proposal ? (
           <PlannerProposal
             goal={goal}
@@ -111,15 +127,15 @@ export function GoalPlannerSection({
             </summary>
             <ol className="disclosure-body stack-s">
               {rounds.map((round) => (
-                <RoundItem key={round.id} round={round} http={http} t={t} />
+                <RoundItem key={round.id} goal={goal} round={round} http={http} t={t} />
               ))}
             </ol>
           </details>
         ) : (
           <span className="text-small text-3" data-testid="goal-planner-none">
             {t(
-              '还没有步骤因为需要人决定而失败，规划器没有跑过。',
-              'No step has failed for a person yet, so the planner has not run.',
+              '还没有步骤失败到要人决定，规划器还没跑过。',
+              'No step has failed to the point of a person deciding yet, so the planner has not run.',
             )}
           </span>
         )}
@@ -177,16 +193,66 @@ function RunningRound({
   );
 }
 
+/** UX P2-2 on #864: what the planner concluded about this pause when it proposed nothing — the
+ *  decision is the requester's again, and this is what they were waiting for. */
+function Conclusion({ round, t }: { readonly round: PlanningRoundWire; readonly t: Translate }) {
+  const outcome = planningOutcomeText(round, t);
+  return (
+    <Notice tone="warn" testId="goal-planner-conclusion">
+      <span className="stack-s">
+        <span>
+          {round.status === 'no_revision'
+            ? t(
+                `规划器看过${failedStepText(round, t)}的失败，没有可行的修订。接下来由请求人重试失败的步骤、自己修订计划或取消。`,
+                `The planner looked at the failure of ${failedStepText(round, t)} and found no revision that would do. It is up to the requester now: retry the failed step, revise the plan, or cancel.`,
+              )
+            : t(
+                `规划器没能为${failedStepText(round, t)}的失败给出修订。接下来由请求人重试失败的步骤、自己修订计划或取消。`,
+                `The planner gave no revision for the failure of ${failedStepText(round, t)}. It is up to the requester now: retry the failed step, revise the plan, or cancel.`,
+              )}
+        </span>
+        {outcome ? <span className="text-small text-3">{outcome}</span> : null}
+        {showsRoundDetail(round) && round.detail ? (
+          <p className="pre-wrap text-small" data-testid="goal-planner-conclusion-detail">
+            {round.status === 'no_revision'
+              ? t('规划器的说明：', 'The planner says: ')
+              : t('平台发现：', 'The platform found: ')}
+            {visibleLines(round.detail)}
+          </p>
+        ) : null}
+      </span>
+    </Notice>
+  );
+}
+
+/** UX P3-4 on #864: what became of the revision a round proposed. */
+function proposedFate(
+  goal: GoalDetailWire,
+  revision: number,
+  t: Translate,
+): { readonly zh: string; readonly en: string } | null {
+  const row = goal.revisions.find((candidate) => candidate.revision === revision);
+  if (!row) return null;
+  if (row.status === 'accepted') return { zh: '已接受', en: 'accepted' };
+  if (row.status === 'rejected') return { zh: '已拒绝', en: 'rejected' };
+  return row.basedOnRevision === goal.currentRevision
+    ? { zh: '等请求人决定', en: 'waiting for the requester' }
+    : null;
+}
+
 function RoundItem({
+  goal,
   round,
   http,
   t,
 }: {
+  readonly goal: GoalDetailWire;
   readonly round: PlanningRoundWire;
   readonly http: CapabilityCaller;
   readonly t: Translate;
 }) {
   const outcome = planningOutcomeText(round, t);
+  const fate = round.revision !== null ? proposedFate(goal, round.revision, t) : null;
   return (
     <li className="stack-s" data-testid="goal-planner-round" data-status={round.status}>
       <span className="row-wrap text-small">
@@ -209,8 +275,13 @@ function RoundItem({
         ) : null}
       </span>
       {round.status === 'proposed' && round.revision !== null ? (
-        <span className="text-small">
-          {t(`提了第 ${round.revision} 版修订。`, `Proposed revision v${round.revision}.`)}
+        <span className="text-small" data-testid="goal-planner-round-proposed">
+          {fate
+            ? t(
+                `提了第 ${round.revision} 版修订（${fate.zh}）。`,
+                `Proposed revision v${round.revision} (${fate.en}).`,
+              )
+            : t(`提了第 ${round.revision} 版修订。`, `Proposed revision v${round.revision}.`)}
         </span>
       ) : null}
       {round.status === 'applied' && round.revision !== null ? (
@@ -222,7 +293,7 @@ function RoundItem({
         </span>
       ) : null}
       {outcome ? <span className="text-small text-3">{outcome}</span> : null}
-      {round.detail ? (
+      {showsRoundDetail(round) && round.detail ? (
         <p className="pre-wrap text-small" data-testid="goal-planner-round-detail">
           {round.status === 'no_revision'
             ? t('规划器的说明：', 'The planner says: ')
@@ -313,7 +384,7 @@ function PlannerProposal({
     errorOverrides: errors,
     testId: `goal-planner-${decision}-confirm`,
   });
-  const changeLines = diff ? diffImpact(diff, t) : [];
+  const changeLines = diff ? diffImpact(diff, goal, t) : [];
   const anchor = (decision: Decision, label: string, variant: 'primary' | 'secondary') => (
     <Button
       variant={variant}
@@ -420,7 +491,12 @@ function PlannerProposal({
             `The planner proposed v${proposal.revision}`,
           )}
         </strong>
-        <StatusChip machine="planRevision" status={proposal.status} size="s" />
+        {/* UX P3-8 on #864: not the goal's own 「待确认」 — whose decision it waits for. */}
+        <span className="chip chip-accent chip-s" data-testid="goal-planner-proposal-state">
+          {decides
+            ? t('等你决定', 'Yours to decide')
+            : t('等请求人决定', 'Waiting for the requester')}
+        </span>
         <time className="text-3 text-small" title={formatDateTime(proposal.createdAt)}>
           {formatRelative(proposal.createdAt)}
         </time>
@@ -477,19 +553,31 @@ function PlannerProposal({
   );
 }
 
-/** What accepting changes, one confirm line each: the step keys added, removed (their Workers
- *  stopped) and redefined, and whether the goal's acceptance checks changed. */
-function diffImpact(diff: PlanDiff, t: Translate): string[] {
+/** What accepting changes, one confirm line each: the step keys added, removed (naming the ones
+ *  whose work is still running and stops — UX P3-5 on #864) and redefined, and whether the goal's
+ *  acceptance checks changed. */
+function diffImpact(diff: PlanDiff, goal: GoalDetailWire, t: Translate): string[] {
   const lines: string[] = [];
   if (diff.added.length > 0)
     lines.push(t(`新增步骤：${diff.added.join('、')}`, `Steps added: ${diff.added.join(', ')}`));
-  if (diff.removed.length > 0)
-    lines.push(
-      t(
-        `去掉步骤：${diff.removed.join('、')}（还在运行的会停下）`,
-        `Steps removed: ${diff.removed.join(', ')} (any still running stop)`,
+  if (diff.removed.length > 0) {
+    const running = diff.removed.filter((key) =>
+      goal.steps.some(
+        (step) =>
+          step.stepKey === key &&
+          step.supersededInRevision === null &&
+          (step.status === 'running' || step.status === 'waiting'),
       ),
     );
+    lines.push(
+      running.length > 0
+        ? t(
+            `去掉步骤：${diff.removed.join('、')}（${running.join('、')} 还在运行，会停下）`,
+            `Steps removed: ${diff.removed.join(', ')} (${running.join(', ')} still running, and stop)`,
+          )
+        : t(`去掉步骤：${diff.removed.join('、')}`, `Steps removed: ${diff.removed.join(', ')}`),
+    );
+  }
   if (diff.changed.length > 0)
     lines.push(
       t(
@@ -561,11 +649,88 @@ function ProposalChanges({
           ) : null}
         </ul>
       )}
+      {/* UX P2-3 on #864: what the platform would run for each step added or redefined — the
+          planner's reason is the model's word, this is the plan's. */}
+      {[...diff.added, ...diff.changed].map((key) => {
+        const step = steps.get(key);
+        return step ? (
+          <ProposedStep key={key} step={step} http={http} gateNames={gateNames} t={t} />
+        ) : null;
+      })}
       {plan.hints.map((hint) => (
         <Notice key={`${hint.code}:${hint.stepKey ?? ''}`} tone="warn" testId="goal-planner-hint">
           {planHintText(hint, t, gateNames, 'revision')}
         </Notice>
       ))}
     </div>
+  );
+}
+
+/** One step of the proposed plan as the platform would run it: what it waits for, its Worker's
+ *  settings, the inputs it takes from earlier steps, its output contract, its checks and its
+ *  input (UX P2-3 on #864). */
+function ProposedStep({
+  step,
+  http,
+  gateNames,
+  t,
+}: {
+  readonly step: PlanStep;
+  readonly http: CapabilityCaller;
+  readonly gateNames: ReadonlyMap<string, string>;
+  readonly t: Translate;
+}) {
+  const dependsOn = step.dependsOn ?? [];
+  return (
+    <details className="disclosure" data-testid="goal-planner-step" data-step-key={step.key}>
+      <summary>{t(`步骤 ${step.key} 会怎么跑`, `How step ${step.key} would run`)}</summary>
+      <div className="disclosure-body stack-s">
+        <span className="text-3">
+          {dependsOn.length > 0
+            ? t(`在这些步骤之后：${dependsOn.join('、')}`, `After: ${dependsOn.join(', ')}`)
+            : t('没有前置步骤', 'No earlier step')}
+          {t(
+            ` · 最多尝试 ${step.maxAttempts ?? DEFAULT_MAX_ATTEMPTS} 次`,
+            ` · at most ${step.maxAttempts ?? DEFAULT_MAX_ATTEMPTS} attempts`,
+          )}
+        </span>
+        {step.spec ? (
+          <WorkerSpecFields spec={step.spec} http={http} gateNames={gateNames} t={t} />
+        ) : null}
+        {step.bindings && step.bindings.length > 0 ? (
+          <ul className="stack-s">
+            {step.bindings.map((binding, index) => (
+              <li key={`${binding.to}-${index}`} className="text-3">
+                {bindingSentence(binding, t)}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {step.outputSchema ? (
+          <div className="stack-s">
+            <span className="text-3">{t('输出约定', 'Output contract')}</span>
+            <OutputContractFields schema={step.outputSchema} t={t} />
+          </div>
+        ) : null}
+        {step.acceptance && step.acceptance.length > 0 ? (
+          <ul className="stack-s" data-testid="goal-planner-step-checks">
+            {step.acceptance.map((check) => (
+              <li key={check.key} className="row-wrap">
+                <span className="text-3">{checkKindLabel(check.kind, t)}</span>
+                <span>{planCheckSentence(check, gateNames, t)}</span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {step.input !== undefined ? (
+          <div className="stack-s">
+            <span className="text-3">{t('输入', 'Input')}</span>
+            <pre className="code-block" data-testid="goal-planner-step-input">
+              {prettyJsonVisible(redactSensitive(step.input))}
+            </pre>
+          </div>
+        ) : null}
+      </div>
+    </details>
   );
 }

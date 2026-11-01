@@ -857,6 +857,7 @@ async function plannerWorkers(
   client: PoolClient,
   workspaceId: string,
 ): Promise<readonly Record<string, unknown>[]> {
+  // Not the planner's own family, whoever published a version of it (as `find_workers`).
   const plannerFamily = await findGoalPlannerFamily(client, workspaceId);
   const result = await client.query<{
     id: string;
