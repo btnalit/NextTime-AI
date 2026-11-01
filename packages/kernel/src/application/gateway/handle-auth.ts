@@ -3,6 +3,7 @@ import type { CryptoKey } from 'jose';
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import {
+  ADMIN_AGENT_SESSION_KIND,
   type HandleClaims,
   HandleInvalid,
   HandleRevoked,
@@ -10,6 +11,7 @@ import {
   holderForSessionKind,
   verifyHandle,
 } from '../../governance/capability/index.js';
+import { adminAgentRefusal } from '../admin-agent/index.js';
 import { withAdminClient } from './auth.js';
 
 /**
@@ -41,6 +43,12 @@ import { withAdminClient } from './auth.js';
  * a Handle is container-held is read from the issuing session's `kind` (`holderForSessionKind`) as
  * well as from the token's `hld` claim, so a container-held Handle minted before the claim existed
  * (or by a rolled-back release) is refused as a bearer all the same.
+ *
+ * S11 AA1 (I-A3): a Handle issued under an `admin_agent` session is also refused — `HandleRevoked`,
+ * the same 401 — once the administrator it acts for may no longer run one: the switch is off, or
+ * the user is no longer an active, effective platform administrator (application/admin-agent
+ * `adminAgentRefusal`). Read on every verification, so a demotion written straight into
+ * `users.platform_role` takes effect on the very next call; the dispatcher checks again.
  */
 
 export interface HandleAuthDeps {
@@ -129,14 +137,22 @@ export async function authenticateHandle(
       publicKey: deps.publicKey,
       isRevoked: createDbRevocationCheck(client),
     });
+    const sessionKind = await issuingSessionKind(client, claims.jti);
     const containerHeld =
-      handleHolderOf(claims) === 'container' ||
-      holderForSessionKind(await issuingSessionKind(client, claims.jti)) === 'container';
+      handleHolderOf(claims) === 'container' || holderForSessionKind(sessionKind) === 'container';
     if (containerHeld !== (presentation === 'source')) {
       throw new HandlePresentationRefused(presentation, claims.jti);
     }
     if (await isPrincipalDisabled(client, claims.ws, claims.obo)) {
       throw new HandleRevoked(`handle ${claims.jti} belongs to disabled principal ${claims.obo}`);
+    }
+    if (sessionKind === ADMIN_AGENT_SESSION_KIND) {
+      const refusal = await adminAgentRefusal(client, claims.ws, claims.obo);
+      if (refusal !== null) {
+        throw new HandleRevoked(
+          `handle ${claims.jti} is an admin agent's that may not act: ${refusal}`,
+        );
+      }
     }
     return claims;
   });

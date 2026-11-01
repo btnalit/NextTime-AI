@@ -48,7 +48,7 @@ describe('roll_back_change_segment: confirming a widening item is a person’s',
     ).rejects.toBeInstanceOf(ForbiddenError);
   });
 
-  it('lets a service owner through when it confirms nothing (the domain refuses a widening item)', async () => {
+  it('the handler itself lets a service owner through when it confirms nothing (dispatch refuses it first: actsForPerson)', async () => {
     await expect(
       rollBackChangeSegmentHandler(
         untouchableClient,

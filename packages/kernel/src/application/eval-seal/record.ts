@@ -22,6 +22,9 @@ export interface EvaluationWithheldRecord {
   /** For a capability result: whether what the call wrote to the platform was rolled back with
    *  it (false: the call took effect). */
   readonly rolledBack?: boolean;
+  /** S11 AA1: an admin agent's session, when the refused call came through one — recorded beside
+   *  the Principal, which is the administrator's own (dispatch.ts). */
+  readonly actingSession?: { readonly sessionKind: string; readonly sessionId: string };
 }
 
 /**
@@ -53,6 +56,12 @@ export async function recordEvaluationWithheld(
           payload: {
             ...(record.channel !== undefined ? { channel: record.channel } : {}),
             onBehalfOf: record.principalId,
+            ...(record.actingSession !== undefined
+              ? {
+                  sessionKind: record.actingSession.sessionKind,
+                  sessionId: record.actingSession.sessionId,
+                }
+              : {}),
             where: record.where,
             ...(record.capability !== undefined ? { capability: record.capability } : {}),
             ...(record.rolledBack !== undefined ? { rolledBack: record.rolledBack } : {}),

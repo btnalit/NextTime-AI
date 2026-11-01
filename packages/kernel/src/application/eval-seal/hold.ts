@@ -156,6 +156,9 @@ export interface ProbeHoldRefusal {
   readonly path: ProbeHoldPath;
   readonly capability?: string;
   readonly taskId?: string;
+  /** S11 AA1: an admin agent's session, when the refused call came through one — recorded beside
+   *  the Principal, which is the administrator's own (dispatch.ts). */
+  readonly actingSession?: { readonly sessionKind: string; readonly sessionId: string };
 }
 
 /**
@@ -177,6 +180,12 @@ export async function writeProbeHoldRefusal(
     payload: {
       ...(refusal.channel !== undefined ? { channel: refusal.channel } : {}),
       onBehalfOf: refusal.principalId,
+      ...(refusal.actingSession !== undefined
+        ? {
+            sessionKind: refusal.actingSession.sessionKind,
+            sessionId: refusal.actingSession.sessionId,
+          }
+        : {}),
       ...(refusal.heldPrincipalId !== undefined
         ? { heldPrincipalId: refusal.heldPrincipalId }
         : {}),

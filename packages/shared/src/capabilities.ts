@@ -4098,6 +4098,11 @@ const platformCapabilities = [
 // into my own workspace" action). The platform-scope half (`list_modules`/`set_default_modules`)
 // is in `platformCapabilities` above, `group: 'platform'` (`assertRegistryConsistent`'s own
 // invariant: every `scope:'platform'` capability must be `group:'platform'`, and vice versa).
+//
+// S11 AA1 (I-A1 / I-A4, STATUS legacy 407): every capability here that applies, rolls back or
+// verifies a ChangePlan segment is `actsForPerson` — a service Principal's API key, which also
+// authenticates on the human channel, is refused (403) as a Handle is; the change-plan core checks
+// the applier's Principal kind again at run time.
 // -------------------------------------------------------------------------------------------
 
 /** `preview_pack_install` / `install_pack` `workerGates` (S11 P1-E2): by Worker name, the gates the
@@ -4125,6 +4130,7 @@ const modulesCapabilities = [
     mode: 'write',
     channel: 'human',
     minRole: 'owner',
+    actsForPerson: true,
     paramsSchema: z
       .object({
         name: z.string().min(1),
@@ -4147,6 +4153,7 @@ const modulesCapabilities = [
     mode: 'write',
     channel: 'human',
     minRole: 'owner',
+    actsForPerson: true,
     paramsSchema: z
       .object({
         name: z.string().min(1),
@@ -4208,6 +4215,7 @@ const modulesCapabilities = [
     mode: 'write',
     channel: 'human',
     minRole: 'owner',
+    actsForPerson: true,
     paramsSchema: z
       .object({
         segmentId: z.guid(),
@@ -4219,7 +4227,7 @@ const modulesCapabilities = [
       .strict(),
     resultSchema: wire.ChangeSegmentWireSchema,
     description:
-      'Roll back one applied ChangePlan segment in one transaction: each item, last first, is compared with what is there now and returned to its state before (an item retires the version it published — of an ontology family, a Skill or a Worker — so the family’s head is the one before it again, or the family is no longer installed; an Operation revision is followed by a further version with the content it replaced, since a retired Operation version is never published again; objects and Facts already written stay). Refuses, writing nothing: 409 change_rollback_conflict when an item cannot be rolled back now — its target changed after it (details.items names the later segment to roll back first), is no longer installed, what it restores is gone, it would restore a type name another family has taken, or an Operation it revised has a revision draft under review —, 409 change_segment_rolled_back when it already was, 400 change_confirmation_required when an authority-widening rollback item is not among confirmedOrdinals, 403 when confirmedOrdinals comes from a Principal that is not a person (a service API key), 404 change_segment_not_found. One change_item.roll_back audit row per item.',
+      'Roll back one applied ChangePlan segment in one transaction: each item, last first, is compared with what is there now and returned to its state before (an item retires the version it published — of an ontology family, a Skill or a Worker — so the family’s head is the one before it again, or the family is no longer installed; an Operation revision is followed by a further version with the content it replaced, since a retired Operation version is never published again; objects and Facts already written stay). Refuses, writing nothing: 409 change_rollback_conflict when an item cannot be rolled back now — its target changed after it (details.items names the later segment to roll back first), is no longer installed, what it restores is gone, it would restore a type name another family has taken, or an Operation it revised has a revision draft under review —, 409 change_segment_rolled_back when it already was, 400 change_confirmation_required when an authority-widening rollback item is not among confirmedOrdinals, 403 when the caller is not a person (a service Principal’s API key), 404 change_segment_not_found. One change_item.roll_back audit row per item.',
   },
   {
     name: 'verify_change_segment',
@@ -4227,6 +4235,7 @@ const modulesCapabilities = [
     mode: 'write',
     channel: 'human',
     minRole: 'owner',
+    actsForPerson: true,
     paramsSchema: z.object({ segmentId: z.guid() }).strict(),
     resultSchema: wire.ChangeVerificationResultWireSchema,
     description:
@@ -4271,6 +4280,7 @@ const modulesCapabilities = [
     mode: 'write',
     channel: 'human',
     minRole: 'owner',
+    actsForPerson: true,
     paramsSchema: z
       .object({
         name: z.string().min(1),
@@ -4288,7 +4298,7 @@ const modulesCapabilities = [
       .strict(),
     resultSchema: wire.PackInstallResultWireSchema,
     description:
-      'Install a pack’s latest version into this workspace in one transaction, as one ChangePlan segment: each component whose content differs is published as its family’s next version — an ontology family, a Skill, a Worker (WorkerDefinition) — with this owner as proposer and publisher (installing, upgrading, or replacing a customized family alike — the dry run showed which); a Worker keeps the gates and model its head has, and one the dry run binds is bound to the gates it showed (pass the dry run’s own workerGates). Refuses, writing nothing: 409 version_changed when the latest version is not the reviewed one, 409 pack_dependency_unmet when a pack it builds on (requires.packs) is not installed here at the version it needs — details.unmet lists each, install those first —, 409 change_plan_changed when the dry run would differ from the reviewed digest now — a gate connected or cut off since counts (preview again), 400 invalid_params for workerGates as in preview_pack_install, 400 change_confirmation_required when an authority-widening item is not among confirmedOrdinals, 403 when confirmedOrdinals comes from a Principal that is not a person (a service API key), 409 ontology_namespace_conflict (I-P1), 409 skill_name_conflict, 404 pack_not_found. Already up to date: records nothing. One change_item.apply audit row per item. Right after the install commits, the segment is verified once as the person who installed (trigger system, as verify_change_segment does; its result is verification — null when the run could not be made, the install stands either way).',
+      'Install a pack’s latest version into this workspace in one transaction, as one ChangePlan segment: each component whose content differs is published as its family’s next version — an ontology family, a Skill, a Worker (WorkerDefinition) — with this owner as proposer and publisher (installing, upgrading, or replacing a customized family alike — the dry run showed which); a Worker keeps the gates and model its head has, and one the dry run binds is bound to the gates it showed (pass the dry run’s own workerGates). Refuses, writing nothing: 409 version_changed when the latest version is not the reviewed one, 409 pack_dependency_unmet when a pack it builds on (requires.packs) is not installed here at the version it needs — details.unmet lists each, install those first —, 409 change_plan_changed when the dry run would differ from the reviewed digest now — a gate connected or cut off since counts (preview again), 400 invalid_params for workerGates as in preview_pack_install, 400 change_confirmation_required when an authority-widening item is not among confirmedOrdinals, 403 when the caller is not a person (a service Principal’s API key), 409 ontology_namespace_conflict (I-P1), 409 skill_name_conflict, 404 pack_not_found. Already up to date: records nothing. One change_item.apply audit row per item. Right after the install commits, the segment is verified once as the person who installed (trigger system, as verify_change_segment does; its result is verification — null when the run could not be made, the install stands either way).',
   },
 ] as const satisfies readonly Capability[];
 

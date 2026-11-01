@@ -27920,6 +27920,7 @@
     "sideEffects": false
   },
   {
+    "actsForPerson": true,
     "channel": "human",
     "group": "modules",
     "minRole": "owner",
@@ -28118,6 +28119,7 @@
     "sideEffects": true
   },
   {
+    "actsForPerson": true,
     "channel": "human",
     "group": "modules",
     "minRole": "owner",
@@ -55836,6 +55838,7 @@
     "sideEffects": true
   },
   {
+    "actsForPerson": true,
     "channel": "human",
     "group": "modules",
     "minRole": "owner",
@@ -63056,6 +63059,7 @@
     "sideEffects": true
   },
   {
+    "actsForPerson": true,
     "channel": "human",
     "group": "modules",
     "minRole": "owner",
@@ -63313,6 +63317,7 @@
     "sideEffects": false
   },
   {
+    "actsForPerson": true,
     "channel": "human",
     "group": "modules",
     "minRole": "owner",

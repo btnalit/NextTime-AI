@@ -2,6 +2,7 @@ import type { ChangeItemClassification } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { writeAudit } from '../../substrate/audit/index.js';
 import type { GraphTypeUsage } from '../../substrate/graph/index.js';
+import { assertChangeApplierIsPerson } from './applier.js';
 import { type WideningReason, classificationOf } from './classify.js';
 import {
   ChangeConfirmationRequiredError,
@@ -301,6 +302,9 @@ export interface RollBackWorkspaceSegmentInput {
   readonly segmentId: string;
   /** The person rolling back, in this workspace; also the confirmer of every widening item. */
   readonly rolledBackBy: string;
+  /** How the person reached this: `human`, their own capability call — never a Handle (I-A1,
+   *  checked at run time with the Principal's kind, `applier.ts`). */
+  readonly channel: 'human';
   /** The ordinals of the authority-widening rollback items the person confirmed (I-A4). */
   readonly confirmedOrdinals: readonly number[];
 }
@@ -312,6 +316,13 @@ export async function rollBackWorkspaceSegment(
   workspaceId: string,
   input: RollBackWorkspaceSegmentInput,
 ): Promise<ChangeSegmentRecord> {
+  await assertChangeApplierIsPerson(
+    client,
+    workspaceId,
+    input.channel,
+    input.rolledBackBy,
+    'roll_back',
+  );
   const segment = await loadChangeSegment(client, workspaceId, input.segmentId, {
     forUpdate: true,
   });

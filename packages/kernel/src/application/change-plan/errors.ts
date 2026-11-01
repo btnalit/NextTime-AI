@@ -46,6 +46,22 @@ export class ChangeConfirmationRequiredError extends Error {
   }
 }
 
+/** I-A1 at run time (legacy 407): a segment is applied or rolled back by a person, on the human
+ *  or platform channel, never through a Handle or by a service or agent Principal
+ *  (`assertChangeApplierIsPerson`). Mapped to 403 `forbidden`; nothing was written. The registry
+ *  refuses such a caller first (`actsForPerson` on every segment-writing capability), so this is
+ *  the backstop. */
+export class ChangeApplierNotAPersonError extends Error {
+  readonly action: 'apply' | 'roll_back';
+  constructor(action: 'apply' | 'roll_back', why: string) {
+    super(
+      `a change segment is ${action === 'apply' ? 'applied' : 'rolled back'} by a person only (${why}) — nothing was written`,
+    );
+    this.name = 'ChangeApplierNotAPersonError';
+    this.action = action;
+  }
+}
+
 /** P1-B: the segment was already rolled back — mapped to 409 `change_segment_rolled_back`; nothing
  *  was written. */
 export class ChangeSegmentRolledBackError extends Error {

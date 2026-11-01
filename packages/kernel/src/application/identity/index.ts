@@ -61,7 +61,12 @@ export {
   verifyConsoleSessionToken,
 } from './console-session.js';
 export type { ConsoleSessionClaims, UserSessionRow } from './console-session.js';
-export { changeOwnPassword, revokeUserCredentials, setUserPassword } from './credentials.js';
+export {
+  changeOwnPassword,
+  revokeUserAdminAgentSessions,
+  revokeUserCredentials,
+  setUserPassword,
+} from './credentials.js';
 export type {
   ChangeOwnPasswordInput,
   ChangeOwnPasswordOutcome,

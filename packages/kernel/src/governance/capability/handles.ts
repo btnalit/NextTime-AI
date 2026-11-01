@@ -36,10 +36,10 @@ export type { CapabilityScope, HandleClaims };
  * S1.7, verifies locally with no DB round trip per request); this table is the kernel's own
  * revocation/lineage record.
  *
- * Holder (`HANDLE_HOLDERS`, @nexttime/shared handle-token.ts): a Handle issued under an `entry` or
- * `worker_run` session is container-held — it carries `hld: 'container'`, never enters the agent
- * container, and is only accepted from the container's own address through the source binding
- * (@nexttime/shared handle-binding.ts); every other Handle is a bearer token. The holder follows
+ * Holder (`HANDLE_HOLDERS`, @nexttime/shared handle-token.ts): a Handle issued under an `entry`,
+ * `worker_run` or `admin_agent` session is container-held — it carries `hld: 'container'`, never
+ * enters the agent container, and is only accepted from the container's own address through the
+ * source binding (@nexttime/shared handle-binding.ts); every other Handle is a bearer token. The holder follows
  * from the session kind (`holderForSessionKind`), never from the caller, and every verifier in
  * this kernel re-derives it from the session row too (application/gateway/handle-auth.ts), so a
  * token minted without the claim — by a release that predates it — is still refused as a bearer.
@@ -392,6 +392,173 @@ export interface EntryScopeOptions {
 }
 
 // -------------------------------------------------------------------------------------------
+// ADMIN_AGENT_CEILING_CAPABILITIES — the fixed ceiling for an admin agent's Handle (S11 AA1;
+// docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §5.2, §5.7, I-A1, I-A2)
+// -------------------------------------------------------------------------------------------
+
+/**
+ * Every capability an admin agent's Handle may ever carry — an `admin_agent` session's
+ * (`@nexttime/shared` `SESSION_KIND_VALUES`; its Principal is the administrator's own human
+ * Principal, so this ceiling and the session kind are what keep the agent from acting as the
+ * person). A literal list, never derived from a group or a name prefix: a capability added to the
+ * registry later joins only when someone adds it here, and the CI guard test
+ * (`handles.test.ts`) states this exact set.
+ *
+ * Reads only, for now (coordinator decision on AA1, 2026-11-01): the workspace's graph, the
+ * definitions an administrator works on (Skills, Procedures, ontology types and versions,
+ * WorkerDefinitions — plan §5.2 "读定义类能力"), the goals it may read (on a Handle only its
+ * person's own runs, application/goal views.ts), and observe-class gate calls (decided per call by
+ * `observeRefusal`, as for the entry agent). Two rules hold it there, both checked when the module
+ * loads (`buildAdminAgentCeiling`):
+ *
+ *   a) What the agent writes must never read as its person's own: a record it proposed carries the
+ *      session kind beside the Principal (plan I-A7, STATUS legacy 293 — drafts gain their
+ *      `origin`). Until a capability's handler records that, it does not write through this
+ *      Handle: no `propose_*`, `record_decision`, `invoke_worker` or report here. AA3 adds
+ *      `propose_change_plan` together with that provenance, and widens the mode rule below for the
+ *      capabilities it covers.
+ *   b) Approving, publishing, applying, rolling back and confirming an item are a person's acts in
+ *      the console. Every one of them is human-channel (`assertValidScope` refuses those in any
+ *      Handle), and the dispatcher refuses an `admin_agent` session's call to anything outside
+ *      this list whatever its Handle claims (application/gateway/dispatch.ts) — the same
+ *      administrator, signed in to the console, still can.
+ */
+const ADMIN_AGENT_CEILING_CAPABILITY_NAMES = [
+  // graph: the workspace's objects, Facts and what can run on them
+  'get_object',
+  'traverse',
+  'search',
+  'list_facts',
+  'state_at',
+  'graph_freshness',
+  'graph_overview',
+  'find_operations',
+  'find_workers',
+  'find_procedures',
+  'explain',
+  // definitions
+  'list_skills',
+  'get_skill',
+  'get_skill_draft_verdicts',
+  'list_procedures',
+  'get_type',
+  'list_types',
+  'validate',
+  'list_ontology_versions',
+  'list_worker_definitions',
+  // goals
+  'get_goal',
+  'list_goals',
+  'get_goal_revision',
+  'list_goal_unresolved_actions',
+  // Tasks and gates, observe-class only
+  'get_task',
+  'list_allowed_operations',
+  'observe_operation',
+  ENTRY_CEILING_GATE_OBSERVE_CAPABILITY_NAME,
+] as const;
+
+/** The registry groups an admin-agent capability may come from. `governance` (`request_action`),
+ *  `ingest`, `connection`, `platform` and any group added later are not among them: a new group —
+ *  one for code hosting, say — joins only by changing this set and the guard test (I-A2). */
+const ADMIN_AGENT_CEILING_GROUPS: ReadonlySet<string> = new Set([
+  'graph',
+  'epistemic',
+  'meta',
+  'ontology',
+  'worker',
+  'goal',
+  'task',
+  'gate',
+]);
+
+/** Thrown while the module loads when `ADMIN_AGENT_CEILING_CAPABILITY_NAMES` breaks a rule of the
+ *  ceiling — the kernel does not start with an admin agent ceiling wider than its rules allow. */
+export class AdminAgentCeilingError extends Error {
+  constructor(name: string, rule: string) {
+    super(`admin agent ceiling: "${name}" ${rule}`);
+    this.name = 'AdminAgentCeilingError';
+  }
+}
+
+/** Checks every name against the ceiling's rules (this section's doc comment) and freezes it. */
+export function buildAdminAgentCeiling(names: readonly string[]): readonly string[] {
+  for (const name of names) {
+    const capability = getCapability(name);
+    if (!capability) throw new AdminAgentCeilingError(name, 'is not a registered capability');
+    if (capability.channel !== 'handle') {
+      throw new AdminAgentCeilingError(
+        name,
+        'is human-channel: a person decides it in the console, never an agent (I-A1)',
+      );
+    }
+    if (capability.scope === 'platform') {
+      throw new AdminAgentCeilingError(
+        name,
+        'is a platform capability: only a platform administrator in the console calls it (I-A1)',
+      );
+    }
+    if (!ADMIN_AGENT_CEILING_GROUPS.has(capability.group)) {
+      throw new AdminAgentCeilingError(
+        name,
+        `is in group "${capability.group}", which the admin agent ceiling does not admit (I-A2)`,
+      );
+    }
+    if (isExecuteClassCapability(name)) {
+      throw new AdminAgentCeilingError(name, 'is execute-class');
+    }
+    if (capability.mode !== 'observe') {
+      throw new AdminAgentCeilingError(
+        name,
+        `has mode "${capability.mode}": a write joins the ceiling only with provenance that records the admin agent's session kind (legacy 293)`,
+      );
+    }
+  }
+  return Object.freeze([...new Set(names)]);
+}
+
+/** The admin agent's capability ceiling (S11 AA1), computed and checked once at module load. */
+export const ADMIN_AGENT_CEILING_CAPABILITIES: readonly string[] = buildAdminAgentCeiling(
+  ADMIN_AGENT_CEILING_CAPABILITY_NAMES,
+);
+
+const ADMIN_AGENT_CEILING_SET: ReadonlySet<string> = new Set(ADMIN_AGENT_CEILING_CAPABILITIES);
+
+/** Whether an admin agent's Handle may carry (and its session call) `name`. */
+export function isAdminAgentCeilingCapability(name: string): boolean {
+  return ADMIN_AGENT_CEILING_SET.has(name);
+}
+
+/** The session kind an admin agent runs under (migration core 0049). */
+export const ADMIN_AGENT_SESSION_KIND = 'admin_agent';
+
+/**
+ * Builds an admin agent's Handle scope: `ADMIN_AGENT_CEILING_CAPABILITIES`, narrowed by the
+ * administrator's role in this workspace when given (`roleMayUseCapability`, as `entryScope` does
+ * — being a platform administrator gives no workspace role), with `resources` copied in. A gate
+ * scope is carried only with a capability that reads it (R-35, as `entryScope`).
+ */
+export function adminAgentScope(
+  resources: Readonly<Record<string, readonly string[]>> = {},
+  options: EntryScopeOptions = {},
+): CapabilityScope {
+  const role = options.role;
+  const capabilities =
+    role === undefined
+      ? [...ADMIN_AGENT_CEILING_CAPABILITIES]
+      : ADMIN_AGENT_CEILING_CAPABILITIES.filter((name) =>
+          roleMayUseCapability(role, getCapability(name)),
+        );
+  const carriesGates = capabilities.some((name) => GATE_SCOPE_READERS.has(name));
+  const scoped: Record<string, string[]> = {};
+  for (const [key, ids] of Object.entries(resources)) {
+    if (key === 'gatekeeper' && !carriesGates) continue;
+    scoped[key] = [...ids];
+  }
+  return { capabilities, resources: scoped };
+}
+
+// -------------------------------------------------------------------------------------------
 // HandleClaims — schema/type now defined in @nexttime/shared, re-exported above.
 // -------------------------------------------------------------------------------------------
 
@@ -489,12 +656,17 @@ interface SessionRow {
 }
 
 /**
- * The session kinds whose Handles are container-held: the entry agent's (`entry`) and a
- * WorkerRun's (`worker_run`). The platform mints these for an agent container it runs, so it can
- * keep them outside that container; every other kind is a member's own client (`mcp_session`, via
- * `issue_handle`) or an external runtime (`service`), which must hold its token itself.
+ * The session kinds whose Handles are container-held: the entry agent's (`entry`), a WorkerRun's
+ * (`worker_run`) and, S11 AA1, an admin agent's (`admin_agent`, plan §5.2 "Handle 用来源绑定（I19），
+ * 不出容器"). The platform mints these for an agent container it runs, so it can keep them outside
+ * that container; every other kind is a member's own client (`mcp_session`, via `issue_handle`) or
+ * an external runtime (`service`), which must hold its token itself.
  */
-export const CONTAINER_HELD_SESSION_KINDS: ReadonlySet<string> = new Set(['entry', 'worker_run']);
+export const CONTAINER_HELD_SESSION_KINDS: ReadonlySet<string> = new Set([
+  'entry',
+  'worker_run',
+  ADMIN_AGENT_SESSION_KIND,
+]);
 
 export function holderForSessionKind(kind: string | undefined): HandleHolder {
   return kind !== undefined && CONTAINER_HELD_SESSION_KINDS.has(kind) ? 'container' : 'bearer';
@@ -528,6 +700,20 @@ export async function issueHandle(
   const sessionRow = sessionResult.rows[0];
   if (!sessionRow) {
     throw new HandleIssuanceError(`no session found for sessionId "${params.sessionId}"`);
+  }
+
+  // S11 AA1 (I-A2): no issuance path gives an admin agent more than its ceiling — `issue_handle`
+  // never opens an `admin_agent` session, and one that is opened (application/admin-agent) issues
+  // through here.
+  if (sessionRow.kind === ADMIN_AGENT_SESSION_KIND) {
+    const outside = params.scope.capabilities.filter(
+      (name) => !isAdminAgentCeilingCapability(name),
+    );
+    if (outside.length > 0) {
+      throw new HandleIssuanceError(
+        `an admin agent's Handle cannot carry ${outside.map((name) => quotedName(name)).join(', ')}: outside ADMIN_AGENT_CEILING_CAPABILITIES`,
+      );
+    }
   }
 
   const holder = holderForSessionKind(sessionRow.kind);
@@ -853,11 +1039,12 @@ export async function revokeWorkspaceEntrySessionHandles(
 
 /**
  * W5.5 (STATUS leftover 18): every Handle whose ceiling was narrowed by `principalId`'s role at
- * issuance — the resident entry agent's `kind='entry'` session(s) *and* every `kind='mcp_session'`
- * session `issue_handle` (application/gateway/issue-handle-handler.ts) opened on their behalf. A
- * role change must reach both: an `mcp_session` Handle can carry a caller-chosen ttl of up to 30
- * days, so leaving it alone would keep owner/builder-gated capability names on a demoted principal
- * for exactly that long. `revokeEntrySessionHandles` above stays entry-only for its existing
+ * issuance — the resident entry agent's `kind='entry'` session(s), every `kind='mcp_session'`
+ * session `issue_handle` (application/gateway/issue-handle-handler.ts) opened on their behalf and
+ * (S11 AA1) their `admin_agent` session (`adminAgentScope` narrows by role too). A role change must
+ * reach them all: an `mcp_session` Handle can carry a caller-chosen ttl of up to 30 days, so
+ * leaving it alone would keep owner/builder-gated capability names on a demoted principal for
+ * exactly that long. `revokeEntrySessionHandles` above stays entry-only for its existing
  * Grant/Profile-change callers, whose ceilings do not depend on session kind the same way.
  */
 export async function revokeRoleScopedSessionHandles(
@@ -867,7 +1054,7 @@ export async function revokeRoleScopedSessionHandles(
 ): Promise<void> {
   const result = await client.query<{ id: string }>(
     `select id from sessions
-     where workspace_id = $1 and on_behalf_of = $2 and kind in ('entry', 'mcp_session')`,
+     where workspace_id = $1 and on_behalf_of = $2 and kind in ('entry', 'mcp_session', 'admin_agent')`,
     [workspaceId, principalId],
   );
   for (const row of result.rows) {

@@ -15,11 +15,16 @@ import { withWorkspace } from '../../adapters/db/pool.js';
 import { GatekeeperClientError, gateRefusalOf } from '../../adapters/gatekeeper-client/index.js';
 import { ActionInDoubtError } from '../../governance/approval/index.js';
 import {
+  ADMIN_AGENT_SESSION_KIND,
+  isAdminAgentCeilingCapability,
+} from '../../governance/capability/index.js';
+import {
   quotedName,
   redactSuspectedSecrets,
   redactedForAudit,
 } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
+import { type AdminAgentRefusalReason, adminAgentRefusal } from '../admin-agent/index.js';
 import {
   EvaluationContentWithheldError,
   EvaluationProbeHoldError,
@@ -145,6 +150,61 @@ export class CapabilityNotImplementedError extends Error {
     super(`capability "${name}" is not implemented yet`);
     this.name = 'CapabilityNotImplementedError';
   }
+}
+
+/**
+ * S11 AA1: the session a Handle's call came through, when it is an admin agent's — written into
+ * every audit row of the call (I-A7, coordinator constraint a): the row's actor is the
+ * administrator's own Principal, and this is what says the agent did it, not the person.
+ */
+interface ActingSession {
+  readonly sessionKind: typeof ADMIN_AGENT_SESSION_KIND;
+  readonly sessionId: string;
+}
+
+/** Why the dispatcher refused an admin agent's call: the authority check (I-A3), or a capability
+ *  outside `ADMIN_AGENT_CEILING_CAPABILITIES` whatever the Handle's scope says (I-A1, I-A2 —
+ *  approving, publishing, applying, rolling back and confirming are a person's, in the console). */
+export type AdminAgentCallRefusal = AdminAgentRefusalReason | 'outside_ceiling';
+
+/** Thrown by {@link dispatchCapability} for an admin agent's call it refuses (403). */
+export class AdminAgentCallRefusedError extends ForbiddenError {
+  readonly refusal: AdminAgentCallRefusal;
+  constructor(name: string, refusal: AdminAgentCallRefusal) {
+    super(
+      refusal === 'outside_ceiling'
+        ? `capability "${name}" is outside the admin agent's ceiling: a person does this in the console`
+        : `the admin agent may not act: ${refusal}`,
+    );
+    this.name = 'AdminAgentCallRefusedError';
+    this.refusal = refusal;
+  }
+}
+
+/**
+ * S11 AA1 (I-A3, I-A1/I-A2): an admin agent's call is checked here for every capability dispatched,
+ * whoever built the caller — `authenticateHandle` refuses its Handle too, but internal callers
+ * build Handle callers of their own. Its person must still be allowed one now, and the capability
+ * must be in its ceiling: the Handle's scope is not trusted for that.
+ */
+async function assertAdminAgentCall(
+  client: Parameters<typeof adminAgentRefusal>[0],
+  workspaceId: string,
+  principalId: string,
+  name: string,
+): Promise<void> {
+  const refusal = await adminAgentRefusal(client, workspaceId, principalId);
+  if (refusal !== null) throw new AdminAgentCallRefusedError(name, refusal);
+  if (!isAdminAgentCeilingCapability(name)) {
+    throw new AdminAgentCallRefusedError(name, 'outside_ceiling');
+  }
+}
+
+/** `actingSession` as audit payload fields (none for any other session). */
+function actingSessionFields(actingSession: ActingSession | undefined): Record<string, string> {
+  return actingSession === undefined
+    ? {}
+    : { sessionKind: actingSession.sessionKind, sessionId: actingSession.sessionId };
 }
 
 /**
@@ -314,6 +374,7 @@ async function auditGateRefusal(
     readonly name: string;
     readonly params: Record<string, unknown>;
     readonly err: unknown;
+    readonly actingSession?: ActingSession;
   },
 ): Promise<void> {
   if (!(call.err instanceof GatekeeperClientError)) return;
@@ -337,6 +398,7 @@ async function auditGateRefusal(
           payload: {
             channel: call.channel,
             onBehalfOf: call.principalId,
+            ...actingSessionFields(call.actingSession),
             ...auditParams(call.capability, call.params),
             ...(resourceRef.resourceRef !== undefined
               ? { resourceRef: resourceRef.resourceRef }
@@ -384,6 +446,7 @@ async function auditEvaluationWithheld(
     readonly channel: string;
     readonly name: string;
     readonly err: unknown;
+    readonly actingSession?: ActingSession;
   },
 ): Promise<void> {
   if (!(call.err instanceof EvaluationContentWithheldError) || call.err.recorded) return;
@@ -392,6 +455,7 @@ async function auditEvaluationWithheld(
     workspaceId: call.workspaceId,
     principalId: call.principalId,
     channel: call.channel,
+    ...(call.actingSession ? { actingSession: call.actingSession } : {}),
     where: call.err.where,
     capability: call.name,
     ...(call.err.where === 'capability_result' ? { rolledBack: call.err.rolledBack } : {}),
@@ -413,11 +477,13 @@ async function auditProbeHold(
     readonly channel: string;
     readonly name: string;
     readonly err: unknown;
+    readonly actingSession?: ActingSession;
   },
 ): Promise<void> {
   if (!(call.err instanceof EvaluationProbeHoldError) || call.err.recorded) return;
   call.err.recorded = true;
   await recordProbeHoldRefusal(deps.pool, {
+    ...(call.actingSession ? { actingSession: call.actingSession } : {}),
     workspaceId: call.workspaceId,
     principalId: call.principalId,
     ...(call.err.heldPrincipalId !== call.principalId
@@ -447,6 +513,7 @@ async function sealedError(
     readonly principalId: string;
     readonly channel: string;
     readonly name: string;
+    readonly actingSession?: ActingSession;
   },
   err: unknown,
   options: SealOptions = {},
@@ -505,6 +572,7 @@ async function auditGoalStepClosed(
     readonly name: string;
     readonly params: Record<string, unknown>;
     readonly err: unknown;
+    readonly actingSession?: ActingSession;
   },
 ): Promise<void> {
   const err = call.err;
@@ -531,6 +599,7 @@ async function auditGoalStepClosed(
           payload: {
             channel: call.channel,
             onBehalfOf: call.principalId,
+            ...actingSessionFields(call.actingSession),
             ...auditParams(call.capability, call.params),
             outcome: 'refused',
             refusal,
@@ -569,6 +638,7 @@ async function auditUnknownOperation(
     /** S10 E3-2a: an evaluation session's call is recorded under its own action (`evaluation
      *  .fixture_call`), naming the capability — never as a call a gate refused. */
     readonly auditAction?: string;
+    readonly actingSession?: ActingSession;
   },
 ): Promise<void> {
   const err = call.err;
@@ -593,6 +663,7 @@ async function auditUnknownOperation(
               : {}),
             channel: call.channel,
             onBehalfOf: call.principalId,
+            ...actingSessionFields(call.actingSession),
             ...auditParams(call.capability, rest),
             ...(resourceRef.resourceRef !== undefined
               ? { resourceRef: resourceRef.resourceRef }
@@ -640,6 +711,7 @@ async function recordRefusedOutput(
     readonly name: string;
     readonly params: Record<string, unknown>;
     readonly err: unknown;
+    readonly actingSession?: ActingSession;
   },
 ): Promise<void> {
   const err = call.err;
@@ -659,6 +731,7 @@ async function recordRefusedOutput(
           payload: {
             channel: call.channel,
             onBehalfOf: call.principalId,
+            ...actingSessionFields(call.actingSession),
             ...auditParams(call.capability, call.params),
             outcome: 'refused',
             refusal: {
@@ -677,6 +750,59 @@ async function recordRefusedOutput(
     const detail = recordErr instanceof Error ? recordErr.message : String(recordErr);
     console.error(
       `[kernel] record of a refused output failed (capability=${call.name}): ${detail}`.replace(
+        /\n|\r/g,
+        '',
+      ),
+    );
+  }
+}
+
+/**
+ * S11 AA1: an admin agent's call the dispatcher refused (`AdminAgentCallRefusedError`) leaves an
+ * audit row, in its own transaction like `auditGateRefusal`'s — its own rolled back with the
+ * refusal: the capability, its redacted params, the acting session, `outcome: 'refused'` and the
+ * refusal (`outside_ceiling`, or why its person may not run one now). A call outside the ceiling
+ * means a Handle that should not exist, so the row is how it is found. Failing to write it is
+ * logged and never replaces the refusal itself.
+ */
+async function auditAdminAgentRefusal(
+  deps: DispatchDeps,
+  call: {
+    readonly workspaceId: string;
+    readonly principalId: string;
+    readonly channel: string;
+    readonly capability: Capability;
+    readonly name: string;
+    readonly params: Record<string, unknown>;
+    readonly err: unknown;
+    readonly actingSession?: ActingSession;
+  },
+): Promise<void> {
+  const err = call.err;
+  if (!(err instanceof AdminAgentCallRefusedError)) return;
+  try {
+    await withWorkspace(
+      deps.pool,
+      { workspaceId: call.workspaceId, principalId: call.principalId },
+      (client) =>
+        writeAudit(client, {
+          workspaceId: call.workspaceId,
+          actorPrincipalId: call.principalId,
+          action: call.name,
+          payload: {
+            channel: call.channel,
+            onBehalfOf: call.principalId,
+            ...actingSessionFields(call.actingSession),
+            ...auditParams(call.capability, call.params),
+            outcome: 'refused',
+            refusal: { code: 'admin_agent_refused', status: 403, reason: err.refusal },
+          },
+        }),
+    );
+  } catch (auditErr) {
+    const detail = auditErr instanceof Error ? auditErr.message : String(auditErr);
+    console.error(
+      `[kernel] audit of an admin agent refusal failed (capability=${call.name}): ${detail}`.replace(
         /\n|\r/g,
         '',
       ),
@@ -784,6 +910,8 @@ export async function dispatchCapability(
   // S10 E3-2a: set once the call is known to come from an evaluation Task's Worker (below).
   let evaluation: EvaluationSession | null = null;
   let sealOptions: SealOptions = {};
+  // S11 AA1: set once the call is known to come through an admin agent's session (below).
+  let actingSession = undefined as ActingSession | undefined;
 
   const handlerResult = await withWorkspace(
     deps.pool,
@@ -799,6 +927,19 @@ export async function dispatchCapability(
       );
       if (workspaceRow.rows[0]?.status !== 'active') {
         throw new ForbiddenError('workspace_disabled: this workspace is disabled');
+      }
+      // S11 AA1 (I-A1–I-A3): an admin agent's call — its Principal is the administrator's own, so
+      // the session kind is what tells it apart. Checked before anything else the call does, and
+      // recorded on every audit row it leaves.
+      if (caller.channel === 'handle' && caller.claims.sid) {
+        const session = await client.query<{ kind: string }>(
+          'select kind from sessions where workspace_id = $1 and id = $2',
+          [workspaceId, caller.claims.sid],
+        );
+        if (session.rows[0]?.kind === ADMIN_AGENT_SESSION_KIND) {
+          actingSession = { sessionKind: ADMIN_AGENT_SESSION_KIND, sessionId: caller.claims.sid };
+          await assertAdminAgentCall(client, workspaceId, principalId, name);
+        }
       }
       // S10 E3-2c (legacy 514): no agent acting for a Principal the evaluation seal has paused
       // gets anything done — every Handle call for it is refused before it runs, the same way
@@ -892,6 +1033,7 @@ export async function dispatchCapability(
           ...result.auditPayload,
           channel: caller.channel,
           onBehalfOf,
+          ...actingSessionFields(actingSession),
           ...auditParams(capability, parsed.data as Record<string, unknown>),
           ...(resourceRef.resourceRef !== undefined
             ? { resourceRef: resourceRef.resourceRef }
@@ -910,7 +1052,9 @@ export async function dispatchCapability(
       params: parsed.data as Record<string, unknown>,
       err,
       ...(evaluation ? { auditAction: evaluationAuditAction(name) } : {}),
+      ...(actingSession ? { actingSession } : {}),
     };
+    await auditAdminAgentRefusal(deps, refused);
     await auditGateRefusal(deps, refused);
     await auditEvaluationWithheld(deps, refused);
     await auditProbeHold(deps, refused);
@@ -920,7 +1064,13 @@ export async function dispatchCapability(
     throw await sealedError(deps, refused, err, sealOptions);
   });
 
-  const sealed = { workspaceId, principalId, channel: caller.channel, name };
+  const sealed = {
+    workspaceId,
+    principalId,
+    channel: caller.channel,
+    name,
+    ...(actingSession ? { actingSession } : {}),
+  };
   const finalResult = handlerResult.afterCommit
     ? await handlerResult.afterCommit(deps.pool).catch(async (err: unknown) => {
         throw await sealedError(deps, sealed, err, sealOptions);

@@ -329,8 +329,9 @@ export const rollBackChangeSegmentHandler: CapabilityHandler = async (
   }
   // A confirmation of an authority-widening item is a person's (I-A4, the same rule as
   // `attest_fact`): a *service* Principal's API key also authenticates on the human channel, and
-  // a service is not a person. Without a confirmation a service owner may still roll back a
-  // segment that widens nothing; one that does is then refused 400 change_confirmation_required.
+  // a service is not a person. Since S11 AA1 (legacy 407) the capability is `actsForPerson`, so
+  // dispatch refuses such a caller before this runs, and `rollBackWorkspaceSegment` checks the
+  // Principal again; this stays as the handler's own statement.
   const confirmedOrdinals = input.confirmedOrdinals ?? [];
   if (confirmedOrdinals.length > 0 && context.principal?.kind !== 'human') {
     throw new ForbiddenError(
@@ -340,6 +341,7 @@ export const rollBackChangeSegmentHandler: CapabilityHandler = async (
   const segment = await rollBackWorkspaceSegment(client, workspaceId, {
     segmentId: input.segmentId,
     rolledBackBy: context.principalId,
+    channel: 'human',
     confirmedOrdinals,
   });
   return {
