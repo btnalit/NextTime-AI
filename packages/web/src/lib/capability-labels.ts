@@ -1535,11 +1535,11 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
       'An admin agent reads newer releases, their migrations and pi compatibility, without links or host commands.',
   },
   platform_state_invariants: {
-    zh: '智能体查看不变量检查',
-    en: 'Agent reads invariant checks',
-    zhHint: '管理员智能体查看最近一次不变量检查各项的违规数，不含违规记录本身。',
+    zh: '智能体查看平台一致性检查',
+    en: 'Agent reads platform consistency checks',
+    zhHint: '管理员智能体查看内核最近一次一致性检查（不变量检查）各项的违规数，不含违规记录本身。',
     enHint:
-      "An admin agent reads the latest invariant check's violation counts, without the violating records.",
+      "An admin agent reads the kernel's latest consistency (invariant) check's violation counts, without the violating records.",
   },
   platform_status: {
     zh: '查看服务状态',
