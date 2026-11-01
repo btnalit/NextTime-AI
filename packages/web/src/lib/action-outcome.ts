@@ -8,6 +8,7 @@ import {
 import { withPlaintextTlsHint } from './errors.js';
 import { actionKindTagText } from './format.js';
 import type { Translate } from './i18n.js';
+import { type ActionTargetFields, actionTargetText } from './queue-scope.js';
 
 /**
  * lib/action-outcome (legacy 287, UX acceptance of #586): one reading of where a gate action
@@ -24,13 +25,19 @@ import type { Translate } from './i18n.js';
  * `queuedBehind` (`ActionRequestWireSchema`).
  */
 
-/** `ActionRequestWireSchema.outcomeInDoubt` / `queuedBehind` (packages/shared/src/wire/governance.ts). */
+/** `ActionRequestWireSchema.outcomeInDoubt` / `queuedBehind` / `target`
+ *  (packages/shared/src/wire/governance.ts). */
 export interface ActionWaitingFields {
   readonly outcomeInDoubt?: { readonly since: string; readonly reason: string | null } | null;
   readonly queuedBehind?: {
     readonly status: 'pending_approval' | 'executing';
     readonly outcomeInDoubt: boolean;
+    /** S11 GO12: `target` — held back on the same instance; `gate` — a request on the whole
+     *  system is involved. Absent from an older kernel: read as the whole system. */
+    readonly scope?: 'target' | 'gate';
   } | null;
+  /** S11 GO12: the instance it acts on; `null` — the whole system; absent from an older kernel. */
+  readonly target?: ActionTargetFields | null;
 }
 
 export type ActionOutcomeKind =
@@ -178,6 +185,7 @@ export function actionOutcomeOfToolResult(text: string): ActionOutcome | null {
           id: object.id as string,
           outcomeInDoubt: waiting.outcomeInDoubt ?? null,
           queuedBehind: waiting.queuedBehind ?? null,
+          ...(waiting.target !== undefined ? { target: waiting.target } : {}),
         }
       : null;
   }
@@ -361,8 +369,16 @@ export function waitingReason(
       ),
       message: withPlaintextTlsHint(
         t(
-          '执行请求发出后没有收到门的答复，动作可能已经执行。平台约 10 分钟后向门查询这次请求，查到就记下结果，从不重新执行；查不到会标为「结果不明」交你核对。在这之前，同一个系统上排在它后面的请求都会等它。',
-          'The call got no answer from the gate after it was sent, so the action may have run. About 10 minutes after the call the platform asks the gate about this request and records what it says — it never runs it again; if the gate cannot say, it is marked "outcome unknown" for you to check. Until then, later requests on the same system wait for it.',
+          `执行请求发出后没有收到门的答复，动作可能已经执行。平台约 10 分钟后向门查询这次请求，查到就记下结果，从不重新执行；查不到会标为「结果不明」交你核对。${
+            row.target
+              ? `在这之前，同一个目标（${actionTargetText(row.target, t)}）上排在它后面的请求和作用于整个系统的请求会等它，别的目标上的请求照常执行。`
+              : '在这之前，同一个系统上排在它后面的请求都会等它。'
+          }`,
+          `The call got no answer from the gate after it was sent, so the action may have run. About 10 minutes after the call the platform asks the gate about this request and records what it says — it never runs it again; if the gate cannot say, it is marked "outcome unknown" for you to check. ${
+            row.target
+              ? `Until then, later requests on the same target (${actionTargetText(row.target, t)}) and requests on the whole system wait for it; requests on other targets run as usual.`
+              : 'Until then, later requests on the same system wait for it.'
+          }`,
         ),
         row.outcomeInDoubt.reason,
         t,
@@ -371,6 +387,16 @@ export function waitingReason(
   }
   if ((row.status === 'approved' || row.status === 'auto_approved') && row.queuedBehind) {
     const behind = row.queuedBehind;
+    if (behind.scope === 'target') {
+      return {
+        tone: 'info',
+        title: t('排队中', 'Queued'),
+        message: sameTargetWaiting(behind, row.target, t),
+      };
+    }
+    if (behind.scope === 'gate') {
+      return { tone: 'info', title: t('排队中', 'Queued'), message: wholeSystemWaiting(behind, t) };
+    }
     return {
       tone: 'info',
       title: t('排队中', 'Queued'),
@@ -394,6 +420,53 @@ export function waitingReason(
   return null;
 }
 
+type QueuedBehind = NonNullable<ActionWaitingFields['queuedBehind']>;
+
+/** S11 GO12, `scope: 'target'`: an earlier request on the same instance holds it back. */
+function sameTargetWaiting(
+  behind: QueuedBehind,
+  target: ActionTargetFields | null | undefined,
+  t: Translate,
+): string {
+  const zhWhich = target ? `同一个目标（${actionTargetText(target, t)}）` : '同一个目标';
+  const enWhich = target ? `the same target (${actionTargetText(target, t)})` : 'the same target';
+  return behind.status === 'pending_approval'
+    ? t(
+        `${zhWhich}上更早的一条请求还在等审批。同一个目标上的请求按提出顺序执行，它有了决定后这条才会执行；别的目标上的请求不受影响。`,
+        `An earlier request on ${enWhich} is still awaiting approval. Requests on one target run in the order they were made, so this one runs once that one is decided; requests on other targets are not held up.`,
+      )
+    : behind.outcomeInDoubt
+      ? t(
+          `${zhWhich}上更早的一条请求结果不明，平台正在向门查询。它有结论后这条才会执行。`,
+          `An earlier request on ${enWhich} has an unknown outcome and the platform is asking the gate about it. This one runs once that one is settled.`,
+        )
+      : t(
+          `${zhWhich}上更早的一条请求正在执行，它结束后这条才会执行。`,
+          `An earlier request on ${enWhich} is still running; this one runs after it.`,
+        );
+}
+
+/** S11 GO12, `scope: 'gate'`: a request on the whole system is involved — this one, the one in
+ *  the way, or one between them — so it waits as every request of the system did before. */
+function wholeSystemWaiting(behind: QueuedBehind, t: Translate): string {
+  const zhWhy = '作用于整个系统的请求不和这个系统上的其他请求同时执行，';
+  const enWhy = 'A request on the whole system never runs alongside other requests on it, so';
+  return behind.status === 'pending_approval'
+    ? t(
+        `同一个系统上更早的一条请求还在等审批。${zhWhy}它有了决定后这条才会执行。`,
+        `An earlier request on the same system is still awaiting approval. ${enWhy} this one runs once that one is decided.`,
+      )
+    : behind.outcomeInDoubt
+      ? t(
+          `同一个系统上更早的一条请求结果不明，平台正在向门查询。${zhWhy}它有结论后这条才会执行。`,
+          `An earlier request on the same system has an unknown outcome and the platform is asking the gate about it. ${enWhy} this one runs once that one is settled.`,
+        )
+      : t(
+          `同一个系统上更早的一条请求正在执行。${zhWhy}它结束后这条才会执行。`,
+          `An earlier request on the same system is still running. ${enWhy} this one runs after it.`,
+        );
+}
+
 /** The same reason in a few words, for a list row: `null` when the row says neither. */
 export function waitingShortLabel(
   row: { readonly status: string } & ActionWaitingFields,
@@ -407,6 +480,26 @@ export function waitingShortLabel(
   }
   if ((row.status === 'approved' || row.status === 'auto_approved') && row.queuedBehind) {
     const behind = row.queuedBehind;
+    if (behind.scope === 'target') {
+      return {
+        tone: 'info',
+        label:
+          behind.status === 'pending_approval'
+            ? t(
+                '排队中：同一目标上更早的请求在等审批',
+                'Queued: an earlier request on the same target awaits approval',
+              )
+            : behind.outcomeInDoubt
+              ? t(
+                  '排队中：同一目标上更早的请求结果不明',
+                  'Queued: an earlier request on the same target has an unknown outcome',
+                )
+              : t(
+                  '排队中：同一目标上更早的请求正在执行',
+                  'Queued: an earlier request on the same target is running',
+                ),
+      };
+    }
     return {
       tone: 'info',
       label:

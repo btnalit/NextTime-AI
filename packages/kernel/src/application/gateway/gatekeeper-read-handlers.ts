@@ -209,6 +209,15 @@ function toWireOperationSummary(record: OperationRecord, revision?: RevisionChan
     ...(absentAnswers !== undefined && record.absentAnswersReview !== undefined
       ? { absentAnswersReview: { ...record.absentAnswersReview } }
       : {}),
+    // S11 GO12: what its calls queue against, so the catalog says it before anyone publishes it.
+    ...(record.operation.target !== undefined
+      ? {
+          target: {
+            objectType: record.operation.target.object_type,
+            params: [...record.operation.target.params],
+          },
+        }
+      : {}),
   };
 }
 

@@ -249,6 +249,60 @@ describe('CatalogPage', () => {
     expect(detail.textContent).not.toContain('表示不存在的回答');
   });
 
+  it('S11 GO12: an execute Operation’s detail says what its calls queue with; an observe one says nothing', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'container.restart',
+            status: 'published',
+            mode: 'execute',
+            blastRadius: 'medium',
+            autoApprovable: false,
+            target: { objectType: 'Container', params: ['id'] },
+          },
+          {
+            gatekeeperId: 'gk-1',
+            name: 'host.reboot',
+            status: 'published',
+            mode: 'execute',
+            blastRadius: 'high',
+            autoApprovable: false,
+          },
+          {
+            gatekeeperId: 'gk-1',
+            name: 'container.list',
+            status: 'published',
+            mode: 'observe',
+            blastRadius: 'low',
+            autoApprovable: true,
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+    });
+    renderPage(http);
+    const rowNamed = async (name: string) => {
+      const row = (await screen.findAllByTestId('catalog-row')).find((candidate) =>
+        candidate.textContent?.includes(name),
+      );
+      if (!row) throw new Error(`${name} row missing`);
+      return row;
+    };
+    let detail = await selectRow(await rowNamed('container.restart'));
+    expect(within(detail).getByTestId('catalog-detail-queue-scope').textContent).toBe(
+      '按目标：Container（参数 id）。同一个 Container 上的请求按提出顺序执行，别的 Container 上的请求不等它。',
+    );
+    expect(detail.textContent).toContain('排队范围');
+    detail = await selectRow(await rowNamed('host.reboot'));
+    expect(within(detail).getByTestId('catalog-detail-queue-scope').textContent).toBe(
+      '整个系统：这个系统上的请求按提出顺序逐个执行。',
+    );
+    detail = await selectRow(await rowNamed('container.list'));
+    expect(within(detail).queryByTestId('catalog-detail-queue-scope')).toBeNull();
+  });
+
   it('legacy 349: the first version of a write or high-impact Operation is confirmed before it is published; a low-impact observe draft stays one click', async () => {
     const http = scriptedHttp({
       list_operations: () => ({

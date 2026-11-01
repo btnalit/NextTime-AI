@@ -15,6 +15,7 @@ import type { ActionRequestRowLike } from './action-card.js';
 import type { ActionWaitingFields } from './action-outcome.js';
 import type { Translate } from './i18n.js';
 import { principalKindLabel, roleLabel } from './labels.js';
+import type { OperationTargetFields } from './queue-scope.js';
 
 /**
  * lib/governance: wire shapes for the S3.11 governance capabilities (docs/development-tasks.md
@@ -216,6 +217,10 @@ export interface OperationCatalogRow {
    *  declaring them, who confirmed at publish that the gate's credentials can see what it looks up,
    *  and when. Absent on a draft and on a version published before the confirmation existed. */
   readonly absentAnswersReview?: OperationAbsentAnswersReviewWire;
+  /** S11 GO12 (`OperationSummaryWire.target`): on an execute Operation that declares one, the
+   *  instance its calls act on — they queue only with calls on the same one. Absent: its calls
+   *  queue with every call of the system. */
+  readonly target?: OperationTargetFields;
 }
 
 /** S11 「门确认不存在」 A: what an observe Operation's declaration means, in a sentence — the

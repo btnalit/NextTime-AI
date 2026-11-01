@@ -62,6 +62,7 @@ import {
   provenNotDraftReviewer,
   provenNotProposer,
 } from '../lib/publish-authority.js';
+import { operationQueueScopeText } from '../lib/queue-scope.js';
 import { type WorkspaceRole, isProvenMember } from '../lib/role.js';
 import type { CatalogTab } from '../lib/router.js';
 import { hrefs } from '../lib/router.js';
@@ -1244,6 +1245,19 @@ function OperationDetailView({
       key: 'blastRadius',
       label: t('影响范围', 'Blast radius'),
       value: <StatusChip machine="blastRadius" status={row.blastRadius} size="s" />,
+    });
+  }
+  // S11 GO12: what an execute call queues with — the same instance, or every call of the system —
+  // so a reviewer sees whether publishing it lets calls on other instances run past each other.
+  if (row.mode === 'execute') {
+    items.push({
+      key: 'queueScope',
+      label: t('排队范围', 'Queue scope'),
+      value: (
+        <span data-testid="catalog-detail-queue-scope">
+          {operationQueueScopeText(row.target, t)}
+        </span>
+      ),
     });
   }
   // S11 「门确认不存在」 A: which of the target's answers mean "not there" — the gate then

@@ -17782,6 +17782,25 @@
                 ],
                 "type": "string"
               },
+              "target": {
+                "additionalProperties": false,
+                "properties": {
+                  "objectType": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "objectType",
+                  "params"
+                ],
+                "type": "object"
+              },
               "version": {
                 "exclusiveMinimum": 0,
                 "type": "integer"
@@ -34337,6 +34356,25 @@
                   "deprecated"
                 ],
                 "type": "string"
+              },
+              "target": {
+                "additionalProperties": false,
+                "properties": {
+                  "objectType": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "objectType",
+                  "params"
+                ],
+                "type": "object"
               },
               "version": {
                 "exclusiveMinimum": 0,

@@ -184,6 +184,11 @@ function operationWideningText(
         return t('Operation 读取的资源增加', 'Operation reads more');
       case 'writes':
         return t('Operation 写入的资源增加', 'Operation writes more');
+      case 'target':
+        return t(
+          'Operation 改为按目标排队：别的目标上的请求不再等它',
+          'Operation queues per target: requests on other targets no longer wait for it',
+        );
     }
   }
   const label = operationFieldLabel(field, t);

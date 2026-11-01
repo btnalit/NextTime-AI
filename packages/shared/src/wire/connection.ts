@@ -139,6 +139,14 @@ export const OperationSummaryWireSchema = z
      *  call looks up — so the declared answers come only when it does not exist. Absent on a draft,
      *  on a version that declares none, and on one published before the confirmation existed. */
     absentAnswersReview: OperationAbsentAnswersReviewWireSchema.optional(),
+    /** S11 GO12: on an execute-class Operation that declares one, the one instance a call acts on
+     *  (`OperationSchema.target`): its calls wait only for earlier calls on the same instance and
+     *  for those on the whole Gatekeeper. Absent: a call waits for every earlier call of its
+     *  Gatekeeper. */
+    target: z
+      .object({ objectType: z.string(), params: z.array(z.string()) })
+      .strict()
+      .optional(),
   })
   .strict();
 export type OperationSummaryWire = z.infer<typeof OperationSummaryWireSchema>;
