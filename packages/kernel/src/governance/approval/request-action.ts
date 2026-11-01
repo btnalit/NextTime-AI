@@ -4,6 +4,7 @@ import {
   ACTION_REQUEST_TRANSITIONS,
   type ActionRequestEvent,
   type ActionRequestStatus,
+  type ActionTarget,
   type BlastRadius,
   type CapabilityScope,
   type PolicyDecision,
@@ -109,6 +110,11 @@ export interface RequestActionInput {
    *  later, possibly in a different transaction/process (S2.4, migrations/governance/
    *  0004_action_request_params.sql). Defaults to `{}`. */
   readonly params?: Record<string, unknown>;
+  /** S11 GO12: the one instance the call acts on (`ActionRequestRow.target`), from the published
+   *  Operation's declaration and `params` (`@nexttime/shared` `actionTargetOf`); omitted (`null`)
+   *  for a call on the whole Gatekeeper. Its identity must be `params`' own values — the database
+   *  refuses any other (governance/0030). */
+  readonly target?: ActionTarget | null;
   /** The requesting Handle's scope — `policy/engine.ts`'s coverage/`deny` check reads
    *  `resources['gatekeeper']` from this (see that module's `GATEKEEPER_RESOURCE_SCOPE_KEY` doc
    *  comment for the exact convention). */
@@ -272,8 +278,8 @@ async function insertActionRequestRow(
     `insert into action_requests (
        workspace_id, status, gatekeeper_id, action_kind, resource_scope, blast_radius,
        policy_decision, await_decision, on_behalf_of, parent_worker_run_id, actor_runtime,
-       idempotency_key, params, requester_can_approve, operation_digest, step_run_id
-     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $16)
+       idempotency_key, params, requester_can_approve, operation_digest, step_run_id, target
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $16, $17::jsonb)
      returning ${ACTION_REQUEST_ROW_COLUMNS}`,
     [
       workspaceId,
@@ -292,6 +298,7 @@ async function insertActionRequestRow(
       requesterCanApprove,
       input.operationDigest ?? null,
       input.stepRunId ?? null,
+      input.target ? JSON.stringify(input.target) : null,
     ],
   );
   const row = result.rows[0];

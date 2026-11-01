@@ -435,6 +435,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         reconciliation: null,
         reconciliationDecisionId: null,
         reexecuteDecisionId: null,
+        target: null,
       };
       const outcome = await executor.execute(actionRequest);
       expect(outcome).toMatchObject({

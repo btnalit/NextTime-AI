@@ -1787,13 +1787,15 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       /** A request of `stepRunId` on `gatekeeperId`, raised by the Worker of the step's latest
        *  attempt (as I-G9's monitor requires), brought to `status` the way the platform does:
-       *  requested, then approved by the owner or started. */
+       *  requested, then approved by the owner or started. `container` (S11 GO12): the request
+       *  acts on that one Container (`id`), not on the whole gate. */
       async function requestOn(
         gatekeeperId: string,
         stepRunId: string,
         onBehalfOf: string,
         status: 'pending_approval' | 'approved' | 'auto_approved' | 'executing',
         actionKind: string,
+        container?: string,
       ): Promise<string> {
         const parentWorkerRunId = await latestRun(stepRunId);
         const row = await admin((client) =>
@@ -1807,6 +1809,12 @@ describe.runIf(DATABASE_URL !== undefined)(
             actorRuntime: 'pi',
             stepRunId,
             parentWorkerRunId,
+            ...(container !== undefined
+              ? {
+                  params: { id: container },
+                  target: { type: 'Container', params: ['id'], identity: [container] },
+                }
+              : {}),
             requesterScope: {
               capabilities: ['request_action'],
               resources: { gatekeeper: [gatekeeperId] },
@@ -2065,6 +2073,86 @@ describe.runIf(DATABASE_URL !== undefined)(
           detail:
             'step x: attempt 2 failed (contract_violation) and is not retried on its own — retry it; step y: attempt 2 failed (contract_violation) and is not retried on its own — retry it; or revise the plan or cancel',
         });
+      });
+
+      it('S11 GO12 (roadmap acceptance): a step awaiting approval on one container holds back no other step’s call on another container of the gate — that step completes and the goal moves on; the same container stays in order', async () => {
+        const requester = await newPrincipal();
+        const goalRunId = await startGoal(requester, [
+          { key: 'a' },
+          { key: 'b' },
+          { key: 'c', dependsOn: ['b'] },
+        ]);
+        await advance(goalRunId, requester);
+        const started = await stepsOf(goalRunId);
+        const stepA = started.a as StepRunRow;
+        const stepB = started.b as StepRunRow;
+
+        const gatekeeperId = await newGatekeeper();
+        const repairWeb = await requestOn(
+          gatekeeperId,
+          stepA.id,
+          requester,
+          'pending_approval',
+          'test.go12.repair',
+          'web',
+        );
+        const restartDb = await requestOn(
+          gatekeeperId,
+          stepB.id,
+          requester,
+          'auto_approved',
+          'test.go12.restart',
+          'db',
+        );
+        const restartWeb = await requestOn(
+          gatekeeperId,
+          stepA.id,
+          requester,
+          'auto_approved',
+          'test.go12.restart',
+          'web',
+        );
+
+        const executed: string[] = [];
+        const drainer = new ApprovalDrainer({
+          executor: {
+            async execute(row) {
+              executed.push(`${row.actionKind}:${row.target?.identity.join('/') ?? '-'}`);
+              return { ok: true };
+            },
+          },
+          withTransaction: createAdminWithTransaction(pool),
+        });
+        // Step b's call runs; step a's pending repair holds back only step a's call on web.
+        expect(
+          await drainer.drainGatekeeper(workspaceId, SYSTEM_ACTOR_PLACEHOLDER, gatekeeperId),
+        ).toMatchObject({ processed: 1, stoppedAtPending: true });
+        expect(executed).toEqual(['test.go12.restart:db']);
+        expect(await actionStatus(restartDb)).toBe('executed');
+        expect(await actionStatus(restartWeb)).toBe('auto_approved');
+
+        // Step b completes and the goal moves on to c, while a still waits for its approval.
+        await completeStep(stepB.id, requester);
+        await advance(goalRunId, requester);
+        const moved = await stepsOf(goalRunId);
+        expect(moved.b?.status).toBe('succeeded');
+        expect(moved.c?.status).toBe('running');
+        expect(moved.a?.status).toBe('running');
+
+        // Approved: web runs in order — the repair, then the restart behind it.
+        await admin((client) =>
+          approveActionRequest(client, workspaceId, {
+            actionRequestId: repairWeb,
+            approverPrincipalId: ownerId,
+            approverRole: 'owner',
+          }),
+        );
+        await drainer.drainGatekeeper(workspaceId, SYSTEM_ACTOR_PLACEHOLDER, gatekeeperId);
+        expect(executed).toEqual([
+          'test.go12.restart:db',
+          'test.go12.repair:web',
+          'test.go12.restart:web',
+        ]);
       });
 
       it('S7: a cancel withdraws what has not run, in its own transaction; the gate drains the next goal’s action at once; the running Task is terminated', async () => {

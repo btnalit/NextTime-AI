@@ -3,6 +3,7 @@ import type {
   ActionRequestFailureKind,
   ActionRequestReconciliation,
   ActionRequestStatus,
+  ActionTarget,
   BlastRadius,
   PolicyDecision,
 } from '@nexttime/shared';
@@ -77,6 +78,12 @@ export interface ActionRequestRow {
    *  `effect_absent`) — the step's next request with the same identity is then a new row (I-G4,
    *  `request-action.ts`). `null` otherwise; recorded once. */
   readonly reexecuteDecisionId: string | null;
+  /** S11 GO12 (migrations/governance/0030_action_request_target.sql): the one instance this request
+   *  acts on — taken when it was made from the Operation version then published and its own params
+   *  (`@nexttime/shared` `actionTargetOf`), never changed. `null`: it acts on the whole Gatekeeper,
+   *  and is ordered against every request of it (I-Q1, `queue.ts`) — every request made before
+   *  that migration, and every one whose Operation declares no target or was not published (I17). */
+  readonly target: ActionTarget | null;
 }
 
 /** Legacy K: `ActionRequestRow.operationDigest` of a request made against no definition at all —
@@ -112,6 +119,7 @@ export interface ActionRequestDbRow {
   reconciliation: ActionRequestReconciliation | null;
   reconciliation_decision_id: string | null;
   reexecute_decision_id: string | null;
+  target: ActionTarget | null;
 }
 
 export function mapActionRequestRow(row: ActionRequestDbRow): ActionRequestRow {
@@ -142,6 +150,7 @@ export function mapActionRequestRow(row: ActionRequestDbRow): ActionRequestRow {
     reconciliation: row.reconciliation,
     reconciliationDecisionId: row.reconciliation_decision_id,
     reexecuteDecisionId: row.reexecute_decision_id,
+    target: row.target,
   };
 }
 
@@ -150,7 +159,7 @@ export const ACTION_REQUEST_ROW_COLUMNS =
   'policy_decision, approval_decision_id, await_decision, on_behalf_of, parent_worker_run_id, ' +
   'actor_runtime, idempotency_key, requested_at, executing_at, executed_at, failed_at, ' +
   'failure_kind, params, requester_can_approve, operation_digest, step_run_id, reconciliation, ' +
-  'reconciliation_decision_id, reexecute_decision_id';
+  'reconciliation_decision_id, reexecute_decision_id, target';
 
 export class ActionRequestNotFoundError extends Error {
   constructor(workspaceId: string, actionRequestId: string) {

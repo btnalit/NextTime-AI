@@ -1,4 +1,4 @@
-import { OperationSchema } from '@nexttime/shared';
+import { OperationSchema, manifestTargetProblems } from '@nexttime/shared';
 import type { Operation } from '@nexttime/shared';
 
 /**
@@ -22,7 +22,7 @@ export function parseManifestJson(raw: string, source: string): Operation[] {
   if (!Array.isArray(parsed)) {
     throw new Error(`manifest "${source}" must be a JSON array of Operations`);
   }
-  return parsed.map((entry, index) => {
+  const operations = parsed.map((entry, index) => {
     const result = OperationSchema.safeParse(entry);
     if (!result.success) {
       const name =
@@ -35,4 +35,12 @@ export function parseManifestJson(raw: string, source: string): Operation[] {
     }
     return result.data;
   });
+  // S11 GO12 (I-Q4): two Operations naming one type by different numbers of params.
+  const [inconsistent] = manifestTargetProblems(operations);
+  if (inconsistent) {
+    throw new Error(
+      `manifest "${source}" entry ${operations.findIndex((operation) => operation.name === inconsistent.operation)} (name: ${inconsistent.operation}) failed OperationSchema validation: ${inconsistent.reason}: ${inconsistent.message}`,
+    );
+  }
+  return operations;
 }

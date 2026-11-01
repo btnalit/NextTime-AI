@@ -183,6 +183,241 @@ export function operationNameProblem(name: string): OperationNameProblem | undef
   return undefined;
 }
 
+/**
+ * S11 GO12 (docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §4.10): which instance an
+ * execute-class call acts on, so a gate's queue orders it only against the calls it can conflict
+ * with. `object_type` is the one ObjectType the call reads and writes; `params`, in order, name the
+ * call's params whose values are that instance's identity. Every call of the same gate that names
+ * an instance of `object_type` gives its identity in the same order.
+ *
+ * An Operation that declares none is ordered against every call of its gate, as before GO12. One
+ * whose effect reaches more than one instance (a compose project's containers, a bulk change) does
+ * not declare one. A governance field like `reads` / `writes`: the gate does not act on it, so it
+ * is not part of the definition's digest; declaring one loosens the order, which is reviewed
+ * (`OPERATION_FIELD_RULES`).
+ */
+export const OperationTargetSchema = z
+  .object({
+    object_type: z.string().min(1),
+    params: z.array(z.string().min(1)).min(1).max(8),
+  })
+  .strict();
+export type OperationTarget = z.infer<typeof OperationTargetSchema>;
+
+/** Why a `target` declaration is refused where an Operation is parsed — each the first word of the
+ *  issue's message and its `params.reason`:
+ *   - `target_not_execute`: only an execute-class call is queued;
+ *   - `target_type_not_sole_written`: the call writes `object_type` and reads or writes nothing
+ *     else (a call touching another type could conflict with calls on it, which no target says);
+ *   - `target_params_duplicate`: a param named twice;
+ *   - `target_param_not_required_scalar`: a param the call need not carry, or one whose schema type
+ *     is not `string` or `integer` (an array or object names more than one instance, or none);
+ *   - `target_arity_inconsistent` (a whole manifest, {@link manifestTargetProblems}): two
+ *     Operations of one gate name instances of the same type by different numbers of params. */
+export const OPERATION_TARGET_REFUSAL_VALUES = [
+  'target_not_execute',
+  'target_type_not_sole_written',
+  'target_params_duplicate',
+  'target_param_not_required_scalar',
+  'target_arity_inconsistent',
+] as const;
+export type OperationTargetRefusal = (typeof OPERATION_TARGET_REFUSAL_VALUES)[number];
+
+/** One refused `target` declaration: the reason, the path under the Operation, a message. */
+export interface OperationTargetProblem {
+  readonly reason: OperationTargetRefusal;
+  readonly path: readonly (string | number)[];
+  readonly message: string;
+}
+
+/** The JSON Schema `type` of `params_schema`'s param `name`, when it is a single string. */
+function paramSchemaType(paramsSchema: Record<string, unknown>, name: string): string | undefined {
+  const properties = paramsSchema.properties;
+  if (properties === null || typeof properties !== 'object') return undefined;
+  const property = (properties as Record<string, unknown>)[name];
+  if (property === null || typeof property !== 'object') return undefined;
+  const type = (property as Record<string, unknown>).type;
+  return typeof type === 'string' ? type : undefined;
+}
+
+function requiredParams(paramsSchema: Record<string, unknown>): readonly string[] {
+  const required = paramsSchema.required;
+  return Array.isArray(required) ? required.filter((v): v is string => typeof v === 'string') : [];
+}
+
+/** What is wrong with `operation`'s own `target` declaration (see
+ *  {@link OPERATION_TARGET_REFUSAL_VALUES}); empty when it declares none or a valid one. */
+export function operationTargetProblems(operation: {
+  readonly mode: string;
+  readonly reads: readonly string[];
+  readonly writes: readonly string[];
+  readonly params_schema: Record<string, unknown>;
+  readonly target?: OperationTarget | undefined;
+}): OperationTargetProblem[] {
+  const target = operation.target;
+  if (target === undefined) return [];
+  const problems: OperationTargetProblem[] = [];
+  if (operation.mode !== 'execute') {
+    problems.push({
+      reason: 'target_not_execute',
+      path: ['target'],
+      message: `only an execute-class call is queued (this one is ${operation.mode})`,
+    });
+  }
+  const touched = new Set([...operation.reads, ...operation.writes]);
+  if (
+    !operation.writes.includes(target.object_type) ||
+    touched.size !== 1 ||
+    !touched.has(target.object_type)
+  ) {
+    problems.push({
+      reason: 'target_type_not_sole_written',
+      path: ['target', 'object_type'],
+      message: `the call must write ${target.object_type} and read or write no other type (reads: ${JSON.stringify(operation.reads)}, writes: ${JSON.stringify(operation.writes)})`,
+    });
+  }
+  const seen = new Set<string>();
+  const required = requiredParams(operation.params_schema);
+  target.params.forEach((name, index) => {
+    if (seen.has(name)) {
+      problems.push({
+        reason: 'target_params_duplicate',
+        path: ['target', 'params', index],
+        message: `param ${JSON.stringify(name)} is named twice`,
+      });
+    }
+    seen.add(name);
+    const type = paramSchemaType(operation.params_schema, name);
+    if (!required.includes(name) || (type !== 'string' && type !== 'integer')) {
+      problems.push({
+        reason: 'target_param_not_required_scalar',
+        path: ['target', 'params', index],
+        message: `param ${JSON.stringify(name)} must be required and of type string or integer (type: ${type ?? 'none'}, required: ${required.includes(name)})`,
+      });
+    }
+  });
+  return problems;
+}
+
+/** S11 GO12: across the Operations of one gate (a whole manifest), every `target` naming the same
+ *  `object_type` names the same number of params — an identity given with two arities never
+ *  matches, so calls on one instance would not be ordered. Refused as `target_arity_inconsistent`,
+ *  pointing at each Operation whose arity differs from the first one declared for the type. */
+export function manifestTargetProblems(
+  operations: readonly { readonly name: string; readonly target?: OperationTarget | undefined }[],
+): (OperationTargetProblem & { readonly operation: string })[] {
+  const first = new Map<string, { readonly name: string; readonly arity: number }>();
+  const problems: (OperationTargetProblem & { readonly operation: string })[] = [];
+  for (const operation of operations) {
+    const target = operation.target;
+    if (target === undefined) continue;
+    const seen = first.get(target.object_type);
+    if (seen === undefined) {
+      first.set(target.object_type, { name: operation.name, arity: target.params.length });
+    } else if (seen.arity !== target.params.length) {
+      problems.push({
+        operation: operation.name,
+        reason: 'target_arity_inconsistent',
+        path: ['target', 'params'],
+        message: `${operation.name} names ${target.object_type} by ${target.params.length} params, ${seen.name} by ${seen.arity}`,
+      });
+    }
+  }
+  return problems;
+}
+
+function isOperationTargetRefusal(value: unknown): value is OperationTargetRefusal {
+  return (OPERATION_TARGET_REFUSAL_VALUES as readonly unknown[]).includes(value);
+}
+
+/** S11 GO12 (I-Q4): the first `target` refusal among the issues of parsing with
+ *  {@link OperationSchema} (alone, or inside a larger shape), so every boundary that parses an
+ *  Operation refuses it with the same reason. `at` is where the Operation sits in what was parsed
+ *  (the path before `target`: `[]` for one Operation, `['operations', 3]` inside an announcement);
+ *  `path` is under the Operation, as {@link operationTargetProblems} gives it. */
+export function operationTargetRefusalOf(
+  issues: readonly {
+    readonly code: string;
+    readonly path: readonly PropertyKey[];
+    readonly message: string;
+    readonly params?: unknown;
+  }[],
+): (OperationTargetProblem & { readonly at: readonly PropertyKey[] }) | undefined {
+  for (const issue of issues) {
+    if (issue.code !== 'custom') continue;
+    const reason = (issue.params as { readonly reason?: unknown } | undefined)?.reason;
+    if (!isOperationTargetRefusal(reason)) continue;
+    const index = issue.path.lastIndexOf('target');
+    if (index < 0) continue;
+    const prefix = `${reason}: `;
+    return {
+      reason,
+      at: issue.path.slice(0, index),
+      path: issue.path
+        .slice(index)
+        .filter((key): key is string | number => typeof key !== 'symbol'),
+      message: issue.message.startsWith(prefix)
+        ? issue.message.slice(prefix.length)
+        : issue.message,
+    };
+  }
+  return undefined;
+}
+
+/** S11 GO12: the instance one call acts on, as its request records it — `type` and `identity` decide
+ *  what it conflicts with; `params` say where `identity` came from. */
+export interface ActionTarget {
+  readonly type: string;
+  readonly params: readonly string[];
+  readonly identity: readonly (string | number)[];
+}
+
+/** S11 GO12: the instance a call of `operation` with `params` acts on, or `null` — ordered against
+ *  every call of its gate — when the Operation declares none, or a declared param is missing or
+ *  not of its schema's type (`"5"` for an `integer` param, say): a value the gate might read as
+ *  another one never narrows the order. */
+export function actionTargetOf(
+  operation: {
+    readonly params_schema: Record<string, unknown>;
+    readonly target?: OperationTarget | undefined;
+  },
+  params: Readonly<Record<string, unknown>>,
+): ActionTarget | null {
+  const target = operation.target;
+  if (target === undefined) return null;
+  const identity: (string | number)[] = [];
+  for (const name of target.params) {
+    const value = params[name];
+    const type = paramSchemaType(operation.params_schema, name);
+    if (type === 'string' && typeof value === 'string') identity.push(value);
+    else if (type === 'integer' && typeof value === 'number' && Number.isSafeInteger(value)) {
+      identity.push(value);
+    } else return null;
+  }
+  return { type: target.object_type, params: [...target.params], identity };
+}
+
+/** S11 GO12 (I-Q1): whether two calls of the same gate are ordered against each other — always when
+ *  either acts on the whole gate (`null`), never when they act on instances of two types (each
+ *  call reads and writes its type alone, I-Q4), and for one type unless both name the instance by
+ *  the same params and their values differ: an instance named by other params (`id` against
+ *  `name`, or a different number of them) may be the same one, and is not told apart (I-Q3).
+ *  Erring this way only orders calls that need not be. */
+export function actionTargetsConflict(
+  a: Pick<ActionTarget, 'type' | 'params' | 'identity'> | null,
+  b: Pick<ActionTarget, 'type' | 'params' | 'identity'> | null,
+): boolean {
+  if (a === null || b === null) return true;
+  if (a.type !== b.type) return false;
+  const sameParams =
+    a.params.length === b.params.length &&
+    a.params.every((name, index) => name === b.params[index]);
+  if (!sameParams || a.identity.length !== b.identity.length) return true;
+  // `5` and `"5"` (two Operations typing one param differently) may be the same instance to the
+  // gate: compared as text, so they are ordered against each other.
+  return a.identity.every((value, index) => String(value) === String(b.identity[index]));
+}
+
 /** The fields of an Operation, as an object schema — for picking fields
  *  (`@nexttime/gatekeeper-base`'s digest) and listing them. Parse an Operation with
  *  {@link OperationSchema}, which adds the rules between fields. */
@@ -215,6 +450,8 @@ export const OperationFieldsSchema = z.object({
   read_only_hint: z.boolean().optional(),
   destructive_hint: z.boolean().optional(),
   idempotent_hint: z.boolean().optional(),
+  /** S11 GO12: the one instance an execute-class call acts on ({@link OperationTargetSchema}). */
+  target: OperationTargetSchema.optional(),
 });
 
 /**
@@ -225,6 +462,15 @@ export const OperationFieldsSchema = z.object({
  * parsed: a gate's manifest, an import, a proposal.
  */
 export const OperationSchema = OperationFieldsSchema.superRefine((operation, ctx) => {
+  // S11 GO12: a `target` the rules refuse, each with its reason (OPERATION_TARGET_REFUSAL_VALUES).
+  for (const problem of operationTargetProblems(operation)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...problem.path],
+      message: `${problem.reason}: ${problem.message}`,
+      params: { reason: problem.reason },
+    });
+  }
   if (operation.mode === 'observe') return;
   const binding = operation.binding;
   const field =

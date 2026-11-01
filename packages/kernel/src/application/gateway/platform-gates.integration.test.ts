@@ -376,6 +376,54 @@ describe.runIf(DATABASE_URL !== undefined)(
         ).rejects.toThrow();
       });
 
+      it('S11 GO12 (I-Q4): a refused target declaration is refused 400 invalid_operation_target with its reason, nothing written', async () => {
+        const targetGate = { ...announceBody, gateId: 'target-fixture-gate' };
+        const onThing = (name: string, params: string[]): Operation => ({
+          ...EXECUTE_OP,
+          name,
+          params_schema: {
+            type: 'object',
+            properties: { id: { type: 'string' }, zone: { type: 'string' } },
+            required: ['id', 'zone'],
+          },
+          writes: ['Thing'],
+          target: { object_type: 'Thing', params },
+        });
+        // One Operation's own declaration: an observe-class call declares one.
+        const own = await announce({
+          ...targetGate,
+          operations: [{ ...OBSERVE_OP, target: { object_type: 'Thing', params: ['id'] } }],
+        });
+        expect(own.statusCode).toBe(400);
+        expect(own.json().error).toMatchObject({
+          code: 'invalid_operation_target',
+          details: { reason: 'target_not_execute', operation: OBSERVE_OP.name, path: ['target'] },
+        });
+        // Across the announcement: one type named by one param here, two there.
+        const arity = await announce({
+          ...targetGate,
+          operations: [onThing('restart_thing', ['id']), onThing('move_thing', ['zone', 'id'])],
+        });
+        expect(arity.statusCode).toBe(400);
+        expect(arity.json().error).toMatchObject({
+          code: 'invalid_operation_target',
+          details: {
+            reason: 'target_arity_inconsistent',
+            operation: 'move_thing',
+            path: ['target', 'params'],
+          },
+        });
+        await expect(
+          callAsAdmin('get_gate_instance', { gateId: 'target-fixture-gate' }),
+        ).rejects.toThrow();
+        // A valid one is taken.
+        const valid = await announce({
+          ...targetGate,
+          operations: [OBSERVE_OP, onThing('restart_thing', ['id'])],
+        });
+        expect(valid.statusCode).toBe(200);
+      });
+
       it('creates the packaged connector as platform_preset next to the four generic kinds', async () => {
         const connectors = await callAsAdmin<ListEnvelope<ConnectorWire>>('list_connectors');
         const names = connectors.items.map((c) => c.name).sort();

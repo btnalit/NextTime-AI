@@ -4,6 +4,7 @@ import {
   OPERATION_FIELD_RULES,
   OPERATION_GOVERNANCE_KEYS,
   diffOperationGovernanceFields,
+  governanceFitsDefinition,
   operationGovernanceChangeDirection,
   operationGovernanceFieldsOf,
   operationGovernanceProperties,
@@ -31,6 +32,8 @@ function op(overrides: Partial<Operation> = {}): Operation {
     ...overrides,
   };
 }
+
+const WEB_TARGET = { object_type: 'Container', params: ['id'] };
 
 function direction(before: Partial<Operation>, after: Partial<Operation>) {
   return operationGovernanceChangeDirection(
@@ -105,6 +108,16 @@ describe('operation governance direction (one classifier, STATUS leftover 344)',
       after: { idempotent_hint: false },
       expected: 'tightened',
     },
+    // S11 GO12 (I-Q5): declaring a target lets a call pass the gate's calls on other instances;
+    // changing it orders it against other calls; dropping it orders it against every call again.
+    { key: 'target', before: {}, after: { target: WEB_TARGET }, expected: 'loosened' },
+    {
+      key: 'target',
+      before: { target: WEB_TARGET },
+      after: { target: { object_type: 'Container', params: ['name'] } },
+      expected: 'loosened',
+    },
+    { key: 'target', before: { target: WEB_TARGET }, after: {}, expected: 'tightened' },
   ];
 
   for (const { key, before, after, expected } of cases) {
@@ -143,6 +156,7 @@ describe('operation governance direction (one classifier, STATUS leftover 344)',
         read_only_hint: true,
         destructive_hint: false,
         idempotent_hint: true,
+        target: WEB_TARGET,
       }),
     );
     expect(diffOperationGovernanceFields(before, after).changedFields).toEqual([
@@ -155,7 +169,17 @@ describe('operation governance direction (one classifier, STATUS leftover 344)',
       'readOnlyHint',
       'destructiveHint',
       'idempotentHint',
+      'target',
     ]);
+  });
+
+  it('S11 GO12: the same target declared again is no change; the rule says `changed` for another one', () => {
+    expect(direction({ target: WEB_TARGET }, { target: { ...WEB_TARGET } })).toBe('neutral');
+    expect(
+      OPERATION_FIELD_RULES.target(WEB_TARGET, { object_type: 'Container', params: ['name'] }),
+    ).toBe('changed');
+    expect(OPERATION_FIELD_RULES.target(undefined, WEB_TARGET)).toBe('loosened');
+    expect(OPERATION_FIELD_RULES.target(WEB_TARGET, undefined)).toBeNull();
   });
 
   it('every governance key is a field OPERATION_FIELD_RULES ranks', () => {
@@ -176,7 +200,7 @@ describe('operationGovernanceProperties / withOperationGovernance', () => {
         writes: ['Container'],
         destructive_hint: false,
       },
-      removed: ['read_only_hint', 'idempotent_hint'],
+      removed: ['read_only_hint', 'idempotent_hint', 'target'],
     });
     const applied = withOperationGovernance(
       op({ read_only_hint: true, idempotent_hint: true }),
@@ -185,5 +209,39 @@ describe('operationGovernanceProperties / withOperationGovernance', () => {
     expect(applied).not.toHaveProperty('read_only_hint');
     expect(applied).not.toHaveProperty('idempotent_hint');
     expect(applied.destructive_hint).toBe(false);
+  });
+
+  it('S11 GO12: a target is written as the Operation stores it, and removed when not declared', () => {
+    const declared = operationGovernanceFieldsOf(op({ target: WEB_TARGET }));
+    expect(declared.target).toEqual({ objectType: 'Container', params: ['id'] });
+    expect(operationGovernanceProperties(declared).set.target).toEqual(WEB_TARGET);
+    expect(withOperationGovernance(op(), declared).target).toEqual(WEB_TARGET);
+    expect(
+      withOperationGovernance(op({ target: WEB_TARGET }), operationGovernanceFieldsOf(op())),
+    ).not.toHaveProperty('target');
+  });
+
+  it('S11 GO12: governance fits the deployed definition only when its target names that definition’s own params', () => {
+    const required = op({
+      params_schema: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id'],
+      },
+    });
+    expect(
+      governanceFitsDefinition(required, operationGovernanceFieldsOf(op({ target: WEB_TARGET }))),
+    ).toBe(true);
+    // `op()`'s own schema does not require `id`, and no schema here has `cid`.
+    expect(
+      governanceFitsDefinition(op(), operationGovernanceFieldsOf(op({ target: WEB_TARGET }))),
+    ).toBe(false);
+    expect(
+      governanceFitsDefinition(
+        required,
+        operationGovernanceFieldsOf(op({ target: { object_type: 'Container', params: ['cid'] } })),
+      ),
+    ).toBe(false);
+    expect(governanceFitsDefinition(op(), operationGovernanceFieldsOf(op()))).toBe(true);
   });
 });

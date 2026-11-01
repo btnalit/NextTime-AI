@@ -1,11 +1,17 @@
 import type { PoolClient } from 'pg';
 import { ACTION_REQUEST_IN_DOUBT_AUDIT_ACTION } from './execution.js';
+import { type QueueHold, planGatekeeperQueue } from './queue.js';
 import {
   type ShownAuditReason,
   shownAuditReason,
   shownAuditReasonWithTruncation,
 } from './shown-reason.js';
-import type { ActionRequestRow } from './types.js';
+import {
+  ACTION_REQUEST_ROW_COLUMNS,
+  type ActionRequestDbRow,
+  type ActionRequestRow,
+  mapActionRequestRow,
+} from './types.js';
 
 /**
  * governance/approval/waiting-state (legacy 287, review of #586): why an ActionRequest that has not
@@ -19,10 +25,12 @@ import type { ActionRequestRow } from './types.js';
  *     reason, and the stale-executing reaper asks the gate (`gate/apply_lookup`) once the row is
  *     past `DEFAULT_STALE_EXECUTING_TIMEOUT_MS`.
  *   - Queued behind: an `approved` / `auto_approved` row that has not run because an earlier row
- *     on the same Gatekeeper stops the queue (`drainer.ts`: a `pending_approval` row awaiting a
- *     human, or an `executing` one — R-50's barrier, often in doubt). Only the blocking row's status
- *     and whether it is in doubt are given, never its id or content: the caller may not be allowed
- *     to see that row (I14), only that something ahead of theirs holds the queue.
+ *     on the same Gatekeeper it conflicts with holds it back (`drainer.ts`: a `pending_approval`
+ *     row awaiting a human, or an `executing` one — R-50's barrier, often in doubt), directly or
+ *     through rows in between (S11 GO12, `queue.ts`). Only the blocking row's status, whether it
+ *     is in doubt and whether it holds this row back on its instance or on the whole Gatekeeper
+ *     are given, never its id or content: the caller may not be allowed to see that row (I14),
+ *     only that something ahead of theirs holds the queue.
  *
  * Both are derived on read, never stored on the row: the audit row is the record (I11), and the
  * queue position changes with every transition on the Gatekeeper.
@@ -36,10 +44,12 @@ export interface ActionRequestInDoubt {
   readonly reason: string | null;
 }
 
-/** The earliest row ahead of a waiting one on its Gatekeeper that the drain stops at. */
+/** The row ahead of a waiting one on its Gatekeeper that holds it back (`QueueHold.root`), and
+ *  whether on its instance or on the whole Gatekeeper (`QueueHold.scope`). */
 export interface ActionRequestQueueBlocker {
   readonly id: string;
   readonly status: 'pending_approval' | 'executing';
+  readonly scope: QueueHold['scope'];
 }
 
 /** Keyed by ActionRequest id: the in-doubt record of each of `ids` that has one. Empty input
@@ -73,8 +83,11 @@ export async function readActionRequestsInDoubt(
 }
 
 /** Keyed by ActionRequest id: for each of `waitingIds` (callers pass `approved` /
- *  `auto_approved` rows), the earliest `pending_approval` / `executing` row on its Gatekeeper
- *  ordered before it — `listExecutableQueue`'s order, `(requested_at, id)` — when there is one. */
+ *  `auto_approved` rows) that a row awaiting approval or executing holds back, that row — as
+ *  `planGatekeeperQueue` plans the queue of its Gatekeeper, the one the drainer runs by, so what a
+ *  reader is told waits is what the drain waits for. A waiting row absent from the map is held back
+ *  by nothing but earlier approved rows, or runs next. One query for the queues of every Gatekeeper
+ *  the rows are on. */
 export async function readQueueBlockers(
   client: PoolClient,
   workspaceId: string,
@@ -82,26 +95,30 @@ export async function readQueueBlockers(
 ): Promise<ReadonlyMap<string, ActionRequestQueueBlocker>> {
   const unique = [...new Set(waitingIds)];
   if (unique.length === 0) return new Map();
-  const result = await client.query<{
-    waiting_id: string;
-    id: string;
-    status: ActionRequestQueueBlocker['status'];
-  }>(
-    `select waiting.id as waiting_id, blocker.id, blocker.status
-     from action_requests waiting
-     cross join lateral (
-       select ahead.id, ahead.status from action_requests ahead
-       where ahead.workspace_id = waiting.workspace_id
-         and ahead.gatekeeper_id = waiting.gatekeeper_id
-         and ahead.status in ('pending_approval', 'executing')
-         and (ahead.requested_at, ahead.id) < (waiting.requested_at, waiting.id)
-       order by ahead.requested_at asc, ahead.id asc
-       limit 1
-     ) blocker
-     where waiting.workspace_id = $1 and waiting.id = any($2::uuid[])`,
+  const result = await client.query<ActionRequestDbRow>(
+    `select ${ACTION_REQUEST_ROW_COLUMNS} from action_requests
+     where workspace_id = $1
+       and gatekeeper_id in (
+         select gatekeeper_id from action_requests where workspace_id = $1 and id = any($2::uuid[])
+       )
+       and status in ('auto_approved', 'approved', 'pending_approval', 'executing')
+     order by gatekeeper_id, requested_at asc, id asc`,
     [workspaceId, unique],
   );
-  return new Map(result.rows.map((row) => [row.waiting_id, { id: row.id, status: row.status }]));
+  const queues = new Map<string, ActionRequestRow[]>();
+  for (const row of result.rows.map(mapActionRequestRow)) {
+    const queue = queues.get(row.gatekeeperId);
+    if (queue) queue.push(row);
+    else queues.set(row.gatekeeperId, [row]);
+  }
+  const wanted = new Set(unique);
+  const blockers = new Map<string, ActionRequestQueueBlocker>();
+  for (const queue of queues.values()) {
+    for (const [id, hold] of planGatekeeperQueue(queue).holds) {
+      if (wanted.has(id)) blockers.set(id, { ...hold.root, scope: hold.scope });
+    }
+  }
+  return blockers;
 }
 
 /** What the wire projection says about one row (`ActionRequestWireSchema.outcomeInDoubt` /
@@ -111,6 +128,7 @@ export interface ActionRequestWaitingState {
   readonly queuedBehind: {
     readonly status: ActionRequestQueueBlocker['status'];
     readonly outcomeInDoubt: boolean;
+    readonly scope: ActionRequestQueueBlocker['scope'];
   } | null;
 }
 
@@ -141,7 +159,11 @@ export async function readActionRequestWaitingStates(
         {
           outcomeInDoubt: doubt ? { since: doubt.since.toISOString(), reason: doubt.reason } : null,
           queuedBehind: blocker
-            ? { status: blocker.status, outcomeInDoubt: inDoubt.has(blocker.id) }
+            ? {
+                status: blocker.status,
+                outcomeInDoubt: inDoubt.has(blocker.id),
+                scope: blocker.scope,
+              }
             : null,
         },
       ];

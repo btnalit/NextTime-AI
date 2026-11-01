@@ -44,6 +44,7 @@ const UNDECLARED = {
   readOnlyHint: null,
   destructiveHint: null,
   idempotentHint: null,
+  target: null,
 } as const;
 
 describe('operationGovernanceChangeDirection (R-19, D-17)', () => {

@@ -140,6 +140,53 @@ describe('GatekeeperBase', () => {
     await expect(first).resolves.toMatchObject({ replayed: false, data: { applied: true } });
   });
 
+  it('S11 GO12: two applies with different keys at once both run, each stored once — on the file store too', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'gk-concurrent-'));
+    try {
+      const pending: ((value: { data: unknown }) => void)[] = [];
+      const invoke = vi.fn(
+        () =>
+          new Promise<{ data: unknown }>((resolve) => {
+            pending.push(resolve);
+          }),
+      );
+      const gate = new GatekeeperBase({
+        manifest: [executeOp()],
+        transport: fakeTransport(invoke),
+        credentialResolver: { resolve: async () => ({}) },
+        idempotencyStore: new JsonFileIdempotencyStore(dir),
+      });
+      // Both are in the transport before either answers: the kernel may now apply calls on two
+      // instances of one gate at once.
+      const web = gate.apply('stock.adjust', { sku: 'web' }, 'req-web');
+      const db = gate.apply('stock.adjust', { sku: 'db' }, 'req-db');
+      await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+      for (const [index, resolve] of pending.entries()) resolve({ data: { n: index } });
+      await expect(Promise.all([web, db])).resolves.toEqual([
+        expect.objectContaining({ replayed: false }),
+        expect.objectContaining({ replayed: false }),
+      ]);
+      // A gate restarted on the same file answers each from the store, never runs either again.
+      const restarted = new GatekeeperBase({
+        manifest: [executeOp()],
+        transport: fakeTransport(invoke),
+        credentialResolver: { resolve: async () => ({}) },
+        idempotencyStore: new JsonFileIdempotencyStore(dir),
+      });
+      await expect(
+        restarted.apply('stock.adjust', { sku: 'web' }, 'req-web'),
+      ).resolves.toMatchObject({ replayed: true });
+      await expect(restarted.apply('stock.adjust', { sku: 'db' }, 'req-db')).resolves.toMatchObject(
+        {
+          replayed: true,
+        },
+      );
+      expect(invoke).toHaveBeenCalledTimes(2);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('apply returns IdempotencyConflictError for the same key with a different params tuple', async () => {
     const gate = new GatekeeperBase({
       manifest: [executeOp()],

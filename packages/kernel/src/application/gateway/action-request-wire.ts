@@ -31,6 +31,8 @@ export function toWireActionRequest(row: ActionRequestRow) {
     gatekeeperId: row.gatekeeperId,
     actionKindTag: row.actionKind,
     resourceScope: row.resourceScope,
+    // S11 GO12: what it is queued against — the instance, or `null` for the whole Gatekeeper.
+    target: row.target ? { objectType: row.target.type, identity: [...row.target.identity] } : null,
     blastRadius: row.blastRadius,
     policyDecision: row.policyDecision,
     approvalDecisionId: row.approvalDecisionId,
