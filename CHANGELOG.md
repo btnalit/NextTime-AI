@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.60.0](https://github.com/btnalit/NextTime-AI/compare/v0.59.0...v0.60.0) (2026-11-01)
+
+
+### Features
+
+* **kernel:** admin agent reads platform runtime, updates and invariant checks (S11 AA2b) ([#903](https://github.com/btnalit/NextTime-AI/issues/903)) ([a301144](https://github.com/btnalit/NextTime-AI/commit/a301144d89050678b94f2f38472cfa781d2478a0))
+
+
+### Bug Fixes
+
+* a run whose every model call was refused for the workspace budget fails model_refused (legacy 589) ([#910](https://github.com/btnalit/NextTime-AI/issues/910)) ([976469a](https://github.com/btnalit/NextTime-AI/commit/976469ae14c60a446c789992f2b617bb4fe5510d))
+
 ## [0.59.0](https://github.com/btnalit/NextTime-AI/compare/v0.58.0...v0.59.0) (2026-11-01)
 
 
