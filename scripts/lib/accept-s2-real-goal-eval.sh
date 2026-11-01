@@ -24,7 +24,11 @@
 #                 trial `errored` for a reason that is not the Worker's own (it could not start,
 #                 was lost, terminated, crashed, withheld), is a platform defect: one fails the
 #                 script (real-eval-trial). One still running when the script stops waiting (10
-#                 minutes) only fails its try: its Task ends by its own time limit.
+#                 minutes) only fails its try, and the script cancels its evaluation Task (the
+#                 owner's cancel_task) and waits up to 2 minutes for it to end, so a slow try does
+#                 not keep a Worker run for the tries after it (legacy 588). A start refused with
+#                 429 while this workspace still has an evaluation Task running is that Worker-run
+#                 cap, not a defect: it only fails its try too.
 #   eval_draft  — a Skill whose published v1 tells the Worker to end its summary with one style
 #                 marker and whose draft v2 with another, evaluated once against the suite (one
 #                 regression case, one full dev case, one full holdout case: regression 2 tries ×
@@ -157,14 +161,23 @@ real_eval_own_error() {
   case "$1" in timeout|no_result|budget_exhausted) return 0 ;; *) return 1 ;; esac
 }
 
+# real_eval_running_tasks: how many of this workspace's evaluation Tasks have not ended.
+real_eval_running_tasks() {
+  psql_ws "select count(*) from tasks where workspace_id='$WORKSPACE_ID' and purpose='evaluation' and status not in ('completed','failed','cancelled')"
+}
+
 real_eval_trial_run() {
   i=$1
   out=$(cap "$ALICE_KEY" start_eval_case_trial "{\"suiteId\":\"$REAL_EVAL_SUITE_ID\",\"suiteVersion\":$REAL_EVAL_SUITE_VERSION,\"caseId\":\"$REAL_EVAL_REGRESSION_CASE_ID\"}" "d.result.id")
   status=$(parse_kv "$out" HTTP_STATUS)
   if [ "$status" != "200" ]; then
-    real_run_line eval_trial "$i" fail "start_eval_case_trial=HTTP$status"
+    running=$(real_eval_running_tasks)
+    real_run_line eval_trial "$i" fail "start_eval_case_trial=HTTP$status evaluation_tasks_running=${running:-unknown}"
     real_stat_add eval_trial 0 0 0 0 0
-    REAL_EVAL_PLATFORM_DEFECT=1
+    # Legacy 588: a 429 while an earlier try's evaluation Task is still running is the Worker-run
+    # cap this script ran into, not the platform refusing a trial it should have started.
+    # Only a count read back (1-99) excuses it; an unreadable count leaves it a defect.
+    case "$status:$running" in 429:[1-9] | 429:[1-9][0-9]) : ;; *) REAL_EVAL_PLATFORM_DEFECT=1 ;; esac
     echo "NOTE real-eval-trial start refused: $(parse_kv "$out" BODY | cut -c1-400)"
     return 0
   fi
@@ -181,10 +194,24 @@ real_eval_trial_run() {
   eval_tasks=$(psql_ws "select count(*) from eval_trials t join tasks k on k.workspace_id=t.workspace_id and k.id=t.task_id where t.workspace_id='$WORKSPACE_ID' and t.run_id='$run_id' and k.purpose='evaluation'")
   ok=0
   [ "$run_status" = "finished" ] && [ "$t_status" = "scored" ] && [ "$t_verdict" = "passed" ] && ok=1
-  # A run still going when the wait ends is only a failed try (the Task's own time limit ends it);
-  # an ended trial errored for a reason that is not its Worker's is the platform's.
+  # A run still going when the wait ends is only a failed try; an ended trial errored for a reason
+  # that is not its Worker's is the platform's.
   if [ "$t_status" = "errored" ] && ! real_eval_own_error "$t_error"; then REAL_EVAL_PLATFORM_DEFECT=1; fi
-  real_run_line eval_trial "$i" "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "run=${run_status:-none} trial=${t_status:-none}/${t_verdict:-none}/${t_error:-none} fixture_calls=${calls:-0} evaluation_tasks=${eval_tasks:-0} cost_usd=${t_cost:-none}"
+  # Legacy 588: cancel the still-running try's evaluation Task and wait for its trial to end
+  # (`errored`/`cancelled`, the script's own doing, never judged), so it does not hold a Worker run
+  # for the tries after it. `cancelled=<HTTP status of cancel_task>/<run status after>` on the line.
+  cancelled=
+  if [ "$run_status" != "finished" ]; then
+    task_id=$(psql_ws "select task_id from eval_trials where workspace_id='$WORKSPACE_ID' and run_id='$run_id' and task_id is not null limit 1")
+    if [ -n "$task_id" ]; then
+      c_out=$(cap "$ALICE_KEY" cancel_task "{\"taskId\":\"$task_id\"}" "d.result.status")
+      after=$(real_eval_wait_run "$run_id" 120)
+      cancelled="HTTP$(parse_kv "$c_out" HTTP_STATUS)/${after%%|*}"
+    else
+      cancelled=no_task
+    fi
+  fi
+  real_run_line eval_trial "$i" "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "run=${run_status:-none} trial=${t_status:-none}/${t_verdict:-none}/${t_error:-none} fixture_calls=${calls:-0} evaluation_tasks=${eval_tasks:-0} cost_usd=${t_cost:-none}${cancelled:+ cancelled=$cancelled}"
   real_stat_add eval_trial "$ok" 0 0 "${calls:-0}" 0
   return 0
 }
