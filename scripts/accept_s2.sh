@@ -847,6 +847,21 @@ step2_docker_restart() {
   [ -n "$AR_ID_DOCKER" ] || fail "step2-list-pending" "no pending ActionRequest for gatekeeper $GATEKEEPER_ID_DOCKER appeared within 60s of the chat-driven invoke_worker call"
   pass "step2-list-pending" "actionRequestId=$AR_ID_DOCKER"
 
+  # S11 GO12: container.restart declares a target (gatekeepers/docker/manifest.json), so the
+  # request records the container it acts on, from the published version and its own `id`. A
+  # version published before GO12 declares none until a person confirms the refresh (a
+  # loosening); the request then acts on the whole gate, as before — skipped, not failed.
+  out=$(cap "$ALICE_KEY" get_action "{\"actionRequestId\":\"$AR_ID_DOCKER\"}" \
+    "(t=>t===null||t===undefined?'none':(t.objectType==='Container'&&Array.isArray(t.identity)&&t.identity.length===1&&String(t.identity[0])===String((d.result.params||{}).id)?'ok':'bad '+JSON.stringify(t)))(d.result.target)")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "step2-request-target" "get_action HTTP $status: $(parse_kv "$out" BODY)"
+  target_verdict=$(parse_kv "$out" EXTRACTED)
+  case "$target_verdict" in
+    ok) pass "step2-request-target" "$AR_ID_DOCKER records the Container it acts on, from its own id" ;;
+    none) skip "step2-request-target" "the published container.restart declares no target yet (a refresh awaiting confirmation): $AR_ID_DOCKER acts on the whole gate" ;;
+    *) fail "step2-request-target" "unexpected target on $AR_ID_DOCKER: $target_verdict" ;;
+  esac
+
   # A system card is a chat message whose `content` carries `kind`/`actionRequestId`
   # (application/linkage/content.ts); the driver may also expose them flattened — accept both.
   history_out=$(run_driver get-history "$ALICE_KEY" "$ALICE_CHAT_ID" "d.some(m=>{const c=(m&&m.content&&typeof m.content==='object')?m.content:m;return c&&c.kind==='system.action_pending'&&c.actionRequestId==='$AR_ID_DOCKER';})")
