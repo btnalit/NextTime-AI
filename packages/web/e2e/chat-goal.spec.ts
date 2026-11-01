@@ -89,6 +89,7 @@ function proposedGoal(requester: string) {
       plan: PLAN,
       proposedBy: requester,
       proposer: 'person',
+      acceptedBy: null,
       reason: null,
       decidedBy: null,
       decidedAt: null,

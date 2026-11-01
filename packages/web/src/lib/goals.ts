@@ -1473,6 +1473,32 @@ export function planDiff(before: GoalPlan, after: GoalPlan): PlanDiff {
   };
 }
 
+/** UX P2-1 on #866: how a revision changed the goal's acceptance checks, check by check (by key):
+ *  the ones it added, the ones it dropped, and the ones it kept the key of but changed. */
+export interface AcceptanceDiff {
+  readonly added: readonly AcceptanceCheck[];
+  readonly removed: readonly AcceptanceCheck[];
+  readonly changed: readonly {
+    readonly before: AcceptanceCheck;
+    readonly after: AcceptanceCheck;
+  }[];
+}
+
+export function acceptanceDiff(before: GoalPlan, after: GoalPlan): AcceptanceDiff {
+  const old = new Map((before.acceptance ?? []).map((check) => [check.key, check]));
+  const next = new Map((after.acceptance ?? []).map((check) => [check.key, check]));
+  const changed: { before: AcceptanceCheck; after: AcceptanceCheck }[] = [];
+  for (const [key, check] of next) {
+    const was = old.get(key);
+    if (was && stableJson(was) !== stableJson(check)) changed.push({ before: was, after: check });
+  }
+  return {
+    added: [...next.values()].filter((check) => !old.has(check.key)),
+    removed: [...old.values()].filter((check) => !next.has(check.key)),
+    changed,
+  };
+}
+
 // ---------------------------------------------------------------------------------------------
 // The goal's state, in a sentence or two
 // ---------------------------------------------------------------------------------------------

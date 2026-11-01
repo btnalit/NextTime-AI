@@ -327,6 +327,10 @@ export interface AdoptRevisionOptions {
   /** S11 GO9a: the planner's proposed revision this adopts (`decide_plan_revision`), instead of
    *  inserting a new one. Its plan is the one `candidate` checked. */
   readonly proposal?: { readonly id: string; readonly revision: number };
+  /** S11 GO9b: the platform accepts `proposal` for the requester, under their `apply_minor` leave,
+   *  from the autonomous round `planningRoundId` (`planner.ts`), while the run keeps running. The
+   *  moves are the advancer's (`by: 'advancer'`, `basis: 'autonomy'`), the requester their actor. */
+  readonly autonomy?: { readonly planningRoundId: string };
 }
 
 /**
@@ -389,6 +393,10 @@ export async function adoptRevision(
       [workspaceId, planRevisionId, options.actorId],
     );
   }
+  const by = options.autonomy ? 'advancer' : 'person';
+  const autonomy = options.autonomy
+    ? { basis: 'autonomy', planningRoundId: options.autonomy.planningRoundId }
+    : {};
   await writeAudit(client, {
     workspaceId,
     actorPrincipalId: options.actorId,
@@ -399,19 +407,23 @@ export async function adoptRevision(
       goalRunId: goal.id,
       revision,
       basedOnRevision: current,
+      by,
       ...(options.proposal ? { proposer: 'planner' } : {}),
+      ...autonomy,
     },
   });
-  // A revision is a change of the run (`updated_at`), not a transition: it stays paused. Like a
-  // resume, a person's revision starts the count of failed advances again (legacy 356): past the
-  // limit the reconcile scan skips the run, and with it the terminating of the Tasks this revision
-  // stops (review #493 on #633).
-  await client.query(
+  // A revision is a change of the run (`updated_at`), not a transition: a paused run stays paused,
+  // and (GO9b, the platform's under the requester's leave) a running one keeps running. Like a
+  // resume, a revision starts the count of failed advances again (legacy 356): past the limit the
+  // reconcile scan skips the run, and with it the terminating of the Tasks this revision stops
+  // (review #493 on #633).
+  const runStatus = options.autonomy ? 'running' : 'paused';
+  const updated = await client.query(
     `update goal_runs
         set current_revision = $3, budget_max_tokens = $4, budget_max_steps = $5,
             budget_max_revisions = $6, budget_max_wall_clock_seconds = $7, updated_at = now(),
             next_tick_at = now(), advance_failures = 0
-      where workspace_id = $1 and id = $2 and status = 'paused'`,
+      where workspace_id = $1 and id = $2 and status = $8`,
     [
       workspaceId,
       goal.id,
@@ -420,10 +432,16 @@ export async function adoptRevision(
       budget.maxSteps,
       budget.maxRevisions,
       budget.maxWallClockSeconds,
+      runStatus,
     ],
   );
+  if (options.autonomy && (updated.rowCount ?? 0) === 0) {
+    throw new GoalRunStateError(
+      `goal run ${goal.id}: the platform adopts a planner revision only while the run is running`,
+    );
+  }
 
-  const actor = { principalId: options.actorId, by: 'person' } as const;
+  const actor = { principalId: options.actorId, by } as const;
   for (const step of superseded) {
     await moveStepRun(client, actor, step, 'supersede', {
       supersededInRevision: revision,
@@ -448,7 +466,7 @@ export async function adoptRevision(
       goalRunId: goal.id,
       stepRunId,
       resultingStatus: 'pending',
-      extraAuditPayload: { by: 'person', stepKey: entry.key, revision },
+      extraAuditPayload: { by, stepKey: entry.key, revision },
     });
     created.push(stepRunId);
   }
@@ -482,9 +500,9 @@ export async function adoptRevision(
     actorPrincipalId: options.actorId,
     change: 'revise',
     goalRunId: goal.id,
-    resultingStatus: 'paused',
+    resultingStatus: runStatus,
     extraAuditPayload: {
-      by: 'person',
+      by,
       revision,
       basedOnRevision: current,
       superseded: superseded.map((step) => step.stepKey),
@@ -494,6 +512,7 @@ export async function adoptRevision(
       released: released.length,
       ...(options.budgetChanged ? { budget } : {}),
       ...(options.proposal ? { proposer: 'planner' } : {}),
+      ...autonomy,
     },
   });
   return {

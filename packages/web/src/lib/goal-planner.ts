@@ -1,9 +1,13 @@
 import type {
   GoalDetailWire,
   PlanRevisionSummaryWire,
+  PlannerRevisionClassReasonWire,
+  PlannerRevisionMajorReason,
   PlanningRoundOutcomeReason,
   PlanningRoundWire,
 } from '@nexttime/shared';
+import { actionLabel } from './capability-labels.js';
+import { shortId } from './format.js';
 import type { GoalViewer } from './goal-actions.js';
 import type { Translate } from './i18n.js';
 
@@ -74,6 +78,14 @@ const OUTCOME: Readonly<Record<PlanningRoundOutcomeReason, readonly [string, str
     '目标已经不在这次暂停里（继续、结束、取消或被所有者锁定），这一轮作废。',
     'The goal left the pause this round was for (resumed, ended, cancelled or held by an owner), so the round was dropped.',
   ],
+  run_not_running: [
+    '目标已经不在运行（被暂停、锁定或取消），这一轮作废。',
+    'The goal stopped running (paused, held or cancelled), so the round was dropped.',
+  ],
+  step_keeps_failing: [
+    '平台已经替你改过这一步两次，它还是失败；这次不再自动换路，等你决定。',
+    'The platform already changed this step twice for you and it still fails, so it does not try another way on its own this time: it waits for your decision.',
+  ],
   plan_revised: [
     '计划已经换成另一个版本，这一轮作废。',
     'Another revision was put in force, so the round was dropped.',
@@ -86,6 +98,85 @@ export function planningOutcomeText(round: PlanningRoundWire, t: Translate): str
   if (round.outcomeReason === null) return null;
   const entry = OUTCOME[round.outcomeReason];
   return t(entry[0], entry[1]);
+}
+
+const MAJOR_REASON: Readonly<Record<PlannerRevisionMajorReason, readonly [string, string]>> = {
+  goal_acceptance_changed: ['改了目标的验收', 'It changes what the goal is accepted on'],
+  step_acceptance_changed: ['去掉或放宽了一步的验收', 'It drops or loosens a check of a step'],
+  execution_step: [
+    '新增或改动的步骤能执行动作，或能让别的 Worker 替它做事',
+    'A step it adds or changes can act or start Workers of its own',
+  ],
+  gate_added: [
+    '新增或改动的步骤用到了原来这一步没有的 gate，哪怕只是读取',
+    'A step it adds or changes reaches a gate the step did not, even only to read',
+  ],
+  admission_blocked: [
+    '新增或改动的步骤要有人批准才能开始',
+    'A step it adds or changes would need a person before it starts',
+  ],
+  stops_live_work: ['会停下还在运行的工作', 'It would stop work that is still running'],
+  unresolvable: [
+    '平台判断不了新增或改动的步骤能做什么',
+    'The platform could not work out what a step it adds or changes could do',
+  ],
+};
+
+/** S11 GO9b: why the platform left a planner revision for the requester to decide, one line per
+ *  reason, naming the step a reason is about and (UX P2-1 on #866) what in it the reason is: the
+ *  execute-class capabilities its Worker would get, the gates it newly reaches (by name where
+ *  read). */
+export function majorReasonTexts(
+  reasons: readonly PlannerRevisionClassReasonWire[],
+  t: Translate,
+  gateNames: ReadonlyMap<string, string> = new Map(),
+): readonly string[] {
+  return reasons.map((reason) => {
+    const entry = MAJOR_REASON[reason.code];
+    const text = t(entry[0], entry[1]);
+    const details: string[] = [];
+    if (reason.stepKey !== null)
+      details.push(t(`步骤 ${reason.stepKey}`, `step ${reason.stepKey}`));
+    if (reason.capabilities && reason.capabilities.length > 0)
+      details.push(
+        t(
+          `执行类能力：${reason.capabilities.map((name) => actionLabel(name, t)).join('、')}`,
+          `execute-class capabilities: ${reason.capabilities.map((name) => actionLabel(name, t)).join(', ')}`,
+        ),
+      );
+    if (reason.gates && reason.gates.length > 0) {
+      const names = reason.gates.map((id) => gateNames.get(id) ?? shortId(id));
+      details.push(t(`gate：${names.join('、')}`, `gates: ${names.join(', ')}`));
+    }
+    return details.length === 0
+      ? text
+      : t(`${text}（${details.join('；')}）`, `${text} (${details.join('; ')})`);
+  });
+}
+
+/** UX P2-1 on #866: the reasons of a major revision that are about `stepKey`, for the step's own
+ *  definition to say what in it made the revision major. */
+export function stepMajorReasons(
+  reasons: readonly PlannerRevisionClassReasonWire[],
+  stepKey: string,
+): readonly PlannerRevisionClassReasonWire[] {
+  return reasons.filter((reason) => reason.stepKey === stepKey);
+}
+
+/** UX P2-2 on #866: the round whose revision the platform adopted for the requester and that is
+ *  the plan in force now — what they find changed when they come back. `null` once a later
+ *  revision (theirs or the platform's) replaced it. */
+export function adoptedRoundInForce(goal: GoalDetailWire): PlanningRoundWire | null {
+  return (
+    goal.planningRounds.find(
+      (round) => round.status === 'applied' && round.revision === goal.currentRevision,
+    ) ?? null
+  );
+}
+
+/** S11 GO9b: the round that proposed `revision`, if a planning round did. */
+export function roundOfRevision(goal: GoalDetailWire, revision: number): PlanningRoundWire | null {
+  return goal.planningRounds.find((round) => round.revision === revision) ?? null;
 }
 
 /** UX P2-1 on #864: what a person's own resume, revision or cancel does to the planner's work —

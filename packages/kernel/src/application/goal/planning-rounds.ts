@@ -1,6 +1,9 @@
 import type {
   GoalPlannerMode,
+  PlannerRevisionClass,
+  PlannerRevisionClassReasonWire,
   PlanningFailureCategory,
+  PlanningRoundKind,
   PlanningRoundOutcomeReason,
   PlanningRoundStatus,
   TaskStatus,
@@ -21,6 +24,10 @@ import { findGoalPlannerPrincipal } from '../task/index.js';
  * terminated by the next advance, or by the cancelling run's), and a revision the planner proposed
  * that nobody decided is `rejected` on the person's behalf: it was made for a plan and a pause that
  * are no more. Accepting the planner's revision is such an action too, for every other round.
+ *
+ * S11 GO9b (goal/0015): an `autonomous` round — opened while an `apply_minor` run kept running —
+ * belongs to that running the same way: a person's pause, an owner's hold or a cancel abandons it
+ * (`run_not_running`).
  */
 
 /** A round as the advancer and the reads use it, with its Task when it has one. */
@@ -32,8 +39,13 @@ export interface PlanningRoundRow {
   readonly stepKey: string;
   readonly stepAttempt: number;
   readonly failureCategory: PlanningFailureCategory;
+  /** S11 GO9b: opened under a pause (`proposal`) or while the run kept running (`autonomous`). */
+  readonly kind: PlanningRoundKind;
   readonly status: PlanningRoundStatus;
   readonly revision: number | null;
+  /** S11 GO9b: how the platform classed the revision it proposed, and why a major one is. */
+  readonly revisionClass: PlannerRevisionClass | null;
+  readonly classReasons: readonly PlannerRevisionClassReasonWire[];
   readonly outcomeReason: PlanningRoundOutcomeReason | null;
   readonly detail: string | null;
   readonly createdAt: Date;
@@ -54,8 +66,11 @@ interface PlanningRoundDbRow {
   step_key: string;
   step_attempt: number;
   failure_category: PlanningFailureCategory;
+  kind: PlanningRoundKind;
   status: PlanningRoundStatus;
   revision: number | null;
+  revision_class: PlannerRevisionClass | null;
+  class_reasons: PlannerRevisionClassReasonWire[] | null;
   outcome_reason: PlanningRoundOutcomeReason | null;
   detail: string | null;
   created_at: Date;
@@ -67,7 +82,8 @@ interface PlanningRoundDbRow {
 }
 
 const ROUND_SELECT = `select pr.id, pr.goal_run_id, pr.based_on_revision, pr.step_run_id, s.step_key,
-       pr.step_attempt, pr.failure_category, pr.status, pr.revision, pr.outcome_reason, pr.detail,
+       pr.step_attempt, pr.failure_category, pr.kind, pr.status, pr.revision, pr.revision_class,
+       pr.class_reasons, pr.outcome_reason, pr.detail,
        pr.created_at, pr.settled_at, t.id as task_id, t.status as task_status,
        t.failure_reason as task_failure_reason, t.result as task_result
   from goal_planning_rounds pr
@@ -83,8 +99,22 @@ function mapRound(row: PlanningRoundDbRow): PlanningRoundRow {
     stepKey: row.step_key,
     stepAttempt: row.step_attempt,
     failureCategory: row.failure_category,
+    kind: row.kind,
     status: row.status,
     revision: row.revision,
+    revisionClass: row.revision_class,
+    // What a reason is about (`capabilities`, `gates`) is read back too, where the reason carries
+    // it: the console names them (UX on #866).
+    classReasons: (row.class_reasons ?? []).map((reason) => ({
+      code: reason.code,
+      stepKey: reason.stepKey ?? null,
+      ...(reason.capabilities !== undefined && reason.capabilities.length > 0
+        ? { capabilities: [...reason.capabilities] }
+        : {}),
+      ...(reason.gates !== undefined && reason.gates.length > 0
+        ? { gates: [...reason.gates] }
+        : {}),
+    })),
     outcomeReason: row.outcome_reason,
     detail: row.detail,
     createdAt: row.created_at,
@@ -146,8 +176,9 @@ export async function readGoalPlannerModes(
 
 /**
  * `confirm_goal`'s `planner`: the requester lets the planner propose revisions of this run when one
- * of its steps fails for them. Written in the confirming transaction, before the run leaves
- * `proposed` (the table's guard), once.
+ * of its steps fails for them (`propose`), or — S11 GO9b — also lets the platform accept the minor
+ * ones for them while the run keeps running (`apply_minor`). Written in the confirming
+ * transaction, before the run leaves `proposed` (the table's guard), once.
  */
 export async function grantGoalPlanner(
   client: PoolClient,
@@ -185,7 +216,13 @@ export async function settlePlanningRound(
   actor: PlanningActor,
   round: Pick<PlanningRoundRow, 'id' | 'goalRunId'>,
   outcome:
-    | { readonly status: 'proposed'; readonly revision: number }
+    | {
+        readonly status: 'proposed' | 'applied';
+        readonly revision: number;
+        /** S11 GO9b: how the platform classed it (`applied`: always `minor`). */
+        readonly revisionClass?: PlannerRevisionClass;
+        readonly classReasons?: readonly PlannerRevisionClassReasonWire[];
+      }
     | { readonly status: 'no_revision'; readonly detail: string }
     | {
         readonly status: 'failed' | 'abandoned';
@@ -195,17 +232,21 @@ export async function settlePlanningRound(
 ): Promise<void> {
   const reason = 'reason' in outcome ? outcome.reason : null;
   const detail = 'detail' in outcome && outcome.detail !== undefined ? outcome.detail : null;
+  const proposed = outcome.status === 'proposed' || outcome.status === 'applied' ? outcome : null;
   await client.query(
     `update goal_planning_rounds
-        set status = $3, revision = $4, outcome_reason = $5, detail = $6, settled_at = now()
+        set status = $3, revision = $4, outcome_reason = $5, detail = $6, settled_at = now(),
+            revision_class = $7, class_reasons = $8::jsonb
       where workspace_id = $1 and id = $2 and status = 'running'`,
     [
       workspaceId,
       round.id,
       outcome.status,
-      outcome.status === 'proposed' ? outcome.revision : null,
+      proposed ? proposed.revision : null,
       reason,
       detail === null ? null : boundDetail(detail),
+      proposed?.revisionClass ?? null,
+      JSON.stringify(proposed?.classReasons ?? []),
     ],
   );
   await writeAudit(client, {
@@ -218,7 +259,8 @@ export async function settlePlanningRound(
       by: actor.by,
       planningRoundId: round.id,
       status: outcome.status,
-      ...(outcome.status === 'proposed' ? { revision: outcome.revision } : {}),
+      ...(proposed ? { revision: proposed.revision } : {}),
+      ...(proposed?.revisionClass ? { revisionClass: proposed.revisionClass } : {}),
       ...(reason !== null ? { reason } : {}),
     },
   });
@@ -235,10 +277,15 @@ export function boundDetail(detail: string): string {
     : `${chars.slice(0, MAX_PLANNING_DETAIL_CHARS - 1).join('')}…`;
 }
 
-export type ClosePlanningReason = Extract<
-  PlanningRoundOutcomeReason,
-  'run_left_pause' | 'plan_revised'
->;
+/** What a round is abandoned for when its run leaves where it was opened (goal/0015). */
+export function leftReason(kind: PlanningRoundKind): 'run_left_pause' | 'run_not_running' {
+  return kind === 'autonomous' ? 'run_not_running' : 'run_left_pause';
+}
+
+/** Why a person's action ends the run's planning: the run left where its rounds were opened
+ *  (resumed, paused, held, cancelled — each round is abandoned `run_left_pause` or, an
+ *  `autonomous` one, `run_not_running`), or its plan was revised. */
+export type ClosePlanningReason = 'run_left' | 'plan_revised';
 
 export interface ClosedPlanning {
   readonly abandonedRoundIds: readonly string[];
@@ -260,8 +307,8 @@ export async function closePlanning(
   options: { readonly keepRevision?: number; readonly rejectProposals?: boolean } = {},
 ): Promise<ClosedPlanning> {
   const actor: PlanningActor = { principalId: actorId, by: 'person' };
-  const running = await client.query<{ id: string }>(
-    `select id from goal_planning_rounds
+  const running = await client.query<{ id: string; kind: PlanningRoundKind }>(
+    `select id, kind from goal_planning_rounds
       where workspace_id = $1 and goal_run_id = $2 and status = 'running'`,
     [workspaceId, goalRunId],
   );
@@ -273,7 +320,7 @@ export async function closePlanning(
       { id: row.id, goalRunId },
       {
         status: 'abandoned',
-        reason,
+        reason: reason === 'plan_revised' ? 'plan_revised' : leftReason(row.kind),
       },
     );
   }

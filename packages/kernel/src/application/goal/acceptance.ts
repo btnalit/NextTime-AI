@@ -323,7 +323,7 @@ export async function endGoalRun(
   // S11 GO9a (UX P2-5 on #864): ending leaves the pause like resuming or cancelling does — a
   // revision the planner proposed for it is rejected on the requester's behalf, and a round whose
   // Task already ended (none can still run, above) is abandoned.
-  await closePlanning(client, workspaceId, goal.id, input.actor.principalId, 'run_left_pause');
+  await closePlanning(client, workspaceId, goal.id, input.actor.principalId, 'run_left');
   const status = await moveGoalRun(client, actor, goal, goal.status, 'complete', {
     outcome: { outcome: input.outcome, basis: 'requester', decisionId },
     audit: {

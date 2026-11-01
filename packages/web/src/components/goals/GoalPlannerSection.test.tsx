@@ -41,6 +41,7 @@ function round(overrides: Partial<PlanningRoundWire> = {}): PlanningRoundWire {
   return {
     id: 'round-1',
     status: 'proposed',
+    kind: 'proposal',
     basedOnRevision: 1,
     stepRunId: 'sr-fetch',
     stepKey: 'fetch',
@@ -52,6 +53,8 @@ function round(overrides: Partial<PlanningRoundWire> = {}): PlanningRoundWire {
     detail: null,
     createdAt: '2026-10-20T00:05:00.000Z',
     settledAt: '2026-10-20T00:06:00.000Z',
+    revisionClass: 'minor',
+    classReasons: [],
     ...overrides,
   };
 }
@@ -76,6 +79,7 @@ function proposedDetail(overrides: Partial<GoalDetailWire> = {}): GoalDetailWire
         basedOnRevision: 1,
         proposedBy: 'p-planner',
         proposer: 'planner',
+        acceptedBy: null,
         reason: 'The first Worker lost its run twice; another Worker renews the same way.',
         decidedBy: null,
         decidedAt: null,
@@ -98,6 +102,7 @@ function proposedPlan(detail: GoalDetailWire): PlanRevisionWire {
     basedOnRevision: 1,
     proposedBy: 'p-planner',
     proposer: 'planner',
+    acceptedBy: null,
     decidedBy: null,
     decidedAt: null,
     plan: {
@@ -138,6 +143,13 @@ function renderPage(http: CapabilityCaller) {
     </PermissionsProvider>,
   );
 }
+
+const confirmed = () => ({
+  goalRunId: 'goal-1',
+  status: 'running',
+  changed: true,
+  createdStepRunIds: [],
+});
 
 const decided = (resumed: boolean) => ({
   goalRunId: 'goal-1',
@@ -287,19 +299,12 @@ describe('goal planner on the goal page (S11 GO9a)', () => {
     expect(items[2]?.textContent).toContain('The DNS record has to be fixed by a person.');
   });
 
-  it('a goal confirmed without the planner shows no planner card, and the confirm card offers the choice, on by default', async () => {
+  it('a goal confirmed without the planner shows no planner card; the confirm card offers three choices, proposals by default', async () => {
     const http = scriptedHttp(
       handlers(
         goalDetail({ status: 'proposed', currentRevision: null, confirmedAt: null }),
         workspace('p-alice', 'member'),
-        {
-          confirm_goal: () => ({
-            goalRunId: 'goal-1',
-            status: 'running',
-            changed: true,
-            createdStepRunIds: [],
-          }),
-        },
+        { confirm_goal: confirmed },
       ),
     );
     renderPage(http);
@@ -307,14 +312,41 @@ describe('goal planner on the goal page (S11 GO9a)', () => {
     expect(screen.queryByTestId('goal-planner')).toBeNull();
     const confirm = await screen.findByTestId('goal-op-confirm-confirm');
     const choice = within(confirm).getByTestId('goal-op-confirm-planner');
-    const box = within(choice).getByRole('checkbox') as HTMLInputElement;
-    expect(box.checked).toBe(true);
-    fireEvent.click(box);
+    expect(within(choice).getAllByRole('radio')).toHaveLength(3);
+    expect(
+      (within(choice).getByTestId('goal-op-confirm-planner-propose') as HTMLInputElement).checked,
+    ).toBe(true);
+    fireEvent.click(within(choice).getByTestId('goal-op-confirm-planner-off'));
     fireEvent.click(within(confirm).getByTestId('confirm-button'));
     await waitFor(() =>
       expect(http.calls.find((call) => call.name === 'confirm_goal')?.params).toEqual({
         goalRunId: 'goal-1',
         revision: 1,
+      }),
+    );
+  });
+
+  it('the confirm card lets the requester leave minor revisions to the platform (S11 GO9b)', async () => {
+    const http = scriptedHttp(
+      handlers(
+        goalDetail({ status: 'proposed', currentRevision: null, confirmedAt: null }),
+        workspace('p-alice', 'member'),
+        { confirm_goal: confirmed },
+      ),
+    );
+    renderPage(http);
+    fireEvent.click(await screen.findByTestId('goal-op-confirm'));
+    const confirm = await screen.findByTestId('goal-op-confirm-confirm');
+    fireEvent.click(within(confirm).getByTestId('goal-op-confirm-planner-apply_minor'));
+    expect(within(confirm).getByTestId('goal-op-confirm-planner').textContent).toContain(
+      '同一步的工作平台最多替你改两次',
+    );
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() =>
+      expect(http.calls.find((call) => call.name === 'confirm_goal')?.params).toEqual({
+        goalRunId: 'goal-1',
+        revision: 1,
+        planner: 'apply_minor',
       }),
     );
   });
@@ -327,6 +359,111 @@ describe('goal planner on the goal page (S11 GO9a)', () => {
     expect(second && within(second).getByTestId('goal-revision-planner').textContent).toBe(
       '规划器提议',
     );
+  });
+});
+
+describe('minor revisions the platform adopts (S11 GO9b)', () => {
+  it('while the goal runs, an autonomous round says no new attempt starts meanwhile', async () => {
+    const detail = goalDetail({
+      planner: 'apply_minor',
+      planningRounds: [
+        round({
+          id: 'round-a',
+          kind: 'autonomous',
+          status: 'running',
+          revision: null,
+          revisionClass: null,
+          settledAt: null,
+        }),
+      ],
+    });
+    const http = scriptedHttp(handlers(detail, workspace('p-alice', 'member')));
+    renderPage(http);
+    const card = await screen.findByTestId('goal-planner');
+    expect(within(card).getByTestId('goal-planner-mode').getAttribute('data-mode')).toBe(
+      'apply_minor',
+    );
+    expect(within(card).getByTestId('goal-planner-mode').textContent).toContain(
+      '平台替自己采用小修订',
+    );
+    const running = within(card).getByTestId('goal-planner-running');
+    expect(running.textContent).toContain('换一条路');
+    expect(running.textContent).toContain('这期间不开始新的尝试');
+  });
+
+  it('a revision the platform adopted reads so, in the rounds and in the revision list', async () => {
+    const base = goalDetail({
+      planner: 'apply_minor',
+      currentRevision: 2,
+      planningRounds: [round({ kind: 'autonomous', status: 'applied', revision: 2 })],
+    });
+    const detail: GoalDetailWire = {
+      ...base,
+      revisions: [
+        ...base.revisions,
+        {
+          id: 'rev-2',
+          goalRunId: base.id,
+          revision: 2,
+          status: 'accepted',
+          basedOnRevision: 1,
+          proposedBy: 'p-planner',
+          proposer: 'planner',
+          acceptedBy: 'platform',
+          reason: 'Another Worker renews the same way.',
+          decidedBy: 'p-alice',
+          decidedAt: '2026-10-20T00:06:00.000Z',
+          createdAt: '2026-10-20T00:06:00.000Z',
+          removals: {},
+          fromProcedure: null,
+        },
+      ],
+    };
+    const http = scriptedHttp(handlers(detail, workspace('p-alice', 'member')));
+    renderPage(http);
+    const card = await screen.findByTestId('goal-planner');
+    expect(within(card).queryByTestId('goal-planner-proposal')).toBeNull();
+    const roundItem = within(card).getByTestId('goal-planner-round');
+    expect(roundItem.getAttribute('data-status')).toBe('applied');
+    expect(within(roundItem).getByTestId('goal-planner-round-applied').textContent).toContain(
+      '平台按请求人的授权采用了它',
+    );
+    const revisions = await screen.findAllByTestId('goal-revision');
+    const second = revisions.find((item) => item.getAttribute('data-revision') === '2');
+    expect(second && within(second).getByTestId('goal-revision-platform').textContent).toBe(
+      '小修订，平台按请求人的授权采用',
+    );
+    expect(
+      within(second as HTMLElement).getByTestId('goal-revision-platform-decider').textContent,
+    ).toContain('平台代为接受（授权人');
+  });
+
+  it('a revision the platform left to the requester says why', async () => {
+    const detail = proposedDetail({
+      planner: 'apply_minor',
+      planningRounds: [
+        round({
+          kind: 'autonomous',
+          revisionClass: 'major',
+          classReasons: [
+            { code: 'goal_acceptance_changed', stepKey: null },
+            { code: 'execution_step', stepKey: 'fetch-other' },
+          ],
+        }),
+      ],
+    });
+    const http = scriptedHttp(handlers(detail, workspace('p-alice', 'member')));
+    renderPage(http);
+    const reasons = await screen.findByTestId('goal-planner-major-reasons');
+    expect(reasons.textContent).toContain('平台没有替请求人采用，目标为此暂停');
+    expect(
+      within(reasons)
+        .getAllByRole('listitem')
+        .map((item) => item.textContent),
+    ).toEqual([
+      '改了目标的验收',
+      '新增或改动的步骤能执行动作，或能让别的 Worker 替它做事（步骤 fetch-other）',
+    ]);
   });
 });
 
@@ -588,5 +725,208 @@ describe('the planner card after the UX review of #864', () => {
         .map((p) => p.textContent)
         .join(),
     ).toContain('目标规划器正在看步骤 fetch 的失败：等它给出结果再结束，或者取消目标。');
+  });
+});
+
+describe('the planner card after the UX review of #866', () => {
+  /** Revision 2, the planner's, adopted by the platform on the requester's leave: `fetch` gives
+   *  way to `fetch-other`. */
+  const adopted = () => {
+    const base = goalDetail({
+      planner: 'apply_minor',
+      currentRevision: 2,
+      planningRounds: [round({ kind: 'autonomous', status: 'applied', revision: 2 })],
+    });
+    const detail: GoalDetailWire = {
+      ...base,
+      revisions: [
+        ...base.revisions,
+        {
+          id: 'rev-2',
+          goalRunId: base.id,
+          revision: 2,
+          status: 'accepted',
+          basedOnRevision: 1,
+          proposedBy: 'p-planner',
+          proposer: 'planner',
+          acceptedBy: 'platform',
+          reason: 'Another Worker renews the same way.',
+          decidedBy: 'p-alice',
+          decidedAt: '2026-10-20T00:06:00.000Z',
+          createdAt: '2026-10-20T00:06:00.000Z',
+          removals: {},
+          fromProcedure: null,
+        },
+      ],
+    };
+    const second = {
+      ...proposedPlan(detail),
+      status: 'accepted' as const,
+      acceptedBy: 'platform' as const,
+      reason: 'Another Worker renews the same way.',
+    };
+    return {
+      detail,
+      byRevision: (params: unknown) =>
+        (params as { revision: number }).revision === 2 ? second : detail.planRevision,
+    };
+  };
+
+  it('P2-2: the revision the platform adopted is shown open, with what it changed and what to do', async () => {
+    const { detail, byRevision } = adopted();
+    const http = scriptedHttp(
+      handlers(detail, workspace('p-alice', 'member'), { get_goal_revision: byRevision }),
+    );
+    renderPage(http);
+    const shown = await screen.findByTestId('goal-planner-adopted');
+    expect(shown.getAttribute('data-revision')).toBe('2');
+    expect(shown.textContent).toContain('平台按请求人的授权采用了规划器的第 2 版修订');
+    expect((await within(shown).findByTestId('goal-planner-adopted-reason')).textContent).toBe(
+      'Another Worker renews the same way.',
+    );
+    const changes = within(shown).getByTestId('goal-planner-changes');
+    expect(changes.querySelector('[data-diff="added"]')?.textContent).toContain('fetch-other');
+    expect(changes.querySelector('[data-diff="removed"]')?.textContent).toContain('fetch');
+    expect(
+      within(shown)
+        .getAllByTestId('goal-planner-step')
+        .map((step) => step.getAttribute('data-step-key')),
+    ).toEqual(['fetch-other']);
+    expect(within(shown).getByTestId('goal-planner-adopted-disagree').textContent).toBe(
+      '如果不同意，可以暂停目标后修订计划。',
+    );
+    // Both plans are read: the one adopted and the one it replaced.
+    expect(
+      http.calls
+        .filter((call) => call.name === 'get_goal_revision')
+        .map((call) => (call.params as { revision: number }).revision)
+        .sort(),
+    ).toEqual([1, 2]);
+  });
+
+  it('P2-2: once a later revision replaced it, the adopted one is only in the rounds', async () => {
+    const { detail } = adopted();
+    renderPage(
+      scriptedHttp(handlers({ ...detail, currentRevision: 3 }, workspace('p-alice', 'member'))),
+    );
+    const card = await screen.findByTestId('goal-planner');
+    expect(within(card).queryByTestId('goal-planner-adopted')).toBeNull();
+    expect(within(card).getByTestId('goal-planner-round').getAttribute('data-status')).toBe(
+      'applied',
+    );
+  });
+
+  it('P2-1: a major revision names what made it so, on its reasons, its steps and its changed checks', async () => {
+    const detail = proposedDetail({
+      planner: 'apply_minor',
+      planningRounds: [
+        round({
+          kind: 'autonomous',
+          revisionClass: 'major',
+          classReasons: [
+            { code: 'goal_acceptance_changed', stepKey: null },
+            { code: 'execution_step', stepKey: 'fetch-other', capabilities: ['request_action'] },
+            { code: 'gate_added', stepKey: 'fetch-other', gates: [GATE_ID] },
+          ],
+        }),
+      ],
+    });
+    const plan = proposedPlan(detail);
+    const proposed: PlanRevisionWire = {
+      ...plan,
+      plan: {
+        ...plan.plan,
+        steps: plan.plan.steps.map((step) =>
+          step.key === 'fetch-other'
+            ? {
+                ...step,
+                nested: true,
+                spec: { gates: [GATE_ID], capabilities: ['request_action'] },
+              }
+            : step,
+        ),
+        acceptance: [
+          ...(plan.plan.acceptance ?? []),
+          { kind: 'requester_confirm', key: 'looks-right', prompt: 'Do the counts look right?' },
+        ],
+      },
+    };
+    renderPage(
+      scriptedHttp(
+        handlers(detail, workspace('p-alice', 'member'), { get_goal_revision: () => proposed }),
+      ),
+    );
+    const reasons = await screen.findByTestId('goal-planner-major-reasons');
+    await waitFor(() =>
+      expect(
+        within(reasons)
+          .getAllByRole('listitem')
+          .map((item) => item.textContent),
+      ).toEqual([
+        '改了目标的验收',
+        '新增或改动的步骤能执行动作，或能让别的 Worker 替它做事（步骤 fetch-other；执行类能力：发起动作请求）',
+        '新增或改动的步骤用到了原来这一步没有的 gate，哪怕只是读取（步骤 fetch-other；gate：cert-gate）',
+      ]),
+    );
+    const diff = await screen.findByTestId('goal-planner-acceptance-diff');
+    expect(diff.textContent).toContain('目标的验收新增：');
+    expect(diff.textContent).toContain('Do the counts look right?');
+    const step = screen.getByTestId('goal-planner-step');
+    expect(step.getAttribute('data-step-key')).toBe('fetch-other');
+    expect(within(step).getByTestId('goal-planner-step-reasons').textContent).toContain(
+      '执行类能力：发起动作请求',
+    );
+    expect(within(step).getByTestId('goal-planner-step-nested').textContent).toMatch(/^可以起子/);
+    fireEvent.click(screen.getByTestId('goal-planner-accept'));
+    const confirm = await screen.findByTestId('goal-planner-accept-confirm');
+    expect(within(confirm).getByTestId('confirm-impact').textContent).toContain('目标的验收新增：');
+  });
+
+  it('P2-3: pausing while the planner finds another way says the round is dropped', async () => {
+    const detail = goalDetail({
+      planner: 'apply_minor',
+      planningRounds: [
+        round({
+          kind: 'autonomous',
+          status: 'running',
+          revision: null,
+          revisionClass: null,
+          settledAt: null,
+        }),
+      ],
+    });
+    renderPage(scriptedHttp(handlers(detail, workspace('p-alice', 'member'))));
+    fireEvent.click(await screen.findByTestId('goal-op-pause'));
+    const pause = await screen.findByTestId('goal-op-pause-confirm');
+    expect(within(pause).getByTestId('confirm-impact').textContent).toContain(
+      '正在进行的这一轮规划会作废，它的规划任务会停下',
+    );
+  });
+
+  it('P3-1 and P3-2: no planner says the goal pauses for the requester; under apply_minor the idle card says no step failed yet', async () => {
+    renderPage(
+      scriptedHttp(
+        handlers(
+          goalDetail({ status: 'proposed', currentRevision: null, confirmedAt: null }),
+          workspace('p-alice', 'member'),
+        ),
+      ),
+    );
+    fireEvent.click(await screen.findByTestId('goal-op-confirm'));
+    const confirm = await screen.findByTestId('goal-op-confirm-confirm');
+    fireEvent.click(within(confirm).getByTestId('goal-op-confirm-planner-off'));
+    expect(within(confirm).getByTestId('goal-op-confirm-planner').textContent).toContain(
+      '步骤失败、需要人决定时，目标暂停，由你自己重试、修订或取消',
+    );
+    cleanup();
+
+    renderPage(
+      scriptedHttp(
+        handlers(goalDetail({ planner: 'apply_minor' }), workspace('p-alice', 'member')),
+      ),
+    );
+    expect((await screen.findByTestId('goal-planner-none')).textContent).toBe(
+      '还没有步骤失败，规划器还没跑过。',
+    );
   });
 });

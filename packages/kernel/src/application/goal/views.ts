@@ -5,6 +5,7 @@ import {
   type GoalPlannerMode,
   type GoalRunStatus,
   type PlanHint,
+  type PlanRevisionAcceptor,
   type PlanRevisionProposer,
   STEP_RUN_STATUS_VALUES,
   type StepRunStatus,
@@ -322,19 +323,41 @@ async function planSourceOf(
 }
 
 /** A revision as a read shows it — S11 GO9a: with who proposed it, a person or the workspace's
- *  goal planner (`planner.ts`), whose Principal `proposedBy` then names. */
-export type PlanRevisionRead = PlanRevisionRow & { readonly proposer: PlanRevisionProposer };
+ *  goal planner (`planner.ts`), whose Principal `proposedBy` then names; GO9b: and who accepted
+ *  it — the platform, under the requester's `apply_minor` leave (an `applied` planning round
+ *  names it; `decidedBy` is the requester then too), or a person. */
+export type PlanRevisionRead = PlanRevisionRow & {
+  readonly proposer: PlanRevisionProposer;
+  readonly acceptedBy: PlanRevisionAcceptor | null;
+};
 
-/** `rows` with their proposer — the goal planner when its Principal proposed one. */
+/** `rows` with their proposer — the goal planner when its Principal proposed one — and who
+ *  accepted the accepted ones. */
 async function withProposers(
   client: PoolClient,
   workspaceId: string,
   rows: readonly PlanRevisionRow[],
 ): Promise<readonly PlanRevisionRead[]> {
-  const plannerId = rows.length > 0 ? await findGoalPlannerPrincipal(client, workspaceId) : null;
+  if (rows.length === 0) return [];
+  const plannerId = await findGoalPlannerPrincipal(client, workspaceId);
+  const applied = new Set<string>();
+  if (plannerId !== null) {
+    const rounds = await client.query<{ goal_run_id: string; revision: number }>(
+      `select goal_run_id, revision from goal_planning_rounds
+        where workspace_id = $1 and goal_run_id = any($2::uuid[]) and status = 'applied'`,
+      [workspaceId, [...new Set(rows.map((row) => row.goalRunId))]],
+    );
+    for (const round of rounds.rows) applied.add(`${round.goal_run_id}:${round.revision}`);
+  }
   return rows.map((row) => ({
     ...row,
     proposer: plannerId !== null && row.proposedBy === plannerId ? 'planner' : 'person',
+    acceptedBy:
+      row.status !== 'accepted'
+        ? null
+        : applied.has(`${row.goalRunId}:${row.revision}`)
+          ? 'platform'
+          : 'person',
   }));
 }
 
