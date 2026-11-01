@@ -399,6 +399,9 @@ goal_s13_refused() {
 
 # The newest planning round of the run: kind:status:step:failure:revision:class.
 S13_ROUND_EXPR="(() => { const r = d.result.planningRounds; const x = r[r.length - 1]; return [d.result.status, d.result.pauseReason || '', r.length, x ? [x.kind, x.status, x.stepKey, x.failureCategory, x.revision, x.revisionClass].join(':') : ''].join(','); })()"
+# Every planning round of the run, with why it ended: kind:status:outcomeReason:detail — what a
+# failure names, so a round that did not propose says why.
+S13_ROUNDS_WHY_EXPR="d.result.planningRounds.map((x) => [x.kind, x.status, x.outcomeReason || '', (x.detail || '').slice(0, 300)].join(':')).join(' | ')"
 # Revision 2 of the run: status:proposer:acceptedBy.
 S13_REVISION_EXPR="(() => { const r = d.result.revisions.find((x) => x.revision === 2); return r ? [r.status, r.proposer, r.acceptedBy || ''].join(':') : 'none'; })()"
 
@@ -422,7 +425,7 @@ goal_s13_propose() {
   goal_wait "$S13_GOAL_ID" 240 "$S13_ROUND_EXPR" '*:proposed:*' '*:no_revision:*' '*:failed:*' '*:abandoned:*' '*:applied:*' 'completed,*' 'cancelled,*' 'failed,*' \
     || goal_fail "s13a-proposed" "$S13_GOAL_ID" "no planning round proposed within 240s of the refusal (last '$GOAL_WAIT_VALUE')"
   [ "$GOAL_WAIT_VALUE" = "paused,needs_decision,1,proposal:proposed:write:action_refused:2:minor" ] \
-    || goal_fail "s13a-proposed" "$S13_GOAL_ID" "goal $S13_GOAL_ID reads '$GOAL_WAIT_VALUE', expected paused needs_decision with one proposal round that proposed a minor revision 2 for step write (proposal:proposed:write:action_refused:2:minor)"
+    || goal_fail "s13a-proposed" "$S13_GOAL_ID" "goal $S13_GOAL_ID reads '$GOAL_WAIT_VALUE', expected paused needs_decision with one proposal round that proposed a minor revision 2 for step write (proposal:proposed:write:action_refused:2:minor); rounds: $(goal_get "$S13_GOAL_ID" "$S13_ROUNDS_WHY_EXPR")"
   revision=$(goal_get "$S13_GOAL_ID" "$S13_REVISION_EXPR")
   [ "$revision" = "proposed:planner:" ] || goal_fail "s13a-proposed" "$S13_GOAL_ID" "revision 2 reads '$revision', expected proposed by the planner and not accepted (proposed:planner:)"
   pass "s13a-proposed" "goal $S13_GOAL_ID paused needs_decision; the planner proposed revision 2 (minor), which waits for alice"
@@ -446,12 +449,12 @@ goal_s13_apply_minor() {
   goal_s13_refused s13b apply_minor
   goal_wait "$S13_GOAL_ID" 300 "$GOAL_END_EXPR" 'completed,*' 'paused,*' 'cancelled,*' 'failed,*' \
     || goal_fail "s13b-achieved" "$S13_GOAL_ID" "goal $S13_GOAL_ID did not settle within 300s of the refusal (last '$GOAL_WAIT_VALUE')"
-  [ "$GOAL_WAIT_VALUE" = "completed,achieved,verified_by_check," ] || goal_fail "s13b-achieved" "$S13_GOAL_ID" "goal $S13_GOAL_ID ended '$GOAL_WAIT_VALUE', expected completed,achieved,verified_by_check with nobody acting after the refusal"
+  [ "$GOAL_WAIT_VALUE" = "completed,achieved,verified_by_check," ] || goal_fail "s13b-achieved" "$S13_GOAL_ID" "goal $S13_GOAL_ID ended '$GOAL_WAIT_VALUE', expected completed,achieved,verified_by_check with nobody acting after the refusal; rounds: $(goal_get "$S13_GOAL_ID" "$S13_ROUNDS_WHY_EXPR")"
   round=$(goal_get "$S13_GOAL_ID" "$S13_ROUND_EXPR")
   revision=$(goal_get "$S13_GOAL_ID" "$S13_REVISION_EXPR")
   pauses=$(psql_ws "select count(*) from audit_records where workspace_id='$WORKSPACE_ID' and resource_type='goal_run' and resource_id='$S13_GOAL_ID' and payload->>'resultingStatus' = 'paused'")
   [ "$round|$revision|$pauses" = "completed,,1,autonomous:applied:write:action_refused:2:minor|accepted:planner:platform|0" ] \
-    || goal_fail "s13b-applied" "$S13_GOAL_ID" "round '$round', revision 2 '$revision', $pauses pause(s) — expected one autonomous round that applied a minor revision 2, accepted by the platform for alice, and no pause"
+    || goal_fail "s13b-applied" "$S13_GOAL_ID" "round '$round', revision 2 '$revision', $pauses pause(s) — expected one autonomous round that applied a minor revision 2, accepted by the platform for alice, and no pause; rounds: $(goal_get "$S13_GOAL_ID" "$S13_ROUNDS_WHY_EXPR")"
   pass "s13b-applied" "goal $S13_GOAL_ID never paused: an autonomous round's minor revision 2 was adopted by the platform for alice, and the goal completed achieved"
   goal_s13_settled s13b
 }

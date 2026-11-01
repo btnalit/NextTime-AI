@@ -905,8 +905,10 @@ function goalPlannerScenario(messages) {
         args: {
           summary: `accept_s2: the goal planner ${output.decision === 'revise' ? 'proposes moving' : 'has no revision for'} step ${failedKey ?? '(unknown)'}.`,
           findings: [output.reason],
+          // A planner's report is its proposal and nothing else: no Facts, evidence or artifacts
+          // (packages/kernel/src/application/goal/planner.ts `PLANNER_REPORT_FORBIDDEN`).
           factsToAssert: [],
-          evidence: [{ kind: 'accept_s2_worker_note', content: { step: failedKey ?? null } }],
+          evidence: [],
           artifacts: [],
           output,
         },
