@@ -40,6 +40,7 @@ import {
   acceptanceDiff,
   bindingSentence,
   checkKindLabel,
+  filesFromSentence,
   isStepAuthorityHint,
   isStepContractHint,
   planCheckSentence,
@@ -1029,6 +1030,11 @@ function ProposedStep({
               </li>
             ))}
           </ul>
+        ) : null}
+        {step.filesFrom && step.filesFrom.length > 0 ? (
+          <span className="text-3" data-testid="goal-planner-step-files-from">
+            {filesFromSentence(step.filesFrom, t)}
+          </span>
         ) : null}
         {step.outputSchema ? (
           <div className="stack-s">

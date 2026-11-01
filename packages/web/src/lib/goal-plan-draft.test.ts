@@ -457,4 +457,62 @@ describe('lib/goal-plan-draft', () => {
         .size,
     ).toBe(0);
   });
+
+  it('S11 GO14: keeps a step’s filesFrom as read, sends a changed one, and says before sending when what it reads is not ticked or not in the plan', () => {
+    const base = paused();
+    const plan = base.planRevision.plan;
+    const detail = paused({
+      planRevision: {
+        ...base.planRevision,
+        plan: {
+          ...plan,
+          steps: [
+            plan.steps[0] as (typeof plan.steps)[number],
+            { ...(plan.steps[1] as (typeof plan.steps)[number]), filesFrom: ['fetch'] },
+          ],
+        },
+      },
+    });
+    const draft = draftFromDetail(detail);
+    expect(planOf(draft)?.steps[1]?.filesFrom).toEqual(['fetch']);
+    expect(draftProblems(draft, detail, zh).size).toBe(0);
+    const apply = draft.steps.find((step) => step.key === 'apply');
+    if (!apply) throw new Error('apply');
+
+    // Reading none: the field leaves the step (undefined is left out on the wire).
+    expect(
+      planOf(withStep(draft, 'apply', { filesFrom: [] }))?.steps[1]?.filesFrom,
+    ).toBeUndefined();
+    // A new step that makes the files again, read instead (UX P2-1 on #884).
+    const remade = {
+      ...draft,
+      steps: [
+        ...draft.steps,
+        { ...emptyStep(), key: 'fetch-2', definitionId: WORKER_ID, version: '2' },
+      ],
+    };
+    const rewired = withStep(remade, 'apply', {
+      dependsOn: ['fetch', 'fetch-2'],
+      filesFrom: ['fetch-2'],
+    });
+    expect(draftProblems(rewired, detail, zh).size).toBe(0);
+    expect(planOf(rewired)?.steps[1]).toMatchObject({
+      key: 'apply',
+      dependsOn: ['fetch', 'fetch-2'],
+      filesFrom: ['fetch-2'],
+    });
+
+    const unticked = withStep(draft, 'apply', { dependsOn: [] });
+    expect(draftProblems(unticked, detail, zh).get(`step:${apply.uid}:filesFrom`)).toBe(
+      '这一步读取步骤 fetch 留下的文件，必须排在它之后：在上面把它勾回来，或者取消读取它的文件。',
+    );
+    const removed = withStep(draft, 'fetch', { removed: true });
+    expect(draftProblems(removed, detail, zh).get(`step:${apply.uid}:filesFrom`)).toBe(
+      '这一步读取步骤 fetch 留下的文件，那一步不在计划里了：恢复那一步，或者在下面取消读取它的文件。',
+    );
+    // The kernel's own problem with what a step reads lands on that field.
+    expect(fieldOfProblem('step "apply": filesFrom[0] "x" is not a step of the plan', draft)).toBe(
+      `step:${apply.uid}:filesFrom`,
+    );
+  });
 });

@@ -128,6 +128,7 @@ export {
 export {
   type AttemptVerdict,
   DEFAULT_BLOCKED_RETRY_RECHECK_MS,
+  DEFAULT_STEP_FILES_RECHECK_MS,
   DEFAULT_QUOTA_RETRY_MS,
   type GoalAdvanceDeps,
   type GoalAdvanceOutcome,
@@ -309,6 +310,20 @@ export {
   runGoalAdvancerTick,
   sweepGoalCancelCleanup,
 } from './advancer.js';
+export {
+  DEFAULT_GOAL_FILES_KEEP_INTERVAL_MS,
+  type GoalFilesKeepTickResult,
+  listGoalFilesToKeep,
+  runGoalFilesKeepTick,
+} from './files-keep.js';
+export {
+  type StepFilesCheck,
+  type StepFilesPort,
+  type StepFilesSource,
+  type StepFilesSources,
+  checkStepFiles,
+  resolveStepFilesSources,
+} from './step-files.js';
 
 export {
   type GoalRunDetail,

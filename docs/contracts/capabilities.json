@@ -20652,6 +20652,15 @@
                         "maxItems": 50,
                         "type": "array"
                       },
+                      "filesFrom": {
+                        "items": {
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                          "type": "string"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array"
+                      },
                       "input": {},
                       "key": {
                         "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
@@ -23204,6 +23213,15 @@
                       "type": "string"
                     },
                     "maxItems": 50,
+                    "type": "array"
+                  },
+                  "filesFrom": {
+                    "items": {
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                      "type": "string"
+                    },
+                    "maxItems": 8,
+                    "minItems": 1,
                     "type": "array"
                   },
                   "input": {},
@@ -45921,6 +45939,15 @@
                     "maxItems": 50,
                     "type": "array"
                   },
+                  "filesFrom": {
+                    "items": {
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                      "type": "string"
+                    },
+                    "maxItems": 8,
+                    "minItems": 1,
+                    "type": "array"
+                  },
                   "input": {},
                   "key": {
                     "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
@@ -54927,6 +54954,15 @@
                       "type": "string"
                     },
                     "maxItems": 50,
+                    "type": "array"
+                  },
+                  "filesFrom": {
+                    "items": {
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                      "type": "string"
+                    },
+                    "maxItems": 8,
+                    "minItems": 1,
                     "type": "array"
                   },
                   "input": {},

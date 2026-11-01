@@ -994,3 +994,62 @@ docker compose logs worker-supervisor --since 30s | grep "docker events subscrip
 - **决定**：维护者 victor，2026-10-08，保持现状，作为已接受风险。不改运行时配置。
 - **重新评估的时机**：gVisor netstack 能解析内嵌 DNS（升级 gVisor 后复测），或者改为给容器显式配置
   DNS 或服务地址、不再依赖内嵌 DNS 时，去掉 `--network=host`，并把本节改为已关闭。
+
+## 17. S11 GO14 之后：目标步骤之间的文件
+
+同一个目标里，计划条目可以在 `filesFrom` 里点名它依赖的上游步骤；那一步的 Worker 留在 `/workspace/out`
+的文件以只读挂载到后一步容器的 `/upstream/<步骤>`。机制与检查见 `packages/worker-supervisor/README.md`
+「步骤间文件」一节，验收见 `docs/runbooks/host-accept-s2.md` 的 `s14-*`。主机上没有新目录：`out/` 在已有
+的 Task 工作目录里，`owner.json` 在已有的 Task 平台目录里。
+
+### 17.1 占盘
+
+没结束（`running`、`paused`、`verifying`）的目标里，每个已成功步骤被接受的那次尝试的两个 Task 目录，由
+内核每小时续租一次（`POST /task-dirs/keep` 刷新 mtime），退休清理不删；目标结束后不再续租，再过一个
+`TASK_WORKDIR_RETENTION_HOURS`（默认 72 小时）被清掉。所以一个长期暂停的目标会一直占着它已成功步骤的
+目录。不只是 `filesFrom` 点名的步骤：修订后新加的步骤也可能读很早以前结束的步骤（只续租被点名的目录是
+遗留项）。`TASK_WORKDIR_RETENTION_HOURS` 至少 2，更小时 worker-supervisor 不启动。
+
+哪些目标在占用（只读）：
+
+```bash
+docker compose exec -T postgres psql -U nexttime -d nexttime -c \
+  "select g.workspace_id, g.id as goal_run_id, g.status, g.updated_at, count(*) as kept_tasks \
+     from goal_runs g \
+     join step_runs s on s.workspace_id = g.workspace_id and s.goal_run_id = g.id \
+     join tasks t on t.workspace_id = s.workspace_id and t.step_run_id = s.id \
+                 and t.step_attempt = s.attempt_count \
+    where g.status in ('running', 'paused', 'verifying') \
+      and s.status = 'succeeded' and t.status = 'completed' \
+    group by g.workspace_id, g.id, g.status, g.updated_at \
+    order by g.updated_at;"
+```
+
+这就是续租的范围（`packages/kernel/src/application/goal/files-keep.ts` `listGoalFilesToKeep`）。要放掉
+某个目标占的目录，是由它的请求人或 owner 结束或取消这个目标，不要在主机上删目录：一个后面还要读这些文件
+的步骤会因此暂停（`needs_decision`，说明「the files of step … are no longer there」）。
+
+内核日志里的 `goal files keep complete` 每小时一行（多少目录、各状态多少）；`goal files keep: Task
+directories not marked as their goal run's` 是 error：某个目录的 `owner.json` 与它的目标对不上，那是内核
+缺陷或有人动了主机上的目录，要查。
+
+### 17.2 升级与回退
+
+- 内核和 worker-supervisor 必须同一次升级、同一次回退。新内核给每个目标步骤的 spawn 带 `goalRunId`，老
+  supervisor 的 `TaskSpawnRequestSchema` 是 strict 的，会拒绝它们，所有目标步骤都起不来；反过来，老内核
+  不调 `/task-dirs/keep`，新 supervisor 照常工作，但一步要读文件时没有续租。
+- 两者之间没有启动依赖。升级时一次重建两者；若新内核先起、老 supervisor 还在，这段时间里目标步骤的 spawn
+  会得到 400，那次尝试失败。回退时先停内核（`docker compose stop kernel`），换好两者的版本后再一起起。
+- 回退前先查有没有计划用到 `filesFrom`（只读）：
+
+  ```bash
+  docker compose exec -T postgres psql -U nexttime -d nexttime -c \
+    "select r.workspace_id, r.goal_run_id, r.revision, r.status, g.status as goal_status \
+       from plan_revisions r \
+       join goal_runs g on g.workspace_id = r.workspace_id and g.id = r.goal_run_id \
+      where jsonb_path_exists(r.plan, '\$.steps[*].filesFrom');"
+  ```
+
+  老内核不认识 `filesFrom`，读不了这些计划。有行时：`goal_status` 还没结束（不是 `completed`、`failed`、
+  `cancelled`，包括还没确认的 `proposed`）的目标先由请求人取消再回退；`status` 是 `proposed` 的待决修订
+  先拒绝；已结束的目标回退后读不出详情，直到再升级回来。

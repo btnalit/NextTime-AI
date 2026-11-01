@@ -2,6 +2,8 @@ import type { CryptoKey } from 'jose';
 import { withWorkspace } from './adapters/db/pool.js';
 import type { PoolLike } from './adapters/db/pool.js';
 import type {
+  TaskDirsKeepInput,
+  TaskDirsKeepResult,
   TaskSpawnInput,
   TaskSpawnOutcome,
   TaskSupervisorClientPort,
@@ -192,5 +194,12 @@ export class FakeTaskSupervisorClient implements TaskSupervisorClientPort {
 
   async status(_workerRunId: string): Promise<TaskSupervisorStatus | undefined> {
     return undefined;
+  }
+
+  /** S11 GO14: every goal step's directory counts as kept — this stand-in runs no container and
+   *  writes no file, so a step that reads an earlier step's files starts (with nothing to read)
+   *  instead of the advance failing on a question nobody can answer. */
+  async keepTaskDirs(tasks: readonly TaskDirsKeepInput[]): Promise<readonly TaskDirsKeepResult[]> {
+    return tasks.map((task) => ({ taskId: task.taskId, state: 'kept' as const }));
   }
 }

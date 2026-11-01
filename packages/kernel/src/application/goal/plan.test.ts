@@ -1296,3 +1296,45 @@ describe('a step’s WorkerSpec (S11 GO8a)', () => {
     );
   });
 });
+
+describe('parsePlan — S11 GO14 filesFrom', () => {
+  it('accepts steps it depends on, and keeps the list as written', () => {
+    const plan = parsePlan({
+      steps: [step('a'), step('b'), step('c', { dependsOn: ['a', 'b'], filesFrom: ['b', 'a'] })],
+    });
+    expect(plan.steps[2]?.filesFrom).toEqual(['b', 'a']);
+    expect(plan.steps[0]?.filesFrom).toBeUndefined();
+  });
+
+  it('refuses a step not in the plan, the step itself, one not depended on, and a step named twice', () => {
+    expect(
+      problemsOf({
+        steps: [
+          step('a'),
+          step('b'),
+          step('c', { dependsOn: ['a'], filesFrom: ['x', 'c', 'b', 'a', 'a'] }),
+        ],
+      }),
+    ).toEqual([
+      'step "c": filesFrom[0]: names step "x", which is not in the plan',
+      'step "c": filesFrom[1]: names this step itself — a step reads the files of a step it depends on',
+      'step "c": filesFrom[2]: names step "b", which this step does not depend on — add it to dependsOn',
+      'step "c": filesFrom[4]: names step "a" again — name each step once',
+    ]);
+  });
+
+  it('refuses an empty list, more than eight steps, and a key that is not a step key', () => {
+    const many = Array.from({ length: 9 }, (_, i) => `s${i}`);
+    expect(problemsOf({ steps: [step('a', { filesFrom: [] })] }).join('\n')).toContain('filesFrom');
+    expect(
+      problemsOf({
+        steps: [...many.map((key) => step(key)), step('z', { dependsOn: many, filesFrom: many })],
+      }).join('\n'),
+    ).toContain('filesFrom');
+    expect(
+      problemsOf({ steps: [step('a'), step('b', { dependsOn: ['a'], filesFrom: ['../a'] })] }).join(
+        '\n',
+      ),
+    ).toContain('filesFrom');
+  });
+});

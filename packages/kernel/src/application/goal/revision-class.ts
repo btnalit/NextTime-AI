@@ -55,7 +55,9 @@ import type { GoalRunRow } from './types.js';
  *     flight — adopting it would stop that work;
  *   - `unresolvable`: what a step it adds or changes would be able to do could not be worked out.
  * Otherwise `minor`: a different Worker, input, order or retry limit for work that only reads,
- * thinks and reports, on checks that still hold. The budget never changes with a planner's
+ * thinks and reports, on checks that still hold — or different files read (`filesFrom`, S11 GO14
+ * F4: they only ever come from steps of the same goal run that have ended, so reading them widens
+ * nothing the run reads or calls). The budget never changes with a planner's
  * revision (its output has none).
  *
  * {@link classifyPlannerRevision} is the rule, pure; {@link plannerRevisionFacts} reads what it

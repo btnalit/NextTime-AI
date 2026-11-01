@@ -788,6 +788,114 @@ describe('the plan editor on the goal page (S11 GO6, revise_goal)', () => {
     expect(focusedId()).toBe('goal-plan-add-confirm');
   });
 
+  it('S11 GO14 (UX P2-1 on #884): after a handoff pause, a new step makes the files again and the step reads its files instead', async () => {
+    const base = goalDetail();
+    const plan = base.planRevision.plan;
+    const detail = paused({
+      pauseReason: 'needs_decision',
+      pausedBy: null,
+      planRevision: {
+        ...base.planRevision,
+        plan: {
+          ...plan,
+          steps: [
+            plan.steps[0] as (typeof plan.steps)[number],
+            { ...(plan.steps[1] as (typeof plan.steps)[number]), filesFrom: ['fetch'] },
+          ],
+        },
+      },
+      steps: [
+        stepRun({ status: 'succeeded', attemptCount: 1, attempts: [] }),
+        stepRun({
+          id: 'sr-apply',
+          stepKey: 'apply',
+          status: 'ready',
+          attemptCount: 0,
+          attempts: [],
+        }),
+      ],
+    });
+    const http = scriptedHttp(
+      handlers(detail, workspace('p-alice', 'member'), {
+        revise_goal: () => ({
+          goalRunId: 'goal-1',
+          status: 'paused',
+          changed: true,
+          revision: 2,
+          planRevisionId: 'rev-2',
+          supersededStepRunIds: ['sr-apply'],
+          createdStepRunIds: ['sr-fetch-2', 'sr-apply-2'],
+          withdrawnActionRequestIds: [],
+          releasedActionRequestIds: [],
+          hints: [],
+        }),
+      }),
+    );
+    renderPage(http);
+    await openEditor();
+    const files = () => within(step('apply')).getByTestId('goal-plan-step-files-from');
+    const option = (key: string) =>
+      within(files())
+        .queryAllByTestId('goal-plan-step-files-from-option')
+        .find((input) => input.getAttribute('data-source-step') === key) as
+        | HTMLInputElement
+        | undefined;
+    expect(option('fetch')?.checked).toBe(true);
+    expect(step('apply').textContent).not.toContain('留下的文件保持不变');
+
+    fireEvent.click(screen.getByTestId('goal-plan-add-step'));
+    const added = screen.getAllByTestId('goal-plan-step').at(-1) as HTMLElement;
+    fireEvent.change(within(added).getByTestId('goal-plan-step-key'), {
+      target: { value: 'fetch-2' },
+    });
+    await waitFor(() =>
+      expect(
+        within(added)
+          .getByTestId('goal-plan-step-worker')
+          .querySelector(`option[value="${WORKER_ID}"]`),
+      ).not.toBeNull(),
+    );
+    fireEvent.change(within(added).getByTestId('goal-plan-step-worker'), {
+      target: { value: WORKER_ID },
+    });
+    fireEvent.change(within(added).getByTestId('goal-plan-step-version'), {
+      target: { value: '2' },
+    });
+    // Only a step it comes after can be read: fetch-2 is offered once ticked there.
+    expect(option('fetch-2')).toBeUndefined();
+    const depends = within(step('apply')).getByTestId('goal-plan-step-depends');
+    fireEvent.click(within(depends).getByLabelText('fetch-2'));
+    fireEvent.click(option('fetch-2') as HTMLInputElement);
+    // Unticking fetch there stops reading its files too.
+    fireEvent.click(within(depends).getByLabelText('fetch'));
+    expect(option('fetch')).toBeUndefined();
+    expect(option('fetch-2')?.checked).toBe(true);
+
+    fireEvent.change(screen.getByTestId('goal-plan-reason'), {
+      target: { value: '重新取证书，apply 改读新的' },
+    });
+    await send();
+    await waitFor(() =>
+      expect(
+        (
+          http.calls.find((call) => call.name === 'revise_goal')?.params as {
+            plan: GoalDetailWire['planRevision']['plan'];
+          }
+        ).plan.steps,
+      ).toEqual([
+        { key: 'fetch', worker: { definitionId: WORKER_ID, version: 2 }, input: { hosts: 3 } },
+        {
+          key: 'apply',
+          worker: { definitionId: WORKER_ID, version: 2 },
+          dependsOn: ['fetch-2'],
+          maxAttempts: 2,
+          filesFrom: ['fetch-2'],
+        },
+        { key: 'fetch-2', worker: { definitionId: WORKER_ID, version: 2 } },
+      ]),
+    );
+  });
+
   it('leaves without sending anything', async () => {
     const http = scriptedHttp(handlers(paused(), workspace('p-alice', 'member')));
     renderPage(http);

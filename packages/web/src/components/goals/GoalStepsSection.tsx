@@ -25,6 +25,7 @@ import {
   bindingSentence,
   checkKindLabel,
   factCheckSentence,
+  filesFromSentence,
   goalFirstAttemptAt,
   goalSteps,
   isStepAuthorityHint,
@@ -210,6 +211,79 @@ export function GoalStepsSection({
   );
 }
 
+/**
+ * S11 GO14: the earlier steps whose files a step reads (its plan entry's `filesFrom`), each with
+ * the attempt whose files its Worker gets — that step's accepted attempt, linked to its Task — or
+ * why there is none yet. A step whose files are gone when it would start pauses the run, and the
+ * pause says so. The files themselves stay on the worker host: the console never sees them.
+ */
+function StepFilesFrom({
+  keys,
+  detail,
+  http,
+  t,
+}: {
+  readonly keys: readonly string[];
+  readonly detail: GoalDetailWire | undefined;
+  readonly http: CapabilityCaller;
+  readonly t: Translate;
+}) {
+  const runs = new Map(
+    detail ? goalSteps(detail).current.map((view) => [view.key, view.run] as const) : [],
+  );
+  return (
+    <div className="stack-s" data-testid="goal-step-files-from">
+      <span className="text-small text-3">
+        {filesFromSentence(keys, t)}
+        {t('（只读）', ' (read-only)')}
+      </span>
+      {detail ? (
+        <ul className="stack-s">
+          {keys.map((key) => {
+            const run = runs.get(key) ?? null;
+            const accepted =
+              run?.status === 'succeeded'
+                ? run.attempts.find((attempt) => attempt.attempt === run.attemptCount)
+                : undefined;
+            return (
+              <li
+                key={key}
+                className="row-wrap text-small"
+                data-testid="goal-step-files-source"
+                data-source-step={key}
+              >
+                <span className="mono">{key}</span>
+                {accepted ? (
+                  <>
+                    <span className="text-3">
+                      {t(`第 ${accepted.attempt} 次尝试`, `attempt ${accepted.attempt}`)}
+                    </span>
+                    <RefChip
+                      kind="task"
+                      id={accepted.taskId}
+                      http={http}
+                      href={hrefs.task(accepted.taskId)}
+                      size="s"
+                    />
+                  </>
+                ) : run?.status === 'skipped' ? (
+                  <span className="text-warn">
+                    {t('这一步被跳过了，没有留下文件', 'This step was skipped and left no files')}
+                  </span>
+                ) : (
+                  <span className="text-3">
+                    {t('这一步成功后才有文件', 'Its files come once it succeeds')}
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 interface StepItemProps {
   readonly view: StepView;
   readonly acceptance: StepAcceptanceWire | undefined;
@@ -320,6 +394,10 @@ function StepItem({
             </li>
           ))}
         </ul>
+      ) : null}
+
+      {planStep?.filesFrom && planStep.filesFrom.length > 0 ? (
+        <StepFilesFrom keys={planStep.filesFrom} detail={detail} http={http} t={t} />
       ) : null}
 
       {trials.length > 0

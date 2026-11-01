@@ -51,7 +51,7 @@
 import { mkdirSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { posix as posixPath } from 'node:path';
 import { isValidCorrelationId } from '@nexttime/shared';
-import type { SupervisorConfig } from './config.js';
+import type { SupervisorConfig, TaskUpstreamFiles } from './config.js';
 import type { TaskSkillInline } from './config.js';
 import type { ContainerState, DockerClient } from './docker-client.js';
 import { denyAllEntryFields, taskSourceId } from './egress-map.js';
@@ -82,6 +82,14 @@ import {
   buildTaskSpawnSpec,
   taskContainerName,
 } from './task-spawn-spec.js';
+import {
+  TaskAlreadySpawnedError,
+  type UpstreamFilesState,
+  UpstreamFilesUnavailableError,
+  hasTaskOwnerMarker,
+  prepareGoalTaskDirs,
+  upstreamFilesState,
+} from './upstream-files.js';
 
 /** Splits `TASK_EGRESS_DENY_LABEL`'s comma-joined value back into a list — the inverse of
  *  `buildTaskSpawnSpec`'s `(input.egressDeny ?? []).join(',')`. Same convention as
@@ -135,6 +143,25 @@ export interface TaskSpawnInput {
    *  the kernel's `x-correlation-id`, or one minted here). Becomes the container's
    *  `NEXTTIME_CORRELATION_ID` and label, and this run's egress source-map `correlationId`. */
   readonly correlationId?: string;
+  /** S11 GO14 (`upstream-files.ts`): the goal run a goal step's Task works for — `spawn()` makes
+   *  its handoff directory and writes its owner marker. */
+  readonly goalRunId?: string;
+  /** S11 GO14: earlier steps' handoff directories to mount — each checked by `spawn()` first
+   *  (`upstreamFilesState`), which refuses the spawn ({@link UpstreamFilesUnavailableError})
+   *  before writing anything when one cannot be mounted. Validated by `config.ts`
+   *  (`TaskSpawnRequestSchema`): only with `goalRunId`, distinct, never this Task. */
+  readonly upstream?: readonly TaskUpstreamFiles[];
+}
+
+/** S11 GO14: one Task of a `keepTaskDirs` call, and what its handoff directory was found to be. */
+export interface TaskDirsKeepEntry {
+  readonly taskId: string;
+  readonly workspaceId: string;
+  readonly goalRunId: string;
+}
+export interface TaskDirsKeepResult {
+  readonly taskId: string;
+  readonly state: UpstreamFilesState;
 }
 
 /** One Worker container reaching a terminal state (leftover 87 metrics / log line). */
@@ -218,6 +245,11 @@ export interface TaskService {
    *  an interval, separate from `reap()`: this one walks the filesystem, not the registry, and
    *  belongs on a much longer, "boring" cadence. */
   sweepRetention(): Promise<void>;
+  /** S11 GO14: the kernel's lease on goal step Tasks' directories (`POST /task-dirs/keep`) — for
+   *  each, its handoff directory's state for a reader of that workspace and goal run
+   *  (`upstreamFilesState`); a `kept` one has both of its directories marked used now, so
+   *  `sweepRetention` leaves them for another retention period. Touches nothing else. */
+  keepTaskDirs(tasks: readonly TaskDirsKeepEntry[]): Promise<readonly TaskDirsKeepResult[]>;
   /** feat/egress-docker-events: called by `index.ts`'s docker-events subscriber for every
    *  container-lifecycle event (`die`/`destroy`/`kill`/`stop`) matching the platform's own label
    *  filter — see `docker-events.ts`'s module doc comment. `containerId` is Docker's own event
@@ -392,6 +424,13 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
     await reconcileOne(workerRunId, entry);
   }
 
+  /** The Tasks with a container this service counts as running — never swept, never mounted. */
+  function runningTaskIds(): Set<string> {
+    return new Set(
+      [...registry.values()].filter((e) => e.state === 'running').map((e) => e.taskId),
+    );
+  }
+
   /** Removes every per-Task directory under `root` older than the retention cutoff whose Task
    *  isn't running. A missing `root` is nothing to sweep (it appears with the first spawn). */
   function sweepTaskDirs(
@@ -464,16 +503,49 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         egressDeny,
         egressDenyAll,
         correlationId,
+        goalRunId,
+        upstream,
       } = input;
       const paths = taskWorkspacePaths(config, taskId);
 
       // Refused before anything is written (runtime-contract.ts).
       await assertRuntimeContract(imagesDocker, image, { mode: 'task', taskId, workerRunId });
 
+      // S11 GO14 (review #493 on #884): a goal step's Task is spawned once — the one whose platform
+      // directory already holds an owner marker is refused, so a handoff directory checked for a
+      // later step is never written by a Worker again (`upstream-files.ts`). A Task outside a goal
+      // has no marker, and its crash requeue is unaffected.
+      if (hasTaskOwnerMarker(paths)) throw new TaskAlreadySpawnedError(taskId);
+
+      // S11 GO14: every earlier step's handoff directory is checked before anything is written
+      // (`upstream-files.ts` has why these checks). Running is asked of Docker as well as of the
+      // registry, which a restart empties until `reconcile()` has run.
+      if (upstream && upstream.length > 0) {
+        if (goalRunId === undefined) {
+          throw new Error('task spawn: upstream files need the goal run they belong to');
+        }
+        const running = runningTaskIds();
+        for (const entry of upstream) {
+          const containers = await docker.listByLabel(TASK_ID_LABEL, entry.taskId);
+          if (containers.some((container) => container.running)) running.add(entry.taskId);
+          const state = upstreamFilesState(
+            config,
+            entry.taskId,
+            { workspaceId, goalRunId },
+            running,
+          );
+          if (state !== 'kept') {
+            throw new UpstreamFilesUnavailableError(entry.stepKey, entry.taskId, state);
+          }
+        }
+      }
+
       // This process also runs as uid 10001, so a directory it creates here is already correctly
       // owned; both are bind sources, which Docker would otherwise create as root.
       mkdirSync(paths.localWorkspaceDir, { recursive: true });
       mkdirSync(paths.localPlatformDir, { recursive: true });
+      // S11 GO14: a goal step's handoff directory and owner marker (`upstream-files.ts`).
+      if (goalRunId !== undefined) prepareGoalTaskDirs(paths, { workspaceId, goalRunId });
 
       // P-A2: the Task-mode counterpart of resident mode's `writeSystemPromptIfChanged` — put the
       // caller's prompt in this Task's platform directory (host-paths.ts `taskSystemPromptPath`)
@@ -522,6 +594,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         egressDeny,
         egressDenyAll,
         correlationId,
+        upstream,
       });
       // Only what the spec builder accepted (a valid id) is remembered and registered.
       const acceptedCorrelationId = spec.labels[TASK_CORRELATION_ID_LABEL];
@@ -747,13 +820,42 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
 
     async sweepRetention(): Promise<void> {
       const cutoffMs = config.taskWorkdirRetentionHours * 60 * 60 * 1000;
-      const runningTaskIds = new Set(
-        [...registry.values()].filter((e) => e.state === 'running').map((e) => e.taskId),
-      );
+      const running = runningTaskIds();
       // A Task's platform directory (host-paths.ts) follows the same rule as its workspace,
       // swept on its own mtime so one left behind without its workspace still goes.
-      sweepTaskDirs(localTaskWorkspacesRootDir(config), runningTaskIds, cutoffMs);
-      sweepTaskDirs(localTaskPlatformRootDir(config), runningTaskIds, cutoffMs);
+      sweepTaskDirs(localTaskWorkspacesRootDir(config), running, cutoffMs);
+      sweepTaskDirs(localTaskPlatformRootDir(config), running, cutoffMs);
+    },
+
+    async keepTaskDirs(tasks): Promise<readonly TaskDirsKeepResult[]> {
+      const running = runningTaskIds();
+      const usedAt = new Date(now());
+      return tasks.map((task) => {
+        const state = upstreamFilesState(
+          config,
+          task.taskId,
+          { workspaceId: task.workspaceId, goalRunId: task.goalRunId },
+          running,
+        );
+        if (state === 'kept') {
+          const paths = taskWorkspacePaths(config, task.taskId);
+          try {
+            utimesSync(paths.localWorkspaceDir, usedAt, usedAt);
+            utimesSync(paths.localPlatformDir, usedAt, usedAt);
+          } catch (err) {
+            console.error(
+              JSON.stringify({
+                level: 'warn',
+                msg: 'task dirs keep failed',
+                taskId: task.taskId,
+                error: String(err),
+              }),
+            );
+            return { taskId: task.taskId, state: 'missing' as const };
+          }
+        }
+        return { taskId: task.taskId, state };
+      });
     },
 
     async notifyContainerExited(containerId: string, action: string): Promise<boolean> {

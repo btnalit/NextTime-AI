@@ -51,6 +51,23 @@ export const GOAL_PLANNER_NO_PROGRESS_LIMIT = 3;
 
 /** S11 GO5d-1: input bindings one step carries at most. */
 export const MAX_STEP_BINDINGS = 16;
+/** S11 GO14: earlier steps whose files one step reads, at most — each is one read-only mount. */
+export const MAX_STEP_FILES_FROM = 8;
+/** S11 GO14: what worker-supervisor finds an earlier step's handoff directory to be for a later
+ *  step of the same goal (its `upstream-files.ts` has the checks):
+ *   - `kept`: there, the goal's, its Task no longer running — it can be mounted;
+ *   - `running`: a container of that Task still runs (it has just reported) — look again shortly;
+ *   - `missing`: gone (retention removed it, or the Task ran before the platform kept such files);
+ *   - `not_owned`: its owner marker is missing or names another workspace or goal run;
+ *   - `not_a_directory`: the handoff directory is a link, a FIFO, a file — not a directory. */
+export const STEP_FILES_STATE_VALUES = [
+  'kept',
+  'running',
+  'missing',
+  'not_owned',
+  'not_a_directory',
+] as const;
+export type StepFilesState = (typeof STEP_FILES_STATE_VALUES)[number];
 /** S11 GO5d-1: where a binding puts its value in the step's input — field names separated by
  *  dots, at most 8 deep (`host`, `target.hosts`). Fields only, no array positions: a binding fills
  *  a field, it does not splice a list. */
@@ -212,6 +229,11 @@ export const PlanStepSchema = z
     outputSchema: StepOutputSchemaSchema.optional(),
     /** S11 GO5d-1: inputs the step takes from earlier steps' outputs. */
     bindings: z.array(StepBindingSchema).min(1).max(MAX_STEP_BINDINGS).optional(),
+    /** S11 GO14: earlier steps whose files this step reads — what each one's Worker left in its
+     *  handoff directory (`/workspace/out`), mounted read-only at `/upstream/<key>` for every
+     *  attempt of this step. Like `bindings`, only from steps this one depends on; the step does
+     *  not start without all of them (the plan's checks: `kernel` `application/goal/plan.ts`). */
+    filesFrom: z.array(StepKeySchema).min(1).max(MAX_STEP_FILES_FROM).optional(),
   })
   .strict();
 

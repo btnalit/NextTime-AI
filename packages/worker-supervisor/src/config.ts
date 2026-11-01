@@ -15,10 +15,18 @@
  * actually needs.
  */
 
-import { HANDLE_BINDINGS_FILE_ENV, normalizeImageRef } from '@nexttime/shared';
+import {
+  HANDLE_BINDINGS_FILE_ENV,
+  MAX_STEP_FILES_FROM,
+  StepKeySchema,
+  normalizeImageRef,
+} from '@nexttime/shared';
 import { z } from 'zod';
 
 export const DEFAULT_SUPERVISOR_PORT = 8081;
+/** S11 GO14: the shortest `TASK_WORKDIR_RETENTION_HOURS` — longer than the kernel's hourly
+ *  renewal of the directories goals still need (`POST /task-dirs/keep`). */
+export const MIN_TASK_WORKDIR_RETENTION_HOURS = 2;
 /** The bindings file on the `handle-bindings` tmpfs volume (docker-compose.yml). */
 export const DEFAULT_SUPERVISOR_HANDLE_BINDINGS_FILE = '/run/handle-bindings/bindings.json';
 
@@ -225,6 +233,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SupervisorConf
     );
   }
 
+  // S11 GO14: the kernel renews goal step Tasks' directories hourly (`POST /task-dirs/keep`); a
+  // retention no longer than that could sweep one between two renewals.
+  const taskWorkdirRetentionHours = parseIntEnv(env.TASK_WORKDIR_RETENTION_HOURS, 72);
+  if (taskWorkdirRetentionHours < MIN_TASK_WORKDIR_RETENTION_HOURS) {
+    throw new Error(
+      `@nexttime/worker-supervisor: TASK_WORKDIR_RETENTION_HOURS must be at least ${MIN_TASK_WORKDIR_RETENTION_HOURS} (the kernel renews the directories of running goals every hour — see config.ts)`,
+    );
+  }
+
   const localDataDir = env.LOCAL_DATA_DIR ?? '/data';
   const workerImage = env.WORKER_IMAGE ?? 'nexttime-ai-worker-runtime';
   const dockerSocketPath = env.DOCKER_SOCKET_PATH ?? '/var/run/docker.sock';
@@ -257,7 +274,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SupervisorConf
       dockerSocketPath,
     ),
     taskMaxRuntimeSec: parseIntEnv(env.TASK_MAX_RUNTIME_SEC, 3600),
-    taskWorkdirRetentionHours: parseIntEnv(env.TASK_WORKDIR_RETENTION_HOURS, 72),
+    taskWorkdirRetentionHours,
     taskReapIntervalMs: parseIntEnv(env.TASK_REAP_INTERVAL_MS, 10_000),
     taskImageAllowlist: buildTaskImageAllowlist(env.WORKER_IMAGE_ALLOWLIST, workerImage),
   };
@@ -427,6 +444,14 @@ export type StopRequest = z.infer<typeof StopRequestSchema>;
 /** Same UUID rule as the resident schemas above (see `IdClaimSchema`'s doc comment). */
 const idClaim = IdClaimSchema;
 
+/** S11 GO14: one upstream handoff directory a Task mounts — the step it was left by (its key is
+ *  the mount's last path segment, `StepKeySchema`: no `/`, never `.` or `..`) and that step's Task
+ *  (a path segment of the bind source, hence a UUID like every other id here). */
+export const TaskUpstreamFilesSchema = z
+  .object({ stepKey: StepKeySchema, taskId: idClaim })
+  .strict();
+export type TaskUpstreamFiles = z.infer<typeof TaskUpstreamFilesSchema>;
+
 /** `POST /task/spawn` request body (S2.8 task brief). `onBehalfOf` carries the `principalId` the
  *  child Handle's `on_behalf_of` is scoped to (I13) — named per the task brief, not `principalId`,
  *  to keep the wire shape distinct from resident mode's own field of that name (this is a
@@ -475,6 +500,54 @@ export const TaskSpawnRequestSchema = z
      *  leaves egress as before. A supervisor that predates this field rejects the request (this
      *  schema is strict), so the kernel never gets an unrestricted evaluation container. */
     egressDenyAll: z.boolean().optional(),
+    /** S11 GO14 (`upstream-files.ts`): the goal run this Task works for — present for every Task
+     *  of a goal step. `spawn()` then makes the Task's handoff directory (`/workspace/out`) and
+     *  writes its owner marker, so a later step of the same goal may mount what it leaves there.
+     *  A supervisor that predates this field rejects the request (strict), which is why the kernel
+     *  and this service are upgraded and rolled back together. */
+    goalRunId: idClaim.optional(),
+    /** S11 GO14: the earlier steps of the same goal whose handoff directories this Task mounts
+     *  read-only at `/upstream/<stepKey>` — the kernel's choice (the step's `filesFrom`, its
+     *  accepted attempt), checked again by `spawn()` against each directory's owner marker. Needs
+     *  `goalRunId`; step keys and Tasks are distinct, and never this Task itself. */
+    upstream: z.array(TaskUpstreamFilesSchema).min(1).max(MAX_STEP_FILES_FROM).optional(),
+  })
+  .strict()
+  .superRefine((request, ctx) => {
+    const upstream = request.upstream ?? [];
+    if (upstream.length === 0) return;
+    if (request.goalRunId === undefined) {
+      ctx.addIssue({ code: 'custom', path: ['upstream'], message: 'upstream needs goalRunId' });
+    }
+    if (new Set(upstream.map((entry) => entry.stepKey)).size !== upstream.length) {
+      ctx.addIssue({ code: 'custom', path: ['upstream'], message: 'step keys repeat' });
+    }
+    if (new Set(upstream.map((entry) => entry.taskId)).size !== upstream.length) {
+      ctx.addIssue({ code: 'custom', path: ['upstream'], message: 'tasks repeat' });
+    }
+    if (upstream.some((entry) => entry.taskId === request.taskId)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['upstream'],
+        message: 'a Task cannot read its own files',
+      });
+    }
+  });
+export type TaskSpawnRequest = z.infer<typeof TaskSpawnRequestSchema>;
+
+/** S11 GO14: how many Tasks one `POST /task-dirs/keep` names. */
+export const MAX_TASK_DIRS_KEEP_BATCH = 500;
+
+/** `POST /task-dirs/keep` request body (S11 GO14, `upstream-files.ts`): goal step Tasks whose
+ *  directories the kernel still needs — each is reported as `upstreamFilesState` sees it for a
+ *  reader of that workspace and goal run, and a `kept` one has both of its directories marked used
+ *  now, so the retention sweep leaves them for another `TASK_WORKDIR_RETENTION_HOURS`. */
+export const TaskDirsKeepRequestSchema = z
+  .object({
+    tasks: z
+      .array(z.object({ taskId: idClaim, workspaceId: idClaim, goalRunId: idClaim }).strict())
+      .min(1)
+      .max(MAX_TASK_DIRS_KEEP_BATCH),
   })
   .strict();
-export type TaskSpawnRequest = z.infer<typeof TaskSpawnRequestSchema>;
+export type TaskDirsKeepRequest = z.infer<typeof TaskDirsKeepRequestSchema>;

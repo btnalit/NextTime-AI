@@ -613,18 +613,18 @@ describe('task-service sweepRetention', () => {
   });
 
   it('deletes a finished Task directory older than the retention window', async () => {
-    const { service, config } = setupRealClock({ TASK_WORKDIR_RETENTION_HOURS: '1' });
+    const { service, config } = setupRealClock({ TASK_WORKDIR_RETENTION_HOURS: '2' });
     const old = taskDir(config, 'old-task');
     mkdirSync(old, { recursive: true });
-    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
-    utimesSync(old, twoHoursAgo, twoHoursAgo);
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    utimesSync(old, threeHoursAgo, threeHoursAgo);
 
     await service.sweepRetention();
     expect(existsSync(old)).toBe(false);
   });
 
   it('keeps a Task directory younger than the retention window', async () => {
-    const { service, config } = setupRealClock({ TASK_WORKDIR_RETENTION_HOURS: '1' });
+    const { service, config } = setupRealClock({ TASK_WORKDIR_RETENTION_HOURS: '2' });
     const recent = taskDir(config, 'recent-task');
     mkdirSync(recent, { recursive: true });
 
@@ -633,15 +633,15 @@ describe('task-service sweepRetention', () => {
   });
 
   it('a spawn marks both of the Task’s directories as used, even when it only rewrites what is there', async () => {
-    const { service, config } = setupRealClock({ TASK_WORKDIR_RETENTION_HOURS: '1' });
+    const { service, config } = setupRealClock({ TASK_WORKDIR_RETENTION_HOURS: '2' });
     const workspace = taskDir(config, 'task-1');
     const platform = join(config.localDataDir, 'workspaces', '.platform', 'tasks', 'task-1');
     mkdirSync(workspace, { recursive: true });
     mkdirSync(platform, { recursive: true });
     writeFileSync(join(platform, 'system-prompt.md'), 'earlier run');
-    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
-    utimesSync(workspace, twoHoursAgo, twoHoursAgo);
-    utimesSync(platform, twoHoursAgo, twoHoursAgo);
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    utimesSync(workspace, threeHoursAgo, threeHoursAgo);
+    utimesSync(platform, threeHoursAgo, threeHoursAgo);
 
     await service.spawn({ ...spawnInput, systemPrompt: 'this run' });
     const hourAgo = Date.now() - 60 * 60 * 1000;
@@ -650,25 +650,25 @@ describe('task-service sweepRetention', () => {
   });
 
   it('never deletes the workdir of a Task the registry still marks running, even if old', async () => {
-    const { service, config } = setupRealClock({ TASK_WORKDIR_RETENTION_HOURS: '1' });
+    const { service, config } = setupRealClock({ TASK_WORKDIR_RETENTION_HOURS: '2' });
     await service.spawn(spawnInput); // taskId: 'task-1', still running
     const dirPath = taskDir(config, 'task-1');
-    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
-    utimesSync(dirPath, twoHoursAgo, twoHoursAgo);
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    utimesSync(dirPath, threeHoursAgo, threeHoursAgo);
 
     await service.sweepRetention();
     expect(existsSync(dirPath)).toBe(true);
   });
 
   it('sweeps a Task’s platform directory by the same rule, never a running Task’s', async () => {
-    const { service, config } = setupRealClock({ TASK_WORKDIR_RETENTION_HOURS: '1' });
+    const { service, config } = setupRealClock({ TASK_WORKDIR_RETENTION_HOURS: '2' });
     await service.spawn({ ...spawnInput, systemPrompt: 'running' }); // task-1, still running
     const old = join(config.localDataDir, 'workspaces', '.platform', 'tasks', 'old-task');
     mkdirSync(old, { recursive: true });
-    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
-    utimesSync(old, twoHoursAgo, twoHoursAgo);
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    utimesSync(old, threeHoursAgo, threeHoursAgo);
     const running = platformDir(config.localDataDir);
-    utimesSync(running, twoHoursAgo, twoHoursAgo);
+    utimesSync(running, threeHoursAgo, threeHoursAgo);
 
     await service.sweepRetention();
     expect(existsSync(old)).toBe(false);

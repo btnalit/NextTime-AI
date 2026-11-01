@@ -69,9 +69,11 @@ export type { SystemPromptParts } from './instance-instructions.js';
 export {
   INSTANCE_INSTRUCTIONS_MARKER,
   PROMPT_ADDENDUM_MARKER,
+  STEP_FILES_MARKER,
   STEP_INSTRUCTIONS_MARKER,
   composeSystemPrompt,
   readInstanceInstructions,
+  stepFilesSection,
 } from './instance-instructions.js';
 export type { LlmAdminAuditEventInput } from './llm-admin-audit.js';
 export { recordLlmAdminAudit } from './llm-admin-audit.js';

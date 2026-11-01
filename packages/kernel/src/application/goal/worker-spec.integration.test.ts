@@ -19,7 +19,7 @@ import {
 } from '../../governance/capability/index.js';
 import { registerGatekeeper } from '../../governance/gatekeepers/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
-import { STEP_INSTRUCTIONS_MARKER } from '../platform/index.js';
+import { STEP_INSTRUCTIONS_MARKER, stepFilesSection } from '../platform/index.js';
 import {
   type RunConfigSnapshot,
   RunConfigSnapshotSchema,
@@ -547,7 +547,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(call.model).toBe('p/m1');
         expect(call.skillsInline?.map((mount) => mount.name)).toEqual([skill.name]);
         expect(call.systemPrompt).toBe(
-          `${BASE_PROMPT}\n\n${STEP_INSTRUCTIONS_MARKER}\n${spec.instructions}`,
+          `${BASE_PROMPT}\n\n${STEP_INSTRUCTIONS_MARKER}\n${spec.instructions}\n\n${stepFilesSection([])}`,
         );
         const sessionScope = await admin(async (client) => {
           const run = await client.query<{ session_id: string }>(
@@ -708,7 +708,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         const task = await latestAttempt((await stepOf(goalRunId, 'a')).id);
         expect(snapshotOf(task)).toMatchObject({ v: 2, spec: null });
         expect(task.observe_scope).toBeNull();
-        expect(spawnOf(task.id).systemPrompt).toBe(BASE_PROMPT);
+        // GO14: every goal step attempt is told where to leave files for later steps.
+        expect(spawnOf(task.id).systemPrompt).toBe(`${BASE_PROMPT}\n\n${stepFilesSection([])}`);
       });
     });
 

@@ -1103,6 +1103,45 @@ async function main() {
       check('three-writes-not-goal-ledger', ledger?.args?.key === 's5-l43', JSON.stringify(ledger));
     }
 
+    // 6p. S11 GO14 goalHandoffStepScenario: the first step writes its token into /workspace/out;
+    //     the second reads /upstream/a/handoff.txt, tries to write beside it, and reports both.
+    {
+      const begin = { role: 'user', content: 'Begin working on your assigned Task now' };
+      const called = (id, name, args, answer) => [
+        { role: 'assistant', content: null, tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }] },
+        { role: 'tool', tool_call_id: id, content: answer },
+      ];
+      const writer = { role: 'custom', content: '### Task input\nACCEPT_S2_SCENARIO=goal_handoff HANDOFF_ROLE=write HANDOFF_MARK=h42tok' };
+      const wrote = toolCallOf((await post([writer, begin])).json);
+      check(
+        'handoff-write-turn1',
+        wrote?.name === 'write' && wrote.args.path === '/workspace/out/handoff.txt' && wrote.args.content === 'h42tok\n',
+        JSON.stringify(wrote),
+      );
+      const writeReport = toolCallOf(
+        (await post([writer, begin, ...called('call_hw', 'write', wrote?.args ?? {}, 'Successfully wrote 7 bytes to /workspace/out/handoff.txt')])).json,
+      );
+      check('handoff-write-report', writeReport?.name === 'report_result' && !JSON.stringify(writeReport.args).includes('h42tok'), JSON.stringify(writeReport));
+      checkToolCallAgainstRegistry('handoff-write-report', writeReport);
+
+      const reader = { role: 'custom', content: '### Task input\nACCEPT_S2_SCENARIO=goal_handoff HANDOFF_ROLE=read' };
+      const read = toolCallOf((await post([reader, begin])).json);
+      check('handoff-read-turn1', read?.name === 'read' && read.args.path === '/upstream/a/handoff.txt', JSON.stringify(read));
+      const readDone = called('call_hr', 'read', read?.args ?? {}, 'h42tok\n');
+      const tamper = toolCallOf((await post([reader, begin, ...readDone])).json);
+      check('handoff-read-turn2', tamper?.name === 'bash' && tamper.args.command.includes('/upstream/a/'), JSON.stringify(tamper));
+      const tamperDone = called('call_hb', 'bash', tamper?.args ?? {}, "touch: cannot touch '/upstream/a/tamper': Read-only file system\nHANDOFF_WRITE_EXIT=1");
+      const readReport = toolCallOf((await post([reader, begin, ...readDone, ...tamperDone])).json);
+      check(
+        'handoff-read-report',
+        readReport?.name === 'report_result' &&
+          readReport.args.summary.includes('HANDOFF_READ=[h42tok]') &&
+          readReport.args.summary.includes('HANDOFF_WRITE_EXIT=1'),
+        JSON.stringify(readReport),
+      );
+      checkToolCallAgainstRegistry('handoff-read-report', readReport);
+    }
+
     // 7. Streaming mode also honors scenarios (SSE contains the scripted tool name).
     {
       const { sse } = await post(

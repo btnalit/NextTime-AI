@@ -4,6 +4,7 @@ import { TaskSupervisorError } from '../../adapters/supervisor-client/index.js';
 import type {
   TaskSkillInlineMountInput,
   TaskSpawnOutcome,
+  TaskUpstreamFilesInput,
 } from '../../adapters/supervisor-client/index.js';
 import { revokeSession } from '../../governance/capability/index.js';
 import { currentCorrelationId } from '../../substrate/correlation/index.js';
@@ -101,6 +102,12 @@ export interface SpawnWorkerRunInput {
    *  requeue) and forwarded verbatim to `/task/spawn`. `undefined` leaves worker-supervisor's own
    *  `WORKER_IMAGE` env default in effect, unchanged from before this field existed. */
   readonly image?: string;
+  /** S11 GO14: set for a goal step's attempt Task only (`step-attempt.ts`) — the goal run it works
+   *  for, so worker-supervisor makes its handoff directory and owner marker. */
+  readonly goalRunId?: string;
+  /** S11 GO14: the earlier steps' handoff directories this attempt mounts (the step's
+   *  `filesFrom`, each one's accepted attempt — `application/goal/step-files.ts`). */
+  readonly upstream?: readonly TaskUpstreamFilesInput[];
 }
 
 /** Creates one WorkerRun row (`provisioning`), its `kind='worker_run'` Activity (S2.7 egress
@@ -327,6 +334,8 @@ export async function spawnWorkerRun(
           : {}),
         systemPrompt: input.systemPrompt,
         image: input.image,
+        ...(input.goalRunId !== undefined ? { goalRunId: input.goalRunId } : {}),
+        ...(input.upstream && input.upstream.length > 0 ? { upstream: input.upstream } : {}),
       },
       { correlationId },
     );

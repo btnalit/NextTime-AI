@@ -823,6 +823,33 @@ describe('POST /task/spawn', () => {
     ).toBe('Instance instructions.');
   });
 
+  // S11 GO14 (review #493 on #884): a goal step's Task is spawned once.
+  it('409s a second spawn of a goal step’s Task, and starts nothing for it', async () => {
+    const { app, docker } = setup();
+    const goalRunId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const first = await app.inject({
+      method: 'POST',
+      url: '/task/spawn',
+      headers: AUTH,
+      payload: { ...validTaskSpawnBody, goalRunId },
+    });
+    expect(first.statusCode).toBe(200);
+    const creates = docker.createCalls.length;
+    const again = await app.inject({
+      method: 'POST',
+      url: '/task/spawn',
+      headers: AUTH,
+      payload: {
+        ...validTaskSpawnBody,
+        workerRunId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        goalRunId,
+      },
+    });
+    expect(again.statusCode).toBe(409);
+    expect(again.json().error.code).toBe('goal_task_spawned');
+    expect(docker.createCalls).toHaveLength(creates);
+  });
+
   it('501s when Task mode is not wired up', async () => {
     const config = loadConfig({ NEXTTIME_DATA: '/host/data', LOCAL_DATA_DIR: dir });
     const docker = createFakeDockerClient();

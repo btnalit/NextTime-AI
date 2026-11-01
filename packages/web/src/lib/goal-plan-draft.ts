@@ -6,6 +6,7 @@ import {
   type GoalPlan,
   MAX_ACCEPTANCE_PROMPT_CHARS,
   MAX_REVISION_REASON_CHARS,
+  MAX_STEP_FILES_FROM,
   type OutputSchema,
   type PlanStep,
   SECRET_FIELD_MASK,
@@ -40,7 +41,7 @@ import type { WorkerDefinitionSummary } from './tasks.js';
 
 /** Where a problem shows: one field of the editor, or the plan as a whole. */
 export type FieldKey =
-  | `step:${string}:${'key' | 'worker' | 'dependsOn' | 'maxAttempts' | 'input'}`
+  | `step:${string}:${'key' | 'worker' | 'dependsOn' | 'filesFrom' | 'maxAttempts' | 'input'}`
   | `step:${string}`
   | `check:${string}:prompt`
   | `check:${string}`
@@ -58,6 +59,9 @@ export interface StepDraft {
   /** The version as the select holds it (`''` until a definition is picked). */
   readonly version: string;
   readonly dependsOn: readonly string[];
+  /** S11 GO14: the steps whose handoff files it reads — always among `dependsOn` (the editor drops
+   *  a step from here when its tick there goes). */
+  readonly filesFrom: readonly string[];
   /** `''`: the platform's default. */
   readonly maxAttempts: string;
   /** The input as JSON text; `''`: no input. */
@@ -142,6 +146,7 @@ export function draftFromDetail(detail: GoalDetailWire): PlanDraft {
       definitionId: step.worker.definitionId,
       version: String(step.worker.version),
       dependsOn: step.dependsOn ?? [],
+      filesFrom: step.filesFrom ?? [],
       maxAttempts: step.maxAttempts === undefined ? '' : String(step.maxAttempts),
       inputText: prettyInput(step.input),
       adoptedOutputSchema: null,
@@ -174,6 +179,7 @@ export function emptyStep(): StepDraft {
     definitionId: '',
     version: '',
     dependsOn: [],
+    filesFrom: [],
     maxAttempts: '',
     inputText: '',
     adoptedOutputSchema: null,
@@ -336,6 +342,10 @@ export function planOf(draft: PlanDraft): GoalPlan | null {
     if (step.dependsOn.length === 0) next.dependsOn = undefined;
     else
       next.dependsOn = sameSet(step.dependsOn, originalDeps) ? originalDeps : [...step.dependsOn];
+    const originalFiles = step.original?.filesFrom ?? [];
+    if (step.filesFrom.length === 0) next.filesFrom = undefined;
+    else
+      next.filesFrom = sameSet(step.filesFrom, originalFiles) ? originalFiles : [...step.filesFrom];
     if (step.maxAttempts === '') next.maxAttempts = undefined;
     else next.maxAttempts = Number(step.maxAttempts);
     if (step.inputText !== prettyInput(step.original?.input)) {
@@ -441,7 +451,7 @@ export function draftProblems(
   }
   const runs = liveRuns(detail);
   for (const step of kept) {
-    const at = (field: 'key' | 'worker' | 'dependsOn' | 'maxAttempts' | 'input') =>
+    const at = (field: 'key' | 'worker' | 'dependsOn' | 'filesFrom' | 'maxAttempts' | 'input') =>
       `step:${step.uid}:${field}` as const;
     if (!STEP_KEY_PATTERN.test(step.key)) {
       problems.set(
@@ -478,6 +488,39 @@ export function draftProblems(
         t(
           `依赖的步骤不在计划里了：${missing.join('、')}。取消勾选，或者恢复那一步。`,
           `Depends on steps no longer in the plan: ${missing.join(', ')}. Untick them, or restore the step.`,
+        ),
+      );
+    }
+    // S11 GO14: a step reads files only of steps it depends on (the editor drops a step from
+    // `filesFrom` when its tick under 「在这些步骤之后」 goes), at most MAX_STEP_FILES_FROM.
+    const gone = step.filesFrom.filter(
+      (key) => !kept.some((other) => other.key === key && other.uid !== step.uid),
+    );
+    const unticked = step.filesFrom.filter(
+      (key) => !gone.includes(key) && !step.dependsOn.includes(key),
+    );
+    if (gone.length > 0) {
+      problems.set(
+        at('filesFrom'),
+        t(
+          `这一步读取步骤 ${gone.join('、')} 留下的文件，那一步不在计划里了：恢复那一步，或者在下面取消读取它的文件。`,
+          `This step reads the files left by step${gone.length > 1 ? 's' : ''} ${gone.join(', ')}, which ${gone.length > 1 ? 'are' : 'is'} no longer in the plan: restore ${gone.length > 1 ? 'them' : 'it'}, or untick reading ${gone.length > 1 ? 'their' : 'its'} files below.`,
+        ),
+      );
+    } else if (unticked.length > 0) {
+      problems.set(
+        at('filesFrom'),
+        t(
+          `这一步读取步骤 ${unticked.join('、')} 留下的文件，必须排在它之后：在上面把它勾回来，或者取消读取它的文件。`,
+          `This step reads the files left by step${unticked.length > 1 ? 's' : ''} ${unticked.join(', ')}, so it must come after ${unticked.length > 1 ? 'them' : 'it'}: tick ${unticked.length > 1 ? 'them' : 'it'} again above, or untick reading ${unticked.length > 1 ? 'their' : 'its'} files.`,
+        ),
+      );
+    } else if (step.filesFrom.length > MAX_STEP_FILES_FROM) {
+      problems.set(
+        at('filesFrom'),
+        t(
+          `一步最多读取 ${MAX_STEP_FILES_FROM} 个步骤留下的文件。`,
+          `A step reads the files of at most ${MAX_STEP_FILES_FROM} steps.`,
         ),
       );
     }
@@ -666,6 +709,7 @@ export function fieldOfRefusal(field: string, draft: PlanDraft): FieldKey {
     const rest = step[2] ?? '';
     if (rest.startsWith('input')) return `step:${sent.uid}:input`;
     if (rest === 'key') return `step:${sent.uid}:key`;
+    if (rest.startsWith('filesFrom')) return `step:${sent.uid}:filesFrom`;
     return `step:${sent.uid}`;
   }
   const check = /^(?:plan\.)?acceptance(?:\.|\[)(\d+)\]?(?:\.(.*))?$/.exec(field);
@@ -692,6 +736,8 @@ export function fieldOfProblem(problem: string, draft: PlanDraft): FieldKey {
   const named = /step "([^"]+)"/.exec(problem);
   if (named) {
     const step = draft.steps.find((item) => !item.removed && item.key === named[1]);
+    // S11 GO14: `step "<key>": filesFrom[<i>] …` is about what the step reads.
+    if (step && /^step "[^"]+": filesFrom\[/.test(problem)) return `step:${step.uid}:filesFrom`;
     if (step) return `step:${step.uid}`;
   }
   return 'plan';

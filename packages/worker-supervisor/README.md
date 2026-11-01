@@ -228,9 +228,41 @@ resident 模式自己的 `SpawnRequestSchema`/`StopRequestSchema`（`workspaceId
 
 ### 工作目录退休（retention sweep）
 
-`TASK_WORKDIR_RETENTION_HOURS`（默认 72）——每小时一次，删除 `workspaces/tasks/` 与
+`TASK_WORKDIR_RETENTION_HOURS`（默认 72，至少 2，更小不启动）——每小时一次，删除 `workspaces/tasks/` 与
 `workspaces/.platform/tasks/` 下 mtime 超过窗口、且登记表里没有标记为 `running` 的目录。小、朴素、可配置、每次删除都打一行日志
-（`task-service.ts` `sweepRetention`）。
+（`task-service.ts` `sweepRetention`）。没结束的目标里已成功步骤的目录由内核每小时续租一次（下一节），所以
+至少 2 小时：续租间隔之内目录不能过期。
+
+### 步骤间文件（S11 GO14，`src/upstream-files.ts`）
+
+同一个目标里，后一步可以读前一步的 Worker 留下的文件。哪一步读哪一步由内核决定（计划条目的
+`filesFrom`，只在同一 GoalRun 里、只取那一步被接受的那次尝试），文件在哪、能不能挂由本服务检查：
+
+- **交接目录**：带 `goalRunId` 的 spawn（每个目标步骤的尝试）在 Task 工作目录里建空的 `out/`（容器里的
+  `/workspace/out`）。只有 Worker 放进这里的东西会被交出去；会话记录、缓存、草稿留在这一步。
+- **归属标记**：同一次 spawn 在 Task 的**平台**目录写 `owner.json`（`{workspaceId, goalRunId}`）。Worker
+  只读挂载平台目录，所以不管 Worker 做了什么，这个标记都说明目录属于哪个目标。
+- **挂载**：`upstream: [{stepKey, taskId}]`（最多 8 个，只能和 `goalRunId` 一起出现，不能是本 Task
+  自己）挂成 `/upstream/<stepKey>`，只读，不在 Worker 的 cwd、任何上级目录或 pi 配置目录里，pi 不会把
+  里面的东西当成 `AGENTS.md`、扩展或 Skill 加载（`packages/platform-extension/src/runtime-whitelist.test.ts`）。
+- **挂载前的检查**（任一不过就 409 `upstream_unavailable`，带 `stepKey` 与状态，什么都没写、什么都没起）：
+  上游 Task 没有容器在跑（`running`）；Task 工作目录在、是目录不是链接，`out` 在（否则 `missing`）；
+  `owner.json` 的工作区与目标就是读的这个 Task 的（否则 `not_owned`）；`out` 按 `lstat` 是目录、不是
+  符号链接、FIFO 或文件，且它的 realpath 正好是工作目录的 realpath 加 `out`（否则 `not_a_directory`）。
+  原因：Docker 在宿主机上解析绑定源的符号链接，上游 Worker 拥有自己的 `/workspace`，`out` 可能指向宿主机
+  上任何地方。检查通过后没有任何东西还能改它：上游容器已经退出，也不会再起来。内核从不 spawn 已结束的
+  Task（目标步骤的尝试不 requeue），本服务也不只靠这一点：平台目录里已经有 `owner.json`（任何形式，链接
+  也算、不跟随）的 Task 再 spawn 一律 409 `goal_task_spawned`，打 error 日志，什么都没写、什么都没起。
+  目标之外的 Task 没有这个标记，崩溃后照常在同一个 Task 下 requeue。`out` **里面**的链接在下游容器里解析，
+  只能指到下游容器自己的文件。
+- **`POST /task-dirs/keep`**（内核内部令牌；`{tasks: [{taskId, workspaceId, goalRunId}]}`，至多 500 个）：
+  逐个回答上面的状态（`kept` 或不能挂的原因），只给 `kept` 的两个目录刷新 mtime，让退休清理放过它们。
+  内核用它做两件事：一步要读文件时在推进里先问一次（`running` 过几秒再看，其余原因让目标暂停等人决定，
+  不花尝试次数）；每小时一次给所有没结束的目标里已成功步骤的目录续租。`not_owned` 打 error 日志：那是
+  内核的缺陷或有人动了宿主机上的目录。
+
+内核和本服务必须同一次升级、同一次回退：`TaskSpawnRequestSchema` 是 strict 的，老版本会拒绝带
+`goalRunId` 的 spawn，于是所有目标步骤都起不来。
 
 ## 事件驱动的 egress 来源反注册（`src/docker-events.ts`，feat/egress-docker-events）
 
@@ -282,7 +314,7 @@ resident 模式的 `reconcile()` 原本只在进程启动时跑一次（那时�
 | Var | Default | Meaning |
 |---|---|---|
 | `TASK_MAX_RUNTIME_SEC` | `3600` | 单个 Task 容器的默认超时（秒），可被请求体 `timeoutSec` 覆盖。 |
-| `TASK_WORKDIR_RETENTION_HOURS` | `72` | 已结束 Task 工作目录保留多久后清理。 |
+| `TASK_WORKDIR_RETENTION_HOURS` | `72` | 已结束 Task 工作目录保留多久后清理；至少 `2`（没结束的目标的步骤目录每小时续租一次），更小时不启动。 |
 | `WORKER_IMAGE_ALLOWLIST` | 空 | 逗号分隔的额外允许镜像列表；**追加**在默认 `WORKER_IMAGE` 之上，不会替换它。 |
 | `HANDLE_BINDINGS_FILE` | `/run/handle-bindings/bindings.json` | Handle 来源绑定文件（见上文），两种模式共用。 |
 

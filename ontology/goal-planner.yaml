@@ -86,6 +86,10 @@ systemPrompt: |
        key. A value the plan shows as [redacted] is kept only when you leave the whole call it is
        in (a step's worker with its input, a check) exactly as you read it; write nothing in place
        of it. Name only Workers from workers. Never write a credential.
+       A step that needs the files an earlier step's Worker left for later steps (in its
+       /workspace/out) names that step in its filesFrom; it must depend on it too (dependsOn). Its
+       Worker then finds them read-only at /upstream/<that step's key>. A step that only needs a
+       value an earlier step reported takes it with bindings instead.
      - decision "no_revision": no change of plan would help (the failure needs a person: an
        approval, access, a decision about the goal itself).
      - reason, always: one or two sentences for the requester — what failed, what you changed and

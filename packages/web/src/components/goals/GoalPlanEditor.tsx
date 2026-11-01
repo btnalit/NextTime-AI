@@ -176,14 +176,15 @@ export function GoalPlanEditor({
       ...current,
       steps: current.steps.map((step) => {
         if (step.uid === uid) return { ...step, ...patch };
-        // A renamed new step: the steps that depended on it follow the new key.
+        // A renamed new step: the steps that depended on it (and read its files) follow the new
+        // key.
         const renamed = current.steps.find((other) => other.uid === uid);
         if (patch.key !== undefined && renamed && step.dependsOn.includes(renamed.key)) {
+          const follow = (dep: string) => (dep === renamed.key ? (patch.key ?? dep) : dep);
           return {
             ...step,
-            dependsOn: step.dependsOn.map((dep) =>
-              dep === renamed.key ? (patch.key ?? dep) : dep,
-            ),
+            dependsOn: step.dependsOn.map(follow),
+            filesFrom: step.filesFrom.map(follow),
           };
         }
         return step;
@@ -643,6 +644,11 @@ function refusalText(credential: boolean, at: FieldKey, path: string | null, t: 
 
 /** For a text shown as read with what only stands for its original (`shownOnly`): left alone, the
  *  original is kept (GO5c takes an entry equal to its stored one as shown as unchanged). */
+/** The English sentence of the parts kept as they are starts with a capital (UX P3-4 on #884). */
+function capitalized(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 function keptAsRead(shown: 'mask' | 'escape' | null, t: Translate): string | null {
   if (shown === null) return null;
   return shown === 'mask'
@@ -811,6 +817,9 @@ function StepEditor({
     // S11 GO13: a step's own output contract stays — the editor only adds one to a step without.
     step.original?.outputSchema ? t('这一步的输出约定', 'the step’s output contract') : null,
   ].filter((part): part is string => part !== null);
+  // S11 GO14 (UX P2-1 on #884): the steps whose files it may read are the ones it comes after.
+  const readable = others.filter((other) => step.dependsOn.includes(other.key));
+  const filesError = errorOf(`step:${step.uid}:filesFrom`);
   const inputError = errorOf(`step:${step.uid}:input`);
   return (
     <div
@@ -916,11 +925,15 @@ function StepEditor({
                       type="checkbox"
                       checked={step.dependsOn.includes(other.key)}
                       onChange={(event) =>
-                        onChange({
-                          dependsOn: event.target.checked
-                            ? [...step.dependsOn, other.key]
-                            : step.dependsOn.filter((dep) => dep !== other.key),
-                        })
+                        onChange(
+                          event.target.checked
+                            ? { dependsOn: [...step.dependsOn, other.key] }
+                            : {
+                                dependsOn: step.dependsOn.filter((dep) => dep !== other.key),
+                                // A step it no longer comes after: it cannot read its files.
+                                filesFrom: step.filesFrom.filter((key) => key !== other.key),
+                              },
+                        )
                       }
                     />
                     <span className="mono">{other.key}</span>
@@ -934,6 +947,55 @@ function StepEditor({
             {errorOf(`step:${step.uid}:dependsOn`) ? (
               <p className="field-error" role="alert">
                 {errorOf(`step:${step.uid}:dependsOn`)}
+              </p>
+            ) : null}
+          </fieldset>
+          <fieldset className="stack-s" data-testid="goal-plan-step-files-from">
+            <legend className="text-small">
+              {t('读取这些步骤留下的文件', 'Read the files left by these steps')}
+            </legend>
+            <span className="text-3 text-small">
+              {t(
+                '那一步的 Worker 放在 /workspace/out 的文件，这一步只读看到。只能从上面勾选的步骤里选；已结束的步骤不会再跑，要换一份新文件，就加一步重新生成，再改读那一步的。',
+                'What that step’s Worker put in /workspace/out, this step sees read-only. Only the steps ticked above can be picked; an ended step does not run again, so for new files add a step that makes them and read that one’s instead.',
+              )}
+            </span>
+            {readable.length === 0 && step.filesFrom.length === 0 ? (
+              <span className="text-3 text-small">
+                {t(
+                  '先在「在这些步骤之后」里勾选步骤',
+                  'Tick a step under “After these steps” first',
+                )}
+              </span>
+            ) : (
+              <div className="row-wrap">
+                {[
+                  ...readable.map((other) => other.key),
+                  // One it reads that is no longer among them stays visible, to untick.
+                  ...step.filesFrom.filter((key) => !readable.some((other) => other.key === key)),
+                ].map((key) => (
+                  <label key={key} className="row-wrap text-small">
+                    <input
+                      type="checkbox"
+                      checked={step.filesFrom.includes(key)}
+                      onChange={(event) =>
+                        onChange({
+                          filesFrom: event.target.checked
+                            ? [...step.filesFrom, key]
+                            : step.filesFrom.filter((from) => from !== key),
+                        })
+                      }
+                      data-testid="goal-plan-step-files-from-option"
+                      data-source-step={key}
+                    />
+                    <span className="mono">{key}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+            {filesError ? (
+              <p className="field-error" role="alert">
+                {filesError}
               </p>
             ) : null}
           </fieldset>
@@ -994,7 +1056,7 @@ function StepEditor({
             <span className="text-3 text-small">
               {t(
                 `${kept.join('、')}保持不变（要改，在对话里让入口智能体修订）。`,
-                `${kept.join(', ')} stay as they are (to change them, ask the entry agent in a chat).`,
+                `${capitalized(kept.join(', '))} stay as they are (to change them, ask the entry agent in a chat).`,
               )}
             </span>
           ) : null}
