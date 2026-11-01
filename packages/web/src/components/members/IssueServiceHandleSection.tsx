@@ -44,12 +44,14 @@ export function serviceHandleMaxTtlSeconds(): number {
  * same way), minus the two `<gate>.<op>` pattern rows, which are not names a scope can hold
  * (`assertValidScope` looks each name up verbatim; gate operations are reached through
  * `request_action` / `observe_operation`), and minus what is made only for a person
- * (`actsForPerson`, S11 GO5c: `propose_goal` — the kernel leaves it out of a service Handle).
- * Grouped by registry group for the checklist.
+ * (`actsForPerson`, S11 GO5c: `propose_goal` — the kernel leaves it out of a service Handle) and
+ * what only an admin agent reads (`adminAgentOnly`, S11 AA2: the platform's state — the kernel
+ * leaves that out too). Grouped by registry group for the checklist.
  */
 export function handleScopeCapabilities(): readonly Capability[] {
   return listByChannel('handle').filter(
-    (capability) => !capability.name.includes('<') && !capability.actsForPerson,
+    (capability) =>
+      !capability.name.includes('<') && !capability.actsForPerson && !capability.adminAgentOnly,
   );
 }
 

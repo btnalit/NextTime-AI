@@ -385,6 +385,14 @@ export async function issueServiceHandleFromCli(
       `issue-service-handle: ${personOnly.join(', ')} ${personOnly.length === 1 ? 'is' : 'are'} made only for a person; a service Handle cannot carry ${personOnly.length === 1 ? 'it' : 'them'}`,
     );
   }
+  // S11 AA2: what only an admin agent reads — `issueHandle` refuses it too, after the Principal
+  // and session are made; say so first.
+  const agentOnly = input.scope.filter((name) => getCapability(name)?.adminAgentOnly);
+  if (agentOnly.length > 0) {
+    throw new Error(
+      `issue-service-handle: ${agentOnly.join(', ')} ${agentOnly.length === 1 ? 'is' : 'are'} read only by an admin agent; a service Handle cannot carry ${agentOnly.length === 1 ? 'it' : 'them'}`,
+    );
+  }
   const keyPair = await loadHandleKeyPair();
 
   return withWorkspace(

@@ -66,6 +66,9 @@ export const ADMIN_AGENT_REFUSAL_REASONS = [
   'workspace_disabled',
   /** The user is not (or no longer) an effective platform administrator. */
   'not_platform_admin',
+  /** S11 AA2: the Principal's platform user is no longer the one the call was checked for (it was
+   *  bound to another between the call's two transactions, `platform-state.ts`). */
+  'user_changed',
 ] as const;
 export type AdminAgentRefusalReason = (typeof ADMIN_AGENT_REFUSAL_REASONS)[number];
 

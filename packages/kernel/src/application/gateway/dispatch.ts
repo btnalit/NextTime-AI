@@ -24,7 +24,14 @@ import {
   redactedForAudit,
 } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
-import { type AdminAgentRefusalReason, adminAgentRefusal } from '../admin-agent/index.js';
+import {
+  type AdminAgentAuthorityFacts,
+  type AdminAgentRefusalReason,
+  AdminAgentRefused,
+  adminAgentEnabled,
+  adminAgentRefusalOf,
+  readAdminAgentAuthorityFacts,
+} from '../admin-agent/index.js';
 import {
   EvaluationContentWithheldError,
   EvaluationProbeHoldError,
@@ -182,22 +189,44 @@ export class AdminAgentCallRefusedError extends ForbiddenError {
 }
 
 /**
+ * S11 AA2 (`Capability.adminAgentOnly`): thrown by {@link dispatchCapability} (403) for a Handle
+ * call to what only an admin agent reads that does not come through an admin agent's session —
+ * whatever its scope says (`issueHandle` gives no other session's Handle one, so such a Handle was
+ * not issued by the kernel, or an internal caller built it). Audited as a refusal.
+ */
+export class AdminAgentOnlyError extends ForbiddenError {
+  constructor(name: string) {
+    super(`capability "${name}" is only an admin agent's`);
+    this.name = 'AdminAgentOnlyError';
+  }
+}
+
+/**
  * S11 AA1 (I-A3, I-A1/I-A2): an admin agent's call is checked here for every capability dispatched,
  * whoever built the caller — `authenticateHandle` refuses its Handle too, but internal callers
  * build Handle callers of their own. Its person must still be allowed one now, and the capability
- * must be in its ceiling: the Handle's scope is not trusted for that.
+ * must be in its ceiling: the Handle's scope is not trusted for that. Returns what it checked.
  */
 async function assertAdminAgentCall(
-  client: Parameters<typeof adminAgentRefusal>[0],
+  client: Parameters<typeof readAdminAgentAuthorityFacts>[0],
   workspaceId: string,
   principalId: string,
   name: string,
-): Promise<void> {
-  const refusal = await adminAgentRefusal(client, workspaceId, principalId);
+): Promise<AdminAgentAuthorityFacts & { readonly userId: string }> {
+  const enabled = adminAgentEnabled();
+  const facts = enabled
+    ? await readAdminAgentAuthorityFacts(client, workspaceId, principalId)
+    : undefined;
+  const refusal = adminAgentRefusalOf(facts, enabled);
   if (refusal !== null) throw new AdminAgentCallRefusedError(name, refusal);
+  // `adminAgentRefusalOf` refuses a Principal with no platform user (`no_platform_user`).
+  if (facts === undefined || facts.userId === null) {
+    throw new AdminAgentCallRefusedError(name, 'no_platform_user');
+  }
   if (!isAdminAgentCeilingCapability(name)) {
     throw new AdminAgentCallRefusedError(name, 'outside_ceiling');
   }
+  return { ...facts, userId: facts.userId };
 }
 
 /** `actingSession` as audit payload fields (none for any other session). */
@@ -763,7 +792,9 @@ async function recordRefusedOutput(
  * refusal: the capability, its redacted params, the acting session, `outcome: 'refused'` and the
  * refusal (`outside_ceiling`, or why its person may not run one now). A call outside the ceiling
  * means a Handle that should not exist, so the row is how it is found. Failing to write it is
- * logged and never replaces the refusal itself.
+ * logged and never replaces the refusal itself. S11 AA2: so does a call to what only an admin agent
+ * reads from any other session (`AdminAgentOnlyError`, refusal code `admin_agent_only`) — a probe
+ * for the platform's state.
  */
 async function auditAdminAgentRefusal(
   deps: DispatchDeps,
@@ -779,7 +810,11 @@ async function auditAdminAgentRefusal(
   },
 ): Promise<void> {
   const err = call.err;
-  if (!(err instanceof AdminAgentCallRefusedError)) return;
+  if (!(err instanceof AdminAgentCallRefusedError) && !(err instanceof AdminAgentOnlyError)) return;
+  const refusal =
+    err instanceof AdminAgentCallRefusedError
+      ? { code: 'admin_agent_refused', status: 403, reason: err.refusal }
+      : { code: 'admin_agent_only', status: 403 };
   try {
     await withWorkspace(
       deps.pool,
@@ -795,7 +830,7 @@ async function auditAdminAgentRefusal(
             ...actingSessionFields(call.actingSession),
             ...auditParams(call.capability, call.params),
             outcome: 'refused',
-            refusal: { code: 'admin_agent_refused', status: 403, reason: err.refusal },
+            refusal,
           },
         }),
     );
@@ -912,6 +947,8 @@ export async function dispatchCapability(
   let sealOptions: SealOptions = {};
   // S11 AA1: set once the call is known to come through an admin agent's session (below).
   let actingSession = undefined as ActingSession | undefined;
+  // S11 AA2: with it, once its authority is checked, the platform user it acts for.
+  let adminAgent = undefined as { sessionId: string; userId: string } | undefined;
 
   const handlerResult = await withWorkspace(
     deps.pool,
@@ -938,8 +975,14 @@ export async function dispatchCapability(
         );
         if (session.rows[0]?.kind === ADMIN_AGENT_SESSION_KIND) {
           actingSession = { sessionKind: ADMIN_AGENT_SESSION_KIND, sessionId: caller.claims.sid };
-          await assertAdminAgentCall(client, workspaceId, principalId, name);
+          const facts = await assertAdminAgentCall(client, workspaceId, principalId, name);
+          adminAgent = { sessionId: caller.claims.sid, userId: facts.userId };
         }
+      }
+      // S11 AA2: what only an admin agent reads, through any other session — refused here whatever
+      // the Handle's scope (authorizeCapabilityCall already refused every caller but a Handle).
+      if (capability.adminAgentOnly && adminAgent === undefined) {
+        throw new AdminAgentOnlyError(name);
       }
       // S10 E3-2c (legacy 514): no agent acting for a Principal the evaluation seal has paused
       // gets anything done — every Handle call for it is refused before it runs, the same way
@@ -994,6 +1037,8 @@ export async function dispatchCapability(
         ...(caller.channel === 'human' && caller.user
           ? { consoleUser: { platformRole: caller.user.platformRole } }
           : {}),
+        // S11 AA2: an admin agent's session and its administrator, checked above.
+        ...(adminAgent ? { adminAgent } : {}),
       };
       // An evaluation session's call is answered by application/eval-session, except `get_task`
       // of its own Task, which the capability's own handler answers like any other call.
@@ -1073,7 +1118,19 @@ export async function dispatchCapability(
   };
   const finalResult = handlerResult.afterCommit
     ? await handlerResult.afterCommit(deps.pool).catch(async (err: unknown) => {
-        throw await sealedError(deps, sealed, err, sealOptions);
+        // S11 AA2: an admin agent's authority checked again after the call committed
+        // (application/admin-agent/platform-state.ts) refuses like the first check, and is audited.
+        const refused =
+          err instanceof AdminAgentRefused && actingSession !== undefined
+            ? new AdminAgentCallRefusedError(name, err.reason)
+            : err;
+        await auditAdminAgentRefusal(deps, {
+          ...sealed,
+          capability,
+          params: parsed.data as Record<string, unknown>,
+          err: refused,
+        });
+        throw await sealedError(deps, sealed, refused, sealOptions);
       })
     : handlerResult.result;
   // S10 E3-1c: a result produced after the call committed (`invoke_worker`'s `wait`, the Worker's

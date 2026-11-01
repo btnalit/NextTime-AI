@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getCapability, handleHolderOf } from '@nexttime/shared';
+import { CAPABILITY_REGISTRY, getCapability, handleHolderOf } from '@nexttime/shared';
 import { SignJWT } from 'jose';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -19,6 +19,7 @@ import {
   HandleRevoked,
   ScopeValidationError,
   WORKER_CEILING_CAPABILITIES,
+  WORKER_INFRASTRUCTURE_CAPABILITY_NAMES,
   adminAgentScope,
   attenuate,
   buildAdminAgentCeiling,
@@ -824,12 +825,29 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1)', () => {
         'list_types',
         'list_worker_definitions',
         'observe_operation',
+        'platform_state_audit',
+        'platform_state_connectors',
+        'platform_state_gates',
         'search',
         'state_at',
         'traverse',
         'validate',
       ].sort(),
     );
+  });
+
+  it('holds every capability only an admin agent calls, and no other ceiling holds one (S11 AA2)', () => {
+    const agentOnly = CAPABILITY_REGISTRY.filter((capability) => capability.adminAgentOnly).map(
+      (capability) => capability.name,
+    );
+    expect(agentOnly.length).toBeGreaterThan(0);
+    for (const name of agentOnly) {
+      expect(ADMIN_AGENT_CEILING_CAPABILITIES, name).toContain(name);
+      expect(ENTRY_CEILING_CAPABILITIES, name).not.toContain(name);
+      expect(WORKER_CEILING_CAPABILITIES, name).not.toContain(name);
+      expect(WORKER_INFRASTRUCTURE_CAPABILITY_NAMES, name).not.toContain(name);
+      expect(entryScope().capabilities, name).not.toContain(name);
+    }
   });
 
   it('holds only handle-channel observe reads: no human-channel, platform, execute-class or writing capability', () => {
@@ -929,6 +947,40 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1)', () => {
       privateKey,
     });
     expect(issued.holder).toBe('container');
+  });
+
+  it('issueHandle refuses what only an admin agent calls to every other session kind (S11 AA2)', async () => {
+    const { client, addSession } = createFakeCapabilityClient();
+    const { privateKey } = await generateEphemeralHandleKeyPair();
+    for (const kind of ['web', 'entry', 'worker_run', 'mcp_session', 'service'] as const) {
+      const sessionId = randomUUID();
+      addSession(sessionId, { workspaceId: randomUUID(), onBehalfOf: randomUUID(), kind });
+      for (const name of [
+        'platform_state_gates',
+        'platform_state_connectors',
+        'platform_state_audit',
+      ]) {
+        await expect(
+          issueHandle(client, {
+            sessionId,
+            scope: { capabilities: ['get_object', name], resources: {} },
+            ttlSeconds: 60,
+            privateKey,
+          }),
+          `${kind} ${name}`,
+        ).rejects.toThrow(/only an admin agent's Handle carries/);
+      }
+      // The same session still gets a Handle without it.
+      await expect(
+        issueHandle(client, {
+          sessionId,
+          scope: { capabilities: ['get_object'], resources: {} },
+          ttlSeconds: 60,
+          privateKey,
+        }),
+        kind,
+      ).resolves.toBeDefined();
+    }
   });
 });
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import {
   ATTEST_FACT_NOTE_MAX_LENGTH,
   CAPABILITY_REGISTRY,
@@ -8,6 +9,7 @@ import {
   getCapability,
   listByChannel,
 } from './capabilities.js';
+import { toJsonSchema } from './json-schema.js';
 
 /**
  * Every capability name listed in design doc §9.3, hardcoded (no snapshot), plus `list_tasks`
@@ -469,5 +471,136 @@ describe('ChangePlan segments are written by a person (S11 AA1, legacy 407)', ()
       expect(capability?.channel, name).toBe('human');
       expect(capability?.actsForPerson, name).toBe(true);
     }
+  });
+});
+
+describe('platform_state: what an admin agent reads of the platform (S11 AA2)', () => {
+  const group = CAPABILITY_REGISTRY.filter((capability) => capability.group === 'platform_state');
+
+  it('holds every admin-agent-only capability, and only those', () => {
+    expect(group.map((capability) => capability.name).sort()).toEqual([
+      'platform_state_audit',
+      'platform_state_connectors',
+      'platform_state_gates',
+    ]);
+    const flagged = CAPABILITY_REGISTRY.filter((capability) => capability.adminAgentOnly);
+    expect(flagged.map((capability) => capability.name).sort()).toEqual(
+      group.map((capability) => capability.name).sort(),
+    );
+  });
+
+  it('is side-effect-free handle-channel observation, for no role and no person in particular', () => {
+    for (const capability of group) {
+      expect(capability.channel, capability.name).toBe('handle');
+      expect(capability.mode, capability.name).toBe('observe');
+      expect(capabilityHasSideEffects(capability), capability.name).toBe(false);
+      expect(capability.scope, capability.name).toBeUndefined();
+      expect(capability.minRole, capability.name).toBeUndefined();
+      expect(capability.actsForPerson, capability.name).toBeUndefined();
+      expect(capability.paramsSchema.safeParse({}).success, capability.name).toBe(true);
+      expect(capability.paramsSchema.safeParse({ any: 1 }).success, capability.name).toBe(false);
+    }
+  });
+
+  /** A property name that reads like an address, a command, free text or a secret: allowed only
+   *  for a value that cannot carry one (an enum, a constant, a number, a boolean). */
+  const SENSITIVE_PROPERTY_NAME =
+    /url|uri|host|address|endpoint|target|port|path|command|detail|payload|label|login|token|secret|credential|password|container|cidr|ip$|name$|display|summary|description|message|note|reason|error/i;
+  /** Property names the rule above catches that hold a patterned identifier: a connector's `name`
+   *  (`CONNECTOR_NAME_PATTERN`). */
+  const SHAPED_SENSITIVE_NAMES = new Set(['name']);
+
+  type Node = Record<string, unknown>;
+  /** The schema's string leaves: `{type: 'string'}` nodes, through `anyOf` / `oneOf`. */
+  function stringLeaves(node: Node): Node[] {
+    const variants = [...((node.anyOf as Node[]) ?? []), ...((node.oneOf as Node[]) ?? [])];
+    if (variants.length > 0) return variants.flatMap(stringLeaves);
+    const type = node.type;
+    return type === 'string' || (Array.isArray(type) && type.includes('string')) ? [node] : [];
+  }
+  function isShapedString(node: Node): boolean {
+    return (
+      Array.isArray(node.enum) ||
+      node.const !== undefined ||
+      typeof node.pattern === 'string' ||
+      node.format === 'date-time'
+    );
+  }
+  function walk(node: Node, path: string, problems: string[]): void {
+    for (const leaf of stringLeaves(node)) {
+      if (!isShapedString(leaf)) problems.push(`${path}: a string with no enum, pattern or format`);
+    }
+    for (const variant of [...((node.anyOf as Node[]) ?? []), ...((node.oneOf as Node[]) ?? [])]) {
+      walk(variant, path, problems);
+    }
+    if (node.type === 'object' || node.properties !== undefined) {
+      for (const [key, child] of Object.entries((node.properties as Record<string, Node>) ?? {})) {
+        const childPath = `${path}.${key}`;
+        if (SENSITIVE_PROPERTY_NAME.test(key)) {
+          const free = stringLeaves(child).filter(
+            (leaf) => !Array.isArray(leaf.enum) && leaf.const === undefined,
+          );
+          if (free.length > 0 && !SHAPED_SENSITIVE_NAMES.has(key)) {
+            problems.push(`${childPath}: named like an address, command, free text or secret`);
+          }
+        }
+        walk(child, childPath, problems);
+      }
+    }
+    if (node.items !== undefined) walk(node.items as Node, `${path}[]`, problems);
+  }
+
+  /** Objects that would keep or drop an unknown key instead of refusing it (`.strict()`): JSON
+   *  Schema writes both as `additionalProperties: false`, so this reads the Zod definition. */
+  function looseObjects(schema: z.ZodType, path: string, problems: string[]): void {
+    const def = (schema as unknown as { _zod: { def: Record<string, unknown> } })._zod.def;
+    if (def.type === 'object') {
+      const catchall = def.catchall as z.ZodType | undefined;
+      const strict =
+        (catchall as unknown as { _zod?: { def: { type: string } } } | undefined)?._zod?.def
+          .type === 'never';
+      if (!strict) problems.push(`${path}: an object that is not strict`);
+      for (const [key, child] of Object.entries(def.shape as Record<string, z.ZodType>)) {
+        looseObjects(child, `${path}.${key}`, problems);
+      }
+    } else if (def.type === 'array') {
+      looseObjects(def.element as z.ZodType, `${path}[]`, problems);
+    } else if (def.type === 'nullable' || def.type === 'optional' || def.type === 'default') {
+      looseObjects(def.innerType as z.ZodType, path, problems);
+    } else if (def.type === 'union') {
+      for (const option of def.options as z.ZodType[]) looseObjects(option, path, problems);
+    }
+  }
+
+  it('returns only strict objects whose every string is shaped and none is named like a secret or address', () => {
+    for (const capability of group) {
+      expect(capability.resultSchema, capability.name).toBeDefined();
+      const schema = capability.resultSchema as z.ZodType;
+      const problems: string[] = [];
+      looseObjects(schema, capability.name, problems);
+      walk(toJsonSchema(schema), capability.name, problems);
+      expect(problems, capability.name).toEqual([]);
+    }
+  });
+
+  it('the guard itself catches a free string, a loose object and an address-named field', () => {
+    const probe = z.object({
+      free: z.string(),
+      loose: z.object({ count: z.number() }),
+      endpoint: z.string().regex(/^[a-z]+$/),
+      gateId: z.string().regex(/^[a-z]+$/),
+      items: z.array(z.object({ note: z.string().nullable() }).strict()),
+    });
+    const problems: string[] = [];
+    looseObjects(probe, 'probe', problems);
+    walk(toJsonSchema(probe), 'probe', problems);
+    expect(problems).toEqual([
+      'probe: an object that is not strict',
+      'probe.loose: an object that is not strict',
+      'probe.free: a string with no enum, pattern or format',
+      'probe.endpoint: named like an address, command, free text or secret',
+      'probe.items[].note: named like an address, command, free text or secret',
+      'probe.items[].note: a string with no enum, pattern or format',
+    ]);
   });
 });

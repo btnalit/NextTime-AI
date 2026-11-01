@@ -64,6 +64,8 @@ function buildCapabilitiesSnapshot() {
     ...(capability.minRole !== undefined ? { minRole: capability.minRole } : {}),
     // S11 GO5c: made only for a person (dispatch refuses any other Principal kind).
     ...(capability.actsForPerson ? { actsForPerson: true } : {}),
+    // S11 AA2: callable only by an admin agent's Handle (dispatch refuses every other caller).
+    ...(capability.adminAgentOnly ? { adminAgentOnly: true } : {}),
     params: snapshotSchema(capability.paramsSchema),
     // Every registry entry carries one as of S3.7 (packages/shared/src/capabilities.ts's own
     // module doc comment) — `null` is defensive only, never expected in practice.

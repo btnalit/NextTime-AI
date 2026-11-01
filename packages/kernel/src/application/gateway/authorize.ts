@@ -115,6 +115,13 @@ export function authorizeCapabilityCall(caller: ResolvedCaller, capability: Capa
     throw new ForbiddenError(`capability "${capability.name}" is human-channel-only`);
   }
 
+  // S11 AA2 (`Capability.adminAgentOnly`): the one exception to "a human caller may call what a
+  // Handle could" (this file's doc comment) — only an admin agent's Handle reads the platform's
+  // state. Which session a Handle belongs to is not in its claims; dispatch.ts checks that.
+  if (capability.adminAgentOnly && caller.channel !== 'handle') {
+    throw new ForbiddenError(`capability "${capability.name}" is only an admin agent's`);
+  }
+
   if (caller.channel === 'handle') {
     if (!caller.claims.scope.capabilities.includes(capability.name)) {
       throw new ForbiddenError(
