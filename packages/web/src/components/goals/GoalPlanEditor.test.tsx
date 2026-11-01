@@ -1087,6 +1087,7 @@ describe('S11 GO15b: a step’s adjustments to its Worker, edited in the plan ed
         expect.stringMatching(/^定义：cert-rotation$/),
         '定义：不作用于任何门',
         expect.stringMatching(/^定义：\S+$/),
+        expect.stringMatching(/^定义：model-a$/),
       ]),
     );
     // Unticking 沿用定义 starts from the definition's list; Skills on offer are the published ones
@@ -1191,6 +1192,127 @@ describe('S11 GO15b: a step’s adjustments to its Worker, edited in the plan ed
     await waitFor(() => expect(sentSteps(http)[0]?.spec).toBe(spec));
   });
 
+  it('UX P2-1 on #889: unticking 沿用定义 starts from the Skills a run mounts now, and holds one with no usable version', async () => {
+    const definition = directories.get_worker_definition as (params: unknown) => {
+      definition: Record<string, unknown>;
+    };
+    const http = scriptedHttp(
+      handlers(withSpec({ skills: ['ghost', 'audit'] }), workspace('p-alice', 'member'), {
+        ...directories,
+        ...revised,
+        get_worker_definition: (params) => {
+          const read = definition(params);
+          return {
+            ...read,
+            definition: {
+              ...read.definition,
+              skills: ['cert-rotation', 'legacy-scan', 'renew-draft'],
+            },
+          };
+        },
+      }),
+    );
+    renderPage(http);
+    await openEditor();
+    // The other steps' sections share the one directory read.
+    const fetch = step('fetch');
+    await within(fetch).findByTestId('goal-plan-spec-fields');
+    // A reference with no published version and no draft is kept, to untick, and says so.
+    const ghost = '（已弃用或不在了：留着它这一步就不会开始，取消勾选）';
+    await waitFor(() =>
+      expect(option(fetch, 'goal-plan-spec-skills', `ghost${ghost}`).checked).toBe(true),
+    );
+    const skillsField = within(fetch)
+      .getAllByTestId('goal-plan-spec-field')
+      .find((element) => element.getAttribute('data-field') === 'skills') as HTMLElement;
+    // Kept as read, it is the kernel's to hint: nothing holds the plan.
+    expect(alerts(skillsField)).toBe('');
+    const model = within(fetch).getByTestId('goal-plan-spec-model') as HTMLSelectElement;
+    await waitFor(() => expect(model.options.length).toBe(3));
+    fireEvent.change(model, { target: { value: 'model-b' } });
+    // Sent as written, it would keep the step from starting: held on its field.
+    expect(alerts(skillsField)).toMatch(/^ghost 已弃用或不在了：这一步点名它就不会开始。/);
+    expect((screen.getByTestId('goal-plan-submit') as HTMLButtonElement).disabled).toBe(true);
+    // Back to the definition: its line says which of its Skills a run would not mount.
+    fireEvent.click(inherit(fetch, 'skills'));
+    expect(alerts(skillsField)).toBe('');
+    const skillsLine = within(fetch)
+      .getAllByTestId('goal-plan-spec-base')
+      .find((line) => line.getAttribute('data-field') === 'skills');
+    expect(skillsLine?.textContent).toMatch(
+      /^定义：cert-rotation、legacy-scan（已弃用或不在了，沿用时不装载）、renew-draft（只有草稿，沿用时不装载）$/,
+    );
+    // Unticked again, the list starts from what the definition mounts now — never the deprecated
+    // one, nor the draft, which stays on offer to tick.
+    fireEvent.click(inherit(fetch, 'skills'));
+    const ticked = within(within(fetch).getByTestId('goal-plan-spec-skills'))
+      .getAllByRole('checkbox')
+      .filter((box) => (box as HTMLInputElement).checked)
+      .map((box) => box.closest('label')?.textContent);
+    expect(ticked).toEqual(['cert-rotation']);
+    expect(
+      option(fetch, 'goal-plan-spec-skills', 'renew-draft（草稿：要有人批准试用，这一步才会开始）')
+        .checked,
+    ).toBe(false);
+    expect(alerts(skillsField)).toBe('');
+    await send();
+    await waitFor(() =>
+      expect(sentSteps(http)[0]?.spec).toEqual({ skills: ['cert-rotation'], model: 'model-b' }),
+    );
+  });
+
+  it('UX P3 on #889: the model says the definition’s, a chosen one’s health, and a list ticked empty what it means', async () => {
+    const http = scriptedHttp(
+      handlers(paused(), workspace('p-alice', 'member'), {
+        ...directories,
+        list_models: () => ({
+          items: [
+            {
+              id: 'model-a',
+              provider: 'p',
+              model: 'a',
+              health: { status: 'ok', testedAt: '2026-11-01T00:00:00.000Z' },
+            },
+            {
+              id: 'model-b',
+              provider: 'q',
+              model: 'b',
+              health: { status: 'tools_failed', testedAt: '2026-11-01T00:00:00.000Z' },
+            },
+          ],
+        }),
+      }),
+    );
+    renderPage(http);
+    await openEditor();
+    const fetch = step('fetch');
+    await openSpec(fetch);
+    const model = within(fetch).getByTestId('goal-plan-spec-model') as HTMLSelectElement;
+    await waitFor(() => expect(model.options.length).toBe(3));
+    expect(within(fetch).queryByTestId('goal-plan-spec-model-health')).toBeNull();
+    fireEvent.change(model, { target: { value: 'model-b' } });
+    expect(within(fetch).getByTestId('goal-plan-spec-model-health').textContent).toMatch(
+      /^所选模型的供应商「q」/,
+    );
+    // Capabilities unticked to none: what that leaves the step with.
+    fireEvent.click(inherit(fetch, 'capabilities'));
+    await within(fetch).findByTestId('goal-plan-spec-capabilities');
+    for (const box of within(within(fetch).getByTestId('goal-plan-spec-capabilities'))
+      .getAllByRole('checkbox')
+      .filter((item) => (item as HTMLInputElement).checked)) {
+      fireEvent.click(box);
+    }
+    // A list set here with something ticked says nothing more.
+    fireEvent.click(inherit(fetch, 'skills'));
+    await waitFor(() =>
+      expect(option(fetch, 'goal-plan-spec-skills', 'cert-rotation').checked).toBe(true),
+    );
+    const none = within(fetch)
+      .getAllByTestId('goal-plan-spec-none')
+      .map((note) => note.getAttribute('data-field'));
+    expect(none).toEqual(['capabilities']);
+  });
+
   it('holds a token cap that is not a whole number above 0 on its field', async () => {
     const http = scriptedHttp(
       handlers(paused(), workspace('p-alice', 'member'), { ...directories }),
@@ -1209,12 +1331,13 @@ describe('S11 GO15b: a step’s adjustments to its Worker, edited in the plan ed
   it('shows what the kernel found in a WorkerSpec on the field it is about', async () => {
     let refusal: HttpError = new HttpError('capability_error', 'plan: invalid', 'invalid_params', {
       problems: [
-        'step "fetch": spec: skills that are not there: "ghost"',
+        'step "fetch": spec: skills that are not there: "audit"',
         'step "fetch": spec: model — one the llm-proxy catalog does not offer: "model-b"',
       ],
     });
     const http = scriptedHttp(
-      handlers(withSpec({ skills: ['ghost'] }), workspace('p-alice', 'member'), {
+      // A Skill the directory still lists, gone by the time the kernel checks it.
+      handlers(withSpec({ skills: ['audit'] }), workspace('p-alice', 'member'), {
         ...directories,
         revise_goal: () => {
           throw refusal;
@@ -1225,8 +1348,7 @@ describe('S11 GO15b: a step’s adjustments to its Worker, edited in the plan ed
     await openEditor();
     const fetch = step('fetch');
     await within(fetch).findByTestId('goal-plan-spec-fields');
-    // A reference no directory row has stays visible, to untick.
-    await waitFor(() => expect(option(fetch, 'goal-plan-spec-skills', 'ghost').checked).toBe(true));
+    await waitFor(() => expect(option(fetch, 'goal-plan-spec-skills', 'audit').checked).toBe(true));
     const model = within(fetch).getByTestId('goal-plan-spec-model') as HTMLSelectElement;
     await waitFor(() => expect(model.options.length).toBe(3));
     fireEvent.change(model, { target: { value: 'model-b' } });
@@ -1244,7 +1366,7 @@ describe('S11 GO15b: a step’s adjustments to its Worker, edited in the plan ed
       field: 'plan.steps.0.spec.instructions',
       suspectedSecretValues: 1,
     });
-    fireEvent.click(option(fetch, 'goal-plan-spec-skills', 'ghost'));
+    fireEvent.click(option(fetch, 'goal-plan-spec-skills', 'audit'));
     fireEvent.change(within(fetch).getByTestId('goal-plan-spec-instructions'), {
       target: { value: 'password=not-a-real-value' },
     });

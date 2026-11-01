@@ -17,6 +17,7 @@ import {
   planOf,
   removalsOf,
   requesterConfirmDraft,
+  skillRefUse,
   specChanged,
   specDraftOf,
   specOf,
@@ -627,5 +628,26 @@ describe('lib/goal-plan-draft', () => {
       `step:${fetch.uid}:spec.instructions`,
     );
     expect(fieldOfRefusal('plan.steps.0.spec', draft)).toBe(`step:${fetch.uid}`);
+  });
+
+  it('classes a Skill reference as the kernel does when a step starts (UX P2-1 on #889)', () => {
+    const published = { id: 'f-1', name: 'triage', status: 'published' };
+    // A family whose latest is a draft still has its published version (`inUse`).
+    const pending = {
+      id: 'f-2',
+      name: 'renew',
+      status: 'draft',
+      inUse: { id: 'f-2', name: 'renew', status: 'published', version: 1, description: '' },
+    };
+    const draftOnly = { id: 'f-3', name: 'scan', status: 'draft' };
+    const rows = [published, pending, draftOnly];
+    expect(skillRefUse(rows, 'triage')).toBe('published');
+    expect(skillRefUse(rows, 'f-1')).toBe('published');
+    expect(skillRefUse(rows, 'renew')).toBe('published');
+    expect(skillRefUse(rows, 'scan')).toBe('draft');
+    expect(skillRefUse(rows, 'f-3')).toBe('draft');
+    // Not listed (its versions deprecated, or gone): a step naming it does not start.
+    expect(skillRefUse(rows, 'legacy')).toBe('unusable');
+    expect(skillRefUse([{ id: 'f-4', name: 'old', status: 'deprecated' }], 'old')).toBe('unusable');
   });
 });

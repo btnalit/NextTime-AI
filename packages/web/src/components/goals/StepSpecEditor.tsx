@@ -14,6 +14,7 @@ import {
   type SpecField,
   type StepDraft,
   shownOnly,
+  skillRefUse,
   specChanged,
   specFieldsSet,
 } from '../../lib/goal-plan-draft.js';
@@ -30,15 +31,26 @@ import {
 } from '../catalog/DirectoryPickers.js';
 import { Button } from '../kit/button.js';
 import { Field, describedBy } from '../kit/field.js';
-import { ModelOption } from '../kit/model-health.js';
+import { ModelHealthNote, ModelOption, withModelHealthNote } from '../kit/model-health.js';
 import { Select } from '../kit/select.js';
 import { Textarea } from '../kit/textarea.js';
+
+/** The Skill directory (`list_skills`) the plan editor reads once for every step: `complete` once
+ *  every page is in — only then is a Skill that is not in it known not to be there. */
+export interface SkillDirectory {
+  readonly rows: readonly SkillRow[];
+  readonly complete: boolean;
+  readonly loading: boolean;
+}
 
 export interface StepSpecEditorProps {
   /** The step editor's id base (`useId`). */
   readonly id: string;
   readonly step: StepDraft;
   readonly http: CapabilityCaller;
+  readonly skills: SkillDirectory;
+  /** Called while the section is open: the editor reads the Skill directory from then on. */
+  readonly onOpen: () => void;
   readonly errorOf: (key: FieldKey) => string | null;
   readonly onChange: (spec: SpecDraft) => void;
 }
@@ -59,7 +71,15 @@ type ListField = 'skills' | 'gates' | 'capabilities';
  * and what the requester holds then, whatever is set here. Closed while the step sets nothing, so
  * the directories are read only when someone opens it.
  */
-export function StepSpecEditor({ id, step, http, errorOf, onChange }: StepSpecEditorProps) {
+export function StepSpecEditor({
+  id,
+  step,
+  http,
+  skills,
+  onOpen,
+  errorOf,
+  onChange,
+}: StepSpecEditorProps) {
   const t = useT();
   const set = specFieldsSet(step.spec);
   const errors = SPEC_FIELDS.filter((field) => errorOf(`step:${step.uid}:spec.${field}`) !== null);
@@ -69,6 +89,9 @@ export function StepSpecEditor({ id, step, http, errorOf, onChange }: StepSpecEd
   useEffect(() => {
     if (anyError) setOpen(true);
   }, [anyError]);
+  useEffect(() => {
+    if (open) onOpen();
+  }, [open, onOpen]);
   const summary =
     set.length === 0
       ? t('沿用 Worker 定义', 'As the Worker is')
@@ -91,7 +114,16 @@ export function StepSpecEditor({ id, step, http, errorOf, onChange }: StepSpecEd
         </span>
       </summary>
       {open ? (
-        <SpecFields id={id} step={step} http={http} errorOf={errorOf} onChange={onChange} t={t} />
+        <SpecFields
+          id={id}
+          step={step}
+          http={http}
+          skills={skills}
+          onOpen={onOpen}
+          errorOf={errorOf}
+          onChange={onChange}
+          t={t}
+        />
       ) : null}
     </details>
   );
@@ -101,6 +133,7 @@ function SpecFields({
   id,
   step,
   http,
+  skills,
   errorOf,
   onChange,
   t,
@@ -122,7 +155,6 @@ function SpecFields({
       : definition
         ? workerSpecBaseOf(definition.definition)
         : null;
-  const skills = useCapabilityList<SkillRow>(http, 'list_skills', {}, { autoLoadAll: true });
   const gatekeepers = useGatekeeperDirectory(http);
   const capabilityNames = useCapabilityList<CapabilityNameRow>(http, 'list_capability_names');
   const models = useCapabilityList<ModelRow>(http, 'list_models');
@@ -174,10 +206,34 @@ function SpecFields({
         ? t('定义：不装载 Skill', 'Definition: mounts no Skill')
         : t('定义：不作用于任何门', 'Definition: acts on no gate');
     }
-    const names = field === 'skills' ? items.map(skillRefShown) : items.map(gateName);
+    const names = field === 'skills' ? items.map(definitionSkillShown) : items.map(gateName);
     return t(`定义：${joined(names)}`, `Definition: ${joined(names)}`);
   };
 
+  /** A Skill the definition names, as its line shows it: one a run would not mount (UX P2-1 on
+   *  #889 — the definition's Skills mount published ones only, best effort) says so. */
+  const definitionSkillShown = (ref: string): string => {
+    const use = skills.complete ? skillRefUse(skills.rows, ref) : 'published';
+    return use === 'published'
+      ? skillRefShown(ref)
+      : use === 'draft'
+        ? t(
+            `${skillRefShown(ref)}（只有草稿，沿用时不装载）`,
+            `${skillRefShown(ref)} (only a draft: not mounted as the definition has it)`,
+          )
+        : t(
+            `${skillRefShown(ref)}（已弃用或不在了，沿用时不装载）`,
+            `${skillRefShown(ref)} (deprecated or gone: not mounted as the definition has it)`,
+          );
+  };
+  /** What unticking 「沿用定义」 starts a list from: the definition's — for Skills, the ones a run
+   *  mounts now (published), so the step starts as it would have run (UX P2-1 on #889). */
+  const startFrom = (field: ListField): string[] => {
+    const items = base?.[field] ?? [];
+    return field === 'skills' && skills.complete
+      ? items.filter((ref) => skillRefUse(skills.rows, ref) === 'published')
+      : [...items];
+  };
   /** 「沿用定义」 on a list: ticked, the step keeps the definition's; unticked, it starts from it. */
   const inherit = (field: ListField | 'observeScope', label: string) => {
     const value = spec[field];
@@ -192,7 +248,7 @@ function SpecFields({
                 ? null
                 : field === 'observeScope'
                   ? []
-                  : [...(base?.[field] ?? [])],
+                  : startFrom(field),
             })
           }
           data-testid="goal-plan-spec-inherit"
@@ -200,6 +256,27 @@ function SpecFields({
         />
         <span>{label}</span>
       </label>
+    );
+  };
+  /** UX P3-2 on #889: a list set here with nothing ticked, said for what it means. */
+  const noneNote = (field: ListField | 'observeScope', offered: boolean): ReactNode => {
+    const value = spec[field];
+    if (value === null || value.length > 0 || !offered) return null;
+    const text =
+      field === 'skills'
+        ? t('一个都没选：这一步不装载 Skill。', 'None ticked: the step mounts no Skill.')
+        : field === 'gates'
+          ? t('一个都没选：这一步不作用于任何门。', 'None ticked: the step acts on no gate.')
+          : field === 'capabilities'
+            ? t(
+                '一个都没选：这一步只有每个 Worker 都有的几项基础能力（报告结果、读自己的 Task 等）。',
+                'None ticked: the step holds only what every Worker has (reporting its result, reading its Task and the like).',
+              )
+            : t('一个都没选：这一步不能观察任何门。', 'None ticked: the step may observe no gate.');
+    return (
+      <span className="text-3 text-small" data-testid="goal-plan-spec-none" data-field={field}>
+        {text}
+      </span>
     );
   };
   const listError = (field: SpecField) => {
@@ -214,8 +291,7 @@ function SpecFields({
   // Skills: one per name, as a WorkerSpec names them — published ones, and drafts the person can
   // see (a step using one waits for someone to approve a trial). A name only deprecated is not on
   // offer; one the step already names stays visible to untick.
-  const skillRows = skills.state.status === 'ready' ? skills.state.data.items : [];
-  const skillOptions = skillChoices(skillRows, spec.skills ?? [], t);
+  const skillOptions = skillChoices(skills, spec.skills ?? [], t);
   const gateRows = gatekeepers.rows ?? [];
   const gateOptions = (selected: readonly string[]): CheckboxOption[] => [
     ...gateRows.map((row) => ({ id: row.id, label: row.name })),
@@ -296,7 +372,7 @@ function SpecFields({
             onToggle={(ref) => patch({ skills: toggleListItem(spec.skills ?? [], ref) })}
             testId="goal-plan-spec-skills"
             emptyHint={
-              skills.state.status === 'loading'
+              skills.loading
                 ? t('正在读取 Skill…', 'Reading Skills…')
                 : t(
                     '没有可用的 Skill：不勾选就是这一步不装载 Skill。',
@@ -305,6 +381,7 @@ function SpecFields({
             }
           />
         ) : null}
+        {noneNote('skills', skillOptions.length > 0)}
         {listError('skills')}
       </div>
 
@@ -322,6 +399,7 @@ function SpecFields({
             emptyHint={t('工作区里还没有门。', 'The workspace has no gate yet.')}
           />
         ) : null}
+        {noneNote('gates', gateOptions(spec.gates ?? []).length > 0)}
         {listError('gates')}
       </div>
 
@@ -347,6 +425,10 @@ function SpecFields({
             }
           />
         ) : null}
+        {noneNote(
+          'capabilities',
+          capabilityNames.state.status === 'ready' && capabilityNames.state.data.items.length > 0,
+        )}
         {listError('capabilities')}
       </div>
 
@@ -359,6 +441,15 @@ function SpecFields({
         )}
         error={modelError}
       >
+        {definitionLine(
+          base?.model !== undefined
+            ? t(`定义：${base.model}`, `Definition: ${base.model}`)
+            : t(
+                '定义：没有设定模型（由请求人的智能体设置来选）',
+                'Definition: sets no model (the requester’s agent settings pick one)',
+              ),
+          'model',
+        )}
         <Select
           id={`${id}-spec-model`}
           aria-label={workerSpecFieldLabel('model', t)}
@@ -366,7 +457,12 @@ function SpecFields({
           value={spec.model}
           onChange={(event) => patch({ model: event.target.value })}
           invalid={modelError !== null}
-          aria-describedby={describedBy(`${id}-spec-model`, true, modelError !== null)}
+          aria-describedby={withModelHealthNote(
+            describedBy(`${id}-spec-model`, true, modelError !== null),
+            `${id}-spec-model-health`,
+            modelRows,
+            spec.model,
+          )}
           data-testid="goal-plan-spec-model"
         >
           <option value="">
@@ -384,6 +480,14 @@ function SpecFields({
             <ModelOption key={row.id} model={row} selected={row.id === spec.model} />
           ))}
         </Select>
+        {/* UX P3-3 on #889: a model chosen whose provider is untested or fails tool calls says so. */}
+        <ModelHealthNote
+          models={modelRows}
+          selectedId={spec.model}
+          canFix={false}
+          testId="goal-plan-spec-model-health"
+          id={`${id}-spec-model-health`}
+        />
       </Field>
 
       <div className="stack-s" data-testid="goal-plan-spec-field" data-field="observeScope">
@@ -407,6 +511,7 @@ function SpecFields({
             emptyHint={t('工作区里还没有门。', 'The workspace has no gate yet.')}
           />
         ) : null}
+        {noneNote('observeScope', gateOptions(spec.observeScope ?? []).length > 0)}
         {listError('observeScope')}
       </div>
 
@@ -448,38 +553,53 @@ function SpecFields({
   );
 }
 
-/** The Skills a step may pick, one per name: a name with a published version as it is, one with
- *  only drafts the person can see said to be a draft; a reference the step already names and no
- *  row has (an id, a name gone) kept to untick. */
+/** The Skills a step may pick, one per name, classed as the kernel classes a reference when the
+ *  step starts (`skillRefUse`): a name with a published version as it is (a family whose latest is
+ *  a draft still has its published one, `inUse`), one with only drafts the person can see said to
+ *  be a draft; a reference the step already names and no option has kept to untick — once the
+ *  directory is whole, one that is neither said to keep the step from starting (UX P2-1 on #889). */
 export function skillChoices(
-  rows: readonly SkillRow[],
+  directory: SkillDirectory,
   selected: readonly string[],
   t: Translate,
 ): CheckboxOption[] {
-  const byName = new Map<string, Set<string>>();
+  const { rows } = directory;
+  const names = new Set<string>();
   for (const row of rows) {
-    const statuses = byName.get(row.name) ?? new Set<string>();
-    statuses.add(row.status);
-    byName.set(row.name, statuses);
+    names.add(row.name);
+    if (row.inUse) names.add(row.inUse.name);
   }
+  const draftLabel = (shown: string) =>
+    t(
+      `${shown}（草稿：要有人批准试用，这一步才会开始）`,
+      `${shown} (a draft: the step starts once someone approves a trial)`,
+    );
   const options: CheckboxOption[] = [];
-  for (const [name, statuses] of byName) {
-    if (statuses.has('published')) options.push({ id: name, label: name });
-    else if (statuses.has('draft')) {
-      options.push({
-        id: name,
-        label: t(
-          `${name}（草稿：要有人批准试用，这一步才会开始）`,
-          `${name} (a draft: the step starts once someone approves a trial)`,
-        ),
-      });
-    }
+  for (const name of names) {
+    const use = skillRefUse(rows, name);
+    if (use === 'published') options.push({ id: name, label: name });
+    else if (use === 'draft') options.push({ id: name, label: draftLabel(name) });
   }
   for (const ref of selected) {
     if (options.some((option) => option.id === ref)) continue;
     // A reference by id (a family the step names by id) reads by its name and short id.
-    const row = rows.find((candidate) => candidate.id === ref);
-    options.push({ id: ref, label: row ? `${row.name} · ${shortId(ref)}` : skillRefShown(ref) });
+    const row = rows.find((candidate) => candidate.id === ref || candidate.inUse?.id === ref);
+    const shown = row
+      ? `${row.inUse?.id === ref ? row.inUse.name : row.name} · ${shortId(ref)}`
+      : skillRefShown(ref);
+    const use = directory.complete ? skillRefUse(rows, ref) : 'published';
+    options.push({
+      id: ref,
+      label:
+        use === 'draft'
+          ? draftLabel(shown)
+          : use === 'unusable'
+            ? t(
+                `${shown}（已弃用或不在了：留着它这一步就不会开始，取消勾选）`,
+                `${shown} (deprecated or gone: the step does not start with it; untick it)`,
+              )
+            : shown,
+    });
   }
   return options;
 }

@@ -78,16 +78,32 @@ describe('stepFieldChanges as sentences (S11 GO15a)', () => {
     });
     expect(texts(stepFieldChanges(before, after))).toEqual([
       expect.stringMatching(/^Skill 加上 renew，去掉 audit$/),
-      '门 改为 cert-gate（原来沿用 Worker 定义）',
+      expect.stringMatching(/^门改为 cert-gate（原来沿用 Worker 定义）$/),
       expect.stringMatching(/^模型 model-a → model-b$/),
       '观察范围限定为门 cert-gate（原来不限）',
     ]);
     expect(texts(stepFieldChanges(after, step()))).toEqual([
       'Skill 改回沿用 Worker 定义',
-      '门 改回沿用 Worker 定义',
+      expect.stringMatching(/^门改回沿用 Worker 定义$/),
       '模型改回沿用 Worker 定义',
       '观察范围改回不限',
     ]);
+  });
+
+  it('says what a list set to nothing means for the step (UX P3-2 on #889)', () => {
+    const none = step({ spec: { skills: [], gates: [], capabilities: [], observeScope: [] } });
+    expect(texts(stepFieldChanges(step(), none))).toEqual([
+      expect.stringMatching(/^Skill 改为空：这一步不装载 Skill（原来沿用 Worker 定义）$/),
+      expect.stringMatching(/^门改为空：这一步不作用于任何门（原来沿用 Worker 定义）$/),
+      expect.stringMatching(/^能力范围改为空：这一步只有每个 Worker 都有的几项基础能力（原来/),
+      '观察范围改为空：这一步不能观察任何门（原来不限）',
+    ]);
+    expect(texts(stepFieldChanges(step(), none), en)).toContain(
+      'Capabilities set to none: the step holds only what every Worker has (the Worker’s own before)',
+    );
+    expect(
+      texts(stepFieldChanges(step({ spec: { gates: [GATE] } }), step({ spec: { gates: [] } }))),
+    ).toEqual(['门改为空：这一步不作用于任何门']);
   });
 
   it('says a WorkerSpec’s responsibility and token cap changed without quoting them', () => {

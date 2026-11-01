@@ -20,7 +20,8 @@ import {
   validateOutput,
 } from '@nexttime/shared';
 import { workerContractOf } from './catalog.js';
-import { goalBudgetRows, planDiff } from './goals.js';
+import { goalBudgetRows, planDiff, skillRefShown } from './goals.js';
+import type { SkillRow } from './governance.js';
 import type { Translate } from './i18n.js';
 import type { WorkerDefinitionSummary } from './tasks.js';
 
@@ -553,6 +554,9 @@ export function draftProblems(
   draft: PlanDraft,
   detail: GoalDetailWire,
   t: Translate,
+  /** The Skill directory, once read in full (`list_skills`, every page) — `null` until then: a
+   *  Skill a step names is checked against it only when it is whole. */
+  skills: readonly SkillRow[] | null = null,
 ): ReadonlyMap<FieldKey, string> {
   const problems = new Map<FieldKey, string>();
   const rewrite = (kind: 'mask' | 'escape'): string =>
@@ -682,7 +686,7 @@ export function draftProblems(
         );
       }
     }
-    for (const [field, problem] of specProblems(step, rewrite, t)) {
+    for (const [field, problem] of specProblems(step, rewrite, t, skills)) {
       problems.set(`step:${step.uid}:spec.${field}`, problem);
     }
   }
@@ -788,9 +792,28 @@ function specProblems(
   step: StepDraft,
   rewrite: (kind: 'mask' | 'escape') => string,
   t: Translate,
+  skills: readonly SkillRow[] | null,
 ): ReadonlyMap<SpecField, string> {
   const problems = new Map<SpecField, string>();
   const { spec } = step;
+  // UX P2-1 on #889: a WorkerSpec that names a Skill with no published version and no draft the
+  // person may see (deprecated, gone) keeps the step from starting (`step_skill_deprecated`) — the
+  // definition's own Skills mount best effort, the WorkerSpec's are held to. Checked only for a
+  // WorkerSpec sent as written (a new step's, or one changed here): one kept as read is the
+  // kernel's to hint, and holding the plan to it would block every other change.
+  if (skills !== null && spec.skills !== null && (step.original === null || specChanged(step))) {
+    const unusable = spec.skills.filter((ref) => skillRefUse(skills, ref) === 'unusable');
+    if (unusable.length > 0) {
+      const names = unusable.map(skillRefShown);
+      problems.set(
+        'skills',
+        t(
+          `${names.join('、')} 已弃用或不在了：这一步点名它就不会开始。取消勾选，或者勾「沿用定义」。`,
+          `${names.join(', ')}: deprecated or gone — a step naming it does not start. Untick it, or tick "As the definition has it".`,
+        ),
+      );
+    }
+  }
   const cap = spec.tokenBudget.trim();
   if (cap !== '') {
     if (!/^\d+$/.test(cap) || Number(cap) <= 0) {
@@ -857,6 +880,27 @@ function specProblems(
     }
   }
   return problems;
+}
+
+/** What a Skill reference (a name or an id, as a WorkerSpec names it) is in the console's Skill
+ *  directory (`list_skills`: each family's latest version — published, or a draft the viewer may
+ *  see, which carries the family's published version as `inUse`), in the order the kernel classes
+ *  it when a step starts (`classifySkillRefs`): `published` — a published version, what a run
+ *  mounts; `draft` — only a draft, a step naming it waits for a trial to be approved; `unusable` —
+ *  neither (its versions deprecated, or gone): a step naming it does not start. */
+export type SkillRefUse = 'published' | 'draft' | 'unusable';
+
+export function skillRefUse(
+  rows: readonly Pick<SkillRow, 'id' | 'name' | 'status' | 'inUse'>[],
+  ref: string,
+): SkillRefUse {
+  const seen = new Set<string>();
+  for (const row of rows) {
+    for (const version of row.inUse ? [row, row.inUse] : [row]) {
+      if (version.id === ref || version.name === ref) seen.add(version.status);
+    }
+  }
+  return seen.has('published') ? 'published' : seen.has('draft') ? 'draft' : 'unusable';
 }
 
 /** Whether a step of the plan in force now names another Worker or version (a new step: no). */

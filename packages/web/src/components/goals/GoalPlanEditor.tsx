@@ -51,6 +51,7 @@ import {
   planHintText,
   stepRemovalText,
 } from '../../lib/goals.js';
+import type { SkillRow } from '../../lib/governance.js';
 import { HttpError } from '../../lib/http-client.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { planStepDiff, stepChangeLine } from '../../lib/plan-step-diff.js';
@@ -77,7 +78,7 @@ import {
   useOperationDone,
 } from './GoalOperationsBar.js';
 import { OutputContractFields } from './OutputContract.js';
-import { StepSpecEditor } from './StepSpecEditor.js';
+import { type SkillDirectory, StepSpecEditor } from './StepSpecEditor.js';
 
 export interface GoalPlanEditorProps {
   readonly goal: GoalDetailWire;
@@ -154,11 +155,27 @@ export function GoalPlanEditor({
     { kind: 'worker' },
     { autoLoadAll: true },
   );
+  // The Skill directory a step's WorkerSpec picks from — read once, when someone first opens a
+  // step's adjustments, and shared by every step (UX P2-1 on #889: a Skill it names is checked
+  // against it, once it is read in full).
+  const [specOpened, setSpecOpened] = useState(false);
+  const skillDirectory = useCapabilityList<SkillRow>(
+    http,
+    'list_skills',
+    {},
+    { autoLoadAll: true, enabled: specOpened },
+  );
+  const skills: SkillDirectory = {
+    rows: skillDirectory.state.status === 'ready' ? skillDirectory.state.data.items : [],
+    complete:
+      skillDirectory.state.status === 'ready' && skillDirectory.state.data.nextCursor === undefined,
+    loading: specOpened && skillDirectory.state.status === 'loading',
+  };
   const run = useOperationDone(onDone, latest);
   const runs = useMemo(() => liveRuns(goal), [goal]);
   if (can('revise_goal') === false) return null;
 
-  const problems = draftProblems(draft, goal, t);
+  const problems = draftProblems(draft, goal, t, skills.complete ? skills.rows : null);
   const errorOf = (key: FieldKey): string | null => refused.get(key) ?? problems.get(key) ?? null;
   /** A change to the draft; it clears the kernel's refusals on what it touches (`scope`: a field
    *  key, or a step's / check's key prefix) and the one about the plan as a whole. */
@@ -330,6 +347,8 @@ export function GoalPlanEditor({
               definitions={published}
               allDefinitions={defs}
               http={http}
+              skills={skills}
+              onSpecOpen={() => setSpecOpened(true)}
               errorOf={errorOf}
               onChange={(patch) => changeStep(step.uid, patch)}
               onRemove={() => {
@@ -771,6 +790,8 @@ function StepEditor({
   definitions,
   allDefinitions,
   http,
+  skills,
+  onSpecOpen,
   errorOf,
   onChange,
   onRemove,
@@ -783,6 +804,8 @@ function StepEditor({
   readonly definitions: readonly WorkerDefinitionSummary[] | undefined;
   readonly allDefinitions: readonly WorkerDefinitionSummary[] | undefined;
   readonly http: CapabilityCaller;
+  readonly skills: SkillDirectory;
+  readonly onSpecOpen: () => void;
   readonly errorOf: (key: FieldKey) => string | null;
   readonly onChange: (patch: Partial<StepDraft>) => void;
   readonly onRemove: () => void;
@@ -933,6 +956,8 @@ function StepEditor({
             id={id}
             step={step}
             http={http}
+            skills={skills}
+            onOpen={onSpecOpen}
             errorOf={errorOf}
             onChange={(spec) => onChange({ spec })}
           />
