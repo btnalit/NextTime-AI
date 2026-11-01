@@ -3,6 +3,7 @@ import type {
   PlannerRevisionClass,
   PlannerRevisionClassReasonWire,
   PlanningFailureCategory,
+  PlanningPoint,
   PlanningRoundKind,
   PlanningRoundOutcomeReason,
   PlanningRoundStatus,
@@ -35,10 +36,14 @@ export interface PlanningRoundRow {
   readonly id: string;
   readonly goalRunId: string;
   readonly basedOnRevision: number;
-  readonly stepRunId: string;
-  readonly stepKey: string;
-  readonly stepAttempt: number;
-  readonly failureCategory: PlanningFailureCategory;
+  /** S11 GO10b (goal/0016): what the round is for — a step's failed attempt (the step fields
+   *  set) or a verification round of the goal (`acceptanceRound` set, the step fields `null`). */
+  readonly point: PlanningPoint;
+  readonly stepRunId: string | null;
+  readonly stepKey: string | null;
+  readonly stepAttempt: number | null;
+  readonly failureCategory: PlanningFailureCategory | null;
+  readonly acceptanceRound: number | null;
   /** S11 GO9b: opened under a pause (`proposal`) or while the run kept running (`autonomous`). */
   readonly kind: PlanningRoundKind;
   readonly status: PlanningRoundStatus;
@@ -62,10 +67,11 @@ interface PlanningRoundDbRow {
   id: string;
   goal_run_id: string;
   based_on_revision: number;
-  step_run_id: string;
-  step_key: string;
-  step_attempt: number;
-  failure_category: PlanningFailureCategory;
+  step_run_id: string | null;
+  step_key: string | null;
+  step_attempt: number | null;
+  failure_category: PlanningFailureCategory | null;
+  acceptance_round: number | null;
   kind: PlanningRoundKind;
   status: PlanningRoundStatus;
   revision: number | null;
@@ -82,12 +88,13 @@ interface PlanningRoundDbRow {
 }
 
 const ROUND_SELECT = `select pr.id, pr.goal_run_id, pr.based_on_revision, pr.step_run_id, s.step_key,
-       pr.step_attempt, pr.failure_category, pr.kind, pr.status, pr.revision, pr.revision_class,
+       pr.step_attempt, pr.failure_category, pr.acceptance_round, pr.kind, pr.status, pr.revision,
+       pr.revision_class,
        pr.class_reasons, pr.outcome_reason, pr.detail,
        pr.created_at, pr.settled_at, t.id as task_id, t.status as task_status,
        t.failure_reason as task_failure_reason, t.result as task_result
   from goal_planning_rounds pr
-  join step_runs s on s.workspace_id = pr.workspace_id and s.id = pr.step_run_id
+  left join step_runs s on s.workspace_id = pr.workspace_id and s.id = pr.step_run_id
   left join tasks t on t.workspace_id = pr.workspace_id and t.planning_round_id = pr.id`;
 
 function mapRound(row: PlanningRoundDbRow): PlanningRoundRow {
@@ -95,10 +102,12 @@ function mapRound(row: PlanningRoundDbRow): PlanningRoundRow {
     id: row.id,
     goalRunId: row.goal_run_id,
     basedOnRevision: row.based_on_revision,
+    point: row.acceptance_round === null ? 'step_failure' : 'goal_acceptance',
     stepRunId: row.step_run_id,
     stepKey: row.step_key,
     stepAttempt: row.step_attempt,
     failureCategory: row.failure_category,
+    acceptanceRound: row.acceptance_round,
     kind: row.kind,
     status: row.status,
     revision: row.revision,

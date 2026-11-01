@@ -671,6 +671,17 @@ export type PlanningRoundKind = (typeof PLANNING_ROUND_KIND_VALUES)[number];
 export const PlanningRoundKindSchema = asEnum(PLANNING_ROUND_KIND_VALUES);
 
 /**
+ * S11 GO10b: the judgment point a planning round is for (goal/0016, its anchor):
+ *   - `step_failure`: the failed attempt of a step the platform does not retry on its own (GO9a);
+ *   - `goal_acceptance`: a verification round of the goal with a check the platform made that
+ *     failed — every step succeeded, the goal's acceptance did not pass. Only ever a `proposal`
+ *     round (I-P6): the requester decides what the planner proposes.
+ */
+export const PLANNING_POINT_VALUES = ['step_failure', 'goal_acceptance'] as const;
+export type PlanningPoint = (typeof PLANNING_POINT_VALUES)[number];
+export const PlanningPointSchema = asEnum(PLANNING_POINT_VALUES);
+
+/**
  * A planning round (goal/0014 `goal_planning_rounds`): one planner run at one failed attempt of a
  * step. `running → proposed` (its revision waits for the requester) `| applied` (S11 GO9b: an
  * `autonomous` round's minor revision, accepted by the platform for the requester) `|

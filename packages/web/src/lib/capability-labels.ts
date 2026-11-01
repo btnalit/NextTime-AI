@@ -2010,16 +2010,17 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   'goal_run.planner_granted': {
     zh: '已允许目标规划器',
     en: 'Goal planner allowed',
-    zhHint: '请求人确认目标时，允许目标规划器在步骤失败、需要人决定时提修订（只提议）。',
+    zhHint: '请求人确认目标时，允许目标规划器在步骤失败、需要人决定，或目标的验收没通过时提修订。',
     enHint:
-      'On confirming the goal, its requester let the goal planner propose a revision when a step fails for a person (proposals only).',
+      'On confirming the goal, its requester let the goal planner propose a revision when a step fails for a person, or the goal’s acceptance does not pass.',
   },
   'goal_planning_round.open': {
     zh: '规划器开始一轮规划',
     en: 'Planning round opened',
-    zhHint: '一个步骤失败、需要人决定，目标规划器开始为它拟修订，或因预算、权限等原因没能开始。',
+    zhHint:
+      '一个步骤失败、需要人决定，或目标的验收没通过，目标规划器开始为它拟修订，或因预算、权限等原因没能开始。',
     enHint:
-      'A step failed for a person and the goal planner started on a revision for it, or could not start (budget, authority).',
+      'A step failed for a person, or the goal’s acceptance did not pass, and the goal planner started on a revision for it, or could not start (budget, authority).',
   },
   'goal_planning_round.settle': {
     zh: '一轮规划结束',

@@ -7,6 +7,7 @@ import {
   reconcileOptions,
   retryableStepKeys,
   revisionsSince,
+  verificationRoundOnResume,
 } from './goal-actions.js';
 import type { Translate } from './i18n.js';
 
@@ -133,6 +134,52 @@ describe('lib/goal-actions', () => {
       ],
     });
     expect(retryableStepKeys(detail)).toEqual(['fetch']);
+  });
+
+  it('UX P2-1 on #872: resuming after the goal’s verification did not pass verifies it again, in the next round, only when every step of the plan in force is done', () => {
+    const acceptance = (status: 'failed' | 'unavailable' | 'passed') =>
+      ({
+        rounds: [
+          { round: 1, planRevision: 1, openedAt: '2026-10-20T00:04:00.000Z', checks: [] },
+          {
+            round: 2,
+            planRevision: 1,
+            openedAt: '2026-10-20T00:08:00.000Z',
+            checks: [{ key: 'served', status }],
+          },
+        ],
+        steps: [],
+        absenceBaselines: [],
+        overriddenChecks: [],
+      }) as unknown as GoalDetailWire['acceptance'];
+    const done = [
+      stepRun({ status: 'succeeded' }),
+      stepRun({ id: 'sr-skip', stepKey: 'skip', status: 'skipped' }),
+      stepRun({ id: 'sr-old', stepKey: 'old', status: 'failed', supersededInRevision: 2 }),
+    ];
+    const paused = (overrides: Partial<GoalDetailWire>) =>
+      goalDetail({ status: 'paused', pauseReason: 'needs_decision', ...overrides });
+    expect(
+      verificationRoundOnResume(paused({ steps: done, acceptance: acceptance('failed') })),
+    ).toBe(3);
+    expect(
+      verificationRoundOnResume(paused({ steps: done, acceptance: acceptance('unavailable') })),
+    ).toBe(3);
+    // The latest round passed: nothing to verify again.
+    expect(
+      verificationRoundOnResume(paused({ steps: done, acceptance: acceptance('passed') })),
+    ).toBeNull();
+    // A step of the plan in force is still to run (a revision added it): resuming runs it first.
+    expect(
+      verificationRoundOnResume(
+        paused({
+          steps: [...done, stepRun({ id: 'sr-new', stepKey: 'reload', status: 'pending' })],
+          acceptance: acceptance('failed'),
+        }),
+      ),
+    ).toBeNull();
+    // No verification round yet.
+    expect(verificationRoundOnResume(paused({ steps: done }))).toBeNull();
   });
 
   it('a finding is the requester’s or an owner’s; running it again the requester’s, while the goal can run', () => {

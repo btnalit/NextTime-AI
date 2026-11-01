@@ -83,7 +83,8 @@ export interface GoalPlannerSectionProps {
  * planner proposes takes effect only once the requester accepts it, and anyone else reads who
  * decides. GO9b: under an `apply_minor` leave the platform adopts a minor revision for the
  * requester while the goal runs (the round reads 已按授权采用); a revision it leaves to them says
- * why (`classReasons`).
+ * why (`classReasons`). GO10b: a round may be for the goal's verification round that did not pass
+ * instead of a failed step (`point`); what it proposes is always the requester's to decide.
  */
 export function GoalPlannerSection({
   goal,
@@ -119,12 +120,12 @@ export function GoalPlannerSection({
         >
           {goal.planner === 'apply_minor'
             ? t(
-                '确认这个目标时，请求人允许目标规划器在步骤失败时换一条路，并允许平台替自己采用小修订：只换 Worker、输入、顺序或重试次数、验收不变的修订，目标不停；其余的修订暂停目标，等请求人决定。规划器看不到外部系统，也不能发起动作；用掉的 token 计入目标的预算。',
-                'When confirming this goal, its requester let the goal planner find another way when a step fails, and the platform adopt minor revisions for them: one that only changes the Worker, input, order or retry limit, on unchanged checks, goes on without stopping the goal; any other pauses the goal for the requester to decide. The planner sees no outside system and cannot act; the tokens it uses count against the goal’s budget.',
+                '确认这个目标时，请求人允许目标规划器在步骤失败时换一条路，并允许平台替自己采用小修订：只换 Worker、输入、顺序或重试次数、验收不变的修订，目标不停；其余的修订暂停目标，等请求人决定。所有步骤都成功但目标的验收没通过时，规划器只提议，修订由请求人决定。规划器看不到外部系统，也不能发起动作；用掉的 token 计入目标的预算。',
+                'When confirming this goal, its requester let the goal planner find another way when a step fails, and the platform adopt minor revisions for them: one that only changes the Worker, input, order or retry limit, on unchanged checks, goes on without stopping the goal; any other pauses the goal for the requester to decide. When every step succeeded and the goal’s acceptance did not pass, the planner only proposes and the requester decides. The planner sees no outside system and cannot act; the tokens it uses count against the goal’s budget.',
               )
             : t(
-                '确认这个目标时，请求人允许目标规划器在步骤失败、需要人决定时提一个修订。规划器只提议：它看不到外部系统，也不能发起动作；它提的修订要请求人接受才生效，用掉的 token 计入目标的预算。',
-                'When confirming this goal, its requester let the goal planner propose a revision when a step fails and a person must decide. The planner only proposes: it sees no outside system and cannot act; what it proposes takes effect only once the requester accepts it, and the tokens it uses count against the goal’s budget.',
+                '确认这个目标时，请求人允许目标规划器在步骤失败、需要人决定时，或所有步骤都成功但目标的验收没通过时，提一个修订。规划器只提议：它看不到外部系统，也不能发起动作；它提的修订要请求人接受才生效，用掉的 token 计入目标的预算。',
+                'When confirming this goal, its requester let the goal planner propose a revision when a step fails and a person must decide, or when every step succeeded and the goal’s acceptance did not pass. The planner only proposes: it sees no outside system and cannot act; what it proposes takes effect only once the requester accepts it, and the tokens it uses count against the goal’s budget.',
               )}
         </span>
         {spent ? (
@@ -164,12 +165,12 @@ export function GoalPlannerSection({
             {/* UX P3-2 on #866: under apply_minor the planner runs on any failure it can take. */}
             {goal.planner === 'apply_minor'
               ? t(
-                  '还没有步骤失败，规划器还没跑过。',
-                  'No step has failed yet, so the planner has not run.',
+                  '还没有步骤失败，目标的验收也没有不通过，规划器还没跑过。',
+                  'No step has failed and the goal’s acceptance has not failed yet, so the planner has not run.',
                 )
               : t(
-                  '还没有步骤失败到要人决定，规划器还没跑过。',
-                  'No step has failed to the point of a person deciding yet, so the planner has not run.',
+                  '还没有步骤失败到要人决定，目标的验收也没有不通过，规划器还没跑过。',
+                  'No step has failed to the point of a person deciding and the goal’s acceptance has not failed yet, so the planner has not run.',
                 )}
           </span>
         )}
@@ -178,12 +179,37 @@ export function GoalPlannerSection({
   );
 }
 
+/** A step's round: the attempt it was for (an autonomous round is always one, I-P6). */
 function failedStepText(round: PlanningRoundWire, t: Translate): string {
-  const category = stepFailureText(round.failureCategory, t).short;
+  const category = round.failureCategory ? stepFailureText(round.failureCategory, t).short : '';
   return t(
     `步骤 ${round.stepKey} 第 ${round.stepAttempt} 次尝试（${category}）`,
     `step ${round.stepKey}, attempt ${round.stepAttempt} (${category})`,
   );
+}
+
+/** What a round was for, as the planning record lists it — the failed attempt of a step, or (S11
+ *  GO10b) the goal's verification round that did not pass. */
+function roundSubjectText(round: PlanningRoundWire, t: Translate): string {
+  return round.point === 'goal_acceptance'
+    ? t(
+        `目标第 ${round.acceptanceRound} 轮验收没通过`,
+        `the goal’s verification round ${round.acceptanceRound} did not pass`,
+      )
+    : failedStepText(round, t);
+}
+
+/** S11 GO10b: what the requester does next once the planner left this pause to them. */
+function nextStepsText(round: PlanningRoundWire, t: Translate): string {
+  return round.point === 'goal_acceptance'
+    ? t(
+        '接下来由请求人决定：继续以再验收一次、自己修订计划，或结束目标。',
+        'It is up to the requester now: resume to verify again, revise the plan, or end the goal.',
+      )
+    : t(
+        '接下来由请求人重试失败的步骤、自己修订计划或取消。',
+        'It is up to the requester now: retry the failed step, revise the plan, or cancel.',
+      );
 }
 
 function RunningRound({
@@ -204,10 +230,15 @@ function RunningRound({
                 `规划器正在为${failedStepText(round, t)}换一条路，这期间不开始新的尝试，已经在跑的照常进行。小修订平台会替请求人采用，其余的修订暂停目标等请求人决定。你也可以暂停或取消目标，那样这一轮就作废。`,
                 `The planner is looking for another way past ${failedStepText(round, t)}; meanwhile no new attempt starts, and those already running go on. A minor revision the platform adopts for the requester; any other pauses the goal for them to decide. You may pause or cancel the goal meanwhile; this round is then dropped.`,
               )
-            : t(
-                `规划器正在看${failedStepText(round, t)}为什么失败，准备提一个修订。它跑完前你也可以自己继续、修订或取消，那样这一轮就作废。`,
-                `The planner is looking at why ${failedStepText(round, t)} failed, to propose a revision. You may still resume, revise or cancel the goal yourself meanwhile; this round is then dropped.`,
-              )}
+            : round.point === 'goal_acceptance'
+              ? t(
+                  `所有步骤都成功了，但目标第 ${round.acceptanceRound} 轮验收没通过。规划器正在看为什么，准备提一个修订：加一步、换个方式重做，或改验收检查。它跑完前你也可以自己继续（再验收一次）、修订或取消，那样这一轮就作废。`,
+                  `Every step succeeded but the goal’s verification round ${round.acceptanceRound} did not pass. The planner is looking at why, to propose a revision: a step added, work redone another way, or a check changed. You may still resume (to verify again), revise or cancel the goal yourself meanwhile; this round is then dropped.`,
+                )
+              : t(
+                  `规划器正在看${failedStepText(round, t)}为什么失败，准备提一个修订。它跑完前你也可以自己继续、修订或取消，那样这一轮就作废。`,
+                  `The planner is looking at why ${failedStepText(round, t)} failed, to propose a revision. You may still resume, revise or cancel the goal yourself meanwhile; this round is then dropped.`,
+                )}
         </span>
         {round.taskId ? (
           <span className="row-wrap text-small">
@@ -245,20 +276,35 @@ function Conclusion({
     <Notice tone="warn" testId="goal-planner-conclusion">
       <span className="stack-s">
         <span>
-          {usedUp
-            ? t(
-                `${usedUp}，规划器没有为${failedStepText(round, t)}的失败运行。接下来由请求人重试失败的步骤、自己修订计划或取消。`,
-                `${usedUp}, so no planner ran for the failure of ${failedStepText(round, t)}. It is up to the requester now: retry the failed step, revise the plan, or cancel.`,
-              )
-            : round.status === 'no_revision'
+          {round.point === 'goal_acceptance'
+            ? usedUp
               ? t(
-                  `规划器看过${failedStepText(round, t)}的失败，没有可行的修订。接下来由请求人重试失败的步骤、自己修订计划或取消。`,
-                  `The planner looked at the failure of ${failedStepText(round, t)} and found no revision that would do. It is up to the requester now: retry the failed step, revise the plan, or cancel.`,
+                  `${usedUp}，目标第 ${round.acceptanceRound} 轮验收没通过，规划器没有运行。${nextStepsText(round, t)}`,
+                  `${usedUp}, so no planner ran for the goal’s verification round ${round.acceptanceRound}, which did not pass. ${nextStepsText(round, t)}`,
                 )
-              : t(
-                  `规划器没能为${failedStepText(round, t)}的失败给出修订。接下来由请求人重试失败的步骤、自己修订计划或取消。`,
-                  `The planner gave no revision for the failure of ${failedStepText(round, t)}. It is up to the requester now: retry the failed step, revise the plan, or cancel.`,
-                )}
+              : round.status === 'no_revision'
+                ? t(
+                    `规划器看过目标第 ${round.acceptanceRound} 轮验收为什么没通过，没有可行的修订。${nextStepsText(round, t)}`,
+                    `The planner looked at why the goal’s verification round ${round.acceptanceRound} did not pass and found no revision that would do. ${nextStepsText(round, t)}`,
+                  )
+                : t(
+                    `目标第 ${round.acceptanceRound} 轮验收没通过，规划器没能给出修订。${nextStepsText(round, t)}`,
+                    `The planner gave no revision for the goal’s verification round ${round.acceptanceRound}, which did not pass. ${nextStepsText(round, t)}`,
+                  )
+            : usedUp
+              ? t(
+                  `${usedUp}，规划器没有为${failedStepText(round, t)}的失败运行。${nextStepsText(round, t)}`,
+                  `${usedUp}, so no planner ran for the failure of ${failedStepText(round, t)}. ${nextStepsText(round, t)}`,
+                )
+              : round.status === 'no_revision'
+                ? t(
+                    `规划器看过${failedStepText(round, t)}的失败，没有可行的修订。${nextStepsText(round, t)}`,
+                    `The planner looked at the failure of ${failedStepText(round, t)} and found no revision that would do. ${nextStepsText(round, t)}`,
+                  )
+                : t(
+                    `规划器没能为${failedStepText(round, t)}的失败给出修订。${nextStepsText(round, t)}`,
+                    `The planner gave no revision for the failure of ${failedStepText(round, t)}. ${nextStepsText(round, t)}`,
+                  )}
         </span>
         {outcome ? <span className="text-small text-3">{outcome}</span> : null}
         {showsRoundDetail(round) && round.detail ? (
@@ -393,7 +439,9 @@ function RoundItem({
     <li className="stack-s" data-testid="goal-planner-round" data-status={round.status}>
       <span className="row-wrap text-small">
         <StatusChip machine="planningRound" status={round.status} size="s" />
-        <span>{failedStepText(round, t)}</span>
+        <span data-testid="goal-planner-round-subject" data-point={round.point}>
+          {roundSubjectText(round, t)}
+        </span>
         <span className="text-3">
           {t(`基于第 ${round.basedOnRevision} 版`, `on v${round.basedOnRevision}`)}
         </span>
@@ -530,6 +578,16 @@ function PlannerProposal({
           t,
         )
       : [];
+  // S11 GO10b: a revision for the goal's acceptance not passing leads to verifying it again.
+  const forAcceptance = round?.point === 'goal_acceptance';
+  const verifiesAgain = forAcceptance
+    ? [
+        t(
+          '所有步骤都完成后，平台重新验收目标（新的一轮）',
+          'Once every step is done, the platform verifies the goal again, in a new round',
+        ),
+      ]
+    : [];
   const anchor = (decision: Decision, label: string, variant: 'primary' | 'secondary') => (
     <Button
       variant={variant}
@@ -561,6 +619,7 @@ function PlannerProposal({
                 `The plan becomes the planner’s v${proposal.revision}, counted against the goal’s revisions`,
               ),
               ...changeLines,
+              ...verifiesAgain,
               t(
                 '目标马上继续，以你的授权花费预算、发起动作；需要审批的动作仍然逐个审批',
                 'The goal moves on at once, spending its budget and acting with your authority; actions that need approval are still approved one by one',
@@ -580,6 +639,7 @@ function PlannerProposal({
                 `The plan becomes the planner’s v${proposal.revision}, counted against the goal’s revisions`,
               ),
               ...changeLines,
+              ...verifiesAgain,
               t('目标保持暂停，由你之后按「继续」', 'The goal stays paused until you resume it'),
             ]}
             confirmLabel={t('接受', 'Accept')}
@@ -596,10 +656,15 @@ function PlannerProposal({
                 '这个提议被拒绝，计划和目标都不变，目标保持暂停',
                 'The proposal is turned down; the plan and the goal stay as they are, paused',
               ),
-              t(
-                '规划器不会为同一次失败再提修订：之后由你重试失败的步骤、自己修订计划或取消',
-                'The planner does not propose again for the same failure: retry the failed step, revise the plan yourself, or cancel',
-              ),
+              forAcceptance
+                ? t(
+                    '规划器不会为这一轮验收再提修订：之后由你继续以再验收一次、自己修订计划或结束目标',
+                    'The planner does not propose again for this verification round: resume to verify again, revise the plan yourself, or end the goal',
+                  )
+                : t(
+                    '规划器不会为同一次失败再提修订：之后由你重试失败的步骤、自己修订计划或取消',
+                    'The planner does not propose again for the same failure: retry the failed step, revise the plan yourself, or cancel',
+                  ),
             ]}
             confirmLabel={t('拒绝', 'Reject')}
             onConfirm={() => decide('reject')}
@@ -647,11 +712,16 @@ function PlannerProposal({
         </time>
       </span>
       {round ? (
-        <span className="text-small text-3">
-          {t(
-            `针对${failedStepText(round, t)}的失败。`,
-            `For the failure of ${failedStepText(round, t)}.`,
-          )}
+        <span className="text-small text-3" data-testid="goal-planner-proposal-for">
+          {round.point === 'goal_acceptance'
+            ? t(
+                `针对目标第 ${round.acceptanceRound} 轮验收没通过。`,
+                `For the goal’s verification round ${round.acceptanceRound}, which did not pass.`,
+              )
+            : t(
+                `针对${failedStepText(round, t)}的失败。`,
+                `For the failure of ${failedStepText(round, t)}.`,
+              )}
         </span>
       ) : null}
       {round && round.revisionClass === 'major' && round.classReasons.length > 0 ? (
