@@ -2801,6 +2801,23 @@ const workerCapabilities = [
       'cursor → nextCursor). With includeOwnDrafts, also includes the caller’s own draft ' +
       'WorkerDefinitions.',
   },
+  {
+    // S11 GO15a: one version of a WorkerDefinition, by id and version — what a goal step's
+    // WorkerSpec is set against (the console shows the definition's own settings beside the
+    // step's). A person's read (HUMAN_ONLY_CAPABILITY_NAMES): no Handle carries it, so no agent's
+    // tools change. The read rule is `list_worker_definitions`': a published or deprecated version,
+    // or a draft the caller proposed — another principal's draft is not there (legacy 492).
+    name: 'get_worker_definition',
+    group: 'worker',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ definitionId: id, version: z.number().int().positive() }).strict(),
+    resultSchema: wire.WorkerDefinitionWireSchema.nullable(),
+    description:
+      'Read one version of a WorkerDefinition — published or deprecated, or a draft the caller ' +
+      'proposed; null for an unknown id or version, or another principal’s draft.',
+  },
 ] as const satisfies readonly Capability[];
 
 // -------------------------------------------------------------------------------------------
@@ -5067,6 +5084,8 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   'issue_handle',
   'publish_worker_definition',
   'deprecate_worker_definition',
+  // S11 GO15a: the console's read of one definition version, beside a goal step's WorkerSpec.
+  'get_worker_definition',
   // Legacy 145: adopting a platform template is the people's decision.
   'get_entry_template_status',
   'propose_entry_template_upgrade',

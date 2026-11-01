@@ -74,6 +74,7 @@ export const AUDITOR_READ_CAPABILITIES: ReadonlySet<string> = new Set<Capability
   'list_skills',
   'list_procedures',
   'list_worker_definitions',
+  'get_worker_definition',
   'list_gatekeepers',
   'get_gatekeeper',
   'list_operations',

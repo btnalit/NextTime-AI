@@ -874,7 +874,15 @@ describe('the plan editor on the goal page (S11 GO6, revise_goal)', () => {
     fireEvent.change(screen.getByTestId('goal-plan-reason'), {
       target: { value: '重新取证书，apply 改读新的' },
     });
-    await send();
+    // S11 GO15a: the confirm says what changed in the step it redefines.
+    const submit = screen.getByTestId('goal-plan-submit') as HTMLButtonElement;
+    await waitFor(() => expect(submit.disabled).toBe(false));
+    fireEvent.click(submit);
+    const confirm = await screen.findByTestId('goal-plan-confirm');
+    expect(within(confirm).getByTestId('confirm-impact').textContent).toContain(
+      '改动 apply：前置步骤加上 fetch-2，去掉 fetch；改读 fetch-2 留下的文件（原来读 fetch）；按新定义重新开始',
+    );
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
     await waitFor(() =>
       expect(
         (

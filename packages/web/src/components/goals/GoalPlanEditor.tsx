@@ -53,6 +53,7 @@ import {
 } from '../../lib/goals.js';
 import { HttpError } from '../../lib/http-client.js';
 import { type Translate, useT } from '../../lib/i18n.js';
+import { planStepDiff, stepChangeLine } from '../../lib/plan-step-diff.js';
 import {
   type WorkerDefinitionSummary,
   definitionVersions,
@@ -513,7 +514,7 @@ export function GoalPlanEditor({
               </Button>
             }
             title={t('提交这次修订', 'Send this revision')}
-            impact={[...impactLines(draft, goal, defs, t), ...dropped]}
+            impact={[...impactLines(draft, goal, defs, gateNames, t), ...dropped]}
             confirmLabel={t('提交修订', 'Send revision')}
             errorOverrides={{
               ...goalOperationErrors(t),
@@ -662,16 +663,25 @@ function keptAsRead(shown: 'mask' | 'escape' | null, t: Translate): string | nul
       );
 }
 
-/** What sending does, for the confirm. */
+/** What sending does, for the confirm — S11 GO15a: a step redefined says what changed in it. */
 function impactLines(
   draft: PlanDraft,
   goal: GoalDetailWire,
   definitions: readonly WorkerDefinitionSummary[] | undefined,
+  gateNames: ReadonlyMap<string, string>,
   t: Translate,
 ): string[] {
   const plan = planOf(draft);
   if (plan === null) return [];
   const diff = planDiff(goal.planRevision.plan, plan);
+  const stepChanges = new Map(
+    planStepDiff(goal.planRevision.plan, plan).map((change) => [change.key, change]),
+  );
+  const workerNames = new Map(
+    (definitions ?? []).flatMap((row) =>
+      typeof row.definition.name === 'string' ? [[row.id, row.definition.name] as const] : [],
+    ),
+  );
   const removals = removalsOf(draft, goal) ?? {};
   const live = new Set(supersededLiveSteps(draft, goal));
   const lines: string[] = [];
@@ -689,13 +699,20 @@ function impactLines(
     );
   }
   for (const key of diff.changed) {
+    const change = stepChanges.get(key);
+    const what = change
+      ? `${stepChangeLine(change, { gateNames, workerNames }, t)}${t('；', '; ')}`
+      : '';
     lines.push(
       live.has(key)
         ? t(
-            `改动 ${key}：按新定义重新开始；正在跑的：${stepRemovalText(removals[key], t)}`,
-            `Change ${key}: starts again on its new definition; what runs now: ${stepRemovalText(removals[key], t)}`,
+            `改动 ${key}：${what}按新定义重新开始；正在跑的：${stepRemovalText(removals[key], t)}`,
+            `Change ${key}: ${what}starts again on its new definition; what runs now: ${stepRemovalText(removals[key], t)}`,
           )
-        : t(`改动 ${key}：按新定义重新开始`, `Change ${key}: starts again on its new definition`),
+        : t(
+            `改动 ${key}：${what}按新定义重新开始`,
+            `Change ${key}: ${what}starts again on its new definition`,
+          ),
     );
   }
   if (diff.acceptanceChanged) lines.push(t('验收检查有改动', 'The acceptance checks change'));

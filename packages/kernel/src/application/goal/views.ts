@@ -36,7 +36,13 @@ import {
 import { readCancelLeftovers } from './cancelling.js';
 import { planContractHints } from './contract-hints.js';
 import { procedureConfirmCheck } from './from-procedure.js';
-import { paramsAsRead, planAsRead, planHints, procedureParametersAsRead } from './plan.js';
+import {
+  paramsAsRead,
+  planAsRead,
+  planHints,
+  procedureParametersAsRead,
+  samePlanEntry,
+} from './plan.js';
 import {
   type PlanningRoundRow,
   listPlanningRounds,
@@ -45,6 +51,7 @@ import {
 import { planAuthorityHints } from './precheck.js';
 import { getGoalRun, getPlanRevision, listPlanRevisions, listStepRuns } from './reads.js';
 import { type UnresolvedGoalAction, listGoalRunUnresolvedActions } from './reconcile.js';
+import { ENDED_STEP_STATUSES } from './revise.js';
 import { GoalRunNotFoundError } from './service.js';
 import {
   type StepTrialApprovalView,
@@ -375,6 +382,9 @@ export interface PlanRevisionView {
   readonly revision: PlanRevisionRead;
   readonly plan: GoalPlan;
   readonly hints: readonly PlanHint[];
+  /** S11 GO15a: the keys of the steps whose start this read checked, in plan order — see
+   *  `stepsToCheck`; a step's verdict is `stepAdmissionOf` over `hints` only for these. */
+  readonly checkedStepKeys: readonly string[];
   /** S11 GO5d-2: see {@link PlanSourceView}. */
   readonly source: PlanSourceView | null;
 }
@@ -407,6 +417,8 @@ async function planRevisionView(
   // so is the revision in force of a paused run, for the steps that have not started an attempt or
   // wait to be tried again — the pause then says which step would not start, and why (a draft
   // Skill waiting for a person, a gate the requester lost, a model no longer allowed or offered).
+  // S11 GO15a: and so is the goal planner's proposal waiting for the requester — for the steps
+  // accepting it would start (`stepsToCheck`).
   const {
     steps: checked,
     retried,
@@ -471,6 +483,7 @@ async function planRevisionView(
           )
         : []),
     ],
+    checkedStepKeys: checked.map((step) => step.key),
     source: await planSourceOf(client, workspaceId, revision),
   };
 }
@@ -480,7 +493,15 @@ async function planRevisionView(
  *  StepRun there has not started an attempt (`pending` or `ready`) and the ones `ready` to be tried
  *  again (`retried`: checked as a later attempt is, `precheck.ts`); none otherwise. A step running,
  *  waiting or ended has no next attempt to admit. `live`: the StepRuns of a paused run's steps
- *  checked, by key (none for a proposal — its confirmation creates them). */
+ *  checked, by key (none for a proposal — its confirmation creates them).
+ *
+ *  S11 GO15a: a revision still proposed on a paused run and based on its revision in force — the
+ *  goal planner's proposal the requester decides on (`decide.ts`; a person's revision is in force
+ *  once written) — is checked as accepting it would start it (`revise.ts` `splitSteps`): a step it
+ *  keeps on its StepRun as that StepRun would be in force (above); a step it adds, or changes, as
+ *  a first attempt of the new StepRun accepting it creates (not in `live`: no approval of a trial
+ *  of the StepRun it replaces carries over, `trialApprovalAppliesTo`). A changed step that ended
+ *  is not checked: accepting the proposal is refused for it. */
 async function stepsToCheck(
   client: PoolClient,
   workspaceId: string,
@@ -497,10 +518,33 @@ async function stepsToCheck(
   if (goal.status === 'proposed') {
     return { steps: revision.revision === 1 ? plan.steps : [], retried, live };
   }
-  if (goal.status !== 'paused' || revision.revision !== goal.currentRevision) {
+  if (goal.status !== 'paused') return { steps: [], retried, live };
+  const proposal =
+    revision.status === 'proposed' &&
+    revision.revision !== goal.currentRevision &&
+    revision.basedOnRevision === goal.currentRevision;
+  if (revision.revision !== goal.currentRevision && !proposal) {
     return { steps: [], retried, live };
   }
+  const fresh = new Set(proposal ? plan.steps.map((step) => step.key) : []);
+  const introducedPlans = new Map<number, unknown>();
   for (const step of await listStepRuns(client, workspaceId, goal.id)) {
+    if (step.status === 'superseded') continue;
+    if (proposal) {
+      let introduced = introducedPlans.get(step.introducedInRevision);
+      if (introduced === undefined) {
+        introduced =
+          (await getPlanRevision(client, workspaceId, goal.id, step.introducedInRevision))?.plan ??
+          null;
+        introducedPlans.set(step.introducedInRevision, introduced);
+      }
+      // A step the proposal changes starts afresh — unless it ended, which accepting refuses.
+      if (!samePlanEntry(introduced, plan, step.stepKey)) {
+        if (ENDED_STEP_STATUSES.has(step.status)) fresh.delete(step.stepKey);
+        continue;
+      }
+      fresh.delete(step.stepKey);
+    }
     if (step.attemptCount === 0 && (step.status === 'pending' || step.status === 'ready')) {
       live.set(step.stepKey, step);
     } else if (step.attemptCount > 0 && step.status === 'ready') {
@@ -508,7 +552,11 @@ async function stepsToCheck(
       retried.add(step.stepKey);
     }
   }
-  return { steps: plan.steps.filter((step) => live.has(step.key)), retried, live };
+  return {
+    steps: plan.steps.filter((step) => live.has(step.key) || fresh.has(step.key)),
+    retried,
+    live,
+  };
 }
 
 /** `params` with each suspected credential replaced — see the module comment. */

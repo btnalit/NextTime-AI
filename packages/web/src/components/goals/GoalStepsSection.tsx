@@ -45,6 +45,12 @@ import {
 import { type Translate, useT } from '../../lib/i18n.js';
 import { taskFailureReasonText } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
+import {
+  type StepAdmissionView,
+  stepAdmissionReasons,
+  stepAdmissionText,
+  stepAdmissionView,
+} from '../../lib/worker-spec-detail.js';
 import { Notice } from '../kit/notice.js';
 import { RedactedNote } from '../kit/redacted-note.js';
 import { RefChip } from '../kit/ref-chip.js';
@@ -171,6 +177,12 @@ export function GoalStepsSection({
             acceptance={view.run ? acceptanceByRun.get(view.run.id) : undefined}
             hints={hintsByStep.get(view.key) ?? []}
             trials={stepTrialApprovals(detail, view.key, view.run ?? null)}
+            admission={stepAdmissionView(
+              detail.planRevision,
+              view.key,
+              view.run ?? null,
+              stepTrialApprovals(detail, view.key, view.run ?? null),
+            )}
             http={http}
             gateNames={gateNames}
             objectNames={objectNames}
@@ -284,6 +296,29 @@ function StepFilesFrom({
   );
 }
 
+/** S11 GO15a: a step's admission verdict in one line — the kernel's (its hints classed by
+ *  `stepAdmissionOf`) and the short reasons it rests on. */
+export function StepAdmissionLine({
+  view,
+  t,
+}: {
+  readonly view: StepAdmissionView;
+  readonly t: Translate;
+}) {
+  const verdict = view.kind === 'checked' ? view.admission.verdict : view.kind;
+  const reasons = stepAdmissionReasons(view, t);
+  const tone =
+    verdict === 'refused' ? 'text-danger' : verdict === 'needs_approval' ? 'text-warn' : 'text-3';
+  return (
+    <span className={`text-small ${tone}`} data-testid="goal-step-admission" data-verdict={verdict}>
+      {stepAdmissionText(view, t)}
+      {reasons.length > 0
+        ? t(`（理由：${reasons.join('、')}）`, ` (because: ${reasons.join(', ')})`)
+        : ''}
+    </span>
+  );
+}
+
 interface StepItemProps {
   readonly view: StepView;
   readonly acceptance: StepAcceptanceWire | undefined;
@@ -291,6 +326,9 @@ interface StepItemProps {
   readonly hints: readonly PlanHint[];
   /** S11 GO8b: the approvals of a trial of the step's draft Skills (`stepTrialApprovals`). */
   readonly trials: readonly StepTrialApprovalWire[];
+  /** S11 GO15a: the step's admission verdict (`stepAdmissionView`) — a step of the plan in force
+   *  only; shown when the read checked it, or when its WorkerSpec is what admission weighs. */
+  readonly admission?: StepAdmissionView;
   readonly http: CapabilityCaller;
   readonly gateNames: ReadonlyMap<string, string>;
   readonly objectNames: ReadonlyMap<string, string> | undefined;
@@ -307,6 +345,7 @@ function StepItem({
   acceptance,
   hints,
   trials,
+  admission,
   http,
   gateNames,
   objectNames,
@@ -379,7 +418,17 @@ function StepItem({
       </span>
 
       {planStep?.spec ? (
-        <WorkerSpecFields spec={planStep.spec} http={http} gateNames={gateNames} t={t} />
+        <WorkerSpecFields
+          spec={planStep.spec}
+          worker={planStep.worker}
+          http={http}
+          gateNames={gateNames}
+          t={t}
+        />
+      ) : null}
+
+      {admission && (admission.kind === 'checked' || planStep?.spec) ? (
+        <StepAdmissionLine view={admission} t={t} />
       ) : null}
 
       {planStep?.bindings ? (

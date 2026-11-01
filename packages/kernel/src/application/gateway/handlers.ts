@@ -70,6 +70,7 @@ import {
   type WorkerDefinitionRow,
   deprecateWorkerDefinition,
   entryTemplateStatus,
+  getWorkerDefinition,
   listWorkerDefinitionsPage,
   loadEntryTemplate,
   proposeEntryTemplateUpgrade,
@@ -1287,6 +1288,20 @@ const listWorkerDefinitionsHandler: CapabilityHandler = async (client, workspace
       ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
       ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),
     },
+  };
+};
+
+/** S11 GO15a: one version of a WorkerDefinition, as `list_worker_definitions` would show it — a
+ *  published or deprecated version to every person, a draft only to its proposer (legacy 492, the
+ *  rule `requirePublishedWorkerDefinition` applies); `null` for anything else, as for a version
+ *  nothing has. The console reads it beside a goal step's WorkerSpec, whose base it is. */
+const getWorkerDefinitionHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { definitionId, version } = params as { definitionId: string; version: number };
+  const principalId = await currentPrincipalId(client);
+  const row = await getWorkerDefinition(client, workspaceId, { definitionId, version });
+  if (!row || (row.status === 'draft' && row.proposedBy !== principalId)) return { result: null };
+  return {
+    result: toWireWorkerDefinition(row, await findGoalPlannerFamily(client, workspaceId)),
   };
 };
 
@@ -2553,6 +2568,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['publish_worker_definition', publishWorkerDefinitionHandler],
   ['deprecate_worker_definition', deprecateWorkerDefinitionHandler],
   ['list_worker_definitions', listWorkerDefinitionsHandler],
+  ['get_worker_definition', getWorkerDefinitionHandler],
   ['get_entry_template_status', getEntryTemplateStatusHandler],
   ['propose_entry_template_upgrade', proposeEntryTemplateUpgradeHandler],
   // S8 W3 K2 (leftover 82) — discard-draft-handler.ts.

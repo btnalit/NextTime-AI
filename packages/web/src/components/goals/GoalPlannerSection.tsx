@@ -50,7 +50,9 @@ import {
   stepFailureText,
 } from '../../lib/goals.js';
 import { type Translate, useT } from '../../lib/i18n.js';
+import { type StepChange, planStepDiff, stepChangeLine } from '../../lib/plan-step-diff.js';
 import { hrefs } from '../../lib/router.js';
+import { stepAdmissionView } from '../../lib/worker-spec-detail.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
 import { ErrorBanner } from '../kit/error-banner.js';
@@ -64,7 +66,9 @@ import {
   goalOperationErrors,
   useOperationDone,
 } from './GoalOperationsBar.js';
+import { StepAdmissionLine } from './GoalStepsSection.js';
 import { OutputContractFields } from './OutputContract.js';
+import { StepChangeList } from './StepChangeList.js';
 import { WorkerSpecFields } from './WorkerSpecFields.js';
 
 export interface GoalPlannerSectionProps {
@@ -574,6 +578,7 @@ function PlannerProposal({
     diff && proposed.state.status === 'ready'
       ? diffImpact(
           diff,
+          planStepDiff(goal.planRevision.plan, proposed.state.data.plan),
           acceptanceDiff(goal.planRevision.plan, proposed.state.data.plan),
           goal,
           gateNames,
@@ -773,10 +778,12 @@ function PlannerProposal({
 }
 
 /** What accepting changes, one confirm line each: the step keys added, removed (naming the ones
- *  whose work is still running and stops — UX P3-5 on #864) and redefined, and each acceptance
- *  check of the goal added, dropped or changed (UX P2-1 on #866). */
+ *  whose work is still running and stops — UX P3-5 on #864) and redefined — S11 GO15a: each with
+ *  what changed in it — and each acceptance check of the goal added, dropped or changed (UX P2-1
+ *  on #866). */
 function diffImpact(
   diff: PlanDiff,
+  steps: readonly StepChange[],
   acceptance: AcceptanceDiff,
   goal: GoalDetailWire,
   gateNames: ReadonlyMap<string, string>,
@@ -803,13 +810,14 @@ function diffImpact(
         : t(`去掉步骤：${diff.removed.join('、')}`, `Steps removed: ${diff.removed.join(', ')}`),
     );
   }
-  if (diff.changed.length > 0)
+  for (const change of steps) {
     lines.push(
       t(
-        `改动步骤：${diff.changed.join('、')}（按新定义重来）`,
-        `Steps redefined: ${diff.changed.join(', ')} (they start over as redefined)`,
+        `改动步骤 ${change.key}：${stepChangeLine(change, { gateNames }, t)}（按新定义重来）`,
+        `Step ${change.key} redefined: ${stepChangeLine(change, { gateNames }, t)} (it starts over as redefined)`,
       ),
     );
+  }
   if (diff.acceptanceChanged) lines.push(...acceptanceLines(acceptance, gateNames, t));
   return lines;
 }
@@ -859,6 +867,7 @@ function ProposalChanges({
   readonly t: Translate;
 }) {
   const steps = new Map(plan.plan.steps.map((step) => [step.key, step]));
+  const stepChanges = planStepDiff(before, plan.plan);
   const rows: { key: string; label: string; keys: readonly string[] }[] = [
     { key: 'added', label: t('新增步骤', 'Steps added'), keys: diff.added },
     { key: 'removed', label: t('去掉步骤', 'Steps removed'), keys: diff.removed },
@@ -899,6 +908,20 @@ function ProposalChanges({
               })}
             </li>
           ))}
+          {stepChanges.length > 0 ? (
+            <li className="stack-s" data-diff="fields">
+              <span className="text-3">
+                {t('改动的步骤里改了什么：', 'What changed in each step redefined:')}
+              </span>
+              <StepChangeList
+                changes={stepChanges}
+                http={http}
+                gateNames={gateNames}
+                t={t}
+                testId="goal-planner-step-diff"
+              />
+            </li>
+          ) : null}
           {diff.acceptanceChanged ? (
             <li className="stack-s" data-diff="acceptance">
               <span className="text-3">
@@ -921,6 +944,7 @@ function ProposalChanges({
           <ProposedStep
             key={key}
             step={step}
+            plan={plan}
             reasons={stepMajorReasons(reasons, key)}
             http={http}
             gateNames={gateNames}
@@ -943,21 +967,37 @@ function ProposalChanges({
  *  lets it act — child Workers (`nested`), actions the platform reconciles (`reconcile`). */
 function ProposedStep({
   step,
+  plan,
   reasons,
   http,
   gateNames,
   t,
 }: {
   readonly step: PlanStep;
+  /** The revision the step is of — S11 GO15a: its hints and the steps a paused run's read checked
+   *  (`checkedStepKeys`), for what admission would say of the step now. */
+  readonly plan: PlanRevisionWire;
   readonly reasons: readonly PlannerRevisionClassReasonWire[];
   readonly http: CapabilityCaller;
   readonly gateNames: ReadonlyMap<string, string>;
   readonly t: Translate;
 }) {
   const dependsOn = step.dependsOn ?? [];
+  // S11 GO15a: only a verdict the read checked — one it did not check (the goal is not paused, or
+  // the revision is not one to decide on) would not start as it stands.
+  const admission = stepAdmissionView(plan, step.key, null, []);
   return (
     <details className="disclosure" data-testid="goal-planner-step" data-step-key={step.key}>
-      <summary>{t(`步骤 ${step.key} 会怎么跑`, `How step ${step.key} would run`)}</summary>
+      <summary>
+        {t(`步骤 ${step.key} 会怎么跑`, `How step ${step.key} would run`)}
+        {/* In the summary, so a step that would not start says so while it is closed. */}
+        {admission.kind === 'checked' ? (
+          <>
+            <span className="meta-sep" />
+            <StepAdmissionLine view={admission} t={t} />
+          </>
+        ) : null}
+      </summary>
       <div className="disclosure-body stack-s">
         <span className="text-3">
           {dependsOn.length > 0
@@ -1020,7 +1060,13 @@ function ProposedStep({
           </div>
         ) : null}
         {step.spec ? (
-          <WorkerSpecFields spec={step.spec} http={http} gateNames={gateNames} t={t} />
+          <WorkerSpecFields
+            spec={step.spec}
+            worker={step.worker}
+            http={http}
+            gateNames={gateNames}
+            t={t}
+          />
         ) : null}
         {step.bindings && step.bindings.length > 0 ? (
           <ul className="stack-s">

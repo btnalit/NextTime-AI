@@ -395,7 +395,7 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
         objectNames={objectNames}
         absenceOperations={absenceOperations}
       />
-      <GoalRevisionsSection detail={goal} http={http} />
+      <GoalRevisionsSection detail={goal} http={http} gateNames={gateNames} />
     </div>
   );
 }
