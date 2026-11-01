@@ -466,17 +466,34 @@ describe('the plan editor on the goal page (S11 GO6, revise_goal)', () => {
     await waitFor(() =>
       expect(document.activeElement).toBe(within(fetch).getByTestId('goal-plan-step-adopt-output')),
     );
+    // Let go by hand: nothing to explain.
+    expect(within(fetch).queryByTestId('goal-plan-step-adoption-dropped')).toBeNull();
     fireEvent.click(within(fetch).getByTestId('goal-plan-step-adopt-output'));
     fireEvent.change(within(fetch).getByTestId('goal-plan-step-version'), {
       target: { value: '2' },
     });
     expect(within(fetch).queryByTestId('goal-plan-step-adopted-output')).toBeNull();
+    // Let go by the version change (UX on #880): the step says so, and that v2 declares none.
+    expect(within(fetch).getByTestId('goal-plan-step-adoption-dropped').textContent).toContain(
+      '原来沿用的输出约定已去掉（那是原来版本的约定）。现在选的版本没有声明输出约定',
+    );
     fireEvent.change(within(fetch).getByTestId('goal-plan-step-version'), {
       target: { value: '3' },
     });
+    expect(within(fetch).getByTestId('goal-plan-step-adoption-dropped').textContent).toContain(
+      '要用现在这个版本的，再沿用一次',
+    );
     fireEvent.click(within(fetch).getByTestId('goal-plan-step-adopt-output'));
+    expect(within(fetch).queryByTestId('goal-plan-step-adoption-dropped')).toBeNull();
     fireEvent.change(screen.getByTestId('goal-plan-reason'), { target: { value: '检查输出' } });
-    await send();
+    // The confirmation says what the revision adopts (UX on #880); nothing is left unused here.
+    const submit = screen.getByTestId('goal-plan-submit') as HTMLButtonElement;
+    await waitFor(() => expect(submit.disabled).toBe(false));
+    fireEvent.click(submit);
+    const confirm = await screen.findByTestId('goal-plan-confirm');
+    expect(confirm.textContent).toContain('沿用 Worker 的输出约定：fetch（输出按约定检查');
+    expect(confirm.textContent).not.toContain('声明了输出约定，步骤里没有设置');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
     await waitFor(() =>
       expect(
         (

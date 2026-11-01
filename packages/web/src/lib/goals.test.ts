@@ -115,6 +115,48 @@ describe('lib/goals', () => {
     expect(stepHintChipLabel(mismatch, en)).toBe('Input off contract');
   });
 
+  it('S11 GO13 (UX on #880): an input mismatch says what is wrong at each place it can, never the value', () => {
+    const mismatch = {
+      code: 'step_input_mismatch' as const,
+      message: 'm',
+      stepKey: 'probe',
+      inputProblems: [
+        { path: 'input.host', message: 'required, missing' },
+        { path: 'input.count', message: 'expected integer, got string' },
+        {
+          path: 'input.mode',
+          message: 'not declared by the schema (additionalProperties is false)',
+        },
+        { path: 'input.port', message: 'expected integer or null, got number' },
+        { path: 'input.name', message: 'shorter than 3 characters' },
+      ],
+      inputProblemCount: 5,
+    };
+    expect(planHintText(mismatch, zh)).toContain(
+      '（5 处：「host」缺少（必填）、「count」应为整数、「mode」约定里没有这个字段 等）',
+    );
+    expect(planHintText(mismatch, en)).toContain(
+      '(5 places: “host” is missing (required), “count” should be an integer, “mode” is not a field of the contract, and more)',
+    );
+    // Past the first three, and for words the hint does not repeat, the place alone.
+    const later = {
+      ...mismatch,
+      inputProblems: mismatch.inputProblems.slice(3),
+      inputProblemCount: 2,
+    };
+    expect(planHintText(later, zh)).toContain('（2 处：「port」应为整数或空值、「name」）');
+    expect(planHintText(later, en)).toContain(
+      '(2 places: “port” should be an integer or null, “name”)',
+    );
+    // An unknown type name in the validator's words: the place alone, not a half reason.
+    const odd = {
+      ...mismatch,
+      inputProblems: [{ path: 'input.x', message: 'expected decimal, got string' }],
+      inputProblemCount: 1,
+    };
+    expect(planHintText(odd, zh)).toContain('（1 处：「x」）');
+  });
+
   it("reads the confirmation card's hints by step, a gate by its name where known", () => {
     const gateNames = new Map([['11111111-2222-4333-8444-555555555555', 'prod-cert-gate']]);
     const gate = {

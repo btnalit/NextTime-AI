@@ -12,9 +12,12 @@ import {
   STEP_KEY_PATTERN,
   type StepRemoval,
   type StepRunWire,
+  validateOutput,
 } from '@nexttime/shared';
+import { workerContractOf } from './catalog.js';
 import { goalBudgetRows, planDiff } from './goals.js';
 import type { Translate } from './i18n.js';
+import type { WorkerDefinitionSummary } from './tasks.js';
 
 /**
  * lib/goal-plan-draft (S11 GO6, plan editor): a revision of a GoalRun's plan as the console edits
@@ -62,6 +65,10 @@ export interface StepDraft {
   /** S11 GO13: the output contract this revision gives a step that has none — its Worker's, taken
    *  by 「沿用 Worker 的输出约定」; `null` when none is taken (the step keeps what it has). */
   readonly adoptedOutputSchema: OutputSchema | null;
+  /** S11 GO13 (UX on #880): a contract this revision had adopted was let go because the step's
+   *  Worker or version changed (it was the old version's) — the editor says so until the step
+   *  adopts again. Editor state only; never part of the plan. */
+  readonly adoptionDropped: boolean;
   readonly removed: boolean;
 }
 
@@ -138,6 +145,7 @@ export function draftFromDetail(detail: GoalDetailWire): PlanDraft {
       maxAttempts: step.maxAttempts === undefined ? '' : String(step.maxAttempts),
       inputText: prettyInput(step.input),
       adoptedOutputSchema: null,
+      adoptionDropped: false,
       removed: false,
     })),
     acceptance: (plan.acceptance ?? []).map((check) => ({
@@ -169,6 +177,7 @@ export function emptyStep(): StepDraft {
     maxAttempts: '',
     inputText: '',
     adoptedOutputSchema: null,
+    adoptionDropped: false,
     removed: false,
   };
 }
@@ -213,6 +222,61 @@ export function releasableActions(run: StepRunWire | undefined): readonly string
   return (run?.actions ?? [])
     .filter((action) => RELEASABLE_ACTION_STATUSES.has(action.status))
     .map((action) => action.actionRequestId);
+}
+
+/** S11 GO13 (UX on #880): what the revision does with its steps' Worker contracts, by step key —
+ *  for the confirmation, before anything is sent. */
+export interface PlanContractNotes {
+  /** Steps this revision gives their Worker version's output contract (「沿用」). */
+  readonly adopted: readonly string[];
+  /** `step_output_contract_unused` on the revised plan: the Worker declares an output contract,
+   *  the step sets none. */
+  readonly unused: readonly string[];
+  /** `step_input_mismatch` on the revised plan: an unbound step's input does not meet the
+   *  Worker's input contract. */
+  readonly inputMismatch: readonly string[];
+}
+
+/**
+ * The kernel's two contract hints (`application/goal/contract-hints.ts`), by the same rule, on the
+ * plan this draft would send — advice only, as there: neither stops the revision nor a step.
+ * Read from the listed Worker versions (`definitions`); a step whose version is not among them
+ * is left out (its own hint, `step_worker_unavailable`, is the kernel's). A step whose input shows
+ * the read's mask is left out of the input check: the kernel puts back what the read masked, so
+ * the text here is not the input it checks.
+ */
+export function planContractNotes(
+  draft: PlanDraft,
+  plan: GoalPlan,
+  definitions: readonly WorkerDefinitionSummary[] | undefined,
+): PlanContractNotes {
+  const adopted = draft.steps
+    .filter((step) => !step.removed && step.adoptedOutputSchema !== null)
+    .map((step) => step.key);
+  const unused: string[] = [];
+  const inputMismatch: string[] = [];
+  for (const step of plan.steps) {
+    const row = definitions?.find(
+      (definition) =>
+        definition.kind === 'worker' &&
+        definition.id === step.worker.definitionId &&
+        definition.version === step.worker.version,
+    );
+    if (row === undefined) continue;
+    const contract = workerContractOf(row.definition);
+    if (contract.outputSchema !== undefined && step.outputSchema === undefined) {
+      unused.push(step.key);
+    }
+    if (
+      contract.inputSchema !== undefined &&
+      (step.bindings ?? []).length === 0 &&
+      !showsMask(step.input) &&
+      validateOutput(contract.inputSchema, step.input, 'input').problems.length > 0
+    ) {
+      inputMismatch.push(step.key);
+    }
+  }
+  return { adopted, unused, inputMismatch };
 }
 
 /** Whether a JSON value shows the `[redacted]` mark anywhere. */

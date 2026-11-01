@@ -755,6 +755,52 @@ function inputPlace(path: string): readonly [string, string] {
   return [`「${place}」`, `“${place}”`];
 }
 
+/** S11 GO13 (UX on #880): each place once, with what is wrong there when the validator's words
+ *  say it in a way the hint can repeat — a field the contract requires is missing, or a value of
+ *  another type than the contract's. Never the value itself. */
+function inputPlacesOf(
+  problems: readonly { readonly path: string; readonly message: string }[],
+): readonly (readonly [string, string])[] {
+  const seen = new Set<string>();
+  const places: (readonly [string, string])[] = [];
+  for (const problem of problems) {
+    if (seen.has(problem.path)) continue;
+    seen.add(problem.path);
+    const [zh, en] = inputPlace(problem.path);
+    const reason = inputReason(problem.message);
+    places.push(reason === null ? [zh, en] : [`${zh}${reason[0]}`, `${en} ${reason[1]}`]);
+  }
+  return places;
+}
+
+const INPUT_TYPE_NAME: Readonly<Record<string, readonly [string, string]>> = {
+  string: ['文本', 'text'],
+  integer: ['整数', 'an integer'],
+  number: ['数字', 'a number'],
+  boolean: ['是或否', 'true or false'],
+  object: ['对象', 'an object'],
+  array: ['列表', 'a list'],
+  null: ['空值', 'null'],
+};
+
+/** What `validateOutput` (`@nexttime/shared` output-schema.ts) found at a place, in the hint's
+ *  words — `null` for what it says another way (the place alone is shown then). */
+function inputReason(message: string): readonly [string, string] | null {
+  if (message === 'required, missing') return ['缺少（必填）', 'is missing (required)'];
+  if (message.startsWith('not declared by the schema')) {
+    return ['约定里没有这个字段', 'is not a field of the contract'];
+  }
+  const expected = /^expected (.+), got \w+$/.exec(message);
+  if (expected === null) return null;
+  const names = (expected[1] ?? '').split(' or ').map((type) => INPUT_TYPE_NAME[type]);
+  if (names.length === 0 || names.some((name) => name === undefined)) return null;
+  const known = names as (readonly [string, string])[];
+  return [
+    `应为${known.map(([zh]) => zh).join('或')}`,
+    `should be ${known.map(([, en]) => en).join(' or ')}`,
+  ];
+}
+
 const inZh: Translate = (zh) => zh;
 const inEn: Translate = (_, en) => en;
 
@@ -782,9 +828,7 @@ export function planHintText(
     model: hint.model ?? '',
     consequence: STEP_HINT_CONSEQUENCE[retried ? 'retried' : 'first'],
     trial: hint.trial !== undefined,
-    inputPlaces: [...new Set((hint.inputProblems ?? []).map((problem) => problem.path))].map(
-      inputPlace,
-    ),
+    inputPlaces: inputPlacesOf(hint.inputProblems ?? []),
     inputProblemCount: hint.inputProblemCount ?? hint.inputProblems?.length ?? 0,
   });
   return t(zh, en);

@@ -27,6 +27,7 @@ import {
   hasRequesterConfirm,
   liveRuns,
   originalPrompt,
+  planContractNotes,
   planOf,
   prettyInput,
   releasableActions,
@@ -511,7 +512,7 @@ export function GoalPlanEditor({
               </Button>
             }
             title={t('提交这次修订', 'Send this revision')}
-            impact={[...impactLines(draft, goal, t), ...dropped]}
+            impact={[...impactLines(draft, goal, defs, t), ...dropped]}
             confirmLabel={t('提交修订', 'Send revision')}
             errorOverrides={{
               ...goalOperationErrors(t),
@@ -656,7 +657,12 @@ function keptAsRead(shown: 'mask' | 'escape' | null, t: Translate): string | nul
 }
 
 /** What sending does, for the confirm. */
-function impactLines(draft: PlanDraft, goal: GoalDetailWire, t: Translate): string[] {
+function impactLines(
+  draft: PlanDraft,
+  goal: GoalDetailWire,
+  definitions: readonly WorkerDefinitionSummary[] | undefined,
+  t: Translate,
+): string[] {
   const plan = planOf(draft);
   if (plan === null) return [];
   const diff = planDiff(goal.planRevision.plan, plan);
@@ -687,6 +693,33 @@ function impactLines(draft: PlanDraft, goal: GoalDetailWire, t: Translate): stri
     );
   }
   if (diff.acceptanceChanged) lines.push(t('验收检查有改动', 'The acceptance checks change'));
+  // S11 GO13 (UX on #880): what the revision does with its Workers' contracts, and the two hints
+  // the revised plan will carry — said here, before it is sent.
+  const contracts = planContractNotes(draft, plan, definitions);
+  if (contracts.adopted.length > 0) {
+    lines.push(
+      t(
+        `沿用 Worker 的输出约定：${contracts.adopted.join('、')}（输出按约定检查，后面的步骤可以绑定它的输出）`,
+        `Adopts the Worker’s output contract: ${contracts.adopted.join(', ')} (the output is checked against it, and later steps can bind to it)`,
+      ),
+    );
+  }
+  if (contracts.unused.length > 0) {
+    lines.push(
+      t(
+        `提示：${contracts.unused.join('、')} 的 Worker 声明了输出约定，步骤里没有设置，输出不检查；只是提示，照常提交`,
+        `Note: the Worker of ${contracts.unused.join(', ')} declares an output contract the step does not set, so its output is not checked; only a note, the revision goes as it is`,
+      ),
+    );
+  }
+  if (contracts.inputMismatch.length > 0) {
+    lines.push(
+      t(
+        `提示：${contracts.inputMismatch.join('、')} 的输入和 Worker 声明的输入约定对不上；只是提示，照常提交`,
+        `Note: the input of ${contracts.inputMismatch.join(', ')} does not match its Worker’s input contract; only a note, the revision goes as it is`,
+      ),
+    );
+  }
   const budget = budgetOf(draft, goal.budget);
   if (budget !== null) {
     const rows = goalBudgetRows({ ...goal, budget }, t);
@@ -997,11 +1030,12 @@ function WorkerPicker({
           value={step.definitionId}
           onChange={(event) => {
             const newest = definitionVersions(rows, event.target.value)[0];
-            // S11 GO13: a contract taken from the Worker was that version's — picking another drops it.
+            // S11 GO13: a contract taken from the Worker was that version's — picking another drops
+            // it, and the step says so.
             onChange({
               definitionId: event.target.value,
               version: newest ? String(newest.version) : '',
-              adoptedOutputSchema: null,
+              ...dropAdoption(step),
             });
           }}
           invalid={error !== null}
@@ -1034,7 +1068,7 @@ function WorkerPicker({
           id={`${id}-version`}
           aria-label={t('版本', 'Version')}
           value={step.version}
-          onChange={(event) => onChange({ version: event.target.value, adoptedOutputSchema: null })}
+          onChange={(event) => onChange({ version: event.target.value, ...dropAdoption(step) })}
           data-testid="goal-plan-step-version"
         >
           {step.definitionId === '' ? (
@@ -1057,6 +1091,15 @@ function WorkerPicker({
       </Field>
     </div>
   );
+}
+
+/** S11 GO13: what a change of Worker or version does to a contract the step adopted — lets it go,
+ *  remembering that it did (UX on #880). */
+function dropAdoption(step: StepDraft): Pick<StepDraft, 'adoptedOutputSchema' | 'adoptionDropped'> {
+  return {
+    adoptedOutputSchema: null,
+    adoptionDropped: step.adoptionDropped || step.adoptedOutputSchema !== null,
+  };
 }
 
 /**
@@ -1110,26 +1153,42 @@ function AdoptOutputContract({
       definition.id === step.definitionId && String(definition.version) === step.version,
   );
   const declared = row ? workerContractOf(row.definition).outputSchema : undefined;
-  if (declared === undefined) return null;
+  const dropped = step.adoptionDropped ? (
+    <span className="text-small" data-testid="goal-plan-step-adoption-dropped">
+      {declared === undefined
+        ? t(
+            '换了 Worker 或版本，原来沿用的输出约定已去掉（那是原来版本的约定）。现在选的版本没有声明输出约定。',
+            'The Worker or version changed, so the output contract adopted before is gone (it was the earlier version’s). The version chosen now declares none.',
+          )
+        : t(
+            '换了 Worker 或版本，原来沿用的输出约定已去掉（那是原来版本的约定）。要用现在这个版本的，再沿用一次。',
+            'The Worker or version changed, so the output contract adopted before is gone (it was the earlier version’s). To use this version’s, adopt it again.',
+          )}
+    </span>
+  ) : null;
+  if (declared === undefined) return dropped;
   return (
-    <div className="row-wrap" ref={ref}>
-      <Button
-        variant="secondary"
-        size="s"
-        onClick={() => {
-          focus('goal-plan-step-drop-output');
-          onChange({ adoptedOutputSchema: declared });
-        }}
-        data-testid="goal-plan-step-adopt-output"
-      >
-        {t('沿用 Worker 的输出约定', 'Adopt the Worker’s output contract')}
-      </Button>
-      <span className="text-small text-3">
-        {t(
-          '这个 Worker 声明了输出约定，这一步还没有：不沿用，它的输出不检查，后面的步骤也不能绑定它的输出。',
-          'This Worker declares an output contract the step does not have yet: without it, the step’s output is not checked and no later step can bind to it.',
-        )}
-      </span>
+    <div className="stack-s" ref={ref}>
+      {dropped}
+      <div className="row-wrap">
+        <Button
+          variant="secondary"
+          size="s"
+          onClick={() => {
+            focus('goal-plan-step-drop-output');
+            onChange({ adoptedOutputSchema: declared, adoptionDropped: false });
+          }}
+          data-testid="goal-plan-step-adopt-output"
+        >
+          {t('沿用 Worker 的输出约定', 'Adopt the Worker’s output contract')}
+        </Button>
+        <span className="text-small text-3">
+          {t(
+            '这个 Worker 声明了输出约定，这一步还没有：不沿用，它的输出不检查，后面的步骤也不能绑定它的输出。',
+            'This Worker declares an output contract the step does not have yet: without it, the step’s output is not checked and no later step can bind to it.',
+          )}
+        </span>
+      </div>
     </div>
   );
 }

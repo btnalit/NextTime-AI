@@ -283,3 +283,36 @@ export function schemaFieldNames(draft: SchemaDraft | null): readonly string[] {
   if (!schema.ok || !isRecord(schema.value) || !isRecord(schema.value.properties)) return [];
   return Object.keys(schema.value.properties);
 }
+
+/**
+ * S11 GO13 (UX on #880): whether a step's contract says what a Worker version declares — `false`
+ * once either has been changed apart. Both sides go through the editor's own reading, so a
+ * contract adopted and left alone matches; key order and the order of `required` do not count.
+ * `true` while the JSON being typed does not parse (nothing to compare yet).
+ */
+export function schemaDraftMatches(draft: SchemaDraft, schema: unknown): boolean {
+  const mine = schemaFromDraft(draft);
+  if (!mine.ok) return true;
+  const theirs = schemaFromDraft(schemaDraftFrom(schema));
+  return theirs.ok && sameSchemaJson(mine.value, theirs.value);
+}
+
+function sameSchemaJson(a: unknown, b: unknown, key?: string): boolean {
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    if (key === 'required' && a.every((item) => typeof item === 'string')) {
+      const names = new Set(a);
+      return b.every((item) => typeof item === 'string' && names.has(item));
+    }
+    return a.every((item, index) => sameSchemaJson(item, b[index]));
+  }
+  if (isRecord(a)) {
+    if (!isRecord(b)) return false;
+    const keys = Object.keys(a);
+    return (
+      keys.length === Object.keys(b).length &&
+      keys.every((name) => Object.hasOwn(b, name) && sameSchemaJson(a[name], b[name], name))
+    );
+  }
+  return a === b;
+}

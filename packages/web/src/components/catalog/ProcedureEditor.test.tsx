@@ -636,6 +636,87 @@ describe('ProcedureEditor (S6-A A2)', () => {
     });
   });
 
+  it('S11 GO13 (UX on #880): a contract adopted from v1 says so once the step is on v2, which declares another, and takes v2’s in one press', async () => {
+    const { caller, calls } = http({
+      propose_procedure: () => ({ id: 'pr-7', version: 1, status: 'draft', name: 'Count' }),
+    });
+    const v1 = {
+      type: 'object',
+      properties: { total: { type: 'integer' }, ok: { type: 'boolean' } },
+      required: ['total', 'ok'],
+    };
+    const v2 = {
+      type: 'object',
+      properties: { items: { type: 'array' } },
+      required: ['items'],
+    };
+    render(
+      <ProcedureEditor
+        http={caller}
+        workerDefinitions={[
+          {
+            id: 'wd-1',
+            version: 2,
+            kind: 'worker',
+            status: 'published',
+            definition: { name: 'Counter', outputSchema: v2 },
+          },
+          {
+            id: 'wd-1',
+            version: 1,
+            kind: 'worker',
+            status: 'published',
+            definition: { name: 'Counter', outputSchema: v1 },
+          },
+        ]}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/^名称/), { target: { value: 'Count' } });
+    fireEvent.change(screen.getByLabelText(/^描述/), { target: { value: 'Count hosts' } });
+    fireEvent.click(screen.getByTestId('procedure-add-step'));
+    const step = screen.getByTestId('procedure-step');
+    fireEvent.change(within(step).getByTestId('procedure-step-kind'), {
+      target: { value: 'worker' },
+    });
+    fireEvent.change(within(step).getByLabelText(/Worker 定义/), { target: { value: 'wd-1' } });
+    fireEvent.change(within(step).getByTestId('steps.0-version'), { target: { value: '1' } });
+    fireEvent.click(within(step).getByTestId('procedure-step-adopt-output'));
+    // Adopted and left alone: it is v1's, nothing to say.
+    expect(within(step).queryByTestId('procedure-step-output-differs')).toBeNull();
+
+    // On v2 the step still carries v1's contract: the page says so and offers v2's.
+    fireEvent.change(within(step).getByTestId('steps.0-version'), { target: { value: '2' } });
+    const differs = within(step).getByTestId('procedure-step-output-differs');
+    expect(differs.textContent).toContain('所选 Worker 版本 v2 声明的不同');
+    const names = () =>
+      within(step)
+        .getAllByTestId('procedure-step-output-field-name')
+        .map((input) => (input as HTMLInputElement).value);
+    expect(names()).toEqual(['total', 'ok']);
+    fireEvent.click(within(step).getByTestId('procedure-step-use-worker-output'));
+    expect(names()).toEqual(['items']);
+    expect(within(step).queryByTestId('procedure-step-output-differs')).toBeNull();
+
+    // A contract edited by hand differs too, whatever the version.
+    fireEvent.change(within(step).getByTestId('procedure-step-output-field-name'), {
+      target: { value: 'rows' },
+    });
+    expect(within(step).getByTestId('procedure-step-output-differs')).toBeTruthy();
+    fireEvent.change(within(step).getByTestId('procedure-step-output-field-name'), {
+      target: { value: 'items' },
+    });
+    expect(within(step).queryByTestId('procedure-step-output-differs')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('procedure-submit'));
+    await screen.findByTestId('draft-proposed');
+    const proposed = calls.find((call) => call.name === 'propose_procedure')?.params as {
+      procedure: { steps: { version?: number; outputSchema?: unknown }[] };
+    };
+    expect(proposed.procedure.steps[0]?.outputSchema).toEqual(v2);
+  });
+
   it('a renamed key is followed by what named it, and a removal keeps a named step’s key (legacy 453)', async () => {
     const { caller, calls } = http({
       propose_procedure: () => ({ id: 'pr-6', version: 1, status: 'draft', name: 'Two' }),

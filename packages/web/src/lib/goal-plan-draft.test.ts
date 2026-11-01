@@ -13,6 +13,7 @@ import {
   emptyStep,
   fieldOfProblem,
   fieldOfRefusal,
+  planContractNotes,
   planOf,
   removalsOf,
   requesterConfirmDraft,
@@ -51,6 +52,65 @@ describe('lib/goal-plan-draft', () => {
     });
     expect(budgetOf(draft, detail.budget)).toBeNull();
     expect(draftProblems(draft, detail, zh).size).toBe(0);
+  });
+
+  it('S11 GO13 (UX on #880): says, before sending, what the revision adopts and the contract hints the kernel will give', () => {
+    const detail = paused();
+    const report = {
+      type: 'object' as const,
+      properties: { summary: { type: 'string' as const } },
+    };
+    const hostsIn = {
+      type: 'object' as const,
+      properties: { hosts: { type: 'array' as const } },
+      required: ['hosts'],
+    };
+    const definitions = [
+      {
+        id: WORKER_ID,
+        version: 2,
+        kind: 'worker',
+        status: 'published',
+        definition: { name: 'w', outputSchema: report, inputSchema: hostsIn },
+      },
+    ];
+    // In force: both steps on v2, neither sets an output contract; fetch's input `{hosts: 3}`
+    // does not meet `hosts: array`; apply has no input at all, which does not either.
+    let draft = draftFromDetail(detail);
+    let plan = planOf(draft);
+    if (plan === null) throw new Error('no plan');
+    expect(planContractNotes(draft, plan, definitions)).toEqual({
+      adopted: [],
+      unused: ['fetch', 'apply'],
+      inputMismatch: ['fetch', 'apply'],
+    });
+    // Adopting on fetch and fixing its input: adopted, and only apply is left with hints.
+    draft = withStep(draft, 'fetch', {
+      adoptedOutputSchema: report,
+      inputText: '{"hosts": ["a"]}',
+    });
+    plan = planOf(draft);
+    if (plan === null) throw new Error('no plan');
+    expect(planContractNotes(draft, plan, definitions)).toEqual({
+      adopted: ['fetch'],
+      unused: ['apply'],
+      inputMismatch: ['apply'],
+    });
+    // A masked input is the kernel's to check; a removed step and an unlisted version say nothing.
+    draft = withStep(draft, 'fetch', { inputText: '{"hosts": "[redacted]"}' });
+    draft = withStep(draft, 'apply', { removed: true });
+    plan = planOf(draft);
+    if (plan === null) throw new Error('no plan');
+    expect(planContractNotes(draft, plan, definitions)).toEqual({
+      adopted: ['fetch'],
+      unused: [],
+      inputMismatch: [],
+    });
+    expect(planContractNotes(draft, plan, undefined)).toEqual({
+      adopted: ['fetch'],
+      unused: [],
+      inputMismatch: [],
+    });
   });
 
   it('a chosen field changes only its step; a removed step and a new one read as such', () => {
