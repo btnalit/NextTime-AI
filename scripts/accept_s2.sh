@@ -850,7 +850,9 @@ step2_docker_restart() {
   # S11 GO12: container.restart declares a target (gatekeepers/docker/manifest.json), so the
   # request records the container it acts on, from the published version and its own `id`. A
   # version published before GO12 declares none until a person confirms the refresh (a
-  # loosening); the request then acts on the whole gate, as before — skipped, not failed.
+  # loosening); the request then acts on the whole gate, as before. That is the expected state
+  # right after an upgrade, so it passes: a SKIP would make the whole S2 exit non-zero
+  # (apply-release.sh counts it as an acceptance failure).
   out=$(cap "$ALICE_KEY" get_action "{\"actionRequestId\":\"$AR_ID_DOCKER\"}" \
     "(t=>t===null||t===undefined?'none':(t.objectType==='Container'&&Array.isArray(t.identity)&&t.identity.length===1&&String(t.identity[0])===String((d.result.params||{}).id)?'ok':'bad '+JSON.stringify(t)))(d.result.target)")
   status=$(parse_kv "$out" HTTP_STATUS)
@@ -867,7 +869,7 @@ step2_docker_restart() {
       status=$(parse_kv "$out" HTTP_STATUS)
       [ "$status" = "200" ] || fail "step2-request-target" "list_operations HTTP $status: $(parse_kv "$out" BODY)"
       [ "$(parse_kv "$out" EXTRACTED)" = "undeclared" ] || fail "step2-request-target" "the published container.restart declares a target, yet $AR_ID_DOCKER recorded none"
-      skip "step2-request-target" "the published container.restart declares no target yet (a refresh awaiting confirmation): $AR_ID_DOCKER acts on the whole gate"
+      pass "step2-request-target" "$AR_ID_DOCKER acts on the whole gate, as before: the published container.restart declares no target yet (its governance refresh awaits the owner's confirmation)"
       ;;
     *) fail "step2-request-target" "unexpected target on $AR_ID_DOCKER: $target_verdict" ;;
   esac
