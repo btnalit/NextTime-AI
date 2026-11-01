@@ -227,16 +227,22 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     expect(screen.getByTestId('approval-detail').textContent).not.toContain(gatekeeperId);
   });
 
-  it('S11 GO12: the target row names the instance the request queues on, or the whole system, and what waits for it while it has not finished', () => {
+  it('S11 GO12: a queue scope row, beside the unchanged target row, names the instance the request queues on, or the whole system, and what waits for it while it has not finished', () => {
+    // A row from before GO12 (no `target` on the wire) has no queue scope row.
+    const before = renderDetail();
+    expect(screen.queryByTestId('approval-queue-target')).toBeNull();
+    before.unmount();
     const { unmount } = renderDetail({ target: { objectType: 'Container', identity: ['c1'] } });
-    expect(screen.getByTestId('approval-target').textContent).toBe('Container「c1」');
-    expect(screen.getByTestId('approval-target-holds').textContent).toBe(
+    // The target row still shows the request's resource scope.
+    expect(screen.getByTestId('approval-target').textContent).toBe('web-1');
+    expect(screen.getByTestId('approval-queue-target').textContent).toBe('Container「c1」');
+    expect(screen.getByTestId('approval-queue-holds').textContent).toBe(
       '同一个 Container 上后来的请求要等它有了结果再执行；别的 Container 上的请求不等它。',
     );
     unmount();
     const whole = renderDetail({ target: null });
-    expect(screen.getByTestId('approval-target').textContent).toBe('整个系统');
-    expect(screen.getByTestId('approval-target-holds').textContent).toBe(
+    expect(screen.getByTestId('approval-queue-target').textContent).toBe('整个系统');
+    expect(screen.getByTestId('approval-queue-holds').textContent).toBe(
       '这个系统上后来的请求都要等它有了结果再执行。',
     );
     whole.unmount();
@@ -245,8 +251,8 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
       status: 'executed',
       target: { objectType: 'Container', identity: ['c1'] },
     });
-    expect(screen.getByTestId('approval-target').textContent).toBe('Container「c1」');
-    expect(screen.queryByTestId('approval-target-holds')).toBeNull();
+    expect(screen.getByTestId('approval-queue-target').textContent).toBe('Container「c1」');
+    expect(screen.queryByTestId('approval-queue-holds')).toBeNull();
     done.unmount();
     // The queue's own scope says the same in the waiting notice.
     renderDetail({

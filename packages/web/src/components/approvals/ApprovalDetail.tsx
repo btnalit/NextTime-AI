@@ -245,31 +245,42 @@ export function ApprovalDetail({
     {
       key: 'target',
       label: t('目标', 'Target'),
-      // S11 GO12: what the gate's queue orders it against — one instance, or the whole system —
-      // and, while it has not finished, which later requests wait for it: an approver can tell
-      // whether deciding it lets the requests behind it go.
-      value:
-        row.target !== undefined ? (
-          <span className="stack-s">
-            <span data-testid="approval-target">{actionTargetOrSystemText(row.target, t)}</span>
-            {UNFINISHED_STATUSES.has(row.status) ? (
-              <span className="text-12 text-text-2" data-testid="approval-target-holds">
-                {actionTargetHoldsText(row.target, t)}
-              </span>
-            ) : null}
-          </span>
-        ) : scopeLabel ? (
-          <span className="mono" data-testid="approval-target" data-volatile="">
-            {scopeLabel}
-          </span>
-        ) : row.resourceScope ? (
-          <span data-testid="approval-target">{t('整个门', 'The whole gate')}</span>
-        ) : (
-          <span className="text-3" data-testid="approval-target">
-            {t('未限定资源', 'No resource scope')}
-          </span>
-        ),
+      value: scopeLabel ? (
+        <span className="mono" data-testid="approval-target" data-volatile="">
+          {scopeLabel}
+        </span>
+      ) : row.resourceScope ? (
+        <span data-testid="approval-target">{t('整个门', 'The whole gate')}</span>
+      ) : (
+        <span className="text-3" data-testid="approval-target">
+          {t('未限定资源', 'No resource scope')}
+        </span>
+      ),
     },
+    // S11 GO12: what the gate's queue orders it against — one instance, or the whole system — and,
+    // while it has not finished, which later requests wait for it: an approver can tell whether
+    // deciding it lets the requests behind it go. Its own row: the resource scope above is a
+    // different thing (what auto-approval and always-allow match on).
+    ...(row.target !== undefined
+      ? [
+          {
+            key: 'queueScope',
+            label: t('排队范围', 'Queue scope'),
+            value: (
+              <span className="stack-s">
+                <span data-testid="approval-queue-target">
+                  {actionTargetOrSystemText(row.target, t)}
+                </span>
+                {UNFINISHED_STATUSES.has(row.status) ? (
+                  <span className="text-12 text-text-2" data-testid="approval-queue-holds">
+                    {actionTargetHoldsText(row.target, t)}
+                  </span>
+                ) : null}
+              </span>
+            ),
+          },
+        ]
+      : []),
     {
       key: 'gatekeeper',
       label: t('门', 'Gatekeeper'),
@@ -784,10 +795,8 @@ function confirmImpact(
   const lines: string[] = [
     `${t('动作', 'Action')}: ${actionKindTagText(row.actionKindTag)}`,
     `${t('目标资源', 'Target')}: ${
-      row.target !== undefined
-        ? actionTargetOrSystemText(row.target, t)
-        : (resourceScopeLabel(row, gatekeeperNames) ??
-          (row.resourceScope ? t('整个门', 'the whole gate') : t('未限定', 'no resource scope')))
+      resourceScopeLabel(row, gatekeeperNames) ??
+      (row.resourceScope ? t('整个门', 'the whole gate') : t('未限定', 'no resource scope'))
     }`,
     `${t('门', 'Gatekeeper')}: ${gatekeeperNames?.get(row.gatekeeperId) ?? row.gatekeeperId}`,
     `${t('影响范围', 'Blast radius')}: ${labelText(statusChipStyle('blastRadius', row.blastRadius), t)}`,
