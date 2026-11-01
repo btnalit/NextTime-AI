@@ -1982,7 +1982,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **注意**：退出时的 restore 也重建 kernel，这一步失败按 P1 处理（遗留 548 会写进 runbook）；带 `spec.model` 的生产目标运行在验收期间可能暂停（遗留 545）。
 - **#862 起（同一下一版）**：两次 kernel 重启之后脚本都会等 agent-host 重新连上（日志 `kernel-link: connected`，最多 `ACCEPT_KERNEL_LINK_WAIT_S` 秒，默认 60）；恢复失败或链路没回来打 `accept: P1 — …`、退出码为 1，做法见 `accept-s1.md` §1（遗留 545、548 已关）。
 
-### 3.85 重试的模型回落与「版本不再发布」的提示（#857，遗留 543、544，v0.53.0 之后的下一版起）
+### 3.85 重试的模型回落与「版本不再发布」的提示（#857，遗留 543、544，v0.54.0 起）
 
 无迁移、不改 compose、无单独主机步骤、无新环境变量；窗口前只读检查：无。
 
@@ -1990,7 +1990,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：步骤钉住的 Worker 版本或上一次尝试用过的 Skill 版本不再发布时，目标页会点名这一步并说明下一步。契约：两个新计划提示码 `step_worker_unavailable`、`step_skill_version_unavailable`。
 - **回滚**：只回退代码即可，无数据变化；回退后重试照旧沿用第一次尝试的模型，提示回到原来的说法。
 
-### 3.86 目标规划器提议修订（#864，goal 0014，task 0012，S11 GO9a，v0.53.0 之后的下一版起）
+### 3.86 目标规划器提议修订（#864，goal 0014，task 0012，S11 GO9a，v0.54.0 起）
 
 带两个迁移（goal `0014_planning_rounds`、task `0012_task_planning`），随 `apply-release.sh` 的迁移步骤自动应用。不改 compose，没有单独的主机步骤，没有新环境变量（规划器模板 `ontology/goal-planner.yaml` 随镜像里已有的 `ontology/` 目录一起发）。task/0012 重建 `tasks` 的 CHECK 约束时会持有 `ACCESS EXCLUSIVE` 锁，迁移期间 `tasks` 的读写会短暂等待。
 
@@ -2014,6 +2014,31 @@ where object_type = 'Operation' and properties->>'status' = 'published'
     - 先撤 task/0012：删掉约束 `tasks_planning_shape`、外键 `tasks_planning_round_fkey`、索引 `tasks_planning_round_uidx`、触发器和函数 `tasks_planning_guard` 与 `worker_runs_planning_root`、列 `planning_round_id`，再把 `tasks_purpose`、`tasks_goal_step_ref`、`tasks_output_schema` 恢复成 task/0011 时的写法；
     - 再 `drop table goal_planning_rounds, goal_planner_delegations`（触发器随表删除），`drop trigger plan_revisions_planner on plan_revisions`，删掉迁移里的函数；
     - 最后从 `schema_migrations` 删掉 goal 14 和 task 12 两行。
+
+### 3.87 目标规划器的小修订由平台采用（#866，goal 0015，S11 GO9b，v0.54.0 起）
+
+带一个迁移（goal `0015_planner_apply_minor`），随 `apply-release.sh` 的迁移步骤自动应用。不改 compose，没有单独的主机步骤，没有新环境变量。必须和 #864（goal 0014、task 0012）同版或在它之后。
+
+- **迁移做什么**：`goal_planner_delegations` 的模式增加 `apply_minor`；`goal_planning_rounds` 新增 `kind`（默认 `proposal`）、`revision_class`、`class_reasons`，状态增加 `applied`，原因增加 `step_keeps_failing`、`run_not_running`；新增函数 `goal_planning_class_reasons_valid`；改写 `goal_planning_rounds_guard` 和 `plan_revisions_planner`。只有列默认值，没有其他回填。
+- **窗口前只读检查**：`select count(*) from goal_planning_rounds where status = 'running'`，应为 0。
+- **发版说明可写**：
+  - 确认目标时可以选「小修订由平台替我采用、目标不停」。
+  - 步骤失败时，规划器换一条路；平台按自己的规则判断是不是小修订，是就替你采用、目标继续。
+  - 改验收、能执行动作、要人批准才能开始、会停下在跑的工作的修订，都会暂停目标等你决定。
+  - 用到原来没有的 gate 的修订，哪怕只读，也暂停等你决定。
+  - 同一份工作平台最多替你改两次，换了步骤名也算。
+  - 新增 `confirm_goal.planner: 'apply_minor'`、`PlanningRoundWire.kind/revisionClass/classReasons`（原因带可选的 `capabilities`、`gates`）、`PlanRevisionSummaryWire.acceptedBy`。
+- **回滚**
+  - 回退目标是 v0.53.0（GO9a 和 GO9b 同版发布）。只回退代码即可（§6）：v0.53.0 不读这两张表，`apply_minor` 的目标在步骤失败时照常暂停；在跑的自主轮停在 `running`，重新升级后以 `run_not_running` 作废。
+  - 若中途回退到只含 GO9a 的构建：它把所有授权读成 `propose`，新开的轮是 `proposal`；它以 `run_left_pause` 作废在跑的自主轮，守卫接受。它的控制台把 `applied` 显示成未知状态。
+  - 回退前用上面的只读检查确认没有在跑的轮。
+  - 要连 schema 一起撤，需要满足三个前提：没有 `applied` 的轮，没有带新原因的轮，没有 `apply_minor` 的授权。然后：
+    1. 重新执行 0014 里 `goal_planning_rounds_guard` 和 `plan_revisions_planner` 的 `create or replace`；
+    2. 删掉本迁移加的约束，重新加回 0014 的四个约束；
+    3. 删掉约束 `goal_planning_rounds_class_reasons` 之后，`drop function goal_planning_class_reasons_valid(jsonb)`；
+    4. 删掉 `kind`、`revision_class`、`class_reasons` 三列；
+    5. `delete from schema_migrations where module = 'goal' and version = 15`。
+  - 撤 schema 的顺序：先撤 0015，再撤 0014 和 task/0012。
 
 ## 4. Hotfix 流程
 
@@ -2167,6 +2192,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.53.0 | goal `0013_step_trial_approvals`（#855，S11 GO8b）：新表 `goal_step_trial_approvals`（一次批准一行，只追加）与 guard 触发器，外键指向 `goal_runs`、`step_runs`、`principals`，不回填 | 可逆 | 回退后，用草稿开始过尝试的步骤再尝试时暂停 `needs_decision`（安全失败）；撤 schema：`drop table goal_step_trial_approvals`、`drop function goal_step_trial_approvals_guard()`，并 `delete from schema_migrations where module = 'goal' and version = 13`（§3.83） |
 | v0.54.0 | goal `0014_planning_rounds`（#864，S11 GO9a）：新表 `goal_planner_delegations`、`goal_planning_rounds` 与 guard 触发器，`plan_revisions` 新增触发器 `plan_revisions_planner`，不回填 | 可逆 | 回退前先让在跑的规划结束（窗口前 `select count(*) from goal_planning_rounds where status = 'running'` 为 0）；回退后的代码不读写新表；撤 schema 须先撤 task `0012`，再 `drop table goal_planning_rounds, goal_planner_delegations`、`drop trigger plan_revisions_planner on plan_revisions` 并删迁移里的函数，最后删 `schema_migrations` 的 goal 14 行（§3.86） |
 | v0.54.0 | task `0012_task_planning`（#864，S11 GO9a）：`tasks` 新列 `planning_round_id`（外键指向规划轮），`tasks_purpose` 增加 `planning`，重建 `tasks_purpose` / `tasks_goal_step_ref` / `tasks_output_schema` 三个 CHECK（全表校验时短暂持有 `ACCESS EXCLUSIVE`），新增 `tasks_planning_shape`、部分唯一索引与两个触发器，不回填 | 可逆 | 回退后的代码只对 `purpose` 为空的任务做崩溃重试，规划任务不会在 deny-all 之外重启；旧 `TaskWire.purpose` 枚举没有 `planning`，生产不校验结果，控制台把它当普通任务显示；撤 schema 先于 goal `0014`：删 `tasks_planning_shape`、`tasks_planning_round_fkey`、`tasks_planning_round_uidx`、触发器与函数 `tasks_planning_guard`、`worker_runs_planning_root`、列 `planning_round_id`，把三个 CHECK 恢复成 task/0011 的写法（如有 `planning` 行先处理），最后删 `schema_migrations` 的 task 12 行（§3.86） |
+| v0.54.0 | goal `0015_planner_apply_minor`（#866，S11 GO9b）：`goal_planner_delegations.mode` 增加 `apply_minor`；`goal_planning_rounds` 新列 `kind`（默认 `proposal`）、`revision_class`、`class_reasons`，状态增加 `applied`、原因增加 `step_keeps_failing` / `run_not_running`；新函数 `goal_planning_class_reasons_valid`，改写 `goal_planning_rounds_guard` 与 `plan_revisions_planner`；只有列默认值 | 可逆 | 回退目标是 v0.53.0（GO9a、GO9b 同版），只回退代码即可；窗口前 `select count(*) from goal_planning_rounds where status = 'running'` 为 0；撤 schema 前提是没有 `applied` 的轮、没有带新原因的轮、没有 `apply_minor` 授权，先于 goal `0014` 与 task `0012`，最后删 `schema_migrations` 的 goal 15 行（§3.87） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

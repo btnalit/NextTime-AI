@@ -5,7 +5,7 @@
 > 拆解与实现说明在 `development-tasks.md`，评估在 `retrospective-*.md` / `code-review-*.md`，
 > 本文只链接不复制。与代码冲突时以代码为准，并修正本文。
 
-最后更新：2026-11-01（**S11 GO9a「目标规划器提议修订、请求人决定」合入（#864，3ef3ae5，迁移 goal/0014、task/0012 可逆，未发版）**：请求人确认时允许后，步骤失败暂停为「需要决定」时平台请一个只提议的规划器给出计划修订，过与人自己修订相同的检查，只有请求人能接受或拒绝；规划器不能观察、不能出网、不能启动别的 Worker。新登遗留 549–551；0.53.1 #861 仍等 GO9b）。 上一版 2026-10-31（**遗留 545、548 合入（#862，73a1cd5，无迁移，未发版）**：验收切换与恢复 provider 重启 kernel 之后，等 agent-host 日志重新出现 `kernel-link: connected` 才继续；恢复失败或链路没回来按 P1 报并让退出码为 1；runbook 写明切换期间带 `spec.model` 的生产目标会暂停）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
+最后更新：2026-11-01（**S11 GO9b「规划器的小修订由平台替请求人采用」合入（#866，a1ada5c，迁移 goal/0015 可逆，未发版）**：确认目标时多一种授权，步骤失败时平台开自主规划轮，按自己的规则分级，小修订替请求人采用、目标不停，大修订暂停等请求人决定；同一份工作最多替改两次。S13 旅程 #867 合入、关闭 549；发版前依赖审计 #869 修 minimatch 告警。新登遗留 552–559；0.54.0 #861 下一步发，GO10 #870 进下一版）。 上一版 2026-11-01（**S11 GO9a「目标规划器提议修订、请求人决定」合入（#864，3ef3ae5，迁移 goal/0014、task/0012 可逆，未发版）**：请求人确认时允许后，步骤失败暂停为「需要决定」时平台请一个只提议的规划器给出计划修订，过与人自己修订相同的检查，只有请求人能接受或拒绝；规划器不能观察、不能出网、不能启动别的 Worker。新登遗留 549–551；0.53.1 #861 仍等 GO9b）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
 
 ## 1. 入口指引
 
@@ -276,6 +276,9 @@
 | 2026-10-31 | 遗留 545、548 合入（#862，W1a，73a1cd5，无迁移，未发版；#856 审查 #488 P2 的跟进）：`scripts/lib/accept-common.sh` 新增 `accept_utc_now` 与 `wait_kernel_link <since>`，`accept_provider_up` / `accept_provider_restore` 在 `up` 前记时间、成功后轮询 agent-host 日志直到 `kernel-link: connected`（`ACCEPT_KERNEL_LINK_WAIT_S` 默认 60、`ACCEPT_KERNEL_LINK_POLL_S` 默认 2，非整秒数直接拒绝）。切换后等不到判 `preflight-fake-provider` FAIL；恢复后等不到或恢复本身失败打 `accept: P1 — …` 并给手动恢复命令；恢复没做完时三个脚本都打 `FAIL restore-provider …`、退出码为 1，预发演练能数到。`docker compose logs` 读不到时超时提示带上它的报错。`accept-s1.md` §1 写明链路等待、切换期间 `spec.model` 不在 fake 目录的生产目标会停在 `needs_decision`（跑前看「目标」页，恢复后由请求人「继续」，545）、恢复失败按 P1 处理（548），S2、S3 手册指过去。`scripts/accept-kernel-link.test.mjs` 用假 `docker` 跑五种情况，接进 CI `test`。#488 首审 P2（恢复的 P1 不进退出码）与两条 P3（参数不校验、日志读不到误报）在 PR 修，复核通过；CI 全绿含 rehearsal。遗留 545、548 关闭；无新遗留，无主机动作 | #862 |
 | 2026-11-01 | 计划变更（协调线程定）：release-please 的 0.53.1 发版 PR #861（含 #857、#862）先不发，等 S11 GO9a / GO9b 合入后一起切下一版，做法同 0.52.1 等 GO8 | — |
 | 2026-11-01 | S11 GO9a「目标规划器提议修订、请求人决定」合入（#864，W1a，3ef3ae5，迁移 goal/0014、task/0012 可逆、不回填，未发版）：确认目标时多一个「目标规划器」勾选项（默认勾上，`confirm_goal.planner` 模式，GO9a 只有 `'propose'`，给 GO9b 留位）。步骤失败、平台不再自动重试而暂停为「需要决定」时，平台为请求人开一轮规划（一个失败尝试最多一轮，一个目标同时最多一轮在跑；`goal_planning_rounds` 状态 `running → proposed | no_revision | failed | abandoned`），规划器是工作区服务主体 `__goal_planner__` 名下按 `ontology/goal-planner.yaml` 懒发布的 Worker 定义，不是新的 agent 运行时。规划任务 `purpose = planning`：`observe_scope '{}'`、`egressDenyAll`、必须带输出契约、不做崩溃重试，Handle 只有 `get_task` / `list_allowed_operations` / `report_task_result`，库层 `worker_runs_planning_root` 禁止它派生或被挂接，`find_workers` 按族排除规划器。规划器的报告在 `report_task_result` 当场复查（不过就 400 逐条写明），与人自己的修订走同一套 `checkRevisionCandidate` / `adoptRevision`、占同样的修订次数；`plan_revisions_planner` guard 限定规划器的修订只在它的轮在跑且基准相同时写入、只有请求人能接受。新能力 `decide_plan_revision{goalRunId, revision, decision, resume?}`（只有请求人，带 `resume` 时同一事务里继续）；`get_goal` 多 `planner`、`planningRounds`，修订带 `proposer`，Worker 定义行多 `goalPlanner`；规划器这一族不能当步骤的 Worker。控制台：确认卡勾选项、目标页「目标规划器」卡片（进行中、无修订的结论、待决定修订的差异与每一步怎么跑、三个分级确认按钮、非请求人看到由谁决定、历次规划轮），「继续」「取消」与自己修订时写明会拒绝规划器提议、作废在跑的规划。#488 通过（隔离与迁移，三条 P3 在 PR 修；release.md 的 P2 由 steward 在本记录补 §3.86 与 §6 两行），#493 首轮「需要改」（P2-1 接受时复核对脱敏值不幂等、P2-2 守卫与 I-P1 测试缺口，在 PR 修）后增量复审通过，UX 首轮 4 条 P2 与 P2-5（结束目标时结束规划）在 PR 修、复验通过；CI 全绿含 probe 与 rehearsal。新登遗留 549（计划里的 fake-llm 规划器旅程 S13 未在本 PR，#867 补）、550、551；#866（GO9b）叠在本 PR 上，改基到 main 后继续 | #864 |
+| 2026-11-01 | S11 GO9b「规划器的小修订由平台替请求人采用」合入（#866，W1a，a1ada5c，迁移 goal/0015 可逆，未发版）：确认卡「目标规划器」改为三选一（不用 / 只提议、由我决定（默认）/ 小修订由平台替我采用、目标不停 `apply_minor`）。`apply_minor` 的目标某一步失败到要人决定时不暂停，开一轮 `kind = autonomous` 的规划（期间不开新尝试，在跑的照常跑完）；规划器的修订先过 GO9a 同一套检查，再由平台自己的规则分级（`revision_class` + `class_reasons`，规划器自述不算）：只换 Worker、输入、顺序或重试次数、改动步骤只读/思考/汇报且验收不变为小修订，平台按授权采用（轮记 `applied`，修订带 `acceptedBy`），目标继续；改验收、放宽一步验收、新增或改动步骤能执行动作或启动别的 Worker、用到原来没有的 gate（哪怕只读，协调线程定为大修订）、要人批准才能开始、会停下在跑的工作、判断不了能做什么，任一条即大修订，暂停为「需要决定」交请求人在同一张卡片上决定。同一份工作平台最多替改两次（按来历计，换步骤名也算），第三次失败暂停（`step_keeps_failing`）；I-P5 不变，平台从不解除人的暂停或所有者锁定，任何暂停都结束自主规划。#488 两轮通过（P2-1 守卫允许 autonomous 轮以 `run_left_pause` 作废，回退到只含 GO9a 的构建也能收尾），#493 首轮「需要改」（P2-1 改步骤名绕过两次上限、P2-2 守卫测试缺口）后两轮增量复核通过，UX 首轮 3 条 P2 与复验时 gate 名未传到控制台（`planning-rounds.ts` 读回 `capabilities` / `gates`）在 PR 修、复验通过；CI 全绿含 probe 与 rehearsal（v0.53.0 → 新头）。新登遗留 552–557；#867（S13）、#870（GO10）改基到 main | #866 |
+| 2026-11-01 | S13 规划器验收旅程合入（#867，W1a，353ec3c）：`accept_s2` 新增 S13，fake-llm 加 `goalPlannerScenario`，两种模式 s13a（propose：confirmed、rejected、proposed、accepted、achieved、planner-task、other-way）与 s13b（apply_minor：confirmed、rejected、applied、planner-task、other-way）在 rehearsal 中全部 PASS；`cleanup_step` 无论是否 `--keep` 都还原 alice 的 AgentProfile（#488 P3①，在 PR 修）。#488 通过；关闭遗留 549 | #867 |
+| 2026-11-01 | v0.54.0 发版前依赖审计（#869，steward，a6263d8）：minimatch GHSA-g3hv-75wg-m249（moderate，pi-coding-agent 1.1.0 钉 10.2.6，Dependabot 两条：pnpm-lock 与 worker-runtime 的 package-lock）无 10.x 修复版，两处 `overrides` 抬到 `^11.0.1`，`pnpm audit` 为 0；bundle 内联的那份仍旧（遗留 558，`pi-upgrade.md` §3）。#488 通过（大版本 override 可接受，P3 登 558、559）；CI 全绿含 rehearsal |
 | 2026-10-16 | 控制台文案第二批合入（#628，25bfdfe，无迁移，只改控制台，未发版；遗留 335、359、360、361、362、363 关闭）：对话输入框因 U+0000 被拒后，提示旁有「移除看不见的字符」按钮，移除后消息不会自动发出（335）；清除预览与审计资源类型统一为「动作请求」「授权」（359）；下一步文案里的 builder 改为「构建者」（360）；错误文案与成员页统一为「最后一位有效的所有者」「人类用户」，capability 名称为「API key 轮换」（i18n 守卫不允许中文短标签以英文结尾）（361）；服务凭证表单输入时就提示保留名规则（362）；640px 以下对话页头部改为两行（363）。另含一个只改测试的提交：旅程③窄屏用例按 Escape 后先等抽屉关上再点下一行（#625 种子行排到第一位后暴露的时序问题）。只改控制台，不需要内核审查（协调线程定）；UX 验收首轮 1 条 P2（390 宽度错误条被按钮挤窄）在本 PR 内修好，复验 PASS（`console-ux/acceptance-628.md`），CI 全绿合入；无主机动作 | PR #628 |
 
 ### 2.2 验收证明了什么，没证明什么
@@ -777,9 +780,17 @@
 | 546 | 验收 override 给 kernel 的挂载范围（只挂 `accept/models`、不挂含 `keys.json` 的整个 accept 目录）没有 validate-compose 守卫（#856 审查 #488 P3） | P3 | W1a | 开放 |
 | 547 | 验收目录下 `provider-health.json` 写不进去（#856 之前就如此，只做记录；#856 审查 #488 P3） | P3 | W1a | 开放 |
 | 548 | `accept_provider_restore` 现在也重建 kernel，失败影响面变大；runbook 应把这一步失败标为 P1（#856 审查 #488 P3） | P3 | W1a | 已关闭（#862，2026-10-31：恢复失败与链路没回来都按 P1 报、退出码为 1，`accept-s1.md` §1 给手动恢复命令） |
-| 549 | GO9a 计划里的 fake-llm 规划器验收旅程（`accept_s2` S13，两种规划器模式）未在 #864 实现，W1a 在 GO9b 之后单独 PR 补齐（#867），合入时关闭（协调线程 11-01 登记） | P2 | W1a | 开放 |
+| 549 | GO9a 计划里的 fake-llm 规划器验收旅程（`accept_s2` S13，两种规划器模式）未在 #864 实现，W1a 在 GO9b 之后单独 PR 补齐（#867），合入时关闭（协调线程 11-01 登记） | P2 | W1a | 已关闭（#867，353ec3c：`accept_s2` S13 两种模式 s13a propose、s13b apply_minor 均在 rehearsal 中 PASS） |
 | 550 | 任务列表里规划任务的标题显示原始 JSON（#864 UX 验收 P3-2） | P3 | W1a / 控制台 | 开放 |
 | 551 | 中文界面里显示规划器的英文名「Goal planner」，需要本地化（#864 UX 验收 P3-1 的剩余部分） | P3 | W1a / 控制台 | 开放 |
+| 552 | GO9a/GO9b 规划器分级与来历计数的存活变异（#493 P3-1：K6、K8、K9、K12、K14、K16、K18、K19、K22、K23 及 b0d010c9 一轮的 9 个），逐个补测试或说明为等价变异 | P3 | W1a | 开放 |
+| 553 | `goal_planning_rounds` 的守卫可改为 deferred 约束触发器（#493 P3-3，可选） | P3 | W1a | 开放 |
+| 554 | 没有测试覆盖「Worker 定义自带的 gate 让修订判为大修订」这条路径（#493 G3） | P3 | W1a | 开放 |
+| 555 | 没有测试覆盖「人接受规划器提议后，来历计数归零」（#493 L3：把来历回溯改成不看轮次状态，现有测试照样通过） | P3 | W1a | 开放 |
+| 556 | revision-class 与 enums 的注释写修订「从不扩大读取面」说过头：不带 gate 的新能力仍判为小修订；收窄注释，或另行决定是否改判 | P3 | W1a | 开放 |
+| 557 | 回退到只含 GO9a 的构建时，它的控制台把 `applied` 的规划轮显示成未知状态（只影响中途回退，§3.87） | P3 | W1a / 控制台 | 开放 |
+| 558 | pi CLI bundle 内联的 minimatch 仍是 10.2.6（GHSA-g3hv-75wg-m249，#869 只抬了 `node_modules` 与 pnpm 树），等 pi 上游发版换掉（`pi-upgrade.md` §3） | P3 | pi 升级 | 开放 |
+| 559 | pnpm 树里 `@smithy/core` 3.33.3 被上游标为 deprecated（logger 脱敏缺陷），下一个依赖波次评估（#869 #488 P3③） | P3 | 依赖波次 | 开放 |
 
 ## 5. 更新规则
 
