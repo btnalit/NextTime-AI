@@ -4432,7 +4432,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **GO14 — 步骤间产物交接**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（GO14，#884，2026-11-01 合入，a10d716；无迁移，内核与 worker-supervisor 同版）：默认方案见项目共享计划 `s11-w2/go14-default-plan.md`（协调线程定 F1–F5 取 A：交接子目录 `/workspace/out/`、步骤显式声明 `filesFrom`、租约刷新未结束目标里所有已成功步骤的目录、改 `filesFrom` 算 minor、Procedure 模板这次不支持）。worker-supervisor `src/upstream-files.ts`：带 `goalRunId` 的 spawn 建空 `out/`，在 Task 平台目录写 `owner.json`；带 `upstream` 的 spawn 逐个检查（上游没有容器在跑、Task 工作目录不是链接、`owner.json` 的工作区与目标相符、`out` 按 `lstat` 是目录且 realpath 正好是工作目录加 `out`），任一不过 409 `upstream_unavailable`，什么都不写；已有 `owner.json` 的 Task 再 spawn 一律 409 `goal_task_spawned`（不只靠内核 R-58）；`owner.json` 按不跟随链接的句柄读（CodeQL file-system-race）；`POST /task-dirs/keep` 只刷新 `kept` 的 mtime；`TASK_WORKDIR_RETENTION_HOURS` 小于 2 不启动。内核 `plan.ts` 校验 `filesFrom`；`goal/step-files.ts` 只按本次 GoalRun 数据库里的 StepRun 解析上游 Task，再经 `keepTaskDirs` 检查；`advance.ts` 按结果开始、5 秒后再看或暂停 `needs_decision`（不花尝试，被跳过或没成功的上游同样暂停）；`step-attempt.ts` 带 `goalRunId` / `upstream`，系统提示加交接说明；`goal/files-keep.ts` 每小时续租。`/upstream` 不在 Worker cwd 上级链与 pi 配置目录里，白名单启动测试断言预埋的 `AGENTS.md`、扩展、skills 不被加载。已知边界：步骤间文件是唯一不经凭证复查的通道（方案 §7 的取舍）。#493 xhigh（三条 P3 在 PR 内修）、#488、UX 复验通过，CodeQL 高危已修。遗留 574、575（GO14 推迟项），新登 576–580。
 
 **GO15 — 控制台：WorkerSpec 详情、规划修订差异**（见 `global-roadmap-2026-10-16.md` §4）
 
