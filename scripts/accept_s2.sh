@@ -125,8 +125,8 @@ if [ -z "${NEXTTIME_DATA:-}" ] || [ -z "${KERNEL_BIND_ADDR:-}" ]; then
 fi
 
 . "$(dirname "$0")/lib/accept-common.sh"
-# S11 GO7a: goal scenarios S1, S2, S4–S12 (goal_scenarios_step, after step 9; S12 and S2 only with
-# ACCEPT_DISRUPTIVE=1), the cleanup of
+# S11 GO7a: goal scenarios S1, S2, S4–S13 (S13: the goal planner of GO9a/GO9b;
+# goal_scenarios_step, after step 9; S12 and S2 only with ACCEPT_DISRUPTIVE=1), the cleanup of
 # every goal they start, of the grants S9 gives bob and of the row locks, held turns and killed
 # service S12, S8 and S2 may leave, and with --real keeping their test ledger out of the published
 # manifest — see that file's own header comment.
@@ -1393,8 +1393,10 @@ cleanup_step() {
   CLEANUP_DONE=1
   # First, --keep or not: a service the goal scenarios' S2 killed is started again (everything
   # below calls the kernel), a row lock S12 or S2 still holds is ended and a turn fake-llm still
-  # holds is released — none of them is a fixture to keep (goal_cleanup_live_work).
+  # holds is released — none of them is a fixture to keep (goal_cleanup_live_work). Nor is alice's
+  # AgentProfile still naming the fake model S13 set (goal_cleanup_planner_model).
   goal_cleanup_live_work
+  goal_cleanup_planner_model
   if [ "$KEEP" -eq 1 ]; then
     echo "cleanup: --keep set, leaving accept-s2 fixtures/gates/workspace up"
     return
