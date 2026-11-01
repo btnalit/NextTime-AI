@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.58.0](https://github.com/btnalit/NextTime-AI/compare/v0.57.0...v0.58.0) (2026-11-01)
+
+
+### Features
+
+* **goal:** WorkerSpec against its definition, admission verdict and field-level revision diff (S11 GO15a) ([#888](https://github.com/btnalit/NextTime-AI/issues/888)) ([4fbd852](https://github.com/btnalit/NextTime-AI/commit/4fbd85220fb9ac8b87b221844328d7ee68d9b133))
+* **web:** edit a step's WorkerSpec in the plan editor (S11 GO15b) ([#889](https://github.com/btnalit/NextTime-AI/issues/889)) ([04ad970](https://github.com/btnalit/NextTime-AI/commit/04ad970578d678a8ff7951304ed08a0570852800))
+
+
+### Bug Fixes
+
+* **goal:** read no goal acceptance and an empty one as the same in revision class (legacy 581) ([#890](https://github.com/btnalit/NextTime-AI/issues/890)) ([78cae45](https://github.com/btnalit/NextTime-AI/commit/78cae4554944fcb94b231c83cd821c0cfd3a3dcc))
+
 ## [0.57.0](https://github.com/btnalit/NextTime-AI/compare/v0.56.0...v0.57.0) (2026-11-01)
 
 
