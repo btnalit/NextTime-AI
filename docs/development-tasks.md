@@ -4436,7 +4436,8 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **GO15 — 控制台：WorkerSpec 详情、规划修订差异**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（GO15a，#888，2026-11-01 合入，4fbd852；无迁移）：默认方案与出入见项目共享计划 `s11-w2/go15-default-plan.md`（F1–F6 取 A，拆成只读的 GO15a 与可编辑的 GO15b；§6 记出入）。shared：`PLAN_HINT_ADMISSION`（`satisfies Record<PlanHintCode, …>`，每个提示码归为 refused / needs_approval / note / plan）与 `stepAdmissionOf`；新能力 `get_worker_definition`（observe、人类通道、成员与审计员可读，HUMAN_ONLY）；`PlanRevisionWire.checkedStepKeys`。内核：handler 按版本读取，已发布与已弃用的人人可读、草稿只有提议人可读，看不到的一律 `null`（F2 出入）；`views.ts` 的 `stepsToCheck` 对暂停运行的规划器提议检查新增或改动的步骤（按第一次尝试，不沿用试用批准）与保留不变、现行规则本来会检查的步骤，已结束的步骤跳过。控制台：`lib/worker-spec-detail`（对照、结论文案、接受时会停下的步骤）、`lib/plan-step-diff`（纯函数字段级差异，只列路径不显示值）、`StepChangeList`，`WorkerSpecFields` 改为对照显示，提议卡、版本时间线与修订确认框三处共用。#493 通过（两条 P3 在 c4e8f9a7 修），UX 通过（五条 P3 在 PR 内修）。关闭遗留 580，遗留 581 另记（早于 GO15a）。下一步 GO15b（修订计划里编辑 spec，#889）。
+- 实现说明（遗留 581，#890，2026-11-01 合入，78cae45；无迁移）：`application/goal/revision-class.ts` 比较目标验收时用 `?? []` 代替 `?? null`（步骤级本来就用 `?? []`），模块注释同步；`revision-class.test.ts` 新增 3 例（缺省 ↔ 空列表判 minor，空列表加一条检查判 `goal_acceptance_changed`）。
 
 ### W3 — 管理员 Agent 配置层
 
