@@ -167,6 +167,26 @@ export function TaskDetail({
           },
         ]
       : []),
+    // S11 GO9a: a round of a goal's planner — for the goal's requester, proposing only.
+    ...(task.purpose === 'planning'
+      ? [
+          {
+            key: 'purpose',
+            label: t('用途', 'Purpose'),
+            value: (
+              <span className="stack-s" data-testid="task-purpose">
+                <span>{t('目标规划', 'Goal planning')}</span>
+                <span className="text-3 text-small">
+                  {t(
+                    '这个任务是目标规划器的一轮规划：它只读自己的任务（目标、在用的计划、失败的经过）并汇报一个修订提议或「无需修订」，不能调用任何门，也不能出网。提议在目标页的「目标规划器」里，由目标的请求人接受或拒绝；它用掉的 token 计入目标的预算。',
+                    'This task is a round of the goal planner: it reads only its own task (the goal, the plan in force, how the step failed) and reports a proposed revision or “no revision”; it cannot call any gate and has no network access. The proposal is under Goal planner on the goal’s page, where the goal’s requester accepts or rejects it; the tokens it uses count against the goal’s budget.',
+                  )}
+                </span>
+              </span>
+            ),
+          },
+        ]
+      : []),
     {
       key: 'createdAt',
       label: t('创建', 'Created'),

@@ -1,6 +1,12 @@
 import type { WorkerResultCapabilityParams, WorkerResultObjectRef } from '@nexttime/shared';
-import { UNSTORABLE_CHAR, outputContractProblems, storableValue } from '@nexttime/shared';
+import {
+  MAX_OUTPUT_PROBLEMS,
+  UNSTORABLE_CHAR,
+  outputContractProblems,
+  storableValue,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { plannerReportProblems } from '../../application/goal/index.js';
 import type {
   ContractPreRejections,
   RejectedResultFact,
@@ -323,6 +329,19 @@ export const reportTaskResultHandler: CapabilityHandler = async (
         output: contract.output ?? null,
         problems: check.problems,
         problemCount: check.problemCount,
+        ...(outputContract.purpose === 'planning' ? { heldTo: 'planner' as const } : {}),
+      });
+    }
+    // S11 GO9a: a goal planner's report is its proposal and nothing else, and the plan it
+    // proposes passes a person's revision checks — refused the same way, each place named.
+    const planner = await plannerReportProblems(client, workspaceId, workerRun.taskId, contract);
+    if (planner.length > 0) {
+      throw new TaskOutputRejectedError({
+        taskId: workerRun.taskId,
+        output: contract.output ?? null,
+        problems: planner.slice(0, MAX_OUTPUT_PROBLEMS),
+        problemCount: planner.length,
+        heldTo: 'planner',
       });
     }
   }

@@ -95,6 +95,13 @@ describe.runIf(DATABASE_URL !== undefined)('deleteWorkspace (integration, real P
     before('goal_step_trial_approvals', 'goal_runs');
     before('goal_step_trial_approvals', 'step_runs');
     before('goal_step_trial_approvals', 'principals');
+    // S11 GO9a (migrations/goal/0014, task/0012).
+    before('goal_planner_delegations', 'goal_runs');
+    before('goal_planner_delegations', 'principals');
+    before('goal_planning_rounds', 'goal_runs');
+    before('goal_planning_rounds', 'step_runs');
+    before('goal_planning_rounds', 'plan_revisions');
+    before('tasks', 'goal_planning_rounds');
     // S11 P1 (migrations/governance/0025).
     before('change_items', 'change_segments');
     before('change_segments', 'principals');

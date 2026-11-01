@@ -485,10 +485,11 @@ export async function listStepLiveTasks(
   return result.rows.map((row) => row.id);
 }
 
-/** A live Task of a GoalRun and the step it runs for. */
+/** A live Task of a GoalRun and the step it runs for — `null` for a planning round's Task (S11
+ *  GO9a, task/0012), which runs for no step. */
 export interface LiveGoalTask {
   readonly taskId: string;
-  readonly stepRunId: string;
+  readonly stepRunId: string | null;
 }
 
 /** {@link listGoalRunLiveTasks} with each Task's step — one read for an advance that asks, step by
@@ -498,7 +499,7 @@ export async function listGoalRunLiveTaskSteps(
   workspaceId: string,
   goalRunId: string,
 ): Promise<readonly LiveGoalTask[]> {
-  const result = await client.query<{ id: string; step_run_id: string }>(
+  const result = await client.query<{ id: string; step_run_id: string | null }>(
     `select id, step_run_id from tasks
      where workspace_id = $1 and goal_run_id = $2
        and status not in ('completed', 'failed', 'cancelled')

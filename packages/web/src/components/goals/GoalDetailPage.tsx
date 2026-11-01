@@ -12,6 +12,7 @@ import { auditHref } from '../../lib/audit.js';
 import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
 import { describeError } from '../../lib/errors.js';
 import { actionKindTagText, excerpt, formatDateTime, formatRelative } from '../../lib/format.js';
+import { plannerNeedsAttention } from '../../lib/goal-planner.js';
 import {
   goalBudgetRows,
   goalCheckObjectIds,
@@ -47,6 +48,8 @@ import {
   GoalOperationsBar,
 } from './GoalOperationsBar.js';
 import { GoalPlanEditor } from './GoalPlanEditor.js';
+import { GoalPlannerSection } from './GoalPlannerSection.js';
+
 import { GoalReconcileControls } from './GoalReconcileControls.js';
 import { GoalRevisionsSection } from './GoalRevisionsSection.js';
 import { GoalStepsSection } from './GoalStepsSection.js';
@@ -66,7 +69,8 @@ export interface GoalDetailPageProps {
  * its acceptance, the actions still waiting for a person (`list_goal_unresolved_actions`), what a
  * cancel left behind, and its plan revisions — and what the reader may do to it now
  * (`GoalOperationsBar`, GO5b; for a proposal, the confirm card: the plan, checks and budget below
- * with 确认并开始 / 驳回) and about each action to check (`GoalReconcileControls`). Revising the
+ * with 确认并开始 / 驳回) and about each action to check (`GoalReconcileControls`), and — S11
+ * GO9a — what the goal planner is doing and the revision it proposed (`GoalPlannerSection`). Revising the
  * plan (修订计划…) swaps the page's sections for the plan editor (`GoalPlanEditor`).
  *
  * A goal the reader may not see reads exactly like one that does not exist (the kernel's 404 for
@@ -246,6 +250,16 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
       </div>
     );
   }
+  const plannerFirst = plannerNeedsAttention(goal);
+  const planner = (
+    <GoalPlannerSection
+      goal={goal}
+      viewer={viewer}
+      http={http}
+      gateNames={gateNames}
+      onDone={onDone}
+    />
+  );
   return (
     <div className="page goal-page stack" data-testid="goal-detail" data-goal-id={goal.id}>
       {header(excerpt(goal.statement, 80) ?? t('目标', 'Goal'))}
@@ -301,10 +315,14 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
             ))
           : null}
       </output>
+      {/* S11 GO9a: the planner's proposal is a decision the requester makes now — above the
+          overview, next to the page's other decisions; with nothing to act on, below it. */}
+      {plannerFirst ? planner : null}
 
       <DashboardCard title={t('概览', 'Overview')} data-testid="goal-overview">
         <KeyValue items={overviewItems(goal, http, t)} />
       </DashboardCard>
+      {plannerFirst ? null : planner}
 
       <DashboardCard title={t('预算', 'Budget')} data-testid="goal-budget">
         <KeyValue

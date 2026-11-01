@@ -61,6 +61,7 @@ const upgrade = (created: boolean): EntryTemplateUpgradeWire => ({
     publishedBy: null,
     createdAt: '2026-10-23T08:00:00.000Z',
     publishedAt: null,
+    goalPlanner: false,
   },
   templateDigest: DIGEST,
   basedOn: { definitionId: ENTRY, version: 2 },

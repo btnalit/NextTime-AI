@@ -102,6 +102,25 @@ export {
 } from './step-attempt.js';
 
 export {
+  type CreatePlanningTaskInput,
+  type CreatePlanningTaskResult,
+  GOAL_PLANNER_PRINCIPAL_DISPLAY_NAME,
+  PLANNER_HANDLE_CAPABILITIES,
+  PLANNER_MAX_DURATION_SEC,
+  PLANNER_MAX_TOKEN_BUDGET,
+  PLANNER_MIN_TOKEN_BUDGET,
+  type PlannerTemplate,
+  createPlanningTask,
+  ensurePlannerDefinition,
+  findGoalPlannerFamily,
+  findGoalPlannerPrincipal,
+  getOrCreateGoalPlannerPrincipal,
+  loadPlannerTemplate,
+  plannerContentDigest,
+  readTaskPlanningRound,
+} from './planning-task.js';
+
+export {
   completeTaskWithResult,
   reactToSupervisorStatus,
   readTaskRow,

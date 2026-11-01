@@ -329,6 +329,18 @@ async function stepParentScope(
   };
 }
 
+/** S11 GO9a: why the requester cannot start a Worker now — disabled, gone, or a role that no
+ *  longer starts Workers — or `null`: the check every attempt makes first ({@link stepParentScope}),
+ *  for a Task of a goal that is no step's (the planner's, `planning-task.ts`). */
+export async function requesterStartRefusal(
+  client: PoolClient,
+  workspaceId: string,
+  requesterId: string,
+): Promise<StepAttemptRefusal | null> {
+  const parent = await stepParentScope(client, workspaceId, requesterId, false);
+  return 'refusal' in parent ? parent.refusal : null;
+}
+
 /** S11 GO8a: the digest a RunConfigSnapshot keeps of a step's WorkerSpec (`null`: none). */
 export function workerSpecDigest(spec: WorkerSpec | null): string | null {
   return spec === null ? null : sha256(canonicalJson(spec));

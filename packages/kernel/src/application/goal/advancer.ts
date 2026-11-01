@@ -9,7 +9,7 @@ import { getActionRequest, shownAuditReason } from '../../governance/approval/in
 import { SYSTEM_ACTOR_PLACEHOLDER } from '../../governance/gatekeepers/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import type { DomainEvent } from '../../substrate/outbox/index.js';
-import { readTaskGoalStep, terminateTaskWith } from '../task/index.js';
+import { readTaskGoalStep, readTaskPlanningRound, terminateTaskWith } from '../task/index.js';
 import { type GoalAdvanceDeps, type GoalAdvanceTarget, advanceGoalRun } from './advance.js';
 import { readCancelLeftovers } from './cancelling.js';
 import { actionDisposition } from './disposition.js';
@@ -233,6 +233,8 @@ export async function recordAdvanceFailure(
  *       after the run was resumed) with no pending check opened since it last moved (S11 GO4b) — a
  *       round to open, or a settled round whose advance failed. A round waiting on its observations
  *       is not counted: their settlement sets the run due (`acceptance-check.ts`).
+ *   (h) a planning round (S11 GO9a, `planner.ts`) whose Task ended while the round still runs —
+ *       to settle — or whose Task still runs after the round stopped running — to terminate.
  * Returns how many runs it set due. A `waiting(reconcile)` step is not counted: its GoalRun is
  * paused for a person, whose finding sets the run due in its own transaction (`reconcile.ts`,
  * GO3c) — or, while the platform's check of it is pending, keeps running, and the check's
@@ -311,6 +313,13 @@ export async function markReconcileDue(
                          and (select coalesce(sum(t.tokens_used), 0) from tasks t
                                where t.workspace_id = c.workspace_id and t.goal_run_id = c.id)
                              >= c.budget_max_tokens)
+                     or exists (
+                       select 1 from goal_planning_rounds pr
+                         join tasks t
+                           on t.workspace_id = pr.workspace_id and t.planning_round_id = pr.id
+                        where pr.workspace_id = c.workspace_id and pr.goal_run_id = c.id
+                          and (pr.status = 'running')
+                              = (t.status in ('completed', 'failed', 'cancelled')))
                    )
                    for no key update skip locked)`,
       [
@@ -492,7 +501,10 @@ export function registerGoalWakeConsumer(
     await wake(
       event.workspaceId,
       async (client) =>
-        (await readTaskGoalStep(client, event.workspaceId, event.taskId))?.goalRunId ?? null,
+        (await readTaskGoalStep(client, event.workspaceId, event.taskId))?.goalRunId ??
+        // S11 GO9a: a planning Task's end settles its round.
+        (await readTaskPlanningRound(client, event.workspaceId, event.taskId))?.goalRunId ??
+        null,
     );
   });
   const offAction = source.subscribe('ActionRequestUpdated', async (event) => {

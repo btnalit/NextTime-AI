@@ -26,6 +26,9 @@ export const WorkerDefinitionWireSchema = z
     publishedBy: z.string().nullable(),
     createdAt: z.string(),
     publishedAt: z.string().nullable(),
+    /** S11 GO9a: a version of the workspace's goal planner family — the platform's, run for a
+     *  goal's planning rounds only; a plan does not run it as a step. */
+    goalPlanner: z.boolean(),
   })
   .strict();
 export type WorkerDefinitionWire = z.infer<typeof WorkerDefinitionWireSchema>;

@@ -135,6 +135,7 @@ function revision(n: 1 | 2) {
     basedOnRevision: n === 1 ? null : 1,
     plan: n === 1 ? PLAN_V1 : PLAN_V2,
     proposedBy: n === 1 ? AGENT : ALICE,
+    proposer: 'person',
     reason: n === 1 ? null : '通知改成人工发；旧证书要在换完后删掉',
     decidedBy: ALICE,
     decidedAt: n === 1 ? T1 : T2,
@@ -275,6 +276,8 @@ const DETAIL = {
   acceptance: { rounds: [], steps: [], absenceBaselines: [], overriddenChecks: [] },
   leftovers: null,
   trialApprovals: [],
+  planner: null,
+  planningRounds: [],
 };
 
 const UNRESOLVED = [
@@ -579,6 +582,10 @@ test.describe('S11 GO6: operations on a goal (stand-in reads and operations)', (
         '要你亲自确认「证书看起来对」（验收检查 looks-right），来自流程第 2 步',
       );
       await expect(page.getByTestId('goal-op-reject')).toBeVisible();
+      // S11 GO9a: the goal planner's leave is offered on the confirm card, on by default.
+      await expect(
+        confirm.getByTestId('goal-op-confirm-planner').getByRole('checkbox'),
+      ).toBeChecked();
       await page.screenshot({
         path: testInfo.outputPath(`goal-confirm-${width}.png`),
         fullPage: true,
@@ -588,6 +595,7 @@ test.describe('S11 GO6: operations on a goal (stand-in reads and operations)', (
       expect(fired.find((call) => call.name === 'confirm_goal')?.params).toEqual({
         goalRunId: GOAL,
         revision: 1,
+        planner: 'propose',
       });
 
       // 2. Alice's goal the owner held: lifting the hold says alice revised the plan since.
@@ -882,6 +890,7 @@ test.describe('S11 GO6: revising the plan (stand-in reads, refusals and revision
     publishedBy: ALICE,
     createdAt: T0,
     publishedAt: T0,
+    goalPlanner: false,
   });
   /** The error `kit/field` shows under a control, by the control's id. */
   const fieldError = async (page: Page, control: ReturnType<Page['getByTestId']>) =>

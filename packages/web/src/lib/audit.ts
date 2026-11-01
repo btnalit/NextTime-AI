@@ -229,6 +229,12 @@ export const AUDIT_LIFECYCLE_ACTIONS = [
   'plan_revision.reject',
   // S11 GO8b: a person approving one trial of a step's draft Skills (`trial-approvals.ts`).
   'step_trial.approve',
+  // S11 GO9a: the goal planner — the requester's leave, its rounds, what it proposed
+  // (`planning-rounds.ts`, `planner.ts`).
+  'goal_run.planner_granted',
+  'goal_planning_round.open',
+  'goal_planning_round.settle',
+  'plan_revision.propose',
   'task.budget_handed_down',
   'action_request.release',
   'action_request.reconcile',

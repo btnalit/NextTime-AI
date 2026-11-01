@@ -34,7 +34,11 @@
  * (`from-procedure.ts`). S11 「门确认不存在」 B-c adds the baseline an absence check goes by
  * (`absence-baselines.ts`, goal/0012): the platform's look before the goal's work, made by
  * `absence-baseline.ts` on the acceptance checks' timer; the advance waits on it before any step
- * starts.
+ * starts. GO9a adds the goal planner (goal/0014): the requester's leave on confirmation, the
+ * planning rounds the advance opens and settles (`planner.ts`, phase P), the rows and the rule
+ * every person's action applies to them (`planning-rounds.ts`) and the requester's decision about
+ * what the planner proposed (`decide.ts`); a person's revision and the planner's share their
+ * checks (`revise.ts` `checkRevisionCandidate`, `adoptRevision`).
  *
  * Boundaries: it lives in `application` because the advancer creates Tasks (`application/task`) and
  * withdraws ActionRequests (`governance/approval`) in the transaction that moves a StepRun.
@@ -161,6 +165,31 @@ export {
   type RevisedGoalRun,
   reviseGoalRun,
 } from './revise.js';
+
+export {
+  type ClosePlanningReason,
+  type ClosedPlanning,
+  MAX_PLANNING_DETAIL_CHARS,
+  type PlanningRoundRow,
+  closePlanning,
+  listPlanningRounds,
+  readGoalPlannerMode,
+  readGoalPlannerModes,
+} from './planning-rounds.js';
+
+export {
+  PLANNER_INPUT_KIND,
+  type PlanningPhaseResult,
+  plannableFailure,
+  plannerReportProblems,
+  runPlanningPhase,
+} from './planner.js';
+
+export {
+  type DecidePlanRevisionInput,
+  type DecidedPlanRevision,
+  decidePlanRevision,
+} from './decide.js';
 
 export {
   type ApproveStepTrialInput,
@@ -292,6 +321,7 @@ export {
   GoalRevisionNotFoundError,
   type ListGoalRunsFilter,
   type ListGoalRunsOptions,
+  type PlanRevisionRead,
   type PlanRevisionView,
   type PlanSourceView,
   getGoalRunVisibleTo,

@@ -30,6 +30,7 @@ import {
   defaultWorkerCapabilities,
 } from './handle-mint.js';
 import { failTaskRow, readTaskRow, readWorkerRunRow, terminateWorkerRunRow } from './lifecycle.js';
+import { findGoalPlannerFamily } from './planning-task.js';
 import { type TaskRuntimeDeps, getConfiguredTaskRuntime } from './runtime.js';
 import { recordTaskTransition } from './transition-log.js';
 import {
@@ -643,6 +644,7 @@ export async function findWorkers(
   need: string,
   limit?: number,
 ): Promise<readonly WorkerDefinitionMatch[]> {
+  let plannerFamily: string | null | undefined;
   return collectUsable(
     (page) => findWorkerDefinitionCandidates(client, workspaceId, { need, ...page }),
     async (candidate) => {
@@ -656,6 +658,11 @@ export async function findWorkers(
         version: match.version,
       });
       if (!definition || definition.status !== 'published') return undefined;
+      // S11 GO9a: the goal planner's definition is the platform's, run only for a planning round
+      // (`planning-task.ts`) — never a Worker an agent delegates to. Every version of its family,
+      // a workspace owner's too (review #488 on #864).
+      plannerFamily ??= await findGoalPlannerFamily(client, workspaceId);
+      if (plannerFamily !== null && match.definitionId === plannerFamily) return undefined;
 
       const content = definition.definition as { capabilities?: string[]; gates?: string[] };
       try {

@@ -18,6 +18,7 @@ import type {
   PackRequirementState,
   PiDriftStatusWire,
   PlanRevisionStatus,
+  PlanningRoundStatus,
   PlatformBackupStatusWire,
   PlatformRoleWire,
   PlatformUpdateFeedStatusWire,
@@ -50,6 +51,7 @@ import {
   OPERATION_MODE_VALUES,
   PACK_INSTALL_STATUS_VALUES,
   PACK_REQUIREMENT_STATE_VALUES,
+  PLANNING_ROUND_STATUS_VALUES,
   PLAN_REVISION_STATUS_VALUES,
   PUBLISHABLE_STATUS_VALUES,
   PiDriftStatusWireSchema,
@@ -146,6 +148,7 @@ export type StatusMachine =
   | 'stepRun'
   | 'goalCheck'
   | 'planRevision'
+  | 'planningRound'
   | 'packRequirement'
   | 'evalTrial'
   | 'evalAssertion'
@@ -475,6 +478,15 @@ export const PLAN_REVISION_TONES: Readonly<Record<PlanRevisionStatus, ChipStyle>
   rejected: { tone: 'danger', label: { zh: '已拒绝', en: 'Rejected' } },
 };
 
+/** S11 GO9a: one round of a goal's planner (`GoalDetailWire.planningRounds`). */
+export const PLANNING_ROUND_TONES: Readonly<Record<PlanningRoundStatus, ChipStyle>> = {
+  running: { tone: 'info', label: { zh: '规划中', en: 'Planning' } },
+  proposed: { tone: 'accent', label: { zh: '已提修订', en: 'Proposed a revision' } },
+  no_revision: { tone: 'neutral', label: { zh: '无可行修订', en: 'No revision' } },
+  failed: { tone: 'warn', label: { zh: '没有结果', en: 'No result' } },
+  abandoned: { tone: 'neutral', label: { zh: '已作废', en: 'Dropped' } },
+};
+
 /** S11 P1-E: where a system a pack needs stands in the workspace (`PackRequirementWire.state`,
  *  the 能力包 detail and install review, and an install record's verification). */
 export const PACK_REQUIREMENT_TONES: Readonly<Record<PackRequirementState, ChipStyle>> = {
@@ -604,6 +616,7 @@ const MACHINES: Readonly<
   stepRun: { values: STEP_RUN_STATUS_VALUES, tones: STEP_RUN_TONES },
   goalCheck: { values: GOAL_ACCEPTANCE_CHECK_STATUS_VALUES, tones: GOAL_CHECK_TONES },
   planRevision: { values: PLAN_REVISION_STATUS_VALUES, tones: PLAN_REVISION_TONES },
+  planningRound: { values: PLANNING_ROUND_STATUS_VALUES, tones: PLANNING_ROUND_TONES },
   packRequirement: { values: PACK_REQUIREMENT_STATE_VALUES, tones: PACK_REQUIREMENT_TONES },
   evalTrial: { values: EVAL_TRIAL_OUTCOME_VALUES, tones: EVAL_TRIAL_TONES },
   evalAssertion: { values: EVAL_ASSERTION_OUTCOME_VALUES, tones: EVAL_ASSERTION_TONES },

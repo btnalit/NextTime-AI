@@ -5,6 +5,7 @@ import type {
   PlanRevisionSummaryWire,
   UnresolvedGoalActionWire,
 } from '@nexttime/shared';
+import { runningPlanningRound } from './goal-planner.js';
 import { type ObjectNames, planCheckSentence, roundCheckSentence } from './goals.js';
 import type { Translate } from './i18n.js';
 
@@ -147,6 +148,9 @@ export function goalOperations(
 
   if (requester && (detail.status === 'paused' || detail.status === 'verifying')) {
     const live = liveStepKeys(detail);
+    // UX P2-5 on #864: the planner's Task is the goal's too — the kernel refuses to end it while
+    // that runs, and says so.
+    const planning = runningPlanningRound(detail);
     ops.end = {
       achieved: detail.status === 'paused',
       disabledReason:
@@ -155,7 +159,12 @@ export function goalOperations(
               `还有步骤在运行或等待（${live.join('、')}）：等它们停下，或者取消目标。`,
               `Steps still run or wait (${live.join(', ')}): wait for them to stop, or cancel the goal.`,
             )
-          : null,
+          : planning !== null
+            ? t(
+                `目标规划器正在看步骤 ${planning.stepKey} 的失败：等它给出结果再结束，或者取消目标。`,
+                `The goal planner is looking at the failure of step ${planning.stepKey}: end the goal once it is done, or cancel the goal.`,
+              )
+            : null,
     };
   }
 
