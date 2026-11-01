@@ -1925,19 +1925,58 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
+    it('a round that failed before its planner ran does not count against the revision budget (S11 GO10, #493 P3 on #870)', async () => {
+      const requester = await newPrincipal('member');
+      const goalRunId = await startGoal(requester);
+      await setMaxRevisions(goalRunId, 1);
+      const setMaxTokens = (max: number) =>
+        raw('update goal_runs set budget_max_tokens = $3 where workspace_id = $1 and id = $2', [
+          workspaceId,
+          goalRunId,
+          max,
+        ]);
+      await setMaxTokens(PLANNER_MIN_TOKEN_BUDGET - 1);
+      const step = await liveStep(goalRunId, 'renew');
+      await loseTask((await lastAttempt(step.id)).id, requester);
+      await advanceOnce(goalRunId, requester);
+      expect(await rounds(goalRunId)).toEqual([
+        expect.objectContaining({ status: 'failed', outcome_reason: 'token_budget_exhausted' }),
+      ]);
+      expect(
+        await raw(
+          `select id from tasks where workspace_id = $1 and goal_run_id = $2 and purpose = 'planning'`,
+          [workspaceId, goalRunId],
+        ),
+      ).toHaveLength(0);
+      // No planner ran: the one round the budget allows is still there for the next failure.
+      await setMaxTokens(BUDGET.maxTokens);
+      await call(human(requester), 'resume_goal', { goalRunId, retrySteps: ['renew'] });
+      await advanceOnce(goalRunId, requester);
+      await loseTask((await lastAttempt(step.id)).id, requester);
+      await advanceOnce(goalRunId, requester);
+      const [, second, ...more] = await rounds(goalRunId);
+      expect(more).toEqual([]);
+      expect(second).toMatchObject({ status: 'running', step_attempt: 2 });
+    });
+
     it('the goal’s usage names the planner’s tokens, already part of its tokens (S11 GO10)', async () => {
       const requester = await newPrincipal('member');
-      const { goalRunId } = await failedForPerson(requester);
+      const { goalRunId, step } = await failedForPerson(requester);
       const [round] = await rounds(goalRunId);
       if (!round) throw new Error('no round');
       const before = (await getGoal(goalRunId, requester)).usage;
       expect(before.plannerTokens).toBe(0);
-      await raw('update tasks set tokens_used = 2500 where workspace_id = $1 and id = $2', [
-        workspaceId,
-        (await plannerTask(round.id)).id,
-      ]);
+      const spend = (taskId: string, tokens: number) =>
+        raw('update tasks set tokens_used = $3 where workspace_id = $1 and id = $2', [
+          workspaceId,
+          taskId,
+          tokens,
+        ]);
+      await spend((await plannerTask(round.id)).id, 2500);
+      // The step's own Task spends too: only the planner's count as the planner's.
+      await spend((await lastAttempt(step.id)).id, 700);
       const after = (await getGoal(goalRunId, requester)).usage;
-      expect(after).toMatchObject({ tokens: before.tokens + 2500, plannerTokens: 2500 });
+      expect(after).toMatchObject({ tokens: before.tokens + 3200, plannerTokens: 2500 });
       const listed = (
         (await call(human(requester), 'list_goals', {})) as {
           items: { id: string; usage: { plannerTokens: number } }[];
