@@ -103,9 +103,17 @@ function mapRound(row: PlanningRoundDbRow): PlanningRoundRow {
     status: row.status,
     revision: row.revision,
     revisionClass: row.revision_class,
+    // What a reason is about (`capabilities`, `gates`) is read back too, where the reason carries
+    // it: the console names them (UX on #866).
     classReasons: (row.class_reasons ?? []).map((reason) => ({
       code: reason.code,
       stepKey: reason.stepKey ?? null,
+      ...(reason.capabilities !== undefined && reason.capabilities.length > 0
+        ? { capabilities: [...reason.capabilities] }
+        : {}),
+      ...(reason.gates !== undefined && reason.gates.length > 0
+        ? { gates: [...reason.gates] }
+        : {}),
     })),
     outcomeReason: row.outcome_reason,
     detail: row.detail,

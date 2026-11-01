@@ -1990,6 +1990,31 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：步骤钉住的 Worker 版本或上一次尝试用过的 Skill 版本不再发布时，目标页会点名这一步并说明下一步。契约：两个新计划提示码 `step_worker_unavailable`、`step_skill_version_unavailable`。
 - **回滚**：只回退代码即可，无数据变化；回退后重试照旧沿用第一次尝试的模型，提示回到原来的说法。
 
+### 3.86 目标规划器提议修订（#864，goal 0014，task 0012，S11 GO9a，v0.53.0 之后的下一版起）
+
+带两个迁移（goal `0014_planning_rounds`、task `0012_task_planning`），随 `apply-release.sh` 的迁移步骤自动应用。不改 compose，没有单独的主机步骤，没有新环境变量（规划器模板 `ontology/goal-planner.yaml` 随镜像里已有的 `ontology/` 目录一起发）。task/0012 重建 `tasks` 的 CHECK 约束时会持有 `ACCESS EXCLUSIVE` 锁，迁移期间 `tasks` 的读写会短暂等待。
+
+- **迁移做什么**
+  - 新表 `goal_planner_delegations`、`goal_planning_rounds`，各带 guard 触发器。
+  - `plan_revisions` 新增触发器 `plan_revisions_planner`。
+  - `tasks` 新增列 `planning_round_id`（外键指向规划轮），`tasks_purpose` 增加 `planning`，`tasks_goal_step_ref` 改写。
+  - 不回填。
+- **发版说明可写**
+  - 确认目标时可以让「目标规划器」帮忙（默认打开）。步骤失败、需要你决定时，规划器先提一个计划修订，目标页写明它改了什么、为什么；只有请求人能接受（可选同时继续）或拒绝，平台从不替你接受。
+  - 规划器不能观察、不能出网、只能交回报告；它提的修订和你自己写的修订过同样的检查、占同样的修订次数。
+  - 新能力 `decide_plan_revision`；`confirm_goal` 新增 `planner`（模式，现在只有 `'propose'`）；`get_goal` 新增 `planner`、`planningRounds`，修订带 `proposer`；Worker 定义的行新增 `goalPlanner`，规划器这一族不能用作步骤的 Worker。
+  - 新审计动作：`goal_run.planner_granted`、`goal_planning_round.open`、`goal_planning_round.settle`、`plan_revision.propose`。
+- **回滚**
+  - 只回退代码即可（§6）。不带本项的代码不读写新表。
+  - 回退前先让在跑的规划结束，窗口前只读检查 `select count(*) from goal_planning_rounds where status = 'running'`，应为 0。在跑的规划轮在回退后会一直停在 `running`；回退后的代码把它的任务当成不属于任何步骤的任务，它的报告不推进任何步骤，崩溃后也不会重试（那个版本只重试 `purpose` 为空的任务），所以它不会在 deny-all 出网之外重新启动。
+  - 旧的 `TaskWire.purpose` 枚举里没有 `planning`。生产环境不校验结果，读任务不会报错；回退后的控制台只为 `evaluation` 显示用途行，规划任务在任务详情里看起来和普通任务一样。
+  - 留在 `proposed` 的规划器修订不会被接受：另一个修订生效后，I-G3 检查会拒绝它。
+  - 清除工作区时，新表排在 `goal_runs`、`step_runs`、`plan_revisions`、`principals` 之前，`tasks` 排在 `goal_planning_rounds` 之前。
+  - 要连 schema 一起撤：
+    - 先撤 task/0012：删掉约束 `tasks_planning_shape`、外键 `tasks_planning_round_fkey`、索引 `tasks_planning_round_uidx`、触发器和函数 `tasks_planning_guard` 与 `worker_runs_planning_root`、列 `planning_round_id`，再把 `tasks_purpose`、`tasks_goal_step_ref`、`tasks_output_schema` 恢复成 task/0011 时的写法；
+    - 再 `drop table goal_planning_rounds, goal_planner_delegations`（触发器随表删除），`drop trigger plan_revisions_planner on plan_revisions`，删掉迁移里的函数；
+    - 最后从 `schema_migrations` 删掉 goal 14 和 task 12 两行。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -2140,6 +2165,8 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.52.0 | worker `0011_eval_seal_holds`（#838，S10 E3-2c）：新表 `eval_seal_hits`、`eval_seal_holds` 与守卫触发器，不回填 | 可逆 | 旧内核照常运行但不再执行生效中的暂停；回滚前按 §3.78 的顺序先处理 `active` 暂停；`purge_workspace` 清理两张新表 |
 | v0.52.0 | worker `0012_draft_evaluation_summary`（#845，S10 E3-3b）：`eval_draft_evaluations` 加 `summary_observation_id`（外键指向 `observations`）与 `dev_verdict` 两个可空列、两条约束与一个部分索引，不回填 | 可逆（代码回退期间观察压缩报 degraded） | 上一版不读写新列；代码回退期间 observations-compaction 安全失败、不删任何东西，重新应用后恢复（§3.80）；差异已在 `reversibility-deltas.json` 声明 |
 | v0.53.0 | goal `0013_step_trial_approvals`（#855，S11 GO8b）：新表 `goal_step_trial_approvals`（一次批准一行，只追加）与 guard 触发器，外键指向 `goal_runs`、`step_runs`、`principals`，不回填 | 可逆 | 回退后，用草稿开始过尝试的步骤再尝试时暂停 `needs_decision`（安全失败）；撤 schema：`drop table goal_step_trial_approvals`、`drop function goal_step_trial_approvals_guard()`，并 `delete from schema_migrations where module = 'goal' and version = 13`（§3.83） |
+| v0.54.0 | goal `0014_planning_rounds`（#864，S11 GO9a）：新表 `goal_planner_delegations`、`goal_planning_rounds` 与 guard 触发器，`plan_revisions` 新增触发器 `plan_revisions_planner`，不回填 | 可逆 | 回退前先让在跑的规划结束（窗口前 `select count(*) from goal_planning_rounds where status = 'running'` 为 0）；回退后的代码不读写新表；撤 schema 须先撤 task `0012`，再 `drop table goal_planning_rounds, goal_planner_delegations`、`drop trigger plan_revisions_planner on plan_revisions` 并删迁移里的函数，最后删 `schema_migrations` 的 goal 14 行（§3.86） |
+| v0.54.0 | task `0012_task_planning`（#864，S11 GO9a）：`tasks` 新列 `planning_round_id`（外键指向规划轮），`tasks_purpose` 增加 `planning`，重建 `tasks_purpose` / `tasks_goal_step_ref` / `tasks_output_schema` 三个 CHECK（全表校验时短暂持有 `ACCESS EXCLUSIVE`），新增 `tasks_planning_shape`、部分唯一索引与两个触发器，不回填 | 可逆 | 回退后的代码只对 `purpose` 为空的任务做崩溃重试，规划任务不会在 deny-all 之外重启；旧 `TaskWire.purpose` 枚举没有 `planning`，生产不校验结果，控制台把它当普通任务显示；撤 schema 先于 goal `0014`：删 `tasks_planning_shape`、`tasks_planning_round_fkey`、`tasks_planning_round_uidx`、触发器与函数 `tasks_planning_guard`、`worker_runs_planning_root`、列 `planning_round_id`，把三个 CHECK 恢复成 task/0011 的写法（如有 `planning` 行先处理），最后删 `schema_migrations` 的 task 12 行（§3.86） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

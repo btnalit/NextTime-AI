@@ -1838,14 +1838,18 @@ describe.runIf(DATABASE_URL !== undefined)(
         reason: 'The same Worker, set up another way.',
       });
       await advanceOnce(goalRunId, requester);
-      return { round: await onlyRound(goalRunId), run: await goalRow(goalRunId) };
+      return { goalRunId, round: await onlyRound(goalRunId), run: await goalRow(goalRunId) };
     }
+
+    /** The round's reasons as get_goal reads them back (what the console names). */
+    const readReasons = async (goalRunId: string, by: string) =>
+      (await getGoal(goalRunId, by)).planningRounds.map((round) => round.classReasons);
 
     it('a step whose Worker would request actions is a major revision, its capability named (K7)', async () => {
       const requester = await newPrincipal('member');
       // The step already reached the gate it requests actions through: only the capability is new.
       const held = await newGate([requester]);
-      const { round, run } = await classedWith(
+      const { goalRunId, round, run } = await classedWith(
         requester,
         { gates: [held], capabilities: ['request_action'] },
         {
@@ -1864,16 +1868,23 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(round.class_reasons).toEqual([
         { code: 'execution_step', stepKey: 'renew', capabilities: ['request_action'] },
       ]);
+      expect(await readReasons(goalRunId, requester)).toEqual([
+        [{ code: 'execution_step', stepKey: 'renew', capabilities: ['request_action'] }],
+      ]);
       expect(run).toMatchObject({ status: 'paused', pause_reason: 'needs_decision' });
     });
 
     it('a gate the step did not reach is a major revision, even one the requester holds, only to read (coordinator on #866 P3-2)', async () => {
       const requester = await newPrincipal('member');
       const held = await newGate([requester]);
-      const { round, run } = await classedWith(requester, { gates: [held] });
+      const { goalRunId, round, run } = await classedWith(requester, { gates: [held] });
       expect(round).toMatchObject({ status: 'proposed', revision_class: 'major' });
       expect(round.class_reasons).toEqual([
         { code: 'gate_added', stepKey: 'renew', gates: [held] },
+      ]);
+      // get_goal reads the gate back (UX on #866: the console names it).
+      expect(await readReasons(goalRunId, requester)).toEqual([
+        [{ code: 'gate_added', stepKey: 'renew', gates: [held] }],
       ]);
       expect(run).toMatchObject({ status: 'paused', pause_reason: 'needs_decision' });
     });
@@ -1881,11 +1892,18 @@ describe.runIf(DATABASE_URL !== undefined)(
     it('a gate the requester lacks: major, it would not start without a person (K6, K8)', async () => {
       const requester = await newPrincipal('member');
       const lacked = await newGate();
-      const { round } = await classedWith(requester, { gates: [lacked] });
+      const { goalRunId, round } = await classedWith(requester, { gates: [lacked] });
       expect(round).toMatchObject({ status: 'proposed', revision_class: 'major' });
       expect(round.class_reasons).toEqual([
         { code: 'gate_added', stepKey: 'renew', gates: [lacked] },
         { code: 'admission_blocked', stepKey: 'renew' },
+      ]);
+      // A reason about no gate or capability reads back without either.
+      expect(await readReasons(goalRunId, requester)).toEqual([
+        [
+          { code: 'gate_added', stepKey: 'renew', gates: [lacked] },
+          { code: 'admission_blocked', stepKey: 'renew' },
+        ],
       ]);
     });
 
