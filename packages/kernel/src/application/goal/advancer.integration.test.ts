@@ -816,7 +816,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('an advance that dies before it commits leaves nothing behind; the run is claimed again after the lease', async () => {
         const requester = await newPrincipal();
         const goalRunId = await startGoal(requester, [{ key: 'a' }, { key: 'b' }]);
-        const claimed = await claimDueGoalRuns(pool, { limit: 10_000, leaseMs: 50 });
+        // A lease no check below can outlive: the 50 ms one this took raced the next query on a
+        // loaded runner (the run read as due again before `isDue` ran). The lease running out is
+        // played by moving `next_tick_at` back below, not by sleeping past it.
+        const claimed = await claimDueGoalRuns(pool, { limit: 10_000, leaseMs: 60_000 });
         expect(claimed.map((target) => target.goalRunId)).toContain(goalRunId);
         expect(await isDue(goalRunId)).toBe(false);
 
@@ -853,7 +856,14 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(steps.a?.status).toBe('pending');
         expect(steps.b?.status).toBe('pending');
 
-        await sleep(100);
+        // The crash left the lease as it was: the run is not due until it runs out.
+        expect(await isDue(goalRunId)).toBe(false);
+        await admin((client) =>
+          client.query(
+            "update goal_runs set next_tick_at = now() - interval '1 second' where workspace_id = $1 and id = $2",
+            [workspaceId, goalRunId],
+          ),
+        );
         const again = await claimDueGoalRuns(pool, { limit: 10_000 });
         expect(again.map((target) => target.goalRunId)).toContain(goalRunId);
         await advance(goalRunId, requester);
