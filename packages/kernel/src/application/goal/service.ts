@@ -1,6 +1,7 @@
 import {
   type GoalFromProcedure,
   GoalPlanSchema,
+  type GoalPlannerMode,
   type GoalRunStatus,
   MAX_GOAL_STATEMENT_CHARS,
 } from '@nexttime/shared';
@@ -449,9 +450,9 @@ export interface ConfirmGoalRunInput {
   readonly confirmedBy: string;
   /** S11 GO8a: see `CreateGoalRunInput.modelCatalog`. */
   readonly modelCatalog?: PlanReferenceSources['modelCatalog'];
-  /** S11 GO9a: the requester lets the goal planner propose revisions of the run
-   *  (`planning-rounds.ts` `grantGoalPlanner`). Given with the confirmation only. */
-  readonly planner?: boolean;
+  /** S11 GO9a: what the requester lets the goal planner do for the run (`propose`;
+   *  `planning-rounds.ts` `grantGoalPlanner`). Given with the confirmation only. */
+  readonly planner?: GoalPlannerMode;
 }
 
 export interface ConfirmedGoalRun {
@@ -523,8 +524,8 @@ export async function confirmGoalRun(
     payload: { goalRunId: goal.id, revision: 1 },
   });
   // S11 GO9a: while the run is still proposed (the leave's guard), from its requester.
-  if (input.planner === true) {
-    await grantGoalPlanner(client, workspaceId, goal.id, input.confirmedBy);
+  if (input.planner !== undefined) {
+    await grantGoalPlanner(client, workspaceId, goal.id, input.confirmedBy, input.planner);
   }
   await client.query(
     `update goal_runs

@@ -4,6 +4,7 @@ import {
   ConflictStatusSchema,
   ConnectionRequestStatusSchema,
   DraftKindSchema,
+  GoalPlannerModeSchema,
   RejectableDraftKindSchema,
   RoleSchema,
   WorkerDefinitionKindSchema,
@@ -4401,12 +4402,12 @@ const goalCapabilities = [
       .object({
         goalRunId,
         revision: z.number().int().positive(),
-        /** S11 GO9a: let the goal planner propose a revision when a step fails for a person. */
-        planner: z.boolean().optional(),
+        /** S11 GO9a: what the goal planner may do when a step fails for a person (`propose`). */
+        planner: GoalPlannerModeSchema.optional(),
       })
       .strict(),
     resultSchema: wire.ConfirmGoalResultWireSchema,
-    description: `Confirm a proposed GoalRun — the requester alone, on the revision they read (its proposal, revision 1): the plan is checked again (400 invalid_params with details.problems when it no longer passes, e.g. a WorkerDefinition deprecated since), accepted and put in force; the run starts with every step pending, and from then on spends and acts with the requester’s authority. planner: true lets the workspace's goal planner propose a revision whenever a step fails in a way that pauses the run for the requester (its contract still broken after a rework, a transient failure past its attempts, an action refused, a verification failed): the planner acts for the requester, observes nothing, does nothing but propose, and its tokens count against the goal's budget; what it proposes waits for the requester (decide_plan_revision). Given once, with the confirmation; absent or false: no planner. Sent again once confirmed, it changes nothing (changed: false). 409 illegal_transition when the run is no longer proposed or the revision is not its proposal.${GOAL_OPERATION_REFUSALS}`,
+    description: `Confirm a proposed GoalRun — the requester alone, on the revision they read (its proposal, revision 1): the plan is checked again (400 invalid_params with details.problems when it no longer passes, e.g. a WorkerDefinition deprecated since), accepted and put in force; the run starts with every step pending, and from then on spends and acts with the requester’s authority. planner: 'propose' lets the workspace's goal planner propose a revision whenever a step fails in a way that pauses the run for the requester (its contract still broken after a rework, a transient failure past its attempts, an action refused, a verification failed): the planner acts for the requester, observes nothing, does nothing but propose, and its tokens count against the goal's budget; what it proposes waits for the requester (decide_plan_revision). Given once, with the confirmation; absent: no planner. Sent again once confirmed, it changes nothing (changed: false). 409 illegal_transition when the run is no longer proposed or the revision is not its proposal.${GOAL_OPERATION_REFUSALS}`,
   },
   {
     name: 'reject_goal',

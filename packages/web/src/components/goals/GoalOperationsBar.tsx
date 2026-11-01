@@ -253,7 +253,7 @@ export function GoalOperationsBar({
             http.call<GoalOperationResultWire>('confirm_goal', {
               goalRunId,
               revision: goal.planRevision.revision,
-              planner,
+              ...(planner ? { planner: 'propose' } : {}),
             }),
             () =>
               planner

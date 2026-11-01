@@ -595,7 +595,7 @@ test.describe('S11 GO6: operations on a goal (stand-in reads and operations)', (
       expect(fired.find((call) => call.name === 'confirm_goal')?.params).toEqual({
         goalRunId: GOAL,
         revision: 1,
-        planner: true,
+        planner: 'propose',
       });
 
       // 2. Alice's goal the owner held: lifting the hold says alice revised the plan since.

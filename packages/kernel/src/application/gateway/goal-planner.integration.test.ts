@@ -198,7 +198,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       })),
     });
 
-    /** Proposed, confirmed (with the planner's leave unless `planner: false`) and started. */
+    /** Proposed, confirmed (with the planner's leave unless `planner` is false) and started. */
     async function startGoal(requesterId: string, planner = true) {
       const created = await asApp(requesterId, (client) =>
         createGoalRun(client, workspaceId, {
@@ -213,7 +213,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       await call(human(requesterId), 'confirm_goal', {
         goalRunId,
         revision: 1,
-        ...(planner ? { planner: true } : {}),
+        ...(planner ? { planner: 'propose' } : {}),
       });
       await advanceOnce(goalRunId, requesterId);
       return goalRunId;

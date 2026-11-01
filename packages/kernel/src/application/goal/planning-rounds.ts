@@ -154,12 +154,13 @@ export async function grantGoalPlanner(
   workspaceId: string,
   goalRunId: string,
   requesterId: string,
+  mode: GoalPlannerMode,
 ): Promise<void> {
   await client.query(
     `insert into goal_planner_delegations (workspace_id, goal_run_id, mode, granted_by)
-     values ($1, $2, 'propose', $3)
+     values ($1, $2, $4, $3)
      on conflict (workspace_id, goal_run_id) do nothing`,
-    [workspaceId, goalRunId, requesterId],
+    [workspaceId, goalRunId, requesterId, mode],
   );
   await writeAudit(client, {
     workspaceId,
@@ -167,7 +168,7 @@ export async function grantGoalPlanner(
     action: 'goal_run.planner_granted',
     resourceType: 'goal_run',
     resourceId: goalRunId,
-    payload: { mode: 'propose' },
+    payload: { mode },
   });
 }
 

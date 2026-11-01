@@ -15,6 +15,7 @@ import {
   type GoalFromProcedure,
   type GoalOperationResultWire,
   type GoalPlan,
+  type GoalPlannerMode,
   type GoalRunStatus,
   type GoalRunWire,
   type ObjectiveOutcome,
@@ -638,7 +639,7 @@ export const confirmGoalHandler: CapabilityHandler = async (client, workspaceId,
   const { goalRunId, revision, planner } = params as {
     goalRunId: string;
     revision: number;
-    planner?: boolean;
+    planner?: GoalPlannerMode;
   };
   const actor = await actorOnVisibleRun(client, workspaceId, 'confirm_goal', ctx, goalRunId);
   const confirmed = await confirmGoalRun(client, workspaceId, {

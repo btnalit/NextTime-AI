@@ -315,7 +315,6 @@ describe('goal planner on the goal page (S11 GO9a)', () => {
       expect(http.calls.find((call) => call.name === 'confirm_goal')?.params).toEqual({
         goalRunId: 'goal-1',
         revision: 1,
-        planner: false,
       }),
     );
   });

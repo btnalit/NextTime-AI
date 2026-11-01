@@ -5485,7 +5485,10 @@
           "type": "string"
         },
         "planner": {
-          "type": "boolean"
+          "enum": [
+            "propose"
+          ],
+          "type": "string"
         },
         "revision": {
           "exclusiveMinimum": 0,

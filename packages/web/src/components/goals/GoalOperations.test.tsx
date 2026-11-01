@@ -89,7 +89,7 @@ describe('goal operations on the goal page (S11 GO6)', () => {
         goalRunId: 'goal-1',
         revision: 1,
         // S11 GO9a: the goal planner's leave, ticked by default on the confirm card.
-        planner: true,
+        planner: 'propose',
       }),
     );
     await waitFor(() => expect(reads(http)).toBe(2));
