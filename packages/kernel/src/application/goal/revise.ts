@@ -126,8 +126,9 @@ export interface ReleasedRequest {
   readonly status: string;
 }
 
-/** A step that ended keeps its row whatever later revisions say: it cannot be superseded. */
-const ENDED_STEP_STATUSES: ReadonlySet<StepRunStatus> = new Set([
+/** A step that ended keeps its row whatever later revisions say: it cannot be superseded (S11
+ *  GO15a: nor is it checked in a proposal that changes it, `views.ts` `stepsToCheck`). */
+export const ENDED_STEP_STATUSES: ReadonlySet<StepRunStatus> = new Set([
   'succeeded',
   'skipped',
   'cancelled',

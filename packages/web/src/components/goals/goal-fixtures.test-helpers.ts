@@ -114,6 +114,7 @@ export function goalDetail(overrides: Partial<GoalDetailWire> = {}): GoalDetailW
       removals: {},
       fromProcedure: null,
       hints: [],
+      checkedStepKeys: [],
     },
     revisions: [
       {

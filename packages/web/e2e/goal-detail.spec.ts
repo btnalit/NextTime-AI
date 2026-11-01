@@ -143,6 +143,7 @@ function revision(n: 1 | 2) {
     createdAt: n === 1 ? T0 : T2,
     removals: n === 1 ? {} : { notify: { mode: 'terminate' } },
     hints: [],
+    checkedStepKeys: [] as string[],
     // GO5d-2: revision 1 was made from a published Procedure; revision 2 is alice's own edit.
     fromProcedure:
       n === 1
@@ -159,7 +160,7 @@ function revision(n: 1 | 2) {
 }
 
 function summary(n: 1 | 2) {
-  const { plan: _plan, hints: _hints, ...rest } = revision(n);
+  const { plan: _plan, hints: _hints, checkedStepKeys: _checked, ...rest } = revision(n);
   return rest;
 }
 

@@ -241,6 +241,7 @@ function toWirePlanRevision(view: PlanRevisionView): PlanRevisionWire {
     // unchanged (S11 GO5c, `reviewRevisedPlan`).
     plan: view.plan,
     hints: view.hints.map(toWirePlanHint),
+    checkedStepKeys: [...view.checkedStepKeys],
   };
 }
 

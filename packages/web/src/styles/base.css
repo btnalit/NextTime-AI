@@ -323,6 +323,20 @@ button:disabled {
   }
 }
 
+/* UX P3-1 on #888: a list whose values are sentences (a goal step's adjustments set against its
+   Worker definition) puts every label above its value on a narrow screen, so the value has the
+   whole width rather than what a long label leaves it. */
+@media (max-width: 768px) {
+  .definition-list.definition-list-stack {
+    grid-template-columns: 1fr;
+    row-gap: var(--space-1);
+  }
+
+  .definition-list.definition-list-stack dd + dt {
+    margin-top: var(--space-2);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

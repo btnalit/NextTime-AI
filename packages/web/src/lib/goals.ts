@@ -954,7 +954,7 @@ function hintSkillsShown(hint: PlanHint): readonly string[] {
 const WORKER_SPEC_FIELD: Readonly<Record<keyof WorkerSpec, readonly [string, string]>> = {
   instructions: ['职责说明', 'Responsibility'],
   skills: ['Skill', 'Skills'],
-  gates: ['门', 'Gates'],
+  gates: ['门', 'Gatekeepers'],
   capabilities: ['能力范围', 'Capabilities'],
   model: ['模型', 'Model'],
   observeScope: ['观察范围', 'Observation scope'],
@@ -1568,7 +1568,7 @@ export function goalSteps(detail: GoalDetailWire): {
   return { current, superseded };
 }
 
-function stableJson(value: unknown): string {
+export function stableJson(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'undefined';
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
   const entries = Object.entries(value as Record<string, unknown>)

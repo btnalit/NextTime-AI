@@ -8,7 +8,7 @@ import { HttpError } from '../../lib/http-client.js';
 import { hrefs } from '../../lib/router.js';
 import type { TaskUpdatedPush } from '../../lib/ws-client.js';
 import { GoalDetailPage } from './GoalDetailPage.js';
-import { GATE_ID, goalDetail, stepRun } from './goal-fixtures.test-helpers.js';
+import { GATE_ID, WORKER_ID, goalDetail, stepRun } from './goal-fixtures.test-helpers.js';
 
 afterEach(cleanup);
 
@@ -356,6 +356,178 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     ).toEqual(['Skill 还是草稿']);
   });
 
+  describe('S11 GO15a: a WorkerSpec against its definition, and the step’s admission', () => {
+    const OBSERVE_ID = '44444444-4444-4444-8444-444444444444';
+    const trial = {
+      specDigest: 'sha256:spec',
+      drafts: [
+        {
+          skillId: '00000000-0000-4000-8000-000000000001',
+          version: 2,
+          name: 'audit',
+          draftDigest: 'sha256:draft',
+          proposedBy: 'p-alice',
+        },
+      ],
+    };
+    const definition = {
+      id: WORKER_ID,
+      version: 2,
+      kind: 'worker',
+      status: 'published',
+      definition: {
+        systemPrompt: 'You fetch certificates.',
+        name: 'cert-fetcher',
+        model: 'big-model',
+        skills: ['cert-rotation', 'triage'],
+        gates: [GATE_ID],
+      },
+      proposedBy: 'p-alice',
+      publishedAt: '2026-10-01T00:00:00.000Z',
+      goalPlanner: false,
+    };
+    function proposal(spec: NonNullable<PlanRevisionWire['plan']['steps'][number]['spec']>) {
+      const base = goalDetail();
+      return goalDetail({
+        status: 'proposed',
+        planRevision: {
+          ...base.planRevision,
+          status: 'proposed',
+          plan: {
+            ...base.planRevision.plan,
+            steps: [
+              { key: 'fetch', worker: { definitionId: WORKER_ID, version: 2 }, spec },
+              ...base.planRevision.plan.steps.slice(1),
+            ],
+          },
+          hints: [
+            {
+              code: 'step_skill_draft',
+              message: 'step "fetch": …',
+              stepKey: 'fetch',
+              skillRefs: ['audit'],
+              trial,
+            },
+          ],
+          checkedStepKeys: ['fetch', 'apply'],
+        },
+      });
+    }
+    const stepRow = (key: string) =>
+      screen.getAllByTestId('goal-step').find((row) => row.dataset.stepKey === key) as HTMLElement;
+    const against = (spec: HTMLElement, field: string) =>
+      within(spec)
+        .getAllByTestId('goal-step-spec-base')
+        .find((line) => line.dataset.field === field)?.textContent;
+
+    it('each field says what it changes of the definition version the step names, and what it keeps', async () => {
+      const http = scriptedHttp({
+        ...baseHandlers(
+          proposal({
+            instructions: 'Only the hosts in the input.',
+            skills: ['cert-rotation', 'audit'],
+            model: 'small-model',
+            observeScope: [OBSERVE_ID],
+            tokenBudget: 5000,
+          }),
+        ),
+        get_worker_definition: () => definition,
+      });
+      renderPage(http);
+      const spec = await screen.findByTestId('goal-step-spec');
+      await waitFor(() =>
+        expect(against(spec, 'skills')).toMatch(
+          /^相对定义：保留 cert-rotation，去掉 triage，加上 audit$/,
+        ),
+      );
+      expect(http.calls.find((call) => call.name === 'get_worker_definition')?.params).toEqual({
+        definitionId: WORKER_ID,
+        version: 2,
+      });
+      expect(against(spec, 'model')).toMatch(/^定义：big-model → 这一步：small-model$/);
+      expect(against(spec, 'instructions')).toBe('追加在定义的系统提示之后，不替换它 · 查看定义');
+      expect(within(spec).getByTestId('goal-step-spec-definition-link').getAttribute('href')).toBe(
+        hrefs.catalog('workers', `${WORKER_ID}@2`),
+      );
+      expect(against(spec, 'observeScope')).toBe('Worker 定义不限观察范围；这一步只读上面这些');
+      expect(against(spec, 'tokenBudget')).toBe('Worker 定义不设上限，只受目标剩下的预算限制');
+      await waitFor(() =>
+        expect(within(spec).getByTestId('goal-step-spec-inherited').textContent).toBe(
+          '其余沿用定义：门（cert-gate）',
+        ),
+      );
+      expect(within(spec).queryByTestId('goal-step-spec-base-unreadable')).toBeNull();
+    });
+
+    it('each step the read checked says what admission concludes, and why', async () => {
+      renderPage(
+        scriptedHttp({
+          ...baseHandlers(proposal({ skills: ['audit'] })),
+          get_worker_definition: () => definition,
+        }),
+      );
+      await screen.findByTestId('goal-step-spec');
+      const fetch = within(stepRow('fetch')).getByTestId('goal-step-admission');
+      expect(fetch.dataset.verdict).toBe('needs_approval');
+      expect(fetch.textContent).toBe(
+        '准入：要有人批准试用它的 Skill 草稿才会开始（理由：Skill 还是草稿）',
+      );
+      const apply = within(stepRow('apply')).getByTestId('goal-step-admission');
+      expect(apply.dataset.verdict).toBe('run');
+      expect(apply.textContent).toBe('准入：可以开始');
+    });
+
+    it('a definition version the reader cannot read leaves the WorkerSpec on its own, said once', async () => {
+      renderPage(
+        scriptedHttp({
+          ...baseHandlers(proposal({ model: 'small-model' })),
+          get_worker_definition: () => null,
+        }),
+      );
+      const spec = await screen.findByTestId('goal-step-spec');
+      await waitFor(() =>
+        expect(within(spec).getByTestId('goal-step-spec-base-unreadable').textContent).toBe(
+          '读不到这一步的 Worker 定义（v2），这里只列出这一步的调整。',
+        ),
+      );
+      expect(within(spec).queryByTestId('goal-step-spec-base')).toBeNull();
+      expect(within(spec).getByTestId('goal-step-spec-model').textContent).toBe('small-model');
+    });
+
+    it('on a running goal, a step with a WorkerSpec says it was admitted when it started', async () => {
+      const base = goalDetail();
+      const detail = goalDetail({
+        planRevision: {
+          ...base.planRevision,
+          plan: {
+            ...base.planRevision.plan,
+            steps: [
+              {
+                key: 'fetch',
+                worker: { definitionId: WORKER_ID, version: 2 },
+                spec: { model: 'small-model' },
+              },
+              {
+                ...(base.planRevision.plan.steps[1] as PlanRevisionWire['plan']['steps'][number]),
+                spec: { model: 'small-model' },
+              },
+            ],
+          },
+        },
+      });
+      renderPage(
+        scriptedHttp({ ...baseHandlers(detail), get_worker_definition: () => definition }),
+      );
+      await screen.findAllByTestId('goal-step-spec');
+      expect(within(stepRow('fetch')).getByTestId('goal-step-admission').textContent).toBe(
+        '准入：第 1 次尝试开始时已准入',
+      );
+      expect(within(stepRow('apply')).getByTestId('goal-step-admission').textContent).toBe(
+        '准入：开始时由平台检查（现在不检查）',
+      );
+    });
+  });
+
   it('S11 GO8a: a run paused at a step that did not start says which step and why, the step’s note worded for a plan in force', async () => {
     const detail = goalDetail({
       status: 'paused',
@@ -557,6 +729,61 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     expect(within(body).getByText('verify')).toBeTruthy();
     expect(within(body).getByText('apply')).toBeTruthy();
     expect(http.calls.filter((call) => call.name === 'get_goal_revision')).toHaveLength(1);
+  });
+
+  it('S11 GO15a: a revision’s changes say what changed in each step it redefined', async () => {
+    const base = goalDetail();
+    const [fetch, apply] = base.planRevision.plan.steps as [
+      PlanRevisionWire['plan']['steps'][number],
+      PlanRevisionWire['plan']['steps'][number],
+    ];
+    const v2: PlanRevisionWire = {
+      ...base.planRevision,
+      id: 'rev-2',
+      revision: 2,
+      basedOnRevision: 1,
+      plan: {
+        ...base.planRevision.plan,
+        steps: [
+          { ...fetch, worker: { ...fetch.worker, version: 3 } },
+          { ...apply, maxAttempts: 4, filesFrom: ['fetch'], spec: { observeScope: [GATE_ID] } },
+        ],
+      },
+      proposedBy: 'p-alice',
+      reason: '换新版本',
+    };
+    const { plan: _plan, hints: _hints, checkedStepKeys: _checked, ...v2Summary } = v2;
+    const detail = goalDetail({
+      currentRevision: 2,
+      planRevision: v2,
+      revisions: [...base.revisions, v2Summary],
+    });
+    renderPage(
+      scriptedHttp({
+        ...baseHandlers(detail),
+        get_goal_revision: () => base.planRevision,
+        get_worker_definition: () => null,
+      }),
+    );
+    const [latest] = await screen.findAllByTestId('goal-revision');
+    const diff = within(latest as HTMLElement).getByTestId(
+      'goal-revision-diff',
+    ) as HTMLDetailsElement;
+    diff.open = true;
+    fireEvent(diff, new Event('toggle'));
+    const steps = await within(diff).findByTestId('goal-revision-step-diff');
+    const lines = (key: string) =>
+      within(steps.querySelector(`[data-step-key="${key}"]`) as HTMLElement)
+        .getAllByTestId('goal-step-change')
+        .map((line) => line.textContent);
+    expect(lines('fetch')).toEqual(['Worker 改用第 3 版（原来第 2 版）']);
+    await waitFor(() =>
+      expect(lines('apply')).toEqual([
+        '最多尝试次数 2 → 4',
+        '观察范围限定为门 cert-gate（原来不限）',
+        '读取步骤 fetch 留下的文件',
+      ]),
+    );
   });
 
   it('a plan made from a Procedure says which version, linked to it — on the plan and on revision 1 (S11 GO5d-2)', async () => {

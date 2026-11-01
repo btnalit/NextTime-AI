@@ -1063,6 +1063,13 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '列出已发布的 Worker 定义，可含你的草稿。',
     enHint: 'Lists published Worker definitions, optionally with your drafts.',
   },
+  get_worker_definition: {
+    zh: '查看 Worker 版本',
+    en: 'Read a Worker definition version',
+    zhHint: '按版本读一个 Worker 定义：已发布或已停用的版本人人可读，草稿只有提议人能读。',
+    enHint:
+      'Reads one version of a Worker definition: a published or deprecated one for anyone, a draft for its proposer only.',
+  },
 
   // -----------------------------------------------------------------------------------------
   // Capabilities — ingest
