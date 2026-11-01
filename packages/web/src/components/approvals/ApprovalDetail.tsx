@@ -775,8 +775,6 @@ export function ApprovalDetail({
   );
 }
 
-/** The confirm's impact lines (§5.8 "Approve 高影响时确认文案列出目标资源"). A pure helper, not a
- *  component — takes `t` from its caller. */
 /** S11 GO12: the statuses in which a request still holds back the requests behind it. */
 const UNFINISHED_STATUSES: ReadonlySet<string> = new Set([
   'pending_approval',
@@ -785,6 +783,8 @@ const UNFINISHED_STATUSES: ReadonlySet<string> = new Set([
   'executing',
 ]);
 
+/** The confirm's impact lines (§5.8 "Approve 高影响时确认文案列出目标资源"). A pure helper, not a
+ *  component — takes `t` from its caller. */
 function confirmImpact(
   pending: PendingConfirm,
   row: ActionRequestRow,

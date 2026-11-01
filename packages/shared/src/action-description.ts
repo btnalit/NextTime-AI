@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { BlastRadiusSchema, OperationModeSchema, isMetaOntologyObjectType } from './enums.js';
+import { namesASecretField } from './secret-field-name.js';
 
 /**
  * ActionDescription (design doc §3.2, ported from cloudflare-os) and Operation (§5.1.4, the
@@ -212,6 +213,9 @@ export type OperationTarget = z.infer<typeof OperationTargetSchema>;
  *   - `target_params_duplicate`: a param named twice;
  *   - `target_param_not_required_scalar`: a param the call need not carry, or one whose schema type
  *     is not `string` or `integer` (an array or object names more than one instance, or none);
+ *   - `target_param_secret`: a param whose name names a secret (`namesASecretField`) — a request
+ *     keeps its target's values as written and shows them to approvers and in waiting texts, where
+ *     no redaction applies, so a value that is a secret must never become one;
  *   - `target_arity_inconsistent` (a whole manifest, {@link manifestTargetProblems}): two
  *     Operations of one gate name instances of the same type by different numbers of params. */
 export const OPERATION_TARGET_REFUSAL_VALUES = [
@@ -219,6 +223,7 @@ export const OPERATION_TARGET_REFUSAL_VALUES = [
   'target_type_not_sole_written',
   'target_params_duplicate',
   'target_param_not_required_scalar',
+  'target_param_secret',
   'target_arity_inconsistent',
 ] as const;
 export type OperationTargetRefusal = (typeof OPERATION_TARGET_REFUSAL_VALUES)[number];
@@ -293,6 +298,13 @@ export function operationTargetProblems(operation: {
         reason: 'target_param_not_required_scalar',
         path: ['target', 'params', index],
         message: `param ${JSON.stringify(name)} must be required and of type string or integer (type: ${type ?? 'none'}, required: ${required.includes(name)})`,
+      });
+    }
+    if (namesASecretField(name)) {
+      problems.push({
+        reason: 'target_param_secret',
+        path: ['target', 'params', index],
+        message: `param ${JSON.stringify(name)} names a secret; a request keeps and shows its target's values as written`,
       });
     }
   });

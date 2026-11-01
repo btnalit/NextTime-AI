@@ -18,11 +18,14 @@ import {
  * queue of them runs exactly as before GO12: one at a time, in order, stopping at the first one
  * awaiting approval or executing.
  *
- * The barrier is still the database, not this function: an `executing` row stays in the queue
- * until it is terminal, and `startActionRequestExecution`'s conditional update lets one trigger
- * start a row. A drain that read the queue before another trigger started an earlier conflicting
- * row picks that earlier row, never one behind it, so two triggers never run conflicting rows
- * together.
+ * The order is read from the database, not kept by this function: an `executing` row stays in
+ * the queue until it is terminal, and `startActionRequestExecution`'s conditional update lets one
+ * trigger start a given row. A drain that read the queue before another trigger started an
+ * earlier conflicting row picks that earlier row, never one behind it. One gap is older than GO12
+ * and still open (review #493 on #876, in the STATUS legacy list): `requested_at` is the inserting
+ * transaction's start time, so a row can commit after a later-stamped conflicting row has already
+ * started; the next read plans it *ahead* of that `executing` row, and a second trigger can run
+ * the two together. Closing it takes a check where a row enters `executing`, not this function.
  */
 
 /** A row of one Gatekeeper's queue, in `listExecutableQueue`'s order — `auto_approved`,

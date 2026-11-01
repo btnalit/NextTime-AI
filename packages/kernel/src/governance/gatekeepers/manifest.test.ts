@@ -1946,6 +1946,18 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
           'target_param_not_required_scalar',
           ['target', 'params', 0],
         ],
+        [
+          {
+            params_schema: {
+              type: 'object',
+              properties: { id: { type: 'string' }, password: { type: 'string' } },
+              required: ['id', 'password'],
+            },
+            target: { object_type: 'Container', params: ['id', 'password'] },
+          },
+          'target_param_secret',
+          ['target', 'params', 1],
+        ],
       ];
       for (const [overrides, reason, place] of cases) {
         const good = restartOn(`q4.good.${randomUUID()}`);

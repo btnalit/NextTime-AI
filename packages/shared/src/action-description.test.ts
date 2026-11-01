@@ -378,6 +378,20 @@ describe('target declarations (S11 GO12)', () => {
     expect(
       refusals({ ...restart, target: { object_type: 'Container', params: ['name'] } }),
     ).toEqual(['target_param_not_required_scalar']);
+    // A param whose name names a secret, though required and a string: its value would be kept
+    // and shown as the request's target.
+    expect(
+      refusals({
+        ...restart,
+        params_schema: {
+          type: 'object',
+          properties: { id: { type: 'string' }, accessToken: { type: 'string' } },
+          required: ['id', 'accessToken'],
+        },
+        target: { object_type: 'Container', params: ['id', 'accessToken'] },
+      }),
+    ).toEqual(['target_param_secret']);
+    expect(OPERATION_TARGET_REFUSAL_VALUES).toContain('target_param_secret');
     // Its shape: no params, an unknown key.
     expect(
       OperationSchema.safeParse({ ...restart, target: { object_type: 'Container', params: [] } })

@@ -96,9 +96,26 @@ const DRAFT_STOP = onContainer('container.stop');
 class CountingTransport implements Transport {
   readonly kind = 'http' as const;
   readonly calls: string[] = [];
+  /** A call (`operation:id`) that does not answer until `release` is called. */
+  private held: { call: string; released: Promise<void> } | null = null;
   async invoke(operation: Operation, params: unknown): Promise<TransportInvokeResult> {
-    this.calls.push(`${operation.name}:${(params as { id?: unknown }).id ?? '-'}`);
+    const call = `${operation.name}:${(params as { id?: unknown }).id ?? '-'}`;
+    this.calls.push(call);
+    const held = this.held;
+    if (held !== null && held.call === call) {
+      this.held = null;
+      await held.released;
+    }
     return { data: { ok: true } };
+  }
+  /** Holds the next `call` until the returned function is called. */
+  hold(call: string): () => void {
+    let release: () => void = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.held = { call, released };
+    return () => release();
   }
 }
 
@@ -111,6 +128,8 @@ describe.runIf(DATABASE_URL !== undefined)(
     let gatekeeperId: string;
     let gateApp: FastifyInstance;
     let drainer: ApprovalDrainer;
+    /** Points `request_action` at a fresh drainer that waits up to `awaitDecisionTimeoutMs`. */
+    let wireRequestAction: (awaitDecisionTimeoutMs: number) => void;
     const transport = new CountingTransport();
 
     function owner(): ResolvedCaller {
@@ -241,11 +260,13 @@ describe.runIf(DATABASE_URL !== undefined)(
           }),
           withTransaction,
         });
-      setRequestActionDeps({
-        gatekeeperClient: gatekeeperClient(),
-        drainer: newDrainer(),
-        awaitDecisionTimeoutMs: 400,
-      });
+      wireRequestAction = (awaitDecisionTimeoutMs) =>
+        setRequestActionDeps({
+          gatekeeperClient: gatekeeperClient(),
+          drainer: newDrainer(),
+          awaitDecisionTimeoutMs,
+        });
+      wireRequestAction(400);
       drainer = newDrainer();
     });
 
@@ -315,6 +336,44 @@ describe.runIf(DATABASE_URL !== undefined)(
         'system.prune:-',
         'container.restart:cache',
       ]);
+    });
+
+    it('review #493 on #876 P3-2: a call held back by an executing call on its instance waits inline, and runs once that one ends', async () => {
+      // The caller waits for the outcome long enough for the held call to be released.
+      wireRequestAction(5_000);
+      const release = transport.hold('container.restart:slow');
+      try {
+        const before = transport.calls.length;
+        const first = request(RESTART.name, { id: 'slow' });
+        // The first call is executing at the gate — its drain is in flight.
+        const deadline = Date.now() + 5_000;
+        while (![...(await waiting()).values()].some((item) => item.status === 'executing')) {
+          if (Date.now() > deadline) throw new Error('the first call never started executing');
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+
+        // The same instance: its own drain is skipped (one in flight), and the executing row
+        // holds it back — it does not return `auto_approved`, it waits.
+        let secondSettled = false;
+        const second = request(RESTART.name, { id: 'slow' }).then((result) => {
+          secondSettled = true;
+          return result;
+        });
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        expect(secondSettled).toBe(false);
+        expect(transport.calls.slice(before)).toEqual(['container.restart:slow']);
+
+        release();
+        expect((await first).status).toBe('executed');
+        expect((await second).status).toBe('executed');
+        expect(transport.calls.slice(before)).toEqual([
+          'container.restart:slow',
+          'container.restart:slow',
+        ]);
+      } finally {
+        release();
+        wireRequestAction(400);
+      }
     });
 
     it('I-Q2: a revision published later changes no request already made; the next call takes the new version', async () => {

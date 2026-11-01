@@ -300,6 +300,7 @@ TLS/错误信封处理（README"RAGFlow 的 `{code, data}` 错误信封对协议
 | `target_type_not_sole_written` | `writes` 必须包含 `object_type`，`reads` / `writes` 里不能有别的类型（碰到别的类型的调用可能和那个类型上的调用冲突，而声明说不出来） |
 | `target_params_duplicate` | 同一个参数写了两次 |
 | `target_param_not_required_scalar` | 参数必须在 `params_schema.required` 里，类型是 `string` 或 `integer`（数组或对象指的不是一个实例） |
+| `target_param_secret` | 参数名像秘密字段（`password`、`token`、`apiKey` 之类，规则同 `namesASecretField`）：请求会原样保存目标的值，并在审批详情和等待说明里显示，那里不做脱敏 |
 | `target_arity_inconsistent` | 同一个门里，指同一个 `object_type` 的声明参数个数不同 |
 
 **机器查不了、由声明者负责的部分**：

@@ -100,21 +100,22 @@ export interface DrainResult {
  * `governance/approval/queue.ts`): a row starts only when no earlier row of its Gatekeeper that
  * conflicts with it — one acting on the whole Gatekeeper, or on the same instance — is still in
  * the queue. Rows that declare no target conflict with every row, so for them the order is the
- * per-Gatekeeper serial one it always was. It is enforced by the database rather than by this
- * object: an `executing` row (another trigger's `apply` in flight, or an earlier outcome unknown)
+ * per-Gatekeeper serial one it always was. The order is read from the database rather than kept
+ * by this object: an `executing` row (another trigger's `apply` in flight, or an earlier outcome unknown)
  * holds back what conflicts with it the same way, and an indeterminate result leaves its row
  * `executing`, holding back its own conflict domain while the drain goes on with the rest. Every
  * drain trigger — the request path's phase 2, the outbox consumer, the periodic tick, each with
  * its own drainer instance — sees the same `executing` row, and `startActionRequestExecution`'s
  * conditional UPDATE lets only one of them start any given row; two instances may so apply two
- * rows of one Gatekeeper at once, when the two do not conflict. The queue is re-read after every
+ * rows of one Gatekeeper at once, when the two do not conflict (and, through the commit-order gap
+ * `queue.ts` describes, rarely two that do). The queue is re-read after every
  * row, so a row approved while this drain was applying an earlier one is picked up here rather
  * than waiting for the next tick.
  *
  * Per-`(workspaceId, gatekeeperId)` single-flight within this instance — a second concurrent call
  * for the same pair while one is already running returns immediately with `skippedInFlight: true`
- * rather than queueing or racing. That set only saves a redundant drain; the barrier above is what
- * keeps the order.
+ * rather than queueing or racing. That set only saves a redundant drain; the database read above
+ * is what keeps the order.
  */
 export class ApprovalDrainer {
   private readonly deps: ApprovalDrainerDeps;
