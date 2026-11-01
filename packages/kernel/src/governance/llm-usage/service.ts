@@ -522,9 +522,9 @@ export async function sessionRefusedOnly(
  * the person's running Turn as `turn_id` too (`interfaces/http/internal/llm-usage.ts` "Turn
  * attribution"), and a Worker answered or refused says nothing about whether the agent did.
  *
- * Runs at every Turn's end: the first query reads only refused rows (the partial index
- * `llm_usage_refused_session_idx`, workspace prefix); the second runs only for a Turn that had a
- * refusal.
+ * Runs at the end of every Turn that ends completed: the first query is one lookup in the partial
+ * index `llm_usage_refused_turn_idx` (refused rows only, by workspace and Turn), however many
+ * refused rows the workspace has piled up; the second runs only for a Turn that had a refusal.
  */
 export async function entryTurnRefusedOnly(
   client: PoolClient,

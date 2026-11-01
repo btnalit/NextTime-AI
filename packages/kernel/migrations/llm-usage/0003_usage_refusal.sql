@@ -19,8 +19,9 @@
 -- Lock: `add column` without a default is catalog-only. The CHECK is added `not valid` (catalog
 -- only) and validated in the same transaction: validation reads the table once under SHARE UPDATE
 -- EXCLUSIVE, which does not block the inserts llm-proxy keeps sending. No existing row is
--- refused, so it holds on every one. The index is partial on `status = 'refused'`, so its build
--- reads the table once and writes nothing.
+-- refused, so it holds on every one. The two indexes are partial on `status = 'refused'`: each
+-- build reads the table once under SHARE (llm-proxy's inserts wait for that read; its reporter
+-- retries) and writes nothing.
 --
 -- Rolling back (docs/runbooks/release.md §6). The previous release's kernel never writes
 -- `refusal_scope` and never writes `status = 'refused'`, so it inserts under this schema
@@ -33,8 +34,8 @@
 -- `callCount`, scripts/report-usage.sh) count them as calls. Dropping the schema too is optional
 -- and loses them: re-applying this migration validates `llm_usage_refusal`, which a refused row
 -- without a scope fails, so they go with it (export them first if they are still needed). With
--- the kernel stopped, in one transaction: drop the index `llm_usage_refused_session_idx` and the
--- constraint `llm_usage_refusal`, `delete from llm_usage where status = 'refused'`, `alter table
+-- the kernel stopped, in one transaction: drop the indexes `llm_usage_refused_session_idx` and
+-- `llm_usage_refused_turn_idx` and the constraint `llm_usage_refusal`, `delete from llm_usage where status = 'refused'`, `alter table
 -- llm_usage drop column refusal_scope`, then `delete from schema_migrations where module =
 -- 'llm-usage' and version = 3`.
 --
@@ -58,8 +59,13 @@ alter table llm_usage add constraint llm_usage_refusal check (
 ) not valid;
 alter table llm_usage validate constraint llm_usage_refusal;
 
--- The Task / entry-Turn check asks "did this session have a refused call" on every Worker result
--- and every settled Turn: a partial index keeps that a lookup, and it holds only refused rows.
+-- The Task check asks "did this session have a refused call" on every Worker result, the entry-Turn
+-- check "did this Turn have one" on every Turn that ends completed: a partial index for each keeps
+-- that a lookup however many refused rows a workspace has piled up, and they hold only refused rows.
+-- (The second half of either check, "was any call answered", runs only after a refusal was found.)
 create index if not exists llm_usage_refused_session_idx
   on llm_usage (workspace_id, session_id)
+  where status = 'refused';
+create index if not exists llm_usage_refused_turn_idx
+  on llm_usage (workspace_id, turn_id)
   where status = 'refused';
