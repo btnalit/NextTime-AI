@@ -393,6 +393,61 @@ describe('lib/goals', () => {
     );
   });
 
+  it('S11 GO14: a run paused at a step that reads files says which step, and why', () => {
+    const budget = goalBudgetRows(goalRun(), zh);
+    const paused = (
+      fetch: 'succeeded' | 'skipped' | 'failed',
+      apply: Partial<GoalDetailWire['planRevision']['plan']['steps'][number]> = {},
+    ) => {
+      const detail = goalDetail();
+      return {
+        ...detail,
+        status: 'paused' as const,
+        pauseReason: 'needs_decision' as const,
+        steps: [
+          stepRun({ id: 'sr-fetch', stepKey: 'fetch', status: fetch, attemptCount: 2 }),
+          stepRun({ id: 'sr-apply', stepKey: 'apply', status: 'ready', attemptCount: 0 }),
+        ],
+        planRevision: {
+          ...detail.planRevision,
+          plan: {
+            ...detail.planRevision.plan,
+            steps: detail.planRevision.plan.steps.map((step) =>
+              step.key === 'apply' ? { ...step, filesFrom: ['fetch'], ...apply } : step,
+            ),
+          },
+        },
+      };
+    };
+    expect(goalStateNote(paused('skipped'), undefined, budget, zh)?.text).toBe(
+      '需要人决定：步骤「apply」要读步骤「fetch」留下的文件，但那一步被跳过了，没有留下文件。修订计划（让它再跑，或者不再读它的文件），或者结束目标。',
+    );
+    expect(goalStateNote(paused('skipped'), undefined, budget, en)?.text).toBe(
+      'A person must decide: step “apply” reads the files step “fetch” left, but it was skipped and left none. Revise the plan (run it again, or stop reading its files), or end the goal.',
+    );
+    expect(goalStateNote(paused('succeeded'), undefined, budget, zh)?.text).toBe(
+      '需要人决定：步骤「apply」要读步骤「fetch」留下的文件，平台现在交不出去（文件不在了，或不能确认属于这个目标）。修订计划让那一步再跑一次，或者结束目标。',
+    );
+    expect(goalStateNote(paused('succeeded'), undefined, budget, en)?.text).toMatch(
+      /^A person must decide: step “apply” reads the files step “fetch” left, and the platform cannot hand them on now/,
+    );
+    // A step that also takes values from earlier steps may have stopped on those: both named.
+    const bound = paused('succeeded', {
+      bindings: [{ to: 'hosts', from: 'fetch', path: 'hosts' }],
+    });
+    expect(goalStateNote(bound, undefined, budget, zh)?.text).toBe(
+      '需要人决定：步骤「apply」开始不了：它从前面步骤取的值，或步骤「fetch」留下的文件，现在拿不到。修订计划让上游步骤再跑一次，或者结束目标。',
+    );
+    // A failed step is why the run paused, not the files: the general note stays.
+    expect(goalStateNote(paused('failed'), undefined, budget, zh)?.text).toMatch(
+      /^需要人决定：验收没通过、动作被拒绝或过期/,
+    );
+    // A step that reads no files: the general note stays.
+    expect(
+      goalStateNote(paused('succeeded', { filesFrom: undefined }), undefined, budget, zh)?.text,
+    ).toMatch(/^需要人决定：验收没通过、动作被拒绝或过期/);
+  });
+
   it('S11 GO8a: a paused run names the step that did not start, and why', () => {
     const budget = goalBudgetRows(goalRun(), zh);
     const paused = (

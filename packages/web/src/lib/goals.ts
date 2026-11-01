@@ -1992,6 +1992,12 @@ function pausedNote(
           };
         }
       }
+      // S11 GO14: a step the advancer tried to start reads earlier steps' files it cannot be
+      // handed — say which, rather than the general sentence below, which marks nothing.
+      const files = !goal.steps?.some((step) => step.status === 'failed')
+        ? stepFilesPauseText(goal, t)
+        : null;
+      if (files) return { tone: 'warn', text: files };
       return {
         tone: 'warn',
         text: t(
@@ -2076,6 +2082,60 @@ function heldWording(
     };
   }
   return { zh: '没有往下做', en: () => 'did not go on' };
+}
+
+/**
+ * S11 GO14: why a run paused `needs_decision` at a step that reads earlier steps' files (`filesFrom`)
+ * — the first such step the advancer tried to start (`ready`, in the revision in force). A source
+ * step skipped or not succeeded left no files, which the steps say; once every source succeeded,
+ * what the platform found (the files gone, or not this goal's) is only in the audit log, and the
+ * next move is the same either way: revise the plan to run that step again, or end the goal. A step
+ * that also takes values from earlier steps (`bindings`) may have stopped on those instead, and the
+ * text says so. `null` when no such step is ready.
+ */
+function stepFilesPauseText(
+  goal: Partial<Pick<GoalDetailWire, 'steps' | 'planRevision'>>,
+  t: Translate,
+): string | null {
+  const live = new Map(
+    (goal.steps ?? [])
+      .filter((step) => step.supersededInRevision === null)
+      .map((step) => [step.stepKey, step] as const),
+  );
+  for (const entry of goal.planRevision?.plan.steps ?? []) {
+    const filesFrom = entry.filesFrom ?? [];
+    if (filesFrom.length === 0 || live.get(entry.key)?.status !== 'ready') continue;
+    const skipped = filesFrom.filter((key) => live.get(key)?.status === 'skipped');
+    const unfinished = filesFrom.filter(
+      (key) => !skipped.includes(key) && live.get(key)?.status !== 'succeeded',
+    );
+    const step = entry.key;
+    if (skipped.length > 0) {
+      const [zh, en] = namesIn(skipped);
+      return t(
+        `需要人决定：步骤「${step}」要读步骤${zh}留下的文件，但${skipped.length === 1 ? '那一步' : '这些步骤'}被跳过了，没有留下文件。修订计划（让${skipped.length === 1 ? '它' : '它们'}再跑，或者不再读它的文件），或者结束目标。`,
+        `A person must decide: step “${step}” reads the files step ${en} left, but ${skipped.length === 1 ? 'it was' : 'they were'} skipped and left none. Revise the plan (run ${skipped.length === 1 ? 'it' : 'them'} again, or stop reading ${skipped.length === 1 ? 'its' : 'their'} files), or end the goal.`,
+      );
+    }
+    if (unfinished.length > 0) {
+      const [zh, en] = namesIn(unfinished);
+      return t(
+        `需要人决定：步骤「${step}」要读步骤${zh}留下的文件，但${unfinished.length === 1 ? '那一步' : '这些步骤'}没有成功，没有可交的文件。修订计划，或者结束目标。`,
+        `A person must decide: step “${step}” reads the files step ${en} left, but ${unfinished.length === 1 ? 'it has' : 'they have'} not succeeded, so there are none to hand on. Revise the plan, or end the goal.`,
+      );
+    }
+    const [zh, en] = namesIn(filesFrom);
+    return entry.bindings && entry.bindings.length > 0
+      ? t(
+          `需要人决定：步骤「${step}」开始不了：它从前面步骤取的值，或步骤${zh}留下的文件，现在拿不到。修订计划让上游步骤再跑一次，或者结束目标。`,
+          `A person must decide: step “${step}” cannot start: the values it takes from earlier steps, or the files step ${en} left, cannot be had now. Revise the plan to run the earlier step again, or end the goal.`,
+        )
+      : t(
+          `需要人决定：步骤「${step}」要读步骤${zh}留下的文件，平台现在交不出去（文件不在了，或不能确认属于这个目标）。修订计划让${filesFrom.length === 1 ? '那一步' : '这些步骤'}再跑一次，或者结束目标。`,
+          `A person must decide: step “${step}” reads the files step ${en} left, and the platform cannot hand them on now (they are gone, or not known to be this goal’s). Revise the plan to run ${filesFrom.length === 1 ? 'that step' : 'those steps'} again, or end the goal.`,
+        );
+  }
+  return null;
 }
 
 /** The hints of `codes` that say why the run paused: of the steps the advancer tried to start —
