@@ -232,6 +232,21 @@ export function retryableStepKeys(detail: GoalDetailWire): string[] {
     .map((step) => step.stepKey);
 }
 
+/** UX P2-1 on #872: the verification round resuming starts, when every step of the plan in force
+ *  is done (succeeded or skipped) and the goal's latest verification round did not pass — resuming
+ *  then verifies the goal again, in the next round, and runs no step. `null` otherwise. */
+export function verificationRoundOnResume(detail: GoalDetailWire): number | null {
+  const latest = detail.acceptance?.rounds.at(-1);
+  if (
+    !latest?.checks.some((check) => check.status === 'failed' || check.status === 'unavailable')
+  ) {
+    return null;
+  }
+  const live = detail.steps.filter((step) => step.supersededInRevision === null);
+  const done = live.every((step) => step.status === 'succeeded' || step.status === 'skipped');
+  return live.length > 0 && done ? latest.round + 1 : null;
+}
+
 /** The step statuses after which an action of the step is not run again. */
 const ENDED_STEP_STATUSES: ReadonlySet<string> = new Set([
   'succeeded',

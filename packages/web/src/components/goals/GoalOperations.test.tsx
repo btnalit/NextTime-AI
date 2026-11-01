@@ -552,6 +552,57 @@ describe('goal operations on the goal page (S11 GO6)', () => {
     );
   });
 
+  it('UX P2-1 on #872: after the goal’s verification did not pass, the resume dialog says it verifies again and reruns no step', async () => {
+    const failedVerification = goalDetail({
+      status: 'paused',
+      pauseReason: 'needs_decision',
+      steps: [stepRun({ status: 'succeeded' })],
+      acceptance: {
+        rounds: [
+          {
+            round: 1,
+            planRevision: 1,
+            openedAt: '2026-10-20T00:04:00.000Z',
+            checks: [
+              {
+                checkKey: 'certs',
+                kind: 'observe_predicate',
+                status: 'failed',
+                check: {
+                  gatekeeperId: GATE_ID,
+                  operation: 'cert.list',
+                  expect: { path: 'expiring', op: 'eq', value: 0 },
+                },
+                fact: null,
+                prompt: null,
+                attempts: 1,
+                lastError: 'predicate_unsatisfied',
+                observationId: null,
+                factId: null,
+                decisionId: null,
+                nextAttemptAt: null,
+                settledAt: '2026-10-20T00:05:00.000Z',
+                overridden: false,
+              },
+            ],
+          },
+        ],
+        steps: [],
+        absenceBaselines: [],
+        overriddenChecks: [],
+      },
+    });
+    renderPage(scriptedHttp(handlers(failedVerification, workspace('p-alice', 'member'))));
+    fireEvent.click(await screen.findByTestId('goal-op-resume'));
+    const confirm = await screen.findByTestId('goal-op-resume-confirm');
+    expect(
+      within(confirm).getByText(
+        '所有步骤都已完成：继续后平台重新验收目标（第 2 轮），不会重跑步骤',
+      ),
+    ).toBeTruthy();
+    expect(within(confirm).queryByTestId('goal-op-resume-retry')).toBeNull();
+  });
+
   it('a 409 for something of the goal, the goal itself unchanged, says nothing moved on', async () => {
     const http = scriptedHttp(
       handlers(

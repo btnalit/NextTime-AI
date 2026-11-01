@@ -852,6 +852,14 @@ describe('lib/goals', () => {
     expect(note(usedUp)).toBe(
       'A person must decide: the planner rounds are used up (3/3), so no planner runs for the goal’s verification round 1, which did not pass. Resume to verify again, revise the plan yourself or end the goal.',
     );
+    // UX P3-1 on #872: the planner looked and found no workable revision.
+    const looked = paused([acceptanceRound('r-a', 'no_revision', 'task-a')]);
+    expect(note(looked)).toBe(
+      'A person must decide: the goal’s verification round 1 did not pass, and the goal planner found no workable revision. Resume to verify again, revise the plan yourself or end the goal; see Goal planner below.',
+    );
+    expect(goalStateNote(looked, undefined, goalBudgetRows(looked, zh), zh)?.text).toBe(
+      '需要人决定：目标第 1 轮验收没通过，目标规划器看过后没有可行的修订。可以继续以再验收一次、自己修订计划或结束目标，见下面「目标规划器」。',
+    );
   });
 
   it('a goal paused for a check says it can go on once every finding is recorded', () => {

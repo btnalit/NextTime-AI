@@ -1835,6 +1835,20 @@ function pausedNote(
           };
         }
       }
+      // UX P3-1 on #872: the planner looked at the verification round that did not pass and found
+      // no workable revision — the pause is about that, not the general sentence below.
+      if (conclusion?.status === 'no_revision') {
+        const verification = acceptanceRoundOf(conclusion);
+        if (verification !== null) {
+          return {
+            tone: 'warn',
+            text: t(
+              `需要人决定：目标第 ${verification} 轮验收没通过，目标规划器看过后没有可行的修订。可以继续以再验收一次、自己修订计划或结束目标，见下面「目标规划器」。`,
+              `A person must decide: the goal’s verification round ${verification} did not pass, and the goal planner found no workable revision. Resume to verify again, revise the plan yourself or end the goal; see Goal planner below.`,
+            ),
+          };
+        }
+      }
       if (
         goal.acceptance?.absenceBaselines.some(
           (baseline) =>

@@ -21,6 +21,7 @@ import {
   holdPlacedAt,
   retryableStepKeys,
   revisionsSince,
+  verificationRoundOnResume,
 } from '../../lib/goal-actions.js';
 import { plannerWorkDropped, runningPlanningRound } from '../../lib/goal-planner.js';
 import {
@@ -774,8 +775,8 @@ function PlannerChoice({
       {none ? (
         <span id={hintId} className="text-small text-3">
           {t(
-            '这个目标的计划修订上限是 0，规划器不会运行，所以只能选「不用目标规划器」。步骤失败、需要人决定时，目标暂停，由你自己重试、修订或取消。',
-            'This goal allows no plan revision, so the planner will not run and “No goal planner” is the only choice. When a step fails and a person must decide, the goal pauses for you to retry, revise or cancel it yourself.',
+            '这个目标的计划修订上限是 0，规划器不会运行，所以只能选「不用目标规划器」。步骤失败、需要人决定时，目标暂停，由你自己重试、修订或取消；所有步骤都成功但目标的验收没通过时也暂停，由你继续以再验收一次、修订或结束目标。',
+            'This goal allows no plan revision, so the planner will not run and “No goal planner” is the only choice. When a step fails and a person must decide, the goal pauses for you to retry, revise or cancel it yourself; when every step succeeds but the goal’s verification does not pass, it pauses too, for you to resume to verify again, revise or end it.',
           )}
         </span>
       ) : value === 'apply_minor' ? (
@@ -834,8 +835,8 @@ function PlannerChoice({
                 `The planner only proposes and runs nothing: it sees no outside system and cannot act; what it proposes takes effect only once you accept it. ${rounds} The tokens it uses count against this goal’s budget. This choice cannot be changed after confirming.`,
               )
             : t(
-                '步骤失败、需要人决定时，目标暂停，由你自己重试、修订或取消。确认后不能再改这个选择。',
-                'When a step fails and a person must decide, the goal pauses for you to retry, revise or cancel it yourself. This choice cannot be changed after confirming.',
+                '步骤失败、需要人决定时，目标暂停，由你自己重试、修订或取消；所有步骤都成功但目标的验收没通过时也暂停，由你继续以再验收一次、修订或结束目标。确认后不能再改这个选择。',
+                'When a step fails and a person must decide, the goal pauses for you to retry, revise or cancel it yourself; when every step succeeds but the goal’s verification does not pass, it pauses too, for you to resume to verify again, revise or end it. This choice cannot be changed after confirming.',
               )}
         </span>
       )}
@@ -856,7 +857,17 @@ function ResumeConfirm({
   // UX P2-1 on #864: resuming drops what the planner is doing for this pause.
   // UX P3-4 on #870: after a no-progress pause, what the planner does next once resumed.
   const left = Math.max(goal.budget.maxRevisions - goal.usage.plannerRounds, 0);
+  // UX P2-1 on #872: after the goal's verification did not pass, what resuming does.
+  const verification = verificationRoundOnResume(goal);
   const dropped = [
+    ...(verification !== null
+      ? [
+          t(
+            `所有步骤都已完成：继续后平台重新验收目标（第 ${verification} 轮），不会重跑步骤`,
+            `Every step is done: once resumed, the platform verifies the goal again (round ${verification}) and runs no step again`,
+          ),
+        ]
+      : []),
     ...plannerWorkDropped(goal, t),
     ...(goal.pauseReason === 'no_progress'
       ? [

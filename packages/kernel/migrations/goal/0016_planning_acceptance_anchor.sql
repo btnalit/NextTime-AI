@@ -26,17 +26,17 @@
 -- No backfill: every existing round is a step's.
 --
 -- Rolling back (docs/runbooks/release.md §6; review #488 on #872). Code without this migration
--- (v0.54.0 and earlier) reads a round's step through an inner join, so it does not see a
--- verification round's round:
+-- (v0.54.0 and earlier, or a build with GO10 and not GO10b) reads a round's step through an inner
+-- join, so it does not see a round anchored on a verification round:
 --   - one left `running` is never settled — its planner's result never lands — and once its
 --     planner Task ends, the advance's due query, which does not join steps, still sees it: the
 --     run is advanced every tick for nothing until a person acts on it (a resume, end, cancel,
 --     revision of the plan or an owner's hold abandons it `run_left_pause`, which this guard
 --     takes);
 --   - a settled one is harmless to it: the planner card leaves it out (a revision it proposed is
---     still offered for the requester's decision), and the planner rounds `maxRevisions` caps no
---     longer count it (`usage.plannerRounds` still does), so such a goal may run that many more
---     planner rounds for a failed step.
+--     still offered for the requester's decision); and in a build with GO10 the planner rounds
+--     `maxRevisions` caps no longer count it (`usage.plannerRounds` still does), so such a goal
+--     may run that many more planner rounds for a failed step (v0.54.0 has no such cap).
 -- Code only may therefore roll back while none runs —
 --   `select count(*) from goal_planning_rounds where acceptance_round is not null and status = 'running'`
 -- is 0; otherwise let each finish, or have its run's requester resume or end the run, first. To
