@@ -2157,7 +2157,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 带一个迁移（core `0049_admin_agent_sessions`），随 `apply-release.sh` 的迁移步骤自动应用。新环境变量 `ADMIN_AGENT_ENABLED`，默认关；这一版没有任何东西会启动管理员智能体（AA4 的运行时才会），所以主机不用设它。
 
 - **迁移**：core/0049 只把 `sessions.kind` 的 CHECK 放宽一个值 `admin_agent`，不回填。旧代码从不写这个值。
-- **开关**：`ADMIN_AGENT_ENABLED` 不设就是关，`1` / `true` 是开；**写成别的值，内核启动时直接报错退出**。升级前确认主机 `.env` 里没有这个变量，或者值合法。
+- **开关**：`ADMIN_AGENT_ENABLED` 不设、空、`0`、`false`（不分大小写，首尾空白会去掉）都是关，`1` / `true` 是开；**写成其他值，内核启动时报错退出**。升级前确认主机 `.env` 里没有它，或者值是这几种之一。（v0.59.0 的 GitHub 发布说明把这句写成「`1` / `true` 以外的非空值都会退出」，以这里为准。）
 - **行为变化（遗留 407）**：`install_pack`、`install_module`、`upgrade_module`、`roll_back_change_segment`、`verify_change_segment` 改为只能代表人调用（`actsForPerson`）；ChangePlan 引擎应用与回滚分段前再查一次，不是 human Principal、或不在 human / platform 通道就返回 403 `forbidden`，什么都不写。**服务 API key 调这五个能力现在得到 403**。主机脚本不用服务 key 调它们，不受影响；排障见 `operations.md` 的排障表与「核验」一节。
 - **发版说明可写**：平台有了"管理员智能体"身份：它没有自己的 Principal，会话种类是 `admin_agent`，属于管理员本人在该工作区的 human Principal；Handle 只由容器持有，上限是 28 个只读能力，再按此人在工作区的角色收窄；每次调用都重新检查此人仍是有效平台管理员、工作区启用、开关打开，拒绝也记审计；经它的每条审计都带 `sessionKind: 'admin_agent'` 和 `sessionId`。approve、apply、rollback 与逐项确认只走人的控制台通道，管理员智能体的 Handle 一律拒绝。管理员被降为普通用户时，立即吊销其管理员智能体会话与 Handle。服务 API key 不能再装包、装模块或写 ChangePlan 分段（遗留 407）。
 - **回滚**：先查 `select count(*) from sessions where kind = 'admin_agent'`。为 0（这一版总是如此）时可以连 schema 一起撤：按 0001 的五个值重建约束，再 `delete from schema_migrations where module = 'core' and version = 49`。不为 0 时保留 core/0049、只回退代码（这些会话被 `capability_handles`、`llm_usage`、`tasks` 以 restrict 外键引用，删掉会丢用量与 Task 历史）。**AA4 之后**回退到 AA1 之前的代码，要先吊销管理员智能体的 Handle（旧代码把它当 bearer、不做逐次的平台角色检查），语句见 0049 文件头：`update capability_handles set revoked_at = now() where session_id in (select id from sessions where kind = 'admin_agent') and revoked_at is null`。
@@ -2168,6 +2168,13 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 
 - **发版说明可写**：新增三个只有管理员智能体会话能调用的只读能力 `platform_state_gates`、`platform_state_connectors`、`platform_state_audit`（能力上的新标记 `adminAgentOnly`，契约快照随之增加）。每次调用分两段：先在调用方工作区里做派发检查并写工作区审计，再在只读平台事务里以管理员身份重查权限后读取；随后写一条平台审计（谁、哪个会话、哪个工作区、读了哪一区、返回多少条，不含内容），这一条写不进去就不返回结果。返回内容按形状白名单投影：不合形状、像 IP 或像密钥的值丢弃或只计数。服务 Handle、CLI 和非管理员智能体会话都调不到这三个能力（403 `forbidden`，审计记 `admin_agent_only`）。
 - **回滚**：只回退代码，随时可以。三个能力只读，平台审计里留下的读记录照常可查。
+
+### 3.99 管理员智能体读平台运行时、更新与不变量检查（#903，S11 AA2b，0.60.0 起）
+
+只读。没有迁移，不改 compose，没有新环境变量，主机不需要操作。`ADMIN_AGENT_ENABLED` 仍默认关（§3.97）。
+
+- **发版说明可写**：平台状态再加三个只有管理员智能体会话能调用的只读能力 `platform_state_runtime`（当前镜像与最近镜像、入口容器计数、五个平台服务的状态）、`platform_state_updates`（当前 / 最新 / 回滚版本、待跑迁移、pi 更新状态）、`platform_state_invariants`（最近一次一致性检查的时间与每项违例数，不给样本）；契约快照随之增加，服务 Handle 选择器与签发拒绝名单各加这三项。调用路径与审计同 §3.98；返回内容按形状白名单投影，版本号的预发布后缀夹带不进地址。
+- **回滚**：只回退代码，随时可以。
 
 ## 4. Hotfix 流程
 
