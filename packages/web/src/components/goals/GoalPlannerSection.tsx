@@ -98,6 +98,16 @@ export function GoalPlannerSection({
   const conclusion = currentPlanningConclusion(goal);
   const adopted = adoptedRoundInForce(goal);
   const rounds = [...goal.planningRounds].reverse();
+  // S11 GO10: what the planner spent so far — rounds that ran, against the revision limit they
+  // share, and its tokens (part of the goal's).
+  const ran = goal.planningRounds.filter((round) => round.taskId !== null).length;
+  const spent =
+    ran > 0
+      ? t(
+          `到目前规划器跑了 ${ran} 轮（最多 ${goal.budget.maxRevisions} 轮，和计划修订次数共用上限），用了 ${goal.usage.plannerTokens.toLocaleString()} token。`,
+          `So far the planner ran ${ran} of at most ${goal.budget.maxRevisions} ${goal.budget.maxRevisions === 1 ? 'round' : 'rounds'} (out of the plan revision limit) and used ${goal.usage.plannerTokens.toLocaleString()} tokens.`,
+        )
+      : null;
   return (
     <DashboardCard title={t('目标规划器', 'Goal planner')} data-testid="goal-planner">
       <div className="stack">
@@ -116,6 +126,11 @@ export function GoalPlannerSection({
                 'When confirming this goal, its requester let the goal planner propose a revision when a step fails and a person must decide. The planner only proposes: it sees no outside system and cannot act; what it proposes takes effect only once the requester accepts it, and the tokens it uses count against the goal’s budget.',
               )}
         </span>
+        {spent ? (
+          <span className="text-small text-3" data-testid="goal-planner-spent">
+            {spent}
+          </span>
+        ) : null}
         {running ? <RunningRound round={running} http={http} t={t} /> : null}
         {adopted ? (
           <AdoptedRevision goal={goal} round={adopted} http={http} gateNames={gateNames} t={t} />

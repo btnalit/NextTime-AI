@@ -124,6 +124,8 @@ export interface GoalRunUsageView {
   readonly tokens: number;
   readonly steps: number;
   readonly revisions: number;
+  /** S11 GO10: the part of `tokens` the goal planner used. */
+  readonly plannerTokens: number;
 }
 
 /** A run with what it has spent and its StepRuns counted by status (superseded ones included). */
@@ -171,6 +173,7 @@ export async function summarizeGoalRuns(
       steps: usage.get(goal.id)?.steps ?? 0,
       // Revision 1 is the confirmed plan; each accepted one after it counts (`revise.ts`).
       revisions: Math.max((accepted.get(goal.id) ?? 0) - 1, 0),
+      plannerTokens: usage.get(goal.id)?.plannerTokens ?? 0,
     },
     stepCounts: counts.get(goal.id) ?? emptyStepCounts(),
   }));

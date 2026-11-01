@@ -62,12 +62,13 @@ import {
 
 /** What the run has spent of its budget (I-G6): tokens of all its Tasks (nested child Tasks
  *  included), step attempts started, revisions made after the first. Wall clock runs from
- *  `confirmedAt`. */
+ *  `confirmedAt`. S11 GO10: `plannerTokens`, the part of `tokens` the goal planner's Tasks used. */
 export const GoalUsageWireSchema = z
   .object({
     tokens: z.number().int().nonnegative(),
     steps: z.number().int().nonnegative(),
     revisions: z.number().int().nonnegative(),
+    plannerTokens: z.number().int().nonnegative(),
   })
   .strict();
 export type GoalUsageWire = z.infer<typeof GoalUsageWireSchema>;

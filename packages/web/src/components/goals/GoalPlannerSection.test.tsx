@@ -338,9 +338,16 @@ describe('goal planner on the goal page (S11 GO9a)', () => {
     fireEvent.click(await screen.findByTestId('goal-op-confirm'));
     const confirm = await screen.findByTestId('goal-op-confirm-confirm');
     fireEvent.click(within(confirm).getByTestId('goal-op-confirm-planner-apply_minor'));
+    const hint = within(confirm).getByTestId('goal-op-confirm-planner').textContent;
+    expect(hint).toContain('同一步的工作平台最多替你改两次');
+    // S11 GO10: the breaker, and the rounds the revision limit allows.
+    expect(hint).toContain('连续 3 轮换路都没让任何一步成功时，目标暂停，等你决定');
+    expect(hint).toContain('规划器最多规划 3 轮，和计划修订次数共用上限，被拒或没提出修订的轮也算');
+    fireEvent.click(within(confirm).getByTestId('goal-op-confirm-planner-propose'));
     expect(within(confirm).getByTestId('goal-op-confirm-planner').textContent).toContain(
-      '同一步的工作平台最多替你改两次',
+      '规划器最多规划 3 轮',
     );
+    fireEvent.click(within(confirm).getByTestId('goal-op-confirm-planner-apply_minor'));
     fireEvent.click(within(confirm).getByTestId('confirm-button'));
     await waitFor(() =>
       expect(http.calls.find((call) => call.name === 'confirm_goal')?.params).toEqual({
@@ -349,6 +356,43 @@ describe('goal planner on the goal page (S11 GO9a)', () => {
         planner: 'apply_minor',
       }),
     );
+  });
+
+  it('a goal that allows no revision says the planner will not run (S11 GO10)', async () => {
+    const proposed = goalDetail({ status: 'proposed', currentRevision: null, confirmedAt: null });
+    const http = scriptedHttp(
+      handlers(
+        { ...proposed, budget: { ...proposed.budget, maxRevisions: 0 } },
+        workspace('p-alice', 'member'),
+      ),
+    );
+    renderPage(http);
+    fireEvent.click(await screen.findByTestId('goal-op-confirm'));
+    const confirm = await screen.findByTestId('goal-op-confirm-confirm');
+    expect(within(confirm).getByTestId('goal-op-confirm-planner').textContent).toContain(
+      '这个目标的计划修订上限是 0，规划器不会运行',
+    );
+  });
+
+  it('the planner card says how many rounds ran, of how many, and the tokens it used (S11 GO10)', async () => {
+    const base = proposedDetail();
+    const detail: GoalDetailWire = {
+      ...base,
+      usage: { ...base.usage, tokens: 52000, plannerTokens: 31000 },
+      planningRounds: [
+        round({ id: 'round-0', status: 'failed', revision: null, taskId: null }),
+        ...base.planningRounds,
+      ],
+    };
+    const http = scriptedHttp(handlers(detail, workspace('p-alice', 'member')));
+    renderPage(http);
+    const card = await screen.findByTestId('goal-planner');
+    // A round recorded failed before it ran a planner does not count.
+    expect(within(card).getByTestId('goal-planner-spent').textContent).toBe(
+      '到目前规划器跑了 1 轮（最多 3 轮，和计划修订次数共用上限），用了 31,000 token。',
+    );
+    const budget = await screen.findByTestId('goal-budget');
+    expect(budget.textContent).toContain('52,000（其中规划器 31,000） / 100,000');
   });
 
   it('the revision list marks the planner’s proposal', async () => {

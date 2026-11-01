@@ -286,7 +286,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           currentRevision: null,
           confirmedAt: null,
           budget: BUDGET,
-          usage: { tokens: 0, steps: 0, revisions: 0 },
+          usage: { tokens: 0, steps: 0, revisions: 0, plannerTokens: 0 },
           steps: [],
           acceptance: { rounds: [], steps: [], absenceBaselines: [], overriddenChecks: [] },
           leftovers: null,

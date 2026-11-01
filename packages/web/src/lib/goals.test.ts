@@ -651,6 +651,72 @@ describe('lib/goals', () => {
     ).toEqual({ done: 3, total: 4 });
   });
 
+  it('S11 GO10: the token row names the planner’s share only when it spent any', () => {
+    const rows = (plannerTokens: number) =>
+      goalBudgetRows(
+        goalRun({ usage: { tokens: 9000, steps: 2, revisions: 0, plannerTokens } }),
+        zh,
+      );
+    expect(rows(0).find((row) => row.key === 'tokens')?.usedText).toBe('9,000');
+    const row = rows(4000).find((item) => item.key === 'tokens');
+    expect(row?.usedText).toBe('9,000（其中规划器 4,000）');
+    // The share is part of the tokens, not added to them.
+    expect(row?.used).toBe(9000);
+    expect(
+      goalBudgetRows(
+        goalRun({ usage: { tokens: 9000, steps: 2, revisions: 0, plannerTokens: 4000 } }),
+        en,
+      ).find((item) => item.key === 'tokens')?.usedText,
+    ).toBe('9,000 (planner 4,000)');
+  });
+
+  it('S11 GO10: a no-progress pause names the steps of the planner’s latest rounds', () => {
+    const planningRound = (id: string, stepKey: string, taskId: string | null) => ({
+      id,
+      status: 'applied' as const,
+      kind: 'autonomous' as const,
+      basedOnRevision: 1,
+      stepRunId: `sr-${stepKey}`,
+      stepKey,
+      stepAttempt: 1,
+      failureCategory: 'transient' as const,
+      taskId,
+      revision: 2,
+      revisionClass: 'minor' as const,
+      classReasons: [],
+      outcomeReason: null,
+      detail: null,
+      createdAt: '2026-10-20T00:05:00.000Z',
+      settledAt: '2026-10-20T00:06:00.000Z',
+    });
+    const detail = goalDetail();
+    const goal = {
+      ...detail,
+      status: 'paused' as const,
+      pauseReason: 'no_progress' as const,
+      planningRounds: [
+        planningRound('r-0', 'old', 'task-0'),
+        planningRound('r-1', 'fetch', 'task-1'),
+        planningRound('r-x', 'never-ran', null),
+        planningRound('r-2', 'renew', 'task-2'),
+        planningRound('r-3', 'fetch', 'task-3'),
+      ],
+    };
+    const budget = goalBudgetRows(goal, zh);
+    expect(goalStateNote(goal, undefined, budget, zh)).toEqual({
+      tone: 'warn',
+      text: '目标规划器连续 3 轮换路（针对步骤「fetch」、「renew」），都没让任何一步成功，平台把目标暂停了，等你决定：可以重试步骤、修订计划或结束目标。',
+    });
+    expect(goalStateNote(goal, undefined, budget, en)?.text).toBe(
+      'The goal planner tried 3 times in a row (for steps “fetch”, “renew”) and no step succeeded, so the platform paused the goal for you to decide: retry a step, revise the plan or end the goal.',
+    );
+    // Without its rounds read, the general sentence.
+    const run = goalRun({ status: 'paused', pauseReason: 'no_progress' });
+    expect(goalStateNote(run, undefined, goalBudgetRows(run, zh), zh)?.text).toBe(
+      '连续几次推进都没有进展，平台把它暂停了，需要人决定下一步。',
+    );
+  });
+
   it('a goal paused for a check says it can go on once every finding is recorded', () => {
     const goal = goalRun({ status: 'paused', pauseReason: 'awaiting_reconcile' });
     const budget = goalBudgetRows(goal, zh);
@@ -766,7 +832,7 @@ describe('lib/goals', () => {
     const goal = goalRun({
       status: 'paused',
       pauseReason: 'budget_exhausted',
-      usage: { tokens: 100000, steps: 2, revisions: 0 },
+      usage: { tokens: 100000, steps: 2, revisions: 0, plannerTokens: 0 },
     });
     // Half an hour after confirmation: the two hours of wall clock are not used up.
     const budget = goalBudgetRows(goal, zh, Date.parse('2026-10-20T00:31:00.000Z'));

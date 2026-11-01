@@ -68,7 +68,12 @@ import {
   roundAcceptance,
   samePlanEntry,
 } from './plan.js';
-import { autonomousPlanning, autonomousRoundRuns, runPlanningPhase } from './planner.js';
+import {
+  type PlanningPause,
+  autonomousPlanning,
+  autonomousRoundRuns,
+  runPlanningPhase,
+} from './planner.js';
 import { readGoalPlannerMode } from './planning-rounds.js';
 import { getPlanRevision, lockStepRuns } from './reads.js';
 import { lockGoalRun } from './service.js';
@@ -619,7 +624,7 @@ class Advance {
       if (this.status === 'running') await this.pauseIfStuck(await this.lockSteps());
     }
     const planning = await this.planningPhase();
-    if (planning.pause !== null) await this.pause('needs_decision', planning.pause);
+    if (planning.pause !== null) await this.pause(planning.pause.reason, planning.pause.detail);
     if (this.status === 'running') {
       // GO9b: a revision the platform adopted is worked on at once; a planner held back by the
       // requester's concurrency quota is tried again when it may start.
@@ -656,7 +661,7 @@ class Advance {
    *  now and whether the platform adopted a revision. */
   private async planningPhase(): Promise<{
     readonly retryAt: number | null;
-    readonly pause: string | null;
+    readonly pause: PlanningPause | null;
     readonly due: boolean;
   }> {
     if (this.status !== 'running' && this.status !== 'paused' && this.status !== 'verifying') {

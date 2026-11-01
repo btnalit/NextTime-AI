@@ -216,10 +216,13 @@ export async function listTaskWorkerRunTree(
 }
 
 /** A GoalRun's usage as I-G6 counts it: tokens are the sum of its Tasks' `tokens_used` (nested
- *  child Tasks included), steps the attempts the advancer started (Tasks with a `step_attempt`). */
+ *  child Tasks included), steps the attempts the advancer started (Tasks with a `step_attempt`).
+ *  S11 GO10: `plannerTokens`, the part of `tokens` its goal planner's Tasks used (`purpose =
+ *  'planning'`). */
 export interface GoalRunUsage {
   readonly tokens: number;
   readonly steps: number;
+  readonly plannerTokens: number;
 }
 
 export async function readGoalRunUsage(
@@ -231,6 +234,7 @@ export async function readGoalRunUsage(
     (await readGoalRunsUsage(client, workspaceId, [goalRunId])).get(goalRunId) ?? {
       tokens: 0,
       steps: 0,
+      plannerTokens: 0,
     }
   );
 }
@@ -243,10 +247,16 @@ export async function readGoalRunsUsage(
   goalRunIds: readonly string[],
 ): Promise<ReadonlyMap<string, GoalRunUsage>> {
   if (goalRunIds.length === 0) return new Map();
-  const result = await client.query<{ goal_run_id: string; tokens: string; steps: string }>(
+  const result = await client.query<{
+    goal_run_id: string;
+    tokens: string;
+    steps: string;
+    planner_tokens: string;
+  }>(
     `select goal_run_id,
             coalesce(sum(tokens_used), 0)::bigint as tokens,
-            count(*) filter (where step_attempt is not null)::bigint as steps
+            count(*) filter (where step_attempt is not null)::bigint as steps,
+            coalesce(sum(tokens_used) filter (where purpose = 'planning'), 0)::bigint as planner_tokens
        from tasks
       where workspace_id = $1 and goal_run_id = any($2::uuid[])
       group by goal_run_id`,
@@ -255,7 +265,11 @@ export async function readGoalRunsUsage(
   return new Map(
     result.rows.map((row) => [
       row.goal_run_id,
-      { tokens: Number(row.tokens), steps: Number(row.steps) },
+      {
+        tokens: Number(row.tokens),
+        steps: Number(row.steps),
+        plannerTokens: Number(row.planner_tokens),
+      },
     ]),
   );
 }

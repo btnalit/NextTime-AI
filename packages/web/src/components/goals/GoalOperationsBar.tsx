@@ -1,6 +1,7 @@
 import {
   type AuditRecordWire,
   type CancelGoalResultWire,
+  GOAL_PLANNER_NO_PROGRESS_LIMIT,
   type GoalDetailWire,
   type GoalOperationResultWire,
   type GoalPlannerMode,
@@ -273,7 +274,7 @@ export function GoalOperationsBar({
           )
         }
       >
-        <PlannerChoice value={planner} onChange={setPlanner} />
+        <PlannerChoice value={planner} onChange={setPlanner} maxRounds={goal.budget.maxRevisions} />
         {absenceOperations ? (
           <AbsenceChecksBasis
             http={http}
@@ -709,13 +710,27 @@ type PlannerChoiceValue = 'off' | GoalPlannerMode;
 function PlannerChoice({
   value,
   onChange,
+  maxRounds,
 }: {
   readonly value: PlannerChoiceValue;
   readonly onChange: (value: PlannerChoiceValue) => void;
+  /** S11 GO10: the plan's revision limit, which also bounds the planner's rounds. */
+  readonly maxRounds: number;
 }) {
   const t = useT();
   const name = useId();
   const hintId = useId();
+  // S11 GO10: every round the planner runs counts against the revision limit, whatever it came to.
+  const rounds =
+    maxRounds === 0
+      ? t(
+          '这个目标的计划修订上限是 0，规划器不会运行。',
+          'This goal allows no plan revision, so the planner will not run.',
+        )
+      : t(
+          `规划器最多规划 ${maxRounds} 轮，和计划修订次数共用上限，被拒或没提出修订的轮也算。`,
+          `The planner runs at most ${maxRounds} ${maxRounds === 1 ? 'round' : 'rounds'}, out of the plan revision limit; a round that is rejected or proposes nothing counts too.`,
+        );
   const options: readonly { value: PlannerChoiceValue; label: string }[] = [
     {
       value: 'off',
@@ -759,13 +774,13 @@ function PlannerChoice({
       <span id={hintId} className="text-small text-3">
         {value === 'apply_minor'
           ? t(
-              '小修订只换 Worker、输入、顺序或重试次数，做的事只读、思考和汇报，验收不变；凡是改验收、新增能执行动作的步骤、让步骤用到原来没有的 gate（哪怕只是读取）、需要有人批准才能开始、或会停下还在跑的工作的修订，都会暂停目标等你决定。同一步的工作平台最多替你改两次，换了步骤名也算同一步。规划器看不到外部系统，也不能发起动作；它用掉的 token 计入这个目标的预算。确认后不能再改这个选择。',
-              'A minor revision only changes the Worker, input, order or retry limit of work that reads, thinks and reports, on unchanged checks. A revision that changes acceptance, adds a step that can act, gives a step a gate it did not reach (even only to read), needs a person to start, or would stop work still running pauses the goal for your decision. The platform changes the work of one step at most twice for you, under a new step key too. The planner sees no outside system and cannot act; the tokens it uses count against this goal’s budget. This choice cannot be changed after confirming.',
+              `小修订只换 Worker、输入、顺序或重试次数，做的事只读、思考和汇报，验收不变；凡是改验收、新增能执行动作的步骤、让步骤用到原来没有的 gate（哪怕只是读取）、需要有人批准才能开始、或会停下还在跑的工作的修订，都会暂停目标等你决定。同一步的工作平台最多替你改两次，换了步骤名也算同一步；连续 ${GOAL_PLANNER_NO_PROGRESS_LIMIT} 轮换路都没让任何一步成功时，目标暂停，等你决定。${rounds}规划器看不到外部系统，也不能发起动作；它用掉的 token 计入这个目标的预算。确认后不能再改这个选择。`,
+              `A minor revision only changes the Worker, input, order or retry limit of work that reads, thinks and reports, on unchanged checks. A revision that changes acceptance, adds a step that can act, gives a step a gate it did not reach (even only to read), needs a person to start, or would stop work still running pauses the goal for your decision. The platform changes the work of one step at most twice for you, under a new step key too; when ${GOAL_PLANNER_NO_PROGRESS_LIMIT} rounds in a row make no step succeed, the goal pauses for your decision. ${rounds} The planner sees no outside system and cannot act; the tokens it uses count against this goal’s budget. This choice cannot be changed after confirming.`,
             )
           : value === 'propose'
             ? t(
-                '规划器只提议、不执行：它看不到外部系统，也不能发起动作；它提的修订要你接受才生效。它用掉的 token 计入这个目标的预算。确认后不能再改这个选择。',
-                'The planner only proposes and runs nothing: it sees no outside system and cannot act; what it proposes takes effect only once you accept it. The tokens it uses count against this goal’s budget. This choice cannot be changed after confirming.',
+                `规划器只提议、不执行：它看不到外部系统，也不能发起动作；它提的修订要你接受才生效。${rounds}它用掉的 token 计入这个目标的预算。确认后不能再改这个选择。`,
+                `The planner only proposes and runs nothing: it sees no outside system and cannot act; what it proposes takes effect only once you accept it. ${rounds} The tokens it uses count against this goal’s budget. This choice cannot be changed after confirming.`,
               )
             : t(
                 '步骤失败、需要人决定时，目标暂停，由你自己重试、修订或取消。确认后不能再改这个选择。',

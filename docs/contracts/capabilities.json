@@ -21247,6 +21247,10 @@
         "usage": {
           "additionalProperties": false,
           "properties": {
+            "plannerTokens": {
+              "minimum": 0,
+              "type": "integer"
+            },
             "revisions": {
               "minimum": 0,
               "type": "integer"
@@ -21263,7 +21267,8 @@
           "required": [
             "tokens",
             "steps",
-            "revisions"
+            "revisions",
+            "plannerTokens"
           ],
           "type": "object"
         }
@@ -32734,6 +32739,10 @@
               "usage": {
                 "additionalProperties": false,
                 "properties": {
+                  "plannerTokens": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
                   "revisions": {
                     "minimum": 0,
                     "type": "integer"
@@ -32750,7 +32759,8 @@
                 "required": [
                   "tokens",
                   "steps",
-                  "revisions"
+                  "revisions",
+                  "plannerTokens"
                 ],
                 "type": "object"
               }

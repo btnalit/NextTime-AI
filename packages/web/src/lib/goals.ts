@@ -35,7 +35,7 @@ import type {
   UnresolvedGoalActionWire,
   WorkerSpec,
 } from '@nexttime/shared';
-import { visibleText } from '@nexttime/shared';
+import { GOAL_PLANNER_NO_PROGRESS_LIMIT, visibleText } from '@nexttime/shared';
 import { actionLabel } from './capability-labels.js';
 import { clipMiddle, redactSensitive, shortId } from './format.js';
 import { pendingTrialStepKeys } from './goal-trials.js';
@@ -996,7 +996,14 @@ export function goalBudgetRows(
       label: 'Token',
       used: usage.tokens,
       max: budget.maxTokens,
-      usedText: usage.tokens.toLocaleString(),
+      // S11 GO10: the goal planner's share is already in `tokens`; named only when it spent any.
+      usedText:
+        usage.plannerTokens > 0
+          ? t(
+              `${usage.tokens.toLocaleString()}（其中规划器 ${usage.plannerTokens.toLocaleString()}）`,
+              `${usage.tokens.toLocaleString()} (planner ${usage.plannerTokens.toLocaleString()})`,
+            )
+          : usage.tokens.toLocaleString(),
       maxText: budget.maxTokens.toLocaleString(),
     },
     {
@@ -1627,7 +1634,23 @@ function pausedNote(
             ),
       };
     }
-    case 'no_progress':
+    case 'no_progress': {
+      // S11 GO10: the goal planner's latest rounds that ran — the ones the platform's breaker
+      // counted — name the steps they were for.
+      const stalled = (goal.planningRounds ?? [])
+        .filter((round) => round.kind === 'autonomous' && round.taskId !== null)
+        .slice(-GOAL_PLANNER_NO_PROGRESS_LIMIT);
+      const keys = [...new Set(stalled.map((round) => round.stepKey))];
+      if (keys.length > 0) {
+        const [zh, en] = namesIn(keys);
+        return {
+          tone: 'warn',
+          text: t(
+            `目标规划器连续 ${stalled.length} 轮换路（针对步骤${zh}），都没让任何一步成功，平台把目标暂停了，等你决定：可以重试步骤、修订计划或结束目标。`,
+            `The goal planner tried ${stalled.length} times in a row (for ${keys.length === 1 ? 'step' : 'steps'} ${en}) and no step succeeded, so the platform paused the goal for you to decide: retry a step, revise the plan or end the goal.`,
+          ),
+        };
+      }
       return {
         tone: 'warn',
         text: t(
@@ -1635,6 +1658,7 @@ function pausedNote(
           'Several rounds made no progress, so the platform paused it; a person decides what next.',
         ),
       };
+    }
     case 'authority_lost': {
       const hints = pauseHints(goal, AUTHORITY_PAUSE_HINTS);
       if (hints.some((hint) => hint.code === 'requester_cannot_start_workers')) {

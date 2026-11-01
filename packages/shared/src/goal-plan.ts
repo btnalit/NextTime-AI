@@ -40,6 +40,10 @@ export const MAX_GOAL_NOTE_CHARS = 2000;
 export const MAX_GOAL_STATEMENT_CHARS = 2000;
 /** S11 GO5c: the longest idempotency key `propose_goal` takes. */
 export const MAX_GOAL_IDEMPOTENCY_KEY_CHARS = 200;
+/** S11 GO10: the autonomous planning rounds a GoalRun opens with no step succeeding and no person
+ *  acting in between; at this many the next failure pauses the run `no_progress` for a person
+ *  instead of opening another round. A platform constant, not a budget field. */
+export const GOAL_PLANNER_NO_PROGRESS_LIMIT = 3;
 
 /** S11 GO5d-1: input bindings one step carries at most. */
 export const MAX_STEP_BINDINGS = 16;

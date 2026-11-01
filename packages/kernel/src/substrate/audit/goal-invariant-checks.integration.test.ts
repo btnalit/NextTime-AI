@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { GOAL_PLANNER_NO_PROGRESS_LIMIT } from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
@@ -1482,6 +1483,76 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(mentioned(result, stillRunning)).toBe(false);
         expect(mentioned(result, justEnded)).toBe(false);
         expect(mentioned(result, underBudget)).toBe(false);
+      });
+    });
+
+    describe('I-G6: the goal planner stops where no step makes progress (S11 GO10)', () => {
+      /** An autonomous round of `stepRunId`'s attempt `attempt`, `ago` seconds old, with its
+       *  planner Task unless `withTask` is false. */
+      async function autonomousRound(
+        goalRunId: string,
+        stepRunId: string,
+        attempt: number,
+        ago_: number,
+        withTask = true,
+      ): Promise<void> {
+        const [round] = await raw<{ id: string }>(
+          `insert into goal_planning_rounds (workspace_id, goal_run_id, based_on_revision,
+             step_run_id, step_attempt, failure_category, status, kind, created_at, settled_at)
+           values ($1, $2, 1, $3, $4, 'transient', 'no_revision', 'autonomous', $5, $5)
+           returning id`,
+          [workspaceId, goalRunId, stepRunId, attempt, ago(ago_)],
+        );
+        if (!withTask) return;
+        await raw(
+          `insert into tasks (workspace_id, status, on_behalf_of, worker_definition_id,
+             worker_definition_version, goal_run_id, plan_revision, purpose, planning_round_id,
+             observe_scope, output_schema, completed_at)
+           values ($1, 'completed', $2, $3, 1, $4, 1, 'planning', $5, '{}', '{}'::jsonb, now())`,
+          [workspaceId, ownerId, randomUUID(), goalRunId, round?.id],
+        );
+      }
+
+      /** A running goal of one failed step `s`, confirmed an hour ago, with `rounds` autonomous
+       *  rounds for its attempts, the oldest 50 minutes old, one a minute apart. */
+      async function planned(rounds: number, withTask = true): Promise<{ id: string; s: string }> {
+        const id = await goal({ confirmedAgo: 3600 });
+        await revision(id, 1, ['s']);
+        const s = await step(id, 's', { status: 'failed', attemptCount: rounds });
+        for (let index = 0; index < rounds; index += 1) {
+          await autonomousRound(id, s, index + 1, 3000 - index * 60, withTask);
+        }
+        return { id, s };
+      }
+
+      it('counts a running goal with more rounds in a row than the limit, not one a step or a person interrupted', async () => {
+        const limit = GOAL_PLANNER_NO_PROGRESS_LIMIT;
+        const over = await planned(limit + 1);
+        const atLimit = await planned(limit);
+        // Rounds that ran no planner (recorded failed before it) are not counted.
+        const noTasks = await planned(limit + 1, false);
+        // A step that succeeded after the first round: the rest are within the limit.
+        const progressed = await planned(limit + 1);
+        await step(progressed.id, 'other', { status: 'succeeded', endedAgo: 3000 - 30 });
+        // The requester resumed it after the first round.
+        const resumed = await planned(limit + 1);
+        await raw(
+          `insert into audit_records (workspace_id, actor_principal_id, action, resource_type,
+             resource_id, payload, created_at)
+           values ($1, $2, 'goal_run.resume', 'goal_run', $3, '{}'::jsonb, $4)`,
+          [workspaceId, ownerId, resumed.id, ago(3000 - 30)],
+        );
+        const paused = await planned(limit + 1);
+        await raw(
+          "update goal_runs set status = 'paused', pause_reason = 'no_progress' where workspace_id = $1 and id = $2",
+          [workspaceId, paused.id],
+        );
+
+        const result = await check((client) => checkIG6(client, ALL, DEFAULT_GOAL_BUDGET_GRACE_MS));
+        expect(flagged(result, 'no-progress', over.id)).toBe(true);
+        for (const fine of [atLimit, noTasks, progressed, resumed, paused]) {
+          expect(mentioned(result, fine.id)).toBe(false);
+        }
       });
     });
 

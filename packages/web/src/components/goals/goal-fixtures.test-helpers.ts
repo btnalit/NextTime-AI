@@ -21,7 +21,7 @@ export function goalRun(overrides: Partial<GoalRunWire> = {}): GoalRunWire {
     statement: '把三台主机的证书都换成新签发的',
     currentRevision: 1,
     budget: { maxTokens: 100000, maxSteps: 10, maxRevisions: 3, maxWallClockSeconds: 7200 },
-    usage: { tokens: 1200, steps: 2, revisions: 0 },
+    usage: { tokens: 1200, steps: 2, revisions: 0, plannerTokens: 0 },
     stepCounts: {
       pending: 1,
       ready: 0,
