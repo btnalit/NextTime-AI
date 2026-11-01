@@ -2123,6 +2123,21 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 
     撤掉之后回到 v0.55.0 的行为。这个顺序在跑满迁移的新库上试过（#881）。
 
+### 3.94 同一个目标里后一步读前一步留下的文件（#884，S11 GO14，0.57.0 起）
+
+没有迁移，不改生产 compose 的结构，但**内核与 worker-supervisor 必须同一次升级、同一次回退**：新内核给每个目标步骤的 spawn 带 `goalRunId`，老 supervisor 的请求 schema 是 strict 的，会拒绝，所有目标步骤都起不来。升级路径由预发演练（v0.56 → 新头，accept_s2 S14）覆盖。
+
+- **发版说明可写**：计划条目可以写 `filesFrom: [步骤…]`（1 到 8 个，必须在它的 `dependsOn` 里）。被点名的步骤那次被接受的尝试，其 Worker 放在 `/workspace/out` 的文件，在这一步的容器里只读出现在 `/upstream/<步骤>`。上游还没退出就稍后再看；文件交不出（被跳过、没成功、目录不在或不属于这个目标、`out` 被换成别的东西）时目标暂停等人决定，不花尝试次数。没结束的目标里已成功步骤的目录每小时续租，目标结束后再过一个保留期清掉。改 `filesFrom` 算小修订；流程模板暂不支持。控制台在确认卡片、规划器提议、步骤详情、修订编辑器里都显示读取关系。契约只加字段：`PlanStep.filesFrom?`；supervisor 内部接口加 `goalRunId`、`upstream[]`、409 `upstream_unavailable` / `goal_task_spawned`、`POST /task-dirs/keep`。
+- **升级前检查**：主机 `.env` 若设置了 `TASK_WORKDIR_RETENTION_HOURS`，必须 ≥ 2，否则新 supervisor 不启动。两者之间没有启动依赖，升级时内核与 supervisor 重建的短暂窗口里 spawn 可能得到 400（`host-worker-runtime.md` §17.2）。
+- **主机注意**：长期暂停的目标会一直占着它已成功步骤的目录；只读查询与处理办法见 `host-worker-runtime.md` §17.1。
+- **已知边界**：步骤间的文件是唯一不经凭证复查的通道（绑定的凭证复查是值级的，文件不做）。这是 GO14 方案的明确取舍：上游 Worker 拿到的观察已经脱敏，Worker 进程不持凭证。
+- **回滚**：只回退代码，内核与 supervisor 一起回退（目标 v0.56.0）。回退前先跑 `host-worker-runtime.md` §17.2 的只读 SQL，查有没有计划用到 `filesFrom`（老内核的 `PlanStepSchema` 是 strict 的，读不了这些计划，`get_goal` 会报 the stored plan no longer parses）。有行时：
+  1. 没结束的目标（包括还没确认的 `proposed`）先由请求人取消；
+  2. 待决的、带 `filesFrom` 的修订先拒绝；
+  3. 先 `docker compose stop kernel`，换好内核与 supervisor 两边的版本后再一起起。
+
+  已结束的这类目标回退后读不出详情，直到再升级回来。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
