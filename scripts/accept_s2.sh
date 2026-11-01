@@ -1393,8 +1393,10 @@ cleanup_step() {
   CLEANUP_DONE=1
   # First, --keep or not: a service the goal scenarios' S2 killed is started again (everything
   # below calls the kernel), a row lock S12 or S2 still holds is ended and a turn fake-llm still
-  # holds is released — none of them is a fixture to keep (goal_cleanup_live_work).
+  # holds is released — none of them is a fixture to keep (goal_cleanup_live_work). Nor is alice's
+  # AgentProfile still naming the fake model S13 set (goal_cleanup_planner_model).
   goal_cleanup_live_work
+  goal_cleanup_planner_model
   if [ "$KEEP" -eq 1 ]; then
     echo "cleanup: --keep set, leaving accept-s2 fixtures/gates/workspace up"
     return

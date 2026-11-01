@@ -368,10 +368,25 @@ goal_s13_report_runner() {
 # the workspace's). The planner names no model of its own (ontology/goal-planner.yaml, §7.7) and
 # runs on its requester's; accept_s2 pins only the entry definition's model, so without this the
 # planner would run on the stack's default provider — the real one on the host.
+# Sets S13_PLANNER_MODEL while alice's profile names a model, so a run S13 leaves early still puts
+# it back (goal_cleanup_planner_model, review #488 on #867).
+S13_PLANNER_MODEL=""
 goal_s13_planner_model() {
+  [ "$1" = "null" ] || S13_PLANNER_MODEL=$1
   out=$(cap "$ALICE_KEY" set_agent_profile "{\"model\":$1}" "String(d.result.model)")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "s13-planner-model" "set_agent_profile HTTP $status: $(parse_kv "$out" BODY)"
+  [ "$1" != "null" ] || S13_PLANNER_MODEL=""
+}
+
+# goal_cleanup_planner_model: for cleanup_step, --keep or not — alice's AgentProfile back to the
+# workspace's model when S13 left it on the fake one (the provider restore takes that model away);
+# prints one line, never fails.
+goal_cleanup_planner_model() {
+  [ -n "$S13_PLANNER_MODEL" ] || return 0
+  gcp_out=$(cap "$ALICE_KEY" set_agent_profile '{"model":null}' "String(d.result.model)")
+  echo "cleanup: alice's AgentProfile still named $S13_PLANNER_MODEL — set_agent_profile {\"model\":null} answered HTTP $(parse_kv "$gcp_out" HTTP_STATUS)"
+  S13_PLANNER_MODEL=""
 }
 
 # goal_s13_refused <name> <leave>: alice proposes the goal and confirms it with the planner's
