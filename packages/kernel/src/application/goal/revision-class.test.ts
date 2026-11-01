@@ -119,6 +119,32 @@ describe('classifyPlannerRevision', () => {
       reasons: [reason('goal_acceptance_changed')],
     },
     {
+      // Legacy 581: no goal acceptance and an empty one mean the same — the requester confirms
+      // (`plan.ts` `planHints`, `roundAcceptance`) — so a planner that writes `[]` changes nothing.
+      name: 'an empty goal acceptance where the plan in force had none, and back, changes nothing',
+      input: {
+        base: plan([step('a')]),
+        candidate: plan([step('a')], []),
+      },
+      reasons: [],
+    },
+    {
+      name: 'the plan in force’s empty goal acceptance left out changes nothing',
+      input: {
+        base: plan([step('a')], []),
+        candidate: plan([step('a')]),
+      },
+      reasons: [],
+    },
+    {
+      name: 'a goal acceptance check added where the plan in force’s was empty is the requester’s',
+      input: {
+        base: plan([step('a')], []),
+        candidate: plan([step('a')], [observe('done', '1')]),
+      },
+      reasons: [reason('goal_acceptance_changed')],
+    },
+    {
       name: 'a changed step that drops one of its checks',
       input: {
         base: plan([step('a', { acceptance: [observe('k1', '1'), observe('k2', '2')] })]),

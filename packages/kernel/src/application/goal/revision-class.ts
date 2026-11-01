@@ -31,8 +31,9 @@ import type { GoalRunRow } from './types.js';
  *
  * `major` when any of these holds, one reason each (`@nexttime/shared`
  * `PlannerRevisionMajorReason`):
- *   - `goal_acceptance_changed`: the plan's `acceptance` is not exactly what it was — what "done"
- *     means is the requester's (even a check added there is theirs to agree to);
+ *   - `goal_acceptance_changed`: the plan's `acceptance` checks are not exactly what they were —
+ *     what "done" means is the requester's (even a check added there is theirs to agree to); none
+ *     and an empty list are the same (legacy 581);
  *   - `step_acceptance_changed`: a step of the plan in force that has not ended is changed or
  *     removed, and one of its acceptance checks is no longer declared, unchanged, by any step of the
  *     proposed plan that will still run. A check moved to a new step, or a new check added, needs
@@ -148,7 +149,9 @@ export function classifyPlannerRevision(
     }
   };
 
-  if (canonicalJson(base.acceptance ?? null) !== canonicalJson(candidate.acceptance ?? null)) {
+  // Legacy 581: no goal acceptance and an empty one are the same — the requester confirms the goal
+  // either way (`plan.ts` `planHints`, `roundAcceptance`) — so only the checks are compared.
+  if (canonicalJson(base.acceptance ?? []) !== canonicalJson(candidate.acceptance ?? [])) {
     add('goal_acceptance_changed', null);
   }
 
