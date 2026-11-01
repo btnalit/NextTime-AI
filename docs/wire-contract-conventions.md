@@ -13,6 +13,7 @@
 | `resourceType` / `resourceId` | Grant 指向的资源种类与 id（当前 `'gatekeeper'`；将来 `'worker_definition'`、`'skill'`）。`capability_grants.capability` 改名为 `resource_type`；`grant_capability` / `revoke_capability` 参数改为 `resourceType` + `resourceId`（原 `scope` 里的 id 提为一等字段；#288 起 `grant_capability` 不再接受 `scope`——库里的 `capability_grants.scope` 列从未被任何授权判定读取，不存在按它收窄的机制，新授权写 `{}`，历史行经 `CapabilityGrantWire` 回显为"范围备注"，仅供查看）。R-26 / D-14 起 `grant_capability` 只接受 `resourceType: 'gatekeeper'` 加必填 `resourceId`（控制台能展示与撤销的唯一一种）；通配（`resource_id` 为空）与其他种类只剩历史行，仍照旧参与匹配。 | Grant 不再借用「capability」这个词——capability 只指注册表里的能力名 |
 | `mode`（capability 注册表） | 治理类别，四值：`observe`（治理意义上的读：不审批、不出草稿）、`write`（平台内即时状态变更，审计、无审批）、`propose`（产生**待人类发布/批准**的草稿或请求：`propose_*`、`request_connection`、`propose_ontology_change`）、`execute`（有后果、由人有意触发或受策略约束的动作：经门作用于外部系统并按策略审批，或发布、授权、接入、批准这类人类通道上有治理分量的动作）。2026-10-02 复审 D-08 放宽了 `execute` 的定义文字，标签本身不改（多个消费方按它分支）。 | `assert_fact` / `record_decision` / `invoke_worker` / `report_*` / `cancel_task` / `register_source` / `submit_observations` 等即时写操作不得标 `propose`，改 `write` |
 | `sideEffects`（capability 注册表，D-08） | 这次调用是否改变任何状态（平台内的表、可审计的记录、经门的作用）。显式标在 `mode` 说不清的条目上——少数 `observe` 能力会写（调门并记录观察到的 Fact、租用上下文条目、记录探测结果）；不标则按 `mode` 推：`observe` 无副作用，其余都有，非 `observe` 不得标 `false`。读取一律用 `capabilityHasSideEffects()`；角色检查（auditor 只读，D-07）与审计默认视图都用它。契约快照里每条都带解析后的值。 | 不得用 `mode === 'observe'` 当只读判据 |
+| `adminAgentOnly`（capability 注册表，S11 AA2） | 只有管理员智能体的 Handle（`admin_agent` 会话）能调用：读平台跨工作区状态的 `platform_state_*`（组 `platform_state`）。注册表自检强制它与组 `platform_state` 双向对应，且只能是 Handle 通道、无副作用的 `observe`，不带 `scope` / `minRole` / `actsForPerson`；人的控制台、服务 API key、平台管理员会话、任何别的会话的 Handle 都调不到（授权层与 dispatch 各拒一次，后者留 `admin_agent_only` 审计行），服务 Handle 与 CLI 也签不进去。契约快照里标 `adminAgentOnly: true`。 | 不得用它标会写的能力；不得给人的通道开一个同义的平台读 |
 | `mode`（Operation，门侧） | 不变：`observe` / `execute`（设计 §7.4）。两处 `mode` 的取值集合不同，靠类型名区分：`CapabilityMode` vs `OperationMode`。 | — |
 | `kind` | 只用于**类型判别**字段（`principals.kind`、`chat.message.kind`、`ChatMessageContent.kind`）。 | 不得用作"种类描述"的自由文本 |
 | `*At` | 时间戳一律 ISO 8601 UTC 字符串（`createdAt`、`expiresAt`、`observedAt`）。 | 线上不得出现 epoch 数字或 `Date` 对象序列化差异 |
@@ -23,6 +24,7 @@
 - 结果里**引用另一资源**时用 `<resource>Id`（`taskId`、`workerRunId`、`gatekeeperId`、`chatId`）。
 - 创建/提议类 capability 的结果 = 被创建的资源对象（含 `id`、状态字段、`createdAt`）。
 - 不返回数据库原始行：snake_case 列名不出现在线上；投影函数在 application 层，一处定义。
+- 给智能体看的平台状态（`platform_state_*`，S11 AA2）按**形状白名单**逐字段投影，不展开（spread）源对象：每个字符串字段都有形状（枚举、模式或 ISO 时间戳），不合形状、像 IP 字面量或像凭证（`findSuspectedSecrets` 的值模式）的值丢掉或只计数，从不原样透传；地址、命令、显示名、管理员写的自由文本、别的工作区的 id 与名称、别人的登录名一律不出现（用计数代替）。`packages/shared/src/capabilities.test.ts` 在 schema 层守住「字符串必须有形状、名字像地址或秘密的字段只能是枚举/数字/布尔」。
 
 ## 3. 信封（Envelopes）
 

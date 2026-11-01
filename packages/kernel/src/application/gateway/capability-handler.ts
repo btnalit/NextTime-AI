@@ -102,6 +102,13 @@ export interface CapabilityHandlerContext {
    * admins for others") without threading a whole `ConsoleUser` through.
    */
   readonly consoleUser?: { readonly platformRole: PlatformRole };
+  /**
+   * S11 AA2: set when the call comes through an admin agent's Handle (an `admin_agent` session,
+   * dispatch.ts), after the authority check (I-A3) passed — its session and the platform user it
+   * acts for (the administrator; the Principal is `principalId`). What reads the platform for it
+   * (`application/admin-agent/platform-state.ts`) opens its platform transaction as this user.
+   */
+  readonly adminAgent?: { readonly sessionId: string; readonly userId: string };
 }
 
 /**

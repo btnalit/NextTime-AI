@@ -118,6 +118,12 @@ export const CAPABILITY_GROUP_VALUES = [
   // evaluation runs. Its own group: what it holds is closed to agents (I-E4), so every member is
   // human-channel, made for a person, and listed in HUMAN_ONLY_CAPABILITY_NAMES.
   'evaluation',
+  // S11 AA2 (docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §5.2, §5.7): what an admin
+  // agent reads of the platform — redacted projections of the platform plane's own reads. Every
+  // member is `adminAgentOnly` and every `adminAgentOnly` capability is here
+  // (`assertRegistryConsistent`): no other caller, a platform administrator in the console
+  // included, reaches them (the console has the `platform` group's own reads).
+  'platform_state',
 ] as const;
 export type CapabilityGroup = (typeof CAPABILITY_GROUP_VALUES)[number];
 export const CapabilityGroupSchema = z.enum(CAPABILITY_GROUP_VALUES);
@@ -189,6 +195,16 @@ export interface Capability {
    * service or agent Principal cannot. Absent = any kind.
    */
   readonly actsForPerson?: true;
+  /**
+   * S11 AA2: only an admin agent calls it — a Handle of an `admin_agent` session (migration core
+   * 0049; kernel `application/admin-agent`). Every other caller is refused: a person in the
+   * console, a service's API key, a platform administrator's console session (`authorizeCapability
+   * Call`), any other Handle (dispatch, whatever its scope), and no other session kind's Handle is
+   * issued with it (`issueHandle`, `issue_service_handle`). Only the `platform_state` group carries
+   * it, observe-mode, handle-channel, side-effect free (`assertRegistryConsistent`). Absent = any
+   * caller the rest of the entry admits.
+   */
+  readonly adminAgentOnly?: true;
   readonly paramsSchema: z.ZodType;
   /**
    * docs/wire-contract-conventions.md §5 ("为每个 capability 增加 `resultSchema`...列表结果复用
@@ -5004,6 +5020,47 @@ const evaluationCapabilities = [
   },
 ] as const satisfies readonly Capability[];
 
+// S11 AA2 — what an admin agent reads of the platform (`adminAgentOnly`; group `platform_state`).
+// Each is a redacted projection of a platform read the console has (wire/platform-state.ts): counts
+// for anything about other workspaces, no address, command, credential, free text or login. The
+// kernel reads it in a read-only platform transaction as the agent's administrator, checking again
+// that the administrator still is one (I-A3), and records the read on the platform's audit too.
+const platformStateCapabilities = [
+  {
+    name: 'platform_state_gates',
+    group: 'platform_state',
+    mode: 'observe',
+    channel: 'handle',
+    adminAgentOnly: true,
+    paramsSchema: noParams,
+    resultSchema: wire.PlatformStateGatesWireSchema,
+    description:
+      'The platform’s gate instances, oldest first (at most 200; total and truncated say whether there are more): for each its gate id, connector, transport, whether the generic gate host serves it and from which preset, which kind of credential it takes (never the credential), its status, trust and health with when it was last seen and checked, how many Operations it offers and how many workspaces enabled it (never which), and the counts of a manifest awaiting an administrator’s confirmation. No address, display name or Operation definition. Only an admin agent calls it.',
+  },
+  {
+    name: 'platform_state_connectors',
+    group: 'platform_state',
+    mode: 'observe',
+    channel: 'handle',
+    adminAgentOnly: true,
+    paramsSchema: noParams,
+    resultSchema: wire.PlatformStateConnectorsWireSchema,
+    description:
+      'The platform’s connectors, packaged ones first: for each its name, transport, whether it is packaged or one of the four generic ones, its mode (disabled, self_serve, platform_preset), the Operations refused for all its instances (how many, and the names that are plain identifiers), its Operation and instance counts and how many gates workspaces connected themselves through it and how many of those are suspended — counts across every workspace, never which. Only an admin agent calls it.',
+  },
+  {
+    name: 'platform_state_audit',
+    group: 'platform_state',
+    mode: 'observe',
+    channel: 'handle',
+    adminAgentOnly: true,
+    paramsSchema: noParams,
+    resultSchema: wire.PlatformStateAuditWireSchema,
+    description:
+      'The platform’s recent changes: among the newest platform audit rows of the last 168 hours (at most 1000 looked through; truncated says the window holds more), how many writes each action made, and the 20 newest writes — each its action, when, the kind of resource it changed and whether this administrator, another administrator or nobody recorded made it. Reads are left out; no params, resource id or login. Only an admin agent calls it.',
+  },
+] as const satisfies readonly Capability[];
+
 /**
  * The registry's groups, each with its literal names kept (`as const`), for `CapabilityName`. The
  * annotation names each group's type rather than letting the compiler infer the whole tuple: the
@@ -5030,6 +5087,7 @@ const GROUPS: readonly [
   typeof modulesCapabilities,
   typeof goalCapabilities,
   typeof evaluationCapabilities,
+  typeof platformStateCapabilities,
 ] = [
   chatCapabilities,
   ontologyCapabilities,
@@ -5049,6 +5107,7 @@ const GROUPS: readonly [
   modulesCapabilities,
   goalCapabilities,
   evaluationCapabilities,
+  platformStateCapabilities,
 ];
 
 /** The complete capability registry (design doc §9.3). */
@@ -5335,6 +5394,34 @@ export function assertRegistryConsistent(): void {
     if (capability.actsForPerson && capability.scope === 'platform') {
       throw new Error(
         `capability registry: "${capability.name}" is scope:platform but declares actsForPerson`,
+      );
+    }
+
+    // S11 AA2: an admin-agent-only capability is a read an agent makes through its Handle, and
+    // the `platform_state` group holds exactly those.
+    if (capability.adminAgentOnly) {
+      const broken =
+        capability.group !== 'platform_state'
+          ? 'is not in group "platform_state"'
+          : capability.channel !== 'handle'
+            ? 'is not handle-channel'
+            : capability.mode !== 'observe' || capabilityHasSideEffects(capability)
+              ? 'is not a side-effect-free observe'
+              : capability.scope !== undefined
+                ? 'declares a scope'
+                : capability.minRole !== undefined
+                  ? 'has a minRole'
+                  : capability.actsForPerson
+                    ? 'declares actsForPerson'
+                    : undefined;
+      if (broken !== undefined) {
+        throw new Error(
+          `capability registry: "${capability.name}" is adminAgentOnly but ${broken}`,
+        );
+      }
+    } else if (capability.group === 'platform_state') {
+      throw new Error(
+        `capability registry: "${capability.name}" is in group "platform_state" but not adminAgentOnly`,
       );
     }
 

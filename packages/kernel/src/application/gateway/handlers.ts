@@ -375,6 +375,11 @@ import {
 // S8 W4-C (journey ⑤ 清理验收残留) — same one-capability-per-file convention as
 // graph-freshness-handler.ts above.
 import { platformDraftResidueHandler } from './platform-residue-handler.js';
+import {
+  platformStateAuditHandler,
+  platformStateConnectorsHandler,
+  platformStateGatesHandler,
+} from './platform-state-handlers.js';
 // E2-0b (review #493 on #764, F2) — reject_draft, the reviewer's transition beside discard_draft.
 import { rejectDraftHandler } from './reject-draft-handler.js';
 import { observeOperationHandler, requestActionHandler } from './request-action-handler.js';
@@ -2692,4 +2697,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['platform_status', platformStatusHandler],
   // S7-E (P-D 剩余 E5, docs/development-tasks.md §5d) — application/platform/runtime.ts.
   ['set_platform_default_model', setPlatformDefaultModelHandler],
+  // S11 AA2 — what an admin agent reads of the platform (platform-state-handlers.ts).
+  ['platform_state_gates', platformStateGatesHandler],
+  ['platform_state_connectors', platformStateConnectorsHandler],
+  ['platform_state_audit', platformStateAuditHandler],
 ]);

@@ -133,3 +133,55 @@ describe('authorizeCapabilityCall', () => {
     expect(() => authorizeCapabilityCall(handleCaller(['get_object']), cap)).not.toThrow();
   });
 });
+
+describe('authorizeCapabilityCall: what only an admin agent calls (S11 AA2, adminAgentOnly)', () => {
+  const agentOnly = capability({
+    name: 'platform_state_probe',
+    group: 'platform_state',
+    adminAgentOnly: true,
+  });
+
+  it('refuses every caller but a Handle — a person, a service key, a platform administrator', () => {
+    for (const role of ['owner', 'builder', 'operator', 'member', 'auditor'] as const) {
+      expect(() => authorizeCapabilityCall(humanCaller(role), agentOnly), role).toThrow(
+        /only an admin agent's/,
+      );
+    }
+    const serviceKey: ResolvedCaller = {
+      ...humanCaller('owner'),
+      principal: {
+        workspaceId: 'ws1',
+        id: 'svc',
+        kind: 'service',
+        role: 'owner',
+        displayName: null,
+      },
+    } as ResolvedCaller;
+    expect(() => authorizeCapabilityCall(serviceKey, agentOnly)).toThrow(ForbiddenError);
+    const platform: ResolvedCaller = {
+      channel: 'platform',
+      user: {
+        id: 'u1',
+        login: 'admin',
+        displayName: 'Admin',
+        platformRole: 'admin',
+        mustChangePassword: false,
+        consoleSessionId: 'cs1',
+      },
+    };
+    expect(() => authorizeCapabilityCall(platform, agentOnly)).toThrow(ForbiddenError);
+  });
+
+  it('admits a Handle whose scope carries it — which session it is, dispatch checks', () => {
+    expect(() =>
+      authorizeCapabilityCall(handleCaller(['platform_state_probe']), agentOnly),
+    ).not.toThrow();
+    expect(() => authorizeCapabilityCall(handleCaller(['get_object']), agentOnly)).toThrow(
+      ForbiddenError,
+    );
+  });
+
+  it('leaves an ordinary handle-channel capability open to a person, as before', () => {
+    expect(() => authorizeCapabilityCall(humanCaller('member'), capability())).not.toThrow();
+  });
+});

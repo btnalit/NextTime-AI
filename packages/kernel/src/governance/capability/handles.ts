@@ -407,8 +407,10 @@ export interface EntryScopeOptions {
  * Reads only, for now (coordinator decision on AA1, 2026-11-01): the workspace's graph, the
  * definitions an administrator works on (Skills, Procedures, ontology types and versions,
  * WorkerDefinitions — plan §5.2 "读定义类能力"), the goals it may read (on a Handle only its
- * person's own runs, application/goal views.ts), and observe-class gate calls (decided per call by
- * `observeRefusal`, as for the entry agent). Those two gate calls are the only ones with side
+ * person's own runs, application/goal views.ts), observe-class gate calls (decided per call by
+ * `observeRefusal`, as for the entry agent) and, since AA2, the platform's state as an agent may
+ * see it (group `platform_state`: redacted, `adminAgentOnly` — no other Handle carries it,
+ * `issueHandle` below). Those two gate calls are the only ones with side
  * effects (`ADMIN_AGENT_CEILING_SIDE_EFFECTS`): an observation records what it saw — an Activity
  * and the observed Facts, under the person's Principal as the entry agent's do; only the audit row
  * carries the session kind until the observation's own record does (STATUS legacy, before AA4).
@@ -459,6 +461,10 @@ const ADMIN_AGENT_CEILING_CAPABILITY_NAMES = [
   'list_allowed_operations',
   'observe_operation',
   ENTRY_CEILING_GATE_OBSERVE_CAPABILITY_NAME,
+  // the platform, redacted (S11 AA2): only an admin agent's Handle carries these (`adminAgentOnly`)
+  'platform_state_gates',
+  'platform_state_connectors',
+  'platform_state_audit',
 ] as const;
 
 /** The registry groups an admin-agent capability may come from. `governance` (`request_action`),
@@ -473,6 +479,7 @@ const ADMIN_AGENT_CEILING_GROUPS: ReadonlySet<string> = new Set([
   'goal',
   'task',
   'gate',
+  'platform_state',
 ]);
 
 /** The ceiling's capabilities that write anything at all (`sideEffects: true`): the observe-class
@@ -729,6 +736,18 @@ export async function issueHandle(
     if (outside.length > 0) {
       throw new HandleIssuanceError(
         `an admin agent's Handle cannot carry ${outside.map((name) => quotedName(name)).join(', ')}: outside ADMIN_AGENT_CEILING_CAPABILITIES`,
+      );
+    }
+  } else {
+    // S11 AA2: and the other way round — what only an admin agent reads (`adminAgentOnly`, the
+    // platform's state) is in no other session's Handle, whoever issues it (the operator CLI's
+    // `issue-service-handle` included). The dispatcher refuses such a call anyway.
+    const agentOnly = params.scope.capabilities.filter(
+      (name) => getCapability(name)?.adminAgentOnly,
+    );
+    if (agentOnly.length > 0) {
+      throw new HandleIssuanceError(
+        `only an admin agent's Handle carries ${agentOnly.map((name) => quotedName(name)).join(', ')}: this is a "${sessionRow.kind}" session`,
       );
     }
   }

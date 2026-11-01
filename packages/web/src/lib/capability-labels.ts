@@ -1497,6 +1497,29 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '查看比当前部署更新的平台版本与升级步骤。',
     enHint: 'Shows newer platform releases and how to upgrade.',
   },
+  // S11 AA2: what an admin agent reads of the platform — it alone calls these, so the console shows
+  // them only in audit rows (the workspace's, and the platform's own record of the read).
+  platform_state_gates: {
+    zh: '智能体查看平台门',
+    en: 'Agent reads platform gates',
+    zhHint: '管理员智能体查看平台门实例的状态与健康，不含地址与凭证。',
+    enHint:
+      "An admin agent reads the platform's gate instances and their health, without addresses or credentials.",
+  },
+  platform_state_connectors: {
+    zh: '智能体查看接入包',
+    en: 'Agent reads connectors',
+    zhHint: '管理员智能体查看接入包目录、模式与计数，不含工作区名字。',
+    enHint:
+      'An admin agent reads the connector catalog, modes and counts, without workspace names.',
+  },
+  platform_state_audit: {
+    zh: '智能体查看平台变更',
+    en: 'Agent reads platform changes',
+    zhHint: '管理员智能体查看平台近期变更的动作与时间，不含参数与账号。',
+    enHint:
+      "An admin agent reads the platform's recent changes by action and time, without params or logins.",
+  },
   platform_status: {
     zh: '查看服务状态',
     en: 'Service status',

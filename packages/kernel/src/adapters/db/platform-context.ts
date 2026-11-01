@@ -19,15 +19,26 @@ export interface PlatformContext {
   readonly userId: string;
 }
 
+export interface WithPlatformOptions {
+  /**
+   * S11 AA2: open the transaction `READ ONLY` — Postgres then refuses every write in it, whatever
+   * policy would admit one (the `*_platform_admin` policies are `for all`). For a read that must
+   * never become anything else: what an admin agent reads of the platform
+   * (`application/admin-agent/platform-state.ts`).
+   */
+  readonly readOnly?: boolean;
+}
+
 export async function withPlatform<T>(
   pool: PoolLike,
   context: PlatformContext,
   fn: (client: PoolClient) => Promise<T>,
+  options: WithPlatformOptions = {},
 ): Promise<T> {
   if (!context.userId) throw new Error('withPlatform requires a non-empty userId');
   const client = await pool.connect();
   try {
-    await client.query('BEGIN');
+    await client.query(options.readOnly ? 'BEGIN READ ONLY' : 'BEGIN');
     await client.query("select set_config('app.platform', 'on', true)");
     await client.query("select set_config('app.user_id', $1, true)", [context.userId]);
     // Never inherit a stale workspace from a pooled connection: policies that read

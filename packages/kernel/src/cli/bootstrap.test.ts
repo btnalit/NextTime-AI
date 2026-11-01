@@ -703,6 +703,30 @@ describe.runIf(DATABASE_URL !== undefined)('createWorkspace (integration, real P
         expect(principals.rowCount).toBe(0);
       });
 
+      it('refuses a capability only an admin agent reads (S11 AA2: platform_state_gates) and opens nothing', async () => {
+        const owner = await createWorkspace(
+          pool,
+          'bootstrap-test-workspace-issue-service-handle-admin-agent-only',
+          'Alice',
+        );
+        await expect(
+          issueServiceHandleFromCli(pool, {
+            workspaceId: owner.workspaceId,
+            name: 'platform-reader-test',
+            scope: ['search', 'platform_state_gates'],
+          }),
+        ).rejects.toThrow(/platform_state_gates is read only by an admin agent/);
+        const principals = await withWorkspace(
+          pool,
+          { workspaceId: owner.workspaceId, principalId: owner.ownerPrincipalId },
+          (client) =>
+            client.query("select 1 from principals where workspace_id = $1 and kind = 'service'", [
+              owner.workspaceId,
+            ]),
+        );
+        expect(principals.rowCount).toBe(0);
+      });
+
       it('re-running with the same --name reuses the same service Principal (a fresh Session/Handle each time)', async () => {
         const owner = await createWorkspace(
           pool,
