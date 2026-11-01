@@ -98,14 +98,23 @@ sh scripts/staging-rehearsal.sh --disposable-host --from v0.42.0 --to HEAD --wor
 3. 从 **main** Run workflow，勾 `real_model`，`runs` 填 3（冒烟）或 10（每次发版的例行回归，上限 10）。
    再勾 `extended` 会加跑 `accept_s2.sh --extended` 的六个场景（`host-accept-real-model.md` §4），
    花费约三倍，job 超时相应从 180 放宽到 330 分钟。
+   job 超时按最坏情况估，不按通常情况（遗留 587）：`runs=10` 时，#899 加的三个场景每次都等到各自的时限，
+   最坏约 180 分钟（goal 10 × 300 s、eval_trial 10 × 600 s、eval_draft 1800 s），再加上原有场景和升级，
+   会超过不带 `extended` 时的 180 分钟。通常远用不了这么久：2026-11-01 `runs=10` 那次，整个 rehearsal job
+   约 57 分钟，其中真实模型阶段约 18 分钟。job 因超时被取消时，先看是哪个场景一直在等，再决定是减 `runs`
+   还是勾 `extended` 换 330 分钟的上限。
 
 被测版本受限：`to` 只能是存在的 `vX.Y.Z` tag（只核对格式与 tag 存在，不核对是否为 GitHub Release、是否在 main 上）或已经在 main 上的提交（留空 = main 头），否则 `plan`
 job 直接失败，不进入 environment。`plan` 不在 environment 里，先于真实模型 job 跑完：run 名称与它的 job 摘要里写着
 from / to / 提交 sha / runs / 配额——要跑的就是这一行；之后 `rehearsal` 开头再核对 sha，不一致就失败。
 
 成本上限：真实模型阶段开始前，脚本把内核自己的每工作区每日 token 配额 `LLM_DAILY_TOKEN_BUDGET` 设为
-`token_budget`（默认 3000000）并重建 kernel——超额的工作区由 llm-proxy 直接拒绝（平台既有的预算机制，
-见 `operations.md` 遗留 19 一节），而不是靠场景自己收敛。`token_budget` 必须是 1 到 10000000 的整数——内核把 0 当成不限额，`plan` 直接拒绝；同一时间只允许一个真实模型
+`token_budget`（默认 8000000）并重建 kernel——超额的工作区由 llm-proxy 直接拒绝（平台既有的预算机制，
+见 `operations.md` 遗留 19 一节），而不是靠场景自己收敛。默认值按实测定：`runs=10`、不带 `extended` 时，
+accept-s2 的工作区一次约用 5.7M token，S3 的约 0.6M（量级与构成见 `host-accept-real-model.md` §8「用量与配额」）；
+默认 8M 给 accept-s2 留约三成余量。配额只是上限，`runs=3` 实际用得少得多。带 `extended` 时花费约三倍，
+`runs=10` 会超过 10M 的上限，只能少跑几次。配额中途耗尽时，之后的调用都被拒绝，REAL 行量的是配额
+而不是模型；验收脚本读 llm-proxy 自己的拒绝日志，有一条就让 `real-budget` 失败并提示调大配额（遗留 586）。`token_budget` 必须是 1 到 10000000 的整数——内核把 0 当成不限额，`plan` 直接拒绝；同一时间只允许一个真实模型
 run（`plan` 查本 workflow 未结束的 `+ real model` dispatch，有就失败），避免并发叠加花费。每个验收脚本用自己的一次性工作区，所以单次
 回归的上界约为"验收脚本数 × 配额"。
 

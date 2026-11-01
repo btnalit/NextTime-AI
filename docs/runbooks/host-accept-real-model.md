@@ -212,6 +212,21 @@ cost/turn。**核对边界**：每个区块的行数应等于该场景自己 `RE
 硬凑平均。avg turn tool calls 这一列不经过 `report-usage.sh`：直接取该场景 `REAL` 行里的
 `turn_tool_calls=<sum>` 除以 `<n>`。
 
+**用量与配额（实测，遗留 586）**——每个验收脚本用自己的一次性工作区，内核按工作区每日
+`LLM_DAILY_TOKEN_BUDGET` 限额（cache read 也计入）。配额中途耗尽，之后该工作区的每个 Turn 和
+Worker 都在第一次模型调用时被 llm-proxy 拒绝，这一轮的 REAL 行量的是配额而不是模型：脚本读
+llm-proxy 自己的拒绝日志（`refused, workspace budget exhausted`），有一条就让 `real-budget` 失败，
+这一轮作废，调大配额重跑。2026-11-01 staging 上 `--runs 10`（不带 `--extended`）的实测量级：
+
+| 工作区 | 调用次数 | token 合计 | 构成 |
+|---|---|---|---|
+| accept-s2 | 约 260 | 约 5.7M | cache read 约 93%。入口会话约 150 次、约 4.8M，每次约 32k，大头是系统提示与工具定义的 cache read；Worker（docker、ssh、评测试跑与草稿评测）约 50 次运行、约 110 次调用、约 0.9M |
+| accept-s3 | 20 | 约 0.6M | dependency_chat 10 次 |
+
+所以 `--runs 10` 时 accept-s2 的配额至少要 6M，staging 默认 8M（`staging-rehearsal.md`「成本上限」）。
+主机上 `LLM_DAILY_TOKEN_BUDGET` 低于这个量级时，例行回归前先临时调大，跑完改回；同一工作区当天已有的用量
+也算在内。带 `--extended` 时约三倍。
+
 **(4) 把 (2)/(3) 的原始输出填进 `docs/private/real-model-<date>.md`**（模板见 §9；文件已在
 `.gitignore` 里，不进任何入库文件）。
 

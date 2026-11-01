@@ -714,6 +714,8 @@ real_chat_dependency_step() {
     i=$((i + 1))
   done
   printf 'REAL scenario=dependency_chat ok=%s/%s turn_tool_calls=%s turn_tool_errors=%s worker_tool_calls=0 worker_tool_errors=0\n' "$ok_n" "$n" "$tc_sum" "$te_sum"
+  # Before judging the count: a refusal for the workspace budget voids it (legacy 586).
+  real_budget_check "real-budget"
   [ "$ok_n" -gt 0 ] || fail "real-chat-dependency" "0/$n dependency chats succeeded under model=$REAL_MODEL"
   pass "real-chat-dependency" "$ok_n/$n dependency chats succeeded under model=$REAL_MODEL"
 
