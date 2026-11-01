@@ -560,7 +560,7 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     );
     const [hint] = screen.getAllByTestId('goal-step-hint');
     expect(hint?.textContent).toMatch(
-      /平台管理员可以在「平台 → 工作区」里允许它，或者在对话里让入口智能体修订计划换掉它，或者在「修订计划…」里移除这一步。$/,
+      /平台管理员可以在「平台 → 工作区」里允许它，或者在「修订计划…」里改这一步对 Worker 的调整把它换掉，或者移除这一步。$/,
     );
     expect(hint?.textContent).not.toContain('驳回');
     expect(hint?.textContent).toContain('这一步不会开始，');

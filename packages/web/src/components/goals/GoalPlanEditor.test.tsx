@@ -324,7 +324,7 @@ describe('the plan editor on the goal page (S11 GO6, revise_goal)', () => {
     await waitFor(() => expect(document.activeElement?.contains(done)).toBe(true));
   });
 
-  it('S11 GO8a: keeps a step’s WorkerSpec as it is, and says so', async () => {
+  it('S11 GO8a / GO15b: a step’s WorkerSpec left alone rides along as it is, whatever else changes', async () => {
     const spec = { instructions: 'Only the hosts in the input.', skills: ['cert-rotation'] };
     const withSpec = paused({
       planRevision: {
@@ -362,7 +362,14 @@ describe('the plan editor on the goal page (S11 GO6, revise_goal)', () => {
     renderPage(http);
     await openEditor();
     const fetch = step('fetch');
-    expect(fetch.textContent).toContain('这一步对 Worker 的调整保持不变');
+    // S11 GO15b: no longer among what stays as it is — it is edited under 「对 Worker 的调整」, open
+    // since the step sets some of it.
+    expect(fetch.textContent).not.toContain('这一步对 Worker 的调整保持不变');
+    const section = within(fetch).getByTestId('goal-plan-step-spec');
+    expect((section as HTMLDetailsElement).open).toBe(true);
+    expect(within(section).getByTestId('goal-plan-step-spec-summary').textContent).toMatch(
+      /^调整了：职责说明、Skill$/,
+    );
     await waitFor(() =>
       expect((within(fetch).getByTestId('goal-plan-step-worker') as HTMLSelectElement).value).toBe(
         WORKER_ID,
@@ -912,5 +919,460 @@ describe('the plan editor on the goal page (S11 GO6, revise_goal)', () => {
     expect(screen.queryByTestId('goal-plan-editor')).toBeNull();
     expect(await screen.findByTestId('goal-op-revise')).toBeTruthy();
     expect(http.calls.some((call) => call.name === 'revise_goal')).toBe(false);
+  });
+});
+
+describe('S11 GO15b: a step’s adjustments to its Worker, edited in the plan editor', () => {
+  const directories: Record<string, (params: unknown) => unknown> = {
+    get_worker_definition: (params) => ({
+      id: WORKER_ID,
+      version: (params as { version: number }).version,
+      kind: 'worker',
+      status: 'published',
+      definition: {
+        name: 'cert-worker',
+        systemPrompt: 'You renew certificates.',
+        skills: ['cert-rotation'],
+        model: 'model-a',
+        capabilities: ['get_task'],
+      },
+    }),
+    list_skills: () => ({
+      items: [
+        {
+          id: '55555555-5555-4555-8555-555555555555',
+          version: 2,
+          status: 'published',
+          name: 'cert-rotation',
+          description: '',
+        },
+        {
+          id: '66666666-6666-4666-8666-666666666666',
+          version: 1,
+          status: 'published',
+          name: 'audit',
+          description: '',
+        },
+        {
+          id: '77777777-7777-4777-8777-777777777777',
+          version: 1,
+          status: 'draft',
+          name: 'renew-draft',
+          description: '',
+        },
+        {
+          id: '88888888-8888-4888-8888-888888888888',
+          version: 3,
+          status: 'deprecated',
+          name: 'legacy-scan',
+          description: '',
+        },
+      ],
+    }),
+    list_capability_names: () => ({
+      items: [
+        { name: 'get_task', mode: 'observe' },
+        { name: 'propose_action', mode: 'propose' },
+      ],
+    }),
+    list_models: () => ({
+      items: [
+        { id: 'model-a', provider: 'p', model: 'a' },
+        { id: 'model-b', provider: 'p', model: 'b' },
+        { id: 'model-c', provider: 'p', model: 'c' },
+      ],
+    }),
+    get_agent_policy: () => ({
+      workspaceId: 'ws-1',
+      allowedModels: ['model-a', 'model-b'],
+      defaultModel: null,
+      memberCanEditProfile: true,
+      maxPromptAddendumChars: 1000,
+      allowedSkills: [],
+      allowedGatekeepers: [],
+      allowMemberAutoApproveLow: false,
+      updatedAt: null,
+      updatedBy: null,
+    }),
+  };
+  const revised = {
+    revise_goal: () => ({
+      goalRunId: 'goal-1',
+      status: 'paused',
+      changed: true,
+      revision: 2,
+      planRevisionId: 'rev-2',
+      supersededStepRunIds: ['sr-fetch'],
+      createdStepRunIds: ['sr-fetch-2'],
+      withdrawnActionRequestIds: [],
+      releasedActionRequestIds: [],
+      hints: [],
+    }),
+  };
+  const withSpec = (spec: Record<string, unknown>) =>
+    paused({
+      planRevision: {
+        ...goalDetail().planRevision,
+        plan: {
+          ...goalDetail().planRevision.plan,
+          steps: [
+            {
+              key: 'fetch',
+              worker: { definitionId: WORKER_ID, version: 2 },
+              input: { hosts: 3 },
+              spec,
+            },
+            ...goalDetail().planRevision.plan.steps.slice(1),
+          ],
+        },
+      },
+    });
+  const sentSteps = (http: { calls: { name: string; params: unknown }[] }) =>
+    (
+      http.calls.find((call) => call.name === 'revise_goal')?.params as {
+        plan: GoalDetailWire['planRevision']['plan'];
+      }
+    ).plan.steps;
+  const openSpec = async (element: HTMLElement) => {
+    const section = within(element).getByTestId('goal-plan-step-spec') as HTMLDetailsElement;
+    if (!section.open) {
+      section.open = true;
+      fireEvent(section, new Event('toggle'));
+    }
+    return within(element).findByTestId('goal-plan-spec-fields');
+  };
+  const inherit = (element: HTMLElement, field: string) =>
+    within(element)
+      .getAllByTestId('goal-plan-spec-inherit')
+      .find((box) => box.getAttribute('data-field') === field) as HTMLInputElement;
+  const option = (element: HTMLElement, testId: string, label: string) =>
+    within(within(element).getByTestId(testId))
+      .getAllByRole('checkbox')
+      .find((box) => box.closest('label')?.textContent === label) as HTMLInputElement;
+
+  it('starts closed on a step that sets nothing, and reads the directories only once opened', async () => {
+    const http = scriptedHttp(
+      handlers(paused(), workspace('p-alice', 'member'), { ...directories }),
+    );
+    renderPage(http);
+    await openEditor();
+    const fetch = step('fetch');
+    const section = within(fetch).getByTestId('goal-plan-step-spec') as HTMLDetailsElement;
+    expect(section.open).toBe(false);
+    expect(within(fetch).getByTestId('goal-plan-step-spec-summary').textContent).toBe(
+      '沿用 Worker 定义',
+    );
+    expect(http.calls.some((call) => call.name === 'list_skills')).toBe(false);
+    await openSpec(fetch);
+    await waitFor(() =>
+      expect(http.calls.some((call) => call.name === 'get_worker_definition')).toBe(true),
+    );
+  });
+
+  it('picks each field from what it may be, starting from the definition, and sends the WorkerSpec', async () => {
+    const http = scriptedHttp(
+      handlers(paused(), workspace('p-alice', 'member'), { ...directories, ...revised }),
+    );
+    renderPage(http);
+    await openEditor();
+    const fetch = step('fetch');
+    await openSpec(fetch);
+    // Each field says what the definition version the step names has.
+    await waitFor(() =>
+      expect(
+        within(fetch)
+          .getAllByTestId('goal-plan-spec-base')
+          .map((line) => line.textContent),
+      ).toEqual([
+        expect.stringMatching(/^定义：cert-rotation$/),
+        '定义：不作用于任何门',
+        expect.stringMatching(/^定义：\S+$/),
+        expect.stringMatching(/^定义：model-a$/),
+      ]),
+    );
+    // Unticking 沿用定义 starts from the definition's list; Skills on offer are the published ones
+    // and a draft, said to be one, never one only deprecated.
+    fireEvent.click(inherit(fetch, 'skills'));
+    await waitFor(() =>
+      expect(option(fetch, 'goal-plan-spec-skills', 'cert-rotation').checked).toBe(true),
+    );
+    const offered = within(within(fetch).getByTestId('goal-plan-spec-skills'))
+      .getAllByRole('checkbox')
+      .map((box) => box.closest('label')?.textContent);
+    expect(offered).toEqual([
+      'cert-rotation',
+      'audit',
+      'renew-draft（草稿：要有人批准试用，这一步才会开始）',
+    ]);
+    fireEvent.click(option(fetch, 'goal-plan-spec-skills', 'audit'));
+    // Models: the catalog's that the workspace allows, the definition's said in the first option.
+    const model = within(fetch).getByTestId('goal-plan-spec-model') as HTMLSelectElement;
+    await waitFor(() =>
+      expect([...model.options].map((item) => item.value)).toEqual(['', 'model-a', 'model-b']),
+    );
+    expect(model.options[0]?.textContent).toBe('沿用定义（model-a）');
+    fireEvent.change(model, { target: { value: 'model-b' } });
+    fireEvent.change(within(fetch).getByTestId('goal-plan-spec-token-budget'), {
+      target: { value: '20000' },
+    });
+    expect(within(fetch).getByTestId('goal-plan-step-spec-summary').textContent).toBe(
+      '调整了：Skill、模型、每次尝试的 Token 上限',
+    );
+    fireEvent.change(screen.getByTestId('goal-plan-reason'), { target: { value: '多做一次审计' } });
+    const submit = screen.getByTestId('goal-plan-submit') as HTMLButtonElement;
+    await waitFor(() => expect(submit.disabled).toBe(false));
+    fireEvent.click(submit);
+    const confirm = await screen.findByTestId('goal-plan-confirm');
+    expect(confirm.textContent).toMatch(/改动 fetch：.*模型设为 model-b（原来沿用 Worker 定义）/);
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() =>
+      expect(sentSteps(http)[0]).toEqual({
+        key: 'fetch',
+        worker: { definitionId: WORKER_ID, version: 2 },
+        input: { hosts: 3 },
+        spec: { skills: ['cert-rotation', 'audit'], model: 'model-b', tokenBudget: 20000 },
+      }),
+    );
+  });
+
+  it('clears every adjustment, and the step runs its Worker as it is', async () => {
+    const http = scriptedHttp(
+      handlers(
+        withSpec({ instructions: 'Only the hosts.', observeScope: [GATE_ID] }),
+        workspace('p-alice', 'member'),
+        { ...directories, ...revised },
+      ),
+    );
+    renderPage(http);
+    await openEditor();
+    const fetch = step('fetch');
+    await within(fetch).findByTestId('goal-plan-spec-fields');
+    expect(inherit(fetch, 'observeScope').checked).toBe(false);
+    await waitFor(() =>
+      expect(option(fetch, 'goal-plan-spec-observe-scope', 'cert-gate').checked).toBe(true),
+    );
+    fireEvent.click(within(fetch).getByTestId('goal-plan-spec-clear'));
+    expect(within(fetch).getByTestId('goal-plan-step-spec-summary').textContent).toBe(
+      '沿用 Worker 定义',
+    );
+    await send();
+    // Left out of what is sent (`undefined` does not reach the wire).
+    await waitFor(() => expect(sentSteps(http)[0]?.spec).toBeUndefined());
+    expect(JSON.parse(JSON.stringify(sentSteps(http)[0]))).toEqual({
+      key: 'fetch',
+      worker: { definitionId: WORKER_ID, version: 2 },
+      input: { hosts: 3 },
+    });
+  });
+
+  it('keeps a masked responsibility left alone, and holds it once another adjustment changes', async () => {
+    const spec = { instructions: 'Use token [redacted] only.', skills: ['cert-rotation'] };
+    const http = scriptedHttp(
+      handlers(withSpec(spec), workspace('p-alice', 'member'), { ...directories, ...revised }),
+    );
+    renderPage(http);
+    await openEditor();
+    const fetch = step('fetch');
+    await within(fetch).findByTestId('goal-plan-spec-fields');
+    expect(fetch.textContent).toContain('这里有遮蔽的原文：不改这一步对 Worker 的调整');
+    const model = within(fetch).getByTestId('goal-plan-spec-model') as HTMLSelectElement;
+    await waitFor(() => expect(model.options.length).toBe(3));
+    fireEvent.change(model, { target: { value: 'model-b' } });
+    expect(errorOf('goal-plan-spec-instructions')).toMatch(
+      /^改了这一步对 Worker 的调整，这一段说明就按新写的算.*请把它重新写成不带凭据的说明。$/,
+    );
+    expect((screen.getByTestId('goal-plan-submit') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(model, { target: { value: '' } });
+    expect(errorOf('goal-plan-spec-instructions')).toBe('');
+    // Left as it is while the Worker's version changes, it is sent as read — the kernel keeps it.
+    fireEvent.change(within(fetch).getByTestId('goal-plan-step-version'), {
+      target: { value: '3' },
+    });
+    await send();
+    await waitFor(() => expect(sentSteps(http)[0]?.spec).toBe(spec));
+  });
+
+  it('UX P2-1 on #889: unticking 沿用定义 starts from the Skills a run mounts now, and holds one with no usable version', async () => {
+    const definition = directories.get_worker_definition as (params: unknown) => {
+      definition: Record<string, unknown>;
+    };
+    const http = scriptedHttp(
+      handlers(withSpec({ skills: ['ghost', 'audit'] }), workspace('p-alice', 'member'), {
+        ...directories,
+        ...revised,
+        get_worker_definition: (params) => {
+          const read = definition(params);
+          return {
+            ...read,
+            definition: {
+              ...read.definition,
+              skills: ['cert-rotation', 'legacy-scan', 'renew-draft'],
+            },
+          };
+        },
+      }),
+    );
+    renderPage(http);
+    await openEditor();
+    // The other steps' sections share the one directory read.
+    const fetch = step('fetch');
+    await within(fetch).findByTestId('goal-plan-spec-fields');
+    // A reference with no published version and no draft is kept, to untick, and says so.
+    const ghost = '（已弃用或不在了：留着它这一步就不会开始，取消勾选）';
+    await waitFor(() =>
+      expect(option(fetch, 'goal-plan-spec-skills', `ghost${ghost}`).checked).toBe(true),
+    );
+    const skillsField = within(fetch)
+      .getAllByTestId('goal-plan-spec-field')
+      .find((element) => element.getAttribute('data-field') === 'skills') as HTMLElement;
+    // Kept as read, it is the kernel's to hint: nothing holds the plan.
+    expect(alerts(skillsField)).toBe('');
+    const model = within(fetch).getByTestId('goal-plan-spec-model') as HTMLSelectElement;
+    await waitFor(() => expect(model.options.length).toBe(3));
+    fireEvent.change(model, { target: { value: 'model-b' } });
+    // Sent as written, it would keep the step from starting: held on its field.
+    expect(alerts(skillsField)).toMatch(/^ghost 已弃用或不在了：这一步点名它就不会开始。/);
+    expect((screen.getByTestId('goal-plan-submit') as HTMLButtonElement).disabled).toBe(true);
+    // Back to the definition: its line says which of its Skills a run would not mount.
+    fireEvent.click(inherit(fetch, 'skills'));
+    expect(alerts(skillsField)).toBe('');
+    const skillsLine = within(fetch)
+      .getAllByTestId('goal-plan-spec-base')
+      .find((line) => line.getAttribute('data-field') === 'skills');
+    expect(skillsLine?.textContent).toMatch(
+      /^定义：cert-rotation、legacy-scan（已弃用或不在了，沿用时不装载）、renew-draft（只有草稿，沿用时不装载）$/,
+    );
+    // Unticked again, the list starts from what the definition mounts now — never the deprecated
+    // one, nor the draft, which stays on offer to tick.
+    fireEvent.click(inherit(fetch, 'skills'));
+    const ticked = within(within(fetch).getByTestId('goal-plan-spec-skills'))
+      .getAllByRole('checkbox')
+      .filter((box) => (box as HTMLInputElement).checked)
+      .map((box) => box.closest('label')?.textContent);
+    expect(ticked).toEqual(['cert-rotation']);
+    expect(
+      option(fetch, 'goal-plan-spec-skills', 'renew-draft（草稿：要有人批准试用，这一步才会开始）')
+        .checked,
+    ).toBe(false);
+    expect(alerts(skillsField)).toBe('');
+    await send();
+    await waitFor(() =>
+      expect(sentSteps(http)[0]?.spec).toEqual({ skills: ['cert-rotation'], model: 'model-b' }),
+    );
+  });
+
+  it('UX P3 on #889: the model says the definition’s, a chosen one’s health, and a list ticked empty what it means', async () => {
+    const http = scriptedHttp(
+      handlers(paused(), workspace('p-alice', 'member'), {
+        ...directories,
+        list_models: () => ({
+          items: [
+            {
+              id: 'model-a',
+              provider: 'p',
+              model: 'a',
+              health: { status: 'ok', testedAt: '2026-11-01T00:00:00.000Z' },
+            },
+            {
+              id: 'model-b',
+              provider: 'q',
+              model: 'b',
+              health: { status: 'tools_failed', testedAt: '2026-11-01T00:00:00.000Z' },
+            },
+          ],
+        }),
+      }),
+    );
+    renderPage(http);
+    await openEditor();
+    const fetch = step('fetch');
+    await openSpec(fetch);
+    const model = within(fetch).getByTestId('goal-plan-spec-model') as HTMLSelectElement;
+    await waitFor(() => expect(model.options.length).toBe(3));
+    expect(within(fetch).queryByTestId('goal-plan-spec-model-health')).toBeNull();
+    fireEvent.change(model, { target: { value: 'model-b' } });
+    expect(within(fetch).getByTestId('goal-plan-spec-model-health').textContent).toMatch(
+      /^所选模型的供应商「q」/,
+    );
+    // Capabilities unticked to none: what that leaves the step with.
+    fireEvent.click(inherit(fetch, 'capabilities'));
+    await within(fetch).findByTestId('goal-plan-spec-capabilities');
+    for (const box of within(within(fetch).getByTestId('goal-plan-spec-capabilities'))
+      .getAllByRole('checkbox')
+      .filter((item) => (item as HTMLInputElement).checked)) {
+      fireEvent.click(box);
+    }
+    // A list set here with something ticked says nothing more.
+    fireEvent.click(inherit(fetch, 'skills'));
+    await waitFor(() =>
+      expect(option(fetch, 'goal-plan-spec-skills', 'cert-rotation').checked).toBe(true),
+    );
+    const none = within(fetch)
+      .getAllByTestId('goal-plan-spec-none')
+      .map((note) => note.getAttribute('data-field'));
+    expect(none).toEqual(['capabilities']);
+  });
+
+  it('holds a token cap that is not a whole number above 0 on its field', async () => {
+    const http = scriptedHttp(
+      handlers(paused(), workspace('p-alice', 'member'), { ...directories }),
+    );
+    renderPage(http);
+    await openEditor();
+    const fetch = step('fetch');
+    await openSpec(fetch);
+    fireEvent.change(within(fetch).getByTestId('goal-plan-spec-token-budget'), {
+      target: { value: '1.5' },
+    });
+    expect(errorOf('goal-plan-spec-token-budget')).toBe('填一个大于 0 的整数，或者清空。');
+    expect((screen.getByTestId('goal-plan-submit') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('shows what the kernel found in a WorkerSpec on the field it is about', async () => {
+    let refusal: HttpError = new HttpError('capability_error', 'plan: invalid', 'invalid_params', {
+      problems: [
+        'step "fetch": spec: skills that are not there: "audit"',
+        'step "fetch": spec: model — one the llm-proxy catalog does not offer: "model-b"',
+      ],
+    });
+    const http = scriptedHttp(
+      // A Skill the directory still lists, gone by the time the kernel checks it.
+      handlers(withSpec({ skills: ['audit'] }), workspace('p-alice', 'member'), {
+        ...directories,
+        revise_goal: () => {
+          throw refusal;
+        },
+      }),
+    );
+    renderPage(http);
+    await openEditor();
+    const fetch = step('fetch');
+    await within(fetch).findByTestId('goal-plan-spec-fields');
+    await waitFor(() => expect(option(fetch, 'goal-plan-spec-skills', 'audit').checked).toBe(true));
+    const model = within(fetch).getByTestId('goal-plan-spec-model') as HTMLSelectElement;
+    await waitFor(() => expect(model.options.length).toBe(3));
+    fireEvent.change(model, { target: { value: 'model-b' } });
+    await send();
+    const field = (name: string) =>
+      within(fetch)
+        .getAllByTestId('goal-plan-spec-field')
+        .find((element) => element.getAttribute('data-field') === name) as HTMLElement;
+    await waitFor(() => expect(alerts(field('skills'))).toMatch(/skills that are not there/));
+    expect(errorOf('goal-plan-spec-model')).toMatch(/llm-proxy catalog does not offer/);
+    expect(within(fetch).queryByTestId('goal-plan-step-problem')).toBeNull();
+
+    // A credential in its responsibility lands there, with how to write it instead.
+    refusal = new HttpError('capability_error', 'plan: refused', 'credentials_in_text', {
+      field: 'plan.steps.0.spec.instructions',
+      suspectedSecretValues: 1,
+    });
+    fireEvent.click(option(fetch, 'goal-plan-spec-skills', 'audit'));
+    fireEvent.change(within(fetch).getByTestId('goal-plan-spec-instructions'), {
+      target: { value: 'password=not-a-real-value' },
+    });
+    await send();
+    await waitFor(() =>
+      expect(errorOf('goal-plan-spec-instructions')).toMatch(/用 deploy 账号的令牌/),
+    );
   });
 });
