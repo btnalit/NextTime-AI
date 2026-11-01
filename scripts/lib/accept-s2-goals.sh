@@ -1489,7 +1489,9 @@ fetch('http://worker-supervisor:8081/task-dirs/keep', {
 goal_s14_handoff() {
   n=$(real_token)
   token="s14-$n"
-  a=$(goal_step_json a "ACCEPT_S2_SCENARIO=goal_handoff HANDOFF_ROLE=write HANDOFF_TOKEN=$token")
+  # The mark is named HANDOFF_MARK, not …_TOKEN: a plan input reading `X_TOKEN=<value>` is refused
+  # as a suspected credential (credentials_in_text), as it should be.
+  a=$(goal_step_json a "ACCEPT_S2_SCENARIO=goal_handoff HANDOFF_ROLE=write HANDOFF_MARK=$token")
   b=$(goal_step_json b "ACCEPT_S2_SCENARIO=goal_handoff HANDOFF_ROLE=read" '"dependsOn":["a"],"filesFrom":["a"]')
   goal_propose_confirm s14 "{\"statement\":\"accept_s2 S14 $n: one ops-runner step leaves a file for the next, which reads it from the earlier step's handoff directory.\",\"plan\":{\"steps\":[$a,$b],\"acceptance\":[$(goal_observe_check_json stock-visible stock.get '{}' symbol '"NXT"')]},\"budget\":$GOAL_BUDGET,\"idempotencyKey\":\"accept-s2-goal-s14-$n\"}"
   S14_GOAL_ID=$GOAL_RUN_ID

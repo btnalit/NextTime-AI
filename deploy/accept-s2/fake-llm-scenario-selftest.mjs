@@ -1111,7 +1111,7 @@ async function main() {
         { role: 'assistant', content: null, tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }] },
         { role: 'tool', tool_call_id: id, content: answer },
       ];
-      const writer = { role: 'custom', content: '### Task input\nACCEPT_S2_SCENARIO=goal_handoff HANDOFF_ROLE=write HANDOFF_TOKEN=h42tok' };
+      const writer = { role: 'custom', content: '### Task input\nACCEPT_S2_SCENARIO=goal_handoff HANDOFF_ROLE=write HANDOFF_MARK=h42tok' };
       const wrote = toolCallOf((await post([writer, begin])).json);
       check(
         'handoff-write-turn1',

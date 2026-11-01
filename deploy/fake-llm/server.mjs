@@ -824,7 +824,7 @@ function goalThreeWritesScenario(messages) {
 }
 
 /** S11 GO14 (scripts/lib/accept-s2-goals.sh S14, `goal_s14_handoff`): files between a goal's steps.
- *  `HANDOFF_ROLE=write HANDOFF_TOKEN=<t>` — the first step: pi's `write` puts `<t>` in
+ *  `HANDOFF_ROLE=write HANDOFF_MARK=<t>` — the first step: pi's `write` puts `<t>` in
  *  `/workspace/out/handoff.txt`, the one directory the platform hands on, then it reports.
  *  `HANDOFF_ROLE=read` — the step after it, whose plan entry names it in `filesFrom` and whose input
  *  carries no token: pi's `read` reads `/upstream/a/handoff.txt`, pi's `bash` tries to write next to
@@ -847,7 +847,9 @@ function goalHandoffStepScenario(messages) {
     },
   });
   if (role === 'write') {
-    const token = extractMarker(blob, 'HANDOFF_TOKEN') ?? 'none';
+    // `HANDOFF_MARK`, not `…_TOKEN`: a plan input reading `X_TOKEN=<value>` is refused as a
+    // suspected credential (`credentials_in_text`), which is the point of that check.
+    const token = extractMarker(blob, 'HANDOFF_MARK') ?? 'none';
     const wrote = findToolResultText(messages, 'write') ?? 'no answer';
     return [
       { tool: { name: 'write', args: { path: '/workspace/out/handoff.txt', content: `${token}\n` } } },
