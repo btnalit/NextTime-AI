@@ -64,7 +64,7 @@ function proposedGoal(requester: string) {
     statement: STATEMENT,
     currentRevision: 1,
     budget: { maxTokens: 200000, maxSteps: 8, maxRevisions: 2, maxWallClockSeconds: 3600 },
-    usage: { tokens: 0, steps: 0, revisions: 0 },
+    usage: { tokens: 0, steps: 0, revisions: 0, plannerTokens: 0, plannerRounds: 0 },
     stepCounts: {
       pending: 0,
       ready: 0,

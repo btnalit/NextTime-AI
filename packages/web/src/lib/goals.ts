@@ -35,9 +35,14 @@ import type {
   UnresolvedGoalActionWire,
   WorkerSpec,
 } from '@nexttime/shared';
-import { visibleText } from '@nexttime/shared';
+import { GOAL_PLANNER_NO_PROGRESS_LIMIT, visibleText } from '@nexttime/shared';
 import { actionLabel } from './capability-labels.js';
 import { clipMiddle, redactSensitive, shortId } from './format.js';
+import {
+  currentPlanningConclusion,
+  plannerRoundsUsedUpText,
+  planningOutcomeText,
+} from './goal-planner.js';
 import { pendingTrialStepKeys } from './goal-trials.js';
 import { isUuidLike } from './graph-view.js';
 import type { Translate } from './i18n.js';
@@ -996,7 +1001,14 @@ export function goalBudgetRows(
       label: 'Token',
       used: usage.tokens,
       max: budget.maxTokens,
-      usedText: usage.tokens.toLocaleString(),
+      // S11 GO10: the goal planner's share is already in `tokens`; named only when it spent any.
+      usedText:
+        usage.plannerTokens > 0
+          ? t(
+              `${usage.tokens.toLocaleString()}（其中规划器 ${usage.plannerTokens.toLocaleString()}）`,
+              `${usage.tokens.toLocaleString()} (planner ${usage.plannerTokens.toLocaleString()})`,
+            )
+          : usage.tokens.toLocaleString(),
       maxText: budget.maxTokens.toLocaleString(),
     },
     {
@@ -1024,6 +1036,27 @@ export function goalBudgetRows(
       maxText: durationText(budget.maxWallClockSeconds, t),
     },
   ];
+}
+
+/** S11 GO10 (coordinator on #870): the goal planner's rounds — rounds that started a planning
+ *  Task, whatever they came to — against `maxRevisions`, a row of the budget card beside the plan
+ *  revisions: two counts, one limit. Not a budget dimension of {@link goalBudgetRows} (reaching it
+ *  stops the planner, it does not pause the goal `budget_exhausted`). `null` for a goal its
+ *  requester did not let the planner near and that never ran one. */
+export interface PlannerRoundsRow extends Omit<BudgetRow, 'key'> {
+  readonly key: 'plannerRounds';
+}
+
+export function plannerRoundsRow(goal: GoalDetailWire, t: Translate): PlannerRoundsRow | null {
+  if (goal.planner === null && goal.usage.plannerRounds === 0) return null;
+  return {
+    key: 'plannerRounds',
+    label: t('规划器轮数', 'Planner rounds'),
+    used: goal.usage.plannerRounds,
+    max: goal.budget.maxRevisions,
+    usedText: String(goal.usage.plannerRounds),
+    maxText: String(goal.budget.maxRevisions),
+  };
 }
 
 /** The budget dimensions used up (`used ≥ max`; a revision budget of 0 is not "used up" — it only
@@ -1627,7 +1660,23 @@ function pausedNote(
             ),
       };
     }
-    case 'no_progress':
+    case 'no_progress': {
+      // S11 GO10: the goal planner's latest rounds that ran — the ones the platform's breaker
+      // counted — name the steps they were for.
+      const stalled = (goal.planningRounds ?? [])
+        .filter((round) => round.kind === 'autonomous' && round.taskId !== null)
+        .slice(-GOAL_PLANNER_NO_PROGRESS_LIMIT);
+      const keys = [...new Set(stalled.map((round) => round.stepKey))];
+      if (keys.length > 0) {
+        const [zh, en] = namesIn(keys);
+        return {
+          tone: 'warn',
+          text: t(
+            `目标规划器连续 ${stalled.length} 轮换路（针对步骤${zh}），都没让任何一步成功，平台把目标暂停了，等你决定：可以重试步骤、修订计划或结束目标。`,
+            `The goal planner tried ${stalled.length} times in a row (for ${keys.length === 1 ? 'step' : 'steps'} ${en}) and no step succeeded, so the platform paused the goal for you to decide: retry a step, revise the plan or end the goal.`,
+          ),
+        };
+      }
       return {
         tone: 'warn',
         text: t(
@@ -1635,6 +1684,7 @@ function pausedNote(
           'Several rounds made no progress, so the platform paused it; a person decides what next.',
         ),
       };
+    }
     case 'authority_lost': {
       const hints = pauseHints(goal, AUTHORITY_PAUSE_HINTS);
       if (hints.some((hint) => hint.code === 'requester_cannot_start_workers')) {
@@ -1692,6 +1742,46 @@ function pausedNote(
             'A person must decide: the goal planner is looking at this failure to propose a revision; it shows under Goal planner below.',
           ),
         };
+      }
+      // S11 GO10 (UX P2-1 on #870): the planner's round for this failure stopped without a
+      // revision — the pause is about that, in the planner card's words (the planner rounds used
+      // up, with their count), not the general sentence below.
+      const conclusion =
+        goal.planningRounds && goal.steps
+          ? currentPlanningConclusion({
+              ...goal,
+              planningRounds: goal.planningRounds,
+              steps: goal.steps,
+            })
+          : null;
+      if (conclusion?.status === 'failed' && goal.planningRounds) {
+        const rounds = { planningRounds: goal.planningRounds, budget: goal.budget };
+        const attempt = t(
+          `步骤「${conclusion.stepKey}」第 ${conclusion.stepAttempt} 次尝试`,
+          `step ${conclusion.stepKey}’s attempt ${conclusion.stepAttempt}`,
+        );
+        const usedUp = plannerRoundsUsedUpText(rounds, conclusion, t);
+        if (usedUp) {
+          // Mid-sentence after the colon in English: "the planner rounds…", not "The…".
+          const usedUpMid = usedUp.charAt(0).toLowerCase() + usedUp.slice(1);
+          return {
+            tone: 'warn',
+            text: t(
+              `需要人决定：${usedUp}，平台不再为${attempt}的失败运行规划器。可以重试步骤、自己修订计划或结束目标。`,
+              `A person must decide: ${usedUpMid}, so no planner runs for the failure of ${attempt}. Retry the step, revise the plan yourself or end the goal.`,
+            ),
+          };
+        }
+        const outcome = planningOutcomeText(conclusion, t, rounds);
+        if (outcome) {
+          return {
+            tone: 'warn',
+            text: t(
+              `需要人决定：${attempt}失败了，目标规划器这次没有给出修订：${outcome}可以重试步骤、自己修订计划或结束目标，见下面「目标规划器」。`,
+              `A person must decide: ${attempt} failed and the goal planner gave no revision this time: ${outcome} Retry the step, revise the plan yourself or end the goal; see Goal planner below.`,
+            ),
+          };
+        }
       }
       if (
         goal.acceptance?.absenceBaselines.some(

@@ -97,7 +97,7 @@ describe('lib/goal-plan-draft', () => {
 
   it('flags on its field what the kernel would refuse, a masked text among them', () => {
     const detail = paused({
-      usage: { tokens: 0, steps: 0, revisions: 3 },
+      usage: { tokens: 0, steps: 0, revisions: 3, plannerTokens: 0, plannerRounds: 0 },
       planRevision: {
         ...goalDetail().planRevision,
         plan: {
@@ -339,7 +339,9 @@ describe('lib/goal-plan-draft', () => {
   });
 
   it('a budget limit at or under what is used already is held on its field', () => {
-    const detail = paused({ usage: { tokens: 48200, steps: 3, revisions: 0 } });
+    const detail = paused({
+      usage: { tokens: 48200, steps: 3, revisions: 0, plannerTokens: 0, plannerRounds: 0 },
+    });
     const draft = draftFromDetail(detail);
     const limits = (budget: Partial<PlanDraft['budget']>) =>
       draftProblems({ ...draft, budget: { ...draft.budget, ...budget } }, detail, zh);
@@ -355,7 +357,7 @@ describe('lib/goal-plan-draft', () => {
 
   it('a goal out of budget may still have what is left of it removed, to go to its checks', () => {
     const detail = paused({
-      usage: { tokens: 100000, steps: 3, revisions: 0 },
+      usage: { tokens: 100000, steps: 3, revisions: 0, plannerTokens: 0, plannerRounds: 0 },
       steps: [
         stepRun({ status: 'succeeded' }),
         stepRun({ id: 'sr-apply', stepKey: 'apply', status: 'pending', attempts: [] }),

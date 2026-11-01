@@ -21247,6 +21247,14 @@
         "usage": {
           "additionalProperties": false,
           "properties": {
+            "plannerRounds": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "plannerTokens": {
+              "minimum": 0,
+              "type": "integer"
+            },
             "revisions": {
               "minimum": 0,
               "type": "integer"
@@ -21263,7 +21271,9 @@
           "required": [
             "tokens",
             "steps",
-            "revisions"
+            "revisions",
+            "plannerTokens",
+            "plannerRounds"
           ],
           "type": "object"
         }
@@ -32734,6 +32744,14 @@
               "usage": {
                 "additionalProperties": false,
                 "properties": {
+                  "plannerRounds": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "plannerTokens": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
                   "revisions": {
                     "minimum": 0,
                     "type": "integer"
@@ -32750,7 +32768,9 @@
                 "required": [
                   "tokens",
                   "steps",
-                  "revisions"
+                  "revisions",
+                  "plannerTokens",
+                  "plannerRounds"
                 ],
                 "type": "object"
               }

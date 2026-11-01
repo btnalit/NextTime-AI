@@ -1,6 +1,7 @@
 import {
   type AuditRecordWire,
   type CancelGoalResultWire,
+  GOAL_PLANNER_NO_PROGRESS_LIMIT,
   type GoalDetailWire,
   type GoalOperationResultWire,
   type GoalPlannerMode,
@@ -139,7 +140,10 @@ export function GoalOperationsBar({
   // S11 GO9a: let the goal planner propose a revision when a step fails — on by default here (an
   // API caller that omits it gets none); given once, with the confirmation. GO9b: or let the
   // platform apply its minor revisions for the requester while the goal keeps running.
-  const [planner, setPlanner] = useState<PlannerChoiceValue>('propose');
+  const [chosenPlanner, setPlanner] = useState<PlannerChoiceValue>('propose');
+  // UX P3-3 on #870: a goal that allows no revision runs no planner — "no planner" is the only
+  // choice there, whatever was picked before.
+  const planner: PlannerChoiceValue = goal.budget.maxRevisions === 0 ? 'off' : chosenPlanner;
   const errors = goalOperationErrors(t);
   const goalRunId = goal.id;
   const run = useOperationDone(onDone, goal);
@@ -273,7 +277,7 @@ export function GoalOperationsBar({
           )
         }
       >
-        <PlannerChoice value={planner} onChange={setPlanner} />
+        <PlannerChoice value={planner} onChange={setPlanner} maxRounds={goal.budget.maxRevisions} />
         {absenceOperations ? (
           <AbsenceChecksBasis
             http={http}
@@ -709,13 +713,23 @@ type PlannerChoiceValue = 'off' | GoalPlannerMode;
 function PlannerChoice({
   value,
   onChange,
+  maxRounds,
 }: {
   readonly value: PlannerChoiceValue;
   readonly onChange: (value: PlannerChoiceValue) => void;
+  /** S11 GO10: the plan's revision limit, which also bounds the planner's rounds. */
+  readonly maxRounds: number;
 }) {
   const t = useT();
   const name = useId();
   const hintId = useId();
+  // S11 GO10: every round the planner runs counts against the revision limit, whatever it came to.
+  // UX P3-1 on #870: the same limit as the plan revisions, counted apart from them.
+  const none = maxRounds === 0;
+  const rounds = t(
+    `规划器最多跑 ${maxRounds} 轮，上限和计划修订次数相同，两者各自计数；被拒或没提出修订的轮也算一轮。`,
+    `The planner runs at most ${maxRounds} ${maxRounds === 1 ? 'round' : 'rounds'}: the same limit as plan revisions, counted apart from them; a round that is rejected or proposes nothing counts too.`,
+  );
   const options: readonly { value: PlannerChoiceValue; label: string }[] = [
     {
       value: 'off',
@@ -750,28 +764,75 @@ function PlannerChoice({
             name={name}
             value={option.value}
             checked={value === option.value}
+            disabled={none && option.value !== 'off'}
             onChange={() => onChange(option.value)}
             data-testid={`goal-op-confirm-planner-${option.value}`}
           />
           <span>{option.label}</span>
         </label>
       ))}
-      <span id={hintId} className="text-small text-3">
-        {value === 'apply_minor'
-          ? t(
-              '小修订只换 Worker、输入、顺序或重试次数，做的事只读、思考和汇报，验收不变；凡是改验收、新增能执行动作的步骤、让步骤用到原来没有的 gate（哪怕只是读取）、需要有人批准才能开始、或会停下还在跑的工作的修订，都会暂停目标等你决定。同一步的工作平台最多替你改两次，换了步骤名也算同一步。规划器看不到外部系统，也不能发起动作；它用掉的 token 计入这个目标的预算。确认后不能再改这个选择。',
-              'A minor revision only changes the Worker, input, order or retry limit of work that reads, thinks and reports, on unchanged checks. A revision that changes acceptance, adds a step that can act, gives a step a gate it did not reach (even only to read), needs a person to start, or would stop work still running pauses the goal for your decision. The platform changes the work of one step at most twice for you, under a new step key too. The planner sees no outside system and cannot act; the tokens it uses count against this goal’s budget. This choice cannot be changed after confirming.',
-            )
-          : value === 'propose'
+      {none ? (
+        <span id={hintId} className="text-small text-3">
+          {t(
+            '这个目标的计划修订上限是 0，规划器不会运行，所以只能选「不用目标规划器」。步骤失败、需要人决定时，目标暂停，由你自己重试、修订或取消。',
+            'This goal allows no plan revision, so the planner will not run and “No goal planner” is the only choice. When a step fails and a person must decide, the goal pauses for you to retry, revise or cancel it yourself.',
+          )}
+        </span>
+      ) : value === 'apply_minor' ? (
+        // UX P3-2 on #870: one rule a line.
+        <ul
+          id={hintId}
+          className="text-small text-3 stack-s"
+          data-testid="goal-op-confirm-planner-rules"
+        >
+          <li>
+            {t(
+              '小修订只换 Worker、输入、顺序或重试次数，做的事只读、思考和汇报，验收不变：平台替你采用，目标不停。',
+              'A minor revision only changes the Worker, input, order or retry limit of work that reads, thinks and reports, on unchanged checks: the platform adopts it for you and the goal goes on.',
+            )}
+          </li>
+          <li>
+            {t(
+              '其余修订暂停目标，等你决定：改验收、新增能执行动作的步骤、让步骤用到原来没有的 gate（哪怕只是读取）、需要有人批准才能开始、或会停下还在跑的工作。',
+              'Any other revision pauses the goal for your decision: one that changes acceptance, adds a step that can act, gives a step a gate it did not reach (even only to read), needs a person to start, or would stop work still running.',
+            )}
+          </li>
+          <li>
+            {t(
+              '同一步的工作平台最多替你改两次，换了步骤名也算同一步。',
+              'The platform changes the work of one step at most twice for you, under a new step key too.',
+            )}
+          </li>
+          <li>
+            {t(
+              `连续 ${GOAL_PLANNER_NO_PROGRESS_LIMIT} 轮换路都没让任何一步成功时，目标暂停，等你决定。`,
+              `When ${GOAL_PLANNER_NO_PROGRESS_LIMIT} rounds in a row make no step succeed, the goal pauses for your decision.`,
+            )}
+          </li>
+          <li>{rounds}</li>
+          <li>
+            {t(
+              '规划器看不到外部系统，也不能发起动作；它用掉的 token 计入这个目标的预算。',
+              'The planner sees no outside system and cannot act; the tokens it uses count against this goal’s budget.',
+            )}
+          </li>
+          <li>
+            {t('确认后不能再改这个选择。', 'This choice cannot be changed after confirming.')}
+          </li>
+        </ul>
+      ) : (
+        <span id={hintId} className="text-small text-3">
+          {value === 'propose'
             ? t(
-                '规划器只提议、不执行：它看不到外部系统，也不能发起动作；它提的修订要你接受才生效。它用掉的 token 计入这个目标的预算。确认后不能再改这个选择。',
-                'The planner only proposes and runs nothing: it sees no outside system and cannot act; what it proposes takes effect only once you accept it. The tokens it uses count against this goal’s budget. This choice cannot be changed after confirming.',
+                `规划器只提议、不执行：它看不到外部系统，也不能发起动作；它提的修订要你接受才生效。${rounds}它用掉的 token 计入这个目标的预算。确认后不能再改这个选择。`,
+                `The planner only proposes and runs nothing: it sees no outside system and cannot act; what it proposes takes effect only once you accept it. ${rounds} The tokens it uses count against this goal’s budget. This choice cannot be changed after confirming.`,
               )
             : t(
                 '步骤失败、需要人决定时，目标暂停，由你自己重试、修订或取消。确认后不能再改这个选择。',
                 'When a step fails and a person must decide, the goal pauses for you to retry, revise or cancel it yourself. This choice cannot be changed after confirming.',
               )}
-      </span>
+        </span>
+      )}
     </fieldset>
   );
 }
@@ -787,7 +848,24 @@ function ResumeConfirm({
   const t = useT();
   const failed = retryableStepKeys(goal);
   // UX P2-1 on #864: resuming drops what the planner is doing for this pause.
-  const dropped = plannerWorkDropped(goal, t);
+  // UX P3-4 on #870: after a no-progress pause, what the planner does next once resumed.
+  const left = Math.max(goal.budget.maxRevisions - goal.usage.plannerRounds, 0);
+  const dropped = [
+    ...plannerWorkDropped(goal, t),
+    ...(goal.pauseReason === 'no_progress'
+      ? [
+          left > 0
+            ? t(
+                `继续后重新计数：步骤再失败时，规划器还会换路，还能跑 ${left} 轮`,
+                `The count starts again: when a step fails again the planner looks for another way, for ${left} more ${left === 1 ? 'round' : 'rounds'} at most`,
+              )
+            : t(
+                `规划器轮数已用完（${goal.usage.plannerRounds}/${goal.budget.maxRevisions}）：继续后步骤再失败时，规划器不再运行，目标暂停等你决定`,
+                `The planner rounds are used up (${goal.usage.plannerRounds}/${goal.budget.maxRevisions}): when a step fails again no planner runs, and the goal pauses for your decision`,
+              ),
+        ]
+      : []),
+  ];
   const [retry, setRetry] = useState<ReadonlySet<string>>(new Set());
   const toggle = (key: string) =>
     setRetry((current) => {

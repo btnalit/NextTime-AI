@@ -1,4 +1,5 @@
 import {
+  GOAL_PLANNER_NO_PROGRESS_LIMIT,
   type GoalRunPauseReason,
   type GoalRunStatus,
   type OutputProblem,
@@ -120,6 +121,18 @@ import type { GoalRunRow, StepRunRow } from './types.js';
  * A proposal round's revision is classed as well, for the requester to read; who decides does not
  * change.
  *
+ * S11 GO10 (`s11-w2/go10-default-plan.md` §3): two limits on top.
+ *
+ *   - **No progress**: an autonomous round is not opened once {@link GOAL_PLANNER_NO_PROGRESS_LIMIT}
+ *     have run with no step succeeding and no person acting since ({@link roundsWithoutProgress});
+ *     the run pauses `no_progress` instead, with no round row, for a person to retry, revise or
+ *     end it. It is the goal-wide counterpart of the per-step limit above: that one stops one
+ *     step's work being redone over and over, this one stops failures moving from step to step.
+ *   - **Planner rounds**: a round of either kind is not opened once `maxRevisions` planner rounds
+ *     (rounds that started a planning Task, whatever they came to) have run
+ *     (`revision_budget_exhausted`). `maxRevisions` caps them and the revisions made each — two
+ *     counts, one limit; `usage.plannerRounds` reads the first.
+ *
  * Every round settles once (goal/0014), and its audit row (`goal_planning_round.open`,
  * `goal_planning_round.settle`) carries `by: 'advancer'` with the requester as actor, like every
  * other move of the advance.
@@ -197,6 +210,15 @@ export interface PlanningPhaseContext {
   readonly plannerTemplate?: () => Promise<PlannerTemplate>;
 }
 
+/** S11 GO9b / GO10: why a running run pauses now. `needs_decision`: an autonomous round's outcome
+ *  the platform does not apply, or a planner that cannot run. `no_progress` (GO10): the planner
+ *  took {@link GOAL_PLANNER_NO_PROGRESS_LIMIT} failures in a row with no step succeeding and no
+ *  person acting in between ({@link roundsWithoutProgress}). */
+export interface PlanningPause {
+  readonly reason: Extract<GoalRunPauseReason, 'needs_decision' | 'no_progress'>;
+  readonly detail: string;
+}
+
 export interface PlanningPhaseResult {
   /** Tasks of rounds no longer running, terminated after the commit. */
   readonly terminate: readonly string[];
@@ -204,9 +226,8 @@ export interface PlanningPhaseResult {
   readonly start: PreparedStepAttempt | null;
   /** When the requester's concurrency quota may let the planner start (epoch ms). */
   readonly retryAt: number | null;
-  /** S11 GO9b: why a running run pauses `needs_decision` now — an autonomous round's outcome the
-   *  platform does not apply, or a planner that cannot run — or `null`. */
-  readonly pause: string | null;
+  /** S11 GO9b: why a running run pauses now, or `null`. */
+  readonly pause: PlanningPause | null;
   /** S11 GO9b: the platform adopted a revision for the requester: the run is due at once. */
   readonly due: boolean;
 }
@@ -259,7 +280,13 @@ export async function runPlanningPhase(ctx: PlanningPhaseContext): Promise<Plann
     if (settled.pause !== null) pause ??= settled.pause;
     if (settled.due) due = true;
   }
-  const idle = { terminate, start: null, retryAt: null, pause, due };
+  const idle = {
+    terminate,
+    start: null,
+    retryAt: null,
+    pause: pause === null ? null : { reason: 'needs_decision' as const, detail: pause },
+    due,
+  };
   // A revision adopted, or a pause to make: the next advance works on what is now in force.
   if (due || pause !== null) return idle;
   const autonomy = running && (await readGoalPlannerMode(client, ws, goal.id)) === 'apply_minor';
@@ -521,6 +548,40 @@ async function plannerRevisionWaits(
   return (waiting.rowCount ?? 0) > 0;
 }
 
+/**
+ * S11 GO10 (`s11-w2/go10-default-plan.md` §3.1): the autonomous rounds that ran a planner since
+ * the run last made progress or saw a person — since the later of its confirmation, its latest
+ * resume and its latest step that succeeded. Every way back to `running` after a pause is a
+ * person's (`confirm`, `resume`: the platform never resumes on its own) and a person changes the
+ * plan only while it is paused (`revise.ts`), so the latest resume covers every decision of
+ * theirs. The resume is read from the run's transition log (`goal_run.resume`,
+ * `transition-log.ts`), written in the transaction that moved it. Derived, never counted in a
+ * column: it rebuilds from the rows and answers why the run paused.
+ */
+export async function roundsWithoutProgress(
+  ctx: Pick<PlanningPhaseContext, 'client' | 'goal' | 'steps'>,
+  rounds: readonly PlanningRoundRow[],
+): Promise<readonly PlanningRoundRow[]> {
+  const { client, goal } = ctx;
+  const resumed = await client.query<{ at: Date | null }>(
+    `select max(created_at) as at from audit_records
+      where workspace_id = $1 and resource_id = $2 and action = 'goal_run.resume'`,
+    [goal.workspaceId, goal.id],
+  );
+  const marks = [
+    goal.confirmedAt,
+    resumed.rows[0]?.at ?? null,
+    ...ctx.steps.map((step) => (step.status === 'succeeded' ? step.endedAt : null)),
+  ].filter((at): at is Date => at !== null);
+  const since = marks.reduce((latest, at) => Math.max(latest, at.getTime()), 0);
+  return rounds
+    .filter(
+      (round) =>
+        round.kind === 'autonomous' && round.task !== null && round.createdAt.getTime() >= since,
+    )
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+}
+
 /** Whether an autonomous round of the run is running. */
 export async function autonomousRoundRuns(
   client: PoolClient,
@@ -541,7 +602,7 @@ async function openRound(
   rounds: readonly PlanningRoundRow[],
   kind: PlanningRoundKind,
 ): Promise<Omit<PlanningPhaseResult, 'terminate' | 'due'>> {
-  const none = { start: null, retryAt: null, pause: null };
+  const none = { start: null, retryAt: null, pause: null } as const;
   const { client, goal } = ctx;
   const ws = goal.workspaceId;
   const base = goal.currentRevision;
@@ -591,12 +652,28 @@ async function openRound(
       ...none,
       pause:
         kind === 'autonomous'
-          ? `step ${step.stepKey}: attempt ${step.attemptCount} failed (${category}); the platform does not plan it on its own now (${reason}: ${boundDetail(detail)}) — retry the step, revise the plan or cancel`
+          ? {
+              reason: 'needs_decision' as const,
+              detail: `step ${step.stepKey}: attempt ${step.attemptCount} failed (${category}); the platform does not plan it on its own now (${reason}: ${boundDetail(detail)}) — retry the step, revise the plan or cancel`,
+            }
           : null,
     };
   };
 
   if (kind === 'autonomous') {
+    // S11 GO10: the breaker — no round, and no round row: the run waits for a person, who may
+    // retry, revise or end it (it never ends on its own).
+    const stalled = await roundsWithoutProgress(ctx, rounds);
+    if (stalled.length >= GOAL_PLANNER_NO_PROGRESS_LIMIT) {
+      const keys = [...new Set(stalled.map((round) => round.stepKey))].join(', ');
+      return {
+        ...none,
+        pause: {
+          reason: 'no_progress',
+          detail: `step ${step.stepKey}: attempt ${step.attemptCount} failed (${category}); the goal planner's last ${stalled.length} rounds (for steps ${keys}) made no step succeed, so the platform does not plan on its own again — retry the step, revise the plan or cancel`,
+        },
+      };
+    }
     const applied = platformAppliedLineage(step, ctx.steps, rounds);
     if (applied >= AUTONOMY_MAX_APPLIED_PER_STEP) {
       return failRound(
@@ -604,6 +681,16 @@ async function openRound(
         `the platform already applied ${applied} planner revisions on its own for the work of step ${step.stepKey}`,
       );
     }
+  }
+  // S11 GO10: the planner rounds — every round that started a planning Task, whatever it came to
+  // (rejected, no revision, failed), since it spent the goal's tokens all the same — are capped by
+  // `maxRevisions`, counted apart from the revisions made (two counts, one limit).
+  const planned = rounds.filter((round) => round.task !== null).length;
+  if (planned >= goal.budget.maxRevisions) {
+    return failRound(
+      'revision_budget_exhausted',
+      `${planned} of ${goal.budget.maxRevisions} planner rounds already run`,
+    );
   }
   const revisions = await client.query<{ accepted: number }>(
     `select count(*) filter (where status = 'accepted')::int as accepted

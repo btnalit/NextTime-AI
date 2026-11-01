@@ -1788,6 +1788,205 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
+    // ----- S11 GO10: the no-progress breaker, rounds against the revision budget ----------------
+
+    /** Under apply_minor, each step of `keys` in turn: its attempt lost, its round rerouting it
+     *  to `to` under its key, applied, and its next attempt started — no step succeeding. */
+    async function reroutedInTurn(
+      goalRunId: string,
+      requester: string,
+      keys: readonly string[],
+      to: typeof worker,
+    ) {
+      for (const key of keys) {
+        const step = await liveStep(goalRunId, key);
+        await loseTask((await lastAttempt(step.id)).id, requester);
+        await advanceOnce(goalRunId, requester);
+        const round = (await autonomyRounds(goalRunId)).at(-1);
+        if (!round) throw new Error('no round');
+        expect(round).toMatchObject({ status: 'running', step_run_id: step.id });
+        const goal = await getGoal(goalRunId, requester);
+        await report((await plannerTask(round.id)).id, {
+          decision: 'revise',
+          plan: changeStep(goal, key, (entry) => ({ ...entry, worker: to })),
+          reason: `Another Worker for ${key}.`,
+        });
+        await advanceOnce(goalRunId, requester);
+        expect((await autonomyRounds(goalRunId)).at(-1)).toMatchObject({ status: 'applied' });
+        await advanceOnce(goalRunId, requester);
+      }
+    }
+
+    const threeSteps = () => planOf([{ key: 's1' }, { key: 's2' }, { key: 's3' }]);
+
+    it('three rounds with no step succeeding: the next failure pauses the goal no_progress, without a round, until a person resumes it (S11 GO10)', async () => {
+      const requester = await newPrincipal('member');
+      const goalRunId = await startGoal(requester, 'apply_minor', threeSteps());
+      // Three different steps: the platform's count for one step's work never reaches its limit.
+      await reroutedInTurn(goalRunId, requester, ['s1', 's2', 's3'], otherWorker);
+      expect(await goalRow(goalRunId)).toMatchObject({ status: 'running' });
+
+      const s1 = await liveStep(goalRunId, 's1');
+      await loseTask((await lastAttempt(s1.id)).id, requester);
+      await advanceOnce(goalRunId, requester);
+      expect((await autonomyRounds(goalRunId)).map((round) => round.status)).toEqual([
+        'applied',
+        'applied',
+        'applied',
+      ]);
+      expect(await goalRow(goalRunId)).toMatchObject({
+        status: 'paused',
+        pause_reason: 'no_progress',
+      });
+      const [pause] = await raw<{ payload: Record<string, unknown> }>(
+        `select payload from audit_records
+          where workspace_id = $1 and resource_id = $2 and action = 'goal_run.pause'`,
+        [workspaceId, goalRunId],
+      );
+      expect(pause?.payload).toMatchObject({ reason: 'no_progress' });
+      expect(String(pause?.payload.detail)).toContain('last 3 rounds (for steps s1, s2, s3)');
+      // Paused for a person: no planner proposes meanwhile, whatever the leave.
+      await advanceOnce(goalRunId, requester);
+      expect(await autonomyRounds(goalRunId)).toHaveLength(3);
+      expect(await goalRow(goalRunId)).toMatchObject({ pause_reason: 'no_progress' });
+      expect((await getGoal(goalRunId, requester)).pauseReason).toBe('no_progress');
+
+      // The requester resuming is a person acting: the count starts again (the budget raised so
+      // only the breaker could stop the next round).
+      await setMaxRevisions(goalRunId, 10);
+      await call(human(requester), 'resume_goal', { goalRunId, retrySteps: ['s1'] });
+      await advanceOnce(goalRunId, requester);
+      const again = await liveStep(goalRunId, 's1');
+      expect(again).toMatchObject({ id: s1.id, attempt_count: 2 });
+      await loseTask((await lastAttempt(again.id)).id, requester);
+      await advanceOnce(goalRunId, requester);
+      expect((await autonomyRounds(goalRunId)).at(-1)).toMatchObject({
+        status: 'running',
+        step_run_id: s1.id,
+        step_attempt: 2,
+      });
+      expect(await goalRow(goalRunId)).toMatchObject({ status: 'running' });
+    });
+
+    it('a step that succeeds starts the count again (S11 GO10)', async () => {
+      const requester = await newPrincipal('member');
+      const goalRunId = await startGoal(requester, 'apply_minor', threeSteps());
+      await setMaxRevisions(goalRunId, 10);
+      await reroutedInTurn(goalRunId, requester, ['s1', 's2'], otherWorker);
+      const s3 = await liveStep(goalRunId, 's3');
+      await dispatchCapability(
+        { pool },
+        await workerOf((await lastAttempt(s3.id)).id),
+        'report_task_result',
+        { summary: 'done' },
+      );
+      await advanceOnce(goalRunId, requester);
+      expect(await liveStep(goalRunId, 's3')).toMatchObject({ status: 'succeeded' });
+      // Two more rounds: without s3's success the second would be the fourth in a row.
+      await reroutedInTurn(goalRunId, requester, ['s1', 's2'], worker);
+      expect((await autonomyRounds(goalRunId)).map((round) => round.status)).toEqual([
+        'applied',
+        'applied',
+        'applied',
+        'applied',
+      ]);
+      expect(await goalRow(goalRunId)).toMatchObject({ status: 'running' });
+    });
+
+    it('a planning round counts against the revision budget whatever it came to (S11 GO10)', async () => {
+      const requester = await newPrincipal('member');
+      const { goalRunId, step } = await failedForPerson(requester);
+      await setMaxRevisions(goalRunId, 1);
+      const [round] = await rounds(goalRunId);
+      if (!round) throw new Error('no round');
+      await report((await plannerTask(round.id)).id, {
+        decision: 'no_revision',
+        reason: 'The certificate authority is down; nothing in the plan helps.',
+      });
+      await advanceOnce(goalRunId, requester);
+      expect((await rounds(goalRunId)).map((row) => row.status)).toEqual(['no_revision']);
+      // No revision was made, yet the one round the budget allows has run.
+      await call(human(requester), 'resume_goal', { goalRunId, retrySteps: ['renew'] });
+      await advanceOnce(goalRunId, requester);
+      await loseTask((await lastAttempt(step.id)).id, requester);
+      await advanceOnce(goalRunId, requester);
+      const [first, second, ...more] = await rounds(goalRunId);
+      expect(more).toEqual([]);
+      expect(first).toMatchObject({ status: 'no_revision' });
+      expect(second).toMatchObject({
+        status: 'failed',
+        outcome_reason: 'revision_budget_exhausted',
+        step_attempt: 2,
+      });
+      expect(second?.detail).toBe('1 of 1 planner rounds already run');
+      expect(await goalRow(goalRunId)).toMatchObject({
+        status: 'paused',
+        pause_reason: 'needs_decision',
+      });
+    });
+
+    it('a round that failed before its planner ran does not count against the revision budget (S11 GO10, #493 P3 on #870)', async () => {
+      const requester = await newPrincipal('member');
+      const goalRunId = await startGoal(requester);
+      await setMaxRevisions(goalRunId, 1);
+      const setMaxTokens = (max: number) =>
+        raw('update goal_runs set budget_max_tokens = $3 where workspace_id = $1 and id = $2', [
+          workspaceId,
+          goalRunId,
+          max,
+        ]);
+      await setMaxTokens(PLANNER_MIN_TOKEN_BUDGET - 1);
+      const step = await liveStep(goalRunId, 'renew');
+      await loseTask((await lastAttempt(step.id)).id, requester);
+      await advanceOnce(goalRunId, requester);
+      expect(await rounds(goalRunId)).toEqual([
+        expect.objectContaining({ status: 'failed', outcome_reason: 'token_budget_exhausted' }),
+      ]);
+      expect((await getGoal(goalRunId, requester)).usage.plannerRounds).toBe(0);
+      expect(
+        await raw(
+          `select id from tasks where workspace_id = $1 and goal_run_id = $2 and purpose = 'planning'`,
+          [workspaceId, goalRunId],
+        ),
+      ).toHaveLength(0);
+      // No planner ran: the one round the budget allows is still there for the next failure.
+      await setMaxTokens(BUDGET.maxTokens);
+      await call(human(requester), 'resume_goal', { goalRunId, retrySteps: ['renew'] });
+      await advanceOnce(goalRunId, requester);
+      await loseTask((await lastAttempt(step.id)).id, requester);
+      await advanceOnce(goalRunId, requester);
+      const [, second, ...more] = await rounds(goalRunId);
+      expect(more).toEqual([]);
+      expect(second).toMatchObject({ status: 'running', step_attempt: 2 });
+      expect((await getGoal(goalRunId, requester)).usage.plannerRounds).toBe(1);
+    });
+
+    it('the goal’s usage names the planner’s tokens, already part of its tokens (S11 GO10)', async () => {
+      const requester = await newPrincipal('member');
+      const { goalRunId, step } = await failedForPerson(requester);
+      const [round] = await rounds(goalRunId);
+      if (!round) throw new Error('no round');
+      const before = (await getGoal(goalRunId, requester)).usage;
+      expect(before).toMatchObject({ plannerTokens: 0, plannerRounds: 1, revisions: 0 });
+      const spend = (taskId: string, tokens: number) =>
+        raw('update tasks set tokens_used = $3 where workspace_id = $1 and id = $2', [
+          workspaceId,
+          taskId,
+          tokens,
+        ]);
+      await spend((await plannerTask(round.id)).id, 2500);
+      // The step's own Task spends too: only the planner's count as the planner's.
+      await spend((await lastAttempt(step.id)).id, 700);
+      const after = (await getGoal(goalRunId, requester)).usage;
+      expect(after).toMatchObject({ tokens: before.tokens + 3200, plannerTokens: 2500 });
+      const listed = (
+        (await call(human(requester), 'list_goals', {})) as {
+          items: { id: string; usage: { plannerTokens: number } }[];
+        }
+      ).items.find((item) => item.id === goalRunId);
+      expect(listed?.usage.plannerTokens).toBe(2500);
+    });
+
     // ----- review #493 on #866 P2-2: what a step's Worker could do, read for real --------------
 
     async function newGate(grantTo: readonly string[] = []): Promise<string> {

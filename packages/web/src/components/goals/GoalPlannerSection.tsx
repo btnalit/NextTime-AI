@@ -28,6 +28,7 @@ import {
   majorReasonTexts,
   mayDecidePlannerProposal,
   pendingPlannerProposal,
+  plannerRoundsUsedUpText,
   planningOutcomeText,
   runningPlanningRound,
   showsRoundDetail,
@@ -98,6 +99,16 @@ export function GoalPlannerSection({
   const conclusion = currentPlanningConclusion(goal);
   const adopted = adoptedRoundInForce(goal);
   const rounds = [...goal.planningRounds].reverse();
+  // S11 GO10: what the planner spent so far — its rounds, against the limit they have the same as
+  // the plan revisions (counted apart, UX P3-1 on #870), and its tokens (part of the goal's).
+  const ran = goal.usage.plannerRounds;
+  const spent =
+    ran > 0
+      ? t(
+          `到目前规划器跑了 ${ran} 轮（最多 ${goal.budget.maxRevisions} 轮，上限和计划修订次数相同），用了 ${goal.usage.plannerTokens.toLocaleString()} token。`,
+          `So far the planner ran ${ran} of at most ${goal.budget.maxRevisions} ${goal.budget.maxRevisions === 1 ? 'round' : 'rounds'} (the same limit as plan revisions) and used ${goal.usage.plannerTokens.toLocaleString()} tokens.`,
+        )
+      : null;
   return (
     <DashboardCard title={t('目标规划器', 'Goal planner')} data-testid="goal-planner">
       <div className="stack">
@@ -116,11 +127,16 @@ export function GoalPlannerSection({
                 'When confirming this goal, its requester let the goal planner propose a revision when a step fails and a person must decide. The planner only proposes: it sees no outside system and cannot act; what it proposes takes effect only once the requester accepts it, and the tokens it uses count against the goal’s budget.',
               )}
         </span>
+        {spent ? (
+          <span className="text-small text-3" data-testid="goal-planner-spent">
+            {spent}
+          </span>
+        ) : null}
         {running ? <RunningRound round={running} http={http} t={t} /> : null}
         {adopted ? (
           <AdoptedRevision goal={goal} round={adopted} http={http} gateNames={gateNames} t={t} />
         ) : null}
-        {conclusion ? <Conclusion round={conclusion} t={t} /> : null}
+        {conclusion ? <Conclusion goal={goal} round={conclusion} t={t} /> : null}
         {proposal ? (
           <PlannerProposal
             goal={goal}
@@ -213,21 +229,36 @@ function RunningRound({
 
 /** UX P2-2 on #864: what the planner concluded about this pause when it proposed nothing — the
  *  decision is the requester's again, and this is what they were waiting for. */
-function Conclusion({ round, t }: { readonly round: PlanningRoundWire; readonly t: Translate }) {
-  const outcome = planningOutcomeText(round, t);
+function Conclusion({
+  goal,
+  round,
+  t,
+}: {
+  readonly goal: GoalDetailWire;
+  readonly round: PlanningRoundWire;
+  readonly t: Translate;
+}) {
+  // UX P2-1 on #870: the planner rounds used up say so, with their count, as the page's top does.
+  const usedUp = plannerRoundsUsedUpText(goal, round, t);
+  const outcome = usedUp ? null : planningOutcomeText(round, t, goal);
   return (
     <Notice tone="warn" testId="goal-planner-conclusion">
       <span className="stack-s">
         <span>
-          {round.status === 'no_revision'
+          {usedUp
             ? t(
-                `规划器看过${failedStepText(round, t)}的失败，没有可行的修订。接下来由请求人重试失败的步骤、自己修订计划或取消。`,
-                `The planner looked at the failure of ${failedStepText(round, t)} and found no revision that would do. It is up to the requester now: retry the failed step, revise the plan, or cancel.`,
+                `${usedUp}，规划器没有为${failedStepText(round, t)}的失败运行。接下来由请求人重试失败的步骤、自己修订计划或取消。`,
+                `${usedUp}, so no planner ran for the failure of ${failedStepText(round, t)}. It is up to the requester now: retry the failed step, revise the plan, or cancel.`,
               )
-            : t(
-                `规划器没能为${failedStepText(round, t)}的失败给出修订。接下来由请求人重试失败的步骤、自己修订计划或取消。`,
-                `The planner gave no revision for the failure of ${failedStepText(round, t)}. It is up to the requester now: retry the failed step, revise the plan, or cancel.`,
-              )}
+            : round.status === 'no_revision'
+              ? t(
+                  `规划器看过${failedStepText(round, t)}的失败，没有可行的修订。接下来由请求人重试失败的步骤、自己修订计划或取消。`,
+                  `The planner looked at the failure of ${failedStepText(round, t)} and found no revision that would do. It is up to the requester now: retry the failed step, revise the plan, or cancel.`,
+                )
+              : t(
+                  `规划器没能为${failedStepText(round, t)}的失败给出修订。接下来由请求人重试失败的步骤、自己修订计划或取消。`,
+                  `The planner gave no revision for the failure of ${failedStepText(round, t)}. It is up to the requester now: retry the failed step, revise the plan, or cancel.`,
+                )}
         </span>
         {outcome ? <span className="text-small text-3">{outcome}</span> : null}
         {showsRoundDetail(round) && round.detail ? (
@@ -356,7 +387,7 @@ function RoundItem({
   readonly http: CapabilityCaller;
   readonly t: Translate;
 }) {
-  const outcome = planningOutcomeText(round, t);
+  const outcome = planningOutcomeText(round, t, goal);
   const fate = round.revision !== null ? proposedFate(goal, round.revision, t) : null;
   return (
     <li className="stack-s" data-testid="goal-planner-round" data-status={round.status}>
