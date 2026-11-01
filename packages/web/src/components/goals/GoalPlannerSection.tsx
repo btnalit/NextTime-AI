@@ -52,7 +52,7 @@ import {
 import { type Translate, useT } from '../../lib/i18n.js';
 import { type StepChange, planStepDiff, stepChangeLine } from '../../lib/plan-step-diff.js';
 import { hrefs } from '../../lib/router.js';
-import { stepAdmissionView } from '../../lib/worker-spec-detail.js';
+import { admissionStopLines, stepAdmissionView } from '../../lib/worker-spec-detail.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
 import { ErrorBanner } from '../kit/error-banner.js';
@@ -585,6 +585,9 @@ function PlannerProposal({
           t,
         )
       : [];
+  // UX P3-4 on #888: a step accepting would start that would not start as it is stops the goal.
+  const stopLines =
+    proposed.state.status === 'ready' ? admissionStopLines(proposed.state.data, gateNames, t) : [];
   // S11 GO10b: a revision for the goal's acceptance not passing leads to verifying it again.
   const forAcceptance = round?.point === 'goal_acceptance';
   const verifiesAgain = forAcceptance
@@ -626,6 +629,7 @@ function PlannerProposal({
                 `The plan becomes the planner’s v${proposal.revision}, counted against the goal’s revisions`,
               ),
               ...changeLines,
+              ...stopLines,
               ...verifiesAgain,
               t(
                 '目标马上继续，以你的授权花费预算、发起动作；需要审批的动作仍然逐个审批',
@@ -646,6 +650,7 @@ function PlannerProposal({
                 `The plan becomes the planner’s v${proposal.revision}, counted against the goal’s revisions`,
               ),
               ...changeLines,
+              ...stopLines,
               ...verifiesAgain,
               t('目标保持暂停，由你之后按「继续」', 'The goal stays paused until you resume it'),
             ]}
@@ -813,8 +818,8 @@ function diffImpact(
   for (const change of steps) {
     lines.push(
       t(
-        `改动步骤 ${change.key}：${stepChangeLine(change, { gateNames }, t)}（按新定义重来）`,
-        `Step ${change.key} redefined: ${stepChangeLine(change, { gateNames }, t)} (it starts over as redefined)`,
+        `改动步骤 ${change.key}，按新定义重来：${stepChangeLine(change, { gateNames }, t)}`,
+        `Step ${change.key} redefined, starting over: ${stepChangeLine(change, { gateNames }, t)}`,
       ),
     );
   }
@@ -988,13 +993,19 @@ function ProposedStep({
   const admission = stepAdmissionView(plan, step.key, null, []);
   return (
     <details className="disclosure" data-testid="goal-planner-step" data-step-key={step.key}>
-      <summary>
+      <summary className="disclosure-summary-wrap">
         {t(`步骤 ${step.key} 会怎么跑`, `How step ${step.key} would run`)}
-        {/* In the summary, so a step that would not start says so while it is closed. */}
+        {/* In the summary, so a step that would not start says so while it is closed — under the
+            title on a narrow screen (UX P3-2 on #888). */}
         {admission.kind === 'checked' ? (
           <>
             <span className="meta-sep" />
-            <StepAdmissionLine view={admission} t={t} />
+            <StepAdmissionLine
+              view={admission}
+              gateNames={gateNames}
+              className="disclosure-summary-sub"
+              t={t}
+            />
           </>
         ) : null}
       </summary>

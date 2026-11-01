@@ -2805,8 +2805,9 @@ const workerCapabilities = [
     // S11 GO15a: one version of a WorkerDefinition, by id and version — what a goal step's
     // WorkerSpec is set against (the console shows the definition's own settings beside the
     // step's). A person's read (HUMAN_ONLY_CAPABILITY_NAMES): no Handle carries it, so no agent's
-    // tools change. The read rule is `list_worker_definitions`': a published or deprecated version,
-    // or a draft the caller proposed — another principal's draft is not there (legacy 492).
+    // tools change. It reads a published or deprecated version, or a draft the caller proposed —
+    // another principal's draft is not there (legacy 492). A deprecated version is one more than
+    // `list_worker_definitions` lists: a step can sit on one, and its WorkerSpec is set against it.
     name: 'get_worker_definition',
     group: 'worker',
     mode: 'observe',

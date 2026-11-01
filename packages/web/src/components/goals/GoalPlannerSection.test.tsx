@@ -1304,9 +1304,15 @@ describe('what a proposal changes in each step, and what admission says of it (S
     expect(diff.querySelector('[data-step-key="fetch-other"]')).toBeNull();
     fireEvent.click(screen.getByTestId('goal-planner-accept'));
     const confirm = await screen.findByTestId('goal-planner-accept-confirm');
-    expect(confirm.textContent).toContain(
-      '改动步骤 apply：前置步骤加上 fetch-other，去掉 fetch；模型设为 big-model（原来沿用 Worker 定义）；读取步骤 fetch-other 留下的文件（按新定义重来）',
+    // UX P3-5 on #888: one parenthesis, not two in a row.
+    expect(confirm.textContent).toMatch(
+      /改动步骤 apply，按新定义重来：前置步骤加上 fetch-other，去掉 fetch；模型设为 big-model（原来沿用 Worker 定义）；读取步骤 fetch-other 留下的文件/,
     );
+    // UX P3-4 on #888: the steps it would start that would not start as they are stop the goal.
+    expect(confirm.textContent).toMatch(
+      /步骤 fetch-other 要有人批准试用它的 Skill 草稿才会开始，目标会停在这一步等批准/,
+    );
+    expect(confirm.textContent).toMatch(/步骤 apply 现在不会开始（模型不允许），目标会停在这一步/);
   });
 
   it('each step it adds or redefines says, while closed, whether it would start and why not', async () => {

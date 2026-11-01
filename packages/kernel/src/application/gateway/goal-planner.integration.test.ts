@@ -3033,6 +3033,51 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(rejected.hints.filter((hint) => hint.stepKey)).toEqual([]);
     });
 
+    it('S11 GO15a: a step that ended is not checked in a proposal — kept as it stands, or changed while it ran and ended since (#493 P3 on #888)', async () => {
+      const requester = await newPrincipal('member');
+      const goalRunId = await startGoal(requester, 'propose', {
+        steps: [
+          { key: 'prep', worker, input: { step: 'prep' }, maxAttempts: 1 },
+          { key: 'side', worker, input: { step: 'side' }, maxAttempts: 1 },
+          { key: 'renew', worker, input: { step: 'renew' }, maxAttempts: 1, dependsOn: ['prep'] },
+        ],
+      });
+      await succeed(goalRunId, 'prep', requester);
+      const failed = await liveStep(goalRunId, 'renew');
+      await loseTask((await lastAttempt(failed.id)).id, requester);
+      await advanceOnce(goalRunId, requester);
+      const [round] = await rounds(goalRunId);
+      if (!round) throw new Error('no round');
+      const before = await getGoal(goalRunId, requester);
+      const [prep, side, renew] = before.planRevision.plan.steps as Record<string, unknown>[];
+      // `side` still runs: the planner may change it (accepting would stop it and start it afresh).
+      expect(await liveStep(goalRunId, 'side')).toMatchObject({ status: 'running' });
+      await report((await plannerTask(round.id)).id, {
+        decision: 'revise',
+        plan: {
+          ...before.planRevision.plan,
+          steps: [
+            prep,
+            { ...side, input: { step: 'side-2' } },
+            { ...renew, input: { step: 'renew-2' } },
+          ],
+        },
+        reason: 'Renew again, and run side on its new input.',
+      });
+      await advanceOnce(goalRunId, requester);
+      expect(await rounds(goalRunId)).toMatchObject([{ status: 'proposed', revision: 2 }]);
+      // Then `side` ends: changed under its key, it is one accepting refuses — nothing it starts.
+      await succeed(goalRunId, 'side', requester);
+      expect(await liveStep(goalRunId, 'side')).toMatchObject({ status: 'succeeded' });
+
+      const proposal = PlanRevisionWireSchema.parse(
+        await call(human(requester), 'get_goal_revision', { goalRunId, revision: 2 }),
+      );
+      expect(proposal.status).toBe('proposed');
+      // `prep` succeeded and is kept as it stands; `side` is changed but ended: neither is checked.
+      expect(proposal.checkedStepKeys).toEqual(['renew']);
+    });
+
     // Last in the file: its large Workers are retired at its end, so no other test reads them.
     it('S11 GO13: the planner reads whether each Worker would start for the requester, its contract and its hints; past 64 KiB the contracts go, last first, and the kernel logs it', async () => {
       const publishWith = async (definition: Record<string, unknown>) => {

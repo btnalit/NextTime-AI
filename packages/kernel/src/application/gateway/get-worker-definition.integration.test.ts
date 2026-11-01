@@ -11,9 +11,10 @@ import type { ResolvedCaller } from './resolve-caller.js';
 
 /**
  * Integration tests (real Postgres; auto-skip without DATABASE_URL) for S11 GO15a's
- * `get_worker_definition`: one version of a WorkerDefinition, as `list_worker_definitions` shows
- * it — a published or deprecated version to every person (an auditor too), a draft only to its
- * proposer (legacy 492); `null` for another's draft, a version nothing has, or another workspace's.
+ * `get_worker_definition`: one version of a WorkerDefinition — a published or deprecated version
+ * to every person (an auditor too; a deprecated one is more than `list_worker_definitions` lists),
+ * a draft only to its proposer (legacy 492); `null` for another's draft, a version nothing has, or
+ * another workspace's.
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;

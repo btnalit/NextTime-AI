@@ -255,7 +255,7 @@ const joinEn = (items: readonly string[]) => items.join(', ');
 
 const SPEC_LIST_LABEL: Readonly<Record<SpecListField, readonly [string, string]>> = {
   skills: ['Skill', 'Skills'],
-  gates: ['门', 'Gates'],
+  gates: ['门', 'Gatekeepers'],
   capabilities: ['能力范围', 'Capabilities'],
   observeScope: ['观察范围', 'Observation scope'],
 };
@@ -425,14 +425,14 @@ export function stepFieldChangeText(
       if (change.after.length === 0) {
         return t(
           `不再读取步骤 ${joinZh(change.before)} 留下的文件`,
-          `No longer reads the files of ${joinEn(change.before)}`,
+          `No longer reads the files left by ${joinEn(change.before)}`,
         );
       }
       return change.before.length === 0
         ? filesFromSentence(change.after, t)
         : t(
             `改读 ${joinZh(change.after)} 留下的文件（原来读 ${joinZh(change.before)}）`,
-            `Reads the files of ${joinEn(change.after)} instead (was ${joinEn(change.before)})`,
+            `Reads the files left by ${joinEn(change.after)} instead (was ${joinEn(change.before)})`,
           );
     case 'outputSchema':
       return !change.before

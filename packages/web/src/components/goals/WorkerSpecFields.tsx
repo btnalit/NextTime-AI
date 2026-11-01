@@ -199,7 +199,10 @@ export function WorkerSpecFields({ spec, worker, http, gateNames, t }: WorkerSpe
             {base
               ? against(
                   base.model === undefined
-                    ? t('定义没有设定模型', 'The definition sets no model')
+                    ? t(
+                        '定义没有设定模型：不调整时由请求人的智能体设置来选',
+                        'The definition sets no model: without this, the requester’s agent settings pick one',
+                      )
                     : base.model === spec.model
                       ? t('和定义的一样', 'The same as the definition’s')
                       : t(
@@ -258,6 +261,7 @@ export function WorkerSpecFields({ spec, worker, http, gateNames, t }: WorkerSpe
           value: value(field),
         }))}
         testId="goal-step-spec-fields"
+        className="definition-list-stack"
       />
       {inherited.length > 0 ? (
         <span className="text-small text-3" data-testid="goal-step-spec-inherited">

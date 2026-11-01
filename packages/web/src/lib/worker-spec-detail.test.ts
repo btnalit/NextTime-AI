@@ -2,6 +2,7 @@ import type { PlanHint } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import type { Translate } from './i18n.js';
 import {
+  admissionStopLines,
   inheritedBaseFields,
   specListAgainst,
   stepAdmissionReasons,
@@ -100,5 +101,50 @@ describe('the step’s admission verdict (S11 GO15a)', () => {
     expect(stepAdmissionReasons(view, zh)).toEqual([
       expect.stringMatching(/^请求人现在不能启动 Worker$/),
     ]);
+  });
+
+  it('names the gate a requester cannot act on, by its name where the page knows it (UX P3-5 on #888)', () => {
+    const known = '00000000-0000-4000-8000-0000000000a1';
+    const unknown = '00000000-0000-4000-8000-0000000000b2';
+    const hint: PlanHint = {
+      code: 'step_gate_not_held',
+      message: 'm',
+      stepKey: 'a',
+      gatekeeperIds: [known, unknown],
+    };
+    const view = stepAdmissionView({ hints: [hint], checkedStepKeys: ['a'] }, 'a', null, []);
+    const [reason] = stepAdmissionReasons(view, zh, new Map([[known, 'cert-gate']]));
+    expect(reason).toMatch(/^请求人不能操作门 cert-gate、\S+$/);
+    expect(reason).not.toContain(unknown);
+    // A capability the requester lacks has no gate to name.
+    const capability = stepAdmissionView(
+      {
+        hints: [{ code: 'step_capability_not_held', message: 'm', stepKey: 'a' }],
+        checkedStepKeys: ['a'],
+      },
+      'a',
+      null,
+      [],
+    );
+    expect(stepAdmissionReasons(capability, zh)).toEqual(['请求人无权限']);
+  });
+
+  it('says where accepting a revision would stop the goal: each checked step that would not start (UX P3-4 on #888)', () => {
+    const refused: PlanHint = { code: 'step_model_not_allowed', message: 'm', stepKey: 'b' };
+    const draft: PlanHint = { code: 'step_skill_draft', message: 'm', stepKey: 'a', trial };
+    const unchecked: PlanHint = { code: 'step_skill_draft', message: 'm', stepKey: 'c', trial };
+    expect(
+      admissionStopLines(
+        { hints: [refused, draft, unchecked], checkedStepKeys: ['a', 'b', 'd'] },
+        new Map(),
+        zh,
+      ),
+    ).toEqual([
+      expect.stringMatching(
+        /^步骤 a 要有人批准试用它的 Skill 草稿才会开始，目标会停在这一步等批准$/,
+      ),
+      '步骤 b 现在不会开始（模型不允许），目标会停在这一步',
+    ]);
+    expect(admissionStopLines({ hints: [], checkedStepKeys: ['a'] }, new Map(), zh)).toEqual([]);
   });
 });

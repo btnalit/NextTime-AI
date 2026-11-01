@@ -954,7 +954,7 @@ function hintSkillsShown(hint: PlanHint): readonly string[] {
 const WORKER_SPEC_FIELD: Readonly<Record<keyof WorkerSpec, readonly [string, string]>> = {
   instructions: ['职责说明', 'Responsibility'],
   skills: ['Skill', 'Skills'],
-  gates: ['门', 'Gates'],
+  gates: ['门', 'Gatekeepers'],
   capabilities: ['能力范围', 'Capabilities'],
   model: ['模型', 'Model'],
   observeScope: ['观察范围', 'Observation scope'],

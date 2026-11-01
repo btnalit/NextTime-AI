@@ -60,7 +60,9 @@ describe('stepFieldChanges as sentences (S11 GO15a)', () => {
       step({ filesFrom: ['side', 'fetch-2'] }),
     );
     expect(texts(changes)).toEqual(['改读 side、fetch-2 留下的文件（原来读 fetch）']);
-    expect(texts(changes, en)).toEqual(['Reads the files of side, fetch-2 instead (was fetch)']);
+    expect(texts(changes, en)).toEqual([
+      'Reads the files left by side, fetch-2 instead (was fetch)',
+    ]);
     expect(texts(stepFieldChanges(step(), step({ filesFrom: ['fetch'] })))).toEqual([
       '读取步骤 fetch 留下的文件',
     ]);
@@ -177,7 +179,7 @@ describe('stepFieldChanges as sentences (S11 GO15a)', () => {
       '模型设为 model-b（原来沿用 Worker 定义）；改读 side、fetch-2 留下的文件（原来读 fetch）',
     );
     expect(change && stepChangeLine(change, names, en)).toBe(
-      'Model set to model-b (the Worker’s own before); Reads the files of side, fetch-2 instead (was fetch)',
+      'Model set to model-b (the Worker’s own before); Reads the files left by side, fetch-2 instead (was fetch)',
     );
   });
 });

@@ -1291,10 +1291,11 @@ const listWorkerDefinitionsHandler: CapabilityHandler = async (client, workspace
   };
 };
 
-/** S11 GO15a: one version of a WorkerDefinition, as `list_worker_definitions` would show it — a
- *  published or deprecated version to every person, a draft only to its proposer (legacy 492, the
- *  rule `requirePublishedWorkerDefinition` applies); `null` for anything else, as for a version
- *  nothing has. The console reads it beside a goal step's WorkerSpec, whose base it is. */
+/** S11 GO15a: one version of a WorkerDefinition — a published or deprecated version to every
+ *  person, a draft only to its proposer (legacy 492, the rule `requirePublishedWorkerDefinition`
+ *  applies); `null` for anything else, as for a version nothing has. One more than
+ *  `list_worker_definitions` shows: a deprecated version reads too, since a step can sit on one and
+ *  the console sets the step's WorkerSpec against it (no draft and no credential in it). */
 const getWorkerDefinitionHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { definitionId, version } = params as { definitionId: string; version: number };
   const principalId = await currentPrincipalId(client);

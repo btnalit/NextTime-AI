@@ -300,17 +300,26 @@ function StepFilesFrom({
  *  `stepAdmissionOf`) and the short reasons it rests on. */
 export function StepAdmissionLine({
   view,
+  gateNames,
+  className,
   t,
 }: {
   readonly view: StepAdmissionView;
+  /** UX P3-5 on #888: a gate the requester cannot act on is named. */
+  readonly gateNames: ReadonlyMap<string, string>;
+  readonly className?: string;
   readonly t: Translate;
 }) {
   const verdict = view.kind === 'checked' ? view.admission.verdict : view.kind;
-  const reasons = stepAdmissionReasons(view, t);
+  const reasons = stepAdmissionReasons(view, t, gateNames);
   const tone =
     verdict === 'refused' ? 'text-danger' : verdict === 'needs_approval' ? 'text-warn' : 'text-3';
   return (
-    <span className={`text-small ${tone}`} data-testid="goal-step-admission" data-verdict={verdict}>
+    <span
+      className={`text-small ${tone}${className ? ` ${className}` : ''}`}
+      data-testid="goal-step-admission"
+      data-verdict={verdict}
+    >
       {stepAdmissionText(view, t)}
       {reasons.length > 0
         ? t(`（理由：${reasons.join('、')}）`, ` (because: ${reasons.join(', ')})`)
@@ -428,7 +437,7 @@ function StepItem({
       ) : null}
 
       {admission && (admission.kind === 'checked' || planStep?.spec) ? (
-        <StepAdmissionLine view={admission} t={t} />
+        <StepAdmissionLine view={admission} gateNames={gateNames} t={t} />
       ) : null}
 
       {planStep?.bindings ? (

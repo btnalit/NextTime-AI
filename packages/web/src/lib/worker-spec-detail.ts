@@ -6,6 +6,7 @@ import {
   type WorkerSpec,
   stepAdmissionOf,
 } from '@nexttime/shared';
+import { shortId } from './format.js';
 import { stepHintChipLabel } from './goals.js';
 import type { Translate } from './i18n.js';
 
@@ -150,16 +151,63 @@ export function stepAdmissionHints(view: StepAdmissionView): readonly PlanHint[]
   return view.kind === 'checked' && view.admission.verdict !== 'run' ? view.admission.hints : [];
 }
 
-/** Why a `checked` verdict is not `run`, one short label per hint — the step's chips, and for the
- *  one plan-wide hint that stops every step, what it says. */
-export function stepAdmissionReasons(view: StepAdmissionView, t: Translate): readonly string[] {
-  return [
-    ...new Set(
-      stepAdmissionHints(view).map(
-        (hint) =>
-          stepHintChipLabel(hint, t) ??
-          t('请求人现在不能启动 Worker', 'The requester cannot start Workers now'),
-      ),
-    ),
-  ];
+/** Why a `checked` verdict is not `run`, one short label per hint — the step's chips, a gate the
+ *  requester cannot act on by name (UX P3-5 on #888), and for the one plan-wide hint that stops
+ *  every step, what it says. */
+export function stepAdmissionReasons(
+  view: StepAdmissionView,
+  t: Translate,
+  gateNames: ReadonlyMap<string, string> = new Map(),
+): readonly string[] {
+  return [...new Set(stepAdmissionHints(view).map((hint) => admissionReason(hint, gateNames, t)))];
+}
+
+function admissionReason(
+  hint: PlanHint,
+  gateNames: ReadonlyMap<string, string>,
+  t: Translate,
+): string {
+  const gates = hint.code === 'step_gate_not_held' ? (hint.gatekeeperIds ?? []) : [];
+  if (gates.length > 0) {
+    const names = gates.map((id) => gateNames.get(id) ?? shortId(id));
+    return t(
+      `请求人不能操作门 ${names.join('、')}`,
+      `The requester cannot act on Gatekeeper${names.length > 1 ? 's' : ''} ${names.join(', ')}`,
+    );
+  }
+  return (
+    stepHintChipLabel(hint, t) ??
+    t('请求人现在不能启动 Worker', 'The requester cannot start Workers now')
+  );
+}
+
+/** UX P3-4 on #888: what accepting a revision leads to at a step the read checked and would not
+ *  start as it is — the goal stops there — one confirm line per step, in the plan's order. */
+export function admissionStopLines(
+  revision: Pick<PlanRevisionWire, 'hints' | 'checkedStepKeys'>,
+  gateNames: ReadonlyMap<string, string>,
+  t: Translate,
+): string[] {
+  const lines: string[] = [];
+  for (const key of revision.checkedStepKeys) {
+    const view = stepAdmissionView(revision, key, null, []);
+    if (view.kind !== 'checked') continue;
+    if (view.admission.verdict === 'needs_approval') {
+      lines.push(
+        t(
+          `步骤 ${key} 要有人批准试用它的 Skill 草稿才会开始，目标会停在这一步等批准`,
+          `Step ${key} starts only once someone approves a trial of its draft Skills: the goal stops there until then`,
+        ),
+      );
+    } else if (view.admission.verdict === 'refused') {
+      const reasons = stepAdmissionReasons(view, t, gateNames);
+      lines.push(
+        t(
+          `步骤 ${key} 现在不会开始（${reasons.join('、')}），目标会停在这一步`,
+          `Step ${key} would not start now (${reasons.join('; ')}): the goal stops there`,
+        ),
+      );
+    }
+  }
+  return lines;
 }
