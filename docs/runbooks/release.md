@@ -2040,6 +2040,15 @@ where object_type = 'Operation' and properties->>'status' = 'published'
     5. `delete from schema_migrations where module = 'goal' and version = 15`。
   - 撤 schema 的顺序：先撤 0015，再撤 0014 和 task/0012。
 
+### 3.88 目标预算全量：无进展熔断与规划器轮数（#870，S11 GO10，v0.54.0 之后的下一版起）
+
+无迁移、不改 compose、无单独主机步骤、无新环境变量；窗口前只读检查：无。
+
+- **行为变化（要告诉 owner）**：GO9a 起 `maxRevisions` 只限制被接受的修订。从这一版起，它同时限制**规划器轮数 / planner rounds**：规划器每跑一轮（拉起过规划任务的轮）都算一轮，不论被拒、没提出修订还是失败，与计划修订各自计数、共用同一个上限；任一个到上限就不再开轮（`failed` / `revision_budget_exhausted`），手动修订不占规划器轮数。已有目标升级后按新规则计数，已经跑过的规划轮也算在内，所以有的目标可能比升级前更早停止规划。
+- **行为变化**：`apply_minor` 下，自上次确认、继续或有步骤成功以来平台已自主规划 3 轮，再有一步失败时不开第 4 轮，目标暂停为「连续没有进展」（`paused(no_progress)`），等人重试步骤、修订计划或结束目标；人继续之后重新计数，暂停期间规划器不提议。
+- **发版说明可写**：目标用量单列规划器（`GoalUsageWire.plannerTokens`，已包含在 `tokens` 里；`plannerRounds`），控制台预算卡与规划器卡片显示规划器用了多少 token、跑了几轮。
+- **回滚**：只回退代码即可，无数据变化。回退后 `maxRevisions` 回到只限制被接受的修订，没有无进展熔断；处于 `paused(no_progress)` 的目标在旧代码里按普通暂停处理，人可继续。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
