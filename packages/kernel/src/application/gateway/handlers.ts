@@ -379,6 +379,9 @@ import {
   platformStateAuditHandler,
   platformStateConnectorsHandler,
   platformStateGatesHandler,
+  platformStateInvariantsHandler,
+  platformStateRuntimeHandler,
+  platformStateUpdatesHandler,
 } from './platform-state-handlers.js';
 // E2-0b (review #493 on #764, F2) — reject_draft, the reviewer's transition beside discard_draft.
 import { rejectDraftHandler } from './reject-draft-handler.js';
@@ -2701,4 +2704,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['platform_state_gates', platformStateGatesHandler],
   ['platform_state_connectors', platformStateConnectorsHandler],
   ['platform_state_audit', platformStateAuditHandler],
+  ['platform_state_runtime', platformStateRuntimeHandler],
+  ['platform_state_updates', platformStateUpdatesHandler],
+  ['platform_state_invariants', platformStateInvariantsHandler],
 ]);

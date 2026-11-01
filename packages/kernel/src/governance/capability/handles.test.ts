@@ -828,6 +828,9 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1)', () => {
         'platform_state_audit',
         'platform_state_connectors',
         'platform_state_gates',
+        'platform_state_invariants',
+        'platform_state_runtime',
+        'platform_state_updates',
         'search',
         'state_at',
         'traverse',
@@ -959,6 +962,9 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1)', () => {
         'platform_state_gates',
         'platform_state_connectors',
         'platform_state_audit',
+        'platform_state_runtime',
+        'platform_state_updates',
+        'platform_state_invariants',
       ]) {
         await expect(
           issueHandle(client, {

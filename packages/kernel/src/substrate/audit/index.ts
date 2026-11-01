@@ -50,6 +50,7 @@ export {
 } from './invariant-checks.js';
 export type {
   InvariantCheckResult,
+  InvariantMetricsSnapshot,
   MinimalPool as InvariantCheckPool,
   RunInvariantChecksOptions,
 } from './invariant-checks.js';

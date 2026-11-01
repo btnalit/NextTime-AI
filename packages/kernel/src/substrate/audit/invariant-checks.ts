@@ -110,6 +110,13 @@ export interface InvariantCheckResult {
   readonly sample: readonly string[];
 }
 
+/** The latest run's results and when it ran (`null` before the first) — what the kernel keeps
+ *  between runs (`InvariantMetricsStore`, packages/kernel/src/index.ts). */
+export interface InvariantMetricsSnapshot {
+  readonly results: readonly InvariantCheckResult[];
+  readonly lastRunAt: Date | null;
+}
+
 /** Minimal `pg.Pool`-shaped port, declared locally rather than imported from `adapters/db/pool.ts`
  *  so this module never crosses the substrate→adapters layer boundary (§7.10) — exactly the same
  *  reasoning `governance/approval/execution.ts`'s own `MinimalPool` gives for itself. */

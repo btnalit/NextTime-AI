@@ -23,6 +23,12 @@ export {
   readPlatformStateForAdminAgent,
   summarizePlatformAudit,
 } from './platform-state.js';
+export {
+  projectInvariantsState,
+  projectRuntimeImage,
+  projectRuntimeState,
+  projectUpdatesState,
+} from './platform-state-runtime.js';
 export type {
   AdminAgentAuthorityFacts,
   AdminAgentRefusalReason,

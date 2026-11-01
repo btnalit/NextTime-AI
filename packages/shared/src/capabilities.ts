@@ -5059,6 +5059,39 @@ const platformStateCapabilities = [
     description:
       'The platform’s recent changes: among the newest platform audit rows of the last 168 hours (at most 1000 looked through; truncated says the window holds more), how many writes each action made, and the 20 newest writes — each its action, when, the kind of resource it changed and whether this administrator, another administrator or nobody recorded made it. Reads are left out; no params, resource id or login. Only an admin agent calls it.',
   },
+  {
+    name: 'platform_state_runtime',
+    group: 'platform_state',
+    mode: 'observe',
+    channel: 'handle',
+    adminAgentOnly: true,
+    paramsSchema: noParams,
+    resultSchema: wire.PlatformStateRuntimeWireSchema,
+    description:
+      'The platform’s runtime layer: the active runtime image (whether the platform setting or worker-supervisor’s default chose it, its content digest, the pi and platform-extension versions and commit it was built with, whether worker-supervisor can start it), the images worker-supervisor lists (newest first, at most 50; imageCount is all), how many resident entry containers there are, how many run and how many run an image other than the active one (never whose), and the status of the platform’s own services. No image tag, label, container id or address. Only an admin agent calls it.',
+  },
+  {
+    name: 'platform_state_updates',
+    group: 'platform_state',
+    mode: 'observe',
+    channel: 'handle',
+    adminAgentOnly: true,
+    paramsSchema: noParams,
+    resultSchema: wire.PlatformStateUpdatesWireSchema,
+    description:
+      'Whether a newer platform release or pi is available, from the update record the host downloads: the running and latest versions, the newer releases (newest first, at most 50: version, when published, breaking or not, its pi, how many migrations), the migrations applying the latest runs, whether that list is partial, the version to roll back to, the pi this release bundles, the active image carries and upstream offers with its compatibility check, and how fresh the record is. No links and no host commands — a person applies a release on the host. Only an admin agent calls it.',
+  },
+  {
+    name: 'platform_state_invariants',
+    group: 'platform_state',
+    mode: 'observe',
+    channel: 'handle',
+    adminAgentOnly: true,
+    paramsSchema: noParams,
+    resultSchema: wire.PlatformStateInvariantsWireSchema,
+    description:
+      'The kernel’s latest periodic invariant check across the platform: when it ran (not_run until the first since the kernel started), whether anything was violated, and how many violations each invariant has. Counts only, never the violating rows. Only an admin agent calls it.',
+  },
 ] as const satisfies readonly Capability[];
 
 /**

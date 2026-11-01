@@ -1,18 +1,27 @@
 import { z } from 'zod';
 import {
+  MigrationRefSchema,
+  PiSdkSuiteResultSchema,
+  PlatformReleaseVersionSchema,
+} from '../release-channel.js';
+import {
   CONNECTOR_NAME_PATTERN,
   ConnectorModeWireSchema,
   GateHealthWireSchema,
   GateInstanceStatusWireSchema,
   GateTransportKindWireSchema,
   GateTrustWireSchema,
+  PiUpdateStateWireSchema,
+  PlatformUpdateFeedStaleCauseWireSchema,
+  PlatformUpdateFeedStatusWireSchema,
 } from './platform.js';
 
 /**
  * wire/platform-state (S11 AA2; docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §5.2,
  * §5.7): what an admin agent reads of the platform — the `platform_state_*` capabilities
- * (`adminAgentOnly`, group `platform_state`). Each is a projection of a platform read a platform
- * administrator has in the console, built field by field for an agent: no address of any system
+ * (`adminAgentOnly`, group `platform_state`). Each is a projection of what a platform administrator
+ * can read — the console's platform pages, or for invariants the kernel's metrics — built field by
+ * field for an agent: no address of any system
  * (no URL, host, port, path or endpoint), no command, no credential or credential-shaped value, no
  * free text an administrator or a system wrote, no other workspace's id or name (counts instead),
  * no other person's login.
@@ -197,3 +206,216 @@ export const PlatformStateAuditWireSchema = z
   })
   .strict();
 export type PlatformStateAuditWire = z.infer<typeof PlatformStateAuditWireSchema>;
+
+// -------------------------------------------------------------------------------------------
+// runtime, updates, invariants (S11 AA2b): read from worker-supervisor, the update feed and the
+// kernel's own invariant checks, not from the database's rows alone
+// -------------------------------------------------------------------------------------------
+
+/** A runtime image's identity: Docker's content id (`RuntimeImageWire.id`), never a tag — a tag
+ *  can name a registry by host and port. */
+export const PLATFORM_STATE_IMAGE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
+
+/** A pi version as `platform_state_*` passes it on (`upstreamLatest`, a release's `pi`): three
+ *  numeric parts and at most a pre-release suffix of one identifier that starts with a letter,
+ *  optionally followed by one numeric part (`rc.1`, `beta.2`, `dev`). Narrower than the release
+ *  channel's own pi version: a suffix of free dotted parts could carry a dotted address or a
+ *  multi-label host name, and the projection does not refuse a version as an IP literal (a
+ *  three-part version is one in the shorthand IPv4 reading). A version outside it is `null`. */
+export const PLATFORM_STATE_PI_VERSION_PATTERN =
+  /^\d{1,4}\.\d{1,4}\.\d{1,6}(?:-[A-Za-z][0-9A-Za-z]{0,15}(?:\.\d{1,6})?)?$/;
+
+/** A component version an image label or a build file carries: a pi version as above, or `dev`
+ *  for a build that did not set one (`scripts/build-images.sh`). */
+export const PLATFORM_STATE_COMPONENT_VERSION_PATTERN =
+  /^(?:dev|\d{1,4}\.\d{1,4}\.\d{1,6}(?:-[A-Za-z][0-9A-Za-z]{0,15}(?:\.\d{1,6})?)?)$/;
+
+/** The commit an image was built from (`ai.nexttime.built-from`): a git sha, or `dev`. */
+export const PLATFORM_STATE_COMMIT_PATTERN = /^(?:dev|[0-9a-f]{7,40})$/;
+
+/** An invariant check's id (`INVARIANT_CHECK_IDS`, substrate/audit/invariant-checks.ts): `I4`,
+ *  `I-S5-1`, `I-G9`, `ops.outbox_stuck`. */
+export const PLATFORM_STATE_INVARIANT_ID_PATTERN = /^(?:I[0-9A-Z-]{1,15}|ops\.[a-z][a-z_]{0,39})$/;
+
+/** The most runtime images `platform_state_runtime` lists (`imageCount` says how many there are). */
+export const PLATFORM_STATE_IMAGES_LIMIT = 50;
+
+/** The most newer releases, and pending migrations, `platform_state_updates` lists. */
+export const PLATFORM_STATE_RELEASES_LIMIT = 50;
+export const PLATFORM_STATE_MIGRATIONS_LIMIT = 500;
+
+/** The most invariant checks `platform_state_invariants` lists. */
+export const PLATFORM_STATE_INVARIANTS_LIMIT = 100;
+
+const ComponentVersionSchema = z.string().regex(PLATFORM_STATE_COMPONENT_VERSION_PATTERN);
+const PiVersionSchema = z.string().regex(PLATFORM_STATE_PI_VERSION_PATTERN);
+
+/** One runtime image (`RuntimeImageWire` without its tags, labels or activatable reference). */
+export const PlatformStateRuntimeImageWireSchema = z
+  .object({
+    digest: z.string().regex(PLATFORM_STATE_IMAGE_DIGEST_PATTERN),
+    createdAt: IsoTimestampSchema,
+    piVersion: ComponentVersionSchema.nullable(),
+    platformExtensionVersion: ComponentVersionSchema.nullable(),
+    builtFrom: z.string().regex(PLATFORM_STATE_COMMIT_PATTERN).nullable(),
+    /** Worker-supervisor's allowlist admits one of its tags (`RuntimeImageWire.allowed`). */
+    allowed: z.boolean(),
+    /** It carries the runtime contract worker-supervisor requires; `null` when that is unknown. */
+    runtimeCompatible: z.boolean().nullable(),
+    /** It is the active image (`set_active_runtime_image`, or worker-supervisor's default). */
+    active: z.boolean(),
+  })
+  .strict();
+export type PlatformStateRuntimeImageWire = z.infer<typeof PlatformStateRuntimeImageWireSchema>;
+
+/** The image Tasks and entry agents start from now. `digest` and what follows are `null` when it
+ *  could not be resolved to a listed image. */
+export const PlatformStateActiveImageWireSchema = z
+  .object({
+    /** Where the choice comes from: the platform setting, worker-supervisor's own default, or
+     *  `unknown` (no setting and worker-supervisor not reachable). */
+    source: z.enum(['setting', 'env_default', 'unknown']),
+    digest: z.string().regex(PLATFORM_STATE_IMAGE_DIGEST_PATTERN).nullable(),
+    piVersion: ComponentVersionSchema.nullable(),
+    platformExtensionVersion: ComponentVersionSchema.nullable(),
+    builtFrom: z.string().regex(PLATFORM_STATE_COMMIT_PATTERN).nullable(),
+    runtimeCompatible: z.boolean().nullable(),
+  })
+  .strict();
+export type PlatformStateActiveImageWire = z.infer<typeof PlatformStateActiveImageWireSchema>;
+
+/** The platform's own services, as `platform_status` probes them (gates are `platform_state_gates`). */
+export const PlatformStateServiceWireSchema = z.enum([
+  'kernel',
+  'postgres',
+  'llm-proxy',
+  'worker-supervisor',
+  'egress-proxy',
+]);
+export type PlatformStateServiceWire = z.infer<typeof PlatformStateServiceWireSchema>;
+
+export const PlatformStateRuntimeWireSchema = z
+  .object({
+    activeImage: PlatformStateActiveImageWireSchema,
+    /** Newest first, at most `PLATFORM_STATE_IMAGES_LIMIT`; empty when worker-supervisor could
+     *  not be reached (its service status says so). */
+    images: z.array(PlatformStateRuntimeImageWireSchema).max(PLATFORM_STATE_IMAGES_LIMIT),
+    /** Every image worker-supervisor listed, including any past the limit. */
+    imageCount: CountSchema,
+    /** Resident entry containers, as counts — never whose, or which workspace's. */
+    entryContainers: z
+      .object({
+        total: CountSchema,
+        running: CountSchema,
+        /** Running from an image other than the active one (`ResidentContainerWire.needsRebuild`). */
+        needsRebuild: CountSchema,
+      })
+      .strict(),
+    services: z
+      .array(
+        z
+          .object({
+            service: PlatformStateServiceWireSchema,
+            status: z.enum(['ok', 'degraded', 'down', 'unknown']),
+          })
+          .strict(),
+      )
+      .max(PlatformStateServiceWireSchema.options.length),
+    checkedAt: IsoTimestampSchema,
+  })
+  .strict();
+export type PlatformStateRuntimeWire = z.infer<typeof PlatformStateRuntimeWireSchema>;
+
+/** A release newer than the running one (`ReleaseChannelRelease` without its notes link). */
+export const PlatformStateReleaseWireSchema = z
+  .object({
+    version: PlatformReleaseVersionSchema,
+    publishedAt: IsoTimestampSchema,
+    breaking: z.boolean(),
+    /** The pi its images carry. */
+    pi: PiVersionSchema.nullable(),
+    migrationCount: CountSchema,
+  })
+  .strict();
+export type PlatformStateReleaseWire = z.infer<typeof PlatformStateReleaseWireSchema>;
+
+/** `PlatformUpdateWire` without its links and host commands: what a newer release brings, never
+ *  how to apply it — a person applies a release on the host (release.md §3). */
+export const PlatformStatePlatformUpdateWireSchema = z
+  .object({
+    currentVersion: PlatformReleaseVersionSchema.nullable(),
+    latestVersion: PlatformReleaseVersionSchema.nullable(),
+    available: z.boolean(),
+    breaking: z.boolean(),
+    /** The migrations applying the newest release runs, in apply order (at most
+     *  `PLATFORM_STATE_MIGRATIONS_LIMIT`; `migrationCount` is all of them). */
+    migrationsPending: z.array(MigrationRefSchema).max(PLATFORM_STATE_MIGRATIONS_LIMIT),
+    migrationCount: CountSchema,
+    /** The record reaches back less far than this version, so the migrations listed are partial. */
+    migrationsIncomplete: z.boolean(),
+    /** Newest first, at most `PLATFORM_STATE_RELEASES_LIMIT`. */
+    newerReleases: z.array(PlatformStateReleaseWireSchema).max(PLATFORM_STATE_RELEASES_LIMIT),
+    rollbackVersion: PlatformReleaseVersionSchema.nullable(),
+  })
+  .strict();
+export type PlatformStatePlatformUpdateWire = z.infer<typeof PlatformStatePlatformUpdateWireSchema>;
+
+/** `PiUpdateWire` without the drift check's failure text and run link. */
+export const PlatformStatePiUpdateWireSchema = z
+  .object({
+    state: PiUpdateStateWireSchema,
+    bundledVersion: ComponentVersionSchema.nullable(),
+    activeImageVersion: ComponentVersionSchema.nullable(),
+    upstreamLatest: PiVersionSchema.nullable(),
+    sdkSuite: PiSdkSuiteResultSchema.nullable(),
+    bundledIn: PlatformReleaseVersionSchema.nullable(),
+    checkedAt: IsoTimestampSchema.nullable(),
+  })
+  .strict();
+export type PlatformStatePiUpdateWire = z.infer<typeof PlatformStatePiUpdateWireSchema>;
+
+/** `PlatformUpdateFeedWire` without its operator text (it names the feed file and host steps). */
+export const PlatformStateUpdateFeedWireSchema = z
+  .object({
+    status: PlatformUpdateFeedStatusWireSchema,
+    staleCause: PlatformUpdateFeedStaleCauseWireSchema.nullable(),
+    fetchedAt: IsoTimestampSchema.nullable(),
+    generatedAt: IsoTimestampSchema.nullable(),
+    /** How old a download may be before the record is `stale`. */
+    maxAgeHours: CountSchema,
+  })
+  .strict();
+export type PlatformStateUpdateFeedWire = z.infer<typeof PlatformStateUpdateFeedWireSchema>;
+
+export const PlatformStateUpdatesWireSchema = z
+  .object({
+    /** `null` when the update record is missing or invalid (`feed.status`). */
+    platform: PlatformStatePlatformUpdateWireSchema.nullable(),
+    pi: PlatformStatePiUpdateWireSchema,
+    feed: PlatformStateUpdateFeedWireSchema,
+    checkedAt: IsoTimestampSchema,
+  })
+  .strict();
+export type PlatformStateUpdatesWire = z.infer<typeof PlatformStateUpdatesWireSchema>;
+
+/** The kernel's periodic invariant checks, as counts: never the violating rows (their samples can
+ *  name other workspaces' resources). */
+export const PlatformStateInvariantsWireSchema = z
+  .object({
+    /** `not_run` until the first check since the kernel started (or when checks are off). */
+    status: z.enum(['not_run', 'clean', 'violations']),
+    lastRunAt: IsoTimestampSchema.nullable(),
+    checks: z
+      .array(
+        z
+          .object({
+            invariant: z.string().regex(PLATFORM_STATE_INVARIANT_ID_PATTERN),
+            violations: CountSchema,
+          })
+          .strict(),
+      )
+      .max(PLATFORM_STATE_INVARIANTS_LIMIT),
+    checkedAt: IsoTimestampSchema,
+  })
+  .strict();
+export type PlatformStateInvariantsWire = z.infer<typeof PlatformStateInvariantsWireSchema>;
