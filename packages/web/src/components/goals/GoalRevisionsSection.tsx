@@ -9,25 +9,30 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { type PlanDiff, planDiff, stepRemovalText } from '../../lib/goals.js';
 import { type Translate, useT } from '../../lib/i18n.js';
+import { type StepChange, planStepDiff } from '../../lib/plan-step-diff.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { DashboardCard } from '../kit/section.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { PlanSource, PlanSourceParameters } from './PlanSource.js';
+import { StepChangeList } from './StepChangeList.js';
 
 export interface GoalRevisionsSectionProps {
   readonly detail: GoalDetailWire;
   readonly http: CapabilityCaller;
+  /** S11 GO15a: the workspace's gatekeepers by id, for what a redefined step changed. */
+  readonly gateNames: ReadonlyMap<string, string>;
 }
 
 /**
  * components/goals/GoalRevisionsSection (S11 GO6): 计划版本 — the plan's revisions, newest first:
  * who made each and why, who decided it, what it decided about the steps it removed, and — opened
  * on demand (`get_goal_revision` for it and the one it was based on) — which steps it added,
- * removed or redefined. Which accepted revision is in force is the goal's `currentRevision`.
+ * removed or redefined — S11 GO15a: and in each step it redefined, what changed from what to what.
+ * Which accepted revision is in force is the goal's `currentRevision`.
  */
-export function GoalRevisionsSection({ detail, http }: GoalRevisionsSectionProps) {
+export function GoalRevisionsSection({ detail, http, gateNames }: GoalRevisionsSectionProps) {
   const t = useT();
   const revisions = [...detail.revisions].reverse();
   return (
@@ -40,6 +45,7 @@ export function GoalRevisionsSection({ detail, http }: GoalRevisionsSectionProps
             current={detail.currentRevision}
             detail={detail}
             http={http}
+            gateNames={gateNames}
             t={t}
           />
         ))}
@@ -53,12 +59,14 @@ function RevisionItem({
   current,
   detail,
   http,
+  gateNames,
   t,
 }: {
   readonly revision: PlanRevisionSummaryWire;
   readonly current: number | null;
   readonly detail: GoalDetailWire;
   readonly http: CapabilityCaller;
+  readonly gateNames: ReadonlyMap<string, string>;
   readonly t: Translate;
 }) {
   const inForce = revision.status === 'accepted' && revision.revision === current;
@@ -182,6 +190,7 @@ function RevisionItem({
           basedOn={revision.basedOnRevision}
           detail={detail}
           http={http}
+          gateNames={gateNames}
           t={t}
         />
       ) : null}
@@ -193,7 +202,12 @@ type DiffState =
   | { readonly status: 'idle' }
   | { readonly status: 'loading' }
   | { readonly status: 'error'; readonly error: unknown }
-  | { readonly status: 'ready'; readonly diff: PlanDiff };
+  | {
+      readonly status: 'ready';
+      readonly diff: PlanDiff;
+      /** S11 GO15a: what changed in each step the revision redefined. */
+      readonly steps: readonly StepChange[];
+    };
 
 function RevisionDiff({
   goalRunId,
@@ -201,6 +215,7 @@ function RevisionDiff({
   basedOn,
   detail,
   http,
+  gateNames,
   t,
 }: {
   readonly goalRunId: string;
@@ -208,6 +223,7 @@ function RevisionDiff({
   readonly basedOn: number;
   readonly detail: GoalDetailWire;
   readonly http: CapabilityCaller;
+  readonly gateNames: ReadonlyMap<string, string>;
   readonly t: Translate;
 }) {
   const [state, setState] = useState<DiffState>({ status: 'idle' });
@@ -221,7 +237,11 @@ function RevisionDiff({
     setState({ status: 'loading' });
     try {
       const [before, after] = await Promise.all([read(basedOn), read(revision)]);
-      setState({ status: 'ready', diff: planDiff(before.plan, after.plan) });
+      setState({
+        status: 'ready',
+        diff: planDiff(before.plan, after.plan),
+        steps: planStepDiff(before.plan, after.plan),
+      });
     } catch (error) {
       setState({ status: 'error', error });
     }
@@ -239,7 +259,7 @@ function RevisionDiff({
       <summary>{t(`相对第 ${basedOn} 版改了什么`, `What changed since v${basedOn}`)}</summary>
       <div className="disclosure-body">
         {state.status === 'ready' ? (
-          <DiffBody diff={state.diff} t={t} />
+          <DiffBody diff={state.diff} steps={state.steps} http={http} gateNames={gateNames} t={t} />
         ) : state.status === 'error' ? (
           <ErrorBanner
             error={state.error}
@@ -254,7 +274,19 @@ function RevisionDiff({
   );
 }
 
-function DiffBody({ diff, t }: { readonly diff: PlanDiff; readonly t: Translate }) {
+function DiffBody({
+  diff,
+  steps,
+  http,
+  gateNames,
+  t,
+}: {
+  readonly diff: PlanDiff;
+  readonly steps: readonly StepChange[];
+  readonly http: CapabilityCaller;
+  readonly gateNames: ReadonlyMap<string, string>;
+  readonly t: Translate;
+}) {
   const lines: {
     readonly key: string;
     readonly label: string;
@@ -283,6 +315,20 @@ function DiffBody({ diff, t }: { readonly diff: PlanDiff; readonly t: Translate 
           ))}
         </li>
       ))}
+      {steps.length > 0 ? (
+        <li className="stack-s" data-diff="fields">
+          <span className="text-3">
+            {t('改动的步骤里改了什么：', 'What changed in each step redefined:')}
+          </span>
+          <StepChangeList
+            changes={steps}
+            http={http}
+            gateNames={gateNames}
+            t={t}
+            testId="goal-revision-step-diff"
+          />
+        </li>
+      ) : null}
       {diff.acceptanceChanged ? (
         <li>{t('目标的验收检查改了。', 'The goal’s acceptance checks changed.')}</li>
       ) : null}

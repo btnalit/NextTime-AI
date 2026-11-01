@@ -1231,6 +1231,23 @@ li[aria-current="true"] {
   display: none;
 }
 
+/* UX P3-2 on #888: a summary that carries a second sentence (a proposed goal step's admission)
+   puts it on its own line under the title on a narrow screen, instead of folding both into
+   narrow columns side by side. */
+.disclosure > summary.disclosure-summary-wrap {
+  flex-wrap: wrap;
+}
+
+@media (max-width: 768px) {
+  .disclosure-summary-wrap > .meta-sep {
+    display: none;
+  }
+
+  .disclosure-summary-wrap > .disclosure-summary-sub {
+    flex-basis: 100%;
+  }
+}
+
 .disclosure > summary .icon-chevron {
   transition: transform var(--transition);
   color: var(--text-3);

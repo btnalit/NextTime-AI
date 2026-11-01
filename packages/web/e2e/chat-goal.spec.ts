@@ -96,6 +96,7 @@ function proposedGoal(requester: string) {
       createdAt: T0,
       removals: {},
       hints: [],
+      checkedStepKeys: [],
       fromProcedure: null,
     },
     revisions: [],

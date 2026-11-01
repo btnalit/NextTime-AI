@@ -172,6 +172,12 @@ export const PlanRevisionWireSchema = z
     createdAt: z.string(),
     removals: StepRemovalsSchema,
     hints: z.array(PlanHintSchema),
+    /** S11 GO15a: the steps whose start this read checked, in plan order — for each, its `step_*`
+     *  hints are all there are, so none means it would start (`stepAdmissionOf`). A step not
+     *  listed was not checked: it has started, runs, waits or ended, or the revision is not one a
+     *  person decides on now (only the proposal of a run still proposed, the revision in force of
+     *  a paused run, and the goal planner's proposal waiting for the requester are). */
+    checkedStepKeys: z.array(z.string()),
     /** S11 GO5d-2: the Procedure the plan was made from; `null` for a plan written as it is. */
     fromProcedure: PlanSourceProcedureWireSchema.nullable(),
   })
@@ -182,6 +188,7 @@ export type PlanRevisionWire = z.infer<typeof PlanRevisionWireSchema>;
 export const PlanRevisionSummaryWireSchema = PlanRevisionWireSchema.omit({
   plan: true,
   hints: true,
+  checkedStepKeys: true,
 });
 export type PlanRevisionSummaryWire = z.infer<typeof PlanRevisionSummaryWireSchema>;
 

@@ -408,6 +408,71 @@ export const PlanHintSchema = z
   .strict();
 export type PlanHint = z.infer<typeof PlanHintSchema>;
 
+/** S11 GO15a: what a plan hint says about the start of the step it names — see
+ *  {@link PLAN_HINT_ADMISSION}. */
+export type PlanHintAdmission = 'refused' | 'needs_approval' | 'note' | 'plan';
+
+/**
+ * S11 GO15a (s11-w2/go15-default-plan.md F3): what each hint says about the admission of the step
+ * it names — the one table the console's 「准入」 line reads and the kernel's tests hold the hints
+ * it makes to, so the two never class a code differently. The verdict itself stays the kernel's:
+ * every `step_*` hint is what its admission and authority check found (`precheck.ts`).
+ *   - `refused` — the step would not start: its attempt is refused, and the goal pauses there for
+ *     a person (`requester_cannot_start_workers` has no step and stops every one);
+ *   - `needs_approval` — it would not start until a person approves one trial of its draft Skills
+ *     (GO8b); a `step_skill_draft` hint with no `trial` to approve is `refused`
+ *     ({@link stepAdmissionOf});
+ *   - `note` — the step starts as the plan says: advice about its Worker's contract, or what
+ *     happens once it runs (a gate refuses calls for want of the requester's account);
+ *   - `plan` — about the plan, not a step's start (`requester_confirm_only`).
+ */
+export const PLAN_HINT_ADMISSION = {
+  requester_confirm_only: 'plan',
+  requester_cannot_start_workers: 'refused',
+  step_gate_not_held: 'refused',
+  step_capability_not_held: 'refused',
+  step_definition_excluded: 'refused',
+  step_account_not_connected: 'note',
+  step_skill_draft: 'needs_approval',
+  step_skill_deprecated: 'refused',
+  step_model_not_offered: 'refused',
+  step_model_not_allowed: 'refused',
+  step_worker_unavailable: 'refused',
+  step_skill_version_unavailable: 'refused',
+  step_output_contract_unused: 'note',
+  step_input_mismatch: 'note',
+} as const satisfies Record<PlanHintCode, PlanHintAdmission>;
+
+/** S11 GO15a: what a read of a revision found about one step's start, from its hints — `run` when
+ *  none stops it; otherwise the hints that do, `refused` when any would refuse it whatever a person
+ *  approves. Only meaningful for a step the read checked (`PlanRevisionWire.checkedStepKeys`). */
+export type StepAdmission =
+  | { readonly verdict: 'run' }
+  | {
+      readonly verdict: 'needs_approval' | 'refused';
+      /** The hints that stop it, in the order the read gave them. */
+      readonly hints: readonly PlanHint[];
+    };
+
+/** What `hints` (one read's, of one revision) say about the start of step `stepKey` — see
+ *  {@link StepAdmission}. A `step_skill_draft` hint with no trial to approve refuses the step: no
+ *  approval lifts it (a reference matches more than one draft, or names a published Skill too). */
+export function stepAdmissionOf(hints: readonly PlanHint[], stepKey: string): StepAdmission {
+  let refused = false;
+  const stopping: PlanHint[] = [];
+  for (const hint of hints) {
+    const admission: PlanHintAdmission = PLAN_HINT_ADMISSION[hint.code];
+    if (admission === 'note' || admission === 'plan') continue;
+    const forStep =
+      hint.code === 'requester_cannot_start_workers' ? true : hint.stepKey === stepKey;
+    if (!forStep) continue;
+    stopping.push(hint);
+    if (admission === 'refused' || hint.trial === undefined) refused = true;
+  }
+  if (stopping.length === 0) return { verdict: 'run' };
+  return { verdict: refused ? 'refused' : 'needs_approval', hints: stopping };
+}
+
 /** A GoalRun's budget (I-G6; goal/0001's `budget_*` columns and their CHECKs): tokens and step
  *  attempts spent, revisions made after the first, wall-clock seconds from confirmation.
  *  S11 GO10: `maxRevisions` also caps the goal planner's rounds (`usage.plannerRounds`, the
