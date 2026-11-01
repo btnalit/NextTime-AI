@@ -23,7 +23,7 @@ import { writeAudit } from '../../substrate/audit/index.js';
 import { DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS } from '../../substrate/audit/invariant-checks.js';
 import { listSourceFreshness } from '../../substrate/epistemic/index.js';
 import type { OntologyEnforcement } from '../../substrate/graph/index.js';
-import { revokeUserCredentials } from '../identity/credentials.js';
+import { revokeUserAdminAgentSessions, revokeUserCredentials } from '../identity/credentials.js';
 import { hashPassword, passwordPolicyViolation } from '../identity/password.js';
 import { LOGIN_PATTERN, effectivePlatformRole, normalizeLogin } from '../identity/users.js';
 import {
@@ -478,9 +478,8 @@ async function assertAdminCanBeReduced(client: PoolClient, user: UserWire): Prom
 export const updateUserHandler: CapabilityHandler = async (client, _workspaceId, params) => {
   const input = params as { userId: string; displayName?: string; platformRole?: 'admin' | 'user' };
   const before = await loadUser(client, input.userId);
-  if (input.platformRole === 'user' && before.platformRole === 'admin') {
-    await assertAdminCanBeReduced(client, before);
-  }
+  const demoted = input.platformRole === 'user' && before.platformRole === 'admin';
+  if (demoted) await assertAdminCanBeReduced(client, before);
   await client.query(
     `update users
         set display_name = coalesce($2, display_name),
@@ -489,6 +488,9 @@ export const updateUserHandler: CapabilityHandler = async (client, _workspaceId,
       where id = $1`,
     [input.userId, input.displayName?.trim() || null, input.platformRole ?? null],
   );
+  // S11 AA1 (I-A3): an admin agent's power follows its person. Every call through one re-checks
+  // the platform role already; revoking its Handles here is what also stops llm-proxy at once.
+  if (demoted) await revokeUserAdminAgentSessions(client, input.userId);
   if (input.displayName) {
     // Keep the membership Principals' display names in step (the members page reads them).
     await client.query(

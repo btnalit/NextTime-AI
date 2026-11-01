@@ -9,6 +9,7 @@ import {
 import { OutboundTargetRefusedError } from '../../adapters/outbound-target/index.js';
 // S11 P1: the ChangePlan core's refusals (application/change-plan), same direct import.
 import {
+  ChangeApplierNotAPersonError,
   ChangeConfirmationRequiredError,
   ChangePlanChangedError,
   ChangeRollbackConflictError,
@@ -387,6 +388,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
     return { status: 403, code: 'meta_ontology_write_forbidden', message: err.message };
   }
   if (err instanceof ForbiddenError) {
+    return { status: 403, code: 'forbidden', message: err.message };
+  }
+  // S11 AA1 (legacy 407): the change-plan core's own check that a segment's applier is a person —
+  // the backstop behind `actsForPerson`, so the same 403 `forbidden`.
+  if (err instanceof ChangeApplierNotAPersonError) {
     return { status: 403, code: 'forbidden', message: err.message };
   }
   // S10 E3-1c (application/eval-seal): what was about to reach an agent carries evaluation

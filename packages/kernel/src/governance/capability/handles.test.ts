@@ -8,6 +8,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import {
+  ADMIN_AGENT_CEILING_CAPABILITIES,
+  AdminAgentCeilingError,
   AttenuationError,
   type CapabilityScope,
   ENTRY_CEILING_CAPABILITIES,
@@ -17,7 +19,9 @@ import {
   HandleRevoked,
   ScopeValidationError,
   WORKER_CEILING_CAPABILITIES,
+  adminAgentScope,
   attenuate,
+  buildAdminAgentCeiling,
   createDbRevocationCheck,
   entryScope,
   holderForSessionKind,
@@ -200,7 +204,7 @@ describe('issueHandle / verifyHandle', () => {
     expect(issued.holder).toBe('bearer');
   });
 
-  it('marks an entry / worker_run Handle container-held (hld claim) and every other kind bearer, from the session row alone', async () => {
+  it('marks an entry / worker_run / admin_agent Handle container-held (hld claim) and every other kind bearer, from the session row alone', async () => {
     const { client, addSession } = createFakeCapabilityClient();
     const { privateKey, publicKey } = await generateEphemeralHandleKeyPair();
     const scope: CapabilityScope = { capabilities: ['get_object'], resources: {} };
@@ -208,6 +212,7 @@ describe('issueHandle / verifyHandle', () => {
     for (const [kind, holder] of [
       ['entry', 'container'],
       ['worker_run', 'container'],
+      ['admin_agent', 'container'],
       ['mcp_session', 'bearer'],
       ['service', 'bearer'],
       ['web', 'bearer'],
@@ -784,6 +789,146 @@ describe('entryScope', () => {
       const scope = entryScope({}, { role: 'builder' });
       expect(new Set(scope.capabilities)).toEqual(new Set(ENTRY_CEILING_CAPABILITIES));
     });
+  });
+});
+
+// -------------------------------------------------------------------------------------------
+// ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1) — the CI guard on the admin agent's ceiling
+// -------------------------------------------------------------------------------------------
+
+describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1)', () => {
+  it('is exactly this set — widening it is a reviewed change to this test (I-A2)', () => {
+    expect([...ADMIN_AGENT_CEILING_CAPABILITIES].sort()).toEqual(
+      [
+        '<gate>.<op>',
+        'explain',
+        'find_operations',
+        'find_procedures',
+        'find_workers',
+        'get_goal',
+        'get_goal_revision',
+        'get_object',
+        'get_skill',
+        'get_skill_draft_verdicts',
+        'get_task',
+        'get_type',
+        'graph_freshness',
+        'graph_overview',
+        'list_allowed_operations',
+        'list_facts',
+        'list_goal_unresolved_actions',
+        'list_goals',
+        'list_ontology_versions',
+        'list_procedures',
+        'list_skills',
+        'list_types',
+        'list_worker_definitions',
+        'observe_operation',
+        'search',
+        'state_at',
+        'traverse',
+        'validate',
+      ].sort(),
+    );
+  });
+
+  it('holds only handle-channel observe reads: no human-channel, platform, execute-class or writing capability', () => {
+    for (const name of ADMIN_AGENT_CEILING_CAPABILITIES) {
+      const capability = getCapability(name);
+      expect(capability, name).toBeDefined();
+      expect(capability?.channel, name).toBe('handle');
+      expect(capability?.scope, name).not.toBe('platform');
+      expect(capability?.mode, name).toBe('observe');
+    }
+    for (const name of [
+      'request_action',
+      '<gate>.<op>:execute',
+      'invoke_worker',
+      'record_decision',
+      'report_turn',
+      'request_connection',
+      'propose_skill',
+      'propose_goal',
+    ]) {
+      expect(ADMIN_AGENT_CEILING_CAPABILITIES, name).not.toContain(name);
+    }
+  });
+
+  it('refuses, when the ceiling is built, every name that breaks one of its rules', () => {
+    for (const [name, rule] of [
+      ['no_such_capability', 'not a registered capability'],
+      // A person's decisions in the console (I-A1).
+      ['approve', 'human-channel'],
+      ['publish_skill', 'human-channel'],
+      ['install_pack', 'human-channel'],
+      ['roll_back_change_segment', 'human-channel'],
+      ['decide_plan_revision', 'human-channel'],
+      ['confirm_goal', 'human-channel'],
+      ['approve_step_trial', 'human-channel'],
+      ['list_users', 'human-channel'],
+      // Outside the groups it admits, or execute-class, or a write.
+      ['request_action', 'group "governance"'],
+      ['<gate>.<op>:execute', 'execute-class'],
+      ['propose_skill', 'has mode "propose"'],
+      ['invoke_worker', 'has mode'],
+      // Observe-class but writes, and not one of the gate observations it names.
+      ['get_entry_context', 'has side effects'],
+    ] as const) {
+      expect(() => buildAdminAgentCeiling([name]), name).toThrow(AdminAgentCeilingError);
+      expect(() => buildAdminAgentCeiling([name]), name).toThrow(rule);
+    }
+  });
+
+  it('adminAgentScope: the full ceiling with no role; narrowed by the role in the workspace', () => {
+    expect(adminAgentScope().capabilities).toEqual([...ADMIN_AGENT_CEILING_CAPABILITIES]);
+    for (const role of ['owner', 'builder', 'operator', 'member', 'auditor'] as const) {
+      const scope = adminAgentScope({}, { role });
+      for (const name of scope.capabilities) {
+        expect(roleMayUseCapability(role, getCapability(name)), `${role} ${name}`).toBe(true);
+      }
+      for (const name of ADMIN_AGENT_CEILING_CAPABILITIES) {
+        if (roleMayUseCapability(role, getCapability(name))) {
+          expect(scope.capabilities, `${role} ${name}`).toContain(name);
+        }
+      }
+    }
+    // An auditor reads no gate, so no gate resource travels with its scope (R-35).
+    const auditor = adminAgentScope({ gatekeeper: ['gk-1'] }, { role: 'auditor' });
+    expect(auditor.capabilities).not.toContain('<gate>.<op>');
+    expect(auditor.resources.gatekeeper).toBeUndefined();
+    expect(adminAgentScope({ gatekeeper: ['gk-1'] }, { role: 'owner' }).resources).toEqual({
+      gatekeeper: ['gk-1'],
+    });
+  });
+
+  it('issueHandle refuses an admin_agent session a scope beyond the ceiling, and issues the ceiling itself', async () => {
+    const { client, addSession } = createFakeCapabilityClient();
+    const { privateKey } = await generateEphemeralHandleKeyPair();
+    const sessionId = randomUUID();
+    addSession(sessionId, {
+      workspaceId: randomUUID(),
+      onBehalfOf: randomUUID(),
+      kind: 'admin_agent',
+    });
+
+    for (const extra of ['propose_skill', 'invoke_worker', 'request_action']) {
+      await expect(
+        issueHandle(client, {
+          sessionId,
+          scope: { capabilities: ['get_object', extra], resources: {} },
+          ttlSeconds: 60,
+          privateKey,
+        }),
+        extra,
+      ).rejects.toThrow(HandleIssuanceError);
+    }
+    const issued = await issueHandle(client, {
+      sessionId,
+      scope: adminAgentScope(),
+      ttlSeconds: 60,
+      privateKey,
+    });
+    expect(issued.holder).toBe('container');
   });
 });
 

@@ -359,8 +359,9 @@ export const installPackHandler: CapabilityHandler = async (
     throw new Error('install_pack: invoked outside the human channel');
   // A confirmation of an authority-widening item is a person's (I-A4, the same rule as
   // `roll_back_change_segment` and `attest_fact`): a *service* Principal's API key also
-  // authenticates on the human channel, and a service is not a person. Without a confirmation a
-  // service owner may still install a pack that widens nothing.
+  // authenticates on the human channel, and a service is not a person. Since S11 AA1 (legacy 407)
+  // the capability is `actsForPerson`, so dispatch refuses such a caller before this runs, and
+  // the change-plan core checks the applier again; this stays as the handler's own statement.
   const confirmedOrdinals = input.confirmedOrdinals ?? [];
   if (confirmedOrdinals.length > 0 && context.principal?.kind !== 'human') {
     throw new ForbiddenError(

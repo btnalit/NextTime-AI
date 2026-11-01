@@ -9,6 +9,7 @@ import {
 import { OutboundTargetRefusedError } from '../../adapters/outbound-target/index.js';
 // S11 P1: the ChangePlan core's refusals (application/change-plan), same direct import.
 import {
+  ChangeApplierNotAPersonError,
   ChangeConfirmationRequiredError,
   ChangePlanChangedError,
   ChangeRollbackConflictError,
@@ -312,7 +313,7 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (err instanceof UnauthorizedError) {
     return { code: WS_ERROR_CODES.UNAUTHORIZED, message: 'unauthorized' };
   }
-  if (err instanceof ForbiddenError) {
+  if (err instanceof ForbiddenError || err instanceof ChangeApplierNotAPersonError) {
     return { code: WS_ERROR_CODES.FORBIDDEN, message: err.message };
   }
   // Review #493 F1: the graph store's backstop (substrate/graph/meta-object-guard.ts) — HTTP's

@@ -20,6 +20,7 @@ import {
 } from './adapters/gatekeeper-client/index.js';
 import { TaskSupervisorClient } from './adapters/supervisor-client/index.js';
 import type { TaskSupervisorClientPort } from './adapters/supervisor-client/index.js';
+import { adminAgentEnabled } from './application/admin-agent/index.js';
 import {
   chatMessageText,
   createChatEventSink,
@@ -1598,6 +1599,9 @@ export function main(): void {
     // S11 GO5c: how many goals one requester may have waiting to be confirmed — read per proposal
     // by `propose_goal`; parsed here once so a bad value stops the kernel at start.
     maxProposedGoalsPerRequester(process.env.GOAL_MAX_PROPOSED_PER_REQUESTER);
+    // S11 AA1: the admin agent's switch — read per call (application/admin-agent); parsed here
+    // once so a mistyped value stops the kernel at start instead of leaving it silently off.
+    adminAgentEnabled(process.env.ADMIN_AGENT_ENABLED);
     const outboxPruneDays = parseNonNegativeIntEnvVar(
       'OUTBOX_PRUNE_DAYS',
       process.env.OUTBOX_PRUNE_DAYS,

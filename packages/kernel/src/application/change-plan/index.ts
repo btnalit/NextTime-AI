@@ -64,7 +64,9 @@ export {
   assertWideningConfirmed,
   planWorkspaceSegment,
 } from './engine.js';
+export { assertChangeApplierIsPerson } from './applier.js';
 export {
+  ChangeApplierNotAPersonError,
   ChangeConfirmationRequiredError,
   ChangePlanChangedError,
   type ChangeRollbackConflict,

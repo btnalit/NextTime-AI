@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ChangeItemClassification, ChangeItemKind } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { writeAudit } from '../../substrate/audit/index.js';
+import { assertChangeApplierIsPerson } from './applier.js';
 import { type WideningReason, classificationOf } from './classify.js';
 import { contentDigest } from './digest.js';
 import { ChangeConfirmationRequiredError, ChangePlanChangedError } from './errors.js';
@@ -52,7 +53,8 @@ import {
  * Who may apply is the caller's capability's authorization (the workspace owner — §5.4 "授权仍按
  * 那个人的角色判"); this module adds no path around it. The applier is a person: `channel` is
  * `human` (a capability call) or `platform` (workspace creation's default modules), never a
- * Handle (I-A1).
+ * Handle (I-A1) — checked at run time too, with the applier's Principal a `human` one
+ * (`applier.ts`, legacy 407).
  */
 
 export type ChangeItemIntent = OntologyVersionIntent | FamilyVersionIntent | OperationVersionIntent;
@@ -364,6 +366,7 @@ export async function applyWorkspaceSegment(
   workspaceId: string,
   input: ApplyWorkspaceSegmentInput,
 ): Promise<AppliedWorkspaceSegment> {
+  await assertChangeApplierIsPerson(client, workspaceId, input.channel, input.appliedBy, 'apply');
   const { plan, kinds } = await planWithKinds(client, workspaceId, input);
   if (plan.digest !== input.reviewedDigest) {
     throw new ChangePlanChangedError(input.reviewedDigest, plan.digest);

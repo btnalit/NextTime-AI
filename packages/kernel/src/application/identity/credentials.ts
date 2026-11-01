@@ -50,6 +50,55 @@ export interface RevokeUserCredentialsOptions {
 }
 
 /**
+ * S11 AA1 (I-A3): revokes the user's admin agents — every `admin_agent` session of each of the
+ * user's human membership Principals, and every Handle minted under it — on `client` inside the
+ * caller's transaction. `update_user` calls it when it takes `admin` away: the per-call check
+ * (application/admin-agent) already refuses such a Handle in the kernel, and the revocation is what
+ * reaches llm-proxy, which checks revoked jtis only. Same transaction handling as
+ * {@link revokeUserCredentials}. Returns the revoked session ids.
+ */
+export async function revokeUserAdminAgentSessions(
+  client: PoolClient,
+  userId: string,
+): Promise<readonly string[]> {
+  const principals = await client.query<{ workspace_id: string; id: string }>(
+    `select workspace_id, id from principals where user_id = $1 and kind = 'human'`,
+    [userId],
+  );
+  const previous = await client.query<{ workspace_id: string | null }>(
+    "select current_setting('app.workspace_id', true) as workspace_id",
+  );
+  const revoked: string[] = [];
+  try {
+    for (const principal of principals.rows) {
+      await client.query("select set_config('app.workspace_id', $1, true)", [
+        principal.workspace_id,
+      ]);
+      const sessions = await client.query<{ id: string }>(
+        `select id from sessions
+          where workspace_id = $1 and on_behalf_of = $2 and kind = 'admin_agent'`,
+        [principal.workspace_id, principal.id],
+      );
+      await client.query(
+        `update sessions set status = 'revoked', expires_at = least(expires_at, now())
+          where workspace_id = $1 and on_behalf_of = $2 and kind = 'admin_agent'
+            and status <> 'revoked'`,
+        [principal.workspace_id, principal.id],
+      );
+      for (const session of sessions.rows) {
+        await revokeSession(client, session.id);
+        revoked.push(session.id);
+      }
+    }
+  } finally {
+    await client.query("select set_config('app.workspace_id', $1, true)", [
+      previous.rows[0]?.workspace_id ?? '',
+    ]);
+  }
+  return revoked;
+}
+
+/**
  * R-12 / D-25: revokes everything `userId` holds, on `client` inside the caller's transaction —
  * `reset_user_password`, `set_user_status` → disabled, a self-service password change and (scoped
  * to one workspace) `remove_membership` all call this, and nothing else revokes a user's access in

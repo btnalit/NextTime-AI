@@ -171,6 +171,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         rollBackWorkspaceSegment(client, ws.workspaceId, {
           segmentId,
           rolledBackBy: ws.ownerId,
+          channel: 'human',
           confirmedOrdinals,
         }),
       );

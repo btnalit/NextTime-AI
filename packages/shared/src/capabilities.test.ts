@@ -455,3 +455,19 @@ describe('D-24 publish / deprecate authority (review 2026-10-02)', () => {
     expect(capability?.minRole).toBe('builder');
   });
 });
+
+describe('ChangePlan segments are written by a person (S11 AA1, legacy 407)', () => {
+  it('every capability that applies, rolls back or verifies a segment is actsForPerson', () => {
+    for (const name of [
+      'install_module',
+      'upgrade_module',
+      'install_pack',
+      'roll_back_change_segment',
+      'verify_change_segment',
+    ]) {
+      const capability = getCapability(name);
+      expect(capability?.channel, name).toBe('human');
+      expect(capability?.actsForPerson, name).toBe(true);
+    }
+  });
+});

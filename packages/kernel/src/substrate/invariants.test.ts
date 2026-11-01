@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Pool } from 'pg';
@@ -88,6 +88,31 @@ function extractTableChecks(sql: string): TableCheck[] {
   return checks;
 }
 
+/**
+ * Every `alter table <t> add constraint <name> check (<column> in (<'a', ...>))` a core migration
+ * declares — a later migration that re-adds one of the CHECKs above with other values (core 0049:
+ * `sessions.kind` gains `admin_agent`). Applied in file order over the CHECKs the tables were
+ * created with, so the test compares the constraint the database actually ends up with.
+ */
+function extractAlteredChecks(sql: string): TableCheck[] {
+  const checks: TableCheck[] = [];
+  const alterRe =
+    /^alter table (?:only )?(\w+)\s+add constraint \w+\s+check\s*\(\s*(\w+)\s+in\s*\(([^()]*)\)\s*\)$/i;
+  for (const statement of splitSqlStatements(sql)) {
+    const match = alterRe.exec(stripLeadingLineComments(statement).trim());
+    const table = match?.[1];
+    const column = match?.[2];
+    const rawValues = match?.[3];
+    if (!table || !column || rawValues === undefined) continue;
+    const values = rawValues
+      .split(',')
+      .map((v) => v.trim().replace(/^'|'$/g, ''))
+      .filter((v) => v.length > 0);
+    checks.push({ table, column, values });
+  }
+  return checks;
+}
+
 /** Extracts every `export const XXX_VALUES = [...] as const;` array from packages/shared/src/enums.ts. */
 function extractSharedEnumValues(source: string): Record<string, string[]> {
   const result: Record<string, string[]> = {};
@@ -132,6 +157,17 @@ describe('core migrations — CHECK enum lists match packages/shared (static, no
     for (const filename of CORE_MIGRATION_FILES) {
       const content = await readFile(path.join(CORE_MIGRATIONS_DIR, filename), 'utf8');
       allChecks.push(...extractTableChecks(content));
+    }
+    // A later core migration that re-adds one of these CHECKs replaces it (file order).
+    const coreFiles = (await readdir(CORE_MIGRATIONS_DIR)).filter((f) => f.endsWith('.sql')).sort();
+    for (const filename of coreFiles) {
+      const content = await readFile(path.join(CORE_MIGRATIONS_DIR, filename), 'utf8');
+      for (const altered of extractAlteredChecks(content)) {
+        const index = allChecks.findIndex(
+          (c) => c.table === altered.table && c.column === altered.column,
+        );
+        if (index !== -1) allChecks[index] = altered;
+      }
     }
 
     const enumsSource = await readFile(SHARED_ENUMS_PATH, 'utf8');

@@ -161,6 +161,14 @@ describe.runIf(DATABASE_URL !== undefined)(
       await expect(
         call(service, 'roll_back_change_segment', { segmentId, confirmedOrdinals: [1] }),
       ).rejects.toBeInstanceOf(ForbiddenError);
+      // S11 AA1 (legacy 407): nor may it roll back at all, confirming nothing — the capability is
+      // `actsForPerson`, refused at dispatch, as is verifying the segment.
+      await expect(call(service, 'roll_back_change_segment', { segmentId })).rejects.toBeInstanceOf(
+        ForbiddenError,
+      );
+      await expect(call(service, 'verify_change_segment', { segmentId })).rejects.toBeInstanceOf(
+        ForbiddenError,
+      );
       expect(
         (await call<ChangeSegmentDetailWire>(owner, 'get_change_segment', { segmentId })).segment
           .status,

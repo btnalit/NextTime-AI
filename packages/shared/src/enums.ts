@@ -32,13 +32,22 @@ export const ROLE_VALUES = ['owner', 'builder', 'operator', 'member', 'auditor']
 export type Role = (typeof ROLE_VALUES)[number];
 export const RoleSchema = asEnum(ROLE_VALUES);
 
-/** Session kind (§9.2 `sessions.kind` CHECK constraint). */
+/**
+ * Session kind (§9.2 `sessions.kind` CHECK constraint). S11 AA1 (plan §5.2, I-A1–I-A3):
+ * `admin_agent` — a platform administrator's admin agent in one workspace. Its Principal is that
+ * administrator's own human Principal, as the entry agent's is its person's: what tells the two
+ * apart is this kind — every Handle issued under it is container-held and held to
+ * `ADMIN_AGENT_CEILING_CAPABILITIES`, and every call through it is checked against the user's
+ * platform role at the time of the call and audited with this kind (kernel
+ * `application/admin-agent`, migration core 0049).
+ */
 export const SESSION_KIND_VALUES = [
   'web',
   'entry',
   'worker_run',
   'mcp_session',
   'service',
+  'admin_agent',
 ] as const;
 export type SessionKind = (typeof SESSION_KIND_VALUES)[number];
 export const SessionKindSchema = asEnum(SESSION_KIND_VALUES);

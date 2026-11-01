@@ -92,7 +92,7 @@ const enumsUnderTest = [
     'SessionKind',
     SESSION_KIND_VALUES,
     SessionKindSchema,
-    ['web', 'entry', 'worker_run', 'mcp_session', 'service'],
+    ['web', 'entry', 'worker_run', 'mcp_session', 'service', 'admin_agent'],
   ],
   [
     'EpistemicStatus',
