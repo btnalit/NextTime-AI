@@ -1,5 +1,6 @@
 # scripts/lib/accept-s2-goals.sh — S11 GO7a: goal scenarios S1, S2 and S4 to S12 of
-# docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §7.2, run by scripts/accept_s2.sh in
+# docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §7.2, and S13 — the goal planner of
+# GO9a/GO9b (legacy 549) — run by scripts/accept_s2.sh in
 # its fake-provider path after step 9 (which covers proposing from chat, confirming, the platform's
 # acceptance and S3's idempotent propose/confirm). Sourced by accept_s2.sh right after
 # accept-common.sh; POSIX sh, same conventions (pass/fail, cap, parse_kv, no temp file, no jq).
@@ -40,7 +41,7 @@
 # background on checks that fail on purpose — the platform retries an unmet acceptance check
 # (GOAL_ACCEPTANCE_CHECK_MAX_ATTEMPTS / _MAX_DURATION_MS) and an unmet reconcile check
 # (GOAL_RECONCILE_CHECK_MAX_ATTEMPTS / _MAX_DURATION_MS) with backoff, by default 5 attempts within
-# about 7.5 minutes, before it pauses the run — while S1, S11, S5, S4, S7, S9, S10, S12 and S8 run
+# about 7.5 minutes, before it pauses the run — while S1, S11, S13, S5, S4, S7, S9, S10, S12 and S8 run
 # one after the other (S12 only with ACCEPT_DISRUPTIVE=1); S6 and the reverse S4 are finished
 # next, and S2 (also only with ACCEPT_DISRUPTIVE=1) runs last, alone: the
 # kernel's restarts would drop a background goal's checks and every connection to the kernel. No
@@ -115,9 +116,10 @@ goal_wait() {
 # How a goal stands: status, outcome, basis — what goal_wait waits on for a run to settle.
 GOAL_END_EXPR="[d.result.status, d.result.outcome || '', d.result.outcomeBasis || '', d.result.pauseReason || ''].join(',')"
 
-# goal_propose_confirm <name> <paramsJson> [apiKey]: proposes as alice — or as the holder of
-# <apiKey> — (a person's propose_goal, as the console makes it), records the run for cleanup,
-# confirms revision 1 as the same person. Sets GOAL_RUN_ID.
+# goal_propose_confirm <name> <paramsJson> [apiKey] [confirm members]: proposes as alice — or as
+# the holder of <apiKey> (empty: alice) — (a person's propose_goal, as the console makes it),
+# records the run for cleanup, confirms revision 1 as the same person, with [confirm members]
+# added to confirm_goal's params (S13: `"planner":"<mode>"`). Sets GOAL_RUN_ID.
 goal_propose_confirm() {
   gpc_key=${3:-$ALICE_KEY}
   out=$(cap "$gpc_key" propose_goal "$2" "[d.result.goalRunId, d.result.status, d.result.changed].join(',')")
@@ -127,7 +129,7 @@ goal_propose_confirm() {
   GOAL_RUN_ID=${proposed%%,*}
   [ "${proposed#*,}" = "proposed,true" ] || fail "$1-proposed" "propose_goal answered '$proposed', expected a new proposed run: $(parse_kv "$out" BODY)"
   GOALS_STARTED="$GOALS_STARTED $GOAL_RUN_ID"
-  out=$(cap "$gpc_key" confirm_goal "{\"goalRunId\":\"$GOAL_RUN_ID\",\"revision\":1}" "[d.result.status, d.result.changed].join(',')")
+  out=$(cap "$gpc_key" confirm_goal "{\"goalRunId\":\"$GOAL_RUN_ID\",\"revision\":1${4:+,$4}}" "[d.result.status, d.result.changed].join(',')")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "$1-confirmed" "confirm_goal HTTP $status: $(parse_kv "$out" BODY)"
   [ "$(parse_kv "$out" EXTRACTED)" = "running,true" ] || fail "$1-confirmed" "confirm_goal answered '$(parse_kv "$out" EXTRACTED)', expected running,true"
@@ -320,6 +322,166 @@ goal_s11_reject() {
   goal_wait "$S11_GOAL_ID" 60 "d.result.status" 'cancelled' \
     || goal_fail "s11-cancelled" "$S11_GOAL_ID" "goal $S11_GOAL_ID reads '$GOAL_WAIT_VALUE' 60s after cancel_goal, expected cancelled"
   pass "s11-cancelled" "alice cancelled goal $S11_GOAL_ID, the decision S11 leaves to a person"
+}
+
+# --- S13: a step's write is refused; the goal planner finds another way (S11 GO9a, GO9b) --------
+#
+# Legacy 549. A goal confirmed with the goal planner's leave has one step whose write to the test
+# ledger alice refuses, as in S11. The platform then starts its goal planner — a Worker of its own
+# that observes nothing and can only propose (ontology/goal-planner.yaml) — on the requester's
+# fake model: fake-llm's `goalPlannerScenario` (deploy/fake-llm/server.mjs) moves the step onto
+# `report-runner`, a Worker with no gate that can execute nothing, the goal's check as it was.
+# By the platform's own rules that is a minor revision. Twice:
+#   - S13a, leave `propose`: the run pauses needs_decision, a proposal round asks the planner, and
+#     its revision 2 waits for alice; she accepts it and resumes in one call (decide_plan_revision
+#     with resume), and the goal reaches done on the platform's own check.
+#   - S13b, leave `apply_minor`: the run never pauses; an autonomous round asks the planner, the
+#     platform adopts its revision for alice (acceptedBy platform), and the goal reaches done with
+#     nobody acting after the refusal.
+# Both check the planner's Task (purpose planning, observing nothing, on the goal, completed),
+# the step's two Tasks (ops-runner's refused write, then report-runner's report) and that the
+# ledger holds nothing under the step's key: the gate never ran the refused write.
+
+REPORT_RUNNER_ID=""
+REPORT_RUNNER_VERSION=""
+
+# goal_s13_report_runner: proposes and publishes `report-runner` as alice, once — no `gates` (none)
+# and no `capabilities` (the Worker ceiling without any execute-class capability), the same fake
+# model as ops-runner. Its name is what fake-llm's planner looks for in the planner's `workers`;
+# its description says nothing of restarting (step 2's `find_workers({need:"restart"})`).
+goal_s13_report_runner() {
+  [ -z "$REPORT_RUNNER_ID" ] || return 0
+  rr_def="{\"name\":\"report-runner\",\"description\":\"Report-only Worker: reads its Task's input and reports what it found; it has no gate and acts on no system.\",\"skills\":[],\"egressDeny\":[],\"model\":\"${ACCEPT_S2_MODEL:-fake/fake-echo}\",\"systemPrompt\":\"You are a report-only Worker. Read your Task's input and report what it asks for with report_result. You have no gate and cannot act on any system.\"}"
+  out=$(cap "$ALICE_KEY" propose_worker_definition "{\"kind\":\"worker\",\"definition\":$rr_def}" "[d.result.id, d.result.version].join(',')")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "s13-report-runner" "propose_worker_definition HTTP $status: $(parse_kv "$out" BODY)"
+  pair=$(parse_kv "$out" EXTRACTED)
+  REPORT_RUNNER_ID=${pair%%,*}
+  REPORT_RUNNER_VERSION=${pair#*,}
+  out=$(cap "$ALICE_KEY" publish_worker_definition "{\"definitionId\":\"$REPORT_RUNNER_ID\",\"version\":$REPORT_RUNNER_VERSION}" "")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "s13-report-runner" "publish_worker_definition HTTP $status: $(parse_kv "$out" BODY)"
+  pass "s13-report-runner" "report-runner@$REPORT_RUNNER_VERSION published ($REPORT_RUNNER_ID): no gate, nothing it can execute"
+}
+
+# goal_s13_planner_model <model JSON>: sets alice's AgentProfile model (`null`: back to inheriting
+# the workspace's). The planner names no model of its own (ontology/goal-planner.yaml, §7.7) and
+# runs on its requester's; accept_s2 pins only the entry definition's model, so without this the
+# planner would run on the stack's default provider — the real one on the host.
+# Sets S13_PLANNER_MODEL while alice's profile names a model, so a run S13 leaves early still puts
+# it back (goal_cleanup_planner_model, review #488 on #867).
+S13_PLANNER_MODEL=""
+goal_s13_planner_model() {
+  [ "$1" = "null" ] || S13_PLANNER_MODEL=$1
+  out=$(cap "$ALICE_KEY" set_agent_profile "{\"model\":$1}" "String(d.result.model)")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "s13-planner-model" "set_agent_profile HTTP $status: $(parse_kv "$out" BODY)"
+  [ "$1" != "null" ] || S13_PLANNER_MODEL=""
+}
+
+# goal_cleanup_planner_model: for cleanup_step, --keep or not — alice's AgentProfile back to the
+# workspace's model when S13 left it on the fake one (the provider restore takes that model away);
+# prints one line, never fails.
+goal_cleanup_planner_model() {
+  [ -n "$S13_PLANNER_MODEL" ] || return 0
+  gcp_out=$(cap "$ALICE_KEY" set_agent_profile '{"model":null}' "String(d.result.model)")
+  echo "cleanup: alice's AgentProfile still named $S13_PLANNER_MODEL — set_agent_profile {\"model\":null} answered HTTP $(parse_kv "$gcp_out" HTTP_STATUS)"
+  S13_PLANNER_MODEL=""
+}
+
+# goal_s13_refused <name> <leave>: alice proposes the goal and confirms it with the planner's
+# <leave>, then refuses the step's write once it waits for her. Sets S13_GOAL_ID, S13_KEY.
+goal_s13_refused() {
+  n=$(real_token)
+  S13_KEY="$1-$n"
+  goal_propose_confirm "$1" "{\"statement\":\"accept_s2 S13 $n ($2): one ops-runner step asks to add an entry to the test ledger; the approver refuses it and the goal planner finds another way.\",\"plan\":{\"steps\":[$(goal_step_json write "ACCEPT_S2_SCENARIO=goal_ledger LEDGER_KEY=$S13_KEY" '"maxAttempts":1')],\"acceptance\":[$(goal_observe_check_json stock-visible stock.get '{}' symbol '"NXT"')]},\"budget\":$GOAL_BUDGET,\"idempotencyKey\":\"accept-s2-goal-$1-$n\"}" "" "\"planner\":\"$2\""
+  S13_GOAL_ID=$GOAL_RUN_ID
+  leave=$(goal_get "$S13_GOAL_ID" "String(d.result.planner)")
+  [ "$leave" = "$2" ] || goal_fail "$1-confirmed" "$S13_GOAL_ID" "goal $S13_GOAL_ID reads planner '$leave', expected '$2'"
+  pass "$1-confirmed" "alice confirmed goal $S13_GOAL_ID with the planner's leave '$2' (one step writing to the test ledger under $S13_KEY)"
+
+  write_expr="(() => { const s = d.result.steps.find((x) => x.stepKey === 'write'); return [d.result.status, s ? s.actions.map((a) => a.status).join('+') : ''].join(','); })()"
+  goal_wait "$S13_GOAL_ID" 180 "$write_expr" '*pending_approval*' 'paused,*' 'completed,*' 'cancelled,*' 'failed,*' \
+    || goal_fail "$1-pending" "$S13_GOAL_ID" "the step's write did not reach pending_approval within 180s (last '$GOAL_WAIT_VALUE')"
+  [ "$GOAL_WAIT_VALUE" = "running,pending_approval" ] || goal_fail "$1-pending" "$S13_GOAL_ID" "goal $S13_GOAL_ID reads '$GOAL_WAIT_VALUE', expected running with one write pending approval"
+  ar_id=$(goal_get "$S13_GOAL_ID" "d.result.steps.find((x) => x.stepKey === 'write').actions[0].actionRequestId")
+  out=$(cap "$ALICE_KEY" reject "{\"actionRequestId\":\"$ar_id\",\"reason\":\"accept_s2 S13: refused on purpose\"}" "d.result.status")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || goal_fail "$1-rejected" "$S13_GOAL_ID" "reject HTTP $status: $(parse_kv "$out" BODY)"
+  [ "$(parse_kv "$out" EXTRACTED)" = "rejected" ] || goal_fail "$1-rejected" "$S13_GOAL_ID" "reject answered '$(parse_kv "$out" EXTRACTED)', expected rejected"
+  pass "$1-rejected" "alice rejected the step's write $ar_id"
+}
+
+# The newest planning round of the run: kind:status:step:failure:revision:class.
+S13_ROUND_EXPR="(() => { const r = d.result.planningRounds; const x = r[r.length - 1]; return [d.result.status, d.result.pauseReason || '', r.length, x ? [x.kind, x.status, x.stepKey, x.failureCategory, x.revision, x.revisionClass].join(':') : ''].join(','); })()"
+# Every planning round of the run, with why it ended: kind:status:outcomeReason:detail — what a
+# failure names, so a round that did not propose says why.
+S13_ROUNDS_WHY_EXPR="d.result.planningRounds.map((x) => [x.kind, x.status, x.outcomeReason || '', (x.detail || '').slice(0, 300)].join(':')).join(' | ')"
+# Revision 2 of the run: status:proposer:acceptedBy.
+S13_REVISION_EXPR="(() => { const r = d.result.revisions.find((x) => x.revision === 2); return r ? [r.status, r.proposer, r.acceptedBy || ''].join(':') : 'none'; })()"
+
+# goal_s13_settled <name>: what the run's Tasks, its pauses and the ledger show once it is done —
+# the planner's Task, the step's two Tasks, no pause unless <name> is the propose half, nothing
+# written under the step's key.
+goal_s13_settled() {
+  planner_tasks=$(psql_ws "select coalesce(string_agg(purpose || ':' || status || ':' || coalesce(cardinality(observe_scope)::text, 'unscoped'), ',' order by created_at), 'none') from tasks where workspace_id='$WORKSPACE_ID' and goal_run_id='$S13_GOAL_ID' and purpose = 'planning'")
+  [ "$planner_tasks" = "planning:completed:0" ] || goal_fail "$1-planner-task" "$S13_GOAL_ID" "the run's planning Tasks read '$planner_tasks', expected one, completed, observing nothing (planning:completed:0)"
+  pass "$1-planner-task" "one planner Task on goal $S13_GOAL_ID: purpose planning, completed, observing nothing"
+
+  step_tasks=$(psql_ws "select coalesce(string_agg(case worker_definition_id when '$OPS_RUNNER_ID' then 'ops-runner' when '$REPORT_RUNNER_ID' then 'report-runner' else 'other' end || ':' || status, ',' order by created_at), 'none') from tasks where workspace_id='$WORKSPACE_ID' and goal_run_id='$S13_GOAL_ID' and purpose is null")
+  count=$(ledger_count "$S13_KEY")
+  [ "$step_tasks|$count" = "ops-runner:completed,report-runner:completed|0" ] \
+    || goal_fail "$1-other-way" "$S13_GOAL_ID" "the step's Tasks read '$step_tasks' and the ledger holds '$count' under $S13_KEY — expected ops-runner's refused write, then report-runner's report, and nothing written"
+  pass "$1-other-way" "the step ran on ops-runner (its write refused), then on report-runner; the ledger holds nothing under $S13_KEY"
+}
+
+goal_s13_propose() {
+  goal_s13_refused s13a propose
+  goal_wait "$S13_GOAL_ID" 240 "$S13_ROUND_EXPR" '*:proposed:*' '*:no_revision:*' '*:failed:*' '*:abandoned:*' '*:applied:*' 'completed,*' 'cancelled,*' 'failed,*' \
+    || goal_fail "s13a-proposed" "$S13_GOAL_ID" "no planning round proposed within 240s of the refusal (last '$GOAL_WAIT_VALUE')"
+  [ "$GOAL_WAIT_VALUE" = "paused,needs_decision,1,proposal:proposed:write:action_refused:2:minor" ] \
+    || goal_fail "s13a-proposed" "$S13_GOAL_ID" "goal $S13_GOAL_ID reads '$GOAL_WAIT_VALUE', expected paused needs_decision with one proposal round that proposed a minor revision 2 for step write (proposal:proposed:write:action_refused:2:minor); rounds: $(goal_get "$S13_GOAL_ID" "$S13_ROUNDS_WHY_EXPR")"
+  revision=$(goal_get "$S13_GOAL_ID" "$S13_REVISION_EXPR")
+  [ "$revision" = "proposed:planner:" ] || goal_fail "s13a-proposed" "$S13_GOAL_ID" "revision 2 reads '$revision', expected proposed by the planner and not accepted (proposed:planner:)"
+  pass "s13a-proposed" "goal $S13_GOAL_ID paused needs_decision; the planner proposed revision 2 (minor), which waits for alice"
+
+  out=$(cap "$ALICE_KEY" decide_plan_revision "{\"goalRunId\":\"$S13_GOAL_ID\",\"revision\":2,\"decision\":\"accept\",\"resume\":true}" "[d.result.decision, d.result.resumed, d.result.revision].join(',')")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || goal_fail "s13a-accepted" "$S13_GOAL_ID" "decide_plan_revision HTTP $status: $(parse_kv "$out" BODY)"
+  [ "$(parse_kv "$out" EXTRACTED)" = "accept,true,2" ] || goal_fail "s13a-accepted" "$S13_GOAL_ID" "decide_plan_revision answered '$(parse_kv "$out" EXTRACTED)', expected accept,true,2"
+  revision=$(goal_get "$S13_GOAL_ID" "$S13_REVISION_EXPR")
+  [ "$revision" = "accepted:planner:person" ] || goal_fail "s13a-accepted" "$S13_GOAL_ID" "revision 2 reads '$revision', expected accepted by a person (accepted:planner:person)"
+  pass "s13a-accepted" "alice accepted the planner's revision 2 and resumed the run in one call"
+
+  goal_wait "$S13_GOAL_ID" 240 "$GOAL_END_EXPR" 'completed,*' 'paused,*' 'cancelled,*' 'failed,*' \
+    || goal_fail "s13a-achieved" "$S13_GOAL_ID" "goal $S13_GOAL_ID did not settle within 240s of the accept (last '$GOAL_WAIT_VALUE')"
+  [ "$GOAL_WAIT_VALUE" = "completed,achieved,verified_by_check," ] || goal_fail "s13a-achieved" "$S13_GOAL_ID" "goal $S13_GOAL_ID ended '$GOAL_WAIT_VALUE', expected completed,achieved,verified_by_check"
+  pass "s13a-achieved" "goal $S13_GOAL_ID completed achieved, verified by the platform's own check, the planner's way"
+  goal_s13_settled s13a
+}
+
+goal_s13_apply_minor() {
+  goal_s13_refused s13b apply_minor
+  goal_wait "$S13_GOAL_ID" 300 "$GOAL_END_EXPR" 'completed,*' 'paused,*' 'cancelled,*' 'failed,*' \
+    || goal_fail "s13b-achieved" "$S13_GOAL_ID" "goal $S13_GOAL_ID did not settle within 300s of the refusal (last '$GOAL_WAIT_VALUE')"
+  [ "$GOAL_WAIT_VALUE" = "completed,achieved,verified_by_check," ] || goal_fail "s13b-achieved" "$S13_GOAL_ID" "goal $S13_GOAL_ID ended '$GOAL_WAIT_VALUE', expected completed,achieved,verified_by_check with nobody acting after the refusal; rounds: $(goal_get "$S13_GOAL_ID" "$S13_ROUNDS_WHY_EXPR")"
+  round=$(goal_get "$S13_GOAL_ID" "$S13_ROUND_EXPR")
+  revision=$(goal_get "$S13_GOAL_ID" "$S13_REVISION_EXPR")
+  pauses=$(psql_ws "select count(*) from audit_records where workspace_id='$WORKSPACE_ID' and resource_type='goal_run' and resource_id='$S13_GOAL_ID' and payload->>'resultingStatus' = 'paused'")
+  [ "$round|$revision|$pauses" = "completed,,1,autonomous:applied:write:action_refused:2:minor|accepted:planner:platform|0" ] \
+    || goal_fail "s13b-applied" "$S13_GOAL_ID" "round '$round', revision 2 '$revision', $pauses pause(s) — expected one autonomous round that applied a minor revision 2, accepted by the platform for alice, and no pause; rounds: $(goal_get "$S13_GOAL_ID" "$S13_ROUNDS_WHY_EXPR")"
+  pass "s13b-applied" "goal $S13_GOAL_ID never paused: an autonomous round's minor revision 2 was adopted by the platform for alice, and the goal completed achieved"
+  goal_s13_settled s13b
+}
+
+goal_s13_planner() {
+  goal_s13_report_runner
+  goal_s13_planner_model "\"${ACCEPT_S2_MODEL:-fake/fake-echo}\""
+  pass "s13-planner-model" "alice's AgentProfile model set to ${ACCEPT_S2_MODEL:-fake/fake-echo}, the model her goal planner runs on"
+  goal_s13_propose
+  goal_s13_apply_minor
+  goal_s13_planner_model null
+  pass "s13-planner-model-reset" "alice's AgentProfile model back to the workspace's"
 }
 
 # --- S5: a step's write waits for approval after its Worker is gone; then the next step starts --
@@ -1299,6 +1461,7 @@ goal_scenarios_step() {
   goal_s4_unseen_start
   goal_s1_dag
   goal_s11_reject
+  goal_s13_planner
   goal_s5_approval
   goal_s4_seen
   goal_s7_cancel_drain
