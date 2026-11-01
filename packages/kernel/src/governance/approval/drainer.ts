@@ -107,8 +107,10 @@ export interface DrainResult {
  * drain trigger — the request path's phase 2, the outbox consumer, the periodic tick, each with
  * its own drainer instance — sees the same `executing` row, and `startActionRequestExecution`'s
  * conditional UPDATE lets only one of them start any given row; two instances may so apply two
- * rows of one Gatekeeper at once, when the two do not conflict (and, through the commit-order gap
- * `queue.ts` describes, rarely two that do). The queue is re-read after every
+ * rows of one Gatekeeper at once, when the two do not conflict. Two that conflict never do: where
+ * a read misses one (a row committed late, two drains reading at different moments — STATUS
+ * legacy 565), the database refuses the second start (`governance/0031`) and this drain reads
+ * again. That keeps them apart, not in `requested_at` order. The queue is re-read after every
  * row, so a row approved while this drain was applying an earlier one is picked up here rather
  * than waiting for the next tick.
  *
@@ -163,9 +165,12 @@ export class ApprovalDrainer {
         // its goal step (S11 GO3a), or started by another trigger. `startActionRequestExecution`
         // re-checks the row under its lock and refuses (`IllegalTransition`); read the queue again
         // rather than end the drain, or the rows behind a withdrawn one wait for the next tick
-        // whenever the withdrawal's own drain was skipped as in flight. Bounded: every refusal is
-        // a row that left the approved statuses for good — terminal, or now `executing`, which the
-        // next read plans around.
+        // whenever the withdrawal's own drain was skipped as in flight. Legacy 565: it also
+        // refuses (`ActionRequestExecutionConflictError`, an `IllegalTransition`) while a
+        // conflicting row of the Gatekeeper this read missed is `executing`. Bounded: every
+        // refusal is a row that left the approved statuses for good — terminal, or now
+        // `executing` — or one held by a committed `executing` row; the next read plans around
+        // both.
         let executing: ActionRequestRow;
         try {
           executing = await this.deps.withTransaction(workspaceId, principalId, (client) =>

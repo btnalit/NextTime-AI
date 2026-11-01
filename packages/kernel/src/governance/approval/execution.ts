@@ -19,7 +19,9 @@ import { recordTransition } from './transition-log.js';
 import {
   ACTION_REQUEST_ROW_COLUMNS,
   type ActionRequestDbRow,
+  ActionRequestExecutionConflictError,
   type ActionRequestRow,
+  EXECUTION_CONFLICT_SQLSTATE,
   mapActionRequestRow,
 } from './types.js';
 
@@ -251,7 +253,13 @@ export async function recordActionRequestReplayAttempt(
 /** `auto_approved|approved -> executing`. Sets `executing_at` (P1-3 fix) — the staleness anchor
  *  `reapStaleExecutingActionRequests` scans on, see migrations/governance/
  *  0006_action_request_executing_at.sql's own doc comment for why this, and not `requested_at`,
- *  is the correct signal. */
+ *  is the correct signal.
+ *
+ *  STATUS legacy 565: the database refuses the start while a conflicting row of the same
+ *  Gatekeeper is `executing` (`governance/0031`, which serializes the starts on one Gatekeeper);
+ *  that refusal is {@link ActionRequestExecutionConflictError}, an `IllegalTransition`. The
+ *  caller's transaction is then aborted and must roll back — every caller runs this in a
+ *  transaction of its own. */
 export async function startActionRequestExecution(
   client: PoolClient,
   workspaceId: string,
@@ -259,11 +267,19 @@ export async function startActionRequestExecution(
 ): Promise<ActionRequestRow> {
   const existing = await getActionRequestForUpdateOrThrow(client, workspaceId, actionRequestId);
   const nextStatus = transition(ACTION_REQUEST_TRANSITIONS, existing.status, 'start_execution');
-  const updated = await updateActionRequestStatusConditional(client, workspaceId, existing.id, {
-    status: nextStatus,
-    expectedStatus: existing.status,
-    executingAt: new Date(),
-  });
+  let updated: ActionRequestRow;
+  try {
+    updated = await updateActionRequestStatusConditional(client, workspaceId, existing.id, {
+      status: nextStatus,
+      expectedStatus: existing.status,
+      executingAt: new Date(),
+    });
+  } catch (err) {
+    if ((err as { code?: unknown } | null)?.code === EXECUTION_CONFLICT_SQLSTATE) {
+      throw new ActionRequestExecutionConflictError(existing.id, existing.status);
+    }
+    throw err;
+  }
 
   await recordTransition(client, workspaceId, {
     actorPrincipalId: existing.onBehalfOf,

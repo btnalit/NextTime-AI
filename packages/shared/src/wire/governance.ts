@@ -34,10 +34,12 @@ export const ActionRequestOutcomeInDoubtWireSchema = z
   .strict();
 export type ActionRequestOutcomeInDoubtWire = z.infer<typeof ActionRequestOutcomeInDoubtWireSchema>;
 
-/** Legacy 287: why an `approved` / `auto_approved` ActionRequest has not run — an earlier row on
- *  the same Gatekeeper holds the queue: one awaiting approval (`pending_approval`), or one still
- *  `executing` (R-50), and whether that one's outcome is in doubt. Only its status, never its id
- *  or content: the caller may not be allowed to see that row (I14). */
+/** Legacy 287: why an `approved` / `auto_approved` ActionRequest has not run — another row on the
+ *  same Gatekeeper holds it back: an earlier one awaiting approval (`pending_approval`), or one
+ *  still `executing` (R-50), and whether that one's outcome is in doubt. The `executing` one is
+ *  usually earlier, but can be later when it started before this request committed (legacy 565:
+ *  conflicting requests never run together, but not strictly in the order they were made). Only
+ *  its status, never its id or content: the caller may not be allowed to see that row (I14). */
 export const ActionRequestQueuedBehindWireSchema = z
   .object({
     status: z.enum(['pending_approval', 'executing']),
@@ -52,8 +54,9 @@ export type ActionRequestQueuedBehindWire = z.infer<typeof ActionRequestQueuedBe
 
 /** S11 GO12: the one instance an ActionRequest acts on, recorded when it was made from the
  *  Operation version then published (`@nexttime/shared` `actionTargetOf`): it waits only for
- *  earlier requests on the same instance and for those on the whole Gatekeeper. `null` on the
- *  request: it acts on the whole Gatekeeper and waits for every earlier one. */
+ *  earlier requests on the same instance and for those on the whole Gatekeeper (and, legacy 565,
+ *  for any such request already executing). `null` on the request: it acts on the whole
+ *  Gatekeeper and waits for every earlier one (and any one already executing). */
 export const ActionRequestTargetWireSchema = z
   .object({
     objectType: z.string(),
@@ -129,7 +132,7 @@ export const ActionRequestWireSchema = z
     // Legacy 287: why a row that has not finished is still waiting, derived on read by the
     // handlers that return listed / single rows (`withApprovalDecision`, as `decisionReason`).
     // `outcomeInDoubt`: set on an `executing` row whose `apply` got no answer, else `null`.
-    // `queuedBehind`: set on an `approved` / `auto_approved` row that an earlier row holds back,
+    // `queuedBehind`: set on an `approved` / `auto_approved` row that another row holds back,
     // else `null`. Optional for the same reason as `decisionReason`.
     outcomeInDoubt: ActionRequestOutcomeInDoubtWireSchema.nullable().optional(),
     queuedBehind: ActionRequestQueuedBehindWireSchema.nullable().optional(),
