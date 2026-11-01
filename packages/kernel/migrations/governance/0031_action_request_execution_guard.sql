@@ -44,13 +44,22 @@
 --
 -- Rolling back (docs/runbooks/release.md §6). Code without this migration keeps the trigger's
 -- guarantee if the trigger stays: an older drainer that plans a row ahead of a conflicting
--- `executing` one gets the refusal as an unexpected database error, that drain stops, and the row
--- starts once the other ends — never both at once, a few error lines in the log instead. To drop
--- the schema too, in one transaction: `drop trigger action_requests_execution_guard on
--- action_requests`, `drop function action_requests_execution_guard()`, `drop function
--- action_request_execution_lock(uuid, uuid)`, `drop function action_request_targets_conflict(jsonb,
--- jsonb)`, `drop function action_request_identity_text(jsonb)`, then `delete from
--- schema_migrations where module = 'governance' and version = 31`.
+-- `executing` one gets the refusal as an unexpected database error, and the row starts once the
+-- other ends — never both at once. On the background drains (outbox consumer, tick) that is an
+-- error line and a drain that stops. On the inline drain of a `request_action` call, that call
+-- returns an internal error although its request is queued and runs once its turn comes; a retry
+-- with an explicit idempotency key, or from a goal step, gets that request back, one without gets
+-- it back only while it has not finished (R-53 / D-12, as for any retry).
+--
+-- To drop the schema too, drop this migration before governance/0030: the guard's plpgsql body
+-- reads `action_requests.target`, a use Postgres does not record, so 0030's `drop column target`
+-- goes through with this trigger still in place and every later start then fails on the missing
+-- column. Rolling back past v0.56.0 takes both, in one transaction, this one first: `drop trigger
+-- action_requests_execution_guard on action_requests`, `drop function
+-- action_requests_execution_guard()`, `drop function action_request_execution_lock(uuid, uuid)`,
+-- `drop function action_request_targets_conflict(jsonb, jsonb)`, `drop function
+-- action_request_identity_text(jsonb)`, `delete from schema_migrations where module =
+-- 'governance' and version = 31`; then governance/0030's own steps.
 --
 -- Cross-process bootstrap lock: same governance-module advisory lock key as every other file in
 -- this module (core/0001_identity.sql's comment has the full rationale).
