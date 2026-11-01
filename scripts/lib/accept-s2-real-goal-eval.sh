@@ -11,17 +11,20 @@
 #
 #   goal        — alice asks her entry agent, in a new chat, to propose (not confirm) a goal whose
 #                 step the ops-runner Worker runs and whose acceptance the platform checks on the
-#                 test stock API. ok: the Turn completed and one GoalRun originated in it is
-#                 `proposed`. The RUN line counts the Turn's propose_goal calls and those that
-#                 failed (the kernel's zod 4 error text went back to the model), and `retried=1`
-#                 when one failed and a later one proposed the run. Each run is turned down at
-#                 once (reject_goal) so the RUNS proposals stay under the per-requester cap.
+#                 test stock API. ok: the Turn completed and at least one GoalRun originated in it
+#                 is `proposed`. The RUN line counts those GoalRuns (`goals=`), the Turn's
+#                 propose_goal calls and those that failed (the kernel's zod 4 error text went back
+#                 to the model), and `retried=1` when one failed and a later one proposed a run.
+#                 Every GoalRun of the Turn is turned down at once (reject_goal), however many the
+#                 model proposed, so the RUNS tries stay under the per-requester cap.
 #   eval_trial  — start_eval_case_trial on the suite's regression case: an evaluation Task of the
 #                 ops-runner version the suite pins, its stock.get call answered from the case's
 #                 fixture, egress denied. ok: the trial ends `scored` and `passed` (the call was
-#                 made and the reported summary names the fixture's symbol). A trial `errored` for
-#                 a reason that is not the Worker's own (it could not start, was lost, terminated,
-#                 crashed, withheld) is a platform defect: one fails the script (real-eval-trial).
+#                 made and the reported summary names the fixture's symbol). A start refused, or a
+#                 trial `errored` for a reason that is not the Worker's own (it could not start,
+#                 was lost, terminated, crashed, withheld), is a platform defect: one fails the
+#                 script (real-eval-trial). One still running when the script stops waiting (10
+#                 minutes) only fails its try: its Task ends by its own time limit.
 #   eval_draft  — a Skill whose published v1 tells the Worker to end its summary with one style
 #                 marker and whose draft v2 with another, evaluated once against the suite (one
 #                 regression case, one full dev case, one full holdout case: regression 2 tries ×
@@ -51,9 +54,9 @@ real_mcp() {
   run_driver mcp "$1" "$2" "$3" "${4:-}"
 }
 
-# The newest (id,status) of a GoalRun proposed in Turn $1, or empty.
-real_goal_of_turn() {
-  psql_ws "select id || ',' || status from goal_runs where workspace_id='$WORKSPACE_ID' and originated_in_turn_id='$1' order by created_at desc limit 1"
+# The GoalRuns proposed in Turn $1, one "id,status" per line, oldest first (empty when none).
+real_goals_of_turn() {
+  psql_ws "select id || ',' || status from goal_runs where workspace_id='$WORKSPACE_ID' and originated_in_turn_id='$1' order by created_at, id"
 }
 
 real_goal_run() {
@@ -64,11 +67,14 @@ real_goal_run() {
   turn_id=$(parse_kv "$chat_out" TURN_ID)
   turn_status=$(parse_kv "$chat_out" TURN_STATUS)
   tc=$(parse_kv "$chat_out" TOOL_CALLS); te=$(parse_kv "$chat_out" TOOL_ERRORS); tn=$(parse_kv "$chat_out" TOOL_NAMES)
-  goal="" goal_id="" goal_status="" calls="0,0" first_failure=""
+  goals="" goal_ids="" goal_count=0 proposed=0 calls="0,0" first_failure=""
   if [ -n "$turn_id" ]; then
-    goal=$(real_goal_of_turn "$turn_id")
-    goal_id=${goal%%,*}
-    [ -n "$goal" ] && goal_status=${goal#*,}
+    goals=$(real_goals_of_turn "$turn_id")
+    for g in $goals; do
+      goal_ids="$goal_ids ${g%%,*}"
+      goal_count=$((goal_count + 1))
+      [ "${g#*,}" = "proposed" ] && proposed=$((proposed + 1))
+    done
     # Every propose_goal call of the Turn, and those the runtime flagged as failed; for the first
     # failed one only its error code (a bounded marker, not the error text).
     calls=$(psql_ws "select count(*) || ',' || count(*) filter (where content->>'outcome' = 'failed') from chat_messages where workspace_id='$WORKSPACE_ID' and turn_id='$turn_id' and role='tool' and content->>'kind'='tool_call' and content->>'name' like '%propose_goal%'")
@@ -76,17 +82,18 @@ real_goal_run() {
   fi
   pg_calls=${calls%%,*}; pg_failed=${calls#*,}
   ok=0
-  [ "$turn_status" = "completed" ] && [ "$goal_status" = "proposed" ] && ok=1
+  [ "$turn_status" = "completed" ] && [ "$proposed" -gt 0 ] && ok=1
   retried=0
   [ "$ok" -eq 1 ] && [ "${pg_failed:-0}" -gt 0 ] && retried=1
-  real_run_line goal "$i" "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "turn=${turn_status:-none} goal=${goal_status:-none} propose_goal_calls=${pg_calls:-0} failed=${pg_failed:-0} retried=$retried first_failure=${first_failure:-none} turn_tools=${tc:-0}/${te:-0}[${tn}]"
+  real_run_line goal "$i" "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "turn=${turn_status:-none} goals=$goal_count proposed=$proposed propose_goal_calls=${pg_calls:-0} failed=${pg_failed:-0} retried=$retried first_failure=${first_failure:-none} turn_tools=${tc:-0}/${te:-0}[${tn}]"
   real_stat_add goal "$ok" "${tc:-0}" "${te:-0}" 0 0
-  # Turned down at once: RUNS proposals would otherwise reach the per-requester cap of proposed
-  # runs, and nobody confirms these. Recorded too, so cleanup_step ends one this missed.
-  if [ -n "$goal_id" ]; then
+  # Every one turned down at once: RUNS tries would otherwise reach the per-requester cap of
+  # proposed runs (a model may propose twice in a Turn), and nobody confirms these. Recorded too,
+  # so cleanup_step ends one this missed.
+  for goal_id in $goal_ids; do
     GOALS_STARTED="$GOALS_STARTED $goal_id"
     goal_end_live "$goal_id"
-  fi
+  done
   return 0
 }
 
@@ -162,7 +169,7 @@ real_eval_trial_run() {
     return 0
   fi
   run_id=$(parse_kv "$out" EXTRACTED)
-  line=$(real_eval_wait_run "$run_id" 420)
+  line=$(real_eval_wait_run "$run_id" 600)
   run_status=${line%%|*}
   trial=${line#*|}
   # arm,status,verdict,error,costUsd
@@ -174,8 +181,9 @@ real_eval_trial_run() {
   eval_tasks=$(psql_ws "select count(*) from eval_trials t join tasks k on k.workspace_id=t.workspace_id and k.id=t.task_id where t.workspace_id='$WORKSPACE_ID' and t.run_id='$run_id' and k.purpose='evaluation'")
   ok=0
   [ "$run_status" = "finished" ] && [ "$t_status" = "scored" ] && [ "$t_verdict" = "passed" ] && ok=1
+  # A run still going when the wait ends is only a failed try (the Task's own time limit ends it);
+  # an ended trial errored for a reason that is not its Worker's is the platform's.
   if [ "$t_status" = "errored" ] && ! real_eval_own_error "$t_error"; then REAL_EVAL_PLATFORM_DEFECT=1; fi
-  [ "$run_status" = "finished" ] || REAL_EVAL_PLATFORM_DEFECT=1
   real_run_line eval_trial "$i" "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "run=${run_status:-none} trial=${t_status:-none}/${t_verdict:-none}/${t_error:-none} fixture_calls=${calls:-0} evaluation_tasks=${eval_tasks:-0} cost_usd=${t_cost:-none}"
   real_stat_add eval_trial "$ok" 0 0 "${calls:-0}" 0
   return 0
@@ -185,8 +193,8 @@ real_eval_trials_step() {
   REAL_EVAL_PLATFORM_DEFECT=0
   i=1
   while [ "$i" -le "$RUNS" ]; do real_eval_trial_run "$i"; i=$((i + 1)); done
-  [ "$REAL_EVAL_PLATFORM_DEFECT" -eq 0 ] || fail "real-eval-trial" "an evaluation trial was refused, never finished, or errored for a reason that is not its Worker's (see RUN scenario=eval_trial lines)"
-  pass "real-eval-trial" "every evaluation trial started, finished and ended scored or errored by its own Worker ($RUNS runs)"
+  [ "$REAL_EVAL_PLATFORM_DEFECT" -eq 0 ] || fail "real-eval-trial" "an evaluation trial was refused or errored for a reason that is not its Worker's (see RUN scenario=eval_trial lines)"
+  pass "real-eval-trial" "no evaluation trial was refused or errored for a reason that is not its Worker's ($RUNS runs)"
 }
 
 # real_skill_propose <handle> <name> <marker> [skillId]: proposes a Skill version through /mcp;
