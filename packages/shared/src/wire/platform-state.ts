@@ -44,7 +44,7 @@ export const PLATFORM_STATE_GATES_LIMIT = 200;
 /** The most disabled Operation names `platform_state_connectors` lists per connector. */
 export const PLATFORM_STATE_DISABLED_OPERATIONS_LIMIT = 500;
 
-/** How far back `platform_state_audit` looks, and the most rows it looks through. */
+/** How far back `platform_state_audit` looks, and the most writes it looks through. */
 export const PLATFORM_STATE_AUDIT_WINDOW_HOURS = 168;
 export const PLATFORM_STATE_AUDIT_SCAN_ROWS = 1000;
 
@@ -123,8 +123,10 @@ export const PlatformStateConnectorWireSchema = z
     mode: ConnectorModeWireSchema,
     /** Every Operation refused for all its instances, however named. */
     disabledOperationCount: CountSchema,
-    /** Those of them whose names fit `PLATFORM_STATE_OPERATION_NAME_PATTERN`, at most
-     *  `PLATFORM_STATE_DISABLED_OPERATIONS_LIMIT`. */
+    /** Those of them that one of the connector's instances announces, in
+     *  `PLATFORM_STATE_OPERATION_NAME_PATTERN`'s shape, at most
+     *  `PLATFORM_STATE_DISABLED_OPERATIONS_LIMIT`. An administrator can disable any string, and a
+     *  bare host name fits the shape too; a name no instance announces is only counted. */
     disabledOperations: z
       .array(z.string().regex(PLATFORM_STATE_OPERATION_NAME_PATTERN))
       .max(PLATFORM_STATE_DISABLED_OPERATIONS_LIMIT),
@@ -170,10 +172,11 @@ export type PlatformStateAuditWriteWire = z.infer<typeof PlatformStateAuditWrite
 export const PlatformStateAuditWireSchema = z
   .object({
     windowHours: z.literal(PLATFORM_STATE_AUDIT_WINDOW_HOURS),
-    /** Platform audit rows looked through: the newest within the window, at most
-     *  `PLATFORM_STATE_AUDIT_SCAN_ROWS`. */
+    /** Platform audit rows looked through: the newest writes within the window, at most
+     *  `PLATFORM_STATE_AUDIT_SCAN_ROWS`. Reads — this capability's own platform audit rows among
+     *  them — are left out before the limit, so frequent reads never push a write out. */
     scannedRows: CountSchema,
-    /** The window holds more rows than were looked through. */
+    /** The window holds more writes than were looked through. */
     truncated: z.boolean(),
     /** Writes per action among the rows looked through, most first. */
     writesByAction: z
