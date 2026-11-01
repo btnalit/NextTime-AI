@@ -4423,7 +4423,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **GO12 — 按「门 × 目标资源」的执行队列**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（GO12，#876，2026-11-01 合入，4de22d8；迁移 governance/0030、core/0048）：默认方案与协调线程 06:42Z 的决定见项目共享计划 `s11-w2/go12-default-plan.md` §8（F1–F5 取 A，项目文件，不入库）。`shared/action-description.ts`：`OperationTargetSchema`（在 `OperationSchema` 的 superRefine 里查 I-Q4）、`operationTargetProblems`、`manifestTargetProblems`、`operationTargetRefusalOf`、`actionTargetOf`、`actionTargetsConflict`。内核 `governance/approval/queue.ts` 的纯函数 `planGatekeeperQueue(rows) → {next, holds}` 供排水器与 `waiting-state.ts` 共用（一行能开始当且仅当前面没有冲突行；被挡的行把根传给后面的冲突行）；顺序靠每轮重读数据库，`executing` 行结束前留在队里，`startActionRequestExecution` 的条件更新保证一行只被开始一次；结果不明的行记存疑后继续排。`request-action-handler.ts` 发起时快照 `target`，内联执行前读同一份队列规划。`target` 是治理字段，不进 `operationDefinitionDigest`，方向规则 I-Q5（无 → 有算放宽）。gatekeeper-base `parseManifestJson` 启动时同样拒绝不合法声明；`add-gatekeeper.md` §6.1 写目标声明规则。遗留 565（发版前必修）、566–568、570。下一步 GO13（能力发现增强）。
 
 **GO13 — 能力发现增强**（见 `global-roadmap-2026-10-16.md` §4）
 
