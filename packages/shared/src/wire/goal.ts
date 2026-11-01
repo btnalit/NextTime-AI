@@ -421,11 +421,16 @@ export const StepTrialApprovalWireSchema = z
 export type StepTrialApprovalWire = z.infer<typeof StepTrialApprovalWireSchema>;
 
 /** S11 GO9b: one reason a planner revision is `major` — the step it is about, when it is about
- *  one (`stepKey`; none for `goal_acceptance_changed`). */
+ *  one (`stepKey`; none for `goal_acceptance_changed`). What made it so, when the platform found
+ *  it in the step's Worker (UX P2-1 on #866): `capabilities`, for `execution_step`, the
+ *  execute-class capabilities it would hold; `gates`, for `gate_added`, the gates it reaches that
+ *  the step it replaces did not. */
 export const PlannerRevisionClassReasonWireSchema = z
   .object({
     code: PlannerRevisionMajorReasonSchema,
     stepKey: z.string().nullable(),
+    capabilities: z.array(z.string()).optional(),
+    gates: z.array(z.string()).optional(),
   })
   .strict();
 export type PlannerRevisionClassReasonWire = z.infer<typeof PlannerRevisionClassReasonWireSchema>;

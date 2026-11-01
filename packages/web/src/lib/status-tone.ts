@@ -482,7 +482,7 @@ export const PLAN_REVISION_TONES: Readonly<Record<PlanRevisionStatus, ChipStyle>
 export const PLANNING_ROUND_TONES: Readonly<Record<PlanningRoundStatus, ChipStyle>> = {
   running: { tone: 'info', label: { zh: '规划中', en: 'Planning' } },
   proposed: { tone: 'accent', label: { zh: '已提修订', en: 'Proposed a revision' } },
-  applied: { tone: 'ok', label: { zh: '已按授权采用', en: 'Adopted on your leave' } },
+  applied: { tone: 'ok', label: { zh: '已按授权采用', en: 'Adopted on the requester’s leave' } },
   no_revision: { tone: 'neutral', label: { zh: '无可行修订', en: 'No revision' } },
   failed: { tone: 'warn', label: { zh: '没有结果', en: 'No result' } },
   abandoned: { tone: 'neutral', label: { zh: '已作废', en: 'Dropped' } },

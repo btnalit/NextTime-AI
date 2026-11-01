@@ -22,7 +22,9 @@
 --   `goal_planning_rounds.revision_class`, `class_reasons` — how the platform classed the revision
 --   a round proposed, set once, when the round settles `proposed` or `applied`; `class_reasons`
 --   lists, for a `major` one, why (`@nexttime/shared` `PlannerRevisionMajorReason`, with the step
---   key a reason is about). A round settled before this migration has none.
+--   key a reason is about and, when the platform found it in the step's Worker, the execute-class
+--   `capabilities` or the added `gates` that made it so). A round settled before this migration
+--   has none.
 --
 --   `goal_planning_rounds.status = 'applied'` — an `autonomous` round whose `minor` revision the
 --   platform accepted for the requester: the revision is `accepted` (`decided_by` the requester,
@@ -42,13 +44,21 @@
 -- Rolling back (docs/runbooks/release.md §6): code only. Code without this migration reads every
 -- leave as `propose` (it only asks whether there is one) and inserts rounds without a kind (so
 -- `proposal`, which is what it opens), so an `apply_minor` run then pauses and proposes as GO9a
--- does. Its console does not name a round `applied` or the two new reasons. To drop the schema too
--- — only once no round is `applied` and none carries a new reason, and no leave is `apply_minor`:
--- restore goal/0014's `goal_planning_rounds_guard` and `plan_revisions_planner` (re-run their
--- `create or replace` from 0014), drop the constraints this file adds and re-add 0014's
--- (`goal_planning_rounds_status`, `_revision`, `_outcome_reason`, `goal_planner_delegations_mode`),
--- drop the columns `kind`, `revision_class`, `class_reasons`, and `delete from schema_migrations
--- where module = 'goal' and version = 15`.
+-- does. An `autonomous` round still running then is abandoned by that code `run_left_pause`,
+-- which the guard below takes for either kind. GO9a's console has no `applied` in its round
+-- statuses (the read is not validated in production, so the page shows such a round as an
+-- unknown status, nothing fails), nor the two new reasons. To drop the schema too — only once no
+-- round is `applied` and none carries a new reason, and no leave is `apply_minor`:
+--   1. restore goal/0014's `goal_planning_rounds_guard` and `plan_revisions_planner` (re-run their
+--      `create or replace` from 0014);
+--   2. drop the constraints this file adds (`goal_planning_rounds_kind`, `_revision_class`,
+--      `_class_reasons`) and the four it replaces, then re-add 0014's
+--      (`goal_planning_rounds_status`, `_revision`, `_outcome_reason`,
+--      `goal_planner_delegations_mode`);
+--   3. `drop function goal_planning_class_reasons_valid(jsonb)` — after the `_class_reasons`
+--      constraint that calls it;
+--   4. drop the columns `kind`, `revision_class`, `class_reasons`;
+--   5. `delete from schema_migrations where module = 'goal' and version = 15`.
 --
 -- Cross-process bootstrap lock: same `goal`-module key as 0001–0014.
 select pg_advisory_xact_lock(7241000701);
@@ -109,9 +119,15 @@ language sql immutable as $$
            or (r ->> 'code') is null
            or (r ->> 'code') not in (
                 'goal_acceptance_changed', 'step_acceptance_changed', 'execution_step',
-                'admission_blocked', 'stops_live_work', 'unresolvable')
+                'gate_added', 'admission_blocked', 'stops_live_work', 'unresolvable')
            or (r ? 'stepKey' and jsonb_typeof(r -> 'stepKey') not in ('string', 'null'))
-           or exists (select 1 from jsonb_object_keys(r) k where k not in ('code', 'stepKey')));
+           or exists (select 1 from jsonb_object_keys(r) k
+                       where k not in ('code', 'stepKey', 'capabilities', 'gates'))
+           or exists (select 1 from jsonb_each(r) e
+                       where e.key in ('capabilities', 'gates')
+                         and (jsonb_typeof(e.value) <> 'array'
+                              or exists (select 1 from jsonb_array_elements(e.value) v
+                                          where jsonb_typeof(v) <> 'string'))));
 $$;
 
 alter table goal_planning_rounds drop constraint if exists goal_planning_rounds_class_reasons;
@@ -236,9 +252,12 @@ begin
   if new.status = 'failed' and new.outcome_reason not in ('task_failed', 'invalid_revision') then
     raise exception 'goal_planning_rounds: a running round fails because its Task gave no usable result (task_failed, invalid_revision)';
   end if;
-  if new.status = 'abandoned' and new.outcome_reason <> 'plan_revised'
-     and new.outcome_reason is distinct from
-         (case old.kind when 'autonomous' then 'run_not_running' else 'run_left_pause' end) then
+  -- An autonomous round is abandoned `run_not_running` by this release's code; `run_left_pause` is
+  -- still taken for it, because code rolled back to GO9a's (which knows no kind) writes that for
+  -- every round — refusing it would leave such a run's advance failing and its cancel refused
+  -- (review #488 on #866).
+  if new.status = 'abandoned' and new.outcome_reason not in ('plan_revised', 'run_left_pause')
+     and not (old.kind = 'autonomous' and new.outcome_reason = 'run_not_running') then
     raise exception 'goal_planning_rounds: a % round is abandoned because %', old.kind,
       case old.kind when 'autonomous' then 'its run stopped running (run_not_running) or its plan was revised'
                     else 'its run left the pause (run_left_pause) or its plan was revised' end;

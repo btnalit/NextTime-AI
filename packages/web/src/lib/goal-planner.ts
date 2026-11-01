@@ -6,6 +6,8 @@ import type {
   PlanningRoundOutcomeReason,
   PlanningRoundWire,
 } from '@nexttime/shared';
+import { actionLabel } from './capability-labels.js';
+import { shortId } from './format.js';
 import type { GoalViewer } from './goal-actions.js';
 import type { Translate } from './i18n.js';
 
@@ -105,6 +107,10 @@ const MAJOR_REASON: Readonly<Record<PlannerRevisionMajorReason, readonly [string
     '新增或改动的步骤能执行动作，或能让别的 Worker 替它做事',
     'A step it adds or changes can act or start Workers of its own',
   ],
+  gate_added: [
+    '新增或改动的步骤用到了原来这一步没有的 gate，哪怕只是读取',
+    'A step it adds or changes reaches a gate the step did not, even only to read',
+  ],
   admission_blocked: [
     '新增或改动的步骤要有人批准才能开始',
     'A step it adds or changes would need a person before it starts',
@@ -117,18 +123,55 @@ const MAJOR_REASON: Readonly<Record<PlannerRevisionMajorReason, readonly [string
 };
 
 /** S11 GO9b: why the platform left a planner revision for the requester to decide, one line per
- *  reason, naming the step a reason is about. */
+ *  reason, naming the step a reason is about and (UX P2-1 on #866) what in it the reason is: the
+ *  execute-class capabilities its Worker would get, the gates it newly reaches (by name where
+ *  read). */
 export function majorReasonTexts(
   reasons: readonly PlannerRevisionClassReasonWire[],
   t: Translate,
+  gateNames: ReadonlyMap<string, string> = new Map(),
 ): readonly string[] {
   return reasons.map((reason) => {
     const entry = MAJOR_REASON[reason.code];
     const text = t(entry[0], entry[1]);
-    return reason.stepKey === null
+    const details: string[] = [];
+    if (reason.stepKey !== null)
+      details.push(t(`步骤 ${reason.stepKey}`, `step ${reason.stepKey}`));
+    if (reason.capabilities && reason.capabilities.length > 0)
+      details.push(
+        t(
+          `执行类能力：${reason.capabilities.map((name) => actionLabel(name, t)).join('、')}`,
+          `execute-class capabilities: ${reason.capabilities.map((name) => actionLabel(name, t)).join(', ')}`,
+        ),
+      );
+    if (reason.gates && reason.gates.length > 0) {
+      const names = reason.gates.map((id) => gateNames.get(id) ?? shortId(id));
+      details.push(t(`gate：${names.join('、')}`, `gates: ${names.join(', ')}`));
+    }
+    return details.length === 0
       ? text
-      : t(`${text}（步骤 ${reason.stepKey}）`, `${text} (step ${reason.stepKey})`);
+      : t(`${text}（${details.join('；')}）`, `${text} (${details.join('; ')})`);
   });
+}
+
+/** UX P2-1 on #866: the reasons of a major revision that are about `stepKey`, for the step's own
+ *  definition to say what in it made the revision major. */
+export function stepMajorReasons(
+  reasons: readonly PlannerRevisionClassReasonWire[],
+  stepKey: string,
+): readonly PlannerRevisionClassReasonWire[] {
+  return reasons.filter((reason) => reason.stepKey === stepKey);
+}
+
+/** UX P2-2 on #866: the round whose revision the platform adopted for the requester and that is
+ *  the plan in force now — what they find changed when they come back. `null` once a later
+ *  revision (theirs or the platform's) replaced it. */
+export function adoptedRoundInForce(goal: GoalDetailWire): PlanningRoundWire | null {
+  return (
+    goal.planningRounds.find(
+      (round) => round.status === 'applied' && round.revision === goal.currentRevision,
+    ) ?? null
+  );
 }
 
 /** S11 GO9b: the round that proposed `revision`, if a planning round did. */

@@ -29,9 +29,15 @@ const step = (key: string, extra: Record<string, unknown> = {}): Step => ({
 const plan = (steps: readonly Step[], acceptance?: readonly unknown[]): GoalPlan =>
   ({ steps, ...(acceptance ? { acceptance } : {}) }) as unknown as GoalPlan;
 
-const reads: StepAbility = { kind: 'resolved', executes: false, blocked: false };
-const acts: StepAbility = { kind: 'resolved', executes: true, blocked: false };
-const blocked: StepAbility = { kind: 'resolved', executes: false, blocked: true };
+const reads: StepAbility = {
+  kind: 'resolved',
+  executeCapabilities: [],
+  addedGates: [],
+  blocked: false,
+};
+const acts: StepAbility = { ...reads, executeCapabilities: ['request_action'] };
+const blocked: StepAbility = { ...reads, blocked: true };
+const reaches = (...gates: string[]): StepAbility => ({ ...reads, addedGates: gates });
 const live: RunningStepFacts = { ended: false, liveWork: false };
 const busy: RunningStepFacts = { ended: false, liveWork: true };
 const done: RunningStepFacts = { ended: true, liveWork: false };
@@ -46,7 +52,10 @@ function classify(
   return classifyPlannerRevision({ running: new Map(), ...input, abilities });
 }
 
-const reason = (code: string, stepKey: string | null = null) => ({ code, stepKey });
+const reason = (
+  code: PlannerRevisionClassReasonWire['code'],
+  stepKey: string | null = null,
+): PlannerRevisionClassReasonWire => ({ code, stepKey });
 
 describe('changedStepKeys', () => {
   it('names the steps added or changed, not the ones kept or removed', () => {
@@ -67,7 +76,7 @@ describe('classifyPlannerRevision', () => {
     readonly name: string;
     readonly input: Partial<ClassifyPlannerRevisionInput> &
       Pick<ClassifyPlannerRevisionInput, 'base' | 'candidate'>;
-    readonly reasons: readonly ReturnType<typeof reason>[];
+    readonly reasons: readonly PlannerRevisionClassReasonWire[];
   }[] = [
     {
       name: 'a different Worker for a failed step that only reads is minor',
@@ -187,7 +196,7 @@ describe('classifyPlannerRevision', () => {
         candidate: plan([step('a'), step('write')]),
         abilities: new Map([['write', acts]]),
       },
-      reasons: [reason('execution_step', 'write')],
+      reasons: [{ ...reason('execution_step', 'write'), capabilities: ['request_action'] }],
     },
     {
       name: 'a changed step that may start Workers of its own',
@@ -204,7 +213,33 @@ describe('classifyPlannerRevision', () => {
         candidate: plan([step('a'), step('w', { reconcile: [{ action: {}, check: {} }] })]),
         abilities: new Map([['w', acts]]),
       },
-      reasons: [reason('execution_step', 'w')],
+      reasons: [{ ...reason('execution_step', 'w'), capabilities: ['request_action'] }],
+    },
+    {
+      name: 'a changed step that reaches a gate its step did not, even only to read (#866 P3-2)',
+      input: {
+        base: plan([step('a')]),
+        candidate: plan([step('a', { worker: workerB })]),
+        abilities: new Map([['a', reaches('gate-2', 'gate-1')]]),
+      },
+      reasons: [{ ...reason('gate_added', 'a'), gates: ['gate-1', 'gate-2'] }],
+    },
+    {
+      name: 'a gate that acts too is named on both reasons, each once',
+      input: {
+        base: plan([step('a')]),
+        candidate: plan([step('a'), step('w', { nested: true })]),
+        abilities: new Map([
+          [
+            'w',
+            { ...acts, executeCapabilities: ['gate.execute', 'request_action'], addedGates: ['g'] },
+          ],
+        ]),
+      },
+      reasons: [
+        { ...reason('execution_step', 'w'), capabilities: ['gate.execute', 'request_action'] },
+        { ...reason('gate_added', 'w'), gates: ['g'] },
+      ],
     },
     {
       name: 'a kept step that can act is not the revision’s doing: minor',
@@ -291,14 +326,14 @@ describe('classifyPlannerRevision', () => {
         ]),
         abilities: new Map([
           ['busy', reads],
-          ['w', { kind: 'resolved', executes: true, blocked: true }],
+          ['w', { ...acts, blocked: true }],
         ]),
       },
       reasons: [
         reason('goal_acceptance_changed'),
         reason('step_acceptance_changed', 'a'),
         reason('stops_live_work', 'busy'),
-        reason('execution_step', 'w'),
+        { ...reason('execution_step', 'w'), capabilities: ['request_action'] },
         reason('admission_blocked', 'w'),
       ],
     },
