@@ -1,5 +1,6 @@
 import {
   PLATFORM_STATE_IMAGES_LIMIT,
+  PLATFORM_STATE_RELEASES_LIMIT,
   type PlatformUpdatesWire,
   type ResidentContainerWire,
   type RuntimeImageWire,
@@ -17,6 +18,7 @@ import {
   projectRuntimeState,
   projectUpdatesState,
 } from './platform-state-runtime.js';
+import { versionOf } from './platform-state-shapes.js';
 
 /**
  * application/admin-agent/platform-state-runtime.test (S11 AA2b; pure, no database): the runtime,
@@ -539,5 +541,105 @@ describe('platform_state_invariants projection', () => {
       expect(out.checks, hostile).toEqual([{ invariant: 'I6', violations: 0 }]);
       expect(out.status, hostile).toBe('violations');
     }
+  });
+});
+
+// #903 review (#493 P3-1/P3-2): a version passes without the IP-literal check, so its pattern is
+// what keeps an address out — a pre-release suffix of free dotted parts would let one through.
+describe('versions and the newer-release cap', () => {
+  const HOSTILE_SUFFIXES = [
+    `0.73.1-${PRIVATE_V4}`,
+    '0.73.1-nas.internal.lan',
+    // `10.5` is an address in the shorthand IPv4 reading
+    '0.73.1-10.5',
+    `0.73.1-${'a1B2'.repeat(12)}`,
+    '0.73.1-rc.1.2',
+  ] as const;
+  const PLAIN_SUFFIXES = ['0.73.1-rc.1', '1.2.0-beta.2', '0.9.0-dev'] as const;
+
+  function withVersions(version: string) {
+    const image = projectRuntimeImage(
+      hostileImage({ piVersion: version, platformExtensionVersion: version }),
+      DIGEST_A,
+    );
+    const base = hostileUpdates();
+    const update = base.platformUpdate as NonNullable<PlatformUpdatesWire['platformUpdate']>;
+    const [newest, older] = update.newerReleases as [
+      (typeof update.newerReleases)[number],
+      (typeof update.newerReleases)[number],
+    ];
+    const updates = projectUpdatesState(
+      {
+        ...base,
+        platformUpdate: { ...update, newerReleases: [{ ...newest, pi: version }, older] },
+        piUpdate: {
+          ...base.piUpdate,
+          bundledVersion: version,
+          activeImageVersion: version,
+          upstreamLatest: version,
+        },
+      },
+      NOW,
+    );
+    return { image, updates };
+  }
+
+  it('nulls a version whose pre-release suffix could carry an address, a host name or a key', () => {
+    for (const version of HOSTILE_SUFFIXES) {
+      const { image, updates } = withVersions(version);
+      expect(image, version).toMatchObject({ piVersion: null, platformExtensionVersion: null });
+      expect(updates.pi, version).toMatchObject({
+        bundledVersion: null,
+        activeImageVersion: null,
+        upstreamLatest: null,
+      });
+      expect(updates.platform?.newerReleases[0]?.pi, version).toBeNull();
+      expectClean('platform_state_updates', updates);
+    }
+  });
+
+  it('keeps a one-identifier suffix as written', () => {
+    for (const version of PLAIN_SUFFIXES) {
+      const { image, updates } = withVersions(version);
+      expect(image, version).toMatchObject({
+        piVersion: version,
+        platformExtensionVersion: version,
+      });
+      expect(updates.pi, version).toMatchObject({
+        bundledVersion: version,
+        activeImageVersion: version,
+        upstreamLatest: version,
+      });
+      expect(updates.platform?.newerReleases[0]?.pi, version).toBe(version);
+      expectClean('platform_state_updates', updates);
+    }
+  });
+
+  it('versionOf refuses a credential-shaped value whatever the pattern admits', () => {
+    const key = `sk-${'a1B2'.repeat(12)}`;
+    expect(versionOf(key, /^.+$/)).toBeNull();
+    expect(versionOf('0.73.1', /^.+$/)).toBe('0.73.1');
+    expect(versionOf(7, /^.+$/)).toBeNull();
+  });
+
+  it(`lists the newest ${PLATFORM_STATE_RELEASES_LIMIT} newer releases of a host further behind`, () => {
+    const base = hostileUpdates();
+    const update = base.platformUpdate as NonNullable<PlatformUpdatesWire['platformUpdate']>;
+    const [newest] = update.newerReleases as [(typeof update.newerReleases)[number]];
+    const releases = Array.from({ length: PLATFORM_STATE_RELEASES_LIMIT + 1 }, (_, index) => ({
+      ...newest,
+      version: `v0.${200 - index}.0`,
+      previousVersion: `v0.${199 - index}.0`,
+    }));
+    const out = projectUpdatesState(
+      { ...base, platformUpdate: { ...update, newerReleases: releases } },
+      NOW,
+    );
+    expectClean('platform_state_updates', out);
+    expect(out.platform?.newerReleases).toHaveLength(PLATFORM_STATE_RELEASES_LIMIT);
+    expect(out.platform?.newerReleases[0]?.version).toBe('v0.200.0');
+    expect(out.platform?.newerReleases.at(-1)?.version).toBe(
+      `v0.${201 - PLATFORM_STATE_RELEASES_LIMIT}.0`,
+    );
   });
 });

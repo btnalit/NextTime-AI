@@ -7,8 +7,8 @@ import {
   PLATFORM_STATE_INVARIANTS_LIMIT,
   PLATFORM_STATE_INVARIANT_ID_PATTERN,
   PLATFORM_STATE_MIGRATIONS_LIMIT,
+  PLATFORM_STATE_PI_VERSION_PATTERN,
   PLATFORM_STATE_RELEASES_LIMIT,
-  PiReleaseVersionSchema,
   PiSdkSuiteResultSchema,
   PiUpdateStateWireSchema,
   PlatformReleaseVersionSchema,
@@ -146,7 +146,7 @@ function projectRelease(release: unknown): PlatformStateReleaseWire | null {
     version,
     publishedAt,
     breaking: source.breaking === true,
-    pi: versionOf(source.pi, PiReleaseVersionSchema),
+    pi: versionOf(source.pi, PLATFORM_STATE_PI_VERSION_PATTERN),
     migrationCount: lengthOf(source.migrations),
   };
 }
@@ -180,7 +180,7 @@ function projectPiUpdate(pi: PlatformUpdatesWire['piUpdate']): PlatformStatePiUp
     state: member(PiUpdateStateWireSchema, pi.state) ?? 'unknown',
     bundledVersion: versionOf(pi.bundledVersion, ComponentVersionSchema),
     activeImageVersion: versionOf(pi.activeImageVersion, ComponentVersionSchema),
-    upstreamLatest: versionOf(pi.upstreamLatest, PiReleaseVersionSchema),
+    upstreamLatest: versionOf(pi.upstreamLatest, PLATFORM_STATE_PI_VERSION_PATTERN),
     sdkSuite: member(PiSdkSuiteResultSchema, pi.sdkSuite),
     bundledIn: versionOf(pi.bundledIn, PlatformReleaseVersionSchema),
     checkedAt: normalizedTimestamp(pi.checkedAt),

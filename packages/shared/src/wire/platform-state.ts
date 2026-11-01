@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import {
   MigrationRefSchema,
-  PiReleaseVersionSchema,
   PiSdkSuiteResultSchema,
   PlatformReleaseVersionSchema,
 } from '../release-channel.js';
@@ -217,10 +216,19 @@ export type PlatformStateAuditWire = z.infer<typeof PlatformStateAuditWireSchema
  *  can name a registry by host and port. */
 export const PLATFORM_STATE_IMAGE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 
-/** A component version an image label or a build file carries: a release version, or `dev` for a
- *  build that did not set one (`scripts/build-images.sh`). */
+/** A pi version as `platform_state_*` passes it on (`upstreamLatest`, a release's `pi`): three
+ *  numeric parts and at most a pre-release suffix of one identifier that starts with a letter,
+ *  optionally followed by one numeric part (`rc.1`, `beta.2`, `dev`). Narrower than the release
+ *  channel's own pi version: a suffix of free dotted parts could carry a dotted address or a
+ *  multi-label host name, and the projection does not refuse a version as an IP literal (a
+ *  three-part version is one in the shorthand IPv4 reading). A version outside it is `null`. */
+export const PLATFORM_STATE_PI_VERSION_PATTERN =
+  /^\d{1,4}\.\d{1,4}\.\d{1,6}(?:-[A-Za-z][0-9A-Za-z]{0,15}(?:\.\d{1,6})?)?$/;
+
+/** A component version an image label or a build file carries: a pi version as above, or `dev`
+ *  for a build that did not set one (`scripts/build-images.sh`). */
 export const PLATFORM_STATE_COMPONENT_VERSION_PATTERN =
-  /^(?:dev|\d{1,4}\.\d{1,4}\.\d{1,6}(?:-[0-9A-Za-z.-]{1,32})?)$/;
+  /^(?:dev|\d{1,4}\.\d{1,4}\.\d{1,6}(?:-[A-Za-z][0-9A-Za-z]{0,15}(?:\.\d{1,6})?)?)$/;
 
 /** The commit an image was built from (`ai.nexttime.built-from`): a git sha, or `dev`. */
 export const PLATFORM_STATE_COMMIT_PATTERN = /^(?:dev|[0-9a-f]{7,40})$/;
@@ -240,6 +248,7 @@ export const PLATFORM_STATE_MIGRATIONS_LIMIT = 500;
 export const PLATFORM_STATE_INVARIANTS_LIMIT = 100;
 
 const ComponentVersionSchema = z.string().regex(PLATFORM_STATE_COMPONENT_VERSION_PATTERN);
+const PiVersionSchema = z.string().regex(PLATFORM_STATE_PI_VERSION_PATTERN);
 
 /** One runtime image (`RuntimeImageWire` without its tags, labels or activatable reference). */
 export const PlatformStateRuntimeImageWireSchema = z
@@ -324,7 +333,7 @@ export const PlatformStateReleaseWireSchema = z
     publishedAt: IsoTimestampSchema,
     breaking: z.boolean(),
     /** The pi its images carry. */
-    pi: PiReleaseVersionSchema.nullable(),
+    pi: PiVersionSchema.nullable(),
     migrationCount: CountSchema,
   })
   .strict();
@@ -357,7 +366,7 @@ export const PlatformStatePiUpdateWireSchema = z
     state: PiUpdateStateWireSchema,
     bundledVersion: ComponentVersionSchema.nullable(),
     activeImageVersion: ComponentVersionSchema.nullable(),
-    upstreamLatest: PiReleaseVersionSchema.nullable(),
+    upstreamLatest: PiVersionSchema.nullable(),
     sdkSuite: PiSdkSuiteResultSchema.nullable(),
     bundledIn: PlatformReleaseVersionSchema.nullable(),
     checkedAt: IsoTimestampSchema.nullable(),

@@ -2,6 +2,10 @@ import { randomBytes } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PoolLike } from './adapters/db/pool.js';
+import {
+  invariantMetricsForHandlersForTests,
+  setInvariantMetricsForHandlers,
+} from './application/gateway/platform-state-handlers.js';
 import { OutboxDispatcher } from './application/outbox/index.js';
 import type { BackgroundServices } from './index.js';
 import {
@@ -9,6 +13,7 @@ import {
   DEFAULT_OUTBOX_PRUNE_INTERVAL_MS,
   OUTBOX_PRUNE_INITIAL_DELAY_MS,
   createBackgroundServices,
+  createInvariantMetricsStore,
   createServer,
   parseNonNegativeIntEnvVar,
   parsePositiveIntEnvVar,
@@ -546,5 +551,42 @@ describe('createBackgroundServices: outbox-prune loop', () => {
     background2.stop();
     await vi.advanceTimersByTimeAsync(DEFAULT_OUTBOX_PRUNE_INTERVAL_MS * 2);
     expect(pruneSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// S11 AA2b: an admin agent's `platform_state_invariants` reads the scheduler tick's snapshot
+// through the store `createBackgroundServices` hands the handlers — unwired, it would answer
+// `not_run` for good and nothing else would notice.
+describe('createBackgroundServices: the invariant snapshot platform_state_invariants reads', () => {
+  afterEach(() => {
+    setInvariantMetricsForHandlers(undefined);
+    vi.useRealTimers();
+  });
+
+  it('hands the handlers the store it is given', () => {
+    const store = createInvariantMetricsStore();
+    createBackgroundServices({
+      pool: unusedPool as unknown as Pool,
+      kind: 'fake',
+      invariantMetrics: store,
+    });
+    expect(invariantMetricsForHandlersForTests()).toBe(store);
+    createBackgroundServices({ pool: unusedPool as unknown as Pool, kind: 'fake' });
+    expect(invariantMetricsForHandlersForTests()).toBeUndefined();
+  });
+
+  it('keeps the latest run and when it ran, null before the first', () => {
+    vi.useFakeTimers();
+    const store = createInvariantMetricsStore();
+    expect(store.snapshot()).toEqual({ results: [], lastRunAt: null });
+    vi.setSystemTime(new Date('2026-11-01T10:00:00.000Z'));
+    store.record([{ invariant: 'I4', violations: 2, sample: ['row-a'] }]);
+    vi.setSystemTime(new Date('2026-11-01T11:00:00.000Z'));
+    const latest = [{ invariant: 'I4', violations: 0, sample: [] }];
+    store.record(latest);
+    expect(store.snapshot()).toEqual({
+      results: latest,
+      lastRunAt: new Date('2026-11-01T11:00:00.000Z'),
+    });
   });
 });

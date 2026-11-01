@@ -113,6 +113,14 @@ export function setInvariantMetricsForHandlers(
   invariantMetrics = store;
 }
 
+/** Tests only: the store `setInvariantMetricsForHandlers` last set (index.test.ts checks that
+ *  `createBackgroundServices` hands its store over). */
+export function invariantMetricsForHandlersForTests():
+  | { snapshot(): InvariantMetricsSnapshot }
+  | undefined {
+  return invariantMetrics;
+}
+
 export const platformStateInvariantsHandler = platformStateHandler(
   'platform_state_invariants',
   async (_client, _agent, checkedAt) => {

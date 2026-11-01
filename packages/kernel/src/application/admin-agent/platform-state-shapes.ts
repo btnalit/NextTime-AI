@@ -30,8 +30,10 @@ export function shaped(value: unknown, pattern: RegExp): string | null {
 
 /** `value` when it is a version `pattern` (a RegExp or a string schema) admits and it does not look
  *  like a credential. Unlike {@link shaped} it is not refused as an IP literal: a three-part version
- *  (`0.73.1`) is one in the shorthand IPv4 reading, but the version patterns admit at most three
- *  numeric parts, never a dotted quad, so no written address fits them. */
+ *  (`0.73.1`) is one in the shorthand IPv4 reading. That is safe only for patterns that admit no
+ *  written address — three numeric parts and at most one letter-led identifier with one numeric
+ *  part after it (`PLATFORM_STATE_PI_VERSION_PATTERN`), never a dotted quad or a multi-label host
+ *  name in a suffix; the credential check stays for any pattern. */
 export function versionOf(value: unknown, pattern: RegExp | z.ZodType<string>): string | null {
   if (typeof value !== 'string') return null;
   const fits = pattern instanceof RegExp ? pattern.test(value) : pattern.safeParse(value).success;

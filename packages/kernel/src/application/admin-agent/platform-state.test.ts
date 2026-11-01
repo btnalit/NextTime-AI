@@ -156,6 +156,12 @@ describe('findAddressLike (the probe itself)', () => {
     expect(findAddressLike({ a: [{ b: `x ${PRIVATE_V4} y` }] })).toEqual([
       '$.a[0].b: an IP literal',
     ]);
+    // A version is let through as what it is, its pre-release suffix split off and read on its
+    // own (#903 review): an address inside a hyphenated value still counts.
+    for (const value of ['0.73.1', '0.73.1-rc.1', '2026', 'core 0049', 'I-S5-1']) {
+      expect(addressLikeReason(value), value).toBeNull();
+    }
+    expect(addressLikeReason(`0.73.1-${PRIVATE_V4}`)).toBe('an IP literal');
   });
 });
 
