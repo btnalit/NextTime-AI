@@ -135,15 +135,21 @@ function RevisionItem({
       ) : null}
       {revision.status === 'proposed' && revision.proposer === 'planner' ? (
         <span className="text-small text-3">
-          {revision.basedOnRevision === current
+          {revision.basedOnRevision !== current
             ? t(
-                '等请求人在上面的「目标规划器」里决定。',
-                'Waiting for the requester to decide, under Goal planner above.',
-              )
-            : t(
                 '它基于的版本已经不在用了，不能再接受。',
                 'The revision it was based on is no longer in force, so it can no longer be accepted.',
-              )}
+              )
+            : detail.status === 'paused'
+              ? t(
+                  '等请求人在上面的「目标规划器」里决定。',
+                  'Waiting for the requester to decide, under Goal planner above.',
+                )
+              : t(
+                  // UX P2-5 on #864: only a paused goal can take it.
+                  '目标已经不在暂停中，不能再接受。',
+                  'The goal is no longer paused, so it can no longer be accepted.',
+                )}
         </span>
       ) : null}
       {revision.reason ? (

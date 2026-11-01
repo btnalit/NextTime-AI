@@ -693,6 +693,43 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect((await goalRow(goalRunId)).status).toBe('cancelled');
     });
 
+    it('ending the run waits for the planner’s Task, then rejects what it proposed (UX P2-5 on #864)', async () => {
+      const requester = await newPrincipal('member');
+      const { goalRunId } = await failedForPerson(requester);
+      const [round] = await rounds(goalRunId);
+      if (!round) throw new Error('no round');
+      const refused = await refusal(
+        call(human(requester), 'end_goal', { goalRunId, outcome: 'not_achieved' }),
+      );
+      expect(refused).toMatchObject({ status: 409 });
+      expect(refused.message).toContain(
+        'the goal planner is still looking at the failure of step renew',
+      );
+      const before = await getGoal(goalRunId, requester);
+      await report((await plannerTask(round.id)).id, {
+        decision: 'revise',
+        plan: reroute(before),
+        reason: 'another Worker renews the same way',
+      });
+      await advanceOnce(goalRunId, requester);
+      expect((await rounds(goalRunId)).map((row) => row.status)).toEqual(['proposed']);
+
+      await call(human(requester), 'end_goal', { goalRunId, outcome: 'not_achieved' });
+      expect(await goalRow(goalRunId)).toMatchObject({ status: 'completed', current_revision: 1 });
+      expect(await revisionRow(goalRunId, 2)).toMatchObject({
+        status: 'rejected',
+        decided_by: requester,
+      });
+      const audit = await raw<{ payload: Record<string, unknown> }>(
+        `select payload from audit_records
+          where workspace_id = $1 and action = 'plan_revision.reject' and payload ->> 'goalRunId' = $2`,
+        [workspaceId, goalRunId],
+      );
+      expect(audit.map((row) => row.payload)).toMatchObject([
+        { revision: 2, by: 'person', reason: 'run_left_pause' },
+      ]);
+    });
+
     it('while an owner holds the run, its requester may accept but not resume; the hold drops a running round', async () => {
       const requester = await newPrincipal('member');
       const { goalRunId } = await failedForPerson(requester);

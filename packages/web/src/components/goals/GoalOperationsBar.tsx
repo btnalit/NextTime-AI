@@ -500,6 +500,7 @@ export function GoalOperationsBar({
         anchor={anchor}
         achievedAllowed={endOp.achieved}
         overridden={checksOverriddenByEnding(goal, gateNames, t, objectNames)}
+        plannerDropped={plannerWorkDropped(goal, t)}
         onEnd={(outcome, note) =>
           run(
             http.call<GoalOperationResultWire>('end_goal', { goalRunId, outcome, ...note }),
@@ -816,12 +817,15 @@ type EndOutcome = 'not_achieved' | 'achieved';
 function EndConfirm({
   achievedAllowed,
   overridden,
+  plannerDropped,
   onEnd,
   ...control
 }: OpenControl & {
   readonly achievedAllowed: boolean;
   /** The acceptance checks that ending as achieved records as the requester's decision. */
   readonly overridden: readonly OverriddenCheck[];
+  /** UX P2-5 on #864: what ending does to the planner's work for this pause. */
+  readonly plannerDropped: readonly string[];
   readonly onEnd: (outcome: EndOutcome, note: { note?: string }) => Promise<void>;
 }) {
   const t = useT();
@@ -848,6 +852,7 @@ function EndConfirm({
                 : t('验收检查都已通过', 'Every acceptance check has passed'),
             ]
           : []),
+        ...plannerDropped,
       ]}
       confirmLabel={t('结束目标', 'End goal')}
       confirmDisabled={note.tooLong}
