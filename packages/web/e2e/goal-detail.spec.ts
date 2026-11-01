@@ -582,6 +582,10 @@ test.describe('S11 GO6: operations on a goal (stand-in reads and operations)', (
         '要你亲自确认「证书看起来对」（验收检查 looks-right），来自流程第 2 步',
       );
       await expect(page.getByTestId('goal-op-reject')).toBeVisible();
+      // S11 GO9a: the goal planner's leave is offered on the confirm card, on by default.
+      await expect(
+        confirm.getByTestId('goal-op-confirm-planner').getByRole('checkbox'),
+      ).toBeChecked();
       await page.screenshot({
         path: testInfo.outputPath(`goal-confirm-${width}.png`),
         fullPage: true,
@@ -591,6 +595,7 @@ test.describe('S11 GO6: operations on a goal (stand-in reads and operations)', (
       expect(fired.find((call) => call.name === 'confirm_goal')?.params).toEqual({
         goalRunId: GOAL,
         revision: 1,
+        planner: true,
       });
 
       // 2. Alice's goal the owner held: lifting the hold says alice revised the plan since.
