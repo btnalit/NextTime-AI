@@ -30,7 +30,9 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * accepted attempts' Tasks of the same goal run mounted (the spawn's `upstream`, the prompt, the
  * audit), every goal step's spawn carries its goal run; an upstream container still exiting puts
  * the step off a moment without spending an attempt; a directory not there, or not this run's,
- * pauses the run for a person, naming the step, again without spending one; and the retention
+ * pauses the run for a person, naming the step, again without spending one, as does a step read
+ * from that was skipped; after a revision redefines the step read from, the live one's files are
+ * mounted; a step put off for an upstream container does not hold the others; and the retention
  * lease lists the accepted attempts of the steps of runs that have not ended.
  *
  * Every run this file moves is left with no `next_tick_at`, so no advancer of another file claims
@@ -426,6 +428,102 @@ describe.runIf(DATABASE_URL !== undefined)(
         supervisor.states.delete(aTask.id);
       },
     );
+
+    // Review #493 on #884 (K1): a skipped step left no accepted files, even when the Worker of its
+    // last attempt reported and that Task completed — those files are not mounted.
+    it('a step reading the files of a skipped step pauses the run for a person, though that step’s last Task completed', async () => {
+      const requester = await newPrincipal('member');
+      const goalRunId = await startGoal(requester, STEPS);
+      const aTask = await latestTask(goalRunId, 'a');
+      await dispatchCapability({ pool }, await workerOf(aTask.id), 'report_task_result', {
+        summary: 'step a done, but not accepted',
+      });
+      expect(await latestTask(goalRunId, 'a')).toMatchObject({ status: 'completed' });
+      await raw(
+        `update step_runs set status = 'skipped', ended_at = now()
+          where workspace_id = $1 and id = $2`,
+        [workspaceId, (await stepRun(goalRunId, 'a')).id],
+      );
+      const askedBefore = supervisor.asked.length;
+      await advanceOnce(goalRunId, requester);
+      if ((await goalRow(goalRunId))?.status === 'running') await advanceOnce(goalRunId, requester);
+      expect(await goalRow(goalRunId)).toMatchObject({
+        status: 'paused',
+        pause_reason: 'needs_decision',
+      });
+      expect(await stepRun(goalRunId, 'b')).toMatchObject({ status: 'ready', attempt_count: 0 });
+      expect(String((await lastPause(goalRunId))?.detail)).toContain(
+        'step b: the files of step a: step a was skipped, so it left no files to read',
+      );
+      expect(
+        supervisor.asked
+          .slice(askedBefore)
+          .flat()
+          .some((entry) => entry.taskId === aTask.id),
+      ).toBe(false);
+    });
+
+    // Review #493 on #884 (K3): a revision that redefines the step read from gives it a new
+    // StepRun; the files are the live one's, not the superseded one's.
+    it('after a revision redefines the step it reads from, a step mounts the new step’s files', async () => {
+      const requester = await newPrincipal('member');
+      const goalRunId = await startGoal(requester, STEPS);
+      const oldA = await latestTask(goalRunId, 'a');
+      await dispatchCapability({ pool }, human(requester), 'pause_goal', { goalRunId });
+      await dispatchCapability({ pool }, human(requester), 'revise_goal', {
+        goalRunId,
+        basedOnRevision: 1,
+        plan: {
+          steps: [
+            { worker, key: 'a', input: { what: 'write the report again' } },
+            ...STEPS.slice(1).map((step) => ({ worker, ...step })),
+          ],
+        },
+        reason: 'a again, differently',
+      });
+      await dispatchCapability({ pool }, human(requester), 'resume_goal', { goalRunId });
+      for (let i = 0; i < 3 && (await stepRun(goalRunId, 'a')).status !== 'running'; i++) {
+        await advanceOnce(goalRunId, requester);
+      }
+      const newA = await latestTask(goalRunId, 'a');
+      expect(newA.id).not.toBe(oldA.id);
+      await finishStep(goalRunId, requester, 'a');
+      if ((await stepRun(goalRunId, 'b')).status === 'ready')
+        await advanceOnce(goalRunId, requester);
+      expect(await goalRow(goalRunId)).toMatchObject({ status: 'running', pause_reason: null });
+      expect(await stepRun(goalRunId, 'b')).toMatchObject({ status: 'running', attempt_count: 1 });
+      expect(supervisor.spawnOf((await latestTask(goalRunId, 'b')).id).upstream).toEqual([
+        { stepKey: 'a', taskId: newA.id },
+      ]);
+    });
+
+    // Review #493 on #884 (K6): waiting for one step's upstream container holds that step only.
+    it('while a step waits for an upstream container to exit, a step that reads no files starts as usual', async () => {
+      const requester = await newPrincipal('member');
+      const goalRunId = await startGoal(requester, [
+        ...STEPS,
+        { key: 'c', dependsOn: ['a'], input: { what: 'something else' } },
+      ]);
+      const aTask = await latestTask(goalRunId, 'a');
+      supervisor.states.set(aTask.id, 'running');
+      // The advancer goes through ready steps in creation order; b and c were made in one
+      // transaction (ties broken by id), so b is put first: c must start after b is put off.
+      await raw(
+        `update step_runs set created_at = created_at - interval '1 second'
+          where workspace_id = $1 and goal_run_id = $2 and step_key = 'b'`,
+        [workspaceId, goalRunId],
+      );
+      await finishStep(goalRunId, requester, 'a');
+      if ((await stepRun(goalRunId, 'c')).status === 'ready')
+        await advanceOnce(goalRunId, requester);
+      expect(await stepRun(goalRunId, 'c')).toMatchObject({ status: 'running', attempt_count: 1 });
+      expect(await stepRun(goalRunId, 'b')).toMatchObject({ status: 'ready', attempt_count: 0 });
+      expect(await goalRow(goalRunId)).toMatchObject({ status: 'running', pause_reason: null });
+
+      supervisor.states.delete(aTask.id);
+      await advanceOnce(goalRunId, requester);
+      expect(await stepRun(goalRunId, 'b')).toMatchObject({ status: 'running', attempt_count: 1 });
+    });
 
     it('a step that reads files cannot start where the supervisor cannot be asked: the advance fails and is tried again', async () => {
       const requester = await newPrincipal('member');

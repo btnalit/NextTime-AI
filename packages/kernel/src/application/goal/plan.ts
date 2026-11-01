@@ -444,9 +444,10 @@ function bindingProblems(step: PlanStep, steps: ReadonlyMap<string, PlanStep>): 
 /**
  * S11 GO14: the steps whose files a step reads (`filesFrom`). Each is another step of the plan
  * (checked first, as a binding's `from`), one this step depends on — so it has ended before an
- * attempt of this one starts — and named once. What a step may read is what its requester
- * confirmed here: the advancer mounts only these steps' handoff directories, of this goal run
- * (`step-files.ts`).
+ * attempt of this one starts — and named once. What a step may read is what the run's current
+ * revision says: the requester confirmed it, revised it, or — `filesFrom` being a minor change
+ * (F4-A) — let the goal planner change it under `apply_minor`. The advancer mounts only these
+ * steps' handoff directories, of this goal run (`step-files.ts`).
  */
 function filesFromProblems(
   step: PlanStep,
