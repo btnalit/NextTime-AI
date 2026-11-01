@@ -858,7 +858,17 @@ step2_docker_restart() {
   target_verdict=$(parse_kv "$out" EXTRACTED)
   case "$target_verdict" in
     ok) pass "step2-request-target" "$AR_ID_DOCKER records the Container it acts on, from its own id" ;;
-    none) skip "step2-request-target" "the published container.restart declares no target yet (a refresh awaiting confirmation): $AR_ID_DOCKER acts on the whole gate" ;;
+    none)
+      # Only a published version without a target may leave the request on the whole gate: on a
+      # fresh database container.restart is published with one, and a missing snapshot there is a
+      # broken insert path (review #488 on #876).
+      out=$(cap "$ALICE_KEY" list_operations "{\"gatekeeperId\":\"$GATEKEEPER_ID_DOCKER\"}" \
+        "(((d.result.items||[]).find(o=>o.name==='container.restart'&&o.status==='published'))||{}).target?'declared':'undeclared'")
+      status=$(parse_kv "$out" HTTP_STATUS)
+      [ "$status" = "200" ] || fail "step2-request-target" "list_operations HTTP $status: $(parse_kv "$out" BODY)"
+      [ "$(parse_kv "$out" EXTRACTED)" = "undeclared" ] || fail "step2-request-target" "the published container.restart declares a target, yet $AR_ID_DOCKER recorded none"
+      skip "step2-request-target" "the published container.restart declares no target yet (a refresh awaiting confirmation): $AR_ID_DOCKER acts on the whole gate"
+      ;;
     *) fail "step2-request-target" "unexpected target on $AR_ID_DOCKER: $target_verdict" ;;
   esac
 
