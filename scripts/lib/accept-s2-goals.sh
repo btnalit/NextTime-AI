@@ -1,6 +1,6 @@
 # scripts/lib/accept-s2-goals.sh — S11 GO7a: goal scenarios S1, S2 and S4 to S12 of
-# docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §7.2, and S13 — the goal planner of
-# GO9a/GO9b (legacy 549) — run by scripts/accept_s2.sh in
+# docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §7.2, S13 — the goal planner of
+# GO9a/GO9b (legacy 549) — and S14 — files between a goal's steps (GO14) — run by scripts/accept_s2.sh in
 # its fake-provider path after step 9 (which covers proposing from chat, confirming, the platform's
 # acceptance and S3's idempotent propose/confirm). Sourced by accept_s2.sh right after
 # accept-common.sh; POSIX sh, same conventions (pass/fail, cap, parse_kv, no temp file, no jq).
@@ -41,7 +41,7 @@
 # background on checks that fail on purpose — the platform retries an unmet acceptance check
 # (GOAL_ACCEPTANCE_CHECK_MAX_ATTEMPTS / _MAX_DURATION_MS) and an unmet reconcile check
 # (GOAL_RECONCILE_CHECK_MAX_ATTEMPTS / _MAX_DURATION_MS) with backoff, by default 5 attempts within
-# about 7.5 minutes, before it pauses the run — while S1, S11, S13, S5, S4, S7, S9, S10, S12 and S8 run
+# about 7.5 minutes, before it pauses the run — while S1, S11, S13, S14, S5, S4, S7, S9, S10, S12 and S8 run
 # one after the other (S12 only with ACCEPT_DISRUPTIVE=1); S6 and the reverse S4 are finished
 # next, and S2 (also only with ACCEPT_DISRUPTIVE=1) runs last, alone: the
 # kernel's restarts would drop a background goal's checks and every connection to the kernel. No
@@ -1454,6 +1454,78 @@ goal_s2_restarts() {
   pass "s2-achieved" "goal $S2_GOAL_ID completed(achieved) through two kernel crashes and a worker-supervisor restart: a, b, c each succeeded on one attempt, each after the one before, one Task each; b's Task $task_b completed with its held turn's report"
 }
 
+# --- S14: a step reads the files an earlier step of the same goal left (S11 GO14) -------------
+
+# goal_supervisor_keep <taskId> <goalRunId>: what worker-supervisor says the Task's directories are
+# to a reader in this workspace and <goalRunId> — `POST /task-dirs/keep` with the kernel's own
+# internal token, from inside the kernel container (the call the advancer and the retention lease
+# make). Prints the state, or `HTTP <status> <body>` when the call did not answer one.
+goal_supervisor_keep() {
+  compose_accept exec -T kernel node -e "
+const token = require('fs').readFileSync('/run/secrets/internal_token_worker_supervisor', 'utf8').trim();
+fetch('http://worker-supervisor:8081/task-dirs/keep', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token },
+  body: JSON.stringify({ tasks: [{ taskId: '$1', workspaceId: '$WORKSPACE_ID', goalRunId: '$2' }] }),
+}).then(async (r) => {
+  const text = await r.text();
+  let state;
+  try { state = JSON.parse(text).tasks[0].state; } catch {}
+  console.log(r.status === 200 && state ? state : 'HTTP ' + r.status + ' ' + text.slice(0, 300));
+}, (err) => console.log('unreachable ' + err));
+" </dev/null 2>&1
+}
+
+# Two ops-runner steps on fake-llm's goal_handoff script: `a` writes a token of this run into
+# /workspace/out/handoff.txt; `b` depends on `a`, names it in `filesFrom` and — its input carries no
+# token, no binding takes a's output — reads /upstream/a/handoff.txt, then tries to write beside it.
+#   - handoff: the goal completes on its own; b's stored summary carries exactly the token a wrote,
+#     and the write beside it failed (the mount is read-only);
+#   - handoff-audit: b's Task was queued naming a's accepted attempt's Task (`task.queue`
+#     `upstreamFiles`), and b's attempt started with `filesFrom` [a] (`step_run.start`);
+#   - handoff-owner: worker-supervisor answers `kept` for a's directories asked about for this
+#     goal run, and `not_owned` for the same Task asked about for another goal run of the workspace
+#     (S1's) — the owner marker it wrote at a's spawn, a second line behind the kernel's choice.
+goal_s14_handoff() {
+  n=$(real_token)
+  token="s14-$n"
+  a=$(goal_step_json a "ACCEPT_S2_SCENARIO=goal_handoff HANDOFF_ROLE=write HANDOFF_TOKEN=$token")
+  b=$(goal_step_json b "ACCEPT_S2_SCENARIO=goal_handoff HANDOFF_ROLE=read" '"dependsOn":["a"],"filesFrom":["a"]')
+  goal_propose_confirm s14 "{\"statement\":\"accept_s2 S14 $n: one ops-runner step leaves a file for the next, which reads it from the earlier step's handoff directory.\",\"plan\":{\"steps\":[$a,$b],\"acceptance\":[$(goal_observe_check_json stock-visible stock.get '{}' symbol '"NXT"')]},\"budget\":$GOAL_BUDGET,\"idempotencyKey\":\"accept-s2-goal-s14-$n\"}"
+  S14_GOAL_ID=$GOAL_RUN_ID
+  goal_wait "$S14_GOAL_ID" 360 "$GOAL_END_EXPR" 'completed,*' 'paused,*' 'cancelled,*' 'failed,*' \
+    || goal_fail "s14-handoff" "$S14_GOAL_ID" "goal $S14_GOAL_ID did not settle within 360s (last '$GOAL_WAIT_VALUE')"
+  [ "$GOAL_WAIT_VALUE" = "completed,achieved,verified_by_check," ] || goal_fail "s14-handoff" "$S14_GOAL_ID" "goal $S14_GOAL_ID ended '$GOAL_WAIT_VALUE', expected completed,achieved,verified_by_check"
+  task_a=$(goal_step_task "$S14_GOAL_ID" a 1)
+  task_b=$(goal_step_task "$S14_GOAL_ID" b 1)
+  [ -n "$task_a" ] && [ -n "$task_b" ] || goal_fail "s14-handoff" "$S14_GOAL_ID" "no Task for the first attempt of a ('$task_a') or b ('$task_b')"
+  summary=$(psql_ws "select coalesce(result->>'summary', '(none)') from tasks where workspace_id = '$WORKSPACE_ID' and id = '$task_b'")
+  case "$summary" in
+    *"HANDOFF_READ=[$token]"*) : ;;
+    *) goal_fail "s14-handoff" "$S14_GOAL_ID" "b's Task $task_b reported '$summary', expected it to have read '$token' from /upstream/a/handoff.txt" ;;
+  esac
+  case "$summary" in
+    *"HANDOFF_WRITE_EXIT=0"*) goal_fail "s14-handoff" "$S14_GOAL_ID" "b's Worker wrote into /upstream/a, which is mounted read-only: '$summary'" ;;
+    *"HANDOFF_WRITE_EXIT="[1-9]*) : ;;
+    *) goal_fail "s14-handoff" "$S14_GOAL_ID" "b's Task $task_b reported '$summary', expected the exit code of its write beside the file" ;;
+  esac
+  pass "s14-handoff" "goal $S14_GOAL_ID completed: b read the token a left in its handoff directory, and could not write there"
+
+  queued=$(psql_ws "select coalesce(payload->'upstreamFiles'->0->>'stepKey', '') || ':' || coalesce(payload->'upstreamFiles'->0->>'taskId', '') || ':' || coalesce(jsonb_array_length(payload->'upstreamFiles'), 0) from audit_records where workspace_id = '$WORKSPACE_ID' and resource_id = '$task_b' and action = 'task.queue'")
+  [ "$queued" = "a:$task_a:1" ] || goal_fail "s14-handoff-audit" "$S14_GOAL_ID" "b's task.queue audit names upstream files '$queued', expected a's Task $task_a alone"
+  started=$(psql_ws "select coalesce(string_agg(r.payload->>'filesFrom', ';'), '') from audit_records r join step_runs s on s.workspace_id = r.workspace_id and s.id = r.resource_id where r.workspace_id = '$WORKSPACE_ID' and s.goal_run_id = '$S14_GOAL_ID' and s.step_key = 'b' and r.action = 'step_run.start'")
+  [ "$started" = '["a"]' ] || goal_fail "s14-handoff-audit" "$S14_GOAL_ID" "b's step_run.start audit reads filesFrom '$started', expected [\"a\"] once"
+  pass "s14-handoff-audit" "b's Task was queued naming a's Task $task_a as its upstream files, and b's attempt started with filesFrom [a]"
+
+  own=$(goal_supervisor_keep "$task_a" "$S14_GOAL_ID")
+  [ "$own" = "kept" ] || goal_fail "s14-handoff-owner" "$S14_GOAL_ID" "worker-supervisor answered '$own' for a's directories asked about for their own goal run, expected kept"
+  other=${S1_GOAL_ID:-}
+  [ -n "$other" ] || other=$(psql_ws "select gen_random_uuid()")
+  foreign=$(goal_supervisor_keep "$task_a" "$other")
+  [ "$foreign" = "not_owned" ] || goal_fail "s14-handoff-owner" "$S14_GOAL_ID" "worker-supervisor answered '$foreign' for a's directories asked about for goal run $other, expected not_owned"
+  pass "s14-handoff-owner" "worker-supervisor keeps a's directories for goal $S14_GOAL_ID and answers not_owned for goal $other"
+}
+
 # goal_scenarios_step: the scenarios, in the order the header explains; S12 and S2 only with
 # ACCEPT_DISRUPTIVE=1.
 goal_scenarios_step() {
@@ -1462,6 +1534,7 @@ goal_scenarios_step() {
   goal_s1_dag
   goal_s11_reject
   goal_s13_planner
+  goal_s14_handoff
   goal_s5_approval
   goal_s4_seen
   goal_s7_cancel_drain

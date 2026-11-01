@@ -11,6 +11,7 @@ import type {
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { type PoolLike, withWorkspace } from '../../adapters/db/pool.js';
+import type { TaskUpstreamFilesInput } from '../../adapters/supervisor-client/index.js';
 import {
   type StepActionOutcome,
   ensureReconcileCheck,
@@ -77,6 +78,7 @@ import {
 import { readGoalPlannerMode } from './planning-rounds.js';
 import { getPlanRevision, lockStepRuns } from './reads.js';
 import { lockGoalRun } from './service.js';
+import { type StepFilesPort, checkStepFiles, resolveStepFilesSources } from './step-files.js';
 import { nameTrialStepRun, trialApprovalCandidates } from './trial-approvals.js';
 import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
 
@@ -172,7 +174,12 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *      never exceed what is left of the goal's: `createStepAttemptTask` inserts the attempt's
  *      Task in this transaction — with the step's `outputSchema` and the input its bindings make
  *      (`bindings.ts`, S11 GO5d-1: a value not there, or one the credential review counts, pauses
- *      `needs_decision` naming the binding) — and the step moves `ready → running` with
+ *      `needs_decision` naming the binding) and the files its `filesFrom` names mounted
+ *      (`step-files.ts`, S11 GO14: the accepted attempts' handoff directories of this run, checked
+ *      with the worker-supervisor first; one not there pauses `needs_decision` naming the step and
+ *      why, without spending an attempt, and an upstream container still exiting is looked at again
+ *      after {@link DEFAULT_STEP_FILES_RECHECK_MS} while other steps start) — and the step moves
+ *      `ready → running` with
  *      `attempt_count + 1` (I-G1). No attempt starts while a request of any superseded step —
  *      whatever key the revision gave its work — has an unknown outcome: the run pauses
  *      `awaiting_reconcile` (review #493 on #633). A step whose key a revision redefined does not
@@ -302,10 +309,16 @@ export const DEFAULT_QUOTA_RETRY_MS = 30_000;
  *  period (S12) instead of the wall-clock deadline — the reconcile scan does not look for it. */
 export const DEFAULT_BLOCKED_RETRY_RECHECK_MS = 60 * 1000;
 
+/** S11 GO14: when a step that reads the files of a step whose container is still exiting (seconds
+ *  after its result) is looked at again. */
+export const DEFAULT_STEP_FILES_RECHECK_MS = 5 * 1000;
+
 export interface GoalAdvancerOptions extends CancellingOptions {
   readonly retryBackoffMs?: (attempts: number) => number;
   readonly quotaRetryMs?: number;
   readonly blockedRetryRecheckMs?: number;
+  /** S11 GO14: when a step whose upstream container has not exited yet is looked at again. */
+  readonly stepFilesRecheckMs?: number;
   /** Failed advances in a row after which a running run pauses for a person (legacy 356;
    *  `advancer.ts` `DEFAULT_MAX_CONSECUTIVE_ADVANCE_FAILURES`). */
   readonly maxConsecutiveAdvanceFailures?: number;
@@ -490,6 +503,8 @@ export async function advanceGoalRun(
         };
       }
       const advance = new Advance(client, goal, now, deps.options ?? {}, {
+        // GO14: the worker-supervisor the attempts spawn on is the one asked about their files.
+        stepFiles: deps.taskRuntime.supervisorClient,
         ...(deps.modelCatalog ? { modelCatalog: deps.modelCatalog } : {}),
         ...(deps.plannerTemplate ? { plannerTemplate: deps.plannerTemplate } : {}),
       });
@@ -556,6 +571,8 @@ class Advance {
   private liveTasks: readonly LiveGoalTask[] = [];
   private readonly modelCatalog: (() => Promise<ReadonlySet<string>>) | undefined;
   private readonly plannerTemplate: (() => Promise<PlannerTemplate>) | undefined;
+  private readonly stepFiles: StepFilesPort | undefined;
+  private readonly stepFilesRecheckMs: number;
   /** The run's pause reason as the advance leaves it: its own, or one this advance paused it for. */
   private pauseReason: GoalRunPauseReason | null;
   /** S11 GO9a: the planner Task phase P created, started after the commit. */
@@ -571,11 +588,14 @@ class Advance {
     sources: {
       readonly modelCatalog?: () => Promise<ReadonlySet<string>>;
       readonly plannerTemplate?: () => Promise<PlannerTemplate>;
+      readonly stepFiles?: StepFilesPort;
     } = {},
   ) {
     this.client = client;
     this.modelCatalog = sources.modelCatalog;
     this.plannerTemplate = sources.plannerTemplate;
+    this.stepFiles = sources.stepFiles;
+    this.stepFilesRecheckMs = options.stepFilesRecheckMs ?? DEFAULT_STEP_FILES_RECHECK_MS;
     this.goal = goal;
     this.now = now;
     this.retryBackoffMs = options.retryBackoffMs ?? defaultRetryBackoffMs;
@@ -1250,8 +1270,9 @@ class Advance {
         this.timers.push(this.now.getTime() + this.blockedRetryRecheckMs);
         continue;
       }
-      if (!(await this.startAttempt(step, share, steps))) return;
-      attemptsSoFar += 1;
+      const started = await this.startAttempt(step, share, steps);
+      if (started === 'stop') return;
+      if (started === 'started') attemptsSoFar += 1;
     }
   }
 
@@ -1311,17 +1332,19 @@ class Advance {
     return busy ? 'busy' : null;
   }
 
-  /** Starts one attempt of a `ready` step with at most `tokenCap` tokens; `false` when nothing more
-   *  starts in this advance. `steps`: the run's StepRuns, which the step's bindings take from. */
+  /** Starts one attempt of a `ready` step with at most `tokenCap` tokens: `started`; `later` when
+   *  this step waits a moment (GO14: an upstream container has not exited) and others may still
+   *  start; `stop` when nothing more starts in this advance. `steps`: the run's StepRuns, which
+   *  the step's bindings and `filesFrom` take from. */
   private async startAttempt(
     step: StepRunRow,
     tokenCap: number,
     steps: readonly StepRunRow[],
-  ): Promise<boolean> {
+  ): Promise<'started' | 'later' | 'stop'> {
     const entry = await this.entry(step);
     if (!entry || !(await this.inCurrentPlan(step))) {
       await this.pause('needs_decision', `step ${step.stepKey}: no longer in the current plan`);
-      return false;
+      return 'stop';
     }
     let previous: RunConfigSnapshot | null = null;
     // GO5d-1: an attempt after one that ended without an accepted result redoes it — the Worker
@@ -1334,7 +1357,7 @@ class Advance {
           'needs_decision',
           `step ${step.stepKey}: attempt ${step.attemptCount} has no readable configuration snapshot`,
         );
-        return false;
+        return 'stop';
       }
       previous = last.runConfig;
       if (last.status === 'failed' && last.failureReason === 'no_result') {
@@ -1348,7 +1371,33 @@ class Advance {
     const input = await assembleStepInput(this.client, this.ws, entry, steps);
     if (input.kind === 'blocked') {
       await this.pause('needs_decision', input.detail);
-      return false;
+      return 'stop';
+    }
+    // GO14 (I-F1, I-F6): the earlier steps' files the plan says this step reads, of this run only,
+    // checked with the worker-supervisor before the attempt is spent.
+    let upstreamFiles: readonly TaskUpstreamFilesInput[] = [];
+    const files = await resolveStepFilesSources(this.client, this.ws, entry, steps);
+    if (files.kind === 'blocked') {
+      await this.pause('needs_decision', files.detail);
+      return 'stop';
+    }
+    if (files.kind === 'sources') {
+      const check = await checkStepFiles(
+        this.stepFiles,
+        this.ws,
+        this.goal.id,
+        step.stepKey,
+        files.sources,
+      );
+      if (check.kind === 'wait') {
+        this.timers.push(this.now.getTime() + this.stepFilesRecheckMs);
+        return 'later';
+      }
+      if (check.kind === 'blocked') {
+        await this.pause('needs_decision', check.detail);
+        return 'stop';
+      }
+      upstreamFiles = check.upstream;
     }
     const currentRevision = this.goal.currentRevision;
     if (currentRevision === null)
@@ -1382,6 +1431,7 @@ class Advance {
       durationCapSec: Math.max(1, Math.floor((this.deadline - this.now.getTime()) / 1000)),
       ...(this.modelCatalog ? { modelCatalog: this.modelCatalog } : {}),
       ...(trialApprovals.length > 0 ? { trialApprovals } : {}),
+      ...(upstreamFiles.length > 0 ? { upstreamFiles } : {}),
     });
     if (result.kind === 'refused') {
       if (result.refusal.kind === 'paused') {
@@ -1398,7 +1448,7 @@ class Advance {
       } else {
         this.timers.push(this.now.getTime() + this.quotaRetryMs);
       }
-      return false;
+      return 'stop';
     }
     if (result.trialApprovalId) {
       // An approval made on the proposal names this StepRun now: one trial is one StepRun.
@@ -1411,10 +1461,13 @@ class Advance {
         ...(reworkOf ? { reworkOf: reworkOf.taskId } : {}),
         ...(result.trialApprovalId ? { trialApproval: result.trialApprovalId } : {}),
         ...((entry.bindings ?? []).length > 0 ? { bound: (entry.bindings ?? []).length } : {}),
+        ...(upstreamFiles.length > 0
+          ? { filesFrom: upstreamFiles.map((file) => file.stepKey) }
+          : {}),
       },
     });
     this.started.push(result.attempt);
-    return true;
+    return 'started';
   }
 
   // ----- E ------------------------------------------------------------------------------------

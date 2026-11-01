@@ -201,6 +201,15 @@ export function bindingSentence(binding: StepBinding, t: Translate): string {
   );
 }
 
+/** S11 GO14: the earlier steps whose files a step reads (`filesFrom`) — mounted read-only for
+ *  its Worker at `/upstream/<step>`. */
+export function filesFromSentence(keys: readonly string[], t: Translate): string {
+  return t(
+    `读取步骤 ${keys.join('、')} 留下的文件`,
+    `Reads the files step${keys.length > 1 ? 's' : ''} ${keys.join(', ')} left`,
+  );
+}
+
 const OUTPUT_TYPE: Readonly<Record<OutputSchemaType, readonly [string, string]>> = {
   string: ['文本', 'text'],
   integer: ['整数', 'integer'],

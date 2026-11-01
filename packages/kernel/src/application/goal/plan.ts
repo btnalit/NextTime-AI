@@ -112,7 +112,12 @@ import { type DraftViewer, classifySkillRefs, getWorkerDefinition } from '../wor
  *     `outputSchema`, `path` a JMESPath expression over that step's output ({@link
  *     bindingProblems}). The advancer puts the values in when an attempt starts
  *     (`bindings.ts`): a value that is not there, or that the credential review counts, pauses the
- *     run for a person rather than start the Worker without it.
+ *     run for a person rather than start the Worker without it;
+ *   - `filesFrom` (S11 GO14) — the steps this one reads the files of: steps it depends on
+ *     ({@link filesFromProblems}). Their Workers' handoff directories (`/workspace/out`) are
+ *     mounted read-only into this step's Worker at `/upstream/<step>` (`step-files.ts`); a
+ *     directory that is not there pauses the run for a person rather than start the Worker
+ *     without it.
  * Unknown fields are refused rather than ignored: a field this version does not act on must not
  * look like it is in force.
  *
@@ -245,6 +250,7 @@ export function parsePlan(plan: unknown): GoalPlan {
   const byStepKey = new Map(shaped.steps.map((step) => [step.key, step]));
   for (const step of shaped.steps) {
     problems.push(...bindingProblems(step, byStepKey));
+    problems.push(...filesFromProblems(step, byStepKey));
     problems.push(...reconcileShapeProblems(step, shaped.acceptance ?? [], lintBudget));
     problems.push(
       ...acceptanceShapeProblems(step.acceptance ?? [], lintBudget, `step "${step.key}": `),
@@ -429,6 +435,44 @@ function bindingProblems(step: PlanStep, steps: ReadonlyMap<string, PlanStep>): 
     if (written !== null) {
       problems.push(
         `${where}: the input already has a value at "${written}" — take it out of the input, or bind another field`,
+      );
+    }
+  });
+  return problems;
+}
+
+/**
+ * S11 GO14: the steps whose files a step reads (`filesFrom`). Each is another step of the plan
+ * (checked first, as a binding's `from`), one this step depends on — so it has ended before an
+ * attempt of this one starts — and named once. What a step may read is what its requester
+ * confirmed here: the advancer mounts only these steps' handoff directories, of this goal run
+ * (`step-files.ts`).
+ */
+function filesFromProblems(
+  step: PlanStep,
+  steps: ReadonlyMap<string, PlanStep>,
+): readonly string[] {
+  const filesFrom = step.filesFrom ?? [];
+  if (filesFrom.length === 0) return [];
+  const problems: string[] = [];
+  const dependsOn = new Set(step.dependsOn ?? []);
+  const seen = new Set<string>();
+  filesFrom.forEach((from, index) => {
+    const where = `step "${step.key}": filesFrom[${index}]`;
+    if (seen.has(from)) {
+      problems.push(`${where}: names step "${from}" again — name each step once`);
+      return;
+    }
+    seen.add(from);
+    if (from === step.key) {
+      problems.push(
+        `${where}: names this step itself — a step reads the files of a step it depends on`,
+      );
+    } else if (!steps.has(from)) {
+      problems.push(`${where}: names step "${from}", which is not in the plan`);
+    } else if (!dependsOn.has(from)) {
+      problems.push(
+        `${where}: names step "${from}", which this step does not depend on — add it to dependsOn`,
       );
     }
   });

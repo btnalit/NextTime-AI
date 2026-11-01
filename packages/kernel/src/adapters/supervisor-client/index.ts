@@ -36,8 +36,16 @@
  * A header, not a body field: `/task/spawn`'s body schema is strict and unchanged.
  */
 
-import { correlationHeaders } from '@nexttime/shared';
+import { STEP_FILES_STATE_VALUES, type StepFilesState, correlationHeaders } from '@nexttime/shared';
+import { z } from 'zod';
 import { currentCorrelationId } from '../../substrate/correlation/index.js';
+
+/** S11 GO14: `POST /task-dirs/keep`'s answer — one state per Task asked about. */
+const TaskDirsKeepResponseSchema = z.object({
+  tasks: z.array(
+    z.object({ taskId: z.string(), state: z.enum(STEP_FILES_STATE_VALUES) }).passthrough(),
+  ),
+});
 
 export const DEFAULT_SUPERVISOR_CLIENT_TIMEOUT_MS = 30_000;
 
@@ -65,23 +73,55 @@ export type TaskSupervisorErrorKind =
   /** 409 from worker-supervisor: the image was built before its mount layout (STATUS leftover 422,
    *  `runtime-contract.ts` there). Recorded as the `worker_run.spawn_failed` audit reason. */
   | 'runtime_image_incompatible'
+  /** S11 GO14: 409 from worker-supervisor — an earlier step's files this spawn mounts cannot be
+   *  mounted (`upstream-files.ts` there); `upstream` on the error says which and why. */
+  | 'upstream_unavailable'
   | 'http_error';
 
 export class TaskSupervisorError extends Error {
   readonly kind: TaskSupervisorErrorKind;
   readonly status?: number;
+  /** S11 GO14: for `upstream_unavailable`, the step whose files could not be mounted and why. */
+  readonly upstream?: { readonly stepKey: string; readonly state: StepFilesState };
 
   constructor(
     kind: TaskSupervisorErrorKind,
     message: string,
-    options: { status?: number; cause?: unknown } = {},
+    options: {
+      status?: number;
+      cause?: unknown;
+      upstream?: { readonly stepKey: string; readonly state: StepFilesState };
+    } = {},
   ) {
     super(message, options.cause !== undefined ? { cause: options.cause } : undefined);
     this.name = 'TaskSupervisorError';
     this.kind = kind;
     this.status = options.status;
+    if (options.upstream) this.upstream = options.upstream;
   }
 }
+
+/** S11 GO14: an earlier step of the same goal whose handoff directory a spawn mounts read-only at
+ *  `/upstream/<stepKey>` (worker-supervisor `upstream-files.ts`). */
+export interface TaskUpstreamFilesInput {
+  readonly stepKey: string;
+  readonly taskId: string;
+}
+
+/** S11 GO14: one goal step Task for `POST /task-dirs/keep`, and what its directory was found to be. */
+export interface TaskDirsKeepInput {
+  readonly taskId: string;
+  readonly workspaceId: string;
+  readonly goalRunId: string;
+}
+export interface TaskDirsKeepResult {
+  readonly taskId: string;
+  readonly state: StepFilesState;
+}
+
+/** S11 GO14: how many Tasks one `POST /task-dirs/keep` may name (worker-supervisor's
+ *  `MAX_TASK_DIRS_KEEP_BATCH`). */
+export const TASK_DIRS_KEEP_BATCH = 500;
 
 export interface TaskSkillMountInput {
   readonly name: string;
@@ -128,6 +168,13 @@ export interface TaskSpawnInput {
    *  platform directory outside its workspace (read-only `/opt/nexttime/platform/system-prompt.md`
    *  in the container) before start. Omitted = the runtime image's default prompt. */
   readonly systemPrompt?: string;
+  /** S11 GO14: the goal run a goal step's attempt Task works for — worker-supervisor makes its
+   *  handoff directory (`/workspace/out`) and owner marker. A supervisor that predates the field
+   *  refuses the spawn (strict schema → 400): the two are upgraded and rolled back together. */
+  readonly goalRunId?: string;
+  /** S11 GO14: earlier steps' handoff directories to mount (the step's `filesFrom`, each one's
+   *  accepted attempt) — chosen by the advancer, checked again by worker-supervisor. */
+  readonly upstream?: readonly TaskUpstreamFilesInput[];
 }
 
 /** S11 W1a: what worker-supervisor reported about the container it started for a WorkerRun —
@@ -377,6 +424,11 @@ export interface TaskSupervisorClientPort {
   /** S7-E: `GET /residents` — every resident entry container across every workspace. Same
    *  optionality reasoning as `listImages` above. */
   listResidents?(): Promise<ResidentInventoryEntry[]>;
+  /** S11 GO14: `POST /task-dirs/keep` — the state of each goal step Task's handoff directory for
+   *  a reader of that workspace and goal run, a `kept` one's directories renewed against the
+   *  retention sweep. At most {@link TASK_DIRS_KEEP_BATCH} per call. Optional on the port for the
+   *  same reason `stopResident` is; callers treat a missing method as "not known". */
+  keepTaskDirs?(tasks: readonly TaskDirsKeepInput[]): Promise<readonly TaskDirsKeepResult[]>;
 }
 
 export class TaskSupervisorClient implements TaskSupervisorClientPort {
@@ -439,6 +491,16 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
       // The supervisor's message names the image and the label it found.
       throw new TaskSupervisorError(code, errorMessageFromBody(body) ?? code, { status });
     }
+    if (status === 409 && code === 'upstream_unavailable') {
+      const error = (body as { error?: { stepKey?: unknown; state?: unknown } }).error;
+      const state = STEP_FILES_STATE_VALUES.find((value) => value === error?.state);
+      throw new TaskSupervisorError(code, errorMessageFromBody(body) ?? code, {
+        status,
+        ...(typeof error?.stepKey === 'string' && state
+          ? { upstream: { stepKey: error.stepKey, state } }
+          : {}),
+      });
+    }
     if (status !== 200) {
       throw new TaskSupervisorError(
         'http_error',
@@ -453,6 +515,35 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
       ip: outcome.ip,
       ...(runtime ? { runtime } : {}),
     };
+  }
+
+  async keepTaskDirs(tasks: readonly TaskDirsKeepInput[]): Promise<readonly TaskDirsKeepResult[]> {
+    if (tasks.length === 0) return [];
+    const { status, body } = await requestJson(
+      this.fetchImpl,
+      this.timeoutMs,
+      `${this.supervisorUrl}/task-dirs/keep`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...this.headers() },
+        body: JSON.stringify({ tasks }),
+      },
+    );
+    if (status !== 200) {
+      const code = errorCodeFromBody(body);
+      throw new TaskSupervisorError(
+        status === 400 ? 'invalid_request' : 'http_error',
+        `POST /task-dirs/keep returned ${status}${code ? ` ${code}` : ''}`,
+        { status },
+      );
+    }
+    const parsed = TaskDirsKeepResponseSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new TaskSupervisorError('invalid_response', 'POST /task-dirs/keep: unexpected body', {
+        status,
+      });
+    }
+    return parsed.data.tasks;
   }
 
   async stopResident(principalId: string): Promise<boolean> {

@@ -481,6 +481,32 @@ export function draftProblems(
         ),
       );
     }
+    // S11 GO14: a step reads files only of steps it depends on, and the editor keeps what it reads
+    // as it was (it cannot change it): the step it reads from stays, and stays ticked.
+    const filesFrom = step.original?.filesFrom ?? [];
+    const gone = filesFrom.filter(
+      (key) => !kept.some((other) => other.key === key && other.uid !== step.uid),
+    );
+    const unticked = filesFrom.filter(
+      (key) => !gone.includes(key) && !step.dependsOn.includes(key),
+    );
+    if (gone.length > 0) {
+      problems.set(
+        at('dependsOn'),
+        t(
+          `这一步读取步骤 ${gone.join('、')} 留下的文件，那一步不在计划里了：恢复那一步，或者去掉这一步。`,
+          `This step reads the files step${gone.length > 1 ? 's' : ''} ${gone.join(', ')} left, which ${gone.length > 1 ? 'are' : 'is'} no longer in the plan: restore ${gone.length > 1 ? 'them' : 'it'}, or remove this step.`,
+        ),
+      );
+    } else if (unticked.length > 0 && !problems.has(at('dependsOn'))) {
+      problems.set(
+        at('dependsOn'),
+        t(
+          `这一步读取步骤 ${unticked.join('、')} 留下的文件，必须排在它之后：把它勾回来。`,
+          `This step reads the files step${unticked.length > 1 ? 's' : ''} ${unticked.join(', ')} left, so it must come after ${unticked.length > 1 ? 'them' : 'it'}: tick ${unticked.length > 1 ? 'them' : 'it'} again.`,
+        ),
+      );
+    }
     if (step.inputText !== prettyInput(step.original?.input) && step.inputText.trim() !== '') {
       const parsed = parseJson(step.inputText);
       if (!parsed.ok) {

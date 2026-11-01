@@ -43,10 +43,12 @@ import {
   type AcceptanceCheckOptions,
   DEFAULT_ACCEPTANCE_CHECK_INTERVAL_MS,
   DEFAULT_GOAL_ADVANCER_INTERVAL_MS,
+  DEFAULT_GOAL_FILES_KEEP_INTERVAL_MS,
   DEFAULT_GOAL_RECONCILE_INTERVAL_MS,
   DEFAULT_RECONCILE_CHECK_INTERVAL_MS,
   type GoalAdvancerOptions,
   type GoalCleanupCursor,
+  type GoalFilesKeepTickResult,
   type ReconcileCheckOptions,
   markReconcileDue,
   maxProposedGoalsPerRequester,
@@ -54,6 +56,7 @@ import {
   runAbsenceBaselineTick,
   runAcceptanceCheckTick,
   runGoalAdvancerTick,
+  runGoalFilesKeepTick,
   runReconcileCheckTick,
   sweepGoalCancelCleanup,
 } from './application/goal/index.js';
@@ -535,6 +538,13 @@ export interface CreateBackgroundServicesOptions {
   /** Called with every failure of the evaluation trial tick — same shape as `onTaskReaperError`.
    *  Defaults to a no-op; `main()` passes `app.log.error`. */
   readonly onEvalTrialError?: (error: unknown) => void;
+  /** S11 GO14: how often the files of goals that have not ended are renewed against the
+   *  worker-supervisor's retention sweep (`application/goal/files-keep.ts`). Default
+   *  `DEFAULT_GOAL_FILES_KEEP_INTERVAL_MS` (an hour; the supervisor's retention is at least two).
+   *  Wired with the task reaper; its failures go to `onGoalAdvancerError`. */
+  readonly goalFilesKeepIntervalMs?: number;
+  /** Called with each renewal's result — `main()` logs it, the `not_owned` Tasks as errors. */
+  readonly onGoalFilesKeepComplete?: (result: GoalFilesKeepTickResult) => void;
   /**
    * `OutboxDispatcher.pruneDispatched`'s `olderThanDays` — deletes dispatched outbox rows older
    * than this many days on a periodic tick (fix/invoke-worker-wait-and-outbox-prune: `pruneDispatched`
@@ -899,6 +909,10 @@ export function createBackgroundServices(
   const onEvalTrialError = options.onEvalTrialError ?? (() => {});
   let evalTrialTimer: NodeJS.Timeout | undefined;
   let evalTrialRunning = false;
+  // S11 GO14: the retention lease on goals' files; ticks do not overlap.
+  const onGoalFilesKeepComplete = options.onGoalFilesKeepComplete ?? (() => {});
+  let goalFilesKeepTimer: NodeJS.Timeout | undefined;
+  let goalFilesKeepRunning = false;
   let unsubscribeGoalWake: (() => void) | undefined;
   let taskDeps:
     | {
@@ -1117,6 +1131,19 @@ export function createBackgroundServices(
             });
         }, options.evalTrialIntervalMs ?? DEFAULT_EVAL_TRIAL_INTERVAL_MS);
         evalTrialTimer.unref?.();
+
+        const filesKeepDeps = { pool: options.pool, supervisorClient: taskDeps.supervisorClient };
+        goalFilesKeepTimer = setInterval(() => {
+          if (goalFilesKeepRunning) return;
+          goalFilesKeepRunning = true;
+          runGoalFilesKeepTick(filesKeepDeps, { onError: (err) => onGoalAdvancerError(err) })
+            .then(onGoalFilesKeepComplete)
+            .catch(onGoalAdvancerError)
+            .finally(() => {
+              goalFilesKeepRunning = false;
+            });
+        }, options.goalFilesKeepIntervalMs ?? DEFAULT_GOAL_FILES_KEEP_INTERVAL_MS);
+        goalFilesKeepTimer.unref?.();
       }
 
       // S8 W3 K2 (leftover 82): the draft-expiry sweep — `draftExpiryDays === 0` is a deliberate
@@ -1237,6 +1264,10 @@ export function createBackgroundServices(
       if (goalAcceptanceCheckTimer) {
         clearInterval(goalAcceptanceCheckTimer);
         goalAcceptanceCheckTimer = undefined;
+      }
+      if (goalFilesKeepTimer) {
+        clearInterval(goalFilesKeepTimer);
+        goalFilesKeepTimer = undefined;
       }
       if (evalTrialTimer) {
         clearInterval(evalTrialTimer);
@@ -1630,6 +1661,20 @@ export function main(): void {
       onTaskReaperError: (err: unknown) => app.log.error(err),
       onGoalAdvancerError: (err: unknown) => app.log.error(err),
       onEvalTrialError: (err: unknown) => app.log.error(err),
+      onGoalFilesKeepComplete: (result: GoalFilesKeepTickResult) => {
+        if (result.notOwned.length > 0) {
+          app.log.error(
+            { taskIds: result.notOwned },
+            "goal files keep: Task directories not marked as their goal run's",
+          );
+        }
+        if (result.tasks > 0) {
+          app.log.info(
+            { tasks: result.tasks, byState: result.byState },
+            'goal files keep complete',
+          );
+        }
+      },
       kind,
       handleKeyPair,
       kernelLlmUrl: process.env.KERNEL_LLM_URL,

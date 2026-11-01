@@ -19,7 +19,9 @@
  * `PI_CODING_AGENT_DIR`: entrypoint.sh owns pi's config directory (rebuilt in `/tmp` at every
  * start, STATUS leftover 422). The mounts match resident mode's: the Task workspace read-write,
  * the Task's platform directory (published system prompt and Skills, written by
- * `task-service.ts`'s `spawn()`) and `models.json` read-only.
+ * `task-service.ts`'s `spawn()`) and `models.json` read-only — plus, for a goal step that reads
+ * earlier steps' files (S11 GO14, `upstream-files.ts`), each one's handoff directory read-only at
+ * `/upstream/<stepKey>`.
  *
  * Nothing from this process's own env is ever forwarded (`docker-client.ts` passes exactly the
  * array built here, never inherits `process.env`) — `task-spawn-spec.test.ts` asserts this
@@ -31,7 +33,7 @@ import {
   SOURCE_BOUND_CAPABILITY_HANDLE,
   isValidCorrelationId,
 } from '@nexttime/shared';
-import type { SupervisorConfig } from './config.js';
+import type { SupervisorConfig, TaskUpstreamFiles } from './config.js';
 import type { ContainerSpec } from './docker-client.js';
 import {
   MODELS_JSON_MOUNT_TARGET,
@@ -41,6 +43,7 @@ import {
   taskWorkspacePaths,
 } from './host-paths.js';
 import { EGRESS_DENY_LABEL, ENTRY_ROLE_LABEL as TASK_ROLE_LABEL } from './spawn-spec.js';
+import { taskHandoffPaths, upstreamMountTarget } from './upstream-files.js';
 
 /** Shares the `nexttime.role` label *key* with resident mode's `ENTRY_ROLE_LABEL`
  *  (`spawn-spec.ts`) — only the value differs (`worker` vs `entry`). Re-exported under this name
@@ -96,6 +99,9 @@ export interface BuildTaskSpawnSpecInput {
    *  `NEXTTIME_CORRELATION_ID` (the platform extension's worker mode sends it on every kernel
    *  call) and `TASK_CORRELATION_ID_LABEL`. Ignored unless valid (`@nexttime/shared`). */
   readonly correlationId?: string;
+  /** S11 GO14: earlier steps' handoff directories, each bound read-only at `/upstream/<stepKey>`
+   *  (`upstream-files.ts`) — already checked by `task-service.ts`'s `spawn()`. */
+  readonly upstream?: readonly TaskUpstreamFiles[];
 }
 
 export function buildTaskSpawnSpec(input: BuildTaskSpawnSpecInput): ContainerSpec {
@@ -127,6 +133,10 @@ export function buildTaskSpawnSpec(input: BuildTaskSpawnSpecInput): ContainerSpe
     `${paths.hostWorkspaceDir}:${WORKSPACE_MOUNT_TARGET}`,
     `${paths.hostPlatformDir}:${PLATFORM_MOUNT_TARGET}:ro`,
     `${hostModelsJsonPath(config)}:${MODELS_JSON_MOUNT_TARGET}:ro`,
+    ...(input.upstream ?? []).map(
+      (entry) =>
+        `${taskHandoffPaths(taskWorkspacePaths(config, entry.taskId)).host}:${upstreamMountTarget(entry.stepKey)}:ro`,
+    ),
   ];
 
   return {

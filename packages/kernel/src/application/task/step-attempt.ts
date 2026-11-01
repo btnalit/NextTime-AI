@@ -3,6 +3,7 @@ import { canonicalJson } from '@nexttime/gatekeeper-base';
 import type { CapabilityScope, OutputSchema, WorkerSpec } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { withWorkspace } from '../../adapters/db/pool.js';
+import type { TaskUpstreamFilesInput } from '../../adapters/supervisor-client/index.js';
 import {
   readAgentProfile,
   readEffectiveAgentProfile,
@@ -226,6 +227,11 @@ export interface CreateStepAttemptInput {
    *  and its WorkerSpec, newest first (`application/goal/trial-approvals.ts`); the first whose
    *  drafts match admits the attempt. Ignored for a later attempt (its snapshot says). */
   readonly trialApprovals?: readonly StepTrialApprovalCandidate[];
+  /** S11 GO14: the handoff directories of earlier steps of this goal run the attempt reads (its
+   *  plan entry's `filesFrom`, as `application/goal/step-files.ts` found them): mounted read-only
+   *  at `/upstream/<stepKey>`, named in the system prompt and on the `task.queue` audit row.
+   *  Absent or empty: it reads none. */
+  readonly upstreamFiles?: readonly TaskUpstreamFilesInput[];
 }
 
 /** Everything {@link startStepAttemptTask} needs after the creating transaction commits. */
@@ -833,9 +839,13 @@ export async function createStepAttemptTask(
   const image = input.previous
     ? (input.previous.image ?? undefined)
     : await resolveActiveRuntimeImage(client);
+  const upstreamFiles = input.upstreamFiles ?? [];
   const systemPrompt = composeSystemPrompt({
     base: content.systemPrompt,
     stepInstructions: input.spec?.instructions,
+    // GO14: every goal step is told where to leave files for later steps; one that reads files
+    // is told where they are.
+    stepFiles: { readsFrom: upstreamFiles.map((entry) => entry.stepKey) },
     instanceInstructions: await readInstanceInstructions(client),
   });
 
@@ -949,6 +959,17 @@ export async function createStepAttemptTask(
         : {}),
       // Legacy 543: the model the previous attempt ran on is no longer allowed, and this one's.
       ...(modelFallback !== null ? { modelFallback } : {}),
+      // GO14 (I11): which earlier steps' files the attempt reads — each step and its attempt's
+      // Task. Not in the run config snapshot: that is strict, and a kernel without this field would
+      // find every later attempt's snapshot unreadable.
+      ...(upstreamFiles.length > 0
+        ? {
+            upstreamFiles: upstreamFiles.map((entry) => ({
+              stepKey: entry.stepKey,
+              taskId: entry.taskId,
+            })),
+          }
+        : {}),
     },
   });
 
@@ -975,6 +996,17 @@ export async function createStepAttemptTask(
         loadedSkills: skills.loadedSkills,
         egressDeny: content.egressDeny,
         image,
+        // GO14: the supervisor marks the Task's directories as this goal run's and makes its
+        // handoff directory; it mounts the upstream ones only after checking them again.
+        goalRunId: input.goalRunId,
+        ...(upstreamFiles.length > 0
+          ? {
+              upstream: upstreamFiles.map((entry) => ({
+                stepKey: entry.stepKey,
+                taskId: entry.taskId,
+              })),
+            }
+          : {}),
       },
     },
   };

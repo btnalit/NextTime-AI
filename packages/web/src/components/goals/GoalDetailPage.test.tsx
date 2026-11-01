@@ -1355,4 +1355,106 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
       within(attempts[1] as HTMLElement).queryByTestId('goal-step-attempt-problems'),
     ).toBeNull();
   });
+
+  it('S11 GO14: a step that reads earlier steps’ files says which, and which attempt’s files its Worker gets', async () => {
+    const base = goalDetail();
+    const plan = base.planRevision.plan;
+    const detail = goalDetail({
+      planRevision: {
+        ...base.planRevision,
+        plan: {
+          ...plan,
+          steps: [
+            plan.steps[0] as (typeof plan.steps)[number],
+            { ...(plan.steps[1] as (typeof plan.steps)[number]), filesFrom: ['fetch'] },
+          ],
+        },
+      },
+      steps: [
+        stepRun({
+          status: 'succeeded',
+          attemptCount: 2,
+          attempts: [
+            {
+              attempt: 1,
+              taskId: 'task-fetch-1',
+              status: 'failed',
+              createdAt: '2026-10-20T00:01:00.000Z',
+              failureReason: 'no_result',
+              rework: false,
+              outputProblems: null,
+              outputProblemCount: 0,
+            },
+            {
+              attempt: 2,
+              taskId: 'task-fetch-2',
+              status: 'completed',
+              createdAt: '2026-10-20T00:03:00.000Z',
+              failureReason: null,
+              rework: false,
+              outputProblems: null,
+              outputProblemCount: 0,
+            },
+          ],
+        }),
+        stepRun({
+          id: 'sr-apply',
+          stepKey: 'apply',
+          status: 'pending',
+          attemptCount: 0,
+          attempts: [],
+        }),
+      ],
+    });
+    const http = scriptedHttp(baseHandlers(detail));
+    renderPage(http);
+
+    const steps = await screen.findAllByTestId('goal-step');
+    const fetch = steps[0] as HTMLElement;
+    const apply = steps[1] as HTMLElement;
+    expect(within(fetch).queryByTestId('goal-step-files-from')).toBeNull();
+    const files = within(apply).getByTestId('goal-step-files-from');
+    expect(files.textContent).toContain('读取步骤 fetch 留下的文件（只读）');
+    const source = within(files).getByTestId('goal-step-files-source');
+    expect(source.getAttribute('data-source-step')).toBe('fetch');
+    // The accepted attempt — the second, not the failed first — and its Task.
+    expect(source.textContent).toContain('第 2 次尝试');
+    expect(source.querySelector('[data-ref-kind="task"]')?.getAttribute('data-ref-id')).toBe(
+      'task-fetch-2',
+    );
+  });
+
+  it('S11 GO14: before the step it reads from has succeeded, says its files come then; a skipped one left none', async () => {
+    const base = goalDetail();
+    const plan = base.planRevision.plan;
+    const withFiles = (status: 'running' | 'skipped') =>
+      goalDetail({
+        planRevision: {
+          ...base.planRevision,
+          plan: {
+            ...plan,
+            steps: [
+              plan.steps[0] as (typeof plan.steps)[number],
+              { ...(plan.steps[1] as (typeof plan.steps)[number]), filesFrom: ['fetch'] },
+            ],
+          },
+        },
+        steps: [
+          stepRun({ status, attemptCount: status === 'running' ? 1 : 0, attempts: [] }),
+          stepRun({ id: 'sr-apply', stepKey: 'apply', status: 'pending', attemptCount: 0 }),
+        ],
+      });
+    for (const [status, says] of [
+      ['running', '这一步成功后才有文件'],
+      ['skipped', '这一步被跳过了，没有留下文件'],
+    ] as const) {
+      const http = scriptedHttp(baseHandlers(withFiles(status)));
+      const { unmount } = renderPage(http);
+      const steps = await screen.findAllByTestId('goal-step');
+      const source = within(steps[1] as HTMLElement).getByTestId('goal-step-files-source');
+      expect(source.textContent).toContain(says);
+      expect(source.querySelector('[data-ref-kind="task"]')).toBeNull();
+      unmount();
+    }
+  });
 });

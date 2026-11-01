@@ -24,14 +24,16 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
  * Worker container), and asserts from what pi actually sends to the model that it loads exactly
  * what the platform hands it — its system prompt, its Skills, its extension, the seven built-in
  * tools — and nothing planted in the workspace, in `$HOME`, in the old in-workspace agent
- * directory or in pi's own config directory, before start or mid-conversation. That catches the
+ * directory, in pi's own config directory or in an earlier goal step's files (`/upstream/<step>`,
+ * S11 GO14), before start or mid-conversation. That catches the
  * kinds of resource planted here: a flag renamed or dropped, a known kind switched back on.
  *
  * A new kind (a new file name, directory or variable) is not planted, so those tests would still
  * pass. The file-access test below covers that: it records every path pi asks the file system
  * about (`test-support/fs-trace.mjs`, preloaded through `NODE_OPTIONS`) in the two places the agent
  * can write — `/workspace` (cwd and `$HOME`) and `/tmp` (pi's config directory, `os.tmpdir()`) —
- * and fails on any path outside `KNOWN_PI_PATHS`. A pi that starts looking somewhere new fails it
+ * and fails on any path outside `KNOWN_PI_PATHS`, and on any path at all under `/upstream`, where
+ * an earlier goal step's Worker wrote. A pi that starts looking somewhere new fails it
  * even when nothing is there yet, and `pi-drift.yml` runs it against `@latest` every night.
  *
  * The extension is a stand-in (the real one needs a kernel and entry / Worker mode, which the
@@ -221,6 +223,33 @@ function plantBeforeStart(): void {
   write(
     join(staleAgentDir, 'settings.json'),
     JSON.stringify({ defaultTools: ['read'], defaultProjectTrust: 'always' }),
+  );
+  plantUpstreamFiles();
+}
+
+/** What an earlier step of the same goal left for this one (S11 GO14): its Worker's
+ *  `/workspace/out`, mounted read-only at `/upstream/<step>` — outside cwd, `$HOME`, every
+ *  directory above them and pi's config directory. That Worker could write anything there, so
+ *  everything pi would load from a directory it searched is planted, as it would be in a
+ *  workspace. */
+function plantUpstreamFiles(): void {
+  const upstream = join(root, 'upstream', 'a');
+  write(join(upstream, 'AGENTS.md'), 'PLANT_UPSTREAM_AGENTS\n');
+  write(join(upstream, 'CLAUDE.md'), 'PLANT_UPSTREAM_CLAUDE\n');
+  write(
+    join(upstream, '.pi', 'settings.json'),
+    JSON.stringify({
+      extensions: ['./x.ts'],
+      defaultTools: ['read'],
+      defaultProjectTrust: 'always',
+    }),
+  );
+  write(join(upstream, '.pi', 'x.ts'), extensionSource('planted_upstream_settings_tool'));
+  write(join(upstream, '.pi', 'extensions', 'x.ts'), extensionSource('planted_upstream_tool'));
+  write(join(upstream, 'skills', 'planted-upstream', 'SKILL.md'), skillSource('planted-upstream'));
+  write(
+    join(upstream, '.agents', 'skills', 'planted-upstream-agents', 'SKILL.md'),
+    skillSource('planted-upstream-agents'),
   );
 }
 
@@ -479,6 +508,8 @@ describe('worker-runtime whitelist start (entrypoint.sh + real pi)', () => {
     const touched = trace.touched().filter((path) => /^(workspace|tmp)(\/|$)/.test(path));
     expect(touched.length).toBeGreaterThan(0);
     expect(touched.filter((path) => !KNOWN_PI_PATHS.some((known) => known.test(path)))).toEqual([]);
+    // An earlier step's files (S11 GO14) are only ever read by the agent's own tools.
+    expect(trace.touched().filter((path) => /^upstream(\/|$)/.test(path))).toEqual([]);
   }, 90_000);
 
   it('falls back to the image’s default prompt when the platform wrote none, still loading nothing else', async () => {

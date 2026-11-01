@@ -810,6 +810,13 @@ function StepEditor({
       : null,
     // S11 GO13: a step's own output contract stays — the editor only adds one to a step without.
     step.original?.outputSchema ? t('这一步的输出约定', 'the step’s output contract') : null,
+    // S11 GO14: which earlier steps' files it reads stays too.
+    step.original?.filesFrom && step.original.filesFrom.length > 0
+      ? t(
+          `读取步骤 ${step.original.filesFrom.join('、')} 留下的文件`,
+          `reading the files step${step.original.filesFrom.length > 1 ? 's' : ''} ${step.original.filesFrom.join(', ')} left`,
+        )
+      : null,
   ].filter((part): part is string => part !== null);
   const inputError = errorOf(`step:${step.uid}:input`);
   return (

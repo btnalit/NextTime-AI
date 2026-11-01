@@ -125,7 +125,8 @@ if [ -z "${NEXTTIME_DATA:-}" ] || [ -z "${KERNEL_BIND_ADDR:-}" ]; then
 fi
 
 . "$(dirname "$0")/lib/accept-common.sh"
-# S11 GO7a: goal scenarios S1, S2, S4–S13 (S13: the goal planner of GO9a/GO9b;
+# S11 GO7a: goal scenarios S1, S2, S4–S14 (S13: the goal planner of GO9a/GO9b; S14: files
+# between a goal's steps, GO14;
 # goal_scenarios_step, after step 9; S12 and S2 only with ACCEPT_DISRUPTIVE=1), the cleanup of
 # every goal they start, of the grants S9 gives bob and of the row locks, held turns and killed
 # service S12, S8 and S2 may leave, and with --real keeping their test ledger out of the published

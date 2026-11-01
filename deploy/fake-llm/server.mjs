@@ -823,6 +823,55 @@ function goalThreeWritesScenario(messages) {
   ];
 }
 
+/** S11 GO14 (scripts/lib/accept-s2-goals.sh S14, `goal_s14_handoff`): files between a goal's steps.
+ *  `HANDOFF_ROLE=write HANDOFF_TOKEN=<t>` — the first step: pi's `write` puts `<t>` in
+ *  `/workspace/out/handoff.txt`, the one directory the platform hands on, then it reports.
+ *  `HANDOFF_ROLE=read` — the step after it, whose plan entry names it in `filesFrom` and whose input
+ *  carries no token: pi's `read` reads `/upstream/a/handoff.txt`, pi's `bash` tries to write next to
+ *  it (the mount is read-only, so that fails), and the report repeats both answers —
+ *  `HANDOFF_READ=[…]` and `HANDOFF_WRITE_EXIT=<code>` — for the script to compare with `<t>`. The
+ *  token reaches the second step only through the file: no binding takes the first step's output. */
+function goalHandoffStepScenario(messages) {
+  const blob = JSON.stringify(messages);
+  const role = extractMarker(blob, 'HANDOFF_ROLE') ?? 'none';
+  const report = (summary, findings) => ({
+    tool: {
+      name: 'report_result',
+      args: {
+        summary,
+        findings,
+        factsToAssert: [],
+        evidence: [{ kind: 'accept_s2_worker_note', content: { role } }],
+        artifacts: [],
+      },
+    },
+  });
+  if (role === 'write') {
+    const token = extractMarker(blob, 'HANDOFF_TOKEN') ?? 'none';
+    const wrote = findToolResultText(messages, 'write') ?? 'no answer';
+    return [
+      { tool: { name: 'write', args: { path: '/workspace/out/handoff.txt', content: `${token}\n` } } },
+      report(`accept_s2: left a file for the next step: ${wrote.slice(0, 200)}`, [
+        'wrote /workspace/out/handoff.txt',
+      ]),
+    ];
+  }
+  const read = (findToolResultText(messages, 'read') ?? 'no answer').trim();
+  const tamper = (findToolResultText(messages, 'bash') ?? 'no answer').trim();
+  return [
+    { tool: { name: 'read', args: { path: '/upstream/a/handoff.txt' } } },
+    {
+      tool: {
+        name: 'bash',
+        args: { command: 'touch /upstream/a/tamper 2>&1; echo HANDOFF_WRITE_EXIT=$?' },
+      },
+    },
+    report(`accept_s2: HANDOFF_READ=[${read.slice(0, 200)}] ${tamper.slice(-200)}`, [
+      'read /upstream/a/handoff.txt',
+    ]),
+  ];
+}
+
 /** The goal planner's Task input (`kind: goal_planning`, see `goalPlannerScenario`) as the Worker
  *  context shows it: under "### Task input", JSON pretty-printed with two-space indents
  *  (packages/platform-extension/src/modes/worker.ts `renderWorkerContext`), so it holds no blank
@@ -934,6 +983,7 @@ const SCENARIOS = [
   { marker: 'ACCEPT_S2_SCENARIO=goal_step', build: goalStepScenario, chat: false },
   { marker: 'ACCEPT_S2_SCENARIO=goal_ledger', build: goalLedgerStepScenario, chat: false },
   { marker: 'ACCEPT_S2_SCENARIO=goal_three_writes', build: goalThreeWritesScenario, chat: false },
+  { marker: 'ACCEPT_S2_SCENARIO=goal_handoff', build: goalHandoffStepScenario, chat: false },
 ];
 
 /**

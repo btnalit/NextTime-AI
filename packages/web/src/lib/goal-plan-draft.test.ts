@@ -457,4 +457,35 @@ describe('lib/goal-plan-draft', () => {
         .size,
     ).toBe(0);
   });
+
+  it('S11 GO14: keeps a step’s filesFrom as read, and says before sending when its step is unticked or removed', () => {
+    const base = paused();
+    const plan = base.planRevision.plan;
+    const detail = paused({
+      planRevision: {
+        ...base.planRevision,
+        plan: {
+          ...plan,
+          steps: [
+            plan.steps[0] as (typeof plan.steps)[number],
+            { ...(plan.steps[1] as (typeof plan.steps)[number]), filesFrom: ['fetch'] },
+          ],
+        },
+      },
+    });
+    const draft = draftFromDetail(detail);
+    expect(planOf(draft)?.steps[1]?.filesFrom).toEqual(['fetch']);
+    expect(draftProblems(draft, detail, zh).size).toBe(0);
+    const apply = draft.steps.find((step) => step.key === 'apply');
+    if (!apply) throw new Error('apply');
+
+    const unticked = withStep(draft, 'apply', { dependsOn: [] });
+    expect(draftProblems(unticked, detail, zh).get(`step:${apply.uid}:dependsOn`)).toBe(
+      '这一步读取步骤 fetch 留下的文件，必须排在它之后：把它勾回来。',
+    );
+    const removed = withStep(draft, 'fetch', { removed: true });
+    expect(draftProblems(removed, detail, zh).get(`step:${apply.uid}:dependsOn`)).toBe(
+      '这一步读取步骤 fetch 留下的文件，那一步不在计划里了：恢复那一步，或者去掉这一步。',
+    );
+  });
 });

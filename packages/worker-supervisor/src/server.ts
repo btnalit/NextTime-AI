@@ -76,6 +76,7 @@ import Fastify, { type FastifyInstance, type FastifyRequest, LogController } fro
 import {
   SpawnRequestSchema,
   StopRequestSchema,
+  TaskDirsKeepRequestSchema,
   TaskSpawnRequestSchema,
   isImageAllowed,
 } from './config.js';
@@ -94,6 +95,7 @@ import {
 import type { ResidentService } from './resident-service.js';
 import { RuntimeImageIncompatibleError } from './runtime-contract.js';
 import type { TaskService } from './task-service.js';
+import { UpstreamFilesUnavailableError } from './upstream-files.js';
 
 export interface CreateServerOptions {
   readonly residentService: ResidentService;
@@ -365,7 +367,57 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
         reply.code(409);
         return { error: { code: err.code, message: err.message } };
       }
+      // S11 GO14: an earlier step's files cannot be mounted (`upstream-files.ts`) — nothing of
+      // the spawn was written. `not_owned` is not a race: it means the kernel named a Task of
+      // another goal, or someone changed the host directory, so it is logged as an error.
+      if (err instanceof UpstreamFilesUnavailableError) {
+        const log = err.state === 'not_owned' ? request.log?.error : request.log?.warn;
+        log?.call(
+          request.log,
+          { stepKey: err.stepKey, taskId: err.taskId, state: err.state },
+          'task/spawn refused: upstream files unavailable',
+        );
+        reply.code(409);
+        return {
+          error: {
+            code: err.code,
+            message: err.message,
+            stepKey: err.stepKey,
+            state: err.state,
+          },
+        };
+      }
       request.log?.error?.(err, 'task/spawn failed');
+      reply.code(500);
+      return { error: { code: 'internal_error', message: String(err) } };
+    }
+  });
+
+  // S11 GO14: the kernel's lease on goal step Tasks' directories, and its check before a step that
+  // reads earlier steps' files starts (`upstream-files.ts`, `task-service.ts` `keepTaskDirs`).
+  app.post('/task-dirs/keep', requireInternal('kernel'), async (request, reply) => {
+    if (!taskService) {
+      reply.code(501);
+      return { error: { code: 'not_implemented', message: 'Task mode is not wired up' } };
+    }
+    const parsed = TaskDirsKeepRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      reply.code(400);
+      return { error: { code: 'invalid_body', message: parsed.error.message } };
+    }
+    try {
+      const tasks = await taskService.keepTaskDirs(parsed.data.tasks);
+      const notOwned = tasks.filter((task) => task.state === 'not_owned');
+      if (notOwned.length > 0) {
+        request.log?.error?.(
+          { taskIds: notOwned.map((task) => task.taskId) },
+          'task-dirs/keep: owner marker missing or not the goal named',
+        );
+      }
+      reply.code(200);
+      return { tasks };
+    } catch (err) {
+      request.log?.error?.(err, 'task-dirs/keep failed');
       reply.code(500);
       return { error: { code: 'internal_error', message: String(err) } };
     }
