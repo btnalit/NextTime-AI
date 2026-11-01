@@ -118,10 +118,8 @@ function RevisionItem({
             {/* S11 GO9b: the platform accepted it for the requester, under their apply_minor leave. */}
             {revision.acceptedBy === 'platform' ? (
               <span className="chip chip-s" data-testid="goal-revision-platform">
-                {t(
-                  '小修订，平台按请求人的授权采用',
-                  'Minor revision, adopted by the platform on the requester’s leave',
-                )}
+                {/* Short in English so the chip fits a 390px row (UX P3-5 on #866). */}
+                {t('小修订，平台按请求人的授权采用', 'Minor, adopted by the platform')}
               </span>
             ) : null}
             {revision.decidedAt ? (
