@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { goalRunIdsIn, latestGoalStatuses, systemStatusLineFromMessage } from './system-status.js';
+import { formatDateTime } from './format.js';
+import type { Translate } from './i18n.js';
+import { localTimeOfUtcMidnight } from './model-refused.js';
+import {
+  type ModelRefusedStatusLine,
+  goalRunIdsIn,
+  latestGoalStatuses,
+  modelRefusedText,
+  systemStatusLineFromMessage,
+} from './system-status.js';
 import type { ChatMessage } from './ws-client.js';
 
 function chatMessage(content: Record<string, unknown> | undefined, text = 'fallback'): ChatMessage {
@@ -166,6 +175,98 @@ describe('systemStatusLineFromMessage', () => {
         chatMessage({ kind: 'system.task_update', taskId: 't-2', status: 'completed' }),
       ),
     ).not.toHaveProperty('goalStep');
+  });
+});
+
+describe('system.model_refused (legacy 589)', () => {
+  const RESETS_AT = '2026-11-02T00:00:00.000Z';
+
+  it('parses the Turn, the budget and when it resets; a value it does not know reads as absent', () => {
+    expect(
+      systemStatusLineFromMessage(
+        chatMessage({
+          kind: 'system.model_refused',
+          text: 'The platform refused the model calls for this message',
+          turnId: 'turn-1',
+          scope: 'workspace_daily_cost',
+          resetsAt: RESETS_AT,
+        }),
+      ),
+    ).toEqual({
+      variant: 'model_refused',
+      text: 'The platform refused the model calls for this message',
+      turnId: 'turn-1',
+      scope: 'workspace_daily_cost',
+      resetsAt: RESETS_AT,
+    });
+    expect(
+      systemStatusLineFromMessage(
+        chatMessage({ kind: 'system.model_refused', turnId: 'turn-1', scope: 'monthly' }, 'kept'),
+      ),
+    ).toEqual({
+      variant: 'model_refused',
+      text: 'kept',
+      turnId: 'turn-1',
+      scope: null,
+      resetsAt: null,
+    });
+  });
+
+  it('returns undefined without the Turn it is about', () => {
+    expect(
+      systemStatusLineFromMessage(
+        chatMessage({ kind: 'system.model_refused', scope: 'workspace_daily_tokens' }),
+      ),
+    ).toBeUndefined();
+  });
+
+  const zh: Translate = (text) => text;
+  const en: Translate = (_zh, text) => text;
+  const line = (overrides: Partial<ModelRefusedStatusLine>): ModelRefusedStatusLine => ({
+    variant: 'model_refused',
+    text: 'kernel text',
+    turnId: 'turn-1',
+    scope: 'workspace_daily_tokens',
+    resetsAt: RESETS_AT,
+    ...overrides,
+  });
+
+  it('says which budget ran out, when it resets and who can raise it where, in the reader’s language', () => {
+    const resets = formatDateTime(RESETS_AT);
+    expect(modelRefusedText(line({}), zh)).toBe(
+      `工作区当天的模型 token 预算用完了，平台拒绝了这条消息的模型调用，所以没有回复。预算在 ${resets} 重置；平台管理员也可以调高它。`,
+    );
+    expect(modelRefusedText(line({ scope: 'workspace_daily_cost' }), zh)).toBe(
+      `工作区当天的模型费用预算用完了，平台拒绝了这条消息的模型调用，所以没有回复。预算在 ${resets} 重置；工作区所有者也可以在「模型与配额」里调高「每工作区日成本」。`,
+    );
+    expect(modelRefusedText(line({ scope: 'workspace_daily_cost' }), en)).toBe(
+      `The workspace’s daily model cost budget is spent, so the platform refused the model calls for this message and there is no reply. It resets at ${resets}. A workspace owner can also raise the daily cost budget under Models.`,
+    );
+    // Never the kernel's English text.
+    expect(modelRefusedText(line({}), zh)).not.toContain('kernel text');
+  });
+
+  it('without a reset time a daily budget names 00:00 UTC on the reader’s clock', () => {
+    const local = localTimeOfUtcMidnight();
+    expect(modelRefusedText(line({ resetsAt: null }), zh)).toBe(
+      `工作区当天的模型 token 预算用完了，平台拒绝了这条消息的模型调用，所以没有回复。预算每天 UTC 0 点（本地 ${local}）重置；平台管理员也可以调高它。`,
+    );
+    expect(modelRefusedText(line({ resetsAt: null }), en)).toContain(
+      `It resets every day at 00:00 UTC (${local} local). A platform administrator can also raise it.`,
+    );
+  });
+
+  it('a budget this console does not know names no period and no setting', () => {
+    expect(modelRefusedText(line({ scope: null, resetsAt: null }), zh)).toBe(
+      '工作区的模型预算用完了，平台拒绝了这条消息的模型调用，所以没有回复。等预算重置，或者管理员调高它之后再发。',
+    );
+    expect(modelRefusedText(line({ scope: null, resetsAt: null }), en)).toBe(
+      'The workspace’s model budget is spent, so the platform refused the model calls for this message and there is no reply. Send it again once the budget resets or an administrator raises it.',
+    );
+    const resets = formatDateTime(RESETS_AT);
+    expect(modelRefusedText(line({ scope: null }), zh)).toBe(
+      `工作区的模型预算用完了，平台拒绝了这条消息的模型调用，所以没有回复。预算在 ${resets} 重置；管理员也可以调高它。`,
+    );
   });
 });
 

@@ -272,8 +272,11 @@ export const WorkerRunStatusSchema = asEnum(WORKER_RUN_STATUS_VALUES);
  * failed and its retry is used up, or the retry could not start), `spawn_failed` (the first run
  * could not start), `spawn_lost` (stuck queued — the kernel died before the run started),
  * `run_lost` (running, but every run of it is gone), `budget_exhausted` (the token budget ran
- * out), `terminated` (the runtime ended its run). The column is free text, so a row an earlier
- * release wrote may carry something else; readers keep a fallback.
+ * out), `terminated` (the runtime ended its run), `model_refused` (legacy 589: llm-proxy refused
+ * every model call of its run — a workspace budget ran out — and none succeeded, so whatever the
+ * run handed back was not the Worker's work; decided from llm-proxy's own refusal records, never
+ * from what the Worker reports). The column is free text, so a row an earlier release wrote may
+ * carry something else; readers keep a fallback.
  */
 export const TASK_FAILURE_REASON_VALUES = [
   'timeout',
@@ -284,9 +287,20 @@ export const TASK_FAILURE_REASON_VALUES = [
   'run_lost',
   'budget_exhausted',
   'terminated',
+  'model_refused',
 ] as const;
 export type TaskFailureReason = (typeof TASK_FAILURE_REASON_VALUES)[number];
 export const TaskFailureReasonSchema = asEnum(TASK_FAILURE_REASON_VALUES);
+
+/**
+ * Legacy 589: which platform budget llm-proxy refused a model call for (`llm_usage.refusal_scope`
+ * on a `refused` usage record; the 402 `budget_exhausted` body's `scope`): the workspace's daily
+ * token sum (`LLM_DAILY_TOKEN_BUDGET`) or its daily cost quota (`task.daily_cost_budget_usd`), both
+ * reset at the next UTC midnight (the kernel's `/internal/llm-budget-exhausted`).
+ */
+export const LLM_REFUSAL_SCOPE_VALUES = ['workspace_daily_tokens', 'workspace_daily_cost'] as const;
+export type LlmRefusalScope = (typeof LLM_REFUSAL_SCOPE_VALUES)[number];
+export const LlmRefusalScopeSchema = asEnum(LLM_REFUSAL_SCOPE_VALUES);
 
 /**
  * S11 W1a E2 (S10 §5.4 "确定性失败分组"; victor 2026-10-23): the kind of failure a failed Task's
@@ -299,8 +313,9 @@ export const TaskFailureReasonSchema = asEnum(TASK_FAILURE_REASON_VALUES);
  *     (`worker_failed`);
  *   - `limit_reached`: the run outlived its duration limit or ran out of token budget (`timeout`,
  *     `budget_exhausted`);
- *   - `platform`: the run never started, was lost, or the runtime ended it (`spawn_failed`,
- *     `spawn_lost`, `run_lost`, `terminated`) — the platform's side, not what the Worker did;
+ *   - `platform`: the run never started, was lost, the runtime ended it, or the platform refused
+ *     every model call it made (`spawn_failed`, `spawn_lost`, `run_lost`, `terminated`,
+ *     `model_refused`) — the platform's side, not what the Worker did;
  *   - `other`.
  */
 export const TASK_FAILURE_CATEGORY_VALUES = [
@@ -438,8 +453,10 @@ export const GoalRunStatusSchema = asEnum(GOAL_RUN_STATUS_VALUES);
  * (`requested`), its budget ran out (`budget_exhausted`, I-G6 — a pause, never a failure), no step
  * made progress for K decision points (`no_progress`), the requester no longer holds the authority
  * a next step needs (`authority_lost`, I-G7), a person must choose (`needs_decision`: verification
- * failed, an action was rejected or expired, a reconcile saw no effect), or someone has to check a
- * target system by hand before anything else runs (`awaiting_reconcile`).
+ * failed, an action was rejected or expired, a reconcile saw no effect), someone has to check a
+ * target system by hand before anything else runs (`awaiting_reconcile`), or a step's Worker had
+ * every model call refused by the platform (`model_refused`, legacy 589: a workspace budget of the
+ * platform's, not the goal's own `budget_exhausted`; resumed by a person once it resets).
  */
 export const GOAL_RUN_PAUSE_REASON_VALUES = [
   'requested',
@@ -448,6 +465,7 @@ export const GOAL_RUN_PAUSE_REASON_VALUES = [
   'authority_lost',
   'needs_decision',
   'awaiting_reconcile',
+  'model_refused',
 ] as const;
 export type GoalRunPauseReason = (typeof GOAL_RUN_PAUSE_REASON_VALUES)[number];
 export const GoalRunPauseReasonSchema = asEnum(GOAL_RUN_PAUSE_REASON_VALUES);

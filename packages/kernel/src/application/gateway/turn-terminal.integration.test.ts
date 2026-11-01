@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { KernelToAgentHostFrame } from '@nexttime/shared';
+import type { KernelToAgentHostFrame, LlmRefusalScope } from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { type PoolLike, createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { entryScope, issueHandle } from '../../governance/capability/index.js';
 import { generateEphemeralHandleKeyPair } from '../../governance/capability/keys.js';
+import { nextUtcMidnight } from '../../governance/llm-usage/index.js';
 import { createBackgroundServices } from '../../index.js';
 import {
   type ChatPushEvent,
@@ -29,7 +31,8 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * outcome: after an agent-host link flap, the replayed terminal frames end the Turn and the chat
  * takes the next message. And the Turn-end ordering invariant: when a Turn reaches its terminal
  * status, every assistant message the kernel received for it is already committed, and a client is
- * told the Turn ended only after that commit.
+ * told the Turn ended only after that commit. And legacy 589: a Turn whose every model call llm-proxy
+ * refused for a spent workspace budget ends `failed` with a `system.model_refused` message.
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -46,6 +49,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     let sink: AgentRuntimeEventSink;
     /** `sink` on `refusingMessagePool()` — see `UNSTORABLE`. */
     let refusingSink: AgentRuntimeEventSink;
+    let privateKey: Awaited<ReturnType<typeof generateEphemeralHandleKeyPair>>['privateKey'];
 
     function admin<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
       return withWorkspace(pool, { workspaceId, principalId: randomUUID() }, fn, {
@@ -193,6 +197,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
       });
       sink = createChatEventSink({ pool });
+      privateKey = (await generateEphemeralHandleKeyPair()).privateKey;
       refusingSink = createChatEventSink({ pool: refusingMessagePool() });
       // `deliverTurnStarted` reaches its row through at most 50 polls of 20 rows, oldest first;
       // files that run earlier against the shared database leave their outbox rows undelivered
@@ -618,6 +623,250 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(row?.status).toBe('interrupted');
       expect(row?.metadata.messagePersistFailure).toMatchObject({ count: 2, errorCode: '22P05' });
       expect(await turnCompletedStatuses(turnId)).toEqual(['interrupted']);
+    });
+
+    // ---------------------------------------------------------------------------------------------
+    // Legacy 589: llm-proxy refused every model call of the Turn (a spent workspace budget).
+    // ---------------------------------------------------------------------------------------------
+
+    /** A session of `kind` acting for the owner, with a Handle: what llm-proxy meters a call under.
+     *  The entry agent's session is one per person, reused across Turns. */
+    async function meteredSession(
+      kind: 'entry' | 'worker_run',
+    ): Promise<{ sessionId: string; jti: string }> {
+      return admin(async (client) => {
+        const session = await client.query<{ id: string }>(
+          `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+           values ($1, $2, $3, $2, 'active') returning id`,
+          [workspaceId, ownerId, kind],
+        );
+        const sessionId = session.rows[0]?.id as string;
+        const issued = await issueHandle(client, {
+          sessionId,
+          scope: entryScope(),
+          ttlSeconds: 3600,
+          privateKey,
+        });
+        return { sessionId, jti: issued.jti };
+      });
+    }
+
+    let usageClock = Date.now();
+    /** One usage row attributed to `turnId`, as `/internal/llm-usage` stores it: a call the provider
+     *  answered, one it failed (`error`, no answer), or one llm-proxy refused for `scope`. Returns
+     *  its start (distinct per row: `(workspace_id, jti, started_at)` is unique). */
+    async function meter(
+      session: { sessionId: string; jti: string },
+      turnId: string,
+      outcome: 'completed' | 'error' | LlmRefusalScope,
+    ): Promise<Date> {
+      usageClock += 1000;
+      const startedAt = new Date(usageClock);
+      const answered = outcome === 'completed';
+      const refused = outcome !== 'completed' && outcome !== 'error';
+      await admin((client) =>
+        client.query(
+          `insert into llm_usage (
+             workspace_id, session_id, jti, turn_id, provider, model,
+             input_tokens, output_tokens, cost_usd, started_at, finished_at, status, request_id,
+             refusal_scope
+           ) values ($1, $2, $3, $4, 'example-provider', 'example-model', $5, $6, $7, $8, $8, $9,
+                     $10, $11)`,
+          [
+            workspaceId,
+            session.sessionId,
+            session.jti,
+            turnId,
+            answered ? 100 : 0,
+            answered ? 20 : 0,
+            answered ? 0.001 : 0,
+            startedAt.toISOString(),
+            refused ? 'refused' : outcome,
+            randomUUID(),
+            refused ? outcome : null,
+          ],
+        ),
+      );
+      return startedAt;
+    }
+
+    async function systemMessages(
+      chatId: string,
+    ): Promise<{ role: string; text: string; kind?: string; content: Record<string, unknown> }[]> {
+      const history = (await dispatchCapability({ pool }, human(), 'get_chat_history', {
+        chatId,
+      })) as {
+        items: { role: string; text: string; kind?: string; content: Record<string, unknown> }[];
+      };
+      return history.items.filter((item) => item.role === 'system');
+    }
+
+    it('legacy 589: every model call of the Turn refused — it ends failed with the refusal on it and a system.model_refused message, pushed before the end', async () => {
+      const { chatId, turnId } = await startTurn();
+      const entry = await meteredSession('entry');
+      await meter(entry, turnId, 'workspace_daily_tokens');
+      // An upstream error is no answer either: it neither makes nor breaks the verdict.
+      await meter(entry, turnId, 'error');
+      const lastRefusedAt = await meter(entry, turnId, 'workspace_daily_cost');
+      const pushes: ChatPushEvent[] = [];
+      const unsubscribe = subscribeToChatPushEvents(chatId, (event) => pushes.push(event));
+      try {
+        await sink.handle(turnEnded(chatId, turnId, 'completed'));
+        await vi.waitFor(() =>
+          expect(pushes.map((event) => event.type)).toContain('chat.metadata'),
+        );
+      } finally {
+        unsubscribe();
+      }
+
+      const row = await turnRow(turnId);
+      expect(row?.status).toBe('failed');
+      // The budget that refused the latest call, and how many were refused.
+      expect(row?.metadata.modelRefused).toEqual({
+        scope: 'workspace_daily_cost',
+        refusedCalls: 2,
+      });
+      expect(await turnCompletedStatuses(turnId)).toEqual(['failed']);
+      const resetsAt = nextUtcMidnight(lastRefusedAt).toISOString();
+      const content = {
+        kind: 'system.model_refused',
+        text: `The platform refused the model calls for this message: the workspace's daily model cost budget is spent. It resets at ${resetsAt}, or an administrator can raise it.`,
+        turnId,
+        scope: 'workspace_daily_cost',
+        resetsAt,
+      };
+      expect(await systemMessages(chatId)).toEqual([
+        expect.objectContaining({ kind: 'system.model_refused', text: content.text, content }),
+      ]);
+      // A client sees the message first, then that the Turn failed.
+      expect(pushes.filter((event) => event.type !== 'chat.stream')).toEqual([
+        {
+          type: 'chat.message',
+          chatId,
+          message: expect.objectContaining({
+            role: 'system',
+            kind: 'system.model_refused',
+            text: content.text,
+            content,
+          }),
+        },
+        { type: 'chat.metadata', chatId, metadata: { turnId, turnStatus: 'failed' } },
+      ]);
+      // The Turn is over: the chat takes the next message.
+      await expect(
+        dispatchCapability({ pool }, human(), 'send_chat_message', { chatId, text: 'next' }),
+      ).resolves.toMatchObject({ turnId: expect.any(String) });
+    });
+
+    it('legacy 589: report_turn on a refused Turn ends it failed too; agent-host’s own completed after it writes no second message', async () => {
+      setAgentRuntimeForHandlers({ startTurn: async () => {}, stopTurn: async () => true });
+      const { chatId, turnId } = await startTurn();
+      const entry = await meteredSession('entry');
+      await meter(entry, turnId, 'workspace_daily_tokens');
+
+      const reported = (await dispatchCapability({ pool }, entryHandle(), 'report_turn', {
+        turnId,
+        summary: '',
+      })) as { status: string };
+      await sink.handle(turnEnded(chatId, turnId, 'completed'));
+
+      expect(reported.status).toBe('failed');
+      expect((await turnRow(turnId))?.metadata.modelRefused).toEqual({
+        scope: 'workspace_daily_tokens',
+        refusedCalls: 1,
+      });
+      expect(await turnCompletedStatuses(turnId)).toEqual(['failed']);
+      const system = await systemMessages(chatId);
+      expect(system.map((message) => message.kind)).toEqual(['system.model_refused']);
+      expect(system[0]?.text).toContain("the workspace's daily model token budget is spent");
+    });
+
+    it('legacy 589: one answered call keeps the Turn completed, and a Turn is judged by its own calls only', async () => {
+      const { chatId, turnId } = await startTurn();
+      const entry = await meteredSession('entry');
+      await meter(entry, turnId, 'workspace_daily_tokens');
+      await meter(entry, turnId, 'completed');
+      await sink.handle(turnEnded(chatId, turnId, 'completed'));
+
+      const row = await turnRow(turnId);
+      expect(row?.status).toBe('completed');
+      expect(row?.metadata.modelRefused).toBeUndefined();
+      expect(await systemMessages(chatId)).toEqual([]);
+
+      // The same entry session's next Turn: only its own calls count, and they were all refused.
+      const { turnId: next } = (await dispatchCapability({ pool }, human(), 'send_chat_message', {
+        chatId,
+        text: 'again',
+      })) as { turnId: string };
+      await meter(entry, next, 'workspace_daily_tokens');
+      await sink.handle(turnEnded(chatId, next, 'completed'));
+      expect((await turnRow(next))?.status).toBe('failed');
+      expect((await turnRow(turnId))?.status).toBe('completed');
+      expect((await systemMessages(chatId)).map((message) => message.content.turnId)).toEqual([
+        next,
+      ]);
+    });
+
+    it('legacy 589: a Worker’s refused calls carrying the person’s Turn do not fail it — only the entry agent’s own calls count', async () => {
+      const { chatId, turnId } = await startTurn();
+      // A Worker acts for the same person, so its calls are attributed to the running Turn too.
+      const worker = await meteredSession('worker_run');
+      await meter(worker, turnId, 'workspace_daily_tokens');
+      await meter(worker, turnId, 'workspace_daily_tokens');
+      await sink.handle(turnEnded(chatId, turnId, 'completed'));
+
+      expect((await turnRow(turnId))?.status).toBe('completed');
+      expect(await systemMessages(chatId)).toEqual([]);
+    });
+
+    it('legacy 589: a Worker’s answered calls carrying the person’s Turn are no answer from the entry agent — its refused-only Turn still fails', async () => {
+      const { chatId, turnId } = await startTurn();
+      const entry = await meteredSession('entry');
+      await meter(entry, turnId, 'workspace_daily_tokens');
+      // A Worker from an earlier Turn, still running for the same person, was answered before the
+      // budget ran out: its rows carry this Turn too.
+      const worker = await meteredSession('worker_run');
+      await meter(worker, turnId, 'completed');
+      await sink.handle(turnEnded(chatId, turnId, 'completed'));
+
+      const row = await turnRow(turnId);
+      expect(row?.status).toBe('failed');
+      expect(row?.metadata.modelRefused).toEqual({
+        scope: 'workspace_daily_tokens',
+        refusedCalls: 1,
+      });
+      expect((await systemMessages(chatId)).map((message) => message.kind)).toEqual([
+        'system.model_refused',
+      ]);
+    });
+
+    it('legacy 589: Stop still comes first — a stopped Turn whose calls were refused ends interrupted, with no message', async () => {
+      setAgentRuntimeForHandlers({ startTurn: async () => {}, stopTurn: async () => true });
+      const { chatId, turnId } = await startTurn();
+      const entry = await meteredSession('entry');
+      await meter(entry, turnId, 'workspace_daily_cost');
+
+      await dispatchCapability({ pool }, human(), 'stop_agent', { chatId });
+      await sink.handle(turnEnded(chatId, turnId, 'completed'));
+
+      const row = await turnRow(turnId);
+      expect(row?.status).toBe('interrupted');
+      expect(row?.metadata.modelRefused).toBeUndefined();
+      expect(await turnCompletedStatuses(turnId)).toEqual(['interrupted']);
+      expect(await systemMessages(chatId)).toEqual([]);
+    });
+
+    it('legacy 589: a refused record that arrives after the Turn ended (llm-proxy’s delivery timeout) changes nothing — the old verdict stands', async () => {
+      const { chatId, turnId } = await startTurn();
+      const entry = await meteredSession('entry');
+      await sink.handle(turnEnded(chatId, turnId, 'completed'));
+      await meter(entry, turnId, 'workspace_daily_tokens');
+      // agent-host's own end replayed after the record: the Turn is already over.
+      await sink.handle(turnEnded(chatId, turnId, 'completed'));
+
+      expect((await turnRow(turnId))?.status).toBe('completed');
+      expect(await turnCompletedStatuses(turnId)).toEqual(['completed']);
+      expect(await systemMessages(chatId)).toEqual([]);
     });
   },
 );

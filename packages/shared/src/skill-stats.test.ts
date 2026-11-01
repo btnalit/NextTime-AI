@@ -15,6 +15,8 @@ describe('taskFailureCategory', () => {
       ['run_lost', 'platform'],
       ['budget_exhausted', 'limit_reached'],
       ['terminated', 'platform'],
+      // Legacy 589: llm-proxy refused every model call for a spent workspace budget.
+      ['model_refused', 'platform'],
     ]);
   });
 

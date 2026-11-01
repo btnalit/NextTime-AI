@@ -120,6 +120,8 @@ export {
   readTaskPlanningRound,
 } from './planning-task.js';
 
+export { failTaskForModelRefusal, workerModelRefusal } from './model-refusal.js';
+
 export {
   completeTaskWithResult,
   reactToSupervisorStatus,

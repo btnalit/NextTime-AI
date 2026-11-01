@@ -365,7 +365,16 @@ export function registerEntryMode(pi: ExtensionAPI, options: EntryModeOptions): 
   // Once per prompt, not per LLM call: a queued follow-up / steer joins the running loop without
   // a new `before_agent_start`, and so keeps the set this run started with. The same boundary is
   // where a changed live context is placed again after the new prompt.
+  // agent_end can fire more than once per platform Turn (auto-retry, auto-compaction retry, and
+  // queued follow-ups each start a new low-level run before the session settles — docs/rpc.md
+  // "agent_end"/"agent_settled"), so its handler below only *records* the latest summary;
+  // report_turn itself fires from agent_settled, exactly once per Turn (see PR body "假设": the
+  // task brief's "at agent end" is the concept — report once the run has actually finished, not on
+  // every retry). Reset once per prompt (legacy 589): a Turn whose model never answered — every
+  // call refused — has no summary of its own, and must not report the previous Turn's.
+  let latestTurnSummary = '';
   pi.on('before_agent_start', async () => {
+    latestTurnSummary = '';
     liveContext.startRun();
     await gateTools.refresh({ reason: 'turn', turnId: currentTurnId });
     return undefined;
@@ -378,13 +387,6 @@ export function registerEntryMode(pi: ExtensionAPI, options: EntryModeOptions): 
     pi.appendEntry('nexttime_turn', { turnId: currentTurnId, workspaceId: options.workspaceId });
   });
 
-  // agent_end can fire more than once per platform Turn (auto-retry, auto-compaction retry, and
-  // queued follow-ups each start a new low-level run before the session settles — docs/rpc.md
-  // "agent_end"/"agent_settled"), so this handler only *records* the latest summary; report_turn
-  // itself fires from agent_settled, exactly once per Turn (see PR body "假设": the task brief's
-  // "at agent end" is the concept — report once the run has actually finished, not on every
-  // retry).
-  let latestTurnSummary = '';
   pi.on('agent_end', (event) => {
     const summary = summarizeAgentEndMessages(event.messages);
     if (summary) latestTurnSummary = summary;

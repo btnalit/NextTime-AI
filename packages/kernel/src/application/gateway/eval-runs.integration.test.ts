@@ -1384,6 +1384,75 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     // Last: it removes this test's workspace. The cascade runs with triggers off and finds the run
     // tables by their `workspace_id` like any other — the evaluation Principal and its Tasks too.
+    // Legacy 589: llm-proxy refused every model call of the trial's Worker for a spent budget, so
+    // the report is worker mode's own, not an answer — the trial is not scored on it.
+    it('a trial whose every model call was refused is errored model_refused, not scored; one answered call keeps it scored', async () => {
+      const refused = await startTrial(devCaseId);
+      const answered = await startTrial(devCaseId);
+      const refusedRow = (claims: HandleClaims, offsetMs: number) =>
+        asOwnerRole((client) =>
+          client.query(
+            `insert into llm_usage (workspace_id, session_id, jti, provider, model, input_tokens,
+               output_tokens, cost_usd, started_at, status, refusal_scope)
+             values ($1, $2, $3, 'p', 'm', 0, 0, 0, now() + make_interval(secs => $4::float / 1000),
+               'refused', 'workspace_daily_tokens')`,
+            [workspaceId, claims.sid, claims.jti, offsetMs],
+          ),
+        );
+      await refusedRow(refused.claims, 1);
+      await refusedRow(refused.claims, 2);
+      await recordUsage(answered.claims, 0.01);
+      await refusedRow(answered.claims, 3);
+
+      const report = { summary: '' };
+      expect(await call(refused.worker, 'report_task_result', report)).toMatchObject({
+        id: refused.taskId,
+        status: 'failed',
+        factIds: [],
+      });
+      expect(await call(answered.worker, 'report_task_result', report)).toMatchObject({
+        status: 'completed',
+      });
+      const task = await asOwnerRole((client) =>
+        client.query<{ status: string; failure_reason: string; result: unknown }>(
+          'select status, failure_reason, result from tasks where workspace_id = $1 and id = $2',
+          [workspaceId, refused.taskId],
+        ),
+      );
+      expect(task.rows[0]).toEqual({
+        status: 'failed',
+        failure_reason: 'model_refused',
+        result: null,
+      });
+      const audit = await asOwnerRole((client) =>
+        client.query<{ payload: Record<string, unknown> }>(
+          `select payload from audit_records
+            where workspace_id = $1 and action = 'report_task_result' and resource_id = $2`,
+          [workspaceId, refused.taskId],
+        ),
+      );
+      expect(audit.rows[0]?.payload).toMatchObject({
+        modelRefused: { scope: 'workspace_daily_tokens', refusedCalls: 2 },
+      });
+
+      await runEvalTrialTick(pool);
+      const refusedRun = await readRun(refused.run.id);
+      expect(refusedRun.status).toBe('finished');
+      expect(refusedRun.trials[0]).toMatchObject({
+        status: 'errored',
+        verdict: null,
+        error: 'model_refused',
+        assertions: [],
+        // Refusals meter nothing: no tokens and no cost for the trial.
+        tokens: 0,
+        costUsd: 0,
+      });
+      expect((await readRun(answered.run.id)).trials[0]).toMatchObject({
+        status: 'scored',
+        verdict: 'failed',
+      });
+    });
+
     it('the workspace purge removes runs, trials and calls with the evaluation Tasks', async () => {
       const result = await purgeWorkspace(pool, { workspaceId, confirm: true, force: true });
       expect(result.executed).toBe(true);

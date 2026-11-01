@@ -54,7 +54,7 @@
 #                         Default output is plain `|`-separated rows, one per line, with a leading
 #                         `# `-commented header line.
 #   --summary              Short-circuits --by: prints exactly one aggregate line for the whole
-#                         workspace/window — calls, input tokens, output tokens, cost_usd, distinct
+#                         workspace/window — calls, refused, input tokens, output tokens, cost_usd, distinct
 #                         turns, avg tokens/turn, avg cost/turn — instead of a per-turn/handle/task
 #                         table. This is the shape docs/runbooks/host-accept-real-model.md's
 #                         post-release routine pastes into the private record.
@@ -66,6 +66,11 @@
 # red line says provider/model names, real cost figures, and per-call raw output belong — never
 # into a committed file, commit message, or PR body. This script's own comments use
 # `<provider/model>` only, per that same red line.
+#
+# `calls` counts the calls a provider was asked; `refused` (legacy 589, llm-usage/0003) the calls
+# llm-proxy refused because a workspace daily budget was spent — 402 before any provider, no
+# tokens and no cost. A real-model run with refused calls measured the budget, not the model
+# (docs/runbooks/host-accept-real-model.md §8).
 #
 # Validation: --workspace must match a uuid shape, --since/--until must match an ISO-8601 UTC
 # timestamp shape — checked with `grep -E` BEFORE either value is ever interpolated into a SQL
@@ -243,7 +248,7 @@ print_table() {
 # --------------------------------------------------------------------------------------------
 
 if [ "$SUMMARY" -eq 1 ]; then
-	sql="select count(*) as calls, coalesce(sum(l.input_tokens),0) as input_tokens, coalesce(sum(l.output_tokens),0) as output_tokens, coalesce(sum(coalesce(l.cache_read_tokens,0)),0) as cache_read_tokens, coalesce(sum(coalesce(l.cache_write_tokens,0)),0) as cache_write_tokens, coalesce(sum($TOTAL_TOKENS_EXPR),0) as total_tokens, coalesce(sum(coalesce(l.cost_usd,0)),0) as cost_usd, count(distinct l.turn_id) as distinct_turns, case when count(distinct l.turn_id) > 0 then round(sum($TOTAL_TOKENS_EXPR)::numeric / count(distinct l.turn_id), 2) else null end as avg_tokens_per_turn, case when count(distinct l.turn_id) > 0 then round(coalesce(sum(l.cost_usd),0)::numeric / count(distinct l.turn_id), 6) else null end as avg_cost_per_turn from llm_usage l where $WHERE_CLAUSE;"
+	sql="select count(*) filter (where l.status <> 'refused') as calls, count(*) filter (where l.status = 'refused') as refused, coalesce(sum(l.input_tokens),0) as input_tokens, coalesce(sum(l.output_tokens),0) as output_tokens, coalesce(sum(coalesce(l.cache_read_tokens,0)),0) as cache_read_tokens, coalesce(sum(coalesce(l.cache_write_tokens,0)),0) as cache_write_tokens, coalesce(sum($TOTAL_TOKENS_EXPR),0) as total_tokens, coalesce(sum(coalesce(l.cost_usd,0)),0) as cost_usd, count(distinct l.turn_id) as distinct_turns, case when count(distinct l.turn_id) > 0 then round(sum($TOTAL_TOKENS_EXPR)::numeric / count(distinct l.turn_id), 2) else null end as avg_tokens_per_turn, case when count(distinct l.turn_id) > 0 then round(coalesce(sum(l.cost_usd),0)::numeric / count(distinct l.turn_id), 6) else null end as avg_cost_per_turn from llm_usage l where $WHERE_CLAUSE;"
 
 	data=$(run_query "$sql")
 	rc=$?
@@ -252,7 +257,7 @@ if [ "$SUMMARY" -eq 1 ]; then
 		exit "$rc"
 	fi
 
-	header="calls|input_tokens|output_tokens|cache_read_tokens|cache_write_tokens|total_tokens|cost_usd|distinct_turns|avg_tokens_per_turn|avg_cost_per_turn"
+	header="calls|refused|input_tokens|output_tokens|cache_read_tokens|cache_write_tokens|total_tokens|cost_usd|distinct_turns|avg_tokens_per_turn|avg_cost_per_turn"
 	print_table "$header" "$data"
 	exit 0
 fi
@@ -263,20 +268,20 @@ fi
 
 case "$BY" in
 	turn)
-		header="turn_id|calls|input_tokens|output_tokens|cache_read_tokens|cache_write_tokens|total_tokens|cost_usd|first_started_at|last_started_at|providers_models"
-		sql="select coalesce(l.turn_id::text, '(none)') as turn_id, count(*) as calls, coalesce(sum(l.input_tokens),0) as input_tokens, coalesce(sum(l.output_tokens),0) as output_tokens, coalesce(sum(coalesce(l.cache_read_tokens,0)),0) as cache_read_tokens, coalesce(sum(coalesce(l.cache_write_tokens,0)),0) as cache_write_tokens, coalesce(sum($TOTAL_TOKENS_EXPR),0) as total_tokens, coalesce(sum(coalesce(l.cost_usd,0)),0) as cost_usd, min(l.started_at) as first_started_at, max(l.started_at) as last_started_at, string_agg(distinct l.provider || '/' || l.model, ',') as providers_models from llm_usage l where $WHERE_CLAUSE group by l.turn_id order by min(l.started_at);"
+		header="turn_id|calls|refused|input_tokens|output_tokens|cache_read_tokens|cache_write_tokens|total_tokens|cost_usd|first_started_at|last_started_at|providers_models"
+		sql="select coalesce(l.turn_id::text, '(none)') as turn_id, count(*) filter (where l.status <> 'refused') as calls, count(*) filter (where l.status = 'refused') as refused, coalesce(sum(l.input_tokens),0) as input_tokens, coalesce(sum(l.output_tokens),0) as output_tokens, coalesce(sum(coalesce(l.cache_read_tokens,0)),0) as cache_read_tokens, coalesce(sum(coalesce(l.cache_write_tokens,0)),0) as cache_write_tokens, coalesce(sum($TOTAL_TOKENS_EXPR),0) as total_tokens, coalesce(sum(coalesce(l.cost_usd,0)),0) as cost_usd, min(l.started_at) as first_started_at, max(l.started_at) as last_started_at, string_agg(distinct l.provider || '/' || l.model, ',') as providers_models from llm_usage l where $WHERE_CLAUSE group by l.turn_id order by min(l.started_at);"
 		;;
 	handle)
-		header="jti|parent_jti|on_behalf_of|session_id|provider|model|calls|input_tokens|output_tokens|cache_read_tokens|cache_write_tokens|total_tokens|cost_usd|first_started_at|last_started_at"
-		sql="select l.jti::text as jti, coalesce(ch.parent_jti::text, '(none)') as parent_jti, coalesce(ch.on_behalf_of::text, '(none)') as on_behalf_of, l.session_id::text as session_id, l.provider, l.model, count(*) as calls, coalesce(sum(l.input_tokens),0) as input_tokens, coalesce(sum(l.output_tokens),0) as output_tokens, coalesce(sum(coalesce(l.cache_read_tokens,0)),0) as cache_read_tokens, coalesce(sum(coalesce(l.cache_write_tokens,0)),0) as cache_write_tokens, coalesce(sum($TOTAL_TOKENS_EXPR),0) as total_tokens, coalesce(sum(coalesce(l.cost_usd,0)),0) as cost_usd, min(l.started_at) as first_started_at, max(l.started_at) as last_started_at from llm_usage l left join capability_handles ch on ch.workspace_id = l.workspace_id and ch.jti = l.jti where $WHERE_CLAUSE group by l.jti, ch.parent_jti, ch.on_behalf_of, l.session_id, l.provider, l.model order by min(l.started_at);"
+		header="jti|parent_jti|on_behalf_of|session_id|provider|model|calls|refused|input_tokens|output_tokens|cache_read_tokens|cache_write_tokens|total_tokens|cost_usd|first_started_at|last_started_at"
+		sql="select l.jti::text as jti, coalesce(ch.parent_jti::text, '(none)') as parent_jti, coalesce(ch.on_behalf_of::text, '(none)') as on_behalf_of, l.session_id::text as session_id, l.provider, l.model, count(*) filter (where l.status <> 'refused') as calls, count(*) filter (where l.status = 'refused') as refused, coalesce(sum(l.input_tokens),0) as input_tokens, coalesce(sum(l.output_tokens),0) as output_tokens, coalesce(sum(coalesce(l.cache_read_tokens,0)),0) as cache_read_tokens, coalesce(sum(coalesce(l.cache_write_tokens,0)),0) as cache_write_tokens, coalesce(sum($TOTAL_TOKENS_EXPR),0) as total_tokens, coalesce(sum(coalesce(l.cost_usd,0)),0) as cost_usd, min(l.started_at) as first_started_at, max(l.started_at) as last_started_at from llm_usage l left join capability_handles ch on ch.workspace_id = l.workspace_id and ch.jti = l.jti where $WHERE_CLAUSE group by l.jti, ch.parent_jti, ch.on_behalf_of, l.session_id, l.provider, l.model order by min(l.started_at);"
 		;;
 	task)
-		header="task_id|task_status|worker_definition_id|calls|input_tokens|output_tokens|cache_read_tokens|cache_write_tokens|total_tokens|cost_usd|first_started_at|last_started_at"
-		sql="select coalesce(t.id::text, '(none: no task, e.g. entry-agent session)') as task_id, coalesce(t.status, '(none)') as task_status, coalesce(t.worker_definition_id::text, '(none)') as worker_definition_id, count(*) as calls, coalesce(sum(l.input_tokens),0) as input_tokens, coalesce(sum(l.output_tokens),0) as output_tokens, coalesce(sum(coalesce(l.cache_read_tokens,0)),0) as cache_read_tokens, coalesce(sum(coalesce(l.cache_write_tokens,0)),0) as cache_write_tokens, coalesce(sum($TOTAL_TOKENS_EXPR),0) as total_tokens, coalesce(sum(coalesce(l.cost_usd,0)),0) as cost_usd, min(l.started_at) as first_started_at, max(l.started_at) as last_started_at from llm_usage l left join worker_runs wr on wr.workspace_id = l.workspace_id and wr.session_id = l.session_id left join tasks t on t.workspace_id = wr.workspace_id and t.id = wr.task_id where $WHERE_CLAUSE group by t.id, t.status, t.worker_definition_id order by min(l.started_at);"
+		header="task_id|task_status|worker_definition_id|calls|refused|input_tokens|output_tokens|cache_read_tokens|cache_write_tokens|total_tokens|cost_usd|first_started_at|last_started_at"
+		sql="select coalesce(t.id::text, '(none: no task, e.g. entry-agent session)') as task_id, coalesce(t.status, '(none)') as task_status, coalesce(t.worker_definition_id::text, '(none)') as worker_definition_id, count(*) filter (where l.status <> 'refused') as calls, count(*) filter (where l.status = 'refused') as refused, coalesce(sum(l.input_tokens),0) as input_tokens, coalesce(sum(l.output_tokens),0) as output_tokens, coalesce(sum(coalesce(l.cache_read_tokens,0)),0) as cache_read_tokens, coalesce(sum(coalesce(l.cache_write_tokens,0)),0) as cache_write_tokens, coalesce(sum($TOTAL_TOKENS_EXPR),0) as total_tokens, coalesce(sum(coalesce(l.cost_usd,0)),0) as cost_usd, min(l.started_at) as first_started_at, max(l.started_at) as last_started_at from llm_usage l left join worker_runs wr on wr.workspace_id = l.workspace_id and wr.session_id = l.session_id left join tasks t on t.workspace_id = wr.workspace_id and t.id = wr.task_id where $WHERE_CLAUSE group by t.id, t.status, t.worker_definition_id order by min(l.started_at);"
 		;;
 	provider)
-		header="provider|model|calls|input_tokens|output_tokens|cache_read_tokens|cache_write_tokens|total_tokens|cost_usd|first_started_at|last_started_at"
-		sql="select l.provider, l.model, count(*) as calls, coalesce(sum(l.input_tokens),0) as input_tokens, coalesce(sum(l.output_tokens),0) as output_tokens, coalesce(sum(coalesce(l.cache_read_tokens,0)),0) as cache_read_tokens, coalesce(sum(coalesce(l.cache_write_tokens,0)),0) as cache_write_tokens, coalesce(sum($TOTAL_TOKENS_EXPR),0) as total_tokens, coalesce(sum(coalesce(l.cost_usd,0)),0) as cost_usd, min(l.started_at) as first_started_at, max(l.started_at) as last_started_at from llm_usage l where $WHERE_CLAUSE group by l.provider, l.model order by l.provider, l.model;"
+		header="provider|model|calls|refused|input_tokens|output_tokens|cache_read_tokens|cache_write_tokens|total_tokens|cost_usd|first_started_at|last_started_at"
+		sql="select l.provider, l.model, count(*) filter (where l.status <> 'refused') as calls, count(*) filter (where l.status = 'refused') as refused, coalesce(sum(l.input_tokens),0) as input_tokens, coalesce(sum(l.output_tokens),0) as output_tokens, coalesce(sum(coalesce(l.cache_read_tokens,0)),0) as cache_read_tokens, coalesce(sum(coalesce(l.cache_write_tokens,0)),0) as cache_write_tokens, coalesce(sum($TOTAL_TOKENS_EXPR),0) as total_tokens, coalesce(sum(coalesce(l.cost_usd,0)),0) as cost_usd, min(l.started_at) as first_started_at, max(l.started_at) as last_started_at from llm_usage l where $WHERE_CLAUSE group by l.provider, l.model order by l.provider, l.model;"
 		;;
 esac
 
