@@ -24,14 +24,19 @@
 --
 -- Rolling back (docs/runbooks/release.md §6). The previous release's kernel never writes
 -- `refusal_scope` and never writes `status = 'refused'`, so it inserts under this schema
--- unchanged; its strict usage schema refuses a record that carries `refusalScope`, so the
--- previous llm-proxy must ship with it (the two always ship in one release). Refused rows already
--- stored stay: they carry no tokens and no cost, so the previous code's budget sums are
--- unchanged; its model-call counts (platform runtime `callCount`, scripts/report-usage.sh) count
--- them as calls. To drop the schema too, with the kernel stopped, in one transaction: drop the
--- index `llm_usage_refused_session_idx` and the constraint `llm_usage_refusal`, `delete from
--- llm_usage where status = 'refused'` (they meter nothing), `alter table llm_usage drop column
--- refusal_scope`, then `delete from schema_migrations where module = 'llm-usage' and version = 3`.
+-- unchanged. Never roll back the kernel alone: its strict usage schema refuses a whole batch that
+-- holds a record carrying `refusalScope`, so this llm-proxy's queue fills (1000 records) and then
+-- drops real usage with it, and the budgets undercount. The previous llm-proxy ships with it (the
+-- two always ship in one release). The default rollback keeps the schema and the refused rows
+-- already stored: they are the evidence of runs the platform refused, they carry no tokens and no
+-- cost, so the previous code's budget sums are unchanged; its model-call counts (platform runtime
+-- `callCount`, scripts/report-usage.sh) count them as calls. Dropping the schema too is optional
+-- and loses them: re-applying this migration validates `llm_usage_refusal`, which a refused row
+-- without a scope fails, so they go with it (export them first if they are still needed). With
+-- the kernel stopped, in one transaction: drop the index `llm_usage_refused_session_idx` and the
+-- constraint `llm_usage_refusal`, `delete from llm_usage where status = 'refused'`, `alter table
+-- llm_usage drop column refusal_scope`, then `delete from schema_migrations where module =
+-- 'llm-usage' and version = 3`.
 --
 -- Runner ordering / advisory lock: same module (`llm-usage`), same key as 0001–0002.
 select pg_advisory_xact_lock(7241000301);
