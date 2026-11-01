@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.55.0](https://github.com/btnalit/NextTime-AI/compare/v0.54.0...v0.55.0) (2026-11-01)
+
+
+### Features
+
+* **goal:** no-progress breaker, planning rounds against the revision budget, planner usage (S11 GO10) ([#870](https://github.com/btnalit/NextTime-AI/issues/870)) ([2cef7c6](https://github.com/btnalit/NextTime-AI/commit/2cef7c62d9fc367f9098ce5df71338cda102a93f))
+* **goal:** planner proposes a revision when the goal's acceptance did not pass (S11 GO10b) ([#872](https://github.com/btnalit/NextTime-AI/issues/872)) ([0f3eaf3](https://github.com/btnalit/NextTime-AI/commit/0f3eaf3c34be76f7d325d6a6a6eed3c742a5f34c))
+
 ## [0.54.0](https://github.com/btnalit/NextTime-AI/compare/v0.53.0...v0.54.0) (2026-11-01)
 
 
