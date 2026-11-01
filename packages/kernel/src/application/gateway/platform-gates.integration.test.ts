@@ -416,12 +416,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         await expect(
           callAsAdmin('get_gate_instance', { gateId: 'target-fixture-gate' }),
         ).rejects.toThrow();
-        // A valid one is taken.
-        const valid = await announce({
-          ...targetGate,
-          operations: [OBSERVE_OP, onThing('restart_thing', ['id'])],
-        });
-        expect(valid.statusCode).toBe(200);
+        // The valid declaration is taken in its own describe at the end of this file: an
+        // instance it creates would change the instance counts the tests below assert.
       });
 
       it('creates the packaged connector as platform_preset next to the four generic kinds', async () => {
@@ -3822,6 +3818,36 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(again.revisionDrafts).toEqual([]);
         expect(again.unchanged).toEqual([ADDED_OP.name]);
+      });
+    });
+
+    // Last in the file: the instance it creates is one more under the packaged connector.
+    describe('S11 GO12 (I-Q4) a valid target declaration', () => {
+      it('is announced; the instance lists the declaring Operation', async () => {
+        const restartThing: Operation = {
+          ...EXECUTE_OP,
+          name: 'restart_thing',
+          params_schema: {
+            type: 'object',
+            properties: { id: { type: 'string' } },
+            required: ['id'],
+          },
+          writes: ['Thing'],
+          target: { object_type: 'Thing', params: ['id'] },
+        };
+        const valid = await announce({
+          ...announceBody,
+          gateId: 'target-fixture-gate',
+          operations: [OBSERVE_OP, restartThing],
+        });
+        expect(valid.statusCode).toBe(200);
+        expect(valid.json().result).toMatchObject({ gateId: 'target-fixture-gate', created: true });
+        const instance = await callAsAdmin<GateInstanceWire>('get_gate_instance', {
+          gateId: 'target-fixture-gate',
+        });
+        expect(instance.operations.map((o) => o.name).sort()).toEqual(
+          [OBSERVE_OP.name, 'restart_thing'].sort(),
+        );
       });
     });
   },
