@@ -115,11 +115,30 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     }
 
+    function registerTestGatekeeper(name: string): Promise<string> {
+      return withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+        const activity = await startActivity(client, workspaceId, {
+          kind: 'test.register_gatekeeper',
+          principalId: ownerId,
+        });
+        const registered = await registerGatekeeper(client, workspaceId, {
+          name,
+          transportKind: 'http',
+          target: `${name}-system`,
+          endpoint: `https://${name}.approval-history-test.invalid/`,
+          activityId: activity.id,
+          registeredBy: { id: ownerId, kind: 'human' },
+        });
+        return registered.gatekeeperId;
+      });
+    }
+
     async function seedPendingActionRequest(input: {
       readonly blastRadius: 'low' | 'medium' | 'high';
       readonly parentWorkerRunId?: string;
       readonly actionKind?: string;
       readonly onBehalfOf?: string;
+      readonly gatekeeperId?: string;
     }): Promise<string> {
       const id = randomUUID();
       await admin((client) =>
@@ -133,7 +152,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           [
             workspaceId,
             id,
-            gatekeeperId,
+            input.gatekeeperId ?? gatekeeperId,
             input.actionKind ?? 'ah.test.action',
             input.blastRadius,
             input.onBehalfOf ?? memberId,
@@ -166,25 +185,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         },
         { skipRoleSwitch: true },
       );
-      gatekeeperId = await withWorkspace(
-        pool,
-        { workspaceId, principalId: ownerId },
-        async (client) => {
-          const activity = await startActivity(client, workspaceId, {
-            kind: 'test.register_gatekeeper',
-            principalId: ownerId,
-          });
-          const registered = await registerGatekeeper(client, workspaceId, {
-            name: 'approval-history-gate',
-            transportKind: 'http',
-            target: 'approval-history-system',
-            endpoint: 'https://gate.approval-history-test.invalid/',
-            activityId: activity.id,
-            registeredBy: { id: ownerId, kind: 'human' },
-          });
-          return registered.gatekeeperId;
-        },
-      );
+      gatekeeperId = await registerTestGatekeeper('approval-history-gate');
     });
 
     afterAll(async () => {
@@ -402,9 +403,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         actionKind: 'ah.in_doubt_reason',
       });
       await dispatchCapability({ pool }, owner, 'approve', { actionRequestId: id });
+      // Its own gate: two requests on one gate that act on the whole gate are never executing
+      // together (I-Q1, governance/0031).
       const longId = await seedPendingActionRequest({
         blastRadius: 'medium',
         actionKind: 'ah.in_doubt_reason.long',
+        gatekeeperId: await registerTestGatekeeper('approval-history-gate-2'),
       });
       await dispatchCapability({ pool }, owner, 'approve', { actionRequestId: longId });
 

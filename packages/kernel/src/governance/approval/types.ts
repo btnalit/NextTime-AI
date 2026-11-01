@@ -275,6 +275,30 @@ export class ActionRequestConcurrentTransitionError extends IllegalTransition {
   }
 }
 
+/** SQLSTATE `governance/0031`'s `action_requests_execution_guard` raises when a row would enter
+ *  `executing` beside a conflicting `executing` row of its Gatekeeper (STATUS legacy 565). */
+export const EXECUTION_CONFLICT_SQLSTATE = 'NTQ01';
+
+/**
+ * STATUS legacy 565: the row may not start now — another request of its Gatekeeper that conflicts
+ * with it (I-Q1) is `executing`, a fact only the database sees in time (`governance/0031`'s
+ * header: a row that commits after a conflicting later-stamped one has started, or two drains
+ * reading at different moments). Nothing was written; the row keeps its status. An
+ * `IllegalTransition` like {@link ActionRequestConcurrentTransitionError}, so every drain trigger
+ * treats it as "someone else is working this queue" and reads the queue again, where
+ * `planGatekeeperQueue` holds the row back by that `executing` row.
+ */
+export class ActionRequestExecutionConflictError extends IllegalTransition {
+  readonly actionRequestId: string;
+
+  constructor(actionRequestId: string, fromStatus: string) {
+    super('ActionRequest', fromStatus, 'start_execution');
+    this.name = 'ActionRequestExecutionConflictError';
+    this.actionRequestId = actionRequestId;
+    this.message = `ActionRequest ${actionRequestId}: may not start — a conflicting request of its gatekeeper is executing`;
+  }
+}
+
 /**
  * S11 GO3c (plan §3.3 I-G4: "同一 Operation 在本步骤有结果不明的动作时，先核对完再放行同类请求"): a
  * Worker acting for a goal step asked for an Operation while an earlier request of the same

@@ -3,6 +3,7 @@ import type { Dirent } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import type { Pool, PoolClient } from 'pg';
+import { ADVISORY_LOCK_KEYS } from './advisory-lock-namespaces.js';
 
 /**
  * adapters/db/migrate: idempotent migration runner over `packages/kernel/migrations/<module>/
@@ -35,7 +36,7 @@ const MIGRATIONS_TABLE = 'schema_migrations';
  * use (core: 7241000101, governance: 7241000201) — see the header comment of
  * packages/kernel/migrations/core/0001_identity.sql for that convention.
  */
-const MIGRATION_RUN_LOCK_KEY = 7241000001;
+const MIGRATION_RUN_LOCK_KEY = ADVISORY_LOCK_KEYS.migrationRun;
 
 /** `NNNN_name.sql` — version is one or more digits, name is lowercase snake_case. */
 const FILENAME_PATTERN = /^(\d+)_([a-z0-9]+(?:_[a-z0-9]+)*)\.sql$/;

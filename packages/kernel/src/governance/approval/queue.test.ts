@@ -138,6 +138,33 @@ describe('planGatekeeperQueue (S11 GO12, I-Q1)', () => {
     expect(plan(rows)).toEqual({ next: 'v', holds: { n: 'p/pending_approval/target' } });
   });
 
+  it('legacy 565: a conflicting row that started first holds back an approved row ordered before it', () => {
+    // a committed after x (stamped later) had started: a waits for x, though x is behind it.
+    expect(plan(queue(['a', 'ok', 'web'], ['x', 'executing', 'web']))).toEqual({
+      next: null,
+      holds: { a: 'x/executing/target' },
+    });
+    // And so does every row behind a that conflicts with it.
+    expect(plan(queue(['a', 'ok', 'web'], ['x', 'executing', 'web'], ['b', 'ok', 'web']))).toEqual({
+      next: null,
+      holds: { a: 'x/executing/target', b: 'x/executing/target' },
+    });
+    // A whole-gate row started behind holds every target; one on another target holds nothing.
+    expect(plan(queue(['a', 'ok', 'web'], ['x', 'executing', null]))).toEqual({
+      next: null,
+      holds: { a: 'x/executing/gate' },
+    });
+    expect(plan(queue(['a', 'ok', 'web'], ['x', 'executing', 'db']))).toEqual({
+      next: 'a',
+      holds: {},
+    });
+    // A pending row behind holds nothing back: it cannot start before a.
+    expect(plan(queue(['a', 'ok', 'web'], ['p', 'pending', 'web']))).toEqual({
+      next: 'a',
+      holds: {},
+    });
+  });
+
   it('rows in other statuses are not in the queue and hold nothing back', () => {
     const rows: QueueEntry[] = [
       { id: 'w', status: 'withdrawn', target: null },

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
+import { ADVISORY_LOCK_KEYS } from '../../adapters/db/advisory-lock-namespaces.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { writeAudit } from '../../substrate/audit/index.js';
@@ -74,9 +75,8 @@ export const OBSERVATION_COMPACTION_BATCH_SIZE = 10_000;
 export const OBSERVATION_COMPACTION_AUDIT_ACTION = 'cli.observations_compacted';
 
 /** Serializes the windows of concurrent runs (transaction-level, one window at a time). A fixed
- *  bigint distinct from the migration keys (runner 7241000001, core 7241000101, governance
- *  7241000201 — see migrations/core/0001_identity.sql). */
-const COMPACTION_LOCK_KEY = 7241010301;
+ *  bigint from the kernel's advisory-lock registry (`adapters/db/advisory-lock-namespaces.ts`). */
+const COMPACTION_LOCK_KEY = ADVISORY_LOCK_KEYS.observationCompaction;
 
 const NIL_UUID = '00000000-0000-0000-0000-000000000000';
 

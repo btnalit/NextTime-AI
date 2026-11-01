@@ -21,11 +21,17 @@ import {
  * The order is read from the database, not kept by this function: an `executing` row stays in
  * the queue until it is terminal, and `startActionRequestExecution`'s conditional update lets one
  * trigger start a given row. A drain that read the queue before another trigger started an
- * earlier conflicting row picks that earlier row, never one behind it. One gap is older than GO12
- * and still open (review #493 on #876, in the STATUS legacy list): `requested_at` is the inserting
- * transaction's start time, so a row can commit after a later-stamped conflicting row has already
- * started; the next read plans it *ahead* of that `executing` row, and a second trigger can run
- * the two together. Closing it takes a check where a row enters `executing`, not this function.
+ * earlier conflicting row picks that earlier row, never one behind it.
+ *
+ * **Mutual exclusion, not strict order** (STATUS legacy 565). A read alone cannot keep I-Q1:
+ * `requested_at` is the inserting transaction's start time, so a row can commit after a
+ * later-stamped conflicting row has already started, and two drains can read at different
+ * moments. The database keeps it where a row enters `executing` (`governance/0031`): starts on
+ * one Gatekeeper go one at a time, and one beside a conflicting `executing` row is refused. So this
+ * function holds an approved row back by *every* conflicting `executing` row — ahead of it or,
+ * after such a late commit, behind it — and what I-Q1 promises is that two conflicting requests of
+ * one Gatekeeper are never `executing` together. It does not promise they run in `requested_at`
+ * order: the late-committed row runs after the one that started first.
  */
 
 /** A row of one Gatekeeper's queue, in `listExecutableQueue`'s order — `auto_approved`,
@@ -61,6 +67,7 @@ export function planGatekeeperQueue<T extends QueueEntry>(rows: readonly T[]): Q
   let next: T | null = null;
   const holds = new Map<string, QueueHold>();
   const queued = rows.filter((row) => QUEUED.has(row.status));
+  const executing = queued.filter((row) => row.status === 'executing');
   queued.forEach((row, index) => {
     if (row.status === 'pending_approval' || row.status === 'executing') {
       holds.set(row.id, {
@@ -81,6 +88,21 @@ export function planGatekeeperQueue<T extends QueueEntry>(rows: readonly T[]): Q
         scope: row.target === null || held.scope === 'gate' ? 'gate' : 'target',
       };
       break;
+    }
+    if (hold === undefined) {
+      // Legacy 565: a conflicting row that started first though ordered after this one (this
+      // one committed late) holds it back as one ahead would — the database would refuse the
+      // start anyway (`governance/0031`).
+      const started = executing.find(
+        (other) => queued.indexOf(other) > index && actionTargetsConflict(other.target, row.target),
+      );
+      if (started !== undefined) {
+        conflicts = true;
+        hold = {
+          root: { id: started.id, status: 'executing' },
+          scope: row.target === null || started.target === null ? 'gate' : 'target',
+        };
+      }
     }
     if (hold !== undefined) holds.set(row.id, hold);
     else if (!conflicts && next === null) next = row;
