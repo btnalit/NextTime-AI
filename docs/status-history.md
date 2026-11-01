@@ -164,6 +164,8 @@
 
 ### 页首更新记录（2026-10-04 精简时移出，原文照搬）
 
+上一版 2026-10-31（**遗留 543、544 合入（#857，0dcc347，无迁移，未发版）**：重试时取自 AgentProfile 的模型按现在的 `allowedModels` 判断，被收窄就按 P-A2 回落并审计；钉住的 Worker 或 Skill 版本不再发布时，提示点名这一步（新提示码 `step_worker_unavailable`、`step_skill_version_unavailable`））。
+
 上一版 2026-10-31（**v0.53.0 发布（#850，tag 在 c8a9c16；主机未应用，停在 v0.50.0）**：遗留 302 发布引用校验（#848）、S11 GO8a WorkerSpec 组建与准入（#853）、GO8b 草稿 Skill 试用批准（#855，含验收修复），迁移 goal/0013，升级按 `release.md` §3.81–§3.84。发布流水线 11 个镜像构建签名与扫描全部成功，release channel 已发）。
 
 上一版 2026-10-31（**S11 GO8b「草稿 Skill 试用批准」合入（#855，fae85cb，迁移 goal/0013 可逆，未发版）**：步骤用到草稿 Skill 时，能发布这些草稿的人可在目标页「批准试用」这一步一次，批准绑定 StepRun、spec 摘要与草稿摘要，草稿一改或修订替换即失效，批准不让目标自己继续。同 PR 带入验收修复（#856 的提交，#848 让 kernel 按生产模型目录校验，验收 fake 覆盖没覆盖 kernel，rehearsal 的 S2 在 `ops-runner-publish` 失败）。GO8 完成；新登遗留 545–548；接着切 v0.53.0）。

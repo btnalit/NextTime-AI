@@ -4404,7 +4404,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **GO9 — 规划 Worker 与自主修订**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（GO9a，#864，2026-11-01 合入，3ef3ae5；迁移 goal/0014、task/0012）：默认值见项目共享计划 `s11-w2/go9-default-plan.md` §6（项目文件，不入库）。`goal/planner.ts`（推进器的规划阶段：开轮、拒绝原因、作废、报告复查）、`goal/planning-rounds.ts`（读写与 `closePlanning`）、`task/planning-task.ts`（规划任务：`observe_scope '{}'`、`egressDenyAll`、必须带输出契约、不做崩溃重试，Handle 只有 `get_task` / `list_allowed_operations` / `report_task_result`，token 上限取规划器默认值、目标余量、工作区默认值的最小者，`find_workers` 按族排除规划器）、`goal/decide.ts`（`decide_plan_revision`，只有请求人）、`revise.ts` 抽出 `checkRevisionCandidate` / `adoptRevision`（人与规划器同一套检查与采用；人自己修订时未决定的规划器修订被拒）。规划器报告在 `report_task_result` 当场复查（`TaskOutputRejectedError`）；接受时不再重新复查（报告时已在同一基准复查，二次复查对脱敏值不幂等，#493 P2-1）。规划器这一族不能当步骤的 Worker（计划校验点名哪一步，规划任务的 `input.workers` 也不列它）。契约：`confirm_goal.planner`（模式枚举，GO9a 只有 `'propose'`）、`GoalDetailWire.planner` / `planningRounds`、`PlanRevisionSummaryWire.proposer`、`WorkerDefinitionWire.goalPlanner`，审计 `goal_run.planner_granted`、`goal_planning_round.open` / `settle`、`plan_revision.propose`。控制台 `GoalPlannerSection`、确认卡 `goal-op-confirm-planner`。下一步 GO9b：`apply_minor` 模式（平台替请求人采用小修订）。
 
 **GO10 — 目标预算全量**（见 `global-roadmap-2026-10-16.md` §4）
 
