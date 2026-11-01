@@ -26,9 +26,11 @@
 #                 script (real-eval-trial). One still running when the script stops waiting (10
 #                 minutes) only fails its try, and the script cancels its evaluation Task (the
 #                 owner's cancel_task) and waits up to 2 minutes for it to end, so a slow try does
-#                 not keep a Worker run for the tries after it (legacy 588). A start refused with
-#                 429 while this workspace still has an evaluation Task running is that Worker-run
-#                 cap, not a defect: it only fails its try too.
+#                 not keep a Worker run for the tries after it (legacy 588); a trial that ends
+#                 just as it is cancelled still fails its try (cancelled=…/finished on the line).
+#                 A start refused with 429 concurrency_exceeded while this workspace still has an
+#                 evaluation Task running is that Worker-run cap, not a defect: it only fails its
+#                 try too.
 #   eval_draft  — a Skill whose published v1 tells the Worker to end its summary with one style
 #                 marker and whose draft v2 with another, evaluated once against the suite (one
 #                 regression case, one full dev case, one full holdout case: regression 2 tries ×
@@ -171,14 +173,20 @@ real_eval_trial_run() {
   out=$(cap "$ALICE_KEY" start_eval_case_trial "{\"suiteId\":\"$REAL_EVAL_SUITE_ID\",\"suiteVersion\":$REAL_EVAL_SUITE_VERSION,\"caseId\":\"$REAL_EVAL_REGRESSION_CASE_ID\"}" "d.result.id")
   status=$(parse_kv "$out" HTTP_STATUS)
   if [ "$status" != "200" ]; then
+    start_body=$(parse_kv "$out" BODY)
+    start_code=$(printf '%s' "$start_body" | sed -n 's/.*"code":"\([^"]*\)".*/\1/p')
     running=$(real_eval_running_tasks)
-    real_run_line eval_trial "$i" fail "start_eval_case_trial=HTTP$status evaluation_tasks_running=${running:-unknown}"
+    real_run_line eval_trial "$i" fail "start_eval_case_trial=HTTP$status/${start_code:-none} evaluation_tasks_running=${running:-unknown}"
     real_stat_add eval_trial 0 0 0 0 0
-    # Legacy 588: a 429 while an earlier try's evaluation Task is still running is the Worker-run
-    # cap this script ran into, not the platform refusing a trial it should have started.
-    # Only a count read back (1-99) excuses it; an unreadable count leaves it a defect.
-    case "$status:$running" in 429:[1-9] | 429:[1-9][0-9]) : ;; *) REAL_EVAL_PLATFORM_DEFECT=1 ;; esac
-    echo "NOTE real-eval-trial start refused: $(parse_kv "$out" BODY | cut -c1-400)"
+    # Legacy 588: a 429 concurrency_exceeded while an earlier try's evaluation Task is still
+    # running is the Worker-run cap this script ran into, not the platform refusing a trial it
+    # should have started. Only that code with a count read back (1-99) excuses it; another 429
+    # (evaluation_budget_exhausted, daily_cost_exceeded) or an unreadable count stays a defect.
+    case "$status:$start_code:$running" in
+      429:concurrency_exceeded:[1-9] | 429:concurrency_exceeded:[1-9][0-9]) : ;;
+      *) REAL_EVAL_PLATFORM_DEFECT=1 ;;
+    esac
+    echo "NOTE real-eval-trial start refused: $(printf '%s' "$start_body" | cut -c1-400)"
     return 0
   fi
   run_id=$(parse_kv "$out" EXTRACTED)
@@ -200,6 +208,8 @@ real_eval_trial_run() {
   # Legacy 588: cancel the still-running try's evaluation Task and wait for its trial to end
   # (`errored`/`cancelled`, the script's own doing, never judged), so it does not hold a Worker run
   # for the tries after it. `cancelled=<HTTP status of cancel_task>/<run status after>` on the line.
+  # A trial that ends between the wait and the cancel stays this try's fail (`ok` is decided above):
+  # one success undercounted, never a defect.
   cancelled=
   if [ "$run_status" != "finished" ]; then
     task_id=$(psql_ws "select task_id from eval_trials where workspace_id='$WORKSPACE_ID' and run_id='$run_id' and task_id is not null limit 1")
