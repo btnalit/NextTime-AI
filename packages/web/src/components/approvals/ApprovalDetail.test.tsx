@@ -227,14 +227,21 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     expect(screen.getByTestId('approval-detail').textContent).not.toContain(gatekeeperId);
   });
 
-  it('S11 GO12: a queue scope row, beside the unchanged target row, names the instance the request queues on, or the whole system, and what waits for it while it has not finished', () => {
+  it('S11 GO12: a queue scope row, beside the approval scope row, names the instance the request queues on, or the whole system, and what waits for it while it has not finished', () => {
     // A row from before GO12 (no `target` on the wire) has no queue scope row.
     const before = renderDetail();
     expect(screen.queryByTestId('approval-queue-target')).toBeNull();
     before.unmount();
     const { unmount } = renderDetail({ target: { objectType: 'Container', identity: ['c1'] } });
-    // The target row still shows the request's resource scope.
+    // The approval scope row still shows the request's resource scope, labelled so that 「目标」
+    // is only ever the instance the queue scope row names.
     expect(screen.getByTestId('approval-target').textContent).toBe('web-1');
+    const labels = [...screen.getByTestId('approval-detail').querySelectorAll('dt')].map(
+      (dt) => dt.textContent,
+    );
+    expect(labels).toContain('审批范围');
+    expect(labels).toContain('排队范围');
+    expect(labels).not.toContain('目标');
     expect(screen.getByTestId('approval-queue-target').textContent).toBe('Container「c1」');
     expect(screen.getByTestId('approval-queue-holds').textContent).toBe(
       '同一个 Container 上后来的请求要等它有了结果再执行；别的 Container 上的请求不等它。',

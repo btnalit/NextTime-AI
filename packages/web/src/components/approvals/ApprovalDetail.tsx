@@ -233,7 +233,9 @@ export function ApprovalDetail({
   }
 
   // L8a-10: a gate-scoped request (the kernel's only writer stores the gate's id as the scope) reads
-  // as "the whole gate", never as the gate's raw id posing as the action's target.
+  // as "the whole gate", never as the gate's raw id posing as the action's target. S11 GO12: this
+  // row is the request's approval scope (what auto-approval and always-allow match on), labelled so
+  // — 「目标」 is the instance the queue scope row below names.
   const scopeLabel = resourceScopeLabel(row, gatekeeperNames);
   const actionItems: KeyValueItem[] = [
     {
@@ -244,7 +246,7 @@ export function ApprovalDetail({
     },
     {
       key: 'target',
-      label: t('目标', 'Target'),
+      label: t('审批范围', 'Approval scope'),
       value: scopeLabel ? (
         <span className="mono" data-testid="approval-target" data-volatile="">
           {scopeLabel}
@@ -794,7 +796,7 @@ function confirmImpact(
 ): readonly string[] {
   const lines: string[] = [
     `${t('动作', 'Action')}: ${actionKindTagText(row.actionKindTag)}`,
-    `${t('目标资源', 'Target')}: ${
+    `${t('审批范围', 'Approval scope')}: ${
       resourceScopeLabel(row, gatekeeperNames) ??
       (row.resourceScope ? t('整个门', 'the whole gate') : t('未限定', 'no resource scope'))
     }`,

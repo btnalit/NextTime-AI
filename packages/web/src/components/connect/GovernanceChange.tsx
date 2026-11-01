@@ -161,8 +161,8 @@ function targetFieldChange(
       ...(after.target === null
         ? {
             note: t(
-              '改为与整个系统排队：这个系统上的请求重新按提出顺序逐个执行',
-              'queued with the whole system: requests on this system again run one at a time, in order',
+              '改回整个系统一个队列：这个系统上的所有请求又按提出顺序逐个执行',
+              'back to one queue for the whole system: every request on this system again runs one at a time, in order',
             ),
           }
         : {}),

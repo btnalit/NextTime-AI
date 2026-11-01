@@ -61,7 +61,7 @@ describe('GovernanceChange: the queue scope (S11 GO12)', () => {
         label: '排队范围',
         before: '按 Container（id）',
         after: '整个系统',
-        note: '改为与整个系统排队：这个系统上的请求重新按提出顺序逐个执行',
+        note: '改回整个系统一个队列：这个系统上的所有请求又按提出顺序逐个执行',
       },
     ]);
     expect(governanceConsequences(change, zh)).toEqual([]);

@@ -292,7 +292,7 @@ describe('CatalogPage', () => {
     };
     let detail = await selectRow(await rowNamed('container.restart'));
     expect(within(detail).getByTestId('catalog-detail-queue-scope').textContent).toBe(
-      '按目标：Container（参数 id）。同一个 Container 上的请求按提出顺序执行，别的 Container 上的请求不等它。',
+      '按目标：Container（参数 id）。同一个 Container 上的请求按提出顺序执行；不同 Container 上的请求各自排队，互不等待。',
     );
     expect(detail.textContent).toContain('排队范围');
     detail = await selectRow(await rowNamed('host.reboot'));

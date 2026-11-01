@@ -278,8 +278,8 @@ export function RefreshOperationGovernanceConfirm({
     list.map((item) => actionKindTagText(item.name)).join(separator);
   const tightensInPlace = self && !loosens;
   const tightenedInPlaceText = `${t(
-    `按门现在描述的，就地收紧 ${tagList(items, '、')} 的治理字段（模式、影响级、可自动批准、是否等审批结果、读写的资源、MCP 提示），不产生新版本，同步后立即生效。这决定它们要不要人工审批。`,
-    `Tightens the governance fields (mode, blast radius, auto-approvable, await-decision, the types read and written, MCP hints) of ${tagList(items, ', ')} in place, to what the gate describes now (no new Operation version), effective once synced. This decides whether they need a person’s approval.`,
+    `按门现在描述的，就地收紧 ${tagList(items, '、')} 的治理字段（模式、影响级、可自动批准、是否等审批结果、读写的资源、MCP 提示、排队范围），不产生新版本，同步后立即生效。这决定它们要不要人工审批。`,
+    `Tightens the governance fields (mode, blast radius, auto-approvable, await-decision, the types read and written, MCP hints, queue scope) of ${tagList(items, ', ')} in place, to what the gate describes now (no new Operation version), effective once synced. This decides whether they need a person’s approval.`,
   )}${
     byRevision.length > 0
       ? t(
@@ -767,12 +767,12 @@ export function RefreshOperationGovernanceConfirm({
             : items.length > 0
               ? source(
                   [
-                    '按门当前生效的清单，直接改写下列已发布 Operation 的治理字段（模式、影响级、可自动批准、是否等审批结果、读写的资源、MCP 提示），不产生新版本，确认后立即生效。这决定它们要不要人工审批；改为只读调用的 Operation 也不再需要授权。',
-                    'Rewrites the governance fields (mode, blast radius, auto-approvable, await-decision, the types read and written, MCP hints) of the published operations below to the manifest in effect (no new Operation version; effective once confirmed). This decides whether they need a person’s approval — and an operation that becomes an observe call no longer needs a grant either.',
+                    '按门当前生效的清单，直接改写下列已发布 Operation 的治理字段（模式、影响级、可自动批准、是否等审批结果、读写的资源、MCP 提示、排队范围），不产生新版本，确认后立即生效。这决定它们要不要人工审批；改为只读调用的 Operation 也不再需要授权。',
+                    'Rewrites the governance fields (mode, blast radius, auto-approvable, await-decision, the types read and written, MCP hints, queue scope) of the published operations below to the manifest in effect (no new Operation version; effective once confirmed). This decides whether they need a person’s approval — and an operation that becomes an observe call no longer needs a grant either.',
                   ],
                   [
-                    '按门现在描述的，直接改写下列已发布 Operation 的治理字段（模式、影响级、可自动批准、是否等审批结果、读写的资源、MCP 提示），不产生新版本，确认后立即生效。这决定它们要不要人工审批；改为只读调用的 Operation 也不再需要授权。',
-                    'Rewrites the governance fields (mode, blast radius, auto-approvable, await-decision, the types read and written, MCP hints) of the published operations below to what the gate describes now (no new Operation version; effective once confirmed). This decides whether they need a person’s approval — and an operation that becomes an observe call no longer needs a grant either.',
+                    '按门现在描述的，直接改写下列已发布 Operation 的治理字段（模式、影响级、可自动批准、是否等审批结果、读写的资源、MCP 提示、排队范围），不产生新版本，确认后立即生效。这决定它们要不要人工审批；改为只读调用的 Operation 也不再需要授权。',
+                    'Rewrites the governance fields (mode, blast radius, auto-approvable, await-decision, the types read and written, MCP hints, queue scope) of the published operations below to what the gate describes now (no new Operation version; effective once confirmed). This decides whether they need a person’s approval — and an operation that becomes an observe call no longer needs a grant either.',
                   ],
                 )
               : undefined

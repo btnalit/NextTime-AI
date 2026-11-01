@@ -82,7 +82,7 @@ export function operationQueueScopeText(
   }
   const params = target.params.join(t('、', ', '));
   return t(
-    `按目标：${target.objectType}（参数 ${params}）。同一个 ${target.objectType} 上的请求按提出顺序执行，别的 ${target.objectType} 上的请求不等它。`,
-    `Per target: ${target.objectType} (${target.params.length > 1 ? 'params' : 'param'} ${params}). Requests on the same ${target.objectType} run in the order they were made; requests on another ${target.objectType} do not wait for them.`,
+    `按目标：${target.objectType}（参数 ${params}）。同一个 ${target.objectType} 上的请求按提出顺序执行；不同 ${target.objectType} 上的请求各自排队，互不等待。`,
+    `Per target: ${target.objectType} (${target.params.length > 1 ? 'params' : 'param'} ${params}). Requests on the same ${target.objectType} run in the order they were made; requests on different ${target.objectType}s queue separately and do not wait for each other.`,
   );
 }

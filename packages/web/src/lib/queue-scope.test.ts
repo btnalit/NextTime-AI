@@ -46,7 +46,7 @@ describe('lib/queue-scope (S11 GO12)', () => {
     expect(operationQueueScopeShortText(null, zh)).toBe('整个系统');
     expect(operationQueueScopeShortText(undefined, en)).toBe('Whole system');
     expect(operationQueueScopeText(container, zh)).toBe(
-      '按目标：Container（参数 id）。同一个 Container 上的请求按提出顺序执行，别的 Container 上的请求不等它。',
+      '按目标：Container（参数 id）。同一个 Container 上的请求按提出顺序执行；不同 Container 上的请求各自排队，互不等待。',
     );
     expect(operationQueueScopeText({ objectType: 'Thing', params: ['zone', 'id'] }, en)).toContain(
       'Per target: Thing (params zone, id).',
