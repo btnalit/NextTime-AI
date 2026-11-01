@@ -2065,6 +2065,29 @@ where object_type = 'Operation' and properties->>'status' = 'published'
   4. 删 `schema_migrations` 里 goal 16。
 - **回退到哪一版**：回退目标是 v0.54.0（GO10 #870 与 GO10b 同版发布）；不论退到只含 GO10 的构建还是更早的版本，前提相同。GO10 没有迁移，goal/0015 及更早的迁移不受 goal/0016 影响；迁移文件头有同样步骤。
 
+### 3.90 同一个门的执行队列按目标资源排队（#876，governance 0030，S11 GO12，0.56.0 起）
+
+带一个迁移（governance `0030_action_request_target`），随 `apply-release.sh` 的迁移步骤自动应用。不改 compose，没有新环境变量。0.56.0 须等遗留 565（`requested_at` 提交顺序缺口）修好再发（协调线程 11-01 定）。
+
+- **发版说明可写**：Operation 可以声明一次调用作用于哪一个实例（`target: { object_type, params }`）。同一个门上，作用于不同实例的请求互不阻塞，等审批的请求只挡同一实例和作用于整个门的调用；没有声明目标的 Operation 行为不变。不合法的声明在导入清单、门公告、`propose_operation` 时一律 400 `invalid_operation_target`（`details` 带 `{reason, operation, path}`）。契约：`ActionRequestWire.target`、`queuedBehind.scope`（`target` / `gate`）、`OperationGovernanceFieldsWire.target`、`OperationSummaryWire.target`。
+- **主机注意（无需操作）**：升级后，已发布的 docker `container.restart` 要等属主接受 docker 门的治理刷新（加上 `target` 属于放宽）才开始按容器排队；在那之前仍整门串行，和现在一样。原地接受这次治理刷新依赖 core `0048`（§3.91）。
+- **回滚**
+  - 只回退代码：随时可以。不含这个迁移的代码从不读写 `target` 列，它插入的行 `target` 为空，守卫放行；它让每个请求等同门所有更早的请求，比现在更严。本版并发开始的同门请求处于 `executing`，旧的排水器遇到 `executing` 就停，不会多跑。
+  - 连 schema 一起回退：停 kernel，单事务执行：
+    1. `drop trigger action_requests_target_guard on action_requests`；
+    2. `drop function action_requests_target_guard()`；
+    3. `alter table action_requests drop column target`（CHECK 随列一起删掉）；
+    4. `delete from schema_migrations where module = 'governance' and version = 30`。
+
+### 3.91 已发布 Operation 版本上的目标声明（#876，core 0048，S11 GO12，0.56.0 起）
+
+带一个迁移（core `0048_operation_target_governance`），随 `apply-release.sh` 的迁移步骤自动应用；和 §3.90 同版。
+
+- **作用**：允许治理刷新在已发布的 Operation 版本上写 `target`（主机上原地接受 docker 门的治理刷新、让 `container.restart` 带上目标靠它）。
+- **回滚**
+  - 只回退代码：随时可以。不含这个迁移的代码从不在已发布版本上写 `target`。
+  - 连 schema 一起回退：重新执行 core/0047 里的两条 `create or replace function`，再 `delete from schema_migrations where module = 'core' and version = 48`。已经带上 `target` 的已发布版本保留它。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -2219,6 +2242,8 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.54.0 | task `0012_task_planning`（#864，S11 GO9a）：`tasks` 新列 `planning_round_id`（外键指向规划轮），`tasks_purpose` 增加 `planning`，重建 `tasks_purpose` / `tasks_goal_step_ref` / `tasks_output_schema` 三个 CHECK（全表校验时短暂持有 `ACCESS EXCLUSIVE`），新增 `tasks_planning_shape`、部分唯一索引与两个触发器，不回填 | 可逆 | 回退后的代码只对 `purpose` 为空的任务做崩溃重试，规划任务不会在 deny-all 之外重启；旧 `TaskWire.purpose` 枚举没有 `planning`，生产不校验结果，控制台把它当普通任务显示；撤 schema 先于 goal `0014`：删 `tasks_planning_shape`、`tasks_planning_round_fkey`、`tasks_planning_round_uidx`、触发器与函数 `tasks_planning_guard`、`worker_runs_planning_root`、列 `planning_round_id`，把三个 CHECK 恢复成 task/0011 的写法（如有 `planning` 行先处理），最后删 `schema_migrations` 的 task 12 行（§3.86） |
 | v0.54.0 | goal `0015_planner_apply_minor`（#866，S11 GO9b）：`goal_planner_delegations.mode` 增加 `apply_minor`；`goal_planning_rounds` 新列 `kind`（默认 `proposal`）、`revision_class`、`class_reasons`，状态增加 `applied`、原因增加 `step_keeps_failing` / `run_not_running`；新函数 `goal_planning_class_reasons_valid`，改写 `goal_planning_rounds_guard` 与 `plan_revisions_planner`；只有列默认值 | 可逆 | 回退目标是 v0.53.0（GO9a、GO9b 同版），只回退代码即可；窗口前 `select count(*) from goal_planning_rounds where status = 'running'` 为 0；撤 schema 前提是没有 `applied` 的轮、没有带新原因的轮、没有 `apply_minor` 授权，先于 goal `0014` 与 task `0012`，最后删 `schema_migrations` 的 goal 15 行（§3.87） |
 | v0.55.0 | goal `0016_planning_acceptance_anchor`（#872，S11 GO10b）：`goal_planning_rounds` 的 `step_run_id` / `step_attempt` / `failure_category` 改为可空，新列 `acceptance_round`，约束 `goal_planning_rounds_anchor`（恰好一个锚）、`goal_planning_rounds_acceptance_kind`（验收锚只能是 `proposal`），唯一索引 `goal_planning_rounds_acceptance_uidx`，重写 `goal_planning_rounds_guard`；不回填 | 可逆（有前提） | 只回退代码：窗口前 `select count(*) from goal_planning_rounds where acceptance_round is not null and status = 'running'` 为 0（否则先等结算，或让请求人继续或结束目标）；回退目标 v0.54.0（与 GO10 同版）。撤 schema：不带 `status` 的同一计数为 0，停 kernel、单事务：恢复 goal/0015 的守卫 → 删两个约束和索引 → 删 `acceptance_round`、三列恢复 `not null` → 删 `schema_migrations` 的 goal 16 行（§3.89） |
+| v0.56.0 | governance `0030_action_request_target`（#876，S11 GO12）：`action_requests.target jsonb`（可空，不回填，不加索引），CHECK `action_requests_target_shape`，触发器 `action_requests_target_guard`（只写一次；`params` 指名的参数值必须等于 `identity`） | 可逆 | 只回退代码随时可以（旧代码不读写 `target`，排得比现在更严，遇 `executing` 就停）；撤 schema：停 kernel、单事务，删触发器与函数 → 删 `target` 列 → 删 `schema_migrations` 的 governance 30 行（§3.90） |
+| v0.56.0 | core `0048_operation_target_governance`（#876，S11 GO12）：改写 core/0047 的两个函数，允许治理刷新在已发布 Operation 版本上写 `target` | 可逆 | 只回退代码随时可以；撤 schema：重跑 core/0047 的两条 `create or replace function`，删 `schema_migrations` 的 core 48 行，已带 `target` 的已发布版本保留（§3.91） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
