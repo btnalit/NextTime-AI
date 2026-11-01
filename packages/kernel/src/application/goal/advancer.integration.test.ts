@@ -1471,12 +1471,14 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(inMs).toBeGreaterThan(50_000);
         expect(inMs).toBeLessThanOrEqual(DEFAULT_BLOCKED_RETRY_RECHECK_MS + 1000);
 
-        const recheck: GoalAdvancerOptions = { ...NO_BACKOFF, blockedRetryRecheckMs: 50 };
+        // The period counts from the start of the advance, so it must outlast the advance itself
+        // and the read below on a slow runner: 50 ms did not (an advance alone took longer).
+        const recheck: GoalAdvancerOptions = { ...NO_BACKOFF, blockedRetryRecheckMs: 1500 };
         await advance(goalRunId, requester, recheck);
         expect(await isDue(goalRunId)).toBe(false);
         // The request ends; its ActionRequestUpdated never arrives.
         await setActionStatus(executing, 'executed');
-        await sleep(100);
+        await sleep(1600);
         expect(await isDue(goalRunId)).toBe(true);
         const claimed = (await claimDueGoalRuns(pool, { limit: 10_000 })).map(
           (target) => target.goalRunId,
