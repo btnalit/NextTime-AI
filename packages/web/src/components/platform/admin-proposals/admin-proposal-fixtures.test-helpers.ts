@@ -103,6 +103,7 @@ export function proposal(patch: Partial<AdminProposalWire> = {}): AdminProposalW
     proposedAt: '2026-11-01T08:00:00.000Z',
     status: 'proposed',
     segmentCounts: { proposed: 3, applied: 0, rejected: 0, withdrawn: 0, rolledBack: 0 },
+    platformSegmentStatus: 'proposed',
     description: '给生产工作区接上知识库，并加一个查知识库的 Skill。',
     contentDigest: 'sha256:proposal',
     segments: [

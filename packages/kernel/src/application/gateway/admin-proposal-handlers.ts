@@ -221,9 +221,15 @@ export const listAdminProposalsHandler: CapabilityHandler = async (
   ctx,
 ): Promise<CapabilityHandlerResult> => {
   platformUserOf('list_admin_proposals', ctx);
-  const { status } = params as { readonly status?: AdminProposalStatus };
+  const { status, platformSegmentStatus } = params as {
+    readonly status?: AdminProposalStatus;
+    readonly platformSegmentStatus?: AdminProposalSegmentStatus;
+  };
   return {
-    result: await listAdminProposals(client, platformScope('list_admin_proposals', ctx), status),
+    result: await listAdminProposals(client, platformScope('list_admin_proposals', ctx), {
+      status,
+      platformSegmentStatus,
+    }),
   };
 };
 

@@ -264,6 +264,10 @@ const adminProposalHeadShape = {
   /** Derived from its segments' (`adminProposalStatusOf`). */
   status: AdminProposalStatusSchema,
   segmentCounts: AdminProposalSegmentCountsWireSchema,
+  /** Legacy 619: its platform segment's status — `proposed` is a platform administrator's to
+   *  decide, before any of its workspace segments can be applied (F8); `null` when it has none.
+   *  `segmentCounts` counts it too. */
+  platformSegmentStatus: AdminProposalSegmentStatusSchema.nullable(),
 };
 
 /** A proposal in a list. */

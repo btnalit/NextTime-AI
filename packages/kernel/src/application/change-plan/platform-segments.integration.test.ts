@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import type {
   AdminProposalSegmentApplyResultWire,
   AdminProposalSegmentPreviewWire,
+  AdminProposalSummaryWire,
   AdminProposalWire,
   AgentAdminProposalWire,
   GateInstanceWire,
@@ -1084,6 +1085,70 @@ describe.runIf(DATABASE_URL !== undefined)(
       await expect(previewAndApply(user, platformSegmentId)).rejects.toBeInstanceOf(
         AdminProposalSegmentNotOpenError,
       );
+    });
+
+    it('legacy 619: the list reads each proposal’s platform segment status, null without one, and narrows to the ones awaiting a platform administrator', async () => {
+      const { agent } = await administrator();
+      const decider = await otherAdministrator();
+      const target = await newTarget();
+      const awaiting = await proposePlatform(
+        agent,
+        [gateItem(`aa3c1-${unique()}`, `tickets-${unique()}`)],
+        [target],
+      );
+      const rejected = await proposePlatform(agent, [
+        gateItem(`aa3c1-${unique()}`, `tickets-${unique()}`),
+      ]);
+      await call(platformCaller(decider), 'reject_platform_segment', {
+        segmentId: rejected.platformSegmentId,
+        reason: 'Not this one.',
+      });
+      const workspaceOnly = await call<AgentAdminProposalWire>(agent, 'propose_admin_proposal', {
+        title: 'Only a Skill',
+        description: 'No platform segment.',
+        sourceName: `aa3c1-${unique()}`,
+        segments: [{ targetWorkspaceId: target.workspaceId, items: [skillItem('ticket-only')] }],
+      });
+      const ours = new Set([awaiting.proposal.id, rejected.proposal.id, workspaceOnly.id]);
+      const listed = async (params: Record<string, unknown>) =>
+        (
+          await call<{ items: AdminProposalSummaryWire[] }>(
+            platformCaller(decider),
+            'list_admin_proposals',
+            params,
+          )
+        ).items
+          .filter((item) => ours.has(item.id))
+          .map((item) => [item.id, item.platformSegmentStatus]);
+
+      expect(await listed({})).toEqual(
+        expect.arrayContaining([
+          [awaiting.proposal.id, 'proposed'],
+          [rejected.proposal.id, 'rejected'],
+          [workspaceOnly.id, null],
+        ]),
+      );
+      expect(await listed({ platformSegmentStatus: 'proposed' })).toEqual([
+        [awaiting.proposal.id, 'proposed'],
+      ]);
+      // Both narrow together: the workspace-only proposal is proposed too, and has no platform segment.
+      expect(await listed({ status: 'proposed', platformSegmentStatus: 'proposed' })).toEqual([
+        [awaiting.proposal.id, 'proposed'],
+      ]);
+      expect(await listed({ status: 'closed', platformSegmentStatus: 'rejected' })).toEqual([
+        [rejected.proposal.id, 'rejected'],
+      ]);
+      // The agent reads it too, on its own list and on the proposal.
+      const asAgent = await call<{ items: AdminProposalSummaryWire[] }>(
+        agent,
+        'agent_list_admin_proposals',
+        {},
+      );
+      expect(asAgent.items.find((item) => item.id === awaiting.proposal.id)).toMatchObject({
+        platformSegmentStatus: 'proposed',
+      });
+      expect(awaiting.proposal.platformSegmentStatus).toBe('proposed');
+      expect(workspaceOnly.platformSegmentStatus).toBeNull();
     });
 
     // -----------------------------------------------------------------------------------------

@@ -4069,10 +4069,17 @@ const platformCapabilities = [
     mode: 'observe',
     channel: 'human',
     scope: 'platform',
-    paramsSchema: z.object({ status: AdminProposalStatusSchema.optional() }).strict(),
+    paramsSchema: z
+      .object({
+        status: AdminProposalStatusSchema.optional(),
+        // Legacy 619: `proposed` lists the proposals whose platform segment awaits a platform
+        // administrator.
+        platformSegmentStatus: AdminProposalSegmentStatusSchema.optional(),
+      })
+      .strict(),
     resultSchema: listEnvelope(wire.AdminProposalSummaryWireSchema),
     description:
-      'The admin proposals admin agents made from their trial workspaces, newest first (at most 100; truncated says there are more): each with its title, source name, the administrator whose agent proposed it, when, its status — proposed (a segment awaits its decision, none applied), partially_applied, applied, closed (nothing awaits, nothing applied) — and how many segments are in each status. status narrows to one.',
+      'The admin proposals admin agents made from their trial workspaces, newest first (at most 100; truncated says there are more): each with its title, source name, the administrator whose agent proposed it, when, its status — proposed (a segment awaits its decision, none applied), partially_applied, applied, closed (nothing awaits, nothing applied) — how many segments are in each status, and its platform segment’s status (platformSegmentStatus; null when it has none). status narrows to one status; platformSegmentStatus to the proposals whose platform segment is in that status (proposed: the ones awaiting a platform administrator). Both narrow together.',
   },
   {
     name: 'get_admin_proposal',
@@ -5304,7 +5311,7 @@ const adminProposalCapabilities = [
     paramsSchema: noParams,
     resultSchema: listEnvelope(wire.AdminProposalSummaryWireSchema),
     description:
-      'The admin proposals your administrator’s agent made in this trial workspace, newest first (at most 100; truncated says there are more): each with its title, source name, when, its status — proposed (a segment awaits its decision, none applied), partially_applied, applied, closed (nothing awaits, nothing applied) — and how many segments are in each status. Only an admin agent calls it.',
+      'The admin proposals your administrator’s agent made in this trial workspace, newest first (at most 100; truncated says there are more): each with its title, source name, when, its status — proposed (a segment awaits its decision, none applied), partially_applied, applied, closed (nothing awaits, nothing applied) — how many segments are in each status, and its platform segment’s status (platformSegmentStatus; null when it has none). Only an admin agent calls it.',
   },
   {
     name: 'agent_get_admin_proposal',

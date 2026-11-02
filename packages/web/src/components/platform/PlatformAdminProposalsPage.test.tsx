@@ -97,7 +97,13 @@ describe('PlatformAdminProposalsPage (平台 · 管理员提案, S11 AA4b)', () 
       within(row).getByTestId(`platform-admin-proposal-row-source-${PROPOSAL}`).textContent,
     ).toBe('kb-onboarding');
     expect(row.textContent).not.toContain('平台管理员 Ada 的管理员智能体');
-    expect(row.textContent).toContain('待确认 3');
+    // Legacy 619 (#936 UX P2-2): the platform part on its own, then the workspace parts.
+    expect(
+      within(row).getByTestId(`platform-admin-proposal-row-platform-${PROPOSAL}`).textContent,
+    ).toBe('平台部分：待你决定');
+    expect(
+      within(row).getByTestId(`platform-admin-proposal-row-workspaces-${PROPOSAL}`).textContent,
+    ).toBe('工作区部分：待确认 2');
 
     fireEvent.change(screen.getByTestId('platform-admin-proposals-filter'), {
       target: { value: 'applied' },
@@ -151,6 +157,98 @@ describe('PlatformAdminProposalsPage (平台 · 管理员提案, S11 AA4b)', () 
     expect(parts.textContent).not.toContain('查知识库');
   });
 
+  it('legacy 619: each row says how its platform part stands apart from its workspace parts, and 平台部分待你决定 lists only the ones awaiting a platform administrator', async () => {
+    const WORKSPACE_ONLY = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const PLATFORM_ONLY = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+    const REJECTED = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+    const awaiting = summary();
+    const workspaceOnly = summary({
+      id: WORKSPACE_ONLY,
+      title: '只改工作区',
+      segmentCounts: { proposed: 1, applied: 1, rejected: 0, withdrawn: 0, rolledBack: 0 },
+      status: 'partially_applied',
+      platformSegmentStatus: null,
+    });
+    const platformOnly = summary({
+      id: PLATFORM_ONLY,
+      title: '只建门宿主实例',
+      segmentCounts: { proposed: 0, applied: 1, rejected: 0, withdrawn: 0, rolledBack: 0 },
+      status: 'applied',
+      platformSegmentStatus: 'applied',
+    });
+    const rejected = summary({
+      id: REJECTED,
+      title: '被拒的',
+      segmentCounts: { proposed: 0, applied: 0, rejected: 1, withdrawn: 2, rolledBack: 0 },
+      status: 'closed',
+      platformSegmentStatus: 'rejected',
+    });
+    const http = scriptedHttp({
+      list_admin_proposals: (params) =>
+        (params as { platformSegmentStatus?: string }).platformSegmentStatus === 'proposed'
+          ? { items: [awaiting] }
+          : { items: [awaiting, workspaceOnly, platformOnly, rejected] },
+    });
+    renderPage(http);
+
+    const platformOf = (id: string) =>
+      screen.queryByTestId(`platform-admin-proposal-row-platform-${id}`)?.textContent ?? null;
+    const workspacesOf = (id: string) =>
+      screen.queryByTestId(`platform-admin-proposal-row-workspaces-${id}`)?.textContent ?? null;
+    await screen.findByTestId(`platform-admin-proposal-row-${REJECTED}`);
+    // Waiting on a platform administrator: in bold, so it stands out down the list.
+    expect(
+      screen.getByTestId(`platform-admin-proposal-row-platform-${PROPOSAL}`).querySelector('strong')
+        ?.textContent,
+    ).toBe('平台部分：待你决定');
+    expect(platformOf(WORKSPACE_ONLY)).toBeNull();
+    expect(workspacesOf(WORKSPACE_ONLY)).toBe('工作区部分：待确认 1 · 已应用 1');
+    expect(platformOf(PLATFORM_ONLY)).toBe('平台部分：已应用');
+    expect(workspacesOf(PLATFORM_ONLY)).toBeNull();
+    expect(platformOf(REJECTED)).toBe('平台部分：已拒绝');
+    expect(
+      screen
+        .getByTestId(`platform-admin-proposal-row-platform-${REJECTED}`)
+        .querySelector('strong'),
+    ).toBeNull();
+    expect(workspacesOf(REJECTED)).toBe('工作区部分：已撤回 2');
+    expect(screen.getByTestId(`platform-admin-proposal-row-${REJECTED}`).textContent).toContain(
+      '平台部分：已拒绝；工作区部分：已撤回 2',
+    );
+
+    fireEvent.change(screen.getByTestId('platform-admin-proposals-filter'), {
+      target: { value: 'platform_pending' },
+    });
+    await waitFor(() =>
+      expect(screen.queryByTestId(`platform-admin-proposal-row-${REJECTED}`)).toBeNull(),
+    );
+    expect(named(http.calls, 'list_admin_proposals').at(-1)?.params).toEqual({
+      platformSegmentStatus: 'proposed',
+    });
+    expect(screen.getByTestId(`platform-admin-proposal-row-${PROPOSAL}`)).toBeTruthy();
+  });
+
+  it('legacy 619: with none awaiting, 平台部分待你决定 says so; in English the parts read as such', async () => {
+    const http = scriptedHttp({
+      list_admin_proposals: (params) =>
+        (params as { platformSegmentStatus?: string }).platformSegmentStatus === 'proposed'
+          ? { items: [] }
+          : { items: [summary()] },
+    });
+    renderPage(http, { english: true });
+
+    const row = await screen.findByTestId(`platform-admin-proposal-row-${PROPOSAL}`);
+    expect(row.textContent).toContain(
+      'Platform part: awaiting your decision; Workspace parts: 2 awaiting',
+    );
+    fireEvent.change(screen.getByTestId('platform-admin-proposals-filter'), {
+      target: { value: 'platform_pending' },
+    });
+    expect((await screen.findByTestId('platform-admin-proposals-empty')).textContent).toContain(
+      'No admin proposals have a platform part awaiting your decision',
+    );
+  });
+
   it('withdrawing sends the reason trimmed, says who reads it, and the proposal then reads as it stands', async () => {
     let withdrawn: AdminProposalWire | null = null;
     const http = scriptedHttp({
@@ -163,6 +261,7 @@ describe('PlatformAdminProposalsPage (平台 · 管理员提案, S11 AA4b)', () 
         withdrawn = proposal({
           status: 'closed',
           segmentCounts: { proposed: 0, applied: 0, rejected: 0, withdrawn: 3, rolledBack: 0 },
+          platformSegmentStatus: 'withdrawn',
           segments: proposal().segments.map((segment) => ({
             ...segment,
             status: 'withdrawn',
@@ -442,6 +541,7 @@ describe('PlatformAdminProposalsPage (平台 · 管理员提案, S11 AA4b)', () 
     const closed = proposal({
       status: 'closed',
       segmentCounts: { proposed: 0, applied: 0, rejected: 3, withdrawn: 0, rolledBack: 0 },
+      platformSegmentStatus: 'rejected',
       segments: proposal().segments.map((segment) => ({
         ...segment,
         status: 'rejected',

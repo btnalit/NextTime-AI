@@ -4,6 +4,7 @@ import type {
   AdminProposalProposerWire,
   AdminProposalSegmentCountsWire,
   AdminProposalSegmentWire,
+  AdminProposalSummaryWire,
   AdminProposalWire,
   AdminProposalWithdrawnOrigin,
   GateHostedDefinitionWire,
@@ -54,6 +55,37 @@ export function segmentCountsText(counts: AdminProposalSegmentCountsWire, t: Tra
   return SEGMENT_COUNT_LABELS.filter(({ key }) => counts[key] > 0)
     .map(({ key, zh, en }) => t(`${zh} ${counts[key]}`, `${counts[key]} ${en}`))
     .join(' · ');
+}
+
+/**
+ * A list row's parts, the platform part on its own (legacy 619, #936 UX P2-2): 「平台部分：待你决定；
+ * 工作区部分：待确认 2」, so a proposal waiting on a platform administrator reads apart from one waiting
+ * only on workspace owners. A proposal with no platform part reads 「工作区部分：…」 alone; one with
+ * only a platform part, the platform part alone.
+ */
+export function proposalPartsText(
+  summary: Pick<AdminProposalSummaryWire, 'segmentCounts' | 'platformSegmentStatus'>,
+  t: Translate,
+): { readonly platform: string | null; readonly workspaces: string | null } {
+  const status = summary.platformSegmentStatus;
+  const counts = { ...summary.segmentCounts };
+  if (status !== null) counts[countKeyOf(status)] -= 1;
+  const workspaceCounts = segmentCountsText(counts, t);
+  return {
+    platform:
+      status === null
+        ? null
+        : status === 'proposed'
+          ? t('平台部分：待你决定', 'Platform part: awaiting your decision')
+          : t(
+              `平台部分：${segmentStatusWord(status, t)}`,
+              `Platform part: ${segmentStatusWord(status, t)}`,
+            ),
+    workspaces:
+      workspaceCounts === ''
+        ? null
+        : t(`工作区部分：${workspaceCounts}`, `Workspace parts: ${workspaceCounts}`),
+  };
 }
 
 /**
