@@ -1747,6 +1747,79 @@ describe('resident-service: an admin agent beside the entry agent (S11 AA4c-2)',
     expect(await restarted.touch('alice')).toBe(true);
   });
 
+  /** A supervisor restarted over `first`'s containers and Handle bindings, whose source map
+   *  cannot be written. */
+  function restartedWithBrokenEgressMap(
+    first: ReturnType<typeof setup>,
+    docker: FakeDockerClient = first.docker,
+  ) {
+    const throwingEgressMap: EgressMapStore = {
+      register: () => {
+        throw new Error('EACCES: permission denied');
+      },
+      unregister: () => {},
+      read: () => ({}),
+    };
+    return createResidentService({
+      config: first.config,
+      docker,
+      handleBindings: first.handleBindings,
+      egressMap: throwingEgressMap,
+      now: () => 0,
+    });
+  }
+
+  it('reconcile removes an admin agent’s container whose deny-all registration fails, and leaves the entry agent’s as before', async () => {
+    const first = setup();
+    const entry = await first.service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+    });
+    const admin = await first.service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h-admin',
+      ...ADMIN,
+    });
+
+    const restarted = restartedWithBrokenEgressMap(first);
+    await restarted.reconcile();
+
+    expect(first.docker.removeCalls).toEqual(['nexttime-admin-alice']);
+    expect(first.docker.stopCalls).toEqual([]);
+    expect(await first.docker.inspectByName('nexttime-admin-alice')).toBeUndefined();
+    const bindings = first.handleBindings.snapshot();
+    expect(bindings.has(admin.ip as string)).toBe(false);
+    expect(await restarted.touch('alice', 'admin_agent')).toBe(false);
+    expect((await restarted.list()).map((item) => item.agentKind)).toEqual(['entry']);
+    // The entry agent's registration stays best-effort: still running, still bound, still known.
+    expect(bindings.get(entry.ip as string)).toMatchObject({ containerId: entry.containerId });
+    expect(await restarted.status('alice')).toMatchObject({ running: true });
+    expect(await restarted.touch('alice')).toBe(true);
+  });
+
+  it('reconcile goes on past an admin agent container Docker refuses to remove', async () => {
+    const first = setup();
+    await first.service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'a', ...ADMIN });
+    await first.service.spawn({ workspaceId: 'ws-1', principalId: 'bob', handle: 'b', ...ADMIN });
+    const refusing: FakeDockerClient = {
+      ...first.docker,
+      remove: async (name) => {
+        if (name === 'nexttime-admin-alice') throw new Error('docker said no');
+        await first.docker.remove(name);
+      },
+    };
+
+    await expect(
+      restartedWithBrokenEgressMap(first, refusing).reconcile(),
+    ).resolves.toBeUndefined();
+    expect(first.docker.removeCalls).toEqual(['nexttime-admin-bob']);
+    // Both lost their Handle binding first, the one Docker kept included.
+    expect(first.handleBindings.snapshot().size).toBe(0);
+    expect(await first.docker.inspectByName('nexttime-admin-bob')).toBeUndefined();
+  });
+
   it('a docker event for the admin agent’s container unregisters it alone', async () => {
     const { service, docker, egressMap } = setup();
     const entry = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });

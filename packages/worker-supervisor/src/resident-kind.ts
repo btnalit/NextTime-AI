@@ -16,6 +16,9 @@
  *
  * On the wire (`/resident/*`, agent-host's start frames) the kind travels as an optional
  * `agentKind: 'admin_agent'`; absent means the entry agent, as every caller before AA4c-2 meant.
+ * An admin agent's spawn always carries its own `systemPrompt` (`config.ts` `SpawnRequestSchema`):
+ * its container would otherwise refuse to start (`entrypoint.sh` `admin_prompt`) after the spawn
+ * had already answered.
  */
 
 import { adminSourceId, entrySourceId } from './egress-map.js';
@@ -83,7 +86,9 @@ export function residentSourceId(
 
 /** Whether this kind's container may reach anything through egress-proxy. The admin agent may
  *  not: it reads and proposes through the kernel alone (I-A2), so its source is registered
- *  deny-all, and a container whose deny-all registration failed is never left running. */
+ *  deny-all, and a container whose deny-all registration failed is never left running — on a
+ *  spawn, a reuse or a `reconcile` alike (`resident-service.ts`). Its container checks the same
+ *  from inside: `entrypoint.sh` refuses to start pi when a request gets out (`egress_denied`). */
 export function residentEgressDenyAll(kind: ResidentAgentKind): boolean {
   return kind === 'admin_agent';
 }

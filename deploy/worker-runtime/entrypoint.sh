@@ -87,7 +87,8 @@
 # system prompt, the exec itself) is entirely unchanged. One structured `nexttime-selfcheck
 # check=<name> result=<ok|fail|skip> ...` line per check — never an env var's *value*, only its
 # name, even on failure (I9). The public proxied-reachability probe is skippable
-# (`NEXTTIME_SELFCHECK_SKIP_PUBLIC_EGRESS_PROBE=1`, for offline test runs) but defaults on.
+# (`NEXTTIME_SELFCHECK_SKIP_PUBLIC_EGRESS_PROBE=1`, for offline test runs) but defaults on — in
+# entry and worker mode only: in admin mode the probe is an invariant (below) and always runs.
 #
 # Which checks are fatal (W8, STATUS leftover 29): the two *invariant* checks — no provider key in
 # the environment (I9) and no direct route out (I10) — still refuse to start pi. The proxied
@@ -103,11 +104,14 @@
 #
 # Admin mode (S11 AA4c-2): a platform administrator's admin agent, in a resident container of its
 # own (worker-supervisor `resident-kind.ts`). Every check above runs for it as for entry mode, and
-# two are stricter. Its egress source is registered deny-all, so the proxied probe must be *refused*
-# (`egress_denied`): a proxied request that goes through means its isolation is not in place, and
-# pi does not start. And it needs the platform's own admin agent prompt (`admin_prompt`): the image's
-# default prompt is the entry agent's, so an admin container without its prompt refuses to start
-# rather than run as something it is not.
+# two are stricter. Its egress source is registered deny-all, so the probe's request must be
+# *refused* (`egress_denied`) — through the proxy when one is configured, straight out when none is
+# (curl takes the proxy variables when they are set), and whatever the skip switch says: a request
+# that goes through means its isolation is not in place, and pi does not start. A refusal, the
+# proxy's 403 and no route at all are all "denied". And it needs the platform's own admin agent
+# prompt (`admin_prompt`): the image's default prompt is the entry agent's, so an admin container
+# without its prompt refuses to start rather than run as something it is not (worker-supervisor
+# refuses an admin spawn without one too, `config.ts` `SpawnRequestSchema`).
 
 set -eu
 
@@ -172,6 +176,44 @@ case "${NEXTTIME_MODE:-}" in
 worker | entry | admin) run_selfcheck=1 ;;
 *) run_selfcheck=0 ;;
 esac
+
+# The public reachability probe, the self-check's last step (header). A function of its own that
+# reads only the environment and `curl`, so `runtime-whitelist.test.ts` can run it on its own: the
+# whole script never gets this far there, since admin mode refuses the test-only root.
+egress_probe() {
+	if [ "${NEXTTIME_MODE:-}" = "admin" ]; then
+		# Admin mode (header): its source is deny-all, so this request must fail — fatal when it
+		# does not: not weather, its isolation. Checked before the skip switch, which has no say
+		# here, and with or without proxy variables: curl goes through the proxy when they are set
+		# and straight out when they are not, and either way out must be closed.
+		if [ -n "${HTTP_PROXY:-}${HTTPS_PROXY:-}${http_proxy:-}${https_proxy:-}" ]; then
+			denied_route=proxied
+		else
+			denied_route=direct
+		fi
+		denied_rc=0
+		curl --max-time 5 -s -o /dev/null https://example.com || denied_rc=$?
+		if [ "$denied_rc" -eq 0 ]; then
+			echo "nexttime-selfcheck check=egress_denied result=fail reason=${denied_route}_request_allowed"
+			exit 1
+		fi
+		echo "nexttime-selfcheck check=egress_denied result=ok curl_rc=${denied_rc}"
+	elif [ "${NEXTTIME_SELFCHECK_SKIP_PUBLIC_EGRESS_PROBE:-}" = "1" ]; then
+		echo "nexttime-selfcheck check=egress_via_proxy result=skip reason=NEXTTIME_SELFCHECK_SKIP_PUBLIC_EGRESS_PROBE=1"
+	else
+		# A false "proxied ok" (direct route + unset proxy vars) is worse than no check at all.
+		if [ -z "${HTTP_PROXY:-}${HTTPS_PROXY:-}${http_proxy:-}${https_proxy:-}" ]; then
+			echo "nexttime-selfcheck check=egress_via_proxy result=fail reason=no_proxy_configured"
+			exit 1
+		fi
+		# Non-fatal (see the header): a transient proxied failure must not take the container down.
+		if curl --max-time 5 -s -o /dev/null https://example.com; then
+			echo "nexttime-selfcheck check=egress_via_proxy result=ok"
+		else
+			echo "nexttime-selfcheck check=egress_via_proxy result=warn reason=proxied_request_failed"
+		fi
+	fi
+}
 
 if [ "$run_selfcheck" = "1" ]; then
 	# Whitelist start (STATUS leftover 422): models.json is worker-supervisor's read-only mount; the
@@ -260,30 +302,7 @@ if [ "$run_selfcheck" = "1" ]; then
 	fi
 	echo "nexttime-selfcheck check=egress_no_direct_route result=ok curl_rc=${direct_rc}"
 
-	if [ "${NEXTTIME_SELFCHECK_SKIP_PUBLIC_EGRESS_PROBE:-}" = "1" ]; then
-		echo "nexttime-selfcheck check=egress_via_proxy result=skip reason=NEXTTIME_SELFCHECK_SKIP_PUBLIC_EGRESS_PROBE=1"
-	elif [ "${NEXTTIME_MODE:-}" = "admin" ]; then
-		# Admin mode (header): its source is deny-all, so this must fail. Fatal when it does not —
-		# not weather, its isolation. No proxy configured at all is no route out either.
-		if [ -n "${HTTP_PROXY:-}${HTTPS_PROXY:-}${http_proxy:-}${https_proxy:-}" ] &&
-			curl --max-time 5 -s -o /dev/null https://example.com; then
-			echo "nexttime-selfcheck check=egress_denied result=fail reason=proxied_request_allowed"
-			exit 1
-		fi
-		echo "nexttime-selfcheck check=egress_denied result=ok"
-	else
-		# A false "proxied ok" (direct route + unset proxy vars) is worse than no check at all.
-		if [ -z "${HTTP_PROXY:-}${HTTPS_PROXY:-}${http_proxy:-}${https_proxy:-}" ]; then
-			echo "nexttime-selfcheck check=egress_via_proxy result=fail reason=no_proxy_configured"
-			exit 1
-		fi
-		# Non-fatal (see the header): a transient proxied failure must not take the container down.
-		if curl --max-time 5 -s -o /dev/null https://example.com; then
-			echo "nexttime-selfcheck check=egress_via_proxy result=ok"
-		else
-			echo "nexttime-selfcheck check=egress_via_proxy result=warn reason=proxied_request_failed"
-		fi
-	fi
+	egress_probe
 fi
 
 # Published Skills (S2.14 / S3.13), one directory per Skill, written by worker-supervisor.
