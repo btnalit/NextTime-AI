@@ -592,3 +592,83 @@ describe('PersistedToolCallRowView: a definition mismatch on a named system', ()
     expect(note.textContent).not.toContain('重新读取门的清单');
   });
 });
+
+describe('S11 AA4e (UX P2-2 on #945): a propose_admin_proposal call links to its proposal', () => {
+  const PROPOSAL_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const proposalText = JSON.stringify(
+    { id: PROPOSAL_ID, title: 'Disk triage', status: 'proposed', segments: [] },
+    null,
+    2,
+  );
+  const record = (
+    patch: Partial<Parameters<typeof PersistedToolCallRowView>[0]['record']> = {},
+  ) => ({
+    toolCallId: 'c-propose',
+    name: 'propose_admin_proposal',
+    outcome: 'done' as const,
+    result: { text: proposalText, truncated: false, totalChars: proposalText.length },
+    redactedValues: 0,
+    startedAt: null,
+    endedAt: null,
+    ...patch,
+  });
+  const href = `#/platform/admin-proposals/${PROPOSAL_ID}`;
+
+  it('under the folded calls, with its title, and inside the row', () => {
+    render(<ToolCallGroupView records={[record()]} />);
+    const line = screen.getByTestId('tool-call-group-admin-proposal');
+    expect(line.textContent).toContain('已提出管理员提案「Disk triage」');
+    expect(screen.getByTestId('tool-call-group-admin-proposal-link').getAttribute('href')).toBe(
+      href,
+    );
+    expect(screen.getByTestId('tool-call-admin-proposal-link').getAttribute('href')).toBe(href);
+    // Not read as an action outcome.
+    expect(
+      document.querySelector('[data-action-outcome]')?.getAttribute('data-action-outcome'),
+    ).toBeFalsy();
+  });
+
+  it('a live row links too', () => {
+    render(
+      <ToolCallRowView
+        row={{
+          toolCallId: 'c-live',
+          name: 'propose_admin_proposal',
+          status: 'ended',
+          result: {
+            content: [{ type: 'text', text: proposalText }],
+            details: JSON.parse(proposalText),
+          },
+        }}
+      />,
+    );
+    expect(screen.getByTestId('tool-call-admin-proposal-link').getAttribute('href')).toBe(href);
+  });
+
+  it('no link for a failed or unfinished call, or another tool', () => {
+    render(
+      <ToolCallGroupView
+        records={[
+          record({ toolCallId: 'c-failed', outcome: 'failed' }),
+          record({ toolCallId: 'c-open', outcome: 'not_finished', result: undefined }),
+          record({ toolCallId: 'c-other', name: 'agent_get_admin_proposal' }),
+        ]}
+      />,
+    );
+    expect(screen.queryByTestId('tool-call-group-admin-proposal')).toBeNull();
+    expect(screen.queryByTestId('tool-call-admin-proposal-link')).toBeNull();
+    cleanup();
+    render(
+      <ToolCallRowView
+        row={{
+          toolCallId: 'c-live-failed',
+          name: 'propose_admin_proposal',
+          status: 'ended',
+          isError: true,
+          result: { error: 'no proposal targets chosen' },
+        }}
+      />,
+    );
+    expect(screen.queryByTestId('tool-call-admin-proposal-link')).toBeNull();
+  });
+});

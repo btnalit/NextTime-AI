@@ -10,8 +10,10 @@ import type { ModelRow } from '../../lib/governance.js';
 import { HttpError } from '../../lib/http-client.js';
 import { useT } from '../../lib/i18n.js';
 import { isExpiredEphemeral, purgeRetention } from '../../lib/platform-workspaces.js';
+import { hrefs } from '../../lib/router.js';
 import { SavedNote } from '../../lib/saved-note.js';
 import { DrawerSection, DrawerSections } from '../kit/drawer-section.js';
+import { RouteLink } from '../kit/route-link.js';
 import { StillNeeded } from '../kit/still-needed.js';
 import { Button } from '../ui/Button.js';
 import { CopyId } from '../ui/CopyId.js';
@@ -46,6 +48,9 @@ export interface WorkspaceDetailPanelProps {
    *  when `purgeable` and never for the platform default; the drawer is the page's (one focus
    *  trap at a time), this panel only asks for it. */
   readonly onPurge?: () => void;
+  /** S11 AA4e (#501 P3 on #947): the reader has a membership here — 管理员智能体 lists only the
+   *  reader's own trial workspaces, so a trial workspace links there only then. */
+  readonly readerIsMember?: boolean;
 }
 
 /**
@@ -92,6 +97,7 @@ export function WorkspaceDetailPanel({
   onDelegated,
   onOpenWorkspaceConfig,
   onPurge,
+  readerIsMember = false,
 }: WorkspaceDetailPanelProps) {
   const t = useT();
   const [name, setName] = useState(workspace.name);
@@ -309,6 +315,20 @@ export function WorkspaceDetailPanel({
         </DrawerSection>
 
         <DrawerSection title={t('相关链接', 'Related links')}>
+          {/* S11 AA4e (journey ⑨, UX P2-1 on #945): a trial workspace's next steps are on 管理员智能体,
+              on its own card — for its members only, that page listing the reader's own memberships
+              (#501 P3 on #947). */}
+          {workspace.purpose === 'admin_trial' && readerIsMember ? (
+            <RouteLink
+              href={hrefs.platformAdminAgent(workspace.id)}
+              testId="workspace-detail-admin-agent-link"
+            >
+              {t(
+                '去管理员智能体：选目标工作区、打开管理员对话',
+                'Go to the admin agent: choose target workspaces, open the admin chat',
+              )}
+            </RouteLink>
+          ) : null}
           {onOpenWorkspaceConfig ? (
             <Button
               variant="secondary"

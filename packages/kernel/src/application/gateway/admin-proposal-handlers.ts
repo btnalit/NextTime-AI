@@ -11,6 +11,7 @@ import {
   agentProposalOf,
   applyAdminProposalSegment,
   checkAdminProposal,
+  countAdminProposalSegments,
   getAdminProposal,
   listAdminProposalSegments,
   listAdminProposals,
@@ -284,6 +285,14 @@ export const listAdminProposalSegmentsHandler: CapabilityHandler = async (
   const { status } = params as { readonly status?: AdminProposalSegmentStatus };
   return { result: await listAdminProposalSegments(client, workspaceId, status) };
 };
+
+/** S11 AA4e: the same scope as the list, counted (`countAdminProposalSegments`). */
+export const getAdminProposalSegmentCountsHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+): Promise<CapabilityHandlerResult> => ({
+  result: await countAdminProposalSegments(client, workspaceId),
+});
 
 export const previewAdminProposalSegmentHandler: CapabilityHandler = async (
   client,

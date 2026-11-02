@@ -1016,6 +1016,10 @@ const ROUTE_LINK_ALLOWED: Readonly<Record<string, string>> = {
   'components/platform/PlatformStatusPage.tsx': 'a platform page, as above',
   'components/platform/PlatformIntegrationsPage.tsx':
     'a platform page, as above: its own tab in the URL (legacy 380)',
+  'components/platform/PlatformAdminAgentPage.tsx':
+    'a platform page, as above: drops the targets link from its own URL (S11 AA4e)',
+  'components/platform/PlatformWorkspacesPage.tsx':
+    'a platform page, as above: a trial workspace created from the admin agent page goes back there (S11 AA4e)',
   'components/platform/integrations/useGateInstancesPanel.ts':
     "that page's gate-instances tab state: drops a connector preset link's query from its own URL (S11 P1-F)",
   'lib/audit.ts': "builds the audit deep links; resourceHref takes the caller's canOpen to filter",

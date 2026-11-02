@@ -191,6 +191,22 @@ describe('admin agent links (S11 AA4c-3)', () => {
     expect(readOpenAdminAgentChat('#/work/chats?open=entry')).toBe(false);
     expect(routeFromHash(hrefs.platformAdminAgent())).toEqual({ kind: 'platformAdminAgent' });
   });
+
+  it('S11 AA4e: 管理员智能体 with a trial workspace marked, and with its targets open', () => {
+    const marked = hrefs.platformAdminAgent('ws-trial');
+    expect(marked).toBe('#/platform/admin-agent/ws-trial');
+    expect(routeFromHash(marked)).toEqual({ kind: 'platformAdminAgent', workspaceId: 'ws-trial' });
+    const targets = hrefs.platformAdminAgent('ws-trial', { targets: true });
+    expect(targets).toBe('#/platform/admin-agent/ws-trial/targets');
+    expect(routeFromHash(targets)).toEqual({
+      kind: 'platformAdminAgent',
+      workspaceId: 'ws-trial',
+      targets: true,
+    });
+    expect(routeFromHash('#/platform/admin-agent/ws-trial/other').kind).not.toBe(
+      'platformAdminAgent',
+    );
+  });
 });
 
 describe('sectionOf', () => {
@@ -308,7 +324,10 @@ function hrefFor(route: Route): string {
     case 'platformAdminProposals':
       return hrefs.platformAdminProposals(route.tab, route.itemId);
     case 'platformAdminAgent':
-      return hrefs.platformAdminAgent();
+      return hrefs.platformAdminAgent(
+        route.workspaceId,
+        route.targets ? { targets: true } : undefined,
+      );
     case 'platformSettings':
       return hrefs.platformSettings();
     case 'platformRuntime':

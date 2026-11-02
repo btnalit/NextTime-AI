@@ -1412,6 +1412,50 @@ describe('ChatPage in an admin agent chat (S11 AA4c-3, UX P2-1 on #943)', () => 
     expect(streaming?.textContent).toContain('正在输出');
   });
 
+  it('S11 AA4e: says above the composer when no target is chosen yet, and links to choosing them', async () => {
+    const trialStatus = (targets: readonly unknown[]) => ({
+      enabled: true,
+      workspaces: [
+        { workspaceId: 'ws-trial', name: '试验场', refusal: null, targets, session: null },
+      ],
+    });
+    const workspace = () => ({
+      id: 'ws-trial',
+      name: '试验场',
+      caller: { id: 'p-1', kind: 'human', role: 'owner', displayName: 'Admin' },
+    });
+    const fake = fakeClient({}, chatRow({ agentKind: 'admin_agent' }));
+    renderChat(
+      fake.client,
+      scriptedHttp({ get_workspace: workspace, get_admin_agent_status: () => trialStatus([]) }),
+    );
+    const hint = await screen.findByTestId('chat-admin-agent-no-targets');
+    expect(hint.textContent).toContain('还没有选目标工作区');
+    expect(within(hint).getByTestId('chat-admin-agent-choose-targets').getAttribute('href')).toBe(
+      '#/platform/admin-agent/ws-trial/targets',
+    );
+    cleanup();
+
+    const chosen = fakeClient({}, chatRow({ agentKind: 'admin_agent' }));
+    const http = scriptedHttp({
+      get_workspace: workspace,
+      get_admin_agent_status: () =>
+        trialStatus([
+          {
+            workspaceId: 'ws-prod',
+            name: '生产',
+            status: 'active',
+            chosenAt: '2026-11-01T00:00:00.000Z',
+          },
+        ]),
+    });
+    renderChat(chosen.client, http);
+    await waitFor(() =>
+      expect(http.calls.some((call) => call.name === 'get_admin_agent_status')).toBe(true),
+    );
+    expect(screen.queryByTestId('chat-admin-agent-no-targets')).toBeNull();
+  });
+
   it('keeps the entry agent wording in an entry chat', async () => {
     const fake = fakeClient();
     renderChat(fake.client, scriptedHttp({}));

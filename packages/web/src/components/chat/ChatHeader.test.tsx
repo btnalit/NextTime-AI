@@ -167,6 +167,23 @@ describe('ChatHeader — an admin agent chat (S11 AA4c-3)', () => {
     expect(window.location.hash).toBe('#/platform/admin-agent');
   });
 
+  it('S11 AA4e: in a known trial workspace, lands on its card with 选择目标工作区 open', async () => {
+    const http = fakeCaller({
+      get_workspace: () => ({
+        id: 'ws-trial',
+        name: 'Trial',
+        caller: { id: 'p-1', kind: 'human', role: 'owner', displayName: 'Admin' },
+      }),
+    });
+    renderHeader({ chat: chatRow({ agentKind: 'admin_agent' }), http });
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-header-status').textContent).toContain('Trial'),
+    );
+    openOverflowMenu();
+    fireEvent.click(await screen.findByTestId('chat-header-admin-targets'));
+    expect(window.location.hash).toBe('#/platform/admin-agent/ws-trial/targets');
+  });
+
   it('an entry agent chat has no targets item', async () => {
     renderHeader();
     expect(screen.queryByTestId('chat-header-admin-agent')).toBeNull();

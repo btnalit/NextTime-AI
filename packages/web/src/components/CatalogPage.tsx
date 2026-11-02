@@ -7,6 +7,7 @@ import type {
 } from '@nexttime/shared';
 import { visibleText } from '@nexttime/shared';
 import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useAdminProposalCountValue } from '../hooks/useAdminProposalCount.js';
 import { invalidateCapability, useCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { useFocusWhenKeyLost } from '../hooks/useFocusWhenLost.js';
 import { usePermissions } from '../hooks/usePermissions.js';
@@ -247,6 +248,7 @@ export function CatalogPage({
 }: CatalogPageProps) {
   const t = useT();
   const can = useRoleCan(http);
+  const waiting = useAdminProposalCountValue();
   // S11 AA4a (F10-2): 管理员提案 is the workspace owner's — only they read, apply or reject what an
   // admin proposal addresses here (`minRole: owner`), so the tab is offered to them alone. Opened
   // from a link by anyone else, it says whose it is.
@@ -273,6 +275,8 @@ export function CatalogPage({
           options={tabs.map((value) => ({
             value,
             label: t(TAB_LABEL[value].zh, TAB_LABEL[value].en),
+            // S11 AA4e: how many admin proposals wait for the owner here.
+            ...(value === 'proposals' && waiting !== null && waiting > 0 ? { count: waiting } : {}),
           }))}
         />
       </div>
