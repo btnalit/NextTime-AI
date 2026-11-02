@@ -24,15 +24,17 @@ import { readTaskGoalStep, taskForWorkerRun } from '../task/index.js';
  * `findRunningTurn` already establishes for this exact table.
  */
 
-/** The most recently created Chat `principalId` owns, or a newly created one if they have none
- *  yet. Used both as the ActionRequest-holder target and as the Task-chat fallback below. */
+/** The most recently created entry Chat `principalId` owns, or a newly created one if they have
+ *  none yet. Used both as the ActionRequest-holder target and as the Task-chat fallback below.
+ *  S11 AA4c: never an admin agent's Chat — what the entry agent's work leaves for the person (a
+ *  Task's outcome, an approval) goes where the entry agent reads it. */
 export async function resolveDefaultChat(
   client: PoolClient,
   workspaceId: string,
   principalId: string,
 ): Promise<ChatRow> {
   const chats = await listChats(client, workspaceId, principalId); // ordered created_at desc
-  const mostRecent = chats[0];
+  const mostRecent = chats.find((chat) => chat.agentKind === 'entry');
   if (mostRecent) return mostRecent;
   return newChat(client, workspaceId, principalId, {});
 }

@@ -52,6 +52,42 @@ export const SESSION_KIND_VALUES = [
 export type SessionKind = (typeof SESSION_KIND_VALUES)[number];
 export const SessionKindSchema = asEnum(SESSION_KIND_VALUES);
 
+/** S11 AA4c (migrations/core/0053): which agent holds a Chat — the person's entry agent, or a
+ *  platform administrator's admin agent in a trial workspace (its Turns run through an
+ *  `admin_agent` session and its own container). Set when the Chat is created, never changed. */
+export const CHAT_AGENT_KIND_VALUES = ['entry', 'admin_agent'] as const;
+export type ChatAgentKind = (typeof CHAT_AGENT_KIND_VALUES)[number];
+export const ChatAgentKindSchema = asEnum(CHAT_AGENT_KIND_VALUES);
+
+/** S11 AA1 / AA4c: why a platform administrator's admin agent may not act now — at its Handle's
+ *  issuance, on every call through one, and on `get_admin_agent_status` (the console says why the
+ *  agent cannot start in a trial workspace). The kernel checks them in this order
+ *  (`application/admin-agent/identity.ts` `adminAgentRefusalOf`). */
+export const ADMIN_AGENT_REFUSAL_REASON_VALUES = [
+  /** `ADMIN_AGENT_ENABLED` is off. */
+  'switched_off',
+  /** No such Principal in the workspace. */
+  'unknown_principal',
+  /** The Principal is not a person (an agent or service Principal never runs one, I-A1). */
+  'not_a_person',
+  /** The person has no platform user (a Principal from before platform users, never bound). */
+  'no_platform_user',
+  'principal_disabled',
+  'user_disabled',
+  'workspace_disabled',
+  /** S11 AA3a (I-A6): the workspace is not a trial workspace (`workspaces.purpose =
+   *  'admin_trial'`, migration core 0050) — an admin agent explores and tries things out only
+   *  there; a production workspace changes only through an applied ChangePlan. */
+  'not_trial_workspace',
+  /** The user is not (or no longer) an effective platform administrator. */
+  'not_platform_admin',
+  /** S11 AA2: the Principal's platform user is no longer the one the call was checked for (it was
+   *  bound to another between the call's two transactions, `platform-state.ts`). */
+  'user_changed',
+] as const;
+export type AdminAgentRefusalReason = (typeof ADMIN_AGENT_REFUSAL_REASON_VALUES)[number];
+export const AdminAgentRefusalReasonSchema = asEnum(ADMIN_AGENT_REFUSAL_REASON_VALUES);
+
 // ---------------------------------------------------------------------------------------------
 // §5.6 Epistemic status & §3.2 / reference-projects Conflict taxonomy
 // ---------------------------------------------------------------------------------------------

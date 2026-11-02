@@ -191,6 +191,30 @@ export class PlatformSegmentChangedError extends Error {
   }
 }
 
+/** S11 AA4c (F5, the AA4c plan's D2, coordinator 11-02): the administrator who proposed this no
+ *  longer has this workspace among the targets of their admin agent (`set_admin_agent_targets`) —
+ *  the proposal keeps the target it was made with, but is not applied after its proposer took it
+ *  back. Mapped to 409 `admin_proposal_target_no_longer_chosen`; nothing was applied. */
+export class AdminProposalTargetNoLongerChosenError extends Error {
+  readonly code = 'admin_proposal_target_no_longer_chosen' as const;
+  constructor(segmentId: string) {
+    super(
+      `admin proposal segment ${segmentId}: its administrator no longer lets their admin agent propose to this workspace — nothing was applied. Reject it, or ask them to choose this workspace again and propose it anew.`,
+    );
+    this.name = 'AdminProposalTargetNoLongerChosenError';
+  }
+}
+
+/** Whether the proposal's proposer still has this workspace among their admin agent's targets
+ *  (`admin_proposal_target_chosen`, governance 0036: it answers for a proposal addressed here). */
+async function targetStillChosen(client: PoolClient, proposalId: string): Promise<boolean> {
+  const result = await client.query<{ chosen: boolean }>(
+    'select admin_proposal_target_chosen($1) as chosen',
+    [proposalId],
+  );
+  return result.rows[0]?.chosen === true;
+}
+
 // -------------------------------------------------------------------------------------------
 // Reads (the target workspace)
 // -------------------------------------------------------------------------------------------
@@ -745,6 +769,7 @@ export async function previewAdminProposalSegment(
     suspectedSecretPaths: [...suspected.paths],
   };
   const standing = await platformStandingOf(client, row);
+  const targetChosen = await targetStillChosen(client, row.proposal_id);
   const { resolved, blockers } = await resolveIntents(
     client,
     workspaceId,
@@ -756,6 +781,7 @@ export async function previewAdminProposalSegment(
       segment: receivedSegmentOf(row),
       blockers: [...blockers],
       platformChanges: [...standing.changes],
+      targetChosen,
       digest: null,
       unchanged: false,
       items: [],
@@ -782,9 +808,11 @@ export async function previewAdminProposalSegment(
     segment: receivedSegmentOf(row),
     blockers: [],
     platformChanges: [...standing.changes],
+    targetChosen,
     // AA3c: the dry run shows what applying would do, but there is nothing to review for applying
-    // until the platform segment it depends on is applied, and while what it created has changed.
-    digest: standing.ready ? plan.digest : null,
+    // until the platform segment it depends on is applied, and while what it created has changed;
+    // AA4c: nor once its proposer took this workspace off their admin agent's targets.
+    digest: standing.ready && targetChosen ? plan.digest : null,
     unchanged: plan.unchanged,
     items,
     ...credentials,
@@ -819,7 +847,8 @@ export interface AppliedAdminProposalSegment {
  * workspace's owner, the applier and the confirmer of every widening item. In order: the proposal's
  * dependency lock, shared (AA3c-2: its platform change is not rolled back until this commits), the
  * segment's row lock and status, the platform segment applied (409) and what it created unchanged
- * (409), resolution (blocked: 409), the credential review (400), then the core's apply (digest 409,
+ * (409), the target still among the proposer's admin agent targets (AA4c: 409), resolution
+ * (blocked: 409), the credential review (400), then the core's apply (digest 409,
  * widening 400, nothing to change: 409 here) and the segment's `applied` edge. Any refusal leaves
  * everything as it was.
  */
@@ -841,6 +870,11 @@ export async function applyAdminProposalSegment(
     throw new PlatformSegmentNotAppliedError(row.id, standing.platformStatus);
   }
   if (standing.changes.length > 0) throw new PlatformSegmentChangedError(row.id, standing.changes);
+  // AA4c: refused while the proposer no longer lets their admin agent propose here (governance
+  // 0036's guard refuses the `applied` edge too).
+  if (!(await targetStillChosen(client, row.proposal_id))) {
+    throw new AdminProposalTargetNoLongerChosenError(row.id);
+  }
   const { resolved, blockers } = await resolveIntents(
     client,
     workspaceId,

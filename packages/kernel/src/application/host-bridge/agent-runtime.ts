@@ -21,6 +21,10 @@ export interface StartTurnInput {
   /** Already carries the `<!--nexttime:turn_id=...-->` marker (§7.2) — see index.ts's
    *  `registerTurnStartedConsumer`, which is the one place that prefixes it. */
   readonly prompt: string;
+  /** S11 AA4c: an admin agent's Turn (its Chat's `agent_kind`), run under its `admin_agent`
+   *  session `sessionId`; absent for the entry agent's. */
+  readonly agentKind?: 'admin_agent';
+  readonly sessionId?: string;
 }
 
 /** `status` values a Turn can end in — same three design doc §5.5 uses for Activity/Turn

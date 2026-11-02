@@ -75,6 +75,11 @@ const TurnStartedEvent = z.object({
   // immediately before handing it to `AgentRuntime.startTurn` — see
   // `packages/kernel/src/index.ts`'s `resolveTurnPrompt` wiring.
   chatMessageId: z.string(),
+  // S11 AA4c (migrations/core/0053): an admin agent's Chat names its agent and the `admin_agent`
+  // session the Turn runs through (the one its Activity records, core 0052) — the runtime issues
+  // that session's Handle and starts the admin agent's own container. Absent: the entry agent.
+  agentKind: z.literal('admin_agent').optional(),
+  sessionId: z.string().optional(),
 });
 
 const TurnCompletedEvent = z.object({

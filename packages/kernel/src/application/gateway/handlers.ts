@@ -10,7 +10,13 @@ import type {
 import { getCapability, storableValue } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
+  adminAgentRefusal,
+  assertAdminAgentAuthority,
+} from '../../application/admin-agent/identity.js';
+import {
   type ChatMessageRow,
+  type ChatRow,
+  assertChatKindAccess,
   chatMessageKind,
   chatMessageText,
   currentPrincipalId,
@@ -158,6 +164,13 @@ import {
 } from '../platform/index.js';
 import { hashStableParams, scopeExplicitIdempotencyKey } from './action-executor.js';
 import { toWireActionRequest } from './action-request-wire.js';
+import {
+  type StopRunningTurn,
+  agentListProposalTargetsHandler,
+  getAdminAgentStatusHandler,
+  setAdminAgentTargetsHandler,
+  stopAdminAgentHandlerWith,
+} from './admin-agent-handlers.js';
 import {
   agentGetAdminProposalHandler,
   agentListAdminProposalsHandler,
@@ -677,17 +690,48 @@ export function setAgentRuntimeForHandlers(runtime: AgentRuntime): void {
   agentRuntime = runtime;
 }
 
+/** S11 AA4c (`assertChatKindAccess`): the caller's Chat, as `requireChatAccess` shows it, with an
+ *  admin agent's Chat refused (403 `admin_agent_refused`) once its person may no longer read it. */
+async function requireChatForCaller(
+  client: PoolClient,
+  workspaceId: string,
+  chatId: string,
+): Promise<ChatRow> {
+  const chat = await requireChatAccess(client, workspaceId, chatId);
+  if (chat.agentKind === 'admin_agent') {
+    await assertChatKindAccess(client, workspaceId, chat, await currentPrincipalId(client), 'read');
+  }
+  return chat;
+}
+
 const listChatsHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { includeArchived } = params as { includeArchived?: boolean };
   const principalId = await currentPrincipalId(client);
   const rows = await listChats(client, workspaceId, principalId, { includeArchived });
-  return { result: { items: rows.map(toWireChat) } };
+  // S11 AA4c: a person who may no longer read their admin agent's Chats (no longer a platform
+  // administrator, the trial workspace disabled, …) does not see them listed either. The switch
+  // being off is not such a reason (`assertChatKindAccess`).
+  const hidesAdminChats =
+    rows.some((row) => row.agentKind === 'admin_agent') &&
+    (await adminAgentRefusal(client, workspaceId, principalId, true)) !== null;
+  const shown = hidesAdminChats ? rows.filter((row) => row.agentKind !== 'admin_agent') : rows;
+  return { result: { items: shown.map(toWireChat) } };
 };
 
 const newChatHandler: CapabilityHandler = async (client, workspaceId, params) => {
-  const { title } = params as { title?: string };
+  const { title, agentKind } = params as { title?: string; agentKind?: 'entry' | 'admin_agent' };
   const principalId = await currentPrincipalId(client);
-  const chat = await newChat(client, workspaceId, principalId, { title });
+  // S11 AA4c (the AA4c plan's D4): an admin agent's Chat is started only by a person whose admin
+  // agent may act here now — switched on, a trial workspace, an effective platform administrator
+  // (403 `admin_agent_refused`, `details.reason`). The database also refuses one outside a trial
+  // workspace (core 0053).
+  if (agentKind === 'admin_agent') {
+    await assertAdminAgentAuthority(client, workspaceId, principalId);
+  }
+  const chat = await newChat(client, workspaceId, principalId, {
+    title,
+    ...(agentKind === 'admin_agent' ? { agentKind } : {}),
+  });
   return { result: toWireChat(chat), resourceType: 'chat', resourceId: chat.id };
 };
 
@@ -705,9 +749,20 @@ const sendChatMessageHandler: CapabilityHandler = async (client, workspaceId, pa
   };
 };
 
+/** Stops the running Turn `turnId` of `chatId` — the body of `stop_agent` below, shared with
+ *  `stop_admin_agent` (admin-agent-handlers.ts), which reaches the runtime only through it. Returns
+ *  what to run once the caller's transaction committed, when the Turn had to be ended here. */
+const stopRunningTurn: StopRunningTurn = async (client, workspaceId, chatId, turnId) => {
+  await requestTurnStop(client, workspaceId, turnId);
+  const runtimeKnowsTurn = await agentRuntime?.stopTurn(turnId);
+  if (runtimeKnowsTurn !== false) return undefined;
+  const ended = await endUnknownRuntimeTurn(client, workspaceId, chatId, turnId);
+  return () => publishTurnEnded(ended);
+};
+
 const stopAgentHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { chatId } = params as { chatId: string };
-  await requireChatAccess(client, workspaceId, chatId);
+  await requireChatForCaller(client, workspaceId, chatId);
   const running = await findRunningTurn(client, workspaceId, chatId);
   if (running) {
     // Fire-and-acknowledge: the actual end-of-turn (status='interrupted') is reported back
@@ -724,10 +779,8 @@ const stopAgentHandler: CapabilityHandler = async (client, workspaceId, params) 
     //
     // R-55: the stop intent is recorded on the Turn first, so whichever report of its end lands
     // first — agent-host's `turnEnded` or the extension's `report_turn` — it ends `interrupted`.
-    await requestTurnStop(client, workspaceId, running.id);
-    const runtimeKnowsTurn = await agentRuntime?.stopTurn(running.id);
-    if (runtimeKnowsTurn === false) {
-      const ended = await endUnknownRuntimeTurn(client, workspaceId, chatId, running.id);
+    const publishEnded = await stopRunningTurn(client, workspaceId, chatId, running.id);
+    if (publishEnded !== undefined) {
       // The `chat.metadata` push waits for this transaction's commit (turn-recovery.ts).
       const result = { stopped: true };
       return {
@@ -735,7 +788,7 @@ const stopAgentHandler: CapabilityHandler = async (client, workspaceId, params) 
         resourceType: 'chat',
         resourceId: chatId,
         afterCommit: async () => {
-          publishTurnEnded(ended);
+          publishEnded();
           return result;
         },
       };
@@ -779,6 +832,7 @@ const getChatHistoryHandler: CapabilityHandler = async (client, workspaceId, par
     cursor?: string;
     limit?: number;
   };
+  await requireChatForCaller(client, workspaceId, chatId);
   const page = await getChatHistory(client, workspaceId, { chatId, cursor, limit });
   const result =
     page.nextCursor === undefined
@@ -794,7 +848,7 @@ const getChatHistoryHandler: CapabilityHandler = async (client, workspaceId, par
  *  transaction has already committed. */
 const subscribeChatHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { chatId } = params as { chatId: string };
-  await requireChatAccess(client, workspaceId, chatId);
+  await requireChatForCaller(client, workspaceId, chatId);
   return { result: { subscribed: true }, resourceType: 'chat', resourceId: chatId };
 };
 
@@ -821,7 +875,7 @@ async function requireChatOwnership(
   ctx: Parameters<CapabilityHandler>[3],
   options: { readonly allowWorkspaceOwner: boolean },
 ): Promise<{ readonly principalId: string }> {
-  const chat = await requireChatAccess(client, workspaceId, chatId);
+  const chat = await requireChatForCaller(client, workspaceId, chatId);
   const caller = ctx?.principal
     ? { id: ctx.principal.id, role: ctx.principal.role }
     : await currentPrincipalRole(client, workspaceId);
@@ -2744,6 +2798,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['agent_list_admin_proposals', agentListAdminProposalsHandler],
   ['agent_get_admin_proposal', agentGetAdminProposalHandler],
   ['agent_withdraw_admin_proposal', agentWithdrawAdminProposalHandler],
+  // S11 AA4c — the admin agent's targets, by id (admin-agent-handlers.ts).
+  ['agent_list_proposal_targets', agentListProposalTargetsHandler],
   ['list_admin_proposals', listAdminProposalsHandler],
   ['get_admin_proposal', getAdminProposalHandler],
   ['withdraw_admin_proposal', withdrawAdminProposalHandler],
@@ -2760,4 +2816,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['get_platform_change_segment', getPlatformChangeSegmentHandler],
   ['preview_roll_back_platform_change_segment', previewRollBackPlatformChangeSegmentHandler],
   ['roll_back_platform_change_segment', rollBackPlatformChangeSegmentHandler],
+  // S11 AA4c — a platform administrator's own admin agent (admin-agent-handlers.ts).
+  ['get_admin_agent_status', getAdminAgentStatusHandler],
+  ['set_admin_agent_targets', setAdminAgentTargetsHandler],
+  ['stop_admin_agent', stopAdminAgentHandlerWith(stopRunningTurn)],
 ]);

@@ -499,6 +499,8 @@ const ADMIN_AGENT_CEILING_CAPABILITY_NAMES = [
   'agent_list_admin_proposals',
   'agent_get_admin_proposal',
   'agent_withdraw_admin_proposal',
+  // S11 AA4c: the workspaces its administrator lets it propose to, by id (`adminAgentOnly`)
+  'agent_list_proposal_targets',
 ] as const;
 
 /** The registry groups an admin-agent capability may come from. `governance` (`request_action`),

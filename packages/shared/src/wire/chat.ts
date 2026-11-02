@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ChatAgentKindSchema } from '../enums.js';
 
 /**
  * wire/chat: Chat / ChatMessage wire shapes (docs/wire-contract-conventions.md §5, S3.7) — one
@@ -30,6 +31,10 @@ export const ChatWireSchema = z
      *  — read back from the same partial unique index `sendChatMessage` relies on
      *  (`activities_one_running_turn_per_chat_uidx`), not a second source of truth. */
     hasRunningTurn: z.boolean(),
+    /** S11 AA4c (migrations/core/0053): `entry` — the person's entry agent; `admin_agent` — a
+     *  platform administrator's admin agent, in a trial workspace, private to the person who
+     *  started it. Set by `new_chat`, never changed. */
+    agentKind: ChatAgentKindSchema,
   })
   .strict();
 export type ChatWire = z.infer<typeof ChatWireSchema>;

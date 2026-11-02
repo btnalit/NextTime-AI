@@ -31,3 +31,4 @@ export * from './procedure-stats.js';
 export * from './skill-stats.js';
 export * from './eval.js';
 export * from './platform-state.js';
+export * from './admin-agent.js';

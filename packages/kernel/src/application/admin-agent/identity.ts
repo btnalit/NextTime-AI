@@ -1,4 +1,8 @@
-import type { Role } from '@nexttime/shared';
+import {
+  ADMIN_AGENT_REFUSAL_REASON_VALUES,
+  type AdminAgentRefusalReason,
+  type Role,
+} from '@nexttime/shared';
 import type { CryptoKey } from 'jose';
 import type { PoolClient } from 'pg';
 import {
@@ -56,30 +60,10 @@ export function adminAgentEnabled(raw: string | undefined = process.env[ADMIN_AG
   );
 }
 
-/** Why an admin agent may not act now. */
-export const ADMIN_AGENT_REFUSAL_REASONS = [
-  /** `ADMIN_AGENT_ENABLED` is off. */
-  'switched_off',
-  /** No such Principal in the workspace. */
-  'unknown_principal',
-  /** The Principal is not a person (an agent or service Principal never runs one, I-A1). */
-  'not_a_person',
-  /** The person has no platform user (a Principal from before platform users, never bound). */
-  'no_platform_user',
-  'principal_disabled',
-  'user_disabled',
-  'workspace_disabled',
-  /** S11 AA3a (I-A6): the workspace is not a trial workspace (`workspaces.purpose =
-   *  'admin_trial'`, migration core 0050) — an admin agent explores and tries things out only
-   *  there; a production workspace changes only through an applied ChangePlan. */
-  'not_trial_workspace',
-  /** The user is not (or no longer) an effective platform administrator. */
-  'not_platform_admin',
-  /** S11 AA2: the Principal's platform user is no longer the one the call was checked for (it was
-   *  bound to another between the call's two transactions, `platform-state.ts`). */
-  'user_changed',
-] as const;
-export type AdminAgentRefusalReason = (typeof ADMIN_AGENT_REFUSAL_REASONS)[number];
+/** Why an admin agent may not act now — the list lives in `@nexttime/shared` (S11 AA4c: the
+ *  console's 「管理员智能体」 page reads it from `get_admin_agent_status`). */
+export const ADMIN_AGENT_REFUSAL_REASONS = ADMIN_AGENT_REFUSAL_REASON_VALUES;
+export type { AdminAgentRefusalReason };
 
 /** Thrown when an admin agent may not act now — at issuance, or (as a refusal of the call) when a
  *  Handle of one is used. */
@@ -254,9 +238,12 @@ export async function issueAdminAgentHandle(
   });
 }
 
-/** The Principal's newest usable `admin_agent` session, or a new one. A revoked one — after a
- *  demotion or a disabled user — is never reused. */
-async function openAdminAgentSession(
+/** The Principal's newest usable `admin_agent` session, or a new one, on `client` inside a
+ *  transaction of `workspaceId`. A revoked one — after a demotion, a disabled user or
+ *  `stop_admin_agent` — is never reused. One per person and trial workspace while it lasts: every
+ *  admin agent Chat of theirs there runs its Turns under it (S11 AA4c, `sendChatMessage`), and its
+ *  Handle is the one the agent's container holds. The caller has checked the authority. */
+export async function openAdminAgentSession(
   client: PoolClient,
   workspaceId: string,
   principalId: string,

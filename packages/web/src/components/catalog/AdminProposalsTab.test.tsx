@@ -97,6 +97,7 @@ function preview(
     segment: received(segmentPatch),
     blockers: [],
     platformChanges: [],
+    targetChosen: true,
     digest: 'sha256:reviewed',
     unchanged: false,
     items: [

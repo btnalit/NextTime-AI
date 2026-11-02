@@ -7,6 +7,12 @@ import {
   gateRefusalOf,
 } from '../../adapters/gatekeeper-client/index.js';
 import { OutboundTargetRefusedError } from '../../adapters/outbound-target/index.js';
+import {
+  AdminAgentRefused,
+  AdminAgentRoleNotStoredError,
+  AdminAgentTargetsInvalidError,
+  AdminAgentTrialWorkspaceNotFoundError,
+} from '../../application/admin-agent/index.js';
 // S11 P1: the ChangePlan core's refusals (application/change-plan), same direct import.
 import {
   AdminProposalCredentialError,
@@ -19,6 +25,8 @@ import {
   AdminProposalSegmentNotFoundError,
   AdminProposalSegmentNotOpenError,
   AdminProposalSegmentUnchangedError,
+  AdminProposalTargetNoLongerChosenError,
+  AdminProposalTargetNotChosenError,
   AdminProposalTargetUnavailableError,
   ChangeApplierNotAPersonError,
   ChangeConfirmationRequiredError,
@@ -332,6 +340,20 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (err instanceof UnauthorizedError) {
     return { code: WS_ERROR_CODES.UNAUTHORIZED, message: 'unauthorized' };
   }
+  // S11 AA4c: mirrors HTTP 403 `admin_agent_refused` (capability-route.ts).
+  if (err instanceof AdminAgentRefused) {
+    return { code: WS_ERROR_CODES.FORBIDDEN, message: err.message };
+  }
+  // S11 AA4c: mirrors HTTP 404 `not_found`, 400 `invalid_params` and 409 `admin_role_not_stored`.
+  if (err instanceof AdminAgentTrialWorkspaceNotFoundError) {
+    return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
+  }
+  if (err instanceof AdminAgentTargetsInvalidError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  if (err instanceof AdminAgentRoleNotStoredError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
   if (err instanceof ForbiddenError || err instanceof ChangeApplierNotAPersonError) {
     return { code: WS_ERROR_CODES.FORBIDDEN, message: err.message };
   }
@@ -596,6 +618,7 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   // `invalid_params`, 429 `admin_proposal_quota_exceeded`, 403 `admin_proposal_role_mismatch`,
   // 404 `admin_proposal_not_found` and 409 `admin_proposal_not_open` (capability-route.ts).
   if (
+    err instanceof AdminProposalTargetNotChosenError ||
     err instanceof AdminProposalTargetUnavailableError ||
     err instanceof AdminProposalCredentialError ||
     err instanceof AdminProposalInvalidError
@@ -622,7 +645,8 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (
     err instanceof AdminProposalSegmentNotOpenError ||
     err instanceof AdminProposalSegmentBlockedError ||
-    err instanceof AdminProposalSegmentUnchangedError
+    err instanceof AdminProposalSegmentUnchangedError ||
+    err instanceof AdminProposalTargetNoLongerChosenError
   ) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
