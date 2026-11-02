@@ -33,6 +33,7 @@ import {
   PlatformChangeSegmentNotFoundError,
   PlatformChangeSegmentRolledBackError,
   PlatformSegmentBlockedError,
+  PlatformSegmentChangedError,
   PlatformSegmentNotAppliedError,
   PlatformSegmentNotFoundError,
 } from '../../application/change-plan/index.js';
@@ -628,7 +629,8 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   // S11 AA3c-1: mirrors HTTP 404 `admin_proposal_segment_not_found` /
   // `platform_change_segment_not_found` and 409 `admin_proposal_segment_blocked`,
   // `platform_segment_not_applied`, `platform_change_segment_rolled_back`,
-  // `platform_change_drifted`, `dependent_segments_applied` (capability-route.ts).
+  // `platform_change_drifted`, `dependent_segments_applied`; AA3c-2: `platform_segment_changed`
+  // (capability-route.ts).
   if (
     err instanceof PlatformSegmentNotFoundError ||
     err instanceof PlatformChangeSegmentNotFoundError
@@ -638,6 +640,7 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (
     err instanceof PlatformSegmentBlockedError ||
     err instanceof PlatformSegmentNotAppliedError ||
+    err instanceof PlatformSegmentChangedError ||
     err instanceof PlatformChangeSegmentRolledBackError ||
     err instanceof PlatformChangeDriftedError ||
     err instanceof DependentSegmentsAppliedError

@@ -1,8 +1,10 @@
 import {
   ADMIN_PROPOSAL_LIST_LIMIT,
+  type AdminProposalGateAvailability,
   type AdminProposalItemBlocker,
   type AdminProposalItemBlockerWire,
   type AdminProposalItemIntentWire,
+  type AdminProposalPlatformInstanceChangeWire,
   type AdminProposalPlatformItemIntentWire,
   type AdminProposalPreviewItemWire,
   type AdminProposalSegmentPreviewWire,
@@ -21,6 +23,7 @@ import {
   findSuspectedSecrets,
   shownFreeText,
 } from '../../governance/redaction/index.js';
+import { listAvailableGateInstances } from '../gates/index.js';
 import { unresolvedWorkerDefinitionReferences } from '../worker/index.js';
 import { derivePackComponentId } from './component-id.js';
 import {
@@ -36,6 +39,7 @@ import { lockFamilyItem } from './family-item.js';
 import { inLockOrder } from './lock-order.js';
 import { lockOntologyItem } from './ontology-item.js';
 import { lockOperationItem, operationRevisionProblem } from './operation-item.js';
+import { lockProposalDependency, readProposalPlatformChange } from './proposal-dependency.js';
 
 /**
  * application/change-plan/admin-proposal-segments: an admin proposal's segment in the workspace it
@@ -88,6 +92,17 @@ import { lockOperationItem, operationRevisionProblem } from './operation-item.js
  * preview still shows what applying would do but gives no digest, and applying is refused (409
  * `platform_segment_not_applied`). Rejecting or rolling it back withdraws this segment while it is
  * still proposed (`withdrawnOrigin: 'platform_segment'`).
+ *
+ * Once it is applied (AA3c-2, F-c4 / F8), this workspace also reads what its apply recorded
+ * (governance 0035's `admin_proposal_platform_change`) and compares each instance it created with
+ * the instance now (`proposal-dependency.ts`, the comparison its rollback makes): while one is gone
+ * or changed, the preview lists it (`platformChanges`) and gives no digest, and applying is refused
+ * (409 `platform_segment_changed`). The digest covers the platform segment and that record, so the
+ * owner's review stands on the platform change they saw. Applying takes the proposal's dependency
+ * lock shared before its row lock; rolling that record back takes it exclusive (`platform-
+ * segments.ts`), so the two never interleave — and 0035's triggers refuse the same edges to a write
+ * that does not come through here. An Operation intent whose gate is not enabled here says whether
+ * the owner can enable it now (`gateAvailability`, F-c1: `enable_gate_instance`, then preview again).
  */
 
 // -------------------------------------------------------------------------------------------
@@ -157,6 +172,22 @@ export class PlatformSegmentNotAppliedError extends Error {
     );
     this.name = 'PlatformSegmentNotAppliedError';
     this.details = { platformSegmentStatus: platformStatus };
+  }
+}
+
+/** S11 AA3c-2 (F-c4): a gate instance the proposal's applied platform segment created is gone or
+ *  changed since (`AdminProposalPlatformInstanceChangeWire`) — what the owner would review the
+ *  proposal against is not what the platform segment created. Mapped to 409
+ *  `platform_segment_changed` with `details.items`; nothing was applied. */
+export class PlatformSegmentChangedError extends Error {
+  readonly code = 'platform_segment_changed' as const;
+  readonly details: { readonly items: readonly AdminProposalPlatformInstanceChangeWire[] };
+  constructor(segmentId: string, items: readonly AdminProposalPlatformInstanceChangeWire[]) {
+    super(
+      `admin proposal segment ${segmentId} depends on gate instances its proposal's platform segment created, and ${items.map((item) => (item.gone ? `${item.gateId} is gone` : `${item.gateId} changed (${item.drift.join(', ')})`)).join('; ')} since. Nothing was applied — reject it, or ask a platform administrator.`,
+    );
+    this.name = 'PlatformSegmentChangedError';
+    this.details = { items };
   }
 }
 
@@ -305,10 +336,58 @@ function assertOpen(row: ReceivedSegmentRow): void {
   if (row.status !== 'proposed') throw new AdminProposalSegmentNotOpenError(row.id, row.status);
 }
 
-/** S11 AA3c: whether the proposal's platform segment — which every workspace segment of it
- *  depends on — leaves this one appliable: none, or applied. */
-function platformSegmentApplied(row: ReceivedSegmentRow): boolean {
-  return row.platform_id === null || row.platform_status === 'applied';
+/** S11 AA3c: where the proposal's platform segment — which every workspace segment of it depends
+ *  on — leaves this one. */
+interface PlatformStanding {
+  /** No platform segment, or it is applied (its record too) and nothing it created changed. */
+  readonly ready: boolean;
+  /** The platform segment's status as this workspace should be told it: `rolled_back` for one
+   *  whose record was rolled back while it still reads applied (the two move in one transaction
+   *  on the kernel's path); `null` without one. */
+  readonly platformStatus: AdminProposalSegmentStatus | null;
+  /** The instances it created that changed since. */
+  readonly changes: readonly AdminProposalPlatformInstanceChangeWire[];
+  /** What the digest binds (I-A8, F8): the platform segment and the record its apply wrote. */
+  readonly binding?: Readonly<Record<string, unknown>>;
+}
+
+async function platformStandingOf(
+  client: PoolClient,
+  row: ReceivedSegmentRow,
+): Promise<PlatformStanding> {
+  if (row.platform_id === null) return { ready: true, platformStatus: null, changes: [] };
+  if (row.platform_status !== 'applied') {
+    return { ready: false, platformStatus: row.platform_status, changes: [] };
+  }
+  const change = await readProposalPlatformChange(client, row.proposal_id);
+  if (change === null) return { ready: false, platformStatus: 'rolled_back', changes: [] };
+  return {
+    ready: change.changes.length === 0,
+    platformStatus: 'applied',
+    changes: change.changes,
+    binding: {
+      platformSegment: {
+        id: row.platform_id,
+        changeSegmentId: change.changeSegmentId,
+        reviewedDigest: change.reviewedDigest,
+      },
+    },
+  };
+}
+
+/** The proposal a segment addressed here belongs to, read before any lock (it never changes). */
+async function proposalIdOf(
+  client: PoolClient,
+  workspaceId: string,
+  segmentId: string,
+): Promise<string> {
+  const result = await client.query<{ proposal_id: string }>(
+    'select proposal_id from admin_proposal_segments where id = $1 and target_workspace_id = $2',
+    [segmentId, workspaceId],
+  );
+  const proposalId = result.rows[0]?.proposal_id;
+  if (proposalId === undefined) throw new AdminProposalSegmentNotFoundError(segmentId);
+  return proposalId;
 }
 
 // -------------------------------------------------------------------------------------------
@@ -394,6 +473,20 @@ async function enabledGatekeeper(
   return result.rows[0]?.gatekeeper_object_id ?? null;
 }
 
+/** F-c1: the gate instances this workspace may enable now — what the pack requirements call
+ *  `offered` (`readPackRequirements`): `enabled`, on a `platform_preset` connector, not linked here. */
+async function offeredGateInstances(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<ReadonlySet<string>> {
+  const available = await listAvailableGateInstances(client, workspaceId);
+  return new Set(
+    available
+      .filter((instance) => instance.status === 'enabled' && instance.gatekeeperId === null)
+      .map((instance) => instance.gateId),
+  );
+}
+
 /**
  * Resolves the segment's intents in `workspaceId` (this module's comment), after taking every lock
  * the core will plan them under, in lock order — so the families, links and Operations read here
@@ -410,6 +503,12 @@ async function resolveIntents(
   const blockers: AdminProposalItemBlockerWire[] = [];
   // Skills an earlier intent publishes, by name: a Worker after it may mount them.
   const skillsBefore = new Set<string>();
+  // The instances the platform offers this workspace (`gateAvailability`), read once when needed.
+  let offered: ReadonlySet<string> | undefined;
+  const availabilityOf = async (gateId: string): Promise<AdminProposalGateAvailability> => {
+    offered ??= await offeredGateInstances(client, workspaceId);
+    return offered.has(gateId) ? 'can_enable' : 'needs_platform';
+  };
   for (const [index, item] of items.entries()) {
     const ordinal = index + 1;
     const block = (kind: ChangeItemKind, reason: AdminProposalItemBlocker) =>
@@ -478,7 +577,12 @@ async function resolveIntents(
       case 'operation_version': {
         const gatekeeperId = await enabledGatekeeper(client, workspaceId, item.gateId);
         if (gatekeeperId === null) {
-          block(item.kind, 'gate_not_enabled');
+          blockers.push({
+            ordinal,
+            kind: item.kind,
+            reason: 'gate_not_enabled',
+            gateAvailability: await availabilityOf(item.gateId),
+          });
           break;
         }
         const live = await getPublishedOperation(client, workspaceId, gatekeeperId, item.name);
@@ -640,6 +744,7 @@ export async function previewAdminProposalSegment(
     suspectedSecretValues: suspected.count,
     suspectedSecretPaths: [...suspected.paths],
   };
+  const standing = await platformStandingOf(client, row);
   const { resolved, blockers } = await resolveIntents(
     client,
     workspaceId,
@@ -650,6 +755,7 @@ export async function previewAdminProposalSegment(
     return {
       segment: receivedSegmentOf(row),
       blockers: [...blockers],
+      platformChanges: [...standing.changes],
       digest: null,
       unchanged: false,
       items: [],
@@ -659,6 +765,7 @@ export async function previewAdminProposalSegment(
   const plan = await planWorkspaceSegment(client, workspaceId, {
     source: sourceOf(row),
     items: resolved.map((entry) => entry.intent),
+    ...(standing.binding !== undefined ? { binding: standing.binding } : {}),
   });
   const items: AdminProposalPreviewItemWire[] = [];
   for (const item of plan.items) {
@@ -674,9 +781,10 @@ export async function previewAdminProposalSegment(
   return {
     segment: receivedSegmentOf(row),
     blockers: [],
+    platformChanges: [...standing.changes],
     // AA3c: the dry run shows what applying would do, but there is nothing to review for applying
-    // until the platform segment it depends on is applied.
-    digest: platformSegmentApplied(row) ? plan.digest : null,
+    // until the platform segment it depends on is applied, and while what it created has changed.
+    digest: standing.ready ? plan.digest : null,
     unchanged: plan.unchanged,
     items,
     ...credentials,
@@ -708,10 +816,12 @@ export interface AppliedAdminProposalSegment {
 
 /**
  * `apply_admin_proposal_segment`, in the caller's one transaction, as `principalId` — this
- * workspace's owner, the applier and the confirmer of every widening item. In order: the segment's
- * row lock and status, resolution (blocked: 409), the credential review (400), then the core's apply
- * (digest 409, widening 400, nothing to change: 409 here) and the segment's `applied` edge. Any
- * refusal leaves everything as it was.
+ * workspace's owner, the applier and the confirmer of every widening item. In order: the proposal's
+ * dependency lock, shared (AA3c-2: its platform change is not rolled back until this commits), the
+ * segment's row lock and status, the platform segment applied (409) and what it created unchanged
+ * (409), resolution (blocked: 409), the credential review (400), then the core's apply (digest 409,
+ * widening 400, nothing to change: 409 here) and the segment's `applied` edge. Any refusal leaves
+ * everything as it was.
  */
 export async function applyAdminProposalSegment(
   client: PoolClient,
@@ -719,11 +829,18 @@ export async function applyAdminProposalSegment(
   principalId: string,
   input: ApplyAdminProposalSegmentInput,
 ): Promise<AppliedAdminProposalSegment> {
+  await lockProposalDependency(
+    client,
+    await proposalIdOf(client, workspaceId, input.segmentId),
+    'shared',
+  );
   const row = await loadReceivedSegment(client, workspaceId, input.segmentId, { forUpdate: true });
   assertOpen(row);
-  if (!platformSegmentApplied(row)) {
-    throw new PlatformSegmentNotAppliedError(row.id, row.platform_status ?? 'proposed');
+  const standing = await platformStandingOf(client, row);
+  if (standing.platformStatus !== null && standing.platformStatus !== 'applied') {
+    throw new PlatformSegmentNotAppliedError(row.id, standing.platformStatus);
   }
+  if (standing.changes.length > 0) throw new PlatformSegmentChangedError(row.id, standing.changes);
   const { resolved, blockers } = await resolveIntents(
     client,
     workspaceId,
@@ -742,6 +859,7 @@ export async function applyAdminProposalSegment(
   const applied = await applyWorkspaceSegment(client, workspaceId, {
     source: sourceOf(row),
     items: resolved.map((entry) => entry.intent),
+    ...(standing.binding !== undefined ? { binding: standing.binding } : {}),
     reviewedDigest: input.reviewedDigest,
     proposedBy: null,
     adminProposal: origin,
