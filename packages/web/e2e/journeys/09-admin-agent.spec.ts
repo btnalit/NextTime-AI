@@ -259,6 +259,13 @@ test.describe('Journey ⑨: 管理员智能体提一份管理员提案', () => {
 
     // --- 窄屏：768px 下经抽屉回到「管理员智能体」，选好的目标照样列着 -----------------------------
     await page.setViewportSize({ width: 768, height: 900 });
+    // 窄屏下打开着的变更记录是一个抽屉，挡着导航：先关掉。
+    const recordDrawer = page
+      .getByRole('dialog')
+      .filter({ has: page.getByTestId('platform-change-record-detail') });
+    await expect(recordDrawer).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(recordDrawer).toBeHidden();
     const narrowCard = await trialCard(page, trialName);
     await expect(
       narrowCard.getByTestId('admin-agent-target').filter({ hasText: targetName }),
