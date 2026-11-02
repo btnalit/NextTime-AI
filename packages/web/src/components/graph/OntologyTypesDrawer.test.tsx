@@ -445,6 +445,26 @@ describe('OntologyTypesDrawer — Proposals list view', () => {
 });
 
 describe('OntologyTypesDrawer — Proposal detail view', () => {
+  it('legacy 597: says an agent drafted it, and has no 起草方 row where none was recorded', async () => {
+    const http = proposalsHttp({
+      list_ontology_versions: () => ({ items: [{ ...DRAFT_PROPOSAL, origin: 'agent' }] }),
+    });
+    render(<Harness http={http} startTab="proposals" />);
+    fireEvent.click((await screen.findAllByTestId('graph-proposal-row'))[0] as HTMLElement);
+    const origin = await screen.findByTestId('graph-proposal-detail-origin');
+    expect(origin.querySelector('.chip')?.textContent).toBe('智能体');
+    expect(origin.querySelector('.chip')?.getAttribute('data-tone')).toBe('warn');
+    expect(screen.getByTestId('graph-proposal-detail-origin-note').textContent).toContain(
+      '发布前请逐项核对',
+    );
+    cleanup();
+
+    render(<Harness http={proposalsHttp()} startTab="proposals" />);
+    fireEvent.click((await screen.findAllByTestId('graph-proposal-row'))[0] as HTMLElement);
+    await screen.findByTestId('graph-proposal-detail-body');
+    expect(screen.queryByTestId('graph-proposal-detail-origin')).toBeNull();
+  });
+
   it('opens a draft and diffs it against its own family’s published base (R-61)', async () => {
     const http = proposalsHttp();
     render(<Harness http={http} startTab="proposals" />);

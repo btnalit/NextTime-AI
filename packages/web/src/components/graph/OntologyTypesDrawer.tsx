@@ -19,6 +19,7 @@ import {
 import { type Translate, useT } from '../../lib/i18n.js';
 import { ontologyTypeKindLabel, principalShownName } from '../../lib/labels.js';
 import { DiscardReasonField } from '../catalog/DiscardReasonField.js';
+import { draftOriginItem } from '../catalog/DraftOrigin.js';
 import { Button } from '../kit/button.js';
 import { Combobox } from '../kit/combobox.js';
 import { Confirm } from '../kit/confirm.js';
@@ -811,6 +812,11 @@ function ProposalDetailBody({
             label: t('提出时间', 'Proposed at'),
             value: <time>{formatDateTime(row.createdAt)}</time>,
           },
+          // Legacy 597: the proposer above is whom it is for; an agent drafting for them is said
+          // here.
+          ...[draftOriginItem(row.origin, t, 'graph-proposal-detail-origin')].filter(
+            (item): item is KeyValueItem => item !== null,
+          ),
         ]}
       />
       <div className="stack-s" data-testid="graph-proposal-diff">

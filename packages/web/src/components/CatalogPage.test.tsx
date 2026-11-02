@@ -4768,3 +4768,149 @@ describe('CatalogPage — publish review on a Skill draft (S10 E3-3a)', () => {
     expect(publish.title).toContain('评测进行中');
   });
 });
+
+describe('CatalogPage 起草方 (legacy 597)', () => {
+  it('a Skill an agent drafted says so beside its proposer; a Procedure a person wrote shows only the chip', async () => {
+    const http = scriptedHttp({
+      list_skills: () => ({
+        items: [
+          {
+            id: 'sk-a',
+            version: 1,
+            status: 'draft',
+            name: 'agent-trick',
+            description: 'd',
+            proposedBy: 'p-member',
+            origin: 'agent',
+            draftDigest: 'sha256:a',
+          },
+        ],
+      }),
+      get_skill: () => null,
+      list_procedures: () => ({
+        items: [
+          {
+            id: 'pr-h',
+            version: 1,
+            status: 'draft',
+            name: 'by-hand',
+            description: 'd',
+            steps: [],
+            proposedBy: 'p-member',
+            origin: 'human',
+          },
+        ],
+      }),
+      resolve_refs: () => ({ items: [{ id: 'p-member', kind: 'principal', name: 'Mia' }] }),
+    });
+    renderPage(http, 'skills');
+    const skill = await selectRow(await screen.findByTestId('catalog-row'));
+    const origin = within(skill).getByTestId('skill-detail-origin');
+    expect(origin.getAttribute('data-origin')).toBe('agent');
+    expect(origin.querySelector('.chip')?.getAttribute('data-tone')).toBe('warn');
+    expect(origin.querySelector('.chip')?.textContent).toBe('智能体');
+    expect(within(origin).getByTestId('skill-detail-origin-note').textContent).toContain(
+      '不是人直接写的',
+    );
+    expect(within(skill).getByTestId('skill-detail-proposer').getAttribute('data-ref-id')).toBe(
+      'p-member',
+    );
+    cleanup();
+
+    renderPage(http, 'procedures');
+    const procedure = await selectRow(await screen.findByTestId('catalog-row'));
+    const byHand = within(procedure).getByTestId('procedure-detail-origin');
+    expect(byHand.querySelector('.chip')?.textContent).toBe('人');
+    expect(within(byHand).queryByTestId('procedure-detail-origin-note')).toBeNull();
+  });
+
+  it('a Worker version names its proposer and the platform template it came from; a version with no recorded origin has no row', async () => {
+    const http = scriptedHttp({
+      list_worker_definitions: () => ({
+        items: [
+          {
+            id: 'wd-entry',
+            version: 1,
+            kind: 'entry',
+            status: 'published',
+            definition: { name: 'Entry' },
+            proposedBy: 'p-owner',
+            origin: 'platform',
+          },
+          {
+            id: 'wd-old',
+            version: 1,
+            kind: 'worker',
+            status: 'published',
+            definition: { name: 'Old' },
+            proposedBy: 'p-owner',
+          },
+        ],
+      }),
+      resolve_refs: () => ({ items: [{ id: 'p-owner', kind: 'principal', name: 'Olga' }] }),
+    });
+    renderPage(http, 'workers');
+    const rows = await screen.findAllByTestId('catalog-row');
+    const entryRow = rows.find((row) => row.textContent?.includes('Entry')) as HTMLElement;
+    const oldRow = rows.find((row) => row.textContent?.includes('Old')) as HTMLElement;
+    const entry = await selectRow(entryRow);
+    const origin = within(entry).getByTestId('worker-detail-origin');
+    expect(origin.querySelector('.chip')?.textContent).toBe('平台模板');
+    expect(origin.querySelector('.chip')?.getAttribute('data-tone')).toBe('info');
+    await waitFor(() =>
+      expect(within(entry).getByTestId('worker-detail-proposer').textContent).toContain('Olga'),
+    );
+
+    const old = await selectRow(oldRow);
+    expect(within(old).getByTestId('worker-detail-proposer')).toBeTruthy();
+    expect(within(old).queryByTestId('worker-detail-origin')).toBeNull();
+  });
+
+  it('an Operation draft an agent last wrote warns it may have replaced its proposer’s own draft; the gate’s manifest names no proposer', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'docker.restart',
+            status: 'draft',
+            version: 1,
+            origin: 'agent',
+            proposedBy: 'p-member',
+            draftDigest: 'sha256:o',
+          },
+          {
+            gatekeeperId: 'gk-1',
+            name: 'docker.ps',
+            status: 'published',
+            version: 1,
+            origin: 'import',
+            proposedBy: 'p-owner',
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      resolve_refs: () => ({ items: [{ id: 'p-member', kind: 'principal', name: 'Mia' }] }),
+    });
+    renderPage(http, 'operations', 'gk-1::docker.restart');
+    const draft = await screen.findByTestId('operation-detail');
+    const origin = within(draft).getByTestId('operation-detail-origin');
+    expect(origin.querySelector('.chip')?.textContent).toBe('智能体');
+    expect(within(origin).getByTestId('operation-detail-origin-note').textContent).toContain(
+      '提议者之前写的内容可能已被替换',
+    );
+    await waitFor(() =>
+      expect(within(draft).getByTestId('operation-detail-proposer').textContent).toContain('Mia'),
+    );
+    cleanup();
+
+    renderPage(http, 'operations', 'gk-1::docker.ps');
+    const imported = await screen.findByTestId('operation-detail');
+    const manifest = within(imported).getByTestId('operation-detail-origin');
+    expect(manifest.querySelector('.chip')?.textContent).toBe('门的清单');
+    expect(within(manifest).getByTestId('operation-detail-origin-note').textContent).toContain(
+      '门自己声明',
+    );
+    expect(within(imported).queryByTestId('operation-detail-proposer')).toBeNull();
+  });
+});
