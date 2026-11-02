@@ -171,7 +171,10 @@ export async function createPlatformUser(
  * `ci-e2e` one every other spec (and `00-gates/`) also touches. Slow (two drawer round-trips) —
  * only worth it for a journey whose success criteria specifically depend on an empty canvas.
  */
-export async function createFreshWorkspace(page: Page): Promise<{
+export async function createFreshWorkspace(
+  page: Page,
+  options: { readonly purpose?: 'admin_trial' } = {},
+): Promise<{
   readonly workspaceName: string;
   readonly ownerLogin: string;
   readonly ownerTemporaryPassword: string;
@@ -197,6 +200,10 @@ export async function createFreshWorkspace(page: Page): Promise<{
   await expect(ownerOption).toHaveCount(1);
   await ownerOption.click();
   await expect(ownerBox).toHaveValue(new RegExp(`^${ownerLogin} — `));
+  // Legacy 596 / 610 (`nav-drawer.spec.ts`): a trial workspace, when asked for (用途 试验).
+  if (options.purpose !== undefined) {
+    await wsDrawer.getByTestId('create-workspace-purpose').selectOption(options.purpose);
+  }
   await wsDrawer.getByTestId('create-workspace-submit').click();
   await expect(wsDrawer).toBeHidden({ timeout: 20_000 });
   // `PlatformWorkspacesPage`'s `handleCreated` swaps the same drawer over to the new workspace's

@@ -150,8 +150,7 @@ export function SidebarContent({
   // so — an amber 「试验」 chip in the caption, 「工作区 · 试验 · 所有者」. Known from the
   // membership (cookie sessions); an apiKey session has none and shows no chip.
   const inTrialWorkspace =
-    memberships?.find((m) => m.workspaceId === selectedWorkspaceId)?.workspacePurpose ===
-    'admin_trial';
+    scopedWorkspacePurpose(memberships, selectedWorkspaceId) === 'admin_trial';
   const navRef = useRef<HTMLElement>(null);
   // Design review follow-up (platform-overview-1440.png): with an owner who is also platform
   // admin, ~21 nav items cannot all fit inside a 900px-tall sidebar even at the tightened row
@@ -208,8 +207,8 @@ export function SidebarContent({
             <>
               <span
                 title={t(
-                  '试验工作区：管理员智能体在这里试做，结果要经人审阅的管理员提案才进入生产',
-                  'Trial workspace: the admin agent tries things here; results reach production only through an admin proposal a person reviews',
+                  '试验工作区：管理员智能体在这里试做，结果要经人审阅、应用管理员提案后才进入正式工作区',
+                  'Trial workspace: the admin agent tries things here; results reach a regular workspace only once a person reviews and applies an admin proposal',
                 )}
               >
                 <StatusChip
@@ -367,12 +366,24 @@ export function SidebarContent({
   );
 }
 
+/** Legacy 596: the purpose of the workspace in scope, from the signed-in user's memberships
+ *  (cookie sessions) — `undefined` for an apiKey session, which has none. */
+export function scopedWorkspacePurpose(
+  memberships: readonly WireMembership[] | undefined,
+  selectedWorkspaceId: string | null | undefined,
+): WireMembership['workspacePurpose'] | undefined {
+  return memberships?.find((m) => m.workspaceId === selectedWorkspaceId)?.workspacePurpose;
+}
+
 export interface MobileTopBarProps {
   /** The current page's own name (`lib/nav.ts` `breadcrumbFor(active)`'s last crumb) — `AppShell`
    *  resolves this; kept a plain string here so this file need not import `lib/router.ts`'s
    *  `NavSection` just to re-derive it. */
   readonly pageTitle: string;
   readonly workspaceName: string;
+  /** Legacy 596: the scoped workspace's purpose (`scopedWorkspacePurpose`) — a trial workspace
+   *  reads 「名字（试验）」 here, the only place it shows at this width while the drawer is shut. */
+  readonly workspacePurpose?: WireMembership['workspacePurpose'];
   readonly role: WorkspaceRole;
   /** The WS connection dot + `data-testid="ws-status"` label — a product gap the S8 W1-A3 follow-up
    *  closed, not a testing convenience: at ≤960px the wide `<aside>` (the only place this used to
@@ -405,11 +416,16 @@ function roleText(role: WorkspaceRole, t: Translate): string {
 export function MobileTopBar({
   pageTitle,
   workspaceName,
+  workspacePurpose,
   role,
   wsStatus,
   onOpenMenu,
 }: MobileTopBarProps) {
   const t = useT();
+  const scopeName =
+    workspacePurpose === undefined
+      ? workspaceName
+      : workspaceNameWithPurpose(workspaceName, workspacePurpose, t);
   return (
     <header className="mobile-topbar">
       <Button
@@ -424,7 +440,7 @@ export function MobileTopBar({
       <div className="mobile-topbar-text">
         <span className="mobile-topbar-title truncate">{pageTitle}</span>
         <span className="mobile-topbar-sub truncate">
-          NextTime AI · {workspaceName} · {roleText(role, t)}
+          {`NextTime AI · ${scopeName} · ${roleText(role, t)}`}
         </span>
       </div>
       <div className="conn-status" title={`Kernel connection: ${STATUS_LABEL[wsStatus].en}`}>

@@ -609,6 +609,36 @@ describe('MobileTopBar', () => {
     expect(screen.getByText('NextTime AI · Acme · 操作员及以上')).toBeTruthy();
   });
 
+  // Legacy 596 (UX on #924, P2-1): at this width the top bar is the only place the workspace shows
+  // while the drawer is shut, so a trial workspace says so there too; a standard one, or an apiKey
+  // session's (no membership, so no purpose), reads as before.
+  it('marks a trial workspace in the identity line, and nothing else', () => {
+    const { rerender } = render(
+      <MobileTopBar
+        pageTitle="对话"
+        workspaceName="Sandbox"
+        workspacePurpose="admin_trial"
+        role={KNOWN_OWNER}
+        wsStatus="connected"
+        onOpenMenu={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('NextTime AI · Sandbox（试验） · 所有者')).toBeTruthy();
+    for (const purpose of ['standard', undefined] as const) {
+      rerender(
+        <MobileTopBar
+          pageTitle="对话"
+          workspaceName="Sandbox"
+          workspacePurpose={purpose}
+          role={KNOWN_OWNER}
+          wsStatus="connected"
+          onOpenMenu={vi.fn()}
+        />,
+      );
+      expect(screen.getByText('NextTime AI · Sandbox · 所有者')).toBeTruthy();
+    }
+  });
+
   // S8 W1-A3 follow-up (audit S2, journey ③ narrow-screen fix): ws-status is invisible at ≤960px
   // unless MobileTopBar carries its own copy — every spec's login helper and this suite's own
   // AppShell.test.tsx both wait on it.
