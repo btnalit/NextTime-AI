@@ -7,6 +7,12 @@ import {
   gateRefusalOf,
 } from '../../adapters/gatekeeper-client/index.js';
 import { OutboundTargetRefusedError } from '../../adapters/outbound-target/index.js';
+import {
+  AdminAgentRefused,
+  AdminAgentRoleNotStoredError,
+  AdminAgentTargetsInvalidError,
+  AdminAgentTrialWorkspaceNotFoundError,
+} from '../../application/admin-agent/index.js';
 // S11 P1: the ChangePlan core's refusals (application/change-plan), same direct import.
 import {
   AdminProposalCredentialError,
@@ -19,6 +25,8 @@ import {
   AdminProposalSegmentNotFoundError,
   AdminProposalSegmentNotOpenError,
   AdminProposalSegmentUnchangedError,
+  AdminProposalTargetNoLongerChosenError,
+  AdminProposalTargetNotChosenError,
   AdminProposalTargetUnavailableError,
   ChangeApplierNotAPersonError,
   ChangeConfirmationRequiredError,
@@ -336,7 +344,10 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // is only the index into the call's segments), a credential (`details` names places, never the
   // value), a proposal that would not apply as written (`details.problems`), the daily limit (429,
   // `details.resetsAt`). Reading or withdrawing one: 404, and 409 when nothing is left to withdraw.
+  // S11 AA4c: a target the administrator has not chosen for their admin agent — checked first, so
+  // like `admin_proposal_target_unavailable` it says nothing of the workspace (`details.segment`).
   if (
+    err instanceof AdminProposalTargetNotChosenError ||
     err instanceof AdminProposalTargetUnavailableError ||
     err instanceof AdminProposalCredentialError
   ) {
@@ -379,6 +390,10 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
       message: err.message,
       details: { blockers: err.details.blockers.map((blocker) => ({ ...blocker })) },
     };
+  }
+  // S11 AA4c: the proposer took this workspace off their admin agent's targets since — 409.
+  if (err instanceof AdminProposalTargetNoLongerChosenError) {
+    return { status: 409, code: err.code, message: err.message };
   }
   if (err instanceof AdminProposalSegmentUnchangedError) {
     return { status: 409, code: err.code, message: err.message };
@@ -509,6 +524,35 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
     err instanceof MetaOntologyObjectWriteError
   ) {
     return { status: 403, code: 'meta_ontology_write_forbidden', message: err.message };
+  }
+  // S11 AA4c: a person's call that needs their admin agent to be allowed to act — starting an admin
+  // agent's Chat or a Turn in one, reading one — refused with why (`details.reason`, the refusal
+  // reasons of `ADMIN_AGENT_REFUSAL_REASON_VALUES`), for the console to say what to change. The
+  // agent's own Handle calls refuse as `forbidden` (dispatch.ts) and never reach here as this.
+  if (err instanceof AdminAgentRefused) {
+    return {
+      status: 403,
+      code: 'admin_agent_refused',
+      message: err.message,
+      details: { reason: err.reason },
+    };
+  }
+  // S11 AA4c: a platform administrator's own admin agent — a trial workspace of theirs that is not
+  // (404), targets that cannot be chosen (400, `details.targetWorkspaceIds`), and a stored role
+  // stricter than the environment's (409). Nothing was changed.
+  if (err instanceof AdminAgentTrialWorkspaceNotFoundError) {
+    return { status: 404, code: err.code, message: err.message };
+  }
+  if (err instanceof AdminAgentTargetsInvalidError) {
+    return {
+      status: 400,
+      code: err.code,
+      message: err.message,
+      details: { targetWorkspaceIds: [...err.details.targetWorkspaceIds] },
+    };
+  }
+  if (err instanceof AdminAgentRoleNotStoredError) {
+    return { status: 409, code: err.code, message: err.message };
   }
   if (err instanceof ForbiddenError) {
     return { status: 403, code: 'forbidden', message: err.message };

@@ -232,6 +232,21 @@ describe('TaskSupervisorClient', () => {
     await expect(client.terminate('wr1')).resolves.toBe(false);
   });
 
+  it('stopResident: the entry container’s body is unchanged; the admin agent’s names its kind (S11 AA4c-2)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(emptyResponse(204));
+    const client = new TaskSupervisorClient({ supervisorUrl: 'http://x', fetchImpl });
+    await expect(client.stopResident?.('p1')).resolves.toBe(true);
+    await expect(client.stopResident?.('p1', 'admin_agent')).resolves.toBe(true);
+    const bodies = fetchImpl.mock.calls.map(([url, init]) => {
+      expect(url).toBe('http://x/resident/stop');
+      return JSON.parse((init as RequestInit).body as string);
+    });
+    expect(bodies).toEqual([
+      { principalId: 'p1' },
+      { principalId: 'p1', agentKind: 'admin_agent' },
+    ]);
+  });
+
   it('reclaimResident: posts to /resident/reclaim and 204 returns true (S8 W5 leftover 77)', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(emptyResponse(204));
     const client = new TaskSupervisorClient({ supervisorUrl: 'http://x', fetchImpl });

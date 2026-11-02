@@ -2749,6 +2749,36 @@
     "adminAgentOnly": true,
     "channel": "handle",
     "group": "admin_proposal",
+    "mode": "observe",
+    "name": "agent_list_proposal_targets",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "targetWorkspaceIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "targetWorkspaceIds"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "adminAgentOnly": true,
+    "channel": "handle",
+    "group": "admin_proposal",
     "mode": "write",
     "name": "agent_withdraw_admin_proposal",
     "params": {
@@ -5177,6 +5207,13 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "agentKind": {
+          "enum": [
+            "entry",
+            "admin_agent"
+          ],
+          "type": "string"
+        },
         "archivedAt": {
           "type": [
             "string",
@@ -5216,7 +5253,8 @@
         "createdAt",
         "archivedAt",
         "lastActivityAt",
-        "hasRunningTurn"
+        "hasRunningTurn",
+        "agentKind"
       ],
       "type": "object"
     },
@@ -15144,6 +15182,138 @@
         "failedAt",
         "failureKind",
         "requesterCanApprove"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "observe",
+    "name": "get_admin_agent_status",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "workspaces": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "refusal": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "switched_off",
+                      "unknown_principal",
+                      "not_a_person",
+                      "no_platform_user",
+                      "principal_disabled",
+                      "user_disabled",
+                      "workspace_disabled",
+                      "not_trial_workspace",
+                      "not_platform_admin",
+                      "user_changed"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "session": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "expiresAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "sessionId": {
+                        "type": "string"
+                      },
+                      "startedAt": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "sessionId",
+                      "startedAt",
+                      "expiresAt"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "targets": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "chosenAt": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "enum": [
+                        "active",
+                        "disabled"
+                      ],
+                      "type": "string"
+                    },
+                    "workspaceId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "workspaceId",
+                    "name",
+                    "status",
+                    "chosenAt"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "workspaceId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "workspaceId",
+              "name",
+              "refusal",
+              "targets",
+              "session"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "enabled",
+        "workspaces"
       ],
       "type": "object"
     },
@@ -35322,6 +35492,13 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "agentKind": {
+                "enum": [
+                  "entry",
+                  "admin_agent"
+                ],
+                "type": "string"
+              },
               "archivedAt": {
                 "type": [
                   "string",
@@ -35361,7 +35538,8 @@
               "createdAt",
               "archivedAt",
               "lastActivityAt",
-              "hasRunningTurn"
+              "hasRunningTurn",
+              "agentKind"
             ],
             "type": "object"
           },
@@ -45175,6 +45353,13 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "agentKind": {
+          "enum": [
+            "entry",
+            "admin_agent"
+          ],
+          "type": "string"
+        },
         "title": {
           "type": "string"
         }
@@ -45185,6 +45370,13 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "agentKind": {
+          "enum": [
+            "entry",
+            "admin_agent"
+          ],
+          "type": "string"
+        },
         "archivedAt": {
           "type": [
             "string",
@@ -45224,7 +45416,8 @@
         "createdAt",
         "archivedAt",
         "lastActivityAt",
-        "hasRunningTurn"
+        "hasRunningTurn",
+        "agentKind"
       ],
       "type": "object"
     },
@@ -48993,6 +49186,9 @@
           "minimum": 0,
           "type": "integer"
         },
+        "targetChosen": {
+          "type": "boolean"
+        },
         "unchanged": {
           "type": "boolean"
         }
@@ -49001,6 +49197,7 @@
         "segment",
         "blockers",
         "platformChanges",
+        "targetChosen",
         "digest",
         "unchanged",
         "items",
@@ -61714,6 +61911,13 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "agentKind": {
+          "enum": [
+            "entry",
+            "admin_agent"
+          ],
+          "type": "string"
+        },
         "archivedAt": {
           "type": [
             "string",
@@ -61753,7 +61957,8 @@
         "createdAt",
         "archivedAt",
         "lastActivityAt",
-        "hasRunningTurn"
+        "hasRunningTurn",
+        "agentKind"
       ],
       "type": "object"
     },
@@ -67993,6 +68198,95 @@
   },
   {
     "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "set_admin_agent_targets",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "targetWorkspaceIds": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "type": "array"
+        },
+        "trialWorkspaceId": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "trialWorkspaceId",
+        "targetWorkspaceIds"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "added": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "removed": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "targets": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "chosenAt": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "active",
+                  "disabled"
+                ],
+                "type": "string"
+              },
+              "workspaceId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "workspaceId",
+              "name",
+              "status",
+              "chosenAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "trialWorkspaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "trialWorkspaceId",
+        "targets",
+        "added",
+        "removed"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
+    "channel": "human",
     "group": "agent_profile",
     "minRole": "owner",
     "mode": "write",
@@ -71428,6 +71722,43 @@
   },
   {
     "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "stop_admin_agent",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "trialWorkspaceId": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "revokedSessions": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stoppedTurns": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "revokedSessions",
+        "stoppedTurns"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
+    "channel": "human",
     "group": "chat",
     "minRole": "member",
     "mode": "execute",
@@ -72909,6 +73240,13 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "agentKind": {
+          "enum": [
+            "entry",
+            "admin_agent"
+          ],
+          "type": "string"
+        },
         "archivedAt": {
           "type": [
             "string",
@@ -72948,7 +73286,8 @@
         "createdAt",
         "archivedAt",
         "lastActivityAt",
-        "hasRunningTurn"
+        "hasRunningTurn",
+        "agentKind"
       ],
       "type": "object"
     },

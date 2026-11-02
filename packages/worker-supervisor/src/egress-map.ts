@@ -56,6 +56,14 @@ export function entrySourceId(workspaceId: string, principalId: string): string 
   return `entry:${workspaceId}:${principalId}`;
 }
 
+/** S11 AA4c-2: an admin agent's resident container (`resident-kind.ts`) — the same
+ *  `<kind>:<workspaceId>:<principalId>` shape as `entry:`, so the kernel attributes its
+ *  observations to the admin agent's own session, never to its person's entry agent. Always
+ *  registered deny-all (`denyAllEntryFields`). */
+export function adminSourceId(workspaceId: string, principalId: string): string {
+  return `admin:${workspaceId}:${principalId}`;
+}
+
 /**
  * Task/Worker-mode analogue of `entrySourceId` (S2.8; docs/development-tasks.md S2.8 task brief:
  * "注册 `(worker_run_id, container_id, ip)` 供 gateway 来源绑定与出网代理解析"). Same opaque-string

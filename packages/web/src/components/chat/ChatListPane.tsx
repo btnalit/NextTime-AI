@@ -1,10 +1,11 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useChatChangeListener } from '../../hooks/useChatUpdates.js';
 import { useResource } from '../../hooks/useResource.js';
 import { type ChatSummary, chatTitle, isArchived, spliceChat } from '../../lib/chat-lifecycle.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
+import { readOpenAdminAgentChat } from '../../lib/router.js';
 import { Button } from '../kit/button.js';
 import { EmptyState } from '../kit/empty-state.js';
 import { ErrorBanner } from '../kit/error-banner.js';
@@ -25,6 +26,22 @@ export interface ChatListPaneProps {
    *  by `ChatListPage` (no chat open, `selectedChatId` omitted) and `ChatPage` (a chat open). */
   readonly selectedChatId?: string | null;
   readonly onSelectChat: (chatId: string) => void;
+  /** S11 AA4c-3: a platform administrator in a trial workspace — the pane offers 新管理员对话, and
+   *  `#/work/chats?open=admin_agent` (the 管理员智能体 page's 打开管理员对话) opens their latest
+   *  admin agent Chat here, or starts one when they have none. */
+  readonly adminAgent?: boolean;
+  /** The location hash at mount (defaults to `window.location.hash`). */
+  readonly initialHash?: string;
+}
+
+/** The reader's admin agent Chat to open: the active one with the latest activity. */
+function latestAdminAgentChat(chats: readonly ChatSummary[]): ChatSummary | undefined {
+  let latest: ChatSummary | undefined;
+  for (const chat of chats) {
+    if (chat.agentKind !== 'admin_agent' || isArchived(chat)) continue;
+    if (latest === undefined || chat.lastActivityAt > latest.lastActivityAt) latest = chat;
+  }
+  return latest;
 }
 
 const SEARCH_ICON_PATH = 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.35-4.35';
@@ -42,7 +59,13 @@ const SEARCH_ICON_PATH = 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.35-4.35
  * `ui/DataRow`'s two-slot (title/meta) shape cannot express "time on the title's own line" without
  * polluting that text node.
  */
-export function ChatListPane({ client, selectedChatId, onSelectChat }: ChatListPaneProps) {
+export function ChatListPane({
+  client,
+  selectedChatId,
+  onSelectChat,
+  adminAgent = false,
+  initialHash,
+}: ChatListPaneProps) {
   const t = useT();
   const load = useCallback(
     () =>
@@ -56,6 +79,7 @@ export function ChatListPane({ client, selectedChatId, onSelectChat }: ChatListP
   const [search, setSearch] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<unknown | null>(null);
+  const [createKind, setCreateKind] = useState<'entry' | 'admin_agent'>('entry');
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<ChatSummary | null>(null);
 
@@ -76,11 +100,15 @@ export function ChatListPane({ client, selectedChatId, onSelectChat }: ChatListP
     [byFilter, query, t],
   );
 
-  async function handleNewChat(): Promise<void> {
+  async function handleNewChat(kind: 'entry' | 'admin_agent' = 'entry'): Promise<void> {
     setCreating(true);
     setCreateError(null);
+    setCreateKind(kind);
     try {
-      const chat = await client.call<ChatSummary>('new_chat', {});
+      const chat = await client.call<ChatSummary>(
+        'new_chat',
+        kind === 'admin_agent' ? { agentKind: 'admin_agent' } : {},
+      );
       onSelectChat(chat.id);
     } catch (err) {
       setCreateError(err);
@@ -88,6 +116,20 @@ export function ChatListPane({ client, selectedChatId, onSelectChat }: ChatListP
       setCreating(false);
     }
   }
+
+  // 打开管理员对话 (`?open=admin_agent`): once, when the list has loaded.
+  const [openAdminAgent] = useState(
+    () => adminAgent && readOpenAdminAgentChat(initialHash ?? window.location.hash),
+  );
+  const opened = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: acts once, on the first loaded list
+  useEffect(() => {
+    if (!openAdminAgent || opened.current || all === undefined) return;
+    opened.current = true;
+    const latest = latestAdminAgentChat(all);
+    if (latest !== undefined) onSelectChat(latest.id);
+    else void handleNewChat('admin_agent');
+  }, [openAdminAgent, all]);
 
   const onChanged = useCallback(
     (chat: ChatSummary): void => {
@@ -115,6 +157,20 @@ export function ChatListPane({ client, selectedChatId, onSelectChat }: ChatListP
             {t('新对话', 'New chat')}
           </Button>
         </div>
+        {adminAgent ? (
+          <Button
+            size="s"
+            onClick={() => void handleNewChat('admin_agent')}
+            disabled={creating}
+            data-testid="new-admin-agent-chat"
+            title={t(
+              '和你的管理员智能体开一段对话：它在这个试验工作区里试做改动，再向你选的目标工作区提出管理员提案',
+              'Start a chat with your admin agent: it tries changes out in this trial workspace, then makes admin proposals to the target workspaces you chose',
+            )}
+          >
+            {t('新管理员对话', 'New admin agent chat')}
+          </Button>
+        ) : null}
         <label className="chat-list-search">
           <svg
             width="14"
@@ -161,7 +217,15 @@ export function ChatListPane({ client, selectedChatId, onSelectChat }: ChatListP
       </header>
 
       {createError !== null ? (
-        <ErrorBanner error={createError} title={t('无法创建对话', 'Could not create a chat')} />
+        <ErrorBanner
+          error={createError}
+          title={
+            createKind === 'admin_agent'
+              ? t('无法创建管理员对话', 'Could not start an admin agent chat')
+              : t('无法创建对话', 'Could not create a chat')
+          }
+          testId="chat-create-error"
+        />
       ) : null}
 
       <div className="chat-list-pane-body">
@@ -290,6 +354,18 @@ export function ChatListPane({ client, selectedChatId, onSelectChat }: ChatListP
                               data-testid="chat-running-chip"
                             >
                               {t('运行中', 'Running')}
+                            </span>
+                          ) : null}
+                          {chat.agentKind === 'admin_agent' ? (
+                            <span
+                              className="chip chip-s chip-warn"
+                              data-testid="chat-admin-agent-chip"
+                              title={t(
+                                '和你的管理员智能体的对话，只有你自己看得到',
+                                'A chat with your admin agent; only you can see it',
+                              )}
+                            >
+                              {t('管理员智能体', 'Admin agent')}
                             </span>
                           ) : null}
                         </div>

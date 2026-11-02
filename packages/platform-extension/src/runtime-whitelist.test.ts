@@ -1,7 +1,8 @@
-import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
+import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from 'node:child_process';
 import {
   chmodSync,
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -526,7 +527,7 @@ describe('worker-runtime whitelist start (entrypoint.sh + real pi)', () => {
     expectOnlyPlatformResources(requests[0], defaultPrompt.split('\n')[0] ?? '');
   }, 90_000);
 
-  it.each(['entry', 'worker'])(
+  it.each(['entry', 'admin', 'worker'])(
     'refuses to start in %s mode when the test-only root is set',
     async (mode) => {
       layOutImage(1, { prompt: `${PLATFORM_PROMPT}\n` });
@@ -537,5 +538,129 @@ describe('worker-runtime whitelist start (entrypoint.sh + real pi)', () => {
       );
     },
     30_000,
+  );
+
+  // S11 AA4c-2: an admin container never falls back to the image's default prompt (the entry
+  // agent's). Run without the test-only root, which admin mode refuses before anything else: the
+  // check comes before the script writes anything, so on a runner with no `/opt/nexttime` it is the
+  // first thing that answers.
+  it.skipIf(existsSync('/opt/nexttime/platform/system-prompt.md'))(
+    'refuses to start in admin mode without the platform’s own prompt, before writing anything',
+    async () => {
+      const child = spawn('sh', [ENTRYPOINT], {
+        env: { PATH: process.env.PATH ?? '', NEXTTIME_MODE: 'admin' },
+      });
+      children.push(child);
+      let stdout = '';
+      child.stdout.on('data', (data: Buffer) => {
+        stdout += data.toString();
+      });
+      const code = await new Promise<number | null>((resolve) => child.on('exit', resolve));
+      expect(code).toBe(1);
+      expect(stdout.trim().split('\n')).toEqual([
+        'nexttime-selfcheck check=admin_prompt result=fail reason=platform_prompt_missing',
+      ]);
+    },
+    30_000,
+  );
+});
+
+/** `entrypoint.sh`'s `egress_probe` on its own (its comment says why): the function's text as the
+ *  script holds it, run under the script's `sh -eu`, with a stand-in `curl` first on PATH that
+ *  records each call and exits `curlRc` — 0 is a request that went out, 7 no route, 28 a timeout,
+ *  56 the proxy's 403 to the CONNECT. Only the given variables, never this process's own proxy
+ *  settings. */
+function runEgressProbe(
+  env: Record<string, string>,
+  curlRc: number,
+): { code: number | null; lines: string[]; curlCalls: string[] } {
+  const probe = /^egress_probe\(\) \{\n[\s\S]*?\n\}$/m.exec(readFileSync(ENTRYPOINT, 'utf8'))?.[0];
+  if (probe === undefined) throw new Error('entrypoint.sh defines no egress_probe function');
+  const bin = join(root, 'curl-bin');
+  const calls = join(root, 'curl-calls');
+  rmSync(calls, { force: true });
+  write(
+    join(bin, 'curl'),
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(calls)}\nexit ${curlRc}\n`,
+  );
+  chmodSync(join(bin, 'curl'), 0o755);
+  const result = spawnSync('sh', ['-eu', '-c', `${probe}\negress_probe`], {
+    encoding: 'utf8',
+    env: { PATH: `${bin}:${process.env.PATH ?? ''}`, ...env },
+  });
+  return {
+    code: result.status,
+    lines: result.stdout.trim().split('\n'),
+    curlCalls: existsSync(calls) ? readFileSync(calls, 'utf8').trim().split('\n') : [],
+  };
+}
+
+// S11 AA4c-2 review: in admin mode the probe is the `egress_denied` invariant. The skip switch has
+// no say there, and no proxy configured is no reason to skip it — curl then goes straight out, and
+// that way must be closed too. The whole script never reaches the probe in admin mode here (it
+// refuses the test-only root first), so these run the function alone.
+describe('entrypoint.sh egress probe', () => {
+  const PROXY = { HTTPS_PROXY: 'http://proxy.invalid:3128' };
+  const SKIP = { NEXTTIME_SELFCHECK_SKIP_PUBLIC_EGRESS_PROBE: '1' };
+  const PROBE_CALL = '--max-time 5 -s -o /dev/null https://example.com';
+
+  it.each([
+    ['no proxy configured', {}, 'direct'],
+    ['a proxy configured', PROXY, 'proxied'],
+  ])(
+    'admin mode refuses to start when a request goes out with %s, skip switch or not',
+    (_, proxy, route) => {
+      for (const skip of [{}, SKIP]) {
+        expect(runEgressProbe({ NEXTTIME_MODE: 'admin', ...proxy, ...skip }, 0)).toEqual({
+          code: 1,
+          lines: [
+            `nexttime-selfcheck check=egress_denied result=fail reason=${route}_request_allowed`,
+          ],
+          curlCalls: [PROBE_CALL],
+        });
+      }
+    },
+  );
+
+  it.each([
+    [7, {}],
+    [28, PROXY],
+    [56, PROXY],
+  ])('admin mode counts curl exit %i as denied, with the skip switch on', (curlRc, proxy) => {
+    expect(runEgressProbe({ NEXTTIME_MODE: 'admin', ...SKIP, ...proxy }, curlRc)).toEqual({
+      code: 0,
+      lines: [`nexttime-selfcheck check=egress_denied result=ok curl_rc=${curlRc}`],
+      curlCalls: [PROBE_CALL],
+    });
+  });
+
+  it.each(['entry', 'worker'])(
+    '%s mode keeps the skip switch, the proxy requirement and the non-fatal probe',
+    (mode) => {
+      expect(runEgressProbe({ NEXTTIME_MODE: mode, ...SKIP }, 0)).toEqual({
+        code: 0,
+        lines: [
+          'nexttime-selfcheck check=egress_via_proxy result=skip reason=NEXTTIME_SELFCHECK_SKIP_PUBLIC_EGRESS_PROBE=1',
+        ],
+        curlCalls: [],
+      });
+      expect(runEgressProbe({ NEXTTIME_MODE: mode }, 0)).toEqual({
+        code: 1,
+        lines: ['nexttime-selfcheck check=egress_via_proxy result=fail reason=no_proxy_configured'],
+        curlCalls: [],
+      });
+      expect(runEgressProbe({ NEXTTIME_MODE: mode, ...PROXY }, 0)).toEqual({
+        code: 0,
+        lines: ['nexttime-selfcheck check=egress_via_proxy result=ok'],
+        curlCalls: [PROBE_CALL],
+      });
+      expect(runEgressProbe({ NEXTTIME_MODE: mode, ...PROXY }, 56)).toEqual({
+        code: 0,
+        lines: [
+          'nexttime-selfcheck check=egress_via_proxy result=warn reason=proxied_request_failed',
+        ],
+        curlCalls: [PROBE_CALL],
+      });
+    },
   );
 });

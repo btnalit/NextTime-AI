@@ -445,6 +445,24 @@ describe('OntologyTypesDrawer — Proposals list view', () => {
 });
 
 describe('OntologyTypesDrawer — Proposal detail view', () => {
+  it('legacy 602: the row of a draft an agent wrote carries the amber 智能体 mark; others none', async () => {
+    const http = proposalsHttp({
+      list_ontology_versions: () => ({
+        items: [
+          { ...DRAFT_PROPOSAL, origin: 'agent' },
+          { ...DRAFT_PROPOSAL, version: DRAFT_PROPOSAL.version + 1, origin: 'human' },
+        ],
+      }),
+    });
+    render(<Harness http={http} startTab="proposals" />);
+    const rows = await screen.findAllByTestId('graph-proposal-row');
+    const marked = rows.filter((row) => within(row).queryByTestId('catalog-row-agent-draft'));
+    expect(marked).toHaveLength(1);
+    const mark = within(marked[0] as HTMLElement).getByTestId('catalog-row-agent-draft');
+    expect(mark.textContent).toBe('智能体');
+    expect(mark.className).toContain('chip-warn');
+  });
+
   it('legacy 597: says an agent drafted it, and has no 起草方 row where none was recorded', async () => {
     const http = proposalsHttp({
       list_ontology_versions: () => ({ items: [{ ...DRAFT_PROPOSAL, origin: 'agent' }] }),

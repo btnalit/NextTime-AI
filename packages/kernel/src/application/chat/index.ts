@@ -33,6 +33,7 @@ export {
   ChatNotFoundError,
   DEFAULT_CHAT_HISTORY_LIMIT,
   TurnAlreadyRunningError,
+  assertChatKindAccess,
   chatMessageKind,
   chatMessageText,
   currentPrincipalId,

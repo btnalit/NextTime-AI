@@ -11,6 +11,7 @@ import {
   AdminProposalNotOpenError,
   AdminProposalQuotaExceededError,
   AdminProposalRoleMismatchError,
+  AdminProposalTargetNotChosenError,
   AdminProposalTargetUnavailableError,
 } from '../../application/change-plan/index.js';
 import {
@@ -83,6 +84,7 @@ export function mapCapabilityErrorToToolResult(err: unknown): CallToolResult {
     err instanceof UnstorableTextError ||
     // S11 AA3b-1: an admin proposal, refused or not found — the code says whether to
     // ask its administrator for another target, leave a value out, wait for the next day, or stop.
+    err instanceof AdminProposalTargetNotChosenError ||
     err instanceof AdminProposalTargetUnavailableError ||
     err instanceof AdminProposalCredentialError ||
     err instanceof AdminProposalQuotaExceededError ||

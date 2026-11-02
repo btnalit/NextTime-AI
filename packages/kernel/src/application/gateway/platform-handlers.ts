@@ -47,6 +47,7 @@ import type { WorkspacePurpose } from '../workspace/create.js';
 import { isLastActiveHumanOwner } from './auth.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 import { readModelCatalog, readModelCatalogWithHealth } from './models-catalog-handler.js';
+import { EVERY_RESIDENT_CONTAINER_KIND, stopResidentContainers } from './resident-containers.js';
 import { publishSessionKick } from './session-revocation.js';
 
 /**
@@ -500,6 +501,11 @@ export const updateUserHandler: CapabilityHandler = async (client, _workspaceId,
   );
   // S11 AA1 (I-A3): an admin agent's power follows its person. Every call through one re-checks
   // the platform role already; revoking its Handles here is what also stops llm-proxy at once.
+  // S11 AA4c-2: and, after commit, its containers stop (best-effort; with the Handles gone they
+  // can no longer act anyway). The person's entry containers are theirs to keep.
+  const adminContainerPrincipalIds = demoted
+    ? await listHumanPrincipalIds(client, { userId: input.userId })
+    : [];
   if (demoted) await revokeUserAdminAgentSessions(client, input.userId);
   if (input.displayName) {
     // Keep the membership Principals' display names in step (the members page reads them).
@@ -508,10 +514,19 @@ export const updateUserHandler: CapabilityHandler = async (client, _workspaceId,
       [input.userId, input.displayName.trim()],
     );
   }
+  const result = await loadUser(client, input.userId);
   return {
-    result: await loadUser(client, input.userId),
+    result,
     resourceType: 'user',
     resourceId: input.userId,
+    ...(demoted
+      ? {
+          afterCommit: async () => {
+            await stopResidentContainers(adminContainerPrincipalIds, ['admin_agent']);
+            return result;
+          },
+        }
+      : {}),
   };
 };
 
@@ -574,11 +589,12 @@ export const setUserStatusHandler: CapabilityHandler = async (
     // P-A2 (design §8 "停用用户 … 入口容器 stop"; a P-A1 gap): once the sessions are gone, stop
     // the user's resident entry containers too — best-effort, after commit. R-05: and close the
     // user's open /ws sockets — console ones by user, API-key ones by membership Principal.
+    // S11 AA4c-2: and their admin agent's containers, whose sessions went with the rest.
     afterCommit: async () => {
       if (input.status === 'disabled') {
         publishSessionKick({ userId: input.userId, principalIds });
       }
-      await stopEntryContainers(principalIds);
+      await stopResidentContainers(principalIds, EVERY_RESIDENT_CONTAINER_KIND);
       return result;
     },
   };
@@ -1035,39 +1051,14 @@ async function listHumanPrincipalIds(
 }
 
 /**
- * Best-effort, after commit: ask worker-supervisor to stop each principal's resident entry
- * container (`POST /resident/stop`; design §8). Sessions were already revoked in the transaction,
- * so a container that survives (supervisor unreachable, runtime not configured in a unit test)
- * can no longer act — the stop only reclaims resources sooner. Never throws.
- */
-async function stopEntryContainers(principalIds: readonly string[]): Promise<void> {
-  if (principalIds.length === 0) return;
-  let stop: ((principalId: string) => Promise<boolean>) | undefined;
-  try {
-    const client = getConfiguredTaskRuntime().supervisorClient;
-    stop = client.stopResident?.bind(client);
-  } catch {
-    return; // no task runtime configured (unit tests / CLI) — nothing to stop
-  }
-  if (!stop) return;
-  for (const principalId of principalIds) {
-    try {
-      await stop(principalId);
-    } catch {
-      // Logged nowhere on purpose: the failure carries no state the platform relies on.
-    }
-  }
-}
-
-/**
  * S8 W5 (leftover 77): best-effort, after a workspace purge actually executed (never called for
  * a preview) — ask worker-supervisor to permanently reclaim each purged Principal's resident entry
  * container (`POST /resident/reclaim`: force-removed, not just stopped — the Principal is gone for
  * good, so nothing will ever reuse this container again) and its `workspaces/<principalId>` data
  * directory. The kernel still never touches a host path or the underlying container runtime itself
  * (design's own "agent / kernel 进程不持凭证"): this only calls worker-supervisor's existing
- * internal-plane HTTP API, over the same client `stopEntryContainers` above already uses, just a
- * different route. Same
+ * internal-plane HTTP API, over the same client `stopResidentContainers`
+ * (`resident-containers.ts`) uses, just a different route. Same
  * shape as the CLI path (`scripts/delete-workspace.sh`'s host-side cleanup, driven by the
  * `purgeWorkspace` result's own `principalIds` — see `PurgeWorkspaceResultWire`'s doc comment) —
  * this closes the gap for the *other* entry point, the console's `purge_workspace` capability,
@@ -1091,7 +1082,7 @@ async function reclaimEntryContainers(principalIds: readonly string[]): Promise<
     try {
       await reclaim(principalId);
     } catch {
-      // Logged nowhere on purpose, same convention as stopEntryContainers above.
+      // Logged nowhere on purpose, same convention as stopResidentContainers.
     }
   }
 }
@@ -1353,8 +1344,9 @@ export const setWorkspaceStatusHandler: CapabilityHandler = async (
     result,
     resourceType: 'workspace',
     resourceId: input.workspaceId,
+    // S11 AA4c-2: a disabled trial workspace's admin agent containers stop with its entry ones.
     afterCommit: async () => {
-      await stopEntryContainers(principalIds);
+      await stopResidentContainers(principalIds, EVERY_RESIDENT_CONTAINER_KIND);
       return result;
     },
   };

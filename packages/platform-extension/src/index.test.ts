@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import platformExtension, { VERSION } from './index.js';
+import platformExtension, { ADMIN_TOOL_CAPABILITY_NAMES, VERSION } from './index.js';
 import { startFakeKernel } from './test-support/fake-kernel.js';
 
 /**
@@ -15,6 +15,13 @@ import { startFakeKernel } from './test-support/fake-kernel.js';
 // handle-binding.ts) — entry / worker mode never read it.
 const REQUIRED_ENTRY_ENV = {
   NEXTTIME_MODE: 'entry',
+  KERNEL_URL: 'http://127.0.0.1:1',
+  WORKSPACE_ID: 'ws-1',
+} as const;
+
+/** S11 AA4c-2: an admin agent's container, started with the same variables as an entry one. */
+const REQUIRED_ADMIN_ENV = {
+  NEXTTIME_MODE: 'admin',
   KERNEL_URL: 'http://127.0.0.1:1',
   WORKSPACE_ID: 'ws-1',
 } as const;
@@ -134,6 +141,25 @@ describe('platformExtension() activation', () => {
     );
   });
 
+  it('registers admin mode, never entry mode, for NEXTTIME_MODE=admin (S11 AA4c-2)', () => {
+    for (const [key, value] of Object.entries(REQUIRED_ADMIN_ENV)) process.env[key] = value;
+    const pi = fakePi();
+
+    expect(() => platformExtension(pi)).not.toThrow();
+
+    const registeredNames = vi.mocked(pi.registerTool).mock.calls.map(([tool]) => tool.name);
+    expect(registeredNames).toEqual([...ADMIN_TOOL_CAPABILITY_NAMES]);
+    expect(registeredNames).not.toContain('invoke_worker');
+    const subscribedEvents = vi.mocked(pi.on).mock.calls.map(([event]) => event);
+    // No `context` hook (entry mode's per-call `get_entry_context`) and no `agent_settled` hook
+    // (its `report_turn`): the admin agent's Handle carries neither.
+    expect(subscribedEvents).not.toContain('context');
+    expect(subscribedEvents).not.toContain('agent_settled');
+    expect(subscribedEvents).toEqual(
+      expect.arrayContaining(['session_start', 'input', 'before_agent_start']),
+    );
+  });
+
   it('accepts an empty NEXTTIME_TURN_ID as "no seed" rather than throwing', () => {
     for (const [key, value] of Object.entries(REQUIRED_ENTRY_ENV)) process.env[key] = value;
     process.env.NEXTTIME_TURN_ID = '';
@@ -173,6 +199,7 @@ describe('platformExtension() activation', () => {
   // interactive mode, outside the platform, still presents its own Handle as a bearer.
   for (const [mode, env] of [
     ['entry', REQUIRED_ENTRY_ENV],
+    ['admin', REQUIRED_ADMIN_ENV],
     ['worker', REQUIRED_WORKER_ENV],
     ['interactive', REQUIRED_INTERACTIVE_ENV],
   ] as const) {

@@ -1,5 +1,5 @@
 import type { DraftOrigin } from '@nexttime/shared';
-import type { Translate } from '../../lib/i18n.js';
+import { type Translate, useT } from '../../lib/i18n.js';
 import type { OperationOrigin } from '../../lib/status-tone.js';
 import type { KeyValueItem } from '../kit/key-value.js';
 import { StatusChip } from '../kit/status-chip.js';
@@ -105,4 +105,35 @@ export function operationOriginItem(
       </span>
     ),
   };
+}
+
+/**
+ * Legacy 602 (#927 UX P3-3): the amber 「智能体」 mark on a list row — Skill, 流程, Worker,
+ * Operation, 本体提案 — for a draft an agent or a service account wrote, so a reviewer scanning the
+ * list sees which drafts the detail's 「起草方」 row will ask them to check part by part
+ * (`draftOriginItem`). Nothing for a person's draft, a gate manifest's or a version past draft:
+ * the mark is a review cue, not a history, and the detail says who wrote any version. Same tone as
+ * the detail's `draftOrigin` chip.
+ */
+export function AgentDraftMark({
+  origin,
+  status,
+}: {
+  readonly origin: string | undefined;
+  readonly status: string;
+}) {
+  const t = useT();
+  if (origin !== 'agent' || status !== 'draft') return null;
+  return (
+    <span
+      className="chip chip-warn chip-s"
+      data-testid="catalog-row-agent-draft"
+      title={t(
+        '这份草稿是智能体或服务账号写的，发布前请逐项核对。',
+        'An agent or a service account wrote this draft. Check every part before publishing.',
+      )}
+    >
+      {t('智能体', 'Agent')}
+    </span>
+  );
 }

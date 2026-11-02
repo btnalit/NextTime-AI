@@ -27,6 +27,7 @@ function chatRow(overrides: Partial<ChatWire> = {}): ChatWire {
     archivedAt: null,
     lastActivityAt: '2026-09-01T00:00:00.000Z',
     hasRunningTurn: false,
+    agentKind: 'entry',
     ...overrides,
   };
 }
@@ -144,5 +145,34 @@ describe('ChatHeader', () => {
   it('no overflow menu at all while the chat row is still being looked up (chat === null)', () => {
     renderHeader({ chat: null, lookupFailed: false });
     expect(screen.queryByTestId('chat-header-menu')).toBeNull();
+  });
+});
+
+describe('ChatHeader — an admin agent chat (S11 AA4c-3)', () => {
+  afterEach(() => {
+    window.location.hash = '';
+  });
+
+  it('says it is the admin agent, not the entry agent', () => {
+    renderHeader({ chat: chatRow({ agentKind: 'admin_agent' }) });
+    const status = screen.getByTestId('chat-header-status');
+    expect(screen.getByTestId('chat-header-admin-agent').textContent).toBe('管理员智能体');
+    expect(status.textContent).not.toContain('入口');
+  });
+
+  it('links to where its targets are chosen, which every admin agent chat there shares', async () => {
+    renderHeader({ chat: chatRow({ agentKind: 'admin_agent' }) });
+    openOverflowMenu();
+    fireEvent.click(await screen.findByTestId('chat-header-admin-targets'));
+    expect(window.location.hash).toBe('#/platform/admin-agent');
+  });
+
+  it('an entry agent chat has no targets item', async () => {
+    renderHeader();
+    expect(screen.queryByTestId('chat-header-admin-agent')).toBeNull();
+    expect(screen.getByTestId('chat-header-status').textContent).toContain('入口');
+    openOverflowMenu();
+    await screen.findByTestId('chat-header-rename');
+    expect(screen.queryByTestId('chat-header-admin-targets')).toBeNull();
   });
 });

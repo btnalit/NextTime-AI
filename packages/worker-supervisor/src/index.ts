@@ -15,6 +15,7 @@ export {
   isImageAllowed,
   loadConfig,
   parseDockerConnection,
+  ReclaimRequestSchema,
   SpawnRequestSchema,
   StopRequestSchema,
   TaskSpawnRequestSchema,
@@ -30,14 +31,30 @@ export { createDockerClient } from './docker-client.js';
 export type { ContainerSpec, ContainerState, DockerClient } from './docker-client.js';
 export { subscribeToContainerEvents } from './docker-events.js';
 export type { ContainerEventsSubscriber, ContainerLifecycleEvent } from './docker-events.js';
-export { createEgressMapStore, entrySourceId, taskSourceId } from './egress-map.js';
+export {
+  adminSourceId,
+  createEgressMapStore,
+  entrySourceId,
+  taskSourceId,
+} from './egress-map.js';
 export { createHandleBindingStore } from './handle-bindings.js';
 export type { HandleBindingStore } from './handle-bindings.js';
 export type { EgressMapStore, SourceMapEntry, SourceMapFile } from './egress-map.js';
 export { loadAgentHostToken, loadInternalToken, requireInternalCaller } from './internal-auth.js';
 export type { SupervisorCaller, SupervisorCallerTokens } from './internal-auth.js';
+export {
+  RESIDENT_AGENT_KINDS,
+  residentContainerName,
+  residentSourceId,
+} from './resident-kind.js';
+export type { ResidentAgentKind } from './resident-kind.js';
 export { createResidentService } from './resident-service.js';
-export type { ResidentService, ResidentStatus, SpawnOutcome } from './resident-service.js';
+export type {
+  ResidentInventoryEntry,
+  ResidentService,
+  ResidentStatus,
+  SpawnOutcome,
+} from './resident-service.js';
 export { buildSpawnSpec, entryContainerName } from './spawn-spec.js';
 export { buildTaskSpawnSpec, taskContainerName } from './task-spawn-spec.js';
 export { createTaskService } from './task-service.js';

@@ -93,7 +93,7 @@ import { AdminProposalsTab } from './catalog/AdminProposalsTab.js';
 import { DraftExpiryNote, type EditorState } from './catalog/CatalogShared.js';
 import { ChangesTab } from './catalog/ChangesTab.js';
 import { DiscardReasonField } from './catalog/DiscardReasonField.js';
-import { draftOriginItem, operationOriginItem } from './catalog/DraftOrigin.js';
+import { AgentDraftMark, draftOriginItem, operationOriginItem } from './catalog/DraftOrigin.js';
 import {
   EntryDraftChanges,
   EntryTemplateNotice,
@@ -1746,6 +1746,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                       v{row.version}
                     </span>
                   ) : null}
+                  <AgentDraftMark origin={row.origin} status={row.status} />
                   {gateLabel !== null ? (
                     <span className="text-3 truncate" data-testid={`catalog-row-gate-${key}`}>
                       {t(`门：${gateLabel}`, `Gate: ${gateLabel}`)}
@@ -2691,7 +2692,10 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                 onSelect={() => selectRow(row.id)}
               >
                 <span className="row-wrap" style={{ justifyContent: 'space-between', minWidth: 0 }}>
-                  <span className="wrap-anywhere">{row.name}</span>
+                  <span className="row-wrap" style={{ minWidth: 0 }}>
+                    <span className="wrap-anywhere">{row.name}</span>
+                    <AgentDraftMark origin={row.origin} status={row.status} />
+                  </span>
                   <StatusChip machine="publishable" status={row.status} size="s" />
                 </span>
                 <span className="truncate text-3">
@@ -3307,6 +3311,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                         {row.steps.length} {t('步', 'steps')}
                       </span>
                     ) : null}
+                    <AgentDraftMark origin={row.origin} status={row.status} />
                   </span>
                   <StatusChip machine="publishable" status={row.status} size="s" />
                 </span>
@@ -4243,6 +4248,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                   <span className="row-wrap">
                     <span className="truncate">{workerLabel(row, t)}</span>
                     <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
+                    <AgentDraftMark origin={row.origin} status={row.status} />
                   </span>
                   <StatusChip machine="publishable" status={row.status} size="s" />
                 </span>
@@ -4285,6 +4291,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                   <span className="row-wrap">
                     <span className="truncate">{workerLabel(row, t)}</span>
                     <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
+                    <AgentDraftMark origin={row.origin} status={row.status} />
                   </span>
                   {workerKey(row) === inUseEntryKey ? (
                     <span className="chip chip-ok chip-s" data-testid="worker-in-use">
@@ -4349,6 +4356,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                         )}
                       </span>
                     ) : null}
+                    <AgentDraftMark origin={row.origin} status={row.status} />
                   </span>
                   <StatusChip machine="publishable" status={row.status} size="s" />
                 </span>

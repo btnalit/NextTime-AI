@@ -3,7 +3,9 @@ import {
   type Route,
   hrefs,
   readConnectorPresetLink,
+  readCreateWorkspacePreset,
   readIntegrationsTab,
+  readOpenAdminAgentChat,
   routeFromHash,
   sectionOf,
 } from './router.js';
@@ -170,6 +172,27 @@ describe('readConnectorPresetLink (S11 P1-F)', () => {
   });
 });
 
+describe('admin agent links (S11 AA4c-3)', () => {
+  it('opens 新建工作区 on the trial purpose, and nothing else', () => {
+    const href = hrefs.platformWorkspacesCreate('admin_trial');
+    expect(href).toBe('#/platform/workspaces?create=admin_trial');
+    expect(routeFromHash(href)).toEqual({ kind: 'platformWorkspaces' });
+    expect(readCreateWorkspacePreset(href)).toBe('admin_trial');
+    expect(readCreateWorkspacePreset(hrefs.platformWorkspaces())).toBeNull();
+    expect(readCreateWorkspacePreset('#/platform/workspaces?create=standard')).toBeNull();
+  });
+
+  it('opens the admin agent chat in 对话, and nothing else', () => {
+    const href = hrefs.chatsOpenAdminAgent();
+    expect(href).toBe('#/work/chats?open=admin_agent');
+    expect(routeFromHash(href)).toEqual({ kind: 'chats' });
+    expect(readOpenAdminAgentChat(href)).toBe(true);
+    expect(readOpenAdminAgentChat(hrefs.chats())).toBe(false);
+    expect(readOpenAdminAgentChat('#/work/chats?open=entry')).toBe(false);
+    expect(routeFromHash(hrefs.platformAdminAgent())).toEqual({ kind: 'platformAdminAgent' });
+  });
+});
+
 describe('sectionOf', () => {
   it('collapses route variants onto their one Sidebar nav item', () => {
     expect(sectionOf({ kind: 'chat', chatId: 'c-1' })).toBe('chats');
@@ -227,6 +250,7 @@ describe('hrefs', () => {
       { kind: 'platformAdminProposals', tab: 'proposals', itemId: 'p-1' },
       { kind: 'platformAdminProposals', tab: 'records' },
       { kind: 'platformAdminProposals', tab: 'records', itemId: 'r 1' },
+      { kind: 'platformAdminAgent' },
     ];
     for (const route of cases) {
       const href = hrefFor(route);
@@ -283,6 +307,8 @@ function hrefFor(route: Route): string {
       return route.gateId ? hrefs.platformGateInstance(route.gateId) : hrefs.platformIntegrations();
     case 'platformAdminProposals':
       return hrefs.platformAdminProposals(route.tab, route.itemId);
+    case 'platformAdminAgent':
+      return hrefs.platformAdminAgent();
     case 'platformSettings':
       return hrefs.platformSettings();
     case 'platformRuntime':

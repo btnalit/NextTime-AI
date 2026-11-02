@@ -14,6 +14,9 @@
 //     (packages/platform-extension/src/modes/entry.ts) intersected with the capability registry
 //     (docs/contracts/capabilities.json); worker: the static `report_result` tool
 //     (packages/platform-extension/src/modes/worker.ts's `REPORT_RESULT_TOOL_NAME`), or
+//   - admin: `ADMIN_TOOL_CAPABILITY_NAMES` (packages/platform-extension/src/modes/admin.ts, S11
+//     AA4c-2) intersected with the registry — itself checked against the kernel's admin agent
+//     ceiling (`checkAdminToolsWithinCeiling`), or
 //   - (ops-runner.yaml only) a `WorkerResultContractSchema` key (packages/shared/src/
 //     worker-result.ts) — a Worker's prompt documents `report_result`'s param names, not a
 //     separate callable tool, or
@@ -166,6 +169,20 @@ async function loadModeToolSets() {
 
   const workerTools = new Set([GATE_PLACEHOLDER, WORKER_REPORT_RESULT_TOOL_NAME]);
 
+  // S11 AA4c-2: admin mode's static tools, and the admin agent ceiling they must stay inside.
+  const adminCapabilityNames = extractStringArrayLiteral(
+    readRepoFile('packages/platform-extension/src/modes/admin.ts'),
+    'ADMIN_TOOL_CAPABILITY_NAMES',
+  );
+  const adminCeilingNames = extractStringArrayLiteral(
+    readRepoFile('packages/kernel/src/governance/capability/handles.ts'),
+    'ADMIN_AGENT_CEILING_CAPABILITY_NAMES',
+  );
+  const adminTools = new Set([
+    GATE_PLACEHOLDER,
+    ...adminCapabilityNames.filter((name) => registryNames.has(name)),
+  ]);
+
   const shared = await loadSharedRegistry();
   const resultContractKeys = new Set(Object.keys(shared.WorkerResultContractSchema.shape));
 
@@ -187,6 +204,9 @@ async function loadModeToolSets() {
   return {
     entryTools,
     workerTools,
+    adminTools,
+    adminCapabilityNames,
+    adminCeilingNames,
     resultContractKeys,
     proposeGoal: { schemaWords: proposeGoalSchemaWords, description: proposeGoal.description },
     goalUpdateWords,
@@ -332,6 +352,11 @@ export const ALLOWED_NON_TOOL_WORDS = {
     'disabled_by_platform', // reachability.reason value (production incident 2026-09-26) — not a tool.
     'verify', // a Procedure step kind (packages/shared procedure.ts), named for S10 E1 — not a tool.
     'nextCursor', // the keyset cursor field of list_facts' result (wire conventions §3), not a tool.
+  ]),
+  'ontology/admin-agent.yaml': new Set([
+    // S11 AA4c-2: the code `propose_admin_proposal` refuses an unchosen target with, named so the
+    // agent recognizes it and tells its administrator — not a tool.
+    'admin_proposal_target_not_chosen',
   ]),
   'ontology/ops-runner.yaml': new Set([
     'context', // the pi `context` event/injection mechanism, not a capability of this name.
@@ -517,6 +542,52 @@ const ENTRY_PROMPT_CONTENT_CHECKS = [
 ];
 
 // -------------------------------------------------------------------------------------------
+// S11 AA4c-2: admin mode registers what the admin agent's Handle may call, and nothing else. Its
+// static tools are all on the kernel's ceiling (`ADMIN_AGENT_CEILING_CAPABILITY_NAMES`), and what
+// the ceiling holds beyond them is exactly what the gate projection reaches for it — its own read
+// (`list_allowed_operations`) and the call behind every projected `<gate>.<op>` tool
+// (`observe_operation`; the placeholder itself is a constant there, not a quoted name). A tool the
+// Handle cannot call would only ever answer 403; a ceiling capability with no tool is either
+// unreachable or a widening nobody wired up — both fail here.
+// -------------------------------------------------------------------------------------------
+
+export const ADMIN_CEILING_REACHED_BY_PROJECTION = new Set([
+  'list_allowed_operations',
+  'observe_operation',
+]);
+
+export function checkAdminToolsWithinCeiling(adminToolNames, ceilingNames) {
+  const violations = [];
+  const ceiling = new Set(ceilingNames);
+  const tools = new Set(adminToolNames);
+  for (const name of tools) {
+    if (ceiling.has(name)) continue;
+    violations.push(
+      `packages/platform-extension/src/modes/admin.ts: admin mode registers "${name}", which is not on the admin agent ceiling (ADMIN_AGENT_CEILING_CAPABILITY_NAMES) — its Handle cannot call it`,
+    );
+  }
+  for (const name of ceiling) {
+    if (tools.has(name) || ADMIN_CEILING_REACHED_BY_PROJECTION.has(name)) continue;
+    violations.push(
+      `packages/kernel/src/governance/capability/handles.ts: "${name}" is on the admin agent ceiling but admin mode registers no tool for it — add it to ADMIN_TOOL_CAPABILITY_NAMES, or take it off the ceiling`,
+    );
+  }
+  for (const name of ADMIN_CEILING_REACHED_BY_PROJECTION) {
+    if (tools.has(name)) {
+      violations.push(
+        `packages/platform-extension/src/modes/admin.ts: "${name}" is reached through the gate projection, never registered as a tool of its own`,
+      );
+    }
+    if (!ceiling.has(name)) {
+      violations.push(
+        `packages/kernel/src/governance/capability/handles.ts: the gate projection needs "${name}" on the admin agent ceiling`,
+      );
+    }
+  }
+  return violations;
+}
+
+// -------------------------------------------------------------------------------------------
 // One file's check — pure, given its already-loaded tool set and allow-list (unit-testable
 // without touching the filesystem).
 // -------------------------------------------------------------------------------------------
@@ -537,19 +608,24 @@ export function checkPromptFile(relativePath, systemPrompt, toolSet, extraAllowe
 const PROMPT_FILES = [
   { path: 'ontology/entry-agent.yaml', toolSetKey: 'entryTools', includeResultContractKeys: false },
   { path: 'ontology/ops-runner.yaml', toolSetKey: 'workerTools', includeResultContractKeys: true },
+  // S11 AA4c-2: the admin agent's system prompt (only a prompt — no WorkerDefinition holds it).
+  { path: 'ontology/admin-agent.yaml', toolSetKey: 'adminTools', includeResultContractKeys: false },
 ];
 
 export async function main() {
   const {
     entryTools,
     workerTools,
+    adminTools,
+    adminCapabilityNames,
+    adminCeilingNames,
     resultContractKeys,
     proposeGoal,
     goalUpdateWords,
     goalChangeWords,
   } = await loadModeToolSets();
-  const toolSetsByKey = { entryTools, workerTools };
-  const violations = [];
+  const toolSetsByKey = { entryTools, workerTools, adminTools };
+  const violations = [...checkAdminToolsWithinCeiling(adminCapabilityNames, adminCeilingNames)];
 
   for (const file of PROMPT_FILES) {
     const raw = readRepoFile(file.path);

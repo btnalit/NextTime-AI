@@ -3,6 +3,7 @@ import { lazy, useCallback, useEffect, useState } from 'react';
 import { AccountPage } from './components/AccountPage.js';
 import { RouteBoundary } from './components/RouteBoundary.js';
 import { AppShell } from './components/shell/AppShell.js';
+import { scopedWorkspacePurpose } from './components/shell/Sidebar.js';
 import { EmptyState } from './components/ui/EmptyState.js';
 import { useToast } from './components/ui/Toast.js';
 import { RouteAccessProvider, useCanOpen } from './hooks/useCanOpen.js';
@@ -99,6 +100,11 @@ const PlatformModelsPage = lazy(() =>
 const PlatformAdminProposalsPage = lazy(() =>
   import('./components/platform/PlatformAdminProposalsPage.js').then((m) => ({
     default: m.PlatformAdminProposalsPage,
+  })),
+);
+const PlatformAdminAgentPage = lazy(() =>
+  import('./components/platform/PlatformAdminAgentPage.js').then((m) => ({
+    default: m.PlatformAdminAgentPage,
   })),
 );
 const PlatformModulesPage = lazy(() =>
@@ -255,6 +261,12 @@ export function Routed({
   if (route.kind === 'login') return null;
   if (platformOnlyBlocked) return null;
 
+  // S11 AA4c-3: a platform administrator in a trial workspace may start 管理员智能体 chats there
+  // (the kernel decides; the list offers 新管理员对话 and says why when it is refused).
+  const adminAgentHere =
+    session.user?.platformRole === 'admin' &&
+    scopedWorkspacePurpose(session.memberships, session.selectedWorkspaceId) === 'admin_trial';
+
   let page: JSX.Element;
   switch (route.kind) {
     case 'chat':
@@ -266,6 +278,7 @@ export function Routed({
           chatId={route.chatId}
           onBack={() => navigate(hrefs.chats())}
           onSelectChat={(id) => navigate(hrefs.chat(id))}
+          adminAgent={adminAgentHere}
           onOpenApproval={openApproval}
           onOpenTask={openTask}
           onOpenGoal={(id) => navigate(hrefs.goal(id))}
@@ -316,6 +329,7 @@ export function Routed({
           client={session.ws}
           http={session.http}
           onSelectChat={(id) => navigate(hrefs.chat(id))}
+          adminAgent={adminAgentHere}
         />
       );
       break;
@@ -462,6 +476,21 @@ export function Routed({
         t,
       );
       break;
+    case 'platformAdminAgent':
+      page = requireAdmin(
+        session,
+        <PlatformAdminAgentPage
+          http={session.http}
+          onOpenChats={(workspaceId, mode) => {
+            // 对话 in the trial workspace: switched to first unless already in it.
+            const destination = mode === 'open' ? hrefs.chatsOpenAdminAgent() : hrefs.chats();
+            if (workspaceId === session.selectedWorkspaceId) navigate(destination);
+            else onSwitchWorkspace(workspaceId, destination);
+          }}
+        />,
+        t,
+      );
+      break;
     case 'platformModules':
       page = requireAdmin(session, <PlatformModulesPage http={session.http} />, t);
       break;
@@ -517,7 +546,11 @@ export function Routed({
  */
 export function isDefaultLanding(hash: string): boolean {
   if (hash === '' || hash === '#' || hash === '#/' || hash === hrefs.login()) return true;
-  return routeFromHash(hash).kind === 'chats' && hash !== hrefs.chats();
+  // UX P3-5 on #943: the path decides — `#/work/chats?open=admin_agent` (a bookmark, a new tab)
+  // names the chats page as much as `#/work/chats` does; its query is the page's.
+  const query = hash.indexOf('?');
+  const path = query === -1 ? hash : hash.slice(0, query);
+  return routeFromHash(hash).kind === 'chats' && path !== hrefs.chats();
 }
 
 /** True for every `#/platform/*` route kind — used by `Routed`'s platform-only redirect. */
@@ -528,6 +561,7 @@ export function isPlatformRoute(kind: Route['kind']): boolean {
     kind === 'platformWorkspaces' ||
     kind === 'platformIntegrations' ||
     kind === 'platformAdminProposals' ||
+    kind === 'platformAdminAgent' ||
     kind === 'platformModules' ||
     kind === 'platformModels' ||
     kind === 'platformSettings' ||

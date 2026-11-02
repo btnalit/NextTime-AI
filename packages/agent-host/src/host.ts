@@ -83,6 +83,15 @@ import type { SpawnInput, SupervisorClientPort } from './supervisor-client.js';
  * a Turn that is still producing pi stdout; a Turn silently blocked for longer than the idle
  * timeout with no pi activity at all (e.g. a long `await_decision` gate wait) is not covered — out
  * of scope for this fix, same as before.
+ *
+ * **Two resident containers per person** (S11 AA4c-2): in a trial workspace a platform
+ * administrator's Turns may be their admin agent's (`startTurn.agentKind: 'admin_agent'`), which
+ * runs in a container of its own (worker-supervisor `resident-kind.ts`). Everything above is per
+ * *resident* — kind × principal — not per principal: `attachments`, `activeTurns` and
+ * `lastTouchAt` are keyed by {@link residentKeyOf}, and every supervisor call and stop carries the
+ * kind. So a person's entry Turn and admin agent Turn run side by side, each in its own pi process,
+ * and one never rejects, stops or reattaches the other. An entry resident's key is its bare
+ * principal id, exactly as before.
  */
 
 export interface HostOptions {
@@ -149,6 +158,29 @@ interface ActiveTurn {
   pendingPrompt: string | undefined;
 }
 
+/** One resident container's identity here: whose (`principalId`) and which (`agentKind`,
+ *  `undefined` for the entry agent). `key` indexes every per-resident map. */
+interface ResidentRef {
+  readonly principalId: string;
+  readonly agentKind: 'admin_agent' | undefined;
+  readonly key: string;
+}
+
+/** An entry resident is keyed by its principal id alone (as before AA4c-2); an admin agent's by
+ *  `admin_agent:<principalId>` — principal ids are UUIDs, so the two never collide. */
+export function residentKeyOf(principalId: string, agentKind: 'admin_agent' | undefined): string {
+  return agentKind === undefined ? principalId : `${agentKind}:${principalId}`;
+}
+
+function residentRefOf(principalId: string, agentKind: 'admin_agent' | undefined): ResidentRef {
+  return { principalId, agentKind, key: residentKeyOf(principalId, agentKind) };
+}
+
+/** How log lines and rejections name the container. */
+function containerNoun(ref: ResidentRef): string {
+  return ref.agentKind === 'admin_agent' ? 'admin agent container' : 'entry container';
+}
+
 /** The `--session-dir` `deploy/worker-runtime/entrypoint.sh` starts pi with — writable and
  *  per-principal (it lives in the entry container's own `/workspace`). */
 const PI_SESSION_DIR = '/workspace/.pi/sessions';
@@ -187,41 +219,45 @@ export function createHost(options: HostOptions): Host {
   /** Best-effort `supervisorClient.touch` — failures are logged, never thrown, since a missed
    *  touch only risks a future idle sweep, not this Turn's own correctness. `turnId` (leftover 87)
    *  is the Turn this touch is made for, forwarded as the call's correlation id. */
-  function performTouch(principalId: string, context: string, turnId?: string): void {
-    supervisorClient.touch(principalId, { correlationId: turnId }).catch((err: unknown) => {
-      log(
-        JSON.stringify({
-          level: 'warn',
-          msg: `agent-host: supervisor touch failed (${context})`,
-          principalId,
-          correlationId: turnId,
-          error: String(err),
-        }),
-      );
-    });
+  function performTouch(ref: ResidentRef, context: string, turnId?: string): void {
+    supervisorClient
+      .touch(ref.principalId, { correlationId: turnId }, ref.agentKind)
+      .catch((err: unknown) => {
+        log(
+          JSON.stringify({
+            level: 'warn',
+            msg: `agent-host: supervisor touch failed (${context})`,
+            principalId: ref.principalId,
+            agentKind: ref.agentKind,
+            correlationId: turnId,
+            error: String(err),
+          }),
+        );
+      });
   }
 
   /** Leftover 46: called from `handleLine` for every line pi emits while bound to an active Turn.
    *  Throttled to `TOUCH_REFRESH_INTERVAL_MS` — `lastTouchAt` is set here (and by
    *  `ensureAttachment`'s own Turn-start touch below) so a burst of streamed events right after a
    *  Turn starts doesn't immediately re-touch on top of the touch `ensureAttachment` already sent. */
-  function refreshTouch(principalId: string): void {
-    const last = lastTouchAt.get(principalId) ?? 0;
+  function refreshTouch(ref: ResidentRef): void {
+    const last = lastTouchAt.get(ref.key) ?? 0;
     const nowMs = now();
     if (nowMs - last < TOUCH_REFRESH_INTERVAL_MS) return;
-    lastTouchAt.set(principalId, nowMs);
-    performTouch(principalId, 'mid-turn idle-clock refresh', activeTurns.get(principalId)?.turnId);
+    lastTouchAt.set(ref.key, nowMs);
+    performTouch(ref, 'mid-turn idle-clock refresh', activeTurns.get(ref.key)?.turnId);
   }
 
   function handleContainerClosed(
-    principalId: string,
+    ref: ResidentRef,
     containerId: string,
     err: Error | undefined,
   ): void {
+    const { principalId } = ref;
     // Only the attachment that actually closed is dropped — by the time a *replaced* container's
     // stream ends, `ensureAttachment` may already have cached the new one under this principal.
-    if (attachments.get(principalId)?.containerId === containerId) {
-      attachments.delete(principalId);
+    if (attachments.get(ref.key)?.containerId === containerId) {
+      attachments.delete(ref.key);
       // Leftover 66 (docs/STATUS.md §4): prune the touch-throttle entry alongside the attachment
       // it was tracking for — without this, `lastTouchAt` keeps one entry per principal ever seen
       // for this process's entire lifetime, even long after its container (and any reason to keep
@@ -230,9 +266,9 @@ export function createHost(options: HostOptions): Host {
       // cache (module doc comment on `lastTouchAt`, distinct from worker-supervisor's own
       // `lastTouchedAt` registry) — `ensureAttachment`/`refreshTouch` repopulate it from scratch
       // on this principal's next Turn, same as `attachments` itself.
-      lastTouchAt.delete(principalId);
+      lastTouchAt.delete(ref.key);
     }
-    const turn = activeTurns.get(principalId);
+    const turn = activeTurns.get(ref.key);
     if (!turn) {
       // Not mid-turn (e.g. idle-timeout stop, or a stop this process itself requested) —
       // nothing to report; the next startTurn re-spawns and re-attaches.
@@ -248,6 +284,7 @@ export function createHost(options: HostOptions): Host {
           level: 'info',
           msg: 'agent-host: a container this turn is not bound to closed — ignoring (recreate in flight or already replaced)',
           principalId,
+          agentKind: ref.agentKind,
           turnId: turn.turnId,
           closedContainerId: containerId,
           boundContainerId: turn.containerId,
@@ -255,12 +292,13 @@ export function createHost(options: HostOptions): Host {
       );
       return;
     }
-    activeTurns.delete(principalId);
+    activeTurns.delete(ref.key);
     log(
       JSON.stringify({
         level: 'warn',
-        msg: 'agent-host: entry container stdio closed mid-turn — reporting interrupted',
+        msg: `agent-host: ${containerNoun(ref)} stdio closed mid-turn — reporting interrupted`,
         principalId,
+        agentKind: ref.agentKind,
         turnId: turn.turnId,
         error: err ? String(err) : undefined,
       }),
@@ -281,7 +319,7 @@ export function createHost(options: HostOptions): Host {
    *  ever saw its prompt, which the kernel is told as `turnRejected`, not `turnEnded`: no
    *  `turnAccepted` has been sent for it. */
   function handleSwitchSessionResponse(
-    principalId: string,
+    ref: ResidentRef,
     turn: ActiveTurn,
     response: Record<string, unknown>,
   ): void {
@@ -297,7 +335,7 @@ export function createHost(options: HostOptions): Host {
     // `success !== true` rather than `=== false`: a malformed response must still settle the Turn
     // rather than leave it waiting on a switch that will never be answered again.
     if (response.success !== true || cancelled) {
-      activeTurns.delete(principalId);
+      activeTurns.delete(ref.key);
       const reason =
         typeof response.error === 'string' ? response.error : 'pi cancelled the session switch';
       kernelLink.sendTurnRejected(turn.turnId, reason);
@@ -306,11 +344,11 @@ export function createHost(options: HostOptions): Host {
 
     // pi really did load this chat's session file — record that even if the Turn itself is dropped
     // just below: this flag tracks the pi *process*'s state, not the Turn's fate.
-    const attachment = attachments.get(principalId);
+    const attachment = attachments.get(ref.key);
     if (attachment) attachment.currentChatId = turn.chatId;
 
     if (turn.stopRequested) {
-      activeTurns.delete(principalId);
+      activeTurns.delete(ref.key);
       kernelLink.sendTurnRejected(turn.turnId, 'turn stopped before the session switch completed');
       return;
     }
@@ -324,7 +362,8 @@ export function createHost(options: HostOptions): Host {
    *  `translatePiEvent` for everything else. A line from a container the active Turn is not bound
    *  to (leftover 44, module doc comment — a container being retired by a recreate, or one
    *  already replaced) is dropped exactly like a line with no tracked Turn at all. */
-  function handleLine(principalId: string, containerId: string, line: string): void {
+  function handleLine(ref: ResidentRef, containerId: string, line: string): void {
+    const { principalId } = ref;
     let parsed: unknown;
     try {
       parsed = JSON.parse(line);
@@ -334,13 +373,13 @@ export function createHost(options: HostOptions): Host {
     if (typeof parsed !== 'object' || parsed === null) return;
     const record = parsed as Record<string, unknown>;
 
-    const activeTurn = activeTurns.get(principalId);
+    const activeTurn = activeTurns.get(ref.key);
     const turn = activeTurn && activeTurn.containerId === containerId ? activeTurn : undefined;
 
     // Leftover 46 (module doc comment): any stdout line from the container this Turn is actually
     // bound to is proof it is still alive and busy — refresh the idle clock (throttled) rather
     // than letting `sweepIdle` judge liveness solely by this Turn's own start time.
-    if (turn) refreshTouch(principalId);
+    if (turn) refreshTouch(ref);
 
     if (
       record.type === 'response' &&
@@ -353,7 +392,7 @@ export function createHost(options: HostOptions): Host {
       // wedged.
       (record.id === turn.pendingSwitchId || record.id === undefined)
     ) {
-      handleSwitchSessionResponse(principalId, turn, record);
+      handleSwitchSessionResponse(ref, turn, record);
       return;
     }
 
@@ -366,7 +405,7 @@ export function createHost(options: HostOptions): Host {
       if (record.success === true) {
         kernelLink.sendTurnAccepted(turn.turnId);
       } else {
-        activeTurns.delete(principalId);
+        activeTurns.delete(ref.key);
         const reason = typeof record.error === 'string' ? record.error : 'pi rejected the prompt';
         kernelLink.sendTurnRejected(turn.turnId, reason);
       }
@@ -379,6 +418,7 @@ export function createHost(options: HostOptions): Host {
           level: 'warn',
           msg: 'agent-host: pi extension_error',
           principalId,
+          agentKind: ref.agentKind,
           extensionPath: record.extensionPath,
           event: record.event,
           error: record.error,
@@ -392,7 +432,7 @@ export function createHost(options: HostOptions): Host {
     if (!turn) return; // an event with no tracked turn to correlate it to — drop it
 
     if (result.kind === 'turnSettled') {
-      activeTurns.delete(principalId);
+      activeTurns.delete(ref.key);
       kernelLink.sendRuntimeEvent({
         type: 'turnEnded',
         status: turn.stopRequested ? 'interrupted' : 'completed',
@@ -414,7 +454,7 @@ export function createHost(options: HostOptions): Host {
   }
 
   async function ensureAttachment(
-    principalId: string,
+    ref: ResidentRef,
     workspaceId: string,
     handle: string,
     llmUrl: string,
@@ -430,7 +470,7 @@ export function createHost(options: HostOptions): Host {
     const spawnResult = await supervisorClient.spawn(
       {
         workspaceId,
-        principalId,
+        principalId: ref.principalId,
         handle,
         kernelUrl,
         llmUrl,
@@ -439,6 +479,8 @@ export function createHost(options: HostOptions): Host {
         egressDeny,
         skillsInline,
         image,
+        // Only when set: a supervisor's strict body schema from before AA4c-2 refuses the key.
+        ...(ref.agentKind === undefined ? {} : { agentKind: ref.agentKind }),
       },
       { correlationId: turnId },
     );
@@ -449,10 +491,10 @@ export function createHost(options: HostOptions): Host {
     // "touch the supervisor each Turn" requirement made visible even when spawn alone would have
     // sufficed. Also seeds `refreshTouch`'s own throttle window (leftover 46, module doc comment)
     // so the first pi stdout line right after this doesn't immediately re-touch on top of it.
-    lastTouchAt.set(principalId, now());
-    performTouch(principalId, 'spawn already refreshed the idle clock', turnId);
+    lastTouchAt.set(ref.key, now());
+    performTouch(ref, 'spawn already refreshed the idle clock', turnId);
 
-    const existing = attachments.get(principalId);
+    const existing = attachments.get(ref.key);
     if (existing && existing.containerId === spawnResult.containerId) return existing;
     if (existing) existing.io.close(); // stale — the container behind it is gone (new id returned)
 
@@ -461,24 +503,43 @@ export function createHost(options: HostOptions): Host {
     // leftover 44): `handleLine`/`handleContainerClosed` compare it against the active Turn's own
     // binding rather than trusting "a stream for this principal" to mean "this Turn's stream".
     const { containerId } = spawnResult;
-    io.onLine((line) => handleLine(principalId, containerId, line));
-    io.onClose((err) => handleContainerClosed(principalId, containerId, err));
+    io.onLine((line) => handleLine(ref, containerId, line));
+    io.onClose((err) => handleContainerClosed(ref, containerId, err));
     const record: AttachmentRecord = {
       containerId: spawnResult.containerId,
       io,
       currentChatId: undefined, // fresh pi process — nothing is known about its loaded session
     };
-    attachments.set(principalId, record);
+    attachments.set(ref.key, record);
     return record;
+  }
+
+  /** The active Turn a `stopTurn` names: under the resident its `agentKind` says, else (a kernel
+   *  that sent no kind) whichever of the principal's residents holds that Turn id. */
+  function findStopTarget(
+    principalId: string,
+    agentKind: 'admin_agent' | undefined,
+    turnId: string,
+  ): { ref: ResidentRef; turn: ActiveTurn } | undefined {
+    const candidates =
+      agentKind === undefined
+        ? [residentRefOf(principalId, undefined), residentRefOf(principalId, 'admin_agent')]
+        : [residentRefOf(principalId, agentKind)];
+    for (const ref of candidates) {
+      const turn = activeTurns.get(ref.key);
+      if (turn && turn.turnId === turnId) return { ref, turn };
+    }
+    return undefined;
   }
 
   return {
     async handleStartTurn(cmd): Promise<void> {
-      if (activeTurns.has(cmd.principalId)) {
-        // See this module's own doc comment: at most one Turn in flight per principal at a time.
+      const ref = residentRefOf(cmd.principalId, cmd.agentKind);
+      if (activeTurns.has(ref.key)) {
+        // See this module's own doc comment: at most one Turn in flight per resident at a time.
         kernelLink.sendTurnRejected(
           cmd.turnId,
-          'entry container is already processing another turn for this principal',
+          `${containerNoun(ref)} is already processing another turn for this principal`,
         );
         return;
       }
@@ -504,12 +565,12 @@ export function createHost(options: HostOptions): Host {
         pendingSwitchId: undefined,
         pendingPrompt: undefined,
       };
-      activeTurns.set(cmd.principalId, turn);
+      activeTurns.set(ref.key, turn);
 
       let record: AttachmentRecord;
       try {
         record = await ensureAttachment(
-          cmd.principalId,
+          ref,
           cmd.workspaceId,
           cmd.handle,
           cmd.kernelLlmUrl || defaultKernelLlmUrl,
@@ -521,12 +582,13 @@ export function createHost(options: HostOptions): Host {
           cmd.turnId,
         );
       } catch (err) {
-        activeTurns.delete(cmd.principalId); // release the reservation — this turn never started
+        activeTurns.delete(ref.key); // release the reservation — this turn never started
         log(
           JSON.stringify({
             level: 'error',
-            msg: 'agent-host: failed to spawn/attach the entry container',
+            msg: `agent-host: failed to spawn/attach the ${containerNoun(ref)}`,
             principalId: cmd.principalId,
+            agentKind: ref.agentKind,
             turnId: cmd.turnId,
             correlationId: cmd.turnId,
             error: String(err),
@@ -534,7 +596,7 @@ export function createHost(options: HostOptions): Host {
         );
         kernelLink.sendTurnRejected(
           cmd.turnId,
-          `failed to spawn/attach the entry container: ${String(err)}`,
+          `failed to spawn/attach the ${containerNoun(ref)}: ${String(err)}`,
         );
         return;
       }
@@ -559,7 +621,7 @@ export function createHost(options: HostOptions): Host {
       // this branch would then send anyway.
       if (record.currentChatId === cmd.chatId) {
         if (turn.stopRequested) {
-          activeTurns.delete(cmd.principalId);
+          activeTurns.delete(ref.key);
           kernelLink.sendTurnRejected(cmd.turnId, 'turn stopped before the prompt was sent');
           return;
         }
@@ -568,7 +630,7 @@ export function createHost(options: HostOptions): Host {
       }
 
       if (!SAFE_CHAT_ID.test(cmd.chatId)) {
-        activeTurns.delete(cmd.principalId); // release the reservation — this turn never started
+        activeTurns.delete(ref.key); // release the reservation — this turn never started
         kernelLink.sendTurnRejected(cmd.turnId, 'chatId is not usable as a pi session file name');
         return;
       }
@@ -583,19 +645,20 @@ export function createHost(options: HostOptions): Host {
     },
 
     handleStopTurn(cmd): void {
-      const turn = activeTurns.get(cmd.principalId);
-      if (!turn || turn.turnId !== cmd.turnId) {
+      const target = findStopTarget(cmd.principalId, cmd.agentKind, cmd.turnId);
+      if (!target) {
         // Unknown or already ended (R-56): say so, so the kernel ends a Turn it still tracks —
         // e.g. one whose `turnEnded` it never received — instead of waiting for a report this
         // process will never send. Answering again for a repeated stop is harmless.
         kernelLink.sendTurnUnknown(cmd.turnId);
         return;
       }
+      const { ref, turn } = target;
       turn.stopRequested = true;
       // Mid-`switch_session`: pi has not been given this Turn's prompt yet, so there is nothing to
       // abort — handleSwitchSessionResponse drops the Turn when the switch lands instead.
       if (turn.pendingSwitchId !== undefined) return;
-      const record = attachments.get(cmd.principalId);
+      const record = attachments.get(ref.key);
       record?.io.writeLine(buildAbortCommand());
     },
   };

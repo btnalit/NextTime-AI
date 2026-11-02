@@ -97,6 +97,7 @@ function preview(
     segment: received(segmentPatch),
     blockers: [],
     platformChanges: [],
+    targetChosen: true,
     digest: 'sha256:reviewed',
     unchanged: false,
     items: [
@@ -590,6 +591,63 @@ describe('AdminProposalsTab (能力目录 · 管理员提案, S11 AA4a)', () => 
     await waitFor(() => expect(named(http.calls, 'preview_admin_proposal_segment').length).toBe(2));
     expect((await screen.findByTestId('catalog-proposal-stale')).textContent).toContain(
       '什么也没有应用',
+    );
+  });
+
+  it('S11 AA4c: a workspace the administrator no longer targets says so, holds the apply and leaves rejecting', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_admin_proposal_segments: () => ({ items: [received({ items: ONLY_SKILL })] }),
+      preview_admin_proposal_segment: () =>
+        preview({ items: ONLY_SKILL_PREVIEW, targetChosen: false }),
+    });
+    renderTab(http, SEGMENT);
+
+    expect((await screen.findByTestId('catalog-proposal-target-dropped')).textContent).toContain(
+      '把本工作区从管理员智能体的目标里去掉了',
+    );
+    expect(
+      (screen.getByTestId('catalog-proposal-apply-trigger') as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(screen.getByTestId('catalog-proposal-missing-steps').textContent).toContain(
+      '请对方把本工作区重新加回目标',
+    );
+    expect(screen.getByTestId('catalog-proposal-reject-trigger')).toBeTruthy();
+  });
+
+  it('S11 AA4c: an apply refused because the target was just dropped reads the review again and says nothing was applied', async () => {
+    let round = 0;
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_admin_proposal_segments: () => ({ items: [received({ items: ONLY_SKILL })] }),
+      preview_admin_proposal_segment: () => {
+        round += 1;
+        return preview({
+          items: ONLY_SKILL_PREVIEW,
+          digest: `sha256:round-${round}`,
+          targetChosen: round === 1,
+        });
+      },
+      apply_admin_proposal_segment: () =>
+        Promise.reject(
+          new HttpError(
+            'capability_error',
+            'target no longer chosen',
+            'admin_proposal_target_no_longer_chosen',
+          ),
+        ),
+    });
+    renderTab(http, SEGMENT);
+
+    fireEvent.click(await screen.findByTestId('catalog-proposal-apply-trigger'));
+    fireEvent.click(
+      within(await screen.findByTestId('catalog-proposal-apply-confirm')).getByRole('button', {
+        name: '应用',
+      }),
+    );
+    await waitFor(() => expect(named(http.calls, 'preview_admin_proposal_segment').length).toBe(2));
+    expect((await screen.findByTestId('catalog-proposal-target-dropped')).textContent).toContain(
+      '不能应用',
     );
   });
 

@@ -158,6 +158,8 @@ export function toWireChat(row: ChatRow) {
     // S8 W4 (audit C1, wire/chat.ts `ChatWireSchema.lastActivityAt`/`hasRunningTurn`).
     lastActivityAt: row.lastActivityAt.toISOString(),
     hasRunningTurn: row.hasRunningTurn,
+    // S11 AA4c (wire/chat.ts `ChatWireSchema.agentKind`).
+    agentKind: row.agentKind,
   };
 }
 

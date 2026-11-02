@@ -549,6 +549,7 @@ describe('Sidebar', () => {
       expect(options).toEqual(['Acme (所有者)', 'Beta (成员)', 'Sandbox（试验） (所有者)']);
       // An ordinary workspace in scope: no chip.
       expect(screen.queryByTestId('sidebar-workspace-trial')).toBeNull();
+      expect(screen.queryByTestId('sidebar-rail-trial')).toBeNull();
 
       rerender(<Sidebar {...props} workspaceName="Sandbox" selectedWorkspaceId="ws-3" />);
       const chip = screen.getByTestId('sidebar-workspace-trial');
@@ -557,6 +558,11 @@ describe('Sidebar', () => {
       // 「工作区 · 试验 · 所有者」: the chip sits between the caption's word and the role.
       const caption = chip.closest('.sidebar-workspace-caption');
       expect(caption?.textContent).toBe('工作区·试验·所有者');
+      // S11 AA4c-3: the icon rail (≤1100px) hides the caption, so a trial workspace keeps a
+      // marker there too, named for screen readers.
+      const rail = screen.getByTestId('sidebar-rail-trial');
+      expect(rail.getAttribute('role')).toBe('img');
+      expect(rail.getAttribute('aria-label')).toBe('试验工作区');
 
       // A single trial membership (no switcher) still shows the chip.
       rerender(

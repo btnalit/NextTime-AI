@@ -1,9 +1,15 @@
-import type { ToolCallMessageContent } from '@nexttime/shared';
+import type { ChatAgentKind, ToolCallMessageContent } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { redactedForAudit } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
+import {
+  AdminAgentRefused,
+  adminAgentRefusal,
+  assertAdminAgentAuthority,
+  openAdminAgentSession,
+} from '../admin-agent/identity.js';
 import {
   EvaluationContentWithheldError,
   assertNoSealHold,
@@ -112,6 +118,9 @@ export interface ChatRow {
    *  (migrations/core/0008_chat_messages.sql) `sendChatMessage` relies on to keep one Turn per
    *  Chat, read back here instead of written anywhere new. */
   readonly hasRunningTurn: boolean;
+  /** S11 AA4c (migrations/core/0053): the agent that holds the Chat — `entry`, or a platform
+   *  administrator's `admin_agent` (private, in a trial workspace). Never changes. */
+  readonly agentKind: ChatAgentKind;
 }
 
 export type ChatMessageRole = 'user' | 'assistant' | 'tool' | 'system';
@@ -146,6 +155,7 @@ interface ChatDbRow {
   archived_at: Date | null;
   last_activity_at: Date;
   has_running_turn: boolean;
+  agent_kind: ChatAgentKind;
 }
 
 interface ChatMessageDbRow {
@@ -161,7 +171,7 @@ interface ChatMessageDbRow {
 }
 
 const CHAT_COLUMNS =
-  'workspace_id, id, owner_principal_id, title, visibility, created_at, archived_at';
+  'workspace_id, id, owner_principal_id, title, visibility, created_at, archived_at, agent_kind';
 const CHAT_MESSAGE_COLUMNS =
   'workspace_id, id, chat_id, turn_id, role, content, sequence, created_at, source_outbox_id';
 
@@ -190,7 +200,7 @@ const CHAT_ACTIVITY_JOIN_SQL = `
 const CHAT_ACTIVITY_SELECT_SQL = `coalesce(m.last_message_at, c.created_at) as last_activity_at,
     coalesce(r.running, false) as has_running_turn`;
 const CHAT_COLUMNS_C =
-  'c.workspace_id, c.id, c.owner_principal_id, c.title, c.visibility, c.created_at, c.archived_at';
+  'c.workspace_id, c.id, c.owner_principal_id, c.title, c.visibility, c.created_at, c.archived_at, c.agent_kind';
 
 function mapChatRow(row: ChatDbRow): ChatRow {
   return {
@@ -203,6 +213,7 @@ function mapChatRow(row: ChatDbRow): ChatRow {
     archivedAt: row.archived_at,
     lastActivityAt: row.last_activity_at,
     hasRunningTurn: row.has_running_turn,
+    agentKind: row.agent_kind,
   };
 }
 
@@ -306,6 +317,10 @@ export async function listChats(
 
 export interface NewChatInput {
   readonly title?: string;
+  /** S11 AA4c: `admin_agent` — the caller has already checked the administrator's authority
+   *  (application/gateway/handlers.ts); the database refuses one outside a trial workspace (core
+   *  0053). */
+  readonly agentKind?: ChatAgentKind;
 }
 
 export async function newChat(
@@ -318,10 +333,10 @@ export async function newChat(
   // `created_at`, `hasRunningTurn` is always false, both known without a join (see `listChats`'s
   // own comment for why those two are computed there instead of stored).
   const result = await client.query<ChatDbRow>(
-    `insert into chats (workspace_id, owner_principal_id, title)
-     values ($1, $2, $3)
+    `insert into chats (workspace_id, owner_principal_id, title, agent_kind)
+     values ($1, $2, $3, $4)
      returning ${CHAT_COLUMNS}, created_at as last_activity_at, false as has_running_turn`,
-    [workspaceId, principalId, input.title ?? null],
+    [workspaceId, principalId, input.title ?? null, input.agentKind ?? 'entry'],
   );
   const row = result.rows[0];
   if (row === undefined) throw new Error('newChat: INSERT ... RETURNING produced no row');
@@ -351,6 +366,33 @@ export async function requireChatAccess(
   const row = result.rows[0];
   if (row === undefined) throw new ChatNotFoundError(workspaceId, chatId);
   return mapChatRow(row);
+}
+
+/**
+ * S11 AA4c (core 0053; the AA4c plan's D4): what an admin agent's Chat asks of its caller beyond
+ * RLS. `chats_admin_agent_private` keeps it private, so `requireChatAccess` already shows it to the
+ * person who started it and no one else; on top of that:
+ *  - `read` (its history, subscribing, stopping its Turn, renaming or archiving it): that person is
+ *    still the administrator the agent acted for — a person, enabled, an effective platform
+ *    administrator in this enabled trial workspace (`adminAgentRefusal`, the switch left out: with
+ *    the agent switched off, what it said stays readable and its Chat can still be tidied up);
+ *  - `turn` (a message, which starts a Turn): the full authority check, switch included.
+ * Throws {@link AdminAgentRefused}; an entry Chat passes untouched.
+ */
+export async function assertChatKindAccess(
+  client: PoolClient,
+  workspaceId: string,
+  chat: ChatRow,
+  principalId: string,
+  mode: 'read' | 'turn',
+): Promise<void> {
+  if (chat.agentKind !== 'admin_agent') return;
+  if (mode === 'turn') {
+    await assertAdminAgentAuthority(client, workspaceId, principalId);
+    return;
+  }
+  const refusal = await adminAgentRefusal(client, workspaceId, principalId, true);
+  if (refusal !== null) throw new AdminAgentRefused(refusal, principalId);
 }
 
 /**
@@ -543,6 +585,8 @@ export async function sendChatMessage(
 ): Promise<SendChatMessageResult> {
   const chat = await requireChatAccess(client, workspaceId, input.chatId);
   if (chat.archivedAt !== null) throw new ChatArchivedError(input.chatId);
+  // S11 AA4c: an admin agent's Chat starts a Turn only while its administrator may act now.
+  await assertChatKindAccess(client, workspaceId, chat, principalId, 'turn');
   // S10 E3-2c (legacy 514): a person whose agents the evaluation seal has paused starts no Turn
   // until the workspace owner releases the pause (the dispatch writes the audit row).
   await assertNoSealHold(client, workspaceId, principalId);
@@ -565,9 +609,21 @@ export async function sendChatMessage(
   // advisory lock without blocking. The key string is duplicated (not imported) in
   // `application/platform/runtime.ts` — see this comment there for why: two call sites, no shared
   // type, cheaper than a new cross-module import for one string literal.
-  await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
-    `roll_entry_containers:${principalId}`,
-  ]);
+  //
+  // S11 AA4c: an admin agent's Turn runs in the administrator's admin container, never the entry
+  // one, so it takes no part in that race. It runs under the person's `admin_agent` session in this
+  // trial workspace (the one every admin Chat of theirs here shares, opened if none is live), and
+  // the Turn records it when it starts (core 0052: `sessionKind` / `sessionId` are written once):
+  // what the session does — model calls, egress — is attributed to the Turn of that session only
+  // (application/host-bridge/turn-attribution.ts), never to an entry Turn running beside it.
+  let adminSessionId: string | undefined;
+  if (chat.agentKind === 'admin_agent') {
+    adminSessionId = await openAdminAgentSession(client, workspaceId, principalId);
+  } else {
+    await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
+      `roll_entry_containers:${principalId}`,
+    ]);
+  }
 
   let turnId: string;
   try {
@@ -575,6 +631,9 @@ export async function sendChatMessage(
       kind: 'agent_turn',
       chatId: input.chatId,
       principalId,
+      ...(adminSessionId === undefined
+        ? {}
+        : { metadata: { sessionKind: 'admin_agent', sessionId: adminSessionId } }),
     });
     turnId = turn.id;
   } catch (err) {
@@ -604,6 +663,9 @@ export async function sendChatMessage(
     // lane-1 P2 fix: a reference into chat_messages (RLS-scoped), not the message text inline —
     // see shared/src/events.ts's TurnStartedEvent doc comment.
     chatMessageId: message.id,
+    ...(adminSessionId === undefined
+      ? {}
+      : { agentKind: 'admin_agent', sessionId: adminSessionId }),
   });
 
   return { message, turnId };

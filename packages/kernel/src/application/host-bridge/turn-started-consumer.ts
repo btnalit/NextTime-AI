@@ -105,6 +105,9 @@ export function registerTurnStartedConsumer(
       turnId: event.turnId,
       principalId: event.principalId,
       prompt: withTurnIdMarker(event.turnId, prompt),
+      ...(event.agentKind === 'admin_agent'
+        ? { agentKind: event.agentKind, ...(event.sessionId ? { sessionId: event.sessionId } : {}) }
+        : {}),
     });
 
     seenOutboxIds.add(meta.outboxId);

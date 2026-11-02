@@ -4,6 +4,10 @@
     {
       "additionalProperties": false,
       "properties": {
+        "agentKind": {
+          "const": "admin_agent",
+          "type": "string"
+        },
         "chatId": {
           "type": "string"
         },
@@ -11,6 +15,9 @@
           "type": "string"
         },
         "principalId": {
+          "type": "string"
+        },
+        "sessionId": {
           "type": "string"
         },
         "turnId": {

@@ -57,13 +57,18 @@ describe.runIf(DATABASE_URL !== undefined)(
       return id;
     }
 
-    async function startRunningTurn(): Promise<string> {
+    /** `adminSessionId`: an admin agent's Turn under that session (S11 AA4c-2), as `sendChatMessage`
+     *  records it — the Chat's own kind is not what attribution reads. */
+    async function startRunningTurn(adminSessionId?: string): Promise<string> {
       return withWorkspace(pool, { workspaceId, principalId }, async (client) => {
         const chat = await newChat(client, workspaceId, principalId, {});
         const turn = await startActivity(client, workspaceId, {
           kind: 'agent_turn',
           chatId: chat.id,
           principalId,
+          ...(adminSessionId === undefined
+            ? {}
+            : { metadata: { sessionKind: 'admin_agent', sessionId: adminSessionId } }),
         });
         return turn.id;
       });
@@ -131,6 +136,46 @@ describe.runIf(DATABASE_URL !== undefined)(
     // be test-local here.
     beforeEach(async () => {
       principalId = await adminInsertPrincipal(workspaceId);
+    });
+
+    it("attributes an admin agent container's egress to its admin Turn, and the entry container's to the entry Turn (S11 AA4c-2)", async () => {
+      // The same person, both agents running at once in this workspace.
+      const entryTurnId = await startRunningTurn();
+      const adminTurnId = await startRunningTurn(randomUUID());
+
+      const result = await recordEgressObservations({ pool }, [
+        observation({
+          sourceId: `admin:${workspaceId}:${principalId}`,
+          hostname: 'registry.example.org',
+          allowed: false,
+          reason: 'deny_all',
+        }),
+        observation({ hostname: 'example.com' }),
+      ]);
+
+      expect(result).toMatchObject({ attributedToRunningTurn: 2, skippedUnknownSource: 0 });
+      const admin = await readActivity(adminTurnId);
+      expect(admin.metadata.egress).toEqual([
+        expect.objectContaining({
+          hostname: 'registry.example.org',
+          allowed: false,
+          reason: 'deny_all',
+        }),
+      ]);
+      const entry = await readActivity(entryTurnId);
+      expect(entry.metadata.egress).toEqual([expect.objectContaining({ hostname: 'example.com' })]);
+    });
+
+    it('drops an admin agent observation when that person has no admin Turn — never onto the entry Turn (S11 AA4c-2)', async () => {
+      const entryTurnId = await startRunningTurn();
+
+      const result = await recordEgressObservations({ pool }, [
+        observation({ sourceId: `admin:${workspaceId}:${principalId}`, allowed: false }),
+      ]);
+
+      expect(result).toMatchObject({ attributedToRunningTurn: 0, skippedNoTurn: 1 });
+      const entry = await readActivity(entryTurnId);
+      expect(entry.metadata.egress).toBeUndefined();
     });
 
     it('appends the observation to a running Turn and enqueues one EgressObserved event', async () => {

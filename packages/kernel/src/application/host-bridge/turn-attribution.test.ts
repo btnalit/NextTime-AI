@@ -53,7 +53,8 @@ describe('findAttributableTurn', () => {
     expect(result).toEqual({ id: 'turn-running', wasRunning: true });
     expect(calls).toHaveLength(1);
     expect(calls[0]?.text).toContain("status = 'running'");
-    expect(calls[0]?.values).toEqual(['ws-1', 'p-1']);
+    // S11 AA4c: no admin session named — the entry agent's Turns (null).
+    expect(calls[0]?.values).toEqual(['ws-1', 'p-1', false, null]);
   });
 
   it('falls back to the most recent Turn within the window when none is running', async () => {
@@ -70,7 +71,7 @@ describe('findAttributableTurn', () => {
     expect(result).toEqual({ id: 'turn-recent', wasRunning: false });
     expect(calls).toHaveLength(2);
     expect(calls[1]?.text).toContain("created_at > $3::timestamptz - ($4 || ' minutes')::interval");
-    expect(calls[1]?.values).toEqual(['ws-1', 'p-1', at.toISOString(), 5]);
+    expect(calls[1]?.values).toEqual(['ws-1', 'p-1', at.toISOString(), 5, false, null]);
   });
 
   it('defaults recentTurnWindowMinutes to DEFAULT_RECENT_TURN_WINDOW_MINUTES when omitted', async () => {
@@ -119,7 +120,25 @@ describe('findAttributableTurnForSession', () => {
     expect(calls[1]?.text).toContain("set_config('app.principal_id'");
     expect(calls[1]?.values).toEqual(['p-1']);
     expect(calls[2]?.text).toContain("status = 'running'");
-    expect(calls[2]?.values).toEqual(['ws-1', 'p-1']);
+    expect(calls[2]?.values).toEqual(['ws-1', 'p-1', false, null]);
+  });
+
+  it("S11 AA4c: an admin agent's session attributes to the Turns of that session alone", async () => {
+    const { client, calls } = fakeClient([
+      { rows: [{ principal_id: 'p-1', kind: 'admin_agent' }] }, // sessions lookup
+      { rows: [] }, // set_config
+      { rows: [{ id: 'turn-admin' }] }, // running-turn lookup
+    ]);
+
+    const result = await findAttributableTurnForSession(client, {
+      workspaceId: 'ws-1',
+      sessionId: 'admin-session-1',
+      at: new Date(),
+    });
+
+    expect(result).toEqual({ id: 'turn-admin', wasRunning: true });
+    expect(calls[2]?.text).toContain("metadata ->> 'sessionId'");
+    expect(calls[2]?.values).toEqual(['ws-1', 'p-1', true, 'admin-session-1']);
   });
 
   it('returns undefined without querying activities when the session does not resolve', async () => {

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { HttpError } from '../lib/http-client.js';
+import { LangProvider } from '../lib/i18n.js';
 import type { CatalogTab } from '../lib/router.js';
 import { CatalogPage } from './CatalogPage.js';
 import { governanceFields } from './connect/governance-fixtures.test-helpers.js';
@@ -4982,5 +4983,208 @@ describe('CatalogPage 起草方 (legacy 597)', () => {
       '门自己声明',
     );
     expect(within(imported).queryByTestId('operation-detail-proposer')).toBeNull();
+  });
+});
+
+describe('CatalogPage 列表行的「智能体」标记 (legacy 602)', () => {
+  /** The rows (not their details) whose text includes `name`. */
+  function rowsNamed(name: string): HTMLElement[] {
+    return [
+      ...screen.queryAllByTestId('catalog-row'),
+      ...screen.queryAllByTestId('workers-my-draft-row'),
+    ].filter((row) => row.textContent?.includes(name));
+  }
+
+  it('marks a Skill or Procedure draft an agent wrote, and nothing else', async () => {
+    const http = scriptedHttp({
+      list_skills: () => ({
+        items: [
+          {
+            id: 'sk-a',
+            version: 1,
+            status: 'draft',
+            name: 'agent-draft',
+            description: 'd',
+            proposedBy: 'p-member',
+            origin: 'agent',
+            draftDigest: 'sha256:a',
+          },
+          {
+            id: 'sk-h',
+            version: 1,
+            status: 'draft',
+            name: 'person-draft',
+            description: 'd',
+            proposedBy: 'p-member',
+            origin: 'human',
+            draftDigest: 'sha256:h',
+          },
+          {
+            id: 'sk-p',
+            version: 1,
+            status: 'published',
+            name: 'agent-published',
+            description: 'd',
+            proposedBy: 'p-member',
+            origin: 'agent',
+          },
+          {
+            id: 'sk-o',
+            version: 1,
+            status: 'draft',
+            name: 'unrecorded-draft',
+            description: 'd',
+            proposedBy: 'p-member',
+            draftDigest: 'sha256:o',
+          },
+        ],
+      }),
+      list_procedures: () => ({
+        items: [
+          {
+            id: 'pr-a',
+            version: 1,
+            status: 'draft',
+            name: 'agent-flow',
+            description: 'd',
+            steps: [],
+            proposedBy: 'p-member',
+            origin: 'agent',
+          },
+        ],
+      }),
+    });
+    renderPage(http, 'skills');
+    await screen.findAllByTestId('catalog-row');
+    const marks = screen.getAllByTestId('catalog-row-agent-draft');
+    expect(marks).toHaveLength(1);
+    const [agentRow] = rowsNamed('agent-draft');
+    expect(within(agentRow as HTMLElement).getByTestId('catalog-row-agent-draft')).toBe(marks[0]);
+    expect(marks[0]?.textContent).toBe('智能体');
+    expect(marks[0]?.className).toContain('chip-warn');
+    expect(marks[0]?.getAttribute('title')).toBe(
+      '这份草稿是智能体或服务账号写的，发布前请逐项核对。',
+    );
+    for (const name of ['person-draft', 'agent-published', 'unrecorded-draft']) {
+      expect(
+        within(rowsNamed(name)[0] as HTMLElement).queryByTestId('catalog-row-agent-draft'),
+      ).toBeNull();
+    }
+    cleanup();
+
+    renderPage(http, 'procedures');
+    const procedure = (await screen.findAllByTestId('catalog-row'))[0] as HTMLElement;
+    expect(within(procedure).getByTestId('catalog-row-agent-draft').textContent).toBe('智能体');
+  });
+
+  it('marks a Worker draft an agent wrote in every list it appears in', async () => {
+    const http = scriptedHttp({
+      list_worker_definitions: () => ({
+        items: [
+          {
+            id: 'wd-a',
+            version: 2,
+            kind: 'worker',
+            status: 'draft',
+            definition: { name: 'Agent worker' },
+            proposedBy: 'p-member',
+            origin: 'agent',
+          },
+          {
+            id: 'wd-p',
+            version: 1,
+            kind: 'worker',
+            status: 'published',
+            definition: { name: 'Published worker' },
+            proposedBy: 'p-owner',
+            origin: 'agent',
+          },
+        ],
+      }),
+    });
+    renderPage(http, 'workers');
+    await screen.findAllByTestId('catalog-row');
+    const agentRows = rowsNamed('Agent worker');
+    expect(agentRows.length).toBeGreaterThan(0);
+    for (const row of agentRows) {
+      expect(within(row).getByTestId('catalog-row-agent-draft')).toBeTruthy();
+    }
+    for (const row of rowsNamed('Published worker')) {
+      expect(within(row).queryByTestId('catalog-row-agent-draft')).toBeNull();
+    }
+  });
+
+  it('marks an Operation draft an agent wrote; a gate manifest’s row has none', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'docker.restart',
+            status: 'draft',
+            version: 1,
+            origin: 'agent',
+            proposedBy: 'p-member',
+            draftDigest: 'sha256:o',
+          },
+          {
+            gatekeeperId: 'gk-1',
+            name: 'docker.ps',
+            status: 'draft',
+            version: 1,
+            origin: 'import',
+            proposedBy: 'p-owner',
+            draftDigest: 'sha256:i',
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+    });
+    renderPage(http, 'operations');
+    await screen.findAllByTestId('catalog-row');
+    expect(
+      within(rowsNamed('restart')[0] as HTMLElement).getByTestId('catalog-row-agent-draft'),
+    ).toBeTruthy();
+    expect(
+      within(rowsNamed('docker.ps')[0] as HTMLElement).queryByTestId('catalog-row-agent-draft'),
+    ).toBeNull();
+  });
+
+  it('renders in English', async () => {
+    localStorage.setItem('nexttime.lang', 'en');
+    try {
+      const http = scriptedHttp({
+        list_skills: () => ({
+          items: [
+            {
+              id: 'sk-a',
+              version: 1,
+              status: 'draft',
+              name: 'agent-draft',
+              description: 'd',
+              proposedBy: 'p-member',
+              origin: 'agent',
+              draftDigest: 'sha256:a',
+            },
+          ],
+        }),
+      });
+      render(
+        <LangProvider>
+          <PermissionsProvider>
+            <ToastProvider>
+              <Harness http={http} initialTab="skills" />
+            </ToastProvider>
+          </PermissionsProvider>
+        </LangProvider>,
+      );
+      const mark = await screen.findByTestId('catalog-row-agent-draft');
+      expect(mark.textContent).toBe('Agent');
+      expect(mark.getAttribute('title')).toBe(
+        'An agent or a service account wrote this draft. Check every part before publishing.',
+      );
+    } finally {
+      localStorage.removeItem('nexttime.lang');
+    }
   });
 });

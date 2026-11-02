@@ -33,6 +33,15 @@
  * `HANDLE_JTI_LABEL`: a mismatch means agent-host presented a Handle this container was never
  * spawned with, so `spawn` stops and recreates it (same shape as the crash-restart path below,
  * `restarts` incremented) instead of silently reusing a container holding a stale Handle.
+ *
+ * **Two kinds** (S11 AA4c-2, `resident-kind.ts`): a Principal may have an entry agent's container
+ * and, in a trial workspace, an admin agent's. Everything here is keyed by kind × Principal — the
+ * registry, the container name, the directories, the egress source and the Handle binding — so the
+ * two never share a container, a file or an attribution. The admin agent's source is registered
+ * deny-all on every spawn, reuse included, and on every `reconcile` (a supervisor restart, a
+ * docker-events reconnect); one whose registration fails is removed on all three paths, never left
+ * running on egress-proxy's unknown-source default. `reconcile`, `list` and the idle sweep cover
+ * both kinds; `reclaim` removes both.
  */
 
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -41,11 +50,20 @@ import { posix as posixPath } from 'node:path';
 import type { SpawnRequest, SupervisorConfig, TaskSkillInline } from './config.js';
 import type { ContainerState, DockerClient, RuntimeImageInfo } from './docker-client.js';
 import { IMAGE_PI_VERSION_LABEL } from './docker-client.js';
-import { entrySourceId } from './egress-map.js';
+import { denyAllEntryFields } from './egress-map.js';
 import type { EgressMapStore, SourceMapFile } from './egress-map.js';
 import { type HandleBindingStore, bindExclusive, containerAtAddress } from './handle-bindings.js';
 import { decodeHandleJtiUnsafe } from './handle-jti.js';
 import { localSkillsDir, localSystemPromptPath, workspacePaths } from './host-paths.js';
+import {
+  RESIDENT_AGENT_KINDS,
+  type ResidentAgentKind,
+  residentContainerName,
+  residentEgressDenyAll,
+  residentKey,
+  residentRoleValue,
+  residentSourceId,
+} from './resident-kind.js';
 import {
   RUNTIME_CONTRACT_VERSION,
   RuntimeImageIncompatibleError,
@@ -55,7 +73,6 @@ import {
   CONTAINER_RUNTIME_CONTRACT_LABEL,
   EGRESS_DENY_LABEL,
   ENTRY_ROLE_LABEL,
-  ENTRY_ROLE_VALUE,
   HANDLE_JTI_LABEL,
   IMAGE_LABEL,
   PRINCIPAL_LABEL,
@@ -63,7 +80,6 @@ import {
   SKILLS_HASH_LABEL,
   WORKSPACE_LABEL,
   buildSpawnSpec,
-  entryContainerName,
   hashSkillsInline,
 } from './spawn-spec.js';
 
@@ -117,6 +133,8 @@ export interface SpawnOutcome {
 
 export interface ResidentStatus {
   readonly principalId: string;
+  /** S11 AA4c-2: whose container this is (`resident-kind.ts`). */
+  readonly agentKind: ResidentAgentKind;
   readonly containerId: string;
   readonly ip: string | undefined;
   readonly running: boolean;
@@ -133,6 +151,9 @@ export interface ResidentStatus {
  *  report what a container *is*, never whether it matches what it *should* be. */
 export interface ResidentInventoryEntry {
   readonly principalId: string;
+  /** S11 AA4c-2: whose container this is (`resident-kind.ts`) — the kernel's
+   *  `roll_entry_containers` rolls the entry agent's alone. */
+  readonly agentKind: ResidentAgentKind;
   readonly workspaceId: string;
   readonly containerId: string;
   readonly running: boolean;
@@ -148,6 +169,10 @@ export interface ResidentInventoryEntry {
 }
 
 interface RegistryEntry {
+  /** S11 AA4c-2: the registry is keyed by `residentKey(agentKind, principalId)`; both are kept on
+   *  the entry too, for the sweep and the docker-events path, which walk the entries. */
+  principalId: string;
+  agentKind: ResidentAgentKind;
   workspaceId: string;
   containerId: string;
   ip: string | undefined;
@@ -192,7 +217,8 @@ export interface ResidentServiceDeps {
 
 export interface ResidentService {
   spawn(input: SpawnRequest): Promise<SpawnOutcome>;
-  stop(principalId: string): Promise<void>;
+  /** Stops one resident container: the entry agent's, or (S11 AA4c-2) the admin agent's. */
+  stop(principalId: string, agentKind?: ResidentAgentKind): Promise<void>;
   /** S8 W5 (leftover 77): permanently reclaims one principal's resident entry container and its
    *  `workspaces/<principalId>` data directory — force-removes the container (`docker rm -f`,
    *  unlike `stop`, which only stops it so a later `spawn` can reuse it) and deletes the directory
@@ -201,19 +227,21 @@ export interface ResidentService {
    *  point. Safe to call for a principal that never had a container or directory: both operations
    *  already tolerate "not found"/a missing path as a no-op, matching the loop
    *  `scripts/delete-workspace.sh`'s host-side cleanup runs over every `PRINCIPAL=` id regardless
-   *  of Principal kind. */
+   *  of Principal kind. S11 AA4c-2: every kind of resident container the Principal has — its
+   *  admin agent's container and directories go with its entry agent's. */
   reclaim(principalId: string): Promise<void>;
-  status(principalId: string): Promise<ResidentStatus | undefined>;
+  status(principalId: string, agentKind?: ResidentAgentKind): Promise<ResidentStatus | undefined>;
   /** Refreshes the idle clock for `principalId`. Returns `false` when the container isn't known
    *  (never spawned, or spawned by a supervisor instance that has since restarted and not yet
    *  reconciled — see `reconcile`). */
-  touch(principalId: string): Promise<boolean>;
-  /** Lists containers labelled `nexttime.role=entry`, re-registers each running one's IP with the
+  touch(principalId: string, agentKind?: ResidentAgentKind): Promise<boolean>;
+  /** Lists containers labelled `nexttime.role=entry` (S11 AA4c-2: and `=admin`), re-registers each running one's IP with the
    *  egress source map, and seeds the idle-timeout registry — called once at startup (design doc
    *  §13 "agent-host 重启...事件桥重连"; the supervisor's own analogue for its egress registrations
    *  and idle clocks, which are both in-memory). feat/egress-docker-events: also called again after
    *  every docker-events reconnect (`index.ts`/`docker-events.ts`) — see its own doc comment for
-   *  why that's safe to do repeatedly. */
+   *  why that's safe to do repeatedly. S11 AA4c-2: an admin agent's container whose deny-all
+   *  registration fails here is removed, as on spawn. */
   reconcile(): Promise<void>;
   /** Stops every resident container whose `lastTouchedAt` is older than `entryIdleTimeoutMs`
    *  (design doc §7.2 "空闲超时停容器"). Call on an interval — see `index.ts`. */
@@ -284,31 +312,44 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
   // rest of the platform treats egress/usage reporting as best-effort elsewhere (e.g.
   // @nexttime/llm-proxy's usage reporter, @nexttime/egress-proxy's own reporter — both queue and
   // retry rather than block their caller).
+  //
+  // S11 AA4c-2: the one exception is the admin agent's deny-all source (`resident-kind.ts`), the
+  // same exception Task mode makes for an evaluation run: this returns `false` and its callers do
+  // not leave that container running — egress-proxy's unknown-source default is configurable
+  // (`EGRESS_DENY_UNKNOWN_SOURCE`), the admin agent's "no egress" is not.
   function registerEgress(
+    kind: ResidentAgentKind,
     workspaceId: string,
     principalId: string,
     ip: string | undefined,
     egressDeny?: readonly string[],
-  ): void {
-    if (!ip) return;
+  ): boolean {
+    if (!ip) return false;
+    const denyAll = residentEgressDenyAll(kind);
     try {
       egressMap.register(ip, {
-        sourceId: entrySourceId(workspaceId, principalId),
+        sourceId: residentSourceId(kind, workspaceId, principalId),
+        ...(denyAll ? denyAllEntryFields() : {}),
         // Omit `deny` entirely when there is nothing to narrow — keeps the SOURCE_MAP_FILE entry
         // byte-for-byte identical to before this field existed for the common "no list" case,
         // rather than writing a needless `"deny": []`.
-        ...(egressDeny && egressDeny.length > 0 ? { deny: egressDeny } : {}),
+        ...(!denyAll && egressDeny && egressDeny.length > 0 ? { deny: egressDeny } : {}),
       });
+      return true;
     } catch (err) {
       console.error(
         JSON.stringify({
-          level: 'warn',
-          msg: 'egress registration failed (spawn still succeeds)',
+          level: denyAll ? 'error' : 'warn',
+          msg: denyAll
+            ? 'admin agent egress registration failed (its container is not left running)'
+            : 'egress registration failed (spawn still succeeds)',
           principalId,
+          agentKind: kind,
           ip,
           error: String(err),
         }),
       );
+      return false;
     }
   }
 
@@ -357,6 +398,7 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
    *  cannot call the kernel or the LLM, so the spawn must not report success — and so does an
    *  address another running container still holds (`bindExclusive`). */
   async function bindHandle(
+    kind: ResidentAgentKind,
     workspaceId: string,
     principalId: string,
     containerId: string,
@@ -364,13 +406,46 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
     handle: string,
   ): Promise<void> {
     if (!ip) {
-      throw new Error(`entry container ${containerId} has no address on the workers network`);
+      throw new Error(`resident container ${containerId} has no address on the workers network`);
     }
     await bindExclusive(
       handleBindings,
       ip,
-      { handle, sourceId: entrySourceId(workspaceId, principalId), containerId },
+      { handle, sourceId: residentSourceId(kind, workspaceId, principalId), containerId },
       isAt,
+    );
+  }
+
+  /** Takes down an admin agent's container whose deny-all egress registration failed (S11 AA4c-2):
+   *  its Handle binding first, while it still holds its address, then its registry entry and the
+   *  container itself. Spawn, reuse and `reconcile` all end here — it must never run where
+   *  egress-proxy might treat it as an unknown, and so possibly unrestricted, source. */
+  async function retireUnregistered(
+    kind: ResidentAgentKind,
+    principalId: string,
+    container: { readonly id: string; readonly ip: string | undefined },
+  ): Promise<void> {
+    unbindHandle(container.ip, container.id);
+    registry.delete(residentKey(kind, principalId));
+    await docker.remove(residentContainerName(kind, principalId));
+  }
+
+  /** Registers `container`'s egress source (`registerEgress`). An entry agent's registration is
+   *  best-effort as before; an admin agent's container whose deny-all registration failed is
+   *  removed (`retireUnregistered`) and the spawn fails (S11 AA4c-2). */
+  async function registerEgressOrRetire(
+    kind: ResidentAgentKind,
+    workspaceId: string,
+    principalId: string,
+    container: { readonly id: string; readonly ip: string | undefined },
+    egressDeny: readonly string[] | undefined,
+  ): Promise<void> {
+    const registered = registerEgress(kind, workspaceId, principalId, container.ip, egressDeny);
+    if (registered || !residentEgressDenyAll(kind)) return;
+    const name = residentContainerName(kind, principalId);
+    await retireUnregistered(kind, principalId, container);
+    throw new Error(
+      `${name} was not started: its deny-all egress registration failed (see the error logged before this)`,
     );
   }
 
@@ -407,9 +482,13 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
   // `systemPrompt` is given and differs from what's already on disk, so a spawn call carrying no
   // `systemPrompt` (or with the caller's own file byte-for-byte in place) is a cheap read + no-op,
   // not a needless write.
-  function writeSystemPromptIfChanged(principalId: string, systemPrompt: string | undefined): void {
+  function writeSystemPromptIfChanged(
+    kind: ResidentAgentKind,
+    principalId: string,
+    systemPrompt: string | undefined,
+  ): void {
     if (systemPrompt === undefined) return;
-    const filePath = localSystemPromptPath(config, principalId);
+    const filePath = localSystemPromptPath(config, principalId, kind);
     try {
       let existing: string | undefined;
       try {
@@ -426,15 +505,16 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
           level: 'warn',
           msg: 'system-prompt.md write failed (spawn still succeeds; entrypoint.sh’s static fallback applies)',
           principalId,
+          agentKind: kind,
           error: String(err),
         }),
       );
     }
   }
 
-  function removeSystemPrompt(principalId: string): void {
+  function removeSystemPrompt(kind: ResidentAgentKind, principalId: string): void {
     try {
-      rmSync(localSystemPromptPath(config, principalId), { force: true });
+      rmSync(localSystemPromptPath(config, principalId, kind), { force: true });
     } catch (err) {
       console.error(
         JSON.stringify({
@@ -464,8 +544,12 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
    * selects). Best-effort, same convention as `writeSystemPromptIfChanged` above — a broken/
    * unwritable workspace directory must never block the entry container from coming up.
    */
-  function writeSkillsInline(principalId: string, skillsInline: readonly TaskSkillInline[]): void {
-    const skillsDir = localSkillsDir(workspacePaths(config, principalId).localPlatformDir);
+  function writeSkillsInline(
+    kind: ResidentAgentKind,
+    principalId: string,
+    skillsInline: readonly TaskSkillInline[],
+  ): void {
+    const skillsDir = localSkillsDir(workspacePaths(config, principalId, kind).localPlatformDir);
     try {
       rmSync(skillsDir, { recursive: true, force: true });
       for (const skill of skillsInline) {
@@ -498,11 +582,14 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         llmUrl,
         systemPrompt,
         model,
-        egressDeny,
         skillsInline,
       } = input;
-      const name = entryContainerName(principalId);
-      const paths = workspacePaths(config, principalId);
+      const kind: ResidentAgentKind = input.agentKind ?? 'entry';
+      const key = residentKey(kind, principalId);
+      // The admin agent has no egress to narrow (`SpawnRequestSchema` refuses a list for it).
+      const egressDeny = kind === 'entry' ? input.egressDeny : undefined;
+      const name = residentContainerName(kind, principalId);
+      const paths = workspacePaths(config, principalId, kind);
       // S7-E (P-C §6.5 决定 E1): resolved once, at the top — every use below (the drift check, the
       // (re)create spec, the returned/stamped label) reads this one value, matching how `handle`/
       // `skillsInline` are already destructured once rather than re-read from `input`.
@@ -518,7 +605,7 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
 
       // S2.6: before deciding reuse-vs-(re)create, so the file is current for whichever the
       // container actually loads at its *next* start (see this function's own doc comment above).
-      writeSystemPromptIfChanged(principalId, systemPrompt);
+      writeSystemPromptIfChanged(kind, principalId, systemPrompt);
 
       const existing = await docker.inspectByName(name);
 
@@ -577,7 +664,7 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       // is the safety-biased-toward-denial net for that window; it can only ever add to what a
       // reconnect restores, never subtract, so it must never be the only mechanism relied on to
       // converge a loosening.
-      const lastAppliedEgressDeny = registry.get(principalId)?.lastAppliedEgressDeny;
+      const lastAppliedEgressDeny = registry.get(key)?.lastAppliedEgressDeny;
       const egressDenyDrifted =
         lastAppliedEgressDeny !== undefined &&
         !egressDenySetsEqual(
@@ -598,7 +685,9 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         handleRotated || skillsChanged || egressDenyDrifted || imageChanged || layoutChanged;
 
       const reuse = async (running: ContainerState): Promise<SpawnOutcome> => {
-        registry.set(principalId, {
+        registry.set(key, {
+          principalId,
+          agentKind: kind,
           workspaceId,
           containerId: running.id,
           ip: running.ip,
@@ -611,10 +700,10 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         // Refreshed on every reuse (not just a fresh spawn) so a WorkerDefinition's egress list
         // published *after* this container started still takes effect immediately, without
         // waiting for the container itself to restart — see registerEgress's own doc comment.
-        registerEgress(workspaceId, principalId, running.ip, egressDeny);
+        await registerEgressOrRetire(kind, workspaceId, principalId, running, egressDeny);
         // The incoming Handle may be newer than the one bound when this container started (an
         // older container without the jti label is reused across a reissue).
-        await bindHandle(workspaceId, principalId, running.id, running.ip, handle);
+        await bindHandle(kind, workspaceId, principalId, running.id, running.ip, handle);
         return {
           containerId: running.id,
           ip: running.ip,
@@ -671,7 +760,7 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
           // IP reuse could otherwise get a different container's egress mis-attributed to this
           // principal — rather than leaving the stale entry in place for up to a full
           // `entryIdleTimeoutMs` (idle-sweep is the only other thing that would ever clear it).
-          const crashed = registry.get(principalId);
+          const crashed = registry.get(key);
           unregisterEgress(crashed?.ip, crashed?.containerId);
         }
         await docker.remove(name);
@@ -679,17 +768,18 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
 
       // S3.13: written only in this (re)create branch — see writeSkillsInline's own doc comment
       // for why a plain reuse above never needs it.
-      writeSkillsInline(principalId, skillsInline ?? []);
+      writeSkillsInline(kind, principalId, skillsInline ?? []);
       // No published entry definition (any more): the new container starts on the image's default
       // prompt, not on one left from before (Task mode does the same). Only here, never before a
       // reuse — the running pi was started on that path.
-      if (systemPrompt === undefined) removeSystemPrompt(principalId);
+      if (systemPrompt === undefined) removeSystemPrompt(kind, principalId);
 
       const networkName = await resolveNetworkName();
       const spec = buildSpawnSpec({
         config,
         workspaceId,
         principalId,
+        agentKind: kind,
         kernelUrl,
         llmUrl,
         networkName,
@@ -701,21 +791,30 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         image,
       });
       const created = await docker.createAndStart(spec);
+      // An admin agent's deny-all is registered before its Handle is bound: its pi starts only once
+      // the binding names this container (entrypoint.sh `handle_binding`), so it never runs for a
+      // moment as a source egress-proxy does not know. The entry agent keeps its order (below).
+      const egressFirst = residentEgressDenyAll(kind);
+      if (egressFirst) {
+        await registerEgressOrRetire(kind, workspaceId, principalId, created, egressDeny);
+      }
       // Bound before anything records the new container. One that cannot be bound is removed: it
       // could call nothing, and its address may still carry a dead container's binding — it must
       // not keep running there (handle-bindings.ts).
       try {
-        await bindHandle(workspaceId, principalId, created.id, created.ip, handle);
+        await bindHandle(kind, workspaceId, principalId, created.id, created.ip, handle);
       } catch (err) {
-        registry.delete(principalId);
+        if (egressFirst) unregisterEgress(created.ip, created.id);
+        registry.delete(key);
         try {
           await docker.remove(name);
         } catch (removeErr) {
           console.error(
             JSON.stringify({
               level: 'warn',
-              msg: 'entry container removal failed after a failed handle binding',
+              msg: 'resident container removal failed after a failed handle binding',
               principalId,
+              agentKind: kind,
               error: String(removeErr),
             }),
           );
@@ -723,7 +822,9 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         throw err;
       }
 
-      registry.set(principalId, {
+      registry.set(key, {
+        principalId,
+        agentKind: kind,
         workspaceId,
         containerId: created.id,
         ip: created.ip,
@@ -732,7 +833,9 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         // this exactly — see RegistryEntry.lastAppliedEgressDeny's own doc comment.
         lastAppliedEgressDeny: egressDeny,
       });
-      registerEgress(workspaceId, principalId, created.ip, egressDeny);
+      if (!egressFirst) {
+        await registerEgressOrRetire(kind, workspaceId, principalId, created, egressDeny);
+      }
 
       return {
         containerId: created.id,
@@ -743,9 +846,10 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       };
     },
 
-    async stop(principalId: string): Promise<void> {
-      const name = entryContainerName(principalId);
-      const entry = registry.get(principalId);
+    async stop(principalId: string, agentKind: ResidentAgentKind = 'entry'): Promise<void> {
+      const key = residentKey(agentKind, principalId);
+      const name = residentContainerName(agentKind, principalId);
+      const entry = registry.get(key);
       const existing = entry ? undefined : await docker.inspectByName(name);
       const ip = entry?.ip ?? existing?.ip;
       const containerId = entry?.containerId ?? existing?.id;
@@ -753,53 +857,62 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       unbindHandle(ip, containerId);
       await docker.stop(name, STOP_TIMEOUT_SECONDS);
       unregisterEgress(ip, containerId);
-      registry.delete(principalId);
+      registry.delete(key);
     },
 
     async reclaim(principalId: string): Promise<void> {
-      const name = entryContainerName(principalId);
-      const entry = registry.get(principalId);
-      const existing = entry ? undefined : await docker.inspectByName(name);
-      const ip = entry?.ip ?? existing?.ip;
-      const containerId = entry?.containerId ?? existing?.id;
+      // S11 AA4c-2: every kind — a purged Principal keeps no resident container of any kind.
+      for (const kind of RESIDENT_AGENT_KINDS) {
+        const key = residentKey(kind, principalId);
+        const name = residentContainerName(kind, principalId);
+        const entry = registry.get(key);
+        const existing = entry ? undefined : await docker.inspectByName(name);
+        const ip = entry?.ip ?? existing?.ip;
+        const containerId = entry?.containerId ?? existing?.id;
 
-      unbindHandle(ip, containerId);
-      await docker.remove(name);
-      unregisterEgress(ip, containerId);
-      registry.delete(principalId);
+        unbindHandle(ip, containerId);
+        await docker.remove(name);
+        unregisterEgress(ip, containerId);
+        registry.delete(key);
 
-      // Best-effort, same convention as registerEgress/writeSystemPromptIfChanged above: a purge
-      // is already irreversible and already recorded in the platform audit row regardless, so a
-      // failed directory removal here (permissions, an already-gone path) must never surface as an
-      // error the caller retries — the container is what actually mattered for "reclaim access",
-      // this is just freeing disk sooner than the operator would notice on their own.
-      // Each directory on its own: one that can't be removed must not keep the other.
-      const { localWorkspaceDir, localPlatformDir } = workspacePaths(config, principalId);
-      for (const dir of [localWorkspaceDir, localPlatformDir]) {
-        try {
-          rmSync(dir, { recursive: true, force: true });
-        } catch (err) {
-          console.error(
-            JSON.stringify({
-              level: 'warn',
-              msg: 'reclaim: workspace directory removal failed',
-              principalId,
-              dir,
-              error: String(err),
-            }),
-          );
+        // Best-effort, same convention as registerEgress/writeSystemPromptIfChanged above: a purge
+        // is already irreversible and already recorded in the platform audit row regardless, so a
+        // failed directory removal here (permissions, an already-gone path) must never surface as
+        // an error the caller retries — the container is what actually mattered for "reclaim
+        // access", this is just freeing disk sooner than the operator would notice on their own.
+        // Each directory on its own: one that can't be removed must not keep the other.
+        const { localWorkspaceDir, localPlatformDir } = workspacePaths(config, principalId, kind);
+        for (const dir of [localWorkspaceDir, localPlatformDir]) {
+          try {
+            rmSync(dir, { recursive: true, force: true });
+          } catch (err) {
+            console.error(
+              JSON.stringify({
+                level: 'warn',
+                msg: 'reclaim: workspace directory removal failed',
+                principalId,
+                agentKind: kind,
+                dir,
+                error: String(err),
+              }),
+            );
+          }
         }
       }
     },
 
-    async status(principalId: string): Promise<ResidentStatus | undefined> {
-      const name = entryContainerName(principalId);
+    async status(
+      principalId: string,
+      agentKind: ResidentAgentKind = 'entry',
+    ): Promise<ResidentStatus | undefined> {
+      const name = residentContainerName(agentKind, principalId);
       const state = await docker.inspectByName(name);
       if (!state) return undefined;
 
-      const entry = registry.get(principalId);
+      const entry = registry.get(residentKey(agentKind, principalId));
       return {
         principalId,
+        agentKind,
         containerId: state.id,
         ip: state.ip,
         running: state.running,
@@ -810,8 +923,9 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       };
     },
 
-    async touch(principalId: string): Promise<boolean> {
-      const existing = registry.get(principalId);
+    async touch(principalId: string, agentKind: ResidentAgentKind = 'entry'): Promise<boolean> {
+      const key = residentKey(agentKind, principalId);
+      const existing = registry.get(key);
       if (existing) {
         existing.lastTouchedAt = now();
         return true;
@@ -819,12 +933,14 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
 
       // Recovery path: this supervisor process doesn't remember this principal (e.g. it
       // restarted since the container was spawned) but the container itself is still there.
-      const name = entryContainerName(principalId);
+      const name = residentContainerName(agentKind, principalId);
       const state = await docker.inspectByName(name);
       if (!state?.running) return false;
 
       const workspaceId = state.labels[WORKSPACE_LABEL] ?? '';
-      registry.set(principalId, {
+      registry.set(key, {
+        principalId,
+        agentKind,
         workspaceId,
         containerId: state.id,
         ip: state.ip,
@@ -834,7 +950,6 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
     },
 
     async reconcile(): Promise<void> {
-      const containers = await docker.listByLabel(ENTRY_ROLE_LABEL, ENTRY_ROLE_VALUE);
       // 遗留22 / code-review-2026-09-10.md §3.5: read once, outside the loop below.
       // EGRESS_DENY_LABEL alone is only what a container was (re)created with; a reuse call since
       // then may already have tightened SOURCE_MAP_FILE past it (spawn()'s own reuse-branch
@@ -845,13 +960,18 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       // (`egressDenyDrifted` above) is what eventually re-stamps the label itself; this union is
       // the safety net for the window before that resync happens.
       const currentMap = readEgressMap();
-      for (const state of containers) {
-        const principalId = state.labels[PRINCIPAL_LABEL];
-        const workspaceId = state.labels[WORKSPACE_LABEL];
-        if (!principalId || !workspaceId) continue;
+      for (const kind of RESIDENT_AGENT_KINDS) {
+        const containers = await docker.listByLabel(ENTRY_ROLE_LABEL, residentRoleValue(kind));
+        for (const state of containers) {
+          const principalId = state.labels[PRINCIPAL_LABEL];
+          const workspaceId = state.labels[WORKSPACE_LABEL];
+          if (!principalId || !workspaceId) continue;
+          if (!state.running) continue;
+          const key = residentKey(kind, principalId);
 
-        if (state.running) {
-          registry.set(principalId, {
+          registry.set(key, {
+            principalId,
+            agentKind: kind,
             workspaceId,
             containerId: state.id,
             ip: state.ip,
@@ -864,14 +984,39 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
             // `lastTouchedAt` forever, silently disabling `sweepIdle()` for as long as the
             // flapping continues. A genuine restart still starts from an empty registry, so this
             // branch behaves exactly as before in that case.
-            lastTouchedAt: registry.get(principalId)?.lastTouchedAt ?? now(),
+            lastTouchedAt: registry.get(key)?.lastTouchedAt ?? now(),
             // Preserve whatever spawn()'s own drift check last recorded here — reconciling a
             // container's idle clock/egress registration says nothing about what was last
             // *published* for it, and clearing this on every reconnect would erase the very
             // signal that check depends on (RegistryEntry.lastAppliedEgressDeny's own doc
             // comment; 遗留22 / code-review-2026-09-10.md §3.5).
-            lastAppliedEgressDeny: registry.get(principalId)?.lastAppliedEgressDeny,
+            lastAppliedEgressDeny: registry.get(key)?.lastAppliedEgressDeny,
           });
+          if (residentEgressDenyAll(kind)) {
+            // S11 AA4c-2: an admin agent's source is deny-all whatever any label or file says. One
+            // whose registration fails here is removed, as spawn and reuse remove theirs
+            // (`retireUnregistered`) — never left to egress-proxy's unknown-source rule, which is
+            // configurable (`EGRESS_DENY_UNKNOWN_SOURCE`). A removal Docker refuses is logged and
+            // the pass goes on — it runs at startup and after every docker-events reconnect; the
+            // container's Handle binding went first, so it can call nothing meanwhile.
+            if (!registerEgress(kind, workspaceId, principalId, state.ip)) {
+              try {
+                await retireUnregistered(kind, principalId, state);
+              } catch (err) {
+                console.error(
+                  JSON.stringify({
+                    level: 'error',
+                    msg: 'removing an admin agent container without its deny-all egress entry failed',
+                    principalId,
+                    agentKind: kind,
+                    containerId: state.id,
+                    error: String(err),
+                  }),
+                );
+              }
+            }
+            continue;
+          }
           // Restores the egress deny list this container was (re)created with (EGRESS_DENY_LABEL),
           // unioned with whatever SOURCE_MAP_FILE already has registered for it (see this
           // function's own doc comment above, and 遗留22 / code-review-2026-09-10.md §3.5). The
@@ -881,14 +1026,14 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
           // startTurn (see EGRESS_DENY_LABEL's own doc comment). The union half covers a
           // reuse-applied tightening the label never learned about — without it, that tightening
           // would revert on every docker-events reconnect in between.
-          const sourceId = entrySourceId(workspaceId, principalId);
+          const sourceId = residentSourceId(kind, workspaceId, principalId);
           const effectiveDeny = Array.from(
             new Set([
               ...splitEgressDenyLabel(state.labels[EGRESS_DENY_LABEL]),
               ...registeredDenyFor(currentMap, state.ip, sourceId),
             ]),
           );
-          registerEgress(workspaceId, principalId, state.ip, effectiveDeny);
+          registerEgress(kind, workspaceId, principalId, state.ip, effectiveDeny);
         }
       }
     },
@@ -896,34 +1041,37 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
     async sweepIdle(): Promise<void> {
       const cutoff = now() - config.entryIdleTimeoutMs;
       const idle = [...registry.entries()].filter(([, entry]) => entry.lastTouchedAt < cutoff);
-      for (const [principalId, entry] of idle) {
-        const name = entryContainerName(principalId);
+      for (const [key, entry] of idle) {
+        const name = residentContainerName(entry.agentKind, entry.principalId);
         unbindHandle(entry.ip, entry.containerId);
         await docker.stop(name, STOP_TIMEOUT_SECONDS);
         unregisterEgress(entry.ip, entry.containerId);
-        registry.delete(principalId);
+        registry.delete(key);
       }
     },
 
     async notifyContainerExited(containerId: string, action: string): Promise<boolean> {
       const match = [...registry.entries()].find(([, entry]) => entry.containerId === containerId);
       if (!match) return false;
-      const [principalId, entry] = match;
+      const [key, entry] = match;
 
       // Docker's `kill` event fires when the signal is sent, not once the container has actually
       // exited — see this method's own doc comment. Re-inspect rather than trust the event alone;
       // `state === undefined` (404, e.g. after a `destroy` following `docker rm`) counts as "not
       // running" just like `state.running === false`.
-      const state = await docker.inspectByName(entryContainerName(principalId));
+      const state = await docker.inspectByName(
+        residentContainerName(entry.agentKind, entry.principalId),
+      );
       if (state?.running) return false;
 
       unregisterEgress(entry.ip, entry.containerId);
-      registry.delete(principalId);
+      registry.delete(key);
       console.log(
         JSON.stringify({
           level: 'info',
           msg: 'resident container exited (docker event)',
-          principalId,
+          principalId: entry.principalId,
+          agentKind: entry.agentKind,
           containerId,
           action,
           // The only trace of *why* an entry agent died that outlives the container: agent-host
@@ -936,15 +1084,17 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
     },
 
     async list(): Promise<ResidentInventoryEntry[]> {
-      const containers = await docker.listByLabel(ENTRY_ROLE_LABEL, ENTRY_ROLE_VALUE);
-      return containers
-        .map((state): ResidentInventoryEntry | undefined => {
+      const items: ResidentInventoryEntry[] = [];
+      for (const kind of RESIDENT_AGENT_KINDS) {
+        const containers = await docker.listByLabel(ENTRY_ROLE_LABEL, residentRoleValue(kind));
+        for (const state of containers) {
           const principalId = state.labels[PRINCIPAL_LABEL];
           const workspaceId = state.labels[WORKSPACE_LABEL];
-          if (!principalId || !workspaceId) return undefined;
-          const entry = registry.get(principalId);
-          return {
+          if (!principalId || !workspaceId) continue;
+          const entry = registry.get(residentKey(kind, principalId));
+          items.push({
             principalId,
+            agentKind: kind,
             workspaceId,
             containerId: state.id,
             running: state.running,
@@ -953,9 +1103,10 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
             imageId: state.running ? state.imageId : undefined,
             startedAt: state.startedAt,
             lastTouchedAt: entry ? new Date(entry.lastTouchedAt).toISOString() : undefined,
-          };
-        })
-        .filter((entry): entry is ResidentInventoryEntry => entry !== undefined);
+          });
+        }
+      }
+      return items;
     },
 
     async listImages(): Promise<RuntimeImageInventory> {

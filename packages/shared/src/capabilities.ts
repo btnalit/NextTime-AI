@@ -3,6 +3,7 @@ import { GateAbsenceSchema } from './action-description.js';
 import {
   AdminProposalSegmentStatusSchema,
   AdminProposalStatusSchema,
+  ChatAgentKindSchema,
   ConflictStatusSchema,
   ConnectionRequestStatusSchema,
   DraftKindSchema,
@@ -310,9 +311,14 @@ const chatCapabilities = [
     mode: 'execute',
     channel: 'human',
     minRole: 'member',
-    paramsSchema: z.object({ title: z.string().optional() }).strict(),
+    // S11 AA4c: `agentKind: 'admin_agent'` starts a platform administrator's admin agent Chat in a
+    // trial workspace (migrations/core/0053); the kernel checks the administrator's authority.
+    paramsSchema: z
+      .object({ title: z.string().optional(), agentKind: ChatAgentKindSchema.optional() })
+      .strict(),
     resultSchema: wire.ChatWireSchema,
-    description: 'Create a new private Chat for the calling principal.',
+    description:
+      'Create a new private Chat for the calling principal. agentKind admin_agent starts one held by your admin agent instead of your entry agent: only in a trial workspace, only while the platform has the admin agent on and you are a platform administrator (403 admin_agent_refused with details.reason otherwise).',
   },
   {
     name: 'send_chat_message',
@@ -4108,6 +4114,48 @@ const platformCapabilities = [
     description:
       'Withdraw an admin proposal: every segment still proposed becomes withdrawn (by this administrator, in the console), with the reason when one is given; segments already applied, rejected or withdrawn keep their status — rolling back an applied one is its workspace owner’s. One withdraw_admin_proposal platform audit row. 409 admin_proposal_not_open when no segment is still proposed; 404 admin_proposal_not_found.',
   },
+  // S11 AA4c (AA4 plan F3–F5; AA4c plan D1, D6, D7; governance 0036): the console's 「管理员智能体」
+  // page. Each is the calling administrator's own — the trial workspaces they are a member of, their admin agent's
+  // targets and sessions — never another administrator's. The agent's Handle reaches none of them
+  // (platform scope, human channel): what it may propose to is chosen by its person.
+  {
+    name: 'get_admin_agent_status',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z.object({}).strict(),
+    resultSchema: wire.AdminAgentStatusWireSchema,
+    description:
+      'Your admin agent: whether the platform has it on (ADMIN_AGENT_ENABLED, set in the host’s environment), and for each trial workspace you are a member of whether it may start there now (refusal: why not), the workspaces it may propose to there, and its open session.',
+  },
+  {
+    name: 'set_admin_agent_targets',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        trialWorkspaceId: z.guid(),
+        targetWorkspaceIds: z.array(z.guid()).max(wire.ADMIN_AGENT_TARGETS_MAX),
+      })
+      .strict(),
+    resultSchema: wire.AdminAgentTargetsResultWireSchema,
+    description:
+      'Choose the workspaces your admin agent may propose changes to from a trial workspace you are a member of — the whole list, replacing the one before (empty: none). Every admin agent Chat of yours in that trial workspace shares it. Each target is an active standard workspace (not a trial or ephemeral one). A proposal keeps the targets it was made with; a workspace dropped here since cannot have its part of an earlier proposal applied (409 admin_proposal_target_no_longer_chosen). One set_admin_agent_targets platform audit row with what was added and removed. 404 not_found for a trial workspace you are not a member of; 400 invalid_params for a target that cannot be one (details.targetWorkspaceIds); 409 admin_role_not_stored while your stored platform role is not admin (NEXTTIME_PLATFORM_ADMINS alone is not enough).',
+  },
+  {
+    name: 'stop_admin_agent',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z.object({ trialWorkspaceId: z.guid().optional() }).strict(),
+    resultSchema: wire.AdminAgentStopResultWireSchema,
+    description:
+      'Stop your admin agent — in one trial workspace, or (no trialWorkspaceId) in every one: its sessions and their Handles are revoked at once and its running Turns stopped. Its Chats stay; the next message starts a new session. One stop_admin_agent platform audit row. The platform switch (ADMIN_AGENT_ENABLED) is the host’s environment, not this.',
+  },
   // S11 AA3c (aa3c-plan F-c2–F-c7; migration governance 0034): an admin proposal's platform
   // segment — new gate-host instances (`gate_instance`) — decided by a platform administrator on the
   // platform plane, as a workspace owner decides a workspace segment: preview (a dry run against the
@@ -5300,7 +5348,7 @@ const adminProposalCapabilities = [
       }),
     resultSchema: wire.AgentAdminProposalWireSchema,
     description:
-      'Propose changes for people to apply, as one admin proposal: one segment per workspace your administrator named (targetWorkspaceId), each a list of changes for its owner to preview, apply or reject — the next version of a Skill or a Worker by its name (a new one where the workspace has none; a Worker never sets its gates or model, the workspace keeps its own), of an ontology family by its name (the complete definition), or how calls of an Operation on a gate instance are governed. platform (at most one segment, applied by a platform administrator before any workspace segment of the proposal can be): new gate-host instances (gate_instance), each with what create_gate_instance takes — a preset and its target, or a transport kind, target, credential mode, the OpenAPI document an http instance imports from and the connector of the system it serves (never a generic one: http, mcp, cli, ssh); never a credential (the administrator enters it after applying). What you read back of a platform item has no target or OpenAPI address (addressWithheld: true): people see them, you do not. platform_state_connectors lists the presets and platform_state_gates the gate ids already taken. sourceName names the proposal’s new Skills and Workers the way a pack does (lowercase words joined by hyphens; not the name of a pack this deployment ships). Nothing changes anywhere when you propose. Refused, writing nothing: 400 admin_proposal_target_unavailable for a target that cannot take a proposal (one unknown, disabled or a trial workspace: the refusal does not say which), 400 admin_proposal_credential when anything in it is almost certainly a credential — a platform item’s target or OpenAPI address carrying a user, password or token too (details.suspectedSecretPaths: where, never the value), 400 redacted_text_submitted for a [redacted] mark copied from a read, 400 invalid_params for two segments for one workspace, two items for one target in a segment (two instances with one gate id in the platform segment), content that would not publish (a Skill’s rules, a Worker’s definition, one that sets gates or model), or a sourceName a shipped pack has, 429 admin_proposal_quota_exceeded past 20 proposals a day for your administrator (UTC). Only an admin agent calls it.',
+      'Propose changes for people to apply, as one admin proposal: one segment per workspace your administrator chose (targetWorkspaceId, one of agent_list_proposal_targets), each a list of changes for its owner to preview, apply or reject — the next version of a Skill or a Worker by its name (a new one where the workspace has none; a Worker never sets its gates or model, the workspace keeps its own), of an ontology family by its name (the complete definition), or how calls of an Operation on a gate instance are governed. platform (at most one segment, applied by a platform administrator before any workspace segment of the proposal can be): new gate-host instances (gate_instance), each with what create_gate_instance takes — a preset and its target, or a transport kind, target, credential mode, the OpenAPI document an http instance imports from and the connector of the system it serves (never a generic one: http, mcp, cli, ssh); never a credential (the administrator enters it after applying). What you read back of a platform item has no target or OpenAPI address (addressWithheld: true): people see them, you do not. platform_state_connectors lists the presets and platform_state_gates the gate ids already taken. sourceName names the proposal’s new Skills and Workers the way a pack does (lowercase words joined by hyphens; not the name of a pack this deployment ships). Nothing changes anywhere when you propose. Refused, writing nothing: 400 admin_proposal_target_not_chosen for a target your administrator has not chosen (agent_list_proposal_targets lists those you may name), 400 admin_proposal_target_unavailable for a chosen target that cannot take a proposal now (disabled since), 400 admin_proposal_credential when anything in it is almost certainly a credential — a platform item’s target or OpenAPI address carrying a user, password or token too (details.suspectedSecretPaths: where, never the value), 400 redacted_text_submitted for a [redacted] mark copied from a read, 400 invalid_params for two segments for one workspace, two items for one target in a segment (two instances with one gate id in the platform segment), content that would not publish (a Skill’s rules, a Worker’s definition, one that sets gates or model), or a sourceName a shipped pack has, 429 admin_proposal_quota_exceeded past 20 proposals a day for your administrator (UTC). Only an admin agent calls it.',
   },
   {
     name: 'agent_list_admin_proposals',
@@ -5339,6 +5387,17 @@ const adminProposalCapabilities = [
     resultSchema: wire.AgentAdminProposalWireSchema,
     description:
       'Withdraw an admin proposal your administrator’s agent made in this trial workspace: every segment still proposed becomes withdrawn, with the reason when one is given — no owner can apply it any more; segments already applied, rejected or withdrawn keep their status (rolling back an applied one is its owner’s). 409 admin_proposal_not_open when no segment is still proposed; 404 admin_proposal_not_found. Only an admin agent calls it.',
+  },
+  {
+    name: 'agent_list_proposal_targets',
+    group: 'admin_proposal',
+    mode: 'observe',
+    channel: 'handle',
+    adminAgentOnly: true,
+    paramsSchema: noParams,
+    resultSchema: wire.AgentProposalTargetsWireSchema,
+    description:
+      'The workspaces your administrator lets you propose to from this trial workspace, by id: a workspace segment of propose_admin_proposal names one of them (400 admin_proposal_target_not_chosen otherwise). Your administrator chooses them; you cannot change them, and nothing else of those workspaces is given here. Only an admin agent calls it.',
   },
 ] as const satisfies readonly Capability[];
 

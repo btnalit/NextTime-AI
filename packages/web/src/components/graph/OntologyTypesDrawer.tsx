@@ -19,7 +19,7 @@ import {
 import { type Translate, useT } from '../../lib/i18n.js';
 import { ontologyTypeKindLabel, principalShownName } from '../../lib/labels.js';
 import { DiscardReasonField } from '../catalog/DiscardReasonField.js';
-import { draftOriginItem } from '../catalog/DraftOrigin.js';
+import { AgentDraftMark, draftOriginItem } from '../catalog/DraftOrigin.js';
 import { Button } from '../kit/button.js';
 import { Combobox } from '../kit/combobox.js';
 import { Confirm } from '../kit/confirm.js';
@@ -672,8 +672,12 @@ function ProposalsListView({ http, onSelect }: ProposalsListViewProps) {
                  *  own copy control is a second, nested interactive element (invalid HTML,
                  *  TasksPage.tsx's own `nameOfPrincipal` doc comment: "the full chip belongs in
                  *  the detail, this is the row"). */}
-                <span className="text-13 font-medium text-text">
-                  {principalShownName(row.proposedBy.displayName, t) ?? shortId(row.proposedBy.id)}
+                <span className="row-wrap">
+                  <span className="text-13 font-medium text-text">
+                    {principalShownName(row.proposedBy.displayName, t) ??
+                      shortId(row.proposedBy.id)}
+                  </span>
+                  <AgentDraftMark origin={row.origin} status={row.status} />
                 </span>
                 <StatusChip machine="publishable" status={row.status} size="s" />
               </span>

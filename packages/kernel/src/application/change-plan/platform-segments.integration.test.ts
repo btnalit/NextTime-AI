@@ -78,6 +78,7 @@ const ONTOLOGY_DIR = path.join(KERNEL_ROOT, '..', '..', 'ontology');
 
 /** Not a real credential: a filler value under a name a credential would have. */
 const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type Target = { readonly workspaceId: string; readonly ownerPrincipalId: string };
 
@@ -217,8 +218,40 @@ describe.runIf(DATABASE_URL !== undefined)(
       return newWorkspace(owner, 'standard');
     }
 
-    const call = <T>(caller: ResolvedCaller, name: string, params: unknown) =>
+    /** What the administrator does on the platform's admin agent page before their agent proposes
+     *  (AA4c, governance 0036): chooses each workspace segment's target, when it may be one — an
+     *  active standard workspace — and the agent's person is a stored platform administrator.
+     *  {@link call} does it for every `propose_admin_proposal`; {@link callUnchosen} does not. */
+    async function chooseSegmentTargets(caller: ResolvedCaller, params: unknown): Promise<void> {
+      const segments = (params as { segments?: unknown } | null)?.segments;
+      if (caller.channel !== 'handle' || !Array.isArray(segments)) return;
+      const ids = (segments as readonly { targetWorkspaceId?: unknown }[])
+        .map((segment) => segment.targetWorkspaceId)
+        .filter((id): id is string => typeof id === 'string' && UUID.test(id));
+      if (ids.length === 0) return;
+      await withAdminClient(pool, (client) =>
+        client.query(
+          `insert into admin_agent_targets
+             (workspace_id, principal_id, target_workspace_id, chosen_by_user)
+           select p.workspace_id, p.id, w.id, p.user_id
+             from principals p
+             join users u on u.id = p.user_id and u.platform_role = 'admin'
+             join workspaces w on w.id = any($3::uuid[])
+                              and w.status = 'active' and w.purpose = 'standard'
+            where p.workspace_id = $1 and p.id = $2 and p.kind = 'human'
+           on conflict do nothing`,
+          [caller.claims.ws, caller.claims.obo, ids],
+        ),
+      );
+    }
+
+    const callUnchosen = <T>(caller: ResolvedCaller, name: string, params: unknown) =>
       dispatchCapability({ pool }, caller, name, params) as Promise<T>;
+
+    const call = async <T>(caller: ResolvedCaller, name: string, params: unknown): Promise<T> => {
+      if (name === 'propose_admin_proposal') await chooseSegmentTargets(caller, params);
+      return callUnchosen<T>(caller, name, params);
+    };
 
     /** Proposes a platform segment of `items`, with a workspace segment for each of `targets`. */
     async function proposePlatform(
@@ -1036,7 +1069,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     it('rejecting the platform segment withdraws the workspace segments still proposed; the reason is the platform’s, never the agent’s to read', async () => {
-      const { user, agent } = await administrator();
+      const { user, trial, agent } = await administrator();
       const decider = await otherAdministrator();
       const [targetA, targetB] = [await newTarget(), await newTarget()];
       const { proposal, platformSegmentId, workspaceSegmentIds } = await proposePlatform(
@@ -1048,6 +1081,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       await call(ownerCaller(targetB), 'reject_admin_proposal_segment', {
         segmentId: workspaceSegmentIds[1],
         reason: 'Not here.',
+      });
+      // The administrator has since dropped both targets: the cascade still withdraws A's
+      // (#937 R-1 — governance 0036 holds only applying to a target no longer chosen).
+      await call(platformCaller(user), 'set_admin_agent_targets', {
+        trialWorkspaceId: trial.workspaceId,
+        targetWorkspaceIds: [],
       });
       const rejected = await call<AdminProposalWire>(
         platformCaller(decider),

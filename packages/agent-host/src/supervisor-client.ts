@@ -10,9 +10,13 @@
  *                                   systemPrompt?, model?, egressDeny?, skillsInline?, image?}
  *                                   -> 200 {containerId, ip, status, created, restarts}
  *                                      | 403 (image not allowlisted)
- *   POST /resident/stop           {principalId} -> 204
- *   GET  /resident/:principalId   -> 200 ResidentStatus | 404
- *   POST /resident/:principalId/touch -> 204 | 404
+ *   POST /resident/stop           {principalId, agentKind?} -> 204
+ *   GET  /resident/:principalId[?agentKind=admin_agent]   -> 200 ResidentStatus | 404
+ *   POST /resident/:principalId/touch[?agentKind=admin_agent] -> 204 | 404
+ *
+ * S11 AA4c-2: a Principal may have two resident containers, its entry agent's and its admin
+ * agent's (worker-supervisor `resident-kind.ts`); `agentKind` names the admin agent's, and every
+ * call without it means the entry agent's, as before.
  *
  * Every route above now requires the internal-plane shared secret (`packages/worker-supervisor`'s
  * `internal-auth.ts`, lane-6 review P1-3: worker-supervisor is `control`-network only, but an
@@ -107,7 +111,16 @@ export interface SpawnInput {
    *  the kernel's own `TaskSupervisorClient`; 409 `runtime_image_incompatible` the same way). `undefined` leaves worker-supervisor's own `WORKER_IMAGE` env
    *  default in effect, unchanged from before this field existed. */
   readonly image?: string;
+  /** S11 AA4c-2: `'admin_agent'` spawns the Principal's admin agent's own resident container
+   *  (worker-supervisor `resident-kind.ts`), forwarded from the `startTurn` command's field of the
+   *  same name; omitted is the entry agent's, as before. Sent only when set, so a supervisor from
+   *  before this field (strict body) still accepts every entry spawn. */
+  readonly agentKind?: 'admin_agent';
 }
+
+/** Which of a Principal's resident containers a `stop` / `status` / `touch` call means — the
+ *  entry agent's when omitted. */
+export type ResidentAgentKind = 'admin_agent' | undefined;
 
 /** One Skill mounted by content — mirrors `worker-supervisor`'s own `config.ts`
  *  `TaskSkillInlineSchema` shape (this package does not depend on that package, so the shape is
@@ -128,6 +141,8 @@ export interface SpawnResult {
 
 export interface ResidentStatus {
   readonly principalId: string;
+  /** S11 AA4c-2; absent from a supervisor that predates it. */
+  readonly agentKind?: 'entry' | 'admin_agent';
   readonly containerId: string;
   readonly ip: string | undefined;
   readonly running: boolean;
@@ -146,6 +161,11 @@ function errorCodeFromBody(body: unknown): string | undefined {
     }
   }
   return undefined;
+}
+
+/** `?agentKind=admin_agent` for the admin agent's container, nothing for the entry agent's. */
+function kindQuery(agentKind: ResidentAgentKind): string {
+  return agentKind === undefined ? '' : `?agentKind=${encodeURIComponent(agentKind)}`;
 }
 
 async function requestJson(
@@ -197,9 +217,13 @@ async function requestJson(
  *  network involved. Same convention as `packages/kernel/src/adapters/db/pool.ts`'s `PoolLike`. */
 export interface SupervisorClientPort {
   spawn(input: SpawnInput, options?: SupervisorCallOptions): Promise<SpawnResult>;
-  stop(principalId: string): Promise<void>;
-  status(principalId: string): Promise<ResidentStatus | undefined>;
-  touch(principalId: string, options?: SupervisorCallOptions): Promise<boolean>;
+  stop(principalId: string, agentKind?: ResidentAgentKind): Promise<void>;
+  status(principalId: string, agentKind?: ResidentAgentKind): Promise<ResidentStatus | undefined>;
+  touch(
+    principalId: string,
+    options?: SupervisorCallOptions,
+    agentKind?: ResidentAgentKind,
+  ): Promise<boolean>;
 }
 
 export class SupervisorClient implements SupervisorClientPort {
@@ -251,7 +275,7 @@ export class SupervisorClient implements SupervisorClientPort {
     return body as SpawnResult;
   }
 
-  async stop(principalId: string): Promise<void> {
+  async stop(principalId: string, agentKind?: ResidentAgentKind): Promise<void> {
     const { status } = await requestJson(
       this.fetchImpl,
       this.timeoutMs,
@@ -259,7 +283,9 @@ export class SupervisorClient implements SupervisorClientPort {
       {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...this.authHeaders },
-        body: JSON.stringify({ principalId }),
+        body: JSON.stringify(
+          agentKind === undefined ? { principalId } : { principalId, agentKind },
+        ),
       },
     );
     if (status !== 204) {
@@ -267,11 +293,14 @@ export class SupervisorClient implements SupervisorClientPort {
     }
   }
 
-  async status(principalId: string): Promise<ResidentStatus | undefined> {
+  async status(
+    principalId: string,
+    agentKind?: ResidentAgentKind,
+  ): Promise<ResidentStatus | undefined> {
     const { status, body } = await requestJson(
       this.fetchImpl,
       this.timeoutMs,
-      `${this.supervisorUrl}/resident/${encodeURIComponent(principalId)}`,
+      `${this.supervisorUrl}/resident/${encodeURIComponent(principalId)}${kindQuery(agentKind)}`,
       { method: 'GET', headers: { ...this.authHeaders } },
     );
     if (status === 404) return undefined;
@@ -286,11 +315,15 @@ export class SupervisorClient implements SupervisorClientPort {
   /** Refreshes the idle-timeout clock. Returns `false` when worker-supervisor has never heard of
    *  this principal (404 — see resident-service.ts's own `touch` doc comment for the recovery
    *  case this still tolerates). */
-  async touch(principalId: string, options: SupervisorCallOptions = {}): Promise<boolean> {
+  async touch(
+    principalId: string,
+    options: SupervisorCallOptions = {},
+    agentKind?: ResidentAgentKind,
+  ): Promise<boolean> {
     const { status } = await requestJson(
       this.fetchImpl,
       this.timeoutMs,
-      `${this.supervisorUrl}/resident/${encodeURIComponent(principalId)}/touch`,
+      `${this.supervisorUrl}/resident/${encodeURIComponent(principalId)}/touch${kindQuery(agentKind)}`,
       {
         method: 'POST',
         headers: { ...this.authHeaders, ...correlationHeaders(options.correlationId) },

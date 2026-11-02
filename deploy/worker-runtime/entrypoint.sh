@@ -3,11 +3,11 @@
 # docs/development-tasks.md S1.5). Runs as the non-root `nexttime` user (uid 10001), root
 # filesystem read-only, `/workspace` (the per-principal bind mount) and `/tmp` (tmpfs) writable.
 #
-# `NEXTTIME_MODE` (entry/worker/interactive) is read by @nexttime/platform-extension itself, not
-# branched on here — this script's job is only to prepare pi's directories and exec pi with an
-# explicit whitelist of everything it loads, with the flags verified against pi 0.84.4's own CLI
-# and re-verified on 0.87.1, 0.99.2 and 1.1.0 (see Dockerfile header for the exact source
-# files/lines cited).
+# `NEXTTIME_MODE` (entry/admin/worker/interactive) is read by @nexttime/platform-extension itself;
+# here it only picks which checks run (below) — this script's job is to prepare pi's directories
+# and exec pi with an explicit whitelist of everything it loads, with the flags verified against
+# pi 0.84.4's own CLI and re-verified on 0.87.1, 0.99.2 and 1.1.0 (see Dockerfile header for the
+# exact source files/lines cited).
 #
 # Whitelist start (STATUS leftover 422, docs/runbooks/pi-upgrade.md §2.6; maintainer 2026-10-23:
 # the platform uses pi's core runtime only, every outer layer is the platform's own): pi loads nothing it finds on its own — not from
@@ -87,7 +87,8 @@
 # system prompt, the exec itself) is entirely unchanged. One structured `nexttime-selfcheck
 # check=<name> result=<ok|fail|skip> ...` line per check — never an env var's *value*, only its
 # name, even on failure (I9). The public proxied-reachability probe is skippable
-# (`NEXTTIME_SELFCHECK_SKIP_PUBLIC_EGRESS_PROBE=1`, for offline test runs) but defaults on.
+# (`NEXTTIME_SELFCHECK_SKIP_PUBLIC_EGRESS_PROBE=1`, for offline test runs) but defaults on — in
+# entry and worker mode only: in admin mode the probe is an invariant (below) and always runs.
 #
 # Which checks are fatal (W8, STATUS leftover 29): the two *invariant* checks — no provider key in
 # the environment (I9) and no direct route out (I10) — still refuse to start pi. The proxied
@@ -100,6 +101,17 @@
 # The two source-binding checks are invariants too and fatal: `handle_env` (no Handle in the
 # environment) and `handle_binding` (pi starts only once this container's address is bound to this
 # container).
+#
+# Admin mode (S11 AA4c-2): a platform administrator's admin agent, in a resident container of its
+# own (worker-supervisor `resident-kind.ts`). Every check above runs for it as for entry mode, and
+# two are stricter. Its egress source is registered deny-all, so the probe's request must be
+# *refused* (`egress_denied`) — through the proxy when one is configured, straight out when none is
+# (curl takes the proxy variables when they are set), and whatever the skip switch says: a request
+# that goes through means its isolation is not in place, and pi does not start. A refusal, the
+# proxy's 403 and no route at all are all "denied". And it needs the platform's own admin agent
+# prompt (`admin_prompt`): the image's default prompt is the entry agent's, so an admin container
+# without its prompt refuses to start rather than run as something it is not (worker-supervisor
+# refuses an admin spawn without one too, `config.ts` `SpawnRequestSchema`).
 
 set -eu
 
@@ -110,7 +122,7 @@ set -eu
 ROOT="${NEXTTIME_RUNTIME_ROOT:-}"
 if [ -n "$ROOT" ]; then
 	case "${NEXTTIME_MODE:-}" in
-	entry | worker)
+	entry | admin | worker)
 		echo "nexttime-selfcheck check=runtime_root result=fail reason=test_only_variable_set"
 		exit 1
 		;;
@@ -124,6 +136,13 @@ PI_SETTINGS_FILE="$ROOT/opt/nexttime/pi-settings.json"
 MODELS_JSON="$ROOT/opt/nexttime/models.json"
 DEFAULT_SYSTEM_PROMPT_FILE="$ROOT/opt/nexttime/default-system-prompt.md"
 EXTENSION_ENTRY="$ROOT/opt/nexttime/platform-extension/dist/index.js"
+
+# Admin mode (header): never on the image's default prompt, which is the entry agent's. Checked
+# before anything is written, so a container started without its prompt changes nothing.
+if [ "${NEXTTIME_MODE:-}" = "admin" ] && [ ! -f "$PLATFORM_DIR/system-prompt.md" ]; then
+	echo "nexttime-selfcheck check=admin_prompt result=fail reason=platform_prompt_missing"
+	exit 1
+fi
 
 mkdir -p "$SESSION_DIR" "$ROOT/workspace/.local"
 
@@ -153,7 +172,50 @@ if [ ! -f "$SYSTEM_PROMPT_FILE" ]; then
 	system_prompt_source=default
 fi
 
-if [ "${NEXTTIME_MODE:-}" = "worker" ] || [ "${NEXTTIME_MODE:-}" = "entry" ]; then
+case "${NEXTTIME_MODE:-}" in
+worker | entry | admin) run_selfcheck=1 ;;
+*) run_selfcheck=0 ;;
+esac
+
+# The public reachability probe, the self-check's last step (header). A function of its own that
+# reads only the environment and `curl`, so `runtime-whitelist.test.ts` can run it on its own: the
+# whole script never gets this far there, since admin mode refuses the test-only root.
+egress_probe() {
+	if [ "${NEXTTIME_MODE:-}" = "admin" ]; then
+		# Admin mode (header): its source is deny-all, so this request must fail — fatal when it
+		# does not: not weather, its isolation. Checked before the skip switch, which has no say
+		# here, and with or without proxy variables: curl goes through the proxy when they are set
+		# and straight out when they are not, and either way out must be closed.
+		if [ -n "${HTTP_PROXY:-}${HTTPS_PROXY:-}${http_proxy:-}${https_proxy:-}" ]; then
+			denied_route=proxied
+		else
+			denied_route=direct
+		fi
+		denied_rc=0
+		curl --max-time 5 -s -o /dev/null https://example.com || denied_rc=$?
+		if [ "$denied_rc" -eq 0 ]; then
+			echo "nexttime-selfcheck check=egress_denied result=fail reason=${denied_route}_request_allowed"
+			exit 1
+		fi
+		echo "nexttime-selfcheck check=egress_denied result=ok curl_rc=${denied_rc}"
+	elif [ "${NEXTTIME_SELFCHECK_SKIP_PUBLIC_EGRESS_PROBE:-}" = "1" ]; then
+		echo "nexttime-selfcheck check=egress_via_proxy result=skip reason=NEXTTIME_SELFCHECK_SKIP_PUBLIC_EGRESS_PROBE=1"
+	else
+		# A false "proxied ok" (direct route + unset proxy vars) is worse than no check at all.
+		if [ -z "${HTTP_PROXY:-}${HTTPS_PROXY:-}${http_proxy:-}${https_proxy:-}" ]; then
+			echo "nexttime-selfcheck check=egress_via_proxy result=fail reason=no_proxy_configured"
+			exit 1
+		fi
+		# Non-fatal (see the header): a transient proxied failure must not take the container down.
+		if curl --max-time 5 -s -o /dev/null https://example.com; then
+			echo "nexttime-selfcheck check=egress_via_proxy result=ok"
+		else
+			echo "nexttime-selfcheck check=egress_via_proxy result=warn reason=proxied_request_failed"
+		fi
+	fi
+}
+
+if [ "$run_selfcheck" = "1" ]; then
 	# Whitelist start (STATUS leftover 422): models.json is worker-supervisor's read-only mount; the
 	# image only holds an empty placeholder at that path. Empty means a worker-supervisor from before
 	# this image started the container (an upgrade between pulling the images and restarting the
@@ -240,21 +302,7 @@ if [ "${NEXTTIME_MODE:-}" = "worker" ] || [ "${NEXTTIME_MODE:-}" = "entry" ]; th
 	fi
 	echo "nexttime-selfcheck check=egress_no_direct_route result=ok curl_rc=${direct_rc}"
 
-	if [ "${NEXTTIME_SELFCHECK_SKIP_PUBLIC_EGRESS_PROBE:-}" = "1" ]; then
-		echo "nexttime-selfcheck check=egress_via_proxy result=skip reason=NEXTTIME_SELFCHECK_SKIP_PUBLIC_EGRESS_PROBE=1"
-	else
-		# A false "proxied ok" (direct route + unset proxy vars) is worse than no check at all.
-		if [ -z "${HTTP_PROXY:-}${HTTPS_PROXY:-}${http_proxy:-}${https_proxy:-}" ]; then
-			echo "nexttime-selfcheck check=egress_via_proxy result=fail reason=no_proxy_configured"
-			exit 1
-		fi
-		# Non-fatal (see the header): a transient proxied failure must not take the container down.
-		if curl --max-time 5 -s -o /dev/null https://example.com; then
-			echo "nexttime-selfcheck check=egress_via_proxy result=ok"
-		else
-			echo "nexttime-selfcheck check=egress_via_proxy result=warn reason=proxied_request_failed"
-		fi
-	fi
+	egress_probe
 fi
 
 # Published Skills (S2.14 / S3.13), one directory per Skill, written by worker-supervisor.

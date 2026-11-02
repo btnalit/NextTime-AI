@@ -2300,6 +2300,41 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：「平台」组下新增「管理员提案」页，两个标签。平台管理员在「管理员提案」里看全部提案（默认列出全部，可按状态筛选）、审阅并应用或写理由拒绝平台部分（每个要新建的门宿主实例逐项确认，含疑似凭据时要勾核对框，和平台现状对不上时不能应用并写明原因）、撤回整份提案；工作区部分只显示状态和所有者写下的理由，不显示它要在工作区里改什么。在「平台变更记录」里看应用留下的记录和每个实例现在的样子，并从那里撤销：确认框按实例列出已启用它的工作区并链接到停用的地方，有工作区部分已应用时不能撤销。英文界面统一把门宿主实例叫 gate-host instance。
 - **回滚**：只回退代码即可。
 
+### 3.111 管理员智能体的对话、目标工作区、状态与停止（内核）（#937，S11 AA4c-1，0.61.0 之后的下一版）
+
+带两个迁移，随 `apply-release.sh` 自动应用：core `0053_chat_agent_kind`（`chats.agent_kind`、两个约束、守卫触发器）、governance `0036_admin_agent_targets`（新平台表 `admin_agent_targets`、两个 security definer 读函数、两个守卫触发器）。不改 compose，没有新环境变量，主机不需要操作；`ADMIN_AGENT_ENABLED` 仍默认关，主机没开，所以下面的行为变化对主机没有影响。
+
+- **发版说明可写**：对话分两种，入口智能体的和管理员智能体的。平台管理员可以在试验工作区里开管理员对话（开关开着才行），这些对话只有本人看得到；同一个人在同一个试验工作区的管理员对话共用一个会话，模型调用与出网按会话分开记账，不会记到同时开着的入口对话上。平台管理员在平台面为自己的管理员智能体选目标工作区（最多 20 个），智能体只能向选中的工作区提议；提案在提议时固定目标，之后去掉的目标上的工作区部分不能再应用，要重新提议。平台管理员能看到自己的管理员智能体状态（能不能用、目标、在用的会话），并能停掉它（吊销会话与 Handle，停掉正在跑的管理员 Turn，入口 Turn 不动）。这一段只是内核；控制台页面在 AA4c-3，运行时在 AA4c-2，合入前管理员 Turn 一律以 `failed` 结束、不交给入口容器。
+- **行为变化**：这一版之前，管理员智能体可以向任何在用的标准工作区提议；之后要平台管理员先选目标（400 `admin_proposal_target_not_chosen`）。
+- **线上**：新能力 `get_admin_agent_status`、`set_admin_agent_targets`、`stop_admin_agent`（平台面）与 `agent_list_proposal_targets`（管理员上限，`adminAgentOnly`）；`new_chat` 加 `agentKind`，`ChatWire` 加 `agentKind`，`TurnStarted` 加可选的 `agentKind`、`sessionId`，`preview_admin_proposal_segment` 加 `targetChosen`；新错误码 `admin_agent_refused`（403）、`admin_proposal_target_not_chosen`（400）、`admin_proposal_target_no_longer_chosen`（409）、`admin_role_not_stored`（409）。契约快照已更新。
+- **回滚**（见 §6 两行）：
+  - core 0053：只回退代码前先确认 `select count(*) from chats where agent_kind = 'admin_agent'` 为 0，不为 0 就先把这些对话归档；否则旧代码会把它们当普通私有对话，交给入口智能体起 Turn。
+  - governance 0036：只回退代码前要先删掉守卫 `drop trigger admin_proposal_segments_target_chosen on admin_proposal_segments` 和它的函数，否则旧代码提议、应用工作区部分时会被这个守卫拒绝。
+
+### 3.112 管理员智能体的运行时：自己的容器、提示词与扩展模式（#941，S11 AA4c-2，0.61.0 之后的下一版）
+
+没有迁移，不改 compose，没有新环境变量，主机不需要操作；`ADMIN_AGENT_ENABLED` 仍默认关，主机没开，对主机没有影响。
+
+- **同版升级**：kernel、agent-host、worker-supervisor 三个服务与 worker-runtime 镜像（`entrypoint.sh`、platform-extension）必须一起升。不带 `agentKind` 的帧和请求仍是入口智能体，行为与以前一样；内核只在管理员 Turn 上写这个字段，所以 agent-host 落后时只会拒掉管理员 Turn。
+- **发版说明可写**：管理员 Turn 真正跑起来，始终在自己的容器里（`nexttime-admin-<id>`，标签 `nexttime.role=admin`；工作目录与平台目录和入口容器分开，互相挂不到）。管理员容器的出网在绑定 Handle 之前登记为全部拒绝，登记失败就删容器；容器启动自检要求经代理的出网被拒、并且有平台给的管理员提示词，否则不启动 pi。扩展的 `admin` 模式只注册管理员上限里的能力和本工作区 observe 类门工具；每个 Turn 开始时把目标工作区 id 放进上下文。提示词随包在 `ontology/admin-agent.yaml`，只是系统提示词，不授予任何东西。Handle 在 Turn 记录的管理员会话下签发（最长一小时，按人 × 试验工作区缓存、原地换绑）。`stop_admin_agent` 与降级在提交后停管理员容器，停用一个人或一个工作区停两种容器。滚动升级与平台运行状态只看入口容器，管理员 Turn 不拦入口容器的滚动。
+- **线上**：`startTurn` / `stopTurn` 帧加可选 `agentKind: 'admin_agent'`；`/resident/spawn`、`/resident/stop`、`GET /resident/:id`、`POST /resident/:id/touch` 加可选 `agentKind`，`/resident/reclaim` 清全部种类；`listResidents` 每条带 `agentKind`；`EXTENSION_MODE_VALUES` 加 `admin`。`scripts/delete-workspace.sh` 同时删管理员容器和它的两个目录。
+- **回滚**：只回退代码即可，但**回退代码之前先删掉管理员容器**：`docker ps -aq --filter label=nexttime.role=admin | xargs -r docker rm -f`（容器名为 `nexttime-admin-*`）。旧的 supervisor 只认 `nexttime.role=entry`，看不到这些容器，它们在出网映射里的条目也只在容器被删除时才清掉。`workspaces/.admin/` 与 `workspaces/.platform/admin-agents/` 两个目录可以留着，旧代码不读。
+
+### 3.113 平台管理员在控制台里使用管理员智能体（#943，S11 AA4c-3，0.61.0 之后的下一版）
+
+只改控制台：没有迁移，没有线上契约变化，不改 compose，主机不需要操作；`ADMIN_AGENT_ENABLED` 仍默认关。控制台要和 §3.111、§3.112 的内核与运行时同版（它读 `get_admin_agent_status`、调 `set_admin_agent_targets`、`stop_admin_agent` 与 `new_chat {agentKind}`）。
+
+- **发版说明可写**：「平台」组下新增「管理员智能体」页：每个试验工作区一张卡，写明能不能开始（不能时写原因、不给按钮）、目标工作区（停用的标出）、在用的会话；可以打开管理员对话、在对话框里选目标工作区（只能选常规、启用中的工作区，最多 20 个，保存前对比加上与去掉的，并写明这组目标由这个试验工作区里你的所有管理员对话共用）、停止一个或全部会话（确认框写明吊销与停下的范围）。平台开关关着时，页面只说一次需要维护者在主机上打开，已有对话照常能读。试验工作区的对话里多「新管理员对话」，管理员对话在列表和标题栏标「管理员智能体」。审计里经管理员智能体的行标「由管理员智能体代为」（遗留 583）；管理员智能体的几项能力统一叫「管理员智能体……」（遗留 591）。目标被去掉的工作区部分在「能力目录 → 管理员提案」里写明原因并置灰应用。Skill、流程、Worker、Operation、本体提案的列表行给智能体写的草稿加琥珀色「智能体」标记（遗留 602）。窄栏里试验工作区有图标级标记。
+- **回滚**：只回退代码即可。
+
+### 3.114 管理员智能体的 CI 旅程与 CI 专用提议标记（#945，S11 AA4d-1，0.61.0 之后的下一版）
+
+没有迁移，没有线上契约变化，不改 compose，主机不需要操作；`ADMIN_AGENT_ENABLED` 仍默认关。
+
+- **发版说明可写**：控制台 e2e 新增旅程 ⑨（管理员智能体提一份管理员提案，平台和工作区各自决定）。内核多一个只在 CI 里接的钩子 `fake-admin-propose.ts`：只有 `FAKE_INVOKE_WORKER=1`（只在 `deploy/ci/env.ci.template` 里设）且 fake 运行时在管理员 Turn 里看到 CI 标记时才调用，用这一轮会话签发的管理员 Handle 走真实的 `propose_admin_proposal` 分发，不授予任何东西。守卫 `scripts/guards/fake-markers.mjs`（进 `pnpm ci:guards`）保证两个 CI 标记只出现在 fake 运行时与 e2e spec 里，钩子只能被允许的内核文件、不经别名导入。`.env.example` 改正了 `ADMIN_AGENT_ENABLED` 的说明：它只在 `secrets/kernel.env` 里生效（遗留 620）。
+- **升级时确认**：主机 `secrets/kernel.env` 与 `.env` 里都不应该有 `FAKE_INVOKE_WORKER`；有就删掉，它只属于 CI。
+- **回滚**：只回退代码即可。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -2468,6 +2503,8 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.61.0 | governance `0034_admin_proposal_platform_segments`（#921，AA3c-1）：`admin_proposal_segments` 加 authority `platform` 与 3 列、新表 `platform_change_segments` / `platform_change_items`、守卫替换与新增、函数 `admin_proposal_platform_segment` | 有条件可逆 | 没有平台部分时只回退代码不损坏数据；有平台部分时旧代码会列出目标为空、决定不了的段，先在新版本里应用、拒绝或撤回提案，再回退代码 | 只回退代码、保留 0034 即可。撤迁移的前提是没有 authority `platform` 的段、也没有 `withdrawn_origin = 'platform_segment'` 的撤回，步骤见 0034 文件头 |
 | v0.61.0 | governance `0035_admin_proposal_platform_dependency`（#923，AA3c-2）：两个依赖触发器及其函数、两个 security definer 读函数 `admin_proposal_platform_change` / `admin_proposal_applied_workspace_changes`、索引 `change_segments_admin_proposal`；不存数据 | 可逆 | 只回退代码不损坏数据：0.60.0 没有平台部分，守卫不会拦它的写入 | 只回退代码、保留 0035 即可。要撤迁移：删两个触发器及其函数、两个读函数和索引 `change_segments_admin_proposal`，再删 `schema_migrations` 里 governance 35 那一行（见 0035 文件头） |
 | v0.61.0 之后的下一版 | core `0052_activity_session_record`（#933，AA4-0，遗留 584）：替换触发器函数 `activities_trigger_record_guard`，加 `metadata.sessionKind` / `metadata.sessionId` 写后不改；不存数据 | 可逆 | 只回退代码不损坏数据：旧代码从不写这两个键 | 只回退代码、保留 0052 即可。要撤迁移：重新执行 0046 里 `create or replace function activities_trigger_record_guard` 的函数体，再删 `schema_migrations` 里 core 52 那一行 |
+| v0.61.0 之后的下一版 | core `0053_chat_agent_kind`（#937，AA4c-1）：`chats.agent_kind`（`entry` / `admin_agent`，默认 `entry`）、约束 `chats_agent_kind_check` 与 `chats_admin_agent_private`、触发器 `chats_agent_kind_guard` 及其函数 | 可逆 | 旧代码不写这一列、按列名读对话，代码可以单独回退；但管理员对话在旧代码里读作普通私有对话，并交给入口智能体起 Turn | 只回退代码前先把 `agent_kind = 'admin_agent'` 的对话归档（计数为 0 才直接回退）。要撤迁移：删触发器及其函数、删两个约束和这一列，再删 `schema_migrations` 里 core 53 那一行（见 0053 文件头） |
+| v0.61.0 之后的下一版 | governance `0036_admin_agent_targets`（#937，AA4c-1）：平台表 `admin_agent_targets` 及其守卫 `admin_agent_targets_guard`、读函数 `admin_agent_chosen_targets()` / `admin_proposal_target_chosen(uuid)`、工作区部分守卫 `admin_proposal_segments_target_chosen` | 有条件可逆 | 旧代码不认识这张表，照常提议、应用工作区部分，会被这里的守卫拒绝 | 只回退代码前先 `drop trigger admin_proposal_segments_target_chosen on admin_proposal_segments` 并删它的函数。要撤迁移：删这个守卫、两个读函数和表，再删 `schema_migrations` 里 governance 36 那一行（见 0036 文件头） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

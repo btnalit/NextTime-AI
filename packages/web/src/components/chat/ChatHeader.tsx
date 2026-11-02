@@ -1,8 +1,10 @@
 import { useState } from 'react';
+import { useCanOpen } from '../../hooks/useCanOpen.js';
 import { useWorkspaceIdentity } from '../../hooks/useWorkspaceIdentity.js';
 import { type ChatSummary, chatTitle, isArchived } from '../../lib/chat-lifecycle.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { useT } from '../../lib/i18n.js';
+import { hrefs, navigate } from '../../lib/router.js';
 import type { TurnStatus } from '../../lib/streaming-reducer.js';
 import { TurnStatusBadge } from '../TurnStatusBadge.js';
 import {
@@ -77,6 +79,9 @@ export function ChatHeader({
   const { workspaceName } = useWorkspaceIdentity(http);
   const archived = chat !== null && isArchived(chat);
   const title = chat ? chatTitle(chat, t) : lookupFailed ? t('对话', 'Chat') : ' ';
+  // S11 AA4c-3: a chat with the reader's own 管理员智能体 (only they read it).
+  const adminAgent = chat?.agentKind === 'admin_agent';
+  const canOpen = useCanOpen();
 
   return (
     <TooltipProvider>
@@ -122,7 +127,13 @@ export function ChatHeader({
             ) : (
               <span className="chat-header-status-dot" aria-hidden />
             )}
-            <span>{t('入口 agent', 'Entry agent')}</span>
+            {adminAgent ? (
+              <span className="chip chip-s chip-warn" data-testid="chat-header-admin-agent">
+                {t('管理员智能体', 'Admin agent')}
+              </span>
+            ) : (
+              <span>{t('入口 agent', 'Entry agent')}</span>
+            )}
             <span aria-hidden>·</span>
             <span>{t('常驻', 'Resident')}</span>
             <span aria-hidden>·</span>
@@ -159,6 +170,16 @@ export function ChatHeader({
                 />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
+                {adminAgent && canOpen(hrefs.platformAdminAgent()) !== false ? (
+                  // The targets are one choice for every admin agent chat of the reader in this
+                  // trial workspace; they are chosen on 平台 · 管理员智能体, which says so.
+                  <DropdownMenuItem
+                    data-testid="chat-header-admin-targets"
+                    onSelect={() => navigate(hrefs.platformAdminAgent())}
+                  >
+                    {t('目标工作区…', 'Target workspaces…')}
+                  </DropdownMenuItem>
+                ) : null}
                 {!archived ? (
                   <DropdownMenuItem
                     data-testid="chat-header-rename"

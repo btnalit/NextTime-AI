@@ -14,20 +14,25 @@
  *
  * Routes:
  *   POST /resident/spawn          {workspaceId, principalId, handle, kernelUrl?, llmUrl?,
- *                                   systemPrompt?, model?, image?}             [agent-host]
+ *                                   systemPrompt?, model?, image?, agentKind?}  [agent-host]
+ *                                  (systemPrompt required with agentKind: config.ts)
  *                                  -> 200 {containerId, ip, status, created, restarts}
  *                                     | 403 (image not allowlisted)
  *                                     | 409 runtime_image_incompatible (runtime-contract.ts)
- *   POST /resident/stop           {principalId} -> 204               [agent-host, kernel]
+ *   POST /resident/stop           {principalId, agentKind?} -> 204   [agent-host, kernel]
  *   POST /resident/reclaim        {principalId} -> 204                           [kernel]
  *                                  (S8 W5 leftover 77 — force-removes the container and deletes
  *                                  its workspaces/<principalId> data directory; unlike
  *                                  /resident/stop, never reuse-able afterwards. Called by the
  *                                  kernel only after a Workspace purge actually ran, once per
  *                                  purged Principal id — see application/gateway/platform-
- *                                  handlers.ts's reclaimEntryContainers on the kernel side.)
- *   GET  /resident/:principalId   -> 200 ResidentStatus | 404        [agent-host, kernel]
- *   POST /resident/:principalId/touch -> 204 | 404                           [agent-host]
+ *                                  handlers.ts's reclaimEntryContainers on the kernel side.
+ *                                  S11 AA4c-2: every kind of the Principal's resident containers.)
+ *   GET  /resident/:principalId[?agentKind=admin_agent]
+ *                                 -> 200 ResidentStatus | 404        [agent-host, kernel]
+ *   POST /resident/:principalId/touch[?agentKind=admin_agent] -> 204 | 404   [agent-host]
+ *                                  (S11 AA4c-2, resident-kind.ts: `agentKind` names the admin
+ *                                  agent's container; without it, the entry agent's, as before.)
  *   GET  /residents               -> 200 {items: ResidentInventoryEntry[]}       [kernel]
  *   GET  /images                  -> 200 {defaultImage: string, images: RuntimeImageInfo[],
  *                                          allowedImages: string[], runtimeContract: string}
@@ -74,6 +79,8 @@ import {
 } from '@nexttime/shared';
 import Fastify, { type FastifyInstance, type FastifyRequest, LogController } from 'fastify';
 import {
+  ReclaimRequestSchema,
+  ResidentKindQuerySchema,
   SpawnRequestSchema,
   StopRequestSchema,
   TaskDirsKeepRequestSchema,
@@ -92,6 +99,7 @@ import {
   type SupervisorMetrics,
   createSupervisorMetrics,
 } from './metrics.js';
+import { residentAgentKindOf } from './resident-kind.js';
 import type { ResidentService } from './resident-service.js';
 import { RuntimeImageIncompatibleError } from './runtime-contract.js';
 import type { TaskService } from './task-service.js';
@@ -274,7 +282,10 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
       return { error: { code: 'invalid_body', message: parsed.error.message } };
     }
     try {
-      await residentService.stop(parsed.data.principalId);
+      await residentService.stop(
+        parsed.data.principalId,
+        residentAgentKindOf(parsed.data.agentKind),
+      );
       reply.code(204);
       return null;
     } catch (err) {
@@ -285,7 +296,7 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
   });
 
   app.post('/resident/reclaim', requireInternal('kernel'), async (request, reply) => {
-    const parsed = StopRequestSchema.safeParse(request.body);
+    const parsed = ReclaimRequestSchema.safeParse(request.body);
     if (!parsed.success) {
       reply.code(400);
       return { error: { code: 'invalid_body', message: parsed.error.message } };
@@ -309,7 +320,15 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
         reply.code(400);
         return { error: { code: 'invalid_principal_id', message: 'principalId must be a UUID' } };
       }
-      const status = await residentService.status(request.params.principalId);
+      const query = ResidentKindQuerySchema.safeParse(request.query ?? {});
+      if (!query.success) {
+        reply.code(400);
+        return { error: { code: 'invalid_query', message: query.error.message } };
+      }
+      const status = await residentService.status(
+        request.params.principalId,
+        residentAgentKindOf(query.data.agentKind),
+      );
       if (!status) {
         reply.code(404);
         return {
@@ -329,7 +348,15 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
         reply.code(400);
         return { error: { code: 'invalid_principal_id', message: 'principalId must be a UUID' } };
       }
-      const touched = await residentService.touch(request.params.principalId);
+      const query = ResidentKindQuerySchema.safeParse(request.query ?? {});
+      if (!query.success) {
+        reply.code(400);
+        return { error: { code: 'invalid_query', message: query.error.message } };
+      }
+      const touched = await residentService.touch(
+        request.params.principalId,
+        residentAgentKindOf(query.data.agentKind),
+      );
       if (!touched) {
         reply.code(404);
         return {

@@ -223,6 +223,186 @@
         }
       ],
       "rationale": "docs/runbooks/release.md §6, governance 0031 row (legacy 565): the BASE test seeds two requests on one Gatekeeper that both act on the whole gate and starts both, so both are executing at once — the state 0031's guard exists to refuse (I-Q1). Nothing in BASE's product code means to reach it: its drainer starts a request only when no conflicting one is executing, and where its read misses one (the legacy 565 gap) the start is now refused with NTQ01 and the request starts after the other ends. The replacement keeps every assertion, with the second request on a gate of its own."
+    },
+    {
+      "migration": "governance/0036_admin_agent_targets.sql",
+      "baseTests": [
+        {
+          "file": "src/application/change-plan/admin-proposal-segments.integration.test.ts",
+          "fullName": "S11 AA3b-2 Admin proposal segments in their target (integration, real Postgres) F5: a Skill resolves to its family here by name, else to a new family under the id a pack of the source name gives it"
+        },
+        {
+          "file": "src/application/change-plan/admin-proposal-segments.integration.test.ts",
+          "fullName": "S11 AA3b-2 Admin proposal segments in their target (integration, real Postgres) F5: a Worker resolves among worker families by name; an entry by that name, two workers by it, or a Skill it mounts that is not there blocks it"
+        },
+        {
+          "file": "src/application/change-plan/admin-proposal-segments.integration.test.ts",
+          "fullName": "S11 AA3b-2 Admin proposal segments in their target (integration, real Postgres) F5: an Operation resolves through the gate instance enabled here; not enabled, not on it, or not a valid revision blocks it"
+        },
+        {
+          "file": "src/application/change-plan/admin-proposal-segments.integration.test.ts",
+          "fullName": "S11 AA3b-2 Admin proposal segments in their target (integration, real Postgres) applies what was previewed: the widening item confirmed, suspected credentials reviewed; versions the agent wrote, applied by the owner, recorded with the proposer"
+        },
+        {
+          "file": "src/application/change-plan/admin-proposal-segments.integration.test.ts",
+          "fullName": "S11 AA3b-2 Admin proposal segments in their target (integration, real Postgres) I-A8: what an intent resolves to is part of what was reviewed; a segment that changes nothing is not applied"
+        },
+        {
+          "file": "src/application/change-plan/admin-proposal-segments.integration.test.ts",
+          "fullName": "S11 AA3b-2 Admin proposal segments in their target (integration, real Postgres) a withdrawn segment is neither previewed nor applied nor rejected"
+        },
+        {
+          "file": "src/application/change-plan/admin-proposal-segments.integration.test.ts",
+          "fullName": "S11 AA3b-2 Admin proposal segments in their target (integration, real Postgres) rejecting takes a reason; the owner and the platform read it, the agent reads only that it was rejected"
+        },
+        {
+          "file": "src/application/change-plan/admin-proposal-segments.integration.test.ts",
+          "fullName": "S11 AA3b-2 Admin proposal segments in their target (integration, real Postgres) legacy 420: a reason, a title or a description that looks like a credential reads masked to the owner, the platform and the agent"
+        },
+        {
+          "file": "src/application/change-plan/admin-proposal-segments.integration.test.ts",
+          "fullName": "S11 AA3b-2 Admin proposal segments in their target (integration, real Postgres) two decisions of one segment run one after the other: the second waits for the first and reads what it left (409 not open)"
+        },
+        {
+          "file": "src/application/change-plan/admin-proposal-segments.integration.test.ts",
+          "fullName": "S11 AA3b-2 Admin proposal segments in their target (integration, real Postgres) verifying an applied proposal: its source is found and names no systems; a later proposal of the same source name does not supersede it"
+        },
+        {
+          "file": "src/application/change-plan/admin-proposal-segments.integration.test.ts",
+          "fullName": "S11 AA3b-2 Admin proposal segments in their target (integration, real Postgres) rolling back the record rolls the proposal segment back with it; once the trial workspace is purged, the record alone"
+        },
+        {
+          "file": "src/application/change-plan/admin-proposal-segments.integration.test.ts",
+          "fullName": "S11 AA3b-2 Admin proposal segments in their target (integration, real Postgres) governance 0033: the record names the proposal segment it applied, as proposed, and nothing else"
+        },
+        {
+          "file": "src/application/change-plan/admin-proposal-segments.integration.test.ts",
+          "fullName": "S11 AA3b-2 Admin proposal segments in their target (integration, real Postgres) a proposal with one segment applied and another still proposed is partially applied, in the list filter as on the wire"
+        },
+        {
+          "file": "src/application/change-plan/admin-proposal-segments.integration.test.ts",
+          "fullName": "S11 AA3b-2 Admin proposal segments in their target (integration, real Postgres) F12: only the owner of the workspace a segment is addressed to reaches it"
+        },
+        {
+          "file": "src/application/change-plan/admin-proposals.integration.test.ts",
+          "fullName": "S11 AA3b-1 Admin proposals (integration, real Postgres) makes a proposal through the Handle: one segment per target, origin agent, nothing changed there"
+        },
+        {
+          "file": "src/application/change-plan/admin-proposals.integration.test.ts",
+          "fullName": "S11 AA3b-1 Admin proposals (integration, real Postgres) F12: the agent reads and withdraws only its own administrator’s proposals in the trial workspace"
+        },
+        {
+          "file": "src/application/change-plan/admin-proposals.integration.test.ts",
+          "fullName": "S11 AA3b-1 Admin proposals (integration, real Postgres) F4: a target workspace reads the segment addressed to it and its proposal’s head, and no other segment; an unrelated workspace reads nothing"
+        },
+        {
+          "file": "src/application/change-plan/admin-proposals.integration.test.ts",
+          "fullName": "S11 AA3b-1 Admin proposals (integration, real Postgres) withdraws through the agent (origin agent) and on the platform (origin human, platform audit row); a proposal with nothing open is 409"
+        },
+        {
+          "file": "src/application/change-plan/admin-proposals.integration.test.ts",
+          "fullName": "S11 AA3b-1 Admin proposals (integration, real Postgres) the guards: a proposal never changes; a segment is added only by its proposal’s transaction, never to a trial workspace, and moves only along an edge decided where it may be"
+        },
+        {
+          "file": "src/application/change-plan/admin-proposals.integration.test.ts",
+          "fullName": "S11 AA3b-1 Admin proposals (integration, real Postgres) P3-2: a withdrawal’s reason carrying a credential, or a [redacted] mark, is refused on both sides and nothing is withdrawn"
+        },
+        {
+          "file": "src/application/change-plan/admin-proposals.integration.test.ts",
+          "fullName": "S11 AA3b-1 Admin proposals (integration, real Postgres) purging a target deletes the segment addressed to it and keeps the proposal; purging the trial workspace deletes its proposals"
+        },
+        {
+          "file": "src/application/change-plan/admin-proposals.integration.test.ts",
+          "fullName": "S11 AA3b-1 Admin proposals (integration, real Postgres) F11: twenty proposals a day per administrator across trial workspaces; three at the limit wait on one lock and one passes"
+        },
+        {
+          "file": "src/application/change-plan/platform-segments.integration.test.ts",
+          "fullName": "S11 AA3c-1 Admin proposal platform segments (integration, real Postgres) F6: a proposal may be a platform segment alone; it follows the workspace segments, holds gate_instance items only, and creates nothing"
+        },
+        {
+          "file": "src/application/change-plan/platform-segments.integration.test.ts",
+          "fullName": "S11 AA3c-1 Admin proposal platform segments (integration, real Postgres) only a platform administrator reaches the platform segment and its record: not a workspace owner, not the agent"
+        },
+        {
+          "file": "src/application/change-plan/platform-segments.integration.test.ts",
+          "fullName": "S11 AA3c-1 Admin proposal platform segments (integration, real Postgres) a workspace segment waits for its platform segment: no digest in its preview, 409 platform_segment_not_applied, then applied once the platform segment is"
+        },
+        {
+          "file": "src/application/change-plan/platform-segments.integration.test.ts",
+          "fullName": "S11 AA3c-1 Admin proposal platform segments (integration, real Postgres) rejecting the platform segment withdraws the workspace segments still proposed; the reason is the platform’s, never the agent’s to read"
+        },
+        {
+          "file": "src/application/change-plan/platform-segments.integration.test.ts",
+          "fullName": "S11 AA3c-1 Admin proposal platform segments (integration, real Postgres) rolls back by disabling what it created, as it is now: enabled or discovered → disabled, disabled stays, lost returns disabled, gone is nothing; the connector stays"
+        },
+        {
+          "file": "src/application/change-plan/platform-segments.integration.test.ts",
+          "fullName": "S11 AA3c-1 Admin proposal platform segments (integration, real Postgres) refuses, writing nothing, while an instance changed since (platform_change_drifted) or a workspace segment of the proposal is applied (dependent_segments_applied)"
+        },
+        {
+          "file": "src/application/change-plan/platform-segments.integration.test.ts",
+          "fullName": "S11 AA3c-1 Admin proposal platform segments (integration, real Postgres) another workspace never reads the proposal’s platform segment; its target reads only its status"
+        },
+        {
+          "file": "src/application/change-plan/platform-segments.integration.test.ts",
+          "fullName": "S11 AA3c-1 Admin proposal platform segments (integration, real Postgres) governance 0034: the database holds who decides and what a record records too — the acting administrator rejects, rolls back and applies; a record names its proposal’s proposer; one platform segment a proposal; withdrawn with the platform segment only once that is decided"
+        },
+        {
+          "file": "src/application/change-plan/platform-segments.integration.test.ts",
+          "fullName": "S11 AA3c-1 Admin proposal platform segments (integration, real Postgres) AA3c-2: a workspace segment compares what its platform segment created with the instances now — changed or gone, no digest and 409 platform_segment_changed; as created again, the same digest"
+        },
+        {
+          "file": "src/application/change-plan/platform-segments.integration.test.ts",
+          "fullName": "S11 AA3c-1 Admin proposal platform segments (integration, real Postgres) AA3c-2: an Operation on an instance not enabled here says who can enable it — the owner (can_enable) or a platform administrator first (needs_platform)"
+        },
+        {
+          "file": "src/application/change-plan/platform-segments.integration.test.ts",
+          "fullName": "S11 AA3c-1 Admin proposal platform segments (integration, real Postgres) AA3c-2: the dependency lock — a platform rollback waiting on a workspace apply then finds it applied (dependent_segments_applied)"
+        },
+        {
+          "file": "src/application/change-plan/platform-segments.integration.test.ts",
+          "fullName": "S11 AA3c-1 Admin proposal platform segments (integration, real Postgres) AA3c-2: the dependency lock — a workspace apply waiting on a platform rollback then finds its segment withdrawn, and applies nothing"
+        },
+        {
+          "file": "src/application/change-plan/platform-segments.integration.test.ts",
+          "fullName": "S11 AA3c-1 Admin proposal platform segments (integration, real Postgres) governance 0035: a write that does not come from the kernel is refused too — a workspace segment applied before its platform segment, or after its record was rolled back; a record rolled back under an applied workspace segment"
+        },
+        {
+          "file": "src/application/change-plan/platform-segments.integration.test.ts",
+          "fullName": "S11 AA3c-1 Admin proposal platform segments (integration, real Postgres) governance 0035 (#493 R-1): the two security definer reads answer only whom they are for — a workspace no workspace segment addresses reads no platform change; no workspace reads the applied workspace changes"
+        },
+        {
+          "file": "src/application/change-plan/platform-segments.integration.test.ts",
+          "fullName": "S11 AA3c-1 Admin proposal platform segments (integration, real Postgres) governance 0035 (#493 P3): a workspace change verified, or whose verification failed, still holds the platform rollback once the trial workspace is purged"
+        },
+        {
+          "file": "src/application/change-plan/platform-segments.integration.test.ts",
+          "fullName": "S11 AA3c-1 Admin proposal platform segments (integration, real Postgres) governance 0035 (#493 P3): a workspace segment that still reads applied, its change rolled back past the kernel, still holds the record"
+        },
+        {
+          "file": "src/application/change-plan/platform-segments.integration.test.ts",
+          "fullName": "S11 AA3c-1 Admin proposal platform segments (integration, real Postgres) AA3c-2: after the trial workspace is purged, a workspace segment applied from it still holds the platform rollback — read from what its apply recorded where it was applied"
+        }
+      ],
+      "replacedBy": [
+        {
+          "file": "src/application/admin-agent/admin-agent-chat.integration.test.ts",
+          "fullName": "S11 AA4c-1 admin agent Chats, targets and stop (integration, real Postgres) set_admin_agent_targets: a person chooses their admin agent’s targets in a trial workspace they are in — the whole list, one platform audit row per change, what was added and removed"
+        },
+        {
+          "file": "src/application/admin-agent/admin-agent-chat.integration.test.ts",
+          "fullName": "S11 AA4c-1 admin agent Chats, targets and stop (integration, real Postgres) governance 0036: a row is a platform administrator’s own choice of an active standard target for their admin agent in a trial workspace — written past the kernel too — and never updated"
+        },
+        {
+          "file": "src/application/change-plan/admin-proposals.integration.test.ts",
+          "fullName": "S11 AA3b-1 Admin proposals (integration, real Postgres) F10 + AA4c: a target the administrator did not choose — unknown, disabled, a trial workspace or a standard one alike — is refused with one code, one text, one shape on every channel, and nothing is written"
+        },
+        {
+          "file": "src/application/change-plan/admin-proposal-segments.integration.test.ts",
+          "fullName": "S11 AA3b-2 Admin proposal segments in their target (integration, real Postgres) AA4c (coordinator, 2026-11-02): a proposal keeps the target it was proposed with — once the administrator drops it, the owner reads it blocked and applying is refused; choosing it again restores what was reviewed"
+        }
+      ],
+      "rationale": "docs/runbooks/release.md §6, governance 0036 row (conditionally reversible): 0036 adds the guard admin_proposal_segments_target_chosen — a workspace segment of an admin proposal is written, and moves to applied, only while its target is among the targets its proposer chose for their admin agent in that trial workspace (admin_agent_targets; the AA4c plan's F5 and D1). v0.61.0 has no targets: its admin agent may propose to any active standard workspace, so on this schema every admin proposal of its with a workspace segment is refused — all of the BASE failures below are that one refusal (\"the workspace segment's target is not among its proposer's targets\"), raised while the test makes its proposal, and each asserts the rule 0036 changes on purpose. This is a behaviour change for a code-only rollback, not a test artefact alone: v0.61.0's own propose path is refused the same way, so code may roll back only after dropping that trigger and its function (0036 header; the §6 row says so). The admin agent is off by default (ADMIN_AGENT_ENABLED), so a deployment that never enabled it never reaches the guard. HEAD's versions of these tests choose the targets first, as the platform's admin agent page does; the replacements assert the new rule: targets are chosen per person and trial workspace, a target not chosen is refused with one code on every channel, a target dropped later blocks its segment until it is chosen again, and the guard holds for a write that does not come from the kernel."
     }
   ]
 }

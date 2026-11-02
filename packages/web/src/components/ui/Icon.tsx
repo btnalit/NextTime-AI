@@ -53,7 +53,10 @@ export type IconName =
   // S11 GO6: 目标 Goals (the sidebar item).
   | 'flag'
   // S10 E3-1a: 评测 Evaluation (the sidebar item) — a lab flask.
-  | 'flask';
+  | 'flask'
+  // S11 AA4c-3: 平台 · 管理员智能体 (the sidebar item) — `bot` with a diamond for its antenna, so it
+  // is not 我的智能体's icon.
+  | 'admin-bot';
 
 const PATHS: Readonly<Record<IconName, string>> = {
   chat: 'M4 5h16v10H9l-5 4V5z',
@@ -99,6 +102,8 @@ const PATHS: Readonly<Record<IconName, string>> = {
   edit: 'M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4L16.5 3.5z',
   flag: 'M5 21V4M5 4h12l-2.5 4L17 12H5',
   flask: 'M9 3h6M10 3v6l-5.5 9.5A1.7 1.7 0 0 0 6 21h12a1.7 1.7 0 0 0 1.5-2.5L14 9V3M7.5 15h9',
+  'admin-bot':
+    'M12 1.5 14 3.5 12 5.5 10 3.5zM12 5.5V8M8 8h8a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3v-6a3 3 0 0 1 3-3zM9 13v.01M15 13v.01M9 17h6',
 };
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'name'> {

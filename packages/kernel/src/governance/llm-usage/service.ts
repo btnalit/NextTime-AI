@@ -516,11 +516,14 @@ export async function sessionRefusedOnly(
 }
 
 /**
- * `sessionRefusedOnly` for one entry-agent Turn: the rows attributed to `turnId` that an `entry`
- * session metered — refused calls and no answered one, or `null`. Only the entry agent's own
- * calls count: a Worker's session acts for the same person, so its calls during the Turn carry
- * the person's running Turn as `turn_id` too (`interfaces/http/internal/llm-usage.ts` "Turn
- * attribution"), and a Worker answered or refused says nothing about whether the agent did.
+ * `sessionRefusedOnly` for one agent Turn: the rows attributed to `turnId` that the agent's own
+ * session metered — an `entry` session, or (S11 AA4c) the `admin_agent` session an admin agent's
+ * Turn runs under — refused calls and no answered one, or `null`. Only the agent's own calls
+ * count: a Worker's session acts for the same person, so its calls during the Turn carry the
+ * person's running Turn as `turn_id` too (`interfaces/http/internal/llm-usage.ts` "Turn
+ * attribution"), and a Worker answered or refused says nothing about whether the agent did. An
+ * entry and an admin agent Turn running at once never share a call: each session's calls are
+ * attributed to its own Turns (application/host-bridge/turn-attribution.ts).
  *
  * Runs at the end of every Turn that ends completed: the first query is one lookup in the partial
  * index `llm_usage_refused_turn_idx` (refused rows only, by workspace and Turn), however many
@@ -542,7 +545,7 @@ export async function entryTurnRefusedOnly(
        from llm_usage u
        join sessions s on s.workspace_id = u.workspace_id and s.id = u.session_id
       where u.workspace_id = $1 and u.status = '${REFUSED_USAGE_STATUS}' and u.turn_id = $2
-        and s.kind = 'entry'`,
+        and s.kind in ('entry', 'admin_agent')`,
     [workspaceId, turnId],
   );
   const row = refused.rows[0];
@@ -553,7 +556,7 @@ export async function entryTurnRefusedOnly(
        from llm_usage u
        join sessions s on s.workspace_id = u.workspace_id and s.id = u.session_id
       where u.workspace_id = $1 and u.status = '${COMPLETED_USAGE_STATUS}' and u.turn_id = $2
-        and s.kind = 'entry'
+        and s.kind in ('entry', 'admin_agent')
       limit 1`,
     [workspaceId, turnId],
   );
