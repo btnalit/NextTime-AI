@@ -2264,6 +2264,13 @@ where object_type = 'Operation' and properties->>'status' = 'published'
   - EN: When the admin agent reads back its own admin proposal (the propose result, `agent_get_admin_proposal`, `agent_withdraw_admin_proposal`), it sees the addresses (target and OpenAPI URL) of the gate-host instances the platform part proposes. These are addresses it proposed itself, and any address carrying a credential was refused when proposed. Fixed in the next release.
 - **回滚**（见 §6）：只回退代码不损坏数据（0.60.0 没有平台部分，这两个守卫不会拦它做的事）。
 
+### 3.107 审阅页显示草稿的起草方（#927，遗留 597，0.61.0 起）
+
+只改控制台：没有迁移，没有线上变化，契约快照不变，不改 compose，主机不需要操作。
+
+- **发版说明可写**：Skill、流程、Worker 定义、Operation 和本体提案的审阅页显示草稿是谁写的（「起草方」：人 / 智能体 / 平台模板；Operation 是门的清单 / 人 / 智能体）。智能体写的草稿带一句提醒：发布前逐项核对；最后由智能体写的 Operation 草稿说明它可能已替换提议者原来的内容。Worker 定义和 Operation 的审阅页现在也显示提议者。文案写「智能体」而不是「管理员智能体」、写「可能已被替换」而不是「改写」：内核对所有智能体会话和 Handle 都记 `agent`，也不记录一次写入是否替换了人的草稿（AA4 方案 F10-4，协调线程 11-02 决定，AA5 实际用过后再看）。#914 之前写的版本没有记录起草方，不显示这一行。
+- **回滚**：只回退代码即可。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
