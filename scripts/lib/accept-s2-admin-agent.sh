@@ -202,7 +202,11 @@ admin_agent_cleanup() {
     if [ -n "$ADMIN_PRINCIPAL_ID" ]; then
       out=$(resident_reclaim "$ADMIN_PRINCIPAL_ID")
       reclaim_status=$(parse_kv "$out" STATUS)
-      echo "cleanup: /resident/reclaim $ADMIN_PRINCIPAL_ID ${reclaim_status:+HTTP $reclaim_status}${reclaim_status:-failed: $(printf '%s' "$out" | tail -n 1)}"
+      if [ -n "$reclaim_status" ]; then
+        echo "cleanup: /resident/reclaim $ADMIN_PRINCIPAL_ID HTTP $reclaim_status"
+      else
+        echo "cleanup: /resident/reclaim $ADMIN_PRINCIPAL_ID failed: $(printf '%s' "$out" | tail -n 1)"
+      fi
     fi
   fi
   for admin_ws in $ADMIN_TRIAL_ID $ADMIN_TARGET_ID; do
