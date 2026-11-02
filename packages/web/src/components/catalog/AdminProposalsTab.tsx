@@ -200,7 +200,7 @@ function platformItemText(item: AdminProposalPlatformItemIntentWire, t: Translat
   const from = item.preset
     ? t(`预设 ${item.preset}`, `preset ${item.preset}`)
     : item.connector
-      ? t(`连接器 ${item.connector}`, `connector ${item.connector}`)
+      ? t(`接入包 ${item.connector}`, `connector ${item.connector}`)
       : null;
   return from
     ? t(`新建门宿主实例 ${name}（${from}）`, `New gate-host instance ${name} (${from})`)
@@ -210,7 +210,7 @@ function platformItemText(item: AdminProposalPlatformItemIntentWire, t: Translat
 const DRIFT_FIELD_LABEL: Readonly<
   Record<GateInstanceDriftField, { readonly zh: string; readonly en: string }>
 > = {
-  connector: { zh: '连接器', en: 'connector' },
+  connector: { zh: '接入包', en: 'connector' },
   transportKind: { zh: '接入方式', en: 'transport' },
   target: { zh: '地址', en: 'address' },
   credentialMode: { zh: '凭据方式', en: 'credential mode' },
@@ -218,7 +218,7 @@ const DRIFT_FIELD_LABEL: Readonly<
   preset: { zh: '预设', en: 'preset' },
 };
 
-/** 「RAGFlow：地址、连接器改过」, 「RAGFlow：已删除」 — an instance the platform part created that is
+/** 「RAGFlow：地址、接入包改过」, 「RAGFlow：已删除」 — an instance the platform part created that is
  *  not as it created it any more. */
 function platformChangeText(
   change: AdminProposalPlatformInstanceChangeWire,

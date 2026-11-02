@@ -750,7 +750,7 @@ function GateInstancesTab({
           onClick={() => setPanel({ kind: 'create' })}
           data-testid="new-gate-instance"
         >
-          {t('新建门宿主实例', 'Create hosted instance')}
+          {t('新建门宿主实例', 'Create gate-host instance')}
         </Button>
       </div>
 
@@ -909,7 +909,7 @@ function GateInstancesTab({
       <Drawer
         open={panel.panel.kind === 'create'}
         onClose={() => setPanel({ kind: 'closed' })}
-        title={t('新建门宿主实例', 'Create hosted instance')}
+        title={t('新建门宿主实例', 'Create gate-host instance')}
         subtitle={t(
           'cli/ssh 由管理员部署；http/mcp 由门宿主接管并导入它的 Operation。',
           'administrator, http/mcp; the gate host takes it over and imports its Operations.',

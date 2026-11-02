@@ -248,6 +248,22 @@ export const SURFACES: readonly Surface[] = [
     ready: (page) => page.getByTestId('platform-integrations-page'),
   },
   {
+    // S11 AA4b: the admin proposals the platform has (none in CI, so the empty state), and the
+    // platform change records applying their platform parts left (none either).
+    id: 'platform-admin-proposals',
+    labelZh: '平台 · 管理员提案',
+    hash: '#/platform/admin-proposals',
+    role: 'admin',
+    ready: (page) => page.getByTestId('platform-admin-proposals-empty'),
+  },
+  {
+    id: 'platform-change-records',
+    labelZh: '平台 · 管理员提案 · 平台变更记录',
+    hash: '#/platform/admin-proposals/records',
+    role: 'admin',
+    ready: (page) => page.getByTestId('platform-change-records-empty'),
+  },
+  {
     id: 'platform-modules',
     labelZh: '平台 · 模块',
     hash: '#/platform/modules',
