@@ -10,12 +10,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  ADMIN_CEILING_REACHED_BY_PROJECTION,
   ALLOWED_NON_TOOL_WORDS,
   GATE_PLACEHOLDER,
   GOAL_UPDATE_FIELD_WORDS,
   PROPOSE_GOAL_REFUSAL_CODES,
   PROPOSE_GOAL_SCHEMA_WORDS,
   candidateIdentifier,
+  checkAdminToolsWithinCeiling,
   checkConditionalOpsRunner,
   checkEmptyFindGuidance,
   checkGoalChangeWords,
@@ -427,13 +429,56 @@ test('checkProposeGoalWords', async (t) => {
 });
 
 test('ALLOWED_NON_TOOL_WORDS', async (t) => {
-  await t.test('only covers the two known prompt files, each a Set', () => {
+  await t.test('only covers the three known prompt files, each a Set', () => {
     assert.deepEqual(Object.keys(ALLOWED_NON_TOOL_WORDS).sort(), [
+      'ontology/admin-agent.yaml',
       'ontology/entry-agent.yaml',
       'ontology/ops-runner.yaml',
     ]);
     for (const value of Object.values(ALLOWED_NON_TOOL_WORDS)) {
       assert.ok(value instanceof Set);
     }
+  });
+});
+
+// S11 AA4c-2: admin mode's tools against the admin agent ceiling.
+test('checkAdminToolsWithinCeiling', async (t) => {
+  const ceiling = ['get_object', 'propose_admin_proposal', ...ADMIN_CEILING_REACHED_BY_PROJECTION];
+
+  await t.test('passes when the tools are the ceiling minus what the projection reaches', () => {
+    assert.deepEqual(
+      checkAdminToolsWithinCeiling(['get_object', 'propose_admin_proposal'], ceiling),
+      [],
+    );
+  });
+
+  await t.test('catches a tool the Handle cannot call', () => {
+    const violations = checkAdminToolsWithinCeiling(
+      ['get_object', 'propose_admin_proposal', 'invoke_worker'],
+      ceiling,
+    );
+    assert.equal(violations.length, 1);
+    assert.match(violations[0], /"invoke_worker", which is not on the admin agent ceiling/);
+  });
+
+  await t.test('catches a ceiling capability no tool reaches', () => {
+    const violations = checkAdminToolsWithinCeiling(['get_object'], ceiling);
+    assert.equal(violations.length, 1);
+    assert.match(violations[0], /"propose_admin_proposal" is on the admin agent ceiling/);
+  });
+
+  await t.test('catches observe_operation registered raw, or missing from the ceiling', () => {
+    const raw = checkAdminToolsWithinCeiling(
+      ['get_object', 'propose_admin_proposal', 'observe_operation'],
+      ceiling,
+    );
+    assert.equal(raw.length, 1);
+    assert.match(raw[0], /reached through the gate projection/);
+    const missing = checkAdminToolsWithinCeiling(
+      ['get_object', 'propose_admin_proposal'],
+      ['get_object', 'propose_admin_proposal', 'observe_operation'],
+    );
+    assert.equal(missing.length, 1);
+    assert.match(missing[0], /needs "list_allowed_operations"/);
   });
 });

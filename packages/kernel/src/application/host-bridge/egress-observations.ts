@@ -76,8 +76,8 @@ import { DEFAULT_RECENT_TURN_WINDOW_MINUTES, findAttributableTurn } from './turn
  */
 
 export interface EgressObservationInput {
-  /** `entry:<workspaceId>:<principalId>` (or any other format — unrecognized ones are skipped,
-   *  see `parseEntrySourceId`). */
+  /** `entry:<workspaceId>:<principalId>`, `admin:<workspaceId>:<principalId>` (S11 AA4c-2) or
+   *  `worker:<workspaceId>:<workerRunId>` — any other format is skipped (`parseResidentSourceId`). */
   readonly sourceId: string;
   readonly hostname: string;
   readonly port: number;
@@ -119,23 +119,31 @@ export interface RecordEgressObservationsResult {
 /** Task brief: "keep the array bounded, e.g. last 200 entries". */
 const MAX_EGRESS_ENTRIES = 200;
 
-/** `entry:<workspaceId>:<principalId>` — both halves are UUIDs (every workspace/principal id in
- *  this codebase is `gen_random_uuid()`), so a plain UUID-shaped check is enough to reject
- *  garbage before ever opening a transaction, without hand-rolling a full UUID parser. */
-const ENTRY_SOURCE_ID_PATTERN =
-  /^entry:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+/** `entry:<workspaceId>:<principalId>`, or (S11 AA4c-2) `admin:<workspaceId>:<principalId>` — a
+ *  platform administrator's admin agent, in its own resident container (worker-supervisor
+ *  `resident-kind.ts`; its source is deny-all, so what it reports are refusals). Both halves are
+ *  UUIDs (every workspace/principal id in this codebase is `gen_random_uuid()`), so a plain
+ *  UUID-shaped check is enough to reject garbage before ever opening a transaction, without
+ *  hand-rolling a full UUID parser. */
+const RESIDENT_SOURCE_ID_PATTERN =
+  /^(entry|admin):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
-interface EntrySource {
+interface ResidentSource {
   readonly workspaceId: string;
   readonly principalId: string;
+  /** Whose Turns the observation belongs to: the admin agent's, or (absent) the entry agent's. */
+  readonly agentKind?: 'admin_agent';
 }
 
-function parseEntrySourceId(sourceId: string): EntrySource | undefined {
-  const match = ENTRY_SOURCE_ID_PATTERN.exec(sourceId);
-  const workspaceId = match?.[1];
-  const principalId = match?.[2];
-  if (!workspaceId || !principalId) return undefined;
-  return { workspaceId, principalId };
+function parseResidentSourceId(sourceId: string): ResidentSource | undefined {
+  const match = RESIDENT_SOURCE_ID_PATTERN.exec(sourceId);
+  const kind = match?.[1];
+  const workspaceId = match?.[2];
+  const principalId = match?.[3];
+  if (!kind || !workspaceId || !principalId) return undefined;
+  return kind.toLowerCase() === 'admin'
+    ? { workspaceId, principalId, agentKind: 'admin_agent' }
+    : { workspaceId, principalId };
 }
 
 /** S2.7: `worker:<workspaceId>:<workerRunId>` — fixed by `packages/worker-supervisor/src/
@@ -273,7 +281,7 @@ export async function recordEgressObservations(
       continue;
     }
 
-    const source = parseEntrySourceId(observation.sourceId);
+    const source = parseResidentSourceId(observation.sourceId);
     if (!source) {
       skippedUnknownSource++;
       log('warn', {
@@ -282,7 +290,7 @@ export async function recordEgressObservations(
       });
       continue;
     }
-    const { workspaceId, principalId } = source;
+    const { workspaceId, principalId, agentKind } = source;
 
     const turn = await withWorkspace(deps.pool, { workspaceId, principalId }, async (client) => {
       const attribution = await findAttributableTurn(client, {
@@ -290,6 +298,7 @@ export async function recordEgressObservations(
         principalId,
         at: new Date(),
         recentTurnWindowMinutes,
+        ...(agentKind === undefined ? {} : { agentKind }),
       });
       if (!attribution) return undefined;
 

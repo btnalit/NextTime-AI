@@ -6,6 +6,7 @@ import {
   ExtensionModeSchema,
 } from '@nexttime/shared';
 import { KernelClient } from './kernel-client.js';
+import { registerAdminMode } from './modes/admin.js';
 import { registerEntryMode } from './modes/entry.js';
 import { registerInteractiveMode } from './modes/interactive.js';
 import { registerWorkerMode } from './modes/worker.js';
@@ -13,6 +14,8 @@ import { restorePiAgentDirOnSessionShutdown } from './pi-agent-dir.js';
 
 export { KernelClient, KernelError } from './kernel-client.js';
 export type { KernelClientOptions, KernelErrorKind, KernelErrorOptions } from './kernel-client.js';
+export { ADMIN_TOOL_CAPABILITY_NAMES, registerAdminMode } from './modes/admin.js';
+export type { AdminModeOptions } from './modes/admin.js';
 export { registerEntryMode } from './modes/entry.js';
 export type { EntryModeOptions } from './modes/entry.js';
 export { registerInteractiveMode } from './modes/interactive.js';
@@ -25,7 +28,9 @@ export type { WorkerModeOptions } from './modes/worker.js';
  * (entry/worker/interactive — design doc §7.4). S1 implemented `entry` mode (./modes/entry.ts);
  * S2.9 added `worker` (./modes/worker.ts); S3.6 (docs/development-tasks.md W2-B) adds
  * `interactive` (./modes/interactive.ts) — a pi/Claude-Code-like client running outside the
- * platform, holding a Handle minted by the human-channel `issue_handle` capability.
+ * platform, holding a Handle minted by the human-channel `issue_handle` capability. S11 AA4c-2
+ * adds `admin` (./modes/admin.ts) — a platform administrator's admin agent, in a resident
+ * container of its own in a trial workspace.
  */
 export const VERSION = '0.1.0';
 
@@ -109,5 +114,11 @@ export default function platformExtension(pi: ExtensionAPI): void {
   const initialTurnId = process.env.NEXTTIME_TURN_ID || undefined;
 
   forwardCorrelationIdToLlmProxy(pi, kernelClient);
+  if (mode === 'admin') {
+    // S11 AA4c-2: its own tool set and no entry context or Turn report — never entry mode, whose
+    // per-call `get_entry_context` the admin agent's Handle cannot call.
+    registerAdminMode(pi, { kernelClient, initialTurnId });
+    return;
+  }
   registerEntryMode(pi, { kernelClient, workspaceId, initialTurnId });
 }

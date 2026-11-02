@@ -29,11 +29,14 @@
 #      rows, its Principals and the Workspace row - plus every user whose memberships were all
 #      here and who never activated (no password, no login, nothing else referencing them). The
 #      platform audit row `platform.workspace_purged` (counts, warnings, purged users) is kept.
-#   2. Each Principal's resident entry container that belonged to it (docker rm -f; ignored if
-#      already stopped/removed).
+#   2. Each Principal's resident containers that belonged to it - the entry agent's and, in a
+#      trial workspace, the admin agent's (S11 AA4c-2) - (docker rm -f; ignored if already
+#      stopped/removed).
 #   3. Each Principal's data directory under $NEXTTIME_DATA/workspaces/<principalId> and its
 #      platform directory (published system prompt and Skills, worker-supervisor host-paths.ts)
-#      under $NEXTTIME_DATA/workspaces/.platform/principals/<principalId>.
+#      under $NEXTTIME_DATA/workspaces/.platform/principals/<principalId>; and the admin agent's
+#      pair, $NEXTTIME_DATA/workspaces/.admin/<principalId> and
+#      $NEXTTIME_DATA/workspaces/.platform/admin-agents/<principalId>.
 #   4. Each Task's data directory under $NEXTTIME_DATA/workspaces/tasks/<taskId> and its platform
 #      directory under $NEXTTIME_DATA/workspaces/.platform/tasks/<taskId>.
 #
@@ -45,8 +48,8 @@
 # use) - refuses without it rather than silently skipping steps 2-4.
 #
 # Safety: only ever removes a path of the exact shape $NEXTTIME_DATA/workspaces/<principalId>,
-# $NEXTTIME_DATA/workspaces/tasks/<taskId> or the matching .platform/principals/<principalId> /
-# .platform/tasks/<taskId> - refuses to touch anything else, even if the CLI's own output were
+# $NEXTTIME_DATA/workspaces/tasks/<taskId>, the matching .platform/principals/<principalId> /
+# .platform/tasks/<taskId>, or .admin/<principalId> / .platform/admin-agents/<principalId> - refuses to touch anything else, even if the CLI's own output were
 # ever malformed, and refuses to act on a principal/task id that is not a UUID - the only ids
 # worker-supervisor accepts (`IdClaimSchema`), so the only directories it ever creates there; a
 # malformed `PRINCIPAL=.platform` or `TASK=` line can never reach the shared `.platform` or
@@ -150,10 +153,12 @@ for pid in $PRINCIPAL_IDS; do
 		continue
 	fi
 
-	echo "delete-workspace: removing resident entry container for principal $pid"
+	echo "delete-workspace: removing resident entry and admin agent containers for principal $pid"
 	docker rm -f "nexttime-entry-$pid" >/dev/null 2>&1 || true
+	docker rm -f "nexttime-admin-$pid" >/dev/null 2>&1 || true
 
-	for dir in "$NEXTTIME_DATA/workspaces/$pid" "$NEXTTIME_DATA/workspaces/.platform/principals/$pid"; do
+	for dir in "$NEXTTIME_DATA/workspaces/$pid" "$NEXTTIME_DATA/workspaces/.platform/principals/$pid" \
+		"$NEXTTIME_DATA/workspaces/.admin/$pid" "$NEXTTIME_DATA/workspaces/.platform/admin-agents/$pid"; do
 		case "$dir" in
 			"$NEXTTIME_DATA/workspaces/"*)
 				if [ -d "$dir" ]; then

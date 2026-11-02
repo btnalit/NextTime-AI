@@ -16,6 +16,7 @@ import type {
   CapabilityHandlerContext,
   CapabilityHandlerResult,
 } from './capability-handler.js';
+import { stopResidentContainers } from './resident-containers.js';
 
 /**
  * application/gateway/admin-agent-handlers (S11 AA4c; the AA4c plan's D1, D3, D6, D7): what a
@@ -133,8 +134,9 @@ async function stopAdminAgentTurns(
  * workspace, or in every one. Two phases, like `purge_workspace`: the platform transaction revokes
  * its `admin_agent` sessions and every Handle under them (what reaches llm-proxy at once), and is
  * the call's audit row; once that committed, each running admin agent Turn is stopped as its person
- * in their trial workspace, as `stop_agent` would. The next message in an admin agent's Chat opens a
- * new session. Stopping its container is the runtime's (AA4c-2).
+ * in their trial workspace, as `stop_agent` would, and then (S11 AA4c-2) its container is stopped,
+ * best-effort: with its Handles revoked it could no longer act anyway. The next message in an admin
+ * agent's Chat opens a new session, and a new container.
  */
 export function stopAdminAgentHandlerWith(stopRunningTurn: StopRunningTurn): CapabilityHandler {
   return async (client, _workspaceId, params, ctx): Promise<CapabilityHandlerResult> => {
@@ -164,6 +166,10 @@ export function stopAdminAgentHandlerWith(stopRunningTurn: StopRunningTurn): Cap
         for (const membership of memberships) {
           stoppedTurns += await stopAdminAgentTurns(pool, membership, stopRunningTurn);
         }
+        await stopResidentContainers(
+          memberships.map((membership) => membership.principalId),
+          ['admin_agent'],
+        );
         return { revokedSessions: revoked.length, stoppedTurns };
       },
     };

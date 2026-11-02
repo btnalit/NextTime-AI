@@ -128,6 +128,8 @@ function createFakeContainerIoClient() {
 function createFakeSupervisorClient() {
   const spawnCalls: SpawnInput[] = [];
   const touchCalls: string[] = [];
+  /** S11 AA4c-2: the resident kind each touch named (`undefined` for the entry agent). */
+  const touchKinds: Array<'admin_agent' | undefined> = [];
   /** Leftover 87: the `x-correlation-id` each spawn / touch was made under. */
   const spawnCorrelationIds: Array<string | undefined> = [];
   const touchCorrelationIds: Array<string | undefined> = [];
@@ -138,6 +140,9 @@ function createFakeSupervisorClient() {
     created: true,
     restarts: 0,
   };
+  /** S11 AA4c-2: when set, each spawn's result is computed from its input (two residents, two
+   *  containers). */
+  let spawnResultOf: ((input: SpawnInput) => SpawnResult) | undefined;
   let spawnError: Error | undefined;
   let touchError: Error | undefined;
   /** Runs while a spawn is in flight — after the request is "sent", before its result comes back
@@ -151,14 +156,19 @@ function createFakeSupervisorClient() {
       spawnCorrelationIds.push(options?.correlationId);
       if (spawnError) throw spawnError;
       if (spawnInterceptor) await spawnInterceptor(input);
-      return spawnResult;
+      return spawnResultOf ? spawnResultOf(input) : spawnResult;
     },
     async stop(): Promise<void> {},
     async status(): Promise<ResidentStatus | undefined> {
       return undefined;
     },
-    async touch(principalId: string, options?: { correlationId?: string }): Promise<boolean> {
+    async touch(
+      principalId: string,
+      options?: { correlationId?: string },
+      agentKind?: 'admin_agent',
+    ): Promise<boolean> {
       touchCalls.push(principalId);
+      touchKinds.push(agentKind);
       touchCorrelationIds.push(options?.correlationId);
       if (touchError) throw touchError;
       return true;
@@ -169,10 +179,14 @@ function createFakeSupervisorClient() {
     client,
     spawnCalls,
     touchCalls,
+    touchKinds,
     spawnCorrelationIds,
     touchCorrelationIds,
     setSpawnResult: (result: SpawnResult) => {
       spawnResult = result;
+    },
+    setSpawnResultOf: (fn: ((input: SpawnInput) => SpawnResult) | undefined) => {
+      spawnResultOf = fn;
     },
     setSpawnError: (err: Error | undefined) => {
       spawnError = err;
@@ -1204,5 +1218,161 @@ describe('createHost — one pi session per chat (leftover 33)', () => {
     // The turn is still waiting for its own answer.
     emitSwitchOk(attachment, cmd.turnId);
     expect(attachment?.written).toEqual([switchCommand(cmd), promptCommand(cmd)]);
+  });
+});
+
+describe('createHost — an admin agent beside the entry agent (S11 AA4c-2)', () => {
+  /** Two residents, two containers: the admin agent's spawn answers `c-admin`, the entry's `c1`. */
+  function setUpTwoResidents() {
+    const setup = setUp();
+    setup.supervisor.setSpawnResultOf((input) => ({
+      containerId: input.agentKind === 'admin_agent' ? 'c-admin' : 'c1',
+      ip: input.agentKind === 'admin_agent' ? '100.64.0.3' : '100.64.0.2',
+      status: 'running',
+      created: true,
+      restarts: 0,
+    }));
+    return setup;
+  }
+
+  function sideBySide() {
+    const principalId = randomUUID();
+    const workspaceId = randomUUID();
+    const entry = startTurnCommand({ principalId, workspaceId });
+    const admin = startTurnCommand({
+      principalId,
+      workspaceId,
+      agentKind: 'admin_agent',
+      handle: 'admin-jwt',
+      systemPrompt: 'you are the admin agent',
+    });
+    return { principalId, entry, admin };
+  }
+
+  it("runs a person's entry Turn and admin agent Turn side by side, each in its own container, and names the kind only for the admin agent", async () => {
+    const { host, supervisor, containerIo, kernelLink } = setUpTwoResidents();
+    const { principalId, entry, admin } = sideBySide();
+
+    const entryAttachment = await startTurnAndAccept(host, containerIo, entry, 'c1');
+    const adminAttachment = await startTurnAndAccept(host, containerIo, admin, 'c-admin');
+
+    expect(kernelLink.rejected).toEqual([]);
+    expect(kernelLink.accepted).toEqual([entry.turnId, admin.turnId]);
+    expect(supervisor.spawnCalls).toHaveLength(2);
+    // A supervisor from before AA4c-2 refuses an unknown body key, so the entry spawn sends none.
+    expect(supervisor.spawnCalls[0]).not.toHaveProperty('agentKind');
+    expect(supervisor.spawnCalls[1]).toEqual(
+      expect.objectContaining({
+        principalId,
+        agentKind: 'admin_agent',
+        handle: 'admin-jwt',
+        systemPrompt: 'you are the admin agent',
+      }),
+    );
+    expect(supervisor.touchCalls).toEqual([principalId, principalId]);
+    expect(supervisor.touchKinds).toEqual([undefined, 'admin_agent']);
+    expect(containerIo.attachCalls).toEqual(['c1', 'c-admin']);
+    expect(entryAttachment?.written).toEqual([switchCommand(entry), promptCommand(entry)]);
+    expect(adminAttachment?.written).toEqual([switchCommand(admin), promptCommand(admin)]);
+
+    // Each container's output settles only its own Turn.
+    adminAttachment?.emitLine({ type: 'agent_settled' });
+    expect(kernelLink.runtimeEvents).toEqual([
+      expect.objectContaining({ type: 'turnEnded', turnId: admin.turnId, status: 'completed' }),
+    ]);
+    entryAttachment?.emitLine({ type: 'agent_settled' });
+    expect(kernelLink.runtimeEvents).toEqual([
+      expect.objectContaining({ type: 'turnEnded', turnId: admin.turnId, status: 'completed' }),
+      expect.objectContaining({ type: 'turnEnded', turnId: entry.turnId, status: 'completed' }),
+    ]);
+  });
+
+  it('rejects a second admin agent Turn while one runs, without blocking the entry agent', async () => {
+    const { host, containerIo, kernelLink } = setUpTwoResidents();
+    const { principalId, entry, admin } = sideBySide();
+    await startTurnAndAccept(host, containerIo, admin, 'c-admin');
+
+    const second = startTurnCommand({
+      principalId,
+      workspaceId: admin.workspaceId,
+      agentKind: 'admin_agent',
+    });
+    await host.handleStartTurn(second);
+    expect(kernelLink.rejected).toEqual([
+      {
+        turnId: second.turnId,
+        reason: 'admin agent container is already processing another turn for this principal',
+      },
+    ]);
+
+    await startTurnAndAccept(host, containerIo, entry, 'c1');
+    expect(kernelLink.accepted).toEqual([admin.turnId, entry.turnId]);
+  });
+
+  it("stops only the admin agent's Turn — named by kind, or found by its Turn id when the kernel sends no kind", async () => {
+    const { host, containerIo, kernelLink } = setUpTwoResidents();
+    const { principalId, entry, admin } = sideBySide();
+    const entryAttachment = await startTurnAndAccept(host, containerIo, entry, 'c1');
+    const adminAttachment = await startTurnAndAccept(host, containerIo, admin, 'c-admin');
+
+    // The admin Turn's id under the entry kind's slot only: a stop that names the admin kind for
+    // the entry Turn's id is unknown, and aborts nothing.
+    host.handleStopTurn({
+      type: 'stopTurn',
+      turnId: entry.turnId,
+      principalId,
+      agentKind: 'admin_agent',
+    });
+    expect(kernelLink.unknown).toEqual([entry.turnId]);
+
+    host.handleStopTurn({ type: 'stopTurn', turnId: admin.turnId, principalId });
+    expect(adminAttachment?.written).toEqual([
+      switchCommand(admin),
+      promptCommand(admin),
+      { type: 'abort' },
+    ]);
+    expect(entryAttachment?.written).toEqual([switchCommand(entry), promptCommand(entry)]);
+
+    adminAttachment?.emitLine({ type: 'agent_settled' });
+    expect(kernelLink.runtimeEvents).toEqual([
+      expect.objectContaining({ type: 'turnEnded', turnId: admin.turnId, status: 'interrupted' }),
+    ]);
+
+    // And the entry Turn is still running: a stop for it now (kind-less, as ever) reaches it.
+    host.handleStopTurn({ type: 'stopTurn', turnId: entry.turnId, principalId });
+    expect(entryAttachment?.written).toEqual([
+      switchCommand(entry),
+      promptCommand(entry),
+      { type: 'abort' },
+    ]);
+  });
+
+  it("reports only the admin agent's Turn interrupted when its container closes, and re-spawns that kind on its next Turn", async () => {
+    const { host, supervisor, containerIo, kernelLink } = setUpTwoResidents();
+    const { principalId, entry, admin } = sideBySide();
+    await startTurnAndAccept(host, containerIo, entry, 'c1');
+    const adminAttachment = await startTurnAndAccept(host, containerIo, admin, 'c-admin');
+
+    adminAttachment?.emitClose(new Error('container exited'));
+    expect(kernelLink.runtimeEvents).toEqual([
+      expect.objectContaining({ type: 'turnEnded', turnId: admin.turnId, status: 'interrupted' }),
+    ]);
+
+    const next = startTurnCommand({
+      principalId,
+      workspaceId: admin.workspaceId,
+      chatId: admin.chatId,
+      agentKind: 'admin_agent',
+    });
+    await host.handleStartTurn(next);
+    expect(supervisor.spawnCalls.map((call) => call.agentKind)).toEqual([
+      undefined,
+      'admin_agent',
+      'admin_agent',
+    ]);
+    expect(containerIo.attachCalls).toEqual(['c1', 'c-admin', 'c-admin']);
+    expect(containerIo.attachmentsByContainerId.get('c-admin')?.written).toEqual([
+      switchCommand(next),
+    ]);
   });
 });

@@ -438,13 +438,15 @@ describe('AgentHostRuntime — startTurn with no agent-host connected', () => {
   });
 });
 
-// #937 R-2 (S11 AA4c-1): an admin agent's Chat is never handed to the entry agent. Until the admin
-// container exists (AA4c-2) its Turn fails at once — with an agent-host connected, it still sends
-// no startTurn to the entry container and issues no entry Handle.
+// #937 R-2 (S11 AA4c-1, carried into AA4c-2): an admin agent's Chat is never handed to the entry
+// agent. Since AA4c-2 its Turn runs in the admin container (`prepareAdminTurn`, proven on real
+// Postgres in agent-host-runtime-admin.integration.test.ts); here, with no admin state behind the
+// fake pool, it must still never take the entry path — no entry session or Handle, no frame
+// without its kind.
 describe('AgentHostRuntime — an admin agent Turn never reaches the entry container', () => {
-  it('ends failed, sends nothing on the link and touches no session or Handle', async () => {
+  it('issues no entry session or Handle and sends no entry-shaped frame', async () => {
     const { pool, handleCount, sessionCount } = createFakePool();
-    const { sink, events } = createFakeSink();
+    const { sink } = createFakeSink();
     const privateKey = await ephemeralPrivateKey();
     const runtime = new AgentHostRuntime({
       pool,
@@ -459,30 +461,20 @@ describe('AgentHostRuntime — an admin agent Turn never reaches the entry conta
     const input = startTurnInput({ agentKind: 'admin_agent', sessionId: randomUUID() });
     await runtime.startTurn(input);
 
-    expect(sent).toEqual([]);
-    expect(pool.connect).not.toHaveBeenCalled();
     expect(sessionCount()).toBe(0);
     expect(handleCount.get(input.principalId)).toBeUndefined();
-    expect(events).toEqual([
-      {
-        type: 'turnEnded',
-        status: 'failed',
-        workspaceId: input.workspaceId,
-        chatId: input.chatId,
-        turnId: input.turnId,
-        principalId: input.principalId,
-      },
-    ]);
+    for (const frame of sent) expect(frame).toMatchObject({ agentKind: 'admin_agent' });
 
     // The same person's entry Turn right after still goes to the entry container.
     const entry = startTurnInput({
       principalId: input.principalId,
       workspaceId: input.workspaceId,
     });
+    const before = sent.length;
     void runtime.startTurn(entry);
-    await vi.waitFor(() => expect(sent).toHaveLength(1));
-    expect(sent[0]).toMatchObject({ type: 'startTurn', turnId: entry.turnId });
-    expect(sent[0]).not.toHaveProperty('agentKind');
+    await vi.waitFor(() => expect(sent).toHaveLength(before + 1));
+    expect(sent[before]).toMatchObject({ type: 'startTurn', turnId: entry.turnId });
+    expect(sent[before]).not.toHaveProperty('agentKind');
     runtime.handleFrame({ type: 'turnAccepted', turnId: entry.turnId });
   });
 });

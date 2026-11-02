@@ -284,9 +284,12 @@ export interface RuntimeImageInventory {
   readonly runtimeContract?: string;
 }
 
-/** S7-E: one resident entry container, as worker-supervisor's `GET /residents` reports it —
- *  mirrors that package's own `ResidentInventoryEntry`. */
+/** S7-E: one resident container, as worker-supervisor's `GET /residents` reports it — mirrors
+ *  that package's own `ResidentInventoryEntry`. */
 export interface ResidentInventoryEntry {
+  /** S11 AA4c-2: whose — the person's entry agent, or (in a trial workspace) their admin agent's
+   *  container of its own. A worker-supervisor from before AA4c-2 sends none: entry. */
+  readonly agentKind?: 'entry' | 'admin_agent';
   readonly principalId: string;
   readonly workspaceId: string;
   readonly containerId: string;
@@ -401,8 +404,9 @@ export interface TaskSupervisorClientPort {
    * "停用用户 … 入口容器 stop"). Optional on the port so the existing test fakes (which model the
    * one-shot Task half only) keep compiling; callers treat a missing method as "nothing to stop".
    * `true` when a container was stopped, `false` when worker-supervisor knew of none (404).
+   * S11 AA4c-2: `agentKind: 'admin_agent'` stops the person's admin agent container instead.
    */
-  stopResident?(principalId: string): Promise<boolean>;
+  stopResident?(principalId: string, agentKind?: 'admin_agent'): Promise<boolean>;
   /**
    * S8 W5 (leftover 77): `POST /resident/reclaim {principalId}` — permanently reclaims one
    * principal's resident entry container (force-removed, not just stopped) and its
@@ -421,8 +425,8 @@ export interface TaskSupervisorClientPort {
    *  model the Task-mode half only); `application/platform/runtime.ts`'s handlers treat a missing
    *  implementation as "no images known", never a thrown error. */
   listImages?(): Promise<RuntimeImageInventory>;
-  /** S7-E: `GET /residents` — every resident entry container across every workspace. Same
-   *  optionality reasoning as `listImages` above. */
+  /** S7-E: `GET /residents` — every resident container across every workspace (S11 AA4c-2:
+   *  admin agents' too, `agentKind`). Same optionality reasoning as `listImages` above. */
   listResidents?(): Promise<ResidentInventoryEntry[]>;
   /** S11 GO14: `POST /task-dirs/keep` — the state of each goal step Task's handoff directory for
    *  a reader of that workspace and goal run, a `kept` one's directories renewed against the
@@ -546,7 +550,7 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
     return parsed.data.tasks;
   }
 
-  async stopResident(principalId: string): Promise<boolean> {
+  async stopResident(principalId: string, agentKind?: 'admin_agent'): Promise<boolean> {
     const { status } = await requestJson(
       this.fetchImpl,
       this.timeoutMs,
@@ -554,7 +558,11 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
       {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...this.headers() },
-        body: JSON.stringify({ principalId }),
+        // The entry agent's body is unchanged: a worker-supervisor from before AA4c-2 refuses the
+        // key (strict schema), and has no admin agent container to stop anyway.
+        body: JSON.stringify(
+          agentKind === undefined ? { principalId } : { principalId, agentKind },
+        ),
       },
     );
     if (status === 204 || status === 200) return true;

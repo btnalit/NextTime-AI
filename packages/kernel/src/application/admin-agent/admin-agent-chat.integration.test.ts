@@ -15,6 +15,11 @@ import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import type {
+  TaskSpawnOutcome,
+  TaskSupervisorClientPort,
+  TaskSupervisorStatus,
+} from '../../adapters/supervisor-client/index.js';
 import { HANDLE_SIGNING_ALG, HandleRevoked } from '../../governance/capability/index.js';
 import { entryTurnRefusedOnly } from '../../governance/llm-usage/index.js';
 import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
@@ -28,6 +33,7 @@ import type { ResolvedCaller } from '../gateway/resolve-caller.js';
 import { findAttributableTurnForSession } from '../host-bridge/index.js';
 import { type UserRow, createUser } from '../identity/index.js';
 import { resolveDefaultChat } from '../linkage/chat-targets.js';
+import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
 import { createWorkspaceWithOwner } from '../workspace/index.js';
 import {
   AdminAgentRefused,
@@ -54,8 +60,28 @@ import {
  *  - Only a person chooses the targets, for their own admin agent: the agent reads ids, and each of
  *    the two `security definer` reads answers for its own caller only (R-1).
  *  - Stopping revokes the sessions and their Handles in one platform transaction (one audit row),
- *    then stops the running Turns; the next message opens a new session.
+ *    then stops the running Turns; the next message opens a new session. S11 AA4c-2: and then its
+ *    container — as do a demotion (its container only) and disabling the person (every container).
  */
+
+/** worker-supervisor as far as stopping resident containers goes (S11 AA4c-2): records each
+ *  `stopResident` call as `<kind>:<principalId>`. */
+class StopRecordingSupervisorClient implements TaskSupervisorClientPort {
+  readonly stops: string[] = [];
+  async spawn(): Promise<TaskSpawnOutcome> {
+    throw new Error('StopRecordingSupervisorClient.spawn is not exercised by this test file');
+  }
+  async terminate(): Promise<boolean> {
+    throw new Error('StopRecordingSupervisorClient.terminate is not exercised by this test file');
+  }
+  async status(): Promise<TaskSupervisorStatus | undefined> {
+    throw new Error('StopRecordingSupervisorClient.status is not exercised by this test file');
+  }
+  async stopResident(principalId: string, agentKind?: 'admin_agent'): Promise<boolean> {
+    this.stops.push(`${agentKind ?? 'entry'}:${principalId}`);
+    return true;
+  }
+}
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -958,6 +984,59 @@ describe.runIf(DATABASE_URL !== undefined)(
         stoppedTurns: 0,
       });
       expect((await turnRow(trial, entryTurn))?.status).toBe('running');
+    });
+
+    it('S11 AA4c-2: the admin agent’s container stops after stop_admin_agent and a demotion; disabling the person stops every container of theirs', async () => {
+      const supervisor = new StopRecordingSupervisorClient();
+      configureTaskRuntime({ pool, privateKey, supervisorClient: supervisor });
+      try {
+        const someone = await newAdmin();
+        const trial = await newTrial();
+        const member = await addMember(trial.workspaceId, someone);
+        const chat = await newAdminChat(member);
+        await send(member, chat.id);
+
+        await call(platform(someone), 'stop_admin_agent', { trialWorkspaceId: trial.workspaceId });
+        expect(supervisor.stops).toEqual([`admin_agent:${member.principalId}`]);
+
+        // A demotion stops the admin agent's container only: the entry ones stay theirs.
+        supervisor.stops.length = 0;
+        await call(platform(admin), 'update_user', { userId: someone.id, platformRole: 'user' });
+        expect(supervisor.stops).toEqual([`admin_agent:${member.principalId}`]);
+        // Not a demotion, nothing to stop.
+        supervisor.stops.length = 0;
+        await call(platform(admin), 'update_user', { userId: someone.id, displayName: 'Renamed' });
+        expect(supervisor.stops).toEqual([]);
+
+        // Disabling the person stops both of their containers.
+        await call(platform(admin), 'set_user_status', { userId: someone.id, status: 'disabled' });
+        expect(supervisor.stops).toEqual([
+          `entry:${member.principalId}`,
+          `admin_agent:${member.principalId}`,
+        ]);
+      } finally {
+        resetTaskRuntimeForTests();
+      }
+    });
+
+    it('#941 review H03: disabling a trial workspace stops its members’ admin agent containers with their entry ones', async () => {
+      const supervisor = new StopRecordingSupervisorClient();
+      configureTaskRuntime({ pool, privateKey, supervisorClient: supervisor });
+      try {
+        const someone = await newAdmin();
+        const trial = await newTrial();
+        const member = await addMember(trial.workspaceId, someone);
+        await send(member, (await newAdminChat(member)).id);
+
+        await call(platform(admin), 'set_workspace_status', {
+          workspaceId: trial.workspaceId,
+          status: 'disabled',
+        });
+        expect(supervisor.stops).toContain(`entry:${member.principalId}`);
+        expect(supervisor.stops).toContain(`admin_agent:${member.principalId}`);
+      } finally {
+        resetTaskRuntimeForTests();
+      }
     });
   },
 );

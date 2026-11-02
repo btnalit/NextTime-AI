@@ -335,3 +335,76 @@ describe('SupervisorClient — x-correlation-id', () => {
     expect(seen[0]?.body).toEqual(input);
   });
 });
+
+// S11 AA4c-2: the admin agent's resident container is named by `agentKind`; the entry agent's by
+// nothing at all, so every request a supervisor from before AA4c-2 accepted is sent unchanged.
+describe('SupervisorClient — agentKind (S11 AA4c-2)', () => {
+  function recordingClient() {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({
+        url: String(url),
+        body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+      });
+      if (String(url).endsWith('/resident/spawn')) {
+        return jsonResponse(200, {
+          containerId: 'c-admin',
+          ip: '100.64.0.3',
+          status: 'running',
+          created: true,
+          restarts: 0,
+        });
+      }
+      return emptyResponse(String(url).includes('/resident/p-1?') ? 404 : 204);
+    });
+    const client = new SupervisorClient({
+      supervisorUrl: 'http://worker-supervisor:8081',
+      fetchImpl,
+    });
+    return { client, calls };
+  }
+
+  it('sends agentKind in the spawn and stop bodies and as the status and touch query', async () => {
+    const { client, calls } = recordingClient();
+
+    await client.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'p-1',
+      handle: 't',
+      agentKind: 'admin_agent',
+    });
+    await client.stop('p-1', 'admin_agent');
+    await client.status('p-1', 'admin_agent');
+    await client.touch('p-1', {}, 'admin_agent');
+
+    expect(calls).toEqual([
+      {
+        url: 'http://worker-supervisor:8081/resident/spawn',
+        body: { workspaceId: 'ws-1', principalId: 'p-1', handle: 't', agentKind: 'admin_agent' },
+      },
+      {
+        url: 'http://worker-supervisor:8081/resident/stop',
+        body: { principalId: 'p-1', agentKind: 'admin_agent' },
+      },
+      { url: 'http://worker-supervisor:8081/resident/p-1?agentKind=admin_agent', body: undefined },
+      {
+        url: 'http://worker-supervisor:8081/resident/p-1/touch?agentKind=admin_agent',
+        body: undefined,
+      },
+    ]);
+  });
+
+  it('sends no kind at all for the entry agent', async () => {
+    const { client, calls } = recordingClient();
+
+    await client.stop('p-1');
+    await client.status('p-1').catch(() => {});
+    await client.touch('p-1');
+
+    expect(calls).toEqual([
+      { url: 'http://worker-supervisor:8081/resident/stop', body: { principalId: 'p-1' } },
+      { url: 'http://worker-supervisor:8081/resident/p-1', body: undefined },
+      { url: 'http://worker-supervisor:8081/resident/p-1/touch', body: undefined },
+    ]);
+  });
+});

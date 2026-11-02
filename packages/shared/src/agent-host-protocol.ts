@@ -276,6 +276,11 @@ export const KernelStartTurnCommandSchema = z
      *  (`z.string().min(1).optional()`), which this frame's `image` ultimately becomes
      *  `/resident/spawn`'s own `image`. */
     image: z.string().min(1).optional(),
+    /** S11 AA4c-2 (the AA4c plan's D8): `admin_agent` — the Turn of the person's admin agent in a
+     *  trial workspace, run in a container of its own (`/resident/spawn`'s `agentKind`), never the
+     *  person's entry container. Absent: the entry agent's, as before; the kernel names the field
+     *  only for an admin agent's Turn, so an agent-host from before it refuses only those. */
+    agentKind: z.literal('admin_agent').optional(),
   })
   .strict();
 
@@ -287,6 +292,9 @@ export const KernelStopTurnCommandSchema = z
     type: z.literal('stopTurn'),
     turnId: z.string(),
     principalId: z.string(),
+    /** S11 AA4c-2: the stopped Turn's kind, as its `startTurn` named it — agent-host keeps one Turn
+     *  per person and agent kind. Absent: the entry agent's. */
+    agentKind: z.literal('admin_agent').optional(),
   })
   .strict();
 

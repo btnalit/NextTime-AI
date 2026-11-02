@@ -282,3 +282,45 @@ describe('hashSkillsInline', () => {
     expect(a).not.toBe(b);
   });
 });
+
+describe('buildSpawnSpec for an admin agent (S11 AA4c-2)', () => {
+  const entry = buildSpawnSpec({
+    config,
+    workspaceId: 'ws-1',
+    principalId: 'alice',
+    networkName: 'nexttime-ai_workers',
+    restarts: 0,
+    image: config.workerImage,
+  });
+  const admin = buildSpawnSpec({
+    config,
+    workspaceId: 'ws-1',
+    principalId: 'alice',
+    agentKind: 'admin_agent',
+    networkName: 'nexttime-ai_workers',
+    restarts: 0,
+    image: config.workerImage,
+  });
+
+  it('has its own name, role label and mode, apart from the same person’s entry container', () => {
+    expect(admin.name).toBe('nexttime-admin-alice');
+    expect(admin.labels['nexttime.role']).toBe('admin');
+    expect(admin.labels['nexttime.principal']).toBe('alice');
+    expect(admin.env).toContain('NEXTTIME_MODE=admin');
+    expect(admin.env).not.toContain('NEXTTIME_MODE=entry');
+  });
+
+  it('mounts its own directories, never the entry agent’s', () => {
+    expect(admin.binds).toEqual([
+      '/host/data/workspaces/.admin/alice:/workspace',
+      '/host/data/workspaces/.platform/admin-agents/alice:/opt/nexttime/platform:ro',
+      entry.binds[2],
+    ]);
+    for (const bind of entry.binds.slice(0, 2)) expect(admin.binds).not.toContain(bind);
+  });
+
+  it('carries the same env keys as the entry container — no more, no less', () => {
+    const keys = (spec: typeof admin) => spec.env.map((e) => e.split('=')[0]).sort();
+    expect(keys(admin)).toEqual(keys(entry));
+  });
+});

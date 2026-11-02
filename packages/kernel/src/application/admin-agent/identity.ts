@@ -206,6 +206,24 @@ export interface IssueAdminAgentHandleParams {
   readonly resources?: Readonly<Record<string, readonly string[]>>;
   readonly ttlSeconds: number;
   readonly privateKey: CryptoKey;
+  /** S11 AA4c-2: the session a Turn was recorded under when it started (`sendChatMessage`). The
+   *  Handle is issued under it only while it is still the person's live `admin_agent` session;
+   *  once it was revoked (`stop_admin_agent`, a demotion) the issue is refused
+   *  ({@link AdminAgentSessionEndedError}) rather than opening a new one under the old Turn — what
+   *  the agent then spent would be attributed to no Turn. Omitted: the live session, or a new one. */
+  readonly sessionId?: string;
+}
+
+/** {@link IssueAdminAgentHandleParams.sessionId} is no longer the person's live `admin_agent`
+ *  session: the agent was stopped (or its person demoted) after the Turn started. */
+export class AdminAgentSessionEndedError extends Error {
+  readonly code = 'admin_agent_session_ended' as const;
+  constructor(sessionId: string) {
+    super(
+      `admin agent session ${sessionId} has ended since this Turn started (stopped, or its person no longer an administrator)`,
+    );
+    this.name = 'AdminAgentSessionEndedError';
+  }
 }
 
 /**
@@ -213,7 +231,8 @@ export interface IssueAdminAgentHandleParams {
  * check (refusing with {@link AdminAgentRefused}), then the Principal's `admin_agent` session — the
  * newest one not revoked or expired, or a new one — and a Handle under it scoped to
  * `adminAgentScope` for the Principal's role here (issueHandle refuses anything wider for this
- * session kind). AA4's runtime calls it when an administrator starts the agent; nothing else does.
+ * session kind). The runtime (`AgentHostRuntime`, S11 AA4c-2) calls it when an admin agent's Turn
+ * starts, pinned to the session the Turn was recorded under; nothing else does.
  */
 export async function issueAdminAgentHandle(
   client: PoolClient,
@@ -229,13 +248,55 @@ export async function issueAdminAgentHandle(
     );
   }
   const facts = await assertAdminAgentAuthority(client, params.workspaceId, params.principalId);
-  const sessionId = await openAdminAgentSession(client, params.workspaceId, params.principalId);
+  const sessionId =
+    params.sessionId === undefined
+      ? await openAdminAgentSession(client, params.workspaceId, params.principalId)
+      : await requireLiveAdminAgentSession(
+          client,
+          params.workspaceId,
+          params.principalId,
+          params.sessionId,
+        );
   return issueHandle(client, {
     sessionId,
     scope: adminAgentScope(params.resources ?? {}, { role: facts.principalRole }),
     ttlSeconds: params.ttlSeconds,
     privateKey: params.privateKey,
   });
+}
+
+/** The Principal's newest usable `admin_agent` session, if any — the one
+ *  {@link openAdminAgentSession} would reuse. */
+async function readLiveAdminAgentSession(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+): Promise<string | undefined> {
+  const existing = await client.query<{ id: string }>(
+    `select id from sessions
+      where workspace_id = $1 and principal_id = $2 and on_behalf_of = $2 and kind = $3
+        and status <> 'revoked' and (expires_at is null or expires_at > now())
+      order by created_at desc, id desc
+      limit 1`,
+    [workspaceId, principalId, ADMIN_AGENT_SESSION_KIND],
+  );
+  return existing.rows[0]?.id;
+}
+
+/** `sessionId`, when it is the Principal's live `admin_agent` session; otherwise
+ *  {@link AdminAgentSessionEndedError}. The runtime (`AgentHostRuntime`) also calls it before it
+ *  reuses a cached Handle: a session can end without its Handles being revoked (the platform's
+ *  `set_membership_role` to the same role ends the person's sessions, revoking Handles only on a
+ *  role change), and a Turn queued under that session must not start on the cached one. */
+export async function requireLiveAdminAgentSession(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+  sessionId: string,
+): Promise<string> {
+  const live = await readLiveAdminAgentSession(client, workspaceId, principalId);
+  if (live !== sessionId) throw new AdminAgentSessionEndedError(sessionId);
+  return live;
 }
 
 /** The Principal's newest usable `admin_agent` session, or a new one, on `client` inside a
@@ -248,16 +309,8 @@ export async function openAdminAgentSession(
   workspaceId: string,
   principalId: string,
 ): Promise<string> {
-  const existing = await client.query<{ id: string }>(
-    `select id from sessions
-      where workspace_id = $1 and principal_id = $2 and on_behalf_of = $2 and kind = $3
-        and status <> 'revoked' and (expires_at is null or expires_at > now())
-      order by created_at desc, id desc
-      limit 1`,
-    [workspaceId, principalId, ADMIN_AGENT_SESSION_KIND],
-  );
-  const found = existing.rows[0];
-  if (found) return found.id;
+  const found = await readLiveAdminAgentSession(client, workspaceId, principalId);
+  if (found !== undefined) return found;
   const inserted = await client.query<{ id: string }>(
     `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
      values ($1, $2, $3, $2, 'active')

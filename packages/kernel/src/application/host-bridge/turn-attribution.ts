@@ -56,14 +56,23 @@ export interface FindAttributableTurnInput {
    * running at once in a trial workspace; what each does is never attributed to the other's.
    */
   readonly adminSessionId?: string;
+  /**
+   * S11 AA4c-2: the admin agent's Turns under any of its sessions here — for what names the person's
+   * admin agent but not its session: its container's egress (`admin:<workspaceId>:<principalId>`,
+   * worker-supervisor `resident-kind.ts`). A person has one live admin session per trial workspace,
+   * so this is its Turns, or a just-ended one's. Ignored when `adminSessionId` is set.
+   */
+  readonly agentKind?: 'admin_agent';
 }
 
-/** The `activities` predicate {@link FindAttributableTurnInput.adminSessionId} adds, on the
- *  query parameter `param` (the admin session's id, or null for the entry agent's Turns). */
-function turnOfAgentSql(param: string): string {
-  return `(case when ${param}::text is null
+/** The `activities` predicate {@link FindAttributableTurnInput.adminSessionId} and
+ *  {@link FindAttributableTurnInput.agentKind} add, on the query parameters `kindParam` (whether
+ *  the admin agent's Turns are meant) and `sessionParam` (its session's id, or null for any). */
+function turnOfAgentSql(kindParam: string, sessionParam: string): string {
+  return `(case when not ${kindParam}::boolean
         then coalesce(metadata ->> 'sessionKind', '') <> 'admin_agent'
-        else metadata ->> 'sessionKind' = 'admin_agent' and metadata ->> 'sessionId' = ${param}::text
+        else metadata ->> 'sessionKind' = 'admin_agent'
+          and (${sessionParam}::text is null or metadata ->> 'sessionId' = ${sessionParam}::text)
       end)`;
 }
 
@@ -86,14 +95,15 @@ export async function findAttributableTurn(
     recentTurnWindowMinutes = DEFAULT_RECENT_TURN_WINDOW_MINUTES,
   } = input;
   const adminSessionId = input.adminSessionId ?? null;
+  const admin = adminSessionId !== null || input.agentKind === 'admin_agent';
 
   const running = await client.query<{ id: string }>(
     `select id from activities
      where workspace_id = $1 and started_by = $2 and kind = 'agent_turn' and status = 'running'
-       and ${turnOfAgentSql('$3')}
+       and ${turnOfAgentSql('$3', '$4')}
      order by created_at desc, id desc
      limit 1`,
-    [workspaceId, principalId, adminSessionId],
+    [workspaceId, principalId, admin, adminSessionId],
   );
   const runningId = running.rows[0]?.id;
   if (runningId) return { id: runningId, wasRunning: true };
@@ -102,10 +112,10 @@ export async function findAttributableTurn(
     `select id from activities
      where workspace_id = $1 and started_by = $2 and kind = 'agent_turn'
        and created_at > $3::timestamptz - ($4 || ' minutes')::interval
-       and ${turnOfAgentSql('$5')}
+       and ${turnOfAgentSql('$5', '$6')}
      order by created_at desc, id desc
      limit 1`,
-    [workspaceId, principalId, at.toISOString(), recentTurnWindowMinutes, adminSessionId],
+    [workspaceId, principalId, at.toISOString(), recentTurnWindowMinutes, admin, adminSessionId],
   );
   const recentId = recent.rows[0]?.id;
   return recentId ? { id: recentId, wasRunning: false } : undefined;
