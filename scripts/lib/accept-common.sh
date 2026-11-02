@@ -95,9 +95,17 @@ require_driver() {
 # (first argument of every token-taking subcommand) becomes NT_ACCEPT_TOKEN, cap/mcp params become
 # NT_ACCEPT_PARAMS, `-e NAME` (no value) copies each into the container, and the driver receives
 # `env:NAME` in their place (driver.mjs resolveArg). The subshell body keeps the exports from
-# outliving the call.
+# outliving the call. `login <login> <password>` (S11 AA4d) moves the password the same way, and
+# a console credential (`console:<workspaceId>:<session>`, driver.mjs header) is a token like any
+# other.
 run_driver() (
   case "$1" in
+    login)
+      [ "$#" -ge 3 ] || { echo "run_driver: login needs <login> <password>" >&2; exit 2; }
+      NT_ACCEPT_TOKEN=$3
+      export NT_ACCEPT_TOKEN
+      set -- login "$2" env:NT_ACCEPT_TOKEN
+      ;;
     cap | mcp)
       [ "$#" -ge 4 ] || { echo "run_driver: $1 needs <token> <name> <paramsJson>" >&2; exit 2; }
       driver_cmd=$1
@@ -108,7 +116,7 @@ run_driver() (
       shift 4
       set -- "$driver_cmd" env:NT_ACCEPT_TOKEN "$driver_name" env:NT_ACCEPT_PARAMS "$@"
       ;;
-    send-and-wait | send-only | isolation-check | get-history | wait-task | explorer)
+    send-and-wait | send-only | isolation-check | get-history | wait-task | explorer | logout)
       [ "$#" -ge 2 ] || { echo "run_driver: $1 needs <token>" >&2; exit 2; }
       driver_cmd=$1
       NT_ACCEPT_TOKEN=$2

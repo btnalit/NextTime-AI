@@ -98,6 +98,21 @@ API 不可用，正在跑的入口 agent 会断线重连，每个 Task 容器短
   `ACCEPT_DISRUPTIVE=1 sh scripts/accept_s2.sh`（整套 S2，约 35–45 分钟，期间按上面说的中断两次），结果照常记
   `docs/private/`。没有当场同意就不跑；这两项每次 staging 预演都跑。
 
+**管理员智能体场景（S11 AA4d，`scripts/lib/accept-s2-admin-agent.sh`）只在内核开着管理员智能体时跑。** 第 9 步之后、
+目标场景之前，脚本用 bootstrap CLI 建一个本次专用的平台管理员（`accept-s2-admin-<nonce>`，随机密码经 stdin 传入、
+不打印，控制台登录拿到会话后就丢掉），登录控制台，建一个试验工作区和一个常规目标工作区，在平台面上选好目标，然后在试验
+工作区里开一个管理员对话：真实的 pi 跑在 worker-supervisor 为这一轮起的管理员容器里，fake-llm 让它依次调
+`agent_list_proposal_targets`、`platform_state_connectors`、`propose_admin_proposal`，提一份管理员提案（目标工作区
+一段 Skill、平台一段门主机实例）。提案从不应用，清理时撤回。开关是主机内核环境里的 `ADMIN_AGENT_ENABLED`
+（`secrets/kernel.env`），脚本只读运行中内核的值，从不打开它：
+
+- **staging 预演打开并要求**：`scripts/staging-rehearsal.sh` 在一次性的 `secrets/kernel.env` 里追加
+  `ADMIN_AGENT_ENABLED=1`（只在目标版本带这个场景时），并 `export ACCEPT_REQUIRE_ADMIN_AGENT=1`：内核没开时是
+  `FAIL admin-agent-switch`，不是跳过。所以每次预演都用真 pi 跑一遍管理员智能体（AA5 的前置）。
+- **生产主机默认关闭**：主机没开开关时什么也不建，日志里只有一行
+  `NOTE admin-agent the admin agent scenario (real pi in its admin container proposing once) not run: the kernel reads ADMIN_AGENT_ENABLED='unset' …`
+  （`apply-release.sh` 的 S2 摘要也打印这一行），最后照样是 `S2 OK`。开关由维护者在主机上决定，验收不替他打开。
+
 不要在别人正用这台主机上的栈时跑 fake 路径（`ACCEPT_DISRUPTIVE=1` 时尤其如此）。`--real` 不跑这些场景，并且在发布 http 门的清单之前把夹具测试账本的
 两个草稿（`ledger.get` / `ledger.add`）丢弃，发布后用 `real-ledger-withheld` 证明门上已发布的只有
 `stock.get`：真实模型的工具列表和加账本之前一样，`api_observe` 不会多一个 GET 可选。
@@ -204,6 +219,12 @@ PASS step9-goal-confirm alice confirmed goal <uuid> (one StepRun); confirming ag
 PASS step9-goal-achieved goal <uuid> completed(achieved, verified_by_check): the step succeeded, the platform's own observation of stock.get passed
 PASS step9-goal-one-task one Task for the goal's one step
 PASS step9-goal-milestones chat <uuid> shows the goal's milestones (proposed, confirmed, checking, completed: achieved) and its step's Task under 'report'; the next turn gets the three after the proposal, not the Task
+PASS admin-agent-administrator platform administrator <uuid> (accept-s2-admin-<nonce>) signed in to the console; the platform has the admin agent on
+PASS admin-agent-workspaces trial workspace <uuid> (admin_trial) and target <uuid>; the admin agent may start in the trial workspace and propose to the target
+PASS admin-agent-tools the admin container offered the admin agent's tools and none of the entry agent's
+PASS admin-agent-proposed the admin agent (Chat <uuid>) proposed <uuid> to its one target; it read the gate-host instance back without its address
+PASS admin-agent-proposal proposal <uuid>: made by the agent, a segment for the chosen target and a platform segment, nothing decided
+PASS admin-agent-audit one propose_admin_proposal audit row in the trial workspace: the administrator's Principal, as its admin agent, under the open session
 PASS goals-planner-model alice's AgentProfile model set to fake/fake-echo, the model her goal planner runs on (S6, S13)
 PASS s6-verifying goal <uuid>: its step reported success, the platform is checking the stock API for a symbol it never shows
 PASS s4u-approved alice approved the write <uuid> under lose-s4u-<hex>; it ran and its answer was lost: failed(outcome_unknown), never run again by the gate
@@ -289,7 +310,8 @@ S2 OK
 
 上面是 `ACCEPT_DISRUPTIVE=1` 时的输出。不设它时没有 `s12-*` 和 `s2-*` 这 11 行，`s4u-cancelled` 之后是一行
 `NOTE goal-disruptive S12 (row lock on a goal) and S2 (kernel killed twice, worker-supervisor restarted) not run: ACCEPT_DISRUPTIVE=unset, not 1 — …`，
-其余不变，最后仍是 `S2 OK`。
+其余不变，最后仍是 `S2 OK`。`admin-agent-*` 这 6 行是内核开着 `ADMIN_AGENT_ENABLED` 时的输出（staging 预演）；
+没开时（主机默认）换成一行 `NOTE admin-agent … not run: the kernel reads ADMIN_AGENT_ENABLED='unset' …`，其余不变。
 
 **在 `packages/platform-extension` 的 entry-mode 工具注册修复落地之前**，对着当前 `main` 跑这个脚本，
 预期在 `ops-runner-publish` 之后很快看到：
@@ -321,6 +343,7 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
 | `connect-mcp-target-refused` | R-27（2026-10-02 评审）：owner 提供的 `manifestSource` 指向平台服务（`http://worker-supervisor:8081/task/<id>/terminate`）→ 内核出站目标判定在任何抓取前拒绝，400 `connection_target_refused` | 同一个 `create_connection`，换一个指向 worker-supervisor 的 `manifestSource`；不带 `connectionRequestId`，不消耗随后那张连接请求卡 |
 | `connect-mcp-*` | S3.12 自己的验收句——"通过 UI 接入一个 fixture MCP server ... publish 后 find_operations 命中其工具"（本脚本覆盖 capability 层这一半，不覆盖对话内 `<gate>.<op>` 工具出现这一半——那是 S3.13 入口 `session_start` 投影的范围，见 `docs/runbooks/web-console.md`） | 同一条 `request_connection → create_connection → publish_manifest` 路径，`kind:'mcp'`；`create_connection` 的 `manifestSource` 指向 `accept-s2-mcp` 自己的 JSON-RPC 端点，导入两个工具（`accept_s2_mcp_echo` 观察类、`accept_s2_mcp_note` 执行类）；`find_operations('accept_s2_mcp')` 发布前 0 命中、发布后 2 命中，与 `s213-find-operations-*` 同一条 I16/I17 不变量 |
 | `step9-*` | S11 GO5e-1：前后依赖、要在对话之外跑完的一串委派步骤，在对话里发起成目标（`docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md`） | 真实 chat 驱动链路：`entryGoalChatScenario`（fake-llm）驱动入口 agent 依次调 `find_workers` → `find_operations('stock')` → `propose_goal`（一步跑在 ops-runner 上；验收是平台自己对 http 门 `stock.get` 的观察 `observe_predicate`，`symbol` 等于 `NXT`；带 `idempotencyKey`），再自己试一次 `confirm_goal`。`agent-cannot-confirm`：回复里 `CONFIRM_GOAL=unavailable`，且 `get_goal` 读到的仍是 `proposed`、未确认、来源 Turn 就是这一轮——入口模式不注册 `confirm_goal`，内核对任何 Handle 也拒绝它（仅人通道）；`idempotent`：同一对话再问一次，回同一个目标、`changed=false`，`list_goals` 里这次请求只有一个目标；`confirm`：alice 以人通道确认（一个 StepRun），再确认一次 `changed=false`；`achieved`：轮询 `get_goal` 至 `completed / achieved / verified_by_check`，唯一一步成功、首次尝试，`stock-visible` 检查 `passed` 且有 Observation——Worker 不写任何 Fact，验收不靠它的话；`one-task`：`tasks` 里这个目标恰好一行；`milestones`（S11 GO5e-2）：发起目标的那个对话里依次出现 `propose`、`confirm`、`verify`、`complete` 四条 `system.goal_update` 状态行，最后一条带 `completed / achieved / verified_by_check`；那一步的 Task 在同一个对话里报告，带 `stepKey`=`report`；除发起那条之外的三条在这个对话下一轮的上下文里等着，那一步的 Task 不进上下文 |
+| `admin-agent-*` | S11 AA4d（AA4 方案 F9 的预演一半）：平台管理员的管理员智能体在真实运行时里提一份管理员提案；只在内核开着 `ADMIN_AGENT_ENABLED` 时跑（见 §2） | `administrator`：bootstrap CLI 建的本次专用平台管理员登录控制台（驱动的 console 凭据 `console:<workspaceId\|->:<cookie>`，经环境变量传，R-34），`get_admin_agent_status` 读到平台已开。`workspaces`：`create_workspace` 建试验（`purpose: admin_trial`）和常规目标两个工作区，`set_admin_agent_targets` 选目标，试验工作区没有拒绝原因。`tools`：新的管理员对话（`new_chat {agentKind:'admin_agent'}`）这一轮在管理员容器里跑完、`completed`，fake-llm 看 pi 交给模型的工具列表：有管理员智能体的工具，没有入口 agent 的（`ADMIN_TOOLS=ok`）。`proposed`：三次调用依次是 `agent_list_proposal_targets`、`platform_state_connectors`、`propose_admin_proposal`，都没出错；每次都带着容器里的管理员 Handle 到内核，内核每次复查这个人仍是平台管理员、试验工作区仍启用、开关仍开；提案 `proposed`、一个目标，智能体读回的门主机实例不带地址（`addressWithheld`）。`proposal`：管理员在平台面读到的提案是智能体提的（`origin = agent`）、目标工作区一段、平台一段（一个 `gate_instance`）、都未决定。`audit`：试验工作区里这份提案的 `propose_admin_proposal` 审计只有一行，操作者是管理员在试验工作区的 Principal，`sessionKind = admin_agent`，会话就是 `get_admin_agent_status` 显示开着的那个。拒绝路径（开关关、会话已结束、不再是管理员、没选目标、入口对话的一轮）由内核集成测试覆盖（`fake-admin-propose.integration.test.ts` 和管理员智能体、gateway 的测试），这里只在真容器里跑一遍正路 |
 | `goals-planner-model` / `goals-planner-model-reset` | S6、S13 的前置：目标规划器跑在请求人的模型上 | 目标场景开始前把 alice 的 AgentProfile 模型设成 fake 模型（`--real` 不跑目标场景）——规划器自己不定模型、跑请求人的模型，accept_s2 只给入口定义和各 Worker 钉了同一个模型，不设的话规划器会跑在栈的默认提供方上（主机上是真实模型）。S6 的规划轮要等它的验收检查重试完才开，所以设一次、到 S6 和 S4 反向都收尾后再设回 `null`（S2 之前）；中途失败时 `cleanup_step` 也会设回 |
 | `s1-*` | S11 §7.2 S1：用户发起目标（a、b 并行，c 依赖 a、b）并确认后不再发消息（GO7a，`scripts/lib/accept-s2-goals.sh`） | 新对话里发「发起三步验收目标 GOAL_NONCE=…」，`entryGoalDagChatScenario`（fake-llm）驱动入口 agent `find_workers` → `find_operations('stock')` → `propose_goal`（三步都跑 ops-runner 的 `goal_step` 剧本，c 的 `dependsOn` 是 a、b；验收同第 9 步）。`proposed`：计划读出来 a、b 无依赖、c 依赖两者；`confirmed`：alice 在对话外以人通道确认，一次建出三个 StepRun；`achieved`：轮询至多 360s 到 `completed / achieved / verified_by_check`，三步各成功一次、各一个 Task；`order`：c 的尝试建于 a、b 都结束之后（a、b 是否真的重叠取决于请求者的并发配额，只报告不判定）；`no-new-turn`：从确认到结束，整个 workspace 没有新的 `agent_turn` Activity；`milestones`：发起对话里依次是 `propose`、`confirm`、`verify`、`complete`，a、b、c 各一条完成的 Task 状态行 |
 | `s11-*` | S11 §7.2 S11：一步的执行动作被拒绝 → 步骤与目标进入需要决定，不自动重试同一动作 | alice 以人通道提一步目标（ops-runner 的 `goal_ledger` 剧本：经 http 门调 `ledger.add` 往夹具账本写一条，`await_decision: true`；`maxAttempts` 2，留一次尝试不用），确认；等这条写入 `pending_approval` 后 alice `reject`。`needs-decision`：目标 `paused(needs_decision)`，步骤 `failed / action_refused`、一次尝试、那条写入 `rejected`；`no-retry`：15s 后状态不变、仍一次尝试一个 Task，夹具账本在这个键下计数 0（门侧根本没执行）；`cancelled`：alice `cancel_goal` 收尾 |
@@ -487,6 +510,12 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
 120s），S12、S2 还持有的行锁用 `pg_terminate_backend` 结束（只结束 `application_name` 为 `accept_s2_lock_<名字>`
 的那个会话），fake-llm 还扣着的回答放行——这些都不是要留着排障的夹具，留着只会让内核不可用、让别的推进卡在锁上；
 只打日志（`cleanup: …`），不判失败。行锁即使脚本被直接杀掉、这一步没跑，也会在各自的上限（S12 90s、S2 180s）后自己提交结束。
+
+管理员智能体场景的收尾（`admin_agent_cleanup`）也不看 `--keep`：会话和管理员账号不是排障用的夹具。只打日志、不判失败：
+撤回智能体的提案（`withdraw_admin_proposal`，从未应用）、停止管理员智能体（`stop_admin_agent`：会话和 Handle 吊销）、
+经 `/resident/reclaim` 回收它的容器、把试验和目标两个工作区设为停用（行保留，审计只增不减）、把本次的管理员降为普通用户，
+再登出控制台。内核拒绝降级时（它是平台上最后一个启用的管理员，比如一台新的 staging 主机）只记一行
+`cleanup: administrator <uuid> not demoted …`：剩下的是一个谁也登录不了的管理员，它的密码只在那次 shell 里存在过。
 
 `--keep` 不传时，`cleanup_step` 接着会：先收尾第 9 步与目标场景确认过、却没看到结束的目标（轮询超时、断言失败）——
 否则它在脚本退出后还会继续：推进器在恢复生产 provider 之后重试那一步，平台验收对已删的门重试，

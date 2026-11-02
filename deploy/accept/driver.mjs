@@ -56,6 +56,13 @@
 //     GET <path> with `x-api-key` (the Explorer API key). Prints HTTP_STATUS= and BODY=.
 //   mcp <token> <method> <paramsJson> [extractExpr]
 //     One MCP JSON-RPC request to POST /mcp. Prints HTTP_STATUS=, BODY= and the extraction.
+//   login <login> <password>
+//     (S11 AA4d) POST /api/auth/login as a person signs in to the console. Prints HTTP_STATUS= and
+//     SESSION=<the console session cookie, `name=value`> (empty unless 200) — a credential, held by
+//     the caller like an API key: pass it back inside a console credential (below), print it only
+//     redacted, end it with `logout`.
+//   logout <consoleCredential>
+//     POST /api/auth/logout with that session (its user_sessions row is revoked). Prints HTTP_STATUS=.
 //   gate-health <gateUrl> [tokenFile]
 //     GET <gateUrl>/gate/health with the kernel container's own /run/secrets/gate_token as
 //     Bearer (every gate route needs it since the gate-protocol hardening). Prints OK=true|false.
@@ -65,6 +72,15 @@
 //     (W7) Tool-call outcomes of one Worker run, read from its pi session JSONL (mounted
 //     read-only by the caller; no kernel call). Prints ASSISTANT_MESSAGES=, MODEL= and the same
 //     TOOL_* fields as send-and-wait. See cmdTranscriptStats for the pinned pi entry shape.
+//
+// Console credential (S11 AA4d): wherever a subcommand takes a <token>, it may instead be
+// `console:<workspaceId>:<session>` — a console session from `login` (`<session>` is the cookie
+// pair it printed) acting in <workspaceId>, or in no workspace with `-` (a platform capability).
+// HTTP calls then carry the session cookie, the workspace selector (header and cookie) and the
+// CSRF header the console sends; `/ws` gets the cookie on the upgrade and authenticates with
+// `{workspaceId}`, as the console does. A person's membership is never issued an API key, so this
+// is how the driver acts as a platform administrator (the admin agent's Chats are a person's).
+// In send-and-wait, a <chatId> of `new:admin_agent` starts the Turn in a new admin agent Chat.
 //
 // Secrets (R-34): any argument may be given as `env:<NAME>` (upper-case name), meaning "the value
 // of <NAME> in my environment". accept-common.sh's run_driver passes tokens and capability params
@@ -87,9 +103,10 @@ const WS_URL = process.env.WS_URL || 'ws://kernel:8080/ws';
 const GATE_TOKEN_FILE = process.env.GATE_TOKEN_FILE || '/run/secrets/gate_token';
 const RPC_TIMEOUT_MS = Number(process.env.RPC_TIMEOUT_MS || 30000);
 
-function connect(url) {
+function connect(url, headers) {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url);
+    // Node's WebSocket (undici) takes upgrade headers; only a console credential sends any.
+    const ws = headers ? new WebSocket(url, { headers }) : new WebSocket(url);
     ws.addEventListener('open', () => resolve(ws));
     ws.addEventListener('error', () => reject(new Error(`ws connect failed: ${url}`)));
   });
@@ -101,6 +118,55 @@ function idCounter() {
     n += 1;
     return n;
   };
+}
+
+const CONSOLE_CREDENTIAL = 'console:';
+const CSRF_HEADER_VALUE = 'nexttime';
+const WORKSPACE_COOKIE = 'nexttime_workspace';
+
+/** `console:<workspaceId|->:<session>` → `{workspaceId, cookie}`; `undefined` for any other token
+ *  (an API key or a Handle). See the header comment. */
+function consoleCredential(token) {
+  if (typeof token !== 'string' || !token.startsWith(CONSOLE_CREDENTIAL)) return undefined;
+  const rest = token.slice(CONSOLE_CREDENTIAL.length);
+  const sep = rest.indexOf(':');
+  if (sep < 0 || sep === rest.length - 1) {
+    throw new Error('console credential: expected console:<workspaceId|->:<session cookie>');
+  }
+  const workspaceId = rest.slice(0, sep);
+  return {
+    workspaceId: workspaceId === '-' ? undefined : workspaceId,
+    cookie: rest.slice(sep + 1),
+  };
+}
+
+/** The headers one HTTP capability call authenticates with: `Authorization: Bearer` for a key or
+ *  a Handle; the session cookie, workspace selector and CSRF header for a console credential. */
+function authHeaders(token) {
+  const consoleAuth = consoleCredential(token);
+  if (!consoleAuth) return token ? { authorization: `Bearer ${token}` } : {};
+  const { workspaceId, cookie } = consoleAuth;
+  return {
+    cookie: workspaceId ? `${cookie}; ${WORKSPACE_COOKIE}=${workspaceId}` : cookie,
+    'x-requested-with': CSRF_HEADER_VALUE,
+    ...(workspaceId ? { 'x-workspace-id': workspaceId } : {}),
+  };
+}
+
+/** Opens `/ws` and authenticates it as `token` (§9.4 first-frame `authenticate`): `{token}` for an
+ *  API key; for a console credential the cookie rides on the upgrade and the frame names the
+ *  workspace. */
+async function openChatSocket(token) {
+  const consoleAuth = consoleCredential(token);
+  const ws = await connect(WS_URL, consoleAuth ? { cookie: consoleAuth.cookie } : undefined);
+  const nextId = idCounter();
+  await call(
+    ws,
+    nextId(),
+    'authenticate',
+    consoleAuth ? { workspaceId: consoleAuth.workspaceId } : { token },
+  );
+  return { ws, nextId };
 }
 
 /** One JSON-RPC request/response pair over an already-open socket (§9.4). Ignores push
@@ -184,10 +250,7 @@ async function cmdCap(args) {
   const [token, capabilityName, paramsJson, extractExpr] = args;
   const res = await fetch(`${KERNEL_HTTP}/api/cap/${capabilityName}`, {
     method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-    },
+    headers: { 'content-type': 'application/json', ...authHeaders(token) },
     body: paramsJson && paramsJson.length > 0 ? paramsJson : '{}',
   });
   const text = await res.text();
@@ -195,6 +258,9 @@ async function cmdCap(args) {
   console.log(`BODY=${text}`);
   printExtraction(parseJsonOrUndefined(text), extractExpr);
 }
+
+/** send-and-wait's <chatId> that starts a new admin agent Chat (S11 AA4d). */
+const NEW_ADMIN_AGENT_CHAT = 'new:admin_agent';
 
 async function cmdSendAndWait(args) {
   const [token, chatIdArg, text, timeoutMsArg, mode] = args;
@@ -225,13 +291,16 @@ async function cmdSendAndWait(args) {
       if (item && typeof item.id === 'string') await approveIfMatching(item.id, item.gatekeeperId);
     }
   };
-  const ws = await connect(WS_URL);
-  const nextId = idCounter();
-  await call(ws, nextId(), 'authenticate', { token });
+  const { ws, nextId } = await openChatSocket(token);
 
   let chatId = chatIdArg;
-  if (!chatId) {
-    const chat = await call(ws, nextId(), 'new_chat', {});
+  if (!chatId || chatId === NEW_ADMIN_AGENT_CHAT) {
+    const chat = await call(
+      ws,
+      nextId(),
+      'new_chat',
+      chatId === NEW_ADMIN_AGENT_CHAT ? { agentKind: 'admin_agent' } : {},
+    );
     chatId = chat.id;
   }
 
@@ -322,10 +391,7 @@ async function cmdSendAndWait(args) {
 async function capCall(token, capabilityName, params) {
   const res = await fetch(`${KERNEL_HTTP}/api/cap/${capabilityName}`, {
     method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-    },
+    headers: { 'content-type': 'application/json', ...authHeaders(token) },
     body: JSON.stringify(params ?? {}),
   });
   return { status: res.status, body: parseJsonOrUndefined(await res.text()) };
@@ -464,9 +530,7 @@ async function cmdTranscriptStats(args) {
 
 async function cmdSendOnly(args) {
   const [token, chatId, text] = args;
-  const ws = await connect(WS_URL);
-  const nextId = idCounter();
-  await call(ws, nextId(), 'authenticate', { token });
+  const { ws, nextId } = await openChatSocket(token);
   const sendResult = await call(ws, nextId(), 'send_chat_message', { chatId, text });
   print({ CHAT_ID: chatId, TURN_ID: sendResult.turnId });
   ws.close();
@@ -474,9 +538,7 @@ async function cmdSendOnly(args) {
 
 async function cmdIsolationCheck(args) {
   const [token, otherChatId] = args;
-  const ws = await connect(WS_URL);
-  const nextId = idCounter();
-  await call(ws, nextId(), 'authenticate', { token });
+  const { ws, nextId } = await openChatSocket(token);
 
   let historyErrorCode = 'none';
   try {
@@ -495,13 +557,43 @@ async function cmdIsolationCheck(args) {
 
 async function cmdGetHistory(args) {
   const [token, chatId, extractExpr] = args;
-  const ws = await connect(WS_URL);
-  const nextId = idCounter();
-  await call(ws, nextId(), 'authenticate', { token });
+  const { ws, nextId } = await openChatSocket(token);
   const history = await call(ws, nextId(), 'get_chat_history', { chatId });
   console.log(`RESULT=${JSON.stringify(history.items)}`);
   printExtraction(history.items, extractExpr);
   ws.close();
+}
+
+/** The console session cookie's name (kernel application/identity/console-session.ts). */
+const CONSOLE_SESSION_COOKIE = 'nexttime_console_session';
+
+async function cmdLogin(args) {
+  const [login, password] = args;
+  if (!login || !password) throw new Error('login: needs <login> <password>');
+  const res = await fetch(`${KERNEL_HTTP}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-requested-with': CSRF_HEADER_VALUE },
+    body: JSON.stringify({ login, password }),
+  });
+  await res.text();
+  const cookies = typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [];
+  const pair = cookies
+    .map((c) => c.split(';')[0].trim())
+    .find((c) => c.startsWith(`${CONSOLE_SESSION_COOKIE}=`));
+  console.log(`HTTP_STATUS=${res.status}`);
+  console.log(`SESSION=${res.status === 200 && pair ? pair : ''}`);
+}
+
+async function cmdLogout(args) {
+  const [token] = args;
+  if (!consoleCredential(token)) throw new Error('logout: needs a console credential');
+  const res = await fetch(`${KERNEL_HTTP}/api/auth/logout`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...authHeaders(token) },
+    body: '{}',
+  });
+  await res.text();
+  console.log(`HTTP_STATUS=${res.status}`);
 }
 
 async function cmdExplorer(args) {
@@ -557,6 +649,8 @@ const COMMANDS = {
   'gate-health': cmdGateHealth,
   'transcript-stats': cmdTranscriptStats,
   'wait-task': cmdWaitTask,
+  login: cmdLogin,
+  logout: cmdLogout,
 };
 
 /** R-34 (2026-10-02 review): an argument `env:<NAME>` stands for the value of <NAME> in the

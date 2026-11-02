@@ -28,6 +28,11 @@
 # out with one NOTE line. scripts/staging-rehearsal.sh sets it; on the production host only in the
 # window, once victor has agreed on the spot (docs/runbooks/host-accept-s2.md §2).
 #
+# The admin agent scenario (S11 AA4d, scripts/lib/accept-s2-admin-agent.sh) runs on the fake path
+# only while the kernel has ADMIN_AGENT_ENABLED on (secrets/kernel.env; this script never sets it);
+# otherwise one NOTE line. ACCEPT_REQUIRE_ADMIN_AGENT=1 makes the switch being off a FAIL —
+# scripts/staging-rehearsal.sh sets both.
+#
 # --keep skips removing the accept-s2 fixture containers (leaves the fixtures/gates/workspace up
 # for inspection). --keep does not skip the fake-provider restore below — the EXIT trap always
 # runs.
@@ -134,6 +139,10 @@ fi
 # service S12, S8 and S2 may leave, and with --real keeping their test ledger out of the published
 # manifest — see that file's own header comment.
 . "$(dirname "$0")/lib/accept-s2-goals.sh"
+# S11 AA4d: a platform administrator's admin agent, real pi in its admin container, proposes once
+# (admin_agent_step, after step 9; only while the kernel has ADMIN_AGENT_ENABLED on) and its
+# cleanup (admin_agent_cleanup) — see that file's own header comment.
+. "$(dirname "$0")/lib/accept-s2-admin-agent.sh"
 # --real only: a goal proposed from chat (#829), evaluation trials (#822) and one draft evaluation
 # (#833) under the real model — see that file's own header comment.
 . "$(dirname "$0")/lib/accept-s2-real-goal-eval.sh"
@@ -1430,6 +1439,9 @@ cleanup_step() {
   # AgentProfile still naming the fake model S13 set (goal_cleanup_planner_model).
   goal_cleanup_live_work
   goal_cleanup_planner_model
+  # The admin agent scenario's administrator, session and workspaces, --keep or not: a console
+  # session and a platform administrator are not fixtures (admin_agent_cleanup).
+  admin_agent_cleanup
   if [ "$KEEP" -eq 1 ]; then
     echo "cleanup: --keep set, leaving accept-s2 fixtures/gates/workspace up"
     return
@@ -2043,6 +2055,7 @@ else
   step7_facts_inferred
   step8_mcp_connect
   step9_goal_from_chat
+  admin_agent_step
   goal_scenarios_step
   cleanup_step
 fi

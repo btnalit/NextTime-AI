@@ -30,8 +30,23 @@ interface RecordedCapRequest {
   method: string;
   path: string;
   authorization?: string;
+  cookie?: string;
+  csrf?: string;
+  workspaceHeader?: string;
   body: unknown;
 }
+
+/** S11 AA4d: what the fake kernel saw of a console login / logout. */
+interface RecordedAuthRequest {
+  path: string;
+  csrf?: string;
+  cookie?: string;
+  body: unknown;
+}
+
+/** A console session cookie the fake kernel issues for {@link GOOD_PASSWORD}. */
+const SESSION_PAIR = 'nexttime_console_session=sess-123';
+const GOOD_PASSWORD = 'pw-good';
 
 interface RecordedMcpRequest {
   accept?: string;
@@ -80,6 +95,10 @@ describe('deploy/accept/driver.mjs (against an in-process fake kernel)', () => {
   const capRequests: RecordedCapRequest[] = [];
   const mcpRequests: RecordedMcpRequest[] = [];
   const wsAuthTokens: unknown[] = [];
+  const wsAuthParams: unknown[] = [];
+  const wsUpgradeCookies: (string | undefined)[] = [];
+  const newChatParams: unknown[] = [];
+  const authRequests: RecordedAuthRequest[] = [];
   let listTasksCallCount = 0;
   let listTasksMode: 'progress' | 'always-running' = 'progress';
 
@@ -113,6 +132,9 @@ describe('deploy/accept/driver.mjs (against an in-process fake kernel)', () => {
             method: req.method,
             path: url.pathname,
             authorization: req.headers.authorization,
+            cookie: req.headers.cookie,
+            csrf: req.headers['x-requested-with'] as string | undefined,
+            workspaceHeader: req.headers['x-workspace-id'] as string | undefined,
             body: parsedBody,
           });
           if (name === 'boom') {
@@ -152,6 +174,38 @@ describe('deploy/accept/driver.mjs (against an in-process fake kernel)', () => {
           return;
         }
 
+        if (
+          (url.pathname === '/api/auth/login' || url.pathname === '/api/auth/logout') &&
+          req.method === 'POST'
+        ) {
+          const parsedBody = bodyText.length > 0 ? JSON.parse(bodyText) : {};
+          authRequests.push({
+            path: url.pathname,
+            csrf: req.headers['x-requested-with'] as string | undefined,
+            cookie: req.headers.cookie,
+            body: parsedBody,
+          });
+          if (req.headers['x-requested-with'] !== 'nexttime') {
+            sendJson(res, 403, { ok: false, error: { code: 'csrf_header_required' } });
+            return;
+          }
+          if (url.pathname === '/api/auth/logout') {
+            res.setHeader('set-cookie', 'nexttime_console_session=; Max-Age=0; Path=/');
+            sendJson(res, 200, { ok: true });
+            return;
+          }
+          if ((parsedBody as { password?: string }).password !== GOOD_PASSWORD) {
+            sendJson(res, 401, { ok: false, error: { code: 'bad_credentials' } });
+            return;
+          }
+          res.setHeader('set-cookie', [
+            'other_cookie=x; Path=/',
+            `${SESSION_PAIR}; Path=/; HttpOnly; Secure; SameSite=Strict`,
+          ]);
+          sendJson(res, 200, { ok: true, result: { user: { id: 'u1' } } });
+          return;
+        }
+
         if (url.pathname === '/explorer/x' && req.method === 'GET') {
           if (req.headers['x-api-key'] !== 'k1') {
             sendJson(res, 401, {});
@@ -181,7 +235,8 @@ describe('deploy/accept/driver.mjs (against an in-process fake kernel)', () => {
     });
 
     wss = new WebSocketServer({ server, path: '/ws' });
-    wss.on('connection', (ws: WsWebSocket) => {
+    wss.on('connection', (ws: WsWebSocket, upgrade: IncomingMessage) => {
+      wsUpgradeCookies.push(upgrade.headers.cookie);
       ws.on('message', (raw) => {
         const msg = JSON.parse(raw.toString());
         const { id, method, params } = msg as {
@@ -202,9 +257,11 @@ describe('deploy/accept/driver.mjs (against an in-process fake kernel)', () => {
         switch (method) {
           case 'authenticate':
             wsAuthTokens.push(params?.token);
+            wsAuthParams.push(params);
             reply({ ok: true });
             return;
           case 'new_chat':
+            newChatParams.push(params);
             reply({ id: 'chat-1' });
             return;
           case 'subscribe_chat':
@@ -586,6 +643,131 @@ describe('deploy/accept/driver.mjs (against an in-process fake kernel)', () => {
     const own = await runDriver(['gate-health', baseUrl, ownTokenFile], env());
     expect(own.code).toBe(0);
     expect(own.kv.get('OK')).toBe('true');
+  });
+
+  // S11 AA4d: a platform administrator signs in to the console and acts with its session cookie
+  // (accept_s2's admin agent scenario, scripts/lib/accept-s2-admin-agent.sh).
+  it('login: posts the CSRF header, prints the console session pair and nothing else of the cookies; the password comes from the environment (R-34)', async () => {
+    const before = authRequests.length;
+    const { code, kv, stdout } = await runDriver(
+      ['login', 'accept-admin', 'env:NT_ACCEPT_TOKEN'],
+      env({ NT_ACCEPT_TOKEN: GOOD_PASSWORD }),
+    );
+    expect(code).toBe(0);
+    expect(kv.get('HTTP_STATUS')).toBe('200');
+    expect(kv.get('SESSION')).toBe(SESSION_PAIR);
+    expect(stdout).not.toContain(GOOD_PASSWORD);
+    expect(stdout).not.toContain('other_cookie');
+    expect(authRequests.slice(before)).toEqual([
+      {
+        path: '/api/auth/login',
+        csrf: 'nexttime',
+        cookie: undefined,
+        body: { login: 'accept-admin', password: GOOD_PASSWORD },
+      },
+    ]);
+  });
+
+  it('login: a refused password prints its status and an empty SESSION', async () => {
+    const { code, kv } = await runDriver(
+      ['login', 'accept-admin', 'env:NT_ACCEPT_TOKEN'],
+      env({ NT_ACCEPT_TOKEN: 'pw-wrong' }),
+    );
+    expect(code).toBe(0);
+    expect(kv.get('HTTP_STATUS')).toBe('401');
+    expect(kv.get('SESSION')).toBe('');
+  });
+
+  it('cap: a console credential in a workspace sends the session cookie, the workspace cookie and header, the CSRF header — and no Authorization', async () => {
+    const before = capRequests.length;
+    const { code, kv } = await runDriver(
+      ['cap', 'env:NT_ACCEPT_TOKEN', 'audit_query', '{}', 'd.result.items.length'],
+      env({ NT_ACCEPT_TOKEN: `console:ws-trial:${SESSION_PAIR}` }),
+    );
+    expect(code).toBe(0);
+    expect(kv.get('HTTP_STATUS')).toBe('200');
+    expect(capRequests.slice(before)).toEqual([
+      {
+        method: 'POST',
+        path: '/api/cap/audit_query',
+        authorization: undefined,
+        cookie: `${SESSION_PAIR}; nexttime_workspace=ws-trial`,
+        csrf: 'nexttime',
+        workspaceHeader: 'ws-trial',
+        body: {},
+      },
+    ]);
+  });
+
+  it('cap: a console credential without a workspace (`-`) sends the session cookie alone — the platform plane', async () => {
+    const before = capRequests.length;
+    const { code } = await runDriver(
+      ['cap', 'env:NT_ACCEPT_TOKEN', 'get_admin_agent_status', '{}'],
+      env({ NT_ACCEPT_TOKEN: `console:-:${SESSION_PAIR}` }),
+    );
+    expect(code).toBe(0);
+    expect(capRequests.slice(before)).toEqual([
+      expect.objectContaining({
+        path: '/api/cap/get_admin_agent_status',
+        authorization: undefined,
+        cookie: SESSION_PAIR,
+        csrf: 'nexttime',
+        workspaceHeader: undefined,
+      }),
+    ]);
+  });
+
+  it('cap: a malformed console credential is refused before any request', async () => {
+    const before = capRequests.length;
+    const { code, stdout } = await runDriver(
+      ['cap', 'env:NT_ACCEPT_TOKEN', 'get_admin_agent_status', '{}'],
+      env({ NT_ACCEPT_TOKEN: 'console:ws-trial' }),
+    );
+    expect(code).toBe(1);
+    expect(stdout).toContain('ERROR=console credential');
+    expect(capRequests.length).toBe(before);
+  });
+
+  it('send-and-wait: a console credential rides on the WS upgrade, `authenticate` names the workspace, and `new:admin_agent` opens an admin agent Chat', async () => {
+    const [cookiesBefore, authBefore, newChatBefore] = [
+      wsUpgradeCookies.length,
+      wsAuthParams.length,
+      newChatParams.length,
+    ];
+    const { code, kv } = await runDriver(
+      ['send-and-wait', 'env:NT_ACCEPT_TOKEN', 'new:admin_agent', 'hi', '5000'],
+      env({ NT_ACCEPT_TOKEN: `console:ws-trial:${SESSION_PAIR}` }),
+    );
+    expect(code).toBe(0);
+    expect(kv.get('CHAT_ID')).toBe('chat-1');
+    expect(kv.get('TURN_STATUS')).toBe('completed');
+    expect(wsUpgradeCookies.slice(cookiesBefore)).toEqual([SESSION_PAIR]);
+    expect(wsAuthParams.slice(authBefore)).toEqual([{ workspaceId: 'ws-trial' }]);
+    expect(newChatParams.slice(newChatBefore)).toEqual([{ agentKind: 'admin_agent' }]);
+  });
+
+  it('send-and-wait: an empty chat id still opens an ordinary Chat (no agentKind)', async () => {
+    const newChatBefore = newChatParams.length;
+    const { code } = await runDriver(['send-and-wait', 'k', '', 'hi', '5000'], env());
+    expect(code).toBe(0);
+    expect(newChatParams.slice(newChatBefore)).toEqual([{}]);
+  });
+
+  it('logout: posts the console session with the CSRF header; a key or Handle is refused', async () => {
+    const before = authRequests.length;
+    const ok = await runDriver(
+      ['logout', 'env:NT_ACCEPT_TOKEN'],
+      env({ NT_ACCEPT_TOKEN: `console:-:${SESSION_PAIR}` }),
+    );
+    expect(ok.code).toBe(0);
+    expect(ok.kv.get('HTTP_STATUS')).toBe('200');
+    expect(authRequests.slice(before)).toEqual([
+      { path: '/api/auth/logout', csrf: 'nexttime', cookie: SESSION_PAIR, body: {} },
+    ]);
+    const refused = await runDriver(['logout', 'some-api-key'], env());
+    expect(refused.code).toBe(1);
+    expect(refused.stdout).toContain('ERROR=logout: needs a console credential');
+    expect(authRequests.length).toBe(before + 1);
   });
 
   it('unknown subcommand exits 1 with an ERROR line', async () => {

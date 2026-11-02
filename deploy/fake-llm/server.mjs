@@ -977,6 +977,131 @@ function goalPlannerScenario(messages) {
   ];
 }
 
+// -------------------------------------------------------------------------------------------
+// S11 AA4d (AA4 plan F9, its rehearsal half; scripts/lib/accept-s2-admin-agent.sh): a platform
+// administrator's admin agent — real pi in its own admin container, its admin agent Handle, the
+// admin mode of packages/platform-extension — proposes one admin proposal. The administrator asks
+// in an admin agent Chat of a trial workspace; the agent reads its proposal targets
+// (`agent_list_proposal_targets`) and the connector presets (`platform_state_connectors`), then
+// calls `propose_admin_proposal` once: the next version of a Skill for each target, and one
+// gate-host instance from the first preset at an address that resolves nowhere (`.invalid`). Each
+// call goes through the kernel's Handle check and the admin agent ceiling as the agent's own.
+//
+// The last step also reports which tools pi offered the model (`ADMIN_TOOLS`): the three it uses
+// must be there, and the entry agent's own tools must not — the admin container started with the
+// admin tool list, not the entry one. And whether the proposal as the agent read it back withheld
+// the gate-host instance's address (`ADMIN_ADDRESS_WITHHELD`). Nothing here names the CI-only chat markers of the fake
+// runtime (scripts/guards/fake-markers.mjs): to real pi they would be plain text.
+// -------------------------------------------------------------------------------------------
+
+const ADMIN_PROPOSE_MARKER = '提一份验收管理员提案';
+/** Tools the admin agent's run must offer: the ones this scenario calls. */
+const ADMIN_AGENT_TOOLS_USED = [
+  'agent_list_proposal_targets',
+  'platform_state_connectors',
+  'propose_admin_proposal',
+];
+/** Entry agent tools an admin agent's run must not offer (platform-extension modes/entry.ts). */
+const ENTRY_ONLY_TOOLS = [
+  'invoke_worker',
+  'request_action',
+  'propose_goal',
+  'confirm_goal',
+  'get_entry_context',
+  'report_turn',
+];
+
+function offeredToolNames(tools) {
+  return (Array.isArray(tools) ? tools : [])
+    .map((tool) => tool?.function?.name ?? tool?.name)
+    .filter((name) => typeof name === 'string');
+}
+
+/** `ok`, or what was missing and what should not have been there. */
+function adminToolsVerdict(tools) {
+  const offered = new Set(offeredToolNames(tools));
+  const missing = ADMIN_AGENT_TOOLS_USED.filter((name) => !offered.has(name));
+  const unexpected = ENTRY_ONLY_TOOLS.filter((name) => offered.has(name));
+  if (missing.length === 0 && unexpected.length === 0) return 'ok';
+  return `missing:${missing.join('|') || '-'};unexpected:${unexpected.join('|') || '-'}`;
+}
+
+function adminAgentProposeChatScenario(messages, tools) {
+  const asked = latestMessageWith(messages, ADMIN_PROPOSE_MARKER);
+  const nonce = extractMarker(asked, 'ADMIN_NONCE') ?? 'none';
+  const targets = findToolResult(messages, 'agent_list_proposal_targets');
+  const targetIds = Array.isArray(targets?.targetWorkspaceIds)
+    ? targets.targetWorkspaceIds.filter((id) => typeof id === 'string')
+    : [];
+  const connectors = findToolResult(messages, 'platform_state_connectors');
+  // A preset no packaged gate holds when there is one (the host's own RagFlow gate may hold the
+  // shipped one); the proposal is never applied, so any shipped preset will do otherwise.
+  const presets = Array.isArray(connectors?.presets)
+    ? connectors.presets.filter((p) => p && typeof p.name === 'string')
+    : [];
+  const preset = presets.find((p) => p.packagedConnector === false) ?? presets[0];
+  const proposed = findToolResult(messages, 'propose_admin_proposal');
+  const proposedText = findToolResultText(messages, 'propose_admin_proposal');
+  const verdict = adminToolsVerdict(tools);
+  // What the agent reads back of its own proposal: the gate-host instance without its addresses
+  // (`addressWithheld`, S11 AA4-0) — `yes` when every such item came back that way.
+  const instanceItems = (Array.isArray(proposed?.segments) ? proposed.segments : [])
+    .flatMap((segment) => (Array.isArray(segment?.items) ? segment.items : []))
+    .filter((item) => item?.kind === 'gate_instance');
+  const withheld =
+    instanceItems.length > 0 &&
+    instanceItems.every((item) => item.addressWithheld === true && !('target' in item))
+      ? 'yes'
+      : 'no';
+  const skill = {
+    kind: 'skill_version',
+    skill: {
+      name: `accept-admin-check-${nonce}`,
+      description: `Check a knowledge base answer against its sources (accept_s2 admin agent ${nonce}).`,
+      markdown:
+        '# Check an answer\n\n1. Ask the knowledge base.\n2. Compare the answer with the passages it cites.\n',
+    },
+  };
+  return [
+    { tool: { name: 'agent_list_proposal_targets', args: {} } },
+    targetIds.length > 0
+      ? { tool: { name: 'platform_state_connectors', args: {} } }
+      : {
+          text: `ADMIN_PROPOSAL_ID= ADMIN_TOOLS=${verdict} — admin agent scenario: no proposal targets chosen (see docs/runbooks/host-accept-s2.md)`,
+        },
+    preset
+      ? {
+          tool: {
+            name: 'propose_admin_proposal',
+            args: {
+              title: `accept_s2 admin proposal ${nonce}`,
+              description:
+                'Proposed by the accept_s2 admin agent scenario: a Skill for each target and one knowledge base instance.',
+              sourceName: 'accept-s2-admin-agent',
+              segments: targetIds.map((targetWorkspaceId) => ({ targetWorkspaceId, items: [skill] })),
+              platform: {
+                items: [
+                  {
+                    kind: 'gate_instance',
+                    gateId: `accept-kb-${nonce}`,
+                    displayName: `accept_s2 knowledge base ${nonce}`,
+                    preset: preset.name,
+                    target: `https://kb-${nonce}.example.invalid`,
+                  },
+                ],
+              },
+            },
+          },
+        }
+      : {
+          text: `ADMIN_PROPOSAL_ID= ADMIN_TOOLS=${verdict} — admin agent scenario: platform_state_connectors listed no preset`,
+        },
+    {
+      text: `ADMIN_PROPOSAL_ID=${typeof proposed?.id === 'string' ? proposed.id : ''} ADMIN_PROPOSAL_STATUS=${typeof proposed?.status === 'string' ? proposed.status : ''} ADMIN_TARGETS=${targetIds.length} ADMIN_ADDRESS_WITHHELD=${withheld} ADMIN_TOOLS=${verdict}${proposed ? '' : ` — propose_admin_proposal answered: ${(proposedText ?? '').slice(0, 300)}`}`,
+    },
+  ];
+}
+
 // Order matters: the entry-chat scenarios must be tested first. Once the entry agent has called
 // `invoke_worker`, its own message history contains the Worker marker (inside the tool-call
 // arguments' `input`), so a Worker-marker-first table would hand the *entry* agent the Worker's
@@ -988,6 +1113,7 @@ const SCENARIOS = [
   { marker: '哪个服务依赖哪个', build: entryDependencyChatScenario, chat: true },
   { marker: '发起验收目标', build: entryGoalChatScenario, chat: true },
   { marker: '发起三步验收目标', build: entryGoalDagChatScenario, chat: true },
+  { marker: ADMIN_PROPOSE_MARKER, build: adminAgentProposeChatScenario, chat: true },
   { marker: 'goal_planning', build: goalPlannerScenario, chat: false },
   { marker: 'ACCEPT_S2_SCENARIO=docker_restart', build: dockerRestartScenario, chat: false },
   { marker: 'ACCEPT_S2_SCENARIO=ssh_run', build: sshRunScenario, chat: false },
