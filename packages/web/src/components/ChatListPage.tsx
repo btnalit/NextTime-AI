@@ -17,6 +17,8 @@ export interface ChatListPageProps {
    *  `PlatformOverviewPage`, is where J1's "执行就绪" check lives. */
   readonly http: CapabilityCaller;
   readonly onSelectChat: (chatId: string) => void;
+  /** S11 AA4c-3: a platform administrator in a trial workspace (`chat/ChatListPane`). */
+  readonly adminAgent?: boolean;
 }
 
 /**
@@ -28,7 +30,7 @@ export interface ChatListPageProps {
  * parallel slice, P3-3, redesigns it): a slim strip above the two-pane row, only on this route (an
  * open chat, `ChatPage`, never showed it either).
  */
-export function ChatListPage({ client, http, onSelectChat }: ChatListPageProps) {
+export function ChatListPage({ client, http, onSelectChat, adminAgent }: ChatListPageProps) {
   const t = useT();
   return (
     <div className="chat-page" data-testid="chats-page">
@@ -36,7 +38,7 @@ export function ChatListPage({ client, http, onSelectChat }: ChatListPageProps) 
         <ExecutionReadinessCard http={http} />
       </div>
       <div className="chat-workspace" data-active-pane="list">
-        <ChatListPane client={client} onSelectChat={onSelectChat} />
+        <ChatListPane client={client} onSelectChat={onSelectChat} adminAgent={adminAgent} />
         <div className="chat-conversation-pane chat-conversation-pane-empty">
           <EmptyState
             title={t('选一个对话，或开始新对话', 'Pick a chat, or start a new one')}

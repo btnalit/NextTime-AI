@@ -12,6 +12,7 @@ import type { ModelRow } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { isResidueWorkspace, readResiduePreset } from '../../lib/platform-workspaces.js';
+import { readCreateWorkspacePreset } from '../../lib/router.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
 import { PageHeader } from '../kit/page-header.js';
 import { Select } from '../kit/select.js';
@@ -133,7 +134,16 @@ export function PlatformWorkspacesPage({
 }: PlatformWorkspacesPageProps) {
   const t = useT();
   const toast = useToast();
-  const [panel, setPanel] = useState<Panel>({ kind: 'closed' });
+  // S11 AA4c-3: `?create=admin_trial` (the 管理员智能体 page's 新建试验工作区) opens 新建工作区 on
+  // 试验 — at mount, or on a `hashchange` while the page is already open.
+  const [createPurpose, setCreatePurpose] = useState<'standard' | 'admin_trial'>(
+    () => readCreateWorkspacePreset(initialHash ?? window.location.hash) ?? 'standard',
+  );
+  const [panel, setPanel] = useState<Panel>(() =>
+    readCreateWorkspacePreset(initialHash ?? window.location.hash) !== null
+      ? { kind: 'create' }
+      : { kind: 'closed' },
+  );
   const [filters, setFilters] = useState<Filters>(() =>
     readResiduePreset(initialHash ?? window.location.hash) ? RESIDUE_FILTERS : DEFAULT_FILTERS,
   );
@@ -143,6 +153,11 @@ export function PlatformWorkspacesPage({
   useEffect(() => {
     function onHashChange(): void {
       if (readResiduePreset(window.location.hash)) setFilters(RESIDUE_FILTERS);
+      const purpose = readCreateWorkspacePreset(window.location.hash);
+      if (purpose !== null) {
+        setCreatePurpose(purpose);
+        setPanel({ kind: 'create' });
+      }
     }
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
@@ -231,7 +246,10 @@ export function PlatformWorkspacesPage({
           <Button
             variant="primary"
             icon="plus"
-            onClick={() => setPanel({ kind: 'create' })}
+            onClick={() => {
+              setCreatePurpose('standard');
+              setPanel({ kind: 'create' });
+            }}
             data-testid="new-workspace"
           >
             {t('新建工作区', 'Create workspace')}
@@ -360,6 +378,9 @@ export function PlatformWorkspacesPage({
             http={http}
             models={catalog}
             defaultOwnerUserId={currentUserId}
+            defaultPurpose={createPurpose}
+            // A preset arriving while the form is already open starts it again on that purpose.
+            key={createPurpose}
             onCreated={handleCreated}
             onCancel={() => setPanel({ kind: 'closed' })}
           />

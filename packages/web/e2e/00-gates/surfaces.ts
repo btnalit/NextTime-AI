@@ -248,6 +248,18 @@ export const SURFACES: readonly Surface[] = [
     ready: (page) => page.getByTestId('platform-integrations-page'),
   },
   {
+    // S11 AA4c-3: the admin's own admin agent — no trial workspace on a fresh stack (the empty
+    // state), or the trial workspaces another spec on the same stack created.
+    id: 'platform-admin-agent',
+    labelZh: '平台 · 管理员智能体',
+    hash: '#/platform/admin-agent',
+    role: 'admin',
+    ready: (page) =>
+      page
+        .getByTestId('admin-agent-no-trial-workspace')
+        .or(page.getByTestId('admin-agent-workspace').first()),
+  },
+  {
     // S11 AA4b: the admin proposals the platform has (none in CI, so the empty state), and the
     // platform change records applying their platform parts left (none either).
     id: 'platform-admin-proposals',

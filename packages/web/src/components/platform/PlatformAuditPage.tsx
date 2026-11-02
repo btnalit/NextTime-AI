@@ -17,6 +17,7 @@ import {
 import { useT } from '../../lib/i18n.js';
 import { auditResourceTypeLabel } from '../../lib/labels.js';
 import { breadcrumbFor } from '../../lib/nav.js';
+import { AdminAgentActingChip } from '../audit/AdminAgentActingChip.js';
 import { AuditPayloadNotes } from '../audit/AuditPayloadNotes.js';
 import { Combobox } from '../kit/combobox.js';
 import { PageHeader } from '../kit/page-header.js';
@@ -316,6 +317,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
                     {row.resourceType
                       ? ` · ${auditResourceTypeLabel(row.resourceType, t)}${row.resourceId ? `:${shortId(row.resourceId)}` : ''}`
                       : ''}
+                    <AdminAgentActingChip payload={row.payload} />
                   </div>
                   <AuditPayloadNotes payload={row.payload} />
                   <details className="platform-audit-payload">

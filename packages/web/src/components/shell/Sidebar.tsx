@@ -174,6 +174,24 @@ export function SidebarContent({
         <span className="sidebar-product truncate">NextTime AI</span>
       </div>
 
+      {/* S11 AA4c-3 (the AA4 plan F10-7): the 961–1100px icon rail hides the workspace block below,
+       *  so a trial workspace keeps one mark there — an amber flask, said in full in its title and
+       *  accessible name. Hidden at every other width (the block itself says 「试验」 there). */}
+      {inTrialWorkspace ? (
+        <span
+          className="sidebar-rail-trial"
+          role="img"
+          aria-label={t('试验工作区', 'Trial workspace')}
+          title={t(
+            '试验工作区：管理员智能体在这里试做，结果要经人审阅、应用管理员提案后才进入正式工作区',
+            'Trial workspace: the admin agent tries things here; results reach a regular workspace only once a person reviews and applies an admin proposal',
+          )}
+          data-testid="sidebar-rail-trial"
+        >
+          <Icon name="flask" size="s" />
+        </span>
+      ) : null}
+
       {/* S8/P3-1 (console redesign V1): a bordered block distinct from the brand row — the name
        *  (or, with >1 membership, the `workspace-switcher` select) plus a "工作区 · 角色" caption.
        *  Previously the workspace name/switcher and role badge lived inside `.sidebar-brand-text`,

@@ -157,6 +157,15 @@ export const PLATFORM_NAV: readonly NavItem[] = [
     icon: 'send',
     href: hrefs.platformIntegrations(),
   },
+  // S11 AA4c-3 (the AA4 plan F3): the reader's own 管理员智能体 — where it may start (each trial
+  // workspace they are in, and why not), the workspaces it may propose to, its session and 停止.
+  {
+    section: 'platformAdminAgent',
+    label: '管理员智能体',
+    sub: 'Admin agent',
+    icon: 'admin-bot',
+    href: hrefs.platformAdminAgent(),
+  },
   // S11 AA4b (the AA4 plan F7): admin proposals — their platform segment reviewed, applied, rejected
   // and rolled back here; each workspace segment shows its status and its owner's reason only.
   {

@@ -1500,43 +1500,43 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   // S11 AA2: what an admin agent reads of the platform — it alone calls these, so the console shows
   // them only in audit rows (the workspace's, and the platform's own record of the read).
   platform_state_gates: {
-    zh: '智能体查看平台门',
-    en: 'Agent reads platform gates',
+    zh: '管理员智能体查看平台门',
+    en: 'Admin agent reads platform gates',
     zhHint: '管理员智能体查看平台门实例的状态与健康，不含地址与凭证。',
     enHint:
       "An admin agent reads the platform's gate instances and their health, without addresses or credentials.",
   },
   platform_state_connectors: {
-    zh: '智能体查看接入包',
-    en: 'Agent reads connectors',
+    zh: '管理员智能体查看接入包',
+    en: 'Admin agent reads connectors',
     zhHint: '管理员智能体查看接入包目录、模式与计数，不含工作区名字。',
     enHint:
       'An admin agent reads the connector catalog, modes and counts, without workspace names.',
   },
   platform_state_audit: {
-    zh: '智能体查看平台变更',
-    en: 'Agent reads platform changes',
+    zh: '管理员智能体查看平台变更',
+    en: 'Admin agent reads platform changes',
     zhHint: '管理员智能体查看平台近期变更的动作与时间，不含参数与账号。',
     enHint:
       "An admin agent reads the platform's recent changes by action and time, without params or logins.",
   },
   platform_state_runtime: {
-    zh: '智能体查看运行层',
-    en: 'Agent reads the runtime layer',
+    zh: '管理员智能体查看运行层',
+    en: 'Admin agent reads the runtime layer',
     zhHint: '管理员智能体查看运行镜像的摘要与版本、入口容器计数和服务状态，不含镜像标签与地址。',
     enHint:
       'An admin agent reads runtime image digests and versions, entry container counts and service status, without image tags or addresses.',
   },
   platform_state_updates: {
-    zh: '智能体查看版本提醒',
-    en: 'Agent reads update reminders',
+    zh: '管理员智能体查看版本提醒',
+    en: 'Admin agent reads update reminders',
     zhHint: '管理员智能体查看可用的新版本、迁移数和 pi 兼容情况，不含链接与主机命令。',
     enHint:
       'An admin agent reads newer releases, their migrations and pi compatibility, without links or host commands.',
   },
   platform_state_invariants: {
-    zh: '智能体查看平台一致性检查',
-    en: 'Agent reads platform consistency checks',
+    zh: '管理员智能体查看一致性',
+    en: 'Admin agent reads platform consistency checks',
     zhHint: '管理员智能体查看内核最近一次一致性检查（不变量检查）各项的违规数，不含违规记录本身。',
     enHint:
       "An admin agent reads the kernel's latest consistency (invariant) check's violation counts, without the violating records.",
@@ -1544,31 +1544,31 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   // S11 AA3b: the admin proposals an admin agent makes for people to apply. The agent's own calls
   // show only in audit rows; a platform administrator reads and withdraws proposals on the platform.
   propose_admin_proposal: {
-    zh: '智能体提交管理员提案',
-    en: 'Agent makes an admin proposal',
+    zh: '管理员智能体提交提案',
+    en: 'Admin agent makes an admin proposal',
     zhHint:
       '管理员智能体在试验工作区提交管理员提案：每个工作区部分发给一个工作区，由其所有者决定是否应用；平台部分（新建门宿主实例）由平台管理员决定。提交提案本身什么也不改动。',
     enHint:
       'An admin agent makes an admin proposal from its trial workspace: each workspace part goes to one workspace, whose owner decides whether to apply it; a platform part (new gate-host instances) is decided by a platform administrator. Making a proposal changes nothing.',
   },
   agent_list_admin_proposals: {
-    zh: '智能体查看管理员提案',
-    en: 'Agent lists admin proposals',
+    zh: '管理员智能体查看提案',
+    en: 'Admin agent lists admin proposals',
     zhHint: '管理员智能体查看自己在这个试验工作区提交的管理员提案及各部分的状态。',
     enHint:
       'An admin agent lists the admin proposals it made in this trial workspace and the status of their parts.',
   },
   agent_get_admin_proposal: {
-    zh: '智能体查看一个管理员提案',
-    en: 'Agent reads an admin proposal',
+    zh: '管理员智能体查看一个提案',
+    en: 'Admin agent reads an admin proposal',
     zhHint:
       '管理员智能体查看自己提交的一个管理员提案：各部分的内容和状态。拒绝时写的理由它看不到，只知道被拒绝了。',
     enHint:
       "An admin agent reads one admin proposal it made: each part's items and status. It learns that a part was rejected, not the reason given.",
   },
   agent_withdraw_admin_proposal: {
-    zh: '智能体撤回管理员提案',
-    en: 'Agent withdraws an admin proposal',
+    zh: '管理员智能体撤回提案',
+    en: 'Admin agent withdraws an admin proposal',
     zhHint:
       '管理员智能体撤回自己提交的管理员提案，尚未决定的部分不再能被应用；已应用的部分不受影响。',
     enHint:
@@ -1601,8 +1601,8 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
       'Stops your admin agent: its sessions and Handles are revoked and its running turns stopped. Its chats stay; the next message starts a new session.',
   },
   agent_list_proposal_targets: {
-    zh: '智能体查看目标工作区',
-    en: 'Agent reads its proposal targets',
+    zh: '管理员智能体查看目标',
+    en: 'Admin agent reads its proposal targets',
     zhHint: '管理员智能体查看它的管理员允许它提议的工作区，只有工作区 ID，看不到别的内容。',
     enHint: 'An admin agent reads the workspaces its administrator lets it propose to, by id only.',
   },

@@ -35,6 +35,7 @@ export type NavSection =
   | 'platformWorkspaces'
   | 'platformIntegrations'
   | 'platformAdminProposals'
+  | 'platformAdminAgent'
   | 'platformModules'
   | 'platformModels'
   | 'platformSettings'
@@ -106,6 +107,7 @@ export type Route =
       readonly tab: PlatformProposalsTab;
       readonly itemId?: string;
     }
+  | { readonly kind: 'platformAdminAgent' }
   | { readonly kind: 'platformModules' }
   | { readonly kind: 'platformModels' }
   | { readonly kind: 'platformSettings' }
@@ -226,6 +228,8 @@ export function routeFromHash(fullHash: string): Route {
     const itemId = adminProposals[2] ? decodeURIComponent(adminProposals[2]) : undefined;
     return { kind: 'platformAdminProposals', tab, ...(itemId !== undefined ? { itemId } : {}) };
   }
+  // S11 AA4c-3: 管理员智能体 — the platform administrator's own admin agent, in each trial workspace.
+  if (hash === '#/platform/admin-agent') return { kind: 'platformAdminAgent' };
   // P-B2b: platform-level 模块 (design §6.4 — module install counts + default modules).
   if (hash === '#/platform/modules') return { kind: 'platformModules' };
   // S6-B: platform-level 模型与供应商 (providers live in llm-proxy; the page talks to /api/llm-admin).
@@ -265,6 +269,9 @@ export const hrefs = {
   login: () => '#/login',
   chats: () => '#/work/chats',
   chat: (chatId: string) => `#/work/chats/${encodeURIComponent(chatId)}`,
+  /** S11 AA4c-3: 对话, opening the reader's latest admin agent Chat there — or a new one when they
+   *  have none (the 管理员智能体 page's 打开管理员对话, after it switched to the trial workspace). */
+  chatsOpenAdminAgent: () => '#/work/chats?open=admin_agent',
   approvals: () => '#/work/approvals',
   approval: (actionRequestId: string) => `#/work/approvals/${encodeURIComponent(actionRequestId)}`,
   goals: () => '#/work/goals',
@@ -312,6 +319,11 @@ export const hrefs = {
       tab === 'records' ? '#/platform/admin-proposals/records' : '#/platform/admin-proposals';
     return itemId !== undefined ? `${base}/${encodeURIComponent(itemId)}` : base;
   },
+  /** S11 AA4c-3: 管理员智能体 — the reader's own admin agent in each trial workspace. */
+  platformAdminAgent: () => '#/platform/admin-agent',
+  /** 工作区 with 新建工作区 already open on that purpose (the 管理员智能体 page's 新建试验工作区). */
+  platformWorkspacesCreate: (purpose: 'admin_trial') =>
+    `#/platform/workspaces?create=${encodeURIComponent(purpose)}`,
   platformModules: () => '#/platform/modules',
   platformModels: () => '#/platform/models',
   /** 模型与供应商 with the 新增供应商 drawer already open (the overview's first-run step). */
@@ -328,6 +340,22 @@ export const hrefs = {
 
 export function navigate(href: string): void {
   window.location.hash = href;
+}
+
+/** The purpose `hrefs.platformWorkspacesCreate` asks 新建工作区 to open on, else `null`. */
+export function readCreateWorkspacePreset(hash: string): 'admin_trial' | null {
+  const query = hash.indexOf('?');
+  if (query === -1) return null;
+  return new URLSearchParams(hash.slice(query + 1)).get('create') === 'admin_trial'
+    ? 'admin_trial'
+    : null;
+}
+
+/** True when the hash asks 对话 to open the reader's admin agent Chat (`hrefs.chatsOpenAdminAgent`). */
+export function readOpenAdminAgentChat(hash: string): boolean {
+  const query = hash.indexOf('?');
+  if (query === -1) return false;
+  return new URLSearchParams(hash.slice(query + 1)).get('open') === 'admin_agent';
 }
 
 /** True when the hash asks 模型与供应商 to open 新增供应商 (`hrefs.platformModelsNewProvider`). */

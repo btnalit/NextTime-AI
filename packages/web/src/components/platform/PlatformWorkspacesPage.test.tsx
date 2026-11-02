@@ -586,6 +586,32 @@ describe('PlatformWorkspacesPage', () => {
     window.location.hash = '';
   });
 
+  it('S11 AA4c-3: ?create=admin_trial opens 新建工作区 on 试验; the header button opens it on 常规', async () => {
+    const http = scriptedHttp(baseHandlers([workspace()]));
+    renderPage(http, { initialHash: '#/platform/workspaces?create=admin_trial' });
+    const form = await screen.findByTestId('create-workspace-form');
+    expect((within(form).getByTestId('create-workspace-purpose') as HTMLSelectElement).value).toBe(
+      'admin_trial',
+    );
+
+    fireEvent.click(screen.getByTestId('new-workspace'));
+    await waitFor(() =>
+      expect((screen.getByTestId('create-workspace-purpose') as HTMLSelectElement).value).toBe(
+        'standard',
+      ),
+    );
+
+    // And on a hashchange while the page is open, over a form already open on 常规.
+    window.location.hash = '#/platform/workspaces?create=admin_trial';
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+    await waitFor(() =>
+      expect((screen.getByTestId('create-workspace-purpose') as HTMLSelectElement).value).toBe(
+        'admin_trial',
+      ),
+    );
+    window.location.hash = '';
+  });
+
   it('A1: a disabled workspace inside retention shows the days left and no purge entry', async () => {
     const recent = workspace({
       id: 'ws-2',

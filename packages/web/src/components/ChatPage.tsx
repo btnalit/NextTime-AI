@@ -47,6 +47,8 @@ export interface ChatPageProps {
    *  P3-2, V3: the list stays on screen next to an open conversation, so picking another row here
    *  must navigate without first going back to the bare chats route. */
   readonly onSelectChat: (chatId: string) => void;
+  /** S11 AA4c-3: a platform administrator in a trial workspace (`chat/ChatListPane`). */
+  readonly adminAgent?: boolean;
   /** Absent when the reader cannot open an approval (`hooks/useCanOpen`): no entry leads there. */
   readonly onOpenApproval?: (actionRequestId: string) => void;
   readonly onOpenTask: (taskId: string) => void;
@@ -87,6 +89,7 @@ export function ChatPage({
   onOpenApproval,
   onOpenTask,
   onOpenGoal,
+  adminAgent,
 }: ChatPageProps) {
   const t = useT();
   const permissions = usePermissions();
@@ -144,7 +147,12 @@ export function ChatPage({
   return (
     <div className="chat-page" data-testid="chat-page">
       <div className="chat-workspace" data-active-pane="conversation">
-        <ChatListPane client={client} selectedChatId={chatId} onSelectChat={onSelectChat} />
+        <ChatListPane
+          client={client}
+          selectedChatId={chatId}
+          onSelectChat={onSelectChat}
+          adminAgent={adminAgent}
+        />
         <div className="chat-conversation-pane">
           <ChatHeader
             client={client}
