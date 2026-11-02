@@ -57,6 +57,14 @@ describe('judgeFinishedAttempt', () => {
     ).toEqual({ kind: 'fail', category: 'transient', pause: 'budget_exhausted' });
   });
 
+  it('a Worker whose every model call was refused pauses the goal model_refused (legacy 589)', () => {
+    for (const effect of [clear, notDelivered]) {
+      expect(
+        judgeFinishedAttempt({ status: 'failed', failureReason: 'model_refused' }, effect),
+      ).toEqual({ kind: 'fail', category: 'transient', pause: 'model_refused' });
+    }
+  });
+
   it('every other failure is transient and left to the retry', () => {
     for (const failureReason of [
       'spawn_failed',

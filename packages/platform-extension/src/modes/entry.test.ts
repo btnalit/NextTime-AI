@@ -557,6 +557,39 @@ Hi`,
     expect(reportCalls[0]?.params).toEqual({ turnId: 'turn-retry', summary: 'final attempt' });
   });
 
+  it('legacy 589: a Turn whose model never answered reports an empty summary, not the previous Turn’s', async () => {
+    kernel.setHandler('report_turn', () => ({ ok: true, result: {} }));
+    kernel.setHandler('list_allowed_operations', () => ({ ok: true, result: { items: [] } }));
+    const inputHandler = fake.handlers.get('input');
+    const beforeAgentStart = fake.handlers.get('before_agent_start');
+    const agentEndHandler = fake.handlers.get('agent_end');
+    const agentSettledHandler = fake.handlers.get('agent_settled');
+    if (!inputHandler || !beforeAgentStart || !agentEndHandler || !agentSettledHandler)
+      throw new Error('handlers not registered');
+
+    inputHandler({ text: '<!--nexttime:turn_id=turn-one-->\nHi', source: 'rpc' }, fakeCtx());
+    await beforeAgentStart({}, fakeCtx());
+    agentEndHandler(
+      { messages: [{ role: 'assistant', content: [{ type: 'text', text: 'first answer' }] }] },
+      fakeCtx(),
+    );
+    await agentSettledHandler({}, fakeCtx());
+
+    // The next Turn's model call is refused (402): the run ends with no assistant text.
+    inputHandler({ text: '<!--nexttime:turn_id=turn-two-->\nAgain', source: 'rpc' }, fakeCtx());
+    await beforeAgentStart({}, fakeCtx());
+    agentEndHandler({ messages: [] }, fakeCtx());
+    await agentSettledHandler({}, fakeCtx());
+
+    const reports = kernel.requests
+      .filter((request) => request.capability === 'report_turn')
+      .map((request) => request.params);
+    expect(reports).toEqual([
+      { turnId: 'turn-one', summary: 'first answer' },
+      { turnId: 'turn-two', summary: '' },
+    ]);
+  });
+
   it('agent_settled with no known turn id skips report_turn instead of throwing', async () => {
     const agentSettledHandler = fake.handlers.get('agent_settled');
     if (!agentSettledHandler) throw new Error('agent_settled handler not registered');

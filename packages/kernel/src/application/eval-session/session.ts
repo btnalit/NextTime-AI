@@ -32,6 +32,8 @@ export interface EvaluationSession {
   readonly taskInput: unknown;
   readonly workerRunId: string;
   readonly workerRunActivityId: string | null;
+  /** The WorkerRun's Handle session — what its model calls are metered under (`llm_usage`). */
+  readonly sessionId: string;
   readonly trialId: string;
   readonly runId: string;
   readonly suiteId: string;
@@ -126,6 +128,7 @@ export async function readEvaluationSession(
     taskInput: row.input,
     workerRunId: row.worker_run_id,
     workerRunActivityId: row.activity_id,
+    sessionId,
     trialId: row.trial_id,
     runId: row.run_id,
     suiteId: row.suite_id,

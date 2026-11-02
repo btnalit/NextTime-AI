@@ -1,7 +1,11 @@
 import { type WorkerResultCapabilityParams, storableValue } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { redactSecrets } from '../../governance/redaction/index.js';
-import { completeTaskWithResult } from '../task/index.js';
+import {
+  completeTaskWithResult,
+  failTaskForModelRefusal,
+  workerModelRefusal,
+} from '../task/index.js';
 import type { EvaluationSession } from './session.js';
 
 /** What an evaluation Task's `report_task_result` returns — the shape the real one returns. */
@@ -15,6 +19,9 @@ export interface EvaluationReportOutcome {
   /** Values replaced as secrets in the stored report, and U+0000 escaped. */
   readonly redactedValues: number;
   readonly unstorableEscaped: number;
+  /** Legacy 589: the model never answered (`workerModelRefusal`) — the Task failed
+   *  `model_refused`, nothing of the report was stored, and the trial ends `errored`. */
+  readonly modelRefused?: { readonly scope: string; readonly refusedCalls: number };
 }
 
 /**
@@ -44,6 +51,30 @@ export async function reportEvaluationResult(
     throw new Error(
       `evaluation report: WorkerRun ${session.workerRunId} has no Activity — cannot report for it`,
     );
+  }
+  // Legacy 589: every model call refused for a spent budget — the report is worker mode's own,
+  // not the Worker's answer, so the trial must not be scored on it. The Task fails
+  // `model_refused`, and the runner ends the trial `errored` with that reason (eval/runner.ts).
+  const modelRefusal = await workerModelRefusal(client, workspaceId, session.sessionId);
+  if (modelRefusal) {
+    const failed = await failTaskForModelRefusal(
+      client,
+      workspaceId,
+      actorPrincipalId,
+      session.taskId,
+      session.workerRunId,
+    );
+    return {
+      result: {
+        id: failed.id,
+        status: failed.status,
+        activityId: session.workerRunActivityId,
+        factIds: [],
+      },
+      redactedValues: 0,
+      unstorableEscaped: 0,
+      modelRefused: { scope: modelRefusal.scope, refusedCalls: modelRefusal.refusedCalls },
+    };
   }
   const task = await completeTaskWithResult(
     client,

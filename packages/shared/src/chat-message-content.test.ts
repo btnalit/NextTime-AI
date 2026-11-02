@@ -8,16 +8,18 @@ import {
 /**
  * chat-message-content.test: round-trip/rejection coverage for the `SystemMessageContent`
  * variants `application/linkage` (kernel) writes into `chat_messages.content` — docs/development-
- * tasks.md S2.11 deliverable 1, and S11 GO5e-2's `system.goal_update`.
+ * tasks.md S2.11 deliverable 1, S11 GO5e-2's `system.goal_update` and legacy 589's
+ * `system.model_refused`.
  */
 
 describe('SYSTEM_MESSAGE_KIND_VALUES', () => {
-  it('lists the three S2.11 chat message kinds and S11 GO5e-2 system.goal_update', () => {
+  it('lists the three S2.11 chat message kinds, S11 GO5e-2 system.goal_update and legacy 589 system.model_refused', () => {
     expect(SYSTEM_MESSAGE_KIND_VALUES).toEqual([
       'system.task_update',
       'system.action_pending',
       'system.action_update',
       'system.goal_update',
+      'system.model_refused',
     ]);
   });
 });
@@ -86,6 +88,14 @@ const SAMPLE_CONTENTS: SystemMessageContent[] = [
     goalRunId: 'goal1',
     status: 'running',
   },
+  // Legacy 589: an entry Turn whose every model call the platform refused.
+  {
+    kind: 'system.model_refused',
+    text: 'The model was not called: the workspace daily token budget is used up',
+    turnId: 'turn1',
+    scope: 'workspace_daily_tokens',
+    resetsAt: '2026-11-02T00:00:00.000Z',
+  },
 ];
 
 describe('SystemMessageContentSchema', () => {
@@ -121,6 +131,18 @@ describe('SystemMessageContentSchema', () => {
         actionKindTag: 'test.action',
         blastRadius: 'not_a_radius',
         isHolder: true,
+      }),
+    ).toThrow();
+  });
+
+  it('rejects system.model_refused whose scope is not an LlmRefusalScope', () => {
+    expect(() =>
+      SystemMessageContentSchema.parse({
+        kind: 'system.model_refused',
+        text: 'x',
+        turnId: 'turn1',
+        scope: 'task_budget',
+        resetsAt: '2026-11-02T00:00:00.000Z',
       }),
     ).toThrow();
   });

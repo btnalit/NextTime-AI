@@ -176,6 +176,7 @@ export async function runEvaluationSessionCall(
           ...(outcome.unstorableEscaped > 0
             ? { unstorableEscaped: outcome.unstorableEscaped }
             : {}),
+          ...(outcome.modelRefused ? { modelRefused: outcome.modelRefused } : {}),
         },
       };
     }

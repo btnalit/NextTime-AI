@@ -183,6 +183,8 @@ const PAUSE_REASON_TEXT: Record<GoalRunPauseReason, string> = {
   authority_lost: 'the requester no longer holds what a step needs',
   needs_decision: 'a decision is needed',
   awaiting_reconcile: 'a target system has to be checked by hand',
+  model_refused:
+    "the platform refused its Worker's model calls: the workspace's daily model budget is spent",
 };
 
 const OUTCOME_BASIS_TEXT: Record<GoalOutcomeBasis, string> = {

@@ -2176,6 +2176,22 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：平台状态再加三个只有管理员智能体会话能调用的只读能力 `platform_state_runtime`（当前镜像与最近镜像、入口容器计数、五个平台服务的状态）、`platform_state_updates`（当前 / 最新 / 回滚版本、待跑迁移、pi 更新状态）、`platform_state_invariants`（最近一次一致性检查的时间与每项违例数，不给样本）；契约快照随之增加，服务 Handle 选择器与签发拒绝名单各加这三项。调用路径与审计同 §3.98；返回内容按形状白名单投影，版本号的预发布后缀夹带不进地址。
 - **回滚**：只回退代码，随时可以。
 
+### 3.100 模型调用全被预算拒绝时，Task、试跑、目标与入口 Turn 不再算完成（#910，遗留 589，0.60.0 起）
+
+带两个迁移（llm-usage `0003_usage_refusal`、goal `0017_pause_model_refused`），随 `apply-release.sh` 的迁移步骤自动应用。不改 compose，没有新环境变量。
+
+- **llm-proxy 与内核必须同版**：旧内核的严格用量 schema 不认 `refusalScope`。`apply-release.sh` 按 tag 整体升级与回滚，正常走就是同版。
+- **迁移**：0003 加 `llm_usage.refusal_scope` 列、CHECK `llm_usage_refusal`（`refused` ⇔ 有 scope，且 0 token、0 费用）与两个 `where status = 'refused'` 的部分索引 `llm_usage_refused_session_idx (workspace_id, session_id)`、`llm_usage_refused_turn_idx (workspace_id, turn_id)`。建索引时在 SHARE 锁下读一遍 `llm_usage`，期间 llm-proxy 的用量插入排队（它的 reporter 会重试），不报错。0017 给 `goal_runs.pause_reason` 加 `model_refused`。
+- **行为变化**：
+  - llm-proxy 的预算拒绝挪到读完请求体（受 `maxRequestBodyBytes` 限制）与模型白名单之后；白名单外照旧 403、不计量；`GET /v1/models` 不受预算影响。
+  - 每个 402 先写一条 `status = 'refused'` 的用量记录交给内核再回，最多多等 5 秒；超时照样回 402，打 warn `llm-proxy: refusal delivery timed out; answering 402, the record is resent in the background`，计数器 `nexttime_llm_proxy_refusal_delivery_timeouts_total{provider}` 加一，记录后台重送，这时内核可能沿用旧判定。**升级窗口内出现几次这条 warn 属正常**。
+  - 402 的 message 以 `out of budget: ` 开头（body 其余字段不变），pi 不再把它当临时错误自动重试。
+  - 一个 Task 或入口 Turn 的模型调用如果全部因预算被拒、没有一次被回答：Worker Task 失败 `model_refused`（平台失败），评测试跑 `errored`（不判分），目标暂停 `model_refused`（不自动恢复，预算重置或调高后由请求者继续），入口 Turn 结束为 `failed` 并写一条 `system.model_refused` 系统消息（哪个预算、什么时候重置）。
+  - 平台「运行状态」的 30 天调用次数与 `report-usage.sh` 的 `calls` 不再算被拒的调用，后者单列 `refused`。
+  - 已知窗口（`operations.md`「被拒之后又被回答」，有意不补）：同一会话被拒后又有一次调用被回答、且 Worker 恰在那条用量入库前上报，会被误判为 `model_refused`。
+- **发版说明可写**：工作区当天的 token 或费用配额用完后，模型一个字没答的运行不再被记成完成：Task 失败 `model_refused`，评测试跑记 `errored` 不判分，目标暂停等预算恢复，对话里写明是哪个预算被用完、什么时候重置、谁能调高。被拒的调用记成 0 token、0 费用的用量，不进预算、不进 Task 的 token 数与试跑费用。
+- **回滚**（见 §6 的两行）：**不能只回滚内核**——旧内核的严格 schema 会把混有 refused 记录的整批拒掉，llm-proxy 的队列满 1000 条后开始丢真实用量，预算就会少算；llm-proxy 必须和内核一起回（按 tag 整体回滚即可）。schema 与已存的 refused 行默认保留（它们是平台拒绝过的运行的证据，不带 token 与费用，旧代码的预算求和不变；旧代码的调用次数会把它们算进去）。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -2334,6 +2350,8 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.56.0 | core `0048_operation_target_governance`（#876，S11 GO12）：改写 core/0047 的两个函数，允许治理刷新在已发布 Operation 版本上写 `target` | 可逆 | 只回退代码随时可以；撤 schema：重跑 core/0047 的两条 `create or replace function`，删 `schema_migrations` 的 core 48 行，已带 `target` 的已发布版本保留（§3.91） |
 | v0.56.0 | governance `0031_action_request_execution_guard`（#881，遗留 565）：函数 `action_request_identity_text`、`action_request_targets_conflict`、`action_request_execution_lock`，触发器 `action_requests_execution_guard`（进入 `executing` 前取门级锁，同门有冲突的执行中请求就拒绝，SQLSTATE `NTQ01`；开始事务不是 READ COMMITTED 时拒绝，SQLSTATE `NTQ02`） | 可逆 | 只回退代码随时可以（触发器留着；旧排水器偶尔收到 `NTQ01`：后台排水停一次，`request_action` 那次调用返回内部错误但请求照常执行一次）；撤 schema：**先于 0030**，停 kernel、单事务删触发器与四个函数，删 `schema_migrations` 的 governance 31 行，再做 0030 的步骤（§3.93） |
 | v0.59.0 | core `0049_admin_agent_sessions`（#897，S11 AA1）：`sessions.kind` 的 CHECK 放宽一个值 `admin_agent`，不回填 | 可逆 | 只放宽：满足旧约束的行都满足新约束，重新加约束校验既有行无需回填；旧代码从不写 `admin_agent`，这一版也没有东西会签发管理员智能体的 Handle（开关默认关，AA4 之前没有运行时） | 先查 `admin_agent` 会话数：为 0 时可按 0001 的五个值重建约束并删掉 `schema_migrations` 的 core 49；不为 0 时保留 0049、只回退代码（restrict 外键）。AA4 之后回退到 AA1 之前的代码，先吊销管理员智能体 Handle（见 §3.97、0049 文件头） |
+| v0.60.0 | llm-usage `0003_usage_refusal`（#910，遗留 589）：`llm_usage.refusal_scope` 列、CHECK `llm_usage_refusal`（`refused` ⇔ 有 scope，且 0 token、0 费用）、两个 `status = 'refused'` 的部分索引 `llm_usage_refused_session_idx`、`llm_usage_refused_turn_idx` | 可逆 | 只加可空列、新约束与部分索引：旧内核从不写 `refusal_scope`、从不写 `status = 'refused'`，在新 schema 上照常插入；但**不能只回滚内核**，旧内核的严格用量 schema 会拒掉含 `refusalScope` 的整批，新 llm-proxy 的队列满 1000 条后丢真实用量——llm-proxy 与内核同版回滚 | 默认保留 schema 与 refused 行，只回退代码（llm-proxy 与内核一起）。删 schema 可选，会连带删掉 refused 行，删前先导出：停内核，一个事务里删两个索引与约束 `llm_usage_refusal`、`delete from llm_usage where status = 'refused'`、`alter table llm_usage drop column refusal_scope`，再删 `schema_migrations` 的 llm-usage 3（见 0003 文件头） |
+| v0.60.0 | goal `0017_pause_model_refused`（#910，遗留 589）：`goal_runs.pause_reason` 的 CHECK 加 `model_refused` | 可逆 | 只放宽：既有行都满足；旧内核从不写 `model_refused`，已经这样暂停的运行在旧代码里是一个没有文案的暂停，恢复照常 | 只回退代码即可。要撤 schema：先确认 `select count(*) from goal_runs where pause_reason = 'model_refused'` 为 0（请求者先恢复或结束每一条），再停内核、一个事务里按 0001 的列表重建 CHECK，删 `schema_migrations` 的 goal 17（见 0017 文件头） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

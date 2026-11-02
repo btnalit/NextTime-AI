@@ -101,7 +101,7 @@ docker compose exec -T egress-proxy node -e \
 | kernel | 根 `internal_token`（kernel 容器内） | `nexttime_invariant_violations{invariant}` 等（`host-chaos.md` §5） |
 | worker-supervisor | kernel 给它的凭证（kernel 容器的 `internal_token_worker_supervisor`） | `nexttime_supervisor_operations_total{operation,outcome}`、`nexttime_supervisor_operation_duration_seconds{operation}`、`nexttime_supervisor_task_exits_total{state}` |
 | agent-host | 它自己的凭证（agent-host 容器的 `internal_token`） | `nexttime_agent_host_turns_started_total`、`nexttime_agent_host_turns_ended_total{status}`、`nexttime_agent_host_turn_duration_seconds{status}`、`nexttime_agent_host_active_turns`、`nexttime_agent_host_kernel_link_up` |
-| llm-proxy | 它自己的凭证（llm-proxy 容器的 `internal_token`；未配 `KERNEL_URL` 时恒 401） | `nexttime_llm_proxy_requests_total{provider,model,status}`、`nexttime_llm_proxy_upstream_duration_seconds{provider,model,outcome}`、`nexttime_llm_proxy_tokens_total{provider,model,direction}` |
+| llm-proxy | 它自己的凭证（llm-proxy 容器的 `internal_token`；未配 `KERNEL_URL` 时恒 401） | `nexttime_llm_proxy_requests_total{provider,model,status}`、`nexttime_llm_proxy_upstream_duration_seconds{provider,model,outcome}`、`nexttime_llm_proxy_tokens_total{provider,model,direction}`、`nexttime_llm_proxy_refusal_delivery_timeouts_total{provider}`（遗留 589：预算拒绝在拒绝记录送达内核前就回了 402） |
 | egress-proxy | 仅 loopback | `nexttime_egress_requests_total{protocol,decision,reason}`、`nexttime_egress_bytes_total{protocol,direction}` |
 | 门（单门 / gate-host） | gate_token | `nexttime_gate_calls_total{gate,route,operation,status}`、`nexttime_gate_call_duration_seconds{gate,route,operation}` |
 
