@@ -2239,6 +2239,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：管理员提案可以带一个「平台部分」，内容是新建门实例；平台管理员预览、应用或拒绝它，并能撤销它创建的东西（实例停用，不删除）。提案的工作区部分要等平台部分应用后才能应用。控制台还没有页面（AA4）。控制台文案写「平台部分 / 工作区部分」（英文 platform part / workspace part），不写「段」。
 - **回滚**（见 §6）：没有平台部分时只回退代码不损坏数据（旧代码从不写 authority `platform`）。有了之后，旧代码会列出它、目标为空、决定不了：先在 0.61.0 上应用或拒绝（或撤回提案），再回退代码。
 
+### 3.105 成员资格带工作区用途，控制台标出试验工作区；手机导航抽屉恢复（#924，遗留 596、610，0.61.0 起）
+
+没有迁移，不改 compose，没有新环境变量，主机不需要操作。
+
+- **新线上**：`UserMembershipWire` 加必填 `workspacePurpose`（`standard` / `ephemeral` / `admin_trial`），`/api/auth/me`、登录、会话返回的成员资格也带它。契约快照 9 项 schema 变化：`add_membership`、`create_user`、`list_user_memberships`、`list_users`、`merge_user`、`set_membership_role`、`set_user_budget`、`set_user_status`、`update_user`。控制台与内核同版发布；旧控制台忽略这个字段，新控制台遇到不带它的旧内核就不加标注。
+- **发版说明可写**：控制台在工作区切换器、侧栏卡片（琥珀色「试验」）、平台用户列表、成员资格面板、账户页与手机顶栏标出试验工作区（临时工作区带「（临时）」）。手机（≤960）上的导航抽屉恢复了导航文字、工作区块与切换器，手机上又能切换工作区（遗留 610，P1：此前 `shell.css` 里 ≤1100 的窄栏规则没有限定在 `.sidebar` 下）。用 API key 登录的会话没有成员资格，不显示「试验」标记。
+- **回滚**：只回退代码即可。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
