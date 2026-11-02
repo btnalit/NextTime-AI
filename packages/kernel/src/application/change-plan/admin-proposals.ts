@@ -10,6 +10,7 @@ import {
   type AdminProposalStatus,
   type AdminProposalSummaryWire,
   type AdminProposalWire,
+  type AdminProposalWithheldGateInstanceWire,
   type AgentAdminProposalWire,
   type ListEnvelope,
   adminProposalStatusOf,
@@ -730,18 +731,37 @@ export async function readAdminProposal(
  * goes through here: `propose_admin_proposal`'s result, `agent_get_admin_proposal` and
  * `agent_withdraw_admin_proposal` (their `resultSchema`, `AgentAdminProposalWireSchema`, refuses an
  * item that still carries either under `KERNEL_VALIDATE_RESULTS`).
+ *
+ * The item is built field by field, never spread (#933 review R-1, as `platform-state.ts` builds
+ * every agent projection): production does not validate results, so a field later added to the
+ * `gate_instance` intent — another address among them — reaches the agent only once it is named
+ * here.
  */
 export function agentProposalOf(proposal: AdminProposalWire): AgentAdminProposalWire {
   return {
     ...proposal,
     segments: proposal.segments.map((segment) => ({
       ...segment,
-      items: segment.items.map((item) => {
-        if (item.kind !== 'gate_instance') return item;
-        const { target: _target, manifestSource: _manifestSource, ...rest } = item;
-        return { ...rest, addressWithheld: true as const };
-      }),
+      items: segment.items.map((item) =>
+        item.kind === 'gate_instance' ? withheldGateInstanceOf(item) : item,
+      ),
     })),
+  };
+}
+
+/** A `gate_instance` item without its addresses: the fields the agent may read, each named. */
+function withheldGateInstanceOf(
+  item: Extract<AdminProposalAnyItemIntentWire, { kind: 'gate_instance' }>,
+): AdminProposalWithheldGateInstanceWire {
+  return {
+    kind: 'gate_instance',
+    gateId: item.gateId,
+    ...(item.displayName !== undefined ? { displayName: item.displayName } : {}),
+    ...(item.preset !== undefined ? { preset: item.preset } : {}),
+    ...(item.transportKind !== undefined ? { transportKind: item.transportKind } : {}),
+    ...(item.credentialMode !== undefined ? { credentialMode: item.credentialMode } : {}),
+    ...(item.connector !== undefined ? { connector: item.connector } : {}),
+    addressWithheld: true,
   };
 }
 
