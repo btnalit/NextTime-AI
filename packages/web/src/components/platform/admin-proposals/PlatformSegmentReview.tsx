@@ -235,7 +235,10 @@ export function PlatformSegmentReview({
               >
                 <span>{platformBlockerText(blocker.reason, subjectOf(blocker.ordinal), t)}</span>
                 {blocker.reason === 'connector_not_offerable' ? (
-                  <RouteLink href={hrefs.platformIntegrationsTab('connectors')}>
+                  <RouteLink
+                    href={hrefs.platformIntegrationsTab('connectors')}
+                    className="link-inline"
+                  >
                     {t('去「集成 → 接入包」', 'Open Integrations → Connectors')}
                   </RouteLink>
                 ) : null}
