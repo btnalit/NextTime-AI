@@ -245,5 +245,7 @@ export function toWireConnectionRequest(row: ConnectionRequestRow) {
     completedBy: row.completedBy,
     requestedAt: row.requestedAt.toISOString(),
     completedAt: row.completedAt ? row.completedAt.toISOString() : null,
+    // S11 AA5a-1: only on a request an admin agent made (I-A7).
+    ...(row.adminAgentSessionId !== null ? { adminAgentSessionId: row.adminAgentSessionId } : {}),
   };
 }

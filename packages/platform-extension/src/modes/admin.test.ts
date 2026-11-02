@@ -92,9 +92,7 @@ describe('registerAdminMode', () => {
     for (const name of [
       'get_entry_context',
       'report_turn',
-      'invoke_worker',
       'record_decision',
-      'request_connection',
       'propose_goal',
       'observe_operation',
       'request_action',
@@ -178,5 +176,61 @@ describe('registerAdminMode', () => {
     ).rejects.toThrow(
       'admin_proposal_target_not_chosen: your administrator has not chosen that workspace',
     );
+  });
+
+  // S11 AA5a-1: its trial runs, called the way every mode calls invoke_worker.
+  it('calls invoke_worker with wait defaulting to false and a timeout past the kernel spawn budget', async () => {
+    kernel.setHandler('invoke_worker', () => ({
+      ok: true,
+      result: { taskId: 'task-1', workerRunId: 'run-1', status: 'running' },
+    }));
+    const callSpy = vi.spyOn(kernelClient, 'call');
+    const tool = fake.tools.get('invoke_worker');
+    await tool?.execute(
+      'call-1',
+      { definitionId: 'def-1', version: 1, input: {} },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+    expect(kernel.requests.at(-1)).toMatchObject({
+      capability: 'invoke_worker',
+      params: { definitionId: 'def-1', version: 1, input: {}, wait: false },
+    });
+    expect(callSpy).toHaveBeenCalledWith('invoke_worker', expect.anything(), undefined, 40_000);
+
+    await tool?.execute(
+      'call-2',
+      { definitionId: 'def-1', version: 1, input: {}, wait: true, timeout: 20 },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+    expect(callSpy).toHaveBeenLastCalledWith(
+      'invoke_worker',
+      expect.objectContaining({ wait: true, timeout: 20 }),
+      undefined,
+      60_000,
+    );
+  });
+
+  it('passes the kernel’s trial-workspace refusal through with its code', async () => {
+    kernel.setHandler('request_connection', () => ({
+      ok: false,
+      error: {
+        code: 'admin_agent_refused',
+        message: 'the admin agent may not act: not_trial_workspace',
+      },
+    }));
+    const tool = fake.tools.get('request_connection');
+    await expect(
+      tool?.execute(
+        'call-1',
+        { kind: 'http', target: 'ticket-system' },
+        undefined,
+        undefined,
+        undefined as never,
+      ),
+    ).rejects.toThrow('admin_agent_refused: the admin agent may not act: not_trial_workspace');
   });
 });

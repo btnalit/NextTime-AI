@@ -1097,7 +1097,13 @@ export async function dispatchCapability(
       });
       return result;
     },
-  ).catch(async (err: unknown) => {
+  ).catch(async (thrown: unknown) => {
+    // S11 AA5a-1: a handler that checks an admin agent's authority again itself
+    // (`application/admin-agent/trial.ts`) refuses like the check above, and is audited the same.
+    const err =
+      thrown instanceof AdminAgentRefused && actingSession !== undefined
+        ? new AdminAgentCallRefusedError(name, thrown.reason)
+        : thrown;
     const refused = {
       workspaceId,
       principalId,

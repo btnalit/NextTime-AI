@@ -53,6 +53,10 @@ export interface RequestConnectionInput {
   readonly kind: ConnectionRequestKind;
   readonly target: string;
   readonly requestedBy: { readonly id: string; readonly kind: PrincipalKind };
+  /** S11 AA5a-1: the admin agent session the request came through, when it did — recorded on the
+   *  row (governance 0037, whose guard holds it to an `admin_agent` session of `requestedBy` in a
+   *  trial workspace). */
+  readonly adminAgentSessionId?: string;
 }
 
 /** `request_connection(kind, target)` — Handle channel, any member (design doc §7.5): inserts one
@@ -67,10 +71,16 @@ export async function requestConnection(
   // Legacy 186: the target is stored, pushed and shown as given — never with a credential in it.
   assertConnectionParamsCarryNoCredentials('request_connection', { target: input.target });
   const result = await client.query(
-    `insert into connection_requests (workspace_id, kind, target, requested_by)
-     values ($1, $2, $3, $4)
+    `insert into connection_requests (workspace_id, kind, target, requested_by, admin_agent_session_id)
+     values ($1, $2, $3, $4, $5)
      returning ${CONNECTION_REQUEST_ROW_COLUMNS}`,
-    [workspaceId, input.kind, input.target, input.requestedBy.id],
+    [
+      workspaceId,
+      input.kind,
+      input.target,
+      input.requestedBy.id,
+      input.adminAgentSessionId ?? null,
+    ],
   );
   const row = result.rows[0];
   if (!row) throw new Error('requestConnection: INSERT ... RETURNING produced no row');

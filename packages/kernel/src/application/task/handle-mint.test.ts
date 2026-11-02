@@ -6,6 +6,7 @@ import {
   HandleIssuanceError,
   WORKER_CEILING_CAPABILITIES,
   WORKER_INFRASTRUCTURE_CAPABILITY_NAMES,
+  adminAgentScope,
   entryScope,
   generateEphemeralHandleKeyPair,
   isExecuteClassCapability,
@@ -359,6 +360,41 @@ describe('computeChildHandleScope', () => {
         expect(child.capabilities).not.toContain(name);
       }
       expect(child.capabilities).toContain('get_object');
+    });
+  });
+
+  // S11 AA5a-1 (the AA5 plan's F2): a Worker the admin agent starts with `invoke_worker` gets a
+  // Worker's ceiling — never what only an admin agent calls, and never its proposals — whatever
+  // its definition declares and whatever the admin agent's own Handle holds.
+  describe('a Worker the admin agent starts (AA5a-1)', () => {
+    const adminOnly = CAPABILITY_REGISTRY.filter((c) => c.adminAgentOnly).map((c) => c.name);
+
+    it('the Worker ceiling holds nothing only an admin agent calls', () => {
+      expect(adminOnly.length).toBeGreaterThan(0);
+      expect(adminOnly.filter((name) => WORKER_CEILING_CAPABILITIES.includes(name))).toEqual([]);
+    });
+
+    it("a definition declaring them gets none, from the admin agent's full Handle", () => {
+      const parent = adminAgentScope({ gatekeeper: ['gk-1'] });
+      expect(parent.capabilities).toContain('invoke_worker');
+      const child = computeChildHandleScope({
+        parentAuthority: parent,
+        declaredCapabilities: [
+          'get_object',
+          ...adminOnly,
+          'invoke_worker',
+          'request_connection',
+          'propose_admin_proposal',
+        ],
+        declaredGates: ['gk-1'],
+      });
+      for (const name of [...adminOnly, 'request_connection', 'propose_admin_proposal']) {
+        expect(child.capabilities, name).not.toContain(name);
+      }
+      expect(child.capabilities).toContain('get_object');
+      expect(child.capabilities.every((name) => WORKER_CEILING_CAPABILITIES.includes(name))).toBe(
+        true,
+      );
     });
   });
 });

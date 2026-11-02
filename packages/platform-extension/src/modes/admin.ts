@@ -8,6 +8,7 @@ import {
   gateToolDescription,
   truncateToolResult,
 } from './gate-tools.js';
+import { resolveInvokeWorkerCallPlan } from './invoke-worker-call.js';
 
 /**
  * `admin` mode (S11 AA4c-2; docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §5, the
@@ -85,6 +86,11 @@ export const ADMIN_TOOL_CAPABILITY_NAMES = [
   'agent_get_admin_proposal',
   'agent_withdraw_admin_proposal',
   'agent_list_proposal_targets',
+  // S11 AA5a-1: trying things out in the trial workspace — asking a person to connect a system
+  // (they enter the credentials), and running a published Worker. The kernel refuses both outside
+  // a trial workspace.
+  'request_connection',
+  'invoke_worker',
 ] as const;
 
 /** The custom message each Turn's proposal targets go in. */
@@ -117,10 +123,15 @@ function buildCapabilityTool(name: string, kernelClient: KernelClient): ToolDefi
     // A thrown error is the tool result, isError (entry.ts `buildCapabilityTool`). A refusal goes
     // back with its code ahead of its message: the admin agent's prompt names the codes it acts on
     // (`admin_proposal_target_not_chosen`) and tells it to report a refusal as it is.
+    // `invoke_worker` is called the way every mode calls it (`invoke-worker-call.ts`): `wait`
+    // defaults to false, and the call's timeout outlasts the kernel's spawn budget and wait.
     async execute(_toolCallId, params) {
-      const result = await kernelClient.call(capability.name, params).catch((error: unknown) => {
-        throw withRefusalCode(error);
-      });
+      const plan = resolveInvokeWorkerCallPlan(capability.name, params);
+      const result = await kernelClient
+        .call(capability.name, plan.params, undefined, plan.timeoutMs)
+        .catch((error: unknown) => {
+          throw withRefusalCode(error);
+        });
       return {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         details: result,
