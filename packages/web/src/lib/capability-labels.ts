@@ -1541,6 +1541,59 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     enHint:
       "An admin agent reads the kernel's latest consistency (invariant) check's violation counts, without the violating records.",
   },
+  // S11 AA3b: the admin proposals an admin agent makes for people to apply. The agent's own calls
+  // show only in audit rows; a platform administrator reads and withdraws proposals on the platform.
+  propose_admin_proposal: {
+    zh: '智能体提交管理员提案',
+    en: 'Agent makes an admin proposal',
+    zhHint:
+      '管理员智能体在试验工作区提交管理员提案，每段发给一个工作区，由其所有者决定是否应用；提交提案本身不改动任何工作区。',
+    enHint:
+      'An admin agent makes an admin proposal from its trial workspace; each segment goes to one workspace, whose owner decides whether to apply it. Making a proposal changes no workspace.',
+  },
+  agent_list_admin_proposals: {
+    zh: '智能体查看管理员提案',
+    en: 'Agent lists admin proposals',
+    zhHint: '管理员智能体查看自己在这个试验工作区提交的管理员提案及各段状态。',
+    enHint:
+      'An admin agent lists the admin proposals it made in this trial workspace and the status of their segments.',
+  },
+  agent_get_admin_proposal: {
+    zh: '智能体查看一个管理员提案',
+    en: 'Agent reads an admin proposal',
+    zhHint:
+      '管理员智能体查看自己提交的一个管理员提案：各段内容和状态。所有者拒绝时写的理由它看不到，只知道被拒绝了。',
+    enHint:
+      "An admin agent reads one admin proposal it made: each segment's items and status. It learns that an owner rejected a segment, not the reason they gave.",
+  },
+  agent_withdraw_admin_proposal: {
+    zh: '智能体撤回管理员提案',
+    en: 'Agent withdraws an admin proposal',
+    zhHint: '管理员智能体撤回自己提交的管理员提案，尚未决定的段不再能被应用；已应用的段不受影响。',
+    enHint:
+      'An admin agent withdraws an admin proposal it made; segments not yet decided can no longer be applied, applied ones stay.',
+  },
+  list_admin_proposals: {
+    zh: '查看管理员提案',
+    en: 'List admin proposals',
+    zhHint: '查看管理员智能体从试验工作区提交的全部管理员提案及各段状态。',
+    enHint:
+      'Lists every admin proposal admin agents made from trial workspaces, with the status of their segments.',
+  },
+  get_admin_proposal: {
+    zh: '查看管理员提案详情',
+    en: 'Read an admin proposal',
+    zhHint: '查看一个管理员提案的说明、各段内容、状态和理由，包括所有者拒绝时写的理由。',
+    enHint:
+      "Shows one admin proposal's description, each segment's items, status and reason, including an owner's reason for rejecting it.",
+  },
+  withdraw_admin_proposal: {
+    zh: '撤回管理员提案',
+    en: 'Withdraw an admin proposal',
+    zhHint: '撤回一个管理员提案：尚未决定的段改为已撤回，不再能被应用；已应用的段不受影响。',
+    enHint:
+      'Withdraws an admin proposal: segments not yet decided become withdrawn and can no longer be applied; applied ones stay.',
+  },
   platform_status: {
     zh: '查看服务状态',
     en: 'Service status',

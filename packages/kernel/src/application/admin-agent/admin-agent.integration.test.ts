@@ -228,8 +228,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       const caller = await agentCaller(issued.token);
       const claims = (caller as { claims: HandleClaims }).claims;
       for (const name of claims.scope.capabilities) {
-        // S11 AA3a: reads, and the five draft proposals.
-        expect(['observe', 'propose'], name).toContain(getCapability(name)?.mode);
+        // S11 AA3a: reads, and the five draft proposals; AA3b: an admin proposal, and
+        // withdrawing one — the only write.
+        expect(
+          name === 'agent_withdraw_admin_proposal' ? ['write'] : ['observe', 'propose'],
+          name,
+        ).toContain(getCapability(name)?.mode);
       }
       expect(claims.scope.capabilities).toContain('propose_skill');
       // Container-held: never accepted as a bearer token.

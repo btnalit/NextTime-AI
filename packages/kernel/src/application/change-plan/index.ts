@@ -26,6 +26,11 @@
  * what it wrote is still in effect and the systems its source needs are in place, recorded on the
  * segment).
  *
+ * S11 AA3b-1: Admin proposals (`proposals.ts`, migrations/governance/0032) — what an admin
+ * agent proposes from its trial workspace, one segment per target workspace, for the owners of
+ * those workspaces to decide; read back and withdrawn by the agent for its administrator and by
+ * platform administrators.
+ *
  * Boundaries: it lives in `application` because applying calls publish functions across
  * `substrate` (ontology), `application/worker` (Skills, WorkerDefinitions) and
  * `governance/gatekeepers` (Operations).
@@ -152,3 +157,24 @@ export {
   MAX_LIST_CHANGE_SEGMENTS_LIMIT,
   listChangeSegments,
 } from './segments.js';
+export {
+  AdminProposalCredentialError,
+  AdminProposalNotFoundError,
+  AdminProposalNotOpenError,
+  type AdminProposalInput,
+  AdminProposalInvalidError,
+  type AdminProposalProblem,
+  type AdminProposalProposer,
+  AdminProposalQuotaExceededError,
+  type AdminProposalScope,
+  AdminProposalTargetUnavailableError,
+  adminProposalDigest,
+  adminProposalQuotaResetsAt,
+  adminProposalSegmentDigest,
+  checkAdminProposal,
+  getAdminProposal,
+  listAdminProposals,
+  proposeAdminProposal,
+  readAdminProposal,
+  withdrawAdminProposal,
+} from './admin-proposals.js';

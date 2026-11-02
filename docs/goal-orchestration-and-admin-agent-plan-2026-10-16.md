@@ -129,6 +129,7 @@ Task / WorkerRun 与转移日志（每次转移发 `TaskUpdated`，`task/transit
 | **AcceptanceCheck** | Epistemic | 验收条件的一项：`observe_predicate`（一个观察类 Operation + 参数 + 对结果的判定式）、`observe_absent`（一个声明了“哪些回答表示不存在”且发布时有人确认过的观察类 Operation + 参数，只有门这样回答才通过，而且目标开工前平台用同样的调用看到过它在；「门确认不存在」B、B-c）、`fact_predicate`（图上事实 + 新鲜度）、`requester_confirm`、`review`（独立评审，W4） | 判定式由入口 agent 或规划器起草，**经请求者确认后才生效**（F2）；执行者自报不是一种验收（I-G5） |
 | **业务动作身份** | Governance | StepRun 内一个外部动作的去重键：（`step_run_id`, 门, Operation, 参数摘要） | 现有幂等键（`action-executor.ts:125,139`）里的会话身份 `sid` 换成 `step_run_id`；连续创建三张工单这类参数不同的合法调用不受影响 |
 | **ChangePlan / ChangeSegment / ChangeItem** | Governance | 一组意图变更，按授权分段：**平台段**（平台管理员应用）与**每个工作区一段**（该工作区 owner 应用）；每项 ChangeItem 是对一个现有发布 / 配置能力的调用意图（参数不含凭证）、干跑差异、授权影响分类、逆操作；每段绑定审阅时的内容摘要，工作区段还绑定它所依赖平台段应用时的摘要 | 能力包安装计划是 ChangePlan 的一种来源；管理员 Agent 的提案是另一种 |
+| **AdminProposal / AdminProposalSegment**（管理员提案，AA3b） | Governance | 管理员 Agent 在试验工作区提交的一份提案：标题、说明、来源名，每个目标工作区一段（AA3c 起另有平台段）；每段是一组与工作区无关的意图（按名字指 Skill、Worker、本体族，按门实例与名字指 Operation）。所有者应用一段时，意图在目标工作区的干跑里解析成该工作区的对象，经 ChangePlan 核心记成一条 ChangeSegment（`source_kind = 'admin_proposal'`） | 即上一行说的"管理员 Agent 的提案"这一来源。代码里 `ChangePlan` 只指核心（干跑计划、`change_segments`、已发版的 `change_plan_changed`），提案另起名，免得两样东西同名（2026-11-02 决定，governance 0032 `admin_proposals` / `admin_proposal_segments`）；与下一行代码层的 ChangeProposal 无关 |
 | **ChangeProposal（代码层，待定）** | Governance | 一个代码改动提议的平台侧记录：仓库、分支、PR 引用、头提交、CI 与审查状态、关联的 GoalRun | W5 决策门通过后才引入；Git 与 PR 是真源，平台只存引用与状态快照 |
 | **管理员 Agent** | 主体 | 由平台管理员启动、代表该管理员（`on_behalf_of`）运行的 agent 实例；能力上限是代码里的常量 `ADMIN_AGENT_CEILING` | 与入口 agent 同一运行时与镜像，不同的能力上限、不同的对话与容器 |
 | **试验工作区** | World | 管理员 Agent 探索与试运行用的普通工作区（RLS 隔离），生产工作区的变化只经 ChangePlan 进入 | 不是 2026-09 否决的"平台工作区"（那是身份方案）；它没有特权 |
@@ -142,6 +143,7 @@ Task / WorkerRun 与转移日志（每次转移发 `TaskUpdated`，`task/transit
 - `ChangePlan proposed_by` 管理员 Agent（或能力包清单）`on_behalf_of` 人；`ChangePlan contains ChangeSegment`（1..N，按授权排序）；`ChangeSegment approved_by` / `applied_by` 该段的有权者；
   `ChangeSegment requires ChangeSegment@digest`（工作区段依赖平台段的某个已应用版本，按摘要绑定；回滚按反向依赖）；`ChangeItem targets` 对象（门实例、Operation、WorkerDefinition、Skill、本体族、平台设置项）。
 - `Object changed_by ChangeItem`（溯源，与 S10 的 `installed_from` 同构）。
+- `AdminProposal proposed_in` 试验工作区、`proposed_by` 管理员 Agent `on_behalf_of` 人；`AdminProposal contains AdminProposalSegment`（每个目标一段）；`AdminProposalSegment addressed_to` 工作区，应用后 `recorded_as ChangeSegment`（AA3b-2）。上面 ChangePlan 那条关系里"管理员 Agent 提出"的部分，在代码里由这一条承担。
 
 **永不允许**：
 - 执行某步骤的 Task 给同一 GoalRun 的验收检查打分（执行者 ≠ 验收者）；
@@ -414,7 +416,7 @@ I-N1，列为待定（§5.5）。
   human Principal，并记下对应的平台用户——每次调用检查该用户当前仍是平台管理员（I-A3）。
 - Handle 用来源绑定（I19），不出容器；不签 API key、不用 service Principal（I-A1）。
 - 能力上限 `ADMIN_AGENT_CEILING`（新增常量，与入口、Worker 上限并列）：入口上限 + 只读的平台状态投影（门实例与健康、连接器三态、运行层盘点、
-  版本提醒、不变量指标、脱敏后的平台审计）+ 读定义类能力（`list_worker_definitions`、`get_skill` 等）+ `propose_change_plan` +
+  版本提醒、不变量指标、脱敏后的平台审计）+ 读定义类能力（`list_worker_definitions`、`get_skill` 等）+ `propose_admin_proposal` +
   在试验工作区内的 `invoke_worker`（W1 之后可用 GoalRun）。**不含**：任何 human 通道能力、`scope:'platform'` 写能力、生产工作区的任何动作、
   任何代码托管类能力。
 - 平台状态投影是新增的 handle 通道只读能力，字段按"不含凭证、不含内网地址细节"另定投影，不复用管理员页面的读接口（那些是 cookie 专用）。
@@ -530,7 +532,7 @@ W5 之前的路线（W0–W4）不依赖这一层；管理员 Agent 在配置层
 
 ### 5.9 控制台
 
-管理组新增：**管理员 Agent**（对话 + 它的目标与在途提案）、**变更计划**（列表与详情：平台段显示差异、授权影响分类、逐项确认、证据、应用、验证、
+管理组新增：**管理员 Agent**（对话 + 它的目标与在途提案）、**管理员提案**（列表与详情：平台段显示差异、授权影响分类、逐项确认、证据、应用、验证、
 回滚；工作区段只显示状态与 owner 写下的理由；部分应用状态）。生产工作区的 owner 在"能力目录"里看到待自己确认的工作区段，它的差异、校验结果与
 逐项确认只在这里生成和显示。代码提案页随 W5 决策门再定。
 
@@ -585,7 +587,7 @@ W5 之前的路线（W0–W4）不依赖这一层；管理员 Agent 在配置层
 | **W0 收尾与前置**（小，可与在途并行） | 治理 181、218、232；新遗留 287、291；主机窗口 H1 与控制台阶段关闭 | 无 | 各自的回归测试；287 是 W1 的硬前置 |
 | **W1 可靠多步执行** | GO1 数据与转移、GO2 推进器与对账、GO3 恢复 / 等待 / 取消 / 修订、GO4 验收、GO5 能力与入口 prompt、GO6 控制台、GO7 主机验收与第一个真实目标；并行车道 W1a：48 ②、E2 | W0 的 287 | §7.2 场景 S1–S12 在主机通过 |
 | **W2 动态组队与改计划** | GO8 WorkerSpec 组合与准入（含决定 288）、GO9 规划 Worker 与自主修订、GO10 预算全量与无进展熔断、GO11 任务级观察范围（与 E3 共用）、GO12 按目标资源的执行队列、GO13 能力发现增强、GO14 产物交接、GO15 控制台 | W1；48 ② | 一个目标中途一步失败，规划器换路后达成；组合 Worker 在授权内直接运行、越权的被拒或转审批；一步等审批不挡同门其他目标资源的动作 |
-| **W3 管理员 Agent 配置层** | 214、P0b、P1（ChangePlan 核心，按授权分段 + 摘要绑定 + 白名单分类；验收 = ops-base + 手写 knowledge 包）；AA1 身份与上限、AA2 平台状态投影、AA3 试验工作区、`propose_change_plan` 与平台段、AA4 控制台、AA5 验收旅程（工单夹具）、AA6（可选）OpenMetadata 包 | P0b → P1；AA1；**不依赖 W1**（与 W1 并行受并发上限约束） | §5.8 的旅程端到端；§5.7 的守卫测试全部通过 |
+| **W3 管理员 Agent 配置层** | 214、P0b、P1（ChangePlan 核心，按授权分段 + 摘要绑定 + 白名单分类；验收 = ops-base + 手写 knowledge 包）；AA1 身份与上限、AA2 平台状态投影、AA3 试验工作区、`propose_admin_proposal` 与平台段、AA4 控制台、AA5 验收旅程（工单夹具）、AA6（可选）OpenMetadata 包 | P0b → P1；AA1；**不依赖 W1**（与 W1 并行受并发上限约束） | §5.8 的旅程端到端；§5.7 的守卫测试全部通过 |
 | **W4 经验沉淀** | E3 Skill 评测 MVP；GO16 组合沉淀提议；GO17 先例与经验召回；GO18 `review` 类验收 | W2；229 已落地 | S10 G4；一个反复验证有效的组合被提议为定义并经人发布 |
 | **W5 管理员 Agent 代码层（待定）** | 决策门 D-W5（§5.5 的两条前提）；通过后再排 AA7–AA10 | W3；维护者决定 | 决策门通过前不开工；W0–W4 不依赖它 |
 

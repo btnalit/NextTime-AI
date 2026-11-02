@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   ATTEST_FACT_NOTE_MAX_LENGTH,
   CAPABILITY_REGISTRY,
+  type Capability,
   INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS,
   assertRegistryConsistent,
   capabilityHasSideEffects,
@@ -486,9 +487,13 @@ describe('platform_state: what an admin agent reads of the platform (S11 AA2)', 
       'platform_state_runtime',
       'platform_state_updates',
     ]);
+    // S11 AA3b: with the `admin_proposal` group's, no other.
+    const adminProposal = CAPABILITY_REGISTRY.filter(
+      (capability) => capability.group === 'admin_proposal',
+    );
     const flagged = CAPABILITY_REGISTRY.filter((capability) => capability.adminAgentOnly);
     expect(flagged.map((capability) => capability.name).sort()).toEqual(
-      group.map((capability) => capability.name).sort(),
+      [...group, ...adminProposal].map((capability) => capability.name).sort(),
     );
   });
 
@@ -605,5 +610,62 @@ describe('platform_state: what an admin agent reads of the platform (S11 AA2)', 
       'probe.items[].note: named like an address, command, free text or secret',
       'probe.items[].note: a string with no enum, pattern or format',
     ]);
+  });
+});
+
+describe('change_plan: what an admin agent proposes for people to apply (S11 AA3b)', () => {
+  const assertConsistent = (entries: readonly Capability[]) => assertRegistryConsistent(entries);
+  const group = CAPABILITY_REGISTRY.filter((capability) => capability.group === 'admin_proposal');
+
+  it('holds the proposal, its two reads and its withdrawal, each only an admin agent calls', () => {
+    expect(group.map((capability) => [capability.name, capability.mode])).toEqual([
+      ['propose_admin_proposal', 'propose'],
+      ['agent_list_admin_proposals', 'observe'],
+      ['agent_get_admin_proposal', 'observe'],
+      ['agent_withdraw_admin_proposal', 'write'],
+    ]);
+    for (const capability of group) {
+      expect(capability.adminAgentOnly, capability.name).toBe(true);
+      expect(capability.channel, capability.name).toBe('handle');
+      expect(capability.scope, capability.name).toBeUndefined();
+      expect(capability.minRole, capability.name).toBeUndefined();
+      expect(capability.actsForPerson, capability.name).toBeUndefined();
+      if (capability.mode === 'observe') {
+        expect(capabilityHasSideEffects(capability), capability.name).toBe(false);
+      }
+    }
+  });
+
+  it('has its platform-plane counterparts in the platform group, for a platform administrator', () => {
+    for (const name of ['list_admin_proposals', 'get_admin_proposal', 'withdraw_admin_proposal']) {
+      const capability = getCapability(name);
+      expect(capability?.group, name).toBe('platform');
+      expect(capability?.scope, name).toBe('platform');
+      expect(capability?.channel, name).toBe('human');
+      expect(capability?.adminAgentOnly, name).toBeUndefined();
+    }
+  });
+
+  it('refuses a group member that is not admin-agent-only, and an admin-agent-only execute', () => {
+    const base = {
+      name: 'probe',
+      group: 'admin_proposal',
+      mode: 'observe',
+      channel: 'handle',
+      paramsSchema: z.object({}).strict(),
+      description: 'probe',
+    } as const;
+    expect(() => assertConsistent([base])).toThrow(
+      /in group "admin_proposal" but not adminAgentOnly/,
+    );
+    expect(() => assertConsistent([{ ...base, adminAgentOnly: true, mode: 'execute' }])).toThrow(
+      /adminAgentOnly but executes/,
+    );
+    expect(() => assertConsistent([{ ...base, adminAgentOnly: true, group: 'graph' }])).toThrow(
+      /is not in group "platform_state" or "admin_proposal"/,
+    );
+    expect(() =>
+      assertConsistent([{ ...base, adminAgentOnly: true, group: 'platform_state', mode: 'write' }]),
+    ).toThrow(/is not a side-effect-free observe/);
   });
 });

@@ -9,6 +9,12 @@ import {
 import { OutboundTargetRefusedError } from '../../adapters/outbound-target/index.js';
 // S11 P1: the ChangePlan core's refusals (application/change-plan), same direct import.
 import {
+  AdminProposalCredentialError,
+  AdminProposalInvalidError,
+  AdminProposalNotFoundError,
+  AdminProposalNotOpenError,
+  AdminProposalQuotaExceededError,
+  AdminProposalTargetUnavailableError,
   ChangeApplierNotAPersonError,
   ChangeConfirmationRequiredError,
   ChangePlanChangedError,
@@ -310,6 +316,34 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // S11 P1 (I-A8): the segment recomputed in the applying transaction is not the one reviewed.
   // Nothing was applied; review it again.
   if (err instanceof ChangePlanChangedError) {
+    return { status: 409, code: err.code, message: err.message };
+  }
+  // S11 AA3b-1: an admin proposal, refused with nothing written — a target that
+  // cannot take a proposal (one code and one message for unknown, disabled and trial: `details.segment`
+  // is only the index into the call's segments), a credential (`details` names places, never the
+  // value), a proposal that would not apply as written (`details.problems`), the daily limit (429,
+  // `details.resetsAt`). Reading or withdrawing one: 404, and 409 when nothing is left to withdraw.
+  if (
+    err instanceof AdminProposalTargetUnavailableError ||
+    err instanceof AdminProposalCredentialError
+  ) {
+    return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
+  }
+  if (err instanceof AdminProposalInvalidError) {
+    return {
+      status: 400,
+      code: 'invalid_params',
+      message: err.message,
+      details: { problems: err.problems.map((problem) => ({ ...problem })) },
+    };
+  }
+  if (err instanceof AdminProposalQuotaExceededError) {
+    return { status: 429, code: err.code, message: err.message, details: { ...err.details } };
+  }
+  if (err instanceof AdminProposalNotFoundError) {
+    return { status: 404, code: err.code, message: err.message };
+  }
+  if (err instanceof AdminProposalNotOpenError) {
     return { status: 409, code: err.code, message: err.message };
   }
   // S11 P1-B: a segment rollback. Not in this workspace → 404; already rolled back → 409; an item

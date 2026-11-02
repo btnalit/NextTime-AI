@@ -965,6 +965,64 @@ export const CHANGE_PROVENANCE_STATUS_VALUES = [
 export type ChangeProvenanceStatus = (typeof CHANGE_PROVENANCE_STATUS_VALUES)[number];
 export const ChangeProvenanceStatusSchema = asEnum(CHANGE_PROVENANCE_STATUS_VALUES);
 
+// ---------------------------------------------------------------------------------------------
+// S11 AA3b Admin proposals (docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §3.1–
+// §3.3, §5.4): what an admin agent proposes from its trial workspace for people to apply elsewhere
+// (migration governance 0032; kernel `application/change-plan/admin-proposals.ts`).
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * A proposed segment's status (transitions.ts `ADMIN_PROPOSAL_SEGMENT_EDGES`; the database's
+ * `admin_proposal_segments_guard` holds the same edges). `proposed` until its authority decides it:
+ * `applied` (AA3b-2: by the owner of its target workspace, then `rolled_back` when that owner rolls
+ * the change back) or `rejected` with a reason; or `withdrawn` by the administrator who proposed it
+ * (through their agent or in the console). `rejected`, `withdrawn` and `rolled_back` are final.
+ */
+export const ADMIN_PROPOSAL_SEGMENT_STATUS_VALUES = [
+  'proposed',
+  'applied',
+  'rejected',
+  'withdrawn',
+  'rolled_back',
+] as const;
+export type AdminProposalSegmentStatus = (typeof ADMIN_PROPOSAL_SEGMENT_STATUS_VALUES)[number];
+export const AdminProposalSegmentStatusSchema = asEnum(ADMIN_PROPOSAL_SEGMENT_STATUS_VALUES);
+
+/**
+ * Who decides a proposed segment: `workspace` — the owner of its target workspace. (The platform
+ * segment, decided by a platform administrator, comes with AA3c.)
+ */
+export const ADMIN_PROPOSAL_SEGMENT_AUTHORITY_VALUES = ['workspace'] as const;
+export type AdminProposalSegmentAuthority =
+  (typeof ADMIN_PROPOSAL_SEGMENT_AUTHORITY_VALUES)[number];
+export const AdminProposalSegmentAuthoritySchema = asEnum(ADMIN_PROPOSAL_SEGMENT_AUTHORITY_VALUES);
+
+/**
+ * A proposal's status, derived from its segments' and never stored (`adminProposalStatusOf`):
+ * `proposed` — a segment still awaits its decision and none is applied; `partially_applied` — some
+ * segment is applied and not every one; `applied` — every segment is; `closed` — none awaits a
+ * decision and none is applied (rejected, withdrawn or rolled back).
+ */
+export const ADMIN_PROPOSAL_STATUS_VALUES = [
+  'proposed',
+  'partially_applied',
+  'applied',
+  'closed',
+] as const;
+export type AdminProposalStatus = (typeof ADMIN_PROPOSAL_STATUS_VALUES)[number];
+export const AdminProposalStatusSchema = asEnum(ADMIN_PROPOSAL_STATUS_VALUES);
+
+/** {@link ADMIN_PROPOSAL_STATUS_VALUES}' rule, from the segments' statuses. A proposal always has a
+ *  segment when proposed; one whose segments are all gone (each target workspace purged) is
+ *  `closed`. */
+export function adminProposalStatusOf(
+  segments: readonly AdminProposalSegmentStatus[],
+): AdminProposalStatus {
+  const applied = segments.filter((status) => status === 'applied').length;
+  if (applied > 0) return applied === segments.length ? 'applied' : 'partially_applied';
+  return segments.includes('proposed') ? 'proposed' : 'closed';
+}
+
 /**
  * What a workspace has of a pack, or of one of its components (S11 P1-C, Pack Contract v1; derived
  * from each component's current content, never stored): `not_installed` — nothing; `up_to_date` —

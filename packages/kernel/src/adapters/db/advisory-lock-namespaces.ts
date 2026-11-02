@@ -53,4 +53,11 @@ export const ADVISORY_LOCK_NAMESPACES = {
    * gatekeeper_id)`. Serializes starts per Gatekeeper so the guard sees every earlier start.
    */
   actionRequestExecution: 7241031,
+  /**
+   * `application/change-plan/admin-proposals.ts` (`proposeAdminProposal`, S11 AA3b F11): every proposal
+   * by one platform user; second key `hashtext(user_id)`. Taken before counting the user's proposals
+   * of the day (`admin_proposals_proposed_today()`, governance/0032), so two proposals at the limit
+   * cannot both pass — they may come from different trial workspaces.
+   */
+  adminProposalQuota: 7241032,
 } as const;

@@ -9,6 +9,12 @@ import {
 import { OutboundTargetRefusedError } from '../../adapters/outbound-target/index.js';
 // S11 P1: the ChangePlan core's refusals (application/change-plan), same direct import.
 import {
+  AdminProposalCredentialError,
+  AdminProposalInvalidError,
+  AdminProposalNotFoundError,
+  AdminProposalNotOpenError,
+  AdminProposalQuotaExceededError,
+  AdminProposalTargetUnavailableError,
   ChangeApplierNotAPersonError,
   ChangeConfirmationRequiredError,
   ChangePlanChangedError,
@@ -571,6 +577,25 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   if (err instanceof ChangePlanChangedError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // S11 AA3b-1: mirrors HTTP 400 `admin_proposal_target_unavailable` / `admin_proposal_credential` /
+  // `invalid_params`, 429 `admin_proposal_quota_exceeded`, 404 `admin_proposal_not_found` and 409
+  // `admin_proposal_not_open` (capability-route.ts).
+  if (
+    err instanceof AdminProposalTargetUnavailableError ||
+    err instanceof AdminProposalCredentialError ||
+    err instanceof AdminProposalInvalidError
+  ) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  if (err instanceof AdminProposalQuotaExceededError) {
+    return { code: WS_ERROR_CODES.QUOTA_EXCEEDED, message: err.message };
+  }
+  if (err instanceof AdminProposalNotFoundError) {
+    return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
+  }
+  if (err instanceof AdminProposalNotOpenError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // S11 P1-B/E: mirrors HTTP 404 `change_segment_not_found`, 409 `change_segment_rolled_back`,

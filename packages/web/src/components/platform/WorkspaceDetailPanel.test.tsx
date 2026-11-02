@@ -99,7 +99,7 @@ describe('WorkspaceDetailPanel', () => {
     expect(within(detail).getByTestId('workspace-detail-purpose').textContent).toBe('试验');
     const note = within(detail).getByTestId('workspace-detail-purpose-note').textContent ?? '';
     expect(note).toContain('管理员智能体只在这里操作');
-    expect(note).toContain('经人应用变更计划');
+    expect(note).toContain('经人应用管理员提案');
     expect(note).toContain('不能设为默认');
   });
 
