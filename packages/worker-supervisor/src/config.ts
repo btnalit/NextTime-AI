@@ -429,17 +429,59 @@ export const SpawnRequestSchema = z
      *  `residentService.spawn()` (same "route resolves the default, service always sees a concrete
      *  value" shape `/task/spawn` already uses for its own `image`). */
     image: z.string().min(1).optional(),
+    /** S11 AA4c-2 (`resident-kind.ts`): `'admin_agent'` spawns the Principal's admin agent's
+     *  resident container instead of its entry agent's; omitted is the entry agent, as before.
+     *  Forwarded by agent-host from the `startTurn` command's own field of the same name. An admin
+     *  agent mounts no Skills and has no per-source deny list — its source is deny-all — so a
+     *  request carrying either is refused rather than half applied. */
+    agentKind: z.literal('admin_agent').optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((request, ctx) => {
+    if (request.agentKind !== 'admin_agent') return;
+    if ((request.skillsInline ?? []).length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['skillsInline'],
+        message: 'an admin agent mounts no Skills',
+      });
+    }
+    if (request.egressDeny !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['egressDeny'],
+        message: 'an admin agent has no egress to narrow: its source is registered deny-all',
+      });
+    }
+  });
 export type SpawnRequest = z.infer<typeof SpawnRequestSchema>;
 
-/** `POST /resident/stop` request body. */
+/** `POST /resident/stop` request body. S11 AA4c-2: `agentKind: 'admin_agent'` stops the admin
+ *  agent's container; omitted stops the entry agent's, as before. */
 export const StopRequestSchema = z
+  .object({
+    principalId: IdClaimSchema,
+    agentKind: z.literal('admin_agent').optional(),
+  })
+  .strict();
+export type StopRequest = z.infer<typeof StopRequestSchema>;
+
+/** `POST /resident/reclaim` request body. Reclaims every kind of resident container the
+ *  Principal has (`resident-kind.ts`) — a purge leaves none of them — so it names no kind. */
+export const ReclaimRequestSchema = z
   .object({
     principalId: IdClaimSchema,
   })
   .strict();
-export type StopRequest = z.infer<typeof StopRequestSchema>;
+export type ReclaimRequest = z.infer<typeof ReclaimRequestSchema>;
+
+/** S11 AA4c-2: the query of `GET /resident/:principalId` and `POST /resident/:principalId/touch`
+ *  — `?agentKind=admin_agent` for the admin agent's container, none for the entry agent's. */
+export const ResidentKindQuerySchema = z
+  .object({
+    agentKind: z.literal('admin_agent').optional(),
+  })
+  .strict();
 
 /** Same UUID rule as the resident schemas above (see `IdClaimSchema`'s doc comment). */
 const idClaim = IdClaimSchema;

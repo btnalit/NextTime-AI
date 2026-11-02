@@ -150,10 +150,22 @@ function incompatibleImageError(image: string, verb: string): PlatformAdminError
   );
 }
 
+/** S11 AA4c-2: worker-supervisor's `GET /residents` lists every resident container, the admin
+ *  agents' beside the entry agents'. Everything in this module is about entry containers — the
+ *  inventory's `residentContainers`, `roll_entry_containers` and, through the inventory,
+ *  `platform_state_runtime` — so each keeps the entry ones only; an admin agent's container is
+ *  shown on its own page (AA4c-3). A worker-supervisor from before AA4c-2 names no kind: all
+ *  entry. */
+export function entryResidentsOnly(
+  residents: readonly ResidentInventoryEntry[],
+): ResidentInventoryEntry[] {
+  return residents.filter((resident) => (resident.agentKind ?? 'entry') === 'entry');
+}
+
 async function tryListResidents(): Promise<ResidentInventoryEntry[]> {
   try {
     const client = getConfiguredTaskRuntime().supervisorClient;
-    return client.listResidents ? await client.listResidents() : [];
+    return client.listResidents ? entryResidentsOnly(await client.listResidents()) : [];
   } catch {
     return [];
   }
@@ -534,7 +546,11 @@ export const rollbackRuntimeImageHandler: CapabilityHandler = async (
  *  Chat's owner, and a resident's Turns run in its own Chats — under the nil principal this check
  *  never saw a real private-chat Turn, so the roll could stop a resident mid-Turn (leftover 64's
  *  lock held, but the check it guards was blind). As the resident it sees every Turn it started:
- *  its own private Chats and any workspace-visible one. */
+ *  its own private Chats and any workspace-visible one.
+ *
+ *  S11 AA4c-2: an admin agent's Turn (`metadata.sessionKind = 'admin_agent'`, written when it
+ *  starts) runs in the person's admin container, which a roll never stops, and takes no part in
+ *  the roll lock (`application/chat/service.ts`) — so it does not hold the entry container back. */
 async function hasInFlightTurn(
   client: PoolClient,
   workspaceId: string,
@@ -544,6 +560,7 @@ async function hasInFlightTurn(
   const result = await client.query(
     `select 1 from activities
       where kind = 'agent_turn' and status = 'running' and started_by = $1
+        and coalesce(metadata ->> 'sessionKind', '') <> 'admin_agent'
       limit 1`,
     [principalId],
   );
@@ -574,7 +591,7 @@ export const rollEntryContainersHandler: CapabilityHandler = async (
   try {
     [imagesResult, residents] = await Promise.all([
       supervisor.listImages(),
-      supervisor.listResidents(),
+      supervisor.listResidents().then(entryResidentsOnly),
     ]);
   } catch (err) {
     throw new PlatformAdminError(

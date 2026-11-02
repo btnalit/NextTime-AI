@@ -568,7 +568,8 @@ describe('POST /resident/reclaim (S8 W5 leftover 77)', () => {
       payload: { principalId: ALICE },
     });
     expect(res.statusCode).toBe(204);
-    expect(docker.removeCalls).toEqual([`nexttime-entry-${ALICE}`]);
+    // S11 AA4c-2: the admin agent's container goes with the entry agent's.
+    expect(docker.removeCalls).toEqual([`nexttime-entry-${ALICE}`, `nexttime-admin-${ALICE}`]);
   });
 
   it('is a no-op 204 for a principal with no container', async () => {
@@ -673,6 +674,111 @@ describe('POST /resident/:principalId/touch', () => {
 
 // taskId/workerRunId/workspaceId/onBehalfOf must be UUIDs (TaskSpawnRequestSchema `idClaim`) —
 // see config.test.ts for the schema-level coverage; these are just fixed, readable stand-ins.
+describe('/resident/* with agentKind (S11 AA4c-2)', () => {
+  const spawnAdmin = (app: ReturnType<typeof setup>['app'], extra: Record<string, unknown> = {}) =>
+    app.inject({
+      method: 'POST',
+      url: '/resident/spawn',
+      headers: AGENT_HOST_AUTH,
+      payload: {
+        workspaceId: WS_R,
+        principalId: ALICE,
+        handle: 'h-admin',
+        agentKind: 'admin_agent',
+        ...extra,
+      },
+    });
+
+  it('spawns the admin agent’s own container and addresses it by kind', async () => {
+    const { app, docker } = setup();
+    await app.inject({
+      method: 'POST',
+      url: '/resident/spawn',
+      headers: AGENT_HOST_AUTH,
+      payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h' },
+    });
+    const spawned = await spawnAdmin(app);
+    expect(spawned.statusCode).toBe(200);
+    expect(docker.createCalls.map((call) => call.name)).toEqual([
+      `nexttime-entry-${ALICE}`,
+      `nexttime-admin-${ALICE}`,
+    ]);
+
+    const status = await app.inject({
+      method: 'GET',
+      url: `/resident/${ALICE}?agentKind=admin_agent`,
+      headers: AUTH,
+    });
+    expect(status.statusCode).toBe(200);
+    expect(status.json()).toMatchObject({ agentKind: 'admin_agent', running: true });
+    const entryStatus = await app.inject({
+      method: 'GET',
+      url: `/resident/${ALICE}`,
+      headers: AUTH,
+    });
+    expect(entryStatus.json()).toMatchObject({ agentKind: 'entry' });
+
+    const touched = await app.inject({
+      method: 'POST',
+      url: `/resident/${ALICE}/touch?agentKind=admin_agent`,
+      headers: AGENT_HOST_AUTH,
+    });
+    expect(touched.statusCode).toBe(204);
+
+    const stopped = await app.inject({
+      method: 'POST',
+      url: '/resident/stop',
+      headers: AUTH,
+      payload: { principalId: ALICE, agentKind: 'admin_agent' },
+    });
+    expect(stopped.statusCode).toBe(204);
+    expect(docker.stopCalls.map((call) => call.name)).toEqual([`nexttime-admin-${ALICE}`]);
+
+    const listed = await app.inject({ method: 'GET', url: '/residents', headers: AUTH });
+    expect(
+      listed
+        .json()
+        .items.map((item: { agentKind: string; running: boolean }) => [
+          item.agentKind,
+          item.running,
+        ]),
+    ).toEqual([
+      ['entry', true],
+      ['admin_agent', false],
+    ]);
+  });
+
+  it('refuses Skills or an egress list for an admin agent, and any other kind', async () => {
+    const { app, docker } = setup();
+    const withSkills = await spawnAdmin(app, {
+      skillsInline: [{ name: 'notes', files: { 'SKILL.md': '# notes' } }],
+    });
+    expect(withSkills.statusCode).toBe(400);
+    expect(withSkills.json().error.message).toContain('an admin agent mounts no Skills');
+    const withDeny = await spawnAdmin(app, { egressDeny: ['example.com'] });
+    expect(withDeny.statusCode).toBe(400);
+    expect(withDeny.json().error.message).toContain('deny-all');
+    const otherKind = await spawnAdmin(app, { agentKind: 'worker' });
+    expect(otherKind.statusCode).toBe(400);
+    expect(docker.createCalls).toEqual([]);
+
+    const badQuery = await app.inject({
+      method: 'GET',
+      url: `/resident/${ALICE}?agentKind=worker`,
+      headers: AUTH,
+    });
+    expect(badQuery.statusCode).toBe(400);
+    expect(badQuery.json().error.code).toBe('invalid_query');
+    const badStop = await app.inject({
+      method: 'POST',
+      url: '/resident/stop',
+      headers: AUTH,
+      payload: { principalId: ALICE, agentKind: 'entry' },
+    });
+    expect(badStop.statusCode).toBe(400);
+  });
+});
+
 const TASK_ID = '11111111-1111-1111-1111-111111111111';
 const WORKER_RUN_ID = '22222222-2222-2222-2222-222222222222';
 const WORKSPACE_ID = '33333333-3333-3333-3333-333333333333';

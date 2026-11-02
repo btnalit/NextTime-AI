@@ -1144,7 +1144,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         ).toContain(workspaceId);
 
         // The `afterCommit` container stop is best-effort and a no-op with no task runtime
-        // configured (`getConfiguredTaskRuntime` throws and `stopEntryContainers` returns) — the
+        // configured (`getConfiguredTaskRuntime` throws and `stopResidentContainers` returns) — the
         // capability must still resolve.
         const disabled = await callAsAdmin<PlatformWorkspaceWire>('set_workspace_status', {
           workspaceId,

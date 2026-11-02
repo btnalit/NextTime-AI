@@ -231,7 +231,12 @@ const enumsUnderTest = [
     WorkerDefinitionKindSchema,
     ['entry', 'worker'],
   ],
-  ['ExtensionMode', EXTENSION_MODE_VALUES, ExtensionModeSchema, ['entry', 'worker', 'interactive']],
+  [
+    'ExtensionMode',
+    EXTENSION_MODE_VALUES,
+    ExtensionModeSchema,
+    ['entry', 'worker', 'interactive', 'admin'],
+  ],
   [
     'MetaOntologyObjectType',
     META_ONTOLOGY_OBJECT_TYPE_VALUES,

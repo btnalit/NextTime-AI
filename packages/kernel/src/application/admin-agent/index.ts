@@ -3,6 +3,7 @@ export {
   ADMIN_AGENT_REFUSAL_REASONS,
   ADMIN_TRIAL_WORKSPACE_PURPOSE,
   AdminAgentRefused,
+  AdminAgentSessionEndedError,
   adminAgentEnabled,
   adminAgentRefusal,
   adminAgentRefusalOf,
@@ -11,6 +12,7 @@ export {
   openAdminAgentSession,
   readAdminAgentAuthorityFacts,
 } from './identity.js';
+export { loadAdminAgentSystemPrompt } from './prompt.js';
 export {
   type AdminAgentMembership,
   AdminAgentRoleNotStoredError,

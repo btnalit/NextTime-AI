@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig } from './config.js';
-import { createEgressMapStore } from './egress-map.js';
+import { DENY_ALL_FALLBACK_ALLOW, createEgressMapStore } from './egress-map.js';
 import type { EgressMapStore } from './egress-map.js';
 import { createResidentService } from './resident-service.js';
 import {
@@ -901,7 +901,8 @@ describe('resident-service reclaim (S8 W5 leftover 77)', () => {
 
     await service.reclaim('alice');
 
-    expect(docker.removeCalls).toEqual(['nexttime-entry-alice']);
+    // S11 AA4c-2: every kind of resident container the Principal may have.
+    expect(docker.removeCalls).toEqual(['nexttime-entry-alice', 'nexttime-admin-alice']);
     expect(docker.stopCalls).toEqual([]); // reclaim never calls stop() — remove() force-stops
     expect(egressMap.read()[outcome.ip as string]).toBeUndefined();
     expect(existsSync(workspaceDir)).toBe(false);
@@ -912,7 +913,7 @@ describe('resident-service reclaim (S8 W5 leftover 77)', () => {
   it('is a no-op when nothing was ever spawned for that principal (no container, no directory)', async () => {
     const { service, docker } = setup();
     await expect(service.reclaim('nobody')).resolves.toBeUndefined();
-    expect(docker.removeCalls).toEqual(['nexttime-entry-nobody']);
+    expect(docker.removeCalls).toEqual(['nexttime-entry-nobody', 'nexttime-admin-nobody']);
   });
 
   it('still removes the container when the workspace directory was already gone', async () => {
@@ -921,7 +922,7 @@ describe('resident-service reclaim (S8 W5 leftover 77)', () => {
     rmSync(join(dir, 'workspaces', 'alice'), { recursive: true, force: true });
 
     await expect(service.reclaim('alice')).resolves.toBeUndefined();
-    expect(docker.removeCalls).toEqual(['nexttime-entry-alice']);
+    expect(docker.removeCalls).toEqual(['nexttime-entry-alice', 'nexttime-admin-alice']);
   });
 });
 
@@ -1474,5 +1475,307 @@ describe('resident-service Handle binding (the Handle never enters the container
     // containers a later spawn recreates)
     expect(boundAtStop.length).toBeGreaterThanOrEqual(5);
     expect(boundAtStop).not.toContain(true);
+  });
+});
+
+describe('resident-service: an admin agent beside the entry agent (S11 AA4c-2)', () => {
+  const ADMIN = { agentKind: 'admin_agent' as const };
+
+  function envOf(docker: FakeDockerClient, name: string): readonly string[] {
+    const spec = docker.createCalls.find((call) => call.name === name);
+    if (!spec) throw new Error(`no container ${name} created`);
+    return spec.env;
+  }
+
+  it('gives the same person a container of each kind, with their own name, role, mode and directories', async () => {
+    const { service, docker } = setup();
+    await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      systemPrompt: 'entry',
+    });
+    await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h-admin',
+      systemPrompt: 'admin',
+      ...ADMIN,
+    });
+
+    expect(docker.createCalls.map((call) => call.name)).toEqual([
+      'nexttime-entry-alice',
+      'nexttime-admin-alice',
+    ]);
+    // The second spawn never touched the entry agent's container.
+    expect(docker.stopCalls).toEqual([]);
+    expect(docker.removeCalls).toEqual([]);
+    const admin = docker.createCalls[1];
+    expect(admin?.labels['nexttime.role']).toBe('admin');
+    expect(envOf(docker, 'nexttime-admin-alice')).toContain('NEXTTIME_MODE=admin');
+    expect(envOf(docker, 'nexttime-entry-alice')).toContain('NEXTTIME_MODE=entry');
+    expect(admin?.binds).toEqual([
+      '/host/data/workspaces/.admin/alice:/workspace',
+      '/host/data/workspaces/.platform/admin-agents/alice:/opt/nexttime/platform:ro',
+      expect.stringMatching(/:\/opt\/nexttime\/models\.json:ro$/),
+    ]);
+    // Each prompt in its own platform directory.
+    expect(readFileSync(join(platformDir('alice'), 'system-prompt.md'), 'utf8')).toBe('entry');
+    expect(
+      readFileSync(
+        join(dir, 'workspaces', '.platform', 'admin-agents', 'alice', 'system-prompt.md'),
+        'utf8',
+      ),
+    ).toBe('admin');
+    expect(existsSync(join(dir, 'workspaces', '.admin', 'alice'))).toBe(true);
+  });
+
+  it('registers the admin agent’s source deny-all and binds its Handle under that source', async () => {
+    const { service, egressMap, handleBindings } = setup();
+    const entry = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    const admin = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h-admin',
+      ...ADMIN,
+    });
+
+    const map = egressMap.read();
+    expect(map[entry.ip as string]).toEqual({ sourceId: 'entry:ws-1:alice' });
+    expect(map[admin.ip as string]).toEqual({
+      sourceId: 'admin:ws-1:alice',
+      allow: [DENY_ALL_FALLBACK_ALLOW],
+      denyAll: true,
+    });
+    const bindings = handleBindings.snapshot();
+    expect(bindings.get(admin.ip as string)).toMatchObject({
+      handle: 'h-admin',
+      sourceId: 'admin:ws-1:alice',
+      containerId: admin.containerId,
+    });
+    expect(bindings.get(entry.ip as string)).toMatchObject({
+      handle: 'h',
+      sourceId: 'entry:ws-1:alice',
+    });
+  });
+
+  it('keeps the admin agent’s source deny-all on a reuse too', async () => {
+    const { service, egressMap } = setup();
+    const first = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h-admin',
+      ...ADMIN,
+    });
+    const again = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h-admin',
+      ...ADMIN,
+    });
+    expect(again.created).toBe(false);
+    expect(again.containerId).toBe(first.containerId);
+    expect(egressMap.read()[again.ip as string]).toMatchObject({ denyAll: true });
+  });
+
+  it('removes an admin agent’s container whose deny-all registration failed, and the spawn fails', async () => {
+    const config = loadConfig({
+      NEXTTIME_DATA: '/host/data',
+      LOCAL_DATA_DIR: dir,
+      EGRESS_SOURCE_MAP_FILE: join(dir, 'egress-sources.json'),
+    });
+    const docker = createFakeDockerClient();
+    const handleBindings = memoryHandleBindings();
+    const throwingEgressMap: EgressMapStore = {
+      register: () => {
+        throw new Error('EACCES: permission denied');
+      },
+      unregister: () => {},
+      read: () => ({}),
+    };
+    const service = createResidentService({
+      config,
+      docker,
+      handleBindings,
+      egressMap: throwingEgressMap,
+    });
+
+    await expect(
+      service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h-admin', ...ADMIN }),
+    ).rejects.toThrow(
+      /nexttime-admin-alice was not started: its deny-all egress registration failed/,
+    );
+    expect(docker.removeCalls).toEqual(['nexttime-admin-alice']);
+    expect(await docker.inspectByName('nexttime-admin-alice')).toBeUndefined();
+    expect(handleBindings.snapshot().size).toBe(0);
+    expect(await service.touch('alice', 'admin_agent')).toBe(false);
+
+    // The entry agent's registration stays best-effort, as before.
+    await expect(
+      service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' }),
+    ).resolves.toMatchObject({ created: true });
+  });
+
+  it('registers the admin agent’s deny-all before its Handle is bound, and takes it back when the binding fails', async () => {
+    const config = loadConfig({
+      NEXTTIME_DATA: '/host/data',
+      LOCAL_DATA_DIR: dir,
+      EGRESS_SOURCE_MAP_FILE: join(dir, 'egress-sources.json'),
+    });
+    const real = createEgressMapStore(config.egressSourceMapFile);
+    const order: string[] = [];
+    let handleBindings = memoryHandleBindings();
+    const recordingEgressMap: EgressMapStore = {
+      register: (ip, entry) => {
+        order.push(`egress:${entry.sourceId}:bound=${handleBindings.snapshot().has(ip)}`);
+        real.register(ip, entry);
+      },
+      unregister: (ip) => {
+        order.push('unregister');
+        real.unregister(ip);
+      },
+      read: () => real.read(),
+    };
+    const service = createResidentService({
+      config,
+      docker: createFakeDockerClient(),
+      handleBindings: {
+        bind: (ip, binding) => handleBindings.bind(ip, binding),
+        unbind: (ip, containerId) => handleBindings.unbind(ip, containerId),
+        retainLive: (isLive) => handleBindings.retainLive(isLive),
+        snapshot: () => handleBindings.snapshot(),
+      },
+      egressMap: recordingEgressMap,
+    });
+
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h-admin', ...ADMIN });
+    // The entry agent keeps its order: bound first, then registered.
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'bob', handle: 'h' });
+    expect(order).toEqual([
+      'egress:admin:ws-1:alice:bound=false',
+      'egress:entry:ws-1:bob:bound=true',
+    ]);
+
+    // A binding that fails after the deny-all went in leaves no registration behind.
+    handleBindings = memoryHandleBindings({ failBind: true });
+    order.length = 0;
+    await expect(
+      service.spawn({ workspaceId: 'ws-1', principalId: 'carol', handle: 'h-admin', ...ADMIN }),
+    ).rejects.toThrow();
+    expect(order).toEqual(['egress:admin:ws-1:carol:bound=false', 'unregister']);
+    expect(Object.values(real.read()).map((entry) => entry.sourceId)).not.toContain(
+      'admin:ws-1:carol',
+    );
+  });
+
+  it('stops, touches and reports one kind without the other', async () => {
+    const { service, docker } = setup();
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h-admin', ...ADMIN });
+
+    expect(await service.status('alice', 'admin_agent')).toMatchObject({
+      agentKind: 'admin_agent',
+      running: true,
+    });
+    expect(await service.status('alice')).toMatchObject({ agentKind: 'entry', running: true });
+
+    await service.stop('alice', 'admin_agent');
+    expect(docker.stopCalls.map((call) => call.name)).toEqual(['nexttime-admin-alice']);
+    expect(await service.status('alice', 'admin_agent')).toMatchObject({ running: false });
+    expect(await service.status('alice')).toMatchObject({ running: true });
+    expect(await service.touch('alice', 'admin_agent')).toBe(false);
+    expect(await service.touch('alice')).toBe(true);
+
+    await service.stop('alice');
+    expect(docker.stopCalls.map((call) => call.name)).toEqual([
+      'nexttime-admin-alice',
+      'nexttime-entry-alice',
+    ]);
+  });
+
+  it('sweeps each kind on its own idle clock', async () => {
+    const { service, docker, advanceClock } = setup();
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    advanceClock(600);
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h-admin', ...ADMIN });
+    advanceClock(600);
+
+    await service.sweepIdle();
+    expect(docker.stopCalls.map((call) => call.name)).toEqual(['nexttime-entry-alice']);
+
+    advanceClock(600);
+    await service.sweepIdle();
+    expect(docker.stopCalls.map((call) => call.name)).toEqual([
+      'nexttime-entry-alice',
+      'nexttime-admin-alice',
+    ]);
+  });
+
+  it('lists both kinds with their kind, and reconcile restores the admin agent’s deny-all source', async () => {
+    const first = setup();
+    await first.service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    const admin = await first.service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h-admin',
+      ...ADMIN,
+    });
+
+    const listed = await first.service.list();
+    expect(listed.map((item) => [item.agentKind, item.principalId])).toEqual([
+      ['entry', 'alice'],
+      ['admin_agent', 'alice'],
+    ]);
+
+    // A restarted supervisor over the same containers and an emptied source map.
+    rmSync(first.config.egressSourceMapFile, { force: true });
+    const egressMap = createEgressMapStore(first.config.egressSourceMapFile);
+    const restarted = createResidentService({
+      config: first.config,
+      docker: first.docker,
+      handleBindings: memoryHandleBindings(),
+      egressMap,
+      now: () => 0,
+    });
+    await restarted.reconcile();
+    expect(egressMap.read()[admin.ip as string]).toEqual({
+      sourceId: 'admin:ws-1:alice',
+      allow: [DENY_ALL_FALLBACK_ALLOW],
+      denyAll: true,
+    });
+    expect(await restarted.touch('alice', 'admin_agent')).toBe(true);
+    expect(await restarted.touch('alice')).toBe(true);
+  });
+
+  it('a docker event for the admin agent’s container unregisters it alone', async () => {
+    const { service, docker, egressMap } = setup();
+    const entry = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    const admin = await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h-admin',
+      ...ADMIN,
+    });
+
+    docker.simulateExternalKill('nexttime-admin-alice');
+    expect(await service.notifyContainerExited(admin.containerId, 'die')).toBe(true);
+    expect(egressMap.read()[admin.ip as string]).toBeUndefined();
+    expect(egressMap.read()[entry.ip as string]).toEqual({ sourceId: 'entry:ws-1:alice' });
+    expect(await service.touch('alice')).toBe(true);
+  });
+
+  it('reclaims the admin agent’s directories with the entry agent’s', async () => {
+    const { service } = setup();
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h-admin', ...ADMIN });
+    const adminWorkspace = join(dir, 'workspaces', '.admin', 'alice');
+    const adminPlatform = join(dir, 'workspaces', '.platform', 'admin-agents', 'alice');
+    expect(existsSync(adminWorkspace)).toBe(true);
+    expect(existsSync(adminPlatform)).toBe(true);
+
+    await service.reclaim('alice');
+    expect(existsSync(adminWorkspace)).toBe(false);
+    expect(existsSync(adminPlatform)).toBe(false);
+    expect(await service.status('alice', 'admin_agent')).toBeUndefined();
   });
 });

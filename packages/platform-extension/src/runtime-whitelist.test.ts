@@ -2,6 +2,7 @@ import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import {
   chmodSync,
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -526,7 +527,7 @@ describe('worker-runtime whitelist start (entrypoint.sh + real pi)', () => {
     expectOnlyPlatformResources(requests[0], defaultPrompt.split('\n')[0] ?? '');
   }, 90_000);
 
-  it.each(['entry', 'worker'])(
+  it.each(['entry', 'admin', 'worker'])(
     'refuses to start in %s mode when the test-only root is set',
     async (mode) => {
       layOutImage(1, { prompt: `${PLATFORM_PROMPT}\n` });
@@ -535,6 +536,30 @@ describe('worker-runtime whitelist start (entrypoint.sh + real pi)', () => {
       expect(runtime.stdoutLines).toContain(
         'nexttime-selfcheck check=runtime_root result=fail reason=test_only_variable_set',
       );
+    },
+    30_000,
+  );
+
+  // S11 AA4c-2: an admin container never falls back to the image's default prompt (the entry
+  // agent's). Run without the test-only root, which admin mode refuses before anything else: the
+  // check comes before the script writes anything, so on a runner with no `/opt/nexttime` it is the
+  // first thing that answers.
+  it.skipIf(existsSync('/opt/nexttime/platform/system-prompt.md'))(
+    'refuses to start in admin mode without the platform’s own prompt, before writing anything',
+    async () => {
+      const child = spawn('sh', [ENTRYPOINT], {
+        env: { PATH: process.env.PATH ?? '', NEXTTIME_MODE: 'admin' },
+      });
+      children.push(child);
+      let stdout = '';
+      child.stdout.on('data', (data: Buffer) => {
+        stdout += data.toString();
+      });
+      const code = await new Promise<number | null>((resolve) => child.on('exit', resolve));
+      expect(code).toBe(1);
+      expect(stdout.trim().split('\n')).toEqual([
+        'nexttime-selfcheck check=admin_prompt result=fail reason=platform_prompt_missing',
+      ]);
     },
     30_000,
   );

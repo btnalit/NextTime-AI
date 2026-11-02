@@ -42,6 +42,11 @@
  * `spawn()` compares it against the running container's own label the same way it already compares
  * `HANDLE_JTI_LABEL`/`SKILLS_HASH_LABEL`/`EGRESS_DENY_LABEL`, so a changed active runtime image
  * forces a recreate at the container's own next spawn instead of silently keeping the old image.
+ *
+ * S11 AA4c-2 addition: `input.agentKind` builds an admin agent's resident container instead
+ * (`resident-kind.ts`): `nexttime-admin-<principal>`, `nexttime.role=admin`, `NEXTTIME_MODE=admin`
+ * and its own directories. The env is otherwise the same list; the admin container goes through
+ * the same egress proxy, where its source is registered deny-all (`resident-service.ts`).
  */
 
 import { createHash } from 'node:crypto';
@@ -56,10 +61,20 @@ import {
   hostModelsJsonPath,
   workspacePaths,
 } from './host-paths.js';
+import {
+  type ResidentAgentKind,
+  residentContainerName,
+  residentExtensionMode,
+  residentRoleValue,
+} from './resident-kind.js';
 import { RUNTIME_CONTRACT_VERSION } from './runtime-contract.js';
 
 export const ENTRY_ROLE_LABEL = 'nexttime.role';
 export const ENTRY_ROLE_VALUE = 'entry';
+/** S11 AA4c-2: `nexttime.role` on an admin agent's resident container (`resident-kind.ts`) —
+ *  deliberately not `entry`, so a supervisor from before AA4c-2 never lists one as an entry
+ *  container. */
+export const ADMIN_ROLE_VALUE = 'admin';
 export const PRINCIPAL_LABEL = 'nexttime.principal';
 export const WORKSPACE_LABEL = 'nexttime.workspace';
 export const RESTARTS_LABEL = 'nexttime.restarts';
@@ -126,13 +141,16 @@ export function hashSkillsInline(skillsInline: readonly TaskSkillInline[]): stri
 }
 
 export function entryContainerName(principalId: string): string {
-  return `nexttime-entry-${principalId}`;
+  return residentContainerName('entry', principalId);
 }
 
 export interface BuildSpawnSpecInput {
   readonly config: SupervisorConfig;
   readonly workspaceId: string;
   readonly principalId: string;
+  /** S11 AA4c-2: whose resident container this is (`resident-kind.ts`) — the entry agent's when
+   *  omitted. Decides the name, the role label, `NEXTTIME_MODE` and the host directories. */
+  readonly agentKind?: ResidentAgentKind;
   readonly kernelUrl?: string;
   readonly llmUrl?: string;
   readonly networkName: string;
@@ -163,7 +181,8 @@ export interface BuildSpawnSpecInput {
 
 export function buildSpawnSpec(input: BuildSpawnSpecInput): ContainerSpec {
   const { config } = input;
-  const paths = workspacePaths(config, input.principalId);
+  const kind = input.agentKind ?? 'entry';
+  const paths = workspacePaths(config, input.principalId, kind);
 
   const env: string[] = [
     `KERNEL_URL=${input.kernelUrl ?? config.kernelUrl}`,
@@ -175,7 +194,7 @@ export function buildSpawnSpec(input: BuildSpawnSpecInput): ContainerSpec {
     // Required by @nexttime/platform-extension (index.ts readRequiredEnv) — see this module's
     // doc comment.
     `WORKSPACE_ID=${input.workspaceId}`,
-    'NEXTTIME_MODE=entry',
+    `NEXTTIME_MODE=${residentExtensionMode(kind)}`,
     `HTTP_PROXY=${config.httpProxyForWorkers}`,
     `HTTPS_PROXY=${config.httpProxyForWorkers}`,
     `NO_PROXY=${config.noProxyForWorkers}`,
@@ -194,13 +213,13 @@ export function buildSpawnSpec(input: BuildSpawnSpecInput): ContainerSpec {
   ];
 
   return {
-    name: entryContainerName(input.principalId),
+    name: residentContainerName(kind, input.principalId),
     image: input.image,
     cmd: input.model ? ['--model', input.model] : undefined,
     env,
     binds,
     labels: {
-      [ENTRY_ROLE_LABEL]: ENTRY_ROLE_VALUE,
+      [ENTRY_ROLE_LABEL]: residentRoleValue(kind),
       [PRINCIPAL_LABEL]: input.principalId,
       [WORKSPACE_LABEL]: input.workspaceId,
       [RESTARTS_LABEL]: String(input.restarts),

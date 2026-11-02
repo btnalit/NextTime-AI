@@ -3,11 +3,11 @@
 # docs/development-tasks.md S1.5). Runs as the non-root `nexttime` user (uid 10001), root
 # filesystem read-only, `/workspace` (the per-principal bind mount) and `/tmp` (tmpfs) writable.
 #
-# `NEXTTIME_MODE` (entry/worker/interactive) is read by @nexttime/platform-extension itself, not
-# branched on here — this script's job is only to prepare pi's directories and exec pi with an
-# explicit whitelist of everything it loads, with the flags verified against pi 0.84.4's own CLI
-# and re-verified on 0.87.1, 0.99.2 and 1.1.0 (see Dockerfile header for the exact source
-# files/lines cited).
+# `NEXTTIME_MODE` (entry/admin/worker/interactive) is read by @nexttime/platform-extension itself;
+# here it only picks which checks run (below) — this script's job is to prepare pi's directories
+# and exec pi with an explicit whitelist of everything it loads, with the flags verified against
+# pi 0.84.4's own CLI and re-verified on 0.87.1, 0.99.2 and 1.1.0 (see Dockerfile header for the
+# exact source files/lines cited).
 #
 # Whitelist start (STATUS leftover 422, docs/runbooks/pi-upgrade.md §2.6; maintainer 2026-10-23:
 # the platform uses pi's core runtime only, every outer layer is the platform's own): pi loads nothing it finds on its own — not from
@@ -100,6 +100,14 @@
 # The two source-binding checks are invariants too and fatal: `handle_env` (no Handle in the
 # environment) and `handle_binding` (pi starts only once this container's address is bound to this
 # container).
+#
+# Admin mode (S11 AA4c-2): a platform administrator's admin agent, in a resident container of its
+# own (worker-supervisor `resident-kind.ts`). Every check above runs for it as for entry mode, and
+# two are stricter. Its egress source is registered deny-all, so the proxied probe must be *refused*
+# (`egress_denied`): a proxied request that goes through means its isolation is not in place, and
+# pi does not start. And it needs the platform's own admin agent prompt (`admin_prompt`): the image's
+# default prompt is the entry agent's, so an admin container without its prompt refuses to start
+# rather than run as something it is not.
 
 set -eu
 
@@ -110,7 +118,7 @@ set -eu
 ROOT="${NEXTTIME_RUNTIME_ROOT:-}"
 if [ -n "$ROOT" ]; then
 	case "${NEXTTIME_MODE:-}" in
-	entry | worker)
+	entry | admin | worker)
 		echo "nexttime-selfcheck check=runtime_root result=fail reason=test_only_variable_set"
 		exit 1
 		;;
@@ -124,6 +132,13 @@ PI_SETTINGS_FILE="$ROOT/opt/nexttime/pi-settings.json"
 MODELS_JSON="$ROOT/opt/nexttime/models.json"
 DEFAULT_SYSTEM_PROMPT_FILE="$ROOT/opt/nexttime/default-system-prompt.md"
 EXTENSION_ENTRY="$ROOT/opt/nexttime/platform-extension/dist/index.js"
+
+# Admin mode (header): never on the image's default prompt, which is the entry agent's. Checked
+# before anything is written, so a container started without its prompt changes nothing.
+if [ "${NEXTTIME_MODE:-}" = "admin" ] && [ ! -f "$PLATFORM_DIR/system-prompt.md" ]; then
+	echo "nexttime-selfcheck check=admin_prompt result=fail reason=platform_prompt_missing"
+	exit 1
+fi
 
 mkdir -p "$SESSION_DIR" "$ROOT/workspace/.local"
 
@@ -153,7 +168,12 @@ if [ ! -f "$SYSTEM_PROMPT_FILE" ]; then
 	system_prompt_source=default
 fi
 
-if [ "${NEXTTIME_MODE:-}" = "worker" ] || [ "${NEXTTIME_MODE:-}" = "entry" ]; then
+case "${NEXTTIME_MODE:-}" in
+worker | entry | admin) run_selfcheck=1 ;;
+*) run_selfcheck=0 ;;
+esac
+
+if [ "$run_selfcheck" = "1" ]; then
 	# Whitelist start (STATUS leftover 422): models.json is worker-supervisor's read-only mount; the
 	# image only holds an empty placeholder at that path. Empty means a worker-supervisor from before
 	# this image started the container (an upgrade between pulling the images and restarting the
@@ -242,6 +262,15 @@ if [ "${NEXTTIME_MODE:-}" = "worker" ] || [ "${NEXTTIME_MODE:-}" = "entry" ]; th
 
 	if [ "${NEXTTIME_SELFCHECK_SKIP_PUBLIC_EGRESS_PROBE:-}" = "1" ]; then
 		echo "nexttime-selfcheck check=egress_via_proxy result=skip reason=NEXTTIME_SELFCHECK_SKIP_PUBLIC_EGRESS_PROBE=1"
+	elif [ "${NEXTTIME_MODE:-}" = "admin" ]; then
+		# Admin mode (header): its source is deny-all, so this must fail. Fatal when it does not —
+		# not weather, its isolation. No proxy configured at all is no route out either.
+		if [ -n "${HTTP_PROXY:-}${HTTPS_PROXY:-}${http_proxy:-}${https_proxy:-}" ] &&
+			curl --max-time 5 -s -o /dev/null https://example.com; then
+			echo "nexttime-selfcheck check=egress_denied result=fail reason=proxied_request_allowed"
+			exit 1
+		fi
+		echo "nexttime-selfcheck check=egress_denied result=ok"
 	else
 		# A false "proxied ok" (direct route + unset proxy vars) is worse than no check at all.
 		if [ -z "${HTTP_PROXY:-}${HTTPS_PROXY:-}${http_proxy:-}${https_proxy:-}" ]; then

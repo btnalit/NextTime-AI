@@ -29,6 +29,7 @@ import {
   generateEphemeralHandleKeyPair,
   issueHandle,
 } from '../../governance/capability/index.js';
+import { startActivity } from '../../substrate/epistemic/index.js';
 import { newChat, sendChatMessage } from '../chat/index.js';
 import { createPlatformAdmin } from '../identity/index.js';
 import type { UserRow } from '../identity/index.js';
@@ -142,6 +143,8 @@ class FakeRuntimeSupervisorClient implements TaskSupervisorClientPort {
    *  worker-supervisor that predates it, so every existing test here sees no compatibility verdict. */
   runtimeContract: string | undefined = undefined;
   readonly stoppedPrincipalIds: string[] = [];
+  /** S11 AA4c-2: every `stopResident` call's kind (`entry` when it named none), in call order. */
+  readonly stoppedAgentKinds: string[] = [];
 
   async spawn(): Promise<TaskSpawnOutcome> {
     throw new Error('FakeRuntimeSupervisorClient.spawn is not exercised by this test file');
@@ -152,8 +155,9 @@ class FakeRuntimeSupervisorClient implements TaskSupervisorClientPort {
   async status(): Promise<TaskSupervisorStatus | undefined> {
     throw new Error('FakeRuntimeSupervisorClient.status is not exercised by this test file');
   }
-  async stopResident(principalId: string): Promise<boolean> {
+  async stopResident(principalId: string, agentKind?: 'admin_agent'): Promise<boolean> {
     this.stoppedPrincipalIds.push(principalId);
+    this.stoppedAgentKinds.push(agentKind ?? 'entry');
     return true;
   }
   async listImages(): Promise<{
@@ -694,6 +698,24 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(staleResult?.needsRebuild).toBe(true);
       });
 
+      it('lists entry containers only: an admin agent’s container is not one (S11 AA4c-2)', async () => {
+        supervisor.images = [IMAGE_V1, IMAGE_V2];
+        await callAsAdmin('set_active_runtime_image', { image: 'nexttime-ai-worker-runtime:v2' });
+        const principalId = randomUUID();
+        const entry = residentEntry({ principalId, imageId: IMAGE_V1.id });
+        const legacy = residentEntry({ imageId: IMAGE_V1.id });
+        supervisor.residents = [
+          { ...entry, agentKind: 'entry' },
+          legacy, // a worker-supervisor from before AA4c-2 names no kind: entry
+          residentEntry({ principalId, agentKind: 'admin_agent', imageId: IMAGE_V1.id }),
+        ];
+
+        const result = await callAsAdmin<RuntimeInventoryWire>('runtime_inventory');
+        expect(result.residentContainers.map((c) => c.containerId).sort()).toEqual(
+          [entry.containerId, legacy.containerId].sort(),
+        );
+      });
+
       it('reports activeImageSource "unknown" (activeImage null) when the setting is unset and worker-supervisor is unreachable', async () => {
         await resetActiveRuntimeImageSetting();
         supervisor.imagesShouldThrow = true;
@@ -743,6 +765,52 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(busyOutcome?.action).toBe('skipped_in_flight');
         expect(supervisor.stoppedPrincipalIds).toEqual([idleStale.principalId]);
         expect(result.stoppedCount).toBe(1);
+      });
+
+      it('leaves admin agent containers alone, and an admin agent Turn does not hold the entry container back (S11 AA4c-2)', async () => {
+        supervisor.images = [IMAGE_V1, IMAGE_V2];
+        await callAsAdmin('set_active_runtime_image', { image: 'nexttime-ai-worker-runtime:v2' });
+
+        const principalId = await insertHumanPrincipal(workspaceId, 'Admin Principal');
+        const entry = residentEntry({ workspaceId, principalId, imageId: IMAGE_V1.id });
+        const adminOnly = residentEntry({ agentKind: 'admin_agent', imageId: IMAGE_V1.id });
+        supervisor.residents = [
+          entry,
+          residentEntry({
+            workspaceId,
+            principalId,
+            agentKind: 'admin_agent',
+            imageId: IMAGE_V1.id,
+          }),
+          adminOnly,
+        ];
+        // A running Turn of this person's admin agent (what `sendChatMessage` records for one, core
+        // 0052): it runs in the admin container, which the roll does not touch.
+        const chat = await withWorkspace(pool, { workspaceId, principalId }, (client) =>
+          newChat(client, workspaceId, principalId, {}),
+        );
+        await withWorkspace(pool, { workspaceId, principalId }, (client) =>
+          startActivity(client, workspaceId, {
+            kind: 'agent_turn',
+            chatId: chat.id,
+            principalId,
+            metadata: { sessionKind: 'admin_agent', sessionId: randomUUID() },
+          }),
+        );
+
+        const everyone = await callAsAdmin<RollEntryContainersResultWire>('roll_entry_containers');
+        expect(everyone.outcomes).toEqual([{ principalId, workspaceId, action: 'stopped' }]);
+        expect(supervisor.stoppedPrincipalIds).toEqual([principalId]);
+        expect(supervisor.stoppedAgentKinds).toEqual(['entry']);
+
+        // Named outright, a person with only an admin agent container has no entry one to roll.
+        const named = await callAsAdmin<RollEntryContainersResultWire>('roll_entry_containers', {
+          principalIds: [adminOnly.principalId],
+        });
+        expect(named.outcomes).toEqual([
+          { principalId: adminOnly.principalId, workspaceId: '', action: 'skipped_not_found' },
+        ]);
+        expect(supervisor.stoppedPrincipalIds).toEqual([principalId]);
       });
 
       it('skips a container that is already up to date', async () => {

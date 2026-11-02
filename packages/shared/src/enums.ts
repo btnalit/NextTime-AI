@@ -1351,8 +1351,9 @@ export const WORKER_DEFINITION_KIND_VALUES = ['entry', 'worker'] as const;
 export type WorkerDefinitionKind = (typeof WORKER_DEFINITION_KIND_VALUES)[number];
 export const WorkerDefinitionKindSchema = asEnum(WORKER_DEFINITION_KIND_VALUES);
 
-/** Platform extension mode (§7.4 `NEXTTIME_MODE`): entry / worker / interactive (your local pi). */
-export const EXTENSION_MODE_VALUES = ['entry', 'worker', 'interactive'] as const;
+/** Platform extension mode (§7.4 `NEXTTIME_MODE`): entry / worker / interactive (your local pi) /
+ *  admin (S11 AA4c-2: a platform administrator's admin agent, in its own resident container). */
+export const EXTENSION_MODE_VALUES = ['entry', 'worker', 'interactive', 'admin'] as const;
 export type ExtensionMode = (typeof EXTENSION_MODE_VALUES)[number];
 export const ExtensionModeSchema = asEnum(EXTENSION_MODE_VALUES);
 

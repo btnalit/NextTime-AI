@@ -21,6 +21,13 @@ import {
 } from '../../governance/capability/index.js';
 import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
 import {
+  ADMIN_AGENT_HANDLE_MAX_TTL_SECONDS,
+  AdminAgentRefused,
+  adminAgentRefusal,
+  issueAdminAgentHandle,
+  loadAdminAgentSystemPrompt,
+} from '../admin-agent/index.js';
+import {
   hasActiveSealHold,
   recordEvaluationWithheld,
   recordProbeHoldRefusal,
@@ -130,6 +137,12 @@ export interface AgentHostRuntimeDeps {
    *  the configured `KERNEL_LLM_URL`; agent-host does not form its own opinion about it. */
   readonly kernelLlmUrl: string;
   readonly entryHandleTtlSeconds?: number;
+  /** S11 AA4c-2: an admin agent's Handle ttl — at most, and by default,
+   *  `ADMIN_AGENT_HANDLE_MAX_TTL_SECONDS` (an hour). */
+  readonly adminAgentHandleTtlSeconds?: number;
+  /** S11 AA4c-2: the admin agent's system prompt — `ontology/admin-agent.yaml` by default
+   *  (`loadAdminAgentSystemPrompt`); tests supply their own. A rejection fails the Turn. */
+  readonly adminAgentSystemPrompt?: () => Promise<string>;
   readonly turnAcceptedTimeoutMs?: number;
   readonly now?: () => number;
   /** Structured logger for warnings/failures only — never receives a Handle token or prompt text.
@@ -141,6 +154,9 @@ interface ActiveTurn {
   readonly workspaceId: string;
   readonly chatId: string;
   readonly principalId: string;
+  /** S11 AA4c-2: an admin agent's Turn — agent-host keeps its container apart from the person's
+   *  entry container, so every frame about it names the kind. */
+  readonly agentKind?: 'admin_agent';
   /** R-55: `stopTurn` was called for this Turn. Before its `startTurn` frame went out, `startTurn`
    *  then ends it `interrupted` instead of sending it; after, a rejected or timed-out accept ends
    *  it `interrupted` rather than `failed`. */
@@ -180,6 +196,31 @@ interface CachedHandle {
    *  already invalidated the underlying `capability_handles` row — the *cache* itself would
    *  otherwise never notice and hand back the now-revoked token on the caller's very next Turn. */
   readonly profileVersionKey: string;
+}
+
+/** S11 AA4c-2: an admin agent's cached Handle — per person and trial workspace, under the
+ *  session its Turns run under. Reused while that session is the Turn's, the Handle is not
+ *  revoked (`stop_admin_agent`, a demotion), the person's role is unchanged and more than 10% of
+ *  its (at most one hour) life is left. */
+interface CachedAdminHandle {
+  readonly token: string;
+  readonly issuedAtMs: number;
+  readonly expiresAtMs: number;
+  readonly role: Role | undefined;
+  readonly jti: string;
+  readonly sessionId: string;
+}
+
+/** What a Turn is started with — the `startTurn` frame's fields beyond the Turn's own ids, from
+ *  the entry agent's preparation (`prepareEntryTurn`) or an admin agent's (`prepareAdminTurn`). */
+interface TurnLaunch {
+  readonly handle: string;
+  readonly systemPrompt: string | undefined;
+  readonly model: string | undefined;
+  /** Not `readonly string[]` — assigned straight into the outbound frame's zod-inferred array. */
+  readonly egressDeny: string[] | undefined;
+  readonly skillsInline: SkillInlineMount[];
+  readonly image: string | undefined;
 }
 
 /** Order-independent set equality for two `resources.gatekeeper` id lists — used by
@@ -271,6 +312,8 @@ export class AgentHostRuntime implements AgentRuntime {
   private readonly privateKey: CryptoKey;
   private readonly kernelLlmUrl: string;
   private readonly entryHandleTtlSeconds: number;
+  private readonly adminAgentHandleTtlSeconds: number;
+  private readonly adminAgentSystemPrompt: () => Promise<string>;
   private readonly turnAcceptedTimeoutMs: number;
   private readonly now: () => number;
   private readonly log: (line: string) => void;
@@ -286,6 +329,8 @@ export class AgentHostRuntime implements AgentRuntime {
   private readonly stoppedBeforeStart = new Set<string>();
   private readonly pendingAccepts = new Map<string, PendingAccept>();
   private readonly handleCache = new Map<string, CachedHandle>();
+  /** S11 AA4c-2: admin agents' Handles, by `workspaceId:principalId` (a trial workspace's person). */
+  private readonly adminHandleCache = new Map<string, CachedAdminHandle>();
   /** Turn-end ordering: the tail of each Turn's sink chain — see `sinkInOrder`. An entry exists
    *  only while that Turn has sink work queued or running. */
   private readonly turnSinkChains = new Map<string, Promise<void>>();
@@ -296,6 +341,12 @@ export class AgentHostRuntime implements AgentRuntime {
     this.privateKey = deps.privateKey;
     this.kernelLlmUrl = deps.kernelLlmUrl;
     this.entryHandleTtlSeconds = deps.entryHandleTtlSeconds ?? DEFAULT_ENTRY_HANDLE_TTL_SECONDS;
+    this.adminAgentHandleTtlSeconds = Math.min(
+      deps.adminAgentHandleTtlSeconds ?? ADMIN_AGENT_HANDLE_MAX_TTL_SECONDS,
+      ADMIN_AGENT_HANDLE_MAX_TTL_SECONDS,
+    );
+    this.adminAgentSystemPrompt =
+      deps.adminAgentSystemPrompt ?? (() => loadAdminAgentSystemPrompt());
     this.turnAcceptedTimeoutMs = deps.turnAcceptedTimeoutMs ?? DEFAULT_TURN_ACCEPTED_TIMEOUT_MS;
     this.now = deps.now ?? (() => Date.now());
     this.log = deps.log ?? ((line) => console.error(line));
@@ -368,21 +419,6 @@ export class AgentHostRuntime implements AgentRuntime {
   // -------------------------------------------------------------------------------------------
 
   async startTurn(input: StartTurnInput): Promise<void> {
-    // S11 AA4c: an admin agent's Turn needs its own container (AA4c-2: the admin container, its own
-    // Handle and egress source), never the entry one; until that runtime exists it fails at once
-    // rather than run the admin agent's Chat with the entry agent.
-    if (input.agentKind === 'admin_agent') {
-      this.log(
-        JSON.stringify({
-          level: 'error',
-          msg: 'agent-host-runtime: no admin agent runtime here yet — the admin agent Turn fails',
-          turnId: input.turnId,
-        }),
-      );
-      await this.emitEnded(input, 'failed');
-      return;
-    }
-
     // R-55: `stop_agent` already ended this Turn (`stopTurn` found it untracked) while its
     // TurnStarted was on the way here — starting it now would run the agent after the Stop.
     if (this.stoppedBeforeStart.delete(input.turnId)) {
@@ -414,11 +450,29 @@ export class AgentHostRuntime implements AgentRuntime {
       workspaceId: input.workspaceId,
       chatId: input.chatId,
       principalId: input.principalId,
+      ...(input.agentKind === 'admin_agent' ? { agentKind: input.agentKind } : {}),
       stopRequested: false,
       sent: false,
     };
     this.activeTurns.set(input.turnId, turn);
 
+    // S11 AA4c-2: an admin agent's Turn runs in its own container with its own prompt and Handle
+    // (`prepareAdminTurn`); everything after the preparation is the same for both agents.
+    const launch =
+      input.agentKind === 'admin_agent'
+        ? await this.prepareAdminTurn(input, turn)
+        : await this.prepareEntryTurn(input, turn);
+    if (launch === undefined) return; // ended already — the preparation said why
+    await this.launchTurn(input, turn, launch);
+  }
+
+  /** The entry agent's Turn: its Handle, its workspace's published entry WorkerDefinition, the
+   *  person's AgentProfile and Skills, the platform's instructions and runtime image. `undefined`
+   *  when the Turn could not be prepared — it has been ended. */
+  private async prepareEntryTurn(
+    input: StartTurnInput,
+    turn: ActiveTurn,
+  ): Promise<TurnLaunch | undefined> {
     // S3.13: the caller's own AgentProfile/AgentPolicy, resolved fresh on every startTurn (same
     // "cheap, never a stale-cache class of bug" convention `resolveEntryDefinition` below already
     // established) — computed once and threaded through `ensureEntryHandle` (gate narrowing +
@@ -445,7 +499,7 @@ export class AgentHostRuntime implements AgentRuntime {
         }),
       );
       await this.emitEnded(input, turn.stopRequested ? 'interrupted' : 'failed');
-      return;
+      return undefined;
     }
 
     // S2.6: the entry container's system prompt/model, from the workspace's currently published
@@ -495,9 +549,95 @@ export class AgentHostRuntime implements AgentRuntime {
       promptAddendum: agentProfile?.effective.promptAddendum,
     });
 
-    // S10 E3-1c (review #493 of #813): what the entry agent would start with goes through the
-    // evaluation seal, as a Worker's start does (`spawnWorkerRun`) — the person's message itself
-    // was checked when it was sent (`sendChatMessage`).
+    // S3.13: the person's AgentProfile `model` wins when set; otherwise the published entry
+    // WorkerDefinition's (see `sendStartTurnFrame`).
+    const model = agentProfile?.effective.model
+      ? agentProfile.effective.model
+      : entryDefinition?.model;
+
+    return {
+      handle: handleToken,
+      systemPrompt,
+      model,
+      egressDeny: entryDefinition?.egressDeny,
+      skillsInline,
+      image,
+    };
+  }
+
+  /**
+   * S11 AA4c-2 (the AA4c plan's D8): an admin agent's Turn. Its prompt is `ontology/admin-agent.yaml`
+   * and the platform's instructions — never the entry WorkerDefinition's, nor the person's entry
+   * prompt addendum, nor their Skills; its model is the one the person's entry agent uses in this
+   * trial workspace (their AgentProfile, else the published entry WorkerDefinition's). Its Handle
+   * is an admin agent's (`ensureAdminAgentHandle`): the authority is checked first (I-A3 — a Turn
+   * queued before the switch went off or the person was demoted does not start), and the Handle is
+   * issued under the session the Turn was recorded under, which must still be live. No egress list
+   * is sent: worker-supervisor gives an admin container none at all. `undefined` when the Turn
+   * could not be prepared — it has been ended, `failed` (or `interrupted` when stopped meanwhile).
+   */
+  private async prepareAdminTurn(
+    input: StartTurnInput,
+    turn: ActiveTurn,
+  ): Promise<TurnLaunch | undefined> {
+    let basePrompt: string;
+    let handleToken: string;
+    try {
+      basePrompt = await this.adminAgentSystemPrompt();
+      handleToken = await this.ensureAdminAgentHandle(input);
+    } catch (err) {
+      this.activeTurns.delete(input.turnId);
+      this.log(
+        JSON.stringify({
+          level: err instanceof AdminAgentRefused ? 'warn' : 'error',
+          msg: 'agent-host-runtime: the admin agent turn could not be prepared — not started',
+          turnId: input.turnId,
+          principalId: input.principalId,
+          ...(err instanceof AdminAgentRefused ? { reason: err.reason } : {}),
+          error: String(err),
+        }),
+      );
+      await this.emitEnded(input, turn.stopRequested ? 'interrupted' : 'failed');
+      return undefined;
+    }
+
+    const agentProfile = await this.resolveAgentProfile(input.workspaceId, input.principalId);
+    const entryDefinition = agentProfile?.effective.model
+      ? undefined
+      : await this.resolveEntryDefinition(input.workspaceId, input.principalId, input.turnId);
+    const instanceInstructions = await this.resolveInstanceInstructions(
+      input.workspaceId,
+      input.principalId,
+      input.turnId,
+    );
+    const image = await this.resolveActiveRuntimeImage(
+      input.workspaceId,
+      input.principalId,
+      input.turnId,
+    );
+    return {
+      handle: handleToken,
+      systemPrompt: composeSystemPrompt({ base: basePrompt, instanceInstructions }),
+      model: agentProfile?.effective.model ? agentProfile.effective.model : entryDefinition?.model,
+      egressDeny: undefined,
+      skillsInline: [],
+      image,
+    };
+  }
+
+  /** What every Turn does once prepared: the evaluation seal, a last look for a stop, then the
+   *  `startTurn` frame through whichever link is registered now. */
+  private async launchTurn(
+    input: StartTurnInput,
+    turn: ActiveTurn,
+    launch: TurnLaunch,
+  ): Promise<void> {
+    const { systemPrompt, skillsInline } = launch;
+
+    // S10 E3-1c (review #493 of #813): what the agent would start with goes through the evaluation
+    // seal, as a Worker's start does (`spawnWorkerRun`) — the person's message itself was checked
+    // when it was sent (`sendChatMessage`). S11 AA4c-2: an admin agent's too, and a seal hold on
+    // its person stops it like their entry agent.
     if (await this.startWithheld(input, systemPrompt, skillsInline)) {
       this.activeTurns.delete(input.turnId);
       await this.emitEnded(input, turn.stopRequested ? 'interrupted' : 'failed');
@@ -527,16 +667,7 @@ export class AgentHostRuntime implements AgentRuntime {
       return;
     }
 
-    const sent = this.sendStartTurnFrame(
-      link,
-      input,
-      handleToken,
-      entryDefinition,
-      agentProfile?.effective,
-      systemPrompt,
-      skillsInline,
-      image,
-    );
+    const sent = this.sendStartTurnFrame(link, input, launch);
     if (!sent.ok) {
       this.activeTurns.delete(input.turnId);
       this.log(
@@ -566,7 +697,7 @@ export class AgentHostRuntime implements AgentRuntime {
       if (outcome.alreadyEnded) return; // the sink already saw this Turn end — nothing to add
       // R-55: agent-host may still be starting it — tell it to stop, or it answers after the Turn
       // is already `failed` (any later frame for it is dropped, untracked, either way).
-      if (outcome.timedOut) this.sendStopFrame(input.turnId, input.principalId);
+      if (outcome.timedOut) this.sendStopFrame(input.turnId, input.principalId, input.agentKind);
       this.log(
         JSON.stringify({
           level: 'error',
@@ -605,7 +736,7 @@ export class AgentHostRuntime implements AgentRuntime {
       return false;
     }
     turn.stopRequested = true;
-    if (turn.sent) this.sendStopFrame(turnId, turn.principalId);
+    if (turn.sent) this.sendStopFrame(turnId, turn.principalId, turn.agentKind);
     return true;
   }
 
@@ -616,10 +747,15 @@ export class AgentHostRuntime implements AgentRuntime {
   /** Best-effort `stopTurn` frame through whichever link is registered now — none connected, or a
    *  send that throws, is logged and otherwise ignored (the caller's own bookkeeping decides what
    *  happens to the Turn). */
-  private sendStopFrame(turnId: string, principalId: string): void {
+  private sendStopFrame(turnId: string, principalId: string, agentKind?: 'admin_agent'): void {
     if (!this.link) return;
     try {
-      this.link.send({ type: 'stopTurn', turnId, principalId });
+      this.link.send({
+        type: 'stopTurn',
+        turnId,
+        principalId,
+        ...(agentKind === undefined ? {} : { agentKind }),
+      });
     } catch (err) {
       this.log(
         JSON.stringify({
@@ -687,29 +823,22 @@ export class AgentHostRuntime implements AgentRuntime {
    * socket) — a `turnAccepted` timeout or an explicit `turnRejected` are reported later, through
    * `wait` resolving with `{ok: false, reason}` on its own schedule.
    *
-   * S3.13: `agentProfile` (the caller's own `effective` AgentProfile, resolved once in `startTurn`
-   * — `undefined` only when resolution itself failed) is merged in here — never re-derived —
-   * against the published entry WorkerDefinition's own `entryDefinition`:
-   *   - `model`: `agentProfile.model` wins when non-empty (`EffectiveAgentProfile.model` is always
-   *     a concrete `string`, `''` meaning "nothing configured anywhere" —
-   *     `governance/agent-profile/resolve.ts`'s own doc comment); otherwise the WorkerDefinition's
-   *     own `model` applies, exactly as before this task.
-   *   - `systemPrompt`: composed by `startTurn` (so the evaluation seal checks exactly what is
-   *     sent) — the platform's `instanceInstructions` (P-A2, 平台设置) and then
-   *     `agentProfile.promptAddendum`, when non-empty, are appended as clearly delimited sections
-   *     (`composeSystemPrompt`, application/platform) — strictly *after* the platform's own
-   *     `entryDefinition.systemPrompt`, so neither can precede or otherwise override it.
+   * What the frame carries beyond the Turn's own ids is `launch`, already resolved by the
+   * preparation (`prepareEntryTurn` / `prepareAdminTurn`), so the evaluation seal checked exactly
+   * what is sent. For the entry agent (S3.13): `model` is the person's AgentProfile `model` when
+   * non-empty (`EffectiveAgentProfile.model` is always a concrete `string`, `''` meaning "nothing
+   * configured anywhere" — `governance/agent-profile/resolve.ts`'s own doc comment), otherwise the
+   * published entry WorkerDefinition's; `systemPrompt` is that WorkerDefinition's, followed by the
+   * platform's `instanceInstructions` (P-A2, 平台设置) and then the AgentProfile's
+   * `promptAddendum` as clearly delimited sections (`composeSystemPrompt`, application/platform) —
+   * strictly *after* the platform's own prompt, so neither can precede or otherwise override it.
    */
   private sendStartTurnFrame(
     link: AgentHostLink,
     input: StartTurnInput,
-    handleToken: string,
-    entryDefinition: ResolvedEntryDefinition | undefined,
-    agentProfile: EffectiveAgentProfile | undefined,
-    systemPrompt: string | undefined,
-    skillsInline: SkillInlineMount[],
-    image: string | undefined,
+    launch: TurnLaunch,
   ): { ok: true; wait: Promise<AcceptOutcome> } | { ok: false; reason: string } {
+    const { handle, systemPrompt, model, egressDeny, skillsInline, image } = launch;
     let resolveWait!: (outcome: AcceptOutcome) => void;
     const wait = new Promise<AcceptOutcome>((resolve) => {
       resolveWait = resolve;
@@ -732,8 +861,6 @@ export class AgentHostRuntime implements AgentRuntime {
       },
     });
 
-    const model = agentProfile?.model ? agentProfile.model : entryDefinition?.model;
-
     try {
       link.send({
         type: 'startTurn',
@@ -742,13 +869,14 @@ export class AgentHostRuntime implements AgentRuntime {
         turnId: input.turnId,
         principalId: input.principalId,
         prompt: input.prompt,
-        handle: handleToken,
+        handle,
         kernelLlmUrl: this.kernelLlmUrl,
+        // S11 AA4c-2: named only for an admin agent's Turn — an agent-host from before AA4c-2
+        // refuses the field, so the entry agent's frames stay as they were.
+        ...(input.agentKind === 'admin_agent' ? { agentKind: input.agentKind } : {}),
         ...(systemPrompt !== undefined ? { systemPrompt } : {}),
         ...(model !== undefined ? { model } : {}),
-        ...(entryDefinition?.egressDeny !== undefined
-          ? { egressDeny: entryDefinition.egressDeny }
-          : {}),
+        ...(egressDeny !== undefined ? { egressDeny } : {}),
         ...(skillsInline.length > 0 ? { skillsInline } : {}),
         ...(image !== undefined ? { image } : {}),
       });
@@ -816,7 +944,9 @@ export class AgentHostRuntime implements AgentRuntime {
       // that died) never reached it; say it again. agent-host stops the Turn or answers
       // `turnUnknown`, and a repeat is harmless either way.
       for (const [turnId, turn] of this.activeTurns) {
-        if (turn.stopRequested && turn.sent) this.sendStopFrame(turnId, turn.principalId);
+        if (turn.stopRequested && turn.sent) {
+          this.sendStopFrame(turnId, turn.principalId, turn.agentKind);
+        }
       }
       return;
     }
@@ -1135,6 +1265,65 @@ export class AgentHostRuntime implements AgentRuntime {
       jti: issued.jti,
     });
     return issued.token;
+  }
+
+  /**
+   * S11 AA4c-2: the admin agent's Handle for this Turn — in one transaction of its trial workspace,
+   * the authority (`adminAgentRefusal`, refusing with {@link AdminAgentRefused}), then the cached
+   * Handle while it is still good (see {@link CachedAdminHandle}), else a new one
+   * (`issueAdminAgentHandle`, at most an hour) under the session the Turn was recorded under —
+   * refused once that session has ended (`AdminAgentSessionEndedError`). The token never leaves
+   * this class but in the `startTurn` frame.
+   */
+  private async ensureAdminAgentHandle(input: StartTurnInput): Promise<string> {
+    const { workspaceId, principalId, sessionId } = input;
+    if (sessionId === undefined) {
+      throw new Error('ensureAdminAgentHandle: an admin agent Turn without its session');
+    }
+    const key = `${workspaceId}:${principalId}`;
+    const cached = this.adminHandleCache.get(key);
+    const { role, disabled, cachedRevoked } = await this.readHandleFreshness(
+      workspaceId,
+      principalId,
+      cached?.jti,
+    );
+    if (disabled) {
+      this.adminHandleCache.delete(key);
+      throw new Error(`ensureAdminAgentHandle: principal ${principalId} or its user is disabled`);
+    }
+    return withWorkspace(this.pool, { workspaceId, principalId }, async (client) => {
+      const refusal = await adminAgentRefusal(client, workspaceId, principalId);
+      if (refusal !== null) {
+        this.adminHandleCache.delete(key);
+        throw new AdminAgentRefused(refusal, principalId);
+      }
+      if (
+        cached &&
+        !cachedRevoked &&
+        cached.sessionId === sessionId &&
+        cached.role === role &&
+        cached.expiresAtMs - this.now() >
+          (cached.expiresAtMs - cached.issuedAtMs) * HANDLE_REISSUE_THRESHOLD
+      ) {
+        return cached.token;
+      }
+      const issued = await issueAdminAgentHandle(client, {
+        workspaceId,
+        principalId,
+        sessionId,
+        ttlSeconds: this.adminAgentHandleTtlSeconds,
+        privateKey: this.privateKey,
+      });
+      this.adminHandleCache.set(key, {
+        token: issued.token,
+        issuedAtMs: issued.issuedAt.getTime(),
+        expiresAtMs: issued.expiresAt.getTime(),
+        role,
+        jti: issued.jti,
+        sessionId,
+      });
+      return issued.token;
+    });
   }
 
   /**

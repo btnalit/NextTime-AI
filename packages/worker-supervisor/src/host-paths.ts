@@ -17,6 +17,7 @@
  */
 
 import type { SupervisorConfig } from './config.js';
+import type { ResidentAgentKind } from './resident-kind.js';
 
 export const WORKSPACE_MOUNT_TARGET = '/workspace';
 /** entrypoint.sh's `PLATFORM_DIR`: `system-prompt.md` and `skills/<name>/` (read-only bind). */
@@ -28,6 +29,13 @@ export const MODELS_JSON_MOUNT_TARGET = '/opt/nexttime/models.json';
  *  backup's) but outside every per-principal and per-Task workspace directory. Principal and
  *  Task ids are UUIDs (`config.ts` `IdClaimSchema`), so `.platform` can never collide with one. */
 const PLATFORM_ROOT_RELATIVE_PATH = 'workspaces/.platform';
+
+/** S11 AA4c-2 (`resident-kind.ts`): an admin agent's workspace directory lives apart from its
+ *  person's entry workspace (`workspaces/<principalId>`), under `workspaces/.admin/`, and its
+ *  platform directory under `workspaces/.platform/admin-agents/` — so neither container ever
+ *  mounts the other's files or session history. Dot-prefixed for the same reason as `.platform`. */
+const ADMIN_WORKSPACE_ROOT_RELATIVE_PATH = 'workspaces/.admin';
+const ADMIN_PLATFORM_DIR_NAME = 'admin-agents';
 
 const SYSTEM_PROMPT_FILE_NAME = 'system-prompt.md';
 const SKILLS_DIR_NAME = 'skills';
@@ -43,7 +51,21 @@ export interface WorkspacePaths {
   readonly localPlatformDir: string;
 }
 
-export function workspacePaths(config: SupervisorConfig, principalId: string): WorkspacePaths {
+/** The directories of one resident container — the entry agent's by default, or (S11 AA4c-2) the
+ *  admin agent's, which share nothing with it (see `ADMIN_WORKSPACE_ROOT_RELATIVE_PATH`). */
+export function workspacePaths(
+  config: SupervisorConfig,
+  principalId: string,
+  kind: ResidentAgentKind = 'entry',
+): WorkspacePaths {
+  if (kind === 'admin_agent') {
+    return {
+      hostWorkspaceDir: `${config.nextTimeData}/${ADMIN_WORKSPACE_ROOT_RELATIVE_PATH}/${principalId}`,
+      localWorkspaceDir: `${config.localDataDir}/${ADMIN_WORKSPACE_ROOT_RELATIVE_PATH}/${principalId}`,
+      hostPlatformDir: `${config.nextTimeData}/${PLATFORM_ROOT_RELATIVE_PATH}/${ADMIN_PLATFORM_DIR_NAME}/${principalId}`,
+      localPlatformDir: `${config.localDataDir}/${PLATFORM_ROOT_RELATIVE_PATH}/${ADMIN_PLATFORM_DIR_NAME}/${principalId}`,
+    };
+  }
   return {
     hostWorkspaceDir: `${config.nextTimeData}/workspaces/${principalId}`,
     localWorkspaceDir: `${config.localDataDir}/workspaces/${principalId}`,
@@ -68,8 +90,12 @@ export function localModelsJsonPath(config: SupervisorConfig): string {
  *  `resident-service.ts`'s spawn() writes it (S2.6) before deciding whether to reuse or
  *  (re)create the entry container, so the container's next start always loads the current
  *  published prompt. */
-export function localSystemPromptPath(config: SupervisorConfig, principalId: string): string {
-  return `${workspacePaths(config, principalId).localPlatformDir}/${SYSTEM_PROMPT_FILE_NAME}`;
+export function localSystemPromptPath(
+  config: SupervisorConfig,
+  principalId: string,
+  kind: ResidentAgentKind = 'entry',
+): string {
+  return `${workspacePaths(config, principalId, kind).localPlatformDir}/${SYSTEM_PROMPT_FILE_NAME}`;
 }
 
 /** The published Skills entrypoint.sh passes to `--skill` (`/opt/nexttime/platform/skills`, one
