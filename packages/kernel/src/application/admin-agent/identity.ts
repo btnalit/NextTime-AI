@@ -284,8 +284,11 @@ async function readLiveAdminAgentSession(
 }
 
 /** `sessionId`, when it is the Principal's live `admin_agent` session; otherwise
- *  {@link AdminAgentSessionEndedError}. */
-async function requireLiveAdminAgentSession(
+ *  {@link AdminAgentSessionEndedError}. The runtime (`AgentHostRuntime`) also calls it before it
+ *  reuses a cached Handle: a session can end without its Handles being revoked (the platform's
+ *  `set_membership_role` to the same role ends the person's sessions, revoking Handles only on a
+ *  role change), and a Turn queued under that session must not start on the cached one. */
+export async function requireLiveAdminAgentSession(
   client: PoolClient,
   workspaceId: string,
   principalId: string,

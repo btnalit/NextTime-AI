@@ -11,6 +11,7 @@ export {
   issueAdminAgentHandle,
   openAdminAgentSession,
   readAdminAgentAuthorityFacts,
+  requireLiveAdminAgentSession,
 } from './identity.js';
 export { loadAdminAgentSystemPrompt } from './prompt.js';
 export {

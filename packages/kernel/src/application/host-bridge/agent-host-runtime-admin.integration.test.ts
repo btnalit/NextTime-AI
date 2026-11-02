@@ -200,8 +200,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       const first = await sessionOf(member);
       const harness = newRuntime();
       await startAdminTurn(harness, member, first);
-      // The first session ends without its Handle being revoked (no path does this today; the
-      // cache must not depend on it): the next one opens and its Turn names it.
+      // The first session ends without its Handle being revoked (the platform's same-role
+      // set_membership_role does this): the next one opens and its Turn names it.
       await withAdminClient(pool, (client) =>
         client.query(`update sessions set status = 'revoked' where id = $1`, [first]),
       );
@@ -243,6 +243,25 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(startFrames(harness.sent)).toHaveLength(2);
       expect(jtiOf(harness.sent, 1)).not.toBe(jtiOf(harness.sent, 0));
       expect(await handleCount(member)).toBe(2);
+    });
+
+    it('#941 review (#493 P3): a Turn queued under a session that ended while its Handle stayed live (same-role set_membership_role) fails rather than reusing the cached Handle', async () => {
+      const member = await newTrialMember();
+      const sessionId = await sessionOf(member);
+      const harness = newRuntime();
+      await startAdminTurn(harness, member, sessionId);
+      expect(startFrames(harness.sent)).toHaveLength(1);
+      harness.sent.length = 0;
+      // What the platform's set_membership_role does to the same role: the session ends, its
+      // Handles are left alone (they are revoked only on a role change).
+      await withAdminClient(pool, (client) =>
+        client.query(
+          `update sessions set status = 'revoked', expires_at = least(expires_at, now()) where id = $1`,
+          [sessionId],
+        ),
+      );
+      expectFailedWithoutFrame(harness, await startAdminTurn(harness, member, sessionId));
+      expect(await handleCount(member)).toBe(1);
     });
 
     it('fails, sending nothing, once the session the Turn was recorded under has ended — no new session under the old Turn', async () => {
