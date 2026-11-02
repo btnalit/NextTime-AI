@@ -28,8 +28,10 @@ import { WS_ERROR_CODES, mapDispatchError } from '../../interfaces/ws/rpc.js';
 import { issueAdminAgentHandle } from '../admin-agent/index.js';
 import { withAdminClient } from '../gateway/auth.js';
 import { ForbiddenError } from '../gateway/authorize.js';
+import type { CapabilityHandler } from '../gateway/capability-handler.js';
 import { dispatchCapability } from '../gateway/dispatch.js';
 import { authenticateHandle } from '../gateway/handle-auth.js';
+import { CAPABILITY_HANDLERS } from '../gateway/handlers.js';
 import type { ResolvedCaller } from '../gateway/resolve-caller.js';
 import { type UserRow, createUser } from '../identity/index.js';
 import { purgeWorkspace } from '../platform/purge-workspace.js';
@@ -1303,6 +1305,115 @@ describe.runIf(DATABASE_URL !== undefined)(
         }),
       );
       expect(mapCapabilityError(created)).toMatchObject({ status: 400, code: 'invalid_params' });
+    });
+
+    it('coordinator (AA3c-1 audit copy): create_gate_instance’s audit rows hold no credential, nor an address as typed that carried one — refused calls write nothing, and dispatch cuts what a handler forgot', async () => {
+      const { user } = await administrator();
+      const admin = platformCaller(user);
+      // This test's own filler, so the search below finds only what this test wrote.
+      const mark = `${FAKE}${unique()}`;
+      /** Synthetic, JWT-shaped (`.gitleaks.toml` allows this signature segment). */
+      const JWT =
+        'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU';
+      const actionsHolding = async (text: string) =>
+        (
+          await withAdminClient(pool, (client) =>
+            client.query<{ action: string }>(
+              'select action from audit_records where strpos(payload::text, $1) > 0',
+              [text],
+            ),
+          )
+        ).rows.map((row) => row.action);
+      const create = (gateId: string, target: string, manifestSource: string) =>
+        call<GateInstanceWire>(admin, 'create_gate_instance', {
+          gateId,
+          transportKind: 'http',
+          target,
+          credentialMode: 'shared',
+          manifestSource,
+        });
+      const callRow = async (gateId: string) => {
+        const rows = await platformAudits('create_gate_instance', { resourceRef: gateId });
+        expect(rows).toHaveLength(1);
+        return rows[0]?.payload ?? {};
+      };
+      const cleanSource = 'https://t.example.invalid/openapi.json';
+
+      // A credential in the address — a user and password, or a query parameter the connection
+      // rule counts as one, the value patterns' or not (`sig=`, `X-Amz-Signature=`) — is refused
+      // before anything is written, the call's audit row with it.
+      for (const target of [
+        `https://ops:${mark}@t.example.invalid`,
+        `https://t.example.invalid/api?token=${mark}`,
+        `https://t.example.invalid/api?sig=${mark}`,
+        `https://t.example.invalid/api?X-Amz-Signature=${mark}`,
+      ]) {
+        const refused = await thrownBy(create(`aa3c1-audit-${unique()}`, target, cleanSource));
+        expect(mapCapabilityError(refused)).toMatchObject({ status: 400 });
+      }
+      expect(await actionsHolding(mark)).toEqual([]);
+
+      // A clean address is recorded as typed: the row still says where the instance points.
+      const cleanGate = `aa3c1-audit-${unique()}`;
+      await create(cleanGate, 'https://t.example.invalid/api?format=json', cleanSource);
+      const clean = await callRow(cleanGate);
+      expect(clean).toMatchObject({
+        channel: 'platform',
+        params: {
+          target: 'https://t.example.invalid/api?format=json',
+          manifestSource: cleanSource,
+        },
+      });
+      // Only `credentialMode` (a field named after a credential: the field rule replaces it whole,
+      // as it always has) is counted; no address is.
+      expect(clean).toMatchObject({ params: { credentialMode: '[redacted]' }, redactedValues: 1 });
+
+      // The wall behind the handler's own check: a create_gate_instance handler that forgot it —
+      // takes the address as typed and puts it in its own audit additions too — still leaves a row
+      // with the address cut and the credential gone, in its params and in what it added.
+      const handlers = CAPABILITY_HANDLERS as Map<string, CapabilityHandler>;
+      const real = handlers.get('create_gate_instance');
+      if (!real) throw new Error('no create_gate_instance handler');
+      const forgetful: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+        const input = params as Record<string, unknown>;
+        const created = await real(
+          client,
+          workspaceId,
+          { ...input, target: 'https://t.example.invalid/api', manifestSource: cleanSource },
+          ctx,
+        );
+        return {
+          ...created,
+          auditPayload: {
+            definition: { target: input.target, manifestSource: input.manifestSource },
+            note: `Authorization: Bearer ${JWT}`,
+            channel: 'workspace',
+          },
+        };
+      };
+      const forgotGate = `aa3c1-audit-${unique()}`;
+      handlers.set('create_gate_instance', forgetful);
+      try {
+        await create(
+          forgotGate,
+          `https://ops:${mark}@t.example.invalid/api?X-Amz-Signature=${mark}&sig=${mark}`,
+          `https://t.example.invalid/openapi.json?sig=${mark}`,
+        );
+      } finally {
+        handlers.set('create_gate_instance', real);
+      }
+      const forgot = await callRow(forgotGate);
+      expect(forgot).toMatchObject({
+        // The fixed fields still win over a handler's additions.
+        channel: 'platform',
+        params: { target: 'https://t.example.invalid/api', manifestSource: cleanSource },
+        definition: { target: 'https://t.example.invalid/api', manifestSource: cleanSource },
+        note: 'Authorization: [redacted]',
+        // The two addresses cut, beside `credentialMode`.
+        redactedValues: 3,
+      });
+      expect(JSON.stringify(forgot)).not.toContain(JWT);
+      expect(await actionsHolding(mark)).toEqual([]);
     });
   },
 );

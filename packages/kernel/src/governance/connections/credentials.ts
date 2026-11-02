@@ -162,3 +162,43 @@ export function redactConnectionAddress(field: ConnectionCredentialField, addres
   cut = scrubSecretValues(cut.replace(/[?#][\s\S]*$/, '')).value;
   return carries(cut) ? SECRET_FIELD_MASK : cut;
 }
+
+const ADDRESS_FIELDS: ReadonlySet<string> = new Set<ConnectionCredentialField>([
+  'target',
+  'endpoint',
+  'manifestSource',
+]);
+
+/** A copy of `value` with every gate address in it — a string under a `target`, `endpoint` or
+ *  `manifestSource` key, at any depth — as `redactConnectionAddress` shows it (by the rule of that
+ *  key), and how many were cut. An address that carries nothing is kept as it is, so the copy
+ *  still says where an instance or a connection points.
+ *
+ *  For the audit copy (S11 AA3c-1, application/gateway/dispatch.ts): the value patterns the audit
+ *  copy runs (`redactSuspectedSecrets`) hide `?token=…` or a URL's password, but not every query
+ *  parameter this module's rule counts as a credential (`sig=`, `X-Amz-Signature=`); an address
+ *  the rule would refuse never reaches an audit row as written. The walk is unbounded: callers pass
+ *  content already bounded by its schema. */
+export function redactConnectionAddressesIn(value: unknown): {
+  readonly value: unknown;
+  readonly count: number;
+} {
+  let count = 0;
+  const walk = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(walk);
+    if (node === null || typeof node !== 'object') return node;
+    const copy: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(node)) {
+      if (typeof child === 'string' && ADDRESS_FIELDS.has(key)) {
+        const shown = redactConnectionAddress(key as ConnectionCredentialField, child);
+        if (shown !== child) count += 1;
+        copy[key] = shown;
+      } else {
+        copy[key] = walk(child);
+      }
+    }
+    return copy;
+  };
+  const copied = walk(value);
+  return { value: count > 0 ? copied : value, count };
+}

@@ -15,7 +15,7 @@ import {
   ReleaseChannelUrlSchema,
 } from '../release-channel.js';
 import { ChangeProvenanceWireSchema } from './change-plan.js';
-import { CONNECTOR_NAME_PATTERN, isGenericConnector } from './gate-instance-fields.js';
+import { CONNECTOR_NAME_PATTERN } from './gate-instance-fields.js';
 
 /**
  * wire/platform: the platform-management plane's wire shapes (docs/platform-admin-design.md §5,
