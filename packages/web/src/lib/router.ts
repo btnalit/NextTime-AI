@@ -51,6 +51,10 @@ export const CATALOG_TAB_VALUES = [
   // before it is installed; the item route is a pack's name. It replaces the 模块 tab (a module is a
   // pack with one ontology part): `#/govern/catalog/modules` still opens it (`LEGACY_CATALOG_TABS`).
   'packs',
+  // S11 AA4a: 管理员提案 — the admin proposals' segments addressed to this workspace
+  // (`list_admin_proposal_segments`), for its owner to review, apply or reject; the item route is a
+  // segment's id. Owners only: the tab is not offered to anyone else.
+  'proposals',
   // S11 P1-B: 安装历史 — the workspace's install records (`list_change_segments`); the item route
   // is a record's id.
   'changes',
