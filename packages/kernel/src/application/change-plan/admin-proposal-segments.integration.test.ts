@@ -1505,9 +1505,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         {},
       );
       expect(theirs.items).toEqual([]);
-      expect(
-        await call(ownerCaller(stranger), 'get_admin_proposal_segment_counts', {}),
-      ).toEqual({ proposed: 0 });
+      expect(await call(ownerCaller(stranger), 'get_admin_proposal_segment_counts', {})).toEqual({
+        proposed: 0,
+      });
 
       // In the target itself: a member, an owner-role service account, the admin agent's Handle.
       const memberId = randomUUID();

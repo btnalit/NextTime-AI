@@ -7,13 +7,13 @@ import {
   type AdminProposalPlatformInstanceChangeWire,
   type AdminProposalPlatformItemIntentWire,
   type AdminProposalPreviewItemWire,
-  type ReceivedAdminProposalCountsWire,
   type AdminProposalSegmentPreviewWire,
   type AdminProposalSegmentStatus,
   type ChangeItemKind,
   type ListEnvelope,
   type OperationFieldChangeWire,
   type PrincipalKind,
+  type ReceivedAdminProposalCountsWire,
   type ReceivedAdminProposalSegmentWire,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
