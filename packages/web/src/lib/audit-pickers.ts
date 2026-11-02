@@ -497,6 +497,9 @@ export const PLATFORM_LIFECYCLE_ACTIONS = [
   'user.identity_claimed',
   'principal.user_rebound',
   'gate_instance.manifest_confirmed',
+  // S11 AA3c-1: an admin proposal's platform part, applied and rolled back.
+  'gate_instance.created',
+  'gate_instance.disabled',
   'connector.entry_handles_revoked',
   'connector.created',
   // Legacy 245 a (same sweep): written with `workspaceId: null` too — a self connection's

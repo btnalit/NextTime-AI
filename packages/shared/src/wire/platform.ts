@@ -15,6 +15,7 @@ import {
   ReleaseChannelUrlSchema,
 } from '../release-channel.js';
 import { ChangeProvenanceWireSchema } from './change-plan.js';
+import { CONNECTOR_NAME_PATTERN } from './gate-instance-fields.js';
 
 /**
  * wire/platform: the platform-management plane's wire shapes (docs/platform-admin-design.md §5,
@@ -448,27 +449,17 @@ export type ConnectorModeWire = z.infer<typeof ConnectorModeWireSchema>;
 export const GateTransportKindWireSchema = z.enum(['http', 'mcp', 'cli', 'ssh']);
 export type GateTransportKindWire = z.infer<typeof GateTransportKindWireSchema>;
 
-/** A connector name (`connectors.name`, core 0023's check): what a packaged gate announces as
- *  `GATE_CONNECTOR` and what `create_gate_instance` takes as `connector`. */
-export const CONNECTOR_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
-
-/** The four generic connectors core 0023 seeds, each named after its transport kind. Only these
- *  govern a workspace connecting a system itself (R-40: `create_connection` /
- *  `request_connection` read the connector named by the connection's kind), so only their mode
- *  reaches past the platform catalog. Every other connector — a packaged gate's, or one an
- *  administrator named for gate-host instances (`create_gate_instance` with `connector`) — governs
- *  the catalog alone. */
-export const GENERIC_CONNECTOR_NAMES: readonly GateTransportKindWire[] = [
-  'http',
-  'mcp',
-  'cli',
-  'ssh',
-];
-
-/** Whether `name` is one of the four generic connectors (`GENERIC_CONNECTOR_NAMES`). */
-export function isGenericConnector(name: string): boolean {
-  return (GENERIC_CONNECTOR_NAMES as readonly string[]).includes(name);
-}
+// CONNECTOR_NAME_PATTERN, GENERIC_CONNECTOR_NAMES and isGenericConnector live in
+// gate-instance-fields.ts (S11 AA3c: an admin proposal's `gate_instance` takes the same fields as
+// `create_gate_instance`, without wire/admin-proposal importing this module).
+export {
+  CONNECTOR_NAME_PATTERN,
+  GATE_INSTANCE_TARGET_MAX_LENGTH,
+  GENERIC_CONNECTOR_NAMES,
+  gateInstanceCreateFields,
+  isGenericConnector,
+  refineGateInstanceCreate,
+} from './gate-instance-fields.js';
 
 export const ConnectorWireSchema = z
   .object({

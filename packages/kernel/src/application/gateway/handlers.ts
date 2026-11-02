@@ -336,6 +336,15 @@ import {
   previewPackInstallHandler,
 } from './pack-handlers.js';
 import {
+  applyPlatformSegmentHandler,
+  getPlatformChangeSegmentHandler,
+  listPlatformChangeSegmentsHandler,
+  previewPlatformSegmentHandler,
+  previewRollBackPlatformChangeSegmentHandler,
+  rejectPlatformSegmentHandler,
+  rollBackPlatformChangeSegmentHandler,
+} from './platform-change-handlers.js';
+import {
   confirmGateManifestHandler,
   createGateInstanceHandler,
   deleteGateInstanceHandler,
@@ -2743,4 +2752,12 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['preview_admin_proposal_segment', previewAdminProposalSegmentHandler],
   ['apply_admin_proposal_segment', applyAdminProposalSegmentHandler],
   ['reject_admin_proposal_segment', rejectAdminProposalSegmentHandler],
+  // S11 AA3c-1 — a platform administrator decides the platform segment and rolls back its record.
+  ['preview_platform_segment', previewPlatformSegmentHandler],
+  ['apply_platform_segment', applyPlatformSegmentHandler],
+  ['reject_platform_segment', rejectPlatformSegmentHandler],
+  ['list_platform_change_segments', listPlatformChangeSegmentsHandler],
+  ['get_platform_change_segment', getPlatformChangeSegmentHandler],
+  ['preview_roll_back_platform_change_segment', previewRollBackPlatformChangeSegmentHandler],
+  ['roll_back_platform_change_segment', rollBackPlatformChangeSegmentHandler],
 ]);

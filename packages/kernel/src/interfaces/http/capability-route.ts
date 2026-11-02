@@ -28,6 +28,13 @@ import {
   ChangeSegmentRolledBackError,
   ChangeSegmentSupersededError,
   ChangeVerificationCooldownError,
+  DependentSegmentsAppliedError,
+  PlatformChangeDriftedError,
+  PlatformChangeSegmentNotFoundError,
+  PlatformChangeSegmentRolledBackError,
+  PlatformSegmentBlockedError,
+  PlatformSegmentNotAppliedError,
+  PlatformSegmentNotFoundError,
 } from '../../application/change-plan/index.js';
 import {
   ChatArchivedError,
@@ -374,6 +381,48 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof AdminProposalSegmentUnchangedError) {
     return { status: 409, code: err.code, message: err.message };
+  }
+  // S11 AA3c-1: the platform segment and its record, decided on the platform plane. Not a platform
+  // segment → 404; an item the platform would not take now → 409 `details.blockers`; a workspace
+  // segment whose platform segment is not applied yet → 409 (`details.platformSegmentStatus`).
+  // A record: not found → 404; rolled back already → 409; an instance changed since → 409
+  // `details.items`; a workspace segment of the proposal still applied → 409 `details.segments`.
+  // Nothing was written.
+  if (err instanceof PlatformSegmentNotFoundError) {
+    return { status: 404, code: err.code, message: err.message };
+  }
+  if (err instanceof PlatformSegmentBlockedError) {
+    return {
+      status: 409,
+      code: err.code,
+      message: err.message,
+      details: { blockers: err.details.blockers.map((blocker) => ({ ...blocker })) },
+    };
+  }
+  if (err instanceof PlatformSegmentNotAppliedError) {
+    return { status: 409, code: err.code, message: err.message, details: { ...err.details } };
+  }
+  if (err instanceof PlatformChangeSegmentNotFoundError) {
+    return { status: 404, code: err.code, message: err.message };
+  }
+  if (err instanceof PlatformChangeSegmentRolledBackError) {
+    return { status: 409, code: err.code, message: err.message };
+  }
+  if (err instanceof PlatformChangeDriftedError) {
+    return {
+      status: 409,
+      code: err.code,
+      message: err.message,
+      details: { items: err.details.items.map((item) => ({ ...item, drift: [...item.drift] })) },
+    };
+  }
+  if (err instanceof DependentSegmentsAppliedError) {
+    return {
+      status: 409,
+      code: err.code,
+      message: err.message,
+      details: { segments: err.details.segments.map((segment) => ({ ...segment })) },
+    };
   }
   // S11 P1-B: a segment rollback. Not in this workspace → 404; already rolled back → 409; an item
   // that cannot be rolled back now (changed since, gone, a name taken) → 409 with `details.items`,

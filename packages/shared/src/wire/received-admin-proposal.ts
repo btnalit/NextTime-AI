@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   AdminProposalItemBlockerSchema,
   AdminProposalSegmentStatusSchema,
+  AdminProposalWithdrawnOriginSchema,
   ChangeItemClassificationSchema,
   ChangeItemKindSchema,
   DraftOriginSchema,
@@ -9,6 +10,7 @@ import {
 import { SkillApplicableSchema } from '../skill.js';
 import {
   AdminProposalItemIntentWireSchema,
+  AdminProposalPlatformItemIntentWireSchema,
   AdminProposalProposerWireSchema,
 } from './admin-proposal.js';
 import {
@@ -55,6 +57,22 @@ export const ReceivedAdminProposalHeadWireSchema = z
   .strict();
 export type ReceivedAdminProposalHeadWire = z.infer<typeof ReceivedAdminProposalHeadWireSchema>;
 
+/** S11 AA3c: the platform segment of the proposal a received segment belongs to — what a platform
+ *  administrator applies first (a new gate instance, `gate_instance`). The received segment depends
+ *  on it: while it is not `applied`, the received segment's preview plans nothing to apply (digest
+ *  `null`) and applying it is refused (409 `platform_segment_not_applied`). Its items are the
+ *  platform's, as proposed; who decided it is not shown here. */
+export const ReceivedAdminProposalPlatformSegmentWireSchema = z
+  .object({
+    id: z.string(),
+    status: AdminProposalSegmentStatusSchema,
+    items: z.array(AdminProposalPlatformItemIntentWireSchema),
+  })
+  .strict();
+export type ReceivedAdminProposalPlatformSegmentWire = z.infer<
+  typeof ReceivedAdminProposalPlatformSegmentWireSchema
+>;
+
 /** One segment addressed to this workspace. */
 export const ReceivedAdminProposalSegmentWireSchema = z
   .object({
@@ -70,14 +88,17 @@ export const ReceivedAdminProposalSegmentWireSchema = z
     decidedAt: z.string().nullable(),
     /** The person of this workspace who applied or rejected it. */
     decidedBy: ChangePrincipalRefWireSchema.nullable(),
-    /** Withdrawn: by the administrator's agent, or by a platform administrator in the console. */
-    withdrawnOrigin: DraftOriginSchema.exclude(['platform']).nullable(),
+    /** Withdrawn: by the administrator's agent, by a platform administrator in the console, or
+     *  because the proposal's platform segment was rejected or rolled back (`platform_segment`). */
+    withdrawnOrigin: AdminProposalWithdrawnOriginSchema.nullable(),
     /** Rejected: the reason this workspace's owner gave. Withdrawn: the reason, when one was
      *  given. */
     reason: z.string().nullable(),
     /** Applied: the change segment that recorded it here (`get_change_segment`, 安装历史). */
     appliedSegmentId: z.string().nullable(),
     rolledBackAt: z.string().nullable(),
+    /** The proposal's platform segment, which this one depends on; `null` when it has none. */
+    platformSegment: ReceivedAdminProposalPlatformSegmentWireSchema.nullable(),
   })
   .strict();
 export type ReceivedAdminProposalSegmentWire = z.infer<
@@ -176,7 +197,9 @@ export const AdminProposalSegmentPreviewWireSchema = z
   .object({
     segment: ReceivedAdminProposalSegmentWireSchema,
     /** Intents that do not resolve here. While there is one, nothing is planned: `items` is empty
-     *  and `digest` null, and applying is refused (409 `admin_proposal_segment_blocked`). */
+     *  and `digest` null, and applying is refused (409 `admin_proposal_segment_blocked`). While the
+     *  proposal's platform segment (`segment.platformSegment`) is not applied, `items` show what
+     *  applying would do and `digest` is null (409 `platform_segment_not_applied`). */
     blockers: z.array(AdminProposalItemBlockerWireSchema),
     /** I-A8: what the owner reviews — `apply_admin_proposal_segment`'s `reviewedDigest`. It covers
      *  what each intent resolved to, so a resolution that changes before the apply is refused too

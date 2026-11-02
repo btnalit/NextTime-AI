@@ -147,9 +147,10 @@ const PURGE_COUNT_LABELS = {
   changeItems: { zh: '安装记录里的改动项', en: 'Install record changes' },
   changeSegments: { zh: '安装记录', en: 'Install records' },
   // S11 AA3b (migrations/governance/0032): what an admin agent proposed from a trial workspace —
-  // the names the capability labels use (one 管理员提案, a 段 per workspace it is addressed to).
+  // the names the capability labels use (one 管理员提案; its 工作区部分, one per workspace it is
+  // addressed to, and at most one 平台部分 — AA3c-1).
   adminProposals: { zh: '管理员提案', en: 'Admin proposals' },
-  adminProposalSegments: { zh: '管理员提案的分段', en: 'Admin proposal segments' },
+  adminProposalSegments: { zh: '管理员提案的各部分', en: 'Admin proposal parts' },
   connectionRequests: { zh: '连接申请', en: 'Connection requests' },
   draftRejections: { zh: '草稿被拒绝的记录', en: 'Draft rejections' },
   // S10 E3-1a / E3-1b / E3-2a / E3-2b / E3-2c (migrations/worker/0007–0011): the names 治理 → 评测

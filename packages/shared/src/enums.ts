@@ -1018,13 +1018,118 @@ export type AdminProposalSegmentStatus = (typeof ADMIN_PROPOSAL_SEGMENT_STATUS_V
 export const AdminProposalSegmentStatusSchema = asEnum(ADMIN_PROPOSAL_SEGMENT_STATUS_VALUES);
 
 /**
- * Who decides a proposed segment: `workspace` — the owner of its target workspace. (The platform
- * segment, decided by a platform administrator, comes with AA3c.)
+ * Who decides a proposed segment: `workspace` — the owner of its target workspace; `platform` — a
+ * platform administrator, on the platform plane (S11 AA3c: at most one per proposal, and only
+ * {@link ADMIN_PROPOSAL_PLATFORM_ITEM_KIND_VALUES} in it). When a proposal has a platform segment,
+ * each of its workspace segments depends on it: it is applied only once the platform segment is.
  */
-export const ADMIN_PROPOSAL_SEGMENT_AUTHORITY_VALUES = ['workspace'] as const;
+export const ADMIN_PROPOSAL_SEGMENT_AUTHORITY_VALUES = ['workspace', 'platform'] as const;
 export type AdminProposalSegmentAuthority =
   (typeof ADMIN_PROPOSAL_SEGMENT_AUTHORITY_VALUES)[number];
 export const AdminProposalSegmentAuthoritySchema = asEnum(ADMIN_PROPOSAL_SEGMENT_AUTHORITY_VALUES);
+
+/**
+ * What a platform segment may change (S11 AA3c F6, the whitelist): `gate_instance` — a new gate-host
+ * instance, created as `create_gate_instance` creates one. Nothing else: no kind here reaches a user,
+ * a member, a workspace, a platform setting, a model, a runtime image or a token (§3.2 — a guard
+ * test holds the list to this). A workspace segment never carries one.
+ */
+export const ADMIN_PROPOSAL_PLATFORM_ITEM_KIND_VALUES = ['gate_instance'] as const;
+export type AdminProposalPlatformItemKind =
+  (typeof ADMIN_PROPOSAL_PLATFORM_ITEM_KIND_VALUES)[number];
+export const AdminProposalPlatformItemKindSchema = asEnum(ADMIN_PROPOSAL_PLATFORM_ITEM_KIND_VALUES);
+
+/**
+ * Why a platform segment's `gate_instance` cannot be created as proposed now (S11 AA3c F-c7) — its
+ * dry run on the platform plane lists each, and the segment cannot be applied while one is there
+ * (409 `admin_proposal_segment_blocked`):
+ *  - `gate_id_taken`: a gate instance already has that id;
+ *  - `connector_preset_not_found`: this deployment ships no preset of that name;
+ *  - `connector_kind_mismatch`: the connector it names is of another transport kind;
+ *  - `connector_packaged`: the connector belongs to a packaged gate;
+ *  - `connector_not_offerable`: the connector exists and is not `platform_preset`, so no workspace
+ *    could enable the instance from the catalog.
+ */
+export const ADMIN_PROPOSAL_PLATFORM_ITEM_BLOCKER_VALUES = [
+  'gate_id_taken',
+  'connector_preset_not_found',
+  'connector_kind_mismatch',
+  'connector_packaged',
+  'connector_not_offerable',
+] as const;
+export type AdminProposalPlatformItemBlocker =
+  (typeof ADMIN_PROPOSAL_PLATFORM_ITEM_BLOCKER_VALUES)[number];
+export const AdminProposalPlatformItemBlockerSchema = asEnum(
+  ADMIN_PROPOSAL_PLATFORM_ITEM_BLOCKER_VALUES,
+);
+
+/**
+ * Who withdrew a segment, or what: `agent` — the administrator through their admin agent; `human`
+ * — a platform administrator in the console; `platform_segment` — the proposal's platform segment
+ * was rejected or rolled back, so a workspace segment that depended on it could no longer be applied
+ * (S11 AA3c, in the platform administrator's transaction).
+ */
+export const ADMIN_PROPOSAL_WITHDRAWN_ORIGIN_VALUES = [
+  'human',
+  'agent',
+  'platform_segment',
+] as const;
+export type AdminProposalWithdrawnOrigin = (typeof ADMIN_PROPOSAL_WITHDRAWN_ORIGIN_VALUES)[number];
+export const AdminProposalWithdrawnOriginSchema = asEnum(ADMIN_PROPOSAL_WITHDRAWN_ORIGIN_VALUES);
+
+/**
+ * A platform change segment's status (S11 AA3c): what a platform segment's apply recorded on the
+ * platform — `applied`, then `rolled_back` when a platform administrator rolls it back.
+ */
+export const PLATFORM_CHANGE_SEGMENT_STATUS_VALUES = ['applied', 'rolled_back'] as const;
+export type PlatformChangeSegmentStatus = (typeof PLATFORM_CHANGE_SEGMENT_STATUS_VALUES)[number];
+export const PlatformChangeSegmentStatusSchema = asEnum(PLATFORM_CHANGE_SEGMENT_STATUS_VALUES);
+
+/**
+ * What a platform administrator still does after a `gate_instance` is created, before a workspace
+ * can enable it (S11 AA3c F-c2), in order: `enter_shared_credential` — a `shared` instance's one
+ * credential, on the gate host (`issue_gate_host_token`); `await_announce` — the gate host takes the
+ * instance over and announces its Operations; `review_and_enable` — review them and set the instance
+ * `enabled` (`update_gate_instance`).
+ */
+export const GATE_INSTANCE_NEXT_STEP_VALUES = [
+  'enter_shared_credential',
+  'await_announce',
+  'review_and_enable',
+] as const;
+export type GateInstanceNextStep = (typeof GATE_INSTANCE_NEXT_STEP_VALUES)[number];
+export const GateInstanceNextStepSchema = asEnum(GATE_INSTANCE_NEXT_STEP_VALUES);
+
+/**
+ * What rolling back a `gate_instance` item does to its instance (S11 AA3c F-c3): `disable` — sets it
+ * `disabled` (a `lost` one comes back disabled); `already_disabled` — it is disabled already, so
+ * nothing is written; `gone` — it was deleted since, so there is nothing to disable.
+ */
+export const PLATFORM_CHANGE_ROLLBACK_ACTION_VALUES = [
+  'disable',
+  'already_disabled',
+  'gone',
+] as const;
+export type PlatformChangeRollbackAction = (typeof PLATFORM_CHANGE_ROLLBACK_ACTION_VALUES)[number];
+export const PlatformChangeRollbackActionSchema = asEnum(PLATFORM_CHANGE_ROLLBACK_ACTION_VALUES);
+
+/**
+ * The fields of a gate instance a `gate_instance` item wrote that rolling it back compares (S11
+ * AA3c F-c3): changed since, it is someone else's instance now, and the rollback stops (409
+ * `platform_change_drifted`). Its status, display name, trust, health and Operations are not
+ * compared: enabling it, renaming it and its heartbeat are what happens to an instance after it is
+ * created.
+ */
+export const GATE_INSTANCE_DRIFT_FIELD_VALUES = [
+  'connector',
+  'transportKind',
+  'target',
+  'credentialMode',
+  'manifestSource',
+  'preset',
+] as const;
+export type GateInstanceDriftField = (typeof GATE_INSTANCE_DRIFT_FIELD_VALUES)[number];
+export const GateInstanceDriftFieldSchema = asEnum(GATE_INSTANCE_DRIFT_FIELD_VALUES);
 
 /**
  * A proposal's status, derived from its segments' and never stored (`adminProposalStatusOf`):

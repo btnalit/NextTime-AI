@@ -160,7 +160,9 @@ export type CredentialReviewSubject =
   | 'procedure'
   | 'worker_definition'
   /** S11 AA3b-2: what an admin proposal's segment writes when its target's owner applies it. */
-  | 'admin_proposal_segment';
+  | 'admin_proposal_segment'
+  /** S11 AA3c: what an admin proposal's platform segment writes when an administrator applies it. */
+  | 'platform_segment';
 
 /**
  * A decision whose content carries suspected credentials (N > 0), sent without

@@ -1,4 +1,5 @@
 import type {
+  AdminProposalPlatformSegmentInputWire,
   AdminProposalSegmentApplyResultWire,
   AdminProposalSegmentInputWire,
   AdminProposalSegmentStatus,
@@ -111,6 +112,7 @@ interface ProposeAdminProposalParams {
   readonly description?: string;
   readonly sourceName: string;
   readonly segments: readonly AdminProposalSegmentInputWire[];
+  readonly platform?: AdminProposalPlatformSegmentInputWire;
 }
 
 export const proposeAdminProposalHandler: CapabilityHandler = async (
@@ -121,7 +123,7 @@ export const proposeAdminProposalHandler: CapabilityHandler = async (
 ): Promise<CapabilityHandlerResult> => {
   const agent = adminAgentOf('propose_admin_proposal', ctx);
   const input = params as ProposeAdminProposalParams;
-  const segments = checkAdminProposal(input, await shippedPackNames());
+  const checked = checkAdminProposal(input, await shippedPackNames());
   const proposal = await proposeAdminProposal(
     client,
     {
@@ -131,7 +133,7 @@ export const proposeAdminProposalHandler: CapabilityHandler = async (
       sessionId: agent.sessionId,
     },
     input,
-    segments,
+    checked,
   );
   return {
     result: proposal,
@@ -141,6 +143,7 @@ export const proposeAdminProposalHandler: CapabilityHandler = async (
       contentDigest: proposal.contentDigest,
       segments: proposal.segments.map((segment) => ({
         ordinal: segment.ordinal,
+        authority: segment.authority,
         targetWorkspaceId: segment.targetWorkspaceId,
         contentDigest: segment.contentDigest,
         items: segment.items.length,

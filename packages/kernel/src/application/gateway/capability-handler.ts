@@ -36,7 +36,8 @@ export interface CapabilityHandlerResult {
   readonly afterCommit?: (pool: PoolLike) => Promise<unknown>;
   /** Fields the handler adds to this call's audit row (`dispatch.ts`), after the params — what the
    *  call's params alone do not say (e.g. the suspected-credential count a `publish_*` caller
-   *  confirmed). Never a credential. Workspace-channel calls only. */
+   *  confirmed). Never a credential. Workspace and platform calls alike (S11 AA3c-1: what a
+   *  platform segment's apply or rollback did beyond its params). */
   readonly auditPayload?: Record<string, unknown>;
 }
 
