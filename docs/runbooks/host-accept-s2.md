@@ -517,7 +517,8 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
 经 `/resident/reclaim` 回收它的容器、把试验和目标两个工作区设为停用（行保留，审计只增不减）、把本次的管理员降为普通用户，
 再登出控制台；每一步都记下 HTTP 状态，回收容器那一步也记（`cleanup: /resident/reclaim <uuid> HTTP 200`）。内核拒绝降级时
 （它是平台上最后一个启用的管理员，比如一台新的 staging 主机）只记一行 `cleanup: administrator <uuid> not demoted …`：
-剩下的是一个谁也登录不了的管理员，它的密码只在那次 shell 里存在过。管理员建好了、控制台登录却失败时，别的什么都没建，
+剩下的是一个谁也登录不了的管理员，它的密码只在那次 shell 里存在过。降级成功时账号仍是启用的普通用户（它不能停用自己），
+所以每跑一次就多一个谁也登录不了的普通用户 `accept-s2-admin-<nonce>`，要清理时在「平台 · 用户」里停用。管理员建好了、控制台登录却失败时，别的什么都没建，
 脚本也降不了它（bootstrap CLI 只会建），收尾记一行 `cleanup: administrator <uuid> (accept-s2-admin-<nonce>) was created but its console login failed …`，
 到「平台 · 用户」里把它降为普通用户。
 

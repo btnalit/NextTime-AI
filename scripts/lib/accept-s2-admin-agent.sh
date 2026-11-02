@@ -42,10 +42,11 @@
 # administrator are not fixtures): the proposal withdrawn, the admin agent stopped (its session and
 # Handle revoked), its container reclaimed, both workspaces disabled (their rows stay: audit only
 # grows), the administrator demoted to a user, then signed out; each part's HTTP status is logged,
-# the reclaim's too. A demotion the kernel refuses (the last active administrator, e.g. on a fresh
-# staging host) is logged: what then remains is an administrator nobody can sign in as — its
-# password existed only in this shell. So is an administrator created whose console login failed:
-# nothing else exists then, and nothing here can demote it.
+# the reclaim's too. A demoted administrator stays an active user (it cannot disable itself): each
+# run leaves one user nobody can sign in as — its password existed only in this shell. A demotion
+# the kernel refuses (the last active administrator, e.g. on a fresh staging host) is logged: an
+# administrator nobody can sign in as then remains. So is an administrator created whose console
+# login failed: nothing else exists then, and nothing here can demote it.
 
 ADMIN_SESSION=""
 ADMIN_USER_ID=""
