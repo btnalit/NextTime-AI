@@ -7,7 +7,9 @@
 # What it proves, on the stack as deployed (real pi in the admin container worker-supervisor
 # starts for an admin agent Turn, its admin agent Handle, the admin mode of
 # packages/platform-extension, llm-proxy in front of fake-llm):
-#   - the runtime: an admin agent Chat's Turn starts the admin container and completes;
+#   - the runtime: an admin agent Chat's Turn starts the admin container and completes — Docker
+#     shows `nexttime-admin-<principal>` running with `nexttime.role=admin`, and no entry
+#     container for that Principal;
 #   - the tool list it starts with: the admin agent's tools are offered, the entry agent's are not
 #     (fake-llm reports what pi offered the model, `ADMIN_TOOLS`);
 #   - the ceiling and the per-call authority recheck on the real path: the agent's three calls
@@ -39,12 +41,15 @@
 # Cleanup (admin_agent_cleanup, logged, never failed; with --keep too — a session and an
 # administrator are not fixtures): the proposal withdrawn, the admin agent stopped (its session and
 # Handle revoked), its container reclaimed, both workspaces disabled (their rows stay: audit only
-# grows), the administrator demoted to a user, then signed out. A demotion the kernel refuses (the
-# last active administrator, e.g. on a fresh staging host) is logged: what then remains is an
-# administrator nobody can sign in as — its password existed only in this shell.
+# grows), the administrator demoted to a user, then signed out; each part's HTTP status is logged,
+# the reclaim's too. A demotion the kernel refuses (the last active administrator, e.g. on a fresh
+# staging host) is logged: what then remains is an administrator nobody can sign in as — its
+# password existed only in this shell. So is an administrator created whose console login failed:
+# nothing else exists then, and nothing here can demote it.
 
 ADMIN_SESSION=""
 ADMIN_USER_ID=""
+ADMIN_LOGIN=""
 ADMIN_TRIAL_ID=""
 ADMIN_TARGET_ID=""
 ADMIN_PRINCIPAL_ID=""
@@ -91,18 +96,18 @@ admin_agent_step() {
   # The administrator: the bootstrap CLI with a random password through stdin, then a console
   # login. The password lives in this function only.
   ADMIN_NONCE=$(real_token)
-  admin_login="accept-s2-admin-$ADMIN_NONCE"
+  ADMIN_LOGIN="accept-s2-admin-$ADMIN_NONCE"
   admin_pw=$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')
-  out=$(printf '%s' "$admin_pw" | docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js create-platform-admin --login "$admin_login" 2>&1)
+  out=$(printf '%s' "$admin_pw" | docker compose run --rm --no-deps -T kernel node dist/cli/bootstrap.js create-platform-admin --login "$ADMIN_LOGIN" 2>&1)
   ADMIN_USER_ID=$(printf '%s\n' "$out" | sed -n 's/^platform admin created: //p')
   [ -n "$ADMIN_USER_ID" ] || { admin_pw=""; fail "admin-agent-administrator" "create-platform-admin: $(printf '%s' "$out" | tail -5)"; }
-  out=$(run_driver login "$admin_login" "$admin_pw")
+  out=$(run_driver login "$ADMIN_LOGIN" "$admin_pw")
   admin_pw=""
   ADMIN_SESSION=$(parse_kv "$out" SESSION)
-  [ -n "$ADMIN_SESSION" ] || fail "admin-agent-administrator" "console login as $admin_login: HTTP $(parse_kv "$out" HTTP_STATUS)"
+  [ -n "$ADMIN_SESSION" ] || fail "admin-agent-administrator" "console login as $ADMIN_LOGIN: HTTP $(parse_kv "$out" HTTP_STATUS)"
   admin_cap get_admin_agent_status '{}' 'String(d.result.enabled)'
   [ "$ADMIN_VALUE" = "true" ] || fail "admin-agent-administrator" "get_admin_agent_status reads enabled=$ADMIN_VALUE while the kernel's environment has the switch on"
-  pass "admin-agent-administrator" "platform administrator $ADMIN_USER_ID ($admin_login) signed in to the console; the platform has the admin agent on"
+  pass "admin-agent-administrator" "platform administrator $ADMIN_USER_ID ($ADMIN_LOGIN) signed in to the console; the platform has the admin agent on"
 
   # Its trial workspace and one target, both on this run's model; the target chosen as the
   # console's page chooses it.
@@ -131,6 +136,16 @@ admin_agent_step() {
   [ "$admin_turn_status" = "completed" ] || fail "admin-agent-turn" "the admin agent Turn $(parse_kv "$out" TURN_ID) ended '${admin_turn_status:-not settled within 180s}', not completed (tools: '$admin_tools') — docker compose logs worker-supervisor"
   [ "$admin_tools" = "agent_list_proposal_targets,platform_state_connectors,propose_admin_proposal" ] || fail "admin-agent-turn" "the admin agent called '$admin_tools', expected agent_list_proposal_targets,platform_state_connectors,propose_admin_proposal"
   [ "$admin_tool_errors" = "0" ] || fail "admin-agent-turn" "$admin_tool_errors of the admin agent's calls ended in an error ($(parse_kv "$out" TOOL_ERROR_NAMES))"
+
+  # The container the Turn ran in, as Docker has it (#481 on #949): worker-supervisor's admin
+  # container for the administrator's Principal in the trial workspace (resident-kind.ts,
+  # spawn-spec.ts labels), running; and no entry container for that Principal — the Turn was not
+  # served by the entry runtime.
+  admin_container="nexttime-admin-$ADMIN_PRINCIPAL_ID"
+  admin_seen=$(docker inspect -f '{{.State.Running}} {{index .Config.Labels "nexttime.role"}} {{index .Config.Labels "nexttime.principal"}} {{index .Config.Labels "nexttime.workspace"}}' "$admin_container" 2>/dev/null)
+  [ "$admin_seen" = "true admin $ADMIN_PRINCIPAL_ID $ADMIN_TRIAL_ID" ] || fail "admin-agent-container" "container $admin_container reads '${admin_seen:-absent}', expected running, nexttime.role=admin, nexttime.principal=$ADMIN_PRINCIPAL_ID, nexttime.workspace=$ADMIN_TRIAL_ID"
+  ! docker inspect "nexttime-entry-$ADMIN_PRINCIPAL_ID" >/dev/null 2>&1 || fail "admin-agent-container" "an entry container nexttime-entry-$ADMIN_PRINCIPAL_ID exists for the administrator's Principal in the trial workspace: the admin agent Turn should start only its admin container"
+  pass "admin-agent-container" "the Turn ran in $admin_container (running, nexttime.role=admin, the administrator's Principal in the trial workspace); no entry container for that Principal"
   admin_reply=$(parse_kv "$(run_driver get-history "$(admin_cred "$ADMIN_TRIAL_ID")" "$admin_chat_id" "(d.filter(m=>m.role==='assistant').pop()||{}).text||''")" EXTRACTED)
   ADMIN_PROPOSAL_ID=$(printf '%s' "$admin_reply" | sed -n 's/.*ADMIN_PROPOSAL_ID=\([0-9a-f-]*\).*/\1/p')
   case "$admin_reply" in
@@ -169,7 +184,12 @@ admin_agent_step() {
 # Logged, never failed (header). Runs whether or not the step got far; each part only when what
 # it ends exists.
 admin_agent_cleanup() {
-  [ -n "$ADMIN_SESSION" ] || return 0
+  if [ -z "$ADMIN_SESSION" ]; then
+    # Created, but its console login failed (#488 on #949): nothing else was made, and nothing can
+    # demote it from here — the bootstrap CLI only creates. Say so, so it is not left unnoticed.
+    [ -z "$ADMIN_USER_ID" ] || echo "cleanup: administrator $ADMIN_USER_ID ($ADMIN_LOGIN) was created but its console login failed — it stays an active administrator nobody can sign in as (its password existed only in this shell); demote it on 平台 · 用户"
+    return 0
+  fi
   if [ -n "$ADMIN_PROPOSAL_ID" ]; then
     out=$(cap "$(admin_cred)" withdraw_admin_proposal "{\"proposalId\":\"$ADMIN_PROPOSAL_ID\",\"reason\":\"accept_s2 admin agent scenario: never applied\"}")
     echo "cleanup: withdraw_admin_proposal $ADMIN_PROPOSAL_ID HTTP $(parse_kv "$out" HTTP_STATUS)"
@@ -178,7 +198,11 @@ admin_agent_cleanup() {
     out=$(cap "$(admin_cred)" stop_admin_agent "{\"trialWorkspaceId\":\"$ADMIN_TRIAL_ID\"}")
     echo "cleanup: stop_admin_agent in $ADMIN_TRIAL_ID HTTP $(parse_kv "$out" HTTP_STATUS)"
     # Its admin container (and an entry container, had one started): removed, not just stopped.
-    [ -z "$ADMIN_PRINCIPAL_ID" ] || resident_reclaim "$ADMIN_PRINCIPAL_ID" >/dev/null 2>&1
+    if [ -n "$ADMIN_PRINCIPAL_ID" ]; then
+      out=$(resident_reclaim "$ADMIN_PRINCIPAL_ID")
+      reclaim_status=$(parse_kv "$out" STATUS)
+      echo "cleanup: /resident/reclaim $ADMIN_PRINCIPAL_ID ${reclaim_status:+HTTP $reclaim_status}${reclaim_status:-failed: $(printf '%s' "$out" | tail -n 1)}"
+    fi
   fi
   for admin_ws in $ADMIN_TRIAL_ID $ADMIN_TARGET_ID; do
     out=$(cap "$(admin_cred)" set_workspace_status "{\"workspaceId\":\"$admin_ws\",\"status\":\"disabled\"}")

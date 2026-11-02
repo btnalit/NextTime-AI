@@ -60,7 +60,7 @@ function buildGateObserveTool(
  */
 
 /** The S1 graph observe group (design doc §9.3 "graph"), registered verbatim as pi tools. */
-const ENTRY_TOOL_CAPABILITY_NAMES = [
+export const ENTRY_TOOL_CAPABILITY_NAMES = [
   // S1 observe group (unchanged order — entry.test.ts pins it).
   'get_object',
   'traverse',

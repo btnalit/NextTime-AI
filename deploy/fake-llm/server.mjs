@@ -1001,14 +1001,17 @@ const ADMIN_AGENT_TOOLS_USED = [
   'platform_state_connectors',
   'propose_admin_proposal',
 ];
-/** Entry agent tools an admin agent's run must not offer (platform-extension modes/entry.ts). */
+/** Tools only the entry agent is offered, which an admin agent's run must not offer: entry mode's
+ *  tools (platform-extension modes/entry.ts `ENTRY_TOOL_CAPABILITY_NAMES`) less admin mode's
+ *  (modes/admin.ts `ADMIN_TOOL_CAPABILITY_NAMES`), exactly — packages/platform-extension/src/
+ *  fake-llm-admin-tools.test.ts pins both lists against those. */
 const ENTRY_ONLY_TOOLS = [
   'invoke_worker',
-  'request_action',
+  'request_connection',
+  'record_decision',
+  'record_procedure_followed',
+  'report_task_outcome',
   'propose_goal',
-  'confirm_goal',
-  'get_entry_context',
-  'report_turn',
 ];
 
 function offeredToolNames(tools) {
