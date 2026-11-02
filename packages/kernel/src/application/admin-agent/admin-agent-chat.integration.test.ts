@@ -27,6 +27,7 @@ import { setAgentRuntimeForHandlers } from '../gateway/handlers.js';
 import type { ResolvedCaller } from '../gateway/resolve-caller.js';
 import { findAttributableTurnForSession } from '../host-bridge/index.js';
 import { type UserRow, createUser } from '../identity/index.js';
+import { resolveDefaultChat } from '../linkage/chat-targets.js';
 import { createWorkspaceWithOwner } from '../workspace/index.js';
 import {
   AdminAgentRefused,
@@ -442,6 +443,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         () => call(person(trial), 'get_chat_history', { chatId: chat.id }),
         () => call(person(trial), 'list_chat_turns', { chatId: chat.id }),
         () => call(person(trial), 'rename_chat', { chatId: chat.id, title: 'renamed' }),
+        // #937 C06: subscribing reads the Chat too.
+        () => call(person(trial), 'subscribe_chat', { chatId: chat.id }),
       ];
 
       await withSwitchOff(async () => {
@@ -469,6 +472,68 @@ describe.runIf(DATABASE_URL !== undefined)(
       }
       await expect(send(trial, chat.id)).resolves.toMatchObject({ turnId: expect.any(String) });
     });
+
+    it('linkage (#937 C08): what the entry agent’s work leaves for the person goes to their newest entry Chat — never an admin agent Chat, however recent', async () => {
+      const trial = await newTrial();
+      const resolve = () =>
+        withWorkspace(pool, trial, (client) =>
+          resolveDefaultChat(client, trial.workspaceId, trial.principalId),
+        );
+      const adminChat = await newAdminChat(trial);
+      const first = await resolve();
+      expect(first.id).not.toBe(adminChat.id);
+      expect(first.agentKind).toBe('entry');
+      // An admin agent Chat newer than every entry Chat: still the entry one.
+      const newer = await newAdminChat(trial);
+      const again = await resolve();
+      expect(again.id).toBe(first.id);
+      expect(again.id).not.toBe(newer.id);
+    });
+
+    it('set_admin_agent_targets: one person’s saves in one trial workspace take turns — a save waits for the one in progress, then reads what it wrote (#937 review)', async () => {
+      const trial = await newTrial();
+      const save = (targets: readonly string[]) =>
+        call<AdminAgentTargetsResultWire>(platform(admin), 'set_admin_agent_targets', {
+          trialWorkspaceId: trial.workspaceId,
+          targetWorkspaceIds: targets,
+        });
+      // A save in progress: its lock held, its row written, not committed yet.
+      const inProgress = await pool.connect();
+      let saving: Promise<AdminAgentTargetsResultWire> | undefined;
+      try {
+        await inProgress.query('begin');
+        await inProgress.query('select pg_advisory_xact_lock(hashtext($1::text))', [
+          `admin-agent-targets:${trial.workspaceId}:${trial.principalId}`,
+        ]);
+        await inProgress.query(
+          `insert into admin_agent_targets
+             (workspace_id, principal_id, target_workspace_id, chosen_by_user)
+           values ($1, $2, $3, $4)`,
+          [trial.workspaceId, trial.principalId, targetA, admin.id],
+        );
+        saving = save([targetA, targetB]);
+        await untilWaitingOnAdvisoryLock('the second save');
+        await inProgress.query('commit');
+      } finally {
+        inProgress.release();
+      }
+      // It read the committed row: only B is new — no duplicate insert, no 500.
+      await expect(saving).resolves.toMatchObject({ added: [targetB], removed: [] });
+    });
+
+    /** Waits until some other session is blocked on an advisory lock. */
+    async function untilWaitingOnAdvisoryLock(what: string): Promise<void> {
+      const deadline = Date.now() + 15_000;
+      for (;;) {
+        const waiting = await pool.query<{ count: number }>(
+          `select count(*)::int as count from pg_stat_activity
+            where wait_event_type = 'Lock' and wait_event = 'advisory'`,
+        );
+        if ((waiting.rows[0]?.count ?? 0) > 0) return;
+        if (Date.now() > deadline) throw new Error(`${what} never waited on the lock`);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
 
     it('turn attribution: what the admin session does belongs to its Turns, what the entry session does to the entry Turns — however they interleave, running or recent', async () => {
       const trial = await newTrial();

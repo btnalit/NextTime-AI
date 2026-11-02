@@ -229,6 +229,12 @@ export async function setAdminAgentTargets(
   );
   if (stored.rows[0]?.platform_role !== 'admin') throw new AdminAgentRoleNotStoredError();
 
+  // #937 review: two saves of one person's list in one trial workspace take turns — the second
+  // reads what the first wrote (no duplicate insert ending in a 500). Same
+  // `pg_advisory_xact_lock(hashtext(...))` convention as the rest of the kernel.
+  await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
+    `admin-agent-targets:${membership.workspaceId}:${membership.principalId}`,
+  ]);
   const before = (await readAdminAgentTargets(client, membership)).map(
     (target) => target.workspaceId,
   );

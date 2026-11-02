@@ -1068,7 +1068,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     it('rejecting the platform segment withdraws the workspace segments still proposed; the reason is the platform’s, never the agent’s to read', async () => {
-      const { user, agent } = await administrator();
+      const { user, trial, agent } = await administrator();
       const decider = await otherAdministrator();
       const [targetA, targetB] = [await newTarget(), await newTarget()];
       const { proposal, platformSegmentId, workspaceSegmentIds } = await proposePlatform(
@@ -1080,6 +1080,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       await call(ownerCaller(targetB), 'reject_admin_proposal_segment', {
         segmentId: workspaceSegmentIds[1],
         reason: 'Not here.',
+      });
+      // The administrator has since dropped both targets: the cascade still withdraws A's
+      // (#937 R-1 — governance 0036 holds only applying to a target no longer chosen).
+      await call(platformCaller(user), 'set_admin_agent_targets', {
+        trialWorkspaceId: trial.workspaceId,
+        targetWorkspaceIds: [],
       });
       const rejected = await call<AdminProposalWire>(
         platformCaller(decider),
