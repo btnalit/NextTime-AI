@@ -1,4 +1,5 @@
 import {
+  type DraftOrigin,
   type GateOwnedParamWire,
   type GatekeeperDetailWire,
   type GrantStatus,
@@ -357,6 +358,10 @@ export interface SkillRow {
   /** The proposer's principal id. The owner and builders see every draft (D-26 rule), so the
    *  catalog shows whose draft it is; optional only so older fixtures still type-check. */
   readonly proposedBy?: string;
+  /** Legacy 597: who wrote this version (`SkillSummaryWire.origin`, `DRAFT_ORIGIN_VALUES`): a
+   *  person, an agent drafting for `proposedBy`, or the platform's template. Absent on a version
+   *  written before it was recorded. */
+  readonly origin?: DraftOrigin;
   /** A draft's content digest (review #493 on #764, F1): `publish_skill` names it, so a draft
    *  discarded and proposed again under the same version since is refused (409 `draft_changed`),
    *  not published in place of the one reviewed. Absent on a published / deprecated row. */
@@ -379,6 +384,8 @@ export interface ProcedureRow {
   readonly parameters?: Readonly<Record<string, unknown>> | null;
   /** As `SkillRow.proposedBy`. */
   readonly proposedBy?: string;
+  /** As `SkillRow.origin`. */
+  readonly origin?: DraftOrigin;
   /** As `SkillRow.draftDigest`, for `publish_procedure`. */
   readonly draftDigest?: string;
   /** As `SkillRow.inUse`: the version a goal made from it uses until the draft is published. */
