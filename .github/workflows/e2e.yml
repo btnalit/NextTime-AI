@@ -201,6 +201,10 @@ jobs:
           sudo env "NEXTTIME_DATA=$NEXTTIME_DATA" sh scripts/gen-handle-keys.sh
           sudo cp config/llm-providers.fake.example.yaml "$NEXTTIME_DATA/config/llm-providers.yaml"
           echo 'FAKE_LLM_API_KEY=fake' | sudo tee -a "$NEXTTIME_DATA/secrets/llm-proxy.env" >/dev/null
+          # S11 AA4d (AA4 plan F9): the admin agent journey (journeys/09-admin-agent.spec.ts) needs
+          # the platform switch on. A host turns it on the same way, in kernel.env
+          # (docs/runbooks/release.md); it is off by default and on no host yet.
+          echo 'ADMIN_AGENT_ENABLED=1' | sudo tee -a "$NEXTTIME_DATA/secrets/kernel.env" >/dev/null
 
       # The bind-mounted files and directories a non-root service writes must be owned by that
       # service's uid, or its writes fail silently (best-effort) — config/egress-sources.json was
