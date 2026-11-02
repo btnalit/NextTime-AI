@@ -2271,6 +2271,28 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：Skill、流程、Worker 定义、Operation 和本体提案的审阅页显示草稿是谁写的（「起草方」：人 / 智能体 / 平台模板；Operation 是门的清单 / 人 / 智能体）。智能体写的草稿带一句提醒：发布前逐项核对；最后由智能体写的 Operation 草稿说明它可能已替换提议者原来的内容。Worker 定义和 Operation 的审阅页现在也显示提议者。文案写「智能体」而不是「管理员智能体」、写「可能已被替换」而不是「改写」：内核对所有智能体会话和 Handle 都记 `agent`，也不记录一次写入是否替换了人的草稿（AA4 方案 F10-4，协调线程 11-02 决定，AA5 实际用过后再看）。#914 之前写的版本没有记录起草方，不显示这一行。
 - **回滚**：只回退代码即可。
 
+### 3.108 所有者在能力目录里审阅管理员提案（#929，S11 AA4a，0.61.0 起）
+
+只改控制台：没有迁移，没有线上变化，契约快照不变，不改 compose，主机不需要操作；`ADMIN_AGENT_ENABLED` 仍默认关。
+
+- **发版说明可写**：工作区所有者在「能力目录」多了「管理员提案」页签，列出管理员提案发给本工作区的部分（默认只看待确认），逐条审阅后应用或写理由拒绝。审阅页写清楚每个条目改什么；扩大权限的条目要逐项确认，含疑似凭据时要勾核对框；系统还没启用时能就地启用，或写明要等平台管理员。平台部分还没应用、或它建的门实例后来被改过时，不能应用并写明原因。拒绝理由留在这个工作区，平台管理员也看得到，提议它的管理员智能体只知道被拒绝了。「安装历史」里来自管理员提案的记录带上提案的标题、说明和链接。图谱抽屉的「提案」改叫「本体提案」。只有所有者看得到这些。
+- **回滚**：只回退代码即可。
+
+### 3.109 管理员智能体的观察记下会话；平台运行状态不再占着事务调 HTTP；平台部分撤销预览列出工作区；智能体读不到门地址（#933，S11 AA4-0，0.61.0 之后的下一版）
+
+带一个迁移 core `0052_activity_session_record`（只替换一个触发器函数，不存数据），随 `apply-release.sh` 自动应用。不改 compose，没有新环境变量，主机不需要操作；`ADMIN_AGENT_ENABLED` 仍默认关。
+
+- **迁移**：替换 `activities_trigger_record_guard`：在 0046 的守卫上加两个键 `metadata.sessionKind`、`metadata.sessionId`，有没有和取值都不能被 update 改。
+- **新线上**：
+  - `preview_roll_back_platform_change_segment`、`roll_back_platform_change_segment` 的条目加必填 `enabledIn: [{workspaceId, name, purpose}]`（按名字排，最多 50 个；`linkedWorkspaceCount` 仍是总数）。控制台从 AA4b 起读它。
+  - 智能体一侧：`propose_admin_proposal`、`agent_get_admin_proposal`、`agent_withdraw_admin_proposal` 改返回 `AgentAdminProposalWireSchema`：平台部分的 `gate_instance` 条目不带 `target` / `manifestSource`，带 `addressWithheld: true`。平台管理员与所有者读到的不变（协调线程 11-02 决定：人读得到，智能体读不到；F9 在提议时已拒绝带凭据的地址）。
+  - 契约快照 5 项变化（上面两个撤销能力 + 三个智能体能力）。
+- **行为变化**：
+  - 经管理员智能体会话的观察（`observe_operation`、`request_action` 的观察分支）在 Activity 的 metadata 里记 `sessionKind` / `sessionId`，能和本人的观察区分开（遗留 584）。
+  - 管理员智能体调 `platform_state_runtime` 时，先在事务外取 worker-supervisor 的列表和健康探测，再开只读事务；取的过程中被降权，调用拒绝 `not_platform_admin`。返回形状不变（遗留 592）。
+- **发版说明可写**：0.61.0 的已知问题已修复，管理员智能体读回自己的管理员提案时不再看到平台部分门宿主实例的地址（遗留 609）。平台部分的撤销预览列出启用了每个实例的工作区。
+- **回滚**（见 §6）：只回退代码不损坏数据：0.61.0 及更早的代码从不写 Activity 的 `metadata.sessionKind` / `metadata.sessionId`。回退到 0.61.0 后，智能体读回提案又能看到门地址（回到 0.61.0 的已知问题）。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -2431,13 +2453,14 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.59.0 | core `0049_admin_agent_sessions`（#897，S11 AA1）：`sessions.kind` 的 CHECK 放宽一个值 `admin_agent`，不回填 | 可逆 | 只放宽：满足旧约束的行都满足新约束，重新加约束校验既有行无需回填；旧代码从不写 `admin_agent`，这一版也没有东西会签发管理员智能体的 Handle（开关默认关，AA4 之前没有运行时） | 先查 `admin_agent` 会话数：为 0 时可按 0001 的五个值重建约束并删掉 `schema_migrations` 的 core 49；不为 0 时保留 0049、只回退代码（restrict 外键）。AA4 之后回退到 AA1 之前的代码，先吊销管理员智能体 Handle（见 §3.97、0049 文件头） |
 | v0.60.0 | llm-usage `0003_usage_refusal`（#910，遗留 589）：`llm_usage.refusal_scope` 列、CHECK `llm_usage_refusal`（`refused` ⇔ 有 scope，且 0 token、0 费用）、两个 `status = 'refused'` 的部分索引 `llm_usage_refused_session_idx`、`llm_usage_refused_turn_idx` | 可逆 | 只加可空列、新约束与部分索引：旧内核从不写 `refusal_scope`、从不写 `status = 'refused'`，在新 schema 上照常插入；但**不能只回滚内核**，旧内核的严格用量 schema 会拒掉含 `refusalScope` 的整批，新 llm-proxy 的队列满 1000 条后丢真实用量——llm-proxy 与内核同版回滚 | 默认保留 schema 与 refused 行，只回退代码（llm-proxy 与内核一起）。删 schema 可选，会连带删掉 refused 行，删前先导出：停内核，一个事务里删两个索引与约束 `llm_usage_refusal`、`delete from llm_usage where status = 'refused'`、`alter table llm_usage drop column refusal_scope`，再删 `schema_migrations` 的 llm-usage 3（见 0003 文件头） |
 | v0.60.0 | goal `0017_pause_model_refused`（#910，遗留 589）：`goal_runs.pause_reason` 的 CHECK 加 `model_refused` | 可逆 | 只放宽：既有行都满足；旧内核从不写 `model_refused`，已经这样暂停的运行在旧代码里是一个没有文案的暂停，恢复照常 | 只回退代码即可。要撤 schema：先确认 `select count(*) from goal_runs where pause_reason = 'model_refused'` 为 0（请求者先恢复或结束每一条），再停内核、一个事务里按 0001 的列表重建 CHECK，删 `schema_migrations` 的 goal 17（见 0017 文件头） |
-| v0.60.0 之后的下一版 | core `0050_admin_trial_workspaces`（#914，AA3a）：`workspaces_purpose_check` 加 `admin_trial`，触发器 `workspaces_admin_trial_fixed` | 有条件可逆 | 旧代码的线上 schema 不认 `admin_trial`：只有 `select count(*) from workspaces where purpose = 'admin_trial'` 为 0 时才能只回退代码；不为 0 时先停用这些工作区、等满 7 天（`PURGE_RETENTION_DAYS`）清除后再回退，这 7 天里保留这个版本（试验工作区不是临时工作区，不会过期清除）。头注释没写 7 天等待，以本行为准 | 数为 0 时只回退代码即可；要撤 schema 按 0050 文件头：删触发器与函数，按 0028 的值重建 CHECK（`purpose in ('standard', 'ephemeral')`），删 `schema_migrations` 的 core 50 |
-| v0.60.0 之后的下一版 | core `0051_ontology_version_origin`（#914，AA3a，遗留 293）：`ontology_versions.origin` 可空列、取值 CHECK、写后不改触发器 | 可逆 | 只加可空列：旧代码不读不写 `origin`，在新 schema 上照常插入 | 只回退代码、保留列即可；要删列按 0051 文件头（删触发器与函数、`drop column origin`，删 `schema_migrations` 的 core 51） |
-| v0.60.0 之后的下一版 | worker `0013_draft_origin`（#914，AA3a，遗留 293）：`skills`、`procedures`、`worker_definitions` 的 `origin` 可空列、取值 CHECK、写后不改触发器 | 可逆 | 同上，旧代码不读不写 `origin` | 只回退代码、保留列即可；要删列按 0013 文件头，删 `schema_migrations` 的 worker 13 |
-| v0.60.0 之后的下一版 | governance `0032_admin_proposals`（#916，AA3b-1）：新表 `admin_proposals`、`admin_proposal_segments` 及 4 个函数 | 可逆 | 只加新表：旧版本不读不写 | 只回退代码、表留着即可；要删按 0032 文件头：`drop table admin_proposal_segments, admin_proposals`、删文件里的 4 个函数，再删 `schema_migrations` 的 governance 32 |
-| v0.60.0 之后的下一版 | governance `0033_change_segments_from_admin_proposals`（#920，AA3b-2）：`change_segments.source_kind` 加 `admin_proposal`、`proposed_by` 可空、4 个溯源列、约束 `change_segments_proposer`、唯一索引、3 个守卫 | 有条件可逆 | 留着 0033 只回退代码不损坏数据，但旧代码看不到 `admin_proposal` 记录（`proposed_by` 内连接 principals：不列出，get / verify / 撤销 404）；要撤掉管理员提案应用的内容，先在新版本里撤销再回退代码 | 只回退代码、保留 0033 即可。撤迁移的前提是没有 `source_kind = 'admin_proposal'` 的行：删 3 个触发器与函数和索引、删约束 `change_segments_proposer`、把 `change_segments_source_kind_check` 恢复为 `('pack')`、`proposed_by` 设回 not null、删 4 列，再删 `schema_migrations` 的 governance 33（见 0033 文件头） |
-| v0.60.0 之后的下一版 | governance `0034_admin_proposal_platform_segments`（#921，AA3c-1）：`admin_proposal_segments` 加 authority `platform` 与 3 列、新表 `platform_change_segments` / `platform_change_items`、守卫替换与新增、函数 `admin_proposal_platform_segment` | 有条件可逆 | 没有平台部分时只回退代码不损坏数据；有平台部分时旧代码会列出目标为空、决定不了的段，先在新版本里应用、拒绝或撤回提案，再回退代码 | 只回退代码、保留 0034 即可。撤迁移的前提是没有 authority `platform` 的段、也没有 `withdrawn_origin = 'platform_segment'` 的撤回，步骤见 0034 文件头 |
-| v0.60.0 之后的下一版 | governance `0035_admin_proposal_platform_dependency`（#923，AA3c-2）：两个依赖触发器及其函数、两个 security definer 读函数 `admin_proposal_platform_change` / `admin_proposal_applied_workspace_changes`、索引 `change_segments_admin_proposal`；不存数据 | 可逆 | 只回退代码不损坏数据：0.60.0 没有平台部分，守卫不会拦它的写入 | 只回退代码、保留 0035 即可。要撤迁移：删两个触发器及其函数、两个读函数和索引 `change_segments_admin_proposal`，再删 `schema_migrations` 里 governance 35 那一行（见 0035 文件头） |
+| v0.61.0 | core `0050_admin_trial_workspaces`（#914，AA3a）：`workspaces_purpose_check` 加 `admin_trial`，触发器 `workspaces_admin_trial_fixed` | 有条件可逆 | 旧代码的线上 schema 不认 `admin_trial`：只有 `select count(*) from workspaces where purpose = 'admin_trial'` 为 0 时才能只回退代码；不为 0 时先停用这些工作区、等满 7 天（`PURGE_RETENTION_DAYS`）清除后再回退，这 7 天里保留这个版本（试验工作区不是临时工作区，不会过期清除）。头注释没写 7 天等待，以本行为准 | 数为 0 时只回退代码即可；要撤 schema 按 0050 文件头：删触发器与函数，按 0028 的值重建 CHECK（`purpose in ('standard', 'ephemeral')`），删 `schema_migrations` 的 core 50 |
+| v0.61.0 | core `0051_ontology_version_origin`（#914，AA3a，遗留 293）：`ontology_versions.origin` 可空列、取值 CHECK、写后不改触发器 | 可逆 | 只加可空列：旧代码不读不写 `origin`，在新 schema 上照常插入 | 只回退代码、保留列即可；要删列按 0051 文件头（删触发器与函数、`drop column origin`，删 `schema_migrations` 的 core 51） |
+| v0.61.0 | worker `0013_draft_origin`（#914，AA3a，遗留 293）：`skills`、`procedures`、`worker_definitions` 的 `origin` 可空列、取值 CHECK、写后不改触发器 | 可逆 | 同上，旧代码不读不写 `origin` | 只回退代码、保留列即可；要删列按 0013 文件头，删 `schema_migrations` 的 worker 13 |
+| v0.61.0 | governance `0032_admin_proposals`（#916，AA3b-1）：新表 `admin_proposals`、`admin_proposal_segments` 及 4 个函数 | 可逆 | 只加新表：旧版本不读不写 | 只回退代码、表留着即可；要删按 0032 文件头：`drop table admin_proposal_segments, admin_proposals`、删文件里的 4 个函数，再删 `schema_migrations` 的 governance 32 |
+| v0.61.0 | governance `0033_change_segments_from_admin_proposals`（#920，AA3b-2）：`change_segments.source_kind` 加 `admin_proposal`、`proposed_by` 可空、4 个溯源列、约束 `change_segments_proposer`、唯一索引、3 个守卫 | 有条件可逆 | 留着 0033 只回退代码不损坏数据，但旧代码看不到 `admin_proposal` 记录（`proposed_by` 内连接 principals：不列出，get / verify / 撤销 404）；要撤掉管理员提案应用的内容，先在新版本里撤销再回退代码 | 只回退代码、保留 0033 即可。撤迁移的前提是没有 `source_kind = 'admin_proposal'` 的行：删 3 个触发器与函数和索引、删约束 `change_segments_proposer`、把 `change_segments_source_kind_check` 恢复为 `('pack')`、`proposed_by` 设回 not null、删 4 列，再删 `schema_migrations` 的 governance 33（见 0033 文件头） |
+| v0.61.0 | governance `0034_admin_proposal_platform_segments`（#921，AA3c-1）：`admin_proposal_segments` 加 authority `platform` 与 3 列、新表 `platform_change_segments` / `platform_change_items`、守卫替换与新增、函数 `admin_proposal_platform_segment` | 有条件可逆 | 没有平台部分时只回退代码不损坏数据；有平台部分时旧代码会列出目标为空、决定不了的段，先在新版本里应用、拒绝或撤回提案，再回退代码 | 只回退代码、保留 0034 即可。撤迁移的前提是没有 authority `platform` 的段、也没有 `withdrawn_origin = 'platform_segment'` 的撤回，步骤见 0034 文件头 |
+| v0.61.0 | governance `0035_admin_proposal_platform_dependency`（#923，AA3c-2）：两个依赖触发器及其函数、两个 security definer 读函数 `admin_proposal_platform_change` / `admin_proposal_applied_workspace_changes`、索引 `change_segments_admin_proposal`；不存数据 | 可逆 | 只回退代码不损坏数据：0.60.0 没有平台部分，守卫不会拦它的写入 | 只回退代码、保留 0035 即可。要撤迁移：删两个触发器及其函数、两个读函数和索引 `change_segments_admin_proposal`，再删 `schema_migrations` 里 governance 35 那一行（见 0035 文件头） |
+| v0.61.0 之后的下一版 | core `0052_activity_session_record`（#933，AA4-0，遗留 584）：替换触发器函数 `activities_trigger_record_guard`，加 `metadata.sessionKind` / `metadata.sessionId` 写后不改；不存数据 | 可逆 | 只回退代码不损坏数据：旧代码从不写这两个键 | 只回退代码、保留 0052 即可。要撤迁移：重新执行 0046 里 `create or replace function activities_trigger_record_guard` 的函数体，再删 `schema_migrations` 里 core 52 那一行 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
