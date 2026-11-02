@@ -12,6 +12,12 @@ import {
   ChangeApplierNotAPersonError,
   ChangeConfirmationRequiredError,
   ChangePlanChangedError,
+  ChangePlanCredentialError,
+  ChangePlanNotFoundError,
+  ChangePlanNotOpenError,
+  ChangePlanProposalInvalidError,
+  ChangePlanQuotaExceededError,
+  ChangePlanTargetUnavailableError,
   ChangeRollbackConflictError,
   ChangeSegmentNotFoundError,
   ChangeSegmentRolledBackError,
@@ -571,6 +577,25 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   if (err instanceof ChangePlanChangedError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // S11 AA3b-1: mirrors HTTP 400 `change_plan_target_unavailable` / `change_plan_credential` /
+  // `invalid_params`, 429 `change_plan_quota_exceeded`, 404 `change_plan_not_found` and 409
+  // `change_plan_not_open` (capability-route.ts).
+  if (
+    err instanceof ChangePlanTargetUnavailableError ||
+    err instanceof ChangePlanCredentialError ||
+    err instanceof ChangePlanProposalInvalidError
+  ) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  if (err instanceof ChangePlanQuotaExceededError) {
+    return { code: WS_ERROR_CODES.QUOTA_EXCEEDED, message: err.message };
+  }
+  if (err instanceof ChangePlanNotFoundError) {
+    return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
+  }
+  if (err instanceof ChangePlanNotOpenError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // S11 P1-B/E: mirrors HTTP 404 `change_segment_not_found`, 409 `change_segment_rolled_back`,

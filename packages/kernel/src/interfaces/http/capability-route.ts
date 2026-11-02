@@ -12,6 +12,12 @@ import {
   ChangeApplierNotAPersonError,
   ChangeConfirmationRequiredError,
   ChangePlanChangedError,
+  ChangePlanCredentialError,
+  ChangePlanNotFoundError,
+  ChangePlanNotOpenError,
+  ChangePlanProposalInvalidError,
+  ChangePlanQuotaExceededError,
+  ChangePlanTargetUnavailableError,
   ChangeRollbackConflictError,
   ChangeSegmentNotFoundError,
   ChangeSegmentRolledBackError,
@@ -310,6 +316,31 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // S11 P1 (I-A8): the segment recomputed in the applying transaction is not the one reviewed.
   // Nothing was applied; review it again.
   if (err instanceof ChangePlanChangedError) {
+    return { status: 409, code: err.code, message: err.message };
+  }
+  // S11 AA3b-1: an admin agent's ChangePlan proposal, refused with nothing written — a target that
+  // cannot take a plan (one code and one message for unknown, disabled and trial: `details.segment`
+  // is only the index into the call's segments), a credential (`details` names places, never the
+  // value), a plan that would not apply as written (`details.problems`), the daily limit (429,
+  // `details.resetsAt`). Reading or withdrawing one: 404, and 409 when nothing is left to withdraw.
+  if (err instanceof ChangePlanTargetUnavailableError || err instanceof ChangePlanCredentialError) {
+    return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
+  }
+  if (err instanceof ChangePlanProposalInvalidError) {
+    return {
+      status: 400,
+      code: 'invalid_params',
+      message: err.message,
+      details: { problems: err.problems.map((problem) => ({ ...problem })) },
+    };
+  }
+  if (err instanceof ChangePlanQuotaExceededError) {
+    return { status: 429, code: err.code, message: err.message, details: { ...err.details } };
+  }
+  if (err instanceof ChangePlanNotFoundError) {
+    return { status: 404, code: err.code, message: err.message };
+  }
+  if (err instanceof ChangePlanNotOpenError) {
     return { status: 409, code: err.code, message: err.message };
   }
   // S11 P1-B: a segment rollback. Not in this workspace → 404; already rolled back → 409; an item

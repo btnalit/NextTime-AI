@@ -45,6 +45,9 @@ const ENTRY_CEILING_EXTRA_CAPABILITY_NAMES: readonly CapabilityName[] = [
 export function entryCeilingCapabilities(): readonly Capability[] {
   const names = new Set<string>(ENTRY_CEILING_EXTRA_CAPABILITY_NAMES);
   for (const capability of CAPABILITY_REGISTRY) {
+    // S11 AA3b: what only an admin agent calls (`propose_change_plan`) is in no other Handle, as
+    // the kernel's ceiling leaves it out.
+    if (capability.adminAgentOnly) continue;
     if (capability.group === 'graph' || capability.name.startsWith('propose_')) {
       names.add(capability.name);
     }

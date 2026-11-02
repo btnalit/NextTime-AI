@@ -797,11 +797,15 @@ describe('entryScope', () => {
 // ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1) — the CI guard on the admin agent's ceiling
 // -------------------------------------------------------------------------------------------
 
-describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a)', () => {
+describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b)', () => {
   it('is exactly this set — widening it is a reviewed change to this test (I-A2)', () => {
     expect([...ADMIN_AGENT_CEILING_CAPABILITIES].sort()).toEqual(
       [
         '<gate>.<op>',
+        // S11 AA3b: its ChangePlans — proposing, reading its administrator's back, withdrawing.
+        'agent_get_change_plan',
+        'agent_list_change_plans',
+        'agent_withdraw_change_plan',
         'explain',
         'find_operations',
         'find_procedures',
@@ -832,6 +836,7 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a)', () => {
         'platform_state_runtime',
         'platform_state_updates',
         // S11 AA3a (F3): the five draft proposals, each recording that an agent wrote it.
+        'propose_change_plan',
         'propose_ontology_change',
         'propose_operation',
         'propose_procedure',
@@ -859,8 +864,9 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a)', () => {
     }
   });
 
-  it('holds only handle-channel observe reads and the five draft proposals: no human-channel, platform, execute-class or other writing capability', () => {
+  it('holds only handle-channel observe reads, the six proposals and withdrawing a ChangePlan: no human-channel, platform, execute-class or other writing capability', () => {
     const proposals = [
+      'propose_change_plan',
       'propose_ontology_change',
       'propose_operation',
       'propose_procedure',
@@ -872,7 +878,13 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a)', () => {
       expect(capability, name).toBeDefined();
       expect(capability?.channel, name).toBe('handle');
       expect(capability?.scope, name).not.toBe('platform');
-      expect(capability?.mode, name).toBe(proposals.includes(name) ? 'propose' : 'observe');
+      expect(capability?.mode, name).toBe(
+        proposals.includes(name)
+          ? 'propose'
+          : name === 'agent_withdraw_change_plan'
+            ? 'write'
+            : 'observe',
+      );
     }
     for (const name of [
       'request_action',
@@ -905,6 +917,8 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a)', () => {
       ['<gate>.<op>:execute', 'execute-class'],
       // Propose-class but not one of the drafts that record who wrote them (S11 AA3a).
       ['propose_goal', 'has mode "propose"'],
+      // A write that is not the one it names (S11 AA3b): withdrawing a ChangePlan.
+      ['assert_fact', 'has mode "write"'],
       ['invoke_worker', 'has mode'],
       // Observe-class but writes, and not one of the gate observations it names.
       ['get_entry_context', 'has side effects'],
@@ -979,6 +993,11 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a)', () => {
         'platform_state_runtime',
         'platform_state_updates',
         'platform_state_invariants',
+        // S11 AA3b
+        'propose_change_plan',
+        'agent_list_change_plans',
+        'agent_get_change_plan',
+        'agent_withdraw_change_plan',
       ]) {
         await expect(
           issueHandle(client, {

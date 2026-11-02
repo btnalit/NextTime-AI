@@ -1,5 +1,6 @@
 import type {
   ActionRequestStatus,
+  ChangePlanSegmentStatus,
   ChangeSegmentStatus,
   ConflictStatus,
   ConnectionRequestStatus,
@@ -619,6 +620,39 @@ export const CHANGE_SEGMENT_TRANSITIONS: TransitionTable<ChangeSegmentStatus, Ch
     edges: CHANGE_SEGMENT_EDGES,
   };
 
+// ---------------------------------------------------------------------------------------------
+// ChangePlanSegment (S11 AA3b, plan §3.3): what an admin agent proposed for one authority to
+// decide. Created `proposed` with its plan; decided once — applied (then rolled back, by the
+// owner who applied it), rejected with a reason, or withdrawn by its proposer. Also enforced by
+// the database (`change_plan_segments_guard`, migrations/governance/0032, the same edges).
+// ---------------------------------------------------------------------------------------------
+
+export const CHANGE_PLAN_SEGMENT_EVENT_VALUES = [
+  'apply',
+  'reject',
+  'withdraw',
+  'roll_back',
+] as const;
+export type ChangePlanSegmentEvent = (typeof CHANGE_PLAN_SEGMENT_EVENT_VALUES)[number];
+
+export const CHANGE_PLAN_SEGMENT_EDGES: readonly StateTransition<
+  ChangePlanSegmentStatus,
+  ChangePlanSegmentEvent
+>[] = [
+  { from: 'proposed', event: 'apply', to: 'applied' },
+  { from: 'proposed', event: 'reject', to: 'rejected' },
+  { from: 'proposed', event: 'withdraw', to: 'withdrawn' },
+  { from: 'applied', event: 'roll_back', to: 'rolled_back' },
+];
+
+export const CHANGE_PLAN_SEGMENT_TRANSITIONS: TransitionTable<
+  ChangePlanSegmentStatus,
+  ChangePlanSegmentEvent
+> = {
+  machine: 'ChangePlanSegment',
+  edges: CHANGE_PLAN_SEGMENT_EDGES,
+};
+
 /** Every transition table, for generic iteration (e.g. exhaustive tests, doc generation). */
 export const ALL_TRANSITION_TABLES = [
   FACT_LIFECYCLE_TRANSITIONS,
@@ -637,4 +671,5 @@ export const ALL_TRANSITION_TABLES = [
   PLAN_REVISION_TRANSITIONS,
   STEP_RUN_TRANSITIONS,
   CHANGE_SEGMENT_TRANSITIONS,
+  CHANGE_PLAN_SEGMENT_TRANSITIONS,
 ] as const;

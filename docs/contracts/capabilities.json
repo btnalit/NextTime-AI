@@ -2018,6 +2018,1137 @@
     "sideEffects": true
   },
   {
+    "adminAgentOnly": true,
+    "channel": "handle",
+    "group": "change_plan",
+    "mode": "observe",
+    "name": "agent_get_change_plan",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "planId": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "planId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "contentDigest": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "origin": {
+          "enum": [
+            "human",
+            "agent",
+            "platform"
+          ],
+          "type": "string"
+        },
+        "proposedAt": {
+          "type": "string"
+        },
+        "proposedBy": {
+          "additionalProperties": false,
+          "properties": {
+            "displayName": {
+              "type": "string"
+            },
+            "userId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "userId",
+            "displayName"
+          ],
+          "type": "object"
+        },
+        "segmentCounts": {
+          "additionalProperties": false,
+          "properties": {
+            "applied": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "proposed": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rejected": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rolledBack": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "withdrawn": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "proposed",
+            "applied",
+            "rejected",
+            "withdrawn",
+            "rolledBack"
+          ],
+          "type": "object"
+        },
+        "segments": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "authority": {
+                "enum": [
+                  "workspace"
+                ],
+                "type": "string"
+              },
+              "contentDigest": {
+                "type": "string"
+              },
+              "decidedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "items": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "skill_version",
+                          "type": "string"
+                        },
+                        "skill": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "applicable": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "gateKinds": {
+                                  "items": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                },
+                                "objectTypes": {
+                                  "items": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                }
+                              },
+                              "type": "object"
+                            },
+                            "description": {
+                              "maxLength": 1024,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "markdown": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "name": {
+                              "maxLength": 64,
+                              "minLength": 1,
+                              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "description",
+                            "markdown"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "skill"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "definition": {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        "kind": {
+                          "const": "worker_definition_version",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "definition"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "definition": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "actionTypes": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "autoApprovable": {
+                                    "type": "boolean"
+                                  },
+                                  "awaitDecision": {
+                                    "type": "boolean"
+                                  },
+                                  "blastRadius": {
+                                    "enum": [
+                                      "low",
+                                      "medium",
+                                      "high"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "description": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "mode": {
+                                    "enum": [
+                                      "observe",
+                                      "execute"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "requesterCanApprove": {
+                                    "type": "boolean"
+                                  },
+                                  "reversibility": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "description",
+                                  "mode",
+                                  "blastRadius"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "linkTypes": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "description": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "domain": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "range": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "domain",
+                                  "range",
+                                  "description"
+                                ],
+                                "type": "object"
+                              },
+                              "minItems": 1,
+                              "type": "array"
+                            },
+                            "objectTypes": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "description": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "identityKey": {
+                                    "items": {
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "minItems": 1,
+                                    "type": "array"
+                                  },
+                                  "name": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "description"
+                                ],
+                                "type": "object"
+                              },
+                              "minItems": 1,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "objectTypes",
+                            "linkTypes"
+                          ],
+                          "type": "object"
+                        },
+                        "family": {
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "ontology_version",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "family",
+                        "definition"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "gateId": {
+                          "pattern": "^[a-z0-9][a-z0-9-]{1,63}$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "operation_version",
+                          "type": "string"
+                        },
+                        "name": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "set": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "auto_approvable": {
+                              "type": "boolean"
+                            },
+                            "await_decision": {
+                              "type": "boolean"
+                            },
+                            "blast_radius": {
+                              "enum": [
+                                "low",
+                                "medium",
+                                "high"
+                              ],
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "reads": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "writes": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "gateId",
+                        "name",
+                        "set"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "ordinal": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "rolledBackAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "enum": [
+                  "proposed",
+                  "applied",
+                  "rejected",
+                  "withdrawn",
+                  "rolled_back"
+                ],
+                "type": "string"
+              },
+              "targetWorkspaceId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "withdrawnOrigin": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "human",
+                      "agent"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "ordinal",
+              "authority",
+              "targetWorkspaceId",
+              "items",
+              "contentDigest",
+              "status",
+              "decidedAt",
+              "withdrawnOrigin",
+              "reason",
+              "rolledBackAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "sourceName": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "partially_applied",
+            "applied",
+            "closed"
+          ],
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "sourceName",
+        "origin",
+        "proposedBy",
+        "proposedAt",
+        "status",
+        "segmentCounts",
+        "description",
+        "contentDigest",
+        "segments"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "adminAgentOnly": true,
+    "channel": "handle",
+    "group": "change_plan",
+    "mode": "observe",
+    "name": "agent_list_change_plans",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "origin": {
+                "enum": [
+                  "human",
+                  "agent",
+                  "platform"
+                ],
+                "type": "string"
+              },
+              "proposedAt": {
+                "type": "string"
+              },
+              "proposedBy": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "type": "string"
+                  },
+                  "userId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "userId",
+                  "displayName"
+                ],
+                "type": "object"
+              },
+              "segmentCounts": {
+                "additionalProperties": false,
+                "properties": {
+                  "applied": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "proposed": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "rejected": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "rolledBack": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "withdrawn": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "proposed",
+                  "applied",
+                  "rejected",
+                  "withdrawn",
+                  "rolledBack"
+                ],
+                "type": "object"
+              },
+              "sourceName": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "proposed",
+                  "partially_applied",
+                  "applied",
+                  "closed"
+                ],
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "sourceName",
+              "origin",
+              "proposedBy",
+              "proposedAt",
+              "status",
+              "segmentCounts"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "adminAgentOnly": true,
+    "channel": "handle",
+    "group": "change_plan",
+    "mode": "write",
+    "name": "agent_withdraw_change_plan",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "planId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "planId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "contentDigest": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "origin": {
+          "enum": [
+            "human",
+            "agent",
+            "platform"
+          ],
+          "type": "string"
+        },
+        "proposedAt": {
+          "type": "string"
+        },
+        "proposedBy": {
+          "additionalProperties": false,
+          "properties": {
+            "displayName": {
+              "type": "string"
+            },
+            "userId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "userId",
+            "displayName"
+          ],
+          "type": "object"
+        },
+        "segmentCounts": {
+          "additionalProperties": false,
+          "properties": {
+            "applied": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "proposed": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rejected": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rolledBack": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "withdrawn": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "proposed",
+            "applied",
+            "rejected",
+            "withdrawn",
+            "rolledBack"
+          ],
+          "type": "object"
+        },
+        "segments": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "authority": {
+                "enum": [
+                  "workspace"
+                ],
+                "type": "string"
+              },
+              "contentDigest": {
+                "type": "string"
+              },
+              "decidedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "items": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "skill_version",
+                          "type": "string"
+                        },
+                        "skill": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "applicable": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "gateKinds": {
+                                  "items": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                },
+                                "objectTypes": {
+                                  "items": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                }
+                              },
+                              "type": "object"
+                            },
+                            "description": {
+                              "maxLength": 1024,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "markdown": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "name": {
+                              "maxLength": 64,
+                              "minLength": 1,
+                              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "description",
+                            "markdown"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "skill"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "definition": {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        "kind": {
+                          "const": "worker_definition_version",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "definition"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "definition": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "actionTypes": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "autoApprovable": {
+                                    "type": "boolean"
+                                  },
+                                  "awaitDecision": {
+                                    "type": "boolean"
+                                  },
+                                  "blastRadius": {
+                                    "enum": [
+                                      "low",
+                                      "medium",
+                                      "high"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "description": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "mode": {
+                                    "enum": [
+                                      "observe",
+                                      "execute"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "requesterCanApprove": {
+                                    "type": "boolean"
+                                  },
+                                  "reversibility": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "description",
+                                  "mode",
+                                  "blastRadius"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "linkTypes": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "description": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "domain": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "range": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "domain",
+                                  "range",
+                                  "description"
+                                ],
+                                "type": "object"
+                              },
+                              "minItems": 1,
+                              "type": "array"
+                            },
+                            "objectTypes": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "description": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "identityKey": {
+                                    "items": {
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "minItems": 1,
+                                    "type": "array"
+                                  },
+                                  "name": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "description"
+                                ],
+                                "type": "object"
+                              },
+                              "minItems": 1,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "objectTypes",
+                            "linkTypes"
+                          ],
+                          "type": "object"
+                        },
+                        "family": {
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "ontology_version",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "family",
+                        "definition"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "gateId": {
+                          "pattern": "^[a-z0-9][a-z0-9-]{1,63}$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "operation_version",
+                          "type": "string"
+                        },
+                        "name": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "set": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "auto_approvable": {
+                              "type": "boolean"
+                            },
+                            "await_decision": {
+                              "type": "boolean"
+                            },
+                            "blast_radius": {
+                              "enum": [
+                                "low",
+                                "medium",
+                                "high"
+                              ],
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "reads": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "writes": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "gateId",
+                        "name",
+                        "set"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "ordinal": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "rolledBackAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "enum": [
+                  "proposed",
+                  "applied",
+                  "rejected",
+                  "withdrawn",
+                  "rolled_back"
+                ],
+                "type": "string"
+              },
+              "targetWorkspaceId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "withdrawnOrigin": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "human",
+                      "agent"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "ordinal",
+              "authority",
+              "targetWorkspaceId",
+              "items",
+              "contentDigest",
+              "status",
+              "decidedAt",
+              "withdrawnOrigin",
+              "reason",
+              "rolledBackAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "sourceName": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "partially_applied",
+            "applied",
+            "closed"
+          ],
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "sourceName",
+        "origin",
+        "proposedBy",
+        "proposedAt",
+        "status",
+        "segmentCounts",
+        "description",
+        "contentDigest",
+        "segments"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
     "channel": "human",
     "group": "governance",
     "minRole": "operator",
@@ -12697,6 +13828,504 @@
         "updatedBy",
         "availableGatekeepers",
         "effective"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "observe",
+    "name": "get_change_plan",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "planId": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "planId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "contentDigest": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "origin": {
+          "enum": [
+            "human",
+            "agent",
+            "platform"
+          ],
+          "type": "string"
+        },
+        "proposedAt": {
+          "type": "string"
+        },
+        "proposedBy": {
+          "additionalProperties": false,
+          "properties": {
+            "displayName": {
+              "type": "string"
+            },
+            "userId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "userId",
+            "displayName"
+          ],
+          "type": "object"
+        },
+        "segmentCounts": {
+          "additionalProperties": false,
+          "properties": {
+            "applied": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "proposed": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rejected": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rolledBack": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "withdrawn": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "proposed",
+            "applied",
+            "rejected",
+            "withdrawn",
+            "rolledBack"
+          ],
+          "type": "object"
+        },
+        "segments": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "authority": {
+                "enum": [
+                  "workspace"
+                ],
+                "type": "string"
+              },
+              "contentDigest": {
+                "type": "string"
+              },
+              "decidedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "items": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "skill_version",
+                          "type": "string"
+                        },
+                        "skill": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "applicable": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "gateKinds": {
+                                  "items": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                },
+                                "objectTypes": {
+                                  "items": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                }
+                              },
+                              "type": "object"
+                            },
+                            "description": {
+                              "maxLength": 1024,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "markdown": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "name": {
+                              "maxLength": 64,
+                              "minLength": 1,
+                              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "description",
+                            "markdown"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "skill"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "definition": {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        "kind": {
+                          "const": "worker_definition_version",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "definition"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "definition": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "actionTypes": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "autoApprovable": {
+                                    "type": "boolean"
+                                  },
+                                  "awaitDecision": {
+                                    "type": "boolean"
+                                  },
+                                  "blastRadius": {
+                                    "enum": [
+                                      "low",
+                                      "medium",
+                                      "high"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "description": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "mode": {
+                                    "enum": [
+                                      "observe",
+                                      "execute"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "requesterCanApprove": {
+                                    "type": "boolean"
+                                  },
+                                  "reversibility": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "description",
+                                  "mode",
+                                  "blastRadius"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "linkTypes": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "description": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "domain": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "range": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "domain",
+                                  "range",
+                                  "description"
+                                ],
+                                "type": "object"
+                              },
+                              "minItems": 1,
+                              "type": "array"
+                            },
+                            "objectTypes": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "description": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "identityKey": {
+                                    "items": {
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "minItems": 1,
+                                    "type": "array"
+                                  },
+                                  "name": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "description"
+                                ],
+                                "type": "object"
+                              },
+                              "minItems": 1,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "objectTypes",
+                            "linkTypes"
+                          ],
+                          "type": "object"
+                        },
+                        "family": {
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "ontology_version",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "family",
+                        "definition"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "gateId": {
+                          "pattern": "^[a-z0-9][a-z0-9-]{1,63}$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "operation_version",
+                          "type": "string"
+                        },
+                        "name": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "set": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "auto_approvable": {
+                              "type": "boolean"
+                            },
+                            "await_decision": {
+                              "type": "boolean"
+                            },
+                            "blast_radius": {
+                              "enum": [
+                                "low",
+                                "medium",
+                                "high"
+                              ],
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "reads": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "writes": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "gateId",
+                        "name",
+                        "set"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "ordinal": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "rolledBackAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "enum": [
+                  "proposed",
+                  "applied",
+                  "rejected",
+                  "withdrawn",
+                  "rolled_back"
+                ],
+                "type": "string"
+              },
+              "targetWorkspaceId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "withdrawnOrigin": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "human",
+                      "agent"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "ordinal",
+              "authority",
+              "targetWorkspaceId",
+              "items",
+              "contentDigest",
+              "status",
+              "decidedAt",
+              "withdrawnOrigin",
+              "reason",
+              "rolledBackAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "sourceName": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "partially_applied",
+            "applied",
+            "closed"
+          ],
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "sourceName",
+        "origin",
+        "proposedBy",
+        "proposedAt",
+        "status",
+        "segmentCounts",
+        "description",
+        "contentDigest",
+        "segments"
       ],
       "type": "object"
     },
@@ -30474,6 +32103,143 @@
   },
   {
     "channel": "human",
+    "group": "platform",
+    "mode": "observe",
+    "name": "list_change_plans",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "proposed",
+            "partially_applied",
+            "applied",
+            "closed"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "origin": {
+                "enum": [
+                  "human",
+                  "agent",
+                  "platform"
+                ],
+                "type": "string"
+              },
+              "proposedAt": {
+                "type": "string"
+              },
+              "proposedBy": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "type": "string"
+                  },
+                  "userId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "userId",
+                  "displayName"
+                ],
+                "type": "object"
+              },
+              "segmentCounts": {
+                "additionalProperties": false,
+                "properties": {
+                  "applied": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "proposed": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "rejected": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "rolledBack": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "withdrawn": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "proposed",
+                  "applied",
+                  "rejected",
+                  "withdrawn",
+                  "rolledBack"
+                ],
+                "type": "object"
+              },
+              "sourceName": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "proposed",
+                  "partially_applied",
+                  "applied",
+                  "closed"
+                ],
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "sourceName",
+              "origin",
+              "proposedBy",
+              "proposedAt",
+              "status",
+              "segmentCounts"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "channel": "human",
     "group": "modules",
     "minRole": "member",
     "mode": "observe",
@@ -46154,6 +47920,825 @@
       "type": "object"
     },
     "sideEffects": false
+  },
+  {
+    "adminAgentOnly": true,
+    "channel": "handle",
+    "group": "change_plan",
+    "mode": "propose",
+    "name": "propose_change_plan",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "maxLength": 4000,
+          "type": "string"
+        },
+        "segments": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "skill_version",
+                          "type": "string"
+                        },
+                        "skill": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "applicable": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "gateKinds": {
+                                  "items": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                },
+                                "objectTypes": {
+                                  "items": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                }
+                              },
+                              "type": "object"
+                            },
+                            "description": {
+                              "maxLength": 1024,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "markdown": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "name": {
+                              "maxLength": 64,
+                              "minLength": 1,
+                              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "description",
+                            "markdown"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "skill"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "definition": {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        "kind": {
+                          "const": "worker_definition_version",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "definition"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "definition": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "actionTypes": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "autoApprovable": {
+                                    "type": "boolean"
+                                  },
+                                  "awaitDecision": {
+                                    "type": "boolean"
+                                  },
+                                  "blastRadius": {
+                                    "enum": [
+                                      "low",
+                                      "medium",
+                                      "high"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "description": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "mode": {
+                                    "enum": [
+                                      "observe",
+                                      "execute"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "requesterCanApprove": {
+                                    "type": "boolean"
+                                  },
+                                  "reversibility": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "description",
+                                  "mode",
+                                  "blastRadius"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "linkTypes": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "description": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "domain": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "range": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "domain",
+                                  "range",
+                                  "description"
+                                ],
+                                "type": "object"
+                              },
+                              "minItems": 1,
+                              "type": "array"
+                            },
+                            "objectTypes": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "description": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "identityKey": {
+                                    "items": {
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "minItems": 1,
+                                    "type": "array"
+                                  },
+                                  "name": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "description"
+                                ],
+                                "type": "object"
+                              },
+                              "minItems": 1,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "objectTypes",
+                            "linkTypes"
+                          ],
+                          "type": "object"
+                        },
+                        "family": {
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "ontology_version",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "family",
+                        "definition"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "gateId": {
+                          "pattern": "^[a-z0-9][a-z0-9-]{1,63}$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "operation_version",
+                          "type": "string"
+                        },
+                        "name": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "set": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "auto_approvable": {
+                              "type": "boolean"
+                            },
+                            "await_decision": {
+                              "type": "boolean"
+                            },
+                            "blast_radius": {
+                              "enum": [
+                                "low",
+                                "medium",
+                                "high"
+                              ],
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "reads": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "writes": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "gateId",
+                        "name",
+                        "set"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "maxItems": 50,
+                "minItems": 1,
+                "type": "array"
+              },
+              "targetWorkspaceId": {
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "targetWorkspaceId",
+              "items"
+            ],
+            "type": "object"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "type": "array"
+        },
+        "sourceName": {
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "sourceName",
+        "segments"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "contentDigest": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "origin": {
+          "enum": [
+            "human",
+            "agent",
+            "platform"
+          ],
+          "type": "string"
+        },
+        "proposedAt": {
+          "type": "string"
+        },
+        "proposedBy": {
+          "additionalProperties": false,
+          "properties": {
+            "displayName": {
+              "type": "string"
+            },
+            "userId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "userId",
+            "displayName"
+          ],
+          "type": "object"
+        },
+        "segmentCounts": {
+          "additionalProperties": false,
+          "properties": {
+            "applied": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "proposed": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rejected": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rolledBack": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "withdrawn": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "proposed",
+            "applied",
+            "rejected",
+            "withdrawn",
+            "rolledBack"
+          ],
+          "type": "object"
+        },
+        "segments": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "authority": {
+                "enum": [
+                  "workspace"
+                ],
+                "type": "string"
+              },
+              "contentDigest": {
+                "type": "string"
+              },
+              "decidedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "items": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "skill_version",
+                          "type": "string"
+                        },
+                        "skill": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "applicable": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "gateKinds": {
+                                  "items": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                },
+                                "objectTypes": {
+                                  "items": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                }
+                              },
+                              "type": "object"
+                            },
+                            "description": {
+                              "maxLength": 1024,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "markdown": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "name": {
+                              "maxLength": 64,
+                              "minLength": 1,
+                              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "description",
+                            "markdown"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "skill"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "definition": {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        "kind": {
+                          "const": "worker_definition_version",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "definition"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "definition": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "actionTypes": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "autoApprovable": {
+                                    "type": "boolean"
+                                  },
+                                  "awaitDecision": {
+                                    "type": "boolean"
+                                  },
+                                  "blastRadius": {
+                                    "enum": [
+                                      "low",
+                                      "medium",
+                                      "high"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "description": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "mode": {
+                                    "enum": [
+                                      "observe",
+                                      "execute"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "requesterCanApprove": {
+                                    "type": "boolean"
+                                  },
+                                  "reversibility": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "description",
+                                  "mode",
+                                  "blastRadius"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "linkTypes": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "description": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "domain": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "range": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "domain",
+                                  "range",
+                                  "description"
+                                ],
+                                "type": "object"
+                              },
+                              "minItems": 1,
+                              "type": "array"
+                            },
+                            "objectTypes": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "description": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "identityKey": {
+                                    "items": {
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "minItems": 1,
+                                    "type": "array"
+                                  },
+                                  "name": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "description"
+                                ],
+                                "type": "object"
+                              },
+                              "minItems": 1,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "objectTypes",
+                            "linkTypes"
+                          ],
+                          "type": "object"
+                        },
+                        "family": {
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "ontology_version",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "family",
+                        "definition"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "gateId": {
+                          "pattern": "^[a-z0-9][a-z0-9-]{1,63}$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "operation_version",
+                          "type": "string"
+                        },
+                        "name": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "set": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "auto_approvable": {
+                              "type": "boolean"
+                            },
+                            "await_decision": {
+                              "type": "boolean"
+                            },
+                            "blast_radius": {
+                              "enum": [
+                                "low",
+                                "medium",
+                                "high"
+                              ],
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "reads": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "writes": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "gateId",
+                        "name",
+                        "set"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "ordinal": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "rolledBackAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "enum": [
+                  "proposed",
+                  "applied",
+                  "rejected",
+                  "withdrawn",
+                  "rolled_back"
+                ],
+                "type": "string"
+              },
+              "targetWorkspaceId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "withdrawnOrigin": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "human",
+                      "agent"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "ordinal",
+              "authority",
+              "targetWorkspaceId",
+              "items",
+              "contentDigest",
+              "status",
+              "decidedAt",
+              "withdrawnOrigin",
+              "reason",
+              "rolledBackAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "sourceName": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "partially_applied",
+            "applied",
+            "closed"
+          ],
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "sourceName",
+        "origin",
+        "proposedBy",
+        "proposedAt",
+        "status",
+        "segmentCounts",
+        "description",
+        "contentDigest",
+        "segments"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",
@@ -65075,6 +67660,509 @@
         "observationId",
         "lastObservationId",
         "lastObservedAt"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "withdraw_change_plan",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "planId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "planId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "contentDigest": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "origin": {
+          "enum": [
+            "human",
+            "agent",
+            "platform"
+          ],
+          "type": "string"
+        },
+        "proposedAt": {
+          "type": "string"
+        },
+        "proposedBy": {
+          "additionalProperties": false,
+          "properties": {
+            "displayName": {
+              "type": "string"
+            },
+            "userId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "userId",
+            "displayName"
+          ],
+          "type": "object"
+        },
+        "segmentCounts": {
+          "additionalProperties": false,
+          "properties": {
+            "applied": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "proposed": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rejected": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rolledBack": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "withdrawn": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "proposed",
+            "applied",
+            "rejected",
+            "withdrawn",
+            "rolledBack"
+          ],
+          "type": "object"
+        },
+        "segments": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "authority": {
+                "enum": [
+                  "workspace"
+                ],
+                "type": "string"
+              },
+              "contentDigest": {
+                "type": "string"
+              },
+              "decidedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "items": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "skill_version",
+                          "type": "string"
+                        },
+                        "skill": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "applicable": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "gateKinds": {
+                                  "items": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                },
+                                "objectTypes": {
+                                  "items": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                }
+                              },
+                              "type": "object"
+                            },
+                            "description": {
+                              "maxLength": 1024,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "markdown": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "name": {
+                              "maxLength": 64,
+                              "minLength": 1,
+                              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "description",
+                            "markdown"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "skill"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "definition": {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        "kind": {
+                          "const": "worker_definition_version",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "definition"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "definition": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "actionTypes": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "autoApprovable": {
+                                    "type": "boolean"
+                                  },
+                                  "awaitDecision": {
+                                    "type": "boolean"
+                                  },
+                                  "blastRadius": {
+                                    "enum": [
+                                      "low",
+                                      "medium",
+                                      "high"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "description": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "mode": {
+                                    "enum": [
+                                      "observe",
+                                      "execute"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "requesterCanApprove": {
+                                    "type": "boolean"
+                                  },
+                                  "reversibility": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "description",
+                                  "mode",
+                                  "blastRadius"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "linkTypes": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "description": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "domain": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "range": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "domain",
+                                  "range",
+                                  "description"
+                                ],
+                                "type": "object"
+                              },
+                              "minItems": 1,
+                              "type": "array"
+                            },
+                            "objectTypes": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "description": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "identityKey": {
+                                    "items": {
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "minItems": 1,
+                                    "type": "array"
+                                  },
+                                  "name": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "description"
+                                ],
+                                "type": "object"
+                              },
+                              "minItems": 1,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "objectTypes",
+                            "linkTypes"
+                          ],
+                          "type": "object"
+                        },
+                        "family": {
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "ontology_version",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "family",
+                        "definition"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "gateId": {
+                          "pattern": "^[a-z0-9][a-z0-9-]{1,63}$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "operation_version",
+                          "type": "string"
+                        },
+                        "name": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "set": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "auto_approvable": {
+                              "type": "boolean"
+                            },
+                            "await_decision": {
+                              "type": "boolean"
+                            },
+                            "blast_radius": {
+                              "enum": [
+                                "low",
+                                "medium",
+                                "high"
+                              ],
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "reads": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "writes": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "gateId",
+                        "name",
+                        "set"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "ordinal": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "rolledBackAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "enum": [
+                  "proposed",
+                  "applied",
+                  "rejected",
+                  "withdrawn",
+                  "rolled_back"
+                ],
+                "type": "string"
+              },
+              "targetWorkspaceId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "withdrawnOrigin": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "human",
+                      "agent"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "ordinal",
+              "authority",
+              "targetWorkspaceId",
+              "items",
+              "contentDigest",
+              "status",
+              "decidedAt",
+              "withdrawnOrigin",
+              "reason",
+              "rolledBackAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "sourceName": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "partially_applied",
+            "applied",
+            "closed"
+          ],
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "sourceName",
+        "origin",
+        "proposedBy",
+        "proposedAt",
+        "status",
+        "segmentCounts",
+        "description",
+        "contentDigest",
+        "segments"
       ],
       "type": "object"
     },

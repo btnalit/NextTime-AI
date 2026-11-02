@@ -1541,6 +1541,57 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     enHint:
       "An admin agent reads the kernel's latest consistency (invariant) check's violation counts, without the violating records.",
   },
+  // S11 AA3b: the change plans an admin agent proposes for people to apply. The agent's own calls
+  // show only in audit rows; a platform administrator reads and withdraws plans on the platform.
+  propose_change_plan: {
+    zh: '智能体提议变更计划',
+    en: 'Agent proposes a change plan',
+    zhHint:
+      '管理员智能体在试验工作区提出变更计划，每段发给一个工作区，由其所有者决定是否应用；提议本身不改动任何工作区。',
+    enHint:
+      'An admin agent proposes a change plan from its trial workspace; each segment goes to one workspace, whose owner decides whether to apply it. Proposing changes no workspace.',
+  },
+  agent_list_change_plans: {
+    zh: '智能体查看变更计划',
+    en: 'Agent lists change plans',
+    zhHint: '管理员智能体查看自己在这个试验工作区提出的变更计划及各段状态。',
+    enHint:
+      'An admin agent lists the change plans it proposed in this trial workspace and the status of their segments.',
+  },
+  agent_get_change_plan: {
+    zh: '智能体查看一个变更计划',
+    en: 'Agent reads a change plan',
+    zhHint: '管理员智能体查看自己提出的一个变更计划：各段内容、状态和所有者给出的拒绝理由。',
+    enHint:
+      "An admin agent reads one change plan it proposed: each segment's items, status and an owner's reason for rejecting it.",
+  },
+  agent_withdraw_change_plan: {
+    zh: '智能体撤回变更计划',
+    en: 'Agent withdraws a change plan',
+    zhHint: '管理员智能体撤回自己提出的变更计划，尚未决定的段不再能被应用；已应用的段不受影响。',
+    enHint:
+      'An admin agent withdraws a change plan it proposed; segments not yet decided can no longer be applied, applied ones stay.',
+  },
+  list_change_plans: {
+    zh: '查看变更计划',
+    en: 'List change plans',
+    zhHint: '查看管理员智能体从试验工作区提出的全部变更计划及各段状态。',
+    enHint:
+      'Lists every change plan admin agents proposed from trial workspaces, with the status of their segments.',
+  },
+  get_change_plan: {
+    zh: '查看变更计划详情',
+    en: 'Read a change plan',
+    zhHint: '查看一个变更计划的说明、各段内容、状态和理由。',
+    enHint: "Shows one change plan's description, each segment's items, status and reason.",
+  },
+  withdraw_change_plan: {
+    zh: '撤回变更计划',
+    en: 'Withdraw a change plan',
+    zhHint: '撤回一个变更计划：尚未决定的段改为已撤回，不再能被应用；已应用的段不受影响。',
+    enHint:
+      'Withdraws a change plan: segments not yet decided become withdrawn and can no longer be applied; applied ones stay.',
+  },
   platform_status: {
     zh: '查看服务状态',
     en: 'Service status',

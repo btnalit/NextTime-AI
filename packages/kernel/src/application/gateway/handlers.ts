@@ -177,6 +177,15 @@ import {
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 import { computeCapabilityReachability, operationReachability } from './capability-reachability.js';
+import {
+  agentGetChangePlanHandler,
+  agentListChangePlansHandler,
+  agentWithdrawChangePlanHandler,
+  getChangePlanHandler,
+  listChangePlansHandler,
+  proposeChangePlanHandler,
+  withdrawChangePlanHandler,
+} from './change-plan-proposal-handlers.js';
 // S11 P1-B: the workspace's ChangePlan segments (安装历史) and their rollback.
 import {
   getChangeSegmentHandler,
@@ -2716,4 +2725,13 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['platform_state_runtime', platformStateRuntimeHandler],
   ['platform_state_updates', platformStateUpdatesHandler],
   ['platform_state_invariants', platformStateInvariantsHandler],
+  // S11 AA3b-1 — ChangePlan proposals (change-plan-proposal-handlers.ts): what an admin agent
+  // proposes and reads back (`change_plan`), and the platform administrator's reads and withdrawal.
+  ['propose_change_plan', proposeChangePlanHandler],
+  ['agent_list_change_plans', agentListChangePlansHandler],
+  ['agent_get_change_plan', agentGetChangePlanHandler],
+  ['agent_withdraw_change_plan', agentWithdrawChangePlanHandler],
+  ['list_change_plans', listChangePlansHandler],
+  ['get_change_plan', getChangePlanHandler],
+  ['withdraw_change_plan', withdrawChangePlanHandler],
 ]);
