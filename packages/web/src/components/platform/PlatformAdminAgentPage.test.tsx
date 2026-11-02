@@ -70,14 +70,24 @@ const STANDARD_WORKSPACES = [
 
 function renderPage(
   http: CapabilityCaller,
-  options: { english?: boolean; onOpenChats?: (id: string, mode: 'open' | 'view') => void } = {},
+  options: {
+    english?: boolean;
+    onOpenChats?: (id: string, mode: 'open' | 'view') => void;
+    focusWorkspaceId?: string;
+    openTargets?: boolean;
+  } = {},
 ) {
   if (options.english) localStorage.setItem('nexttime.lang', 'en');
   const onOpenChats = options.onOpenChats ?? vi.fn();
   render(
     <LangProvider>
       <PermissionsProvider>
-        <PlatformAdminAgentPage http={http} onOpenChats={onOpenChats} />
+        <PlatformAdminAgentPage
+          http={http}
+          onOpenChats={onOpenChats}
+          focusWorkspaceId={options.focusWorkspaceId}
+          openTargets={options.openTargets}
+        />
       </PermissionsProvider>
     </LangProvider>,
   );
@@ -460,5 +470,53 @@ describe('PlatformAdminAgentPage (平台 · 管理员智能体, S11 AA4c-3)', ()
     expect(text(within(dialog).getByTestId('admin-agent-targets-diff'))).toContain(
       '去掉：运维、旧仓库。之前向它们提的工作区部分暂时不能应用。',
     );
+  });
+
+  it('S11 AA4e: the header offers 新建试验工作区 once there is a trial workspace (the empty state has its own)', async () => {
+    renderPage(scriptedHttp({ get_admin_agent_status: () => status() }));
+    const header = await screen.findByTestId('admin-agent-header-create-trial');
+    expect(header.getAttribute('href')).toBe('#/platform/workspaces?create=admin_trial');
+    cleanup();
+
+    renderPage(scriptedHttp({ get_admin_agent_status: () => status({ workspaces: [] }) }));
+    await screen.findByTestId('admin-agent-no-trial-workspace');
+    expect(screen.queryByTestId('admin-agent-header-create-trial')).toBeNull();
+    expect(screen.getByTestId('admin-agent-create-trial').getAttribute('href')).toBe(
+      '#/platform/workspaces?create=admin_trial',
+    );
+  });
+
+  it('S11 AA4e: a link naming a trial workspace marks its card; with targets it opens 选择目标工作区 once', async () => {
+    const scrolled = vi.fn();
+    const scrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrolled;
+    let reads = 0;
+    const http = scriptedHttp({
+      get_admin_agent_status: () => {
+        reads += 1;
+        return status({
+          workspaces: [trial(), trial({ workspaceId: WS_TRIAL_2, name: '试验二', targets: [] })],
+        });
+      },
+      list_workspaces: () => ({ items: STANDARD_WORKSPACES }),
+    });
+    window.history.replaceState(null, '', `#/platform/admin-agent/${WS_TRIAL_2}/targets`);
+    renderPage(http, { focusWorkspaceId: WS_TRIAL_2, openTargets: true });
+
+    const dialog = await screen.findByTestId('admin-agent-targets-dialog');
+    expect(text(dialog)).toContain('试验二');
+    const cards = screen.getAllByTestId('admin-agent-workspace');
+    expect(cards.map((card) => card.getAttribute('data-focused'))).toEqual([null, 'true']);
+    expect(scrolled).toHaveBeenCalled();
+
+    // Closing it drops the link: the hash keeps the card, and a reload does not open it again.
+    fireEvent.click(within(dialog).getByRole('button', { name: '取消' }));
+    await waitFor(() => expect(screen.queryByTestId('admin-agent-targets-dialog')).toBeNull());
+    expect(window.location.hash).toBe(`#/platform/admin-agent/${WS_TRIAL_2}`);
+    fireEvent.click(screen.getByTestId('admin-agent-refresh'));
+    await waitFor(() => expect(reads).toBe(2));
+    expect(screen.queryByTestId('admin-agent-targets-dialog')).toBeNull();
+    window.history.replaceState(null, '', '#');
+    Element.prototype.scrollIntoView = scrollIntoView;
   });
 });

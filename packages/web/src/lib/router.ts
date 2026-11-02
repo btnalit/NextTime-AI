@@ -107,7 +107,13 @@ export type Route =
       readonly tab: PlatformProposalsTab;
       readonly itemId?: string;
     }
-  | { readonly kind: 'platformAdminAgent' }
+  | {
+      readonly kind: 'platformAdminAgent';
+      /** S11 AA4e: this trial workspace's card is scrolled to and marked… */
+      readonly workspaceId?: string;
+      /** …with its 选择目标工作区 open. */
+      readonly targets?: true;
+    }
   | { readonly kind: 'platformModules' }
   | { readonly kind: 'platformModels' }
   | { readonly kind: 'platformSettings' }
@@ -229,7 +235,16 @@ export function routeFromHash(fullHash: string): Route {
     return { kind: 'platformAdminProposals', tab, ...(itemId !== undefined ? { itemId } : {}) };
   }
   // S11 AA4c-3: 管理员智能体 — the platform administrator's own admin agent, in each trial workspace.
-  if (hash === '#/platform/admin-agent') return { kind: 'platformAdminAgent' };
+  // S11 AA4e: `/<trial workspace id>` marks its card; `/<id>/targets` also opens its targets.
+  const adminAgent = /^#\/platform\/admin-agent(?:\/([^/]+)(?:\/(targets))?)?$/.exec(hash);
+  if (adminAgent) {
+    if (!adminAgent[1]) return { kind: 'platformAdminAgent' };
+    return {
+      kind: 'platformAdminAgent',
+      workspaceId: decodeURIComponent(adminAgent[1]),
+      ...(adminAgent[2] ? { targets: true as const } : {}),
+    };
+  }
   // P-B2b: platform-level 模块 (design §6.4 — module install counts + default modules).
   if (hash === '#/platform/modules') return { kind: 'platformModules' };
   // S6-B: platform-level 模型与供应商 (providers live in llm-proxy; the page talks to /api/llm-admin).
@@ -319,8 +334,14 @@ export const hrefs = {
       tab === 'records' ? '#/platform/admin-proposals/records' : '#/platform/admin-proposals';
     return itemId !== undefined ? `${base}/${encodeURIComponent(itemId)}` : base;
   },
-  /** S11 AA4c-3: 管理员智能体 — the reader's own admin agent in each trial workspace. */
-  platformAdminAgent: () => '#/platform/admin-agent',
+  /** S11 AA4c-3: 管理员智能体 — the reader's own admin agent in each trial workspace; S11 AA4e:
+   *  with `workspaceId`, that trial workspace's card marked, and with `targets` its 选择目标工作区
+   *  open. */
+  platformAdminAgent: (workspaceId?: string, options?: { readonly targets?: boolean }) => {
+    if (workspaceId === undefined) return '#/platform/admin-agent';
+    const card = `#/platform/admin-agent/${encodeURIComponent(workspaceId)}`;
+    return options?.targets === true ? `${card}/targets` : card;
+  },
   /** 工作区 with 新建工作区 already open on that purpose (the 管理员智能体 page's 新建试验工作区). */
   platformWorkspacesCreate: (purpose: 'admin_trial') =>
     `#/platform/workspaces?create=${encodeURIComponent(purpose)}`,

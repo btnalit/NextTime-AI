@@ -20,6 +20,10 @@ import {
   shortId,
 } from '../lib/format.js';
 import { type Translate, sentenceGap, useT } from '../lib/i18n.js';
+import {
+  type ProposedAdminProposal,
+  proposedAdminProposalOf,
+} from '../lib/proposed-admin-proposal.js';
 import { hrefs } from '../lib/router.js';
 import type { ToolCallRow } from '../lib/streaming-reducer.js';
 import { type ToolCallRecord, previewDisplayText } from '../lib/tool-call-record.js';
@@ -244,6 +248,8 @@ export function ToolCallRowView({
       ? outcomeOfLiveResult(row.result)
       : null;
   const actionChip = action ? actionOutcomeChip(action, t) : null;
+  const proposed =
+    row.status === 'ended' && !failed ? proposedAdminProposalOf(row.name, row.result) : null;
   const chipClass = running
     ? 'chip-info chip-live'
     : failed
@@ -290,6 +296,7 @@ export function ToolCallRowView({
               />
             ) : null}
             <WaitingNote outcome={action} />
+            {proposed !== null ? <ProposedAdminProposalLink proposal={proposed} /> : null}
             <pre className="code-block">{resultText}</pre>
           </>
         ) : null}
@@ -317,6 +324,29 @@ function actionOutcomeOfRecord(record: ToolCallRecord): ActionOutcome | null {
     : null;
 }
 
+/** The admin proposal a persisted `propose_admin_proposal` call made — only one that finished. */
+function proposedAdminProposalOfRecord(record: ToolCallRecord): ProposedAdminProposal | null {
+  return record.outcome === 'done' && record.result
+    ? proposedAdminProposalOf(record.name, record.result.text)
+    : null;
+}
+
+/** S11 AA4e (UX P2-2 on #945): where the proposal this call made is reviewed — linked from the
+ *  call's own result, not from whatever the model wrote about it. */
+function ProposedAdminProposalLink({ proposal }: { readonly proposal: ProposedAdminProposal }) {
+  const t = useT();
+  return (
+    <span className="text-small" data-testid="tool-call-admin-proposal">
+      <RouteLink
+        href={hrefs.platformAdminProposals('proposals', proposal.id)}
+        testId="tool-call-admin-proposal-link"
+      >
+        {t('在 平台 · 管理员提案 查看', 'View it in Platform · Admin proposals')}
+      </RouteLink>
+    </span>
+  );
+}
+
 function outcomeChip(record: ToolCallRecord, t: Translate): { className: string; label: string } {
   switch (record.outcome) {
     case 'failed':
@@ -339,6 +369,7 @@ export function PersistedToolCallRowView({
 }) {
   const t = useT();
   const action = actionOutcomeOfRecord(record);
+  const proposed = proposedAdminProposalOfRecord(record);
   const chip = action ? actionOutcomeChip(action, t) : outcomeChip(record, t);
   const name = record.name != null ? visibleText(record.name) : t('（未知工具）', '(unknown tool)');
   return (
@@ -404,6 +435,7 @@ export function PersistedToolCallRowView({
               />
             ) : null}
             <WaitingNote outcome={action} />
+            {proposed !== null ? <ProposedAdminProposalLink proposal={proposed} /> : null}
             <pre className="code-block">{previewDisplayText(record.result)}</pre>
             {record.result.truncated ? (
               <span className="text-3 text-small">
@@ -462,50 +494,79 @@ export const ToolCallGroupView = memo(function ToolCallGroupView({
   const kinds = records.map((r) => actionOutcomeOfRecord(r)?.kind);
   const outcomeUnknown = kinds.filter((kind) => kind === 'outcome_unknown').length;
   const inDoubt = kinds.filter((kind) => kind === 'in_doubt').length;
+  // S11 AA4e (UX P2-2 on #945): the proposals this Turn made, linked under the folded calls — the
+  // next step after an admin agent proposes is reviewing what it proposed.
+  const proposed = records
+    .map(proposedAdminProposalOfRecord)
+    .filter((p): p is ProposedAdminProposal => p !== null);
   return (
-    <details
-      className="tool-call-group"
-      open={failed + unfinished + outcomeUnknown + inDoubt > 0}
-      data-testid="tool-call-group"
-    >
-      <summary>
-        <Icon name="chevron-right" size="s" className="icon-chevron" />
-        <span>{t(`调用了 ${records.length} 个工具`, `${records.length} tool call(s)`)}</span>
-        {failed > 0 ? (
-          <span className="chip chip-s chip-danger">
-            {t(`${failed} 个失败`, `${failed} failed`)}
+    <>
+      <details
+        className="tool-call-group"
+        open={failed + unfinished + outcomeUnknown + inDoubt > 0}
+        data-testid="tool-call-group"
+      >
+        <summary>
+          <Icon name="chevron-right" size="s" className="icon-chevron" />
+          <span>{t(`调用了 ${records.length} 个工具`, `${records.length} tool call(s)`)}</span>
+          {failed > 0 ? (
+            <span className="chip chip-s chip-danger">
+              {t(`${failed} 个失败`, `${failed} failed`)}
+            </span>
+          ) : null}
+          {unfinished > 0 ? (
+            <span className="chip chip-s chip-warn">
+              {t(`${unfinished} 个未完成`, `${unfinished} not finished`)}
+            </span>
+          ) : null}
+          {outcomeUnknown > 0 ? (
+            <span className="chip chip-s chip-danger" data-testid="tool-call-group-outcome-unknown">
+              {t(`${outcomeUnknown} 个结果不明`, `${outcomeUnknown} outcome unknown`)}
+            </span>
+          ) : null}
+          {inDoubt > 0 ? (
+            <span className="chip chip-s chip-warn" data-testid="tool-call-group-in-doubt">
+              {t(`${inDoubt} 个结果不明·查询中`, `${inDoubt} outcome unknown · asking`)}
+            </span>
+          ) : null}
+        </summary>
+        <div className="tool-calls">
+          <span className="text-3 text-small">
+            {t(
+              'agent 自己报告的调用，参数和结果已脱敏、截断。能力调用的权威记录在',
+              'Reported by the agent; arguments and results are redacted and shortened. The authoritative record of capability calls is the',
+            )}
+            {sentenceGap(t)}
+            <RouteLink href={hrefs.audit()}>{t('审计', 'audit log')}</RouteLink>
+            {t('。', '.')}
           </span>
-        ) : null}
-        {unfinished > 0 ? (
-          <span className="chip chip-s chip-warn">
-            {t(`${unfinished} 个未完成`, `${unfinished} not finished`)}
-          </span>
-        ) : null}
-        {outcomeUnknown > 0 ? (
-          <span className="chip chip-s chip-danger" data-testid="tool-call-group-outcome-unknown">
-            {t(`${outcomeUnknown} 个结果不明`, `${outcomeUnknown} outcome unknown`)}
-          </span>
-        ) : null}
-        {inDoubt > 0 ? (
-          <span className="chip chip-s chip-warn" data-testid="tool-call-group-in-doubt">
-            {t(`${inDoubt} 个结果不明·查询中`, `${inDoubt} outcome unknown · asking`)}
-          </span>
-        ) : null}
-      </summary>
-      <div className="tool-calls">
-        <span className="text-3 text-small">
-          {t(
-            'agent 自己报告的调用，参数和结果已脱敏、截断。能力调用的权威记录在',
-            'Reported by the agent; arguments and results are redacted and shortened. The authoritative record of capability calls is the',
-          )}
+          {records.map((record) => (
+            <PersistedToolCallRowView key={record.toolCallId} record={record} http={http} />
+          ))}
+        </div>
+      </details>
+      {proposed.map((proposal) => (
+        <p
+          key={proposal.id}
+          className="text-3 text-small"
+          data-testid="tool-call-group-admin-proposal"
+          data-proposal-id={proposal.id}
+        >
+          {proposal.title !== null
+            ? t(
+                `已提出管理员提案「${visibleText(proposal.title)}」。`,
+                `Made the admin proposal “${visibleText(proposal.title)}”.`,
+              )
+            : t('已提出一份管理员提案。', 'Made an admin proposal.')}
           {sentenceGap(t)}
-          <RouteLink href={hrefs.audit()}>{t('审计', 'audit log')}</RouteLink>
-          {t('。', '.')}
-        </span>
-        {records.map((record) => (
-          <PersistedToolCallRowView key={record.toolCallId} record={record} http={http} />
-        ))}
-      </div>
-    </details>
+          <RouteLink
+            href={hrefs.platformAdminProposals('proposals', proposal.id)}
+            testId="tool-call-group-admin-proposal-link"
+          >
+            {t('在 平台 · 管理员提案 查看', 'View it in Platform · Admin proposals')}
+          </RouteLink>
+        </p>
+      ))}
+    </>
   );
 });

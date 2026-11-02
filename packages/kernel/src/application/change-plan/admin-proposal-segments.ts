@@ -7,6 +7,7 @@ import {
   type AdminProposalPlatformInstanceChangeWire,
   type AdminProposalPlatformItemIntentWire,
   type AdminProposalPreviewItemWire,
+  type ReceivedAdminProposalCountsWire,
   type AdminProposalSegmentPreviewWire,
   type AdminProposalSegmentStatus,
   type ChangeItemKind,
@@ -320,6 +321,24 @@ export async function listAdminProposalSegments(
   );
   const items = result.rows.slice(0, ADMIN_PROPOSAL_LIST_LIMIT).map(receivedSegmentOf);
   return result.rows.length > ADMIN_PROPOSAL_LIST_LIMIT ? { items, truncated: true } : { items };
+}
+
+/** How many segments addressed to `workspaceId` wait for its owner's decision (`proposed`): the
+ *  rows {@link listAdminProposalSegments} lists under that status — the same tables, join and
+ *  predicate, read under the same workspace's row security — counted, not listed (S11 AA4e: the
+ *  console's badge and 待我审批 notice). */
+export async function countAdminProposalSegments(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<ReceivedAdminProposalCountsWire> {
+  const result = await client.query<{ proposed: number }>(
+    `select count(*)::int as proposed
+       from admin_proposal_segments s
+       join admin_proposals p on p.workspace_id = s.workspace_id and p.id = s.proposal_id
+      where s.target_workspace_id = $1 and s.status = 'proposed'`,
+    [workspaceId],
+  );
+  return { proposed: result.rows[0]?.proposed ?? 0 };
 }
 
 /** One segment addressed to `workspaceId`, or {@link AdminProposalSegmentNotFoundError}.

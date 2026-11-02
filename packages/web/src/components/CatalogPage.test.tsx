@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AdminProposalCountProvider } from '../hooks/useAdminProposalCount.js';
 import { PermissionsProvider } from '../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { HttpError } from '../lib/http-client.js';
@@ -70,11 +71,18 @@ function Harness({
   );
 }
 
-function renderPage(http: CapabilityCaller, initialTab?: CatalogTab, initialItemId?: string) {
+function renderPage(
+  http: CapabilityCaller,
+  initialTab?: CatalogTab,
+  initialItemId?: string,
+  adminProposalCount: number | null = null,
+) {
   return render(
     <PermissionsProvider>
       <ToastProvider>
-        <Harness http={http} initialTab={initialTab} initialItemId={initialItemId} />
+        <AdminProposalCountProvider value={adminProposalCount}>
+          <Harness http={http} initialTab={initialTab} initialItemId={initialItemId} />
+        </AdminProposalCountProvider>
       </ToastProvider>
     </PermissionsProvider>,
   );
@@ -187,6 +195,28 @@ describe('CatalogPage', () => {
     expect(owner.calls.find((c) => c.name === 'list_admin_proposal_segments')?.params).toEqual({
       status: 'proposed',
     });
+    unmount();
+  });
+
+  it('S11 AA4e: the 管理员提案 tab carries how many wait for the owner (the shell’s count)', async () => {
+    const owner = scriptedHttp({
+      get_workspace: () => ({
+        id: 'ws-1',
+        name: 'Acme',
+        createdAt: '2026-01-01T00:00:00Z',
+        principalCount: 2,
+        gatekeeperCount: 0,
+        caller: { id: 'p-owner', role: 'owner', displayName: 'owner', kind: 'human' },
+      }),
+      list_operations: () => ({ items: [] }),
+      get_operation_stats: () => ({ items: [] }),
+    });
+    const { unmount } = renderPage(owner, undefined, undefined, 2);
+    const tab = await screen.findByRole('tab', { name: /管理员提案/ });
+    expect(tab.textContent).toBe('管理员提案2');
+    unmount();
+    renderPage(owner, undefined, undefined, 0);
+    expect((await screen.findByRole('tab', { name: /管理员提案/ })).textContent).toBe('管理员提案');
   });
 
   it('renders a not_found from a tab capability as an ordinary error banner (B6: the "not live yet" branch is gone)', async () => {

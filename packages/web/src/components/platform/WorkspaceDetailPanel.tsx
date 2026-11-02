@@ -10,8 +10,10 @@ import type { ModelRow } from '../../lib/governance.js';
 import { HttpError } from '../../lib/http-client.js';
 import { useT } from '../../lib/i18n.js';
 import { isExpiredEphemeral, purgeRetention } from '../../lib/platform-workspaces.js';
+import { hrefs } from '../../lib/router.js';
 import { SavedNote } from '../../lib/saved-note.js';
 import { DrawerSection, DrawerSections } from '../kit/drawer-section.js';
+import { RouteLink } from '../kit/route-link.js';
 import { StillNeeded } from '../kit/still-needed.js';
 import { Button } from '../ui/Button.js';
 import { CopyId } from '../ui/CopyId.js';
@@ -309,6 +311,19 @@ export function WorkspaceDetailPanel({
         </DrawerSection>
 
         <DrawerSection title={t('相关链接', 'Related links')}>
+          {/* S11 AA4e (journey ⑨, UX P2-1 on #945): a trial workspace's next steps are on 管理员智能体,
+              on its own card. */}
+          {workspace.purpose === 'admin_trial' ? (
+            <RouteLink
+              href={hrefs.platformAdminAgent(workspace.id)}
+              testId="workspace-detail-admin-agent-link"
+            >
+              {t(
+                '去管理员智能体：选目标工作区、打开管理员对话',
+                'Go to the admin agent: choose target workspaces, open the admin chat',
+              )}
+            </RouteLink>
+          ) : null}
           {onOpenWorkspaceConfig ? (
             <Button
               variant="secondary"

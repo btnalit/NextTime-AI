@@ -40,6 +40,9 @@ const ROLE_BADGE_CLASS: Readonly<Record<InferredRole, string>> = {
 export interface SidebarProps {
   readonly active: NavSection;
   readonly pendingCount: number | null;
+  /** S11 AA4e: admin proposals waiting for this workspace's owner (`useAdminProposalCount`) — the
+   *  badge on 能力目录; `null`/absent for anyone else. */
+  readonly adminProposalCount?: number | null;
   readonly wsStatus: WsConnectionStatus;
   readonly workspaceName: string;
   readonly role: WorkspaceRole;
@@ -122,6 +125,7 @@ export function Sidebar(props: SidebarProps) {
 export function SidebarContent({
   active,
   pendingCount,
+  adminProposalCount = null,
   wsStatus,
   workspaceName,
   role,
@@ -138,6 +142,7 @@ export function SidebarContent({
   wsStatusTestId = true,
 }: SidebarProps) {
   const t = useT();
+  const badges: NavBadges = { approvals: pendingCount, catalog: adminProposalCount };
   const showGovern =
     !isProvenMember(role) && (authMode === 'apiKey' || selectedWorkspaceId != null);
   // A page the known role cannot open is not offered (`lib/route-access`, the same table every
@@ -266,9 +271,7 @@ export function SidebarContent({
 
       <nav className="sidebar-nav" aria-label="Sections" ref={navRef}>
         <NavSectionGroup titleZh="使用" titleEn="Use" testId="nav-section-use">
-          {WORK_NAV.filter(roleSeesItem).map((item) =>
-            renderNavItem(item, active, pendingCount, t),
-          )}
+          {WORK_NAV.filter(roleSeesItem).map((item) => renderNavItem(item, active, badges, t))}
         </NavSectionGroup>
 
         {showGovern ? (
@@ -288,9 +291,7 @@ export function SidebarContent({
             scopeEn="This workspace"
             testId="nav-section-govern"
           >
-            {GOVERN_NAV.filter(roleSeesItem).map((item) =>
-              renderNavItem(item, active, pendingCount, t),
-            )}
+            {GOVERN_NAV.filter(roleSeesItem).map((item) => renderNavItem(item, active, badges, t))}
             {explorerAvailable !== false ? renderExternalNavItem(EXPLORER_NAV, t) : null}
           </NavSectionGroup>
         ) : null}
@@ -303,7 +304,7 @@ export function SidebarContent({
             scopeEn="Platform-wide"
             testId="nav-section-platform"
           >
-            {PLATFORM_NAV.map((item) => renderNavItem(item, active, pendingCount, t))}
+            {PLATFORM_NAV.map((item) => renderNavItem(item, active, badges, t))}
           </NavSectionGroup>
         ) : null}
       </nav>
@@ -509,13 +510,25 @@ export function NavDrawer({ open, onOpenChange, ...sidebarProps }: NavDrawerProp
   );
 }
 
+/** The counts nav items carry: requests waiting on 待我审批, admin proposals on 能力目录 (S11 AA4e). */
+interface NavBadges {
+  readonly approvals: number | null;
+  readonly catalog: number | null;
+}
+
 function renderNavItem(
   item: NavItem,
   active: NavSection,
-  pendingCount: number | null,
+  badges: NavBadges,
   t: Translate,
 ): ReactNode {
-  const badge = item.section === 'approvals' && pendingCount !== null && pendingCount > 0;
+  const count =
+    item.section === 'approvals'
+      ? badges.approvals
+      : item.section === 'catalog'
+        ? badges.catalog
+        : null;
+  const badge = count !== null && count > 0;
   return (
     <a
       key={item.section}
@@ -533,8 +546,19 @@ function renderNavItem(
       <Icon name={item.icon as IconName} />
       <span className="nav-label truncate">{t(item.label, item.sub)}</span>
       {badge ? (
-        <span className="nav-badge" aria-label={`${pendingCount} pending approvals`}>
-          {pendingCount > 99 ? '99+' : pendingCount}
+        <span
+          className="nav-badge"
+          aria-label={
+            item.section === 'catalog'
+              ? t(
+                  `${count} 份管理员提案等你决定`,
+                  `${count} admin proposal(s) awaiting your decision`,
+                )
+              : `${count} pending approvals`
+          }
+          data-testid={item.section === 'catalog' ? 'nav-catalog-badge' : undefined}
+        >
+          {count > 99 ? '99+' : count}
         </span>
       ) : null}
     </a>

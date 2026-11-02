@@ -12,6 +12,7 @@ import type {
   ChangeVerificationResultWire,
   ListEnvelope,
   Operation,
+  ReceivedAdminProposalCountsWire,
   ReceivedAdminProposalSegmentWire,
   Role,
 } from '@nexttime/shared';
@@ -811,6 +812,52 @@ describe.runIf(DATABASE_URL !== undefined)(
       ]);
     });
 
+    it('get_admin_proposal_segment_counts: what the list shows under proposed, counted, for this workspace only (S11 AA4e)', async () => {
+      const { agent } = await administrator();
+      const target = await newTarget();
+      const stranger = await newTarget();
+      const counts = (of: Target) =>
+        call<ReceivedAdminProposalCountsWire>(
+          ownerCaller(of),
+          'get_admin_proposal_segment_counts',
+          {},
+        );
+      expect(await counts(target)).toEqual({ proposed: 0 });
+
+      const first = await proposeFor(agent, target, [skillItem('counted-one')]);
+      const second = await proposeFor(agent, target, [skillItem('counted-two')]);
+      await proposeFor(agent, target, [skillItem('counted-three')]);
+      expect(await counts(target)).toEqual({ proposed: 3 });
+      const listed = await call<ListEnvelope<ReceivedAdminProposalSegmentWire>>(
+        ownerCaller(target),
+        'list_admin_proposal_segments',
+        { status: 'proposed' },
+      );
+      expect(listed.items).toHaveLength(3);
+      // Another workspace's owner counts none of them.
+      expect(await counts(stranger)).toEqual({ proposed: 0 });
+
+      // Decided or withdrawn: no longer waiting.
+      await call(ownerCaller(target), 'reject_admin_proposal_segment', {
+        segmentId: first.segmentId,
+        reason: 'Not here.',
+      });
+      await call(agent, 'agent_withdraw_admin_proposal', {
+        proposalId: second.proposal.id,
+        reason: 'Superseded.',
+      });
+      expect(await counts(target)).toEqual({ proposed: 1 });
+      expect(
+        (
+          await call<ListEnvelope<ReceivedAdminProposalSegmentWire>>(
+            ownerCaller(target),
+            'list_admin_proposal_segments',
+            { status: 'proposed' },
+          )
+        ).items,
+      ).toHaveLength(1);
+    });
+
     it('rejecting takes a reason; the owner and the platform read it, the agent reads only that it was rejected', async () => {
       const { user, agent } = await administrator();
       const target = await newTarget();
@@ -1458,6 +1505,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         {},
       );
       expect(theirs.items).toEqual([]);
+      expect(
+        await call(ownerCaller(stranger), 'get_admin_proposal_segment_counts', {}),
+      ).toEqual({ proposed: 0 });
 
       // In the target itself: a member, an owner-role service account, the admin agent's Handle.
       const memberId = randomUUID();
@@ -1473,12 +1523,13 @@ describe.runIf(DATABASE_URL !== undefined)(
       const service = humanCaller(target.workspaceId, serviceId, 'owner', 'service');
       for (const name of [
         'list_admin_proposal_segments',
+        'get_admin_proposal_segment_counts',
         'preview_admin_proposal_segment',
         'apply_admin_proposal_segment',
         'reject_admin_proposal_segment',
       ]) {
         const params =
-          name === 'list_admin_proposal_segments'
+          name === 'list_admin_proposal_segments' || name === 'get_admin_proposal_segment_counts'
             ? {}
             : { segmentId, reviewedDigest: dryRun.digest, reason: 'No.' };
         for (const [who, caller] of [

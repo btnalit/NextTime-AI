@@ -17,6 +17,7 @@ import { goalRunIdsIn, latestGoalStatuses } from '../lib/system-status.js';
 import { persistedToolCallIds, threadItems } from '../lib/tool-call-record.js';
 import type { WsClient } from '../lib/ws-client.js';
 import { ToolCallGroupView, ToolCallRowView } from './ToolCallRowView.js';
+import { AdminAgentTargetsHint } from './chat/AdminAgentTargetsHint.js';
 import { ChatHeader } from './chat/ChatHeader.js';
 import { ChatListPane } from './chat/ChatListPane.js';
 import { ChatMessageRow } from './chat/ChatMessageRow.js';
@@ -294,6 +295,9 @@ export function ChatPage({
 
           <div className="composer-wrap">
             <ChatModelHealthNotice running={runningModel} />
+            {agentKind === 'admin_agent' && !archived ? (
+              <AdminAgentTargetsHint http={http} />
+            ) : null}
             <form className="composer" onSubmit={composer.handleSubmit}>
               {archived && chat ? (
                 <Notice tone="info" testId="chat-archived-notice">

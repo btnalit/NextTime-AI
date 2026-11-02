@@ -36,6 +36,7 @@ function renderPage(
     readonly onOpenWorkspaceConfig?: (workspaceId: string) => void;
     readonly onMembershipsChanged?: () => void;
     readonly initialHash?: string;
+    readonly currentUserId?: string;
   } = {},
 ) {
   return render(
@@ -47,6 +48,7 @@ function renderPage(
           onOpenWorkspaceConfig={options.onOpenWorkspaceConfig ?? vi.fn()}
           onMembershipsChanged={options.onMembershipsChanged}
           initialHash={options.initialHash ?? '#/platform/workspaces'}
+          currentUserId={options.currentUserId}
         />
       </ToastProvider>
     </PermissionsProvider>,
@@ -612,6 +614,82 @@ describe('PlatformWorkspacesPage', () => {
     // UX P3-6 on #943: the preset is dropped once read, so a reload does not open it again; the
     // rest of the query stays.
     expect(window.location.hash).toBe('#/platform/workspaces?residue=1');
+    window.location.hash = '';
+  });
+
+  it('S11 AA4e: a trial workspace created from 管理员智能体 goes back there, on its own card', async () => {
+    const created = workspace({
+      id: 'ws-lab',
+      name: 'Lab',
+      purpose: 'admin_trial',
+      isDefault: false,
+      memberCount: 1,
+    });
+    const onMembershipsChanged = vi.fn();
+    const http = scriptedHttp({
+      ...baseHandlers([workspace()]),
+      create_workspace: (params) => {
+        expect(params).toEqual({ name: 'Lab', ownerUserId: 'u-2', purpose: 'admin_trial' });
+        return created;
+      },
+    });
+    window.location.hash = '#/platform/workspaces?create=admin_trial';
+    renderPage(http, {
+      initialHash: '#/platform/workspaces?create=admin_trial',
+      currentUserId: 'u-2',
+      onMembershipsChanged,
+    });
+    const form = await screen.findByTestId('create-workspace-form');
+    fireEvent.change(within(form).getByLabelText(/名称/), { target: { value: 'Lab' } });
+    await waitFor(() =>
+      expect((within(form).getByTestId('create-workspace-owner') as HTMLInputElement).value).toBe(
+        'bob — Bob',
+      ),
+    );
+    fireEvent.click(within(form).getByTestId('create-workspace-submit'));
+    await waitFor(() => expect(window.location.hash).toBe('#/platform/admin-agent/ws-lab'));
+    expect(onMembershipsChanged).toHaveBeenCalled();
+    expect((await screen.findByRole('status')).textContent).toContain('已建好试验工作区');
+    window.location.hash = '';
+  });
+
+  it('S11 AA4e: a trial workspace made from the plain 新建工作区 stays here, its drawer linking to 管理员智能体', async () => {
+    const created = workspace({
+      id: 'ws-lab',
+      name: 'Lab',
+      purpose: 'admin_trial',
+      isDefault: false,
+      memberCount: 1,
+    });
+    let listCalls = 0;
+    const http = scriptedHttp({
+      ...baseHandlers([workspace()]),
+      list_workspaces: () => {
+        listCalls += 1;
+        return { items: listCalls === 1 ? [workspace()] : [workspace(), created] };
+      },
+      create_workspace: () => created,
+    });
+    window.location.hash = '#/platform/workspaces';
+    renderPage(http, { currentUserId: 'u-2' });
+    await screen.findByTestId('platform-workspaces-table');
+    fireEvent.click(screen.getByTestId('new-workspace'));
+    const form = await screen.findByTestId('create-workspace-form');
+    fireEvent.change(within(form).getByTestId('create-workspace-purpose'), {
+      target: { value: 'admin_trial' },
+    });
+    fireEvent.change(within(form).getByLabelText(/名称/), { target: { value: 'Lab' } });
+    await waitFor(() =>
+      expect((within(form).getByTestId('create-workspace-owner') as HTMLInputElement).value).toBe(
+        'bob — Bob',
+      ),
+    );
+    fireEvent.click(within(form).getByTestId('create-workspace-submit'));
+    const detail = await screen.findByTestId('workspace-detail');
+    expect(window.location.hash).toBe('#/platform/workspaces');
+    expect(
+      within(detail).getByTestId('workspace-detail-admin-agent-link').getAttribute('href'),
+    ).toBe('#/platform/admin-agent/ws-lab');
     window.location.hash = '';
   });
 

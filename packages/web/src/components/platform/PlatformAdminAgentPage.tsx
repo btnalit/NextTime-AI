@@ -3,7 +3,7 @@ import type {
   AdminAgentStopResultWire,
   AdminAgentTrialWorkspaceWire,
 } from '@nexttime/shared';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { invalidateCapability, useCapability } from '../../hooks/useCapability.js';
 import { adminAgentRefusalText } from '../../lib/admin-agent.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -29,6 +29,11 @@ export interface PlatformAdminAgentPageProps {
   /** Opens 对话 in that trial workspace (switching to it first when it is not the current one):
    *  `open` lands on the reader's latest admin agent Chat there, or a new one; `view` on the list. */
   readonly onOpenChats: (workspaceId: string, mode: 'open' | 'view') => void;
+  /** S11 AA4e (`hrefs.platformAdminAgent(id)`): this trial workspace's card is scrolled to and
+   *  marked — a chat's 「目标工作区…」, a workspace just created here. */
+  readonly focusWorkspaceId?: string;
+  /** …and its 选择目标工作区 opens (`hrefs.platformAdminAgent(id, { targets: true })`). */
+  readonly openTargets?: boolean;
 }
 
 /** The reads this page's changes make stale. */
@@ -50,7 +55,12 @@ const STALE_READS = ['get_admin_agent_status'] as const;
  *
  * Its model use is counted in the reader's own user budget, as the entry agent's is.
  */
-export function PlatformAdminAgentPage({ http, onOpenChats }: PlatformAdminAgentPageProps) {
+export function PlatformAdminAgentPage({
+  http,
+  onOpenChats,
+  focusWorkspaceId,
+  openTargets = false,
+}: PlatformAdminAgentPageProps) {
   const t = useT();
   const status = useCapability<AdminAgentStatusWire>(http, 'get_admin_agent_status');
 
@@ -66,6 +76,15 @@ export function PlatformAdminAgentPage({ http, onOpenChats }: PlatformAdminAgent
     setStopped({ result, where });
     void reload();
   }
+
+  // The targets link opens 选择目标工作区 once per arrival: closing it drops the link here (the hash
+  // loses `/targets` by `replaceState`, which fires no `hashchange`, so the route still carries it
+  // — and a card remounted by a reload must not open the dialog again).
+  const linkedTargets = openTargets ? (focusWorkspaceId ?? null) : null;
+  const [targetsLink, setTargetsLink] = useState(linkedTargets !== null);
+  useEffect(() => {
+    setTargetsLink(linkedTargets !== null);
+  }, [linkedTargets]);
 
   const data = status.state.status === 'ready' ? status.state.data : null;
   const withSession = data?.workspaces.filter((workspace) => workspace.session !== null) ?? [];
@@ -84,6 +103,17 @@ export function PlatformAdminAgentPage({ http, onOpenChats }: PlatformAdminAgent
             <Button variant="ghost" onClick={() => void reload()} data-testid="admin-agent-refresh">
               {t('刷新', 'Refresh')}
             </Button>
+            {/* UX P3-3 on #945: another trial workspace, once there is one (the empty state has
+                its own). */}
+            {data !== null && data.workspaces.length > 0 ? (
+              <RouteLink
+                href={hrefs.platformWorkspacesCreate('admin_trial')}
+                className={buttonVariants({ variant: 'secondary' })}
+                testId="admin-agent-header-create-trial"
+              >
+                {t('新建试验工作区', 'Create a trial workspace')}
+              </RouteLink>
+            ) : null}
             {withSession.length > 1 ? (
               <StopAdminAgent http={http} workspace={null} onStopped={onStopped} />
             ) : null}
@@ -134,6 +164,9 @@ export function PlatformAdminAgentPage({ http, onOpenChats }: PlatformAdminAgent
                 key={workspace.workspaceId}
                 http={http}
                 workspace={workspace}
+                focused={workspace.workspaceId === focusWorkspaceId}
+                openTargets={workspace.workspaceId === focusWorkspaceId && targetsLink}
+                onTargetsLinkDone={() => setTargetsLink(false)}
                 onChanged={() => void reload()}
                 onStopped={onStopped}
                 onOpenChats={onOpenChats}
@@ -156,12 +189,19 @@ export function PlatformAdminAgentPage({ http, onOpenChats }: PlatformAdminAgent
 function TrialWorkspaceCard({
   http,
   workspace,
+  focused,
+  openTargets,
+  onTargetsLinkDone,
   onChanged,
   onStopped,
   onOpenChats,
 }: {
   readonly http: CapabilityCaller;
   readonly workspace: AdminAgentTrialWorkspaceWire;
+  readonly focused: boolean;
+  readonly openTargets: boolean;
+  /** The dialog the targets link opened was closed: the page drops the link. */
+  readonly onTargetsLinkDone: () => void;
   readonly onChanged: () => void;
   readonly onStopped: (result: AdminAgentStopResultWire, where: string | null) => void;
   readonly onOpenChats: (workspaceId: string, mode: 'open' | 'view') => void;
@@ -174,142 +214,168 @@ function TrialWorkspaceCard({
   // Its Chats can still be read with the switch off; every other reason refuses reading too.
   const readable = refusal === null || refusal === 'switched_off';
 
+  // S11 AA4e (UX P3-2 on #945): the link that named this card brings it into view, and opens its
+  // targets when it asked for them (and they can be chosen here).
+  const cardRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (focused) cardRef.current?.scrollIntoView?.({ block: 'start' });
+  }, [focused]);
+  useEffect(() => {
+    if (openTargets && readable) setEditing(true);
+  }, [openTargets, readable]);
+
   return (
-    <DashboardCard
-      data-testid="admin-agent-workspace"
-      data-workspace-id={workspace.workspaceId}
-      title={
-        <span className="row-wrap">
-          <span>{workspace.name}</span>
-          <StatusChip machine="workspacePurpose" status="admin_trial" size="s" />
-        </span>
-      }
-      actions={
-        refusal === null ? (
-          <Button
-            variant="primary"
-            size="s"
-            onClick={() => onOpenChats(workspace.workspaceId, 'open')}
-            data-testid="admin-agent-open-chat"
-          >
-            {t('打开管理员对话', 'Open the admin agent chat')}
-          </Button>
-        ) : readable ? (
-          <Button
-            size="s"
-            onClick={() => onOpenChats(workspace.workspaceId, 'view')}
-            data-testid="admin-agent-view-chats"
-          >
-            {t('查看管理员对话', 'View admin agent chats')}
-          </Button>
-        ) : null
-      }
-    >
-      <div className="stack">
-        {ownRefusal !== null ? (
-          <Notice tone="warn" testId="admin-agent-refusal">
-            {t('管理员智能体不能在这里开始：', 'The admin agent cannot start here: ')}
-            {adminAgentRefusalText(ownRefusal, t)}
-          </Notice>
-        ) : null}
+    // A plain wrapper holds the ref (kit/section's DashboardCard does not forward one).
+    <div ref={cardRef}>
+      <DashboardCard
+        data-testid="admin-agent-workspace"
+        data-workspace-id={workspace.workspaceId}
+        data-focused={focused ? 'true' : undefined}
+        className={focused ? 'ring-2 ring-accent' : undefined}
+        title={
+          <span className="row-wrap">
+            <span>{workspace.name}</span>
+            <StatusChip machine="workspacePurpose" status="admin_trial" size="s" />
+          </span>
+        }
+        actions={
+          refusal === null ? (
+            <Button
+              variant="primary"
+              size="s"
+              onClick={() => onOpenChats(workspace.workspaceId, 'open')}
+              data-testid="admin-agent-open-chat"
+            >
+              {t('打开管理员对话', 'Open the admin agent chat')}
+            </Button>
+          ) : readable ? (
+            <Button
+              size="s"
+              onClick={() => onOpenChats(workspace.workspaceId, 'view')}
+              data-testid="admin-agent-view-chats"
+            >
+              {t('查看管理员对话', 'View admin agent chats')}
+            </Button>
+          ) : null
+        }
+      >
+        <div className="stack">
+          {ownRefusal !== null ? (
+            <Notice tone="warn" testId="admin-agent-refusal">
+              {t('管理员智能体不能在这里开始：', 'The admin agent cannot start here: ')}
+              {adminAgentRefusalText(ownRefusal, t)}
+            </Notice>
+          ) : null}
 
-        <section className="stack-s" data-testid="admin-agent-targets">
-          <div className="row">
-            <h3 className="grow text-13 font-semibold">{t('目标工作区', 'Target workspaces')}</h3>
-            {readable ? (
-              <Button
-                size="s"
-                onClick={() => setEditing(true)}
-                data-testid="admin-agent-choose-targets"
-              >
-                {t('选择目标工作区', 'Choose target workspaces')}
-              </Button>
-            ) : null}
-          </div>
-          <p className="text-3" data-testid="admin-agent-targets-shared-short">
-            {/* UX P3-3 on #943: the whole of it is in the dialog. */}
-            {t(
-              '这个试验工作区里你的所有管理员对话共用这组目标。',
-              'All of your admin agent chats in this trial workspace share these targets.',
-            )}
-          </p>
-          {workspace.targets.length === 0 ? (
-            <p className="text-3" data-testid="admin-agent-no-targets">
-              {t(
-                '还没有选目标工作区：管理员智能体现在不能向任何工作区提出管理员提案。',
-                'No target workspaces yet: the admin agent cannot make an admin proposal to any workspace.',
-              )}
-            </p>
-          ) : (
-            <ul className="stack-s" aria-label={t('目标工作区', 'Target workspaces')}>
-              {workspace.targets.map((target) => (
-                <li
-                  key={target.workspaceId}
-                  className="row-wrap"
-                  data-testid="admin-agent-target"
-                  data-workspace-id={target.workspaceId}
+          <section className="stack-s" data-testid="admin-agent-targets">
+            <div className="row">
+              <h3 className="grow text-13 font-semibold">{t('目标工作区', 'Target workspaces')}</h3>
+              {readable ? (
+                <Button
+                  size="s"
+                  onClick={() => setEditing(true)}
+                  data-testid="admin-agent-choose-targets"
                 >
-                  <span>{target.name}</span>
-                  {target.status === 'disabled' ? (
-                    <>
-                      <StatusChip machine="workspaceStatus" status="disabled" size="s" />
-                      <span className="text-3">
-                        {t('已停用，向它提议会被拒绝', 'disabled; proposing to it is refused')}
-                      </span>
-                    </>
-                  ) : null}
-                  <span className="text-3" title={formatDateTime(target.chosenAt)}>
-                    {t('选于', 'chosen')} {formatRelative(target.chosenAt)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        <section className="stack-s" data-testid="admin-agent-session">
-          <div className="row">
-            <h3 className="grow text-13 font-semibold">{t('会话', 'Session')}</h3>
-            {workspace.session !== null ? (
-              <StopAdminAgent http={http} workspace={workspace} onStopped={onStopped} />
-            ) : null}
-          </div>
-          {workspace.session !== null ? (
-            <KeyValue
-              items={[
-                {
-                  key: 'started',
-                  label: t('开始于', 'Started'),
-                  value: formatDateTime(workspace.session.startedAt),
-                },
-                {
-                  key: 'expires',
-                  label: t('到期', 'Expires'),
-                  value:
-                    workspace.session.expiresAt === null
-                      ? t('不会自动到期', 'Does not expire on its own')
-                      : formatDateTime(workspace.session.expiresAt),
-                },
-              ]}
-            />
-          ) : (
-            <p className="text-3" data-testid="admin-agent-no-session">
+                  {t('选择目标工作区', 'Choose target workspaces')}
+                </Button>
+              ) : null}
+            </div>
+            <p className="text-3" data-testid="admin-agent-targets-shared-short">
+              {/* UX P3-3 on #943: the whole of it is in the dialog. */}
               {t(
-                '现在没有在用的会话。在管理员对话里发一条消息，就会开一个新会话。',
-                'No session is open now. Sending a message in an admin agent chat opens a new one.',
+                '这个试验工作区里你的所有管理员对话共用这组目标。',
+                'All of your admin agent chats in this trial workspace share these targets.',
               )}
             </p>
-          )}
-        </section>
-      </div>
+            {workspace.targets.length === 0 ? (
+              <p className="text-3" data-testid="admin-agent-no-targets">
+                {t(
+                  '还没有选目标工作区：管理员智能体现在不能向任何工作区提出管理员提案。',
+                  'No target workspaces yet: the admin agent cannot make an admin proposal to any workspace.',
+                )}
+              </p>
+            ) : (
+              <ul className="stack-s" aria-label={t('目标工作区', 'Target workspaces')}>
+                {workspace.targets.map((target) => (
+                  <li
+                    key={target.workspaceId}
+                    className="row-wrap"
+                    data-testid="admin-agent-target"
+                    data-workspace-id={target.workspaceId}
+                  >
+                    <span>{target.name}</span>
+                    {target.status === 'disabled' ? (
+                      <>
+                        <StatusChip machine="workspaceStatus" status="disabled" size="s" />
+                        <span className="text-3">
+                          {t('已停用，向它提议会被拒绝', 'disabled; proposing to it is refused')}
+                        </span>
+                      </>
+                    ) : null}
+                    <span className="text-3" title={formatDateTime(target.chosenAt)}>
+                      {t('选于', 'chosen')} {formatRelative(target.chosenAt)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
 
-      <AdminAgentTargetsDialog
-        http={http}
-        workspace={editing ? workspace : null}
-        onClose={() => setEditing(false)}
-        onSaved={onChanged}
-      />
-    </DashboardCard>
+          <section className="stack-s" data-testid="admin-agent-session">
+            <div className="row">
+              <h3 className="grow text-13 font-semibold">{t('会话', 'Session')}</h3>
+              {workspace.session !== null ? (
+                <StopAdminAgent http={http} workspace={workspace} onStopped={onStopped} />
+              ) : null}
+            </div>
+            {workspace.session !== null ? (
+              <KeyValue
+                items={[
+                  {
+                    key: 'started',
+                    label: t('开始于', 'Started'),
+                    value: formatDateTime(workspace.session.startedAt),
+                  },
+                  {
+                    key: 'expires',
+                    label: t('到期', 'Expires'),
+                    value:
+                      workspace.session.expiresAt === null
+                        ? t('不会自动到期', 'Does not expire on its own')
+                        : formatDateTime(workspace.session.expiresAt),
+                  },
+                ]}
+              />
+            ) : (
+              <p className="text-3" data-testid="admin-agent-no-session">
+                {t(
+                  '现在没有在用的会话。在管理员对话里发一条消息，就会开一个新会话。',
+                  'No session is open now. Sending a message in an admin agent chat opens a new one.',
+                )}
+              </p>
+            )}
+          </section>
+        </div>
+
+        <AdminAgentTargetsDialog
+          http={http}
+          workspace={editing ? workspace : null}
+          onClose={() => {
+            setEditing(false);
+            // Opened by the link: a reload stays on the card, without opening the dialog again.
+            if (openTargets) {
+              onTargetsLinkDone();
+              window.history.replaceState(
+                null,
+                '',
+                hrefs.platformAdminAgent(workspace.workspaceId),
+              );
+            }
+          }}
+          onSaved={onChanged}
+        />
+      </DashboardCard>
+    </div>
   );
 }
 

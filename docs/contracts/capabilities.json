@@ -15837,6 +15837,35 @@
     "sideEffects": false
   },
   {
+    "actsForPerson": true,
+    "channel": "human",
+    "group": "modules",
+    "minRole": "owner",
+    "mode": "observe",
+    "name": "get_admin_proposal_segment_counts",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "proposed": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "proposed"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
     "channel": "human",
     "group": "agent_profile",
     "minRole": "member",

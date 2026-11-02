@@ -76,7 +76,7 @@ export function ChatHeader({
   const [renaming, setRenaming] = useState(false);
   const [archiveTarget, setArchiveTarget] = useState<ChatSummary | null>(null);
   const { restore, restoringId } = useRestoreChat(client, onChatChanged);
-  const { workspaceName } = useWorkspaceIdentity(http);
+  const { workspaceName, workspaceId } = useWorkspaceIdentity(http);
   const archived = chat !== null && isArchived(chat);
   const title = chat ? chatTitle(chat, t) : lookupFailed ? t('对话', 'Chat') : ' ';
   // S11 AA4c-3: a chat with the reader's own 管理员智能体 (only they read it).
@@ -172,10 +172,17 @@ export function ChatHeader({
               <DropdownMenuContent align="end">
                 {adminAgent && canOpen(hrefs.platformAdminAgent()) !== false ? (
                   // The targets are one choice for every admin agent chat of the reader in this
-                  // trial workspace; they are chosen on 平台 · 管理员智能体, which says so.
+                  // trial workspace; they are chosen on 平台 · 管理员智能体, which says so — on this
+                  // trial workspace's card, its 选择目标工作区 open (S11 AA4e, UX P3-2 on #945).
                   <DropdownMenuItem
                     data-testid="chat-header-admin-targets"
-                    onSelect={() => navigate(hrefs.platformAdminAgent())}
+                    onSelect={() =>
+                      navigate(
+                        workspaceId === null
+                          ? hrefs.platformAdminAgent()
+                          : hrefs.platformAdminAgent(workspaceId, { targets: true }),
+                      )
+                    }
                   >
                     {t('目标工作区…', 'Target workspaces…')}
                   </DropdownMenuItem>
