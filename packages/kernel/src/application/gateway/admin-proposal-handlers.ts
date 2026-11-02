@@ -1,10 +1,20 @@
-import type { AdminProposalSegmentInputWire, AdminProposalStatus } from '@nexttime/shared';
+import type {
+  AdminProposalSegmentApplyResultWire,
+  AdminProposalSegmentInputWire,
+  AdminProposalSegmentStatus,
+  AdminProposalStatus,
+} from '@nexttime/shared';
+import { credentialReviewAudit } from '../../governance/redaction/index.js';
 import {
   type AdminProposalScope,
+  applyAdminProposalSegment,
   checkAdminProposal,
   getAdminProposal,
+  listAdminProposalSegments,
   listAdminProposals,
+  previewAdminProposalSegment,
   proposeAdminProposal,
+  rejectAdminProposalSegment,
   withdrawAdminProposal,
 } from '../change-plan/index.js';
 import { loadPackRegistry } from '../packs/index.js';
@@ -23,6 +33,9 @@ import type {
  *    Dispatch has already checked the agent's authority (I-A1, I-A6) and gives `ctx.adminAgent`.
  *  - Three `platform` capabilities: a platform administrator in the console reads every proposal and
  *    withdraws one, in a platform transaction (`ctx.platformUser`).
+ *  - S11 AA3b-2, the `modules` group: the owner of a workspace a segment is addressed to lists,
+ *    previews, applies and rejects it (application/change-plan/admin-proposal-segments.ts) — human
+ *    channel, owner, a person (`actsForPerson`, `HUMAN_ONLY`), in the workspace's transaction.
  *
  * Every one runs in the call's own transaction, whose audit row dispatch writes.
  */
@@ -238,4 +251,100 @@ export const withdrawAdminProposalHandler: CapabilityHandler = async (
     reason,
   );
   return { result: proposal, resourceType: 'admin_proposal', resourceId: proposalId };
+};
+
+// -------------------------------------------------------------------------------------------
+// S11 AA3b-2: the target workspace's owner
+// -------------------------------------------------------------------------------------------
+
+/** The person deciding: dispatch admits only a person on the human channel (`actsForPerson`,
+ *  `HUMAN_ONLY`), and the core checks the applier once more (`assertChangeApplierIsPerson`); a
+ *  call without one here is a wiring bug. */
+function ownerOf(name: string, ctx: CapabilityHandlerContext | undefined): string {
+  if (!ctx?.principalId) throw new Error(`${name}: no calling principal in context`);
+  if (ctx.channel !== 'human') throw new Error(`${name}: invoked outside the human channel`);
+  return ctx.principalId;
+}
+
+export const listAdminProposalSegmentsHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+): Promise<CapabilityHandlerResult> => {
+  const { status } = params as { readonly status?: AdminProposalSegmentStatus };
+  return { result: await listAdminProposalSegments(client, workspaceId, status) };
+};
+
+export const previewAdminProposalSegmentHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+): Promise<CapabilityHandlerResult> => {
+  const { segmentId } = params as { readonly segmentId: string };
+  return {
+    result: await previewAdminProposalSegment(client, workspaceId, segmentId),
+    resourceType: 'admin_proposal_segment',
+    resourceId: segmentId,
+  };
+};
+
+export const applyAdminProposalSegmentHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+): Promise<CapabilityHandlerResult> => {
+  const principalId = ownerOf('apply_admin_proposal_segment', ctx);
+  const input = params as {
+    readonly segmentId: string;
+    readonly reviewedDigest: string;
+    readonly confirmedOrdinals?: number[];
+    readonly credentialsReviewed?: boolean;
+  };
+  const applied = await applyAdminProposalSegment(client, workspaceId, principalId, {
+    segmentId: input.segmentId,
+    reviewedDigest: input.reviewedDigest,
+    confirmedOrdinals: input.confirmedOrdinals ?? [],
+    ...(input.credentialsReviewed !== undefined
+      ? { credentialsReviewed: input.credentialsReviewed }
+      : {}),
+  });
+  const result: AdminProposalSegmentApplyResultWire = {
+    segment: applied.segment,
+    changeSegmentId: applied.changeSegmentId,
+  };
+  return {
+    result,
+    resourceType: 'admin_proposal_segment',
+    resourceId: input.segmentId,
+    auditPayload: {
+      proposalId: applied.segment.proposal.id,
+      changeSegmentId: applied.changeSegmentId,
+      digest: applied.plan.digest,
+      ...credentialReviewAudit(applied.suspectedSecretValues),
+    },
+  };
+};
+
+export const rejectAdminProposalSegmentHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+): Promise<CapabilityHandlerResult> => {
+  const principalId = ownerOf('reject_admin_proposal_segment', ctx);
+  const { segmentId, reason } = params as { readonly segmentId: string; readonly reason: string };
+  const segment = await rejectAdminProposalSegment(
+    client,
+    workspaceId,
+    principalId,
+    segmentId,
+    reason,
+  );
+  return {
+    result: segment,
+    resourceType: 'admin_proposal_segment',
+    resourceId: segmentId,
+    auditPayload: { proposalId: segment.proposal.id },
+  };
 };

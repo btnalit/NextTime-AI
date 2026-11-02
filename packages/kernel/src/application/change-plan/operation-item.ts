@@ -138,10 +138,22 @@ function fieldChanges(operation: Operation, revised: Operation): OperationFieldC
   ).map((field) => ({ field, before: operation[field] ?? null, after: revised[field] ?? null }));
 }
 
+/** An `operation_version` intent that does not make a valid revision of the live version (see
+ *  `revisedContent`). For a pack, a caller bug — its intent is built by code — so it is not mapped
+ *  to an error code; an admin proposal's intent is checked with {@link operationRevisionProblem}
+ *  before it is planned, and one that fails is a blocker (`operation_revision_invalid`, S11
+ *  AA3b-2). */
+export class OperationRevisionInvalidError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'OperationRevisionInvalidError';
+  }
+}
+
 /** The live version with `values` set, checked: only `OPERATION_ITEM_FIELDS`, a valid Operation, a
  *  description that is visible text of the allowed length with no suspected credential (nobody is
  *  asked to confirm one here: an item's content is reviewed as a whole), and the same definition
- *  the gate runs. A caller bug otherwise — an intent is built by code — so a plain `Error`. */
+ *  the gate runs. `OperationRevisionInvalidError` otherwise. */
 function revisedContent(
   intent: OperationVersionIntent,
   live: OperationRecord,
@@ -151,7 +163,7 @@ function revisedContent(
     (field) => !(OPERATION_ITEM_FIELDS as readonly string[]).includes(field),
   );
   if (unknown.length > 0) {
-    throw new Error(
+    throw new OperationRevisionInvalidError(
       `${subject}: an item sets only ${OPERATION_ITEM_FIELDS.join(', ')}, not ${unknown.join(', ')}`,
     );
   }
@@ -159,28 +171,47 @@ function revisedContent(
   if (typeof set.description === 'string') {
     const description = storableText(set.description.trim());
     if (description.length === 0 || description.length > OPERATION_DESCRIPTION_MAX_LENGTH) {
-      throw new Error(
+      throw new OperationRevisionInvalidError(
         `${subject}: a description is 1 to ${OPERATION_DESCRIPTION_MAX_LENGTH} characters`,
       );
     }
     if (findSuspectedSecrets(description).count > 0) {
-      throw new Error(`${subject}: the description carries a suspected credential`);
+      throw new OperationRevisionInvalidError(
+        `${subject}: the description carries a suspected credential`,
+      );
     }
     set.description = description;
   }
   const parsed = OperationSchema.safeParse({ ...live.operation, ...set });
   if (!parsed.success) {
-    throw new Error(`${subject}: the revision is not a valid Operation (${parsed.error.message})`);
+    throw new OperationRevisionInvalidError(
+      `${subject}: the revision is not a valid Operation (${parsed.error.message})`,
+    );
   }
   // `safeParse` drops keys `OperationSchema` does not know; the revision keeps what the live
   // version has, with only the fields set replaced.
   const revised = { ...live.operation, ...set } as Operation;
   if (operationDefinitionDiffers(live, revised)) {
-    throw new Error(
+    throw new OperationRevisionInvalidError(
       `${subject}: a revision keeps what the gate runs (for an ssh binding that includes blast_radius); only how calls are governed changes`,
     );
   }
   return revised;
+}
+
+/** Why `intent` is not a valid revision of `live` (`revisedContent`'s refusal), or `null` when it
+ *  is — what an admin proposal's resolution asks before it plans the item (S11 AA3b-2). */
+export function operationRevisionProblem(
+  intent: OperationVersionIntent,
+  live: OperationRecord,
+): string | null {
+  try {
+    revisedContent(intent, live);
+    return null;
+  } catch (err) {
+    if (err instanceof OperationRevisionInvalidError) return err.message;
+    throw err;
+  }
 }
 
 /** The item's dry run: reads the live version, builds and checks the revision, classifies it.

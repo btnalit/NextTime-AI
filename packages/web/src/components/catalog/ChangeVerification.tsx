@@ -326,7 +326,12 @@ function VerificationResult({
         </Notice>
       ) : verification.requirements.length === 0 ? (
         <span className="text-3 text-small">
-          {t('这个能力包没有写明要用到的系统。', 'This pack names no systems it needs.')}
+          {segment.source.kind === 'admin_proposal'
+            ? t(
+                '管理员提案不写明要用到的系统，只核验写入的改动项。',
+                'An admin proposal names no systems it needs; only the changes it wrote are checked.',
+              )
+            : t('这个能力包没有写明要用到的系统。', 'This pack names no systems it needs.')}
         </span>
       ) : (
         <div className="stack-s" data-testid="catalog-change-requirements">
@@ -451,10 +456,15 @@ export function ChangeVerificationSection({
     <div className="stack-s" data-testid="catalog-change-verification">
       <span className="section-title">{t('核验', 'Verification')}</span>
       <p className="text-3 text-small">
-        {t(
-          '核验会检查这次安装写入的内容是否还在生效，以及能力包要用到的系统是否已接入、能连通。它只问系统是否在线，不会执行任何操作。',
-          'Verification checks that what this install wrote is still in effect, and that the systems the pack needs are connected and answering. It only asks whether each system is up; it runs nothing.',
-        )}
+        {segment.source.kind === 'admin_proposal'
+          ? t(
+              '核验会检查这次应用写入的内容是否还在生效。它只读，不会执行任何操作。',
+              'Verification checks that what this apply wrote is still in effect. It only reads; it runs nothing.',
+            )
+          : t(
+              '核验会检查这次安装写入的内容是否还在生效，以及能力包要用到的系统是否已接入、能连通。它只问系统是否在线，不会执行任何操作。',
+              'Verification checks that what this install wrote is still in effect, and that the systems the pack needs are connected and answering. It only asks whether each system is up; it runs nothing.',
+            )}
       </p>
       {/* The cooldown describes the result the focus lands on — not a live region, which would
        *  read every second of the countdown out. */}

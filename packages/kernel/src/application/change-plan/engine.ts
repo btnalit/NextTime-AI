@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { ChangeItemClassification, ChangeItemKind } from '@nexttime/shared';
+import type { ChangeItemClassification, ChangeItemKind, ChangeSourceKind } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { assertChangeApplierIsPerson } from './applier.js';
@@ -7,6 +7,7 @@ import { type WideningReason, classificationOf } from './classify.js';
 import { contentDigest } from './digest.js';
 import { ChangeConfirmationRequiredError, ChangePlanChangedError } from './errors.js';
 import {
+  type ChangeItemOrigin,
   type FamilyVersionIntent,
   type SkillItemContent,
   applyFamilyItem,
@@ -34,9 +35,10 @@ import {
 
 /**
  * application/change-plan/engine: the ChangePlan core's workspace segment (S11 plan §3.1–§3.4,
- * §5.4; migrations/governance/0025_change_segments.sql). One core for every source of change — a
- * pack (a module is a pack with one ontology component) today, the platform admin agent's
- * proposal later (AA3). Item kinds: a version of an ontology family (`ontology-item.ts`), of a
+ * §5.4; migrations/governance/0025_change_segments.sql, 0033). One core for every source of change
+ * — a pack (a module is a pack with one ontology component), and a segment of an admin proposal a
+ * platform administrator's admin agent made (S11 AA3b-2, `admin-proposal-segments.ts`). Item
+ * kinds: a version of an ontology family (`ontology-item.ts`), of a
  * Skill or of a `worker` WorkerDefinition (`family-item.ts`), and a revision of a published
  * Operation's governance (`operation-item.ts`).
  *
@@ -62,13 +64,26 @@ export type ChangeItemIntent = OntologyVersionIntent | FamilyVersionIntent | Ope
 /** How a segment was applied (see `ApplyWorkspaceSegmentInput.channel`). */
 export type ChangeChannel = 'human' | 'platform';
 
-/** Where the intent came from (§5.4 "一个核心，两种来源"). */
+/** Where the intent came from (§5.4 "一个核心，两种来源"): `pack` — `name` the pack, `version` its
+ *  version; `admin_proposal` (S11 AA3b-2) — `name` the proposal's source name, `version` the
+ *  proposal's id. */
 export interface ChangeSource {
-  readonly kind: 'pack';
+  readonly kind: ChangeSourceKind;
   readonly name: string;
   readonly version: string;
-  /** `sha256:` digest of the source content the items were built from. */
+  /** `sha256:` digest of the source content the items were built from (a pack version's; an admin
+   *  proposal segment's `content_digest`). */
   readonly digest: string;
+}
+
+/** S11 AA3b-2: an `admin_proposal` segment's origin, recorded on it (governance 0033) so it says
+ *  who proposed it after the proposal's trial workspace is purged. */
+export interface AdminProposalOrigin {
+  readonly proposalId: string;
+  readonly proposalSegmentId: string;
+  /** The platform user whose admin agent proposed it, and the name they had then. */
+  readonly proposedByUser: string;
+  readonly proposerDisplayName: string;
 }
 
 export interface WorkspaceSegmentInput {
@@ -121,7 +136,10 @@ export interface WorkspaceSegmentPlan {
 interface KindPlan {
   readonly planned: PlannedChangeItem;
   /** Writes the item through its kind's publish function; returns its `after`. */
-  readonly apply: (appliedBy: string) => Promise<Readonly<Record<string, unknown>>>;
+  readonly apply: (
+    appliedBy: string,
+    origin: ChangeItemOrigin,
+  ) => Promise<Readonly<Record<string, unknown>>>;
 }
 
 async function lockItem(
@@ -204,7 +222,8 @@ async function planItem(
           unchanged: ontology.unchanged,
           detail: { kind, types: ontology.types },
         },
-        apply: (appliedBy) => applyOntologyItem(client, workspaceId, ontology, appliedBy),
+        apply: (appliedBy, origin) =>
+          applyOntologyItem(client, workspaceId, ontology, appliedBy, origin),
       };
     }
     case 'skill_version':
@@ -226,7 +245,8 @@ async function planItem(
           unchanged: family.unchanged,
           detail,
         },
-        apply: (appliedBy) => applyFamilyItem(client, workspaceId, family, appliedBy),
+        apply: (appliedBy, origin) =>
+          applyFamilyItem(client, workspaceId, family, appliedBy, origin),
       };
     }
     case 'operation_version': {
@@ -243,6 +263,7 @@ async function planItem(
           unchanged: operation.unchanged,
           detail: { kind, fields: operation.fields },
         },
+        // An Operation revision has no `origin` of its own: the record's source says it.
         apply: (appliedBy) => applyOperationItem(client, workspaceId, operation, appliedBy),
       };
     }
@@ -332,10 +353,9 @@ export function assertWideningConfirmed(
   if (unconfirmed.length > 0) throw new ChangeConfirmationRequiredError(unconfirmed, context);
 }
 
-export interface ApplyWorkspaceSegmentInput extends WorkspaceSegmentInput {
+interface ApplyWorkspaceSegmentCommon extends WorkspaceSegmentInput {
   /** The plan digest the applier reviewed (I-A8). */
   readonly reviewedDigest: string;
-  readonly proposedBy: string;
   /** The person applying, in this workspace; also the confirmer of every widening item. */
   readonly appliedBy: string;
   /** Recorded on the segment (`change_segments.channel`): `human` — the applier's own capability
@@ -345,6 +365,40 @@ export interface ApplyWorkspaceSegmentInput extends WorkspaceSegmentInput {
   readonly channel: ChangeChannel;
   /** The ordinals of the authority-widening items the applier confirmed, one by one (I-A4). */
   readonly confirmedOrdinals: readonly number[];
+}
+
+/** Who proposed what a segment applies: a pack's install names a Principal of this workspace
+ *  (`proposedBy`, the person installing — or the first owner, `channel: platform`); an admin
+ *  proposal's segment names nobody here (`proposedBy: null`) and says where it came from instead
+ *  (`adminProposal`, S11 AA3b-2). Which one goes with the source's kind, checked at run time and by
+ *  `change_segments_proposer` (governance 0033). */
+export type ApplyWorkspaceSegmentInput = ApplyWorkspaceSegmentCommon &
+  (
+    | { readonly proposedBy: string; readonly adminProposal?: undefined }
+    | { readonly proposedBy: null; readonly adminProposal: AdminProposalOrigin }
+  );
+
+/** Who drafted what a segment of `source` publishes (I-A7): an admin agent wrote an admin
+ *  proposal's content; a pack's the person applying reviewed (`ChangeItemOrigin`). */
+function itemOriginOf(source: ChangeSource): ChangeItemOrigin {
+  return source.kind === 'admin_proposal' ? 'agent' : 'human';
+}
+
+/** A segment's proposer agrees with its source (see `ApplyWorkspaceSegmentInput`): refused before
+ *  anything is planned — a caller bug, never something to apply. */
+function assertProposerMatchesSource(input: ApplyWorkspaceSegmentInput): void {
+  const origin = input.adminProposal;
+  if (input.source.kind === 'admin_proposal') {
+    if (!origin || input.proposedBy !== null || input.source.version !== origin.proposalId) {
+      throw new Error(
+        'change-plan: an admin_proposal segment names its proposal (version = proposal id) and no proposer of this workspace',
+      );
+    }
+  } else if (origin !== undefined || input.proposedBy === null) {
+    throw new Error(
+      `change-plan: a ${input.source.kind} segment names its proposer in this workspace`,
+    );
+  }
 }
 
 export interface AppliedChangeItem {
@@ -366,6 +420,7 @@ export async function applyWorkspaceSegment(
   workspaceId: string,
   input: ApplyWorkspaceSegmentInput,
 ): Promise<AppliedWorkspaceSegment> {
+  assertProposerMatchesSource(input);
   await assertChangeApplierIsPerson(client, workspaceId, input.channel, input.appliedBy, 'apply');
   const { plan, kinds } = await planWithKinds(client, workspaceId, input);
   if (plan.digest !== input.reviewedDigest) {
@@ -375,11 +430,13 @@ export async function applyWorkspaceSegment(
   if (plan.unchanged) return { plan, segmentId: null, items: [] };
 
   const planId = randomUUID();
+  const origin = input.adminProposal ?? null;
   const segment = await client.query<{ id: string }>(
     `insert into change_segments
        (workspace_id, plan_id, channel, source_kind, source_name, source_version, source_digest,
-        reviewed_digest, proposed_by, applied_by)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        reviewed_digest, proposed_by, applied_by, admin_proposal_id, admin_proposal_segment_id,
+        proposed_by_user, proposer_display_name)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
      returning id`,
     [
       workspaceId,
@@ -392,15 +449,20 @@ export async function applyWorkspaceSegment(
       plan.digest,
       input.proposedBy,
       input.appliedBy,
+      origin?.proposalId ?? null,
+      origin?.proposalSegmentId ?? null,
+      origin?.proposedByUser ?? null,
+      origin?.proposerDisplayName ?? null,
     ],
   );
   const segmentId = segment.rows[0]?.id;
   if (!segmentId) throw new Error('change-plan: INSERT ... RETURNING produced no segment');
 
+  const itemOrigin = itemOriginOf(plan.source);
   const applied: AppliedChangeItem[] = [];
   for (const { planned, apply } of kinds) {
     if (planned.unchanged) continue;
-    const after = await apply(input.appliedBy);
+    const after = await apply(input.appliedBy, itemOrigin);
     const confirmedBy = planned.classification === 'authority_widening' ? input.appliedBy : null;
     const item = await client.query<{ id: string }>(
       `insert into change_items
@@ -444,6 +506,8 @@ export async function applyWorkspaceSegment(
         classification: planned.classification,
         widening: planned.widening,
         proposedBy: input.proposedBy,
+        // S11 AA3b-2: where an admin proposal's item came from, and that an agent drafted it.
+        ...(origin ? { adminProposal: { ...origin }, origin: itemOrigin } : {}),
         confirmedBy,
       },
     });

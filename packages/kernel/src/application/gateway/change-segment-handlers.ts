@@ -56,7 +56,17 @@ export function toChangeSegmentWire(segment: ChangeSegmentRecord): ChangeSegment
     channel: segment.channel,
     source: { ...segment.source },
     status: segment.status,
-    proposedBy: toPrincipalRefWire(segment.proposedBy),
+    proposedBy: segment.proposedBy ? toPrincipalRefWire(segment.proposedBy) : null,
+    adminProposal: segment.adminProposal
+      ? {
+          proposalId: segment.adminProposal.proposalId,
+          proposalSegmentId: segment.adminProposal.proposalSegmentId,
+          proposedBy: {
+            userId: segment.adminProposal.proposedByUser,
+            displayName: segment.adminProposal.proposerDisplayName,
+          },
+        }
+      : null,
     appliedBy: toPrincipalRefWire(segment.appliedBy),
     appliedAt: segment.appliedAt.toISOString(),
     verifiedAt: segment.verifiedAt?.toISOString() ?? null,

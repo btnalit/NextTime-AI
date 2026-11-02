@@ -26,10 +26,16 @@
  * what it wrote is still in effect and the systems its source needs are in place, recorded on the
  * segment).
  *
- * S11 AA3b-1: Admin proposals (`proposals.ts`, migrations/governance/0032) — what an admin
+ * S11 AA3b-1: Admin proposals (`admin-proposals.ts`, migrations/governance/0032) — what an admin
  * agent proposes from its trial workspace, one segment per target workspace, for the owners of
  * those workspaces to decide; read back and withdrawn by the agent for its administrator and by
  * platform administrators.
+ *
+ * S11 AA3b-2: the owner of a target workspace decides the segment addressed to it
+ * (`admin-proposal-segments.ts`, migrations/governance/0033): its intents resolve to the
+ * workspace's own objects, its dry run is this core's, and applying it records a change segment of
+ * source `admin_proposal` — the second source (§5.4 "一个核心，两种来源") — rolled back like any
+ * other.
  *
  * Boundaries: it lives in `application` because applying calls publish functions across
  * `substrate` (ontology), `application/worker` (Skills, WorkerDefinitions) and
@@ -53,8 +59,10 @@ export {
   classifySkillChange,
   classifyWorkerDefinitionChange,
 } from './classify.js';
+export { derivePackComponentId } from './component-id.js';
 export { contentDigest } from './digest.js';
 export {
+  type AdminProposalOrigin,
   type ApplyWorkspaceSegmentInput,
   type AppliedChangeItem,
   type AppliedWorkspaceSegment,
@@ -166,6 +174,7 @@ export {
   type AdminProposalProblem,
   type AdminProposalProposer,
   AdminProposalQuotaExceededError,
+  AdminProposalRoleMismatchError,
   type AdminProposalScope,
   AdminProposalTargetUnavailableError,
   adminProposalDigest,
@@ -178,3 +187,16 @@ export {
   readAdminProposal,
   withdrawAdminProposal,
 } from './admin-proposals.js';
+export {
+  type AppliedAdminProposalSegment,
+  type ApplyAdminProposalSegmentInput,
+  AdminProposalSegmentBlockedError,
+  AdminProposalSegmentNotFoundError,
+  AdminProposalSegmentNotOpenError,
+  AdminProposalSegmentUnchangedError,
+  applyAdminProposalSegment,
+  getAdminProposalSegment,
+  listAdminProposalSegments,
+  previewAdminProposalSegment,
+  rejectAdminProposalSegment,
+} from './admin-proposal-segments.js';

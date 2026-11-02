@@ -17,11 +17,12 @@ import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ADVISORY_LOCK_NAMESPACES } from '../../adapters/db/advisory-lock-namespaces.js';
 import { runMigrations } from '../../adapters/db/migrate.js';
+import { withPlatform } from '../../adapters/db/platform-context.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { HANDLE_SIGNING_ALG } from '../../governance/capability/index.js';
 import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
 import { mapCapabilityErrorToToolResult } from '../../interfaces/mcp/server-factory.js';
-import { mapDispatchError } from '../../interfaces/ws/rpc.js';
+import { WS_ERROR_CODES, mapDispatchError } from '../../interfaces/ws/rpc.js';
 import { issueAdminAgentHandle } from '../admin-agent/index.js';
 import { adminProposalReaderOf } from '../gateway/admin-proposal-handlers.js';
 import { withAdminClient } from '../gateway/auth.js';
@@ -37,6 +38,7 @@ import {
   AdminProposalNotFoundError,
   AdminProposalNotOpenError,
   AdminProposalQuotaExceededError,
+  AdminProposalRoleMismatchError,
   AdminProposalTargetUnavailableError,
 } from './index.js';
 
@@ -362,6 +364,13 @@ describe.runIf(DATABASE_URL !== undefined)(
         message: (first as Error).message,
         details: { segment: 1 },
       });
+      expect(shape(first).ws).toEqual({
+        code: WS_ERROR_CODES.INVALID_PARAMS,
+        message: (first as Error).message,
+      });
+      expect(shape(first).mcp.content).toEqual([
+        { type: 'text', text: `admin_proposal_target_unavailable: ${(first as Error).message}` },
+      ]);
       for (const other of rest) expect(shape(other)).toEqual(shape(first));
       // The text names none of the workspaces.
       for (const target of targets) expect((first as Error).message).not.toContain(target);
@@ -435,6 +444,7 @@ describe.runIf(DATABASE_URL !== undefined)(
                   workerItem({ name: 'disk-worker', systemPrompt: 'x', gates: ['gk-1'] }),
                   workerItem({ systemPrompt: 'nameless' }),
                   skillItem('blank-body', '   '),
+                  workerItem({ name: 'model-worker', systemPrompt: 'x', model: 'some-model' }),
                 ],
               },
               { targetWorkspaceId: targetA.workspaceId, items: [skillItem('disk-triage')] },
@@ -457,6 +467,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           'segments[0].items[2].definition.gates',
           'segments[0].items[3].definition.name',
           'segments[0].items[4].skill',
+          'segments[0].items[5].definition.model',
           'segments[1].targetWorkspaceId',
         ]),
       );
@@ -701,6 +712,80 @@ describe.runIf(DATABASE_URL !== undefined)(
           ),
         ),
       ).rejects.toThrow(/withdrawn by its proposer or on the platform plane/);
+      // Withdrawn by the transaction's own platform user — on the platform plane its acting
+      // administrator, in the trial workspace the user of its Principal — never by another one.
+      await expect(
+        withPlatform(pool, { userId: admin.id }, (c) =>
+          c.query(
+            `update admin_proposal_segments set status = 'withdrawn', withdrawn_by_user = $2
+              where id = $1`,
+            [segmentId, otherAdmin.id],
+          ),
+        ),
+      ).rejects.toThrow(/withdrawn on the platform plane by its acting administrator/);
+      await expect(
+        asTrial((c) =>
+          c.query(
+            `update admin_proposal_segments set status = 'withdrawn', withdrawn_by_user = $2
+              where id = $1`,
+            [segmentId, otherAdmin.id],
+          ),
+        ),
+      ).rejects.toThrow(/withdrawn in the trial workspace by its own user/);
+      // The platform plane never decides a workspace segment, whoever it names.
+      for (const status of ['applied', 'rejected'] as const) {
+        await expect(
+          withPlatform(pool, { userId: admin.id }, (c) =>
+            c.query(
+              `update admin_proposal_segments set status = $2, decided_by = $3, reason = 'no'
+                where id = $1`,
+              [segmentId, status, targetA.ownerPrincipalId],
+            ),
+          ),
+          status,
+        ).rejects.toThrow(new RegExp(`is ${status} in its target workspace`));
+      }
+      // governance 0033 (#916 review, #488 P3-a): the decider is the person of this transaction,
+      // not another person of the target the writer names.
+      const member = await createUser(pool, {
+        login: `aa3b-member-${tag}`,
+        displayName: 'Member A',
+      });
+      const memberPrincipalId = randomUUID();
+      await withAdminClient(pool, (c) =>
+        c.query(
+          `insert into principals (workspace_id, id, kind, role, display_name, user_id)
+           values ($1, $2, 'human', 'member', 'Member A', $3)`,
+          [targetA.workspaceId, memberPrincipalId, member.id],
+        ),
+      );
+      await expect(
+        asTarget((c) =>
+          c.query(
+            `update admin_proposal_segments set status = 'rejected', decided_by = $2, reason = 'no'
+              where id = $1`,
+            [segmentId, memberPrincipalId],
+          ),
+        ),
+      ).rejects.toThrow(/a segment is rejected by the person of this transaction/);
+      // #488 P3-b: an update that moves no edge keeps the row's time as it was.
+      const stamped = async () => {
+        const result = await withAdminClient(pool, (c) =>
+          c.query<{ updated_at: Date }>(
+            'select updated_at from admin_proposal_segments where id = $1',
+            [segmentId],
+          ),
+        );
+        return result.rows[0]?.updated_at.toISOString();
+      };
+      const stampedBefore = await stamped();
+      await asTarget((c) =>
+        c.query(
+          `update admin_proposal_segments set updated_at = now() + interval '1 day' where id = $1`,
+          [segmentId],
+        ),
+      );
+      expect(await stamped()).toBe(stampedBefore);
       // The target rejects it, with its own person as the decider.
       await asTarget((c) =>
         c.query(
@@ -800,6 +885,23 @@ describe.runIf(DATABASE_URL !== undefined)(
           );
         }),
       ).rejects.toThrow(/never addressed to a trial workspace/);
+      // governance 0033 (#488 P3-a): the proposer is the person of this transaction — not another
+      // administrator of the same trial workspace, whom 0032 alone would accept.
+      await expect(
+        asTrial(async (c) => {
+          const session = await c.query<{ id: string }>(
+            `select id from sessions where workspace_id = $1 and kind = 'admin_agent' limit 1`,
+            [trialId],
+          );
+          await c.query(
+            `insert into admin_proposals
+               (workspace_id, proposed_by, proposed_by_user, proposer_display_name, session_id,
+                origin, title, source_name, content_digest)
+             values ($1, $2, $3, 'AA3b Other Admin', $4, 'agent', 't', 'x', $5)`,
+            [trialId, otherAdminPrincipalId, otherAdmin.id, session.rows[0]?.id, digest],
+          );
+        }),
+      ).rejects.toThrow(/the proposer is the person of this transaction/);
       // And a proposal is made only in a trial workspace (the insert policy) — here by the same
       // administrator, owner of a standard workspace, so only the policy refuses it.
       const standard = await newWorkspace(admin, 'standard');
@@ -814,6 +916,118 @@ describe.runIf(DATABASE_URL !== undefined)(
           ),
         ),
       ).rejects.toThrow(/row-level security/);
+    });
+
+    it('P3-1: an administrator only NEXTTIME_PLATFORM_ADMINS makes one, stored as a user, is refused with 403 and nothing is written', async () => {
+      const login = `aa3b-pinned-${tag}`;
+      const pinned = await createUser(pool, { login, displayName: 'Pinned Admin' });
+      const previous = process.env.NEXTTIME_PLATFORM_ADMINS;
+      process.env.NEXTTIME_PLATFORM_ADMINS = previous ? `${previous},${login}` : login;
+      try {
+        const trial = await newWorkspace(pinned, 'admin_trial');
+        const caller = await agent(trial.workspaceId, trial.ownerPrincipalId);
+        const written = async () => {
+          const result = await withAdminClient(pool, (c) =>
+            c.query<{ n: number }>(
+              'select count(*)::int as n from admin_proposals where proposed_by_user = $1',
+              [pinned.id],
+            ),
+          );
+          return result.rows[0]?.n;
+        };
+        const err = await thrownBy(
+          propose(
+            caller,
+            proposalParams([
+              { targetWorkspaceId: targetA.workspaceId, items: [skillItem('pinned')] },
+            ]),
+          ),
+        );
+        expect(err).toBeInstanceOf(AdminProposalRoleMismatchError);
+        expect(mapCapabilityError(err)).toEqual({
+          status: 403,
+          code: 'admin_proposal_role_mismatch',
+          message: (err as Error).message,
+        });
+        expect(mapDispatchError(err).code).toBe(WS_ERROR_CODES.FORBIDDEN);
+        expect(mapCapabilityErrorToToolResult(err).content).toEqual([
+          { type: 'text', text: expect.stringMatching(/^admin_proposal_role_mismatch: /) },
+        ]);
+        expect(await written()).toBe(0);
+        // Had the kernel let it through, 0032's guard refuses the row by the stored role.
+        await expect(
+          inWorkspace(trial.workspaceId, trial.ownerPrincipalId, async (c) => {
+            const session = await c.query<{ id: string }>(
+              `select id from sessions where workspace_id = $1 and kind = 'admin_agent' limit 1`,
+              [trial.workspaceId],
+            );
+            await c.query(
+              `insert into admin_proposals
+                 (workspace_id, proposed_by, proposed_by_user, proposer_display_name, session_id,
+                  origin, title, source_name, content_digest)
+               values ($1, $2, $3, 'Pinned Admin', $4, 'agent', 't', 'x', $5)`,
+              [
+                trial.workspaceId,
+                trial.ownerPrincipalId,
+                pinned.id,
+                session.rows[0]?.id,
+                `sha256:${'0'.repeat(64)}`,
+              ],
+            );
+          }),
+        ).rejects.toThrow(/the proposer is a platform administrator/);
+        expect(await written()).toBe(0);
+      } finally {
+        if (previous === undefined) Reflect.deleteProperty(process.env, 'NEXTTIME_PLATFORM_ADMINS');
+        else process.env.NEXTTIME_PLATFORM_ADMINS = previous;
+      }
+    });
+
+    it('P3-2: a withdrawal’s reason carrying a credential, or a [redacted] mark, is refused on both sides and nothing is withdrawn', async () => {
+      const caller = await agent(trialId, adminPrincipalId);
+      const proposal = await propose(
+        caller,
+        proposalParams([
+          { targetWorkspaceId: targetA.workspaceId, items: [skillItem('w-reason')] },
+        ]),
+      );
+      const secret = `postgres://ops:${FAKE}@db.example.invalid/app`;
+      for (const [name, by] of [
+        ['agent_withdraw_admin_proposal', caller],
+        ['withdraw_admin_proposal', platformCaller(admin)],
+      ] as const) {
+        const err = await thrownBy(
+          dispatchCapability({ pool }, by, name, {
+            proposalId: proposal.id,
+            reason: `Superseded: use ${secret} instead.`,
+          }),
+        );
+        expect(err, name).toBeInstanceOf(AdminProposalCredentialError);
+        const mapped = mapCapabilityError(err);
+        expect(mapped, name).toMatchObject({
+          status: 400,
+          code: 'admin_proposal_credential',
+          details: { suspectedSecretValues: 1, suspectedSecretPaths: ['reason'] },
+        });
+        expect(JSON.stringify(mapped), name).not.toContain(FAKE);
+        const masked = await thrownBy(
+          dispatchCapability({ pool }, by, name, {
+            proposalId: proposal.id,
+            reason: `Superseded: use ${SECRET_FIELD_MASK} instead.`,
+          }),
+        );
+        expect(mapCapabilityError(masked), name).toMatchObject({
+          status: 400,
+          code: 'redacted_text_submitted',
+          details: { field: 'withdrawal.reason', paths: ['withdrawal.reason'] },
+        });
+      }
+      const read = (await dispatchCapability({ pool }, caller, 'agent_get_admin_proposal', {
+        proposalId: proposal.id,
+      })) as AdminProposalWire;
+      expect(read.segments.map((segment) => [segment.status, segment.reason])).toEqual([
+        ['proposed', null],
+      ]);
     });
 
     it('purging a target deletes the segment addressed to it and keeps the proposal; purging the trial workspace deletes its proposals', async () => {

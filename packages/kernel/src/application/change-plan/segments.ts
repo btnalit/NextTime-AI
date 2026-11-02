@@ -6,7 +6,7 @@ import type {
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { WideningReason } from './classify.js';
-import type { ChangeChannel, ChangeSource } from './engine.js';
+import type { AdminProposalOrigin, ChangeChannel, ChangeSource } from './engine.js';
 
 /**
  * application/change-plan/segments: reading the workspace's applied segments and their items back
@@ -28,7 +28,10 @@ export interface ChangeSegmentRecord {
   readonly source: ChangeSource;
   readonly status: ChangeSegmentStatus;
   readonly reviewedDigest: string;
-  readonly proposedBy: ChangePrincipalRef;
+  /** `null` for an `admin_proposal` source: nobody of this workspace proposed it (S11 AA3b-2). */
+  readonly proposedBy: ChangePrincipalRef | null;
+  /** An `admin_proposal` source's origin (governance 0033); `null` for any other. */
+  readonly adminProposal: AdminProposalOrigin | null;
   readonly appliedBy: ChangePrincipalRef;
   readonly appliedAt: Date;
   readonly verifiedAt: Date | null;
@@ -65,7 +68,7 @@ interface SegmentDbRow {
   id: string;
   plan_id: string;
   channel: ChangeChannel;
-  source_kind: 'pack';
+  source_kind: ChangeSource['kind'];
   source_name: string;
   source_version: string;
   source_digest: string;
@@ -74,9 +77,13 @@ interface SegmentDbRow {
   applied_at: Date;
   verified_at: Date | null;
   rolled_back_at: Date | null;
-  proposed_by: string;
-  proposed_kind: PrincipalKind;
+  proposed_by: string | null;
+  proposed_kind: PrincipalKind | null;
   proposed_name: string | null;
+  admin_proposal_id: string | null;
+  admin_proposal_segment_id: string | null;
+  proposed_by_user: string | null;
+  proposer_display_name: string | null;
   applied_by: string;
   applied_kind: PrincipalKind;
   applied_name: string | null;
@@ -94,6 +101,8 @@ const SEGMENT_SELECT = `
          s.source_digest, s.status, s.reviewed_digest, s.applied_at, s.verified_at,
          s.rolled_back_at,
          s.proposed_by, pp.kind as proposed_kind, pp.display_name as proposed_name,
+         s.admin_proposal_id, s.admin_proposal_segment_id, s.proposed_by_user,
+         s.proposer_display_name,
          s.applied_by, pa.kind as applied_kind, pa.display_name as applied_name,
          s.rolled_back_by, pr.kind as rolled_back_kind, pr.display_name as rolled_back_name,
          (select count(*)::int from change_items i
@@ -104,7 +113,7 @@ const SEGMENT_SELECT = `
          to_char(s.applied_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
            as applied_at_key
     from change_segments s
-    join principals pp on pp.workspace_id = s.workspace_id and pp.id = s.proposed_by
+    left join principals pp on pp.workspace_id = s.workspace_id and pp.id = s.proposed_by
     join principals pa on pa.workspace_id = s.workspace_id and pa.id = s.applied_by
     left join principals pr on pr.workspace_id = s.workspace_id and pr.id = s.rolled_back_by`;
 
@@ -121,7 +130,22 @@ function mapSegment(row: SegmentDbRow): ChangeSegmentRecord {
     },
     status: row.status,
     reviewedDigest: row.reviewed_digest,
-    proposedBy: { id: row.proposed_by, kind: row.proposed_kind, displayName: row.proposed_name },
+    proposedBy:
+      row.proposed_by === null || row.proposed_kind === null
+        ? null
+        : { id: row.proposed_by, kind: row.proposed_kind, displayName: row.proposed_name },
+    adminProposal:
+      row.admin_proposal_id === null ||
+      row.admin_proposal_segment_id === null ||
+      row.proposed_by_user === null ||
+      row.proposer_display_name === null
+        ? null
+        : {
+            proposalId: row.admin_proposal_id,
+            proposalSegmentId: row.admin_proposal_segment_id,
+            proposedByUser: row.proposed_by_user,
+            proposerDisplayName: row.proposer_display_name,
+          },
     appliedBy: { id: row.applied_by, kind: row.applied_kind, displayName: row.applied_name },
     appliedAt: row.applied_at,
     verifiedAt: row.verified_at,

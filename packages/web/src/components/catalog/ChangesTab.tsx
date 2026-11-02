@@ -48,11 +48,23 @@ export interface ChangesTabProps {
   readonly onSelectItem: (itemId: string | null) => void;
 }
 
-/** 「能力包 ops-assets v2」 — what an install record installed. Every source is a pack (S11 P1-C:
- *  a module is a pack with one ontology part, so a module install before P1-C reads the same). */
+/** 「能力包 ops-assets v2」 — what an install record installed: a pack (S11 P1-C: a module is a
+ *  pack with one ontology part, so a module install before P1-C reads the same), or (S11 AA3b-2)
+ *  「管理员提案 ops-tuning」 — a segment of an admin proposal, by the source name it proposed under
+ *  (its version is the proposal's id, never shown as a number). */
 export function sourceLabel(segment: Pick<ChangeSegmentWire, 'source'>, t: Translate): string {
-  const { name, version } = segment.source;
+  const { kind, name, version } = segment.source;
+  if (kind === 'admin_proposal') return t(`管理员提案 ${name}`, `Admin proposal ${name}`);
   return t(`能力包 ${name} v${version}`, `Pack ${name} v${version}`);
+}
+
+/** S11 AA3b-2: who proposed an admin proposal's segment — the platform administrator whose admin
+ *  agent wrote it, by the name they had then. */
+function adminProposerText(segment: ChangeSegmentWire, t: Translate): string | null {
+  const proposer = segment.adminProposal?.proposedBy;
+  if (!proposer) return null;
+  const name = proposer.displayName || shortId(proposer.userId);
+  return t(`平台管理员 ${name} 的管理员智能体`, `${name}'s admin agent (platform administrator)`);
 }
 
 function principalName(ref: ChangePrincipalRefWire, t: Translate): string {
@@ -371,8 +383,8 @@ export function ChangesTab({ http, itemId, onSelectItem }: ChangesTabProps) {
       <div className="stack-s">
         <p className="text-3 text-small">
           {t(
-            '每次安装或升级能力包会留下一条安装记录：谁做的，改了什么（每个改动项是这次写入的一处变化：一个本体、Skill 或 Worker 的新版本），需要时可以整条撤销。启用安装记录之前装上的能力包不在这里。',
-            'Each pack install or upgrade leaves an install record: who did it and what changed (each change is one thing it wrote: a new version of an ontology, a Skill or a Worker); the whole record can be rolled back if needed. Packs installed before records were kept are not here.',
+            '每次安装或升级能力包会留下一条安装记录，应用管理员提案也会留下一条：谁做的，改了什么（每个改动项是这次写入的一处变化：一个本体、Skill 或 Worker 的新版本），需要时可以整条撤销。启用安装记录之前装上的能力包不在这里。',
+            'Each pack install or upgrade leaves an install record, and so does applying an admin proposal: who did it and what changed (each change is one thing it wrote: a new version of an ontology, a Skill or a Worker); the whole record can be rolled back if needed. Packs installed before records were kept are not here.',
           )}
         </p>
         {rows.length === 0 ? (
@@ -495,9 +507,18 @@ function ChangeSegmentDetail({
     <div className="stack" data-testid="catalog-change-detail">
       <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
         <h2 className="catalog-detail-title" data-testid="catalog-change-title">
-          {t('能力包 ', 'Pack ')}
-          <span className="mono wrap-anywhere">{segment.source.name}</span>
-          {` v${segment.source.version}`}
+          {segment.source.kind === 'admin_proposal' ? (
+            <>
+              {t('管理员提案 ', 'Admin proposal ')}
+              <span className="mono wrap-anywhere">{segment.source.name}</span>
+            </>
+          ) : (
+            <>
+              {t('能力包 ', 'Pack ')}
+              <span className="mono wrap-anywhere">{segment.source.name}</span>
+              {` v${segment.source.version}`}
+            </>
+          )}
         </h2>
         <StatusChip
           machine="changeSegment"
@@ -507,6 +528,19 @@ function ChangeSegmentDetail({
       </div>
       <KeyValue
         items={[
+          ...(adminProposerText(segment, t) !== null
+            ? [
+                {
+                  key: 'proposer',
+                  label: t('提议人', 'Proposed by'),
+                  value: (
+                    <span data-testid="catalog-change-proposer">
+                      {adminProposerText(segment, t)}
+                    </span>
+                  ),
+                },
+              ]
+            : []),
           { key: 'how', label: t('方式', 'How'), value: appliedByText(segment, t) },
           {
             key: 'when',
@@ -584,10 +618,15 @@ function ChangeSegmentDetail({
       ) : rolledBackHere === segment.id ? (
         <output className="block">
           <Notice testId="catalog-change-rolled-back">
-            {t(
-              '已撤销。这次安装写入的版本已停用，能力包回到了安装之前的样子；已有的对象和事实都保留着。',
-              'Rolled back. The versions this install wrote are deprecated and the pack is back to how it was before; existing objects and Facts are kept.',
-            )}
+            {segment.source.kind === 'admin_proposal'
+              ? t(
+                  '已撤销。这次应用写入的版本已停用，工作区回到了应用之前的样子；已有的对象和事实都保留着。',
+                  'Rolled back. The versions this apply wrote are deprecated and the workspace is back to how it was before; existing objects and Facts are kept.',
+                )
+              : t(
+                  '已撤销。这次安装写入的版本已停用，能力包回到了安装之前的样子；已有的对象和事实都保留着。',
+                  'Rolled back. The versions this install wrote are deprecated and the pack is back to how it was before; existing objects and Facts are kept.',
+                )}
           </Notice>
         </output>
       ) : null}
@@ -610,10 +649,15 @@ function ChangeItemView({
         <StatusChip machine="changeItemState" status={item.state} size="s" />
       </div>
       <span className="text-3 text-small">
-        {t(
-          `${zhJoin(zhJoin(`能力包 v${segment.source.version} 带来的`, familyNoun(item.kind, t)), '版本')}（与能力包版本分开编号）：${versionText(item.before, t)} → ${versionText(item.after, t)}`,
-          `${familyNoun(item.kind, t)} version pack v${segment.source.version} brought (numbered apart from the pack's): ${versionText(item.before, t)} → ${versionText(item.after, t)}`,
-        )}
+        {segment.source.kind === 'admin_proposal'
+          ? t(
+              `${zhJoin(zhJoin('管理员提案带来的', familyNoun(item.kind, t)), '版本')}：${versionText(item.before, t)} → ${versionText(item.after, t)}`,
+              `${familyNoun(item.kind, t)} version the admin proposal brought: ${versionText(item.before, t)} → ${versionText(item.after, t)}`,
+            )
+          : t(
+              `${zhJoin(zhJoin(`能力包 v${segment.source.version} 带来的`, familyNoun(item.kind, t)), '版本')}（与能力包版本分开编号）：${versionText(item.before, t)} → ${versionText(item.after, t)}`,
+              `${familyNoun(item.kind, t)} version pack v${segment.source.version} brought (numbered apart from the pack's): ${versionText(item.before, t)} → ${versionText(item.after, t)}`,
+            )}
       </span>
       {item.kind === 'operation_version' && item.fields.length > 0 ? (
         <div className="stack-s" data-testid={`catalog-change-item-${item.ordinal}-fields`}>
@@ -861,10 +905,15 @@ function RollBackSegment({
     <div className="stack-s" data-testid="catalog-change-rollback">
       <span className="section-title">{t('撤销', 'Roll back')}</span>
       <p className="text-3 text-small">
-        {t(
-          '把这条记录退回到安装之前：每一项回到上一版，首次安装的则不再安装。已经写入的数据保留。之后可以在「能力包」页签重新安装。',
-          'Returns this record to what was there before: each item goes back a version, or a first install is no longer installed. Data already written stays. You can install again from the Packs tab.',
-        )}
+        {segment.source.kind === 'admin_proposal'
+          ? t(
+              '把这条记录退回到应用之前：每一项回到上一版，首次安装的则不再安装。已经写入的数据保留。撤销后这份管理员提案不能再应用；之后要再用，需由平台管理员的管理员智能体重新提出。',
+              "Returns this record to what was there before: each item goes back a version, or a first install is no longer installed. Data already written stays. The admin proposal cannot be applied again afterwards; to use it again, a platform administrator's admin agent has to propose it again.",
+            )
+          : t(
+              '把这条记录退回到安装之前：每一项回到上一版，首次安装的则不再安装。已经写入的数据保留。之后可以在「能力包」页签重新安装。',
+              'Returns this record to what was there before: each item goes back a version, or a first install is no longer installed. Data already written stays. You can install again from the Packs tab.',
+            )}
       </p>
       <Confirm
         tier="medium"
@@ -938,8 +987,8 @@ function RollBackSegment({
                         )
                       ) : (
                         t(
-                          '后来的改动不是通过能力包安装做的，这里撤销不了。',
-                          ' The later change was not made through a pack install, so it cannot be rolled back here.',
+                          '后来的改动不在任何安装记录里，这里撤销不了。',
+                          ' The later change is in no install record, so it cannot be rolled back here.',
                         )
                       )
                     ) : null}

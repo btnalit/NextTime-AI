@@ -14,6 +14,11 @@ import {
   AdminProposalNotFoundError,
   AdminProposalNotOpenError,
   AdminProposalQuotaExceededError,
+  AdminProposalRoleMismatchError,
+  AdminProposalSegmentBlockedError,
+  AdminProposalSegmentNotFoundError,
+  AdminProposalSegmentNotOpenError,
+  AdminProposalSegmentUnchangedError,
   AdminProposalTargetUnavailableError,
   ChangeApplierNotAPersonError,
   ChangeConfirmationRequiredError,
@@ -340,10 +345,34 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   if (err instanceof AdminProposalQuotaExceededError) {
     return { status: 429, code: err.code, message: err.message, details: { ...err.details } };
   }
+  // #916 review P3-1: the stored platform role is not admin while the kernel's effective one is.
+  if (err instanceof AdminProposalRoleMismatchError) {
+    return { status: 403, code: err.code, message: err.message };
+  }
   if (err instanceof AdminProposalNotFoundError) {
     return { status: 404, code: err.code, message: err.message };
   }
   if (err instanceof AdminProposalNotOpenError) {
+    return { status: 409, code: err.code, message: err.message };
+  }
+  // S11 AA3b-2: a segment addressed to this workspace, decided by its owner. Not addressed here →
+  // 404; no longer proposed → 409 (`details.status`); an intent that does not resolve here → 409
+  // with `details.blockers`; nothing to apply → 409 (reject it instead). Nothing was written.
+  if (err instanceof AdminProposalSegmentNotFoundError) {
+    return { status: 404, code: err.code, message: err.message };
+  }
+  if (err instanceof AdminProposalSegmentNotOpenError) {
+    return { status: 409, code: err.code, message: err.message, details: { ...err.details } };
+  }
+  if (err instanceof AdminProposalSegmentBlockedError) {
+    return {
+      status: 409,
+      code: err.code,
+      message: err.message,
+      details: { blockers: err.details.blockers.map((blocker) => ({ ...blocker })) },
+    };
+  }
+  if (err instanceof AdminProposalSegmentUnchangedError) {
     return { status: 409, code: err.code, message: err.message };
   }
   // S11 P1-B: a segment rollback. Not in this workspace → 404; already rolled back → 409; an item

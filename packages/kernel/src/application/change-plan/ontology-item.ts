@@ -16,6 +16,7 @@ import {
 } from '../../substrate/ontology/index.js';
 import { type WideningReason, classifyOntologyDefinitionChange } from './classify.js';
 import { contentDigest } from './digest.js';
+import type { ChangeItemOrigin } from './family-item.js';
 
 /**
  * application/change-plan/ontology-item: the `ontology_version` item kind — "publish this
@@ -180,13 +181,14 @@ export async function applyOntologyItem(
   workspaceId: string,
   planned: PlannedOntologyItem,
   appliedBy: string,
+  origin: ChangeItemOrigin,
 ): Promise<{ readonly definitionDigest: string; readonly version: number }> {
   const published = await publishOntologyVersion(client, workspaceId, {
     id: planned.target.ontologyId,
     definition: planned.definition,
     principalId: appliedBy,
-    // S11 AA3a (legacy 293): the person applying the segment reviewed what it writes.
-    origin: 'human',
+    // S11 AA3a (legacy 293) / AA3b-2: who drafted what the segment writes (`ChangeItemOrigin`).
+    origin,
   });
   return { definitionDigest: planned.after.definitionDigest, version: published.version };
 }

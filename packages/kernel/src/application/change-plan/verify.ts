@@ -51,8 +51,9 @@ import {
  * `change_segment.verify` audit row naming who ran it and how (`trigger`: `manual` — a person asked;
  * `system` — the platform ran it right after an install, as the person who installed).
  *
- * Only the latest segment of a source that is not rolled back is verified: an earlier one is
- * superseded (409 `change_segment_superseded`, naming the later one), a rolled back one is final
+ * Only the latest segment of a pack that is not rolled back is verified: an earlier one is
+ * superseded (409 `change_segment_superseded`, naming the later one) — each segment of an admin
+ * proposal is a source of its own (S11 AA3b-2), so it is never superseded —, a rolled back one is final
  * (409 `change_segment_rolled_back`). A run probes gates, so a segment is not verified again within
  * `CHANGE_VERIFICATION_COOLDOWN_SECONDS` of its last run (429 `change_verification_cooldown`) —
  * checked before anything is probed, under the segment's row lock, so two clicks cannot both probe.
@@ -209,6 +210,7 @@ async function findSupersedingSegment(
        from change_segments later
        join change_segments this on this.workspace_id = later.workspace_id and this.id = $2
       where later.workspace_id = $1
+        and this.source_kind = 'pack'
         and later.source_kind = this.source_kind and later.source_name = this.source_name
         and later.status <> 'rolled_back'
         and (later.applied_at, later.id) > (this.applied_at, this.id)

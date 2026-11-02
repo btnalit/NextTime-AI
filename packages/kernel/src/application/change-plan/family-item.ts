@@ -96,6 +96,12 @@ export interface WorkerDefinitionVersionIntent {
 export type KeptWorkerField = 'gates' | 'model';
 
 export type FamilyVersionIntent = SkillVersionIntent | WorkerDefinitionVersionIntent;
+
+/** Who drafted what an item publishes (I-A7, the `origin` of the version it writes; S11 AA3a /
+ *  AA3b-2): `human` — the person applying the segment reviewed a pack this deployment ships;
+ *  `agent` — an admin agent wrote it (an admin proposal's segment), the person applying it
+ *  reviewed and published it. Never `platform`: that is the kernel's own templates'. */
+export type ChangeItemOrigin = 'human' | 'agent';
 export type FamilyItemKind = FamilyVersionIntent['kind'];
 
 /** A family version, by number and content digest (an item's `before` / `after`). A type, not an
@@ -348,7 +354,8 @@ function withKeptFields(
 }
 
 /** Publishes the planned content as the family's next version, `appliedBy` as its proposer and
- *  publisher (the person applying the segment reviewed it; there is no separate draft), through the
+ *  publisher (the person applying the segment reviewed it; there is no separate draft) and
+ *  `origin` as who drafted it, through the
  *  registry's own propose and publish — no actor, so none of a person's draft checks (D-24, the
  *  credential review: a pack's content is checked when the registry loads, `application/packs`).
  *  Returns the item's `after`. */
@@ -357,6 +364,7 @@ export async function applyFamilyItem(
   workspaceId: string,
   planned: PlannedFamilyItem,
   appliedBy: string,
+  origin: ChangeItemOrigin,
 ): Promise<{ readonly contentDigest: string; readonly version: number }> {
   let version: number;
   if (planned.kind === 'skill_version') {
@@ -369,8 +377,8 @@ export async function applyFamilyItem(
       description: planned.content.description,
       markdown: planned.content.markdown,
       applicable: planned.content.applicable,
-      // S11 AA3a (legacy 293): the person applying the segment reviewed what it writes.
-      origin: 'human',
+      // S11 AA3a (legacy 293) / AA3b-2: who drafted what the segment writes.
+      origin,
     });
     const published = await publishSkill(client, workspaceId, appliedBy, skillId);
     // `publishSkill` publishes the family's latest version; under the registry lock that is the
@@ -389,7 +397,7 @@ export async function applyFamilyItem(
       onMissingFamily: 'start',
       kind: 'worker',
       definition: { ...planned.content },
-      origin: 'human',
+      origin,
     });
     const published = await publishWorkerDefinition(client, workspaceId, appliedBy, {
       definitionId,
