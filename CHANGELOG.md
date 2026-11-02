@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.61.0](https://github.com/btnalit/NextTime-AI/compare/v0.60.0...v0.61.0) (2026-11-02)
+
+
+### Features
+
+* **admin-agent:** admin proposals an admin agent makes, reads back and withdraws (S11 AA3b-1) ([#916](https://github.com/btnalit/NextTime-AI/issues/916)) ([36666f8](https://github.com/btnalit/NextTime-AI/commit/36666f8e2220f16ba42dd264ecc957261512f2bd))
+* **admin-agent:** owners preview, apply, reject and roll back admin proposal segments (S11 AA3b-2) ([#920](https://github.com/btnalit/NextTime-AI/issues/920)) ([ee71a62](https://github.com/btnalit/NextTime-AI/commit/ee71a6249a41e21e9763fe6ae2e178f38e021ae4))
+* **admin-agent:** platform segment of admin proposals (S11 AA3c-1) ([#921](https://github.com/btnalit/NextTime-AI/issues/921)) ([305e6ad](https://github.com/btnalit/NextTime-AI/commit/305e6ad2937082ed34863c59d43e1ca08249f754))
+* **admin-agent:** workspace parts of an admin proposal hold to its platform part (S11 AA3c-2) ([#923](https://github.com/btnalit/NextTime-AI/issues/923)) ([65ab5f7](https://github.com/btnalit/NextTime-AI/commit/65ab5f750f3962cb22042b56bbfa5b6070a51603))
+* **console:** mark trial workspaces in memberships (legacy 596) ([#924](https://github.com/btnalit/NextTime-AI/issues/924)) ([375d247](https://github.com/btnalit/NextTime-AI/commit/375d2471a68d6c4ec68469fa25d93f075e00f029))
+* **console:** owner reviews admin proposals in the catalog (S11 AA4a) ([#929](https://github.com/btnalit/NextTime-AI/issues/929)) ([a69027d](https://github.com/btnalit/NextTime-AI/commit/a69027db07fd644a80944b8eacd0173e57f92079))
+* **console:** show who wrote a draft on review pages (legacy 597) ([#927](https://github.com/btnalit/NextTime-AI/issues/927)) ([d0b622b](https://github.com/btnalit/NextTime-AI/commit/d0b622b5127325bd67d9d7a34693c862c08e1192))
+* **kernel:** admin trial workspaces, I-A6 and draft origin (S11 AA3a) ([#914](https://github.com/btnalit/NextTime-AI/issues/914)) ([fd90b8e](https://github.com/btnalit/NextTime-AI/commit/fd90b8e2c80c3538a6d8169fad1911b6efd749d7))
+
 ## [0.60.0](https://github.com/btnalit/NextTime-AI/compare/v0.59.0...v0.60.0) (2026-11-01)
 
 
