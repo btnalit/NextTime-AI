@@ -8,6 +8,7 @@ import type {
   ChangeRollbackPreviewWire,
   ChangeSegmentDetailWire,
   ChangeSegmentWire,
+  ChangeVerificationResultWire,
   ListEnvelope,
   Operation,
   ReceivedAdminProposalSegmentWire,
@@ -37,6 +38,7 @@ import { type UserRow, createUser } from '../identity/index.js';
 import { purgeWorkspace } from '../platform/purge-workspace.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/definitions.js';
 import { createWorkspaceWithOwner } from '../workspace/index.js';
+import { withdrawAdminProposal } from './admin-proposals.js';
 import {
   AdminProposalSegmentBlockedError,
   AdminProposalSegmentNotFoundError,
@@ -819,6 +821,134 @@ describe.runIf(DATABASE_URL !== undefined)(
       // Rejected is closed.
       expect(await thrownBy(preview(target, segmentId))).toMatchObject({
         details: { status: 'rejected' },
+      });
+    });
+
+    it('legacy 420: a reason, a title or a description that looks like a credential reads masked to the owner, the platform and the agent', async () => {
+      // #920 review P3-2: neither is refused when written (a reject reason never is), so the mask
+      // on every read is what keeps the value from the next reader.
+      const { user, agent } = await administrator();
+      const target = await newTarget();
+      const proposal = await call<AdminProposalWire>(agent, 'propose_admin_proposal', {
+        title: `Disk triage with PGPASSWORD=${FAKE}`,
+        description: `Run it with PGPASSWORD=${FAKE} set.`,
+        sourceName: `aa3b2-mask-${tag}`,
+        segments: [{ targetWorkspaceId: target.workspaceId, items: [skillItem('masked')] }],
+      });
+      const segmentId = proposal.segments[0]?.id ?? '';
+      const rejected = await call<ReceivedAdminProposalSegmentWire>(
+        ownerCaller(target),
+        'reject_admin_proposal_segment',
+        { segmentId, reason: `It printed PGPASSWORD=${FAKE} to the log.` },
+      );
+      expect(rejected.reason).toBe('It printed PGPASSWORD=[redacted] to the log.');
+      expect(rejected.proposal).toMatchObject({
+        title: 'Disk triage with PGPASSWORD=[redacted]',
+        description: 'Run it with PGPASSWORD=[redacted] set.',
+      });
+      const ownerList = await call<ListEnvelope<ReceivedAdminProposalSegmentWire>>(
+        ownerCaller(target),
+        'list_admin_proposal_segments',
+        {},
+      );
+      const onPlatform = await call<AdminProposalWire>(platformCaller(user), 'get_admin_proposal', {
+        proposalId: proposal.id,
+      });
+      expect(onPlatform.segments[0]?.reason).toBe('It printed PGPASSWORD=[redacted] to the log.');
+      const platformList = await call<ListEnvelope<{ id: string; title: string }>>(
+        platformCaller(user),
+        'list_admin_proposals',
+        {},
+      );
+      const agentList = await call<ListEnvelope<{ id: string; title: string }>>(
+        agent,
+        'agent_list_admin_proposals',
+        {},
+      );
+      expect(platformList.items.find((p) => p.id === proposal.id)?.title).toBe(
+        'Disk triage with PGPASSWORD=[redacted]',
+      );
+      expect(agentList.items.find((p) => p.id === proposal.id)?.title).toBe(
+        'Disk triage with PGPASSWORD=[redacted]',
+      );
+      for (const read of [rejected, ownerList, onPlatform, platformList, agentList]) {
+        expect(JSON.stringify(read)).not.toContain(FAKE);
+      }
+      // The stored row is the record (I11): masked on read, kept as written.
+      expect((await segmentRow(segmentId))?.reason).toContain(FAKE);
+    });
+
+    it('two decisions of one segment run one after the other: the second waits for the first and reads what it left (409 not open)', async () => {
+      // #920 review P3-3: applying takes the segment's row lock first, so a withdrawal holding it
+      // makes the apply wait, and the apply then refuses as not open — never a raw database error.
+      const { user, agent } = await administrator();
+      const target = await newTarget();
+      const { proposal, segmentId } = await proposeFor(agent, target, [skillItem('raced')]);
+      const dryRun = await preview(target, segmentId);
+      let release: () => void = () => {};
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let withdrawn: () => void = () => {};
+      const withdrawing = new Promise<void>((resolve) => {
+        withdrawn = resolve;
+      });
+      const holder = withPlatform(pool, { userId: user.id }, async (client) => {
+        await withdrawAdminProposal(
+          client,
+          proposal.id,
+          { reader: 'platform' },
+          user.id,
+          undefined,
+        );
+        withdrawn();
+        await released;
+      });
+      await withdrawing;
+      const applying = thrownBy(
+        apply(target, segmentId, dryRun.digest ?? '', { confirmedOrdinals: [1] }),
+      );
+      // The apply is waiting on the segment's row lock before the withdrawal commits.
+      let waiting = 0;
+      for (let attempt = 0; attempt < 100 && waiting === 0; attempt += 1) {
+        const locks = await withAdminClient(pool, (client) =>
+          client.query<{ n: number }>(
+            `select count(*)::int as n from pg_stat_activity
+              where pid <> pg_backend_pid() and wait_event_type = 'Lock'
+                and query like '%admin_proposal_segments%for update%'`,
+          ),
+        );
+        waiting = locks.rows[0]?.n ?? 0;
+        if (waiting === 0) await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(waiting).toBeGreaterThan(0);
+      release();
+      await holder;
+      const refused = await applying;
+      expect(refused).toBeInstanceOf(AdminProposalSegmentNotOpenError);
+      expect(refused).toMatchObject({ details: { status: 'withdrawn' } });
+      expect((await segmentRow(segmentId))?.status).toBe('withdrawn');
+    });
+
+    it('verifying an applied proposal: its source is found and names no systems; a later proposal of the same source name does not supersede it', async () => {
+      // #920 review P3-1: a pack's later install of the same name supersedes an earlier one; two
+      // proposals sharing a source name are two sources, each verified on its own.
+      const { agent } = await administrator();
+      const target = await newTarget();
+      const sourceName = `aa3b2-verify-${tag}`;
+      const first = await proposeFor(agent, target, [skillItem('verify-first')], sourceName);
+      const firstApplied = await previewAndApply(target, first.segmentId);
+      const second = await proposeFor(agent, target, [skillItem('verify-second')], sourceName);
+      await previewAndApply(target, second.segmentId);
+      const verified = await call<ChangeVerificationResultWire>(
+        ownerCaller(target),
+        'verify_change_segment',
+        { segmentId: firstApplied.changeSegmentId },
+      );
+      expect(verified.verification).toMatchObject({ sourceFound: true, requirements: [] });
+      expect(verified.segment).toMatchObject({
+        id: firstApplied.changeSegmentId,
+        source: { kind: 'admin_proposal', name: sourceName },
       });
     });
 

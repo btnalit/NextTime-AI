@@ -383,8 +383,8 @@ export function ChangesTab({ http, itemId, onSelectItem }: ChangesTabProps) {
       <div className="stack-s">
         <p className="text-3 text-small">
           {t(
-            '每次安装或升级能力包会留下一条安装记录：谁做的，改了什么（每个改动项是这次写入的一处变化：一个本体、Skill 或 Worker 的新版本），需要时可以整条撤销。启用安装记录之前装上的能力包不在这里。',
-            'Each pack install or upgrade leaves an install record: who did it and what changed (each change is one thing it wrote: a new version of an ontology, a Skill or a Worker); the whole record can be rolled back if needed. Packs installed before records were kept are not here.',
+            '每次安装或升级能力包会留下一条安装记录，应用管理员提案也会留下一条：谁做的，改了什么（每个改动项是这次写入的一处变化：一个本体、Skill 或 Worker 的新版本），需要时可以整条撤销。启用安装记录之前装上的能力包不在这里。',
+            'Each pack install or upgrade leaves an install record, and so does applying an admin proposal: who did it and what changed (each change is one thing it wrote: a new version of an ontology, a Skill or a Worker); the whole record can be rolled back if needed. Packs installed before records were kept are not here.',
           )}
         </p>
         {rows.length === 0 ? (
@@ -618,10 +618,15 @@ function ChangeSegmentDetail({
       ) : rolledBackHere === segment.id ? (
         <output className="block">
           <Notice testId="catalog-change-rolled-back">
-            {t(
-              '已撤销。这次安装写入的版本已停用，能力包回到了安装之前的样子；已有的对象和事实都保留着。',
-              'Rolled back. The versions this install wrote are deprecated and the pack is back to how it was before; existing objects and Facts are kept.',
-            )}
+            {segment.source.kind === 'admin_proposal'
+              ? t(
+                  '已撤销。这次应用写入的版本已停用，工作区回到了应用之前的样子；已有的对象和事实都保留着。',
+                  'Rolled back. The versions this apply wrote are deprecated and the workspace is back to how it was before; existing objects and Facts are kept.',
+                )
+              : t(
+                  '已撤销。这次安装写入的版本已停用，能力包回到了安装之前的样子；已有的对象和事实都保留着。',
+                  'Rolled back. The versions this install wrote are deprecated and the pack is back to how it was before; existing objects and Facts are kept.',
+                )}
           </Notice>
         </output>
       ) : null}
@@ -900,10 +905,15 @@ function RollBackSegment({
     <div className="stack-s" data-testid="catalog-change-rollback">
       <span className="section-title">{t('撤销', 'Roll back')}</span>
       <p className="text-3 text-small">
-        {t(
-          '把这条记录退回到安装之前：每一项回到上一版，首次安装的则不再安装。已经写入的数据保留。之后可以在「能力包」页签重新安装。',
-          'Returns this record to what was there before: each item goes back a version, or a first install is no longer installed. Data already written stays. You can install again from the Packs tab.',
-        )}
+        {segment.source.kind === 'admin_proposal'
+          ? t(
+              '把这条记录退回到应用之前：每一项回到上一版，首次安装的则不再安装。已经写入的数据保留。撤销后这份管理员提案不能再应用；之后要再用，需由平台管理员的管理员智能体重新提出。',
+              "Returns this record to what was there before: each item goes back a version, or a first install is no longer installed. Data already written stays. The admin proposal cannot be applied again afterwards; to use it again, a platform administrator's admin agent has to propose it again.",
+            )
+          : t(
+              '把这条记录退回到安装之前：每一项回到上一版，首次安装的则不再安装。已经写入的数据保留。之后可以在「能力包」页签重新安装。',
+              'Returns this record to what was there before: each item goes back a version, or a first install is no longer installed. Data already written stays. You can install again from the Packs tab.',
+            )}
       </p>
       <Confirm
         tier="medium"
@@ -977,8 +987,8 @@ function RollBackSegment({
                         )
                       ) : (
                         t(
-                          '后来的改动不是通过能力包安装做的，这里撤销不了。',
-                          ' The later change was not made through a pack install, so it cannot be rolled back here.',
+                          '后来的改动不在任何安装记录里，这里撤销不了。',
+                          ' The later change is in no install record, so it cannot be rolled back here.',
                         )
                       )
                     ) : null}

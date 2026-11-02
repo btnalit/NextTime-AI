@@ -1723,9 +1723,9 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zh: '核验安装记录',
     en: 'Verify install record',
     zhHint:
-      '检查一条安装记录写入的内容是否还在生效，能力包要用到的系统是否已接入、能连通（只探测门的健康，不执行操作）；同一条记录 60 秒内只能核验一次。',
+      '检查一条安装记录写入的内容是否还在生效；能力包的记录还检查它要用到的系统是否已接入、能连通（只探测门的健康，不执行操作）；同一条记录 60 秒内只能核验一次。',
     enHint:
-      "Checks that what an install record wrote is still in effect and that the systems its pack needs are connected and answering (it only probes each gate's health and runs nothing); once a minute per record at most.",
+      "Checks that what an install record wrote is still in effect and, for a pack's record, that the systems the pack needs are connected and answering (it only probes each gate's health and runs nothing); once a minute per record at most.",
   },
 
   // -----------------------------------------------------------------------------------------
