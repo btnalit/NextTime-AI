@@ -14,7 +14,7 @@ import {
 } from '../../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../../lib/clients.js';
 import { describeError } from '../../../lib/errors.js';
-import { formatDateTime, shortId } from '../../../lib/format.js';
+import { formatDateTime } from '../../../lib/format.js';
 import { type Translate, useT } from '../../../lib/i18n.js';
 import { hrefs } from '../../../lib/router.js';
 import { Button } from '../../kit/button.js';
