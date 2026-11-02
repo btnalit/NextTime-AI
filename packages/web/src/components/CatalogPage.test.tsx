@@ -4885,9 +4885,9 @@ describe('CatalogPage 起草方 (legacy 597)', () => {
     const origin = within(entry).getByTestId('worker-detail-origin');
     expect(origin.querySelector('.chip')?.textContent).toBe('平台模板');
     expect(origin.querySelector('.chip')?.getAttribute('data-tone')).toBe('info');
-    // The proposer beside it is whoever created the workspace, not the template's author.
+    // The proposer beside it is the owner the workspace was created for, not the template's author.
     expect(within(origin).getByTestId('worker-detail-origin-note').textContent).toBe(
-      '平台自带的模板，建工作区时写入；提议者是建这个工作区的人。',
+      '平台自带的模板，建工作区时写入；提议者是建工作区时设定的所有者。',
     );
     await waitFor(() =>
       expect(within(entry).getByTestId('worker-detail-proposer').textContent).toContain('Olga'),

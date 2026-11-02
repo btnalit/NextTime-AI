@@ -48,8 +48,8 @@ export function draftOriginItem(
         ) : origin === 'platform' ? (
           <span className="text-3 text-small" data-testid={`${testId}-note`}>
             {t(
-              '平台自带的模板，建工作区时写入；提议者是建这个工作区的人。',
-              'The platform’s own template, written when the workspace was created; the proposer is whoever created the workspace.',
+              '平台自带的模板，建工作区时写入；提议者是建工作区时设定的所有者。',
+              'The platform’s own template, written when the workspace was created; the proposer is the owner the workspace was created for.',
             )}
           </span>
         ) : null}
