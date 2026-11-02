@@ -48,6 +48,9 @@ export interface WorkspaceDetailPanelProps {
    *  when `purgeable` and never for the platform default; the drawer is the page's (one focus
    *  trap at a time), this panel only asks for it. */
   readonly onPurge?: () => void;
+  /** S11 AA4e (#501 P3 on #947): the reader has a membership here — 管理员智能体 lists only the
+   *  reader's own trial workspaces, so a trial workspace links there only then. */
+  readonly readerIsMember?: boolean;
 }
 
 /**
@@ -94,6 +97,7 @@ export function WorkspaceDetailPanel({
   onDelegated,
   onOpenWorkspaceConfig,
   onPurge,
+  readerIsMember = false,
 }: WorkspaceDetailPanelProps) {
   const t = useT();
   const [name, setName] = useState(workspace.name);
@@ -312,8 +316,9 @@ export function WorkspaceDetailPanel({
 
         <DrawerSection title={t('相关链接', 'Related links')}>
           {/* S11 AA4e (journey ⑨, UX P2-1 on #945): a trial workspace's next steps are on 管理员智能体,
-              on its own card. */}
-          {workspace.purpose === 'admin_trial' ? (
+              on its own card — for its members only, that page listing the reader's own memberships
+              (#501 P3 on #947). */}
+          {workspace.purpose === 'admin_trial' && readerIsMember ? (
             <RouteLink
               href={hrefs.platformAdminAgent(workspace.id)}
               testId="workspace-detail-admin-agent-link"

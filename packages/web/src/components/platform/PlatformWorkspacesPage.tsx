@@ -208,7 +208,14 @@ export function PlatformWorkspacesPage({
    *  its own card, where its targets are chosen and its chat opened; its status is read again so
    *  the card is there. Kept on 试验 by the reader; a workspace they switched to 标准 stays here. */
   function handleCreated(created: PlatformWorkspaceWire): void {
-    if (createPurpose === 'admin_trial' && created.purpose === 'admin_trial') {
+    // S11 AA4e (#501 P3 on #947): only back to 管理员智能体 when the reader is an owner of what
+    // was made — the page lists the reader's own memberships, and the first owner can be someone
+    // else; a trial workspace made for another person opens here like any other.
+    if (
+      createPurpose === 'admin_trial' &&
+      created.purpose === 'admin_trial' &&
+      isOwner(created, currentUserId)
+    ) {
       invalidateCapability(http, 'get_admin_agent_status');
       onMembershipsChanged?.();
       toast.push({
@@ -429,6 +436,7 @@ export function PlatformWorkspacesPage({
             key={openWorkspace.id}
             http={http}
             workspace={openWorkspace}
+            readerIsMember={memberOf.has(openWorkspace.id) || isOwner(openWorkspace, currentUserId)}
             models={catalog}
             modelsReady={models.state.status === 'ready'}
             onChanged={replaceWorkspace}
@@ -601,4 +609,10 @@ function withoutQueryParam(hash: string, name: string): string {
   params.delete(name);
   const rest = params.toString();
   return rest === '' ? hash.slice(0, query) : `${hash.slice(0, query)}?${rest}`;
+}
+
+/** S11 AA4e (#501 P3 on #947): the reader is one of `workspace`'s owners — known from the row
+ *  itself, so it holds for a workspace just made, before `memberships` is read again. */
+function isOwner(workspace: PlatformWorkspaceWire, userId: string | undefined): boolean {
+  return userId !== undefined && workspace.owners.some((owner) => owner.userId === userId);
 }

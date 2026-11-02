@@ -554,10 +554,10 @@ export const ToolCallGroupView = memo(function ToolCallGroupView({
         >
           {proposal.title !== null
             ? t(
-                `已提出管理员提案「${visibleText(proposal.title)}」。`,
-                `Made the admin proposal “${visibleText(proposal.title)}”.`,
+                `智能体报告已提出管理员提案「${visibleText(proposal.title)}」。`,
+                `The agent reports it made the admin proposal “${visibleText(proposal.title)}”.`,
               )
-            : t('已提出一份管理员提案。', 'Made an admin proposal.')}
+            : t('智能体报告已提出一份管理员提案。', 'The agent reports it made an admin proposal.')}
           {sentenceGap(t)}
           <RouteLink
             href={hrefs.platformAdminProposals('proposals', proposal.id)}

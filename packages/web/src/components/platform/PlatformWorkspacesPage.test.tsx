@@ -617,6 +617,8 @@ describe('PlatformWorkspacesPage', () => {
     window.location.hash = '';
   });
 
+  const BOB = { userId: 'u-2', login: 'bob', displayName: 'Bob', principalId: 'p-lab-bob' };
+
   it('S11 AA4e: a trial workspace created from 管理员智能体 goes back there, on its own card', async () => {
     const created = workspace({
       id: 'ws-lab',
@@ -624,6 +626,7 @@ describe('PlatformWorkspacesPage', () => {
       purpose: 'admin_trial',
       isDefault: false,
       memberCount: 1,
+      owners: [BOB],
     });
     const onMembershipsChanged = vi.fn();
     const http = scriptedHttp({
@@ -660,6 +663,7 @@ describe('PlatformWorkspacesPage', () => {
       purpose: 'admin_trial',
       isDefault: false,
       memberCount: 1,
+      owners: [BOB],
     });
     let listCalls = 0;
     const http = scriptedHttp({
@@ -690,6 +694,44 @@ describe('PlatformWorkspacesPage', () => {
     expect(
       within(detail).getByTestId('workspace-detail-admin-agent-link').getAttribute('href'),
     ).toBe('#/platform/admin-agent/ws-lab');
+    window.location.hash = '';
+  });
+
+  it('S11 AA4e (#501 P3 on #947): a trial workspace made for someone else stays here, without the 管理员智能体 link', async () => {
+    // The first owner was changed in the form: the reader has no membership in what was made, so
+    // 管理员智能体 (the reader's own trial workspaces) would have no card for it.
+    const created = workspace({
+      id: 'ws-lab',
+      name: 'Lab',
+      purpose: 'admin_trial',
+      isDefault: false,
+      memberCount: 1,
+    });
+    let listCalls = 0;
+    const http = scriptedHttp({
+      ...baseHandlers([workspace()]),
+      list_workspaces: () => {
+        listCalls += 1;
+        return { items: listCalls === 1 ? [workspace()] : [workspace(), created] };
+      },
+      create_workspace: () => created,
+    });
+    window.location.hash = '#/platform/workspaces?create=admin_trial';
+    renderPage(http, {
+      initialHash: '#/platform/workspaces?create=admin_trial',
+      currentUserId: 'u-2',
+    });
+    const form = await screen.findByTestId('create-workspace-form');
+    fireEvent.change(within(form).getByLabelText(/名称/), { target: { value: 'Lab' } });
+    await waitFor(() =>
+      expect((within(form).getByTestId('create-workspace-owner') as HTMLInputElement).value).toBe(
+        'bob — Bob',
+      ),
+    );
+    fireEvent.click(within(form).getByTestId('create-workspace-submit'));
+    const detail = await screen.findByTestId('workspace-detail');
+    expect(window.location.hash).toBe('#/platform/workspaces');
+    expect(within(detail).queryByTestId('workspace-detail-admin-agent-link')).toBeNull();
     window.location.hash = '';
   });
 
