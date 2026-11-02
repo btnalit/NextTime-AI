@@ -2192,6 +2192,21 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：工作区当天的 token 或费用配额用完后，模型一个字没答的运行不再被记成完成：Task 失败 `model_refused`，评测试跑记 `errored` 不判分，目标暂停等预算恢复，对话里写明是哪个预算被用完、什么时候重置、谁能调高。被拒的调用记成 0 token、0 费用的用量，不进预算、不进 Task 的 token 数与试跑费用。
 - **回滚**（见 §6 的两行）：**不能只回滚内核**——旧内核的严格 schema 会把混有 refused 记录的整批拒掉，llm-proxy 的队列满 1000 条后开始丢真实用量，预算就会少算；llm-proxy 必须和内核一起回（按 tag 整体回滚即可）。schema 与已存的 refused 行默认保留（它们是平台拒绝过的运行的证据，不带 token 与费用，旧代码的预算求和不变；旧代码的调用次数会把它们算进去）。
 
+### 3.101 试验工作区、I-A6 与草稿溯源（#914，S11 AA3a，0.61.0 起）
+
+带三个迁移（core `0050_admin_trial_workspaces`、core `0051_ontology_version_origin`、worker `0013_draft_origin`），随 `apply-release.sh` 自动应用。不改 compose，没有新环境变量；`ADMIN_AGENT_ENABLED` 仍默认关，这一版没有运行时会启动管理员智能体（AA4）。
+
+- **迁移**：0050 放宽 `workspaces_purpose_check`（加 `admin_trial`），加触发器 `workspaces_admin_trial_fixed`（`purpose` 改进或改出 `admin_trial` 对所有角色都拒绝；`standard` ↔ `ephemeral` 不受影响）。0013 给 `skills`、`procedures`、`worker_definitions`，0051 给 `ontology_versions` 加可空的 `origin` 列、取值 CHECK 与「写后不改」触发器；已有行不回填，线上省略字段。
+- **行为变化**：
+  - 新用途「试验工作区」（`create_workspace {purpose: 'admin_trial'}`，只在创建时决定、之后改不了）。不能设为平台默认工作区（`update_platform_settings` 拒绝，错误码 `trial_workspace`），启动时的默认工作区收养也跳过它；除此之外与常规工作区相同，同样的 RLS 隔离、没有额外权限。CLI `create-workspace --purpose` 仍只收 `standard` / `ephemeral`。
+  - I-A6：管理员智能体的 Handle 只在试验工作区签发与使用，常规工作区签发拒绝 `not_trial_workspace`，每次调用也重查（对旧版本签出的 Handle 同样生效）。关闭遗留 585。
+  - 管理员智能体的上限里明确列出 5 个起草能力（`propose_skill`、`propose_procedure`、`propose_worker_definition`、`propose_operation`、`propose_ontology_change`），只产生待人发布的草稿；发布、批准、应用仍只走人的通道。
+  - 草稿溯源 `origin`（`human` / `agent` / `platform`）由内核按调用通道与调用方 Principal 的种类推出，调用方不能传；服务 Principal 的 API key 经人的通道起草记 `agent`。关闭遗留 293。
+  - 用户列表的「残留用户」：试验工作区的成员算真实成员。
+- **发版说明可写**：平台可以建「试验工作区」，它是将来管理员智能体唯一能行动的地方，创建后不能改回常规、不能设为默认；Skill、Procedure、WorkerDefinition 与本体草稿记录是人、智能体还是平台自己起草的。
+- **升级验收期间先别建试验工作区**：`create_workspace` 建试验工作区不受 `ADMIN_AGENT_ENABLED` 控制，一旦建了，只回滚代码的窗口就关上了（见下条与 §6）。
+- **回滚**（见 §6 的三行）：只回滚代码的前提是 `select count(*) from workspaces where purpose = 'admin_trial'` 为 0（旧代码的线上 schema 不认这个值）。已经建过的，要先停用、等满 7 天（`PURGE_RETENTION_DAYS`）再清除——它不是临时工作区，不会过期清除——这 7 天里只能保留这个版本。`origin` 列可以留着，旧代码不读。迁移头注释没写这 7 天等待：0050 已在审查与验收环境跑过，改文件会让迁移校验和对不上，以这里为准（#914 #488 P3-a）。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -2352,6 +2367,9 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.59.0 | core `0049_admin_agent_sessions`（#897，S11 AA1）：`sessions.kind` 的 CHECK 放宽一个值 `admin_agent`，不回填 | 可逆 | 只放宽：满足旧约束的行都满足新约束，重新加约束校验既有行无需回填；旧代码从不写 `admin_agent`，这一版也没有东西会签发管理员智能体的 Handle（开关默认关，AA4 之前没有运行时） | 先查 `admin_agent` 会话数：为 0 时可按 0001 的五个值重建约束并删掉 `schema_migrations` 的 core 49；不为 0 时保留 0049、只回退代码（restrict 外键）。AA4 之后回退到 AA1 之前的代码，先吊销管理员智能体 Handle（见 §3.97、0049 文件头） |
 | v0.60.0 | llm-usage `0003_usage_refusal`（#910，遗留 589）：`llm_usage.refusal_scope` 列、CHECK `llm_usage_refusal`（`refused` ⇔ 有 scope，且 0 token、0 费用）、两个 `status = 'refused'` 的部分索引 `llm_usage_refused_session_idx`、`llm_usage_refused_turn_idx` | 可逆 | 只加可空列、新约束与部分索引：旧内核从不写 `refusal_scope`、从不写 `status = 'refused'`，在新 schema 上照常插入；但**不能只回滚内核**，旧内核的严格用量 schema 会拒掉含 `refusalScope` 的整批，新 llm-proxy 的队列满 1000 条后丢真实用量——llm-proxy 与内核同版回滚 | 默认保留 schema 与 refused 行，只回退代码（llm-proxy 与内核一起）。删 schema 可选，会连带删掉 refused 行，删前先导出：停内核，一个事务里删两个索引与约束 `llm_usage_refusal`、`delete from llm_usage where status = 'refused'`、`alter table llm_usage drop column refusal_scope`，再删 `schema_migrations` 的 llm-usage 3（见 0003 文件头） |
 | v0.60.0 | goal `0017_pause_model_refused`（#910，遗留 589）：`goal_runs.pause_reason` 的 CHECK 加 `model_refused` | 可逆 | 只放宽：既有行都满足；旧内核从不写 `model_refused`，已经这样暂停的运行在旧代码里是一个没有文案的暂停，恢复照常 | 只回退代码即可。要撤 schema：先确认 `select count(*) from goal_runs where pause_reason = 'model_refused'` 为 0（请求者先恢复或结束每一条），再停内核、一个事务里按 0001 的列表重建 CHECK，删 `schema_migrations` 的 goal 17（见 0017 文件头） |
+| v0.60.0 之后的下一版 | core `0050_admin_trial_workspaces`（#914，AA3a）：`workspaces_purpose_check` 加 `admin_trial`，触发器 `workspaces_admin_trial_fixed` | 有条件可逆 | 旧代码的线上 schema 不认 `admin_trial`：只有 `select count(*) from workspaces where purpose = 'admin_trial'` 为 0 时才能只回退代码；不为 0 时先停用这些工作区、等满 7 天（`PURGE_RETENTION_DAYS`）清除后再回退，这 7 天里保留这个版本（试验工作区不是临时工作区，不会过期清除）。头注释没写 7 天等待，以本行为准 | 数为 0 时只回退代码即可；要撤 schema 按 0050 文件头：删触发器与函数，按 0028 的值重建 CHECK（`purpose in ('standard', 'ephemeral')`），删 `schema_migrations` 的 core 50 |
+| v0.60.0 之后的下一版 | core `0051_ontology_version_origin`（#914，AA3a，遗留 293）：`ontology_versions.origin` 可空列、取值 CHECK、写后不改触发器 | 可逆 | 只加可空列：旧代码不读不写 `origin`，在新 schema 上照常插入 | 只回退代码、保留列即可；要删列按 0051 文件头（删触发器与函数、`drop column origin`，删 `schema_migrations` 的 core 51） |
+| v0.60.0 之后的下一版 | worker `0013_draft_origin`（#914，AA3a，遗留 293）：`skills`、`procedures`、`worker_definitions` 的 `origin` 可空列、取值 CHECK、写后不改触发器 | 可逆 | 同上，旧代码不读不写 `origin` | 只回退代码、保留列即可；要删列按 0013 文件头，删 `schema_migrations` 的 worker 13 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
