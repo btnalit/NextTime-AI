@@ -756,6 +756,14 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
 
     const owner = scriptedHttp({ get_workspace: () => OWNER_WORKSPACE, ...handlers });
     const { unmount } = renderTab(owner, FIRST);
+    // UX P3-4 (#929): the row reads by the proposal's title, the source name on its second line;
+    // a record whose proposal is no longer readable keeps the source name.
+    const row = await screen.findByTestId(`catalog-change-row-${FIRST}`);
+    await waitFor(() => expect(row.textContent).toContain('整理容器运维'));
+    expect(row.textContent).toMatch(/管理员提案\s*ops-tuning/);
+    expect(screen.getByTestId(`catalog-change-row-${LATER}`).textContent).not.toContain(
+      '整理容器运维',
+    );
     const origin = await screen.findByTestId('catalog-change-proposal');
     expect(origin.textContent).toContain('整理容器运维');
     expect(origin.textContent).toContain('给运维加一个排障 Skill。');
@@ -778,6 +786,9 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
     renderTab(member, FIRST);
     await screen.findByTestId('catalog-change-detail');
     await waitFor(() => expect(member.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    expect(screen.getByTestId(`catalog-change-row-${FIRST}`).textContent).toMatch(
+      /管理员提案\s*ops-tuning/,
+    );
     expect(screen.queryByTestId('catalog-change-proposal')).toBeNull();
     expect(screen.queryByTestId('catalog-change-proposal-gone')).toBeNull();
     expect(member.calls.some((c) => c.name === 'list_admin_proposal_segments')).toBe(false);

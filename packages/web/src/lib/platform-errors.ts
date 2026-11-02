@@ -288,12 +288,12 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
   // S11 AA4a (`application/change-plan/admin-proposal-segments.ts`): the owner's review of an admin
   // proposal's segment in 能力目录 · 管理员提案. Nothing was written in any of them.
   admin_proposal_segment_not_found: {
-    zh: '这个工作区没有这份管理员提案，它可能是发给另一个工作区的。回到「管理员提案」重新选择',
-    en: 'This workspace has no such admin proposal — it may be addressed to another workspace. Pick it again from Admin proposals',
+    zh: '这个工作区没有这份管理员提案，它可能是发给另一个工作区的，本次没有写入任何内容。回到「管理员提案」重新选择',
+    en: 'This workspace has no such admin proposal — it may be addressed to another workspace. Nothing was written. Pick it again from Admin proposals',
   },
   admin_proposal_segment_not_open: {
-    zh: '这份管理员提案已经有了决定（应用、拒绝或被撤回），本次没有写入任何内容。刷新后查看它现在的状态',
-    en: 'This admin proposal has been decided already (applied, rejected or withdrawn) — nothing was written. Refresh to see where it stands now',
+    zh: '这份管理员提案已经有了决定（应用、拒绝、被撤回或已撤销），本次没有写入任何内容。刷新后查看它现在的状态',
+    en: 'This admin proposal has been decided already (applied, rejected, withdrawn or rolled back) — nothing was written. Refresh to see where it stands now',
   },
   admin_proposal_segment_blocked: {
     zh: '其中有内容在本工作区里对不上（名字已被占用、要用的系统没启用等），本次没有写入任何内容。按审阅里列出的原因处理后再应用，或拒绝它',

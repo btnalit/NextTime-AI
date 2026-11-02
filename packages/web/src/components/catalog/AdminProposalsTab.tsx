@@ -755,8 +755,14 @@ function SegmentReview({
         {
           segmentId: segment.id,
           reviewedDigest: data.digest,
+          // #501 P3: exactly what the owner ticked (I-A4) — a widening item the review gained after
+          // the dialog opened is then refused by the kernel, never confirmed on the owner's behalf.
           ...(widening.length > 0
-            ? { confirmedOrdinals: widening.map((item) => item.ordinal) }
+            ? {
+                confirmedOrdinals: widening
+                  .filter((item) => confirmed.has(item.ordinal))
+                  .map((item) => item.ordinal),
+              }
             : {}),
           ...credentialReviewParams(needsCredentialReview && credentialsReviewed),
         },
@@ -793,6 +799,12 @@ function SegmentReview({
     onDecided(result);
   }
 
+  // UX P3-1 (#929): a part that cannot be applied however it is ticked (an instance the platform
+  // part created changed since, or nothing to apply) says only why; ticking is left for later.
+  const hardBlocked =
+    data.blockers.length === 0 &&
+    !platformPartPending &&
+    (data.platformChanges.length > 0 || data.unchanged);
   const missing = [
     ...(data.blockers.length > 0
       ? [
@@ -802,7 +814,7 @@ function SegmentReview({
           ),
         ]
       : []),
-    ...(unconfirmed > 0
+    ...(unconfirmed > 0 && !hardBlocked
       ? [
           t(
             `勾选 ${unconfirmed} 项权限边界确认`,
@@ -810,11 +822,11 @@ function SegmentReview({
           ),
         ]
       : []),
-    ...(needsCredentialReview && !credentialsReviewed
+    ...(needsCredentialReview && !credentialsReviewed && !hardBlocked
       ? [t('核对疑似凭据', 'review the suspected credentials')]
       : []),
   ];
-  const notReadyReason =
+  const notReadySentence =
     data.blockers.length > 0
       ? null
       : platformPartPending
@@ -833,6 +845,11 @@ function SegmentReview({
                 'The workspace already is as it proposes; there is nothing to apply',
               )
             : null;
+  // UX P3-2 (#929): after 「还差：…；」 the reason continues the sentence (no capital in English).
+  const notReadyReason =
+    notReadySentence !== null && missing.length > 0
+      ? notReadySentence.charAt(0).toLowerCase() + notReadySentence.slice(1)
+      : notReadySentence;
 
   return (
     <div className="stack" data-testid="catalog-proposal-review">
@@ -899,6 +916,7 @@ function SegmentReview({
               <ReviewItem
                 key={item.ordinal}
                 item={item}
+                disabled={hardBlocked}
                 checked={confirmed.has(item.ordinal)}
                 onCheckedChange={(checked) =>
                   setConfirmed((prev) => {
@@ -1147,10 +1165,13 @@ function itemHeadline(item: AdminProposalPreviewItemWire, t: Translate): string 
 
 function ReviewItem({
   item,
+  disabled,
   checked,
   onCheckedChange,
 }: {
   readonly item: AdminProposalPreviewItemWire;
+  /** It cannot be applied whatever is ticked (`hardBlocked`): the confirmation waits. */
+  readonly disabled: boolean;
   readonly checked: boolean;
   readonly onCheckedChange: (checked: boolean) => void;
 }) {
@@ -1167,6 +1188,7 @@ function ReviewItem({
               <input
                 type="checkbox"
                 checked={checked}
+                disabled={disabled}
                 onChange={(event) => onCheckedChange(event.currentTarget.checked)}
                 data-testid={`${prefix}-confirm`}
               />

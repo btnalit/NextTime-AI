@@ -10,10 +10,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
+import { LangProvider } from '../../lib/i18n.js';
 import { statusChipStyle } from '../../lib/status-tone.js';
 import { AdminProposalsTab } from './AdminProposalsTab.js';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
 
 /** S11 AA4a: 能力目录 · 管理员提案 — the owner reviews, applies or rejects the part of an admin
  *  proposal addressed to this workspace. */
@@ -465,6 +469,38 @@ describe('AdminProposalsTab (能力目录 · 管理员提案, S11 AA4a)', () => 
     );
   });
 
+  it('UX P3-2 (#929): in English the reason after “Still needed: …;” goes on in lower case', async () => {
+    localStorage.setItem('nexttime.lang', 'en');
+    const platformSegment = {
+      id: OTHER,
+      status: 'proposed' as const,
+      items: [
+        {
+          kind: 'gate_instance' as const,
+          gateId: 'ragflow-a',
+          displayName: 'RAGFlow',
+          preset: 'ragflow',
+          target: 'https://ragflow.internal.example',
+        },
+      ],
+    };
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_admin_proposal_segments: () => ({ items: [received({ platformSegment })] }),
+      preview_admin_proposal_segment: () => preview({ digest: null }, { platformSegment }),
+    });
+    render(
+      <LangProvider>
+        <PermissionsProvider>
+          <Harness http={http} initialItemId={SEGMENT} platformAdmin={false} />
+        </PermissionsProvider>
+      </LangProvider>,
+    );
+    expect((await screen.findByTestId('catalog-proposal-missing-steps')).textContent).toBe(
+      'Still needed: tick 2 authority-boundary confirmations; a platform administrator has to apply the platform part first',
+    );
+  });
+
   it('an instance the platform part created that changed since is named with what changed, and the apply waits', async () => {
     const platformSegment = {
       id: OTHER,
@@ -490,14 +526,11 @@ describe('AdminProposalsTab (能力目录 · 管理员提案, S11 AA4a)', () => 
     };
     const http = scriptedHttp({
       get_workspace: () => OWNER_WORKSPACE,
-      list_admin_proposal_segments: () => ({
-        items: [received({ items: ONLY_SKILL, platformSegment })],
-      }),
+      list_admin_proposal_segments: () => ({ items: [received({ platformSegment })] }),
       preview_admin_proposal_segment: () =>
         preview(
           {
             digest: null,
-            items: ONLY_SKILL_PREVIEW,
             platformChanges: [
               { gateId: 'ragflow-a', gone: false, drift: ['target', 'connector'] },
               { gateId: 'wiki-a', gone: true, drift: [] },
@@ -517,9 +550,17 @@ describe('AdminProposalsTab (能力目录 · 管理员提案, S11 AA4a)', () => 
     expect(
       (screen.getByTestId('catalog-proposal-apply-trigger') as HTMLButtonElement).disabled,
     ).toBe(true);
+    // UX P3-1 (#929): however it is ticked it cannot be applied, so only the reason is said and
+    // the confirmations wait.
     expect(screen.getByTestId('catalog-proposal-missing-steps').textContent).toBe(
       '平台部分建好的门宿主实例之后被改过，现在不能应用',
     );
+    for (const ordinal of [2, 3]) {
+      expect(
+        (screen.getByTestId(`catalog-proposal-item-${ordinal}-confirm`) as HTMLInputElement)
+          .disabled,
+      ).toBe(true);
+    }
   });
 
   it('an apply refused because things moved since reads the review again and says why', async () => {

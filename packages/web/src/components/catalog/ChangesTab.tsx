@@ -362,6 +362,11 @@ export function typeNamesText(names: OntologyTypeNamesWire, t: Translate): strin
 export function ChangesTab({ http, itemId, onSelectItem }: ChangesTabProps) {
   const t = useT();
   const segments = useCapabilityList<ChangeSegmentWire>(http, 'list_change_segments', {});
+  const proposalTitles = useAdminProposalTitles(
+    http,
+    segments.state.status === 'ready' &&
+      segments.state.data.items.some((segment) => segment.adminProposal !== null),
+  );
 
   function refresh(): void {
     invalidateCapability(http, 'list_change_segments');
@@ -371,6 +376,12 @@ export function ChangesTab({ http, itemId, onSelectItem }: ChangesTabProps) {
   }
 
   const rows = segments.state.status === 'ready' ? segments.state.data.items : [];
+  // UX P3-4 (#929): a record an admin proposal left is found again by the proposal's title, which
+  // is what its owner remembers; the source name moves to the second line.
+  const rowTitle = (segment: ChangeSegmentWire): string =>
+    (segment.adminProposal !== null
+      ? proposalTitles.get(segment.adminProposal.proposalSegmentId)
+      : undefined) ?? sourceLabel(segment, t);
   const list =
     segments.state.status === 'loading' ? (
       <SkeletonRows count={4} label={t('正在加载安装历史…', 'Loading install history')} />
@@ -408,10 +419,16 @@ export function ChangesTab({ http, itemId, onSelectItem }: ChangesTabProps) {
                 onSelect={() => onSelectItem(segment.id)}
               >
                 <span className="row-wrap" style={{ justifyContent: 'space-between' }}>
-                  <span className="truncate">{sourceLabel(segment, t)}</span>
+                  <span className="truncate">{rowTitle(segment)}</span>
                   <StatusChip machine="changeSegment" status={segment.status} size="s" />
                 </span>
                 <span className="truncate text-3">
+                  {rowTitle(segment) !== sourceLabel(segment, t) ? (
+                    <>
+                      {sourceLabel(segment, t)}
+                      {' · '}
+                    </>
+                  ) : null}
                   {appliedByText(segment, t)}
                   {' · '}
                   <time
@@ -639,6 +656,28 @@ function ChangeSegmentDetail({
         </output>
       ) : null}
     </div>
+  );
+}
+
+/** The titles of the admin proposals whose segments addressed here this owner can still read, by
+ *  segment id (`list_admin_proposal_segments`, owners only — `enabled` is false for anyone else, and
+ *  until a record from an admin proposal is listed). */
+function useAdminProposalTitles(
+  http: CapabilityCaller,
+  enabled: boolean,
+): ReadonlyMap<string, string> {
+  const can = useRoleCan(http);
+  const owner = can('list_admin_proposal_segments') === true;
+  const segments = useCapabilityList<ReceivedAdminProposalSegmentWire>(
+    http,
+    'list_admin_proposal_segments',
+    {},
+    { enabled: owner && enabled },
+  );
+  return new Map(
+    segments.state.status === 'ready'
+      ? segments.state.data.items.map((row) => [row.id, row.proposal.title] as const)
+      : [],
   );
 }
 
