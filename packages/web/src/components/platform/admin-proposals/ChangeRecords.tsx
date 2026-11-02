@@ -93,7 +93,7 @@ export function ChangeRecordsTab({
               '这里只记应用管理员提案平台部分的改动；手动做的改动看平台审计。',
               'Only what applying admin proposals’ platform parts changed is recorded here; for changes made by hand, see the platform audit.',
             )}{' '}
-            <RouteLink href={hrefs.platformAudit()}>
+            <RouteLink href={hrefs.platformAudit()} className="link-inline">
               {t('打开平台审计', 'Open the platform audit')}
             </RouteLink>
           </span>
@@ -343,6 +343,7 @@ export function ChangeRecordBody({
                     {t('，', ', ')}
                     <RouteLink
                       href={hrefs.platformAdminProposals('proposals', record.source.proposalId)}
+                      className="link-inline"
                     >
                       {t('查看这份管理员提案', 'open the admin proposal')}
                     </RouteLink>

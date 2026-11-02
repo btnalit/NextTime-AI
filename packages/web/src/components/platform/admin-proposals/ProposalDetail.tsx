@@ -381,7 +381,10 @@ function PlatformPartRecord({
                   {`${item?.displayName ?? entry.gateId}${t('：', ': ')}`}
                   {entry.steps.map((step) => nextStepText(step, t)).join(t('，然后', ', then '))}
                   {t('。', '. ')}
-                  <RouteLink href={hrefs.platformGateInstance(entry.gateId)}>
+                  <RouteLink
+                    href={hrefs.platformGateInstance(entry.gateId)}
+                    className="link-inline"
+                  >
                     {t('去门实例页', 'Open the gate instance')}
                   </RouteLink>
                 </span>
@@ -394,7 +397,10 @@ function PlatformPartRecord({
         <>
           <span className="text-small">
             {t('应用时记成了一条平台变更记录：', 'Applying it left a platform change record: ')}
-            <RouteLink href={hrefs.platformAdminProposals('records', record.id)}>
+            <RouteLink
+              href={hrefs.platformAdminProposals('records', record.id)}
+              className="link-inline"
+            >
               {t('在「平台变更记录」查看', 'Open it under Platform change records')}
             </RouteLink>
           </span>
