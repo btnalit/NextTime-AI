@@ -32,7 +32,8 @@ describe('Sidebar', () => {
     );
     const badge = screen.getByTestId('nav-catalog-badge');
     expect(badge.textContent).toBe('3');
-    expect(badge.getAttribute('aria-label')).toBe('3 份管理员提案等你决定');
+    expect(badge.getAttribute('aria-label')).toBe('3 份管理员提案等你处理');
+    expect(badge.getAttribute('title')).toBe('3 份管理员提案等你处理');
     expect(screen.getByTestId('nav-catalog').contains(badge)).toBe(true);
     cleanup();
     for (const adminProposalCount of [0, null]) {

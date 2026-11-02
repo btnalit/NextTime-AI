@@ -529,6 +529,12 @@ function renderNavItem(
         ? badges.catalog
         : null;
   const badge = count !== null && count > 0;
+  // S11 AA4e (UX P3-1 on #947): 等你处理, not 等你决定 — a proposal whose platform part is not
+  // applied yet is counted too, and there the owner can only look at it or reject it.
+  const badgeLabel =
+    item.section === 'catalog'
+      ? t(`${count} 份管理员提案等你处理`, `${count} admin proposal(s) waiting for you`)
+      : `${count} pending approvals`;
   return (
     <a
       key={item.section}
@@ -548,14 +554,9 @@ function renderNavItem(
       {badge ? (
         <span
           className="nav-badge"
-          aria-label={
-            item.section === 'catalog'
-              ? t(
-                  `${count} 份管理员提案等你决定`,
-                  `${count} admin proposal(s) awaiting your decision`,
-                )
-              : `${count} pending approvals`
-          }
+          aria-label={badgeLabel}
+          // S11 AA4e (UX P3-4 on #947): the same words on hover, not only to a screen reader.
+          title={item.section === 'catalog' ? badgeLabel : undefined}
           data-testid={item.section === 'catalog' ? 'nav-catalog-badge' : undefined}
         >
           {count > 99 ? '99+' : count}

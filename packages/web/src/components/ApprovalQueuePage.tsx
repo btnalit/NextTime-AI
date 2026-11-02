@@ -181,11 +181,11 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
       {adminProposals !== null && adminProposals > 0 ? (
         <Notice testId="approvals-admin-proposals">
           {t(
-            `另有 ${adminProposals} 份管理员提案等你在「能力目录 → 管理员提案」里决定。`,
-            `${adminProposals} admin proposal(s) also await your decision under Catalog → Admin proposals.`,
+            `另有 ${adminProposals} 份管理员提案等你在「能力目录 → 管理员提案」里处理。`,
+            `${adminProposals} admin proposal(s) also wait for you under Catalog → Admin proposals.`,
           )}{' '}
           <RouteLink href={hrefs.catalog('proposals')} testId="approvals-admin-proposals-link">
-            {t('去决定', 'Decide them')}
+            {t('去处理', 'Open them')}
           </RouteLink>
         </Notice>
       ) : null}

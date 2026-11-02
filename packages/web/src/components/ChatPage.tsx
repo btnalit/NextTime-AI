@@ -295,10 +295,11 @@ export function ChatPage({
 
           <div className="composer-wrap">
             <ChatModelHealthNotice running={runningModel} />
-            {agentKind === 'admin_agent' && !archived ? (
-              <AdminAgentTargetsHint http={http} />
-            ) : null}
             <form className="composer" onSubmit={composer.handleSubmit}>
+              {/* S11 AA4e (UX P3-3 on #947): inside the composer, so it lines up with the input. */}
+              {agentKind === 'admin_agent' && !archived ? (
+                <AdminAgentTargetsHint http={http} />
+              ) : null}
               {archived && chat ? (
                 <Notice tone="info" testId="chat-archived-notice">
                   <span className="row-wrap">
