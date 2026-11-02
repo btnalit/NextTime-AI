@@ -2157,7 +2157,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 带一个迁移（core `0049_admin_agent_sessions`），随 `apply-release.sh` 的迁移步骤自动应用。新环境变量 `ADMIN_AGENT_ENABLED`，默认关；这一版没有任何东西会启动管理员智能体（AA4 的运行时才会），所以主机不用设它。
 
 - **迁移**：core/0049 只把 `sessions.kind` 的 CHECK 放宽一个值 `admin_agent`，不回填。旧代码从不写这个值。
-- **开关**：`ADMIN_AGENT_ENABLED` 不设、空、`0`、`false`（不分大小写，首尾空白会去掉）都是关，`1` / `true` 是开；**写成其他值，内核启动时报错退出**。升级前确认主机 `.env` 里没有它，或者值是这几种之一。（v0.59.0 的 GitHub 发布说明把这句写成「`1` / `true` 以外的非空值都会退出」，以这里为准。）
+- **开关**：`ADMIN_AGENT_ENABLED` 不设、空、`0`、`false`（不分大小写，首尾空白会去掉）都是关，`1` / `true` 是开；**写成其他值，内核启动时报错退出**。升级前确认主机 `secrets/kernel.env` 里没有它，或者值是这几种之一：内核只从这个 env_file 读它，`docker-compose.yml` 不从 `.env` 传这个变量，写在 `.env` 里不起作用（11-02 更正，W1a 核对 compose）。（v0.59.0 的 GitHub 发布说明把这句写成「`1` / `true` 以外的非空值都会退出」，以这里为准。）
 - **行为变化（遗留 407）**：`install_pack`、`install_module`、`upgrade_module`、`roll_back_change_segment`、`verify_change_segment` 改为只能代表人调用（`actsForPerson`）；ChangePlan 引擎应用与回滚分段前再查一次，不是 human Principal、或不在 human / platform 通道就返回 403 `forbidden`，什么都不写。**服务 API key 调这五个能力现在得到 403**。主机脚本不用服务 key 调它们，不受影响；排障见 `operations.md` 的排障表与「核验」一节。
 - **发版说明可写**：平台有了"管理员智能体"身份：它没有自己的 Principal，会话种类是 `admin_agent`，属于管理员本人在该工作区的 human Principal；Handle 只由容器持有，上限是 28 个只读能力，再按此人在工作区的角色收窄；每次调用都重新检查此人仍是有效平台管理员、工作区启用、开关打开，拒绝也记审计；经它的每条审计都带 `sessionKind: 'admin_agent'` 和 `sessionId`。approve、apply、rollback 与逐项确认只走人的控制台通道，管理员智能体的 Handle 一律拒绝。管理员被降为普通用户时，立即吊销其管理员智能体会话与 Handle。服务 API key 不能再装包、装模块或写 ChangePlan 分段（遗留 407）。
 - **回滚**：先查 `select count(*) from sessions where kind = 'admin_agent'`。为 0（这一版总是如此）时可以连 schema 一起撤：按 0001 的五个值重建约束，再 `delete from schema_migrations where module = 'core' and version = 49`。不为 0 时保留 core/0049、只回退代码（这些会话被 `capability_handles`、`llm_usage`、`tasks` 以 restrict 外键引用，删掉会丢用量与 Task 历史）。**AA4 之后**回退到 AA1 之前的代码，要先吊销管理员智能体的 Handle（旧代码把它当 bearer、不做逐次的平台角色检查），语句见 0049 文件头：`update capability_handles set revoked_at = now() where session_id in (select id from sessions where kind = 'admin_agent') and revoked_at is null`。
@@ -2292,6 +2292,13 @@ where object_type = 'Operation' and properties->>'status' = 'published'
   - 管理员智能体调 `platform_state_runtime` 时，先在事务外取 worker-supervisor 的列表和健康探测，再开只读事务；取的过程中被降权，调用拒绝 `not_platform_admin`。返回形状不变（遗留 592）。
 - **发版说明可写**：0.61.0 的已知问题已修复，管理员智能体读回自己的管理员提案时不再看到平台部分门宿主实例的地址（遗留 609）。平台部分的撤销预览列出启用了每个实例的工作区。
 - **回滚**（见 §6）：只回退代码不损坏数据：0.61.0 及更早的代码从不写 Activity 的 `metadata.sessionKind` / `metadata.sessionId`。回退到 0.61.0 后，智能体读回提案又能看到门地址（回到 0.61.0 的已知问题）。
+
+### 3.110 平台管理员在平台面审阅管理员提案与平台变更记录（#936，S11 AA4b，0.61.0 之后的下一版）
+
+只改控制台：没有迁移，没有线上变化，契约快照不变，不改 compose，主机不需要操作；`ADMIN_AGENT_ENABLED` 仍默认关。
+
+- **发版说明可写**：「平台」组下新增「管理员提案」页，两个标签。平台管理员在「管理员提案」里看全部提案（默认列出全部，可按状态筛选）、审阅并应用或写理由拒绝平台部分（每个要新建的门宿主实例逐项确认，含疑似凭据时要勾核对框，和平台现状对不上时不能应用并写明原因）、撤回整份提案；工作区部分只显示状态和所有者写下的理由，不显示它要在工作区里改什么。在「平台变更记录」里看应用留下的记录和每个实例现在的样子，并从那里撤销：确认框按实例列出已启用它的工作区并链接到停用的地方，有工作区部分已应用时不能撤销。英文界面统一把门宿主实例叫 gate-host instance。
+- **回滚**：只回退代码即可。
 
 ## 4. Hotfix 流程
 
