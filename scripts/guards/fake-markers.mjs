@@ -66,10 +66,27 @@ export function markerFindings(rel, text) {
   );
 }
 
-/** Rule 2 over one file: a call `name(` outside the allowed files; in index.ts, outside the gate. */
+/** The hooks' own modules, as an import or require names them. */
+const HOOK_MODULE_IMPORT =
+  /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)['"`][^'"`]*\bfake-(?:invoke-worker|admin-propose)(?:\.[cm]?[jt]s)?['"`]/;
+
+/** Rule 2 over one file: outside the allowed files, an import of a hook's module or a call
+ *  `name(`; in index.ts, a call outside the gate or a builder imported under another name (a
+ *  call through the alias would not read as `name(`). */
 export function hookFindings(rel, text) {
   const out = [];
+  if (!matchesAny(rel, HOOK_ALLOWED) && HOOK_MODULE_IMPORT.test(text)) {
+    out.push(`${rel}: imports a CI-only hook's module (only the kernel's index.ts may)`);
+  }
   for (const name of HOOK_BUILDERS) {
+    // The allowed kernel files only: this guard and its test spell the alias out to look for it.
+    if (
+      matchesAny(rel, HOOK_ALLOWED) &&
+      rel.startsWith('packages/') &&
+      new RegExp(`\\b${name}\\s+as\\s+\\w`).test(text)
+    ) {
+      out.push(`${rel}: imports ${name} under another name (call it by its own name)`);
+    }
     const call = new RegExp(`\\b${name}\\(`, 'g');
     const calls = [...text.matchAll(call)].filter(
       (m) => !/function\s+$/.test(text.slice(Math.max(0, m.index - 20), m.index)),
@@ -105,25 +122,45 @@ function closingBrace(text, open) {
   return text.length;
 }
 
-/** Rule 3 over one file: a line that gives FAKE_INVOKE_WORKER a non-empty value. Configuration
- *  and scripts only — env files, compose files, workflows, shell and Node scripts, Dockerfiles: the
- *  TypeScript sources read the flag (the kernel's index.ts) or set it inside a test process. */
+/** Rule 3 over one file: a line that gives FAKE_INVOKE_WORKER a non-empty value — env files,
+ *  compose files, workflows, JSON, shell and Node scripts, Dockerfiles, and TypeScript outside its
+ *  tests (a test may set it in its own process; the kernel's index.ts only reads it). */
 export function flagFindings(rel, text) {
   if (rel === FLAG_SETTER || rel.startsWith('docs/') || /^scripts\/guards\/fake-markers/.test(rel))
     return [];
-  if (/\.(tsx?|md)$/.test(rel)) return [];
+  if (/\.md$/.test(rel)) return [];
+  const typescript = /\.[cm]?tsx?$/.test(rel);
+  if (typescript && /\.(test|spec)\.[cm]?tsx?$/.test(rel)) return [];
   const out = [];
   text.split('\n').forEach((line, i) => {
     if (/^\s*(#|\/\/|\*)/.test(line)) return;
-    // KEY=value (env file, shell), KEY: value (compose), export KEY=value, -e KEY=value.
-    const m = /\bFAKE_INVOKE_WORKER\s*(?:=(?!=)|:)\s*["']?([^"'\s#]*)/.exec(line);
-    if (!m) return;
+    const value = typescript ? typescriptFlagValue(line) : configFlagValue(line);
+    if (value === undefined || value === '') return;
     // docker-compose.yml's pass-through, empty unless the env file sets it.
-    if (/^\$\{FAKE_INVOKE_WORKER:-\}$/.test(m[1])) return;
-    if (m[1] === '') return;
+    if (/^\$\{FAKE_INVOKE_WORKER:-\}$/.test(value)) return;
     out.push(`${rel}:${i + 1}: sets FAKE_INVOKE_WORKER (only ${FLAG_SETTER} may)`);
   });
   return out;
+}
+
+/** KEY=value (env file, shell, Dockerfile ENV/ARG), KEY: value (compose, workflow), "KEY": value
+ *  (JSON), export KEY=value, -e KEY=value, and a Dockerfile's `ENV KEY value`. */
+function configFlagValue(line) {
+  const dockerEnv = /^\s*ENV\s+FAKE_INVOKE_WORKER\s+["']?([^"'\s#]*)/.exec(line);
+  if (dockerEnv) return dockerEnv[1];
+  return /\bFAKE_INVOKE_WORKER["']?\s*(?:=(?!=)|:)\s*["']?([^"'\s#,]*)/.exec(line)?.[1];
+}
+
+/** `process.env.FAKE_INVOKE_WORKER = …` (or `process.env['FAKE_INVOKE_WORKER'] = …`) and an
+ *  object key `FAKE_INVOKE_WORKER: …` (a child process's env) — not a comparison, not a mention
+ *  inside a string such as a log line. */
+function typescriptFlagValue(line) {
+  const assigned =
+    /\bprocess\.env(?:\.FAKE_INVOKE_WORKER|\[\s*['"`]FAKE_INVOKE_WORKER['"`]\s*\])\s*=(?!=)\s*['"`]?([^'"`\s;]*)/.exec(
+      line,
+    );
+  if (assigned) return assigned[1];
+  return /(?:^|[{,\s])['"`]?FAKE_INVOKE_WORKER['"`]?\s*:\s*['"`]?([^'"`\s,}]*)/.exec(line)?.[1];
 }
 
 /** Tracked text files the rules read. */
