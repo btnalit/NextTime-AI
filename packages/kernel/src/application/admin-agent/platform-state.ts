@@ -66,7 +66,11 @@ import { count, lengthOf, member, shaped, timestamp } from './platform-state-sha
  * separate short platform transaction records the read on the platform's audit (who, which admin
  * agent session, which section, how many items — never what): what the agent read is the
  * platform's, so the platform's audit shows it, under the same correlation id as the workspace
- * row. If that record cannot be written the agent gets nothing.
+ * row. If that record cannot be written the agent gets nothing. A section that also asks another
+ * service (`platform_state_runtime`: worker-supervisor's lists and two health probes) does that
+ * before the transaction opens (S11 AA4-0, legacy 592): no connection or transaction is held while
+ * the service answers, and the authority check still comes after, so a revocation during the call
+ * still withholds what it fetched.
  *
  * What it reads is projected field by field, never spread (`project*` below, pure): a string passes
  * only in its shape (an enum, a pattern, an ISO timestamp) and is dropped or nulled otherwise, so a
@@ -94,13 +98,18 @@ export interface PlatformStateRead<T> {
  * checking its authority again there (throws {@link AdminAgentRefused}), then records the read on
  * the platform's audit as `action` in a transaction of its own. Resolves with the read's result
  * only once that record is written.
+ *
+ * `fetch`, when given, is what the read needs from outside the database (HTTP): it runs first,
+ * with no connection taken, and `read` gets what it returned. It must not touch the database.
  */
-export async function readPlatformStateForAdminAgent<T>(
+export async function readPlatformStateForAdminAgent<T, F = undefined>(
   pool: PoolLike,
   reader: AdminAgentPlatformReader,
   action: string,
-  read: (client: PoolClient) => Promise<PlatformStateRead<T>>,
+  read: (client: PoolClient, fetched: F) => Promise<PlatformStateRead<T>>,
+  fetch?: () => Promise<F>,
 ): Promise<T> {
+  const fetched = fetch === undefined ? (undefined as F) : await fetch();
   const done = await withPlatform(
     pool,
     { userId: reader.userId },
@@ -115,7 +124,7 @@ export async function readPlatformStateForAdminAgent<T>(
       if (facts?.userId !== reader.userId) {
         throw new AdminAgentRefused('user_changed', reader.principalId);
       }
-      return read(client);
+      return read(client, fetched);
     },
     { readOnly: true },
   );

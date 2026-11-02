@@ -10,6 +10,8 @@ import {
   type AdminProposalStatus,
   type AdminProposalSummaryWire,
   type AdminProposalWire,
+  type AdminProposalWithheldGateInstanceWire,
+  type AgentAdminProposalWire,
   type ListEnvelope,
   adminProposalStatusOf,
   workerDefinitionContentSchemaFor,
@@ -436,7 +438,7 @@ export async function proposeAdminProposal(
   proposer: AdminProposalProposer,
   input: AdminProposalInput,
   checked: CheckedAdminProposal,
-): Promise<AdminProposalWire> {
+): Promise<AgentAdminProposalWire> {
   const { segments, platform } = checked;
   // The user is a member here, so the workspace transaction reads the row (core 0021).
   const user = await client.query<{ display_name: string; platform_role: string }>(
@@ -527,7 +529,7 @@ export async function proposeAdminProposal(
   });
   if (read === null)
     throw new Error(`proposeAdminProposal: proposal ${proposalId} not readable after insert`);
-  return read;
+  return agentProposalOf(read);
 }
 
 // -------------------------------------------------------------------------------------------
@@ -718,6 +720,48 @@ export async function readAdminProposal(
     description: shownFreeText(row.description),
     contentDigest: row.content_digest,
     segments: segments.rows.map((row) => segmentOf(row, scope.reader)),
+  };
+}
+
+/**
+ * `proposal` as the agent that proposed it reads it (AA4-0, coordinator 2026-11-02): each of the
+ * platform segment's `gate_instance` items without `target` and `manifestSource`, marked
+ * `addressWithheld` — people read the addresses (the target workspace's owner and platform
+ * administrators), the agent never does, not even those it typed. Every read on the agent's side
+ * goes through here: `propose_admin_proposal`'s result, `agent_get_admin_proposal` and
+ * `agent_withdraw_admin_proposal` (their `resultSchema`, `AgentAdminProposalWireSchema`, refuses an
+ * item that still carries either under `KERNEL_VALIDATE_RESULTS`).
+ *
+ * The item is built field by field, never spread (#933 review R-1, as `platform-state.ts` builds
+ * every agent projection): production does not validate results, so a field later added to the
+ * `gate_instance` intent — another address among them — reaches the agent only once it is named
+ * here.
+ */
+export function agentProposalOf(proposal: AdminProposalWire): AgentAdminProposalWire {
+  return {
+    ...proposal,
+    segments: proposal.segments.map((segment) => ({
+      ...segment,
+      items: segment.items.map((item) =>
+        item.kind === 'gate_instance' ? withheldGateInstanceOf(item) : item,
+      ),
+    })),
+  };
+}
+
+/** A `gate_instance` item without its addresses: the fields the agent may read, each named. */
+function withheldGateInstanceOf(
+  item: Extract<AdminProposalAnyItemIntentWire, { kind: 'gate_instance' }>,
+): AdminProposalWithheldGateInstanceWire {
+  return {
+    kind: 'gate_instance',
+    gateId: item.gateId,
+    ...(item.displayName !== undefined ? { displayName: item.displayName } : {}),
+    ...(item.preset !== undefined ? { preset: item.preset } : {}),
+    ...(item.transportKind !== undefined ? { transportKind: item.transportKind } : {}),
+    ...(item.credentialMode !== undefined ? { credentialMode: item.credentialMode } : {}),
+    ...(item.connector !== undefined ? { connector: item.connector } : {}),
+    addressWithheld: true,
   };
 }
 

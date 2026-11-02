@@ -10,7 +10,12 @@ import {
   readGatesState,
   readPlatformStateForAdminAgent,
 } from '../admin-agent/index.js';
-import { probePlatformServiceHealth, readRuntimeInventory } from '../platform/runtime.js';
+import {
+  composeRuntimeInventory,
+  fetchRuntimeInventorySources,
+  probePlatformServiceHealth,
+} from '../platform/runtime.js';
+import { readPlatformSettings } from '../platform/settings.js';
 import { readPlatformUpdates } from '../platform/updates.js';
 import type {
   CapabilityHandler,
@@ -23,7 +28,9 @@ import type {
  * what an admin agent reads of the platform (`adminAgentOnly`; application/admin-agent
  * platform-state.ts does the reading and the projection). Each is two-phase: the call's own
  * workspace transaction holds only dispatch's checks and audit row, and the read runs after it
- * commits, in a read-only platform transaction as the agent's administrator.
+ * commits, in a read-only platform transaction as the agent's administrator. What a section asks
+ * another service for (`platform_state_runtime`) is fetched before that transaction opens, so it
+ * holds no connection while the service answers (S11 AA4-0, legacy 592).
  */
 
 /** Dispatch sets `ctx.adminAgent` for an admin agent's call and refuses every other caller of an
@@ -39,26 +46,33 @@ function adminAgentOf(
   return ctx.adminAgent;
 }
 
-function platformStateHandler(
+/** A section's handler: `read` runs in the read-only platform transaction; `fetch`, when given, is
+ *  what it asks other services for, fetched before that transaction opens (never the database). */
+function platformStateHandler<F = undefined>(
   name: string,
   read: (
     client: PoolClient,
     agent: NonNullable<CapabilityHandlerContext['adminAgent']>,
     checkedAt: string,
+    fetched: F,
   ) => Promise<PlatformStateRead<unknown>>,
+  fetch?: () => Promise<F>,
 ): CapabilityHandler {
   return async (_client, workspaceId, _params, ctx): Promise<CapabilityHandlerResult> => {
     const agent = adminAgentOf(name, ctx);
     const principalId = ctx?.principalId ?? '';
     return {
       result: null,
-      afterCommit: (pool) =>
-        readPlatformStateForAdminAgent(
+      afterCommit: (pool) => {
+        const checkedAt = new Date().toISOString();
+        return readPlatformStateForAdminAgent(
           pool,
           { workspaceId, principalId, sessionId: agent.sessionId, userId: agent.userId },
           name,
-          (client) => read(client, agent, new Date().toISOString()),
-        ),
+          (client, fetched: F) => read(client, agent, checkedAt, fetched),
+          fetch,
+        );
+      },
     };
   };
 }
@@ -80,13 +94,20 @@ export const platformStateAuditHandler = platformStateHandler(
 
 export const platformStateRuntimeHandler = platformStateHandler(
   'platform_state_runtime',
-  async (client, _agent, checkedAt) => {
-    // The inventory's one DB read (the active-image setting) and worker-supervisor's two lists,
-    // then the service probes — awaited in turn: `client` runs one query at a time.
-    const inventory = await readRuntimeInventory(client);
-    const services = await probePlatformServiceHealth();
-    const result = projectRuntimeState(inventory, services, checkedAt);
+  async (client, _agent, checkedAt, fetched) => {
+    // In the transaction: the inventory's one DB read, the active-image setting.
+    const { settings } = await readPlatformSettings(client);
+    const inventory = composeRuntimeInventory(settings.activeRuntimeImage, fetched.sources);
+    const result = projectRuntimeState(inventory, fetched.services, checkedAt);
     return { result, returned: result.images.length };
+  },
+  // Before it: worker-supervisor's two lists and the two health probes, over HTTP.
+  async () => {
+    const [sources, services] = await Promise.all([
+      fetchRuntimeInventorySources(),
+      probePlatformServiceHealth(),
+    ]);
+    return { sources, services };
   },
 );
 

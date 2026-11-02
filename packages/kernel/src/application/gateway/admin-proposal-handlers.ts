@@ -8,6 +8,7 @@ import type {
 import { credentialReviewAudit } from '../../governance/redaction/index.js';
 import {
   type AdminProposalScope,
+  agentProposalOf,
   applyAdminProposalSegment,
   checkAdminProposal,
   getAdminProposal,
@@ -176,10 +177,12 @@ export const agentGetAdminProposalHandler: CapabilityHandler = async (
   const agent = adminAgentOf('agent_get_admin_proposal', ctx);
   const { proposalId } = params as { readonly proposalId: string };
   return {
-    result: await getAdminProposal(
-      client,
-      proposalId,
-      agentScope('agent_get_admin_proposal', workspaceId, agent.userId, ctx),
+    result: agentProposalOf(
+      await getAdminProposal(
+        client,
+        proposalId,
+        agentScope('agent_get_admin_proposal', workspaceId, agent.userId, ctx),
+      ),
     ),
     resourceType: 'admin_proposal',
     resourceId: proposalId,
@@ -204,7 +207,11 @@ export const agentWithdrawAdminProposalHandler: CapabilityHandler = async (
     agent.userId,
     reason,
   );
-  return { result: proposal, resourceType: 'admin_proposal', resourceId: proposalId };
+  return {
+    result: agentProposalOf(proposal),
+    resourceType: 'admin_proposal',
+    resourceId: proposalId,
+  };
 };
 
 export const listAdminProposalsHandler: CapabilityHandler = async (

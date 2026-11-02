@@ -282,3 +282,47 @@ export const AdminProposalWireSchema = z
   })
   .strict();
 export type AdminProposalWire = z.infer<typeof AdminProposalWireSchema>;
+
+// ---------------------------------------------------------------------------------------------
+// S11 AA4-0 (coordinator 2026-11-02, on #929): what the agent reads back. A platform segment's
+// `gate_instance` items reach the target workspace's owner and platform administrators as proposed
+// — their `target` and `manifestSource` passed F9's rule when proposed (no user, password, query or
+// fragment) — but never the agent, even the addresses it typed itself: a later session of the same
+// administrator's agent, or a proposal another session made, would otherwise read an address the
+// platform never shows the agent anywhere else (`platform_state_*` lists no address). The agent's
+// reads (`propose_admin_proposal`'s result, `agent_get_admin_proposal`,
+// `agent_withdraw_admin_proposal`) carry each such item without the two, marked `addressWithheld`.
+// ---------------------------------------------------------------------------------------------
+
+/** A platform segment's `gate_instance` item as the agent reads it: everything but its addresses. */
+export const AdminProposalWithheldGateInstanceWireSchema = z
+  .object({
+    kind: z.literal('gate_instance'),
+    gateId: gateInstanceCreateFields.gateId,
+    displayName: gateInstanceCreateFields.displayName,
+    preset: gateInstanceCreateFields.preset,
+    transportKind: gateInstanceCreateFields.transportKind,
+    credentialMode: gateInstanceCreateFields.credentialMode,
+    connector: gateInstanceCreateFields.connector,
+    /** Always `true`: `target` and `manifestSource` are not read back to the agent. */
+    addressWithheld: z.literal(true),
+  })
+  .strict();
+export type AdminProposalWithheldGateInstanceWire = z.infer<
+  typeof AdminProposalWithheldGateInstanceWireSchema
+>;
+
+/** A segment of a proposal as the agent that proposed it reads it. */
+export const AgentAdminProposalSegmentWireSchema = AdminProposalSegmentWireSchema.extend({
+  /** A workspace segment's intents as proposed, or the platform segment's without addresses. */
+  items: z.array(
+    z.union([AdminProposalItemIntentWireSchema, AdminProposalWithheldGateInstanceWireSchema]),
+  ),
+}).strict();
+export type AgentAdminProposalSegmentWire = z.infer<typeof AgentAdminProposalSegmentWireSchema>;
+
+/** A proposal with its segments, as the agent that proposed it reads it. */
+export const AgentAdminProposalWireSchema = AdminProposalWireSchema.extend({
+  segments: z.array(AgentAdminProposalSegmentWireSchema),
+}).strict();
+export type AgentAdminProposalWire = z.infer<typeof AgentAdminProposalWireSchema>;

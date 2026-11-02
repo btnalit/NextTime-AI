@@ -45,8 +45,9 @@ import {
  * state an admin agent reads from outside the database's rows — the runtime layer
  * (`runtime_inventory` and `platform_status`'s service probes), the update record
  * (`platform_updates`) and the kernel's invariant checks (`InvariantMetricsStore`). Pure: the
- * caller (application/gateway/platform-state-handlers.ts) reads the sources inside the read-only
- * platform transaction of {@link readPlatformStateForAdminAgent} and passes them here.
+ * caller (application/gateway/platform-state-handlers.ts) reads the sources — the runtime layer's
+ * over HTTP before the read-only platform transaction of {@link readPlatformStateForAdminAgent}
+ * opens (legacy 592), the rest inside it — and passes them here.
  *
  * The same rules as platform-state.ts: built field by field, never spread; a string passes only in
  * its shape. What each one leaves out is what can name a place or carry a step: image tags (a tag

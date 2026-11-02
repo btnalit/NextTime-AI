@@ -182,6 +182,7 @@ export {
   adminProposalPlatformSegmentDigest,
   adminProposalQuotaResetsAt,
   adminProposalSegmentDigest,
+  agentProposalOf,
   checkAdminProposal,
   getAdminProposal,
   listAdminProposals,

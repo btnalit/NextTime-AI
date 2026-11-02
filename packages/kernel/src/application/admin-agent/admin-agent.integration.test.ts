@@ -1,7 +1,14 @@
 import { randomUUID } from 'node:crypto';
+import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { HandleClaims, PrincipalKind, Role } from '@nexttime/shared';
+import {
+  GatekeeperBase,
+  InMemoryIdempotencyStore,
+  createGatekeeperServer,
+} from '@nexttime/gatekeeper-base';
+import type { Transport, TransportInvokeResult } from '@nexttime/gatekeeper-base';
+import type { HandleClaims, Operation, PrincipalKind, Role } from '@nexttime/shared';
 import { getCapability } from '@nexttime/shared';
 import { decodeJwt, generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
@@ -10,6 +17,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import {
+  HttpGatekeeperClient,
+  deriveConnectionSecret,
+} from '../../adapters/gatekeeper-client/index.js';
+import { createOutboundTargetGuard } from '../../adapters/outbound-target/index.js';
+import { ApprovalDrainer } from '../../governance/approval/index.js';
+import {
   ADMIN_AGENT_SESSION_KIND,
   HANDLE_SIGNING_ALG,
   HandleRevoked,
@@ -17,14 +30,25 @@ import {
   issueHandle,
 } from '../../governance/capability/index.js';
 import {
+  importManifest,
+  publishOperation,
+  registerGatekeeper,
+} from '../../governance/gatekeepers/index.js';
+import { startActivity } from '../../substrate/epistemic/index.js';
+import {
   ChangeApplierNotAPersonError,
   applyWorkspaceSegment,
   rollBackWorkspaceSegment,
 } from '../change-plan/index.js';
+import {
+  createAdminWithTransaction,
+  createGatekeeperActionExecutor,
+} from '../gateway/action-executor.js';
 import { withAdminClient } from '../gateway/auth.js';
 import { ForbiddenError, authorizeCapabilityCall } from '../gateway/authorize.js';
 import { AdminAgentCallRefusedError, dispatchCapability } from '../gateway/dispatch.js';
 import { HandlePresentationRefused, authenticateHandle } from '../gateway/handle-auth.js';
+import { setRequestActionDeps } from '../gateway/request-action-handler.js';
 import type { ResolvedCaller } from '../gateway/resolve-caller.js';
 import { type UserRow, createUser } from '../identity/index.js';
 import { createWorkspaceWithOwner } from '../workspace/index.js';
@@ -70,6 +94,30 @@ const PERSON_DECISIONS = [
   'confirm_goal',
   'approve_step_trial',
 ] as const;
+
+/** Legacy 584: a self-connected fake gate in the trial workspace (the kernel presents the
+ *  connection secret it derives; loopback is allowed past the owner-supplied-URL predicate). */
+const GATE_TOKEN = 'aa4-0-observe-integration-test-token-0123456789abcdef';
+const GATE_SALT = 'e'.repeat(32);
+const OBSERVE_OP: Operation = {
+  name: 'observe.inventory',
+  binding: { kind: 'http', method: 'GET', path: '/inventory' },
+  params_schema: {},
+  mode: 'observe',
+  blast_radius: 'low',
+  reversibility: false,
+  auto_approvable: true,
+  await_decision: false,
+  reads: [],
+  writes: [],
+};
+
+class InventoryTransport implements Transport {
+  readonly kind = 'http' as const;
+  async invoke(): Promise<TransportInvokeResult> {
+    return { data: { hosts: ['h1', 'h2'] } };
+  }
+}
 
 describe.runIf(DATABASE_URL !== undefined)(
   'S11 AA1 admin agent identity and ceiling (integration, real Postgres)',
@@ -686,6 +734,144 @@ describe.runIf(DATABASE_URL !== undefined)(
           ),
           table,
         ).rejects.toThrow(/origin is fixed/);
+      }
+    });
+
+    it('legacy 584: a gate observation through the Handle records the admin agent session on its Activity; the person’s own records none, and neither changes', async () => {
+      const gate = new GatekeeperBase({
+        manifest: [OBSERVE_OP],
+        transport: new InventoryTransport(),
+        credentialResolver: { resolve: async () => ({}) },
+        idempotencyStore: new InMemoryIdempotencyStore(),
+      });
+      const app = createGatekeeperServer({
+        gate,
+        token: deriveConnectionSecret(GATE_TOKEN, workspaceId, GATE_SALT),
+      });
+      await app.listen({ port: 0, host: '127.0.0.1' });
+      try {
+        const { port } = app.server.address() as AddressInfo;
+        const gatekeeperId = await withWorkspace(
+          pool,
+          { workspaceId, principalId: adminPrincipalId },
+          async (client) => {
+            const activity = await startActivity(client, workspaceId, {
+              kind: 'test.connection',
+              principalId: adminPrincipalId,
+            });
+            const registered = await registerGatekeeper(client, workspaceId, {
+              name: `aa4-0-observe-${randomUUID().slice(0, 8)}`,
+              transportKind: 'http',
+              target: 'example-system',
+              endpoint: `http://127.0.0.1:${port}`,
+              connectionSecretSalt: GATE_SALT,
+              activityId: activity.id,
+              registeredBy: { id: adminPrincipalId, kind: 'human' },
+            });
+            await importManifest(client, workspaceId, {
+              gatekeeperId: registered.gatekeeperId,
+              operations: [OBSERVE_OP],
+              proposedBy: { id: adminPrincipalId, kind: 'human' },
+              activityId: activity.id,
+            });
+            await publishOperation(client, workspaceId, {
+              gatekeeperId: registered.gatekeeperId,
+              name: OBSERVE_OP.name,
+            });
+            return registered.gatekeeperId;
+          },
+        );
+        const gatekeeperClient = new HttpGatekeeperClient({
+          token: GATE_TOKEN,
+          outboundTargetGuard: createOutboundTargetGuard({
+            policy: { platformSubnets: [], allowHosts: ['127.0.0.1'] },
+          }),
+        });
+        const adminWithTransaction = createAdminWithTransaction(pool);
+        setRequestActionDeps({
+          gatekeeperClient,
+          drainer: new ApprovalDrainer({
+            executor: createGatekeeperActionExecutor({
+              gatekeeperClient,
+              withTransaction: adminWithTransaction,
+            }),
+            withTransaction: adminWithTransaction,
+          }),
+          awaitDecisionTimeoutMs: 800,
+        });
+
+        const issued = await issue(adminPrincipalId);
+        const params = { gatekeeperId, operation: OBSERVE_OP.name, params: {} };
+        for (const caller of [await agentCaller(issued.token), personCaller()]) {
+          const result = (await dispatchCapability(
+            { pool },
+            caller,
+            'observe_operation',
+            params,
+          )) as {
+            status: string;
+          };
+          expect(result.status).toBe('ok');
+        }
+
+        const activities = await withAdminClient(pool, (client) =>
+          client.query<{ id: string; started_by: string; metadata: Record<string, unknown> }>(
+            `select id, started_by, metadata from activities
+              where workspace_id = $1 and kind = 'gatekeeper_observe' and metadata ->> 'gatekeeperId' = $2
+              order by created_at asc, id asc`,
+            [workspaceId, gatekeeperId],
+          ),
+        );
+        const [viaAgent, viaPerson] = activities.rows;
+        // Both are the administrator's own Principal; only the session tells them apart.
+        expect(activities.rows.map((row) => row.started_by)).toEqual([
+          adminPrincipalId,
+          adminPrincipalId,
+        ]);
+        expect(viaAgent?.metadata).toMatchObject({
+          gatekeeperId,
+          operation: OBSERVE_OP.name,
+          sessionKind: ADMIN_AGENT_SESSION_KIND,
+          sessionId: issued.sessionId,
+        });
+        expect(viaPerson?.metadata).toMatchObject({ gatekeeperId, operation: OBSERVE_OP.name });
+        expect(viaPerson?.metadata).not.toHaveProperty('sessionKind');
+        expect(viaPerson?.metadata).not.toHaveProperty('sessionId');
+
+        // core/0052: the session an Activity records is never removed, changed or added later.
+        const rewrite = (id: string, expression: string) =>
+          withAdminClient(pool, (client) =>
+            client.query(
+              `update activities set metadata = ${expression} where workspace_id = $1 and id = $2`,
+              [workspaceId, id],
+            ),
+          );
+        const agentId = viaAgent?.id as string;
+        const personId = viaPerson?.id as string;
+        const fixed = /the session an Activity records it was started through/;
+        await expect(rewrite(agentId, `metadata - 'sessionKind'`)).rejects.toThrow(fixed);
+        await expect(rewrite(agentId, `metadata - 'sessionId'`)).rejects.toThrow(fixed);
+        await expect(
+          rewrite(agentId, `jsonb_set(metadata, '{sessionId}', to_jsonb(gen_random_uuid()::text))`),
+        ).rejects.toThrow(fixed);
+        await expect(
+          rewrite(personId, `metadata || '{"sessionKind": "admin_agent"}'::jsonb`),
+        ).rejects.toThrow(fixed);
+        // Every other key stays writable, as before.
+        await rewrite(agentId, `metadata || '{"note": "kept"}'::jsonb`);
+        const after = await withAdminClient(pool, (client) =>
+          client.query<{ metadata: Record<string, unknown> }>(
+            'select metadata from activities where workspace_id = $1 and id = $2',
+            [workspaceId, agentId],
+          ),
+        );
+        expect(after.rows[0]?.metadata).toMatchObject({
+          note: 'kept',
+          sessionKind: ADMIN_AGENT_SESSION_KIND,
+          sessionId: issued.sessionId,
+        });
+      } finally {
+        await app.close();
       }
     });
 
