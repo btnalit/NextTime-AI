@@ -497,6 +497,26 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(JSON.stringify(mapCapabilityError(inSource))).toContain(
         'platform.items[0].manifestSource',
       );
+      // A query parameter only the connection rule counts as a credential — not the value
+      // patterns (no user, password or `token=`): refused just the same (review of #921, #493 P3-3).
+      for (const address of [
+        `https://t.example.invalid/api?sig=${FAKE}`,
+        `https://t.example.invalid/api?X-Amz-Signature=${FAKE}`,
+      ]) {
+        const signed = await thrownBy(
+          call(agent, 'propose_admin_proposal', {
+            ...base,
+            platform: { items: [gateItem(gateId, 'tickets', { target: address })] },
+          }),
+        );
+        expect(signed).toBeInstanceOf(AdminProposalCredentialError);
+        expect(mapCapabilityError(signed)).toMatchObject({
+          status: 400,
+          code: 'admin_proposal_credential',
+        });
+        expect(JSON.stringify(mapCapabilityError(signed))).toContain('platform.items[0].target');
+        expect(JSON.stringify(mapCapabilityError(signed))).not.toContain(FAKE);
+      }
     });
 
     // -----------------------------------------------------------------------------------------
@@ -1260,6 +1280,70 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect((await segmentRow(platformSegmentId))?.status).toBe('applied');
     });
 
+    it('governance 0034: each authority holds only its own kinds, every item an object naming one — not a non-string kind, an array holding the name, or an item that is itself an array', async () => {
+      const cases: readonly (readonly [string, string, boolean])[] = [
+        ['platform', '[{"kind":"gate_instance"}]', true],
+        ['platform', '[{"kind":"gate_instance"},{"kind":"gate_instance"}]', true],
+        ['platform', '[{"kind":"skill_version"}]', false],
+        ['platform', '[{"kind":"gate_instance"},{"kind":"x"}]', false],
+        ['platform', '[{"kind":1}]', false],
+        ['platform', '[{"kind":["gate_instance"]}]', false],
+        ['platform', '["gate_instance"]', false],
+        ['platform', '[{}]', false],
+        // An item that is itself an array: lax mode would unwrap it and count the object inside.
+        ['platform', '[[{"kind":"gate_instance"}]]', false],
+        ['platform', '[[{"kind":"gate_instance"},{"kind":"x"}]]', false],
+        [
+          'platform',
+          JSON.stringify(Array.from({ length: 11 }, () => ({ kind: 'gate_instance' }))),
+          false,
+        ],
+        ['workspace', '[{"kind":"skill_version"},{"kind":"operation_version"}]', true],
+        ['workspace', '[{"kind":"worker_definition_version"},{"kind":"ontology_version"}]', true],
+        ['workspace', '[{"kind":"gate_instance"}]', false],
+        ['workspace', '[{"kind":1}]', false],
+        ['workspace', '[{"kind":["skill_version"]}]', false],
+        ['workspace', '[[{"kind":"skill_version"}]]', false],
+        ['workspace', '[[{"kind":"skill_version"},{"kind":"x"}]]', false],
+      ];
+      // The constraint as migrated, on a scratch table without the segment guards in front of it
+      // (they refuse any row not written by the transaction that makes its proposal).
+      const verdicts = await withAdminClient(pool, async (client) => {
+        const found = await client.query<{ def: string }>(
+          `select pg_get_constraintdef(oid) as def from pg_constraint
+            where conname = 'admin_proposal_segments_item_kinds'`,
+        );
+        const definition = found.rows[0]?.def;
+        if (!definition) throw new Error('no admin_proposal_segments_item_kinds constraint');
+        await client.query(
+          'create temp table item_kinds_probe (authority text not null, items jsonb not null) on commit drop',
+        );
+        await client.query(
+          `alter table item_kinds_probe add constraint item_kinds_probe ${definition}`,
+        );
+        const taken: boolean[] = [];
+        for (const [authority, items] of cases) {
+          await client.query('savepoint probe');
+          taken.push(
+            await client
+              .query('insert into item_kinds_probe values ($1, $2::jsonb)', [authority, items])
+              .then(
+                () => true,
+                (err: unknown) => {
+                  if (!/item_kinds_probe/.test(String((err as Error).message))) throw err;
+                  return false;
+                },
+              ),
+          );
+          await client.query('rollback to savepoint probe');
+        }
+        return taken;
+      });
+      expect(cases.map(([authority, items], index) => [authority, items, verdicts[index]])).toEqual(
+        cases,
+      );
+    });
+
     it('F-c8: an existing instance with a target over 500 still reads and disables; only creating one is refused', async () => {
       const { user } = await administrator();
       const gateId = `aa3c1-long-${unique()}`;
@@ -1414,6 +1498,57 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       expect(JSON.stringify(forgot)).not.toContain(JWT);
       expect(await actionsHolding(mark)).toEqual([]);
+    });
+
+    it('coordinator (AA3c-1 audit copy): the workspace branch cuts a gate address and a credential a handler put in its audit additions, as the platform branch does', async () => {
+      const target = await newTarget();
+      const mark = `${FAKE}${unique()}`;
+      const JWT =
+        'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU';
+      const handlers = CAPABILITY_HANDLERS as Map<string, CapabilityHandler>;
+      const real = handlers.get('get_workspace');
+      if (!real) throw new Error('no get_workspace handler');
+      // A handler that puts an address as typed, and a credential, in its own audit additions.
+      const careless: CapabilityHandler = async (client, workspaceId, params, ctx) => ({
+        ...(await real(client, workspaceId, params, ctx)),
+        auditPayload: {
+          definition: {
+            target: `https://ops:${mark}@t.example.invalid/api?sig=${mark}`,
+            endpoint: `https://t.example.invalid/hook?X-Amz-Signature=${mark}`,
+            manifestSource: 'https://t.example.invalid/openapi.json',
+          },
+          note: `Authorization: Bearer ${JWT}`,
+          channel: 'platform',
+        },
+      });
+      handlers.set('get_workspace', careless);
+      try {
+        await call(ownerCaller(target), 'get_workspace', {});
+      } finally {
+        handlers.set('get_workspace', real);
+      }
+      const rows = await withAdminClient(pool, (client) =>
+        client.query<{ payload: Record<string, unknown> }>(
+          `select payload from audit_records where workspace_id = $1 and action = 'get_workspace'
+            order by created_at desc, id desc`,
+          [target.workspaceId],
+        ),
+      );
+      expect(rows.rows).toHaveLength(1);
+      const row = rows.rows[0]?.payload ?? {};
+      expect(row).toMatchObject({
+        // The fixed fields still win over a handler's additions.
+        channel: 'human',
+        definition: {
+          target: 'https://t.example.invalid/api',
+          endpoint: 'https://t.example.invalid/hook',
+          // An address without a credential is kept as typed.
+          manifestSource: 'https://t.example.invalid/openapi.json',
+        },
+        note: 'Authorization: [redacted]',
+      });
+      expect(JSON.stringify(row)).not.toContain(mark);
+      expect(JSON.stringify(row)).not.toContain(JWT);
     });
   },
 );

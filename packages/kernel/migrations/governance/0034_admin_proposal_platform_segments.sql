@@ -108,17 +108,20 @@ create unique index if not exists admin_proposal_segments_one_platform
 -- item is an object whose `kind` is a string naming one of them. (A negative filter would let an
 -- item through whose `kind` is not a string — lax mode makes that comparison unknown, and the
 -- filter selects nothing — or an array holding the name, which lax mode unwraps; review of #921.)
+-- `strict`, so an item that is itself an array is one item, not unwrapped into the objects it holds
+-- (lax `$[*] ? (…)` counts `[[{"kind":"gate_instance"},{"kind":"x"}]]` as one passing item); an item
+-- without a `kind` makes the filter an error, which counts as unknown, so it is not counted either.
 alter table admin_proposal_segments drop constraint if exists admin_proposal_segments_item_kinds;
 alter table admin_proposal_segments add constraint admin_proposal_segments_item_kinds check (
   case authority
     when 'platform' then
       jsonb_array_length(items) <= 10
       and jsonb_array_length(jsonb_path_query_array(items,
-        '$[*] ? (@.kind.type() == "string" && @.kind == "gate_instance")'))
+        'strict $[*] ? (@.kind.type() == "string" && @.kind == "gate_instance")'))
         = jsonb_array_length(items)
     else
       jsonb_array_length(jsonb_path_query_array(items,
-        '$[*] ? (@.kind.type() == "string" && (@.kind == "skill_version" || @.kind == "worker_definition_version" || @.kind == "ontology_version" || @.kind == "operation_version"))'))
+        'strict $[*] ? (@.kind.type() == "string" && (@.kind == "skill_version" || @.kind == "worker_definition_version" || @.kind == "ontology_version" || @.kind == "operation_version"))'))
         = jsonb_array_length(items)
   end
 );
