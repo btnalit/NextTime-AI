@@ -1,11 +1,12 @@
 import type {
+  GateInstanceWire,
   PlatformChangeRollbackPreviewWire,
   PlatformChangeRollbackResultWire,
   PlatformChangeSegmentStatus,
   PlatformChangeSegmentWire,
 } from '@nexttime/shared';
 import { PLATFORM_CHANGE_SEGMENT_STATUS_VALUES } from '@nexttime/shared';
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   invalidateCapability,
   useCapability,
@@ -519,6 +520,55 @@ function rollbackRefusalText(code: string, t: Translate): string | null {
   }
 }
 
+/**
+ * #936 UX 必须修-1: disabling Operations is the connector's (`set_connector_mode`'s
+ * `disabledOperations`), and an instance an admin proposal created from a preset joins a connector
+ * other instances may share — so the rollback dialog says what that cut-off costs, from how many
+ * instances the connector holds now (`list_gate_instances {connector}`), before anyone does it in
+ * the heat of a rollback. Read while the dialog is open only; while it loads or when it fails, the
+ * sentence says "every instance" without a number.
+ */
+function ConnectorCutOff({
+  http,
+  connector,
+  gateName,
+  testId,
+}: {
+  readonly http: CapabilityCaller;
+  readonly connector: string;
+  readonly gateName: string;
+  readonly testId: string;
+}) {
+  const t = useT();
+  const params = useMemo(() => ({ connector }), [connector]);
+  const instances = useCapabilityList<GateInstanceWire>(http, 'list_gate_instances', params);
+  const count = instances.state.status === 'ready' ? instances.state.data.items.length : null;
+  const text =
+    count === null
+      ? t(
+          `也可以在「集成 → 接入包」停用 ${connector} 的 Operation，但那会切断这个接入包下所有门宿主实例的调用，不只 ${gateName}。`,
+          `Disabling ${connector}’s Operations under Integrations → Connectors also works, but it cuts off every gate-host instance of that connector, not just ${gateName}.`,
+        )
+      : count > 1
+        ? t(
+            `也可以在「集成 → 接入包」停用 ${connector} 的 Operation，但那会切断这个接入包下全部 ${count} 个门宿主实例的调用，不只 ${gateName}。`,
+            `Disabling ${connector}’s Operations under Integrations → Connectors also works, but it cuts off all ${count} gate-host instances of that connector, not just ${gateName}.`,
+          )
+        : t(
+            `也可以在「集成 → 接入包」停用 ${connector} 的 Operation：这个接入包下现在只有 ${gateName} 这一个门宿主实例，之后加进来的实例也会被拒绝这些 Operation。`,
+            `Disabling ${connector}’s Operations under Integrations → Connectors also works: ${gateName} is the only gate-host instance of that connector now, and any instance added later is refused those Operations too.`,
+          );
+  return (
+    <span
+      className="text-3 text-small"
+      data-testid={testId}
+      data-instance-count={count === null ? undefined : String(count)}
+    >
+      {text}
+    </span>
+  );
+}
+
 function RollBack({
   http,
   record,
@@ -567,8 +617,8 @@ function RollBack({
     ...(drifted.length > 0
       ? [
           t(
-            `${drifted.map((item) => `${nameOf(item.gateId)}（${driftFieldsText(item.drift, t)}）`).join('、')}在应用之后改过：先在「集成 → 门实例」改回应用时的样子，或者手动处理`,
-            `${drifted.map((item) => `${nameOf(item.gateId)} (${driftFieldsText(item.drift, t)})`).join(', ')} changed since it was applied: put it back as it was under Integrations → Gate instances first, or deal with it by hand`,
+            `${drifted.map((item) => `${nameOf(item.gateId)}（${driftFieldsText(item.drift, t)}）`).join('、')}在应用之后变了（被删掉重建过，或门宿主报上来的不一样了），已经不是这条记录建的样子，这条记录撤销不了。要停用它，到它的门实例页去停用`,
+            `${drifted.map((item) => `${nameOf(item.gateId)} (${driftFieldsText(item.drift, t)})`).join(', ')} changed since it was applied (deleted and created again, or its gate host announced it differently), so it is no longer what this record created and this record cannot be rolled back. To disable it, do so on its gate instance page`,
           ),
         ]
       : []),
@@ -633,8 +683,8 @@ function RollBack({
             <div className="stack-s" data-testid="platform-change-record-enabled-in">
               <span className="text-small">
                 {t(
-                  '下面这些工作区已经启用了它们：停用后不能再新启用，但已启用的会继续调用。要切断调用，到「集成 → 接入包」停用这个接入包的 Operation。',
-                  'The workspaces below have enabled them: once disabled no workspace can newly enable them, but those that did keep calling them. To cut those calls off, disable the connector’s Operations under Integrations → Connectors.',
+                  '下面这些工作区已经启用了它们：撤销后不能再新启用，但已启用的会继续调用。要切断某个工作区的调用，请那个工作区的所有者在「能力目录 → Operation」里停用这个门的 Operation，只影响他们自己的工作区。',
+                  'The workspaces below have enabled them: once rolled back no workspace can newly enable them, but those that did keep calling them. To cut one workspace off, ask its owner to disable this gate’s Operations under Catalog → Operations, which affects their workspace only.',
                 )}
               </span>
               {used.map((item) => {
@@ -666,17 +716,20 @@ function RollBack({
                         {t(`还有 ${more} 个没有列出`, `${more} more not listed`)}
                       </span>
                     ) : null}
+                    {connector !== undefined ? (
+                      <ConnectorCutOff
+                        http={http}
+                        connector={connector}
+                        gateName={nameOf(item.gateId)}
+                        testId={`platform-change-record-connector-cutoff-${item.ordinal}`}
+                      />
+                    ) : null}
                     <span className="row-wrap text-small">
-                      <RouteLink href={hrefs.platformIntegrationsTab('connectors')}>
-                        {connector !== undefined
-                          ? t(
-                              `去「集成 → 接入包」把 ${connector} 的 Operation 停用`,
-                              `Disable ${connector}’s Operations under Integrations → Connectors`,
-                            )
-                          : t('去「集成 → 接入包」', 'Open Integrations → Connectors')}
-                      </RouteLink>
                       <RouteLink href={hrefs.platformGateInstance(item.gateId)}>
                         {t('去门实例页', 'Open the gate instance')}
+                      </RouteLink>
+                      <RouteLink href={hrefs.platformIntegrationsTab('connectors')}>
+                        {t('去「集成 → 接入包」', 'Open Integrations → Connectors')}
                       </RouteLink>
                     </span>
                   </div>

@@ -14,7 +14,7 @@ import {
 } from '../../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../../lib/clients.js';
 import { describeError } from '../../../lib/errors.js';
-import { formatDateTime, shortId } from '../../../lib/format.js';
+import { formatDateTime } from '../../../lib/format.js';
 import { type Translate, useT } from '../../../lib/i18n.js';
 import { hrefs } from '../../../lib/router.js';
 import { Button } from '../../kit/button.js';
@@ -370,7 +370,7 @@ function PlatformPartRecord({
           <span className="stack-s">
             <span>
               {t(
-                '平台部分已应用。新建的门宿主实例现在是「已发现」，工作区还用不了；每个实例还要做：',
+                '平台部分已应用。新建的门宿主实例现在是「未启用」，工作区还用不了；每个实例还要做：',
                 'The platform part is applied. The new gate-host instances are discovered and no workspace can use them yet; for each, what is left to do:',
               )}
             </span>
