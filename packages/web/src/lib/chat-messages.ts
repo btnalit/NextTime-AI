@@ -1,3 +1,4 @@
+import type { ChatAgentKind } from '@nexttime/shared';
 import type { Translate } from './i18n.js';
 import type { ChatMessage } from './ws-client.js';
 
@@ -24,12 +25,19 @@ export function insertChatMessage(
  *  though `ChatPage` only ever renders a `user`/`assistant` row through this today (`tool`/
  *  `system` rows resolve to an inline card or status line first) — a future bare row of either
  *  kind reads as a name, not a wire value, without this helper needing a second call site. */
-export function messageRoleLabel(role: string, t: Translate): string {
+export function messageRoleLabel(
+  role: string,
+  t: Translate,
+  agentKind: ChatAgentKind = 'entry',
+): string {
   switch (role) {
     case 'user':
       return t('你', 'You');
     case 'assistant':
-      return t('入口 agent', 'Entry agent');
+      // S11 AA4c-3 (UX P2-1 on #943): an admin chat's replies come from the admin agent.
+      return agentKind === 'admin_agent'
+        ? t('管理员智能体', 'Admin agent')
+        : t('入口 agent', 'Entry agent');
     case 'tool':
       return t('工具', 'Tool');
     case 'system':

@@ -151,14 +151,24 @@ export function PlatformWorkspacesPage({
   // The banner link can also land while this page is already mounted (same route kind — no
   // remount), so the preset is applied on `hashchange` too; the plain route never resets it.
   useEffect(() => {
+    // UX P3-6 on #943: `?create=` is dropped once read (as `useGateInstancesPanel` drops its
+    // preset), so closing 新建工作区 and reloading does not open it again.
+    function dropCreatePreset(): void {
+      const hash = window.location.hash;
+      if (readCreateWorkspacePreset(hash) !== null) {
+        window.history.replaceState(null, '', withoutQueryParam(hash, 'create'));
+      }
+    }
     function onHashChange(): void {
       if (readResiduePreset(window.location.hash)) setFilters(RESIDUE_FILTERS);
       const purpose = readCreateWorkspacePreset(window.location.hash);
       if (purpose !== null) {
         setCreatePurpose(purpose);
         setPanel({ kind: 'create' });
+        dropCreatePreset();
       }
     }
+    dropCreatePreset();
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
@@ -561,4 +571,14 @@ function workspaceColumns(
       ),
     },
   ];
+}
+
+/** `hash` without one query parameter (the rest kept as they were). */
+function withoutQueryParam(hash: string, name: string): string {
+  const query = hash.indexOf('?');
+  if (query === -1) return hash;
+  const params = new URLSearchParams(hash.slice(query + 1));
+  params.delete(name);
+  const rest = params.toString();
+  return rest === '' ? hash.slice(0, query) : `${hash.slice(0, query)}?${rest}`;
 }
