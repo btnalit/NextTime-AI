@@ -2067,6 +2067,23 @@
           ],
           "type": "string"
         },
+        "platformSegmentStatus": {
+          "anyOf": [
+            {
+              "enum": [
+                "proposed",
+                "applied",
+                "rejected",
+                "withdrawn",
+                "rolled_back"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "proposedAt": {
           "type": "string"
         },
@@ -2573,6 +2590,7 @@
         "proposedAt",
         "status",
         "segmentCounts",
+        "platformSegmentStatus",
         "description",
         "contentDigest",
         "segments"
@@ -2611,6 +2629,23 @@
                   "platform"
                 ],
                 "type": "string"
+              },
+              "platformSegmentStatus": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "proposed",
+                      "applied",
+                      "rejected",
+                      "withdrawn",
+                      "rolled_back"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "proposedAt": {
                 "type": "string"
@@ -2688,7 +2723,8 @@
               "proposedBy",
               "proposedAt",
               "status",
-              "segmentCounts"
+              "segmentCounts",
+              "platformSegmentStatus"
             ],
             "type": "object"
           },
@@ -2785,6 +2821,23 @@
           ],
           "type": "string"
         },
+        "platformSegmentStatus": {
+          "anyOf": [
+            {
+              "enum": [
+                "proposed",
+                "applied",
+                "rejected",
+                "withdrawn",
+                "rolled_back"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "proposedAt": {
           "type": "string"
         },
@@ -3291,6 +3344,7 @@
         "proposedAt",
         "status",
         "segmentCounts",
+        "platformSegmentStatus",
         "description",
         "contentDigest",
         "segments"
@@ -15305,6 +15359,23 @@
           ],
           "type": "string"
         },
+        "platformSegmentStatus": {
+          "anyOf": [
+            {
+              "enum": [
+                "proposed",
+                "applied",
+                "rejected",
+                "withdrawn",
+                "rolled_back"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "proposedAt": {
           "type": "string"
         },
@@ -15828,6 +15899,7 @@
         "proposedAt",
         "status",
         "segmentCounts",
+        "platformSegmentStatus",
         "description",
         "contentDigest",
         "segments"
@@ -34576,6 +34648,16 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "platformSegmentStatus": {
+          "enum": [
+            "proposed",
+            "applied",
+            "rejected",
+            "withdrawn",
+            "rolled_back"
+          ],
+          "type": "string"
+        },
         "status": {
           "enum": [
             "proposed",
@@ -34606,6 +34688,23 @@
                   "platform"
                 ],
                 "type": "string"
+              },
+              "platformSegmentStatus": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "proposed",
+                      "applied",
+                      "rejected",
+                      "withdrawn",
+                      "rolled_back"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "proposedAt": {
                 "type": "string"
@@ -34683,7 +34782,8 @@
               "proposedBy",
               "proposedAt",
               "status",
-              "segmentCounts"
+              "segmentCounts",
+              "platformSegmentStatus"
             ],
             "type": "object"
           },
@@ -54111,6 +54211,23 @@
           ],
           "type": "string"
         },
+        "platformSegmentStatus": {
+          "anyOf": [
+            {
+              "enum": [
+                "proposed",
+                "applied",
+                "rejected",
+                "withdrawn",
+                "rolled_back"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "proposedAt": {
           "type": "string"
         },
@@ -54617,6 +54734,7 @@
         "proposedAt",
         "status",
         "segmentCounts",
+        "platformSegmentStatus",
         "description",
         "contentDigest",
         "segments"
@@ -60248,6 +60366,23 @@
           ],
           "type": "string"
         },
+        "platformSegmentStatus": {
+          "anyOf": [
+            {
+              "enum": [
+                "proposed",
+                "applied",
+                "rejected",
+                "withdrawn",
+                "rolled_back"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "proposedAt": {
           "type": "string"
         },
@@ -60771,6 +60906,7 @@
         "proposedAt",
         "status",
         "segmentCounts",
+        "platformSegmentStatus",
         "description",
         "contentDigest",
         "segments"
@@ -75392,6 +75528,23 @@
           ],
           "type": "string"
         },
+        "platformSegmentStatus": {
+          "anyOf": [
+            {
+              "enum": [
+                "proposed",
+                "applied",
+                "rejected",
+                "withdrawn",
+                "rolled_back"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "proposedAt": {
           "type": "string"
         },
@@ -75915,6 +76068,7 @@
         "proposedAt",
         "status",
         "segmentCounts",
+        "platformSegmentStatus",
         "description",
         "contentDigest",
         "segments"
