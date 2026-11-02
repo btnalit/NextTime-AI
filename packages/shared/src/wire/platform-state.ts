@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { BlastRadiusSchema, OperationModeSchema } from '../enums.js';
 import {
   MigrationRefSchema,
   PiSdkSuiteResultSchema,
@@ -149,9 +150,51 @@ export const PlatformStateConnectorWireSchema = z
   .strict();
 export type PlatformStateConnectorWire = z.infer<typeof PlatformStateConnectorWireSchema>;
 
+/** At most this many of a preset's Operations are listed (`operationCount` is all). */
+export const PLATFORM_STATE_PRESET_OPERATIONS_LIMIT = 100;
+
+/** One Operation a preset's instances announce: its name (in
+ *  `PLATFORM_STATE_OPERATION_NAME_PATTERN`'s shape; one that does not fit is only counted) and how
+ *  it is classified. Never its description, binding or params. */
+export const PlatformStatePresetOperationWireSchema = z
+  .object({
+    name: z.string().regex(PLATFORM_STATE_OPERATION_NAME_PATTERN),
+    mode: OperationModeSchema,
+    blastRadius: BlastRadiusSchema,
+  })
+  .strict();
+export type PlatformStatePresetOperationWire = z.infer<
+  typeof PlatformStatePresetOperationWireSchema
+>;
+
+/**
+ * S11 AA3c (aa3c-plan F-c6): a connector preset this deployment ships (`list_connector_presets`) —
+ * what an admin proposal's `gate_instance` names in `preset`. Field by field: its name (the
+ * connector its instances join), transport, the kind of credential an instance takes (never one),
+ * the Operations an instance announces, whether a packaged gate holds its connector (a preset
+ * instance is refused beside it) and how many instances its connector holds. Not its display name,
+ * summary or hints: free text, and the address hint carries an example address.
+ */
+export const PlatformStatePresetWireSchema = z
+  .object({
+    name: z.string().regex(CONNECTOR_NAME_PATTERN),
+    transportKind: z.enum(['http', 'mcp']),
+    credentialMode: z.enum(['shared', 'connected_account']),
+    operations: z
+      .array(PlatformStatePresetOperationWireSchema)
+      .max(PLATFORM_STATE_PRESET_OPERATIONS_LIMIT),
+    operationCount: CountSchema,
+    packagedConnector: z.boolean(),
+    instanceCount: CountSchema,
+  })
+  .strict();
+export type PlatformStatePresetWire = z.infer<typeof PlatformStatePresetWireSchema>;
+
 export const PlatformStateConnectorsWireSchema = z
   .object({
     connectors: z.array(PlatformStateConnectorWireSchema),
+    /** S11 AA3c: the connector presets, by name. */
+    presets: z.array(PlatformStatePresetWireSchema),
     checkedAt: IsoTimestampSchema,
   })
   .strict();

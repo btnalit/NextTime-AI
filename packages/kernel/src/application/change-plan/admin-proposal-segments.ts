@@ -3,6 +3,7 @@ import {
   type AdminProposalItemBlocker,
   type AdminProposalItemBlockerWire,
   type AdminProposalItemIntentWire,
+  type AdminProposalPlatformItemIntentWire,
   type AdminProposalPreviewItemWire,
   type AdminProposalSegmentPreviewWire,
   type AdminProposalSegmentStatus,
@@ -79,6 +80,14 @@ import { lockOperationItem, operationRevisionProblem } from './operation-item.js
  * writes need the owner's confirmation (#526, `admin_proposal_segment`). The segment then moves to
  * `applied`, naming the owner and the change segment that recorded it. Rolling that change segment
  * back moves it to `rolled_back` in the same transaction (`rollback.ts`).
+ *
+ * **The platform segment (S11 AA3c).** A proposal may also hold a platform segment — new gate
+ * instances a platform administrator applies on the platform plane (`platform-segments.ts`) — and
+ * every workspace segment of it depends on that one. This workspace reads it with its own segment
+ * (`platformSegment`, through governance 0034's definer function); while it is not applied, the
+ * preview still shows what applying would do but gives no digest, and applying is refused (409
+ * `platform_segment_not_applied`). Rejecting or rolling it back withdraws this segment while it is
+ * still proposed (`withdrawnOrigin: 'platform_segment'`).
  */
 
 // -------------------------------------------------------------------------------------------
@@ -135,6 +144,22 @@ export class AdminProposalSegmentUnchangedError extends Error {
   }
 }
 
+/** S11 AA3c: the proposal's platform segment — the gate instances this segment's items need, which
+ *  a platform administrator applies — is not applied (still proposed, or rejected, withdrawn or
+ *  rolled back). Mapped to 409 `platform_segment_not_applied` with `details.platformSegmentStatus`;
+ *  nothing was applied. */
+export class PlatformSegmentNotAppliedError extends Error {
+  readonly code = 'platform_segment_not_applied' as const;
+  readonly details: { readonly platformSegmentStatus: AdminProposalSegmentStatus };
+  constructor(segmentId: string, platformStatus: AdminProposalSegmentStatus) {
+    super(
+      `admin proposal segment ${segmentId} depends on its proposal's platform segment, which is ${platformStatus} — it is applied here only once a platform administrator has applied that one. Nothing was applied.`,
+    );
+    this.name = 'PlatformSegmentNotAppliedError';
+    this.details = { platformSegmentStatus: platformStatus };
+  }
+}
+
 // -------------------------------------------------------------------------------------------
 // Reads (the target workspace)
 // -------------------------------------------------------------------------------------------
@@ -150,10 +175,13 @@ interface ReceivedSegmentRow {
   decided_by: string | null;
   decided_kind: PrincipalKind | null;
   decided_name: string | null;
-  withdrawn_origin: 'human' | 'agent' | null;
+  withdrawn_origin: 'human' | 'agent' | 'platform_segment' | null;
   reason: string | null;
   applied_segment_id: string | null;
   rolled_back_at: Date | null;
+  platform_id: string | null;
+  platform_status: AdminProposalSegmentStatus | null;
+  platform_items: AdminProposalPlatformItemIntentWire[] | null;
   title: string;
   description: string;
   source_name: string;
@@ -167,11 +195,15 @@ const RECEIVED_SELECT = `
   select s.id, s.proposal_id, s.ordinal, s.items, s.content_digest, s.status, s.decided_at,
          s.decided_by, d.kind as decided_kind, d.display_name as decided_name,
          s.withdrawn_origin, s.reason, s.applied_segment_id, s.rolled_back_at,
+         ps.id as platform_id, ps.status as platform_status, ps.items as platform_items,
          p.title, p.description, p.source_name, p.origin, p.proposed_by_user,
          p.proposer_display_name, p.created_at as proposed_at
     from admin_proposal_segments s
     join admin_proposals p on p.workspace_id = s.workspace_id and p.id = s.proposal_id
-    left join principals d on d.workspace_id = s.target_workspace_id and d.id = s.decided_by`;
+    left join principals d on d.workspace_id = s.target_workspace_id and d.id = s.decided_by
+    -- S11 AA3c: the proposal's platform segment, which this workspace reads only through the
+    -- definer function (governance 0034: it answers for a proposal addressed to this workspace).
+    left join lateral admin_proposal_platform_segment(s.proposal_id) ps on true`;
 
 /** The segment as this workspace reads it. Free text another person wrote — the proposal's title
  *  and description, a reason — reads as every read shows it (`shownFreeText`, legacy 420); the
@@ -202,6 +234,10 @@ function receivedSegmentOf(row: ReceivedSegmentRow): ReceivedAdminProposalSegmen
     reason: shownFreeText(row.reason),
     appliedSegmentId: row.applied_segment_id,
     rolledBackAt: row.rolled_back_at?.toISOString() ?? null,
+    platformSegment:
+      row.platform_id === null || row.platform_status === null
+        ? null
+        : { id: row.platform_id, status: row.platform_status, items: row.platform_items ?? [] },
   };
 }
 
@@ -267,6 +303,12 @@ export async function getAdminProposalSegment(
 
 function assertOpen(row: ReceivedSegmentRow): void {
   if (row.status !== 'proposed') throw new AdminProposalSegmentNotOpenError(row.id, row.status);
+}
+
+/** S11 AA3c: whether the proposal's platform segment — which every workspace segment of it
+ *  depends on — leaves this one appliable: none, or applied. */
+function platformSegmentApplied(row: ReceivedSegmentRow): boolean {
+  return row.platform_id === null || row.platform_status === 'applied';
 }
 
 // -------------------------------------------------------------------------------------------
@@ -632,7 +674,9 @@ export async function previewAdminProposalSegment(
   return {
     segment: receivedSegmentOf(row),
     blockers: [],
-    digest: plan.digest,
+    // AA3c: the dry run shows what applying would do, but there is nothing to review for applying
+    // until the platform segment it depends on is applied.
+    digest: platformSegmentApplied(row) ? plan.digest : null,
     unchanged: plan.unchanged,
     items,
     ...credentials,
@@ -677,6 +721,9 @@ export async function applyAdminProposalSegment(
 ): Promise<AppliedAdminProposalSegment> {
   const row = await loadReceivedSegment(client, workspaceId, input.segmentId, { forUpdate: true });
   assertOpen(row);
+  if (!platformSegmentApplied(row)) {
+    throw new PlatformSegmentNotAppliedError(row.id, row.platform_status ?? 'proposed');
+  }
   const { resolved, blockers } = await resolveIntents(
     client,
     workspaceId,

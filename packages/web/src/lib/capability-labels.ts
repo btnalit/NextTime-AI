@@ -1625,6 +1625,62 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     enHint:
       "Rejects an admin proposal sent here, with your reason; only this workspace and the platform's administrators see the reason — the agent that proposed it learns only that it was rejected.",
   },
+  // S11 AA3c-1: an admin proposal's platform part, decided by a platform administrator, and the
+  // platform change record its apply leaves.
+  preview_platform_segment: {
+    zh: '预览提案的平台部分',
+    en: "Preview a proposal's platform part",
+    zhHint:
+      '试算管理员提案的平台部分：会新建哪些门宿主实例、用哪个接入包、是否新建接入包、之后还要做什么；不写入任何东西。',
+    enHint:
+      "Dry-runs an admin proposal's platform part: the gate-host instances it would create, the connector each joins, whether that connector is new, and what is left to do afterwards. Writes nothing.",
+  },
+  apply_platform_segment: {
+    zh: '应用提案的平台部分',
+    en: "Apply a proposal's platform part",
+    zhHint:
+      '按试算结果新建门宿主实例（待发现，尚未启用），记成一条平台变更记录，可从那里撤销；之后提案的各工作区部分才能由所有者应用。',
+    enHint:
+      "Creates the gate-host instances as dry-run (discovered, not enabled yet) and records them as one platform change record, which can be rolled back from there; only then can each workspace's owner apply their part.",
+  },
+  reject_platform_segment: {
+    zh: '拒绝提案的平台部分',
+    en: "Reject a proposal's platform part",
+    zhHint: '拒绝管理员提案的平台部分并写明理由；提案里还没决定的工作区部分随之撤回。',
+    enHint:
+      "Rejects an admin proposal's platform part, with a reason; the proposal's workspace parts not yet decided are withdrawn with it.",
+  },
+  list_platform_change_segments: {
+    zh: '查看平台变更记录',
+    en: 'List platform change records',
+    zhHint:
+      '列出应用管理员提案平台部分留下的记录，最新的在前：来自哪份提案、谁的智能体提出、谁应用、谁撤销。',
+    enHint:
+      "Lists the records applying admin proposals' platform parts left, newest first: the proposal each came from, whose agent proposed it, who applied it and who rolled it back.",
+  },
+  get_platform_change_segment: {
+    zh: '查看平台变更记录详情',
+    en: 'Read a platform change record',
+    zhHint: '查看一条平台变更记录：新建了哪些门宿主实例、当时的定义，以及每项由谁确认。',
+    enHint:
+      'Shows one platform change record: the gate-host instances it created, their definitions as created, and who confirmed each.',
+  },
+  preview_roll_back_platform_change_segment: {
+    zh: '预览撤销平台变更',
+    en: 'Preview rolling back a platform change',
+    zhHint:
+      '看撤销会停用哪些实例、哪些已停用或已不在、哪些之后被改过（改过就撤销不了），以及还有哪些工作区部分要先在各自工作区撤销；不写入任何东西。',
+    enHint:
+      'Shows which instances rolling back would disable, which are disabled or gone already, which changed since (then it cannot roll back), and which workspace parts must be rolled back in their workspaces first. Writes nothing.',
+  },
+  roll_back_platform_change_segment: {
+    zh: '撤销平台变更',
+    en: 'Roll back a platform change',
+    zhHint:
+      '停用这条记录新建的门宿主实例（不删除，门标识保留历史；接入包保留），提案里还没决定的工作区部分随之撤回。已启用它的工作区仍能调用，要切断调用请在接入包里停用对应操作。',
+    enHint:
+      "Disables the gate-host instances this record created (never deletes them, so each gate id keeps its history; the connector stays), and withdraws the proposal's workspace parts not yet decided. Workspaces that enabled an instance keep calling it; to cut those calls off, disable the Operations in its connector.",
+  },
   platform_status: {
     zh: '查看服务状态',
     en: 'Service status',
@@ -2385,6 +2441,20 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '平台暂停或恢复一个自己接入的门后，该工作区的入口凭证被吊销，下一轮重新签发。',
     enHint:
       "Suspending or resuming a self-connected gate revoked that workspace's entry Handles; new ones come next turn.",
+  },
+  'gate_instance.created': {
+    zh: '门实例已新建',
+    en: 'Gate instance created',
+    zhHint: '应用管理员提案的平台部分时新建了一个门宿主实例（待发现，尚未启用）。',
+    enHint:
+      "Applying an admin proposal's platform part created a gate-host instance (discovered, not enabled yet).",
+  },
+  'gate_instance.disabled': {
+    zh: '门实例已停用',
+    en: 'Gate instance disabled',
+    zhHint: '撤销平台变更时停用了它新建的一个门宿主实例；已启用它的工作区仍能调用。',
+    enHint:
+      'Rolling back a platform change disabled a gate-host instance it created; workspaces that enabled it keep calling it.',
   },
   'gate_instance.manifest_confirmed': {
     zh: '门清单已确认',

@@ -16,6 +16,8 @@ export {
   type PlatformStateRead,
   projectConnector,
   projectConnectors,
+  projectPreset,
+  type PresetOccupancy,
   projectGateInstance,
   projectGateInstances,
   readAuditState,

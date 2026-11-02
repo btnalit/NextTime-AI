@@ -7,6 +7,7 @@ import {
   ConnectionRequestStatusSchema,
   DraftKindSchema,
   GoalPlannerModeSchema,
+  PlatformChangeSegmentStatusSchema,
   RejectableDraftKindSchema,
   RoleSchema,
   WorkerDefinitionKindSchema,
@@ -3787,69 +3788,12 @@ const platformCapabilities = [
     mode: 'write',
     channel: 'human',
     scope: 'platform',
+    // S11 AA3c F-c8: `target` at most `GATE_INSTANCE_TARGET_MAX_LENGTH` (500, what an announce
+    // takes; 2000 before 0.61.0). The fields are shared with an admin proposal's `gate_instance`.
     paramsSchema: z
-      .object({
-        /** Stable id, becomes the instance’s `GATE_ID` and its path on the gate host (`/i/<gateId>`). */
-        gateId: z.string().regex(/^[a-z0-9][a-z0-9-]{1,63}$/),
-        displayName: z.string().min(1).max(120).optional(),
-        /** S11 P1-F: create it from this connector preset (`list_connector_presets`). The preset
-         *  fixes the transport kind, the credential mode, the Operations and the connector (its
-         *  name), so `transportKind`, `credentialMode`, `manifestSource` and `connector` are left
-         *  out; only `target` is typed. An unknown name refuses 404 `connector_preset_not_found`. */
-        preset: z.string().regex(wire.CONNECTOR_NAME_PATTERN).optional(),
-        /** Required without `preset`. */
-        transportKind: z.enum(['http', 'mcp']).optional(),
-        target: z.string().url().max(2000),
-        /** Required without `preset`. */
-        credentialMode: z.enum(['shared', 'connected_account']).optional(),
-        /** http: the OpenAPI document URL the host imports Operations from (required without `preset` — without it the instance would have no Operations). mcp: omitted, tools are listed on the target. */
-        manifestSource: z.string().url().max(2000).nullable().optional(),
-        /** P1: the connector (接入包) the instance belongs to, named after the system it serves.
-         *  Omitted: the generic connector of its transport kind (`http` / `mcp`), whose mode also
-         *  decides whether workspaces may connect that kind themselves (R-40). A name no connector
-         *  carries yet creates one for this kind, `platform_preset`, so the instance reaches the
-         *  catalog once enabled without touching the generic one; an existing one must be of the
-         *  same kind (409 `connector_kind_mismatch`) and not a packaged gate's (409
-         *  `connector_packaged`). */
-        connector: z.string().regex(wire.CONNECTOR_NAME_PATTERN).optional(),
-      })
+      .object(wire.gateInstanceCreateFields)
       .strict()
-      .superRefine((value, ctx) => {
-        if (value.preset !== undefined) {
-          for (const key of [
-            'transportKind',
-            'credentialMode',
-            'manifestSource',
-            'connector',
-          ] as const) {
-            if (value[key] !== undefined) {
-              ctx.addIssue({
-                code: z.ZodIssueCode.custom,
-                path: [key],
-                message: `the preset fixes ${key}; leave it out`,
-              });
-            }
-          }
-          return;
-        }
-        for (const key of ['transportKind', 'credentialMode'] as const) {
-          if (value[key] === undefined) {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              path: [key],
-              message: `${key} is required without a preset`,
-            });
-          }
-        }
-        if (value.transportKind === 'http' && !value.manifestSource) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ['manifestSource'],
-            message:
-              'an http instance needs the OpenAPI document URL to import its Operations from',
-          });
-        }
-      }),
+      .superRefine(wire.refineGateInstanceCreate),
     resultSchema: wire.GateInstanceWireSchema,
     description:
       'P-B2a: create a generic http / mcp gate instance for the platform gate host to serve. Lands `discovered` with no heartbeat; the host pulls the definition, imports the Operations and announces it, then the administrator enables it exactly like a packaged gate. P1: `connector` names the system it serves; omitted, it joins the generic connector of its kind. S11 P1-F: `preset` creates it from a connector preset instead — only `target` is typed, the host builds it from the preset’s Operations, and it joins the preset’s connector (409 `connector_packaged` when a packaged gate holds that name). Never takes a credential — enter that via `issue_gate_host_token`.',
@@ -4156,6 +4100,106 @@ const platformCapabilities = [
     resultSchema: wire.AdminProposalWireSchema,
     description:
       'Withdraw an admin proposal: every segment still proposed becomes withdrawn (by this administrator, in the console), with the reason when one is given; segments already applied, rejected or withdrawn keep their status — rolling back an applied one is its workspace owner’s. One withdraw_admin_proposal platform audit row. 409 admin_proposal_not_open when no segment is still proposed; 404 admin_proposal_not_found.',
+  },
+  // S11 AA3c (aa3c-plan F-c2–F-c7; migration governance 0034): an admin proposal's platform
+  // segment — new gate-host instances (`gate_instance`) — decided by a platform administrator on the
+  // platform plane, as a workspace owner decides a workspace segment: preview (a dry run against the
+  // platform's gate instances and connectors, digested), apply (in one transaction, recorded as a
+  // platform change segment), reject. The record is rolled back from here: each instance it created
+  // is disabled, compared first with what the record wrote. Each workspace segment of the proposal
+  // depends on the platform segment: applied only once it is, withdrawn when it is rejected or
+  // rolled back, and while one is applied the platform segment is not rolled back.
+  {
+    name: 'preview_platform_segment',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z.object({ segmentId: z.guid() }).strict(),
+    resultSchema: wire.PlatformSegmentPreviewWireSchema,
+    description:
+      'Dry-run an admin proposal’s platform segment, writing nothing: for each gate_instance item, the instance applying it would create — its gate id, the connector it joins (created when none has that name yet), the hosted definition (from the preset, or as proposed), always authority_widening (a new outside address), and what the administrator does after applying it (nextSteps: enter_shared_credential, await_announce, review_and_enable) — plus the digest to review and the proposal’s workspace segments, which depend on it. An item that cannot be created as proposed now is a blocker (gate_id_taken, connector_preset_not_found, connector_kind_mismatch, connector_packaged, connector_not_offerable: a connector of that name exists but is not platform_preset) and nothing is planned while one is there (digest null). Also counts the values that look like credentials (paths by item, items[n]…, never values). 404 admin_proposal_segment_not_found for anything but a platform segment; 409 admin_proposal_segment_not_open once it is no longer proposed.',
+  },
+  {
+    name: 'apply_platform_segment',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        segmentId: z.guid(),
+        /** The preview's `digest` (I-A8). */
+        reviewedDigest: z.string().min(1),
+        /** The ordinals of the `authority_widening` items — every item — each confirmed by the
+         *  administrator applying it (I-A4). */
+        confirmedOrdinals: z.array(z.number().int().positive()).optional(),
+        /** Required when the preview counted suspected credentials (`suspectedSecretValues` > 0). */
+        credentialsReviewed: z.boolean().optional(),
+      })
+      .strict(),
+    resultSchema: wire.PlatformSegmentApplyResultWireSchema,
+    description:
+      'Apply an admin proposal’s platform segment in one transaction: the segment is locked and dry-run again, each instance created as create_gate_instance creates one (discovered, no Operations until the gate host announces it — enable it with update_gate_instance once you have reviewed them), and the whole recorded as one platform change segment (list_platform_change_segments; roll it back with roll_back_platform_change_segment). Refused, writing nothing: 409 change_plan_changed when the dry run differs from reviewedDigest (preview again), 409 admin_proposal_segment_blocked while an item cannot be created (details.blockers), 409 admin_proposal_segment_not_open when it is no longer proposed, 400 change_confirmation_required for an item not in confirmedOrdinals, 400 credentials_review_required when it carries suspected credentials and credentialsReviewed is not true, 404 admin_proposal_segment_not_found. Platform AuditRecords: one gate_instance.created per item (with connector.created for a connector it created) and one apply_platform_segment, the administrator applying it apart from the administrator whose agent proposed it. Its workspace segments can then be applied by their owners.',
+  },
+  {
+    name: 'reject_platform_segment',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        segmentId: z.guid(),
+        reason: z.string().trim().min(1).max(wire.ADMIN_PROPOSAL_REASON_MAX_LENGTH),
+      })
+      .strict(),
+    resultSchema: wire.AdminProposalWireSchema,
+    description:
+      'Reject an admin proposal’s platform segment, with your reason: it becomes rejected and can never be applied, and each of the proposal’s workspace segments still proposed becomes withdrawn in the same transaction (withdrawnOrigin platform_segment) — they depend on it. The reason is for the platform’s administrators: the admin agent reads that it was rejected, not why. Returns the proposal. 409 admin_proposal_segment_not_open when it is no longer proposed; 404 admin_proposal_segment_not_found.',
+  },
+  {
+    name: 'list_platform_change_segments',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z.object({ status: PlatformChangeSegmentStatusSchema.optional() }).strict(),
+    resultSchema: listEnvelope(wire.PlatformChangeSegmentWireSchema),
+    description: `What applying admin proposals’ platform segments changed on the platform, newest first, at most ${wire.ADMIN_PROPOSAL_LIST_LIMIT} (truncated says there are more): for each, the proposal and segment it came from (kept when the trial workspace is purged), the administrator whose agent proposed it, the administrator who applied it and when, who rolled it back and when, and each instance it created as created. Optional status filter (applied, rolled_back).`,
+  },
+  {
+    name: 'get_platform_change_segment',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z.object({ changeSegmentId: z.guid() }).strict(),
+    resultSchema: wire.PlatformChangeSegmentWireSchema,
+    description:
+      'One platform change segment: what an admin proposal’s platform segment created when it was applied, with its source, proposer, who applied and rolled it back, and its items. 404 platform_change_segment_not_found.',
+  },
+  {
+    name: 'preview_roll_back_platform_change_segment',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z.object({ changeSegmentId: z.guid() }).strict(),
+    resultSchema: wire.PlatformChangeRollbackPreviewWireSchema,
+    description:
+      'Dry run of roll_back_platform_change_segment, writing nothing: per item, what it does to the instance it created — disable it, nothing when it is disabled already, nothing when it is gone — the fields changed since it was created (connector, transport, target, credential mode, OpenAPI source, preset: while one is, nothing is rolled back), and how many workspaces enabled it (they keep calling it after it is disabled: to cut those calls off, use set_connector_mode’s disabledOperations); plus the proposal’s workspace segments applied now, each to be rolled back in its workspace first. 404 platform_change_segment_not_found.',
+  },
+  {
+    name: 'roll_back_platform_change_segment',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z.object({ changeSegmentId: z.guid() }).strict(),
+    resultSchema: wire.PlatformChangeRollbackResultWireSchema,
+    description:
+      'Roll back one platform change segment in one transaction: each instance it created is compared with what it wrote and disabled — never deleted, so its gate id keeps its history; an instance lost from the gate host stays disabled when it returns; the connector it created stays. The admin proposal’s platform segment becomes rolled_back, and each of its workspace segments still proposed becomes withdrawn (withdrawnOrigin platform_segment). Refuses, writing nothing: 409 platform_change_drifted when an instance’s connector or definition changed since (details.items names the fields), 409 dependent_segments_applied while a workspace segment of the proposal is applied (details.segments: roll those back in their workspaces first), 409 platform_change_segment_rolled_back when it already was, 404 platform_change_segment_not_found. Platform AuditRecords: one gate_instance.disabled per instance it disables and one roll_back_platform_change_segment.',
   },
 ] as const satisfies readonly Capability[];
 
@@ -5169,7 +5213,7 @@ const platformStateCapabilities = [
     paramsSchema: noParams,
     resultSchema: wire.PlatformStateConnectorsWireSchema,
     description:
-      'The platform’s connectors, packaged ones first: for each its name, transport, whether it is packaged or one of the four generic ones, its mode (disabled, self_serve, platform_preset), the Operations refused for all its instances (how many, and the names that are plain identifiers), its Operation and instance counts and how many gates workspaces connected themselves through it and how many of those are suspended — counts across every workspace, never which. Only an admin agent calls it.',
+      'The platform’s connectors, packaged ones first: for each its name, transport, whether it is packaged or one of the four generic ones, its mode (disabled, self_serve, platform_preset), the Operations refused for all its instances (how many, and the names that are plain identifiers), its Operation and instance counts and how many gates workspaces connected themselves through it and how many of those are suspended — counts across every workspace, never which. Also the connector presets this deployment ships — what an admin proposal’s gate_instance names in preset: for each its name, transport, the kind of credential an instance takes (never one), the Operations an instance announces (name, mode, blast radius), whether a packaged gate holds its connector (no preset instance beside it) and how many instances its connector holds; never an address or a hint. Only an admin agent calls it.',
   },
   {
     name: 'platform_state_audit',
@@ -5236,13 +5280,20 @@ const adminProposalCapabilities = [
         sourceName: z.string().max(64).regex(wire.ADMIN_PROPOSAL_SOURCE_NAME_PATTERN),
         segments: z
           .array(wire.AdminProposalSegmentInputWireSchema)
-          .min(1)
-          .max(wire.ADMIN_PROPOSAL_MAX_SEGMENTS),
+          .max(wire.ADMIN_PROPOSAL_MAX_SEGMENTS)
+          .default([]),
+        /** S11 AA3c: at most one platform segment — new gate instances for a platform
+         *  administrator to apply first. */
+        platform: wire.AdminProposalPlatformSegmentInputWireSchema.optional(),
       })
-      .strict(),
+      .strict()
+      .refine((value) => value.segments.length > 0 || value.platform !== undefined, {
+        message: 'propose at least one segment: a workspace segment or the platform segment',
+        path: ['segments'],
+      }),
     resultSchema: wire.AdminProposalWireSchema,
     description:
-      'Propose changes for people to apply, as one admin proposal: one segment per workspace your administrator named (targetWorkspaceId), each a list of changes for its owner to preview, apply or reject — the next version of a Skill or a Worker by its name (a new one where the workspace has none; a Worker never sets its gates or model, the workspace keeps its own), of an ontology family by its name (the complete definition), or how calls of an Operation on a gate instance are governed. sourceName names the proposal’s new Skills and Workers the way a pack does (lowercase words joined by hyphens; not the name of a pack this deployment ships). Nothing changes anywhere when you propose. Refused, writing nothing: 400 admin_proposal_target_unavailable for a target that cannot take a proposal (one unknown, disabled or a trial workspace: the refusal does not say which), 400 admin_proposal_credential when anything in it is almost certainly a credential (details.suspectedSecretPaths: where, never the value), 400 redacted_text_submitted for a [redacted] mark copied from a read, 400 invalid_params for two segments for one workspace, two items for one target in a segment, content that would not publish (a Skill’s rules, a Worker’s definition, one that sets gates or model), or a sourceName a shipped pack has, 429 admin_proposal_quota_exceeded past 20 proposals a day for your administrator (UTC). Only an admin agent calls it.',
+      'Propose changes for people to apply, as one admin proposal: one segment per workspace your administrator named (targetWorkspaceId), each a list of changes for its owner to preview, apply or reject — the next version of a Skill or a Worker by its name (a new one where the workspace has none; a Worker never sets its gates or model, the workspace keeps its own), of an ontology family by its name (the complete definition), or how calls of an Operation on a gate instance are governed. platform (at most one segment, applied by a platform administrator before any workspace segment of the proposal can be): new gate-host instances (gate_instance), each with what create_gate_instance takes — a preset and its target, or a transport kind, target, credential mode, the OpenAPI document an http instance imports from and the connector of the system it serves (never a generic one: http, mcp, cli, ssh); never a credential (the administrator enters it after applying). platform_state_connectors lists the presets and platform_state_gates the gate ids already taken. sourceName names the proposal’s new Skills and Workers the way a pack does (lowercase words joined by hyphens; not the name of a pack this deployment ships). Nothing changes anywhere when you propose. Refused, writing nothing: 400 admin_proposal_target_unavailable for a target that cannot take a proposal (one unknown, disabled or a trial workspace: the refusal does not say which), 400 admin_proposal_credential when anything in it is almost certainly a credential — a platform item’s target or OpenAPI address carrying a user, password or token too (details.suspectedSecretPaths: where, never the value), 400 redacted_text_submitted for a [redacted] mark copied from a read, 400 invalid_params for two segments for one workspace, two items for one target in a segment (two instances with one gate id in the platform segment), content that would not publish (a Skill’s rules, a Worker’s definition, one that sets gates or model), or a sourceName a shipped pack has, 429 admin_proposal_quota_exceeded past 20 proposals a day for your administrator (UTC). Only an admin agent calls it.',
   },
   {
     name: 'agent_list_admin_proposals',
@@ -5534,6 +5585,17 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
     'issue_gate_host_token',
     'issue_gate_credential_token',
     'issue_llm_admin_token',
+    // S11 AA3b / AA3c: the platform's reads and decisions of admin proposals.
+    'list_admin_proposals',
+    'get_admin_proposal',
+    'withdraw_admin_proposal',
+    'preview_platform_segment',
+    'apply_platform_segment',
+    'reject_platform_segment',
+    'list_platform_change_segments',
+    'get_platform_change_segment',
+    'preview_roll_back_platform_change_segment',
+    'roll_back_platform_change_segment',
   ] as const),
 ]);
 

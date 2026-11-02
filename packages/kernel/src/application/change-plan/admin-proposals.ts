@@ -1,7 +1,9 @@
 import {
   ADMIN_PROPOSAL_DAILY_LIMIT,
   ADMIN_PROPOSAL_LIST_LIMIT,
+  type AdminProposalAnyItemIntentWire,
   type AdminProposalItemIntentWire,
+  type AdminProposalPlatformSegmentInputWire,
   type AdminProposalSegmentInputWire,
   type AdminProposalSegmentStatus,
   type AdminProposalSegmentWire,
@@ -14,6 +16,7 @@ import {
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { ADVISORY_LOCK_NAMESPACES } from '../../adapters/db/advisory-lock-namespaces.js';
+import { findConnectionParamsCredential } from '../../governance/connections/index.js';
 import {
   RedactedTextSubmittedError,
   findCredentialValues,
@@ -180,6 +183,15 @@ export interface AdminProposalInput {
   readonly description?: string;
   readonly sourceName: string;
   readonly segments: readonly AdminProposalSegmentInputWire[];
+  /** S11 AA3c: the platform segment — new gate-host instances a platform administrator applies on
+   *  the platform plane, which every workspace segment then depends on. */
+  readonly platform?: AdminProposalPlatformSegmentInputWire;
+}
+
+/** What {@link checkAdminProposal} returns: the segments as they will be stored. */
+export interface CheckedAdminProposal {
+  readonly segments: readonly AdminProposalSegmentInputWire[];
+  readonly platform: AdminProposalPlatformSegmentInputWire | null;
 }
 
 /** The target an item changes in a workspace, as a key (two items for one target in a segment are
@@ -259,10 +271,23 @@ function checkItem(
 export function checkAdminProposal(
   input: AdminProposalInput,
   shippedPackNames: ReadonlySet<string>,
-): readonly AdminProposalSegmentInputWire[] {
+): CheckedAdminProposal {
   const credentials = findCredentialValues(input);
   if (credentials.count > 0) {
     throw new AdminProposalCredentialError(credentials.count, credentials.paths);
+  }
+  // AA3c: a gate instance's address is held to `create_gate_instance`'s rule (a URL's user name,
+  // password, query or fragment, and anything else that could carry a credential), which is
+  // stricter than the value patterns above — the address is sent to the gate host and shown to
+  // every enabling workspace.
+  for (const [i, item] of (input.platform?.items ?? []).entries()) {
+    const found = findConnectionParamsCredential({
+      target: item.target,
+      manifestSource: item.manifestSource ?? null,
+    });
+    if (found !== null) {
+      throw new AdminProposalCredentialError(1, [`platform.items[${i}].${found.field}`]);
+    }
   }
   // Spelled from the document's name, as a goal proposal's are (`RedactedTextSubmittedError` names
   // the document by the first segment of `field`).
@@ -305,13 +330,44 @@ export function checkAdminProposal(
     });
     return { targetWorkspaceId: segment.targetWorkspaceId, items };
   });
+  const platform =
+    input.platform === undefined ? null : checkPlatformSegment(input.platform, problems);
   if (problems.length > 0) throw new AdminProposalInvalidError(problems);
-  return segments;
+  return { segments, platform };
+}
+
+/** A platform segment's items as they will be stored: one instance per gate id (the second would
+ *  be refused `gate_id_taken` by the first when applied). Whether each fits the platform now is
+ *  the dry run's (`platform-segments.ts`), when an administrator previews it. */
+function checkPlatformSegment(
+  platform: AdminProposalPlatformSegmentInputWire,
+  problems: AdminProposalProblem[],
+): AdminProposalPlatformSegmentInputWire {
+  const gateIds = new Map<string, number>();
+  for (const [i, item] of platform.items.entries()) {
+    const earlier = gateIds.get(item.gateId);
+    if (earlier !== undefined) {
+      problems.push({
+        path: `platform.items[${i}].gateId`,
+        message: `names the gate instance platform.items[${earlier}] does: one item per gate id`,
+      });
+    } else {
+      gateIds.set(item.gateId, i);
+    }
+  }
+  return { items: platform.items };
 }
 
 /** `sha256:` of what a segment proposes: its target and its items. */
 export function adminProposalSegmentDigest(segment: AdminProposalSegmentInputWire): string {
   return contentDigest({ targetWorkspaceId: segment.targetWorkspaceId, items: segment.items });
+}
+
+/** `sha256:` of what a platform segment proposes: no target, and its items. */
+export function adminProposalPlatformSegmentDigest(
+  segment: AdminProposalPlatformSegmentInputWire,
+): string {
+  return contentDigest({ targetWorkspaceId: null, items: segment.items });
 }
 
 /** `sha256:` of what a proposal holds: its title, description, source name and each segment's
@@ -379,8 +435,9 @@ export async function proposeAdminProposal(
   client: PoolClient,
   proposer: AdminProposalProposer,
   input: AdminProposalInput,
-  segments: readonly AdminProposalSegmentInputWire[],
+  checked: CheckedAdminProposal,
 ): Promise<AdminProposalWire> {
+  const { segments, platform } = checked;
   // The user is a member here, so the workspace transaction reads the row (core 0021).
   const user = await client.query<{ display_name: string; platform_role: string }>(
     'select display_name, platform_role from users where id = $1',
@@ -402,7 +459,13 @@ export async function proposeAdminProposal(
 
   const displayName = (user.rows[0]?.display_name ?? '').slice(0, 200) || proposer.userId;
   const description = input.description ?? '';
-  const segmentDigests = segments.map(adminProposalSegmentDigest);
+  // The platform segment comes last (its ordinal after every workspace segment's), so the
+  // proposal's digest lists the segments in the order they are read.
+  const platformDigest = platform === null ? null : adminProposalPlatformSegmentDigest(platform);
+  const segmentDigests = [
+    ...segments.map(adminProposalSegmentDigest),
+    ...(platformDigest === null ? [] : [platformDigest]),
+  ];
   const digest = adminProposalDigest({
     title: input.title,
     description,
@@ -441,6 +504,20 @@ export async function proposeAdminProposal(
         segment.targetWorkspaceId,
         JSON.stringify(segment.items),
         segmentDigests[index],
+      ],
+    );
+  }
+  if (platform !== null) {
+    await client.query(
+      `insert into admin_proposal_segments
+         (workspace_id, proposal_id, ordinal, authority, target_workspace_id, items, content_digest)
+       values ($1, $2, $3, 'platform', null, $4::jsonb, $5)`,
+      [
+        proposer.workspaceId,
+        proposalId,
+        segments.length + 1,
+        JSON.stringify(platform.items),
+        platformDigest,
       ],
     );
   }
@@ -492,11 +569,11 @@ interface SegmentRow {
   ordinal: number;
   authority: string;
   target_workspace_id: string | null;
-  items: AdminProposalItemIntentWire[];
+  items: AdminProposalAnyItemIntentWire[];
   content_digest: string;
   status: AdminProposalSegmentStatus;
   decided_at: Date | null;
-  withdrawn_origin: 'human' | 'agent' | null;
+  withdrawn_origin: 'human' | 'agent' | 'platform_segment' | null;
   reason: string | null;
   rolled_back_at: Date | null;
 }

@@ -293,7 +293,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       await dropDatabase?.();
     }, 60_000);
 
-    it('a. create_gate_instance lands enabled/unknown/no-heartbeat; a second create with the same id is refused', async () => {
+    it('a. create_gate_instance lands discovered/unknown/no-heartbeat; a second create with the same id is refused', async () => {
       const created = await callAsAdmin<GateInstanceWire>('create_gate_instance', {
         gateId: 'hosted-mcp',
         transportKind: 'mcp',

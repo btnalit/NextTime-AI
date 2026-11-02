@@ -14,6 +14,7 @@ import {
 import { gateAddressOrigin } from '../../governance/gatekeepers/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import {
+  type HostedGateRequest,
   type SelfConnectionListRow,
   confirmPendingManifest,
   createHostedGateInstance,
@@ -21,6 +22,7 @@ import {
   displayedGateInstance,
   getConnector,
   getGateInstance,
+  hostedGateRefusalMessage,
   listConnectors,
   listExternalRuntimes,
   listGateInstances,
@@ -29,6 +31,7 @@ import {
   operationsOf,
   readConnectorOccupancy,
   recordGateInstanceCheck,
+  resolveHostedDefinition,
   revokeEntryHandlesForConnector,
   revokeEntryHandlesInWorkspace,
   revokeExternalRuntime,
@@ -480,60 +483,22 @@ export const listConnectorPresetsHandler: CapabilityHandler = async (client) => 
   return { result: { items } };
 };
 
-interface CreateGateInstanceInput {
-  readonly gateId: string;
-  readonly displayName?: string;
-  readonly preset?: string;
-  readonly transportKind?: 'http' | 'mcp';
-  readonly target: string;
-  readonly credentialMode?: 'shared' | 'connected_account';
-  readonly manifestSource?: string | null;
-  readonly connector?: string;
-}
-
-/** The definition `create_gate_instance` stores, and the connector the instance joins: the
- *  preset's (S11 P1-F) when one is named — its transport, credential mode and name, with only the
- *  administrator's address — else exactly what was typed. The params schema already refused a
- *  preset call that also names any of those, and a plain one missing the kind or mode. */
+/** The definition `create_gate_instance` stores, and the connector the instance joins
+ *  (`resolveHostedDefinition`: the preset's, else exactly what was typed). */
 async function requestedDefinition(
-  input: CreateGateInstanceInput,
+  input: HostedGateRequest,
 ): Promise<{ readonly definition: GateHostedDefinitionWire; readonly connector: string }> {
-  if (input.preset !== undefined) {
-    const presets = await loadConnectorPresets();
-    const preset = presets.find((candidate) => candidate.name === input.preset);
-    if (!preset) {
-      throw new PlatformAdminError(
-        'connector_preset_not_found',
-        `connector preset "${input.preset}" is not in this deployment`,
-      );
-    }
-    return {
-      definition: {
-        transportKind: preset.transportKind,
-        target: input.target,
-        credentialMode: preset.credentialMode,
-        manifestSource: null,
-        preset: preset.name,
-      },
-      connector: preset.name,
-    };
-  }
-  const transportKind = input.transportKind;
-  const credentialMode = input.credentialMode;
-  if (transportKind === undefined || credentialMode === undefined) {
-    throw new Error(
-      'create_gate_instance: transportKind and credentialMode passed the params schema unset',
+  const resolved = resolveHostedDefinition(
+    input,
+    input.preset !== undefined ? await loadConnectorPresets() : [],
+  );
+  if (resolved.refused !== null) {
+    throw new PlatformAdminError(
+      'connector_preset_not_found',
+      `connector preset "${input.preset}" is not in this deployment`,
     );
   }
-  return {
-    definition: {
-      transportKind,
-      target: input.target,
-      credentialMode,
-      manifestSource: transportKind === 'http' ? (input.manifestSource ?? null) : null,
-    },
-    connector: input.connector ?? transportKind,
-  };
+  return { definition: resolved.definition, connector: resolved.connector };
 }
 
 export const createGateInstanceHandler: CapabilityHandler = async (
@@ -542,7 +507,7 @@ export const createGateInstanceHandler: CapabilityHandler = async (
   params,
   ctx,
 ) => {
-  const input = params as CreateGateInstanceInput;
+  const input = params as HostedGateRequest;
   const { definition, connector } = await requestedDefinition(input);
   // Review of #549 (the gate-instance half of legacy 186): the definition is stored as given, sent
   // to the gate host, and shown to every platform administrator and enabling workspace — a
@@ -558,28 +523,13 @@ export const createGateInstanceHandler: CapabilityHandler = async (
     connector,
     definition,
   });
-  const refused = outcome.refused;
-  if (refused === 'gate_id_taken') {
+  if (outcome.refused !== null) {
     throw new PlatformAdminError(
-      'gate_id_taken',
-      `a gate instance "${input.gateId}" already exists`,
+      outcome.refused,
+      hostedGateRefusalMessage(outcome.refused, input.gateId, connector, definition),
     );
   }
-  if (refused === 'connector_kind_mismatch') {
-    throw new PlatformAdminError(
-      'connector_kind_mismatch',
-      `the connector "${connector}" is not an ${definition.transportKind} connector — name a new one for this system, or one of the same kind`,
-    );
-  }
-  if (refused === 'connector_packaged') {
-    throw new PlatformAdminError(
-      'connector_packaged',
-      definition.preset !== undefined
-        ? `the connector "${connector}" belongs to a packaged gate this deployment runs — the system is already connected through it, so no preset instance can join it`
-        : `the connector "${connector}" belongs to a packaged gate — name a new one for this system`,
-    );
-  }
-  if (outcome.refused === null && outcome.connectorCreated) {
+  if (outcome.connectorCreated) {
     // P1: a new connector starts `platform_preset` with no `set_connector_mode` row of its own, so
     // its creation is recorded against it — the same connector-keyed shape as
     // `connector.entry_handles_revoked` (dispatch's own row for this call names the instance).

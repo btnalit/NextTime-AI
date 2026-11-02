@@ -917,6 +917,8 @@ export async function dispatchCapability(
           resourceType: result.resourceType,
           resourceId: resourceRef.resourceId,
           payload: {
+            // S11 AA3c-1: first, as on the workspace path, so the fixed fields below always win.
+            ...result.auditPayload,
             channel: 'platform',
             actorLogin: platformUser.login,
             ...auditParams(capability, parsed.data as Record<string, unknown>),
