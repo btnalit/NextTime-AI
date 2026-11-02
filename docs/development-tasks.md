@@ -4590,7 +4590,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **AA3 — 试验工作区 + `propose_change_plan` + 平台段（关闭遗留 293）**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（AA3a，#914，2026-11-02 合入，fd90b8e；迁移 core/0050、core/0051、worker/0013；决定见项目共享计划 `s11-w3/aa3-default-plan.md` F1–F3，项目文件，不入库）：AA3 拆成 AA3a（本段）、AA3b（变更计划提议与工作区段）、AA3c（平台段），都进 0.61.0。试验工作区：0050 放宽 `workspaces_purpose_check`、触发器 `workspaces_admin_trial_fixed`（`before update of purpose`，对所有角色拒绝改进改出 `admin_trial`）；`update_platform_settings` 拒绝设为默认（`trial_workspace`），默认工作区收养跳过它；CLI `--purpose` 仍只收 `standard` / `ephemeral`（试验工作区的所有者必须是已有平台管理员，而 CLI `--owner` 会新建用户；解析抽成 `parseCreateWorkspacePurpose`）；残留用户判定从 `purpose = 'standard'` 改为 `purpose <> 'ephemeral'`；`ops.collector_silent` 仍只看常规工作区。I-A6：管理员智能体身份读 `w.purpose`，`adminAgentRefusalOf` 加 `not_trial_workspace`，拒绝顺序 … → `workspace_disabled` → `not_trial_workspace` → `not_platform_admin`（关闭遗留 585）。上限：`ADMIN_AGENT_CEILING_PROPOSALS` 显式名单 5 项，模式规则改为「`observe`，或名单里的 `propose`」，守卫测试写死名单。`origin`（关闭遗留 293）：所有写草稿的路径参数必填（漏传编译不过），网关用 `draftOriginOf(ctx)`——只有人的通道上的人类 Principal 得 `human`，Handle、服务 Principal 或无上下文得 `agent`；`platform` 字面量只在三个内核模板（新工作区入口模板、平台元本体、目标规划器定义）各写一次；`draft-origin.guard.test.ts` 证明调用方得不出 `platform`、所有可派发能力的参数 schema 都拒收 `origin`；草稿摘要只在有值时把 `origin` 算进去，已存的评测与拒绝记录不失效（`draft-digest.test.ts` 把 null origin 的摘要钉在旧值上）。控制台：新建工作区的「用途」、列表与详情的琥珀色「试验」、筛选、默认工作区下拉里列出但不可选、加人下拉带「（试验）」。词表加 `origin`。测试：内核真 Postgres 全量 4999 项，审查修复后受影响的 8 个文件 80 项；e2e `workspaces.spec.ts` 新增试验工作区旅程（1440 / 390）。遗留 596–599。
 
 **AA4 — 控制台：管理员 Agent 与变更计划**（见 `global-roadmap-2026-10-16.md` §4）
 
