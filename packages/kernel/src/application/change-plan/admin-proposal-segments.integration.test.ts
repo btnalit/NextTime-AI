@@ -858,6 +858,23 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).toHaveLength(1);
     });
 
+    it('get_admin_proposal_segment_counts: the trial workspace counts none of the segments it sent out (S11 AA4e, #493 on #947)', async () => {
+      // The segments table's RLS lets the trial workspace read the segments its own proposals
+      // sent out; only `target_workspace_id = $1` keeps them out of its owner's count.
+      const { agent, trial } = await administrator();
+      const target = await newTarget();
+      await proposeFor(agent, target, [skillItem('sent-one')]);
+      await proposeFor(agent, target, [skillItem('sent-two')]);
+      const counts = (of: Target) =>
+        call<ReceivedAdminProposalCountsWire>(
+          ownerCaller(of),
+          'get_admin_proposal_segment_counts',
+          {},
+        );
+      expect(await counts(target)).toEqual({ proposed: 2 });
+      expect(await counts(trial)).toEqual({ proposed: 0 });
+    });
+
     it('rejecting takes a reason; the owner and the platform read it, the agent reads only that it was rejected', async () => {
       const { user, agent } = await administrator();
       const target = await newTarget();
