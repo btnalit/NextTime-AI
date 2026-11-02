@@ -47,6 +47,11 @@ import {
   ChangePlanChangedError,
   type UnconfirmedChangeItem,
 } from './errors.js';
+import {
+  appliedDependents,
+  gateInstanceDrift,
+  lockProposalDependency,
+} from './proposal-dependency.js';
 
 /**
  * application/change-plan/platform-segments: an admin proposal's platform segment on the platform
@@ -84,9 +89,12 @@ import {
  * depends on its platform segment (`admin-proposal-segments.ts` refuses to apply one before it is
  * applied). Rejecting the platform segment, or rolling back its record, withdraws each of them
  * still proposed in the same transaction (`withdrawn_origin = 'platform_segment'`); a rollback is
- * refused while one of them is applied (roll that back in its workspace first). Both take the
- * workspace segments' row locks before they read them, and applying a workspace segment takes its
- * own first, so the two never interleave: whichever comes second sees what the first left.
+ * refused while one of them is applied (roll that back in its workspace first) — read from what
+ * their applies recorded in each workspace (`appliedDependents`), which outlives a purged trial
+ * workspace. A rollback takes the proposal's dependency lock exclusive before any row lock, and
+ * applying a workspace segment takes it shared first (`proposal-dependency.ts`, AA3c-2), so the two
+ * never interleave: whichever comes second sees what the first left. Rejecting takes the workspace
+ * segments' row locks, which applying one takes too. governance 0035 holds both edges again.
  *
  * **Rolling back (F-c3).** Compare, then write: each instance is read under its row lock and
  * compared with what the item created (its connector and its definition); a changed one refuses
@@ -840,26 +848,6 @@ interface PlannedItemRollback {
   readonly instance: GateInstanceNow | null;
 }
 
-/** The fields an instance changed since its item created it (F-c3), in
- *  `GATE_INSTANCE_DRIFT_FIELD_VALUES` order. */
-function driftOf(item: ChangeItemRow, now: GateInstanceNow): GateInstanceDriftField[] {
-  const drift: GateInstanceDriftField[] = [];
-  if (now.connector !== item.connector) drift.push('connector');
-  const was = item.definition;
-  const is = now.definition;
-  const fields = [
-    'transportKind',
-    'target',
-    'credentialMode',
-    'manifestSource',
-    'preset',
-  ] as const satisfies readonly GateInstanceDriftField[];
-  for (const field of fields) {
-    if ((is?.[field] ?? null) !== (was[field] ?? null)) drift.push(field);
-  }
-  return drift;
-}
-
 async function planRollback(
   client: PoolClient,
   items: readonly ChangeItemRow[],
@@ -900,7 +888,7 @@ async function planRollback(
         ordinal: item.ordinal,
         gateId: item.gate_id,
         action: alreadyDisabled ? 'already_disabled' : 'disable',
-        drift: driftOf(item, now),
+        drift: gateInstanceDrift(item, now),
         linkedWorkspaceCount: now.links,
       },
       instance: now,
@@ -918,9 +906,7 @@ export async function previewPlatformChangeRollback(
   const row = await loadChangeSegment(client, changeSegmentId);
   const items = (await itemsOf(client, [row.id])).get(row.id) ?? [];
   const planned = await planRollback(client, items, { forUpdate: false });
-  const dependentsApplied = (await dependentsOf(client, row.admin_proposal_id)).filter(
-    (dependent) => dependent.status === 'applied',
-  );
+  const dependentsApplied = await appliedDependents(client, row.admin_proposal_id);
   return {
     changeSegment,
     items: planned.map((entry) => entry.wire),
@@ -939,21 +925,26 @@ export interface RolledBackPlatformChangeSegment {
 
 /**
  * `roll_back_platform_change_segment`, in the caller's one platform transaction, as `userId`. In
- * order: the record's row lock and status (409), the workspace segments' row locks and any applied
- * (409), each instance's row lock and its drift (409) — then the record's `rolled_back` edge, each
- * instance disabled, the platform segment's `rolled_back` edge (while its trial workspace exists)
- * and the workspace segments still proposed withdrawn. Any refusal leaves everything as it was.
+ * order: the proposal's dependency lock, exclusive (`lockProposalDependency`, AA3c-2: no workspace
+ * segment of it applies until this commits), the record's row lock and status (409), the workspace
+ * segments' row locks and any applied — by what their applies recorded, so after the trial
+ * workspace is purged too (409) — each instance's row lock and its drift (409); then the record's
+ * `rolled_back` edge, each instance disabled, the platform segment's `rolled_back` edge (while its
+ * trial workspace exists) and the workspace segments still proposed withdrawn. Any refusal leaves
+ * everything as it was.
  */
 export async function rollBackPlatformChangeSegment(
   client: PoolClient,
   userId: string,
   changeSegmentId: string,
 ): Promise<RolledBackPlatformChangeSegment> {
+  // The proposal id never changes on a record (0034's guard), so it is read before any lock.
+  const unlocked = await loadChangeSegment(client, changeSegmentId);
+  await lockProposalDependency(client, unlocked.admin_proposal_id, 'exclusive');
   const row = await loadChangeSegment(client, changeSegmentId, { forUpdate: true });
   if (row.status === 'rolled_back') throw new PlatformChangeSegmentRolledBackError(row.id);
-  const dependentsApplied = (
-    await dependentsOf(client, row.admin_proposal_id, { forUpdate: true })
-  ).filter((dependent) => dependent.status === 'applied');
+  await dependentsOf(client, row.admin_proposal_id, { forUpdate: true });
+  const dependentsApplied = await appliedDependents(client, row.admin_proposal_id);
   if (dependentsApplied.length > 0) {
     throw new DependentSegmentsAppliedError(row.id, dependentsApplied);
   }

@@ -90,6 +90,12 @@ export interface WorkspaceSegmentInput {
   readonly source: ChangeSource;
   /** In order: item `n` is ordinal `n + 1`. */
   readonly items: readonly ChangeItemIntent[];
+  /** S11 AA3c-2 (F8): what else the plan stands on that the person applying reviews — for an admin
+   *  proposal's segment, the proposal's applied platform segment and the record its apply wrote.
+   *  Folded into the digest when given, so applying refuses (409 `change_plan_changed`) once it
+   *  differs from what was previewed; not recorded. A pack's segment has none, and its digests are
+   *  what they were. */
+  readonly binding?: Readonly<Record<string, unknown>>;
 }
 
 /** What a planned item would change, by kind, for the person reviewing it (not recorded, not in
@@ -280,9 +286,14 @@ const ITEM_KIND_CAPABILITY: Readonly<Record<ChangeItemKind, string>> = {
   operation_version: 'publish_operation',
 };
 
-function segmentDigest(source: ChangeSource, items: readonly PlannedChangeItem[]): string {
+function segmentDigest(
+  source: ChangeSource,
+  items: readonly PlannedChangeItem[],
+  binding: Readonly<Record<string, unknown>> | undefined,
+): string {
   return contentDigest({
     source,
+    ...(binding !== undefined ? { binding } : {}),
     items: items.map((item) => ({
       ordinal: item.ordinal,
       kind: item.kind,
@@ -312,7 +323,7 @@ async function planWithKinds(
     plan: {
       source: input.source,
       items,
-      digest: segmentDigest(input.source, items),
+      digest: segmentDigest(input.source, items, input.binding),
       unchanged: items.every((item) => item.unchanged),
     },
     kinds,

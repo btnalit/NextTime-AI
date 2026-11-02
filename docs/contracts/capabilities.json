@@ -47567,6 +47567,13 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "gateAvailability": {
+                "enum": [
+                  "can_enable",
+                  "needs_platform"
+                ],
+                "type": "string"
+              },
               "kind": {
                 "enum": [
                   "ontology_version",
@@ -48319,6 +48326,40 @@
           },
           "type": "array"
         },
+        "platformChanges": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "drift": {
+                "items": {
+                  "enum": [
+                    "connector",
+                    "transportKind",
+                    "target",
+                    "credentialMode",
+                    "manifestSource",
+                    "preset"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "gateId": {
+                "type": "string"
+              },
+              "gone": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "gateId",
+              "gone",
+              "drift"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "segment": {
           "additionalProperties": false,
           "properties": {
@@ -48893,6 +48934,7 @@
       "required": [
         "segment",
         "blockers",
+        "platformChanges",
         "digest",
         "unchanged",
         "items",

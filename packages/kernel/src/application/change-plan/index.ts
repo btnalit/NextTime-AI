@@ -196,6 +196,7 @@ export {
   AdminProposalSegmentNotFoundError,
   AdminProposalSegmentNotOpenError,
   AdminProposalSegmentUnchangedError,
+  PlatformSegmentChangedError,
   PlatformSegmentNotAppliedError,
   applyAdminProposalSegment,
   getAdminProposalSegment,

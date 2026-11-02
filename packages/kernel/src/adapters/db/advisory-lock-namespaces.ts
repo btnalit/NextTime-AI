@@ -60,4 +60,13 @@ export const ADVISORY_LOCK_NAMESPACES = {
    * cannot both pass — they may come from different trial workspaces.
    */
   adminProposalQuota: 7241032,
+  /**
+   * `application/change-plan/proposal-dependency.ts` and governance/0035 (S11 AA3c-2 F-c4): an admin
+   * proposal's workspace segments depending on its platform segment; second key
+   * `hashtext(proposal_id::text)`. Applying a workspace segment takes it shared, rolling back the
+   * platform change segment its platform segment recorded takes it exclusive — each before any row
+   * lock, and 0035's triggers again before they check — so a workspace segment is never applied
+   * while that rollback commits, nor the other way round.
+   */
+  adminProposalDependency: 7241033,
 } as const;

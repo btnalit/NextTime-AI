@@ -190,7 +190,9 @@ export const PlatformChangeRollbackPreviewWireSchema = z
     changeSegment: PlatformChangeSegmentWireSchema,
     items: z.array(PlatformChangeRollbackItemWireSchema),
     /** The proposal's workspace segments applied now: roll each back in its workspace first (409
-     *  `dependent_segments_applied`). Empty when the proposal is gone (its trial workspace purged). */
+     *  `dependent_segments_applied`). Read from the change segments their applies recorded in each
+     *  workspace (S11 AA3c-2), which outlive the proposal: still listed once its trial workspace is
+     *  purged. */
     dependentsApplied: z.array(PlatformSegmentDependentWireSchema),
     /** Nothing is drifted, no dependent is applied, and it is not rolled back already. */
     canRollBack: z.boolean(),

@@ -33,6 +33,7 @@ import {
   PlatformChangeSegmentNotFoundError,
   PlatformChangeSegmentRolledBackError,
   PlatformSegmentBlockedError,
+  PlatformSegmentChangedError,
   PlatformSegmentNotAppliedError,
   PlatformSegmentNotFoundError,
 } from '../../application/change-plan/index.js';
@@ -401,6 +402,16 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof PlatformSegmentNotAppliedError) {
     return { status: 409, code: err.code, message: err.message, details: { ...err.details } };
+  }
+  // S11 AA3c-2: an instance that platform segment created is gone or changed since → 409
+  // `details.items`.
+  if (err instanceof PlatformSegmentChangedError) {
+    return {
+      status: 409,
+      code: err.code,
+      message: err.message,
+      details: { items: err.details.items.map((item) => ({ ...item, drift: [...item.drift] })) },
+    };
   }
   if (err instanceof PlatformChangeSegmentNotFoundError) {
     return { status: 404, code: err.code, message: err.message };
