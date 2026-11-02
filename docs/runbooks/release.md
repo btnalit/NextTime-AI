@@ -2229,7 +2229,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 
 ### 3.104 管理员提案的平台部分：新建门实例（#921，S11 AA3c-1，0.61.0 起）
 
-带一个迁移 governance `0034_admin_proposal_platform_segments`，随 `apply-release.sh` 自动应用。不改 compose，没有新环境变量，主机不需要操作；`ADMIN_AGENT_ENABLED` 仍默认关。AA3c-1 与 AA3c-2（§3.105）之间不发版：AA3c-1 单独还没有提案依赖锁、数据库第二道墙与实例复核。
+带一个迁移 governance `0034_admin_proposal_platform_segments`，随 `apply-release.sh` 自动应用。不改 compose，没有新环境变量，主机不需要操作；`ADMIN_AGENT_ENABLED` 仍默认关。AA3c-1 与 AA3c-2（§3.106）之间不发版：AA3c-1 单独还没有提案依赖锁、数据库第二道墙与实例复核。
 
 - **迁移**：`admin_proposal_segments` 的 authority 加 `platform`（没有目标工作区，每个提案最多一个：唯一索引 `admin_proposal_segments_one_platform`），条目类型按 authority 检查（平台部分只收 `gate_instance`、最多 10 个；工作区部分是四类版本），CHECK 按正向计数并用 strict 模式（每个条目是带字符串 `kind` 的对象，嵌套数组不能绕过）；新列 `decided_by_user`、`rolled_back_by_user`、`applied_platform_segment_id`（与 `decided_by` / `rolled_back_by` / `applied_segment_id` 互斥）；`withdrawn_origin` 加 `platform_segment`。新表 `platform_change_segments`、`platform_change_items` 只在平台面（强制 RLS，`app_platform()`），不对提案或 `gate_instances` 建外键（试验工作区清除、实例删除后记录仍保留），只授予 select / insert（段另有 update），不能删。守卫：替换 `admin_proposal_segments_guard` 与 `admin_proposal_segments_record_guard`（平台部分只在平台面、由当前管理员 `app.user_id` 决定与撤销），新增 `platform_change_segments_guard`（由应用事务在来源为 proposed 时写入，之后只能 applied → rolled_back，不可删）与 `platform_change_items_guard`（只由写记录的事务写入、之后不改，放宽权限边界的条目要应用人确认，I-A4）。security definer 函数 `admin_proposal_platform_segment(proposal_id)` 只回答事务自己的工作区、且它是该提案某个工作区部分的目标时。
 - **新线上**：7 个能力（平台范围、人的通道）`preview_platform_segment`、`apply_platform_segment`、`reject_platform_segment`、`list_platform_change_segments`、`get_platform_change_segment`、`preview_roll_back_platform_change_segment`、`roll_back_platform_change_segment`。`propose_admin_proposal` 可带 `platform { items: gate_instance[] }`；提案的段可以是 authority `platform`（`targetWorkspaceId` 为 null）；`withdrawnOrigin` 加 `platform_segment`；工作区部分的预览与列表加 `segment.platformSegment`（id、status）；`platform_state_connectors` 加 `presets`（白名单字段：name、transportKind、credentialMode、operations {name, mode, blastRadius} 最多 100、operationCount、packagedConnector、instanceCount）。新错误码 `platform_change_segment_not_found`（404，WS `NOT_FOUND`），`platform_segment_not_applied`、`platform_change_segment_rolled_back`、`platform_change_drifted`、`dependent_segments_applied`（409，WS `ILLEGAL_TRANSITION`）。平台新审计动作 `gate_instance.created`（每个应用的条目一条）、`gate_instance.disabled`（撤销停用的每个实例一条）。契约快照新增 7 项、11 项变化。
@@ -2246,6 +2246,23 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **新线上**：`UserMembershipWire` 加必填 `workspacePurpose`（`standard` / `ephemeral` / `admin_trial`），`/api/auth/me`、登录、会话返回的成员资格也带它。契约快照 9 项 schema 变化：`add_membership`、`create_user`、`list_user_memberships`、`list_users`、`merge_user`、`set_membership_role`、`set_user_budget`、`set_user_status`、`update_user`。控制台与内核同版发布；旧控制台忽略这个字段，新控制台遇到不带它的旧内核就不加标注。
 - **发版说明可写**：控制台在工作区切换器、侧栏卡片（琥珀色「试验」）、平台用户列表、成员资格面板、账户页与手机顶栏标出试验工作区（临时工作区带「（临时）」）。手机（≤960）上的导航抽屉恢复了导航文字、工作区块与切换器，手机上又能切换工作区（遗留 610，P1：此前 `shell.css` 里 ≤1100 的窄栏规则没有限定在 `.sidebar` 下）。用 API key 登录的会话没有成员资格，不显示「试验」标记。
 - **回滚**：只回退代码即可。
+
+### 3.106 管理员提案的平台依赖：锁、数据库第二道墙与实例复核（#923，S11 AA3c-2，0.61.0 起）
+
+带一个迁移 governance `0035_admin_proposal_platform_dependency`，随 `apply-release.sh` 自动应用；只有函数、触发器和一个索引，不存数据。不改 compose，没有新环境变量，主机不需要操作；`ADMIN_AGENT_ENABLED` 仍默认关。
+
+- **迁移**：
+  - 触发器 `admin_proposal_segments_platform_dependency`：工作区部分要变成 applied，提案必须没有平台部分，或者平台部分和它的平台变更记录都已 applied。
+  - 触发器 `platform_change_segments_rollback_dependency`：平台变更记录要从 applied 变成 rolled_back，提案的工作区部分必须都没有 applied，而且以本提案为来源的 change segment（`change_segments.admin_proposal_id`，任何工作区）都已撤销；试验工作区清除之后也成立。
+  - 两个触发器都拿提案依赖锁（advisory 命名空间 7241033，第二个键是 `hashtext(proposal_id)`）：工作区应用拿共享锁，平台撤销拿排他锁。内核路径先拿这把锁再拿行锁；两个都绕过内核、顺序相反的写入可能死锁，Postgres 会中止其中一个，两边都不落库（0035 文件头写明，遗留 608）。
+  - security definer 读函数：`admin_proposal_platform_change(proposal_id)` 只回答该提案某个工作区部分的目标工作区，返回已应用记录的 id、审阅摘要和每个条目的门 id / 连接器 / 定义；`admin_proposal_applied_workspace_changes(proposal_id)` 只在平台面回答，列出已应用的依赖。两条的隔离条件都有测试守住。
+  - 索引 `change_segments_admin_proposal`。
+- **新线上**：新错误码 `platform_segment_changed`（409，WS `ILLEGAL_TRANSITION`，`details.items [{gateId, gone, drift}]`）。平台变更记录被撤销时也返回 `platform_segment_not_applied`（`platformSegmentStatus` 为 `rolled_back`）。`preview_admin_proposal_segment` 的结果加 `platformChanges`，blocker 加可选的 `gateAvailability`（只在 `gate_not_enabled` 上：`can_enable` / `needs_platform`）。`preview_roll_back_platform_change_segment` 的 `dependentsApplied` 改从 change segment 读（试验工作区清除后也列得出）。契约快照 1 项变化（`preview_admin_proposal_segment`）。
+- **发版说明可写**：管理员提案的工作区部分应用前，会对照它的平台部分创建的门实例再查一遍；实例在那之后被改过或删了，就列出改了什么，不能应用（`platform_segment_changed`）。工作区部分的审阅摘要现在也覆盖管理员应用的那个平台部分。
+- **已知问题**（0.61.0 带着发，下一版 AA4-0 修，遗留 609）：
+  - 中：管理员智能体读回自己的管理员提案时（提议的返回、`agent_get_admin_proposal`、`agent_withdraw_admin_proposal`），能看到平台部分新建门宿主实例的地址和 OpenAPI 地址。这些地址都是它自己提议的，提议时已拒绝任何带凭据的地址。下一版去掉。
+  - EN: When the admin agent reads back its own admin proposal (the propose result, `agent_get_admin_proposal`, `agent_withdraw_admin_proposal`), it sees the addresses (target and OpenAPI URL) of the gate-host instances the platform part proposes. These are addresses it proposed itself, and any address carrying a credential was refused when proposed. Fixed in the next release.
+- **回滚**（见 §6）：只回退代码不损坏数据（0.60.0 没有平台部分，这两个守卫不会拦它做的事）。
 
 ## 4. Hotfix 流程
 
@@ -2413,6 +2430,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.60.0 之后的下一版 | governance `0032_admin_proposals`（#916，AA3b-1）：新表 `admin_proposals`、`admin_proposal_segments` 及 4 个函数 | 可逆 | 只加新表：旧版本不读不写 | 只回退代码、表留着即可；要删按 0032 文件头：`drop table admin_proposal_segments, admin_proposals`、删文件里的 4 个函数，再删 `schema_migrations` 的 governance 32 |
 | v0.60.0 之后的下一版 | governance `0033_change_segments_from_admin_proposals`（#920，AA3b-2）：`change_segments.source_kind` 加 `admin_proposal`、`proposed_by` 可空、4 个溯源列、约束 `change_segments_proposer`、唯一索引、3 个守卫 | 有条件可逆 | 留着 0033 只回退代码不损坏数据，但旧代码看不到 `admin_proposal` 记录（`proposed_by` 内连接 principals：不列出，get / verify / 撤销 404）；要撤掉管理员提案应用的内容，先在新版本里撤销再回退代码 | 只回退代码、保留 0033 即可。撤迁移的前提是没有 `source_kind = 'admin_proposal'` 的行：删 3 个触发器与函数和索引、删约束 `change_segments_proposer`、把 `change_segments_source_kind_check` 恢复为 `('pack')`、`proposed_by` 设回 not null、删 4 列，再删 `schema_migrations` 的 governance 33（见 0033 文件头） |
 | v0.60.0 之后的下一版 | governance `0034_admin_proposal_platform_segments`（#921，AA3c-1）：`admin_proposal_segments` 加 authority `platform` 与 3 列、新表 `platform_change_segments` / `platform_change_items`、守卫替换与新增、函数 `admin_proposal_platform_segment` | 有条件可逆 | 没有平台部分时只回退代码不损坏数据；有平台部分时旧代码会列出目标为空、决定不了的段，先在新版本里应用、拒绝或撤回提案，再回退代码 | 只回退代码、保留 0034 即可。撤迁移的前提是没有 authority `platform` 的段、也没有 `withdrawn_origin = 'platform_segment'` 的撤回，步骤见 0034 文件头 |
+| v0.60.0 之后的下一版 | governance `0035_admin_proposal_platform_dependency`（#923，AA3c-2）：两个依赖触发器及其函数、两个 security definer 读函数 `admin_proposal_platform_change` / `admin_proposal_applied_workspace_changes`、索引 `change_segments_admin_proposal`；不存数据 | 可逆 | 只回退代码不损坏数据：0.60.0 没有平台部分，守卫不会拦它的写入 | 只回退代码、保留 0035 即可。要撤迁移：删两个触发器及其函数、两个读函数和索引 `change_segments_admin_proposal`，再删 `schema_migrations` 里 governance 35 那一行（见 0035 文件头） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

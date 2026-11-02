@@ -537,7 +537,13 @@ describe.runIf(DATABASE_URL !== undefined)(
       ]);
       const dryRun = await preview(target, segmentId);
       expect(dryRun.blockers).toEqual([
-        { ordinal: 1, kind: 'operation_version', reason: 'gate_not_enabled' },
+        // An instance of a connector the platform does not offer to workspaces (self_serve).
+        {
+          ordinal: 1,
+          kind: 'operation_version',
+          reason: 'gate_not_enabled',
+          gateAvailability: 'needs_platform',
+        },
         { ordinal: 2, kind: 'operation_version', reason: 'operation_not_found' },
         { ordinal: 3, kind: 'operation_version', reason: 'operation_revision_invalid' },
       ]);

@@ -928,6 +928,21 @@ export type AdminProposalItemBlocker = (typeof ADMIN_PROPOSAL_ITEM_BLOCKER_VALUE
 export const AdminProposalItemBlockerSchema = asEnum(ADMIN_PROPOSAL_ITEM_BLOCKER_VALUES);
 
 /**
+ * S11 AA3c-2 (F-c1): for a `gate_not_enabled` blocker, where the gate instance the intent names
+ * stands for this workspace — the pack requirements' two states short of `connected`
+ * (`PACK_REQUIREMENT_STATE_VALUES`), by instance rather than by connector:
+ *  - `can_enable`: the platform offers it (`enabled`, on a `platform_preset` connector): the owner
+ *    enables it here (`enable_gate_instance`, with its own manifest review) and previews again;
+ *  - `needs_platform`: it is not offered yet — no such instance, or not `enabled` (a new instance
+ *    of the proposal's platform segment is `discovered` until a platform administrator reviews its
+ *    manifest and enables it), or its connector is not offered to workspaces.
+ */
+export const ADMIN_PROPOSAL_GATE_AVAILABILITY_VALUES = ['can_enable', 'needs_platform'] as const;
+export type AdminProposalGateAvailability =
+  (typeof ADMIN_PROPOSAL_GATE_AVAILABILITY_VALUES)[number];
+export const AdminProposalGateAvailabilitySchema = asEnum(ADMIN_PROPOSAL_GATE_AVAILABILITY_VALUES);
+
+/**
  * An applied item's target now (S11 P1-B, read at the time of the call): `in_effect` — what the item
  * wrote is still there (the version it published is its family's head: the latest published
  * version of the ontology family, Skill or WorkerDefinition; for an Operation, its one published

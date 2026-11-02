@@ -1,11 +1,13 @@
 import { z } from 'zod';
 import {
+  AdminProposalGateAvailabilitySchema,
   AdminProposalItemBlockerSchema,
   AdminProposalSegmentStatusSchema,
   AdminProposalWithdrawnOriginSchema,
   ChangeItemClassificationSchema,
   ChangeItemKindSchema,
   DraftOriginSchema,
+  GateInstanceDriftFieldSchema,
 } from '../enums.js';
 import { SkillApplicableSchema } from '../skill.js';
 import {
@@ -106,12 +108,15 @@ export type ReceivedAdminProposalSegmentWire = z.infer<
 >;
 
 /** An intent that does not resolve here (`ADMIN_PROPOSAL_ITEM_BLOCKER_VALUES`), by its ordinal in
- *  the segment. */
+ *  the segment. `gateAvailability` (S11 AA3c-2, F-c1), only on `gate_not_enabled`: whether the
+ *  owner can enable the gate instance here now (`can_enable`) or the platform has to offer it first
+ *  (`needs_platform`) — `ADMIN_PROPOSAL_GATE_AVAILABILITY_VALUES`. */
 export const AdminProposalItemBlockerWireSchema = z
   .object({
     ordinal: z.number().int().positive(),
     kind: ChangeItemKindSchema,
     reason: AdminProposalItemBlockerSchema,
+    gateAvailability: AdminProposalGateAvailabilitySchema.optional(),
   })
   .strict();
 export type AdminProposalItemBlockerWire = z.infer<typeof AdminProposalItemBlockerWireSchema>;
@@ -192,6 +197,22 @@ export const AdminProposalPreviewItemWireSchema = z.discriminatedUnion('kind', [
 ]);
 export type AdminProposalPreviewItemWire = z.infer<typeof AdminProposalPreviewItemWireSchema>;
 
+/** S11 AA3c-2 (F-c4): a gate instance the proposal's applied platform segment created that is not
+ *  as it created it any more — `gone` (deleted since), or `drift`, the fields changed since
+ *  (`GATE_INSTANCE_DRIFT_FIELD_VALUES`, the comparison its rollback makes). The owner reviewed the
+ *  proposal against what the platform segment created; while one has changed, the segment is not
+ *  applied (409 `platform_segment_changed`). */
+export const AdminProposalPlatformInstanceChangeWireSchema = z
+  .object({
+    gateId: z.string(),
+    gone: z.boolean(),
+    drift: z.array(GateInstanceDriftFieldSchema),
+  })
+  .strict();
+export type AdminProposalPlatformInstanceChangeWire = z.infer<
+  typeof AdminProposalPlatformInstanceChangeWireSchema
+>;
+
 /** `preview_admin_proposal_segment`: what applying the segment here would do, without doing it. */
 export const AdminProposalSegmentPreviewWireSchema = z
   .object({
@@ -199,11 +220,18 @@ export const AdminProposalSegmentPreviewWireSchema = z
     /** Intents that do not resolve here. While there is one, nothing is planned: `items` is empty
      *  and `digest` null, and applying is refused (409 `admin_proposal_segment_blocked`). While the
      *  proposal's platform segment (`segment.platformSegment`) is not applied, `items` show what
-     *  applying would do and `digest` is null (409 `platform_segment_not_applied`). */
+     *  applying would do and `digest` is null (409 `platform_segment_not_applied`); the same while
+     *  an instance it created has changed since (`platformChanges`, 409
+     *  `platform_segment_changed`). */
     blockers: z.array(AdminProposalItemBlockerWireSchema),
+    /** S11 AA3c-2: the instances the applied platform segment created that changed since (see
+     *  `AdminProposalPlatformInstanceChangeWire`); empty when none did, or when the proposal has no
+     *  platform segment or it is not applied. */
+    platformChanges: z.array(AdminProposalPlatformInstanceChangeWireSchema),
     /** I-A8: what the owner reviews — `apply_admin_proposal_segment`'s `reviewedDigest`. It covers
      *  what each intent resolved to, so a resolution that changes before the apply is refused too
-     *  (409 `change_plan_changed`). */
+     *  (409 `change_plan_changed`), and — with a platform segment — that segment and the record its
+     *  apply wrote (S11 AA3c-2, F8). */
     digest: z.string().nullable(),
     /** Every item is `unchanged`: there is nothing to apply (409 `admin_proposal_segment_unchanged`;
      *  reject it instead). */
