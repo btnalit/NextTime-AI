@@ -1752,6 +1752,27 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(again.platformChanges).toEqual([]);
       expect(again.digest).toBe(ready.digest);
 
+      // Registered again under another connector (`gates/store.ts`'s re-registration does): drifted
+      // too (#493 P3).
+      const elsewhere = await appliedPlatform();
+      const setConnector = (connector: string) =>
+        withAdminClient(pool, (client) =>
+          client.query('update gate_instances set connector = $2 where gate_id = $1', [
+            gateId,
+            connector,
+          ]),
+        );
+      const createdConnector = String((await gateRow(gateId))?.connector);
+      await setConnector(String((await gateRow(elsewhere.gateId))?.connector));
+      const reconnected = await previewThere(target, segmentId);
+      expect(reconnected.platformChanges).toEqual([{ gateId, gone: false, drift: ['connector'] }]);
+      expect(reconnected.digest).toBeNull();
+      expect(await thrownBy(applyThere(target, segmentId, ready))).toBeInstanceOf(
+        PlatformSegmentChangedError,
+      );
+      await setConnector(createdConnector);
+      expect((await previewThere(target, segmentId)).digest).toBe(ready.digest);
+
       await withAdminClient(pool, (client) =>
         client.query('delete from gate_instances where gate_id = $1', [gateId]),
       );
@@ -1928,6 +1949,101 @@ describe.runIf(DATABASE_URL !== undefined)(
       await expect(markApplied(second, otherSegmentId)).rejects.toThrow(
         /platform segment is applied \(it is applied, its record rolled_back\)/,
       );
+    });
+
+    it('governance 0035 (#493 R-1): the two security definer reads answer only whom they are for — a workspace no workspace segment addresses reads no platform change; no workspace reads the applied workspace changes', async () => {
+      const { user, target, proposalId, segmentId } = await appliedPlatform();
+      const applied = await applyThere(target, segmentId, await previewThere(target, segmentId));
+      const other = await newTarget();
+      const platformChange = (who: Target) =>
+        inTarget(who, (client) =>
+          client.query('select change_segment_id from admin_proposal_platform_change($1)', [
+            proposalId,
+          ]),
+        );
+      // Addressed: what the platform segment recorded. Not addressed: nothing, though the
+      // function reads past row level security.
+      expect((await platformChange(target)).rowCount).toBe(1);
+      expect((await platformChange(other)).rowCount).toBe(0);
+
+      const appliedChanges = 'select * from admin_proposal_applied_workspace_changes($1)';
+      const onPlatform = await withPlatform(pool, { userId: user.id }, (client) =>
+        client.query(appliedChanges, [proposalId]),
+      );
+      expect(onPlatform.rows).toEqual([
+        {
+          workspace_id: target.workspaceId,
+          admin_proposal_segment_id: segmentId,
+          change_segment_id: applied.changeSegmentId,
+        },
+      ]);
+      // Not even the workspace the change was applied in.
+      for (const who of [target, other]) {
+        expect(
+          (await inTarget(who, (client) => client.query(appliedChanges, [proposalId]))).rowCount,
+        ).toBe(0);
+      }
+    });
+
+    it('governance 0035 (#493 P3): a workspace change verified, or whose verification failed, still holds the platform rollback once the trial workspace is purged', async () => {
+      const { user, trial, target, recordId, segmentId } = await appliedPlatform();
+      const applied = await applyThere(target, segmentId, await previewThere(target, segmentId));
+      await purgeWorkspace(pool, { workspaceId: trial.workspaceId, confirm: true, force: true });
+      const rollRecordBack = () =>
+        withPlatform(pool, { userId: user.id }, (client) =>
+          client.query(
+            `update platform_change_segments
+                set status = 'rolled_back', rolled_back_by_user = $2, rolled_back_at = now()
+              where id = $1`,
+            [recordId, user.id],
+          ),
+        );
+      for (const [run, status] of ['verified', 'verification_failed'].entries()) {
+        // The guard stamps verified_at itself from a new verification result.
+        await withAdminClient(pool, (client) =>
+          client.query(
+            'update change_segments set status = $2, verification = $3::jsonb where id = $1',
+            [applied.changeSegmentId, status, JSON.stringify({ run, items: [] })],
+          ),
+        );
+        await expect(rollRecordBack()).rejects.toThrow(
+          /no workspace segment of its proposal is applied/,
+        );
+        expect(
+          await thrownBy(
+            call(platformCaller(user), 'roll_back_platform_change_segment', {
+              changeSegmentId: recordId,
+            }),
+          ),
+        ).toBeInstanceOf(DependentSegmentsAppliedError);
+        expect(await recordStatus(recordId)).toBe('applied');
+      }
+    });
+
+    it('governance 0035 (#493 P3): a workspace segment that still reads applied, its change rolled back past the kernel, still holds the record', async () => {
+      const { user, target, recordId, segmentId } = await appliedPlatform();
+      const applied = await applyThere(target, segmentId, await previewThere(target, segmentId));
+      // Rolled back in its workspace without the kernel, which would roll the segment back with it.
+      await inTarget(target, (client) =>
+        client.query(
+          `update change_segments
+              set status = 'rolled_back', rolled_back_by = $2, rolled_back_at = now()
+            where id = $1`,
+          [applied.changeSegmentId, target.ownerPrincipalId],
+        ),
+      );
+      expect((await segmentRow(segmentId))?.status).toBe('applied');
+      await expect(
+        withPlatform(pool, { userId: user.id }, (client) =>
+          client.query(
+            `update platform_change_segments
+                set status = 'rolled_back', rolled_back_by_user = $2, rolled_back_at = now()
+              where id = $1`,
+            [recordId, user.id],
+          ),
+        ),
+      ).rejects.toThrow(/no workspace segment of its proposal is applied/);
+      expect(await recordStatus(recordId)).toBe('applied');
     });
 
     it('AA3c-2: after the trial workspace is purged, a workspace segment applied from it still holds the platform rollback — read from what its apply recorded where it was applied', async () => {

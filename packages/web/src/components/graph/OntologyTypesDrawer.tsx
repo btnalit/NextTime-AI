@@ -19,6 +19,7 @@ import {
 import { type Translate, useT } from '../../lib/i18n.js';
 import { ontologyTypeKindLabel, principalShownName } from '../../lib/labels.js';
 import { DiscardReasonField } from '../catalog/DiscardReasonField.js';
+import { draftOriginItem } from '../catalog/DraftOrigin.js';
 import { Button } from '../kit/button.js';
 import { Combobox } from '../kit/combobox.js';
 import { Confirm } from '../kit/confirm.js';
@@ -798,6 +799,11 @@ function ProposalDetailBody({
       <KeyValue
         testId="graph-proposal-detail-fields"
         items={[
+          // Legacy 597: the proposer above is whom it is for; an agent drafting for them is said
+          // right under it.
+          ...[draftOriginItem(row.origin, row.status, t, 'graph-proposal-detail-origin')].filter(
+            (item): item is KeyValueItem => item !== null,
+          ),
           { key: 'version', label: t('版本', 'Version'), value: `v${row.version}`, mono: true },
           {
             key: 'base',

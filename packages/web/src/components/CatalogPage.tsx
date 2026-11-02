@@ -1,4 +1,5 @@
 import type {
+  DraftOrigin,
   EntryTemplateStatusWire,
   GateOwnedParamWire,
   PublishEvaluationReview,
@@ -92,6 +93,7 @@ import { AdminProposalsTab } from './catalog/AdminProposalsTab.js';
 import { DraftExpiryNote, type EditorState } from './catalog/CatalogShared.js';
 import { ChangesTab } from './catalog/ChangesTab.js';
 import { DiscardReasonField } from './catalog/DiscardReasonField.js';
+import { draftOriginItem, operationOriginItem } from './catalog/DraftOrigin.js';
 import {
   EntryDraftChanges,
   EntryTemplateNotice,
@@ -1247,6 +1249,13 @@ function OperationDetailView({
         ),
     },
   ];
+  // Legacy 597: for a proposal whose it is, then who wrote this version — the gate's own manifest
+  // is nobody's draft, so it names no proposer.
+  if (row.proposedBy !== undefined && row.origin !== undefined && row.origin !== 'import') {
+    items.push(proposerItem(http, row.proposedBy, t, 'operation-detail-proposer'));
+  }
+  const originItem = operationOriginItem(row.origin, row.status, t);
+  if (originItem !== null) items.push(originItem);
   if (row.mode) {
     items.push({
       key: 'mode',
@@ -2253,6 +2262,8 @@ function SkillDetailView({
   if (row.proposedBy) {
     items.push(proposerItem(http, row.proposedBy, t, 'skill-detail-proposer'));
   }
+  const skillOrigin = draftOriginItem(row.origin, row.status, t, 'skill-detail-origin');
+  if (skillOrigin !== null) items.push(skillOrigin);
   const gateKinds = row.applicable?.gateKinds as readonly string[] | undefined;
   const objectTypes = row.applicable?.objectTypes as readonly string[] | undefined;
   if (gateKinds && gateKinds.length > 0) {
@@ -2919,6 +2930,9 @@ function ProcedureDetailView({
           ...(row.proposedBy
             ? [proposerItem(http, row.proposedBy, t, 'procedure-detail-proposer')]
             : []),
+          ...[draftOriginItem(row.origin, row.status, t, 'procedure-detail-origin')].filter(
+            (item): item is KeyValueItem => item !== null,
+          ),
         ]}
       />
 
@@ -3462,7 +3476,12 @@ function workerLabel(row: WorkerDefinitionSummary, t: Translate): string {
 /** A `list_worker_definitions` row as the catalog reads it: `proposedBy` (required on the wire,
  *  `WorkerDefinitionWireSchema`) decides who may publish / deprecate it (D-24). Optional only so
  *  older fixtures still type-check. */
-type CatalogWorkerRow = WorkerDefinitionSummary & { readonly proposedBy?: string };
+type CatalogWorkerRow = WorkerDefinitionSummary & {
+  readonly proposedBy?: string;
+  /** Legacy 597: who wrote this version (`WorkerDefinitionWire.origin`); absent on a version
+   *  written before it was recorded. */
+  readonly origin?: DraftOrigin;
+};
 
 type WorkerEditorState =
   | { readonly kind: 'new' }
@@ -3699,7 +3718,7 @@ function WorkerDetailView({
   onDiscard,
 }: {
   readonly http: CapabilityCaller;
-  readonly row: WorkerDefinitionSummary;
+  readonly row: CatalogWorkerRow;
   readonly isMyDraft: boolean;
   readonly canPropose: boolean;
   readonly canPublish: boolean;
@@ -3746,6 +3765,13 @@ function WorkerDetailView({
     ? row.definition.gates.filter((id): id is string => typeof id === 'string')
     : [];
   const items: KeyValueItem[] = [];
+  // Legacy 597: whose version this is and who wrote it — the platform's own entry or planner
+  // template, a person, or an agent drafting for one.
+  if (row.proposedBy !== undefined) {
+    items.push(proposerItem(http, row.proposedBy, t, 'worker-detail-proposer'));
+  }
+  const workerOrigin = draftOriginItem(row.origin, row.status, t, 'worker-detail-origin');
+  if (workerOrigin !== null) items.push(workerOrigin);
   if (typeof row.definition.description === 'string') {
     items.push({
       key: 'description',

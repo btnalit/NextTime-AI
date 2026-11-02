@@ -61,6 +61,7 @@ function user(overrides: Partial<UserWire> = {}): UserWire {
       {
         workspaceId: 'ws-1',
         workspaceName: 'Acme',
+        workspacePurpose: 'standard',
         workspaceStatus: 'active',
         principalId: 'p-1',
         role: 'operator',
@@ -90,6 +91,7 @@ describe('UserMembershipsPanel', () => {
           {
             workspaceId: 'ws-1',
             workspaceName: 'Acme',
+            workspacePurpose: 'standard',
             workspaceStatus: 'active',
             principalId: 'p-1',
             role: 'owner',
@@ -103,6 +105,40 @@ describe('UserMembershipsPanel', () => {
     expect(note.textContent).toContain('「Acme」唯一的所有者');
     expect(within(row).queryByRole('button', { name: '移出' })).toBeNull();
     expect(within(row).queryByRole('combobox')).toBeNull();
+  });
+
+  it('legacy 596: a membership of a trial workspace carries the amber 「试验」 chip', () => {
+    const http = scriptedHttp({ list_workspaces: () => ({ items: [workspace()] }) });
+    renderPanel(
+      http,
+      user({
+        memberships: [
+          {
+            workspaceId: 'ws-1',
+            workspaceName: 'Acme',
+            workspacePurpose: 'standard',
+            workspaceStatus: 'active',
+            principalId: 'p-1',
+            role: 'operator',
+            disabled: false,
+          },
+          {
+            workspaceId: 'ws-9',
+            workspaceName: 'Sandbox',
+            workspacePurpose: 'admin_trial',
+            workspaceStatus: 'active',
+            principalId: 'p-9',
+            role: 'owner',
+            disabled: false,
+          },
+        ],
+      }),
+    );
+    const rows = screen.getAllByTestId('user-membership-row');
+    expect(within(rows[0] as HTMLElement).queryByTestId('user-membership-trial')).toBeNull();
+    const chip = within(rows[1] as HTMLElement).getByTestId('user-membership-trial');
+    expect(chip.textContent).toBe('试验');
+    expect(chip.getAttribute('data-tone')).toBe('warn');
   });
 
   it('offers every active workspace the user is not in yet, and adds the picked one', async () => {
@@ -181,6 +217,7 @@ describe('UserMembershipsPanel', () => {
           {
             workspaceId: 'ws-1',
             workspaceName: 'Acme',
+            workspacePurpose: 'standard',
             workspaceStatus: 'disabled',
             principalId: 'p-1',
             role: 'operator',

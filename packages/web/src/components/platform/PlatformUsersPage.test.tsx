@@ -59,6 +59,7 @@ function user(overrides: Partial<UserWire> = {}): UserWire {
       {
         workspaceId: 'ws-1',
         workspaceName: 'Acme',
+        workspacePurpose: 'standard',
         workspaceStatus: 'active',
         principalId: 'p-1',
         role: 'member',
@@ -106,6 +107,7 @@ describe('PlatformUsersPage', () => {
               {
                 workspaceId: 'ws-2',
                 workspaceName: 'Beta',
+                workspacePurpose: 'standard',
                 workspaceStatus: 'active',
                 principalId: 'p-2',
                 role: 'operator',
@@ -145,6 +147,45 @@ describe('PlatformUsersPage', () => {
       name: 'list_users',
       params: { limit: 50, hideResidual: true },
     });
+  });
+
+  it('legacy 596: a membership of a trial workspace reads 「（试验）」 in the 工作区 column', async () => {
+    const http = scriptedHttp({
+      list_users: () => ({
+        items: [
+          user({
+            memberships: [
+              {
+                workspaceId: 'ws-1',
+                workspaceName: 'Acme',
+                workspacePurpose: 'standard',
+                workspaceStatus: 'active',
+                principalId: 'p-1',
+                role: 'member',
+                disabled: false,
+              },
+              {
+                workspaceId: 'ws-9',
+                workspaceName: 'UX914 试验区',
+                workspacePurpose: 'admin_trial',
+                workspaceStatus: 'active',
+                principalId: 'p-9',
+                role: 'owner',
+                disabled: false,
+              },
+            ],
+          }),
+        ],
+      }),
+      get_platform_settings: () => settings(),
+    });
+    renderPage(http);
+    const table = await screen.findByTestId('platform-users-table');
+    const chips = within(table).getAllByTestId('platform-user-workspace-chip');
+    expect(chips.map((chip) => chip.textContent)).toEqual([
+      'Acme@成员',
+      'UX914 试验区（试验）@所有者',
+    ]);
   });
 
   it('A6: the residual toggle re-queries without hideResidual', async () => {
@@ -342,6 +383,7 @@ describe('PlatformUsersPage', () => {
         {
           workspaceId: 'ws-2',
           workspaceName: 'Beta',
+          workspacePurpose: 'standard',
           workspaceStatus: 'active',
           principalId: 'p-2',
           role: 'member',
@@ -457,6 +499,7 @@ describe('PlatformUsersPage', () => {
         {
           workspaceId: 'ws-9',
           workspaceName: 'accept-s3',
+          workspacePurpose: 'standard',
           workspaceStatus: 'active',
           principalId: 'p-b',
           role: 'operator',

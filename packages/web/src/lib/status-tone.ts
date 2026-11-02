@@ -8,6 +8,7 @@ import type {
   ConnectorModeWire,
   DraftEvaluationStageStatus,
   DraftEvaluationVerdict,
+  DraftOrigin,
   GateInstanceStatusWire,
   GateTrustWire,
   GoalAcceptanceCheckStatus,
@@ -43,6 +44,7 @@ import {
   ConnectorModeWireSchema,
   DRAFT_EVALUATION_STAGE_STATUS_VALUES,
   DRAFT_EVALUATION_VERDICT_VALUES,
+  DRAFT_ORIGIN_VALUES,
   GOAL_ACCEPTANCE_CHECK_STATUS_VALUES,
   GOAL_RUN_STATUS_VALUES,
   GRANT_STATUS_VALUES,
@@ -51,6 +53,7 @@ import {
   GateTrustWireSchema,
   OBJECTIVE_OUTCOME_VALUES,
   OPERATION_MODE_VALUES,
+  OperationSummaryWireSchema,
   PACK_INSTALL_STATUS_VALUES,
   PACK_REQUIREMENT_STATE_VALUES,
   PLANNING_ROUND_STATUS_VALUES,
@@ -157,7 +160,9 @@ export type StatusMachine =
   | 'evalAssertion'
   | 'draftEvaluation'
   | 'draftEvaluationStage'
-  | 'skillPublishCandidate';
+  | 'skillPublishCandidate'
+  | 'draftOrigin'
+  | 'operationOrigin';
 
 export const ACTION_REQUEST_TONES: Readonly<Record<ActionRequestStatus, ChipStyle>> = {
   proposed: { tone: 'neutral', label: { zh: '已提议', en: 'Proposed' } },
@@ -593,6 +598,26 @@ export const SKILL_PUBLISH_CANDIDATE_TONES: Readonly<
   discarded: { tone: 'neutral', label: { zh: '已丢弃', en: 'Discarded' } },
 };
 
+/** Legacy 597 (S11 AA3a's `DRAFT_ORIGIN_VALUES`): who wrote a Skill / Procedure / WorkerDefinition /
+ *  ontology version. An agent's — an entry, Worker or admin agent session, or an automation
+ *  credential — is amber, "a person still has to read it"; a person's is grey; the platform's own
+ *  template is blue (§5.9: system). */
+export const DRAFT_ORIGIN_TONES: Readonly<Record<DraftOrigin, ChipStyle>> = {
+  human: { tone: 'neutral', label: { zh: '人', en: 'A person' } },
+  agent: { tone: 'warn', label: { zh: '智能体', en: 'An agent' } },
+  platform: { tone: 'info', label: { zh: '平台模板', en: 'Platform template' } },
+};
+
+/** Legacy 597: an Operation version's `origin` (`OperationSummaryWire.origin`) — the gate's own
+ *  manifest is blue (system); a proposal is coloured as `DRAFT_ORIGIN_TONES`. */
+export const OPERATION_ORIGIN_VALUES = OperationSummaryWireSchema.shape.origin.unwrap().options;
+export type OperationOrigin = (typeof OPERATION_ORIGIN_VALUES)[number];
+export const OPERATION_ORIGIN_TONES: Readonly<Record<OperationOrigin, ChipStyle>> = {
+  import: { tone: 'info', label: { zh: '门的清单', en: 'Gate manifest' } },
+  human: DRAFT_ORIGIN_TONES.human,
+  agent: DRAFT_ORIGIN_TONES.agent,
+};
+
 const MACHINES: Readonly<
   Record<StatusMachine, { values: readonly string[]; tones: Readonly<Record<string, ChipStyle>> }>
 > = {
@@ -653,6 +678,8 @@ const MACHINES: Readonly<
     values: SKILL_PUBLISH_CANDIDATE_STATE_VALUES,
     tones: SKILL_PUBLISH_CANDIDATE_TONES,
   },
+  draftOrigin: { values: DRAFT_ORIGIN_VALUES, tones: DRAFT_ORIGIN_TONES },
+  operationOrigin: { values: OPERATION_ORIGIN_VALUES, tones: OPERATION_ORIGIN_TONES },
 };
 
 export interface ResolvedChipStyle extends ChipStyle {

@@ -4,6 +4,7 @@ import {
   BLAST_RADIUS_VALUES,
   CONNECTION_REQUEST_STATUS_VALUES,
   ConnectorModeWireSchema,
+  DRAFT_ORIGIN_VALUES,
   GRANT_STATUS_VALUES,
   GateHealthWireSchema,
   GateTrustWireSchema,
@@ -28,6 +29,7 @@ import {
   AUTO_APPROVABLE_VALUES,
   type ChipStyle,
   GATE_INSTANCE_STATUS_VALUES,
+  OPERATION_ORIGIN_VALUES,
   SELF_CONNECTION_STATUS_VALUES,
   type StatusMachine,
   USER_STATUS_VALUES,
@@ -86,6 +88,9 @@ const MACHINES: readonly { readonly machine: StatusMachine; readonly values: rea
     { machine: 'updateFeed', values: PlatformUpdateFeedStatusWireSchema.options },
     // P0b: derived from `suspendedAt` (no wire enum).
     { machine: 'selfConnection', values: SELF_CONNECTION_STATUS_VALUES },
+    // Legacy 597: who wrote a draft version, and an Operation version.
+    { machine: 'draftOrigin', values: DRAFT_ORIGIN_VALUES },
+    { machine: 'operationOrigin', values: OPERATION_ORIGIN_VALUES },
   ];
 
 describe('StatusChip', () => {

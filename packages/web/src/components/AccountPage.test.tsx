@@ -58,7 +58,13 @@ const USER: WireUser = {
 };
 
 const MEMBERSHIPS: readonly WireMembership[] = [
-  { workspaceId: 'ws-1', workspaceName: 'Acme', principalId: 'p-1', role: 'owner' },
+  {
+    workspaceId: 'ws-1',
+    workspaceName: 'Acme',
+    workspacePurpose: 'standard',
+    principalId: 'p-1',
+    role: 'owner',
+  },
 ];
 
 describe('AccountPage: API-key mode (no user)', () => {
