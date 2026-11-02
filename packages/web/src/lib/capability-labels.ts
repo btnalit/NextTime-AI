@@ -1678,9 +1678,9 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zh: '撤销平台变更',
     en: 'Roll back a platform change',
     zhHint:
-      '停用这条记录新建的门宿主实例（不删除，门标识保留历史；接入包保留），提案里还没决定的工作区部分随之撤回。已启用它的工作区仍能调用，要切断调用请在接入包里停用对应操作。',
+      '停用这条记录新建的门宿主实例（不删除，门标识保留历史；接入包保留），提案里还没决定的工作区部分随之撤回。已启用它的工作区仍能调用：要切断某个工作区，由它的所有者在能力目录里停用这个门的 Operation；在接入包里停用 Operation 会切断这个接入包下的所有实例。',
     enHint:
-      "Disables the gate-host instances this record created (never deletes them, so each gate id keeps its history; the connector stays), and withdraws the proposal's workspace parts not yet decided. Workspaces that enabled an instance keep calling it; to cut those calls off, disable the Operations in its connector.",
+      "Disables the gate-host instances this record created (never deletes them, so each gate id keeps its history; the connector stays), and withdraws the proposal's workspace parts not yet decided. Workspaces that enabled an instance keep calling it: to cut one workspace off, its owner disables this gate's Operations in its catalog; disabling Operations on the connector cuts off every instance of that connector.",
   },
   platform_status: {
     zh: '查看服务状态',

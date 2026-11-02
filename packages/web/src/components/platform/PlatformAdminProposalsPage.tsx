@@ -21,7 +21,7 @@ import { Tabs } from '../kit/tabs.js';
 import { ChangeRecordsTab } from './admin-proposals/ChangeRecords.js';
 import { ProposalDetail } from './admin-proposals/ProposalDetail.js';
 import { ADMIN_PROPOSAL_STALE_READS } from './admin-proposals/stale-reads.js';
-import { proposerText, segmentCountsText } from './admin-proposals/text.js';
+import { segmentCountsText } from './admin-proposals/text.js';
 
 export interface PlatformAdminProposalsPageProps {
   readonly http: CapabilityCaller;
@@ -190,7 +190,12 @@ function ProposalsTab({
                   <StatusChip machine="adminProposal" status={proposal.status} size="s" />
                 </span>
                 <span className="truncate text-3">
-                  {proposerText(proposal.proposedBy, t)}
+                  <span
+                    className="mono"
+                    data-testid={`platform-admin-proposal-row-source-${proposal.id}`}
+                  >
+                    {proposal.sourceName}
+                  </span>
                   {' · '}
                   <time
                     dateTime={proposal.proposedAt}

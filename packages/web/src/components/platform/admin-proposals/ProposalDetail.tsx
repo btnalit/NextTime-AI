@@ -370,7 +370,7 @@ function PlatformPartRecord({
           <span className="stack-s">
             <span>
               {t(
-                '平台部分已应用。新建的门宿主实例现在是「已发现」，工作区还用不了；每个实例还要做：',
+                '平台部分已应用。新建的门宿主实例现在是「未启用」，工作区还用不了；每个实例还要做：',
                 'The platform part is applied. The new gate-host instances are discovered and no workspace can use them yet; for each, what is left to do:',
               )}
             </span>
