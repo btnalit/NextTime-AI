@@ -19,6 +19,8 @@ export interface CreateWorkspaceFormProps {
    *  an admin creating a workspace for themselves), still changeable in the picker. Omitted = no
    *  default. The form itself cannot know the current user; the page passes it when it does. */
   readonly defaultOwnerUserId?: string;
+  /** 用途 preselected (the 管理员智能体 page's 新建试验工作区 opens the form on 试验). */
+  readonly defaultPurpose?: 'standard' | 'admin_trial';
   readonly onCreated: (workspace: PlatformWorkspaceWire) => void;
   readonly onCancel: () => void;
 }
@@ -44,6 +46,7 @@ export function CreateWorkspaceForm({
   http,
   models,
   defaultOwnerUserId,
+  defaultPurpose = 'standard',
   onCreated,
   onCancel,
 }: CreateWorkspaceFormProps) {
@@ -54,7 +57,7 @@ export function CreateWorkspaceForm({
   const [ownerUserId, setOwnerUserId] = useState(defaultOwnerUserId ?? '');
   const [entryModel, setEntryModel] = useState<string | null>(null);
   const [allowedModels, setAllowedModels] = useState<readonly string[]>([]);
-  const [purpose, setPurpose] = useState<'standard' | 'admin_trial'>('standard');
+  const [purpose, setPurpose] = useState<'standard' | 'admin_trial'>(defaultPurpose);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
 

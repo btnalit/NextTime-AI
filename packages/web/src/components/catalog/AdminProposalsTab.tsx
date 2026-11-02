@@ -111,6 +111,7 @@ const STALE_CODES = new Set([
   'admin_proposal_segment_unchanged',
   'platform_segment_not_applied',
   'platform_segment_changed',
+  'admin_proposal_target_no_longer_chosen',
 ]);
 
 /** 「平台管理员 Ada 的管理员智能体」 — who proposed it, by the name they had then (as 安装历史 says
@@ -801,10 +802,14 @@ function SegmentReview({
 
   // UX P3-1 (#929): a part that cannot be applied however it is ticked (an instance the platform
   // part created changed since, or nothing to apply) says only why; ticking is left for later.
+  // S11 AA4c (governance 0036): the administrator dropped this workspace from their admin agent's
+  // targets since it proposed — nothing here can be ticked into an apply.
+  const targetDropped = !data.targetChosen;
   const hardBlocked =
-    data.blockers.length === 0 &&
-    !platformPartPending &&
-    (data.platformChanges.length > 0 || data.unchanged);
+    targetDropped ||
+    (data.blockers.length === 0 &&
+      !platformPartPending &&
+      (data.platformChanges.length > 0 || data.unchanged));
   const missing = [
     ...(data.blockers.length > 0
       ? [
@@ -826,8 +831,12 @@ function SegmentReview({
       ? [t('核对疑似凭据', 'review the suspected credentials')]
       : []),
   ];
-  const notReadySentence =
-    data.blockers.length > 0
+  const notReadySentence = targetDropped
+    ? t(
+        '提议它的平台管理员之后把本工作区从管理员智能体的目标里去掉了，现在不能应用。可以拒绝它，或请对方把本工作区重新加回目标',
+        'The platform administrator who proposed it has since removed this workspace from their admin agent’s targets, so it cannot be applied now. Reject it, or ask them to add this workspace back to the targets',
+      )
+    : data.blockers.length > 0
       ? null
       : platformPartPending
         ? t(
@@ -856,6 +865,14 @@ function SegmentReview({
       {staleNotice ? (
         <Notice tone="warn" testId="catalog-proposal-stale">
           {staleText}
+        </Notice>
+      ) : null}
+      {targetDropped ? (
+        <Notice tone="warn" testId="catalog-proposal-target-dropped">
+          {t(
+            '提议它的平台管理员之后把本工作区从管理员智能体的目标里去掉了：这份管理员提案还在，但不能应用。可以拒绝它；如果还需要，请对方把本工作区重新加回目标，它就能照原样应用。',
+            'The platform administrator who proposed it has since removed this workspace from their admin agent’s targets: the admin proposal is still here, but it cannot be applied. Reject it; if it is still wanted, ask them to add this workspace back to the targets and it can be applied as it is.',
+          )}
         </Notice>
       ) : null}
       {data.blockers.length > 0 ? (
@@ -968,6 +985,7 @@ function SegmentReview({
                     variant="primary"
                     disabled={
                       data.digest === null ||
+                      targetDropped ||
                       data.unchanged ||
                       data.blockers.length > 0 ||
                       unconfirmed > 0 ||
@@ -1004,6 +1022,10 @@ function SegmentReview({
                   change_plan_changed: staleText,
                   admin_proposal_segment_blocked: staleText,
                   platform_segment_changed: staleText,
+                  admin_proposal_target_no_longer_chosen: t(
+                    '提议它的平台管理员刚把本工作区从管理员智能体的目标里去掉了，所以什么也没有应用。上面已经换成现在的样子：可以拒绝它，或请对方把本工作区重新加回目标。',
+                    'The platform administrator who proposed it has just removed this workspace from their admin agent’s targets, so nothing was applied. The review above now shows how things are: reject it, or ask them to add this workspace back to the targets.',
+                  ),
                 }}
                 testId="catalog-proposal-apply-confirm"
               />

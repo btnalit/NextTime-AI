@@ -12,6 +12,7 @@ import type { ModelRow } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { isResidueWorkspace, readResiduePreset } from '../../lib/platform-workspaces.js';
+import { readCreateWorkspacePreset } from '../../lib/router.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
 import { PageHeader } from '../kit/page-header.js';
 import { Select } from '../kit/select.js';
@@ -133,7 +134,16 @@ export function PlatformWorkspacesPage({
 }: PlatformWorkspacesPageProps) {
   const t = useT();
   const toast = useToast();
-  const [panel, setPanel] = useState<Panel>({ kind: 'closed' });
+  // S11 AA4c-3: `?create=admin_trial` (the 管理员智能体 page's 新建试验工作区) opens 新建工作区 on
+  // 试验 — at mount, or on a `hashchange` while the page is already open.
+  const [createPurpose, setCreatePurpose] = useState<'standard' | 'admin_trial'>(
+    () => readCreateWorkspacePreset(initialHash ?? window.location.hash) ?? 'standard',
+  );
+  const [panel, setPanel] = useState<Panel>(() =>
+    readCreateWorkspacePreset(initialHash ?? window.location.hash) !== null
+      ? { kind: 'create' }
+      : { kind: 'closed' },
+  );
   const [filters, setFilters] = useState<Filters>(() =>
     readResiduePreset(initialHash ?? window.location.hash) ? RESIDUE_FILTERS : DEFAULT_FILTERS,
   );
@@ -141,9 +151,24 @@ export function PlatformWorkspacesPage({
   // The banner link can also land while this page is already mounted (same route kind — no
   // remount), so the preset is applied on `hashchange` too; the plain route never resets it.
   useEffect(() => {
+    // UX P3-6 on #943: `?create=` is dropped once read (as `useGateInstancesPanel` drops its
+    // preset), so closing 新建工作区 and reloading does not open it again.
+    function dropCreatePreset(): void {
+      const hash = window.location.hash;
+      if (readCreateWorkspacePreset(hash) !== null) {
+        window.history.replaceState(null, '', withoutQueryParam(hash, 'create'));
+      }
+    }
     function onHashChange(): void {
       if (readResiduePreset(window.location.hash)) setFilters(RESIDUE_FILTERS);
+      const purpose = readCreateWorkspacePreset(window.location.hash);
+      if (purpose !== null) {
+        setCreatePurpose(purpose);
+        setPanel({ kind: 'create' });
+        dropCreatePreset();
+      }
     }
+    dropCreatePreset();
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
@@ -231,7 +256,10 @@ export function PlatformWorkspacesPage({
           <Button
             variant="primary"
             icon="plus"
-            onClick={() => setPanel({ kind: 'create' })}
+            onClick={() => {
+              setCreatePurpose('standard');
+              setPanel({ kind: 'create' });
+            }}
             data-testid="new-workspace"
           >
             {t('新建工作区', 'Create workspace')}
@@ -360,6 +388,9 @@ export function PlatformWorkspacesPage({
             http={http}
             models={catalog}
             defaultOwnerUserId={currentUserId}
+            defaultPurpose={createPurpose}
+            // A preset arriving while the form is already open starts it again on that purpose.
+            key={createPurpose}
             onCreated={handleCreated}
             onCancel={() => setPanel({ kind: 'closed' })}
           />
@@ -540,4 +571,14 @@ function workspaceColumns(
       ),
     },
   ];
+}
+
+/** `hash` without one query parameter (the rest kept as they were). */
+function withoutQueryParam(hash: string, name: string): string {
+  const query = hash.indexOf('?');
+  if (query === -1) return hash;
+  const params = new URLSearchParams(hash.slice(query + 1));
+  params.delete(name);
+  const rest = params.toString();
+  return rest === '' ? hash.slice(0, query) : `${hash.slice(0, query)}?${rest}`;
 }

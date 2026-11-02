@@ -36,6 +36,7 @@ import { Field, Input, Select } from '../ui/Field.js';
 import { RefChip } from '../ui/RefChip.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { useToast } from '../ui/Toast.js';
+import { AdminAgentActingChip } from './AdminAgentActingChip.js';
 import { AuditPayloadNotes } from './AuditPayloadNotes.js';
 
 export interface AuditLogSectionProps {
@@ -363,6 +364,7 @@ export function AuditLogSection({
                           name={nameOf(principalNames, row.actorPrincipalId)}
                           size="s"
                         />
+                        <AdminAgentActingChip payload={row.payload} />
                         {row.resourceId ? (
                           <>
                             <span className="meta-sep" />

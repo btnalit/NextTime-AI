@@ -4,6 +4,7 @@ import {
   PRINCIPAL_REFUSAL_REASON_VALUES,
   type PrincipalRefusalReason,
 } from '@nexttime/shared';
+import { adminAgentRefusalMessage } from './admin-agent.js';
 import { definitionReferenceRefusalOf, definitionReferenceText } from './definition-reference.js';
 import { HttpError } from './http-client.js';
 import { type Translate, sentenceGap } from './i18n.js';
@@ -156,6 +157,10 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   platform_change_drifted: 'Changed since it was applied',
   dependent_segments_applied: 'Workspaces depend on it',
   platform_change_segment_rolled_back: 'Already rolled back',
+  // S11 AA4c-3: the admin agent and its targets.
+  admin_agent_refused: 'The admin agent cannot start here',
+  admin_proposal_target_no_longer_chosen: 'No longer among the targets',
+  admin_role_not_stored: 'Administrator role not stored',
   // S11 GO5c: the requester already has as many goals waiting to be confirmed as one may.
   proposed_goal_limit: 'Too many goals waiting',
   quota_exceeded: 'Quota exceeded',
@@ -267,6 +272,9 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   platform_change_drifted: '应用之后被改过',
   dependent_segments_applied: '有工作区依赖它',
   platform_change_segment_rolled_back: '已经撤销过了',
+  admin_agent_refused: '管理员智能体不能在这里开始',
+  admin_proposal_target_no_longer_chosen: '已不在目标工作区里',
+  admin_role_not_stored: '平台管理员身份没有存进平台',
   proposed_goal_limit: '等待确认的目标太多',
   quota_exceeded: '超出配额',
   internal_error: '内核出错',
@@ -785,6 +793,7 @@ export function presentError(
     (overrides ? ownEntry(overrides, described.code) : undefined) ??
     (err instanceof LocalizedError ? err.message : null) ??
     platformErrorMessage(err, t) ??
+    adminAgentRefusalMessage(err, t) ??
     llmAdminErrorMessage(err, t) ??
     transportErrorMessage(err, t) ??
     stepReferenceMessage(err, t) ??

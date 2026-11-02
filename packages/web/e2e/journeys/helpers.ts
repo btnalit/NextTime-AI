@@ -89,6 +89,7 @@ const NAV_TESTID_BY_LABEL: Readonly<Record<string, string>> = {
   工作区: 'platformWorkspaces',
   用户: 'platformUsers',
   集成: 'platformIntegrations',
+  管理员智能体: 'platformAdminAgent',
   管理员提案: 'platformAdminProposals',
   模块: 'platformModules',
   模型与供应商: 'platformModels',

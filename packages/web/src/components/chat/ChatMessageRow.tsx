@@ -1,3 +1,4 @@
+import type { ChatAgentKind } from '@nexttime/shared';
 import { useEffect, useState } from 'react';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import {
@@ -43,6 +44,8 @@ export interface ChatMessageRowProps {
   /** The goals this chat names, each read once (`useChatGoals`). */
   readonly goals: ReadonlyMap<string, ChatGoalRead>;
   readonly onOpenGoal: (goalRunId: string) => void;
+  /** S11 AA4c-3: whose replies these are — an admin chat's come from the admin agent. */
+  readonly agentKind?: ChatAgentKind;
 }
 
 /**
@@ -71,6 +74,7 @@ export function ChatMessageRow({
   latestGoalStatus,
   goals,
   onOpenGoal,
+  agentKind,
 }: ChatMessageRowProps) {
   const t = useT();
   if (isPendingCardMessage(message) && message.content) {
@@ -143,13 +147,14 @@ export function ChatMessageRow({
     >
       {message.role === 'assistant' ? (
         // Console redesign P3-2 (V3): the assistant's own avatar + "入口 agent · time" row leads
+        // (管理员智能体 in an admin chat)
         // the body (the artboard's `Chat.dc.html`), instead of trailing it — every other role
         // keeps the trailing meta line below.
         <div className="message-meta message-meta-lead">
           <span className="message-avatar" aria-hidden="true">
             A
           </span>
-          <span>{messageRoleLabel(message.role, t)}</span>
+          <span>{messageRoleLabel(message.role, t, agentKind)}</span>
           <time title={formatDateTime(message.createdAt)}>{formatTime(message.createdAt)}</time>
         </div>
       ) : null}
@@ -157,7 +162,7 @@ export function ChatMessageRow({
       {message.role === 'assistant' ? <MessageReferences http={http} text={message.text} /> : null}
       {message.role !== 'assistant' ? (
         <div className="message-meta">
-          <span>{messageRoleLabel(message.role, t)}</span>
+          <span>{messageRoleLabel(message.role, t, agentKind)}</span>
           <time title={formatDateTime(message.createdAt)}>{formatTime(message.createdAt)}</time>
         </div>
       ) : null}
