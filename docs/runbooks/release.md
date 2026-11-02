@@ -2207,6 +2207,16 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **升级验收期间先别建试验工作区**：`create_workspace` 建试验工作区不受 `ADMIN_AGENT_ENABLED` 控制，一旦建了，只回滚代码的窗口就关上了（见下条与 §6）。
 - **回滚**（见 §6 的三行）：只回滚代码的前提是 `select count(*) from workspaces where purpose = 'admin_trial'` 为 0（旧代码的线上 schema 不认这个值）。已经建过的，要先停用、等满 7 天（`PURGE_RETENTION_DAYS`）再清除——它不是临时工作区，不会过期清除——这 7 天里只能保留这个版本。`origin` 列可以留着，旧代码不读。迁移头注释没写这 7 天等待：0050 已在审查与验收环境跑过，改文件会让迁移校验和对不上，以这里为准（#914 #488 P3-a）。
 
+### 3.102 管理员提案：管理员智能体提议、读回与撤回（#916，S11 AA3b-1，0.61.0 起）
+
+带一个迁移 governance `0032_admin_proposals`，随 `apply-release.sh` 自动应用。不改 compose，没有新环境变量，主机不需要操作；`ADMIN_AGENT_ENABLED` 仍默认关，AA4 之前没有运行时会启动管理员智能体。
+
+- **迁移**：新表 `admin_proposals`、`admin_proposal_segments` 及其函数（含 security definer `admin_proposals_proposed_today()`），旧版本不读不写。
+- **新线上**：7 个能力——`admin_proposal` 组（adminAgentOnly）`propose_admin_proposal`、`agent_list_admin_proposals`、`agent_get_admin_proposal`、`agent_withdraw_admin_proposal`；`platform` 组 `list_admin_proposals`、`get_admin_proposal`、`withdraw_admin_proposal`（参数 `proposalId`）。新错误码 `admin_proposal_target_unavailable`（400）、`admin_proposal_credential`（400）、`admin_proposal_quota_exceeded`（429，WS -32012）、`admin_proposal_not_found`（404）、`admin_proposal_not_open`（409）。契约快照只新增这 7 项。
+- **发版说明可写**：管理员智能体可以在试验工作区里起草「管理员提案」（要改哪些正式工作区、改什么），读回和撤回自己的提案；平台管理员在平台面列出、查看、撤回全部提案。每位管理员每天（UTC）最多 20 份。提案只是提议，正式工作区的变化仍要人审批应用（AA3b-2 / AA3c 起）。
+- **本地或验收环境的库**：跑过改名前 0032（表名 `change_plans`、`change_plan_segments`）的，删掉这两张表与它们的函数、删 `schema_migrations` 的 governance 32，再重跑迁移。没有主机跑过改名前的版本。
+- **回滚**（见 §6）：只回退代码即可，表留着没人读。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -2370,6 +2380,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.60.0 之后的下一版 | core `0050_admin_trial_workspaces`（#914，AA3a）：`workspaces_purpose_check` 加 `admin_trial`，触发器 `workspaces_admin_trial_fixed` | 有条件可逆 | 旧代码的线上 schema 不认 `admin_trial`：只有 `select count(*) from workspaces where purpose = 'admin_trial'` 为 0 时才能只回退代码；不为 0 时先停用这些工作区、等满 7 天（`PURGE_RETENTION_DAYS`）清除后再回退，这 7 天里保留这个版本（试验工作区不是临时工作区，不会过期清除）。头注释没写 7 天等待，以本行为准 | 数为 0 时只回退代码即可；要撤 schema 按 0050 文件头：删触发器与函数，按 0028 的值重建 CHECK（`purpose in ('standard', 'ephemeral')`），删 `schema_migrations` 的 core 50 |
 | v0.60.0 之后的下一版 | core `0051_ontology_version_origin`（#914，AA3a，遗留 293）：`ontology_versions.origin` 可空列、取值 CHECK、写后不改触发器 | 可逆 | 只加可空列：旧代码不读不写 `origin`，在新 schema 上照常插入 | 只回退代码、保留列即可；要删列按 0051 文件头（删触发器与函数、`drop column origin`，删 `schema_migrations` 的 core 51） |
 | v0.60.0 之后的下一版 | worker `0013_draft_origin`（#914，AA3a，遗留 293）：`skills`、`procedures`、`worker_definitions` 的 `origin` 可空列、取值 CHECK、写后不改触发器 | 可逆 | 同上，旧代码不读不写 `origin` | 只回退代码、保留列即可；要删列按 0013 文件头，删 `schema_migrations` 的 worker 13 |
+| v0.60.0 之后的下一版 | governance `0032_admin_proposals`（#916，AA3b-1）：新表 `admin_proposals`、`admin_proposal_segments` 及 4 个函数 | 可逆 | 只加新表：旧版本不读不写 | 只回退代码、表留着即可；要删按 0032 文件头：`drop table admin_proposal_segments, admin_proposals`、删文件里的 4 个函数，再删 `schema_migrations` 的 governance 32 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
