@@ -143,6 +143,13 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   // S11 P1-E: verifying an install record.
   change_segment_superseded: 'A later install record is in effect',
   change_verification_cooldown: 'Verified just now',
+  // S11 AA4a: an owner reviewing an admin proposal's segment (能力目录 · 管理员提案).
+  admin_proposal_segment_not_found: 'Admin proposal not found',
+  admin_proposal_segment_not_open: 'Already decided',
+  admin_proposal_segment_blocked: 'Cannot be applied here yet',
+  admin_proposal_segment_unchanged: 'Nothing to apply',
+  platform_segment_not_applied: 'Waiting for the platform',
+  platform_segment_changed: 'Changed on the platform',
   // S11 GO5c: the requester already has as many goals waiting to be confirmed as one may.
   proposed_goal_limit: 'Too many goals waiting',
   quota_exceeded: 'Quota exceeded',
@@ -242,6 +249,12 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   change_rollback_conflict: '现在不能撤销',
   change_segment_superseded: '有更新的安装记录在生效',
   change_verification_cooldown: '刚核验过',
+  admin_proposal_segment_not_found: '找不到这份管理员提案',
+  admin_proposal_segment_not_open: '已经有了决定',
+  admin_proposal_segment_blocked: '现在还不能在这里应用',
+  admin_proposal_segment_unchanged: '没有要应用的内容',
+  platform_segment_not_applied: '要等平台先应用',
+  platform_segment_changed: '平台上已经改过',
   proposed_goal_limit: '等待确认的目标太多',
   quota_exceeded: '超出配额',
   internal_error: '内核出错',

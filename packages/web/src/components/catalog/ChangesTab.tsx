@@ -9,6 +9,7 @@ import {
   type ChangeWideningReasonWire,
   type OntologyTypeNamesWire,
   type OperationFieldChangeWire,
+  type ReceivedAdminProposalSegmentWire,
 } from '@nexttime/shared';
 import { useEffect, useState } from 'react';
 import {
@@ -282,8 +283,9 @@ function familyNoun(kind: ChangeItemWire['kind'], t: Translate): string {
   }
 }
 
-/** 「是」, 「高影响」, 「Container、Host」 — one governance field's value on an Operation version. */
-function operationValueText(
+/** 「是」, 「高影响」, 「Container、Host」 — one governance field's value on an Operation version
+ *  (also the admin proposal review's, `AdminProposalsTab`). */
+export function operationValueText(
   field: OperationFieldChangeWire['field'],
   value: OperationFieldChangeWire['before'],
   t: Translate,
@@ -577,6 +579,12 @@ function ChangeSegmentDetail({
             : []),
         ]}
       />
+      {segment.adminProposal !== null ? (
+        <AdminProposalOrigin
+          http={http}
+          proposalSegmentId={segment.adminProposal.proposalSegmentId}
+        />
+      ) : null}
       {segment.channel === 'platform' ? (
         <p className="text-3 text-small">
           {t(
@@ -630,6 +638,58 @@ function ChangeSegmentDetail({
           </Notice>
         </output>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * S11 AA4a (legacy 602 item 4): what the admin proposal an install record applied said about itself
+ * — its title and description, with a way back to it under 管理员提案. Read from the owner's own
+ * list of segments addressed here (`list_admin_proposal_segments`, owners only: anyone else reads
+ * the record as before). The proposal goes when the trial workspace it came from is purged; the
+ * record keeps who proposed it and what changed.
+ */
+function AdminProposalOrigin({
+  http,
+  proposalSegmentId,
+}: {
+  readonly http: CapabilityCaller;
+  readonly proposalSegmentId: string;
+}) {
+  const t = useT();
+  const can = useRoleCan(http);
+  const owner = can('list_admin_proposal_segments') === true;
+  const segments = useCapabilityList<ReceivedAdminProposalSegmentWire>(
+    http,
+    'list_admin_proposal_segments',
+    {},
+    { enabled: owner },
+  );
+  if (!owner || segments.state.status !== 'ready') return null;
+  const proposal = segments.state.data.items.find((row) => row.id === proposalSegmentId);
+  if (proposal === undefined) {
+    return (
+      <p className="text-3 text-small" data-testid="catalog-change-proposal-gone">
+        {t(
+          '这份管理员提案的原文已经读不到了（提议它的试验工作区可能已被清除，或它不在最新的 100 条里）；这条记录照样保留着谁提议的、改了什么。',
+          'The text of this admin proposal can no longer be read (the trial workspace it came from may have been purged, or it is not among the newest 100); this record still keeps who proposed it and what changed.',
+        )}
+      </p>
+    );
+  }
+  return (
+    <div className="stack-s" data-testid="catalog-change-proposal">
+      <span className="text-small">
+        <strong className="wrap-anywhere">{proposal.proposal.title}</strong>
+      </span>
+      {proposal.proposal.description ? (
+        <span className="text-3 text-small pre-wrap wrap-anywhere">
+          {proposal.proposal.description}
+        </span>
+      ) : null}
+      <RouteLink href={hrefs.catalog('proposals', proposal.id)}>
+        {t('在「管理员提案」查看', 'Open it under Admin proposals')}
+      </RouteLink>
     </div>
   );
 }

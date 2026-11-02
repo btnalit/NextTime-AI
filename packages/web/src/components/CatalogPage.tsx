@@ -88,6 +88,7 @@ import {
   AbsentAnswersReviewedLine,
   useAbsentAnswersReview,
 } from './catalog/AbsentAnswersReview.js';
+import { AdminProposalsTab } from './catalog/AdminProposalsTab.js';
 import { DraftExpiryNote, type EditorState } from './catalog/CatalogShared.js';
 import { ChangesTab } from './catalog/ChangesTab.js';
 import { DiscardReasonField } from './catalog/DiscardReasonField.js';
@@ -192,6 +193,9 @@ const TAB_LABEL: Readonly<Record<CatalogTab, { readonly zh: string; readonly en:
   procedures: { zh: '流程', en: 'Procedures' },
   workers: { zh: 'Worker', en: 'Workers' },
   packs: { zh: '能力包', en: 'Packs' },
+  // S11 AA4a: the admin proposals' segments addressed to this workspace, for its owner
+  // (`catalog/AdminProposalsTab`).
+  proposals: { zh: '管理员提案', en: 'Admin proposals' },
   // S11 P1-B: each pack install or upgrade, and its rollback (`catalog/ChangesTab`).
   changes: { zh: '安装历史', en: 'Install history' },
 };
@@ -203,9 +207,10 @@ const NEW_ITEM_ID = 'new';
 
 /**
  * components/CatalogPage: 能力目录 Catalog (`/govern/catalog`, S3.11 "目录" group — `minRole:
- * 'member'`, open to everyone). Six tabs over the platform's publishable content: Operations
+ * 'member'`, open to everyone). Seven tabs over the platform's publishable content: Operations
  * (`list_operations`), Skills/Procedures (`list_skills`/`list_procedures`), Workers
- * (`list_worker_definitions`), 能力包 (`list_packs`, `PacksTab`, S11 P1-C) and 安装历史
+ * (`list_worker_definitions`), 能力包 (`list_packs`, `PacksTab`, S11 P1-C), 管理员提案
+ * (`list_admin_proposal_segments`, `AdminProposalsTab`, S11 AA4a — the owner's only) and 安装历史
  * (`list_change_segments`, `ChangesTab`, S11 P1-B). Publish/deprecate stay the two-step `propose → publish` capabilities already in the
  * registry (docs/wire-contract-conventions.md: "UI 不得提供'直接改分类'的捷径") — never a shortcut,
  * each write still `channel: 'human'`-gated on its own (no fixed `minRole`, so a 403 denies only
@@ -239,6 +244,14 @@ export function CatalogPage({
   platformAdmin = false,
 }: CatalogPageProps) {
   const t = useT();
+  const can = useRoleCan(http);
+  // S11 AA4a (F10-2): 管理员提案 is the workspace owner's — only they read, apply or reject what an
+  // admin proposal addresses here (`minRole: owner`), so the tab is offered to them alone. Opened
+  // from a link by anyone else, it says whose it is.
+  const tabs = (Object.keys(TAB_LABEL) as CatalogTab[]).filter(
+    (value) =>
+      value !== 'proposals' || tab === 'proposals' || can('list_admin_proposal_segments') === true,
+  );
   return (
     <div className="page">
       <PageHeader
@@ -255,7 +268,7 @@ export function CatalogPage({
           ariaLabel="Catalog section"
           value={tab}
           onChange={onTabChange}
-          options={(Object.keys(TAB_LABEL) as CatalogTab[]).map((value) => ({
+          options={tabs.map((value) => ({
             value,
             label: t(TAB_LABEL[value].zh, TAB_LABEL[value].en),
           }))}
@@ -271,6 +284,13 @@ export function CatalogPage({
         <WorkersTab http={http} itemId={itemId} onSelectItem={onSelectItem} />
       ) : tab === 'packs' ? (
         <PacksTab
+          http={http}
+          itemId={itemId}
+          onSelectItem={onSelectItem}
+          platformAdmin={platformAdmin}
+        />
+      ) : tab === 'proposals' ? (
+        <AdminProposalsTab
           http={http}
           itemId={itemId}
           onSelectItem={onSelectItem}

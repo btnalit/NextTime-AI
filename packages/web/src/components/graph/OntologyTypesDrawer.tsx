@@ -139,7 +139,7 @@ export function OntologyTypesDrawer({
                 { value: 'types', label: t('类型', 'Types'), testId: 'graph-ontology-tab-types' },
                 {
                   value: 'proposals',
-                  label: t('提案', 'Proposals'),
+                  label: t('本体提案', 'Ontology proposals'),
                   testId: 'graph-ontology-tab-proposals',
                 },
               ]}
@@ -645,13 +645,13 @@ function ProposalsListView({ http, onSelect }: ProposalsListViewProps) {
       ) : proposals.state.status === 'error' ? (
         <ErrorBanner
           error={proposals.state.error}
-          title={t('无法加载提案', 'Could not load proposals')}
+          title={t('无法加载本体提案', 'Could not load ontology proposals')}
           onRetry={() => void proposals.reload()}
           testId="graph-proposals-error"
         />
       ) : drafts.length === 0 ? (
         <EmptyState
-          title={t('还没有待审阅的提案', 'No proposals to review yet')}
+          title={t('还没有待审阅的本体提案', 'No ontology proposals to review yet')}
           body={t(
             '智能体调用「提议本体修改」后，草稿会出现在这里，等待有人审阅并发布。',
             'Once an agent proposes an ontology change, the draft appears here, awaiting review and publish.',
@@ -731,13 +731,13 @@ function ProposalDetailView({
       ) : proposals.state.status === 'error' ? (
         <ErrorBanner
           error={proposals.state.error}
-          title={t('无法加载该提案', 'Could not load this proposal')}
+          title={t('无法加载这份本体提案', 'Could not load this ontology proposal')}
           onRetry={() => void proposals.reload()}
           testId="graph-proposal-detail-error"
         />
       ) : row === undefined ? (
         <EmptyState
-          title={t('未找到该提案', 'Proposal not found')}
+          title={t('找不到这份本体提案', 'Ontology proposal not found')}
           body={t(
             '它可能已被发布，或不再对你可见。',
             'It may already be published, or is no longer visible to you.',

@@ -705,6 +705,84 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
     );
   });
 
+  it('S11 AA4a (legacy 602 ④): a record an admin proposal left shows the proposal’s title and leads to it; one no longer readable says so; a member reads neither', async () => {
+    const PROPOSAL_SEGMENT = '33333333-3333-4333-8333-333333333333';
+    const fromProposal = (proposalSegmentId: string): Partial<ChangeSegmentWire> => ({
+      source: { kind: 'admin_proposal', name: 'ops-tuning', version: '1', digest: 'sha256:p' },
+      proposedBy: null,
+      adminProposal: {
+        proposalId: 'proposal-1',
+        proposalSegmentId,
+        proposedBy: { userId: 'u-ada', displayName: 'Ada' },
+      },
+    });
+    const listed = {
+      id: PROPOSAL_SEGMENT,
+      proposal: {
+        id: 'proposal-1',
+        title: '整理容器运维',
+        description: '给运维加一个排障 Skill。',
+        sourceName: 'ops-tuning',
+        origin: 'agent',
+        proposedBy: { userId: 'u-ada', displayName: 'Ada' },
+        proposedAt: '2026-11-01T08:00:00.000Z',
+      },
+      ordinal: 1,
+      items: [],
+      contentDigest: 'sha256:c',
+      status: 'applied',
+      decidedAt: '2026-11-02T08:00:00.000Z',
+      decidedBy: { id: 'p-owner', kind: 'human', displayName: 'Owner' },
+      withdrawnOrigin: null,
+      reason: null,
+      appliedSegmentId: FIRST,
+      rolledBackAt: null,
+      platformSegment: null,
+    };
+    const proposalSegmentOf = (id: string) => (id === FIRST ? PROPOSAL_SEGMENT : 'gone-segment');
+    const handlers = {
+      list_change_segments: () => ({
+        items: [
+          segment(FIRST, fromProposal(proposalSegmentOf(FIRST))),
+          segment(LATER, fromProposal(proposalSegmentOf(LATER))),
+        ],
+      }),
+      get_change_segment: (params: unknown) => {
+        const id = (params as { segmentId: string }).segmentId;
+        return detail(id, {}, fromProposal(proposalSegmentOf(id)));
+      },
+      list_admin_proposal_segments: () => ({ items: [listed] }),
+    };
+
+    const owner = scriptedHttp({ get_workspace: () => OWNER_WORKSPACE, ...handlers });
+    const { unmount } = renderTab(owner, FIRST);
+    const origin = await screen.findByTestId('catalog-change-proposal');
+    expect(origin.textContent).toContain('整理容器运维');
+    expect(origin.textContent).toContain('给运维加一个排障 Skill。');
+    expect(origin.querySelector('a')?.getAttribute('href')).toBe(
+      `#/govern/catalog/proposals/${PROPOSAL_SEGMENT}`,
+    );
+    fireEvent.click(screen.getByTestId(`catalog-change-row-${LATER}`));
+    expect((await screen.findByTestId('catalog-change-proposal-gone')).textContent).toContain(
+      '这条记录照样保留着谁提议的、改了什么',
+    );
+    unmount();
+
+    const member = scriptedHttp({
+      get_workspace: () => ({
+        ...OWNER_WORKSPACE,
+        caller: { ...OWNER_WORKSPACE.caller, role: 'member' },
+      }),
+      ...handlers,
+    });
+    renderTab(member, FIRST);
+    await screen.findByTestId('catalog-change-detail');
+    await waitFor(() => expect(member.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    expect(screen.queryByTestId('catalog-change-proposal')).toBeNull();
+    expect(screen.queryByTestId('catalog-change-proposal-gone')).toBeNull();
+    expect(member.calls.some((c) => c.name === 'list_admin_proposal_segments')).toBe(false);
+  });
+
   it('no records yet: says what makes one', async () => {
     const http = scriptedHttp({
       get_workspace: () => OWNER_WORKSPACE,

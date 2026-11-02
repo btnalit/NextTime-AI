@@ -1,5 +1,6 @@
 import type {
   ActionRequestStatus,
+  AdminProposalSegmentStatus,
   BlastRadius,
   ChangeItemState,
   ChangeSegmentStatus,
@@ -34,6 +35,7 @@ import type {
 } from '@nexttime/shared';
 import {
   ACTION_REQUEST_STATUS_VALUES,
+  ADMIN_PROPOSAL_SEGMENT_STATUS_VALUES,
   BLAST_RADIUS_VALUES,
   CHANGE_ITEM_STATE_VALUES,
   CHANGE_SEGMENT_STATUS_VALUES,
@@ -142,6 +144,7 @@ export type StatusMachine =
   | 'objectiveOutcome'
   | 'selfConnection'
   | 'changeSegment'
+  | 'adminProposalSegment'
   | 'changeItemState'
   | 'packInstall'
   | 'goalRun'
@@ -422,6 +425,19 @@ export const CHANGE_SEGMENT_TONES: Readonly<Record<ChangeSegmentStatus, ChipStyl
   rolled_back: { tone: 'neutral', label: { zh: '已撤销', en: 'Rolled back' } },
 };
 
+/** S11 AA4a: an admin proposal's segment addressed to this workspace
+ *  (`ReceivedAdminProposalSegmentWire.status`, the 能力目录 管理员提案 tab): 待确认 until this
+ *  workspace's owner applies or rejects it, or the administrator who proposed it withdraws it;
+ *  已撤销 once the install record its apply left is rolled back. */
+export const ADMIN_PROPOSAL_SEGMENT_TONES: Readonly<Record<AdminProposalSegmentStatus, ChipStyle>> =
+  {
+    proposed: { tone: 'warn', label: { zh: '待确认', en: 'Awaiting decision' } },
+    applied: { tone: 'ok', label: { zh: '已应用', en: 'Applied' } },
+    rejected: { tone: 'danger', label: { zh: '已拒绝', en: 'Rejected' } },
+    withdrawn: { tone: 'neutral', label: { zh: '已撤回', en: 'Withdrawn' } },
+    rolled_back: { tone: 'neutral', label: { zh: '已撤销', en: 'Rolled back' } },
+  };
+
 /** S11 P1-B: what one change of an install record left is now (`ChangeItemWire.state`). */
 export const CHANGE_ITEM_STATE_TONES: Readonly<Record<ChangeItemState, ChipStyle>> = {
   in_effect: { tone: 'ok', label: { zh: '生效中', en: 'In effect' } },
@@ -614,6 +630,10 @@ const MACHINES: Readonly<
   objectiveOutcome: { values: OBJECTIVE_OUTCOME_VALUES, tones: OBJECTIVE_OUTCOME_TONES },
   selfConnection: { values: SELF_CONNECTION_STATUS_VALUES, tones: SELF_CONNECTION_TONES },
   changeSegment: { values: CHANGE_SEGMENT_STATUS_VALUES, tones: CHANGE_SEGMENT_TONES },
+  adminProposalSegment: {
+    values: ADMIN_PROPOSAL_SEGMENT_STATUS_VALUES,
+    tones: ADMIN_PROPOSAL_SEGMENT_TONES,
+  },
   changeItemState: { values: CHANGE_ITEM_STATE_VALUES, tones: CHANGE_ITEM_STATE_TONES },
   packInstall: { values: PACK_INSTALL_STATUS_VALUES, tones: PACK_INSTALL_TONES },
   goalRun: { values: GOAL_RUN_STATUS_VALUES, tones: GOAL_RUN_TONES },

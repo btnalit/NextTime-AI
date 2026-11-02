@@ -285,6 +285,32 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '其中有改动现在撤销不了（之后又被改过、要退回的那一版已经不在，或类型名已被别的本体占用），本次没有写入任何内容。刷新后按撤销预览里列出的原因处理',
     en: 'Some of its changes cannot be rolled back now (changed again since, the version to return to is gone, or a type name is taken by another ontology) — nothing was written. Refresh and deal with the reasons the rollback preview lists',
   },
+  // S11 AA4a (`application/change-plan/admin-proposal-segments.ts`): the owner's review of an admin
+  // proposal's segment in 能力目录 · 管理员提案. Nothing was written in any of them.
+  admin_proposal_segment_not_found: {
+    zh: '这个工作区没有这份管理员提案，它可能是发给另一个工作区的。回到「管理员提案」重新选择',
+    en: 'This workspace has no such admin proposal — it may be addressed to another workspace. Pick it again from Admin proposals',
+  },
+  admin_proposal_segment_not_open: {
+    zh: '这份管理员提案已经有了决定（应用、拒绝或被撤回），本次没有写入任何内容。刷新后查看它现在的状态',
+    en: 'This admin proposal has been decided already (applied, rejected or withdrawn) — nothing was written. Refresh to see where it stands now',
+  },
+  admin_proposal_segment_blocked: {
+    zh: '其中有内容在本工作区里对不上（名字已被占用、要用的系统没启用等），本次没有写入任何内容。按审阅里列出的原因处理后再应用，或拒绝它',
+    en: 'Part of it does not fit this workspace (a name is taken, a system it needs is not enabled, …) — nothing was written. Deal with the reasons the review lists, then apply it, or reject it',
+  },
+  admin_proposal_segment_unchanged: {
+    zh: '工作区里已经是它提议的样子，没有要应用的内容，本次没有写入任何内容。不需要它的话可以拒绝',
+    en: 'The workspace already is as it proposes, so there is nothing to apply — nothing was written. Reject it if it is not needed',
+  },
+  platform_segment_not_applied: {
+    zh: '这份管理员提案还有平台部分（例如新建一个门宿主实例），要等平台管理员先应用它；平台部分被拒绝或撤销后，这一部分就不能再应用了。本次没有写入任何内容',
+    en: 'This admin proposal also has a platform part (a new gate-host instance, say) that a platform administrator has to apply first; once that part is rejected or rolled back, this one can no longer be applied. Nothing was written',
+  },
+  platform_segment_changed: {
+    zh: '平台部分建好的门宿主实例之后在平台上被改过或删掉了，和你审阅的已经不一样，本次没有写入任何内容。可以拒绝它，或请平台管理员改回原样',
+    en: 'A gate-host instance its platform part created was changed or deleted on the platform since, so it is not what you reviewed — nothing was written. Reject it, or ask a platform administrator to put it back as it was',
+  },
   // S7-E (`application/platform/runtime.ts`): the 运行层 page's refusals. Nothing changed in any of
   // them. The allowlist is the host's configuration, so the operator is who widens it.
   image_not_in_inventory: {
