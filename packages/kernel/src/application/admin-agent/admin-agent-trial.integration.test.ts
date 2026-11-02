@@ -43,6 +43,7 @@ import { createWorkspaceWithOwner } from '../workspace/index.js';
 import {
   AdminAgentRefused,
   TRIAL_SELF_CONNECT_AUDIT_ACTION,
+  isPlatformAdminInTrialWorkspace,
   issueAdminAgentHandle,
 } from './index.js';
 
@@ -887,6 +888,23 @@ describe.runIf(DATABASE_URL !== undefined)(
         } finally {
           await setPlatformRole(admin, 'admin');
         }
+
+        // A trial workspace taken out of use (disabled — the step before a purge, which deletes
+        // the workspace and its self connections) no longer grants the exception either.
+        const disabled = await withAdminClient(pool, async (client) => {
+          await client.query("update workspaces set status = 'disabled' where id = $1", [trialWs]);
+          try {
+            return await isPlatformAdminInTrialWorkspace(client, trialWs, adminPrincipalId);
+          } finally {
+            await client.query("update workspaces set status = 'active' where id = $1", [trialWs]);
+          }
+        });
+        expect(disabled).toBe(false);
+        expect(
+          await withAdminClient(pool, (client) =>
+            isPlatformAdminInTrialWorkspace(client, trialWs, adminPrincipalId),
+          ),
+        ).toBe(true);
       });
     });
   },
