@@ -17,6 +17,43 @@ const KNOWN_OWNER: WorkspaceRole = { kind: 'known', role: 'owner' };
 const KNOWN_MEMBER: WorkspaceRole = { kind: 'known', role: 'member' };
 
 describe('Sidebar', () => {
+  it('S11 AA4e: 能力目录 carries how many admin proposals wait for the owner, none when there are none', () => {
+    render(
+      <Sidebar
+        active="chats"
+        pendingCount={null}
+        adminProposalCount={3}
+        wsStatus="connected"
+        workspaceName="Acme"
+        role={KNOWN_OWNER}
+        authMode="apiKey"
+        onLogout={vi.fn()}
+      />,
+    );
+    const badge = screen.getByTestId('nav-catalog-badge');
+    expect(badge.textContent).toBe('3');
+    expect(badge.getAttribute('aria-label')).toBe('3 份管理员提案等你处理');
+    expect(badge.getAttribute('title')).toBe('3 份管理员提案等你处理');
+    expect(screen.getByTestId('nav-catalog').contains(badge)).toBe(true);
+    cleanup();
+    for (const adminProposalCount of [0, null]) {
+      render(
+        <Sidebar
+          active="chats"
+          pendingCount={null}
+          adminProposalCount={adminProposalCount}
+          wsStatus="connected"
+          workspaceName="Acme"
+          role={KNOWN_OWNER}
+          authMode="apiKey"
+          onLogout={vi.fn()}
+        />,
+      );
+      expect(screen.queryByTestId('nav-catalog-badge')).toBeNull();
+      cleanup();
+    }
+  });
+
   it('#541 acceptance: hides a 治理 page the known role cannot load at all (审计 for an operator)', () => {
     render(
       <Sidebar

@@ -4479,6 +4479,21 @@ const modulesCapabilities = [
     resultSchema: listEnvelope(wire.ReceivedAdminProposalSegmentWireSchema),
     description: `The segments of admin proposals addressed to this workspace — what a platform administrator’s admin agent proposed for it — newest first, at most ${wire.ADMIN_PROPOSAL_LIST_LIMIT} (truncated says there are more): for each, its proposal’s title, description, source name and proposer, the intents as proposed, its status, when and by whom here it was decided, the reason given, and the change segment an applied one recorded. Optional status filter. Never another workspace’s segment of the same proposal.`,
   },
+  // S11 AA4e (journey ⑨, UX P2-3 on #945): the owner learns that a proposal waits without opening
+  // the tab — the console's badge on 能力目录 and its notice on 待我审批 read this count, which the
+  // kernel takes in the same scope as the list (coordinator: no list pulled to filter client-side).
+  {
+    name: 'get_admin_proposal_segment_counts',
+    group: 'modules',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'owner',
+    actsForPerson: true,
+    paramsSchema: z.object({}).strict(),
+    resultSchema: wire.ReceivedAdminProposalCountsWireSchema,
+    description:
+      'How many admin proposal segments addressed to this workspace wait for its owner’s decision (proposed) — the segments list_admin_proposal_segments lists under that status, counted without listing them. One per proposal here.',
+  },
   {
     name: 'preview_admin_proposal_segment',
     group: 'modules',
@@ -5499,6 +5514,7 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   'reject_draft',
   // S11 AA3b-2: deciding an admin proposal's segment is the target workspace owner's, never an agent's.
   'list_admin_proposal_segments',
+  'get_admin_proposal_segment_counts',
   'preview_admin_proposal_segment',
   'apply_admin_proposal_segment',
   'reject_admin_proposal_segment',

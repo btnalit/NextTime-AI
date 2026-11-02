@@ -5,14 +5,14 @@ import type {
   WorkspaceStatusWire,
 } from '@nexttime/shared';
 import { useEffect, useMemo, useState } from 'react';
-import { useCapabilityList } from '../../hooks/useCapability.js';
+import { invalidateCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import type { WireMembership } from '../../lib/auth-api.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import type { ModelRow } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { isResidueWorkspace, readResiduePreset } from '../../lib/platform-workspaces.js';
-import { readCreateWorkspacePreset } from '../../lib/router.js';
+import { hrefs, navigate, readCreateWorkspacePreset } from '../../lib/router.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
 import { PageHeader } from '../kit/page-header.js';
 import { Select } from '../kit/select.js';
@@ -201,8 +201,35 @@ export function PlatformWorkspacesPage({
   }
 
   /** The new row is written into the loaded page before the re-read so the drawer this opens has
-   *  a subject for the whole round trip (`reload()` keeps the cached page on screen). */
+   *  a subject for the whole round trip (`reload()` keeps the cached page on screen).
+   *
+   *  S11 AA4e (journey ⑨, UX P2-1 on #945): a trial workspace created from the 管理员智能体 page's
+   *  新建试验工作区 (`?create=admin_trial` — the only way `createPurpose` is 试验) goes back there, on
+   *  its own card, where its targets are chosen and its chat opened; its status is read again so
+   *  the card is there. Kept on 试验 by the reader; a workspace they switched to 标准 stays here. */
   function handleCreated(created: PlatformWorkspaceWire): void {
+    // S11 AA4e (#501 P3 on #947): only back to 管理员智能体 when the reader is an owner of what
+    // was made — the page lists the reader's own memberships, and the first owner can be someone
+    // else; a trial workspace made for another person opens here like any other.
+    if (
+      createPurpose === 'admin_trial' &&
+      created.purpose === 'admin_trial' &&
+      isOwner(created, currentUserId)
+    ) {
+      invalidateCapability(http, 'get_admin_agent_status');
+      onMembershipsChanged?.();
+      toast.push({
+        tone: 'ok',
+        title: t(`已建好试验工作区 ${created.name}`, `Created trial workspace ${created.name}`),
+        description: t(
+          '回到管理员智能体：先给它选目标工作区，再打开管理员对话。',
+          'Back on the admin agent: choose its target workspaces, then open the admin chat.',
+        ),
+        key: `create-trial-workspace:${created.id}`,
+      });
+      navigate(hrefs.platformAdminAgent(created.id));
+      return;
+    }
     workspaces.mutate((data) => ({ ...data, items: [...data.items, created] }));
     setPanel({ kind: 'workspace', workspaceId: created.id });
     void workspaces.reload();
@@ -409,6 +436,7 @@ export function PlatformWorkspacesPage({
             key={openWorkspace.id}
             http={http}
             workspace={openWorkspace}
+            readerIsMember={memberOf.has(openWorkspace.id) || isOwner(openWorkspace, currentUserId)}
             models={catalog}
             modelsReady={models.state.status === 'ready'}
             onChanged={replaceWorkspace}
@@ -581,4 +609,10 @@ function withoutQueryParam(hash: string, name: string): string {
   params.delete(name);
   const rest = params.toString();
   return rest === '' ? hash.slice(0, query) : `${hash.slice(0, query)}?${rest}`;
+}
+
+/** S11 AA4e (#501 P3 on #947): the reader is one of `workspace`'s owners — known from the row
+ *  itself, so it holds for a workspace just made, before `memberships` is read again. */
+function isOwner(workspace: PlatformWorkspaceWire, userId: string | undefined): boolean {
+  return userId !== undefined && workspace.owners.some((owner) => owner.userId === userId);
 }

@@ -5,6 +5,7 @@ import {
 } from '@nexttime/shared';
 import type { ActionRequestFailureKind, ActionRequestStatus } from '@nexttime/shared';
 import { useEffect, useMemo, useState } from 'react';
+import { useAdminProposalCountValue } from '../hooks/useAdminProposalCount.js';
 import { useAskForAccess } from '../hooks/useAskForAccess.js';
 import { useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
@@ -24,6 +25,7 @@ import { type Translate, useT } from '../lib/i18n.js';
 import { actorRuntimeLabel } from '../lib/labels.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { capabilityHolders } from '../lib/role-holders.js';
+import { hrefs } from '../lib/router.js';
 import { labelText, statusChipStyle } from '../lib/status-tone.js';
 import { ActionFailureLine } from './approvals/ActionFailure.js';
 import { ActionWaitingLine } from './approvals/ActionWaiting.js';
@@ -40,8 +42,10 @@ import { EmptyState } from './kit/empty-state.js';
 import { ErrorBanner } from './kit/error-banner.js';
 import { List, ListRow } from './kit/list-row.js';
 import { MasterDetail, nothingToPick } from './kit/master-detail.js';
+import { Notice } from './kit/notice.js';
 import { PageHeader } from './kit/page-header.js';
 import { RedactedNote } from './kit/redacted-note.js';
+import { RouteLink } from './kit/route-link.js';
 import { SameNameId } from './kit/same-name-id.js';
 import { Select } from './kit/select.js';
 import { SkeletonRows } from './kit/skeleton.js';
@@ -107,6 +111,7 @@ function waitingLabel(iso: string | undefined, t: Translate): string {
  */
 export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: ApprovalQueuePageProps) {
   const t = useT();
+  const adminProposals = useAdminProposalCountValue();
   const permissions = usePermissions();
   const can = useRoleCan(http);
   const { principalId } = useWorkspaceIdentity(http);
@@ -169,6 +174,21 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
           ) : undefined
         }
       />
+
+      {/* S11 AA4e (journey ⑨, UX P2-3 on #945): the owner's other todo — admin proposals waiting
+          here are decided under 能力目录, not in this queue. Counted by the kernel in the owner's
+          scope (`useAdminProposalCount`); nothing for anyone else. */}
+      {adminProposals !== null && adminProposals > 0 ? (
+        <Notice testId="approvals-admin-proposals">
+          {t(
+            `另有 ${adminProposals} 份管理员提案等你在「能力目录 → 管理员提案」里处理。`,
+            `${adminProposals} admin proposal(s) also wait for you under Catalog → Admin proposals.`,
+          )}{' '}
+          <RouteLink href={hrefs.catalog('proposals')} testId="approvals-admin-proposals-link">
+            {t('去处理', 'Open them')}
+          </RouteLink>
+        </Notice>
+      ) : null}
 
       <div className="page-toolbar">
         <Tabs<Filter>

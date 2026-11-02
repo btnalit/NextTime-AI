@@ -481,6 +481,8 @@ export function Routed({
         session,
         <PlatformAdminAgentPage
           http={session.http}
+          focusWorkspaceId={route.workspaceId}
+          openTargets={route.targets === true}
           onOpenChats={(workspaceId, mode) => {
             // 对话 in the trial workspace: switched to first unless already in it.
             const destination = mode === 'open' ? hrefs.chatsOpenAdminAgent() : hrefs.chats();
