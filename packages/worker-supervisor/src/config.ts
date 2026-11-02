@@ -433,12 +433,23 @@ export const SpawnRequestSchema = z
      *  resident container instead of its entry agent's; omitted is the entry agent, as before.
      *  Forwarded by agent-host from the `startTurn` command's own field of the same name. An admin
      *  agent mounts no Skills and has no per-source deny list — its source is deny-all — so a
-     *  request carrying either is refused rather than half applied. */
+     *  request carrying either is refused rather than half applied. And it always carries its own
+     *  `systemPrompt` (the kernel's `ontology/admin-agent.yaml`): the image's default prompt is the
+     *  entry agent's, so its container refuses to start without one (`entrypoint.sh`
+     *  `admin_prompt`) — refused here, before a spawn answers success for a container that exits. */
     agentKind: z.literal('admin_agent').optional(),
   })
   .strict()
   .superRefine((request, ctx) => {
     if (request.agentKind !== 'admin_agent') return;
+    if (request.systemPrompt === undefined || request.systemPrompt.trim() === '') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['systemPrompt'],
+        message:
+          'an admin agent needs its own system prompt: the image’s default is the entry agent’s',
+      });
+    }
     if ((request.skillsInline ?? []).length > 0) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

@@ -65,7 +65,6 @@ export function PlatformSegmentReview({
   readonly workspaces: WorkspaceRefs;
   readonly onApplied: (result: PlatformSegmentApplyResultWire) => void;
   readonly onRejected: (proposal: AdminProposalWire) => void;
-  /** Decided or withdrawn by someone else meanwhile: read the proposal again. */
   /** Someone decided this part meanwhile: read the proposal again, saying why nothing was done. */
   readonly onDecidedElsewhere: (message: string) => void;
 }) {
@@ -355,7 +354,7 @@ export function PlatformSegmentReview({
             target={proposal.title}
             impact={[
               t(
-                `在平台上新建 ${data.items.length} 个门宿主实例，状态为「已发现」，工作区还用不了`,
+                `在平台上新建 ${data.items.length} 个门宿主实例，状态为「未启用」，工作区还用不了`,
                 `Creates ${data.items.length} gate-host instance(s) on the platform, discovered, which no workspace can use yet`,
               ),
               ...(createdConnectors.length > 0

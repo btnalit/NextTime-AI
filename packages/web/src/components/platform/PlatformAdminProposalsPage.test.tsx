@@ -91,7 +91,12 @@ describe('PlatformAdminProposalsPage (平台 · 管理员提案, S11 AA4b)', () 
     const row = await screen.findByTestId(`platform-admin-proposal-row-${PROPOSAL}`);
     expect(named(http.calls, 'list_admin_proposals')[0]?.params).toEqual({});
     expect(row.textContent).toContain('接入知识库');
-    expect(row.textContent).toContain('平台管理员 Ada 的管理员智能体');
+    // #936 UX P3-3: the source name and when — every proposal here is a platform administrator's
+    // admin agent's, so the proposer is read in the detail.
+    expect(
+      within(row).getByTestId(`platform-admin-proposal-row-source-${PROPOSAL}`).textContent,
+    ).toBe('kb-onboarding');
+    expect(row.textContent).not.toContain('平台管理员 Ada 的管理员智能体');
     expect(row.textContent).toContain('待确认 3');
 
     fireEvent.change(screen.getByTestId('platform-admin-proposals-filter'), {

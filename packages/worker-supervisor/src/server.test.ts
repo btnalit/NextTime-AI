@@ -685,6 +685,7 @@ describe('/resident/* with agentKind (S11 AA4c-2)', () => {
         principalId: ALICE,
         handle: 'h-admin',
         agentKind: 'admin_agent',
+        systemPrompt: 'you are the admin agent',
         ...extra,
       },
     });
@@ -748,8 +749,14 @@ describe('/resident/* with agentKind (S11 AA4c-2)', () => {
     ]);
   });
 
-  it('refuses Skills or an egress list for an admin agent, and any other kind', async () => {
+  it('refuses an admin agent without its own prompt, Skills or an egress list for one, and any other kind', async () => {
     const { app, docker } = setup();
+    // Its container would exit on `admin_prompt` after the spawn had answered 200.
+    const withoutPrompt = await spawnAdmin(app, { systemPrompt: undefined });
+    expect(withoutPrompt.statusCode).toBe(400);
+    expect(withoutPrompt.json().error.message).toContain(
+      'an admin agent needs its own system prompt',
+    );
     const withSkills = await spawnAdmin(app, {
       skillsInline: [{ name: 'notes', files: { 'SKILL.md': '# notes' } }],
     });
