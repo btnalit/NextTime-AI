@@ -1,5 +1,9 @@
 import type { ObjectiveOutcome } from '@nexttime/shared';
-import { currentPrincipalId, requireChatAccess } from '../../application/chat/index.js';
+import {
+  assertChatKindAccess,
+  currentPrincipalId,
+  requireChatAccess,
+} from '../../application/chat/index.js';
 import { findAttributableTurn } from '../../application/host-bridge/index.js';
 import {
   type ObjectiveOutcomeRecord,
@@ -103,10 +107,12 @@ export function toWireTurnAttribution(record: TurnAttributionRecord) {
 // Handlers
 // -------------------------------------------------------------------------------------------
 
-/** `list_chat_turns` (human): the Chat must be visible (`requireChatAccess`, 404 otherwise). */
+/** `list_chat_turns` (human): the Chat must be visible (`requireChatAccess`, 404 otherwise), and an
+ *  admin agent's Chat still readable by its person (S11 AA4c, `assertChatKindAccess`). */
 export const listChatTurnsHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { chatId, limit, cursor } = params as { chatId: string; limit?: number; cursor?: string };
-  await requireChatAccess(client, workspaceId, chatId);
+  const chat = await requireChatAccess(client, workspaceId, chatId);
+  await assertChatKindAccess(client, workspaceId, chat, await currentPrincipalId(client), 'read');
   const page = await listChatTurns(client, workspaceId, chatId, { limit, cursor });
   return {
     result: {

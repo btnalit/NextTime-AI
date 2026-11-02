@@ -438,6 +438,55 @@ describe('AgentHostRuntime — startTurn with no agent-host connected', () => {
   });
 });
 
+// #937 R-2 (S11 AA4c-1): an admin agent's Chat is never handed to the entry agent. Until the admin
+// container exists (AA4c-2) its Turn fails at once — with an agent-host connected, it still sends
+// no startTurn to the entry container and issues no entry Handle.
+describe('AgentHostRuntime — an admin agent Turn never reaches the entry container', () => {
+  it('ends failed, sends nothing on the link and touches no session or Handle', async () => {
+    const { pool, handleCount, sessionCount } = createFakePool();
+    const { sink, events } = createFakeSink();
+    const privateKey = await ephemeralPrivateKey();
+    const runtime = new AgentHostRuntime({
+      pool,
+      sink,
+      privateKey,
+      kernelLlmUrl: 'http://llm-proxy:8082',
+      log: () => {},
+    });
+    const { link, sent } = createFakeLink();
+    runtime.connect(link);
+
+    const input = startTurnInput({ agentKind: 'admin_agent', sessionId: randomUUID() });
+    await runtime.startTurn(input);
+
+    expect(sent).toEqual([]);
+    expect(pool.connect).not.toHaveBeenCalled();
+    expect(sessionCount()).toBe(0);
+    expect(handleCount.get(input.principalId)).toBeUndefined();
+    expect(events).toEqual([
+      {
+        type: 'turnEnded',
+        status: 'failed',
+        workspaceId: input.workspaceId,
+        chatId: input.chatId,
+        turnId: input.turnId,
+        principalId: input.principalId,
+      },
+    ]);
+
+    // The same person's entry Turn right after still goes to the entry container.
+    const entry = startTurnInput({
+      principalId: input.principalId,
+      workspaceId: input.workspaceId,
+    });
+    void runtime.startTurn(entry);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({ type: 'startTurn', turnId: entry.turnId });
+    expect(sent[0]).not.toHaveProperty('agentKind');
+    runtime.handleFrame({ type: 'turnAccepted', turnId: entry.turnId });
+  });
+});
+
 // S10 E3-1c (review #493 of #813): what the entry agent starts with goes through the evaluation
 // seal, and a check that cannot run starts nothing (the hit itself is proven on real Postgres, in
 // application/gateway/eval-seal.integration.test.ts).

@@ -617,12 +617,14 @@ describe('change_plan: what an admin agent proposes for people to apply (S11 AA3
   const assertConsistent = (entries: readonly Capability[]) => assertRegistryConsistent(entries);
   const group = CAPABILITY_REGISTRY.filter((capability) => capability.group === 'admin_proposal');
 
-  it('holds the proposal, its two reads and its withdrawal, each only an admin agent calls', () => {
+  it('holds the proposal, its two reads, its withdrawal and the targets read, each only an admin agent calls', () => {
     expect(group.map((capability) => [capability.name, capability.mode])).toEqual([
       ['propose_admin_proposal', 'propose'],
       ['agent_list_admin_proposals', 'observe'],
       ['agent_get_admin_proposal', 'observe'],
       ['agent_withdraw_admin_proposal', 'write'],
+      // S11 AA4c (governance 0036): what its administrator lets it propose to — ids only.
+      ['agent_list_proposal_targets', 'observe'],
     ]);
     for (const capability of group) {
       expect(capability.adminAgentOnly, capability.name).toBe(true);

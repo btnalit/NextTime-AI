@@ -49,6 +49,22 @@ export interface FindAttributableTurnInput {
   readonly at: Date;
   /** See `DEFAULT_RECENT_TURN_WINDOW_MINUTES`. */
   readonly recentTurnWindowMinutes?: number;
+  /**
+   * S11 AA4c: which agent's Turns. Omitted: the entry agent's — every Turn but one an admin agent
+   * runs (`metadata.sessionKind = 'admin_agent'`, written when the Turn starts, core 0052). An
+   * admin session: only the Turns run under it (`metadata.sessionId`). A person can have both
+   * running at once in a trial workspace; what each does is never attributed to the other's.
+   */
+  readonly adminSessionId?: string;
+}
+
+/** The `activities` predicate {@link FindAttributableTurnInput.adminSessionId} adds, on the
+ *  query parameter `param` (the admin session's id, or null for the entry agent's Turns). */
+function turnOfAgentSql(param: string): string {
+  return `(case when ${param}::text is null
+        then coalesce(metadata ->> 'sessionKind', '') <> 'admin_agent'
+        else metadata ->> 'sessionKind' = 'admin_agent' and metadata ->> 'sessionId' = ${param}::text
+      end)`;
 }
 
 /**
@@ -69,13 +85,15 @@ export async function findAttributableTurn(
     at,
     recentTurnWindowMinutes = DEFAULT_RECENT_TURN_WINDOW_MINUTES,
   } = input;
+  const adminSessionId = input.adminSessionId ?? null;
 
   const running = await client.query<{ id: string }>(
     `select id from activities
      where workspace_id = $1 and started_by = $2 and kind = 'agent_turn' and status = 'running'
+       and ${turnOfAgentSql('$3')}
      order by created_at desc, id desc
      limit 1`,
-    [workspaceId, principalId],
+    [workspaceId, principalId, adminSessionId],
   );
   const runningId = running.rows[0]?.id;
   if (runningId) return { id: runningId, wasRunning: true };
@@ -84,9 +102,10 @@ export async function findAttributableTurn(
     `select id from activities
      where workspace_id = $1 and started_by = $2 and kind = 'agent_turn'
        and created_at > $3::timestamptz - ($4 || ' minutes')::interval
+       and ${turnOfAgentSql('$5')}
      order by created_at desc, id desc
      limit 1`,
-    [workspaceId, principalId, at.toISOString(), recentTurnWindowMinutes],
+    [workspaceId, principalId, at.toISOString(), recentTurnWindowMinutes, adminSessionId],
   );
   const recentId = recent.rows[0]?.id;
   return recentId ? { id: recentId, wasRunning: false } : undefined;
@@ -113,12 +132,14 @@ export async function findAttributableTurnForSession(
 ): Promise<AttributableTurn | undefined> {
   const { workspaceId, sessionId, at, recentTurnWindowMinutes } = input;
 
-  const session = await client.query<{ principal_id: string }>(
-    'select principal_id from sessions where workspace_id = $1 and id = $2',
+  const session = await client.query<{ principal_id: string; kind: string }>(
+    'select principal_id, kind from sessions where workspace_id = $1 and id = $2',
     [workspaceId, sessionId],
   );
   const principalId = session.rows[0]?.principal_id;
   if (!principalId) return undefined;
+  // S11 AA4c: an admin agent's model calls belong to the Turns of its own session only.
+  const adminSessionId = session.rows[0]?.kind === 'admin_agent' ? sessionId : undefined;
 
   // RLS: `activities_visibility` (migrations/core/0003_chat.sql) restricts visible `activities`
   // rows to Chats the transaction's `app.principal_id` owns (or that are workspace-visible) — a
@@ -135,5 +156,11 @@ export async function findAttributableTurnForSession(
   // transaction (`llm_usage`, `outbox`) has a principal-scoped RLS predicate for this to disturb.
   await client.query("select set_config('app.principal_id', $1, true)", [principalId]);
 
-  return findAttributableTurn(client, { workspaceId, principalId, at, recentTurnWindowMinutes });
+  return findAttributableTurn(client, {
+    workspaceId,
+    principalId,
+    at,
+    recentTurnWindowMinutes,
+    ...(adminSessionId === undefined ? {} : { adminSessionId }),
+  });
 }

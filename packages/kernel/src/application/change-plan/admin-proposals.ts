@@ -75,6 +75,24 @@ export class AdminProposalTargetUnavailableError extends Error {
   }
 }
 
+/** S11 AA4c (F5, the AA4c plan's D2): a segment's target is not among the workspaces the
+ *  administrator lets their admin agent propose to in this trial workspace (`set_admin_agent_targets`
+ *  on the platform plane; governance 0036). Checked before {@link AdminProposalTargetUnavailableError},
+ *  so the refusal says nothing about the workspace itself — whether it exists or is disabled — only
+ *  that it was not chosen: `segment` is the index into the call's own `segments`. Mapped to 400
+ *  `admin_proposal_target_not_chosen`; nothing was written. */
+export class AdminProposalTargetNotChosenError extends Error {
+  readonly code = 'admin_proposal_target_not_chosen' as const;
+  readonly details: { readonly segment: number };
+  constructor(segment: number) {
+    super(
+      `segments[${segment}].targetWorkspaceId: your administrator has not chosen that workspace for you to propose to — nothing was proposed. agent_list_proposal_targets lists the ones they chose; ask them to add another on the platform's admin agent page.`,
+    );
+    this.name = 'AdminProposalTargetNotChosenError';
+    this.details = { segment };
+  }
+}
+
 /** F9: a value in the proposal that is almost certainly a credential (`findCredentialValues`).
  *  Mapped to 400 `admin_proposal_credential` with `details: { suspectedSecretValues,
  *  suspectedSecretPaths }` — where (field names and indices, at most 20), never a fragment of the
@@ -426,12 +444,27 @@ async function firstUnavailableTarget(
   return index === -1 ? undefined : index;
 }
 
+/** S11 AA4c (F5, D2): the first segment whose target the administrator has not chosen for their
+ *  admin agent here, or none. `admin_agent_chosen_targets()` (governance 0036) answers for the
+ *  transaction's own Principal in this trial workspace only. */
+async function firstTargetNotChosen(
+  client: PoolClient,
+  segments: readonly AdminProposalSegmentInputWire[],
+): Promise<number | undefined> {
+  if (segments.length === 0) return undefined;
+  const result = await client.query<{ id: string }>('select admin_agent_chosen_targets() as id');
+  const chosen = new Set(result.rows.map((row) => row.id));
+  const index = segments.findIndex((segment) => !chosen.has(segment.targetWorkspaceId));
+  return index === -1 ? undefined : index;
+}
+
 /**
  * Makes a proposal in the trial workspace `proposer.workspaceId`, in the caller's transaction (the
  * dispatcher's, which then writes the call's audit row). `segments` are
  * {@link checkAdminProposal}'s. The order of the database checks: F11's count under the
- * administrator's lock, then the targets — so a refused proposal never counts, and two at the
- * limit cannot both pass.
+ * administrator's lock, then the targets — chosen (S11 AA4c), then available — so a refused
+ * proposal never counts, and two at the limit cannot both pass. Each workspace segment keeps the
+ * target it names: changing the targets afterwards does not move a proposal made before.
  */
 export async function proposeAdminProposal(
   client: PoolClient,
@@ -456,6 +489,8 @@ export async function proposeAdminProposal(
   if ((today.rows[0]?.count ?? 0) >= ADMIN_PROPOSAL_DAILY_LIMIT) {
     throw new AdminProposalQuotaExceededError(adminProposalQuotaResetsAt(new Date()));
   }
+  const notChosen = await firstTargetNotChosen(client, segments);
+  if (notChosen !== undefined) throw new AdminProposalTargetNotChosenError(notChosen);
   const unavailable = await firstUnavailableTarget(client, segments);
   if (unavailable !== undefined) throw new AdminProposalTargetUnavailableError(unavailable);
 

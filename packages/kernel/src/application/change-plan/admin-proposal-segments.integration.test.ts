@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type {
+  AdminAgentTargetsResultWire,
   AdminProposalSegmentApplyResultWire,
   AdminProposalSegmentPreviewWire,
   AdminProposalWire,
@@ -28,6 +29,8 @@ import {
   registerGatekeeper,
 } from '../../governance/gatekeepers/index.js';
 import { CredentialReviewRequiredError } from '../../governance/redaction/credential-review.js';
+import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
+import { WS_ERROR_CODES, mapDispatchError } from '../../interfaces/ws/rpc.js';
 import { issueAdminAgentHandle } from '../admin-agent/index.js';
 import { withAdminClient } from '../gateway/auth.js';
 import { ForbiddenError } from '../gateway/authorize.js';
@@ -44,6 +47,8 @@ import {
   AdminProposalSegmentNotFoundError,
   AdminProposalSegmentNotOpenError,
   AdminProposalSegmentUnchangedError,
+  AdminProposalTargetNoLongerChosenError,
+  AdminProposalTargetNotChosenError,
   ChangeConfirmationRequiredError,
   ChangePlanChangedError,
   derivePackComponentId,
@@ -76,6 +81,7 @@ const ONTOLOGY_DIR = path.join(KERNEL_ROOT, '..', '..', 'ontology');
 
 /** Not a real credential: a filler value under a name a credential would have. */
 const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type Target = { readonly workspaceId: string; readonly ownerPrincipalId: string };
 
@@ -221,8 +227,40 @@ describe.runIf(DATABASE_URL !== undefined)(
       return newWorkspace(owner, 'standard');
     }
 
-    const call = <T>(caller: ResolvedCaller, name: string, params: unknown) =>
+    /** What the administrator does on the platform's admin agent page before their agent proposes
+     *  (AA4c, governance 0036): chooses each workspace segment's target, when it may be one — an
+     *  active standard workspace — and the agent's person is a stored platform administrator.
+     *  {@link call} does it for every `propose_admin_proposal`; {@link callUnchosen} does not. */
+    async function chooseSegmentTargets(caller: ResolvedCaller, params: unknown): Promise<void> {
+      const segments = (params as { segments?: unknown } | null)?.segments;
+      if (caller.channel !== 'handle' || !Array.isArray(segments)) return;
+      const ids = (segments as readonly { targetWorkspaceId?: unknown }[])
+        .map((segment) => segment.targetWorkspaceId)
+        .filter((id): id is string => typeof id === 'string' && UUID.test(id));
+      if (ids.length === 0) return;
+      await withAdminClient(pool, (client) =>
+        client.query(
+          `insert into admin_agent_targets
+             (workspace_id, principal_id, target_workspace_id, chosen_by_user)
+           select p.workspace_id, p.id, w.id, p.user_id
+             from principals p
+             join users u on u.id = p.user_id and u.platform_role = 'admin'
+             join workspaces w on w.id = any($3::uuid[])
+                              and w.status = 'active' and w.purpose = 'standard'
+            where p.workspace_id = $1 and p.id = $2 and p.kind = 'human'
+           on conflict do nothing`,
+          [caller.claims.ws, caller.claims.obo, ids],
+        ),
+      );
+    }
+
+    const callUnchosen = <T>(caller: ResolvedCaller, name: string, params: unknown) =>
       dispatchCapability({ pool }, caller, name, params) as Promise<T>;
+
+    const call = async <T>(caller: ResolvedCaller, name: string, params: unknown): Promise<T> => {
+      if (name === 'propose_admin_proposal') await chooseSegmentTargets(caller, params);
+      return callUnchosen<T>(caller, name, params);
+    };
 
     /** Proposes one segment for `target` and returns that segment's id and the proposal. */
     async function proposeFor(
@@ -1204,6 +1242,195 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       expect(read.status).toBe('partially_applied');
       expect(read.segmentCounts).toMatchObject({ proposed: 1, applied: 1 });
+    });
+
+    it('AA4c (coordinator, 2026-11-02): a proposal keeps the target it was proposed with — once the administrator drops it, the owner reads it blocked and applying is refused; choosing it again restores what was reviewed', async () => {
+      const { user, trial, agent } = await administrator();
+      const target = await newTarget();
+      const other = await newTarget();
+      const { proposal, segmentId } = await proposeFor(agent, target, [skillItem('frozen')]);
+      // Two more to `target`, for the ways out the 409 names (#937 R-1).
+      const toReject = await proposeFor(agent, target, [skillItem('frozen-reject')]);
+      const toWithdraw = await proposeFor(agent, target, [skillItem('frozen-withdraw')]);
+      const reviewed = await preview(target, segmentId);
+      expect(reviewed.targetChosen).toBe(true);
+      expect(reviewed.digest).toMatch(/^sha256:/);
+
+      // On the platform's admin agent page the administrator swaps `target` for `other`.
+      const changed = await call<AdminAgentTargetsResultWire>(
+        platformCaller(user),
+        'set_admin_agent_targets',
+        { trialWorkspaceId: trial.workspaceId, targetWorkspaceIds: [other.workspaceId] },
+      );
+      expect(changed).toMatchObject({
+        added: [other.workspaceId],
+        removed: [target.workspaceId],
+      });
+
+      // The proposal does not follow: its segment is still `target`'s, and `other` has none.
+      const theirs = await call<ListEnvelope<ReceivedAdminProposalSegmentWire>>(
+        ownerCaller(other),
+        'list_admin_proposal_segments',
+        {},
+      );
+      expect(theirs.items).toEqual([]);
+      const blocked = await preview(target, segmentId);
+      expect(blocked).toMatchObject({ targetChosen: false, digest: null });
+      expect(blocked.segment.id).toBe(segmentId);
+      // Applying what was reviewed before the change is refused, and nothing is written.
+      const refused = await thrownBy(apply(target, segmentId, reviewed.digest as string));
+      expect(refused).toBeInstanceOf(AdminProposalTargetNoLongerChosenError);
+      expect(mapCapabilityError(refused)).toMatchObject({
+        status: 409,
+        code: 'admin_proposal_target_no_longer_chosen',
+      });
+      expect(mapDispatchError(refused).code).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
+      expect((await segmentRow(segmentId))?.status).toBe('proposed');
+      const recorded = await inTarget(target, (client) =>
+        client.query('select 1 from change_segments where admin_proposal_segment_id = $1', [
+          segmentId,
+        ]),
+      );
+      expect(recorded.rows).toHaveLength(0);
+      // What the refusal tells the owner to do still works with the target dropped (#937 R-1,
+      // governance 0036's segment guard holds only applying to a chosen target): the owner
+      // rejects, and the agent withdraws its own proposal.
+      await expect(
+        call<ReceivedAdminProposalSegmentWire>(
+          ownerCaller(target),
+          'reject_admin_proposal_segment',
+          { segmentId: toReject.segmentId, reason: 'Not chosen for us any more.' },
+        ),
+      ).resolves.toMatchObject({ status: 'rejected' });
+      expect((await segmentRow(toReject.segmentId))?.status).toBe('rejected');
+      await call(agent, 'agent_withdraw_admin_proposal', { proposalId: toWithdraw.proposal.id });
+      expect((await segmentRow(toWithdraw.segmentId))?.status).toBe('withdrawn');
+      // The agent proposing it again to `target` is refused; to `other`, it goes through.
+      const again = await thrownBy(
+        callUnchosen(agent, 'propose_admin_proposal', {
+          title: 'Again',
+          sourceName: `aa3b2-${tag}`,
+          segments: [{ targetWorkspaceId: target.workspaceId, items: [skillItem('frozen')] }],
+        }),
+      );
+      expect(again).toBeInstanceOf(AdminProposalTargetNotChosenError);
+      await expect(
+        callUnchosen(agent, 'propose_admin_proposal', {
+          title: 'Again',
+          sourceName: `aa3b2-${tag}`,
+          segments: [{ targetWorkspaceId: other.workspaceId, items: [skillItem('frozen')] }],
+        }),
+      ).resolves.toMatchObject({ segments: [{ targetWorkspaceId: other.workspaceId }] });
+
+      // governance 0036, the database's second wall. A proposal written past the kernel — in one
+      // transaction, as 0032 requires — gets no workspace segment to a target its proposer did
+      // not choose...
+      const writeCopy = (targetWorkspaceId: string) =>
+        withWorkspace(
+          pool,
+          { workspaceId: trial.workspaceId, principalId: trial.ownerPrincipalId },
+          async (client) => {
+            const copy = await client.query<{ id: string }>(
+              `insert into admin_proposals
+                 (workspace_id, proposed_by, proposed_by_user, proposer_display_name, session_id,
+                  origin, title, description, source_name, content_digest)
+               select workspace_id, proposed_by, proposed_by_user, proposer_display_name,
+                      session_id, origin, 'Written past the kernel', description, source_name,
+                      content_digest
+                 from admin_proposals where id = $1
+               returning id`,
+              [proposal.id],
+            );
+            await client.query(
+              `insert into admin_proposal_segments
+                 (workspace_id, proposal_id, ordinal, authority, target_workspace_id, items,
+                  content_digest)
+               select workspace_id, $2, 1, 'workspace', $3, items, content_digest
+                 from admin_proposal_segments where id = $1`,
+              [segmentId, copy.rows[0]?.id, targetWorkspaceId],
+            );
+          },
+        );
+      const third = await newTarget();
+      await expect(writeCopy(third.workspaceId)).rejects.toThrow(
+        /not among its proposer's targets/,
+      );
+      // ...nor to one another administrator in the same trial workspace chose for their own agent
+      // (#937 G08): the targets are the proposer's.
+      const colleague = await createUser(pool, {
+        login: `aa3b2-colleague-${randomUUID().slice(0, 8)}`,
+        displayName: 'Colleague',
+        platformRole: 'admin',
+      });
+      await withAdminClient(pool, (client) =>
+        client.query(
+          `insert into principals (workspace_id, id, kind, role, display_name, user_id)
+           values ($1, $2, 'human', 'member', $3, $4)`,
+          [trial.workspaceId, randomUUID(), colleague.displayName, colleague.id],
+        ),
+      );
+      await call(platformCaller(colleague), 'set_admin_agent_targets', {
+        trialWorkspaceId: trial.workspaceId,
+        targetWorkspaceIds: [third.workspaceId],
+      });
+      await expect(writeCopy(third.workspaceId)).rejects.toThrow(
+        /not among its proposer's targets/,
+      );
+      await expect(writeCopy(other.workspaceId)).resolves.toBeUndefined();
+      // ...nor moved to applied, though its record is otherwise right.
+      await inTarget(target, (client) =>
+        client.query(
+          `insert into change_segments
+             (workspace_id, plan_id, channel, source_kind, source_name, source_version,
+              source_digest, reviewed_digest, proposed_by, applied_by, admin_proposal_id,
+              admin_proposal_segment_id, proposed_by_user, proposer_display_name)
+           values ($1, gen_random_uuid(), 'human', 'admin_proposal', $2, $3, $4, $10,
+                   null, $5, $6, $7, $8, $9)`,
+          [
+            target.workspaceId,
+            `aa3b2-${tag}`,
+            proposal.id,
+            proposal.segments[0]?.contentDigest,
+            target.ownerPrincipalId,
+            proposal.id,
+            segmentId,
+            user.id,
+            user.displayName,
+            reviewed.digest,
+          ],
+        ),
+      );
+      const forged = await inTarget(target, (client) =>
+        client.query<{ id: string }>(
+          'select id from change_segments where admin_proposal_segment_id = $1',
+          [segmentId],
+        ),
+      );
+      const forgedId = forged.rows[0]?.id as string;
+      const markApplied = () =>
+        inTarget(target, (client) =>
+          client.query(
+            `update admin_proposal_segments
+                set status = 'applied', decided_by = $2, applied_segment_id = $3
+              where id = $1`,
+            [segmentId, target.ownerPrincipalId, forgedId],
+          ),
+        );
+      await expect(markApplied()).rejects.toThrow(/not among its proposer's targets/);
+      expect((await segmentRow(segmentId))?.status).toBe('proposed');
+      await withAdminClient(pool, (client) =>
+        client.query('delete from change_segments where id = $1', [forgedId]),
+      );
+
+      // Chosen again: the same digest as before, and it applies.
+      await call(platformCaller(user), 'set_admin_agent_targets', {
+        trialWorkspaceId: trial.workspaceId,
+        targetWorkspaceIds: [other.workspaceId, target.workspaceId],
+      });
+      const restored = await preview(target, segmentId);
+      expect(restored).toMatchObject({ targetChosen: true, digest: reviewed.digest });
+      await previewAndApply(target, segmentId);
+      expect((await segmentRow(segmentId))?.status).toBe('applied');
     });
 
     it('F12: only the owner of the workspace a segment is addressed to reaches it', async () => {

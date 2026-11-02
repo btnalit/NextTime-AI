@@ -55,15 +55,20 @@ export interface RevokeUserCredentialsOptions {
  * caller's transaction. `update_user` calls it when it takes `admin` away: the per-call check
  * (application/admin-agent) already refuses such a Handle in the kernel, and the revocation is what
  * reaches llm-proxy, which checks revoked jtis only. Same transaction handling as
- * {@link revokeUserCredentials}. Returns the revoked session ids.
+ * {@link revokeUserCredentials}. Returns the ids of the sessions it revoked (those not revoked
+ * before).
  */
 export async function revokeUserAdminAgentSessions(
   client: PoolClient,
   userId: string,
+  options: { readonly workspaceIds?: readonly string[] } = {},
 ): Promise<readonly string[]> {
+  // S11 AA4c (`stop_admin_agent`): `workspaceIds` narrows it to the user's admin agents there.
   const principals = await client.query<{ workspace_id: string; id: string }>(
-    `select workspace_id, id from principals where user_id = $1 and kind = 'human'`,
-    [userId],
+    `select workspace_id, id from principals
+      where user_id = $1 and kind = 'human'
+        and ($2::uuid[] is null or workspace_id = any($2::uuid[]))`,
+    [userId, options.workspaceIds === undefined ? null : [...options.workspaceIds]],
   );
   const previous = await client.query<{ workspace_id: string | null }>(
     "select current_setting('app.workspace_id', true) as workspace_id",
@@ -79,16 +84,16 @@ export async function revokeUserAdminAgentSessions(
           where workspace_id = $1 and on_behalf_of = $2 and kind = 'admin_agent'`,
         [principal.workspace_id, principal.id],
       );
-      await client.query(
+      const moved = await client.query<{ id: string }>(
         `update sessions set status = 'revoked', expires_at = least(expires_at, now())
           where workspace_id = $1 and on_behalf_of = $2 and kind = 'admin_agent'
-            and status <> 'revoked'`,
+            and status <> 'revoked'
+          returning id`,
         [principal.workspace_id, principal.id],
       );
-      for (const session of sessions.rows) {
-        await revokeSession(client, session.id);
-        revoked.push(session.id);
-      }
+      // Every Handle under any of its admin sessions, revoked or not — idempotent.
+      for (const session of sessions.rows) await revokeSession(client, session.id);
+      revoked.push(...moved.rows.map((row) => row.id));
     }
   } finally {
     await client.query("select set_config('app.workspace_id', $1, true)", [

@@ -1574,6 +1574,38 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     enHint:
       'An admin agent withdraws an admin proposal it made; parts not yet decided can no longer be applied, applied ones stay.',
   },
+  // S11 AA4c-1 (the AA4c plan's D1, D3, D6, D7): the 「管理员智能体」 page's reads and changes, and
+  // the one read the agent has of the workspaces it may propose to.
+  get_admin_agent_status: {
+    zh: '查看管理员智能体',
+    en: 'Read the admin agent',
+    zhHint:
+      '查看平台是否开启了管理员智能体，以及本人所在的每个试验工作区里：能否使用、可以向哪些工作区提议、在用的会话。',
+    enHint:
+      'Shows whether the platform has the admin agent on and, for each trial workspace you are in, whether it may start there, the workspaces it may propose to, and its open session.',
+  },
+  set_admin_agent_targets: {
+    zh: '设置管理员智能体目标',
+    en: 'Choose admin agent targets',
+    zhHint:
+      '选择管理员智能体可以向哪些工作区提议，整组替换。同一试验工作区里本人的所有管理员对话共用这一组；已有的提案保留提议时的目标。',
+    enHint:
+      'Chooses the workspaces the admin agent may propose to, replacing the list before. Every admin agent chat of yours in that trial workspace shares it; earlier proposals keep the targets they were made with.',
+  },
+  stop_admin_agent: {
+    zh: '停止管理员智能体',
+    en: 'Stop the admin agent',
+    zhHint:
+      '停止本人的管理员智能体：吊销它的会话和 Handle，停掉正在跑的一轮。对话保留，下一条消息会开新会话。',
+    enHint:
+      'Stops your admin agent: its sessions and Handles are revoked and its running turns stopped. Its chats stay; the next message starts a new session.',
+  },
+  agent_list_proposal_targets: {
+    zh: '智能体查看目标工作区',
+    en: 'Agent reads its proposal targets',
+    zhHint: '管理员智能体查看它的管理员允许它提议的工作区，只有工作区 ID，看不到别的内容。',
+    enHint: 'An admin agent reads the workspaces its administrator lets it propose to, by id only.',
+  },
   list_admin_proposals: {
     zh: '查看管理员提案',
     en: 'List admin proposals',

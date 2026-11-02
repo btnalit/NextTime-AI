@@ -39,6 +39,7 @@ import {
   AdminProposalNotOpenError,
   AdminProposalQuotaExceededError,
   AdminProposalRoleMismatchError,
+  AdminProposalTargetNotChosenError,
   AdminProposalTargetUnavailableError,
 } from './index.js';
 
@@ -47,8 +48,9 @@ import {
  * DATABASE_URL): what an admin agent proposes from its trial workspace, through its Handle — and
  * migrations/governance/0032's guards, policies and quota helper under the application role.
  *
- *  - F10 (coordinator, 2026-11-02): an unknown, a disabled and a trial target are refused with the
- *    same code, the same text and the same details, over HTTP, WebSocket and MCP alike.
+ *  - F10 (coordinator, 2026-11-02) and AA4c: a target the administrator did not choose (unknown,
+ *    disabled, trial or standard alike) is refused with the same code, the same text and the same
+ *    details, over HTTP, WebSocket and MCP alike; one chosen and disabled since, as unavailable.
  *  - F9: a credential is refused with where it is, never the value.
  *  - F11: twenty proposals a day per administrator, counted across trial workspaces; proposals at the
  *    limit wait on the administrator's lock, and only one of them passes.
@@ -65,6 +67,7 @@ const ONTOLOGY_DIR = path.join(KERNEL_ROOT, '..', '..', 'ontology');
 
 /** Not a real credential: the shapes the high-confidence patterns know, with a filler value. */
 const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function skillItem(name: string, markdown = '# Steps\n\n1. Look at the disk.') {
   return {
@@ -142,7 +145,38 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     }
 
-    function propose(caller: ResolvedCaller, params: Record<string, unknown>) {
+    /** What the administrator does on the platform's admin agent page before their agent proposes
+     *  (AA4c, governance 0036): chooses each segment's target, when it may be one — an active
+     *  standard workspace — and the agent's person is a stored platform administrator. Tests of
+     *  the refusal call {@link proposeUnchosen}. */
+    async function chooseSegmentTargets(caller: ResolvedCaller, params: Record<string, unknown>) {
+      if (caller.channel !== 'handle' || !Array.isArray(params.segments)) return;
+      const ids = (params.segments as readonly { targetWorkspaceId?: unknown }[])
+        .map((segment) => segment.targetWorkspaceId)
+        .filter((id): id is string => typeof id === 'string' && UUID.test(id));
+      if (ids.length === 0) return;
+      await withAdminClient(pool, (client) =>
+        client.query(
+          `insert into admin_agent_targets
+             (workspace_id, principal_id, target_workspace_id, chosen_by_user)
+           select p.workspace_id, p.id, w.id, p.user_id
+             from principals p
+             join users u on u.id = p.user_id and u.platform_role = 'admin'
+             join workspaces w on w.id = any($3::uuid[])
+                              and w.status = 'active' and w.purpose = 'standard'
+            where p.workspace_id = $1 and p.id = $2 and p.kind = 'human'
+           on conflict do nothing`,
+          [caller.claims.ws, caller.claims.obo, ids],
+        ),
+      );
+    }
+
+    async function propose(caller: ResolvedCaller, params: Record<string, unknown>) {
+      await chooseSegmentTargets(caller, params);
+      return proposeUnchosen(caller, params);
+    }
+
+    function proposeUnchosen(caller: ResolvedCaller, params: Record<string, unknown>) {
       return dispatchCapability(
         { pool },
         caller,
@@ -332,10 +366,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
-    it('F10: an unknown, a disabled and a trial target are refused alike — one code, one text, one shape on every channel — and nothing is written', async () => {
+    it('F10 + AA4c: a target the administrator did not choose — unknown, disabled, a trial workspace or a standard one alike — is refused with one code, one text, one shape on every channel, and nothing is written', async () => {
       const caller = await agent(trialId, adminPrincipalId);
       const before = await proposalCount();
+      const unchosen = await newWorkspace(admin, 'standard');
       const refusals = [];
+      // `propose` chooses what may be chosen: targetA, never the other four.
       const targets = [randomUUID(), disabledId, otherTrialId, trialId];
       for (const target of targets) {
         refusals.push(
@@ -350,9 +386,21 @@ describe.runIf(DATABASE_URL !== undefined)(
           ),
         );
       }
+      // An active standard workspace the administrator has not chosen.
+      refusals.push(
+        await thrownBy(
+          proposeUnchosen(
+            caller,
+            proposalParams([
+              { targetWorkspaceId: targetA.workspaceId, items: [skillItem('disk-triage')] },
+              { targetWorkspaceId: unchosen.workspaceId, items: [skillItem('disk-triage')] },
+            ]),
+          ),
+        ),
+      );
       expect(await proposalCount()).toBe(before);
       const [first, ...rest] = refusals;
-      expect(first).toBeInstanceOf(AdminProposalTargetUnavailableError);
+      expect(first).toBeInstanceOf(AdminProposalTargetNotChosenError);
       const shape = (err: unknown) => ({
         http: mapCapabilityError(err),
         ws: mapDispatchError(err),
@@ -360,7 +408,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       expect(shape(first).http).toEqual({
         status: 400,
-        code: 'admin_proposal_target_unavailable',
+        code: 'admin_proposal_target_not_chosen',
         message: (first as Error).message,
         details: { segment: 1 },
       });
@@ -369,11 +417,43 @@ describe.runIf(DATABASE_URL !== undefined)(
         message: (first as Error).message,
       });
       expect(shape(first).mcp.content).toEqual([
-        { type: 'text', text: `admin_proposal_target_unavailable: ${(first as Error).message}` },
+        { type: 'text', text: `admin_proposal_target_not_chosen: ${(first as Error).message}` },
       ]);
       for (const other of rest) expect(shape(other)).toEqual(shape(first));
-      // The text names none of the workspaces.
-      for (const target of targets) expect((first as Error).message).not.toContain(target);
+      // The text names none of the workspaces, and tells the agent where the chosen ones are.
+      for (const target of [...targets, unchosen.workspaceId]) {
+        expect((first as Error).message).not.toContain(target);
+      }
+      expect((first as Error).message).toContain('agent_list_proposal_targets');
+    });
+
+    it('F10: a target chosen and disabled since is refused as unavailable, as it was before AA4c, and nothing is written', async () => {
+      const caller = await agent(trialId, adminPrincipalId);
+      const owner = await createUser(pool, {
+        login: `aa4c-gone-${randomUUID().slice(0, 8)}`,
+        displayName: 'Owner Gone',
+      });
+      const target = await newWorkspace(owner, 'standard');
+      const params = proposalParams([
+        { targetWorkspaceId: targetA.workspaceId, items: [skillItem('disk-triage')] },
+        { targetWorkspaceId: target.workspaceId, items: [skillItem('disk-triage')] },
+      ]);
+      await chooseSegmentTargets(caller, params);
+      await withAdminClient(pool, (client) =>
+        client.query(`update workspaces set status = 'disabled' where id = $1`, [
+          target.workspaceId,
+        ]),
+      );
+      const before = await proposalCount();
+      const err = await thrownBy(proposeUnchosen(caller, params));
+      expect(err).toBeInstanceOf(AdminProposalTargetUnavailableError);
+      expect(mapCapabilityError(err)).toMatchObject({
+        status: 400,
+        code: 'admin_proposal_target_unavailable',
+        details: { segment: 1 },
+      });
+      expect((err as Error).message).not.toContain(target.workspaceId);
+      expect(await proposalCount()).toBe(before);
     });
 
     it('F9: a credential is refused with where it is, never the value; a [redacted] mark too', async () => {

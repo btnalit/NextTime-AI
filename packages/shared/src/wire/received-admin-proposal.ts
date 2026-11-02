@@ -228,6 +228,12 @@ export const AdminProposalSegmentPreviewWireSchema = z
      *  `AdminProposalPlatformInstanceChangeWire`); empty when none did, or when the proposal has no
      *  platform segment or it is not applied. */
     platformChanges: z.array(AdminProposalPlatformInstanceChangeWireSchema),
+    /** S11 AA4c (governance 0036): whether this workspace is still among the targets the proposal's
+     *  administrator lets their admin agent propose to. A proposal keeps the targets it was made
+     *  with; when the administrator has dropped this workspace since, `digest` is null and applying
+     *  is refused (409 `admin_proposal_target_no_longer_chosen`) — reject it, or ask for it to be
+     *  proposed again. */
+    targetChosen: z.boolean(),
     /** I-A8: what the owner reviews — `apply_admin_proposal_segment`'s `reviewedDigest`. It covers
      *  what each intent resolved to, so a resolution that changes before the apply is refused too
      *  (409 `change_plan_changed`), and — with a platform segment — that segment and the record its

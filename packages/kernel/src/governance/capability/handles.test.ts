@@ -797,7 +797,7 @@ describe('entryScope', () => {
 // ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1) — the CI guard on the admin agent's ceiling
 // -------------------------------------------------------------------------------------------
 
-describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b)', () => {
+describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c)', () => {
   it('is exactly this set — widening it is a reviewed change to this test (I-A2)', () => {
     expect([...ADMIN_AGENT_CEILING_CAPABILITIES].sort()).toEqual(
       [
@@ -805,6 +805,8 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b)', () => {
         // S11 AA3b: its AdminProposals — proposing, reading its administrator's back, withdrawing.
         'agent_get_admin_proposal',
         'agent_list_admin_proposals',
+        // S11 AA4c: the ids of the workspaces its administrator lets it propose to (a read).
+        'agent_list_proposal_targets',
         'agent_withdraw_admin_proposal',
         'explain',
         'find_operations',

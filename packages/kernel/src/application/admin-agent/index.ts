@@ -8,8 +8,21 @@ export {
   adminAgentRefusalOf,
   assertAdminAgentAuthority,
   issueAdminAgentHandle,
+  openAdminAgentSession,
   readAdminAgentAuthorityFacts,
 } from './identity.js';
+export {
+  type AdminAgentMembership,
+  AdminAgentRoleNotStoredError,
+  AdminAgentTargetsInvalidError,
+  AdminAgentTrialWorkspaceNotFoundError,
+  listAdminAgentMemberships,
+  readAdminAgentStatus,
+  readAdminAgentTargets,
+  readChosenTargetIds,
+  requireAdminAgentMembership,
+  setAdminAgentTargets,
+} from './targets.js';
 export {
   type AdminAgentPlatformReader,
   type PlatformAuditSummaryRow,

@@ -26,6 +26,7 @@ function chat(overrides: Partial<ChatWire> = {}): ChatWire {
     archivedAt: null,
     lastActivityAt: '2026-09-01T00:00:00.000Z',
     hasRunningTurn: false,
+    agentKind: 'entry',
     ...overrides,
   };
 }

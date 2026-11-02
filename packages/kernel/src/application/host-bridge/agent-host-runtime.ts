@@ -368,6 +368,21 @@ export class AgentHostRuntime implements AgentRuntime {
   // -------------------------------------------------------------------------------------------
 
   async startTurn(input: StartTurnInput): Promise<void> {
+    // S11 AA4c: an admin agent's Turn needs its own container (AA4c-2: the admin container, its own
+    // Handle and egress source), never the entry one; until that runtime exists it fails at once
+    // rather than run the admin agent's Chat with the entry agent.
+    if (input.agentKind === 'admin_agent') {
+      this.log(
+        JSON.stringify({
+          level: 'error',
+          msg: 'agent-host-runtime: no admin agent runtime here yet — the admin agent Turn fails',
+          turnId: input.turnId,
+        }),
+      );
+      await this.emitEnded(input, 'failed');
+      return;
+    }
+
     // R-55: `stop_agent` already ended this Turn (`stopTurn` found it untracked) while its
     // TurnStarted was on the way here — starting it now would run the agent after the Stop.
     if (this.stoppedBeforeStart.delete(input.turnId)) {
