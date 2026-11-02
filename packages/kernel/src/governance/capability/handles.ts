@@ -402,9 +402,11 @@ export interface EntryScopeOptions {
  * Principal, so this ceiling and the session kind are what keep the agent from acting as the
  * person). A literal list, never derived from a group or a name prefix: a capability added to the
  * registry later joins only when someone adds it here, and the CI guard test
- * (`handles.test.ts`) states this exact set.
+ * (`handles.test.ts`) states this exact set. It holds only in a trial workspace: the Handle is not
+ * issued, and no call through one is served, anywhere else (I-A6, `application/admin-agent`'s
+ * `not_trial_workspace`, S11 AA3a).
  *
- * Reads only, for now (coordinator decision on AA1, 2026-11-01): the workspace's graph, the
+ * Reads (coordinator decision on AA1, 2026-11-01): the workspace's graph, the
  * definitions an administrator works on (Skills, Procedures, ontology types and versions,
  * WorkerDefinitions — plan §5.2 "读定义类能力"), the goals it may read (on a Handle only its
  * person's own runs, application/goal views.ts), observe-class gate calls (decided per call by
@@ -414,14 +416,18 @@ export interface EntryScopeOptions {
  * effects (`ADMIN_AGENT_CEILING_SIDE_EFFECTS`): an observation records what it saw — an Activity
  * and the observed Facts, under the person's Principal as the entry agent's do; only the audit row
  * carries the session kind until the observation's own record does (STATUS legacy, before AA4).
+ *
+ * Drafts (S11 AA3a, plan F3): the five draft proposals (`ADMIN_AGENT_CEILING_PROPOSALS`) — a
+ * draft is private to its proposer until a person publishes it, over the human channel.
+ *
  * Two rules hold it there, both checked when the module loads (`buildAdminAgentCeiling`):
  *
  *   a) What the agent writes must never read as its person's own: a record it proposed carries the
- *      session kind beside the Principal (plan I-A7, STATUS legacy 293 — drafts gain their
- *      `origin`). Until a capability's handler records that, it does not write through this
- *      Handle: no `propose_*`, `record_decision`, `invoke_worker` or report here. AA3 adds
- *      `propose_change_plan` together with that provenance, and widens the mode rule below for the
- *      capabilities it covers.
+ *      session kind beside the Principal (plan I-A7, STATUS legacy 293). A write joins only when
+ *      its handler records that — a draft's `origin` is `agent` through any Handle, an Operation
+ *      draft's proposer kind is `agent` (worker/0013, core/0051, `draftOriginOf`) — and only by
+ *      being named in `ADMIN_AGENT_CEILING_PROPOSALS`: no `record_decision`, `invoke_worker`,
+ *      `request_connection` or report here. AA3b adds `propose_change_plan` the same way.
  *   b) Approving, publishing, applying, rolling back and confirming an item are a person's acts in
  *      the console. Every one of them is human-channel (`assertValidScope` refuses those in any
  *      Handle), and the dispatcher refuses an `admin_agent` session's call to anything outside
@@ -451,6 +457,12 @@ const ADMIN_AGENT_CEILING_CAPABILITY_NAMES = [
   'validate',
   'list_ontology_versions',
   'list_worker_definitions',
+  // drafts (S11 AA3a): private to the proposer until a person publishes them
+  'propose_skill',
+  'propose_procedure',
+  'propose_worker_definition',
+  'propose_operation',
+  'propose_ontology_change',
   // goals
   'get_goal',
   'list_goals',
@@ -483,6 +495,18 @@ const ADMIN_AGENT_CEILING_GROUPS: ReadonlySet<string> = new Set([
   'task',
   'gate',
   'platform_state',
+]);
+
+/** The ceiling's propose-class capabilities (S11 AA3a): each writes a private draft whose `origin`
+ *  (or, for an Operation, its proposer kind) says an agent wrote it. A literal list as the ceiling
+ *  is — another propose-class capability joins only by being named here, once its handler records
+ *  who wrote what it proposes (rule a above). */
+const ADMIN_AGENT_CEILING_PROPOSALS: ReadonlySet<string> = new Set([
+  'propose_skill',
+  'propose_procedure',
+  'propose_worker_definition',
+  'propose_operation',
+  'propose_ontology_change',
 ]);
 
 /** The ceiling's capabilities that write anything at all (`sideEffects: true`): the observe-class
@@ -528,10 +552,13 @@ export function buildAdminAgentCeiling(names: readonly string[]): readonly strin
     if (isExecuteClassCapability(name)) {
       throw new AdminAgentCeilingError(name, 'is execute-class');
     }
-    if (capability.mode !== 'observe') {
+    if (
+      capability.mode !== 'observe' &&
+      !(capability.mode === 'propose' && ADMIN_AGENT_CEILING_PROPOSALS.has(name))
+    ) {
       throw new AdminAgentCeilingError(
         name,
-        `has mode "${capability.mode}": a write joins the ceiling only with provenance that records the admin agent's session kind (legacy 293)`,
+        `has mode "${capability.mode}": a write joins the ceiling only as a propose-class capability named in ADMIN_AGENT_CEILING_PROPOSALS, whose handler records that an agent wrote it (legacy 293)`,
       );
     }
     if (capability.sideEffects && !ADMIN_AGENT_CEILING_SIDE_EFFECTS.has(name)) {

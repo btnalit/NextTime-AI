@@ -245,6 +245,9 @@ export async function proposeEntryTemplateUpgrade(
     ...(current ? { definitionId: current.id } : {}),
     kind: 'entry',
     definition,
+    // S11 AA3a (legacy 293): `propose_entry_template_upgrade` is a human-channel capability — the
+    // person asked for this draft.
+    origin: 'human',
   });
   return { draft, templateDigest: template.digest, basedOn, differs, created: true };
 }

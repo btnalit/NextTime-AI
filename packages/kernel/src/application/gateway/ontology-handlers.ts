@@ -11,6 +11,7 @@ import {
 } from '../../substrate/ontology/index.js';
 import { currentPrincipalId } from '../chat/index.js';
 import type { CapabilityHandler } from './capability-handler.js';
+import { draftOriginOf } from './draft-viewer.js';
 
 /**
  * application/gateway/ontology-handlers: the six `ontology`-group capabilities (docs/development-
@@ -118,6 +119,7 @@ export const proposeOntologyChangeHandler: CapabilityHandler = async (
     id,
     change,
     proposedBy: principalId,
+    origin: draftOriginOf(ctx),
   });
   return {
     result: toWireOntologyProposeResult(row),
@@ -152,6 +154,7 @@ function toWireOntologyVersionListItem(row: OntologyVersionListItem) {
     version: row.version,
     status: row.status,
     proposedBy: row.proposedBy,
+    ...(row.origin !== null ? { origin: row.origin } : {}),
     createdAt: row.createdAt.toISOString(),
     definition: row.definition,
     base: row.base,

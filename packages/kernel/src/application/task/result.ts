@@ -533,7 +533,11 @@ export async function postWorkerResult(
     // (`skills.ts`'s own I16 read-privacy note), so nothing further is needed here to keep it
     // private to `actorPrincipalId` alone.
     const proposedSkillRecord = contract.proposedSkill
-      ? await proposeSkill(client, workspaceId, actorPrincipalId, contract.proposedSkill)
+      ? await proposeSkill(client, workspaceId, actorPrincipalId, {
+          ...contract.proposedSkill,
+          // S11 AA3a (legacy 293): a Worker's report, through its Handle.
+          origin: 'agent',
+        })
       : undefined;
 
     await endActivity(client, workspaceId, activity.id, 'completed');

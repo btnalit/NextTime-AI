@@ -336,6 +336,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       await installOlder(ws, 'kit', 1);
       await inWorkspace(ws, (client) =>
         publishOntologyVersion(client, ws.workspaceId, {
+          origin: 'human',
           id: deriveOntologyPackId('kit-core'),
           definition: {
             objectTypes: [{ name: 'Alpha', description: 'edited by hand' }],
@@ -478,6 +479,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const ws = await newWorkspace();
       await inWorkspace(ws, async (client) => {
         const own = await proposeSkill(client, ws.workspaceId, ws.ownerId, {
+          origin: 'human',
           name: 'crew-check',
           description: 'Mine.',
           markdown: 'my body',

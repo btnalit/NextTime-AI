@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { DraftOrigin } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { assertOntologyNamespace, lockOntologyNamespace } from './namespace.js';
 import { OntologyDefinitionParseError, parseOntologyDefinition } from './schema.js';
@@ -93,6 +94,7 @@ export interface OntologyVersionDbRow {
   status: string;
   definition: OntologyDefinition;
   proposed_by: string;
+  origin: DraftOrigin | null;
   published_by: string | null;
   created_at: Date;
   published_at: Date | null;
@@ -105,6 +107,9 @@ export interface OntologyVersionRow {
   readonly status: string;
   readonly definition: OntologyDefinition;
   readonly proposedBy: string;
+  /** S11 AA3a (legacy 293): who wrote this version — `null` for one written before it was
+   *  recorded (core/0051). */
+  readonly origin: DraftOrigin | null;
   readonly publishedBy: string | null;
   readonly createdAt: Date;
   readonly publishedAt: Date | null;
@@ -112,6 +117,10 @@ export interface OntologyVersionRow {
 
 /** Exported so `registry.ts` maps the identical `ontology_versions` row shape the same way,
  *  rather than redefining an equivalent function against a second copy of `OntologyVersionDbRow`. */
+/** The columns every `OntologyVersionDbRow` read selects. */
+export const ONTOLOGY_VERSION_COLUMNS = `workspace_id, id, version, status, definition, proposed_by,
+  origin, published_by, created_at, published_at`;
+
 export function mapOntologyVersionRow(row: OntologyVersionDbRow): OntologyVersionRow {
   return {
     workspaceId: row.workspace_id,
@@ -120,6 +129,7 @@ export function mapOntologyVersionRow(row: OntologyVersionDbRow): OntologyVersio
     status: row.status,
     definition: row.definition,
     proposedBy: row.proposed_by,
+    origin: row.origin ?? null,
     publishedBy: row.published_by,
     createdAt: row.created_at,
     publishedAt: row.published_at,
@@ -137,6 +147,8 @@ export interface PublishOntologyVersionInput {
   /** Both `proposed_by` and `published_by` — see this module's doc comment on why a bootstrap
    *  seed has no separate draft/review step. */
   readonly principalId: string;
+  /** S11 AA3a (legacy 293): who wrote the definition (`DRAFT_ORIGIN_VALUES`). */
+  readonly origin: DraftOrigin;
 }
 
 /** R-60: serializes every publish into one ontology family (`registry.ts`'s `publishOntologyDraft`
@@ -172,17 +184,18 @@ export async function publishOntologyVersion(
   const nextVersion = await nextOntologyVersion(client, workspaceId, input.id);
   const result = await client.query<OntologyVersionDbRow>(
     `insert into ontology_versions
-       (workspace_id, id, version, status, definition, proposed_by, published_by, published_at)
+       (workspace_id, id, version, status, definition, proposed_by, origin, published_by,
+        published_at)
      values
-       ($1, coalesce($2::uuid, gen_random_uuid()), $3, 'published', $4::jsonb, $5, $5, now())
-     returning workspace_id, id, version, status, definition, proposed_by, published_by,
-       created_at, published_at`,
+       ($1, coalesce($2::uuid, gen_random_uuid()), $3, 'published', $4::jsonb, $5, $6, $5, now())
+     returning ${ONTOLOGY_VERSION_COLUMNS}`,
     [
       workspaceId,
       input.id ?? null,
       nextVersion,
       JSON.stringify(input.definition),
       input.principalId,
+      input.origin,
     ],
   );
   const row = result.rows[0];
@@ -201,8 +214,7 @@ export async function loadPublishedOntologyHead(
   id: string,
 ): Promise<OntologyVersionRow | null> {
   const result = await client.query<OntologyVersionDbRow>(
-    `select workspace_id, id, version, status, definition, proposed_by, published_by,
-            created_at, published_at
+    `select ${ONTOLOGY_VERSION_COLUMNS}
        from ontology_versions
       where workspace_id = $1 and id = $2 and status = 'published'
       order by version desc
@@ -222,8 +234,7 @@ export async function loadOntologyVersion(
   version: number,
 ): Promise<OntologyVersionRow | null> {
   const result = await client.query<OntologyVersionDbRow>(
-    `select workspace_id, id, version, status, definition, proposed_by, published_by,
-            created_at, published_at
+    `select ${ONTOLOGY_VERSION_COLUMNS}
        from ontology_versions
       where workspace_id = $1 and id = $2 and version = $3`,
     [workspaceId, id, version],
@@ -279,7 +290,12 @@ export async function seedPlatformMetaOntology(
 ): Promise<OntologyVersionRow> {
   const filePath = path.join(dir, 'platform-meta.yaml');
   const definition = await loadOntologyDefinitionFile(filePath);
-  return publishOntologyVersion(client, workspaceId, { definition, principalId });
+  // S11 AA3a: the platform's own file, written with no caller.
+  return publishOntologyVersion(client, workspaceId, {
+    definition,
+    principalId,
+    origin: 'platform',
+  });
 }
 
 // -------------------------------------------------------------------------------------------
@@ -355,5 +371,7 @@ export async function publishOntologyDomainPack(
     id,
     definition,
     principalId: input.principalId,
+    // S11 AA3a: an operator publishing a reviewed file from the CLI.
+    origin: 'human',
   });
 }

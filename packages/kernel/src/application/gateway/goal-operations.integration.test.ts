@@ -294,6 +294,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       auditorId = await newPrincipal('auditor');
       const proposed = await as(ownerId, (client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           kind: 'worker',
           definition: { systemPrompt: 'You do one step of a goal.' },
         }),

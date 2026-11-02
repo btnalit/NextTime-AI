@@ -80,6 +80,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     ): Promise<{ readonly id: string; readonly version: number }> {
       const proposed = await inTx(ownerId, (client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           kind: 'worker',
           definition: content,
         }),

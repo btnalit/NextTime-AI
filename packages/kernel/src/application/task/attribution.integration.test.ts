@@ -203,6 +203,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       const skill = await inTx(ownerId, (client) =>
         proposeSkill(client, workspaceId, ownerId, {
+          origin: 'human',
           name: `diagnose-${randomUUID().slice(0, 8)}`,
           description: 'How to diagnose a slow service.',
           markdown: 'Check latency first.',
@@ -213,6 +214,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       const definition = await inTx(ownerId, (client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           kind: 'worker',
           definition: { systemPrompt: 'You diagnose.', skills: [skill.name] },
         }),
@@ -227,6 +229,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       const procedure = await inTx(ownerId, (client) =>
         proposeProcedure(client, workspaceId, ownerId, {
+          origin: 'human',
           name: `diagnose-flow-${randomUUID().slice(0, 8)}`,
           description: 'Delegate a diagnosis, then verify it.',
           steps: [
@@ -292,6 +295,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('a run of a definition with no Skills is recorded as [], a pre-E1 run reads null (未记录)', async () => {
         const bare = await inTx(ownerId, (client) =>
           proposeWorkerDefinition(client, workspaceId, ownerId, {
+            origin: 'human',
             kind: 'worker',
             definition: { systemPrompt: 'No skills.' },
           }),
@@ -336,6 +340,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('a deprecated Skill is no longer loaded or recorded', async () => {
         const skill = await inTx(ownerId, (client) =>
           proposeSkill(client, workspaceId, ownerId, {
+            origin: 'human',
             name: `retired-${randomUUID().slice(0, 8)}`,
             description: 'Retired.',
             markdown: 'Old.',
@@ -344,6 +349,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         await inTx(ownerId, (client) => publishSkill(client, workspaceId, ownerId, skill.id));
         const definition = await inTx(ownerId, (client) =>
           proposeWorkerDefinition(client, workspaceId, ownerId, {
+            origin: 'human',
             kind: 'worker',
             definition: { systemPrompt: 'Uses a retired skill.', skills: [skill.name] },
           }),
@@ -505,6 +511,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         const other = await inTx(ownerId, (client) =>
           proposeProcedure(client, workspaceId, ownerId, {
+            origin: 'human',
             name: `other-${randomUUID().slice(0, 8)}`,
             description: 'Another flow.',
             steps: [{ kind: 'verify', description: 'Check.' }],
@@ -528,6 +535,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const { turnId } = await insertTurn(memberId, 'running');
         const draft = await inTx(memberId, (client) =>
           proposeProcedure(client, workspaceId, memberId, {
+            origin: 'human',
             name: `draft-${randomUUID().slice(0, 8)}`,
             description: 'Never published.',
             steps: [{ kind: 'verify', description: 'Check.' }],

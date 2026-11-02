@@ -198,7 +198,11 @@ describe.runIf(DATABASE_URL !== undefined)(
     it('publishes a fresh definition as a published, version-1 ontology_versions row', async () => {
       const definition = uniqueDefinition();
       const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-        publishOntologyVersion(client, workspaceId, { definition, principalId: ownerId }),
+        publishOntologyVersion(client, workspaceId, {
+          origin: 'human',
+          definition,
+          principalId: ownerId,
+        }),
       );
 
       expect(row.version).toBe(1);
@@ -212,10 +216,15 @@ describe.runIf(DATABASE_URL !== undefined)(
     it('publishing again under the same id produces version 2', async () => {
       const definition = uniqueDefinition();
       const first = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-        publishOntologyVersion(client, workspaceId, { definition, principalId: ownerId }),
+        publishOntologyVersion(client, workspaceId, {
+          origin: 'human',
+          definition,
+          principalId: ownerId,
+        }),
       );
       const second = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         publishOntologyVersion(client, workspaceId, {
+          origin: 'human',
           id: first.id,
           definition,
           principalId: ownerId,
@@ -238,7 +247,11 @@ describe.runIf(DATABASE_URL !== undefined)(
     it('an already-published version cannot have its definition changed (I12, DB trigger)', async () => {
       const definition = uniqueDefinition();
       const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-        publishOntologyVersion(client, workspaceId, { definition, principalId: ownerId }),
+        publishOntologyVersion(client, workspaceId, {
+          origin: 'human',
+          definition,
+          principalId: ownerId,
+        }),
       );
 
       const otherDefinition = parseOntologyDefinition(

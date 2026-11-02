@@ -1,4 +1,5 @@
 import type { PoolLike } from '../../adapters/db/pool.js';
+import { ADMIN_TRIAL_WORKSPACE_PURPOSE } from '../admin-agent/index.js';
 import { withAdminClient } from '../gateway/auth.js';
 import { createWorkspaceWithOwner } from '../workspace/index.js';
 import { readPlatformSettings, updatePlatformSettings } from './settings.js';
@@ -11,8 +12,9 @@ import { readPlatformSettings, updatePlatformSettings } from './settings.js';
  *     earliest active administrator (`admin`), seeded like any CLI-created workspace but with no
  *     API key — and it becomes `platform_settings.defaultWorkspaceId`, the workspace every
  *     page-created user joins;
- *   * an upgraded install (workspaces exist, no default recorded yet) adopts its only active
- *     workspace as the default; with several, the administrator picks one in platform settings.
+ *   * an upgraded install (workspaces exist, no default recorded yet) adopts its only active (and
+ *     not trial, S11 AA3a) workspace as the default; with several, the administrator picks one in
+ *     platform settings.
  *
  * Idempotent, never fatal to the caller (index.ts logs and continues), superuser path like the
  * rest of bootstrap — nothing exists yet for RLS to scope against.
@@ -35,8 +37,8 @@ export async function ensureDefaultWorkspace(
   const log = options.log ?? (() => {});
   const state = await withAdminClient(pool, async (client) => {
     const settings = await readPlatformSettings(client);
-    const workspaces = await client.query<{ id: string; status: string }>(
-      'select id, status from workspaces order by created_at, id',
+    const workspaces = await client.query<{ id: string; status: string; purpose: string }>(
+      'select id, status, purpose from workspaces order by created_at, id',
     );
     const admin = await client.query<{ id: string; display_name: string }>(
       `select id, display_name from users
@@ -71,7 +73,11 @@ export async function ensureDefaultWorkspace(
   if (current && state.workspaces.some((w) => w.id === current)) {
     return { kind: 'unchanged', workspaceId: current };
   }
-  const active = state.workspaces.filter((w) => w.status === 'active');
+  // S11 AA3a: a trial workspace is never the default (every new user joins the default; an admin
+  // agent explores in a trial workspace) — `update_platform_settings` refuses one too.
+  const active = state.workspaces.filter(
+    (w) => w.status === 'active' && w.purpose !== ADMIN_TRIAL_WORKSPACE_PURPOSE,
+  );
   if (active.length === 1 && active[0]) {
     const workspaceId = active[0].id;
     await withAdminClient(pool, (client) =>

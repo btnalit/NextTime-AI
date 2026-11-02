@@ -270,6 +270,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       // version is refused (legacy 302).
       await inWorkspace(ws, async (client) => {
         const draft = await proposeSkill(client, ws.workspaceId, ws.ownerId, {
+          origin: 'human',
           name: 'fix-it',
           description: 'Fix the thing.',
           markdown: 'body',
@@ -335,6 +336,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       await inWorkspace(ws, async (client) => {
         await proposeSkill(client, ws.workspaceId, ws.ownerId, {
+          origin: 'human',
           skillId,
           name: 'fix-it',
           description: 'Fix the thing.',
@@ -342,6 +344,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
         await publishSkill(client, ws.workspaceId, ws.ownerId, skillId);
         const draft = await proposeWorkerDefinition(client, ws.workspaceId, ws.ownerId, {
+          origin: 'human',
           definitionId,
           kind: 'worker',
           definition: { name: 'fixer', systemPrompt: 'edited by hand' },
@@ -366,6 +369,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       // A person's Skill holds "fix-it": a pack's Skill of that name (another family) is refused.
       await inWorkspace(ws, async (client) => {
         const own = await proposeSkill(client, ws.workspaceId, ws.ownerId, {
+          origin: 'human',
           name: 'fix-it',
           description: 'Mine.',
           markdown: 'my body',
@@ -380,6 +384,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       await apply(ws, skillSegment(randomUUID(), skill('body', 'fix-that')));
       const refused = inWorkspace(ws, async (client) => {
         const draft = await proposeSkill(client, ws.workspaceId, ws.ownerId, {
+          origin: 'human',
           name: 'fix-that',
           description: 'Mine too.',
           markdown: 'my body',
@@ -394,6 +399,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       await apply(ws, skillSegment(skillId, skill('# Fix it\n\nStep one.')));
       const draft = await inWorkspace(ws, (client) =>
         proposeSkill(client, ws.workspaceId, ws.ownerId, {
+          origin: 'human',
           skillId,
           name: 'fix-it',
           description: 'Fix the thing, my way.',

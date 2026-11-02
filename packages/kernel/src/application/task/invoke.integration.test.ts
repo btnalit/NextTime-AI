@@ -190,6 +190,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
   ): Promise<{ id: string; version: number }> {
     const proposed = await inTx(ownerId, (client) =>
       proposeWorkerDefinition(client, workspaceId, ownerId, {
+        origin: 'human',
         kind: 'worker',
         definition: content,
       }),

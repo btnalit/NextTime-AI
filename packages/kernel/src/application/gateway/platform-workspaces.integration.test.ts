@@ -761,6 +761,90 @@ describe.runIf(DATABASE_URL !== undefined)(
           'user_not_found',
         );
       });
+
+      // S11 AA3a (plan §3.1 "试验工作区", I-A6; migration core 0050): `purpose: 'admin_trial'`
+      // makes a trial workspace — the only kind an admin agent acts in — for good, and never the
+      // platform default.
+      it('S11 AA3a: purpose admin_trial creates a trial workspace that stays one and is never the default', async () => {
+        const name = `trial-${randomUUID().slice(0, 8)}`;
+        const created = await callAsAdmin<PlatformWorkspaceWire>('create_workspace', {
+          name,
+          ownerUserId: owner.id,
+          purpose: 'admin_trial',
+        });
+        expect(created.purpose).toBe('admin_trial');
+        expect(created.isDefault).toBe(false);
+        expect((await readWorkspace(created.id)).purpose).toBe('admin_trial');
+        // A trial workspace is an ordinary workspace otherwise: it is bootstrapped like any other.
+        const ownerPrincipal = created.owners[0];
+        if (!ownerPrincipal) throw new Error('create_workspace returned no owner');
+        const entryDefinition = await inWorkspace(
+          created.id,
+          ownerPrincipal.principalId,
+          (client) => getPublishedEntryDefinition(client, created.id),
+        );
+        expect(entryDefinition?.status).toBe('published');
+
+        const audit = await withAdminClient(pool, (client) =>
+          client.query<{ payload: { details?: { purpose?: string } } }>(
+            `select payload from audit_records
+              where action = 'workspace.created' and resource_id = $1`,
+            [created.id],
+          ),
+        );
+        expect(audit.rows).toHaveLength(1);
+        expect(audit.rows[0]?.payload.details?.purpose).toBe('admin_trial');
+
+        // The database refuses turning it back into a production workspace, for every role.
+        await expect(
+          withAdminClient(pool, (client) =>
+            client.query(`update workspaces set purpose = 'standard' where id = $1`, [created.id]),
+          ),
+        ).rejects.toThrow(/never becomes a trial workspace or stops being one/);
+        // Renaming it (an update that leaves `purpose` alone) is unaffected.
+        await callAsAdmin<PlatformWorkspaceWire>('update_workspace', {
+          workspaceId: created.id,
+          name: `${name}-renamed`,
+        });
+        expect((await readWorkspace(created.id)).purpose).toBe('admin_trial');
+
+        // Every new user joins the default workspace — never the place an admin agent explores.
+        await expectPlatformError(
+          () => callAsAdmin('update_platform_settings', { defaultWorkspaceId: created.id }),
+          'trial_workspace',
+        );
+        const settings = await callAsAdmin<{ defaultWorkspaceId: string | null }>(
+          'get_platform_settings',
+        );
+        expect(settings.defaultWorkspaceId).not.toBe(created.id);
+      }, 120_000);
+
+      it('S11 AA3a: a production workspace never becomes a trial workspace; standard ↔ ephemeral is left as it was', async () => {
+        const workspaceId = await insertBareWorkspace('platform-workspaces-never-trial');
+        await expect(
+          withAdminClient(pool, (client) =>
+            client.query(`update workspaces set purpose = 'admin_trial' where id = $1`, [
+              workspaceId,
+            ]),
+          ),
+        ).rejects.toThrow(/never becomes a trial workspace or stops being one/);
+        expect((await readWorkspace(workspaceId)).purpose).toBe('standard');
+
+        await withAdminClient(pool, (client) =>
+          client.query(`update workspaces set purpose = 'ephemeral' where id = $1`, [workspaceId]),
+        );
+        expect((await readWorkspace(workspaceId)).purpose).toBe('ephemeral');
+      });
+
+      it('S11 AA3a: ephemeral stays the CLI’s — create_workspace admits only standard and admin_trial', async () => {
+        await expect(
+          callAsAdmin('create_workspace', {
+            name: `ephemeral-${randomUUID().slice(0, 8)}`,
+            ownerUserId: owner.id,
+            purpose: 'ephemeral',
+          }),
+        ).rejects.toMatchObject({ name: 'InvalidCapabilityParamsError' });
+      });
     });
 
     // ---- update_workspace --------------------------------------------------------------------

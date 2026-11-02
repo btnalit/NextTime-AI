@@ -215,6 +215,7 @@ describe.runIf(DATABASE_URL !== undefined)('modules (integration, real Postgres)
     const { publishOntologyVersion } = await import('../../substrate/ontology/index.js');
     await inWorkspace(workspaceId, principalId, (client) =>
       publishOntologyVersion(client, workspaceId, {
+        origin: 'human',
         id: packId,
         definition: { objectTypes: [{ name: 'HandEdited', description: 'd' }], linkTypes: [] },
         principalId,
@@ -265,6 +266,7 @@ describe.runIf(DATABASE_URL !== undefined)('modules (integration, real Postgres)
       const { publishOntologyVersion } = await import('../../substrate/ontology/index.js');
       await inWorkspace(workspaceId, principalId, (client) =>
         publishOntologyVersion(client, workspaceId, {
+          origin: 'human',
           id: packId,
           definition: { objectTypes: [{ name: 'HandEdited2', description: 'd' }], linkTypes: [] },
           principalId,

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   DraftKindSchema,
+  DraftOriginSchema,
   PublishableStatusSchema,
   RejectableDraftKindSchema,
   WorkerDefinitionKindSchema,
@@ -23,6 +24,9 @@ export const WorkerDefinitionWireSchema = z
     status: PublishableStatusSchema,
     definition: z.record(z.string(), z.unknown()),
     proposedBy: z.string(),
+    /** S11 AA3a (legacy 293): whether a person or an agent session wrote this version
+     *  (`DRAFT_ORIGIN_VALUES`); absent on versions written before it was recorded. */
+    origin: DraftOriginSchema.optional(),
     publishedBy: z.string().nullable(),
     createdAt: z.string(),
     publishedAt: z.string().nullable(),
@@ -90,6 +94,8 @@ const SkillSummaryBaseWireSchema = z
     description: z.string(),
     applicable: SkillApplicableSchema,
     proposedBy: z.string(),
+    /** S11 AA3a (legacy 293): as `WorkerDefinitionWire.origin`. */
+    origin: DraftOriginSchema.optional(),
     /** Review #493 on #764 (F1): on a `draft` only — the digest of everything this version says
      *  and who proposed it. A discarded draft is deleted and the family's next proposal takes its
      *  version again, so the version alone does not name what the reader looked at:
@@ -147,6 +153,8 @@ const ProcedureSummaryBaseWireSchema = z
     /** S11 GO5d-2: the parameters schema a goal made from it is proposed with; `null` = none. */
     parameters: z.record(z.string(), z.unknown()).nullable(),
     proposedBy: z.string(),
+    /** S11 AA3a (legacy 293): as `WorkerDefinitionWire.origin`. */
+    origin: DraftOriginSchema.optional(),
     /** Review #493 on #764 (F1): as `SkillSummaryWire.draftDigest`, for `publish_procedure`. */
     draftDigest: z.string().optional(),
   })

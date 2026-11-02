@@ -202,7 +202,7 @@ import {
 // S8 W3 K2 (leftover 82) — discard_draft, same one-capability-per-file convention as
 // export-prov-handler.ts/operation-manifest-handlers.ts below.
 import { discardDraftHandler } from './discard-draft-handler.js';
-import { decisionViewerOf, graphReadViewerOf } from './draft-viewer.js';
+import { decisionViewerOf, draftOriginOf, graphReadViewerOf } from './draft-viewer.js';
 import {
   attestFactHandler,
   causalChainHandler,
@@ -1123,6 +1123,7 @@ function toWireWorkerDefinition(row: WorkerDefinitionRow, plannerFamily: string 
     status: row.status,
     definition: row.definition,
     proposedBy: row.proposedBy,
+    ...(row.origin !== null ? { origin: row.origin } : {}),
     publishedBy: row.publishedBy,
     createdAt: row.createdAt.toISOString(),
     publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
@@ -1130,7 +1131,12 @@ function toWireWorkerDefinition(row: WorkerDefinitionRow, plannerFamily: string 
   };
 }
 
-const proposeWorkerDefinitionHandler: CapabilityHandler = async (client, workspaceId, params) => {
+const proposeWorkerDefinitionHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
   const { definitionId, kind, definition } = params as {
     definitionId?: string;
     kind: WorkerDefinitionKind;
@@ -1141,6 +1147,7 @@ const proposeWorkerDefinitionHandler: CapabilityHandler = async (client, workspa
     definitionId,
     kind,
     definition,
+    origin: draftOriginOf(ctx),
   });
   return {
     result: toWireWorkerDefinition(row, await findGoalPlannerFamily(client, workspaceId)),

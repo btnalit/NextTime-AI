@@ -136,6 +136,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     ): Promise<string> {
       const draft = await inTx((client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           kind: 'worker',
           definition: { systemPrompt: 'A test worker.', name, ...extra },
         }),

@@ -199,6 +199,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       const proposed = await inTx(ownerId, (client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           kind: 'worker',
           definition: { systemPrompt: 'You are a plain worker.' },
         }),
@@ -1008,6 +1009,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         const proposed = await inTx(ownerId, (client) =>
           proposeWorkerDefinition(client, workspaceId, ownerId, {
+            origin: 'human',
             kind: 'worker',
             definition: { systemPrompt: 'You are a plain worker.' },
           }),

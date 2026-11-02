@@ -23,7 +23,7 @@ import { currentPrincipalId } from '../chat/index.js';
 import { procedureTemplateProblems } from '../goal/index.js';
 import { readProcedureStats, readSkillStats } from '../task/index.js';
 import { type CapabilityHandler, publishActorOf } from './capability-handler.js';
-import { draftViewerOf } from './draft-viewer.js';
+import { draftOriginOf, draftViewerOf } from './draft-viewer.js';
 
 /**
  * application/gateway/skill-procedure-handlers: `propose_skill` / `publish_skill` /
@@ -58,6 +58,7 @@ const proposeSkillHandler: CapabilityHandler = async (client, workspaceId, param
   const record = await proposeSkill(client, workspaceId, principalId, {
     ...content,
     ...(skillId !== undefined ? { skillId } : {}),
+    origin: draftOriginOf(ctx),
   });
   return {
     result: {
@@ -137,6 +138,7 @@ function toWireSkillSummary(row: SkillRow) {
     description: row.description,
     applicable: row.applicable,
     proposedBy: row.proposedBy,
+    ...(row.origin !== null ? { origin: row.origin } : {}),
     ...(row.status === 'draft' ? { draftDigest: skillDraftDigest(row) } : {}),
   };
 }
@@ -224,6 +226,7 @@ const proposeProcedureHandler: CapabilityHandler = async (client, workspaceId, p
   const record = await proposeProcedure(client, workspaceId, principalId, {
     ...content,
     ...(procedureId !== undefined ? { procedureId } : {}),
+    origin: draftOriginOf(ctx),
   });
   return {
     result: {
@@ -299,6 +302,7 @@ function toWireProcedureSummary(row: ProcedureRow) {
     steps: row.steps,
     parameters: row.parameters as Record<string, unknown> | null,
     proposedBy: row.proposedBy,
+    ...(row.origin !== null ? { origin: row.origin } : {}),
     ...(row.status === 'draft' ? { draftDigest: procedureDraftDigest(row) } : {}),
   };
 }

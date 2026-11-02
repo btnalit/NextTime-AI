@@ -200,6 +200,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     async function publishedDefinition(systemPrompt: string): Promise<string> {
       const proposed = await asApp((client) =>
         proposeWorkerDefinition(client, workspaceId, people.owner, {
+          origin: 'human',
           kind: 'worker',
           definition: { systemPrompt },
         }),

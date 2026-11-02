@@ -211,6 +211,7 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
       const fixture = minimalDefinition();
       const draft = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
         proposeOntologyChange(client, workspaceId, {
+          origin: 'human',
           change: fixture.definition,
           proposedBy: alice,
         }),
@@ -257,6 +258,7 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
       const fixture = minimalDefinition();
       const draft = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
         proposeOntologyChange(client, workspaceId, {
+          origin: 'human',
           change: fixture.definition,
           proposedBy: alice,
         }),
@@ -292,6 +294,7 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
       const fixture = minimalDefinition();
       const draft = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
         proposeOntologyChange(client, workspaceId, {
+          origin: 'human',
           change: fixture.definition,
           proposedBy: alice,
         }),
@@ -321,6 +324,7 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
       const fixture = minimalDefinition();
       const draft = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
         proposeOntologyChange(client, workspaceId, {
+          origin: 'human',
           change: fixture.definition,
           proposedBy: alice,
         }),
@@ -357,6 +361,7 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
       await expect(
         withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
           proposeOntologyChange(client, workspaceId, {
+            origin: 'human',
             change: { objectTypes: [] },
             proposedBy: alice,
           }),
@@ -374,6 +379,7 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
       const fixture = minimalDefinition();
       const alicesDraft = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
         proposeOntologyChange(client, workspaceId, {
+          origin: 'human',
           change: fixture.definition,
           proposedBy: alice,
         }),
@@ -509,7 +515,11 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
     it('publishOntologyDraft refuses a draft that redeclares another family’s ObjectType; the draft stays a draft', async () => {
       const owner = minimalDefinition();
       const ownerDraft = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
-        proposeOntologyChange(client, workspaceId, { change: owner.definition, proposedBy: alice }),
+        proposeOntologyChange(client, workspaceId, {
+          origin: 'human',
+          change: owner.definition,
+          proposedBy: alice,
+        }),
       );
       await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
         publishOntologyDraft(client, workspaceId, {
@@ -528,7 +538,11 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
         ],
       };
       const clashDraft = await withWorkspace(pool, { workspaceId, principalId: bob }, (client) =>
-        proposeOntologyChange(client, workspaceId, { change: clash, proposedBy: bob }),
+        proposeOntologyChange(client, workspaceId, {
+          origin: 'human',
+          change: clash,
+          proposedBy: bob,
+        }),
       );
       const refusal = await withWorkspace(pool, { workspaceId, principalId: bob }, (client) =>
         publishOntologyDraft(client, workspaceId, {
@@ -558,6 +572,7 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
       const owner = minimalDefinition();
       await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
         publishOntologyVersion(client, workspaceId, {
+          origin: 'human',
           definition: owner.definition,
           principalId: alice,
         }),
@@ -577,7 +592,11 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
 
       await expect(
         withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
-          publishOntologyVersion(client, workspaceId, { definition: clash, principalId: alice }),
+          publishOntologyVersion(client, workspaceId, {
+            origin: 'human',
+            definition: clash,
+            principalId: alice,
+          }),
         ),
       ).rejects.toThrow(OntologyNamespaceConflictError);
       expect(await countRows()).toBe(before);
@@ -605,6 +624,7 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
       });
       const a = withWorkspace(pool, { workspaceId, principalId: alice }, async (client) => {
         const row = await publishOntologyVersion(client, workspaceId, {
+          origin: 'human',
           definition: first.definition,
           principalId: alice,
         });
@@ -616,7 +636,11 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
 
       // B starts while A is uncommitted: it must wait on the advisory lock, not race past the check.
       const b = withWorkspace(pool, { workspaceId, principalId: bob }, (client) =>
-        publishOntologyVersion(client, workspaceId, { definition: clash, principalId: bob }),
+        publishOntologyVersion(client, workspaceId, {
+          origin: 'human',
+          definition: clash,
+          principalId: bob,
+        }),
       ).catch((err: unknown) => err);
       const waiting = async (): Promise<number> =>
         (
@@ -650,12 +674,14 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
       const first = minimalDefinition();
       const v1 = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
         publishOntologyVersion(client, workspaceId, {
+          origin: 'human',
           definition: first.definition,
           principalId: alice,
         }),
       );
       const v2 = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
         publishOntologyVersion(client, workspaceId, {
+          origin: 'human',
           id: v1.id,
           definition: first.definition,
           principalId: alice,
@@ -666,6 +692,7 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
       const second = minimalDefinition();
       const sibling = await withWorkspace(pool, { workspaceId, principalId: alice }, (client) =>
         publishOntologyVersion(client, workspaceId, {
+          origin: 'human',
           definition: second.definition,
           principalId: alice,
         }),

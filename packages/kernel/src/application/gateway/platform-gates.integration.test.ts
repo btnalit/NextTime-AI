@@ -1029,6 +1029,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           { workspaceId, principalId: ownerPrincipalId },
           (client) =>
             proposeWorkerDefinition(client, workspaceId, ownerPrincipalId, {
+              origin: 'human',
               kind: 'worker',
               definition: {
                 systemPrompt: 'Acts on the linked legacy gate.',

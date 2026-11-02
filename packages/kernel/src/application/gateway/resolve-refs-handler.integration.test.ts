@@ -244,6 +244,7 @@ describe.runIf(DATABASE_URL !== undefined)('resolve_refs (integration, real Post
       { workspaceId, principalId: ownerId },
       async (client) => {
         const draft = await proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           kind: 'worker',
           definition: { systemPrompt: 'Do the thing.', name: 'resolve-refs-worker' },
         });
@@ -297,6 +298,7 @@ describe.runIf(DATABASE_URL !== undefined)('resolve_refs (integration, real Post
       { workspaceId, principalId: ownerId },
       async (client) => {
         const v1 = await proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           kind: 'worker',
           definition: { systemPrompt: 'Do the thing.', name: 'published-name' },
         });
@@ -305,11 +307,13 @@ describe.runIf(DATABASE_URL !== undefined)('resolve_refs (integration, real Post
           version: v1.version,
         });
         await proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           definitionId: v1.id,
           kind: 'worker',
           definition: { systemPrompt: 'Do it better.', name: 'draft-name' },
         });
         const draftOnly = await proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           kind: 'worker',
           definition: { systemPrompt: 'Not yet.', name: 'private-draft' },
         });
@@ -396,6 +400,7 @@ describe.runIf(DATABASE_URL !== undefined)('resolve_refs (integration, real Post
       { workspaceId, principalId: ownerId },
       async (client) => {
         const draft = await proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           kind: 'worker',
           definition: { systemPrompt: 'Do the task.', name: 'resolve-refs-task-worker' },
         });

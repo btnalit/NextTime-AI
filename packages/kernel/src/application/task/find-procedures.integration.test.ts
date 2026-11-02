@@ -156,6 +156,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const unique = uniqueNeed('restock-alert');
       const draft = await inTx((client) =>
         proposeProcedure(client, workspaceId, ownerId, {
+          origin: 'human',
           name: unique,
           description: 'Checks stock levels and alerts when low.',
           steps: [{ kind: 'operation', gatekeeperId, operationName: opName }],
@@ -180,6 +181,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const unique = uniqueNeed('draft-only');
       await inTx((client) =>
         proposeProcedure(client, workspaceId, ownerId, {
+          origin: 'human',
           name: unique,
           description: 'Never published.',
           steps: [{ kind: 'operation', gatekeeperId, operationName: opName }],
@@ -197,6 +199,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const unique = uniqueNeed('deprecated');
       const draft = await inTx((client) =>
         proposeProcedure(client, workspaceId, ownerId, {
+          origin: 'human',
           name: unique,
           description: 'Will be deprecated.',
           steps: [{ kind: 'operation', gatekeeperId, operationName: opName }],
@@ -216,6 +219,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const unique = uniqueNeed('observe-only');
       const draft = await inTx((client) =>
         proposeProcedure(client, workspaceId, ownerId, {
+          origin: 'human',
           name: unique,
           description: 'Read-only.',
           steps: [{ kind: 'operation', gatekeeperId, operationName: opName }],
@@ -264,6 +268,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const unique = uniqueNeed('execute-ungranted');
       const draft = await inTx((client) =>
         proposeProcedure(client, workspaceId, ownerId, {
+          origin: 'human',
           name: unique,
           description: 'Writes something.',
           steps: [{ kind: 'operation', gatekeeperId, operationName: opName }],
@@ -282,6 +287,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const unique = uniqueNeed('execute-granted');
       const draft = await inTx((client) =>
         proposeProcedure(client, workspaceId, ownerId, {
+          origin: 'human',
           name: unique,
           description: 'Writes something the caller may actually do.',
           steps: [{ kind: 'operation', gatekeeperId, operationName: opName }],
@@ -302,6 +308,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     it('excludes a Procedure whose worker step the caller could never invoke (execute-class need it does not hold)', async () => {
       const workerDraft = await inTx((client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           kind: 'worker',
           definition: {
             systemPrompt: 'You need real gate access.',
@@ -320,6 +327,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const unique = uniqueNeed('worker-step-ungranted');
       const draft = await inTx((client) =>
         proposeProcedure(client, workspaceId, ownerId, {
+          origin: 'human',
           name: unique,
           description: 'A worker step the caller cannot invoke.',
           steps: [{ kind: 'worker', definitionId: workerDef.id, version: workerDef.version }],
@@ -336,6 +344,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     it("S8 W2-K1 (audit B4): excludes a Procedure whose worker step names a WorkerDefinition that exists, is published, and is otherwise invocable, but is outside the caller's own enabledWorkerDefinitionIds whitelist", async () => {
       const workerDraft = await inTx((client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           kind: 'worker',
           definition: { systemPrompt: 'A plain worker needing no gate access.' },
         }),
@@ -350,6 +359,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const unique = uniqueNeed('worker-step-not-enabled');
       const draft = await inTx((client) =>
         proposeProcedure(client, workspaceId, ownerId, {
+          origin: 'human',
           name: unique,
           description: 'A worker step invocable in principle, but not enabled for this caller.',
           steps: [{ kind: 'worker', definitionId: workerDef.id, version: workerDef.version }],
@@ -385,6 +395,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const definitionOf = async (kind: 'worker' | 'entry') => {
         const proposed = await inTx((client) =>
           proposeWorkerDefinition(client, workspaceId, ownerId, {
+            origin: 'human',
             kind,
             definition: {
               systemPrompt: `A ${kind} definition.`,
@@ -404,6 +415,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const unique = uniqueNeed('entry-step-legacy');
       const draft = await inTx((client) =>
         proposeProcedure(client, workspaceId, ownerId, {
+          origin: 'human',
           name: unique,
           description: 'Published with a Worker step, then made to name the entry definition.',
           steps: [{ kind: 'worker', definitionId: worker.id, version: worker.version }],
@@ -447,6 +459,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const unique = uniqueNeed('unconstrained');
       const draft = await inTx((client) =>
         proposeProcedure(client, workspaceId, ownerId, {
+          origin: 'human',
           name: unique,
           description: 'Only an unconstrained caller sees this without an explicit grant.',
           steps: [{ kind: 'operation', gatekeeperId, operationName: opName }],

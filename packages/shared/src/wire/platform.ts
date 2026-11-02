@@ -290,9 +290,13 @@ export type OntologyEnforcementWire = z.infer<typeof OntologyEnforcementWireSche
 
 /** S5.3 (`workspaces.purpose`, migration core 0028): why the workspace exists. `ephemeral` — an
  *  acceptance run or a demo — carries `expiresAt` and is retired by
- *  `scripts/delete-workspaces-matching.sh --expired`; `standard` never expires. Set at creation
- *  (`create-workspace --purpose ephemeral --ttl <n>h`), read-only on the console. */
-export const WorkspacePurposeWireSchema = z.enum(['standard', 'ephemeral']);
+ *  `scripts/delete-workspaces-matching.sh --expired`; `standard` never expires. S11 AA3a
+ *  (migration core 0050): `admin_trial` — a trial workspace, the only kind of workspace a platform
+ *  administrator's admin agent may act in (plan I-A6); an ordinary workspace with no privileges,
+ *  never the platform default, and a workspace never becomes one or stops being one. Set at
+ *  creation (`create_workspace`'s `purpose`, `create-workspace --purpose`), read-only on the
+ *  console. */
+export const WorkspacePurposeWireSchema = z.enum(['standard', 'ephemeral', 'admin_trial']);
 export type WorkspacePurposeWire = z.infer<typeof WorkspacePurposeWireSchema>;
 
 export const PlatformWorkspaceWireSchema = z

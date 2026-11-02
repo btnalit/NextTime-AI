@@ -324,13 +324,26 @@ function PlatformSettingsForm({
                 disabled={submitting || workspacesLoading}
               >
                 <option value="">{t('无', 'None')}</option>
-                {workspaceOptions.map((ws) => (
-                  <option key={ws.id} value={ws.id}>
-                    {ws.status === 'disabled'
-                      ? `${ws.name}${t('（已停用）', ' (disabled)')}`
-                      : ws.name}
-                  </option>
-                ))}
+                {workspaceOptions.map((ws) =>
+                  // S11 AA3a: a trial workspace is never the default (`update_platform_settings`
+                  // refuses it, `trial_workspace`), so it is listed but not pickable — unless it
+                  // already is the stored value, which stays shown by name.
+                  ws.purpose === 'admin_trial' ? (
+                    <option
+                      key={ws.id}
+                      value={ws.id}
+                      disabled={ws.id !== values.defaultWorkspaceId}
+                    >
+                      {`${ws.name}${t('（试验工作区，不能设为默认）', ' (trial workspace — cannot be the default)')}`}
+                    </option>
+                  ) : (
+                    <option key={ws.id} value={ws.id}>
+                      {ws.status === 'disabled'
+                        ? `${ws.name}${t('（已停用）', ' (disabled)')}`
+                        : ws.name}
+                    </option>
+                  ),
+                )}
                 {currentWorkspaceUnknown ? (
                   <option value={values.defaultWorkspaceId}>
                     {workspacesLoading

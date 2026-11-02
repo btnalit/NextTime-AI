@@ -275,6 +275,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       const proposed = await asApp((client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           kind: 'worker',
           definition: { systemPrompt: 'You are a plain worker.' },
         }),
@@ -528,6 +529,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     it("a Worker whose definition's system prompt carries a holdout run is not started either", async () => {
       const proposed = await asApp((client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           kind: 'worker',
           definition: { systemPrompt: `Always remember: ${HOLDOUT_INPUT}` },
         }),

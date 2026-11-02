@@ -32,3 +32,15 @@ describe('platformErrorMessage — runtime refusals', () => {
     expect(platformErrorMessage(new HttpError('capability_error', 'x', 'conflict'), zh)).toBeNull();
   });
 });
+
+describe('platformErrorMessage — trial workspace (S11 AA3a)', () => {
+  it('trial_workspace says why a trial workspace cannot be the default', () => {
+    const err = new HttpError(
+      'capability_error',
+      'a trial workspace cannot be…',
+      'trial_workspace',
+    );
+    expect(platformErrorMessage(err, zh)).toContain('试验工作区不能设为默认工作区');
+    expect(platformErrorMessage(err, en)).toContain('trial workspace cannot be the default');
+  });
+});

@@ -179,6 +179,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     async function workerProposedSkillOfMember(): Promise<string> {
       const draft = await withWorkspace(pool, { workspaceId, principalId: memberId }, (client) =>
         proposeSkill(client, workspaceId, memberId, {
+          origin: 'human',
           name: `worker-skill-${randomUUID().slice(0, 8)}`,
           description: 'A reusable trick a member’s Worker found.',
           markdown: '# Steps\n\nDo the thing.',

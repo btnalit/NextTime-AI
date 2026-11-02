@@ -219,6 +219,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       if (!v1) throw new Error('no entry definition');
       const own = await as(ownerId, (client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           definitionId: v1.id,
           kind: 'entry',
           definition: { ...v1.definition, egressDeny: ['tracker.example'] },

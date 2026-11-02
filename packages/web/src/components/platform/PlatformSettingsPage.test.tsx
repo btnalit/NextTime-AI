@@ -226,6 +226,45 @@ describe('PlatformSettingsPage', () => {
     await screen.findByTestId('platform-settings-saved');
   });
 
+  it('S11 AA3a: a trial workspace is listed as not pickable for the default', async () => {
+    const http = scriptedHttp({
+      get_platform_settings: () => settings(),
+      list_workspaces: () => ({
+        items: [
+          workspace(),
+          workspace({ id: 'ws-trial', name: 'Lab', purpose: 'admin_trial', isDefault: false }),
+        ],
+      }),
+    });
+    renderPage(http);
+    const form = await screen.findByTestId('platform-settings-form');
+    const picker = within(form).getByLabelText(/默认工作区/) as HTMLSelectElement;
+    await waitFor(() =>
+      expect([...picker.options].map((option) => option.textContent)).toEqual([
+        '无',
+        'Acme',
+        'Lab（试验工作区，不能设为默认）',
+      ]),
+    );
+    const trial = [...picker.options].find((option) => option.value === 'ws-trial');
+    expect(trial?.disabled).toBe(true);
+    expect([...picker.options].find((option) => option.value === 'ws-1')?.disabled).toBe(false);
+  });
+
+  it('S11 AA3a: a trial workspace already stored as the default stays shown and selected', async () => {
+    const http = scriptedHttp({
+      get_platform_settings: () => settings({ defaultWorkspaceId: 'ws-trial' }),
+      list_workspaces: () => ({
+        items: [workspace({ id: 'ws-trial', name: 'Lab', purpose: 'admin_trial' })],
+      }),
+    });
+    renderPage(http);
+    const form = await screen.findByTestId('platform-settings-form');
+    const picker = within(form).getByLabelText(/默认工作区/) as HTMLSelectElement;
+    await waitFor(() => expect(picker.value).toBe('ws-trial'));
+    expect([...picker.options].find((option) => option.value === 'ws-trial')?.disabled).toBe(false);
+  });
+
   it('a default workspace id the list does not know (purged) is shown, kept, and not re-sent', async () => {
     const http = scriptedHttp({
       get_platform_settings: () => settings({ defaultWorkspaceId: 'ws-gone' }),

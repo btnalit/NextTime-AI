@@ -40,6 +40,7 @@ const VALID_SKILL = {
   name: 'diagnose-network',
   description: 'Find the top talker on the network and the process behind it.',
   markdown: 'Run `ss -tnp` and look for the highest byte count; cross-reference the PID.',
+  origin: 'human' as const,
 };
 
 describe('validateSkillContent (pure)', () => {
@@ -273,6 +274,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         const workerDraft = await inTx(ownerId, (client) =>
           proposeWorkerDefinition(client, workspaceId, ownerId, {
+            origin: 'human',
             kind: 'worker',
             definition: { systemPrompt: 'You use a skill.', skills: [skillName] },
           }),

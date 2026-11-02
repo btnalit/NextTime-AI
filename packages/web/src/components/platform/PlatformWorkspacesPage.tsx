@@ -263,6 +263,7 @@ export function PlatformWorkspacesPage({
           <option value="all">{t('全部', 'All')}</option>
           <option value="standard">{t('常规', 'standard')}</option>
           <option value="ephemeral">{t('临时', 'ephemeral')}</option>
+          <option value="admin_trial">{t('试验', 'trial')}</option>
         </Select>
         <label className="checkbox">
           <input

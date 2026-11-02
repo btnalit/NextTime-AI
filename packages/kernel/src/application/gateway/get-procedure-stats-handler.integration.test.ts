@@ -125,6 +125,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         { workspaceId, principalId: principals.owner },
         async (client) => {
           const draft = await proposeProcedure(client, workspaceId, principals.owner, {
+            origin: 'human',
             name: need,
             description: 'Asks a person before anything else.',
             steps: [{ kind: 'approval', description: 'A person agrees to go ahead.' }],

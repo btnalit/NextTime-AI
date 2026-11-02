@@ -286,6 +286,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       const proposed = await asApp((client) =>
         proposeWorkerDefinition(client, workspaceId, people.owner, {
+          origin: 'human',
           kind: 'worker',
           definition: { systemPrompt: 'You are a plain worker.' },
         }),

@@ -3577,6 +3577,8 @@ const platformCapabilities = [
         allowedModels: z.array(z.string().min(1)).max(100).optional(),
         /** S5.1: what a Link write the published ontology does not license does. Omitted → the kernel's `ONTOLOGY_ENFORCEMENT` default (`reject`). */
         ontologyEnforcement: wire.OntologyEnforcementWireSchema.optional(),
+        /** S11 AA3a: `admin_trial` makes it a trial workspace — the only kind an admin agent acts in (I-A6) — for good: a workspace never becomes one or stops being one. Omitted → `standard`. `ephemeral` is the CLI's (`create-workspace --purpose ephemeral --ttl`), which also sets the expiry. */
+        purpose: z.enum(['standard', 'admin_trial']).optional(),
       })
       .strict(),
     resultSchema: wire.PlatformWorkspaceWireSchema,

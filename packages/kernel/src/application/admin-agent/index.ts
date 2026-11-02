@@ -1,6 +1,7 @@
 export {
   ADMIN_AGENT_HANDLE_MAX_TTL_SECONDS,
   ADMIN_AGENT_REFUSAL_REASONS,
+  ADMIN_TRIAL_WORKSPACE_PURPOSE,
   AdminAgentRefused,
   adminAgentEnabled,
   adminAgentRefusal,

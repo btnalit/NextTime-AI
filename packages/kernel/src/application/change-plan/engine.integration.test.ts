@@ -291,6 +291,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         // Someone publishes the family in between.
         await inWorkspace(ws, (client) =>
           publishOntologyVersion(client, ws.workspaceId, {
+            origin: 'human',
             id: deriveOntologyPackId('fam-c'),
             definition: definitionOf('ThingC0'),
             principalId: ws.ownerId,
@@ -439,6 +440,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         // item: the head is not what the recorded item wrote.
         await inWorkspace(ws, (client) =>
           publishOntologyVersion(client, ws.workspaceId, {
+            origin: 'human',
             id: deriveOntologyPackId('fam-p'),
             definition: definitionOf('ThingP2'),
             principalId: ws.ownerId,
@@ -602,6 +604,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const ws = await newWorkspace();
         await inWorkspace(ws, (client) =>
           publishOntologyVersion(client, ws.workspaceId, {
+            origin: 'human',
             id: deriveOntologyPackId('plain-mod'),
             definition: definitionOf('PlainThing', [RESTART]),
             principalId: ws.ownerId,

@@ -16,6 +16,7 @@
 | `adminAgentOnly`（capability 注册表，S11 AA2） | 只有管理员智能体的 Handle（`admin_agent` 会话）能调用：读平台跨工作区状态的 `platform_state_*`（组 `platform_state`）。注册表自检强制它与组 `platform_state` 双向对应，且只能是 Handle 通道、无副作用的 `observe`，不带 `scope` / `minRole` / `actsForPerson`；人的控制台、服务 API key、平台管理员会话、任何别的会话的 Handle 都调不到（授权层与 dispatch 各拒一次，后者留 `admin_agent_only` 审计行），服务 Handle 与 CLI 也签不进去。契约快照里标 `adminAgentOnly: true`。 | 不得用它标会写的能力；不得给人的通道开一个同义的平台读 |
 | `mode`（Operation，门侧） | 不变：`observe` / `execute`（设计 §7.4）。两处 `mode` 的取值集合不同，靠类型名区分：`CapabilityMode` vs `OperationMode`。 | — |
 | `kind` | 只用于**类型判别**字段（`principals.kind`、`chat.message.kind`、`ChatMessageContent.kind`）。 | 不得用作"种类描述"的自由文本 |
+| `origin`（草稿，S11 AA3a，遗留 293） | 一个 Skill / Procedure / WorkerDefinition / OntologyVersion 版本是从哪个通道起草的：`human`（人的通道，或人自己的动作——装能力包、应用变更段、CLI）、`agent`（智能体会话经 Handle）、`platform`（内核自己的模板，没有调用方——新工作区的入口模板、平台元本体、目标规划器的定义）。由内核按调用通道推出，调用方不能传；写入后不可改（库触发器）。之前写的行没有它，线上省略该字段。与 `proposedBy`（哪个 Principal）互补，不是同义词。 | 不得从 `proposedBy` 的 Principal 种类倒推；不得作为参数接收 |
 | `*At` | 时间戳一律 ISO 8601 UTC 字符串（`createdAt`、`expiresAt`、`observedAt`）。 | 线上不得出现 epoch 数字或 `Date` 对象序列化差异 |
 
 ## 2. 标识（Identity）

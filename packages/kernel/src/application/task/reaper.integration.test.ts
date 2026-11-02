@@ -137,6 +137,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       async function seedPendingChildRequest(awaitDecision: boolean) {
         const definitionId = await inTx(ownerId, async (client) => {
           const proposed = await proposeWorkerDefinition(client, workspaceId, ownerId, {
+            origin: 'human',
             kind: 'worker',
             definition: { systemPrompt: 'ops-runner' },
           });
@@ -219,6 +220,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it("routes a pending child WorkerRun's ActionRequest back to the parent Task, and resumes on resolution", async () => {
         const definitionId = await inTx(ownerId, async (client) => {
           const proposed = await proposeWorkerDefinition(client, workspaceId, ownerId, {
+            origin: 'human',
             kind: 'worker',
             definition: { systemPrompt: 'ops-runner' },
           });
@@ -324,6 +326,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('finds a published worker definition by a need matching its name/description, ranked over an unrelated one', async () => {
         await inTx(ownerId, async (client) => {
           const target = await proposeWorkerDefinition(client, workspaceId, ownerId, {
+            origin: 'human',
             kind: 'worker',
             definition: {
               systemPrompt: 'You restart RouterOS devices.',
@@ -337,6 +340,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           });
 
           const unrelated = await proposeWorkerDefinition(client, workspaceId, ownerId, {
+            origin: 'human',
             kind: 'worker',
             definition: {
               systemPrompt: 'You do something else entirely.',
@@ -367,6 +371,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             properties: { transportKind: 'ssh' },
           });
           const executeNeeding = await proposeWorkerDefinition(client, workspaceId, ownerId, {
+            origin: 'human',
             kind: 'worker',
             definition: {
               systemPrompt: 'You need real gate access.',

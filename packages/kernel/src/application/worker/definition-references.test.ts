@@ -77,6 +77,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     async function publishedSkill(client: PoolClient, name: string) {
       const draft = await proposeSkill(client, workspaceId, ownerId, {
+        origin: 'human',
         name,
         description: `What ${name} does.`,
         markdown: `# ${name}\n\nDo it.`,
@@ -86,6 +87,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     async function workerDraft(client: PoolClient, definition: Record<string, unknown>) {
       return proposeWorkerDefinition(client, workspaceId, ownerId, {
+        origin: 'human',
         kind: 'worker',
         definition: { systemPrompt: 'You run things.', ...definition },
       });
@@ -145,6 +147,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     it('every reference that is not there is named at once, by field, and nothing is published', async () => {
       const { draft, unpublished, deprecated } = await inTx(async (client) => {
         const unpublished = await proposeSkill(client, workspaceId, ownerId, {
+          origin: 'human',
           name: `draft-only-${randomUUID().slice(0, 6)}`,
           description: 'Still a draft.',
           markdown: '# Draft\n\nNot yet.',
@@ -176,6 +179,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       const withForeign = await inTx((client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           definitionId: draft.id,
           kind: 'worker',
           definition: {
@@ -262,6 +266,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       // An entry definition's model too.
       const entry = await inTx((client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           kind: 'entry',
           definition: {
             systemPrompt: 'You are the entry agent.',
@@ -288,6 +293,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     it('an entry definition keeps its own ceiling check: outside it is invalid content, as before', async () => {
       const entry = await inTx((client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           kind: 'entry',
           definition: {
             systemPrompt: 'You are the entry agent.',

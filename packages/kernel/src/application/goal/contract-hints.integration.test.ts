@@ -46,7 +46,11 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     async function publish(definition: Record<string, unknown>) {
       const draft = await inTx((client) =>
-        proposeWorkerDefinition(client, workspaceId, ownerId, { kind: 'worker', definition }),
+        proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
+          kind: 'worker',
+          definition,
+        }),
       );
       await inTx((client) =>
         publishWorkerDefinition(client, workspaceId, ownerId, {

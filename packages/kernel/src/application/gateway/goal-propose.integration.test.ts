@@ -146,7 +146,11 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     async function publish(definition: Record<string, unknown>) {
       const proposed = await as(ownerId, (client) =>
-        proposeWorkerDefinition(client, workspaceId, ownerId, { kind: 'worker', definition }),
+        proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
+          kind: 'worker',
+          definition,
+        }),
       );
       await as(ownerId, (client) =>
         publishWorkerDefinition(client, workspaceId, ownerId, {
@@ -578,6 +582,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         // nor its kind is named.
         const theirs = await as(ownerId, (client) =>
           proposeWorkerDefinition(client, workspaceId, ownerId, {
+            origin: 'human',
             kind: 'entry',
             definition: { systemPrompt: 'not published', capabilities: [] },
           }),

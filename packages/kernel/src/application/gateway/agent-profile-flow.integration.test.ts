@@ -147,6 +147,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         { workspaceId: ws, principalId: byPrincipalId },
         async (client) => {
           const proposed = await proposeSkill(client, ws, byPrincipalId, {
+            origin: 'human',
             name,
             description: `${name} description`,
             markdown: `# ${name}\n\nbody`,

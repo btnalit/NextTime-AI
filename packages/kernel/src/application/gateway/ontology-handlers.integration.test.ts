@@ -465,6 +465,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const aliceDraft = await propose(aliceId, familyId, withLinkType('valve_pack_rel'));
         await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
           publishOntologyVersion(client, workspaceId, {
+            origin: 'human',
             id: familyId,
             definition: BASE_CHANGE,
             principalId: ownerId,

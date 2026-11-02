@@ -406,6 +406,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const model = 'fake/fake-echo';
       await inWorkspace(ws, async (client) => {
         const proposed = await proposeWorkerDefinition(client, ws.workspaceId, ws.ownerId, {
+          origin: 'human',
           definitionId: runner.definitionId,
           kind: 'worker',
           definition: { ...before.definition, gates: [south], model },

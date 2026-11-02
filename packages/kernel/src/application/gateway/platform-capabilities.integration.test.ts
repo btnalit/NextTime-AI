@@ -1185,12 +1185,14 @@ describe.runIf(DATABASE_URL !== undefined)(
         const proposer = await addPrincipal(pool, workspaceId, 'Draft Residue Proposer');
         await withWorkspace(pool, { workspaceId, principalId: proposer.principalId }, (client) =>
           proposeWorkerDefinition(client, workspaceId, proposer.principalId, {
+            origin: 'human',
             kind: 'worker',
             definition: { systemPrompt: 'You are a test worker.' },
           }),
         );
         await withWorkspace(pool, { workspaceId, principalId: proposer.principalId }, (client) =>
           proposeSkill(client, workspaceId, proposer.principalId, {
+            origin: 'human',
             name: 'residue-test-skill',
             description: 'exists only to be counted',
             markdown: 'do nothing',
@@ -1198,6 +1200,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         await withWorkspace(pool, { workspaceId, principalId: proposer.principalId }, (client) =>
           proposeProcedure(client, workspaceId, proposer.principalId, {
+            origin: 'human',
             name: 'residue-test-procedure',
             description: 'exists only to be counted',
             steps: [],
