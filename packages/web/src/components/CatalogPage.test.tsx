@@ -155,6 +155,39 @@ describe('CatalogPage', () => {
     expect(screen.getByRole('tab', { name: 'Skill' }).getAttribute('aria-selected')).toBe('true');
   });
 
+  it('S11 AA4a: only an owner is offered the 管理员提案 tab, which lists what awaits their decision', async () => {
+    const workspace = (role: 'owner' | 'member') => ({
+      id: 'ws-1',
+      name: 'Acme',
+      createdAt: '2026-01-01T00:00:00Z',
+      principalCount: 2,
+      gatekeeperCount: 0,
+      caller: { id: `p-${role}`, role, displayName: role, kind: 'human' },
+    });
+    const reads = {
+      list_operations: () => ({ items: [] }),
+      get_operation_stats: () => ({ items: [] }),
+      list_admin_proposal_segments: () => ({ items: [] }),
+    };
+
+    const member = scriptedHttp({ get_workspace: () => workspace('member'), ...reads });
+    const { unmount } = renderPage(member);
+    await waitFor(() => expect(member.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    await screen.findByRole('tab', { name: '安装历史' });
+    expect(screen.queryByRole('tab', { name: '管理员提案' })).toBeNull();
+    unmount();
+
+    const owner = scriptedHttp({ get_workspace: () => workspace('owner'), ...reads });
+    renderPage(owner);
+    fireEvent.click(await screen.findByRole('tab', { name: '管理员提案' }));
+    expect((await screen.findByTestId('catalog-proposals-empty')).textContent).toContain(
+      '没有待确认的管理员提案',
+    );
+    expect(owner.calls.find((c) => c.name === 'list_admin_proposal_segments')?.params).toEqual({
+      status: 'proposed',
+    });
+  });
+
   it('renders a not_found from a tab capability as an ordinary error banner (B6: the "not live yet" branch is gone)', async () => {
     const http = scriptedHttp({
       list_operations: () =>

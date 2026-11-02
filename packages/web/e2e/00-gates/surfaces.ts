@@ -140,7 +140,7 @@ export const SURFACES: readonly Surface[] = [
     role: 'owner',
     ready: (page) => heading(page, '系统与授权'), // components/systems/SystemsPage.tsx
   },
-  // CatalogPage.tsx renders the same "能力目录 Catalog" heading for all six tabs — only the tab
+  // CatalogPage.tsx renders the same "能力目录 Catalog" heading for all seven tabs — only the tab
   // body under it changes (Tabs component, `#/govern/catalog/<tab>`).
   {
     id: 'catalog-operations',
@@ -177,6 +177,15 @@ export const SURFACES: readonly Surface[] = [
     hash: '#/govern/catalog/packs',
     role: 'owner',
     ready: (page) => heading(page, '能力目录'),
+  },
+  {
+    // S11 AA4a: the admin proposals addressed to this workspace (owners only; none in CI, so the
+    // empty state).
+    id: 'catalog-proposals',
+    labelZh: '能力目录 · 管理员提案',
+    hash: '#/govern/catalog/proposals',
+    role: 'owner',
+    ready: (page) => page.getByTestId('catalog-proposals-empty'),
   },
   {
     // S11 P1-B: the install records (the workspace's default packs, installed by the platform).
