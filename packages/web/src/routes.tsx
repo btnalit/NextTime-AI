@@ -546,7 +546,11 @@ export function Routed({
  */
 export function isDefaultLanding(hash: string): boolean {
   if (hash === '' || hash === '#' || hash === '#/' || hash === hrefs.login()) return true;
-  return routeFromHash(hash).kind === 'chats' && hash !== hrefs.chats();
+  // UX P3-5 on #943: the path decides — `#/work/chats?open=admin_agent` (a bookmark, a new tab)
+  // names the chats page as much as `#/work/chats` does; its query is the page's.
+  const query = hash.indexOf('?');
+  const path = query === -1 ? hash : hash.slice(0, query);
+  return routeFromHash(hash).kind === 'chats' && path !== hrefs.chats();
 }
 
 /** True for every `#/platform/*` route kind — used by `Routed`'s platform-only redirect. */

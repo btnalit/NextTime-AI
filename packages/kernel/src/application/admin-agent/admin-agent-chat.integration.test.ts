@@ -1018,5 +1018,25 @@ describe.runIf(DATABASE_URL !== undefined)(
         resetTaskRuntimeForTests();
       }
     });
+
+    it('#941 review H03: disabling a trial workspace stops its members’ admin agent containers with their entry ones', async () => {
+      const supervisor = new StopRecordingSupervisorClient();
+      configureTaskRuntime({ pool, privateKey, supervisorClient: supervisor });
+      try {
+        const someone = await newAdmin();
+        const trial = await newTrial();
+        const member = await addMember(trial.workspaceId, someone);
+        await send(member, (await newAdminChat(member)).id);
+
+        await call(platform(admin), 'set_workspace_status', {
+          workspaceId: trial.workspaceId,
+          status: 'disabled',
+        });
+        expect(supervisor.stops).toContain(`entry:${member.principalId}`);
+        expect(supervisor.stops).toContain(`admin_agent:${member.principalId}`);
+      } finally {
+        resetTaskRuntimeForTests();
+      }
+    });
   },
 );

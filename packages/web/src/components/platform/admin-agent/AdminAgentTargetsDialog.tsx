@@ -35,8 +35,10 @@ export interface AdminAgentTargetsDialogProps {
   readonly onSaved: (result: AdminAgentTargetsResultWire) => void;
 }
 
-/** A row the reader may tick: every active standard workspace, and a target chosen before that is
- *  no longer one (disabled since) — kept ticked, so unticking it is how it is removed. */
+/** A row the reader may tick: every active standard workspace, and every target chosen before that
+ *  the list does not hold — kept ticked, so unticking it is how it is removed. Whether it is disabled
+ *  is read from the target itself (`AdminAgentTargetWire.status`, #501 on #943), not inferred from
+ *  its absence from the list. */
 interface Candidate {
   readonly workspaceId: string;
   readonly name: string;
@@ -99,7 +101,7 @@ export function AdminAgentTargetsDialog({
       .map((target) => ({
         workspaceId: target.workspaceId,
         name: target.name,
-        disabled: true,
+        disabled: target.status === 'disabled',
       }));
     return [...kept, ...listed];
   }, [workspaces.state, workspace]);
@@ -233,8 +235,20 @@ export function AdminAgentTargetsDialog({
               </fieldset>
             </>
           )}
+          <InlineError
+            error={error}
+            overrides={adminAgentTargetsErrorOverrides(t)}
+            testId="admin-agent-targets-error"
+          />
+        </div>
+        <DialogFooter>
           {changed ? (
-            <div className="stack-s text-3" data-testid="admin-agent-targets-diff">
+            <div
+              className="stack-s text-3 basis-full"
+              data-testid="admin-agent-targets-diff"
+              // UX P3-2 on #943: in the pinned footer, so what Save does is in view beside it.
+              aria-live="polite"
+            >
               {added.length > 0 ? (
                 <p>
                   {t('加上：', 'Adding: ')}
@@ -245,21 +259,19 @@ export function AdminAgentTargetsDialog({
                 <p>
                   {t('去掉：', 'Removing: ')}
                   {removed.map(nameOf).join(t('、', ', '))}
-                  {t(
-                    '。之前向它们提的工作区部分暂时不能应用。',
-                    '. The workspace parts proposed to them before cannot be applied until they are added back.',
-                  )}
+                  {removed.length === 1
+                    ? t(
+                        '。之前向它提的工作区部分暂时不能应用。',
+                        '. The workspace part proposed to it before cannot be applied until it is added back.',
+                      )
+                    : t(
+                        '。之前向它们提的工作区部分暂时不能应用。',
+                        '. The workspace parts proposed to them before cannot be applied until they are added back.',
+                      )}
                 </p>
               ) : null}
             </div>
           ) : null}
-          <InlineError
-            error={error}
-            overrides={adminAgentTargetsErrorOverrides(t)}
-            testId="admin-agent-targets-error"
-          />
-        </div>
-        <DialogFooter>
           <Button
             variant="primary"
             size="s"

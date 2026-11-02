@@ -26,6 +26,7 @@ import {
   adminAgentRefusal,
   issueAdminAgentHandle,
   loadAdminAgentSystemPrompt,
+  requireLiveAdminAgentSession,
 } from '../admin-agent/index.js';
 import {
   hasActiveSealHold,
@@ -1270,7 +1271,7 @@ export class AgentHostRuntime implements AgentRuntime {
   /**
    * S11 AA4c-2: the admin agent's Handle for this Turn — in one transaction of its trial workspace,
    * the authority (`adminAgentRefusal`, refusing with {@link AdminAgentRefused}), then the cached
-   * Handle while it is still good (see {@link CachedAdminHandle}), else a new one
+   * Handle while it is still good (see {@link CachedAdminHandle}) and its session live, else a new one
    * (`issueAdminAgentHandle`, at most an hour) under the session the Turn was recorded under —
    * refused once that session has ended (`AdminAgentSessionEndedError`). The token never leaves
    * this class but in the `startTurn` frame.
@@ -1305,6 +1306,14 @@ export class AgentHostRuntime implements AgentRuntime {
         cached.expiresAtMs - this.now() >
           (cached.expiresAtMs - cached.issuedAtMs) * HANDLE_REISSUE_THRESHOLD
       ) {
+        // #941 review (#493): the session may have ended while its Handle stayed live (see
+        // `requireLiveAdminAgentSession`) — a cache hit is refused then, as a new issue would be.
+        try {
+          await requireLiveAdminAgentSession(client, workspaceId, principalId, sessionId);
+        } catch (err) {
+          this.adminHandleCache.delete(key);
+          throw err;
+        }
         return cached.token;
       }
       const issued = await issueAdminAgentHandle(client, {

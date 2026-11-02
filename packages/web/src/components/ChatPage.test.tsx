@@ -1386,3 +1386,41 @@ describe('ChatPage goal card and milestones (S11 GO5e-2)', () => {
     expect(within(card).getByTestId('goal-proposal-open').textContent).toBe('查看目标');
   });
 });
+
+describe('ChatPage in an admin agent chat (S11 AA4c-3, UX P2-1 on #943)', () => {
+  it('names the admin agent, not the entry agent, in the empty state, on replies and while streaming', async () => {
+    const fake = fakeClient({}, chatRow({ agentKind: 'admin_agent' }));
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => fake.caughtUp());
+    const empty = await screen.findByTestId('chat-empty');
+    await waitFor(() => expect(empty.textContent).toContain('问管理员智能体点什么'));
+    expect(empty.textContent).toContain('提出管理员提案');
+    expect(empty.textContent).not.toMatch(/入口/);
+
+    act(() => fake.deliver(persisted(1, 'assistant', '已提出一份管理员提案。')));
+    const lead = document.querySelector('.message-assistant .message-meta-lead');
+    expect(lead?.textContent).toContain('管理员智能体');
+    expect(lead?.textContent).not.toMatch(/入口/);
+
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: '再看一下' } });
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+    await waitFor(() => expect(fake.client.sendChatMessage).toHaveBeenCalled());
+    act(() => fake.stream('turn-1', { streamKind: 'textDelta', delta: '正在看' }));
+    const streaming = document.querySelector('.message-streaming .message-meta-lead');
+    expect(streaming?.textContent).toContain('管理员智能体');
+    expect(streaming?.textContent).toContain('正在输出');
+  });
+
+  it('keeps the entry agent wording in an entry chat', async () => {
+    const fake = fakeClient();
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => fake.caughtUp());
+    expect((await screen.findByTestId('chat-empty')).textContent).toMatch(/问入口\sagent\s点什么/);
+    act(() => fake.deliver(persisted(1, 'assistant', 'ok')));
+    expect(document.querySelector('.message-assistant .message-meta-lead')?.textContent).toMatch(
+      /入口\sagent/,
+    );
+  });
+});

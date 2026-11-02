@@ -602,13 +602,16 @@ describe('PlatformWorkspacesPage', () => {
     );
 
     // And on a hashchange while the page is open, over a form already open on 常规.
-    window.location.hash = '#/platform/workspaces?create=admin_trial';
+    window.location.hash = '#/platform/workspaces?create=admin_trial&residue=1';
     window.dispatchEvent(new HashChangeEvent('hashchange'));
     await waitFor(() =>
       expect((screen.getByTestId('create-workspace-purpose') as HTMLSelectElement).value).toBe(
         'admin_trial',
       ),
     );
+    // UX P3-6 on #943: the preset is dropped once read, so a reload does not open it again; the
+    // rest of the query stays.
+    expect(window.location.hash).toBe('#/platform/workspaces?residue=1');
     window.location.hash = '';
   });
 

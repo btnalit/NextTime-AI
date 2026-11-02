@@ -2,6 +2,7 @@ import { Fragment, useMemo, useState } from 'react';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
+import { messageRoleLabel } from '../lib/chat-messages.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import {
   composerEvaluationContentStep,
@@ -143,6 +144,7 @@ export function ChatPage({
   // #530 必修 3: the model the next Turn runs, when its provider is not known to work.
   const [runningModel, setRunningModel] = useState<RunningModelHealth | null>(null);
   const { chat, archived } = chatSummary;
+  const agentKind = chat?.agentKind ?? 'entry';
 
   return (
     <div className="chat-page" data-testid="chat-page">
@@ -180,11 +182,16 @@ export function ChatPage({
                 <p className="chat-empty">{t('正在加载历史…', 'Loading history…')}</p>
               ) : null}
               {caughtUp && messages.length === 0 && turn.status !== 'running' ? (
-                <p className="chat-empty">
-                  {t(
-                    '还没有消息。问入口 agent 点什么——它可以观察系统、提出动作并委派给 Worker。',
-                    'No messages yet. Ask the entry agent something — it can observe systems, propose actions and delegate to Workers.',
-                  )}
+                <p className="chat-empty" data-testid="chat-empty">
+                  {agentKind === 'admin_agent'
+                    ? t(
+                        '还没有消息。问管理员智能体点什么——它在这个试验工作区里试做改动，再向你选的目标工作区提出管理员提案；它不委派 Worker。',
+                        'No messages yet. Ask the admin agent something — it tries changes in this trial workspace, then proposes them to the target workspaces you chose as an admin proposal. It does not delegate to Workers.',
+                      )
+                    : t(
+                        '还没有消息。问入口 agent 点什么——它可以观察系统、提出动作并委派给 Worker。',
+                        'No messages yet. Ask the entry agent something — it can observe systems, propose actions and delegate to Workers.',
+                      )}
                 </p>
               ) : null}
               {items.map((item) => {
@@ -220,6 +227,7 @@ export function ChatPage({
                       latestGoalStatus={latestGoalStatus}
                       goals={goals}
                       onOpenGoal={onOpenGoal}
+                      agentKind={agentKind}
                     />
                     {turnAttribution ? (
                       <TurnOutcomeControl
@@ -242,7 +250,7 @@ export function ChatPage({
                     <span className="message-avatar" aria-hidden="true">
                       A
                     </span>
-                    <span>{t('入口 agent', 'Entry agent')}</span>
+                    <span>{messageRoleLabel('assistant', t, agentKind)}</span>
                     <span aria-hidden>·</span>
                     <span>{t('正在输出', 'Streaming')}</span>
                   </div>
