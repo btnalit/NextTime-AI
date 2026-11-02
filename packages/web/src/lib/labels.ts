@@ -272,6 +272,17 @@ export function roleLabel(role: string, t: Translate): string {
   return labelText(statusChipStyle('role', role), t);
 }
 
+/** A workspace's name with its `purpose` spelled out where it is not the ordinary one — 「（试验）」
+ *  for a trial workspace (`admin_trial`, S11 AA3a), 「（临时）」 for an `ephemeral` one — for an
+ *  `<option>` or a chip that cannot hold a `StatusChip`. One rule for every place that lists a
+ *  workspace by name: the workspace pickers, the switcher, the users page (legacy 596). An
+ *  unknown purpose (a newer kernel) shows the bare name. */
+export function workspaceNameWithPurpose(name: string, purpose: string, t: Translate): string {
+  if (purpose === 'admin_trial') return `${name}${t('（试验）', ' (trial)')}`;
+  if (purpose === 'ephemeral') return `${name}${t('（临时）', ' (ephemeral)')}`;
+  return name;
+}
+
 /** Console audit P1-12: what each workspace `Role` can do, one line, shown next to every role
  *  picker so choosing one is not a guess. Derived from the registry's `minRole`s (an owner clears
  *  every one; `approve`/`reject`/`list_grants`/`list_policies` need operator; every `propose_*`/

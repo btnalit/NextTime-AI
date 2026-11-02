@@ -26,6 +26,7 @@ function membership(workspaceId: string): WireMembership {
   return {
     workspaceId,
     workspaceName: workspaceId,
+    workspacePurpose: 'standard',
     principalId: `p-${workspaceId}`,
     role: 'member',
   };

@@ -451,7 +451,13 @@ describe('PlatformWorkspacesPage', () => {
     );
     renderPage(http, {
       memberships: [
-        { workspaceId: 'ws-1', workspaceName: 'Acme', principalId: 'p-1', role: 'owner' },
+        {
+          workspaceId: 'ws-1',
+          workspaceName: 'Acme',
+          workspacePurpose: 'standard',
+          principalId: 'p-1',
+          role: 'owner',
+        },
       ],
       onOpenWorkspaceConfig,
     });

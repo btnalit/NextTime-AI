@@ -115,8 +115,12 @@
 
 .sidebar-workspace-caption {
   display: flex;
+  /* Legacy 596 (UX on #924): 「Workspace · trial · Operator」 is wider than the card in English —
+   * the role chip wraps to a second line instead of running past the card's edge. */
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
+  row-gap: 2px;
   font-size: var(--fs-12);
   color: var(--text-3);
   min-width: 0;
@@ -545,34 +549,44 @@
     grid-template-columns: var(--rail-w) minmax(0, 1fr);
   }
 
+  /* Legacy 610: every rule below is the wide `<aside class="sidebar">` collapsing to its icon rail,
+   * so each is scoped to `.sidebar`. `NavDrawer` (≤960px, `.nav-drawer`) renders the same
+   * `SidebarContent` classes and is inside this width too: unscoped, these rules left the drawer a
+   * column of unlabelled icons with no workspace switcher, current user or language switch. */
   .sidebar {
     padding: var(--space-4) var(--space-2);
     align-items: stretch;
   }
 
-  .sidebar-brand {
+  .sidebar .sidebar-brand {
     justify-content: center;
     padding: 0;
   }
 
-  .sidebar-product,
-  .sidebar-workspace-block,
-  .nav-label,
-  .nav-section-title,
-  .conn-status-label,
-  .sidebar-version,
-  .sidebar-user,
-  .lang-switch {
+  .sidebar .sidebar-product,
+  .sidebar .sidebar-workspace-block,
+  .sidebar .nav-label,
+  .sidebar .nav-section-title,
+  .sidebar .conn-status-label,
+  .sidebar .sidebar-version,
+  .sidebar .sidebar-user,
+  .sidebar .lang-switch {
     display: none;
   }
 
-  .nav-item {
+  /* `MobileTopBar` keeps only the connection dot, as it always has (the label holds the
+   * `ws-status` testid; the dot's `title` names the state). */
+  .mobile-topbar .conn-status-label {
+    display: none;
+  }
+
+  .sidebar .nav-item {
     justify-content: center;
     padding: 10px 0;
     position: relative;
   }
 
-  .nav-badge {
+  .sidebar .nav-badge {
     position: absolute;
     top: 2px;
     right: 8px;
@@ -583,12 +597,12 @@
     box-shadow: 0 0 0 2px var(--surface-1);
   }
 
-  .conn-status {
+  .sidebar .conn-status {
     justify-content: center;
     padding: 6px 0;
   }
 
-  .sidebar-user-row {
+  .sidebar .sidebar-user-row {
     justify-content: center;
     padding: 0;
   }

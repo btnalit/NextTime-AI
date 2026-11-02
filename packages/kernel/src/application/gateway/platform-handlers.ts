@@ -165,6 +165,7 @@ interface MembershipDbRow {
   workspace_id: string;
   workspace_name: string;
   workspace_status: 'active' | 'disabled';
+  workspace_purpose: WorkspacePurpose;
   principal_id: string;
   role: Role;
   disabled: boolean;
@@ -182,6 +183,7 @@ function toWireMembership(row: MembershipDbRow): UserMembershipWire {
     workspaceId: row.workspace_id,
     workspaceName: row.workspace_name,
     workspaceStatus: row.workspace_status,
+    workspacePurpose: row.workspace_purpose,
     principalId: row.principal_id,
     role: row.role,
     disabled: row.disabled,
@@ -196,7 +198,8 @@ async function loadMemberships(
   if (userIds.length === 0) return map;
   const result = await client.query<MembershipDbRow>(
     `select p.user_id, p.workspace_id, w.name as workspace_name, w.status as workspace_status,
-            p.id as principal_id, p.role, (p.disabled_at is not null) as disabled
+            w.purpose as workspace_purpose, p.id as principal_id, p.role,
+            (p.disabled_at is not null) as disabled
        from principals p
        join workspaces w on w.id = p.workspace_id
       where p.kind = 'human' and p.user_id = any($1::uuid[])
@@ -391,6 +394,7 @@ async function insertMembership(
     workspaceId: workspace.id,
     workspaceName: workspace.name,
     workspaceStatus: workspace.status,
+    workspacePurpose: workspace.purpose,
     principalId: row.id,
     role: input.role,
     disabled: false,

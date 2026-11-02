@@ -1997,6 +1997,14 @@
         "workspaceName": {
           "type": "string"
         },
+        "workspacePurpose": {
+          "enum": [
+            "standard",
+            "ephemeral",
+            "admin_trial"
+          ],
+          "type": "string"
+        },
         "workspaceStatus": {
           "enum": [
             "active",
@@ -2009,6 +2017,7 @@
         "workspaceId",
         "workspaceName",
         "workspaceStatus",
+        "workspacePurpose",
         "principalId",
         "role",
         "disabled"
@@ -10283,6 +10292,14 @@
                   "workspaceName": {
                     "type": "string"
                   },
+                  "workspacePurpose": {
+                    "enum": [
+                      "standard",
+                      "ephemeral",
+                      "admin_trial"
+                    ],
+                    "type": "string"
+                  },
                   "workspaceStatus": {
                     "enum": [
                       "active",
@@ -10295,6 +10312,7 @@
                   "workspaceId",
                   "workspaceName",
                   "workspaceStatus",
+                  "workspacePurpose",
                   "principalId",
                   "role",
                   "disabled"
@@ -43983,6 +44001,14 @@
               "workspaceName": {
                 "type": "string"
               },
+              "workspacePurpose": {
+                "enum": [
+                  "standard",
+                  "ephemeral",
+                  "admin_trial"
+                ],
+                "type": "string"
+              },
               "workspaceStatus": {
                 "enum": [
                   "active",
@@ -43995,6 +44021,7 @@
               "workspaceId",
               "workspaceName",
               "workspaceStatus",
+              "workspacePurpose",
               "principalId",
               "role",
               "disabled"
@@ -44123,6 +44150,14 @@
                     "workspaceName": {
                       "type": "string"
                     },
+                    "workspacePurpose": {
+                      "enum": [
+                        "standard",
+                        "ephemeral",
+                        "admin_trial"
+                      ],
+                      "type": "string"
+                    },
                     "workspaceStatus": {
                       "enum": [
                         "active",
@@ -44135,6 +44170,7 @@
                     "workspaceId",
                     "workspaceName",
                     "workspaceStatus",
+                    "workspacePurpose",
                     "principalId",
                     "role",
                     "disabled"
@@ -44960,6 +44996,14 @@
               "workspaceName": {
                 "type": "string"
               },
+              "workspacePurpose": {
+                "enum": [
+                  "standard",
+                  "ephemeral",
+                  "admin_trial"
+                ],
+                "type": "string"
+              },
               "workspaceStatus": {
                 "enum": [
                   "active",
@@ -44972,6 +45016,7 @@
               "workspaceId",
               "workspaceName",
               "workspaceStatus",
+              "workspacePurpose",
               "principalId",
               "role",
               "disabled"
@@ -68656,6 +68701,14 @@
         "workspaceName": {
           "type": "string"
         },
+        "workspacePurpose": {
+          "enum": [
+            "standard",
+            "ephemeral",
+            "admin_trial"
+          ],
+          "type": "string"
+        },
         "workspaceStatus": {
           "enum": [
             "active",
@@ -68668,6 +68721,7 @@
         "workspaceId",
         "workspaceName",
         "workspaceStatus",
+        "workspacePurpose",
         "principalId",
         "role",
         "disabled"
@@ -69177,6 +69231,14 @@
               "workspaceName": {
                 "type": "string"
               },
+              "workspacePurpose": {
+                "enum": [
+                  "standard",
+                  "ephemeral",
+                  "admin_trial"
+                ],
+                "type": "string"
+              },
               "workspaceStatus": {
                 "enum": [
                   "active",
@@ -69189,6 +69251,7 @@
               "workspaceId",
               "workspaceName",
               "workspaceStatus",
+              "workspacePurpose",
               "principalId",
               "role",
               "disabled"
@@ -69333,6 +69396,14 @@
               "workspaceName": {
                 "type": "string"
               },
+              "workspacePurpose": {
+                "enum": [
+                  "standard",
+                  "ephemeral",
+                  "admin_trial"
+                ],
+                "type": "string"
+              },
               "workspaceStatus": {
                 "enum": [
                   "active",
@@ -69345,6 +69416,7 @@
               "workspaceId",
               "workspaceName",
               "workspaceStatus",
+              "workspacePurpose",
               "principalId",
               "role",
               "disabled"
@@ -73755,6 +73827,14 @@
               "workspaceName": {
                 "type": "string"
               },
+              "workspacePurpose": {
+                "enum": [
+                  "standard",
+                  "ephemeral",
+                  "admin_trial"
+                ],
+                "type": "string"
+              },
               "workspaceStatus": {
                 "enum": [
                   "active",
@@ -73767,6 +73847,7 @@
               "workspaceId",
               "workspaceName",
               "workspaceStatus",
+              "workspacePurpose",
               "principalId",
               "role",
               "disabled"
