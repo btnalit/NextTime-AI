@@ -799,6 +799,11 @@ function ProposalDetailBody({
       <KeyValue
         testId="graph-proposal-detail-fields"
         items={[
+          // Legacy 597: the proposer above is whom it is for; an agent drafting for them is said
+          // right under it.
+          ...[draftOriginItem(row.origin, row.status, t, 'graph-proposal-detail-origin')].filter(
+            (item): item is KeyValueItem => item !== null,
+          ),
           { key: 'version', label: t('版本', 'Version'), value: `v${row.version}`, mono: true },
           {
             key: 'base',
@@ -812,11 +817,6 @@ function ProposalDetailBody({
             label: t('提出时间', 'Proposed at'),
             value: <time>{formatDateTime(row.createdAt)}</time>,
           },
-          // Legacy 597: the proposer above is whom it is for; an agent drafting for them is said
-          // here.
-          ...[draftOriginItem(row.origin, t, 'graph-proposal-detail-origin')].filter(
-            (item): item is KeyValueItem => item !== null,
-          ),
         ]}
       />
       <div className="stack-s" data-testid="graph-proposal-diff">

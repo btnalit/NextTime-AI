@@ -4809,12 +4809,15 @@ describe('CatalogPage 起草方 (legacy 597)', () => {
     expect(origin.getAttribute('data-origin')).toBe('agent');
     expect(origin.querySelector('.chip')?.getAttribute('data-tone')).toBe('warn');
     expect(origin.querySelector('.chip')?.textContent).toBe('智能体');
-    expect(within(origin).getByTestId('skill-detail-origin-note').textContent).toContain(
-      '不是人直接写的',
+    expect(within(origin).getByTestId('skill-detail-origin-note').textContent).toBe(
+      '这一版是智能体或服务账号写的，不是人直接写的。发布前请逐项核对。',
     );
-    expect(within(skill).getByTestId('skill-detail-proposer').getAttribute('data-ref-id')).toBe(
-      'p-member',
-    );
+    const proposer = within(skill).getByTestId('skill-detail-proposer');
+    expect(proposer.getAttribute('data-ref-id')).toBe('p-member');
+    // Read together: whom it is for, then who wrote it.
+    expect(
+      proposer.compareDocumentPosition(origin) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     cleanup();
 
     renderPage(http, 'procedures');
@@ -4822,6 +4825,31 @@ describe('CatalogPage 起草方 (legacy 597)', () => {
     const byHand = within(procedure).getByTestId('procedure-detail-origin');
     expect(byHand.querySelector('.chip')?.textContent).toBe('人');
     expect(within(byHand).queryByTestId('procedure-detail-origin-note')).toBeNull();
+  });
+
+  it('a version an agent wrote that is past its draft says who wrote it, without asking to check it before publishing (#927 UX P2-1)', async () => {
+    const http = scriptedHttp({
+      list_skills: () => ({
+        items: [
+          {
+            id: 'sk-p',
+            version: 1,
+            status: 'published',
+            name: 'agent-published',
+            description: 'd',
+            proposedBy: 'p-member',
+            origin: 'agent',
+          },
+        ],
+      }),
+      get_skill: () => null,
+      resolve_refs: () => ({ items: [{ id: 'p-member', kind: 'principal', name: 'Mia' }] }),
+    });
+    renderPage(http, 'skills');
+    const skill = await selectRow(await screen.findByTestId('catalog-row'));
+    expect(within(skill).getByTestId('skill-detail-origin-note').textContent).toBe(
+      '这一版是智能体或服务账号写的，不是人直接写的。',
+    );
   });
 
   it('a Worker version names its proposer and the platform template it came from; a version with no recorded origin has no row', async () => {
@@ -4857,6 +4885,10 @@ describe('CatalogPage 起草方 (legacy 597)', () => {
     const origin = within(entry).getByTestId('worker-detail-origin');
     expect(origin.querySelector('.chip')?.textContent).toBe('平台模板');
     expect(origin.querySelector('.chip')?.getAttribute('data-tone')).toBe('info');
+    // The proposer beside it is whoever created the workspace, not the template's author.
+    expect(within(origin).getByTestId('worker-detail-origin-note').textContent).toBe(
+      '平台自带的模板，建工作区时写入；提议者是建这个工作区的人。',
+    );
     await waitFor(() =>
       expect(within(entry).getByTestId('worker-detail-proposer').textContent).toContain('Olga'),
     );
@@ -4902,6 +4934,11 @@ describe('CatalogPage 起草方 (legacy 597)', () => {
     await waitFor(() =>
       expect(within(draft).getByTestId('operation-detail-proposer').textContent).toContain('Mia'),
     );
+    // The proposer first, the writer right under it, as on every other review page.
+    expect(
+      within(draft).getByTestId('operation-detail-proposer').compareDocumentPosition(origin) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     cleanup();
 
     renderPage(http, 'operations', 'gk-1::docker.ps');

@@ -9,12 +9,16 @@ import { StatusChip } from '../kit/status-chip.js';
  * review page — whether a person, an agent or the platform's own template wrote the version being
  * read. The proposer row beside it names the Principal the version is for; an entry or admin agent
  * drafts for its person, so that Principal alone does not say an agent wrote it. The kernel records
- * `agent` for every agent session (entry, Worker, admin) and for an automation credential alike, so
- * the row says "an agent" and not which one. `null` (no row) for a version written before origins
- * were recorded.
+ * `agent` for every Handle (an entry agent, a Worker, an admin agent, an external runtime) and for
+ * a service account's API key alike (`draftOriginOf`), so the row says "an agent or a service
+ * account" and not which one — the console's own words for both (#927 UX P3-1). Only a draft asks to be checked before
+ * publishing; a version past that step just says who wrote it (#927 UX P2-1). `null` (no row) for
+ * a version written before origins were recorded. The caller puts it right under the proposer row:
+ * read together, whom the version is for and who wrote it (#927 UX P3-2).
  */
 export function draftOriginItem(
   origin: DraftOrigin | undefined,
+  status: string,
   t: Translate,
   testId: string,
 ): KeyValueItem | null {
@@ -27,16 +31,26 @@ export function draftOriginItem(
         <span>
           <StatusChip machine="draftOrigin" status={origin} size="s" />
         </span>
-        {origin === 'agent' ? (
+        {origin === 'agent' && status === 'draft' ? (
           <span className="text-3 text-small" data-testid={`${testId}-note`}>
             {t(
-              '这一版是智能体（或自动化凭证）写的，不是人直接写的。发布前请逐项核对。',
-              'An agent (or an automation credential) wrote this version, not a person directly. Check every part before publishing.',
+              '这一版是智能体或服务账号写的，不是人直接写的。发布前请逐项核对。',
+              'An agent or a service account wrote this version, not a person directly. Check every part before publishing.',
+            )}
+          </span>
+        ) : origin === 'agent' ? (
+          <span className="text-3 text-small" data-testid={`${testId}-note`}>
+            {t(
+              '这一版是智能体或服务账号写的，不是人直接写的。',
+              'An agent or a service account wrote this version, not a person directly.',
             )}
           </span>
         ) : origin === 'platform' ? (
           <span className="text-3 text-small" data-testid={`${testId}-note`}>
-            {t('平台自带的模板。', 'The platform’s own template.')}
+            {t(
+              '平台自带的模板，建工作区时写入；提议者是建这个工作区的人。',
+              'The platform’s own template, written when the workspace was created; the proposer is whoever created the workspace.',
+            )}
           </span>
         ) : null}
       </span>
@@ -76,15 +90,15 @@ export function operationOriginItem(
         ) : origin === 'agent' && status === 'draft' ? (
           <span className="text-3 text-small" data-testid="operation-detail-origin-note">
             {t(
-              '这份草稿最后一次是智能体（或自动化凭证）写入的。智能体代提议者起草，可以改写提议者在控制台写的同名草稿，所以提议者之前写的内容可能已被替换。发布前请逐项核对。',
-              'An agent (or an automation credential) last wrote this draft. An agent drafting for its proposer may rewrite a draft the proposer wrote in the console under the same name, so what the proposer wrote before may have been replaced. Check every part before publishing.',
+              '这份草稿最后一次是智能体或服务账号写入的。智能体代提议者起草，可以改写提议者在控制台写的同名草稿，所以提议者之前写的内容可能已被替换。发布前请逐项核对。',
+              'An agent or a service account last wrote this draft. An agent drafting for its proposer may rewrite a draft the proposer wrote in the console under the same name, so what the proposer wrote before may have been replaced. Check every part before publishing.',
             )}
           </span>
         ) : origin === 'agent' ? (
           <span className="text-3 text-small" data-testid="operation-detail-origin-note">
             {t(
-              '这一版是智能体（或自动化凭证）写的，不是人直接写的。',
-              'An agent (or an automation credential) wrote this version, not a person directly.',
+              '这一版是智能体或服务账号写的，不是人直接写的。',
+              'An agent or a service account wrote this version, not a person directly.',
             )}
           </span>
         ) : null}

@@ -457,6 +457,9 @@ describe('OntologyTypesDrawer — Proposal detail view', () => {
     expect(screen.getByTestId('graph-proposal-detail-origin-note').textContent).toContain(
       '发布前请逐项核对',
     );
+    // Right under the proposer at the top: the first of the fields.
+    const fields = screen.getByTestId('graph-proposal-detail-fields');
+    expect(fields.textContent?.startsWith('起草方')).toBe(true);
     cleanup();
 
     render(<Harness http={proposalsHttp()} startTab="proposals" />);

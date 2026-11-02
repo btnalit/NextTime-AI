@@ -1229,13 +1229,13 @@ function OperationDetailView({
         ),
     },
   ];
-  // Legacy 597: who wrote this version, and for a proposal whose it is — the gate's own manifest
+  // Legacy 597: for a proposal whose it is, then who wrote this version — the gate's own manifest
   // is nobody's draft, so it names no proposer.
-  const originItem = operationOriginItem(row.origin, row.status, t);
-  if (originItem !== null) items.push(originItem);
   if (row.proposedBy !== undefined && row.origin !== undefined && row.origin !== 'import') {
     items.push(proposerItem(http, row.proposedBy, t, 'operation-detail-proposer'));
   }
+  const originItem = operationOriginItem(row.origin, row.status, t);
+  if (originItem !== null) items.push(originItem);
   if (row.mode) {
     items.push({
       key: 'mode',
@@ -2242,7 +2242,7 @@ function SkillDetailView({
   if (row.proposedBy) {
     items.push(proposerItem(http, row.proposedBy, t, 'skill-detail-proposer'));
   }
-  const skillOrigin = draftOriginItem(row.origin, t, 'skill-detail-origin');
+  const skillOrigin = draftOriginItem(row.origin, row.status, t, 'skill-detail-origin');
   if (skillOrigin !== null) items.push(skillOrigin);
   const gateKinds = row.applicable?.gateKinds as readonly string[] | undefined;
   const objectTypes = row.applicable?.objectTypes as readonly string[] | undefined;
@@ -2910,7 +2910,7 @@ function ProcedureDetailView({
           ...(row.proposedBy
             ? [proposerItem(http, row.proposedBy, t, 'procedure-detail-proposer')]
             : []),
-          ...[draftOriginItem(row.origin, t, 'procedure-detail-origin')].filter(
+          ...[draftOriginItem(row.origin, row.status, t, 'procedure-detail-origin')].filter(
             (item): item is KeyValueItem => item !== null,
           ),
         ]}
@@ -3750,7 +3750,7 @@ function WorkerDetailView({
   if (row.proposedBy !== undefined) {
     items.push(proposerItem(http, row.proposedBy, t, 'worker-detail-proposer'));
   }
-  const workerOrigin = draftOriginItem(row.origin, t, 'worker-detail-origin');
+  const workerOrigin = draftOriginItem(row.origin, row.status, t, 'worker-detail-origin');
   if (workerOrigin !== null) items.push(workerOrigin);
   if (typeof row.definition.description === 'string') {
     items.push({
