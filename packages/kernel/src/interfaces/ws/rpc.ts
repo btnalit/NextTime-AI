@@ -28,6 +28,13 @@ import {
   ChangeSegmentRolledBackError,
   ChangeSegmentSupersededError,
   ChangeVerificationCooldownError,
+  DependentSegmentsAppliedError,
+  PlatformChangeDriftedError,
+  PlatformChangeSegmentNotFoundError,
+  PlatformChangeSegmentRolledBackError,
+  PlatformSegmentBlockedError,
+  PlatformSegmentNotAppliedError,
+  PlatformSegmentNotFoundError,
 } from '../../application/change-plan/index.js';
 import {
   ChatArchivedError,
@@ -615,6 +622,25 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
     err instanceof AdminProposalSegmentNotOpenError ||
     err instanceof AdminProposalSegmentBlockedError ||
     err instanceof AdminProposalSegmentUnchangedError
+  ) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // S11 AA3c-1: mirrors HTTP 404 `admin_proposal_segment_not_found` /
+  // `platform_change_segment_not_found` and 409 `admin_proposal_segment_blocked`,
+  // `platform_segment_not_applied`, `platform_change_segment_rolled_back`,
+  // `platform_change_drifted`, `dependent_segments_applied` (capability-route.ts).
+  if (
+    err instanceof PlatformSegmentNotFoundError ||
+    err instanceof PlatformChangeSegmentNotFoundError
+  ) {
+    return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
+  }
+  if (
+    err instanceof PlatformSegmentBlockedError ||
+    err instanceof PlatformSegmentNotAppliedError ||
+    err instanceof PlatformChangeSegmentRolledBackError ||
+    err instanceof PlatformChangeDriftedError ||
+    err instanceof DependentSegmentsAppliedError
   ) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }

@@ -4,6 +4,7 @@ import {
   AdminProposalSegmentAuthoritySchema,
   AdminProposalSegmentStatusSchema,
   AdminProposalStatusSchema,
+  AdminProposalWithdrawnOriginSchema,
   DraftOriginSchema,
 } from '../enums.js';
 import { OntologyDefinitionSchema } from '../ontology-definition.js';
@@ -12,6 +13,11 @@ import {
   PublishedSkillNameSchema,
   SkillApplicableSchema,
 } from '../skill.js';
+import {
+  gateInstanceCreateFields,
+  isGenericConnector,
+  refineGateInstanceCreate,
+} from './gate-instance-fields.js';
 
 // ---------------------------------------------------------------------------------------------
 // S11 AA3b: Admin proposals (plan §3.1–§3.3, §5.4; migration governance 0032; the kernel's
@@ -121,6 +127,60 @@ export const AdminProposalItemIntentWireSchema = z.discriminatedUnion('kind', [
 ]);
 export type AdminProposalItemIntentWire = z.infer<typeof AdminProposalItemIntentWireSchema>;
 
+/** Items in a platform segment. */
+export const ADMIN_PROPOSAL_PLATFORM_MAX_ITEMS = 10;
+
+/**
+ * S11 AA3c (F6, F-c1–F-c3): what a platform segment proposes — `gate_instance`, a new gate-host
+ * instance, with exactly what `create_gate_instance` takes (`gateInstanceCreateFields`: a preset and
+ * an address, or a transport kind, an address, a credential mode and the OpenAPI document an http
+ * instance imports from). Never a credential, and never the generic connector: without a preset it
+ * names the connector of the system it serves (`connector`), so a workspace can enable the instance
+ * from the catalog once a platform administrator has. Applying it creates the instance
+ * `discovered`; the administrator then enters a shared credential when it takes one, waits for the
+ * gate host to announce its Operations, reviews them and enables it.
+ */
+export const AdminProposalGateInstanceIntentWireSchema = z
+  .object({ kind: z.literal('gate_instance'), ...gateInstanceCreateFields })
+  .strict()
+  .superRefine((value, ctx) => {
+    refineGateInstanceCreate(value, ctx);
+    if (value.preset !== undefined) return;
+    if (value.connector === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['connector'],
+        message:
+          'name the connector of the system it serves: without a preset, a proposed instance never joins a generic connector',
+      });
+    } else if (isGenericConnector(value.connector)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['connector'],
+        message: `"${value.connector}" is a generic connector, whose mode governs every workspace connecting that kind itself: name the system's own`,
+      });
+    }
+  });
+export type AdminProposalGateInstanceIntentWire = z.infer<
+  typeof AdminProposalGateInstanceIntentWireSchema
+>;
+
+/** One intent of a platform segment ({@link ADMIN_PROPOSAL_PLATFORM_ITEM_KIND_VALUES}). */
+export const AdminProposalPlatformItemIntentWireSchema = z.discriminatedUnion('kind', [
+  AdminProposalGateInstanceIntentWireSchema,
+]);
+export type AdminProposalPlatformItemIntentWire = z.infer<
+  typeof AdminProposalPlatformItemIntentWireSchema
+>;
+
+/** An intent of either kind of segment, as a proposal reads back: a workspace segment's
+ *  ({@link AdminProposalItemIntentWireSchema}) or a platform segment's. */
+export const AdminProposalAnyItemIntentWireSchema = z.union([
+  AdminProposalItemIntentWireSchema,
+  AdminProposalPlatformItemIntentWireSchema,
+]);
+export type AdminProposalAnyItemIntentWire = z.infer<typeof AdminProposalAnyItemIntentWireSchema>;
+
 /** One segment as proposed: the workspace it is for, and what it changes there. */
 export const AdminProposalSegmentInputWireSchema = z
   .object({
@@ -132,6 +192,21 @@ export const AdminProposalSegmentInputWireSchema = z
   })
   .strict();
 export type AdminProposalSegmentInputWire = z.infer<typeof AdminProposalSegmentInputWireSchema>;
+
+/** S11 AA3c: the platform segment as proposed — what a platform administrator applies on the
+ *  platform plane. At most one per proposal; each workspace segment of the proposal then depends on
+ *  it (applied only once it is). */
+export const AdminProposalPlatformSegmentInputWireSchema = z
+  .object({
+    items: z
+      .array(AdminProposalPlatformItemIntentWireSchema)
+      .min(1)
+      .max(ADMIN_PROPOSAL_PLATFORM_MAX_ITEMS),
+  })
+  .strict();
+export type AdminProposalPlatformSegmentInputWire = z.infer<
+  typeof AdminProposalPlatformSegmentInputWireSchema
+>;
 
 /** Who made a proposal: the platform user whose admin agent did, by the name they had then. */
 export const AdminProposalProposerWireSchema = z
@@ -145,20 +220,21 @@ export const AdminProposalSegmentWireSchema = z
     id: z.string(),
     ordinal: z.number().int().positive(),
     authority: AdminProposalSegmentAuthoritySchema,
-    /** The workspace a `workspace` segment is for. */
+    /** The workspace a `workspace` segment is for; `null` for the `platform` segment. */
     targetWorkspaceId: z.string().nullable(),
-    items: z.array(AdminProposalItemIntentWireSchema),
+    /** A workspace segment's intents, or the platform segment's (`gate_instance`). */
+    items: z.array(AdminProposalAnyItemIntentWireSchema),
     /** `sha256:` of what the segment proposes (its target and items). */
     contentDigest: z.string(),
     status: AdminProposalSegmentStatusSchema,
     /** When it was applied, rejected or withdrawn. */
     decidedAt: z.string().nullable(),
-    /** Withdrawn: through the administrator's agent, or by a platform administrator in the
-     *  console. */
-    withdrawnOrigin: DraftOriginSchema.exclude(['platform']).nullable(),
-    /** Rejected: the owner's reason — for platform administrators (`get_admin_proposal`); `null` to
-     *  the agent, which reads that the segment was rejected, not why. Withdrawn: the reason, when
-     *  one was given, to both. */
+    /** Withdrawn: through the administrator's agent, by a platform administrator in the console,
+     *  or because the proposal's platform segment was rejected or rolled back (`platform_segment`). */
+    withdrawnOrigin: AdminProposalWithdrawnOriginSchema.nullable(),
+    /** Rejected: the reason its owner — or, for the platform segment, a platform administrator —
+     *  gave, for platform administrators (`get_admin_proposal`); `null` to the agent, which reads
+     *  that the segment was rejected, not why. Withdrawn: the reason, when one was given, to both. */
     reason: z.string().nullable(),
     rolledBackAt: z.string().nullable(),
   })

@@ -1,4 +1,5 @@
 import {
+  BlastRadiusSchema,
   CAPABILITY_REGISTRY,
   CONNECTOR_NAME_PATTERN,
   ConnectorModeWireSchema,
@@ -8,6 +9,7 @@ import {
   type GateInstanceWire,
   GateTransportKindWireSchema,
   GateTrustWireSchema,
+  OperationModeSchema,
   PLATFORM_STATE_AUDIT_ACTION_PATTERN,
   PLATFORM_STATE_AUDIT_RECENT_LIMIT,
   PLATFORM_STATE_AUDIT_SCAN_ROWS,
@@ -16,6 +18,7 @@ import {
   PLATFORM_STATE_GATES_LIMIT,
   PLATFORM_STATE_GATE_ID_PATTERN,
   PLATFORM_STATE_OPERATION_NAME_PATTERN,
+  PLATFORM_STATE_PRESET_OPERATIONS_LIMIT,
   PLATFORM_STATE_RESOURCE_TYPE_PATTERN,
   type PendingGateManifestWire,
   type PlatformStateAuditActorWire,
@@ -25,6 +28,8 @@ import {
   type PlatformStateGateWire,
   type PlatformStateGatesWire,
   type PlatformStatePendingManifestWire,
+  type PlatformStatePresetOperationWire,
+  type PlatformStatePresetWire,
   capabilityHasSideEffects,
   isGenericConnector,
 } from '@nexttime/shared';
@@ -33,7 +38,13 @@ import { withPlatform } from '../../adapters/db/platform-context.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { ADMIN_AGENT_SESSION_KIND } from '../../governance/capability/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
-import { listConnectors, listGateInstances } from '../gates/index.js';
+import {
+  type ConnectorPreset,
+  listConnectors,
+  listGateInstances,
+  loadConnectorPresets,
+  readConnectorOccupancy,
+} from '../gates/index.js';
 import {
   AdminAgentRefused,
   adminAgentEnabled,
@@ -243,17 +254,69 @@ export function projectConnector(
   };
 }
 
+/** Where a preset's connector stands now: held by a packaged gate, and how many instances it has
+ *  (`readConnectorOccupancy`; absent when no connector has its name yet). */
+export interface PresetOccupancy {
+  readonly packaged: boolean;
+  readonly instanceCount: number;
+}
+
+/** One connector preset as an admin agent sees it (S11 AA3c F-c6), or `null` when its name, kind or
+ *  credential mode is out of shape. Field by field, by whitelist: never its display name, summary
+ *  or hints (free text — the address hint carries an example address), and of each Operation only
+ *  a shaped name and how it is classified, never its description, binding or params. */
+export function projectPreset(
+  preset: ConnectorPreset,
+  occupancy: PresetOccupancy | undefined,
+): PlatformStatePresetWire | null {
+  const name = shaped(preset.name, CONNECTOR_NAME_PATTERN);
+  const transportKind = preset.transportKind === 'http' ? 'http' : null;
+  const credentialMode =
+    preset.credentialMode === 'shared' || preset.credentialMode === 'connected_account'
+      ? preset.credentialMode
+      : null;
+  if (name === null || transportKind === null || credentialMode === null) return null;
+  const operations = Array.isArray(preset.operations) ? preset.operations : [];
+  return {
+    name,
+    transportKind,
+    credentialMode,
+    operations: operations
+      .map((operation): PlatformStatePresetOperationWire | null => {
+        const operationName = shaped(operation.name, PLATFORM_STATE_OPERATION_NAME_PATTERN);
+        const mode = member(OperationModeSchema, operation.mode);
+        const blastRadius = member(BlastRadiusSchema, operation.blast_radius);
+        return operationName === null || mode === null || blastRadius === null
+          ? null
+          : { name: operationName, mode, blastRadius };
+      })
+      .filter((operation): operation is PlatformStatePresetOperationWire => operation !== null)
+      .slice(0, PLATFORM_STATE_PRESET_OPERATIONS_LIMIT),
+    operationCount: operations.length,
+    packagedConnector: occupancy?.packaged === true,
+    instanceCount: count(occupancy?.instanceCount),
+  };
+}
+
 /** `platform_state_connectors`' result, in the order given. `announced` maps a connector's name to
- *  the Operation names its instances announce. */
+ *  the Operation names its instances announce; `presets` are the deployment's connector presets
+ *  with where each one's connector stands. */
 export function projectConnectors(
   connectors: readonly ConnectorWire[],
   announced: ReadonlyMap<string, ReadonlySet<string>>,
   checkedAt: string,
+  presets: readonly {
+    readonly preset: ConnectorPreset;
+    readonly occupancy: PresetOccupancy | undefined;
+  }[] = [],
 ): PlatformStateConnectorsWire {
   return {
     connectors: connectors
       .map((connector) => projectConnector(connector, announced.get(connector.name)))
       .filter((connector): connector is PlatformStateConnectorWire => connector !== null),
+    presets: presets
+      .map(({ preset, occupancy }) => projectPreset(preset, occupancy))
+      .filter((preset): preset is PlatformStatePresetWire => preset !== null),
     checkedAt,
   };
 }
@@ -354,8 +417,18 @@ export async function readConnectorsState(
   const announced = new Map(
     announcedRows.rows.map((row) => [row.connector, new Set(row.names)] as const),
   );
-  const result = projectConnectors(await listConnectors(client), announced, checkedAt);
-  return { result, returned: result.connectors.length };
+  const presets = await loadConnectorPresets();
+  const occupancy = await readConnectorOccupancy(
+    client,
+    presets.map((preset) => preset.name),
+  );
+  const result = projectConnectors(
+    await listConnectors(client),
+    announced,
+    checkedAt,
+    presets.map((preset) => ({ preset, occupancy: occupancy.get(preset.name) })),
+  );
+  return { result, returned: result.connectors.length + result.presets.length };
 }
 
 export async function readAuditState(

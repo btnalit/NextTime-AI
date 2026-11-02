@@ -1,4 +1,8 @@
-import type { ChangeItemKind, ChangeRollbackBlocker } from '@nexttime/shared';
+import type {
+  AdminProposalPlatformItemKind,
+  ChangeItemKind,
+  ChangeRollbackBlocker,
+} from '@nexttime/shared';
 import type { WideningReason } from './classify.js';
 
 /** I-A8: the segment's dry run, recomputed in the applying transaction, is not the one reviewed —
@@ -20,7 +24,8 @@ export class ChangePlanChangedError extends Error {
 
 export interface UnconfirmedChangeItem {
   readonly ordinal: number;
-  readonly kind: ChangeItemKind;
+  /** A change segment's item kind, or (S11 AA3c) a platform segment's. */
+  readonly kind: ChangeItemKind | AdminProposalPlatformItemKind;
   readonly target: Readonly<Record<string, unknown>>;
   readonly widening: readonly WideningReason[];
 }

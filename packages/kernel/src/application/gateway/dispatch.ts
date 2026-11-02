@@ -18,6 +18,7 @@ import {
   ADMIN_AGENT_SESSION_KIND,
   isAdminAgentCeilingCapability,
 } from '../../governance/capability/index.js';
+import { redactConnectionAddressesIn } from '../../governance/connections/index.js';
 import {
   quotedName,
   redactSuspectedSecrets,
@@ -46,6 +47,7 @@ import {
   TaskOutputRejectedError,
   recordRejectedOutput,
 } from '../task/index.js';
+import { auditedHandlerPayload } from './audit-copy.js';
 import { ForbiddenError, assertActsForPerson, authorizeCapabilityCall } from './authorize.js';
 import type { CapabilityHandlerContext } from './capability-handler.js';
 import {
@@ -353,8 +355,12 @@ function auditParams(
   readonly redactedValues?: number;
   readonly unstorableEscaped?: number;
 } {
-  // Unbounded walk: the params already passed their schema, and the copy keeps their shape.
-  const redacted = redactSuspectedSecrets(params, { secretFields: true });
+  // Unbounded walks: the params already passed their schema, and the copy keeps their shape. Gate
+  // addresses first (S11 AA3c-1, `redactConnectionAddressesIn`): the connection rule cuts query
+  // parameters the value patterns do not know as credentials (`sig=`, `X-Amz-Signature=`).
+  const addresses = redactConnectionAddressesIn(params);
+  const redacted = redactSuspectedSecrets(addresses.value, { secretFields: true });
+  const replaced = redacted.count + addresses.count;
   let audited = redacted.value as Record<string, unknown>;
   if (capability.redactedParamKeys && capability.redactedParamKeys.length > 0) {
     audited = { ...audited };
@@ -377,7 +383,7 @@ function auditParams(
   return {
     params: audited,
     ...(withheld.length > 0 ? { withheldParams: withheld } : {}),
-    ...(redacted.count > 0 ? { redactedValues: redacted.count } : {}),
+    ...(replaced > 0 ? { redactedValues: replaced } : {}),
     ...(storable.escaped > 0 ? { unstorableEscaped: storable.escaped } : {}),
   };
 }
@@ -917,6 +923,9 @@ export async function dispatchCapability(
           resourceType: result.resourceType,
           resourceId: resourceRef.resourceId,
           payload: {
+            // S11 AA3c-1: first, as on the workspace path, so the fixed fields below always win;
+            // through the same audit copy (audit-copy.ts).
+            ...auditedHandlerPayload(result.auditPayload),
             channel: 'platform',
             actorLogin: platformUser.login,
             ...auditParams(capability, parsed.data as Record<string, unknown>),
@@ -1074,8 +1083,9 @@ export async function dispatchCapability(
         resourceType: result.resourceType,
         resourceId: resourceRef.resourceId,
         payload: {
-          // First, so the fixed fields below always win over a handler's additions.
-          ...result.auditPayload,
+          // First, so the fixed fields below always win over a handler's additions; through the
+          // audit copy (audit-copy.ts, S11 AA3c-1).
+          ...auditedHandlerPayload(result.auditPayload),
           channel: caller.channel,
           onBehalfOf,
           ...actingSessionFields(actingSession),

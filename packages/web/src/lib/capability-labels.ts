@@ -1547,52 +1547,53 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zh: '智能体提交管理员提案',
     en: 'Agent makes an admin proposal',
     zhHint:
-      '管理员智能体在试验工作区提交管理员提案，每段发给一个工作区，由其所有者决定是否应用；提交提案本身不改动任何工作区。',
+      '管理员智能体在试验工作区提交管理员提案：每个工作区部分发给一个工作区，由其所有者决定是否应用；平台部分（新建门宿主实例）由平台管理员决定。提交提案本身什么也不改动。',
     enHint:
-      'An admin agent makes an admin proposal from its trial workspace; each segment goes to one workspace, whose owner decides whether to apply it. Making a proposal changes no workspace.',
+      'An admin agent makes an admin proposal from its trial workspace: each workspace part goes to one workspace, whose owner decides whether to apply it; a platform part (new gate-host instances) is decided by a platform administrator. Making a proposal changes nothing.',
   },
   agent_list_admin_proposals: {
     zh: '智能体查看管理员提案',
     en: 'Agent lists admin proposals',
-    zhHint: '管理员智能体查看自己在这个试验工作区提交的管理员提案及各段状态。',
+    zhHint: '管理员智能体查看自己在这个试验工作区提交的管理员提案及各部分的状态。',
     enHint:
-      'An admin agent lists the admin proposals it made in this trial workspace and the status of their segments.',
+      'An admin agent lists the admin proposals it made in this trial workspace and the status of their parts.',
   },
   agent_get_admin_proposal: {
     zh: '智能体查看一个管理员提案',
     en: 'Agent reads an admin proposal',
     zhHint:
-      '管理员智能体查看自己提交的一个管理员提案：各段内容和状态。所有者拒绝时写的理由它看不到，只知道被拒绝了。',
+      '管理员智能体查看自己提交的一个管理员提案：各部分的内容和状态。拒绝时写的理由它看不到，只知道被拒绝了。',
     enHint:
-      "An admin agent reads one admin proposal it made: each segment's items and status. It learns that an owner rejected a segment, not the reason they gave.",
+      "An admin agent reads one admin proposal it made: each part's items and status. It learns that a part was rejected, not the reason given.",
   },
   agent_withdraw_admin_proposal: {
     zh: '智能体撤回管理员提案',
     en: 'Agent withdraws an admin proposal',
-    zhHint: '管理员智能体撤回自己提交的管理员提案，尚未决定的段不再能被应用；已应用的段不受影响。',
+    zhHint:
+      '管理员智能体撤回自己提交的管理员提案，尚未决定的部分不再能被应用；已应用的部分不受影响。',
     enHint:
-      'An admin agent withdraws an admin proposal it made; segments not yet decided can no longer be applied, applied ones stay.',
+      'An admin agent withdraws an admin proposal it made; parts not yet decided can no longer be applied, applied ones stay.',
   },
   list_admin_proposals: {
     zh: '查看管理员提案',
     en: 'List admin proposals',
-    zhHint: '查看管理员智能体从试验工作区提交的全部管理员提案及各段状态。',
+    zhHint: '查看管理员智能体从试验工作区提交的全部管理员提案及各部分的状态。',
     enHint:
-      'Lists every admin proposal admin agents made from trial workspaces, with the status of their segments.',
+      'Lists every admin proposal admin agents made from trial workspaces, with the status of their parts.',
   },
   get_admin_proposal: {
     zh: '查看管理员提案详情',
     en: 'Read an admin proposal',
-    zhHint: '查看一个管理员提案的说明、各段内容、状态和理由，包括所有者拒绝时写的理由。',
+    zhHint: '查看一个管理员提案的说明、各部分的内容、状态和理由，包括拒绝时写的理由。',
     enHint:
-      "Shows one admin proposal's description, each segment's items, status and reason, including an owner's reason for rejecting it.",
+      "Shows one admin proposal's description, each part's items, status and reason, including the reason a part was rejected.",
   },
   withdraw_admin_proposal: {
     zh: '撤回管理员提案',
     en: 'Withdraw an admin proposal',
-    zhHint: '撤回一个管理员提案：尚未决定的段改为已撤回，不再能被应用；已应用的段不受影响。',
+    zhHint: '撤回一个管理员提案：尚未决定的部分改为已撤回，不再能被应用；已应用的部分不受影响。',
     enHint:
-      'Withdraws an admin proposal: segments not yet decided become withdrawn and can no longer be applied; applied ones stay.',
+      'Withdraws an admin proposal: parts not yet decided become withdrawn and can no longer be applied; applied ones stay.',
   },
   list_admin_proposal_segments: {
     zh: '查看发来的管理员提案',
@@ -1605,17 +1606,17 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zh: '预览管理员提案',
     en: 'Preview an admin proposal',
     zhHint:
-      '把发来的管理员提案对应到本工作区的对象并试算一遍，看会改什么、是否扩大权限、有无疑似凭证；不写入任何东西。',
+      '把发来的管理员提案对应到本工作区的对象并试算一遍，看会改什么、是否扩大权限、有无疑似凭证；不写入任何东西。提案带平台部分时，平台管理员应用它之前只能查看，不能应用。',
     enHint:
-      "Maps an admin proposal sent here onto this workspace's own objects and dry-runs it: what it would change, whether it widens authority, any suspected credentials. Writes nothing.",
+      "Maps an admin proposal sent here onto this workspace's own objects and dry-runs it: what it would change, whether it widens authority, any suspected credentials. Writes nothing. When the proposal has a platform part, this can be read but not applied until a platform administrator applies that part.",
   },
   apply_admin_proposal_segment: {
     zh: '应用管理员提案',
     en: 'Apply an admin proposal',
     zhHint:
-      '在本工作区应用发来的管理员提案，记成一条安装历史，可从那里撤销；发布的版本记为智能体起草、由你发布。',
+      '在本工作区应用发来的管理员提案，记成一条安装历史，可从那里撤销；发布的版本记为智能体起草、由你发布。提案带平台部分时，要等平台管理员先应用它。',
     enHint:
-      'Applies an admin proposal sent here as one install record, which can be rolled back from there; each version it publishes is recorded as drafted by an agent and published by you.',
+      'Applies an admin proposal sent here as one install record, which can be rolled back from there; each version it publishes is recorded as drafted by an agent and published by you. When the proposal has a platform part, a platform administrator applies that part first.',
   },
   reject_admin_proposal_segment: {
     zh: '拒绝管理员提案',
@@ -1624,6 +1625,62 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
       '拒绝发来的管理员提案并写明理由；理由只有本工作区和平台管理员能看到，提议的智能体只知道被拒绝了。',
     enHint:
       "Rejects an admin proposal sent here, with your reason; only this workspace and the platform's administrators see the reason — the agent that proposed it learns only that it was rejected.",
+  },
+  // S11 AA3c-1: an admin proposal's platform part, decided by a platform administrator, and the
+  // platform change record its apply leaves.
+  preview_platform_segment: {
+    zh: '预览管理员提案的平台部分',
+    en: "Preview an admin proposal's platform part",
+    zhHint:
+      '试算管理员提案的平台部分：会新建哪些门宿主实例、用哪个接入包、是否新建接入包、之后还要做什么；不写入任何东西。',
+    enHint:
+      "Dry-runs an admin proposal's platform part: the gate-host instances it would create, the connector each joins, whether that connector is new, and what is left to do afterwards. Writes nothing.",
+  },
+  apply_platform_segment: {
+    zh: '应用管理员提案的平台部分',
+    en: "Apply an admin proposal's platform part",
+    zhHint:
+      '按试算结果新建门宿主实例（未启用），记成一条平台变更记录，可从那里撤销；之后提案的各工作区部分才能由所有者应用。',
+    enHint:
+      "Creates the gate-host instances as dry-run (discovered, not enabled yet) and records them as one platform change record, which can be rolled back from there; only then can each workspace's owner apply their part.",
+  },
+  reject_platform_segment: {
+    zh: '拒绝管理员提案的平台部分',
+    en: "Reject an admin proposal's platform part",
+    zhHint: '拒绝管理员提案的平台部分并写明理由；提案里还没决定的工作区部分随之撤回。',
+    enHint:
+      "Rejects an admin proposal's platform part, with a reason; the proposal's workspace parts not yet decided are withdrawn with it.",
+  },
+  list_platform_change_segments: {
+    zh: '查看平台变更记录',
+    en: 'List platform change records',
+    zhHint:
+      '列出应用管理员提案平台部分留下的记录，最新的在前：来自哪份提案、谁的智能体提出、谁应用、谁撤销。',
+    enHint:
+      "Lists the records applying admin proposals' platform parts left, newest first: the proposal each came from, whose agent proposed it, who applied it and who rolled it back.",
+  },
+  get_platform_change_segment: {
+    zh: '查看平台变更记录详情',
+    en: 'Read a platform change record',
+    zhHint: '查看一条平台变更记录：新建了哪些门宿主实例、当时的定义，以及每项由谁确认。',
+    enHint:
+      'Shows one platform change record: the gate-host instances it created, their definitions as created, and who confirmed each.',
+  },
+  preview_roll_back_platform_change_segment: {
+    zh: '预览撤销平台变更',
+    en: 'Preview rolling back a platform change',
+    zhHint:
+      '看撤销会停用哪些实例、哪些已停用或已不在、哪些之后被改过（改过就撤销不了），以及还有哪些工作区部分要先在各自工作区撤销；不写入任何东西。',
+    enHint:
+      'Shows which instances rolling back would disable, which are disabled or gone already, which changed since (then it cannot roll back), and which workspace parts must be rolled back in their workspaces first. Writes nothing.',
+  },
+  roll_back_platform_change_segment: {
+    zh: '撤销平台变更',
+    en: 'Roll back a platform change',
+    zhHint:
+      '停用这条记录新建的门宿主实例（不删除，门标识保留历史；接入包保留），提案里还没决定的工作区部分随之撤回。已启用它的工作区仍能调用，要切断调用请在接入包里停用对应操作。',
+    enHint:
+      "Disables the gate-host instances this record created (never deletes them, so each gate id keeps its history; the connector stays), and withdraws the proposal's workspace parts not yet decided. Workspaces that enabled an instance keep calling it; to cut those calls off, disable the Operations in its connector.",
   },
   platform_status: {
     zh: '查看服务状态',
@@ -2385,6 +2442,20 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '平台暂停或恢复一个自己接入的门后，该工作区的入口凭证被吊销，下一轮重新签发。',
     enHint:
       "Suspending or resuming a self-connected gate revoked that workspace's entry Handles; new ones come next turn.",
+  },
+  'gate_instance.created': {
+    zh: '管理员提案新建门实例',
+    en: 'Admin proposal created a gate instance',
+    zhHint: '应用管理员提案的平台部分时新建了一个门宿主实例（未启用）。',
+    enHint:
+      "Applying an admin proposal's platform part created a gate-host instance (discovered, not enabled yet).",
+  },
+  'gate_instance.disabled': {
+    zh: '撤销平台变更停用门实例',
+    en: 'Platform change rollback disabled a gate instance',
+    zhHint: '撤销平台变更时停用了它新建的一个门宿主实例；已启用它的工作区仍能调用。',
+    enHint:
+      'Rolling back a platform change disabled a gate-host instance it created; workspaces that enabled it keep calling it.',
   },
   'gate_instance.manifest_confirmed': {
     zh: '门清单已确认',

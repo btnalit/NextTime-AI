@@ -123,3 +123,14 @@ export {
   resolveConnectorPresetsDir,
   withPresetOperations,
 } from './presets.js';
+export type {
+  HostedDefinitionResolution,
+  HostedGatePlan,
+  HostedGatePlanRefusal,
+  HostedGateRequest,
+} from './hosted-plan.js';
+export {
+  hostedGateRefusalMessage,
+  planHostedGateInstance,
+  resolveHostedDefinition,
+} from './hosted-plan.js';

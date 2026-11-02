@@ -31,6 +31,8 @@ const OTHER_AUDIT_ACTIONS = [
   'self_connection.entry_handles_revoked',
   'gatekeeper.self_connection_linked',
   'gate_instance.manifest_confirmed',
+  'gate_instance.created',
+  'gate_instance.disabled',
   'platform.llm_admin_token_issued',
   'platform.llm_provider_created',
   'platform.llm_provider_updated',

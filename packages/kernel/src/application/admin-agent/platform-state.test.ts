@@ -8,6 +8,7 @@ import {
 } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import { findSuspectedSecrets } from '../../governance/redaction/index.js';
+import type { ConnectorPreset } from '../gates/index.js';
 import { addressLikeReason, findAddressLike } from './platform-state-probes.js';
 import {
   type PlatformAuditSummaryRow,
@@ -15,6 +16,7 @@ import {
   projectConnectors,
   projectGateInstance,
   projectGateInstances,
+  projectPreset,
   summarizePlatformAudit,
 } from './platform-state.js';
 
@@ -98,6 +100,51 @@ function hostileGate(overrides: Partial<GateInstanceWire> = {}): GateInstanceWir
     },
     createdAt: T0,
     updatedAt: T1,
+    ...overrides,
+  };
+}
+
+/** A preset whose free text — display name, summary, hints, each Operation's description,
+ *  binding and params — carries canaries and addresses (F-c6: none of it reaches the agent). */
+function hostilePreset(overrides: Partial<ConnectorPreset> = {}): ConnectorPreset {
+  return {
+    name: 'ragflow',
+    displayName: 'canary-presets-display-name',
+    summary: `canary-presets-summary at https://${PRIVATE_V4}:9380/api`,
+    transportKind: 'http',
+    credentialMode: 'shared',
+    targetHint: 'canary-presets-target-hint, e.g. https://ragflow.example.com',
+    credentialHint: `canary-presets-credential-hint sk-${'a1B2'.repeat(12)}`,
+    operations: [
+      {
+        name: 'dataset.list',
+        description: `canary-presets-op-description ${PRIVATE_V4_B}:5432`,
+        binding: { kind: 'http', method: 'GET', path: '/canary-presets-binding-path' },
+        params_schema: {
+          type: 'object',
+          properties: { canary_presets_param: { type: 'string', default: 'canary-default' } },
+        },
+        mode: 'observe',
+        blast_radius: 'low',
+        reversibility: false,
+        auto_approvable: true,
+        await_decision: false,
+        reads: ['canary-presets-reads'],
+        writes: [],
+      },
+      ...HOSTILE_STRINGS.map((name) => ({
+        name,
+        binding: { kind: 'http' as const, method: 'GET' as const, path: '/x' },
+        params_schema: { type: 'object' },
+        mode: 'observe' as const,
+        blast_radius: 'low' as const,
+        reversibility: false,
+        auto_approvable: true,
+        await_decision: false,
+        reads: [],
+        writes: [],
+      })),
+    ],
     ...overrides,
   };
 }
@@ -348,6 +395,69 @@ describe('platform_state_connectors projection', () => {
     expect(
       projectConnector({ ...hostileConnector(), workspaceNames: ['canary'] } as ConnectorWire),
     ).toEqual(projectConnector(hostileConnector()));
+  });
+});
+
+describe('platform_state_connectors presets (S11 AA3c F-c6)', () => {
+  it('keeps the name, transport, credential kind and each shaped Operation’s classification — no address, hint, description or default', () => {
+    const out = projectConnectors([hostileConnector()], ANNOUNCED, T1, [
+      { preset: hostilePreset(), occupancy: { packaged: true, instanceCount: 2 } },
+    ]);
+    expectClean('platform_state_connectors', out);
+    expect(out.presets).toEqual([
+      {
+        name: 'ragflow',
+        transportKind: 'http',
+        credentialMode: 'shared',
+        operations: [{ name: 'dataset.list', mode: 'observe', blastRadius: 'low' }],
+        operationCount: 1 + HOSTILE_STRINGS.length,
+        packagedConnector: true,
+        instanceCount: 2,
+      },
+    ]);
+  });
+
+  it('drops a preset whose name, transport or credential mode is out of shape; no occupancy reads 0', () => {
+    for (const hostile of HOSTILE_STRINGS) {
+      expect(projectPreset(hostilePreset({ name: hostile }), undefined), hostile).toBeNull();
+      expect(
+        projectPreset(
+          hostilePreset({ credentialMode: hostile as ConnectorPreset['credentialMode'] }),
+          undefined,
+        ),
+        hostile,
+      ).toBeNull();
+    }
+    expect(
+      projectPreset(hostilePreset({ transportKind: 'mcp' as unknown as 'http' }), undefined),
+    ).toBeNull();
+    expect(projectPreset(hostilePreset(), undefined)).toMatchObject({
+      packagedConnector: false,
+      instanceCount: 0,
+    });
+  });
+
+  it('does not change when the source gains a field — nothing is spread', () => {
+    expect(
+      projectPreset(
+        { ...hostilePreset(), defaultCredential: 'canary-presets-default' } as ConnectorPreset,
+        undefined,
+      ),
+    ).toEqual(projectPreset(hostilePreset(), undefined));
+  });
+
+  it('the presets this deployment ships read clean', async () => {
+    const { loadConnectorPresets } = await import('../gates/index.js');
+    const shipped = await loadConnectorPresets();
+    expect(shipped.length).toBeGreaterThan(0);
+    const out = projectConnectors(
+      [],
+      new Map(),
+      T1,
+      shipped.map((preset) => ({ preset, occupancy: undefined })),
+    );
+    expectClean('platform_state_connectors', out);
+    expect(out.presets.map((preset) => preset.name)).toEqual(shipped.map((preset) => preset.name));
   });
 });
 
