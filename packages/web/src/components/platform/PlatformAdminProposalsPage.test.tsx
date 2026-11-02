@@ -104,6 +104,10 @@ describe('PlatformAdminProposalsPage (平台 · 管理员提案, S11 AA4b)', () 
     expect(
       within(row).getByTestId(`platform-admin-proposal-row-workspaces-${PROPOSAL}`).textContent,
     ).toBe('工作区部分：待确认 2');
+    // #951 UX P3-1: the line wraps on a narrow screen instead of cutting the workspace part off.
+    const partsLine = within(row).getByTestId(`platform-admin-proposal-row-parts-${PROPOSAL}`);
+    expect(partsLine.classList.contains('wrap-anywhere')).toBe(true);
+    expect(partsLine.classList.contains('truncate')).toBe(false);
 
     fireEvent.change(screen.getByTestId('platform-admin-proposals-filter'), {
       target: { value: 'applied' },

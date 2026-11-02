@@ -123,12 +123,17 @@ function listParams(filter: StatusFilter): Record<string, string> {
   return { status: filter };
 }
 
-/** A row's third line: the platform part on its own, then the workspace parts' counts. */
+/** A row's third line: the platform part on its own, then the workspace parts' counts. It wraps
+ *  rather than ellipsing (#951 UX P3-1): at 390px the English line ran past the row and the
+ *  workspace part, the half the reader still needed, was the one cut off. */
 function ProposalPartsLine({ proposal }: { readonly proposal: AdminProposalSummaryWire }) {
   const t = useT();
   const parts = proposalPartsText(proposal, t);
   return (
-    <span className="truncate text-3 text-small">
+    <span
+      className="wrap-anywhere text-3 text-small"
+      data-testid={`platform-admin-proposal-row-parts-${proposal.id}`}
+    >
       {parts.platform !== null ? (
         <span data-testid={`platform-admin-proposal-row-platform-${proposal.id}`}>
           {proposal.platformSegmentStatus === 'proposed' ? (
