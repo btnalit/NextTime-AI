@@ -1561,9 +1561,10 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   agent_get_change_plan: {
     zh: '智能体查看一个变更计划',
     en: 'Agent reads a change plan',
-    zhHint: '管理员智能体查看自己提出的一个变更计划：各段内容、状态和所有者给出的拒绝理由。',
+    zhHint:
+      '管理员智能体查看自己提出的一个变更计划：各段内容和状态。所有者拒绝时写的理由它看不到，只知道被拒绝了。',
     enHint:
-      "An admin agent reads one change plan it proposed: each segment's items, status and an owner's reason for rejecting it.",
+      "An admin agent reads one change plan it proposed: each segment's items and status. It learns that an owner rejected a segment, not the reason they gave.",
   },
   agent_withdraw_change_plan: {
     zh: '智能体撤回变更计划',
@@ -1582,8 +1583,9 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   get_change_plan: {
     zh: '查看变更计划详情',
     en: 'Read a change plan',
-    zhHint: '查看一个变更计划的说明、各段内容、状态和理由。',
-    enHint: "Shows one change plan's description, each segment's items, status and reason.",
+    zhHint: '查看一个变更计划的说明、各段内容、状态和理由，包括所有者拒绝时写的理由。',
+    enHint:
+      "Shows one change plan's description, each segment's items, status and reason, including an owner's reason for rejecting it.",
   },
   withdraw_change_plan: {
     zh: '撤回变更计划',

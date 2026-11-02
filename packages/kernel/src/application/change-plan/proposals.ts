@@ -417,7 +417,10 @@ export async function proposeChangePlan(
       ],
     );
   }
-  const read = await readChangePlan(client, planId, { workspaceId: proposer.workspaceId });
+  const read = await readChangePlan(client, planId, {
+    workspaceId: proposer.workspaceId,
+    reader: 'agent',
+  });
   if (read === null) throw new Error(`proposeChangePlan: plan ${planId} not readable after insert`);
   return read;
 }
@@ -426,11 +429,17 @@ export async function proposeChangePlan(
 // Reads
 // -------------------------------------------------------------------------------------------
 
-/** Which plans a read sees. The agent: its administrator's (`proposedByUser`) in its trial
- *  workspace (F12) — RLS already keeps it to the workspace's own. The platform plane: any. */
+/** Which plans a read sees, and who reads them. The agent: its administrator's
+ *  (`proposedByUser`) in its trial workspace (F12) — RLS already keeps it to the workspace's own.
+ *  The platform plane: any. */
 export interface ChangePlanScope {
   readonly workspaceId?: string;
   readonly proposedByUser?: string;
+  /** What a target workspace's owner writes stays with them and the platform's people (coordinator
+   *  2026-11-02, as for what their dry run finds): the agent reads that a segment was rejected,
+   *  never why — a rejected segment's `reason` is `null` for `agent`. A withdrawal's reason is the
+   *  administrator's own, and the agent reads it. */
+  readonly reader: 'agent' | 'platform';
 }
 
 interface PlanRow {
@@ -532,7 +541,7 @@ function summaryOf(row: PlanRow): ChangePlanSummaryWire {
   };
 }
 
-function segmentOf(row: SegmentRow): ChangePlanSegmentWire {
+function segmentOf(row: SegmentRow, reader: ChangePlanScope['reader']): ChangePlanSegmentWire {
   return {
     id: row.id,
     ordinal: row.ordinal,
@@ -543,7 +552,7 @@ function segmentOf(row: SegmentRow): ChangePlanSegmentWire {
     status: row.status,
     decidedAt: row.decided_at?.toISOString() ?? null,
     withdrawnOrigin: row.withdrawn_origin,
-    reason: row.reason,
+    reason: row.status === 'rejected' && reader === 'agent' ? null : row.reason,
     rolledBackAt: row.rolled_back_at?.toISOString() ?? null,
   };
 }
@@ -599,7 +608,7 @@ export async function readChangePlan(
     ...summaryOf(row),
     description: row.description,
     contentDigest: row.content_digest,
-    segments: segments.rows.map(segmentOf),
+    segments: segments.rows.map((row) => segmentOf(row, scope.reader)),
   };
 }
 

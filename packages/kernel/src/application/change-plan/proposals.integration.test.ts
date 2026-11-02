@@ -690,8 +690,26 @@ describe.runIf(DATABASE_URL !== undefined)(
       const read = (await dispatchCapability({ pool }, caller, 'agent_get_change_plan', {
         planId: plan.id,
       })) as ChangePlanWire;
-      expect(read.segments[0]).toMatchObject({ status: 'rejected', reason: 'Not here.' });
+      // The agent reads that it was rejected, and when — not why: what the owner wrote stays with
+      // them and the platform's people (coordinator 11-02, as for what their dry run finds).
+      expect(read.segments[0]).toMatchObject({ status: 'rejected', reason: null });
+      expect(read.segments[0]?.decidedAt).not.toBeNull();
+      expect(JSON.stringify(read)).not.toContain('Not here.');
       expect(read.status).toBe('closed');
+      const listedByAgent = (await dispatchCapability(
+        { pool },
+        caller,
+        'agent_list_change_plans',
+        {},
+      )) as ListEnvelope<ChangePlanSummaryWire>;
+      expect(JSON.stringify(listedByAgent)).not.toContain('Not here.');
+      const readOnPlatform = (await dispatchCapability(
+        { pool },
+        platformCaller(admin),
+        'get_change_plan',
+        { planId: plan.id },
+      )) as ChangePlanWire;
+      expect(readOnPlatform.segments[0]).toMatchObject({ status: 'rejected', reason: 'Not here.' });
       // Final: no edge out of rejected.
       await expect(
         asTarget((c) =>

@@ -511,7 +511,8 @@ export type ChangeProvenanceWire = z.infer<typeof ChangeProvenanceWireSchema>;
 // Read by the agent that proposed it (`agent_get_change_plan`, its administrator's plans in its
 // trial workspace) and by platform administrators (`get_change_plan`). Neither sees what a target
 // workspace's dry run found there, nor who decided a segment (a Principal of that workspace): a
-// segment carries its status, when it was decided, and the reason given when one was.
+// segment carries its status, when it was decided, and the reason given when one was — an owner's
+// reason for rejecting it to platform administrators only (the agent reads that it was rejected).
 // ---------------------------------------------------------------------------------------------
 
 /** A plan's title: what it changes, in a line. */
@@ -641,7 +642,9 @@ export const ChangePlanSegmentWireSchema = z
     /** Withdrawn: through the administrator's agent, or by a platform administrator in the
      *  console. */
     withdrawnOrigin: DraftOriginSchema.exclude(['platform']).nullable(),
-    /** Rejected: the owner's reason. Withdrawn: the reason, when one was given. */
+    /** Rejected: the owner's reason — for platform administrators (`get_change_plan`); `null` to
+     *  the agent, which reads that the segment was rejected, not why. Withdrawn: the reason, when
+     *  one was given, to both. */
     reason: z.string().nullable(),
     rolledBackAt: z.string().nullable(),
   })

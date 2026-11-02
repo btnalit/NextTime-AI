@@ -51,10 +51,14 @@ function platformUserOf(
   return ctx.platformUser;
 }
 
-/** F12: on the agent's side, the plans its administrator proposed in this trial workspace. */
+/** F12: on the agent's side, the plans its administrator proposed in this trial workspace — read
+ *  as the agent reads them (no owner's reason for a rejection). */
 function agentScope(workspaceId: string, userId: string): ChangePlanScope {
-  return { workspaceId, proposedByUser: userId };
+  return { workspaceId, proposedByUser: userId, reader: 'agent' };
 }
+
+/** A platform administrator's: every plan, and why an owner rejected a segment. */
+const PLATFORM_SCOPE: ChangePlanScope = { reader: 'platform' };
 
 /** The packs this deployment ships, whose names a plan's own source name must not take. */
 async function shippedPackNames(): Promise<ReadonlySet<string>> {
@@ -155,7 +159,7 @@ export const listChangePlansHandler: CapabilityHandler = async (
 ): Promise<CapabilityHandlerResult> => {
   platformUserOf('list_change_plans', ctx);
   const { status } = params as { readonly status?: ChangePlanStatus };
-  return { result: await listChangePlans(client, {}, status) };
+  return { result: await listChangePlans(client, PLATFORM_SCOPE, status) };
 };
 
 export const getChangePlanHandler: CapabilityHandler = async (
@@ -167,7 +171,7 @@ export const getChangePlanHandler: CapabilityHandler = async (
   platformUserOf('get_change_plan', ctx);
   const { planId } = params as { readonly planId: string };
   return {
-    result: await getChangePlan(client, planId, {}),
+    result: await getChangePlan(client, planId, PLATFORM_SCOPE),
     resourceType: 'change_plan',
     resourceId: planId,
   };
@@ -181,6 +185,6 @@ export const withdrawChangePlanHandler: CapabilityHandler = async (
 ): Promise<CapabilityHandlerResult> => {
   const user = platformUserOf('withdraw_change_plan', ctx);
   const { planId, reason } = params as { readonly planId: string; readonly reason?: string };
-  const plan = await withdrawChangePlan(client, planId, {}, user.id, reason);
+  const plan = await withdrawChangePlan(client, planId, PLATFORM_SCOPE, user.id, reason);
   return { result: plan, resourceType: 'change_plan', resourceId: planId };
 };

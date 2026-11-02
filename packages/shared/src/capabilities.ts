@@ -4138,7 +4138,7 @@ const platformCapabilities = [
     paramsSchema: z.object({ planId: z.guid() }).strict(),
     resultSchema: wire.ChangePlanWireSchema,
     description:
-      'One change plan with its description, digest and segments in order: for each the workspace it is for, its items as proposed (workspace-agnostic intents: a Skill or Worker by name, an ontology family by name, an Operation by gate and name), its digest, status, when it was decided, and the reason given when it was rejected or withdrawn. Not what a target workspace’s dry run found there, nor who decided a segment. 404 change_plan_not_found.',
+      'One change plan with its description, digest and segments in order: for each the workspace it is for, its items as proposed (workspace-agnostic intents: a Skill or Worker by name, an ontology family by name, an Operation by gate and name), its digest, status, when it was decided, and the reason given when it was rejected or withdrawn (an owner’s reason for a rejection reaches platform administrators only, never the agent). Not what a target workspace’s dry run found there, nor who decided a segment. 404 change_plan_not_found.',
   },
   {
     name: 'withdraw_change_plan',
@@ -5193,7 +5193,7 @@ const changePlanCapabilities = [
     paramsSchema: z.object({ planId: z.guid() }).strict(),
     resultSchema: wire.ChangePlanWireSchema,
     description:
-      'One change plan your administrator’s agent proposed in this trial workspace, with its segments in order: for each the workspace it is for, its items as proposed, its status, when it was decided, and the reason its owner gave when they rejected it (or the reason it was withdrawn with). Nothing of what the workspace’s dry run found there, nor who decided. 404 change_plan_not_found for any other plan. Only an admin agent calls it.',
+      'One change plan your administrator’s agent proposed in this trial workspace, with its segments in order: for each the workspace it is for, its items as proposed, its status, when it was decided, and the reason it was withdrawn with when one was given. Not why an owner rejected a segment (only that they did), nor anything of what the workspace’s dry run found there, nor who decided. 404 change_plan_not_found for any other plan. Only an admin agent calls it.',
   },
   {
     name: 'agent_withdraw_change_plan',
