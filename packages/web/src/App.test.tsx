@@ -172,7 +172,13 @@ describe('App: 我的账户', () => {
     authApi.getMe.mockResolvedValue({
       user: CAROL,
       memberships: [
-        { workspaceId: 'ws-1', workspaceName: 'Acme', principalId: 'p-1', role: 'member' },
+        {
+          workspaceId: 'ws-1',
+          workspaceName: 'Acme',
+          workspacePurpose: 'standard',
+          principalId: 'p-1',
+          role: 'member',
+        },
       ],
     });
     render(<App />);
@@ -190,8 +196,20 @@ describe('App: 我的账户', () => {
     authApi.getMe.mockResolvedValue({
       user: CAROL,
       memberships: [
-        { workspaceId: 'ws-1', workspaceName: 'Acme', principalId: 'p-1', role: 'member' },
-        { workspaceId: 'ws-2', workspaceName: 'Beta', principalId: 'p-2', role: 'member' },
+        {
+          workspaceId: 'ws-1',
+          workspaceName: 'Acme',
+          workspacePurpose: 'standard',
+          principalId: 'p-1',
+          role: 'member',
+        },
+        {
+          workspaceId: 'ws-2',
+          workspaceName: 'Beta',
+          workspacePurpose: 'standard',
+          principalId: 'p-2',
+          role: 'member',
+        },
       ],
     });
     wsStub.refusedWorkspaces.add('ws-2');

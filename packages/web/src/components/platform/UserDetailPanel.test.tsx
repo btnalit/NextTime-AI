@@ -50,6 +50,7 @@ function user(overrides: Partial<UserWire> = {}): UserWire {
       {
         workspaceId: 'ws-1',
         workspaceName: 'Acme',
+        workspacePurpose: 'standard',
         workspaceStatus: 'active',
         principalId: 'p-1',
         role: 'member',
@@ -278,6 +279,7 @@ describe('UserDetailPanel', () => {
         {
           workspaceId: 'ws-1',
           workspaceName: 'Acme',
+          workspacePurpose: 'standard',
           workspaceStatus: 'active',
           principalId: 'p-1',
           role: 'operator',
@@ -286,6 +288,7 @@ describe('UserDetailPanel', () => {
         {
           workspaceId: 'ws-2',
           workspaceName: 'Beta',
+          workspacePurpose: 'standard',
           workspaceStatus: 'active',
           principalId: 'p-2',
           role: 'owner',

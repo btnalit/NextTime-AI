@@ -9,7 +9,7 @@ import { useExplorerAvailable } from '../../lib/explorer-probe.js';
 import type { WorkspaceInfo } from '../../lib/governance.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import type { NavSection } from '../../lib/router.js';
-import { MobileTopBar, NavDrawer, Sidebar } from './Sidebar.js';
+import { MobileTopBar, NavDrawer, Sidebar, scopedWorkspacePurpose } from './Sidebar.js';
 import { useKernelVersion } from './useKernelVersion.js';
 import { useNarrowViewport } from './useNarrowViewport.js';
 
@@ -106,6 +106,7 @@ export function AppShell({
           <MobileTopBar
             pageTitle={pageTitle}
             workspaceName={workspaceName}
+            workspacePurpose={scopedWorkspacePurpose(memberships, selectedWorkspaceId)}
             role={role}
             wsStatus={wsStatus}
             onOpenMenu={() => setDrawerOpen(true)}

@@ -419,8 +419,20 @@ describe('Sidebar', () => {
 
   describe('S4.1: sign-out label + workspace switcher', () => {
     const MEMBERSHIPS: readonly WireMembership[] = [
-      { workspaceId: 'ws-1', workspaceName: 'Acme', principalId: 'p-1', role: 'owner' },
-      { workspaceId: 'ws-2', workspaceName: 'Beta', principalId: 'p-2', role: 'member' },
+      {
+        workspaceId: 'ws-1',
+        workspaceName: 'Acme',
+        workspacePurpose: 'standard',
+        principalId: 'p-1',
+        role: 'owner',
+      },
+      {
+        workspaceId: 'ws-2',
+        workspaceName: 'Beta',
+        workspacePurpose: 'standard',
+        principalId: 'p-2',
+        role: 'member',
+      },
     ];
 
     it('labels the sign-out button "清除密钥" in apiKey mode and "登出" in cookie mode', () => {
@@ -507,6 +519,57 @@ describe('Sidebar', () => {
       fireEvent.change(select, { target: { value: 'ws-2' } });
       expect(onSwitchWorkspace).toHaveBeenCalledWith('ws-2');
     });
+
+    it('legacy 596: marks a trial workspace 「（试验）」 in the switcher and with an amber chip in the caption while it is the one in scope', () => {
+      const memberships: readonly WireMembership[] = [
+        ...MEMBERSHIPS,
+        {
+          workspaceId: 'ws-3',
+          workspaceName: 'Sandbox',
+          workspacePurpose: 'admin_trial',
+          principalId: 'p-3',
+          role: 'owner',
+        },
+      ];
+      const props = {
+        active: 'chats' as const,
+        pendingCount: null,
+        wsStatus: 'connected' as const,
+        role: KNOWN_OWNER,
+        authMode: 'cookie' as const,
+        onLogout: vi.fn(),
+        memberships,
+      };
+      const { rerender } = render(
+        <Sidebar {...props} workspaceName="Acme" selectedWorkspaceId="ws-1" />,
+      );
+      const options = Array.from(
+        (screen.getByTestId('workspace-switcher') as HTMLSelectElement).options,
+      ).map((option) => option.textContent);
+      expect(options).toEqual(['Acme (所有者)', 'Beta (成员)', 'Sandbox（试验） (所有者)']);
+      // An ordinary workspace in scope: no chip.
+      expect(screen.queryByTestId('sidebar-workspace-trial')).toBeNull();
+
+      rerender(<Sidebar {...props} workspaceName="Sandbox" selectedWorkspaceId="ws-3" />);
+      const chip = screen.getByTestId('sidebar-workspace-trial');
+      expect(chip.textContent).toBe('试验');
+      expect(chip.getAttribute('data-tone')).toBe('warn');
+      // 「工作区 · 试验 · 所有者」: the chip sits between the caption's word and the role.
+      const caption = chip.closest('.sidebar-workspace-caption');
+      expect(caption?.textContent).toBe('工作区·试验·所有者');
+
+      // A single trial membership (no switcher) still shows the chip.
+      rerender(
+        <Sidebar
+          {...props}
+          memberships={[memberships[2] as WireMembership]}
+          workspaceName="Sandbox"
+          selectedWorkspaceId="ws-3"
+        />,
+      );
+      expect(screen.queryByTestId('workspace-switcher')).toBeNull();
+      expect(screen.getByTestId('sidebar-workspace-trial')).toBeTruthy();
+    });
   });
 });
 
@@ -544,6 +607,36 @@ describe('MobileTopBar', () => {
     );
     // Legacy 354: in the viewer's language.
     expect(screen.getByText('NextTime AI · Acme · 操作员及以上')).toBeTruthy();
+  });
+
+  // Legacy 596 (UX on #924, P2-1): at this width the top bar is the only place the workspace shows
+  // while the drawer is shut, so a trial workspace says so there too; a standard one, or an apiKey
+  // session's (no membership, so no purpose), reads as before.
+  it('marks a trial workspace in the identity line, and nothing else', () => {
+    const { rerender } = render(
+      <MobileTopBar
+        pageTitle="对话"
+        workspaceName="Sandbox"
+        workspacePurpose="admin_trial"
+        role={KNOWN_OWNER}
+        wsStatus="connected"
+        onOpenMenu={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('NextTime AI · Sandbox（试验） · 所有者')).toBeTruthy();
+    for (const purpose of ['standard', undefined] as const) {
+      rerender(
+        <MobileTopBar
+          pageTitle="对话"
+          workspaceName="Sandbox"
+          workspacePurpose={purpose}
+          role={KNOWN_OWNER}
+          wsStatus="connected"
+          onOpenMenu={vi.fn()}
+        />,
+      );
+      expect(screen.getByText('NextTime AI · Sandbox · 所有者')).toBeTruthy();
+    }
   });
 
   // S8 W1-A3 follow-up (audit S2, journey ③ narrow-screen fix): ws-status is invisible at ≤960px
