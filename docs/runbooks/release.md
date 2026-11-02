@@ -2217,6 +2217,16 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **本地或验收环境的库**：跑过改名前 0032（表名 `change_plans`、`change_plan_segments`）的，删掉这两张表与它们的函数、删 `schema_migrations` 的 governance 32，再重跑迁移。没有主机跑过改名前的版本。
 - **回滚**（见 §6）：只回退代码即可，表留着没人读。
 
+### 3.103 目标工作区的所有者预览、应用或拒绝管理员提案的段（#920，S11 AA3b-2，0.61.0 起）
+
+带一个迁移 governance `0033_change_segments_from_admin_proposals`，随 `apply-release.sh` 自动应用。不改 compose，没有新环境变量，主机不需要操作；`ADMIN_AGENT_ENABLED` 仍默认关。
+
+- **迁移**：`change_segments.source_kind` 加 `admin_proposal`，`proposed_by` 改为可空；加 4 个溯源列（`admin_proposal_id`、`admin_proposal_segment_id`、`proposed_by_user`、`proposer_display_name`，没有外键，试验工作区清除后仍保留）、约束 `change_segments_proposer` 与唯一索引（每个提案段最多一条记录）；3 个守卫：`change_segments_admin_proposal_guard`（插入）、`admin_proposal_segments_record_guard`（`applied_segment_id` 必须是这一段的记录，只有带着那条记录才能 `rolled_back`，决定人与撤销人是事务的 Principal，同状态更新不改 `updated_at`）、`admin_proposals_proposer_guard`（`proposed_by` 是事务的 Principal）。
+- **新线上**：4 个能力（`modules` 组、人的通道、`owner` 起、HUMAN_ONLY）`list_admin_proposal_segments`、`preview_admin_proposal_segment`、`apply_admin_proposal_segment`、`reject_admin_proposal_segment`。`ChangeSegmentWire.proposedBy` 可空，新增 `adminProposal { proposalId, proposalSegmentId, proposedBy { userId, displayName } } | null`，`source.kind` 加 `admin_proposal`。新错误码 `admin_proposal_segment_not_found`（404）、`admin_proposal_segment_not_open` / `admin_proposal_segment_blocked` / `admin_proposal_segment_unchanged`（409，WS `ILLEGAL_TRANSITION`）、`admin_proposal_role_mismatch`（403，WS `FORBIDDEN`）；应用时重新解析的摘要不一致沿用 `change_plan_changed`（409）。契约快照新增 4 项，另有 5 项结果 schema 随 `ChangeSegmentWire` 变化（`get_change_segment`、`list_change_segments`、`preview_roll_back_change_segment`、`roll_back_change_segment`、`verify_change_segment`）。
+- **行为变化（遗留 600）**：内核在提议前按库里存的 `platform_role` 判断，与 `NEXTTIME_PLATFORM_ADMINS` 钉住的角色不一致时返回 403 `admin_proposal_role_mismatch`（先同步角色），什么都不写；按更严的那边算。
+- **发版说明可写**：目标工作区的所有者可以预览、应用或拒绝发给自己的管理员提案段；应用的内容在「安装历史」里显示为「管理员提案 <来源名>」并写明提议的管理员，和能力包安装一样可以撤销。发布的版本记为智能体起草、由所有者发布。控制台还没有提案页面（AA4）。
+- **回滚**（见 §6）：留着 0033 只回退代码不会损坏数据（旧代码从不写 `admin_proposal`，能力包照旧插入）。但旧代码把 `proposed_by` 内连接到 principals，`admin_proposal` 的记录（`proposed_by` 为空）对它不可见：列不出，get / verify / 撤销都返回 404。所以**要撤掉管理员提案应用的内容，先在 0.61.0 上撤销，再回退代码**（#920 #488 P3-a）。数据库只保证一个方向的一致性（提案段为 `rolled_back` 时记录一定已撤销），反方向由 `rollback.ts` 在同一事务里同时改两边。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -2381,6 +2391,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.60.0 之后的下一版 | core `0051_ontology_version_origin`（#914，AA3a，遗留 293）：`ontology_versions.origin` 可空列、取值 CHECK、写后不改触发器 | 可逆 | 只加可空列：旧代码不读不写 `origin`，在新 schema 上照常插入 | 只回退代码、保留列即可；要删列按 0051 文件头（删触发器与函数、`drop column origin`，删 `schema_migrations` 的 core 51） |
 | v0.60.0 之后的下一版 | worker `0013_draft_origin`（#914，AA3a，遗留 293）：`skills`、`procedures`、`worker_definitions` 的 `origin` 可空列、取值 CHECK、写后不改触发器 | 可逆 | 同上，旧代码不读不写 `origin` | 只回退代码、保留列即可；要删列按 0013 文件头，删 `schema_migrations` 的 worker 13 |
 | v0.60.0 之后的下一版 | governance `0032_admin_proposals`（#916，AA3b-1）：新表 `admin_proposals`、`admin_proposal_segments` 及 4 个函数 | 可逆 | 只加新表：旧版本不读不写 | 只回退代码、表留着即可；要删按 0032 文件头：`drop table admin_proposal_segments, admin_proposals`、删文件里的 4 个函数，再删 `schema_migrations` 的 governance 32 |
+| v0.60.0 之后的下一版 | governance `0033_change_segments_from_admin_proposals`（#920，AA3b-2）：`change_segments.source_kind` 加 `admin_proposal`、`proposed_by` 可空、4 个溯源列、约束 `change_segments_proposer`、唯一索引、3 个守卫 | 有条件可逆 | 留着 0033 只回退代码不损坏数据，但旧代码看不到 `admin_proposal` 记录（`proposed_by` 内连接 principals：不列出，get / verify / 撤销 404）；要撤掉管理员提案应用的内容，先在新版本里撤销再回退代码 | 只回退代码、保留 0033 即可。撤迁移的前提是没有 `source_kind = 'admin_proposal'` 的行：删 3 个触发器与函数和索引、删约束 `change_segments_proposer`、把 `change_segments_source_kind_check` 恢复为 `('pack')`、`proposed_by` 设回 not null、删 4 列，再删 `schema_migrations` 的 governance 33（见 0033 文件头） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
