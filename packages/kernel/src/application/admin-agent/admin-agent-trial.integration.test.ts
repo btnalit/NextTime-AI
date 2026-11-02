@@ -889,8 +889,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           await setPlatformRole(admin, 'admin');
         }
 
-        // A trial workspace taken out of use (disabled — the step before a purge, which deletes
-        // the workspace and its self connections) no longer grants the exception either.
+        // A trial workspace taken out of use (disabled — a workspace is purged only once it is)
+        // no longer grants the exception either.
         const disabled = await withAdminClient(pool, async (client) => {
           await client.query("update workspaces set status = 'disabled' where id = $1", [trialWs]);
           try {
