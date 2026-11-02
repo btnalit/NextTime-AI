@@ -436,15 +436,17 @@ describe.runIf(DATABASE_URL !== undefined)(
         (await call<{ items: ChatWire[] }>(person(trial), 'list_chats', {})).items.map(
           (item) => item.id,
         );
+      // One at a time: each is started only when the loop reaches it, so a refusal is awaited the
+      // moment it happens (never an unhandled rejection while an earlier one is still pending).
       const reads = () => [
-        call(person(trial), 'get_chat_history', { chatId: chat.id }),
-        call(person(trial), 'list_chat_turns', { chatId: chat.id }),
-        call(person(trial), 'rename_chat', { chatId: chat.id, title: 'renamed' }),
+        () => call(person(trial), 'get_chat_history', { chatId: chat.id }),
+        () => call(person(trial), 'list_chat_turns', { chatId: chat.id }),
+        () => call(person(trial), 'rename_chat', { chatId: chat.id, title: 'renamed' }),
       ];
 
       await withSwitchOff(async () => {
         expect(await listIds()).toEqual(expect.arrayContaining([chat.id, entry.id]));
-        for (const read of reads()) await expect(read).resolves.toBeDefined();
+        for (const read of reads()) await expect(read()).resolves.toBeDefined();
         const refused = await thrownBy(send(trial, chat.id));
         expect(refused).toBeInstanceOf(AdminAgentRefused);
         expect((refused as AdminAgentRefused).reason).toBe('switched_off');
@@ -457,8 +459,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         const ids = await listIds();
         expect(ids).toContain(entry.id);
         expect(ids).not.toContain(chat.id);
-        for (const read of [...reads(), send(trial, chat.id)]) {
-          const refused = await thrownBy(read);
+        for (const read of [...reads(), () => send(trial, chat.id)]) {
+          const refused = await thrownBy(read());
           expect(refused).toBeInstanceOf(AdminAgentRefused);
           expect((refused as AdminAgentRefused).reason).toBe('not_platform_admin');
         }
