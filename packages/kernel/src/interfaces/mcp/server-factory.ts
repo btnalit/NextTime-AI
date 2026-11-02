@@ -5,12 +5,12 @@ import type { HandleClaims } from '@nexttime/shared';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { GatekeeperClientError } from '../../adapters/gatekeeper-client/index.js';
 import {
-  ChangePlanCredentialError,
-  ChangePlanNotFoundError,
-  ChangePlanNotOpenError,
-  ChangePlanProposalInvalidError,
-  ChangePlanQuotaExceededError,
-  ChangePlanTargetUnavailableError,
+  AdminProposalCredentialError,
+  AdminProposalInvalidError,
+  AdminProposalNotFoundError,
+  AdminProposalNotOpenError,
+  AdminProposalQuotaExceededError,
+  AdminProposalTargetUnavailableError,
 } from '../../application/change-plan/index.js';
 import {
   CapabilityNotFoundError,
@@ -65,10 +65,7 @@ const MCP_SERVER_VERSION = '0.1.0';
 export function mapCapabilityErrorToToolResult(err: unknown): CallToolResult {
   let message: string;
   if (err instanceof CapabilityNotFoundError) message = `not_found: ${err.message}`;
-  else if (
-    err instanceof InvalidCapabilityParamsError ||
-    err instanceof ChangePlanProposalInvalidError
-  )
+  else if (err instanceof InvalidCapabilityParamsError || err instanceof AdminProposalInvalidError)
     message = `invalid_params: ${err.message}`;
   else if (err instanceof CapabilityNotImplementedError)
     message = `not_implemented: ${err.message}`;
@@ -83,13 +80,13 @@ export function mapCapabilityErrorToToolResult(err: unknown): CallToolResult {
     err instanceof UnknownOperationError ||
     err instanceof OperationNameInvalidError ||
     err instanceof UnstorableTextError ||
-    // S11 AA3b-1: an admin agent's ChangePlan, refused or not found — the code says whether to
+    // S11 AA3b-1: an admin proposal, refused or not found — the code says whether to
     // ask its administrator for another target, leave a value out, wait for the next day, or stop.
-    err instanceof ChangePlanTargetUnavailableError ||
-    err instanceof ChangePlanCredentialError ||
-    err instanceof ChangePlanQuotaExceededError ||
-    err instanceof ChangePlanNotFoundError ||
-    err instanceof ChangePlanNotOpenError
+    err instanceof AdminProposalTargetUnavailableError ||
+    err instanceof AdminProposalCredentialError ||
+    err instanceof AdminProposalQuotaExceededError ||
+    err instanceof AdminProposalNotFoundError ||
+    err instanceof AdminProposalNotOpenError
   )
     message = `${err.code}: ${err.message}`;
   // A gate's own answer (`operation_refused`, `invalid_params`, …): its code tells a refusal the

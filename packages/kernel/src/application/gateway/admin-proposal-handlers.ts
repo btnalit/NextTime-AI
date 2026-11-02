@@ -1,0 +1,241 @@
+import type { AdminProposalSegmentInputWire, AdminProposalStatus } from '@nexttime/shared';
+import {
+  type AdminProposalScope,
+  checkAdminProposal,
+  getAdminProposal,
+  listAdminProposals,
+  proposeAdminProposal,
+  withdrawAdminProposal,
+} from '../change-plan/index.js';
+import { loadPackRegistry } from '../packs/index.js';
+import type {
+  CapabilityHandler,
+  CapabilityHandlerContext,
+  CapabilityHandlerResult,
+} from './capability-handler.js';
+
+/**
+ * application/gateway/admin-proposal-handlers (S11 AA3b-1): Admin proposals
+ * (application/change-plan/admin-proposals.ts; migrations/governance/0032).
+ *
+ *  - The `admin_proposal` group (`adminAgentOnly`): what an admin agent proposes from its trial
+ *    workspace and reads back — only its own administrator's proposals there (F12) — and withdraws.
+ *    Dispatch has already checked the agent's authority (I-A1, I-A6) and gives `ctx.adminAgent`.
+ *  - Three `platform` capabilities: a platform administrator in the console reads every proposal and
+ *    withdraws one, in a platform transaction (`ctx.platformUser`).
+ *
+ * Every one runs in the call's own transaction, whose audit row dispatch writes.
+ */
+
+/** Dispatch sets `ctx.adminAgent` for an admin agent's call and refuses every other caller of an
+ *  `adminAgentOnly` capability first (`AdminAgentOnlyError`), so a call without it here is a wiring
+ *  bug, not a caller to answer. */
+function adminAgentOf(
+  name: string,
+  ctx: CapabilityHandlerContext | undefined,
+): NonNullable<CapabilityHandlerContext['adminAgent']> {
+  if (!ctx?.adminAgent) {
+    throw new Error(`${name}: no admin agent in the call's context (dispatch refuses any other)`);
+  }
+  return ctx.adminAgent;
+}
+
+/** A platform capability's acting administrator (dispatch's platform branch sets it). */
+function platformUserOf(
+  name: string,
+  ctx: CapabilityHandlerContext | undefined,
+): NonNullable<CapabilityHandlerContext['platformUser']> {
+  if (!ctx?.platformUser) {
+    throw new Error(`${name}: no platform user in the call's context (a platform-scope call)`);
+  }
+  return ctx.platformUser;
+}
+
+/**
+ * Who reads a proposal, from what dispatch established about the call — never from its params, and
+ * never from its Principal: an admin agent acts as its administrator's own Principal (AA1), so
+ * only the session kind tells the two apart. Dispatch sets `ctx.adminAgent` exactly when the
+ * call came through an `admin_agent` session, and `ctx.platformUser` only on the platform
+ * channel (a console session's cookie; no Handle reaches it). An admin agent is `agent` whatever
+ * else the context carries (coordinator 2026-11-02).
+ */
+export function adminProposalReaderOf(
+  name: string,
+  ctx: CapabilityHandlerContext | undefined,
+): AdminProposalScope['reader'] {
+  if (ctx?.adminAgent) return 'agent';
+  if (ctx?.platformUser) return 'platform';
+  throw new Error(`${name}: neither an admin agent nor a platform user in the call's context`);
+}
+
+/** F12: on the agent's side, the proposals its administrator proposed in this trial workspace — read
+ *  as the agent reads them (no owner's reason for a rejection). */
+function agentScope(
+  name: string,
+  workspaceId: string,
+  userId: string,
+  ctx: CapabilityHandlerContext | undefined,
+): AdminProposalScope {
+  return { workspaceId, proposedByUser: userId, reader: adminProposalReaderOf(name, ctx) };
+}
+
+/** A platform administrator's: every proposal — and why an owner rejected a segment, unless the call
+ *  is an admin agent's (which the platform channel never is). */
+function platformScope(
+  name: string,
+  ctx: CapabilityHandlerContext | undefined,
+): AdminProposalScope {
+  return { reader: adminProposalReaderOf(name, ctx) };
+}
+
+/** The packs this deployment ships, whose names a proposal's own source name must not take. */
+async function shippedPackNames(): Promise<ReadonlySet<string>> {
+  return new Set((await loadPackRegistry()).keys());
+}
+
+interface ProposeAdminProposalParams {
+  readonly title: string;
+  readonly description?: string;
+  readonly sourceName: string;
+  readonly segments: readonly AdminProposalSegmentInputWire[];
+}
+
+export const proposeAdminProposalHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+): Promise<CapabilityHandlerResult> => {
+  const agent = adminAgentOf('propose_admin_proposal', ctx);
+  const input = params as ProposeAdminProposalParams;
+  const segments = checkAdminProposal(input, await shippedPackNames());
+  const proposal = await proposeAdminProposal(
+    client,
+    {
+      workspaceId,
+      principalId: ctx?.principalId ?? '',
+      userId: agent.userId,
+      sessionId: agent.sessionId,
+    },
+    input,
+    segments,
+  );
+  return {
+    result: proposal,
+    resourceType: 'admin_proposal',
+    resourceId: proposal.id,
+    auditPayload: {
+      contentDigest: proposal.contentDigest,
+      segments: proposal.segments.map((segment) => ({
+        ordinal: segment.ordinal,
+        targetWorkspaceId: segment.targetWorkspaceId,
+        contentDigest: segment.contentDigest,
+        items: segment.items.length,
+      })),
+    },
+  };
+};
+
+export const agentListAdminProposalsHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  _params,
+  ctx,
+): Promise<CapabilityHandlerResult> => {
+  const agent = adminAgentOf('agent_list_admin_proposals', ctx);
+  return {
+    result: await listAdminProposals(
+      client,
+      agentScope('agent_list_admin_proposals', workspaceId, agent.userId, ctx),
+    ),
+  };
+};
+
+export const agentGetAdminProposalHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+): Promise<CapabilityHandlerResult> => {
+  const agent = adminAgentOf('agent_get_admin_proposal', ctx);
+  const { proposalId } = params as { readonly proposalId: string };
+  return {
+    result: await getAdminProposal(
+      client,
+      proposalId,
+      agentScope('agent_get_admin_proposal', workspaceId, agent.userId, ctx),
+    ),
+    resourceType: 'admin_proposal',
+    resourceId: proposalId,
+  };
+};
+
+export const agentWithdrawAdminProposalHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+): Promise<CapabilityHandlerResult> => {
+  const agent = adminAgentOf('agent_withdraw_admin_proposal', ctx);
+  const { proposalId, reason } = params as {
+    readonly proposalId: string;
+    readonly reason?: string;
+  };
+  const proposal = await withdrawAdminProposal(
+    client,
+    proposalId,
+    agentScope('agent_withdraw_admin_proposal', workspaceId, agent.userId, ctx),
+    agent.userId,
+    reason,
+  );
+  return { result: proposal, resourceType: 'admin_proposal', resourceId: proposalId };
+};
+
+export const listAdminProposalsHandler: CapabilityHandler = async (
+  client,
+  _workspaceId,
+  params,
+  ctx,
+): Promise<CapabilityHandlerResult> => {
+  platformUserOf('list_admin_proposals', ctx);
+  const { status } = params as { readonly status?: AdminProposalStatus };
+  return {
+    result: await listAdminProposals(client, platformScope('list_admin_proposals', ctx), status),
+  };
+};
+
+export const getAdminProposalHandler: CapabilityHandler = async (
+  client,
+  _workspaceId,
+  params,
+  ctx,
+): Promise<CapabilityHandlerResult> => {
+  platformUserOf('get_admin_proposal', ctx);
+  const { proposalId } = params as { readonly proposalId: string };
+  return {
+    result: await getAdminProposal(client, proposalId, platformScope('get_admin_proposal', ctx)),
+    resourceType: 'admin_proposal',
+    resourceId: proposalId,
+  };
+};
+
+export const withdrawAdminProposalHandler: CapabilityHandler = async (
+  client,
+  _workspaceId,
+  params,
+  ctx,
+): Promise<CapabilityHandlerResult> => {
+  const user = platformUserOf('withdraw_admin_proposal', ctx);
+  const { proposalId, reason } = params as {
+    readonly proposalId: string;
+    readonly reason?: string;
+  };
+  const proposal = await withdrawAdminProposal(
+    client,
+    proposalId,
+    platformScope('withdraw_admin_proposal', ctx),
+    user.id,
+    reason,
+  );
+  return { result: proposal, resourceType: 'admin_proposal', resourceId: proposalId };
+};

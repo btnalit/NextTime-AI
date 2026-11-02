@@ -1,15 +1,15 @@
 import {
-  CHANGE_PLAN_DAILY_LIMIT,
-  CHANGE_PLAN_LIST_LIMIT,
-  type ChangePlanItemIntentWire,
-  type ChangePlanSegmentProposalWire,
-  type ChangePlanSegmentStatus,
-  type ChangePlanSegmentWire,
-  type ChangePlanStatus,
-  type ChangePlanSummaryWire,
-  type ChangePlanWire,
+  ADMIN_PROPOSAL_DAILY_LIMIT,
+  ADMIN_PROPOSAL_LIST_LIMIT,
+  type AdminProposalItemIntentWire,
+  type AdminProposalSegmentInputWire,
+  type AdminProposalSegmentStatus,
+  type AdminProposalSegmentWire,
+  type AdminProposalStatus,
+  type AdminProposalSummaryWire,
+  type AdminProposalWire,
   type ListEnvelope,
-  changePlanStatusOf,
+  adminProposalStatusOf,
   workerDefinitionContentSchemaFor,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
@@ -23,15 +23,15 @@ import { validateSkillContent } from '../worker/index.js';
 import { contentDigest } from './digest.js';
 
 /**
- * application/change-plan/proposals: what a platform administrator's admin agent proposes from its
- * trial workspace for people to apply elsewhere — a ChangePlan and its segments (S11 AA3b-1;
+ * application/change-plan/admin-proposals: what a platform administrator's admin agent proposes from its
+ * trial workspace for people to apply elsewhere — an admin proposal and its segments (S11 AA3b-1;
  * docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §3.1–§3.3, §5.4, I-A4–I-A8; the AA3
- * default plan F4 / F5 / F9–F12). Owns migrations/governance/0032_change_plans.sql, whose header
+ * default plan F4 / F5 / F9–F12). Owns migrations/governance/0032_admin_proposals.sql, whose header
  * has the model: where the rows live, who reads them, the lifecycle and the guards.
  *
  * What this cut does: propose (in the trial workspace, through the agent's Handle only), read back
- * and withdraw — by the agent for its own administrator's plans (F12), and by a platform
- * administrator on the platform plane for any plan. Previewing, applying and rejecting a segment in
+ * and withdraw — by the agent for its own administrator's proposals (F12), and by a platform
+ * administrator on the platform plane for any proposal. Previewing, applying and rejecting a segment in
  * its target workspace are AA3b-2's (`decided_by`, `applied_segment_id` stay null until then).
  *
  * A proposal writes nothing, and says why, when:
@@ -42,9 +42,9 @@ import { contentDigest } from './digest.js';
  *  - it names one target twice, or one item target twice in a segment, or content that would not
  *    publish (a Skill's rules, a Worker's definition — never its `gates` or `model`, the target
  *    workspace's own), or a source name a shipped pack has;
- *  - its administrator already proposed {@link CHANGE_PLAN_DAILY_LIMIT} plans today (F11, UTC,
+ *  - its administrator already proposed {@link ADMIN_PROPOSAL_DAILY_LIMIT} proposals today (F11, UTC,
  *    across every trial workspace, withdrawn ones included);
- *  - a target cannot take a plan: unknown, disabled, or a trial workspace — all three refused alike
+ *  - a target cannot take a proposal: unknown, disabled, or a trial workspace — all three refused alike
  *    (F10, coordinator 2026-11-02: one code and one text, so the agent cannot learn from the
  *    refusal whether a workspace it was not told about exists, or its state).
  */
@@ -53,58 +53,58 @@ import { contentDigest } from './digest.js';
 // Errors
 // -------------------------------------------------------------------------------------------
 
-/** F10 / §3.2: a segment's target cannot take a plan — unknown, disabled, or a trial workspace
+/** F10 / §3.2: a segment's target cannot take a proposal — unknown, disabled, or a trial workspace
  *  (proposing to one would be self-reference). One code and one message for the three, so the
  *  refusal says nothing about which: `segment` is the index into the call's own `segments`, the
- *  only thing it adds. Mapped to 400 `change_plan_target_unavailable`; nothing was written. */
-export class ChangePlanTargetUnavailableError extends Error {
-  readonly code = 'change_plan_target_unavailable' as const;
+ *  only thing it adds. Mapped to 400 `admin_proposal_target_unavailable`; nothing was written. */
+export class AdminProposalTargetUnavailableError extends Error {
+  readonly code = 'admin_proposal_target_unavailable' as const;
   readonly details: { readonly segment: number };
   constructor(segment: number) {
     super(
-      `segments[${segment}].targetWorkspaceId: that workspace cannot take a change plan. Ask your administrator for the id of an active workspace that is not a trial workspace — nothing was proposed.`,
+      `segments[${segment}].targetWorkspaceId: that workspace cannot take an admin proposal. Ask your administrator for the id of an active workspace that is not a trial workspace — nothing was proposed.`,
     );
-    this.name = 'ChangePlanTargetUnavailableError';
+    this.name = 'AdminProposalTargetUnavailableError';
     this.details = { segment };
   }
 }
 
 /** F9: a value in the proposal that is almost certainly a credential (`findCredentialValues`).
- *  Mapped to 400 `change_plan_credential` with `details: { suspectedSecretValues,
+ *  Mapped to 400 `admin_proposal_credential` with `details: { suspectedSecretValues,
  *  suspectedSecretPaths }` — where (field names and indices, at most 20), never a fragment of the
  *  value; nothing was written. */
-export class ChangePlanCredentialError extends Error {
-  readonly code = 'change_plan_credential' as const;
+export class AdminProposalCredentialError extends Error {
+  readonly code = 'admin_proposal_credential' as const;
   readonly details: {
     readonly suspectedSecretValues: number;
     readonly suspectedSecretPaths: readonly string[];
   };
   constructor(count: number, paths: readonly string[]) {
     super(
-      `the change plan carries ${count} value(s) that are almost certainly credentials, at ${paths.join(', ')} — nothing was proposed. A plan never carries a credential: a gate authenticates with what is configured on it. Leave the value out.`,
+      `the admin proposal carries ${count} value(s) that are almost certainly credentials, at ${paths.join(', ')} — nothing was proposed. A proposal never carries a credential: a gate authenticates with what is configured on it. Leave the value out.`,
     );
-    this.name = 'ChangePlanCredentialError';
+    this.name = 'AdminProposalCredentialError';
     this.details = { suspectedSecretValues: count, suspectedSecretPaths: paths };
   }
 }
 
-/** F11: the administrator already proposed {@link CHANGE_PLAN_DAILY_LIMIT} plans since 00:00 UTC,
+/** F11: the administrator already proposed {@link ADMIN_PROPOSAL_DAILY_LIMIT} proposals since 00:00 UTC,
  *  across every trial workspace (withdrawn ones count). Mapped to 429
- *  `change_plan_quota_exceeded` with `details: { dailyLimit, resetsAt }`; nothing was written. */
-export class ChangePlanQuotaExceededError extends Error {
-  readonly code = 'change_plan_quota_exceeded' as const;
+ *  `admin_proposal_quota_exceeded` with `details: { dailyLimit, resetsAt }`; nothing was written. */
+export class AdminProposalQuotaExceededError extends Error {
+  readonly code = 'admin_proposal_quota_exceeded' as const;
   readonly details: { readonly dailyLimit: number; readonly resetsAt: string };
   constructor(resetsAt: string) {
     super(
-      `your administrator has proposed ${CHANGE_PLAN_DAILY_LIMIT} change plans today (UTC), the daily limit — nothing was proposed. The count starts again at ${resetsAt}.`,
+      `your administrator has proposed ${ADMIN_PROPOSAL_DAILY_LIMIT} admin proposals today (UTC), the daily limit — nothing was proposed. The count starts again at ${resetsAt}.`,
     );
-    this.name = 'ChangePlanQuotaExceededError';
-    this.details = { dailyLimit: CHANGE_PLAN_DAILY_LIMIT, resetsAt };
+    this.name = 'AdminProposalQuotaExceededError';
+    this.details = { dailyLimit: ADMIN_PROPOSAL_DAILY_LIMIT, resetsAt };
   }
 }
 
 /** A problem with what a proposal holds, by where in it (`segments[1].items[0].skill.name`). */
-export interface ChangePlanProposalProblem {
+export interface AdminProposalProblem {
   readonly path: string;
   readonly message: string;
 }
@@ -113,36 +113,36 @@ export interface ChangePlanProposalProblem {
  *  in a segment, content that would not publish, a source name a shipped pack has. Mapped to 400
  *  `invalid_params` with `details.problems` (each a path and why — never a value from the content);
  *  nothing was written. */
-export class ChangePlanProposalInvalidError extends Error {
-  readonly problems: readonly ChangePlanProposalProblem[];
-  constructor(problems: readonly ChangePlanProposalProblem[]) {
+export class AdminProposalInvalidError extends Error {
+  readonly problems: readonly AdminProposalProblem[];
+  constructor(problems: readonly AdminProposalProblem[]) {
     super(
-      `the change plan cannot be proposed as written — ${problems.map((p) => `${p.path}: ${p.message}`).join('; ')}. Nothing was proposed.`,
+      `the admin proposal cannot be made as written — ${problems.map((p) => `${p.path}: ${p.message}`).join('; ')}. Nothing was proposed.`,
     );
-    this.name = 'ChangePlanProposalInvalidError';
+    this.name = 'AdminProposalInvalidError';
     this.problems = problems;
   }
 }
 
-/** No plan by that id the caller may read: on the agent's side, any plan but one its own
- *  administrator proposed in this trial workspace (F12). Mapped to 404 `change_plan_not_found`. */
-export class ChangePlanNotFoundError extends Error {
-  readonly code = 'change_plan_not_found' as const;
-  constructor(planId: string) {
-    super(`change plan ${planId} not found`);
-    this.name = 'ChangePlanNotFoundError';
+/** No proposal by that id the caller may read: on the agent's side, any proposal but one its own
+ *  administrator proposed in this trial workspace (F12). Mapped to 404 `admin_proposal_not_found`. */
+export class AdminProposalNotFoundError extends Error {
+  readonly code = 'admin_proposal_not_found' as const;
+  constructor(proposalId: string) {
+    super(`admin proposal ${proposalId} not found`);
+    this.name = 'AdminProposalNotFoundError';
   }
 }
 
-/** Withdrawing a plan with no segment still proposed. Mapped to 409 `change_plan_not_open`;
+/** Withdrawing a proposal with no segment still proposed. Mapped to 409 `admin_proposal_not_open`;
  *  nothing was written. */
-export class ChangePlanNotOpenError extends Error {
-  readonly code = 'change_plan_not_open' as const;
-  constructor(planId: string) {
+export class AdminProposalNotOpenError extends Error {
+  readonly code = 'admin_proposal_not_open' as const;
+  constructor(proposalId: string) {
     super(
-      `change plan ${planId} has no segment still proposed — each was applied, rejected or withdrawn already, or its workspace is gone; nothing was withdrawn`,
+      `admin proposal ${proposalId} has no segment still proposed — each was applied, rejected or withdrawn already, or its workspace is gone; nothing was withdrawn`,
     );
-    this.name = 'ChangePlanNotOpenError';
+    this.name = 'AdminProposalNotOpenError';
   }
 }
 
@@ -150,16 +150,16 @@ export class ChangePlanNotOpenError extends Error {
 // Checking a proposal (pure)
 // -------------------------------------------------------------------------------------------
 
-export interface ChangePlanProposalInput {
+export interface AdminProposalInput {
   readonly title: string;
   readonly description?: string;
   readonly sourceName: string;
-  readonly segments: readonly ChangePlanSegmentProposalWire[];
+  readonly segments: readonly AdminProposalSegmentInputWire[];
 }
 
 /** The target an item changes in a workspace, as a key (two items for one target in a segment are
  *  refused: the second would overwrite what the first proposes). */
-function itemTargetKey(item: ChangePlanItemIntentWire): string | null {
+function itemTargetKey(item: AdminProposalItemIntentWire): string | null {
   switch (item.kind) {
     case 'skill_version':
       return `skill:${item.skill.name}`;
@@ -174,7 +174,7 @@ function itemTargetKey(item: ChangePlanItemIntentWire): string | null {
   }
 }
 
-/** The fields of a Worker that are its workspace's own: a plan never sets them, as a pack never
+/** The fields of a Worker that are its workspace's own: a proposal never sets them, as a pack never
  *  ships them (application/packs `WORKSPACE_OWNED_WORKER_FIELDS`; not imported — packs installs
  *  through this module). */
 const WORKSPACE_OWNED_WORKER_FIELDS = ['gates', 'model'] as const;
@@ -182,10 +182,10 @@ const WORKSPACE_OWNED_WORKER_FIELDS = ['gates', 'model'] as const;
 /** One item's content as publishing it would check it, and the item as stored (a Worker's
  *  definition parsed, so normalized like a pack's). */
 function checkItem(
-  item: ChangePlanItemIntentWire,
+  item: AdminProposalItemIntentWire,
   at: string,
-  problems: ChangePlanProposalProblem[],
-): ChangePlanItemIntentWire {
+  problems: AdminProposalProblem[],
+): AdminProposalItemIntentWire {
   if (item.kind === 'skill_version') {
     try {
       validateSkillContent(item.skill);
@@ -199,14 +199,14 @@ function checkItem(
     for (const field of owned) {
       problems.push({
         path: `${at}.definition.${field}`,
-        message: `a plan never sets a Worker's ${field}: the workspace that applies it keeps its own`,
+        message: `a proposal never sets a Worker's ${field}: the workspace that applies it keeps its own`,
       });
     }
     if (typeof item.definition.name !== 'string' || item.definition.name.length === 0) {
       problems.push({
         path: `${at}.definition.name`,
         message:
-          'a Worker in a plan is named: its name is how each workspace finds its own version',
+          'a Worker in a proposal is named: its name is how each workspace finds its own version',
       });
     }
     const parsed = workerDefinitionContentSchemaFor('worker').safeParse(item.definition);
@@ -227,29 +227,29 @@ function checkItem(
 
 /**
  * Everything about a proposal that needs no database: credentials and the redaction mark first
- * (their errors name places only), then the plan's shape. Returns the segments as they will be
+ * (their errors name places only), then the proposal's shape. Returns the segments as they will be
  * stored. `shippedPackNames`: the packs this deployment ships (the gateway reads the registry), a
- * name the plan's own Skills and Workers must not be derived under.
+ * name the proposal's own Skills and Workers must not be derived under.
  */
-export function checkChangePlanProposal(
-  input: ChangePlanProposalInput,
+export function checkAdminProposal(
+  input: AdminProposalInput,
   shippedPackNames: ReadonlySet<string>,
-): readonly ChangePlanSegmentProposalWire[] {
+): readonly AdminProposalSegmentInputWire[] {
   const credentials = findCredentialValues(input);
   if (credentials.count > 0) {
-    throw new ChangePlanCredentialError(credentials.count, credentials.paths);
+    throw new AdminProposalCredentialError(credentials.count, credentials.paths);
   }
-  // Spelled from the document's name, as a goal plan's are (`RedactedTextSubmittedError` names
+  // Spelled from the document's name, as a goal proposal's are (`RedactedTextSubmittedError` names
   // the document by the first segment of `field`).
-  const redacted = redactedPathsIn(input).map((path) => `plan.${path}`);
+  const redacted = redactedPathsIn(input).map((path) => `proposal.${path}`);
   if (redacted.length > 0) throw new RedactedTextSubmittedError(redacted[0] as string, redacted);
 
-  const problems: ChangePlanProposalProblem[] = [];
+  const problems: AdminProposalProblem[] = [];
   if (shippedPackNames.has(input.sourceName)) {
     problems.push({
       path: 'sourceName',
       message:
-        'is the name of a pack this deployment ships: a plan names its Skills and Workers under a name of its own',
+        'is the name of a pack this deployment ships: a proposal names its Skills and Workers under a name of its own',
     });
   }
   const targets = new Map<string, number>();
@@ -280,18 +280,18 @@ export function checkChangePlanProposal(
     });
     return { targetWorkspaceId: segment.targetWorkspaceId, items };
   });
-  if (problems.length > 0) throw new ChangePlanProposalInvalidError(problems);
+  if (problems.length > 0) throw new AdminProposalInvalidError(problems);
   return segments;
 }
 
 /** `sha256:` of what a segment proposes: its target and its items. */
-export function changePlanSegmentDigest(segment: ChangePlanSegmentProposalWire): string {
+export function adminProposalSegmentDigest(segment: AdminProposalSegmentInputWire): string {
   return contentDigest({ targetWorkspaceId: segment.targetWorkspaceId, items: segment.items });
 }
 
-/** `sha256:` of what a plan proposes: its title, description, source name and each segment's
+/** `sha256:` of what a proposal holds: its title, description, source name and each segment's
  *  digest, in order. */
-export function changePlanDigest(input: {
+export function adminProposalDigest(input: {
   readonly title: string;
   readonly description: string;
   readonly sourceName: string;
@@ -306,7 +306,7 @@ export function changePlanDigest(input: {
 }
 
 /** The next 00:00 UTC after `now`, when F11's count starts again. */
-export function changePlanQuotaResetsAt(now: Date): string {
+export function adminProposalQuotaResetsAt(now: Date): string {
   return new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
   ).toISOString();
@@ -318,19 +318,19 @@ export function changePlanQuotaResetsAt(now: Date): string {
 
 /** Who proposes: the admin agent's session, and its administrator — their Principal in the trial
  *  workspace (the Handle's `obo`) and their platform user. */
-export interface ChangePlanProposer {
+export interface AdminProposalProposer {
   readonly workspaceId: string;
   readonly principalId: string;
   readonly userId: string;
   readonly sessionId: string;
 }
 
-/** F10: the first segment whose target cannot take a plan, or none. One read of each, the same
+/** F10: the first segment whose target cannot take a proposal, or none. One read of each, the same
  *  answer for unknown, disabled and trial (`workspaces` is readable by every transaction, core
  *  0001). */
 async function firstUnavailableTarget(
   client: PoolClient,
-  segments: readonly ChangePlanSegmentProposalWire[],
+  segments: readonly AdminProposalSegmentInputWire[],
 ): Promise<number | undefined> {
   const ids = segments.map((segment) => segment.targetWorkspaceId);
   const result = await client.query<{ id: string }>(
@@ -344,30 +344,30 @@ async function firstUnavailableTarget(
 }
 
 /**
- * Proposes a plan in the trial workspace `proposer.workspaceId`, in the caller's transaction (the
+ * Makes a proposal in the trial workspace `proposer.workspaceId`, in the caller's transaction (the
  * dispatcher's, which then writes the call's audit row). `segments` are
- * {@link checkChangePlanProposal}'s. The order of the database checks: F11's count under the
+ * {@link checkAdminProposal}'s. The order of the database checks: F11's count under the
  * administrator's lock, then the targets — so a refused proposal never counts, and two at the
  * limit cannot both pass.
  */
-export async function proposeChangePlan(
+export async function proposeAdminProposal(
   client: PoolClient,
-  proposer: ChangePlanProposer,
-  input: ChangePlanProposalInput,
-  segments: readonly ChangePlanSegmentProposalWire[],
-): Promise<ChangePlanWire> {
+  proposer: AdminProposalProposer,
+  input: AdminProposalInput,
+  segments: readonly AdminProposalSegmentInputWire[],
+): Promise<AdminProposalWire> {
   await client.query('select pg_advisory_xact_lock($1, hashtext($2::text))', [
-    ADVISORY_LOCK_NAMESPACES.changePlanQuota,
+    ADVISORY_LOCK_NAMESPACES.adminProposalQuota,
     proposer.userId,
   ]);
   const today = await client.query<{ count: number }>(
-    'select change_plans_proposed_today() as count',
+    'select admin_proposals_proposed_today() as count',
   );
-  if ((today.rows[0]?.count ?? 0) >= CHANGE_PLAN_DAILY_LIMIT) {
-    throw new ChangePlanQuotaExceededError(changePlanQuotaResetsAt(new Date()));
+  if ((today.rows[0]?.count ?? 0) >= ADMIN_PROPOSAL_DAILY_LIMIT) {
+    throw new AdminProposalQuotaExceededError(adminProposalQuotaResetsAt(new Date()));
   }
   const unavailable = await firstUnavailableTarget(client, segments);
-  if (unavailable !== undefined) throw new ChangePlanTargetUnavailableError(unavailable);
+  if (unavailable !== undefined) throw new AdminProposalTargetUnavailableError(unavailable);
 
   const user = await client.query<{ display_name: string }>(
     'select display_name from users where id = $1',
@@ -375,15 +375,15 @@ export async function proposeChangePlan(
   );
   const displayName = (user.rows[0]?.display_name ?? '').slice(0, 200) || proposer.userId;
   const description = input.description ?? '';
-  const segmentDigests = segments.map(changePlanSegmentDigest);
-  const digest = changePlanDigest({
+  const segmentDigests = segments.map(adminProposalSegmentDigest);
+  const digest = adminProposalDigest({
     title: input.title,
     description,
     sourceName: input.sourceName,
     segmentDigests,
   });
-  const plan = await client.query<{ id: string }>(
-    `insert into change_plans
+  const proposal = await client.query<{ id: string }>(
+    `insert into admin_proposals
        (workspace_id, proposed_by, proposed_by_user, proposer_display_name, session_id, origin,
         title, description, source_name, content_digest)
      values ($1, $2, $3, $4, $5, 'agent', $6, $7, $8, $9)
@@ -400,16 +400,16 @@ export async function proposeChangePlan(
       digest,
     ],
   );
-  const planId = plan.rows[0]?.id;
-  if (planId === undefined) throw new Error('proposeChangePlan: the insert returned no row');
+  const proposalId = proposal.rows[0]?.id;
+  if (proposalId === undefined) throw new Error('proposeAdminProposal: the insert returned no row');
   for (const [index, segment] of segments.entries()) {
     await client.query(
-      `insert into change_plan_segments
-         (workspace_id, plan_id, ordinal, authority, target_workspace_id, items, content_digest)
+      `insert into admin_proposal_segments
+         (workspace_id, proposal_id, ordinal, authority, target_workspace_id, items, content_digest)
        values ($1, $2, $3, 'workspace', $4, $5::jsonb, $6)`,
       [
         proposer.workspaceId,
-        planId,
+        proposalId,
         index + 1,
         segment.targetWorkspaceId,
         JSON.stringify(segment.items),
@@ -417,11 +417,12 @@ export async function proposeChangePlan(
       ],
     );
   }
-  const read = await readChangePlan(client, planId, {
+  const read = await readAdminProposal(client, proposalId, {
     workspaceId: proposer.workspaceId,
     reader: 'agent',
   });
-  if (read === null) throw new Error(`proposeChangePlan: plan ${planId} not readable after insert`);
+  if (read === null)
+    throw new Error(`proposeAdminProposal: proposal ${proposalId} not readable after insert`);
   return read;
 }
 
@@ -429,10 +430,10 @@ export async function proposeChangePlan(
 // Reads
 // -------------------------------------------------------------------------------------------
 
-/** Which plans a read sees, and who reads them. The agent: its administrator's
+/** Which proposals a read sees, and who reads them. The agent: its administrator's
  *  (`proposedByUser`) in its trial workspace (F12) — RLS already keeps it to the workspace's own.
  *  The platform plane: any. */
-export interface ChangePlanScope {
+export interface AdminProposalScope {
   readonly workspaceId?: string;
   readonly proposedByUser?: string;
   /** What a target workspace's owner writes stays with them and the platform's people (coordinator
@@ -442,7 +443,7 @@ export interface ChangePlanScope {
   readonly reader: 'agent' | 'platform';
 }
 
-interface PlanRow {
+interface ProposalRow {
   id: string;
   title: string;
   description: string;
@@ -464,18 +465,18 @@ interface SegmentRow {
   ordinal: number;
   authority: string;
   target_workspace_id: string | null;
-  items: ChangePlanItemIntentWire[];
+  items: AdminProposalItemIntentWire[];
   content_digest: string;
-  status: ChangePlanSegmentStatus;
+  status: AdminProposalSegmentStatus;
   decided_at: Date | null;
   withdrawn_origin: 'human' | 'agent' | null;
   reason: string | null;
   rolled_back_at: Date | null;
 }
 
-/** The plan status `changePlanStatusOf` derives, written in SQL over the counts below — for the
+/** The proposal status `adminProposalStatusOf` derives, written in SQL over the counts below — for the
  *  list's `status` filter, which must narrow before the limit. The integration tests read each
- *  status back through the wire, which derives it with `changePlanStatusOf` itself. */
+ *  status back through the wire, which derives it with `adminProposalStatusOf` itself. */
 const PLAN_STATUS_SQL = `case
     when c.applied > 0 and c.applied = c.total then 'applied'
     when c.applied > 0 then 'partially_applied'
@@ -487,7 +488,7 @@ const PLAN_SELECT = `
   select p.id, p.title, p.description, p.source_name, p.origin, p.proposed_by_user,
          p.proposer_display_name, p.content_digest, p.created_at,
          c.proposed, c.applied, c.rejected, c.withdrawn, c.rolled_back
-    from change_plans p
+    from admin_proposals p
     cross join lateral (
       select count(s.id)::int as total,
              (count(*) filter (where s.status = 'proposed'))::int as proposed,
@@ -495,11 +496,11 @@ const PLAN_SELECT = `
              (count(*) filter (where s.status = 'rejected'))::int as rejected,
              (count(*) filter (where s.status = 'withdrawn'))::int as withdrawn,
              (count(*) filter (where s.status = 'rolled_back'))::int as rolled_back
-        from change_plan_segments s
-       where s.workspace_id = p.workspace_id and s.plan_id = p.id
+        from admin_proposal_segments s
+       where s.workspace_id = p.workspace_id and s.proposal_id = p.id
     ) c`;
 
-function scopeFilter(scope: ChangePlanScope, values: unknown[]): string {
+function scopeFilter(scope: AdminProposalScope, values: unknown[]): string {
   const where: string[] = [];
   if (scope.workspaceId !== undefined) {
     values.push(scope.workspaceId);
@@ -512,25 +513,25 @@ function scopeFilter(scope: ChangePlanScope, values: unknown[]): string {
   return where.join(' and ');
 }
 
-function statusesOf(row: PlanRow): ChangePlanSegmentStatus[] {
+function statusesOf(row: ProposalRow): AdminProposalSegmentStatus[] {
   return [
-    ...Array<ChangePlanSegmentStatus>(row.proposed).fill('proposed'),
-    ...Array<ChangePlanSegmentStatus>(row.applied).fill('applied'),
-    ...Array<ChangePlanSegmentStatus>(row.rejected).fill('rejected'),
-    ...Array<ChangePlanSegmentStatus>(row.withdrawn).fill('withdrawn'),
-    ...Array<ChangePlanSegmentStatus>(row.rolled_back).fill('rolled_back'),
+    ...Array<AdminProposalSegmentStatus>(row.proposed).fill('proposed'),
+    ...Array<AdminProposalSegmentStatus>(row.applied).fill('applied'),
+    ...Array<AdminProposalSegmentStatus>(row.rejected).fill('rejected'),
+    ...Array<AdminProposalSegmentStatus>(row.withdrawn).fill('withdrawn'),
+    ...Array<AdminProposalSegmentStatus>(row.rolled_back).fill('rolled_back'),
   ];
 }
 
-function summaryOf(row: PlanRow): ChangePlanSummaryWire {
+function summaryOf(row: ProposalRow): AdminProposalSummaryWire {
   return {
     id: row.id,
     title: row.title,
     sourceName: row.source_name,
-    origin: row.origin as ChangePlanSummaryWire['origin'],
+    origin: row.origin as AdminProposalSummaryWire['origin'],
     proposedBy: { userId: row.proposed_by_user, displayName: row.proposer_display_name },
     proposedAt: row.created_at.toISOString(),
-    status: changePlanStatusOf(statusesOf(row)),
+    status: adminProposalStatusOf(statusesOf(row)),
     segmentCounts: {
       proposed: row.proposed,
       applied: row.applied,
@@ -541,11 +542,14 @@ function summaryOf(row: PlanRow): ChangePlanSummaryWire {
   };
 }
 
-function segmentOf(row: SegmentRow, reader: ChangePlanScope['reader']): ChangePlanSegmentWire {
+function segmentOf(
+  row: SegmentRow,
+  reader: AdminProposalScope['reader'],
+): AdminProposalSegmentWire {
   return {
     id: row.id,
     ordinal: row.ordinal,
-    authority: row.authority as ChangePlanSegmentWire['authority'],
+    authority: row.authority as AdminProposalSegmentWire['authority'],
     targetWorkspaceId: row.target_workspace_id,
     items: row.items,
     contentDigest: row.content_digest,
@@ -557,52 +561,52 @@ function segmentOf(row: SegmentRow, reader: ChangePlanScope['reader']): ChangePl
   };
 }
 
-/** The plans `scope` sees, newest first, at most {@link CHANGE_PLAN_LIST_LIMIT} (`truncated` when
+/** The proposals `scope` sees, newest first, at most {@link ADMIN_PROPOSAL_LIST_LIMIT} (`truncated` when
  *  there are more), narrowed to one derived `status` when given. */
-export async function listChangePlans(
+export async function listAdminProposals(
   client: PoolClient,
-  scope: ChangePlanScope,
-  status?: ChangePlanStatus,
-): Promise<ListEnvelope<ChangePlanSummaryWire>> {
+  scope: AdminProposalScope,
+  status?: AdminProposalStatus,
+): Promise<ListEnvelope<AdminProposalSummaryWire>> {
   const values: unknown[] = [];
   const conditions = [scopeFilter(scope, values)].filter((condition) => condition !== '');
   if (status !== undefined) {
     values.push(status);
     conditions.push(`${PLAN_STATUS_SQL} = $${values.length}`);
   }
-  values.push(CHANGE_PLAN_LIST_LIMIT + 1);
-  const result = await client.query<PlanRow>(
+  values.push(ADMIN_PROPOSAL_LIST_LIMIT + 1);
+  const result = await client.query<ProposalRow>(
     `${PLAN_SELECT}
      ${conditions.length > 0 ? `where ${conditions.join(' and ')}` : ''}
      order by p.created_at desc, p.id
      limit $${values.length}`,
     values,
   );
-  const items = result.rows.slice(0, CHANGE_PLAN_LIST_LIMIT).map(summaryOf);
-  return result.rows.length > CHANGE_PLAN_LIST_LIMIT ? { items, truncated: true } : { items };
+  const items = result.rows.slice(0, ADMIN_PROPOSAL_LIST_LIMIT).map(summaryOf);
+  return result.rows.length > ADMIN_PROPOSAL_LIST_LIMIT ? { items, truncated: true } : { items };
 }
 
-/** One plan with its segments in order, or `null` when `scope` does not see it. */
-export async function readChangePlan(
+/** One proposal with its segments in order, or `null` when `scope` does not see it. */
+export async function readAdminProposal(
   client: PoolClient,
-  planId: string,
-  scope: ChangePlanScope,
-): Promise<ChangePlanWire | null> {
-  const values: unknown[] = [planId];
+  proposalId: string,
+  scope: AdminProposalScope,
+): Promise<AdminProposalWire | null> {
+  const values: unknown[] = [proposalId];
   const filter = scopeFilter(scope, values);
-  const plan = await client.query<PlanRow>(
+  const proposal = await client.query<ProposalRow>(
     `${PLAN_SELECT} where p.id = $1${filter === '' ? '' : ` and ${filter}`}`,
     values,
   );
-  const row = plan.rows[0];
+  const row = proposal.rows[0];
   if (row === undefined) return null;
   const segments = await client.query<SegmentRow>(
     `select id, ordinal, authority, target_workspace_id, items, content_digest, status,
             decided_at, withdrawn_origin, reason, rolled_back_at
-       from change_plan_segments
-      where plan_id = $1
+       from admin_proposal_segments
+      where proposal_id = $1
       order by ordinal`,
-    [planId],
+    [proposalId],
   );
   return {
     ...summaryOf(row),
@@ -612,15 +616,15 @@ export async function readChangePlan(
   };
 }
 
-/** {@link readChangePlan}, or {@link ChangePlanNotFoundError}. */
-export async function getChangePlan(
+/** {@link readAdminProposal}, or {@link AdminProposalNotFoundError}. */
+export async function getAdminProposal(
   client: PoolClient,
-  planId: string,
-  scope: ChangePlanScope,
-): Promise<ChangePlanWire> {
-  const plan = await readChangePlan(client, planId, scope);
-  if (plan === null) throw new ChangePlanNotFoundError(planId);
-  return plan;
+  proposalId: string,
+  scope: AdminProposalScope,
+): Promise<AdminProposalWire> {
+  const proposal = await readAdminProposal(client, proposalId, scope);
+  if (proposal === null) throw new AdminProposalNotFoundError(proposalId);
+  return proposal;
 }
 
 // -------------------------------------------------------------------------------------------
@@ -628,35 +632,35 @@ export async function getChangePlan(
 // -------------------------------------------------------------------------------------------
 
 /**
- * Withdraws every segment of `planId` still proposed, as `userId` — the administrator through their
- * agent (in the trial workspace, `scope` their own plans) or a platform administrator on the
+ * Withdraws every segment of `proposalId` still proposed, as `userId` — the administrator through their
+ * agent (in the trial workspace, `scope` their own proposals) or a platform administrator on the
  * platform plane. The guard derives the channel (`withdrawn_origin`) from where the transaction
  * runs and stamps the time. Segments already decided keep their status; with none left proposed,
- * {@link ChangePlanNotOpenError}. Returns the plan as it now reads.
+ * {@link AdminProposalNotOpenError}. Returns the proposal as it now reads.
  */
-export async function withdrawChangePlan(
+export async function withdrawAdminProposal(
   client: PoolClient,
-  planId: string,
-  scope: ChangePlanScope,
+  proposalId: string,
+  scope: AdminProposalScope,
   userId: string,
   reason: string | undefined,
-): Promise<ChangePlanWire> {
-  await getChangePlan(client, planId, scope);
+): Promise<AdminProposalWire> {
+  await getAdminProposal(client, proposalId, scope);
   // Each open segment under its row lock, so a concurrent apply (AA3b-2) or withdrawal waits and
   // then sees the status this one leaves.
   const open = await client.query<{ id: string }>(
-    `select id from change_plan_segments
-      where plan_id = $1 and status = 'proposed'
+    `select id from admin_proposal_segments
+      where proposal_id = $1 and status = 'proposed'
       order by ordinal
       for update`,
-    [planId],
+    [proposalId],
   );
-  if (open.rows.length === 0) throw new ChangePlanNotOpenError(planId);
+  if (open.rows.length === 0) throw new AdminProposalNotOpenError(proposalId);
   await client.query(
-    `update change_plan_segments
+    `update admin_proposal_segments
         set status = 'withdrawn', withdrawn_by_user = $2, reason = $3
       where id = any($1::uuid[]) and status = 'proposed'`,
     [open.rows.map((row) => row.id), userId, reason ?? null],
   );
-  return getChangePlan(client, planId, scope);
+  return getAdminProposal(client, proposalId, scope);
 }

@@ -2020,20 +2020,20 @@
   {
     "adminAgentOnly": true,
     "channel": "handle",
-    "group": "change_plan",
+    "group": "admin_proposal",
     "mode": "observe",
-    "name": "agent_get_change_plan",
+    "name": "agent_get_admin_proposal",
     "params": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
-        "planId": {
+        "proposalId": {
           "format": "uuid",
           "type": "string"
         }
       },
       "required": [
-        "planId"
+        "proposalId"
       ],
       "type": "object"
     },
@@ -2519,9 +2519,9 @@
   {
     "adminAgentOnly": true,
     "channel": "handle",
-    "group": "change_plan",
+    "group": "admin_proposal",
     "mode": "observe",
-    "name": "agent_list_change_plans",
+    "name": "agent_list_admin_proposals",
     "params": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
@@ -2647,14 +2647,14 @@
   {
     "adminAgentOnly": true,
     "channel": "handle",
-    "group": "change_plan",
+    "group": "admin_proposal",
     "mode": "write",
-    "name": "agent_withdraw_change_plan",
+    "name": "agent_withdraw_admin_proposal",
     "params": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
-        "planId": {
+        "proposalId": {
           "format": "uuid",
           "type": "string"
         },
@@ -2665,7 +2665,7 @@
         }
       },
       "required": [
-        "planId"
+        "proposalId"
       ],
       "type": "object"
     },
@@ -13599,256 +13599,20 @@
   },
   {
     "channel": "human",
-    "group": "agent_profile",
-    "minRole": "member",
-    "mode": "observe",
-    "name": "get_agent_policy",
-    "params": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "additionalProperties": false,
-      "properties": {},
-      "type": "object"
-    },
-    "result": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "additionalProperties": false,
-      "properties": {
-        "allowMemberAutoApproveLow": {
-          "type": "boolean"
-        },
-        "allowedGatekeepers": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "allowedModels": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "allowedSkills": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "defaultModel": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "maxPromptAddendumChars": {
-          "exclusiveMinimum": 0,
-          "type": "integer"
-        },
-        "memberCanEditProfile": {
-          "type": "boolean"
-        },
-        "updatedAt": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "updatedBy": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "workspaceId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "workspaceId",
-        "allowedModels",
-        "defaultModel",
-        "memberCanEditProfile",
-        "maxPromptAddendumChars",
-        "allowedSkills",
-        "allowedGatekeepers",
-        "allowMemberAutoApproveLow",
-        "updatedAt",
-        "updatedBy"
-      ],
-      "type": "object"
-    },
-    "sideEffects": false
-  },
-  {
-    "channel": "human",
-    "group": "agent_profile",
-    "minRole": "member",
-    "mode": "observe",
-    "name": "get_agent_profile",
-    "params": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "additionalProperties": false,
-      "properties": {
-        "principalId": {
-          "minLength": 1,
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
-    "result": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "additionalProperties": false,
-      "properties": {
-        "autoApproveLow": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "availableGatekeepers": {
-          "items": {
-            "additionalProperties": false,
-            "properties": {
-              "gatekeeperId": {
-                "type": "string"
-              },
-              "granted": {
-                "type": "boolean"
-              },
-              "inUse": {
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "gatekeeperId",
-              "granted",
-              "inUse"
-            ],
-            "type": "object"
-          },
-          "type": "array"
-        },
-        "effective": {
-          "additionalProperties": false,
-          "properties": {
-            "autoApproveLow": {
-              "type": "boolean"
-            },
-            "enabledGatekeepers": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "enabledSkills": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "enabledWorkerDefinitions": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "model": {
-              "type": "string"
-            },
-            "promptAddendum": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "model",
-            "enabledSkills",
-            "enabledGatekeepers",
-            "enabledWorkerDefinitions",
-            "promptAddendum",
-            "autoApproveLow"
-          ],
-          "type": "object"
-        },
-        "excludedGatekeepers": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "excludedSkills": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "excludedWorkerDefinitions": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "principalId": {
-          "type": "string"
-        },
-        "promptAddendum": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "updatedAt": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "updatedBy": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "principalId",
-        "model",
-        "excludedSkills",
-        "excludedGatekeepers",
-        "excludedWorkerDefinitions",
-        "promptAddendum",
-        "autoApproveLow",
-        "updatedAt",
-        "updatedBy",
-        "availableGatekeepers",
-        "effective"
-      ],
-      "type": "object"
-    },
-    "sideEffects": false
-  },
-  {
-    "channel": "human",
     "group": "platform",
     "mode": "observe",
-    "name": "get_change_plan",
+    "name": "get_admin_proposal",
     "params": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
-        "planId": {
+        "proposalId": {
           "format": "uuid",
           "type": "string"
         }
       },
       "required": [
-        "planId"
+        "proposalId"
       ],
       "type": "object"
     },
@@ -14326,6 +14090,242 @@
         "description",
         "contentDigest",
         "segments"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "channel": "human",
+    "group": "agent_profile",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "get_agent_policy",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "allowMemberAutoApproveLow": {
+          "type": "boolean"
+        },
+        "allowedGatekeepers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "allowedModels": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "allowedSkills": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "defaultModel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "maxPromptAddendumChars": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "memberCanEditProfile": {
+          "type": "boolean"
+        },
+        "updatedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updatedBy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "allowedModels",
+        "defaultModel",
+        "memberCanEditProfile",
+        "maxPromptAddendumChars",
+        "allowedSkills",
+        "allowedGatekeepers",
+        "allowMemberAutoApproveLow",
+        "updatedAt",
+        "updatedBy"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "channel": "human",
+    "group": "agent_profile",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "get_agent_profile",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "principalId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "autoApproveLow": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "availableGatekeepers": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "gatekeeperId": {
+                "type": "string"
+              },
+              "granted": {
+                "type": "boolean"
+              },
+              "inUse": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "gatekeeperId",
+              "granted",
+              "inUse"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "effective": {
+          "additionalProperties": false,
+          "properties": {
+            "autoApproveLow": {
+              "type": "boolean"
+            },
+            "enabledGatekeepers": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "enabledSkills": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "enabledWorkerDefinitions": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "model": {
+              "type": "string"
+            },
+            "promptAddendum": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "model",
+            "enabledSkills",
+            "enabledGatekeepers",
+            "enabledWorkerDefinitions",
+            "promptAddendum",
+            "autoApproveLow"
+          ],
+          "type": "object"
+        },
+        "excludedGatekeepers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "excludedSkills": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "excludedWorkerDefinitions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "principalId": {
+          "type": "string"
+        },
+        "promptAddendum": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updatedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updatedBy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "principalId",
+        "model",
+        "excludedSkills",
+        "excludedGatekeepers",
+        "excludedWorkerDefinitions",
+        "promptAddendum",
+        "autoApproveLow",
+        "updatedAt",
+        "updatedBy",
+        "availableGatekeepers",
+        "effective"
       ],
       "type": "object"
     },
@@ -31883,6 +31883,143 @@
     "sideEffects": false
   },
   {
+    "channel": "human",
+    "group": "platform",
+    "mode": "observe",
+    "name": "list_admin_proposals",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "proposed",
+            "partially_applied",
+            "applied",
+            "closed"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "origin": {
+                "enum": [
+                  "human",
+                  "agent",
+                  "platform"
+                ],
+                "type": "string"
+              },
+              "proposedAt": {
+                "type": "string"
+              },
+              "proposedBy": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "type": "string"
+                  },
+                  "userId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "userId",
+                  "displayName"
+                ],
+                "type": "object"
+              },
+              "segmentCounts": {
+                "additionalProperties": false,
+                "properties": {
+                  "applied": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "proposed": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "rejected": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "rolledBack": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "withdrawn": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "proposed",
+                  "applied",
+                  "rejected",
+                  "withdrawn",
+                  "rolledBack"
+                ],
+                "type": "object"
+              },
+              "sourceName": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "proposed",
+                  "partially_applied",
+                  "applied",
+                  "closed"
+                ],
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "sourceName",
+              "origin",
+              "proposedBy",
+              "proposedAt",
+              "status",
+              "segmentCounts"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
     "channel": "handle",
     "group": "task",
     "mode": "observe",
@@ -32081,143 +32218,6 @@
             "required": [
               "name",
               "mode"
-            ],
-            "type": "object"
-          },
-          "type": "array"
-        },
-        "nextCursor": {
-          "type": "string"
-        },
-        "truncated": {
-          "const": true,
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "items"
-      ],
-      "type": "object"
-    },
-    "sideEffects": false
-  },
-  {
-    "channel": "human",
-    "group": "platform",
-    "mode": "observe",
-    "name": "list_change_plans",
-    "params": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "additionalProperties": false,
-      "properties": {
-        "status": {
-          "enum": [
-            "proposed",
-            "partially_applied",
-            "applied",
-            "closed"
-          ],
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
-    "result": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "additionalProperties": false,
-      "properties": {
-        "items": {
-          "items": {
-            "additionalProperties": false,
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "origin": {
-                "enum": [
-                  "human",
-                  "agent",
-                  "platform"
-                ],
-                "type": "string"
-              },
-              "proposedAt": {
-                "type": "string"
-              },
-              "proposedBy": {
-                "additionalProperties": false,
-                "properties": {
-                  "displayName": {
-                    "type": "string"
-                  },
-                  "userId": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "userId",
-                  "displayName"
-                ],
-                "type": "object"
-              },
-              "segmentCounts": {
-                "additionalProperties": false,
-                "properties": {
-                  "applied": {
-                    "minimum": 0,
-                    "type": "integer"
-                  },
-                  "proposed": {
-                    "minimum": 0,
-                    "type": "integer"
-                  },
-                  "rejected": {
-                    "minimum": 0,
-                    "type": "integer"
-                  },
-                  "rolledBack": {
-                    "minimum": 0,
-                    "type": "integer"
-                  },
-                  "withdrawn": {
-                    "minimum": 0,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "proposed",
-                  "applied",
-                  "rejected",
-                  "withdrawn",
-                  "rolledBack"
-                ],
-                "type": "object"
-              },
-              "sourceName": {
-                "type": "string"
-              },
-              "status": {
-                "enum": [
-                  "proposed",
-                  "partially_applied",
-                  "applied",
-                  "closed"
-                ],
-                "type": "string"
-              },
-              "title": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "title",
-              "sourceName",
-              "origin",
-              "proposedBy",
-              "proposedAt",
-              "status",
-              "segmentCounts"
             ],
             "type": "object"
           },
@@ -47924,9 +47924,9 @@
   {
     "adminAgentOnly": true,
     "channel": "handle",
-    "group": "change_plan",
+    "group": "admin_proposal",
     "mode": "propose",
-    "name": "propose_change_plan",
+    "name": "propose_admin_proposal",
     "params": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
@@ -67669,12 +67669,12 @@
     "channel": "human",
     "group": "platform",
     "mode": "write",
-    "name": "withdraw_change_plan",
+    "name": "withdraw_admin_proposal",
     "params": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
-        "planId": {
+        "proposalId": {
           "format": "uuid",
           "type": "string"
         },
@@ -67685,7 +67685,7 @@
         }
       },
       "required": [
-        "planId"
+        "proposalId"
       ],
       "type": "object"
     },

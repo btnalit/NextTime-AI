@@ -186,7 +186,7 @@ function buildEntryCeilingCapabilityNames(): readonly string[] {
   const names = new Set<string>();
   for (const capability of CAPABILITY_REGISTRY) {
     if (capability.channel !== 'handle') continue;
-    // S11 AA3b: `propose_change_plan` is an admin agent's only (`adminAgentOnly`), and no other
+    // S11 AA3b: `propose_admin_proposal` is an admin agent's only (`adminAgentOnly`), and no other
     // Handle carries one (`issueHandle`).
     if (capability.adminAgentOnly) continue;
     if (capability.group === 'graph' || capability.name.startsWith('propose_')) {
@@ -261,7 +261,7 @@ function buildWorkerCeilingCapabilityNames(): readonly string[] {
     // Human-channel names never reach a Handle (`assertValidScope`; see the entry ceiling above).
     if (capability.channel !== 'handle') continue;
     if (WORKER_CEILING_EXCLUDED_PROPOSE_NAMES.has(capability.name)) continue;
-    // S11 AA3b: as for the entry ceiling — `propose_change_plan` is an admin agent's only.
+    // S11 AA3b: as for the entry ceiling — `propose_admin_proposal` is an admin agent's only.
     if (capability.adminAgentOnly) continue;
     if (capability.group === 'graph' || capability.name.startsWith('propose_')) {
       names.add(capability.name);
@@ -425,9 +425,9 @@ export interface EntryScopeOptions {
  * Drafts (S11 AA3a, plan F3): the five draft proposals (`ADMIN_AGENT_CEILING_PROPOSALS`) — a
  * draft is private to its proposer until a person publishes it, over the human channel.
  *
- * Change plans (S11 AA3b, group `change_plan`, `adminAgentOnly`): a ChangePlan for the owners of
- * the workspaces it names to apply or reject (`propose_change_plan`), its own administrator's
- * plans read back, and withdrawing one. Nothing changes in a target workspace until its owner
+ * Admin proposals (S11 AA3b, group `admin_proposal`, `adminAgentOnly`): an admin proposal for the owners of
+ * the workspaces it names to apply or reject (`propose_admin_proposal`), its own administrator's
+ * proposals read back, and withdrawing one. Nothing changes in a target workspace until its owner
  * applies a segment there, in the console.
  *
  * Two rules hold it there, both checked when the module loads (`buildAdminAgentCeiling`):
@@ -437,9 +437,9 @@ export interface EntryScopeOptions {
  *      its handler records that — a draft's `origin` is `agent` through any Handle, an Operation
  *      draft's proposer kind is `agent` (worker/0013, core/0051, `draftOriginOf`) — and only by
  *      being named in `ADMIN_AGENT_CEILING_PROPOSALS`: no `record_decision`, `invoke_worker`,
- *      `request_connection` or report here. AA3b adds `propose_change_plan` the same way, and
- *      one write, `agent_withdraw_change_plan` (`ADMIN_AGENT_CEILING_WRITES`): taking back a
- *      plan it proposed, recorded `withdrawn_origin = 'agent'`.
+ *      `request_connection` or report here. AA3b adds `propose_admin_proposal` the same way, and
+ *      one write, `agent_withdraw_admin_proposal` (`ADMIN_AGENT_CEILING_WRITES`): taking back a
+ *      proposal it made, recorded `withdrawn_origin = 'agent'`.
  *   b) Approving, publishing, applying, rolling back and confirming an item are a person's acts in
  *      the console. Every one of them is human-channel (`assertValidScope` refuses those in any
  *      Handle), and the dispatcher refuses an `admin_agent` session's call to anything outside
@@ -492,12 +492,12 @@ const ADMIN_AGENT_CEILING_CAPABILITY_NAMES = [
   'platform_state_runtime',
   'platform_state_updates',
   'platform_state_invariants',
-  // change plans (S11 AA3b): what it proposes for people to apply elsewhere, from its trial
-  // workspace, and its own administrator's plans read back (`adminAgentOnly`)
-  'propose_change_plan',
-  'agent_list_change_plans',
-  'agent_get_change_plan',
-  'agent_withdraw_change_plan',
+  // admin proposals (S11 AA3b): what it proposes for people to apply elsewhere, from its trial
+  // workspace, and its own administrator's proposals read back (`adminAgentOnly`)
+  'propose_admin_proposal',
+  'agent_list_admin_proposals',
+  'agent_get_admin_proposal',
+  'agent_withdraw_admin_proposal',
 ] as const;
 
 /** The registry groups an admin-agent capability may come from. `governance` (`request_action`),
@@ -513,7 +513,7 @@ const ADMIN_AGENT_CEILING_GROUPS: ReadonlySet<string> = new Set([
   'task',
   'gate',
   'platform_state',
-  'change_plan',
+  'admin_proposal',
 ]);
 
 /** The ceiling's propose-class capabilities (S11 AA3a): each writes a private draft whose `origin`
@@ -526,16 +526,16 @@ const ADMIN_AGENT_CEILING_PROPOSALS: ReadonlySet<string> = new Set([
   'propose_worker_definition',
   'propose_operation',
   'propose_ontology_change',
-  // S11 AA3b: a ChangePlan, `origin = 'agent'` always (migrations/governance/0032).
-  'propose_change_plan',
+  // S11 AA3b: an admin proposal, `origin = 'agent'` always (migrations/governance/0032).
+  'propose_admin_proposal',
 ]);
 
-/** The ceiling's write-mode capabilities (S11 AA3b): withdrawing a ChangePlan its administrator
+/** The ceiling's write-mode capabilities (S11 AA3b): withdrawing an admin proposal its administrator
  *  proposed — the one write that is not a proposal. Its record says an agent made it: the segment
  *  guard derives `withdrawn_origin = 'agent'` from the trial workspace's transaction
  *  (migrations/governance/0032), and it only ever takes back what the agent itself offered. A
  *  literal list as the ceiling is. */
-const ADMIN_AGENT_CEILING_WRITES: ReadonlySet<string> = new Set(['agent_withdraw_change_plan']);
+const ADMIN_AGENT_CEILING_WRITES: ReadonlySet<string> = new Set(['agent_withdraw_admin_proposal']);
 
 /** The ceiling's observe-class capabilities that declare side effects (`sideEffects: true`): the
  *  observe-class gate calls, which record their observation. The `propose_*` drafts above write

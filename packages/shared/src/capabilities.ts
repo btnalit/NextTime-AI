@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { GateAbsenceSchema } from './action-description.js';
 import {
-  ChangePlanStatusSchema,
+  AdminProposalStatusSchema,
   ConflictStatusSchema,
   ConnectionRequestStatusSchema,
   DraftKindSchema,
@@ -125,12 +125,12 @@ export const CAPABILITY_GROUP_VALUES = [
   // (`assertRegistryConsistent`): no other caller, a platform administrator in the console
   // included, reaches them (the console has the `platform` group's own reads).
   'platform_state',
-  // S11 AA3b (plan §3.1–§3.3, §5.4, F12): what an admin agent proposes for people to apply — a
-  // ChangePlan from its trial workspace — and its reads of what it proposed. Every member is
+  // S11 AA3b (plan §3.1–§3.3, §5.4, F12): what an admin agent proposes for people to apply — an
+  // admin proposal from its trial workspace — and its reads of what it proposed. Every member is
   // `adminAgentOnly` (`assertRegistryConsistent`); a platform administrator in the console reads
-  // and withdraws plans through the `platform` group's own `list_change_plans` / `get_change_plan`
-  // / `withdraw_change_plan`.
-  'change_plan',
+  // and withdraws proposals through the `platform` group's own `list_admin_proposals` / `get_admin_proposal`
+  // / `withdraw_admin_proposal`.
+  'admin_proposal',
 ] as const;
 export type CapabilityGroup = (typeof CAPABILITY_GROUP_VALUES)[number];
 export const CapabilityGroupSchema = z.enum(CAPABILITY_GROUP_VALUES);
@@ -209,7 +209,7 @@ export interface Capability {
    * Call`), any other Handle (dispatch, whatever its scope), and no other session kind's Handle is
    * issued with it (`issueHandle`, `issue_service_handle`). Only two groups carry it, handle-
    * channel (`assertRegistryConsistent`): `platform_state`, observe-mode and side-effect free, and
-   * `change_plan` (S11 AA3b), the change plans it proposes. Absent = any caller the rest of the
+   * `admin_proposal` (S11 AA3b), the admin proposals it makes. Absent = any caller the rest of the
    * entry admits.
    */
   readonly adminAgentOnly?: true;
@@ -4114,47 +4114,47 @@ const platformCapabilities = [
     description:
       'Set the module family names `create_workspace` installs (each at its own latest version) into every new workspace. Every name must already be in `list_modules` — an unknown name 400s rather than being silently kept.',
   },
-  // S11 AA3b (plan F12): the change plans admin agents proposed, as platform administrators read
-  // them — every plan, across trial workspaces — and withdrawing one. The agent reads its own
-  // through the `change_plan` group (`agent_list_change_plans` / `agent_get_change_plan`); the
+  // S11 AA3b (plan F12): the admin proposals admin agents made, as platform administrators read
+  // them — every proposal, across trial workspaces — and withdrawing one. The agent reads its own
+  // through the `admin_proposal` group (`agent_list_admin_proposals` / `agent_get_admin_proposal`); the
   // owners of the target workspaces decide the segments (AA3b-2).
   {
-    name: 'list_change_plans',
+    name: 'list_admin_proposals',
     group: 'platform',
     mode: 'observe',
     channel: 'human',
     scope: 'platform',
-    paramsSchema: z.object({ status: ChangePlanStatusSchema.optional() }).strict(),
-    resultSchema: listEnvelope(wire.ChangePlanSummaryWireSchema),
+    paramsSchema: z.object({ status: AdminProposalStatusSchema.optional() }).strict(),
+    resultSchema: listEnvelope(wire.AdminProposalSummaryWireSchema),
     description:
-      'The change plans admin agents proposed from their trial workspaces, newest first (at most 100; truncated says there are more): each with its title, source name, the administrator whose agent proposed it, when, its status — proposed (a segment awaits its decision, none applied), partially_applied, applied, closed (nothing awaits, nothing applied) — and how many segments are in each status. status narrows to one.',
+      'The admin proposals admin agents made from their trial workspaces, newest first (at most 100; truncated says there are more): each with its title, source name, the administrator whose agent proposed it, when, its status — proposed (a segment awaits its decision, none applied), partially_applied, applied, closed (nothing awaits, nothing applied) — and how many segments are in each status. status narrows to one.',
   },
   {
-    name: 'get_change_plan',
+    name: 'get_admin_proposal',
     group: 'platform',
     mode: 'observe',
     channel: 'human',
     scope: 'platform',
-    paramsSchema: z.object({ planId: z.guid() }).strict(),
-    resultSchema: wire.ChangePlanWireSchema,
+    paramsSchema: z.object({ proposalId: z.guid() }).strict(),
+    resultSchema: wire.AdminProposalWireSchema,
     description:
-      'One change plan with its description, digest and segments in order: for each the workspace it is for, its items as proposed (workspace-agnostic intents: a Skill or Worker by name, an ontology family by name, an Operation by gate and name), its digest, status, when it was decided, and the reason given when it was rejected or withdrawn (an owner’s reason for a rejection reaches platform administrators only, never the agent). Not what a target workspace’s dry run found there, nor who decided a segment. 404 change_plan_not_found.',
+      'One admin proposal with its description, digest and segments in order: for each the workspace it is for, its items as proposed (workspace-agnostic intents: a Skill or Worker by name, an ontology family by name, an Operation by gate and name), its digest, status, when it was decided, and the reason given when it was rejected or withdrawn (an owner’s reason for a rejection reaches platform administrators only, never the agent). Not what a target workspace’s dry run found there, nor who decided a segment. 404 admin_proposal_not_found.',
   },
   {
-    name: 'withdraw_change_plan',
+    name: 'withdraw_admin_proposal',
     group: 'platform',
     mode: 'write',
     channel: 'human',
     scope: 'platform',
     paramsSchema: z
       .object({
-        planId: z.guid(),
-        reason: z.string().trim().min(1).max(wire.CHANGE_PLAN_REASON_MAX_LENGTH).optional(),
+        proposalId: z.guid(),
+        reason: z.string().trim().min(1).max(wire.ADMIN_PROPOSAL_REASON_MAX_LENGTH).optional(),
       })
       .strict(),
-    resultSchema: wire.ChangePlanWireSchema,
+    resultSchema: wire.AdminProposalWireSchema,
     description:
-      'Withdraw a change plan: every segment still proposed becomes withdrawn (by this administrator, in the console), with the reason when one is given; segments already applied, rejected or withdrawn keep their status — rolling back an applied one is its workspace owner’s. One withdraw_change_plan platform audit row. 409 change_plan_not_open when no segment is still proposed; 404 change_plan_not_found.',
+      'Withdraw an admin proposal: every segment still proposed becomes withdrawn (by this administrator, in the console), with the reason when one is given; segments already applied, rejected or withdrawn keep their status — rolling back an applied one is its workspace owner’s. One withdraw_admin_proposal platform audit row. 409 admin_proposal_not_open when no segment is still proposed; 404 admin_proposal_not_found.',
   },
 ] as const satisfies readonly Capability[];
 
@@ -5147,69 +5147,69 @@ const platformStateCapabilities = [
 ] as const satisfies readonly Capability[];
 
 // S11 AA3b — what an admin agent proposes for people to apply (`adminAgentOnly`; group
-// `change_plan`; plan §3.1–§3.3, F4 / F5 / F9–F12). From its trial workspace only (I-A6), for its
-// administrator: the plan is the trial workspace's record, its segments are offered to the owners
+// `admin_proposal`; plan §3.1–§3.3, F4 / F5 / F9–F12). From its trial workspace only (I-A6), for its
+// administrator: the proposal is the trial workspace's record, its segments are offered to the owners
 // of the workspaces they name, and nothing changes anywhere until one of them applies a segment
 // (AA3b-2). The agent reads back what it proposed and what became of it, and may withdraw it.
-const changePlanCapabilities = [
+const adminProposalCapabilities = [
   {
-    name: 'propose_change_plan',
-    group: 'change_plan',
+    name: 'propose_admin_proposal',
+    group: 'admin_proposal',
     mode: 'propose',
     channel: 'handle',
     adminAgentOnly: true,
     paramsSchema: z
       .object({
-        title: z.string().trim().min(1).max(wire.CHANGE_PLAN_TITLE_MAX_LENGTH),
-        description: z.string().max(wire.CHANGE_PLAN_DESCRIPTION_MAX_LENGTH).optional(),
-        sourceName: z.string().max(64).regex(wire.CHANGE_PLAN_SOURCE_NAME_PATTERN),
+        title: z.string().trim().min(1).max(wire.ADMIN_PROPOSAL_TITLE_MAX_LENGTH),
+        description: z.string().max(wire.ADMIN_PROPOSAL_DESCRIPTION_MAX_LENGTH).optional(),
+        sourceName: z.string().max(64).regex(wire.ADMIN_PROPOSAL_SOURCE_NAME_PATTERN),
         segments: z
-          .array(wire.ChangePlanSegmentProposalWireSchema)
+          .array(wire.AdminProposalSegmentInputWireSchema)
           .min(1)
-          .max(wire.CHANGE_PLAN_MAX_SEGMENTS),
+          .max(wire.ADMIN_PROPOSAL_MAX_SEGMENTS),
       })
       .strict(),
-    resultSchema: wire.ChangePlanWireSchema,
+    resultSchema: wire.AdminProposalWireSchema,
     description:
-      'Propose a change plan for people to apply: one segment per workspace your administrator named (targetWorkspaceId), each a list of changes for its owner to preview, apply or reject — the next version of a Skill or a Worker by its name (a new one where the workspace has none; a Worker never sets its gates or model, the workspace keeps its own), of an ontology family by its name (the complete definition), or how calls of an Operation on a gate instance are governed. sourceName names the plan’s new Skills and Workers the way a pack does (lowercase words joined by hyphens; not the name of a pack this deployment ships). Nothing changes anywhere when you propose. Refused, writing nothing: 400 change_plan_target_unavailable for a target that cannot take a plan (one unknown, disabled or a trial workspace: the refusal does not say which), 400 change_plan_credential when anything in it is almost certainly a credential (details.suspectedSecretPaths: where, never the value), 400 redacted_text_submitted for a [redacted] mark copied from a read, 400 invalid_params for two segments for one workspace, two items for one target in a segment, content that would not publish (a Skill’s rules, a Worker’s definition, one that sets gates or model), or a sourceName a shipped pack has, 429 change_plan_quota_exceeded past 20 plans a day for your administrator (UTC). Only an admin agent calls it.',
+      'Propose changes for people to apply, as one admin proposal: one segment per workspace your administrator named (targetWorkspaceId), each a list of changes for its owner to preview, apply or reject — the next version of a Skill or a Worker by its name (a new one where the workspace has none; a Worker never sets its gates or model, the workspace keeps its own), of an ontology family by its name (the complete definition), or how calls of an Operation on a gate instance are governed. sourceName names the proposal’s new Skills and Workers the way a pack does (lowercase words joined by hyphens; not the name of a pack this deployment ships). Nothing changes anywhere when you propose. Refused, writing nothing: 400 admin_proposal_target_unavailable for a target that cannot take a proposal (one unknown, disabled or a trial workspace: the refusal does not say which), 400 admin_proposal_credential when anything in it is almost certainly a credential (details.suspectedSecretPaths: where, never the value), 400 redacted_text_submitted for a [redacted] mark copied from a read, 400 invalid_params for two segments for one workspace, two items for one target in a segment, content that would not publish (a Skill’s rules, a Worker’s definition, one that sets gates or model), or a sourceName a shipped pack has, 429 admin_proposal_quota_exceeded past 20 proposals a day for your administrator (UTC). Only an admin agent calls it.',
   },
   {
-    name: 'agent_list_change_plans',
-    group: 'change_plan',
+    name: 'agent_list_admin_proposals',
+    group: 'admin_proposal',
     mode: 'observe',
     channel: 'handle',
     adminAgentOnly: true,
     paramsSchema: noParams,
-    resultSchema: listEnvelope(wire.ChangePlanSummaryWireSchema),
+    resultSchema: listEnvelope(wire.AdminProposalSummaryWireSchema),
     description:
-      'The change plans your administrator’s agent proposed in this trial workspace, newest first (at most 100; truncated says there are more): each with its title, source name, when, its status — proposed (a segment awaits its decision, none applied), partially_applied, applied, closed (nothing awaits, nothing applied) — and how many segments are in each status. Only an admin agent calls it.',
+      'The admin proposals your administrator’s agent made in this trial workspace, newest first (at most 100; truncated says there are more): each with its title, source name, when, its status — proposed (a segment awaits its decision, none applied), partially_applied, applied, closed (nothing awaits, nothing applied) — and how many segments are in each status. Only an admin agent calls it.',
   },
   {
-    name: 'agent_get_change_plan',
-    group: 'change_plan',
+    name: 'agent_get_admin_proposal',
+    group: 'admin_proposal',
     mode: 'observe',
     channel: 'handle',
     adminAgentOnly: true,
-    paramsSchema: z.object({ planId: z.guid() }).strict(),
-    resultSchema: wire.ChangePlanWireSchema,
+    paramsSchema: z.object({ proposalId: z.guid() }).strict(),
+    resultSchema: wire.AdminProposalWireSchema,
     description:
-      'One change plan your administrator’s agent proposed in this trial workspace, with its segments in order: for each the workspace it is for, its items as proposed, its status, when it was decided, and the reason it was withdrawn with when one was given. Not why an owner rejected a segment (only that they did), nor anything of what the workspace’s dry run found there, nor who decided. 404 change_plan_not_found for any other plan. Only an admin agent calls it.',
+      'One admin proposal your administrator’s agent made in this trial workspace, with its segments in order: for each the workspace it is for, its items as proposed, its status, when it was decided, and the reason it was withdrawn with when one was given. Not why an owner rejected a segment (only that they did), nor anything of what the workspace’s dry run found there, nor who decided. 404 admin_proposal_not_found for any other proposal. Only an admin agent calls it.',
   },
   {
-    name: 'agent_withdraw_change_plan',
-    group: 'change_plan',
+    name: 'agent_withdraw_admin_proposal',
+    group: 'admin_proposal',
     mode: 'write',
     channel: 'handle',
     adminAgentOnly: true,
     paramsSchema: z
       .object({
-        planId: z.guid(),
-        reason: z.string().trim().min(1).max(wire.CHANGE_PLAN_REASON_MAX_LENGTH).optional(),
+        proposalId: z.guid(),
+        reason: z.string().trim().min(1).max(wire.ADMIN_PROPOSAL_REASON_MAX_LENGTH).optional(),
       })
       .strict(),
-    resultSchema: wire.ChangePlanWireSchema,
+    resultSchema: wire.AdminProposalWireSchema,
     description:
-      'Withdraw a change plan your administrator’s agent proposed in this trial workspace: every segment still proposed becomes withdrawn, with the reason when one is given — no owner can apply it any more; segments already applied, rejected or withdrawn keep their status (rolling back an applied one is its owner’s). 409 change_plan_not_open when no segment is still proposed; 404 change_plan_not_found. Only an admin agent calls it.',
+      'Withdraw an admin proposal your administrator’s agent made in this trial workspace: every segment still proposed becomes withdrawn, with the reason when one is given — no owner can apply it any more; segments already applied, rejected or withdrawn keep their status (rolling back an applied one is its owner’s). 409 admin_proposal_not_open when no segment is still proposed; 404 admin_proposal_not_found. Only an admin agent calls it.',
   },
 ] as const satisfies readonly Capability[];
 
@@ -5240,7 +5240,7 @@ const GROUPS: readonly [
   typeof goalCapabilities,
   typeof evaluationCapabilities,
   typeof platformStateCapabilities,
-  typeof changePlanCapabilities,
+  typeof adminProposalCapabilities,
 ] = [
   chatCapabilities,
   ontologyCapabilities,
@@ -5261,7 +5261,7 @@ const GROUPS: readonly [
   goalCapabilities,
   evaluationCapabilities,
   platformStateCapabilities,
-  changePlanCapabilities,
+  adminProposalCapabilities,
 ];
 
 /** The complete capability registry (design doc §9.3). */
@@ -5556,12 +5556,12 @@ export function assertRegistryConsistent(
 
     // S11 AA2 / AA3b: an admin-agent-only capability is a call an agent makes through its
     // Handle, and two groups hold exactly those: `platform_state`, reads with no side effect, and
-    // `change_plan`, what it proposes for people to apply — the proposal, its reads, and its
+    // `admin_proposal`, what it proposes for people to apply — the proposal, its reads, and its
     // withdrawal (the kernel's admin agent ceiling names each write it admits).
     if (capability.adminAgentOnly) {
       const broken =
-        capability.group !== 'platform_state' && capability.group !== 'change_plan'
-          ? 'is not in group "platform_state" or "change_plan"'
+        capability.group !== 'platform_state' && capability.group !== 'admin_proposal'
+          ? 'is not in group "platform_state" or "admin_proposal"'
           : capability.channel !== 'handle'
             ? 'is not handle-channel'
             : capability.group === 'platform_state' &&
@@ -5582,7 +5582,7 @@ export function assertRegistryConsistent(
           `capability registry: "${capability.name}" is adminAgentOnly but ${broken}`,
         );
       }
-    } else if (capability.group === 'platform_state' || capability.group === 'change_plan') {
+    } else if (capability.group === 'platform_state' || capability.group === 'admin_proposal') {
       throw new Error(
         `capability registry: "${capability.name}" is in group "${capability.group}" but not adminAgentOnly`,
       );

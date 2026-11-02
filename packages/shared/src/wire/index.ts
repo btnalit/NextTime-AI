@@ -23,6 +23,7 @@ export * from './platform.js';
 export * from './llm-admin.js';
 export * from './readiness.js';
 export * from './change-plan.js';
+export * from './admin-proposal.js';
 export * from './packs.js';
 export * from './procedure-stats.js';
 export * from './skill-stats.js';

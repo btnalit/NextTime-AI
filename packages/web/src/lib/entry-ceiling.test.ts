@@ -20,7 +20,7 @@ describe('lib/entry-ceiling', () => {
 
   it('offers nothing only an admin agent calls (S11 AA2, AA3b)', () => {
     const names = entryCeilingCapabilities().map((capability) => capability.name);
-    expect(names).not.toContain('propose_change_plan');
+    expect(names).not.toContain('propose_admin_proposal');
     expect(names.some((name) => name.startsWith('platform_state_'))).toBe(false);
   });
 });

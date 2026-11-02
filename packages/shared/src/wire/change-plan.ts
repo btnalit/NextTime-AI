@@ -1,30 +1,19 @@
 import { z } from 'zod';
-import { OperationFieldsSchema } from '../action-description.js';
 import {
   ChangeChannelSchema,
   ChangeItemClassificationSchema,
   ChangeItemKindSchema,
   ChangeItemStateSchema,
-  ChangePlanSegmentAuthoritySchema,
-  ChangePlanSegmentStatusSchema,
-  ChangePlanStatusSchema,
   ChangeRollbackBlockerSchema,
   ChangeSegmentStatusSchema,
   ChangeSourceKindSchema,
   ChangeVerificationTriggerSchema,
   ChangeWideningReasonCodeSchema,
-  DraftOriginSchema,
   OperationItemFieldSchema,
   PackInstallStatusSchema,
   PackRequirementStateSchema,
   PrincipalKindSchema,
 } from '../enums.js';
-import { OntologyDefinitionSchema } from '../ontology-definition.js';
-import {
-  PublishedSkillDescriptionSchema,
-  PublishedSkillNameSchema,
-  SkillApplicableSchema,
-} from '../skill.js';
 
 /**
  * wire/change-plan: the ChangePlan core's records as the console reads them (S11 P1-B,
@@ -498,197 +487,3 @@ export const ChangeProvenanceWireSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('not_installed') }).strict(),
 ]);
 export type ChangeProvenanceWire = z.infer<typeof ChangeProvenanceWireSchema>;
-
-// ---------------------------------------------------------------------------------------------
-// S11 AA3b: ChangePlan proposals (plan §3.1–§3.3, §5.4; migration governance 0032; the kernel's
-// `application/change-plan/proposals.ts`). A **plan** is what a platform administrator's admin
-// agent proposes from its trial workspace; each **segment** of it is addressed to one workspace,
-// whose owner decides it (AA3b-2: preview, apply, reject). What a segment proposes is a list of
-// workspace-agnostic intents — a Skill or a Worker by name, an ontology family by name, an
-// Operation by gate instance and name — that the target workspace's own dry run resolves (F5): the
-// agent cannot see another workspace's ids, and the plan never names one of its objects.
-//
-// Read by the agent that proposed it (`agent_get_change_plan`, its administrator's plans in its
-// trial workspace) and by platform administrators (`get_change_plan`). Neither sees what a target
-// workspace's dry run found there, nor who decided a segment (a Principal of that workspace): a
-// segment carries its status, when it was decided, and the reason given when one was — an owner's
-// reason for rejecting it to platform administrators only (the agent reads that it was rejected).
-// ---------------------------------------------------------------------------------------------
-
-/** A plan's title: what it changes, in a line. */
-export const CHANGE_PLAN_TITLE_MAX_LENGTH = 200;
-/** A plan's description: why, and what to look at. */
-export const CHANGE_PLAN_DESCRIPTION_MAX_LENGTH = 4000;
-/** Segments in one plan (one per target workspace). */
-export const CHANGE_PLAN_MAX_SEGMENTS = 20;
-/** Items in one segment. */
-export const CHANGE_PLAN_SEGMENT_MAX_ITEMS = 50;
-/** A reason given when a segment is rejected or withdrawn. */
-export const CHANGE_PLAN_REASON_MAX_LENGTH = 2000;
-/** F11: plans one platform user may propose per UTC day, across every trial workspace (429
- *  `change_plan_quota_exceeded` past it). Withdrawn plans count. */
-export const CHANGE_PLAN_DAILY_LIMIT = 20;
-/** At most this many plans in one list (newest first; `truncated` says there are more). */
-export const CHANGE_PLAN_LIST_LIMIT = 100;
-/** A plan's `sourceName`: the name its new Skill and Worker families are derived under in a target
- *  workspace (AA3b-2, `derivePackComponentId(sourceName, kind, name)`) — a pack's name rule, so the
- *  plan exported as a pack keeps their ids. migrations/governance/0032's check is the same. */
-export const CHANGE_PLAN_SOURCE_NAME_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
-/** An ontology family's name in an `ontology_version` intent: the same rule. */
-export const CHANGE_PLAN_ONTOLOGY_FAMILY_PATTERN = CHANGE_PLAN_SOURCE_NAME_PATTERN;
-/** A gate instance's id in an `operation_version` intent (`gate_instances.gate_id`, core 0023's
- *  check; `PLATFORM_STATE_GATE_ID_PATTERN` is the same, and the test says so). */
-export const CHANGE_PLAN_GATE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/;
-
-/** The Operation fields an `operation_version` intent may set — `OPERATION_ITEM_FIELD_VALUES`, each
- *  with the Operation's own schema; at least one. The kernel checks the revised Operation as a
- *  whole against the target's live version when the owner previews it. */
-const ChangePlanOperationSetSchema = OperationFieldsSchema.pick({
-  description: true,
-  blast_radius: true,
-  auto_approvable: true,
-  await_decision: true,
-  reads: true,
-  writes: true,
-})
-  .partial()
-  .strict()
-  .refine((set) => Object.keys(set).length > 0, { message: 'set changes at least one field' });
-
-/**
- * One intent of a proposed segment, by kind (`CHANGE_ITEM_KIND_VALUES`), naming its target the way
- * every workspace can resolve it:
- *  - `skill_version`: the next version of the target's Skill of this `name` — a new Skill there
- *    when it has none. The content as `propose_skill` takes it, under the published Skill rules.
- *  - `worker_definition_version`: the next version of the target's `worker` WorkerDefinition named
- *    `definition.name` — a new one when it has none. Never its `gates` or `model`: those are the
- *    target workspace's own, kept from its current version, as a pack's Worker (the kernel refuses
- *    a definition that sets either).
- *  - `ontology_version`: the next version of the ontology family named `family`, its complete new
- *    definition.
- *  - `operation_version`: a revision of how calls of the Operation `name` on the gate instance
- *    `gateId` are governed (the fields of `set`), wherever the target has that gate enabled.
- */
-export const ChangePlanItemIntentWireSchema = z.discriminatedUnion('kind', [
-  z
-    .object({
-      kind: z.literal('skill_version'),
-      skill: z
-        .object({
-          name: PublishedSkillNameSchema,
-          description: PublishedSkillDescriptionSchema,
-          markdown: z.string().min(1),
-          applicable: SkillApplicableSchema.optional(),
-        })
-        .strict(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal('worker_definition_version'),
-      definition: z.record(z.string(), z.unknown()),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal('ontology_version'),
-      family: z.string().max(64).regex(CHANGE_PLAN_ONTOLOGY_FAMILY_PATTERN),
-      definition: OntologyDefinitionSchema,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal('operation_version'),
-      gateId: z.string().regex(CHANGE_PLAN_GATE_ID_PATTERN),
-      name: z.string().min(1).max(200),
-      set: ChangePlanOperationSetSchema,
-    })
-    .strict(),
-]);
-export type ChangePlanItemIntentWire = z.infer<typeof ChangePlanItemIntentWireSchema>;
-
-/** One segment as proposed: the workspace it is for, and what it changes there. */
-export const ChangePlanSegmentProposalWireSchema = z
-  .object({
-    /** A workspace the administrator named (the agent sees no other workspace's id). An unknown,
-     *  disabled or trial workspace is refused, all three alike (400 change_plan_target_unavailable,
-     *  F10 / §3.2): the refusal says nothing about which. */
-    targetWorkspaceId: z.guid(),
-    items: z.array(ChangePlanItemIntentWireSchema).min(1).max(CHANGE_PLAN_SEGMENT_MAX_ITEMS),
-  })
-  .strict();
-export type ChangePlanSegmentProposalWire = z.infer<typeof ChangePlanSegmentProposalWireSchema>;
-
-/** Who proposed a plan: the platform user whose admin agent did, by the name they had then. */
-export const ChangePlanProposerWireSchema = z
-  .object({ userId: z.string(), displayName: z.string() })
-  .strict();
-export type ChangePlanProposerWire = z.infer<typeof ChangePlanProposerWireSchema>;
-
-/** A segment of a plan, as its proposer and the platform read it. */
-export const ChangePlanSegmentWireSchema = z
-  .object({
-    id: z.string(),
-    ordinal: z.number().int().positive(),
-    authority: ChangePlanSegmentAuthoritySchema,
-    /** The workspace a `workspace` segment is for. */
-    targetWorkspaceId: z.string().nullable(),
-    items: z.array(ChangePlanItemIntentWireSchema),
-    /** `sha256:` of what the segment proposes (its target and items). */
-    contentDigest: z.string(),
-    status: ChangePlanSegmentStatusSchema,
-    /** When it was applied, rejected or withdrawn. */
-    decidedAt: z.string().nullable(),
-    /** Withdrawn: through the administrator's agent, or by a platform administrator in the
-     *  console. */
-    withdrawnOrigin: DraftOriginSchema.exclude(['platform']).nullable(),
-    /** Rejected: the owner's reason — for platform administrators (`get_change_plan`); `null` to
-     *  the agent, which reads that the segment was rejected, not why. Withdrawn: the reason, when
-     *  one was given, to both. */
-    reason: z.string().nullable(),
-    rolledBackAt: z.string().nullable(),
-  })
-  .strict();
-export type ChangePlanSegmentWire = z.infer<typeof ChangePlanSegmentWireSchema>;
-
-/** How many of a plan's segments are in each status. */
-export const ChangePlanSegmentCountsWireSchema = z
-  .object({
-    proposed: z.number().int().nonnegative(),
-    applied: z.number().int().nonnegative(),
-    rejected: z.number().int().nonnegative(),
-    withdrawn: z.number().int().nonnegative(),
-    rolledBack: z.number().int().nonnegative(),
-  })
-  .strict();
-export type ChangePlanSegmentCountsWire = z.infer<typeof ChangePlanSegmentCountsWireSchema>;
-
-const changePlanHeadShape = {
-  id: z.string(),
-  title: z.string(),
-  sourceName: z.string(),
-  /** I-A7: who drafted it — an admin agent, always. */
-  origin: DraftOriginSchema,
-  proposedBy: ChangePlanProposerWireSchema,
-  proposedAt: z.string(),
-  /** Derived from its segments' (`changePlanStatusOf`). */
-  status: ChangePlanStatusSchema,
-  segmentCounts: ChangePlanSegmentCountsWireSchema,
-};
-
-/** A plan in a list. */
-export const ChangePlanSummaryWireSchema = z.object(changePlanHeadShape).strict();
-export type ChangePlanSummaryWire = z.infer<typeof ChangePlanSummaryWireSchema>;
-
-/** A plan with its segments, in order. */
-export const ChangePlanWireSchema = z
-  .object({
-    ...changePlanHeadShape,
-    description: z.string(),
-    /** `sha256:` of what the plan proposes: its title, description, source name and each
-     *  segment's digest, in order. */
-    contentDigest: z.string(),
-    segments: z.array(ChangePlanSegmentWireSchema),
-  })
-  .strict();
-export type ChangePlanWire = z.infer<typeof ChangePlanWireSchema>;

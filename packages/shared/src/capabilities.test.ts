@@ -487,13 +487,13 @@ describe('platform_state: what an admin agent reads of the platform (S11 AA2)', 
       'platform_state_runtime',
       'platform_state_updates',
     ]);
-    // S11 AA3b: with the `change_plan` group's, no other.
-    const changePlan = CAPABILITY_REGISTRY.filter(
-      (capability) => capability.group === 'change_plan',
+    // S11 AA3b: with the `admin_proposal` group's, no other.
+    const adminProposal = CAPABILITY_REGISTRY.filter(
+      (capability) => capability.group === 'admin_proposal',
     );
     const flagged = CAPABILITY_REGISTRY.filter((capability) => capability.adminAgentOnly);
     expect(flagged.map((capability) => capability.name).sort()).toEqual(
-      [...group, ...changePlan].map((capability) => capability.name).sort(),
+      [...group, ...adminProposal].map((capability) => capability.name).sort(),
     );
   });
 
@@ -615,14 +615,14 @@ describe('platform_state: what an admin agent reads of the platform (S11 AA2)', 
 
 describe('change_plan: what an admin agent proposes for people to apply (S11 AA3b)', () => {
   const assertConsistent = (entries: readonly Capability[]) => assertRegistryConsistent(entries);
-  const group = CAPABILITY_REGISTRY.filter((capability) => capability.group === 'change_plan');
+  const group = CAPABILITY_REGISTRY.filter((capability) => capability.group === 'admin_proposal');
 
   it('holds the proposal, its two reads and its withdrawal, each only an admin agent calls', () => {
     expect(group.map((capability) => [capability.name, capability.mode])).toEqual([
-      ['propose_change_plan', 'propose'],
-      ['agent_list_change_plans', 'observe'],
-      ['agent_get_change_plan', 'observe'],
-      ['agent_withdraw_change_plan', 'write'],
+      ['propose_admin_proposal', 'propose'],
+      ['agent_list_admin_proposals', 'observe'],
+      ['agent_get_admin_proposal', 'observe'],
+      ['agent_withdraw_admin_proposal', 'write'],
     ]);
     for (const capability of group) {
       expect(capability.adminAgentOnly, capability.name).toBe(true);
@@ -637,7 +637,7 @@ describe('change_plan: what an admin agent proposes for people to apply (S11 AA3
   });
 
   it('has its platform-plane counterparts in the platform group, for a platform administrator', () => {
-    for (const name of ['list_change_plans', 'get_change_plan', 'withdraw_change_plan']) {
+    for (const name of ['list_admin_proposals', 'get_admin_proposal', 'withdraw_admin_proposal']) {
       const capability = getCapability(name);
       expect(capability?.group, name).toBe('platform');
       expect(capability?.scope, name).toBe('platform');
@@ -649,18 +649,20 @@ describe('change_plan: what an admin agent proposes for people to apply (S11 AA3
   it('refuses a group member that is not admin-agent-only, and an admin-agent-only execute', () => {
     const base = {
       name: 'probe',
-      group: 'change_plan',
+      group: 'admin_proposal',
       mode: 'observe',
       channel: 'handle',
       paramsSchema: z.object({}).strict(),
       description: 'probe',
     } as const;
-    expect(() => assertConsistent([base])).toThrow(/in group "change_plan" but not adminAgentOnly/);
+    expect(() => assertConsistent([base])).toThrow(
+      /in group "admin_proposal" but not adminAgentOnly/,
+    );
     expect(() => assertConsistent([{ ...base, adminAgentOnly: true, mode: 'execute' }])).toThrow(
       /adminAgentOnly but executes/,
     );
     expect(() => assertConsistent([{ ...base, adminAgentOnly: true, group: 'graph' }])).toThrow(
-      /is not in group "platform_state" or "change_plan"/,
+      /is not in group "platform_state" or "admin_proposal"/,
     );
     expect(() =>
       assertConsistent([{ ...base, adminAgentOnly: true, group: 'platform_state', mode: 'write' }]),

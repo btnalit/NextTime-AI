@@ -159,6 +159,15 @@ import {
 import { hashStableParams, scopeExplicitIdempotencyKey } from './action-executor.js';
 import { toWireActionRequest } from './action-request-wire.js';
 import {
+  agentGetAdminProposalHandler,
+  agentListAdminProposalsHandler,
+  agentWithdrawAdminProposalHandler,
+  getAdminProposalHandler,
+  listAdminProposalsHandler,
+  proposeAdminProposalHandler,
+  withdrawAdminProposalHandler,
+} from './admin-proposal-handlers.js';
+import {
   getAgentPolicyHandler,
   getAgentProfileHandler,
   setAgentPolicyHandler,
@@ -177,15 +186,6 @@ import {
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 import { computeCapabilityReachability, operationReachability } from './capability-reachability.js';
-import {
-  agentGetChangePlanHandler,
-  agentListChangePlansHandler,
-  agentWithdrawChangePlanHandler,
-  getChangePlanHandler,
-  listChangePlansHandler,
-  proposeChangePlanHandler,
-  withdrawChangePlanHandler,
-} from './change-plan-proposal-handlers.js';
 // S11 P1-B: the workspace's ChangePlan segments (安装历史) and their rollback.
 import {
   getChangeSegmentHandler,
@@ -2725,13 +2725,13 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['platform_state_runtime', platformStateRuntimeHandler],
   ['platform_state_updates', platformStateUpdatesHandler],
   ['platform_state_invariants', platformStateInvariantsHandler],
-  // S11 AA3b-1 — ChangePlan proposals (change-plan-proposal-handlers.ts): what an admin agent
-  // proposes and reads back (`change_plan`), and the platform administrator's reads and withdrawal.
-  ['propose_change_plan', proposeChangePlanHandler],
-  ['agent_list_change_plans', agentListChangePlansHandler],
-  ['agent_get_change_plan', agentGetChangePlanHandler],
-  ['agent_withdraw_change_plan', agentWithdrawChangePlanHandler],
-  ['list_change_plans', listChangePlansHandler],
-  ['get_change_plan', getChangePlanHandler],
-  ['withdraw_change_plan', withdrawChangePlanHandler],
+  // S11 AA3b-1 — Admin proposals (admin-proposal-handlers.ts): what an admin agent
+  // proposes and reads back (`admin_proposal`), and the platform administrator's reads and withdrawal.
+  ['propose_admin_proposal', proposeAdminProposalHandler],
+  ['agent_list_admin_proposals', agentListAdminProposalsHandler],
+  ['agent_get_admin_proposal', agentGetAdminProposalHandler],
+  ['agent_withdraw_admin_proposal', agentWithdrawAdminProposalHandler],
+  ['list_admin_proposals', listAdminProposalsHandler],
+  ['get_admin_proposal', getAdminProposalHandler],
+  ['withdraw_admin_proposal', withdrawAdminProposalHandler],
 ]);
