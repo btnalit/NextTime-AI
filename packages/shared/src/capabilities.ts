@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { GateAbsenceSchema } from './action-description.js';
 import {
+  AdminProposalSegmentStatusSchema,
   AdminProposalStatusSchema,
   ConflictStatusSchema,
   ConnectionRequestStatusSchema,
@@ -4368,6 +4369,76 @@ const modulesCapabilities = [
     description:
       'Install a pack’s latest version into this workspace in one transaction, as one ChangePlan segment: each component whose content differs is published as its family’s next version — an ontology family, a Skill, a Worker (WorkerDefinition) — with this owner as proposer and publisher (installing, upgrading, or replacing a customized family alike — the dry run showed which); a Worker keeps the gates and model its head has, and one the dry run binds is bound to the gates it showed (pass the dry run’s own workerGates). Refuses, writing nothing: 409 version_changed when the latest version is not the reviewed one, 409 pack_dependency_unmet when a pack it builds on (requires.packs) is not installed here at the version it needs — details.unmet lists each, install those first —, 409 change_plan_changed when the dry run would differ from the reviewed digest now — a gate connected or cut off since counts (preview again), 400 invalid_params for workerGates as in preview_pack_install, 400 change_confirmation_required when an authority-widening item is not among confirmedOrdinals, 403 when the caller is not a person (a service Principal’s API key), 409 ontology_namespace_conflict (I-P1), 409 skill_name_conflict, 404 pack_not_found. Already up to date: records nothing. One change_item.apply audit row per item. Right after the install commits, the segment is verified once as the person who installed (trigger system, as verify_change_segment does; its result is verification — null when the run could not be made, the install stands either way).',
   },
+  // S11 AA3b-2 (plan §3.1–§3.3, §5.4; AA3 F4 / F5 / F7 / F9): an admin proposal's segment addressed
+  // to this workspace — what a platform administrator's admin agent proposed from its trial workspace —
+  // decided by this workspace's owner, as a pack is installed: preview (resolve each intent here,
+  // dry-run it, digest it), apply (in one transaction, the same core), or reject. Human channel only
+  // (HUMAN_ONLY_CAPABILITY_NAMES): no Handle carries them, so no agent decides a segment. What the
+  // preview finds stays here: the agent reads the segment's status only, the platform its status
+  // and an owner's reason for rejecting it (coordinator 2026-11-02).
+  {
+    name: 'list_admin_proposal_segments',
+    group: 'modules',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'owner',
+    actsForPerson: true,
+    paramsSchema: z.object({ status: AdminProposalSegmentStatusSchema.optional() }).strict(),
+    resultSchema: listEnvelope(wire.ReceivedAdminProposalSegmentWireSchema),
+    description: `The segments of admin proposals addressed to this workspace — what a platform administrator’s admin agent proposed for it — newest first, at most ${wire.ADMIN_PROPOSAL_LIST_LIMIT} (truncated says there are more): for each, its proposal’s title, description, source name and proposer, the intents as proposed, its status, when and by whom here it was decided, the reason given, and the change segment an applied one recorded. Optional status filter. Never another workspace’s segment of the same proposal.`,
+  },
+  {
+    name: 'preview_admin_proposal_segment',
+    group: 'modules',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'owner',
+    actsForPerson: true,
+    paramsSchema: z.object({ segmentId: z.guid() }).strict(),
+    resultSchema: wire.AdminProposalSegmentPreviewWireSchema,
+    description:
+      'Dry-run an admin proposal’s segment here, writing nothing: each intent resolves to this workspace’s own object — a Skill or a worker WorkerDefinition by the name its head goes by (none: a new family under an id derived from the proposal’s source name), an ontology family by name, an Operation through the gate instance this workspace enabled — and is planned as a pack’s install plans it: classification and widening reasons, before and after, what changes, and the digest to review. An intent that does not resolve is a blocker (name_taken, name_ambiguous, unresolved_references, gate_not_enabled, operation_not_found, operation_revision_invalid) and nothing is planned while one is there (digest null). A Worker keeps this workspace’s gates and model. Also counts the values that look like credentials in what it writes (paths by intent, items[n]…, never values). 404 admin_proposal_segment_not_found for a segment not addressed here; 409 admin_proposal_segment_not_open once it is no longer proposed (applied, rejected, withdrawn, rolled back).',
+  },
+  {
+    name: 'apply_admin_proposal_segment',
+    group: 'modules',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'owner',
+    actsForPerson: true,
+    paramsSchema: z
+      .object({
+        segmentId: z.guid(),
+        /** The preview's `digest` (I-A8). */
+        reviewedDigest: z.string().min(1),
+        /** The ordinals of the `authority_widening` items, each confirmed by the person applying
+         *  (I-A4). */
+        confirmedOrdinals: z.array(z.number().int().positive()).optional(),
+        /** Required when the preview counted suspected credentials (`suspectedSecretValues` > 0). */
+        credentialsReviewed: z.boolean().optional(),
+      })
+      .strict(),
+    resultSchema: wire.AdminProposalSegmentApplyResultWireSchema,
+    description:
+      'Apply an admin proposal’s segment in this workspace in one transaction, as one change segment of source admin_proposal (安装历史; roll it back from there with roll_back_change_segment, which marks the proposal’s segment rolled_back too): the segment is locked, each intent resolved again and the dry run recomputed — refused, writing nothing, with 409 change_plan_changed when it differs from reviewedDigest (anything here or the resolution moved since the preview: preview again), 409 admin_proposal_segment_blocked while an intent does not resolve (details.blockers), 409 admin_proposal_segment_unchanged when there is nothing to apply (reject it instead), 409 admin_proposal_segment_not_open when it is no longer proposed (applied, rejected or withdrawn already), 400 change_confirmation_required for an authority-widening item not in confirmedOrdinals, 400 credentials_review_required when it carries suspected credentials and credentialsReviewed is not true, 403 for anyone but a person, 404 admin_proposal_segment_not_found. Each version it publishes is drafted by an agent (origin agent) and published by this owner. One change_item.apply audit row per item.',
+  },
+  {
+    name: 'reject_admin_proposal_segment',
+    group: 'modules',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'owner',
+    actsForPerson: true,
+    paramsSchema: z
+      .object({
+        segmentId: z.guid(),
+        reason: z.string().trim().min(1).max(wire.ADMIN_PROPOSAL_REASON_MAX_LENGTH),
+      })
+      .strict(),
+    resultSchema: wire.ReceivedAdminProposalSegmentWireSchema,
+    description:
+      'Reject an admin proposal’s segment, with your reason: it becomes rejected and can never be applied. The reason is for this workspace and the platform’s administrators — the admin agent that proposed it reads that it was rejected, not why. 409 admin_proposal_segment_not_open when it is no longer proposed; 404 admin_proposal_segment_not_found.',
+  },
 ] as const satisfies readonly Capability[];
 
 // -------------------------------------------------------------------------------------------
@@ -5316,6 +5387,11 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   'discard_draft',
   // S11 W1a E2-0b (review #493 on #772, N1): a reviewer's transition — never an agent's.
   'reject_draft',
+  // S11 AA3b-2: deciding an admin proposal's segment is the target workspace owner's, never an agent's.
+  'list_admin_proposal_segments',
+  'preview_admin_proposal_segment',
+  'apply_admin_proposal_segment',
+  'reject_admin_proposal_segment',
   // Legacy 491: the reviewer's words go to the person whose draft it was.
   'list_draft_rejections',
   // S10 E3-1a (I-E4): an evaluation suite is open to people, closed to agents.

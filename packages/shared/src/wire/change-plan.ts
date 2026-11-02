@@ -14,6 +14,7 @@ import {
   PackRequirementStateSchema,
   PrincipalKindSchema,
 } from '../enums.js';
+import { AdminProposalProposerWireSchema } from './admin-proposal.js';
 
 /**
  * wire/change-plan: the ChangePlan core's records as the console reads them (S11 P1-B,
@@ -40,8 +41,10 @@ export const ChangePrincipalRefWireSchema = z
   .strict();
 export type ChangePrincipalRefWire = z.infer<typeof ChangePrincipalRefWireSchema>;
 
-/** Where a segment came from: a pack (a module) at a version, and the digest of the content its
- *  items were built from. */
+/** Where a segment came from, and the digest of the content its items were built from: a pack (a
+ *  module) at a version — `name` the pack, `version` its version —, or (S11 AA3b-2) a segment of an
+ *  admin proposal — `name` the proposal's `sourceName`, `version` the proposal's id, `digest` the
+ *  segment's `contentDigest`. */
 export const ChangeSourceWireSchema = z
   .object({
     kind: ChangeSourceKindSchema,
@@ -61,10 +64,24 @@ export const ChangeWideningReasonWireSchema = z
   .strict();
 export type ChangeWideningReasonWire = z.infer<typeof ChangeWideningReasonWireSchema>;
 
+/** S11 AA3b-2: an `admin_proposal` segment's origin — the admin proposal, its segment this
+ *  workspace's owner applied, and the platform user whose admin agent proposed it, by the name they
+ *  had then. Kept on the record when the proposal's trial workspace is purged. */
+export const ChangeSegmentAdminProposalWireSchema = z
+  .object({
+    proposalId: z.string(),
+    proposalSegmentId: z.string(),
+    proposedBy: AdminProposalProposerWireSchema,
+  })
+  .strict();
+export type ChangeSegmentAdminProposalWire = z.infer<typeof ChangeSegmentAdminProposalWireSchema>;
+
 /** `list_change_segments`' item, and the head of `get_change_segment` / the result of
  *  `roll_back_change_segment`. Times are ISO 8601. `channel: 'platform'`: the platform applied it
  *  on the workspace's behalf (workspace creation's default modules) — `proposedBy` / `appliedBy`
- *  then name the workspace's first owner, who did nothing themselves. */
+ *  then name the workspace's first owner, who did nothing themselves. An `admin_proposal` source
+ *  (S11 AA3b-2): `proposedBy` is `null` — no Principal of this workspace proposed it — and
+ *  `adminProposal` says who did; `null` for every other source. */
 export const ChangeSegmentWireSchema = z
   .object({
     id: z.string(),
@@ -72,7 +89,8 @@ export const ChangeSegmentWireSchema = z
     channel: ChangeChannelSchema,
     source: ChangeSourceWireSchema,
     status: ChangeSegmentStatusSchema,
-    proposedBy: ChangePrincipalRefWireSchema,
+    proposedBy: ChangePrincipalRefWireSchema.nullable(),
+    adminProposal: ChangeSegmentAdminProposalWireSchema.nullable(),
     appliedBy: ChangePrincipalRefWireSchema,
     appliedAt: z.string(),
     verifiedAt: z.string().nullable(),

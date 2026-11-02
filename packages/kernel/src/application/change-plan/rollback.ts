@@ -361,6 +361,17 @@ export async function rollBackWorkspaceSegment(
       where workspace_id = $1 and id = $2`,
     [workspaceId, segment.id, input.rolledBackBy],
   );
+  // S11 AA3b-2: rolling back what an admin proposal's segment applied rolls that segment back too,
+  // in this transaction (governance 0033's `admin_proposal_segments_record_guard` checks the record
+  // went first). Its trial workspace may have been purged since, the segment with it: then only the
+  // record here is rolled back.
+  if (segment.adminProposal) {
+    await client.query(
+      `update admin_proposal_segments set status = 'rolled_back', rolled_back_by = $3
+        where id = $2 and target_workspace_id = $1 and status = 'applied'`,
+      [workspaceId, segment.adminProposal.proposalSegmentId, input.rolledBackBy],
+    );
+  }
 
   // I-A7: one row per item — what went back, from which version to which, who confirmed a
   // widening item.
@@ -379,6 +390,7 @@ export async function rollBackWorkspaceSegment(
         ordinal: item.record.ordinal,
         kind: item.record.kind,
         source: segment.source,
+        ...(segment.adminProposal ? { adminProposal: { ...segment.adminProposal } } : {}),
         target: item.detail.planned.target,
         from: item.detail.planned.from,
         to: item.detail.planned.to,

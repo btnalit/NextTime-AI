@@ -892,11 +892,40 @@ export const CHANGE_CHANNEL_VALUES = ['human', 'platform'] as const;
 export type ChangeChannelValue = (typeof CHANGE_CHANNEL_VALUES)[number];
 export const ChangeChannelSchema = asEnum(CHANGE_CHANNEL_VALUES);
 
-/** Where a segment's intent came from (§5.4 "一个核心，两种来源"): P1 has packs (a module is a pack
- *  with one ontology component); the platform admin agent's proposals come with AA3. */
-export const CHANGE_SOURCE_KIND_VALUES = ['pack'] as const;
+/** Where a segment's intent came from (§5.4 "一个核心，两种来源"): `pack` — a pack this deployment
+ *  ships (a module is a pack with one ontology component); `admin_proposal` — a segment of an admin
+ *  proposal a platform administrator's admin agent made, applied by this workspace's owner (S11
+ *  AA3b-2). */
+export const CHANGE_SOURCE_KIND_VALUES = ['pack', 'admin_proposal'] as const;
 export type ChangeSourceKind = (typeof CHANGE_SOURCE_KIND_VALUES)[number];
 export const ChangeSourceKindSchema = asEnum(CHANGE_SOURCE_KIND_VALUES);
+
+/**
+ * S11 AA3b-2 (F5): why an intent of an admin proposal's segment does not resolve in the workspace
+ * it is addressed to — its owner's dry run lists each, and the segment cannot be applied while one
+ * is there (409 `admin_proposal_segment_blocked`):
+ *  - `name_taken`: the Worker's name here is the workspace's entry agent definition's, not a
+ *    `worker` one's;
+ *  - `name_ambiguous`: more than one `worker` WorkerDefinition here goes by that name;
+ *  - `gate_not_enabled`: this workspace has not enabled the gate instance the intent names;
+ *  - `unresolved_references`: the Worker names what is not here — a Skill with no published version
+ *    (and no earlier intent of the segment publishing it), or a capability a Worker can never hold
+ *    (`unresolved_references` is what publishing it would refuse with);
+ *  - `operation_not_found`: the gate this workspace enabled has no published Operation by that name;
+ *  - `operation_revision_invalid`: what the intent sets does not make a valid revision of the
+ *    Operation as it is here (a description the rules refuse, a field the gate's own definition
+ *    fixes — an ssh binding's `blast_radius`).
+ */
+export const ADMIN_PROPOSAL_ITEM_BLOCKER_VALUES = [
+  'name_taken',
+  'name_ambiguous',
+  'unresolved_references',
+  'gate_not_enabled',
+  'operation_not_found',
+  'operation_revision_invalid',
+] as const;
+export type AdminProposalItemBlocker = (typeof ADMIN_PROPOSAL_ITEM_BLOCKER_VALUES)[number];
+export const AdminProposalItemBlockerSchema = asEnum(ADMIN_PROPOSAL_ITEM_BLOCKER_VALUES);
 
 /**
  * An applied item's target now (S11 P1-B, read at the time of the call): `in_effect` — what the item

@@ -326,7 +326,12 @@ function VerificationResult({
         </Notice>
       ) : verification.requirements.length === 0 ? (
         <span className="text-3 text-small">
-          {t('这个能力包没有写明要用到的系统。', 'This pack names no systems it needs.')}
+          {segment.source.kind === 'admin_proposal'
+            ? t(
+                '管理员提案不写明要用到的系统，只核验写入的改动项。',
+                'An admin proposal names no systems it needs; only the changes it wrote are checked.',
+              )
+            : t('这个能力包没有写明要用到的系统。', 'This pack names no systems it needs.')}
         </span>
       ) : (
         <div className="stack-s" data-testid="catalog-change-requirements">

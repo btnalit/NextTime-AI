@@ -18,6 +18,7 @@ import {
   RedactedTextSubmittedError,
   findCredentialValues,
   redactedPathsIn,
+  shownFreeText,
 } from '../../governance/redaction/index.js';
 import { validateSkillContent } from '../worker/index.js';
 import { contentDigest } from './digest.js';
@@ -79,9 +80,17 @@ export class AdminProposalCredentialError extends Error {
     readonly suspectedSecretValues: number;
     readonly suspectedSecretPaths: readonly string[];
   };
-  constructor(count: number, paths: readonly string[]) {
+  /** `withdrawal`: a withdrawal's reason (#916 review P3-2) — the one text an administrator writes
+   *  after proposing that the target workspace reads. */
+  constructor(
+    count: number,
+    paths: readonly string[],
+    subject: 'proposal' | 'withdrawal' = 'proposal',
+  ) {
     super(
-      `the admin proposal carries ${count} value(s) that are almost certainly credentials, at ${paths.join(', ')} — nothing was proposed. A proposal never carries a credential: a gate authenticates with what is configured on it. Leave the value out.`,
+      subject === 'proposal'
+        ? `the admin proposal carries ${count} value(s) that are almost certainly credentials, at ${paths.join(', ')} — nothing was proposed. A proposal never carries a credential: a gate authenticates with what is configured on it. Leave the value out.`
+        : `the withdrawal's reason carries ${count} value(s) that are almost certainly credentials, at ${paths.join(', ')} — nothing was withdrawn. The workspaces the proposal is addressed to read the reason: leave the value out.`,
     );
     this.name = 'AdminProposalCredentialError';
     this.details = { suspectedSecretValues: count, suspectedSecretPaths: paths };
@@ -100,6 +109,22 @@ export class AdminProposalQuotaExceededError extends Error {
     );
     this.name = 'AdminProposalQuotaExceededError';
     this.details = { dailyLimit: ADMIN_PROPOSAL_DAILY_LIMIT, resetsAt };
+  }
+}
+
+/** I-A1, where the two readings of the administrator's platform role differ (#916 review P3-1,
+ *  coordinator 11-02): the kernel's (`effectivePlatformRole` — a login `NEXTTIME_PLATFORM_ADMINS`
+ *  pins is an administrator whatever is stored) lets the admin agent act, while the stored
+ *  `users.platform_role`, the only one the database sees (0032's `admin_proposals_guard`), is not
+ *  `admin`. The stricter one decides: refused before anything is counted or written, with what to
+ *  do instead of the guard's bare exception. Mapped to 403 `admin_proposal_role_mismatch`. */
+export class AdminProposalRoleMismatchError extends Error {
+  readonly code = 'admin_proposal_role_mismatch' as const;
+  constructor() {
+    super(
+      "your administrator's stored platform role is not admin, though NEXTTIME_PLATFORM_ADMINS makes them one: the two differ, and an admin proposal goes by the stricter — nothing was proposed. Ask a platform administrator to set the stored role to admin first.",
+    );
+    this.name = 'AdminProposalRoleMismatchError';
   }
 }
 
@@ -356,6 +381,12 @@ export async function proposeAdminProposal(
   input: AdminProposalInput,
   segments: readonly AdminProposalSegmentInputWire[],
 ): Promise<AdminProposalWire> {
+  // The user is a member here, so the workspace transaction reads the row (core 0021).
+  const user = await client.query<{ display_name: string; platform_role: string }>(
+    'select display_name, platform_role from users where id = $1',
+    [proposer.userId],
+  );
+  if (user.rows[0]?.platform_role !== 'admin') throw new AdminProposalRoleMismatchError();
   await client.query('select pg_advisory_xact_lock($1, hashtext($2::text))', [
     ADVISORY_LOCK_NAMESPACES.adminProposalQuota,
     proposer.userId,
@@ -369,10 +400,6 @@ export async function proposeAdminProposal(
   const unavailable = await firstUnavailableTarget(client, segments);
   if (unavailable !== undefined) throw new AdminProposalTargetUnavailableError(unavailable);
 
-  const user = await client.query<{ display_name: string }>(
-    'select display_name from users where id = $1',
-    [proposer.userId],
-  );
   const displayName = (user.rows[0]?.display_name ?? '').slice(0, 200) || proposer.userId;
   const description = input.description ?? '';
   const segmentDigests = segments.map(adminProposalSegmentDigest);
@@ -526,7 +553,8 @@ function statusesOf(row: ProposalRow): AdminProposalSegmentStatus[] {
 function summaryOf(row: ProposalRow): AdminProposalSummaryWire {
   return {
     id: row.id,
-    title: row.title,
+    // Legacy 420: free text reads as every read shows it (AA3b-2 brought the target's reads in line).
+    title: shownFreeText(row.title),
     sourceName: row.source_name,
     origin: row.origin as AdminProposalSummaryWire['origin'],
     proposedBy: { userId: row.proposed_by_user, displayName: row.proposer_display_name },
@@ -556,7 +584,7 @@ function segmentOf(
     status: row.status,
     decidedAt: row.decided_at?.toISOString() ?? null,
     withdrawnOrigin: row.withdrawn_origin,
-    reason: row.status === 'rejected' && reader === 'agent' ? null : row.reason,
+    reason: row.status === 'rejected' && reader === 'agent' ? null : shownFreeText(row.reason),
     rolledBackAt: row.rolled_back_at?.toISOString() ?? null,
   };
 }
@@ -610,7 +638,7 @@ export async function readAdminProposal(
   );
   return {
     ...summaryOf(row),
-    description: row.description,
+    description: shownFreeText(row.description),
     contentDigest: row.content_digest,
     segments: segments.rows.map((row) => segmentOf(row, scope.reader)),
   };
@@ -645,6 +673,19 @@ export async function withdrawAdminProposal(
   userId: string,
   reason: string | undefined,
 ): Promise<AdminProposalWire> {
+  // #916 review P3-2: the reason reaches every workspace the proposal is addressed to (F4's
+  // segment read), so it is checked as the proposal was (F9), before anything is read.
+  if (reason !== undefined) {
+    const credentials = findCredentialValues({ reason });
+    if (credentials.count > 0) {
+      throw new AdminProposalCredentialError(credentials.count, credentials.paths, 'withdrawal');
+    }
+    const redacted = redactedPathsIn({ reason }).map((path) => `withdrawal.${path}`);
+    if (redacted.length > 0) throw new RedactedTextSubmittedError(redacted[0] as string, redacted);
+  }
+  // Read in scope first, and keep it: without it another administrator's proposal in the same
+  // trial workspace with nothing left open would answer 409 instead of 404 — whether it exists
+  // would show (#916 review, note 2).
   await getAdminProposal(client, proposalId, scope);
   // Each open segment under its row lock, so a concurrent apply (AA3b-2) or withdrawal waits and
   // then sees the status this one leaves.

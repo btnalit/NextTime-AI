@@ -48,11 +48,23 @@ export interface ChangesTabProps {
   readonly onSelectItem: (itemId: string | null) => void;
 }
 
-/** 「能力包 ops-assets v2」 — what an install record installed. Every source is a pack (S11 P1-C:
- *  a module is a pack with one ontology part, so a module install before P1-C reads the same). */
+/** 「能力包 ops-assets v2」 — what an install record installed: a pack (S11 P1-C: a module is a
+ *  pack with one ontology part, so a module install before P1-C reads the same), or (S11 AA3b-2)
+ *  「管理员提案 ops-tuning」 — a segment of an admin proposal, by the source name it proposed under
+ *  (its version is the proposal's id, never shown as a number). */
 export function sourceLabel(segment: Pick<ChangeSegmentWire, 'source'>, t: Translate): string {
-  const { name, version } = segment.source;
+  const { kind, name, version } = segment.source;
+  if (kind === 'admin_proposal') return t(`管理员提案 ${name}`, `Admin proposal ${name}`);
   return t(`能力包 ${name} v${version}`, `Pack ${name} v${version}`);
+}
+
+/** S11 AA3b-2: who proposed an admin proposal's segment — the platform administrator whose admin
+ *  agent wrote it, by the name they had then. */
+function adminProposerText(segment: ChangeSegmentWire, t: Translate): string | null {
+  const proposer = segment.adminProposal?.proposedBy;
+  if (!proposer) return null;
+  const name = proposer.displayName || shortId(proposer.userId);
+  return t(`平台管理员 ${name} 的管理员智能体`, `${name}'s admin agent (platform administrator)`);
 }
 
 function principalName(ref: ChangePrincipalRefWire, t: Translate): string {
@@ -495,9 +507,18 @@ function ChangeSegmentDetail({
     <div className="stack" data-testid="catalog-change-detail">
       <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
         <h2 className="catalog-detail-title" data-testid="catalog-change-title">
-          {t('能力包 ', 'Pack ')}
-          <span className="mono wrap-anywhere">{segment.source.name}</span>
-          {` v${segment.source.version}`}
+          {segment.source.kind === 'admin_proposal' ? (
+            <>
+              {t('管理员提案 ', 'Admin proposal ')}
+              <span className="mono wrap-anywhere">{segment.source.name}</span>
+            </>
+          ) : (
+            <>
+              {t('能力包 ', 'Pack ')}
+              <span className="mono wrap-anywhere">{segment.source.name}</span>
+              {` v${segment.source.version}`}
+            </>
+          )}
         </h2>
         <StatusChip
           machine="changeSegment"
@@ -507,6 +528,19 @@ function ChangeSegmentDetail({
       </div>
       <KeyValue
         items={[
+          ...(adminProposerText(segment, t) !== null
+            ? [
+                {
+                  key: 'proposer',
+                  label: t('提议人', 'Proposed by'),
+                  value: (
+                    <span data-testid="catalog-change-proposer">
+                      {adminProposerText(segment, t)}
+                    </span>
+                  ),
+                },
+              ]
+            : []),
           { key: 'how', label: t('方式', 'How'), value: appliedByText(segment, t) },
           {
             key: 'when',
@@ -610,10 +644,15 @@ function ChangeItemView({
         <StatusChip machine="changeItemState" status={item.state} size="s" />
       </div>
       <span className="text-3 text-small">
-        {t(
-          `${zhJoin(zhJoin(`能力包 v${segment.source.version} 带来的`, familyNoun(item.kind, t)), '版本')}（与能力包版本分开编号）：${versionText(item.before, t)} → ${versionText(item.after, t)}`,
-          `${familyNoun(item.kind, t)} version pack v${segment.source.version} brought (numbered apart from the pack's): ${versionText(item.before, t)} → ${versionText(item.after, t)}`,
-        )}
+        {segment.source.kind === 'admin_proposal'
+          ? t(
+              `${zhJoin(zhJoin('管理员提案带来的', familyNoun(item.kind, t)), '版本')}：${versionText(item.before, t)} → ${versionText(item.after, t)}`,
+              `${familyNoun(item.kind, t)} version the admin proposal brought: ${versionText(item.before, t)} → ${versionText(item.after, t)}`,
+            )
+          : t(
+              `${zhJoin(zhJoin(`能力包 v${segment.source.version} 带来的`, familyNoun(item.kind, t)), '版本')}（与能力包版本分开编号）：${versionText(item.before, t)} → ${versionText(item.after, t)}`,
+              `${familyNoun(item.kind, t)} version pack v${segment.source.version} brought (numbered apart from the pack's): ${versionText(item.before, t)} → ${versionText(item.after, t)}`,
+            )}
       </span>
       {item.kind === 'operation_version' && item.fields.length > 0 ? (
         <div className="stack-s" data-testid={`catalog-change-item-${item.ordinal}-fields`}>

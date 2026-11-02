@@ -1,0 +1,734 @@
+import {
+  ADMIN_PROPOSAL_LIST_LIMIT,
+  type AdminProposalItemBlocker,
+  type AdminProposalItemBlockerWire,
+  type AdminProposalItemIntentWire,
+  type AdminProposalPreviewItemWire,
+  type AdminProposalSegmentPreviewWire,
+  type AdminProposalSegmentStatus,
+  type ChangeItemKind,
+  type ListEnvelope,
+  type OperationFieldChangeWire,
+  type PrincipalKind,
+  type ReceivedAdminProposalSegmentWire,
+} from '@nexttime/shared';
+import type { PoolClient } from 'pg';
+import { getGatekeeper, getPublishedOperation } from '../../governance/gatekeepers/index.js';
+import {
+  type SuspectedSecrets,
+  assertCredentialsReviewed,
+  findSuspectedSecrets,
+  shownFreeText,
+} from '../../governance/redaction/index.js';
+import { unresolvedWorkerDefinitionReferences } from '../worker/index.js';
+import { derivePackComponentId } from './component-id.js';
+import {
+  type AdminProposalOrigin,
+  type ChangeItemIntent,
+  type ChangeSource,
+  type PlannedChangeItem,
+  type WorkspaceSegmentPlan,
+  applyWorkspaceSegment,
+  planWorkspaceSegment,
+} from './engine.js';
+import { lockFamilyItem } from './family-item.js';
+import { inLockOrder } from './lock-order.js';
+import { lockOntologyItem } from './ontology-item.js';
+import { lockOperationItem, operationRevisionProblem } from './operation-item.js';
+
+/**
+ * application/change-plan/admin-proposal-segments: an admin proposal's segment in the workspace it
+ * is addressed to (S11 AA3b-2; docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §3.1–§3.3,
+ * §5.4, I-A4 / I-A7 / I-A8; the AA3 default plan F5 / F7 / F9) — the second source of the ChangePlan
+ * core (§5.4 "一个核心，两种来源"). The proposal itself, and its making, reading and withdrawing,
+ * are `admin-proposals.ts`'; migrations/governance/0032 has the model, 0033 the record a segment
+ * leaves here when it is applied.
+ *
+ * Every function here runs in the target workspace's own transaction, as its owner (the
+ * `modules` group's `*_admin_proposal_segment(s)` capabilities: human channel, owner, a person —
+ * no Handle carries them). RLS lets that transaction read the one segment addressed to it and its
+ * proposal's head, and move that segment along the edges its target decides (0032's guard).
+ *
+ * **Resolving (F5).** A segment's intents are workspace-agnostic; each resolves to this workspace's
+ * own object, under the locks the core plans it under (taken first, in `lock-order.ts`'s order, so
+ * what the resolution read is what the plan and the apply see):
+ *   - a Skill by the name of the family that has it published (Skill names are unique among
+ *     published families); with none, a new family under `derivePackComponentId(sourceName,
+ *     'skill', name)` — the id the proposal exported as a pack would give it;
+ *   - a `worker` WorkerDefinition by the name its family's head goes by; with none, a new family
+ *     the same way. It keeps this workspace's `gates` and `model` from the head (none for a new
+ *     one: the owner binds it here afterwards, E2a). Blocked when the name is the entry agent's
+ *     (`name_taken`), when two `worker` families go by it (`name_ambiguous`), or when the Worker
+ *     names a Skill with no published version and no earlier intent of the segment to publish it,
+ *     or a capability no Worker can hold (`unresolved_references` — what publishing it would
+ *     refuse at apply);
+ *   - an ontology family by its name (`deriveOntologyPackId(family)`, as a pack's);
+ *   - an Operation through the gate instance this workspace enabled (`workspace_gate_links`):
+ *     blocked when it has not (`gate_not_enabled`), when the gate has no published Operation by
+ *     that name (`operation_not_found`), or when what the intent sets is not a valid revision of
+ *     that Operation (`operation_revision_invalid`).
+ * A blocker stays here: nothing of the dry run is written to the proposal's tables, so the agent
+ * and the platform read the segment's status only (coordinator 2026-11-02).
+ *
+ * **Applying.** One transaction: the segment's row lock, then resolution and the core's apply
+ * (`applyWorkspaceSegment`) with the source `{ kind: 'admin_proposal', name: sourceName, version:
+ * proposal id, digest: the segment's content digest }` — so a resolution that moved since the
+ * preview changes the digest and is refused (409 `change_plan_changed`, I-A8) — no proposer of
+ * this workspace and the proposal's origin instead (0033 checks both against the proposal), and
+ * every version it publishes `origin = 'agent'` (I-A7). Suspected credentials in what the segment
+ * writes need the owner's confirmation (#526, `admin_proposal_segment`). The segment then moves to
+ * `applied`, naming the owner and the change segment that recorded it. Rolling that change segment
+ * back moves it to `rolled_back` in the same transaction (`rollback.ts`).
+ */
+
+// -------------------------------------------------------------------------------------------
+// Errors
+// -------------------------------------------------------------------------------------------
+
+/** No segment by that id is addressed to this workspace (RLS shows it no other). Mapped to 404
+ *  `admin_proposal_segment_not_found`. */
+export class AdminProposalSegmentNotFoundError extends Error {
+  readonly code = 'admin_proposal_segment_not_found' as const;
+  constructor(segmentId: string) {
+    super(`admin proposal segment ${segmentId} not found in this workspace`);
+    this.name = 'AdminProposalSegmentNotFoundError';
+  }
+}
+
+/** The segment is no longer `proposed`: applied, rejected or withdrawn already (or rolled back).
+ *  Mapped to 409 `admin_proposal_segment_not_open` with `details.status`; nothing was written. */
+export class AdminProposalSegmentNotOpenError extends Error {
+  readonly code = 'admin_proposal_segment_not_open' as const;
+  readonly details: { readonly status: AdminProposalSegmentStatus };
+  constructor(segmentId: string, status: AdminProposalSegmentStatus) {
+    super(
+      `admin proposal segment ${segmentId} is ${status}, not proposed — only a proposed segment is previewed, applied or rejected; nothing was changed`,
+    );
+    this.name = 'AdminProposalSegmentNotOpenError';
+    this.details = { status };
+  }
+}
+
+/** An intent of the segment does not resolve here. Mapped to 409 `admin_proposal_segment_blocked`
+ *  with `details.blockers`; nothing was written. */
+export class AdminProposalSegmentBlockedError extends Error {
+  readonly code = 'admin_proposal_segment_blocked' as const;
+  readonly details: { readonly blockers: readonly AdminProposalItemBlockerWire[] };
+  constructor(segmentId: string, blockers: readonly AdminProposalItemBlockerWire[]) {
+    super(
+      `admin proposal segment ${segmentId} cannot be applied here: ${blockers.map((b) => `item ${b.ordinal} (${b.kind}) ${b.reason}`).join('; ')}. Nothing was applied — reject it, or apply it once what it needs is here.`,
+    );
+    this.name = 'AdminProposalSegmentBlockedError';
+    this.details = { blockers };
+  }
+}
+
+/** Every intent of the segment is already as proposed here: applying would record nothing. Mapped
+ *  to 409 `admin_proposal_segment_unchanged`; nothing was written (reject it instead). */
+export class AdminProposalSegmentUnchangedError extends Error {
+  readonly code = 'admin_proposal_segment_unchanged' as const;
+  constructor(segmentId: string) {
+    super(
+      `admin proposal segment ${segmentId} changes nothing here — everything it proposes is already so. Nothing was applied; reject it to close it.`,
+    );
+    this.name = 'AdminProposalSegmentUnchangedError';
+  }
+}
+
+// -------------------------------------------------------------------------------------------
+// Reads (the target workspace)
+// -------------------------------------------------------------------------------------------
+
+interface ReceivedSegmentRow {
+  id: string;
+  proposal_id: string;
+  ordinal: number;
+  items: AdminProposalItemIntentWire[];
+  content_digest: string;
+  status: AdminProposalSegmentStatus;
+  decided_at: Date | null;
+  decided_by: string | null;
+  decided_kind: PrincipalKind | null;
+  decided_name: string | null;
+  withdrawn_origin: 'human' | 'agent' | null;
+  reason: string | null;
+  applied_segment_id: string | null;
+  rolled_back_at: Date | null;
+  title: string;
+  description: string;
+  source_name: string;
+  origin: 'agent';
+  proposed_by_user: string;
+  proposer_display_name: string;
+  proposed_at: Date;
+}
+
+const RECEIVED_SELECT = `
+  select s.id, s.proposal_id, s.ordinal, s.items, s.content_digest, s.status, s.decided_at,
+         s.decided_by, d.kind as decided_kind, d.display_name as decided_name,
+         s.withdrawn_origin, s.reason, s.applied_segment_id, s.rolled_back_at,
+         p.title, p.description, p.source_name, p.origin, p.proposed_by_user,
+         p.proposer_display_name, p.created_at as proposed_at
+    from admin_proposal_segments s
+    join admin_proposals p on p.workspace_id = s.workspace_id and p.id = s.proposal_id
+    left join principals d on d.workspace_id = s.target_workspace_id and d.id = s.decided_by`;
+
+/** The segment as this workspace reads it. Free text another person wrote — the proposal's title
+ *  and description, a reason — reads as every read shows it (`shownFreeText`, legacy 420); the
+ *  intents are shown as proposed, for review (their suspected credentials are counted, and
+ *  confirmed when applied). */
+function receivedSegmentOf(row: ReceivedSegmentRow): ReceivedAdminProposalSegmentWire {
+  return {
+    id: row.id,
+    proposal: {
+      id: row.proposal_id,
+      title: shownFreeText(row.title),
+      description: shownFreeText(row.description),
+      sourceName: row.source_name,
+      origin: row.origin,
+      proposedBy: { userId: row.proposed_by_user, displayName: row.proposer_display_name },
+      proposedAt: row.proposed_at.toISOString(),
+    },
+    ordinal: row.ordinal,
+    items: row.items,
+    contentDigest: row.content_digest,
+    status: row.status,
+    decidedAt: row.decided_at?.toISOString() ?? null,
+    decidedBy:
+      row.decided_by === null || row.decided_kind === null
+        ? null
+        : { id: row.decided_by, kind: row.decided_kind, displayName: row.decided_name },
+    withdrawnOrigin: row.withdrawn_origin,
+    reason: shownFreeText(row.reason),
+    appliedSegmentId: row.applied_segment_id,
+    rolledBackAt: row.rolled_back_at?.toISOString() ?? null,
+  };
+}
+
+/** The segments addressed to `workspaceId`, newest first, at most
+ *  {@link ADMIN_PROPOSAL_LIST_LIMIT} (`truncated` when there are more), narrowed to `status` when
+ *  given. */
+export async function listAdminProposalSegments(
+  client: PoolClient,
+  workspaceId: string,
+  status?: AdminProposalSegmentStatus,
+): Promise<ListEnvelope<ReceivedAdminProposalSegmentWire>> {
+  const values: unknown[] = [workspaceId];
+  let filter = '';
+  if (status !== undefined) {
+    values.push(status);
+    filter = ` and s.status = $${values.length}`;
+  }
+  values.push(ADMIN_PROPOSAL_LIST_LIMIT + 1);
+  const result = await client.query<ReceivedSegmentRow>(
+    `${RECEIVED_SELECT}
+      where s.target_workspace_id = $1${filter}
+      order by s.created_at desc, s.id
+      limit $${values.length}`,
+    values,
+  );
+  const items = result.rows.slice(0, ADMIN_PROPOSAL_LIST_LIMIT).map(receivedSegmentOf);
+  return result.rows.length > ADMIN_PROPOSAL_LIST_LIMIT ? { items, truncated: true } : { items };
+}
+
+/** One segment addressed to `workspaceId`, or {@link AdminProposalSegmentNotFoundError}.
+ *  `forUpdate`: its row stays locked until the transaction ends — applying and rejecting take it
+ *  first, so two decisions of one segment (or a decision and a withdrawal) run one after the
+ *  other, and the second sees the status the first left. */
+async function loadReceivedSegment(
+  client: PoolClient,
+  workspaceId: string,
+  segmentId: string,
+  options: { readonly forUpdate?: boolean } = {},
+): Promise<ReceivedSegmentRow> {
+  if (options.forUpdate) {
+    await client.query(
+      'select 1 from admin_proposal_segments where id = $1 and target_workspace_id = $2 for update',
+      [segmentId, workspaceId],
+    );
+  }
+  const result = await client.query<ReceivedSegmentRow>(
+    `${RECEIVED_SELECT} where s.id = $1 and s.target_workspace_id = $2`,
+    [segmentId, workspaceId],
+  );
+  const row = result.rows[0];
+  if (row === undefined) throw new AdminProposalSegmentNotFoundError(segmentId);
+  return row;
+}
+
+/** `get` for one segment (the list's shape). */
+export async function getAdminProposalSegment(
+  client: PoolClient,
+  workspaceId: string,
+  segmentId: string,
+): Promise<ReceivedAdminProposalSegmentWire> {
+  return receivedSegmentOf(await loadReceivedSegment(client, workspaceId, segmentId));
+}
+
+function assertOpen(row: ReceivedSegmentRow): void {
+  if (row.status !== 'proposed') throw new AdminProposalSegmentNotOpenError(row.id, row.status);
+}
+
+// -------------------------------------------------------------------------------------------
+// Resolving the intents (F5)
+// -------------------------------------------------------------------------------------------
+
+/** What one intent resolved to here: the core's intent, and whether it starts a family. */
+interface ResolvedIntent {
+  readonly intent: ChangeItemIntent;
+  readonly newFamily: boolean;
+}
+
+interface Resolution {
+  /** By ordinal - 1; complete only when `blockers` is empty. */
+  readonly resolved: readonly ResolvedIntent[];
+  readonly blockers: readonly AdminProposalItemBlockerWire[];
+}
+
+/** The lock an intent's kind is planned under (`engine.ts`' `lockItem`), for an intent as proposed. */
+async function lockIntent(
+  client: PoolClient,
+  workspaceId: string,
+  intent: AdminProposalItemIntentWire,
+): Promise<void> {
+  switch (intent.kind) {
+    case 'ontology_version':
+      return lockOntologyItem(client, workspaceId, intent);
+    case 'skill_version':
+    case 'worker_definition_version':
+      return lockFamilyItem(client, workspaceId);
+    case 'operation_version':
+      return lockOperationItem(client, workspaceId);
+  }
+}
+
+/** The Skill family here with a published version named `name` (at most one: Skill names are
+ *  unique among published families), or `null`. */
+async function skillFamilyNamed(
+  client: PoolClient,
+  workspaceId: string,
+  name: string,
+): Promise<string | null> {
+  const result = await client.query<{ id: string }>(
+    `select distinct id from skills
+      where workspace_id = $1 and name = $2 and status = 'published'
+      order by id
+      limit 1`,
+    [workspaceId, name],
+  );
+  return result.rows[0]?.id ?? null;
+}
+
+/** The WorkerDefinition families here whose head (latest published version) goes by `name`. */
+async function workerFamiliesNamed(
+  client: PoolClient,
+  workspaceId: string,
+  name: string,
+): Promise<readonly { readonly id: string; readonly kind: string }[]> {
+  const result = await client.query<{ id: string; kind: string }>(
+    `select id, kind from (
+       select distinct on (id) id, kind, definition ->> 'name' as name
+         from worker_definitions
+        where workspace_id = $1 and status = 'published'
+        order by id, version desc
+     ) heads
+     where name = $2
+     order by id`,
+    [workspaceId, name],
+  );
+  return result.rows;
+}
+
+/** The Gatekeeper this workspace enabled the gate instance `gateId` as, or `null`. */
+async function enabledGatekeeper(
+  client: PoolClient,
+  workspaceId: string,
+  gateId: string,
+): Promise<string | null> {
+  const result = await client.query<{ gatekeeper_object_id: string }>(
+    'select gatekeeper_object_id from workspace_gate_links where workspace_id = $1 and gate_id = $2',
+    [workspaceId, gateId],
+  );
+  return result.rows[0]?.gatekeeper_object_id ?? null;
+}
+
+/**
+ * Resolves the segment's intents in `workspaceId` (this module's comment), after taking every lock
+ * the core will plan them under, in lock order — so the families, links and Operations read here
+ * stay as read until the transaction ends.
+ */
+async function resolveIntents(
+  client: PoolClient,
+  workspaceId: string,
+  sourceName: string,
+  items: readonly AdminProposalItemIntentWire[],
+): Promise<Resolution> {
+  for (const intent of inLockOrder(items)) await lockIntent(client, workspaceId, intent);
+  const resolved: ResolvedIntent[] = [];
+  const blockers: AdminProposalItemBlockerWire[] = [];
+  // Skills an earlier intent publishes, by name: a Worker after it may mount them.
+  const skillsBefore = new Set<string>();
+  for (const [index, item] of items.entries()) {
+    const ordinal = index + 1;
+    const block = (kind: ChangeItemKind, reason: AdminProposalItemBlocker) =>
+      blockers.push({ ordinal, kind, reason });
+    switch (item.kind) {
+      case 'ontology_version':
+        resolved.push({
+          intent: { kind: item.kind, family: item.family, definition: item.definition },
+          newFamily: false,
+        });
+        break;
+      case 'skill_version': {
+        const existing = await skillFamilyNamed(client, workspaceId, item.skill.name);
+        resolved.push({
+          intent: {
+            kind: item.kind,
+            skillId: existing ?? derivePackComponentId(sourceName, 'skill', item.skill.name),
+            content: {
+              name: item.skill.name,
+              description: item.skill.description,
+              markdown: item.skill.markdown,
+              applicable: item.skill.applicable ?? {},
+            },
+          },
+          newFamily: existing === null,
+        });
+        skillsBefore.add(item.skill.name);
+        break;
+      }
+      case 'worker_definition_version': {
+        // A proposal's Worker is named (`checkAdminProposal`, AA3b-1).
+        const name = String(item.definition.name);
+        const families = await workerFamiliesNamed(client, workspaceId, name);
+        const workers = families.filter((family) => family.kind === 'worker');
+        if (workers.length > 1) {
+          block(item.kind, 'name_ambiguous');
+          break;
+        }
+        if (workers.length === 0 && families.length > 0) {
+          block(item.kind, 'name_taken');
+          break;
+        }
+        const unresolved = await unresolvedWorkerDefinitionReferences(
+          client,
+          workspaceId,
+          'worker',
+          item.definition,
+        );
+        const skills = (unresolved.skills ?? []).filter((ref) => !skillsBefore.has(ref));
+        if (skills.length > 0 || (unresolved.capabilities ?? []).length > 0) {
+          block(item.kind, 'unresolved_references');
+          break;
+        }
+        const existing = workers[0]?.id ?? null;
+        resolved.push({
+          intent: {
+            kind: item.kind,
+            definitionId: existing ?? derivePackComponentId(sourceName, 'worker', name),
+            definition: item.definition,
+            keepFromHead: ['gates', 'model'],
+          },
+          newFamily: existing === null,
+        });
+        break;
+      }
+      case 'operation_version': {
+        const gatekeeperId = await enabledGatekeeper(client, workspaceId, item.gateId);
+        if (gatekeeperId === null) {
+          block(item.kind, 'gate_not_enabled');
+          break;
+        }
+        const live = await getPublishedOperation(client, workspaceId, gatekeeperId, item.name);
+        if (live === null) {
+          block(item.kind, 'operation_not_found');
+          break;
+        }
+        const intent = { kind: item.kind, gatekeeperId, name: item.name, set: item.set };
+        if (operationRevisionProblem(intent, live) !== null) {
+          block(item.kind, 'operation_revision_invalid');
+          break;
+        }
+        resolved.push({ intent, newFamily: false });
+        break;
+      }
+    }
+  }
+  return { resolved, blockers };
+}
+
+function sourceOf(row: ReceivedSegmentRow): ChangeSource {
+  return {
+    kind: 'admin_proposal',
+    name: row.source_name,
+    version: row.proposal_id,
+    digest: row.content_digest,
+  };
+}
+
+/** F9: the values in what the segment writes that look like credentials — the count `publish_*`
+ *  makes of a draft (the document rule), over the intents as proposed. */
+function suspectedSecretsOf(row: ReceivedSegmentRow): SuspectedSecrets {
+  return findSuspectedSecrets({ items: row.items });
+}
+
+// -------------------------------------------------------------------------------------------
+// Preview
+// -------------------------------------------------------------------------------------------
+
+async function previewItemOf(
+  client: PoolClient,
+  workspaceId: string,
+  item: PlannedChangeItem,
+  newFamily: boolean,
+): Promise<AdminProposalPreviewItemWire> {
+  const common = {
+    ordinal: item.ordinal,
+    unchanged: item.unchanged,
+    classification: item.classification,
+    widening: item.widening.map((w) => ({ path: w.path, reason: w.reason })),
+  };
+  const { detail } = item;
+  switch (detail.kind) {
+    case 'ontology_version': {
+      const names = (section: typeof detail.types.added) => ({
+        objectTypes: [...section.objectTypes],
+        linkTypes: [...section.linkTypes],
+        actionTypes: [...section.actionTypes],
+      });
+      const target = item.target as { family: string; ontologyId: string };
+      const before = item.before as { version: number; definitionDigest: string } | null;
+      const after = item.after as { definitionDigest: string };
+      return {
+        ...common,
+        kind: detail.kind,
+        target: { family: target.family, ontologyId: target.ontologyId },
+        before: before
+          ? { version: before.version, definitionDigest: before.definitionDigest }
+          : null,
+        after: { definitionDigest: after.definitionDigest },
+        types: {
+          added: names(detail.types.added),
+          removed: names(detail.types.removed),
+          changed: names(detail.types.changed),
+        },
+      };
+    }
+    case 'skill_version': {
+      const target = item.target as { skillId: string; name: string };
+      const before = item.before as { version: number; contentDigest: string } | null;
+      const after = item.after as { contentDigest: string };
+      return {
+        ...common,
+        kind: detail.kind,
+        target: { skillId: target.skillId, name: target.name },
+        newFamily,
+        before: before ? { version: before.version, contentDigest: before.contentDigest } : null,
+        after: { contentDigest: after.contentDigest },
+        skill: {
+          name: detail.content.name,
+          description: detail.content.description,
+          markdown: detail.content.markdown,
+          applicable: detail.content.applicable,
+        },
+        changedFields: [...detail.changedFields],
+      };
+    }
+    case 'worker_definition_version': {
+      const target = item.target as { definitionId: string; name: string };
+      const before = item.before as { version: number; contentDigest: string } | null;
+      const after = item.after as { contentDigest: string };
+      const ids = Array.isArray(detail.definition.gates)
+        ? detail.definition.gates.filter((id): id is string => typeof id === 'string')
+        : [];
+      const gates: { id: string; name: string }[] = [];
+      for (const id of ids) {
+        gates.push({ id, name: (await getGatekeeper(client, workspaceId, id))?.name ?? id });
+      }
+      return {
+        ...common,
+        kind: detail.kind,
+        target: { definitionId: target.definitionId, name: target.name },
+        newFamily,
+        before: before ? { version: before.version, contentDigest: before.contentDigest } : null,
+        after: { contentDigest: after.contentDigest },
+        definition: { ...detail.definition },
+        gates,
+        changedFields: [...detail.changedFields],
+      };
+    }
+    case 'operation_version': {
+      const target = item.target as { gatekeeperId: string; gatekeeperName: string; name: string };
+      const before = item.before as { version: number; contentDigest: string };
+      const after = item.after as { contentDigest: string };
+      return {
+        ...common,
+        kind: detail.kind,
+        target: {
+          gatekeeperId: target.gatekeeperId,
+          gatekeeperName: target.gatekeeperName,
+          name: target.name,
+        },
+        before: { version: before.version, contentDigest: before.contentDigest },
+        after: { contentDigest: after.contentDigest },
+        fields: detail.fields.map(
+          (change) =>
+            ({
+              field: change.field,
+              before: change.before,
+              after: change.after,
+            }) as OperationFieldChangeWire,
+        ),
+      };
+    }
+  }
+}
+
+/** `preview_admin_proposal_segment`: resolves and dry-runs a proposed segment here, writing nothing
+ *  (its locks are held until the transaction ends, as a pack's preview holds them). */
+export async function previewAdminProposalSegment(
+  client: PoolClient,
+  workspaceId: string,
+  segmentId: string,
+): Promise<AdminProposalSegmentPreviewWire> {
+  const row = await loadReceivedSegment(client, workspaceId, segmentId);
+  assertOpen(row);
+  const suspected = suspectedSecretsOf(row);
+  const credentials = {
+    suspectedSecretValues: suspected.count,
+    suspectedSecretPaths: [...suspected.paths],
+  };
+  const { resolved, blockers } = await resolveIntents(client, workspaceId, row.source_name, row.items);
+  if (blockers.length > 0) {
+    return {
+      segment: receivedSegmentOf(row),
+      blockers: [...blockers],
+      digest: null,
+      unchanged: false,
+      items: [],
+      ...credentials,
+    };
+  }
+  const plan = await planWorkspaceSegment(client, workspaceId, {
+    source: sourceOf(row),
+    items: resolved.map((entry) => entry.intent),
+  });
+  const items: AdminProposalPreviewItemWire[] = [];
+  for (const item of plan.items) {
+    items.push(
+      await previewItemOf(client, workspaceId, item, resolved[item.ordinal - 1]?.newFamily ?? false),
+    );
+  }
+  return {
+    segment: receivedSegmentOf(row),
+    blockers: [],
+    digest: plan.digest,
+    unchanged: plan.unchanged,
+    items,
+    ...credentials,
+  };
+}
+
+// -------------------------------------------------------------------------------------------
+// Apply and reject
+// -------------------------------------------------------------------------------------------
+
+export interface ApplyAdminProposalSegmentInput {
+  readonly segmentId: string;
+  /** The preview's `digest` (I-A8). */
+  readonly reviewedDigest: string;
+  /** The ordinals of the authority-widening items the owner confirmed, one by one (I-A4). */
+  readonly confirmedOrdinals: readonly number[];
+  /** Required when the segment carries suspected credentials (F9). */
+  readonly credentialsReviewed?: boolean;
+}
+
+export interface AppliedAdminProposalSegment {
+  readonly segment: ReceivedAdminProposalSegmentWire;
+  /** The change segment that recorded it here (安装历史). */
+  readonly changeSegmentId: string;
+  readonly plan: WorkspaceSegmentPlan;
+  /** What the owner confirmed (F9), for the call's audit row (`credentialReviewAudit`). */
+  readonly suspectedSecretValues: number;
+}
+
+/**
+ * `apply_admin_proposal_segment`, in the caller's one transaction, as `principalId` — this
+ * workspace's owner, the applier and the confirmer of every widening item. In order: the segment's
+ * row lock and status, resolution (blocked: 409), the credential review (400), then the core's apply
+ * (digest 409, widening 400, nothing to change: 409 here) and the segment's `applied` edge. Any
+ * refusal leaves everything as it was.
+ */
+export async function applyAdminProposalSegment(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+  input: ApplyAdminProposalSegmentInput,
+): Promise<AppliedAdminProposalSegment> {
+  const row = await loadReceivedSegment(client, workspaceId, input.segmentId, { forUpdate: true });
+  assertOpen(row);
+  const { resolved, blockers } = await resolveIntents(client, workspaceId, row.source_name, row.items);
+  if (blockers.length > 0) throw new AdminProposalSegmentBlockedError(row.id, blockers);
+  const suspected = suspectedSecretsOf(row);
+  assertCredentialsReviewed(
+    'admin_proposal_segment',
+    row.id,
+    suspected,
+    input.credentialsReviewed,
+  );
+  const origin: AdminProposalOrigin = {
+    proposalId: row.proposal_id,
+    proposalSegmentId: row.id,
+    proposedByUser: row.proposed_by_user,
+    proposerDisplayName: row.proposer_display_name,
+  };
+  const applied = await applyWorkspaceSegment(client, workspaceId, {
+    source: sourceOf(row),
+    items: resolved.map((entry) => entry.intent),
+    reviewedDigest: input.reviewedDigest,
+    proposedBy: null,
+    adminProposal: origin,
+    appliedBy: principalId,
+    channel: 'human',
+    confirmedOrdinals: input.confirmedOrdinals,
+  });
+  if (applied.segmentId === null) throw new AdminProposalSegmentUnchangedError(row.id);
+  const updated = await client.query(
+    `update admin_proposal_segments
+        set status = 'applied', decided_by = $3, applied_segment_id = $4
+      where id = $1 and target_workspace_id = $2 and status = 'proposed'`,
+    [row.id, workspaceId, principalId, applied.segmentId],
+  );
+  if (updated.rowCount !== 1) {
+    throw new Error(`applyAdminProposalSegment: segment ${row.id} did not move to applied`);
+  }
+  return {
+    segment: await getAdminProposalSegment(client, workspaceId, row.id),
+    changeSegmentId: applied.segmentId,
+    plan: applied.plan,
+    suspectedSecretValues: suspected.count,
+  };
+}
+
+/** `reject_admin_proposal_segment`, as `principalId` (this workspace's owner), with `reason`
+ *  (already trimmed and bounded by the capability's params). The guard stamps the time. */
+export async function rejectAdminProposalSegment(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+  segmentId: string,
+  reason: string,
+): Promise<ReceivedAdminProposalSegmentWire> {
+  const row = await loadReceivedSegment(client, workspaceId, segmentId, { forUpdate: true });
+  assertOpen(row);
+  const updated = await client.query(
+    `update admin_proposal_segments
+        set status = 'rejected', decided_by = $3, reason = $4
+      where id = $1 and target_workspace_id = $2 and status = 'proposed'`,
+    [row.id, workspaceId, principalId, reason],
+  );
+  if (updated.rowCount !== 1) {
+    throw new Error(`rejectAdminProposalSegment: segment ${row.id} did not move to rejected`);
+  }
+  return getAdminProposalSegment(client, workspaceId, row.id);
+}

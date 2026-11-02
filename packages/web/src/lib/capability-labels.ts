@@ -1594,6 +1594,36 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     enHint:
       'Withdraws an admin proposal: segments not yet decided become withdrawn and can no longer be applied; applied ones stay.',
   },
+  list_admin_proposal_segments: {
+    zh: '查看发来的管理员提案',
+    en: 'List admin proposals sent here',
+    zhHint: '查看平台管理员的智能体发给本工作区的管理员提案：提议了什么、状态、由谁决定。',
+    enHint:
+      "Lists the admin proposals a platform administrator's agent sent to this workspace: what each proposes, its status and who decided it.",
+  },
+  preview_admin_proposal_segment: {
+    zh: '预览管理员提案',
+    en: 'Preview an admin proposal',
+    zhHint:
+      '把发来的管理员提案对应到本工作区的对象并试算一遍，看会改什么、是否扩大权限、有无疑似凭证；不写入任何东西。',
+    enHint:
+      "Maps an admin proposal sent here onto this workspace's own objects and dry-runs it: what it would change, whether it widens authority, any suspected credentials. Writes nothing.",
+  },
+  apply_admin_proposal_segment: {
+    zh: '应用管理员提案',
+    en: 'Apply an admin proposal',
+    zhHint:
+      '在本工作区应用发来的管理员提案，记成一条安装历史，可从那里撤销；发布的版本记为智能体起草、由你发布。',
+    enHint:
+      'Applies an admin proposal sent here as one install record, which can be rolled back from there; each version it publishes is recorded as drafted by an agent and published by you.',
+  },
+  reject_admin_proposal_segment: {
+    zh: '拒绝管理员提案',
+    en: 'Reject an admin proposal',
+    zhHint: '拒绝发来的管理员提案并写明理由；理由只有本工作区和平台管理员能看到，提议的智能体只知道被拒绝了。',
+    enHint:
+      "Rejects an admin proposal sent here, with your reason; only this workspace and the platform's administrators see the reason — the agent that proposed it learns only that it was rejected.",
+  },
   platform_status: {
     zh: '查看服务状态',
     en: 'Service status',

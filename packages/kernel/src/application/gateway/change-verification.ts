@@ -27,7 +27,8 @@ import { probeGatekeeperHealth } from './gatekeeper-read-handlers.js';
  * each with how the workspace has that pack now (`readPackDependencies`).
  *
  * The source version counts as found only when this deployment ships it with the same content
- * (name, version and digest): what it needs is then known.
+ * (name, version and digest): what it needs is then known. An admin proposal's segment (S11 AA3b-2)
+ * needs neither systems nor packs, so it is found with none.
  */
 
 async function probeGates(
@@ -64,6 +65,11 @@ export function sourceRequirementsChecker(
   registry: PackRegistryOptions = {},
 ): CheckSourceRequirements {
   return async (source: ChangeSource) => {
+    // S11 AA3b-2: an admin proposal's segment needs nothing outside it — no systems, no packs — and
+    // is its own source (the record keeps its digest), so what it needs is known: none.
+    if (source.kind === 'admin_proposal') {
+      return { sourceFound: true, requirements: [], dependencies: [] };
+    }
     const packs = await loadPackRegistry(registry);
     const version = packs
       .get(source.name)

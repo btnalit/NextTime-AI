@@ -29,6 +29,7 @@ function segment(id: string, patch: Partial<ChangeSegmentWire> = {}): ChangeSegm
     source: { kind: 'pack', name: 'ops-assets', version: '2', digest: 'sha256:x' },
     status: 'applied',
     proposedBy: { id: 'p-owner', kind: 'human', displayName: 'Owner' },
+    adminProposal: null,
     appliedBy: { id: 'p-owner', kind: 'human', displayName: 'Owner' },
     appliedAt: '2026-10-20T08:00:00.000Z',
     verifiedAt: null,

@@ -46,7 +46,7 @@ interface WritingItemRow {
   segment_id: string;
   status: ChangeSegmentStatus;
   channel: ChangeChannel;
-  source_kind: 'pack';
+  source_kind: ChangeSource['kind'];
   source_name: string;
   source_version: string;
   source_digest: string;
