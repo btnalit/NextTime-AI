@@ -1,4 +1,4 @@
-import type { Role } from '@nexttime/shared';
+import type { Role, WorkspacePurposeWire } from '@nexttime/shared';
 /**
  * Platform users and their workspace memberships (S4.1, design doc §7.11 "身份模型：用户在平台，
  * 成员资格在工作区").
@@ -41,6 +41,7 @@ export interface MembershipRow {
   readonly workspaceId: string;
   readonly workspaceName: string;
   readonly workspaceStatus: 'active' | 'disabled';
+  readonly workspacePurpose: WorkspacePurposeWire;
   readonly principalId: string;
   readonly role: Role;
   readonly disabled: boolean;
@@ -571,6 +572,7 @@ interface MembershipDbRow {
   workspace_id: string;
   workspace_name: string;
   workspace_status: string;
+  workspace_purpose: string;
   principal_id: string;
   role: string;
   disabled: boolean;
@@ -581,6 +583,7 @@ function mapMembership(row: MembershipDbRow): MembershipRow {
     workspaceId: row.workspace_id,
     workspaceName: row.workspace_name,
     workspaceStatus: row.workspace_status as 'active' | 'disabled',
+    workspacePurpose: row.workspace_purpose as WorkspacePurposeWire,
     principalId: row.principal_id,
     role: row.role as Role,
     disabled: row.disabled,
@@ -593,7 +596,8 @@ export async function listMemberships(pool: PoolLike, userId: string): Promise<M
   return withAdminClient(pool, async (client) => {
     const result = await client.query<MembershipDbRow>(
       `select p.workspace_id, w.name as workspace_name, w.status as workspace_status,
-              p.id as principal_id, p.role, (p.disabled_at is not null) as disabled
+              w.purpose as workspace_purpose, p.id as principal_id, p.role,
+              (p.disabled_at is not null) as disabled
          from principals p
          join workspaces w on w.id = p.workspace_id
         where p.user_id = $1 and p.kind = 'human'

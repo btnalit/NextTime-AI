@@ -14,7 +14,7 @@ import {
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
-import { roleLabel } from '../../lib/labels.js';
+import { roleLabel, workspaceNameWithPurpose } from '../../lib/labels.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { envAdminTitle } from '../../lib/platform-errors.js';
 import { deriveUserStatus } from '../../lib/status-tone.js';
@@ -479,7 +479,7 @@ function userColumns(
                 title={membership.disabled ? t('成员资格已停用', 'Membership disabled') : undefined}
                 data-testid="platform-user-workspace-chip"
               >
-                {membership.workspaceName}@{roleLabel(membership.role, t)}
+                {`${workspaceNameWithPurpose(membership.workspaceName, membership.workspacePurpose, t)}@${roleLabel(membership.role, t)}`}
               </span>
             ))
           )}

@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useRef } from 'react';
 import type { WireMembership } from '../../lib/auth-api.js';
 import { type Translate, useT } from '../../lib/i18n.js';
-import { roleLabel } from '../../lib/labels.js';
+import { roleLabel, workspaceNameWithPurpose } from '../../lib/labels.js';
 import type { ExternalNavItem, NavItem } from '../../lib/nav.js';
 import { EXPLORER_NAV, GOVERN_NAV, PLATFORM_NAV, WORK_NAV } from '../../lib/nav.js';
 import type { InferredRole, WorkspaceRole } from '../../lib/role.js';
@@ -146,6 +146,11 @@ export function SidebarContent({
     role.kind !== 'known' || roleMayOpen(role.role, item.href);
   const isAdmin = platformRole === 'admin';
   const showSwitcher = authMode === 'cookie' && memberships !== undefined && memberships.length > 1;
+  // Legacy 596: inside a trial workspace (`admin_trial`, the admin agent's sandbox) the block says
+  // so — an amber 「试验」 chip in the caption, 「工作区 · 试验 · 所有者」. Known from the
+  // membership (cookie sessions); an apiKey session has none and shows no chip.
+  const inTrialWorkspace =
+    scopedWorkspacePurpose(memberships, selectedWorkspaceId) === 'admin_trial';
   const navRef = useRef<HTMLElement>(null);
   // Design review follow-up (platform-overview-1440.png): with an owner who is also platform
   // admin, ~21 nav items cannot all fit inside a 900px-tall sidebar even at the tightened row
@@ -186,7 +191,7 @@ export function SidebarContent({
           >
             {(memberships ?? []).map((m) => (
               <option key={m.workspaceId} value={m.workspaceId}>
-                {m.workspaceName} ({roleLabel(m.role, t)})
+                {`${workspaceNameWithPurpose(m.workspaceName, m.workspacePurpose, t)} (${roleLabel(m.role, t)})`}
               </option>
             ))}
           </Select>
@@ -198,6 +203,24 @@ export function SidebarContent({
         <span className="sidebar-workspace-caption">
           <span>{t('工作区', 'Workspace')}</span>
           <span aria-hidden>·</span>
+          {inTrialWorkspace ? (
+            <>
+              <span
+                title={t(
+                  '试验工作区：管理员智能体在这里试做，结果要经人审阅、应用管理员提案后才进入正式工作区',
+                  'Trial workspace: the admin agent tries things here; results reach a regular workspace only once a person reviews and applies an admin proposal',
+                )}
+              >
+                <StatusChip
+                  machine="workspacePurpose"
+                  status="admin_trial"
+                  size="s"
+                  testId="sidebar-workspace-trial"
+                />
+              </span>
+              <span aria-hidden>·</span>
+            </>
+          ) : null}
           {role.kind === 'known' ? (
             // Legacy sweep (console batch, 2026-10-16): the tooltip names the role in words; the
             // raw value stays machine-readable on `data-role` (e2e journey ⑧ keys on it).
@@ -343,12 +366,24 @@ export function SidebarContent({
   );
 }
 
+/** Legacy 596: the purpose of the workspace in scope, from the signed-in user's memberships
+ *  (cookie sessions) — `undefined` for an apiKey session, which has none. */
+export function scopedWorkspacePurpose(
+  memberships: readonly WireMembership[] | undefined,
+  selectedWorkspaceId: string | null | undefined,
+): WireMembership['workspacePurpose'] | undefined {
+  return memberships?.find((m) => m.workspaceId === selectedWorkspaceId)?.workspacePurpose;
+}
+
 export interface MobileTopBarProps {
   /** The current page's own name (`lib/nav.ts` `breadcrumbFor(active)`'s last crumb) — `AppShell`
    *  resolves this; kept a plain string here so this file need not import `lib/router.ts`'s
    *  `NavSection` just to re-derive it. */
   readonly pageTitle: string;
   readonly workspaceName: string;
+  /** Legacy 596: the scoped workspace's purpose (`scopedWorkspacePurpose`) — a trial workspace
+   *  reads 「名字（试验）」 here, the only place it shows at this width while the drawer is shut. */
+  readonly workspacePurpose?: WireMembership['workspacePurpose'];
   readonly role: WorkspaceRole;
   /** The WS connection dot + `data-testid="ws-status"` label — a product gap the S8 W1-A3 follow-up
    *  closed, not a testing convenience: at ≤960px the wide `<aside>` (the only place this used to
@@ -381,11 +416,16 @@ function roleText(role: WorkspaceRole, t: Translate): string {
 export function MobileTopBar({
   pageTitle,
   workspaceName,
+  workspacePurpose,
   role,
   wsStatus,
   onOpenMenu,
 }: MobileTopBarProps) {
   const t = useT();
+  const scopeName =
+    workspacePurpose === undefined
+      ? workspaceName
+      : workspaceNameWithPurpose(workspaceName, workspacePurpose, t);
   return (
     <header className="mobile-topbar">
       <Button
@@ -400,7 +440,7 @@ export function MobileTopBar({
       <div className="mobile-topbar-text">
         <span className="mobile-topbar-title truncate">{pageTitle}</span>
         <span className="mobile-topbar-sub truncate">
-          NextTime AI · {workspaceName} · {roleText(role, t)}
+          {`NextTime AI · ${scopeName} · ${roleText(role, t)}`}
         </span>
       </div>
       <div className="conn-status" title={`Kernel connection: ${STATUS_LABEL[wsStatus].en}`}>

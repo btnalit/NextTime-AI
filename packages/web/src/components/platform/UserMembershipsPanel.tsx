@@ -13,6 +13,7 @@ import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { Field, Select as LegacySelect } from '../ui/Field.js';
 import { Notice } from '../ui/Notice.js';
+import { StatusChip } from '../ui/StatusChip.js';
 import { PlatformError } from './PlatformError.js';
 
 export interface UserMembershipsPanelProps {
@@ -222,6 +223,14 @@ function MembershipRow({
       <div className="data-row-main">
         <div className="data-row-title">
           <span className="truncate">{membership.workspaceName}</span>
+          {membership.workspacePurpose === 'admin_trial' ? (
+            <StatusChip
+              machine="workspacePurpose"
+              status="admin_trial"
+              size="s"
+              testId="user-membership-trial"
+            />
+          ) : null}
           {membership.disabled ? <span className="tag">{t('已停用', 'Disabled')}</span> : null}
           {membership.workspaceStatus === 'disabled' ? (
             <span className="tag text-danger">{t('工作区已停用', 'Workspace disabled')}</span>

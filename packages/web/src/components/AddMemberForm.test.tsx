@@ -136,6 +136,7 @@ describe('AddMemberForm', () => {
               {
                 workspaceId: 'ws-1',
                 workspaceName: 'Default',
+                workspacePurpose: 'standard',
                 workspaceStatus: 'active',
                 principalId: 'p-1',
                 role: 'owner',

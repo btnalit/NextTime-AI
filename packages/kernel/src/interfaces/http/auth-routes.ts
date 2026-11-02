@@ -87,6 +87,8 @@ interface WireUser {
 interface WireMembership {
   readonly workspaceId: string;
   readonly workspaceName: string;
+  /** Legacy 596: the console marks a trial (`admin_trial`) workspace in its switcher and sidebar. */
+  readonly workspacePurpose: string;
   readonly principalId: string;
   readonly role: string;
 }
@@ -105,6 +107,7 @@ function toWireMembership(m: MembershipRow): WireMembership {
   return {
     workspaceId: m.workspaceId,
     workspaceName: m.workspaceName,
+    workspacePurpose: m.workspacePurpose,
     principalId: m.principalId,
     role: m.role,
   };
