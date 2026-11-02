@@ -157,6 +157,15 @@ export const PLATFORM_NAV: readonly NavItem[] = [
     icon: 'send',
     href: hrefs.platformIntegrations(),
   },
+  // S11 AA4b (the AA4 plan F7): admin proposals — their platform segment reviewed, applied, rejected
+  // and rolled back here; each workspace segment shows its status and its owner's reason only.
+  {
+    section: 'platformAdminProposals',
+    label: '管理员提案',
+    sub: 'Admin proposals',
+    icon: 'edit',
+    href: hrefs.platformAdminProposals(),
+  },
   // P-B2b (design §6.4): modules — versioned domain packs, install counts, default modules.
   {
     section: 'platformModules',

@@ -223,6 +223,10 @@ describe('hrefs', () => {
       { kind: 'platformStatus' },
       { kind: 'platformAudit' },
       { kind: 'platformResidue' },
+      { kind: 'platformAdminProposals', tab: 'proposals' },
+      { kind: 'platformAdminProposals', tab: 'proposals', itemId: 'p-1' },
+      { kind: 'platformAdminProposals', tab: 'records' },
+      { kind: 'platformAdminProposals', tab: 'records', itemId: 'r 1' },
     ];
     for (const route of cases) {
       const href = hrefFor(route);
@@ -277,6 +281,8 @@ function hrefFor(route: Route): string {
       return hrefs.platformWorkspaces();
     case 'platformIntegrations':
       return route.gateId ? hrefs.platformGateInstance(route.gateId) : hrefs.platformIntegrations();
+    case 'platformAdminProposals':
+      return hrefs.platformAdminProposals(route.tab, route.itemId);
     case 'platformSettings':
       return hrefs.platformSettings();
     case 'platformRuntime':

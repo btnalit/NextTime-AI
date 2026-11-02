@@ -1,6 +1,7 @@
 import type {
   ActionRequestStatus,
   AdminProposalSegmentStatus,
+  AdminProposalStatus,
   BlastRadius,
   ChangeItemState,
   ChangeSegmentStatus,
@@ -22,6 +23,7 @@ import type {
   PlanRevisionStatus,
   PlanningRoundStatus,
   PlatformBackupStatusWire,
+  PlatformChangeSegmentStatus,
   PlatformRoleWire,
   PlatformUpdateFeedStatusWire,
   PublishableStatus,
@@ -37,6 +39,7 @@ import type {
 import {
   ACTION_REQUEST_STATUS_VALUES,
   ADMIN_PROPOSAL_SEGMENT_STATUS_VALUES,
+  ADMIN_PROPOSAL_STATUS_VALUES,
   BLAST_RADIUS_VALUES,
   CHANGE_ITEM_STATE_VALUES,
   CHANGE_SEGMENT_STATUS_VALUES,
@@ -58,6 +61,7 @@ import {
   PACK_REQUIREMENT_STATE_VALUES,
   PLANNING_ROUND_STATUS_VALUES,
   PLAN_REVISION_STATUS_VALUES,
+  PLATFORM_CHANGE_SEGMENT_STATUS_VALUES,
   PUBLISHABLE_STATUS_VALUES,
   PiDriftStatusWireSchema,
   PlatformBackupStatusWireSchema,
@@ -148,6 +152,8 @@ export type StatusMachine =
   | 'selfConnection'
   | 'changeSegment'
   | 'adminProposalSegment'
+  | 'adminProposal'
+  | 'platformChangeSegment'
   | 'changeItemState'
   | 'packInstall'
   | 'goalRun'
@@ -443,6 +449,22 @@ export const ADMIN_PROPOSAL_SEGMENT_TONES: Readonly<Record<AdminProposalSegmentS
     rolled_back: { tone: 'neutral', label: { zh: '已撤销', en: 'Rolled back' } },
   };
 
+/** S11 AA4b: a whole admin proposal, as the platform lists it (`adminProposalStatusOf`). */
+export const ADMIN_PROPOSAL_TONES: Readonly<Record<AdminProposalStatus, ChipStyle>> = {
+  proposed: { tone: 'warn', label: { zh: '待确认', en: 'Awaiting decisions' } },
+  partially_applied: { tone: 'info', label: { zh: '部分已应用', en: 'Partly applied' } },
+  applied: { tone: 'ok', label: { zh: '已应用', en: 'Applied' } },
+  closed: { tone: 'neutral', label: { zh: '已结束', en: 'Closed' } },
+};
+
+/** S11 AA4b: a platform change segment (平台变更记录) — what a platform segment's apply recorded. */
+export const PLATFORM_CHANGE_SEGMENT_TONES: Readonly<
+  Record<PlatformChangeSegmentStatus, ChipStyle>
+> = {
+  applied: { tone: 'ok', label: { zh: '已应用', en: 'Applied' } },
+  rolled_back: { tone: 'neutral', label: { zh: '已撤销', en: 'Rolled back' } },
+};
+
 /** S11 P1-B: what one change of an install record left is now (`ChangeItemWire.state`). */
 export const CHANGE_ITEM_STATE_TONES: Readonly<Record<ChangeItemState, ChipStyle>> = {
   in_effect: { tone: 'ok', label: { zh: '生效中', en: 'In effect' } },
@@ -658,6 +680,11 @@ const MACHINES: Readonly<
   adminProposalSegment: {
     values: ADMIN_PROPOSAL_SEGMENT_STATUS_VALUES,
     tones: ADMIN_PROPOSAL_SEGMENT_TONES,
+  },
+  adminProposal: { values: ADMIN_PROPOSAL_STATUS_VALUES, tones: ADMIN_PROPOSAL_TONES },
+  platformChangeSegment: {
+    values: PLATFORM_CHANGE_SEGMENT_STATUS_VALUES,
+    tones: PLATFORM_CHANGE_SEGMENT_TONES,
   },
   changeItemState: { values: CHANGE_ITEM_STATE_VALUES, tones: CHANGE_ITEM_STATE_TONES },
   packInstall: { values: PACK_INSTALL_STATUS_VALUES, tones: PACK_INSTALL_TONES },

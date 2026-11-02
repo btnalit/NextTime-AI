@@ -693,7 +693,7 @@ function ConnectionStep({
         showCreateForm ? (
           <div className="stack-s" data-testid="launcher-create-instance">
             <span className="section-title">
-              {t('新建门宿主实例', 'Create a hosted instance')} ({kind})
+              {t('新建门宿主实例', 'Create a gate-host instance')} ({kind})
             </span>
             <CreateGateInstanceForm
               http={http}

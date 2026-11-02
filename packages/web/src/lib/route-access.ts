@@ -35,6 +35,7 @@ export const ROUTE_REQUIRES: Readonly<Partial<Record<Route['kind'], RouteRequire
   platformUsers: PLATFORM,
   platformWorkspaces: PLATFORM,
   platformIntegrations: PLATFORM,
+  platformAdminProposals: PLATFORM,
   platformModules: PLATFORM,
   platformModels: PLATFORM,
   platformSettings: PLATFORM,

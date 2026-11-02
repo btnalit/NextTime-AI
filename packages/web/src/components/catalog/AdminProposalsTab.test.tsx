@@ -542,7 +542,7 @@ describe('AdminProposalsTab (能力目录 · 管理员提案, S11 AA4a)', () => 
     renderTab(http, SEGMENT);
 
     const changes = await screen.findByTestId('catalog-proposal-platform-changes');
-    expect(changes.textContent).toContain('RAGFlow：地址、连接器改过');
+    expect(changes.textContent).toContain('RAGFlow：地址、接入包改过');
     expect(changes.textContent).toContain('wiki-a：已删除');
     expect(screen.getByTestId('catalog-proposal-platform').textContent).toContain(
       '平台管理员已经应用',

@@ -96,6 +96,11 @@ const PlatformModelsPage = lazy(() =>
     default: m.PlatformModelsPage,
   })),
 );
+const PlatformAdminProposalsPage = lazy(() =>
+  import('./components/platform/PlatformAdminProposalsPage.js').then((m) => ({
+    default: m.PlatformAdminProposalsPage,
+  })),
+);
 const PlatformModulesPage = lazy(() =>
   import('./components/platform/PlatformModulesPage.js').then((m) => ({
     default: m.PlatformModulesPage,
@@ -445,6 +450,18 @@ export function Routed({
         t,
       );
       break;
+    case 'platformAdminProposals':
+      page = requireAdmin(
+        session,
+        <PlatformAdminProposalsPage
+          http={session.http}
+          tab={route.tab}
+          itemId={route.itemId}
+          onNavigate={(tab, id) => navigate(hrefs.platformAdminProposals(tab, id ?? undefined))}
+        />,
+        t,
+      );
+      break;
     case 'platformModules':
       page = requireAdmin(session, <PlatformModulesPage http={session.http} />, t);
       break;
@@ -510,6 +527,7 @@ export function isPlatformRoute(kind: Route['kind']): boolean {
     kind === 'platformUsers' ||
     kind === 'platformWorkspaces' ||
     kind === 'platformIntegrations' ||
+    kind === 'platformAdminProposals' ||
     kind === 'platformModules' ||
     kind === 'platformModels' ||
     kind === 'platformSettings' ||

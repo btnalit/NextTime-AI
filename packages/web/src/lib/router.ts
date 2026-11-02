@@ -34,6 +34,7 @@ export type NavSection =
   | 'platformUsers'
   | 'platformWorkspaces'
   | 'platformIntegrations'
+  | 'platformAdminProposals'
   | 'platformModules'
   | 'platformModels'
   | 'platformSettings'
@@ -72,6 +73,13 @@ export type EvaluationTab = (typeof EVALUATION_TAB_VALUES)[number];
 export const INTEGRATIONS_TAB_VALUES = ['connectors', 'instances', 'self', 'runtimes'] as const;
 export type IntegrationsTab = (typeof INTEGRATIONS_TAB_VALUES)[number];
 
+/** 平台 · 管理员提案's tabs (S11 AA4b): the admin proposals themselves, and 平台变更记录 — what
+ *  applying their platform segments changed on the platform. The item route is a proposal's id, or
+ *  a platform change segment's: `#/platform/admin-proposals[/<id>]`,
+ *  `#/platform/admin-proposals/records[/<id>]` (both ids are uuids, so `records` never is one). */
+export const PLATFORM_PROPOSALS_TAB_VALUES = ['proposals', 'records'] as const;
+export type PlatformProposalsTab = (typeof PLATFORM_PROPOSALS_TAB_VALUES)[number];
+
 export type Route =
   | { readonly kind: 'login' }
   | { readonly kind: 'graph' }
@@ -93,6 +101,11 @@ export type Route =
   | { readonly kind: 'platformUsers' }
   | { readonly kind: 'platformWorkspaces' }
   | { readonly kind: 'platformIntegrations'; readonly gateId?: string }
+  | {
+      readonly kind: 'platformAdminProposals';
+      readonly tab: PlatformProposalsTab;
+      readonly itemId?: string;
+    }
   | { readonly kind: 'platformModules' }
   | { readonly kind: 'platformModels' }
   | { readonly kind: 'platformSettings' }
@@ -206,6 +219,13 @@ export function routeFromHash(fullHash: string): Route {
       ? { kind: 'platformIntegrations', gateId: decodeURIComponent(integrations[1]) }
       : { kind: 'platformIntegrations' };
   }
+  // S11 AA4b: 管理员提案 and its 平台变更记录 tab, each with an optional item.
+  const adminProposals = /^#\/platform\/admin-proposals(?:\/(records))?(?:\/(.+))?$/.exec(hash);
+  if (adminProposals) {
+    const tab: PlatformProposalsTab = adminProposals[1] === 'records' ? 'records' : 'proposals';
+    const itemId = adminProposals[2] ? decodeURIComponent(adminProposals[2]) : undefined;
+    return { kind: 'platformAdminProposals', tab, ...(itemId !== undefined ? { itemId } : {}) };
+  }
   // P-B2b: platform-level 模块 (design §6.4 — module install counts + default modules).
   if (hash === '#/platform/modules') return { kind: 'platformModules' };
   // S6-B: platform-level 模型与供应商 (providers live in llm-proxy; the page talks to /api/llm-admin).
@@ -286,6 +306,12 @@ export const hrefs = {
    *  system that a preset of the same name covers sends a platform administrator here. */
   platformConnectorPreset: (preset: string) =>
     `#/platform/integrations?tab=instances&preset=${encodeURIComponent(preset)}`,
+  /** S11 AA4b: 管理员提案 (`tab` proposals) or 平台变更记录 (`records`), with an item open. */
+  platformAdminProposals: (tab: PlatformProposalsTab = 'proposals', itemId?: string) => {
+    const base =
+      tab === 'records' ? '#/platform/admin-proposals/records' : '#/platform/admin-proposals';
+    return itemId !== undefined ? `${base}/${encodeURIComponent(itemId)}` : base;
+  },
   platformModules: () => '#/platform/modules',
   platformModels: () => '#/platform/models',
   /** 模型与供应商 with the 新增供应商 drawer already open (the overview's first-run step). */

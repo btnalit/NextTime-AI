@@ -311,6 +311,32 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '平台部分建好的门宿主实例之后在平台上被改过或删掉了，和你审阅的已经不一样，本次没有写入任何内容。可以拒绝它，或请平台管理员改回原样',
     en: 'A gate-host instance its platform part created was changed or deleted on the platform since, so it is not what you reviewed — nothing was written. Reject it, or ask a platform administrator to put it back as it was',
   },
+  // S11 AA4b (`application/change-plan/admin-proposals.ts`, `platform-segments.ts`): 平台 · 管理员提案
+  // and its 平台变更记录. Nothing was written in any of them.
+  admin_proposal_not_found: {
+    zh: '平台上没有这份管理员提案，本次没有写入任何内容。回到「管理员提案」重新选择',
+    en: 'The platform has no such admin proposal — nothing was written. Pick it again from Admin proposals',
+  },
+  admin_proposal_not_open: {
+    zh: '这份管理员提案已经没有待决定的部分（都已应用、拒绝、撤回或撤销），本次没有写入任何内容。刷新后查看它现在的状态',
+    en: 'No part of this admin proposal is still awaiting a decision (each was applied, rejected, withdrawn or rolled back) — nothing was written. Refresh to see where it stands now',
+  },
+  platform_change_segment_not_found: {
+    zh: '平台上没有这条平台变更记录，本次没有写入任何内容。回到「平台变更记录」重新选择',
+    en: 'The platform has no such platform change record — nothing was written. Pick it again from Platform change records',
+  },
+  platform_change_drifted: {
+    zh: '它建的门宿主实例在应用之后又被改过，和撤销预览里看到的不一样了，本次没有写入任何内容。刷新后看哪里改了：先在「集成 → 门实例」改回原样，或手动处理',
+    en: 'A gate-host instance it created was changed after it was applied, so it is not what the rollback preview showed — nothing was written. Refresh to see what changed: put it back as it was under Integrations → Gate instances first, or deal with it by hand',
+  },
+  dependent_segments_applied: {
+    zh: '这份管理员提案的工作区部分已经在工作区里应用了，它们要用这些门宿主实例，所以不能撤销，本次没有写入任何内容。请这些工作区的所有者先在「安装历史」撤销它们',
+    en: 'Workspace parts of this admin proposal were applied and use these gate-host instances, so it cannot be rolled back — nothing was written. Ask those workspaces’ owners to roll theirs back in Install history first',
+  },
+  platform_change_segment_rolled_back: {
+    zh: '这条平台变更记录已经撤销过了，本次没有写入任何内容。刷新后查看它现在的状态',
+    en: 'This platform change record was already rolled back — nothing was written. Refresh to see where it stands now',
+  },
   // S7-E (`application/platform/runtime.ts`): the 运行层 page's refusals. Nothing changed in any of
   // them. The allowlist is the host's configuration, so the operator is who widens it.
   image_not_in_inventory: {
