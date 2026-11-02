@@ -136,7 +136,7 @@ describe('PlatformSegmentReview (平台部分审阅, S11 AA4b)', () => {
 
     fireEvent.click(trigger);
     const confirm = await screen.findByTestId('platform-segment-apply-confirm');
-    expect(confirm.textContent).toContain('在平台上新建 2 个门宿主实例，状态为「已发现」');
+    expect(confirm.textContent).toContain('在平台上新建 2 个门宿主实例，状态为「未启用」');
     expect(confirm.textContent).toContain('新建接入包 ops-console（平台预置）');
     expect(confirm.textContent).toContain('记成一条平台变更记录');
     fireEvent.click(within(confirm).getByRole('button', { name: '应用' }));

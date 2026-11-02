@@ -270,15 +270,22 @@ export function currentStateText(
           `${driftFieldsText(item.drift, t)}在应用之后改过`,
           `${driftFieldsText(item.drift, t)} changed since it was applied`,
         )
-      : t('和应用时一样', 'as it was applied');
-  const state =
-    item.action === 'already_disabled' ? t('已停用', 'disabled') : t('没有停用', 'not disabled');
+      : t('定义和应用时一样', 'its definition is as it was applied');
+  const disabled = item.action === 'already_disabled';
+  const state = disabled ? t('已停用', 'disabled') : t('没有停用', 'not disabled');
+  // #936 UX P3-2: a disabled instance still answers the workspaces that enabled it — say so, as
+  // right after a rollback is when it is easiest to believe they were cut off.
   const used =
     item.linkedWorkspaceCount > 0
-      ? t(
-          `${item.linkedWorkspaceCount} 个工作区启用了它`,
-          `${item.linkedWorkspaceCount} workspace${item.linkedWorkspaceCount > 1 ? 's' : ''} enabled it`,
-        )
+      ? disabled
+        ? t(
+            `${item.linkedWorkspaceCount} 个工作区启用了它，已启用的仍能调用`,
+            `${item.linkedWorkspaceCount} workspace${item.linkedWorkspaceCount > 1 ? 's' : ''} enabled it and can still call it`,
+          )
+        : t(
+            `${item.linkedWorkspaceCount} 个工作区启用了它`,
+            `${item.linkedWorkspaceCount} workspace${item.linkedWorkspaceCount > 1 ? 's' : ''} enabled it`,
+          )
       : t('没有工作区启用它', 'no workspace enabled it');
   return t(`${name}：${drift}；${state}；${used}`, `${name}: ${drift}; ${state}; ${used}`);
 }

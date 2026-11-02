@@ -15,6 +15,7 @@
  * Routes:
  *   POST /resident/spawn          {workspaceId, principalId, handle, kernelUrl?, llmUrl?,
  *                                   systemPrompt?, model?, image?, agentKind?}  [agent-host]
+ *                                  (systemPrompt required with agentKind: config.ts)
  *                                  -> 200 {containerId, ip, status, created, restarts}
  *                                     | 403 (image not allowlisted)
  *                                     | 409 runtime_image_incompatible (runtime-contract.ts)

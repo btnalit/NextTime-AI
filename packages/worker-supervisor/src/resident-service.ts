@@ -38,8 +38,10 @@
  * and, in a trial workspace, an admin agent's. Everything here is keyed by kind × Principal — the
  * registry, the container name, the directories, the egress source and the Handle binding — so the
  * two never share a container, a file or an attribution. The admin agent's source is registered
- * deny-all on every spawn, reuse included; one whose registration fails is not left running.
- * `reconcile`, `list` and the idle sweep cover both kinds; `reclaim` removes both.
+ * deny-all on every spawn, reuse included, and on every `reconcile` (a supervisor restart, a
+ * docker-events reconnect); one whose registration fails is removed on all three paths, never left
+ * running on egress-proxy's unknown-source default. `reconcile`, `list` and the idle sweep cover
+ * both kinds; `reclaim` removes both.
  */
 
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -238,7 +240,8 @@ export interface ResidentService {
    *  §13 "agent-host 重启...事件桥重连"; the supervisor's own analogue for its egress registrations
    *  and idle clocks, which are both in-memory). feat/egress-docker-events: also called again after
    *  every docker-events reconnect (`index.ts`/`docker-events.ts`) — see its own doc comment for
-   *  why that's safe to do repeatedly. */
+   *  why that's safe to do repeatedly. S11 AA4c-2: an admin agent's container whose deny-all
+   *  registration fails here is removed, as on spawn. */
   reconcile(): Promise<void>;
   /** Stops every resident container whose `lastTouchedAt` is older than `entryIdleTimeoutMs`
    *  (design doc §7.2 "空闲超时停容器"). Call on an interval — see `index.ts`. */
@@ -413,10 +416,23 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
     );
   }
 
+  /** Takes down an admin agent's container whose deny-all egress registration failed (S11 AA4c-2):
+   *  its Handle binding first, while it still holds its address, then its registry entry and the
+   *  container itself. Spawn, reuse and `reconcile` all end here — it must never run where
+   *  egress-proxy might treat it as an unknown, and so possibly unrestricted, source. */
+  async function retireUnregistered(
+    kind: ResidentAgentKind,
+    principalId: string,
+    container: { readonly id: string; readonly ip: string | undefined },
+  ): Promise<void> {
+    unbindHandle(container.ip, container.id);
+    registry.delete(residentKey(kind, principalId));
+    await docker.remove(residentContainerName(kind, principalId));
+  }
+
   /** Registers `container`'s egress source (`registerEgress`). An entry agent's registration is
    *  best-effort as before; an admin agent's container whose deny-all registration failed is
-   *  removed and the spawn fails (S11 AA4c-2) — it must never run where egress-proxy might treat
-   *  it as an unknown, and so possibly unrestricted, source. */
+   *  removed (`retireUnregistered`) and the spawn fails (S11 AA4c-2). */
   async function registerEgressOrRetire(
     kind: ResidentAgentKind,
     workspaceId: string,
@@ -427,9 +443,7 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
     const registered = registerEgress(kind, workspaceId, principalId, container.ip, egressDeny);
     if (registered || !residentEgressDenyAll(kind)) return;
     const name = residentContainerName(kind, principalId);
-    unbindHandle(container.ip, container.id);
-    registry.delete(residentKey(kind, principalId));
-    await docker.remove(name);
+    await retireUnregistered(kind, principalId, container);
     throw new Error(
       `${name} was not started: its deny-all egress registration failed (see the error logged before this)`,
     );
@@ -979,10 +993,28 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
             lastAppliedEgressDeny: registry.get(key)?.lastAppliedEgressDeny,
           });
           if (residentEgressDenyAll(kind)) {
-            // S11 AA4c-2: an admin agent's source is deny-all whatever any label or file says. A
-            // registration that fails here leaves it to egress-proxy's unknown-source rule until
-            // its next spawn, which refuses to run it unregistered; the failure is logged.
-            registerEgress(kind, workspaceId, principalId, state.ip);
+            // S11 AA4c-2: an admin agent's source is deny-all whatever any label or file says. One
+            // whose registration fails here is removed, as spawn and reuse remove theirs
+            // (`retireUnregistered`) — never left to egress-proxy's unknown-source rule, which is
+            // configurable (`EGRESS_DENY_UNKNOWN_SOURCE`). A removal Docker refuses is logged and
+            // the pass goes on — it runs at startup and after every docker-events reconnect; the
+            // container's Handle binding went first, so it can call nothing meanwhile.
+            if (!registerEgress(kind, workspaceId, principalId, state.ip)) {
+              try {
+                await retireUnregistered(kind, principalId, state);
+              } catch (err) {
+                console.error(
+                  JSON.stringify({
+                    level: 'error',
+                    msg: 'removing an admin agent container without its deny-all egress entry failed',
+                    principalId,
+                    agentKind: kind,
+                    containerId: state.id,
+                    error: String(err),
+                  }),
+                );
+              }
+            }
             continue;
           }
           // Restores the egress deny list this container was (re)created with (EGRESS_DENY_LABEL),

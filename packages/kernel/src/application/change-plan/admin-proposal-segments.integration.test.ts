@@ -1249,6 +1249,9 @@ describe.runIf(DATABASE_URL !== undefined)(
       const target = await newTarget();
       const other = await newTarget();
       const { proposal, segmentId } = await proposeFor(agent, target, [skillItem('frozen')]);
+      // Two more to `target`, for the ways out the 409 names (#937 R-1).
+      const toReject = await proposeFor(agent, target, [skillItem('frozen-reject')]);
+      const toWithdraw = await proposeFor(agent, target, [skillItem('frozen-withdraw')]);
       const reviewed = await preview(target, segmentId);
       expect(reviewed.targetChosen).toBe(true);
       expect(reviewed.digest).toMatch(/^sha256:/);
@@ -1289,6 +1292,19 @@ describe.runIf(DATABASE_URL !== undefined)(
         ]),
       );
       expect(recorded.rows).toHaveLength(0);
+      // What the refusal tells the owner to do still works with the target dropped (#937 R-1,
+      // governance 0036's segment guard holds only applying to a chosen target): the owner
+      // rejects, and the agent withdraws its own proposal.
+      await expect(
+        call<ReceivedAdminProposalSegmentWire>(
+          ownerCaller(target),
+          'reject_admin_proposal_segment',
+          { segmentId: toReject.segmentId, reason: 'Not chosen for us any more.' },
+        ),
+      ).resolves.toMatchObject({ status: 'rejected' });
+      expect((await segmentRow(toReject.segmentId))?.status).toBe('rejected');
+      await call(agent, 'agent_withdraw_admin_proposal', { proposalId: toWithdraw.proposal.id });
+      expect((await segmentRow(toWithdraw.segmentId))?.status).toBe('withdrawn');
       // The agent proposing it again to `target` is refused; to `other`, it goes through.
       const again = await thrownBy(
         callUnchosen(agent, 'propose_admin_proposal', {
@@ -1336,6 +1352,27 @@ describe.runIf(DATABASE_URL !== undefined)(
           },
         );
       const third = await newTarget();
+      await expect(writeCopy(third.workspaceId)).rejects.toThrow(
+        /not among its proposer's targets/,
+      );
+      // ...nor to one another administrator in the same trial workspace chose for their own agent
+      // (#937 G08): the targets are the proposer's.
+      const colleague = await createUser(pool, {
+        login: `aa3b2-colleague-${randomUUID().slice(0, 8)}`,
+        displayName: 'Colleague',
+        platformRole: 'admin',
+      });
+      await withAdminClient(pool, (client) =>
+        client.query(
+          `insert into principals (workspace_id, id, kind, role, display_name, user_id)
+           values ($1, $2, 'human', 'member', $3, $4)`,
+          [trial.workspaceId, randomUUID(), colleague.displayName, colleague.id],
+        ),
+      );
+      await call(platformCaller(colleague), 'set_admin_agent_targets', {
+        trialWorkspaceId: trial.workspaceId,
+        targetWorkspaceIds: [third.workspaceId],
+      });
       await expect(writeCopy(third.workspaceId)).rejects.toThrow(
         /not among its proposer's targets/,
       );

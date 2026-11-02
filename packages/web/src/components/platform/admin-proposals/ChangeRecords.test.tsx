@@ -127,7 +127,9 @@ describe('平台变更记录 (S11 AA4b)', () => {
     ).toBe(true);
     expect(
       within(detail).getByTestId('platform-change-record-rollback-missing-steps').textContent,
-    ).toContain('知识库（地址）在应用之后改过：先在「集成 → 门实例」改回应用时的样子');
+    ).toContain(
+      '知识库（地址）在应用之后变了（被删掉重建过，或门宿主报上来的不一样了），已经不是这条记录建的样子，这条记录撤销不了。要停用它，到它的门实例页去停用',
+    );
   });
 
   it('the rollback lists the workspaces that enabled each instance with where to cut them off, then says what it did', async () => {
@@ -156,6 +158,10 @@ describe('平台变更记录 (S11 AA4b)', () => {
               canRollBack: false,
             })
           : rollbackPreview({ items: [enabled, rollbackItem(2, 'ops-api')] }),
+      // Two other RAGFlow instances share the connector the proposal's instance joined.
+      list_gate_instances: () => ({
+        items: [{ gateId: 'kb-main' }, { gateId: 'kb-legal' }, { gateId: 'kb-hr' }],
+      }),
       roll_back_platform_change_segment: () => {
         rolledBack = changeRecord({
           status: 'rolled_back',
@@ -185,11 +191,19 @@ describe('平台变更记录 (S11 AA4b)', () => {
     expect(kb.textContent).toContain('生产');
     expect(kb.textContent).toContain('试验场');
     expect(kb.textContent).toContain('还有 50 个没有列出');
-    expect(
-      within(kb)
-        .getByRole('link', { name: '去「集成 → 接入包」把 ragflow 的 Operation 停用' })
-        .getAttribute('href'),
-    ).toBe('#/platform/integrations');
+    // #936 UX 必须修-1: the per-workspace cut-off first; the connector's says what it costs.
+    expect(confirm.textContent).toContain(
+      '请那个工作区的所有者在「能力目录 → Operation」里停用这个门的 Operation，只影响他们自己的工作区',
+    );
+    const cutOff = await within(kb).findByTestId('platform-change-record-connector-cutoff-1');
+    await waitFor(() => expect(cutOff.getAttribute('data-instance-count')).toBe('3'));
+    expect(cutOff.textContent).toBe(
+      '也可以在「集成 → 接入包」停用 ragflow 的 Operation，但那会切断这个接入包下全部 3 个门宿主实例的调用，不只 知识库。',
+    );
+    expect(named(http.calls, 'list_gate_instances')[0]?.params).toEqual({ connector: 'ragflow' });
+    expect(within(kb).getByRole('link', { name: '去「集成 → 接入包」' }).getAttribute('href')).toBe(
+      '#/platform/integrations',
+    );
     expect(within(kb).getByRole('link', { name: '去门实例页' }).getAttribute('href')).toBe(
       '#/platform/integrations/kb-main',
     );
@@ -214,6 +228,42 @@ describe('平台变更记录 (S11 AA4b)', () => {
       expect(screen.getByTestId('platform-change-record-now-1').textContent).toContain('已停用'),
     );
     expect(screen.queryByTestId('platform-change-record-rollback-trigger')).toBeNull();
+  });
+
+  it('says when the connector holds only this instance, and says "every instance" without a count when it cannot tell (#936 UX 必须修-1)', async () => {
+    const enabled = rollbackItem(1, 'kb-main', {
+      linkedWorkspaceCount: 1,
+      enabledIn: [{ workspaceId: WS_PROD, name: '生产', purpose: 'standard' }],
+    });
+    const httpWith = (instances: () => unknown) =>
+      scriptedHttp({
+        list_platform_change_segments: () => ({ items: [changeRecord()] }),
+        get_platform_change_segment: () => changeRecord(),
+        preview_roll_back_platform_change_segment: () =>
+          rollbackPreview({ items: [enabled, rollbackItem(2, 'ops-api')] }),
+        list_gate_instances: instances,
+      });
+    renderRecords(
+      httpWith(() => ({ items: [{ gateId: 'kb-main' }] })),
+      RECORD,
+    );
+    fireEvent.click(await screen.findByTestId('platform-change-record-rollback-trigger'));
+    const only = await screen.findByTestId('platform-change-record-connector-cutoff-1');
+    await waitFor(() => expect(only.getAttribute('data-instance-count')).toBe('1'));
+    expect(only.textContent).toBe(
+      '也可以在「集成 → 接入包」停用 ragflow 的 Operation：这个接入包下现在只有 知识库 这一个门宿主实例，之后加进来的实例也会被拒绝这些 Operation。',
+    );
+    cleanup();
+
+    const down = httpWith(() => Promise.reject(new Error('down')));
+    renderRecords(down, RECORD);
+    fireEvent.click(await screen.findByTestId('platform-change-record-rollback-trigger'));
+    const unknown = await screen.findByTestId('platform-change-record-connector-cutoff-1');
+    await waitFor(() => expect(named(down.calls, 'list_gate_instances')).toHaveLength(1));
+    expect(unknown.getAttribute('data-instance-count')).toBeNull();
+    expect(unknown.textContent).toBe(
+      '也可以在「集成 → 接入包」停用 ragflow 的 Operation，但那会切断这个接入包下所有门宿主实例的调用，不只 知识库。',
+    );
   });
 
   it('applied workspace parts hold the rollback until their owners roll them back', async () => {
@@ -318,7 +368,7 @@ describe('平台变更记录 (S11 AA4b)', () => {
       '撤销之后的现状',
     );
     expect((await screen.findByTestId('platform-change-record-now-1')).textContent).toBe(
-      '知识库：和应用时一样；已停用；没有工作区启用它',
+      '知识库：定义和应用时一样；已停用；没有工作区启用它',
     );
     expect(screen.queryByTestId('platform-change-record-rollback')).toBeNull();
   });

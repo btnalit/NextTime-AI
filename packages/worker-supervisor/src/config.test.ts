@@ -262,6 +262,44 @@ describe('SpawnRequestSchema', () => {
       }).success,
     ).toBe(true);
   });
+
+  it('requires an admin agent’s own systemPrompt, and refuses Skills or an egress list for it (S11 AA4c-2)', () => {
+    const admin = {
+      workspaceId: '55555555-5555-4555-8555-555555555555',
+      principalId: '66666666-6666-4666-8666-666666666666',
+      handle: 'h1',
+      agentKind: 'admin_agent',
+    };
+    const issuesOf = (body: Record<string, unknown>) =>
+      SpawnRequestSchema.safeParse(body).error?.issues.map((issue) => ({
+        path: issue.path,
+        message: issue.message,
+      }));
+
+    expect(SpawnRequestSchema.safeParse({ ...admin, systemPrompt: 'admin' }).success).toBe(true);
+    for (const systemPrompt of [undefined, '   ']) {
+      expect(issuesOf({ ...admin, systemPrompt })).toEqual([
+        {
+          path: ['systemPrompt'],
+          message:
+            'an admin agent needs its own system prompt: the image’s default is the entry agent’s',
+        },
+      ]);
+    }
+    // Empty is refused by the field itself, for either kind.
+    expect(SpawnRequestSchema.safeParse({ ...admin, systemPrompt: '' }).success).toBe(false);
+    expect(
+      issuesOf({
+        ...admin,
+        systemPrompt: 'admin',
+        skillsInline: [{ name: 'notes', files: { 'SKILL.md': '# notes' } }],
+        egressDeny: [],
+      })?.map((issue) => issue.path),
+    ).toEqual([['skillsInline'], ['egressDeny']]);
+    // The entry agent's prompt stays optional.
+    const { agentKind: _, ...entry } = admin;
+    expect(SpawnRequestSchema.safeParse(entry).success).toBe(true);
+  });
 });
 
 describe('StopRequestSchema', () => {
