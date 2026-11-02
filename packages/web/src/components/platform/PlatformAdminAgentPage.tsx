@@ -8,7 +8,7 @@ import { invalidateCapability, useCapability } from '../../hooks/useCapability.j
 import { adminAgentRefusalText } from '../../lib/admin-agent.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
-import { useT } from '../../lib/i18n.js';
+import { type Translate, useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { hrefs } from '../../lib/router.js';
 import { Button, buttonVariants } from '../kit/button.js';
@@ -23,7 +23,6 @@ import { DashboardCard } from '../kit/section.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { AdminAgentTargetsDialog } from './admin-agent/AdminAgentTargetsDialog.js';
-import { sharedTargetsText } from './admin-agent/text.js';
 
 export interface PlatformAdminAgentPageProps {
   readonly http: CapabilityCaller;
@@ -60,10 +59,11 @@ export function PlatformAdminAgentPage({ http, onOpenChats }: PlatformAdminAgent
     await status.reload();
   }
 
-  // What the last 停止 did, said on the page (it stays until the next stop or a reload).
-  const [stopped, setStopped] = useState<AdminAgentStopResultWire | null>(null);
-  function onStopped(result: AdminAgentStopResultWire): void {
-    setStopped(result);
+  // What the last 停止 did, and where (`null`: every trial workspace), said on the page (it stays
+  // until the next stop or a reload).
+  const [stopped, setStopped] = useState<StoppedNote | null>(null);
+  function onStopped(result: AdminAgentStopResultWire, where: string | null): void {
+    setStopped({ result, where });
     void reload();
   }
 
@@ -103,12 +103,7 @@ export function PlatformAdminAgentPage({ http, onOpenChats }: PlatformAdminAgent
       ) : data !== null ? (
         <div className="stack">
           {stopped !== null ? (
-            <Notice testId="admin-agent-stopped">
-              {t(
-                `管理员智能体已停止：吊销了 ${stopped.revokedSessions} 个会话，停下了 ${stopped.stoppedTurns} 轮。对话都还在，之后再发消息会开一个新会话。`,
-                `The admin agent is stopped: ${stopped.revokedSessions} session(s) revoked, ${stopped.stoppedTurns} turn(s) stopped. The chats stay; the next message opens a new session.`,
-              )}
-            </Notice>
+            <Notice testId="admin-agent-stopped">{stoppedText(stopped, t)}</Notice>
           ) : null}
           {data.enabled ? null : (
             <Notice tone="warn" testId="admin-agent-switched-off">
@@ -168,7 +163,7 @@ function TrialWorkspaceCard({
   readonly http: CapabilityCaller;
   readonly workspace: AdminAgentTrialWorkspaceWire;
   readonly onChanged: () => void;
-  readonly onStopped: (result: AdminAgentStopResultWire) => void;
+  readonly onStopped: (result: AdminAgentStopResultWire, where: string | null) => void;
   readonly onOpenChats: (workspaceId: string, mode: 'open' | 'view') => void;
 }) {
   const t = useT();
@@ -231,7 +226,13 @@ function TrialWorkspaceCard({
               </Button>
             ) : null}
           </div>
-          <p className="text-3">{sharedTargetsText(t)}</p>
+          <p className="text-3" data-testid="admin-agent-targets-shared-short">
+            {/* UX P3-3 on #943: the whole of it is in the dialog. */}
+            {t(
+              '这个试验工作区里你的所有管理员对话共用这组目标。',
+              'All of your admin agent chats in this trial workspace share these targets.',
+            )}
+          </p>
           {workspace.targets.length === 0 ? (
             <p className="text-3" data-testid="admin-agent-no-targets">
               {t(
@@ -320,7 +321,7 @@ function StopAdminAgent({
 }: {
   readonly http: CapabilityCaller;
   readonly workspace: AdminAgentTrialWorkspaceWire | null;
-  readonly onStopped: (result: AdminAgentStopResultWire) => void;
+  readonly onStopped: (result: AdminAgentStopResultWire, where: string | null) => void;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -368,8 +369,26 @@ function StopAdminAgent({
           'stop_admin_agent',
           workspace !== null ? { trialWorkspaceId: workspace.workspaceId } : {},
         );
-        onStopped(result);
+        onStopped(result, workspace?.name ?? null);
       }}
     />
+  );
+}
+
+/** The last 停止's result, and the trial workspace it was in (`null`: every one). */
+interface StoppedNote {
+  readonly result: AdminAgentStopResultWire;
+  readonly where: string | null;
+}
+
+/** What a 停止 did (UX P3-4 on #943): where, how many sessions, and turns only when some ran. */
+function stoppedText({ result, where }: StoppedNote, t: Translate): string {
+  const zhWhere = where === null ? '在所有试验工作区' : `在「${where}」`;
+  const enWhere = where === null ? 'in every trial workspace' : `in “${where}”`;
+  const zhTurns = result.stoppedTurns > 0 ? `，停下了 ${result.stoppedTurns} 轮` : '';
+  const enTurns = result.stoppedTurns > 0 ? `, ${result.stoppedTurns} turn(s) stopped` : '';
+  return t(
+    `已${zhWhere}停止管理员智能体：吊销了 ${result.revokedSessions} 个会话${zhTurns}。对话都还在，之后再发消息会开一个新会话。`,
+    `The admin agent is stopped ${enWhere}: ${result.revokedSessions} session(s) revoked${enTurns}. The chats stay; the next message opens a new session.`,
   );
 }

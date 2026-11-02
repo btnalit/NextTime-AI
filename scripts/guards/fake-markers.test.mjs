@@ -75,6 +75,48 @@ test('a hook is built only by index.ts, inside the FAKE_INVOKE_WORKER gate', () 
   );
 });
 
+test('a hook cannot be reached under another name: its module is imported by index.ts only, never aliased', () => {
+  // #945 review (#493 P3): an alias or a namespace import would not read as `name(`.
+  for (const text of [
+    "import { createFakeAdminProposeHandler as make } from '../../fake-admin-propose.js';",
+    "import * as fake from '../fake-invoke-worker.js';",
+    "const { createFakeDelegateHandler: build } = await import('../../fake-invoke-worker.js');",
+    "const hooks = require('./fake-admin-propose');",
+  ]) {
+    assert.deepEqual(
+      hookFindings('packages/kernel/src/application/host-bridge/agent-host-runtime.ts', text),
+      [
+        "packages/kernel/src/application/host-bridge/agent-host-runtime.ts: imports a CI-only hook's module (only the kernel's index.ts may)",
+      ],
+      text,
+    );
+  }
+  assert.deepEqual(
+    hookFindings(
+      'packages/kernel/src/index.ts',
+      `import { createFakeAdminProposeHandler as make } from './fake-admin-propose.js';\nif (${HOOK_GATE}) {\n  hook = make(deps);\n}`,
+    ),
+    [
+      'packages/kernel/src/index.ts: imports createFakeAdminProposeHandler under another name (call it by its own name)',
+    ],
+  );
+  // index.ts's own import, by name, and a comment naming the module elsewhere are fine.
+  assert.deepEqual(
+    hookFindings(
+      'packages/kernel/src/index.ts',
+      `import { createFakeAdminProposeHandler } from './fake-admin-propose.js';\nif (${HOOK_GATE}) {\n  hook = createFakeAdminProposeHandler(deps);\n}`,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    hookFindings(
+      'packages/kernel/src/application/host-bridge/fake-runtime.ts',
+      ' * Wired only by `packages/kernel/src/fake-admin-propose.ts` (CI-only glue).',
+    ),
+    [],
+  );
+});
+
 test('FAKE_INVOKE_WORKER gets a value only in the CI env template', () => {
   assert.deepEqual(flagFindings(FLAG_SETTER, 'FAKE_INVOKE_WORKER=1'), []);
   // docker-compose.yml passes it through, empty by default.
@@ -100,6 +142,48 @@ test('FAKE_INVOKE_WORKER gets a value only in the CI env template', () => {
     flagFindings('packages/kernel/src/index.ts', "if (process.env.FAKE_INVOKE_WORKER === '1') {"),
     [],
   );
+  assert.deepEqual(
+    flagFindings(
+      'packages/kernel/src/index.ts',
+      '      "FAKE_INVOKE_WORKER=1: invoke_worker and the admin agent\'s propose_admin_proposal are scripted",',
+    ),
+    [],
+  );
+  assert.deepEqual(
+    flagFindings(
+      'packages/kernel/src/fake-admin-propose.integration.test.ts',
+      "process.env.FAKE_INVOKE_WORKER = '1';",
+    ),
+    [],
+  );
+});
+
+test('FAKE_INVOKE_WORKER set any other way is found too: Dockerfile ENV, JSON, a TypeScript script', () => {
+  // #945 review (#493 P3).
+  for (const [rel, line] of [
+    ['deploy/worker-runtime/Dockerfile', 'ENV FAKE_INVOKE_WORKER 1'],
+    ['packages/kernel/Dockerfile', 'ENV NODE_ENV=production FAKE_INVOKE_WORKER=1'],
+    ['packages/kernel/Dockerfile', 'ARG FAKE_INVOKE_WORKER=1'],
+    ['deploy/accept/env.json', '  "FAKE_INVOKE_WORKER": "1",'],
+    ['packages/web/package.json', '    "e2e": "FAKE_INVOKE_WORKER=1 playwright test",'],
+    ['scripts/accept/run.ts', "process.env.FAKE_INVOKE_WORKER = '1';"],
+    ['scripts/accept/run.ts', "process.env['FAKE_INVOKE_WORKER'] = flag;"],
+    [
+      'scripts/accept/run.ts',
+      "spawn('node', [main], { env: { ...process.env, FAKE_INVOKE_WORKER: '1' } });",
+    ],
+    ['packages/kernel/src/boot.mts', "  FAKE_INVOKE_WORKER: 'true',"],
+  ]) {
+    assert.equal(flagFindings(rel, line).length, 1, `${rel}: ${line}`);
+  }
+  for (const [rel, line] of [
+    ['deploy/worker-runtime/Dockerfile', '# ENV FAKE_INVOKE_WORKER 1 — never'],
+    ['deploy/accept/env.json', '  "FAKE_INVOKE_WORKER": "",'],
+    ['scripts/accept/run.ts', "if (process.env.FAKE_INVOKE_WORKER !== '1') return;"],
+    ['scripts/accept/run.ts', "process.env.FAKE_INVOKE_WORKER = '';"],
+  ]) {
+    assert.deepEqual(flagFindings(rel, line), [], `${rel}: ${line}`);
+  }
 });
 
 test('check reads every file it is given and reports each rule', () => {

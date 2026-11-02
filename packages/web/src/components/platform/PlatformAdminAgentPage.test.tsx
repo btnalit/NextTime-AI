@@ -111,8 +111,10 @@ describe('PlatformAdminAgentPage (平台 · 管理员智能体, S11 AA4c-3)', ()
     expect(text(card)).toContain('试验场');
     // D1: the choice is one for every admin agent chat of the reader in this trial workspace.
     expect(text(within(card).getByTestId('admin-agent-targets'))).toContain(
-      '这个试验工作区里你的所有管理员对话共用这一组目标',
+      '这个试验工作区里你的所有管理员对话共用这组目标。',
     );
+    // UX P3-3 on #943: the long explanation is the dialog's, not repeated on every card.
+    expect(text(card)).not.toContain('都会作用到这个试验工作区下你的所有管理员对话');
     const targets = within(card).getAllByTestId('admin-agent-target');
     expect(targets.map((row) => row.getAttribute('data-workspace-id'))).toEqual([WS_PROD, WS_GONE]);
     expect(text(targets[0])).not.toContain('已停用');
@@ -253,7 +255,14 @@ describe('PlatformAdminAgentPage (平台 · 管理员智能体, S11 AA4c-3)', ()
     expect((box(gone) as HTMLInputElement | HTMLButtonElement).disabled).toBe(true);
     const diff = within(dialog).getByTestId('admin-agent-targets-diff');
     expect(text(diff)).toContain('加上：运维');
-    expect(text(diff)).toContain('去掉：旧仓库。之前向它们提的工作区部分暂时不能应用。');
+    // UX P3-1 on #943: one removed is 它, more are 它们.
+    expect(text(diff)).toContain('去掉：旧仓库。之前向它提的工作区部分暂时不能应用。');
+    // UX P3-2 on #943: what Save does sits in the pinned footer, beside the button.
+    expect(
+      within(dialog)
+        .getByTestId('admin-agent-targets-diff')
+        .nextElementSibling?.getAttribute('data-testid'),
+    ).toBe('admin-agent-targets-save');
 
     fireEvent.click(within(dialog).getByTestId('admin-agent-targets-save'));
     await waitFor(() => expect(screen.queryByTestId('admin-agent-targets-dialog')).toBeNull());
@@ -380,9 +389,10 @@ describe('PlatformAdminAgentPage (平台 · 管理员智能体, S11 AA4c-3)', ()
         { trialWorkspaceId: WS_TRIAL },
       ]),
     );
-    expect(text(await screen.findByTestId('admin-agent-stopped'))).toContain(
-      '管理员智能体已停止：吊销了 1 个会话，停下了 0 轮。',
-    );
+    // UX P3-4 on #943: it says where, and leaves out turns when none was running.
+    const stoppedHere = text(await screen.findByTestId('admin-agent-stopped'));
+    expect(stoppedHere).toContain('已在「试验场」停止管理员智能体：吊销了 1 个会话。');
+    expect(stoppedHere).not.toContain('停下了');
 
     fireEvent.click(screen.getByTestId('admin-agent-stop-all'));
     const all = await screen.findByTestId('admin-agent-stop-all-confirm');
@@ -392,7 +402,7 @@ describe('PlatformAdminAgentPage (平台 · 管理员智能体, S11 AA4c-3)', ()
     expect(named(http.calls, 'stop_admin_agent')[1]?.params).toEqual({});
     await waitFor(() =>
       expect(text(screen.getByTestId('admin-agent-stopped'))).toContain(
-        '吊销了 2 个会话，停下了 1 轮。',
+        '已在所有试验工作区停止管理员智能体：吊销了 2 个会话，停下了 1 轮。',
       ),
     );
   });
@@ -412,7 +422,43 @@ describe('PlatformAdminAgentPage (平台 · 管理员智能体, S11 AA4c-3)', ()
       'View admin agent chats',
     );
     expect(text(within(card).getByTestId('admin-agent-targets'))).toContain(
-      'Every admin agent chat of yours in this trial workspace shares these targets',
+      'All of your admin agent chats in this trial workspace share these targets.',
+    );
+  });
+
+  it('marks a target disabled from its own status, not from the list missing it (#501 on #943)', async () => {
+    const http = scriptedHttp({
+      get_admin_agent_status: () =>
+        status({
+          workspaces: [
+            trial({
+              targets: [
+                // Active but not in this read of the list: still tickable once taken off.
+                target({ workspaceId: WS_OPS, name: '运维' }),
+                target({ workspaceId: WS_GONE, name: '旧仓库', status: 'disabled' }),
+              ],
+            }),
+          ],
+        }),
+      list_workspaces: () => ({ items: [platformWorkspace()] }),
+    });
+    renderPage(http);
+
+    fireEvent.click(await screen.findByTestId('admin-agent-choose-targets'));
+    const dialog = await screen.findByTestId('admin-agent-targets-dialog');
+    const options = await within(dialog).findAllByTestId('admin-agent-target-option');
+    const row = (id: string) =>
+      options.find((option) => option.getAttribute('data-workspace-id') === id) as HTMLElement;
+    const box = (id: string) => within(row(id)).getByRole('checkbox') as HTMLInputElement;
+    expect(text(row(WS_OPS))).not.toContain('向它提议会被拒绝');
+    expect(text(row(WS_GONE))).toContain('向它提议会被拒绝');
+    fireEvent.click(box(WS_OPS));
+    fireEvent.click(box(WS_GONE));
+    expect(box(WS_OPS).disabled).toBe(false);
+    expect(box(WS_GONE).disabled).toBe(true);
+    // UX P3-1 on #943: more than one removed is 它们.
+    expect(text(within(dialog).getByTestId('admin-agent-targets-diff'))).toContain(
+      '去掉：运维、旧仓库。之前向它们提的工作区部分暂时不能应用。',
     );
   });
 });

@@ -232,7 +232,9 @@ export class AdminAgentSessionEndedError extends Error {
  * newest one not revoked or expired, or a new one — and a Handle under it scoped to
  * `adminAgentScope` for the Principal's role here (issueHandle refuses anything wider for this
  * session kind). The runtime (`AgentHostRuntime`, S11 AA4c-2) calls it when an admin agent's Turn
- * starts, pinned to the session the Turn was recorded under; nothing else does.
+ * starts, pinned to the session the Turn was recorded under. The only other caller is the CI-only
+ * fake hook (`fake-admin-propose.ts`, S11 AA4d), built only under `FAKE_INVOKE_WORKER=1`, which
+ * issues it the same way for the Turn it scripts.
  */
 export async function issueAdminAgentHandle(
   client: PoolClient,
@@ -284,8 +286,11 @@ async function readLiveAdminAgentSession(
 }
 
 /** `sessionId`, when it is the Principal's live `admin_agent` session; otherwise
- *  {@link AdminAgentSessionEndedError}. */
-async function requireLiveAdminAgentSession(
+ *  {@link AdminAgentSessionEndedError}. The runtime (`AgentHostRuntime`) also calls it before it
+ *  reuses a cached Handle: a session can end without its Handles being revoked (the platform's
+ *  `set_membership_role` to the same role ends the person's sessions, revoking Handles only on a
+ *  role change), and a Turn queued under that session must not start on the cached one. */
+export async function requireLiveAdminAgentSession(
   client: PoolClient,
   workspaceId: string,
   principalId: string,
