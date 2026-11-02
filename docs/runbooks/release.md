@@ -2320,6 +2320,13 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **线上**：`startTurn` / `stopTurn` 帧加可选 `agentKind: 'admin_agent'`；`/resident/spawn`、`/resident/stop`、`GET /resident/:id`、`POST /resident/:id/touch` 加可选 `agentKind`，`/resident/reclaim` 清全部种类；`listResidents` 每条带 `agentKind`；`EXTENSION_MODE_VALUES` 加 `admin`。`scripts/delete-workspace.sh` 同时删管理员容器和它的两个目录。
 - **回滚**：只回退代码即可，但**回退代码之前先删掉管理员容器**：`docker ps -aq --filter label=nexttime.role=admin | xargs -r docker rm -f`（容器名为 `nexttime-admin-*`）。旧的 supervisor 只认 `nexttime.role=entry`，看不到这些容器，它们在出网映射里的条目也只在容器被删除时才清掉。`workspaces/.admin/` 与 `workspaces/.platform/admin-agents/` 两个目录可以留着，旧代码不读。
 
+### 3.113 平台管理员在控制台里使用管理员智能体（#943，S11 AA4c-3，0.61.0 之后的下一版）
+
+只改控制台：没有迁移，没有线上契约变化，不改 compose，主机不需要操作；`ADMIN_AGENT_ENABLED` 仍默认关。控制台要和 §3.111、§3.112 的内核与运行时同版（它读 `get_admin_agent_status`、调 `set_admin_agent_targets`、`stop_admin_agent` 与 `new_chat {agentKind}`）。
+
+- **发版说明可写**：「平台」组下新增「管理员智能体」页：每个试验工作区一张卡，写明能不能开始（不能时写原因、不给按钮）、目标工作区（停用的标出）、在用的会话；可以打开管理员对话、在对话框里选目标工作区（只能选常规、启用中的工作区，最多 20 个，保存前对比加上与去掉的，并写明这组目标由这个试验工作区里你的所有管理员对话共用）、停止一个或全部会话（确认框写明吊销与停下的范围）。平台开关关着时，页面只说一次需要维护者在主机上打开，已有对话照常能读。试验工作区的对话里多「新管理员对话」，管理员对话在列表和标题栏标「管理员智能体」。审计里经管理员智能体的行标「由管理员智能体代为」（遗留 583）；管理员智能体的几项能力统一叫「管理员智能体……」（遗留 591）。目标被去掉的工作区部分在「能力目录 → 管理员提案」里写明原因并置灰应用。Skill、流程、Worker、Operation、本体提案的列表行给智能体写的草稿加琥珀色「智能体」标记（遗留 602）。窄栏里试验工作区有图标级标记。
+- **回滚**：只回退代码即可。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
