@@ -33,8 +33,11 @@ import {
 
 /** S5.3 (`workspaces.purpose`, migration core 0028): `ephemeral` — an acceptance run, a demo —
  *  carries `expires_at` and is retired by `scripts/delete-workspaces-matching.sh --expired`;
- *  `standard` never expires. Decided at creation; the console shows it read-only. */
-export const WORKSPACE_PURPOSE_VALUES = ['standard', 'ephemeral'] as const;
+ *  `standard` never expires. S11 AA3a (migration core 0050): `admin_trial` — a trial workspace,
+ *  the only kind an admin agent acts in (plan I-A6, `application/admin-agent/identity.ts`); it
+ *  never expires and is never the platform default. Decided at creation; the console shows it
+ *  read-only, and the database refuses a change to or from `admin_trial`. */
+export const WORKSPACE_PURPOSE_VALUES = ['standard', 'ephemeral', 'admin_trial'] as const;
 export type WorkspacePurpose = (typeof WORKSPACE_PURPOSE_VALUES)[number];
 
 export interface CreateWorkspaceOwner {
@@ -241,6 +244,8 @@ export async function createWorkspaceWithOwner(
       const draft = await proposeWorkerDefinition(client, workspaceId, ownerPrincipalId, {
         kind: entryTemplate.kind,
         definition: entryDefinition,
+        // S11 AA3a (legacy 293): the platform's entry template, written with no caller.
+        origin: 'platform',
       });
       await publishWorkerDefinition(client, workspaceId, ownerPrincipalId, {
         definitionId: draft.id,

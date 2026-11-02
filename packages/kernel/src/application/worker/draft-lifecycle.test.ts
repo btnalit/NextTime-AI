@@ -40,6 +40,7 @@ const VALID_SKILL = {
   name: 'diagnose-network',
   description: 'Find the top talker on the network and the process behind it.',
   markdown: 'Run `ss -tnp` and look for the highest byte count.',
+  origin: 'human' as const,
 };
 // OntologyDefinitionSchema needs at least one object type and one link type.
 const VALID_ONTOLOGY_CHANGE = {
@@ -52,6 +53,7 @@ const VALID_PROCEDURE = {
   name: 'restart-and-verify',
   description: 'Restart then check',
   steps: [],
+  origin: 'human' as const,
 };
 
 function humanCaller(
@@ -135,6 +137,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('the proposer can discard their own draft WorkerDefinition — the row is gone', async () => {
         const draft = await inTx(proposerId, (client) =>
           proposeWorkerDefinition(client, workspaceId, proposerId, {
+            origin: 'human',
             kind: 'worker',
             definition: VALID_WORKER_DEFINITION,
           }),
@@ -204,6 +207,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('another principal cannot discard someone else’s draft — not-found (I16), never forbidden', async () => {
         const draft = await inTx(proposerId, (client) =>
           proposeWorkerDefinition(client, workspaceId, proposerId, {
+            origin: 'human',
             kind: 'worker',
             definition: VALID_WORKER_DEFINITION,
           }),
@@ -232,6 +236,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('a published version can never be discarded (typed error), even by its own proposer', async () => {
         const draft = await inTx(proposerId, (client) =>
           proposeWorkerDefinition(client, workspaceId, proposerId, {
+            origin: 'human',
             kind: 'worker',
             definition: VALID_WORKER_DEFINITION,
           }),
@@ -322,6 +327,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       function proposeOntology(principalId: string) {
         return inTx(principalId, (client) =>
           proposeOntologyChange(client, workspaceId, {
+            origin: 'human',
             change: VALID_ONTOLOGY_CHANGE,
             proposedBy: principalId,
           }),
@@ -408,6 +414,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('deletes only drafts older than the threshold, never a published row, across all three kinds', async () => {
         const oldWorker = await inTx(proposerId, (client) =>
           proposeWorkerDefinition(client, workspaceId, proposerId, {
+            origin: 'human',
             kind: 'worker',
             definition: VALID_WORKER_DEFINITION,
           }),
@@ -421,6 +428,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         const recentWorker = await inTx(proposerId, (client) =>
           proposeWorkerDefinition(client, workspaceId, proposerId, {
+            origin: 'human',
             kind: 'worker',
             definition: VALID_WORKER_DEFINITION,
           }),
@@ -428,6 +436,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         const publishedWorker = await inTx(proposerId, (client) =>
           proposeWorkerDefinition(client, workspaceId, proposerId, {
+            origin: 'human',
             kind: 'worker',
             definition: VALID_WORKER_DEFINITION,
           }),

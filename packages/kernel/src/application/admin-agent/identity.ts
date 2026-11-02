@@ -23,8 +23,9 @@ import { type PlatformRole, effectivePlatformRole } from '../identity/users.js';
  * an API key and never a service Principal's (I-A1).
  *
  * I-A3 — its authority is checked on every call, not when a Handle is issued: the Principal must
- * still be a person, enabled, in an enabled workspace, and its user active and an effective
- * platform administrator (`effectivePlatformRole`: the environment's administrator list wins,
+ * still be a person, enabled, in an enabled trial workspace (I-A6, S11 AA3a: `purpose =
+ * 'admin_trial'`, which a workspace has from its creation for good — migration core 0050), and
+ * its user active and an effective platform administrator (`effectivePlatformRole`: the environment's administrator list wins,
  * as everywhere else) — and the switch below must be on. `authenticateHandle` (handle-auth.ts)
  * refuses the Handle otherwise, and the dispatcher (dispatch.ts) checks again for every call it
  * dispatches, whoever built the caller. A demotion also revokes the user's admin-agent Handles at
@@ -36,6 +37,10 @@ import { type PlatformRole, effectivePlatformRole } from '../identity/users.js';
  */
 
 const ADMIN_AGENT_ENABLED_VAR = 'ADMIN_AGENT_ENABLED';
+
+/** S11 AA3a (plan §3.1 "试验工作区", I-A6): the `workspaces.purpose` of the only workspaces an
+ *  admin agent acts in (migration core 0050). */
+export const ADMIN_TRIAL_WORKSPACE_PURPOSE = 'admin_trial';
 
 /** Whether the admin agent is switched on: `ADMIN_AGENT_ENABLED` is `1` or `true` (any case).
  *  Unset or empty is off, as are `0` and `false`; anything else throws — the kernel reads it once
@@ -64,6 +69,10 @@ export const ADMIN_AGENT_REFUSAL_REASONS = [
   'principal_disabled',
   'user_disabled',
   'workspace_disabled',
+  /** S11 AA3a (I-A6): the workspace is not a trial workspace (`workspaces.purpose =
+   *  'admin_trial'`, migration core 0050) — an admin agent explores and tries things out only
+   *  there; a production workspace changes only through an applied ChangePlan. */
+  'not_trial_workspace',
   /** The user is not (or no longer) an effective platform administrator. */
   'not_platform_admin',
   /** S11 AA2: the Principal's platform user is no longer the one the call was checked for (it was
@@ -89,6 +98,8 @@ export interface AdminAgentAuthorityFacts {
   readonly principalRole: Role;
   readonly principalDisabled: boolean;
   readonly workspaceStatus: string;
+  /** `workspaces.purpose` (S11 AA3a). */
+  readonly workspacePurpose: string;
   readonly userId: string | null;
   readonly login: string | null;
   readonly platformRole: PlatformRole | null;
@@ -110,6 +121,7 @@ export function adminAgentRefusalOf(
   if (facts.principalDisabled) return 'principal_disabled';
   if (facts.userStatus !== 'active') return 'user_disabled';
   if (facts.workspaceStatus !== 'active') return 'workspace_disabled';
+  if (facts.workspacePurpose !== ADMIN_TRIAL_WORKSPACE_PURPOSE) return 'not_trial_workspace';
   if (effectivePlatformRole(facts.login, facts.platformRole) !== 'admin') {
     return 'not_platform_admin';
   }
@@ -121,6 +133,7 @@ interface AuthorityRow {
   principal_role: Role;
   principal_disabled: boolean;
   workspace_status: string;
+  workspace_purpose: string;
   user_id: string | null;
   login: string | null;
   platform_role: PlatformRole | null;
@@ -141,7 +154,7 @@ export async function readAdminAgentAuthorityFacts(
   const result = await client.query<AuthorityRow>(
     `select p.kind as principal_kind, p.role as principal_role,
             (p.disabled_at is not null) as principal_disabled,
-            w.status as workspace_status,
+            w.status as workspace_status, w.purpose as workspace_purpose,
             u.id as user_id, u.login, u.platform_role, u.status as user_status
        from principals p
        join workspaces w on w.id = p.workspace_id
@@ -156,6 +169,7 @@ export async function readAdminAgentAuthorityFacts(
     principalRole: row.principal_role,
     principalDisabled: row.principal_disabled,
     workspaceStatus: row.workspace_status,
+    workspacePurpose: row.workspace_purpose,
     userId: row.user_id,
     login: row.login,
     platformRole: row.platform_role,

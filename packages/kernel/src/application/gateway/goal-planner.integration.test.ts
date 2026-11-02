@@ -404,6 +404,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const publish = async (prompt: string) => {
         const proposed = await asApp(ownerId, (client) =>
           proposeWorkerDefinition(client, workspaceId, ownerId, {
+            origin: 'human',
             kind: 'worker',
             definition: { systemPrompt: prompt },
           }),
@@ -856,6 +857,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       if (family === null) throw new Error('no planner family');
       const mine = await asApp(ownerId, (client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           definitionId: family,
           kind: 'worker',
           definition: {
@@ -3082,7 +3084,11 @@ describe.runIf(DATABASE_URL !== undefined)(
     it('S11 GO13: the planner reads whether each Worker would start for the requester, its contract and its hints; past 64 KiB the contracts go, last first, and the kernel logs it', async () => {
       const publishWith = async (definition: Record<string, unknown>) => {
         const proposed = await asApp(ownerId, (client) =>
-          proposeWorkerDefinition(client, workspaceId, ownerId, { kind: 'worker', definition }),
+          proposeWorkerDefinition(client, workspaceId, ownerId, {
+            origin: 'human',
+            kind: 'worker',
+            definition,
+          }),
         );
         await asApp(ownerId, (client) =>
           publishWorkerDefinition(client, workspaceId, ownerId, {

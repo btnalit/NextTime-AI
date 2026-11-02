@@ -271,6 +271,14 @@ export function WorkspaceDetailPanel({
                 size="s"
                 testId="workspace-detail-purpose"
               />
+              {workspace.purpose === 'admin_trial' ? (
+                <div className="text-3" data-testid="workspace-detail-purpose-note">
+                  {t(
+                    '管理员智能体只在这里操作；结果要经人应用变更计划才进入正式工作区。不能设为默认。',
+                    'The admin agent acts only here; what it makes reaches other workspaces only through a change plan a person applies. It cannot be the default.',
+                  )}
+                </div>
+              ) : null}
             </dd>
             <dt>{t('生命周期', 'Lifecycle')}</dt>
             <dd data-testid="workspace-detail-lifecycle">

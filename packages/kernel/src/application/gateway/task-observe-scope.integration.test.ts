@@ -347,6 +347,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       const proposed = await inTx((client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           kind: 'worker',
           definition: {
             systemPrompt: 'You are a task-observe-scope test worker.',
@@ -458,6 +459,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const need = `scope-${randomUUID()}`;
       const procedure = await inTx((client) =>
         proposeProcedure(client, workspaceId, ownerId, {
+          origin: 'human',
           name: need,
           description: 'Reads the out-of-scope gate.',
           steps: [{ kind: 'operation', gatekeeperId: gateOut, operationName: OBSERVE_OP.name }],

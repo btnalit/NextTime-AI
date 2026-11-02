@@ -173,6 +173,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const name = `renew-${randomUUID().slice(0, 8)}`;
       const row = await as(ownerId, (client) =>
         proposeProcedure(client, workspaceId, ownerId, {
+          origin: 'human',
           ...(procedureId !== undefined ? { procedureId } : {}),
           name,
           description: 'Renew the certificates of a site.',
@@ -256,6 +257,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       const proposed = await as(ownerId, (client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           kind: 'worker',
           definition: { systemPrompt: 'You do one step of a goal.' },
         }),

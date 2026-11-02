@@ -147,7 +147,11 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     async function publish(definition: Record<string, unknown>): Promise<string> {
       const proposed = await inTx(ownerId, (client) =>
-        proposeWorkerDefinition(client, workspaceId, ownerId, { kind: 'worker', definition }),
+        proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
+          kind: 'worker',
+          definition,
+        }),
       );
       await inTx(ownerId, (client) =>
         publishWorkerDefinition(client, workspaceId, ownerId, {

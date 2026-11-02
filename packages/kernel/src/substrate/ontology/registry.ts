@@ -1,7 +1,12 @@
-import type { PrincipalKind } from '@nexttime/shared';
+import type { DraftOrigin, PrincipalKind } from '@nexttime/shared';
 import { boundedEcho, quotedName } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { lockOntologyFamily, mapOntologyVersionRow, nextOntologyVersion } from './loader.js';
+import {
+  ONTOLOGY_VERSION_COLUMNS,
+  lockOntologyFamily,
+  mapOntologyVersionRow,
+  nextOntologyVersion,
+} from './loader.js';
 import type { OntologyVersionDbRow, OntologyVersionRow } from './loader.js';
 import { assertOntologyNamespace } from './namespace.js';
 import type { ActionTypeDefinition, ObjectTypeDefinition, OntologyDefinition } from './schema.js';
@@ -68,6 +73,9 @@ export interface ProposeOntologyChangeInput {
   readonly id?: string;
   readonly change: unknown;
   readonly proposedBy: string;
+  /** S11 AA3a (legacy 293): who writes the draft, from the call channel (a Handle → `agent`, the
+   *  human channel → `human`); never what the caller sends. */
+  readonly origin: DraftOrigin;
 }
 
 /** R-60: the family's published head — its highest `published` version, the one every reader of
@@ -111,10 +119,9 @@ export async function proposeOntologyChange(
   const version = await nextOntologyVersion(client, workspaceId, input.id);
   const result = await client.query<OntologyVersionDbRow>(
     `insert into ontology_versions
-       (workspace_id, id, version, status, definition, proposed_by, base_version)
-     values ($1, coalesce($2::uuid, gen_random_uuid()), $3, 'draft', $4::jsonb, $5, $6)
-     returning workspace_id, id, version, status, definition, proposed_by, published_by,
-       created_at, published_at`,
+       (workspace_id, id, version, status, definition, proposed_by, base_version, origin)
+     values ($1, coalesce($2::uuid, gen_random_uuid()), $3, 'draft', $4::jsonb, $5, $6, $7)
+     returning ${ONTOLOGY_VERSION_COLUMNS}`,
     [
       workspaceId,
       input.id ?? null,
@@ -122,6 +129,7 @@ export async function proposeOntologyChange(
       JSON.stringify(parsed.data),
       input.proposedBy,
       baseVersion,
+      input.origin,
     ],
   );
   const row = result.rows[0];
@@ -240,8 +248,7 @@ export async function publishOntologyDraft(
        set status = 'published', published_by = $4, published_at = now()
      where workspace_id = $1 and id = $2 and version = $3 and status = 'draft'
        and proposed_by = $4
-     returning workspace_id, id, version, status, definition, proposed_by, published_by,
-       created_at, published_at`,
+     returning ${ONTOLOGY_VERSION_COLUMNS}`,
     [workspaceId, input.id, input.version, input.publishedBy],
   );
   const row = result.rows[0];
@@ -571,6 +578,8 @@ export interface OntologyVersionListItem {
     readonly kind: PrincipalKind;
     readonly displayName: string | null;
   };
+  /** S11 AA3a (legacy 293): who wrote this version; `null` before it was recorded. */
+  readonly origin: DraftOrigin | null;
   readonly createdAt: Date;
   /** R-61: for a draft, the published version of its own family it was proposed against (R-60's
    *  `base_version`) with that version's definition — what the draft changes is exactly the diff
@@ -592,6 +601,7 @@ interface OntologyVersionListDbRow {
   proposer_id: string;
   proposer_kind: PrincipalKind;
   proposer_display_name: string | null;
+  origin: DraftOrigin | null;
   base_version: number | null;
   base_definition: OntologyDefinition | null;
 }
@@ -607,6 +617,7 @@ function mapListRow(row: OntologyVersionListDbRow): OntologyVersionListItem {
       kind: row.proposer_kind,
       displayName: row.proposer_display_name,
     },
+    origin: row.origin ?? null,
     createdAt: row.created_at,
     base:
       row.base_version !== null && row.base_definition !== null
@@ -696,7 +707,7 @@ export async function listOntologyVersions(
   const cursor = decodeListOntologyVersionsCursor(filter.cursor);
 
   const result = await client.query<OntologyVersionListDbRow>(
-    `select t.id, t.version, t.status, t.definition, t.created_at,
+    `select t.id, t.version, t.status, t.definition, t.created_at, t.origin,
             p.id as proposer_id, p.kind as proposer_kind, p.display_name as proposer_display_name,
             b.version as base_version, b.definition as base_definition
      from ontology_versions t

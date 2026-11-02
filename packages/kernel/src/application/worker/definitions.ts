@@ -1,4 +1,5 @@
 import {
+  type DraftOrigin,
   IllegalTransition,
   PUBLISHABLE_TRANSITIONS,
   type PublishableStatus,
@@ -62,6 +63,7 @@ interface WorkerDefinitionDbRow {
   status: PublishableStatus;
   definition: Record<string, unknown>;
   proposed_by: string;
+  origin: DraftOrigin | null;
   published_by: string | null;
   created_at: Date;
   published_at: Date | null;
@@ -75,6 +77,9 @@ export interface WorkerDefinitionRow {
   readonly status: PublishableStatus;
   readonly definition: Record<string, unknown>;
   readonly proposedBy: string;
+  /** S11 AA3a (legacy 293): who wrote this version — `null` for one written before it was
+   *  recorded (worker/0013). */
+  readonly origin: DraftOrigin | null;
   readonly publishedBy: string | null;
   readonly createdAt: Date;
   readonly publishedAt: Date | null;
@@ -89,13 +94,14 @@ function mapRow(row: WorkerDefinitionDbRow): WorkerDefinitionRow {
     status: row.status,
     definition: row.definition,
     proposedBy: row.proposed_by,
+    origin: row.origin ?? null,
     publishedBy: row.published_by,
     createdAt: row.created_at,
     publishedAt: row.published_at,
   };
 }
 
-const SELECT_COLUMNS = `workspace_id, id, version, kind, status, definition, proposed_by,
+const SELECT_COLUMNS = `workspace_id, id, version, kind, status, definition, proposed_by, origin,
   published_by, created_at, published_at`;
 
 // -------------------------------------------------------------------------------------------
@@ -202,6 +208,10 @@ export interface ProposeWorkerDefinitionInput {
   readonly onMissingFamily?: 'not_found' | 'start';
   readonly kind: WorkerDefinitionKind;
   readonly definition: Record<string, unknown>;
+  /** S11 AA3a (legacy 293): who writes this version, from the call channel (a Handle → `agent`;
+   *  the human channel, or a person's own action such as installing a pack → `human`). Never what
+   *  the caller sends. */
+  readonly origin: DraftOrigin;
 }
 
 async function nextVersion(
@@ -274,9 +284,9 @@ export async function proposeWorkerDefinition(
   const version = await nextVersion(client, workspaceId, input.definitionId);
   const result = await client.query<WorkerDefinitionDbRow>(
     `insert into worker_definitions
-       (workspace_id, id, version, kind, status, definition, proposed_by)
+       (workspace_id, id, version, kind, status, definition, proposed_by, origin)
      values
-       ($1, coalesce($2::uuid, gen_random_uuid()), $3, $4, 'draft', $5::jsonb, $6)
+       ($1, coalesce($2::uuid, gen_random_uuid()), $3, $4, 'draft', $5::jsonb, $6, $7)
      returning ${SELECT_COLUMNS}`,
     [
       workspaceId,
@@ -285,6 +295,7 @@ export async function proposeWorkerDefinition(
       input.kind,
       JSON.stringify(input.definition),
       proposerPrincipalId,
+      input.origin,
     ],
   );
   const row = result.rows[0];

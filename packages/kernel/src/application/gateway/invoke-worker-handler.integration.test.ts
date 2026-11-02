@@ -215,6 +215,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     async function publishTestWorkerDefinition(name: string): Promise<string> {
       const proposed = await inTx(ownerId, (client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           kind: 'worker',
           definition: { systemPrompt: `You are worker ${name}.`, name },
         }),
@@ -239,6 +240,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       const proposed = await inTx(ownerId, (client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           kind: 'worker',
           definition: { systemPrompt: 'You are a plain worker.' },
         }),

@@ -645,7 +645,9 @@ export const DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS = 2 * 60 * 60 * 1000;
 /**
  * `ops.collector_silent` (see module doc comment): every `sources` row whose owner Principal is
  * `kind = 'service'`, in a workspace that is `active` and `standard`, that has at least one
- * `observations` row and whose newest one is older than `thresholdMs`. A Source registered but
+ * `observations` row and whose newest one is older than `thresholdMs`. A trial workspace (S11
+ * AA3a, `admin_trial`) is left out like an `ephemeral` one: a Source an admin agent tries out
+ * there is not a production collector, and its going quiet pages nobody. A Source registered but
  * never observed is not counted — it never established a cadence to fall silent from (an
  * external runtime that registered a Source for a one-off import stays quiet legitimately).
  *

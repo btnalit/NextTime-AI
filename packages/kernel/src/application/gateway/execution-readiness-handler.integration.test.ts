@@ -155,6 +155,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     ): Promise<{ definitionId: string; version: number }> {
       return withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
         const draft = await proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           kind: 'worker',
           definition: {
             systemPrompt: 'You act on the registered gate.',
@@ -206,6 +207,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         { workspaceId: inWorkspaceId, principalId: actorId },
         async (client) => {
           const draft = await proposeWorkerDefinition(client, inWorkspaceId, actorId, {
+            origin: 'human',
             kind: 'worker',
             definition: {
               systemPrompt: 'You observe the registered gate.',

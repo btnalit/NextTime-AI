@@ -152,6 +152,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       const workerDraft = await inTx(ownerId, (client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           kind: 'worker',
           definition: { systemPrompt: 'You are a plain worker.' },
         }),
@@ -168,6 +169,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       // Legacy 486: an entry definition, published — never a step.
       const entryDraft = await inTx(ownerId, (client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           kind: 'entry',
           definition: { systemPrompt: 'You are the entry agent.', capabilities: ['get_object'] },
         }),
@@ -207,6 +209,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     function operationStepProcedure(name: string) {
       return {
+        origin: 'human' as const,
         name,
         description: 'A procedure with one operation step.',
         steps: [
@@ -237,6 +240,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('propose does not validate step references (a bogus reference is accepted as a draft)', async () => {
         const row = await inTx(proposerId, (client) =>
           proposeProcedure(client, workspaceId, proposerId, {
+            origin: 'human',
             name: `proc-bogus-${randomUUID()}`,
             description: 'References nothing real.',
             steps: [
@@ -253,6 +257,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const name = `proc-entry-step-${randomUUID()}`;
         const refused = inTx(proposerId, (client) =>
           proposeProcedure(client, workspaceId, proposerId, {
+            origin: 'human',
             name,
             description: 'Runs the entry agent as a step.',
             steps: [
@@ -272,6 +277,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         await expect(
           inTx(proposerId, (client) =>
             proposeProcedure(client, workspaceId, proposerId, {
+              origin: 'human',
               name,
               description: 'Names a version the entry family does not have yet.',
               steps: [{ kind: 'worker', definitionId: entryDefinitionId, version: 99 }],
@@ -294,6 +300,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('propose still takes a worker step naming a definition not visible yet (publish decides)', async () => {
         const row = await inTx(proposerId, (client) =>
           proposeProcedure(client, workspaceId, proposerId, {
+            origin: 'human',
             name: `proc-unknown-worker-${randomUUID()}`,
             description: 'Names a WorkerDefinition that does not exist yet.',
             steps: [{ kind: 'worker', definitionId: randomUUID(), version: 1 }],
@@ -305,6 +312,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('propose reads the family as its proposer sees it: another principal’s entry draft reads as an id nothing has (I16, review #493 N1)', async () => {
         const othersDraft = await inTx(otherPrincipalId, (client) =>
           proposeWorkerDefinition(client, workspaceId, otherPrincipalId, {
+            origin: 'human',
             kind: 'entry',
             definition: { systemPrompt: 'A private entry draft.', capabilities: ['get_object'] },
           }),
@@ -312,6 +320,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const propose = (principalId: string, definitionId: string, version: number) =>
           inTx(principalId, (client) =>
             proposeProcedure(client, workspaceId, principalId, {
+              origin: 'human',
               name: `proc-draft-family-${randomUUID()}`,
               description: 'Names a WorkerDefinition family that has only a draft.',
               steps: [{ kind: 'worker', definitionId, version }],
@@ -331,6 +340,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('legacy 492: publish answers another principal’s WorkerDefinition draft as a version nothing has', async () => {
         const othersDraft = await inTx(otherPrincipalId, (client) =>
           proposeWorkerDefinition(client, workspaceId, otherPrincipalId, {
+            origin: 'human',
             kind: 'worker',
             definition: { systemPrompt: 'A private worker draft.' },
           }),
@@ -338,6 +348,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const publishAs = async (principalId: string, step: { id: string; version: number }) => {
           const draft = await inTx(proposerId, (client) =>
             proposeProcedure(client, workspaceId, proposerId, {
+              origin: 'human',
               name: `proc-draft-worker-${randomUUID()}`,
               description: 'Names a WorkerDefinition version that is only a draft.',
               steps: [{ kind: 'worker', definitionId: step.id, version: step.version }],
@@ -458,6 +469,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const unique = `proc-valid-worker-${randomUUID()}`;
         const draft = await inTx(proposerId, (client) =>
           proposeProcedure(client, workspaceId, proposerId, {
+            origin: 'human',
             name: unique,
             description: 'A procedure with one worker step.',
             steps: [
@@ -479,6 +491,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const unique = `proc-approval-verify-${randomUUID()}`;
         const draft = await inTx(proposerId, (client) =>
           proposeProcedure(client, workspaceId, proposerId, {
+            origin: 'human',
             name: unique,
             description: 'Approval and verify steps only, plus one real operation step.',
             steps: [
@@ -497,6 +510,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('rejects publishing a procedure with zero steps', async () => {
         const draft = await inTx(proposerId, (client) =>
           proposeProcedure(client, workspaceId, proposerId, {
+            origin: 'human',
             name: `proc-empty-${randomUUID()}`,
             description: 'No steps.',
             steps: [],
@@ -510,6 +524,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('rejects publishing a procedure whose operation step references a nonexistent Operation, leaving the row in draft', async () => {
         const draft = await inTx(proposerId, (client) =>
           proposeProcedure(client, workspaceId, proposerId, {
+            origin: 'human',
             name: `proc-bad-op-${randomUUID()}`,
             description: 'References an Operation that does not exist.',
             steps: [
@@ -541,6 +556,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         const draft = await inTx(proposerId, (client) =>
           proposeProcedure(client, workspaceId, proposerId, {
+            origin: 'human',
             name: `proc-draft-op-${randomUUID()}`,
             description: 'References a draft (unpublished) Operation.',
             steps: [{ kind: 'operation', gatekeeperId, operationName: draftOp.name }],
@@ -554,12 +570,14 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('rejects publishing a procedure whose worker step references an unpublished WorkerDefinition', async () => {
         const unpublishedWorker = await inTx(ownerId, (client) =>
           proposeWorkerDefinition(client, workspaceId, ownerId, {
+            origin: 'human',
             kind: 'worker',
             definition: { systemPrompt: 'Never published.' },
           }),
         );
         const draft = await inTx(proposerId, (client) =>
           proposeProcedure(client, workspaceId, proposerId, {
+            origin: 'human',
             name: `proc-draft-worker-${randomUUID()}`,
             description: 'References a draft (unpublished) WorkerDefinition.',
             steps: [

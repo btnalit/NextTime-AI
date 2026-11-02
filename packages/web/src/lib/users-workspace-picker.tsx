@@ -137,7 +137,11 @@ export function WorkspacePicker({
           {leading}
           {visible.map((ws) => (
             <option key={ws.id} value={ws.id}>
-              {ws.purpose === 'ephemeral' ? `${ws.name}${t('（临时）', ' (ephemeral)')}` : ws.name}
+              {ws.purpose === 'ephemeral'
+                ? `${ws.name}${t('（临时）', ' (ephemeral)')}`
+                : ws.purpose === 'admin_trial'
+                  ? `${ws.name}${t('（试验）', ' (trial)')}`
+                  : ws.name}
             </option>
           ))}
         </Select>

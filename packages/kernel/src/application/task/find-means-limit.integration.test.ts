@@ -89,6 +89,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     ): Promise<string> {
       const draft = await inTx((client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           kind: 'worker',
           definition: { systemPrompt: 'A test worker.', name, ...extra },
         }),
@@ -228,6 +229,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       const usable = await inTx((client) =>
         proposeProcedure(client, workspaceId, ownerId, {
+          origin: 'human',
           name: `${need}usable`,
           description: 'Observe only.',
           steps: [{ kind: 'operation', gatekeeperId, operationName: observeOp }],
@@ -237,6 +239,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       for (let i = 0; i < 3; i += 1) {
         const blocked = await inTx((client) =>
           proposeProcedure(client, workspaceId, ownerId, {
+            origin: 'human',
             name: `${need}blocked${i}`,
             description: 'A worker step the caller could never invoke.',
             steps: [{ kind: 'worker', definitionId: executeWorker, version: 1 }],

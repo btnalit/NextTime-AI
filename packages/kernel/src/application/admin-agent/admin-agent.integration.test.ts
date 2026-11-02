@@ -3,13 +3,19 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { HandleClaims, PrincipalKind, Role } from '@nexttime/shared';
 import { getCapability } from '@nexttime/shared';
-import { generateKeyPair } from 'jose';
+import { decodeJwt, generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
-import { HANDLE_SIGNING_ALG, HandleRevoked } from '../../governance/capability/index.js';
+import {
+  ADMIN_AGENT_SESSION_KIND,
+  HANDLE_SIGNING_ALG,
+  HandleRevoked,
+  adminAgentScope,
+  issueHandle,
+} from '../../governance/capability/index.js';
 import {
   ChangeApplierNotAPersonError,
   applyWorkspaceSegment,
@@ -30,7 +36,7 @@ import {
 } from './index.js';
 
 /**
- * application/admin-agent integration (S11 AA1; real Postgres, auto-skip without DATABASE_URL):
+ * application/admin-agent integration (S11 AA1, AA3a; real Postgres, auto-skip without DATABASE_URL):
  * an admin agent acts as its administrator's own human Principal under an `admin_agent` session,
  * through a container-held Handle held to `ADMIN_AGENT_CEILING_CAPABILITIES` — and its authority is
  * checked on every call (I-A3), never trusted from issuance. The coordinator's two constraints on
@@ -43,6 +49,9 @@ import {
  *      human channel.
  *
  * Also STATUS legacy 407: a ChangePlan segment's applier is a person at run time.
+ *
+ * S11 AA3a: the agent acts only in a trial workspace (I-A6, legacy 585) — `workspaceId` is one —
+ * and the drafts it proposes there say an agent wrote them (`origin`, legacy 293).
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -190,6 +199,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         name: `aa1-${tag}`,
         owner: { userId: admin.id, displayName: 'AA1 Admin' },
         ontologyDir: ONTOLOGY_DIR,
+        purpose: 'admin_trial',
       });
       workspaceId = created.workspaceId;
       adminPrincipalId = created.ownerPrincipalId;
@@ -218,8 +228,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       const caller = await agentCaller(issued.token);
       const claims = (caller as { claims: HandleClaims }).claims;
       for (const name of claims.scope.capabilities) {
-        expect(getCapability(name)?.mode, name).toBe('observe');
+        // S11 AA3a: reads, and the five draft proposals.
+        expect(['observe', 'propose'], name).toContain(getCapability(name)?.mode);
       }
+      expect(claims.scope.capabilities).toContain('propose_skill');
       // Container-held: never accepted as a bearer token.
       await expect(authenticateHandle(pool, issued.token, { publicKey })).rejects.toBeInstanceOf(
         HandlePresentationRefused,
@@ -273,30 +285,30 @@ describe.runIf(DATABASE_URL !== undefined)(
         channel: 'handle',
         claims: {
           ...real.claims,
-          scope: { capabilities: ['propose_skill', 'list_skills'], resources: {} },
+          scope: { capabilities: ['record_decision', 'list_skills'], resources: {} },
         },
       };
-      const thrown = await dispatchCapability({ pool }, forged, 'propose_skill', {
-        skill: { name: 'aa1-forged', description: 'never written', body: 'x' },
+      const thrown = await dispatchCapability({ pool }, forged, 'record_decision', {
+        summary: 'aa1-forged',
       }).then(
         () => null,
         (err: unknown) => err,
       );
       expect(thrown).toBeInstanceOf(AdminAgentCallRefusedError);
       expect((thrown as AdminAgentCallRefusedError).refusal).toBe('outside_ceiling');
-      expect(await lastAudit('propose_skill')).toMatchObject({
+      expect(await lastAudit('record_decision')).toMatchObject({
         actor: adminPrincipalId,
         sessionKind: 'admin_agent',
         sessionId: issued.sessionId,
         outcome: 'refused',
         refusal: { code: 'admin_agent_refused', status: 403, reason: 'outside_ceiling' },
       });
-      const drafts = await withAdminClient(pool, (client) =>
-        client.query("select 1 from skills where workspace_id = $1 and name = 'aa1-forged'", [
+      const decisions = await withAdminClient(pool, (client) =>
+        client.query("select 1 from decisions where workspace_id = $1 and summary = 'aa1-forged'", [
           workspaceId,
         ]),
       );
-      expect(drafts.rowCount).toBe(0);
+      expect(decisions.rowCount).toBe(0);
     });
 
     it('checks the platform role on every call, not at issuance (I-A3)', async () => {
@@ -448,6 +460,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         name: `aa1-off-${tag}`,
         owner: { userId: owner.id, displayName: 'Off Workspace Admin' },
         ontologyDir: ONTOLOGY_DIR,
+        purpose: 'admin_trial',
       });
       await withAdminClient(pool, (client) =>
         client.query("update workspaces set status = 'disabled' where id = $1", [off.workspaceId]),
@@ -491,6 +504,185 @@ describe.runIf(DATABASE_URL !== undefined)(
       const { claims } = (await agentCaller(issued.token)) as { claims: HandleClaims };
       expect(claims.scope.capabilities).not.toContain('<gate>.<op>');
       expect(claims.scope.capabilities).toContain('list_skills');
+    });
+
+    it('I-A6 (legacy 585): issues only in a trial workspace, and refuses every call of a Handle issued outside one', async () => {
+      const tag = randomUUID().slice(0, 8);
+      const production = await createWorkspaceWithOwner(pool, {
+        name: `aa3-production-${tag}`,
+        owner: { userId: admin.id, displayName: 'AA1 Admin' },
+        ontologyDir: ONTOLOGY_DIR,
+      });
+      const scope = {
+        workspaceId: production.workspaceId,
+        principalId: production.ownerPrincipalId,
+      };
+      const thrown = await withWorkspace(pool, scope, (client) =>
+        issueAdminAgentHandle(client, { ...scope, ttlSeconds: 600, privateKey }),
+      ).then(
+        () => null,
+        (err: unknown) => err,
+      );
+      expect(thrown).toBeInstanceOf(AdminAgentRefused);
+      expect((thrown as AdminAgentRefused).reason).toBe('not_trial_workspace');
+      const sessions = await withAdminClient(pool, (client) =>
+        client.query('select 1 from sessions where workspace_id = $1 and kind = $2', [
+          production.workspaceId,
+          ADMIN_AGENT_SESSION_KIND,
+        ]),
+      );
+      expect(sessions.rowCount).toBe(0);
+
+      // A Handle an earlier release issued there (AA1 checked no purpose): refused when presented
+      // and at dispatch, with the refusal audited under the admin agent's session.
+      const legacy = await withWorkspace(pool, scope, async (client) => {
+        const session = await client.query<{ id: string }>(
+          `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+           values ($1, $2, $3, $2, 'active') returning id`,
+          [scope.workspaceId, scope.principalId, ADMIN_AGENT_SESSION_KIND],
+        );
+        const sessionId = session.rows[0]?.id ?? '';
+        const handle = await issueHandle(client, {
+          sessionId,
+          scope: adminAgentScope(),
+          ttlSeconds: 600,
+          privateKey,
+        });
+        return { sessionId, handle };
+      });
+      await expect(
+        authenticateHandle(pool, legacy.handle.token, { publicKey }, 'source'),
+      ).rejects.toThrow(/not_trial_workspace/);
+      // What a verified token would carry: dispatch re-checks the authority on its own (I-A3).
+      const claims = decodeJwt(legacy.handle.token) as HandleClaims;
+      const refused = await dispatchCapability(
+        { pool },
+        { channel: 'handle', claims },
+        'list_skills',
+        {},
+      ).then(
+        () => null,
+        (err: unknown) => err,
+      );
+      expect(refused).toBeInstanceOf(AdminAgentCallRefusedError);
+      expect((refused as AdminAgentCallRefusedError).refusal).toBe('not_trial_workspace');
+      const audit = await withAdminClient(pool, (client) =>
+        client.query<{ payload: Record<string, unknown> }>(
+          `select payload from audit_records
+            where workspace_id = $1 and action = 'list_skills' order by created_at desc, id desc limit 1`,
+          [scope.workspaceId],
+        ),
+      );
+      expect(audit.rows[0]?.payload).toMatchObject({
+        sessionKind: 'admin_agent',
+        sessionId: legacy.sessionId,
+        outcome: 'refused',
+        refusal: { reason: 'not_trial_workspace' },
+      });
+    });
+
+    it('legacy 293: a draft proposed through the Handle says an agent wrote it; the same person in the console wrote theirs', async () => {
+      const issued = await issue(adminPrincipalId);
+      const agent = await agentCaller(issued.token);
+      const tag = randomUUID().slice(0, 8);
+      const skill = (name: string) => ({
+        skill: { name, description: `AA3a origin ${name}`, markdown: 'Check the thing.' },
+      });
+      const procedure = (name: string) => ({
+        procedure: { name, description: `AA3a origin ${name}`, steps: [] },
+      });
+      const worker = (name: string) => ({
+        kind: 'worker',
+        definition: { name, systemPrompt: `AA3a origin ${name}` },
+      });
+      const ontology = (name: string) => ({
+        change: {
+          objectTypes: [{ name, description: 'AA3a origin' }],
+          linkTypes: [
+            { name: `${name}_link`, domain: name, range: name, description: 'AA3a origin' },
+          ],
+        },
+      });
+      const cases = [
+        ['propose_skill', skill, 'skills', 'name'],
+        ['propose_procedure', procedure, 'procedures', 'name'],
+        ['propose_worker_definition', worker, 'worker_definitions', "definition->>'name'"],
+        [
+          'propose_ontology_change',
+          ontology,
+          'ontology_versions',
+          "definition->'objectTypes'->0->>'name'",
+        ],
+      ] as const;
+      for (const [capability, params, table, nameColumn] of cases) {
+        for (const [who, caller] of [
+          ['agent', agent],
+          ['human', personCaller()],
+        ] as const) {
+          const name = `aa3_${who}_${capability.replace('propose_', '')}_${tag}`;
+          await dispatchCapability({ pool }, caller, capability, params(name));
+          const row = await withAdminClient(pool, (client) =>
+            client.query<{ origin: string | null; proposed_by: string }>(
+              `select origin, proposed_by from ${table}
+                where workspace_id = $1 and ${nameColumn} = $2`,
+              [workspaceId, name],
+            ),
+          );
+          // The same Principal either way: only `origin` tells them apart.
+          expect(row.rows, `${capability} ${who}`).toEqual([
+            { origin: who, proposed_by: adminPrincipalId },
+          ]);
+        }
+        expect(await lastAudit(capability)).not.toHaveProperty('sessionKind');
+      }
+      expect(await lastAudit('propose_skill')).toMatchObject({ actor: adminPrincipalId });
+
+      // A service's API key is the human channel too, and not a person (review #493 on #914,
+      // P3-1): what it drafts says an agent wrote it.
+      const serviceId = await insertPrincipal('service', 'owner', null);
+      for (const [capability, params, table, nameColumn] of cases) {
+        const name = `aa3_service_${capability.replace('propose_', '')}_${tag}`;
+        await dispatchCapability(
+          { pool },
+          personCaller(serviceId, 'service'),
+          capability,
+          params(name),
+        );
+        const row = await withAdminClient(pool, (client) =>
+          client.query<{ origin: string | null; proposed_by: string }>(
+            `select origin, proposed_by from ${table}
+              where workspace_id = $1 and ${nameColumn} = $2`,
+            [workspaceId, name],
+          ),
+        );
+        expect(row.rows, `${capability} service`).toEqual([
+          { origin: 'agent', proposed_by: serviceId },
+        ]);
+      }
+
+      // Read back: the agent's draft carries it on the wire, to the person who reviews it.
+      const listed = (await dispatchCapability({ pool }, personCaller(), 'list_skills', {})) as {
+        items: { name: string; origin?: string }[];
+      };
+      expect(listed.items.find((item) => item.name === `aa3_agent_skill_${tag}`)?.origin).toBe(
+        'agent',
+      );
+      expect(listed.items.find((item) => item.name === `aa3_human_skill_${tag}`)?.origin).toBe(
+        'human',
+      );
+
+      // Fixed once written (worker/0013, core/0051): not even the admin role rewrites it.
+      for (const table of ['skills', 'procedures', 'worker_definitions', 'ontology_versions']) {
+        await expect(
+          withAdminClient(pool, (client) =>
+            client.query(
+              `update ${table} set origin = 'human' where workspace_id = $1 and origin = 'agent'`,
+              [workspaceId],
+            ),
+          ),
+          table,
+        ).rejects.toThrow(/origin is fixed/);
+      }
     });
 
     it('legacy 407: a ChangePlan segment is applied and rolled back by a person only, whatever the caller casts', async () => {

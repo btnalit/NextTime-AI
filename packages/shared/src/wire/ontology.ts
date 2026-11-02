@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   BlastRadiusSchema,
+  DraftOriginSchema,
   OperationModeSchema,
   PrincipalKindSchema,
   PublishableStatusSchema,
@@ -29,6 +30,9 @@ export const OntologyVersionWireSchema = z
     status: PublishableStatusSchema,
     definition: z.record(z.string(), z.unknown()),
     proposedBy: z.string(),
+    /** S11 AA3a (legacy 293): as `WorkerDefinitionWire.origin` (`wire/worker.ts`). `proposedBy`'s
+     *  Principal kind cannot say it: an entry or admin agent drafts for its person, a `human`. */
+    origin: DraftOriginSchema.optional(),
     publishedBy: z.string().nullable(),
     createdAt: z.string(),
     publishedAt: z.string().nullable(),
@@ -83,6 +87,8 @@ export const OntologyVersionListItemWireSchema = z
         displayName: z.string().nullable(),
       })
       .strict(),
+    /** S11 AA3a (legacy 293): as `OntologyVersionWire.origin`. */
+    origin: DraftOriginSchema.optional(),
     createdAt: z.string(),
     definition: OntologyDefinitionSchema,
     base: z

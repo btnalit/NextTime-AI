@@ -288,10 +288,13 @@ export const WORKSPACE_STATUS_TONES: Readonly<Record<WorkspaceStatusWire, ChipSt
   disabled: { tone: 'neutral', label: { zh: '已停用', en: 'Disabled' } },
 };
 
-/** `standard` is the production default (blue); `ephemeral` is acceptance residue (grey, §5.9). */
+/** `standard` is the production default (blue); `ephemeral` is acceptance residue (grey, §5.9);
+ *  `admin_trial` (S11 AA3a) is a trial workspace — the admin agent's sandbox, whose results reach
+ *  production only through a ChangePlan a person applies — amber, "pending a human". */
 export const WORKSPACE_PURPOSE_TONES: Readonly<Record<WorkspacePurposeWire, ChipStyle>> = {
   standard: { tone: 'info', label: { zh: '常规', en: 'standard' } },
   ephemeral: { tone: 'neutral', label: { zh: '临时', en: 'ephemeral' } },
+  admin_trial: { tone: 'warn', label: { zh: '试验', en: 'trial' } },
 };
 
 /** `awaiting_host` is derived: a hosted instance (`create_gate_instance`) the gate host has not

@@ -185,6 +185,8 @@ export async function applyOntologyItem(
     id: planned.target.ontologyId,
     definition: planned.definition,
     principalId: appliedBy,
+    // S11 AA3a (legacy 293): the person applying the segment reviewed what it writes.
+    origin: 'human',
   });
   return { definitionDigest: planned.after.definitionDigest, version: published.version };
 }

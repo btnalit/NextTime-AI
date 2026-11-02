@@ -320,6 +320,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       // Published outside the ChangePlan core: the item no longer is what is in effect.
       await inWorkspace(ws, async (client) => {
         await proposeSkill(client, ws.workspaceId, ws.ownerId, {
+          origin: 'human',
           skillId,
           ...skill('# Fix it by hand'),
         });

@@ -1,4 +1,5 @@
 import {
+  type DraftOrigin,
   IllegalTransition,
   type OutputSchema,
   PUBLISHABLE_TRANSITIONS,
@@ -71,6 +72,7 @@ interface ProcedureDbRow {
   steps: readonly ProcedureStep[];
   parameters: OutputSchema | null;
   proposed_by: string;
+  origin: DraftOrigin | null;
   published_by: string | null;
   created_at: Date;
   published_at: Date | null;
@@ -87,17 +89,21 @@ export interface ProcedureRow {
   /** S11 GO5d-2: the parameters schema of a goal made from it; `null` = it takes none. */
   readonly parameters: OutputSchema | null;
   readonly proposedBy: string;
+  /** S11 AA3a (legacy 293): who wrote this version — `null` for one written before it was
+   *  recorded (worker/0013). */
+  readonly origin: DraftOrigin | null;
   readonly publishedBy: string | null;
   readonly createdAt: Date;
   readonly publishedAt: Date | null;
 }
 
 /** Review #493 on #764 (F1): the digest a reviewer hands back to `publish_procedure`
- *  (`familyVersionDigest`) — everything the version says, and who proposed it. */
+ *  (`familyVersionDigest`) — everything the version says, and who proposed it. S11 AA3a: and who
+ *  wrote it (`origin`), when recorded, as `skillDraftDigest`. */
 export function procedureDraftDigest(
   row: Pick<
     ProcedureRow,
-    'id' | 'version' | 'name' | 'description' | 'steps' | 'parameters' | 'proposedBy'
+    'id' | 'version' | 'name' | 'description' | 'steps' | 'parameters' | 'proposedBy' | 'origin'
   >,
 ): string {
   return familyVersionDigest('procedure', {
@@ -108,6 +114,7 @@ export function procedureDraftDigest(
     steps: row.steps,
     parameters: row.parameters,
     proposedBy: row.proposedBy,
+    ...(row.origin !== null ? { origin: row.origin } : {}),
   });
 }
 
@@ -122,6 +129,7 @@ function mapRow(row: ProcedureDbRow): ProcedureRow {
     steps: row.steps ?? [],
     parameters: row.parameters ?? null,
     proposedBy: row.proposed_by,
+    origin: row.origin ?? null,
     publishedBy: row.published_by,
     createdAt: row.created_at,
     publishedAt: row.published_at,
@@ -129,7 +137,7 @@ function mapRow(row: ProcedureDbRow): ProcedureRow {
 }
 
 const SELECT_COLUMNS = `workspace_id, id, version, status, name, description, steps, parameters,
-  proposed_by, published_by, created_at, published_at`;
+  proposed_by, origin, published_by, created_at, published_at`;
 
 // -------------------------------------------------------------------------------------------
 // Errors
@@ -172,6 +180,10 @@ export interface ProposeProcedureInput {
   readonly steps: readonly ProcedureStep[];
   /** S11 GO5d-2: absent — it takes no parameters. */
   readonly parameters?: OutputSchema;
+  /** S11 AA3a (legacy 293): who writes this version, from the call channel (a Handle → `agent`;
+   *  the human channel, or a person's own action such as installing a pack → `human`). Never what
+   *  the caller sends. */
+  readonly origin: DraftOrigin;
 }
 
 /** The Procedure family's own advisory lock (transaction-scoped): what proposing its next version
@@ -242,9 +254,11 @@ export async function proposeProcedure(
   const version = await nextVersion(client, workspaceId, input.procedureId);
   const result = await client.query<ProcedureDbRow>(
     `insert into procedures
-       (workspace_id, id, version, status, name, description, steps, parameters, proposed_by)
+       (workspace_id, id, version, status, name, description, steps, parameters, proposed_by,
+        origin)
      values
-       ($1, coalesce($2::uuid, gen_random_uuid()), $3, 'draft', $4, $5, $6::jsonb, $7::jsonb, $8)
+       ($1, coalesce($2::uuid, gen_random_uuid()), $3, 'draft', $4, $5, $6::jsonb, $7::jsonb, $8,
+        $9)
      returning ${SELECT_COLUMNS}`,
     [
       workspaceId,
@@ -255,6 +269,7 @@ export async function proposeProcedure(
       JSON.stringify(input.steps),
       input.parameters === undefined ? null : JSON.stringify(input.parameters),
       proposerPrincipalId,
+      input.origin,
     ],
   );
   const row = result.rows[0];

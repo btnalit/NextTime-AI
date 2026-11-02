@@ -1,4 +1,4 @@
-import type { Role } from '@nexttime/shared';
+import type { DraftOrigin, Role } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { DraftViewer } from '../../application/worker/index.js';
 import { seesEveryDraft } from '../../governance/capability/index.js';
@@ -12,6 +12,19 @@ import type { CapabilityHandlerContext } from './capability-handler.js';
  * Moved here from skill-procedure-handlers.ts (#462) when the generic graph reads started using it
  * too (STATUS leftover 123).
  */
+
+/**
+ * S11 AA3a (legacy 293): who a draft proposed through this call is written by — `human` when a
+ * person calls over the human channel; `agent` otherwise: through a Handle (an entry agent, a
+ * Worker, an admin agent), or a service Principal's API key over the human channel (an
+ * automation credential is not a person, as `ChangeApplierNotAPersonError` and
+ * `publish_operation`'s reviewed-absent rule hold). From the channel and the Principal dispatch.ts
+ * authenticated, never from the params; no `ctx` (a test driving the handler directly) counts as
+ * a Handle, as `propose_operation`'s proposer kind does.
+ */
+export function draftOriginOf(ctx: CapabilityHandlerContext | undefined): DraftOrigin {
+  return ctx?.channel === 'human' && ctx.principal?.kind === 'human' ? 'human' : 'agent';
+}
 
 /**
  * Who a draft-narrowed read (Skill / Procedure registries, the generic graph reads) is narrowed

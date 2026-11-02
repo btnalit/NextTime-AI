@@ -291,6 +291,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     ): Promise<{ id: string; version: number; digest: string }> {
       const row = await asApp((client) =>
         proposeSkill(client, workspaceId, people[proposer], {
+          origin: 'human',
           ...(options.skillId ? { skillId: options.skillId } : {}),
           ...content,
         }),
@@ -531,6 +532,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       const definition = await asApp((client) =>
         proposeWorkerDefinition(client, workspaceId, people.owner, {
+          origin: 'human',
           kind: 'worker',
           definition: { systemPrompt: 'You restart hosts.', skills: ['restart-helper', 'notes'] },
         }),

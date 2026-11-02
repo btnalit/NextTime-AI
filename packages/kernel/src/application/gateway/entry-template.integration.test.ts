@@ -219,6 +219,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       if (!v1) throw new Error('no entry definition');
       const own = await as(ownerId, (client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
+          origin: 'human',
           definitionId: v1.id,
           kind: 'entry',
           definition: { ...v1.definition, egressDeny: ['tracker.example'] },
@@ -276,6 +277,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           kind: 'entry',
           status: 'draft',
           proposedBy: builderId,
+          // S11 AA3a (legacy 293): a person asked for it, over the human channel.
+          origin: 'human',
         });
         expect(upgrade.draft.definition).toEqual({
           ...v1.definition,

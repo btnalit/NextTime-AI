@@ -35,6 +35,7 @@ import {
   computeWorkspaceTableDeletionOrder,
   createWorkspace,
   issueServiceHandleFromCli,
+  parseCreateWorkspacePurpose,
   parseDeleteWorkspaceArgs,
   parsePurgeWorkspaceArgs,
   parseTtl,
@@ -214,6 +215,19 @@ describe('S5.3 create-workspace --purpose ephemeral --ttl (pure, no DB)', () => 
   it('parseTtl rejects a zero, a negative, a unitless or a fractional value', () => {
     for (const bad of ['0h', '-1h', '24', '1.5h', 'h', '']) {
       expect(() => parseTtl(bad)).toThrow(BootstrapUsageError);
+    }
+  });
+
+  it('parseCreateWorkspacePurpose: standard (default) or ephemeral; never admin_trial (S11 AA3a)', () => {
+    expect(parseCreateWorkspacePurpose(undefined, 'usage')).toBe('standard');
+    expect(parseCreateWorkspacePurpose('standard', 'usage')).toBe('standard');
+    expect(parseCreateWorkspacePurpose('ephemeral', 'usage')).toBe('ephemeral');
+    // A trial workspace is the platform plane's (`create_workspace`), with an administrator as
+    // its owner — not this command's new display-name owner.
+    for (const bad of ['admin_trial', 'trial', '']) {
+      expect(() => parseCreateWorkspacePurpose(bad, 'usage'), bad).toThrow(
+        /--purpose must be standard or ephemeral/,
+      );
     }
   });
 

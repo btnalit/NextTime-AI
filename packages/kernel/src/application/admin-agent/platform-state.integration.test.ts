@@ -412,6 +412,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         name: `aa2-${tag}`,
         owner: { userId: admin.id, displayName: 'AA2 Admin' },
         ontologyDir: ONTOLOGY_DIR,
+        // S11 AA3a (I-A6): an admin agent acts only in a trial workspace.
+        purpose: 'admin_trial',
       });
       workspaceId = created.workspaceId;
       adminPrincipalId = created.ownerPrincipalId;

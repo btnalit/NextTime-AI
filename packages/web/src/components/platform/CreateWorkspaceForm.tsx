@@ -6,7 +6,7 @@ import { useT } from '../../lib/i18n.js';
 import { useGuardedClose } from '../kit/discard-guard.js';
 import { StillNeeded } from '../kit/still-needed.js';
 import { Button } from '../ui/Button.js';
-import { Field, Input } from '../ui/Field.js';
+import { Field, Input, Select } from '../ui/Field.js';
 import { PlatformError } from './PlatformError.js';
 import { UserPicker } from './UserPicker.js';
 import { AllowedModelsChecklist, EntryModelSelect } from './WorkspaceModelControls.js';
@@ -34,6 +34,11 @@ export interface CreateWorkspaceFormProps {
  * entry-model options narrow to the checklist as it is ticked — `create_workspace` refuses a
  * non-empty allowed list that does not contain the entry model, and the two controls being one
  * draft here means that combination is not reachable by picking a model and then un-ticking it.
+ *
+ * 用途 (S11 AA3a, `create_workspace {purpose}`): 常规 (omitted on the wire) or 试验 — a trial
+ * workspace, the only kind a platform administrator's admin agent acts in. It is fixed for good
+ * (the kernel refuses a change either way, migration core 0050) and never the platform default, so
+ * the hint says both before the workspace exists. 临时 stays the CLI's (it also sets the expiry).
  */
 export function CreateWorkspaceForm({
   http,
@@ -49,6 +54,7 @@ export function CreateWorkspaceForm({
   const [ownerUserId, setOwnerUserId] = useState(defaultOwnerUserId ?? '');
   const [entryModel, setEntryModel] = useState<string | null>(null);
   const [allowedModels, setAllowedModels] = useState<readonly string[]>([]);
+  const [purpose, setPurpose] = useState<'standard' | 'admin_trial'>('standard');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
 
@@ -71,6 +77,7 @@ export function CreateWorkspaceForm({
     const params: Record<string, unknown> = { name: name.trim(), ownerUserId };
     if (entryModelValue !== null) params.entryModel = entryModelValue;
     if (allowedModels.length > 0) params.allowedModels = [...allowedModels];
+    if (purpose === 'admin_trial') params.purpose = purpose;
     setSubmitting(true);
     setError(null);
     try {
@@ -112,6 +119,33 @@ export function CreateWorkspaceForm({
         disabled={submitting}
         testId="create-workspace-owner"
       />
+
+      <Field
+        id="cw-purpose"
+        label={t('用途', 'Purpose')}
+        hint={
+          purpose === 'admin_trial'
+            ? t(
+                '试验工作区是平台管理员的管理员智能体唯一能操作的工作区，用来探索和试做；那里的结果要经人应用变更计划才进入正式工作区。创建后不能改回常规，也不能设为默认工作区。平台管理员要是它的成员，管理员智能体才能在这里工作。',
+                "A trial workspace is the only workspace a platform administrator's admin agent acts in — for exploring and trying things out; what it makes there reaches other workspaces only through a change plan a person applies. It stays a trial workspace for good and cannot be the default workspace. The admin agent works here only for a platform administrator who is a member.",
+              )
+            : t(
+                '常规工作区给人和他们的智能体日常使用。创建后用途不能再改。',
+                'A standard workspace is for people and their agents. Its purpose cannot be changed later.',
+              )
+        }
+      >
+        <Select
+          id="cw-purpose"
+          value={purpose}
+          onChange={(event) => setPurpose(event.target.value as 'standard' | 'admin_trial')}
+          disabled={submitting}
+          data-testid="create-workspace-purpose"
+        >
+          <option value="standard">{t('常规', 'Standard')}</option>
+          <option value="admin_trial">{t('试验（管理员智能体）', 'Trial (admin agent)')}</option>
+        </Select>
+      </Field>
 
       <EntryModelSelect
         id="cw-entry-model"

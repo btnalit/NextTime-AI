@@ -195,6 +195,8 @@ export async function ensurePlannerDefinition(
       ...(definitionId !== undefined ? { definitionId } : {}),
       kind: 'worker',
       definition: template.definition,
+      // S11 AA3a (legacy 293): this kernel's own template, written with no caller.
+      origin: 'platform',
     });
     return publishWorkerDefinition(client, workspaceId, plannerId, {
       definitionId: proposed.id,

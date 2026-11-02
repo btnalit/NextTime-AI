@@ -60,6 +60,11 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     en: 'Invalid login — 3–64 characters of a-z 0-9 . _ -, e.g. alice',
   },
   workspace_disabled: { zh: '该工作区已停用', en: 'That workspace is disabled' },
+  // S11 AA3a: `update_platform_settings` naming a trial workspace as the default.
+  trial_workspace: {
+    zh: '试验工作区不能设为默认工作区：新用户都会加入默认工作区',
+    en: 'A trial workspace cannot be the default workspace — every new user joins the default',
+  },
   // P-A2 (workspace configuration): the four codes the workspace capabilities add.
   user_disabled: {
     zh: '该用户已停用，不能作为所有者',

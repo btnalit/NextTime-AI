@@ -13,7 +13,9 @@ import {
   ConflictStatusSchema,
   ConflictTypeSchema,
   DECISION_STATUS_VALUES,
+  DRAFT_ORIGIN_VALUES,
   DecisionStatusSchema,
+  DraftOriginSchema,
   ENTRY_AGENT_SESSION_STATUS_VALUES,
   EPISTEMIC_STATUS_VALUES,
   EXTENSION_MODE_VALUES,
@@ -212,6 +214,7 @@ const enumsUnderTest = [
     PublishableStatusSchema,
     ['draft', 'published', 'deprecated'],
   ],
+  ['DraftOrigin', DRAFT_ORIGIN_VALUES, DraftOriginSchema, ['human', 'agent', 'platform']],
   [
     'OperationStatus',
     OPERATION_STATUS_VALUES,
@@ -344,8 +347,8 @@ const enumsUnderTest = [
 ] as const;
 
 describe('enums', () => {
-  it('covers all 38 domain enums required by R4 + S2.2 + S2.6 + R-55 (TurnStatus) + legacy 278 (OperationStatus) + S11 GO1 (ActionRequestFailureKind and the GoalRun / PlanRevision / StepRun vocabulary) + legacy 324 (TaskFailureReason) + the member-management refusal reasons (PrincipalRefusalReason) + S11 GO3b (GoalRunPauseAuthority) + S11 GO4a (GoalAcceptanceCheckKind / Status) + S11 W1a E2-1 (TaskFailureCategory / TaskRefusal) + S11 「门确认不存在」 B-c (GoalAbsenceBaselineStatus)', () => {
-    expect(enumsUnderTest).toHaveLength(38);
+  it('covers all 39 domain enums required by R4 + S2.2 + S2.6 + R-55 (TurnStatus) + legacy 278 (OperationStatus) + S11 GO1 (ActionRequestFailureKind and the GoalRun / PlanRevision / StepRun vocabulary) + legacy 324 (TaskFailureReason) + the member-management refusal reasons (PrincipalRefusalReason) + S11 GO3b (GoalRunPauseAuthority) + S11 GO4a (GoalAcceptanceCheckKind / Status) + S11 W1a E2-1 (TaskFailureCategory / TaskRefusal) + S11 「门确认不存在」 B-c (GoalAbsenceBaselineStatus) + S11 AA3a (DraftOrigin, legacy 293)', () => {
+    expect(enumsUnderTest).toHaveLength(39);
   });
 
   for (const [name, values, schema, expected] of enumsUnderTest) {

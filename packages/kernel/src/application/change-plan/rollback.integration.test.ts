@@ -396,6 +396,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const segmentId = await apply(ws, segment('fam-o', definitionOf(['ThingO'])));
         await inWorkspace(ws, (client) =>
           publishOntologyVersion(client, ws.workspaceId, {
+            origin: 'human',
             id: deriveOntologyPackId('fam-o'),
             definition: definitionOf(['ThingO', 'ThingO2']),
             principalId: ws.ownerId,

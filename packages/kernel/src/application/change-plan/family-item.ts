@@ -369,6 +369,8 @@ export async function applyFamilyItem(
       description: planned.content.description,
       markdown: planned.content.markdown,
       applicable: planned.content.applicable,
+      // S11 AA3a (legacy 293): the person applying the segment reviewed what it writes.
+      origin: 'human',
     });
     const published = await publishSkill(client, workspaceId, appliedBy, skillId);
     // `publishSkill` publishes the family's latest version; under the registry lock that is the
@@ -387,6 +389,7 @@ export async function applyFamilyItem(
       onMissingFamily: 'start',
       kind: 'worker',
       definition: { ...planned.content },
+      origin: 'human',
     });
     const published = await publishWorkerDefinition(client, workspaceId, appliedBy, {
       definitionId,

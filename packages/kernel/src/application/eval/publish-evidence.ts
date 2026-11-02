@@ -5,6 +5,7 @@ import {
   type DraftEvaluationSummaryWire,
   type DraftEvaluationVerdict,
   type DraftEvaluationWire,
+  type DraftOrigin,
   FAMILY_HISTORY_VERDICTS,
   type PublishAcknowledgementItemWire,
   type PublishEvaluationReview,
@@ -253,10 +254,11 @@ async function withCandidateState(
     markdown: string | null;
     applicable: SkillApplicable | null;
     proposed_by: string | null;
+    origin: DraftOrigin | null;
     rejected: boolean;
   }>(
     `select e.id as evaluation_id, v.id, v.version, v.status, v.name, v.description, v.markdown,
-            v.applicable, v.proposed_by,
+            v.applicable, v.proposed_by, v.origin,
             exists (select 1 from draft_rejections r
                      where r.workspace_id = e.workspace_id and r.kind = 'skill'
                        and r.family_id = e.skill_id and r.version = e.skill_version
@@ -283,6 +285,7 @@ async function withCandidateState(
         markdown: row.markdown ?? '',
         applicable: row.applicable ?? {},
         proposedBy: row.proposed_by ?? '',
+        origin: row.origin,
       }) === evaluation.candidate.draftDigest;
     stateOf.set(
       row.evaluation_id,

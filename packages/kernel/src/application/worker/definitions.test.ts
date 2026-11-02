@@ -206,6 +206,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('creates a draft version-1 row owned by the proposer', async () => {
         const row = await inTx(builderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
             kind: 'entry',
             definition: VALID_ENTRY_DEFINITION,
           }),
@@ -220,6 +221,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('a second propose under the same definitionId produces version 2', async () => {
         const first = await inTx(builderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
             kind: 'worker',
             definition: VALID_WORKER_DEFINITION,
           }),
@@ -227,6 +229,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         // The proposer's own draft family, then a published one anyone may extend.
         const own = await inTx(builderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
             definitionId: first.id,
             kind: 'worker',
             definition: VALID_WORKER_DEFINITION,
@@ -240,6 +243,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         const third = await inTx(otherBuilderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, otherBuilderId, {
+            origin: 'human',
             definitionId: first.id,
             kind: 'worker',
             definition: VALID_WORKER_DEFINITION,
@@ -253,6 +257,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('legacy 492: a family only someone else has drafted is not found, as an id nothing has', async () => {
         const theirs = await inTx(builderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
             kind: 'entry',
             definition: VALID_ENTRY_DEFINITION,
           }),
@@ -266,6 +271,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         for (const attempt of attempts) {
           const err = await inTx(otherBuilderId, (client) =>
             proposeWorkerDefinition(client, workspaceId, otherBuilderId, {
+              origin: 'human',
               ...attempt,
               definition: VALID_WORKER_DEFINITION,
             }),
@@ -290,6 +296,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const derived = randomUUID();
         const started = await inTx(ownerId, (client) =>
           proposeWorkerDefinition(client, workspaceId, ownerId, {
+            origin: 'human',
             definitionId: derived,
             onMissingFamily: 'start',
             kind: 'worker',
@@ -301,6 +308,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         await expect(
           inTx(builderId, (client) =>
             proposeWorkerDefinition(client, workspaceId, builderId, {
+              origin: 'human',
               definitionId: derived,
               onMissingFamily: 'start',
               kind: 'entry',
@@ -313,6 +321,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('rejects a kind mismatch against an existing definitionId', async () => {
         const first = await inTx(builderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
             kind: 'worker',
             definition: VALID_WORKER_DEFINITION,
           }),
@@ -321,6 +330,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         await expect(
           inTx(builderId, (client) =>
             proposeWorkerDefinition(client, workspaceId, builderId, {
+              origin: 'human',
               definitionId: first.id,
               kind: 'entry',
               definition: VALID_ENTRY_DEFINITION,
@@ -332,6 +342,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('propose does not validate content (invalid content is accepted as a draft)', async () => {
         const row = await inTx(builderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
             kind: 'entry',
             definition: { nonsense: true },
           }),
@@ -344,6 +355,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('publishes a draft, sets published_by/published_at, and projects a WorkerDefinition Object', async () => {
         const draft = await inTx(builderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
             kind: 'entry',
             definition: VALID_ENTRY_DEFINITION,
           }),
@@ -369,6 +381,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('rejects publishing content that fails validation, leaving the row in draft', async () => {
         const draft = await inTx(builderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
             kind: 'entry',
             definition: { systemPrompt: 'hi', capabilities: ['request_action'] },
           }),
@@ -395,6 +408,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('rejects publishing an already-published version (IllegalTransition)', async () => {
         const draft = await inTx(builderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
             kind: 'worker',
             definition: VALID_WORKER_DEFINITION,
           }),
@@ -410,6 +424,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('deprecates a published version, and rejects deprecating a draft', async () => {
         const draft = await inTx(builderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
             kind: 'worker',
             definition: VALID_WORKER_DEFINITION,
           }),
@@ -443,6 +458,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('rejects a reference to a draft version', async () => {
         const draft = await inTx(builderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
             kind: 'worker',
             definition: VALID_WORKER_DEFINITION,
           }),
@@ -461,6 +477,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('legacy 492: for whom the answer is, a draft not theirs is not found; their own is not published', async () => {
         const draft = await inTx(builderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
             kind: 'worker',
             definition: VALID_WORKER_DEFINITION,
           }),
@@ -482,6 +499,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('resolves a published version', async () => {
         const draft = await inTx(builderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
             kind: 'worker',
             definition: VALID_WORKER_DEFINITION,
           }),
@@ -526,6 +544,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('returns the most recently published entry definition, and lists published worker definitions', async () => {
         const entryDraft = await inTx(builderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
             kind: 'entry',
             definition: VALID_ENTRY_DEFINITION,
           }),
@@ -556,6 +575,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('omits every draft row when includeOwnDrafts is omitted (default false, unchanged behavior)', async () => {
         const draft = await inTx(builderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
             kind: 'worker',
             definition: VALID_WORKER_DEFINITION,
           }),
@@ -571,12 +591,14 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('includes only the caller’s own draft rows when includeOwnDrafts is true', async () => {
         const ownDraft = await inTx(builderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
             kind: 'worker',
             definition: VALID_WORKER_DEFINITION,
           }),
         );
         const othersDraft = await inTx(otherBuilderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, otherBuilderId, {
+            origin: 'human',
             kind: 'worker',
             definition: VALID_WORKER_DEFINITION,
           }),
@@ -594,6 +616,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('never returns another principal’s draft, even for a caller who also passes includeOwnDrafts', async () => {
         const othersDraft = await inTx(otherBuilderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, otherBuilderId, {
+            origin: 'human',
             kind: 'worker',
             definition: VALID_WORKER_DEFINITION,
           }),
@@ -608,6 +631,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('leaves published rows unchanged (still present, still status "published") when includeOwnDrafts is true', async () => {
         const draft = await inTx(builderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, builderId, {
+            origin: 'human',
             kind: 'worker',
             definition: VALID_WORKER_DEFINITION,
           }),
@@ -665,6 +689,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         for (let i = 0; i < 3; i += 1) {
           const draft = await inFreshTx(pagingBuilderId, (client) =>
             proposeWorkerDefinition(client, freshWorkspaceId, pagingBuilderId, {
+              origin: 'human',
               kind: 'worker',
               definition: VALID_WORKER_DEFINITION,
             }),
@@ -674,6 +699,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         for (let i = 0; i < 3; i += 1) {
           const draft = await inFreshTx(pagingBuilderId, (client) =>
             proposeWorkerDefinition(client, freshWorkspaceId, pagingBuilderId, {
+              origin: 'human',
               kind: 'worker',
               definition: VALID_WORKER_DEFINITION,
             }),

@@ -7748,6 +7748,13 @@
         "ownerUserId": {
           "minLength": 1,
           "type": "string"
+        },
+        "purpose": {
+          "enum": [
+            "standard",
+            "admin_trial"
+          ],
+          "type": "string"
         }
       },
       "required": [
@@ -7840,7 +7847,8 @@
         "purpose": {
           "enum": [
             "standard",
-            "ephemeral"
+            "ephemeral",
+            "admin_trial"
           ],
           "type": "string"
         },
@@ -8560,6 +8568,14 @@
           "enum": [
             "entry",
             "worker"
+          ],
+          "type": "string"
+        },
+        "origin": {
+          "enum": [
+            "human",
+            "agent",
+            "platform"
           ],
           "type": "string"
         },
@@ -24637,6 +24653,14 @@
                 "name": {
                   "type": "string"
                 },
+                "origin": {
+                  "enum": [
+                    "human",
+                    "agent",
+                    "platform"
+                  ],
+                  "type": "string"
+                },
                 "proposedBy": {
                   "type": "string"
                 },
@@ -24668,6 +24692,14 @@
               "type": "string"
             },
             "name": {
+              "type": "string"
+            },
+            "origin": {
+              "enum": [
+                "human",
+                "agent",
+                "platform"
+              ],
               "type": "string"
             },
             "proposedBy": {
@@ -27571,6 +27603,14 @@
               "enum": [
                 "entry",
                 "worker"
+              ],
+              "type": "string"
+            },
+            "origin": {
+              "enum": [
+                "human",
+                "agent",
+                "platform"
               ],
               "type": "string"
             },
@@ -34431,6 +34471,14 @@
               "id": {
                 "type": "string"
               },
+              "origin": {
+                "enum": [
+                  "human",
+                  "agent",
+                  "platform"
+                ],
+                "type": "string"
+              },
               "proposedBy": {
                 "additionalProperties": false,
                 "properties": {
@@ -36549,6 +36597,14 @@
                   "name": {
                     "type": "string"
                   },
+                  "origin": {
+                    "enum": [
+                      "human",
+                      "agent",
+                      "platform"
+                    ],
+                    "type": "string"
+                  },
                   "parameters": {
                     "anyOf": [
                       {
@@ -37215,6 +37271,14 @@
                 "type": "object"
               },
               "name": {
+                "type": "string"
+              },
+              "origin": {
+                "enum": [
+                  "human",
+                  "agent",
+                  "platform"
+                ],
                 "type": "string"
               },
               "parameters": {
@@ -38278,6 +38342,14 @@
                   "name": {
                     "type": "string"
                   },
+                  "origin": {
+                    "enum": [
+                      "human",
+                      "agent",
+                      "platform"
+                    ],
+                    "type": "string"
+                  },
                   "proposedBy": {
                     "type": "string"
                   },
@@ -38306,6 +38378,14 @@
                 "type": "object"
               },
               "name": {
+                "type": "string"
+              },
+              "origin": {
+                "enum": [
+                  "human",
+                  "agent",
+                  "platform"
+                ],
                 "type": "string"
               },
               "proposedBy": {
@@ -39584,6 +39664,14 @@
                 ],
                 "type": "string"
               },
+              "origin": {
+                "enum": [
+                  "human",
+                  "agent",
+                  "platform"
+                ],
+                "type": "string"
+              },
               "proposedBy": {
                 "type": "string"
               },
@@ -39859,7 +39947,8 @@
         "purpose": {
           "enum": [
             "standard",
-            "ephemeral"
+            "ephemeral",
+            "admin_trial"
           ],
           "type": "string"
         },
@@ -39961,7 +40050,8 @@
               "purpose": {
                 "enum": [
                   "standard",
-                  "ephemeral"
+                  "ephemeral",
+                  "admin_trial"
                 ],
                 "type": "string"
               },
@@ -46175,6 +46265,14 @@
               ],
               "type": "string"
             },
+            "origin": {
+              "enum": [
+                "human",
+                "agent",
+                "platform"
+              ],
+              "type": "string"
+            },
             "proposedBy": {
               "type": "string"
             },
@@ -48349,6 +48447,14 @@
           ],
           "type": "string"
         },
+        "origin": {
+          "enum": [
+            "human",
+            "agent",
+            "platform"
+          ],
+          "type": "string"
+        },
         "proposedBy": {
           "type": "string"
         },
@@ -49229,6 +49335,14 @@
           ],
           "type": "string"
         },
+        "origin": {
+          "enum": [
+            "human",
+            "agent",
+            "platform"
+          ],
+          "type": "string"
+        },
         "proposedBy": {
           "type": "string"
         },
@@ -49429,7 +49543,8 @@
         "purpose": {
           "enum": [
             "standard",
-            "ephemeral"
+            "ephemeral",
+            "admin_trial"
           ],
           "type": "string"
         },
@@ -58361,7 +58476,8 @@
         "purpose": {
           "enum": [
             "standard",
-            "ephemeral"
+            "ephemeral",
+            "admin_trial"
           ],
           "type": "string"
         },
@@ -59677,7 +59793,8 @@
         "purpose": {
           "enum": [
             "standard",
-            "ephemeral"
+            "ephemeral",
+            "admin_trial"
           ],
           "type": "string"
         },
@@ -64106,7 +64223,8 @@
         "purpose": {
           "enum": [
             "standard",
-            "ephemeral"
+            "ephemeral",
+            "admin_trial"
           ],
           "type": "string"
         },

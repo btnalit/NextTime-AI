@@ -23,6 +23,7 @@ import { writeAudit } from '../../substrate/audit/index.js';
 import { DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS } from '../../substrate/audit/invariant-checks.js';
 import { listSourceFreshness } from '../../substrate/epistemic/index.js';
 import type { OntologyEnforcement } from '../../substrate/graph/index.js';
+import { ADMIN_TRIAL_WORKSPACE_PURPOSE } from '../admin-agent/index.js';
 import { revokeUserAdminAgentSessions, revokeUserCredentials } from '../identity/credentials.js';
 import { hashPassword, passwordPolicyViolation } from '../identity/password.js';
 import { LOGIN_PATTERN, effectivePlatformRole, normalizeLogin } from '../identity/users.js';
@@ -79,6 +80,8 @@ export type PlatformErrorCode =
   | 'weak_password'
   | 'invalid_login'
   | 'workspace_disabled'
+  /** S11 AA3a: a trial workspace (`purpose = 'admin_trial'`) named as the platform default. */
+  | 'trial_workspace'
   // P-A2 (workspace configuration)
   | 'user_disabled'
   | 'default_workspace'
@@ -247,8 +250,10 @@ function decodeCursor(cursor: string): { createdAt: string; id: string } | null 
 /**
  * S6 A6 (`list_users {hideResidual}`): a *residual* user is one awaiting activation
  * (`has_password = false`) who holds at least one membership and none of whose non-disabled
- * memberships is in an active `standard` workspace — every one sits in a disabled workspace or an
- * `ephemeral` one (an acceptance run, a demo). Those are the "重复的、看不懂的用户" of A6: they
+ * memberships is in an active workspace that is not `ephemeral` — every one sits in a disabled
+ * workspace or an `ephemeral` one (an acceptance run, a demo). A trial workspace (S11 AA3a,
+ * `admin_trial`) is a real place like a `standard` one: its members are people, not acceptance
+ * residue. Those are the "重复的、看不懂的用户" of A6: they
  * leave with their workspace (`purge_workspace`, §4 edge (b)) and the page hides them by default
  * until then. A user with no membership at all, or with a membership somewhere real, is never
  * residual whatever their password state. Expressed as SQL so the keyset cursor stays exact.
@@ -260,7 +265,7 @@ const RESIDUAL_USER_CONDITION = `
      select 1 from principals p
        join workspaces w on w.id = p.workspace_id
       where p.user_id = u.id and p.kind = 'human' and p.disabled_at is null
-        and w.status = 'active' and w.purpose = 'standard'
+        and w.status = 'active' and w.purpose <> 'ephemeral'
    ))`;
 
 export const listUsersHandler: CapabilityHandler = async (client, _workspaceId, params) => {
@@ -342,11 +347,12 @@ interface WorkspaceDbRow {
   id: string;
   name: string;
   status: 'active' | 'disabled';
+  purpose: WorkspacePurpose;
 }
 
 async function loadWorkspace(client: PoolClient, workspaceId: string): Promise<WorkspaceDbRow> {
   const result = await client.query<WorkspaceDbRow>(
-    'select id, name, status from workspaces where id = $1',
+    'select id, name, status, purpose from workspaces where id = $1',
     [workspaceId],
   );
   const row = result.rows[0];
@@ -799,6 +805,14 @@ export const updatePlatformSettingsHandler: CapabilityHandler = async (
     if (workspace.status !== 'active') {
       throw new PlatformAdminError('workspace_disabled', 'the default workspace must be active');
     }
+    // S11 AA3a: every new user joins the default workspace, and an admin agent acts in a trial
+    // workspace (I-A6) — ordinary users never land in the one place it explores.
+    if (workspace.purpose === ADMIN_TRIAL_WORKSPACE_PURPOSE) {
+      throw new PlatformAdminError(
+        'trial_workspace',
+        'a trial workspace cannot be the default workspace: every new user joins the default workspace',
+      );
+    }
   }
   const row = await updatePlatformSettings(client, patch, actingUser(context).id);
   return {
@@ -1138,6 +1152,8 @@ export const createWorkspaceHandler: CapabilityHandler = async (
     entryModel?: string;
     allowedModels?: string[];
     ontologyEnforcement?: OntologyEnforcement;
+    /** S11 AA3a: `standard` (omitted) or `admin_trial` — the registry's schema admits no other. */
+    purpose?: 'standard' | 'admin_trial';
   };
   const acting = actingUser(context);
   const owner = await loadUser(client, input.ownerUserId);
@@ -1195,7 +1211,10 @@ export const createWorkspaceHandler: CapabilityHandler = async (
     payload: {
       channel: 'platform',
       actorLogin: acting.login,
-      details: { defaultModules: settings.defaultModules },
+      details: {
+        defaultModules: settings.defaultModules,
+        purpose: input.purpose ?? 'standard',
+      },
       triggeredBy: 'create_workspace',
     },
   });
@@ -1213,6 +1232,7 @@ export const createWorkspaceHandler: CapabilityHandler = async (
         allowedModels,
         ontologyEnforcement: input.ontologyEnforcement,
         defaultModules: settings.defaultModules,
+        purpose: input.purpose ?? 'standard',
       });
       // P2 hotfix (post-v0.16.0 review, "default modules drift"): only known once the bootstrap
       // above has actually run its install loop — too late for the phase-1 `workspace.created` row

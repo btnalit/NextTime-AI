@@ -195,6 +195,14 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(await familyVersions(ws, 'fam-a')).toEqual([
           { version: 1, published_by: ws.ownerId },
         ]);
+        // S11 AA3a (legacy 293): the person applying the segment reviewed what it writes.
+        expect(
+          await rows(
+            ws,
+            'select origin from ontology_versions where workspace_id = $1 and id = $2',
+            [deriveOntologyPackId('fam-a')],
+          ),
+        ).toEqual([{ origin: 'human' }]);
 
         const [segmentRow] = await rows(
           ws,
@@ -291,6 +299,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         // Someone publishes the family in between.
         await inWorkspace(ws, (client) =>
           publishOntologyVersion(client, ws.workspaceId, {
+            origin: 'human',
             id: deriveOntologyPackId('fam-c'),
             definition: definitionOf('ThingC0'),
             principalId: ws.ownerId,
@@ -439,6 +448,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         // item: the head is not what the recorded item wrote.
         await inWorkspace(ws, (client) =>
           publishOntologyVersion(client, ws.workspaceId, {
+            origin: 'human',
             id: deriveOntologyPackId('fam-p'),
             definition: definitionOf('ThingP2'),
             principalId: ws.ownerId,
@@ -602,6 +612,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const ws = await newWorkspace();
         await inWorkspace(ws, (client) =>
           publishOntologyVersion(client, ws.workspaceId, {
+            origin: 'human',
             id: deriveOntologyPackId('plain-mod'),
             definition: definitionOf('PlainThing', [RESTART]),
             principalId: ws.ownerId,

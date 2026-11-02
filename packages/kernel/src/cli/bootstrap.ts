@@ -845,6 +845,26 @@ export function checkDeleteWorkspaceGuards(
   return { ok: true };
 }
 
+/** `create-workspace --purpose` (S5.3): `standard` (omitted) or `ephemeral`. S11 AA3a: never
+ *  `admin_trial` — a trial workspace is created on the platform plane (`create_workspace`), with
+ *  an existing platform administrator as its owner; this command's `--owner` is a new user's
+ *  display name, who could never run an admin agent there. Pure, exported for the unit test. */
+export function parseCreateWorkspacePurpose(
+  raw: string | undefined,
+  usage: string,
+): Exclude<WorkspacePurpose, 'admin_trial'> {
+  const purposeFlag = raw ?? 'standard';
+  if (
+    purposeFlag === 'admin_trial' ||
+    !(WORKSPACE_PURPOSE_VALUES as readonly string[]).includes(purposeFlag)
+  ) {
+    throw new BootstrapUsageError(
+      `${usage}\n--purpose must be standard or ephemeral (got "${purposeFlag}")`,
+    );
+  }
+  return purposeFlag as Exclude<WorkspacePurpose, 'admin_trial'>;
+}
+
 async function runCreateWorkspace(argv: readonly string[]): Promise<void> {
   const flags = parseFlags(argv);
   const name = flags.name;
@@ -853,13 +873,7 @@ async function runCreateWorkspace(argv: readonly string[]): Promise<void> {
   if (!name || !owner) {
     throw new BootstrapUsageError(usage);
   }
-  const purposeFlag = flags.purpose ?? 'standard';
-  if (!(WORKSPACE_PURPOSE_VALUES as readonly string[]).includes(purposeFlag)) {
-    throw new BootstrapUsageError(
-      `${usage}\n--purpose must be standard or ephemeral (got "${purposeFlag}")`,
-    );
-  }
-  const purpose = purposeFlag as WorkspacePurpose;
+  const purpose = parseCreateWorkspacePurpose(flags.purpose, usage);
   if (flags.ttl !== undefined && purpose !== 'ephemeral') {
     throw new BootstrapUsageError(`${usage}\n--ttl is only valid with --purpose ephemeral`);
   }

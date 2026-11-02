@@ -362,6 +362,85 @@ test.describe('P-A2 acceptance: a second workspace, delegated to its own owner',
     await signOut(page);
   });
 
+  // S11 AA3a (plan §3.1 "试验工作区", I-A6): 用途 试验 makes a trial workspace — the only kind an
+  // admin agent acts in — for good. The administrator is its first owner (the form's default); it
+  // reads 试验 in the list and behind the 用途 filter, and the platform settings list it as the
+  // default workspace's option without letting it be picked. Screenshots at 1440 and 390 are
+  // written to the run's output for UX acceptance; they are not a screenshot gate.
+  test('admin: a trial workspace (用途 试验) is created for good and never offered as the default (S11 AA3a)', async ({
+    page,
+  }, testInfo) => {
+    test.slow();
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await signInAsAdmin(page);
+    const trialName = `${workspaceName}-trial`;
+
+    await page.getByTestId('nav-platformWorkspaces').click();
+    await expect(page.getByTestId('platform-workspaces-page')).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId('new-workspace').click();
+    const createDrawer = page.getByTestId('create-workspace-drawer');
+    await expect(createDrawer.getByTestId('create-workspace-form')).toBeVisible();
+    await createDrawer.locator('#cw-name').fill(trialName);
+    await expect(createDrawer.getByTestId('create-workspace-owner')).toHaveValue(
+      new RegExp(`^${ADMIN_LOGIN} — `),
+      { timeout: 15_000 },
+    );
+    const purpose = createDrawer.getByTestId('create-workspace-purpose');
+    await expect(purpose).toHaveValue('standard');
+    await purpose.selectOption('admin_trial');
+    await expect(createDrawer.locator('#cw-purpose-hint')).toContainText('不能设为默认工作区');
+    for (const width of [1440, 390] as const) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.screenshot({
+        path: testInfo.outputPath(`create-trial-workspace-${width}.png`),
+        fullPage: true,
+      });
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await createDrawer.getByRole('button', { name: /创建/ }).click();
+    await expect(createDrawer).toBeHidden({ timeout: 20_000 });
+
+    const drawer = page.getByTestId('workspace-drawer');
+    await expect(drawer.getByTestId('workspace-detail-purpose')).toHaveAttribute(
+      'data-status',
+      'admin_trial',
+      { timeout: 15_000 },
+    );
+    await expect(drawer.getByTestId('workspace-detail-purpose')).toHaveText('试验');
+    await page.keyboard.press('Escape');
+    await expect(drawer).toBeHidden();
+
+    // 用途 → 试验 narrows the list to trial workspaces: W2 (常规) drops out.
+    await page.locator('#platform-workspaces-purpose').selectOption('admin_trial');
+    const trialRow = workspaceRow(page, trialName);
+    await expect(trialRow).toHaveCount(1, { timeout: 15_000 });
+    await expect(trialRow.getByTestId('workspace-purpose')).toHaveAttribute(
+      'data-status',
+      'admin_trial',
+    );
+    await expect(workspaceRow(page, workspaceName).filter({ hasNotText: trialName })).toHaveCount(
+      0,
+    );
+    for (const width of [1440, 390] as const) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.screenshot({
+        path: testInfo.outputPath(`trial-workspaces-list-${width}.png`),
+        fullPage: true,
+      });
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    // 平台设置 → 默认工作区: listed, not pickable (`update_platform_settings` refuses it).
+    await page.goto('/#/platform/settings');
+    const picker = page.getByTestId('platform-settings-form').locator('#ps-default-workspace');
+    const trialOption = picker.locator('option', { hasText: trialName });
+    await expect(trialOption).toHaveCount(1, { timeout: 15_000 });
+    await expect(trialOption).toHaveText(`${trialName}（试验工作区，不能设为默认）`);
+    await expect(trialOption).toBeDisabled();
+
+    await signOut(page);
+  });
+
   test('admin: the default view hides residue; the residue preset and the purge flow (S6-A A1)', async ({
     page,
   }) => {

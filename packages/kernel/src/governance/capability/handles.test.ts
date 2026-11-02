@@ -797,7 +797,7 @@ describe('entryScope', () => {
 // ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1) — the CI guard on the admin agent's ceiling
 // -------------------------------------------------------------------------------------------
 
-describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1)', () => {
+describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a)', () => {
   it('is exactly this set — widening it is a reviewed change to this test (I-A2)', () => {
     expect([...ADMIN_AGENT_CEILING_CAPABILITIES].sort()).toEqual(
       [
@@ -831,6 +831,12 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1)', () => {
         'platform_state_invariants',
         'platform_state_runtime',
         'platform_state_updates',
+        // S11 AA3a (F3): the five draft proposals, each recording that an agent wrote it.
+        'propose_ontology_change',
+        'propose_operation',
+        'propose_procedure',
+        'propose_skill',
+        'propose_worker_definition',
         'search',
         'state_at',
         'traverse',
@@ -853,13 +859,20 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1)', () => {
     }
   });
 
-  it('holds only handle-channel observe reads: no human-channel, platform, execute-class or writing capability', () => {
+  it('holds only handle-channel observe reads and the five draft proposals: no human-channel, platform, execute-class or other writing capability', () => {
+    const proposals = [
+      'propose_ontology_change',
+      'propose_operation',
+      'propose_procedure',
+      'propose_skill',
+      'propose_worker_definition',
+    ];
     for (const name of ADMIN_AGENT_CEILING_CAPABILITIES) {
       const capability = getCapability(name);
       expect(capability, name).toBeDefined();
       expect(capability?.channel, name).toBe('handle');
       expect(capability?.scope, name).not.toBe('platform');
-      expect(capability?.mode, name).toBe('observe');
+      expect(capability?.mode, name).toBe(proposals.includes(name) ? 'propose' : 'observe');
     }
     for (const name of [
       'request_action',
@@ -868,8 +881,8 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1)', () => {
       'record_decision',
       'report_turn',
       'request_connection',
-      'propose_skill',
       'propose_goal',
+      'propose_entry_template_upgrade',
     ]) {
       expect(ADMIN_AGENT_CEILING_CAPABILITIES, name).not.toContain(name);
     }
@@ -890,7 +903,8 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1)', () => {
       // Outside the groups it admits, or execute-class, or a write.
       ['request_action', 'group "governance"'],
       ['<gate>.<op>:execute', 'execute-class'],
-      ['propose_skill', 'has mode "propose"'],
+      // Propose-class but not one of the drafts that record who wrote them (S11 AA3a).
+      ['propose_goal', 'has mode "propose"'],
       ['invoke_worker', 'has mode'],
       // Observe-class but writes, and not one of the gate observations it names.
       ['get_entry_context', 'has side effects'],
@@ -932,7 +946,7 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1)', () => {
       kind: 'admin_agent',
     });
 
-    for (const extra of ['propose_skill', 'invoke_worker', 'request_action']) {
+    for (const extra of ['propose_goal', 'invoke_worker', 'request_action']) {
       await expect(
         issueHandle(client, {
           sessionId,

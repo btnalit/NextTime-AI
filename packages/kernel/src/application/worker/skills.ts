@@ -1,4 +1,5 @@
 import {
+  type DraftOrigin,
   IllegalTransition,
   PUBLISHABLE_TRANSITIONS,
   type PublishableStatus,
@@ -66,6 +67,7 @@ interface SkillDbRow {
   markdown: string;
   applicable: SkillApplicable;
   proposed_by: string;
+  origin: DraftOrigin | null;
   published_by: string | null;
   created_at: Date;
   published_at: Date | null;
@@ -81,6 +83,9 @@ export interface SkillRow {
   readonly markdown: string;
   readonly applicable: SkillApplicable;
   readonly proposedBy: string;
+  /** S11 AA3a (legacy 293): who wrote this version — `null` for one written before it was
+   *  recorded (worker/0013). */
+  readonly origin: DraftOrigin | null;
   readonly publishedBy: string | null;
   readonly createdAt: Date;
   readonly publishedAt: Date | null;
@@ -97,6 +102,7 @@ function mapRow(row: SkillDbRow): SkillRow {
     markdown: row.markdown,
     applicable: row.applicable ?? {},
     proposedBy: row.proposed_by,
+    origin: row.origin ?? null,
     publishedBy: row.published_by,
     createdAt: row.created_at,
     publishedAt: row.published_at,
@@ -104,11 +110,12 @@ function mapRow(row: SkillDbRow): SkillRow {
 }
 
 /** Review #493 on #764 (F1): the digest a reviewer hands back to `publish_skill`
- *  (`familyVersionDigest`) — everything the version says, and who proposed it. */
+ *  (`familyVersionDigest`) — everything the version says, and who proposed it. S11 AA3a: and who
+ *  wrote it (`origin`), when recorded — a row written before keeps the digest it had. */
 export function skillDraftDigest(
   row: Pick<
     SkillRow,
-    'id' | 'version' | 'name' | 'description' | 'markdown' | 'applicable' | 'proposedBy'
+    'id' | 'version' | 'name' | 'description' | 'markdown' | 'applicable' | 'proposedBy' | 'origin'
   >,
 ): string {
   return familyVersionDigest('skill', {
@@ -119,11 +126,12 @@ export function skillDraftDigest(
     markdown: row.markdown,
     applicable: row.applicable,
     proposedBy: row.proposedBy,
+    ...(row.origin !== null ? { origin: row.origin } : {}),
   });
 }
 
 const SELECT_COLUMNS = `workspace_id, id, version, status, name, description, markdown, applicable,
-  proposed_by, published_by, created_at, published_at`;
+  proposed_by, origin, published_by, created_at, published_at`;
 
 // -------------------------------------------------------------------------------------------
 // Errors
@@ -261,6 +269,10 @@ export interface ProposeSkillInput {
   readonly description: string;
   readonly markdown: string;
   readonly applicable?: SkillApplicable;
+  /** S11 AA3a (legacy 293): who writes this version, from the call channel (a Handle → `agent`;
+   *  the human channel, or a person's own action such as installing a pack → `human`). Never what
+   *  the caller sends. */
+  readonly origin: DraftOrigin;
 }
 
 /** The version a proposal gets: 1 for a new family; for an existing one, the next after its latest,
@@ -311,9 +323,10 @@ export async function proposeSkill(
   const version = await nextVersion(client, workspaceId, input);
   const result = await client.query<SkillDbRow>(
     `insert into skills
-       (workspace_id, id, version, status, name, description, markdown, applicable, proposed_by)
+       (workspace_id, id, version, status, name, description, markdown, applicable, proposed_by,
+        origin)
      values
-       ($1, coalesce($2::uuid, gen_random_uuid()), $3, 'draft', $4, $5, $6, $7::jsonb, $8)
+       ($1, coalesce($2::uuid, gen_random_uuid()), $3, 'draft', $4, $5, $6, $7::jsonb, $8, $9)
      returning ${SELECT_COLUMNS}`,
     [
       workspaceId,
@@ -324,6 +337,7 @@ export async function proposeSkill(
       input.markdown,
       JSON.stringify(input.applicable ?? {}),
       proposerPrincipalId,
+      input.origin,
     ],
   );
   const row = result.rows[0];

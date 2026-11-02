@@ -8,6 +8,7 @@ import { createPool } from '../../adapters/db/pool.js';
 import { withAdminClient } from '../gateway/auth.js';
 import { createPlatformAdmin } from '../identity/index.js';
 import type { UserRow } from '../identity/index.js';
+import { createWorkspaceWithOwner } from '../workspace/index.js';
 import { ensureDefaultWorkspace } from './default-workspace.js';
 import { readPlatformSettings, updatePlatformSettings } from './settings.js';
 
@@ -177,5 +178,48 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       expect(workspaces.rowCount).toBe(1);
     });
+
+    // S11 AA3a: a trial workspace (`admin_trial`) is never the default — every new user joins the
+    // default, and an admin agent explores in a trial workspace. It is not counted as a candidate
+    // either, so it neither gets adopted nor stops the only production workspace being adopted.
+    it('S11 AA3a: a trial workspace is never adopted, nor counted against the only production workspace', async () => {
+      const trial = await createWorkspaceWithOwner(pool, {
+        name: 'Trial',
+        owner: { userId: admin.id, displayName: 'Default Workspace Admin' },
+        ontologyDir: ONTOLOGY_DIR,
+        purpose: 'admin_trial',
+      });
+      await withAdminClient(pool, (client) =>
+        updatePlatformSettings(client, { defaultWorkspaceId: null }, null),
+      );
+      expect(await ensureDefaultWorkspace(pool, { ontologyDir: ONTOLOGY_DIR })).toEqual({
+        kind: 'adopted',
+        workspaceId: defaultWorkspaceId,
+      });
+
+      // With the production workspace disabled, the trial workspace is the only active one — and
+      // still not adopted.
+      await withAdminClient(pool, async (client) => {
+        await updatePlatformSettings(client, { defaultWorkspaceId: null }, null);
+        await client.query(`update workspaces set status = 'disabled' where id = $1`, [
+          defaultWorkspaceId,
+        ]);
+      });
+      try {
+        expect(await ensureDefaultWorkspace(pool, { ontologyDir: ONTOLOGY_DIR })).toEqual({
+          kind: 'unchanged',
+          workspaceId: null,
+        });
+        const settings = await withAdminClient(pool, (client) => readPlatformSettings(client));
+        expect(settings.settings.defaultWorkspaceId).toBeNull();
+        expect(settings.settings.defaultWorkspaceId).not.toBe(trial.workspaceId);
+      } finally {
+        await withAdminClient(pool, (client) =>
+          client.query(`update workspaces set status = 'active' where id = $1`, [
+            defaultWorkspaceId,
+          ]),
+        );
+      }
+    }, 120_000);
   },
 );

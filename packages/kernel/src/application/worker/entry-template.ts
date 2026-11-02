@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { canonicalJson } from '@nexttime/gatekeeper-base';
 import {
+  type DraftOrigin,
   ENTRY_TEMPLATE_FIELD_VALUES,
   type EntryTemplateField,
   type WorkerDefinitionKind,
@@ -193,6 +194,7 @@ export async function proposeEntryTemplateUpgrade(
   principalId: string,
   template: EntryTemplate,
   expected: EntryTemplateExpectation,
+  origin: DraftOrigin,
 ): Promise<EntryTemplateUpgrade> {
   if (expected.templateDigest !== template.digest) {
     throw new EntryTemplateChangedError('the platform entry template');
@@ -245,6 +247,9 @@ export async function proposeEntryTemplateUpgrade(
     ...(current ? { definitionId: current.id } : {}),
     kind: 'entry',
     definition,
+    // S11 AA3a (legacy 293): the caller's, as every gateway draft's (`draftOriginOf`) — a person
+    // over the human channel, or a service's API key (`agent`).
+    origin,
   });
   return { draft, templateDigest: template.digest, basedOn, differs, created: true };
 }
