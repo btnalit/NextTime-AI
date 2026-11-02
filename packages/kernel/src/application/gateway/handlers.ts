@@ -1188,6 +1188,7 @@ const proposeEntryTemplateUpgradeHandler: CapabilityHandler = async (
   client,
   workspaceId,
   params,
+  ctx,
 ) => {
   const { templateDigest, basedOn } = params as {
     templateDigest: string;
@@ -1200,6 +1201,7 @@ const proposeEntryTemplateUpgradeHandler: CapabilityHandler = async (
     principalId,
     await loadEntryTemplate(),
     { templateDigest, basedOn },
+    draftOriginOf(ctx),
   );
   return {
     result: {

@@ -1,7 +1,11 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CAPABILITY_CHANNEL_VALUES, CAPABILITY_REGISTRY } from '@nexttime/shared';
+import {
+  CAPABILITY_CHANNEL_VALUES,
+  CAPABILITY_REGISTRY,
+  PRINCIPAL_KIND_VALUES,
+} from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import type { CapabilityHandlerContext } from './capability-handler.js';
 import { draftOriginOf } from './draft-viewer.js';
@@ -13,8 +17,9 @@ import { CAPABILITY_HANDLERS } from './handlers.js';
  * all. So nothing a caller sends, over the human channel or through a Handle, may come out as
  * `platform`; only the kernel's own templates write it. Three rules hold that:
  *
- *  1. The gateway derives a draft's origin from the channel alone (`draftOriginOf`), and no
- *     channel gives `platform`.
+ *  1. The gateway derives a draft's origin from the channel and the calling Principal's kind
+ *     alone (`draftOriginOf`): `human` only for a person over the human channel, and nothing
+ *     gives `platform`.
  *  2. No capability takes an `origin` param: every dispatchable capability's `paramsSchema`
  *     refuses the key (dispatch.ts parses the params before any handler runs), so a caller cannot
  *     name an origin, whatever value it sends.
@@ -59,11 +64,23 @@ describe('S11 AA3a: no caller can produce a platform draft origin', () => {
     text: readFileSync(full, 'utf8'),
   }));
 
-  it('draftOriginOf derives human or agent from the channel, never platform', () => {
+  it('draftOriginOf derives human for a person over the human channel, agent otherwise, never platform', () => {
     expect(CAPABILITY_CHANNEL_VALUES.length).toBeGreaterThan(0);
     for (const channel of CAPABILITY_CHANNEL_VALUES) {
-      const origin = draftOriginOf({ channel } as CapabilityHandlerContext);
-      expect(origin).toBe(channel === 'human' ? 'human' : 'agent');
+      for (const kind of PRINCIPAL_KIND_VALUES) {
+        const ctx = {
+          channel,
+          principalId: 'p',
+          principal: { id: 'p', kind, role: 'owner', displayName: null },
+        } as CapabilityHandlerContext;
+        // A service's API key is the human channel too, and still not a person (review #493 on
+        // #914, P3-1).
+        expect(draftOriginOf(ctx), `${channel} ${kind}`).toBe(
+          channel === 'human' && kind === 'human' ? 'human' : 'agent',
+        );
+      }
+      // No resolved Principal (a Handle never has one): not a person either.
+      expect(draftOriginOf({ channel } as CapabilityHandlerContext), channel).toBe('agent');
     }
     expect(draftOriginOf(undefined)).toBe('agent');
   });

@@ -637,6 +637,29 @@ describe.runIf(DATABASE_URL !== undefined)(
       }
       expect(await lastAudit('propose_skill')).toMatchObject({ actor: adminPrincipalId });
 
+      // A service's API key is the human channel too, and not a person (review #493 on #914,
+      // P3-1): what it drafts says an agent wrote it.
+      const serviceId = await insertPrincipal('service', 'owner', null);
+      for (const [capability, params, table, nameColumn] of cases) {
+        const name = `aa3_service_${capability.replace('propose_', '')}_${tag}`;
+        await dispatchCapability(
+          { pool },
+          personCaller(serviceId, 'service'),
+          capability,
+          params(name),
+        );
+        const row = await withAdminClient(pool, (client) =>
+          client.query<{ origin: string | null; proposed_by: string }>(
+            `select origin, proposed_by from ${table}
+              where workspace_id = $1 and ${nameColumn} = $2`,
+            [workspaceId, name],
+          ),
+        );
+        expect(row.rows, `${capability} service`).toEqual([
+          { origin: 'agent', proposed_by: serviceId },
+        ]);
+      }
+
       // Read back: the agent's draft carries it on the wire, to the person who reviews it.
       const listed = (await dispatchCapability({ pool }, personCaller(), 'list_skills', {})) as {
         items: { name: string; origin?: string }[];

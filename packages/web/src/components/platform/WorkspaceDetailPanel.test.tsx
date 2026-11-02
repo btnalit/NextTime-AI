@@ -82,6 +82,7 @@ describe('WorkspaceDetailPanel', () => {
     const detail = screen.getByTestId('workspace-detail');
     expect(within(detail).getByTestId('workspace-detail-status').textContent).toBe('活跃');
     expect(within(detail).getByTestId('workspace-detail-purpose').textContent).toBe('常规');
+    expect(within(detail).queryByTestId('workspace-detail-purpose-note')).toBeNull();
     expect(within(detail).getByTestId('workspace-detail-lifecycle').textContent).toBe('—');
     expect(within(detail).getByTestId('workspace-owner-chip').textContent).toBe('alice');
     expect(within(detail).queryByTestId('workspace-purge')).toBeNull();
@@ -89,6 +90,17 @@ describe('WorkspaceDetailPanel', () => {
     // Not a member: the hint, no config switch.
     expect(within(detail).getByTestId('workspace-no-membership')).toBeTruthy();
     expect(within(detail).queryByTestId('open-workspace-config')).toBeNull();
+  });
+
+  it('S11 AA3a: a trial workspace says what it is for under its purpose (UX review on #914, P3-1)', () => {
+    const http = scriptedHttp({ list_users: () => ({ items: [] }) });
+    renderPanel(http, workspace({ purpose: 'admin_trial' }));
+    const detail = screen.getByTestId('workspace-detail');
+    expect(within(detail).getByTestId('workspace-detail-purpose').textContent).toBe('试验');
+    const note = within(detail).getByTestId('workspace-detail-purpose-note').textContent ?? '';
+    expect(note).toContain('管理员智能体只在这里操作');
+    expect(note).toContain('经人应用变更计划');
+    expect(note).toContain('不能设为默认');
   });
 
   it('S8 W4-C: name / entry model / ontology enforcement share one draft and one 保存 button, posting only the changed fields', async () => {

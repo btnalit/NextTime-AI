@@ -414,6 +414,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       const draft = ownList.items.find((s) => s.name === skillName);
       expect(draft?.status).toBe('draft');
       expect(draft?.proposedBy).toBe(ownerId);
+      // S11 AA3a (legacy 293): the Worker wrote it, through its Handle — not the person it is for.
+      expect(draft?.origin).toBe('agent');
 
       const otherId = await adminInsertPrincipal('operator', `other-${taskId}`);
       const otherList = await inTx(otherId, (client) =>

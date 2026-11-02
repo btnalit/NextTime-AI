@@ -75,6 +75,8 @@ describe('CreateWorkspaceForm', () => {
     const hint = document.getElementById('cw-purpose-hint')?.textContent ?? '';
     expect(hint).toContain('管理员智能体唯一能操作');
     expect(hint).toContain('不能设为默认工作区');
+    // Who must be a member for the agent to work there (UX review on #914, P3-3).
+    expect(hint).toContain('平台管理员要是它的成员');
 
     fireEvent.change(screen.getByLabelText(/名称/), { target: { value: 'Lab' } });
     await waitFor(() =>

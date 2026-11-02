@@ -1025,16 +1025,18 @@ export const DraftKindSchema = asEnum(DRAFT_KIND_VALUES);
 
 /**
  * S11 AA3a (legacy 293): who wrote a version of one of the `DRAFT_KIND_VALUES` registries.
- * - `human`: a person — over the human channel, or by an action of theirs that writes content they
- *   reviewed (installing a pack, applying a change segment, the CLI).
- * - `agent`: an agent session through its Handle — an entry agent, a Worker's report, an admin
- *   agent.
+ * - `human`: a person — a human Principal over the human channel, or by an action of theirs that
+ *   writes content they reviewed (installing a pack, applying a change segment, the CLI).
+ * - `agent`: not a person — an agent session through its Handle (an entry agent, a Worker's
+ *   report, an admin agent), or a service Principal's API key over the human channel (an
+ *   automation credential).
  * - `platform`: the kernel's own template, written with no caller — a new workspace's entry agent
  *   and platform-meta ontology, the goal planner's definition.
- * Derived by the kernel from how the row is written (a capability call's channel), never taken
- * from the caller, and fixed once written. Absent on rows written before it was recorded
- * (unknown). `proposedBy` stays the Principal the version is for: an entry or admin agent drafts on
- * its person's behalf, so the Principal alone does not say which wrote it.
+ * Derived by the kernel from how the row is written (a capability call's channel and the calling
+ * Principal's kind), never taken from the caller, and fixed once written. Absent on rows written
+ * before it was recorded (unknown). `proposedBy` stays the Principal the version is for: an entry
+ * or admin agent drafts on its person's behalf, so the Principal alone does not say which wrote
+ * it.
  */
 export const DRAFT_ORIGIN_VALUES = ['human', 'agent', 'platform'] as const;
 export type DraftOrigin = (typeof DRAFT_ORIGIN_VALUES)[number];

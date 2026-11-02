@@ -183,6 +183,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(await skillVersions(ws, skillId)).toEqual([
         { version: 1, status: 'published', proposed_by: ws.ownerId, published_by: ws.ownerId },
       ]);
+      // S11 AA3a (legacy 293): the person applying the segment reviewed what it writes.
+      expect(
+        await rows(ws, 'select origin from skills where workspace_id = $1 and id = $2', [skillId]),
+      ).toEqual([{ origin: 'human' }]);
       expect(
         await inWorkspace(ws, (client) =>
           loadFamilyProvenance(client, ws.workspaceId, 'skill_version', skillId),
@@ -297,6 +301,17 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(await workerVersions(ws, definitionId)).toEqual([
         { version: 1, status: 'published' },
         { version: 2, status: 'published' },
+      ]);
+      // S11 AA3a (legacy 293): as the Skill's — the person applying reviewed both.
+      expect(
+        await rows(
+          ws,
+          'select version, origin from worker_definitions where workspace_id = $1 and id = $2 order by version',
+          [definitionId],
+        ),
+      ).toEqual([
+        { version: 1, origin: 'human' },
+        { version: 2, origin: 'human' },
       ]);
 
       // Back to v1: fewer Skills narrows, the prompt change is confirmed.

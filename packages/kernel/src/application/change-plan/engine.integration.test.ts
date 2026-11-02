@@ -195,6 +195,14 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(await familyVersions(ws, 'fam-a')).toEqual([
           { version: 1, published_by: ws.ownerId },
         ]);
+        // S11 AA3a (legacy 293): the person applying the segment reviewed what it writes.
+        expect(
+          await rows(
+            ws,
+            'select origin from ontology_versions where workspace_id = $1 and id = $2',
+            [deriveOntologyPackId('fam-a')],
+          ),
+        ).toEqual([{ origin: 'human' }]);
 
         const [segmentRow] = await rows(
           ws,

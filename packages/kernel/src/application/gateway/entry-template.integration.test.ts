@@ -277,6 +277,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           kind: 'entry',
           status: 'draft',
           proposedBy: builderId,
+          // S11 AA3a (legacy 293): a person asked for it, over the human channel.
+          origin: 'human',
         });
         expect(upgrade.draft.definition).toEqual({
           ...v1.definition,

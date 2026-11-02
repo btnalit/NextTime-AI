@@ -412,7 +412,7 @@ export interface EntryScopeOptions {
  * person's own runs, application/goal views.ts), observe-class gate calls (decided per call by
  * `observeRefusal`, as for the entry agent) and, since AA2, the platform's state as an agent may
  * see it (group `platform_state`: redacted, `adminAgentOnly` — no other Handle carries it,
- * `issueHandle` below). Those two gate calls are the only ones with side
+ * `issueHandle` below). Those two gate calls are the only reads with side
  * effects (`ADMIN_AGENT_CEILING_SIDE_EFFECTS`): an observation records what it saw — an Activity
  * and the observed Facts, under the person's Principal as the entry agent's do; only the audit row
  * carries the session kind until the observation's own record does (STATUS legacy, before AA4).
@@ -509,9 +509,10 @@ const ADMIN_AGENT_CEILING_PROPOSALS: ReadonlySet<string> = new Set([
   'propose_ontology_change',
 ]);
 
-/** The ceiling's capabilities that write anything at all (`sideEffects: true`): the observe-class
- *  gate calls, which record their observation. A literal list as the ceiling is — another
- *  observe-class capability with side effects joins only by being named here. */
+/** The ceiling's observe-class capabilities that declare side effects (`sideEffects: true`): the
+ *  observe-class gate calls, which record their observation. The `propose_*` drafts above write
+ *  too, but by their mode, not this flag — so they are not here. A literal list as the ceiling is
+ *  — another observe-class capability with side effects joins only by being named here. */
 const ADMIN_AGENT_CEILING_SIDE_EFFECTS: ReadonlySet<string> = new Set([
   'observe_operation',
   ENTRY_CEILING_GATE_OBSERVE_CAPABILITY_NAME,

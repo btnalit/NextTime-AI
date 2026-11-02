@@ -126,8 +126,8 @@ export function CreateWorkspaceForm({
         hint={
           purpose === 'admin_trial'
             ? t(
-                '试验工作区是平台管理员的管理员智能体唯一能操作的工作区，用来探索和试做；那里的结果要经人应用变更计划才进入正式工作区。创建后不能改回常规，也不能设为默认工作区。',
-                "A trial workspace is the only workspace a platform administrator's admin agent acts in — for exploring and trying things out; what it makes there reaches other workspaces only through a change plan a person applies. It stays a trial workspace for good and cannot be the default workspace.",
+                '试验工作区是平台管理员的管理员智能体唯一能操作的工作区，用来探索和试做；那里的结果要经人应用变更计划才进入正式工作区。创建后不能改回常规，也不能设为默认工作区。平台管理员要是它的成员，管理员智能体才能在这里工作。',
+                "A trial workspace is the only workspace a platform administrator's admin agent acts in — for exploring and trying things out; what it makes there reaches other workspaces only through a change plan a person applies. It stays a trial workspace for good and cannot be the default workspace. The admin agent works here only for a platform administrator who is a member.",
               )
             : t(
                 '常规工作区给人和他们的智能体日常使用。创建后用途不能再改。',

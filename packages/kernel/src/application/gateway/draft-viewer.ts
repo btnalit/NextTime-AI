@@ -14,13 +14,16 @@ import type { CapabilityHandlerContext } from './capability-handler.js';
  */
 
 /**
- * S11 AA3a (legacy 293): who a draft proposed through this call is written by — `human` over the
- * human channel, `agent` through a Handle (an entry agent, a Worker, an admin agent). From the
- * channel dispatch.ts authenticated, never from the params; no `ctx` (a test driving the handler
- * directly) counts as a Handle, as `propose_operation`'s proposer kind does.
+ * S11 AA3a (legacy 293): who a draft proposed through this call is written by — `human` when a
+ * person calls over the human channel; `agent` otherwise: through a Handle (an entry agent, a
+ * Worker, an admin agent), or a service Principal's API key over the human channel (an
+ * automation credential is not a person, as `ChangeApplierNotAPersonError` and
+ * `publish_operation`'s reviewed-absent rule hold). From the channel and the Principal dispatch.ts
+ * authenticated, never from the params; no `ctx` (a test driving the handler directly) counts as
+ * a Handle, as `propose_operation`'s proposer kind does.
  */
 export function draftOriginOf(ctx: CapabilityHandlerContext | undefined): DraftOrigin {
-  return ctx?.channel === 'human' ? 'human' : 'agent';
+  return ctx?.channel === 'human' && ctx.principal?.kind === 'human' ? 'human' : 'agent';
 }
 
 /**

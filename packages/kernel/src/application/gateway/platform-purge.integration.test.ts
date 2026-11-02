@@ -210,7 +210,7 @@ describe.runIf(DATABASE_URL !== undefined)('S6 purge plane (integration, real Po
    *  exactly what every acceptance run leaves behind. */
   async function seedWorkspace(input: {
     readonly name: string;
-    readonly purpose?: 'standard' | 'ephemeral';
+    readonly purpose?: 'standard' | 'ephemeral' | 'admin_trial';
     readonly expiresAt?: Date | null;
   }): Promise<SeededWorkspace> {
     const created = await createWorkspaceWithOwner(pool, {
@@ -1044,6 +1044,7 @@ describe.runIf(DATABASE_URL !== undefined)('S6 purge plane (integration, real Po
     let expired: SeededWorkspace;
     let live: SeededWorkspace;
     let disabledWs: SeededWorkspace;
+    let trial: SeededWorkspace;
 
     beforeAll(async () => {
       expired = await seedWorkspace({
@@ -1057,6 +1058,7 @@ describe.runIf(DATABASE_URL !== undefined)('S6 purge plane (integration, real Po
         expiresAt: new Date(Date.now() + DAY_MS),
       });
       disabledWs = await seedWorkspace({ name: 'filter-disabled' });
+      trial = await seedWorkspace({ name: 'filter-trial', purpose: 'admin_trial' });
       await callAsAdmin('set_workspace_status', {
         workspaceId: disabledWs.workspaceId,
         status: 'disabled',
@@ -1117,6 +1119,10 @@ describe.runIf(DATABASE_URL !== undefined)('S6 purge plane (integration, real Po
       expect(logins(hidden.items)).not.toContain(disabledWs.ownerLogin);
       // A real account, and a never-activated user with a membership in the home workspace, stay.
       expect(logins(hidden.items)).toContain(admin.login);
+      // So does one whose only membership is a trial workspace (S11 AA3a): a real place, not
+      // acceptance residue (review #493 on #914, P3-2).
+      expect(logins(all.items)).toContain(trial.ownerLogin);
+      expect(logins(hidden.items)).toContain(trial.ownerLogin);
 
       const pending = await callAsAdmin<ListEnvelope<UserWire>>('list_users', {
         pendingOnly: true,
