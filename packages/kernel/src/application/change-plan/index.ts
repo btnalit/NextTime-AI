@@ -202,6 +202,7 @@ export {
   PlatformSegmentChangedError,
   PlatformSegmentNotAppliedError,
   applyAdminProposalSegment,
+  countAdminProposalSegments,
   getAdminProposalSegment,
   listAdminProposalSegments,
   previewAdminProposalSegment,

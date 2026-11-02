@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AdminProposalCountProvider } from '../hooks/useAdminProposalCount.js';
 import { type CapabilityCaller, type PushSource, SILENT_PUSH_SOURCE } from '../lib/clients.js';
 import type { ActionRequestRow } from '../lib/governance.js';
 import { HttpError } from '../lib/http-client.js';
@@ -675,5 +676,37 @@ describe('ApprovalQueuePage decisions (S6-A B2 / C25)', () => {
     expect(within(historyRow).getByTestId('approval-history-reason').textContent).toContain(
       'looks safe',
     );
+  });
+
+  it('S11 AA4e: points the owner at the admin proposals waiting under 能力目录 (the shell’s count)', async () => {
+    const http = scriptedHttp([() => Promise.resolve([])]);
+    const view = render(
+      <AdminProposalCountProvider value={2}>
+        <ApprovalQueuePage http={http} pushes={SILENT_PUSH_SOURCE} onSelect={vi.fn()} />
+      </AdminProposalCountProvider>,
+    );
+    await screen.findByTestId('approvals-empty');
+    expect(screen.getByTestId('approvals-admin-proposals').textContent).toContain(
+      '另有 2 份管理员提案',
+    );
+    expect(screen.getByTestId('approvals-admin-proposals-link').getAttribute('href')).toBe(
+      '#/govern/catalog/proposals',
+    );
+    view.unmount();
+
+    for (const value of [0, null]) {
+      const again = render(
+        <AdminProposalCountProvider value={value}>
+          <ApprovalQueuePage
+            http={scriptedHttp([() => Promise.resolve([])])}
+            pushes={SILENT_PUSH_SOURCE}
+            onSelect={vi.fn()}
+          />
+        </AdminProposalCountProvider>,
+      );
+      await screen.findByTestId('approvals-empty');
+      expect(screen.queryByTestId('approvals-admin-proposals'), String(value)).toBeNull();
+      again.unmount();
+    }
   });
 });

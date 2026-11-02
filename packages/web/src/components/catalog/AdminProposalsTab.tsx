@@ -15,6 +15,7 @@ import {
   type ReceivedAdminProposalSegmentWire,
 } from '@nexttime/shared';
 import { useState } from 'react';
+import { notifyAdminProposalsDecided } from '../../hooks/useAdminProposalCount.js';
 import {
   invalidateCapability,
   useCapability,
@@ -336,6 +337,8 @@ export function AdminProposalsTab({
     if (decided !== null) setHeld(decided);
     for (const name of DECISION_STALE_READS) invalidateCapability(http, name);
     void segments.reload();
+    // S11 AA4e: the 能力目录 badge, this tab's count and 待我审批's note follow.
+    notifyAdminProposalsDecided();
   }
 
   const selected =

@@ -1634,6 +1634,14 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     enHint:
       "Lists the admin proposals a platform administrator's agent sent to this workspace: what each proposes, its status and who decided it.",
   },
+  get_admin_proposal_segment_counts: {
+    zh: '查看待确认的管理员提案数',
+    en: 'Count admin proposals awaiting a decision',
+    zhHint:
+      '数一数发给本工作区、还在等所有者决定的管理员提案；控制台的角标和「待我审批」里的提示读它。',
+    enHint:
+      "Counts the admin proposals sent to this workspace that still await its owner's decision; the console's badge and the note under Approvals read it.",
+  },
   preview_admin_proposal_segment: {
     zh: '预览管理员提案',
     en: 'Preview an admin proposal',

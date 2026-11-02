@@ -107,6 +107,16 @@ export type ReceivedAdminProposalSegmentWire = z.infer<
   typeof ReceivedAdminProposalSegmentWireSchema
 >;
 
+/** `get_admin_proposal_segment_counts` (S11 AA4e): how many segments addressed to this workspace
+ *  wait for its owner's decision — `proposed`, the rows `list_admin_proposal_segments` lists under
+ *  that status (one per proposal here: governance 0032's unique (proposal_id,
+ *  target_workspace_id)). Counted by the kernel in the owner's scope, so the console's badge and
+ *  notice need no list. */
+export const ReceivedAdminProposalCountsWireSchema = z
+  .object({ proposed: z.number().int().nonnegative() })
+  .strict();
+export type ReceivedAdminProposalCountsWire = z.infer<typeof ReceivedAdminProposalCountsWireSchema>;
+
 /** An intent that does not resolve here (`ADMIN_PROPOSAL_ITEM_BLOCKER_VALUES`), by its ordinal in
  *  the segment. `gateAvailability` (S11 AA3c-2, F-c1), only on `gate_not_enabled`: whether the
  *  owner can enable the gate instance here now (`can_enable`) or the platform has to offer it first

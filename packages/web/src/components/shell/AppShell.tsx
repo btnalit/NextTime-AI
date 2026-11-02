@@ -1,4 +1,8 @@
 import { type ReactNode, useEffect, useState } from 'react';
+import {
+  AdminProposalCountProvider,
+  useAdminProposalCount,
+} from '../../hooks/useAdminProposalCount.js';
 import { useCapability } from '../../hooks/useCapability.js';
 import { usePendingCount } from '../../hooks/usePendingCount.js';
 import { useWorkspaceIdentity } from '../../hooks/useWorkspaceIdentity.js';
@@ -57,6 +61,9 @@ export function AppShell({
   children,
 }: AppShellProps) {
   const pendingCount = usePendingCount(http, pushes);
+  // S11 AA4e: admin proposals waiting for this workspace's owner — the 能力目录 badge here, and the
+  // pages under the shell read the same number (`useAdminProposalCountValue`).
+  const adminProposalCount = useAdminProposalCount(http, pushes);
   const wsStatus = useWsStatus(pushes);
   const { workspaceName, role } = useWorkspaceIdentity(http);
   const kernelVersion = useKernelVersion(http, platformRole === 'admin');
@@ -85,6 +92,7 @@ export function AppShell({
   const sidebarProps = {
     active,
     pendingCount,
+    adminProposalCount,
     wsStatus,
     workspaceName,
     role,
@@ -114,7 +122,11 @@ export function AppShell({
         ) : (
           <Sidebar {...sidebarProps} />
         )}
-        <main className="main">{children}</main>
+        <main className="main">
+          <AdminProposalCountProvider value={adminProposalCount}>
+            {children}
+          </AdminProposalCountProvider>
+        </main>
       </div>
       {isNarrow ? (
         <NavDrawer open={drawerOpen} onOpenChange={setDrawerOpen} {...sidebarProps} />
