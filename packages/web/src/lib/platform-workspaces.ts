@@ -151,6 +151,9 @@ const PURGE_COUNT_LABELS = {
   // addressed to, and at most one 平台部分 — AA3c-1).
   adminProposals: { zh: '管理员提案', en: 'Admin proposals' },
   adminProposalSegments: { zh: '管理员提案的各部分', en: 'Admin proposal parts' },
+  // S11 AA4c-1 (migrations/governance/0036): in a trial workspace, the workspaces each
+  // administrator's admin agent may propose to.
+  adminAgentTargets: { zh: '管理员智能体的目标工作区', en: 'Admin agent targets' },
   connectionRequests: { zh: '连接申请', en: 'Connection requests' },
   draftRejections: { zh: '草稿被拒绝的记录', en: 'Draft rejections' },
   // S10 E3-1a / E3-1b / E3-2a / E3-2b / E3-2c (migrations/worker/0007–0011): the names 治理 → 评测
