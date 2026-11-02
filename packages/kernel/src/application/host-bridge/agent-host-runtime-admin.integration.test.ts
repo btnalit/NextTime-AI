@@ -190,6 +190,61 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
+    /** The jti of the one Handle `startFrames(sent)[index]` carried. */
+    function jtiOf(sent: readonly KernelToAgentHostFrame[], index: number): string {
+      return decodeJwt(startFrames(sent)[index]?.handle as string).jti as string;
+    }
+
+    it('#941 review R04: a Turn under a new session gets a Handle of that session, even while the old session’s Handle is unrevoked and cached', async () => {
+      const member = await newTrialMember();
+      const first = await sessionOf(member);
+      const harness = newRuntime();
+      await startAdminTurn(harness, member, first);
+      // The first session ends without its Handle being revoked (no path does this today; the
+      // cache must not depend on it): the next one opens and its Turn names it.
+      await withAdminClient(pool, (client) =>
+        client.query(`update sessions set status = 'revoked' where id = $1`, [first]),
+      );
+      const second = await sessionOf(member);
+      expect(second).not.toBe(first);
+      await startAdminTurn(harness, member, second);
+      const frames = startFrames(harness.sent);
+      expect(frames).toHaveLength(2);
+      expect(decodeJwt(frames[1]?.handle as string).sid).toBe(second);
+      expect(jtiOf(harness.sent, 1)).not.toBe(jtiOf(harness.sent, 0));
+      expect(await handleCount(member)).toBe(2);
+    });
+
+    it('#941 review R05: a cached Handle revoked since is never sent again — the same session gets a new one', async () => {
+      const member = await newTrialMember();
+      const sessionId = await sessionOf(member);
+      const harness = newRuntime();
+      await startAdminTurn(harness, member, sessionId);
+      const revoked = jtiOf(harness.sent, 0);
+      await withAdminClient(pool, (client) =>
+        client.query('update capability_handles set revoked_at = now() where jti = $1', [revoked]),
+      );
+      await startAdminTurn(harness, member, sessionId);
+      expect(startFrames(harness.sent)).toHaveLength(2);
+      expect(jtiOf(harness.sent, 1)).not.toBe(revoked);
+      expect(decodeJwt(startFrames(harness.sent)[1]?.handle as string).sid).toBe(sessionId);
+      expect(await handleCount(member)).toBe(2);
+    });
+
+    it('#941 review R06: once the person’s role in the trial workspace changes, the cached Handle (narrowed for the old role) is not reused', async () => {
+      const member = await newTrialMember();
+      const sessionId = await sessionOf(member);
+      const harness = newRuntime();
+      await startAdminTurn(harness, member, sessionId);
+      await withAdminClient(pool, (client) =>
+        client.query(`update principals set role = 'auditor' where id = $1`, [member.principalId]),
+      );
+      await startAdminTurn(harness, member, sessionId);
+      expect(startFrames(harness.sent)).toHaveLength(2);
+      expect(jtiOf(harness.sent, 1)).not.toBe(jtiOf(harness.sent, 0));
+      expect(await handleCount(member)).toBe(2);
+    });
+
     it('fails, sending nothing, once the session the Turn was recorded under has ended — no new session under the old Turn', async () => {
       const member = await newTrialMember();
       const sessionId = await sessionOf(member);
