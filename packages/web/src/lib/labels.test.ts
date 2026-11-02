@@ -46,6 +46,7 @@ import {
   sourceVisibilityLabel,
   taskFailureReasonText,
   workerDefinitionKindLabel,
+  workspaceNameWithPurpose,
 } from './labels.js';
 import { purgeCountLabel } from './platform-workspaces.js';
 
@@ -179,6 +180,14 @@ describe('lib/labels', () => {
     expect(roleLabel('auditor', zhT)).toBe('审计员');
     expect(roleLabel('builder', zhT)).toBe('构建者');
     expect(roleLabel('made_up_role', zhT)).toBe('made_up_role');
+  });
+
+  it('workspaceNameWithPurpose marks a trial and an ephemeral workspace, nothing else (legacy 596)', () => {
+    expect(workspaceNameWithPurpose('Sandbox', 'admin_trial', zhT)).toBe('Sandbox（试验）');
+    expect(workspaceNameWithPurpose('Sandbox', 'admin_trial', enT)).toBe('Sandbox (trial)');
+    expect(workspaceNameWithPurpose('ci-e2e', 'ephemeral', zhT)).toBe('ci-e2e（临时）');
+    expect(workspaceNameWithPurpose('Acme', 'standard', zhT)).toBe('Acme');
+    expect(workspaceNameWithPurpose('Acme', 'made_up', zhT)).toBe('Acme');
   });
 
   it('connectorModeLabel resolves the three-state connector mode, including the audit S14 raw-enum examples', () => {

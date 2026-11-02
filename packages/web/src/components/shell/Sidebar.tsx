@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useRef } from 'react';
 import type { WireMembership } from '../../lib/auth-api.js';
 import { type Translate, useT } from '../../lib/i18n.js';
-import { roleLabel } from '../../lib/labels.js';
+import { roleLabel, workspaceNameWithPurpose } from '../../lib/labels.js';
 import type { ExternalNavItem, NavItem } from '../../lib/nav.js';
 import { EXPLORER_NAV, GOVERN_NAV, PLATFORM_NAV, WORK_NAV } from '../../lib/nav.js';
 import type { InferredRole, WorkspaceRole } from '../../lib/role.js';
@@ -146,6 +146,12 @@ export function SidebarContent({
     role.kind !== 'known' || roleMayOpen(role.role, item.href);
   const isAdmin = platformRole === 'admin';
   const showSwitcher = authMode === 'cookie' && memberships !== undefined && memberships.length > 1;
+  // Legacy 596: inside a trial workspace (`admin_trial`, the admin agent's sandbox) the block says
+  // so — an amber 「试验」 chip in the caption, 「工作区 · 试验 · 所有者」. Known from the
+  // membership (cookie sessions); an apiKey session has none and shows no chip.
+  const inTrialWorkspace =
+    memberships?.find((m) => m.workspaceId === selectedWorkspaceId)?.workspacePurpose ===
+    'admin_trial';
   const navRef = useRef<HTMLElement>(null);
   // Design review follow-up (platform-overview-1440.png): with an owner who is also platform
   // admin, ~21 nav items cannot all fit inside a 900px-tall sidebar even at the tightened row
@@ -186,7 +192,7 @@ export function SidebarContent({
           >
             {(memberships ?? []).map((m) => (
               <option key={m.workspaceId} value={m.workspaceId}>
-                {m.workspaceName} ({roleLabel(m.role, t)})
+                {`${workspaceNameWithPurpose(m.workspaceName, m.workspacePurpose, t)} (${roleLabel(m.role, t)})`}
               </option>
             ))}
           </Select>
@@ -198,6 +204,24 @@ export function SidebarContent({
         <span className="sidebar-workspace-caption">
           <span>{t('工作区', 'Workspace')}</span>
           <span aria-hidden>·</span>
+          {inTrialWorkspace ? (
+            <>
+              <span
+                title={t(
+                  '试验工作区：管理员智能体在这里试做，结果要经人审阅的管理员提案才进入生产',
+                  'Trial workspace: the admin agent tries things here; results reach production only through an admin proposal a person reviews',
+                )}
+              >
+                <StatusChip
+                  machine="workspacePurpose"
+                  status="admin_trial"
+                  size="s"
+                  testId="sidebar-workspace-trial"
+                />
+              </span>
+              <span aria-hidden>·</span>
+            </>
+          ) : null}
           {role.kind === 'known' ? (
             // Legacy sweep (console batch, 2026-10-16): the tooltip names the role in words; the
             // raw value stays machine-readable on `data-role` (e2e journey ⑧ keys on it).

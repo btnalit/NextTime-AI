@@ -14,6 +14,7 @@ import {
 import type { CapabilityCaller } from '../lib/clients.js';
 import { HttpError } from '../lib/http-client.js';
 import { type Translate, useT } from '../lib/i18n.js';
+import { workspaceNameWithPurpose } from '../lib/labels.js';
 import {
   loginError,
   loginNormalizedNote,
@@ -608,7 +609,12 @@ function MembershipsCard({ memberships }: { readonly memberships: readonly WireM
             <li key={m.workspaceId} className="row" style={{ justifyContent: 'space-between' }}>
               {/* S8 W4 (audit S15 "我的账户里写明'在 X 工作区中你是 owner'"): explicit "在 … 中你
                *  是 …" phrasing instead of a bare name + chip pair. */}
-              <span>{t(`在 ${m.workspaceName} 中你是`, `In ${m.workspaceName}, you are`)}</span>
+              <span>
+                {t(
+                  `在 ${workspaceNameWithPurpose(m.workspaceName, m.workspacePurpose, t)} 中你是`,
+                  `In ${workspaceNameWithPurpose(m.workspaceName, m.workspacePurpose, t)}, you are`,
+                )}
+              </span>
               <StatusChip machine="role" status={m.role} size="s" />
             </li>
           ))}

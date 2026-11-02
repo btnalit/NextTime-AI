@@ -6,6 +6,7 @@ import { Select } from '../components/kit/select.js';
 import { type CapabilityListResult, useCapabilityList } from '../hooks/useCapability.js';
 import type { CapabilityCaller } from './clients.js';
 import { useT } from './i18n.js';
+import { workspaceNameWithPurpose } from './labels.js';
 
 /**
  * lib/users-workspace-picker: the users page's "which workspace" picker (create-user's default
@@ -137,11 +138,7 @@ export function WorkspacePicker({
           {leading}
           {visible.map((ws) => (
             <option key={ws.id} value={ws.id}>
-              {ws.purpose === 'ephemeral'
-                ? `${ws.name}${t('（临时）', ' (ephemeral)')}`
-                : ws.purpose === 'admin_trial'
-                  ? `${ws.name}${t('（试验）', ' (trial)')}`
-                  : ws.name}
+              {workspaceNameWithPurpose(ws.name, ws.purpose, t)}
             </option>
           ))}
         </Select>

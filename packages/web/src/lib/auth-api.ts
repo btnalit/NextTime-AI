@@ -1,3 +1,4 @@
+import type { WorkspacePurposeWire } from '@nexttime/shared';
 import { HttpError } from './http-client.js';
 
 /**
@@ -28,6 +29,8 @@ export interface WireUser {
 export interface WireMembership {
   readonly workspaceId: string;
   readonly workspaceName: string;
+  /** Legacy 596: an `admin_trial` workspace is marked 「试验」 in the switcher and the sidebar. */
+  readonly workspacePurpose: WorkspacePurposeWire;
   readonly principalId: string;
   readonly role: string;
 }

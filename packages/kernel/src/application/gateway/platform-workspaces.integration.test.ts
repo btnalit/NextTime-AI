@@ -25,7 +25,12 @@ import {
 } from '../../governance/agent-profile/index.js';
 import { HANDLE_SIGNING_ALG } from '../../governance/capability/index.js';
 import { createServer } from '../../index.js';
-import { CONSOLE_SESSION_COOKIE, createPlatformAdmin, createUser } from '../identity/index.js';
+import {
+  CONSOLE_SESSION_COOKIE,
+  createPlatformAdmin,
+  createUser,
+  listMemberships,
+} from '../identity/index.js';
 import type { UserRow } from '../identity/index.js';
 import { updatePlatformSettings } from '../platform/index.js';
 import { getPublishedEntryDefinition } from '../worker/index.js';
@@ -817,6 +822,59 @@ describe.runIf(DATABASE_URL !== undefined)(
           'get_platform_settings',
         );
         expect(settings.defaultWorkspaceId).not.toBe(created.id);
+      }, 120_000);
+
+      // Legacy 596: every membership read carries the workspace's purpose, so the console can mark
+      // a trial workspace wherever it lists one (the switcher reads `/api/auth/me`, the users page
+      // `list_users`, the memberships panel `list_user_memberships`).
+      it('legacy 596: memberships of a trial workspace carry workspacePurpose admin_trial on every read', async () => {
+        const created = await callAsAdmin<PlatformWorkspaceWire>('create_workspace', {
+          name: `trial-membership-${randomUUID().slice(0, 8)}`,
+          ownerUserId: owner.id,
+          purpose: 'admin_trial',
+        });
+        const joiner = await createUser(pool, {
+          login: `trial-joiner-${randomUUID().slice(0, 8)}`,
+          displayName: 'Trial Joiner',
+        });
+
+        const added = await callAsAdmin<UserMembershipWire>('add_membership', {
+          userId: joiner.id,
+          workspaceId: created.id,
+          role: 'member',
+        });
+        expect(added.workspacePurpose).toBe('admin_trial');
+        const raised = await callAsAdmin<UserMembershipWire>('set_membership_role', {
+          userId: joiner.id,
+          workspaceId: created.id,
+          role: 'operator',
+        });
+        expect(raised.workspacePurpose).toBe('admin_trial');
+
+        const listed = await callAsAdmin<{ items: UserMembershipWire[] }>('list_user_memberships', {
+          userId: owner.id,
+        });
+        expect(listed.items.find((m) => m.workspaceId === created.id)?.workspacePurpose).toBe(
+          'admin_trial',
+        );
+        // Each of the owner's memberships carries its own workspace's purpose.
+        for (const membership of listed.items) {
+          expect(membership.workspacePurpose).toBe(
+            (await readWorkspace(membership.workspaceId)).purpose,
+          );
+        }
+
+        const users = await callAsAdmin<ListEnvelope<UserWire>>('list_users', {
+          query: joiner.login,
+        });
+        const listedJoiner = users.items.find((u) => u.id === joiner.id);
+        expect(listedJoiner?.memberships.map((m) => m.workspacePurpose)).toEqual(['admin_trial']);
+
+        // What `/api/auth/me`, login and the session answer from (`toWireMembership`).
+        const own = await listMemberships(pool, joiner.id);
+        expect(own.map((m) => [m.workspaceId, m.workspacePurpose])).toEqual([
+          [created.id, 'admin_trial'],
+        ]);
       }, 120_000);
 
       it('S11 AA3a: a production workspace never becomes a trial workspace; standard ↔ ephemeral is left as it was', async () => {
