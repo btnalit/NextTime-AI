@@ -2311,6 +2311,15 @@ where object_type = 'Operation' and properties->>'status' = 'published'
   - core 0053：只回退代码前先确认 `select count(*) from chats where agent_kind = 'admin_agent'` 为 0，不为 0 就先把这些对话归档；否则旧代码会把它们当普通私有对话，交给入口智能体起 Turn。
   - governance 0036：只回退代码前要先删掉守卫 `drop trigger admin_proposal_segments_target_chosen on admin_proposal_segments` 和它的函数，否则旧代码提议、应用工作区部分时会被这个守卫拒绝。
 
+### 3.112 管理员智能体的运行时：自己的容器、提示词与扩展模式（#941，S11 AA4c-2，0.61.0 之后的下一版）
+
+没有迁移，不改 compose，没有新环境变量，主机不需要操作；`ADMIN_AGENT_ENABLED` 仍默认关，主机没开，对主机没有影响。
+
+- **同版升级**：kernel、agent-host、worker-supervisor 三个服务与 worker-runtime 镜像（`entrypoint.sh`、platform-extension）必须一起升。不带 `agentKind` 的帧和请求仍是入口智能体，行为与以前一样；内核只在管理员 Turn 上写这个字段，所以 agent-host 落后时只会拒掉管理员 Turn。
+- **发版说明可写**：管理员 Turn 真正跑起来，始终在自己的容器里（`nexttime-admin-<id>`，标签 `nexttime.role=admin`；工作目录与平台目录和入口容器分开，互相挂不到）。管理员容器的出网在绑定 Handle 之前登记为全部拒绝，登记失败就删容器；容器启动自检要求经代理的出网被拒、并且有平台给的管理员提示词，否则不启动 pi。扩展的 `admin` 模式只注册管理员上限里的能力和本工作区 observe 类门工具；每个 Turn 开始时把目标工作区 id 放进上下文。提示词随包在 `ontology/admin-agent.yaml`，只是系统提示词，不授予任何东西。Handle 在 Turn 记录的管理员会话下签发（最长一小时，按人 × 试验工作区缓存、原地换绑）。`stop_admin_agent` 与降级在提交后停管理员容器，停用一个人或一个工作区停两种容器。滚动升级与平台运行状态只看入口容器，管理员 Turn 不拦入口容器的滚动。
+- **线上**：`startTurn` / `stopTurn` 帧加可选 `agentKind: 'admin_agent'`；`/resident/spawn`、`/resident/stop`、`GET /resident/:id`、`POST /resident/:id/touch` 加可选 `agentKind`，`/resident/reclaim` 清全部种类；`listResidents` 每条带 `agentKind`；`EXTENSION_MODE_VALUES` 加 `admin`。`scripts/delete-workspace.sh` 同时删管理员容器和它的两个目录。
+- **回滚**：只回退代码即可，但**回退代码之前先删掉管理员容器**：`docker ps -aq --filter label=nexttime.role=admin | xargs -r docker rm -f`（容器名为 `nexttime-admin-*`）。旧的 supervisor 只认 `nexttime.role=entry`，看不到这些容器，它们在出网映射里的条目也只在容器被删除时才清掉。`workspaces/.admin/` 与 `workspaces/.platform/admin-agents/` 两个目录可以留着，旧代码不读。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
