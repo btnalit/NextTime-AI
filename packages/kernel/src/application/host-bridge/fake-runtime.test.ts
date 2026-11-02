@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentRuntimeEvent, StartTurnInput } from './agent-runtime.js';
 import {
+  FAKE_ADMIN_PROPOSE_MARKER,
   FAKE_DELEGATE_MARKER,
+  type FakeAdminProposeOutcome,
   FakeAgentRuntime,
   type FakeDelegateOutcome,
 } from './fake-runtime.js';
@@ -248,6 +250,107 @@ describe('FakeAgentRuntime', () => {
       });
       const turnEnded = events.find((e) => e.type === 'turnEnded');
       expect(turnEnded).toMatchObject({ status: 'failed' });
+    });
+  });
+  describe('onAdminPropose (S11 AA4d, AA4 plan F9)', () => {
+    const OUTCOME: FakeAdminProposeOutcome = {
+      proposalId: 'proposal-1',
+      title: 'CI admin proposal 1',
+      status: 'proposed',
+    };
+    const ADMIN_INPUT: StartTurnInput = {
+      ...INPUT,
+      agentKind: 'admin_agent',
+      sessionId: 'session-1',
+      prompt: `${FAKE_ADMIN_PROPOSE_MARKER} 提一份管理员提案`,
+    };
+
+    async function run(
+      options: Partial<ConstructorParameters<typeof FakeAgentRuntime>[0]>,
+      input: StartTurnInput,
+    ) {
+      const { sink, events } = collectingSink();
+      const runtime = new FakeAgentRuntime({ sink, ...options });
+      await runtime.startTurn(input);
+      await waitFor(events, () => events.some((e) => e.type === 'turnEnded'));
+      return events;
+    }
+
+    it('an admin agent Turn with the marker calls it once, emits a propose_admin_proposal pair, and ends completed', async () => {
+      const onAdminPropose = vi.fn(async () => OUTCOME);
+      const onDelegate = vi.fn(async (): Promise<FakeDelegateOutcome> => {
+        throw new Error('never');
+      });
+      const events = await run({ onAdminPropose, onDelegate }, ADMIN_INPUT);
+
+      expect(onAdminPropose).toHaveBeenCalledTimes(1);
+      expect(onAdminPropose).toHaveBeenCalledWith(ADMIN_INPUT);
+      expect(onDelegate).not.toHaveBeenCalled();
+      expect(events.some((e) => e.type === 'textDelta')).toBe(false);
+      const started = events.find((e) => e.type === 'toolCallStarted');
+      const ended = events.find((e) => e.type === 'toolCallEnded');
+      expect(started).toMatchObject({ name: 'propose_admin_proposal' });
+      expect(ended).toMatchObject({ result: OUTCOME });
+      expect((ended as { toolCallId?: string })?.toolCallId).toBe(
+        (started as { toolCallId?: string })?.toolCallId,
+      );
+      expect(events.find((e) => e.type === 'message')).toMatchObject({
+        role: 'assistant',
+        content: {
+          text: `propose_admin_proposal: proposed "${OUTCOME.title}" (${OUTCOME.proposalId}), now ${OUTCOME.status}.`,
+        },
+      });
+      expect(events.find((e) => e.type === 'turnEnded')).toMatchObject({ status: 'completed' });
+      const types = events.map((e) => e.type);
+      expect(types).toEqual(['toolCallStarted', 'toolCallEnded', 'message', 'turnEnded']);
+    });
+
+    it('the marker in an entry Turn is echoed: only an admin agent proposes', async () => {
+      const onAdminPropose = vi.fn(async () => OUTCOME);
+      const input: StartTurnInput = { ...INPUT, prompt: ADMIN_INPUT.prompt };
+      const events = await run({ onAdminPropose }, input);
+
+      expect(onAdminPropose).not.toHaveBeenCalled();
+      expect(events.some((e) => e.type === 'toolCallStarted')).toBe(false);
+      expect(events.find((e) => e.type === 'message')).toMatchObject({
+        content: { text: `echo: ${input.prompt}` },
+      });
+    });
+
+    it('with no hook wired the marker is echoed, in an admin agent Turn too', async () => {
+      const events = await run({}, ADMIN_INPUT);
+
+      expect(events.some((e) => e.type === 'toolCallStarted')).toBe(false);
+      expect(events.find((e) => e.type === 'message')).toMatchObject({
+        content: { text: `echo: ${ADMIN_INPUT.prompt}` },
+      });
+      expect(events.find((e) => e.type === 'turnEnded')).toMatchObject({ status: 'completed' });
+    });
+
+    it('the delegate marker in an admin agent Turn is echoed: an admin agent never calls invoke_worker', async () => {
+      const onDelegate = vi.fn(async (): Promise<FakeDelegateOutcome> => {
+        throw new Error('never');
+      });
+      const input: StartTurnInput = { ...ADMIN_INPUT, prompt: `${FAKE_DELEGATE_MARKER} 委派` };
+      const events = await run({ onDelegate }, input);
+
+      expect(onDelegate).not.toHaveBeenCalled();
+      expect(events.find((e) => e.type === 'message')).toMatchObject({
+        content: { text: `echo: ${input.prompt}` },
+      });
+    });
+
+    it('a rejection ends the Turn failed with its message, never throwing out of startTurn', async () => {
+      const onAdminPropose = vi.fn(async (): Promise<FakeAdminProposeOutcome> => {
+        throw new Error('no proposal targets chosen');
+      });
+      const events = await run({ onAdminPropose }, ADMIN_INPUT);
+
+      expect(events.find((e) => e.type === 'toolCallEnded')).toMatchObject({ isError: true });
+      expect(events.find((e) => e.type === 'message')).toMatchObject({
+        content: { text: 'propose_admin_proposal failed: no proposal targets chosen' },
+      });
+      expect(events.find((e) => e.type === 'turnEnded')).toMatchObject({ status: 'failed' });
     });
   });
 });

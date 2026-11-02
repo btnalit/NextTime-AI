@@ -26,6 +26,26 @@ import type {
  */
 export const FAKE_DELEGATE_MARKER = '__nexttime_fake_delegate__';
 
+/**
+ * S11 AA4d (AA4 plan F9, CI only): a prompt containing this exact substring, in an **admin agent**
+ * Turn (`input.agentKind === 'admin_agent'`) and when `FakeAgentRuntimeOptions.onAdminPropose` is
+ * wired, makes `run()` call that hook instead of echoing — a scripted "the admin agent decided to
+ * call propose_admin_proposal" Turn. The same guard as {@link FAKE_DELEGATE_MARKER}: only this fake
+ * runtime reads it. An entry Turn carrying it is echoed like any other prompt, and the real runtime
+ * (agent-host, pi) has no code that looks for it — `fake-runtime.test.ts` and the platform
+ * extension's own guard test say so. Exported so the composition root
+ * (`packages/kernel/src/fake-admin-propose.ts`, CI-only) and the e2e journey share the literal.
+ */
+export const FAKE_ADMIN_PROPOSE_MARKER = '__nexttime_fake_admin_propose__';
+
+/** What `onAdminPropose` resolves with: the proposal as the admin agent reads it back, reduced to
+ *  what the scripted reply names. */
+export interface FakeAdminProposeOutcome {
+  readonly proposalId: string;
+  readonly title: string;
+  readonly status: string;
+}
+
 /** What `onDelegate` resolves with — structurally the shape of `application/task`'s own
  *  `InvokeWorkerResult` (`status` widened to plain `string`, `result`/`failureReason` kept
  *  optional) without this file importing anything from `application/task` at all (host-bridge
@@ -69,6 +89,16 @@ export interface FakeAgentRuntimeOptions {
    * implementation's own layering.
    */
   readonly onDelegate?: (input: StartTurnInput) => Promise<FakeDelegateOutcome>;
+  /**
+   * S11 AA4d (AA4 plan F9): when set, an admin agent Turn whose prompt contains
+   * {@link FAKE_ADMIN_PROPOSE_MARKER} calls this instead of echoing — a scripted "the admin agent
+   * called propose_admin_proposal" Turn, with the same `toolCallStarted`/`toolCallEnded` pair, one
+   * assistant `message` and one `turnEnded` as `onDelegate`. Only an admin agent Turn reaches it;
+   * an entry Turn with the marker is echoed. `undefined` (the default, and always in production)
+   * keeps every prompt on the echo path. Wired only by `packages/kernel/src/fake-admin-propose.ts`
+   * (CI-only glue) under the same `FAKE_INVOKE_WORKER=1` gate as `onDelegate`.
+   */
+  readonly onAdminPropose?: (input: StartTurnInput) => Promise<FakeAdminProposeOutcome>;
 }
 
 const DEFAULT_CHUNK_SIZE = 8;
@@ -93,6 +123,7 @@ export class FakeAgentRuntime implements AgentRuntime {
   private readonly chunkSize: number;
   private readonly shouldFail: (input: StartTurnInput) => boolean;
   private readonly onDelegate?: (input: StartTurnInput) => Promise<FakeDelegateOutcome>;
+  private readonly onAdminPropose?: (input: StartTurnInput) => Promise<FakeAdminProposeOutcome>;
   /** turnId -> stop requested. Checked between emitted chunks so a `stopTurn` mid-stream ends the
    *  Turn with `status: 'interrupted'` instead of running to completion. */
   private readonly stopRequested = new Set<string>();
@@ -108,6 +139,7 @@ export class FakeAgentRuntime implements AgentRuntime {
     this.chunkSize = options.chunkSize ?? DEFAULT_CHUNK_SIZE;
     this.shouldFail = options.shouldFail ?? (() => false);
     this.onDelegate = options.onDelegate;
+    this.onAdminPropose = options.onAdminPropose;
   }
 
   async startTurn(input: StartTurnInput): Promise<void> {
@@ -145,7 +177,15 @@ export class FakeAgentRuntime implements AgentRuntime {
   private async run(input: StartTurnInput): Promise<void> {
     this.runningTurnIds.add(input.turnId);
 
-    if (this.onDelegate && input.prompt.includes(FAKE_DELEGATE_MARKER)) {
+    // Each scripted path belongs to one kind of agent: an admin agent never calls invoke_worker
+    // (it is outside its ceiling), and only an admin agent proposes an admin proposal. A marker in
+    // the other kind's Turn is just text, echoed.
+    if (input.agentKind === 'admin_agent') {
+      if (this.onAdminPropose && input.prompt.includes(FAKE_ADMIN_PROPOSE_MARKER)) {
+        await this.runAdminPropose(input, this.onAdminPropose);
+        return;
+      }
+    } else if (this.onDelegate && input.prompt.includes(FAKE_DELEGATE_MARKER)) {
       await this.runDelegate(input, this.onDelegate);
       return;
     }
@@ -214,6 +254,57 @@ export class FakeAgentRuntime implements AgentRuntime {
       role: 'assistant',
       content: {
         text: `invoke_worker: task ${outcome.taskId} (worker run ${outcome.workerRunId}) ended ${outcome.status}.`,
+      },
+    });
+
+    if (this.stopRequested.has(input.turnId)) {
+      await this.endTurn(input, 'interrupted');
+      return;
+    }
+    await this.endTurn(input, this.shouldFail(input) ? 'failed' : 'completed');
+  }
+  /** S11 AA4d: the scripted "call propose_admin_proposal" path `run()` dispatches an admin agent
+   *  Turn to on a marker match. `onAdminPropose` rejecting (no target chosen, the switch off, a
+   *  refusal of the proposal itself) ends the Turn `failed` with the error's message, as
+   *  {@link runDelegate} does. */
+  private async runAdminPropose(
+    input: StartTurnInput,
+    onAdminPropose: (input: StartTurnInput) => Promise<FakeAdminProposeOutcome>,
+  ): Promise<void> {
+    const toolCallId = `fake-admin-propose-${input.turnId}`;
+    await this.emit(input, {
+      type: 'toolCallStarted',
+      toolCallId,
+      name: 'propose_admin_proposal',
+      args: {},
+    });
+
+    let outcome: FakeAdminProposeOutcome;
+    try {
+      outcome = await onAdminPropose(input);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await this.emit(input, {
+        type: 'toolCallEnded',
+        toolCallId,
+        result: { error: message },
+        isError: true,
+      });
+      await this.emit(input, {
+        type: 'message',
+        role: 'assistant',
+        content: { text: `propose_admin_proposal failed: ${message}` },
+      });
+      await this.endTurn(input, 'failed');
+      return;
+    }
+
+    await this.emit(input, { type: 'toolCallEnded', toolCallId, result: outcome });
+    await this.emit(input, {
+      type: 'message',
+      role: 'assistant',
+      content: {
+        text: `propose_admin_proposal: proposed "${outcome.title}" (${outcome.proposalId}), now ${outcome.status}.`,
       },
     });
 

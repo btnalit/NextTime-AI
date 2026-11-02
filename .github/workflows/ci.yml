@@ -143,6 +143,12 @@ jobs:
       - name: Third-party images come from their GHCR copies by the listed digest (scripts/guards/image-mirrors.mjs, deploy/image-mirrors.json)
         run: node scripts/guards/image-mirrors.mjs
 
+      - name: CI-only marker guard unit tests (S11 AA4d)
+        run: node --test scripts/guards/fake-markers.test.mjs
+
+      - name: CI-only chat markers and their hooks stay out of the real runtime and every real deployment (scripts/guards/fake-markers.mjs, AA4 plan F9)
+        run: node scripts/guards/fake-markers.mjs
+
       - name: i18n pair guard detector unit tests (S8 W1-A9 / W1-A12)
         run: node --test scripts/guards/i18n-pairs.test.mjs
 

@@ -64,6 +64,7 @@ import {
 } from './application/goal/index.js';
 import type {
   AgentRuntime,
+  FakeAdminProposeOutcome,
   FakeDelegateOutcome,
   IsTurnRunning,
   ResolveTurnPrompt,
@@ -85,6 +86,7 @@ import {
   runTaskReaper,
 } from './application/task/index.js';
 import { DEFAULT_DRAFT_EXPIRY_DAYS, expireDraftsOnce } from './application/worker/index.js';
+import { createFakeAdminProposeHandler } from './fake-admin-propose.js';
 import { FakeTaskSupervisorClient, createFakeDelegateHandler } from './fake-invoke-worker.js';
 import {
   ApprovalDrainer,
@@ -486,6 +488,12 @@ export interface CreateBackgroundServicesOptions {
    *  `FakeAgentRuntime` construction exactly as it was before this option existed. Ignored when
    *  `kind === 'agent-host'`, and ignored entirely when `options.runtime` is given directly. */
   readonly fakeAgentRuntimeOnDelegate?: (input: StartTurnInput) => Promise<FakeDelegateOutcome>;
+  /** S11 AA4d (AA4 plan F9, test-only): wired straight through to `FakeAgentRuntime`'s own
+   *  `onAdminPropose` when `kind === 'fake'`, exactly like `fakeAgentRuntimeOnDelegate` — `main()`
+   *  builds it only under the same `FAKE_INVOKE_WORKER=1` flag (`fake-admin-propose.ts`). */
+  readonly fakeAgentRuntimeOnAdminPropose?: (
+    input: StartTurnInput,
+  ) => Promise<FakeAdminProposeOutcome>;
   /** How often the S2.7 task reaper polls (duration-limit enforcement + supervisor-status
    *  reconciliation). Default `DEFAULT_TASK_REAPER_INTERVAL_MS` (30s — much tighter than the
    *  approval reaper's 5 minutes, matching `worker-supervisor`'s own 30s `reap()` cadence). */
@@ -642,7 +650,11 @@ function buildDefaultRuntime(options: CreateBackgroundServicesOptions): AgentRun
   const sink = createChatEventSink({ pool: options.pool });
 
   if (kind === 'fake') {
-    return new FakeAgentRuntime({ sink, onDelegate: options.fakeAgentRuntimeOnDelegate });
+    return new FakeAgentRuntime({
+      sink,
+      onDelegate: options.fakeAgentRuntimeOnDelegate,
+      onAdminPropose: options.fakeAgentRuntimeOnAdminPropose,
+    });
   }
 
   if (!options.handleKeyPair) {
@@ -1647,6 +1659,12 @@ export function main(): void {
     let fakeAgentRuntimeOnDelegate:
       | ((input: StartTurnInput) => Promise<FakeDelegateOutcome>)
       | undefined;
+    // S11 AA4d (AA4 plan F9): under the same flag and gates, an admin agent Turn carrying
+    // `FAKE_ADMIN_PROPOSE_MARKER` proposes through the real dispatch with the Turn's own admin
+    // agent Handle (fake-admin-propose.ts) — the admin agent journey without pi.
+    let fakeAgentRuntimeOnAdminPropose:
+      | ((input: StartTurnInput) => Promise<FakeAdminProposeOutcome>)
+      | undefined;
     if (process.env.FAKE_INVOKE_WORKER === '1' && kind === 'fake' && handleKeyPair) {
       fakeTaskSupervisorClient = new FakeTaskSupervisorClient({
         pool,
@@ -1657,8 +1675,12 @@ export function main(): void {
         privateKey: handleKeyPair.privateKey,
         supervisorClient: fakeTaskSupervisorClient,
       });
+      fakeAgentRuntimeOnAdminPropose = createFakeAdminProposeHandler({
+        pool,
+        privateKey: handleKeyPair.privateKey,
+      });
       app.log.warn(
-        'FAKE_INVOKE_WORKER=1: invoke_worker is scripted (no real worker-supervisor spawn) — never set this outside CI',
+        "FAKE_INVOKE_WORKER=1: invoke_worker and the admin agent's propose_admin_proposal are scripted (no real worker-supervisor spawn, no pi) — never set this outside CI",
       );
     }
 
@@ -1670,6 +1692,7 @@ export function main(): void {
         supervisorToken !== undefined ? internalAuthorizationHeader(supervisorToken) : undefined,
       taskSupervisorClient: fakeTaskSupervisorClient,
       fakeAgentRuntimeOnDelegate,
+      fakeAgentRuntimeOnAdminPropose,
       taskReaperIntervalMs,
       onTaskReaperError: (err: unknown) => app.log.error(err),
       onGoalAdvancerError: (err: unknown) => app.log.error(err),

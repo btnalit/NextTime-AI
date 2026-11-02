@@ -232,7 +232,9 @@ export class AdminAgentSessionEndedError extends Error {
  * newest one not revoked or expired, or a new one — and a Handle under it scoped to
  * `adminAgentScope` for the Principal's role here (issueHandle refuses anything wider for this
  * session kind). The runtime (`AgentHostRuntime`, S11 AA4c-2) calls it when an admin agent's Turn
- * starts, pinned to the session the Turn was recorded under; nothing else does.
+ * starts, pinned to the session the Turn was recorded under. The only other caller is the CI-only
+ * fake hook (`fake-admin-propose.ts`, S11 AA4d), built only under `FAKE_INVOKE_WORKER=1`, which
+ * issues it the same way for the Turn it scripts.
  */
 export async function issueAdminAgentHandle(
   client: PoolClient,
