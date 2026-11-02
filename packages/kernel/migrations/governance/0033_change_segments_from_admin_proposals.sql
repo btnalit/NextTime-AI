@@ -41,15 +41,20 @@
 --     own Principal, as 0032 already ties the withdrawer to the transaction (#488 P3-a).
 --   * one record per proposal segment (`change_segments_admin_proposal_segment`).
 --
--- Reversibility: columns, checks and guards only; a release before this one never writes `admin_proposal`
--- and still inserts packs as it did (all four null, `proposed_by` set), so rolling back the code
--- alone is safe — it reads an `admin_proposal` record's source as if it were a pack's, and its null
--- `proposed_by` as a missing proposer; its apply-free paths (propose, withdraw) already write the
--- transaction's own Principal and leave `updated_at` alone. To take the migration out (only with
--- no `admin_proposal` row left): drop the three triggers and their functions and the index, `alter table change_segments drop
--- constraint change_segments_proposer`, restore `change_segments_source_kind_check` to `source_kind
--- in ('pack')`, `alter column proposed_by set not null`, drop the four columns, then `delete from
--- schema_migrations where module = 'governance' and version = 33`.
+-- Reversibility: columns, checks and guards only. A release before this one never writes
+-- `admin_proposal`, still inserts packs as it did (all four null, `proposed_by` set), and its
+-- apply-free paths (propose, withdraw) already write the transaction's own Principal and leave
+-- `updated_at` alone, so rolling back the code alone corrupts nothing. That code, though, joins
+-- `proposed_by` to `principals` with an inner join, so an `admin_proposal` record (null
+-- `proposed_by`) drops out of its reads: not listed, and 404 to get, verify or roll back. To undo
+-- what an admin proposal applied, roll it back on this release first, then roll back the code.
+-- The database only holds "proposal segment rolled back => its record rolled back"; the other way
+-- round is the kernel's (rollback.ts moves both in one transaction), so a new rollback path must
+-- move the proposal segment too. To take the migration out (only with no `admin_proposal` row
+-- left): drop the three triggers and their functions and the index, `alter table change_segments
+-- drop constraint change_segments_proposer`, restore `change_segments_source_kind_check` to
+-- `source_kind in ('pack')`, `alter column proposed_by set not null`, drop the four columns, then
+-- `delete from schema_migrations where module = 'governance' and version = 33`.
 --
 -- Cross-process bootstrap lock: same governance-module advisory lock key as every other file in
 -- this module (core/0001_identity.sql's header comment has the full rationale).

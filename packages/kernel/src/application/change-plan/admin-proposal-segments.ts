@@ -598,7 +598,12 @@ export async function previewAdminProposalSegment(
     suspectedSecretValues: suspected.count,
     suspectedSecretPaths: [...suspected.paths],
   };
-  const { resolved, blockers } = await resolveIntents(client, workspaceId, row.source_name, row.items);
+  const { resolved, blockers } = await resolveIntents(
+    client,
+    workspaceId,
+    row.source_name,
+    row.items,
+  );
   if (blockers.length > 0) {
     return {
       segment: receivedSegmentOf(row),
@@ -616,7 +621,12 @@ export async function previewAdminProposalSegment(
   const items: AdminProposalPreviewItemWire[] = [];
   for (const item of plan.items) {
     items.push(
-      await previewItemOf(client, workspaceId, item, resolved[item.ordinal - 1]?.newFamily ?? false),
+      await previewItemOf(
+        client,
+        workspaceId,
+        item,
+        resolved[item.ordinal - 1]?.newFamily ?? false,
+      ),
     );
   }
   return {
@@ -667,15 +677,15 @@ export async function applyAdminProposalSegment(
 ): Promise<AppliedAdminProposalSegment> {
   const row = await loadReceivedSegment(client, workspaceId, input.segmentId, { forUpdate: true });
   assertOpen(row);
-  const { resolved, blockers } = await resolveIntents(client, workspaceId, row.source_name, row.items);
+  const { resolved, blockers } = await resolveIntents(
+    client,
+    workspaceId,
+    row.source_name,
+    row.items,
+  );
   if (blockers.length > 0) throw new AdminProposalSegmentBlockedError(row.id, blockers);
   const suspected = suspectedSecretsOf(row);
-  assertCredentialsReviewed(
-    'admin_proposal_segment',
-    row.id,
-    suspected,
-    input.credentialsReviewed,
-  );
+  assertCredentialsReviewed('admin_proposal_segment', row.id, suspected, input.credentialsReviewed);
   const origin: AdminProposalOrigin = {
     proposalId: row.proposal_id,
     proposalSegmentId: row.id,

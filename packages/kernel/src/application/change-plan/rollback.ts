@@ -364,7 +364,8 @@ export async function rollBackWorkspaceSegment(
   // S11 AA3b-2: rolling back what an admin proposal's segment applied rolls that segment back too,
   // in this transaction (governance 0033's `admin_proposal_segments_record_guard` checks the record
   // went first). Its trial workspace may have been purged since, the segment with it: then only the
-  // record here is rolled back.
+  // record here is rolled back. The database holds only "proposal segment rolled back => record
+  // rolled back", not the other way round: any other path that rolls a record back must do this too.
   if (segment.adminProposal) {
     await client.query(
       `update admin_proposal_segments set status = 'rolled_back', rolled_back_by = $3

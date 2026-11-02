@@ -395,7 +395,9 @@ function assertProposerMatchesSource(input: ApplyWorkspaceSegmentInput): void {
       );
     }
   } else if (origin !== undefined || input.proposedBy === null) {
-    throw new Error(`change-plan: a ${input.source.kind} segment names its proposer in this workspace`);
+    throw new Error(
+      `change-plan: a ${input.source.kind} segment names its proposer in this workspace`,
+    );
   }
 }
 

@@ -1620,7 +1620,8 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   reject_admin_proposal_segment: {
     zh: '拒绝管理员提案',
     en: 'Reject an admin proposal',
-    zhHint: '拒绝发来的管理员提案并写明理由；理由只有本工作区和平台管理员能看到，提议的智能体只知道被拒绝了。',
+    zhHint:
+      '拒绝发来的管理员提案并写明理由；理由只有本工作区和平台管理员能看到，提议的智能体只知道被拒绝了。',
     enHint:
       "Rejects an admin proposal sent here, with your reason; only this workspace and the platform's administrators see the reason — the agent that proposed it learns only that it was rejected.",
   },
