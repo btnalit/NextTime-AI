@@ -14,7 +14,7 @@ import {
   AdminProposalSegmentWireSchema,
 } from './admin-proposal.js';
 import { ChangeWideningReasonWireSchema } from './change-plan.js';
-import { GateHostedDefinitionWireSchema } from './platform.js';
+import { GateHostedDefinitionWireSchema, WorkspacePurposeWireSchema } from './platform.js';
 import { ReceivedAdminProposalHeadWireSchema } from './received-admin-proposal.js';
 
 // ---------------------------------------------------------------------------------------------
@@ -168,11 +168,30 @@ export const PlatformSegmentApplyResultWireSchema = z
   .strict();
 export type PlatformSegmentApplyResultWire = z.infer<typeof PlatformSegmentApplyResultWireSchema>;
 
+/** How many of the workspaces that enabled an instance a rollback item names (`enabledIn`);
+ *  `linkedWorkspaceCount` counts them all. */
+export const PLATFORM_CHANGE_ENABLED_IN_LIMIT = 50;
+
+/** A workspace that enabled an instance (S11 AA4-0): what the platform plane already shows of it
+ *  — its id, name and purpose, nothing it holds. */
+export const PlatformChangeEnabledWorkspaceWireSchema = z
+  .object({
+    workspaceId: z.string(),
+    name: z.string(),
+    purpose: WorkspacePurposeWireSchema,
+  })
+  .strict();
+export type PlatformChangeEnabledWorkspaceWire = z.infer<
+  typeof PlatformChangeEnabledWorkspaceWireSchema
+>;
+
 /** One item of a rollback: what it does to the instance its item created. `drift`: the fields
  *  changed since it was created (F-c3) — while there is one, nothing is rolled back (409
  *  `platform_change_drifted`). `linkedWorkspaceCount`: workspaces that enabled the instance — a
  *  disabled instance takes no new workspace, and those keep calling it (cutting calls off is
- *  `set_connector_mode`'s `disabledOperations`). */
+ *  `set_connector_mode`'s `disabledOperations`). `enabledIn` names them (S11 AA4-0, the AA4 plan
+ *  F7), by name, at most {@link PLATFORM_CHANGE_ENABLED_IN_LIMIT}: the rollback dialog links each
+ *  to its gate page, where its owner can disable it. */
 export const PlatformChangeRollbackItemWireSchema = z
   .object({
     ordinal: z.number().int().positive(),
@@ -180,6 +199,9 @@ export const PlatformChangeRollbackItemWireSchema = z
     action: PlatformChangeRollbackActionSchema,
     drift: z.array(GateInstanceDriftFieldSchema),
     linkedWorkspaceCount: z.number().int().nonnegative(),
+    enabledIn: z
+      .array(PlatformChangeEnabledWorkspaceWireSchema)
+      .max(PLATFORM_CHANGE_ENABLED_IN_LIMIT),
   })
   .strict();
 export type PlatformChangeRollbackItemWire = z.infer<typeof PlatformChangeRollbackItemWireSchema>;

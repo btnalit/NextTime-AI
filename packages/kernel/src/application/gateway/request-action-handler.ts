@@ -43,6 +43,7 @@ import {
   shownAuditReason,
 } from '../../governance/approval/index.js';
 import {
+  ADMIN_AGENT_SESSION_KIND,
   hasActiveGrant,
   listActiveGrantResourceScopes,
   roleMayUseCapability,
@@ -362,7 +363,11 @@ async function recordWorkerGateObservationSafely(
  *  The Activity records which Task's Worker made the call — `triggeredByTaskId`, `null` for a
  *  caller that is not a WorkerRun (S11 GO4c): a goal's fact check takes the Facts this observation
  *  confirms as evidence only when the Task is not one of that goal's (goal/0007), and the record
- *  never changes once written (core/0046).
+ *  never changes once written (core/0046). An admin agent's call (`adminAgentSessionId`, dispatch
+ *  sets it after the authority check) also records `sessionKind: admin_agent` and its `sessionId`
+ *  (S11 AA4-0, legacy 584): the Activity's Principal is the administrator's own, so without them
+ *  the Facts it writes read as the administrator's own observation; only the audit row told them
+ *  apart.
  *
  *  S11 「门确认不存在」 A: a gate that answers the call as absent — the target answered with what
  *  the published definition declares means "does not exist" — is taken at its word only when that
@@ -376,7 +381,8 @@ async function runObserve(
   published: OperationRecord,
   operationParams: unknown,
   onBehalfOf: string,
-  workerRun?: WorkerRunRow,
+  workerRun: WorkerRunRow | undefined,
+  adminAgentSessionId: string | undefined,
 ): Promise<CapabilityHandlerResult> {
   const operationName = published.name;
   const credentialReview = reviewObserveParams(gatekeeper.name, operationName, operationParams);
@@ -388,6 +394,9 @@ async function runObserve(
       gatekeeperId: gatekeeper.gatekeeperId,
       operation: operationName,
       triggeredByTaskId: workerRun?.taskId ?? null,
+      ...(adminAgentSessionId === undefined
+        ? {}
+        : { sessionKind: ADMIN_AGENT_SESSION_KIND, sessionId: adminAgentSessionId }),
     },
   });
   try {
@@ -1437,6 +1446,7 @@ export const observeOperationHandler: CapabilityHandler = async (
     operationParams ?? {},
     onBehalfOf,
     workerRun ?? undefined,
+    ctx?.adminAgent?.sessionId,
   );
 };
 
@@ -1566,6 +1576,7 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
       resolvedParams,
       onBehalfOf,
       workerRun ?? undefined,
+      ctx?.adminAgent?.sessionId,
     );
   }
 

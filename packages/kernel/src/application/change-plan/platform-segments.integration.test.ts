@@ -5,6 +5,7 @@ import type {
   AdminProposalSegmentApplyResultWire,
   AdminProposalSegmentPreviewWire,
   AdminProposalWire,
+  AgentAdminProposalWire,
   GateInstanceWire,
   ListEnvelope,
   PlatformChangeRollbackPreviewWire,
@@ -14,6 +15,7 @@ import type {
   PlatformSegmentPreviewWire,
   ReceivedAdminProposalSegmentWire,
 } from '@nexttime/shared';
+import { PLATFORM_CHANGE_ENABLED_IN_LIMIT } from '@nexttime/shared';
 import { generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
 import type { Pool, PoolClient } from 'pg';
@@ -223,11 +225,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       items: readonly Record<string, unknown>[],
       targets: readonly Target[] = [],
     ): Promise<{
-      readonly proposal: AdminProposalWire;
+      readonly proposal: AgentAdminProposalWire;
       readonly platformSegmentId: string;
       readonly workspaceSegmentIds: readonly string[];
     }> {
-      const proposal = await call<AdminProposalWire>(agent, 'propose_admin_proposal', {
+      const proposal = await call<AgentAdminProposalWire>(agent, 'propose_admin_proposal', {
         title: 'Connect the ticket system',
         description: 'What the trial workspace settled on.',
         sourceName: `aa3c1-${unique()}`,
@@ -526,6 +528,142 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(JSON.stringify(mapCapabilityError(signed))).toContain('platform.items[0].target');
         expect(JSON.stringify(mapCapabilityError(signed))).not.toContain(FAKE);
       }
+    });
+
+    it('AA4-0 (coordinator 2026-11-02): people read a platform item’s addresses, the agent never does — not in what propose returns, nor agent_get, nor agent_withdraw — and an address that carried a credential was never written (F9)', async () => {
+      const { user, agent } = await administrator();
+      const target = await newTarget();
+      const httpGate = `aa40-${unique()}`;
+      const mcpGate = `aa40-${unique()}`;
+      const httpItem = gateItem(httpGate, `tickets-${unique()}`);
+      const mcpItem = {
+        kind: 'gate_instance' as const,
+        gateId: mcpGate,
+        transportKind: 'mcp' as const,
+        target: `https://${mcpGate}.example.invalid/mcp`,
+        credentialMode: 'connected_account' as const,
+        connector: `wiki-${unique()}`,
+      };
+      const addresses = [httpItem.target, httpItem.manifestSource, mcpItem.target];
+
+      /** Every key anywhere in `value`. */
+      const keysIn = (value: unknown): string[] =>
+        Array.isArray(value)
+          ? value.flatMap(keysIn)
+          : value !== null && typeof value === 'object'
+            ? Object.entries(value).flatMap(([key, inner]) => [key, ...keysIn(inner)])
+            : [];
+      const withheld = (read: AgentAdminProposalWire) => {
+        expect(keysIn(read)).not.toContain('target');
+        expect(keysIn(read)).not.toContain('manifestSource');
+        for (const address of addresses) expect(JSON.stringify(read)).not.toContain(address);
+        expect(read.segments.find((s) => s.authority === 'platform')?.items).toEqual([
+          {
+            kind: 'gate_instance',
+            gateId: httpGate,
+            displayName: httpItem.displayName,
+            transportKind: 'http',
+            credentialMode: 'shared',
+            connector: httpItem.connector,
+            addressWithheld: true,
+          },
+          {
+            kind: 'gate_instance',
+            gateId: mcpGate,
+            transportKind: 'mcp',
+            credentialMode: 'connected_account',
+            connector: mcpItem.connector,
+            addressWithheld: true,
+          },
+        ]);
+      };
+
+      const { proposal, platformSegmentId } = await proposePlatform(
+        agent,
+        [httpItem, mcpItem],
+        [target],
+      );
+      withheld(proposal);
+      withheld(
+        await call<AgentAdminProposalWire>(agent, 'agent_get_admin_proposal', {
+          proposalId: proposal.id,
+        }),
+      );
+
+      // The target workspace's owner and platform administrators read them as proposed.
+      const received = await call<{ items: ReceivedAdminProposalSegmentWire[] }>(
+        ownerCaller(target),
+        'list_admin_proposal_segments',
+        {},
+      );
+      expect(received.items.map((segment) => segment.platformSegment)).toEqual([
+        { id: platformSegmentId, status: 'proposed', items: [httpItem, mcpItem] },
+      ]);
+      const onPlatform = await call<AdminProposalWire>(platformCaller(user), 'get_admin_proposal', {
+        proposalId: proposal.id,
+      });
+      expect(onPlatform.segments.find((s) => s.authority === 'platform')?.items).toEqual([
+        httpItem,
+        mcpItem,
+      ]);
+
+      // F9: an address carrying a user and password, or a signature in its query, is refused
+      // when proposed — nothing is written, so no owner or administrator ever reads it.
+      for (const platform of [
+        {
+          items: [
+            gateItem(`aa40-${unique()}`, 'tickets', {
+              target: `https://ops:${FAKE}@t.example.invalid`,
+            }),
+          ],
+        },
+        {
+          items: [
+            gateItem(`aa40-${unique()}`, 'tickets', {
+              manifestSource: `https://t.example.invalid/openapi.json?sig=${FAKE}`,
+            }),
+          ],
+        },
+      ]) {
+        const refused = await thrownBy(
+          call(agent, 'propose_admin_proposal', {
+            title: 'Connect the ticket system',
+            description: 'x',
+            sourceName: `aa40-${unique()}`,
+            segments: [
+              { targetWorkspaceId: target.workspaceId, items: [skillItem('ticket-triage')] },
+            ],
+            platform,
+          }),
+        );
+        expect(mapCapabilityError(refused)).toMatchObject({
+          status: 400,
+          code: 'admin_proposal_credential',
+        });
+        expect(JSON.stringify(mapCapabilityError(refused))).not.toContain(FAKE);
+      }
+      const afterRefusals = await call<{ items: ReceivedAdminProposalSegmentWire[] }>(
+        ownerCaller(target),
+        'list_admin_proposal_segments',
+        {},
+      );
+      expect(afterRefusals.items.map((segment) => segment.id)).toEqual(
+        received.items.map((segment) => segment.id),
+      );
+      expect(JSON.stringify(afterRefusals)).not.toContain(FAKE);
+      const listed = await call<{ items: { id: string }[] }>(
+        agent,
+        'agent_list_admin_proposals',
+        {},
+      );
+      expect(listed.items.map((item) => item.id)).toEqual([proposal.id]);
+
+      // What the agent reads back when it withdraws.
+      withheld(
+        await call<AgentAdminProposalWire>(agent, 'agent_withdraw_admin_proposal', {
+          proposalId: proposal.id,
+        }),
+      );
     });
 
     // -----------------------------------------------------------------------------------------
@@ -1078,6 +1216,98 @@ describe.runIf(DATABASE_URL !== undefined)(
           )
         ).canRollBack,
       ).toBe(false);
+    });
+
+    it('the rollback preview names the workspaces that enabled each instance, by name, at most 50 (AA4 F7)', async () => {
+      const { user, trial, agent } = await administrator();
+      const target = await newTarget();
+      const system = `tickets-${unique()}`;
+      const linked = `aa4-${unique()}`;
+      const unlinked = `aa4-${unique()}`;
+      const { platformSegmentId } = await proposePlatform(
+        agent,
+        [gateItem(linked, system), gateItem(unlinked, system)],
+        [target],
+      );
+      const recordId = (await previewAndApply(user, platformSegmentId)).changeSegment.id;
+      await call<GateInstanceWire>(platformCaller(user), 'update_gate_instance', {
+        gateId: linked,
+        status: 'enabled',
+      });
+      // Named so that the order is by name, not by when each enabled it.
+      const tag = unique();
+      await withAdminClient(pool, async (client) => {
+        await client.query('update workspaces set name = $2 where id = $1', [
+          target.workspaceId,
+          `b-${tag}`,
+        ]);
+        await client.query('update workspaces set name = $2 where id = $1', [
+          trial.workspaceId,
+          `a-${tag}`,
+        ]);
+        for (const workspace of [target, trial]) {
+          await client.query(
+            `insert into workspace_gate_links (workspace_id, gate_id, gatekeeper_object_id, enabled_by)
+             values ($1, $2, gen_random_uuid(), $3)`,
+            [workspace.workspaceId, linked, workspace.ownerPrincipalId],
+          );
+        }
+      });
+      const preview = () =>
+        call<PlatformChangeRollbackPreviewWire>(
+          platformCaller(user),
+          'preview_roll_back_platform_change_segment',
+          { changeSegmentId: recordId },
+        );
+
+      const two = await preview();
+      expect(
+        two.items.map((item) => [
+          item.gateId,
+          item.action,
+          item.linkedWorkspaceCount,
+          item.enabledIn,
+        ]),
+      ).toEqual([
+        [
+          linked,
+          'disable',
+          2,
+          [
+            { workspaceId: trial.workspaceId, name: `a-${tag}`, purpose: 'admin_trial' },
+            { workspaceId: target.workspaceId, name: `b-${tag}`, purpose: 'standard' },
+          ],
+        ],
+        [unlinked, 'disable', 0, []],
+      ]);
+
+      // Past the limit the list stops at 50; the count stays the whole number.
+      await withAdminClient(pool, (client) =>
+        client.query(
+          `with made as (
+             insert into workspaces (id, name)
+             select gen_random_uuid(), 'c-' || $2 || '-' || lpad(n::text, 2, '0')
+               from generate_series(1, 49) as n
+             returning id
+           ), owners as (
+             insert into principals (workspace_id, id, kind, role, display_name)
+             select id, gen_random_uuid(), 'human', 'owner', 'bulk owner' from made
+             returning workspace_id, id
+           )
+           insert into workspace_gate_links (workspace_id, gate_id, gatekeeper_object_id, enabled_by)
+           select workspace_id, $1, gen_random_uuid(), id from owners`,
+          [linked, tag],
+        ),
+      );
+      const many = (await preview()).items[0];
+      expect(many?.linkedWorkspaceCount).toBe(51);
+      expect(many?.enabledIn).toHaveLength(PLATFORM_CHANGE_ENABLED_IN_LIMIT);
+      expect(many?.enabledIn.slice(0, 3).map((workspace) => workspace.name)).toEqual([
+        `a-${tag}`,
+        `b-${tag}`,
+        `c-${tag}-01`,
+      ]);
+      expect(many?.enabledIn.at(-1)).toMatchObject({ name: `c-${tag}-48`, purpose: 'standard' });
     });
 
     it('refuses, writing nothing, while an instance changed since (platform_change_drifted) or a workspace segment of the proposal is applied (dependent_segments_applied)', async () => {

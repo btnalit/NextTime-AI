@@ -419,8 +419,9 @@ export interface EntryScopeOptions {
  * see it (group `platform_state`: redacted, `adminAgentOnly` — no other Handle carries it,
  * `issueHandle` below). Those two gate calls are the only reads with side
  * effects (`ADMIN_AGENT_CEILING_SIDE_EFFECTS`): an observation records what it saw — an Activity
- * and the observed Facts, under the person's Principal as the entry agent's do; only the audit row
- * carries the session kind until the observation's own record does (STATUS legacy, before AA4).
+ * and the observed Facts, under the person's Principal as the entry agent's do — and its Activity
+ * records the admin agent's session beside it (`sessionKind`, `sessionId`; fixed once written,
+ * core/0052, S11 AA4-0, legacy 584), as its audit row does.
  *
  * Drafts (S11 AA3a, plan F3): the five draft proposals (`ADMIN_AGENT_CEILING_PROPOSALS`) — a
  * draft is private to its proposer until a person publishes it, over the human channel.

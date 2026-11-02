@@ -247,13 +247,37 @@ function findImage(
 // runtime_inventory / list_runtime_images
 // -------------------------------------------------------------------------------------------
 
-/** `runtime_inventory`'s result: also what an admin agent's `platform_state_runtime` projects
- *  (application/admin-agent, S11 AA2b). */
+/** What the runtime inventory reads from worker-supervisor: its image list and its resident
+ *  containers, each empty when it cannot be reached. */
+export interface RuntimeInventorySources {
+  readonly images: Awaited<ReturnType<typeof tryListImages>>;
+  readonly residents: readonly ResidentInventoryEntry[];
+}
+
+/** worker-supervisor's two lists, over HTTP and with no database connection: a caller that must
+ *  hold no transaction while they answer (an admin agent's `platform_state_runtime`, S11 AA4-0,
+ *  legacy 592) fetches them first and composes after. */
+export async function fetchRuntimeInventorySources(): Promise<RuntimeInventorySources> {
+  const [images, residents] = await Promise.all([tryListImages(), tryListResidents()]);
+  return { images, residents };
+}
+
+/** `runtime_inventory`'s result. */
 export async function readRuntimeInventory(client: PoolClient): Promise<RuntimeInventoryWire> {
   const { settings } = await readPlatformSettings(client);
-  const [imagesResult, residents] = await Promise.all([tryListImages(), tryListResidents()]);
+  return composeRuntimeInventory(settings.activeRuntimeImage, await fetchRuntimeInventorySources());
+}
+
+/** The inventory from the platform's active-image setting and worker-supervisor's two lists
+ *  (pure): `runtime_inventory`'s result, and what an admin agent's `platform_state_runtime`
+ *  projects (application/admin-agent, S11 AA2b). */
+export function composeRuntimeInventory(
+  activeRuntimeImage: string | null,
+  sources: RuntimeInventorySources,
+): RuntimeInventoryWire {
+  const { images: imagesResult, residents } = sources;
   const { activeImage, activeImageSource } = resolveActiveImage(
-    settings.activeRuntimeImage,
+    activeRuntimeImage,
     imagesResult.defaultImage,
   );
   const activeImageInfo = activeImage ? findImage(imagesResult.images, activeImage) : undefined;
@@ -809,9 +833,11 @@ async function sumLlmUsage30Days(client: PoolClient): Promise<PlatformStatusLlmU
 }
 
 /** The platform's own services as `platform_status` reports them (its gates aside) — also what an
- *  admin agent's `platform_state_runtime` projects. Called inside a platform transaction: if
- *  postgres were unreachable the caller would not have got this far (same convention
- *  `platformOverviewHandler` already uses). The two HTTP healthz probes touch no DB connection. */
+ *  admin agent's `platform_state_runtime` projects. `postgres` reads `ok` because neither caller
+ *  returns anything without a platform transaction: `platform_status` probes inside its own (same
+ *  convention `platformOverviewHandler` already uses); `platform_state_runtime` probes just before
+ *  its read-only one opens (legacy 592), and returns nothing if that fails. The two HTTP healthz
+ *  probes touch no DB connection. */
 export async function probePlatformServiceHealth(): Promise<ServiceHealthWire[]> {
   const llmProxyUrl = process.env.KERNEL_LLM_URL ?? 'http://llm-proxy:8082';
   const supervisorUrl = process.env.SUPERVISOR_URL ?? 'http://worker-supervisor:8081';

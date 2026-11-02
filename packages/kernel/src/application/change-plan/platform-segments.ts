@@ -10,6 +10,8 @@ import {
   type GateInstanceDriftField,
   type GateInstanceNextStep,
   type ListEnvelope,
+  PLATFORM_CHANGE_ENABLED_IN_LIMIT,
+  type PlatformChangeEnabledWorkspaceWire,
   type PlatformChangeItemWire,
   type PlatformChangeRollbackItemWire,
   type PlatformChangeRollbackPreviewWire,
@@ -876,6 +878,7 @@ async function planRollback(
           action: 'gone',
           drift: [],
           linkedWorkspaceCount: 0,
+          enabledIn: [],
         },
         instance: null,
       });
@@ -890,11 +893,32 @@ async function planRollback(
         action: alreadyDisabled ? 'already_disabled' : 'disable',
         drift: gateInstanceDrift(item, now),
         linkedWorkspaceCount: now.links,
+        enabledIn: now.links === 0 ? [] : await workspacesEnabling(client, item.gate_id),
       },
       instance: now,
     });
   }
   return planned;
+}
+
+/** The workspaces that enabled `gateId`, by name, at most {@link PLATFORM_CHANGE_ENABLED_IN_LIMIT}
+ *  (S11 AA4-0, the AA4 plan F7): their id, name and purpose — what the platform plane already lists
+ *  of every workspace — for the rollback dialog to link each to the gate page where its owner
+ *  disables it. */
+async function workspacesEnabling(
+  client: PoolClient,
+  gateId: string,
+): Promise<PlatformChangeEnabledWorkspaceWire[]> {
+  const result = await client.query<PlatformChangeEnabledWorkspaceWire>(
+    `select w.id as "workspaceId", w.name, w.purpose
+       from workspace_gate_links l
+       join workspaces w on w.id = l.workspace_id
+      where l.gate_id = $1
+      order by w.name, w.id
+      limit $2`,
+    [gateId, PLATFORM_CHANGE_ENABLED_IN_LIMIT],
+  );
+  return result.rows;
 }
 
 /** `preview_roll_back_platform_change_segment`: what rolling it back would do, writing nothing. */

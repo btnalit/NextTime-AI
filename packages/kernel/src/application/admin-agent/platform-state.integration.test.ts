@@ -797,6 +797,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       const savedEnv: Record<string, string | undefined> = {};
       let feedDir: string;
       let probeServer: Server;
+      /** Where the llm-proxy probe records that it was asked, while a test wants to know when. */
+      let probeEvents: string[] | undefined;
 
       function setEnv(name: string, value: string | undefined): void {
         if (!(name in savedEnv)) savedEnv[name] = process.env[name];
@@ -823,6 +825,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         setEnv('KERNEL_VERSION', 'v0.57.0 (c849da6)');
         // llm-proxy answers its probe; worker-supervisor's is refused (the error names the address).
         probeServer = createServer((_req, res) => {
+          probeEvents?.push('llm-proxy probe');
           res.writeHead(200).end('ok');
         });
         await new Promise<void>((resolve) => probeServer.listen(0, 'localhost', resolve));
@@ -899,6 +902,75 @@ describe.runIf(DATABASE_URL !== undefined)(
           sessionKind: 'admin_agent',
           returned: 2,
         });
+      });
+
+      it('platform_state_runtime asks the supervisor and probes the services before its read-only transaction opens (legacy 592)', async () => {
+        const { caller } = await agent();
+        const events: string[] = [];
+        supervisor.listImages = async () => {
+          events.push('supervisor images');
+          return FakeRuntimeSupervisor.prototype.listImages.call(supervisor);
+        };
+        supervisor.listResidents = async () => {
+          events.push('supervisor residents');
+          return FakeRuntimeSupervisor.prototype.listResidents.call(supervisor);
+        };
+        probeEvents = events;
+        const hooked = poolWithHook(
+          pool,
+          (text) => text === 'BEGIN READ ONLY',
+          async () => {
+            events.push('begin read only');
+          },
+        );
+        try {
+          const { outcome } = await call(caller, 'platform_state_runtime', { pool: hooked });
+          expect(outcome).toMatchObject({ imageCount: 2 });
+          // No platform connection is held while the supervisor or a service answers: every HTTP
+          // call has returned before the one read-only transaction begins.
+          expect([...events].sort()).toEqual([
+            'begin read only',
+            'llm-proxy probe',
+            'supervisor images',
+            'supervisor residents',
+          ]);
+          expect(events.at(-1)).toBe('begin read only');
+        } finally {
+          probeEvents = undefined;
+          Reflect.deleteProperty(supervisor, 'listImages');
+          Reflect.deleteProperty(supervisor, 'listResidents');
+        }
+      });
+
+      it('a demotion while the supervisor answers still withholds the runtime read (legacy 592)', async () => {
+        const { caller, sessionId } = await agent();
+        let demoted = false;
+        supervisor.listImages = async () => {
+          if (!demoted) {
+            demoted = true;
+            await setPlatformRole(admin, 'user');
+          }
+          return FakeRuntimeSupervisor.prototype.listImages.call(supervisor);
+        };
+        try {
+          const { correlationId, outcome } = await call(caller, 'platform_state_runtime');
+          expect(demoted).toBe(true);
+          expect(outcome).toBeInstanceOf(AdminAgentCallRefusedError);
+          expect((outcome as AdminAgentCallRefusedError).refusal).toBe('not_platform_admin');
+          const rows = await auditRows('platform_state_runtime', correlationId);
+          // The call's own row and the refusal; what the supervisor answered never reaches the agent
+          // and nothing is written on the platform's side.
+          expect(rows.map((row) => row.workspace_id)).toEqual([workspaceId, workspaceId]);
+          expect(rows[1]?.payload).toMatchObject({
+            sessionKind: 'admin_agent',
+            sessionId,
+            outcome: 'refused',
+            refusal: { code: 'admin_agent_refused', status: 403, reason: 'not_platform_admin' },
+          });
+        } finally {
+          Reflect.deleteProperty(supervisor, 'listImages');
+          await setPlatformRole(admin, 'admin');
+        }
       });
 
       it('platform_state_updates: versions, migrations and freshness — no link, command, failure text or path', async () => {

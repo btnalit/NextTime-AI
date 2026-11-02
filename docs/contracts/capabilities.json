@@ -2430,71 +2430,54 @@
                       ]
                     },
                     {
-                      "anyOf": [
-                        {
-                          "additionalProperties": false,
-                          "properties": {
-                            "connector": {
-                              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
-                              "type": "string"
-                            },
-                            "credentialMode": {
-                              "enum": [
-                                "shared",
-                                "connected_account"
-                              ],
-                              "type": "string"
-                            },
-                            "displayName": {
-                              "maxLength": 120,
-                              "minLength": 1,
-                              "type": "string"
-                            },
-                            "gateId": {
-                              "pattern": "^[a-z0-9][a-z0-9-]{1,63}$",
-                              "type": "string"
-                            },
-                            "kind": {
-                              "const": "gate_instance",
-                              "type": "string"
-                            },
-                            "manifestSource": {
-                              "anyOf": [
-                                {
-                                  "format": "uri",
-                                  "maxLength": 2000,
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "preset": {
-                              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
-                              "type": "string"
-                            },
-                            "target": {
-                              "format": "uri",
-                              "maxLength": 500,
-                              "type": "string"
-                            },
-                            "transportKind": {
-                              "enum": [
-                                "http",
-                                "mcp"
-                              ],
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "kind",
-                            "gateId",
-                            "target"
+                      "additionalProperties": false,
+                      "properties": {
+                        "addressWithheld": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "connector": {
+                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+                          "type": "string"
+                        },
+                        "credentialMode": {
+                          "enum": [
+                            "shared",
+                            "connected_account"
                           ],
-                          "type": "object"
+                          "type": "string"
+                        },
+                        "displayName": {
+                          "maxLength": 120,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "gateId": {
+                          "pattern": "^[a-z0-9][a-z0-9-]{1,63}$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "gate_instance",
+                          "type": "string"
+                        },
+                        "preset": {
+                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+                          "type": "string"
+                        },
+                        "transportKind": {
+                          "enum": [
+                            "http",
+                            "mcp"
+                          ],
+                          "type": "string"
                         }
-                      ]
+                      },
+                      "required": [
+                        "kind",
+                        "gateId",
+                        "addressWithheld"
+                      ],
+                      "type": "object"
                     }
                   ]
                 },
@@ -3135,71 +3118,54 @@
                       ]
                     },
                     {
-                      "anyOf": [
-                        {
-                          "additionalProperties": false,
-                          "properties": {
-                            "connector": {
-                              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
-                              "type": "string"
-                            },
-                            "credentialMode": {
-                              "enum": [
-                                "shared",
-                                "connected_account"
-                              ],
-                              "type": "string"
-                            },
-                            "displayName": {
-                              "maxLength": 120,
-                              "minLength": 1,
-                              "type": "string"
-                            },
-                            "gateId": {
-                              "pattern": "^[a-z0-9][a-z0-9-]{1,63}$",
-                              "type": "string"
-                            },
-                            "kind": {
-                              "const": "gate_instance",
-                              "type": "string"
-                            },
-                            "manifestSource": {
-                              "anyOf": [
-                                {
-                                  "format": "uri",
-                                  "maxLength": 2000,
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "preset": {
-                              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
-                              "type": "string"
-                            },
-                            "target": {
-                              "format": "uri",
-                              "maxLength": 500,
-                              "type": "string"
-                            },
-                            "transportKind": {
-                              "enum": [
-                                "http",
-                                "mcp"
-                              ],
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "kind",
-                            "gateId",
-                            "target"
+                      "additionalProperties": false,
+                      "properties": {
+                        "addressWithheld": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "connector": {
+                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+                          "type": "string"
+                        },
+                        "credentialMode": {
+                          "enum": [
+                            "shared",
+                            "connected_account"
                           ],
-                          "type": "object"
+                          "type": "string"
+                        },
+                        "displayName": {
+                          "maxLength": 120,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "gateId": {
+                          "pattern": "^[a-z0-9][a-z0-9-]{1,63}$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "gate_instance",
+                          "type": "string"
+                        },
+                        "preset": {
+                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+                          "type": "string"
+                        },
+                        "transportKind": {
+                          "enum": [
+                            "http",
+                            "mcp"
+                          ],
+                          "type": "string"
                         }
-                      ]
+                      },
+                      "required": [
+                        "kind",
+                        "gateId",
+                        "addressWithheld"
+                      ],
+                      "type": "object"
                     }
                   ]
                 },
@@ -53414,6 +53380,35 @@
                 },
                 "type": "array"
               },
+              "enabledIn": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "purpose": {
+                      "enum": [
+                        "standard",
+                        "ephemeral",
+                        "admin_trial"
+                      ],
+                      "type": "string"
+                    },
+                    "workspaceId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "workspaceId",
+                    "name",
+                    "purpose"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
               "gateId": {
                 "type": "string"
               },
@@ -53431,7 +53426,8 @@
               "gateId",
               "action",
               "drift",
-              "linkedWorkspaceCount"
+              "linkedWorkspaceCount",
+              "enabledIn"
             ],
             "type": "object"
           },
@@ -54252,71 +54248,54 @@
                       ]
                     },
                     {
-                      "anyOf": [
-                        {
-                          "additionalProperties": false,
-                          "properties": {
-                            "connector": {
-                              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
-                              "type": "string"
-                            },
-                            "credentialMode": {
-                              "enum": [
-                                "shared",
-                                "connected_account"
-                              ],
-                              "type": "string"
-                            },
-                            "displayName": {
-                              "maxLength": 120,
-                              "minLength": 1,
-                              "type": "string"
-                            },
-                            "gateId": {
-                              "pattern": "^[a-z0-9][a-z0-9-]{1,63}$",
-                              "type": "string"
-                            },
-                            "kind": {
-                              "const": "gate_instance",
-                              "type": "string"
-                            },
-                            "manifestSource": {
-                              "anyOf": [
-                                {
-                                  "format": "uri",
-                                  "maxLength": 2000,
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "preset": {
-                              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
-                              "type": "string"
-                            },
-                            "target": {
-                              "format": "uri",
-                              "maxLength": 500,
-                              "type": "string"
-                            },
-                            "transportKind": {
-                              "enum": [
-                                "http",
-                                "mcp"
-                              ],
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "kind",
-                            "gateId",
-                            "target"
+                      "additionalProperties": false,
+                      "properties": {
+                        "addressWithheld": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "connector": {
+                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+                          "type": "string"
+                        },
+                        "credentialMode": {
+                          "enum": [
+                            "shared",
+                            "connected_account"
                           ],
-                          "type": "object"
+                          "type": "string"
+                        },
+                        "displayName": {
+                          "maxLength": 120,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "gateId": {
+                          "pattern": "^[a-z0-9][a-z0-9-]{1,63}$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "gate_instance",
+                          "type": "string"
+                        },
+                        "preset": {
+                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+                          "type": "string"
+                        },
+                        "transportKind": {
+                          "enum": [
+                            "http",
+                            "mcp"
+                          ],
+                          "type": "string"
                         }
-                      ]
+                      },
+                      "required": [
+                        "kind",
+                        "gateId",
+                        "addressWithheld"
+                      ],
+                      "type": "object"
                     }
                   ]
                 },
@@ -67014,6 +66993,35 @@
                 },
                 "type": "array"
               },
+              "enabledIn": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "purpose": {
+                      "enum": [
+                        "standard",
+                        "ephemeral",
+                        "admin_trial"
+                      ],
+                      "type": "string"
+                    },
+                    "workspaceId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "workspaceId",
+                    "name",
+                    "purpose"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
               "gateId": {
                 "type": "string"
               },
@@ -67031,7 +67039,8 @@
               "gateId",
               "action",
               "drift",
-              "linkedWorkspaceCount"
+              "linkedWorkspaceCount",
+              "enabledIn"
             ],
             "type": "object"
           },
