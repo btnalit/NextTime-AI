@@ -599,6 +599,7 @@ interface ProposalRow {
   rejected: number;
   withdrawn: number;
   rolled_back: number;
+  platform_status: AdminProposalSegmentStatus | null;
 }
 
 interface SegmentRow {
@@ -628,7 +629,7 @@ const PLAN_STATUS_SQL = `case
 const PLAN_SELECT = `
   select p.id, p.title, p.description, p.source_name, p.origin, p.proposed_by_user,
          p.proposer_display_name, p.content_digest, p.created_at,
-         c.proposed, c.applied, c.rejected, c.withdrawn, c.rolled_back
+         c.proposed, c.applied, c.rejected, c.withdrawn, c.rolled_back, c.platform_status
     from admin_proposals p
     cross join lateral (
       select count(s.id)::int as total,
@@ -636,7 +637,10 @@ const PLAN_SELECT = `
              (count(*) filter (where s.status = 'applied'))::int as applied,
              (count(*) filter (where s.status = 'rejected'))::int as rejected,
              (count(*) filter (where s.status = 'withdrawn'))::int as withdrawn,
-             (count(*) filter (where s.status = 'rolled_back'))::int as rolled_back
+             (count(*) filter (where s.status = 'rolled_back'))::int as rolled_back,
+             -- Legacy 619: a proposal has at most one platform segment
+             -- (admin_proposal_segments_one_platform), so max() is its status, or null.
+             (max(s.status::text) filter (where s.authority = 'platform')) as platform_status
         from admin_proposal_segments s
        where s.workspace_id = p.workspace_id and s.proposal_id = p.id
     ) c`;
@@ -681,6 +685,7 @@ function summaryOf(row: ProposalRow): AdminProposalSummaryWire {
       withdrawn: row.withdrawn,
       rolledBack: row.rolled_back,
     },
+    platformSegmentStatus: row.platform_status,
   };
 }
 
@@ -703,18 +708,31 @@ function segmentOf(
   };
 }
 
+/** What `list_admin_proposals` narrows to; both together when both are given. */
+export interface AdminProposalListFilter {
+  /** One derived proposal status. */
+  readonly status?: AdminProposalStatus;
+  /** Legacy 619: the proposals whose platform segment is in this status (`proposed`: awaiting a
+   *  platform administrator). */
+  readonly platformSegmentStatus?: AdminProposalSegmentStatus;
+}
+
 /** The proposals `scope` sees, newest first, at most {@link ADMIN_PROPOSAL_LIST_LIMIT} (`truncated` when
- *  there are more), narrowed to one derived `status` when given. */
+ *  there are more), narrowed by `filter` before the limit. */
 export async function listAdminProposals(
   client: PoolClient,
   scope: AdminProposalScope,
-  status?: AdminProposalStatus,
+  filter: AdminProposalListFilter = {},
 ): Promise<ListEnvelope<AdminProposalSummaryWire>> {
   const values: unknown[] = [];
   const conditions = [scopeFilter(scope, values)].filter((condition) => condition !== '');
-  if (status !== undefined) {
-    values.push(status);
+  if (filter.status !== undefined) {
+    values.push(filter.status);
     conditions.push(`${PLAN_STATUS_SQL} = $${values.length}`);
+  }
+  if (filter.platformSegmentStatus !== undefined) {
+    values.push(filter.platformSegmentStatus);
+    conditions.push(`c.platform_status = $${values.length}`);
   }
   values.push(ADMIN_PROPOSAL_LIST_LIMIT + 1);
   const result = await client.query<ProposalRow>(

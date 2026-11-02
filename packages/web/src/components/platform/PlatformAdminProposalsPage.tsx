@@ -21,7 +21,7 @@ import { Tabs } from '../kit/tabs.js';
 import { ChangeRecordsTab } from './admin-proposals/ChangeRecords.js';
 import { ProposalDetail } from './admin-proposals/ProposalDetail.js';
 import { ADMIN_PROPOSAL_STALE_READS } from './admin-proposals/stale-reads.js';
-import { segmentCountsText } from './admin-proposals/text.js';
+import { proposalPartsText } from './admin-proposals/text.js';
 
 export interface PlatformAdminProposalsPageProps {
   readonly http: CapabilityCaller;
@@ -113,7 +113,45 @@ export function PlatformAdminProposalsPage({
   );
 }
 
-type StatusFilter = AdminProposalStatus | 'all';
+/** `platform_pending` (legacy 619, #936 UX P2-2): the proposals whose platform part awaits a
+ *  platform administrator — this page's to-do. */
+type StatusFilter = AdminProposalStatus | 'all' | 'platform_pending';
+
+function listParams(filter: StatusFilter): Record<string, string> {
+  if (filter === 'all') return {};
+  if (filter === 'platform_pending') return { platformSegmentStatus: 'proposed' };
+  return { status: filter };
+}
+
+/** A row's third line: the platform part on its own, then the workspace parts' counts. It wraps
+ *  rather than ellipsing (#951 UX P3-1): at 390px the English line ran past the row and the
+ *  workspace part, the half the reader still needed, was the one cut off. */
+function ProposalPartsLine({ proposal }: { readonly proposal: AdminProposalSummaryWire }) {
+  const t = useT();
+  const parts = proposalPartsText(proposal, t);
+  return (
+    <span
+      className="wrap-anywhere text-3 text-small"
+      data-testid={`platform-admin-proposal-row-parts-${proposal.id}`}
+    >
+      {parts.platform !== null ? (
+        <span data-testid={`platform-admin-proposal-row-platform-${proposal.id}`}>
+          {proposal.platformSegmentStatus === 'proposed' ? (
+            <strong>{parts.platform}</strong>
+          ) : (
+            parts.platform
+          )}
+        </span>
+      ) : null}
+      {parts.platform !== null && parts.workspaces !== null ? t('；', '; ') : null}
+      {parts.workspaces !== null ? (
+        <span data-testid={`platform-admin-proposal-row-workspaces-${proposal.id}`}>
+          {parts.workspaces}
+        </span>
+      ) : null}
+    </span>
+  );
+}
 
 function ProposalsTab({
   http,
@@ -131,7 +169,7 @@ function ProposalsTab({
   const proposals = useCapabilityList<AdminProposalSummaryWire>(
     http,
     'list_admin_proposals',
-    filter === 'all' ? {} : { status: filter },
+    listParams(filter),
   );
   const rows = proposals.state.status === 'ready' ? proposals.state.data.items : [];
 
@@ -154,6 +192,9 @@ function ProposalsTab({
           data-testid="platform-admin-proposals-filter"
         >
           <option value="all">{t('全部', 'All')}</option>
+          <option value="platform_pending">
+            {t('平台部分待你决定', 'Platform part awaiting you')}
+          </option>
           {ADMIN_PROPOSAL_STATUS_VALUES.map((status) => (
             <option key={status} value={status}>
               {labelText(ADMIN_PROPOSAL_TONES[status], t)}
@@ -165,7 +206,12 @@ function ProposalsTab({
             title={
               filter === 'all'
                 ? t('还没有管理员提案', 'No admin proposals yet')
-                : t('没有这个状态的管理员提案', 'No admin proposals in this status')
+                : filter === 'platform_pending'
+                  ? t(
+                      '没有平台部分在等你决定的管理员提案',
+                      'No admin proposals have a platform part awaiting your decision',
+                    )
+                  : t('没有这个状态的管理员提案', 'No admin proposals in this status')
             }
             body={t(
               '平台管理员的管理员智能体在试验工作区里试好改动、提出管理员提案后，会出现在这里。',
@@ -205,9 +251,7 @@ function ProposalsTab({
                     {formatRelative(proposal.proposedAt)}
                   </time>
                 </span>
-                <span className="truncate text-3 text-small">
-                  {segmentCountsText(proposal.segmentCounts, t)}
-                </span>
+                <ProposalPartsLine proposal={proposal} />
               </ListRow>
             ))}
           </List>
