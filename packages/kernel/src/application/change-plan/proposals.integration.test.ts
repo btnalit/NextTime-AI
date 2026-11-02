@@ -24,6 +24,7 @@ import { mapCapabilityErrorToToolResult } from '../../interfaces/mcp/server-fact
 import { mapDispatchError } from '../../interfaces/ws/rpc.js';
 import { issueAdminAgentHandle } from '../admin-agent/index.js';
 import { withAdminClient } from '../gateway/auth.js';
+import { changePlanReaderOf } from '../gateway/change-plan-proposal-handlers.js';
 import { dispatchCapability } from '../gateway/dispatch.js';
 import { authenticateHandle } from '../gateway/handle-auth.js';
 import type { ResolvedCaller } from '../gateway/resolve-caller.js';
@@ -710,6 +711,41 @@ describe.runIf(DATABASE_URL !== undefined)(
         { planId: plan.id },
       )) as ChangePlanWire;
       expect(readOnPlatform.segments[0]).toMatchObject({ status: 'rejected', reason: 'Not here.' });
+      // The same administrator's identity through the admin agent's session never reads it on the
+      // platform side either: the reader comes from the session kind, not the Principal (AA1: the
+      // agent acts as its administrator's own) nor anything the call passes. The platform reads
+      // are the platform channel's only — a console cookie; no Handle reaches them.
+      for (const [name, params] of [
+        ['get_change_plan', { planId: plan.id }],
+        ['list_change_plans', {}],
+      ] as const) {
+        const attempt = dispatchCapability({ pool }, caller, name, params);
+        await expect(attempt, name).rejects.toThrow(/requires a platform administrator/);
+        await attempt.catch((err: unknown) =>
+          expect(JSON.stringify(err), name).not.toContain('Not here.'),
+        );
+      }
+      // And were the handler ever handed an admin agent's context, it reads as the agent does.
+      const adminAgentCtx = { sessionId: randomUUID(), userId: admin.id };
+      const platformUserCtx = { id: admin.id, login: admin.login };
+      expect(
+        changePlanReaderOf('get_change_plan', {
+          channel: 'human',
+          principalId: '',
+          adminAgent: adminAgentCtx,
+          platformUser: platformUserCtx,
+        }),
+      ).toBe('agent');
+      expect(
+        changePlanReaderOf('get_change_plan', {
+          channel: 'human',
+          principalId: '',
+          platformUser: platformUserCtx,
+        }),
+      ).toBe('platform');
+      expect(() =>
+        changePlanReaderOf('get_change_plan', { channel: 'human', principalId: '' }),
+      ).toThrow(/neither an admin agent nor a platform user/);
       // Final: no edge out of rejected.
       await expect(
         asTarget((c) =>

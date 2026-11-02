@@ -51,14 +51,39 @@ function platformUserOf(
   return ctx.platformUser;
 }
 
-/** F12: on the agent's side, the plans its administrator proposed in this trial workspace — read
- *  as the agent reads them (no owner's reason for a rejection). */
-function agentScope(workspaceId: string, userId: string): ChangePlanScope {
-  return { workspaceId, proposedByUser: userId, reader: 'agent' };
+/**
+ * Who reads a plan, from what dispatch established about the call — never from its params, and
+ * never from its Principal: an admin agent acts as its administrator's own Principal (AA1), so
+ * only the session kind tells the two apart. Dispatch sets `ctx.adminAgent` exactly when the
+ * call came through an `admin_agent` session, and `ctx.platformUser` only on the platform
+ * channel (a console session's cookie; no Handle reaches it). An admin agent is `agent` whatever
+ * else the context carries (coordinator 2026-11-02).
+ */
+export function changePlanReaderOf(
+  name: string,
+  ctx: CapabilityHandlerContext | undefined,
+): ChangePlanScope['reader'] {
+  if (ctx?.adminAgent) return 'agent';
+  if (ctx?.platformUser) return 'platform';
+  throw new Error(`${name}: neither an admin agent nor a platform user in the call's context`);
 }
 
-/** A platform administrator's: every plan, and why an owner rejected a segment. */
-const PLATFORM_SCOPE: ChangePlanScope = { reader: 'platform' };
+/** F12: on the agent's side, the plans its administrator proposed in this trial workspace — read
+ *  as the agent reads them (no owner's reason for a rejection). */
+function agentScope(
+  name: string,
+  workspaceId: string,
+  userId: string,
+  ctx: CapabilityHandlerContext | undefined,
+): ChangePlanScope {
+  return { workspaceId, proposedByUser: userId, reader: changePlanReaderOf(name, ctx) };
+}
+
+/** A platform administrator's: every plan — and why an owner rejected a segment, unless the call
+ *  is an admin agent's (which the platform channel never is). */
+function platformScope(name: string, ctx: CapabilityHandlerContext | undefined): ChangePlanScope {
+  return { reader: changePlanReaderOf(name, ctx) };
+}
 
 /** The packs this deployment ships, whose names a plan's own source name must not take. */
 async function shippedPackNames(): Promise<ReadonlySet<string>> {
@@ -115,7 +140,12 @@ export const agentListChangePlansHandler: CapabilityHandler = async (
   ctx,
 ): Promise<CapabilityHandlerResult> => {
   const agent = adminAgentOf('agent_list_change_plans', ctx);
-  return { result: await listChangePlans(client, agentScope(workspaceId, agent.userId)) };
+  return {
+    result: await listChangePlans(
+      client,
+      agentScope('agent_list_change_plans', workspaceId, agent.userId, ctx),
+    ),
+  };
 };
 
 export const agentGetChangePlanHandler: CapabilityHandler = async (
@@ -127,7 +157,11 @@ export const agentGetChangePlanHandler: CapabilityHandler = async (
   const agent = adminAgentOf('agent_get_change_plan', ctx);
   const { planId } = params as { readonly planId: string };
   return {
-    result: await getChangePlan(client, planId, agentScope(workspaceId, agent.userId)),
+    result: await getChangePlan(
+      client,
+      planId,
+      agentScope('agent_get_change_plan', workspaceId, agent.userId, ctx),
+    ),
     resourceType: 'change_plan',
     resourceId: planId,
   };
@@ -144,7 +178,7 @@ export const agentWithdrawChangePlanHandler: CapabilityHandler = async (
   const plan = await withdrawChangePlan(
     client,
     planId,
-    agentScope(workspaceId, agent.userId),
+    agentScope('agent_withdraw_change_plan', workspaceId, agent.userId, ctx),
     agent.userId,
     reason,
   );
@@ -159,7 +193,7 @@ export const listChangePlansHandler: CapabilityHandler = async (
 ): Promise<CapabilityHandlerResult> => {
   platformUserOf('list_change_plans', ctx);
   const { status } = params as { readonly status?: ChangePlanStatus };
-  return { result: await listChangePlans(client, PLATFORM_SCOPE, status) };
+  return { result: await listChangePlans(client, platformScope('list_change_plans', ctx), status) };
 };
 
 export const getChangePlanHandler: CapabilityHandler = async (
@@ -171,7 +205,7 @@ export const getChangePlanHandler: CapabilityHandler = async (
   platformUserOf('get_change_plan', ctx);
   const { planId } = params as { readonly planId: string };
   return {
-    result: await getChangePlan(client, planId, PLATFORM_SCOPE),
+    result: await getChangePlan(client, planId, platformScope('get_change_plan', ctx)),
     resourceType: 'change_plan',
     resourceId: planId,
   };
@@ -185,6 +219,12 @@ export const withdrawChangePlanHandler: CapabilityHandler = async (
 ): Promise<CapabilityHandlerResult> => {
   const user = platformUserOf('withdraw_change_plan', ctx);
   const { planId, reason } = params as { readonly planId: string; readonly reason?: string };
-  const plan = await withdrawChangePlan(client, planId, PLATFORM_SCOPE, user.id, reason);
+  const plan = await withdrawChangePlan(
+    client,
+    planId,
+    platformScope('withdraw_change_plan', ctx),
+    user.id,
+    reason,
+  );
   return { result: plan, resourceType: 'change_plan', resourceId: planId };
 };
