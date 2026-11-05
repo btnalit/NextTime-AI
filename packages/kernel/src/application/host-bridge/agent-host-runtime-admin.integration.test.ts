@@ -8,6 +8,7 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { setAgentPolicy, setAgentProfile } from '../../governance/agent-profile/index.js';
 import { grantCapability, revokeCapabilityGrant } from '../../governance/capability/grants.js';
 import { generateEphemeralHandleKeyPair } from '../../governance/capability/keys.js';
 import { openAdminAgentSession } from '../admin-agent/index.js';
@@ -24,8 +25,9 @@ import type { AgentRuntimeEvent } from './agent-runtime.js';
  * under — no Skills, no egress list; the Handle is reused while that session lives; and the Turn
  * fails, sending nothing, when the authority is gone (I-A3), the session ended (`stop_admin_agent`)
  * or the prompt cannot be read. S11 AA5a-1: the Handle carries the person's gate Grants in the
- * trial workspace (never one from another workspace), and a Grant made or revoked since is picked
- * up on the next Turn under the same session. Real database because the authority, the session and
+ * trial workspace (never one from another workspace), narrowed as the entry Handle's are (AgentPolicy
+ * cap, My Agent exclusions), and a Grant, policy or exclusion changed since is picked up on the next
+ * Turn under the same session. Real database because the authority, the session and
  * the Grants are read inside the trial workspace's transaction.
  */
 
@@ -314,7 +316,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       return result.rows[0]?.status;
     }
 
-    it('S11 AA5a-1: carries the person’s gate Grants in the trial workspace only — never a Grant they hold in another workspace — and picks up a Grant made or revoked since under the same session', async () => {
+    it('S11 AA5a-1: carries the person’s gate Grants in the trial workspace only, narrowed as the entry Handle’s are — never a Grant they hold in another workspace — and picks up a Grant, policy or exclusion changed since under the same session', async () => {
       const member = await newTrialMember();
       // The same person owns a production workspace and holds a gate Grant there.
       const production = await createWorkspaceWithOwner(pool, {
@@ -386,6 +388,39 @@ describe.runIf(DATABASE_URL !== undefined)(
       await startAdminTurn(harness, member, sessionId);
       expect(gatesOf(harness.sent, 4)).toEqual([secondGate]);
       expect(decodeJwt(startFrames(harness.sent)[4]?.handle as string).sid).toBe(sessionId);
+
+      // 5: the gate set is the entry Handle's (R-37 / D-20, #493 and #501 on 9514bb1c) — capped by
+      // the workspace AgentPolicy: a policy that allows only another gate drops the granted one on
+      // the next Turn, with no revocation in between.
+      const thirdGate = randomUUID();
+      await withWorkspace(pool, member, (client) =>
+        grantCapability(client, member.workspaceId, {
+          principalId: member.principalId,
+          resourceType: 'gatekeeper',
+          resourceId: thirdGate,
+          grantedBy: member.principalId,
+        }),
+      );
+      await withWorkspace(pool, member, (client) =>
+        setAgentPolicy(client, member.workspaceId, member.principalId, {
+          allowedGatekeepers: [thirdGate],
+        }),
+      );
+      await startAdminTurn(harness, member, sessionId);
+      expect(gatesOf(harness.sent, 5)).toEqual([thirdGate]);
+
+      // 6: … and minus the person's own My Agent exclusions.
+      await withWorkspace(pool, member, (client) =>
+        setAgentPolicy(client, member.workspaceId, member.principalId, { allowedGatekeepers: [] }),
+      );
+      await withWorkspace(pool, member, (client) =>
+        setAgentProfile(client, member.workspaceId, member.principalId, member.principalId, {
+          excludedGatekeepers: [thirdGate],
+        }),
+      );
+      await startAdminTurn(harness, member, sessionId);
+      expect(gatesOf(harness.sent, 6)).toEqual([secondGate]);
+      expect(decodeJwt(startFrames(harness.sent)[6]?.handle as string).sid).toBe(sessionId);
 
       for (let index = 0; index < startFrames(harness.sent).length; index++) {
         expect(gatesOf(harness.sent, index)).not.toContain(productionGate);

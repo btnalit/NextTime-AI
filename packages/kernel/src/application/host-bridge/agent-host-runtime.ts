@@ -34,6 +34,7 @@ import {
   recordProbeHoldRefusal,
   sealWithholds,
 } from '../eval-seal/index.js';
+import { entryGatekeeperIds, readExecuteAccess } from '../gates/index.js';
 import {
   composeSystemPrompt,
   readInstanceInstructions,
@@ -1280,15 +1281,20 @@ export class AgentHostRuntime implements AgentRuntime {
    * refused once that session has ended (`AdminAgentSessionEndedError`). The token never leaves
    * this class but in the `startTurn` frame.
    *
-   * S11 AA5a-1 (the AA5 plan's D1, "试跑 Worker（写动作照常审批）"): the Handle carries the
-   * person's active gate Grants in this trial workspace as `resources.gatekeeper`, as the entry
-   * agent's does (`ensureEntryHandle`). It is what lets a Worker the admin agent starts with
-   * `invoke_worker` ask for actions on those gates (`computeChildHandleScope`'s delegated
-   * `request_action`, every action still decided by policy or a person); the admin agent's own
-   * Handle never holds `request_action` (its ceiling excludes execute-class capabilities). Grants
-   * are read in this workspace only (`listActiveGrantResourceScopes` filters by it, and the
-   * authority check above refuses any workspace that is not a trial one), so a Grant the person
-   * holds in another workspace is never carried.
+   * S11 AA5a-1 (the AA5 plan's D1, "试跑 Worker（写动作照常审批）"): the Handle carries, as
+   * `resources.gatekeeper`, the gate set the entry agent's Handle carries — the person's active
+   * gate Grants in this trial workspace minus their own My Agent exclusions, capped by the
+   * workspace AgentPolicy (`entryGatekeeperIds`, R-37 / D-20; what `issue_handle` mints with). It
+   * is what lets a Worker the admin agent starts with `invoke_worker` ask for actions on those gates
+   * (`computeChildHandleScope`'s delegated `request_action`, every action still decided by policy
+   * or a person), and a WorkerDefinition naming a gate outside it is refused at `invoke_worker`
+   * (`InvokeWorkerAttenuationError`), as it is for the entry agent, rather than only when its action
+   * is decided. The admin agent's own Handle never holds `request_action` (its ceiling excludes
+   * execute-class capabilities). Grants are read in this workspace only (`readExecuteAccess` filters
+   * by it, and the authority check above refuses any workspace that is not a trial one), so a Grant
+   * the person holds in another workspace is never carried. The gate set is read every Turn and a
+   * cached Handle is reused only for the same set, so a policy or exclusion change reaches the next
+   * Turn; within a Turn, `request_action` narrows the same way again when it decides.
    */
   private async ensureAdminAgentHandle(input: StartTurnInput): Promise<string> {
     const { workspaceId, principalId, sessionId } = input;
@@ -1312,10 +1318,9 @@ export class AgentHostRuntime implements AgentRuntime {
         this.adminHandleCache.delete(key);
         throw new AdminAgentRefused(refusal, principalId);
       }
-      const gatekeeperIds = await listActiveGrantResourceScopes(client, workspaceId, {
-        principalId,
-        resourceType: GATEKEEPER_RESOURCE_SCOPE_KEY,
-      });
+      const gatekeeperIds = entryGatekeeperIds(
+        await readExecuteAccess(client, workspaceId, principalId),
+      );
       if (
         cached &&
         !cachedRevoked &&
