@@ -25,6 +25,12 @@ ssh <TARGET_HOST> 'NEXTTIME_DATA=<NEXTTIME_DATA> sh -s' < scripts/host-env-init.
 属主改成容器非 root 用户（uid:gid 见脚本注释），`config/` 设为可读；`pgdata/`、`secrets/` 目录本身、
 `backups/` 不动。用 `stat` / `ls -ln` 验证，**不要 `cat` 密钥**。
 
+新装主机的 `secrets/kernel.env` 带 `ADMIN_AGENT_ENABLED=1`：管理员智能体默认打开，平台管理员可以在试验工作区里用它。
+不想开就把这一行改成 `ADMIN_AGENT_ENABLED=0`，再 `docker compose up -d --force-recreate kernel`（内核只在启动时读一次）。
+`kernel.env` 只在不存在或为空时生成，之后重跑本脚本不会改它；所以升级上来的主机保持原样，原来没写这一项就是关着，
+要打开时由维护者在 `kernel.env` 里加上 `ADMIN_AGENT_ENABLED=1` 并重建内核。内核自己的默认仍是关（不设、空、`0`、`false`
+都是关；写成别的值内核启动时就停下）。
+
 紧接着跑 `ssh <TARGET_HOST> 'NEXTTIME_DATA=<NEXTTIME_DATA> sh -s' < scripts/gen-handle-keys.sh` 生成 Handle 签名密钥对（S1.9，幂等）：私钥落在 `secrets/handle.key`（0640，组 10001，只经 compose secret `handle_key` 挂进 kernel），公钥在 `config/handle.pub`。若 `secrets/kernel.env` 是在此之前生成的，用 `sed -i` 把其中 `HANDLE_PRIVATE_KEY_FILE` 改成 `/run/secrets/handle_key` 并补一行 `HANDLE_PUBLIC_KEY_FILE=/data/config/handle.pub`（不要 `cat` 该文件）。
 
 同一次脚本运行也会生成 `secrets/internal.token`（fix/internal-plane-auth，2026-09；幂等，已存在则不动）：32 字节随机数，hex 编码，0640，组 10001——内核 internal plane（`/internal/*` HTTP 路由 + `/internal/agent-host` WS）的**根**，经 compose secret `internal_token` 只挂进 `kernel`。每个调用方服务只持从根派生的自己那份凭证（R-03）：`scripts/derive-internal-tokens.sh` 写 `secrets/internal-<调用方>-to-<被调方>.token`（0640，组 10001，幂等、每次重新派生），compose 把每份挂进对应服务。本地跑 `sh scripts/gen-handle-keys.sh` 时它会自动接着跑派生；像上面这样经 SSH 管道（`sh -s`）跑时脚本找不到同目录的派生脚本，要再管道跑一次：`ssh <TARGET_HOST> 'NEXTTIME_DATA=<NEXTTIME_DATA> sh -s' < scripts/derive-internal-tokens.sh`——缺这些文件 `docker compose up` 会直接失败。用 `stat` 验证权限，**不要 `cat` 这些文件**。
