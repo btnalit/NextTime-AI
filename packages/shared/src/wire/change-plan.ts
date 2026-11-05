@@ -277,9 +277,14 @@ export const ChangeRequirementGateWireSchema = z
   .strict();
 export type ChangeRequirementGateWire = z.infer<typeof ChangeRequirementGateWireSchema>;
 
-/** One system the segment's source needs (a connector its pack version `requires`), as a
- *  verification found it: where it stands in the workspace and, when `connected`, the health of
- *  each of its gates there. Met when `connected` with at least one gate `ok`. */
+/** One system the segment's source needs, as a verification found it: where it stands in the
+ *  workspace and, when `connected`, the health of each of its gates there.
+ *   - A pack: a connector its version `requires`, with every gate of it here; met when `connected`
+ *     with at least one gate `ok`.
+ *   - An admin proposal (legacy 630): a system the gates its items run through belong to (an
+ *     Operation item's gate, the gates its Worker items' versions name), with only those gates;
+ *     met when `connected` and every one of them is `ok`. `needs_platform` when the platform cut
+ *     one of them off, which is then not probed. */
 export const ChangeRequirementCheckWireSchema = z
   .object({
     connector: z.string(),

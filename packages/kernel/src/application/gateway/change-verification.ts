@@ -1,11 +1,13 @@
 import type { PoolClient } from 'pg';
 import { getGatekeeper } from '../../governance/gatekeepers/index.js';
 import type {
+  ChangeGateRef,
   ChangeSource,
   CheckSourceRequirements,
   RequirementCheck,
   RequirementGateCheck,
 } from '../change-plan/index.js';
+import { type GatekeeperPlatformPolicy, readGatekeeperPlatformPolicies } from '../gates/index.js';
 import {
   type PackRegistryOptions,
   loadPackRegistry,
@@ -27,8 +29,14 @@ import { probeGatekeeperHealth } from './gatekeeper-read-handlers.js';
  * each with how the workspace has that pack now (`readPackDependencies`).
  *
  * The source version counts as found only when this deployment ships it with the same content
- * (name, version and digest): what it needs is then known. An admin proposal's segment (S11 AA3b-2)
- * needs neither systems nor packs, so it is found with none.
+ * (name, version and digest): what it needs is then known.
+ *
+ * An admin proposal's segment (S11 AA3b-2) is its own source, so it is always found, and builds on
+ * no pack. It names no systems either: what it needs is the gates what it wrote runs through
+ * (legacy 630, AA5 plan F5(a) — `verify.ts`' `gatesWrittenThrough`: each Operation item's gate,
+ * the gates each Worker item's version names), so its requirements are those gates, one per
+ * system they belong to (`gateRequirements`), each probed the same way. The verification then
+ * needs every one of them to answer (`verify.ts`).
  */
 
 async function probeGates(
@@ -57,6 +65,51 @@ async function probeGates(
   );
 }
 
+/** Whether a workspace Gatekeeper can be acted through now, by the platform's cut-offs — the rule
+ *  `readPackRequirements` connects a system by: a catalog gate whose instance is enabled, a
+ *  self-connected one not suspended. One with neither record (registered directly, never by a
+ *  deployment's own paths) has no cut-off. */
+function gateUsable(policy: GatekeeperPlatformPolicy | undefined): boolean {
+  if (policy === undefined) return true;
+  return policy.origin === 'catalog' ? policy.instanceStatus === 'enabled' : !policy.suspended;
+}
+
+/** An admin proposal segment's requirements (see this module's comment): the gates it runs
+ *  through, grouped by the system each belongs to (a gate with no platform record goes by its own
+ *  name), in system order. A system is `connected` while every one of its listed gates can be acted
+ *  through, each probed; one cut off by the platform (its instance disabled, its connection
+ *  suspended) or no longer there makes the system `needs_platform` — only a platform
+ *  administrator brings it back — and is not probed, so the requirement is not met. */
+async function gateRequirements(
+  client: PoolClient,
+  workspaceId: string,
+  segmentGates: readonly ChangeGateRef[],
+): Promise<RequirementCheck[]> {
+  if (segmentGates.length === 0) return [];
+  const policies = await readGatekeeperPlatformPolicies(client, workspaceId);
+  const systems = new Map<string, { usable: string[]; cutOff: boolean }>();
+  for (const gate of segmentGates) {
+    const gatekeeper = await getGatekeeper(client, workspaceId, gate.id);
+    const policy = policies.get(gate.id);
+    const connector = policy?.connector ?? gatekeeper?.name ?? gate.name;
+    const system = systems.get(connector) ?? { usable: [], cutOff: false };
+    systems.set(connector, system);
+    if (gatekeeper !== null && gateUsable(policy)) system.usable.push(gate.id);
+    else system.cutOff = true;
+  }
+  const requirements: RequirementCheck[] = [];
+  for (const connector of [...systems.keys()].sort()) {
+    const system = systems.get(connector);
+    if (!system) continue;
+    requirements.push({
+      connector,
+      state: system.cutOff ? 'needs_platform' : 'connected',
+      gates: await probeGates(client, workspaceId, system.usable),
+    });
+  }
+  return requirements;
+}
+
 /** `CheckSourceRequirements` for a segment of `workspaceId` (see this module's comment).
  *  `registry` says where the packs are, for tests; the deployment's own by default. */
 export function sourceRequirementsChecker(
@@ -64,11 +117,15 @@ export function sourceRequirementsChecker(
   workspaceId: string,
   registry: PackRegistryOptions = {},
 ): CheckSourceRequirements {
-  return async (source: ChangeSource) => {
-    // S11 AA3b-2: an admin proposal's segment needs nothing outside it — no systems, no packs — and
-    // is its own source (the record keeps its digest), so what it needs is known: none.
+  return async (source: ChangeSource, segmentGates: readonly ChangeGateRef[]) => {
+    // S11 AA3b-2: an admin proposal's segment is its own source (the record keeps its digest), so
+    // it is found; it builds on no pack, and needs the gates what it wrote runs through (legacy 630).
     if (source.kind === 'admin_proposal') {
-      return { sourceFound: true, requirements: [], dependencies: [] };
+      return {
+        sourceFound: true,
+        requirements: await gateRequirements(client, workspaceId, segmentGates),
+        dependencies: [],
+      };
     }
     const packs = await loadPackRegistry(registry);
     const version = packs

@@ -354,7 +354,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       };
 
       const found = await inWorkspace(ws, (client) =>
-        sourceRequirementsChecker(client, ws.workspaceId, fixture)(source),
+        sourceRequirementsChecker(client, ws.workspaceId, fixture)(source, []),
       );
       expect(found.sourceFound).toBe(true);
       expect(found.requirements).toHaveLength(2);
@@ -384,12 +384,97 @@ describe.runIf(DATABASE_URL !== undefined)(
           client,
           ws.workspaceId,
           fixture,
-        )({
-          ...source,
-          digest: `sha256:${'0'.repeat(64)}`,
-        }),
+        )(
+          {
+            ...source,
+            digest: `sha256:${'0'.repeat(64)}`,
+          },
+          [],
+        ),
       );
       expect(unknown).toEqual({ sourceFound: false, requirements: [], dependencies: [] });
+    });
+
+    it('sourceRequirementsChecker, admin proposal (legacy 630): the gates what the segment wrote runs through, by system, each probed; a gate the platform cut off is not', async () => {
+      const ws = await newWorkspace();
+      await addConnector(connector('ap-runs'), 'self_serve');
+      await addConnector(connector('ap-cut'), 'self_serve');
+      await addConnector(connector('ap-catalog'), 'platform_preset');
+      await addConnector(connector('ap-unused'), 'self_serve');
+      const up = await connectSelf(ws, connector('ap-runs'));
+      const down = await connectSelf(ws, connector('ap-runs'));
+      const suspended = await connectSelf(ws, connector('ap-cut'), true);
+      const alsoCut = await connectSelf(ws, connector('ap-cut'));
+      const disabled = await linkCatalogGate(ws, connector('ap-catalog'), 'disabled');
+      // A gate of the workspace no item runs through is not looked at.
+      const untouched = await connectSelf(ws, connector('ap-unused'));
+      setGatekeeperReadHandlerDeps({
+        gatekeeperClient: fakeHealthClient(
+          new Map([
+            [up.endpoint, 'ok'],
+            [alsoCut.endpoint, 'ok'],
+            [untouched.endpoint, 'ok'],
+          ]),
+        ),
+      });
+      const source: ChangeSource = {
+        kind: 'admin_proposal',
+        name: 'aa5-ops',
+        version: randomUUID(),
+        digest: `sha256:${'1'.repeat(64)}`,
+      };
+      const gone = randomUUID();
+      const check = (gates: readonly { id: string; name: string }[]) =>
+        inWorkspace(ws, (client) =>
+          sourceRequirementsChecker(client, ws.workspaceId)(source, gates),
+        );
+
+      // Nothing it wrote runs through a gate (Skills only, a Worker with none): nothing to probe.
+      expect(await check([])).toEqual({ sourceFound: true, requirements: [], dependencies: [] });
+
+      const found = await check([
+        { id: up.gatekeeperId, name: 'up' },
+        { id: down.gatekeeperId, name: 'down' },
+        { id: suspended.gatekeeperId, name: 'suspended' },
+        { id: alsoCut.gatekeeperId, name: 'also-cut' },
+        { id: disabled, name: 'disabled' },
+        { id: gone, name: 'gone-gate' },
+      ]);
+      expect(found.sourceFound).toBe(true);
+      expect(found.dependencies).toEqual([]);
+      const bySystem = new Map(
+        found.requirements.map((requirement) => [requirement.connector, requirement]),
+      );
+      expect([...bySystem.keys()].sort()).toEqual(
+        [connector('ap-catalog'), connector('ap-cut'), connector('ap-runs'), 'gone-gate'].sort(),
+      );
+      // Both listed gates of a system are probed, the one down included.
+      expect(bySystem.get(connector('ap-runs'))?.state).toBe('connected');
+      expect(
+        new Map(bySystem.get(connector('ap-runs'))?.gates.map((gate) => [gate.id, gate.health])),
+      ).toEqual(
+        new Map([
+          [up.gatekeeperId, 'ok'],
+          [down.gatekeeperId, 'unreachable'],
+        ]),
+      );
+      // A suspended connection makes its system the platform's to bring back; the other listed gate
+      // of it is still probed and shown.
+      expect(bySystem.get(connector('ap-cut'))).toMatchObject({
+        state: 'needs_platform',
+        gates: [{ id: alsoCut.gatekeeperId, health: 'ok' }],
+      });
+      expect(bySystem.get(connector('ap-catalog'))).toEqual({
+        connector: connector('ap-catalog'),
+        state: 'needs_platform',
+        gates: [],
+      });
+      // A gate that is no longer there goes by the name the segment recorded.
+      expect(bySystem.get('gone-gate')).toEqual({
+        connector: 'gone-gate',
+        state: 'needs_platform',
+        gates: [],
+      });
     });
 
     it('install_pack verifies what it installed as the installer (trigger system); verify_change_segment is the owner’s, with a cooldown', async () => {
