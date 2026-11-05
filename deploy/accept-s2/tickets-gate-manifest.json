@@ -1,0 +1,76 @@
+[
+  {
+    "name": "tickets.list",
+    "description": "List the open tickets of the test ticket system (accept_s2.sh admin agent journey).",
+    "binding": {
+      "kind": "http",
+      "method": "GET",
+      "path": "/tickets"
+    },
+    "params_schema": {},
+    "mode": "observe",
+    "blast_radius": "low",
+    "reversibility": false,
+    "auto_approvable": true,
+    "await_decision": false,
+    "reads": [],
+    "writes": []
+  },
+  {
+    "name": "tickets.create",
+    "description": "Open a ticket in the test ticket system (accept_s2.sh admin agent journey).",
+    "binding": {
+      "kind": "http",
+      "method": "POST",
+      "path": "/tickets"
+    },
+    "params_schema": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["low", "normal", "high"]
+        }
+      },
+      "required": ["title"]
+    },
+    "mode": "execute",
+    "blast_radius": "medium",
+    "reversibility": false,
+    "auto_approvable": false,
+    "await_decision": true,
+    "reads": [],
+    "writes": []
+  },
+  {
+    "name": "tickets.get",
+    "description": "Read one ticket of the test ticket system by its id (accept_s2.sh admin agent journey).",
+    "binding": {
+      "kind": "http",
+      "method": "GET",
+      "path": "/tickets/{id}"
+    },
+    "params_schema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "x-in": "path"
+        }
+      },
+      "required": ["id"]
+    },
+    "mode": "observe",
+    "blast_radius": "low",
+    "reversibility": false,
+    "auto_approvable": true,
+    "await_decision": false,
+    "reads": [],
+    "writes": []
+  }
+]

@@ -149,6 +149,63 @@ function checkToolCallAgainstRegistry(label, call) {
   );
 }
 
+/** A tool result the selftest feeds back, checked against that capability's result schema first, so
+ *  a scenario that reads a key the kernel never sends (AA5c: `taskId` for invoke_worker's `id`)
+ *  fails here, not on the staging rehearsal. Returns the value unchanged. */
+function wireResult(label, name, value) {
+  const parsed = shared.getCapability(name).resultSchema.safeParse(value);
+  check(`${label}-result-vs-schema`, parsed.success, parsed.success ? '' : JSON.stringify(parsed.error.issues));
+  return value;
+}
+
+/** An agent's view of a proposal built from its propose_admin_proposal args (AgentAdminProposalWire):
+ *  the workspace segments' items as proposed, the platform segment's gate_instance items without the
+ *  address (`addressWithheld`), every segment in `status`. */
+function agentProposalWire(id, args, status) {
+  const now = '2026-11-05T00:00:00.000Z';
+  const segment = (ordinal, authority, targetWorkspaceId, items) => ({
+    id: `seg-${ordinal}`,
+    ordinal,
+    authority,
+    targetWorkspaceId,
+    items,
+    contentDigest: `sha256:${ordinal}`,
+    status,
+    decidedAt: status === 'proposed' ? null : now,
+    withdrawnOrigin: null,
+    reason: null,
+    rolledBackAt: null,
+  });
+  const workspace = (args?.segments ?? []).map((s, i) => segment(i + 1, 'workspace', s.targetWorkspaceId, s.items));
+  const platform = args?.platform
+    ? [
+        segment(
+          workspace.length + 1,
+          'platform',
+          null,
+          args.platform.items.map(({ target: _t, manifestSource: _m, ...rest }) => ({ ...rest, addressWithheld: true })),
+        ),
+      ]
+    : [];
+  const segments = [...workspace, ...platform];
+  const counts = { proposed: 0, applied: 0, rejected: 0, withdrawn: 0, rolledBack: 0 };
+  counts[status === 'rolled_back' ? 'rolledBack' : status] = segments.length;
+  return {
+    id,
+    title: args?.title ?? '',
+    sourceName: args?.sourceName ?? '',
+    origin: 'agent',
+    proposedBy: { userId: 'user-1', displayName: 'Administrator' },
+    proposedAt: now,
+    status,
+    segmentCounts: counts,
+    platformSegmentStatus: platform.length > 0 ? status : null,
+    description: args?.description ?? '',
+    contentDigest: 'sha256:proposal',
+    segments,
+  };
+}
+
 async function post(messages, stream = false, extra = {}) {
   const res = await fetch(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
     method: 'POST',
@@ -1193,6 +1250,217 @@ async function main() {
       checkToolCallAgainstRegistry('goal-planner-acceptance-no-revision', none);
       const noneOutput = shared.PlannerOutputSchema.safeParse(none?.args?.output);
       check('goal-planner-acceptance-no-revision-output', noneOutput.success, noneOutput.success ? '' : JSON.stringify(noneOutput.error.issues));
+    }
+
+    // 6t. S11 AA5c: the admin agent's ticket journey — three chat Turns, then the Worker it tries.
+    {
+      const fn = (name) => ({ type: 'function', function: { name, parameters: { type: 'object' } } });
+      const call = (id, name, args) => ({
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+      });
+      const result = (id, value) => ({ role: 'tool', tool_call_id: id, content: JSON.stringify(value) });
+      const textOf = (json) => json.choices?.[0]?.message?.content ?? '';
+
+      // Turn A: request_connection, then the request's id.
+      const askA = { role: 'user', content: '验收工单：接入工单系统 TICKETS_NONCE=t42' };
+      const toolsA = [fn('request_connection'), fn('invoke_worker'), fn('propose_skill')];
+      const a1 = toolCallOf((await post([askA], false, { tools: toolsA })).json);
+      check(
+        'tickets-connect-turn1',
+        a1?.name === 'request_connection' && a1.args.kind === 'http' && a1.args.target === 'helpdesk',
+        JSON.stringify(a1),
+      );
+      checkToolCallAgainstRegistry('tickets-connect-turn1', a1);
+      const historyA = [askA, call('c1', 'request_connection', a1?.args ?? {}), result('c1', { id: 'cr-1', status: 'requested' })];
+      const a2 = textOf((await post(historyA, false, { tools: toolsA })).json);
+      check('tickets-connect-turn2', a2.startsWith('TICKETS_CONNECTION_REQUEST=cr-1 TICKETS_TOOLS=ok'), a2);
+      const a2missing = textOf((await post(historyA, false, { tools: [fn('request_connection')] })).json);
+      check('tickets-connect-tools-missing', a2missing.includes('TICKETS_TOOLS=missing:invoke_worker;unexpected:-'), a2missing);
+
+      // Turn B, in the same resident history: the newest marker wins, counted from its own question.
+      const askB = { role: 'user', content: '验收工单：起草工单 Worker TICKETS_NONCE=t42 WORKER_MODEL=fake/fake-echo' };
+      const toolsB = [fn('find_operations'), fn('propose_skill'), fn('propose_worker_definition'), fn('helpdesk_tickets_list'), fn('helpdesk_tickets_get')];
+      let historyB = [...historyA, { role: 'assistant', content: a2 }, askB];
+      const b1 = toolCallOf((await post(historyB, false, { tools: toolsB })).json);
+      check('tickets-draft-turn1', b1?.name === 'find_operations' && b1.args.need === 'ticket', JSON.stringify(b1));
+      checkToolCallAgainstRegistry('tickets-draft-turn1', b1);
+      historyB = [
+        ...historyB,
+        call('b1', 'find_operations', b1?.args ?? {}),
+        result('b1', { items: [{ identityKey: { name: 'tickets.list', gatekeeperId: 'gk-t' } }] }),
+      ];
+      const b2 = toolCallOf((await post(historyB, false, { tools: toolsB })).json);
+      check('tickets-draft-turn2', b2?.name === 'helpdesk_tickets_list' && JSON.stringify(b2.args) === '{}', JSON.stringify(b2));
+      historyB = [...historyB, call('b2', 'helpdesk_tickets_list', {}), result('b2', { data: { items: [{ id: 'T-1001' }, { id: 'T-1002' }] } })];
+      const b3 = toolCallOf((await post(historyB, false, { tools: toolsB })).json);
+      check('tickets-draft-turn3', b3?.name === 'propose_skill' && b3.args.skill.name === 'accept-tickets-triage-t42', JSON.stringify(b3));
+      checkToolCallAgainstRegistry('tickets-draft-turn3', b3);
+      historyB = [...historyB, call('b3', 'propose_skill', b3?.args ?? {}), result('b3', { id: 'sk-1', version: 1, draftDigest: 'dg1' })];
+      const b4 = toolCallOf((await post(historyB, false, { tools: toolsB })).json);
+      check('tickets-draft-turn4', b4?.name === 'propose_skill' && b4.args.skill.name === 'accept-tickets-open-t42', JSON.stringify(b4));
+      checkToolCallAgainstRegistry('tickets-draft-turn4', b4);
+      historyB = [...historyB, call('b4', 'propose_skill', b4?.args ?? {}), result('b4', { id: 'sk-2', version: 1, draftDigest: 'dg2' })];
+      const b5 = toolCallOf((await post(historyB, false, { tools: toolsB })).json);
+      const def = b5?.args?.definition ?? {};
+      check(
+        'tickets-draft-turn5',
+        b5?.name === 'propose_worker_definition' &&
+          b5.args.kind === 'worker' &&
+          def.model === 'fake/fake-echo' &&
+          JSON.stringify(def.gates) === '["gk-t"]' &&
+          JSON.stringify(def.capabilities) === '["request_action"]' &&
+          JSON.stringify(def.skills) === '["accept-tickets-triage-t42","accept-tickets-open-t42"]' &&
+          !JSON.stringify(def).includes('验收工单') &&
+          !JSON.stringify(def).includes('ACCEPT_S2_SCENARIO'),
+        JSON.stringify(b5),
+      );
+      checkToolCallAgainstRegistry('tickets-draft-turn5', b5);
+      const content = shared.WorkerWorkerDefinitionContentSchema.safeParse(def);
+      check('tickets-draft-turn5-definition', content.success, content.success ? '' : JSON.stringify(content.error.issues));
+      historyB = [...historyB, call('b5', 'propose_worker_definition', b5?.args ?? {}), result('b5', { id: 'wd-1', version: 1 })];
+      const b6 = textOf((await post(historyB, false, { tools: toolsB })).json);
+      check(
+        'tickets-draft-turn6',
+        b6 === 'TICKETS_DRAFTED=yes TICKETS_GATEKEEPER=gk-t TICKETS_SEEN=2 TICKETS_SKILLS=sk-1:1:dg1,sk-2:1:dg2 TICKETS_WORKER=wd-1:1 TICKETS_TOOLS=ok',
+        b6,
+      );
+      // Offered the execute tool too: said so (the admin mode projects observe tools only).
+      const b6create = textOf((await post(historyB, false, { tools: [...toolsB, fn('helpdesk_tickets_create')] })).json);
+      check('tickets-draft-create-offered', b6create.includes('TICKETS_TOOLS=missing:-;unexpected:helpdesk_tickets_create'), b6create);
+      // No observe tool offered (not granted yet): stops there and says why.
+      const noList = textOf(
+        (await post([askB, call('n1', 'find_operations', { need: 'ticket' }), result('n1', { items: [{ identityKey: { name: 'tickets.list', gatekeeperId: 'gk-t' } }] })], false, {
+          tools: [fn('find_operations'), fn('propose_skill'), fn('propose_worker_definition')],
+        })).json,
+      );
+      check('tickets-draft-no-list-tool', noList.startsWith('TICKETS_DRAFTED=no') && noList.includes('no *_tickets_list tool offered'), noList);
+
+      // Turn C: invoke_worker on the version the person names, the Worker scenario's marker as input.
+      const askC = { role: 'user', content: '验收工单：试跑工单 Worker TICKETS_DEFINITION=wd-1 TICKETS_VERSION=2 TICKET_TITLE=accept-ticket-t42' };
+      const toolsC = [fn('invoke_worker'), fn('helpdesk_tickets_list')];
+      let historyC = [...historyB, { role: 'assistant', content: b6 }, askC];
+      const c1 = toolCallOf((await post(historyC, false, { tools: toolsC })).json);
+      check(
+        'tickets-try-turn1',
+        c1?.name === 'invoke_worker' &&
+          c1.args.definitionId === 'wd-1' &&
+          c1.args.version === 2 &&
+          c1.args.wait === false &&
+          c1.args.input === 'ACCEPT_S2_SCENARIO=tickets_create TICKET_TITLE=accept-ticket-t42',
+        JSON.stringify(c1),
+      );
+      checkToolCallAgainstRegistry('tickets-try-turn1', c1);
+      historyC = [...historyC, call('cc1', 'invoke_worker', c1?.args ?? {}), result('cc1', wireResult('tickets-try-turn1', 'invoke_worker', { id: 'task-9', workerRunId: 'wr-9', status: 'queued' }))];
+      const c2 = textOf((await post(historyC, false, { tools: toolsC })).json);
+      check('tickets-try-turn2', c2 === 'TICKETS_TASK_ID=task-9 TICKETS_TOOLS=ok', c2);
+
+      // The Worker: tickets.create on whatever the gate is named, then its report.
+      const begin = { role: 'user', content: 'Begin working on your assigned Task now' };
+      const input = { role: 'custom', content: '### Task input\nACCEPT_S2_SCENARIO=tickets_create TICKET_TITLE=accept-ticket-t42' };
+      const toolsW = [fn('report_result'), fn('helpdesk_tickets_list'), fn('helpdesk_tickets_create')];
+      const w1 = toolCallOf((await post([input, begin], false, { tools: toolsW })).json);
+      check(
+        'tickets-worker-turn1',
+        w1?.name === 'helpdesk_tickets_create' && w1.args.title === 'accept-ticket-t42' && w1.args.priority === 'normal',
+        JSON.stringify(w1),
+      );
+      const w2 = toolCallOf(
+        (await post([input, begin, call('w1', 'helpdesk_tickets_create', w1?.args ?? {}), result('w1', { status: 'executed', data: { id: 'T-1003' } })], false, { tools: toolsW })).json,
+      );
+      check('tickets-worker-turn2', w2?.name === 'report_result' && w2.args.summary.includes('T-1003'), JSON.stringify(w2));
+      checkToolCallAgainstRegistry('tickets-worker-turn2', w2);
+
+      // Turn D: the targets, then one proposal for the workspace the person names — the same Skills
+      // and Worker (no gates, no model), tickets.create loosened, a gate-host instance.
+      const ws = '11111111-2222-4333-8444-555555555555';
+      const askD = {
+        role: 'user',
+        content: `验收工单：提议接入正式工作区 TICKETS_NONCE=t42 TICKETS_WORKSPACE=${ws} TICKETS_SYSTEM=http://accept-s2-openapi:8080 TICKETS_OPENAPI=http://accept-s2-openapi:8080/tickets/openapi.json`,
+      };
+      // The same Chat: Turn B's history (its propose_* calls) comes before.
+      const toolsD = [fn('agent_list_proposal_targets'), fn('propose_admin_proposal'), fn('helpdesk_tickets_list')];
+      let historyD = [...historyB, askD];
+      const d1 = toolCallOf((await post(historyD, false, { tools: toolsD })).json);
+      check('tickets-propose-turn1', d1?.name === 'agent_list_proposal_targets', JSON.stringify(d1));
+      checkToolCallAgainstRegistry('tickets-propose-turn1', d1);
+      historyD = [...historyD, call('d1', 'agent_list_proposal_targets', {}), result('d1', wireResult('tickets-propose-turn1', 'agent_list_proposal_targets', { targetWorkspaceIds: [ws] }))];
+      const d2 = toolCallOf((await post(historyD, false, { tools: toolsD })).json);
+      const seg = d2?.args?.segments?.[0];
+      const inst = d2?.args?.platform?.items?.[0];
+      const worker = seg?.items?.[2]?.definition ?? {};
+      check(
+        'tickets-propose-turn2',
+        d2?.name === 'propose_admin_proposal' &&
+          d2.args.sourceName === 'accept-tickets-t42' &&
+          d2.args.segments.length === 1 &&
+          seg.targetWorkspaceId === ws &&
+          JSON.stringify(seg.items.map((i) => i.kind)) ===
+            '["skill_version","skill_version","worker_definition_version","operation_version"]' &&
+          JSON.stringify(seg.items.slice(0, 2)) === JSON.stringify([{ kind: 'skill_version', skill: b3.args.skill }, { kind: 'skill_version', skill: b4.args.skill }]) &&
+          worker.name === 'accept-tickets-worker-t42' &&
+          !('gates' in worker) &&
+          !('model' in worker) &&
+          JSON.stringify(worker.skills) === JSON.stringify(def.skills) &&
+          worker.systemPrompt === def.systemPrompt &&
+          JSON.stringify(seg.items[3]) === '{"kind":"operation_version","gateId":"accept-tickets-t42","name":"tickets.create","set":{"blast_radius":"low"}}' &&
+          inst?.gateId === 'accept-tickets-t42' &&
+          inst.transportKind === 'http' &&
+          inst.credentialMode === 'shared' &&
+          inst.target === 'http://accept-s2-openapi:8080' &&
+          inst.manifestSource === 'http://accept-s2-openapi:8080/tickets/openapi.json' &&
+          inst.connector === 'accept-s2-tickets' &&
+          !JSON.stringify(d2.args).includes('验收工单'),
+        JSON.stringify(d2),
+      );
+      checkToolCallAgainstRegistry('tickets-propose-turn2', d2);
+      const proposedWorker = shared.WorkerWorkerDefinitionContentSchema.safeParse(worker);
+      check('tickets-propose-turn2-worker', proposedWorker.success, proposedWorker.success ? '' : JSON.stringify(proposedWorker.error.issues));
+      historyD = [
+        ...historyD,
+        call('d2', 'propose_admin_proposal', d2?.args ?? {}),
+        result('d2', wireResult('tickets-propose-turn2', 'propose_admin_proposal', agentProposalWire('pr-1', d2?.args, 'proposed'))),
+      ];
+      const d3 = textOf((await post(historyD, false, { tools: toolsD })).json);
+      check('tickets-propose-turn3', d3 === 'TICKETS_PROPOSAL_ID=pr-1 TICKETS_PROPOSAL_STATUS=proposed TICKETS_ADDRESS_WITHHELD=yes TICKETS_TOOLS=ok', d3);
+      const notTarget = textOf(
+        (await post([askD, call('n2', 'agent_list_proposal_targets', {}), result('n2', { targetWorkspaceIds: ['other'] })], false, { tools: toolsD })).json,
+      );
+      check('tickets-propose-not-a-target', notTarget.startsWith('TICKETS_PROPOSAL_ID= ') && notTarget.includes('is not among the proposal targets (other)'), notTarget);
+
+      // Turn E: the agent reads its proposal back; the reply lists every key it got.
+      const askE = { role: 'user', content: '验收工单：查看提案进展 TICKETS_PROPOSAL_ID=22222222-3333-4444-8555-666666666666' };
+      const toolsE = [fn('agent_get_admin_proposal')];
+      let historyE = [...historyD, askE];
+      const readBack = agentProposalWire('pr-1', d2?.args, 'applied');
+      const e1 = toolCallOf((await post(historyE, false, { tools: toolsE })).json);
+      check('tickets-progress-turn1', e1?.name === 'agent_get_admin_proposal' && e1.args.proposalId === '22222222-3333-4444-8555-666666666666', JSON.stringify(e1));
+      checkToolCallAgainstRegistry('tickets-progress-turn1', e1);
+      historyE = [
+        ...historyE,
+        call('e1', 'agent_get_admin_proposal', e1?.args ?? {}),
+        result('e1', wireResult('tickets-progress-turn1', 'agent_get_admin_proposal', readBack)),
+      ];
+      const e2 = textOf((await post(historyE, false, { tools: toolsE })).json);
+      const keysOf = (value, keys = new Set()) => {
+        if (Array.isArray(value)) for (const v of value) keysOf(v, keys);
+        else if (value && typeof value === 'object')
+          for (const [k, v] of Object.entries(value)) {
+            keys.add(k);
+            keysOf(v, keys);
+          }
+        return keys;
+      };
+      const readKeys = [...keysOf(readBack)].sort();
+      check(
+        'tickets-progress-turn2',
+        e2 === `TICKETS_AGENT_STATUSES=workspace:applied,platform:applied TICKETS_AGENT_KEYS=${readKeys.join('|')} TICKETS_TOOLS=ok` &&
+          readKeys.includes('addressWithheld') &&
+          !readKeys.includes('target') &&
+          !readKeys.includes('manifestSource'),
+        e2,
+      );
     }
 
     // 7. Streaming mode also honors scenarios (SSE contains the scripted tool name).

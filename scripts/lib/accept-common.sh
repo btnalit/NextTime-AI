@@ -116,6 +116,14 @@ run_driver() (
       shift 4
       set -- "$driver_cmd" env:NT_ACCEPT_TOKEN "$driver_name" env:NT_ACCEPT_PARAMS "$@"
       ;;
+    gate-host-credential)
+      # S11 AA5c: the console credential and the credential JSON both through the environment.
+      [ "$#" -ge 4 ] || { echo "run_driver: gate-host-credential needs <token> <gateId> <credentialJson>" >&2; exit 2; }
+      NT_ACCEPT_TOKEN=$2
+      NT_ACCEPT_PARAMS=$4
+      export NT_ACCEPT_TOKEN NT_ACCEPT_PARAMS
+      set -- gate-host-credential env:NT_ACCEPT_TOKEN "$3" env:NT_ACCEPT_PARAMS
+      ;;
     send-and-wait | send-only | isolation-check | get-history | wait-task | explorer | logout)
       [ "$#" -ge 2 ] || { echo "run_driver: $1 needs <token>" >&2; exit 2; }
       driver_cmd=$1

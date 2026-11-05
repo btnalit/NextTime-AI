@@ -115,7 +115,7 @@ services:
         NEXTTIME_SUBNET_WORKERS: "${NEXTTIME_SUBNET_WORKERS:?}",
         NEXTTIME_SUBNET_CONTROL: "${NEXTTIME_SUBNET_CONTROL:?}",
         NEXTTIME_CONNECTION_ALLOW_HOSTS: "${NEXTTIME_CONNECTION_ALLOW_HOSTS:-}",
-        NEXTTIME_CONNECTION_FIXTURE_HOSTS: "accept-s2-ssh-gate,accept-s2-http-gate,accept-s2-openapi,accept-s2-mcp",
+        NEXTTIME_CONNECTION_FIXTURE_HOSTS: "accept-s2-ssh-gate,accept-s2-http-gate,accept-s2-tickets-gate,accept-s2-openapi,accept-s2-mcp",
         INITIAL_ADMIN_PASSWORD_FILE: /run/setup/initial-admin-password,
         # P-A1 (design/platform-admin §6.6): logins that are always platform administrators —
         # the console cannot disable or demote them. Optional, comma-separated. Kept in env on
@@ -1201,10 +1201,18 @@ services:
   # already refuses to start with an empty/missing token (see that file's own header comment), so
   # an accidental `docker compose --profile accept-s2 up` without the token set fails loudly
   # inside the container instead, not at compose-parse time for every other command.
+  # S11 AA5c: it also serves a test ticket system under `/tickets` (its own OpenAPI document at
+  # `/tickets/openapi.json`) for the admin agent journey. ACCEPT_S2_TICKETS_PROD_TOKEN is the
+  # second credential that journey gives the production workspace's connection, so a ticket says
+  # which connection opened it; empty means only ACCEPT_S2_API_TOKEN is accepted.
   accept-s2-openapi:
     build: { context: ., dockerfile: deploy/accept-s2/openapi-fixture/Dockerfile }
     profiles: ["accept-s2"]
-    environment: { ACCEPT_S2_API_TOKEN: "${ACCEPT_S2_API_TOKEN:-}" }
+    environment:
+      {
+        ACCEPT_S2_API_TOKEN: "${ACCEPT_S2_API_TOKEN:-}",
+        ACCEPT_S2_TICKETS_PROD_TOKEN: "${ACCEPT_S2_TICKETS_PROD_TOKEN:-}",
+      }
     networks: [control]
     restart: "no"
 
@@ -1296,6 +1304,36 @@ services:
       [
         "${NEXTTIME_DATA}/accept-s2/http-gate:/data/gate",
         "./deploy/accept-s2/http-gate-manifest.json:/data/gate-manifest.json:ro",
+      ]
+    networks: [control]
+    restart: "no"
+
+  # S11 AA5c: the test ticket system's gate (the AA5 plan's §5.8 journey,
+  # scripts/lib/accept-s2-admin-agent-tickets.sh): the same http-kind Gatekeeper image as
+  # accept-s2-http-gate, in front of the same accept-s2-openapi fixture, serving the ticket system's
+  # three Operations (deploy/accept-s2/tickets-gate-manifest.json — exactly what `importOpenApi`
+  # derives from `/tickets/openapi.json`, pinned by gatekeeper-base's
+  # accept-s2-tickets-openapi.test.ts). Its own service, data directory and ConnectedAccount store
+  # because the admin agent's trial workspace connects it with its own connection secret and test
+  # credential, apart from the S2 workspace's http gate (a gate answers only the connection secret
+  # it was started with). 连接密钥（R-01）：同 accept-s2-ssh-gate——自连门，不持 gate_token。
+  accept-s2-tickets-gate:
+    build: { context: ., dockerfile: packages/gatekeeper-base/Dockerfile }
+    profiles: ["accept-s2"]
+    environment:
+      {
+        GATE_KERNEL_TOKEN_FILE: /data/gate/kernel.token,
+        GATE_TRANSPORT_KIND: http,
+        GATE_TARGET_BASE_URL: http://accept-s2-openapi:8080,
+        GATE_CREDENTIAL_MODE: connected_account,
+        GATE_STORE_KEY_FILE: /data/gate/store.key,
+        GATE_MANIFEST_FILE: /data/gate-manifest.json,
+        GATE_PORT: "8090",
+      }
+    volumes:
+      [
+        "${NEXTTIME_DATA}/accept-s2/tickets-gate:/data/gate",
+        "./deploy/accept-s2/tickets-gate-manifest.json:/data/gate-manifest.json:ro",
       ]
     networks: [control]
     restart: "no"
