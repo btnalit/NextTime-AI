@@ -109,7 +109,8 @@ API 不可用，正在跑的入口 agent 会断线重连，每个 Task 容器短
 - **staging 预演打开并要求**：`scripts/staging-rehearsal.sh` 在一次性的 `secrets/kernel.env` 里追加
   `ADMIN_AGENT_ENABLED=1`（只在目标版本带这个场景时），并 `export ACCEPT_REQUIRE_ADMIN_AGENT=1`：内核没开时是
   `FAIL admin-agent-switch`，不是跳过。所以每次预演都用真 pi 跑一遍管理员智能体（AA5 的前置）。
-- **生产主机默认关闭**：主机没开开关时什么也不建，日志里只有一行
+- **开关关着的主机**（升级上来、`secrets/kernel.env` 里没写这一项的主机，或维护者设成 `0` 的；新装主机默认是开的，
+  见 `host-checkout.md` §E3.3）：什么也不建，日志里只有一行
   `NOTE admin-agent the admin agent scenario (real pi in its admin container proposing once) not run: the kernel reads ADMIN_AGENT_ENABLED='unset' …`
   （`apply-release.sh` 的 S2 摘要也打印这一行），最后照样是 `S2 OK`。开关由维护者在主机上决定，验收不替他打开。
 
@@ -352,9 +353,9 @@ S2 OK
 
 上面是 `ACCEPT_DISRUPTIVE=1` 时的输出。不设它时没有 `s12-*` 和 `s2-*` 这 11 行，`s4u-cancelled` 之后是一行
 `NOTE goal-disruptive S12 (row lock on a goal) and S2 (kernel killed twice, worker-supervisor restarted) not run: ACCEPT_DISRUPTIVE=unset, not 1 — …`，
-其余不变，最后仍是 `S2 OK`。`admin-agent-*` 这 7 行和其后 `admin-agent-tickets` 的 14 行 PASS、6 行 HUMAN、1 行 NOTE
+其余不变，最后仍是 `S2 OK`。`admin-agent-*` 这 7 行和其后 `admin-agent-tickets` 的 14 行 PASS、7 行 HUMAN、1 行 NOTE
 是内核开着 `ADMIN_AGENT_ENABLED` 时的输出（staging 预演；工单账本的张数在 `--keep` 重跑、夹具没重建时会更多，脚本只认「多一张」）；
-没开时（主机默认）换成两行 `NOTE admin-agent … not run: the kernel reads ADMIN_AGENT_ENABLED='unset' …` 和
+没开时（升级上来、`kernel.env` 没写这一项的主机）换成两行 `NOTE admin-agent … not run: the kernel reads ADMIN_AGENT_ENABLED='unset' …` 和
 `NOTE admin-agent-tickets … not run: the admin agent scenario did not run …`，其余不变。
 
 **在 `packages/platform-extension` 的 entry-mode 工具注册修复落地之前**，对着当前 `main` 跑这个脚本，
