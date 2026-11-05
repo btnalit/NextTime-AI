@@ -2393,6 +2393,19 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：对话里 `invoke_worker` 那一行链接到它建的 Task，`request_connection` 那一行链接到「系统与授权」并直接打开这张申请的「完成连接」抽屉（深链 `#/govern/systems?complete=<申请 id>`；申请已完成、已取消、不在这个工作区或读者完成不了时，页面说明原因）。入口智能体的这两种调用同样有链接。试验工作区里，管理员智能体提的申请和建的 Task 标「由管理员智能体代为」；不是平台管理员的所有者在 http / mcp 申请卡上看到「平台预置时只有平台管理员能完成」。「平台预置」的说明补上试验工作区例外，审计页认得 `connection.trial_self_connect`。
 - **回滚**：只回滚代码。
 
+### 3.122 管理员智能体的工单旅程：试验、提案、应用与验证（#959，S11 AA5c，0.61.0 之后的下一版）
+
+只改验收脚本、驱动、fake-llm、openapi 夹具与手册：没有迁移，线上契约不变，主机不需要操作。
+
+- **主机 apply**：内核开着 `ADMIN_AGENT_ENABLED` 时（新装主机默认开，§3.118），accept_s2 在管理员智能体场景之后多跑一段工单旅程；开关关着时只多一行 `NOTE admin-agent-tickets … not run`。这段会：
+  - 起停一个 `accept-s2-tickets-gate` 容器，数据目录在数据目录下的 `accept-s2/tickets-gate`，和其它 accept-s2 门一样保留；
+  - 在平台上建一个 gate-host 实例 `accept-tickets-<nonce>`，收尾时回滚成停用；删不掉，每跑一次多一个（遗留 629）；
+  - 新建一个连接器 `accept-s2-tickets`，回滚后保留，每台主机只建一次；
+  - 在 gate-host 的加密存储里多一份测试用的生产凭证（本次随机生成）；
+  - S2 摘要多两行 NOTE（授权门（试验）、验证）。
+- **CI**：`quality` 多一步 openapi 夹具自测。
+- **回滚**：只回滚代码。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
