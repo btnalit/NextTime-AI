@@ -97,6 +97,13 @@ async function run(base) {
     JSON.stringify(list.json?.items?.map((t) => t.id)) === JSON.stringify(['T-1001', 'T-1002']),
     JSON.stringify(list.json),
   );
+  check('tickets list names the trial credential as its reader', list.json?.readBy === 'trial', JSON.stringify(list.json?.readBy));
+  const prodList = await call(base, 'GET', '/tickets', { token: PROD_TOKEN });
+  check(
+    'tickets list names the production credential as its reader',
+    prodList.status === 200 && prodList.json?.readBy === 'production' && prodList.json?.items?.length === 2,
+    JSON.stringify(prodList.json),
+  );
   const one = await call(base, 'GET', '/tickets/T-1001', { token: PROD_TOKEN });
   check('tickets get 200', one.status === 200 && one.json?.id === 'T-1001', JSON.stringify(one));
   check(

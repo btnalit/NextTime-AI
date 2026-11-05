@@ -39,7 +39,10 @@
 //                         fixture plays, for the admin agent journey (scripts/lib/
 //                         accept-s2-admin-agent-tickets.sh, AA5 plan §5.8): `tickets.list`,
 //                         `tickets.get` (observe) and `tickets.create` (execute). No auth.
-//   GET  /tickets          -> `tickets.list`: {items}, every ticket, oldest first.
+//   GET  /tickets          -> `tickets.list`: {items, readBy}, every ticket, oldest first, and which
+//                         of the two credentials below read them (`trial` / `production`) — so a
+//                         read through a gate shows which credential that gate holds without
+//                         opening a ticket.
 //   GET  /tickets/{id}     -> `tickets.get`: one ticket, 404 when there is none.
 //   POST /tickets          -> `tickets.create`: body {title, priority?}; opens a ticket and answers
 //                         it, 201. A title that is not a 1–200 character string, or a priority
@@ -182,7 +185,7 @@ async function serveTickets(req, res, url) {
     return true;
   }
   if (req.method === 'GET' && isList) {
-    sendJson(res, 200, { items: tickets });
+    sendJson(res, 200, { items: tickets, readBy: via });
     return true;
   }
   if (req.method === 'GET') {

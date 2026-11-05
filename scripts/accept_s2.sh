@@ -377,14 +377,21 @@ fixtures_secrets_step() {
   fi
   pass "fixtures-store-key" "ConnectedAccount store key generated into \${NEXTTIME_DATA}/accept-s2/http-gate/"
 
+  # Two tokens, one per line: the fixture's own (every self-connected gate's credential, and the
+  # ticket system's trial one) and, S11 AA5c, the ticket system's production one — the credential
+  # the platform administrator enters for the gate-host instance the admin agent's proposal
+  # creates (scripts/lib/accept-s2-admin-agent-tickets.sh), so a ticket says which one opened it.
   out=$(docker compose --profile accept-s2 run --rm --no-deps -T --entrypoint node accept-s2-http-gate \
-    -e "console.log(require('crypto').randomBytes(20).toString('hex'))" </dev/null 2>&1)
-  ACCEPT_S2_API_TOKEN=$(printf '%s\n' "$out" | tail -1 | tr -dc 'a-f0-9')
-  if [ -z "$ACCEPT_S2_API_TOKEN" ] || [ ${#ACCEPT_S2_API_TOKEN} -ne 40 ]; then
-    fail "fixtures-api-token" "could not generate a bearer token: $out"
+    -e "const c=require('crypto');console.log(c.randomBytes(20).toString('hex'));console.log(c.randomBytes(20).toString('hex'))" </dev/null 2>&1)
+  ACCEPT_S2_API_TOKEN=$(printf '%s\n' "$out" | tail -2 | head -1 | tr -dc 'a-f0-9')
+  ACCEPT_S2_TICKETS_PROD_TOKEN=$(printf '%s\n' "$out" | tail -1 | tr -dc 'a-f0-9')
+  if [ ${#ACCEPT_S2_API_TOKEN} -ne 40 ] || [ ${#ACCEPT_S2_TICKETS_PROD_TOKEN} -ne 40 ] ||
+    [ "$ACCEPT_S2_API_TOKEN" = "$ACCEPT_S2_TICKETS_PROD_TOKEN" ]; then
+    # Not $out: one of its lines may be a good token.
+    fail "fixtures-api-token" "could not generate two distinct 40-hex bearer tokens (got ${#ACCEPT_S2_API_TOKEN} and ${#ACCEPT_S2_TICKETS_PROD_TOKEN} hex characters; $(printf '%s\n' "$out" | wc -l) output line(s))"
   fi
-  export ACCEPT_S2_API_TOKEN
-  pass "fixtures-api-token" "bearer token generated: $(redact "$ACCEPT_S2_API_TOKEN")"
+  export ACCEPT_S2_API_TOKEN ACCEPT_S2_TICKETS_PROD_TOKEN
+  pass "fixtures-api-token" "bearer tokens generated: $(redact "$ACCEPT_S2_API_TOKEN") and the ticket system's production one $(redact "$ACCEPT_S2_TICKETS_PROD_TOKEN")"
 }
 
 fixtures_up_step() {

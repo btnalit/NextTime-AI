@@ -50,12 +50,14 @@ describe('fake-llm admin agent scenario tool names (S11 AA4d-2)', () => {
     }
   });
 
-  // S11 AA5c: the ticket journey's three Turns (`ticketsConnectChatScenario` and the two after it).
+  // S11 AA5c: the ticket journey's five Turns (`ticketsConnectChatScenario` and the four after it).
   it('the tools the ticket journey calls are admin mode tools', () => {
     const used = [
       ...stringArray('TICKETS_CONNECT_TOOLS'),
       ...stringArray('TICKETS_DRAFT_TOOLS'),
       ...stringArray('TICKETS_TRY_TOOLS'),
+      ...stringArray('TICKETS_PROPOSE_TOOLS'),
+      ...stringArray('TICKETS_PROGRESS_TOOLS'),
     ];
     expect(used).toEqual([
       'request_connection',
@@ -64,6 +66,9 @@ describe('fake-llm admin agent scenario tool names (S11 AA4d-2)', () => {
       'propose_skill',
       'propose_worker_definition',
       'invoke_worker',
+      'agent_list_proposal_targets',
+      'propose_admin_proposal',
+      'agent_get_admin_proposal',
     ]);
     for (const name of used) {
       expect(admin.has(name), `${name} is an admin mode tool`).toBe(true);

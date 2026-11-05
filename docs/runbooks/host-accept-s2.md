@@ -114,11 +114,12 @@ API 不可用，正在跑的入口 agent 会断线重连，每个 Task 容器短
   `NOTE admin-agent the admin agent scenario (real pi in its admin container proposing once) not run: the kernel reads ADMIN_AGENT_ENABLED='unset' …`
   （`apply-release.sh` 的 S2 摘要也打印这一行），最后照样是 `S2 OK`。开关由维护者在主机上决定，验收不替他打开。
 
-**管理员智能体的工单旅程（S11 AA5c，`scripts/lib/accept-s2-admin-agent-tickets.sh`，AA5 方案 §5.8 的试验一半）紧接着上面那个场景跑，
-在同一个试验工作区、同一个管理员身上。** 上面那个场景没跑（开关关着）时它也不跑，只多一行
+**管理员智能体的工单旅程（S11 AA5c，`scripts/lib/accept-s2-admin-agent-tickets.sh`，AA5 方案 §5.8）紧接着上面那个场景跑，
+在同一个试验工作区、同一个管理员身上，目标工作区也是上面那个场景选的那个。** 上面那个场景没跑（开关关着）时它也不跑，只多一行
 `NOTE admin-agent-tickets … not run: the admin agent scenario did not run …`。系统是 openapi 夹具里的测试工单系统
-（`/tickets`，起始两张单），前面是它自己的门 `accept-s2-tickets-gate`：脚本在试验工作区里铸连接密钥、起门，测试凭证用本次的
-`ACCEPT_S2_API_TOKEN`（夹具在每张单上记 `via: trial`）。同一个管理员对话跑三轮，轮与轮之间由脚本扮演人：
+（`/tickets`，起始两张单），认两份凭证：试验的 `ACCEPT_S2_API_TOKEN` 和生产的 `ACCEPT_S2_TICKETS_PROD_TOKEN`（都是本次随机生成，
+夹具在每张单上记 `via: trial` 或 `via: production`，`GET /tickets` 回答 `readBy`）。试验那一半前面是它自己的门
+`accept-s2-tickets-gate`：脚本在试验工作区里铸连接密钥、起门。同一个管理员对话跑五轮，轮与轮之间由脚本扮演人：
 
 1. 智能体调 `request_connection`（http，`helpdesk`），请求记下它的会话；人完成这张请求卡：录测试凭证（`create_connection`，
    清单来源是工单系统的 OpenAPI 文档），按读到的发布导入的三个 Operation（`publish_manifest`），再把门授权给自己
@@ -126,12 +127,26 @@ API 不可用，正在跑的入口 agent 会断线重连，每个 Task 容器短
 2. 智能体用 `find_operations` 找到工单 Operation，经投影的观察工具读 `tickets.list`（执行工具从不交给它），起草两个 Skill 和
    一个只能在这个门上请求动作的 Worker；人在试验工作区发布这三份草稿；
 3. 智能体用 `invoke_worker` 试跑这个 Worker；Worker 的 `tickets.create` 等人决定，人批准；之后工单账本恰好多一张单、用的是试验凭证，
-   Task 上记着智能体的会话。
+   Task 上记着智能体的会话；
+4. 智能体调 `agent_list_proposal_targets`，再调 `propose_admin_proposal`：工作区部分给目标工作区带去同样的两个 Skill 和 Worker
+   （不带门、不带模型，提案里的 Worker 不能定这两项）和 `tickets.create` 的 blast radius 从 medium 放到 low（仍逐个审批）；平台部分是一个
+   gate-host 实例 `accept-tickets-<nonce>`（http，凭证 `shared`，连接器 `accept-s2-tickets`，地址和清单来源是工单系统的）。读回给
+   智能体的平台部分不带地址（`addressWithheld`）。然后人走平台面：预览平台部分并按序号确认、应用；等 gate-host 拉到这个实例、
+   宣告出三个 Operation（约一分钟一次）；在 gate-host 上录生产凭证（控制台的「集成」页，驱动用 `issue_gate_host_token` 换来的令牌
+   直接 POST 给 gate-host，凭证不经内核）；启用实例。再走目标工作区：所有者预览并启用这个门（三个 Operation 按读到的发布），
+   经它读 `tickets.list`，夹具回答 `readBy: production`；预览工作区部分（四项都是 `authority_widening`：两个 `skill/added`、
+   `worker/added`、`operation.blast_radius/loosened`），逐项确认、应用、到「安装历史」验证（四项都 `in_effect`）。应用后 Worker 已发布、
+   `origin = agent`、没有门（所有者要自己给它绑门），`tickets.create` 是 low、仍不可自动批准；
+5. 智能体用 `agent_get_admin_proposal` 读回自己的提案：两部分都是 `applied`。平台读到的和智能体读到的都不带所有者预览里的东西
+   （`before` / `after` / `classification` / `confirmedBy` 这类键，脚本的 `TICKETS_DRY_RUN_KEYS`）。
 
-最后核对审计归属（智能体的请求、草稿、试跑记在它的会话下；凭证、发布、批准是人，不带会话）、测试凭证不出现在内核库任何表里，
-并逐条列出人做过的事：只允许 AA5 方案列的「录凭证」「试验工作区发布」「批准试验动作」，外加一类方案没列的「授权门（试验）」——
-Worker 只能在它的人持有的门上请求动作，所以人得先授权这个门；脚本打一行 `NOTE admin-agent-tickets 授权门（试验）…`，作为决策门
-D-W5 的证据（AA5 方案 §4 第 3 份清单）。把工单系统带进生产工作区的那一半（提案、平台段和工作区段的应用、生产凭证）不在这里。
+最后核对审计归属（智能体的请求、草稿、试跑、提案记在它的会话下；凭证、发布、批准、平台部分的应用、所有者的启用、应用和验证是人，
+不带会话；目标工作区里四条 `change_item.apply` 记着 `origin: agent`、提案人和确认人）、两份凭证都不出现在内核库任何表里、生产那一半
+没有开单，并逐条列出人做过的事：只允许 AA5 方案列的「录凭证」（两次：试验、生产）「试验工作区发布」「批准试验动作」
+「按段审阅与逐项确认」「每段应用」（每部分各一次）「启用门」（平台、工作区各一次），外加两类方案没列的，各打一行 NOTE，作为决策门
+D-W5 的证据（AA5 方案 §4 第 3 份清单）：「授权门（试验）」——Worker 只能在它的人持有的门上请求动作，所以人得先授权这个门；
+「验证」——应用工作区部分不会自动验证，要所有者到「安装历史」点；而且管理员提案来源的部分验证时只看各项是否生效，不探门的健康
+（方案 F5(a) 原以为会探）。
 
 不要在别人正用这台主机上的栈时跑 fake 路径（`ACCEPT_DISRUPTIVE=1` 时尤其如此）。`--real` 不跑这些场景，并且在发布 http 门的清单之前把夹具测试账本的
 两个草稿（`ledger.get` / `ledger.add`）丢弃，发布后用 `real-ledger-withheld` 证明门上已发布的只有
@@ -166,7 +181,7 @@ PASS bootstrap-workspace workspace=<uuid> alice=<uuid> key=abc123...(redacted)
 PASS bootstrap-bob bob=<uuid> (member) key=def456...(redacted)
 PASS fixtures-ssh-keygen keypair generated into ${NEXTTIME_DATA}/accept-s2/ssh/
 PASS fixtures-store-key ConnectedAccount store key generated into ${NEXTTIME_DATA}/accept-s2/http-gate/
-PASS fixtures-api-token bearer token generated: 9f3a1c...(redacted)
+PASS fixtures-api-token bearer tokens generated: 9f3a1c...(redacted) and the ticket system's production one 4b7e20...(redacted)
 PASS fixtures-up accept-s2-sshd, accept-s2-openapi, accept-s2-restart-target up
 PASS fixtures-gate-secrets ssh/http gates' own connection secrets minted: ntgc1_...(redacted), ntgc1_...(redacted)
 PASS fixtures-gates-up accept-s2-ssh-gate, accept-s2-http-gate healthy on their own connection secrets; the platform gate token is refused
@@ -264,10 +279,25 @@ HUMAN admin-agent-tickets 批准试验动作: approve <uuid>: the Worker's ticke
 PASS admin-agent-tickets-approve the person approved the Worker's tickets.create (<uuid>): executed, Task <uuid> completed
 PASS admin-agent-tickets-book the ticket book went from 2 to 3: one ticket accept-ticket-<hex>, opened with the trial credential
 PASS admin-agent-tickets-task Task <uuid>: for the administrator, recorded under the admin agent's session <uuid>
+PASS admin-agent-tickets-propose the admin agent proposed <uuid>: for <uuid> the two Skills and the Worker it tried and tickets.create at blast radius low; on the platform a gate-host instance accept-tickets-<hex> (read back to the agent without its addresses)
+HUMAN admin-agent-tickets 按段审阅与逐项确认: preview_platform_segment <uuid>: the gate-host instance, confirmed by its ordinal
+HUMAN admin-agent-tickets 每段应用: apply_platform_segment <uuid>
+HUMAN admin-agent-tickets 录凭证: the production credential for accept-tickets-<hex>, to the gate host (the console's 集成 page)
+HUMAN admin-agent-tickets 启用门: update_gate_instance accept-tickets-<hex> enabled (platform)
+PASS admin-agent-tickets-platform the platform part applied (change segment <uuid>): accept-tickets-<hex> announced its three Operations as imported, took the production credential and was enabled on the platform
+HUMAN admin-agent-tickets 启用门: enable_gate_instance accept-tickets-<hex> in <uuid> (workspace)
+PASS admin-agent-tickets-enable the owner enabled accept-tickets-<hex> in <uuid> (Gatekeeper <uuid>); through it the ticket system answers the production credential
+HUMAN admin-agent-tickets 按段审阅与逐项确认: preview_admin_proposal_segment <uuid>: four items, each confirmed by its ordinal
+HUMAN admin-agent-tickets 每段应用: apply_admin_proposal_segment <uuid> in <uuid>
+HUMAN admin-agent-tickets 验证: verify_change_segment <uuid> (安装历史)
+PASS admin-agent-tickets-apply the owner applied the workspace part (change segment <uuid>, four items confirmed one by one) and verified it; the Worker is published without a gate, tickets.create is low and still not auto-approvable
+PASS admin-agent-tickets-reads the platform and the agent read both parts applied, and nothing of the owner's dry run (before,after,changedFields,…)
 PASS admin-agent-tickets-audit audit: the agent's request, drafts and try under its session; the credential, the publishing and the approval by the person, under none
-PASS admin-agent-tickets-no-token-leak the test credential appears in 0 rows across all <n> public tables
-PASS admin-agent-tickets-human what the person did: 录凭证×1 批准试验动作×1 授权门（试验）×1 试验工作区发布×4
+PASS admin-agent-tickets-audit-production audit: the proposal under the agent's session; four applied items marked origin agent, proposed for <uuid>, confirmed and applied by the owner; the platform part applied by the administrator — none of the person's rows under a session
+PASS admin-agent-tickets-no-token-leak the trial and the production credential each appear in 0 rows across all <n> public tables
+PASS admin-agent-tickets-human what the person did: 启用门×2 录凭证×2 批准试验动作×1 按段审阅与逐项确认×2 授权门（试验）×1 每段应用×2 试验工作区发布×4 验证×1
 NOTE admin-agent-tickets 授权门（试验） is a person's step the AA5 plan's §5.8 list leaves out: the Worker asks for actions only on gates its person holds (connect_gatekeeper on the 系统访问 card) — D-W5 evidence (AA5 plan §4 item 3)
+NOTE admin-agent-tickets 验证 is a person's step the AA5 plan's §5.8 list leaves out: applying a workspace part does not verify it, the owner does (verify_change_segment, 安装历史) — and for an admin proposal it checks only that the items are in effect, no gate health probe (the plan's F5(a) expected one) — D-W5 evidence (AA5 plan §4 item 3)
 PASS goals-planner-model alice's AgentProfile model set to fake/fake-echo, the model her goal planner runs on (S6, S13)
 PASS s6-verifying goal <uuid>: its step reported success, the platform is checking the stock API for a symbol it never shows
 PASS s4u-approved alice approved the write <uuid> under lose-s4u-<hex>; it ran and its answer was lost: failed(outcome_unknown), never run again by the gate
@@ -353,7 +383,7 @@ S2 OK
 
 上面是 `ACCEPT_DISRUPTIVE=1` 时的输出。不设它时没有 `s12-*` 和 `s2-*` 这 11 行，`s4u-cancelled` 之后是一行
 `NOTE goal-disruptive S12 (row lock on a goal) and S2 (kernel killed twice, worker-supervisor restarted) not run: ACCEPT_DISRUPTIVE=unset, not 1 — …`，
-其余不变，最后仍是 `S2 OK`。`admin-agent-*` 这 7 行和其后 `admin-agent-tickets` 的 14 行 PASS、7 行 HUMAN、1 行 NOTE
+其余不变，最后仍是 `S2 OK`。`admin-agent-*` 这 7 行和其后 `admin-agent-tickets` 的 20 行 PASS、15 行 HUMAN、2 行 NOTE
 是内核开着 `ADMIN_AGENT_ENABLED` 时的输出（staging 预演；工单账本的张数在 `--keep` 重跑、夹具没重建时会更多，脚本只认「多一张」）；
 没开时（升级上来、`kernel.env` 没写这一项的主机）换成两行 `NOTE admin-agent … not run: the kernel reads ADMIN_AGENT_ENABLED='unset' …` 和
 `NOTE admin-agent-tickets … not run: the admin agent scenario did not run …`，其余不变。
@@ -389,7 +419,7 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
 | `connect-mcp-*` | S3.12 自己的验收句——"通过 UI 接入一个 fixture MCP server ... publish 后 find_operations 命中其工具"（本脚本覆盖 capability 层这一半，不覆盖对话内 `<gate>.<op>` 工具出现这一半——那是 S3.13 入口 `session_start` 投影的范围，见 `docs/runbooks/web-console.md`） | 同一条 `request_connection → create_connection → publish_manifest` 路径，`kind:'mcp'`；`create_connection` 的 `manifestSource` 指向 `accept-s2-mcp` 自己的 JSON-RPC 端点，导入两个工具（`accept_s2_mcp_echo` 观察类、`accept_s2_mcp_note` 执行类）；`find_operations('accept_s2_mcp')` 发布前 0 命中、发布后 2 命中，与 `s213-find-operations-*` 同一条 I16/I17 不变量 |
 | `step9-*` | S11 GO5e-1：前后依赖、要在对话之外跑完的一串委派步骤，在对话里发起成目标（`docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md`） | 真实 chat 驱动链路：`entryGoalChatScenario`（fake-llm）驱动入口 agent 依次调 `find_workers` → `find_operations('stock')` → `propose_goal`（一步跑在 ops-runner 上；验收是平台自己对 http 门 `stock.get` 的观察 `observe_predicate`，`symbol` 等于 `NXT`；带 `idempotencyKey`），再自己试一次 `confirm_goal`。`agent-cannot-confirm`：回复里 `CONFIRM_GOAL=unavailable`，且 `get_goal` 读到的仍是 `proposed`、未确认、来源 Turn 就是这一轮——入口模式不注册 `confirm_goal`，内核对任何 Handle 也拒绝它（仅人通道）；`idempotent`：同一对话再问一次，回同一个目标、`changed=false`，`list_goals` 里这次请求只有一个目标；`confirm`：alice 以人通道确认（一个 StepRun），再确认一次 `changed=false`；`achieved`：轮询 `get_goal` 至 `completed / achieved / verified_by_check`，唯一一步成功、首次尝试，`stock-visible` 检查 `passed` 且有 Observation——Worker 不写任何 Fact，验收不靠它的话；`one-task`：`tasks` 里这个目标恰好一行；`milestones`（S11 GO5e-2）：发起目标的那个对话里依次出现 `propose`、`confirm`、`verify`、`complete` 四条 `system.goal_update` 状态行，最后一条带 `completed / achieved / verified_by_check`；那一步的 Task 在同一个对话里报告，带 `stepKey`=`report`；除发起那条之外的三条在这个对话下一轮的上下文里等着，那一步的 Task 不进上下文 |
 | `admin-agent-*` | S11 AA4d（AA4 方案 F9 的预演一半）：平台管理员的管理员智能体在真实运行时里提一份管理员提案；只在内核开着 `ADMIN_AGENT_ENABLED` 时跑（见 §2） | `administrator`：bootstrap CLI 建的本次专用平台管理员登录控制台（驱动的 console 凭据 `console:<workspaceId\|->:<cookie>`，经环境变量传，R-34），`get_admin_agent_status` 读到平台已开。`workspaces`：`create_workspace` 建试验（`purpose: admin_trial`）和常规目标两个工作区，`set_admin_agent_targets` 选目标，试验工作区没有拒绝原因。`container`：新的管理员对话（`new_chat {agentKind:'admin_agent'}`）这一轮跑完、`completed`，`docker inspect` 读到它跑在 `nexttime-admin-<principal>` 里：运行中，`nexttime.role=admin`，`nexttime.principal` 和 `nexttime.workspace` 是管理员在试验工作区的 Principal 和试验工作区；这个 Principal 没有入口容器。`tools`：fake-llm 看 pi 交给模型的工具列表：有这一轮调用的三个管理员智能体工具，没有只属于入口 agent 的四个（`record_decision`、`record_procedure_followed`、`report_task_outcome`、`propose_goal`；`invoke_worker` 和 `request_connection` 自 AA5a-1 起两种模式都有，管理员智能体只能在试验工作区里用），回 `ADMIN_TOOLS=ok`；这两份名单由 `packages/platform-extension/src/fake-llm-admin-tools.test.ts` 钉在两种模式各自注册的工具上。`proposed`：三次调用依次是 `agent_list_proposal_targets`、`platform_state_connectors`、`propose_admin_proposal`，都没出错；每次都带着容器里的管理员 Handle 到内核，内核每次复查这个人仍是平台管理员、试验工作区仍启用、开关仍开；提案 `proposed`、一个目标，智能体读回的门主机实例不带地址（`addressWithheld`）。`proposal`：管理员在平台面读到的提案是智能体提的（`origin = agent`）、目标工作区一段、平台一段（一个 `gate_instance`）、都未决定。`audit`：试验工作区里这份提案的 `propose_admin_proposal` 审计只有一行，操作者是管理员在试验工作区的 Principal，`sessionKind = admin_agent`，会话就是 `get_admin_agent_status` 显示开着的那个。拒绝路径（开关关、会话已结束、不再是管理员、没选目标、入口对话的一轮）由内核集成测试覆盖（`fake-admin-propose.integration.test.ts` 和管理员智能体、gateway 的测试），这里只在真容器里跑一遍正路 |
-| `admin-agent-tickets-*` | S11 AA5c（AA5 方案 §5.8 的试验一半）：在上一行的试验工作区里，管理员智能体接入测试工单系统、起草工单 Worker 并试跑一次，人只做录凭证、发布、授权门、批准；只在上一行跑了时跑（见 §2） | `gate`：`accept-s2-tickets-gate` 用试验工作区铸的连接密钥起来、健康检查通过。`request`：第一轮只调了 `request_connection`（http，`helpdesk`），`connection_requests` 这一行是管理员的 Principal 提的、`admin_agent_session_id` 是 `get_admin_agent_status` 显示的会话。`connect`：人用这张请求的 id 完成连接（`create_connection`，测试凭证直送门的 ConnectedAccount 存储，清单来源 `/tickets/openapi.json`），请求变成 `completed` 且指向新门；连接器 `http` 是 `self_serve`，试验工作区没有 `connection.trial_self_connect` 审计（没用到 #954 的试验例外）。`operations`：门导入成 `tickets.list`、`tickets.get`（observe）和 `tickets.create`（execute），按读到的发布。`grant`：门授权给管理员在试验工作区的 Principal。`draft`：第二轮依次调 `find_operations`、投影的 `<门>_tickets_list`、两次 `propose_skill`、`propose_worker_definition`，都没出错；这一轮没交给它 `*_tickets_create`（`TICKETS_TOOLS=ok`）；它读到至少两张单；两份 Skill 和 Worker 都是草稿、`origin = agent`，Worker 只声明这个门和 `request_action`。`publish`：人发布两份 Skill（带 `draftDigest`）和 Worker。`try`：第三轮只调了 `invoke_worker`，回了 Task。`approve`：Worker 的 `tickets.create` 落成一条待人审批的 ActionRequest（为管理员），人批准后 `executed`，Task `completed`。`book`：人经门读 `tickets.list`，比试跑前恰好多一张，标题是本次的、`via: trial`、优先级 `normal`；这个门上只有这一条 ActionRequest。`task`：Task 为管理员、`admin_agent_session_id` 是同一个会话，三轮里会话没换。`audit`：试验工作区里 `request_connection`、两次 `propose_skill`、`propose_worker_definition`、`invoke_worker` 是管理员的 Principal、`sessionKind = admin_agent`、同一会话；`create_connection`、两次 `publish_skill`、`publish_worker_definition` 和这条 ActionRequest 的 `action_request.approve` 不带会话（人）。`no-token-leak`：测试凭证不在内核库任何表里（同 S2.13 的检查，`token_rows_in_kernel_db`）。`human`：人做过的事只有「录凭证」「试验工作区发布」「批准试验动作」和「授权门（试验）」四类；后一类 AA5 方案没列，打一行 NOTE 作 D-W5 证据 |
+| `admin-agent-tickets-*` | S11 AA5c（AA5 方案 §5.8）：在上一行的试验工作区里，管理员智能体接入测试工单系统、起草工单 Worker 并试跑一次，再提一份管理员提案把它带进上一行选的目标工作区；人只做录凭证、发布、授权门、批准、按部分审阅确认与应用、启用门、验证；只在上一行跑了时跑（见 §2） | `gate`：`accept-s2-tickets-gate` 用试验工作区铸的连接密钥起来、健康检查通过。`request`：第一轮只调了 `request_connection`（http，`helpdesk`），`connection_requests` 这一行是管理员的 Principal 提的、`admin_agent_session_id` 是 `get_admin_agent_status` 显示的会话。`connect`：人用这张请求的 id 完成连接（`create_connection`，测试凭证直送门的 ConnectedAccount 存储，清单来源 `/tickets/openapi.json`），请求变成 `completed` 且指向新门；连接器 `http` 是 `self_serve`，试验工作区没有 `connection.trial_self_connect` 审计（没用到 #954 的试验例外）。`operations`：门导入成 `tickets.list`、`tickets.get`（observe）和 `tickets.create`（execute），按读到的发布。`grant`：门授权给管理员在试验工作区的 Principal。`draft`：第二轮依次调 `find_operations`、投影的 `<门>_tickets_list`、两次 `propose_skill`、`propose_worker_definition`，都没出错；这一轮没交给它 `*_tickets_create`（`TICKETS_TOOLS=ok`）；它读到至少两张单；两份 Skill 和 Worker 都是草稿、`origin = agent`，Worker 只声明这个门和 `request_action`。`publish`：人发布两份 Skill（带 `draftDigest`）和 Worker。`try`：第三轮只调了 `invoke_worker`，回了 Task。`approve`：Worker 的 `tickets.create` 落成一条待人审批的 ActionRequest（为管理员），人批准后 `executed`，Task `completed`。`book`：人经门读 `tickets.list`，比试跑前恰好多一张，标题是本次的、`via: trial`、优先级 `normal`；这个门上只有这一条 ActionRequest。`task`：Task 为管理员、`admin_agent_session_id` 是同一个会话，五轮里会话没换。`propose`：第四轮只调了 `agent_list_proposal_targets`、`propose_admin_proposal`；`get_admin_proposal` 读到两部分都是 `proposed`：工作区部分给目标工作区、四项依次是 `skill_version`×2、`worker_definition_version`、`operation_version`，平台部分一项 `gate_instance`；回给智能体的平台部分 `addressWithheld`、不带地址和清单来源。`platform`：`preview_platform_segment` 一项、`authority_widening`、`target/added`，连接器 `accept-s2-tickets`；按序号确认、应用；`get_gate_instance` 等到 `discovered`、看到三个 Operation（`tickets.create` execute/medium，`tickets.get`、`tickets.list` observe/low）；经 gate-host 录生产凭证（`issue_gate_host_token` 换的令牌，POST 200，`credentialMode = shared`）；`update_gate_instance` 启用。`enable`：所有者 `preview_gate_instance_enable` 可启用、三个 Operation、带清单摘要，`enable_gate_instance` 按这个摘要启用；经新 Gatekeeper 读 `tickets.list`，`readBy = production`、张数与试跑后相同。`apply`：`preview_admin_proposal_segment` 四项都是 `authority_widening`（`skill/added`×2、`worker/added`、`operation.blast_radius/loosened`）、没有阻断；四项按序号确认、应用，回了 change segment；`verify_change_segment` `verified`、四项 `in_effect`、没有要求（不探门健康）；Worker 已发布、`origin = agent`、没有门、能力只有 `request_action`；`tickets.create` 最新发布版 execute、low、仍不可自动批准。`reads`：平台的 `get_admin_proposal` 和第五轮智能体的 `agent_get_admin_proposal`（只调了它）都读到两部分 `applied`，两边的键里都没有 `TICKETS_DRY_RUN_KEYS` 里的任何一个。`audit`：试验工作区里 `request_connection`、两次 `propose_skill`、`propose_worker_definition`、`invoke_worker`、`propose_admin_proposal` 是管理员的 Principal、`sessionKind = admin_agent`、同一会话；`create_connection`、两次 `publish_skill`、`publish_worker_definition` 和这条 ActionRequest 的 `action_request.approve` 不带会话（人）。`audit-production`：目标工作区里四条 `change_item.apply`（序号 1–4）`origin: agent`、提案人是这位管理员、带确认人和本次 change segment，是所有者做的；所有者的启用、应用、验证行都不带会话；平台的 `apply_platform_segment` 那一行带提案 id、是这位管理员、不带会话。`no-token-leak`：试验和生产两份凭证都不在内核库任何表里（同 S2.13 的检查，`token_rows_in_kernel_db`）；生产那一半没有开单。`human`：人做过的事只有「录凭证」「试验工作区发布」「批准试验动作」「按段审阅与逐项确认」「每段应用」「启用门」，前一类、后三类各两次，外加「授权门（试验）」「验证」两类；这两类 AA5 方案没列，各打一行 NOTE 作 D-W5 证据 |
 | `goals-planner-model` / `goals-planner-model-reset` | S6、S13 的前置：目标规划器跑在请求人的模型上 | 目标场景开始前把 alice 的 AgentProfile 模型设成 fake 模型（`--real` 不跑目标场景）——规划器自己不定模型、跑请求人的模型，accept_s2 只给入口定义和各 Worker 钉了同一个模型，不设的话规划器会跑在栈的默认提供方上（主机上是真实模型）。S6 的规划轮要等它的验收检查重试完才开，所以设一次、到 S6 和 S4 反向都收尾后再设回 `null`（S2 之前）；中途失败时 `cleanup_step` 也会设回 |
 | `s1-*` | S11 §7.2 S1：用户发起目标（a、b 并行，c 依赖 a、b）并确认后不再发消息（GO7a，`scripts/lib/accept-s2-goals.sh`） | 新对话里发「发起三步验收目标 GOAL_NONCE=…」，`entryGoalDagChatScenario`（fake-llm）驱动入口 agent `find_workers` → `find_operations('stock')` → `propose_goal`（三步都跑 ops-runner 的 `goal_step` 剧本，c 的 `dependsOn` 是 a、b；验收同第 9 步）。`proposed`：计划读出来 a、b 无依赖、c 依赖两者；`confirmed`：alice 在对话外以人通道确认，一次建出三个 StepRun；`achieved`：轮询至多 360s 到 `completed / achieved / verified_by_check`，三步各成功一次、各一个 Task；`order`：c 的尝试建于 a、b 都结束之后（a、b 是否真的重叠取决于请求者的并发配额，只报告不判定）；`no-new-turn`：从确认到结束，整个 workspace 没有新的 `agent_turn` Activity；`milestones`：发起对话里依次是 `propose`、`confirm`、`verify`、`complete`，a、b、c 各一条完成的 Task 状态行 |
 | `s11-*` | S11 §7.2 S11：一步的执行动作被拒绝 → 步骤与目标进入需要决定，不自动重试同一动作 | alice 以人通道提一步目标（ops-runner 的 `goal_ledger` 剧本：经 http 门调 `ledger.add` 往夹具账本写一条，`await_decision: true`；`maxAttempts` 2，留一次尝试不用），确认；等这条写入 `pending_approval` 后 alice `reject`。`needs-decision`：目标 `paused(needs_decision)`，步骤 `failed / action_refused`、一次尝试、那条写入 `rejected`；`no-retry`：15s 后状态不变、仍一次尝试一个 Task，夹具账本在这个键下计数 0（门侧根本没执行）；`cancelled`：alice `cancel_goal` 收尾 |
@@ -565,9 +595,12 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
 剩下的是一个谁也登录不了的管理员，它的密码只在那次 shell 里存在过。降级成功时账号仍是启用的普通用户（它不能停用自己），
 所以每跑一次就多一个谁也登录不了的普通用户 `accept-s2-admin-<nonce>`，要清理时在「平台 · 用户」里停用。管理员建好了、控制台登录却失败时，别的什么都没建，
 脚本也降不了它（bootstrap CLI 只会建），收尾记一行 `cleanup: administrator <uuid> (accept-s2-admin-<nonce>) was created but its console login failed …`，
-到「平台 · 用户」里把它降为普通用户。工单旅程的收尾（`admin_agent_tickets_cleanup`）在它之前跑、也不看 `--keep`：只在试跑的 Task 还没结束时
-取消它（`cancel_task`），其余都随别处收掉——门容器随下面的 `rm -sf`，试验工作区随 `admin_agent_cleanup` 停用，工单账本是夹具内存、随夹具容器
-消失；门的数据目录（它的 ConnectedAccount 存储）和其他 accept-s2 门的一样留着。
+到「平台 · 用户」里把它降为普通用户。工单旅程的收尾（`admin_agent_tickets_cleanup`）在它之前跑、也不看 `--keep`，只打日志、不判失败：
+先回滚目标工作区里应用的那一段（`preview_roll_back_change_segment` 后 `roll_back_change_segment`，带上预览里要确认的序号），再回滚平台部分
+（`roll_back_platform_change_segment`：gate-host 实例变成停用；应用时新建的连接器 `accept-s2-tickets` 不随回滚删除，留着）；
+平台部分没应用过时改为撤回提案（`withdraw_admin_proposal`）；试跑的 Task 还没结束时取消它（`cancel_task`）。其余都随别处收掉——门容器随下面的
+`rm -sf`，试验和目标工作区随 `admin_agent_cleanup` 停用，工单账本是夹具内存、随夹具容器消失；门的数据目录（它的 ConnectedAccount 存储）
+和其他 accept-s2 门的一样留着；gate-host 加密存储里的那份生产凭证也留着（实例停用后不再用到），实例的行和审计保留。
 
 `--keep` 不传时，`cleanup_step` 接着会：先收尾第 9 步与目标场景确认过、却没看到结束的目标（轮询超时、断言失败）——
 否则它在脚本退出后还会继续：推进器在恢复生产 provider 之后重试那一步，平台验收对已删的门重试，
