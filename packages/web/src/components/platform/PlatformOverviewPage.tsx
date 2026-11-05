@@ -17,6 +17,7 @@ import { type ProviderStatusKind, describeProviderHealth } from '../../lib/provi
 import { hrefs } from '../../lib/router.js';
 import { labelText, statusChipStyle } from '../../lib/status-tone.js';
 import { BindApiKeyForm } from '../BindApiKeyForm.js';
+import { AuditRefusedChip } from '../audit/AuditRefusedChip.js';
 import { EmptyState as KitEmptyState } from '../kit/empty-state.js';
 import { KeyValue } from '../kit/key-value.js';
 import { PageHeader } from '../kit/page-header.js';
@@ -569,7 +570,13 @@ function PlatformOverviewBody({
               <DataRow
                 key={row.id}
                 testId="platform-overview-audit-row"
-                title={actionLabel(row.action, t)}
+                className="audit-row"
+                title={
+                  <>
+                    {actionLabel(row.action, t)}
+                    <AuditRefusedChip payload={row.payload} detailsBelow={false} />
+                  </>
+                }
                 meta={`${formatAuditActor(row, t)} · ${formatDateTime(row.createdAt)}`}
               />
             ))}
