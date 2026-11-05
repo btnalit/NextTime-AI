@@ -1221,7 +1221,8 @@ function BlockerLine({
  *  previewing does not hold (binding grants nothing: 系统与授权 does). Until they hold them, a goal
  *  step using the Worker is refused outright (`authority_lost: gates`), and so is delegating to it
  *  when it holds an execute-class capability (`InvokeWorkerAttenuationError`); one that only
- *  observes drops those gates and goes on (#501 on #968, P3-1). */
+ *  observes drops those gates and goes on (#501 on #968, P3-1). The owner cannot tell those apart
+ *  here, so delegating "may be" refused (UX re-check of #968). */
 function workerGateBindingText(
   binding: AdminProposalWorkerGateBindingWire,
   gates: readonly { readonly id: string; readonly name: string }[],
@@ -1243,12 +1244,12 @@ function workerGateBindingText(
     `接入的系统：它要用 ${systems}，应用时绑到本工作区的 ${names}`,
     `Systems: it acts on ${systems}; applying binds it to ${names} here`,
   );
-  return notHeld.length === 0
-    ? bound
-    : t(
-        `${bound}。其中 ${notHeld.join('、')} 你还没有授权给自己。授权之前，目标里用到这个 Worker 的步骤会被拒绝；它能在这些门上执行操作的话，你的智能体委派它也会被拒。要先在「系统与授权」里授权`,
-        `${bound}. You do not hold ${notHeld.join(', ')}. Until you grant them to yourself on Systems & access, a goal step that uses this Worker is refused, and so is your agent delegating to it if it can act on those gates`,
-      );
+  if (notHeld.length === 0) return bound;
+  const them = notHeld.length === 1 ? 'it' : 'them';
+  return t(
+    `${bound}。其中 ${notHeld.join('、')} 你还没有授权给自己：授权之前，目标里用到这个 Worker 的步骤会被拒绝，你的智能体委派它也可能被拒。先在「系统与授权」里授权`,
+    `${bound}. You do not hold ${notHeld.join(', ')} yet: until you grant ${them} to yourself on Systems & access, goal steps that use this Worker are refused, and your agent may be refused when it delegates to it`,
+  );
 }
 
 /** 「Skill docker-triage：新建」, 「Worker ops-runner：第 2 版 → 新的一版」 — what one item does to
