@@ -2377,6 +2377,15 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **Handle**：管理员智能体的 Handle 带上这个人在试验工作区的门（与入口智能体 Handle 同一个门集合）；门授权变动时，它的 Handle 和入口智能体的一起吊销（会话不动）。没有迁移，只需回滚代码。
 - **回滚**（见 §6 两行）：task 0013 和 governance 0037 回滚时只回代码即可（新列可空、不回填，旧版本不写这一列）；要连列一起删，按两个迁移头注释写的顺序：先删 trigger，再删 function，再 drop column，最后删 `schema_migrations` 里对应的行。
 
+### 3.120 管理员智能体对同一目标反复被拒后熔断（#956，S11 AA5a-2，遗留 595，0.61.0 之后的下一版）
+
+带一个迁移，随 `apply-release.sh` 自动应用：governance `0038_admin_proposal_rejection_reads`（只建一个 security definer 函数 `admin_proposal_rejections_since(timestamptz)`）。不改 compose；两个新的可选环境变量，主机不设就用默认值，不需要操作。`ADMIN_AGENT_ENABLED` 在主机上没开，所以下面的行为变化对主机没有影响。
+
+- **发版说明可写**：同一位平台管理员提给同一个目标工作区的工作区部分，在 7 天内被拒满 3 次后，管理员智能体再提议到这个目标会被拒绝（429 `admin_proposal_target_rejected_repeatedly`），什么也不写入；能让计数降到上限以下的那次拒绝移出窗口后自动恢复。每次拦下都在试验工作区写一行审计，控制台审计行上写明原因、恢复时间和去哪里看拒绝理由；智能体看不到目标 id、提案 id 和所有者写的理由。
+- **环境变量**（可选，`secrets/kernel.env`）：`ADMIN_PROPOSAL_REJECTION_LIMIT`（默认 3）、`ADMIN_PROPOSAL_REJECTION_WINDOW_DAYS`（默认 7）。必须是不小于 1 的整数，空值按默认；写错的值会让内核在启动时停下，报错里写出变量名和默认值。改了要 `docker compose up -d --force-recreate kernel`。
+- **线上**：新错误码 `admin_proposal_target_rejected_repeatedly`（HTTP 429；WebSocket 是 `QUOTA_EXCEEDED` -32012，和每日配额同类）；`propose_admin_proposal` 的说明加上这条。契约快照不变。
+- **回滚**（见 §6 一行）：上一版不调这个函数，只回滚代码就行；要删函数：`drop function admin_proposal_rejections_since(timestamptz)`，再删 `schema_migrations` 里 governance 38 那一行。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -2549,6 +2558,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.61.0 之后的下一版 | governance `0036_admin_agent_targets`（#937，AA4c-1）：平台表 `admin_agent_targets` 及其守卫 `admin_agent_targets_guard`、读函数 `admin_agent_chosen_targets()` / `admin_proposal_target_chosen(uuid)`、工作区部分守卫 `admin_proposal_segments_target_chosen` | 有条件可逆 | 旧代码不认识这张表，照常提议、应用工作区部分，会被这里的守卫拒绝 | 只回退代码前先 `drop trigger admin_proposal_segments_target_chosen on admin_proposal_segments` 并删它的函数。要撤迁移：删这个守卫、两个读函数和表，再删 `schema_migrations` 里 governance 36 那一行（见 0036 文件头） |
 | v0.61.0 之后的下一版 | task `0013_task_admin_agent_session`（#954，AA5a-1）：`tasks.admin_agent_session_id`（可空、不回填）、外键 `tasks_admin_agent_session_fk`、守卫 `tasks_admin_agent_session_guard` 及其函数（插入时只许本工作区、代表 `on_behalf_of` 的 `admin_agent` 会话且工作区是试验工作区；写入后不改） | 可逆 | 旧代码插入、读取都写明列名，从不写这一列，插入时为 NULL 能过守卫；管理员智能体派的 Task 仍在表里，旧代码只是不显示来源 | 只需回退代码。要撤迁移：`drop trigger tasks_admin_agent_session_guard on tasks`、删它的函数、`alter table tasks drop column admin_agent_session_id`（外键随之删除），再删 `schema_migrations` 里 task 13 那一行（见 0013 文件头） |
 | v0.61.0 之后的下一版 | governance `0037_connection_request_admin_agent_session`（#954，AA5a-1）：`connection_requests.admin_agent_session_id`（可空、不回填）、外键 `connection_requests_admin_agent_session_fk`、守卫 `connection_requests_admin_agent_session_guard` 及其函数（插入时只许本工作区、代表 `requested_by` 的 `admin_agent` 会话且工作区是试验工作区；写入后不改） | 可逆 | 旧代码插入、读取都写明列名，从不写这一列；完成、取消请求时不动这一列，能过守卫 | 只需回退代码。要撤迁移：`drop trigger connection_requests_admin_agent_session_guard on connection_requests`、删它的函数、`alter table connection_requests drop column admin_agent_session_id`，再删 `schema_migrations` 里 governance 37 那一行（见 0037 文件头） |
+| v0.61.0 之后的下一版 | governance `0038_admin_proposal_rejection_reads`（#956，AA5a-2，遗留 595）：security definer 函数 `admin_proposal_rejections_since(timestamptz)`，只回答事务自己的平台用户在给定时间之后被拒的工作区部分（目标、提案、部分、时间，不含理由） | 可逆 | 只加函数，旧代码不调它 | 只需回退代码。要撤迁移：`drop function admin_proposal_rejections_since(timestamptz)`，再删 `schema_migrations` 里 governance 38 那一行（见 0038 文件头） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
