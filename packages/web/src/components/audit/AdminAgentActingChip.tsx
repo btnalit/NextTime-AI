@@ -18,12 +18,18 @@ export function actedByAdminAgent(payload: unknown): boolean {
  * Renders nothing for any other row.
  */
 export function AdminAgentActingChip({ payload }: { readonly payload: unknown }) {
-  const t = useT();
   if (!actedByAdminAgent(payload)) return null;
+  return <AdminAgentActingMark testId="audit-admin-agent" />;
+}
+
+/** The same mark wherever a resource records the admin agent session that made it in the
+ *  person's name (S11 AA5b: a connection request's or a Task's `adminAgentSessionId`). */
+export function AdminAgentActingMark({ testId }: { readonly testId: string }) {
+  const t = useT();
   return (
     <span
       className="chip chip-s chip-warn"
-      data-testid="audit-admin-agent"
+      data-testid={testId}
       title={t(
         '这一条是这位平台管理员的管理员智能体以本人名义做的',
         'This was done by this platform administrator’s admin agent, in their name',

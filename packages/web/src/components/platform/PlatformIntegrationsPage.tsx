@@ -380,8 +380,8 @@ function connectorModeDescriptionBody(
   }
   if (pendingMode === 'platform_preset' && !catalogOnly) {
     return t(
-      '切到平台预置后，工作区只能从目录启用它的实例，不能再自己连这一类系统；已经建立的连接不受影响。改错了可以随时再切回来。',
-      'As a platform preset, workspaces can only enable its instances from the catalog and can no longer connect this kind of system themselves; existing connections are unaffected. Switch it back at any time if this was a mistake.',
+      '切到平台预置后，工作区只能从目录启用它的实例，不能再自己连这一类系统；已经建立的连接不受影响。唯一的例外是试验工作区：平台管理员在那里仍可以自己连这一类系统，每次都单独记一条审计。改错了可以随时再切回来。',
+      'As a platform preset, workspaces can only enable its instances from the catalog and can no longer connect this kind of system themselves; existing connections are unaffected. The one exception is a trial workspace: a platform administrator can still connect this kind of system there, and each time is audited on its own. Switch it back at any time if this was a mistake.',
     );
   }
   return t(

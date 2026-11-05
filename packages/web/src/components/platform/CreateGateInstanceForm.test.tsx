@@ -507,6 +507,10 @@ describe('CreateGateInstanceForm', () => {
         '所有工作区都不能再自己接入 mcp 系统',
       ),
     );
+    // S11 AA5b: with the trial-workspace exception (AA5a-1).
+    expect(within(form).getByTestId('cgi-connector-generic-note').textContent).toContain(
+      '试验工作区里的平台管理员除外',
+    );
 
     fireEvent.click(within(form).getByTestId('create-gate-instance-submit'));
     await waitFor(() => expect(sent).toMatchObject({ gateId: 'widgets-2', connector: 'mcp' }));

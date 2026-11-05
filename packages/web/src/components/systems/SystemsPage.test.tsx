@@ -106,12 +106,28 @@ function scriptedHttp(
   };
 }
 
-function renderPage(http: CapabilityCaller, platformAdmin = false) {
+function renderPage(http: CapabilityCaller, platformAdmin = false, trialWorkspace = false) {
   return render(
     <PermissionsProvider>
-      <SystemsPage http={http} platformAdmin={platformAdmin} />
+      <SystemsPage http={http} platformAdmin={platformAdmin} trialWorkspace={trialWorkspace} />
     </PermissionsProvider>,
   );
+}
+
+/** A connection request row as `list_connection_requests` returns it. */
+function requestRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'cr-1',
+    status: 'requested',
+    kind: 'http',
+    target: 'https://inventory.example.com',
+    requestedBy: 'p-2',
+    gatekeeperId: null,
+    completedBy: null,
+    requestedAt: '2026-09-01T00:00:00.000Z',
+    completedAt: null,
+    ...overrides,
+  };
 }
 
 /** A workspace Gatekeeper linked to the platform instance `stock`. */
@@ -1238,5 +1254,147 @@ describe('SystemsPage', () => {
     await screen.findAllByTestId('gatekeeper-card');
     expect(member.calls.some((call) => call.name === 'preview_gate_instance_enable')).toBe(false);
     expect(screen.queryByTestId('gatekeeper-governance-drift')).toBeNull();
+  });
+});
+
+describe('SystemsPage: S11 AA5b — the admin chat opens one connection request here', () => {
+  afterEach(() => {
+    window.history.replaceState(null, '', '#/');
+  });
+
+  it('`?complete=<id>` opens that request’s 完成连接 drawer, and the query is dropped once read', async () => {
+    window.history.replaceState(null, '', '#/govern/systems?complete=cr-2');
+    const http = scriptedHttp({
+      list_connection_requests: () => ({
+        items: [requestRow(), requestRow({ id: 'cr-2', target: 'https://tickets.example.com' })],
+      }),
+    });
+    renderPage(http);
+    const drawer = await screen.findByTestId('complete-connection-drawer');
+    expect(drawer.textContent).toContain('https://tickets.example.com');
+    expect(window.location.hash).toBe('#/govern/systems');
+    expect(screen.queryByTestId('linked-request-note')).toBeNull();
+  });
+
+  it('a link followed while the page is open opens the drawer too', async () => {
+    window.history.replaceState(null, '', '#/govern/systems');
+    const http = scriptedHttp({
+      list_connection_requests: () => ({ items: [requestRow()] }),
+    });
+    renderPage(http);
+    await screen.findByTestId('request-row');
+    expect(screen.queryByTestId('complete-connection-drawer')).toBeNull();
+    window.history.replaceState(null, '', '#/govern/systems?complete=cr-1');
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+    await screen.findByTestId('complete-connection-drawer');
+    expect(window.location.hash).toBe('#/govern/systems');
+  });
+
+  it('a request already completed says so, links the connected system, and lists every request', async () => {
+    window.history.replaceState(null, '', '#/govern/systems?complete=cr-1');
+    const http = scriptedHttp({
+      list_connection_requests: () => ({
+        items: [
+          requestRow({
+            status: 'completed',
+            gatekeeperId: '11111111-1111-4111-8111-111111111111',
+            completedBy: 'p-self',
+            completedAt: '2026-09-02T00:00:00.000Z',
+          }),
+        ],
+      }),
+    });
+    renderPage(http);
+    const note = await screen.findByTestId('linked-request-note');
+    expect(note.textContent).toContain('已经完成了');
+    expect(within(note).getByTestId('linked-request-gate').getAttribute('href')).toBe(
+      '#/govern/systems/11111111-1111-4111-8111-111111111111',
+    );
+    // The filter moved to 全部, so the completed row is in the list.
+    expect(await screen.findByTestId('request-row')).toBeTruthy();
+    expect(screen.queryByTestId('complete-connection-drawer')).toBeNull();
+  });
+
+  it('a cancelled request says nothing was connected', async () => {
+    window.history.replaceState(null, '', '#/govern/systems?complete=cr-1');
+    const http = scriptedHttp({
+      list_connection_requests: () => ({ items: [requestRow({ status: 'cancelled' })] }),
+    });
+    renderPage(http);
+    const note = await screen.findByTestId('linked-request-note');
+    expect(note.textContent).toContain('已经取消了，什么也没有接入');
+    expect(within(note).queryByTestId('linked-request-gate')).toBeNull();
+  });
+
+  it('a request this workspace does not have says it may be in another workspace', async () => {
+    window.history.replaceState(null, '', '#/govern/systems?complete=cr-9');
+    const http = scriptedHttp({
+      list_connection_requests: () => ({ items: [requestRow()] }),
+    });
+    renderPage(http);
+    const note = await screen.findByTestId('linked-request-note');
+    expect(note.textContent).toContain('可能是在另一个工作区里提出的');
+    expect(screen.queryByTestId('complete-connection-drawer')).toBeNull();
+  });
+
+  it('a member, who cannot read the requests, is told so once and no drawer opens', async () => {
+    window.history.replaceState(null, '', '#/govern/systems?complete=cr-1');
+    const http = scriptedHttp({
+      get_workspace: () => workspace('member'),
+      list_connection_requests: () => ({ items: [requestRow()] }),
+    });
+    renderPage(http);
+    await screen.findByTestId('requests-forbidden');
+    expect(screen.queryByTestId('linked-request-note')).toBeNull();
+    expect(screen.queryByTestId('complete-connection-drawer')).toBeNull();
+    expect(http.calls.some((call) => call.name === 'list_connection_requests')).toBe(false);
+  });
+});
+
+describe('SystemsPage: S11 AA5b — requests in a trial workspace', () => {
+  it('an owner who is not a platform administrator reads who completes a preset kind there', async () => {
+    const http = scriptedHttp({
+      list_connection_requests: () => ({
+        items: [requestRow(), requestRow({ id: 'cr-2', kind: 'ssh', target: 'ops@host' })],
+      }),
+    });
+    renderPage(http, false, true);
+    const rows = await screen.findAllByTestId('request-row');
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0] as HTMLElement).getByTestId('request-trial-note').textContent).toContain(
+      '只有平台管理员能完成这个连接',
+    );
+    // The exception covers only the generic connectors (http, mcp).
+    expect(within(rows[1] as HTMLElement).queryByTestId('request-trial-note')).toBeNull();
+    // The 完成 button stays: the platform may well let the workspace connect it itself.
+    expect(within(rows[0] as HTMLElement).getByRole('button', { name: '完成' })).toBeTruthy();
+  });
+
+  it('a platform administrator, or any workspace that is not a trial one, reads no such note', async () => {
+    const items = { items: [requestRow()] };
+    renderPage(scriptedHttp({ list_connection_requests: () => items }), true, true);
+    await screen.findByTestId('request-row');
+    expect(screen.queryByTestId('request-trial-note')).toBeNull();
+    cleanup();
+    renderPage(scriptedHttp({ list_connection_requests: () => items }), false, false);
+    await screen.findByTestId('request-row');
+    expect(screen.queryByTestId('request-trial-note')).toBeNull();
+  });
+
+  it('a request the admin agent made is marked so on its row', async () => {
+    const http = scriptedHttp({
+      list_connection_requests: () => ({
+        items: [
+          requestRow({ adminAgentSessionId: '22222222-2222-4222-8222-222222222222' }),
+          requestRow({ id: 'cr-2' }),
+        ],
+      }),
+    });
+    renderPage(http, true, true);
+    const rows = await screen.findAllByTestId('request-row');
+    expect(within(rows[0] as HTMLElement).getByTestId('request-admin-agent').textContent).toContain(
+      '由管理员智能体代为',
+    );
+    expect(within(rows[1] as HTMLElement).queryByTestId('request-admin-agent')).toBeNull();
   });
 });

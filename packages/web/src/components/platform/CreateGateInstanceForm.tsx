@@ -877,15 +877,15 @@ function CustomGateInstanceForm({
           data-testid="cgi-connector-generic-note"
         >
           {t(
-            `通用接入包「${transportKind}」已是平台预置：实例启用后工作区就能在目录里看到它；工作区现在本来就不能自己接入 ${transportKind} 系统。`,
-            `The generic connector "${transportKind}" is already a platform preset: once enabled, workspaces see the instance in the catalog; they already cannot connect ${transportKind} systems themselves.`,
+            `通用接入包「${transportKind}」已是平台预置：实例启用后工作区就能在目录里看到它；工作区现在本来就不能自己接入 ${transportKind} 系统（试验工作区里的平台管理员除外）。`,
+            `The generic connector "${transportKind}" is already a platform preset: once enabled, workspaces see the instance in the catalog; they already cannot connect ${transportKind} systems themselves (a platform administrator in a trial workspace still can).`,
           )}
         </p>
       ) : (
         <Notice tone="warn" testId="cgi-connector-generic-note">
           {t(
-            `工作区要在目录里看到这个实例，得把通用接入包「${transportKind}」设为平台预置；那样所有工作区都不能再自己接入 ${transportKind} 系统（已建立的连接不受影响）。不想这样，就选「这个系统自己的接入包」。`,
-            `For workspaces to see this instance in the catalog, the generic connector "${transportKind}" must become a platform preset — then no workspace can connect ${transportKind} systems itself any more (existing connections are unaffected). To avoid that, choose "A connector of its own for this system".`,
+            `工作区要在目录里看到这个实例，得把通用接入包「${transportKind}」设为平台预置；那样所有工作区都不能再自己接入 ${transportKind} 系统（已建立的连接不受影响；试验工作区里的平台管理员除外）。不想这样，就选「这个系统自己的接入包」。`,
+            `For workspaces to see this instance in the catalog, the generic connector "${transportKind}" must become a platform preset — then no workspace can connect ${transportKind} systems itself any more (existing connections are unaffected; a platform administrator in a trial workspace still can). To avoid that, choose "A connector of its own for this system".`,
           )}
         </Notice>
       )}

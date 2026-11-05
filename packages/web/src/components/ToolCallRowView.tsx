@@ -20,12 +20,10 @@ import {
   shortId,
 } from '../lib/format.js';
 import { type Translate, sentenceGap, useT } from '../lib/i18n.js';
-import {
-  type ProposedAdminProposal,
-  proposedAdminProposalOf,
-} from '../lib/proposed-admin-proposal.js';
+import { transportKindLabel } from '../lib/labels.js';
 import { hrefs } from '../lib/router.js';
 import type { ToolCallRow } from '../lib/streaming-reducer.js';
+import { type MadeResource, madeResourceOf } from '../lib/tool-call-made.js';
 import { type ToolCallRecord, previewDisplayText } from '../lib/tool-call-record.js';
 import { useGatekeeperDirectory } from './approvals/useDirectoryNames.js';
 import { Notice } from './kit/notice.js';
@@ -248,8 +246,7 @@ export function ToolCallRowView({
       ? outcomeOfLiveResult(row.result)
       : null;
   const actionChip = action ? actionOutcomeChip(action, t) : null;
-  const proposed =
-    row.status === 'ended' && !failed ? proposedAdminProposalOf(row.name, row.result) : null;
+  const made = row.status === 'ended' && !failed ? madeResourceOf(row.name, row.result) : null;
   const chipClass = running
     ? 'chip-info chip-live'
     : failed
@@ -296,7 +293,7 @@ export function ToolCallRowView({
               />
             ) : null}
             <WaitingNote outcome={action} />
-            {proposed !== null ? <ProposedAdminProposalLink proposal={proposed} /> : null}
+            {made !== null ? <MadeResourceLink made={made} /> : null}
             <pre className="code-block">{resultText}</pre>
           </>
         ) : null}
@@ -324,27 +321,50 @@ function actionOutcomeOfRecord(record: ToolCallRecord): ActionOutcome | null {
     : null;
 }
 
-/** The admin proposal a persisted `propose_admin_proposal` call made — only one that finished. */
-function proposedAdminProposalOfRecord(record: ToolCallRecord): ProposedAdminProposal | null {
+/** What a persisted call made (`lib/tool-call-made`) — only for one that finished. */
+function madeResourceOfRecord(record: ToolCallRecord): MadeResource | null {
   return record.outcome === 'done' && record.result
-    ? proposedAdminProposalOf(record.name, record.result.text)
+    ? madeResourceOf(record.name, record.result.text)
     : null;
 }
 
-/** S11 AA4e (UX P2-2 on #945): where the proposal this call made is reviewed — linked from the
- *  call's own result, not from whatever the model wrote about it. */
-function ProposedAdminProposalLink({ proposal }: { readonly proposal: ProposedAdminProposal }) {
+/** S11 AA4e (UX P2-2 on #945), AA5b: where what this call made is looked at next — linked from the
+ *  call's own result, not from whatever the model wrote about it: the proposal to review, the Task
+ *  to follow, the connection request a person completes. */
+function MadeResourceLink({ made }: { readonly made: MadeResource }) {
   const t = useT();
-  return (
-    <span className="text-small" data-testid="tool-call-admin-proposal">
-      <RouteLink
-        href={hrefs.platformAdminProposals('proposals', proposal.id)}
-        testId="tool-call-admin-proposal-link"
-      >
-        {t('在 平台 · 管理员提案 查看', 'View it in Platform · Admin proposals')}
-      </RouteLink>
-    </span>
-  );
+  switch (made.kind) {
+    case 'admin_proposal':
+      return (
+        <span className="text-small" data-testid="tool-call-admin-proposal">
+          <RouteLink
+            href={hrefs.platformAdminProposals('proposals', made.id)}
+            testId="tool-call-admin-proposal-link"
+          >
+            {t('在 平台 · 管理员提案 查看', 'View it in Platform · Admin proposals')}
+          </RouteLink>
+        </span>
+      );
+    case 'task':
+      return (
+        <span className="text-small" data-testid="tool-call-task">
+          <RouteLink href={hrefs.task(made.id)} testId="tool-call-task-link">
+            {t('在 任务 查看', 'View it in Tasks')}
+          </RouteLink>
+        </span>
+      );
+    case 'connection_request':
+      return (
+        <span className="text-small" data-testid="tool-call-connection-request">
+          <RouteLink
+            href={hrefs.completeConnectionRequest(made.id)}
+            testId="tool-call-connection-request-link"
+          >
+            {t('在 系统与授权 完成这个连接', 'Complete it in Systems & access')}
+          </RouteLink>
+        </span>
+      );
+  }
 }
 
 function outcomeChip(record: ToolCallRecord, t: Translate): { className: string; label: string } {
@@ -369,7 +389,7 @@ export function PersistedToolCallRowView({
 }) {
   const t = useT();
   const action = actionOutcomeOfRecord(record);
-  const proposed = proposedAdminProposalOfRecord(record);
+  const made = madeResourceOfRecord(record);
   const chip = action ? actionOutcomeChip(action, t) : outcomeChip(record, t);
   const name = record.name != null ? visibleText(record.name) : t('（未知工具）', '(unknown tool)');
   return (
@@ -435,7 +455,7 @@ export function PersistedToolCallRowView({
               />
             ) : null}
             <WaitingNote outcome={action} />
-            {proposed !== null ? <ProposedAdminProposalLink proposal={proposed} /> : null}
+            {made !== null ? <MadeResourceLink made={made} /> : null}
             <pre className="code-block">{previewDisplayText(record.result)}</pre>
             {record.result.truncated ? (
               <span className="text-3 text-small">
@@ -495,10 +515,12 @@ export const ToolCallGroupView = memo(function ToolCallGroupView({
   const outcomeUnknown = kinds.filter((kind) => kind === 'outcome_unknown').length;
   const inDoubt = kinds.filter((kind) => kind === 'in_doubt').length;
   // S11 AA4e (UX P2-2 on #945): the proposals this Turn made, linked under the folded calls — the
-  // next step after an admin agent proposes is reviewing what it proposed.
-  const proposed = records
-    .map(proposedAdminProposalOfRecord)
-    .filter((p): p is ProposedAdminProposal => p !== null);
+  // next step after an admin agent proposes is reviewing what it proposed. AA5b: so are the
+  // connections it asked for, which a person completes by entering the credential, and the Tasks
+  // it started (UX P3-1 on #961: the Task's progress lines follow, but the link to it is here).
+  const followUps = records
+    .map(madeResourceOfRecord)
+    .filter((made): made is MadeResource => made !== null);
   return (
     <>
       <details
@@ -545,28 +567,70 @@ export const ToolCallGroupView = memo(function ToolCallGroupView({
           ))}
         </div>
       </details>
-      {proposed.map((proposal) => (
-        <p
-          key={proposal.id}
-          className="text-3 text-small"
-          data-testid="tool-call-group-admin-proposal"
-          data-proposal-id={proposal.id}
-        >
-          {proposal.title !== null
-            ? t(
-                `智能体报告已提出管理员提案「${visibleText(proposal.title)}」。`,
-                `The agent reports it made the admin proposal “${visibleText(proposal.title)}”.`,
-              )
-            : t('智能体报告已提出一份管理员提案。', 'The agent reports it made an admin proposal.')}
-          {sentenceGap(t)}
-          <RouteLink
-            href={hrefs.platformAdminProposals('proposals', proposal.id)}
-            testId="tool-call-group-admin-proposal-link"
+      {followUps.map((made) =>
+        made.kind === 'task' ? (
+          <p
+            key={made.id}
+            className="text-3 text-small"
+            data-testid="tool-call-group-task"
+            data-task-id={made.id}
           >
-            {t('在 平台 · 管理员提案 查看', 'View it in Platform · Admin proposals')}
-          </RouteLink>
-        </p>
-      ))}
+            {t('智能体报告已派出一个任务。', 'The agent reports it started a Task.')}
+            {sentenceGap(t)}
+            <RouteLink href={hrefs.task(made.id)} testId="tool-call-group-task-link">
+              {t('在 任务 查看', 'View it in Tasks')}
+            </RouteLink>
+          </p>
+        ) : made.kind === 'admin_proposal' ? (
+          <p
+            key={made.id}
+            className="text-3 text-small"
+            data-testid="tool-call-group-admin-proposal"
+            data-proposal-id={made.id}
+          >
+            {made.title !== null
+              ? t(
+                  `智能体报告已提出管理员提案「${visibleText(made.title)}」。`,
+                  `The agent reports it made the admin proposal “${visibleText(made.title)}”.`,
+                )
+              : t(
+                  '智能体报告已提出一份管理员提案。',
+                  'The agent reports it made an admin proposal.',
+                )}
+            {sentenceGap(t)}
+            <RouteLink
+              href={hrefs.platformAdminProposals('proposals', made.id)}
+              testId="tool-call-group-admin-proposal-link"
+            >
+              {t('在 平台 · 管理员提案 查看', 'View it in Platform · Admin proposals')}
+            </RouteLink>
+          </p>
+        ) : (
+          <p
+            key={made.id}
+            className="text-3 text-small"
+            data-testid="tool-call-group-connection-request"
+            data-connection-request-id={made.id}
+          >
+            {made.connectionKind !== null
+              ? t(
+                  `智能体报告已申请接入一个 ${transportKindLabel(made.connectionKind, t)} 系统，要由人录入凭证来完成连接。`,
+                  `The agent reports it asked to connect a system over ${transportKindLabel(made.connectionKind, t)}; a person completes the connection by entering its credential.`,
+                )
+              : t(
+                  '智能体报告已申请接入一个系统，要由人录入凭证来完成连接。',
+                  'The agent reports it asked to connect a system; a person completes the connection by entering its credential.',
+                )}
+            {sentenceGap(t)}
+            <RouteLink
+              href={hrefs.completeConnectionRequest(made.id)}
+              testId="tool-call-group-connection-request-link"
+            >
+              {t('在 系统与授权 完成这个连接', 'Complete it in Systems & access')}
+            </RouteLink>
+          </p>
+        ),
+      )}
     </>
   );
 });

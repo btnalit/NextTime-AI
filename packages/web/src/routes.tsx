@@ -263,9 +263,9 @@ export function Routed({
 
   // S11 AA4c-3: a platform administrator in a trial workspace may start 管理员智能体 chats there
   // (the kernel decides; the list offers 新管理员对话 and says why when it is refused).
-  const adminAgentHere =
-    session.user?.platformRole === 'admin' &&
+  const trialWorkspaceHere =
     scopedWorkspacePurpose(session.memberships, session.selectedWorkspaceId) === 'admin_trial';
+  const adminAgentHere = session.user?.platformRole === 'admin' && trialWorkspaceHere;
 
   let page: JSX.Element;
   switch (route.kind) {
@@ -366,7 +366,11 @@ export function Routed({
     // the `systems` route carries an optional `gatekeeperId` deep link.
     case 'access':
       page = (
-        <SystemsPage http={session.http} platformAdmin={session.user?.platformRole === 'admin'} />
+        <SystemsPage
+          http={session.http}
+          platformAdmin={session.user?.platformRole === 'admin'}
+          trialWorkspace={trialWorkspaceHere}
+        />
       );
       break;
     case 'systems':
@@ -376,6 +380,7 @@ export function Routed({
           selectedGatekeeperId={route.gatekeeperId}
           onSelectGatekeeper={(id) => navigate(id ? hrefs.gatekeeper(id) : hrefs.systems())}
           platformAdmin={session.user?.platformRole === 'admin'}
+          trialWorkspace={trialWorkspaceHere}
         />
       );
       break;

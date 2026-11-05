@@ -185,6 +185,9 @@ export const AUDIT_LIFECYCLE_ACTIONS = [
   'chat.unarchive',
   'chat.rename',
   'connection.request_cancelled',
+  // S11 AA5a-1 (the AA5 plan's F1): one use of the trial-workspace exception to a platform-preset
+  // connector, beside the `request_connection` / `create_connection` row it let through.
+  'connection.trial_self_connect',
   'facts_not_reobserved',
   'ontology_violation',
   'change_item.apply',

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   type Route,
   hrefs,
+  readCompleteConnectionRequest,
   readConnectorPresetLink,
   readCreateWorkspacePreset,
   readIntegrationsTab,
@@ -190,6 +191,16 @@ describe('admin agent links (S11 AA4c-3)', () => {
     expect(readOpenAdminAgentChat(hrefs.chats())).toBe(false);
     expect(readOpenAdminAgentChat('#/work/chats?open=entry')).toBe(false);
     expect(routeFromHash(hrefs.platformAdminAgent())).toEqual({ kind: 'platformAdminAgent' });
+  });
+
+  it('S11 AA5b: 系统与授权 asked to complete one connection request', () => {
+    const id = '0f0e0d0c-0b0a-4908-8706-050403020100';
+    const href = hrefs.completeConnectionRequest(id);
+    expect(href).toBe(`#/govern/systems?complete=${id}`);
+    expect(routeFromHash(href)).toEqual({ kind: 'systems' });
+    expect(readCompleteConnectionRequest(href)).toBe(id);
+    expect(readCompleteConnectionRequest(hrefs.systems())).toBeNull();
+    expect(readCompleteConnectionRequest('#/govern/systems?complete=')).toBeNull();
   });
 
   it('S11 AA4e: 管理员智能体 with a trial workspace marked, and with its targets open', () => {

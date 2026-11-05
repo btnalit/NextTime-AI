@@ -1996,6 +1996,15 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '一条待处理的连接申请被取消。',
     enHint: 'A pending connection request was cancelled.',
   },
+  // S11 AA5a-1 (the AA5 plan's F1; `application/admin-agent/trial.ts`).
+  'connection.trial_self_connect': {
+    zh: '按试验例外放行连接',
+    en: 'Connection allowed for trial',
+    zhHint:
+      '平台把这一类系统设为平台预置，工作区本不能自己接入；这里是平台管理员在试验工作区里申请或完成了这个连接，按试验工作区的例外放行。',
+    enHint:
+      'The platform provides this kind of system as a preset, so a workspace cannot normally connect it itself; here a platform administrator requested or completed the connection in a trial workspace, which the trial-workspace exception allows.',
+  },
   facts_not_reobserved: {
     zh: '未再观测的事实已作废',
     en: 'Unobserved facts retired',
