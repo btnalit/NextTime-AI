@@ -56,7 +56,7 @@ export {
   upsertAnnouncement,
 } from './store.js';
 export type { ConnectorGate, ConnectorOffer, ConnectorStanding } from './connector-standing.js';
-export { readConnectorStandings } from './connector-standing.js';
+export { gateConnectedByPlatform, readConnectorStandings } from './connector-standing.js';
 export type { SelfConnectionListRow, SelfConnectionRow } from './self-connections.js';
 export {
   findSelfConnection,

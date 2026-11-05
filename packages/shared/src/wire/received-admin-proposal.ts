@@ -130,15 +130,19 @@ export type AdminProposalGateOfferWire = z.infer<typeof AdminProposalGateOfferWi
  *  the segment. `gateAvailability` (S11 AA3c-2, F-c1), on `gate_not_enabled` and
  *  `worker_system_not_connected`: whether the owner can enable a gate instance here now
  *  (`can_enable`) or the platform has to offer one first (`needs_platform`) —
- *  `ADMIN_PROPOSAL_GATE_AVAILABILITY_VALUES`. On `worker_system_not_connected` (S11 AA5f) only:
- *  `connector`, the system with no connected gate here, and `offered`, the instances of it the
- *  platform offers this workspace (for `can_enable`; empty otherwise). */
+ *  `ADMIN_PROPOSAL_GATE_AVAILABILITY_VALUES`. `fromPlatformSegment` (S11 AA5f), on the same two:
+ *  whether the gate (by id) or the system (by connector) is one this proposal's platform segment
+ *  creates — only then does the owner wait for that part; any other system the platform has to
+ *  offer some other way. On `worker_system_not_connected` (S11 AA5f) only: `connector`, the system
+ *  with no connected gate here, and `offered`, the instances of it the platform offers this
+ *  workspace (for `can_enable`; empty otherwise). */
 export const AdminProposalItemBlockerWireSchema = z
   .object({
     ordinal: z.number().int().positive(),
     kind: ChangeItemKindSchema,
     reason: AdminProposalItemBlockerSchema,
     gateAvailability: AdminProposalGateAvailabilitySchema.optional(),
+    fromPlatformSegment: z.boolean().optional(),
     connector: z.string().optional(),
     offered: z.array(AdminProposalGateOfferWireSchema).optional(),
   })

@@ -470,7 +470,7 @@ describe('AdminProposalsTab (能力目录 · 管理员提案, S11 AA4a)', () => 
       if (held) expect(gates).not.toContain('还没有授权');
       else
         expect(gates).toContain(
-          '其中 Docker staging 你还没有授权给自己：你运行它时，它用不了这些门，要先在「系统与授权」里授权',
+          '其中 Docker staging 你还没有授权给自己。授权之前，目标里用到这个 Worker 的步骤会被拒绝；它能在这些门上执行操作的话，你的智能体委派它也会被拒。要先在「系统与授权」里授权',
         );
     }
   });
@@ -769,6 +769,64 @@ describe('AdminProposalsTab (能力目录 · 管理员提案, S11 AA4a)', () => 
       'Worker ops-runner：它要用的系统 tickets 平台还没有提供给工作区，需要平台管理员先提供。',
     );
     expect(within(blocker).queryByRole('button')).toBeNull();
+  });
+
+  it('UX M-1 (#968): while the platform part waits, only a system that part creates is said to wait on it; any other needs the platform some other way', async () => {
+    const platformSegment = {
+      id: OTHER,
+      status: 'proposed' as const,
+      items: [
+        {
+          kind: 'gate_instance' as const,
+          gateId: 'ragflow-a',
+          displayName: 'RAGFlow',
+          preset: 'ragflow',
+          target: 'https://ragflow.internal.example',
+        },
+      ],
+    };
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_admin_proposal_segments: () => ({ items: [received({ platformSegment })] }),
+      preview_admin_proposal_segment: () =>
+        preview(
+          {
+            digest: null,
+            items: [],
+            blockers: [
+              {
+                ordinal: 2,
+                kind: 'worker_definition_version',
+                reason: 'worker_system_not_connected',
+                gateAvailability: 'needs_platform',
+                connector: 'ragflow',
+                fromPlatformSegment: true,
+                offered: [],
+              },
+              {
+                ordinal: 2,
+                kind: 'worker_definition_version',
+                reason: 'worker_system_not_connected',
+                gateAvailability: 'needs_platform',
+                connector: 'tickets',
+                fromPlatformSegment: false,
+                offered: [],
+              },
+            ],
+          },
+          { platformSegment },
+        ),
+    });
+    renderTab(http, SEGMENT);
+
+    const [created, other] = await screen.findAllByTestId('catalog-proposal-blocker-2');
+    expect(created?.textContent).toContain(
+      'Worker ops-runner：它要用的系统 ragflow 由这份提案的平台部分新建，要等平台管理员应用平台部分并启用这个系统',
+    );
+    expect(other?.textContent).toContain(
+      'Worker ops-runner：它要用的系统 tickets 平台还没有提供给工作区，需要平台管理员先提供。',
+    );
+    expect(other?.textContent).not.toContain('平台部分');
   });
 
   it('a platform part not applied yet holds the apply and says who goes first', async () => {

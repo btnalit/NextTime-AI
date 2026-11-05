@@ -239,13 +239,16 @@ function platformChangeText(
   return t(`${name}：${fields.join('、')}改过`, `${name}: ${fields.join(', ')} changed`);
 }
 
-/** Why an intent does not resolve here, as what the owner can do about it. */
+/** Why an intent does not resolve here, as what the owner can do about it. A gate or system waits
+ *  on the platform part only when the kernel says that part creates it (`fromPlatformSegment`):
+ *  any other the platform has to offer some other way (UX acceptance of #968, M-1). */
 function blockerText(
   blocker: AdminProposalItemBlockerWire,
   subject: string,
   platformPartPending: boolean,
   t: Translate,
 ): string {
+  const waitsOnPlatformPart = platformPartPending && blocker.fromPlatformSegment === true;
   switch (blocker.reason) {
     case 'name_taken':
       return t(
@@ -268,7 +271,7 @@ function blockerText(
             `${subject}：它要改的系统平台已经提供，本工作区还没启用。可以在下面直接启用，启用后会重新检查。`,
             `${subject}: the platform offers the system it changes, but this workspace has not enabled it. Enable it below; the review is checked again afterwards.`,
           )
-        : platformPartPending
+        : waitsOnPlatformPart
           ? t(
               `${subject}：它要改的系统由这份提案的平台部分新建，要等平台管理员应用平台部分并启用这个系统，之后才能在这里启用。`,
               `${subject}: the system it changes is the one this proposal’s platform part creates; a platform administrator has to apply that part and enable the system before it can be enabled here.`,
@@ -294,7 +297,7 @@ function blockerText(
             `${subject}：它要用的系统 ${system} 平台已经提供，本工作区还没启用。可以在下面直接启用，启用后会重新检查。`,
             `${subject}: the platform offers the system it acts on (${system}), but this workspace has not enabled it. Enable it below; the review is checked again afterwards.`,
           )
-        : platformPartPending
+        : waitsOnPlatformPart
           ? t(
               `${subject}：它要用的系统 ${system} 由这份提案的平台部分新建，要等平台管理员应用平台部分并启用这个系统，之后才能在这里启用。`,
               `${subject}: the system it acts on (${system}) is the one this proposal’s platform part creates; a platform administrator has to apply that part and enable the system before it can be enabled here.`,
@@ -1299,7 +1302,7 @@ function BlockerLine({
       platformAdmin ? (
         <RouteLink
           href={
-            gateId !== null && !platformPartPending
+            gateId !== null && !(platformPartPending && blocker.fromPlatformSegment === true)
               ? hrefs.platformGateInstance(gateId)
               : hrefs.platformIntegrations()
           }
@@ -1326,8 +1329,10 @@ function workerIntentName(
 
 /** S11 AA5f: how applying binds a proposed Worker that names its systems and has no gates here
  *  yet — to the gates it keeps (`gates`) of those systems; and the ones among them the person
- *  previewing does not hold, which the Worker cannot use when they run it until they do (binding
- *  grants nothing: 系统与授权 does). */
+ *  previewing does not hold (binding grants nothing: 系统与授权 does). Until they hold them, a goal
+ *  step using the Worker is refused outright (`authority_lost: gates`), and so is delegating to it
+ *  when it holds an execute-class capability (`InvokeWorkerAttenuationError`); one that only
+ *  observes drops those gates and goes on (#501 on #968, P3-1). */
 function workerGateBindingText(
   binding: AdminProposalWorkerGateBindingWire,
   gates: readonly { readonly id: string; readonly name: string }[],
@@ -1352,8 +1357,8 @@ function workerGateBindingText(
   return notHeld.length === 0
     ? bound
     : t(
-        `${bound}。其中 ${notHeld.join('、')} 你还没有授权给自己：你运行它时，它用不了这些门，要先在「系统与授权」里授权`,
-        `${bound}. You do not hold ${notHeld.join(', ')}: when you run it, it cannot use them until you grant them to yourself on Systems & access`,
+        `${bound}。其中 ${notHeld.join('、')} 你还没有授权给自己。授权之前，目标里用到这个 Worker 的步骤会被拒绝；它能在这些门上执行操作的话，你的智能体委派它也会被拒。要先在「系统与授权」里授权`,
+        `${bound}. You do not hold ${notHeld.join(', ')}. Until you grant them to yourself on Systems & access, a goal step that uses this Worker is refused, and so is your agent delegating to it if it can act on those gates`,
       );
 }
 

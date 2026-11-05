@@ -438,8 +438,11 @@ export interface AdminProposalProposer {
 
 /** The connector a platform segment's `gate_instance` item puts its instance under: its preset's
  *  (a preset is its connector, `hosted-plan.ts`), the one it names, or the generic one of its
- *  transport (`null` here: never a system a Worker names). */
-function platformItemConnector(item: AdminProposalPlatformSegmentInputWire['items'][number]) {
+ *  transport (`null` here: never a system a Worker names). Also which blocker of a workspace
+ *  segment waits on the platform segment (`admin-proposal-segments.ts`, `fromPlatformSegment`). */
+export function platformItemConnector(
+  item: AdminProposalPlatformSegmentInputWire['items'][number],
+): string | null {
   return item.preset ?? item.connector ?? null;
 }
 
