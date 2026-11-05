@@ -71,6 +71,10 @@ export interface TaskSummary {
   /** S10 E3-2a: what the Task is for when it is not ordinary work — `evaluation`, a trial of an
    *  evaluation case. `null` = ordinary work; absent from a kernel that predates E3-2a. */
   readonly purpose?: TaskPurpose | null;
+  /** S11 AA5a-1 (I-A7): the admin agent session that started this Task through `invoke_worker`
+   *  in its trial workspace — `onBehalfOf` is then the administrator's own Principal. Absent for
+   *  every other Task. */
+  readonly adminAgentSessionId?: string;
 }
 
 /** `list_worker_definitions` row (`toWireWorkerDefinition`, handlers.ts) — only what the Tasks

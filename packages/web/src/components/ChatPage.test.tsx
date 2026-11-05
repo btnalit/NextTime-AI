@@ -1396,6 +1396,12 @@ describe('ChatPage in an admin agent chat (S11 AA4c-3, UX P2-1 on #943)', () => 
     const empty = await screen.findByTestId('chat-empty');
     await waitFor(() => expect(empty.textContent).toContain('问管理员智能体点什么'));
     expect(empty.textContent).toContain('提出管理员提案');
+    // S11 AA5b: it connects systems and tries Workers now (AA5a-1) — no "it does not delegate".
+    expect(empty.textContent).toContain('申请接入系统、试跑');
+    expect(empty.textContent).not.toContain('不委派');
+    // #501 P3 on #961: low-impact actions can be auto-approved, so it must not promise that every action waits.
+    expect(empty.textContent).toContain('照常走审批，要人批准的会等你');
+    expect(empty.textContent).not.toContain('等你批准');
     expect(empty.textContent).not.toMatch(/入口/);
 
     act(() => fake.deliver(persisted(1, 'assistant', '已提出一份管理员提案。')));

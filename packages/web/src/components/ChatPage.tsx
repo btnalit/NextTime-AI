@@ -186,8 +186,8 @@ export function ChatPage({
                 <p className="chat-empty" data-testid="chat-empty">
                   {agentKind === 'admin_agent'
                     ? t(
-                        '还没有消息。问管理员智能体点什么——它在这个试验工作区里试做改动，再向你选的目标工作区提出管理员提案；它不委派 Worker。',
-                        'No messages yet. Ask the admin agent something — it tries changes in this trial workspace, then proposes them to the target workspaces you chose as an admin proposal. It does not delegate to Workers.',
+                        '还没有消息。问管理员智能体点什么——它在这个试验工作区里申请接入系统、试跑 Worker、试做改动，再向你选的目标工作区提出管理员提案。连接要由你录入凭证来完成；Worker 要做的动作照常走审批，要人批准的会等你。这两样都会出现在这个对话里。',
+                        'No messages yet. Ask the admin agent something — in this trial workspace it asks to connect systems, tries Workers out and tries changes, then proposes them to the target workspaces you chose as an admin proposal. You complete each connection by entering its credential; what a Worker wants to do goes through approval as usual, and anything that needs a person waits for you. Both show up in this chat.',
                       )
                     : t(
                         '还没有消息。问入口 agent 点什么——它可以观察系统、提出动作并委派给 Worker。',

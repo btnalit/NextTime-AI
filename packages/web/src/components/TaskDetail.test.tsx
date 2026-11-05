@@ -605,3 +605,20 @@ describe('TaskDetail evaluation purpose', () => {
     expect(screen.getByTestId('task-on-behalf-of').textContent).toContain('Alice');
   });
 });
+
+/** S11 AA5b: a Task the admin agent started (`invoke_worker` in a trial workspace, I-A7). */
+describe('TaskDetail admin agent', () => {
+  it('marks a Task the admin agent started for its administrator', async () => {
+    renderDetail({ adminAgentSessionId: '33333333-3333-4333-8333-333333333333' });
+    expect((await screen.findByTestId('task-admin-agent')).textContent).toContain(
+      '由管理员智能体代为',
+    );
+    expect(screen.getByTestId('task-on-behalf-of').textContent).toContain('Alice');
+  });
+
+  it('a Task anyone else started carries no such mark', async () => {
+    renderDetail();
+    await screen.findByTestId('task-detail');
+    expect(screen.queryByTestId('task-admin-agent')).toBeNull();
+  });
+});
