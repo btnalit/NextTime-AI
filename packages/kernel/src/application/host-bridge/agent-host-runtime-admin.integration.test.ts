@@ -8,6 +8,7 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { grantCapability, revokeCapabilityGrant } from '../../governance/capability/grants.js';
 import { generateEphemeralHandleKeyPair } from '../../governance/capability/keys.js';
 import { openAdminAgentSession } from '../admin-agent/index.js';
 import { withAdminClient } from '../gateway/auth.js';
@@ -22,8 +23,10 @@ import type { AgentRuntimeEvent } from './agent-runtime.js';
  * carries the admin agent's own prompt and a Handle issued under the session the Turn was recorded
  * under — no Skills, no egress list; the Handle is reused while that session lives; and the Turn
  * fails, sending nothing, when the authority is gone (I-A3), the session ended (`stop_admin_agent`)
- * or the prompt cannot be read. Real database because the authority and the session are read
- * inside the trial workspace's transaction.
+ * or the prompt cannot be read. S11 AA5a-1: the Handle carries the person's gate Grants in the
+ * trial workspace (never one from another workspace), and a Grant made or revoked since is picked
+ * up on the next Turn under the same session. Real database because the authority, the session and
+ * the Grants are read inside the trial workspace's transaction.
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -283,6 +286,110 @@ describe.runIf(DATABASE_URL !== undefined)(
         ),
       );
       expect(live.rows).toEqual([]);
+    });
+
+    /** `resources.gatekeeper` of the Handle `startFrames(sent)[index]` carried; `[]` when none. */
+    function gatesOf(sent: readonly KernelToAgentHostFrame[], index: number): readonly string[] {
+      const claims = decodeJwt(startFrames(sent)[index]?.handle as string) as {
+        scope?: { capabilities?: readonly string[]; resources?: Record<string, readonly string[]> };
+      };
+      expect(claims.scope?.capabilities ?? []).not.toContain('request_action');
+      return [...(claims.scope?.resources?.gatekeeper ?? [])].sort();
+    }
+
+    async function handleRevoked(jti: string): Promise<boolean> {
+      const result = await withAdminClient(pool, (client) =>
+        client.query<{ revoked: boolean }>(
+          'select revoked_at is not null as revoked from capability_handles where jti = $1',
+          [jti],
+        ),
+      );
+      return result.rows[0]?.revoked === true;
+    }
+
+    async function sessionStatus(sessionId: string): Promise<string | undefined> {
+      const result = await withAdminClient(pool, (client) =>
+        client.query<{ status: string }>('select status from sessions where id = $1', [sessionId]),
+      );
+      return result.rows[0]?.status;
+    }
+
+    it('S11 AA5a-1: carries the person’s gate Grants in the trial workspace only — never a Grant they hold in another workspace — and picks up a Grant made or revoked since under the same session', async () => {
+      const member = await newTrialMember();
+      // The same person owns a production workspace and holds a gate Grant there.
+      const production = await createWorkspaceWithOwner(pool, {
+        name: `aa5a1-production-${randomUUID().slice(0, 8)}`,
+        owner: { userId: member.userId, displayName: 'AA4c-2 Runtime Admin' },
+        ontologyDir: ONTOLOGY_DIR,
+      });
+      const productionGate = randomUUID();
+      await withWorkspace(
+        pool,
+        { workspaceId: production.workspaceId, principalId: production.ownerPrincipalId },
+        (client) =>
+          grantCapability(client, production.workspaceId, {
+            principalId: production.ownerPrincipalId,
+            resourceType: 'gatekeeper',
+            resourceId: productionGate,
+            grantedBy: production.ownerPrincipalId,
+          }),
+      );
+      const sessionId = await sessionOf(member);
+      const harness = newRuntime();
+
+      // 0: no Grant in the trial workspace — no gate, the production Grant not either.
+      await startAdminTurn(harness, member, sessionId);
+      expect(gatesOf(harness.sent, 0)).toEqual([]);
+
+      // 1: a Grant in the trial workspace revokes the cached Handle (not the session); the next
+      // Turn carries the gate under the same session.
+      const trialGate = randomUUID();
+      const grant = await withWorkspace(pool, member, (client) =>
+        grantCapability(client, member.workspaceId, {
+          principalId: member.principalId,
+          resourceType: 'gatekeeper',
+          resourceId: trialGate,
+          grantedBy: member.principalId,
+        }),
+      );
+      expect(await handleRevoked(jtiOf(harness.sent, 0))).toBe(true);
+      expect(await sessionStatus(sessionId)).toBe('active');
+      await startAdminTurn(harness, member, sessionId);
+      expect(gatesOf(harness.sent, 1)).toEqual([trialGate]);
+      expect(decodeJwt(startFrames(harness.sent)[1]?.handle as string).sid).toBe(sessionId);
+
+      // 2: a Grant written without that revocation is still picked up — the cache is keyed on the
+      // gate set, not only on revocation.
+      const secondGate = randomUUID();
+      await withAdminClient(pool, (client) =>
+        client.query(
+          `insert into capability_grants (workspace_id, principal_id, resource_type, resource_id, granted_by)
+           values ($1, $2, 'gatekeeper', $3, $2)`,
+          [member.workspaceId, member.principalId, secondGate],
+        ),
+      );
+      expect(await handleRevoked(jtiOf(harness.sent, 1))).toBe(false);
+      await startAdminTurn(harness, member, sessionId);
+      expect(gatesOf(harness.sent, 2)).toEqual([trialGate, secondGate].sort());
+      expect(jtiOf(harness.sent, 2)).not.toBe(jtiOf(harness.sent, 1));
+
+      // 3: unchanged Grants reuse the Handle.
+      await startAdminTurn(harness, member, sessionId);
+      expect(jtiOf(harness.sent, 3)).toBe(jtiOf(harness.sent, 2));
+
+      // 4: revoking a Grant revokes the cached Handle; the next Turn drops the gate.
+      await withWorkspace(pool, member, (client) =>
+        revokeCapabilityGrant(client, member.workspaceId, grant.id),
+      );
+      expect(await handleRevoked(jtiOf(harness.sent, 3))).toBe(true);
+      expect(await sessionStatus(sessionId)).toBe('active');
+      await startAdminTurn(harness, member, sessionId);
+      expect(gatesOf(harness.sent, 4)).toEqual([secondGate]);
+      expect(decodeJwt(startFrames(harness.sent)[4]?.handle as string).sid).toBe(sessionId);
+
+      for (let index = 0; index < startFrames(harness.sent).length; index++) {
+        expect(gatesOf(harness.sent, index)).not.toContain(productionGate);
+      }
     });
 
     it('fails, sending nothing, when its person may no longer run it (switch off, demoted), even with a Handle cached', async () => {

@@ -1143,6 +1143,32 @@ export async function revokeEntrySessionHandles(
 }
 
 /**
+ * S11 AA5a-1: `revokeEntrySessionHandles` plus the principal's own `admin_agent` session — every
+ * Handle that carries the principal's gate Grants as `resources.gatekeeper` (`ensureEntryHandle`,
+ * and since AA5a-1 `ensureAdminAgentHandle`, so a Worker the admin agent starts in its trial
+ * workspace may ask for actions on them). `grants.ts` calls this whenever a `'gatekeeper'` Grant is
+ * made or revoked, so neither agent keeps a gate set its person no longer has. It revokes Handles
+ * only (`revokeSession`): the admin agent's session stays live and its next Turn is issued a
+ * Handle under it with the current Grants. The admin agent's Handle never holds `request_action`
+ * itself (its ceiling excludes execute-class capabilities).
+ */
+export async function revokeGateGrantScopedSessionHandles(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+): Promise<void> {
+  const result = await client.query<{ id: string }>(
+    `select id from sessions
+     where workspace_id = $1 and principal_id = $2 and on_behalf_of = $2
+       and kind in ('entry', 'admin_agent')`,
+    [workspaceId, principalId],
+  );
+  for (const row of result.rows) {
+    await revokeSession(client, row.id);
+  }
+}
+
+/**
  * R-37 / D-20: `revokeEntrySessionHandles` for every principal of the workspace at once — a
  * workspace-wide change to what an entry Handle may carry (the AgentPolicy gate cap,
  * `set_agent_policy`) reaches every member's entry agent. Each entry agent mints a fresh Handle on

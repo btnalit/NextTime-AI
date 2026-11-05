@@ -201,8 +201,8 @@ interface CachedHandle {
 
 /** S11 AA4c-2: an admin agent's cached Handle — per person and trial workspace, under the
  *  session its Turns run under. Reused while that session is the Turn's, the Handle is not
- *  revoked (`stop_admin_agent`, a demotion), the person's role is unchanged and more than 10% of
- *  its (at most one hour) life is left. */
+ *  revoked (`stop_admin_agent`, a demotion), the person's role and gate Grants are unchanged and
+ *  more than 10% of its (at most one hour) life is left. */
 interface CachedAdminHandle {
   readonly token: string;
   readonly issuedAtMs: number;
@@ -210,6 +210,10 @@ interface CachedAdminHandle {
   readonly role: Role | undefined;
   readonly jti: string;
   readonly sessionId: string;
+  /** S11 AA5a-1: the `resources.gatekeeper` ids baked in at issuance — the person's active gate
+   *  Grants in this trial workspace, compared on every Turn as `CachedHandle.gatekeeperIds` is, so
+   *  a Grant made or revoked since is picked up on the next Turn. */
+  readonly gatekeeperIds: readonly string[];
 }
 
 /** What a Turn is started with — the `startTurn` frame's fields beyond the Turn's own ids, from
@@ -1275,6 +1279,16 @@ export class AgentHostRuntime implements AgentRuntime {
    * (`issueAdminAgentHandle`, at most an hour) under the session the Turn was recorded under —
    * refused once that session has ended (`AdminAgentSessionEndedError`). The token never leaves
    * this class but in the `startTurn` frame.
+   *
+   * S11 AA5a-1 (the AA5 plan's D1, "试跑 Worker（写动作照常审批）"): the Handle carries the
+   * person's active gate Grants in this trial workspace as `resources.gatekeeper`, as the entry
+   * agent's does (`ensureEntryHandle`). It is what lets a Worker the admin agent starts with
+   * `invoke_worker` ask for actions on those gates (`computeChildHandleScope`'s delegated
+   * `request_action`, every action still decided by policy or a person); the admin agent's own
+   * Handle never holds `request_action` (its ceiling excludes execute-class capabilities). Grants
+   * are read in this workspace only (`listActiveGrantResourceScopes` filters by it, and the
+   * authority check above refuses any workspace that is not a trial one), so a Grant the person
+   * holds in another workspace is never carried.
    */
   private async ensureAdminAgentHandle(input: StartTurnInput): Promise<string> {
     const { workspaceId, principalId, sessionId } = input;
@@ -1298,11 +1312,16 @@ export class AgentHostRuntime implements AgentRuntime {
         this.adminHandleCache.delete(key);
         throw new AdminAgentRefused(refusal, principalId);
       }
+      const gatekeeperIds = await listActiveGrantResourceScopes(client, workspaceId, {
+        principalId,
+        resourceType: GATEKEEPER_RESOURCE_SCOPE_KEY,
+      });
       if (
         cached &&
         !cachedRevoked &&
         cached.sessionId === sessionId &&
         cached.role === role &&
+        sameGatekeeperScope(cached.gatekeeperIds, gatekeeperIds) &&
         cached.expiresAtMs - this.now() >
           (cached.expiresAtMs - cached.issuedAtMs) * HANDLE_REISSUE_THRESHOLD
       ) {
@@ -1320,6 +1339,7 @@ export class AgentHostRuntime implements AgentRuntime {
         workspaceId,
         principalId,
         sessionId,
+        ...(gatekeeperIds.length > 0 ? { resources: { gatekeeper: gatekeeperIds } } : {}),
         ttlSeconds: this.adminAgentHandleTtlSeconds,
         privateKey: this.privateKey,
       });
@@ -1330,6 +1350,7 @@ export class AgentHostRuntime implements AgentRuntime {
         role,
         jti: issued.jti,
         sessionId,
+        gatekeeperIds,
       });
       return issued.token;
     });
