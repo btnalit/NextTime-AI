@@ -23,7 +23,7 @@ import {
   GATEKEEPER_GRANT_CAPABILITY,
   listActiveGrantResourceScopes,
 } from '../../governance/capability/index.js';
-import { getGatekeeper, getPublishedOperation } from '../../governance/gatekeepers/index.js';
+import { gatekeeperNamesShown, getPublishedOperation } from '../../governance/gatekeepers/index.js';
 import {
   type SuspectedSecrets,
   assertCredentialsReviewed,
@@ -35,6 +35,7 @@ import {
   loadPublishedWorkerDefinitionHead,
   unresolvedWorkerDefinitionReferences,
 } from '../worker/index.js';
+import { platformItemConnector } from './admin-proposals.js';
 import { derivePackComponentId } from './component-id.js';
 import {
   type AdminProposalOrigin,
@@ -89,6 +90,11 @@ import { lockProposalDependency, readProposalPlatformChange } from './proposal-d
  *     blocked when it has not (`gate_not_enabled`), when the gate has no published Operation by
  *     that name (`operation_not_found`), or when what the intent sets is not a valid revision of
  *     that Operation (`operation_revision_invalid`).
+ * A `gate_not_enabled` or `worker_system_not_connected` blocker says whether the gate (by id) or the
+ * system (by connector) is one this proposal's platform segment creates (`fromPlatformSegment`,
+ * the rule `propose` accepts a Worker's systems by): only then is "wait for the platform part" the
+ * owner's answer — another system the platform does not offer is never coming with it (UX
+ * acceptance of #968, M-1).
  * A blocker stays here: nothing of the dry run is written to the proposal's tables, so the agent
  * and the platform read the segment's status only (coordinator 2026-11-02).
  *
@@ -654,14 +660,16 @@ function chosenWorkerGates(
 /**
  * Resolves the segment's intents in `workspaceId` (this module's comment), after taking every lock
  * the core will plan them under, in lock order — so the families, links and Operations read here
- * stay as read until the transaction ends. `choice`: the gates the owner kept for each Worker the
- * apply binds (AA5f; {@link AdminProposalWorkerGatesError} for one that does not fit).
+ * stay as read until the transaction ends. `platformItems`: the proposal's platform segment's, for
+ * which blocker waits on it (`fromPlatformSegment`). `choice`: the gates the owner kept for each
+ * Worker the apply binds (AA5f; {@link AdminProposalWorkerGatesError} for one that does not fit).
  */
 async function resolveIntents(
   client: PoolClient,
   workspaceId: string,
   sourceName: string,
   items: readonly AdminProposalItemIntentWire[],
+  platformItems: readonly AdminProposalPlatformItemIntentWire[],
   choice: AdminProposalWorkerGateChoice = new Map(),
 ): Promise<Resolution> {
   assertWorkerGateChoiceNamesWorkers(items, choice);
@@ -676,6 +684,14 @@ async function resolveIntents(
     offered ??= await offeredGateInstances(client, workspaceId);
     return offered.has(gateId) ? 'can_enable' : 'needs_platform';
   };
+  // What the proposal's platform segment creates: its instances' ids, and their connectors.
+  const platformGateIds = new Set(platformItems.map((item) => item.gateId));
+  const platformConnectors = new Set(
+    platformItems.flatMap((item) => {
+      const connector = platformItemConnector(item);
+      return connector === null ? [] : [connector];
+    }),
+  );
   for (const [index, item] of items.entries()) {
     const ordinal = index + 1;
     const block = (kind: ChangeItemKind, reason: AdminProposalItemBlocker) =>
@@ -740,6 +756,7 @@ async function resolveIntents(
               reason: 'worker_system_not_connected',
               connector: standing.connector,
               gateAvailability: standing.state === 'can_enable' ? 'can_enable' : 'needs_platform',
+              fromPlatformSegment: platformConnectors.has(standing.connector),
               offered: standing.offered.map((offer) => ({
                 gateId: offer.gateId,
                 displayName: offer.displayName,
@@ -779,6 +796,7 @@ async function resolveIntents(
             kind: item.kind,
             reason: 'gate_not_enabled',
             gateAvailability: await availabilityOf(item.gateId),
+            fromPlatformSegment: platformGateIds.has(item.gateId),
           });
           break;
         }
@@ -905,10 +923,14 @@ async function previewItemOf(
       const ids = Array.isArray(detail.definition.gates)
         ? detail.definition.gates.filter((id): id is string => typeof id === 'string')
         : [];
-      const gates: { id: string; name: string }[] = [];
-      for (const id of ids) {
-        gates.push({ id, name: (await getGatekeeper(client, workspaceId, id))?.name ?? id });
-      }
+      // Named as every read names a gate (`gatekeeperNamesShown`), not through `getGatekeeper`,
+      // which has none for a gate-host instance its host has not announced yet (UX #968 P2-1);
+      // a candidate's own name (`readConnectorStandings`) next, its id only last.
+      const shown = ids.length === 0 ? {} : await gatekeeperNamesShown(client, workspaceId);
+      const candidateNames = new Map(
+        (resolved?.gateBinding?.candidates ?? []).map((gate) => [gate.id, gate.name] as const),
+      );
+      const gates = ids.map((id) => ({ id, name: shown[id] ?? candidateNames.get(id) ?? id }));
       return {
         ...common,
         kind: detail.kind,
@@ -974,6 +996,7 @@ export async function previewAdminProposalSegment(
     workspaceId,
     row.source_name,
     row.items,
+    row.platform_items ?? [],
     choice,
   );
   if (blockers.length > 0) {
@@ -1082,6 +1105,7 @@ export async function applyAdminProposalSegment(
     workspaceId,
     row.source_name,
     row.items,
+    row.platform_items ?? [],
     input.workerGates,
   );
   if (blockers.length > 0) throw new AdminProposalSegmentBlockedError(row.id, blockers);

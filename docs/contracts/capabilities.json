@@ -48156,6 +48156,9 @@
               "connector": {
                 "type": "string"
               },
+              "fromPlatformSegment": {
+                "type": "boolean"
+              },
               "gateAvailability": {
                 "enum": [
                   "can_enable",

@@ -2145,7 +2145,14 @@ describe.runIf(DATABASE_URL !== undefined)(
       const platformSegmentId = proposal.segments.find((s) => s.authority === 'platform')?.id ?? '';
       const blockers = async () => (await previewThere(target, segmentId)).blockers;
       const blocked = (gateAvailability: string) => [
-        { ordinal: 1, kind: 'operation_version', reason: 'gate_not_enabled', gateAvailability },
+        {
+          ordinal: 1,
+          kind: 'operation_version',
+          reason: 'gate_not_enabled',
+          gateAvailability,
+          // The instance is this proposal's platform segment's: waiting on that part is the answer.
+          fromPlatformSegment: true,
+        },
       ];
 
       // Not created yet, then created but not offered to workspaces (discovered).
@@ -2157,6 +2164,60 @@ describe.runIf(DATABASE_URL !== undefined)(
         client.query(`update gate_instances set status = 'enabled' where gate_id = $1`, [gateId]),
       );
       expect(await blockers()).toEqual(blocked('can_enable'));
+    });
+
+    it('AA5f: a Worker system with no gate here waits on the platform segment only when that segment creates its connector (fromPlatformSegment)', async () => {
+      const { agent } = await administrator();
+      const target = await newTarget();
+      const gateId = `aa5f-${unique()}`;
+      const created = `tickets-${unique()}`;
+      // A connector the platform has, of which no instance is offered: not this proposal's to bring.
+      const other = `other-${unique()}`;
+      await withAdminClient(pool, (client) =>
+        client.query(
+          `insert into connectors (name, kind, mode) values ($1, 'http', 'platform_preset')`,
+          [other],
+        ),
+      );
+      const proposal = await call<AdminProposalWire>(agent, 'propose_admin_proposal', {
+        title: 'File tickets',
+        description: 'A Worker of the new ticket system, and of one the platform has.',
+        sourceName: `aa5f-${unique()}`,
+        segments: [
+          {
+            targetWorkspaceId: target.workspaceId,
+            items: [
+              {
+                kind: 'worker_definition_version',
+                definition: { name: 'ticket-filer', systemPrompt: 'You file tickets.' },
+                systems: [created, other],
+              },
+            ],
+          },
+        ],
+        platform: { items: [gateItem(gateId, created)] },
+      });
+      const segmentId = proposal.segments.find((s) => s.authority === 'workspace')?.id ?? '';
+      expect((await previewThere(target, segmentId)).blockers).toEqual([
+        {
+          ordinal: 1,
+          kind: 'worker_definition_version',
+          reason: 'worker_system_not_connected',
+          connector: created,
+          gateAvailability: 'needs_platform',
+          fromPlatformSegment: true,
+          offered: [],
+        },
+        {
+          ordinal: 1,
+          kind: 'worker_definition_version',
+          reason: 'worker_system_not_connected',
+          connector: other,
+          gateAvailability: 'needs_platform',
+          fromPlatformSegment: false,
+          offered: [],
+        },
+      ]);
     });
 
     it('AA3c-2: the dependency lock — a platform rollback waiting on a workspace apply then finds it applied (dependent_segments_applied)', async () => {

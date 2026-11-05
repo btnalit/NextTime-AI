@@ -631,6 +631,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           kind: 'operation_version',
           reason: 'gate_not_enabled',
           gateAvailability: 'needs_platform',
+          fromPlatformSegment: false,
         },
         { ordinal: 2, kind: 'operation_version', reason: 'operation_not_found' },
         { ordinal: 3, kind: 'operation_version', reason: 'operation_revision_invalid' },
@@ -1144,6 +1145,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       const second = await seedGate(target, tickets);
       const elsewhere = await seedGate(target); // a gate of another system: never a candidate
       const [gateA, gateB] = [first.gatekeeperId ?? '', second.gatekeeperId ?? ''].sort();
+      const nameOf = new Map([
+        [first.gatekeeperId, first.gateId],
+        [second.gatekeeperId, second.gateId],
+      ]);
       // The owner holds one of the two (`connect_gatekeeper`), and is told so; applying grants none.
       await inTarget(target, (client) =>
         grantCapability(client, target.workspaceId, {
@@ -1165,8 +1170,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         systems: [tickets],
         source: 'apply',
         candidates: [
-          { id: gateA, name: expect.any(String), connector: tickets, held: true },
-          { id: gateB, name: expect.any(String), connector: tickets, held: false },
+          { id: gateA, name: nameOf.get(gateA), connector: tickets, held: true },
+          { id: gateB, name: nameOf.get(gateB), connector: tickets, held: false },
         ],
       });
       // Every candidate unless the owner keeps fewer; binding widens what the Worker may act on.
@@ -1254,6 +1259,31 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(againItem.gates.map((gate) => gate.id)).toEqual([gateB]);
     });
 
+    it('AA5f: a gate is shown by its name even while it has no connection config yet — a gate-host instance its host has not announced (UX #968 P2-1)', async () => {
+      const { agent } = await administrator();
+      const target = await newTarget();
+      const tickets = await seedSystem('aa5f-unannounced');
+      const gate = await seedGate(target, tickets);
+      const gatekeeperId = gate.gatekeeperId ?? '';
+      // Enabled before its host first spoke: the Gatekeeper has its name, not yet an endpoint.
+      await withAdminClient(pool, (client) =>
+        client.query(`update objects set properties = properties - 'endpoint' where id = $1`, [
+          gatekeeperId,
+        ]),
+      );
+      const { segmentId } = await proposeFor(agent, target, [
+        workerItem({ name: 'ticket-worker', systemPrompt: 'You file tickets.' }, [tickets]),
+      ]);
+      const dryRun = await preview(target, segmentId);
+      expect(dryRun.blockers).toEqual([]);
+      const item = dryRun.items[0];
+      if (item?.kind !== 'worker_definition_version') throw new Error('not a Worker item');
+      expect(item.gateBinding.candidates).toEqual([
+        { id: gatekeeperId, name: gate.gateId, connector: tickets, held: false },
+      ]);
+      expect(item.gates).toEqual([{ id: gatekeeperId, name: gate.gateId }]);
+    });
+
     it('AA5f: keeping none publishes gates: [] — kept from then on; a Worker naming no system gets none and takes no gate', async () => {
       const { agent } = await administrator();
       const target = await newTarget();
@@ -1326,6 +1356,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           reason: 'worker_system_not_connected',
           connector: offeredSystem,
           gateAvailability: 'can_enable',
+          fromPlatformSegment: false,
           offered: [{ gateId: offered.gateId, displayName: offered.gateId }],
         },
         {
@@ -1334,6 +1365,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           reason: 'worker_system_not_connected',
           connector: missingSystem,
           gateAvailability: 'needs_platform',
+          fromPlatformSegment: false,
           offered: [],
         },
       ]);
