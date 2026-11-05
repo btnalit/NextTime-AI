@@ -2278,7 +2278,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：工作区所有者在「能力目录」多了「管理员提案」页签，列出管理员提案发给本工作区的部分（默认只看待确认），逐条审阅后应用或写理由拒绝。审阅页写清楚每个条目改什么；扩大权限的条目要逐项确认，含疑似凭据时要勾核对框；系统还没启用时能就地启用，或写明要等平台管理员。平台部分还没应用、或它建的门实例后来被改过时，不能应用并写明原因。拒绝理由留在这个工作区，平台管理员也看得到，提议它的管理员智能体只知道被拒绝了。「安装历史」里来自管理员提案的记录带上提案的标题、说明和链接。图谱抽屉的「提案」改叫「本体提案」。只有所有者看得到这些。
 - **回滚**：只回退代码即可。
 
-### 3.109 管理员智能体的观察记下会话；平台运行状态不再占着事务调 HTTP；平台部分撤销预览列出工作区；智能体读不到门地址（#933，S11 AA4-0，0.61.0 之后的下一版）
+### 3.109 管理员智能体的观察记下会话；平台运行状态不再占着事务调 HTTP；平台部分撤销预览列出工作区；智能体读不到门地址（#933，S11 AA4-0，0.62.0 起）
 
 带一个迁移 core `0052_activity_session_record`（只替换一个触发器函数，不存数据），随 `apply-release.sh` 自动应用。不改 compose，没有新环境变量，主机不需要操作；`ADMIN_AGENT_ENABLED` 仍默认关。
 
@@ -2293,14 +2293,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：0.61.0 的已知问题已修复，管理员智能体读回自己的管理员提案时不再看到平台部分门宿主实例的地址（遗留 609）。平台部分的撤销预览列出启用了每个实例的工作区。
 - **回滚**（见 §6）：只回退代码不损坏数据：0.61.0 及更早的代码从不写 Activity 的 `metadata.sessionKind` / `metadata.sessionId`。回退到 0.61.0 后，智能体读回提案又能看到门地址（回到 0.61.0 的已知问题）。
 
-### 3.110 平台管理员在平台面审阅管理员提案与平台变更记录（#936，S11 AA4b，0.61.0 之后的下一版）
+### 3.110 平台管理员在平台面审阅管理员提案与平台变更记录（#936，S11 AA4b，0.62.0 起）
 
 只改控制台：没有迁移，没有线上变化，契约快照不变，不改 compose，主机不需要操作；`ADMIN_AGENT_ENABLED` 仍默认关。
 
 - **发版说明可写**：「平台」组下新增「管理员提案」页，两个标签。平台管理员在「管理员提案」里看全部提案（默认列出全部，可按状态筛选）、审阅并应用或写理由拒绝平台部分（每个要新建的门宿主实例逐项确认，含疑似凭据时要勾核对框，和平台现状对不上时不能应用并写明原因）、撤回整份提案；工作区部分只显示状态和所有者写下的理由，不显示它要在工作区里改什么。在「平台变更记录」里看应用留下的记录和每个实例现在的样子，并从那里撤销：确认框按实例列出已启用它的工作区并链接到停用的地方，有工作区部分已应用时不能撤销。英文界面统一把门宿主实例叫 gate-host instance。
 - **回滚**：只回退代码即可。
 
-### 3.111 管理员智能体的对话、目标工作区、状态与停止（内核）（#937，S11 AA4c-1，0.61.0 之后的下一版）
+### 3.111 管理员智能体的对话、目标工作区、状态与停止（内核）（#937，S11 AA4c-1，0.62.0 起）
 
 带两个迁移，随 `apply-release.sh` 自动应用：core `0053_chat_agent_kind`（`chats.agent_kind`、两个约束、守卫触发器）、governance `0036_admin_agent_targets`（新平台表 `admin_agent_targets`、两个 security definer 读函数、两个守卫触发器）。不改 compose，没有新环境变量，主机不需要操作；`ADMIN_AGENT_ENABLED` 仍默认关，主机没开，所以下面的行为变化对主机没有影响。
 
@@ -2311,7 +2311,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
   - core 0053：只回退代码前先确认 `select count(*) from chats where agent_kind = 'admin_agent'` 为 0，不为 0 就先把这些对话归档；否则旧代码会把它们当普通私有对话，交给入口智能体起 Turn。
   - governance 0036：只回退代码前要先删掉守卫 `drop trigger admin_proposal_segments_target_chosen on admin_proposal_segments` 和它的函数，否则旧代码提议、应用工作区部分时会被这个守卫拒绝。
 
-### 3.112 管理员智能体的运行时：自己的容器、提示词与扩展模式（#941，S11 AA4c-2，0.61.0 之后的下一版）
+### 3.112 管理员智能体的运行时：自己的容器、提示词与扩展模式（#941，S11 AA4c-2，0.62.0 起）
 
 没有迁移，不改 compose，没有新环境变量，主机不需要操作；`ADMIN_AGENT_ENABLED` 仍默认关，主机没开，对主机没有影响。
 
@@ -2320,14 +2320,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **线上**：`startTurn` / `stopTurn` 帧加可选 `agentKind: 'admin_agent'`；`/resident/spawn`、`/resident/stop`、`GET /resident/:id`、`POST /resident/:id/touch` 加可选 `agentKind`，`/resident/reclaim` 清全部种类；`listResidents` 每条带 `agentKind`；`EXTENSION_MODE_VALUES` 加 `admin`。`scripts/delete-workspace.sh` 同时删管理员容器和它的两个目录。
 - **回滚**：只回退代码即可，但**回退代码之前先删掉管理员容器**：`docker ps -aq --filter label=nexttime.role=admin | xargs -r docker rm -f`（容器名为 `nexttime-admin-*`）。旧的 supervisor 只认 `nexttime.role=entry`，看不到这些容器，它们在出网映射里的条目也只在容器被删除时才清掉。`workspaces/.admin/` 与 `workspaces/.platform/admin-agents/` 两个目录可以留着，旧代码不读。
 
-### 3.113 平台管理员在控制台里使用管理员智能体（#943，S11 AA4c-3，0.61.0 之后的下一版）
+### 3.113 平台管理员在控制台里使用管理员智能体（#943，S11 AA4c-3，0.62.0 起）
 
 只改控制台：没有迁移，没有线上契约变化，不改 compose，主机不需要操作；`ADMIN_AGENT_ENABLED` 仍默认关。控制台要和 §3.111、§3.112 的内核与运行时同版（它读 `get_admin_agent_status`、调 `set_admin_agent_targets`、`stop_admin_agent` 与 `new_chat {agentKind}`）。
 
 - **发版说明可写**：「平台」组下新增「管理员智能体」页：每个试验工作区一张卡，写明能不能开始（不能时写原因、不给按钮）、目标工作区（停用的标出）、在用的会话；可以打开管理员对话、在对话框里选目标工作区（只能选常规、启用中的工作区，最多 20 个，保存前对比加上与去掉的，并写明这组目标由这个试验工作区里你的所有管理员对话共用）、停止一个或全部会话（确认框写明吊销与停下的范围）。平台开关关着时，页面只说一次需要维护者在主机上打开，已有对话照常能读。试验工作区的对话里多「新管理员对话」，管理员对话在列表和标题栏标「管理员智能体」。审计里经管理员智能体的行标「由管理员智能体代为」（遗留 583）；管理员智能体的几项能力统一叫「管理员智能体……」（遗留 591）。目标被去掉的工作区部分在「能力目录 → 管理员提案」里写明原因并置灰应用。Skill、流程、Worker、Operation、本体提案的列表行给智能体写的草稿加琥珀色「智能体」标记（遗留 602）。窄栏里试验工作区有图标级标记。
 - **回滚**：只回退代码即可。
 
-### 3.114 管理员智能体的 CI 旅程与 CI 专用提议标记（#945，S11 AA4d-1，0.61.0 之后的下一版）
+### 3.114 管理员智能体的 CI 旅程与 CI 专用提议标记（#945，S11 AA4d-1，0.62.0 起）
 
 没有迁移，没有线上契约变化，不改 compose，主机不需要操作；`ADMIN_AGENT_ENABLED` 仍默认关。
 
@@ -2335,7 +2335,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **升级时确认**：主机 `secrets/kernel.env` 与 `.env` 里都不应该有 `FAKE_INVOKE_WORKER`；有就删掉，它只属于 CI。
 - **回滚**：只回退代码即可。
 
-### 3.115 管理员提案的交接入口：所有者待办计数、对话里的提案链接、建好试验工作区后回到管理员智能体（#947，S11 AA4e，0.61.0 之后的下一版）
+### 3.115 管理员提案的交接入口：所有者待办计数、对话里的提案链接、建好试验工作区后回到管理员智能体（#947，S11 AA4e，0.62.0 起）
 
 没有迁移，不改 compose，主机不需要操作；`ADMIN_AGENT_ENABLED` 仍默认关。控制台与内核同版（新能力）。
 
@@ -2343,7 +2343,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：目标工作区的所有者在侧栏「能力目录」角标、「管理员提案」页签数字和「待我审批」顶部提示里看到有几份管理员提案等他处理（只在控制台内，不发外部通知）；管理员智能体提议成功后，对话里的工具调用行与折叠行带「在 平台 · 管理员提案 查看」链接（id 从调用结果读，不看模型怎么写）；从「管理员智能体」新建试验工作区后回到那张卡片；管理员对话里还没选目标时输入区上方提示；标题栏「目标工作区…」直接打开选择对话框；已有试验工作区时页头多「新建试验工作区」。
 - **回滚**：只回退代码即可。
 
-### 3.116 平台管理员的管理员提案列表单列平台部分状态（#951，遗留 619，0.61.0 之后的下一版）
+### 3.116 平台管理员的管理员提案列表单列平台部分状态（#951，遗留 619，0.62.0 起）
 
 没有迁移，不改 compose，主机不需要操作；`ADMIN_AGENT_ENABLED` 仍默认关。控制台与内核同版。
 
@@ -2351,7 +2351,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：「平台 → 管理员提案」列表每行把平台部分单独写出来（例如「平台部分：待你决定；工作区部分：待确认 2」，待你决定的加粗），筛选多一项「平台部分待你决定」。
 - **回滚**：只回退代码即可。
 
-### 3.117 管理员智能体在 staging 预演里用真 pi 跑一遍（#949，S11 AA4d-2，0.61.0 之后的下一版）
+### 3.117 管理员智能体在 staging 预演里用真 pi 跑一遍（#949，S11 AA4d-2，0.62.0 起）
 
 只改验收脚本、驱动、fake-llm、手册和一个测试：没有迁移，没有线上契约变化，生产代码行为不变（platform-extension 只多导出一个常量），不改 compose，主机不需要操作。
 
@@ -2359,7 +2359,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **主机 apply**：脚本只读运行中内核的 `ADMIN_AGENT_ENABLED`，从不替主机打开；开关关着（主机默认）时只打一行 `NOTE admin-agent … not run`，S2 仍是 `S2 OK`。维护者以后打开开关时，S2 会建一个本次专用的管理员和两个工作区，收尾时停用和降级；降级被拒（它是最后一个启用的管理员）或控制台登录失败时脚本记一行，要到「平台 · 用户」里手工降级（`host-accept-s2.md` §2、§6）。staging 预演在一次性的 `secrets/kernel.env` 里打开开关并设 `ACCEPT_REQUIRE_ADMIN_AGENT=1`，开关没开就 `FAIL admin-agent-switch`。
 - **回滚**：只回退代码即可。
 
-### 3.118 新装主机默认打开管理员智能体（#957，S11，0.61.0 之后的下一版）
+### 3.118 新装主机默认打开管理员智能体（#957，S11，0.62.0 起）
 
 不改内核行为（内核自身仍是没设 `ADMIN_AGENT_ENABLED` 就关），没有迁移，不改 compose，契约不变。只改 `scripts/host-env-init.sh`、e2e 与 staging 预演的检查和手册。
 
@@ -2367,7 +2367,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **已有主机升级不受影响**：`host-env-init.sh` 只在 `kernel.env` 缺失或为空时才写，从不改写；`kernel.env` 写什么就是什么，没写就是关。要打开时在 `kernel.env` 里加 `ADMIN_AGENT_ENABLED=1` 并 `docker compose up -d --force-recreate kernel`（`host-checkout.md` §E3.3）。主机现在停在 v0.50.0，升级时不会因此打开。
 - **回滚**：只回滚代码；已经生成的 `kernel.env` 不会被改回去，要关就手工改成 0 并重建内核。
 
-### 3.119 管理员智能体在试验工作区里请人接系统、试跑 Worker（#954，S11 AA5a-1，0.61.0 之后的下一版）
+### 3.119 管理员智能体在试验工作区里请人接系统、试跑 Worker（#954，S11 AA5a-1，0.62.0 起）
 
 带两个迁移，随 `apply-release.sh` 自动应用：task `0013_task_admin_agent_session`（`tasks.admin_agent_session_id`）、governance `0037_connection_request_admin_agent_session`（`connection_requests.admin_agent_session_id`）。两列都可空、不回填，各带到 `sessions` 的外键和一个守卫触发器。不改 compose，没有新环境变量，主机不需要操作；`ADMIN_AGENT_ENABLED` 仍默认关，主机没开，所以管理员智能体的两项新能力对主机没有影响。
 
@@ -2377,7 +2377,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **Handle**：管理员智能体的 Handle 带上这个人在试验工作区的门（与入口智能体 Handle 同一个门集合）；门授权变动时，它的 Handle 和入口智能体的一起吊销（会话不动）。没有迁移，只需回滚代码。
 - **回滚**（见 §6 两行）：task 0013 和 governance 0037 回滚时只回代码即可（新列可空、不回填，旧版本不写这一列）；要连列一起删，按两个迁移头注释写的顺序：先删 trigger，再删 function，再 drop column，最后删 `schema_migrations` 里对应的行。
 
-### 3.120 管理员智能体对同一目标反复被拒后熔断（#956，S11 AA5a-2，遗留 595，0.61.0 之后的下一版）
+### 3.120 管理员智能体对同一目标反复被拒后熔断（#956，S11 AA5a-2，遗留 595，0.62.0 起）
 
 带一个迁移，随 `apply-release.sh` 自动应用：governance `0038_admin_proposal_rejection_reads`（只建一个 security definer 函数 `admin_proposal_rejections_since(timestamptz)`）。不改 compose；两个新的可选环境变量，主机不设就用默认值，不需要操作。`ADMIN_AGENT_ENABLED` 在主机上没开，所以下面的行为变化对主机没有影响。
 
@@ -2386,14 +2386,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **线上**：新错误码 `admin_proposal_target_rejected_repeatedly`（HTTP 429；WebSocket 是 `QUOTA_EXCEEDED` -32012，和每日配额同类）；`propose_admin_proposal` 的说明加上这条。契约快照不变。
 - **回滚**（见 §6 一行）：上一版不调这个函数，只回滚代码就行；要删函数：`drop function admin_proposal_rejections_since(timestamptz)`，再删 `schema_migrations` 里 governance 38 那一行。
 
-### 3.121 管理员对话链到 Task 和「完成连接」，试验例外的文案（#961，S11 AA5b，0.61.0 之后的下一版）
+### 3.121 管理员对话链到 Task 和「完成连接」，试验例外的文案（#961，S11 AA5b，0.62.0 起）
 
 只改控制台：没有迁移，不改 compose，没有新环境变量，线上契约不变，主机不需要操作。
 
 - **发版说明可写**：对话里 `invoke_worker` 那一行链接到它建的 Task，`request_connection` 那一行链接到「系统与授权」并直接打开这张申请的「完成连接」抽屉（深链 `#/govern/systems?complete=<申请 id>`；申请已完成、已取消、不在这个工作区或读者完成不了时，页面说明原因）。入口智能体的这两种调用同样有链接。试验工作区里，管理员智能体提的申请和建的 Task 标「由管理员智能体代为」；不是平台管理员的所有者在 http / mcp 申请卡上看到「平台预置时只有平台管理员能完成」。「平台预置」的说明补上试验工作区例外，审计页认得 `connection.trial_self_connect`。
 - **回滚**：只回滚代码。
 
-### 3.122 管理员智能体的工单旅程：试验、提案、应用与验证（#959，S11 AA5c，0.61.0 之后的下一版）
+### 3.122 管理员智能体的工单旅程：试验、提案、应用与验证（#959，S11 AA5c，0.62.0 起）
 
 只改验收脚本、驱动、fake-llm、openapi 夹具与手册：没有迁移，线上契约不变，主机不需要操作。
 
@@ -2406,11 +2406,19 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **CI**：`quality` 多一步 openapi 夹具自测。
 - **回滚**：只回滚代码。
 
-### 3.123 审计流标出被拦下的调用（#964，遗留 628，0.61.0 之后的下一版）
+### 3.123 审计流标出被拦下的调用（#964，遗留 628，0.62.0 起）
 
 只改控制台：没有迁移，不改 compose，没有新环境变量，线上契约不变，主机不需要操作。
 
 - **发版说明可写**：审计里被拒的调用（payload 为 `outcome: refused`）在动作名后面多一个红色「被拦下」标记，后面跟着拒绝码（写入方没记拒绝码的只显示标记）。工作区「审计」页、平台「审计」页、平台总览和平台状态页的「最近改动」都有。默认隐藏读操作时，被拒的读调用照样显示，「已隐藏 N 条读操作」只数没被拒的读。手机宽度下标记和拒绝码整组换行。
+- **回滚**：只回滚代码。
+
+### 3.124 管理员提案的验证会探它经过的门（#966，遗留 630，0.62.0 起）
+
+没有迁移，不改 compose，没有新环境变量，线上契约形状不变，主机不需要操作。
+
+- **发版说明可写**：验证一段已应用的管理员提案时，除了核验改动项还在生效，还会探这一段写入的 Operation 所在的门和 Worker 那一版里写的门，按系统分组，每个门都要连得通才算满足。门被平台切断（实例停用、连接挂起）或已经不在时，这个系统记成 `needs_platform`，不去探，验证不通过。这一段什么门都不经过时，照旧只核验改动项。控制台的验证结果文案相应调整。
+- **行为变化**：管理员提案的验证可能从「通过」变成「不通过」，门不通或被切断时就会这样，这是本意。
 - **回滚**：只回滚代码。
 
 ## 4. Hotfix 流程
@@ -2580,12 +2588,12 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.61.0 | governance `0033_change_segments_from_admin_proposals`（#920，AA3b-2）：`change_segments.source_kind` 加 `admin_proposal`、`proposed_by` 可空、4 个溯源列、约束 `change_segments_proposer`、唯一索引、3 个守卫 | 有条件可逆 | 留着 0033 只回退代码不损坏数据，但旧代码看不到 `admin_proposal` 记录（`proposed_by` 内连接 principals：不列出，get / verify / 撤销 404）；要撤掉管理员提案应用的内容，先在新版本里撤销再回退代码 | 只回退代码、保留 0033 即可。撤迁移的前提是没有 `source_kind = 'admin_proposal'` 的行：删 3 个触发器与函数和索引、删约束 `change_segments_proposer`、把 `change_segments_source_kind_check` 恢复为 `('pack')`、`proposed_by` 设回 not null、删 4 列，再删 `schema_migrations` 的 governance 33（见 0033 文件头） |
 | v0.61.0 | governance `0034_admin_proposal_platform_segments`（#921，AA3c-1）：`admin_proposal_segments` 加 authority `platform` 与 3 列、新表 `platform_change_segments` / `platform_change_items`、守卫替换与新增、函数 `admin_proposal_platform_segment` | 有条件可逆 | 没有平台部分时只回退代码不损坏数据；有平台部分时旧代码会列出目标为空、决定不了的段，先在新版本里应用、拒绝或撤回提案，再回退代码 | 只回退代码、保留 0034 即可。撤迁移的前提是没有 authority `platform` 的段、也没有 `withdrawn_origin = 'platform_segment'` 的撤回，步骤见 0034 文件头 |
 | v0.61.0 | governance `0035_admin_proposal_platform_dependency`（#923，AA3c-2）：两个依赖触发器及其函数、两个 security definer 读函数 `admin_proposal_platform_change` / `admin_proposal_applied_workspace_changes`、索引 `change_segments_admin_proposal`；不存数据 | 可逆 | 只回退代码不损坏数据：0.60.0 没有平台部分，守卫不会拦它的写入 | 只回退代码、保留 0035 即可。要撤迁移：删两个触发器及其函数、两个读函数和索引 `change_segments_admin_proposal`，再删 `schema_migrations` 里 governance 35 那一行（见 0035 文件头） |
-| v0.61.0 之后的下一版 | core `0052_activity_session_record`（#933，AA4-0，遗留 584）：替换触发器函数 `activities_trigger_record_guard`，加 `metadata.sessionKind` / `metadata.sessionId` 写后不改；不存数据 | 可逆 | 只回退代码不损坏数据：旧代码从不写这两个键 | 只回退代码、保留 0052 即可。要撤迁移：重新执行 0046 里 `create or replace function activities_trigger_record_guard` 的函数体，再删 `schema_migrations` 里 core 52 那一行 |
-| v0.61.0 之后的下一版 | core `0053_chat_agent_kind`（#937，AA4c-1）：`chats.agent_kind`（`entry` / `admin_agent`，默认 `entry`）、约束 `chats_agent_kind_check` 与 `chats_admin_agent_private`、触发器 `chats_agent_kind_guard` 及其函数 | 可逆 | 旧代码不写这一列、按列名读对话，代码可以单独回退；但管理员对话在旧代码里读作普通私有对话，并交给入口智能体起 Turn | 只回退代码前先把 `agent_kind = 'admin_agent'` 的对话归档（计数为 0 才直接回退）。要撤迁移：删触发器及其函数、删两个约束和这一列，再删 `schema_migrations` 里 core 53 那一行（见 0053 文件头） |
-| v0.61.0 之后的下一版 | governance `0036_admin_agent_targets`（#937，AA4c-1）：平台表 `admin_agent_targets` 及其守卫 `admin_agent_targets_guard`、读函数 `admin_agent_chosen_targets()` / `admin_proposal_target_chosen(uuid)`、工作区部分守卫 `admin_proposal_segments_target_chosen` | 有条件可逆 | 旧代码不认识这张表，照常提议、应用工作区部分，会被这里的守卫拒绝 | 只回退代码前先 `drop trigger admin_proposal_segments_target_chosen on admin_proposal_segments` 并删它的函数。要撤迁移：删这个守卫、两个读函数和表，再删 `schema_migrations` 里 governance 36 那一行（见 0036 文件头） |
-| v0.61.0 之后的下一版 | task `0013_task_admin_agent_session`（#954，AA5a-1）：`tasks.admin_agent_session_id`（可空、不回填）、外键 `tasks_admin_agent_session_fk`、守卫 `tasks_admin_agent_session_guard` 及其函数（插入时只许本工作区、代表 `on_behalf_of` 的 `admin_agent` 会话且工作区是试验工作区；写入后不改） | 可逆 | 旧代码插入、读取都写明列名，从不写这一列，插入时为 NULL 能过守卫；管理员智能体派的 Task 仍在表里，旧代码只是不显示来源 | 只需回退代码。要撤迁移：`drop trigger tasks_admin_agent_session_guard on tasks`、删它的函数、`alter table tasks drop column admin_agent_session_id`（外键随之删除），再删 `schema_migrations` 里 task 13 那一行（见 0013 文件头） |
-| v0.61.0 之后的下一版 | governance `0037_connection_request_admin_agent_session`（#954，AA5a-1）：`connection_requests.admin_agent_session_id`（可空、不回填）、外键 `connection_requests_admin_agent_session_fk`、守卫 `connection_requests_admin_agent_session_guard` 及其函数（插入时只许本工作区、代表 `requested_by` 的 `admin_agent` 会话且工作区是试验工作区；写入后不改） | 可逆 | 旧代码插入、读取都写明列名，从不写这一列；完成、取消请求时不动这一列，能过守卫 | 只需回退代码。要撤迁移：`drop trigger connection_requests_admin_agent_session_guard on connection_requests`、删它的函数、`alter table connection_requests drop column admin_agent_session_id`，再删 `schema_migrations` 里 governance 37 那一行（见 0037 文件头） |
-| v0.61.0 之后的下一版 | governance `0038_admin_proposal_rejection_reads`（#956，AA5a-2，遗留 595）：security definer 函数 `admin_proposal_rejections_since(timestamptz)`，只回答事务自己的平台用户在给定时间之后被拒的工作区部分（目标、提案、部分、时间，不含理由） | 可逆 | 只加函数，旧代码不调它 | 只需回退代码。要撤迁移：`drop function admin_proposal_rejections_since(timestamptz)`，再删 `schema_migrations` 里 governance 38 那一行（见 0038 文件头） |
+| v0.62.0 | core `0052_activity_session_record`（#933，AA4-0，遗留 584）：替换触发器函数 `activities_trigger_record_guard`，加 `metadata.sessionKind` / `metadata.sessionId` 写后不改；不存数据 | 可逆 | 只回退代码不损坏数据：旧代码从不写这两个键 | 只回退代码、保留 0052 即可。要撤迁移：重新执行 0046 里 `create or replace function activities_trigger_record_guard` 的函数体，再删 `schema_migrations` 里 core 52 那一行 |
+| v0.62.0 | core `0053_chat_agent_kind`（#937，AA4c-1）：`chats.agent_kind`（`entry` / `admin_agent`，默认 `entry`）、约束 `chats_agent_kind_check` 与 `chats_admin_agent_private`、触发器 `chats_agent_kind_guard` 及其函数 | 可逆 | 旧代码不写这一列、按列名读对话，代码可以单独回退；但管理员对话在旧代码里读作普通私有对话，并交给入口智能体起 Turn | 只回退代码前先把 `agent_kind = 'admin_agent'` 的对话归档（计数为 0 才直接回退）。要撤迁移：删触发器及其函数、删两个约束和这一列，再删 `schema_migrations` 里 core 53 那一行（见 0053 文件头） |
+| v0.62.0 | governance `0036_admin_agent_targets`（#937，AA4c-1）：平台表 `admin_agent_targets` 及其守卫 `admin_agent_targets_guard`、读函数 `admin_agent_chosen_targets()` / `admin_proposal_target_chosen(uuid)`、工作区部分守卫 `admin_proposal_segments_target_chosen` | 有条件可逆 | 旧代码不认识这张表，照常提议、应用工作区部分，会被这里的守卫拒绝 | 只回退代码前先 `drop trigger admin_proposal_segments_target_chosen on admin_proposal_segments` 并删它的函数。要撤迁移：删这个守卫、两个读函数和表，再删 `schema_migrations` 里 governance 36 那一行（见 0036 文件头） |
+| v0.62.0 | task `0013_task_admin_agent_session`（#954，AA5a-1）：`tasks.admin_agent_session_id`（可空、不回填）、外键 `tasks_admin_agent_session_fk`、守卫 `tasks_admin_agent_session_guard` 及其函数（插入时只许本工作区、代表 `on_behalf_of` 的 `admin_agent` 会话且工作区是试验工作区；写入后不改） | 可逆 | 旧代码插入、读取都写明列名，从不写这一列，插入时为 NULL 能过守卫；管理员智能体派的 Task 仍在表里，旧代码只是不显示来源 | 只需回退代码。要撤迁移：`drop trigger tasks_admin_agent_session_guard on tasks`、删它的函数、`alter table tasks drop column admin_agent_session_id`（外键随之删除），再删 `schema_migrations` 里 task 13 那一行（见 0013 文件头） |
+| v0.62.0 | governance `0037_connection_request_admin_agent_session`（#954，AA5a-1）：`connection_requests.admin_agent_session_id`（可空、不回填）、外键 `connection_requests_admin_agent_session_fk`、守卫 `connection_requests_admin_agent_session_guard` 及其函数（插入时只许本工作区、代表 `requested_by` 的 `admin_agent` 会话且工作区是试验工作区；写入后不改） | 可逆 | 旧代码插入、读取都写明列名，从不写这一列；完成、取消请求时不动这一列，能过守卫 | 只需回退代码。要撤迁移：`drop trigger connection_requests_admin_agent_session_guard on connection_requests`、删它的函数、`alter table connection_requests drop column admin_agent_session_id`，再删 `schema_migrations` 里 governance 37 那一行（见 0037 文件头） |
+| v0.62.0 | governance `0038_admin_proposal_rejection_reads`（#956，AA5a-2，遗留 595）：security definer 函数 `admin_proposal_rejections_since(timestamptz)`，只回答事务自己的平台用户在给定时间之后被拒的工作区部分（目标、提案、部分、时间，不含理由） | 可逆 | 只加函数，旧代码不调它 | 只需回退代码。要撤迁移：`drop function admin_proposal_rejections_since(timestamptz)`，再删 `schema_migrations` 里 governance 38 那一行（见 0038 文件头） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
