@@ -2359,6 +2359,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **主机 apply**：脚本只读运行中内核的 `ADMIN_AGENT_ENABLED`，从不替主机打开；开关关着（主机默认）时只打一行 `NOTE admin-agent … not run`，S2 仍是 `S2 OK`。维护者以后打开开关时，S2 会建一个本次专用的管理员和两个工作区，收尾时停用和降级；降级被拒（它是最后一个启用的管理员）或控制台登录失败时脚本记一行，要到「平台 · 用户」里手工降级（`host-accept-s2.md` §2、§6）。staging 预演在一次性的 `secrets/kernel.env` 里打开开关并设 `ACCEPT_REQUIRE_ADMIN_AGENT=1`，开关没开就 `FAIL admin-agent-switch`。
 - **回滚**：只回退代码即可。
 
+### 3.118 新装主机默认打开管理员智能体（#957，S11，0.61.0 之后的下一版）
+
+不改内核行为（内核自身仍是没设 `ADMIN_AGENT_ENABLED` 就关），没有迁移，不改 compose，契约不变。只改 `scripts/host-env-init.sh`、e2e 与 staging 预演的检查和手册。
+
+- **发版说明可写**：新装主机的 `secrets/kernel.env` 默认带 `ADMIN_AGENT_ENABLED=1`，管理员智能体默认打开；改成 0 并重建内核（`docker compose up -d --force-recreate kernel`）即可关闭。
+- **已有主机升级不受影响**：`host-env-init.sh` 只在 `kernel.env` 缺失或为空时才写，从不改写；`kernel.env` 写什么就是什么，没写就是关。要打开时在 `kernel.env` 里加 `ADMIN_AGENT_ENABLED=1` 并 `docker compose up -d --force-recreate kernel`（`host-checkout.md` §E3.3）。主机现在停在 v0.50.0，升级时不会因此打开。
+- **回滚**：只回滚代码；已经生成的 `kernel.env` 不会被改回去，要关就手工改成 0 并重建内核。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
