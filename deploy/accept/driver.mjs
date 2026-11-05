@@ -68,6 +68,15 @@
 //     Bearer (every gate route needs it since the gate-protocol hardening). Prints OK=true|false.
 //     `tokenFile` (R-01): read the Bearer from that file instead — a self-connected gate holds its
 //     own connection secret, never the platform gate token (scripts/accept_s2.sh mounts it).
+//   gate-host-credential <token> <gateId> <credentialJson>
+//     (S11 AA5c) What the console's 集成 page does when a platform administrator enters a gate-host
+//     instance's shared credential (packages/web/src/lib/gate-host.ts): `issue_gate_host_token
+//     {gateId}` as <token>, then POST `{onBehalfOf, credential}` to the gate host with that 5-minute
+//     token — straight to GATE_HOST_HTTP (default http://gate-host:8083, the control network) plus
+//     the path the kernel returns without its caddy prefix `/gate-host`. The kernel never sees the
+//     credential. Prints TOKEN_STATUS= (the kernel's HTTP status), CREDENTIAL_MODE=, POST_STATUS=
+//     (the gate host's, empty when no token came back) and POST_ERROR= (its error code, if any) —
+//     never the token or the credential.
 //   transcript-stats <path>
 //     (W7) Tool-call outcomes of one Worker run, read from its pi session JSONL (mounted
 //     read-only by the caller; no kernel call). Prints ASSISTANT_MESSAGES=, MODEL= and the same
@@ -101,6 +110,7 @@ import { readFileSync } from 'node:fs';
 const KERNEL_HTTP = process.env.KERNEL_HTTP || 'http://kernel:8080';
 const WS_URL = process.env.WS_URL || 'ws://kernel:8080/ws';
 const GATE_TOKEN_FILE = process.env.GATE_TOKEN_FILE || '/run/secrets/gate_token';
+const GATE_HOST_HTTP = process.env.GATE_HOST_HTTP || 'http://gate-host:8083';
 const RPC_TIMEOUT_MS = Number(process.env.RPC_TIMEOUT_MS || 30000);
 
 function connect(url, headers) {
@@ -638,6 +648,39 @@ async function cmdGateHealth(args) {
   console.log(`OK=${body !== undefined && body.ok === true}`);
 }
 
+/** The kernel's `issue_gate_host_token` url is caddy's (`/gate-host/i/<gateId>/…`); the driver
+ *  reaches the gate host itself on the control network. */
+const GATE_HOST_CADDY_PREFIX = '/gate-host';
+
+async function cmdGateHostCredential(args) {
+  const [token, gateId, credentialJson] = args;
+  if (!gateId) throw new Error('gate-host-credential: missing <gateId>');
+  const credential = parseJsonOrUndefined(credentialJson ?? '');
+  if (!credential || typeof credential !== 'object' || Array.isArray(credential)) {
+    throw new Error('gate-host-credential: <credentialJson> must be a JSON object');
+  }
+  const issued = await capCall(token, 'issue_gate_host_token', { gateId });
+  const minted = issued.body?.result;
+  console.log(`TOKEN_STATUS=${issued.status}`);
+  console.log(`CREDENTIAL_MODE=${typeof minted?.credentialMode === 'string' ? minted.credentialMode : ''}`);
+  if (issued.status !== 200 || typeof minted?.token !== 'string' || typeof minted?.url !== 'string') {
+    console.log('POST_STATUS=');
+    console.log(`POST_ERROR=${typeof issued.body?.error?.code === 'string' ? issued.body.error.code : ''}`);
+    return;
+  }
+  const path = minted.url.startsWith(`${GATE_HOST_CADDY_PREFIX}/`)
+    ? minted.url.slice(GATE_HOST_CADDY_PREFIX.length)
+    : minted.url;
+  const res = await fetch(`${GATE_HOST_HTTP}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${minted.token}` },
+    body: JSON.stringify({ onBehalfOf: minted.onBehalfOf, credential }),
+  });
+  const body = parseJsonOrUndefined(await res.text());
+  console.log(`POST_STATUS=${res.status}`);
+  console.log(`POST_ERROR=${typeof body?.error?.code === 'string' ? body.error.code : ''}`);
+}
+
 const COMMANDS = {
   cap: cmdCap,
   'send-and-wait': cmdSendAndWait,
@@ -647,6 +690,7 @@ const COMMANDS = {
   explorer: cmdExplorer,
   mcp: cmdMcp,
   'gate-health': cmdGateHealth,
+  'gate-host-credential': cmdGateHostCredential,
   'transcript-stats': cmdTranscriptStats,
   'wait-task': cmdWaitTask,
   login: cmdLogin,

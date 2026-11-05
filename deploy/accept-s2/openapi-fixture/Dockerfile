@@ -14,6 +14,7 @@ RUN groupadd --system --gid 10001 nexttime \
 WORKDIR /app
 COPY deploy/accept-s2/openapi-fixture/server.mjs ./server.mjs
 COPY deploy/accept-s2/openapi-fixture/openapi.json ./openapi.json
+COPY deploy/accept-s2/openapi-fixture/tickets-openapi.json ./tickets-openapi.json
 
 USER nexttime
 ENV NODE_ENV=production

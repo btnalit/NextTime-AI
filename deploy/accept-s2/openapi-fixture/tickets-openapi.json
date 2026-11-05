@@ -1,0 +1,58 @@
+{
+  "openapi": "3.0.3",
+  "info": { "title": "accept-s2 test ticket system", "version": "1.0.0" },
+  "paths": {
+    "/tickets": {
+      "get": {
+        "operationId": "tickets.list",
+        "summary": "List the open tickets of the test ticket system (accept_s2.sh admin agent journey).",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      },
+      "post": {
+        "operationId": "tickets.create",
+        "summary": "Open a ticket in the test ticket system (accept_s2.sh admin agent journey).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+                  "priority": { "type": "string", "enum": ["low", "normal", "high"] }
+                },
+                "required": ["title"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/tickets/{id}": {
+      "get": {
+        "operationId": "tickets.get",
+        "summary": "Read one ticket of the test ticket system by its id (accept_s2.sh admin agent journey).",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    }
+  }
+}
