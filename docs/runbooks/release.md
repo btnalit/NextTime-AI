@@ -2351,6 +2351,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：「平台 → 管理员提案」列表每行把平台部分单独写出来（例如「平台部分：待你决定；工作区部分：待确认 2」，待你决定的加粗），筛选多一项「平台部分待你决定」。
 - **回滚**：只回退代码即可。
 
+### 3.117 管理员智能体在 staging 预演里用真 pi 跑一遍（#949，S11 AA4d-2，0.61.0 之后的下一版）
+
+只改验收脚本、驱动、fake-llm、手册和一个测试：没有迁移，没有线上契约变化，生产代码行为不变（platform-extension 只多导出一个常量），不改 compose，主机不需要操作。
+
+- **发版说明可写**：S2 验收新增管理员智能体场景（`scripts/lib/accept-s2-admin-agent.sh`）：本次专用的平台管理员在试验工作区开管理员对话，真 pi 在管理员容器里依次调 `agent_list_proposal_targets`、`platform_state_connectors`、`propose_admin_proposal`，脚本核对容器（`nexttime.role=admin`、没有入口容器）、工具列表（没有只属于入口智能体的六个）、提案（`origin = agent`、地址隐去）与审计（`sessionKind = admin_agent`），收尾撤回提案、停止管理员智能体、回收容器、停用两个工作区、降级管理员。
+- **主机 apply**：脚本只读运行中内核的 `ADMIN_AGENT_ENABLED`，从不替主机打开；开关关着（主机默认）时只打一行 `NOTE admin-agent … not run`，S2 仍是 `S2 OK`。维护者以后打开开关时，S2 会建一个本次专用的管理员和两个工作区，收尾时停用和降级；降级被拒（它是最后一个启用的管理员）或控制台登录失败时脚本记一行，要到「平台 · 用户」里手工降级（`host-accept-s2.md` §2、§6）。staging 预演在一次性的 `secrets/kernel.env` 里打开开关并设 `ACCEPT_REQUIRE_ADMIN_AGENT=1`，开关没开就 `FAIL admin-agent-switch`。
+- **回滚**：只回退代码即可。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
