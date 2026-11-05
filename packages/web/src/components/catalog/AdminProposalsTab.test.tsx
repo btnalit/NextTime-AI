@@ -715,9 +715,7 @@ describe('AdminProposalsTab (能力目录 · 管理员提案, S11 AA4a)', () => 
           .checked,
       ).toBe(true),
     );
-    expect(
-      named(http.calls, 'preview_admin_proposal_segment').map((call) => call.params),
-    ).toEqual([
+    expect(named(http.calls, 'preview_admin_proposal_segment').map((call) => call.params)).toEqual([
       { segmentId: SEGMENT },
       { segmentId: SEGMENT, workerGates: { 'ops-runner': ['gk-1'] } },
       { segmentId: SEGMENT, workerGates: { 'ops-runner': ['gk-1'] } },
