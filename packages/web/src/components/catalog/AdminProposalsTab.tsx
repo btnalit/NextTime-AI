@@ -908,9 +908,11 @@ function SegmentReview({
                 'Part of it does not fit this workspace; it cannot be applied until that is dealt with:',
               )}
             </span>
-            {data.blockers.map((blocker) => (
+            {data.blockers.map((blocker, index) => (
               <BlockerLine
-                key={blocker.ordinal}
+                // A Worker has one blocker per system it names that is not connected (AA5f), so
+                // the ordinal alone is not unique.
+                key={`${blocker.ordinal}-${index}`}
                 http={http}
                 blocker={blocker}
                 intent={segment.items[blocker.ordinal - 1]}
