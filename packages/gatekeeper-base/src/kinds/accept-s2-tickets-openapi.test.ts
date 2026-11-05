@@ -8,13 +8,18 @@ import { HttpTransport, importOpenApi } from './http.js';
  * (`deploy/accept-s2/openapi-fixture/tickets-openapi.json`, served by the openapi fixture at
  * `/tickets/openapi.json`). The admin agent journey (`scripts/lib/accept-s2-admin-agent-tickets.sh`,
  * the AA5 plan's §5.8) connects it in a trial workspace and expects exactly these Operations: two
- * reads that need no approval and one write that waits for a person. If the document drifts, this
- * fails here, not halfway through a journey on the staging host.
+ * reads that need no approval and one write that waits for a person; and the trial gate's served
+ * manifest (`deploy/accept-s2/tickets-gate-manifest.json`) is exactly what the kernel imports. If
+ * either drifts, this fails here, not halfway through a journey on the staging host.
  */
 const DOCUMENT_PATH = fileURLToPath(
   new URL('../../../../deploy/accept-s2/openapi-fixture/tickets-openapi.json', import.meta.url),
 );
 const document = JSON.parse(readFileSync(DOCUMENT_PATH, 'utf8'));
+/** The fixture gate's own served manifest (`accept-s2-tickets-gate`'s `GATE_MANIFEST_FILE`). */
+const GATE_MANIFEST_PATH = fileURLToPath(
+  new URL('../../../../deploy/accept-s2/tickets-gate-manifest.json', import.meta.url),
+);
 
 describe('accept_s2 ticket system OpenAPI document (S11 AA5c)', () => {
   const operations = importOpenApi(document);
@@ -22,6 +27,12 @@ describe('accept_s2 ticket system OpenAPI document (S11 AA5c)', () => {
 
   it('imports three Operations named by their operationId', () => {
     expect([...byName.keys()].sort()).toEqual(['tickets.create', 'tickets.get', 'tickets.list']);
+  });
+
+  it('the fixture gate serves exactly what the kernel imports from the document', () => {
+    // create_connection imports `manifestSource` (this document) as the draft, while the gate
+    // answers describeOperations from its own file: the two must not drift apart.
+    expect(JSON.parse(readFileSync(GATE_MANIFEST_PATH, 'utf8'))).toEqual(operations);
   });
 
   it('reads are observe and need no approval; opening a ticket is execute and waits for a decision', () => {

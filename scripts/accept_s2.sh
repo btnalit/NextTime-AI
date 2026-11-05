@@ -293,13 +293,13 @@ preflight_step() {
     2) fail "preflight-accept-s2-gate-image" "$image_out — install this release's images first: sh scripts/pull-images.sh <tag> gate-host (or sh scripts/build-images.sh gate-host)" ;;
     *) fail "preflight-accept-s2-gate-image" "$image_out" ;;
   esac
-  for g in accept-s2-ssh-gate accept-s2-http-gate; do
+  for g in accept-s2-ssh-gate accept-s2-http-gate accept-s2-tickets-gate; do
     g_image=$(compose_image_of "$g" --profile accept-s2) ||
       fail "preflight-accept-s2-gate-image" "cannot resolve the local image name of $g (docker compose --profile accept-s2 config --images)"
     docker tag "$gate_image" "$g_image" ||
       fail "preflight-accept-s2-gate-image" "docker tag $gate_image $g_image failed"
   done
-  pass "preflight-accept-s2-gate-image" "accept-s2-ssh-gate / accept-s2-http-gate run $image_out"
+  pass "preflight-accept-s2-gate-image" "accept-s2-ssh-gate / accept-s2-http-gate / accept-s2-tickets-gate run $image_out"
 }
 
 bootstrap_step() {
@@ -1461,9 +1461,9 @@ cleanup_step() {
   resident_reclaim "$ALICE_PRINCIPAL_ID" >/dev/null 2>&1
   resident_reclaim "$BOB_PRINCIPAL_ID" >/dev/null 2>&1
   # `down` on a profile also stops every default-profile service (postgres/kernel/…), which broke
-  # running accept_s3.sh right after this script (STATUS leftover 26) — `rm -sf` the six accept-s2
+  # running accept_s3.sh right after this script (STATUS leftover 26) — `rm -sf` the seven accept-s2
   # fixture/gate containers by name instead, leaving the rest of the stack untouched.
-  down_out=$(docker compose --profile accept-s2 rm -sf accept-s2-sshd accept-s2-openapi accept-s2-mcp accept-s2-ssh-gate accept-s2-http-gate accept-s2-restart-target 2>&1)
+  down_out=$(docker compose --profile accept-s2 rm -sf accept-s2-sshd accept-s2-openapi accept-s2-mcp accept-s2-ssh-gate accept-s2-http-gate accept-s2-tickets-gate accept-s2-restart-target 2>&1)
   down_rc=$?
   if [ "$down_rc" -ne 0 ]; then
     echo "cleanup: docker compose --profile accept-s2 rm -sf failed: $down_out" >&2

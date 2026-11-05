@@ -46,7 +46,7 @@
   密钥，并断言平台 `gate_token` 被这个门拒绝；`create_connection` 带同一把 `connectionSecret`。验收夹具都
   在平台自己的 `control` 网络上、用裸服务名，内核的出站目标判定默认拒绝这种地址——除了 `docker-compose.yml`
   固定写给 kernel 的验收夹具清单 `NEXTTIME_CONNECTION_FIXTURE_HOSTS`（`accept-s2-ssh-gate,accept-s2-http-gate,
-  accept-s2-openapi,accept-s2-mcp`，常量，`validate-compose.mjs` 保证全是 `accept-*` 夹具、都不挂
+  accept-s2-tickets-gate,accept-s2-openapi,accept-s2-mcp`，常量，`validate-compose.mjs` 保证全是 `accept-*` 夹具、都不挂
   `gate_token`）。永久放行它们不授予任何东西：名字只在 `accept-s2` profile 起着时才解析得到，夹具门只认绑定到
   验收工作区的连接密钥。**脚本不重启 kernel**；`worker-supervisor` 等平台服务不在清单里，照样被拒
   （`connect-mcp-target-refused` 验的就是这个）。
