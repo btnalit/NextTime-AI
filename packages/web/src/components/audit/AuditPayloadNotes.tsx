@@ -1,4 +1,4 @@
-import { auditPayloadShown } from '../../lib/format.js';
+import { auditPayloadShown, formatDateTime } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
 import { RedactedNote, showsRedaction } from '../kit/redacted-note.js';
 
@@ -76,6 +76,29 @@ function asRecord(value: unknown): Readonly<Record<string, unknown>> | undefined
     : undefined;
 }
 
+/** S11 AA5a-2 (F6(a), legacy 595): a `propose_admin_proposal` the kernel refused because the
+ *  target workspace rejected this administrator's proposals too often lately
+ *  (`admin_proposal_target_rejected_repeatedly`, kernel `change-plan/admin-proposal-breaker.ts`):
+ *  the rule as it stood, how many rejections counted and when the target opens again. */
+function breakerNote(record: Readonly<Record<string, unknown>>):
+  | {
+      readonly limit: number;
+      readonly windowDays: number;
+      readonly rejected: number;
+      readonly reopensAt: string;
+    }
+  | undefined {
+  if (record.outcome !== 'refused') return undefined;
+  const refusal = asRecord(record.refusal);
+  if (refusal?.code !== 'admin_proposal_target_rejected_repeatedly') return undefined;
+  const limit = countAt(refusal, 'rejectionLimit');
+  const windowDays = countAt(refusal, 'windowDays');
+  const reopensAt = typeof refusal.reopensAt === 'string' ? refusal.reopensAt : undefined;
+  const rejected = Array.isArray(refusal.rejections) ? refusal.rejections.length : undefined;
+  if (limit === undefined || windowDays === undefined || reopensAt === undefined) return undefined;
+  return { limit, windowDays, rejected: rejected ?? limit, reopensAt };
+}
+
 /**
  * What an audit row's payload says about credentials, in words above the raw payload (legacy 159,
  * 178): the kernel's `credentialReview` (a person confirmed N suspected credentials — or, for a
@@ -89,7 +112,9 @@ function asRecord(value: unknown): Readonly<Record<string, unknown>> | undefined
  * the console masks (`auditPayloadShown`, what the page shows below the notes). S10 E3-1b: and
  * which params the record leaves out (`withheldParams`, an evaluation case's content). S10 E3-1c:
  * and, on an `evaluation.content_withheld` row, where the seal stopped the content and what that
- * left. Renders nothing when the payload has none of them.
+ * left. S11 AA5a-2: and, on an admin agent's proposal refused because its target workspace kept
+ * rejecting this administrator's proposals, the rule, the count and when the target opens again.
+ * Renders nothing when the payload has none of them.
  */
 export function AuditPayloadNotes({ payload }: { readonly payload: unknown }) {
   const t = useT();
@@ -101,6 +126,7 @@ export function AuditPayloadNotes({ payload }: { readonly payload: unknown }) {
   const revokedHandles = countAt(record, 'revokedHandleCount');
   const withheld = namesAt(record, 'withheldParams');
   const sealed = sealNote(record);
+  const breaker = breakerNote(record);
   // Looked for in what the page shows below.
   const { params, ...rest } = auditPayloadShown(record) as Record<string, unknown>;
   const masked = showsRedaction(rest) || (redacted === undefined && showsRedaction(params));
@@ -110,6 +136,7 @@ export function AuditPayloadNotes({ payload }: { readonly payload: unknown }) {
     revokedHandles === undefined &&
     withheld === undefined &&
     sealed === undefined &&
+    breaker === undefined &&
     !masked
   ) {
     return null;
@@ -153,6 +180,14 @@ export function AuditPayloadNotes({ payload }: { readonly payload: unknown }) {
           {t(
             `${sealed.zh}记录里不写拦下的是哪段内容、属于哪个用例。`,
             `${sealed.en} The record never says which text it was or which case it belongs to.`,
+          )}
+        </li>
+      ) : null}
+      {breaker !== undefined ? (
+        <li data-testid="audit-admin-proposal-breaker">
+          {t(
+            `目标工作区在 ${breaker.windowDays} 天内拒绝了这位管理员的提案 ${breaker.rejected} 次（满 ${breaker.limit} 次就暂停），管理员智能体在 ${formatDateTime(breaker.reopensAt)} 之前不能再向它提案，到时自动恢复；这次提案什么也没写入。所有者写的拒绝理由在「平台 → 管理员提案」各提案的详情里，智能体看不到。`,
+            `The target workspace rejected this administrator's proposals ${breaker.rejected} time(s) within ${breaker.windowDays} day(s) (the limit is ${breaker.limit}), so the admin agent cannot propose to it again until ${formatDateTime(breaker.reopensAt)}, when it reopens on its own; this proposal wrote nothing. The owner's reasons are in each proposal's detail under Platform → Admin proposals; the agent never sees them.`,
           )}
         </li>
       ) : null}

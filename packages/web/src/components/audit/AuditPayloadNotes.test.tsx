@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
+import { formatDateTime } from '../../lib/format.js';
 import { CredentialReview } from '../kit/credential-review.js';
 import { AuditPayloadNotes } from './AuditPayloadNotes.js';
 
@@ -116,12 +117,69 @@ describe('AuditPayloadNotes (legacy 159, 178)', () => {
     expect(screen.getByTestId('audit-payload-redacted')).toBeTruthy();
   });
 
+  it('S11 AA5a-2: says why a target closed to the admin agent, until when, and where the reasons are', () => {
+    const reopensAt = '2026-11-09T08:30:00.000Z';
+    render(
+      <AuditPayloadNotes
+        payload={{
+          channel: 'handle',
+          sessionKind: 'admin_agent',
+          outcome: 'refused',
+          refusal: {
+            code: 'admin_proposal_target_rejected_repeatedly',
+            status: 429,
+            segment: 0,
+            targetWorkspaceId: '00000000-0000-4000-8000-0000000000a1',
+            rejectionLimit: 3,
+            windowDays: 7,
+            reopensAt,
+            rejections: [
+              { proposalId: 'p1', segmentId: 's1', rejectedAt: '2026-11-02T08:30:00.000Z' },
+              { proposalId: 'p2', segmentId: 's2', rejectedAt: '2026-11-03T08:30:00.000Z' },
+              { proposalId: 'p3', segmentId: 's3', rejectedAt: '2026-11-04T08:30:00.000Z' },
+            ],
+          },
+        }}
+      />,
+    );
+    const note = screen.getByTestId('audit-admin-proposal-breaker').textContent ?? '';
+    expect(note).toContain('7 天内拒绝了这位管理员的提案 3 次');
+    expect(note).toContain('满 3 次就暂停');
+    expect(note).toContain(`在 ${formatDateTime(reopensAt)} 之前不能再向它提案，到时自动恢复`);
+    expect(note).toContain('这次提案什么也没写入');
+    expect(note).toContain('「平台 → 管理员提案」');
+    expect(note).toContain('智能体看不到');
+  });
+
   it('renders nothing for an ordinary payload or a malformed count', () => {
     const { container } = render(
       <>
         <AuditPayloadNotes payload={{ name: 'x' }} />
         <AuditPayloadNotes
           payload={{ redactedValues: 0, credentialReview: { suspectedSecretValues: '2' } }}
+        />
+        <AuditPayloadNotes
+          payload={{ outcome: 'refused', refusal: { code: 'admin_agent_refused', status: 403 } }}
+        />
+        <AuditPayloadNotes
+          payload={{
+            outcome: 'refused',
+            refusal: {
+              code: 'admin_proposal_target_rejected_repeatedly',
+              rejectionLimit: 3,
+              windowDays: 7,
+            },
+          }}
+        />
+        <AuditPayloadNotes
+          payload={{
+            refusal: {
+              code: 'admin_proposal_target_rejected_repeatedly',
+              rejectionLimit: 3,
+              windowDays: 7,
+              reopensAt: '2026-11-09T08:30:00.000Z',
+            },
+          }}
         />
         <AuditPayloadNotes payload={null} />
         <AuditPayloadNotes payload={[1]} />

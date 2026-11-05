@@ -27,6 +27,7 @@ import {
   AdminProposalSegmentUnchangedError,
   AdminProposalTargetNoLongerChosenError,
   AdminProposalTargetNotChosenError,
+  AdminProposalTargetRejectedRepeatedlyError,
   AdminProposalTargetUnavailableError,
   ChangeApplierNotAPersonError,
   ChangeConfirmationRequiredError,
@@ -625,7 +626,11 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   ) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
-  if (err instanceof AdminProposalQuotaExceededError) {
+  // S11 AA5a-2: 429 `admin_proposal_target_rejected_repeatedly` too.
+  if (
+    err instanceof AdminProposalQuotaExceededError ||
+    err instanceof AdminProposalTargetRejectedRepeatedlyError
+  ) {
     return { code: WS_ERROR_CODES.QUOTA_EXCEEDED, message: err.message };
   }
   if (err instanceof AdminProposalRoleMismatchError) {
