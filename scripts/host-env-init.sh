@@ -15,7 +15,8 @@
 # fix-up on a few of those directories. One exception: collectors/host-inventory/ (S3.3) is
 # `mkdir -p`'d defensively right before it is chowned — see that step's own comment for why.
 #
-# Scope: writes secrets/{kernel,llm-proxy,gatekeeper-ragflow}.env and
+# Scope: writes secrets/{kernel,llm-proxy,gatekeeper-ragflow}.env (kernel.env with the admin agent
+# switched on — a new install's default, see that step's own comment) and
 # config/{llm-providers.yaml,handle.pub,egress-sources.json} as placeholders/templates — no real
 # credentials exist yet at this point in the task list (S1.7/S1.9 fill them in later;
 # egress-sources.json is S1.11's SOURCE_MAP_FILE for egress-proxy, design doc §7.9 — an empty
@@ -99,8 +100,14 @@ urlencode() {
 
 CREATED=""
 SKIPPED=""
+ADMIN_AGENT_SWITCHED_ON=0
 
 # --- secrets/kernel.env: DATABASE_URL (from secrets/pg_password) + Handle key file paths ------
+# Written only when missing or empty, never rewritten. That is also how a new install and an
+# upgrade differ on the admin agent switch: the kernel itself keeps the agent off while
+# ADMIN_AGENT_ENABLED is unset (packages/kernel/src/application/admin-agent/identity.ts), and only
+# the kernel.env created here sets it to 1 — a host whose kernel.env predates this keeps whatever it
+# says (no line: off) until a maintainer changes it (docs/runbooks/host-checkout.md §E3.3).
 KERNEL_ENV="$SECRETS_DIR/kernel.env"
 if [ ! -s "$KERNEL_ENV" ]; then
 	pg_password=$(cat "$PG_PASSWORD_FILE")
@@ -113,9 +120,14 @@ if [ ! -s "$KERNEL_ENV" ]; then
 		echo "# compose secret 'handle_key'; the public key is config/handle.pub."
 		echo "HANDLE_PRIVATE_KEY_FILE=/run/secrets/handle_key"
 		echo "HANDLE_PUBLIC_KEY_FILE=/data/config/handle.pub"
+		echo "# Admin agent (S11): a new install starts with it on, so platform administrators can"
+		echo "# run it in trial workspaces. To switch it off, set this to 0 and recreate the kernel"
+		echo "# (docker compose up -d --force-recreate kernel); the kernel reads it once at start."
+		echo "ADMIN_AGENT_ENABLED=1"
 	} >"$KERNEL_ENV"
 	unset pg_password encoded_password
 	CREATED="$CREATED secrets/kernel.env"
+	ADMIN_AGENT_SWITCHED_ON=1
 else
 	SKIPPED="$SKIPPED secrets/kernel.env"
 fi
@@ -400,6 +412,10 @@ done
 echo ""
 echo "host-env-init: created:${CREATED:- (none — all already existed)}"
 echo "host-env-init: already existed, left unchanged:${SKIPPED:- (none)}"
+if [ "$ADMIN_AGENT_SWITCHED_ON" -eq 1 ]; then
+	echo "host-env-init: admin agent switched on for this new install (ADMIN_AGENT_ENABLED=1 in secrets/kernel.env);"
+	echo "  set it to 0 there and recreate the kernel to switch it off"
+fi
 echo ""
 echo "host-env-init: secrets/*.env (mode, path):"
 for f in kernel.env llm-proxy.env gatekeeper-ragflow.env; do

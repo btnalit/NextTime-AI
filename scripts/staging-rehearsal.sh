@@ -96,7 +96,9 @@ export ACCEPT_DISRUPTIVE="${ACCEPT_DISRUPTIVE:-1}"
 # S11 AA4d (AA4 plan F9): the target's accept_s2 runs its admin agent scenario — real pi in the
 # admin container proposing once — only while the kernel has ADMIN_AGENT_ENABLED on, and with this
 # set a switch left off is a FAIL, not a NOTE. The switch itself goes into this throwaway host's
-# secrets/kernel.env right before the apply (step 10); production keeps it off.
+# secrets/kernel.env right before the apply (step 10): a --from release older than new installs'
+# admin-agent-on default wrote a kernel.env without it, as an upgraded host has. A --from release
+# with that default already wrote ADMIN_AGENT_ENABLED=1 in step 3; the append repeats the same value.
 export ACCEPT_REQUIRE_ADMIN_AGENT="${ACCEPT_REQUIRE_ADMIN_AGENT:-1}"
 [ -n "$FROM" ] && [ -n "$TO" ] && [ -n "$WORK" ] || die "--from, --to and --work are required"
 [ "$(id -u)" -eq 0 ] || die "run as root (the host-init scripts chown the data root to the container uid)"
