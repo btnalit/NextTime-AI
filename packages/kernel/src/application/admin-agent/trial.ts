@@ -23,17 +23,25 @@ import {
  * **Self-connecting in a trial workspace** (F1(a)). A workspace may connect a system of its own only
  * while the platform keeps that kind's generic connector in `self_serve` (R-40, D-19). A trial
  * workspace is a platform administrator's sandbox for trying a system out before proposing it for
- * production, so there an `http` or `mcp` connection is allowed whatever the connector's mode —
- * provided the Principal asking (the admin agent's person) and the one completing it (a person, on
- * the human channel) is, at that moment, a platform administrator acting in an active trial
- * workspace ({@link isPlatformAdminInTrialWorkspace}). Each use of the exception leaves its own
+ * production, so there an `http` or `mcp` connection is allowed while the platform runs that kind
+ * itself (`platform_preset`) — provided the Principal asking (the admin agent's person) and the one
+ * completing it (a person, on the human channel) is, at that moment, a platform administrator
+ * acting in an active trial workspace ({@link isPlatformAdminInTrialWorkspace}). A kind the
+ * platform switched off (`disabled`) stays off here too: no exception passes it (coordinator
+ * 2026-11-05 — what is taken out of use grants nothing, as with a disabled trial workspace). Each
+ * use of the exception leaves its own
  * audit row (`connection.trial_self_connect`), and the connection is a self connection like any
  * other: the platform sees it and can suspend it. Production still goes through a platform
  * segment's `gate_instance`.
  */
 
-/** The connection kinds a trial workspace may self-connect whatever the connector's mode (F1). */
+/** The connection kinds a trial workspace may self-connect though the connector is not `self_serve`
+ *  (F1). */
 export const TRIAL_SELF_CONNECT_KINDS: ReadonlySet<string> = new Set(['http', 'mcp']);
+
+/** The one connector mode besides `self_serve` the trial exception passes; `disabled` it never does
+ *  (coordinator 2026-11-05). */
+export const TRIAL_SELF_CONNECT_PASSES_MODE = 'platform_preset' as const;
 
 /** The audit action written each time the trial exception lets a connection through. */
 export const TRIAL_SELF_CONNECT_AUDIT_ACTION = 'connection.trial_self_connect';

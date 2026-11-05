@@ -296,11 +296,11 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     /** Sets the platform's generic connectors for `kinds` to `mode` while `fn` runs, then puts
      *  back what was there. Test files run one at a time against a real database. */
-    async function withConnectorModes(
+    async function withConnectorModes<T>(
       kinds: readonly string[],
       mode: string,
-      fn: () => Promise<void>,
-    ): Promise<void> {
+      fn: () => Promise<T>,
+    ): Promise<T> {
       const before = await withAdminClient(pool, (client) =>
         client.query<{ name: string; mode: string }>(
           'select name, mode from connectors where name = any($1::text[])',
@@ -311,7 +311,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         client.query('update connectors set mode = $2 where name = any($1::text[])', [kinds, mode]),
       );
       try {
-        await fn();
+        return await fn();
       } finally {
         for (const row of before.rows) {
           await withAdminClient(pool, (client) =>
@@ -766,8 +766,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       }
     });
 
-    it('in a trial workspace a platform administrator self-connects http or mcp whatever the connector mode, each use audited; nobody else, no other kind, no other workspace', async () => {
-      await withConnectorModes(['http', 'mcp', 'cli'], 'disabled', async () => {
+    it('in a trial workspace a platform administrator self-connects http or mcp while the connector is platform-preset, each use audited; nobody else, no other kind, no other workspace', async () => {
+      await withConnectorModes(['http', 'mcp', 'cli'], 'platform_preset', async () => {
         const { caller, sessionId } = await agent();
         const before = await auditCount(trialWs, TRIAL_SELF_CONNECT_AUDIT_ACTION);
 
@@ -781,7 +781,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           actor: adminPrincipalId,
           capability: 'request_connection',
           kind: 'mcp',
-          connectorMode: 'disabled',
+          connectorMode: 'platform_preset',
           sessionKind: 'admin_agent',
           sessionId,
           resourceType: 'connection_request',
@@ -850,7 +850,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           actor: adminPrincipalId,
           capability: 'create_connection',
           kind: 'mcp',
-          connectorMode: 'disabled',
+          connectorMode: 'platform_preset',
           resourceType: 'gatekeeper',
           resourceId: created.gatekeeperId,
         });
@@ -905,6 +905,66 @@ describe.runIf(DATABASE_URL !== undefined)(
             isPlatformAdminInTrialWorkspace(client, trialWs, adminPrincipalId),
           ),
         ).toBe(true);
+      });
+    });
+
+    it('a connector the platform disabled stays closed in a trial workspace too: no request, no completion, no exception audited (coordinator 2026-11-05)', async () => {
+      const { caller } = await agent();
+      // Asked for while the platform ran http itself, then switched off before anyone completed it.
+      const requested = await withConnectorModes(
+        ['http'],
+        'platform_preset',
+        async () =>
+          dispatchCapability({ pool }, caller, 'request_connection', {
+            kind: 'http',
+            target: 'switched-off-later',
+          }) as Promise<{ id: string }>,
+      );
+      await withConnectorModes(['http', 'mcp'], 'disabled', async () => {
+        const before = await auditCount(trialWs, TRIAL_SELF_CONNECT_AUDIT_ACTION);
+        for (const kind of ['http', 'mcp'] as const) {
+          // The admin agent cannot ask…
+          const byAgent = await refusalOf(
+            dispatchCapability({ pool }, caller, 'request_connection', {
+              kind,
+              target: `disabled-${kind}`,
+            }),
+          );
+          expect(byAgent, kind).toBeInstanceOf(ConnectorNotSelfServeError);
+          expect(byAgent, kind).toMatchObject({ code: 'connector_not_self_serve' });
+          // …nor its platform administrator, by hand.
+          expect(
+            await refusalOf(
+              dispatchCapability(
+                { pool },
+                person(trialWs, adminPrincipalId),
+                'request_connection',
+                { kind, target: `disabled-${kind}-by-hand` },
+              ),
+            ),
+            kind,
+          ).toBeInstanceOf(ConnectorNotSelfServeError);
+        }
+        // Nor complete what was asked for before the switch.
+        expect(
+          await refusalOf(
+            dispatchCapability({ pool }, person(trialWs, adminPrincipalId), 'create_connection', {
+              connectionRequestId: requested.id,
+              kind: 'http',
+              target: 'switched-off-later',
+              endpoint: unusedEndpoint(),
+              connectionSecret: CONNECTION_SECRETS.mint(trialWs).secret,
+              credentialKind: 'shared',
+            }),
+          ),
+        ).toBeInstanceOf(ConnectorNotSelfServeError);
+        expect(await auditCount(trialWs, TRIAL_SELF_CONNECT_AUDIT_ACTION)).toBe(before);
+        const row = await withAdminClient(pool, (client) =>
+          client.query<{ status: string }>('select status from connection_requests where id = $1', [
+            requested.id,
+          ]),
+        );
+        expect(row.rows[0]?.status).toBe('requested');
       });
     });
   },

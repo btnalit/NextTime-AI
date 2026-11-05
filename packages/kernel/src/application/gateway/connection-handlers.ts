@@ -39,6 +39,7 @@ import { writeAudit } from '../../substrate/audit/index.js';
 import {
   TRIAL_SELF_CONNECT_AUDIT_ACTION,
   TRIAL_SELF_CONNECT_KINDS,
+  TRIAL_SELF_CONNECT_PASSES_MODE,
   assertAdminAgentInTrialWorkspace,
   isPlatformAdminInTrialWorkspace,
 } from '../admin-agent/index.js';
@@ -111,13 +112,17 @@ import { toWireConnectionRequest, toWireGrant } from './resource-wire.js';
  * its own only while the platform keeps the generic connector for that `kind` in `self_serve`
  * (design `platform-admin-design.md` "三态：禁用 / 可自连 / 平台预置"). `disabled` closes it to new
  * connections; `platform_preset` means the platform runs that kind's instances and a workspace
- * enables them from the catalog (`enable_gate_instance`). `assertConnectorSelfServe` refuses both
- * `create_connection` and `request_connection` otherwise, before any other check or I/O — 409
- * `connector_not_self_serve`. Existing connections are untouched (D-19: the mode gates new
+ * enables them from the catalog (`enable_gate_instance`). `assertConnectorAllowsSelfConnection`
+ * refuses both `create_connection` and `request_connection` otherwise — 409
+ * `connector_not_self_serve` — once the caller's Principal is known (and, for `request_connection`,
+ * whether it is an admin agent's), before the parameters are checked and before any fetch or
+ * write. Existing connections are untouched (D-19: the mode gates new
  * connections; the connector's Operation deny list is the cut-off for existing ones). One exception
  * (S11 AA5a-1, the AA5 plan's F1): in a trial workspace an `http` or `mcp` connection asked for and
- * completed by a platform administrator passes whatever the mode, and each such pass is audited
- * (`connection.trial_self_connect`) — `application/admin-agent/trial.ts` says why.
+ * completed by a platform administrator passes a `platform_preset` connector — never a `disabled`
+ * one (coordinator 2026-11-05: a kind the platform switched off stays off everywhere) — and each
+ * such pass is audited (`connection.trial_self_connect`); `application/admin-agent/trial.ts` says
+ * why.
  *
  * **Admin agents (S11 AA5a-1)**: `request_connection` is in the admin agent's ceiling, in its trial
  * workspace only — the handler checks the workspace's purpose again itself
@@ -299,8 +304,9 @@ interface ConnectorAllowance {
 }
 
 /** R-40 (D-19): see the module doc comment ("Connector three-state"). S11 AA5a-1: an `http` or
- *  `mcp` connection a platform administrator makes in their trial workspace passes whatever the
- *  mode (`isPlatformAdminInTrialWorkspace`, read only when the mode would refuse). */
+ *  `mcp` connection a platform administrator makes in their trial workspace passes a
+ *  `platform_preset` connector (`isPlatformAdminInTrialWorkspace`, read only then); a `disabled`
+ *  one, or a kind with no connector row, refuses everyone. */
 async function assertConnectorAllowsSelfConnection(
   client: PoolClient,
   workspaceId: string,
@@ -310,6 +316,7 @@ async function assertConnectorAllowsSelfConnection(
   const mode = await readConnectorMode(client, kind);
   if (mode === 'self_serve') return { trialException: null };
   if (
+    mode === TRIAL_SELF_CONNECT_PASSES_MODE &&
     TRIAL_SELF_CONNECT_KINDS.has(kind) &&
     (await isPlatformAdminInTrialWorkspace(client, workspaceId, principalId))
   ) {
