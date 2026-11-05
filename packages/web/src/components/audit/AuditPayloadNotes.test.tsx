@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { RouteAccessProvider } from '../../hooks/useCanOpen.js';
+import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime } from '../../lib/format.js';
+import { LangProvider } from '../../lib/i18n.js';
+import { hrefs } from '../../lib/router.js';
 import { CredentialReview } from '../kit/credential-review.js';
 import { AuditPayloadNotes } from './AuditPayloadNotes.js';
 
@@ -117,38 +121,105 @@ describe('AuditPayloadNotes (legacy 159, 178)', () => {
     expect(screen.getByTestId('audit-payload-redacted')).toBeTruthy();
   });
 
-  it('S11 AA5a-2: says why a target closed to the admin agent, until when, and where the reasons are', () => {
-    const reopensAt = '2026-11-09T08:30:00.000Z';
+  const TARGET = '00000000-0000-4000-8000-0000000000a1';
+  const REOPENS_AT = '2026-11-09T08:30:00.000Z';
+  const REJECTED_AT = [
+    '2026-11-02T08:30:00.000Z',
+    '2026-11-03T08:30:00.000Z',
+    '2026-11-04T08:30:00.000Z',
+  ];
+  function breakerPayload(rejectedCount = 3): Record<string, unknown> {
+    return {
+      channel: 'handle',
+      sessionKind: 'admin_agent',
+      outcome: 'refused',
+      refusal: {
+        code: 'admin_proposal_target_rejected_repeatedly',
+        status: 429,
+        segment: 0,
+        targetWorkspaceId: TARGET,
+        rejectionLimit: 3,
+        windowDays: 7,
+        reopensAt: REOPENS_AT,
+        rejections: Array.from({ length: rejectedCount }, (_, index) => ({
+          proposalId: `p${index + 1}`,
+          segmentId: `s${index + 1}`,
+          rejectedAt: REJECTED_AT[index] ?? REJECTED_AT[2],
+        })),
+      },
+    };
+  }
+  const nobody: CapabilityCaller = { call: vi.fn(async () => ({})) as CapabilityCaller['call'] };
+
+  it('S11 AA5a-2: says which target closed to the admin agent, until when, and links the rejected proposals', () => {
     render(
       <AuditPayloadNotes
-        payload={{
-          channel: 'handle',
-          sessionKind: 'admin_agent',
-          outcome: 'refused',
-          refusal: {
-            code: 'admin_proposal_target_rejected_repeatedly',
-            status: 429,
-            segment: 0,
-            targetWorkspaceId: '00000000-0000-4000-8000-0000000000a1',
-            rejectionLimit: 3,
-            windowDays: 7,
-            reopensAt,
-            rejections: [
-              { proposalId: 'p1', segmentId: 's1', rejectedAt: '2026-11-02T08:30:00.000Z' },
-              { proposalId: 'p2', segmentId: 's2', rejectedAt: '2026-11-03T08:30:00.000Z' },
-              { proposalId: 'p3', segmentId: 's3', rejectedAt: '2026-11-04T08:30:00.000Z' },
-            ],
-          },
-        }}
+        payload={breakerPayload()}
+        workspaceNames={new Map([[TARGET, 'Ops production']])}
       />,
     );
-    const note = screen.getByTestId('audit-admin-proposal-breaker').textContent ?? '';
-    expect(note).toContain('7 天内拒绝了这位管理员的提案 3 次');
-    expect(note).toContain('满 3 次就暂停');
-    expect(note).toContain(`在 ${formatDateTime(reopensAt)} 之前不能再向它提案，到时自动恢复`);
-    expect(note).toContain('这次提案什么也没写入');
-    expect(note).toContain('「平台 → 管理员提案」');
-    expect(note).toContain('智能体看不到');
+    const note = screen.getByTestId('audit-admin-proposal-breaker');
+    const text = note.textContent ?? '';
+    expect(text).toContain(
+      '目标工作区「Ops production」在 7 天内拒绝了这位管理员的提案 3 次，到了上限。',
+    );
+    expect(text).not.toContain('满 3 次');
+    expect(text).toContain(`在 ${formatDateTime(REOPENS_AT)} 之前不能再向它提案，到时自动恢复`);
+    expect(text).toContain('这次提案什么也没写入');
+    expect(text).toContain('「平台 → 管理员提案」里，智能体看不到。');
+    expect(text).toContain('被拒的是这几份（按被拒时间）：');
+    expect(screen.getByTestId('audit-admin-proposal-breaker-proposals').getAttribute('href')).toBe(
+      hrefs.platformAdminProposals(),
+    );
+    const rejections = screen.getAllByTestId('audit-admin-proposal-breaker-rejection');
+    expect(rejections.map((link) => link.getAttribute('href'))).toEqual(
+      ['p1', 'p2', 'p3'].map((id) => hrefs.platformAdminProposals('proposals', id)),
+    );
+    expect(rejections.map((link) => link.textContent)).toEqual(
+      REJECTED_AT.map((at) => formatDateTime(at)),
+    );
+  });
+
+  it('S11 AA5a-2: names an unknown target by a short id, says the limit when more counted, and links nothing for a reader who is not a platform administrator', () => {
+    render(
+      <RouteAccessProvider http={nobody} platformAdmin={false}>
+        <AuditPayloadNotes payload={breakerPayload(4)} />
+      </RouteAccessProvider>,
+    );
+    const note = screen.getByTestId('audit-admin-proposal-breaker');
+    expect(note.textContent).toContain(
+      '目标工作区「00000000」在 7 天内拒绝了这位管理员的提案 4 次，上限是 3 次。',
+    );
+    expect(note.querySelector('a')).toBeNull();
+    expect(screen.getByTestId('audit-admin-proposal-breaker-proposals').textContent).toBe(
+      '平台 → 管理员提案',
+    );
+    expect(screen.getAllByTestId('audit-admin-proposal-breaker-rejection')).toHaveLength(4);
+  });
+
+  it('S11 AA5a-2: says it in English with the counts spelled out', () => {
+    localStorage.setItem('nexttime.lang', 'en');
+    try {
+      render(
+        <LangProvider>
+          <AuditPayloadNotes
+            payload={breakerPayload()}
+            workspaceNames={new Map([[TARGET, 'Ops production']])}
+          />
+        </LangProvider>,
+      );
+      const text = screen.getByTestId('audit-admin-proposal-breaker').textContent ?? '';
+      expect(text).toContain(
+        'The target workspace “Ops production” rejected this administrator’s proposals 3 times within 7 days, which is the limit, so the admin agent cannot propose to it again until',
+      );
+      expect(text).not.toContain('(s)');
+      expect(text).toContain(
+        'The owner’s reasons are under Platform → Admin proposals; the agent never sees them.',
+      );
+      expect(text).toContain('The rejected proposals, by when they were rejected: ');
+    } finally {
+      localStorage.removeItem('nexttime.lang');
+    }
   });
 
   it('renders nothing for an ordinary payload or a malformed count', () => {
