@@ -16,6 +16,7 @@ import {
 } from '../lib/tasks.js';
 import { TaskDetail } from './TaskDetail.js';
 import { usePrincipalNames } from './approvals/useDirectoryNames.js';
+import { AdminAgentActingMark } from './audit/AdminAgentActingChip.js';
 import { Button } from './kit/button.js';
 import { EmptyState } from './kit/empty-state.js';
 import { ErrorBanner } from './kit/error-banner.js';
@@ -384,6 +385,11 @@ function TasksList({
                 <span className="meta-sep" />
                 <span>{t('代表', 'on behalf of')}</span>
                 <span className="truncate">{principalName}</span>
+                {/* UX P3-4 on #961: the row says what the detail's 「发起」 says. A span, not a
+                    control, so it sits inside the row's button. */}
+                {task.adminAgentSessionId !== undefined ? (
+                  <AdminAgentActingMark testId="task-row-admin-agent" />
+                ) : null}
                 <span className="meta-sep" />
                 <span className="tabular">
                   {finished

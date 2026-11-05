@@ -516,14 +516,11 @@ export const ToolCallGroupView = memo(function ToolCallGroupView({
   const inDoubt = kinds.filter((kind) => kind === 'in_doubt').length;
   // S11 AA4e (UX P2-2 on #945): the proposals this Turn made, linked under the folded calls — the
   // next step after an admin agent proposes is reviewing what it proposed. AA5b: so are the
-  // connections it asked for, which a person completes by entering the credential. A Task it
-  // started is not repeated here: the Task's own progress lines follow in this chat.
+  // connections it asked for, which a person completes by entering the credential, and the Tasks
+  // it started (UX P3-1 on #961: the Task's progress lines follow, but the link to it is here).
   const followUps = records
     .map(madeResourceOfRecord)
-    .filter(
-      (made): made is Exclude<MadeResource, { kind: 'task' }> =>
-        made !== null && made.kind !== 'task',
-    );
+    .filter((made): made is MadeResource => made !== null);
   return (
     <>
       <details
@@ -571,7 +568,20 @@ export const ToolCallGroupView = memo(function ToolCallGroupView({
         </div>
       </details>
       {followUps.map((made) =>
-        made.kind === 'admin_proposal' ? (
+        made.kind === 'task' ? (
+          <p
+            key={made.id}
+            className="text-3 text-small"
+            data-testid="tool-call-group-task"
+            data-task-id={made.id}
+          >
+            {t('智能体报告已派出一个任务。', 'The agent reports it started a Task.')}
+            {sentenceGap(t)}
+            <RouteLink href={hrefs.task(made.id)} testId="tool-call-group-task-link">
+              {t('在 任务 查看', 'View it in Tasks')}
+            </RouteLink>
+          </p>
+        ) : made.kind === 'admin_proposal' ? (
           <p
             key={made.id}
             className="text-3 text-small"

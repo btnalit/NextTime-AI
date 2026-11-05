@@ -25,7 +25,11 @@ import { type Translate, sentenceGap, useT } from '../lib/i18n.js';
 import { roleLabel } from '../lib/labels.js';
 import { endpointAlreadyConnectedMessage } from '../lib/platform-errors.js';
 import { sameNameIds, withSameNameId } from '../lib/same-name.js';
-import { trialConnectorRefusal, trialSelfConnectApplies } from '../lib/trial-connect.js';
+import {
+  trialConnectorRefusal,
+  trialRequestNeedsPlatformAdminNote,
+  trialSelfConnectApplies,
+} from '../lib/trial-connect.js';
 import { ConnectionSecretReveal } from './connect/ConnectionSecretReveal.js';
 import { useGuardedClose } from './kit/discard-guard.js';
 import { ErrorDetails } from './kit/error-details.js';
@@ -440,6 +444,12 @@ export function CompleteConnectionForm({
         </Notice>
       ) : null}
 
+      {/* UX P3-2 on #961: the request card's trial note, said before the Gatekeeper is started —
+          an owner who is not a platform administrator may be refused only on 注册门. */}
+      {!platformAdmin && trialSelfConnectApplies(trialWorkspace, kind) ? (
+        <Notice testId="cc-trial-note">{trialRequestNeedsPlatformAdminNote(t)}</Notice>
+      ) : null}
+
       {hideKindField ? null : (
         <Field id="cc-kind" label={t('类型', 'Kind')} required>
           <Select
@@ -700,7 +710,12 @@ export function CompleteConnectionForm({
         <div ref={submitErrorRef} tabIndex={-1}>
           <ErrorBanner
             error={submitError}
-            title={t('门未接受这次连接', 'The gate did not accept this connection')}
+            title={
+              // UX P3-3 on #961: a connector mode is the platform's rule, not the gate's answer.
+              describeError(submitError).code === 'connector_not_self_serve'
+                ? t('平台没有接受这次连接', 'The platform did not accept this connection')
+                : t('门未接受这次连接', 'The gate did not accept this connection')
+            }
             overrides={
               trialSelfConnectApplies(trialWorkspace, kind)
                 ? { connector_not_self_serve: trialConnectorRefusal(platformAdmin, t) }

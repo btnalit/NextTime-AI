@@ -726,9 +726,59 @@ describe('CompleteConnectionForm: S11 AA5b — a refused connector in a trial wo
     await secretShown();
     fireEvent.change(screen.getByLabelText(/门端点/), { target: { value: 'http://gate:8080' } });
     fireEvent.click(screen.getByRole('button', { name: '注册门' }));
-    await screen.findByText('门未接受这次连接');
+    // UX P3-3 on #961: a connector mode is the platform's rule, so the platform is what refused.
+    await screen.findByText('平台没有接受这次连接');
+    expect(screen.queryByText('门未接受这次连接')).toBeNull();
     return document.body.textContent ?? '';
   }
+
+  it('an owner who is not a platform administrator reads the trial note before starting the gate', async () => {
+    render(
+      <CompleteConnectionForm
+        http={refused()}
+        request={request}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+        trialWorkspace
+        platformAdmin={false}
+      />,
+    );
+    await secretShown();
+    expect(screen.getByTestId('cc-trial-note').textContent).toContain(
+      '只有平台管理员能完成这个连接',
+    );
+  });
+
+  it('no trial note for a platform administrator, outside a trial workspace, or for ssh', async () => {
+    const cases: ReadonlyArray<{
+      readonly trialWorkspace: boolean;
+      readonly platformAdmin: boolean;
+      readonly row: ConnectionRequestRow;
+    }> = [
+      { trialWorkspace: true, platformAdmin: true, row: request },
+      { trialWorkspace: false, platformAdmin: false, row: request },
+      {
+        trialWorkspace: true,
+        platformAdmin: false,
+        row: { ...request, kind: 'ssh', target: 'ops@inventory.example.internal' },
+      },
+    ];
+    for (const { trialWorkspace, platformAdmin, row } of cases) {
+      render(
+        <CompleteConnectionForm
+          http={refused()}
+          request={row}
+          onDone={vi.fn()}
+          onCancel={vi.fn()}
+          trialWorkspace={trialWorkspace}
+          platformAdmin={platformAdmin}
+        />,
+      );
+      await secretShown();
+      expect(screen.queryByTestId('cc-trial-note')).toBeNull();
+      cleanup();
+    }
+  });
 
   it('a platform administrator is told the platform switched this kind off, and where to change it', async () => {
     const text = await submit({ trialWorkspace: true, platformAdmin: true });

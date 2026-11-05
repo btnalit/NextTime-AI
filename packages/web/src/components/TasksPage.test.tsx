@@ -231,6 +231,25 @@ describe('TasksPage linked approvals (C28) and push reconciliation (C7)', () => 
     expect(screen.getByTestId('task-row').textContent).not.toContain('run_lost');
   });
 
+  it('UX P3-4 on #961: a row says when the admin agent started the Task, as the detail does', async () => {
+    const http = scriptedHttp({
+      list_tasks: () => ({
+        items: [
+          task({ id: 'task-by-agent', adminAgentSessionId: 'session-1' }),
+          task({ id: 'task-by-person' }),
+        ],
+      }),
+      list_worker_definitions: () => ({ items: [] }),
+      resolve_refs: () => ({ items: [] }),
+    });
+    renderPage(http, pushSource());
+    const rows = await screen.findAllByTestId('task-row');
+    expect(rows).toHaveLength(2);
+    const marks = screen.getAllByTestId('task-row-admin-agent');
+    expect(marks).toHaveLength(1);
+    expect(marks[0]?.textContent).toBe('由管理员智能体代为');
+  });
+
   it('task.updated re-reads only that Task (get_task), never the whole list', async () => {
     const pushes = pushSource();
     const http = scriptedHttp({

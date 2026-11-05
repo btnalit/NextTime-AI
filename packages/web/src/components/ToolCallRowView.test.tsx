@@ -703,7 +703,7 @@ describe('S11 AA5b: invoke_worker links to its Task, request_connection to compl
     endedAt: null,
   });
 
-  it('inside each folded row; only the connection gets a line under the calls', () => {
+  it('inside each folded row, and a line under the calls for each', () => {
     render(
       <ToolCallGroupView
         records={[
@@ -718,8 +718,13 @@ describe('S11 AA5b: invoke_worker links to its Task, request_connection to compl
     expect(screen.getByTestId('tool-call-connection-request-link').getAttribute('href')).toBe(
       `#/govern/systems?complete=${REQUEST_ID}`,
     );
-    // The Task's own progress lines follow in the chat, so it is not repeated under the calls.
-    expect(screen.queryByTestId('tool-call-group-task')).toBeNull();
+    // UX P3-1 on #961: the Task gets its line under the calls too, not only inside its folded row.
+    const taskLine = screen.getByTestId('tool-call-group-task');
+    expect(taskLine.getAttribute('data-task-id')).toBe(TASK_ID);
+    expect(taskLine.textContent).toContain('智能体报告已派出一个任务。');
+    expect(screen.getByTestId('tool-call-group-task-link').getAttribute('href')).toBe(
+      `#/work/tasks/${TASK_ID}`,
+    );
     const line = screen.getByTestId('tool-call-group-connection-request');
     expect(line.getAttribute('data-connection-request-id')).toBe(REQUEST_ID);
     expect(line.textContent).toContain('已申请接入一个 HTTP 系统，要由人录入凭证来完成连接');
