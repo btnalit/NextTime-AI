@@ -1,7 +1,8 @@
+import type { AdminAgentStatusWire } from '@nexttime/shared';
 import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useAskForAccess } from '../../hooks/useAskForAccess.js';
 import { useCanOpen } from '../../hooks/useCanOpen.js';
-import { useCapabilityList } from '../../hooks/useCapability.js';
+import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import { AuditIdPicker } from '../../lib/audit-id-picker.js';
 import { auditActorSource, resourceIdSource } from '../../lib/audit-pickers.js';
 import {
@@ -27,6 +28,7 @@ import {
 import type { PrincipalRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { auditResourceTypeLabel, principalShownName, roleLabel } from '../../lib/labels.js';
+import { hrefs } from '../../lib/router.js';
 import { sameNameIds, withSameNameId } from '../../lib/same-name.js';
 import { nameOf } from '../approvals/useDirectoryNames.js';
 import { Button } from '../ui/Button.js';
@@ -37,7 +39,7 @@ import { RefChip } from '../ui/RefChip.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { useToast } from '../ui/Toast.js';
 import { AdminAgentActingChip } from './AdminAgentActingChip.js';
-import { AuditPayloadNotes } from './AuditPayloadNotes.js';
+import { AuditPayloadNotes, adminProposalBreakerTarget } from './AuditPayloadNotes.js';
 
 export interface AuditLogSectionProps {
   readonly http: CapabilityCaller;
@@ -121,6 +123,32 @@ export function AuditLogSection({
     [rows, showReads],
   );
   const hiddenReadCount = rows.length - visibleRows.length;
+  // S11 AA5a-2 (#956 UX P2-1): a row the rejection breaker refused names its target workspace,
+  // from the administrator's own admin agent targets — read only when such a row is loaded and the
+  // reader is a platform administrator (no one else reads them); a short id otherwise.
+  const breakerShown = useMemo(
+    () => rows.some((row) => adminProposalBreakerTarget(row.payload) !== undefined),
+    [rows],
+  );
+  const adminAgent = useCapability<AdminAgentStatusWire>(
+    http,
+    'get_admin_agent_status',
+    undefined,
+    {
+      enabled: breakerShown && canOpen(hrefs.platformAdminAgent()) === true,
+    },
+  );
+  const targetNames = useMemo(
+    () =>
+      new Map(
+        adminAgent.state.status === 'ready'
+          ? adminAgent.state.data.workspaces.flatMap((trial) =>
+              trial.targets.map((target) => [target.workspaceId, target.name] as const),
+            )
+          : [],
+      ),
+    [adminAgent.state],
+  );
 
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
@@ -392,7 +420,7 @@ export function AuditLogSection({
                           </>
                         ) : null}
                       </div>
-                      <AuditPayloadNotes payload={row.payload} />
+                      <AuditPayloadNotes payload={row.payload} workspaceNames={targetNames} />
                       <details className="platform-audit-payload">
                         <summary>{t('负载', 'Payload')}</summary>
                         <pre className="code-block pre-wrap">

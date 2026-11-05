@@ -21,6 +21,7 @@ import {
 import { TaskSupervisorClient } from './adapters/supervisor-client/index.js';
 import type { TaskSupervisorClientPort } from './adapters/supervisor-client/index.js';
 import { adminAgentEnabled } from './application/admin-agent/index.js';
+import { adminProposalRejectionBreaker } from './application/change-plan/index.js';
 import {
   chatMessageText,
   createChatEventSink,
@@ -1623,6 +1624,10 @@ export function main(): void {
     // S11 AA1: the admin agent's switch — read per call (application/admin-agent); parsed here
     // once so a mistyped value stops the kernel at start instead of leaving it silently off.
     adminAgentEnabled(process.env.ADMIN_AGENT_ENABLED);
+    // S11 AA5a-2 (F6): how many rejections, within how many days, close a target workspace to an
+    // administrator's admin agent — read per proposal; parsed here once so a mistyped value stops
+    // the kernel at start.
+    adminProposalRejectionBreaker();
     const outboxPruneDays = parseNonNegativeIntEnvVar(
       'OUTBOX_PRUNE_DAYS',
       process.env.OUTBOX_PRUNE_DAYS,
