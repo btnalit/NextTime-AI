@@ -192,6 +192,21 @@ export {
   withdrawAdminProposal,
 } from './admin-proposals.js';
 export {
+  ADMIN_PROPOSAL_REJECTION_LIMIT_VAR,
+  ADMIN_PROPOSAL_REJECTION_WINDOW_DAYS_VAR,
+  type AdminProposalRejectionBreaker,
+  AdminProposalTargetRejectedRepeatedlyError,
+  type AdminProposalTargetRejection,
+  type AdminProposalTrippedTarget,
+  DEFAULT_ADMIN_PROPOSAL_REJECTION_LIMIT,
+  DEFAULT_ADMIN_PROPOSAL_REJECTION_WINDOW_DAYS,
+  adminProposalRejectionBreaker,
+  assertTargetsNotRejectedRepeatedly,
+  readAdminProposalRejectionsSince,
+  rejectionWindowStart,
+  trippedTargetOf,
+} from './admin-proposal-breaker.js';
+export {
   type AppliedAdminProposalSegment,
   type ApplyAdminProposalSegmentInput,
   AdminProposalSegmentBlockedError,

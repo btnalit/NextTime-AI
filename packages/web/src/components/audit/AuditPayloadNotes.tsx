@@ -1,6 +1,9 @@
-import { auditPayloadShown } from '../../lib/format.js';
+import { Fragment } from 'react';
+import { auditPayloadShown, formatDateTime, shortId } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
+import { hrefs } from '../../lib/router.js';
 import { RedactedNote, showsRedaction } from '../kit/redacted-note.js';
+import { RouteLink } from '../kit/route-link.js';
 
 /** A non-negative whole number at `record[key]`, else `undefined`. */
 function countAt(record: Readonly<Record<string, unknown>>, key: string): number | undefined {
@@ -76,6 +79,115 @@ function asRecord(value: unknown): Readonly<Record<string, unknown>> | undefined
     : undefined;
 }
 
+interface BreakerNote {
+  readonly limit: number;
+  readonly windowDays: number;
+  readonly rejected: number;
+  readonly reopensAt: string;
+  /** The target workspace, when the row names it. */
+  readonly targetWorkspaceId: string | undefined;
+  /** The rejected proposals that counted, oldest first, as the row lists them. */
+  readonly rejections: readonly { readonly proposalId: string; readonly rejectedAt: string }[];
+}
+
+/** S11 AA5a-2 (F6(a), legacy 595): a `propose_admin_proposal` the kernel refused because the
+ *  target workspace rejected this administrator's proposals too often lately
+ *  (`admin_proposal_target_rejected_repeatedly`, kernel `change-plan/admin-proposal-breaker.ts`):
+ *  the rule as it stood, which target, the rejections that counted and when the target opens
+ *  again. */
+function breakerNote(record: Readonly<Record<string, unknown>>): BreakerNote | undefined {
+  if (record.outcome !== 'refused') return undefined;
+  const refusal = asRecord(record.refusal);
+  if (refusal?.code !== 'admin_proposal_target_rejected_repeatedly') return undefined;
+  const limit = countAt(refusal, 'rejectionLimit');
+  const windowDays = countAt(refusal, 'windowDays');
+  const reopensAt = typeof refusal.reopensAt === 'string' ? refusal.reopensAt : undefined;
+  if (limit === undefined || windowDays === undefined || reopensAt === undefined) return undefined;
+  const listed = Array.isArray(refusal.rejections) ? refusal.rejections : undefined;
+  const rejections = (listed ?? []).flatMap((item) => {
+    const rejection = asRecord(item);
+    return typeof rejection?.proposalId === 'string' && typeof rejection.rejectedAt === 'string'
+      ? [{ proposalId: rejection.proposalId, rejectedAt: rejection.rejectedAt }]
+      : [];
+  });
+  return {
+    limit,
+    windowDays,
+    rejected: listed?.length ?? limit,
+    reopensAt,
+    targetWorkspaceId:
+      typeof refusal.targetWorkspaceId === 'string' ? refusal.targetWorkspaceId : undefined,
+    rejections,
+  };
+}
+
+/** The target workspace of a breaker row (`breakerNote`), so the page can look its name up. */
+export function adminProposalBreakerTarget(payload: unknown): string | undefined {
+  const record = asRecord(payload);
+  return record === undefined ? undefined : breakerNote(record)?.targetWorkspaceId;
+}
+
+/** "once", "twice", "3 times". */
+function timesEn(count: number): string {
+  if (count === 1) return 'once';
+  if (count === 2) return 'twice';
+  return `${count} times`;
+}
+
+/** Why the admin agent cannot propose to this target now, until when, and where the owner's
+ *  reasons are: the proposals page, and each rejected proposal's detail (#956 UX P2-1, P3-1..3).
+ *  The links are plain text for a reader who is not a platform administrator. */
+function BreakerNoteItem({
+  note,
+  workspaceNames,
+}: {
+  readonly note: BreakerNote;
+  readonly workspaceNames: ReadonlyMap<string, string> | undefined;
+}) {
+  const t = useT();
+  const id = note.targetWorkspaceId;
+  const target = id === undefined ? undefined : (workspaceNames?.get(id) ?? shortId(id));
+  const reopens = formatDateTime(note.reopensAt);
+  const over = note.rejected > note.limit;
+  return (
+    <li data-testid="audit-admin-proposal-breaker">
+      {t(
+        `目标工作区${target === undefined ? '' : `「${target}」`}在 ${note.windowDays} 天内拒绝了这位管理员的提案 ${note.rejected} 次，${over ? `上限是 ${note.limit} 次` : '到了上限'}。管理员智能体在 ${reopens} 之前不能再向它提案，到时自动恢复；这次提案什么也没写入。所有者写的拒绝理由在「`,
+        `The target workspace${target === undefined ? '' : ` “${target}”`} rejected this administrator’s proposals ${timesEn(note.rejected)} within ${note.windowDays === 1 ? '1 day' : `${note.windowDays} days`}, ${over ? `more than the limit of ${note.limit}` : 'which is the limit'}, so the admin agent cannot propose to it again until ${reopens}, when it reopens on its own; this proposal wrote nothing. The owner’s reasons are under `,
+      )}
+      <RouteLink
+        href={hrefs.platformAdminProposals()}
+        whenRefused="plain"
+        testId="audit-admin-proposal-breaker-proposals"
+      >
+        {t('平台 → 管理员提案', 'Platform → Admin proposals')}
+      </RouteLink>
+      {t('」里，智能体看不到。', '; the agent never sees them.')}
+      {note.rejections.length > 0 ? (
+        <>
+          {t(
+            '被拒的是这几份（按被拒时间）：',
+            ' The rejected proposals, by when they were rejected: ',
+          )}
+          {note.rejections.map((rejection, index) => (
+            <Fragment key={rejection.proposalId}>
+              {index > 0 ? t('、', ', ') : null}
+              <RouteLink
+                href={hrefs.platformAdminProposals('proposals', rejection.proposalId)}
+                whenRefused="plain"
+                testId="audit-admin-proposal-breaker-rejection"
+              >
+                {formatDateTime(rejection.rejectedAt)}
+              </RouteLink>
+            </Fragment>
+          ))}
+          {t('。', '.')}
+        </>
+      ) : null}
+    </li>
+  );
+}
+
 /**
  * What an audit row's payload says about credentials, in words above the raw payload (legacy 159,
  * 178): the kernel's `credentialReview` (a person confirmed N suspected credentials — or, for a
@@ -89,9 +201,20 @@ function asRecord(value: unknown): Readonly<Record<string, unknown>> | undefined
  * the console masks (`auditPayloadShown`, what the page shows below the notes). S10 E3-1b: and
  * which params the record leaves out (`withheldParams`, an evaluation case's content). S10 E3-1c:
  * and, on an `evaluation.content_withheld` row, where the seal stopped the content and what that
- * left. Renders nothing when the payload has none of them.
+ * left. S11 AA5a-2: and, on an admin agent's proposal refused because its target workspace kept
+ * rejecting this administrator's proposals, which target, the rule, the count, when the target
+ * opens again and the rejected proposals.
+ * Renders nothing when the payload has none of them.
  */
-export function AuditPayloadNotes({ payload }: { readonly payload: unknown }) {
+export function AuditPayloadNotes({
+  payload,
+  workspaceNames,
+}: {
+  readonly payload: unknown;
+  /** Names of workspaces the reader can see, by id — a breaker row's target is named by it, else
+   *  by a short id. */
+  readonly workspaceNames?: ReadonlyMap<string, string>;
+}) {
   const t = useT();
   const record = asRecord(payload);
   if (record === undefined) return null;
@@ -101,6 +224,7 @@ export function AuditPayloadNotes({ payload }: { readonly payload: unknown }) {
   const revokedHandles = countAt(record, 'revokedHandleCount');
   const withheld = namesAt(record, 'withheldParams');
   const sealed = sealNote(record);
+  const breaker = breakerNote(record);
   // Looked for in what the page shows below.
   const { params, ...rest } = auditPayloadShown(record) as Record<string, unknown>;
   const masked = showsRedaction(rest) || (redacted === undefined && showsRedaction(params));
@@ -110,6 +234,7 @@ export function AuditPayloadNotes({ payload }: { readonly payload: unknown }) {
     revokedHandles === undefined &&
     withheld === undefined &&
     sealed === undefined &&
+    breaker === undefined &&
     !masked
   ) {
     return null;
@@ -155,6 +280,9 @@ export function AuditPayloadNotes({ payload }: { readonly payload: unknown }) {
             `${sealed.en} The record never says which text it was or which case it belongs to.`,
           )}
         </li>
+      ) : null}
+      {breaker !== undefined ? (
+        <BreakerNoteItem note={breaker} workspaceNames={workspaceNames} />
       ) : null}
       {revokedHandles !== undefined ? (
         <li data-testid="audit-revoked-handles">
