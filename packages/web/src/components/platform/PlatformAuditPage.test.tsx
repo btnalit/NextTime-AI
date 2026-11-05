@@ -190,6 +190,64 @@ describe('PlatformAuditPage', () => {
     );
   });
 
+  it('legacy 628: a refused call says 被拦下 with its code; a refused read stays shown while plain reads are hidden', async () => {
+    const http = scriptedHttp({
+      list_users: () => ({ items: [] }),
+      platform_audit_query: () => ({
+        items: [
+          row({ id: 'audit-ok', action: 'create_user' }),
+          row({
+            id: 'audit-refused-write',
+            action: 'set_user_status',
+            payload: { outcome: 'refused', refusal: { code: 'admin_agent_only', status: 403 } },
+          }),
+          row({
+            id: 'audit-refused-read',
+            action: 'list_users',
+            payload: { outcome: 'refused', refusal: { code: 'forbidden', status: 403 } },
+          }),
+          row({ id: 'audit-read', action: 'list_workspaces', payload: {} }),
+          row({
+            id: 'audit-refused-nocode',
+            action: 'platform.workspace_purged',
+            payload: { outcome: 'refused' },
+          }),
+        ],
+      }),
+    });
+    renderPage(http);
+
+    const list = await screen.findByTestId('platform-audit-list');
+    const rows = within(list).getAllByTestId('platform-audit-row');
+    const rowOf = (action: string) => {
+      const found = rows.find((r) =>
+        Array.from(r.querySelectorAll('.mono')).some((el) => el.textContent === action),
+      );
+      if (!found) throw new Error(`no row for ${action}`);
+      return found;
+    };
+    // The plain read is hidden and counted; the refused read is not.
+    expect(rows).toHaveLength(4);
+    expect(screen.getByTestId('platform-audit-hidden-reads-note').textContent).toContain('1');
+    expect(() => rowOf('list_workspaces')).toThrow();
+
+    expect(within(rowOf('create_user')).queryByTestId('audit-refused')).toBeNull();
+    const write = rowOf('set_user_status');
+    expect(within(write).getByTestId('audit-refused').textContent).toBe('被拦下');
+    expect(within(write).getByTestId('audit-refused-code').textContent).toBe('admin_agent_only');
+    // UX P2-1 on #964: the chip and its code wrap as one group, in a title row that wraps.
+    const group = within(write).getByTestId('audit-refused').parentElement;
+    expect(group?.className).toBe('audit-refused');
+    expect(group?.contains(within(write).getByTestId('audit-refused-code'))).toBe(true);
+    expect(group?.parentElement?.classList.contains('audit-row-title')).toBe(true);
+    expect(within(rowOf('list_users')).getByTestId('audit-refused-code').textContent).toBe(
+      'forbidden',
+    );
+    const noCode = rowOf('platform.workspace_purged');
+    expect(within(noCode).getByTestId('audit-refused')).toBeTruthy();
+    expect(within(noCode).queryByTestId('audit-refused-code')).toBeNull();
+  });
+
   it('S11 fix (CI #288/#290): when every loaded row is a read, the empty state (not a blank page) shows and "Show reads" reveals it', async () => {
     const http = scriptedHttp({
       list_users: () => ({ items: [] }),
