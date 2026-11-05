@@ -9,6 +9,7 @@ import {
   auditEntryFromHash,
   auditFilterFromEntry,
   auditHref,
+  auditRefusal,
   downloadJson,
   downloadName,
   explainView,
@@ -31,6 +32,42 @@ describe('isReadAuditAction (D-08)', () => {
     expect(isReadAuditAction('assert_fact')).toBe(false);
     // Not a capability (a lifecycle transition): never treated as a read.
     expect(isReadAuditAction('action_request.approve')).toBe(false);
+  });
+});
+
+describe('auditRefusal (legacy 628)', () => {
+  it('reads a refused call and its refusal code', () => {
+    expect(
+      auditRefusal({
+        outcome: 'refused',
+        refusal: { code: 'admin_proposal_target_rejected_repeatedly', status: 409 },
+      }),
+    ).toEqual({ code: 'admin_proposal_target_rejected_repeatedly' });
+  });
+
+  it('a refused row with no refusal (evaluation.seal_hold_refused) has no code', () => {
+    expect(auditRefusal({ outcome: 'refused', path: '/x', capability: 'search' })).toEqual({
+      code: null,
+    });
+  });
+
+  it('a malformed refusal never yields a code', () => {
+    for (const refusal of [null, 'denied', ['code'], { code: '' }, { code: 409 }, {}]) {
+      expect(auditRefusal({ outcome: 'refused', refusal })).toEqual({ code: null });
+    }
+  });
+
+  it('anything but outcome "refused" is not a refusal', () => {
+    for (const payload of [
+      {},
+      { outcome: 'ok' },
+      { outcome: 'Refused' },
+      { refusal: { code: 'forbidden' } },
+      null,
+      undefined,
+    ]) {
+      expect(auditRefusal(payload)).toBeNull();
+    }
   });
 });
 

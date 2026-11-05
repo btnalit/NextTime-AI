@@ -3,7 +3,7 @@ import { type FormEvent, useMemo, useRef, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import { useDebounced } from '../../lib/audit-id-picker.js';
 import { platformAuditActionSuggestions } from '../../lib/audit-pickers.js';
-import { isReadAuditAction } from '../../lib/audit.js';
+import { auditRefusal, isReadAuditAction } from '../../lib/audit.js';
 import { actionLabel } from '../../lib/capability-labels.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
@@ -19,6 +19,7 @@ import { auditResourceTypeLabel } from '../../lib/labels.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { AdminAgentActingChip } from '../audit/AdminAgentActingChip.js';
 import { AuditPayloadNotes } from '../audit/AuditPayloadNotes.js';
+import { AuditRefusedChip } from '../audit/AuditRefusedChip.js';
 import { Combobox } from '../kit/combobox.js';
 import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
@@ -120,8 +121,14 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
 
   const rows = audit.state.status === 'ready' ? audit.state.data.items : [];
   const nextCursor = audit.state.status === 'ready' ? audit.state.data.nextCursor : undefined;
+  // Legacy 628: a refused read stays shown — what was refused is exactly what an auditor looks for.
   const visibleRows = useMemo(
-    () => (showReads ? rows : rows.filter((row) => !isReadAuditAction(row.action))),
+    () =>
+      showReads
+        ? rows
+        : rows.filter(
+            (row) => !isReadAuditAction(row.action) || auditRefusal(row.payload) !== null,
+          ),
     [rows, showReads],
   );
   const hiddenReadCount = rows.length - visibleRows.length;
@@ -308,7 +315,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
                 <div className="data-row-main">
                   <div className="data-row-title">
                     <span className="mono text-small">{formatDateTime(row.createdAt)}</span> —{' '}
-                    {actionLabel(row.action, t)}{' '}
+                    {actionLabel(row.action, t)} <AuditRefusedChip payload={row.payload} />{' '}
                     <span className="mono text-3 text-small">{row.action}</span>
                   </div>
                   <div className="data-row-meta">

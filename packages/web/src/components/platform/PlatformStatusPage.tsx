@@ -8,6 +8,7 @@ import { formatAuditActor, formatDateTime, formatRelative } from '../../lib/form
 import { useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { hrefs } from '../../lib/router.js';
+import { AuditRefusedChip } from '../audit/AuditRefusedChip.js';
 import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
@@ -214,7 +215,12 @@ function StatusBody({
               <DataRow
                 key={row.id}
                 testId="status-audit-row"
-                title={actionLabel(row.action, t)}
+                title={
+                  <>
+                    {actionLabel(row.action, t)}
+                    <AuditRefusedChip payload={row.payload} detailsBelow={false} />
+                  </>
+                }
                 meta={`${formatAuditActor(row, t)} · ${formatDateTime(row.createdAt)}`}
               />
             ))}

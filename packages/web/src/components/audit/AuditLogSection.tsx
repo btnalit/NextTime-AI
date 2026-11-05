@@ -10,6 +10,7 @@ import {
   type AuditFilter,
   type AuditRecordRow,
   auditActionSuggestions,
+  auditRefusal,
   downloadJson,
   downloadName,
   isEmptyFilter,
@@ -40,6 +41,7 @@ import { SkeletonRows } from '../ui/Skeleton.js';
 import { useToast } from '../ui/Toast.js';
 import { AdminAgentActingChip } from './AdminAgentActingChip.js';
 import { AuditPayloadNotes, adminProposalBreakerTarget } from './AuditPayloadNotes.js';
+import { AuditRefusedChip } from './AuditRefusedChip.js';
 
 export interface AuditLogSectionProps {
   readonly http: CapabilityCaller;
@@ -118,8 +120,14 @@ export function AuditLogSection({
   const forbidden = audit.state.status === 'error' && isForbiddenError(audit.state.error);
   const rows = audit.state.status === 'ready' ? audit.state.data.items : [];
   const nextCursor = audit.state.status === 'ready' ? audit.state.data.nextCursor : undefined;
+  // Legacy 628: a refused read stays shown — what was refused is exactly what an auditor looks for.
   const visibleRows = useMemo(
-    () => (showReads ? rows : rows.filter((row) => !isReadAuditAction(row.action))),
+    () =>
+      showReads
+        ? rows
+        : rows.filter(
+            (row) => !isReadAuditAction(row.action) || auditRefusal(row.payload) !== null,
+          ),
     [rows, showReads],
   );
   const hiddenReadCount = rows.length - visibleRows.length;
@@ -380,6 +388,7 @@ export function AuditLogSection({
                         {/* P1-14: what happened first; the action name stays as the secondary
                          *  text an auditor filters by. */}
                         <span>{actionLabel(row.action, t)}</span>
+                        <AuditRefusedChip payload={row.payload} />
                         <span className="mono text-3 text-small">{row.action}</span>
                         <time className="text-3 text-small" title={formatDateTime(row.createdAt)}>
                           {formatRelative(row.createdAt)} · {formatDateTime(row.createdAt)}
