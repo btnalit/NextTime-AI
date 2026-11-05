@@ -459,6 +459,55 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
     await waitFor(() => expect(screen.queryByTestId('catalog-change-verify')).toBeNull());
   });
 
+  it('legacy 630: an admin proposal’s record lists the gates what it wrote runs through, each of which must answer; with none, says only the changes were checked', async () => {
+    const proposalSource: Partial<ChangeSegmentWire> = {
+      source: { kind: 'admin_proposal', name: 'ops-tuning', version: '1', digest: 'sha256:p' },
+      proposedBy: null,
+    };
+    const withRequirements = (requirements: ChangeVerificationWire['requirements']) =>
+      scriptedHttp({
+        get_workspace: () => OWNER_WORKSPACE,
+        list_change_segments: () => ({
+          items: [segment(FIRST, { ...proposalSource, status: 'verification_failed' })],
+        }),
+        get_change_segment: () => ({
+          ...detail(FIRST, {}, { ...proposalSource, status: 'verification_failed' }),
+          verification: verification({ passed: requirements.length === 0, requirements }),
+        }),
+        list_admin_proposal_segments: () => ({ items: [] }),
+      });
+
+    const { unmount } = renderTab(
+      withRequirements([
+        {
+          connector: 'tickets',
+          state: 'connected',
+          met: false,
+          gates: [
+            { id: 'gk-1', name: 'tickets-a', health: 'ok' },
+            { id: 'gk-2', name: 'tickets-b', health: 'unreachable' },
+          ],
+        },
+      ]),
+      FIRST,
+    );
+    const result = await screen.findByTestId('catalog-change-verification-result');
+    expect(within(result).getByTestId('catalog-change-requirements').textContent).toMatch(
+      /^写入的改动项经过的系统和门（每个门都要能连通）：/,
+    );
+    const tickets = within(result).getByTestId('catalog-change-requirement-tickets');
+    expect(tickets.textContent).toMatch(/tickets已接入但有门连不通/);
+    expect(tickets.textContent).toMatch(/tickets-a健康/);
+    expect(tickets.textContent).toMatch(/tickets-b不可达/);
+    unmount();
+
+    renderTab(withRequirements([]), FIRST);
+    expect((await screen.findByTestId('catalog-change-verification-result')).textContent).toContain(
+      '这个提案写入的改动项都不经过门（没有 Operation，也没有带门的 Worker），只核验改动项是否还在生效。',
+    );
+    expect(screen.queryByTestId('catalog-change-requirements')).toBeNull();
+  });
+
   it('the owner verifies a record; right after, the button waits out the cooldown', async () => {
     let verified: ChangeVerificationWire | null = null;
     const http = scriptedHttp({

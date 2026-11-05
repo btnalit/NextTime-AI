@@ -24,6 +24,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { withPlatform } from '../../adapters/db/platform-context.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import type { GateTarget, GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
 import {
   GATEKEEPER_GRANT_CAPABILITY,
   HANDLE_SIGNING_ALG,
@@ -41,6 +42,7 @@ import { issueAdminAgentHandle } from '../admin-agent/index.js';
 import { withAdminClient } from '../gateway/auth.js';
 import { ForbiddenError } from '../gateway/authorize.js';
 import { dispatchCapability } from '../gateway/dispatch.js';
+import { setGatekeeperReadHandlerDeps } from '../gateway/gatekeeper-read-handlers.js';
 import { authenticateHandle } from '../gateway/handle-auth.js';
 import type { ResolvedCaller } from '../gateway/resolve-caller.js';
 import { type UserRow, createUser } from '../identity/index.js';
@@ -753,15 +755,19 @@ describe.runIf(DATABASE_URL !== undefined)(
         'get_change_segment',
         { segmentId: applied.changeSegmentId },
       );
-      // S11 AA5f: the apply verified it once it committed, as the owner (`trigger: system`).
+      // S11 AA5f: the apply verified it once it committed, as the owner (`trigger: system`). The
+      // Worker keeps its gate here, which does not answer in this test (legacy 630 probes it): the
+      // run does not pass, and the apply stands.
       expect(applied.verification).toMatchObject({
         trigger: 'system',
         verifiedBy: { id: target.ownerPrincipalId, kind: 'human' },
-        passed: true,
+        passed: false,
+        items: [{ state: 'in_effect' }, { state: 'in_effect' }, { state: 'in_effect' }],
+        requirements: [{ connector: 'http', state: 'connected', met: false }],
       });
       expect(record.verification).toEqual(applied.verification);
       expect(record.segment).toMatchObject({
-        status: 'verified',
+        status: 'verification_failed',
         source: {
           kind: 'admin_proposal',
           name: `aa3b2-${tag}`,
@@ -1092,7 +1098,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect((await segmentRow(segmentId))?.status).toBe('withdrawn');
     });
 
-    it('verifying an applied proposal: its source is found and names no systems; a later proposal of the same source name does not supersede it', async () => {
+    it('verifying an applied proposal of Skills only: its source is found and nothing it wrote runs through a gate; a later proposal of the same source name does not supersede it', async () => {
       // #920 review P3-1: a pack's later install of the same name supersedes an earlier one; two
       // proposals sharing a source name are two sources, each verified on its own.
       const { agent } = await administrator();
@@ -1211,11 +1217,14 @@ describe.runIf(DATABASE_URL !== undefined)(
         ),
       );
       expect(published.rows.map((row) => row.definition.gates)).toEqual([[gateB]]);
-      // Applying verified it once, as the owner (`trigger: system`): what it wrote is in effect.
+      // Applying verified it once, as the owner (`trigger: system`): what it wrote is in effect,
+      // and the gate it was bound to — only that one — is probed (legacy 630; it does not answer
+      // in this test).
       expect(applied.verification).toMatchObject({
         trigger: 'system',
         verifiedBy: { id: target.ownerPrincipalId },
         items: [{ ordinal: 1, state: 'in_effect' }],
+        requirements: [{ connector: tickets, gates: [{ id: gateB, health: 'unreachable' }] }],
       });
       // No Grant was given by applying.
       const grants = await inTarget(target, (client) =>
@@ -1358,6 +1367,102 @@ describe.runIf(DATABASE_URL !== undefined)(
         candidates: [],
       });
       expect(keptItem.gates.map((gate) => gate.id)).toEqual([gatekeeperId]);
+    });
+
+    it('verifying an applied proposal probes the gates what it wrote runs through (legacy 630): the Operation item’s gate and the gates the Worker item’s version names — every one must answer', async () => {
+      const { agent } = await administrator();
+      /** In a new target: a gate the proposal's Operation item revises, a gate the Worker's family
+       *  already has (its version from the proposal keeps it, AA3b-2 F5), and a gate nothing it
+       *  writes runs through; the proposal applied. */
+      async function appliedInNewTarget() {
+        const target = await newTarget();
+        const operationGate = await seedGate(target);
+        const workerGate = await seedGate(target);
+        const unused = await seedGate(target);
+        await seedWorkerFamily(target, 'worker', {
+          name: 'gated-worker',
+          systemPrompt: 'You restart containers.',
+          gates: [workerGate.gatekeeperId],
+        });
+        const { segmentId } = await proposeFor(agent, target, [
+          skillItem('restart-check'),
+          workerItem({ name: 'gated-worker', systemPrompt: 'You restart containers, carefully.' }),
+          operationItem(operationGate.gateId, { auto_approvable: true }),
+        ]);
+        const applied = await previewAndApply(target, segmentId);
+        // Applying verified it once already (S11 AA5f), before the test says which gates answer:
+        // move that run back past the cooldown and verify again.
+        const verify = async () => {
+          await ageLastVerification(target, applied.changeSegmentId);
+          return call<ChangeVerificationResultWire>(ownerCaller(target), 'verify_change_segment', {
+            segmentId: applied.changeSegmentId,
+          });
+        };
+        return { target, operationGate, workerGate, unused, verify };
+      }
+      const answering = new Set<string>();
+      const probed: string[] = [];
+      setGatekeeperReadHandlerDeps({
+        gatekeeperClient: {
+          health: async (gate: GateTarget) => {
+            probed.push(gate.endpoint);
+            if ([...answering].some((gateId) => gate.endpoint.includes(gateId))) {
+              return { status: 'ok' };
+            }
+            throw new Error('connection refused');
+          },
+        } as unknown as GatekeeperClient,
+      });
+      try {
+        // The Worker's gate does not answer: the items are in effect, the run does not pass.
+        const down = await appliedInNewTarget();
+        answering.add(down.operationGate.gateId);
+        answering.add(down.unused.gateId);
+        const failed = await down.verify();
+        expect(failed.verification?.items.map((item) => item.state)).toEqual([
+          'in_effect',
+          'in_effect',
+          'in_effect',
+        ]);
+        expect(failed.verification).toMatchObject({ passed: false, sourceFound: true });
+        expect(failed.segment.status).toBe('verification_failed');
+        // Both gates are of one system; a pack's requirement would pass with one answering.
+        expect(failed.verification?.requirements).toHaveLength(1);
+        expect(failed.verification?.requirements[0]).toMatchObject({
+          connector: 'http',
+          state: 'connected',
+          met: false,
+        });
+        expect(
+          new Map(
+            failed.verification?.requirements[0]?.gates.map((gate) => [gate.id, gate.health]),
+          ),
+        ).toEqual(
+          new Map([
+            [down.operationGate.gatekeeperId, 'ok'],
+            [down.workerGate.gatekeeperId, 'unreachable'],
+          ]),
+        );
+        // A gate of the workspace nothing it wrote runs through is not probed.
+        expect(probed.some((endpoint) => endpoint.includes(down.unused.gateId))).toBe(false);
+        expect(
+          (await lastAudit(down.target.workspaceId, 'change_segment.verify'))?.payload,
+        ).toMatchObject({ passed: false, requirements: [{ connector: 'http', met: false }] });
+
+        // Every gate it runs through answers: it passes.
+        const up = await appliedInNewTarget();
+        answering.add(up.operationGate.gateId);
+        answering.add(up.workerGate.gateId);
+        const passed = await up.verify();
+        expect(passed.verification).toMatchObject({
+          passed: true,
+          requirements: [{ connector: 'http', state: 'connected', met: true }],
+        });
+        expect(passed.verification?.requirements[0]?.gates).toHaveLength(2);
+        expect(passed.segment.status).toBe('verified');
+      } finally {
+        setGatekeeperReadHandlerDeps({});
+      }
     });
 
     it('rolling back the record rolls the proposal segment back with it; once the trial workspace is purged, the record alone', async () => {
