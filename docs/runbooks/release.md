@@ -2386,6 +2386,13 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **线上**：新错误码 `admin_proposal_target_rejected_repeatedly`（HTTP 429；WebSocket 是 `QUOTA_EXCEEDED` -32012，和每日配额同类）；`propose_admin_proposal` 的说明加上这条。契约快照不变。
 - **回滚**（见 §6 一行）：上一版不调这个函数，只回滚代码就行；要删函数：`drop function admin_proposal_rejections_since(timestamptz)`，再删 `schema_migrations` 里 governance 38 那一行。
 
+### 3.121 管理员对话链到 Task 和「完成连接」，试验例外的文案（#961，S11 AA5b，0.61.0 之后的下一版）
+
+只改控制台：没有迁移，不改 compose，没有新环境变量，线上契约不变，主机不需要操作。
+
+- **发版说明可写**：对话里 `invoke_worker` 那一行链接到它建的 Task，`request_connection` 那一行链接到「系统与授权」并直接打开这张申请的「完成连接」抽屉（深链 `#/govern/systems?complete=<申请 id>`；申请已完成、已取消、不在这个工作区或读者完成不了时，页面说明原因）。入口智能体的这两种调用同样有链接。试验工作区里，管理员智能体提的申请和建的 Task 标「由管理员智能体代为」；不是平台管理员的所有者在 http / mcp 申请卡上看到「平台预置时只有平台管理员能完成」。「平台预置」的说明补上试验工作区例外，审计页认得 `connection.trial_self_connect`。
+- **回滚**：只回滚代码。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
