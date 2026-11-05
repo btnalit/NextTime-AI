@@ -493,7 +493,7 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
     );
     const result = await screen.findByTestId('catalog-change-verification-result');
     expect(within(result).getByTestId('catalog-change-requirements').textContent).toMatch(
-      /^写入的改动项经过的门（每个都要能连通）：/,
+      /^写入的改动项经过的系统和门（每个门都要能连通）：/,
     );
     const tickets = within(result).getByTestId('catalog-change-requirement-tickets');
     expect(tickets.textContent).toMatch(/tickets已接入但有门连不通/);
@@ -503,7 +503,7 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
 
     renderTab(withRequirements([]), FIRST);
     expect((await screen.findByTestId('catalog-change-verification-result')).textContent).toContain(
-      '这个提案写入的改动项都不经过门（没有 Operation，Worker 也没有门），只核验改动项是否还在生效。',
+      '这个提案写入的改动项都不经过门（没有 Operation，也没有带门的 Worker），只核验改动项是否还在生效。',
     );
     expect(screen.queryByTestId('catalog-change-requirements')).toBeNull();
   });

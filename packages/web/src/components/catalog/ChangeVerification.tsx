@@ -336,7 +336,7 @@ function VerificationResult({
         <span className="text-3 text-small">
           {segment.source.kind === 'admin_proposal'
             ? t(
-                '这个提案写入的改动项都不经过门（没有 Operation，Worker 也没有门），只核验改动项是否还在生效。',
+                '这个提案写入的改动项都不经过门（没有 Operation，也没有带门的 Worker），只核验改动项是否还在生效。',
                 'Nothing this proposal wrote runs through a gate (no Operation, no Worker with gates), so only whether its changes are still in effect is checked.',
               )
             : t('这个能力包没有写明要用到的系统。', 'This pack names no systems it needs.')}
@@ -346,8 +346,8 @@ function VerificationResult({
           <span className="text-small">
             {segment.source.kind === 'admin_proposal'
               ? t(
-                  '写入的改动项经过的门（每个都要能连通）：',
-                  'The gates what it wrote runs through (each must answer):',
+                  '写入的改动项经过的系统和门（每个门都要能连通）：',
+                  'The systems and gates what it wrote runs through (each gate must answer):',
                 )
               : t('要用到的系统：', 'Systems it needs:')}
           </span>
