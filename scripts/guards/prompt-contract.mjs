@@ -549,12 +549,21 @@ const ENTRY_PROMPT_CONTENT_CHECKS = [
 // (`observe_operation`; the placeholder itself is a constant there, not a quoted name). A tool the
 // Handle cannot call would only ever answer 403; a ceiling capability with no tool is either
 // unreachable or a widening nobody wired up — both fail here.
+//
+// S11 AA5a-1: one more kind of ceiling capability has no tool on purpose — what the ceiling holds
+// only so a Worker the admin agent starts keeps it (handles.ts `ADMIN_AGENT_CEILING_FOR_ITS_WORKERS`:
+// a child Handle keeps only what its parent holds). `report_task_result` is the one: its handler
+// refuses any session but a WorkerRun's, so the admin agent's own call could only answer 403. Named
+// here as well as in the kernel, so adding to either alone fails this guard; registering one as a
+// tool fails it too.
 // -------------------------------------------------------------------------------------------
 
 export const ADMIN_CEILING_REACHED_BY_PROJECTION = new Set([
   'list_allowed_operations',
   'observe_operation',
 ]);
+
+export const ADMIN_CEILING_FOR_ITS_WORKERS = new Set(['report_task_result']);
 
 export function checkAdminToolsWithinCeiling(adminToolNames, ceilingNames) {
   const violations = [];
@@ -567,7 +576,13 @@ export function checkAdminToolsWithinCeiling(adminToolNames, ceilingNames) {
     );
   }
   for (const name of ceiling) {
-    if (tools.has(name) || ADMIN_CEILING_REACHED_BY_PROJECTION.has(name)) continue;
+    if (
+      tools.has(name) ||
+      ADMIN_CEILING_REACHED_BY_PROJECTION.has(name) ||
+      ADMIN_CEILING_FOR_ITS_WORKERS.has(name)
+    ) {
+      continue;
+    }
     violations.push(
       `packages/kernel/src/governance/capability/handles.ts: "${name}" is on the admin agent ceiling but admin mode registers no tool for it — add it to ADMIN_TOOL_CAPABILITY_NAMES, or take it off the ceiling`,
     );
@@ -581,6 +596,18 @@ export function checkAdminToolsWithinCeiling(adminToolNames, ceilingNames) {
     if (!ceiling.has(name)) {
       violations.push(
         `packages/kernel/src/governance/capability/handles.ts: the gate projection needs "${name}" on the admin agent ceiling`,
+      );
+    }
+  }
+  for (const name of ADMIN_CEILING_FOR_ITS_WORKERS) {
+    if (tools.has(name)) {
+      violations.push(
+        `packages/platform-extension/src/modes/admin.ts: "${name}" is on the ceiling only for a Worker the admin agent starts, never registered as a tool of its own`,
+      );
+    }
+    if (!ceiling.has(name)) {
+      violations.push(
+        `packages/kernel/src/governance/capability/handles.ts: a Worker the admin agent starts needs "${name}" on the admin agent ceiling`,
       );
     }
   }

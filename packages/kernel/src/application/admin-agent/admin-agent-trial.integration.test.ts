@@ -673,6 +673,62 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).toMatchObject({ name: 'InvokeWorkerValidationError' });
     });
 
+    it('a Worker the admin agent starts hands its result back and its Task completes; the admin agent’s own Handle cannot report one', async () => {
+      const { caller } = await agent();
+      const started = (await dispatchCapability({ pool }, caller, 'invoke_worker', {
+        definitionId: trialDefinitionId,
+        version: 1,
+        input: { ticket: 'T-report-1' },
+      })) as { id: string };
+      const row = await withAdminClient(pool, async (client) => {
+        const result = await client.query<{
+          session_id: string;
+          jti: string;
+          on_behalf_of: string;
+          scope: HandleClaims['scope'];
+          expires_at: Date;
+        }>(
+          `select h.session_id, h.jti, h.on_behalf_of, h.scope, h.expires_at
+             from capability_handles h
+             join worker_runs r on r.session_id = h.session_id
+            where r.task_id = $1`,
+          [started.id],
+        );
+        return result.rows[0];
+      });
+      if (!row) throw new Error(`no Worker Handle for Task ${started.id}`);
+      expect(row.scope.capabilities).toContain('report_task_result');
+
+      // Its own session is no WorkerRun's: refused, and the Worker's Task is untouched by it.
+      expect(
+        await refusalOf(
+          dispatchCapability({ pool }, caller, 'report_task_result', { summary: 'not mine' }),
+        ),
+      ).toMatchObject({ message: expect.stringMatching(/not bound|not a WorkerRun/i) });
+
+      const worker: ResolvedCaller = {
+        channel: 'handle',
+        claims: {
+          ws: trialWs,
+          sid: row.session_id,
+          obo: row.on_behalf_of,
+          scope: row.scope,
+          jti: row.jti,
+          iat: Math.floor(Date.now() / 1000),
+          exp: Math.floor(new Date(row.expires_at).getTime() / 1000),
+        },
+      };
+      const reported = (await dispatchCapability({ pool }, worker, 'report_task_result', {
+        summary: 'T-report-1 checked',
+      })) as { id: string; status: string };
+      expect(reported).toMatchObject({ id: started.id, status: 'completed' });
+      const task = (await dispatchCapability({ pool }, caller, 'get_task', {
+        taskId: started.id,
+      })) as { status: string; result?: { summary?: string } };
+      expect(task.status).toBe('completed');
+      expect(task.result?.summary).toBe('T-report-1 checked');
+    });
+
     it('invoke_worker attributes the Task to the Turn that started it: an admin agent’s Task to its own running Turn, never to an entry Turn running beside it', async () => {
       const { caller, sessionId } = await agent();
       const entryCaller = await entryAgent();

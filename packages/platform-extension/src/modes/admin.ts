@@ -36,8 +36,9 @@ import { resolveInvokeWorkerCallPlan } from './invoke-worker-call.js';
 
 /** Every capability this mode registers as a pi tool, verbatim (`buildCapabilityTool`). Each is on
  *  the admin agent ceiling; of the ceiling, only `list_allowed_operations` (the gate projection's
- *  own read), `observe_operation` and `<gate>.<op>` (reached through the projected gate tools) are
- *  not here — the kernel's `handles.test.ts` pins exactly that difference. */
+ *  own read), `observe_operation` and `<gate>.<op>` (reached through the projected gate tools), and
+ *  `report_task_result` (on the ceiling only for a Worker the agent starts, S11 AA5a-1: its own
+ *  session is refused) are not here. */
 export const ADMIN_TOOL_CAPABILITY_NAMES = [
   // graph: the trial workspace's objects, Facts and what can run on them
   'get_object',

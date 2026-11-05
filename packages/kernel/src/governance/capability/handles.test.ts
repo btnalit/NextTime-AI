@@ -848,6 +848,8 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c, AA5a)', (
         'propose_worker_definition',
         // S11 AA5a-1 (F1): asking to connect a system, in its trial workspace only.
         'request_connection',
+        // S11 AA5a-1: only so a Worker it starts can hand its result back (refused for itself).
+        'report_task_result',
         'search',
         'state_at',
         'traverse',
@@ -870,7 +872,15 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c, AA5a)', (
     }
   });
 
-  it('holds only handle-channel observe reads, the seven proposals, withdrawing an admin proposal and starting a trial Worker: no human-channel, platform, execute-class or other writing capability', () => {
+  it('holds every Worker infrastructure capability, so a Worker it starts keeps them all (S11 AA5a-1)', () => {
+    // A child Handle keeps only what its parent's holds (computeChildHandleScope): a missing name
+    // here is a Worker the admin agent starts that cannot read its Task or report its result.
+    for (const name of WORKER_INFRASTRUCTURE_CAPABILITY_NAMES) {
+      expect(ADMIN_AGENT_CEILING_CAPABILITIES, name).toContain(name);
+    }
+  });
+
+  it('holds only handle-channel observe reads, the seven proposals, withdrawing an admin proposal, starting a trial Worker and that Worker’s report: no human-channel, platform, execute-class or other writing capability', () => {
     const proposals = [
       'propose_admin_proposal',
       'propose_ontology_change',
@@ -881,8 +891,9 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c, AA5a)', (
       // S11 AA5a-1: the connection request records the admin agent session it came through.
       'request_connection',
     ];
-    // S11 AA5a-1: the Task records the admin agent session that started it.
-    const writes = ['agent_withdraw_admin_proposal', 'invoke_worker'];
+    // S11 AA5a-1: the Task records the admin agent session that started it; and the report of a
+    // Worker it starts, which its own session is refused (no WorkerRun is its).
+    const writes = ['agent_withdraw_admin_proposal', 'invoke_worker', 'report_task_result'];
     for (const name of ADMIN_AGENT_CEILING_CAPABILITIES) {
       const capability = getCapability(name);
       expect(capability, name).toBeDefined();

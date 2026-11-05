@@ -396,6 +396,21 @@ describe('computeChildHandleScope', () => {
         true,
       );
     });
+
+    it('keeps every piece of Worker infrastructure: the Worker reads its Task and reports its result', () => {
+      // A definition declaring only what it acts with (the ops-runner shape): the infrastructure is
+      // force-declared, then intersected with the admin agent's Handle like everything else.
+      const child = computeChildHandleScope({
+        parentAuthority: adminAgentScope({ gatekeeper: ['gk-1'] }),
+        declaredCapabilities: ['request_action'],
+        declaredGates: ['gk-1'],
+      });
+      for (const name of WORKER_INFRASTRUCTURE_CAPABILITY_NAMES) {
+        expect(child.capabilities, name).toContain(name);
+      }
+      expect(child.capabilities).toContain('request_action');
+      expect(child.resources.gatekeeper).toEqual(['gk-1']);
+    });
   });
 });
 

@@ -452,7 +452,10 @@ export interface EntryScopeOptions {
  *      `record_decision`, goal proposal or report here. AA3b adds `propose_admin_proposal` the same
  *      way, and one write, `agent_withdraw_admin_proposal`: taking back a proposal it made,
  *      recorded `withdrawn_origin = 'agent'`. AA5a-1 adds `request_connection` (a proposal) and
- *      `invoke_worker` (a write).
+ *      `invoke_worker` (a write), and one write that is there for the Worker it starts, never for
+ *      itself: `report_task_result` (`ADMIN_AGENT_CEILING_FOR_ITS_WORKERS` — a Worker's Handle
+ *      keeps only what its parent's holds, and the handler refuses every session but the
+ *      WorkerRun's own).
  *   b) Approving, publishing, applying, rolling back and confirming an item are a person's acts in
  *      the console. Every one of them is human-channel (`assertValidScope` refuses those in any
  *      Handle), and the dispatcher refuses an `admin_agent` session's call to anything outside
@@ -498,6 +501,8 @@ const ADMIN_AGENT_CEILING_CAPABILITY_NAMES = [
   'list_allowed_operations',
   'observe_operation',
   ENTRY_CEILING_GATE_OBSERVE_CAPABILITY_NAME,
+  // S11 AA5a-1: for a Worker it starts, never for itself (`ADMIN_AGENT_CEILING_FOR_ITS_WORKERS`)
+  'report_task_result',
   // the platform, redacted (S11 AA2): only an admin agent's Handle carries these (`adminAgentOnly`)
   'platform_state_gates',
   'platform_state_connectors',
@@ -567,6 +572,17 @@ const ADMIN_AGENT_CEILING_WRITES: ReadonlySet<string> = new Set([
   'invoke_worker',
 ]);
 
+/** S11 AA5a-1: the write-mode Worker infrastructure (`WORKER_INFRASTRUCTURE_CAPABILITY_NAMES`) the
+ *  ceiling holds only so a Worker it starts with `invoke_worker` keeps it. A child Handle holds
+ *  what its parent holds (`computeChildHandleScope`'s parent intersection, I13), so without
+ *  `report_task_result` here every such Worker lost it and could never hand its result back. The
+ *  agent itself never writes through it: the handler serves only the WorkerRun whose session is
+ *  the calling Handle's (`findWorkerRunBySessionId`), an admin agent session has none, so its own
+ *  call is refused (403) and nothing is recorded; admin mode registers no tool for it. The entry
+ *  ceiling holds it for the same reason (`ENTRY_CEILING_EXTRA_CAPABILITY_NAMES`). A literal list
+ *  as the ceiling is; every name must also be Worker infrastructure. */
+const ADMIN_AGENT_CEILING_FOR_ITS_WORKERS: ReadonlySet<string> = new Set(['report_task_result']);
+
 /** The ceiling's observe-class capabilities that declare side effects (`sideEffects: true`): the
  *  observe-class gate calls, which record their observation. The `propose_*` drafts above write
  *  too, but by their mode, not this flag — so they are not here. A literal list as the ceiling is
@@ -612,9 +628,19 @@ export function buildAdminAgentCeiling(names: readonly string[]): readonly strin
       throw new AdminAgentCeilingError(name, 'is execute-class');
     }
     if (
+      ADMIN_AGENT_CEILING_FOR_ITS_WORKERS.has(name) &&
+      !WORKER_INFRASTRUCTURE_CAPABILITY_NAMES.includes(name)
+    ) {
+      throw new AdminAgentCeilingError(
+        name,
+        'is named in ADMIN_AGENT_CEILING_FOR_ITS_WORKERS but is not Worker infrastructure (WORKER_INFRASTRUCTURE_CAPABILITY_NAMES)',
+      );
+    }
+    if (
       capability.mode !== 'observe' &&
       !(capability.mode === 'propose' && ADMIN_AGENT_CEILING_PROPOSALS.has(name)) &&
-      !(capability.mode === 'write' && ADMIN_AGENT_CEILING_WRITES.has(name))
+      !(capability.mode === 'write' && ADMIN_AGENT_CEILING_WRITES.has(name)) &&
+      !(capability.mode === 'write' && ADMIN_AGENT_CEILING_FOR_ITS_WORKERS.has(name))
     ) {
       throw new AdminAgentCeilingError(
         name,
