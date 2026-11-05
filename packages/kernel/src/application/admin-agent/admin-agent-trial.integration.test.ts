@@ -164,21 +164,26 @@ describe.runIf(DATABASE_URL !== undefined)(
       return withWorkspace(pool, { workspaceId, principalId }, fn);
     }
 
-    async function issue() {
+    /** `resources`: what the runtime bakes in (`ensureAdminAgentHandle` — the person's gate
+     *  Grants in the trial workspace); none by default. */
+    async function issue(resources?: Readonly<Record<string, readonly string[]>>) {
       return inWs(trialWs, adminPrincipalId, (client) =>
         issueAdminAgentHandle(client, {
           workspaceId: trialWs,
           principalId: adminPrincipalId,
+          ...(resources === undefined ? {} : { resources }),
           ttlSeconds: 600,
           privateKey,
         }),
       );
     }
 
-    async function agent(): Promise<{ caller: ResolvedCaller; sessionId: string }> {
-      const issued = await issue();
+    async function agent(
+      resources?: Readonly<Record<string, readonly string[]>>,
+    ): Promise<{ caller: ResolvedCaller; claims: HandleClaims; sessionId: string }> {
+      const issued = await issue(resources);
       const claims = await authenticateHandle(pool, issued.token, { publicKey }, 'source');
-      return { caller: { channel: 'handle', claims }, sessionId: issued.sessionId };
+      return { caller: { channel: 'handle', claims }, claims, sessionId: issued.sessionId };
     }
 
     /** The administrator's own entry agent in the trial workspace: same Principal, an entry
@@ -304,12 +309,20 @@ describe.runIf(DATABASE_URL !== undefined)(
       return result.rows[0]?.id ?? '';
     }
 
-    async function publishDefinition(workspaceId: string, ownerId: string): Promise<string> {
+    async function publishDefinition(
+      workspaceId: string,
+      ownerId: string,
+      extra: { readonly capabilities?: readonly string[]; readonly gates?: readonly string[] } = {},
+    ): Promise<string> {
       const proposed = await inWs(workspaceId, ownerId, (client) =>
         proposeWorkerDefinition(client, workspaceId, ownerId, {
           origin: 'human',
           kind: 'worker',
-          definition: { systemPrompt: 'You check a ticket system.', name: 'ticket-checker' },
+          definition: {
+            systemPrompt: 'You check a ticket system.',
+            name: 'ticket-checker',
+            ...extra,
+          },
         }),
       );
       await inWs(workspaceId, ownerId, (client) =>
@@ -582,6 +595,138 @@ describe.runIf(DATABASE_URL !== undefined)(
         taskId: byEntry.id,
       })) as Record<string, unknown>;
       expect(entryTask).not.toHaveProperty('adminAgentSessionId');
+    });
+
+    it('invoke_worker hands a Worker request_action on a trial gate only through the person’s gate Grant the Handle carries; the admin agent’s own Handle never holds it (the AA5 plan’s D1)', async () => {
+      const tag = randomUUID().slice(0, 8);
+      const trialGate = await inWs(trialWs, adminPrincipalId, async (client) => {
+        const activity = await startActivity(client, trialWs, {
+          kind: 'test.connection',
+          principalId: adminPrincipalId,
+        });
+        const registered = await registerGatekeeper(client, trialWs, {
+          name: `aa5a1-trial-gate-${tag}`,
+          transportKind: 'http',
+          target: 'trial-ticket-system',
+          endpoint: unusedEndpoint(),
+          connectionSecretSalt: 'f'.repeat(32),
+          activityId: activity.id,
+          registeredBy: { id: adminPrincipalId, kind: 'human' },
+        });
+        return registered.gatekeeperId;
+      });
+      const gatedDefinitionId = await publishDefinition(trialWs, adminPrincipalId, {
+        capabilities: ['request_action'],
+        gates: [trialGate],
+      });
+      const invokeGated = (caller: ResolvedCaller, ticket: string) =>
+        dispatchCapability({ pool }, caller, 'invoke_worker', {
+          definitionId: gatedDefinitionId,
+          version: 1,
+          input: { ticket },
+        }) as Promise<{ id: string }>;
+
+      // No gate carried: a Worker that must ask for actions cannot be started at all.
+      const bare = await agent();
+      expect(bare.claims.scope.capabilities).not.toContain('request_action');
+      expect(await refusalOf(invokeGated(bare.caller, 'T-d1-1'))).toMatchObject({
+        name: 'InvokeWorkerAttenuationError',
+      });
+
+      // The gate Grant carried, as the runtime issues it: the Worker may ask for actions on that
+      // gate (each still decided by policy or a person); the admin agent itself still may not.
+      const granted = await agent({ gatekeeper: [trialGate] });
+      expect(granted.claims.scope.capabilities).not.toContain('request_action');
+      expect(granted.claims.scope.resources.gatekeeper).toEqual([trialGate]);
+      const started = await invokeGated(granted.caller, 'T-d1-2');
+      try {
+        const child = await withAdminClient(pool, (client) =>
+          client.query<{ scope: { capabilities: string[]; resources: Record<string, string[]> } }>(
+            `select h.scope from capability_handles h
+               join worker_runs r on r.session_id = h.session_id
+              where r.task_id = $1`,
+            [started.id],
+          ),
+        );
+        expect(child.rows).toHaveLength(1);
+        expect(child.rows[0]?.scope.capabilities).toContain('request_action');
+        expect(child.rows[0]?.scope.resources.gatekeeper).toEqual([trialGate]);
+      } finally {
+        // The supervisor fake keeps every WorkerRun running: end this one so it does not count
+        // against the person's concurrency quota in the tests after it.
+        await dispatchCapability({ pool }, person(trialWs, adminPrincipalId), 'cancel_task', {
+          taskId: started.id,
+        });
+      }
+
+      // A gate carried for one system does not open another: a production gate is not declared
+      // by the trial definition, and the trial gate alone is all the Worker gets.
+      expect(
+        await refusalOf(
+          dispatchCapability({ pool }, granted.caller, 'invoke_worker', {
+            definitionId: gatedDefinitionId,
+            version: 1,
+            input: { ticket: 'T-d1-3' },
+            gates: [productionGatekeeperId],
+          }),
+        ),
+      ).toMatchObject({ name: 'InvokeWorkerValidationError' });
+    });
+
+    it('a Worker the admin agent starts hands its result back and its Task completes; the admin agent’s own Handle cannot report one', async () => {
+      const { caller } = await agent();
+      const started = (await dispatchCapability({ pool }, caller, 'invoke_worker', {
+        definitionId: trialDefinitionId,
+        version: 1,
+        input: { ticket: 'T-report-1' },
+      })) as { id: string };
+      const row = await withAdminClient(pool, async (client) => {
+        const result = await client.query<{
+          session_id: string;
+          jti: string;
+          on_behalf_of: string;
+          scope: HandleClaims['scope'];
+          expires_at: Date;
+        }>(
+          `select h.session_id, h.jti, h.on_behalf_of, h.scope, h.expires_at
+             from capability_handles h
+             join worker_runs r on r.session_id = h.session_id
+            where r.task_id = $1`,
+          [started.id],
+        );
+        return result.rows[0];
+      });
+      if (!row) throw new Error(`no Worker Handle for Task ${started.id}`);
+      expect(row.scope.capabilities).toContain('report_task_result');
+
+      // Its own session is no WorkerRun's: refused, and the Worker's Task is untouched by it.
+      expect(
+        await refusalOf(
+          dispatchCapability({ pool }, caller, 'report_task_result', { summary: 'not mine' }),
+        ),
+      ).toMatchObject({ message: expect.stringMatching(/not bound|not a WorkerRun/i) });
+
+      const worker: ResolvedCaller = {
+        channel: 'handle',
+        claims: {
+          ws: trialWs,
+          sid: row.session_id,
+          obo: row.on_behalf_of,
+          scope: row.scope,
+          jti: row.jti,
+          iat: Math.floor(Date.now() / 1000),
+          exp: Math.floor(new Date(row.expires_at).getTime() / 1000),
+        },
+      };
+      const reported = (await dispatchCapability({ pool }, worker, 'report_task_result', {
+        summary: 'T-report-1 checked',
+      })) as { id: string; status: string };
+      expect(reported).toMatchObject({ id: started.id, status: 'completed' });
+      const task = (await dispatchCapability({ pool }, caller, 'get_task', {
+        taskId: started.id,
+      })) as { status: string; result?: { summary?: string } };
+      expect(task.status).toBe('completed');
+      expect(task.result?.summary).toBe('T-report-1 checked');
     });
 
     it('invoke_worker attributes the Task to the Turn that started it: an admin agent’s Task to its own running Turn, never to an entry Turn running beside it', async () => {
