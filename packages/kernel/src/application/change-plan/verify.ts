@@ -18,7 +18,9 @@ import { z } from 'zod';
 import { writeAudit } from '../../substrate/audit/index.js';
 import type { ChangeSource } from './engine.js';
 import { ChangeSegmentRolledBackError } from './errors.js';
-import { inspectChangeSegment } from './inspect.js';
+import type { ChangeGateRef } from './family-item.js';
+import { type InspectedChangeItem, inspectChangeSegment } from './inspect.js';
+import { parseStoredOperationItem } from './operation-item.js';
 import {
   type ChangePrincipalRef,
   ChangeSegmentNotFoundError,
@@ -36,8 +38,14 @@ import {
  *   2. Are the systems its source needs in place? The caller says which those are and how each
  *      stands (`CheckSourceRequirements`: for a pack, its version's `requires.connectors`, where
  *      each stands in the workspace, and the health of its gates — the gateway probes them through
- *      the gate's own health endpoint, the path `get_gatekeeper` already uses). A requirement is met
- *      when it is `connected` with at least one gate `ok`.
+ *      the gate's own health endpoint, the path `get_gatekeeper` already uses). A pack's
+ *      requirement lists every gate of that system here, so it is met when it is `connected` with at
+ *      least one gate `ok`.
+ *      An admin proposal's segment is its own source (S11 AA3b-2) and names no systems; what it
+ *      needs is what it wrote runs through (legacy 630; AA5 plan F5(a)): each Operation item's
+ *      gate, and the gates the version each Worker item published names (`gatesWrittenThrough`,
+ *      handed to the caller with the source). Its requirement lists exactly those gates of a
+ *      system, so it is met only when it is `connected` and every one of them is `ok`.
  *   3. Are the packs its source builds on still installed at the version it needs? (S11 P1-F: for a
  *      pack, its version's `requires.packs` and how the workspace has each — the caller reads them,
  *      `CheckSourceRequirements`' `dependencies`.) Met when the installed version is the one named
@@ -96,8 +104,41 @@ function dependencyMet(dependency: DependencyCheck): boolean {
   );
 }
 
-/** Says which systems `source` needs and how each stands now — probing gates as it goes. */
-export type CheckSourceRequirements = (source: ChangeSource) => Promise<SourceRequirements>;
+/** Says which systems `source` needs and how each stands now — probing gates as it goes.
+ *  `segmentGates`: the gates what the segment wrote runs through (`gatesWrittenThrough`) — what an
+ *  admin proposal's segment needs; a pack's needs are its version's own. */
+export type CheckSourceRequirements = (
+  source: ChangeSource,
+  segmentGates: readonly ChangeGateRef[],
+) => Promise<SourceRequirements>;
+
+/** The gates the segment's items run through, each once, in item order: an `operation_version`
+ *  item's gate (the Operation it revised lives there), and the gates the version a
+ *  `worker_definition_version` item published names (none for a Worker with no gates, nor when
+ *  that version no longer holds what the item recorded — the item is then not in effect anyway). */
+export function gatesWrittenThrough(items: readonly InspectedChangeItem[]): ChangeGateRef[] {
+  const gates = new Map<string, ChangeGateRef>();
+  for (const item of items) {
+    if (item.record.kind === 'operation_version') {
+      const { gatekeeperId, gatekeeperName } = parseStoredOperationItem(item.record).target;
+      if (!gates.has(gatekeeperId))
+        gates.set(gatekeeperId, { id: gatekeeperId, name: gatekeeperName });
+    }
+    for (const gate of item.workerGates?.after ?? []) {
+      if (!gates.has(gate.id)) gates.set(gate.id, { id: gate.id, name: gate.name });
+    }
+  }
+  return [...gates.values()];
+}
+
+/** Whether a requirement is met (see this module's comment, question 2): for an admin proposal's
+ *  segment every gate it lists must answer, for a pack's one is enough. */
+function requirementMet(source: ChangeSource, requirement: RequirementCheck): boolean {
+  if (requirement.state !== 'connected') return false;
+  return source.kind === 'admin_proposal'
+    ? requirement.gates.length > 0 && requirement.gates.every((gate) => gate.health === 'ok')
+    : requirement.gates.some((gate) => gate.health === 'ok');
+}
 
 const RequirementGateCheckSchema = z
   .object({
@@ -274,13 +315,12 @@ export async function verifyChangeSegment(
     kind: item.record.kind,
     state: item.state,
   }));
-  const found = await input.checkRequirements(segment.source);
+  const found = await input.checkRequirements(segment.source, gatesWrittenThrough(inspected.items));
   const requirements = found.requirements.map((requirement) => ({
     connector: requirement.connector,
     state: requirement.state,
     gates: requirement.gates.map((gate) => ({ id: gate.id, name: gate.name, health: gate.health })),
-    met:
-      requirement.state === 'connected' && requirement.gates.some((gate) => gate.health === 'ok'),
+    met: requirementMet(segment.source, requirement),
   }));
   const dependencies = found.dependencies.map((dependency) => ({
     name: dependency.name,

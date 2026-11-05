@@ -54,8 +54,8 @@
 # do, checked against the plan's kinds: 录凭证 (twice), 试验工作区发布, 批准试验动作, 按段审阅与逐项确认
 # and 每段应用 (each part), 启用门 (platform and workspace) — plus two the plan's list leaves out,
 # each printed as a NOTE (evidence for decision gate D-W5, AA5 plan §4 item 3): 授权门（试验） and
-# 验证 (applying does not verify; for an admin proposal verify checks only that the items are in
-# effect, no gate health probe — the plan's F5(a) expected one).
+# 验证 (applying does not verify; the owner does, and the run probes the gates the part runs
+# through — legacy 630).
 #
 # Runs only when the admin agent scenario did (its administrator signed in, its trial workspace
 # set up): otherwise one `NOTE admin-agent-tickets …` line, as admin_agent_step's switch NOTE.
@@ -405,8 +405,10 @@ admin_agent_tickets_step() {
   TICKETS_CHANGE_SEGMENT_ID=${ADMIN_VALUE#*,}
   [ "$ADMIN_VALUE" = "applied,$TICKETS_CHANGE_SEGMENT_ID" ] && [ -n "$TICKETS_CHANGE_SEGMENT_ID" ] || fail "admin-agent-tickets-apply" "apply_admin_proposal_segment reads '$ADMIN_VALUE', expected applied and its change segment"
   tickets_human "每段应用" "apply_admin_proposal_segment $TICKETS_WS_SEGMENT_ID in $ADMIN_TARGET_ID"
-  admin_cap verify_change_segment "{\"segmentId\":\"$TICKETS_CHANGE_SEGMENT_ID\"}" "[d.result.segment.status, d.result.verification.passed, d.result.verification.items.map((i) => i.state).join('+'), d.result.verification.requirements.length].join(',')" "$ADMIN_TARGET_ID"
-  [ "$ADMIN_VALUE" = "verified,true,in_effect+in_effect+in_effect+in_effect,0" ] || fail "admin-agent-tickets-apply" "verify_change_segment $TICKETS_CHANGE_SEGMENT_ID reads '$ADMIN_VALUE', expected verified, passed, the four items in effect"
+  admin_cap verify_change_segment "{\"segmentId\":\"$TICKETS_CHANGE_SEGMENT_ID\"}" "[d.result.segment.status, d.result.verification.passed, d.result.verification.items.map((i) => i.state).join('+'), d.result.verification.requirements.map((r) => [r.connector, r.state, r.met, r.gates.map((g) => g.id + '/' + g.health).join('+')].join(':')).join(';')].join(',')" "$ADMIN_TARGET_ID"
+  # Legacy 630: the run probes the gates what the segment wrote runs through — here only the
+  # production Gatekeeper (tickets.create's blast radius lives there; the Worker has no gate).
+  [ "$ADMIN_VALUE" = "verified,true,in_effect+in_effect+in_effect+in_effect,$TICKETS_CONNECTOR:connected:true:$TICKETS_PROD_GATEKEEPER_ID/ok" ] || fail "admin-agent-tickets-apply" "verify_change_segment $TICKETS_CHANGE_SEGMENT_ID reads '$ADMIN_VALUE', expected verified, passed, the four items in effect and one requirement: $TICKETS_CONNECTOR connected and met, its production Gatekeeper probed ok"
   tickets_human "验证" "verify_change_segment $TICKETS_CHANGE_SEGMENT_ID (安装历史)"
   # What applying wrote: the Worker without a gate (a proposal never sets one: the owner binds it
   # here), tickets.create at blast radius low and still approved one by one.
@@ -488,7 +490,7 @@ admin_agent_tickets_step() {
   for kind in $extra; do
     case "$kind" in
       授权门（试验）) echo "NOTE admin-agent-tickets $kind is a person's step the AA5 plan's §5.8 list leaves out: the Worker asks for actions only on gates its person holds (connect_gatekeeper on the 系统访问 card) — D-W5 evidence (AA5 plan §4 item 3)" ;;
-      验证) echo "NOTE admin-agent-tickets $kind is a person's step the AA5 plan's §5.8 list leaves out: applying a workspace part does not verify it, the owner does (verify_change_segment, 安装历史) — and for an admin proposal it checks only that the items are in effect, no gate health probe (the plan's F5(a) expected one) — D-W5 evidence (AA5 plan §4 item 3)" ;;
+      验证) echo "NOTE admin-agent-tickets $kind is a person's step the AA5 plan's §5.8 list leaves out: applying a workspace part does not verify it, the owner does (verify_change_segment, 安装历史) — D-W5 evidence (AA5 plan §4 item 3)" ;;
     esac
   done
 }
