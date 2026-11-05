@@ -464,8 +464,8 @@ describe('AdminProposalsTab (能力目录 · 管理员提案, S11 AA4a)', () => 
       });
       renderTab(http, SEGMENT);
       const gates = (await screen.findByTestId('catalog-proposal-item-2-gates')).textContent;
-      expect(gates).toContain(
-        '接入的系统：它要用 docker，应用时绑到本工作区的 Docker prod、Docker staging',
+      expect(gates).toMatch(
+        /接入的系统：它要用 docker，应用时绑到本工作区的 Docker prod、Docker staging/,
       );
       if (held) expect(gates).not.toContain('还没有授权');
       else
