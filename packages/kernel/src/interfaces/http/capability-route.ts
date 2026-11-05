@@ -27,6 +27,7 @@ import {
   AdminProposalSegmentUnchangedError,
   AdminProposalTargetNoLongerChosenError,
   AdminProposalTargetNotChosenError,
+  AdminProposalTargetRejectedRepeatedlyError,
   AdminProposalTargetUnavailableError,
   ChangeApplierNotAPersonError,
   ChangeConfirmationRequiredError,
@@ -362,6 +363,12 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
     };
   }
   if (err instanceof AdminProposalQuotaExceededError) {
+    return { status: 429, code: err.code, message: err.message, details: { ...err.details } };
+  }
+  // S11 AA5a-2 (F6): a target that keeps rejecting this administrator's proposals. `details` says
+  // which segment and when it opens again — never the owners' reasons (`tripped` stays in the
+  // kernel, for the refusal's audit row).
+  if (err instanceof AdminProposalTargetRejectedRepeatedlyError) {
     return { status: 429, code: err.code, message: err.message, details: { ...err.details } };
   }
   // #916 review P3-1: the stored platform role is not admin while the kernel's effective one is.

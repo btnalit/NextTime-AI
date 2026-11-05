@@ -33,6 +33,7 @@ import {
   adminAgentRefusalOf,
   readAdminAgentAuthorityFacts,
 } from '../admin-agent/index.js';
+import { AdminProposalTargetRejectedRepeatedlyError } from '../change-plan/admin-proposal-breaker.js';
 import {
   EvaluationContentWithheldError,
   EvaluationProbeHoldError,
@@ -653,6 +654,75 @@ async function auditGoalStepClosed(
 }
 
 /**
+ * S11 AA5a-2 (F6; coordinator 2026-11-02: "熔断触发时写一行审计"): a `propose_admin_proposal` the
+ * breaker refused — a target that has rejected too many of the administrator's proposals lately
+ * (`AdminProposalTargetRejectedRepeatedlyError`) — leaves an audit row in the trial workspace,
+ * written in its own transaction like `auditGateRefusal`'s, since the call's own rolled back with
+ * the refusal: the call's action, its redacted params, `outcome: 'refused'`, and `refusal` with the
+ * rule, the target, when it opens again and the rejected segments it counted (proposal and segment
+ * ids and when each was rejected — never what the owners wrote; a platform administrator reads that
+ * on the platform's admin proposals page). Failing to write it is logged and never replaces the
+ * refusal itself.
+ */
+async function auditTargetRejectedRepeatedly(
+  deps: DispatchDeps,
+  call: {
+    readonly workspaceId: string;
+    readonly principalId: string;
+    readonly channel: string;
+    readonly capability: Capability;
+    readonly name: string;
+    readonly params: Record<string, unknown>;
+    readonly err: unknown;
+    readonly actingSession?: ActingSession;
+  },
+): Promise<void> {
+  const err = call.err;
+  if (!(err instanceof AdminProposalTargetRejectedRepeatedlyError)) return;
+  try {
+    await withWorkspace(
+      deps.pool,
+      { workspaceId: call.workspaceId, principalId: call.principalId },
+      (client) =>
+        writeAudit(client, {
+          workspaceId: call.workspaceId,
+          actorPrincipalId: call.principalId,
+          action: call.name,
+          payload: {
+            channel: call.channel,
+            onBehalfOf: call.principalId,
+            ...actingSessionFields(call.actingSession),
+            ...auditParams(call.capability, call.params),
+            outcome: 'refused',
+            refusal: {
+              code: err.code,
+              status: 429,
+              segment: err.details.segment,
+              targetWorkspaceId: err.tripped.targetWorkspaceId,
+              rejectionLimit: err.details.rejectionLimit,
+              windowDays: err.details.windowDays,
+              reopensAt: err.details.reopensAt,
+              rejections: err.tripped.rejections.map((rejection) => ({
+                proposalId: rejection.proposalId,
+                segmentId: rejection.segmentId,
+                rejectedAt: rejection.decidedAt.toISOString(),
+              })),
+            },
+          },
+        }),
+    );
+  } catch (auditErr) {
+    const detail = auditErr instanceof Error ? auditErr.message : String(auditErr);
+    console.error(
+      `[kernel] audit of a repeated-rejection refusal failed (capability=${call.name}): ${detail}`.replace(
+        /\n|\r/g,
+        '',
+      ),
+    );
+  }
+}
+
+/**
  * Legacy 232: a `request_action` refused for naming nothing the gate runs (`UnknownOperationError`)
  * leaves an audit row, as such a call did when it still became an ActionRequest ("审计只增不减"),
  * written in its own transaction like `auditGateRefusal`'s. The requested name is caller-chosen
@@ -1121,6 +1191,7 @@ export async function dispatchCapability(
     await auditProbeHold(deps, refused);
     await auditUnknownOperation(deps, refused);
     await auditGoalStepClosed(deps, refused);
+    await auditTargetRejectedRepeatedly(deps, refused);
     await recordRefusedOutput(deps, refused);
     throw await sealedError(deps, refused, err, sealOptions);
   });

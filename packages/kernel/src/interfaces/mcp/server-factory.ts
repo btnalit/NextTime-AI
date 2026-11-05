@@ -12,6 +12,7 @@ import {
   AdminProposalQuotaExceededError,
   AdminProposalRoleMismatchError,
   AdminProposalTargetNotChosenError,
+  AdminProposalTargetRejectedRepeatedlyError,
   AdminProposalTargetUnavailableError,
 } from '../../application/change-plan/index.js';
 import {
@@ -88,6 +89,7 @@ export function mapCapabilityErrorToToolResult(err: unknown): CallToolResult {
     err instanceof AdminProposalTargetUnavailableError ||
     err instanceof AdminProposalCredentialError ||
     err instanceof AdminProposalQuotaExceededError ||
+    err instanceof AdminProposalTargetRejectedRepeatedlyError ||
     err instanceof AdminProposalRoleMismatchError ||
     err instanceof AdminProposalNotFoundError ||
     err instanceof AdminProposalNotOpenError

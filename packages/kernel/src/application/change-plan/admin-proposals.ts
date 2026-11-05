@@ -26,6 +26,7 @@ import {
   shownFreeText,
 } from '../../governance/redaction/index.js';
 import { validateSkillContent } from '../worker/index.js';
+import { assertTargetsNotRejectedRepeatedly } from './admin-proposal-breaker.js';
 import { contentDigest } from './digest.js';
 
 /**
@@ -52,7 +53,9 @@ import { contentDigest } from './digest.js';
  *    across every trial workspace, withdrawn ones included);
  *  - a target cannot take a proposal: unknown, disabled, or a trial workspace — all three refused alike
  *    (F10, coordinator 2026-11-02: one code and one text, so the agent cannot learn from the
- *    refusal whether a workspace it was not told about exists, or its state).
+ *    refusal whether a workspace it was not told about exists, or its state);
+ *  - a target has rejected too many of the administrator's proposals lately (F6, S11 AA5a-2,
+ *    `admin-proposal-breaker.ts`).
  */
 
 // -------------------------------------------------------------------------------------------
@@ -462,8 +465,9 @@ async function firstTargetNotChosen(
  * Makes a proposal in the trial workspace `proposer.workspaceId`, in the caller's transaction (the
  * dispatcher's, which then writes the call's audit row). `segments` are
  * {@link checkAdminProposal}'s. The order of the database checks: F11's count under the
- * administrator's lock, then the targets — chosen (S11 AA4c), then available — so a refused
- * proposal never counts, and two at the limit cannot both pass. Each workspace segment keeps the
+ * administrator's lock, then the targets — chosen (S11 AA4c), then available, then not closed by
+ * repeated rejections (F6, S11 AA5a-2) — so a refused proposal never counts, and two at the limit
+ * cannot both pass. Each workspace segment keeps the
  * target it names: changing the targets afterwards does not move a proposal made before.
  */
 export async function proposeAdminProposal(
@@ -493,6 +497,12 @@ export async function proposeAdminProposal(
   if (notChosen !== undefined) throw new AdminProposalTargetNotChosenError(notChosen);
   const unavailable = await firstUnavailableTarget(client, segments);
   if (unavailable !== undefined) throw new AdminProposalTargetUnavailableError(unavailable);
+  // F6 (S11 AA5a-2): a target that keeps rejecting this administrator's proposals is closed to them
+  // for a while — read under the same lock, from the rejections already committed.
+  await assertTargetsNotRejectedRepeatedly(
+    client,
+    segments.map((segment) => segment.targetWorkspaceId),
+  );
 
   const displayName = (user.rows[0]?.display_name ?? '').slice(0, 200) || proposer.userId;
   const description = input.description ?? '';
