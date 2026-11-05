@@ -140,6 +140,15 @@ export interface InvokeWorkerCallerCtx {
    * 自己的职责范围").
    */
   readonly turnId?: string;
+  /**
+   * S11 AA5a-1 (plan I-A7, the AA5 plan's F2): the admin agent session this call came through,
+   * when it did — the caller's Principal is then the administrator's own, so this is what records
+   * that the agent started the Task (`tasks.admin_agent_session_id`, task 0013, whose guard holds it
+   * to an `admin_agent` session of that Principal in a trial workspace). Resolved and checked by
+   * the caller (`invokeWorkerHandler`, `assertAdminAgentInTrialWorkspace`); a Worker's own nested
+   * call never has one.
+   */
+  readonly adminAgentSessionId?: string;
 }
 
 export interface InvokeWorkerInput {
@@ -455,8 +464,8 @@ async function insertQueuedTaskWithQuotaCheck(
         `insert into tasks (
            workspace_id, status, on_behalf_of, created_by_activity_id, worker_definition_id,
            worker_definition_version, input, token_budget, duration_limit_sec, idempotency_key,
-           goal_run_id, step_run_id, plan_revision, observe_scope
-         ) values ($1, 'queued', $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13::uuid[])
+           goal_run_id, step_run_id, plan_revision, observe_scope, admin_agent_session_id
+         ) values ($1, 'queued', $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13::uuid[], $14)
          returning ${TASK_ROW_COLUMNS}`,
         [
           workspaceId,
@@ -472,6 +481,7 @@ async function insertQueuedTaskWithQuotaCheck(
           goalStep?.stepRunId ?? null,
           goalStep?.planRevision ?? null,
           observeScope,
+          callerWorkerRun ? null : (caller.adminAgentSessionId ?? null),
         ],
       );
       const row = taskResult.rows[0];

@@ -24,6 +24,11 @@ describe('admin agent prompt', () => {
     expect(prompt).toContain('You are the admin agent');
     expect(prompt).toContain('admin_proposal_target_not_chosen');
     expect(prompt).toContain('Proposal targets');
+    // S11 AA5a-1: connect and check, draft and try out here, then propose.
+    expect(prompt).toContain('Trying things out in this trial workspace');
+    expect(prompt).toContain('`request_connection`');
+    expect(prompt).toContain('`invoke_worker`');
+    expect(prompt).toContain('only then propose');
   });
 
   it.each([

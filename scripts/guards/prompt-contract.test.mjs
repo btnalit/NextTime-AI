@@ -10,6 +10,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  ADMIN_CEILING_FOR_ITS_WORKERS,
   ADMIN_CEILING_REACHED_BY_PROJECTION,
   ALLOWED_NON_TOOL_WORDS,
   GATE_PLACEHOLDER,
@@ -443,7 +444,12 @@ test('ALLOWED_NON_TOOL_WORDS', async (t) => {
 
 // S11 AA4c-2: admin mode's tools against the admin agent ceiling.
 test('checkAdminToolsWithinCeiling', async (t) => {
-  const ceiling = ['get_object', 'propose_admin_proposal', ...ADMIN_CEILING_REACHED_BY_PROJECTION];
+  const ceiling = [
+    'get_object',
+    'propose_admin_proposal',
+    ...ADMIN_CEILING_REACHED_BY_PROJECTION,
+    ...ADMIN_CEILING_FOR_ITS_WORKERS,
+  ];
 
   await t.test('passes when the tools are the ceiling minus what the projection reaches', () => {
     assert.deepEqual(
@@ -476,9 +482,33 @@ test('checkAdminToolsWithinCeiling', async (t) => {
     assert.match(raw[0], /reached through the gate projection/);
     const missing = checkAdminToolsWithinCeiling(
       ['get_object', 'propose_admin_proposal'],
-      ['get_object', 'propose_admin_proposal', 'observe_operation'],
+      [
+        'get_object',
+        'propose_admin_proposal',
+        'observe_operation',
+        ...ADMIN_CEILING_FOR_ITS_WORKERS,
+      ],
     );
     assert.equal(missing.length, 1);
     assert.match(missing[0], /needs "list_allowed_operations"/);
   });
+
+  // S11 AA5a-1
+  await t.test(
+    'catches report_task_result registered as a tool, or missing from the ceiling',
+    () => {
+      const raw = checkAdminToolsWithinCeiling(
+        ['get_object', 'propose_admin_proposal', 'report_task_result'],
+        ceiling,
+      );
+      assert.equal(raw.length, 1);
+      assert.match(raw[0], /only for a Worker the admin agent starts/);
+      const missing = checkAdminToolsWithinCeiling(
+        ['get_object', 'propose_admin_proposal'],
+        ceiling.filter((name) => name !== 'report_task_result'),
+      );
+      assert.equal(missing.length, 1);
+      assert.match(missing[0], /a Worker the admin agent starts needs "report_task_result"/);
+    },
+  );
 });

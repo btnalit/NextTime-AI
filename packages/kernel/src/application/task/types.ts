@@ -50,6 +50,9 @@ export interface TaskRow {
   /** S10 E3-2a (migrations/task/0011): `evaluation` — a run of an evaluation case, acting for the
    *  workspace's evaluation service principal; `null` — ordinary work. Fixed at creation. */
   readonly purpose: TaskPurpose | null;
+  /** S11 AA5a-1 (task 0013): the admin agent session whose `invoke_worker` started this Task, in its
+   *  trial workspace; `null` for every other Task. */
+  readonly adminAgentSessionId: string | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
   readonly completedAt: Date | null;
@@ -79,6 +82,7 @@ interface TaskDbRow {
   rework_of: unknown;
   observe_scope: string[] | null;
   purpose: TaskPurpose | null;
+  admin_agent_session_id: string | null;
   created_at: Date;
   updated_at: Date;
   completed_at: Date | null;
@@ -112,6 +116,7 @@ export function mapTaskRow(row: TaskDbRow): TaskRow {
     reworkOf: parseReworkOf(row.rework_of),
     observeScope: row.observe_scope,
     purpose: row.purpose,
+    adminAgentSessionId: row.admin_agent_session_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at,
@@ -123,8 +128,8 @@ export function mapTaskRow(row: TaskDbRow): TaskRow {
 export const TASK_ROW_COLUMNS = `workspace_id, id, status, on_behalf_of, created_by_activity_id,
   worker_definition_id, worker_definition_version, input, result, token_budget,
   duration_limit_sec, tokens_used, budget_warned_at, failure_reason, retry_count, step_attempt,
-  output_schema, rejected_output, rework_of, observe_scope, purpose, created_at, updated_at,
-  completed_at, failed_at, cancelled_at`;
+  output_schema, rejected_output, rework_of, observe_scope, purpose, admin_agent_session_id,
+  created_at, updated_at, completed_at, failed_at, cancelled_at`;
 
 export interface WorkerRunRow {
   readonly workspaceId: string;

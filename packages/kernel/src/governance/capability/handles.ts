@@ -431,16 +431,31 @@ export interface EntryScopeOptions {
  * proposals read back, and withdrawing one. Nothing changes in a target workspace until its owner
  * applies a segment there, in the console.
  *
+ * Trial runs (S11 AA5a-1, the AA5 plan's F1 and F2; plan §5.8 steps 2 and 4): in its trial
+ * workspace it asks for a connection to a system (`request_connection` — a card a platform
+ * administrator completes with the credentials, in the console) and tries out what it drafted
+ * there once a person published it (`invoke_worker` — the Worker gets the Worker ceiling, never
+ * anything only an admin agent holds; its writes are ActionRequests a person decides). Both hold
+ * only in a trial workspace: the dispatcher's authority check refuses every call outside one, the
+ * two handlers check the workspace's purpose again themselves (`application/admin-agent/trial.ts`
+ * `assertAdminAgentInTrialWorkspace`), and the database refuses to record either for any other
+ * workspace (task 0013, governance 0037).
+ *
  * Two rules hold it there, both checked when the module loads (`buildAdminAgentCeiling`):
  *
  *   a) What the agent writes must never read as its person's own: a record it proposed carries the
  *      session kind beside the Principal (plan I-A7, STATUS legacy 293). A write joins only when
  *      its handler records that — a draft's `origin` is `agent` through any Handle, an Operation
- *      draft's proposer kind is `agent` (worker/0013, core/0051, `draftOriginOf`) — and only by
- *      being named in `ADMIN_AGENT_CEILING_PROPOSALS`: no `record_decision`, `invoke_worker`,
- *      `request_connection` or report here. AA3b adds `propose_admin_proposal` the same way, and
- *      one write, `agent_withdraw_admin_proposal` (`ADMIN_AGENT_CEILING_WRITES`): taking back a
- *      proposal it made, recorded `withdrawn_origin = 'agent'`.
+ *      draft's proposer kind is `agent` (worker/0013, core/0051, `draftOriginOf`), a connection
+ *      request's and a Task's `admin_agent_session_id` (governance/0037, task/0013) — and only by
+ *      being named in `ADMIN_AGENT_CEILING_PROPOSALS` or `ADMIN_AGENT_CEILING_WRITES`: no
+ *      `record_decision`, goal proposal or report here. AA3b adds `propose_admin_proposal` the same
+ *      way, and one write, `agent_withdraw_admin_proposal`: taking back a proposal it made,
+ *      recorded `withdrawn_origin = 'agent'`. AA5a-1 adds `request_connection` (a proposal) and
+ *      `invoke_worker` (a write), and one write that is there for the Worker it starts, never for
+ *      itself: `report_task_result` (`ADMIN_AGENT_CEILING_FOR_ITS_WORKERS` — a Worker's Handle
+ *      keeps only what its parent's holds, and the handler refuses every session but the
+ *      WorkerRun's own).
  *   b) Approving, publishing, applying, rolling back and confirming an item are a person's acts in
  *      the console. Every one of them is human-channel (`assertValidScope` refuses those in any
  *      Handle), and the dispatcher refuses an `admin_agent` session's call to anything outside
@@ -486,6 +501,8 @@ const ADMIN_AGENT_CEILING_CAPABILITY_NAMES = [
   'list_allowed_operations',
   'observe_operation',
   ENTRY_CEILING_GATE_OBSERVE_CAPABILITY_NAME,
+  // S11 AA5a-1: for a Worker it starts, never for itself (`ADMIN_AGENT_CEILING_FOR_ITS_WORKERS`)
+  'report_task_result',
   // the platform, redacted (S11 AA2): only an admin agent's Handle carries these (`adminAgentOnly`)
   'platform_state_gates',
   'platform_state_connectors',
@@ -501,11 +518,17 @@ const ADMIN_AGENT_CEILING_CAPABILITY_NAMES = [
   'agent_withdraw_admin_proposal',
   // S11 AA4c: the workspaces its administrator lets it propose to, by id (`adminAgentOnly`)
   'agent_list_proposal_targets',
+  // S11 AA5a-1: trial runs, in its trial workspace only — a connection a platform administrator
+  // completes, and a published Worker started to try it out
+  'request_connection',
+  'invoke_worker',
 ] as const;
 
 /** The registry groups an admin-agent capability may come from. `governance` (`request_action`),
- *  `ingest`, `connection`, `platform` and any group added later are not among them: a new group —
- *  one for code hosting, say — joins only by changing this set and the guard test (I-A2). */
+ *  `ingest`, `platform` and any group added later are not among them: a new group — one for code
+ *  hosting, say — joins only by changing this set and the guard test (I-A2). `connection` joins in
+ *  S11 AA5a-1 for `request_connection` alone: every other capability of the group is human-channel
+ *  (creating, completing and rotating a connection are a person's), which the ceiling refuses. */
 const ADMIN_AGENT_CEILING_GROUPS: ReadonlySet<string> = new Set([
   'graph',
   'epistemic',
@@ -515,6 +538,7 @@ const ADMIN_AGENT_CEILING_GROUPS: ReadonlySet<string> = new Set([
   'goal',
   'task',
   'gate',
+  'connection',
   'platform_state',
   'admin_proposal',
 ]);
@@ -531,14 +555,33 @@ const ADMIN_AGENT_CEILING_PROPOSALS: ReadonlySet<string> = new Set([
   'propose_ontology_change',
   // S11 AA3b: an admin proposal, `origin = 'agent'` always (migrations/governance/0032).
   'propose_admin_proposal',
+  // S11 AA5a-1: a connection request, which records the admin agent session that made it
+  // (`connection_requests.admin_agent_session_id`, migrations/governance/0037); trial workspace only.
+  'request_connection',
 ]);
 
-/** The ceiling's write-mode capabilities (S11 AA3b): withdrawing an admin proposal its administrator
- *  proposed — the one write that is not a proposal. Its record says an agent made it: the segment
- *  guard derives `withdrawn_origin = 'agent'` from the trial workspace's transaction
- *  (migrations/governance/0032), and it only ever takes back what the agent itself offered. A
- *  literal list as the ceiling is. */
-const ADMIN_AGENT_CEILING_WRITES: ReadonlySet<string> = new Set(['agent_withdraw_admin_proposal']);
+/** The ceiling's write-mode capabilities. Each record says an agent made it. S11 AA3b: withdrawing
+ *  an admin proposal its administrator proposed — the segment guard derives
+ *  `withdrawn_origin = 'agent'` from the trial workspace's transaction
+ *  (migrations/governance/0032), and it only ever takes back what the agent itself offered. S11
+ *  AA5a-1: starting a published Worker in its trial workspace — the Task records the admin agent
+ *  session that started it (`tasks.admin_agent_session_id`, migrations/task/0013). A literal list
+ *  as the ceiling is. */
+const ADMIN_AGENT_CEILING_WRITES: ReadonlySet<string> = new Set([
+  'agent_withdraw_admin_proposal',
+  'invoke_worker',
+]);
+
+/** S11 AA5a-1: the write-mode Worker infrastructure (`WORKER_INFRASTRUCTURE_CAPABILITY_NAMES`) the
+ *  ceiling holds only so a Worker it starts with `invoke_worker` keeps it. A child Handle holds
+ *  what its parent holds (`computeChildHandleScope`'s parent intersection, I13), so without
+ *  `report_task_result` here every such Worker lost it and could never hand its result back. The
+ *  agent itself never writes through it: the handler serves only the WorkerRun whose session is
+ *  the calling Handle's (`findWorkerRunBySessionId`), an admin agent session has none, so its own
+ *  call is refused (403) and nothing is recorded; admin mode registers no tool for it. The entry
+ *  ceiling holds it for the same reason (`ENTRY_CEILING_EXTRA_CAPABILITY_NAMES`). A literal list
+ *  as the ceiling is; every name must also be Worker infrastructure. */
+const ADMIN_AGENT_CEILING_FOR_ITS_WORKERS: ReadonlySet<string> = new Set(['report_task_result']);
 
 /** The ceiling's observe-class capabilities that declare side effects (`sideEffects: true`): the
  *  observe-class gate calls, which record their observation. The `propose_*` drafts above write
@@ -585,9 +628,19 @@ export function buildAdminAgentCeiling(names: readonly string[]): readonly strin
       throw new AdminAgentCeilingError(name, 'is execute-class');
     }
     if (
+      ADMIN_AGENT_CEILING_FOR_ITS_WORKERS.has(name) &&
+      !WORKER_INFRASTRUCTURE_CAPABILITY_NAMES.includes(name)
+    ) {
+      throw new AdminAgentCeilingError(
+        name,
+        'is named in ADMIN_AGENT_CEILING_FOR_ITS_WORKERS but is not Worker infrastructure (WORKER_INFRASTRUCTURE_CAPABILITY_NAMES)',
+      );
+    }
+    if (
       capability.mode !== 'observe' &&
       !(capability.mode === 'propose' && ADMIN_AGENT_CEILING_PROPOSALS.has(name)) &&
-      !(capability.mode === 'write' && ADMIN_AGENT_CEILING_WRITES.has(name))
+      !(capability.mode === 'write' && ADMIN_AGENT_CEILING_WRITES.has(name)) &&
+      !(capability.mode === 'write' && ADMIN_AGENT_CEILING_FOR_ITS_WORKERS.has(name))
     ) {
       throw new AdminAgentCeilingError(
         name,
@@ -1108,6 +1161,32 @@ export async function revokeEntrySessionHandles(
   const result = await client.query<{ id: string }>(
     `select id from sessions
      where workspace_id = $1 and principal_id = $2 and on_behalf_of = $2 and kind = 'entry'`,
+    [workspaceId, principalId],
+  );
+  for (const row of result.rows) {
+    await revokeSession(client, row.id);
+  }
+}
+
+/**
+ * S11 AA5a-1: `revokeEntrySessionHandles` plus the principal's own `admin_agent` session — every
+ * Handle that carries the principal's gate Grants as `resources.gatekeeper` (`ensureEntryHandle`,
+ * and since AA5a-1 `ensureAdminAgentHandle`, so a Worker the admin agent starts in its trial
+ * workspace may ask for actions on them). `grants.ts` calls this whenever a `'gatekeeper'` Grant is
+ * made or revoked, so neither agent keeps a gate set its person no longer has. It revokes Handles
+ * only (`revokeSession`): the admin agent's session stays live and its next Turn is issued a
+ * Handle under it with the current Grants. The admin agent's Handle never holds `request_action`
+ * itself (its ceiling excludes execute-class capabilities).
+ */
+export async function revokeGateGrantScopedSessionHandles(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+): Promise<void> {
+  const result = await client.query<{ id: string }>(
+    `select id from sessions
+     where workspace_id = $1 and principal_id = $2 and on_behalf_of = $2
+       and kind in ('entry', 'admin_agent')`,
     [workspaceId, principalId],
   );
   for (const row of result.rows) {

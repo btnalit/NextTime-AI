@@ -25,8 +25,9 @@
 #
 # The switch: ADMIN_AGENT_ENABLED is the host's kernel environment (secrets/kernel.env), and this
 # script never turns it on. When the running kernel has it off, nothing here creates anything and
-# one `NOTE admin-agent …` line says so (a NOTE, not a SKIP: the run still ends in "S2 OK") — the
-# production host's default. scripts/staging-rehearsal.sh turns it on in its throwaway kernel.env
+# one `NOTE admin-agent …` line says so (a NOTE, not a SKIP: the run still ends in "S2 OK") — what an
+# upgraded host whose kernel.env never set the switch sees (a new install's kernel.env sets it to 1,
+# scripts/host-env-init.sh). scripts/staging-rehearsal.sh turns it on in its throwaway kernel.env
 # and sets ACCEPT_REQUIRE_ADMIN_AGENT=1, which makes the switch being off a FAIL instead.
 #
 # Who acts: a platform administrator created for this run with the bootstrap CLI

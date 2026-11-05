@@ -149,7 +149,12 @@ describe('platformExtension() activation', () => {
 
     const registeredNames = vi.mocked(pi.registerTool).mock.calls.map(([tool]) => tool.name);
     expect(registeredNames).toEqual([...ADMIN_TOOL_CAPABILITY_NAMES]);
-    expect(registeredNames).not.toContain('invoke_worker');
+    // S11 AA5a-1: its trial runs; still none of the entry agent's own.
+    expect(registeredNames).toEqual(
+      expect.arrayContaining(['invoke_worker', 'request_connection']),
+    );
+    expect(registeredNames).not.toContain('report_turn');
+    expect(registeredNames).not.toContain('propose_goal');
     const subscribedEvents = vi.mocked(pi.on).mock.calls.map(([event]) => event);
     // No `context` hook (entry mode's per-call `get_entry_context`) and no `agent_settled` hook
     // (its `report_turn`): the admin agent's Handle carries neither.

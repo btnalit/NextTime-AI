@@ -38,6 +38,11 @@ export const ConnectionRequestWireSchema = z
     completedBy: z.string().nullable(),
     requestedAt: z.string(),
     completedAt: z.string().nullable(),
+    /** S11 AA5a-1 (plan §5.2 I-A7, the AA5 plan's F1): the admin agent session that requested
+     *  this connection in its trial workspace — `requestedBy` is the administrator's own
+     *  Principal, so this is what says the agent asked, not the person. Fixed when the request is
+     *  made (governance 0037). Absent for every other request. */
+    adminAgentSessionId: z.string().optional(),
   })
   .strict();
 export type ConnectionRequestWire = z.infer<typeof ConnectionRequestWireSchema>;
@@ -52,6 +57,7 @@ export const ConnectionRequestCreatedWireSchema = ConnectionRequestWireSchema.pi
   target: true,
   requestedBy: true,
   requestedAt: true,
+  adminAgentSessionId: true,
 });
 
 export const GatekeeperSummaryWireSchema = z

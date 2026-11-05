@@ -23,6 +23,9 @@ export interface ConnectionRequestRow {
   readonly completedBy: string | null;
   readonly requestedAt: Date;
   readonly completedAt: Date | null;
+  /** S11 AA5a-1 (governance 0037): the admin agent session that made the request, when an admin
+   *  agent did (in its trial workspace); `null` for every other request. */
+  readonly adminAgentSessionId: string | null;
 }
 
 interface ConnectionRequestDbRow {
@@ -36,6 +39,7 @@ interface ConnectionRequestDbRow {
   completed_by: string | null;
   requested_at: Date;
   completed_at: Date | null;
+  admin_agent_session_id: string | null;
 }
 
 export function mapConnectionRequestRow(row: ConnectionRequestDbRow): ConnectionRequestRow {
@@ -50,12 +54,13 @@ export function mapConnectionRequestRow(row: ConnectionRequestDbRow): Connection
     completedBy: row.completed_by,
     requestedAt: row.requested_at,
     completedAt: row.completed_at,
+    adminAgentSessionId: row.admin_agent_session_id,
   };
 }
 
 export const CONNECTION_REQUEST_ROW_COLUMNS =
   'workspace_id, id, status, kind, target, requested_by, gatekeeper_id, completed_by, ' +
-  'requested_at, completed_at';
+  'requested_at, completed_at, admin_agent_session_id';
 
 export class ConnectionRequestNotFoundError extends Error {
   constructor(workspaceId: string, connectionRequestId: string) {

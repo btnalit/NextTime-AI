@@ -37,7 +37,9 @@ import { type PlatformRole, effectivePlatformRole } from '../identity/users.js';
  *
  * The switch is `ADMIN_AGENT_ENABLED` in the kernel's environment, off unless set (plan §5.7:
  * "停止开关放在环境变量（被劫持的管理员会话改不了）"). Off, no admin-agent Handle is issued and
- * every call through one already issued is refused.
+ * every call through one already issued is refused. A new install starts with it on — the
+ * kernel.env `scripts/host-env-init.sh` creates says `ADMIN_AGENT_ENABLED=1` — while the kernel's
+ * own default stays off, so a host upgraded with a kernel.env that never set it keeps it off.
  */
 
 const ADMIN_AGENT_ENABLED_VAR = 'ADMIN_AGENT_ENABLED';
@@ -202,7 +204,11 @@ export interface IssueAdminAgentHandleParams {
   readonly workspaceId: string;
   /** The administrator's human Principal in `workspaceId`. */
   readonly principalId: string;
-  /** Resource scope to carry (`adminAgentScope`): which gates its observe-class tools may name. */
+  /** Resource scope to carry (`adminAgentScope`). `gatekeeper`: the entry Handle's gate set in
+   *  this trial workspace — the person's active gate Grants, minus their My Agent exclusions,
+   *  capped by the AgentPolicy (S11 AA5a-1, the runtime's `ensureAdminAgentHandle`,
+   *  `entryGatekeeperIds`) — what a Worker it starts may ask actions on
+   *  (`computeChildHandleScope`); the Handle itself never holds `request_action`. */
   readonly resources?: Readonly<Record<string, readonly string[]>>;
   readonly ttlSeconds: number;
   readonly privateKey: CryptoKey;

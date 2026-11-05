@@ -35,6 +35,14 @@ import {
   setGatekeeperConnectionSecretSalt,
 } from '../../governance/gatekeepers/index.js';
 import { scrubSecretValues } from '../../governance/redaction/index.js';
+import { writeAudit } from '../../substrate/audit/index.js';
+import {
+  TRIAL_SELF_CONNECT_AUDIT_ACTION,
+  TRIAL_SELF_CONNECT_KINDS,
+  TRIAL_SELF_CONNECT_PASSES_MODE,
+  assertAdminAgentInTrialWorkspace,
+  isPlatformAdminInTrialWorkspace,
+} from '../admin-agent/index.js';
 import { currentPrincipalId } from '../chat/index.js';
 import {
   assertEndpointFreeForSelfConnection,
@@ -104,10 +112,23 @@ import { toWireConnectionRequest, toWireGrant } from './resource-wire.js';
  * its own only while the platform keeps the generic connector for that `kind` in `self_serve`
  * (design `platform-admin-design.md` "三态：禁用 / 可自连 / 平台预置"). `disabled` closes it to new
  * connections; `platform_preset` means the platform runs that kind's instances and a workspace
- * enables them from the catalog (`enable_gate_instance`). `assertConnectorSelfServe` refuses both
- * `create_connection` and `request_connection` otherwise, before any other check or I/O — 409
- * `connector_not_self_serve`. Existing connections are untouched (D-19: the mode gates new
- * connections; the connector's Operation deny list is the cut-off for existing ones).
+ * enables them from the catalog (`enable_gate_instance`). `assertConnectorAllowsSelfConnection`
+ * refuses both `create_connection` and `request_connection` otherwise — 409
+ * `connector_not_self_serve` — once the caller's Principal is known (and, for `request_connection`,
+ * whether it is an admin agent's), before the parameters are checked and before any fetch or
+ * write. Existing connections are untouched (D-19: the mode gates new
+ * connections; the connector's Operation deny list is the cut-off for existing ones). One exception
+ * (S11 AA5a-1, the AA5 plan's F1): in a trial workspace an `http` or `mcp` connection asked for and
+ * completed by a platform administrator passes a `platform_preset` connector — never a `disabled`
+ * one (coordinator 2026-11-05: a kind the platform switched off stays off everywhere) — and each
+ * such pass is audited (`connection.trial_self_connect`); `application/admin-agent/trial.ts` says
+ * why.
+ *
+ * **Admin agents (S11 AA5a-1)**: `request_connection` is in the admin agent's ceiling, in its trial
+ * workspace only — the handler checks the workspace's purpose again itself
+ * (`assertAdminAgentInTrialWorkspace`) and records the admin agent session on the request
+ * (`admin_agent_session_id`, governance 0037). Completing it stays a person's (`create_connection`
+ * is human-channel).
  *
  * **Outbound-target predicate (R-27)**: `endpoint` and `manifestSource` are owner-supplied URLs the
  * kernel itself fetches from inside the platform's networks, so both pass `@nexttime/shared`'s
@@ -276,13 +297,64 @@ export class ConnectorNotSelfServeError extends Error {
   }
 }
 
-/** R-40 (D-19): see the module doc comment ("Connector three-state"). */
-async function assertConnectorSelfServe(
+/** Why a new connection of a kind may be made here: the connector is `self_serve`, or (S11 AA5a-1)
+ *  the trial workspace exception applies — `trialException` then carries the mode it passed over. */
+interface ConnectorAllowance {
+  readonly trialException: { readonly connectorMode: string | null } | null;
+}
+
+/** R-40 (D-19): see the module doc comment ("Connector three-state"). S11 AA5a-1: an `http` or
+ *  `mcp` connection a platform administrator makes in their trial workspace passes a
+ *  `platform_preset` connector (`isPlatformAdminInTrialWorkspace`, read only then); a `disabled`
+ *  one, or a kind with no connector row, refuses everyone. */
+async function assertConnectorAllowsSelfConnection(
   client: PoolClient,
+  workspaceId: string,
   kind: ConnectionRequestKind,
-): Promise<void> {
+  principalId: string,
+): Promise<ConnectorAllowance> {
   const mode = await readConnectorMode(client, kind);
-  if (mode !== 'self_serve') throw new ConnectorNotSelfServeError(kind, mode);
+  if (mode === 'self_serve') return { trialException: null };
+  if (
+    mode === TRIAL_SELF_CONNECT_PASSES_MODE &&
+    TRIAL_SELF_CONNECT_KINDS.has(kind) &&
+    (await isPlatformAdminInTrialWorkspace(client, workspaceId, principalId))
+  ) {
+    return { trialException: { connectorMode: mode } };
+  }
+  throw new ConnectorNotSelfServeError(kind, mode);
+}
+
+/** The audit row of one use of the trial exception (S11 AA5a-1), in the call's own transaction — it
+ *  stands only if the connection it let through does. */
+async function auditTrialSelfConnect(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+  record: {
+    readonly capability: 'request_connection' | 'create_connection';
+    readonly kind: ConnectionRequestKind;
+    readonly connectorMode: string | null;
+    readonly resourceType: 'connection_request' | 'gatekeeper';
+    readonly resourceId: string;
+    readonly adminAgentSessionId?: string;
+  },
+): Promise<void> {
+  await writeAudit(client, {
+    workspaceId,
+    actorPrincipalId: principalId,
+    action: TRIAL_SELF_CONNECT_AUDIT_ACTION,
+    resourceType: record.resourceType,
+    resourceId: record.resourceId,
+    payload: {
+      capability: record.capability,
+      kind: record.kind,
+      connectorMode: record.connectorMode,
+      ...(record.adminAgentSessionId !== undefined
+        ? { sessionKind: 'admin_agent', sessionId: record.adminAgentSessionId }
+        : {}),
+    },
+  });
 }
 
 /**
@@ -308,16 +380,38 @@ export const requestConnectionHandler: CapabilityHandler = async (
   ctx,
 ) => {
   const { kind, target } = params as { kind: ConnectionRequestKind; target: string };
-  // R-40: a request the owner could never complete is refused up front, with the reason.
-  await assertConnectorSelfServe(client, kind);
   const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
+  // S11 AA5a-1 (I-A6): an admin agent asks only in its trial workspace — checked here as well as
+  // at dispatch, and recorded on the request.
+  const adminAgentSessionId = await assertAdminAgentInTrialWorkspace(client, workspaceId, {
+    ...ctx,
+    principalId,
+  });
+  // R-40: a request the owner could never complete is refused up front, with the reason.
+  const allowance = await assertConnectorAllowsSelfConnection(
+    client,
+    workspaceId,
+    kind,
+    principalId,
+  );
   const requesterKind: PrincipalKind = ctx?.channel === 'human' ? 'human' : 'agent';
 
   const row = await requestConnection(client, workspaceId, {
     kind,
     target,
     requestedBy: { id: principalId, kind: requesterKind },
+    ...(adminAgentSessionId !== undefined ? { adminAgentSessionId } : {}),
   });
+  if (allowance.trialException) {
+    await auditTrialSelfConnect(client, workspaceId, principalId, {
+      capability: 'request_connection',
+      kind,
+      connectorMode: allowance.trialException.connectorMode,
+      resourceType: 'connection_request',
+      resourceId: row.id,
+      ...(adminAgentSessionId !== undefined ? { adminAgentSessionId } : {}),
+    });
+  }
 
   return {
     result: {
@@ -327,6 +421,7 @@ export const requestConnectionHandler: CapabilityHandler = async (
       target: row.target,
       requestedBy: row.requestedBy,
       requestedAt: row.requestedAt.toISOString(),
+      ...(row.adminAgentSessionId !== null ? { adminAgentSessionId: row.adminAgentSessionId } : {}),
     },
     resourceType: 'connection_request',
     resourceId: row.id,
@@ -438,8 +533,15 @@ export const createConnectionHandler: CapabilityHandler = async (
   const params = rawParams as CreateConnectionParams;
   const current = requireDeps();
   const { gatekeeperClient, connectionSecrets, fetchImpl } = current;
-  // R-40 (D-19): first — whether this workspace may self-connect this kind at all.
-  await assertConnectorSelfServe(client, params.kind);
+  const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
+  // R-40 (D-19): first — whether this workspace may self-connect this kind at all (S11 AA5a-1: or
+  // the trial workspace exception, for a platform administrator completing it now).
+  const allowance = await assertConnectorAllowsSelfConnection(
+    client,
+    workspaceId,
+    params.kind,
+    principalId,
+  );
   // Legacy 186: before the endpoint or the manifest source is checked, fetched, echoed in an error
   // or stored.
   assertConnectionParamsCarryNoCredentials('create_connection', {
@@ -447,7 +549,6 @@ export const createConnectionHandler: CapabilityHandler = async (
     endpoint: params.endpoint,
     manifestSource: params.manifestSource,
   });
-  const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
 
   const effectiveCredentialKind: 'shared' | 'connected_account' =
     params.credentialKind ?? (params.credentials !== undefined ? 'connected_account' : 'shared');
@@ -509,6 +610,16 @@ export const createConnectionHandler: CapabilityHandler = async (
   // Credential POST — deliberately last (this file's module doc comment): a failure here throws out
   // of this handler, and dispatch.ts's withWorkspace transaction rolls back every DB write the
   // landing just made.
+  if (allowance.trialException) {
+    await auditTrialSelfConnect(client, workspaceId, principalId, {
+      capability: 'create_connection',
+      kind: params.kind,
+      connectorMode: allowance.trialException.connectorMode,
+      resourceType: 'gatekeeper',
+      resourceId: completion.gatekeeperId,
+    });
+  }
+
   if (effectiveCredentialKind === 'connected_account') {
     const onBehalfOf =
       params.onBehalfOf ?? completion.connectionRequest?.requestedBy ?? principalId;
