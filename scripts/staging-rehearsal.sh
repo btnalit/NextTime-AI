@@ -93,6 +93,11 @@ done
 # disposable, so they run here; the production host leaves it off unless victor agrees in the window
 # (docs/runbooks/host-accept-s2.md). It reaches accept_s2 through the target's apply-release.sh.
 export ACCEPT_DISRUPTIVE="${ACCEPT_DISRUPTIVE:-1}"
+# S11 AA4d (AA4 plan F9): the target's accept_s2 runs its admin agent scenario — real pi in the
+# admin container proposing once — only while the kernel has ADMIN_AGENT_ENABLED on, and with this
+# set a switch left off is a FAIL, not a NOTE. The switch itself goes into this throwaway host's
+# secrets/kernel.env right before the apply (step 10); production keeps it off.
+export ACCEPT_REQUIRE_ADMIN_AGENT="${ACCEPT_REQUIRE_ADMIN_AGENT:-1}"
 [ -n "$FROM" ] && [ -n "$TO" ] && [ -n "$WORK" ] || die "--from, --to and --work are required"
 [ "$(id -u)" -eq 0 ] || die "run as root (the host-init scripts chown the data root to the container uid)"
 [ -f docker-compose.yml ] && [ -f scripts/apply-release.sh ] || die "run from the repository root"
@@ -385,6 +390,12 @@ fi
 #     would run the old flow and skip every step the target added), run from the checkout root.
 apply_script="$WORK/apply-release-$TO_TAG.sh"
 git show "$TO_TAG:scripts/apply-release.sh" >"$apply_script" || fail apply "git show $TO_TAG:scripts/apply-release.sh"
+# The admin agent switch, for the target only: written after the --from baseline, so the kernel
+# the apply recreates is the first to read it (a release before S11 AA1 ignores it anyway).
+if [ "$ACCEPT_REQUIRE_ADMIN_AGENT" = "1" ] && git show "$TO_TAG:scripts/lib/accept-s2-admin-agent.sh" >/dev/null 2>&1; then
+  printf "\nADMIN_AGENT_ENABLED=1\n" >>"$D/secrets/kernel.env" || fail apply "ADMIN_AGENT_ENABLED in secrets/kernel.env"
+  step "admin agent switched on in secrets/kernel.env for $TO_TAG's acceptance"
+fi
 step "apply via $TO_TAG:scripts/apply-release.sh (release.md §3)"
 # A target whose apply owns config/egress-sources.json's ownership (#491) gets the file back as a
 # fresh host-env-init.sh leaves it (root 0644), so that its own step — not the operator chown above,
