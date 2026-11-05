@@ -1224,6 +1224,16 @@ export const PACK_INSTALL_STATUS_VALUES = [
 export type PackInstallStatus = (typeof PACK_INSTALL_STATUS_VALUES)[number];
 export const PackInstallStatusSchema = asEnum(PACK_INSTALL_STATUS_VALUES);
 
+/**
+ * Where a pack comes from (S11 AA5d): `builtin` — the image's own `packs/`; `extra` — the
+ * deployment's extra packs directory (`EXTRA_PACKS_DIR`, the host's `config/packs/`): an applied
+ * admin proposal exported as a pack, or an organization's own. Both are Pack Contract v1 and install
+ * the same way; an extra pack is never a module.
+ */
+export const PACK_SOURCE_VALUES = ['builtin', 'extra'] as const;
+export type PackSource = (typeof PACK_SOURCE_VALUES)[number];
+export const PackSourceSchema = asEnum(PACK_SOURCE_VALUES);
+
 // ---------------------------------------------------------------------------------------------
 // §5.5 Publishable lifecycle (OntologyVersion / WorkerDefinition / Skill / Procedure / Manifest)
 // ---------------------------------------------------------------------------------------------

@@ -1449,6 +1449,12 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '签发5分钟令牌，用于管理模型供应商。',
     enHint: 'A 5-minute token for managing model providers.',
   },
+  extra_packs_status: {
+    zh: '查看附加能力包',
+    en: 'Extra packs',
+    zhHint: '列出本部署附加的能力包，以及没读进来的包和原因。',
+    enHint: 'Lists the packs this deployment adds, and those left out with the reason.',
+  },
   platform_draft_residue: {
     zh: '查看草稿残留',
     en: 'Draft residue',

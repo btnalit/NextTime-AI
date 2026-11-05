@@ -101,11 +101,13 @@ export function isModulePack(entry: PackEntry): boolean {
   });
 }
 
-/** The modules among `packs`, in the registry's order. */
+/** The modules among `packs`, in the registry's order. An extra pack (S11 AA5d, `PackEntry.
+ *  source`) is never one, whatever it holds: it is installed with `install_pack`, never offered as
+ *  a new workspace's default module, and its domain pack is not in the ontology library. */
 export function moduleRegistryOf(packs: PackRegistry): ModuleRegistry {
   const registry = new Map<string, ModuleRegistryEntry>();
   for (const pack of packs.values()) {
-    if (!isModulePack(pack)) continue;
+    if (pack.source !== 'builtin' || !isModulePack(pack)) continue;
     const requiring = pack.versions.find((version) => version.requiredPacks.length > 0);
     if (requiring) {
       throw new PackRegistryError(

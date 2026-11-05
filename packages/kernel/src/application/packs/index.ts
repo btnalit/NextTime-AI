@@ -7,7 +7,9 @@
  * (`install.ts`). A version may say which systems it needs (`requires.connectors`, P1-E) and which
  * other packs it builds on (`requires.packs`, P1-F), and `requirements.ts` reads where each stands
  * in a workspace. A module
- * (`application/platform/modules.ts`) is a pack with one ontology component named after it.
+ * (`application/platform/modules.ts`) is a pack with one ontology component named after it. A
+ * deployment may add packs of its own in `EXTRA_PACKS_DIR` (S11 AA5d, `registry.ts`): the same
+ * contract, never modules, each one that breaks a rule left out rather than the whole registry.
  */
 
 export {
@@ -37,23 +39,33 @@ export {
   type PackRequirementManifest,
 } from './manifest.js';
 export {
+  type DomainPackLocation,
   type PackComponent,
   type PackEntry,
+  type PackFiles,
   PackNotFoundError,
   type PackOntologyComponent,
   type PackSkillComponent,
+  type PackSource,
   type PackWorkerComponent,
   type PackRegistry,
   PackRegistryError,
   type PackRegistryOptions,
+  type PackRegistryRead,
   type PackVersion,
+  type SkippedExtraPack,
   derivePackComponentId,
+  diskPackFiles,
   latestPackVersion,
+  loadPackEntry,
   loadPackRegistry,
+  memoryPackFiles,
   packComponentDigest,
   packComponentKey,
   packOwnedWorkerDigest,
+  readPackRegistry,
   requirePack,
+  resolveExtraPacksDir,
   resolvePacksDir,
   WORKSPACE_OWNED_WORKER_FIELDS,
 } from './registry.js';

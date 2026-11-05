@@ -5,8 +5,9 @@ import path from 'node:path';
 /**
  * application/packs/fixture: test support — writes packs (Pack Contract v1) and the domain packs
  * they name into a fresh temporary directory, laid out as the image lays them out (`packs/`,
- * `ontology/`), with each version's Skill and Worker files beside its manifest. Not used by any
- * production path.
+ * `ontology/`), with each version's Skill and Worker files beside its manifest — or, `extra`, as
+ * an extra packs directory holds them (S11 AA5d: each version's domain packs in its own
+ * `ontology/`). Not used by any production path.
  */
 
 export interface PackFixtureComponent {
@@ -40,8 +41,15 @@ export interface PackFixtureVersion {
 export interface PackFixtureDirs {
   /** Remove this when done. */
   readonly root: string;
+  /** The packs (`extra`: the extra packs directory). */
   readonly packsDir: string;
+  /** The ontology library (`extra`: empty — each version holds its own domain packs). */
   readonly ontologyDir: string;
+}
+
+export interface PackFixtureOptions {
+  /** Lay the packs out as an extra packs directory holds them (S11 AA5d). */
+  readonly extra?: boolean;
 }
 
 /** A minimal domain pack declaring one ObjectType `name` (and the one LinkType the schema needs). */
@@ -65,6 +73,7 @@ export function workerFile(name: string, systemPrompt: string, extra = ''): Pack
 /** `packs[name]` lists its versions in order (version 1 first). */
 export async function writePackFixture(
   packs: Readonly<Record<string, readonly PackFixtureVersion[]>>,
+  options: PackFixtureOptions = {},
 ): Promise<PackFixtureDirs> {
   const root = await mkdtemp(path.join(tmpdir(), 'nexttime-packs-fixture-'));
   const packsDir = path.join(root, 'packs');
@@ -110,8 +119,10 @@ export async function writePackFixture(
         path.join(dir, 'pack.yaml'),
         `schema: 1\nname: ${name}\nversion: ${index + 1}\nsummary: ${JSON.stringify(version.summary ?? `${name} pack`)}\nnotes: ${JSON.stringify(version.notes ?? `v${index + 1}`)}\nbreaking: ${version.breaking ?? false}\n${requires}components:${components === '' ? ' {}\n' : `\n${components}`}`,
       );
+      const domainPacks = options.extra ? path.join(dir, 'ontology') : ontologyDir;
+      if (ontology.length > 0) await mkdir(domainPacks, { recursive: true });
       for (const component of ontology) {
-        await writeFile(path.join(ontologyDir, component.domainPack), component.yaml);
+        await writeFile(path.join(domainPacks, component.domainPack), component.yaml);
       }
       for (const [sub, files, ext] of [
         ['skills', skills, 'md'],

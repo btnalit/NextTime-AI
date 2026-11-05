@@ -13,6 +13,7 @@ function packOf(
 ): PackEntry {
   return {
     name: 'kit',
+    source: 'builtin',
     versions: versions.map(
       (families, index) =>
         ({

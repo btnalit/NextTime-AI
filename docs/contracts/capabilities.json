@@ -14082,6 +14082,88 @@
     "sideEffects": false
   },
   {
+    "channel": "human",
+    "group": "platform",
+    "mode": "observe",
+    "name": "extra_packs_status",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "checkedAt": {
+          "type": "string"
+        },
+        "configured": {
+          "type": "boolean"
+        },
+        "packs": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "latestVersion": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "summary",
+              "latestVersion"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "skipped": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "unreadable": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "configured",
+        "packs",
+        "skipped",
+        "unreadable",
+        "checkedAt"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
     "channel": "handle",
     "group": "graph",
     "minRole": "member",
@@ -32619,6 +32701,13 @@
               },
               "type": "array"
             },
+            "source": {
+              "enum": [
+                "builtin",
+                "extra"
+              ],
+              "type": "string"
+            },
             "status": {
               "enum": [
                 "not_installed",
@@ -32771,6 +32860,7 @@
           },
           "required": [
             "name",
+            "source",
             "summary",
             "latestVersion",
             "versions",
@@ -40296,6 +40386,13 @@
                 },
                 "type": "array"
               },
+              "source": {
+                "enum": [
+                  "builtin",
+                  "extra"
+                ],
+                "type": "string"
+              },
               "status": {
                 "enum": [
                   "not_installed",
@@ -40448,6 +40545,7 @@
             },
             "required": [
               "name",
+              "source",
               "summary",
               "latestVersion",
               "versions",
@@ -51501,6 +51599,13 @@
               },
               "type": "array"
             },
+            "source": {
+              "enum": [
+                "builtin",
+                "extra"
+              ],
+              "type": "string"
+            },
             "status": {
               "enum": [
                 "not_installed",
@@ -51653,6 +51758,7 @@
           },
           "required": [
             "name",
+            "source",
             "summary",
             "latestVersion",
             "versions",
