@@ -1103,6 +1103,233 @@ function adminAgentProposeChatScenario(messages, tools) {
   ];
 }
 
+// -------------------------------------------------------------------------------------------
+// S11 AA5c (the AA5 plan's §5.8 journey, its trial half; scripts/lib/accept-s2-admin-agent-tickets.sh):
+// in its trial workspace, the admin agent connects the test ticket system, looks at it, drafts what
+// a ticket Worker needs and tries that Worker once. Three Turns of one admin agent Chat, each asked
+// by the administrator (the script plays the person), and between them the person does what only
+// a person may: enter the credential and complete the connection, publish the drafts, approve the
+// Worker's write. Each call goes through the kernel as the agent's own (its Handle, the ceiling,
+// the trial workspace check).
+//
+//   Turn A (TICKETS_CONNECT_MARKER): `request_connection` for an http system named `helpdesk`; the
+//     reply carries the request's id (`TICKETS_CONNECTION_REQUEST`) for the person to complete.
+//   Turn B (TICKETS_DRAFT_MARKER), once the person connected it and granted it to themselves:
+//     `find_operations` for the ticket system, its observe tool `*_tickets_list` (the gate projection
+//     offers it this Turn; its execute `*_tickets_create` must not be offered — the admin agent
+//     observes, it never acts), two `propose_skill` and one `propose_worker_definition` — a Worker
+//     that may ask for actions (`request_action`) on that one gate, on the model the person names
+//     (`WORKER_MODEL`), using both Skills.
+//   Turn C (TICKETS_TRY_MARKER), once the person published the three drafts: `invoke_worker` on the
+//     version the person names (`TICKETS_DEFINITION`, `TICKETS_VERSION`), its input the Worker
+//     scenario's marker (`ticketsCreateScenario`) and the ticket's title (`TICKET_TITLE`).
+//
+// Each Turn's last step is one line of KEY=value results the script reads, plus `TICKETS_TOOLS`:
+// `ok`, or what the admin container offered wrongly for that Turn. Nothing here names the CI-only
+// chat markers of the fake runtime (scripts/guards/fake-markers.mjs).
+// -------------------------------------------------------------------------------------------
+
+const TICKETS_CONNECT_MARKER = '验收工单：接入工单系统';
+const TICKETS_DRAFT_MARKER = '验收工单：起草工单 Worker';
+const TICKETS_TRY_MARKER = '验收工单：试跑工单 Worker';
+const TICKETS_WORKER_MARKER = 'ACCEPT_S2_SCENARIO=tickets_create';
+/** The name the agent asks the ticket system to be connected under — its tools are `helpdesk_<op>`. */
+const TICKETS_TARGET = 'helpdesk';
+/** The admin mode tools each Turn calls, so each must be offered (packages/platform-extension/src/
+ *  fake-llm-admin-tools.test.ts pins them to admin mode's `ADMIN_TOOL_CAPABILITY_NAMES`). */
+const TICKETS_CONNECT_TOOLS = ['request_connection', 'invoke_worker'];
+const TICKETS_DRAFT_TOOLS = ['find_operations', 'propose_skill', 'propose_worker_definition'];
+const TICKETS_TRY_TOOLS = ['invoke_worker'];
+
+/** The first offered tool whose name ends with `suffix` — a gate tool's name starts with whatever
+ *  the connection was named, as `restartToolName` explains. */
+function offeredToolEndingWith(tools, suffix) {
+  return offeredToolNames(tools).find((name) => name.endsWith(suffix));
+}
+
+/** `ok`, or the tools that should have been offered and were not, and those that were and should
+ *  not have been. */
+function ticketsToolsVerdict(tools, required, forbiddenSuffixes = []) {
+  const offered = offeredToolNames(tools);
+  const missing = required.filter((name) => !offered.includes(name));
+  const unexpected = offered.filter((name) => forbiddenSuffixes.some((s) => name.endsWith(s)));
+  if (missing.length === 0 && unexpected.length === 0) return 'ok';
+  return `missing:${missing.join('|') || '-'};unexpected:${unexpected.join('|') || '-'}`;
+}
+
+/** A marker whose value may hold a `/` (a model id like `fake/fake-echo`), which `extractMarker`'s
+ *  class leaves out. */
+function extractModelMarker(blob, key) {
+  const match = new RegExp(`${key}=([A-Za-z0-9_.:/-]+)`).exec(blob);
+  return match ? match[1] : undefined;
+}
+
+function ticketsConnectChatScenario(messages, tools) {
+  const requested = findToolResult(messages, 'request_connection');
+  const requestedText = findToolResultText(messages, 'request_connection');
+  const verdict = ticketsToolsVerdict(tools, TICKETS_CONNECT_TOOLS);
+  const id = typeof requested?.id === 'string' ? requested.id : '';
+  return [
+    { tool: { name: 'request_connection', args: { kind: 'http', target: TICKETS_TARGET } } },
+    {
+      text: `TICKETS_CONNECTION_REQUEST=${id} TICKETS_TOOLS=${verdict}${id ? '' : ` — request_connection answered: ${(requestedText ?? '').slice(0, 300)}`}`,
+    },
+  ];
+}
+
+function ticketsDraftChatScenario(messages, tools) {
+  const asked = latestMessageWith(messages, TICKETS_DRAFT_MARKER);
+  const nonce = extractMarker(asked, 'TICKETS_NONCE') ?? 'none';
+  const model = extractModelMarker(asked, 'WORKER_MODEL') ?? 'fake/fake-echo';
+  const listTool = offeredToolEndingWith(tools, '_tickets_list');
+  const verdict = ticketsToolsVerdict(
+    tools,
+    [...TICKETS_DRAFT_TOOLS, ...(listTool ? [] : ['<gate>_tickets_list'])],
+    ['_tickets_create'],
+  );
+  const found = findToolResult(messages, 'find_operations');
+  const operation = Array.isArray(found?.items)
+    ? found.items.find(
+        (o) =>
+          typeof o?.identityKey?.name === 'string' &&
+          o.identityKey.name.startsWith('tickets.') &&
+          typeof o.identityKey.gatekeeperId === 'string',
+      )
+    : undefined;
+  const gatekeeperId = operation?.identityKey.gatekeeperId;
+  const listed = listTool ? findToolResult(messages, listTool) : undefined;
+  const listedData = listed && typeof listed === 'object' ? (listed.data ?? listed) : undefined;
+  const tickets = Array.isArray(listedData?.items) ? listedData.items : undefined;
+  const skills = allToolResults(messages, 'propose_skill')
+    .slice(-2)
+    .map((call) => {
+      try {
+        return JSON.parse(call.text ?? '');
+      } catch {
+        return undefined;
+      }
+    });
+  const skillLine = skills
+    .map((s) => (s && typeof s.id === 'string' ? `${s.id}:${s.version}:${s.draftDigest}` : ''))
+    .join(',');
+  const worker = findToolResult(messages, 'propose_worker_definition');
+  const workerText = findToolResultText(messages, 'propose_worker_definition');
+  const triage = `accept-tickets-triage-${nonce}`;
+  const open = `accept-tickets-open-${nonce}`;
+  const stop = (why) => ({
+    text: `TICKETS_DRAFTED=no TICKETS_TOOLS=${verdict} — tickets draft scenario: ${why}`,
+  });
+  return [
+    { tool: { name: 'find_operations', args: { need: 'ticket' } } },
+    gatekeeperId && listTool
+      ? { tool: { name: listTool, args: {} } }
+      : stop(gatekeeperId ? 'no *_tickets_list tool offered' : 'find_operations found no tickets.* Operation'),
+    tickets
+      ? {
+          tool: {
+            name: 'propose_skill',
+            args: {
+              skill: {
+                name: triage,
+                description: `Read the helpdesk's open tickets before opening a new one (accept_s2 tickets ${nonce}).`,
+                markdown:
+                  '# Triage\n\n1. List the tickets.\n2. If one already covers the problem, report it instead of opening another.\n',
+              },
+            },
+          },
+        }
+      : stop('the ticket list did not come back'),
+    {
+      tool: {
+        name: 'propose_skill',
+        args: {
+          skill: {
+            name: open,
+            description: `Open one helpdesk ticket for a problem nobody reported yet (accept_s2 tickets ${nonce}).`,
+            markdown:
+              '# Open a ticket\n\n1. Give it a short title naming the problem.\n2. Use priority normal unless told otherwise.\n3. Opening a ticket waits for a person to approve it.\n',
+          },
+        },
+      },
+    },
+    {
+      tool: {
+        name: 'propose_worker_definition',
+        args: {
+          kind: 'worker',
+          definition: {
+            name: `accept-tickets-worker-${nonce}`,
+            description: `Opens helpdesk tickets for problems nobody reported yet (accept_s2 tickets ${nonce}).`,
+            systemPrompt:
+              'You open helpdesk tickets. Read the open tickets first; open a new one only for a problem none of them covers, and report what you did.',
+            model,
+            skills: [triage, open],
+            capabilities: ['request_action'],
+            gates: [gatekeeperId ?? 'none'],
+          },
+        },
+      },
+    },
+    {
+      text: `TICKETS_DRAFTED=${worker && typeof worker.id === 'string' ? 'yes' : 'no'} TICKETS_GATEKEEPER=${gatekeeperId ?? ''} TICKETS_SEEN=${tickets ? tickets.length : ''} TICKETS_SKILLS=${skillLine} TICKETS_WORKER=${worker && typeof worker.id === 'string' ? `${worker.id}:${worker.version}` : ''} TICKETS_TOOLS=${verdict}${worker ? '' : ` — propose_worker_definition answered: ${(workerText ?? '').slice(0, 300)}`}`,
+    },
+  ];
+}
+
+function ticketsTryChatScenario(messages, tools) {
+  const asked = latestMessageWith(messages, TICKETS_TRY_MARKER);
+  const definitionId = extractMarker(asked, 'TICKETS_DEFINITION') ?? 'none';
+  const version = Number(extractMarker(asked, 'TICKETS_VERSION') ?? '1');
+  const title = extractMarker(asked, 'TICKET_TITLE') ?? 'none';
+  const verdict = ticketsToolsVerdict(tools, TICKETS_TRY_TOOLS, ['_tickets_create']);
+  const invoked = findToolResult(messages, 'invoke_worker');
+  const invokedText = findToolResultText(messages, 'invoke_worker');
+  const taskId = typeof invoked?.taskId === 'string' ? invoked.taskId : '';
+  return [
+    {
+      tool: {
+        name: 'invoke_worker',
+        args: {
+          definitionId,
+          version,
+          input: `${TICKETS_WORKER_MARKER} TICKET_TITLE=${title}`,
+          wait: false,
+        },
+      },
+    },
+    {
+      text: `TICKETS_TASK_ID=${taskId} TICKETS_TOOLS=${verdict}${taskId ? '' : ` — invoke_worker answered: ${(invokedText ?? '').slice(0, 300)}`}`,
+    },
+  ];
+}
+
+/** The Worker the admin agent tries (Turn C): one governed write — `tickets.create` on the ticket
+ *  system's gate (the tool offered whose name ends `_tickets_create`), titled as its input says
+ *  (`TICKET_TITLE`) — then its report. The Operation awaits a decision: the call waits for one up
+ *  to the kernel's budget, and the script approves it meanwhile. The report repeats what came back
+ *  and claims nothing about the ticket: the script counts the tickets itself. */
+function ticketsCreateScenario(messages, tools) {
+  const blob = JSON.stringify(messages);
+  const title = extractMarker(blob, 'TICKET_TITLE') ?? 'none';
+  const createTool = offeredToolEndingWith(tools, '_tickets_create') ?? `${TICKETS_TARGET}_tickets_create`;
+  const answer = findToolResultText(messages, createTool) ?? '';
+  return [
+    { tool: { name: createTool, args: { title, priority: 'normal' } } },
+    {
+      tool: {
+        name: 'report_result',
+        args: {
+          summary: `accept_s2: asked the helpdesk to open a ticket titled ${title}; the platform answered: ${answer.slice(0, 300)}`,
+          findings: [`tickets.create requested for ${title}`],
+          factsToAssert: [],
+          evidence: [{ kind: 'accept_s2_worker_note', content: { title } }],
+          artifacts: [],
+        },
+      },
+    },
+  ];
+}
+
 // Order matters: the entry-chat scenarios must be tested first. Once the entry agent has called
 // `invoke_worker`, its own message history contains the Worker marker (inside the tool-call
 // arguments' `input`), so a Worker-marker-first table would hand the *entry* agent the Worker's
@@ -1115,6 +1342,9 @@ const SCENARIOS = [
   { marker: '发起验收目标', build: entryGoalChatScenario, chat: true },
   { marker: '发起三步验收目标', build: entryGoalDagChatScenario, chat: true },
   { marker: ADMIN_PROPOSE_MARKER, build: adminAgentProposeChatScenario, chat: true },
+  { marker: TICKETS_CONNECT_MARKER, build: ticketsConnectChatScenario, chat: true },
+  { marker: TICKETS_DRAFT_MARKER, build: ticketsDraftChatScenario, chat: true },
+  { marker: TICKETS_TRY_MARKER, build: ticketsTryChatScenario, chat: true },
   { marker: 'goal_planning', build: goalPlannerScenario, chat: false },
   { marker: 'ACCEPT_S2_SCENARIO=docker_restart', build: dockerRestartScenario, chat: false },
   { marker: 'ACCEPT_S2_SCENARIO=ssh_run', build: sshRunScenario, chat: false },
@@ -1122,6 +1352,7 @@ const SCENARIOS = [
   { marker: 'ACCEPT_S2_SCENARIO=goal_ledger', build: goalLedgerStepScenario, chat: false },
   { marker: 'ACCEPT_S2_SCENARIO=goal_three_writes', build: goalThreeWritesScenario, chat: false },
   { marker: 'ACCEPT_S2_SCENARIO=goal_handoff', build: goalHandoffStepScenario, chat: false },
+  { marker: TICKETS_WORKER_MARKER, build: ticketsCreateScenario, chat: false },
 ];
 
 /**
