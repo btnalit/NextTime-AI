@@ -25,6 +25,7 @@ import { type Translate, sentenceGap, useT } from '../lib/i18n.js';
 import { roleLabel } from '../lib/labels.js';
 import { endpointAlreadyConnectedMessage } from '../lib/platform-errors.js';
 import { sameNameIds, withSameNameId } from '../lib/same-name.js';
+import { trialConnectorRefusal, trialSelfConnectApplies } from '../lib/trial-connect.js';
 import { ConnectionSecretReveal } from './connect/ConnectionSecretReveal.js';
 import { useGuardedClose } from './kit/discard-guard.js';
 import { ErrorDetails } from './kit/error-details.js';
@@ -53,6 +54,11 @@ export interface CompleteConnectionFormProps {
    *  Gatekeeper already at that address into view. Omitted where there is no list to show it in;
    *  the field still names it. */
   readonly onShowGatekeeper?: (gatekeeperId: string) => void;
+  /** S11 AA5b: the workspace is a trial workspace — a refused `http`/`mcp` self-connection there
+   *  says what the trial exception allows (`lib/trial-connect`). */
+  readonly trialWorkspace?: boolean;
+  /** The reader is a platform administrator (`session.user?.platformRole === 'admin'`). */
+  readonly platformAdmin?: boolean;
 }
 
 type CredentialKind = 'shared' | 'connected_account';
@@ -226,6 +232,8 @@ export function CompleteConnectionForm({
   initialKind,
   hideKindField = false,
   onShowGatekeeper,
+  trialWorkspace = false,
+  platformAdmin = false,
 }: CompleteConnectionFormProps) {
   // Legacy 497: in a drawer whose form was edited, 取消 asks before discarding it.
   const guardedClose = useGuardedClose();
@@ -693,6 +701,11 @@ export function CompleteConnectionForm({
           <ErrorBanner
             error={submitError}
             title={t('门未接受这次连接', 'The gate did not accept this connection')}
+            overrides={
+              trialSelfConnectApplies(trialWorkspace, kind)
+                ? { connector_not_self_serve: trialConnectorRefusal(platformAdmin, t) }
+                : undefined
+            }
           />
         </div>
       ) : null}

@@ -32,6 +32,9 @@ export interface ConnectionRequestRow {
   readonly completedBy: string | null;
   readonly requestedAt: string;
   readonly completedAt: string | null;
+  /** S11 AA5a-1 (I-A7): the admin agent session that asked for it in a trial workspace —
+   *  `requestedBy` is then the administrator's own Principal. Absent for every other request. */
+  readonly adminAgentSessionId?: string;
 }
 
 export interface CreateConnectionParams {

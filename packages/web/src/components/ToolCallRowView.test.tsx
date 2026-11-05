@@ -672,3 +672,107 @@ describe('S11 AA4e (UX P2-2 on #945): a propose_admin_proposal call links to its
     expect(screen.queryByTestId('tool-call-admin-proposal-link')).toBeNull();
   });
 });
+
+describe('S11 AA5b: invoke_worker links to its Task, request_connection to completing it', () => {
+  const TASK_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const REQUEST_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const taskText = JSON.stringify(
+    { id: TASK_ID, workerRunId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', status: 'running' },
+    null,
+    2,
+  );
+  const requestText = JSON.stringify(
+    {
+      id: REQUEST_ID,
+      status: 'requested',
+      kind: 'http',
+      target: 'https://tickets.example.test',
+      requestedBy: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      requestedAt: '2026-11-05T10:00:00.000Z',
+    },
+    null,
+    2,
+  );
+  const record = (name: string, text: string, id: string) => ({
+    toolCallId: `c-${id}`,
+    name,
+    outcome: 'done' as const,
+    result: { text, truncated: false, totalChars: text.length },
+    redactedValues: 0,
+    startedAt: null,
+    endedAt: null,
+  });
+
+  it('inside each folded row; only the connection gets a line under the calls', () => {
+    render(
+      <ToolCallGroupView
+        records={[
+          record('invoke_worker', taskText, TASK_ID),
+          record('request_connection', requestText, REQUEST_ID),
+        ]}
+      />,
+    );
+    expect(screen.getByTestId('tool-call-task-link').getAttribute('href')).toBe(
+      `#/work/tasks/${TASK_ID}`,
+    );
+    expect(screen.getByTestId('tool-call-connection-request-link').getAttribute('href')).toBe(
+      `#/govern/systems?complete=${REQUEST_ID}`,
+    );
+    // The Task's own progress lines follow in the chat, so it is not repeated under the calls.
+    expect(screen.queryByTestId('tool-call-group-task')).toBeNull();
+    const line = screen.getByTestId('tool-call-group-connection-request');
+    expect(line.getAttribute('data-connection-request-id')).toBe(REQUEST_ID);
+    expect(line.textContent).toContain('已申请接入一个 HTTP 系统，要由人录入凭证来完成连接');
+    expect(screen.getByTestId('tool-call-group-connection-request-link').getAttribute('href')).toBe(
+      `#/govern/systems?complete=${REQUEST_ID}`,
+    );
+  });
+
+  it('a live row links from pi’s details', () => {
+    render(
+      <ToolCallRowView
+        row={{
+          toolCallId: 'c-live-task',
+          name: 'invoke_worker',
+          status: 'ended',
+          result: { content: [{ type: 'text', text: taskText }], details: JSON.parse(taskText) },
+        }}
+      />,
+    );
+    expect(screen.getByTestId('tool-call-task-link').getAttribute('href')).toBe(
+      `#/work/tasks/${TASK_ID}`,
+    );
+  });
+
+  it('a preview cut short still links; the line then names no kind', () => {
+    const cut = requestText.slice(0, 60);
+    render(
+      <ToolCallGroupView
+        records={[
+          {
+            ...record('request_connection', cut, REQUEST_ID),
+            result: { text: cut, truncated: true, totalChars: requestText.length },
+          },
+        ]}
+      />,
+    );
+    const line = screen.getByTestId('tool-call-group-connection-request');
+    expect(line.textContent).toContain('已申请接入一个系统');
+    expect(line.textContent).not.toContain('HTTP');
+  });
+
+  it('no link for a refused request', () => {
+    render(
+      <ToolCallRowView
+        row={{
+          toolCallId: 'c-refused',
+          name: 'request_connection',
+          status: 'ended',
+          isError: true,
+          result: { error: 'connector_not_self_serve' },
+        }}
+      />,
+    );
+    expect(screen.queryByTestId('tool-call-connection-request-link')).toBeNull();
+  });
+});

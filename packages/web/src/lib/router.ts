@@ -306,6 +306,10 @@ export const hrefs = {
   access: () => '#/govern/access',
   systems: () => '#/govern/systems',
   gatekeeper: (gatekeeperId: string) => `#/govern/systems/${encodeURIComponent(gatekeeperId)}`,
+  /** S11 AA5b: 系统与授权 opening 完成连接 on one connection request — the admin chat's link from
+   *  the `request_connection` call that made it (`readCompleteConnectionRequest`). */
+  completeConnectionRequest: (requestId: string) =>
+    `#/govern/systems?complete=${encodeURIComponent(requestId)}`,
   catalog: (tab: CatalogTab = 'operations', itemId?: string) =>
     itemId !== undefined
       ? `#/govern/catalog/${tab}/${encodeURIComponent(itemId)}`
@@ -403,6 +407,15 @@ export function readConnectorPresetLink(hash: string): string | null {
   if (query === -1) return null;
   const preset = new URLSearchParams(hash.slice(query + 1)).get('preset');
   return preset ? preset : null;
+}
+
+/** The connection request `hrefs.completeConnectionRequest` asks 系统与授权 to complete, else
+ *  `null`. */
+export function readCompleteConnectionRequest(hash: string): string | null {
+  const query = hash.indexOf('?');
+  if (query === -1) return null;
+  const id = new URLSearchParams(hash.slice(query + 1)).get('complete');
+  return id ? id : null;
 }
 
 /** The provider id `hrefs.platformModelsProvider` asks 模型与供应商 to open, else `null`. */

@@ -699,3 +699,58 @@ describe('CompleteConnectionForm', () => {
     ).toBeUndefined();
   });
 });
+
+describe('CompleteConnectionForm: S11 AA5b — a refused connector in a trial workspace', () => {
+  const refused = () =>
+    httpWith(async () => {
+      throw new HttpError(
+        'capability_error',
+        'create_connection: connector http is not self-serve',
+        'connector_not_self_serve',
+      );
+    });
+
+  async function submit(
+    props: { readonly trialWorkspace?: boolean; readonly platformAdmin?: boolean },
+    row: ConnectionRequestRow = request,
+  ): Promise<string> {
+    render(
+      <CompleteConnectionForm
+        http={refused()}
+        request={row}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+        {...props}
+      />,
+    );
+    await secretShown();
+    fireEvent.change(screen.getByLabelText(/门端点/), { target: { value: 'http://gate:8080' } });
+    fireEvent.click(screen.getByRole('button', { name: '注册门' }));
+    await screen.findByText('门未接受这次连接');
+    return document.body.textContent ?? '';
+  }
+
+  it('a platform administrator is told the platform switched this kind off, and where to change it', async () => {
+    const text = await submit({ trialWorkspace: true, platformAdmin: true });
+    expect(text).toContain('平台禁用了这一类系统，试验工作区也不能自己接入');
+    expect(text).toContain('「可自连」或「平台预置」');
+  });
+
+  it('an owner who is not a platform administrator is told a platform administrator completes it', async () => {
+    const text = await submit({ trialWorkspace: true, platformAdmin: false });
+    expect(text).toContain('平台预置的这类系统要由平台管理员来完成连接');
+    expect(text).toContain('请平台管理员来完成它');
+  });
+
+  it('outside a trial workspace, or for a kind the exception does not cover, the usual refusal reads', async () => {
+    let text = await submit({ trialWorkspace: false, platformAdmin: true });
+    expect(text).toContain('平台目前不允许工作区自己接入这类系统');
+    expect(text).not.toContain('试验工作区');
+    cleanup();
+    text = await submit(
+      { trialWorkspace: true, platformAdmin: true },
+      { ...request, kind: 'ssh', target: 'ops@inventory.example.internal' },
+    );
+    expect(text).not.toContain('试验工作区');
+  });
+});

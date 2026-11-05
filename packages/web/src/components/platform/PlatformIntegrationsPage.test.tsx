@@ -444,9 +444,10 @@ describe('PlatformIntegrationsPage', () => {
     fireEvent.change(within(generic).getByTestId('connector-mode-mcp'), {
       target: { value: 'platform_preset' },
     });
-    expect((await screen.findByTestId('connector-mode-confirm-mcp')).textContent).toContain(
-      '不能再自己连这一类系统',
-    );
+    const genericConfirm = await screen.findByTestId('connector-mode-confirm-mcp');
+    expect(genericConfirm.textContent).toContain('不能再自己连这一类系统');
+    // S11 AA5b: the trial-workspace exception (AA5a-1) is said where presetting ends self-connect.
+    expect(genericConfirm.textContent).toContain('唯一的例外是试验工作区');
 
     fireEvent.click(screen.getByTestId('integrations-tab-instances'));
     const instances = await screen.findByTestId('gate-instances-table');

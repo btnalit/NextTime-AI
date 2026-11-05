@@ -32,6 +32,7 @@ import {
 import { ProxyOutcomeNote } from './ProxyOutcomeNote.js';
 import { LinkedApprovals } from './approvals/LinkedApprovals.js';
 import { nameOf } from './approvals/useDirectoryNames.js';
+import { AdminAgentActingMark } from './audit/AdminAgentActingChip.js';
 import {
   OutputContractExplanation,
   OutputContractFields,
@@ -148,6 +149,16 @@ export function TaskDetail({
         />
       ),
     },
+    // S11 AA5b: started by that person's admin agent in its trial workspace (AA5a-1, I-A7).
+    ...(task.adminAgentSessionId !== undefined
+      ? [
+          {
+            key: 'adminAgent',
+            label: t('发起', 'Started by'),
+            value: <AdminAgentActingMark testId="task-admin-agent" />,
+          },
+        ]
+      : []),
     ...(task.purpose === 'evaluation'
       ? [
           {

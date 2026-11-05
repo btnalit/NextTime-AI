@@ -23,12 +23,18 @@ import type { GrantRow, PrincipalRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { principalShownName, transportKindLabel } from '../../lib/labels.js';
 import { breadcrumbFor } from '../../lib/nav.js';
+import { hrefs, readCompleteConnectionRequest } from '../../lib/router.js';
 import { labelText, statusChipStyle, statusValues } from '../../lib/status-tone.js';
+import {
+  trialRequestNeedsPlatformAdminNote,
+  trialSelfConnectApplies,
+} from '../../lib/trial-connect.js';
 import { AvailableGateInstancesSection } from '../AvailableGateInstancesSection.js';
 import { CompleteConnectionForm } from '../CompleteConnectionForm.js';
 import { GatekeeperDetailDrawer } from '../GatekeeperDetailDrawer.js';
 import { OnboardingWizard } from '../OnboardingWizard.js';
 import { RequestConnectionForm } from '../RequestConnectionForm.js';
+import { AdminAgentActingMark } from '../audit/AdminAgentActingChip.js';
 import { ConnectSystemLauncher } from '../connect/ConnectSystemLauncher.js';
 import { type FirstPublish, firstPublishNeedsConfirm } from '../connect/GovernanceChange.js';
 import { Button } from '../kit/button.js';
@@ -43,6 +49,7 @@ import { EmptyState } from '../kit/empty-state.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { Notice } from '../kit/notice.js';
 import { PageHeader } from '../kit/page-header.js';
+import { RouteLink } from '../kit/route-link.js';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../kit/sheet.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { Tabs } from '../kit/tabs.js';
@@ -63,7 +70,18 @@ export interface SystemsPageProps {
   /** `session.user?.platformRole === 'admin'` — lets the launcher create/enable the platform
    *  instance in place. */
   readonly platformAdmin?: boolean;
+  /** S11 AA5b: the workspace in scope is a trial workspace (`scopedWorkspacePurpose`) — its open
+   *  `http`/`mcp` requests say who completes them while the kind is a platform preset
+   *  (`lib/trial-connect`). */
+  readonly trialWorkspace?: boolean;
 }
+
+/** S11 AA5b: what 系统与授权 says when it was opened on one connection request
+ *  (`hrefs.completeConnectionRequest`) and could not open its 完成连接 drawer. */
+type LinkedRequestNote =
+  | { readonly kind: 'missing' }
+  | { readonly kind: 'not_open'; readonly row: ConnectionRequestRow }
+  | { readonly kind: 'not_completable'; readonly row: ConnectionRequestRow };
 
 type RequestFilter = 'requested' | 'all' | 'completed' | 'cancelled';
 type DrawerMode =
@@ -131,6 +149,7 @@ export function SystemsPage({
   selectedGatekeeperId,
   onSelectGatekeeper,
   platformAdmin = false,
+  trialWorkspace = false,
 }: SystemsPageProps) {
   const t = useT();
   const permissions = usePermissions();
@@ -140,6 +159,27 @@ export function SystemsPage({
   const [filter, setFilter] = useState<RequestFilter>('requested');
   const [drawer, setDrawer] = useState<DrawerMode>({ kind: 'closed' });
   const [cancelling, setCancelling] = useState<ConnectionRequestRow | null>(null);
+  // S11 AA5b: the admin chat's 「在 系统与授权 完成这个连接」 links here with
+  // `?complete=<request id>` (`hrefs.completeConnectionRequest`): that request's 完成连接 drawer opens
+  // once the requests and the reader's role are known. The query is dropped once read, so closing
+  // the drawer and reloading does not open it again; a link followed while this page is already
+  // mounted opens it too.
+  const [linkedRequestId, setLinkedRequestId] = useState<string | null>(() =>
+    readCompleteConnectionRequest(window.location.hash),
+  );
+  const [linkedRequestNote, setLinkedRequestNote] = useState<LinkedRequestNote | null>(null);
+  useEffect(() => {
+    function consume(): void {
+      const hash = window.location.hash;
+      const requestId = readCompleteConnectionRequest(hash);
+      if (requestId === null) return;
+      setLinkedRequestId(requestId);
+      window.history.replaceState(null, '', hash.slice(0, hash.indexOf('?')));
+    }
+    consume();
+    window.addEventListener('hashchange', consume);
+    return () => window.removeEventListener('hashchange', consume);
+  }, []);
 
   // ---- Primary content: systems -----------------------------------------------------------
   // Held until the reader's role is known: an auditor may not read it (#541 acceptance).
@@ -438,7 +478,8 @@ export function SystemsPage({
   }
 
   const cancelOverrides = cancelConnectionRequestOverrides(t);
-  const canCreate = can('create_connection') !== false;
+  const createsConnections = can('create_connection');
+  const canCreate = createsConnections !== false;
   const canRequest = can('request_connection') !== false;
   // An auditor reads neither its readiness nor the grants: the page says so once, read-only.
   const readsReadiness = can('execution_readiness') !== false;
@@ -449,6 +490,33 @@ export function SystemsPage({
   // gatekeeper and is listed above as a connected system).
   const enableableCount = availableRows.filter((row) => !row.gatekeeperId).length;
   const gates = readiness.state.status === 'ready' ? readiness.state.data.gates : [];
+
+  // S11 AA5b: the linked request (`linkedRequestId` above), once there is something to decide on.
+  // A reader who may not read the requests is already told so by the section; nothing more here.
+  useEffect(() => {
+    if (linkedRequestId === null) return;
+    if (requestsForbidden) {
+      setLinkedRequestId(null);
+      return;
+    }
+    if (requests.state.status !== 'ready' || createsConnections === null) return;
+    const row = requests.state.data.find((item) => item.id === linkedRequestId);
+    setLinkedRequestId(null);
+    if (row?.status === 'requested' && createsConnections) {
+      setLinkedRequestNote(null);
+      setDrawer({ kind: 'complete', request: row });
+      return;
+    }
+    if (row !== undefined && row.status !== 'requested') setFilter('all');
+    setLinkedRequestNote(
+      row === undefined
+        ? { kind: 'missing' }
+        : row.status === 'requested'
+          ? { kind: 'not_completable', row }
+          : { kind: 'not_open', row },
+    );
+    document.getElementById('connection-requests-title')?.scrollIntoView?.({ block: 'start' });
+  }, [linkedRequestId, requests.state, requestsForbidden, createsConnections]);
 
   return (
     <div className="page">
@@ -641,6 +709,7 @@ export function SystemsPage({
             ) : null}
           </div>
 
+          {linkedRequestNote !== null ? <LinkedRequestNotice note={linkedRequestNote} /> : null}
           {requestsForbidden ? (
             <Notice testId="requests-forbidden">
               {t(
@@ -704,12 +773,22 @@ export function SystemsPage({
                     {t('由', 'by')}{' '}
                     {principalNames.get(row.requestedBy) ?? shortId(row.requestedBy)}
                   </span>
+                  {row.adminAgentSessionId !== undefined ? (
+                    <AdminAgentActingMark testId="request-admin-agent" />
+                  ) : null}
                   <time className="text-3 text-small" title={formatDateTime(row.requestedAt)}>
                     {formatRelative(row.requestedAt)}
                   </time>
                   {row.gatekeeperId ? (
                     <span className="text-3 text-small" title={row.gatekeeperId}>
                       {t('门', 'gate')} {shortId(row.gatekeeperId)}
+                    </span>
+                  ) : null}
+                  {row.status === 'requested' &&
+                  !platformAdmin &&
+                  trialSelfConnectApplies(trialWorkspace, row.kind) ? (
+                    <span className="text-3 text-small" data-testid="request-trial-note">
+                      {trialRequestNeedsPlatformAdminNote(t)}
                     </span>
                   ) : null}
                   {row.status === 'requested' ? (
@@ -834,6 +913,8 @@ export function SystemsPage({
               onDone={handleCompleted}
               onCancel={() => setDrawer({ kind: 'closed' })}
               onShowGatekeeper={showGatekeeperCard}
+              trialWorkspace={trialWorkspace}
+              platformAdmin={platformAdmin}
             />
           ) : null}
         </SheetContent>
@@ -926,5 +1007,57 @@ export function SystemsPage({
         </SheetContent>
       </Sheet>
     </div>
+  );
+}
+
+/** S11 AA5b: 系统与授权 was opened on one connection request (the admin chat's link) and its
+ *  完成连接 drawer could not open — why, and what is left to do. */
+function LinkedRequestNotice({ note }: { readonly note: LinkedRequestNote }) {
+  const t = useT();
+  if (note.kind === 'missing') {
+    return (
+      <Notice tone="warn" testId="linked-request-note">
+        {t(
+          '这个工作区里没有你从对话打开的连接申请。它可能是在另一个工作区里提出的：切换到那个工作区，再从对话里打开它。',
+          'The connection request you opened from the chat is not in this workspace. It may have been made in another one: switch to that workspace and open it from the chat again.',
+        )}
+      </Notice>
+    );
+  }
+  if (note.kind === 'not_completable') {
+    return (
+      <Notice tone="info" testId="linked-request-note">
+        {t(
+          '你从对话打开的连接申请还在等人完成，但你的角色不能完成连接：请工作区所有者在下面的列表里完成它。',
+          'The connection request you opened from the chat is still waiting, but your role cannot complete connections: ask a workspace owner to complete it in the list below.',
+        )}
+      </Notice>
+    );
+  }
+  const { row } = note;
+  return (
+    <Notice tone="info" testId="linked-request-note">
+      {row.status === 'completed' ? (
+        <>
+          {t(
+            '你从对话打开的连接申请已经完成了。',
+            'The connection request you opened from the chat is already complete.',
+          )}
+          {row.gatekeeperId !== null ? (
+            <>
+              {' '}
+              <RouteLink href={hrefs.gatekeeper(row.gatekeeperId)} testId="linked-request-gate">
+                {t('查看接入的系统', 'View the connected system')}
+              </RouteLink>
+            </>
+          ) : null}
+        </>
+      ) : (
+        t(
+          '你从对话打开的连接申请已经取消了，什么也没有接入。还需要它的话，请智能体重新申请，或在下面自己申请连接。',
+          'The connection request you opened from the chat was cancelled, and nothing was connected. If it is still needed, ask the agent to request it again, or request the connection yourself below.',
+        )
+      )}
+    </Notice>
   );
 }

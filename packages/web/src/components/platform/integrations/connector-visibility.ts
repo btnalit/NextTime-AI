@@ -140,8 +140,8 @@ export function hiddenInstanceExplanation(
   return `${why}${
     isGenericConnector(connector.name)
       ? t(
-          `要让工作区启用它，到「接入包」把「${connector.name}」改成「平台预置」；之后工作区不能再自己接入这一类系统。`,
-          ` To let workspaces enable it, set "${connector.name}" to platform preset under Connectors; workspaces then can no longer connect this kind of system themselves.`,
+          `要让工作区启用它，到「接入包」把「${connector.name}」改成「平台预置」；之后工作区不能再自己接入这一类系统（试验工作区里的平台管理员除外）。`,
+          ` To let workspaces enable it, set "${connector.name}" to platform preset under Connectors; workspaces then can no longer connect this kind of system themselves (a platform administrator in a trial workspace still can).`,
         )
       : t(
           `要让工作区启用它，到「接入包」把「${connector.name}」改成「平台预置」。`,

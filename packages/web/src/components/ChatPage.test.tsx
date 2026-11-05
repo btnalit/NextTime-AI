@@ -1396,6 +1396,9 @@ describe('ChatPage in an admin agent chat (S11 AA4c-3, UX P2-1 on #943)', () => 
     const empty = await screen.findByTestId('chat-empty');
     await waitFor(() => expect(empty.textContent).toContain('问管理员智能体点什么'));
     expect(empty.textContent).toContain('提出管理员提案');
+    // S11 AA5b: it connects systems and tries Workers now (AA5a-1) — no "it does not delegate".
+    expect(empty.textContent).toContain('申请接入系统、试跑');
+    expect(empty.textContent).not.toContain('不委派');
     expect(empty.textContent).not.toMatch(/入口/);
 
     act(() => fake.deliver(persisted(1, 'assistant', '已提出一份管理员提案。')));

@@ -1149,8 +1149,8 @@ function PlatformEnableSection({
             )}
             {isGenericConnector(connector.name)
               ? t(
-                  ' 通用接入包设为平台预置后，所有工作区都不能再自己连这一类系统（已建立的连接不受影响）。',
-                  ' Once a generic connector is a platform preset, no workspace can connect this kind of system itself any more (existing connections are unaffected).',
+                  ' 通用接入包设为平台预置后，所有工作区都不能再自己连这一类系统（已建立的连接不受影响；试验工作区里的平台管理员除外）。',
+                  ' Once a generic connector is a platform preset, no workspace can connect this kind of system itself any more (existing connections are unaffected; a platform administrator in a trial workspace still can).',
                 )
               : null}
           </Notice>

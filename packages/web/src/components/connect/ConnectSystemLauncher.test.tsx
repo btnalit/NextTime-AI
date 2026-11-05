@@ -314,6 +314,8 @@ describe('ConnectSystemLauncher — hosted path from the platform page', () => {
     const presetBlock = await screen.findByTestId('launcher-connector-preset');
     // A generic connector: presetting it ends workspace self-connection for the kind.
     expect(presetBlock.textContent).toContain('所有工作区都不能再自己连这一类系统');
+    // S11 AA5b: with the trial-workspace exception (AA5a-1).
+    expect(presetBlock.textContent).toContain('试验工作区里的平台管理员除外');
     fireEvent.click(within(presetBlock).getByTestId('launcher-connector-preset-button'));
     await waitFor(() => expect(screen.queryByTestId('launcher-connector-preset')).toBeNull());
     expect(screen.getByTestId('launcher-connector-ok').textContent).toContain('平台预置');
