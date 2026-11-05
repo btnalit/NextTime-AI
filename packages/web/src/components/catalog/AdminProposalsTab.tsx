@@ -874,6 +874,10 @@ function SegmentReview({
         setStaleNotice(true);
         readAgain();
       }
+      // A kept gate cut off or disconnected since the last read (`chosenWorkerGates`, 400): the
+      // review read again with the same choice is refused too, which sends the choice back to the
+      // default and says so — as it does when the read itself is refused (#501 on #969, P3-1).
+      if (chosen && code === 'invalid_params') readAgain();
       if (code === 'admin_proposal_segment_not_open') onDecided(null);
       throw error;
     }
@@ -1637,7 +1641,7 @@ function WorkerGateChoiceField({
           />
           <span>
             {gate.name}
-            <span className="text-3">{`（${gate.connector}）`}</span>
+            <span className="text-3">{t(`（${gate.connector}）`, ` (${gate.connector})`)}</span>
             {gate.held ? null : (
               <span className="text-3" data-testid={`${prefix}-gate-${gate.id}-not-held`}>
                 {t('，你还没有授权给自己', ', not granted to you yet')}

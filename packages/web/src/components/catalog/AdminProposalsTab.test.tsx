@@ -645,6 +645,86 @@ describe('AdminProposalsTab (能力目录 · 管理员提案, S11 AA4a)', () => 
     expect(screen.queryByTestId('catalog-proposal-preview-error')).toBeNull();
   });
 
+  it('a choice the apply refuses (a kept gate cut off since the review was read) reads the review again and goes back to the default', async () => {
+    const candidates = [
+      { id: 'gk-1', name: 'Docker prod', connector: 'docker', held: true },
+      { id: 'gk-2', name: 'Docker staging', connector: 'docker', held: true },
+    ];
+    let cutOff = false;
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_admin_proposal_segments: () => ({ items: [received()] }),
+      preview_admin_proposal_segment: (params) => {
+        const kept = (params as { workerGates?: Record<string, readonly string[]> }).workerGates?.[
+          'ops-runner'
+        ];
+        if (kept !== undefined && cutOff) {
+          throw new HttpError(
+            'capability_error',
+            'gate(s) gk-1 are not connected gates of the systems Worker "ops-runner" names',
+            'invalid_params',
+          );
+        }
+        const ids = kept ?? candidates.map((gate) => gate.id);
+        return preview({
+          digest: kept === undefined ? 'sha256:reviewed' : `sha256:kept-${ids.join('+')}`,
+          items: preview().items.map((item) =>
+            item.kind === 'worker_definition_version'
+              ? {
+                  ...item,
+                  newFamily: true,
+                  before: null,
+                  gates: candidates
+                    .filter((gate) => ids.includes(gate.id))
+                    .map((gate) => ({ id: gate.id, name: gate.name })),
+                  gateBinding: { systems: ['docker'], source: 'apply' as const, candidates },
+                }
+              : item,
+          ),
+        });
+      },
+      apply_admin_proposal_segment: () => {
+        cutOff = true;
+        throw new HttpError(
+          'capability_error',
+          'gate(s) gk-1 are not connected gates of the systems Worker "ops-runner" names',
+          'invalid_params',
+        );
+      },
+    });
+    renderTab(http, SEGMENT);
+    fireEvent.click(await screen.findByTestId('catalog-proposal-item-2-binding-gate-gk-2'));
+    await waitFor(() =>
+      expect(screen.getByTestId('catalog-proposal-item-2-gates').textContent).not.toContain(
+        'Docker staging',
+      ),
+    );
+    await waitFor(() => expect(screen.queryByTestId('catalog-proposal-rereading')).toBeNull());
+    fireEvent.click(screen.getByTestId('catalog-proposal-item-2-confirm'));
+    fireEvent.click(screen.getByTestId('catalog-proposal-item-3-confirm'));
+    fireEvent.click(screen.getByTestId('catalog-proposal-apply-trigger'));
+    const confirm = await screen.findByTestId('catalog-proposal-apply-confirm');
+    fireEvent.click(within(confirm).getByRole('button', { name: '应用' }));
+
+    expect((await screen.findByTestId('catalog-proposal-choice-reset')).textContent).toContain(
+      '改回了默认',
+    );
+    await waitFor(() =>
+      expect(
+        (screen.getByTestId('catalog-proposal-item-2-binding-gate-gk-2') as HTMLInputElement)
+          .checked,
+      ).toBe(true),
+    );
+    expect(
+      named(http.calls, 'preview_admin_proposal_segment').map((call) => call.params),
+    ).toEqual([
+      { segmentId: SEGMENT },
+      { segmentId: SEGMENT, workerGates: { 'ops-runner': ['gk-1'] } },
+      { segmentId: SEGMENT, workerGates: { 'ops-runner': ['gk-1'] } },
+      { segmentId: SEGMENT },
+    ]);
+  });
+
   it('applying says when the check right after could not run, or did not pass', async () => {
     for (const verification of [null, { passed: false }] as const) {
       cleanup();
