@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.62.0](https://github.com/btnalit/NextTime-AI/compare/v0.61.0...v0.62.0) (2026-11-05)
+
+
+### Features
+
+* **admin-agent:** admin agent chats, targets, status and stop in the kernel (S11 AA4c-1) ([#937](https://github.com/btnalit/NextTime-AI/issues/937)) ([1bd1754](https://github.com/btnalit/NextTime-AI/commit/1bd17542781d10088ae43cc4a15416a2394a2bcf))
+* **admin-agent:** agent observations record their session; rollback preview names workspaces (S11 AA4-0) ([#933](https://github.com/btnalit/NextTime-AI/issues/933)) ([5afa987](https://github.com/btnalit/NextTime-AI/commit/5afa9875c132997581d3aa8d7cc610743ce4115e))
+* **admin-agent:** new installs start with the admin agent switched on ([#957](https://github.com/btnalit/NextTime-AI/issues/957)) ([0ac9e0e](https://github.com/btnalit/NextTime-AI/commit/0ac9e0e0312fcf8bc27bcfcd13c97e89eb211635))
+* **admin-agent:** run admin agent turns in their own container (S11 AA4c-2) ([#941](https://github.com/btnalit/NextTime-AI/issues/941)) ([e2a9e1a](https://github.com/btnalit/NextTime-AI/commit/e2a9e1a142571f094d055f8b898b24f8cefefd14))
+* **console:** admin proposal handoffs — owner count badge, chat proposal link, trial return, targets deep links (S11 AA4e) ([#947](https://github.com/btnalit/NextTime-AI/issues/947)) ([d73af4d](https://github.com/btnalit/NextTime-AI/commit/d73af4da8e399edfe04417412827351d5e20e904))
+* **console:** admin proposal rows show the platform part apart, with a filter for the ones awaiting you (legacy 619) ([#951](https://github.com/btnalit/NextTime-AI/issues/951)) ([7ecb8bc](https://github.com/btnalit/NextTime-AI/commit/7ecb8bcabde4e91d2f7792369b3fa4a5a4a3b05b))
+* **console:** platform administrators review admin proposals on the platform (S11 AA4b) ([#936](https://github.com/btnalit/NextTime-AI/issues/936)) ([5de733e](https://github.com/btnalit/NextTime-AI/commit/5de733ed08a4ce1cb5efc89e3b5728bed07f39d3))
+* **console:** platform administrators run their admin agent from the console (S11 AA4c-3) ([#943](https://github.com/btnalit/NextTime-AI/issues/943)) ([608f460](https://github.com/btnalit/NextTime-AI/commit/608f46081bcf4ea348c710dba12eeef82d2442a8))
+* **kernel:** admin agent trial runs — request_connection and invoke_worker in its trial workspace (AA5a-1) ([#954](https://github.com/btnalit/NextTime-AI/issues/954)) ([4b07111](https://github.com/btnalit/NextTime-AI/commit/4b071114fd88a65e89e668253e85a488c76513f5))
+* **kernel:** close a target to an admin agent after repeated rejections (AA5a-2) ([#956](https://github.com/btnalit/NextTime-AI/issues/956)) ([2c7ab3c](https://github.com/btnalit/NextTime-AI/commit/2c7ab3c4593f13a27f5a85c83577455ee7f40dc4))
+* **web:** admin chat links to the Task and to completing a connection; trial exception copy (AA5b) ([#961](https://github.com/btnalit/NextTime-AI/issues/961)) ([91862e2](https://github.com/btnalit/NextTime-AI/commit/91862e28b26aa915de088caf3296afe66fc115b8))
+
+
+### Bug Fixes
+
+* **kernel:** verify an applied admin proposal by probing the gates it runs through (legacy 630) ([#966](https://github.com/btnalit/NextTime-AI/issues/966)) ([846b7d0](https://github.com/btnalit/NextTime-AI/commit/846b7d0fe8943391e3614df627819a3871214772))
+* **web:** mark refused calls in the audit streams (legacy 628) ([#964](https://github.com/btnalit/NextTime-AI/issues/964)) ([4297b34](https://github.com/btnalit/NextTime-AI/commit/4297b349cfc7f173c43a8e00b39f9db29e7224c2))
+
 ## [0.61.0](https://github.com/btnalit/NextTime-AI/compare/v0.60.0...v0.61.0) (2026-11-02)
 
 
