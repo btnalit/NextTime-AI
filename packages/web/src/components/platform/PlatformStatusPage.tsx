@@ -215,6 +215,7 @@ function StatusBody({
               <DataRow
                 key={row.id}
                 testId="status-audit-row"
+                className="audit-row"
                 title={
                   <>
                     {actionLabel(row.action, t)}

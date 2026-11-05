@@ -444,6 +444,12 @@ describe('AuditPage entry points', () => {
     const write = rowOf('assert_fact');
     expect(within(write).getByTestId('audit-refused').textContent).toBe('被拦下');
     expect(within(write).getByTestId('audit-refused-code').textContent).toBe('admin_agent_only');
+    // UX P2-1 on #964: the chip and its code wrap as one group, in a title row that wraps; the
+    // tooltip names the section the reason is in.
+    const chip = within(write).getByTestId('audit-refused');
+    expect(chip.parentElement?.className).toBe('audit-refused');
+    expect(chip.parentElement?.parentElement?.classList.contains('audit-row-title')).toBe(true);
+    expect(chip.getAttribute('title')).toContain('「负载」');
     expect(within(rowOf('list_grants')).getByTestId('audit-refused-code').textContent).toBe(
       'forbidden',
     );

@@ -384,7 +384,7 @@ export function AuditLogSection({
                 {visibleRows.map((row) => (
                   <li className="data-row" key={row.id} data-testid="audit-row">
                     <div className="data-row-main">
-                      <div className="data-row-title">
+                      <div className="data-row-title audit-row-title">
                         {/* P1-14: what happened first; the action name stays as the secondary
                          *  text an auditor filters by. */}
                         <span>{actionLabel(row.action, t)}</span>

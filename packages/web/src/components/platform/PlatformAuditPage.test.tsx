@@ -235,6 +235,11 @@ describe('PlatformAuditPage', () => {
     const write = rowOf('set_user_status');
     expect(within(write).getByTestId('audit-refused').textContent).toBe('被拦下');
     expect(within(write).getByTestId('audit-refused-code').textContent).toBe('admin_agent_only');
+    // UX P2-1 on #964: the chip and its code wrap as one group, in a title row that wraps.
+    const group = within(write).getByTestId('audit-refused').parentElement;
+    expect(group?.className).toBe('audit-refused');
+    expect(group?.contains(within(write).getByTestId('audit-refused-code'))).toBe(true);
+    expect(group?.parentElement?.classList.contains('audit-row-title')).toBe(true);
     expect(within(rowOf('list_users')).getByTestId('audit-refused-code').textContent).toBe(
       'forbidden',
     );

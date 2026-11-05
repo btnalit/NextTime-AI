@@ -313,7 +313,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
             {visibleRows.map((row) => (
               <li className="data-row" key={row.id} data-testid="platform-audit-row">
                 <div className="data-row-main">
-                  <div className="data-row-title">
+                  <div className="data-row-title audit-row-title">
                     <span className="mono text-small">{formatDateTime(row.createdAt)}</span> —{' '}
                     {actionLabel(row.action, t)} <AuditRefusedChip payload={row.payload} />{' '}
                     <span className="mono text-3 text-small">{row.action}</span>

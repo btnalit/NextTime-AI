@@ -289,8 +289,10 @@ export function isReadAuditAction(action: string): boolean {
 }
 
 /** Legacy 628: what an audit row says about a refused call — non-null iff the writer recorded
- *  `payload.outcome: 'refused'` (every refusing writer does; a dispatched call also records
- *  `refusal: {code, status, …}`, while e.g. `evaluation.seal_hold_refused` carries no code).
+ *  `payload.outcome: 'refused'` (a refused dispatched call does, with `refusal: {code, status,
+ *  …}`; `evaluation.seal_hold_refused` does with no code). Not every withholding writer says
+ *  `refused`: `evaluation.content_withheld` records `'withheld'`, and its label already says the
+ *  content was withheld, so it is not marked again.
  *  `code` is `payload.refusal.code` when it is a non-empty string, null otherwise. */
 export function auditRefusal(
   payload: Readonly<Record<string, unknown>> | null | undefined,

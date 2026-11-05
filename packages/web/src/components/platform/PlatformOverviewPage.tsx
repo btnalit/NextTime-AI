@@ -570,6 +570,7 @@ function PlatformOverviewBody({
               <DataRow
                 key={row.id}
                 testId="platform-overview-audit-row"
+                className="audit-row"
                 title={
                   <>
                     {actionLabel(row.action, t)}

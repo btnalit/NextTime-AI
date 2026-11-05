@@ -1157,6 +1157,31 @@
   margin-top: var(--space-2);
 }
 
+/* Legacy 628 (UX P2-1 on #964): at narrow widths an audit row's title wraps instead of squeezing
+ * the action label into one character per line — the label, the 「被拦下」 group, the action name
+ * and the time each move to the next line as a whole, and a monospace name or code too long for
+ * the line breaks anywhere. The recent-audit lists (overview, status) use `DataRow`, whose title
+ * row they reach through the row's `audit-row` class. */
+.audit-row-title,
+.audit-row > .data-row-main > .data-row-title {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+
+.audit-row-title > .mono,
+.audit-refused-code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.audit-refused {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px var(--space-2);
+  min-width: 0;
+}
+
 /* Legacy 232: a payload can carry long caller-chosen strings — it scrolls in its own box. */
 .platform-audit-payload .code-block {
   max-height: 480px;
