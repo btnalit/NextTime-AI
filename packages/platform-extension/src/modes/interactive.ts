@@ -1,13 +1,10 @@
 import type { ExtensionAPI, ToolDefinition } from '@earendil-works/pi-coding-agent';
-import {
-  INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS,
-  INVOKE_WORKER_SPAWN_BUDGET_SECONDS,
-  getCapability,
-} from '@nexttime/shared';
+import { getCapability } from '@nexttime/shared';
 import { type KernelClient, KernelError } from '../kernel-client.js';
 import { gateToolParameters, toToolParameters } from '../tool-schema.js';
 import type { EntryContextResult } from './entry-context.js';
 import { type AllowedOperationWire, gateToolDescription, gateToolName } from './gate-tools.js';
+import { resolveInvokeWorkerCallPlan } from './invoke-worker-call.js';
 import { installLiveContext } from './live-context.js';
 
 /**
@@ -26,7 +23,8 @@ import { installLiveContext } from './live-context.js';
  * `entry.ts` itself. Re-implementing the small, stable list here — rather than widening `entry.ts`'s
  * own exports to accommodate a second consumer — keeps this task's diff to files it actually owns;
  * `gate-tools.ts` (naming/sanitization) is already a shared module both modes import, so that part
- * is reused, not duplicated, and so is `entry-context.ts` (how the injected context is worded).
+ * is reused, not duplicated, and so are `entry-context.ts` (how the injected context is worded)
+ * and `invoke-worker-call.ts` (how `invoke_worker` is called — S11 AA5a-1 gave it a third mode).
  *
  * **What "no resident-container assumptions" means in practice:** `entry.ts`'s own code never
  * touches the supervisor or egress proxy either (those are compose/infra concerns, not pi-
@@ -103,50 +101,6 @@ function logKernelError(error: unknown, capabilityName: string): void {
   // Never interpolates the capability Handle — KernelError's message never carries it
   // (kernel-client.ts).
   console.error(`[nexttime:interactive] kernel call "${capabilityName}" failed: ${message}`);
-}
-
-/** Extra headroom (ms) layered on top of the kernel's own `invoke_worker` spawn budget and wait
- *  window — verbatim the same constant/reasoning `entry.ts`'s own `resolveInvokeWorkerCallPlan`
- *  uses (this file's own module doc comment on why it is re-declared rather than imported). */
-const WAIT_TIMEOUT_HEADROOM_MS = 10_000;
-
-interface InvokeWorkerCallPlan {
-  readonly params: unknown;
-  readonly timeoutMs?: number;
-}
-
-/** `invoke_worker`'s phase 1 (up to `INVOKE_WORKER_SPAWN_BUDGET_SECONDS` waiting for the Worker to
- *  start) plus its own `wait:true` window can exceed `KernelClient`'s flat default per-call timeout
- *  (`DEFAULT_KERNEL_CLIENT_TIMEOUT_MS`, 30s) — without this, a slow spawn or a `wait:true` call
- *  would abort client-side while the kernel was still working, and a retry would start a second
- *  Worker (2026-10-02 review R-54). Verbatim the same rule `entry.ts`'s own
- *  `resolveInvokeWorkerCallPlan` implements (`wait` defaults to `false` when the caller omits it;
- *  every invoke_worker call gets `30s + (wait ? min(timeout ?? 90, 90) : 0) + 10s`). Every other
- *  capability's params pass through unmodified. */
-function resolveInvokeWorkerCallPlan(
-  capabilityName: string,
-  params: unknown,
-): InvokeWorkerCallPlan {
-  if (capabilityName !== 'invoke_worker') return { params };
-  const base = params && typeof params === 'object' ? (params as Record<string, unknown>) : {};
-  const spawnBudgetMs = INVOKE_WORKER_SPAWN_BUDGET_SECONDS * 1000;
-  if (base.wait !== true) {
-    return {
-      params: { ...base, wait: false },
-      timeoutMs: spawnBudgetMs + WAIT_TIMEOUT_HEADROOM_MS,
-    };
-  }
-
-  const requestedTimeoutSeconds =
-    typeof base.timeout === 'number' ? base.timeout : INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS;
-  const clampedTimeoutSeconds = Math.min(
-    requestedTimeoutSeconds,
-    INVOKE_WORKER_MAX_WAIT_TIMEOUT_SECONDS,
-  );
-  return {
-    params: base,
-    timeoutMs: spawnBudgetMs + clampedTimeoutSeconds * 1000 + WAIT_TIMEOUT_HEADROOM_MS,
-  };
 }
 
 function buildCapabilityTool(

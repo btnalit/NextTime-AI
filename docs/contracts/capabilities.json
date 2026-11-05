@@ -5634,6 +5634,9 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "adminAgentSessionId": {
+          "type": "string"
+        },
         "completedAt": {
           "type": [
             "string",
@@ -30492,6 +30495,9 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "adminAgentSessionId": {
+          "type": "string"
+        },
         "cancelledAt": {
           "type": [
             "string",
@@ -35746,6 +35752,9 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "adminAgentSessionId": {
+                "type": "string"
+              },
               "completedAt": {
                 "type": [
                   "string",
@@ -43350,6 +43359,9 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "adminAgentSessionId": {
+                "type": "string"
+              },
               "cancelledAt": {
                 "type": [
                   "string",
@@ -63968,6 +63980,9 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "adminAgentSessionId": {
+          "type": "string"
+        },
         "id": {
           "type": "string"
         },

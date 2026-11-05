@@ -1006,8 +1006,6 @@ const ADMIN_AGENT_TOOLS_USED = [
  *  (modes/admin.ts `ADMIN_TOOL_CAPABILITY_NAMES`), exactly — packages/platform-extension/src/
  *  fake-llm-admin-tools.test.ts pins both lists against those. */
 const ENTRY_ONLY_TOOLS = [
-  'invoke_worker',
-  'request_connection',
   'record_decision',
   'record_procedure_followed',
   'report_task_outcome',

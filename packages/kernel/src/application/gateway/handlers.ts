@@ -13,6 +13,7 @@ import {
   adminAgentRefusal,
   assertAdminAgentAuthority,
 } from '../../application/admin-agent/identity.js';
+import { assertAdminAgentInTrialWorkspace } from '../../application/admin-agent/trial.js';
 import {
   type ChatMessageRow,
   type ChatRow,
@@ -2099,8 +2100,23 @@ function inputCredentialReview(input: unknown): Record<string, unknown> {
 
 const invokeWorkerHandler: CapabilityHandler = async (_client, workspaceId, params, ctx) => {
   const principalId = ctx?.principalId ?? '';
+  // S11 AA5a-1 (I-A6, the AA5 plan's F2): an admin agent starts a Worker only in its trial
+  // workspace — checked here as well as at dispatch — and the Task records its session (I-A7).
+  const adminAgentSessionId = await assertAdminAgentInTrialWorkspace(_client, workspaceId, {
+    ...ctx,
+    principalId,
+  });
+  // The Task belongs to the Turn that started it: an admin agent's own Turn under its session
+  // (S11 AA4c), never an entry Turn of the same person running beside it. So the Task's progress,
+  // and the approvals its Worker raises, land in the Chat they were asked from
+  // (application/linkage/chat-targets.ts `resolveTaskChat`).
   const attributedTurn = principalId
-    ? await findAttributableTurn(_client, { workspaceId, principalId, at: new Date() })
+    ? await findAttributableTurn(_client, {
+        workspaceId,
+        principalId,
+        at: new Date(),
+        ...(adminAgentSessionId === undefined ? {} : { adminSessionId: adminAgentSessionId }),
+      })
     : undefined;
   const turnId = attributedTurn?.wasRunning ? attributedTurn.id : undefined;
   const input = params as InvokeWorkerInput;
@@ -2121,7 +2137,13 @@ const invokeWorkerHandler: CapabilityHandler = async (_client, workspaceId, para
 
   const created = await invokeWorkerCreate(
     workspaceId,
-    { principalId, channel: ctx?.channel ?? 'handle', claims: ctx?.claims, turnId },
+    {
+      principalId,
+      channel: ctx?.channel ?? 'handle',
+      claims: ctx?.claims,
+      turnId,
+      ...(adminAgentSessionId !== undefined ? { adminAgentSessionId } : {}),
+    },
     { ...input, idempotencyKey },
     getConfiguredTaskRuntime(),
   );
@@ -2247,6 +2269,8 @@ function toWireTask(
       : null,
     observeScope: task.observeScope === null ? null : [...task.observeScope],
     purpose: task.purpose,
+    // S11 AA5a-1 (I-A7): the admin agent session that started it, for its trial runs only.
+    ...(task.adminAgentSessionId !== null ? { adminAgentSessionId: task.adminAgentSessionId } : {}),
   };
 }
 

@@ -277,9 +277,14 @@ describe.runIf(DATABASE_URL !== undefined)(
       const claims = (caller as { claims: HandleClaims }).claims;
       for (const name of claims.scope.capabilities) {
         // S11 AA3a: reads, and the five draft proposals; AA3b: an admin proposal, and
-        // withdrawing one — the only write.
+        // withdrawing one; AA5a-1: a connection request, and a trial Worker — the two writes —
+        // and that Worker's report, which this Handle's own session is refused.
         expect(
-          name === 'agent_withdraw_admin_proposal' ? ['write'] : ['observe', 'propose'],
+          name === 'agent_withdraw_admin_proposal' ||
+            name === 'invoke_worker' ||
+            name === 'report_task_result'
+            ? ['write']
+            : ['observe', 'propose'],
           name,
         ).toContain(getCapability(name)?.mode);
       }

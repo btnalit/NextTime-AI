@@ -902,8 +902,12 @@ const connectionCapabilities = [
     resultSchema: wire.ConnectionRequestCreatedWireSchema,
     // R-40 (maintainer decision D-19): refused (409 `connector_not_self_serve`) unless the platform
     // keeps the generic connector for `kind` in `self_serve` — an owner could never complete it.
+    // S11 AA5a-1 (the AA5 plan's F1): in an admin trial workspace a platform administrator — their
+    // admin agent included — may request an http or mcp connection while that connector is
+    // platform-preset (never while it is disabled), and only a platform administrator completes it
+    // there (kernel `application/admin-agent/trial.ts`).
     description:
-      'Propose connecting a new system; produces a connection-request card for a human to fill in credentials. Refused (409 connector_not_self_serve) when the platform has not opened this kind for self-connection.',
+      'Propose connecting a new system; produces a connection-request card for a human to fill in credentials. Refused (409 connector_not_self_serve) when the platform has not opened this kind for self-connection — except, while the platform runs that kind itself (platform-preset, not disabled), an http or mcp system in an admin trial workspace, which a platform administrator may connect.',
   },
   {
     // S2.13 extension (task brief: "add the follow-up capability the human uses to complete a
@@ -954,7 +958,7 @@ const connectionCapabilities = [
       .strict(),
     resultSchema: wire.CreateConnectionResultWireSchema,
     description:
-      'Register a Gatekeeper instance with address and credentials (credentials go straight to the gatekeeper, never persisted by the kernel); auto-imports a manifest draft for http/mcp. The endpoint must not be a platform-catalog gate instance (400 endpoint_is_platform_gate) — those are enabled with enable_gate_instance. Requires connectionSecret (from mint_connection_secret, already configured in the gate); endpoint and manifestSource must not point at platform services or networks (400 connection_target_refused). Refused (409 connector_not_self_serve) unless the platform keeps this kind’s connector in self-serve mode. P0b: refused 409 endpoint_already_connected (details.gatekeeperId and details.gatekeeperName, the Gatekeeper already there) when this workspace already has a Gatekeeper at that endpoint, under any spelling of it (scheme and host case, a trailing dot, the default port, user info, query and fragment, trailing slashes, an IDN host and its punycode, percent-encoding) — re-sync or rotate that one instead; the new Gatekeeper is recorded as a self connection, which the platform can suspend (suspend_self_connection).',
+      'Register a Gatekeeper instance with address and credentials (credentials go straight to the gatekeeper, never persisted by the kernel); auto-imports a manifest draft for http/mcp. The endpoint must not be a platform-catalog gate instance (400 endpoint_is_platform_gate) — those are enabled with enable_gate_instance. Requires connectionSecret (from mint_connection_secret, already configured in the gate); endpoint and manifestSource must not point at platform services or networks (400 connection_target_refused). Refused (409 connector_not_self_serve) unless the platform keeps this kind’s connector in self-serve mode — except, while that connector is platform-preset (never while it is disabled), an http or mcp connection in an admin trial workspace made by a platform administrator. P0b: refused 409 endpoint_already_connected (details.gatekeeperId and details.gatekeeperName, the Gatekeeper already there) when this workspace already has a Gatekeeper at that endpoint, under any spelling of it (scheme and host case, a trailing dot, the default port, user info, query and fragment, trailing slashes, an IDN host and its punycode, percent-encoding) — re-sync or rotate that one instead; the new Gatekeeper is recorded as a self connection, which the platform can suspend (suspend_self_connection).',
     redactedParamKeys: ['credentials', 'connectionSecret'],
   },
   {

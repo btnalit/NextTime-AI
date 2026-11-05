@@ -1,6 +1,6 @@
 import type { GrantStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { revokeEntrySessionHandles } from './handles.js';
+import { revokeGateGrantScopedSessionHandles } from './handles.js';
 
 /**
  * governance/capability/grants: CapabilityGrant CRUD and the I14 "does this Principal hold this
@@ -150,9 +150,10 @@ export async function grantCapability(
   // Item 4 fix: a new `'gatekeeper'` Grant widens what this principal may reach through their
   // entry agent — force their cached entry Handle(s) to reissue on the next Turn rather than
   // waiting for `ensureEntryHandle`'s own ttl-driven reissue window (see
-  // `revokeEntrySessionHandles`'s own doc comment).
+  // `revokeEntrySessionHandles`'s own doc comment). S11 AA5a-1: their admin agent's Handle too,
+  // which carries the same Grants in a trial workspace (`revokeGateGrantScopedSessionHandles`).
   if (mapped.resourceType === GATEKEEPER_GRANT_CAPABILITY) {
-    await revokeEntrySessionHandles(client, workspaceId, mapped.principalId);
+    await revokeGateGrantScopedSessionHandles(client, workspaceId, mapped.principalId);
   }
   return mapped;
 }
@@ -187,8 +188,9 @@ export async function revokeCapabilityGrant(
   // Item 4 fix (review job 652a4abc lane2 P1: "revoking a connect_gatekeeper Grant leaves the
   // gate in the entry Handle up to ~21.6h") — force the principal's cached entry Handle(s) to
   // reissue on their next Turn rather than continuing to carry a gate this Grant just revoked.
+  // S11 AA5a-1: their admin agent's Handle too (`revokeGateGrantScopedSessionHandles`).
   if (mapped.resourceType === GATEKEEPER_GRANT_CAPABILITY) {
-    await revokeEntrySessionHandles(client, workspaceId, mapped.principalId);
+    await revokeGateGrantScopedSessionHandles(client, workspaceId, mapped.principalId);
   }
   return mapped;
 }

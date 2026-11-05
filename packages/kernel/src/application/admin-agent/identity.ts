@@ -204,7 +204,11 @@ export interface IssueAdminAgentHandleParams {
   readonly workspaceId: string;
   /** The administrator's human Principal in `workspaceId`. */
   readonly principalId: string;
-  /** Resource scope to carry (`adminAgentScope`): which gates its observe-class tools may name. */
+  /** Resource scope to carry (`adminAgentScope`). `gatekeeper`: the entry Handle's gate set in
+   *  this trial workspace — the person's active gate Grants, minus their My Agent exclusions,
+   *  capped by the AgentPolicy (S11 AA5a-1, the runtime's `ensureAdminAgentHandle`,
+   *  `entryGatekeeperIds`) — what a Worker it starts may ask actions on
+   *  (`computeChildHandleScope`); the Handle itself never holds `request_action`. */
   readonly resources?: Readonly<Record<string, readonly string[]>>;
   readonly ttlSeconds: number;
   readonly privateKey: CryptoKey;

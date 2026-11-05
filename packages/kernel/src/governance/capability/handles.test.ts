@@ -797,7 +797,7 @@ describe('entryScope', () => {
 // ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1) — the CI guard on the admin agent's ceiling
 // -------------------------------------------------------------------------------------------
 
-describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c)', () => {
+describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c, AA5a)', () => {
   it('is exactly this set — widening it is a reviewed change to this test (I-A2)', () => {
     expect([...ADMIN_AGENT_CEILING_CAPABILITIES].sort()).toEqual(
       [
@@ -821,6 +821,8 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c)', () => {
         'get_type',
         'graph_freshness',
         'graph_overview',
+        // S11 AA5a-1 (F2): a trial run of a published Worker, in its trial workspace only.
+        'invoke_worker',
         'list_allowed_operations',
         'list_facts',
         'list_goal_unresolved_actions',
@@ -844,6 +846,10 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c)', () => {
         'propose_procedure',
         'propose_skill',
         'propose_worker_definition',
+        // S11 AA5a-1 (F1): asking to connect a system, in its trial workspace only.
+        'request_connection',
+        // S11 AA5a-1: only so a Worker it starts can hand its result back (refused for itself).
+        'report_task_result',
         'search',
         'state_at',
         'traverse',
@@ -866,7 +872,15 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c)', () => {
     }
   });
 
-  it('holds only handle-channel observe reads, the six proposals and withdrawing an admin proposal: no human-channel, platform, execute-class or other writing capability', () => {
+  it('holds every Worker infrastructure capability, so a Worker it starts keeps them all (S11 AA5a-1)', () => {
+    // A child Handle keeps only what its parent's holds (computeChildHandleScope): a missing name
+    // here is a Worker the admin agent starts that cannot read its Task or report its result.
+    for (const name of WORKER_INFRASTRUCTURE_CAPABILITY_NAMES) {
+      expect(ADMIN_AGENT_CEILING_CAPABILITIES, name).toContain(name);
+    }
+  });
+
+  it('holds only handle-channel observe reads, the seven proposals, withdrawing an admin proposal, starting a trial Worker and that Worker’s report: no human-channel, platform, execute-class or other writing capability', () => {
     const proposals = [
       'propose_admin_proposal',
       'propose_ontology_change',
@@ -874,29 +888,34 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c)', () => {
       'propose_procedure',
       'propose_skill',
       'propose_worker_definition',
+      // S11 AA5a-1: the connection request records the admin agent session it came through.
+      'request_connection',
     ];
+    // S11 AA5a-1: the Task records the admin agent session that started it; and the report of a
+    // Worker it starts, which its own session is refused (no WorkerRun is its).
+    const writes = ['agent_withdraw_admin_proposal', 'invoke_worker', 'report_task_result'];
     for (const name of ADMIN_AGENT_CEILING_CAPABILITIES) {
       const capability = getCapability(name);
       expect(capability, name).toBeDefined();
       expect(capability?.channel, name).toBe('handle');
       expect(capability?.scope, name).not.toBe('platform');
       expect(capability?.mode, name).toBe(
-        proposals.includes(name)
-          ? 'propose'
-          : name === 'agent_withdraw_admin_proposal'
-            ? 'write'
-            : 'observe',
+        proposals.includes(name) ? 'propose' : writes.includes(name) ? 'write' : 'observe',
       );
     }
     for (const name of [
       'request_action',
       '<gate>.<op>:execute',
-      'invoke_worker',
       'record_decision',
       'report_turn',
-      'request_connection',
       'propose_goal',
       'propose_entry_template_upgrade',
+      // The connection group's other capabilities are a person's (human channel) — S11 AA5a-1.
+      'create_connection',
+      'cancel_connection_request',
+      'list_connection_requests',
+      'mint_connection_secret',
+      'enable_gate_instance',
     ]) {
       expect(ADMIN_AGENT_CEILING_CAPABILITIES, name).not.toContain(name);
     }
@@ -919,9 +938,10 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c)', () => {
       ['<gate>.<op>:execute', 'execute-class'],
       // Propose-class but not one of the drafts that record who wrote them (S11 AA3a).
       ['propose_goal', 'has mode "propose"'],
-      // A write that is not the one it names (S11 AA3b): withdrawing an admin proposal.
+      // A write that is not one it names (S11 AA3b, AA5a-1): withdrawing an admin proposal,
+      // starting a trial Worker.
       ['assert_fact', 'has mode "write"'],
-      ['invoke_worker', 'has mode'],
+      ['record_decision', 'has mode'],
       // Observe-class but writes, and not one of the gate observations it names.
       ['get_entry_context', 'has side effects'],
     ] as const) {
@@ -962,7 +982,7 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c)', () => {
       kind: 'admin_agent',
     });
 
-    for (const extra of ['propose_goal', 'invoke_worker', 'request_action']) {
+    for (const extra of ['propose_goal', 'record_decision', 'request_action']) {
       await expect(
         issueHandle(client, {
           sessionId,

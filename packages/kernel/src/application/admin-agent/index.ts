@@ -15,6 +15,15 @@ export {
 } from './identity.js';
 export { loadAdminAgentSystemPrompt } from './prompt.js';
 export {
+  TRIAL_SELF_CONNECT_AUDIT_ACTION,
+  TRIAL_SELF_CONNECT_KINDS,
+  TRIAL_SELF_CONNECT_PASSES_MODE,
+  type TrialCaller,
+  adminAgentSessionOf,
+  assertAdminAgentInTrialWorkspace,
+  isPlatformAdminInTrialWorkspace,
+} from './trial.js';
+export {
   type AdminAgentMembership,
   AdminAgentRoleNotStoredError,
   AdminAgentTargetsInvalidError,

@@ -147,6 +147,11 @@ export const TaskWireSchema = z
     /** S10 E3-2a: `evaluation` — a run of an evaluation case (the console shows its result under
      *  治理 → 评测); `null` — ordinary work. */
     purpose: TaskPurposeSchema.nullable(),
+    /** S11 AA5a-1 (plan §5.2 I-A7, the AA5 plan's F2): the admin agent session that started this
+     *  Task through `invoke_worker` in its trial workspace — the Task's `onBehalfOf` is the
+     *  administrator's own Principal, so this is what says the agent started it, not the person.
+     *  Fixed when the Task is created (task 0013). Absent for every other Task. */
+    adminAgentSessionId: z.string().optional(),
   })
   .strict();
 export type TaskWire = z.infer<typeof TaskWireSchema>;
