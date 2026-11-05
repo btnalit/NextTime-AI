@@ -123,7 +123,7 @@ API 不可用，正在跑的入口 agent 会断线重连，每个 Task 容器短
 
 1. 智能体调 `request_connection`（http，`helpdesk`），请求记下它的会话；人完成这张请求卡：录测试凭证（`create_connection`，
    清单来源是工单系统的 OpenAPI 文档），按读到的发布导入的三个 Operation（`publish_manifest`），再把门授权给自己
-   （`connect_gatekeeper`，控制台的「系统访问」卡）；
+   （`connect_gatekeeper`，控制台的「系统与授权」）；
 2. 智能体用 `find_operations` 找到工单 Operation，经投影的观察工具读 `tickets.list`（执行工具从不交给它），起草两个 Skill 和
    一个只能在这个门上请求动作的 Worker；人在试验工作区发布这三份草稿；
 3. 智能体用 `invoke_worker` 试跑这个 Worker；Worker 的 `tickets.create` 等人决定，人批准；之后工单账本恰好多一张单、用的是试验凭证，
@@ -269,7 +269,7 @@ HUMAN admin-agent-tickets 录凭证: create_connection for the agent's request <
 PASS admin-agent-tickets-connect the person completed request <uuid>: Gatekeeper <uuid>, credential sent to the gate (self-serve http, no trial exception used)
 HUMAN admin-agent-tickets 试验工作区发布: publish_manifest: the ticket gate's three Operations, as read
 PASS admin-agent-tickets-operations the gate imported the OpenAPI document as tickets.list / tickets.get (observe) and tickets.create (execute); published in the trial workspace
-HUMAN admin-agent-tickets 授权门（试验）: connect_gatekeeper: the ticket gate granted to the administrator (the console's 系统访问 card)
+HUMAN admin-agent-tickets 授权门（试验）: connect_gatekeeper: the ticket gate granted to the administrator (the console's Systems & access page, 系统与授权)
 PASS admin-agent-tickets-grant the ticket gate granted to the administrator's Principal in the trial workspace
 PASS admin-agent-tickets-draft the admin agent saw 2 ticket(s) through its observe tool and drafted two Skills and Worker <uuid>@1 (asks for actions on the ticket gate only); all private drafts, origin agent
 HUMAN admin-agent-tickets 试验工作区发布: publish_skill <uuid>@1 (the agent's draft)
@@ -297,7 +297,7 @@ PASS admin-agent-tickets-audit audit: the agent's request, drafts and try under 
 PASS admin-agent-tickets-audit-production audit: the proposal under the agent's session; four applied items marked origin agent, proposed for <uuid>, confirmed and applied by the owner; the platform part applied by the administrator — none of the person's rows under a session
 PASS admin-agent-tickets-no-token-leak the trial and the production credential each appear in 0 rows across all <n> public tables
 PASS admin-agent-tickets-human what the person did: 启用门×2 录凭证×2 批准试验动作×1 按段审阅与逐项确认×2 授权门（试验）×1 每段应用×2 试验工作区发布×4
-NOTE admin-agent-tickets 授权门（试验） is a person's step the AA5 plan's §5.8 list leaves out: the Worker asks for actions only on gates its person holds (connect_gatekeeper on the 系统访问 card) — D-W5 evidence (AA5 plan §4 item 3)
+NOTE admin-agent-tickets 授权门（试验） is a person's step the AA5 plan's §5.8 list leaves out: the Worker asks for actions only on gates its person holds (connect_gatekeeper on Systems & access, 系统与授权) — D-W5 evidence (AA5 plan §4 item 3)
 PASS goals-planner-model alice's AgentProfile model set to fake/fake-echo, the model her goal planner runs on (S6, S13)
 PASS s6-verifying goal <uuid>: its step reported success, the platform is checking the stock API for a symbol it never shows
 PASS s4u-approved alice approved the write <uuid> under lose-s4u-<hex>; it ran and its answer was lost: failed(outcome_unknown), never run again by the gate

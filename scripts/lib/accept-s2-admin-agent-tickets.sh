@@ -28,8 +28,8 @@
 #      the person completes the request card: enters the test credential (`create_connection`
 #      naming the request, the OpenAPI document as its manifest source), publishes the three
 #      imported Operations as read (`publish_manifest`), grants the gate to themselves
-#      (`connect_gatekeeper` — the console's 系统访问 card; without it the Worker below could not
-#      ask for an action on the gate);
+#      (`connect_gatekeeper` — the console's Systems & access page, 系统与授权; without it the
+#      Worker below could not ask for an action on the gate);
 #   B. the agent finds the ticket Operations, observes `tickets.list` through its projected observe
 #      tool (its execute tool is never offered to it), drafts two Skills and a Worker that may ask
 #      for actions on that gate; the person publishes the three drafts in the trial workspace;
@@ -204,7 +204,7 @@ admin_agent_tickets_step() {
   out=$(cap "$(admin_cred "$ADMIN_TRIAL_ID")" connect_gatekeeper "{\"gatekeeperId\":\"$TICKETS_GATEKEEPER_ID\",\"principalId\":\"$ADMIN_PRINCIPAL_ID\"}" "")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "admin-agent-tickets-grant" "connect_gatekeeper HTTP $status: $(parse_kv "$out" BODY)"
-  tickets_human "授权门（试验）" "connect_gatekeeper: the ticket gate granted to the administrator (the console's 系统访问 card)"
+  tickets_human "授权门（试验）" "connect_gatekeeper: the ticket gate granted to the administrator (the console's Systems & access page, 系统与授权)"
   pass "admin-agent-tickets-grant" "the ticket gate granted to the administrator's Principal in the trial workspace"
 
   # --- Turn B: the agent looks and drafts ---
@@ -498,7 +498,7 @@ admin_agent_tickets_step() {
   pass "admin-agent-tickets-human" "what the person did: $summary"
   for kind in $extra; do
     case "$kind" in
-      授权门（试验）) echo "NOTE admin-agent-tickets $kind is a person's step the AA5 plan's §5.8 list leaves out: the Worker asks for actions only on gates its person holds (connect_gatekeeper on the 系统访问 card) — D-W5 evidence (AA5 plan §4 item 3)" ;;
+      授权门（试验）) echo "NOTE admin-agent-tickets $kind is a person's step the AA5 plan's §5.8 list leaves out: the Worker asks for actions only on gates its person holds (connect_gatekeeper on Systems & access, 系统与授权) — D-W5 evidence (AA5 plan §4 item 3)" ;;
     esac
   done
 }

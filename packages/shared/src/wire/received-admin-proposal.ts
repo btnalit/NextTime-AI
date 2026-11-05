@@ -149,7 +149,7 @@ export type AdminProposalItemBlockerWire = z.infer<typeof AdminProposalItemBlock
  *  — with whether the person previewing holds it (`held`: a `connect_gatekeeper` Grant of theirs
  *  covers it). Binding is what the Worker may act on; holding is whether this person can hand the
  *  gate to it when they run it (`invoke_worker` narrows a Worker to the gates its caller holds), so
- *  a gate not held is shown, never granted by applying (the 系统访问 card does that). */
+ *  a gate not held is shown, never granted by applying (Systems & access, 系统与授权, does that). */
 export const AdminProposalWorkerGateCandidateWireSchema = z
   .object({
     id: z.string(),
