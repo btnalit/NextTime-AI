@@ -14,6 +14,7 @@ import {
   SkillApplicableSchema,
 } from '../skill.js';
 import {
+  CONNECTOR_NAME_PATTERN,
   gateInstanceCreateFields,
   isGenericConnector,
   refineGateInstanceCreate,
@@ -60,6 +61,31 @@ export const ADMIN_PROPOSAL_ONTOLOGY_FAMILY_PATTERN = ADMIN_PROPOSAL_SOURCE_NAME
  *  check; `PLATFORM_STATE_GATE_ID_PATTERN` is the same, and the test says so). */
 export const ADMIN_PROPOSAL_GATE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/;
 
+/** Systems one proposed Worker may name (`systems`). */
+export const ADMIN_PROPOSAL_WORKER_MAX_SYSTEMS = 8;
+
+/** S11 AA5f: the systems a proposed Worker acts on, by connector name — what a pack's Worker file
+ *  names (`systems`): each once, never a generic connector (`http`, `mcp`, `cli`, `ssh` name a
+ *  transport, not a system). Proposing checks each is a connector the platform has, or one the
+ *  proposal's own platform segment creates. */
+export const AdminProposalWorkerSystemsSchema = z
+  .array(z.string().regex(CONNECTOR_NAME_PATTERN))
+  .min(1)
+  .max(ADMIN_PROPOSAL_WORKER_MAX_SYSTEMS)
+  .superRefine((systems, ctx) => {
+    for (const [index, system] of systems.entries()) {
+      if (isGenericConnector(system)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [index],
+          message: `"${system}" is a generic connector, a transport rather than a system: name the system's own connector`,
+        });
+      } else if (systems.indexOf(system) !== index) {
+        ctx.addIssue({ code: 'custom', path: [index], message: `names "${system}" twice` });
+      }
+    }
+  });
+
 /** The Operation fields an `operation_version` intent may set — `OPERATION_ITEM_FIELD_VALUES`, each
  *  with the Operation's own schema; at least one. The kernel checks the revised Operation as a
  *  whole against the target's live version when the owner previews it. */
@@ -83,7 +109,9 @@ const AdminProposalOperationSetSchema = OperationFieldsSchema.pick({
  *  - `worker_definition_version`: the next version of the target's `worker` WorkerDefinition named
  *    `definition.name` — a new one when it has none. Never its `gates` or `model`: those are the
  *    target workspace's own, kept from its current version, as a pack's Worker (the kernel refuses
- *    a definition that sets either).
+ *    a definition that sets either). `systems` (S11 AA5f) names the kinds of system it acts on, as
+ *    a pack's Worker does: where the target has no gates for it yet, its owner binds it to their
+ *    connected gates of those systems when applying (and cannot apply while one has none).
  *  - `ontology_version`: the next version of the ontology family named `family`, its complete new
  *    definition.
  *  - `operation_version`: a revision of how calls of the Operation `name` on the gate instance
@@ -107,6 +135,7 @@ export const AdminProposalItemIntentWireSchema = z.discriminatedUnion('kind', [
     .object({
       kind: z.literal('worker_definition_version'),
       definition: z.record(z.string(), z.unknown()),
+      systems: AdminProposalWorkerSystemsSchema.optional(),
     })
     .strict(),
   z

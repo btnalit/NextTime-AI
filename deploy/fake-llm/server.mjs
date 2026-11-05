@@ -456,12 +456,16 @@ function entryRestartChatScenario(messages) {
             },
           },
         }
-      : { text: 'echo: 重启测试容器 (find_workers did not resolve — see docs/runbooks/host-accept-s2.md)' },
+      : {
+          text: 'echo: 重启测试容器 (find_workers did not resolve — see docs/runbooks/host-accept-s2.md)',
+        },
     invokeResult && typeof invokeResult.id === 'string'
       ? {
           text: `Started a Worker to restart the container — task ${invokeResult.id} is now running, I will follow up once it reports back.`,
         }
-      : { text: 'echo: 重启测试容器 (invoke_worker did not resolve — see docs/runbooks/host-accept-s2.md)' },
+      : {
+          text: 'echo: 重启测试容器 (invoke_worker did not resolve — see docs/runbooks/host-accept-s2.md)',
+        },
   ];
 }
 
@@ -615,7 +619,9 @@ function entryGoalChatScenario(messages) {
     { tool: { name: 'find_workers', args: { need: 'restart' } } },
     workerMatch
       ? { tool: { name: 'find_operations', args: { need: 'stock' } } }
-      : { text: 'echo: 发起验收目标 (find_workers did not resolve — see docs/runbooks/host-accept-s2.md)' },
+      : {
+          text: 'echo: 发起验收目标 (find_workers did not resolve — see docs/runbooks/host-accept-s2.md)',
+        },
     workerMatch && stockGet
       ? {
           tool: {
@@ -626,7 +632,10 @@ function entryGoalChatScenario(messages) {
                 steps: [
                   {
                     key: 'report',
-                    worker: { definitionId: workerMatch.definitionId, version: workerMatch.version },
+                    worker: {
+                      definitionId: workerMatch.definitionId,
+                      version: workerMatch.version,
+                    },
                     input: `ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=${nonce}`,
                   },
                 ],
@@ -643,15 +652,24 @@ function entryGoalChatScenario(messages) {
                   },
                 ],
               },
-              budget: { maxTokens: 200000, maxSteps: 3, maxRevisions: 1, maxWallClockSeconds: 1800 },
+              budget: {
+                maxTokens: 200000,
+                maxSteps: 3,
+                maxRevisions: 1,
+                maxWallClockSeconds: 1800,
+              },
               idempotencyKey: `accept-s2-goal-${nonce}`,
             },
           },
         }
-      : { text: 'echo: 发起验收目标 (find_operations did not resolve stock.get — see docs/runbooks/host-accept-s2.md)' },
+      : {
+          text: 'echo: 发起验收目标 (find_operations did not resolve stock.get — see docs/runbooks/host-accept-s2.md)',
+        },
     goalRunId
       ? { tool: { name: 'confirm_goal', args: { goalRunId, revision: 1 } } }
-      : { text: 'echo: 发起验收目标 (propose_goal did not resolve — see docs/runbooks/host-accept-s2.md)' },
+      : {
+          text: 'echo: 发起验收目标 (propose_goal did not resolve — see docs/runbooks/host-accept-s2.md)',
+        },
     {
       text: `Proposed goal GOAL_ID=${goalRunId} GOAL_STATUS=${proposed?.status} GOAL_CHANGED=${proposed?.changed} CONFIRM_GOAL=${confirmed ? 'confirmed' : 'unavailable'} — please confirm it in the console under Goals; nothing runs until you do.`,
     },
@@ -724,7 +742,9 @@ function entryGoalDagChatScenario(messages) {
     { tool: { name: 'find_workers', args: { need: 'restart' } } },
     workerMatch
       ? { tool: { name: 'find_operations', args: { need: 'stock' } } }
-      : { text: 'echo: 发起三步验收目标 (find_workers did not resolve — see docs/runbooks/host-accept-s2.md)' },
+      : {
+          text: 'echo: 发起三步验收目标 (find_workers did not resolve — see docs/runbooks/host-accept-s2.md)',
+        },
     workerMatch && stockGet
       ? {
           tool: {
@@ -746,12 +766,19 @@ function entryGoalDagChatScenario(messages) {
                   },
                 ],
               },
-              budget: { maxTokens: 200000, maxSteps: 6, maxRevisions: 1, maxWallClockSeconds: 1800 },
+              budget: {
+                maxTokens: 200000,
+                maxSteps: 6,
+                maxRevisions: 1,
+                maxWallClockSeconds: 1800,
+              },
               idempotencyKey: `accept-s2-goal-dag-${nonce}`,
             },
           },
         }
-      : { text: 'echo: 发起三步验收目标 (find_operations did not resolve stock.get — see docs/runbooks/host-accept-s2.md)' },
+      : {
+          text: 'echo: 发起三步验收目标 (find_operations did not resolve stock.get — see docs/runbooks/host-accept-s2.md)',
+        },
     {
       text: `Proposed goal GOAL_ID=${proposed?.goalRunId} GOAL_STATUS=${proposed?.status} — please confirm it in the console under Goals; nothing runs until you do.`,
     },
@@ -800,7 +827,9 @@ function goalThreeWritesScenario(messages) {
   const blob = JSON.stringify(messages);
   const key = extractMarker(blob, 'LEDGER_KEY') ?? 'none';
   const hold = extractMarker(blob, 'HOLD');
-  const write = (n) => ({ tool: { name: 'accept_s2_api_ledger_add', args: { key: `${key}-${n}` } } });
+  const write = (n) => ({
+    tool: { name: 'accept_s2_api_ledger_add', args: { key: `${key}-${n}` } },
+  });
   const answers = allToolResults(messages, 'accept_s2_api_ledger_add').map(
     (call) => `${call.args?.key}: ${(call.text ?? 'no answer').slice(0, 200)}`,
   );
@@ -852,7 +881,12 @@ function goalHandoffStepScenario(messages) {
     const token = extractMarker(blob, 'HANDOFF_MARK') ?? 'none';
     const wrote = findToolResultText(messages, 'write') ?? 'no answer';
     return [
-      { tool: { name: 'write', args: { path: '/workspace/out/handoff.txt', content: `${token}\n` } } },
+      {
+        tool: {
+          name: 'write',
+          args: { path: '/workspace/out/handoff.txt', content: `${token}\n` },
+        },
+      },
       report(`accept_s2: left a file for the next step: ${wrote.slice(0, 200)}`, [
         'wrote /workspace/out/handoff.txt',
       ]),
@@ -1079,7 +1113,10 @@ function adminAgentProposeChatScenario(messages, tools) {
               description:
                 'Proposed by the accept_s2 admin agent scenario: a Skill for each target and one knowledge base instance.',
               sourceName: 'accept-s2-admin-agent',
-              segments: targetIds.map((targetWorkspaceId) => ({ targetWorkspaceId, items: [skill] })),
+              segments: targetIds.map((targetWorkspaceId) => ({
+                targetWorkspaceId,
+                items: [skill],
+              })),
               platform: {
                 items: [
                   {
@@ -1128,7 +1165,9 @@ function adminAgentProposeChatScenario(messages, tools) {
 //   Turn D (TICKETS_PROPOSE_MARKER), the production half, once the try went through:
 //     `agent_list_proposal_targets`, then one `propose_admin_proposal` for the workspace the person
 //     names (`TICKETS_WORKSPACE`, which must be one of its targets) — what it tried: the same two
-//     Skills and the Worker (never its gates or model: the workspace keeps its own), and
+//     Skills and the Worker (never its gates or model: the workspace keeps its own) with the system
+//     it acts on (`systems: [TICKETS_CONNECTOR]`, so the owner applying binds it to that workspace's
+//     gate of the ticket system — S11 AA5f), and
 //     `tickets.create` revised to `blast_radius: low` (a loosening, so it is confirmed one by one);
 //     and in the platform part one http gate-host instance for the ticket system at the addresses
 //     the person gives (`TICKETS_SYSTEM`, `TICKETS_OPENAPI`), connector TICKETS_CONNECTOR, a shared
@@ -1290,7 +1329,11 @@ function ticketsDraftChatScenario(messages, tools) {
     { tool: { name: 'find_operations', args: { need: 'ticket' } } },
     gatekeeperId && listTool
       ? { tool: { name: listTool, args: {} } }
-      : stop(gatekeeperId ? 'no *_tickets_list tool offered' : 'find_operations found no tickets.* Operation'),
+      : stop(
+          gatekeeperId
+            ? 'no *_tickets_list tool offered'
+            : 'find_operations found no tickets.* Operation',
+        ),
     tickets
       ? { tool: { name: 'propose_skill', args: { skill: triage } } }
       : stop('the ticket list did not come back'),
@@ -1356,7 +1399,9 @@ function ticketsProposeChatScenario(messages, tools) {
     .filter((item) => item?.kind === 'gate_instance');
   const withheld =
     instanceItems.length > 0 &&
-    instanceItems.every((item) => item.addressWithheld === true && !('target' in item) && !('manifestSource' in item))
+    instanceItems.every(
+      (item) => item.addressWithheld === true && !('target' in item) && !('manifestSource' in item),
+    )
       ? 'yes'
       : 'no';
   const gateId = `accept-tickets-${nonce}`;
@@ -1376,8 +1421,17 @@ function ticketsProposeChatScenario(messages, tools) {
                   targetWorkspaceId: workspaceId,
                   items: [
                     ...ticketsSkills(nonce).map((skill) => ({ kind: 'skill_version', skill })),
-                    { kind: 'worker_definition_version', definition: ticketsWorker(nonce) },
-                    { kind: 'operation_version', gateId, name: 'tickets.create', set: { blast_radius: 'low' } },
+                    {
+                      kind: 'worker_definition_version',
+                      definition: ticketsWorker(nonce),
+                      systems: [TICKETS_CONNECTOR],
+                    },
+                    {
+                      kind: 'operation_version',
+                      gateId,
+                      name: 'tickets.create',
+                      set: { blast_radius: 'low' },
+                    },
                   ],
                 },
               ],
@@ -1432,7 +1486,8 @@ function ticketsProgressChatScenario(messages, tools) {
 function ticketsCreateScenario(messages, tools) {
   const blob = JSON.stringify(messages);
   const title = extractMarker(blob, 'TICKET_TITLE') ?? 'none';
-  const createTool = offeredToolEndingWith(tools, '_tickets_create') ?? `${TICKETS_TARGET}_tickets_create`;
+  const createTool =
+    offeredToolEndingWith(tools, '_tickets_create') ?? `${TICKETS_TARGET}_tickets_create`;
   const answer = findToolResultText(messages, createTool) ?? '';
   return [
     { tool: { name: createTool, args: { title, priority: 'normal' } } },
@@ -1630,7 +1685,11 @@ function sendScenarioStep(res, step, stream) {
           role: 'assistant',
           content: null,
           tool_calls: [
-            { id: toolCallId, type: 'function', function: { name: step.tool.name, arguments: argsJson } },
+            {
+              id: toolCallId,
+              type: 'function',
+              function: { name: step.tool.name, arguments: argsJson },
+            },
           ],
         }
       : { role: 'assistant', content: text };
@@ -1663,7 +1722,12 @@ function sendScenarioStep(res, step, stream) {
           index: 0,
           delta: {
             tool_calls: [
-              { index: 0, id: toolCallId, type: 'function', function: { name: step.tool.name, arguments: '' } },
+              {
+                index: 0,
+                id: toolCallId,
+                type: 'function',
+                function: { name: step.tool.name, arguments: '' },
+              },
             ],
           },
           finish_reason: null,
@@ -1768,9 +1832,7 @@ async function handleChatCompletions(req, res) {
       object: 'chat.completion',
       created,
       model: MODEL_ID,
-      choices: [
-        { index: 0, message, finish_reason: wantsToolCall ? 'tool_calls' : 'stop' },
-      ],
+      choices: [{ index: 0, message, finish_reason: wantsToolCall ? 'tool_calls' : 'stop' }],
       usage,
     });
     return;
@@ -1795,7 +1857,12 @@ async function handleChatCompletions(req, res) {
           index: 0,
           delta: {
             tool_calls: [
-              { index: 0, id: toolCallId, type: 'function', function: { name: TOOL_TRIGGER_WORD, arguments: '' } },
+              {
+                index: 0,
+                id: toolCallId,
+                type: 'function',
+                function: { name: TOOL_TRIGGER_WORD, arguments: '' },
+              },
             ],
           },
           finish_reason: null,

@@ -16,6 +16,7 @@ import type {
   ReceivedAdminProposalSegmentWire,
   Role,
 } from '@nexttime/shared';
+import { CHANGE_VERIFICATION_COOLDOWN_SECONDS } from '@nexttime/shared';
 import { generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
 import type { Pool, PoolClient } from 'pg';
@@ -23,7 +24,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { withPlatform } from '../../adapters/db/platform-context.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
-import { HANDLE_SIGNING_ALG } from '../../governance/capability/index.js';
+import {
+  GATEKEEPER_GRANT_CAPABILITY,
+  HANDLE_SIGNING_ALG,
+  grantCapability,
+} from '../../governance/capability/index.js';
 import {
   importManifest,
   publishOperation,
@@ -50,8 +55,10 @@ import {
   AdminProposalSegmentUnchangedError,
   AdminProposalTargetNoLongerChosenError,
   AdminProposalTargetNotChosenError,
+  AdminProposalWorkerGatesError,
   ChangeConfirmationRequiredError,
   ChangePlanChangedError,
+  ChangeVerificationCooldownError,
   derivePackComponentId,
 } from './index.js';
 
@@ -113,8 +120,12 @@ function skillItem(name: string, markdown = '# Steps\n\n1. Look at the disk.') {
   };
 }
 
-function workerItem(definition: Record<string, unknown>) {
-  return { kind: 'worker_definition_version' as const, definition };
+function workerItem(definition: Record<string, unknown>, systems?: readonly string[]) {
+  return {
+    kind: 'worker_definition_version' as const,
+    definition,
+    ...(systems !== undefined ? { systems: [...systems] } : {}),
+  };
 }
 
 function operationItem(gateId: string, set: Record<string, unknown>, name = RESTART.name) {
@@ -312,6 +323,24 @@ describe.runIf(DATABASE_URL !== undefined)(
       return apply(target, segmentId, dryRun.digest, { confirmedOrdinals: widening, ...extra });
     }
 
+    /** Moves a change segment's last verification back past the cooldown (S11 AA5f: applying
+     *  verifies it once): `verified_at` only moves with a new result (migration 0025's trigger), so
+     *  the trigger is off for this one statement, as in verify.integration.test.ts. */
+    const ageLastVerification = (target: Target, changeSegmentId: string) =>
+      withWorkspace(
+        pool,
+        { workspaceId: target.workspaceId, principalId: target.ownerPrincipalId },
+        async (client) => {
+          await client.query('set local session_replication_role = replica');
+          await client.query(
+            `update change_segments set verified_at = verified_at - make_interval(secs => $3)
+              where workspace_id = $1 and id = $2`,
+            [target.workspaceId, changeSegmentId, CHANGE_VERIFICATION_COOLDOWN_SECONDS + 1],
+          );
+        },
+        { skipRoleSwitch: true },
+      );
+
     async function inTarget<T>(target: Target, run: (client: PoolClient) => Promise<T>) {
       return withWorkspace(
         pool,
@@ -375,16 +404,34 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     }
 
-    /** A gate instance of the catalog; when `enableIn` is given, that workspace enabled it as a
-     *  Gatekeeper on which `RESTART` is published. Returns the gate instance's id. */
-    async function seedGate(enableIn?: Target): Promise<{ gateId: string; gatekeeperId?: string }> {
+    /** S11 AA5f: a system the platform offers to workspaces (a `platform_preset` connector), by a
+     *  name of this run. */
+    async function seedSystem(name: string): Promise<string> {
+      const connector = `${name}-${tag}`;
+      await withAdminClient(pool, (client) =>
+        client.query(
+          `insert into connectors (name, kind, mode) values ($1, 'http', 'platform_preset')
+           on conflict (name) do nothing`,
+          [connector],
+        ),
+      );
+      return connector;
+    }
+
+    /** A gate instance of the catalog (of the generic `http` connector unless `connector` names a
+     *  system); when `enableIn` is given, that workspace enabled it as a Gatekeeper on which
+     *  `RESTART` is published. Returns the gate instance's id. */
+    async function seedGate(
+      enableIn?: Target,
+      connector = 'http',
+    ): Promise<{ gateId: string; gatekeeperId?: string }> {
       const gateId = `aa3b2-gate-${randomUUID().slice(0, 8)}`;
       const endpoint = `https://${gateId}.example.invalid`;
       await withAdminClient(pool, (client) =>
         client.query(
           `insert into gate_instances (gate_id, connector, display_name, transport_kind, endpoint, status)
-           values ($1, 'http', $1, 'http', $2, 'enabled')`,
-          [gateId, endpoint],
+           values ($1, $3, $1, 'http', $2, 'enabled')`,
+          [gateId, endpoint, connector],
         ),
       );
       if (!enableIn) return { gateId };
@@ -706,8 +753,15 @@ describe.runIf(DATABASE_URL !== undefined)(
         'get_change_segment',
         { segmentId: applied.changeSegmentId },
       );
+      // S11 AA5f: the apply verified it once it committed, as the owner (`trigger: system`).
+      expect(applied.verification).toMatchObject({
+        trigger: 'system',
+        verifiedBy: { id: target.ownerPrincipalId, kind: 'human' },
+        passed: true,
+      });
+      expect(record.verification).toEqual(applied.verification);
       expect(record.segment).toMatchObject({
-        status: 'applied',
+        status: 'verified',
         source: {
           kind: 'admin_proposal',
           name: `aa3b2-${tag}`,
@@ -1046,8 +1100,24 @@ describe.runIf(DATABASE_URL !== undefined)(
       const sourceName = `aa3b2-verify-${tag}`;
       const first = await proposeFor(agent, target, [skillItem('verify-first')], sourceName);
       const firstApplied = await previewAndApply(target, first.segmentId);
+      // S11 AA5f: applying verified it already (`trigger: system`), so verifying it again now is
+      // within the cooldown, as after a pack's install.
+      expect(firstApplied.verification).toMatchObject({
+        trigger: 'system',
+        passed: true,
+        sourceFound: true,
+        requirements: [],
+      });
+      expect(
+        await thrownBy(
+          call(ownerCaller(target), 'verify_change_segment', {
+            segmentId: firstApplied.changeSegmentId,
+          }),
+        ),
+      ).toBeInstanceOf(ChangeVerificationCooldownError);
       const second = await proposeFor(agent, target, [skillItem('verify-second')], sourceName);
       await previewAndApply(target, second.segmentId);
+      await ageLastVerification(target, firstApplied.changeSegmentId);
       const verified = await call<ChangeVerificationResultWire>(
         ownerCaller(target),
         'verify_change_segment',
@@ -1058,6 +1128,236 @@ describe.runIf(DATABASE_URL !== undefined)(
         id: firstApplied.changeSegmentId,
         source: { kind: 'admin_proposal', name: sourceName },
       });
+    });
+
+    it('AA5f: a Worker naming its systems is bound when applied to the connected gates of those systems the owner keeps — each shown with whether the owner holds it — and the apply verifies once', async () => {
+      const { agent } = await administrator();
+      const target = await newTarget();
+      const tickets = await seedSystem('aa5f-tickets');
+      const first = await seedGate(target, tickets);
+      const second = await seedGate(target, tickets);
+      const elsewhere = await seedGate(target); // a gate of another system: never a candidate
+      const [gateA, gateB] = [first.gatekeeperId ?? '', second.gatekeeperId ?? ''].sort();
+      // The owner holds one of the two (`connect_gatekeeper`), and is told so; applying grants none.
+      await inTarget(target, (client) =>
+        grantCapability(client, target.workspaceId, {
+          principalId: target.ownerPrincipalId,
+          resourceType: GATEKEEPER_GRANT_CAPABILITY,
+          resourceId: gateA,
+          grantedBy: target.ownerPrincipalId,
+        }),
+      );
+      const { segmentId } = await proposeFor(agent, target, [
+        workerItem({ name: 'ticket-worker', systemPrompt: 'You file tickets.' }, [tickets]),
+      ]);
+
+      const dryRun = await preview(target, segmentId);
+      expect(dryRun.blockers).toEqual([]);
+      const item = dryRun.items[0];
+      if (item?.kind !== 'worker_definition_version') throw new Error('not a Worker item');
+      expect(item.gateBinding).toEqual({
+        systems: [tickets],
+        source: 'apply',
+        candidates: [
+          { id: gateA, name: expect.any(String), connector: tickets, held: true },
+          { id: gateB, name: expect.any(String), connector: tickets, held: false },
+        ],
+      });
+      // Every candidate unless the owner keeps fewer; binding widens what the Worker may act on.
+      expect(item.gates.map((gate) => gate.id)).toEqual([gateA, gateB]);
+      expect(item.definition.gates).toEqual([gateA, gateB]);
+      expect(item.classification).toBe('authority_widening');
+
+      // The owner keeps one: the dry run, and its digest, are that choice.
+      const choice = { workerGates: { 'ticket-worker': [gateB] } };
+      const kept = await call<AdminProposalSegmentPreviewWire>(
+        ownerCaller(target),
+        'preview_admin_proposal_segment',
+        { segmentId, ...choice },
+      );
+      const keptItem = kept.items[0];
+      if (keptItem?.kind !== 'worker_definition_version') throw new Error('not a Worker item');
+      expect(keptItem.gates.map((gate) => gate.id)).toEqual([gateB]);
+      expect(kept.digest).not.toBe(dryRun.digest);
+      // The digest reviewed is the choice applied.
+      expect(
+        await thrownBy(
+          apply(target, segmentId, dryRun.digest ?? '', { confirmedOrdinals: [1], ...choice }),
+        ),
+      ).toBeInstanceOf(ChangePlanChangedError);
+
+      // A choice that does not fit: a Worker the segment does not propose, a gate not a candidate.
+      for (const workerGates of [
+        { 'no-such-worker': [gateA] },
+        { 'ticket-worker': [elsewhere.gatekeeperId ?? ''] },
+      ]) {
+        const refused = await thrownBy(
+          call(ownerCaller(target), 'preview_admin_proposal_segment', { segmentId, workerGates }),
+        );
+        expect(refused).toBeInstanceOf(AdminProposalWorkerGatesError);
+        expect(mapCapabilityError(refused)).toMatchObject({ status: 400, code: 'invalid_params' });
+      }
+
+      const applied = await apply(target, segmentId, kept.digest ?? '', {
+        confirmedOrdinals: [1],
+        ...choice,
+      });
+      const published = await inTarget(target, (client) =>
+        client.query<{ definition: Record<string, unknown> }>(
+          `select definition from worker_definitions
+            where workspace_id = $1 and definition ->> 'name' = 'ticket-worker'
+              and status = 'published'`,
+          [target.workspaceId],
+        ),
+      );
+      expect(published.rows.map((row) => row.definition.gates)).toEqual([[gateB]]);
+      // Applying verified it once, as the owner (`trigger: system`): what it wrote is in effect.
+      expect(applied.verification).toMatchObject({
+        trigger: 'system',
+        verifiedBy: { id: target.ownerPrincipalId },
+        items: [{ ordinal: 1, state: 'in_effect' }],
+      });
+      // No Grant was given by applying.
+      const grants = await inTarget(target, (client) =>
+        client.query<{ resource_id: string }>(
+          `select resource_id from capability_grants
+            where workspace_id = $1 and principal_id = $2 and resource_type = $3 and status = 'active'`,
+          [target.workspaceId, target.ownerPrincipalId, GATEKEEPER_GRANT_CAPABILITY],
+        ),
+      );
+      expect(grants.rows.map((row) => row.resource_id)).toEqual([gateA]);
+
+      // The next proposal of that Worker keeps the gates the workspace has (`workspace`), whatever
+      // the systems it names.
+      const next = await proposeFor(agent, target, [
+        workerItem({ name: 'ticket-worker', systemPrompt: 'You file tickets, briefly.' }, [
+          tickets,
+        ]),
+      ]);
+      const again = await preview(target, next.segmentId);
+      const againItem = again.items[0];
+      if (againItem?.kind !== 'worker_definition_version') throw new Error('not a Worker item');
+      expect(againItem.gateBinding).toEqual({
+        systems: [tickets],
+        source: 'workspace',
+        candidates: [],
+      });
+      expect(againItem.gates.map((gate) => gate.id)).toEqual([gateB]);
+    });
+
+    it('AA5f: keeping none publishes gates: [] — kept from then on; a Worker naming no system gets none and takes no gate', async () => {
+      const { agent } = await administrator();
+      const target = await newTarget();
+      const tickets = await seedSystem('aa5f-none');
+      const { gatekeeperId } = await seedGate(target, tickets);
+      const { segmentId } = await proposeFor(agent, target, [
+        workerItem({ name: 'quiet-worker', systemPrompt: 'You wait.' }, [tickets]),
+        workerItem({ name: 'plain-worker', systemPrompt: 'You read.' }),
+      ]);
+      const none = { workerGates: { 'quiet-worker': [] } };
+      const dryRun = await call<AdminProposalSegmentPreviewWire>(
+        ownerCaller(target),
+        'preview_admin_proposal_segment',
+        { segmentId, ...none },
+      );
+      const [quiet, plain] = dryRun.items;
+      if (
+        quiet?.kind !== 'worker_definition_version' ||
+        plain?.kind !== 'worker_definition_version'
+      )
+        throw new Error('not Worker items');
+      expect(quiet.gateBinding.source).toBe('apply');
+      expect(quiet.gates).toEqual([]);
+      expect(quiet.definition.gates).toEqual([]);
+      expect(plain.gateBinding).toEqual({ systems: [], source: 'none', candidates: [] });
+      expect(plain.definition).not.toHaveProperty('gates');
+      // A Worker that names no system has no candidate: a gate kept for it is refused.
+      expect(
+        await thrownBy(
+          call(ownerCaller(target), 'preview_admin_proposal_segment', {
+            segmentId,
+            workerGates: { 'plain-worker': [gatekeeperId ?? ''] },
+          }),
+        ),
+      ).toBeInstanceOf(AdminProposalWorkerGatesError);
+      await apply(target, segmentId, dryRun.digest ?? '', {
+        confirmedOrdinals: dryRun.items
+          .filter((item) => item.classification === 'authority_widening')
+          .map((item) => item.ordinal),
+        ...none,
+      });
+      const next = await proposeFor(agent, target, [
+        workerItem({ name: 'quiet-worker', systemPrompt: 'You wait, still.' }, [tickets]),
+      ]);
+      const again = (await preview(target, next.segmentId)).items[0];
+      if (again?.kind !== 'worker_definition_version') throw new Error('not a Worker item');
+      expect(again.gateBinding.source).toBe('workspace');
+      expect(again.gates).toEqual([]);
+    });
+
+    it('AA5f: a system with no connected gate here blocks the Worker until one is — saying whether the owner can enable one now — unless its head keeps gates of its own', async () => {
+      const { agent } = await administrator();
+      const target = await newTarget();
+      const offeredSystem = await seedSystem('aa5f-offered');
+      const missingSystem = await seedSystem('aa5f-missing');
+      const offered = await seedGate(undefined, offeredSystem); // enabled, not linked here
+      const { segmentId } = await proposeFor(agent, target, [
+        workerItem({ name: 'blocked-worker', systemPrompt: 'You wait for gates.' }, [
+          offeredSystem,
+          missingSystem,
+        ]),
+      ]);
+      const dryRun = await preview(target, segmentId);
+      expect(dryRun.digest).toBeNull();
+      expect(dryRun.items).toEqual([]);
+      expect(dryRun.blockers).toEqual([
+        {
+          ordinal: 1,
+          kind: 'worker_definition_version',
+          reason: 'worker_system_not_connected',
+          connector: offeredSystem,
+          gateAvailability: 'can_enable',
+          offered: [{ gateId: offered.gateId, displayName: offered.gateId }],
+        },
+        {
+          ordinal: 1,
+          kind: 'worker_definition_version',
+          reason: 'worker_system_not_connected',
+          connector: missingSystem,
+          gateAvailability: 'needs_platform',
+          offered: [],
+        },
+      ]);
+      const refused = await thrownBy(
+        apply(target, segmentId, 'sha256:any', { confirmedOrdinals: [1] }),
+      );
+      expect(refused).toBeInstanceOf(AdminProposalSegmentBlockedError);
+      expect(mapCapabilityError(refused)).toMatchObject({
+        status: 409,
+        code: 'admin_proposal_segment_blocked',
+        details: { blockers: dryRun.blockers },
+      });
+
+      // A Worker whose head here has gates of its own keeps them: nothing to bind, nothing blocks.
+      const { gatekeeperId } = await seedGate(target);
+      await seedWorkerFamily(target, 'worker', {
+        name: 'bound-worker',
+        systemPrompt: 'Bound here already.',
+        gates: [gatekeeperId],
+      });
+      const keptHere = await proposeFor(agent, target, [
+        workerItem({ name: 'bound-worker', systemPrompt: 'Bound here, still.' }, [missingSystem]),
+      ]);
+      const keptPreview = await preview(target, keptHere.segmentId);
+      expect(keptPreview.blockers).toEqual([]);
+      const keptItem = keptPreview.items[0];
+      if (keptItem?.kind !== 'worker_definition_version') throw new Error('not a Worker item');
+      expect(keptItem.gateBinding).toEqual({
+        systems: [missingSystem],
+        source: 'workspace',
+        candidates: [],
+      });
+      expect(keptItem.gates.map((gate) => gate.id)).toEqual([gatekeeperId]);
     });
 
     it('rolling back the record rolls the proposal segment back with it; once the trial workspace is purged, the record alone', async () => {

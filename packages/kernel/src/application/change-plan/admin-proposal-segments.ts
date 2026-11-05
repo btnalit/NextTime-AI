@@ -9,6 +9,8 @@ import {
   type AdminProposalPreviewItemWire,
   type AdminProposalSegmentPreviewWire,
   type AdminProposalSegmentStatus,
+  type AdminProposalWorkerGateBindingWire,
+  type AdminProposalWorkerGateSource,
   type ChangeItemKind,
   type ListEnvelope,
   type OperationFieldChangeWire,
@@ -17,6 +19,10 @@ import {
   type ReceivedAdminProposalSegmentWire,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import {
+  GATEKEEPER_GRANT_CAPABILITY,
+  listActiveGrantResourceScopes,
+} from '../../governance/capability/index.js';
 import { getGatekeeper, getPublishedOperation } from '../../governance/gatekeepers/index.js';
 import {
   type SuspectedSecrets,
@@ -24,8 +30,11 @@ import {
   findSuspectedSecrets,
   shownFreeText,
 } from '../../governance/redaction/index.js';
-import { listAvailableGateInstances } from '../gates/index.js';
-import { unresolvedWorkerDefinitionReferences } from '../worker/index.js';
+import { listAvailableGateInstances, readConnectorStandings } from '../gates/index.js';
+import {
+  loadPublishedWorkerDefinitionHead,
+  unresolvedWorkerDefinitionReferences,
+} from '../worker/index.js';
 import { derivePackComponentId } from './component-id.js';
 import {
   type AdminProposalOrigin,
@@ -62,12 +71,19 @@ import { lockProposalDependency, readProposalPlatformChange } from './proposal-d
  *     published families); with none, a new family under `derivePackComponentId(sourceName,
  *     'skill', name)` — the id the proposal exported as a pack would give it;
  *   - a `worker` WorkerDefinition by the name its family's head goes by; with none, a new family
- *     the same way. It keeps this workspace's `gates` and `model` from the head (none for a new
- *     one: the owner binds it here afterwards, E2a). Blocked when the name is the entry agent's
- *     (`name_taken`), when two `worker` families go by it (`name_ambiguous`), or when the Worker
- *     names a Skill with no published version and no earlier intent of the segment to publish it,
- *     or a capability no Worker can hold (`unresolved_references` — what publishing it would
- *     refuse at apply);
+ *     the same way. It keeps this workspace's `gates` and `model` from the head where the head has
+ *     them. Where it has no gates yet and the intent names its systems (`systems`, S11 AA5f), the
+ *     apply binds it to this workspace's connected gates of those systems (`readConnectorStandings`,
+ *     the rule a pack's Worker is bound by): every one, unless the owner kept only some
+ *     (`AdminProposalWorkerGateChoice`); keeping none publishes `gates: []`, kept like any other
+ *     choice — the console says that binding it later publishes its next version, which leaves
+ *     this segment's item `replaced`. Blocked when the name is the entry agent's (`name_taken`),
+ *     when two `worker` families go by it (`name_ambiguous`), when the Worker names a Skill with
+ *     no published version and no earlier intent of the segment to publish it, or a capability no
+ *     Worker can hold (`unresolved_references` — what publishing it would refuse at apply), or
+ *     (AA5f) when a system it would be bound to has no connected gate here
+ *     (`worker_system_not_connected`, one per system, with whether the owner can enable one now:
+ *     binding it after the apply would leave the item `replaced`, so the segment waits for it);
  *   - an ontology family by its name (`deriveOntologyPackId(family)`, as a pack's);
  *   - an Operation through the gate instance this workspace enabled (`workspace_gate_links`):
  *     blocked when it has not (`gate_not_enabled`), when the gate has no published Operation by
@@ -159,6 +175,21 @@ export class AdminProposalSegmentUnchangedError extends Error {
     this.name = 'AdminProposalSegmentUnchangedError';
   }
 }
+
+/** S11 AA5f: `workerGates` names a Worker this segment has none of, or for a Worker this apply
+ *  binds a gate that is not one of its candidates (`gateBinding.candidates`). Mapped to 400
+ *  `invalid_params`; nothing was written. Never sent by the console. */
+export class AdminProposalWorkerGatesError extends Error {
+  constructor(reason: string) {
+    super(`workerGates: ${reason}`);
+    this.name = 'AdminProposalWorkerGatesError';
+  }
+}
+
+/** S11 AA5f: the gates the owner applying a segment kept for each proposed Worker the apply binds,
+ *  by the Worker's name (`workerGates`, as `install_pack`'s). A Worker not named is bound to every
+ *  candidate. */
+export type AdminProposalWorkerGateChoice = ReadonlyMap<string, readonly string[]>;
 
 /** S11 AA3c: the proposal's platform segment — the gate instances this segment's items need, which
  *  a platform administrator applies — is not applied (still proposed, or rejected, withdrawn or
@@ -437,10 +468,28 @@ async function proposalIdOf(
 // Resolving the intents (F5)
 // -------------------------------------------------------------------------------------------
 
-/** What one intent resolved to here: the core's intent, and whether it starts a family. */
+/** S11 AA5f: a connected gate of a system a proposed Worker names, which the apply may bind it to. */
+interface WorkerGateCandidate {
+  readonly id: string;
+  readonly name: string;
+  readonly connector: string;
+}
+
+/** S11 AA5f: how the apply sets a proposed Worker's gates here (`AdminProposalWorkerGateBindingWire`
+ *  without who holds what). */
+interface WorkerGateBinding {
+  readonly systems: readonly string[];
+  readonly source: AdminProposalWorkerGateSource;
+  /** For `apply`: the connected gates of its systems, in the systems' order. */
+  readonly candidates: readonly WorkerGateCandidate[];
+}
+
+/** What one intent resolved to here: the core's intent, whether it starts a family, and for a
+ *  Worker how its gates are set. */
 interface ResolvedIntent {
   readonly intent: ChangeItemIntent;
   readonly newFamily: boolean;
+  readonly gateBinding?: WorkerGateBinding;
 }
 
 interface Resolution {
@@ -530,17 +579,92 @@ async function offeredGateInstances(
   );
 }
 
+/** AA5f: a `workerGates` key must be the name of a Worker the segment proposes (whether the apply
+ *  binds it is the resolution's: a Worker whose head has gates keeps them, as a pack's). */
+function assertWorkerGateChoiceNamesWorkers(
+  items: readonly AdminProposalItemIntentWire[],
+  choice: AdminProposalWorkerGateChoice,
+): void {
+  const names = new Set(
+    items.flatMap((item) =>
+      item.kind === 'worker_definition_version' ? [String(item.definition.name)] : [],
+    ),
+  );
+  for (const name of choice.keys()) {
+    if (!names.has(name)) {
+      throw new AdminProposalWorkerGatesError(`the segment proposes no Worker "${name}"`);
+    }
+  }
+}
+
+/** AA5f: where a proposed Worker's gates come from here (see this module's comment), and for
+ *  `apply` the standing of each system it names, under the registry lock its intent is planned
+ *  under (`lockFamilyItem`), so the head read here is the one the plan keeps from. */
+async function workerGateBindingOf(
+  client: PoolClient,
+  workspaceId: string,
+  definitionId: string | null,
+  systems: readonly string[] | undefined,
+): Promise<
+  WorkerGateBinding & { readonly standings: Awaited<ReturnType<typeof readConnectorStandings>> }
+> {
+  const named = [...(systems ?? [])];
+  const head =
+    definitionId === null
+      ? null
+      : await loadPublishedWorkerDefinitionHead(client, workspaceId, definitionId);
+  if (head !== null && head.definition.gates !== undefined) {
+    return { systems: named, source: 'workspace', candidates: [], standings: [] };
+  }
+  if (named.length === 0) return { systems: named, source: 'none', candidates: [], standings: [] };
+  const standings = await readConnectorStandings(client, workspaceId, named);
+  return {
+    systems: named,
+    source: 'apply',
+    candidates: standings.flatMap((standing) =>
+      standing.gatekeepers.map((gate) => ({
+        id: gate.id,
+        name: gate.name,
+        connector: standing.connector,
+      })),
+    ),
+    standings,
+  };
+}
+
+/** AA5f: the gates the apply binds a Worker to — the owner's choice, checked against the
+ *  candidates, or every candidate. An empty choice binds none (`gates: []`, kept as the choice). */
+function chosenWorkerGates(
+  name: string,
+  candidates: readonly WorkerGateCandidate[],
+  chosen: readonly string[] | undefined,
+): string[] {
+  if (chosen === undefined) return candidates.map((gate) => gate.id);
+  const offered = new Set(candidates.map((gate) => gate.id));
+  const foreign = chosen.filter((id) => !offered.has(id));
+  if (foreign.length > 0) {
+    throw new AdminProposalWorkerGatesError(
+      `gate(s) ${foreign.join(', ')} are not connected gates of the systems Worker "${name}" names`,
+    );
+  }
+  const kept = new Set(chosen);
+  return candidates.filter((gate) => kept.has(gate.id)).map((gate) => gate.id);
+}
+
 /**
  * Resolves the segment's intents in `workspaceId` (this module's comment), after taking every lock
  * the core will plan them under, in lock order — so the families, links and Operations read here
- * stay as read until the transaction ends.
+ * stay as read until the transaction ends. `choice`: the gates the owner kept for each Worker the
+ * apply binds (AA5f; {@link AdminProposalWorkerGatesError} for one that does not fit).
  */
 async function resolveIntents(
   client: PoolClient,
   workspaceId: string,
   sourceName: string,
   items: readonly AdminProposalItemIntentWire[],
+  choice: AdminProposalWorkerGateChoice = new Map(),
 ): Promise<Resolution> {
+  assertWorkerGateChoiceNamesWorkers(items, choice);
   for (const intent of inLockOrder(items)) await lockIntent(client, workspaceId, intent);
   const resolved: ResolvedIntent[] = [];
   const blockers: AdminProposalItemBlockerWire[] = [];
@@ -606,14 +730,44 @@ async function resolveIntents(
           break;
         }
         const existing = workers[0]?.id ?? null;
+        const binding = await workerGateBindingOf(client, workspaceId, existing, item.systems);
+        const unconnected = binding.standings.filter((standing) => standing.state !== 'connected');
+        if (unconnected.length > 0) {
+          for (const standing of unconnected) {
+            blockers.push({
+              ordinal,
+              kind: item.kind,
+              reason: 'worker_system_not_connected',
+              connector: standing.connector,
+              gateAvailability: standing.state === 'can_enable' ? 'can_enable' : 'needs_platform',
+              offered: standing.offered.map((offer) => ({
+                gateId: offer.gateId,
+                displayName: offer.displayName,
+              })),
+            });
+          }
+          break;
+        }
+        // A Worker whose head has gates keeps them whatever `workerGates` says (as a pack's); one
+        // that names no system has no candidate, so any gate kept for it is refused.
+        const gates =
+          binding.source === 'workspace'
+            ? undefined
+            : chosenWorkerGates(name, binding.candidates, choice.get(name));
         resolved.push({
           intent: {
             kind: item.kind,
             definitionId: existing ?? derivePackComponentId(sourceName, 'worker', name),
-            definition: item.definition,
+            definition:
+              binding.source === 'apply' ? { ...item.definition, gates } : item.definition,
             keepFromHead: ['gates', 'model'],
           },
           newFamily: existing === null,
+          gateBinding: {
+            systems: binding.systems,
+            source: binding.source,
+            candidates: binding.candidates,
+          },
         });
         break;
       }
@@ -665,12 +819,33 @@ function suspectedSecretsOf(row: ReceivedSegmentRow): SuspectedSecrets {
 // Preview
 // -------------------------------------------------------------------------------------------
 
+/** AA5f: a Worker's gate binding as the preview shows it — each candidate with whether the person
+ *  previewing holds it (`held`: one of their active `connect_gatekeeper` Grants covers it). */
+function gateBindingWireOf(
+  binding: WorkerGateBinding | undefined,
+  held: ReadonlySet<string>,
+): AdminProposalWorkerGateBindingWire {
+  if (binding === undefined) return { systems: [], source: 'none', candidates: [] };
+  return {
+    systems: [...binding.systems],
+    source: binding.source,
+    candidates: binding.candidates.map((gate) => ({
+      id: gate.id,
+      name: gate.name,
+      connector: gate.connector,
+      held: held.has(gate.id),
+    })),
+  };
+}
+
 async function previewItemOf(
   client: PoolClient,
   workspaceId: string,
   item: PlannedChangeItem,
-  newFamily: boolean,
+  resolved: ResolvedIntent | undefined,
+  held: ReadonlySet<string>,
 ): Promise<AdminProposalPreviewItemWire> {
+  const newFamily = resolved?.newFamily ?? false;
   const common = {
     ordinal: item.ordinal,
     unchanged: item.unchanged,
@@ -743,6 +918,7 @@ async function previewItemOf(
         after: { contentDigest: after.contentDigest },
         definition: { ...detail.definition },
         gates,
+        gateBinding: gateBindingWireOf(resolved?.gateBinding, held),
         changedFields: [...detail.changedFields],
       };
     }
@@ -774,11 +950,15 @@ async function previewItemOf(
 }
 
 /** `preview_admin_proposal_segment`: resolves and dry-runs a proposed segment here, writing nothing
- *  (its locks are held until the transaction ends, as a pack's preview holds them). */
+ *  (its locks are held until the transaction ends, as a pack's preview holds them), as
+ *  `principalId` — this workspace's owner, whose Grants say which gate candidates they hold (AA5f)
+ *  — with the gates they kept for each Worker the apply binds (`choice`). */
 export async function previewAdminProposalSegment(
   client: PoolClient,
   workspaceId: string,
+  principalId: string,
   segmentId: string,
+  choice: AdminProposalWorkerGateChoice = new Map(),
 ): Promise<AdminProposalSegmentPreviewWire> {
   const row = await loadReceivedSegment(client, workspaceId, segmentId);
   assertOpen(row);
@@ -794,6 +974,7 @@ export async function previewAdminProposalSegment(
     workspaceId,
     row.source_name,
     row.items,
+    choice,
   );
   if (blockers.length > 0) {
     return {
@@ -812,16 +993,15 @@ export async function previewAdminProposalSegment(
     items: resolved.map((entry) => entry.intent),
     ...(standing.binding !== undefined ? { binding: standing.binding } : {}),
   });
+  const held = new Set(
+    await listActiveGrantResourceScopes(client, workspaceId, {
+      principalId,
+      resourceType: GATEKEEPER_GRANT_CAPABILITY,
+    }),
+  );
   const items: AdminProposalPreviewItemWire[] = [];
   for (const item of plan.items) {
-    items.push(
-      await previewItemOf(
-        client,
-        workspaceId,
-        item,
-        resolved[item.ordinal - 1]?.newFamily ?? false,
-      ),
-    );
+    items.push(await previewItemOf(client, workspaceId, item, resolved[item.ordinal - 1], held));
   }
   return {
     segment: receivedSegmentOf(row),
@@ -850,6 +1030,8 @@ export interface ApplyAdminProposalSegmentInput {
   readonly confirmedOrdinals: readonly number[];
   /** Required when the segment carries suspected credentials (F9). */
   readonly credentialsReviewed?: boolean;
+  /** AA5f: the gates the owner kept for each Worker the apply binds (the preview's). */
+  readonly workerGates?: AdminProposalWorkerGateChoice;
 }
 
 export interface AppliedAdminProposalSegment {
@@ -866,10 +1048,11 @@ export interface AppliedAdminProposalSegment {
  * workspace's owner, the applier and the confirmer of every widening item. In order: the proposal's
  * dependency lock, shared (AA3c-2: its platform change is not rolled back until this commits), the
  * segment's row lock and status, the platform segment applied (409) and what it created unchanged
- * (409), the target still among the proposer's admin agent targets (AA4c: 409), resolution
- * (blocked: 409), the credential review (400), then the core's apply (digest 409,
- * widening 400, nothing to change: 409 here) and the segment's `applied` edge. Any refusal leaves
- * everything as it was.
+ * (409), the target still among the proposer's admin agent targets (AA4c: 409), resolution with the
+ * owner's gate choice (a choice that does not fit: 400; blocked: 409), the credential review (400),
+ * then the core's apply (digest 409 — the gates a Worker is bound to are in what it publishes, so a
+ * candidate connected or cut off since the preview changes it; widening 400; nothing to change:
+ * 409 here) and the segment's `applied` edge. Any refusal leaves everything as it was.
  */
 export async function applyAdminProposalSegment(
   client: PoolClient,
@@ -899,6 +1082,7 @@ export async function applyAdminProposalSegment(
     workspaceId,
     row.source_name,
     row.items,
+    input.workerGates,
   );
   if (blockers.length > 0) throw new AdminProposalSegmentBlockedError(row.id, blockers);
   const suspected = suspectedSecretsOf(row);

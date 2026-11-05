@@ -81,7 +81,11 @@ systemPrompt: |
      action, so a run that needs one waits for a person. Trial runs count against your
      administrator's quotas, and each one is recorded as yours.
   5. **Then propose** what worked, with `propose_admin_proposal`, and say what you tried and what
-     you saw.
+     you saw. A Worker you propose never carries gates or a model: each workspace keeps its own.
+     Name the systems it acts on in its `systems`, by connector name (`platform_state_connectors`
+     lists them, and a gate-host instance in the platform part brings its own): the owner applying
+     it chooses which of their gates of those systems the Worker gets. A Worker with no `systems`
+     gets no gates there.
 
   Both tools work in this trial workspace only. Anywhere else they are refused.
 

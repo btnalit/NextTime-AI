@@ -28,8 +28,8 @@
 
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVER_PATH = join(HERE, '..', 'fake-llm', 'server.mjs');
@@ -37,10 +37,9 @@ const PORT = 8790;
 
 // name -> params JSON Schema (draft-07), loaded once from the capability registry itself.
 const REGISTRY = new Map(
-  JSON.parse(readFileSync(new URL('../../docs/contracts/capabilities.json', import.meta.url))).map((c) => [
-    c.name,
-    c.params,
-  ]),
+  JSON.parse(readFileSync(new URL('../../docs/contracts/capabilities.json', import.meta.url))).map(
+    (c) => [c.name, c.params],
+  ),
 );
 
 let failures = 0;
@@ -88,7 +87,8 @@ function validateParams(schema, args) {
     if (type === 'integer') return Number.isInteger(value);
     if (type === 'boolean') return typeof value === 'boolean';
     if (type === 'array') return Array.isArray(value);
-    if (type === 'object') return typeof value === 'object' && value !== null && !Array.isArray(value);
+    if (type === 'object')
+      return typeof value === 'object' && value !== null && !Array.isArray(value);
     if (type === 'null') return value === null;
     return true; // unrecognized type keyword - don't fail on it
   };
@@ -102,7 +102,9 @@ function validateParams(schema, args) {
       }
     }
     if (propSchema.enum && !propSchema.enum.includes(value)) {
-      problems.push(`"${key}" expected one of ${JSON.stringify(propSchema.enum)}, got ${JSON.stringify(value)}`);
+      problems.push(
+        `"${key}" expected one of ${JSON.stringify(propSchema.enum)}, got ${JSON.stringify(value)}`,
+      );
     }
   }
   return problems;
@@ -111,12 +113,16 @@ function validateParams(schema, args) {
 // Prove the validator actually bites before relying on it below.
 check(
   'validator-catches-missing-required',
-  validateParams(REGISTRY.get('search'), { objectType: 'Container' }).some((p) => p.includes('query')),
+  validateParams(REGISTRY.get('search'), { objectType: 'Container' }).some((p) =>
+    p.includes('query'),
+  ),
   JSON.stringify(validateParams(REGISTRY.get('search'), { objectType: 'Container' })),
 );
 check(
   'validator-catches-unknown-property',
-  validateParams(REGISTRY.get('get_object'), { objectId: 'x', extra: 1 }).some((p) => p.includes('extra')),
+  validateParams(REGISTRY.get('get_object'), { objectId: 'x', extra: 1 }).some((p) =>
+    p.includes('extra'),
+  ),
   JSON.stringify(validateParams(REGISTRY.get('get_object'), { objectId: 'x', extra: 1 })),
 );
 
@@ -154,7 +160,11 @@ function checkToolCallAgainstRegistry(label, call) {
  *  fails here, not on the staging rehearsal. Returns the value unchanged. */
 function wireResult(label, name, value) {
   const parsed = shared.getCapability(name).resultSchema.safeParse(value);
-  check(`${label}-result-vs-schema`, parsed.success, parsed.success ? '' : JSON.stringify(parsed.error.issues));
+  check(
+    `${label}-result-vs-schema`,
+    parsed.success,
+    parsed.success ? '' : JSON.stringify(parsed.error.issues),
+  );
   return value;
 }
 
@@ -176,14 +186,19 @@ function agentProposalWire(id, args, status) {
     reason: null,
     rolledBackAt: null,
   });
-  const workspace = (args?.segments ?? []).map((s, i) => segment(i + 1, 'workspace', s.targetWorkspaceId, s.items));
+  const workspace = (args?.segments ?? []).map((s, i) =>
+    segment(i + 1, 'workspace', s.targetWorkspaceId, s.items),
+  );
   const platform = args?.platform
     ? [
         segment(
           workspace.length + 1,
           'platform',
           null,
-          args.platform.items.map(({ target: _t, manifestSource: _m, ...rest }) => ({ ...rest, addressWithheld: true })),
+          args.platform.items.map(({ target: _t, manifestSource: _m, ...rest }) => ({
+            ...rest,
+            addressWithheld: true,
+          })),
         ),
       ]
     : [];
@@ -308,8 +323,14 @@ async function main() {
       ];
       const tools = [
         { type: 'function', function: { name: 'report_result', parameters: { type: 'object' } } },
-        { type: 'function', function: { name: 'gatekeeper-docker_containers_list', parameters: { type: 'object' } } },
-        { type: 'function', function: { name: 'gatekeeper-docker_container_restart', parameters: { type: 'object' } } },
+        {
+          type: 'function',
+          function: { name: 'gatekeeper-docker_containers_list', parameters: { type: 'object' } },
+        },
+        {
+          type: 'function',
+          function: { name: 'gatekeeper-docker_container_restart', parameters: { type: 'object' } },
+        },
       ];
       const { json } = await post(messages, false, { tools });
       const call = toolCallOf(json);
@@ -332,7 +353,13 @@ async function main() {
         {
           role: 'assistant',
           content: null,
-          tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'docker_container_restart', arguments: '{"id":"abc123"}' } }],
+          tool_calls: [
+            {
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'docker_container_restart', arguments: '{"id":"abc123"}' },
+            },
+          ],
         },
         { role: 'tool', tool_call_id: 'call_1', content: 'pending approval, actionRequestId ar-1' },
       ];
@@ -373,7 +400,9 @@ async function main() {
     //    extension currently registers the tool being called (see docs/runbooks/
     //    host-accept-s2.md "已知偏离") — this scenario is ready either way.
     {
-      const { json } = await post([{ role: 'user', content: '重启测试容器 CONTAINER_ID=deadbeef' }]);
+      const { json } = await post([
+        { role: 'user', content: '重启测试容器 CONTAINER_ID=deadbeef' },
+      ]);
       const call = toolCallOf(json);
       check(
         'entry-restart-chat-turn1',
@@ -402,7 +431,13 @@ async function main() {
         {
           role: 'assistant',
           content: null,
-          tool_calls: [{ id: 'call_fw', type: 'function', function: { name: 'find_workers', arguments: '{"need":"restart"}' } }],
+          tool_calls: [
+            {
+              id: 'call_fw',
+              type: 'function',
+              function: { name: 'find_workers', arguments: '{"need":"restart"}' },
+            },
+          ],
         },
         {
           role: 'tool',
@@ -410,7 +445,9 @@ async function main() {
           // find_workers is a find_* capability: `{items}` envelope, not a bare array
           // (docs/wire-contract-conventions.md §3; server.mjs reads `.items`).
           content: JSON.stringify({
-            items: [{ definitionId: 'ops-runner-uuid', version: 3, kind: 'worker', name: 'ops-runner' }],
+            items: [
+              { definitionId: 'ops-runner-uuid', version: 3, kind: 'worker', name: 'ops-runner' },
+            ],
           }),
         },
       ];
@@ -438,7 +475,13 @@ async function main() {
         {
           role: 'assistant',
           content: null,
-          tool_calls: [{ id: 'call_fw', type: 'function', function: { name: 'find_workers', arguments: '{"need":"restart"}' } }],
+          tool_calls: [
+            {
+              id: 'call_fw',
+              type: 'function',
+              function: { name: 'find_workers', arguments: '{"need":"restart"}' },
+            },
+          ],
         },
         { role: 'tool', tool_call_id: 'call_fw', content: 'Error: unknown tool "find_workers"' },
       ];
@@ -460,17 +503,31 @@ async function main() {
         {
           role: 'assistant',
           content: null,
-          tool_calls: [{ id: 'call_fw', type: 'function', function: { name: 'find_workers', arguments: '{"need":"restart"}' } }],
+          tool_calls: [
+            {
+              id: 'call_fw',
+              type: 'function',
+              function: { name: 'find_workers', arguments: '{"need":"restart"}' },
+            },
+          ],
         },
         {
           role: 'tool',
           tool_call_id: 'call_fw',
-          content: JSON.stringify({ items: [{ definitionId: 'ops-runner-uuid', version: 3, kind: 'worker' }] }),
+          content: JSON.stringify({
+            items: [{ definitionId: 'ops-runner-uuid', version: 3, kind: 'worker' }],
+          }),
         },
         {
           role: 'assistant',
           content: null,
-          tool_calls: [{ id: 'call_iw', type: 'function', function: { name: 'invoke_worker', arguments: '{}' } }],
+          tool_calls: [
+            {
+              id: 'call_iw',
+              type: 'function',
+              function: { name: 'invoke_worker', arguments: '{}' },
+            },
+          ],
         },
         {
           role: 'tool',
@@ -496,7 +553,13 @@ async function main() {
         {
           role: 'assistant',
           content: null,
-          tool_calls: [{ id: 'call_ob', type: 'function', function: { name: 'accept_s2_api_stock_get', arguments: '{}' } }],
+          tool_calls: [
+            {
+              id: 'call_ob',
+              type: 'function',
+              function: { name: 'accept_s2_api_stock_get', arguments: '{}' },
+            },
+          ],
         },
         {
           role: 'tool',
@@ -520,7 +583,8 @@ async function main() {
       const call = toolCallOf(json);
       check(
         'entry-dependency-chat-turn1',
-        call?.name === 'search' && JSON.stringify(call.args) === '{"query":"","objectType":"Container"}',
+        call?.name === 'search' &&
+          JSON.stringify(call.args) === '{"query":"","objectType":"Container"}',
         JSON.stringify(json.choices[0]),
       );
       checkToolCallAgainstRegistry('entry-dependency-chat-turn1', call);
@@ -534,15 +598,27 @@ async function main() {
         {
           role: 'assistant',
           content: null,
-          tool_calls: [{ id: 'call_s', type: 'function', function: { name: 'search', arguments: '{"query":"","objectType":"Container"}' } }],
+          tool_calls: [
+            {
+              id: 'call_s',
+              type: 'function',
+              function: { name: 'search', arguments: '{"query":"","objectType":"Container"}' },
+            },
+          ],
         },
         {
           role: 'tool',
           tool_call_id: 'call_s',
           content: JSON.stringify({
             items: [
-              { id: 'postgres-container-id', identityKey: { composeProjectId: 'p', serviceName: 'postgres' } },
-              { id: 'kernel-container-id', identityKey: { composeProjectId: 'p', serviceName: 'kernel' } },
+              {
+                id: 'postgres-container-id',
+                identityKey: { composeProjectId: 'p', serviceName: 'postgres' },
+              },
+              {
+                id: 'kernel-container-id',
+                identityKey: { composeProjectId: 'p', serviceName: 'kernel' },
+              },
             ],
           }),
         },
@@ -567,7 +643,13 @@ async function main() {
         {
           role: 'assistant',
           content: null,
-          tool_calls: [{ id: 'call_s', type: 'function', function: { name: 'search', arguments: '{"query":"","objectType":"Container"}' } }],
+          tool_calls: [
+            {
+              id: 'call_s',
+              type: 'function',
+              function: { name: 'search', arguments: '{"query":"","objectType":"Container"}' },
+            },
+          ],
         },
         { role: 'tool', tool_call_id: 'call_s', content: JSON.stringify({ items: [] }) },
       ];
@@ -589,24 +671,49 @@ async function main() {
         {
           role: 'assistant',
           content: null,
-          tool_calls: [{ id: 'call_s', type: 'function', function: { name: 'search', arguments: '{"query":"","objectType":"Container"}' } }],
+          tool_calls: [
+            {
+              id: 'call_s',
+              type: 'function',
+              function: { name: 'search', arguments: '{"query":"","objectType":"Container"}' },
+            },
+          ],
         },
         {
           role: 'tool',
           tool_call_id: 'call_s',
-          content: JSON.stringify({ items: [{ id: 'kernel-container-id', identityKey: { serviceName: 'kernel' } }] }),
+          content: JSON.stringify({
+            items: [{ id: 'kernel-container-id', identityKey: { serviceName: 'kernel' } }],
+          }),
         },
         {
           role: 'assistant',
           content: null,
-          tool_calls: [{ id: 'call_t', type: 'function', function: { name: 'traverse', arguments: '{"fromId":"kernel-container-id","linkType":"depends_on","depth":1}' } }],
+          tool_calls: [
+            {
+              id: 'call_t',
+              type: 'function',
+              function: {
+                name: 'traverse',
+                arguments: '{"fromId":"kernel-container-id","linkType":"depends_on","depth":1}',
+              },
+            },
+          ],
         },
         {
           role: 'tool',
           tool_call_id: 'call_t',
           content: JSON.stringify({
             nodes: ['postgres-container-id'],
-            edges: [{ linkId: 'fact-1', linkType: 'depends_on', sourceObjectId: 'kernel-container-id', targetObjectId: 'postgres-container-id', depth: 1 }],
+            edges: [
+              {
+                linkId: 'fact-1',
+                linkType: 'depends_on',
+                sourceObjectId: 'kernel-container-id',
+                targetObjectId: 'postgres-container-id',
+                depth: 1,
+              },
+            ],
           }),
         },
       ];
@@ -628,35 +735,62 @@ async function main() {
         {
           role: 'assistant',
           content: null,
-          tool_calls: [{ id: 'call_s', type: 'function', function: { name: 'search', arguments: '{"query":"","objectType":"Container"}' } }],
+          tool_calls: [
+            {
+              id: 'call_s',
+              type: 'function',
+              function: { name: 'search', arguments: '{"query":"","objectType":"Container"}' },
+            },
+          ],
         },
         {
           role: 'tool',
           tool_call_id: 'call_s',
-          content: JSON.stringify({ items: [{ id: 'kernel-container-id', identityKey: { serviceName: 'kernel' } }] }),
+          content: JSON.stringify({
+            items: [{ id: 'kernel-container-id', identityKey: { serviceName: 'kernel' } }],
+          }),
         },
         {
           role: 'assistant',
           content: null,
-          tool_calls: [{ id: 'call_t', type: 'function', function: { name: 'traverse', arguments: '{}' } }],
+          tool_calls: [
+            { id: 'call_t', type: 'function', function: { name: 'traverse', arguments: '{}' } },
+          ],
         },
         {
           role: 'tool',
           tool_call_id: 'call_t',
           content: JSON.stringify({
             nodes: ['postgres-container-id'],
-            edges: [{ linkId: 'fact-1', linkType: 'depends_on', sourceObjectId: 'kernel-container-id', targetObjectId: 'postgres-container-id', depth: 1 }],
+            edges: [
+              {
+                linkId: 'fact-1',
+                linkType: 'depends_on',
+                sourceObjectId: 'kernel-container-id',
+                targetObjectId: 'postgres-container-id',
+                depth: 1,
+              },
+            ],
           }),
         },
         {
           role: 'assistant',
           content: null,
-          tool_calls: [{ id: 'call_g', type: 'function', function: { name: 'get_object', arguments: '{"objectId":"postgres-container-id"}' } }],
+          tool_calls: [
+            {
+              id: 'call_g',
+              type: 'function',
+              function: { name: 'get_object', arguments: '{"objectId":"postgres-container-id"}' },
+            },
+          ],
         },
         {
           role: 'tool',
           tool_call_id: 'call_g',
-          content: JSON.stringify({ id: 'postgres-container-id', identityKey: { serviceName: 'postgres' } }),
+          content: JSON.stringify({
+            id: 'postgres-container-id',
+            identityKey: { serviceName: 'postgres' },
+          }),
         },
       ];
       const { json } = await post(messages);
@@ -689,7 +823,9 @@ async function main() {
       });
       const foundWorkers = [
         call('call_fw', 'find_workers', { need: 'restart' }),
-        result('call_fw', { items: [{ definitionId: WORKER_ID, version: 2, kind: 'worker', name: 'ops-runner' }] }),
+        result('call_fw', {
+          items: [{ definitionId: WORKER_ID, version: 2, kind: 'worker', name: 'ops-runner' }],
+        }),
       ];
       const foundOperations = [
         call('call_fo', 'find_operations', { need: 'stock' }),
@@ -707,26 +843,45 @@ async function main() {
       ];
       const proposedOnce = [
         call('call_pg', 'propose_goal', {}),
-        result('call_pg', { goalRunId: GOAL_ID, status: 'proposed', changed: true, planRevisionId: 'rev-1', hints: [] }),
+        result('call_pg', {
+          goalRunId: GOAL_ID,
+          status: 'proposed',
+          changed: true,
+          planRevisionId: 'rev-1',
+          hints: [],
+        }),
       ];
 
       {
         const { json } = await post([ask]);
         const turn1 = toolCallOf(json);
-        check('entry-goal-chat-turn1', turn1?.name === 'find_workers' && turn1.args.need === 'restart', JSON.stringify(json.choices[0]));
+        check(
+          'entry-goal-chat-turn1',
+          turn1?.name === 'find_workers' && turn1.args.need === 'restart',
+          JSON.stringify(json.choices[0]),
+        );
         checkToolCallAgainstRegistry('entry-goal-chat-turn1', turn1);
       }
       {
         const { json } = await post([ask, ...foundWorkers]);
         const turn2 = toolCallOf(json);
-        check('entry-goal-chat-turn2', turn2?.name === 'find_operations' && turn2.args.need === 'stock', JSON.stringify(json.choices[0]));
+        check(
+          'entry-goal-chat-turn2',
+          turn2?.name === 'find_operations' && turn2.args.need === 'stock',
+          JSON.stringify(json.choices[0]),
+        );
         checkToolCallAgainstRegistry('entry-goal-chat-turn2', turn2);
       }
       {
-        const { json } = await post([ask, call('call_fw', 'find_workers', { need: 'restart' }), result('call_fw', 'Tool find_workers not found')]);
+        const { json } = await post([
+          ask,
+          call('call_fw', 'find_workers', { need: 'restart' }),
+          result('call_fw', 'Tool find_workers not found'),
+        ]);
         check(
           'entry-goal-chat-turn2-unresolved',
-          json.choices[0].finish_reason === 'stop' && json.choices[0].message.content.includes('did not resolve'),
+          json.choices[0].finish_reason === 'stop' &&
+            json.choices[0].message.content.includes('did not resolve'),
           JSON.stringify(json.choices[0]),
         );
       }
@@ -760,7 +915,13 @@ async function main() {
         // The entry agent's session is resident: an earlier asking with another nonce is still in
         // the history. The newest asking's nonce is the one used.
         const earlier = { role: 'user', content: '发起验收目标 GOAL_NONCE=old1' };
-        const { json } = await post([earlier, { role: 'assistant', content: 'earlier reply' }, ask, ...foundWorkers, ...foundOperations]);
+        const { json } = await post([
+          earlier,
+          { role: 'assistant', content: 'earlier reply' },
+          ask,
+          ...foundWorkers,
+          ...foundOperations,
+        ]);
         const turn3 = toolCallOf(json);
         check(
           'entry-goal-chat-turn3-newest-nonce',
@@ -773,7 +934,9 @@ async function main() {
         const turn4 = toolCallOf(json);
         check(
           'entry-goal-chat-turn4',
-          turn4?.name === 'confirm_goal' && turn4.args.goalRunId === GOAL_ID && turn4.args.revision === 1,
+          turn4?.name === 'confirm_goal' &&
+            turn4.args.goalRunId === GOAL_ID &&
+            turn4.args.revision === 1,
           JSON.stringify(json.choices[0]),
         );
         checkToolCallAgainstRegistry('entry-goal-chat-turn4', turn4);
@@ -807,7 +970,12 @@ async function main() {
           ...foundOperations,
           ...proposedOnce,
           call('call_cg', 'confirm_goal', { goalRunId: GOAL_ID, revision: 1 }),
-          result('call_cg', { goalRunId: GOAL_ID, status: 'running', changed: true, createdStepRunIds: ['s1'] }),
+          result('call_cg', {
+            goalRunId: GOAL_ID,
+            status: 'running',
+            changed: true,
+            createdStepRunIds: ['s1'],
+          }),
         ]);
         check(
           'entry-goal-chat-turn5-confirmed-shows',
@@ -828,16 +996,26 @@ async function main() {
           { role: 'user', content: '发起验收目标 GOAL_NONCE=n42' },
         ]);
         const again = toolCallOf(json);
-        check('entry-goal-chat-asked-again', again?.name === 'find_workers', JSON.stringify(json.choices[0]));
+        check(
+          'entry-goal-chat-asked-again',
+          again?.name === 'find_workers',
+          JSON.stringify(json.choices[0]),
+        );
       }
       {
         const { json } = await post([
           ask,
-          call('call_pg', 'propose_goal', { plan: { steps: [{ input: 'ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=n42' }] } }),
+          call('call_pg', 'propose_goal', {
+            plan: { steps: [{ input: 'ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=n42' }] },
+          }),
           result('call_pg', { goalRunId: GOAL_ID, status: 'proposed', changed: true }),
         ]);
         const notWorker = toolCallOf(json);
-        check('entry-goal-chat-not-worker-script', notWorker?.name !== 'report_result', JSON.stringify(json.choices[0]));
+        check(
+          'entry-goal-chat-not-worker-script',
+          notWorker?.name !== 'report_result',
+          JSON.stringify(json.choices[0]),
+        );
       }
     }
 
@@ -879,18 +1057,30 @@ async function main() {
       });
       const foundWorkers = [
         call('call_fw', 'find_workers', { need: 'restart' }),
-        result('call_fw', { items: [{ definitionId: WORKER_ID, version: 2, kind: 'worker', name: 'ops-runner' }] }),
+        result('call_fw', {
+          items: [{ definitionId: WORKER_ID, version: 2, kind: 'worker', name: 'ops-runner' }],
+        }),
       ];
       const foundOperations = [
         call('call_fo', 'find_operations', { need: 'stock' }),
         result('call_fo', {
-          items: [{ id: 'op-object-id', objectType: 'Operation', identityKey: { gatekeeperId: GATE_ID, name: 'stock.get', version: 1 } }],
+          items: [
+            {
+              id: 'op-object-id',
+              objectType: 'Operation',
+              identityKey: { gatekeeperId: GATE_ID, name: 'stock.get', version: 1 },
+            },
+          ],
         }),
       ];
       {
         const { json } = await post([ask]);
         const turn1 = toolCallOf(json);
-        check('entry-goal-dag-turn1', turn1?.name === 'find_workers' && turn1.args.need === 'restart', JSON.stringify(json.choices[0]));
+        check(
+          'entry-goal-dag-turn1',
+          turn1?.name === 'find_workers' && turn1.args.need === 'restart',
+          JSON.stringify(json.choices[0]),
+        );
       }
       {
         const { json } = await post([ask, ...foundWorkers, ...foundOperations]);
@@ -899,7 +1089,8 @@ async function main() {
         check(
           'entry-goal-dag-turn3',
           turn3?.name === 'propose_goal' &&
-            steps.map((st) => `${st.key}:${(st.dependsOn ?? []).join('+')}`).join(',') === 'a:,b:,c:a+b' &&
+            steps.map((st) => `${st.key}:${(st.dependsOn ?? []).join('+')}`).join(',') ===
+              'a:,b:,c:a+b' &&
             steps.every(
               (st) =>
                 st.worker.definitionId === WORKER_ID &&
@@ -923,12 +1114,20 @@ async function main() {
           ...foundWorkers,
           ...foundOperations,
           call('call_pg', 'propose_goal', {}),
-          result('call_pg', { goalRunId: GOAL_ID, status: 'proposed', changed: true, planRevisionId: 'rev-1', hints: [] }),
+          result('call_pg', {
+            goalRunId: GOAL_ID,
+            status: 'proposed',
+            changed: true,
+            planRevisionId: 'rev-1',
+            hints: [],
+          }),
         ]);
         const text = json.choices[0].message.content;
         check(
           'entry-goal-dag-turn4',
-          json.choices[0].finish_reason === 'stop' && text.includes(`GOAL_ID=${GOAL_ID}`) && text.includes('GOAL_STATUS=proposed'),
+          json.choices[0].finish_reason === 'stop' &&
+            text.includes(`GOAL_ID=${GOAL_ID}`) &&
+            text.includes('GOAL_STATUS=proposed'),
           JSON.stringify(json.choices[0]),
         );
       }
@@ -953,7 +1152,10 @@ async function main() {
     // 6m. S11 GO7a goalLedgerStepScenario: the step's Worker asks for one ledger entry under the
     //     key its input names, then reports what the platform answered.
     {
-      const input = { role: 'custom', content: '### Task input\nACCEPT_S2_SCENARIO=goal_ledger GOAL_NONCE=l42 LEDGER_KEY=s5-l42' };
+      const input = {
+        role: 'custom',
+        content: '### Task input\nACCEPT_S2_SCENARIO=goal_ledger GOAL_NONCE=l42 LEDGER_KEY=s5-l42',
+      };
       const begin = { role: 'user', content: 'Begin working on your assigned Task now' };
       {
         const { json } = await post([input, begin]);
@@ -971,9 +1173,19 @@ async function main() {
           {
             role: 'assistant',
             content: null,
-            tool_calls: [{ id: 'call_la', type: 'function', function: { name: 'accept_s2_api_ledger_add', arguments: '{"key":"s5-l42"}' } }],
+            tool_calls: [
+              {
+                id: 'call_la',
+                type: 'function',
+                function: { name: 'accept_s2_api_ledger_add', arguments: '{"key":"s5-l42"}' },
+              },
+            ],
           },
-          { role: 'tool', tool_call_id: 'call_la', content: '{"status":"pending_approval","actionRequestId":"ar-1"}' },
+          {
+            role: 'tool',
+            tool_call_id: 'call_la',
+            content: '{"status":"pending_approval","actionRequestId":"ar-1"}',
+          },
         ]);
         const call = toolCallOf(json);
         check(
@@ -993,12 +1205,23 @@ async function main() {
     //     waits); once released it never holds again; a turn asked again past the end of the script
     //     (the clamp) is not held; a held request whose client went away drops off the list.
     {
-      const holdsBody = async () => (await fetch(`http://127.0.0.1:${PORT}/accept-s2/holds`)).json();
+      const holdsBody = async () =>
+        (await fetch(`http://127.0.0.1:${PORT}/accept-s2/holds`)).json();
       const holds = async () => (await holdsBody()).holds;
       const release = async (name) =>
-        (await (await fetch(`http://127.0.0.1:${PORT}/accept-s2/holds/${name}/release`, { method: 'POST' })).json()).released;
+        (
+          await (
+            await fetch(`http://127.0.0.1:${PORT}/accept-s2/holds/${name}/release`, {
+              method: 'POST',
+            })
+          ).json()
+        ).released;
       const settle = () => new Promise((resolve) => setTimeout(resolve, 300));
-      const input = { role: 'custom', content: '### Task input\nACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=h42 STEP=a HOLD=s12-h42-a' };
+      const input = {
+        role: 'custom',
+        content:
+          '### Task input\nACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=h42 STEP=a HOLD=s12-h42-a',
+      };
       const begin = { role: 'user', content: 'Begin working on your assigned Task now' };
       let answered = false;
       const pending = post([input, begin]).then((reply) => {
@@ -1007,17 +1230,41 @@ async function main() {
       });
       await settle();
       const listed = await holds();
-      check('held-turn-listed', !answered && listed.includes('s12-h42-a'), JSON.stringify({ answered, listed }));
-      check('held-turn-release-count', (await release('s12-h42-a')) === 1, 'expected one request released');
+      check(
+        'held-turn-listed',
+        !answered && listed.includes('s12-h42-a'),
+        JSON.stringify({ answered, listed }),
+      );
+      check(
+        'held-turn-release-count',
+        (await release('s12-h42-a')) === 1,
+        'expected one request released',
+      );
       const { json } = await pending;
       const call = toolCallOf(json);
-      check('held-turn-answered', call?.name === 'report_result' && call.args.summary.includes('h42'), JSON.stringify(json.choices[0]));
+      check(
+        'held-turn-answered',
+        call?.name === 'report_result' && call.args.summary.includes('h42'),
+        JSON.stringify(json.choices[0]),
+      );
       check('held-turn-unlisted', (await holds()).length === 0, 'expected no hold left');
       const heldCounts = (await holdsBody()).counts['s12-h42-a'];
-      check('held-turn-counts', heldCounts?.held === 1 && heldCounts.dropped === 0, JSON.stringify(heldCounts));
+      check(
+        'held-turn-counts',
+        heldCounts?.held === 1 && heldCounts.dropped === 0,
+        JSON.stringify(heldCounts),
+      );
       const again = toolCallOf((await post([input, begin])).json);
-      check('held-turn-once', again?.name === 'report_result', 'a released name must answer at once');
-      check('held-turn-release-none', (await release('never-held')) === 0, 'releasing an unknown name releases nothing');
+      check(
+        'held-turn-once',
+        again?.name === 'report_result',
+        'a released name must answer at once',
+      );
+      check(
+        'held-turn-release-none',
+        (await release('never-held')) === 0,
+        'releasing an unknown name releases nothing',
+      );
 
       // Headers first: llm-proxy answers its client 502 when an upstream sends no response headers
       // within 10 s (UPSTREAM_CONNECT_TIMEOUT_MS), so a held turn has its status and content type
@@ -1035,7 +1282,13 @@ async function main() {
             body: JSON.stringify({
               model: 'fake-echo',
               stream,
-              messages: [{ role: 'custom', content: `### Task input\nACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=${nonce} STEP=a HOLD=${name}` }, begin],
+              messages: [
+                {
+                  role: 'custom',
+                  content: `### Task input\nACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=${nonce} STEP=a HOLD=${name}`,
+                },
+                begin,
+              ],
             }),
           }),
           new Promise((resolve) => setTimeout(() => resolve(undefined), 2000)),
@@ -1043,7 +1296,9 @@ async function main() {
         const heldNow = (await holds()).includes(name);
         check(
           `held-turn-headers-first-${label}`,
-          res?.status === 200 && (res.headers.get('content-type') ?? '').startsWith(type) && heldNow,
+          res?.status === 200 &&
+            (res.headers.get('content-type') ?? '').startsWith(type) &&
+            heldNow,
           JSON.stringify({ status: res?.status, type: res?.headers.get('content-type'), heldNow }),
         );
         if (!res) continue;
@@ -1054,28 +1309,59 @@ async function main() {
         });
         await settle();
         check(`held-turn-body-waits-${label}`, !bodyDone, 'the body must wait for the release');
-        check(`held-turn-headers-first-release-${label}`, (await release(name)) === 1, 'expected one request released');
+        check(
+          `held-turn-headers-first-release-${label}`,
+          (await release(name)) === 1,
+          'expected one request released',
+        );
         const text = await body;
         const answered = stream
           ? text.includes('"report_result"') && text.includes('data: [DONE]')
           : toolCallOf(JSON.parse(text))?.name === 'report_result';
         check(`held-turn-body-after-release-${label}`, answered, text.slice(0, 300));
         const counts = (await holdsBody()).counts[name];
-        check(`held-turn-headers-first-counts-${label}`, counts?.held === 1 && counts.dropped === 0, JSON.stringify(counts));
+        check(
+          `held-turn-headers-first-counts-${label}`,
+          counts?.held === 1 && counts.dropped === 0,
+          JSON.stringify(counts),
+        );
       }
 
       // The clamp: one assistant message already answered the script's only turn.
-      const clampInput = { role: 'custom', content: '### Task input\nACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=h43 STEP=a HOLD=s12-h43-a' };
+      const clampInput = {
+        role: 'custom',
+        content:
+          '### Task input\nACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=h43 STEP=a HOLD=s12-h43-a',
+      };
       const reported = {
         role: 'assistant',
         content: null,
-        tool_calls: [{ id: 'call_rr', type: 'function', function: { name: 'report_result', arguments: '{}' } }],
+        tool_calls: [
+          { id: 'call_rr', type: 'function', function: { name: 'report_result', arguments: '{}' } },
+        ],
       };
-      const clamped = toolCallOf((await post([clampInput, begin, reported, { role: 'tool', tool_call_id: 'call_rr', content: '{}' }])).json);
-      check('held-turn-clamp-not-held', clamped?.name === 'report_result' && (await holds()).length === 0, JSON.stringify(clamped));
+      const clamped = toolCallOf(
+        (
+          await post([
+            clampInput,
+            begin,
+            reported,
+            { role: 'tool', tool_call_id: 'call_rr', content: '{}' },
+          ])
+        ).json,
+      );
+      check(
+        'held-turn-clamp-not-held',
+        clamped?.name === 'report_result' && (await holds()).length === 0,
+        JSON.stringify(clamped),
+      );
 
       // A client that goes away while held.
-      const goneInput = { role: 'custom', content: '### Task input\nACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=h44 STEP=a HOLD=s12-h44-a' };
+      const goneInput = {
+        role: 'custom',
+        content:
+          '### Task input\nACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=h44 STEP=a HOLD=s12-h44-a',
+      };
       const controller = new AbortController();
       const gone = fetch(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
         method: 'POST',
@@ -1089,9 +1375,17 @@ async function main() {
       await gone;
       await settle();
       const after = await holds();
-      check('held-turn-client-gone', before.includes('s12-h44-a') && !after.includes('s12-h44-a'), JSON.stringify({ before, after }));
+      check(
+        'held-turn-client-gone',
+        before.includes('s12-h44-a') && !after.includes('s12-h44-a'),
+        JSON.stringify({ before, after }),
+      );
       const goneCounts = (await holdsBody()).counts['s12-h44-a'];
-      check('held-turn-client-gone-counted', goneCounts?.held === 1 && goneCounts.dropped === 1, JSON.stringify(goneCounts));
+      check(
+        'held-turn-client-gone-counted',
+        goneCounts?.held === 1 && goneCounts.dropped === 1,
+        JSON.stringify(goneCounts),
+      );
       // Asked again after its client went away (a Worker's SDK retrying a cut model call): held
       // again under the same name, the count saying so.
       let againAnswered = false;
@@ -1103,32 +1397,65 @@ async function main() {
       const reHeld = await holdsBody();
       check(
         'held-turn-asked-again',
-        !againAnswered && reHeld.holds.includes('s12-h44-a') && reHeld.counts['s12-h44-a'].held === 2 && reHeld.counts['s12-h44-a'].dropped === 1,
+        !againAnswered &&
+          reHeld.holds.includes('s12-h44-a') &&
+          reHeld.counts['s12-h44-a'].held === 2 &&
+          reHeld.counts['s12-h44-a'].dropped === 1,
         JSON.stringify({ againAnswered, reHeld }),
       );
-      check('held-turn-asked-again-release', (await release('s12-h44-a')) === 1, 'expected the one request asked again released');
+      check(
+        'held-turn-asked-again-release',
+        (await release('s12-h44-a')) === 1,
+        'expected the one request asked again released',
+      );
       await againPending;
     }
 
     // 6o. S11 GO7a-3 goalThreeWritesScenario: three ledger writes under <k>-1..3, the third asked
     //     only once its hold is released, then a report naming each answer.
     {
-      const input = { role: 'custom', content: '### Task input\nACCEPT_S2_SCENARIO=goal_three_writes LEDGER_KEY=s8l-t42 HOLD=s8l-t42-a' };
+      const input = {
+        role: 'custom',
+        content:
+          '### Task input\nACCEPT_S2_SCENARIO=goal_three_writes LEDGER_KEY=s8l-t42 HOLD=s8l-t42-a',
+      };
       const begin = { role: 'user', content: 'Begin working on your assigned Task now' };
       const wrote = (id, key, answer) => [
         {
           role: 'assistant',
           content: null,
-          tool_calls: [{ id, type: 'function', function: { name: 'accept_s2_api_ledger_add', arguments: JSON.stringify({ key }) } }],
+          tool_calls: [
+            {
+              id,
+              type: 'function',
+              function: { name: 'accept_s2_api_ledger_add', arguments: JSON.stringify({ key }) },
+            },
+          ],
         },
         { role: 'tool', tool_call_id: id, content: answer },
       ];
       const first = toolCallOf((await post([input, begin])).json);
-      check('three-writes-turn1', first?.name === 'accept_s2_api_ledger_add' && first.args.key === 's8l-t42-1', JSON.stringify(first));
-      const one = wrote('call_w1', 's8l-t42-1', '{"status":"pending_approval","actionRequestId":"ar-1"}');
+      check(
+        'three-writes-turn1',
+        first?.name === 'accept_s2_api_ledger_add' && first.args.key === 's8l-t42-1',
+        JSON.stringify(first),
+      );
+      const one = wrote(
+        'call_w1',
+        's8l-t42-1',
+        '{"status":"pending_approval","actionRequestId":"ar-1"}',
+      );
       const second = toolCallOf((await post([input, begin, ...one])).json);
-      check('three-writes-turn2', second?.name === 'accept_s2_api_ledger_add' && second.args.key === 's8l-t42-2', JSON.stringify(second));
-      const two = wrote('call_w2', 's8l-t42-2', '{"status":"pending_approval","actionRequestId":"ar-2"}');
+      check(
+        'three-writes-turn2',
+        second?.name === 'accept_s2_api_ledger_add' && second.args.key === 's8l-t42-2',
+        JSON.stringify(second),
+      );
+      const two = wrote(
+        'call_w2',
+        's8l-t42-2',
+        '{"status":"pending_approval","actionRequestId":"ar-2"}',
+      );
       let answered = false;
       const pending = post([input, begin, ...one, ...two]).then((reply) => {
         answered = true;
@@ -1136,11 +1463,23 @@ async function main() {
       });
       await new Promise((resolve) => setTimeout(resolve, 300));
       const listed = (await (await fetch(`http://127.0.0.1:${PORT}/accept-s2/holds`)).json()).holds;
-      check('three-writes-third-held', !answered && listed.includes('s8l-t42-a'), JSON.stringify({ answered, listed }));
+      check(
+        'three-writes-third-held',
+        !answered && listed.includes('s8l-t42-a'),
+        JSON.stringify({ answered, listed }),
+      );
       await fetch(`http://127.0.0.1:${PORT}/accept-s2/holds/s8l-t42-a/release`, { method: 'POST' });
       const third = toolCallOf((await pending).json);
-      check('three-writes-turn3', third?.name === 'accept_s2_api_ledger_add' && third.args.key === 's8l-t42-3', JSON.stringify(third));
-      const three = wrote('call_w3', 's8l-t42-3', 'illegal_transition: request_action: goal step sr-1 is superseded and takes no new work (I-G9)');
+      check(
+        'three-writes-turn3',
+        third?.name === 'accept_s2_api_ledger_add' && third.args.key === 's8l-t42-3',
+        JSON.stringify(third),
+      );
+      const three = wrote(
+        'call_w3',
+        's8l-t42-3',
+        'illegal_transition: request_action: goal step sr-1 is superseded and takes no new work (I-G9)',
+      );
       const report = toolCallOf((await post([input, begin, ...one, ...two, ...three])).json);
       check(
         'three-writes-report',
@@ -1155,7 +1494,16 @@ async function main() {
       checkToolCallAgainstRegistry('three-writes-report', report);
       // Not mistaken for goal_ledger's script (whose marker it does not contain), nor the reverse.
       const ledger = toolCallOf(
-        (await post([{ role: 'custom', content: '### Task input\nACCEPT_S2_SCENARIO=goal_ledger GOAL_NONCE=l43 LEDGER_KEY=s5-l43' }, begin])).json,
+        (
+          await post([
+            {
+              role: 'custom',
+              content:
+                '### Task input\nACCEPT_S2_SCENARIO=goal_ledger GOAL_NONCE=l43 LEDGER_KEY=s5-l43',
+            },
+            begin,
+          ])
+        ).json,
       );
       check('three-writes-not-goal-ledger', ledger?.args?.key === 's5-l43', JSON.stringify(ledger));
     }
@@ -1165,29 +1513,73 @@ async function main() {
     {
       const begin = { role: 'user', content: 'Begin working on your assigned Task now' };
       const called = (id, name, args, answer) => [
-        { role: 'assistant', content: null, tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }] },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            { id, type: 'function', function: { name, arguments: JSON.stringify(args) } },
+          ],
+        },
         { role: 'tool', tool_call_id: id, content: answer },
       ];
-      const writer = { role: 'custom', content: '### Task input\nACCEPT_S2_SCENARIO=goal_handoff HANDOFF_ROLE=write HANDOFF_MARK=h42tok' };
+      const writer = {
+        role: 'custom',
+        content:
+          '### Task input\nACCEPT_S2_SCENARIO=goal_handoff HANDOFF_ROLE=write HANDOFF_MARK=h42tok',
+      };
       const wrote = toolCallOf((await post([writer, begin])).json);
       check(
         'handoff-write-turn1',
-        wrote?.name === 'write' && wrote.args.path === '/workspace/out/handoff.txt' && wrote.args.content === 'h42tok\n',
+        wrote?.name === 'write' &&
+          wrote.args.path === '/workspace/out/handoff.txt' &&
+          wrote.args.content === 'h42tok\n',
         JSON.stringify(wrote),
       );
       const writeReport = toolCallOf(
-        (await post([writer, begin, ...called('call_hw', 'write', wrote?.args ?? {}, 'Successfully wrote 7 bytes to /workspace/out/handoff.txt')])).json,
+        (
+          await post([
+            writer,
+            begin,
+            ...called(
+              'call_hw',
+              'write',
+              wrote?.args ?? {},
+              'Successfully wrote 7 bytes to /workspace/out/handoff.txt',
+            ),
+          ])
+        ).json,
       );
-      check('handoff-write-report', writeReport?.name === 'report_result' && !JSON.stringify(writeReport.args).includes('h42tok'), JSON.stringify(writeReport));
+      check(
+        'handoff-write-report',
+        writeReport?.name === 'report_result' &&
+          !JSON.stringify(writeReport.args).includes('h42tok'),
+        JSON.stringify(writeReport),
+      );
       checkToolCallAgainstRegistry('handoff-write-report', writeReport);
 
-      const reader = { role: 'custom', content: '### Task input\nACCEPT_S2_SCENARIO=goal_handoff HANDOFF_ROLE=read' };
+      const reader = {
+        role: 'custom',
+        content: '### Task input\nACCEPT_S2_SCENARIO=goal_handoff HANDOFF_ROLE=read',
+      };
       const read = toolCallOf((await post([reader, begin])).json);
-      check('handoff-read-turn1', read?.name === 'read' && read.args.path === '/upstream/a/handoff.txt', JSON.stringify(read));
+      check(
+        'handoff-read-turn1',
+        read?.name === 'read' && read.args.path === '/upstream/a/handoff.txt',
+        JSON.stringify(read),
+      );
       const readDone = called('call_hr', 'read', read?.args ?? {}, 'h42tok\n');
       const tamper = toolCallOf((await post([reader, begin, ...readDone])).json);
-      check('handoff-read-turn2', tamper?.name === 'bash' && tamper.args.command.includes('/upstream/a/'), JSON.stringify(tamper));
-      const tamperDone = called('call_hb', 'bash', tamper?.args ?? {}, "touch: cannot touch '/upstream/a/tamper': Read-only file system\nHANDOFF_WRITE_EXIT=1");
+      check(
+        'handoff-read-turn2',
+        tamper?.name === 'bash' && tamper.args.command.includes('/upstream/a/'),
+        JSON.stringify(tamper),
+      );
+      const tamperDone = called(
+        'call_hb',
+        'bash',
+        tamper?.args ?? {},
+        "touch: cannot touch '/upstream/a/tamper': Read-only file system\nHANDOFF_WRITE_EXIT=1",
+      );
       const readReport = toolCallOf((await post([reader, begin, ...readDone, ...tamperDone])).json);
       check(
         'handoff-read-report',
@@ -1213,12 +1605,19 @@ async function main() {
       });
       const plan = {
         steps: [
-          { key: 'write', worker: { definitionId: 'd-ops', version: 1 }, input: 'ACCEPT_S2_SCENARIO=goal_ledger LEDGER_KEY=s13a-p42', maxAttempts: 1 },
+          {
+            key: 'write',
+            worker: { definitionId: 'd-ops', version: 1 },
+            input: 'ACCEPT_S2_SCENARIO=goal_ledger LEDGER_KEY=s13a-p42',
+            maxAttempts: 1,
+          },
         ],
         acceptance: [{ kind: 'observe_predicate', key: 'stock-visible', check: {} }],
       };
       const workers = [{ name: 'report-runner', definitionId: 'd-rr', version: 3 }];
-      const revise = toolCallOf((await post([plannerInput({ plan, failedStep: { key: 'write' }, workers }), begin])).json);
+      const revise = toolCallOf(
+        (await post([plannerInput({ plan, failedStep: { key: 'write' }, workers }), begin])).json,
+      );
       const revised = revise?.args?.output?.plan?.steps?.[0];
       check(
         'goal-planner-revise',
@@ -1233,11 +1632,36 @@ async function main() {
       );
       checkToolCallAgainstRegistry('goal-planner-revise', revise);
       const reviseOutput = shared.PlannerOutputSchema.safeParse(revise?.args?.output);
-      check('goal-planner-revise-output', reviseOutput.success, reviseOutput.success ? '' : JSON.stringify(reviseOutput.error.issues));
+      check(
+        'goal-planner-revise-output',
+        reviseOutput.success,
+        reviseOutput.success ? '' : JSON.stringify(reviseOutput.error.issues),
+      );
 
-      const accepted = { ...plan, steps: [{ key: 'report', worker: { definitionId: 'd-ops', version: 1 }, input: 'ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=s6-p42 STEP=report' }] };
+      const accepted = {
+        ...plan,
+        steps: [
+          {
+            key: 'report',
+            worker: { definitionId: 'd-ops', version: 1 },
+            input: 'ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=s6-p42 STEP=report',
+          },
+        ],
+      };
       const none = toolCallOf(
-        (await post([plannerInput({ plan: accepted, failedAcceptance: { round: 2, checks: [{ key: 'stock-unseen', kind: 'observe_predicate', status: 'failed' }] }, workers }), begin])).json,
+        (
+          await post([
+            plannerInput({
+              plan: accepted,
+              failedAcceptance: {
+                round: 2,
+                checks: [{ key: 'stock-unseen', kind: 'observe_predicate', status: 'failed' }],
+              },
+              workers,
+            }),
+            begin,
+          ])
+        ).json,
       );
       check(
         'goal-planner-acceptance-no-revision',
@@ -1249,18 +1673,29 @@ async function main() {
       );
       checkToolCallAgainstRegistry('goal-planner-acceptance-no-revision', none);
       const noneOutput = shared.PlannerOutputSchema.safeParse(none?.args?.output);
-      check('goal-planner-acceptance-no-revision-output', noneOutput.success, noneOutput.success ? '' : JSON.stringify(noneOutput.error.issues));
+      check(
+        'goal-planner-acceptance-no-revision-output',
+        noneOutput.success,
+        noneOutput.success ? '' : JSON.stringify(noneOutput.error.issues),
+      );
     }
 
     // 6t. S11 AA5c: the admin agent's ticket journey — three chat Turns, then the Worker it tries.
     {
-      const fn = (name) => ({ type: 'function', function: { name, parameters: { type: 'object' } } });
+      const fn = (name) => ({
+        type: 'function',
+        function: { name, parameters: { type: 'object' } },
+      });
       const call = (id, name, args) => ({
         role: 'assistant',
         content: '',
         tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
       });
-      const result = (id, value) => ({ role: 'tool', tool_call_id: id, content: JSON.stringify(value) });
+      const result = (id, value) => ({
+        role: 'tool',
+        tool_call_id: id,
+        content: JSON.stringify(value),
+      });
       const textOf = (json) => json.choices?.[0]?.message?.content ?? '';
 
       // Turn A: request_connection, then the request's id.
@@ -1269,22 +1704,51 @@ async function main() {
       const a1 = toolCallOf((await post([askA], false, { tools: toolsA })).json);
       check(
         'tickets-connect-turn1',
-        a1?.name === 'request_connection' && a1.args.kind === 'http' && a1.args.target === 'helpdesk',
+        a1?.name === 'request_connection' &&
+          a1.args.kind === 'http' &&
+          a1.args.target === 'helpdesk',
         JSON.stringify(a1),
       );
       checkToolCallAgainstRegistry('tickets-connect-turn1', a1);
-      const historyA = [askA, call('c1', 'request_connection', a1?.args ?? {}), result('c1', { id: 'cr-1', status: 'requested' })];
+      const historyA = [
+        askA,
+        call('c1', 'request_connection', a1?.args ?? {}),
+        result('c1', { id: 'cr-1', status: 'requested' }),
+      ];
       const a2 = textOf((await post(historyA, false, { tools: toolsA })).json);
-      check('tickets-connect-turn2', a2.startsWith('TICKETS_CONNECTION_REQUEST=cr-1 TICKETS_TOOLS=ok'), a2);
-      const a2missing = textOf((await post(historyA, false, { tools: [fn('request_connection')] })).json);
-      check('tickets-connect-tools-missing', a2missing.includes('TICKETS_TOOLS=missing:invoke_worker;unexpected:-'), a2missing);
+      check(
+        'tickets-connect-turn2',
+        a2.startsWith('TICKETS_CONNECTION_REQUEST=cr-1 TICKETS_TOOLS=ok'),
+        a2,
+      );
+      const a2missing = textOf(
+        (await post(historyA, false, { tools: [fn('request_connection')] })).json,
+      );
+      check(
+        'tickets-connect-tools-missing',
+        a2missing.includes('TICKETS_TOOLS=missing:invoke_worker;unexpected:-'),
+        a2missing,
+      );
 
       // Turn B, in the same resident history: the newest marker wins, counted from its own question.
-      const askB = { role: 'user', content: '验收工单：起草工单 Worker TICKETS_NONCE=t42 WORKER_MODEL=fake/fake-echo' };
-      const toolsB = [fn('find_operations'), fn('propose_skill'), fn('propose_worker_definition'), fn('helpdesk_tickets_list'), fn('helpdesk_tickets_get')];
+      const askB = {
+        role: 'user',
+        content: '验收工单：起草工单 Worker TICKETS_NONCE=t42 WORKER_MODEL=fake/fake-echo',
+      };
+      const toolsB = [
+        fn('find_operations'),
+        fn('propose_skill'),
+        fn('propose_worker_definition'),
+        fn('helpdesk_tickets_list'),
+        fn('helpdesk_tickets_get'),
+      ];
       let historyB = [...historyA, { role: 'assistant', content: a2 }, askB];
       const b1 = toolCallOf((await post(historyB, false, { tools: toolsB })).json);
-      check('tickets-draft-turn1', b1?.name === 'find_operations' && b1.args.need === 'ticket', JSON.stringify(b1));
+      check(
+        'tickets-draft-turn1',
+        b1?.name === 'find_operations' && b1.args.need === 'ticket',
+        JSON.stringify(b1),
+      );
       checkToolCallAgainstRegistry('tickets-draft-turn1', b1);
       historyB = [
         ...historyB,
@@ -1292,16 +1756,40 @@ async function main() {
         result('b1', { items: [{ identityKey: { name: 'tickets.list', gatekeeperId: 'gk-t' } }] }),
       ];
       const b2 = toolCallOf((await post(historyB, false, { tools: toolsB })).json);
-      check('tickets-draft-turn2', b2?.name === 'helpdesk_tickets_list' && JSON.stringify(b2.args) === '{}', JSON.stringify(b2));
-      historyB = [...historyB, call('b2', 'helpdesk_tickets_list', {}), result('b2', { data: { items: [{ id: 'T-1001' }, { id: 'T-1002' }] } })];
+      check(
+        'tickets-draft-turn2',
+        b2?.name === 'helpdesk_tickets_list' && JSON.stringify(b2.args) === '{}',
+        JSON.stringify(b2),
+      );
+      historyB = [
+        ...historyB,
+        call('b2', 'helpdesk_tickets_list', {}),
+        result('b2', { data: { items: [{ id: 'T-1001' }, { id: 'T-1002' }] } }),
+      ];
       const b3 = toolCallOf((await post(historyB, false, { tools: toolsB })).json);
-      check('tickets-draft-turn3', b3?.name === 'propose_skill' && b3.args.skill.name === 'accept-tickets-triage-t42', JSON.stringify(b3));
+      check(
+        'tickets-draft-turn3',
+        b3?.name === 'propose_skill' && b3.args.skill.name === 'accept-tickets-triage-t42',
+        JSON.stringify(b3),
+      );
       checkToolCallAgainstRegistry('tickets-draft-turn3', b3);
-      historyB = [...historyB, call('b3', 'propose_skill', b3?.args ?? {}), result('b3', { id: 'sk-1', version: 1, draftDigest: 'dg1' })];
+      historyB = [
+        ...historyB,
+        call('b3', 'propose_skill', b3?.args ?? {}),
+        result('b3', { id: 'sk-1', version: 1, draftDigest: 'dg1' }),
+      ];
       const b4 = toolCallOf((await post(historyB, false, { tools: toolsB })).json);
-      check('tickets-draft-turn4', b4?.name === 'propose_skill' && b4.args.skill.name === 'accept-tickets-open-t42', JSON.stringify(b4));
+      check(
+        'tickets-draft-turn4',
+        b4?.name === 'propose_skill' && b4.args.skill.name === 'accept-tickets-open-t42',
+        JSON.stringify(b4),
+      );
       checkToolCallAgainstRegistry('tickets-draft-turn4', b4);
-      historyB = [...historyB, call('b4', 'propose_skill', b4?.args ?? {}), result('b4', { id: 'sk-2', version: 1, draftDigest: 'dg2' })];
+      historyB = [
+        ...historyB,
+        call('b4', 'propose_skill', b4?.args ?? {}),
+        result('b4', { id: 'sk-2', version: 1, draftDigest: 'dg2' }),
+      ];
       const b5 = toolCallOf((await post(historyB, false, { tools: toolsB })).json);
       const def = b5?.args?.definition ?? {};
       check(
@@ -1311,34 +1799,71 @@ async function main() {
           def.model === 'fake/fake-echo' &&
           JSON.stringify(def.gates) === '["gk-t"]' &&
           JSON.stringify(def.capabilities) === '["request_action"]' &&
-          JSON.stringify(def.skills) === '["accept-tickets-triage-t42","accept-tickets-open-t42"]' &&
+          JSON.stringify(def.skills) ===
+            '["accept-tickets-triage-t42","accept-tickets-open-t42"]' &&
           !JSON.stringify(def).includes('验收工单') &&
           !JSON.stringify(def).includes('ACCEPT_S2_SCENARIO'),
         JSON.stringify(b5),
       );
       checkToolCallAgainstRegistry('tickets-draft-turn5', b5);
       const content = shared.WorkerWorkerDefinitionContentSchema.safeParse(def);
-      check('tickets-draft-turn5-definition', content.success, content.success ? '' : JSON.stringify(content.error.issues));
-      historyB = [...historyB, call('b5', 'propose_worker_definition', b5?.args ?? {}), result('b5', { id: 'wd-1', version: 1 })];
+      check(
+        'tickets-draft-turn5-definition',
+        content.success,
+        content.success ? '' : JSON.stringify(content.error.issues),
+      );
+      historyB = [
+        ...historyB,
+        call('b5', 'propose_worker_definition', b5?.args ?? {}),
+        result('b5', { id: 'wd-1', version: 1 }),
+      ];
       const b6 = textOf((await post(historyB, false, { tools: toolsB })).json);
       check(
         'tickets-draft-turn6',
-        b6 === 'TICKETS_DRAFTED=yes TICKETS_GATEKEEPER=gk-t TICKETS_SEEN=2 TICKETS_SKILLS=sk-1:1:dg1,sk-2:1:dg2 TICKETS_WORKER=wd-1:1 TICKETS_TOOLS=ok',
+        b6 ===
+          'TICKETS_DRAFTED=yes TICKETS_GATEKEEPER=gk-t TICKETS_SEEN=2 TICKETS_SKILLS=sk-1:1:dg1,sk-2:1:dg2 TICKETS_WORKER=wd-1:1 TICKETS_TOOLS=ok',
         b6,
       );
       // Offered the execute tool too: said so (the admin mode projects observe tools only).
-      const b6create = textOf((await post(historyB, false, { tools: [...toolsB, fn('helpdesk_tickets_create')] })).json);
-      check('tickets-draft-create-offered', b6create.includes('TICKETS_TOOLS=missing:-;unexpected:helpdesk_tickets_create'), b6create);
+      const b6create = textOf(
+        (await post(historyB, false, { tools: [...toolsB, fn('helpdesk_tickets_create')] })).json,
+      );
+      check(
+        'tickets-draft-create-offered',
+        b6create.includes('TICKETS_TOOLS=missing:-;unexpected:helpdesk_tickets_create'),
+        b6create,
+      );
       // No observe tool offered (not granted yet): stops there and says why.
       const noList = textOf(
-        (await post([askB, call('n1', 'find_operations', { need: 'ticket' }), result('n1', { items: [{ identityKey: { name: 'tickets.list', gatekeeperId: 'gk-t' } }] })], false, {
-          tools: [fn('find_operations'), fn('propose_skill'), fn('propose_worker_definition')],
-        })).json,
+        (
+          await post(
+            [
+              askB,
+              call('n1', 'find_operations', { need: 'ticket' }),
+              result('n1', {
+                items: [{ identityKey: { name: 'tickets.list', gatekeeperId: 'gk-t' } }],
+              }),
+            ],
+            false,
+            {
+              tools: [fn('find_operations'), fn('propose_skill'), fn('propose_worker_definition')],
+            },
+          )
+        ).json,
       );
-      check('tickets-draft-no-list-tool', noList.startsWith('TICKETS_DRAFTED=no') && noList.includes('no *_tickets_list tool offered'), noList);
+      check(
+        'tickets-draft-no-list-tool',
+        noList.startsWith('TICKETS_DRAFTED=no') &&
+          noList.includes('no *_tickets_list tool offered'),
+        noList,
+      );
 
       // Turn C: invoke_worker on the version the person names, the Worker scenario's marker as input.
-      const askC = { role: 'user', content: '验收工单：试跑工单 Worker TICKETS_DEFINITION=wd-1 TICKETS_VERSION=2 TICKET_TITLE=accept-ticket-t42' };
+      const askC = {
+        role: 'user',
+        content:
+          '验收工单：试跑工单 Worker TICKETS_DEFINITION=wd-1 TICKETS_VERSION=2 TICKET_TITLE=accept-ticket-t42',
+      };
       const toolsC = [fn('invoke_worker'), fn('helpdesk_tickets_list')];
       let historyC = [...historyB, { role: 'assistant', content: b6 }, askC];
       const c1 = toolCallOf((await post(historyC, false, { tools: toolsC })).json);
@@ -1352,40 +1877,93 @@ async function main() {
         JSON.stringify(c1),
       );
       checkToolCallAgainstRegistry('tickets-try-turn1', c1);
-      historyC = [...historyC, call('cc1', 'invoke_worker', c1?.args ?? {}), result('cc1', wireResult('tickets-try-turn1', 'invoke_worker', { id: 'task-9', workerRunId: 'wr-9', status: 'queued' }))];
+      historyC = [
+        ...historyC,
+        call('cc1', 'invoke_worker', c1?.args ?? {}),
+        result(
+          'cc1',
+          wireResult('tickets-try-turn1', 'invoke_worker', {
+            id: 'task-9',
+            workerRunId: 'wr-9',
+            status: 'queued',
+          }),
+        ),
+      ];
       const c2 = textOf((await post(historyC, false, { tools: toolsC })).json);
       check('tickets-try-turn2', c2 === 'TICKETS_TASK_ID=task-9 TICKETS_TOOLS=ok', c2);
 
       // The Worker: tickets.create on whatever the gate is named, then its report.
       const begin = { role: 'user', content: 'Begin working on your assigned Task now' };
-      const input = { role: 'custom', content: '### Task input\nACCEPT_S2_SCENARIO=tickets_create TICKET_TITLE=accept-ticket-t42' };
-      const toolsW = [fn('report_result'), fn('helpdesk_tickets_list'), fn('helpdesk_tickets_create')];
+      const input = {
+        role: 'custom',
+        content: '### Task input\nACCEPT_S2_SCENARIO=tickets_create TICKET_TITLE=accept-ticket-t42',
+      };
+      const toolsW = [
+        fn('report_result'),
+        fn('helpdesk_tickets_list'),
+        fn('helpdesk_tickets_create'),
+      ];
       const w1 = toolCallOf((await post([input, begin], false, { tools: toolsW })).json);
       check(
         'tickets-worker-turn1',
-        w1?.name === 'helpdesk_tickets_create' && w1.args.title === 'accept-ticket-t42' && w1.args.priority === 'normal',
+        w1?.name === 'helpdesk_tickets_create' &&
+          w1.args.title === 'accept-ticket-t42' &&
+          w1.args.priority === 'normal',
         JSON.stringify(w1),
       );
       const w2 = toolCallOf(
-        (await post([input, begin, call('w1', 'helpdesk_tickets_create', w1?.args ?? {}), result('w1', { status: 'executed', data: { id: 'T-1003' } })], false, { tools: toolsW })).json,
+        (
+          await post(
+            [
+              input,
+              begin,
+              call('w1', 'helpdesk_tickets_create', w1?.args ?? {}),
+              result('w1', { status: 'executed', data: { id: 'T-1003' } }),
+            ],
+            false,
+            { tools: toolsW },
+          )
+        ).json,
       );
-      check('tickets-worker-turn2', w2?.name === 'report_result' && w2.args.summary.includes('T-1003'), JSON.stringify(w2));
+      check(
+        'tickets-worker-turn2',
+        w2?.name === 'report_result' && w2.args.summary.includes('T-1003'),
+        JSON.stringify(w2),
+      );
       checkToolCallAgainstRegistry('tickets-worker-turn2', w2);
 
       // Turn D: the targets, then one proposal for the workspace the person names — the same Skills
-      // and Worker (no gates, no model), tickets.create loosened, a gate-host instance.
+      // and Worker (no gates, no model; the system it acts on), tickets.create loosened, a gate-host
+      // instance.
       const ws = '11111111-2222-4333-8444-555555555555';
       const askD = {
         role: 'user',
         content: `验收工单：提议接入正式工作区 TICKETS_NONCE=t42 TICKETS_WORKSPACE=${ws} TICKETS_SYSTEM=http://accept-s2-openapi:8080 TICKETS_OPENAPI=http://accept-s2-openapi:8080/tickets/openapi.json`,
       };
       // The same Chat: Turn B's history (its propose_* calls) comes before.
-      const toolsD = [fn('agent_list_proposal_targets'), fn('propose_admin_proposal'), fn('helpdesk_tickets_list')];
+      const toolsD = [
+        fn('agent_list_proposal_targets'),
+        fn('propose_admin_proposal'),
+        fn('helpdesk_tickets_list'),
+      ];
       let historyD = [...historyB, askD];
       const d1 = toolCallOf((await post(historyD, false, { tools: toolsD })).json);
-      check('tickets-propose-turn1', d1?.name === 'agent_list_proposal_targets', JSON.stringify(d1));
+      check(
+        'tickets-propose-turn1',
+        d1?.name === 'agent_list_proposal_targets',
+        JSON.stringify(d1),
+      );
       checkToolCallAgainstRegistry('tickets-propose-turn1', d1);
-      historyD = [...historyD, call('d1', 'agent_list_proposal_targets', {}), result('d1', wireResult('tickets-propose-turn1', 'agent_list_proposal_targets', { targetWorkspaceIds: [ws] }))];
+      historyD = [
+        ...historyD,
+        call('d1', 'agent_list_proposal_targets', {}),
+        result(
+          'd1',
+          wireResult('tickets-propose-turn1', 'agent_list_proposal_targets', {
+            targetWorkspaceIds: [ws],
+          }),
+        ),
+      ];
       const d2 = toolCallOf((await post(historyD, false, { tools: toolsD })).json);
       const seg = d2?.args?.segments?.[0];
       const inst = d2?.args?.platform?.items?.[0];
@@ -1398,13 +1976,19 @@ async function main() {
           seg.targetWorkspaceId === ws &&
           JSON.stringify(seg.items.map((i) => i.kind)) ===
             '["skill_version","skill_version","worker_definition_version","operation_version"]' &&
-          JSON.stringify(seg.items.slice(0, 2)) === JSON.stringify([{ kind: 'skill_version', skill: b3.args.skill }, { kind: 'skill_version', skill: b4.args.skill }]) &&
+          JSON.stringify(seg.items.slice(0, 2)) ===
+            JSON.stringify([
+              { kind: 'skill_version', skill: b3.args.skill },
+              { kind: 'skill_version', skill: b4.args.skill },
+            ]) &&
           worker.name === 'accept-tickets-worker-t42' &&
           !('gates' in worker) &&
           !('model' in worker) &&
+          JSON.stringify(seg.items[2].systems) === '["accept-s2-tickets"]' &&
           JSON.stringify(worker.skills) === JSON.stringify(def.skills) &&
           worker.systemPrompt === def.systemPrompt &&
-          JSON.stringify(seg.items[3]) === '{"kind":"operation_version","gateId":"accept-tickets-t42","name":"tickets.create","set":{"blast_radius":"low"}}' &&
+          JSON.stringify(seg.items[3]) ===
+            '{"kind":"operation_version","gateId":"accept-tickets-t42","name":"tickets.create","set":{"blast_radius":"low"}}' &&
           inst?.gateId === 'accept-tickets-t42' &&
           inst.transportKind === 'http' &&
           inst.credentialMode === 'shared' &&
@@ -1416,26 +2000,65 @@ async function main() {
       );
       checkToolCallAgainstRegistry('tickets-propose-turn2', d2);
       const proposedWorker = shared.WorkerWorkerDefinitionContentSchema.safeParse(worker);
-      check('tickets-propose-turn2-worker', proposedWorker.success, proposedWorker.success ? '' : JSON.stringify(proposedWorker.error.issues));
+      check(
+        'tickets-propose-turn2-worker',
+        proposedWorker.success,
+        proposedWorker.success ? '' : JSON.stringify(proposedWorker.error.issues),
+      );
       historyD = [
         ...historyD,
         call('d2', 'propose_admin_proposal', d2?.args ?? {}),
-        result('d2', wireResult('tickets-propose-turn2', 'propose_admin_proposal', agentProposalWire('pr-1', d2?.args, 'proposed'))),
+        result(
+          'd2',
+          wireResult(
+            'tickets-propose-turn2',
+            'propose_admin_proposal',
+            agentProposalWire('pr-1', d2?.args, 'proposed'),
+          ),
+        ),
       ];
       const d3 = textOf((await post(historyD, false, { tools: toolsD })).json);
-      check('tickets-propose-turn3', d3 === 'TICKETS_PROPOSAL_ID=pr-1 TICKETS_PROPOSAL_STATUS=proposed TICKETS_ADDRESS_WITHHELD=yes TICKETS_TOOLS=ok', d3);
-      const notTarget = textOf(
-        (await post([askD, call('n2', 'agent_list_proposal_targets', {}), result('n2', { targetWorkspaceIds: ['other'] })], false, { tools: toolsD })).json,
+      check(
+        'tickets-propose-turn3',
+        d3 ===
+          'TICKETS_PROPOSAL_ID=pr-1 TICKETS_PROPOSAL_STATUS=proposed TICKETS_ADDRESS_WITHHELD=yes TICKETS_TOOLS=ok',
+        d3,
       );
-      check('tickets-propose-not-a-target', notTarget.startsWith('TICKETS_PROPOSAL_ID= ') && notTarget.includes('is not among the proposal targets (other)'), notTarget);
+      const notTarget = textOf(
+        (
+          await post(
+            [
+              askD,
+              call('n2', 'agent_list_proposal_targets', {}),
+              result('n2', { targetWorkspaceIds: ['other'] }),
+            ],
+            false,
+            { tools: toolsD },
+          )
+        ).json,
+      );
+      check(
+        'tickets-propose-not-a-target',
+        notTarget.startsWith('TICKETS_PROPOSAL_ID= ') &&
+          notTarget.includes('is not among the proposal targets (other)'),
+        notTarget,
+      );
 
       // Turn E: the agent reads its proposal back; the reply lists every key it got.
-      const askE = { role: 'user', content: '验收工单：查看提案进展 TICKETS_PROPOSAL_ID=22222222-3333-4444-8555-666666666666' };
+      const askE = {
+        role: 'user',
+        content: '验收工单：查看提案进展 TICKETS_PROPOSAL_ID=22222222-3333-4444-8555-666666666666',
+      };
       const toolsE = [fn('agent_get_admin_proposal')];
       let historyE = [...historyD, askE];
       const readBack = agentProposalWire('pr-1', d2?.args, 'applied');
       const e1 = toolCallOf((await post(historyE, false, { tools: toolsE })).json);
-      check('tickets-progress-turn1', e1?.name === 'agent_get_admin_proposal' && e1.args.proposalId === '22222222-3333-4444-8555-666666666666', JSON.stringify(e1));
+      check(
+        'tickets-progress-turn1',
+        e1?.name === 'agent_get_admin_proposal' &&
+          e1.args.proposalId === '22222222-3333-4444-8555-666666666666',
+        JSON.stringify(e1),
+      );
       checkToolCallAgainstRegistry('tickets-progress-turn1', e1);
       historyE = [
         ...historyE,
@@ -1455,7 +2078,8 @@ async function main() {
       const readKeys = [...keysOf(readBack)].sort();
       check(
         'tickets-progress-turn2',
-        e2 === `TICKETS_AGENT_STATUSES=workspace:applied,platform:applied TICKETS_AGENT_KEYS=${readKeys.join('|')} TICKETS_TOOLS=ok` &&
+        e2 ===
+          `TICKETS_AGENT_STATUSES=workspace:applied,platform:applied TICKETS_AGENT_KEYS=${readKeys.join('|')} TICKETS_TOOLS=ok` &&
           readKeys.includes('addressWithheld') &&
           !readKeys.includes('target') &&
           !readKeys.includes('manifestSource'),
@@ -1477,7 +2101,9 @@ async function main() {
       );
       check(
         'docker-restart-stream',
-        sse.includes('"name":"docker_container_restart"') && sse.includes('xyz789') && sse.includes('data: [DONE]'),
+        sse.includes('"name":"docker_container_restart"') &&
+          sse.includes('xyz789') &&
+          sse.includes('data: [DONE]'),
         sse.slice(0, 400),
       );
     }
@@ -1497,18 +2123,26 @@ async function main() {
     //    OpenAI-compatible upstream would — this is the exact failure mode §3.1 documents.
     {
       const tools = [{ type: 'function', function: { name: 'bad_tool', parameters: null } }];
-      const { status, json } = await post([{ role: 'user', content: 'hello there' }], false, { tools });
+      const { status, json } = await post([{ role: 'user', content: 'hello there' }], false, {
+        tools,
+      });
       check(
         'invalid-tool-schema-null-rejected',
-        status === 400 && json.error?.code === 'invalid_function_parameters' && json.error.message.includes('bad_tool'),
+        status === 400 &&
+          json.error?.code === 'invalid_function_parameters' &&
+          json.error.message.includes('bad_tool'),
         JSON.stringify({ status, json }),
       );
     }
     // 9a. Same rejection for a non-object top-level schema (e.g. a Gatekeeper Operation whose
     //     params_schema never got normalized to `type: "object"` — the exact §3.1 shape).
     {
-      const tools = [{ type: 'function', function: { name: 'other_tool', parameters: { type: 'string' } } }];
-      const { status, json } = await post([{ role: 'user', content: 'hello there' }], false, { tools });
+      const tools = [
+        { type: 'function', function: { name: 'other_tool', parameters: { type: 'string' } } },
+      ];
+      const { status, json } = await post([{ role: 'user', content: 'hello there' }], false, {
+        tools,
+      });
       check(
         'invalid-tool-schema-non-object-rejected',
         status === 400 && json.error?.code === 'invalid_function_parameters',
@@ -1518,9 +2152,14 @@ async function main() {
     // 9b. A well-formed `tools` array never trips the check — plain echo still goes through.
     {
       const tools = [
-        { type: 'function', function: { name: 'good_tool', parameters: { type: 'object', properties: {} } } },
+        {
+          type: 'function',
+          function: { name: 'good_tool', parameters: { type: 'object', properties: {} } },
+        },
       ];
-      const { status, json } = await post([{ role: 'user', content: 'hello there' }], false, { tools });
+      const { status, json } = await post([{ role: 'user', content: 'hello there' }], false, {
+        tools,
+      });
       check(
         'valid-tool-schema-not-rejected',
         status === 200 && json.choices[0].message.content === 'echo: hello there',

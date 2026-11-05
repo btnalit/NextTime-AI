@@ -283,6 +283,23 @@ function blockerText(
         `${subject}：它要改的设置对本工作区里的这个 Operation 不成立（例如系统自己定死的字段）。只能拒绝，或请平台管理员改过后重新提议。`,
         `${subject}: what it sets does not make a valid revision of this Operation here (such as a field the system itself fixes). Reject it, or ask a platform administrator to revise and propose it again.`,
       );
+    case 'worker_system_not_connected': {
+      const system = blocker.connector ?? '';
+      return blocker.gateAvailability === 'can_enable'
+        ? t(
+            `${subject}：它要用的系统 ${system} 平台已经提供，本工作区还没启用。可以在下面直接启用，启用后会重新检查。`,
+            `${subject}: the platform offers the system it acts on (${system}), but this workspace has not enabled it. Enable it below; the review is checked again afterwards.`,
+          )
+        : platformPartPending
+          ? t(
+              `${subject}：它要用的系统 ${system} 由这份提案的平台部分新建，要等平台管理员应用平台部分并启用这个系统，之后才能在这里启用。`,
+              `${subject}: the system it acts on (${system}) is the one this proposal’s platform part creates; a platform administrator has to apply that part and enable the system before it can be enabled here.`,
+            )
+          : t(
+              `${subject}：它要用的系统 ${system} 平台还没有提供给工作区，需要平台管理员先提供。`,
+              `${subject}: the platform does not offer the system it acts on (${system}) to workspaces yet; a platform administrator has to offer it first.`,
+            );
+    }
   }
 }
 
@@ -1151,6 +1168,32 @@ function BlockerLine({
             />
           </span>
         ) : null
+      ) : null}
+      {blocker.reason === 'worker_system_not_connected' &&
+      blocker.gateAvailability === 'can_enable' &&
+      (blocker.offered ?? []).length > 0 ? (
+        can('enable_gate_instance') !== false ? (
+          <span className="row-wrap">
+            {(blocker.offered ?? []).map((offer) => (
+              <EnableGateConfirm
+                key={offer.gateId}
+                http={http}
+                gateId={offer.gateId}
+                gateDisplayName={offer.displayName}
+                platformAdmin={platformAdmin}
+                onEnabled={onEnabled}
+                testId={`catalog-proposal-blocker-${blocker.ordinal}-enable-${offer.gateId}`}
+              />
+            ))}
+          </span>
+        ) : null
+      ) : null}
+      {blocker.reason === 'worker_system_not_connected' &&
+      blocker.gateAvailability !== 'can_enable' &&
+      platformAdmin ? (
+        <RouteLink href={hrefs.platformIntegrations()}>
+          {t('去「平台 · 集成」', 'Open Platform · Integrations')}
+        </RouteLink>
       ) : null}
       {blocker.reason === 'gate_not_enabled' &&
       blocker.gateAvailability !== 'can_enable' &&
