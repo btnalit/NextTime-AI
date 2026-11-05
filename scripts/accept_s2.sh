@@ -143,6 +143,11 @@ fi
 # (admin_agent_step, after step 9; only while the kernel has ADMIN_AGENT_ENABLED on) and its
 # cleanup (admin_agent_cleanup) — see that file's own header comment.
 . "$(dirname "$0")/lib/accept-s2-admin-agent.sh"
+# S11 AA5c: in that scenario's trial workspace, the admin agent connects the test ticket system,
+# drafts a ticket Worker and tries it once, the script playing the person in between
+# (admin_agent_tickets_step, right after admin_agent_step) and its cleanup
+# (admin_agent_tickets_cleanup) — see that file's own header comment.
+. "$(dirname "$0")/lib/accept-s2-admin-agent-tickets.sh"
 # --real only: a goal proposed from chat (#829), evaluation trials (#822) and one draft evaluation
 # (#833) under the real model — see that file's own header comment.
 . "$(dirname "$0")/lib/accept-s2-real-goal-eval.sh"
@@ -524,26 +529,9 @@ connections_step() {
 
   # S2.13 acceptance: "内核数据库任何表中不存在凭证明文" — the bearer token must appear nowhere in any
   # kernel DB table (audit_records payload, objects, connection_requests, ...).
-  tables=$(docker compose exec -T postgres psql -U nexttime -d nexttime -tAc \
-    "select tablename from pg_tables where schemaname='public'" </dev/null 2>/dev/null)
-  if [ -z "$tables" ]; then
-    fail "s213-no-token-leak" "could not list public tables via psql"
-  fi
-  sql="select count(*) from ("
-  first=1
-  for t in $tables; do
-    if [ "$first" -eq 1 ]; then first=0; else sql="$sql union all "; fi
-    sql="$sql select 1 from \"$t\" x where x::text ilike '%' || :'token' || '%'"
-  done
-  sql="$sql) accept_s2_leak_check"
-  # SQL goes in on stdin, not via -c: psql performs :'var' interpolation only on input it parses
-  # itself (stdin/-f), never on a -c string (verified on the host — -c fails with a syntax error at
-  # the colon, and the discarded stderr made this look like a real leak). The token is set by a
-  # `\set` line on the same stdin (R-34: never `-v token=…`, an argument any local user can read
-  # from /proc); it is 40 hex characters (checked above), so it needs no quoting there.
-  leak_count=$(printf '\\set token %s\n%s\n' "$ACCEPT_S2_API_TOKEN" "$sql" | docker compose exec -T postgres psql -U nexttime -d nexttime -tA 2>/dev/null | tail -1)
-  [ "$leak_count" = "0" ] || fail "s213-no-token-leak" "bearer token string found in $leak_count row(s) across kernel DB tables"
-  pass "s213-no-token-leak" "bearer token appears in 0 rows across all $(printf '%s\n' "$tables" | wc -l | tr -d ' ') public tables"
+  token_rows_in_kernel_db "$ACCEPT_S2_API_TOKEN" || fail "s213-no-token-leak" "$TOKEN_ROWS_ERROR"
+  [ "$TOKEN_ROWS" = "0" ] || fail "s213-no-token-leak" "bearer token string found in $TOKEN_ROWS row(s) across kernel DB tables"
+  pass "s213-no-token-leak" "bearer token appears in 0 rows across all $TOKEN_ROWS_TABLES public tables"
 
   # --- docker (already-deployed gatekeeper-docker; docs/runbooks/host-gatekeepers.md §10) ---
   # STATUS leftover 36 (S5.5): gatekeeper-docker announces itself to the platform catalog (P-B1,
@@ -1439,8 +1427,10 @@ cleanup_step() {
   # AgentProfile still naming the fake model S13 set (goal_cleanup_planner_model).
   goal_cleanup_live_work
   goal_cleanup_planner_model
-  # The admin agent scenario's administrator, session and workspaces, --keep or not: a console
-  # session and a platform administrator are not fixtures (admin_agent_cleanup).
+  # The admin agent scenarios' administrator, session and workspaces, --keep or not: a console
+  # session and a platform administrator are not fixtures (admin_agent_cleanup); before it, the
+  # ticket journey's Task if one is still running (admin_agent_tickets_cleanup).
+  admin_agent_tickets_cleanup
   admin_agent_cleanup
   if [ "$KEEP" -eq 1 ]; then
     echo "cleanup: --keep set, leaving accept-s2 fixtures/gates/workspace up"
@@ -1488,6 +1478,36 @@ cleanup_step() {
 # --------------------------------------------------------------------------------------------
 
 REAL_SUMMARY=""
+
+# token_rows_in_kernel_db <token>: how many rows of the kernel database's public tables hold
+# <token> anywhere in their text (S2.13 "内核数据库任何表中不存在凭证明文"; also the AA5c ticket
+# journey's credential check). Sets TOKEN_ROWS and TOKEN_ROWS_TABLES (how many tables were
+# searched); returns 1 with TOKEN_ROWS_ERROR set when the tables cannot be listed. <token> must be
+# hex (every caller's is 40 hex characters), so it needs no quoting on psql's `\set` line.
+token_rows_in_kernel_db() {
+  TOKEN_ROWS=""
+  TOKEN_ROWS_ERROR=""
+  tables=$(docker compose exec -T postgres psql -U nexttime -d nexttime -tAc \
+    "select tablename from pg_tables where schemaname='public'" </dev/null 2>/dev/null)
+  if [ -z "$tables" ]; then
+    TOKEN_ROWS_ERROR="could not list public tables via psql"
+    return 1
+  fi
+  TOKEN_ROWS_TABLES=$(printf '%s\n' "$tables" | wc -l | tr -d ' ')
+  sql="select count(*) from ("
+  first=1
+  for t in $tables; do
+    if [ "$first" -eq 1 ]; then first=0; else sql="$sql union all "; fi
+    sql="$sql select 1 from \"$t\" x where x::text ilike '%' || :'token' || '%'"
+  done
+  sql="$sql) accept_s2_leak_check"
+  # SQL goes in on stdin, not via -c: psql performs :'var' interpolation only on input it parses
+  # itself (stdin/-f), never on a -c string (verified on the host — -c fails with a syntax error at
+  # the colon, and the discarded stderr made this look like a real leak). The token is set by a
+  # `\set` line on the same stdin (R-34: never `-v token=…`, an argument any local user can read
+  # from /proc).
+  TOKEN_ROWS=$(printf '\\set token %s\n%s\n' "$1" "$sql" | docker compose exec -T postgres psql -U nexttime -d nexttime -tA 2>/dev/null | tail -1)
+}
 
 # psql_ws <sql>: one scalar for this workspace (the SQL references $WORKSPACE_ID itself).
 psql_ws() {
@@ -2056,6 +2076,7 @@ else
   step8_mcp_connect
   step9_goal_from_chat
   admin_agent_step
+  admin_agent_tickets_step
   goal_scenarios_step
   cleanup_step
 fi
