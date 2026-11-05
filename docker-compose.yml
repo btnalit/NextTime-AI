@@ -1201,10 +1201,18 @@ services:
   # already refuses to start with an empty/missing token (see that file's own header comment), so
   # an accidental `docker compose --profile accept-s2 up` without the token set fails loudly
   # inside the container instead, not at compose-parse time for every other command.
+  # S11 AA5c: it also serves a test ticket system under `/tickets` (its own OpenAPI document at
+  # `/tickets/openapi.json`) for the admin agent journey. ACCEPT_S2_TICKETS_PROD_TOKEN is the
+  # second credential that journey gives the production workspace's connection, so a ticket says
+  # which connection opened it; empty means only ACCEPT_S2_API_TOKEN is accepted.
   accept-s2-openapi:
     build: { context: ., dockerfile: deploy/accept-s2/openapi-fixture/Dockerfile }
     profiles: ["accept-s2"]
-    environment: { ACCEPT_S2_API_TOKEN: "${ACCEPT_S2_API_TOKEN:-}" }
+    environment:
+      {
+        ACCEPT_S2_API_TOKEN: "${ACCEPT_S2_API_TOKEN:-}",
+        ACCEPT_S2_TICKETS_PROD_TOKEN: "${ACCEPT_S2_TICKETS_PROD_TOKEN:-}",
+      }
     networks: [control]
     restart: "no"
 
