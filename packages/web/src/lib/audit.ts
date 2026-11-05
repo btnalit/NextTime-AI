@@ -288,6 +288,26 @@ export function isReadAuditAction(action: string): boolean {
   return capability !== undefined && !capabilityHasSideEffects(capability);
 }
 
+/** Legacy 628: what an audit row says about a refused call — non-null iff the writer recorded
+ *  `payload.outcome: 'refused'` (a refused dispatched call does, with `refusal: {code, status,
+ *  …}`; `evaluation.seal_hold_refused` does with no code). Not every withholding writer says
+ *  `refused`: `evaluation.content_withheld` records `'withheld'`, and its label already says the
+ *  content was withheld, so it is not marked again.
+ *  `code` is `payload.refusal.code` when it is a non-empty string, null otherwise. */
+export function auditRefusal(
+  payload: Readonly<Record<string, unknown>> | null | undefined,
+): { readonly code: string | null } | null {
+  if (typeof payload !== 'object' || payload === null || payload.outcome !== 'refused') {
+    return null;
+  }
+  const refusal = payload.refusal;
+  const code =
+    typeof refusal === 'object' && refusal !== null && !Array.isArray(refusal)
+      ? (refusal as Readonly<Record<string, unknown>>).code
+      : undefined;
+  return { code: typeof code === 'string' && code !== '' ? code : null };
+}
+
 /** Every workspace-scope capability name from `CAPABILITY_REGISTRY` (a dispatched call is
  *  audited under its own name) plus the lifecycle actions above, deduplicated and sorted — the
  *  action selector's suggestion list (§5.5 "action 用能力注册表做选择器"). */

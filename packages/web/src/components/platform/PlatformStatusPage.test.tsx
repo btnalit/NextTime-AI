@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { PlatformStatusWire } from '@nexttime/shared';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -196,6 +196,43 @@ describe('PlatformStatusPage', () => {
     expect(list.textContent).toContain('切换活动镜像');
     expect(list.textContent).not.toContain('set_active_runtime_image');
     expect(list.textContent).toContain('admin');
+  });
+
+  it('legacy 628: a refused recent change says 被拦下 with its code; a successful one does not', async () => {
+    const base = {
+      id: 'a-1',
+      action: 'set_active_runtime_image',
+      actorUserId: 'u-1',
+      actorLogin: 'admin',
+      resourceType: 'platform_settings',
+      resourceId: null,
+      payload: {},
+      createdAt: '2026-09-22T00:00:00.000Z',
+    };
+    const http = scriptedHttp({
+      platform_status: () =>
+        status({
+          recentAudit: [
+            base,
+            {
+              ...base,
+              id: 'a-2',
+              payload: { outcome: 'refused', refusal: { code: 'admin_agent_only', status: 403 } },
+            },
+            { ...base, id: 'a-3', payload: { outcome: 'refused' } },
+          ],
+        }),
+    });
+    renderPage(http);
+
+    await screen.findByTestId('status-audit-list');
+    const [ok, refused, noCode] = screen.getAllByTestId('status-audit-row');
+    if (!ok || !refused || !noCode) throw new Error('three rows');
+    expect(within(ok).queryByTestId('audit-refused')).toBeNull();
+    expect(within(refused).getByTestId('audit-refused').textContent).toBe('被拦下');
+    expect(within(refused).getByTestId('audit-refused-code').textContent).toBe('admin_agent_only');
+    expect(within(noCode).getByTestId('audit-refused')).toBeTruthy();
+    expect(within(noCode).queryByTestId('audit-refused-code')).toBeNull();
   });
 
   it('a load error shows ErrorBanner with retry', async () => {

@@ -528,6 +528,40 @@ describe('PlatformOverviewPage', () => {
     expect(audit.textContent).not.toContain('null');
   });
 
+  it('legacy 628: a refused recent change says 被拦下 with its code; a successful one does not', async () => {
+    const base = overview().recentAudit[0];
+    if (!base) throw new Error('fixture has a recent audit row');
+    const http = scriptedHttp({
+      platform_overview: () =>
+        overview({
+          recentAudit: [
+            base,
+            {
+              ...base,
+              id: 'audit-refused',
+              action: 'set_user_status',
+              payload: { outcome: 'refused', refusal: { code: 'admin_agent_only', status: 403 } },
+            },
+            { ...base, id: 'audit-refused-nocode', payload: { outcome: 'refused' } },
+          ],
+        }),
+      list_workspaces: () => ({ items: [] }),
+    });
+    renderPage(http);
+
+    await screen.findByTestId('platform-overview-audit');
+    const [ok, refused, noCode] = screen.getAllByTestId('platform-overview-audit-row');
+    if (!ok || !refused || !noCode) throw new Error('three rows');
+    expect(within(ok).queryByTestId('audit-refused')).toBeNull();
+    const chip = within(refused).getByTestId('audit-refused');
+    expect(chip.textContent).toBe('被拦下');
+    // No payload details on this card: the tooltip points to the full audit page.
+    expect(chip.getAttribute('title')).toContain('查看全部');
+    expect(within(refused).getByTestId('audit-refused-code').textContent).toBe('admin_agent_only');
+    expect(within(noCode).getByTestId('audit-refused')).toBeTruthy();
+    expect(within(noCode).queryByTestId('audit-refused-code')).toBeNull();
+  });
+
   it('shows BindApiKeyForm only when there are pending-activation users, and reloads on success', async () => {
     let calls = 0;
     const http = scriptedHttp({

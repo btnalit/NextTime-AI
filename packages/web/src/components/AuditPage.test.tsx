@@ -398,6 +398,66 @@ describe('AuditPage entry points', () => {
     expect(toggle?.checked).toBe(true);
   });
 
+  it('legacy 628: a refused call says 被拦下 with its code; a refused read stays shown while plain reads are hidden', async () => {
+    const http = scriptedHttp({
+      audit_query: () => ({
+        items: [
+          auditRow({ id: 'audit-ok', action: 'action_request.approve' }),
+          auditRow({
+            id: 'audit-refused-write',
+            action: 'assert_fact',
+            payload: { outcome: 'refused', refusal: { code: 'admin_agent_only', status: 403 } },
+          }),
+          auditRow({
+            id: 'audit-refused-read',
+            action: 'list_grants',
+            payload: { outcome: 'refused', refusal: { code: 'forbidden', status: 403 } },
+          }),
+          auditRow({ id: 'audit-read', action: 'search', payload: {} }),
+          auditRow({
+            id: 'audit-refused-nocode',
+            action: 'evaluation.seal_hold_refused',
+            payload: { outcome: 'refused', path: '/x' },
+          }),
+        ],
+      }),
+      list_principals: principalsPage,
+      list_gatekeepers: () => ({ items: [] }),
+    });
+    renderPage(http);
+
+    const list = await screen.findByTestId('audit-list');
+    const rows = within(list).getAllByTestId('audit-row');
+    const rowOf = (action: string) => {
+      const found = rows.find((row) =>
+        Array.from(row.querySelectorAll('.mono')).some((el) => el.textContent === action),
+      );
+      if (!found) throw new Error(`no row for ${action}`);
+      return found;
+    };
+    // The plain read is hidden and counted; the refused read is not.
+    expect(rows).toHaveLength(4);
+    expect(screen.getByTestId('audit-hidden-reads-note').textContent).toContain('1');
+    expect(() => rowOf('search')).toThrow();
+
+    expect(within(rowOf('action_request.approve')).queryByTestId('audit-refused')).toBeNull();
+    const write = rowOf('assert_fact');
+    expect(within(write).getByTestId('audit-refused').textContent).toBe('被拦下');
+    expect(within(write).getByTestId('audit-refused-code').textContent).toBe('admin_agent_only');
+    // UX P2-1 on #964: the chip and its code wrap as one group, in a title row that wraps; the
+    // tooltip names the section the reason is in.
+    const chip = within(write).getByTestId('audit-refused');
+    expect(chip.parentElement?.className).toBe('audit-refused');
+    expect(chip.parentElement?.parentElement?.classList.contains('audit-row-title')).toBe(true);
+    expect(chip.getAttribute('title')).toContain('「负载」');
+    expect(within(rowOf('list_grants')).getByTestId('audit-refused-code').textContent).toBe(
+      'forbidden',
+    );
+    const noCode = rowOf('evaluation.seal_hold_refused');
+    expect(within(noCode).getByTestId('audit-refused')).toBeTruthy();
+    expect(within(noCode).queryByTestId('audit-refused-code')).toBeNull();
+  });
+
   it('reads the entry from the hash when the route table does not pass one', async () => {
     window.location.hash = '#/govern/audit?nodeId=fact-1';
     const http = scriptedHttp({
