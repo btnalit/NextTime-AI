@@ -430,6 +430,51 @@ describe('AdminProposalsTab (能力目录 · 管理员提案, S11 AA4a)', () => 
     expect(screen.queryByTestId('catalog-proposal-blockers')).toBeNull();
   });
 
+  it('a proposed Worker naming its systems says which gates applying binds it to, and the ones the owner does not hold', async () => {
+    const bound = (held: boolean) =>
+      preview({
+        items: preview().items.map((item) =>
+          item.kind === 'worker_definition_version'
+            ? {
+                ...item,
+                newFamily: true,
+                before: null,
+                gates: [
+                  { id: 'gk-1', name: 'Docker prod' },
+                  { id: 'gk-2', name: 'Docker staging' },
+                ],
+                gateBinding: {
+                  systems: ['docker'],
+                  source: 'apply' as const,
+                  candidates: [
+                    { id: 'gk-1', name: 'Docker prod', connector: 'docker', held: true },
+                    { id: 'gk-2', name: 'Docker staging', connector: 'docker', held },
+                  ],
+                },
+              }
+            : item,
+        ),
+      });
+    for (const held of [true, false]) {
+      cleanup();
+      const http = scriptedHttp({
+        get_workspace: () => OWNER_WORKSPACE,
+        list_admin_proposal_segments: () => ({ items: [received()] }),
+        preview_admin_proposal_segment: () => bound(held),
+      });
+      renderTab(http, SEGMENT);
+      const gates = (await screen.findByTestId('catalog-proposal-item-2-gates')).textContent;
+      expect(gates).toContain(
+        '接入的系统：它要用 docker，应用时绑到本工作区的 Docker prod、Docker staging',
+      );
+      if (held) expect(gates).not.toContain('还没有授权');
+      else
+        expect(gates).toContain(
+          '其中 Docker staging 你还没有授权给自己：你运行它时，它用不了这些门，要先在「系统与授权」里授权',
+        );
+    }
+  });
+
   it('a system a proposed Worker names that is not connected here is enabled on the spot, each instance the platform offers', async () => {
     let enabled = false;
     const http = scriptedHttp({

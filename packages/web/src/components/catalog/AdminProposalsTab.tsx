@@ -9,6 +9,7 @@ import {
   type AdminProposalSegmentApplyResultWire,
   type AdminProposalSegmentPreviewWire,
   type AdminProposalSegmentStatus,
+  type AdminProposalWorkerGateBindingWire,
   type AvailableGateInstanceWire,
   type ChangePrincipalRefWire,
   type GateInstanceDriftField,
@@ -1212,6 +1213,39 @@ function BlockerLine({
   );
 }
 
+/** S11 AA5f: how applying binds a proposed Worker that names its systems and has no gates here
+ *  yet — to the gates it keeps (`gates`) of those systems; and the ones among them the person
+ *  previewing does not hold, which the Worker cannot use when they run it until they do (binding
+ *  grants nothing: 系统与授权 does). */
+function workerGateBindingText(
+  binding: AdminProposalWorkerGateBindingWire,
+  gates: readonly { readonly id: string; readonly name: string }[],
+  t: Translate,
+): string {
+  const systems = binding.systems.join(t('、', ', '));
+  if (gates.length === 0) {
+    return t(
+      `接入的系统：它要用 ${systems}，这次应用一个门都不绑`,
+      `Systems: it acts on ${systems}; this apply binds it to no gate`,
+    );
+  }
+  const names = gates.map((gate) => gate.name).join(t('、', ', '));
+  const kept = new Set(gates.map((gate) => gate.id));
+  const notHeld = binding.candidates
+    .filter((candidate) => kept.has(candidate.id) && !candidate.held)
+    .map((candidate) => candidate.name);
+  const bound = t(
+    `接入的系统：它要用 ${systems}，应用时绑到本工作区的 ${names}`,
+    `Systems: it acts on ${systems}; applying binds it to ${names} here`,
+  );
+  return notHeld.length === 0
+    ? bound
+    : t(
+        `${bound}。其中 ${notHeld.join('、')} 你还没有授权给自己：你运行它时，它用不了这些门，要先在「系统与授权」里授权`,
+        `${bound}. You do not hold ${notHeld.join(', ')}: when you run it, it cannot use them until you grant them to yourself on Systems & access`,
+      );
+}
+
 /** 「Skill docker-triage：新建」, 「Worker ops-runner：第 2 版 → 新的一版」 — what one item does to
  *  its family here. */
 function itemHeadline(item: AdminProposalPreviewItemWire, t: Translate): string {
@@ -1386,20 +1420,22 @@ function ItemChanges({
         </span>
       ) : null}
       <span className="text-3 text-small" data-testid={`${prefix}-gates`}>
-        {item.newFamily
-          ? t(
-              '接入的系统：新的 Worker 不接入任何系统；应用后在「Worker」页给它选',
-              'Systems: a new Worker is connected to none; pick some on the Workers tab afterwards',
-            )
-          : item.gates.length > 0
+        {item.gateBinding.source === 'apply'
+          ? workerGateBindingText(item.gateBinding, item.gates, t)
+          : item.newFamily
             ? t(
-                `接入的系统：沿用工作区为它选的 ${item.gates.map((gate) => gate.name).join('、')}`,
-                `Systems: keeps the ones the workspace chose, ${item.gates.map((gate) => gate.name).join(', ')}`,
+                '接入的系统：新的 Worker 不接入任何系统；应用后在「Worker」页给它选',
+                'Systems: a new Worker is connected to none; pick some on the Workers tab afterwards',
               )
-            : t(
-                '接入的系统：沿用工作区的设置，不接入任何系统',
-                'Systems: keeps the workspace’s setting, none',
-              )}
+            : item.gates.length > 0
+              ? t(
+                  `接入的系统：沿用工作区为它选的 ${item.gates.map((gate) => gate.name).join('、')}`,
+                  `Systems: keeps the ones the workspace chose, ${item.gates.map((gate) => gate.name).join(', ')}`,
+                )
+              : t(
+                  '接入的系统：沿用工作区的设置，不接入任何系统',
+                  'Systems: keeps the workspace’s setting, none',
+                )}
       </span>
       <details className="disclosure" data-testid={`${prefix}-content`}>
         <summary>{t('查看系统提示词', 'Show the system prompt')}</summary>
