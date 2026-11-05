@@ -181,6 +181,76 @@ describe.runIf(DATABASE_URL !== undefined)(
       return { caller: { channel: 'handle', claims }, sessionId: issued.sessionId };
     }
 
+    /** The administrator's own entry agent in the trial workspace: same Principal, an entry
+     *  session and Handle. */
+    async function entryAgent(): Promise<ResolvedCaller> {
+      const entrySession = await insertSession(trialWs, 'entry', adminPrincipalId);
+      const entryHandle = await inWs(trialWs, adminPrincipalId, (client) =>
+        issueHandle(client, {
+          sessionId: entrySession,
+          scope: entryScope(),
+          ttlSeconds: 600,
+          privateKey,
+        }),
+      );
+      return {
+        channel: 'handle',
+        claims: {
+          ws: entryHandle.workspaceId,
+          sid: entryHandle.sessionId,
+          obo: entryHandle.onBehalfOf,
+          scope: entryHandle.scope,
+          jti: entryHandle.jti,
+          iat: Math.floor(entryHandle.issuedAt.getTime() / 1000),
+          exp: Math.floor(entryHandle.expiresAt.getTime() / 1000),
+        } satisfies HandleClaims,
+      };
+    }
+
+    /** A running Turn of the administrator's in a new Chat of `agentKind` — an admin agent's under
+     *  `adminSessionId`, as `sendChatMessage` starts it (core 0052's `sessionKind` / `sessionId`). */
+    async function startRunningTurn(
+      agentKind: 'entry' | 'admin_agent',
+      adminSessionId?: string,
+    ): Promise<string> {
+      return inWs(trialWs, adminPrincipalId, async (client) => {
+        const chat = await client.query<{ id: string }>(
+          `insert into chats (workspace_id, owner_principal_id, agent_kind, visibility)
+           values ($1, $2, $3, 'private') returning id`,
+          [trialWs, adminPrincipalId, agentKind],
+        );
+        const turn = await startActivity(client, trialWs, {
+          kind: 'agent_turn',
+          chatId: chat.rows[0]?.id,
+          principalId: adminPrincipalId,
+          ...(adminSessionId === undefined
+            ? {}
+            : { metadata: { sessionKind: 'admin_agent', sessionId: adminSessionId } }),
+        });
+        return turn.id;
+      });
+    }
+
+    async function endTurn(turnId: string): Promise<void> {
+      await withAdminClient(pool, (client) =>
+        client.query(
+          `update activities set status = 'completed', ended_at = now()
+            where workspace_id = $1 and id = $2`,
+          [trialWs, turnId],
+        ),
+      );
+    }
+
+    async function taskTurn(taskId: string): Promise<string | null> {
+      const result = await withAdminClient(pool, (client) =>
+        client.query<{ created_by_activity_id: string | null }>(
+          'select created_by_activity_id from tasks where workspace_id = $1 and id = $2',
+          [trialWs, taskId],
+        ),
+      );
+      return result.rows[0]?.created_by_activity_id ?? null;
+    }
+
     function person(
       workspaceId: string,
       principalId: string,
@@ -502,27 +572,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       }
 
       // The person's own entry agent: same Principal, no admin agent session on its Task.
-      const entrySession = await insertSession(trialWs, 'entry', adminPrincipalId);
-      const entryHandle = await inWs(trialWs, adminPrincipalId, (client) =>
-        issueHandle(client, {
-          sessionId: entrySession,
-          scope: entryScope(),
-          ttlSeconds: 600,
-          privateKey,
-        }),
-      );
-      const entryCaller: ResolvedCaller = {
-        channel: 'handle',
-        claims: {
-          ws: entryHandle.workspaceId,
-          sid: entryHandle.sessionId,
-          obo: entryHandle.onBehalfOf,
-          scope: entryHandle.scope,
-          jti: entryHandle.jti,
-          iat: Math.floor(entryHandle.issuedAt.getTime() / 1000),
-          exp: Math.floor(entryHandle.expiresAt.getTime() / 1000),
-        } satisfies HandleClaims,
-      };
+      const entryCaller = await entryAgent();
       const byEntry = (await dispatchCapability({ pool }, entryCaller, 'invoke_worker', {
         definitionId: trialDefinitionId,
         version: 1,
@@ -532,6 +582,35 @@ describe.runIf(DATABASE_URL !== undefined)(
         taskId: byEntry.id,
       })) as Record<string, unknown>;
       expect(entryTask).not.toHaveProperty('adminAgentSessionId');
+    });
+
+    it('invoke_worker attributes the Task to the Turn that started it: an admin agent’s Task to its own running Turn, never to an entry Turn running beside it', async () => {
+      const { caller, sessionId } = await agent();
+      const entryCaller = await entryAgent();
+      const invoke = async (who: ResolvedCaller, ticket: string) =>
+        (
+          (await dispatchCapability({ pool }, who, 'invoke_worker', {
+            definitionId: trialDefinitionId,
+            version: 1,
+            input: { ticket },
+          })) as { id: string }
+        ).id;
+
+      // The admin Turn starts first, so the entry Turn is the person's most recent running one.
+      const adminTurn = await startRunningTurn('admin_agent', sessionId);
+      const entryTurn = await startRunningTurn('entry');
+      try {
+        expect(await taskTurn(await invoke(caller, 'T-attr-1'))).toBe(adminTurn);
+        expect(await taskTurn(await invoke(entryCaller, 'T-attr-2'))).toBe(entryTurn);
+
+        // No running Turn of its own: the admin agent's Task belongs to no Turn, even with the
+        // person's entry Turn still running.
+        await endTurn(adminTurn);
+        expect(await taskTurn(await invoke(caller, 'T-attr-3'))).toBeNull();
+      } finally {
+        await endTurn(adminTurn);
+        await endTurn(entryTurn);
+      }
     });
 
     it('a production workspace’s Worker or gate cannot be reached from the trial workspace, and a trial request cannot be completed from production', async () => {

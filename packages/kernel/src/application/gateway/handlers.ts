@@ -2106,8 +2106,17 @@ const invokeWorkerHandler: CapabilityHandler = async (_client, workspaceId, para
     ...ctx,
     principalId,
   });
+  // The Task belongs to the Turn that started it: an admin agent's own Turn under its session
+  // (S11 AA4c), never an entry Turn of the same person running beside it. So the Task's progress,
+  // and the approvals its Worker raises, land in the Chat they were asked from
+  // (application/linkage/chat-targets.ts `resolveTaskChat`).
   const attributedTurn = principalId
-    ? await findAttributableTurn(_client, { workspaceId, principalId, at: new Date() })
+    ? await findAttributableTurn(_client, {
+        workspaceId,
+        principalId,
+        at: new Date(),
+        ...(adminAgentSessionId === undefined ? {} : { adminSessionId: adminAgentSessionId }),
+      })
     : undefined;
   const turnId = attributedTurn?.wasRunning ? attributedTurn.id : undefined;
   const input = params as InvokeWorkerInput;
