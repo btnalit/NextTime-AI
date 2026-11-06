@@ -21,8 +21,10 @@
 --     proposal segment records one that exists, is addressed to this workspace, is still `proposed`
 --     (the installing transaction moves it to `applied` right after, 0033's record guard checking
 --     `applied_segment_id`), whose proposal and proposer are the record's, and whose one item is a
---     `pack_install` of exactly this pack (`source_name`) and version (`source_version`) — so an
---     install cannot claim a proposal that asked for something else. `admin_proposal` records:
+--     `pack_install` of exactly this pack (`source_name`) and version (`source_version`), with the
+--     segment's content digest the record's `source_digest` (the kernel stores the pack version's
+--     digest as a pack install segment's, so an extra pack replaced under the same version number
+--     does not answer it) — so an install cannot claim a proposal that asked for something else. `admin_proposal` records:
 --     unchanged. A `pack` record naming none: unchanged (passes).
 --   * `admin_proposal_segments_item_kinds` (0034's, replaced): a workspace segment holds 0032's
 --     intents, as before, or a `pack_install` alone (I-G2) — one install answers it, one record; a
@@ -115,8 +117,9 @@ begin
   if jsonb_array_length(proposed.items) <> 1
      or proposed.items -> 0 ->> 'kind' is distinct from 'pack_install'
      or proposed.items -> 0 ->> 'pack' is distinct from new.source_name
-     or proposed.items -> 0 ->> 'version' is distinct from new.source_version then
-    raise exception 'change_segments: a pack install answers a proposal segment asking for this pack (%) at this version (%)',
+     or proposed.items -> 0 ->> 'version' is distinct from new.source_version
+     or proposed.content_digest is distinct from new.source_digest then
+    raise exception 'change_segments: a pack install answers a proposal segment asking for this pack (%) at this version (%) with this content',
       new.source_name, new.source_version;
   end if;
   return new;

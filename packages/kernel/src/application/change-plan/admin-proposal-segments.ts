@@ -273,7 +273,7 @@ export class AdminProposalPackMismatchError extends Error {
     super(
       asked === null
         ? `admin proposal segment ${segmentId} asks for no pack install: preview and apply it with preview_admin_proposal_segment / apply_admin_proposal_segment — nothing was installed`
-        : `admin proposal segment ${segmentId} asks for pack ${asked.pack} version ${asked.version}, not this install — nothing was installed`,
+        : `admin proposal segment ${segmentId} asks for pack ${asked.pack} version ${asked.version} with the content it had when proposed, not this install — nothing was installed`,
     );
     this.name = 'AdminProposalPackMismatchError';
     this.details = { pack: asked?.pack ?? null, version: asked?.version ?? null };
@@ -1213,8 +1213,8 @@ export interface OpenPackInstallSegment {
  * S11 AA5g-2 (docs/admin-agent-packs-design-2026-11-06.md D3): `install_pack` with
  * `adminProposalSegmentId`, before it installs — in the install's own transaction, as this
  * workspace's owner. The segment's row lock (so a withdrawal or another decision waits for the
- * install, and sees `applied`), then: it is proposed (409), it asks for exactly this pack and
- * version (409 {@link AdminProposalPackMismatchError}), and its proposer still lets their admin agent
+ * install, and sees `applied`), then: it is proposed (409), it asks for exactly this pack,
+ * version and content (409 {@link AdminProposalPackMismatchError}), and its proposer still lets their admin agent
  * propose here (409, governance 0036's guard refuses the `applied` edge too). Writes nothing; the
  * install then records the change naming it (governance 0040 checks the same against the row), and
  * {@link markPackInstallSegmentApplied} moves it.
@@ -1223,12 +1223,19 @@ export async function openPackInstallSegment(
   client: PoolClient,
   workspaceId: string,
   segmentId: string,
-  pack: { readonly name: string; readonly version: number },
+  pack: { readonly name: string; readonly version: number; readonly digest: string | null },
 ): Promise<OpenPackInstallSegment> {
   const row = await loadReceivedSegment(client, workspaceId, segmentId, { forUpdate: true });
   assertOpen(row);
   const asked = packInstallOf(row);
-  if (asked === null || asked.pack !== pack.name || asked.version !== pack.version) {
+  // The same name and version with other content (an extra pack replaced in place) is not what it
+  // asked for either: the segment's content digest is the version's digest it was proposed with.
+  if (
+    asked === null ||
+    asked.pack !== pack.name ||
+    asked.version !== pack.version ||
+    row.content_digest !== pack.digest
+  ) {
     throw new AdminProposalPackMismatchError(row.id, asked);
   }
   if (!(await targetStillChosen(client, row.proposal_id))) {

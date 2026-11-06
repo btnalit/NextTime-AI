@@ -405,6 +405,9 @@ export const installPackHandler: CapabilityHandler = async (
       : await openPackInstallSegment(client, workspaceId, input.adminProposalSegmentId, {
           name: input.name,
           version: input.version,
+          digest:
+            registry.get(input.name)?.versions.find((v) => v.version === input.version)?.digest ??
+            null,
         });
   const installed = await installPack(client, workspaceId, context.principalId, registry, {
     name: input.name,

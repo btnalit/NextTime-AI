@@ -182,12 +182,15 @@ export const proposePackInstallHandler: CapabilityHandler = async (
 ): Promise<CapabilityHandlerResult> => {
   const agent = adminAgentOf('propose_pack_install', ctx);
   const input = params as ProposePackInstallParams;
-  const entry = (await loadPackRegistry()).get(input.pack);
+  const registry = await loadPackRegistry();
+  const entry = registry.get(input.pack);
+  const latest = entry === undefined ? null : latestPackVersion(entry);
   const { proposal: header, checked } = checkPackInstallProposal(
     input,
-    entry === undefined
+    entry === undefined || latest === null
       ? null
-      : { name: entry.name, latestVersion: latestPackVersion(entry).version },
+      : { name: entry.name, latestVersion: latest.version, latestDigest: latest.digest },
+    new Set(registry.keys()),
   );
   const proposal = await proposeAdminProposal(
     client,

@@ -595,21 +595,26 @@ function AdminProposalSegmentDetail({
             label: t('提议时间', 'Proposed'),
             value: <span data-volatile="">{formatDateTime(segment.proposal.proposedAt)}</span>,
           },
-          {
-            key: 'source',
-            label: t('来源名', 'Source name'),
-            value: (
-              <span
-                className="mono wrap-anywhere"
-                title={t(
-                  '新建的 Skill 和 Worker 以它命名',
-                  'New Skills and Workers are named under it',
-                )}
-              >
-                {segment.proposal.sourceName}
-              </span>
-            ),
-          },
+          // A pack install proposal derives nothing under its source name (S11 AA5g): not shown.
+          ...(packInstallOf(segment) === null
+            ? [
+                {
+                  key: 'source',
+                  label: t('来源名', 'Source name'),
+                  value: (
+                    <span
+                      className="mono wrap-anywhere"
+                      title={t(
+                        '新建的 Skill 和 Worker 以它命名',
+                        'New Skills and Workers are named under it',
+                      )}
+                    >
+                      {segment.proposal.sourceName}
+                    </span>
+                  ),
+                },
+              ]
+            : []),
           ...(decision !== null
             ? [
                 {

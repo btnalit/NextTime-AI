@@ -1159,8 +1159,8 @@ export function InstallPack({
                   'This admin proposal was decided after you looked (rejected, withdrawn or applied), so nothing was installed.',
                 ),
                 admin_proposal_pack_mismatch: t(
-                  '在你查看之后，这个能力包有了新版本，和这份管理员提案请求的版本不一样了，所以什么也没有安装。可以拒绝这份提案，或在「能力包」页直接安装最新版本。',
-                  'A newer version of this pack appeared after you looked, so it is no longer the version this admin proposal asks for and nothing was installed. Reject the proposal, or install the latest version from Packs.',
+                  '这个能力包和这份管理员提案请求的已经不一样了（有了新版本，或同一个版本号下的内容被换过），所以什么也没有安装。可以拒绝这份提案，或在「能力包」页直接安装现在的版本。',
+                  'This pack is no longer what this admin proposal asks for (a newer version appeared, or the content under the same version number was replaced), so nothing was installed. Reject the proposal, or install the current version from Packs.',
                 ),
                 admin_proposal_target_no_longer_chosen: t(
                   '提议它的平台管理员刚把本工作区从管理员智能体的目标里去掉了，所以什么也没有安装。可以拒绝它，或请对方把本工作区重新加回目标。',

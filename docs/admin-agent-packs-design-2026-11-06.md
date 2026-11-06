@@ -14,7 +14,13 @@
 | 2 | 目标只剩一个；审计里 `set_admin_agent_targets` 17:05–17:08 改了三次，记录方「本管理员 / self」 | **不是缺陷，归属正确。** `platform_state_audit` 的 `actor: 'self'` 意思是「这个智能体所属的管理员本人」（`actorOf`：`actorUserId === selfUserId`），不是智能体。`set_admin_agent_targets` 是 human 通道、平台面的能力，不在管理员智能体上限里，智能体调不到；三行都是维护者本人在控制台「管理员智能体 → 选择目标工作区」里保存的（时间与维护者 11-06 17:02Z 起做控制台核对吻合）。每行审计带 `added` / `removed`，维护者在「平台 · 审计」按动作筛 `set_admin_agent_targets` 就能看到第二个工作区是哪一次去掉的，或者从来没加过。顺带：目标对话框按「整张列表替换」保存，若在保存后状态还没刷新时又打开对话框再保存，会用旧列表覆盖（窗口只有一次请求的时长，三次保存间隔 26 秒和 2.5 分钟，不像是这个原因；协调定为遗留 648，P3，控制台，修法：版本号 / ETag 或改成增量 add / remove）。 | `kernel/src/application/admin-agent/platform-state.ts` `actorOf`、`targets.ts`、`web/.../AdminAgentTargetsDialog.tsx` |
 | 3 | 读不到目标工作区的内容 | **按设计如此，不改。** F5 与协调 2026-11-02 的决定：提案的意图与工作区无关，由目标工作区自己的干跑解析；智能体只读得到段的状态。平台面也没有读工作区内容的 RLS 策略（skill / worker / ontology 版本表都没有 `*_platform_admin` 策略）。给智能体开跨工作区的内容读，等于在平台面开一个所有工作区都没有的口子。能力包场景真正需要的只是「目标装没装、装的哪版」，见 §4 D5，推迟。 | 0032 / 0033 迁移头注释、`admin-proposal-segments.ts` 模块注释 |
 
-缺口 2 的措辞问题：`platform_state_audit` 的描述只说 "whether this administrator, another administrator or nobody recorded made it"，模型把 `self` 译成「本管理员 / self」后又推断「可能是我自己的改动」。第一片顺带把描述改成明确的「`self` = 你的管理员本人在控制台做的；你自己改不了目标」。
+缺口 2 的措辞问题：`platform_state_audit` 的描述只说 "whether this administrator, another administrator or nobody recorded made it"，模型把 `self` 译成「本管理员 / self」后又推断「可能是我自己的改动」。
+
+#484 复核补正：`actorOf` 只比 user id（`platform-state.ts`）。智能体自己在平台面写的审计行，`actor_user_id` 也是管理员本人，只是 payload 里带 `channel: 'handle'`（`platform-state.ts` 131–145 行）。今天这些行没有混进 `self`，只是因为智能体在平台面只有读，读被 `READ_ACTIONS` 滤掉了。这不是结构上的保证。所以描述照实写：
+
+> `self` = 你的管理员账号做的：管理员本人在控制台做的，以及经由你在平台面做的写（也记在管理员账号下）；今天你在平台面能做的都是读，这里不列；你改不了自己的目标。
+
+按 `channel` 拆出「你自己」作为结构保证，等智能体第一次有平台面写动作时再做。
 
 ## 2. 领域模型（只列本次涉及的）
 
@@ -31,16 +37,19 @@
 > 装包这件事的**内容来源**仍是包（`source_kind = 'pack'`，源摘要是包版本的摘要），由 owner 安装；
 > **为什么装**是一条溯源：这次安装应某个管理员提案段的建议（`admin_proposal_segment_id` 等 0033 已有的四列）。
 
-即「一个核心，两种来源」不变，只是 pack 来源的安装记录可以带一条「应谁的建议」。
+即「一个核心，两种来源」不变，只是 pack 来源的安装记录可以带一条「应谁的建议」。代码依据：`change-plan/engine.ts` 的 `itemOriginOf` 只对 `admin_proposal` 来源的条目记 `origin = 'agent'`，pack 来源的条目记 `human`，带不带提案溯源都一样。
+
+`agent_list_packs` 复用的 `PackWire` 只有来源类别（`source: 'builtin' | 'extra'`），没有附加包目录在主机上的路径。
 
 ## 3. 不变量
 
 - I-G1 智能体不能安装：装包只经 `install_pack`（human 通道、owner、`actsForPerson`）。新能力 `propose_pack_install` 只写提案。
 - I-G2 一个装包建议段只含一项 `pack_install`，不与内容意图混在一个段里；一个提案只建议一个包（每个目标一段）。数据库约束保证前者（段的 `items` 含 `pack_install` 时长度为 1）。
-- I-G3 一条 pack 来源的安装记录若带提案溯源，则该提案段存在、指向本工作区、状态为 `proposed`（在同一事务里转 `applied`）、其唯一一项的包名与版本等于记录的 `source_name` / `source_version`。数据库触发器保证（仿 0033 `change_segments_admin_proposal_guard`）。
+- I-G3 一条 pack 来源的安装记录若带提案溯源，则该提案段存在、指向本工作区、状态为 `proposed`（在同一事务里转 `applied`）、其唯一一项的包名与版本等于记录的 `source_name` / `source_version`，段的 `content_digest` 等于记录的 `source_digest`。数据库触发器保证（仿 0033 `change_segments_admin_proposal_guard`）。装包建议段的 `content_digest` 就是建议时那个包版本的摘要（`PackVersion.digest`，即这一版每次安装的源摘要）。
 - I-G4 一条安装记录最多回应一个提案段，一个提案段最多由一条记录回应（0033 已有唯一索引）。
 - I-G5 回滚这条安装记录，同一事务把提案段转 `rolled_back`（`rollback.ts` 已按 `segment.adminProposal` 处理，不区分来源，只要该列有值）。
-- I-G6 包版本以 owner 审阅时为准：建议的版本不是当前最新版时，不能按这个建议装（`install_pack` 本来就只装最新版并核对 `version`）。
+- I-G6 包版本以 owner 审阅时为准：建议的版本不是当前最新版时，不能按这个建议装（`install_pack` 本来就只装最新版并核对 `version`）。版本号相同但摘要不同（附加包目录里同一版本号被换了内容）也不能按这条建议装：内核在安装前比对，返回 409 `admin_proposal_pack_mismatch`，I-G3 的触发器再兜底。
+- I-G8 装包建议提案的 `source_name` 不表示「哪个包」。0032 把源名定义为提案新组件的命名空间（`derivePackComponentId(source_name, …)`），装包建议不派生任何组件，所以它的源名固定为 `pack-install`。包名和版本只放在段的那一项里。`checkAdminProposal` 的「源名不能是本部署自带包的名字」规则照旧，对它也成立：若部署真有一个叫 `pack-install` 的包，`propose_pack_install` 一律拒绝并说明。
 - I-G7 智能体对目标工作区仍只读得到段状态（F5 不变）。
 
 ## 4. 决定（每条：结论、理由、被否的替代）
@@ -52,7 +61,7 @@
 
 **D2 提：新增 `propose_pack_install`（`admin_proposal` 组，`adminAgentOnly`，handle，propose）。**
 参数：`pack`、`version`（智能体看到的最新版）、`targetWorkspaceIds`（1–20，必须都在已选目标里）、`title`、`description`（为什么装）。
-写一条管理员提案：`source_name = pack`、`origin = 'agent'`，每个目标一段，段的 `items = [{ kind: 'pack_install', pack, version }]`。复用提案的全部治理：每日限额、目标必须已选（`admin_proposal_target_not_chosen` 先查）、不可用目标一律同码拒绝、熔断（被同一目标频繁拒绝）、撤回、回读、平台面列表。
+写一条管理员提案：`source_name = 'pack-install'`（I-G8，#484 复核改；原稿写的 `source_name = pack` 与「源名不能是自带包名」的规则冲突）、`origin = 'agent'`，段的 `content_digest` 是包版本的摘要（I-G3），每个目标一段，段的 `items = [{ kind: 'pack_install', pack, version }]`。复用提案的全部治理：每日限额、目标必须已选（`admin_proposal_target_not_chosen` 先查）、不可用目标一律同码拒绝、熔断（被同一目标频繁拒绝）、撤回、回读、平台面列表。
 提案时校验：包在注册表里、版本是它的最新版、源名不与已有提案冲突的规则照旧。
 理由：显式的领域能力，工具描述短、模型不容易拼错（遗留 645 就是参数结构让模型首轮被拒）。
 否：在 `propose_admin_proposal` 里加第五种意图——要在一个段里禁止混用、apply 路径分叉，模型也更容易拼出被拒的组合。

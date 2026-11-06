@@ -220,6 +220,9 @@ export interface AdminProposalInput {
 export interface StoredWorkspaceSegment {
   readonly targetWorkspaceId: string;
   readonly items: readonly AdminProposalWorkspaceItemWire[];
+  /** S11 AA5g-2: a pack install segment's stored content digest — the digest of the pack version it
+   *  asks for. Absent for a segment of intents, whose digest is {@link adminProposalSegmentDigest}. */
+  readonly contentDigest?: string;
 }
 
 /** What {@link checkAdminProposal} returns: the segments as they will be stored. */
@@ -405,12 +408,24 @@ export interface PackInstallProposalInput {
   readonly description?: string;
 }
 
-/** What {@link checkPackInstallProposal} is told of a pack this deployment has: its name and its
- *  latest version (the gateway reads the registry; this module never does). */
+/** What {@link checkPackInstallProposal} is told of a pack this deployment has: its name, its
+ *  latest version and that version's digest (the gateway reads the registry; this module never
+ *  does). */
 export interface PackOnOffer {
   readonly name: string;
   readonly latestVersion: number;
+  /** `PackVersion.digest` of the latest version: the source digest of every install of it. */
+  readonly latestDigest: string;
 }
+
+/**
+ * S11 AA5g-2 (#484 on #1002, must-fix 1): the source name of every pack install proposal. A
+ * proposal's source name is the namespace its new Skills and Workers are derived under (0032), and
+ * one asking for a pack install derives none — so it never names the pack (that lives in its one
+ * `pack_install` item), and never a pack this deployment ships either: `checkAdminProposal`'s rule
+ * holds for it as for any proposal.
+ */
+export const PACK_INSTALL_PROPOSAL_SOURCE_NAME = 'pack-install';
 
 /**
  * S11 AA5g-2 (docs/admin-agent-packs-design-2026-11-06.md D2): `propose_pack_install` as the
@@ -424,6 +439,7 @@ export interface PackOnOffer {
 export function checkPackInstallProposal(
   input: PackInstallProposalInput,
   offered: PackOnOffer | null,
+  shippedPackNames: ReadonlySet<string>,
 ): { readonly proposal: AdminProposalInput; readonly checked: CheckedAdminProposal } {
   const text = { title: input.title, description: input.description };
   const credentials = findCredentialValues(text);
@@ -434,6 +450,12 @@ export function checkPackInstallProposal(
   if (redacted.length > 0) throw new RedactedTextSubmittedError(redacted[0] as string, redacted);
 
   const problems: AdminProposalProblem[] = [];
+  if (shippedPackNames.has(PACK_INSTALL_PROPOSAL_SOURCE_NAME)) {
+    problems.push({
+      path: 'pack',
+      message: `this deployment ships a pack named "${PACK_INSTALL_PROPOSAL_SOURCE_NAME}", the source name pack install proposals are kept under: ask a platform administrator`,
+    });
+  }
   if (offered === null) {
     problems.push({
       path: 'pack',
@@ -458,22 +480,29 @@ export function checkPackInstallProposal(
     }
   }
   if (problems.length > 0) throw new AdminProposalInvalidError(problems);
+  // #484 on #1002, must-fix 2: each segment's content digest is the digest of the pack version it
+  // asks for, so an install of the same version number with other content (an extra pack replaced
+  // in place) does not answer it (governance 0040 compares it with the install's source digest).
+  const packDigest = (offered as PackOnOffer).latestDigest;
   const segments: StoredWorkspaceSegment[] = input.targetWorkspaceIds.map((id) => ({
     targetWorkspaceId: id,
     items: [{ kind: 'pack_install', pack: input.pack, version: input.version }],
+    contentDigest: packDigest,
   }));
   return {
     proposal: {
       title: input.title,
       ...(input.description !== undefined ? { description: input.description } : {}),
-      sourceName: input.pack,
+      sourceName: PACK_INSTALL_PROPOSAL_SOURCE_NAME,
       segments: [],
     },
     checked: { segments, platform: null },
   };
 }
 
-/** `sha256:` of what a segment proposes: its target and its items. */
+/** `sha256:` of what a segment proposes: its target and its items. A pack install segment's own
+ *  digest is the pack version's ({@link StoredWorkspaceSegment.contentDigest}); this is what the
+ *  proposal's digest lists for it either way, so its target is in that digest too. */
 export function adminProposalSegmentDigest(segment: StoredWorkspaceSegment): string {
   return contentDigest({ targetWorkspaceId: segment.targetWorkspaceId, items: segment.items });
 }
@@ -696,7 +725,7 @@ export async function proposeAdminProposal(
         index + 1,
         segment.targetWorkspaceId,
         JSON.stringify(segment.items),
-        segmentDigests[index],
+        segment.contentDigest ?? segmentDigests[index],
       ],
     );
   }

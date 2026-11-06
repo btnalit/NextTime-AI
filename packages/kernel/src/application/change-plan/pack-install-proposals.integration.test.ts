@@ -100,6 +100,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     let publicKey: CryptoKey;
     let previousSwitch: string | undefined;
     let latest: number;
+    let latestDigest: string;
 
     async function newWorkspace(
       owner: UserRow,
@@ -228,6 +229,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const entry = (await loadPackRegistry()).get(PACK);
       if (entry === undefined) throw new Error(`no pack ${PACK} in this deployment`);
       latest = latestPackVersion(entry).version;
+      latestDigest = latestPackVersion(entry).digest;
     });
 
     afterAll(async () => {
@@ -248,7 +250,18 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(before.items.find((pack) => pack.name === PACK)?.status).toBe('not_installed');
 
       const proposal = await proposeInstall(agent, [a, b]);
-      expect(proposal).toMatchObject({ sourceName: PACK, origin: 'agent', status: 'proposed' });
+      // Its source name is pack install proposals' own, never the pack's (#484 on #1002): a source
+      // name is what new Skills and Workers are derived under, and this derives none.
+      expect(proposal).toMatchObject({
+        sourceName: 'pack-install',
+        origin: 'agent',
+        status: 'proposed',
+      });
+      // Each segment's content digest is the pack version's: the install's source digest answers it.
+      expect(proposal.segments.map((segment) => segment.contentDigest)).toEqual([
+        latestDigest,
+        latestDigest,
+      ]);
       expect(proposal.segments.map((segment) => segment.items)).toEqual([
         [{ kind: 'pack_install', pack: PACK, version: latest }],
         [{ kind: 'pack_install', pack: PACK, version: latest }],
@@ -446,7 +459,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       const row = head.rows[0];
       if (!row) throw new Error('no proposal');
-      const insert = (version: string, name = PACK, partial = false) =>
+      const insert = (version: string, name = PACK, partial = false, digest = latestDigest) =>
         withWorkspace(
           pool,
           { workspaceId: a.workspaceId, principalId: a.ownerPrincipalId },
@@ -456,7 +469,7 @@ describe.runIf(DATABASE_URL !== undefined)(
                  (workspace_id, plan_id, channel, source_kind, source_name, source_version,
                   source_digest, reviewed_digest, proposed_by, applied_by, admin_proposal_id,
                   admin_proposal_segment_id, proposed_by_user, proposer_display_name)
-               values ($1, gen_random_uuid(), 'human', 'pack', $2, $3, 'sha256:x', 'sha256:x',
+               values ($1, gen_random_uuid(), 'human', 'pack', $2, $3, $9, 'sha256:x',
                        $4, $4, $5, $6, $7, $8)`,
               [
                 a.workspaceId,
@@ -467,6 +480,7 @@ describe.runIf(DATABASE_URL !== undefined)(
                 segmentId,
                 row.proposed_by_user,
                 partial ? null : row.proposer_display_name,
+                digest,
               ],
             ),
         );
@@ -475,6 +489,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       await expect(insert(String(latest), 'ops-assets')).rejects.toThrow(
         /a pack install answers a proposal segment asking for this pack/,
+      );
+      // The same name and version with other content (an extra pack replaced in place).
+      await expect(insert(String(latest), PACK, false, `sha256:${'0'.repeat(64)}`)).rejects.toThrow(
+        /a pack install answers a proposal segment asking for this pack .* with this content/,
       );
       // A part of the proposal's provenance names no proposal it could be checked against.
       await expect(insert(String(latest), PACK, true)).rejects.toThrow(

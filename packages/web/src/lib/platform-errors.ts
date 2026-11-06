@@ -309,8 +309,8 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     en: 'This admin proposal asks to install a pack, which installs through the pack’s own install review, not as an ordinary proposal. Nothing was written. Use Install… on the proposal',
   },
   admin_proposal_pack_mismatch: {
-    zh: '这份管理员提案请求的是另一个能力包或另一个版本（能力包可能已经有了新版本），本次没有写入任何内容。可以拒绝它，或在「能力包」页安装最新版本',
-    en: 'This admin proposal asks for another pack or another version (the pack may have a newer version now) — nothing was written. Reject it, or install the latest version from Packs',
+    zh: '这份管理员提案请求的是另一个能力包、另一个版本，或这个版本当时的内容（能力包可能已经有了新版本，或内容被换过），本次没有写入任何内容。可以拒绝它，或在「能力包」页安装现在的版本',
+    en: 'This admin proposal asks for another pack, another version, or that version’s content as it was then (the pack may have a newer version or replaced content now) — nothing was written. Reject it, or install the current version from Packs',
   },
   platform_segment_not_applied: {
     zh: '这份管理员提案还有平台部分（例如新建一个门宿主实例），要等平台管理员先应用它；平台部分被拒绝或撤销后，这一部分就不能再应用了。本次没有写入任何内容',

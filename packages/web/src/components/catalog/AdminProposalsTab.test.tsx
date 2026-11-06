@@ -1230,7 +1230,7 @@ describe('AdminProposalsTab (能力目录 · 管理员提案, S11 AA4a)', () => 
 
 /** S11 AA5g-3: a segment asking this workspace to install a pack (`propose_pack_install`). */
 const PACK_ASK = received({
-  proposal: { ...received().proposal, title: '装上运维基础包', sourceName: 'ops-base' },
+  proposal: { ...received().proposal, title: '装上运维基础包', sourceName: 'pack-install' },
   items: [{ kind: 'pack_install', pack: 'ops-base', version: 2 }],
 });
 
@@ -1306,6 +1306,8 @@ describe('AdminProposalsTab — a proposal asking for a pack install (S11 AA5g-3
     expect(within(review).getByTestId('catalog-proposal-pack-ask').textContent).toMatch(
       /请求在本工作区安装能力包 ops-base 的 v2/,
     );
+    // Nothing is derived under its source name, so it is not shown.
+    expect(screen.getByTestId('catalog-proposal-detail').textContent).not.toContain('来源名');
     // Never the generic proposal review: that one is refused for a pack install.
     expect(named(http.calls, 'preview_admin_proposal_segment')).toEqual([]);
     expect(screen.queryByTestId('catalog-proposal-apply-trigger')).toBeNull();

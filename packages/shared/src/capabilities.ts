@@ -5361,7 +5361,7 @@ const platformStateCapabilities = [
     paramsSchema: noParams,
     resultSchema: wire.PlatformStateAuditWireSchema,
     description:
-      'The platform’s recent changes: among the newest platform audit rows of the last 168 hours (at most 1000 looked through; truncated says the window holds more), how many writes each action made, and the 20 newest writes — each its action, when, the kind of resource it changed and who made it: self is your administrator, the person you work for (in the console — never you: what you do is audited in your trial workspace, not here, and you cannot change your own targets), another_administrator another platform administrator, unattributed nobody recorded. Reads are left out; no params, resource id or login. Only an admin agent calls it.',
+      'The platform’s recent changes: among the newest platform audit rows of the last 168 hours (at most 1000 looked through; truncated says the window holds more), how many writes each action made, and the 20 newest writes — each its action, when, the kind of resource it changed and who made it: self is your administrator’s account, the person you work for — what they did in the console, and also any platform write made through you, which is recorded under their account too (today every platform call you can make is a read, left out here; you cannot change your own targets), another_administrator another platform administrator, unattributed nobody recorded. Reads are left out; no params, resource id or login. Only an admin agent calls it.',
   },
   {
     name: 'platform_state_runtime',
