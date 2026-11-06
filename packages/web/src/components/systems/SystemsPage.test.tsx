@@ -7,6 +7,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import type { GrantRow, PrincipalRow } from '../../lib/governance.js';
 import { HttpError } from '../../lib/http-client.js';
 import { governanceFields } from '../connect/governance-fixtures.test-helpers.js';
+import { comboboxOptionTexts, openCombobox } from '../kit/combobox.test-helpers.js';
 import { SystemsPage } from './SystemsPage.js';
 
 afterEach(cleanup);
@@ -592,6 +593,39 @@ describe('SystemsPage', () => {
     const grantDrawer = await screen.findByTestId('grant-gate-drawer');
     const form = within(grantDrawer).getByTestId('grant-gate-form');
     expect(within(form).getByTestId('ggf-locked-gate-chip').textContent).toContain('Docker prod');
+  });
+
+  it('host v0.63.0: the grant drawer marks the members who already hold this gate as 已授权, so nobody is granted twice', async () => {
+    const http = scriptedHttp({
+      execution_readiness: (params) =>
+        readiness({
+          principalId: (params as { principalId?: string }).principalId ?? 'p-self',
+          ready: true,
+          gates: [gate()],
+        }),
+      list_principals: () => ({
+        items: [principal(), principal({ id: 'p-self', displayName: 'Alice', role: 'owner' })],
+      }),
+      // Bob (p-2) holds this gate already.
+      list_grants: () => ({ items: [grant()] }),
+    });
+    renderPage(http);
+    const card = (await screen.findAllByTestId('gatekeeper-card')).find((el) =>
+      el.textContent?.includes('Docker prod'),
+    ) as HTMLElement;
+    await waitFor(() =>
+      expect(within(card).getByTestId('system-access-summary').textContent).toContain('Bob'),
+    );
+    fireEvent.click(within(card).getByTestId('gatekeeper-grant-button'));
+    const grantDrawer = await screen.findByTestId('grant-gate-drawer');
+    const member = within(grantDrawer).getByTestId('ggf-member');
+    openCombobox(member);
+    await waitFor(() => expect(comboboxOptionTexts(member)).toHaveLength(2));
+    expect(comboboxOptionTexts(member)).toContain('Bob成员 · 已授权');
+    expect(comboboxOptionTexts(member).some((text) => text.startsWith('Alice'))).toBe(true);
+    expect(
+      comboboxOptionTexts(member).some((text) => text.includes('Alice') && text.includes('已授权')),
+    ).toBe(false);
   });
 
   it('R-39: an operator grantee is marked as also an approver, and revoking says the approval right goes too', async () => {

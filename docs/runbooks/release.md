@@ -32,6 +32,9 @@
    tag（走 `--pull`，验签发布镜像），在一次性 runner 上从上一个发布版升上去并跑 S3→S1→S2→S4；需要真实模型回归时勾
    `real_model`（`staging-real-model` environment，仅 main 触发，不设人工审批，见 `staging-rehearsal.md` §4）。步骤、成本上限与它复现不了的东西见
    `docs/runbooks/staging-rehearsal.md`。预演绿了再按 §3 上生产主机。
+6. **主机升级按大版本攒着做（维护者 2026-11-06 定）**：发版不等于升主机，主机按大版本攒几版一次升（如 v0.50.0 → v0.63.0 一个窗口）。
+   只有主机升级前那一次预演要求 `from` = 主机当前版本、`to` = 要升到的 tag，按主机实际要走的路径跑一遍；日常预演
+   （功能 PR、发版后的例行预演）的 `from` 不限，取上一个发布版即可。这条是流程约定，CI 不强制检查。
 
 ## 2. 已知限制：release PR 不会自动触发 CI，合并前先手动踢一下
 
@@ -2481,6 +2484,29 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 
 - **发版说明可写**：`list_allowed_operations` 只在 Handle 持有 `request_action` 时列执行类 Operation。持有门、没有 `request_action` 的 Handle（例如没声明 `capabilities` 的 Worker）以前会拿到每次都 403 的执行类工具，现在不再列出，与 MCP 投影的规则一致；持有 `request_action` 的 Handle 列出的和以前一样。`propose_worker_definition` 的描述写清 worker 定义的字段、不写 `capabilities` 时的默认值、写了的列表会替换默认值、要请求动作必须显式列出 `request_action`。默认值不改：声明 `gates` 不隐式带上 `request_action`。
 - **主机升级步骤不变**。
+- **回滚**：只回滚代码。
+
+### 3.133 `propose_goal` 的描述写清验收放哪、路径是 JMESPath（#1000，遗留 645，0.63.0 之后的下一版）
+
+只改工具描述：没有迁移，不改 compose，没有新环境变量，线上契约 schema 不变（只改 `propose_goal` 的 description）。
+
+- **发版说明可写**：`propose_goal` 的描述先写清参数（`statement`、`budget`、可选 `idempotencyKey`，`plan` 与 `fromProcedure` 恰好一个）、验收放在 `plan.acceptance`（放顶层会被拒）、plan 里所有 path 都是 JMESPath（如 `state`、`data.items[0].id`，不是带 `$` 的 JSONPath）。校验行为不变，这两种写法本来就会被拒，现在模型事先就知道。
+- **主机升级步骤不变**。效果看下一次真实模型回归 goal 场景的首次被拒次数。
+- **回滚**：只回滚代码。
+
+### 3.134 切换工作区连不上平台时提供「刷新并进入」，`/ws` 认证记日志（#1003，遗留 649，0.63.0 之后的下一版）
+
+控制台与内核日志：没有迁移，不改 compose，没有新环境变量，线上契约不变。
+
+- **发版说明可写**：切换工作区时如果是传输层失败（`connection_closed`，平台并没有拒绝），提示不再自动消失，带「刷新页面并进入「X」」按钮，点了把 X 设为本标签页的工作区再刷新；内核拒绝（forbidden 等）不出这个按钮。内核 `/ws` 每次 authenticate 记一行结果（`success` / `refused` / `too_late` / `error`）和耗时，超时关闭、没认证就关闭的 socket 记关闭码与 `authenticated:false`；意外错误只记错误名和 SQLSTATE，不记 message。
+- **主机**：升级后可以用内核日志里 `"ws":"authenticate"` 的行复核切换问题。日志量随 `/ws` 连接数增加（每次认证、每次关闭各一行）。
+- **回滚**：只回滚代码。
+
+### 3.135 「系统与授权」授权时「成员」是可搜索的下拉框，已授权的成员不能再选（#997，遗留 646，0.63.0 之后的下一版）
+
+只改控制台：没有迁移，不改 compose，没有新环境变量，线上契约不变。
+
+- **发版说明可写**：授权抽屉里的「成员」就是一个可搜索的下拉框（点开看全部成员、输入缩小范围、点选或回车选中），内部服务主体不列出；门上已有有效授权的成员标「已授权」、不能再选（系统卡片和接入向导第 3 步都是）。删掉了必然 400 的「全部门（含未来新增）」。内核侧授权仍不去重（遗留 647）。
 - **回滚**：只回滚代码。
 
 ## 4. Hotfix 流程

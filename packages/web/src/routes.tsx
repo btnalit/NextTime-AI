@@ -9,10 +9,11 @@ import { useToast } from './components/ui/Toast.js';
 import { RouteAccessProvider, useCanOpen } from './hooks/useCanOpen.js';
 import { usePushToasts } from './hooks/usePushToasts.js';
 import type { MeResult, SessionResult, WireUser } from './lib/auth-api.js';
-import { errorToastText } from './lib/errors.js';
+import { describeError, errorToastText } from './lib/errors.js';
 import { type Translate, useT } from './lib/i18n.js';
 import { roleMayOpen } from './lib/route-access.js';
 import { type Route, hrefs, navigate, routeFromHash, sectionOf } from './lib/router.js';
+import { reloadIntoWorkspace } from './lib/session.js';
 import type { Session } from './session/types.js';
 import type { WorkspaceSwitchFailure } from './session/useSessionMachine.js';
 
@@ -204,12 +205,31 @@ function useWorkspaceSwitchFailureToast(
   useEffect(() => {
     if (!failure || failure.generation !== generation) return;
     const name = failure.workspaceName ?? failure.workspaceId;
+    // Legacy 649: the kernel never refused this one — the browser could not reach the platform
+    // (a page left open across an upgrade). Only a reload cures that, so the notice offers it,
+    // straight into the workspace asked for, and stays until it is used or dismissed.
+    const transport = describeError(failure.error).code === 'connection_closed';
     toast.push({
       tone: 'danger',
       key: 'workspace-switch-failed',
       title: t(`没能切换到工作区「${name}」`, `Could not switch to workspace "${name}"`),
-      description: `${t('仍在当前工作区。', 'You are still in the current workspace. ')}${errorToastText(failure.error, t)}`,
-      durationMs: 10_000,
+      // UX review of #1003: with the button there, "reload the page" would send the reader to F5,
+      // which lands back in the current workspace — the description points at the button instead.
+      description: transport
+        ? t(
+            '仍在当前工作区。和平台的连接断了，点下面的按钮刷新页面并直接进入它。',
+            'You are still in the current workspace. The connection to the platform closed — use the button below to reload straight into it.',
+          )
+        : `${t('仍在当前工作区。', 'You are still in the current workspace. ')}${errorToastText(failure.error, t)}`,
+      ...(transport
+        ? {
+            action: {
+              label: t(`刷新页面并进入「${name}」`, `Reload and open "${name}"`),
+              onClick: () => reloadIntoWorkspace(failure.workspaceId, failure.destination),
+            },
+            durationMs: 0,
+          }
+        : { durationMs: 10_000 }),
     });
   }, [failure?.seq]);
 }

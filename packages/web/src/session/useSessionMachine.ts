@@ -33,6 +33,8 @@ export interface WorkspaceSwitchFailure {
   readonly generation: number;
   readonly workspaceId: string;
   readonly workspaceName: string | undefined;
+  /** Where the switch would have landed (Legacy 649: a reload into the workspace lands there). */
+  readonly destination: string;
   readonly error: unknown;
 }
 
@@ -509,6 +511,7 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
             workspaceId,
             workspaceName: session.memberships.find((m) => m.workspaceId === workspaceId)
               ?.workspaceName,
+            destination,
             error: outcome.error,
           });
           void refreshMemberships();
