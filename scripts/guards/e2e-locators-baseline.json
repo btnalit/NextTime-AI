@@ -1,6 +1,7 @@
 {
   "packages/web/e2e/00-gates/screenshot.spec.ts": {
-    "row.getByTestId('chat-row-archive').click()": 1
+    "row.getByTestId('chat-row-archive').click()": 1,
+    "row.press('Enter')": 1
   },
   "packages/web/e2e/approval-failure-reason.spec.ts": {
     "page.getByTestId('approval-failure-reason-toggle').click()": 2
@@ -15,6 +16,7 @@
     "page.selectOption('#audit-resource-type', 'workspace')": 1
   },
   "packages/web/e2e/auth-helpers.ts": {
+    "apiKeySummary.click()": 1,
     "page.getByTestId('api-key-login-submit').click()": 1,
     "page.getByTestId('login-submit').click()": 1,
     "page.locator('#login-name').fill(login)": 1,
@@ -38,10 +40,12 @@
     "page.getByTestId('workers-new-draft').click()": 1,
     "procedure.getByTestId('procedure-add-step').click()": 1,
     "procedure.getByTestId('procedure-view-json').click()": 1,
+    "row.click()": 2,
     "worker.getByTestId('worker-view-json').click()": 1
   },
   "packages/web/e2e/chat-goal.spec.ts": {
     "card.getByTestId('goal-proposal-open').click()": 1,
+    "lines.nth(2).click()": 2,
     "open.click()": 1
   },
   "packages/web/e2e/chat.spec.ts": {
@@ -110,6 +114,7 @@
     "page.locator('#cp-current-password').fill(initialPassword)": 1,
     "page.locator('#cp-new-password').fill(changedPassword)": 1,
     "page.locator('#login-password').fill(changedPassword)": 1,
+    "row.click()": 2,
     "statusToggle.click()": 1,
     "switcher.selectOption(workspaceId as string)": 1,
     "tokenInput.fill(SHARED_TOKEN)": 1,

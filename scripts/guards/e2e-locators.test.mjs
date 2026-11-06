@@ -50,21 +50,62 @@ test('assertions on test ids are fine; only actions count', () => {
   assert.deepEqual(rules("await expect(page.getByTestId('summary')).toBeVisible();"), []);
 });
 
-test('L2: page-level selector actions are reported; keyboard presses are not', () => {
+test('L2: page-level selector actions are reported, page.press(sel, key) too; keyboard presses are not', () => {
   assert.deepEqual(
     rules(`
       await page.selectOption('#audit-resource-type', 'workspace');
       await page.click('text=OK');
+      await page.press('#q', 'Enter');
       await page.keyboard.press('Escape');
     `),
-    ["L2 page.selectOption('#audit-resource-type', 'workspace')", "L2 page.click('text=OK')"],
+    [
+      "L2 page.selectOption('#audit-resource-type', 'workspace')",
+      "L2 page.click('text=OK')",
+      "L2 page.press('#q', 'Enter')",
+    ],
   );
 });
 
-test('a target that cannot be traced (a parameter, an ambiguous name) is left alone', () => {
+test('hover, tap, dragTo and dispatchEvent are interactions too', () => {
+  assert.deepEqual(
+    rules(`
+      await page.getByTestId('a').hover();
+      await page.locator('.b').dragTo(page.getByRole('row', { name: 'x' }));
+      await page.getByRole('button', { name: '保存' }).dispatchEvent('click');
+    `),
+    [
+      "L1 page.getByTestId('a').hover()",
+      "L1 page.locator('.b').dragTo(page.getByRole('row', { name: 'x' }))",
+    ],
+  );
+});
+
+test("the same name declared in two tests resolves to each test's own declaration", () => {
+  assert.deepEqual(
+    rules(`
+      test('a', async () => {
+        const row = page.getByTestId('row-a');
+        await row.click();
+      });
+      test('b', async () => {
+        const row = page.getByRole('row', { name: 'b' });
+        await row.click();
+      });
+      const lines = page.getByTestId('lines');
+      test('c', async () => {
+        await lines.nth(2).click();
+      });
+    `),
+    ['L1 row.click()', 'L1 lines.nth(2).click()'],
+  );
+});
+
+test('a target that cannot be traced (a parameter, a shadowing parameter, a name declared twice in one scope) is left alone', () => {
   assert.deepEqual(
     rules(`
       async function pick(select) { await select.selectOption('a'); }
+      const row = page.getByTestId('row');
+      async function open(row) { await row.click(); }
       let x = page.getByTestId('a'); let x = page.getByRole('button');
       await x.click();
     `),

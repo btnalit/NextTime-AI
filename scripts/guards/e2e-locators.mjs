@@ -6,21 +6,27 @@
 // labelled 「成员」, which did not work. The test was green; the console was broken. So:
 //
 //   L1  the target of an interaction (click, dblclick, fill, type, press, pressSequentially,
-//       selectOption, check, uncheck, setChecked, setInputFiles, clear) must come from
+//       selectOption, check, uncheck, setChecked, setInputFiles, clear, hover, tap, dragTo,
+//       dispatchEvent) must come from
 //       getByRole / getByLabel / getByText / getByPlaceholder / getByAltText / getByTitle.
 //       getByTestId and CSS `locator()` may scope (`drawer.getByRole('combobox', { name: '成员' })`)
 //       and assert (`expect(row.getByTestId('x')).toBeVisible()`), never be the thing acted on.
 //   L2  no page-level selector actions (`page.click('#x')`, `page.fill(sel, …)`,
-//       `page.selectOption(sel, …)`): they bypass locators altogether.
+//       `page.press(sel, key)`, `page.selectOption(sel, …)`): they bypass locators altogether.
+//       (`page.keyboard.press(key)` is not one.)
 //
 // A control a test cannot reach by role or label has no accessible name — that is the defect to
-// fix in the console, not in the test. What this cannot see: a target passed in as a function
-// parameter or built across files is "unknown" and not reported (the reviewer's to catch).
+// fix in the console, not in the test. A variable is traced to its declaration in the nearest
+// enclosing scope (each test's own `const row = …`). What this cannot see: a target passed in as
+// a function parameter, built across files, or declared twice in one scope is "unknown" and not
+// reported (the reviewer's to catch).
 //
 // Existing violations are listed in scripts/guards/e2e-locators-baseline.json, by file and the
 // text of the call (not line numbers), and can only go away: a new one fails, and a listed one
 // that is gone fails until it is removed from the baseline (`--update-baseline` rewrites it from
-// the current code — only ever to shrink it; the diff shows if it grew).
+// the current code — only ever to shrink it; the diff shows if it grew). The key is the call's
+// text with whitespace collapsed, so editing a baselined call — or a formatter rewrapping it
+// differently — makes it a new violation: move it to role / label then, don't re-baseline it.
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -43,6 +49,10 @@ const ACTIONS = new Set([
   'setChecked',
   'setInputFiles',
   'clear',
+  'hover',
+  'tap',
+  'dragTo',
+  'dispatchEvent',
 ]);
 const VISIBLE = new Set([
   'getByRole',
@@ -60,18 +70,62 @@ function calleeName(call) {
   return ts.isPropertyAccessExpression(call.expression) ? call.expression.name.text : undefined;
 }
 
-/** Every `const|let name = <initializer>` in the file; a name declared twice is ambiguous. */
+function isScope(node) {
+  return (
+    ts.isSourceFile(node) ||
+    ts.isBlock(node) ||
+    ts.isCaseBlock(node) ||
+    ts.isModuleBlock(node) ||
+    ts.isForStatement(node) ||
+    ts.isForOfStatement(node) ||
+    ts.isForInStatement(node) ||
+    ts.isFunctionLike(node)
+  );
+}
+
+function enclosingScope(node) {
+  let scope = node.parent;
+  while (scope && !isScope(scope)) scope = scope.parent;
+  return scope;
+}
+
+/**
+ * Every `const|let|var name = <initializer>`, keyed by the scope that declares it (a block, a
+ * function, a `for`, the file): each `test()` body that writes its own `const row = …` gets its
+ * own entry. A name declared twice in one scope is ambiguous (null).
+ */
 function collectDeclarations(sourceFile) {
-  const declarations = new Map();
+  const scopes = new Map();
   const visit = (node) => {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      const scope = enclosingScope(node);
+      if (!scopes.has(scope)) scopes.set(scope, new Map());
+      const names = scopes.get(scope);
       const name = node.name.text;
-      declarations.set(name, declarations.has(name) ? null : node.initializer);
+      names.set(name, names.has(name) ? null : node.initializer);
     }
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
-  return declarations;
+  return scopes;
+}
+
+/** The initializer `identifier` refers to where it is used: the nearest scope that declares it.
+ *  A parameter of that name on the way up shadows anything outside it (unknown). */
+function resolve(identifier, scopes) {
+  const name = identifier.text;
+  for (let node = identifier.parent; node; node = node.parent) {
+    if (!isScope(node)) continue;
+    const declared = scopes.get(node)?.get(name);
+    if (declared !== undefined) return declared;
+    if (
+      ts.isFunctionLike(node) &&
+      node.parameters?.some((p) => ts.isIdentifier(p.name) && p.name.text === name)
+    ) {
+      return null;
+    }
+  }
+  return null;
 }
 
 /** 'visible' | 'hidden' | 'unknown' — how the locator `expr` was found. */
@@ -97,9 +151,9 @@ export function classify(expr, declarations, seen = new Set()) {
       return 'unknown';
     }
     if (ts.isIdentifier(node)) {
-      const initializer = declarations.get(node.text);
-      if (!initializer || seen.has(node.text)) return 'unknown';
-      seen.add(node.text);
+      const initializer = resolve(node, declarations);
+      if (!initializer || seen.has(initializer)) return 'unknown';
+      seen.add(initializer);
       node = initializer;
       continue;
     }
@@ -129,7 +183,7 @@ export function findViolations(fileName, sourceText) {
       if (ACTIONS.has(action)) {
         const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
         const text = node.getText(sourceFile).replace(/\s+/g, ' ');
-        if (isPageLike(target) && node.arguments.length > 0 && action !== 'press') {
+        if (isPageLike(target) && node.arguments.length > 0) {
           out.push({ rule: 'L2', text, line });
         } else if (classify(target, declarations) === 'hidden') {
           out.push({ rule: 'L1', text, line });
