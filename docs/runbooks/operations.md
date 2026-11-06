@@ -987,16 +987,18 @@ config/packs/
 ```
 mkdir -p ${NEXTTIME_DATA}/config/packs && cd ${NEXTTIME_DATA}/config/packs
 mkdir .incoming && tar --no-same-owner --no-same-permissions -xf /path/to/org-notes.tar -C .incoming
-test -z "$(find .incoming -type l)" || { echo '包里有符号链接，停下'; find .incoming -type l; }
-chmod -R a+rX .incoming                    # 内核以 uid 10001 读
-mv .incoming/org-notes ./org-notes         # 新包
-# 已有的包加一个新版本时改成：mv .incoming/org-notes/2 ./org-notes/2
+# 没有符号链接才往下走；内核以 uid 10001 读，所以要 chmod
+test -z "$(find .incoming -type l)" \
+  && chmod -R a+rX .incoming \
+  && mv .incoming/org-notes ./org-notes \
+  || { echo '包里有符号链接，或上面哪一步失败了：没有放进去'; find .incoming -type l; }
+# 已有的包加一个新版本时，把上面的 mv 换成：mv .incoming/org-notes/2 ./org-notes/2
 rm -r .incoming
 ```
 
 - `mkdir -p`：AA5d 之前装的主机原来没有 `config/packs/`；`apply-release.sh` 和 `host-env-init.sh` 都会建，这里再保底一次。
 - `--no-same-owner --no-same-permissions`：root 解 tar 默认保留包里的属主和权限；这里让文件归 root、只读给容器。
-- 符号链接：包里的文件必须是它自己的。第三行列出链接时就停下，不要 `mv`。内核也不读：附加包里的文件是链接或在链接下面，这个包整个丢掉（原因写「symbolic link」），因为链接会把内核能读到的别的文件（比如 `/run/secrets/` 下的）带进包里。
+- 符号链接：包里的文件必须是它自己的。有链接时那一段只打印链接，不会 `chmod` 和 `mv`；最后的 `rm -r` 把解开的东西清掉。内核也不读：附加包里的文件是链接或在链接下面，这个包整个丢掉（原因写「symbolic link」），因为链接会把内核能读到的别的文件（比如 `/run/secrets/` 下的）带进包里。
 
 **附加包有毛病，只丢它自己**：自带包有一条规则不过，整个注册表照旧拒绝加载（那是部署本身的 bug）；附加包不一样，
 违反任何一条，只把这个包丢掉，其余照常列出、安装、核验、提案和新建工作区。会被丢掉的情况：
