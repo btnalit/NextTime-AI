@@ -1606,3 +1606,27 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
     ).toBe('#/govern/catalog/workers/def-1%403');
   });
 });
+
+/** S11 AA5d-3: a pack this deployment adds is marked where it is listed and where it is read. */
+describe('PacksTab: packs this deployment adds', () => {
+  it('marks an extra pack in the list and says where it comes from in its detail', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_packs: () => ({
+        items: [pack(), pack({ name: 'ticket-desk', source: 'extra', summary: 'Ticket triage.' })],
+      }),
+    });
+    renderTab(http, 'ticket-desk');
+
+    await screen.findByTestId('catalog-pack-row-ticket-desk-extra');
+    expect(screen.getByTestId('catalog-pack-row-ticket-desk-extra').textContent).toBe('本部署附加');
+    expect(screen.queryByTestId('catalog-pack-row-ops-assets-extra')).toBeNull();
+    expect((await screen.findByTestId('catalog-pack-source')).textContent).toContain('本部署附加');
+
+    fireEvent.click(screen.getByTestId('catalog-pack-row-ops-assets'));
+    await waitFor(() =>
+      expect(screen.getByTestId('catalog-pack-title').textContent).toBe('ops-assets'),
+    );
+    expect(screen.getByTestId('catalog-pack-source').textContent).toBe('随平台附带');
+  });
+});

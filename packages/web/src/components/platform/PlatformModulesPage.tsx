@@ -10,6 +10,7 @@ import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { useToast } from '../ui/Toast.js';
+import { ExtraPacksSection } from './ExtraPacksSection.js';
 import { PlatformError } from './PlatformError.js';
 
 export interface PlatformModulesPageProps {
@@ -30,6 +31,9 @@ export interface PlatformModulesPageProps {
  * plane does not have. This page only counts and configures; `components/catalog/PacksTab.tsx`
  * (the owner's 能力目录 能力包 tab, S11 P1-C — a module is a pack with one ontology part) is where
  * a workspace actually installs one.
+ *
+ * S11 AA5d-3: below the modules, the packs this deployment adds (`ExtraPacksSection`) — never
+ * modules, so never in the table above.
  */
 export function PlatformModulesPage({ http }: PlatformModulesPageProps) {
   const t = useT();
@@ -174,6 +178,8 @@ export function PlatformModulesPage({ http }: PlatformModulesPageProps) {
           </table>
         </div>
       )}
+
+      <ExtraPacksSection http={http} />
     </div>
   );
 }

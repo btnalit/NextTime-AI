@@ -29,6 +29,7 @@ import { SkeletonRows } from '../../kit/skeleton.js';
 import { StatusChip } from '../../kit/status-chip.js';
 import { Textarea } from '../../kit/textarea.js';
 import { ChangeRecordBody } from './ChangeRecords.js';
+import { ExportPack } from './ExportPack.js';
 import { PlatformSegmentReview } from './PlatformSegmentReview.js';
 import { type PresetLabel, usePresetLabel } from './preset-labels.js';
 import { ADMIN_PROPOSAL_STALE_READS } from './stale-reads.js';
@@ -222,6 +223,8 @@ export function ProposalDetail({
             {workspaceParts.map((segment) => (
               <WorkspacePart
                 key={segment.id}
+                http={http}
+                proposal={proposal}
                 segment={segment}
                 platform={platform}
                 workspaces={workspaces}
@@ -537,10 +540,14 @@ function workspacePartText(
 }
 
 function WorkspacePart({
+  http,
+  proposal,
   segment,
   platform,
   workspaces,
 }: {
+  readonly http: CapabilityCaller;
+  readonly proposal: AdminProposalWire;
   readonly segment: AdminProposalSegmentWire;
   readonly platform: AdminProposalSegmentWire | null;
   readonly workspaces: WorkspaceRefs;
@@ -578,6 +585,13 @@ function WorkspacePart({
             : t('理由：', 'Reason: ')}
           {segment.reason}
         </span>
+      ) : null}
+      {segment.status === 'applied' ? (
+        // S11 AA5d-3: what it applied, as a pack other workspaces install (the kernel checks it
+        // is verified there now).
+        <div className="row-wrap">
+          <ExportPack http={http} proposal={proposal} segment={segment} testIdPrefix={prefix} />
+        </div>
       ) : null}
     </div>
   );
