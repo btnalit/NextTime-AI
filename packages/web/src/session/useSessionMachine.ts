@@ -33,7 +33,7 @@ export interface WorkspaceSwitchFailure {
   readonly generation: number;
   readonly workspaceId: string;
   readonly workspaceName: string | undefined;
-  /** Where the switch would have landed (Legacy 647: a reload into the workspace lands there). */
+  /** Where the switch would have landed (Legacy 649: a reload into the workspace lands there). */
   readonly destination: string;
   readonly error: unknown;
 }

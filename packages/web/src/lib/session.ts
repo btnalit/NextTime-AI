@@ -62,7 +62,7 @@ export function saveSelectedWorkspaceId(workspaceId: string): void {
   }
 }
 
-/** Legacy 647: a workspace switch that failed in transport — the browser could not reach the
+/** Legacy 649: a workspace switch that failed in transport — the browser could not reach the
  *  platform at all, which only a reload of the page cured — finishes by a reload into the workspace
  *  asked for: it becomes this tab's selected workspace (the boot flow opens it when it is still a
  *  membership, and picks another when not), the hash becomes the switch's own destination without

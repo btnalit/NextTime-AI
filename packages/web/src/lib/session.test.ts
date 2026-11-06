@@ -37,7 +37,7 @@ describe('selected workspace store (S4.1)', () => {
   });
 });
 
-describe('reloadIntoWorkspace (legacy 647)', () => {
+describe('reloadIntoWorkspace (legacy 649)', () => {
   it('selects the workspace, sets the destination without a hashchange, then reloads', () => {
     window.history.replaceState(null, '', '/#/platform/admin-agent');
     const onHashChange = vi.fn();

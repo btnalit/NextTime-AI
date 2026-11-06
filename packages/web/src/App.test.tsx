@@ -36,11 +36,11 @@ const authApi = vi.hoisted(() => ({
 /** R-64: workspaces whose WS `authenticate` the stub kernel refuses. */
 const wsStub = vi.hoisted(() => ({
   refusedWorkspaces: new Set<string>(),
-  /** Legacy 647: the next socket cannot reach the platform at all (`connect` fails). */
+  /** Legacy 649: the next socket cannot reach the platform at all (`connect` fails). */
   unreachable: false,
 }));
 
-/** Legacy 647: the reload a transport failure offers — stubbed, jsdom cannot navigate. */
+/** Legacy 649: the reload a transport failure offers — stubbed, jsdom cannot navigate. */
 const sessionLib = vi.hoisted(() => ({ reloadIntoWorkspace: vi.fn() }));
 
 vi.mock('./lib/session.js', async (importOriginal) => ({
@@ -245,7 +245,7 @@ describe('App: 我的账户', () => {
     expect(screen.queryByRole('button', { name: /刷新页面并进入/ })).toBeNull();
   });
 
-  it('legacy 647: a switch the browser cannot even send offers a reload into that workspace', async () => {
+  it('legacy 649: a switch the browser cannot even send offers a reload into that workspace', async () => {
     authApi.getMe.mockResolvedValue({
       user: CAROL,
       memberships: [

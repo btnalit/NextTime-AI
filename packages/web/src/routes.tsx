@@ -205,7 +205,7 @@ function useWorkspaceSwitchFailureToast(
   useEffect(() => {
     if (!failure || failure.generation !== generation) return;
     const name = failure.workspaceName ?? failure.workspaceId;
-    // Legacy 647: the kernel never refused this one — the browser could not reach the platform
+    // Legacy 649: the kernel never refused this one — the browser could not reach the platform
     // (a page left open across an upgrade). Only a reload cures that, so the notice offers it,
     // straight into the workspace asked for, and stays until it is used or dismissed.
     const transport = describeError(failure.error).code === 'connection_closed';

@@ -332,10 +332,10 @@ describe('/ws pre-auth limits (L1-16 / L5-12(b); fake pool, always runs)', () =>
     expect(frames).toEqual([]);
   });
 
-  // Legacy 647: a switch into a workspace failed on a host with nothing in the kernel log to say
+  // Legacy 649: a switch into a workspace failed on a host with nothing in the kernel log to say
   // whether the socket was refused, timed out, or never arrived. Every way an unauthenticated
   // socket ends is now logged, with how long its credential took.
-  it('logs the deadline close and the unauthenticated end of the socket (legacy 647)', async () => {
+  it('logs the deadline close and the unauthenticated end of the socket (legacy 649)', async () => {
     const { pool, connect, release } = createPreAuthPool(true);
     const logLines: Record<string, unknown>[] = [];
     const url = await listenWs(pool, 100, logLines);
@@ -360,7 +360,7 @@ describe('/ws pre-auth limits (L1-16 / L5-12(b); fake pool, always runs)', () =>
     expect(typeof tooLate?.durationMs).toBe('number');
   });
 
-  it('logs a successful authenticate with its workspace and duration (legacy 647)', async () => {
+  it('logs a successful authenticate with its workspace and duration (legacy 649)', async () => {
     const { pool } = createPreAuthPool();
     const logLines: Record<string, unknown>[] = [];
     const url = await listenWs(pool, 60_000, logLines);
@@ -378,7 +378,7 @@ describe('/ws pre-auth limits (L1-16 / L5-12(b); fake pool, always runs)', () =>
     ws.close();
   });
 
-  it('logs a refused authenticate with its code, and a failure to resolve as an error (legacy 647)', async () => {
+  it('logs a refused authenticate with its code, and a failure to resolve as an error (legacy 649)', async () => {
     const logLines: Record<string, unknown>[] = [];
     const broken: PoolLike = {
       connect: async () => {

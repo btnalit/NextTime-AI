@@ -219,7 +219,7 @@ function callLogger(
   };
 }
 
-/** Legacy 647: what a log line may say about an unexpected error — its name and, for a database
+/** Legacy 649: what a log line may say about an unexpected error — its name and, for a database
  *  error, its SQLSTATE. Never the message, which can quote a credential-bearing value. */
 function errorFields(err: unknown): { errorName: string; sqlState?: string } {
   const errorName = err instanceof Error ? err.name : typeof err;
@@ -551,7 +551,7 @@ function handleConnection(
   socket.once('close', (code: number, reason: Buffer) => {
     clearTimeout(authTimer);
     dropSubscriptions(state);
-    // Legacy 647: how a socket ended, and whether it ever had a caller — a socket that closes
+    // Legacy 649: how a socket ended, and whether it ever had a caller — a socket that closes
     // unauthenticated is what the console reports as `connection_closed`.
     request.log.info({
       ws: 'closed',
@@ -656,7 +656,7 @@ function handleConnection(
         return { error: { code: WS_ERROR_CODES.FORBIDDEN, message: err.message } };
       }
       if (err instanceof UnauthorizedError) return unauthorized;
-      // Legacy 647: not a refusal but a failure to resolve at all (the database, a key file) —
+      // Legacy 649: not a refusal but a failure to resolve at all (the database, a key file) —
       // still answered as unauthorized, never silently.
       request.log.error({ ws: 'authenticate', outcome: 'error', ...errorFields(err) });
       return unauthorized;
