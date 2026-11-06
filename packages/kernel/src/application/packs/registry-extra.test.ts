@@ -180,6 +180,22 @@ describe('extra packs: one breaking a rule is left out, with the reason', () => 
     expect(skipped[0]?.reason).not.toContain(token);
   });
 
+  it('a manifest the schema refuses: each field to fix as `path: message`, never zod’s issue JSON', async () => {
+    const dirs = await packs(BASE, { 'thin-pack': [FAMILY('thin-pack', 't.yaml', 'Thin')] });
+    await writeFile(
+      path.join(dirs.extraDir, 'thin-pack', '1', 'pack.yaml'),
+      'schema: 1\nname: thin-pack\nversion: 1\nnotes: ""\nbreaking: false\n',
+    );
+    const { skipped } = await read(dirs);
+    expect(skipped).toEqual([
+      {
+        name: 'thin-pack',
+        reason:
+          'pack manifest "thin-pack/1/pack.yaml": summary: Invalid input: expected string, received undefined; components: Invalid input: expected object, received undefined',
+      },
+    ]);
+  });
+
   it('a file that is a symbolic link, or sits under one, is refused: a pack’s files are its own', async () => {
     const secret = 'not-for-any-pack: the content of a file outside the packs directory';
     const withSkill = (family: string, type: string): PackFixtureVersion => ({
