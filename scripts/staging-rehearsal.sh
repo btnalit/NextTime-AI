@@ -702,25 +702,33 @@ if [ "$rollback_drill" -eq 1 ]; then
     degraded=*)
       rb_note="rollback-code NOTE $rb_result — $FROM is back and its acceptance passed, but a non-fatal step of its apply was left undone (see $rb_log); not a reversibility finding" ;;
     *)
-      # Stopped before the checkout moved (the apply puts it back, R-71): nothing to restore onto.
-      [ "$rb_on_from" -eq 1 ] || fail rollback-code "${rb_result:-no RESULT line} — the host could not be put back on $FROM's code; see $rb_log"
-      rb_note="rollback-code NOTE ${rb_result:-no RESULT line} — $FROM's apply stopped after its checkout (migrate / up); the restore below is what puts this host back" ;;
+      # A migrate failure puts the checkout back on the target (fail_before_up, R-71): nothing to
+      # restore onto. Only a failure at or after `up` leaves --from checked out.
+      if [ "$rb_on_from" -eq 1 ]; then
+        rb_note="rollback-code NOTE ${rb_result:-no RESULT line} — $FROM's apply failed at or after its up step; the restore below is what puts this host back"
+      else
+        rb_note="rollback-code FAILED ${rb_result:-no RESULT line} — the host could not be put back on $FROM's code; see $rb_log"
+      fi ;;
   esac
   step "$rb_note"
   echo "$rb_note" >"$LOGS/rollback-summary.txt"
-  [ "$rb_on_from" -eq 1 ] || fail rollback-code "checkout is not on $FROM after the rollback apply"
+  [ "$rb_on_from" -eq 1 ] || fail rollback-code "checkout is not on $FROM after the rollback apply ($rb_note)"
+  rb_restore_fail() {
+    echo "FAIL rollback-restore — $1"
+    echo "rollback-restore FAILED — $1" >>"$LOGS/rollback-summary.txt"
+    echo "RESULT rollback-restore-failed"
+    exit 1
+  }
   sh scripts/restore.sh --db "$rb_dump" --target-db nexttime --i-know >"$LOGS/rollback-restore.log" 2>&1 </dev/null
   rb_restore_rc=$?
   grep -E '^(PASS|FAIL|STEP|restore)' "$LOGS/rollback-restore.log" | tail -n 12 | sed 's/^/STEP rollback-restore | /'
   if [ "$rb_restore_rc" -ne 0 ]; then
-    echo "FAIL rollback-restore — $FROM's scripts/restore.sh exit=$rb_restore_rc; see $LOGS/rollback-restore.log"
-    echo "RESULT rollback-restore-failed"; exit 1
+    rb_restore_fail "$FROM's scripts/restore.sh exit=$rb_restore_rc; see $LOGS/rollback-restore.log"
   fi
-  docker compose up -d --no-build --wait kernel </dev/null >>"$LOGS/stack.log" 2>&1 || {
-    echo "FAIL rollback-restore — the stack did not come back healthy after the restore"; echo "RESULT rollback-restore-failed"; exit 1; }
+  docker compose up -d --no-build --wait kernel </dev/null >>"$LOGS/stack.log" 2>&1 ||
+    rb_restore_fail "the stack did not come back healthy after the restore; see $LOGS/stack.log"
   if ! accept "rollback-$FROM-s1" scripts/accept_s1.sh; then
-    echo "FAIL rollback-restore — $FROM's S1 fails on the restored pre-upgrade database; see $LOGS/rollback-$FROM-s1.log"
-    echo "RESULT rollback-restore-failed"; exit 1
+    rb_restore_fail "$FROM's S1 fails on the restored pre-upgrade database; see $LOGS/rollback-$FROM-s1.log"
   fi
   step "rollback-drill done — $FROM running on its own restored database"
   echo "rollback-restore ok — $FROM's S1 passes on the restored pre-upgrade database" >>"$LOGS/rollback-summary.txt"
