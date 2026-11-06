@@ -1052,7 +1052,7 @@ rm -r .incoming
 | `component_name_invalid` | Skill 或 Worker 的名字不能做包的组成部分（比如以数字开头） |
 | `worker_skill_outside` | Worker 挂的 Skill 不在这一段里 |
 | `component_owned` | 改的是本部署某个包已有的组成部分 |
-| `pack_name_taken` | 本部署已有同名、内容不同的包（同一来源名、内容不同的另一次导出也算） |
+| `pack_name_taken` | 本部署已有同名、内容不同的包（同一来源名、内容不同的另一次导出也算，同一份提案换了 `summary` 或 `notes` 再导出也是）。要换掉上次导出的那份：把同名目录移出 `config/packs/`，模块页点「重新读取」，再导出；已经有工作区装了它的，别换掉版本 1，按 §14.1 加一个新版本 |
 | `no_components` | 这一段只有 Operation 改动 |
 | `not_a_valid_pack` | 读回来被加载器拒绝，或者和应用时的内容对不上 |
 

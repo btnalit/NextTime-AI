@@ -153,6 +153,8 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   platform_segment_changed: 'Changed on the platform',
   admin_proposal_not_found: 'Admin proposal not found',
   admin_proposal_not_open: 'Nothing left to withdraw',
+  // S11 AA5d-3: `export_admin_proposal_pack` refused (the dialog lists `details.problems`).
+  admin_proposal_pack_not_exportable: 'Cannot be exported as a pack',
   platform_change_segment_not_found: 'Platform change record not found',
   platform_change_drifted: 'Changed since it was applied',
   dependent_segments_applied: 'Workspaces depend on it',
@@ -268,6 +270,7 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   platform_segment_changed: '平台上已经改过',
   admin_proposal_not_found: '找不到这份管理员提案',
   admin_proposal_not_open: '没有可撤回的部分',
+  admin_proposal_pack_not_exportable: '不能导出成能力包',
   platform_change_segment_not_found: '找不到这条平台变更记录',
   platform_change_drifted: '应用之后被改过',
   dependent_segments_applied: '有工作区依赖它',
