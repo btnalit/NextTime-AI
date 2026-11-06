@@ -62,7 +62,7 @@
 **D2 提：新增 `propose_pack_install`（`admin_proposal` 组，`adminAgentOnly`，handle，propose）。**
 参数：`pack`、`version`（智能体看到的最新版）、`targetWorkspaceIds`（1–20，必须都在已选目标里）、`title`、`description`（为什么装）。
 写一条管理员提案：`source_name = 'pack-install'`（I-G8，#484 复核改；原稿写的 `source_name = pack` 与「源名不能是自带包名」的规则冲突）、`origin = 'agent'`，段的 `content_digest` 是包版本的摘要（I-G3），每个目标一段，段的 `items = [{ kind: 'pack_install', pack, version }]`。复用提案的全部治理：每日限额、目标必须已选（`admin_proposal_target_not_chosen` 先查）、不可用目标一律同码拒绝、熔断（被同一目标频繁拒绝）、撤回、回读、平台面列表。
-提案时校验：包在注册表里、版本是它的最新版、源名不与已有提案冲突的规则照旧。
+提案时校验：包在注册表里、版本是它的最新版、源名不能是自带包名的规则照旧（I-G8）；源名没有唯一约束（0032），同一时间可以有多份装包建议。
 理由：显式的领域能力，工具描述短、模型不容易拼错（遗留 645 就是参数结构让模型首轮被拒）。
 否：在 `propose_admin_proposal` 里加第五种意图——要在一个段里禁止混用、apply 路径分叉，模型也更容易拼出被拒的组合。
 
