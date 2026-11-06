@@ -405,6 +405,34 @@ describe('/ws pre-auth limits (L1-16 / L5-12(b); fake pool, always runs)', () =>
     expect(JSON.stringify(logLines)).not.toContain('too many clients');
   });
 
+  it('an Authorization header that fails to resolve is logged as an error, a wrong key is not (legacy 649)', async () => {
+    const brokenLines: Record<string, unknown>[] = [];
+    const broken: PoolLike = {
+      connect: async () => {
+        throw Object.assign(new Error('too many clients already'), { code: '53300' });
+      },
+    };
+    const brokenUrl = await listenWs(broken, 60_000, brokenLines);
+    const brokenWs = await open(brokenUrl, { authorization: `Bearer ${PREAUTH_API_KEY}` });
+    await closeOf(brokenWs);
+    expect(brokenLines).toContainEqual(
+      expect.objectContaining({ ws: 'authenticate', outcome: 'error', sqlState: '53300' }),
+    );
+    await app?.close();
+
+    const wrongKeyLines: Record<string, unknown>[] = [];
+    const { pool } = createPreAuthPool();
+    const url = await listenWs(pool, 60_000, wrongKeyLines);
+    const ws = await open(url, { authorization: 'Bearer not-a-known-key' });
+    await closeOf(ws);
+    await vi.waitFor(() =>
+      expect(wrongKeyLines).toContainEqual(
+        expect.objectContaining({ ws: 'closed', authenticated: false }),
+      ),
+    );
+    expect(wrongKeyLines.some((l) => l.outcome === 'error')).toBe(false);
+  });
+
   it('the deadline also ends a credential that is still resolving', async () => {
     const { pool, connect, release } = createPreAuthPool(true);
     const url = await listenWs(pool, 100);
