@@ -180,6 +180,29 @@ describe('extra packs: one breaking a rule is left out, with the reason', () => 
     expect(skipped[0]?.reason).not.toContain(token);
   });
 
+  it('a credential in an extra pack’s domain pack: left out like one in a Skill, never its value', async () => {
+    const token = `gh${'p_'}${'a1B2c3D4'.repeat(4)}`;
+    const dirs = await packs(BASE, {
+      'leaky-ontology': [
+        {
+          ontology: [
+            {
+              family: 'leaky-ontology',
+              domainPack: 'leaky.yaml',
+              yaml: objectTypeYaml('Leak').replace('description: d', `description: "use ${token}"`),
+            },
+          ],
+        },
+      ],
+    });
+    const { registry, skipped } = await read(dirs);
+    expect([...registry.keys()]).toEqual(['base-pack']);
+    expect(skipped.map((skip) => skip.name)).toEqual(['leaky-ontology']);
+    expect(skipped[0]?.reason).toBe(
+      'pack manifest "leaky-ontology/1/ontology/leaky.yaml": carries 1 suspected credential value(s) (at objectTypes[0].description); a pack ships no credentials',
+    );
+  });
+
   it('a manifest the schema refuses: each field to fix as `path: message`, never zod’s issue JSON', async () => {
     const dirs = await packs(BASE, { 'thin-pack': [FAMILY('thin-pack', 't.yaml', 'Thin')] });
     await writeFile(
