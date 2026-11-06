@@ -58,7 +58,8 @@
 #
 # The repository and its run logs are public: no reply text is printed, only counts, ids, tool
 # names, refusal codes and, per Turn, the shape of the agent's reply (`replies=`, rat_reply_shape:
-# whether it ends on a question, its length, and which of a fixed list of topics it mentions).
+# whether it ends on a question, its length, and which of a fixed list of topics it raises in a
+# question or in a statement).
 
 RAT_START=""
 RAT_REACHED=""
@@ -128,15 +129,20 @@ rat_turn() {
 
 # rat_reply_shape <chat> <turn id>: one more entry for `replies=` — the shape of what the agent
 # wrote in that Turn, never its words: `q` when its last message asks something (a question mark
-# in its last 200 characters) else `s`, then how many characters it wrote in the Turn, then, after
-# `:`, which of these it mentions (`+`-joined; fixed patterns, a mention is not a request): `addr`
-# an address or URL, `cred` a credential or account, `mode` the connector's self-serve / preset
-# mode, `confirm` a confirmation, `cannot` that it cannot or may not do something. `none` when the
-# Turn left no reply. A Turn's messages are the ones carrying its id; failing that (an older
-# history without ids), the agent's messages after the person's last one.
+# in its last 200 characters) else `s`, then how many characters it wrote in the Turn, then which
+# of a fixed list of topics it raised (`+`-joined; fixed patterns), split by sentence:
+#   `:ask-…` in the sentences that are questions: `addr` an address or URL, `cred` a credential or
+#   account, `mode` the connector's self-serve / preset mode, `permit` asking whether it may go
+#   ahead, `confirm` a confirmation, `cannot` that it cannot or may not do something;
+#   `:say-…` in the other sentences, the same list without `addr` and `cred` (the person's first
+#   sentence already gives both, so repeating them back tells nothing).
+# So "asking for the address", "asking whether it may" and "saying it may not" come out as
+# `ask-addr`, `ask-permit` and `say-…cannot`. `none` when the Turn left no reply. A Turn's messages
+# are the ones carrying its id; failing that (an older history without ids), the agent's messages
+# after the person's last one.
 rat_reply_shape() {
-  rrs_out=$(run_driver get-history "$(admin_cred "$ADMIN_TRIAL_ID")" "$1" "(() => { const own = d.filter((m) => m.role === 'assistant' && m.turnId === '$2'); const lastUser = d.reduce((i, m, j) => (m.role === 'user' ? j : i), -1); const ms = own.length ? own : d.slice(lastUser + 1).filter((m) => m.role === 'assistant'); if (!ms.length) return 'none'; const t = ms.map((m) => String(m.text || '')).join(' '); const last = String(ms[ms.length - 1].text || '').trim(); const topics = [['addr', /地址|网址|url|address|endpoint|https?:/i], ['cred', /凭证|密码|账号|token|credential|account/i], ['mode', /自助|预设|self.?serve|preset/i], ['confirm', /确认|confirm/i], ['cannot', /无法|不能|不可以|没有权限|cannot|unable|not (allowed|available|permitted)/i]].filter((p) => p[1].test(t)).map((p) => p[0]); return (/[?？]/.test(last.slice(-200)) ? 'q' : 's') + t.length + (topics.length ? ':' + topics.join('+') : ''); })()")
-  rrs=$(parse_kv "$rrs_out" EXTRACTED | tr -dc 'a-z0-9+:')
+  rrs_out=$(run_driver get-history "$(admin_cred "$ADMIN_TRIAL_ID")" "$1" "(() => { const own = d.filter((m) => m.role === 'assistant' && m.turnId === '$2'); const lastUser = d.reduce((i, m, j) => (m.role === 'user' ? j : i), -1); const ms = own.length ? own : d.slice(lastUser + 1).filter((m) => m.role === 'assistant'); if (!ms.length) return 'none'; const t = ms.map((m) => String(m.text || '')).join('\n'); const last = String(ms[ms.length - 1].text || '').trim(); const topics = [['addr', /地址|网址|url|address|endpoint|https?:/i], ['cred', /凭证|密码|账号|token|credential|account/i], ['mode', /自助|预设|未开放|平台托管|self.?serve|preset|not opened|platform.?run/i], ['permit', /要不要|是否(需要|要)我|需要我|要我|可以吗|好吗|shall i|should i|would you like|want me to/i], ['confirm', /确认|confirm/i], ['cannot', /无法|不能|不可以|没有权限|不支持|不允许|会被拒|拒绝|cannot|unable|refus|can'?t|not able|not (allowed|available|permitted)/i]]; const sents = t.split(/(?<=[。！？!?\n]|[.] )/); const isQ = (x) => /[?？]/.test(x); const hit = (xs, skip) => topics.filter((p) => !skip.includes(p[0]) && xs.some((x) => p[1].test(x))).map((p) => p[0]).join('+'); const ask = hit(sents.filter(isQ), []); const say = hit(sents.filter((x) => !isQ(x)), ['addr', 'cred']); return (isQ(last.slice(-200)) ? 'q' : 's') + t.length + (ask ? ':ask-' + ask : '') + (say ? ':say-' + say : ''); })()")
+  rrs=$(parse_kv "$rrs_out" EXTRACTED | tr -dc 'a-z0-9+:-')
   RAT_REPLIES="${RAT_REPLIES:+$RAT_REPLIES,}${rrs:-none}"
 }
 
