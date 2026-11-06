@@ -2444,6 +2444,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **主机**：升级后 `config/packs/` 由 `apply-release.sh` 自动建好，不放包就没有任何变化。
 - **回滚**：只回滚代码。`config/packs/` 留着无害，旧内核不读它；已经从附加包装进工作区的内容是普通的安装记录，撤销照旧（旧内核找不到这个包，安装记录可能显示成已定制，这一点是 #488 的推断，未验证）。
 
+### 3.128 把验证通过的管理员提案导出成能力包（#976，S11 AA5d-2，0.62.0 之后的下一版）
+
+带一个迁移，随 `apply-release.sh` 自动应用：governance `0039_admin_proposal_segment_verified`（只建一个 security definer 函数 `admin_proposal_segment_verified(uuid)`）。不改 compose，没有新环境变量，主机不需要操作。线上契约新增：平台面能力 `export_admin_proposal_pack`，错误码 409 `admin_proposal_pack_not_exportable`（`details.problems`）。
+
+- **发版说明可写**：平台管理员可以把一段已应用、并且在那个工作区里最近一次验证通过的管理员提案（工作区部分），导出成能力包的版本 1：带本体族、Skill、Worker（Worker 带它列的 `systems`，从不带门和模型），Operation 改动只列进 `omitted`。导出只返回文件、不写任何东西（只记一行审计），放进 `config/packs/` 后在应用过的工作区直接是「已是最新」，别的工作区像其他包一样装。不满足条件时一次列出所有原因（九种）。用法、拒绝原因和已知限制见 `operations.md` §14.11。
+- **行为变化**：附加包与自带包的清单、Skill、Worker 文件不合 schema 时，原因从 zod 的整段 issue JSON 变成一行 `字段: 原因; …`（只是文字）。新能力不调就什么都不发生。
+- **回滚**（见 §6 一行）：上一版不调这个函数，只回滚代码就行；要删函数：`drop function admin_proposal_segment_verified(uuid)`，再删 `schema_migrations` 里 governance 39 那一行。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -2617,6 +2625,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.62.0 | task `0013_task_admin_agent_session`（#954，AA5a-1）：`tasks.admin_agent_session_id`（可空、不回填）、外键 `tasks_admin_agent_session_fk`、守卫 `tasks_admin_agent_session_guard` 及其函数（插入时只许本工作区、代表 `on_behalf_of` 的 `admin_agent` 会话且工作区是试验工作区；写入后不改） | 可逆 | 旧代码插入、读取都写明列名，从不写这一列，插入时为 NULL 能过守卫；管理员智能体派的 Task 仍在表里，旧代码只是不显示来源 | 只需回退代码。要撤迁移：`drop trigger tasks_admin_agent_session_guard on tasks`、删它的函数、`alter table tasks drop column admin_agent_session_id`（外键随之删除），再删 `schema_migrations` 里 task 13 那一行（见 0013 文件头） |
 | v0.62.0 | governance `0037_connection_request_admin_agent_session`（#954，AA5a-1）：`connection_requests.admin_agent_session_id`（可空、不回填）、外键 `connection_requests_admin_agent_session_fk`、守卫 `connection_requests_admin_agent_session_guard` 及其函数（插入时只许本工作区、代表 `requested_by` 的 `admin_agent` 会话且工作区是试验工作区；写入后不改） | 可逆 | 旧代码插入、读取都写明列名，从不写这一列；完成、取消请求时不动这一列，能过守卫 | 只需回退代码。要撤迁移：`drop trigger connection_requests_admin_agent_session_guard on connection_requests`、删它的函数、`alter table connection_requests drop column admin_agent_session_id`，再删 `schema_migrations` 里 governance 37 那一行（见 0037 文件头） |
 | v0.62.0 | governance `0038_admin_proposal_rejection_reads`（#956，AA5a-2，遗留 595）：security definer 函数 `admin_proposal_rejections_since(timestamptz)`，只回答事务自己的平台用户在给定时间之后被拒的工作区部分（目标、提案、部分、时间，不含理由） | 可逆 | 只加函数，旧代码不调它 | 只需回退代码。要撤迁移：`drop function admin_proposal_rejections_since(timestamptz)`，再删 `schema_migrations` 里 governance 38 那一行（见 0038 文件头） |
+| v0.62.0 之后的下一版 | governance `0039_admin_proposal_segment_verified`（#976，AA5d-2）：security definer 函数 `admin_proposal_segment_verified(uuid)`，只对平台面回答这一段应用的东西在工作区里现在是否 `verified`（只给是或否，不给 id、条目、结果或时间，按 core 0042 的规矩） | 可逆 | 只加函数，旧代码不调它 | 只需回退代码。要撤迁移：`drop function admin_proposal_segment_verified(uuid)`，再删 `schema_migrations` 里 governance 39 那一行 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
