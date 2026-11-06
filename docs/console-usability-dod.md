@@ -18,7 +18,7 @@
 | **没有 403** | 控制台不发出当前角色会被内核拒绝的请求：读按角色挂起，写按角色收起，路由按路由表放行。 | 10 | 请求层 `HttpClient.roleGate`；`src/role-gating.guard.test.ts`（语法树逐处检查，CI `test`）；旅程 ⑧ 四个非所有者角色 `/api/cap/*` 零 403 |
 | **不显示原始 API 名或英文服务端文案** | zh 下不出现能力名、枚举值、错误码、内核英文原文、裸 UUID；这些只进「技术细节」。 | 3、5 | `scripts/guards/i18n-pairs.mjs`；`e2e/00-gates/content.spec.ts`；`expectNoHalfEnglish` / `expectReadableErrors` |
 | **每个按钮当前角色都用得了** | 角色做不了的写操作不显示；按内容暂时不能点的按钮灰掉并写明「还差：…」；指向别的页面的链接只在当前角色打得开时才是链接。 | 4、10 | `useRoleCan` / `kit/route-link` 的 `RouteLink` 与 `useCanOpen`（由角色门禁守卫逐处检查）；`scripts/guards/disabled-reason.mjs`（CI `guards`）；e2e `expectDisabledExplained` |
-| **e2e 走用户的路** | 点击、填写、选择的那个控件按用户看得见的角色和名字找（`getByRole` / `getByLabel`）；`data-testid` 只用来圈定范围和断言，不用文案、样式类做定位。拿不到可访问名字的控件是控制台缺陷（遗留 646：测试对没标签的 `<select>` 直接 `selectOption`，用户用的搜索框坏了而 CI 是绿的）。改可见文字时同一提交更新 e2e。 | 11 | `scripts/guards/e2e-locators.mjs`（CI `quality`，存量见基线、只减不增）；评审清单；CI web-e2e |
+| **e2e 走用户的路** | 点击、填写、选择的那个控件按用户看得见的角色和名字找（`getByRole` / `getByLabel`）；`data-testid` 只用来圈定范围和断言，不用 `getByText` 抓页面文案、不用样式类做定位。拿不到可访问名字的控件是控制台缺陷（遗留 646：测试对没标签的 `<select>` 直接 `selectOption`，用户用的搜索框坏了而 CI 是绿的）。改可见文字时同一提交更新 e2e。 | 11 | `scripts/guards/e2e-locators.mjs`（CI `quality`，存量见基线、只减不增）；评审清单；CI web-e2e |
 
 下面 11 条是完整标准。新功能也按这一页验收：后端新增或改变了用户可见的能力（capability、配置项、状态、错误）时，同一个 PR，或写明的跟进 issue，要给出控制台里的入口和呈现。
 
@@ -34,7 +34,7 @@
 | 8 | **破坏性操作分级确认** | 按三档确认，统一走 `components/kit/confirm`：<br>• `low`：直接执行，Toast 里可以撤销；<br>• `medium`：在按钮旁确认，列出影响范围；<br>• `irreversible`：要键入目标名称并勾选知情。 | 评审清单 |
 | 9 | **合理默认、不偷偷改** | 没设置的值明确显示「未设置（实际用 X）」。保存只提交用户改过的字段，不把显示用的兜底值写回去。 | 评审清单；表单单测 |
 | 10 | **有引导的首跑路径、没有死路** | 从首次登录到「入口 agent 能执行一个动作」，每一步都有明确的入口指向下一步。任何角色都不会看到这两样东西：<br>• 点了一定 403 的按钮；<br>• 只有别人才能照做的指引。 | 控制台请求层 `HttpClient.roleGate` 与界面 `useRoleCan`，和内核用同一个判定 `roleMayUseCapability`；旅程 ⑧：四个非所有者角色走遍可见页，`/api/cap/*` 零 403，没有链接的提示要写明找谁 |
-| 11 | **改了可见标签，同一提交里更新 e2e** | 按钮、链接、标题、字段标签等可见文字改名时，同一个提交里同步更新 `e2e/` 下用到它们的定位器。web-e2e 在 PR 头上为绿，是 UX 验收的前提。 | CI web-e2e；e2e 辅助函数用 `data-testid` 定位 |
+| 11 | **改了可见标签，同一提交里更新 e2e** | 按钮、链接、标题、字段标签等可见文字改名时，同一个提交里同步更新 `e2e/` 下用到它们的定位器。web-e2e 在 PR 头上为绿，是 UX 验收的前提。 | CI web-e2e；`scripts/guards/e2e-locators.mjs`（交互按角色 / 标签定位） |
 
 ## 用法
 
