@@ -292,8 +292,9 @@ export const WORKER_CEILING_CAPABILITIES: readonly string[] = buildWorkerCeiling
  *
  * No name here is execute-class and none is a privilege escalation on its own:
  * `list_allowed_operations` only describes what the same Handle may already call (execute-class
- * Operations inside its own `resources.gatekeeper`, observe-class ones `observeRefusal` accepts —
- * §9.3 "结果带 epistemic_status", a description, not a grant); `observe_operation` is decided per
+ * Operations inside its own `resources.gatekeeper` when it also holds `request_action`,
+ * observe-class ones `observeRefusal` accepts — §9.3 "结果带 epistemic_status", a description,
+ * not a grant); `observe_operation` is decided per
  * call by that same predicate (see its own comment in the list below); and
  * `report_task_result`'s handler independently authenticates by checking the calling Handle's own
  * `claims.sid` against the addressed Task's own WorkerRun `session_id` (never trusts a

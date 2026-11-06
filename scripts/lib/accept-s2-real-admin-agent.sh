@@ -57,7 +57,9 @@
 # fake path).
 #
 # The repository and its run logs are public: no reply text is printed, only counts, ids, tool
-# names and refusal codes.
+# names, refusal codes and, per Turn, the shape of the agent's reply (`replies=`, rat_reply_shape:
+# whether it ends on a question, its length, and which of a fixed list of topics it raises in a
+# question or in a statement).
 
 RAT_START=""
 RAT_REACHED=""
@@ -75,6 +77,7 @@ RAT_BOOK_BEFORE=""
 RAT_TURN_TIMEOUTS=0
 RAT_TURN_ERRORS=0
 RAT_TURN_ERROR=""
+RAT_REPLIES=""
 
 # rat_reached <step>: the journey got through <step>.
 rat_reached() {
@@ -120,7 +123,27 @@ rat_turn() {
     RAT_TURN_TIMEOUTS=$((RAT_TURN_TIMEOUTS + 1))
     rat_stop_turn
   fi
+  rat_reply_shape "$TICKETS_CHAT_ID" "$(parse_kv "$rt_out" TURN_ID)"
   return 0
+}
+
+# rat_reply_shape <chat> <turn id>: one more entry for `replies=` — the shape of what the agent
+# wrote in that Turn, never its words: `q` when its last message asks something (a question mark
+# in its last 200 characters) else `s`, then how many characters it wrote in the Turn, then which
+# of a fixed list of topics it raised (`+`-joined; fixed patterns), split by sentence:
+#   `:ask-…` in the sentences that are questions: `addr` an address or URL, `cred` a credential or
+#   account, `mode` the connector's self-serve / preset mode, `permit` asking whether it may go
+#   ahead, `confirm` a confirmation, `cannot` that it cannot or may not do something;
+#   `:say-…` in the other sentences, the same list without `addr` and `cred` (the person's first
+#   sentence already gives both, so repeating them back tells nothing).
+# So "asking for the address", "asking whether it may" and "saying it may not" come out as
+# `ask-addr`, `ask-permit` and `say-…cannot`. `none` when the Turn left no reply. A Turn's messages
+# are the ones carrying its id; failing that (an older history without ids), the agent's messages
+# after the person's last one.
+rat_reply_shape() {
+  rrs_out=$(run_driver get-history "$(admin_cred "$ADMIN_TRIAL_ID")" "$1" "(() => { const own = d.filter((m) => m.role === 'assistant' && m.turnId === '$2'); const lastUser = d.reduce((i, m, j) => (m.role === 'user' ? j : i), -1); const ms = own.length ? own : d.slice(lastUser + 1).filter((m) => m.role === 'assistant'); if (!ms.length) return 'none'; const t = ms.map((m) => String(m.text || '')).join('\n'); const last = String(ms[ms.length - 1].text || '').trim(); const topics = [['addr', /地址|网址|url|address|endpoint|https?:/i], ['cred', /凭证|密码|账号|token|credential|account/i], ['mode', /自助|预设|未开放|平台托管|self.?serve|preset|not opened|platform.?run/i], ['permit', /要不要|是否(需要|要)我|需要我|要我|可以吗|好吗|shall i|should i|would you like|want me to/i], ['confirm', /确认|confirm/i], ['cannot', /无法|不能|不可以|没有权限|不支持|不允许|会被拒|拒绝|cannot|unable|refus|can'?t|not able|not (allowed|available|permitted)/i]]; const sents = t.split(/(?<=[。！？!?\n]|[.] )/); const isQ = (x) => /[?？]/.test(x); const hit = (xs, skip) => topics.filter((p) => !skip.includes(p[0]) && xs.some((x) => p[1].test(x))).map((p) => p[0]).join('+'); const ask = hit(sents.filter(isQ), []); const say = hit(sents.filter((x) => !isQ(x)), ['addr', 'cred']); return (isQ(last.slice(-200)) ? 'q' : 's') + t.length + (ask ? ':ask-' + ask : '') + (say ? ':say-' + say : ''); })()")
+  rrs=$(parse_kv "$rrs_out" EXTRACTED | tr -dc 'a-z0-9+:-')
+  RAT_REPLIES="${RAT_REPLIES:+$RAT_REPLIES,}${rrs:-none}"
 }
 
 # rat_stop_turn: the Chat's running Turn, if any, is stopped as the person would (stop_agent) and
@@ -221,7 +244,9 @@ rat_approver() {
 rat_journey() {
   # --- Connect: the agent asks for the ticket system ---
   tickets_gate_up
-  rat_turn new:admin_agent "我想在试验工作区里试接一个测试用的工单系统，看看能不能让一个 Worker 帮我开工单。它是 http 系统，请把它叫作 helpdesk，用测试账号。请先发一个接入请求，凭证我会在控制台填。"
+  # Everything a person asking for a connection would say: what the system is, its address, its
+  # name, and that the credential is theirs to enter.
+  rat_turn new:admin_agent "我想在试验工作区里试接一个测试用的工单系统，看看能不能让一个 Worker 帮我开工单。它是 http 系统，地址是 $TICKETS_SYSTEM_URL，请把它叫作 helpdesk，用测试账号。请先发一个接入请求，凭证我会在控制台填。"
   # The target is the agent's text: JSON-encoded by postgres for the person's call, letters, digits
   # and ._:/- only (others as _) in the RUN line.
   cr_sql="select id || ',' || kind || ',' || to_json(target)::text from connection_requests where workspace_id = '$ADMIN_TRIAL_ID' and status = 'requested' and requested_at >= '$RAT_START' order by requested_at desc limit 1"
@@ -534,6 +559,25 @@ rat_invariants() {
   pass "real-admin-tickets-invariants" "no ticket before approval or through the production gate (${rat_grown:-0} trial ticket(s), ${rat_approved:-0} approved request(s)); neither credential in $TOKEN_ROWS_TABLES kernel tables; the agent's calls under its session, the person's under none$([ -n "$TICKETS_CHANGE_SEGMENT_ID" ] && echo ", the applied items the agent's, applied by the owner")"
 }
 
+# rat_usage: `<tokens>,<cost_usd>` of the trial workspace's llm_usage since the journey started,
+# read once it has settled: llm-proxy reports usage to the kernel in batches (about every 2 s,
+# longer while it backs off), so a read right after the last Turn can miss that Turn's calls (the
+# first --real round's RUN line counted only its first Turn's two calls). Read every 3 s until two
+# reads agree, at most 10 times.
+rat_usage() {
+  ru_prev=""
+  ru_i=0
+  while :; do
+    ru_now=$(psql_ws "select count(*) || ',' || coalesce(sum(input_tokens + output_tokens + coalesce(cache_read_tokens, 0) + coalesce(cache_write_tokens, 0)), 0) || ',' || coalesce(round(sum(cost_usd), 4), 0) from llm_usage where workspace_id = '$ADMIN_TRIAL_ID' and started_at >= '$RAT_START'")
+    [ "$ru_now" != "$ru_prev" ] || break
+    ru_i=$((ru_i + 1))
+    [ "$ru_i" -lt 10 ] || break
+    ru_prev=$ru_now
+    sleep 3
+  done
+  printf '%s' "${ru_now#*,}"
+}
+
 real_admin_tickets_step() {
   echo "=== admin agent ticket journey (real model, run=1) ==="
   if ! admin_agent_setup; then
@@ -548,10 +592,10 @@ real_admin_tickets_step() {
     wait "$RAT_APPROVER_PID" 2>/dev/null
     RAT_APPROVER_PID=""
   fi
-  usage=$(psql_ws "select coalesce(sum(input_tokens + output_tokens + coalesce(cache_read_tokens, 0) + coalesce(cache_write_tokens, 0)), 0) || ',' || coalesce(round(sum(cost_usd), 4), 0) from llm_usage where workspace_id = '$ADMIN_TRIAL_ID' and started_at >= '$RAT_START'")
+  usage=$(rat_usage)
   tools=$(printf '%s' "$RAT_TOOLS" | tr ',' '\n' | sed '/^$/d' | sort | uniq -c | sed 's/^ *\([0-9]*\) \(.*\)$/\2×\1/' | tr '\n' ',' | sed 's/,$//')
   human=$(printf '%s' "$TICKETS_HUMAN_ACTIONS" | sed '/^$/d' | wc -l | tr -d ' ')
-  real_run_line admin_tickets 1 "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "reached=${RAT_REACHED:-none} stuck=${RAT_STUCK:--} turns=$RAT_TURNS nudges=$RAT_NUDGES turn_timeouts=$RAT_TURN_TIMEOUTS turn_errors=$RAT_TURN_ERRORS${RAT_TURN_ERROR:+[$RAT_TURN_ERROR]} turn_tools=$RAT_TC/$RAT_TE[$tools] refused=$(rat_agent_refusals) tokens=${usage%%,*} cost_usd=${usage#*,} human_steps=$human${RAT_DETAIL:+ $RAT_DETAIL}"
+  real_run_line admin_tickets 1 "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "reached=${RAT_REACHED:-none} stuck=${RAT_STUCK:--} turns=$RAT_TURNS nudges=$RAT_NUDGES turn_timeouts=$RAT_TURN_TIMEOUTS turn_errors=$RAT_TURN_ERRORS${RAT_TURN_ERROR:+[$RAT_TURN_ERROR]} turn_tools=$RAT_TC/$RAT_TE[$tools] replies=${RAT_REPLIES:--} refused=$(rat_agent_refusals) tokens=${usage%%,*} cost_usd=${usage#*,} human_steps=$human${RAT_DETAIL:+ $RAT_DETAIL}"
   real_stat_add admin_tickets "$ok" "$RAT_TC" "$RAT_TE" 0 0
   rat_invariants
   real_budget_check "real-admin-tickets-budget" "$ADMIN_TRIAL_ID"
