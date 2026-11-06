@@ -62,6 +62,22 @@ export function saveSelectedWorkspaceId(workspaceId: string): void {
   }
 }
 
+/** Legacy 647: a workspace switch that failed in transport — the browser could not reach the
+ *  platform at all, which only a reload of the page cured — finishes by a reload into the workspace
+ *  asked for: it becomes this tab's selected workspace (the boot flow opens it when it is still a
+ *  membership, and picks another when not), the hash becomes the switch's own destination without
+ *  a `hashchange` the old session would route on, and the page reloads. */
+export function reloadIntoWorkspace(
+  workspaceId: string,
+  destination: string,
+  reload: () => void = () => window.location.reload(),
+): void {
+  saveSelectedWorkspaceId(workspaceId);
+  const { pathname, search } = window.location;
+  window.history.replaceState(window.history.state, '', `${pathname}${search}${destination}`);
+  reload();
+}
+
 /**
  * Review 2026-10-02 R-15: "this browser signed out, but the kernel may not have heard it". The
  * console session cookie is HttpOnly — only `POST /api/auth/logout`'s response can drop it — and
