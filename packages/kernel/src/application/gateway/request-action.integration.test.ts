@@ -913,6 +913,28 @@ describe.runIf(DATABASE_URL !== undefined)(
         };
       }
 
+      /** A Handle whose gate scope names this test's Gatekeeper (the owner's, so the gate is
+       *  executable for it), holding `list_allowed_operations` plus `extra` — a Worker of a
+       *  WorkerDefinition that declares the gate, with or without `request_action`. */
+      function gateScopedCaller(extra: readonly string[]): ResolvedCaller {
+        const now = Math.floor(Date.now() / 1000);
+        return {
+          channel: 'handle',
+          claims: {
+            ws: workspaceId,
+            sid: randomUUID(),
+            obo: ownerId,
+            scope: {
+              capabilities: ['list_allowed_operations', ...extra],
+              resources: { gatekeeper: [gatekeeperId] },
+            },
+            jti: randomUUID(),
+            iat: now,
+            exp: now + 600,
+          },
+        };
+      }
+
       /** How many capability-dispatch audit rows `actor` has for `action` on this Gatekeeper. */
       async function gateAuditCount(actor: string, action: string): Promise<number> {
         const rows = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
@@ -977,7 +999,8 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       // Tool projection agrees with enforcement: the ungranted member's entry Handle is offered the
       // gate's observe tool (the call above succeeds for it) and none of its execute-class ones; a
-      // Handle whose gate scope carries the Grant still gets the execute ones (unchanged).
+      // Handle whose gate scope carries the Grant and that holds `request_action` still gets the
+      // execute ones (unchanged).
       it('list_allowed_operations projects the ungranted gate’s observe Operations, never its execute ones', async () => {
         expect(await listedOperationNames(entryHandleCaller([], memberNoGrantId))).toEqual([
           'observe.stock',
@@ -985,9 +1008,28 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(await listedOperationNames(workerHandleCaller(memberNoGrantId))).toEqual([
           'observe.stock',
         ]);
-        expect(await listedOperationNames(entryHandleCaller([gatekeeperId]))).toEqual(
+        expect(await listedOperationNames(gateScopedCaller(['request_action']))).toEqual(
           [AUTO_OP.name, OBSERVE_OP.name, PENDING_OP.name].sort(),
         );
+      });
+
+      // Staging real-model run 2026-11-06: a Worker whose WorkerDefinition named the gate but not
+      // `request_action` carried the gate in `resources.gatekeeper` and no `request_action`, was
+      // listed `tickets.create`, and its call was a 403. Execute-class Operations are reached only
+      // through `request_action`, so a Handle without it — that Worker, or an entry Handle carrying
+      // the Grant — is listed the observe ones alone, and the call it would have made is refused.
+      it('list_allowed_operations lists no execute Operation to a Handle without request_action, even for a gate in its scope', async () => {
+        expect(await listedOperationNames(gateScopedCaller([]))).toEqual([OBSERVE_OP.name]);
+        expect(await listedOperationNames(entryHandleCaller([gatekeeperId]))).toEqual([
+          OBSERVE_OP.name,
+        ]);
+        await expect(
+          dispatchCapability({ pool }, gateScopedCaller([]), 'request_action', {
+            gatekeeperId,
+            operation: AUTO_OP.name,
+            params: { qty: 1 },
+          }),
+        ).rejects.toThrow(/not in the calling handle's scope/);
       });
 
       // The two conditions that still refuse an observation: the member's own AgentProfile

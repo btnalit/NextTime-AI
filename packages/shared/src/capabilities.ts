@@ -2671,8 +2671,14 @@ const workerCapabilities = [
       })
       .strict(),
     resultSchema: wire.WorkerDefinitionWireSchema,
+    // Staging real-model run 2026-11-06: `definition` is an opaque record here, and an admin agent
+    // drafted a Worker that named its ticket gate but no `request_action` — the least-privilege
+    // default (`capabilities` omitted = the worker ceiling minus execute-class names) — so the
+    // Worker could not ask for the one action it was for. The fields and that rule are spelled
+    // out here, since this description is all the agent sees; the default itself stays (execute
+    // authority is declared, never implied by `gates`, and an approver sees it in the draft).
     description:
-      'Propose a private draft WorkerDefinition version: definitionId omitted starts a new family; given, it must name a family you can see (not found otherwise) and the version keeps its kind.',
+      'Propose a private draft WorkerDefinition version: definitionId omitted starts a new family; given, it must name a family you can see (not found otherwise) and the version keeps its kind. A kind "worker" definition holds systemPrompt (required), name, description, model, skills (the Skills it loads, by name or id), gates (the Gatekeeper ids it acts on) and capabilities. Without capabilities the Worker only reads and proposes: for it to request actions on its gates (execute-class Operations, each an ActionRequest that waits for approval), include "request_action" in capabilities.',
   },
   {
     // Legacy 145: the platform's entry template against the entry definition the workspace runs

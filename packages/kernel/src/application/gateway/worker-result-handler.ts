@@ -449,11 +449,18 @@ function toWireOperation(
  *     a calling Worker runs (S11 GO11), or an Operation on the platform deny list, is not
  *     listed. This is what makes an ungranted system visible to the entry agent, a Worker and an
  *     MCP client alike — without it enforcement would allow a call no tool exists for.
- *   - **execute-class**: the published execute Operations of the Gatekeepers in the Handle's own
- *     `resources.gatekeeper` (Grant-derived, attenuated per Worker) that the member can still act
- *     on now — narrowed to their current `effective.enabledGatekeepers` exactly as `request_action`
- *     narrows it (R-37 / D-20, application/gates/execute-access.ts) — minus the platform deny list
- *     (`operationPlatformStatus`).
+ *   - **execute-class**: only for a Handle that holds `request_action`, the one way an execute
+ *     Operation is reached (worker mode, the MCP projection): the published execute Operations of
+ *     the Gatekeepers in the Handle's own `resources.gatekeeper` (Grant-derived, attenuated per
+ *     Worker) that the member can still act on now — narrowed to their current
+ *     `effective.enabledGatekeepers` exactly as `request_action` narrows it (R-37 / D-20,
+ *     application/gates/execute-access.ts) — minus the platform deny list
+ *     (`operationPlatformStatus`). A Handle without `request_action` is listed none, even when its
+ *     `resources.gatekeeper` names the gate — an entry or admin agent Handle (whose modes project
+ *     observe tools only), or a Worker whose WorkerDefinition declares `gates` but no
+ *     `request_action` (the least-privilege default, `defaultWorkerCapabilities`). Before, such a
+ *     Worker was offered tools whose every call was a 403 (staging real-model run 2026-11-06, the
+ *     admin agent's trial Worker) — the same kind of gap as the incident below.
  *
  *  Human callers (no Handle, `ctx?.scope` undefined) get an empty list — this describes a Handle.
  *
@@ -470,11 +477,15 @@ export const listAllowedOperationsHandler: CapabilityHandler = async (
   const principalId = ctx?.principalId;
   if (!ctx?.scope || !principalId) return { result: { items: [] } };
 
-  const executeScope = narrowScopeToExecutableGates(
-    ctx.scope,
-    await readExecuteAccess(client, workspaceId, principalId),
+  // Same rule as the MCP projection (interfaces/mcp/tool-projection.ts `wantsExecuteGates`).
+  const executeGatekeepers = new Set(
+    ctx.scope.capabilities.includes('request_action')
+      ? (narrowScopeToExecutableGates(
+          ctx.scope,
+          await readExecuteAccess(client, workspaceId, principalId),
+        ).resources.gatekeeper ?? [])
+      : [],
   );
-  const executeGatekeepers = new Set(executeScope.resources.gatekeeper ?? []);
   const gates = await listGatekeepers(client, workspaceId);
   const records = await listPublishedOperationsForGatekeepers(
     client,
