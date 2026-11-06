@@ -2,6 +2,8 @@
 import type {
   AdminProposalSegmentPreviewWire,
   AvailableGateInstanceWire,
+  PackInstallPreviewWire,
+  PackWire,
   ReceivedAdminProposalSegmentWire,
 } from '@nexttime/shared';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -1223,5 +1225,247 @@ describe('AdminProposalsTab (能力目录 · 管理员提案, S11 AA4a)', () => 
       return typeof style.label === 'string' ? style.label : style.label.zh;
     });
     expect(labels).toEqual(['待确认', '已应用', '已拒绝', '已撤回', '已撤销']);
+  });
+});
+
+/** S11 AA5g-3: a segment asking this workspace to install a pack (`propose_pack_install`). */
+const PACK_ASK = received({
+  proposal: { ...received().proposal, title: '装上运维基础包', sourceName: 'pack-install' },
+  items: [{ kind: 'pack_install', pack: 'ops-base', version: 2 }],
+});
+
+function opsBase(patch: Partial<PackWire> = {}): PackWire {
+  return {
+    name: 'ops-base',
+    source: 'builtin',
+    summary: '运维基础能力',
+    latestVersion: 2,
+    versions: [
+      {
+        version: 2,
+        notes: null,
+        breaking: false,
+        requiredConnectors: [],
+        requiredPacks: [],
+        components: [],
+      },
+    ],
+    status: 'not_installed',
+    installedVersion: null,
+    components: [],
+    requirements: [],
+    dependencies: [],
+    ...patch,
+  } as PackWire;
+}
+
+function opsBasePreview(): PackInstallPreviewWire {
+  return {
+    pack: opsBase(),
+    targetVersion: 2,
+    digest: 'sha256:pack-plan',
+    unchanged: false,
+    crossedVersions: [2],
+    breaking: false,
+    items: [],
+    inUse: { objects: 0, links: 0, capped: false },
+  };
+}
+
+describe('AdminProposalsTab — a proposal asking for a pack install (S11 AA5g-3)', () => {
+  it('is installed through the pack’s own review, with the segment’s id; the proposal then reads applied with its install record', async () => {
+    let applied = false;
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_admin_proposal_segments: () => ({
+        items: [
+          applied
+            ? {
+                ...PACK_ASK,
+                status: 'applied',
+                appliedSegmentId: RECORD,
+                decidedAt: '2026-11-02T08:00:00.000Z',
+              }
+            : PACK_ASK,
+        ],
+      }),
+      list_packs: () => ({ items: [opsBase()] }),
+      preview_pack_install: () => opsBasePreview(),
+      install_pack: () => {
+        applied = true;
+        return {
+          pack: opsBase({ status: 'up_to_date', installedVersion: 2 }),
+          segmentId: RECORD,
+          verification: null,
+        };
+      },
+    });
+    renderTab(http, SEGMENT);
+
+    const review = await screen.findByTestId('catalog-proposal-pack-review');
+    expect(within(review).getByTestId('catalog-proposal-pack-ask').textContent).toMatch(
+      /请求在本工作区安装能力包 ops-base 的 v2/,
+    );
+    // Nothing is derived under its source name, so it is not shown.
+    expect(screen.getByTestId('catalog-proposal-detail').textContent).not.toContain('来源名');
+    // Never the generic proposal review: that one is refused for a pack install.
+    expect(named(http.calls, 'preview_admin_proposal_segment')).toEqual([]);
+    expect(screen.queryByTestId('catalog-proposal-apply-trigger')).toBeNull();
+
+    fireEvent.click(await screen.findByTestId('catalog-pack-install-trigger'));
+    await screen.findByTestId('catalog-pack-preview');
+    fireEvent.click(screen.getByRole('button', { name: '安装' }));
+
+    await waitFor(() =>
+      expect(named(http.calls, 'install_pack').map((call) => call.params)).toEqual([
+        {
+          name: 'ops-base',
+          version: 2,
+          reviewedDigest: 'sha256:pack-plan',
+          adminProposalSegmentId: SEGMENT,
+        },
+      ]),
+    );
+    expect((await screen.findByTestId('catalog-proposal-status')).textContent).toBe('已应用');
+    expect(screen.getByTestId('catalog-proposal-intent-1').textContent).toMatch(
+      /^能力包 ops-base v2$/,
+    );
+    expect(screen.getByTestId('catalog-proposal-record').textContent).toMatch(/安装历史/);
+    expect(named(http.calls, 'apply_admin_proposal_segment')).toEqual([]);
+  });
+
+  it('a pack with a newer version since says only the latest installs, offers no install and leaves rejecting', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_admin_proposal_segments: () => ({ items: [PACK_ASK] }),
+      list_packs: () => ({ items: [opsBase({ latestVersion: 3 })] }),
+      reject_admin_proposal_segment: (params) =>
+        received({
+          ...PACK_ASK,
+          status: 'rejected',
+          reason: (params as { reason: string }).reason,
+          decidedAt: '2026-11-02T08:00:00.000Z',
+          decidedBy: { id: 'p-owner', kind: 'human', displayName: 'Owner' },
+        }),
+    });
+    renderTab(http, SEGMENT);
+
+    expect((await screen.findByTestId('catalog-proposal-pack-newer')).textContent).toMatch(
+      /最新版本是 v3.*请求的 v2 已经不是最新/,
+    );
+    expect(screen.queryByTestId('catalog-pack-install-trigger')).toBeNull();
+    // How installing answers it is said only while it can be installed (UX P3-2).
+    expect(screen.queryByTestId('catalog-proposal-pack-ask')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('catalog-proposal-reject-trigger'));
+    const confirm = await screen.findByTestId('catalog-proposal-reject-confirm');
+    fireEvent.change(within(confirm).getByTestId('catalog-proposal-reject-reason'), {
+      target: { value: '已经有更新的版本' },
+    });
+    fireEvent.click(within(confirm).getByRole('button', { name: '拒绝' }));
+    await waitFor(() =>
+      expect(named(http.calls, 'reject_admin_proposal_segment').map((call) => call.params)).toEqual(
+        [{ segmentId: SEGMENT, reason: '已经有更新的版本' }],
+      ),
+    );
+    expect(named(http.calls, 'install_pack')).toEqual([]);
+  });
+
+  it('a pack already installed at that version, or gone from the deployment, says why there is nothing to install', async () => {
+    const installed = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_admin_proposal_segments: () => ({ items: [PACK_ASK] }),
+      list_packs: () => ({ items: [opsBase({ status: 'up_to_date', installedVersion: 2 })] }),
+    });
+    renderTab(installed, SEGMENT);
+    expect((await screen.findByTestId('catalog-proposal-pack-installed')).textContent).toMatch(
+      /已经装着 ops-base v2/,
+    );
+    expect(screen.queryByTestId('catalog-pack-install-trigger')).toBeNull();
+    cleanup();
+
+    const gone = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_admin_proposal_segments: () => ({ items: [PACK_ASK] }),
+      list_packs: () => ({ items: [] }),
+    });
+    renderTab(gone, SEGMENT);
+    expect((await screen.findByTestId('catalog-proposal-pack-gone')).textContent).toMatch(
+      /已经没有能力包 ops-base/,
+    );
+    expect(screen.queryByTestId('catalog-pack-install-trigger')).toBeNull();
+  });
+
+  it('#501 P3-1: installed at that version with a Worker still to connect, it installs from here to connect it', async () => {
+    const bindable = opsBase({
+      status: 'up_to_date',
+      installedVersion: 2,
+      components: [
+        {
+          kind: 'worker',
+          name: 'ops-runner',
+          definitionId: 'def-1',
+          headVersion: 2,
+          systems: ['docker'],
+          gates: [],
+          gatesKept: false,
+          bindable: true,
+          status: 'up_to_date',
+          installedVersion: 2,
+          provenance: { status: 'not_installed' },
+        } as PackWire['components'][number],
+      ],
+    });
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_admin_proposal_segments: () => ({ items: [PACK_ASK] }),
+      list_packs: () => ({ items: [bindable] }),
+    });
+    renderTab(http, SEGMENT);
+    const review = await screen.findByTestId('catalog-proposal-pack-review');
+    expect(within(review).getByTestId('catalog-proposal-pack-ask')).toBeDefined();
+    expect(screen.queryByTestId('catalog-proposal-pack-installed')).toBeNull();
+    expect((await screen.findByTestId('catalog-pack-install-trigger')).textContent).toBe(
+      '把 Worker 接上系统…',
+    );
+  });
+
+  it('an install refused because the workspace was just dropped from the targets says nothing was installed', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_admin_proposal_segments: () => ({ items: [PACK_ASK] }),
+      list_packs: () => ({ items: [opsBase()] }),
+      preview_pack_install: () => opsBasePreview(),
+      install_pack: () => {
+        throw new HttpError(
+          'capability_error',
+          'workspace is no longer among the targets',
+          'admin_proposal_target_no_longer_chosen',
+        );
+      },
+    });
+    renderTab(http, SEGMENT);
+
+    fireEvent.click(await screen.findByTestId('catalog-pack-install-trigger'));
+    await screen.findByTestId('catalog-pack-preview');
+    fireEvent.click(screen.getByRole('button', { name: '安装' }));
+    const confirm = await screen.findByTestId('catalog-pack-install-confirm');
+    await waitFor(() =>
+      expect(confirm.textContent).toMatch(/从管理员智能体的目标里去掉了，所以什么也没有安装/),
+    );
+  });
+
+  it('is the owner’s to install or reject: a member reads that and gets no controls', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => MEMBER_WORKSPACE,
+      list_admin_proposal_segments: () => ({ items: [PACK_ASK] }),
+      list_packs: () => ({ items: [opsBase()] }),
+    });
+    renderTab(http, SEGMENT);
+    expect((await screen.findByTestId('catalog-proposals-owner-only')).textContent).toMatch(
+      /工作区所有者/,
+    );
+    expect(screen.queryByTestId('catalog-pack-install-trigger')).toBeNull();
+    expect(screen.queryByTestId('catalog-proposal-reject-trigger')).toBeNull();
   });
 });

@@ -2,6 +2,7 @@ import type {
   AdminProposalItemIntentWire,
   AdminProposalPackExportProblemWire,
   AdminProposalPackExportWire,
+  AdminProposalWorkspaceItemWire,
   ExportedPackFileWire,
   ExportedPackOmittedItemWire,
 } from '@nexttime/shared';
@@ -352,7 +353,7 @@ export async function buildAdminProposalPack(
 
 interface ExportedSegmentRow {
   readonly status: string;
-  readonly items: AdminProposalItemIntentWire[];
+  readonly items: AdminProposalWorkspaceItemWire[];
   readonly source_name: string;
 }
 
@@ -377,6 +378,20 @@ export async function exportAdminProposalPack(
   if (row === undefined) {
     throw new AdminProposalSegmentNotFoundError(input.segmentId, 'on this platform');
   }
+  // S11 AA5g-2: a segment asking for a pack install brings nothing of its own — what it installed is
+  // a pack already.
+  const asked = row.items.find((item) => item.kind === 'pack_install');
+  if (asked !== undefined) {
+    throw new AdminProposalPackNotExportableError(input.segmentId, [
+      {
+        code: 'no_components',
+        message: `the segment asked for pack ${asked.pack} version ${asked.version} to be installed: what it installs is that pack already`,
+      },
+    ]);
+  }
+  const items = row.items.filter(
+    (item): item is AdminProposalItemIntentWire => item.kind !== 'pack_install',
+  );
   if (row.status !== 'applied') {
     throw new AdminProposalPackNotExportableError(input.segmentId, [
       {
@@ -399,7 +414,7 @@ export async function exportAdminProposalPack(
     ]);
   }
   const built = await buildAdminProposalPack(
-    { sourceName: row.source_name, items: row.items },
+    { sourceName: row.source_name, items },
     { summary: input.summary, ...(input.notes !== undefined ? { notes: input.notes } : {}) },
     registry,
   );

@@ -382,10 +382,13 @@ interface ApplyWorkspaceSegmentCommon extends WorkspaceSegmentInput {
  *  (`proposedBy`, the person installing — or the first owner, `channel: platform`); an admin
  *  proposal's segment names nobody here (`proposedBy: null`) and says where it came from instead
  *  (`adminProposal`, S11 AA3b-2). Which one goes with the source's kind, checked at run time and by
- *  `change_segments_proposer` (governance 0033). */
+ *  `change_segments_proposer` (governance 0033). S11 AA5g-2 (governance 0040): a pack's install
+ *  may also name the admin proposal segment that asked for it (`adminProposal` beside
+ *  `proposedBy`) — why it was installed; its content is still the pack's, drafted by nobody here
+ *  but reviewed by the person installing (`itemOriginOf`: `human`). */
 export type ApplyWorkspaceSegmentInput = ApplyWorkspaceSegmentCommon &
   (
-    | { readonly proposedBy: string; readonly adminProposal?: undefined }
+    | { readonly proposedBy: string; readonly adminProposal?: AdminProposalOrigin }
     | { readonly proposedBy: null; readonly adminProposal: AdminProposalOrigin }
   );
 
@@ -405,9 +408,13 @@ function assertProposerMatchesSource(input: ApplyWorkspaceSegmentInput): void {
         'change-plan: an admin_proposal segment names its proposal (version = proposal id) and no proposer of this workspace',
       );
     }
-  } else if (origin !== undefined || input.proposedBy === null) {
+  } else if (input.proposedBy === null) {
     throw new Error(
       `change-plan: a ${input.source.kind} segment names its proposer in this workspace`,
+    );
+  } else if (origin !== undefined && input.source.kind !== 'pack') {
+    throw new Error(
+      `change-plan: only a pack's install names an admin proposal beside its proposer, not a ${input.source.kind} segment`,
     );
   }
 }
@@ -517,7 +524,8 @@ export async function applyWorkspaceSegment(
         classification: planned.classification,
         widening: planned.widening,
         proposedBy: input.proposedBy,
-        // S11 AA3b-2: where an admin proposal's item came from, and that an agent drafted it.
+        // S11 AA3b-2: where an admin proposal's item came from, and that an agent drafted it. S11
+        // AA5g-2: for a pack's install, the proposal that asked for it (`origin: human`).
         ...(origin ? { adminProposal: { ...origin }, origin: itemOrigin } : {}),
         confirmedBy,
       },

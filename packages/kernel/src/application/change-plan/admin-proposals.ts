@@ -11,6 +11,7 @@ import {
   type AdminProposalSummaryWire,
   type AdminProposalWire,
   type AdminProposalWithheldGateInstanceWire,
+  type AdminProposalWorkspaceItemWire,
   type AgentAdminProposalWire,
   type ListEnvelope,
   adminProposalStatusOf,
@@ -214,9 +215,19 @@ export interface AdminProposalInput {
   readonly platform?: AdminProposalPlatformSegmentInputWire;
 }
 
+/** A workspace segment as it is stored: `propose_admin_proposal`'s intents, or (S11 AA5g-2) one
+ *  `pack_install` (`propose_pack_install`). */
+export interface StoredWorkspaceSegment {
+  readonly targetWorkspaceId: string;
+  readonly items: readonly AdminProposalWorkspaceItemWire[];
+  /** S11 AA5g-2: a pack install segment's stored content digest — the digest of the pack version it
+   *  asks for. Absent for a segment of intents, whose digest is {@link adminProposalSegmentDigest}. */
+  readonly contentDigest?: string;
+}
+
 /** What {@link checkAdminProposal} returns: the segments as they will be stored. */
 export interface CheckedAdminProposal {
-  readonly segments: readonly AdminProposalSegmentInputWire[];
+  readonly segments: readonly StoredWorkspaceSegment[];
   readonly platform: AdminProposalPlatformSegmentInputWire | null;
 }
 
@@ -388,8 +399,111 @@ function checkPlatformSegment(
   return { items: platform.items };
 }
 
-/** `sha256:` of what a segment proposes: its target and its items. */
-export function adminProposalSegmentDigest(segment: AdminProposalSegmentInputWire): string {
+/** S11 AA5g-2: `propose_pack_install`'s params (already bounded by the capability). */
+export interface PackInstallProposalInput {
+  readonly pack: string;
+  readonly version: number;
+  readonly targetWorkspaceIds: readonly string[];
+  readonly title: string;
+  readonly description?: string;
+}
+
+/** What {@link checkPackInstallProposal} is told of a pack this deployment has: its name, its
+ *  latest version and that version's digest (the gateway reads the registry; this module never
+ *  does). */
+export interface PackOnOffer {
+  readonly name: string;
+  readonly latestVersion: number;
+  /** `PackVersion.digest` of the latest version: the source digest of every install of it. */
+  readonly latestDigest: string;
+}
+
+/**
+ * S11 AA5g-2 (#484 on #1002, must-fix 1): the source name of every pack install proposal. A
+ * proposal's source name is the namespace its new Skills and Workers are derived under (0032), and
+ * one asking for a pack install derives none — so it never names the pack (that lives in its one
+ * `pack_install` item), and never a pack this deployment ships either: `checkAdminProposal`'s rule
+ * holds for it as for any proposal.
+ */
+export const PACK_INSTALL_PROPOSAL_SOURCE_NAME = 'pack-install';
+
+/**
+ * S11 AA5g-2 (docs/admin-agent-packs-design-2026-11-06.md D2): `propose_pack_install` as the
+ * proposal it writes — `sourceName` the pack, one workspace segment per target, each holding one
+ * `pack_install` (governance 0040: alone in its segment) — checked as {@link checkAdminProposal}
+ * checks the rest (credentials and the redaction mark in the free text first, naming places only).
+ * Refused with {@link AdminProposalInvalidError} for a target named twice, a pack this deployment
+ * does not have, or a version that is not its latest now: the owner installs the latest version
+ * only (`install_pack`), so a proposal for another could never be installed.
+ */
+export function checkPackInstallProposal(
+  input: PackInstallProposalInput,
+  offered: PackOnOffer | null,
+  shippedPackNames: ReadonlySet<string>,
+): { readonly proposal: AdminProposalInput; readonly checked: CheckedAdminProposal } {
+  const text = { title: input.title, description: input.description };
+  const credentials = findCredentialValues(text);
+  if (credentials.count > 0) {
+    throw new AdminProposalCredentialError(credentials.count, credentials.paths);
+  }
+  const redacted = redactedPathsIn(text).map((path) => `proposal.${path}`);
+  if (redacted.length > 0) throw new RedactedTextSubmittedError(redacted[0] as string, redacted);
+
+  const problems: AdminProposalProblem[] = [];
+  if (shippedPackNames.has(PACK_INSTALL_PROPOSAL_SOURCE_NAME)) {
+    problems.push({
+      path: 'pack',
+      message: `this deployment ships a pack named "${PACK_INSTALL_PROPOSAL_SOURCE_NAME}", the source name pack install proposals are kept under: ask a platform administrator`,
+    });
+  }
+  if (offered === null) {
+    problems.push({
+      path: 'pack',
+      message: `this deployment has no pack named "${input.pack}": agent_list_packs lists those it has`,
+    });
+  } else if (offered.latestVersion !== input.version) {
+    problems.push({
+      path: 'version',
+      message: `pack ${offered.name}'s latest version is ${offered.latestVersion}: an owner installs only the latest, so propose that one`,
+    });
+  }
+  const seen = new Map<string, number>();
+  for (const [i, id] of input.targetWorkspaceIds.entries()) {
+    const first = seen.get(id);
+    if (first !== undefined) {
+      problems.push({
+        path: `targetWorkspaceIds[${i}]`,
+        message: `names the workspace targetWorkspaceIds[${first}] does: one segment per workspace`,
+      });
+    } else {
+      seen.set(id, i);
+    }
+  }
+  if (problems.length > 0) throw new AdminProposalInvalidError(problems);
+  // #484 on #1002, must-fix 2: each segment's content digest is the digest of the pack version it
+  // asks for, so an install of the same version number with other content (an extra pack replaced
+  // in place) does not answer it (governance 0040 compares it with the install's source digest).
+  const packDigest = (offered as PackOnOffer).latestDigest;
+  const segments: StoredWorkspaceSegment[] = input.targetWorkspaceIds.map((id) => ({
+    targetWorkspaceId: id,
+    items: [{ kind: 'pack_install', pack: input.pack, version: input.version }],
+    contentDigest: packDigest,
+  }));
+  return {
+    proposal: {
+      title: input.title,
+      ...(input.description !== undefined ? { description: input.description } : {}),
+      sourceName: PACK_INSTALL_PROPOSAL_SOURCE_NAME,
+      segments: [],
+    },
+    checked: { segments, platform: null },
+  };
+}
+
+/** `sha256:` of what a segment proposes: its target and its items. A pack install segment's own
+ *  digest is the pack version's ({@link StoredWorkspaceSegment.contentDigest}); this is what the
+ *  proposal's digest lists for it either way, so its target is in that digest too. */
+export function adminProposalSegmentDigest(segment: StoredWorkspaceSegment): string {
   return contentDigest({ targetWorkspaceId: segment.targetWorkspaceId, items: segment.items });
 }
 
@@ -456,7 +570,7 @@ export function platformItemConnector(
  */
 async function unknownWorkerSystems(
   client: PoolClient,
-  segments: readonly AdminProposalSegmentInputWire[],
+  segments: readonly StoredWorkspaceSegment[],
   platform: AdminProposalPlatformSegmentInputWire | null,
 ): Promise<AdminProposalProblem[]> {
   const named = segments.flatMap((segment, s) =>
@@ -492,7 +606,7 @@ async function unknownWorkerSystems(
  *  0001). */
 async function firstUnavailableTarget(
   client: PoolClient,
-  segments: readonly AdminProposalSegmentInputWire[],
+  segments: readonly StoredWorkspaceSegment[],
 ): Promise<number | undefined> {
   const ids = segments.map((segment) => segment.targetWorkspaceId);
   const result = await client.query<{ id: string }>(
@@ -510,7 +624,7 @@ async function firstUnavailableTarget(
  *  transaction's own Principal in this trial workspace only. */
 async function firstTargetNotChosen(
   client: PoolClient,
-  segments: readonly AdminProposalSegmentInputWire[],
+  segments: readonly StoredWorkspaceSegment[],
 ): Promise<number | undefined> {
   if (segments.length === 0) return undefined;
   const result = await client.query<{ id: string }>('select admin_agent_chosen_targets() as id');
@@ -611,7 +725,7 @@ export async function proposeAdminProposal(
         index + 1,
         segment.targetWorkspaceId,
         JSON.stringify(segment.items),
-        segmentDigests[index],
+        segment.contentDigest ?? segmentDigests[index],
       ],
     );
   }
@@ -671,6 +785,7 @@ interface ProposalRow {
   withdrawn: number;
   rolled_back: number;
   platform_status: AdminProposalSegmentStatus | null;
+  pack_install: { pack: string; version: number } | null;
 }
 
 interface SegmentRow {
@@ -700,7 +815,8 @@ const PLAN_STATUS_SQL = `case
 const PLAN_SELECT = `
   select p.id, p.title, p.description, p.source_name, p.origin, p.proposed_by_user,
          p.proposer_display_name, p.content_digest, p.created_at,
-         c.proposed, c.applied, c.rejected, c.withdrawn, c.rolled_back, c.platform_status
+         c.proposed, c.applied, c.rejected, c.withdrawn, c.rolled_back, c.platform_status,
+         c.pack_install
     from admin_proposals p
     cross join lateral (
       select count(s.id)::int as total,
@@ -711,7 +827,11 @@ const PLAN_SELECT = `
              (count(*) filter (where s.status = 'rolled_back'))::int as rolled_back,
              -- Legacy 619: a proposal has at most one platform segment
              -- (admin_proposal_segments_one_platform), so max() is its status, or null.
-             (max(s.status::text) filter (where s.authority = 'platform')) as platform_status
+             (max(s.status::text) filter (where s.authority = 'platform')) as platform_status,
+             -- S11 AA5g: a pack install proposal's segments each hold the same one pack_install
+             -- (governance 0040: alone in its segment).
+             (array_agg(s.items -> 0 order by s.ordinal)
+                filter (where s.items -> 0 ->> 'kind' = 'pack_install'))[1] as pack_install
         from admin_proposal_segments s
        where s.workspace_id = p.workspace_id and s.proposal_id = p.id
     ) c`;
@@ -757,6 +877,10 @@ function summaryOf(row: ProposalRow): AdminProposalSummaryWire {
       rolledBack: row.rolled_back,
     },
     platformSegmentStatus: row.platform_status,
+    packInstall:
+      row.pack_install === null
+        ? null
+        : { pack: row.pack_install.pack, version: row.pack_install.version },
   };
 }
 

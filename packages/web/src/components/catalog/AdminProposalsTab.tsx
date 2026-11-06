@@ -2,7 +2,6 @@ import {
   ADMIN_PROPOSAL_REASON_MAX_LENGTH,
   ADMIN_PROPOSAL_SEGMENT_STATUS_VALUES,
   type AdminProposalItemBlockerWire,
-  type AdminProposalItemIntentWire,
   type AdminProposalPlatformInstanceChangeWire,
   type AdminProposalPlatformItemIntentWire,
   type AdminProposalPreviewItemWire,
@@ -10,10 +9,12 @@ import {
   type AdminProposalSegmentPreviewWire,
   type AdminProposalSegmentStatus,
   type AdminProposalWorkerGateBindingWire,
+  type AdminProposalWorkspaceItemWire,
   type AvailableGateInstanceWire,
   type ChangePrincipalRefWire,
   type ChangeVerificationWire,
   type GateInstanceDriftField,
+  type PackWire,
   type ReceivedAdminProposalSegmentWire,
 } from '@nexttime/shared';
 import { useEffect, useRef, useState } from 'react';
@@ -61,6 +62,7 @@ import {
   wideningText,
 } from './ChangesTab.js';
 import { MarkdownPreview } from './MarkdownPreview.js';
+import { InstallPack, nothingToInstall } from './PacksTab.js';
 
 /**
  * components/catalog/AdminProposalsTab: 能力目录 · 管理员提案 (`#/govern/catalog/proposals`, S11
@@ -169,18 +171,35 @@ function decisionText(segment: ReceivedAdminProposalSegmentWire, t: Translate): 
  *  here (F10-6: never the bare id where a name exists). */
 type GateNames = ReadonlyMap<string, string>;
 
+/** S11 AA5g-2 (governance 0040): a segment asking for one pack at one version holds exactly that
+ *  item. It is answered by installing the pack (its own review, `install_pack`), never by
+ *  `apply_admin_proposal_segment`. */
+function packInstallOf(
+  segment: ReceivedAdminProposalSegmentWire,
+): { readonly pack: string; readonly version: number } | null {
+  const [only, ...rest] = segment.items;
+  return only?.kind === 'pack_install' && rest.length === 0
+    ? { pack: only.pack, version: only.version }
+    : null;
+}
+
 function gateNameOf(gateId: string, names: GateNames): string {
   return names.get(gateId) ?? gateId;
 }
 
 /** 「Skill docker-triage」, 「Worker ops-runner」, 「本体 ops-assets」, 「Operation restart（门
- *  Docker prod）」 — an intent as proposed, before it resolves to anything here. */
+ *  Docker prod）」, 「能力包 ops-base v3」 — an intent as proposed, before it resolves to anything
+ *  here. */
 function intentSubjectText(
-  intent: AdminProposalItemIntentWire,
+  intent: AdminProposalWorkspaceItemWire,
   gates: GateNames,
   t: Translate,
 ): string {
   switch (intent.kind) {
+    case 'pack_install': {
+      const version = `v${intent.version}`;
+      return t(`能力包 ${intent.pack} ${version}`, `Pack ${intent.pack} ${version}`);
+    }
     case 'skill_version':
       return `Skill ${intent.skill.name}`;
     case 'worker_definition_version': {
@@ -576,21 +595,26 @@ function AdminProposalSegmentDetail({
             label: t('提议时间', 'Proposed'),
             value: <span data-volatile="">{formatDateTime(segment.proposal.proposedAt)}</span>,
           },
-          {
-            key: 'source',
-            label: t('来源名', 'Source name'),
-            value: (
-              <span
-                className="mono wrap-anywhere"
-                title={t(
-                  '新建的 Skill 和 Worker 以它命名',
-                  'New Skills and Workers are named under it',
-                )}
-              >
-                {segment.proposal.sourceName}
-              </span>
-            ),
-          },
+          // A pack install proposal derives nothing under its source name (S11 AA5g): not shown.
+          ...(packInstallOf(segment) === null
+            ? [
+                {
+                  key: 'source',
+                  label: t('来源名', 'Source name'),
+                  value: (
+                    <span
+                      className="mono wrap-anywhere"
+                      title={t(
+                        '新建的 Skill 和 Worker 以它命名',
+                        'New Skills and Workers are named under it',
+                      )}
+                    >
+                      {segment.proposal.sourceName}
+                    </span>
+                  ),
+                },
+              ]
+            : []),
           ...(decision !== null
             ? [
                 {
@@ -656,7 +680,20 @@ function AdminProposalSegmentDetail({
         </Notice>
       ) : null}
 
-      {segment.status === 'proposed' ? (
+      {segment.status === 'proposed' && packInstallOf(segment) !== null ? (
+        <PackInstallProposalReview
+          http={http}
+          segment={segment}
+          onInstalled={(checked) => {
+            setAppliedHere({ segmentId: segment.id, verification: checked });
+            onDecided(null);
+          }}
+          onDecided={(next) => {
+            if (next !== null) setDecided(next);
+            onDecided(next);
+          }}
+        />
+      ) : segment.status === 'proposed' ? (
         <SegmentReview
           http={http}
           segment={segment}
@@ -768,8 +805,6 @@ function SegmentReview({
   const [confirmed, setConfirmed] = useState<ReadonlySet<number>>(new Set());
   const [credentialsReviewed, setCredentialsReviewed] = useState(false);
   const [applyOpen, setApplyOpen] = useState(false);
-  const [rejectOpen, setRejectOpen] = useState(false);
-  const [reason, setReason] = useState('');
   // A refusal that showed the review was out of date: say so above the fresh one.
   const [staleNotice, setStaleNotice] = useState(false);
 
@@ -885,22 +920,6 @@ function SegmentReview({
     // A Worker it publishes is what the readiness hint asks for when there is none.
     announceReadinessChange(http);
     onDecided(result.segment, result.verification);
-  }
-
-  async function reject(): Promise<void> {
-    let result: ReceivedAdminProposalSegmentWire;
-    try {
-      result = await http.call<ReceivedAdminProposalSegmentWire>('reject_admin_proposal_segment', {
-        segmentId: segment.id,
-        reason: reason.trim(),
-      });
-    } catch (error) {
-      if (isForbiddenError(error)) permissions.markDenied('reject_admin_proposal_segment');
-      if (describeError(error).code === 'admin_proposal_segment_not_open') onDecided(null);
-      throw error;
-    }
-    permissions.markAllowed('reject_admin_proposal_segment');
-    onDecided(result);
   }
 
   // UX P3-1 (#929): a part that cannot be applied however it is ticked (an instance the platform
@@ -1159,55 +1178,7 @@ function SegmentReview({
               />
             ) : null}
             {canReject ? (
-              <Confirm
-                tier="medium"
-                open={rejectOpen}
-                onOpenChange={(next) => {
-                  setRejectOpen(next);
-                  if (!next) setReason('');
-                }}
-                anchor={
-                  <Button
-                    variant="ghost"
-                    onClick={() => setRejectOpen(true)}
-                    data-testid="catalog-proposal-reject-trigger"
-                  >
-                    {t('拒绝…', 'Reject…')}
-                  </Button>
-                }
-                title={t('拒绝这份管理员提案', 'Reject this admin proposal')}
-                description={t(
-                  '拒绝后它不能再应用，工作区里什么也不会改。理由会留在这个工作区，平台管理员也看得到；提议它的管理员智能体只知道被拒绝了，看不到理由。',
-                  'Once rejected it can never be applied, and nothing in the workspace changes. The reason stays with this workspace and the platform’s administrators read it too; the admin agent that proposed it learns only that it was rejected, not why.',
-                )}
-                target={segment.proposal.title}
-                confirmLabel={t('拒绝', 'Reject')}
-                danger
-                confirmDisabled={reason.trim() === ''}
-                onConfirm={reject}
-                testId="catalog-proposal-reject-confirm"
-              >
-                <Field
-                  id="catalog-proposal-reject-reason"
-                  label={t('拒绝理由', 'Reason')}
-                  hint={t(
-                    '必填：为什么不采用它。只有本工作区和平台管理员看得到。',
-                    'Required: why it is not taken. Only this workspace and the platform’s administrators read it.',
-                  )}
-                  required
-                >
-                  <Textarea
-                    id="catalog-proposal-reject-reason"
-                    value={reason}
-                    maxLength={ADMIN_PROPOSAL_REASON_MAX_LENGTH}
-                    onChange={(event) => setReason(event.target.value)}
-                    aria-label={t('拒绝理由', 'Reject reason')}
-                    aria-required
-                    aria-describedby={describedBy('catalog-proposal-reject-reason', true, false)}
-                    data-testid="catalog-proposal-reject-reason"
-                  />
-                </Field>
-              </Confirm>
+              <RejectSegment http={http} segment={segment} onDecided={onDecided} />
             ) : null}
           </div>
           <div id="catalog-proposal-missing">
@@ -1217,6 +1188,257 @@ function SegmentReview({
               testId="catalog-proposal-missing-steps"
             />
           </div>
+        </div>
+      ) : (
+        <p className="text-3 text-small" data-testid="catalog-proposal-owner-only">
+          {t(
+            '应用或拒绝管理员提案由工作区所有者操作。',
+            'A workspace owner applies or rejects admin proposals.',
+          )}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** 拒绝… — a reason the owner writes, which this workspace and the platform's administrators read;
+ *  the admin agent learns only that it was rejected. */
+function RejectSegment({
+  http,
+  segment,
+  onDecided,
+}: {
+  readonly http: CapabilityCaller;
+  readonly segment: ReceivedAdminProposalSegmentWire;
+  /** What the reject returned; `null`: decided elsewhere meanwhile (read the list again). */
+  readonly onDecided: (segment: ReceivedAdminProposalSegmentWire | null) => void;
+}) {
+  const t = useT();
+  const permissions = usePermissions();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+
+  async function reject(): Promise<void> {
+    let result: ReceivedAdminProposalSegmentWire;
+    try {
+      result = await http.call<ReceivedAdminProposalSegmentWire>('reject_admin_proposal_segment', {
+        segmentId: segment.id,
+        reason: reason.trim(),
+      });
+    } catch (error) {
+      if (isForbiddenError(error)) permissions.markDenied('reject_admin_proposal_segment');
+      if (describeError(error).code === 'admin_proposal_segment_not_open') onDecided(null);
+      throw error;
+    }
+    permissions.markAllowed('reject_admin_proposal_segment');
+    onDecided(result);
+  }
+
+  return (
+    <Confirm
+      tier="medium"
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setReason('');
+      }}
+      anchor={
+        <Button
+          variant="ghost"
+          onClick={() => setOpen(true)}
+          data-testid="catalog-proposal-reject-trigger"
+        >
+          {t('拒绝…', 'Reject…')}
+        </Button>
+      }
+      title={t('拒绝这份管理员提案', 'Reject this admin proposal')}
+      description={t(
+        '拒绝后它不能再应用，工作区里什么也不会改。理由会留在这个工作区，平台管理员也看得到；提议它的管理员智能体只知道被拒绝了，看不到理由。',
+        'Once rejected it can never be applied, and nothing in the workspace changes. The reason stays with this workspace and the platform’s administrators read it too; the admin agent that proposed it learns only that it was rejected, not why.',
+      )}
+      target={segment.proposal.title}
+      confirmLabel={t('拒绝', 'Reject')}
+      danger
+      confirmDisabled={reason.trim() === ''}
+      onConfirm={reject}
+      testId="catalog-proposal-reject-confirm"
+    >
+      <Field
+        id="catalog-proposal-reject-reason"
+        label={t('拒绝理由', 'Reason')}
+        hint={t(
+          '必填：为什么不采用它。只有本工作区和平台管理员看得到。',
+          'Required: why it is not taken. Only this workspace and the platform’s administrators read it.',
+        )}
+        required
+      >
+        <Textarea
+          id="catalog-proposal-reject-reason"
+          value={reason}
+          maxLength={ADMIN_PROPOSAL_REASON_MAX_LENGTH}
+          onChange={(event) => setReason(event.target.value)}
+          aria-label={t('拒绝理由', 'Reject reason')}
+          aria-required
+          aria-describedby={describedBy('catalog-proposal-reject-reason', true, false)}
+          data-testid="catalog-proposal-reject-reason"
+        />
+      </Field>
+    </Confirm>
+  );
+}
+
+/**
+ * S11 AA5g-3: a segment asking this workspace to install a pack (`propose_pack_install`). It is
+ * answered with the pack's own install review — the same one 能力包 shows, read from this
+ * workspace — run with the segment's id, so the install leaves one install record (source: the
+ * pack, with this proposal as where it came from) and the segment reads 已应用; or rejected. Only
+ * the latest version installs, so a proposal for an older one can only be rejected.
+ */
+function PackInstallProposalReview({
+  http,
+  segment,
+  onInstalled,
+  onDecided,
+}: {
+  readonly http: CapabilityCaller;
+  readonly segment: ReceivedAdminProposalSegmentWire;
+  /** Installed from here: the segment is applied (the list reads it again). */
+  readonly onInstalled: (verification: ChangeVerificationWire | null) => void;
+  readonly onDecided: (segment: ReceivedAdminProposalSegmentWire | null) => void;
+}) {
+  const t = useT();
+  const can = useRoleCan(http);
+  const asked = packInstallOf(segment);
+  const packs = useCapabilityList<PackWire>(http, 'list_packs', {});
+  // Installed from here: said at once, while the list reads the segment as applied (UX P3-2).
+  const [installedHere, setInstalledHere] = useState(false);
+  // The packs last read, kept while they are read again (a refusal reads the lists again): the
+  // install review stays open on screen, saying why nothing was installed.
+  const lastPacks = useRef<readonly PackWire[] | null>(null);
+  if (packs.state.status === 'ready') lastPacks.current = packs.state.data.items;
+  if (asked === null) return null;
+  const known = lastPacks.current;
+  const pack = known?.find((candidate) => candidate.name === asked.pack);
+  const canInstall = can('install_pack') !== false;
+  const canReject = can('reject_admin_proposal_segment') !== false;
+
+  const standing =
+    known === null
+      ? null
+      : pack === undefined
+        ? {
+            testId: 'catalog-proposal-pack-gone',
+            text: t(
+              `这个部署里已经没有能力包 ${asked.pack}，不能照它安装。可以拒绝它。`,
+              `This deployment no longer has the pack ${asked.pack}, so it cannot be installed as asked. Reject it.`,
+            ),
+          }
+        : pack.latestVersion !== asked.version
+          ? {
+              testId: 'catalog-proposal-pack-newer',
+              text: t(
+                `能力包 ${asked.pack} 现在的最新版本是 v${pack.latestVersion}，这份提案请求的 v${asked.version} 已经不是最新，只能安装最新版本，所以不能照它安装。可以拒绝它；需要的话，在「能力包」页直接安装最新版本。`,
+                `The latest version of ${asked.pack} is now v${pack.latestVersion}; this proposal asks for v${asked.version}, and only the latest version installs, so it cannot be installed as asked. Reject it; if it is still wanted, install the latest version from Packs.`,
+              ),
+            }
+          : pack.installedVersion === asked.version && nothingToInstall(pack)
+            ? {
+                testId: 'catalog-proposal-pack-installed',
+                text: t(
+                  `工作区里已经装着 ${asked.pack} v${asked.version}，没有要安装的内容。不需要它的话可以拒绝。`,
+                  `This workspace already has ${asked.pack} v${asked.version}, so there is nothing to install. Reject it if it is not needed.`,
+                ),
+              }
+            : null;
+
+  return (
+    <div className="stack" data-testid="catalog-proposal-pack-review">
+      {installedHere ? (
+        <Notice testId="catalog-proposal-pack-installed-here">
+          {t(
+            `已装上 ${asked.pack} v${asked.version}，这份管理员提案记为已应用。安装记录在「安装历史」里，需要时可以整条撤销。`,
+            `${asked.pack} v${asked.version} is installed and this admin proposal reads applied. The install record is under Install history, where it can be rolled back as a whole.`,
+          )}
+        </Notice>
+      ) : known !== null && standing === null ? (
+        // UX P3-2: how installing answers it — said only while it can be installed from here.
+        <Notice testId="catalog-proposal-pack-ask">
+          {t(
+            `它请求在本工作区安装能力包 ${asked.pack} 的 v${asked.version}。安装前先看它会改动什么，审阅和在「能力包」页安装时一样；装上后这份管理员提案记为已应用，安装记录的来源是这个能力包，在「安装历史」里可以整条撤销。`,
+            `It asks this workspace to install v${asked.version} of the pack ${asked.pack}. Review what it changes first, the same review as installing it from Packs; once installed, this admin proposal reads applied, and the install record — its source the pack — can be rolled back as a whole under Install history.`,
+          )}
+        </Notice>
+      ) : null}
+      {known === null && packs.state.status === 'loading' ? (
+        <SkeletonRows count={2} label={t('正在加载能力包…', 'Loading pack')} />
+      ) : packs.state.status === 'error' ? (
+        <ErrorBanner
+          error={packs.state.error}
+          title={t('无法加载能力包', 'Could not load packs')}
+          onRetry={() => void packs.reload()}
+          testId="catalog-proposal-pack-error"
+        />
+      ) : null}
+      {pack !== undefined ? (
+        <KeyValue
+          items={[
+            {
+              key: 'pack',
+              label: t('能力包', 'Pack'),
+              value: (
+                <RouteLink
+                  href={hrefs.catalog('packs', pack.name)}
+                  testId="catalog-proposal-pack-link"
+                >
+                  <span className="mono">{pack.name}</span>
+                </RouteLink>
+              ),
+            },
+            ...(pack.summary
+              ? [{ key: 'summary', label: t('简介', 'Summary'), value: pack.summary }]
+              : []),
+            {
+              key: 'installed',
+              label: t('已装版本', 'Installed'),
+              value:
+                pack.installedVersion !== null
+                  ? `v${pack.installedVersion}`
+                  : pack.status === 'customized'
+                    ? t('对不上任何一个版本（已定制）', 'Matches no version (customized)')
+                    : t('未安装', 'Not installed'),
+            },
+            { key: 'asked', label: t('请求的版本', 'Asked for'), value: `v${asked.version}` },
+          ]}
+        />
+      ) : null}
+      {standing !== null && !installedHere ? (
+        <Notice tone="warn" testId={standing.testId}>
+          {standing.text}
+        </Notice>
+      ) : null}
+      {canInstall || canReject ? (
+        <div className="row-wrap">
+          {canInstall && pack !== undefined && standing === null && !installedHere ? (
+            <InstallPack
+              http={http}
+              pack={pack}
+              adminProposalSegmentId={segment.id}
+              onInstalled={(result) => {
+                setInstalledHere(true);
+                onInstalled(result.verification);
+              }}
+              onStale={() => void packs.reload()}
+              onProposalStale={(code) => {
+                // Decided meanwhile: the list says how it stands now. A newer version: the packs
+                // read again say it can only be rejected. Otherwise the refusal says it all.
+                if (code === 'admin_proposal_segment_not_open') onDecided(null);
+                else if (code === 'admin_proposal_pack_mismatch') void packs.reload();
+              }}
+            />
+          ) : null}
+          {canReject && !installedHere ? (
+            <RejectSegment http={http} segment={segment} onDecided={onDecided} />
+          ) : null}
         </div>
       ) : (
         <p className="text-3 text-small" data-testid="catalog-proposal-owner-only">
@@ -1242,7 +1464,7 @@ function BlockerLine({
 }: {
   readonly http: CapabilityCaller;
   readonly blocker: AdminProposalItemBlockerWire;
-  readonly intent: AdminProposalItemIntentWire | undefined;
+  readonly intent: AdminProposalWorkspaceItemWire | undefined;
   readonly subject: string;
   readonly offered: readonly AvailableGateInstanceWire[];
   readonly platformPartPending: boolean;

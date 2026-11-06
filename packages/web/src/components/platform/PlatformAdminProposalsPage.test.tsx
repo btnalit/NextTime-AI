@@ -648,4 +648,42 @@ describe('PlatformAdminProposalsPage (平台 · 管理员提案, S11 AA4b)', () 
       '等工作区所有者在「能力目录 → 管理员提案」里决定',
     );
   });
+
+  it('S11 AA5g: a workspace part asking for a pack install says which pack and version, and once applied offers no export of its own', async () => {
+    const http = scriptedHttp({
+      list_admin_proposals: () => ({
+        items: [
+          summary({ sourceName: 'pack-install', packInstall: { pack: 'ops-base', version: 2 } }),
+        ],
+      }),
+      get_admin_proposal: () =>
+        proposal({
+          sourceName: 'pack-install',
+          packInstall: { pack: 'ops-base', version: 2 },
+          segments: [
+            workspaceSegment({
+              ordinal: 1,
+              id: PROD_SEGMENT,
+              items: [{ kind: 'pack_install', pack: 'ops-base', version: 2 }],
+              status: 'applied',
+              decidedAt: '2026-11-02T08:00:00.000Z',
+            }),
+          ],
+        }),
+    });
+    renderPage(http, { itemId: PROPOSAL });
+    expect(
+      (await screen.findByTestId('platform-admin-proposal-workspace-part-1-pack')).textContent,
+    ).toMatch(/^请求安装能力包 ops-base v2$/);
+    // The proposal's own header names the pack, never the source name all pack installs share.
+    expect(screen.getByTestId('platform-admin-proposal-pack').textContent).toMatch(
+      /^请求安装能力包 ops-base v2$/,
+    );
+    expect(
+      screen.getByTestId(`platform-admin-proposal-row-source-${PROPOSAL}`).textContent,
+    ).toMatch(/^请求安装能力包 ops-base v2$/);
+    expect(
+      screen.queryByTestId('platform-admin-proposal-workspace-part-1-export-trigger'),
+    ).toBeNull();
+  });
 });

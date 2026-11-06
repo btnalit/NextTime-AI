@@ -215,6 +215,7 @@ function agentProposalWire(id, args, status) {
     status,
     segmentCounts: counts,
     platformSegmentStatus: platform.length > 0 ? status : null,
+    packInstall: null,
     description: args?.description ?? '',
     contentDigest: 'sha256:proposal',
     segments,

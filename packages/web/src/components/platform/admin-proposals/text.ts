@@ -27,6 +27,15 @@ import type { PresetLabel } from './preset-labels.js';
  * this console uses for it).
  */
 
+/** 「请求安装能力包 ops-base v2」 — what a pack install proposal asks of its targets (S11 AA5g). */
+export function packInstallText(
+  asked: { readonly pack: string; readonly version: number },
+  t: Translate,
+): string {
+  const version = `v${asked.version}`;
+  return t(`请求安装能力包 ${asked.pack} ${version}`, `Install pack ${asked.pack} ${version}`);
+}
+
 /** A platform user by the name they had then, or a short id when they had none. */
 export function userName(ref: AdminProposalProposerWire | PlatformUserRefWire): string {
   return ref.displayName || shortId(ref.userId);

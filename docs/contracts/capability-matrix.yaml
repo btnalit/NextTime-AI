@@ -30,6 +30,9 @@ capabilities:
   agent_list_admin_proposals:
     console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
     agents: [admin]
+  agent_list_packs:
+    console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看能力包走能力目录的能力包页（list_packs）"
+    agents: [admin]
   agent_list_proposal_targets:
     console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
     agents: [admin]
@@ -537,6 +540,9 @@ capabilities:
   propose_operation:
     console: required
     agents: [entry, admin]
+  propose_pack_install:
+    console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；所有者在能力目录的管理员提案页审阅，用 install_pack 带 adminProposalSegmentId 安装，或拒绝"
+    agents: [admin]
   propose_procedure:
     console: required
     agents: [entry, admin]

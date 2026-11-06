@@ -19,9 +19,11 @@ import {
   AdminProposalInvalidError,
   AdminProposalNotFoundError,
   AdminProposalNotOpenError,
+  AdminProposalPackMismatchError,
   AdminProposalQuotaExceededError,
   AdminProposalRoleMismatchError,
   AdminProposalSegmentBlockedError,
+  AdminProposalSegmentIsPackInstallError,
   AdminProposalSegmentNotFoundError,
   AdminProposalSegmentNotOpenError,
   AdminProposalSegmentUnchangedError,
@@ -656,6 +658,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
     err instanceof AdminProposalSegmentBlockedError ||
     err instanceof AdminProposalSegmentUnchangedError ||
     err instanceof AdminProposalTargetNoLongerChosenError ||
+    // S11 AA5g-2: mirrors HTTP 409 `admin_proposal_segment_is_pack_install` /
+    // `admin_proposal_pack_mismatch`.
+    err instanceof AdminProposalSegmentIsPackInstallError ||
+    err instanceof AdminProposalPackMismatchError ||
     // S11 AA5d-2: mirrors HTTP 409 `admin_proposal_pack_not_exportable`.
     err instanceof AdminProposalPackNotExportableError
   ) {

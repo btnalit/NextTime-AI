@@ -1765,6 +1765,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         ['workspace', '[{"kind":"skill_version"},{"kind":"operation_version"}]', true],
         ['workspace', '[{"kind":"worker_definition_version"},{"kind":"ontology_version"}]', true],
         ['workspace', '[{"kind":"gate_instance"}]', false],
+        // S11 AA5g-2 (governance 0040): a pack_install alone, in a workspace segment only.
+        ['workspace', '[{"kind":"pack_install"}]', true],
+        ['workspace', '[{"kind":"pack_install"},{"kind":"skill_version"}]', false],
+        ['workspace', '[{"kind":"pack_install"},{"kind":"pack_install"}]', false],
+        ['platform', '[{"kind":"pack_install"}]', false],
         ['workspace', '[{"kind":1}]', false],
         ['workspace', '[{"kind":["skill_version"]}]', false],
         ['workspace', '[[{"kind":"skill_version"}]]', false],
