@@ -206,17 +206,29 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
     await expect(operationsList).toContainText(OBSERVE_OP, { timeout: 15_000 });
     await expect(operationsList).toContainText(EXECUTE_OP);
 
-    const memberSelect = grantForm.getByTestId('ggf-member-select');
-    await expect(memberSelect).toBeEnabled({ timeout: 15_000 });
-    const memberOption = memberSelect.locator('option:not([value=""])');
+    // 「成员」这一栏本身就是成员列表（主机 v0.63.0 验收：它曾经只是搜索框，下拉框是下面另一个
+    // 控件，在框里输入名字并不算选中，授予一直卡在「选择成员」）。
+    const member = grantForm.getByTestId('ggf-member');
+    await expect(member).toBeEnabled({ timeout: 15_000 });
+    await member.click();
+    const memberOptions = grantForm.getByRole('option');
     // 全新工作区只有这一个人类成员——它自己。
-    await expect(memberOption).toHaveCount(1);
-    const memberId = await memberOption.getAttribute('value');
-    expect(memberId ?? '').not.toBe('');
-    await memberSelect.selectOption(memberId as string);
+    await expect(memberOptions).toHaveCount(1, { timeout: 15_000 });
+    const ownName =
+      (await memberOptions.first().locator('.combobox-option-label').textContent()) ?? '';
+    expect(ownName).not.toBe('');
+    // 输入名字缩小列表，回车选中——之前输入名字什么也选不中。
+    await member.fill(ownName.slice(0, Math.max(1, ownName.length - 1)));
+    await member.press('Enter');
+    await expect(member).toHaveValue(ownName);
 
     await grantForm.getByTestId('ggf-submit').click();
     await expect(grantForm.getByTestId('ggf-granted-summary')).toBeVisible({ timeout: 15_000 });
+    // 已经有这个门的成员在列表里标「已授权」，不能再授予一次。
+    await member.click();
+    await expect(memberOptions.first()).toContainText('已授权', { timeout: 15_000 });
+    await expect(memberOptions.first()).toHaveAttribute('aria-disabled', 'true');
+    await member.press('Escape');
     await page.keyboard.press('Escape');
     await expect(grantDrawer).toBeHidden();
     // Console redesign P3-3 (V5): "谁能用" no longer sits inline on the card — its summary button
