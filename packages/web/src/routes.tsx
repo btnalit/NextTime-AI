@@ -213,7 +213,14 @@ function useWorkspaceSwitchFailureToast(
       tone: 'danger',
       key: 'workspace-switch-failed',
       title: t(`没能切换到工作区「${name}」`, `Could not switch to workspace "${name}"`),
-      description: `${t('仍在当前工作区。', 'You are still in the current workspace. ')}${errorToastText(failure.error, t)}`,
+      // UX review of #1003: with the button there, "reload the page" would send the reader to F5,
+      // which lands back in the current workspace — the description points at the button instead.
+      description: transport
+        ? t(
+            '仍在当前工作区。和平台的连接断了，点下面的按钮刷新页面并直接进入它。',
+            'You are still in the current workspace. The connection to the platform closed — use the button below to reload straight into it.',
+          )
+        : `${t('仍在当前工作区。', 'You are still in the current workspace. ')}${errorToastText(failure.error, t)}`,
       ...(transport
         ? {
             action: {

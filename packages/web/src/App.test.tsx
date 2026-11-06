@@ -274,7 +274,7 @@ describe('App: 我的账户', () => {
     });
 
     await screen.findByText('没能切换到工作区「mgmt」');
-    expect(screen.getByText(/和平台的连接断了/)).toBeTruthy();
+    expect(screen.getByText(/和平台的连接断了，点下面的按钮刷新页面并直接进入它/)).toBeTruthy();
     expect(screen.getByTestId('nav-agent')).toBeTruthy();
     const reload = screen.getByRole('button', { name: '刷新页面并进入「mgmt」' });
     fireEvent.click(reload);
