@@ -2,15 +2,16 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import {
+  comboboxOptionTexts,
+  openCombobox,
+  pickComboboxValue,
+} from '../kit/combobox.test-helpers.js';
 import { GrantGateForm } from './GrantGateForm.js';
 
-/** `list_principals` resolves asynchronously — setting the `<select>`'s value before its `<option
- *  value="p-1">` exists is a silent no-op (no matching option, the DOM value does not change), so
- *  every caller awaits the option first. */
+/** Picks a member in the member combobox once `list_principals` (asynchronous) has listed it. */
 async function selectMember(id: string): Promise<void> {
-  const select = screen.getByTestId('ggf-member-select');
-  await waitFor(() => expect(select.querySelector(`option[value="${id}"]`)).not.toBeNull());
-  fireEvent.change(select, { target: { value: id } });
+  await pickComboboxValue(screen.getByTestId('ggf-member'), id);
 }
 
 /**
@@ -106,6 +107,91 @@ function scriptedHttp(
 }
 
 describe('GrantGateForm', () => {
+  const twoMembers = () => ({
+    items: [
+      {
+        id: 'p-1',
+        kind: 'human',
+        role: 'member',
+        displayName: 'Bob',
+        createdAt: '2026-09-01T00:00:00.000Z',
+        hasApiKey: false,
+      },
+      {
+        id: 'p-2',
+        kind: 'human',
+        role: 'member',
+        displayName: 'Carol',
+        createdAt: '2026-09-01T00:00:00.000Z',
+        hasApiKey: false,
+      },
+    ],
+  });
+
+  it('host v0.63.0: the 成员 field is itself the member list — typing a name narrows it and Enter picks that member', async () => {
+    const http = scriptedHttp({
+      list_principals: twoMembers,
+      grant_capability: () => ({ id: 'grant-1' }),
+    });
+    render(
+      <GrantGateForm
+        http={http}
+        lockedGatekeeper={{ id: 'gk-1', name: 'docker-gate' }}
+        onGranted={vi.fn()}
+      />,
+    );
+    const member = screen.getByTestId('ggf-member');
+    // The field labelled 成员 is the combobox: no separate search box or <select> next to it.
+    expect(screen.getByLabelText(/成员/)).toBe(member);
+    expect(member.getAttribute('role')).toBe('combobox');
+    expect(screen.queryByRole('listbox', { hidden: true })).toBeNull();
+    openCombobox(member);
+    await waitFor(() => expect(comboboxOptionTexts(member)).toEqual(['Bob成员', 'Carol成员']));
+
+    fireEvent.change(member, { target: { value: 'Car' } });
+    expect(comboboxOptionTexts(member)).toEqual(['Carol成员']);
+    // Typing alone has chosen nobody yet: 授予 still waits for a member.
+    expect(screen.getByTestId('ggf-submit').hasAttribute('disabled')).toBe(true);
+    fireEvent.keyDown(member, { key: 'Enter' });
+    await waitFor(() =>
+      expect(screen.getByTestId('ggf-submit').hasAttribute('disabled')).toBe(false),
+    );
+    expect(screen.getByTestId('ggf-member-chip').textContent).toContain('Carol');
+
+    fireEvent.click(screen.getByTestId('ggf-submit'));
+    await waitFor(() =>
+      expect(http.calls.find((call) => call.name === 'grant_capability')?.params).toEqual({
+        principalId: 'p-2',
+        resourceType: 'gatekeeper',
+        resourceId: 'gk-1',
+      }),
+    );
+  });
+
+  it('a member who already holds the locked gate is listed as 已授权 and cannot be picked again', async () => {
+    const http = scriptedHttp({ list_principals: twoMembers });
+    render(
+      <GrantGateForm
+        http={http}
+        lockedGatekeeper={{ id: 'gk-1', name: 'docker-gate' }}
+        grantedPrincipalIds={['p-1']}
+        onGranted={vi.fn()}
+      />,
+    );
+    const member = screen.getByTestId('ggf-member');
+    openCombobox(member);
+    await waitFor(() =>
+      expect(comboboxOptionTexts(member)).toEqual(['Bob成员 · 已授权', 'Carol成员']),
+    );
+    const bob = screen
+      .getAllByRole('option')
+      .find((option) => option.getAttribute('data-value') === 'p-1');
+    expect(bob?.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(bob as HTMLElement);
+    expect(screen.queryByTestId('ggf-member-chip')).toBeNull();
+    expect(screen.getByTestId('ggf-submit').hasAttribute('disabled')).toBe(true);
+  });
+
   it('legacy 266: a locked gate that shares its name with another gate shows its short id', async () => {
     const http = scriptedHttp({
       list_gatekeepers: () => ({
@@ -352,7 +438,7 @@ describe('GrantGateForm', () => {
     });
     render(<GrantGateForm http={http} onGranted={vi.fn()} />);
     const banner = await screen.findByTestId('ggf-members-error');
-    expect(screen.queryByText('没有匹配的成员')).toBeNull();
+    expect(screen.queryByText('没有匹配的成员。')).toBeNull();
     fireEvent.click(within(banner).getByRole('button'));
     await waitFor(() => expect(screen.queryByTestId('ggf-members-error')).toBeNull());
     await selectMember('p-1');
@@ -484,10 +570,14 @@ describe('GrantGateForm: audit P1-9 still-needed line', () => {
       }),
     });
     render(<GrantGateForm http={http} onGranted={vi.fn()} />);
-    const select = screen.getByTestId('ggf-member-select');
-    await waitFor(() => expect(select.querySelectorAll('option')).toHaveLength(4));
-    const labels = [...select.querySelectorAll('option')].slice(1).map((o) => o.textContent);
-    expect(labels).toEqual(['张三 · aaaaaaaa (成员)', '张三 · bbbbbbbb (成员)', '李四 (成员)']);
+    const member = screen.getByTestId('ggf-member');
+    openCombobox(member);
+    await waitFor(() => expect(comboboxOptionTexts(member)).toHaveLength(3));
+    expect(comboboxOptionTexts(member)).toEqual([
+      '张三 · aaaaaaaa成员',
+      '张三 · bbbbbbbb成员',
+      '李四成员',
+    ]);
 
     const list = await screen.findByTestId('ggf-gate-list');
     await waitFor(() => expect(within(list).getAllByTestId('same-name-id')).toHaveLength(2));

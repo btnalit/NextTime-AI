@@ -10,6 +10,8 @@ export interface GrantGateDrawerProps {
   readonly onOpenChange: (open: boolean) => void;
   /** Opened from a system card: fixes the gate, matching `GrantGateForm`'s own prop. */
   readonly lockedGatekeeper?: { readonly id: string; readonly name: string };
+  /** Matching `GrantGateForm`'s own prop: who already holds a grant on the locked gate. */
+  readonly grantedPrincipalIds?: readonly string[];
   readonly onGranted: (grants: readonly GrantRow[]) => void;
 }
 
@@ -24,6 +26,7 @@ export function GrantGateDrawer({
   open,
   onOpenChange,
   lockedGatekeeper,
+  grantedPrincipalIds,
   onGranted,
 }: GrantGateDrawerProps) {
   const t = useT();
@@ -37,6 +40,7 @@ export function GrantGateDrawer({
           <GrantGateForm
             http={http}
             lockedGatekeeper={lockedGatekeeper}
+            grantedPrincipalIds={grantedPrincipalIds}
             onGranted={onGranted}
             onCancel={() => onOpenChange(false)}
           />

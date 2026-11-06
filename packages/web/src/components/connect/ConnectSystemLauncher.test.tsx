@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
+import { pickComboboxValue } from '../kit/combobox.test-helpers.js';
 import { ConnectSystemLauncher, type ConnectSystemLauncherProps } from './ConnectSystemLauncher.js';
 
 /**
@@ -534,10 +535,8 @@ describe('ConnectSystemLauncher — hosted path from the workspace page (non-adm
     expect(screen.getByTestId('launcher-next').hasAttribute('disabled')).toBe(true);
 
     const grant = screen.getByTestId('launcher-grant');
-    const select = within(grant).getByTestId('ggf-member-select');
-    // `list_principals` resolves asynchronously — the `<option value="p-alice">` may not exist yet.
-    await waitFor(() => expect(select.querySelector('option[value="p-alice"]')).not.toBeNull());
-    fireEvent.change(select, { target: { value: 'p-alice' } });
+    // `list_principals` resolves asynchronously — the picker waits for Alice's row.
+    await pickComboboxValue(within(grant).getByTestId('ggf-member'), 'p-alice');
     fireEvent.click(within(grant).getByTestId('ggf-submit'));
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'grant_capability')).toBe(true),
@@ -858,9 +857,8 @@ describe('ConnectSystemLauncher — "我的智能体现在能用它吗？" (cons
     fireEvent.click(within(confirm).getByTestId('confirm-button'));
     await within(workspaceSide).findByTestId('launcher-workspace-linked');
     const grant = screen.getByTestId('launcher-grant');
-    const select = within(grant).getByTestId('ggf-member-select');
-    await waitFor(() => expect(select.querySelector('option[value="p-alice"]')).not.toBeNull());
-    fireEvent.change(select, { target: { value: 'p-alice' } });
+    // `list_principals` resolves asynchronously — the picker waits for Alice's row.
+    await pickComboboxValue(within(grant).getByTestId('ggf-member'), 'p-alice');
     fireEvent.click(within(grant).getByTestId('ggf-submit'));
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'grant_capability')).toBe(true),

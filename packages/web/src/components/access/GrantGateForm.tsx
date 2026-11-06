@@ -16,6 +16,7 @@ import { roleLabel, transportKindLabel } from '../../lib/labels.js';
 import { sameNameIds, withSameNameId } from '../../lib/same-name.js';
 import { useGatekeeperDirectory } from '../approvals/useDirectoryNames.js';
 import { Button } from '../kit/button.js';
+import { Combobox, type ComboboxOption } from '../kit/combobox.js';
 import { Confirm } from '../kit/confirm.js';
 import { useGuardedClose } from '../kit/discard-guard.js';
 import { ErrorBanner } from '../kit/error-banner.js';
@@ -33,6 +34,10 @@ export interface GrantGateFormProps {
    *  — the audit's own "pre-selected when opened from a card" (J6/SY2). Omitted (opened from the
    *  Access page): a member+multi-gate picker with an explicit "全部门" toggle. */
   readonly lockedGatekeeper?: { readonly id: string; readonly name: string };
+  /** With `lockedGatekeeper`: the members who already hold a grant on it. They stay in the member
+   *  picker, marked 「已授权」 and not pickable — granting them again would only add a second grant
+   *  for the same person. */
+  readonly grantedPrincipalIds?: readonly string[];
   readonly onGranted: (grants: readonly GrantRow[]) => void;
   readonly onCancel?: () => void;
   readonly submitLabel?: string;
@@ -45,7 +50,7 @@ export interface GrantGateFormProps {
  * this in a `kit/sheet`; the launcher's step 3 embeds it inline, locked to the gate it just
  * enabled). Replaces `GrantCapabilityForm`'s free-text `resourceId`/JSON `scope` fields (Access
  * page) and `RegisteredSystemsSection`'s in-card expanding form (a bare principal id/select) — a
- * member picker (`list_principals` with `q`), a gate picker (`list_gatekeepers` with `q`,
+ * member combobox (`list_principals`, filtered as you type), a gate picker (`list_gatekeepers` with `q`,
  * multi-select, hidden entirely when `lockedGatekeeper` is given), and — only while the grant
  * targets exactly one gate — a read-only list of that gate's Operations the grant will cover
  * (`list_operations{gatekeeperId}`). No id or JSON is ever shown as an editable field: everything
@@ -86,6 +91,7 @@ export function GrantGateForm(props: GrantGateFormProps) {
 function GrantGateFormBody({
   http,
   lockedGatekeeper,
+  grantedPrincipalIds,
   onGranted,
   onCancel,
   submitLabel,
@@ -97,16 +103,22 @@ function GrantGateFormBody({
   const can = useRoleCan(http);
 
   // ---- Member picker -----------------------------------------------------------------------
-  const [memberQuery, setMemberQuery] = useState('');
+  // One combobox over the whole directory (read once, every page): typing filters it and picking
+  // a row is what chooses the member. It used to be a search box labelled 成员 plus a separate
+  // <select> below it, so a name typed into the box chose nobody and 授予 stayed blocked on
+  // 「选择成员」 (host acceptance of v0.63.0) — the two-controls-for-one-field shape legacy 153 ①
+  // removed from `platform/UserPicker`.
   const principals = useCapabilityList<PrincipalRow>(
     http,
     'list_principals',
-    memberQuery.trim() ? { q: memberQuery.trim() } : {},
+    {},
     { autoLoadAll: true, enabled: can('list_principals') === true },
   );
   const memberOptions =
     principals.state.status === 'ready'
-      ? principals.state.data.items.filter((row) => row.kind === 'human' && !row.disabledAt)
+      ? principals.state.data.items.filter(
+          (row) => row.kind === 'human' && !row.disabledAt && !row.internal,
+        )
       : [];
   // Two members with the same name (and role) must not read the same in the picker, or the owner
   // could grant the wrong person (#559 acceptance).
@@ -117,6 +129,15 @@ function GrantGateFormBody({
   );
   const [principalId, setPrincipalId] = useState('');
   const selectedPrincipal = memberOptions.find((row) => row.id === principalId);
+  const alreadyGranted = new Set(lockedGatekeeper ? (grantedPrincipalIds ?? []) : []);
+  const memberComboOptions: ComboboxOption[] = memberOptions.map((row) => ({
+    value: row.id,
+    label: withSameNameId(row.displayName, row.id, memberSame),
+    secondary: alreadyGranted.has(row.id)
+      ? t(`${roleLabel(row.role, t)} · 已授权`, `${roleLabel(row.role, t)} · already granted`)
+      : roleLabel(row.role, t),
+    disabled: alreadyGranted.has(row.id),
+  }));
 
   // ---- Gate picker (hidden entirely when locked) -------------------------------------------
   const [gateQuery, setGateQuery] = useState('');
@@ -278,49 +299,33 @@ function GrantGateFormBody({
   return (
     <div className="stack" data-testid={testId ?? 'grant-gate-form'} data-discard-guard>
       <Field
-        id="ggf-member-query"
+        id="ggf-member"
         label={t('成员', 'Member')}
         required
         hint={t(
-          '按名字搜索，从下方选择一位。',
-          'Search by name, then pick one from the list below.',
+          '点开列表选一位，或输入名字缩小范围后选择。',
+          'Open the list and pick one, or type a name to narrow it down, then pick.',
         )}
       >
-        <input
-          id="ggf-member-query"
-          className="input"
-          value={memberQuery}
-          onChange={(event) => setMemberQuery(event.target.value)}
-          placeholder={t('搜索成员…', 'Search members…')}
-          data-no-discard-guard
+        <Combobox
+          id="ggf-member"
+          options={memberComboOptions}
+          value={principalId}
+          onChange={setPrincipalId}
+          loading={principals.state.status === 'loading'}
           disabled={submitting}
-          aria-describedby={describedBy('ggf-member-query', true, false)}
-        />
-      </Field>
-      <select
-        id="ggf-member-select"
-        className="select"
-        aria-label={t('选择成员', 'Choose a member')}
-        value={principalId}
-        onChange={(event) => setPrincipalId(event.target.value)}
-        disabled={submitting || memberOptions.length === 0}
-        data-testid="ggf-member-select"
-      >
-        <option value="">
-          {principals.state.status === 'loading'
-            ? t('正在加载…', 'Loading…')
-            : principals.state.status === 'error'
+          placeholder={t('选择或搜索成员…', 'Pick or search a member…')}
+          emptyText={
+            principals.state.status === 'error'
               ? t('成员列表加载失败', 'Could not load members')
               : memberOptions.length === 0
-                ? t('没有匹配的成员', 'No matching member')
-                : t('— 选择 —', '— Choose —')}
-        </option>
-        {memberOptions.map((row) => (
-          <option key={row.id} value={row.id}>
-            {withSameNameId(row.displayName, row.id, memberSame)} ({roleLabel(row.role, t)})
-          </option>
-        ))}
-      </select>
+                ? t('这个工作区还没有可授权的成员。', 'No member in this workspace to grant yet.')
+                : t('没有匹配的成员。', 'No matching member.')
+          }
+          aria-describedby={describedBy('ggf-member', true, false)}
+          testId="ggf-member"
+        />
+      </Field>
       {principals.state.status === 'error' ? (
         <ErrorBanner
           error={principals.state.error}
