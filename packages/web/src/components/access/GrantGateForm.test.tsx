@@ -333,33 +333,6 @@ describe('GrantGateForm', () => {
     await waitFor(() => expect(calls.sort()).toEqual(['gk-1', 'gk-2']));
   });
 
-  it('J6: "全部门" is blocked behind an explicit confirm; grant_capability then omits resourceId', async () => {
-    const http = scriptedHttp({
-      grant_capability: (params) => {
-        expect(params).toEqual({ principalId: 'p-1', resourceType: 'gatekeeper' });
-        return { id: 'grant-1', principalId: 'p-1', resourceType: 'gatekeeper', status: 'active' };
-      },
-    });
-    render(<GrantGateForm http={http} onGranted={vi.fn()} />);
-
-    await selectMember('p-1');
-    fireEvent.click(await screen.findByTestId('ggf-gate-gk-1'));
-    fireEvent.click(screen.getByTestId('ggf-all-gates-checkbox'));
-    expect((screen.getByTestId('ggf-all-gates-checkbox') as HTMLInputElement).checked).toBe(false);
-    // Picking "全部门" also clears the specific-gate selection underneath it.
-    const confirm = await screen.findByTestId('ggf-all-gates-confirm');
-    fireEvent.click(within(confirm).getByTestId('confirm-button'));
-    await waitFor(() =>
-      expect((screen.getByTestId('ggf-all-gates-checkbox') as HTMLInputElement).checked).toBe(true),
-    );
-    expect((screen.getByTestId('ggf-gate-gk-1') as HTMLInputElement).checked).toBe(false);
-
-    fireEvent.click(screen.getByTestId('ggf-submit'));
-    await waitFor(() =>
-      expect(http.calls.some((call) => call.name === 'grant_capability')).toBe(true),
-    );
-  });
-
   it('submit is disabled until a member and a target are both chosen', async () => {
     const http = scriptedHttp({});
     render(<GrantGateForm http={http} onGranted={vi.fn()} />);
