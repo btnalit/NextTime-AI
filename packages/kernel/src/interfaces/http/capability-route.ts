@@ -154,6 +154,7 @@ import {
 } from '../../application/identity/index.js';
 // S11 P1-C: a domain module's error, imported directly like the two above.
 import {
+  AdminProposalPackNotExportableError,
   PackDependencyUnmetError,
   PackNotFoundError,
   PackWorkerGatesError,
@@ -397,6 +398,16 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
       code: err.code,
       message: err.message,
       details: { blockers: err.details.blockers.map((blocker) => ({ ...blocker })) },
+    };
+  }
+  // S11 AA5d-2: `export_admin_proposal_pack` refuses the segment, with every reason found
+  // (`details.problems`: code, path, message — never a credential's value); nothing was written.
+  if (err instanceof AdminProposalPackNotExportableError) {
+    return {
+      status: 409,
+      code: err.code,
+      message: err.message,
+      details: { problems: err.details.problems.map((problem) => ({ ...problem })) },
     };
   }
   // S11 AA4c: the proposer took this workspace off their admin agent's targets since — 409.

@@ -136,8 +136,10 @@ import { lockProposalDependency, readProposalPlatformChange } from './proposal-d
  *  `admin_proposal_segment_not_found`. */
 export class AdminProposalSegmentNotFoundError extends Error {
   readonly code = 'admin_proposal_segment_not_found' as const;
-  constructor(segmentId: string) {
-    super(`admin proposal segment ${segmentId} not found in this workspace`);
+  /** `where`: the plane it was looked for on (S11 AA5d-2: a platform administrator's export reads
+   *  the workspace segments of every proposal). */
+  constructor(segmentId: string, where = 'in this workspace') {
+    super(`admin proposal segment ${segmentId} not found ${where}`);
     this.name = 'AdminProposalSegmentNotFoundError';
   }
 }
