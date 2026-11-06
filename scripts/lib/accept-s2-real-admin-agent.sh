@@ -125,8 +125,13 @@ rat_turn() {
 
 # rat_stop_turn: the Chat's running Turn, if any, is stopped as the person would (stop_agent) and
 # waited for, at most 60 s. A Turn still running after that leaves the next message refused, which
-# rat_turn counts; the cleanup's stop_admin_agent stops it in the end.
+# rat_turn counts; the cleanup's stop_admin_agent stops it in the end. With no Chat known yet (the
+# driver failed on the first message after sending it), the Chat of the admin agent's running Turn
+# in the trial workspace is taken, so it is stopped and the next message goes on in it.
 rat_stop_turn() {
+  if [ -z "$TICKETS_CHAT_ID" ]; then
+    TICKETS_CHAT_ID=$(psql_ws "select chat_id from activities where workspace_id = '$ADMIN_TRIAL_ID' and kind = 'agent_turn' and status = 'running' and metadata ->> 'sessionKind' = 'admin_agent' and created_at >= '$RAT_START' order by created_at desc limit 1")
+  fi
   [ -n "$TICKETS_CHAT_ID" ] || return 0
   rst_out=$(cap "$(admin_cred "$ADMIN_TRIAL_ID")" stop_agent "{\"chatId\":\"$TICKETS_CHAT_ID\"}")
   [ "$(parse_kv "$rst_out" HTTP_STATUS)" = "200" ] || rat_note "stop_agent=http_$(parse_kv "$rst_out" HTTP_STATUS)"
