@@ -5,7 +5,7 @@
 > 拆解与实现说明在 `development-tasks.md`，评估在 `retrospective-*.md` / `code-review-*.md`，
 > 本文只链接不复制。与代码冲突时以代码为准，并修正本文。
 
-最后更新：2026-11-06（**遗留 645、646、649 修复合入（#1000、#997、#1003），capability matrix 守卫合入（#1006）**：新增或改名 capability 必须同步 `capability-matrix.yaml`；登 653。主机在 v0.63.0。进行中：#1001（643，等预演）、#1008（批次 F）、AA5g（#1002）。计划内工作完成后做一次前端全面审查）。 上一版 2026-11-06（**测试覆盖缺口清单合入（#1005，05eb8d7）**：批次 A（#1006）合入后新增或改名 capability 必须同步 `capability-matrix.yaml`；主机升级按大版本攒着做，只有升级前那次预演要求 from = 主机版本（`release.md` §1 第 6 步）。主机在 v0.63.0。进行中：#1001（643）、#1000（645）、#1003（649）、#997（646）、AA5g（#1002）。计划内工作完成后做一次前端全面审查）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
+最后更新：2026-11-06（**遗留 643 修复合入（#1001，01f16f2）**：单独跑验收脚本后不再留下 fake-llm。主机在 v0.63.0。进行中：#1008（批次 F，staging 回滚演练）、AA5g（#1002）。计划内工作完成后做一次前端全面审查）。 上一版 2026-11-06（**遗留 645、646、649 修复合入（#1000、#997、#1003），capability matrix 守卫合入（#1006）**：新增或改名 capability 必须同步 `capability-matrix.yaml`；登 653。主机在 v0.63.0。进行中：#1001（643，等预演）、#1008（批次 F）、AA5g（#1002）。计划内工作完成后做一次前端全面审查）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
 
 ## 1. 入口指引
 
@@ -356,6 +356,7 @@
 | 2026-11-06 | 遗留 646「系统与授权里成员选不了」合入（#997，729bae9，只改控制台，契约不变，进 0.63.0 之后的下一版；见 release.md §3.135）：`GrantGateForm` 改用 `kit/combobox`，门锁定时表单自己读 `list_grants` 标「已授权」，删掉必然 400 的「全部门」；web-e2e 旅程 ① 同步。UX（含复看）与 #501 通过；#501 的 P3（PR 描述过时）合入前已改；内核不去重仍是 647；关闭 646 | #997 |
 | 2026-11-06 | 测试覆盖批次 A「capability matrix 守卫」合入（#1006，测试守门人，4b7198d，只改 CI 守卫、PR 模板与 `testing.md`）：`docs/contracts/capability-matrix.yaml` 为每个 capability 声明控制台与 agent 投影，`scripts/guards/capability-matrix.mjs` 进 `ci:guards`。**从此新增或改名 capability 的 PR 必须同步 `capability-matrix.yaml`**。#484（文档）与 #488（守卫，P2 与解析器 P3 在 PR 内修）通过；其余守卫局限登 653 | #1006 |
 | 2026-11-06 | 记录（steward）：本批合入 #1000、#1003、#997、#1006；关闭 645、646、649；登 653 | — |
+| 2026-11-06 | 遗留 643「单独跑验收脚本后 fake-llm 一直开着」合入（#1001，W1a，01f16f2，只改验收脚本与 runbook，进 0.63.0 之后的下一版；见 release.md §3.136）：`accept-common.sh` 的 `accept_provider_restore` 在恢复生产供应商后停掉 fake-llm，停不掉只打 WARNING；`accept-s1.md`、`host-accept-s2.md`、`host-accept-s3.md` 同步；`accept-kernel-link.test.mjs` 覆盖。#488 通过、无 P3；CI 与更新分支后的 staging 预演全绿；关闭 643 | #1001 |
 | 2026-10-16 | 控制台文案第二批合入（#628，25bfdfe，无迁移，只改控制台，未发版；遗留 335、359、360、361、362、363 关闭）：对话输入框因 U+0000 被拒后，提示旁有「移除看不见的字符」按钮，移除后消息不会自动发出（335）；清除预览与审计资源类型统一为「动作请求」「授权」（359）；下一步文案里的 builder 改为「构建者」（360）；错误文案与成员页统一为「最后一位有效的所有者」「人类用户」，capability 名称为「API key 轮换」（i18n 守卫不允许中文短标签以英文结尾）（361）；服务凭证表单输入时就提示保留名规则（362）；640px 以下对话页头部改为两行（363）。另含一个只改测试的提交：旅程③窄屏用例按 Escape 后先等抽屉关上再点下一行（#625 种子行排到第一位后暴露的时序问题）。只改控制台，不需要内核审查（协调线程定）；UX 验收首轮 1 条 P2（390 宽度错误条被按钮挤窄）在本 PR 内修好，复验 PASS（`console-ux/acceptance-628.md`），CI 全绿合入；无主机动作 | PR #628 |
 
 ### 2.2 验收证明了什么，没证明什么
@@ -951,7 +952,7 @@
 | 640 | 试验工作区被清除之后，平台预设连接器的「试验自接例外」随之关闭，没有内核集成测试（现有测试只覆盖停用；路径本身有验收旅程断言，缺更快更窄的回归）（`retrospective-s11-w3-admin-agent.md` §3 第 15 行，#986） | P3 | 内核 / W1a | 开放 |
 | 641 | 管理员发起的 Task 里，Worker 的执行类动作走普通 ActionRequest 审批、不另开捷径，没有内核测试（现在只有验收旅程覆盖）（`retrospective-s11-w3-admin-agent.md` §3 第 16 行，#986） | P3 | 内核 / W1a | 开放 |
 | 642 | WorkerDefinition 的 `gates` 语义漂移：`worker-definition.ts` 把 `gates` 当作定义 can_act_on 的门；`handle-mint.ts` 的 `delegatedRequestAction` 让持有门资源的 Handle 把请求权下放给子 Handle，但 Handle 自己能否调 `request_action` 看能力名单。结果只声明 `gates`、不声明 `request_action` 的 Worker 自己对这些门请求不了，持有 `invoke_worker` 时却能把请求权转交给子 Worker；同一字段在入口 Handle 上是「只能转交」，在 Worker 上本该是「自己做」。协调已定默认值不改（执行权必须显式声明，审批人在草稿里看得到 `request_action`），字段语义怎么收拢留给本条（staging `--real` 第二轮 run 42182615259、#986 §2.2） | P3 | 内核（下一个治理批次） | 开放 |
-| 643 | 单独跑 `accept_s2.sh` 退出后 fake-llm 仍在运行，只有 `apply-release.sh` 会停它，`host-accept-s2.md` 也没写这一步；fake-llm 是不带认证的测试端点，不该在主机上一直开着（v0.63.0 主机窗口已手动停）。修法：脚本退出时停掉，或在 runbook 加一步 | P2 | 验收脚本 / W1a | 开放 |
+| 643 | 单独跑 `accept_s2.sh` 退出后 fake-llm 仍在运行，只有 `apply-release.sh` 会停它，`host-accept-s2.md` 也没写这一步；fake-llm 是不带认证的测试端点，不该在主机上一直开着（v0.63.0 主机窗口已手动停）。修法：脚本退出时停掉，或在 runbook 加一步 | P2 | 验收脚本 / W1a | 已关闭（#1001，01f16f2） |
 | 644 | 主机上 `cli.raw_secrets_scrubbed` 审计记为 unattributed：主机没设 `NEXTTIME_PLATFORM_ADMINS`，`apply-release.sh` 也没传 `--actor`。要定是 apply 默认带上执行人，还是 runbook 要求设平台管理员（v0.63.0 主机窗口） | P3 | 运维脚本 / 手册 | 开放 |
 | 645 | 真实模型的工具调用首次被参数校验拒绝、重试后成功共 7 次（v0.50.0 窗口 0 次）：`propose_goal` 3 次（把 acceptance 写在顶层、JSONPath 写法不对），`report_result` 3 次，`get_skill` 1 次；goal 场景 10 次里 3 次首次被拒。不是平台缺陷，改进这几个工具的描述与示例可以少走一轮（v0.63.0 主机真实模型回归） | P3 | 内核（工具描述） | 已关闭（#1000，8e048d4） |
 | 646 | 控制台「系统与授权」：点「授权」后「成员」下拉选不了；手填后点授权提示「未选成员」，但已授权列表里能看到这个用户。授权路径的控制台缺陷（维护者 11-06 在主机 v0.63.0 上发现；协调另派修复） | P2 | 控制台 | 已关闭（#997，729bae9） |
