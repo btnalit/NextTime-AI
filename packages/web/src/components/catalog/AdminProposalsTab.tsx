@@ -62,7 +62,7 @@ import {
   wideningText,
 } from './ChangesTab.js';
 import { MarkdownPreview } from './MarkdownPreview.js';
-import { InstallPack } from './PacksTab.js';
+import { InstallPack, nothingToInstall } from './PacksTab.js';
 
 /**
  * components/catalog/AdminProposalsTab: 能力目录 · 管理员提案 (`#/govern/catalog/proposals`, S11
@@ -684,7 +684,6 @@ function AdminProposalSegmentDetail({
         <PackInstallProposalReview
           http={http}
           segment={segment}
-          platformAdmin={platformAdmin}
           onInstalled={(checked) => {
             setAppliedHere({ segmentId: segment.id, verification: checked });
             onDecided(null);
@@ -1298,13 +1297,11 @@ function RejectSegment({
 function PackInstallProposalReview({
   http,
   segment,
-  platformAdmin,
   onInstalled,
   onDecided,
 }: {
   readonly http: CapabilityCaller;
   readonly segment: ReceivedAdminProposalSegmentWire;
-  readonly platformAdmin: boolean;
   /** Installed from here: the segment is applied (the list reads it again). */
   readonly onInstalled: (verification: ChangeVerificationWire | null) => void;
   readonly onDecided: (segment: ReceivedAdminProposalSegmentWire | null) => void;
@@ -1344,7 +1341,7 @@ function PackInstallProposalReview({
                 `The latest version of ${asked.pack} is now v${pack.latestVersion}; this proposal asks for v${asked.version}, and only the latest version installs, so it cannot be installed as asked. Reject it; if it is still wanted, install the latest version from Packs.`,
               ),
             }
-          : pack.installedVersion === asked.version && pack.status === 'up_to_date'
+          : pack.installedVersion === asked.version && nothingToInstall(pack)
             ? {
                 testId: 'catalog-proposal-pack-installed',
                 text: t(

@@ -1670,6 +1670,49 @@ describe('PacksTab — an admin proposal asking for this pack (S11 AA5g, UX P3-1
     expect(within(notice).getByTestId('catalog-pack-proposal-link')).toBeDefined();
   });
 
+  it('#501 P3-1: installed at that version and nothing left to do says so; with a Worker to connect it still installs from the proposal', async () => {
+    const upToDate = pack({ status: 'up_to_date', installedVersion: 2 });
+    const done = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_packs: () => ({ items: [upToDate] }),
+      list_admin_proposal_segments: () => ({ items: [asking(2)] }),
+    });
+    renderTab(done, 'ops-assets');
+    expect((await screen.findByTestId('catalog-pack-proposal')).textContent).toMatch(
+      /已经是这一版，没有要装的/,
+    );
+    cleanup();
+
+    const bindable = pack({
+      status: 'up_to_date',
+      installedVersion: 2,
+      components: [
+        {
+          kind: 'worker',
+          name: 'ops-runner',
+          definitionId: 'def-1',
+          headVersion: 2,
+          systems: ['docker'],
+          gates: [],
+          gatesKept: false,
+          bindable: true,
+          status: 'up_to_date',
+          installedVersion: 2,
+          provenance: { status: 'not_installed' },
+        } as PackComponentStateWire,
+      ],
+    });
+    const connect = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_packs: () => ({ items: [bindable] }),
+      list_admin_proposal_segments: () => ({ items: [asking(2)] }),
+    });
+    renderTab(connect, 'ops-assets');
+    expect((await screen.findByTestId('catalog-pack-proposal')).textContent).toMatch(
+      /从那份管理员提案里安装，它会记为已应用/,
+    );
+  });
+
   it('a proposal for an older version says it can only be rejected', async () => {
     const http = scriptedHttp({
       get_workspace: () => OWNER_WORKSPACE,

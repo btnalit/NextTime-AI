@@ -80,6 +80,12 @@ function bindableWorkers(pack: PackWire): readonly string[] {
   );
 }
 
+/** Up to date with no Worker left to connect: installing again would change nothing, so there is
+ *  no install control (#1002 review P3-1: shared with a proposal asking for this pack). */
+export function nothingToInstall(pack: PackWire): boolean {
+  return pack.status === 'up_to_date' && bindableWorkers(pack).length === 0;
+}
+
 /** The install control's label, or `null` when there is nothing to install. Up to date with a
  *  Worker to connect, installing again only connects it. */
 /** Legacy 442: how the systems of a Worker that keeps the workspace's gates moved under them. An
@@ -197,9 +203,9 @@ function actionLabel(pack: PackWire, t: Translate): string | null {
     case 'customized':
       return t(`换成 v${v} 的标准内容`, `Replace with v${v}`);
     case 'up_to_date':
-      return bindableWorkers(pack).length > 0
-        ? t('把 Worker 接上系统', 'Connect the Worker to its systems')
-        : null;
+      return nothingToInstall(pack)
+        ? null
+        : t('把 Worker 接上系统', 'Connect the Worker to its systems');
   }
 }
 
@@ -566,7 +572,7 @@ function PackProposalNotice({
   const name = proposedBy.displayName || shortId(proposedBy.userId);
   // UX P3-1 (#1002): it reads as installable from the proposal only when it is — the version it
   // asks for is still the latest, and not installed already; otherwise it can only be rejected.
-  const installed = pack.status === 'up_to_date' && pack.installedVersion === item.version;
+  const installed = nothingToInstall(pack) && pack.installedVersion === item.version;
   const outdated = pack.latestVersion !== item.version;
   return (
     <Notice testId="catalog-pack-proposal">

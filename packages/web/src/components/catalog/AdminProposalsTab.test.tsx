@@ -1396,6 +1396,40 @@ describe('AdminProposalsTab — a proposal asking for a pack install (S11 AA5g-3
     expect(screen.queryByTestId('catalog-pack-install-trigger')).toBeNull();
   });
 
+  it('#501 P3-1: installed at that version with a Worker still to connect, it installs from here to connect it', async () => {
+    const bindable = opsBase({
+      status: 'up_to_date',
+      installedVersion: 2,
+      components: [
+        {
+          kind: 'worker',
+          name: 'ops-runner',
+          definitionId: 'def-1',
+          headVersion: 2,
+          systems: ['docker'],
+          gates: [],
+          gatesKept: false,
+          bindable: true,
+          status: 'up_to_date',
+          installedVersion: 2,
+          provenance: { status: 'not_installed' },
+        } as PackWire['components'][number],
+      ],
+    });
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_admin_proposal_segments: () => ({ items: [PACK_ASK] }),
+      list_packs: () => ({ items: [bindable] }),
+    });
+    renderTab(http, SEGMENT);
+    const review = await screen.findByTestId('catalog-proposal-pack-review');
+    expect(within(review).getByTestId('catalog-proposal-pack-ask')).toBeDefined();
+    expect(screen.queryByTestId('catalog-proposal-pack-installed')).toBeNull();
+    expect((await screen.findByTestId('catalog-pack-install-trigger')).textContent).toBe(
+      '把 Worker 接上系统…',
+    );
+  });
+
   it('an install refused because the workspace was just dropped from the targets says nothing was installed', async () => {
     const http = scriptedHttp({
       get_workspace: () => OWNER_WORKSPACE,
