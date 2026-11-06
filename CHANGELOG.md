@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.63.0](https://github.com/btnalit/NextTime-AI/compare/v0.62.0...v0.63.0) (2026-11-06)
+
+
+### Features
+
+* **kernel:** bind a proposed Worker's gates when its admin proposal is applied (AA5f) ([#968](https://github.com/btnalit/NextTime-AI/issues/968)) ([673a436](https://github.com/btnalit/NextTime-AI/commit/673a43685cb22376e8e6ead57f4f025bfa198f45))
+* **kernel:** export an applied admin proposal segment as a pack (S11 AA5d-2) ([#976](https://github.com/btnalit/NextTime-AI/issues/976)) ([5c80a43](https://github.com/btnalit/NextTime-AI/commit/5c80a43c66bac4ddbff534ea14ae95d878f846de))
+* **kernel:** extra packs dir beside the image's packs (S11 AA5d-1) ([#971](https://github.com/btnalit/NextTime-AI/issues/971)) ([18c69e6](https://github.com/btnalit/NextTime-AI/commit/18c69e6f45e67b1a461e13d625ddb50e39c7e776))
+* **web:** choose a proposed Worker's gates before applying an admin proposal (AA5f-2) ([#969](https://github.com/btnalit/NextTime-AI/issues/969)) ([8780d6b](https://github.com/btnalit/NextTime-AI/commit/8780d6b4d701e0d91680ba0772c92cf2e0e48b2c))
+* **web:** pack source label, extra packs on the platform, export an admin proposal as a pack (S11 AA5d-3) ([#977](https://github.com/btnalit/NextTime-AI/issues/977)) ([4a93d34](https://github.com/btnalit/NextTime-AI/commit/4a93d342d620f77a5b9f49d959a1258548fa96ed))
+
+
+### Bug Fixes
+
+* **kernel:** offer execute tools only to a Handle that can request actions ([#989](https://github.com/btnalit/NextTime-AI/issues/989)) ([4ec8cd9](https://github.com/btnalit/NextTime-AI/commit/4ec8cd9ab27b765d44c58505ef07879d6b534aa9))
+
 ## [0.62.0](https://github.com/btnalit/NextTime-AI/compare/v0.61.0...v0.62.0) (2026-11-05)
 
 
