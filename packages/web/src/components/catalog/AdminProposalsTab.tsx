@@ -12,10 +12,11 @@ import {
   type AdminProposalWorkerGateBindingWire,
   type AvailableGateInstanceWire,
   type ChangePrincipalRefWire,
+  type ChangeVerificationWire,
   type GateInstanceDriftField,
   type ReceivedAdminProposalSegmentWire,
 } from '@nexttime/shared';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { notifyAdminProposalsDecided } from '../../hooks/useAdminProposalCount.js';
 import {
   invalidateCapability,
@@ -74,9 +75,11 @@ import { MarkdownPreview } from './MarkdownPreview.js';
  * intent resolved to in this workspace, item by item as a pack's install review shows it, what in it
  * does not fit (blockers; a system it needs that the owner can enable on the spot), the platform part
  * it depends on, and an instance that part created that has changed since. Applying
- * (`apply_admin_proposal_segment`) carries the reviewed digest, each authority-widening item ticked
- * and — when it holds values that look like credentials — the owner's confirmation; it leaves one
- * install record (安装历史), from where it is rolled back. Rejecting
+ * (`apply_admin_proposal_segment`) carries the reviewed digest, each authority-widening item ticked,
+ * the gates the owner kept for a proposed Worker it binds (`workerGates`, S11 AA5f: part of the
+ * review, so a new choice reads it again) and — when it holds values that look like credentials —
+ * the owner's confirmation; it leaves one install record (安装历史), from where it is rolled back,
+ * and is verified once right after (its result said beside that record). Rejecting
  * (`reject_admin_proposal_segment`) takes a reason, which this workspace and the platform's
  * administrators read; the admin agent reads only that it was rejected.
  */
@@ -516,6 +519,16 @@ function AdminProposalSegmentDetail({
   // What this pane's own apply or reject returned: shown until the list catches up.
   const [decided, setDecided] = useState<ReceivedAdminProposalSegmentWire | null>(null);
   const segment = decided !== null && listed.status === 'proposed' ? decided : listed;
+  // S11 AA5f: an apply here verifies the change once right after (as a pack's install does): its
+  // result, for the segment applied, said beside the install record.
+  const [appliedHere, setAppliedHere] = useState<{
+    readonly segmentId: string;
+    readonly verification: ChangeVerificationWire | null;
+  } | null>(null);
+  const verification =
+    appliedHere !== null && appliedHere.segmentId === segment.id && segment.status === 'applied'
+      ? appliedHere
+      : null;
   const hasOperations = segment.items.some((item) => item.kind === 'operation_version');
   const offered = useCapabilityList<AvailableGateInstanceWire>(
     http,
@@ -650,8 +663,11 @@ function AdminProposalSegmentDetail({
           gateNames={gateNames}
           offered={offered.state.status === 'ready' ? offered.state.data.items : []}
           platformAdmin={platformAdmin}
-          onDecided={(next) => {
+          onDecided={(next, checked) => {
             if (next !== null) setDecided(next);
+            if (next !== null && checked !== undefined) {
+              setAppliedHere({ segmentId: next.id, verification: checked });
+            }
             onDecided(next);
           }}
         />
@@ -679,6 +695,21 @@ function AdminProposalSegmentDetail({
               </RouteLink>
             </span>
           ) : null}
+          {verification !== null ? (
+            <span className="text-small" data-testid="catalog-proposal-applied-verification">
+              {verification.verification === null
+                ? t(
+                    '应用后没能核验，可以在安装记录里再核验一次。',
+                    'It could not be verified right after applying; verify it from the install record.',
+                  )
+                : verification.verification.passed
+                  ? t('应用后已核验：通过。', 'Verified right after applying: passed.')
+                  : t(
+                      '应用后已核验：没有通过，原因见安装记录。',
+                      'Verified right after applying: it did not pass; the install record says why.',
+                    )}
+            </span>
+          ) : null}
         </>
       )}
     </div>
@@ -698,18 +729,42 @@ function SegmentReview({
   readonly gateNames: GateNames;
   readonly offered: readonly AvailableGateInstanceWire[];
   readonly platformAdmin: boolean;
-  /** As `AdminProposalSegmentDetail`'s. */
-  readonly onDecided: (segment: ReceivedAdminProposalSegmentWire | null) => void;
+  /** As `AdminProposalSegmentDetail`'s; `verification`, with an apply here: its first check. */
+  readonly onDecided: (
+    segment: ReceivedAdminProposalSegmentWire | null,
+    verification?: ChangeVerificationWire | null,
+  ) => void;
 }) {
   const t = useT();
   const can = useRoleCan(http);
   const permissions = usePermissions();
+  // S11 AA5f: by Worker name, the gates the owner keeps for a Worker this apply binds; a Worker not
+  // here is bound to every candidate (the default). Part of what is reviewed: a new choice is a new
+  // read, and the apply passes exactly the choice the review on screen was read with.
+  const [choice, setChoice] = useState<WorkerGateChoice>({});
+  const chosen = Object.keys(choice).length > 0;
   const preview = useCapability<AdminProposalSegmentPreviewWire>(
     http,
     'preview_admin_proposal_segment',
-    { segmentId: segment.id },
+    { segmentId: segment.id, ...(chosen ? { workerGates: choice } : {}) },
     { enabled: can('preview_admin_proposal_segment') === true },
   );
+  // The last review read, kept on screen (nothing can be applied from it) while the next is read —
+  // a new gate choice, or the review read again after a change.
+  const lastRead = useRef<AdminProposalSegmentPreviewWire | null>(null);
+  if (preview.state.status === 'ready') lastRead.current = preview.state.data;
+  // A gate kept for a Worker that is no longer one of its candidates (cut off or disconnected
+  // since): the read is refused (400), so the choice goes back to the default and says so.
+  const [choiceReset, setChoiceReset] = useState(false);
+  const refusedChoice =
+    chosen &&
+    preview.state.status === 'error' &&
+    describeError(preview.state.error).code === 'invalid_params';
+  useEffect(() => {
+    if (!refusedChoice) return;
+    setChoice({});
+    setChoiceReset(true);
+  }, [refusedChoice]);
   const [confirmed, setConfirmed] = useState<ReadonlySet<number>>(new Set());
   const [credentialsReviewed, setCredentialsReviewed] = useState(false);
   const [applyOpen, setApplyOpen] = useState(false);
@@ -725,7 +780,13 @@ function SegmentReview({
     void preview.reload();
   }
 
-  if (preview.state.status === 'loading') {
+  const shown =
+    preview.state.status === 'ready'
+      ? preview.state.data
+      : preview.state.status === 'loading' || refusedChoice
+        ? lastRead.current
+        : null;
+  if (shown === null && preview.state.status === 'loading') {
     return (
       <SkeletonRows
         count={3}
@@ -733,7 +794,7 @@ function SegmentReview({
       />
     );
   }
-  if (preview.state.status === 'error') {
+  if (shown === null && preview.state.status === 'error') {
     // Decided meanwhile (409 not open, by someone else or withdrawn): the list says how it
     // stands now, so retrying reads it again.
     const decidedMeanwhile =
@@ -751,7 +812,10 @@ function SegmentReview({
     );
   }
 
-  const data = preview.state.data;
+  if (shown === null) return null;
+  const data = shown;
+  // The review on screen is an earlier read: nothing is applied from it until the next arrives.
+  const reading = preview.state.status !== 'ready';
   const platformPartPending =
     segment.platformSegment !== null && segment.platformSegment.status !== 'applied';
   const widening = data.items.filter(
@@ -766,6 +830,15 @@ function SegmentReview({
   const canApply = can('apply_admin_proposal_segment') !== false;
   const canReject = can('reject_admin_proposal_segment') !== false;
   const changes = data.items.filter((item) => !item.unchanged).length;
+  // The gates a Worker this apply binds keeps: as chosen, else every candidate.
+  const keptOf = (item: AdminProposalPreviewItemWire): readonly string[] => {
+    if (item.kind !== 'worker_definition_version') return [];
+    const name = workerIntentName(segment, item.ordinal);
+    return (
+      (name === null ? undefined : choice[name]) ??
+      item.gateBinding.candidates.map((gate) => gate.id)
+    );
+  };
   const staleText = t(
     '在你查看之后，工作区或平台上的情况变了，所以什么也没有应用。上面已经换成现在的样子，请重新看一遍再确认。',
     'Things in the workspace or on the platform changed after you looked, so nothing was applied. The review above now shows how things are; look it over again before confirming.',
@@ -790,6 +863,8 @@ function SegmentReview({
               }
             : {}),
           ...credentialReviewParams(needsCredentialReview && credentialsReviewed),
+          // S11 AA5f: the choice this review was read with (the digest covers the gates it binds).
+          ...(chosen ? { workerGates: choice } : {}),
         },
       );
     } catch (error) {
@@ -799,13 +874,17 @@ function SegmentReview({
         setStaleNotice(true);
         readAgain();
       }
+      // A kept gate cut off or disconnected since the last read (`chosenWorkerGates`, 400): the
+      // review read again with the same choice is refused too, which sends the choice back to the
+      // default and says so — as it does when the read itself is refused (#501 on #969, P3-1).
+      if (chosen && code === 'invalid_params') readAgain();
       if (code === 'admin_proposal_segment_not_open') onDecided(null);
       throw error;
     }
     permissions.markAllowed('apply_admin_proposal_segment');
     // A Worker it publishes is what the readiness hint asks for when there is none.
     announceReadinessChange(http);
-    onDecided(result.segment);
+    onDecided(result.segment, result.verification);
   }
 
   async function reject(): Promise<void> {
@@ -891,6 +970,14 @@ function SegmentReview({
           {staleText}
         </Notice>
       ) : null}
+      {choiceReset ? (
+        <Notice tone="warn" testId="catalog-proposal-choice-reset">
+          {t(
+            '你为 Worker 留下的门里，有的现在已经不能绑了（门被平台切断或断开了），所以改回了默认：把现在能绑的门全部绑上。请重新选一遍要绑哪些门。',
+            'Some of the gates you kept for a Worker can no longer be bound (the platform cut them off, or they were disconnected), so the choice went back to the default: every gate that can be bound now. Choose the gates again.',
+          )}
+        </Notice>
+      ) : null}
       {targetDropped ? (
         <Notice tone="warn" testId="catalog-proposal-target-dropped">
           {t(
@@ -954,11 +1041,25 @@ function SegmentReview({
                 )
               : t('它会在这里改动', 'What it changes here')}
           </span>
-          <div className="stack-s" data-testid="catalog-proposal-items">
+          <div className="stack-s" data-testid="catalog-proposal-items" aria-busy={reading}>
+            {reading ? (
+              <span className="text-3 text-small" data-testid="catalog-proposal-rereading">
+                {t('正在重新检查…', 'Checking again…')}
+              </span>
+            ) : null}
             {data.items.map((item) => (
               <ReviewItem
                 key={item.ordinal}
                 item={item}
+                kept={keptOf(item)}
+                onKeptChange={(kept) => {
+                  const name = workerIntentName(segment, item.ordinal);
+                  if (name === null) return;
+                  setChoiceReset(false);
+                  // A new choice is a new review: its confirmations are given again (as a pack's).
+                  setConfirmed(new Set());
+                  setChoice((prev) => ({ ...prev, [name]: kept }));
+                }}
                 disabled={hardBlocked}
                 checked={confirmed.has(item.ordinal)}
                 onCheckedChange={(checked) =>
@@ -1011,6 +1112,7 @@ function SegmentReview({
                     variant="primary"
                     disabled={
                       data.digest === null ||
+                      reading ||
                       targetDropped ||
                       data.unchanged ||
                       data.blockers.length > 0 ||
@@ -1042,7 +1144,7 @@ function SegmentReview({
                 ]}
                 confirmLabel={t('应用', 'Apply')}
                 danger={widening.length > 0}
-                confirmDisabled={data.digest === null}
+                confirmDisabled={data.digest === null || reading}
                 onConfirm={apply}
                 errorOverrides={{
                   change_plan_changed: staleText,
@@ -1218,6 +1320,19 @@ function BlockerLine({
   );
 }
 
+/** S11 AA5f: `workerGates` — by the name a proposed Worker goes by (its intent's
+ *  `definition.name`, as the kernel keys it), the gates the owner keeps for it. */
+type WorkerGateChoice = Readonly<Record<string, readonly string[]>>;
+
+/** The name the Worker intent at `ordinal` goes by; null for any other kind. */
+function workerIntentName(
+  segment: ReceivedAdminProposalSegmentWire,
+  ordinal: number,
+): string | null {
+  const intent = segment.items[ordinal - 1];
+  return intent?.kind === 'worker_definition_version' ? String(intent.definition.name) : null;
+}
+
 /** S11 AA5f: how applying binds a proposed Worker that names its systems and has no gates here
  *  yet — to the gates it keeps (`gates`) of those systems; and the ones among them the person
  *  previewing does not hold (binding grants nothing: 系统与授权 does). Until they hold them, a goal
@@ -1275,11 +1390,16 @@ function itemHeadline(item: AdminProposalPreviewItemWire, t: Translate): string 
 
 function ReviewItem({
   item,
+  kept,
+  onKeptChange,
   disabled,
   checked,
   onCheckedChange,
 }: {
   readonly item: AdminProposalPreviewItemWire;
+  /** S11 AA5f: for a Worker this apply binds, the gates kept (ticked). */
+  readonly kept: readonly string[];
+  readonly onKeptChange: (kept: readonly string[]) => void;
   /** It cannot be applied whatever is ticked (`hardBlocked`): the confirmation waits. */
   readonly disabled: boolean;
   readonly checked: boolean;
@@ -1292,7 +1412,13 @@ function ReviewItem({
       <span>{itemHeadline(item, t)}</span>
       {item.unchanged ? null : (
         <>
-          <ItemChanges item={item} prefix={prefix} />
+          <ItemChanges
+            item={item}
+            prefix={prefix}
+            kept={kept}
+            onKeptChange={onKeptChange}
+            disabled={disabled}
+          />
           {item.classification === 'authority_widening' ? (
             <label className="checkbox">
               <input
@@ -1323,9 +1449,15 @@ function stringList(value: unknown): readonly string[] | null {
 function ItemChanges({
   item,
   prefix,
+  kept,
+  onKeptChange,
+  disabled,
 }: {
   readonly item: AdminProposalPreviewItemWire;
   readonly prefix: string;
+  readonly kept: readonly string[];
+  readonly onKeptChange: (kept: readonly string[]) => void;
+  readonly disabled: boolean;
 }) {
   const t = useT();
   if (item.kind === 'ontology_version') {
@@ -1445,6 +1577,15 @@ function ItemChanges({
                   'Systems: keeps the workspace’s setting, none',
                 )}
       </span>
+      {item.gateBinding.source === 'apply' && item.gateBinding.candidates.length > 0 ? (
+        <WorkerGateChoiceField
+          binding={item.gateBinding}
+          kept={kept}
+          onKeptChange={onKeptChange}
+          disabled={disabled}
+          prefix={`${prefix}-binding`}
+        />
+      ) : null}
       <details className="disclosure" data-testid={`${prefix}-content`}>
         <summary>{t('查看系统提示词', 'Show the system prompt')}</summary>
         <div className="disclosure-body">
@@ -1452,5 +1593,73 @@ function ItemChanges({
         </div>
       </details>
     </>
+  );
+}
+
+/**
+ * S11 AA5f: which of the candidates a proposed Worker is bound to — every one ticked by default
+ * (as a pack's install connects its Workers, `PacksTab`'s `WorkerBindingReview`); unticking one
+ * reads the review again, since the apply binds exactly what was reviewed. Each gate the person
+ * does not hold says so: binding grants nothing.
+ */
+function WorkerGateChoiceField({
+  binding,
+  kept,
+  onKeptChange,
+  disabled,
+  prefix,
+}: {
+  readonly binding: AdminProposalWorkerGateBindingWire;
+  readonly kept: readonly string[];
+  readonly onKeptChange: (kept: readonly string[]) => void;
+  readonly disabled: boolean;
+  readonly prefix: string;
+}) {
+  const t = useT();
+  const keptSet = new Set(kept);
+  return (
+    <fieldset className="stack-s" data-testid={`${prefix}-choice`}>
+      <legend className="text-small">
+        {t(
+          '应用时把它绑到这些门（默认全部绑上，可以取消勾选）：',
+          'Applying binds it to these gates (all of them by default; untick any):',
+        )}
+      </legend>
+      {binding.candidates.map((gate) => (
+        <label className="checkbox" key={gate.id}>
+          <input
+            type="checkbox"
+            checked={keptSet.has(gate.id)}
+            disabled={disabled}
+            onChange={(event) => {
+              const on = event.currentTarget.checked;
+              onKeptChange(
+                binding.candidates
+                  .map((candidate) => candidate.id)
+                  .filter((id) => (id === gate.id ? on : keptSet.has(id))),
+              );
+            }}
+            data-testid={`${prefix}-gate-${gate.id}`}
+          />
+          <span>
+            {gate.name}
+            <span className="text-3">{t(`（${gate.connector}）`, ` (${gate.connector})`)}</span>
+            {gate.held ? null : (
+              <span className="text-3" data-testid={`${prefix}-gate-${gate.id}-not-held`}>
+                {t('，你还没有授权给自己', ', not granted to you yet')}
+              </span>
+            )}
+          </span>
+        </label>
+      ))}
+      {kept.length === 0 ? (
+        <span className="text-3 text-small" data-testid={`${prefix}-none-kept`}>
+          {t(
+            '一个都不绑：它不能对任何系统动手。这个选择会记下来，之后的管理员提案不会再给它绑门；要绑，在「Worker」页给它选。',
+            'None: it cannot act on any system. The choice is kept, and later admin proposals will not bind it again; to bind it, pick gates on the Workers tab.',
+          )}
+        </span>
+      ) : null}
+    </fieldset>
   );
 }

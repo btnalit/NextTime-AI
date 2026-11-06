@@ -30,6 +30,7 @@ import {
   PackManifestError,
   type PackRequirementManifest,
   parsePackManifest,
+  schemaIssues,
 } from './manifest.js';
 
 /**
@@ -418,7 +419,7 @@ async function loadSkillComponent(
     throw new PackManifestError(source, `frontmatter is not YAML: ${String(err)}`, { cause: err });
   }
   const frontmatter = SkillFrontmatterSchema.safeParse(raw);
-  if (!frontmatter.success) throw new PackManifestError(source, frontmatter.error.message);
+  if (!frontmatter.success) throw new PackManifestError(source, schemaIssues(frontmatter.error));
   if (frontmatter.data.name !== name) {
     throw new PackManifestError(
       source,
@@ -471,7 +472,7 @@ function workerSystems(
   if (raw === undefined) return [];
   const parsed = WorkerSystemsSchema.safeParse(raw);
   if (!parsed.success) {
-    throw new PackManifestError(source, `systems: ${parsed.error.message}`);
+    throw new PackManifestError(source, `systems: ${schemaIssues(parsed.error)}`);
   }
   const systems = parsed.data;
   const repeated = systems.find((system, index) => systems.indexOf(system) !== index);
@@ -513,7 +514,7 @@ async function loadWorkerComponent(
   const { systems: rawSystems, ...content } = raw as Record<string, unknown>;
   const systems = workerSystems(source, rawSystems, requiredConnectors);
   const parsed = WorkerWorkerDefinitionContentSchema.safeParse({ ...content, name });
-  if (!parsed.success) throw new PackManifestError(source, parsed.error.message);
+  if (!parsed.success) throw new PackManifestError(source, schemaIssues(parsed.error));
   const definition = parsed.data;
   const foreign = (definition.skills ?? []).filter((skill) => !skills.has(skill));
   if (foreign.length > 0) {
