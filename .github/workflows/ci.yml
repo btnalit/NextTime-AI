@@ -161,6 +161,12 @@ jobs:
       - name: Disabled-reason guard (a button grey because of the form's content says why next to it)
         run: node scripts/guards/disabled-reason.mjs
 
+      - name: Capability matrix guard unit tests
+        run: node --test scripts/guards/capability-matrix.test.mjs
+
+      - name: Every capability says where it is projected, and the code agrees (scripts/guards/capability-matrix.mjs, docs/contracts/capability-matrix.yaml)
+        run: node scripts/guards/capability-matrix.mjs
+
       - name: Compose static validation (R-03 — the internal-plane root is mounted into the kernel only; every service secret is declared)
         run: node scripts/validate-compose.mjs
 

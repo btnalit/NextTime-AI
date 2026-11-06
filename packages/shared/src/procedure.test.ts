@@ -237,4 +237,27 @@ describe('Procedure as a plan template (S11 GO5d-2)', () => {
       expect(neither.error.issues.map((issue) => issue.path.join('.'))).toEqual(['plan']);
     }
   });
+
+  // Legacy 645: real models put the goal's acceptance at the top level (host v0.63.0 window, and
+  // staging round 3). The description says where it goes, and the schema refuses the other place.
+  it('propose_goal takes the acceptance checks inside the plan only, and its description says so', () => {
+    const propose = CAPABILITY_REGISTRY.find((capability) => capability.name === 'propose_goal');
+    if (!propose) throw new Error('propose_goal is not registered');
+    const base = {
+      statement: 'Renew the certificates of the main site.',
+      budget: { maxTokens: 1000, maxSteps: 5, maxRevisions: 1, maxWallClockSeconds: 600 },
+    };
+    const steps = [{ key: 'a', worker: { definitionId: DEF, version: 1 } }];
+    const acceptance = [
+      { kind: 'requester_confirm', key: 'ok', prompt: 'Is the certificate renewed?' },
+    ];
+    expect(propose.paramsSchema.safeParse({ ...base, plan: { steps, acceptance } }).success).toBe(
+      true,
+    );
+    expect(propose.paramsSchema.safeParse({ ...base, plan: { steps }, acceptance }).success).toBe(
+      false,
+    );
+    expect(propose.description).toContain('as plan.acceptance next to plan.steps');
+    expect(propose.description).toContain('not JSONPath: no leading $ or $.');
+  });
 });
