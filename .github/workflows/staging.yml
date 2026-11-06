@@ -332,6 +332,17 @@ jobs:
           fi
           sudo sh scripts/staging-rehearsal.sh "$@"
 
+      - name: Rollback drill summary
+        if: ${{ always() }}
+        run: |
+          f="$RUNNER_TEMP/staging/logs/rollback-summary.txt"
+          sudo test -f "$f" || exit 0
+          {
+            echo "### Rollback drill"
+            echo
+            sudo cat "$f" | sed 's/^/- /'
+          } >>"$GITHUB_STEP_SUMMARY"
+
       - name: Collect logs
         if: ${{ always() }}
         run: |

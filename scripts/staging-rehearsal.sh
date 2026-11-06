@@ -693,13 +693,22 @@ if [ "$rollback_drill" -eq 1 ]; then
   [ -n "$rb_log" ] || fail rollback-code "--from's apply-release.sh wrote no log"
   grep -E '^(STEP (migrate|up|accept|checkout)|FAIL|RESULT)' "$rb_log" | sed 's/^/STEP rollback-code | /'
   rb_result=$(sed -n 's/^RESULT //p' "$rb_log" | tail -n 1)
+  rb_on_from=0
+  [ "$(git describe --tags --exact-match HEAD 2>/dev/null)" = "$FROM" ] && rb_on_from=1
   case "$rb_result" in
-    ok) step "rollback-code ok — $FROM's acceptance passes on $TO_TAG's schema (code-only rollback works on this data)" ;;
-    acceptance-failures=* | degraded=*)
-      step "rollback-code NOTE $rb_result — $FROM's code does not pass on $TO_TAG's schema; a rollback of this release needs the database restored, and release.md §6 must say so" ;;
-    *) fail rollback-code "${rb_result:-no RESULT line} — the host could not be put back on $FROM's code; see $rb_log" ;;
+    ok) rb_note="rollback-code ok — $FROM's acceptance passes on $TO_TAG's schema (code-only rollback works on this data)" ;;
+    acceptance-failures=*)
+      rb_note="rollback-code NOTE $rb_result — $FROM's code does not pass on $TO_TAG's schema; a rollback of this release needs the database restored, and release.md §6 must say so" ;;
+    degraded=*)
+      rb_note="rollback-code NOTE $rb_result — $FROM is back and its acceptance passed, but a non-fatal step of its apply was left undone (see $rb_log); not a reversibility finding" ;;
+    *)
+      # Stopped before the checkout moved (the apply puts it back, R-71): nothing to restore onto.
+      [ "$rb_on_from" -eq 1 ] || fail rollback-code "${rb_result:-no RESULT line} — the host could not be put back on $FROM's code; see $rb_log"
+      rb_note="rollback-code NOTE ${rb_result:-no RESULT line} — $FROM's apply stopped after its checkout (migrate / up); the restore below is what puts this host back" ;;
   esac
-  [ "$(git describe --tags --exact-match HEAD 2>/dev/null)" = "$FROM" ] || fail rollback-code "checkout is not on $FROM after the rollback apply"
+  step "$rb_note"
+  echo "$rb_note" >"$LOGS/rollback-summary.txt"
+  [ "$rb_on_from" -eq 1 ] || fail rollback-code "checkout is not on $FROM after the rollback apply"
   sh scripts/restore.sh --db "$rb_dump" --target-db nexttime --i-know >"$LOGS/rollback-restore.log" 2>&1 </dev/null
   rb_restore_rc=$?
   grep -E '^(PASS|FAIL|STEP|restore)' "$LOGS/rollback-restore.log" | tail -n 12 | sed 's/^/STEP rollback-restore | /'
@@ -714,6 +723,7 @@ if [ "$rollback_drill" -eq 1 ]; then
     echo "RESULT rollback-restore-failed"; exit 1
   fi
   step "rollback-drill done — $FROM running on its own restored database"
+  echo "rollback-restore ok — $FROM's S1 passes on the restored pre-upgrade database" >>"$LOGS/rollback-summary.txt"
 fi
 
 step done
