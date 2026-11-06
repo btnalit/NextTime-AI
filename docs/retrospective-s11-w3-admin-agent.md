@@ -255,14 +255,14 @@ W3 = 214、P0b、P1、AA1–AA6（`global-roadmap-2026-10-16.md` §4）。AA6（
   - 变的是 plan 能写的东西：v0.50.0 到 v0.63.0 之间加了 WorkerSpec、Worker 合同、步骤间传文件、规格对照（GO8a、GO13、GO14、GO15a），`goal-plan.ts` 从 265 行长到 506 行。
   - schema 变大可能更容易写错，也可能只是 10 次里的波动。一个窗口分不出来。
 - `report_result` 和 `get_skill` 那 4 次，转回的摘要里没写拒绝原因，这里不推测。
-- **建议**（交协调排，不挡 D-W5）：在 `propose_goal` 描述的开头写清两条：`acceptance` 放在 `plan` 里；`path` 是 JMESPath，不带 `$`。
+- **建议**（遗留 645，W1a 做，不挡 D-W5）：在 `propose_goal` 描述的开头写清两条：`acceptance` 放在 `plan` 里；`path` 是 JMESPath，不带 `$`。
   改完看下一次回归 goal 场景的 `first_failure` 和 `failed=`。
 
-**这一窗口的其他发现**（交 steward 登遗留，不影响本节结论）：
+**这一窗口的其他发现**（不影响本节结论）：
 1. 单独跑 `accept_s2.sh` 退出后，fake-llm 还在运行，只有 apply 才会停它；`host-accept-s2.md` 也没写这一步。
-   fake-llm 是没有认证的测试端点，这一窗口已手动停掉。建议脚本退出时停掉它，或者在 runbook 里加一行。
-2. `cli.raw_secrets_scrubbed` 的审计行没有归属（`unattributed`）：主机没设 `NEXTTIME_PLATFORM_ADMINS`，apply 也没传 `--actor`。
-3. 主机任务单把 `docs/runbooks/release.md` 写成了 `docs/release.md`。发版说明里如果有同样的写法，要改过来。
+   fake-llm 是没有认证的测试端点，这一窗口已手动停掉。建议脚本退出时停掉它，或者在 runbook 里加一行。遗留 643。
+2. `cli.raw_secrets_scrubbed` 的审计行没有归属（`unattributed`）：主机没设 `NEXTTIME_PLATFORM_ADMINS`，apply 也没传 `--actor`。遗留 644。
+3. 主机任务单把 `docs/runbooks/release.md` 写成了 `docs/release.md`。入库的文档、脚本和 workflow 里没有这种写法，没登遗留。
 
 ### 2.4 人做了哪些事
 
@@ -506,5 +506,5 @@ AA5f 之后是 14 件（#959 时是 15 件，「验证」那一步变成应用�
 - 以后回归时，RUN 行可以加一个有界的 `worker_caps=`，记 Worker 定义里有没有 `request_action`。这样定义里写了什么能直接核实，不用靠推（#484 的建议）。
 - 交 steward 登遗留：`gates = can_act_on` 的语义漂移（§2.2 第二轮的读法）。
 - §2.3 已补。还有两项等维护者在控制台确认：用自己的管理员账号用一次管理员智能体；手动走一遍能力包导出和导入。
-- 主机窗口的发现 1–3（§2.3）交 steward 登遗留。发现 4 的建议（改 `propose_goal` 的描述）交协调排，不挡 D-W5。
+- 主机窗口的发现记为遗留 643（单独跑 S2 后 fake-llm 没停）、644（审计没有归属）、645（`propose_goal` 等工具的描述），都不挡 D-W5。
 - D-W5：维护者看 §4–§6 定。在那之前不排 AA7–AA10。
