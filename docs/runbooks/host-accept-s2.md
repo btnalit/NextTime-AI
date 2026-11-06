@@ -150,6 +150,28 @@ API 不可用，正在跑的入口 agent 会断线重连，每个 Task 容器短
 D-W5 的证据（AA5 方案 §4 第 3 份清单）：「授权门（试验）」——Worker 只能在它的人持有的门上请求动作，所以人得先授权这个门。
 给 Worker 绑门和验证不再是人的步骤（S11 AA5f）：应用时绑、应用后自己验证，人一共做 14 件事。
 
+**把它沉淀成能力包（S11 AA5d-4，`scripts/lib/accept-s2-admin-agent-pack.sh`）紧接着工单旅程跑。** 工单旅程没应用工作区部分
+（上面的场景没跑）时它也不跑，只多一行 `NOTE admin-agent-pack … not run …`。脚本扮演平台管理员、维护者和所有者：
+
+1. 平台管理员导出目标工作区里已应用、已验证的那一段（`export_admin_proposal_pack`，控制台的「导出成能力包…」）：包名是提案的
+   来源名 `accept-tickets-<nonce>`，版本 1，带两个 Skill 和 Worker（写着它用的系统，不带门和模型），`tickets.create` 的 blast radius
+   列进 `omitted`（包里没有 Operation）；再导出一次，文件和 digest 一样（导出什么都不写）；
+2. 维护者把文件放进 `${NEXTTIME_DATA}/config/packs/accept-tickets-<nonce>/1/`（`operations.md` §14.10：控制台下载的 tar 解开就是这些；
+   照那里的做法先写进同一目录下的 `.incoming-<nonce>/`，再一次 `mv -T` 到位，内核不会读到写了一半的包；目录必须还不存在；
+   root 所有、0644 / 0755，内核经只读的 `config/` 挂载以 uid 10001 读）。平台读到它是附加包（`extra_packs_status`），不用重启；
+3. 目标工作区读到这个包 `up_to_date`（`source: extra`）：Skill 和 Worker 就是按来源名派生的那几个族，内容是应用时的内容；
+   应用时给 Worker 绑的门是工作区自己的，不算改过；
+4. 新建第三个工作区 `accept-s2-pack-<nonce>`（同一个所有者）：包是 `not_installed`，它要的系统 `can_enable`（平台部分建的那个
+   gate-host 实例在供应）。所有者在这里启用这个门，预览安装（Worker 在这里还没有门，这次安装把它绑到这里唯一的那个门），确认
+   放宽权限的各项，安装；安装后它自己验证一次（`trigger: system`：三项都 `in_effect`，系统已连上、门探活 `ok`，来源找得到）。
+   之后包是 `up_to_date`，组件 id 和目标工作区里的一样，Worker 已发布、绑着第三个工作区自己的门。
+
+最后打印人为了复用做了哪几件事（导出、放进附加包目录、启用门、按段审阅与逐项确认、安装），作为 D-W5 的证据。包在
+`config/packs/` 里的这几分钟，**每个工作区的「能力包」列表都会列出它**（附加包目录本来就是这样用的）；清理时不管 `--keep` 与否都会：
+在第三个工作区回滚这次安装、停用这个工作区、删掉这个包的目录（只删本次建的、名字是 `accept-tickets-<nonce>` 的那个；
+`mv` 之前就失败的，删掉留下的 `.incoming-<nonce>/`）。它启用的门
+随工单旅程的清理一起断开（停用 gate-host 实例）。
+
 不要在别人正用这台主机上的栈时跑 fake 路径（`ACCEPT_DISRUPTIVE=1` 时尤其如此）。`--real` 不跑这些场景，并且在发布 http 门的清单之前把夹具测试账本的
 两个草稿（`ledger.get` / `ledger.add`）丢弃，发布后用 `real-ledger-withheld` 证明门上已发布的只有
 `stock.get`：真实模型的工具列表和加账本之前一样，`api_observe` 不会多一个 GET 可选。
@@ -298,6 +320,18 @@ PASS admin-agent-tickets-audit-production audit: the proposal under the agent's 
 PASS admin-agent-tickets-no-token-leak the trial and the production credential each appear in 0 rows across all <n> public tables
 PASS admin-agent-tickets-human what the person did: 启用门×2 录凭证×2 批准试验动作×1 按段审阅与逐项确认×2 授权门（试验）×1 每段应用×2 试验工作区发布×4
 NOTE admin-agent-tickets 授权门（试验） is a person's step the AA5 plan's §5.8 list leaves out: the Worker asks for actions only on gates its person holds (connect_gatekeeper on Systems & access, 系统与授权) — D-W5 evidence (AA5 plan §4 item 3)
+HUMAN admin-agent-pack 导出: export_admin_proposal_pack <uuid> (the console's 导出成能力包…)
+PASS admin-agent-pack-export the platform administrator exported the target's applied part as accept-tickets-<hex> version 1 (sha256:<hex>): two Skills and the Worker, tickets.create's blast radius left out; the same pack when asked again
+HUMAN admin-agent-pack 放进附加包目录: the exported files into <data>/config/packs/.incoming-<hex>/, then mv -T to <data>/config/packs/accept-tickets-<hex> (operations.md §14.10)
+PASS admin-agent-pack-place the files written into .incoming-<hex>/, then one mv -T to <data>/config/packs/accept-tickets-<hex>/1/; the platform reads accept-tickets-<hex> as an extra pack at version 1, nothing left out, no restart
+PASS admin-agent-pack-target the target <uuid> reads accept-tickets-<hex> up_to_date (extra): its Skills and Worker <uuid> are the pack's families, the Worker's gate there its own
+PASS admin-agent-pack-workspace workspace <uuid>: accept-tickets-<hex> not installed, its system accept-s2-tickets offered by the platform (accept-tickets-<hex>)
+HUMAN admin-agent-pack 启用门: enable_gate_instance accept-tickets-<hex> in <uuid> (from the pack's requirement)
+PASS admin-agent-pack-enable the owner enabled accept-tickets-<hex> in <uuid> (Gatekeeper <uuid>)
+HUMAN admin-agent-pack 按段审阅与逐项确认: preview_pack_install accept-tickets-<hex> in <uuid>: items <n,…> confirmed by their ordinals
+HUMAN admin-agent-pack 安装: install_pack accept-tickets-<hex> 1 in <uuid>
+PASS admin-agent-pack-install the owner installed accept-tickets-<hex> in <uuid> (change segment <uuid>, verified by itself): the target's Skill and Worker ids, the Worker <uuid> bound to <uuid>
+PASS admin-agent-pack-human what the people did to reuse it: 启用门×1 安装×1 导出×1 按段审阅与逐项确认×1 放进附加包目录×1
 PASS goals-planner-model alice's AgentProfile model set to fake/fake-echo, the model her goal planner runs on (S6, S13)
 PASS s6-verifying goal <uuid>: its step reported success, the platform is checking the stock API for a symbol it never shows
 PASS s4u-approved alice approved the write <uuid> under lose-s4u-<hex>; it ran and its answer was lost: failed(outcome_unknown), never run again by the gate

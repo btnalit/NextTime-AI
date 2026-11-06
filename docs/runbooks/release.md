@@ -2452,6 +2452,13 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **行为变化**：附加包与自带包的清单、Skill、Worker 文件不合 schema 时，原因从 zod 的整段 issue JSON 变成一行 `字段: 原因; …`（只是文字）。新能力不调就什么都不发生。
 - **回滚**（见 §6 一行）：上一版不调这个函数，只回滚代码就行；要删函数：`drop function admin_proposal_segment_verified(uuid)`，再删 `schema_migrations` 里 governance 39 那一行。
 
+### 3.129 控制台标出附加包、平台面看附加包状态、把管理员提案导出成能力包（#977，S11 AA5d-3，0.62.0 之后的下一版）
+
+只改控制台（加 runbook 一行）：没有迁移，不改 compose，没有新环境变量，线上契约不变，主机不需要操作。控制台与内核同版（用到 §3.127 的 `PackWire.source`、`extra_packs_status` 与 §3.128 的 `export_admin_proposal_pack`）。
+
+- **发版说明可写**：能力目录里附加包标「本部署附加」，详情多一行「来源」。「平台 · 模块」多一张「本部署附加的能力包」卡片：读进来的包、没读进来的目录和原因、没配置 / 读不了 / 是空的各有说明，「重新读取」立刻重读目录。「平台 · 管理员提案」详情里，已应用的工作区部分可以「导出成能力包…」：写简介（默认提案标题）和说明（默认列出不带的 Operation 改动），导出后列出文件、没带的条目和摘要，可以下载成 `<名字>-1.tar`，按 `operations.md` §14.10 放进主机 `config/packs/`；被拒时逐条列出原因和位置；某个文件路径放不进 tar 时不下载，提示是哪条路径。
+- **回滚**：只回滚代码。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
