@@ -13,7 +13,8 @@
 #
 # Usage:
 #   sh scripts/staging-rehearsal.sh --disposable-host --from vA.B.C --to <tag|commit-ish> --work <dir>
-#        [--worker-runtime runc|runsc] [--no-seed] [--no-verify] [--allow-baseline-failures]
+#        [--worker-runtime runc|runsc] [--no-seed] [--no-rollback-drill] [--no-verify]
+#        [--allow-baseline-failures]
 #        [--real <provider/model> --real-providers <llm-providers.yaml> --real-env <file> [--runs N]
 #         [--real-token-budget TOKENS] [--real-extended]]
 #
@@ -36,6 +37,13 @@
 #                       is what gives the migrations under test non-empty tables to run against, and
 #                       proves the staging host itself is healthy (a --from baseline failure stops
 #                       the rehearsal unless --allow-baseline-failures).
+#   --no-rollback-drill skip step 14: after everything above passed, roll the host back to --from
+#                       the way release.md §5 says (the --from release's own apply-release.sh,
+#                       --prefetch then --pull — code only), report whether --from's acceptance
+#                       passes on the new schema with the data the apply left (evidence for
+#                       release.md §6, not a gate), then restore the target apply's pre-upgrade dump
+#                       over the live database with --from's scripts/restore.sh and run --from's S1
+#                       on it (a gate: the recovery point an operator falls back on must work).
 #   --no-verify         pass --no-verify to the --from release's pull-images.sh (skip the cosign
 #                       check — only where the sigstore endpoints are unreachable; say so).
 #   --real ...          after a clean apply, add a real provider the way an administrator does in
@@ -53,6 +61,7 @@
 #
 # Output follows apply-release.sh: one "STEP <name> …" line per step, "FAIL <name>" on a stop, and
 # a last line "RESULT ok" or "RESULT failed-at=<step>" / "RESULT acceptance-failures=<n>" /
+# "RESULT rollback-restore-failed" (step 14's restore or its S1) /
 # "RESULT degraded=<step>[,…]" (apply-release.sh's, passed on) / "RESULT real-model-failures=<n>".
 # Exit status 0 only for "RESULT ok".
 #
@@ -64,7 +73,7 @@ set -u
 
 die() { echo "staging-rehearsal: $*" >&2; exit 2; }
 
-disposable=0 FROM= TO= WORK= RUNTIME= seed=1 verify_flag= allow_baseline=0
+disposable=0 FROM= TO= WORK= RUNTIME= seed=1 rollback_drill=1 verify_flag= allow_baseline=0
 REAL_MODEL= REAL_PROVIDERS= REAL_ENV= RUNS=3 BUDGET=8000000 REAL_EXTENDED=
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -74,6 +83,7 @@ while [ "$#" -gt 0 ]; do
     --work) WORK=${2:-}; shift ;;
     --worker-runtime) RUNTIME=${2:-}; shift ;;
     --no-seed) seed=0 ;;
+    --no-rollback-drill) rollback_drill=0 ;;
     --no-verify) verify_flag=--no-verify ;;
     --allow-baseline-failures) allow_baseline=1 ;;
     --real) REAL_MODEL=${2:-}; shift ;;
@@ -203,7 +213,7 @@ else
   git tag "$TO_TAG" "$to_sha" || die "could not create the local staging tag $TO_TAG"
   CREATED_TAG=$TO_TAG
 fi
-echo "STEP start from=$FROM to=$TO_TAG ($(git rev-parse --short "$TO_TAG^{commit}")) images-to=${pull_flag:-build} seed=$seed work=$WORK"
+echo "STEP start from=$FROM to=$TO_TAG ($(git rev-parse --short "$TO_TAG^{commit}")) images-to=${pull_flag:-build} seed=$seed rollback-drill=$rollback_drill work=$WORK"
 
 # 1. preflight — this (target) version's host-preflight.sh; plus IPv6, which the docker socket
 #    proxies need (they bind [::]:2375) and host-preflight.sh does not check.
@@ -638,6 +648,72 @@ if [ -f scripts/check-caddy-log-redaction.sh ]; then
   [ "$redaction_rc" -eq 0 ] || fail caddy-log-redaction "see $LOGS/caddy-log-redaction.log"
 else
   step "caddy-log-redaction skipped — $TO_TAG predates scripts/check-caddy-log-redaction.sh"
+fi
+
+# 14. rollback drill (docs/test-coverage-gaps-2026-11-06.md G8/G14): back to --from the way
+#     release.md §5 says — "按 §3 把主机切到上一个已知良好的 tag", i.e. --from's own apply-release.sh,
+#     prefetched first like any apply — then the recovery point. Two answers, kept apart:
+#     a) code only: does --from's acceptance pass on the target's schema, with the data the seed and
+#        the target's suites left? This is release.md §6's reversibility question on real tables
+#        (reversibility-probe.yml asks it on an empty database). Reported, never a gate: a release
+#        may be irreversible on purpose, and §6 then says the database has to be restored.
+#     b) code + database: restore the target apply's own pre-upgrade dump over the live database
+#        (--from's scripts/restore.sh, --target-db nexttime --i-know) and run --from's S1. A gate:
+#        this is the dump an operator falls back on, and the only rehearsal of restoring it.
+#     Not reproduced: version-specific manual rollback steps a release's own §3 section lists
+#     (draining Workers and the like) — those stay the operator's, as in drill-upgrade.sh.
+if [ "$rollback_drill" -eq 1 ]; then
+  rb_dump=$(ls -t "$D/backups/pre-upgrade"/nexttime-pre-"$TO_TAG"-from-*.dump 2>/dev/null | head -n 1)
+  [ -n "$rb_dump" ] || fail rollback-dump "no pre-upgrade dump of the $TO_TAG apply in $D/backups/pre-upgrade"
+  step "rollback-drill start $TO_TAG -> $FROM, recovery point $(basename "$rb_dump")"
+  rb_script="$WORK/apply-release-$FROM.sh"
+  git show "$FROM:scripts/apply-release.sh" >"$rb_script" || fail rollback-code "git show $FROM:scripts/apply-release.sh"
+  # Prefetched first, like any apply (release.md §3). A --from too old to prefetch, or whose
+  # prefetch log this script cannot find, pulls inside the apply instead when it can.
+  rb_prefetch=
+  if grep -q -- '--prefetch' "$rb_script"; then
+    APPLY_LOG_DIR="$LOGS" sh "$rb_script" --prefetch "$FROM" </dev/null >/dev/null 2>&1
+    rb_prefetch_log=$(ls -t "$LOGS"/prefetch-"$FROM"-*Z.log 2>/dev/null | head -n 1)
+    rb_prefetch=$(sed -n 's/^RESULT //p' "$rb_prefetch_log" 2>/dev/null | tail -n 1)
+  fi
+  if [ "$rb_prefetch" = ok ]; then
+    rb_pull=--pull
+    step "rollback-code prefetch ok $FROM"
+  elif grep -q -- '--allow-long-pull' "$rb_script"; then
+    rb_pull="--pull --allow-long-pull"
+    step "rollback-code prefetch ${rb_prefetch:-not run} — $FROM's apply pulls inside the window (--allow-long-pull)"
+  else
+    rb_pull=--pull
+    step "rollback-code prefetch ${rb_prefetch:-not run} — $FROM's apply checks for its images itself"
+  fi
+  # The rollback apply runs --from's full acceptance, without the service-interrupting goal
+  # scenarios: they answer nothing about reversibility and cost about a third of the time.
+  ACCEPT_DISRUPTIVE= APPLY_LOG_DIR="$LOGS" sh "$rb_script" $rb_pull "$FROM" </dev/null >/dev/null 2>&1
+  rb_log=$(ls -t "$LOGS"/apply-"$FROM"-*Z.log 2>/dev/null | head -n 1)
+  [ -n "$rb_log" ] || fail rollback-code "--from's apply-release.sh wrote no log"
+  grep -E '^(STEP (migrate|up|accept|checkout)|FAIL|RESULT)' "$rb_log" | sed 's/^/STEP rollback-code | /'
+  rb_result=$(sed -n 's/^RESULT //p' "$rb_log" | tail -n 1)
+  case "$rb_result" in
+    ok) step "rollback-code ok — $FROM's acceptance passes on $TO_TAG's schema (code-only rollback works on this data)" ;;
+    acceptance-failures=* | degraded=*)
+      step "rollback-code NOTE $rb_result — $FROM's code does not pass on $TO_TAG's schema; a rollback of this release needs the database restored, and release.md §6 must say so" ;;
+    *) fail rollback-code "${rb_result:-no RESULT line} — the host could not be put back on $FROM's code; see $rb_log" ;;
+  esac
+  [ "$(git describe --tags --exact-match HEAD 2>/dev/null)" = "$FROM" ] || fail rollback-code "checkout is not on $FROM after the rollback apply"
+  sh scripts/restore.sh --db "$rb_dump" --target-db nexttime --i-know >"$LOGS/rollback-restore.log" 2>&1 </dev/null
+  rb_restore_rc=$?
+  grep -E '^(PASS|FAIL|STEP|restore)' "$LOGS/rollback-restore.log" | tail -n 12 | sed 's/^/STEP rollback-restore | /'
+  if [ "$rb_restore_rc" -ne 0 ]; then
+    echo "FAIL rollback-restore — $FROM's scripts/restore.sh exit=$rb_restore_rc; see $LOGS/rollback-restore.log"
+    echo "RESULT rollback-restore-failed"; exit 1
+  fi
+  docker compose up -d --no-build --wait kernel </dev/null >>"$LOGS/stack.log" 2>&1 || {
+    echo "FAIL rollback-restore — the stack did not come back healthy after the restore"; echo "RESULT rollback-restore-failed"; exit 1; }
+  if ! accept "rollback-$FROM-s1" scripts/accept_s1.sh; then
+    echo "FAIL rollback-restore — $FROM's S1 fails on the restored pre-upgrade database; see $LOGS/rollback-$FROM-s1.log"
+    echo "RESULT rollback-restore-failed"; exit 1
+  fi
+  step "rollback-drill done — $FROM running on its own restored database"
 fi
 
 step done
