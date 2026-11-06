@@ -5,7 +5,7 @@
 > 拆解与实现说明在 `development-tasks.md`，评估在 `retrospective-*.md` / `code-review-*.md`，
 > 本文只链接不复制。与代码冲突时以代码为准，并修正本文。
 
-最后更新：2026-11-06（**S11 AA5g 合入（#1002，6705498）**：管理员智能体能列出能力包、提议所有者安装，governance 0040 可逆。**测试缺口批次 F 合入（#1008，ae4cbf7）**：staging 每轮预演都演练回滚与恢复，G8、G14 云上部分已覆盖。主机在 v0.63.0。**测试缺口 B1 合入（#1012，78a6b29）**：e2e 定位守卫上线，存量 435 处只减不增。计划内工作完成后做一次前端全面审查）。 上一版 2026-11-06（**遗留 643 修复合入（#1001，01f16f2）**：单独跑验收脚本后不再留下 fake-llm。主机在 v0.63.0。进行中：#1008（批次 F，staging 回滚演练）、AA5g（#1002）。计划内工作完成后做一次前端全面审查）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
+最后更新：2026-11-06（**测试债棘轮由 CI 强制只降不升（#1013，2e8ad06）**：e2e 定位基线与 capability-matrix 棘轮对 base 只降不升，上升要 `ratchet-raise` 标签。今天已合入 AA5g（#1002）、批次 F（#1008）、B1（#1012）。主机在 v0.63.0。下一步：测试守门人补 AA5g 的 e2e 旅程（遗留 654）。计划内工作完成后做一次前端全面审查）。 上一版 2026-11-06（**S11 AA5g 合入（#1002，6705498）**：管理员智能体能列出能力包、提议所有者安装，governance 0040 可逆。**测试缺口批次 F 合入（#1008，ae4cbf7）**：staging 每轮预演都演练回滚与恢复，G8、G14 云上部分已覆盖。主机在 v0.63.0。**测试缺口 B1 合入（#1012，78a6b29）**：e2e 定位守卫上线，存量 435 处只减不增。计划内工作完成后做一次前端全面审查）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
 
 ## 1. 入口指引
 
@@ -360,6 +360,7 @@
 | 2026-11-06 | 测试缺口批次 F（staging 回滚与恢复演练）合入（#1008，测试守门人，ae4cbf7，只改 `staging-rehearsal.sh`、`staging.yml` 与 `staging-rehearsal.md`，不改主机行为）：staging 预演新增第 14 步「回滚演练」，默认开启（`--no-rollback-drill` / workflow 输入 `rollback_drill` 可关）。先用 `--from` 版本自己的 `apply-release.sh` 只回滚代码，在目标版本的 schema 与验收留下的数据上跑 `--from` 的 S3/S1/S2/S4，结果只报告（`STEP rollback-code ok` 或 `NOTE`，NOTE 表示这一版只回滚代码不够，release.md §6 要写明）；再用 `--from` 的 `restore.sh` 把 apply 自己做的 pre-upgrade dump 恢复到线上库并跑 S1，这一步是门槛。#488 通过；预演 v0.63.0 → 本 PR → 回滚：`rollback-code ok`，恢复 72/72 张表，恢复后 S1 25/0。**缺口 G8（回滚演练）、G14（备份恢复演练）的云上部分已覆盖**（`docs/test-coverage-gaps-2026-11-06.md`），主机上的 `drill-upgrade.sh` / `drill-restore.sh` 不变 | #1008 |
 | 2026-11-06 | S11 AA5g「管理员智能体看见能力包、提议安装」合入（#1002，6705498，shared + kernel + platform-extension + 控制台 + governance 0040，进 0.63.0 之后的下一版；见 release.md §3.137、§6）：`agent_list_packs`、`propose_pack_install`、`install_pack` 的 `adminProposalSegmentId`；设计稿 `docs/admin-agent-packs-design-2026-11-06.md`（协调批 D1–D4，D5 推迟为 AA5g-4）。审查：#484 设计稿 PASS，#493 内核与 0040 PASS（变异 21 个杀 14 个，存活的 G1/G3/G4/C5 已在本 PR 补测试钉住），#501 web 切片 PASS（P3「已装好判断比内核严」已在本 PR 修），UX 验收与复验 PASS；CI、可逆性探针与更新分支后的 staging 预演全绿。登记遗留 654（`propose_pack_install` 的 e2e journey） | #1002 |
 | 2026-11-06 | 测试缺口批次 B1（e2e 定位守卫）合入（#1012，测试守门人，78a6b29，只改守卫脚本、CI、DoD 与 PR 模板，加一处旅程定位）：`scripts/guards/e2e-locators.mjs` 用 TypeScript AST 扫 `packages/web/e2e`，L1 交互动作的目标必须来自 getByRole / getByLabel / getByText 等按人能看到的东西定位（testid 与 CSS 只能圈范围、做断言），L2 禁止页面级 selector 动作；接入 `pnpm ci:guards` 与 CI `quality`，单测 9 条。**缺口 G1：e2e 定位守卫已上线，存量 435 处在基线里，只减不增**（基线与 base 比对的棘轮由测试守门人随后的 PR 做）。守卫第一次拦截：旅程 01 改成按「成员」这个名字找 combobox（646 的漏测）。`docs/console-usability-dod.md` 那条改为「e2e 走用户的路」。#488 通过（P2 已修，P3 修三项），UX 通过；登记遗留 655（`evaluate(el => el.click())` 未覆盖） | #1012 |
+| 2026-11-06 | 测试债棘轮由 CI 强制只降不升（#1013，测试守门人，2e8ad06，只改 CI 与守卫脚本，`docs/testing.md` 一节）：`scripts/guards/ratchet-shrinks.mjs` 在 PR 的 `quality` 里把 e2e 定位基线（#1012，缺口 G1）与 capability-matrix 棘轮（#1006，缺口 G4 / G5）和合并提交的第一父提交（HEAD^1）比，只许降不许升；审查者确认的上升加 `ratchet-raise` 标签放行（运行时读标签，重跑也认）。#488 通过（P2、P3 已在本 PR 修）。遗留 653 里「棘轮没有和 base 比较」那一项划掉，其余照旧 | #1013 |
 | 2026-10-16 | 控制台文案第二批合入（#628，25bfdfe，无迁移，只改控制台，未发版；遗留 335、359、360、361、362、363 关闭）：对话输入框因 U+0000 被拒后，提示旁有「移除看不见的字符」按钮，移除后消息不会自动发出（335）；清除预览与审计资源类型统一为「动作请求」「授权」（359）；下一步文案里的 builder 改为「构建者」（360）；错误文案与成员页统一为「最后一位有效的所有者」「人类用户」，capability 名称为「API key 轮换」（i18n 守卫不允许中文短标签以英文结尾）（361）；服务凭证表单输入时就提示保留名规则（362）；640px 以下对话页头部改为两行（363）。另含一个只改测试的提交：旅程③窄屏用例按 Escape 后先等抽屉关上再点下一行（#625 种子行排到第一位后暴露的时序问题）。只改控制台，不需要内核审查（协调线程定）；UX 验收首轮 1 条 P2（390 宽度错误条被按钮挤窄）在本 PR 内修好，复验 PASS（`console-ux/acceptance-628.md`），CI 全绿合入；无主机动作 | PR #628 |
 
 ### 2.2 验收证明了什么，没证明什么
@@ -965,7 +966,7 @@
 | 650 | 主机上有智能体拿已吊销的 Handle 反复调 `search`（403）和 `get_task`（401），一直循环、不停下：Handle 被吊销后 agent 侧应该停下或报告，而不是一直重试；要查是哪条路径没有处理吊销（v0.63.0 主机观察，#1003 线程） | P3 | 内核 / agent-host | 开放 |
 | 651 | 主机上一段时间内有几个内网地址每隔几秒就以 `Host: kernel:8080` 连一次 `/ws`，来源容器未确认；要查清是哪个服务、是否该连、连不上时有没有退避（v0.63.0 主机观察，#1003 线程） | P3 | 运维 / 内核 | 开放 |
 | 652 | 控制台提示组件 Toast 的 action 按钮用 ghost 样式，看起来像一行普通文字，不像能点；应全站统一改成次要按钮（#1003 UX P3-2） | P3 | 控制台 | 开放 |
-| 653 | capability-matrix 守卫的已知局限（#1006 上 #488 的 P3）：interactive 模式（`INTERACTIVE_TOOL_CAPABILITY_NAMES`）与 Worker 工具没进 M3；M2 把注释掉的调用也算进去，泛型里带括号时会误判成 indirect；M5 只检查内核测试里有没有出现这个名字；棘轮只要求等于计数，没有和 base 比较「只降不升」；工具列表靠解析源码读取（读不懂会报错，entry 与 admin 同一解析器），没有导入构建产物 | P3 | 测试守门人 | 开放 |
+| 653 | capability-matrix 守卫的已知局限（#1006 上 #488 的 P3）：interactive 模式（`INTERACTIVE_TOOL_CAPABILITY_NAMES`）与 Worker 工具没进 M3；M2 把注释掉的调用也算进去，泛型里带括号时会误判成 indirect；M5 只检查内核测试里有没有出现这个名字；~~棘轮只要求等于计数，没有和 base 比较「只降不升」~~（#1013 已修）；工具列表靠解析源码读取（读不懂会报错，entry 与 admin 同一解析器），没有导入构建产物 | P3 | 测试守门人 | 开放 |
 | 654 | `propose_pack_install` 没有 e2e journey：管理员智能体提议 → 所有者从提案安装 → 回滚，要给 fake-llm 加一个新的场景标记；内核集成测试与控制台单测已覆盖，缺的是端到端一条（#1002 跟进项） | P3 | 测试守门人（已排期） | 开放 |
 | 655 | e2e 定位守卫（#1012）没有覆盖 `locator.evaluate(el => el.click())` 这种绕开可见控件的点击（#488 P3，小） | P3 | 测试守门人 | 开放 |
 
