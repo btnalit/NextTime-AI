@@ -126,11 +126,13 @@ RUN scenario=<key> run=<i> outcome=ok|fail <detail>
 
 `admin_tickets` 的 RUN 行（`run=1`）字段：`reached=`（按顺序 connect, draft, publish, try,
 approve, ticket, propose, platform, enable, applied, bound）、`stuck=`（`-` 表示走完；最后一个
-Turn 没正常结束时带 `(last_turn=failed|timeout)`）、`turns=` / `nudges=`、`turn_tools=`（几个 Turn
-合计）、`refused=<次数>[<能力>:<拒绝码>,…]`（智能体被内核拒掉的调用——是护栏在起作用，不是缺陷）、
+Turn 没正常结束时带 `(last_turn=failed|timeout|error)`）、`turns=` / `nudges=`（只算发出去、开了
+Turn 的）、`turn_timeouts=`（420 秒没结束的 Turn：脚本像人一样先 `stop_agent` 停掉、最多等 60 秒，
+再说下一句，免得下一句被 409 拒掉、它也接着花钱）、`turn_errors=[<内核原话，只留字母数字>]`（消息
+没发出去、没开 Turn 的次数，例如上一个 Turn 还没停下）、`turn_tools=`（几个 Turn 合计）、`refused=<次数>[<能力>:<拒绝码>,…]`（智能体被内核拒掉的调用——是护栏在起作用，不是缺陷）、
 `tokens=` / `cost_usd=`（试验工作区自这一项开始以来的 `llm_usage`，含它试跑的 Worker）、
 `human_steps=`（人做了几步，明细是上面的 `HUMAN admin-agent-tickets …` 行），以及走到的那几步
-各自的观察：`request=<kind>/<target>`、`observed=yes|no`（起草前有没有调观察工具读工单）、
+各自的观察：`request=<kind>/<target>`（target 是智能体写的，只留字母数字和 `._:/-`，其余换成 `_`）、`observed=yes|no`（起草前有没有调观察工具读工单）、
 `skills=` / `workers=`、`worker_gate=yes|no`（发布的 Worker 有没有带工单门）、`tasks=`、
 `action=<操作>:<状态>`、`task=`、`title=yes|no`（新工单是不是要的标题）、`proposal=<各段条目>`、
 `gate=<门 id>:<状态>`、`platform_part=none`、`verified=`、`target_worker_gates=`。这些是 D-W5

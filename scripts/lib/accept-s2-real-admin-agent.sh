@@ -34,7 +34,8 @@
 # Runs once (`run=1`), whatever --runs says: one journey creates an administrator, two workspaces,
 # a gate container and a gate-host instance, and costs about as much as the other --real
 # scenarios together (docs/runbooks/host-accept-real-model.md §8). Each Turn may take up to 420 s;
-# when one ends without doing what was asked (no request, no draft, no Task, no proposal) the
+# one still running then is stopped as the person would (stop_agent) before anything else is said.
+# When one ends without doing what was asked (no request, no draft, no Task, no proposal) the
 # person says it once more ("请直接按刚才说的做") — one nudge per step, counted. llm-proxy's
 # per-workspace budget applies to the trial workspace like any other (staging: 8M tokens); a budget
 # refusal there voids the run like the other scenarios' (real_budget_check).
@@ -71,6 +72,9 @@ RAT_DETAIL=""
 RAT_APPROVER_PID=""
 RAT_TURN_STATUS=""
 RAT_BOOK_BEFORE=""
+RAT_TURN_TIMEOUTS=0
+RAT_TURN_ERRORS=0
+RAT_TURN_ERROR=""
 
 # rat_reached <step>: the journey got through <step>.
 rat_reached() {
@@ -83,12 +87,26 @@ rat_note() {
 }
 
 # rat_turn <chat|new:admin_agent> <text>: one Turn as the administrator in the trial workspace.
-# Leaves its status in RAT_TURN_STATUS (empty when it did not settle within 420 s) and the Chat in
-# TICKETS_CHAT_ID; adds its tool calls to the run's counts. Never fails: what the Turn did is read
+# Leaves its status in RAT_TURN_STATUS (empty when it did not settle within 420 s, `error` when the
+# driver could not send it) and the Chat in TICKETS_CHAT_ID; adds its tool calls to the run's
+# counts. Returns 1 when the message started no Turn (the driver's ERROR=, e.g. 409 while a Turn
+# still runs): counted in turn_errors=, not in turns=. A Turn that did not settle is stopped
+# (rat_stop_turn) before anything else is said, so the next message is not refused and it stops
+# spending tokens; counted in turn_timeouts=. Never fails the script: what the Turn did is read
 # from the kernel afterwards.
 rat_turn() {
+  rt_out=$(run_driver send-and-wait "$(admin_cred "$ADMIN_TRIAL_ID")" "${1:-new:admin_agent}" "$2" 420000)
+  rt_error=$(parse_kv "$rt_out" ERROR)
+  if [ -n "$rt_error" ]; then
+    RAT_TURN_ERRORS=$((RAT_TURN_ERRORS + 1))
+    # The kernel's message, not the model's; still only letters, digits and _ in the public log.
+    [ -n "$RAT_TURN_ERROR" ] || RAT_TURN_ERROR=$(printf '%s' "$rt_error" | tr -c 'A-Za-z0-9_' '_' | cut -c1-60)
+    RAT_TURN_STATUS=error
+    # The driver can fail after the message went out (reading the history): nothing may stay running.
+    rat_stop_turn
+    return 1
+  fi
   RAT_TURNS=$((RAT_TURNS + 1))
-  rt_out=$(run_driver send-and-wait "$(admin_cred "$ADMIN_TRIAL_ID")" "$1" "$2" 420000)
   rt_chat=$(parse_kv "$rt_out" CHAT_ID)
   [ -z "$rt_chat" ] || TICKETS_CHAT_ID=$rt_chat
   RAT_TURN_STATUS=$(parse_kv "$rt_out" TURN_STATUS)
@@ -98,12 +116,34 @@ rat_turn() {
   RAT_TE=$((RAT_TE + ${rt_te:-0}))
   rt_names=$(parse_kv "$rt_out" TOOL_NAMES)
   [ -z "$rt_names" ] || RAT_TOOLS="${RAT_TOOLS:+$RAT_TOOLS,}$rt_names"
+  if [ -z "$RAT_TURN_STATUS" ]; then
+    RAT_TURN_TIMEOUTS=$((RAT_TURN_TIMEOUTS + 1))
+    rat_stop_turn
+  fi
+  return 0
 }
 
-# rat_nudge <step>: the person says it once more, after a Turn that did not do <step>.
+# rat_stop_turn: the Chat's running Turn, if any, is stopped as the person would (stop_agent) and
+# waited for, at most 60 s. A Turn still running after that leaves the next message refused, which
+# rat_turn counts; the cleanup's stop_admin_agent stops it in the end.
+rat_stop_turn() {
+  [ -n "$TICKETS_CHAT_ID" ] || return 0
+  rst_out=$(cap "$(admin_cred "$ADMIN_TRIAL_ID")" stop_agent "{\"chatId\":\"$TICKETS_CHAT_ID\"}")
+  [ "$(parse_kv "$rst_out" HTTP_STATUS)" = "200" ] || rat_note "stop_agent=http_$(parse_kv "$rst_out" HTTP_STATUS)"
+  rst_i=0
+  while [ "$rst_i" -lt 12 ]; do
+    rst_running=$(psql_ws "select count(*) from activities where workspace_id = '$ADMIN_TRIAL_ID' and chat_id = '$TICKETS_CHAT_ID' and kind = 'agent_turn' and status = 'running'")
+    [ "${rst_running:-1}" != "0" ] || return 0
+    sleep 5
+    rst_i=$((rst_i + 1))
+  done
+}
+
+# rat_nudge <step>: the person says it once more, after a Turn that did not do <step>. Counted only
+# when the message started a Turn.
 rat_nudge() {
-  RAT_NUDGES=$((RAT_NUDGES + 1))
-  rat_turn "${TICKETS_CHAT_ID:-new:admin_agent}" "请直接按刚才说的做，不需要再确认。"
+  rat_turn "$TICKETS_CHAT_ID" "请直接按刚才说的做，不需要再确认。" && RAT_NUDGES=$((RAT_NUDGES + 1))
+  return 0
 }
 
 # rat_stuck <step:reason>: the journey stops here (returns 1, for `|| return 1`); the last Turn's
@@ -177,7 +217,9 @@ rat_journey() {
   # --- Connect: the agent asks for the ticket system ---
   tickets_gate_up
   rat_turn new:admin_agent "我想在试验工作区里试接一个测试用的工单系统，看看能不能让一个 Worker 帮我开工单。它是 http 系统，请把它叫作 helpdesk，用测试账号。请先发一个接入请求，凭证我会在控制台填。"
-  cr_sql="select id || ',' || kind || ',' || target from connection_requests where workspace_id = '$ADMIN_TRIAL_ID' and status = 'requested' and requested_at >= '$RAT_START' order by requested_at desc limit 1"
+  # The target is the agent's text: JSON-encoded by postgres for the person's call, letters, digits
+  # and ._:/- only (others as _) in the RUN line.
+  cr_sql="select id || ',' || kind || ',' || to_json(target)::text from connection_requests where workspace_id = '$ADMIN_TRIAL_ID' and status = 'requested' and requested_at >= '$RAT_START' order by requested_at desc limit 1"
   cr_row=$(psql_ws "$cr_sql")
   if [ -z "$cr_row" ]; then
     rat_nudge connect
@@ -187,11 +229,11 @@ rat_journey() {
   cr_id=${cr_row%%,*}
   cr_rest=${cr_row#*,}
   cr_kind=${cr_rest%%,*}
-  cr_target=${cr_rest#*,}
-  rat_note "request=$cr_kind/$cr_target"
+  cr_target_json=${cr_rest#*,}
+  rat_note "request=$cr_kind/$(printf '%s' "$cr_target_json" | sed 's/^"//; s/"$//' | tr -c 'A-Za-z0-9._:/-' '_' | cut -c1-60)"
   [ "$cr_kind" = "http" ] || rat_stuck "connect:request_kind_$cr_kind" || return 1
   out=$(cap "$(admin_cred "$ADMIN_TRIAL_ID")" create_connection \
-    "{\"connectionRequestId\":\"$cr_id\",\"kind\":\"http\",\"target\":\"$cr_target\",\"endpoint\":\"http://accept-s2-tickets-gate:8090\",\"connectionSecret\":\"$tickets_secret\",\"credentials\":{\"token\":\"$ACCEPT_S2_API_TOKEN\"},\"credentialKind\":\"connected_account\",\"manifestSource\":\"$TICKETS_OPENAPI_URL\"}" \
+    "{\"connectionRequestId\":\"$cr_id\",\"kind\":\"http\",\"target\":$cr_target_json,\"endpoint\":\"http://accept-s2-tickets-gate:8090\",\"connectionSecret\":\"$tickets_secret\",\"credentials\":{\"token\":\"$ACCEPT_S2_API_TOKEN\"},\"credentialKind\":\"connected_account\",\"manifestSource\":\"$TICKETS_OPENAPI_URL\"}" \
     "d.result.gatekeeperId")
   tickets_secret=""
   [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] || fail "real-admin-tickets-connect" "create_connection for the agent's request $cr_id HTTP $(parse_kv "$out" HTTP_STATUS): $(parse_kv "$out" BODY)"
@@ -504,7 +546,7 @@ real_admin_tickets_step() {
   usage=$(psql_ws "select coalesce(sum(input_tokens + output_tokens + coalesce(cache_read_tokens, 0) + coalesce(cache_write_tokens, 0)), 0) || ',' || coalesce(round(sum(cost_usd), 4), 0) from llm_usage where workspace_id = '$ADMIN_TRIAL_ID' and started_at >= '$RAT_START'")
   tools=$(printf '%s' "$RAT_TOOLS" | tr ',' '\n' | sed '/^$/d' | sort | uniq -c | sed 's/^ *\([0-9]*\) \(.*\)$/\2×\1/' | tr '\n' ',' | sed 's/,$//')
   human=$(printf '%s' "$TICKETS_HUMAN_ACTIONS" | sed '/^$/d' | wc -l | tr -d ' ')
-  real_run_line admin_tickets 1 "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "reached=${RAT_REACHED:-none} stuck=${RAT_STUCK:--} turns=$RAT_TURNS nudges=$RAT_NUDGES turn_tools=$RAT_TC/$RAT_TE[$tools] refused=$(rat_agent_refusals) tokens=${usage%%,*} cost_usd=${usage#*,} human_steps=$human${RAT_DETAIL:+ $RAT_DETAIL}"
+  real_run_line admin_tickets 1 "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "reached=${RAT_REACHED:-none} stuck=${RAT_STUCK:--} turns=$RAT_TURNS nudges=$RAT_NUDGES turn_timeouts=$RAT_TURN_TIMEOUTS turn_errors=$RAT_TURN_ERRORS${RAT_TURN_ERROR:+[$RAT_TURN_ERROR]} turn_tools=$RAT_TC/$RAT_TE[$tools] refused=$(rat_agent_refusals) tokens=${usage%%,*} cost_usd=${usage#*,} human_steps=$human${RAT_DETAIL:+ $RAT_DETAIL}"
   real_stat_add admin_tickets "$ok" "$RAT_TC" "$RAT_TE" 0 0
   rat_invariants
   real_budget_check "real-admin-tickets-budget" "$ADMIN_TRIAL_ID"
