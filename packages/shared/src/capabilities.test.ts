@@ -625,6 +625,8 @@ describe('change_plan: what an admin agent proposes for people to apply (S11 AA3
       ['agent_withdraw_admin_proposal', 'write'],
       // S11 AA4c (governance 0036): what its administrator lets it propose to — ids only.
       ['agent_list_proposal_targets', 'observe'],
+      // S11 AA5g-1: the deployment's packs and its trial workspace's state of each.
+      ['agent_list_packs', 'observe'],
     ]);
     for (const capability of group) {
       expect(capability.adminAgentOnly, capability.name).toBe(true);

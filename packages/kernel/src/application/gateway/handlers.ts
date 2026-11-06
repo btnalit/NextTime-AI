@@ -2829,6 +2829,9 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['agent_withdraw_admin_proposal', agentWithdrawAdminProposalHandler],
   // S11 AA4c — the admin agent's targets, by id (admin-agent-handlers.ts).
   ['agent_list_proposal_targets', agentListProposalTargetsHandler],
+  // S11 AA5g-1 — the deployment's packs and the trial workspace's state of each: `list_packs`' own
+  // read, in the caller's (trial) workspace transaction (pack-handlers.ts).
+  ['agent_list_packs', listPacksHandler],
   ['list_admin_proposals', listAdminProposalsHandler],
   ['get_admin_proposal', getAdminProposalHandler],
   ['withdraw_admin_proposal', withdrawAdminProposalHandler],

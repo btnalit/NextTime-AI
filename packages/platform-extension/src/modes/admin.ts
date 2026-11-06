@@ -87,6 +87,8 @@ export const ADMIN_TOOL_CAPABILITY_NAMES = [
   'agent_get_admin_proposal',
   'agent_withdraw_admin_proposal',
   'agent_list_proposal_targets',
+  // S11 AA5g-1: the deployment's capability packs, and this trial workspace's state of each
+  'agent_list_packs',
   // S11 AA5a-1: trying things out in the trial workspace — asking a person to connect a system
   // (they enter the credentials), and running a published Worker. The kernel refuses both outside
   // a trial workspace.

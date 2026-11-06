@@ -519,6 +519,9 @@ const ADMIN_AGENT_CEILING_CAPABILITY_NAMES = [
   'agent_withdraw_admin_proposal',
   // S11 AA4c: the workspaces its administrator lets it propose to, by id (`adminAgentOnly`)
   'agent_list_proposal_targets',
+  // S11 AA5g-1: the deployment's capability packs and this trial workspace's state of each
+  // (`adminAgentOnly`; installing one stays a workspace owner's, in the console)
+  'agent_list_packs',
   // S11 AA5a-1: trial runs, in its trial workspace only — a connection a platform administrator
   // completes, and a published Worker started to try it out
   'request_connection',

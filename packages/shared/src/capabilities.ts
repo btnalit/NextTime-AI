@@ -5357,7 +5357,7 @@ const platformStateCapabilities = [
     paramsSchema: noParams,
     resultSchema: wire.PlatformStateAuditWireSchema,
     description:
-      'The platform’s recent changes: among the newest platform audit rows of the last 168 hours (at most 1000 looked through; truncated says the window holds more), how many writes each action made, and the 20 newest writes — each its action, when, the kind of resource it changed and whether this administrator, another administrator or nobody recorded made it. Reads are left out; no params, resource id or login. Only an admin agent calls it.',
+      'The platform’s recent changes: among the newest platform audit rows of the last 168 hours (at most 1000 looked through; truncated says the window holds more), how many writes each action made, and the 20 newest writes — each its action, when, the kind of resource it changed and who made it: self is your administrator, the person you work for (in the console — never you: what you do is audited in your trial workspace, not here, and you cannot change your own targets), another_administrator another platform administrator, unattributed nobody recorded. Reads are left out; no params, resource id or login. Only an admin agent calls it.',
   },
   {
     name: 'platform_state_runtime',
@@ -5476,6 +5476,20 @@ const adminProposalCapabilities = [
     resultSchema: wire.AgentProposalTargetsWireSchema,
     description:
       'The workspaces your administrator lets you propose to from this trial workspace, by id: a workspace segment of propose_admin_proposal names one of them (400 admin_proposal_target_not_chosen otherwise). Your administrator chooses them; you cannot change them, and nothing else of those workspaces is given here. Only an admin agent calls it.',
+  },
+  // S11 AA5g-1 (docs/admin-agent-packs-design-2026-11-06.md D1): the capability packs this
+  // deployment has, and this trial workspace's state of each — `list_packs`' own projection, for
+  // the agent (that one is human-channel). Never another workspace's state (F5).
+  {
+    name: 'agent_list_packs',
+    group: 'admin_proposal',
+    mode: 'observe',
+    channel: 'handle',
+    adminAgentOnly: true,
+    paramsSchema: noParams,
+    resultSchema: listEnvelope(wire.PackWireSchema),
+    description:
+      'The capability packs this deployment has — shipped in the image (source image) or added by its maintainer (source extra) — each with its versions and components (ontology families, Skills, Workers), and this trial workspace’s state of it: not installed / up to date / outdated / customized, for the pack and each component; the systems the latest version needs (requiredConnectors) and where each stands here; the packs it builds on (requiredPacks / dependencies). The state is this trial workspace’s only: you cannot read whether another workspace has a pack — its owner sees that when deciding. You cannot install a pack: workspace owners do, in the console. Only an admin agent calls it.',
   },
 ] as const satisfies readonly Capability[];
 

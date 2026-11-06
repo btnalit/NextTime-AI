@@ -1,6 +1,6 @@
 # 管理员智能体看见能力包、提议安装能力包（S11 AA5g 设计）
 
-> 状态：设计稿，待协调 / 维护者定。实现分三片（§9），第一片（只读）可先做。
+> 状态：协调 2026-11-06 已批 D1–D4，D5 推迟；按 AA5g-1 → AA5g-2 → AA5g-3 实现（§9）。
 > 起因：维护者 2026-11-06 在主机 v0.63.0 的试验工作区让管理员智能体「看看能力包是不是有两个未安装，
 > 在两个工作区里装上」。智能体如实回答它看不见能力包、没有安装这条路，且提案目标只剩一个工作区。
 > 上位文档：`goal-orchestration-and-admin-agent-plan-2026-10-16.md` §3、§5.4（一个核心，两种来源）、I-A2 / I-A4 / I-A7 / I-A8，
@@ -11,7 +11,7 @@
 | # | 智能体说的 | 核实结论 | 依据 |
 |---|---|---|---|
 | 1 | 看不见「能力包」，也没有「安装」动作 | **属实，是产品缺口。** 能力包的读写全在 `modules` 组：`list_packs`（human，member）、`preview_pack_install` / `install_pack`（human，owner，`actsForPerson`）。管理员智能体的上限（`ADMIN_AGENT_CEILING_CAPABILITY_NAMES`）一个都没有，`modules` 组也不在 `ADMIN_AGENT_CEILING_GROUPS` 里。管理员提案的工作区段只有四种意图（`skill_version` / `worker_definition_version` / `ontology_version` / `operation_version`），没有「装某个包」。 | `kernel/src/governance/capability/handles.ts`、`shared/src/capabilities.ts` 的 `list_packs` 等、`shared/src/wire/admin-proposal.ts` |
-| 2 | 目标只剩一个；审计里 `set_admin_agent_targets` 17:05–17:08 改了三次，记录方「本管理员 / self」 | **不是缺陷，归属正确。** `platform_state_audit` 的 `actor: 'self'` 意思是「这个智能体所属的管理员本人」（`actorOf`：`actorUserId === selfUserId`），不是智能体。`set_admin_agent_targets` 是 human 通道、平台面的能力，不在管理员智能体上限里，智能体调不到；三行都是维护者本人在控制台「管理员智能体 → 选择目标工作区」里保存的（时间与维护者 11-06 17:02Z 起做控制台核对吻合）。每行审计带 `added` / `removed`，维护者在「平台 · 审计」按动作筛 `set_admin_agent_targets` 就能看到第二个工作区是哪一次去掉的，或者从来没加过。顺带：目标对话框按「整张列表替换」保存，若在保存后状态还没刷新时又打开对话框再保存，会用旧列表覆盖（窗口只有一次请求的时长，三次保存间隔 26 秒和 2.5 分钟，不像是这个原因，记为观察，不立遗留）。 | `kernel/src/application/admin-agent/platform-state.ts` `actorOf`、`targets.ts`、`web/.../AdminAgentTargetsDialog.tsx` |
+| 2 | 目标只剩一个；审计里 `set_admin_agent_targets` 17:05–17:08 改了三次，记录方「本管理员 / self」 | **不是缺陷，归属正确。** `platform_state_audit` 的 `actor: 'self'` 意思是「这个智能体所属的管理员本人」（`actorOf`：`actorUserId === selfUserId`），不是智能体。`set_admin_agent_targets` 是 human 通道、平台面的能力，不在管理员智能体上限里，智能体调不到；三行都是维护者本人在控制台「管理员智能体 → 选择目标工作区」里保存的（时间与维护者 11-06 17:02Z 起做控制台核对吻合）。每行审计带 `added` / `removed`，维护者在「平台 · 审计」按动作筛 `set_admin_agent_targets` 就能看到第二个工作区是哪一次去掉的，或者从来没加过。顺带：目标对话框按「整张列表替换」保存，若在保存后状态还没刷新时又打开对话框再保存，会用旧列表覆盖（窗口只有一次请求的时长，三次保存间隔 26 秒和 2.5 分钟，不像是这个原因；协调定为遗留 648，P3，控制台，修法：版本号 / ETag 或改成增量 add / remove）。 | `kernel/src/application/admin-agent/platform-state.ts` `actorOf`、`targets.ts`、`web/.../AdminAgentTargetsDialog.tsx` |
 | 3 | 读不到目标工作区的内容 | **按设计如此，不改。** F5 与协调 2026-11-02 的决定：提案的意图与工作区无关，由目标工作区自己的干跑解析；智能体只读得到段的状态。平台面也没有读工作区内容的 RLS 策略（skill / worker / ontology 版本表都没有 `*_platform_admin` 策略）。给智能体开跨工作区的内容读，等于在平台面开一个所有工作区都没有的口子。能力包场景真正需要的只是「目标装没装、装的哪版」，见 §4 D5，推迟。 | 0032 / 0033 迁移头注释、`admin-proposal-segments.ts` 模块注释 |
 
 缺口 2 的措辞问题：`platform_state_audit` 的描述只说 "whether this administrator, another administrator or nobody recorded made it"，模型把 `self` 译成「本管理员 / self」后又推断「可能是我自己的改动」。第一片顺带把描述改成明确的「`self` = 你的管理员本人在控制台做的；你自己改不了目标」。

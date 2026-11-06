@@ -1620,6 +1620,14 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '管理员智能体查看它的管理员允许它提议的工作区，只有工作区 ID，看不到别的内容。',
     enHint: 'An admin agent reads the workspaces its administrator lets it propose to, by id only.',
   },
+  agent_list_packs: {
+    zh: '管理员智能体查看能力包',
+    en: 'Admin agent lists capability packs',
+    zhHint:
+      '管理员智能体查看本部署的能力包，以及它所在试验工作区装了哪些；看不到别的工作区装没装，也不能安装。',
+    enHint:
+      'An admin agent reads the deployment’s capability packs and which its trial workspace has installed — never another workspace’s, and it cannot install one.',
+  },
   list_admin_proposals: {
     zh: '查看管理员提案',
     en: 'List admin proposals',
