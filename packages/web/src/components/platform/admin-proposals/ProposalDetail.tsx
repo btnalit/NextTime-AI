@@ -35,6 +35,7 @@ import { type PresetLabel, usePresetLabel } from './preset-labels.js';
 import { ADMIN_PROPOSAL_STALE_READS } from './stale-reads.js';
 import {
   nextStepText,
+  packInstallText,
   partialApplicationText,
   platformIntentText,
   proposerText,
@@ -143,21 +144,33 @@ export function ProposalDetail({
             label: t('提议时间', 'Proposed'),
             value: <span data-volatile="">{formatDateTime(proposal.proposedAt)}</span>,
           },
-          {
-            key: 'source',
-            label: t('来源名', 'Source name'),
-            value: (
-              <span
-                className="mono wrap-anywhere"
-                title={t(
-                  '工作区里新建的 Skill 和 Worker 以它命名',
-                  'New Skills and Workers in a workspace are named under it',
-                )}
-              >
-                {proposal.sourceName}
-              </span>
-            ),
-          },
+          // S11 AA5g: a pack install proposal derives nothing under its source name — it says
+          // which pack it asks for instead.
+          proposal.packInstall !== null
+            ? {
+                key: 'pack',
+                label: t('能力包', 'Pack'),
+                value: (
+                  <span data-testid="platform-admin-proposal-pack">
+                    {packInstallText(proposal.packInstall, t)}
+                  </span>
+                ),
+              }
+            : {
+                key: 'source',
+                label: t('来源名', 'Source name'),
+                value: (
+                  <span
+                    className="mono wrap-anywhere"
+                    title={t(
+                      '工作区里新建的 Skill 和 Worker 以它命名',
+                      'New Skills and Workers in a workspace are named under it',
+                    )}
+                  >
+                    {proposal.sourceName}
+                  </span>
+                ),
+              },
         ]}
       />
       {notice !== null ? (
@@ -555,6 +568,13 @@ function WorkspacePart({
   const t = useT();
   const prefix = `platform-admin-proposal-workspace-part-${segment.ordinal}`;
   const when = segment.status === 'rolled_back' ? segment.rolledBackAt : segment.decidedAt;
+  // S11 AA5g-2: a part asking its workspace to install a pack holds that one item; it is the pack's
+  // own install there, so there is nothing of its own to export as a pack.
+  const [first] = segment.items;
+  const packInstall =
+    segment.items.length === 1 && first?.kind === 'pack_install'
+      ? { pack: first.pack, version: first.version }
+      : null;
   return (
     <div className="card card-padded stack-s" data-testid={prefix}>
       <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
@@ -578,6 +598,11 @@ function WorkspacePart({
           </>
         ) : null}
       </span>
+      {packInstall !== null ? (
+        <span className="text-small" data-testid={`${prefix}-pack`}>
+          {packInstallText(packInstall, t)}
+        </span>
+      ) : null}
       {segment.reason !== null ? (
         <span className="text-small pre-wrap wrap-anywhere" data-testid={`${prefix}-reason`}>
           {segment.status === 'rejected'
@@ -586,7 +611,7 @@ function WorkspacePart({
           {segment.reason}
         </span>
       ) : null}
-      {segment.status === 'applied' ? (
+      {segment.status === 'applied' && packInstall === null ? (
         // S11 AA5d-3: what it applied, as a pack other workspaces install (the kernel checks it
         // is verified there now).
         <div className="row-wrap">

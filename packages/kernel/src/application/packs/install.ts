@@ -4,6 +4,7 @@ import { getGatekeeper } from '../../governance/gatekeepers/index.js';
 import type { GraphTypeUsage } from '../../substrate/graph/index.js';
 import { deriveOntologyPackId } from '../../substrate/ontology/index.js';
 import {
+  type AdminProposalOrigin,
   type WorkspaceSegmentInput,
   type WorkspaceSegmentPlan,
   applyWorkspaceSegment,
@@ -452,6 +453,10 @@ export interface InstallPackInput {
   readonly confirmedOrdinals: readonly number[];
   /** The gates the person kept for a Worker the install binds (the preview's own choice). */
   readonly workerGates?: WorkerGateChoice;
+  /** S11 AA5g-2: the admin proposal segment that asked for this install, recorded on the change
+   *  segment as why it was installed (governance 0040 checks it asked for exactly this pack and
+   *  version). The caller opened it first (`openPackInstallSegment`) and marks it applied after. */
+  readonly adminProposal?: AdminProposalOrigin;
 }
 
 export interface InstalledPack {
@@ -496,6 +501,7 @@ export async function installPack(
     ...segment,
     reviewedDigest: input.reviewedDigest,
     proposedBy: principalId,
+    ...(input.adminProposal !== undefined ? { adminProposal: input.adminProposal } : {}),
     appliedBy: principalId,
     channel: 'human',
     confirmedOrdinals: input.confirmedOrdinals,

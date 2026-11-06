@@ -19,9 +19,11 @@ import {
   AdminProposalInvalidError,
   AdminProposalNotFoundError,
   AdminProposalNotOpenError,
+  AdminProposalPackMismatchError,
   AdminProposalQuotaExceededError,
   AdminProposalRoleMismatchError,
   AdminProposalSegmentBlockedError,
+  AdminProposalSegmentIsPackInstallError,
   AdminProposalSegmentNotFoundError,
   AdminProposalSegmentNotOpenError,
   AdminProposalSegmentUnchangedError,
@@ -416,6 +418,14 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof AdminProposalSegmentUnchangedError) {
     return { status: 409, code: err.code, message: err.message };
+  }
+  // S11 AA5g-2: a pack install segment previewed or applied as a segment of intents, and an
+  // install naming a segment that asks for another pack or version — 409, nothing written.
+  if (
+    err instanceof AdminProposalSegmentIsPackInstallError ||
+    err instanceof AdminProposalPackMismatchError
+  ) {
+    return { status: 409, code: err.code, message: err.message, details: { ...err.details } };
   }
   // S11 AA5f: `workerGates` naming a Worker the segment does not propose, or a gate that is not one
   // of its candidates — a caller-input mistake, as `install_pack`'s (the console offers only

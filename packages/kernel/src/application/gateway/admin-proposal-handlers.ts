@@ -13,6 +13,7 @@ import {
   agentProposalOf,
   applyAdminProposalSegment,
   checkAdminProposal,
+  checkPackInstallProposal,
   countAdminProposalSegments,
   getAdminProposal,
   listAdminProposalSegments,
@@ -23,7 +24,7 @@ import {
   verifyChangeSegment,
   withdrawAdminProposal,
 } from '../change-plan/index.js';
-import { exportAdminProposalPack, loadPackRegistry } from '../packs/index.js';
+import { exportAdminProposalPack, latestPackVersion, loadPackRegistry } from '../packs/index.js';
 import type {
   CapabilityHandler,
   CapabilityHandlerContext,
@@ -150,6 +151,65 @@ export const proposeAdminProposalHandler: CapabilityHandler = async (
     resourceId: proposal.id,
     auditPayload: {
       contentDigest: proposal.contentDigest,
+      segments: proposal.segments.map((segment) => ({
+        ordinal: segment.ordinal,
+        authority: segment.authority,
+        targetWorkspaceId: segment.targetWorkspaceId,
+        contentDigest: segment.contentDigest,
+        items: segment.items.length,
+      })),
+    },
+  };
+};
+
+interface ProposePackInstallParams {
+  readonly pack: string;
+  readonly version: number;
+  readonly targetWorkspaceIds: readonly string[];
+  readonly title: string;
+  readonly description?: string;
+}
+
+/** S11 AA5g-2 `propose_pack_install`: an admin proposal of one `pack_install` segment per target
+ *  (docs/admin-agent-packs-design-2026-11-06.md D2), checked against the packs this deployment has
+ *  now, then made exactly as `propose_admin_proposal` makes one — the daily limit, the targets
+ *  chosen, available and not closed by repeated rejections. */
+export const proposePackInstallHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+): Promise<CapabilityHandlerResult> => {
+  const agent = adminAgentOf('propose_pack_install', ctx);
+  const input = params as ProposePackInstallParams;
+  const registry = await loadPackRegistry();
+  const entry = registry.get(input.pack);
+  const latest = entry === undefined ? null : latestPackVersion(entry);
+  const { proposal: header, checked } = checkPackInstallProposal(
+    input,
+    entry === undefined || latest === null
+      ? null
+      : { name: entry.name, latestVersion: latest.version, latestDigest: latest.digest },
+    new Set(registry.keys()),
+  );
+  const proposal = await proposeAdminProposal(
+    client,
+    {
+      workspaceId,
+      principalId: ctx?.principalId ?? '',
+      userId: agent.userId,
+      sessionId: agent.sessionId,
+    },
+    header,
+    checked,
+  );
+  return {
+    result: proposal,
+    resourceType: 'admin_proposal',
+    resourceId: proposal.id,
+    auditPayload: {
+      contentDigest: proposal.contentDigest,
+      pack: { name: input.pack, version: input.version },
       segments: proposal.segments.map((segment) => ({
         ordinal: segment.ordinal,
         authority: segment.authority,

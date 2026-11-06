@@ -9,6 +9,7 @@ import {
   type PackInstallResultWire,
   type PackRequirementState,
   type PackWire,
+  type ReceivedAdminProposalSegmentWire,
 } from '@nexttime/shared';
 import { useEffect, useRef, useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../../hooks/useCapability.js';
@@ -77,6 +78,12 @@ function bindableWorkers(pack: PackWire): readonly string[] {
   return pack.components.flatMap((component) =>
     component.kind === 'worker' && component.bindable ? [component.name] : [],
   );
+}
+
+/** Up to date with no Worker left to connect: installing again would change nothing, so there is
+ *  no install control (#1002 review P3-1: shared with a proposal asking for this pack). */
+export function nothingToInstall(pack: PackWire): boolean {
+  return pack.status === 'up_to_date' && bindableWorkers(pack).length === 0;
 }
 
 /** The install control's label, or `null` when there is nothing to install. Up to date with a
@@ -196,9 +203,9 @@ function actionLabel(pack: PackWire, t: Translate): string | null {
     case 'customized':
       return t(`换成 v${v} 的标准内容`, `Replace with v${v}`);
     case 'up_to_date':
-      return bindableWorkers(pack).length > 0
-        ? t('把 Worker 接上系统', 'Connect the Worker to its systems')
-        : null;
+      return nothingToInstall(pack)
+        ? null
+        : t('把 Worker 接上系统', 'Connect the Worker to its systems');
   }
 }
 
@@ -426,15 +433,18 @@ function PackDetail({
           </Notice>
         </output>
       ) : (
-        <InstallPack
-          http={http}
-          pack={pack}
-          onInstalled={(result) => {
-            setInstalled(result);
-            onChanged();
-          }}
-          onStale={onChanged}
-        />
+        <>
+          <PackProposalNotice http={http} pack={pack} />
+          <InstallPack
+            http={http}
+            pack={pack}
+            onInstalled={(result) => {
+              setInstalled(result);
+              onChanged();
+            }}
+            onStale={onChanged}
+          />
+        </>
       )}
 
       {pack.dependencies.length > 0 ? (
@@ -530,6 +540,60 @@ function PackDetail({
         ))}
       </div>
     </div>
+  );
+}
+
+/** S11 AA5g-3: an admin proposal awaiting this workspace's owner that asks for this pack. Installing
+ *  it from the proposal records the install as answering it (and the proposal reads 已应用);
+ *  installing here leaves the proposal open, to be rejected. Owner-only, as the proposals are. */
+function PackProposalNotice({
+  http,
+  pack,
+}: {
+  readonly http: CapabilityCaller;
+  readonly pack: PackWire;
+}) {
+  const t = useT();
+  const can = useRoleCan(http);
+  const proposals = useCapabilityList<ReceivedAdminProposalSegmentWire>(
+    http,
+    'list_admin_proposal_segments',
+    { status: 'proposed' },
+    { enabled: can('list_admin_proposal_segments') === true },
+  );
+  if (proposals.state.status !== 'ready') return null;
+  const asking = proposals.state.data.items.find((segment) => {
+    const [only] = segment.items;
+    return segment.items.length === 1 && only?.kind === 'pack_install' && only.pack === pack.name;
+  });
+  const item = asking?.items[0];
+  if (asking === undefined || item?.kind !== 'pack_install') return null;
+  const { proposedBy } = asking.proposal;
+  const name = proposedBy.displayName || shortId(proposedBy.userId);
+  // UX P3-1 (#1002): it reads as installable from the proposal only when it is — the version it
+  // asks for is still the latest, and not installed already; otherwise it can only be rejected.
+  const installed = nothingToInstall(pack) && pack.installedVersion === item.version;
+  const outdated = pack.latestVersion !== item.version;
+  return (
+    <Notice testId="catalog-pack-proposal">
+      {installed
+        ? t(
+            `平台管理员 ${name} 的管理员智能体提议在本工作区安装 v${item.version}，工作区里已经是这一版，没有要装的。不需要那份管理员提案的话，可以打开它拒绝。`,
+            `${name}'s admin agent (platform administrator) proposes installing v${item.version} here, which the workspace already has, so there is nothing to install. Open that admin proposal to reject it if it is not needed.`,
+          )
+        : outdated
+          ? t(
+              `平台管理员 ${name} 的管理员智能体提议在本工作区安装 v${item.version}，现在最新的是 v${pack.latestVersion}，只能安装最新版本，所以不能照那份管理员提案安装。可以打开它拒绝。`,
+              `${name}'s admin agent (platform administrator) proposes installing v${item.version} here; the latest is now v${pack.latestVersion}, and only the latest installs, so it cannot be installed as that admin proposal asks. Open it to reject it.`,
+            )
+          : t(
+              `平台管理员 ${name} 的管理员智能体提议在本工作区安装 v${item.version}。从那份管理员提案里安装，它会记为已应用；在这里直接安装的话，那份提案还得另外拒绝。`,
+              `${name}'s admin agent (platform administrator) proposes installing v${item.version} here. Installing it from that admin proposal marks the proposal applied; installing it here leaves the proposal to be rejected separately.`,
+            )}{' '}
+      <RouteLink href={hrefs.catalog('proposals', asking.id)} testId="catalog-pack-proposal-link">
+        {t('打开这份管理员提案', 'Open the admin proposal')}
+      </RouteLink>
+    </Notice>
   );
 }
 
@@ -904,17 +968,33 @@ function packDraftPendingText(t: Translate): string {
   );
 }
 
-function InstallPack({
+/** S11 AA5g-3: refusals of an install that answers an admin proposal which mean the proposal is
+ *  not open to it any more (decided meanwhile, a newer version, no longer among the targets). */
+const PROPOSAL_STALE_CODES = new Set([
+  'admin_proposal_segment_not_open',
+  'admin_proposal_pack_mismatch',
+  'admin_proposal_target_no_longer_chosen',
+  'admin_proposal_segment_unchanged',
+]);
+
+export function InstallPack({
   http,
   pack,
   onInstalled,
   onStale,
+  adminProposalSegmentId,
+  onProposalStale,
 }: {
   readonly http: CapabilityCaller;
   readonly pack: PackWire;
   readonly onInstalled: (result: PackInstallResultWire) => void;
   /** The list is out of date (a newer version, or the workspace changed since it was read). */
   readonly onStale: () => void;
+  /** S11 AA5g-3: the admin proposal segment this install answers (能力目录 · 管理员提案): the
+   *  install is recorded as coming from it, and the segment reads 已应用. */
+  readonly adminProposalSegmentId?: string;
+  /** The admin proposal it answers is not open to this install any more (the refusal's code). */
+  readonly onProposalStale?: (code: string) => void;
 }) {
   const t = useT();
   const can = useRoleCan(http);
@@ -1013,6 +1093,7 @@ function InstallPack({
         reviewedDigest: data.digest,
         ...(widening.length > 0 ? { confirmedOrdinals: widening.map((item) => item.ordinal) } : {}),
         ...(Object.keys(reviewedChoice).length > 0 ? { workerGates: reviewedChoice } : {}),
+        ...(adminProposalSegmentId !== undefined ? { adminProposalSegmentId } : {}),
       });
     } catch (error) {
       if (isForbiddenError(error)) permissions.markDenied('install_pack');
@@ -1020,6 +1101,8 @@ function InstallPack({
         setRound((n) => n + 1);
         onStale();
       }
+      const code = describeError(error).code;
+      if (PROPOSAL_STALE_CODES.has(code)) onProposalStale?.(code);
       // Legacy 302: a Worker of the pack names what the workspace does not have (a Skill
       // deprecated by hand, say) — said as what to fix here, not as a draft to revise.
       const refusal = definitionReferenceRefusalOf(error);
@@ -1089,6 +1172,26 @@ function InstallPack({
             'A pack it builds on changed after you looked (rolled back, or another version), so it no longer meets what this pack needs and nothing was installed. The review above now shows how things are.',
           ),
           draft_pending: packDraftPendingText(t),
+          ...(adminProposalSegmentId !== undefined
+            ? {
+                admin_proposal_segment_not_open: t(
+                  '这份管理员提案在你查看之后已经有了决定（被拒绝、被撤回或已应用），所以什么也没有安装。',
+                  'This admin proposal was decided after you looked (rejected, withdrawn or applied), so nothing was installed.',
+                ),
+                admin_proposal_pack_mismatch: t(
+                  '这个能力包和这份管理员提案请求的已经不一样了（有了新版本，或同一个版本号下的内容被换过），所以什么也没有安装。可以拒绝这份提案，或在「能力包」页直接安装现在的版本。',
+                  'This pack is no longer what this admin proposal asks for (a newer version appeared, or the content under the same version number was replaced), so nothing was installed. Reject the proposal, or install the current version from Packs.',
+                ),
+                admin_proposal_target_no_longer_chosen: t(
+                  '提议它的平台管理员刚把本工作区从管理员智能体的目标里去掉了，所以什么也没有安装。可以拒绝它，或请对方把本工作区重新加回目标。',
+                  'The platform administrator who proposed it has just removed this workspace from their admin agent’s targets, so nothing was installed. Reject it, or ask them to add this workspace back to the targets.',
+                ),
+                admin_proposal_segment_unchanged: t(
+                  '工作区里已经是这一版的内容，没有要安装的，所以这份管理员提案没有记为已应用。不需要它的话可以拒绝。',
+                  'The workspace already has this version, so there was nothing to install and this admin proposal was not marked applied. Reject it if it is not needed.',
+                ),
+              }
+            : {}),
         }}
         testId="catalog-pack-install-confirm"
       >

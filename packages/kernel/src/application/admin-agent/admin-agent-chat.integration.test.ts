@@ -7,7 +7,9 @@ import type {
   AdminAgentTargetsResultWire,
   AgentProposalTargetsWire,
   ChatWire,
+  ListEnvelope,
   LlmRefusalScope,
+  PackWire,
 } from '@nexttime/shared';
 import { generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
@@ -827,6 +829,28 @@ describe.runIf(DATABASE_URL !== undefined)(
         (client) => client.query<{ id: string }>('select admin_agent_chosen_targets() as id'),
       );
       expect(elsewhere.rows).toEqual([]);
+    });
+
+    it('AA5g-1: the agent lists the deployment’s packs with its trial workspace’s state — list_packs’ own projection — and nothing of the pack plane a person has (list, preview, install)', async () => {
+      const trial = await newTrial();
+      const mine = await agentHandle(trial);
+      const packs = await call<ListEnvelope<PackWire>>(mine.caller, 'agent_list_packs', {});
+      // The same read as list_packs, in the same (trial) workspace: one projection, not two.
+      const asPerson = await call<ListEnvelope<PackWire>>(person(trial), 'list_packs', {});
+      expect(packs).toEqual(asPerson);
+      expect(packs.items.map((pack) => pack.name)).toEqual(
+        expect.arrayContaining(['ops-base', 'ops-assets', 'knowledge']),
+      );
+      // The person on the human channel has no such read: it is the agent's.
+      await expect(call(person(trial), 'agent_list_packs', {})).rejects.toBeInstanceOf(
+        ForbiddenError,
+      );
+      // Installing stays a workspace owner's, in the console: the agent's Handle reaches none of it.
+      for (const name of ['list_packs', 'preview_pack_install', 'install_pack']) {
+        await expect(call(mine.caller, name, { name: 'ops-base' }), name).rejects.toBeInstanceOf(
+          ForbiddenError,
+        );
+      }
     });
 
     it('governance 0036: a row is a platform administrator’s own choice of an active standard target for their admin agent in a trial workspace — written past the kernel too — and never updated', async () => {
