@@ -399,6 +399,18 @@ describe('FakeAgentRuntime', () => {
         expect(onAdminProposePack).not.toHaveBeenCalled();
       });
 
+      it('an admin Turn without the marker is echoed even with the pack hook wired', async () => {
+        const onAdminProposePack = vi.fn(async () => OUTCOME);
+        const plain: StartTurnInput = { ...ADMIN_INPUT, prompt: '看看有哪些能力包' };
+        const events = await run({ onAdminProposePack }, plain);
+
+        expect(onAdminProposePack).not.toHaveBeenCalled();
+        expect(events.some((e) => e.type === 'toolCallStarted')).toBe(false);
+        expect(events.find((e) => e.type === 'message')).toMatchObject({
+          content: { text: `echo: ${plain.prompt}` },
+        });
+      });
+
       it('in an entry Turn, or with no hook wired, the pack marker is echoed', async () => {
         const onAdminProposePack = vi.fn(async () => OUTCOME);
         const entry = await run({ onAdminProposePack }, { ...INPUT, prompt: PACK_INPUT.prompt });
