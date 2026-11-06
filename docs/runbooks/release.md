@@ -2475,6 +2475,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **主机升级步骤不变**。这一项不在主机上跑；合入后在 staging 上用 main 跑一轮 `--real`（runs=1、8M token 上限），结果记 STATUS。
 - **回滚**：只回滚脚本。
 
+### 3.132 只给能请求动作的 Handle 列执行类 Operation（#989，内核，0.62.0 之后的下一版）
+
+内核行为修正：没有迁移，不改 compose，没有新环境变量，线上契约 schema 不变（只改了 `propose_worker_definition` 的 description）。
+
+- **发版说明可写**：`list_allowed_operations` 只在 Handle 持有 `request_action` 时列执行类 Operation。持有门、没有 `request_action` 的 Handle（例如没声明 `capabilities` 的 Worker）以前会拿到每次都 403 的执行类工具，现在不再列出，与 MCP 投影的规则一致；持有 `request_action` 的 Handle 列出的和以前一样。`propose_worker_definition` 的描述写清 worker 定义的字段、不写 `capabilities` 时的默认值、写了的列表会替换默认值、要请求动作必须显式列出 `request_action`。默认值不改：声明 `gates` 不隐式带上 `request_action`。
+- **主机升级步骤不变**。
+- **回滚**：只回滚代码。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
