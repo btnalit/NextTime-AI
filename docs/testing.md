@@ -24,7 +24,7 @@
 | ② substrate/governance 集成测试 | `packages/kernel`（`substrate/*`、`governance/*`、`application/*` 里 `describe.runIf(DATABASE_URL)` 的套件） | `sh scripts/test-db.sh` 起临时 Postgres → `DATABASE_URL=... pnpm --filter @nexttime/kernel test` | `test`（用 GitHub Actions 自带的 `postgres:` service container） | 纯单元部分能跑；DB-gated 套件被 `runIf` 跳过（不是失败），见 §5 |
 | ③ 契约测试 | `packages/platform-extension`（`*.sdk.test.ts` 用真实 pi SDK）、`packages/gatekeeper-base` + `gatekeepers/{docker,ragflow}`（fake 系统/假 dockerode） | `pnpm --filter @nexttime/platform-extension test`、`pnpm --filter @nexttime/gatekeeper-base test`、`pnpm --filter <gatekeepers 包> test` | `test` | 能跑——这些测试用内存假桩/pi 的 SDK 内存态，不连真实 Docker 或真实门实例 |
 | ④ 接口层一致性校验 | `packages/shared` 的 capability 注册表 → `docs/contracts/{capabilities,events}.json` 快照；`scripts/guards/vocabulary.mjs` 词表守卫 | `pnpm contract:check`、`node scripts/guards/vocabulary.mjs`（先 `node --test scripts/guards/vocabulary.test.mjs` 跑守卫自身的单测） | `quality` | 能跑（纯 Node 脚本，读编译产物，不需要 Docker） |
-| ⑤ 端到端 | 三个主机验收脚本 `scripts/accept_s{1,2,3}.sh`；两个 S3.10 运维演练脚本 `scripts/drill-restore.sh`/`scripts/drill-add-gatekeeper.sh`（见 §4）；`packages/web` 的 Playwright（`pnpm --filter @nexttime/web e2e`，opt-in） | 见 §4 | 均**不在** CI（都需要真实 Docker/主机） | 不能跑——都需要真实容器（入口容器、Worker 容器、门服务、真实 Postgres） |
+| ⑤ 端到端 | 三个主机验收脚本 `scripts/accept_s{1,2,3}.sh`；两个 S3.10 运维演练脚本 `scripts/drill-restore.sh`/`scripts/drill-add-gatekeeper.sh`（见 §4）；`packages/web` 的 Playwright（`pnpm --filter @nexttime/web e2e`） | 见 §4 | 验收脚本与演练**不在** CI（需要真实主机，staging 预演覆盖验收脚本）；Playwright 在 `e2e.yml` 的 `web-e2e`（必需检查） | 不能跑——都需要真实容器（入口容器、Worker 容器、门服务、真实 Postgres） |
 
 `pnpm -r test`（`make test`；`.github/workflows/ci.yml` 的 `test` job 跑
 `pnpm --no-bail -r test`）一次性跑①②③层里每个包各自的 `vitest run`——②层的 DB 套件是否真的执行
@@ -100,12 +100,18 @@ pnpm ci:guards        # kernel purity + pi 版本一致性 + membership-capabili
   步骤自动化成可重复执行、PASS/FAIL 分明的脚本——S3.10 自己的验收句（"按「从备份恢复」手册在临时
   环境走一遍成功；按「新增接入包」手册接入一个 fake 系统成功"）落地成这两个脚本，而不是留在
   "人读手册、手动敲命令"的状态。见这两份 runbook 各自的"验证"一节。
-- `packages/web` 的 Playwright（`pnpm --filter @nexttime/web e2e`）：独立 opt-in，需要
-  `WEB_E2E_BASE_URL`/`WEB_E2E_API_KEY` 指向一个已跑起来的、`AGENT_RUNTIME=fake` 的内核（见
-  `packages/web/README.md`"已知偏离"一节、`docs/runbooks/accept-s1.md` §5）。development-tasks.md
-  的 S3 实施波次表 W1-D 项计划把它接进 CI 的独立 `e2e` job（用 compose 精简 profile 起
-  `postgres+kernel+caddy+fake-llm`）——写本文档时**尚未落地**，`.github/workflows/ci.yml` 目前
-  只有 `quality`/`test`/`guards` 三个 job，没有 `e2e`。
+- `packages/web` 的 Playwright（`pnpm --filter @nexttime/web e2e`）：已在 CI，`.github/workflows/e2e.yml`
+  的 `web-e2e` job 在 runner 里起一次性的 `AGENT_RUNTIME=fake` compose 栈跑全部 spec，是合并的必需检查
+  （docs-only 改动经 `changes` job 跳过）。本地跑法与基线更新见 `docs/runbooks/web-console.md`
+  "CI（Playwright）"与"UX 门槛基线"。
+
+## 4a. 功能与测试同步：capability matrix
+
+`docs/contracts/capability-matrix.yaml` 给每个 capability 写明控制台入口与哪些 agent 拿到它当工具，
+`scripts/guards/capability-matrix.mjs`（CI `quality`、`pnpm ci:guards`，先构建 shared）核对代码，
+规则 M1–M5 与棘轮见该文件头注释和 `docs/test-coverage-gaps-2026-11-06.md` §5.1。新增 capability 的
+PR 在同一提交里加一行；大面积改名后可 `node scripts/guards/capability-matrix.mjs --bootstrap` 重新生成，
+保留已有理由，提交前读 diff。
 
 ## 5. 常见问题
 
