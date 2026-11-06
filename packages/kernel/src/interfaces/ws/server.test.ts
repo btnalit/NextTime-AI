@@ -268,9 +268,25 @@ describe('/ws pre-auth limits (L1-16 / L5-12(b); fake pool, always runs)', () =>
     app = undefined;
   });
 
-  /** A listener with only `/ws`, so the auth deadline can be shortened. */
-  async function listenWs(pool: PoolLike, authTimeoutMs = 60_000): Promise<string> {
-    app = Fastify();
+  /** A listener with only `/ws`, so the auth deadline can be shortened. `logLines`, when given,
+   *  collects every JSON log line the listener writes. */
+  async function listenWs(
+    pool: PoolLike,
+    authTimeoutMs = 60_000,
+    logLines?: Record<string, unknown>[],
+  ): Promise<string> {
+    app = logLines
+      ? Fastify({
+          logger: {
+            level: 'info',
+            stream: {
+              write: (line: string) => {
+                logLines.push(JSON.parse(line) as Record<string, unknown>);
+              },
+            },
+          },
+        })
+      : Fastify();
     registerWsRoute(app, { pool }, { authTimeoutMs });
     const address = await app.listen({ port: 0, host: '127.0.0.1' });
     return `${address.replace('http://', 'ws://')}/ws`;
@@ -314,6 +330,107 @@ describe('/ws pre-auth limits (L1-16 / L5-12(b); fake pool, always runs)', () =>
     await expect(closeOf(ws)).resolves.toEqual({ code: 1008, reason: 'authentication timeout' });
     // A bare close: no `id: null` -32001 the console would read as "signed out" (R-16).
     expect(frames).toEqual([]);
+  });
+
+  // Legacy 649: a switch into a workspace failed on a host with nothing in the kernel log to say
+  // whether the socket was refused, timed out, or never arrived. Every way an unauthenticated
+  // socket ends is now logged, with how long its credential took.
+  it('logs the deadline close and the unauthenticated end of the socket (legacy 649)', async () => {
+    const { pool, connect, release } = createPreAuthPool(true);
+    const logLines: Record<string, unknown>[] = [];
+    const url = await listenWs(pool, 100, logLines);
+    const ws = await open(url);
+    const closed = closeOf(ws);
+    ws.send(rpc(1, 'authenticate', { token: PREAUTH_API_KEY }));
+    await vi.waitFor(() => expect(connect).toHaveBeenCalledTimes(1));
+    await expect(closed).resolves.toEqual({ code: 1008, reason: 'authentication timeout' });
+    release();
+    await vi.waitFor(() =>
+      expect(logLines).toContainEqual(
+        expect.objectContaining({ ws: 'authenticate', outcome: 'too_late' }),
+      ),
+    );
+    expect(logLines).toContainEqual(
+      expect.objectContaining({ ws: 'policy_close', reason: 'authentication timeout' }),
+    );
+    expect(logLines).toContainEqual(
+      expect.objectContaining({ ws: 'closed', code: 1008, authenticated: false }),
+    );
+    const tooLate = logLines.find((l) => l.outcome === 'too_late');
+    expect(typeof tooLate?.durationMs).toBe('number');
+  });
+
+  it('logs a successful authenticate with its workspace and duration (legacy 649)', async () => {
+    const { pool } = createPreAuthPool();
+    const logLines: Record<string, unknown>[] = [];
+    const url = await listenWs(pool, 60_000, logLines);
+    const ws = await open(url);
+    const frames = framesOf(ws);
+    ws.send(rpc(1, 'authenticate', { token: PREAUTH_API_KEY }));
+    await vi.waitFor(() => expect(frames).toHaveLength(1));
+    const line = logLines.find((l) => l.ws === 'authenticate');
+    expect(line).toMatchObject({
+      outcome: 'success',
+      workspaceId: PREAUTH_WORKSPACE_ID,
+      principalId: PREAUTH_PRINCIPAL_ID,
+    });
+    expect(typeof line?.durationMs).toBe('number');
+    ws.close();
+  });
+
+  it('logs a refused authenticate with its code, and a failure to resolve as an error (legacy 649)', async () => {
+    const logLines: Record<string, unknown>[] = [];
+    const broken: PoolLike = {
+      connect: async () => {
+        throw Object.assign(new Error('too many clients already'), { code: '53300' });
+      },
+    };
+    const url = await listenWs(broken, 60_000, logLines);
+    const ws = await open(url);
+    const frames = framesOf(ws);
+    ws.send(rpc(1, 'authenticate', { token: PREAUTH_API_KEY }));
+    await vi.waitFor(() => expect(frames).toHaveLength(1));
+    expect(frames[0]).toMatchObject({ id: 1, error: { code: WS_ERROR_CODES.UNAUTHORIZED } });
+    expect(logLines).toContainEqual(
+      expect.objectContaining({ ws: 'authenticate', outcome: 'error', sqlState: '53300' }),
+    );
+    expect(logLines).toContainEqual(
+      expect.objectContaining({
+        ws: 'authenticate',
+        outcome: 'refused',
+        code: WS_ERROR_CODES.UNAUTHORIZED,
+      }),
+    );
+    // Never the error's message.
+    expect(JSON.stringify(logLines)).not.toContain('too many clients');
+  });
+
+  it('an Authorization header that fails to resolve is logged as an error, a wrong key is not (legacy 649)', async () => {
+    const brokenLines: Record<string, unknown>[] = [];
+    const broken: PoolLike = {
+      connect: async () => {
+        throw Object.assign(new Error('too many clients already'), { code: '53300' });
+      },
+    };
+    const brokenUrl = await listenWs(broken, 60_000, brokenLines);
+    const brokenWs = await open(brokenUrl, { authorization: `Bearer ${PREAUTH_API_KEY}` });
+    await closeOf(brokenWs);
+    expect(brokenLines).toContainEqual(
+      expect.objectContaining({ ws: 'authenticate', outcome: 'error', sqlState: '53300' }),
+    );
+    await app?.close();
+
+    const wrongKeyLines: Record<string, unknown>[] = [];
+    const { pool } = createPreAuthPool();
+    const url = await listenWs(pool, 60_000, wrongKeyLines);
+    const ws = await open(url, { authorization: 'Bearer not-a-known-key' });
+    await closeOf(ws);
+    await vi.waitFor(() =>
+      expect(wrongKeyLines).toContainEqual(
+        expect.objectContaining({ ws: 'closed', authenticated: false }),
+      ),
+    );
+    expect(wrongKeyLines.some((l) => l.outcome === 'error')).toBe(false);
   });
 
   it('the deadline also ends a credential that is still resolving', async () => {

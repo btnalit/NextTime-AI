@@ -117,6 +117,13 @@ describe('substrate/epistemic predicate (S11 GO3d)', () => {
       expect(lintPredicate({ path: 'items[', op: 'exists' })[0]).toMatch(
         /^path "items\[" is not a JMESPath expression: /,
       );
+      // Legacy 645: JSONPath is what real models write when they guess (propose_goal's description
+      // now says JMESPath); it does not compile.
+      for (const path of ['$.state', '$..id', '$.data.items[0].id']) {
+        expect(lintPredicate({ path, op: 'exists' })[0], path).toMatch(
+          /is not a JMESPath expression: /,
+        );
+      }
       expect(lintPredicate({ path: '`1`', op: 'eq', value: 1 })).toEqual([
         'path "`1`" reads nothing from the observation\'s result',
       ]);
@@ -503,6 +510,7 @@ describe('binding paths (S11 GO5d-1)', () => {
       'path "a.constructor" goes through constructor',
     ]);
     expect(bindingPathProblems('a[')[0]).toMatch(/^path "a\[" is not a JMESPath expression/);
+    expect(bindingPathProblems('$.hosts[0]')[0]).toMatch(/is not a JMESPath expression/);
   });
 
   it('bindingSchemaProblems follows a plain path only as far as the schema says', () => {

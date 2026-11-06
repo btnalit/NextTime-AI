@@ -34,7 +34,19 @@ const authApi = vi.hoisted(() => ({
 }));
 
 /** R-64: workspaces whose WS `authenticate` the stub kernel refuses. */
-const wsStub = vi.hoisted(() => ({ refusedWorkspaces: new Set<string>() }));
+const wsStub = vi.hoisted(() => ({
+  refusedWorkspaces: new Set<string>(),
+  /** Legacy 649: the next socket cannot reach the platform at all (`connect` fails). */
+  unreachable: false,
+}));
+
+/** Legacy 649: the reload a transport failure offers — stubbed, jsdom cannot navigate. */
+const sessionLib = vi.hoisted(() => ({ reloadIntoWorkspace: vi.fn() }));
+
+vi.mock('./lib/session.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./lib/session.js')>()),
+  ...sessionLib,
+}));
 
 vi.mock('./lib/auth-api.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./lib/auth-api.js')>()),
@@ -46,6 +58,7 @@ vi.mock('./lib/ws-client.js', async (importOriginal) => {
   class StubWsClient {
     private status: 'connecting' | 'connected' | 'reconnecting' | 'closed' = 'closed';
     async connect(): Promise<void> {
+      if (wsStub.unreachable) throw new Error('WsClient: connection error');
       this.status = 'connected';
     }
     async authenticate(credential?: { workspaceId?: string }): Promise<void> {
@@ -117,6 +130,7 @@ beforeEach(() => {
   window.location.hash = '';
   vi.clearAllMocks();
   wsStub.refusedWorkspaces.clear();
+  wsStub.unreachable = false;
 });
 
 afterEach(cleanup);
@@ -227,6 +241,44 @@ describe('App: 我的账户', () => {
     expect(screen.queryByRole('button', { name: '用这把 key 登录' })).toBeNull();
     // The membership list was re-read after the failure.
     await waitFor(() => expect(authApi.getMe).toHaveBeenCalledTimes(2));
+    // A refusal is not cured by a reload, so none is offered.
+    expect(screen.queryByRole('button', { name: /刷新页面并进入/ })).toBeNull();
+  });
+
+  it('legacy 649: a switch the browser cannot even send offers a reload into that workspace', async () => {
+    authApi.getMe.mockResolvedValue({
+      user: CAROL,
+      memberships: [
+        {
+          workspaceId: 'ws-1',
+          workspaceName: 'Acme',
+          workspacePurpose: 'standard',
+          principalId: 'p-1',
+          role: 'member',
+        },
+        {
+          workspaceId: 'ws-trial',
+          workspaceName: 'mgmt',
+          workspacePurpose: 'admin_trial',
+          principalId: 'p-2',
+          role: 'owner',
+        },
+      ],
+    });
+    render(<App />);
+    await screen.findByTestId('nav-agent');
+
+    wsStub.unreachable = true;
+    fireEvent.change(screen.getAllByTestId('workspace-switcher')[0] as HTMLElement, {
+      target: { value: 'ws-trial' },
+    });
+
+    await screen.findByText('没能切换到工作区「mgmt」');
+    expect(screen.getByText(/和平台的连接断了，点下面的按钮刷新页面并直接进入它/)).toBeTruthy();
+    expect(screen.getByTestId('nav-agent')).toBeTruthy();
+    const reload = screen.getByRole('button', { name: '刷新页面并进入「mgmt」' });
+    fireEvent.click(reload);
+    expect(sessionLib.reloadIntoWorkspace).toHaveBeenCalledWith('ws-trial', '#/work/chats');
   });
 
   it('cookie user with no workspace → account page: the bind-API-key card is offered there too', async () => {
