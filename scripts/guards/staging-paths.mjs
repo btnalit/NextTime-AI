@@ -18,7 +18,7 @@
 // by the tag dispatch before production (docs/runbooks/staging-rehearsal.md §3.1).
 //
 // Run: `node scripts/guards/staging-paths.mjs` (also part of `pnpm ci:guards`).
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -28,13 +28,11 @@ const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
 /** The `pull_request: paths:` list of staging.yml (a plain YAML list, read line by line). */
 export function filterPaths(workflow) {
   const lines = workflow.split('\n');
-  const start = lines.findIndex(
-    (l, i) => /^ {2}pull_request:\s*$/.test(l) && /^ {4}paths:\s*$/.test(lines[i + 1] ?? ''),
-  );
+  const start = lines.findIndex((l, i) => /^  pull_request:\s*$/.test(l) && /^    paths:\s*$/.test(lines[i + 1] ?? ''));
   if (start < 0) throw new Error('staging.yml: no `pull_request: paths:` block');
   const out = [];
   for (const l of lines.slice(start + 2)) {
-    const m = /^ {6}- (\S+)\s*$/.exec(l);
+    const m = /^      - (\S+)\s*$/.exec(l);
     if (!m) break;
     out.push(m[1].replace(/^['"]|['"]$/g, ''));
   }
@@ -91,12 +89,7 @@ export function check() {
   const scan = (from) => {
     for (const rel of referencedPaths(read(from))) {
       if (!named.has(rel)) named.set(rel, from);
-      if (
-        rel.endsWith('.sh') &&
-        !rel.includes('*') &&
-        !seen.has(rel) &&
-        existsSync(path.join(ROOT, rel))
-      ) {
+      if (rel.endsWith('.sh') && !rel.includes('*') && !seen.has(rel) && existsSync(path.join(ROOT, rel))) {
         seen.add(rel);
         queue.push(rel);
       }
@@ -109,8 +102,7 @@ export function check() {
   for (const [rel, from] of named) {
     if (rel.startsWith('deploy/')) {
       const dir = rel.split('/')[1];
-      if (dir && !dir.includes('*') && !filter.includes(`deploy/${dir}/**`))
-        missing.push({ path: `deploy/${dir}/**`, from });
+      if (dir && !dir.includes('*') && !filter.includes(`deploy/${dir}/**`)) missing.push({ path: `deploy/${dir}/**`, from });
     } else if (!covered(rel)) {
       missing.push({ path: rel, from });
     }
@@ -122,16 +114,10 @@ export function check() {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const missing = check();
   if (missing.length) {
-    console.error(
-      'staging-paths: .github/workflows/staging.yml `pull_request.paths` misses what the rehearsal runs:',
-    );
+    console.error('staging-paths: .github/workflows/staging.yml `pull_request.paths` misses what the rehearsal runs:');
     for (const m of missing) console.error(`  ${m.path}   (named in ${m.from})`);
-    console.error(
-      'Add each to both the pull_request paths list and docs/runbooks/staging-rehearsal.md §3.1.',
-    );
+    console.error('Add each to both the pull_request paths list and docs/runbooks/staging-rehearsal.md §3.1.');
     process.exit(1);
   }
-  console.log(
-    "staging-paths: the staging trigger filter covers the release rehearsal's scripts and deploy/ directories.",
-  );
+  console.log('staging-paths: the staging trigger filter covers the release rehearsal\'s scripts and deploy/ directories.');
 }

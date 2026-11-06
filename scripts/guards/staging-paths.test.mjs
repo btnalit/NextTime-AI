@@ -13,8 +13,7 @@ test('globToRegExp: * stays within a directory, ** crosses directories', () => {
 });
 
 test('filterPaths reads only the pull_request paths list', () => {
-  const wf =
-    "on:\n  pull_request:\n    paths:\n      - a.sh\n      - 'deploy/x/**'\n  workflow_dispatch:\n    inputs: {}\n";
+  const wf = 'on:\n  pull_request:\n    paths:\n      - a.sh\n      - \'deploy/x/**\'\n  workflow_dispatch:\n    inputs: {}\n';
   assert.deepEqual(filterPaths(wf), ['a.sh', 'deploy/x/**']);
   assert.throws(() => filterPaths('on:\n  push:\n'));
 });
