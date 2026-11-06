@@ -16,7 +16,7 @@
    目标工作区应用、绑门、自动验证；另一条路把应用过的提案导出成能力包，放进附加包目录，在第三个工作区装上（§2.1）。模型是 fake-llm，
    按脚本走，不会自己卡住。真实模型（§2.2）：
    - 第一轮停在第一步。人那句话里少了地址，脚本又看不到它回了什么，这一轮说明不了它能走多远。
-   - 第二轮补齐测量（#985）之后，一句没催就走完接入、起草、发布、试跑。
+   - 第二轮补齐测量（#985）之后，一句没催：它自己发了接入请求，起草了 Skill 和 Worker，人发布之后又自己发起试跑。发布是人做的。
    - 停在审批前，是因为试跑的 Worker 被列出了一个它调不了的执行工具。这是平台缺陷，不是模型没做到，#989 修。
 2. **§5.7 的守卫逐行对到了测试。** 16 行里：
    - 14 行有内核或单元测试，都在 v0.62.0 的 tag 上，那次 CI 全绿；
@@ -97,11 +97,11 @@ W3 = 214、P0b、P1、AA1–AA6（`global-roadmap-2026-10-16.md` §4）。AA6（
 
 | 字段 | 第一轮 | 第二轮（#985 之后） |
 |---|---|---|
-| 运行 | run 42168783604，main d738bfee（v0.62.0 → v0.63.0-staging.d738bfee），`RESULT ok`；升级前后 S1–S4 全绿，其他真实场景全部 1/1 | run 42182615259，main 54d14f73（v0.62.0 → v0.63.0-staging.54d14f73），job 绿；S2、S3 通过，其他真实场景全部 1/1 |
+| 运行 | run 42168783604，main d738bfee（v0.62.0 → v0.63.0-staging.d738bfee），`RESULT ok`；升级前后 S1–S4 全绿，其他真实场景全部 1/1 | run 42182615259，main 54d14f73（v0.62.0 → v0.63.0-staging.54d14f73），job 绿；升级前后 S1–S4 全绿；real-s2 68/0、real-s3 33/0，其他真实场景全部 1/1 |
 | 走到 / 卡在 | `reached=none`，`stuck=connect:no_request` | `reached=connect,draft,publish,try`，`stuck=approve:no_action_request(task=completed)` |
-| Turn / 补话 / 工具调用（出错） | 2 / 1 / 2（0）：`platform_state_connectors`、`platform_state_gates` 各一次；被拒 0 | 3 / 0 / 10（0）：接入 `request_connection`；起草读了工单列表、`find_operations`、`list_skills`、`list_worker_definitions`、`get_type`，起草 Skill 和 Worker 各一个；试跑 `find_workers`、`invoke_worker`；被拒 0 |
-| 回复形状（`replies=`） | （当时没有） | `s501:say-confirm+cannot`、`s1416:say-permit+confirm`、`s511`：三个 Turn 都以陈述结尾，问句里一类也没有 |
-| token / 美元 | RUN 行 `tokens=39012` 少算了一次调用；llm-proxy 日志三次调用合计约 6 万（缓存读写占绝大部分，输出 1343）。staging 不记价，`cost_usd=0` | `tokens=288414`，和 llm-proxy 日志 13 次调用（智能体 10 次、试跑 Worker 3 次）逐项加总一致，输出 4744。staging 不记价，`cost_usd=0`；按目录价估约 0.24 美元（估算） |
+| Turn / 补话 / 工具调用（出错） | 2 / 1 / 2（0）：`platform_state_connectors`、`platform_state_gates` 各一次；被拒 0 | 3 / 0 / 10（0）：接入 `request_connection`；起草 `observe_operation` 一次、`find_operations`、`list_skills`、`list_worker_definitions`、`get_type`，起草 Skill 和 Worker 各一个；试跑 `find_workers`、`invoke_worker`；被拒 0 |
+| 回复形状（`replies=`） | （当时没有） | `s501:say-confirm+cannot`、`s1416:say-permit+confirm`、`s511`：三个 Turn 都以陈述结尾，问句里一类也没有（读法见下） |
+| token / 美元 | RUN 行 `tokens=39012` 少算了一次调用；llm-proxy 日志三次调用合计约 6 万（缓存读写占绝大部分，输出 1343）。staging 不记价，`cost_usd=0` | `tokens=288414`，和 llm-proxy 日志 13 次调用（智能体 10 次、试跑 Worker 3 次）逐项加总一致，输出 4744。staging 不记价，`cost_usd=0`；按目录价估约 0.24 美元（估算，只算这条旅程；整轮见 §7） |
 | 人做了几件事 | 0 | 5：录凭证、发布门的 Operation、授权门（试验）、发布 Skill、发布 Worker |
 | 新发现的缺口 | 无（见下面的读法） | 1 个产品缺陷，并入 §4 第 5 条 |
 
@@ -135,11 +135,19 @@ W3 = 214、P0b、P1、AA1–AA6（`global-roadmap-2026-10-16.md` §4）。AA6（
 **第二轮怎么读**：
 - **核实过的**（compose 日志，按 Turn 的 correlationId 分组）：
   - 接入 Turn 约 7 秒，两次模型调用，第一次就调了 `request_connection`（http，地址就是人给的那个），之后写了一段陈述。
-  - 起草 Turn 约 26 秒，五次调用：先读工单列表、找 Operation、列已有的 Skill 和 Worker，起草一个 Skill，调一次 `get_type`，
+  - 起草 Turn 约 26 秒，五次调用：先 `observe_operation` 读了一次、找 Operation、列已有的 Skill 和 Worker，起草一个 Skill，调一次 `get_type`，
     再起草 Worker。草稿里的 Worker 写了工单门（`worker_gate=yes`）。
   - 试跑 Turn：`find_workers` 后 `invoke_worker`。试跑 Worker 先 `observe_operation` 读了一次，接着 `request_action`
     在 2.5 毫秒内返回 403（`forbidden`），然后 `report_task_result`，Task 记成 completed。没有 ActionRequest，所以审批人什么也等不到。
   - 智能体写试跑那段回复时 Worker 还没跑完（智能体最后一次调用 08:30:06 结束，Worker 08:30:09），它不知道这次被拒。
+- **回复形状**（核实的只有类别）：三个 Turn 的标记全在陈述句里，没有一句问句。接入 Turn 写到了「确认」（`confirm`）和「不能」
+  （`cannot`）两类，起草 Turn 写到了「要不要我 / 需要我」（`permit`）和「确认」，试跑 Turn 一类也没有。
+  标记只记提到了哪一类词，不记指的是什么。下面是推断：
+  - 接入 Turn 的 `cannot`，可能是在说凭证要人来填、它自己不录（人第一句就这么说了），也可能是别的「不能」。
+    它在同一个 Turn 里已经发了请求，所以不是「说不让做，然后停下」。
+  - 起草 Turn 的 `permit` 在陈述句里，更像「需要我……请告诉我」这类收尾，不是在问能不能做；它也没有因此停下（`nudges=0`）。
+  - 能说明的：信息给全时，它的话里有「确认」「要不要我」「不能」这类词，却没有一句是在问人，也没有因此停下。
+    说明不了的：这些词具体指什么，以及第一轮它说了什么。
 - **核实过的**（代码）：
   - WorkerDefinition 不写 `capabilities` 时，默认是 worker 上限减掉执行类（`handle-mint.ts` 的 `defaultWorkerCapabilities`）。
     试跑 Worker 的 Handle 因此带着这个门（`resources.gatekeeper`），却没有 `request_action`。
@@ -157,12 +165,13 @@ W3 = 214、P0b、P1、AA1–AA6（`global-roadmap-2026-10-16.md` §4）。AA6（
 - **「gates = can_act_on」的语义漂移（核实，代码）**，作为事实记下，交 steward 登遗留：
   - `worker-definition.ts` 把 `gates` 写成这个定义 can_act_on 的门。
   - 内核从 S2.12 起把「对门提请求」的权利跟着门资源下放（`handle-mint.ts` 的 `delegatedRequestAction`）。一个 Handle 自己能不能调
-    `request_action`，看的却是能力名单。D4 撤销以后，观察也不看门了。
+    `request_action`，看的却是能力名单。
   - 结果是，只声明 `gates`、不声明 `request_action` 的 Worker，自己对这些门一个动作也请求不了；它若持有 `invoke_worker`，
     却能把请求权再交给它启动的子 Worker。同一个字段，在入口 Handle 上的意思是「只能转交」，在 Worker 上本该是「自己做」。
   - 协调定的方向：执行权必须显式声明，不由 `gates` 隐式带出，审批人在草稿里能看到 `request_action`。字段语义怎么收拢，留给遗留。
 - **对第一轮那两个推断**：两轮之间只改了人的第一句（补上 http、地址、名字、用测试账号、凭证由人来填）。补上之后，它第一个 Turn
-  就发了请求，三个 Turn 都没有问句（没有 `ask-` 标记）。这支持「缺信息」是第一轮的主因，排除不了「等同意」也起过作用；只跑了一次，不是证明。
+  就发了请求，三个 Turn 都没有问句（没有 `ask-` 标记）。这和「缺信息是第一轮的主因」相容，但不算支持：第二轮它的陈述里也有「确认」
+  「要不要我」「不能」这类词（见上面的回复形状），第一轮它说了什么看不到，「等同意」排除不了。只跑了一次，不是证明。
 - **对 D-W5**：第二轮说明，人把该给的信息给全时，真实模型能把配置层的旅程走到试跑，不要人催；停下的那一步是平台缺陷，
   用正常开发修，不需要智能体写代码。它还没走到审批、提案和目标工作区应用，这几步等 #989 合入后的第三轮。
 
@@ -377,7 +386,10 @@ AA5f 之后是 14 件（#959 时是 15 件，「验证」那一步变成应用�
 - fake-llm 不花钱。
 - 真实模型（§2.2，staging 不记价）：
   - 第一轮只走到第一步，三次调用约 6 万 token。
-  - 第二轮走到试跑，13 次调用 288414 token，缓存读写占绝大部分，按目录价估约 0.24 美元（估算）。
+  - 第二轮，只算管理员这条旅程：走到试跑，13 次调用（智能体 10 次、试跑 Worker 3 次）288414 token，缓存读写占绝大部分，
+    按目录价估约 0.24 美元。
+  - 第二轮整轮（所有真实场景，含这条旅程）：STATUS 第二轮那一行（#988）记的是 69 次调用、约 0.7 美元。
+  - 两个数都是按目录价的估算，范围不同，不矛盾。
   - 整条旅程的成本等第三轮。
 - 预演一整轮（升级加 S1–S4）在 GitHub runner 上约 42 分钟（job 127652862358 的 Rehearse 一步，01:35–02:17 UTC）。
 
