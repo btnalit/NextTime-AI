@@ -96,7 +96,9 @@ test.describe('Journey ⑩: 管理员智能体提议装能力包，所有者装�
     await page.getByRole('link', { name: '新建试验工作区' }).click();
     const createDrawer = page.getByTestId('create-workspace-drawer');
     await expect(createDrawer.getByTestId('create-workspace-purpose')).toHaveValue('admin_trial');
-    await createDrawer.getByLabel('名称', { exact: true }).fill(trialName);
+    // Not `exact`: Chromium folds `<Field required>`'s aria-hidden asterisk into the label's name
+    // (see `loginWithPassword` in e2e/auth-helpers.ts), so it reads 「名称*」.
+    await createDrawer.getByLabel(/^名称/).fill(trialName);
     await expect(createDrawer.getByTestId('create-workspace-owner')).toHaveValue(
       new RegExp(`^${ADMIN_LOGIN} — `),
       { timeout: 15_000 },
