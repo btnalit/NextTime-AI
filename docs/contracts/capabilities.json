@@ -14192,6 +14192,112 @@
   },
   {
     "channel": "human",
+    "group": "platform",
+    "mode": "observe",
+    "name": "export_admin_proposal_pack",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "notes": {
+          "maxLength": 4000,
+          "type": "string"
+        },
+        "segmentId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 500,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "segmentId",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "files": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "path": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "type": "object"
+          },
+          "minItems": 2,
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "omitted": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "gateId": {
+                "type": "string"
+              },
+              "index": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "operation_version",
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "index",
+              "kind",
+              "gateId",
+              "name"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "version": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "digest",
+        "files",
+        "omitted"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "channel": "human",
     "group": "audit",
     "minRole": "auditor",
     "mode": "observe",

@@ -147,6 +147,15 @@ export class PackManifestError extends Error {
   }
 }
 
+/** A schema's refusal as one line, an issue per `; `-separated part (`path: message`), so the reason
+ *  an extra pack is left out with (console 平台 · 模块, `extra_packs_status`, the kernel log) names
+ *  the fields to fix instead of quoting zod's issue JSON. */
+export function schemaIssues(error: z.ZodError): string {
+  return error.issues
+    .map((issue) => `${issue.path.map(String).join('.') || '(the whole file)'}: ${issue.message}`)
+    .join('; ');
+}
+
 /** Parses one `pack.yaml`'s text. `source` names it in errors. */
 export function parsePackManifest(text: string, source: string): PackManifest {
   let raw: unknown;
@@ -179,7 +188,7 @@ export function parsePackManifest(text: string, source: string): PackManifest {
     }
   }
   const result = PackManifestSchema.safeParse(raw);
-  if (!result.success) throw new PackManifestError(source, result.error.message);
+  if (!result.success) throw new PackManifestError(source, schemaIssues(result.error));
   const manifest = result.data;
   if (manifest.version === 1 && manifest.breaking) {
     throw new PackManifestError(source, 'version 1 cannot be breaking: nothing precedes it');

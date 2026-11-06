@@ -30,6 +30,7 @@ import {
   PackManifestError,
   type PackRequirementManifest,
   parsePackManifest,
+  schemaIssues,
 } from './manifest.js';
 
 /**
@@ -80,7 +81,8 @@ import {
  * organization's own. They are read on every call like the image's (no restart: a maintainer
  * unpacks one beside the directory and moves it in, so a half-written one is never read) and are
  * Pack Contract v1 to the letter, with one difference: a version's `domainPack` files are its own
- * `ontology/<file>`, since a pack from outside the image cannot add to the ontology library. Each
+ * `ontology/<file>`, since a pack from outside the image cannot add to the ontology library, and
+ * those files may carry no suspected credential either (the library ships in the image). Each
  * is `source: 'extra'` (`PackEntry.source`), never a module (`application/platform/modules.ts`).
  * The image's packs are checked first and alone, as above; an extra pack breaking any rule —
  * its own (a manifest, a component file, versions, a file that is a symbolic link or sits under one
@@ -368,7 +370,11 @@ async function loadDomainPack(
 ): Promise<OntologyDefinition> {
   if (location !== 'version') return loadOntologyDefinitionFile(path.join(location.library, file));
   const source = path.join(versionDir, 'ontology', file);
-  return parseOntologyDefinition(await readComponentFile(files, source), source);
+  const definition = parseOntologyDefinition(await readComponentFile(files, source), source);
+  // A domain pack from outside the image is checked as its Skills and Workers are; the platform's
+  // ontology library ships in the image, reviewed with the code.
+  assertNoSuspectedSecrets(source, definition);
+  return definition;
 }
 
 /** Refuses content carrying a suspected credential (see this module's comment). */
@@ -418,7 +424,7 @@ async function loadSkillComponent(
     throw new PackManifestError(source, `frontmatter is not YAML: ${String(err)}`, { cause: err });
   }
   const frontmatter = SkillFrontmatterSchema.safeParse(raw);
-  if (!frontmatter.success) throw new PackManifestError(source, frontmatter.error.message);
+  if (!frontmatter.success) throw new PackManifestError(source, schemaIssues(frontmatter.error));
   if (frontmatter.data.name !== name) {
     throw new PackManifestError(
       source,
@@ -471,7 +477,7 @@ function workerSystems(
   if (raw === undefined) return [];
   const parsed = WorkerSystemsSchema.safeParse(raw);
   if (!parsed.success) {
-    throw new PackManifestError(source, `systems: ${parsed.error.message}`);
+    throw new PackManifestError(source, `systems: ${schemaIssues(parsed.error)}`);
   }
   const systems = parsed.data;
   const repeated = systems.find((system, index) => systems.indexOf(system) !== index);
@@ -513,7 +519,7 @@ async function loadWorkerComponent(
   const { systems: rawSystems, ...content } = raw as Record<string, unknown>;
   const systems = workerSystems(source, rawSystems, requiredConnectors);
   const parsed = WorkerWorkerDefinitionContentSchema.safeParse({ ...content, name });
-  if (!parsed.success) throw new PackManifestError(source, parsed.error.message);
+  if (!parsed.success) throw new PackManifestError(source, schemaIssues(parsed.error));
   const definition = parsed.data;
   const foreign = (definition.skills ?? []).filter((skill) => !skills.has(skill));
   if (foreign.length > 0) {

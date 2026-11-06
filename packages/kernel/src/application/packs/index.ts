@@ -13,6 +13,13 @@
  */
 
 export {
+  type AdminProposalPackExportInput,
+  AdminProposalPackNotExportableError,
+  type AdminProposalPackSource,
+  buildAdminProposalPack,
+  exportAdminProposalPack,
+} from './export.js';
+export {
   type InstallPackInput,
   type InstalledPack,
   type PackInstallPlan,

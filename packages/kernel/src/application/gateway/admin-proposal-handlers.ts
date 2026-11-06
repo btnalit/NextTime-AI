@@ -23,7 +23,7 @@ import {
   verifyChangeSegment,
   withdrawAdminProposal,
 } from '../change-plan/index.js';
-import { loadPackRegistry } from '../packs/index.js';
+import { exportAdminProposalPack, loadPackRegistry } from '../packs/index.js';
 import type {
   CapabilityHandler,
   CapabilityHandlerContext,
@@ -40,7 +40,9 @@ import { sourceRequirementsChecker } from './change-verification.js';
  *    workspace and reads back — only its own administrator's proposals there (F12) — and withdraws.
  *    Dispatch has already checked the agent's authority (I-A1, I-A6) and gives `ctx.adminAgent`.
  *  - Three `platform` capabilities: a platform administrator in the console reads every proposal and
- *    withdraws one, in a platform transaction (`ctx.platformUser`).
+ *    withdraws one, in a platform transaction (`ctx.platformUser`). S11 AA5d-2 adds a fourth,
+ *    `export_admin_proposal_pack` (application/packs/export.ts): an applied, verified workspace
+ *    segment as the files of a pack.
  *  - S11 AA3b-2, the `modules` group: the owner of a workspace a segment is addressed to lists,
  *    previews, applies and rejects it (application/change-plan/admin-proposal-segments.ts) — human
  *    channel, owner, a person (`actsForPerson`, `HUMAN_ONLY`), in the workspace's transaction.
@@ -287,6 +289,28 @@ function ownerOf(name: string, ctx: CapabilityHandlerContext | undefined): strin
   if (ctx.channel !== 'human') throw new Error(`${name}: invoked outside the human channel`);
   return ctx.principalId;
 }
+
+/** S11 AA5d-2 `export_admin_proposal_pack` (platform plane): the files of a pack, read from the
+ *  segment and the deployment's packs now; writes nothing but dispatch's audit row. */
+export const exportAdminProposalPackHandler: CapabilityHandler = async (
+  client,
+  _workspaceId,
+  params,
+  ctx,
+): Promise<CapabilityHandlerResult> => {
+  platformUserOf('export_admin_proposal_pack', ctx);
+  const { segmentId, summary, notes } = params as {
+    readonly segmentId: string;
+    readonly summary: string;
+    readonly notes?: string;
+  };
+  const pack = await exportAdminProposalPack(
+    client,
+    { segmentId, summary, ...(notes !== undefined ? { notes } : {}) },
+    await loadPackRegistry(),
+  );
+  return { result: pack, resourceType: 'admin_proposal_segment', resourceId: segmentId };
+};
 
 export const listAdminProposalSegmentsHandler: CapabilityHandler = async (
   client,

@@ -123,7 +123,11 @@ import {
   StepTrialChangedError,
 } from '../../application/goal/index.js';
 // S11 P1-C: a domain module's error, imported directly like the two above.
-import { PackDependencyUnmetError, PackNotFoundError } from '../../application/packs/index.js';
+import {
+  AdminProposalPackNotExportableError,
+  PackDependencyUnmetError,
+  PackNotFoundError,
+} from '../../application/packs/index.js';
 // P-B2b: same direct-import convention as the comment above — application/platform/modules.ts is a
 // domain module, not re-exported by application/gateway/index.ts's curated surface.
 import {
@@ -651,7 +655,9 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
     err instanceof AdminProposalSegmentNotOpenError ||
     err instanceof AdminProposalSegmentBlockedError ||
     err instanceof AdminProposalSegmentUnchangedError ||
-    err instanceof AdminProposalTargetNoLongerChosenError
+    err instanceof AdminProposalTargetNoLongerChosenError ||
+    // S11 AA5d-2: mirrors HTTP 409 `admin_proposal_pack_not_exportable`.
+    err instanceof AdminProposalPackNotExportableError
   ) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }

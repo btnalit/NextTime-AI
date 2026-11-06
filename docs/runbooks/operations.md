@@ -990,20 +990,21 @@ mkdir .incoming && tar --no-same-owner --no-same-permissions -xf /path/to/org-no
 # 没有符号链接才往下走；内核以 uid 10001 读，所以要 chmod
 test -z "$(find .incoming -type l)" \
   && chmod -R a+rX .incoming \
-  && mv .incoming/org-notes ./org-notes \
+  && mv -T .incoming/org-notes ./org-notes \
   || { echo '包里有符号链接，或上面哪一步失败了：没有放进去'; find .incoming -type l; }
-# 已有的包加一个新版本时，把上面的 mv 换成：mv .incoming/org-notes/2 ./org-notes/2
+# 已有的包加一个新版本时，把上面的 mv 换成：mv -T .incoming/org-notes/2 ./org-notes/2
 rm -r .incoming
 ```
 
 - `mkdir -p`：AA5d 之前装的主机原来没有 `config/packs/`；`apply-release.sh` 和 `host-env-init.sh` 都会建，这里再保底一次。
 - `--no-same-owner --no-same-permissions`：root 解 tar 默认保留包里的属主和权限；这里让文件归 root、只读给容器。
+- `mv -T`：同名的目录已经在、里面有东西，就报错停下，不会把包嵌进那个目录里（变成 `org-notes/org-notes`）。
 - 符号链接：包里的文件必须是它自己的。有链接时那一段只打印链接，不会 `chmod` 和 `mv`；最后的 `rm -r` 把解开的东西清掉。内核也不读：附加包里的文件是链接或在链接下面，这个包整个丢掉（原因写「symbolic link」），因为链接会把内核能读到的别的文件（比如 `/run/secrets/` 下的）带进包里。
 
 **附加包有毛病，只丢它自己**：自带包有一条规则不过，整个注册表照旧拒绝加载（那是部署本身的 bug）；附加包不一样，
 违反任何一条，只把这个包丢掉，其余照常列出、安装、核验、提案和新建工作区。会被丢掉的情况：
 
-- 它自己的规则：包名、版本目录（从 1 连续）、清单、Skill / Worker 文件、域包文件、疑似凭证，同 §14、§14.5；文件是符号链接或在链接下面；
+- 它自己的规则：包名、版本目录（从 1 连续）、清单、Skill / Worker 文件、域包文件、疑似凭证（Skill、Worker 和域包文件都查），同 §14、§14.5；文件是符号链接或在链接下面；
 - 和自带包同名，或者带了自带包已有的组成部分（本体族、Skill 名、Worker 名）；
 - 和另一个附加包带了同一个组成部分：**两个都丢**，因为分不清哪个才是想要的；
 - 依赖的包不在（或版本不够），或者附加包之间互相依赖绕成环；依赖了被丢掉的包的，也一起丢掉。
@@ -1022,6 +1023,56 @@ rm -r .incoming
 留着，安装记录照样能在「安装历史」里撤销，只是再核验会因为「这个部署里已经没有这个版本」而不通过。要恢复，把目录移回来。
 
 **备份**：`config/packs/` 在 `config/` 里，跟着备份走（`backup-restore.md`）。
+
+### 14.11 把管理员提案导出成能力包（S11 AA5d-2）
+
+管理员智能体在试验工作区里摸索出来的本体族、Skill 和 Worker，经提案应用到一个工作区并验证通过之后，平台管理员可以把那一段导出成
+能力包，放进 §14.10 的附加包目录，别的工作区就能像装其他包一样装。
+
+- 能力：平台面的 `export_admin_proposal_pack`（`segmentId`、`summary`，可选 `notes`）。控制台入口在 AA5d-3 加。
+- 包名就是提案的来源名（`sourceName`），版本是 1。提案应用时，新的 Skill 和 Worker 族就是按来源名派生 id 的，所以导出的包和应用过的
+  工作区里的是同一批 id：放进去以后，那个工作区的「能力包」里它直接是「已是最新」，不用再装。
+- 带什么：本体族、Skill、Worker，内容就是这一段应用时的内容。Worker 不带门和模型（它们属于工作区），带它在提案里列的 `systems`；
+  清单的 `requires.connectors` 就是这些系统。Operation 改动不带，结果的 `omitted` 列出来：装到别处，那些门保持各自的设置。
+- 前提：这一段已应用，并且它应用的东西在那个工作区里按最近一次验证仍然通过。平台只读这一个是或否
+  （governance 0039 的 `admin_proposal_segment_verified`），读不到那个工作区的其他东西。
+- 导出什么都不写（只有它自己的审计行）；同一段、同样的 `summary` 和 `notes`，每次给出一样的文件和摘要。
+- 交出来之前，内核用读附加包的同一个加载器把这些文件读一遍，每个组成部分的摘要都要和应用时的一致。
+
+拒绝时返回 409 `admin_proposal_pack_not_exportable`，`details.problems` 列出每一条（`code`、`path`、`message`；疑似凭证只给位置，不给值）：
+
+| code | 意思 |
+|---|---|
+| `segment_not_applied` | 这一段还没应用，或者已经撤销 |
+| `not_verified` | 应用的东西在那个工作区里最近一次验证没通过（比如后来又改了）；所有者重新验证通过后再导 |
+| `suspected_credentials` | 内容、`summary` 或 `notes` 里有疑似凭证 |
+| `component_name_invalid` | Skill 或 Worker 的名字不能做包的组成部分（比如以数字开头） |
+| `worker_skill_outside` | Worker 挂的 Skill 不在这一段里 |
+| `component_owned` | 改的是本部署某个包已有的组成部分 |
+| `pack_name_taken` | 本部署已有同名、内容不同的包（同一来源名、内容不同的另一次导出也算） |
+| `no_components` | 这一段只有 Operation 改动 |
+| `not_a_valid_pack` | 读回来被加载器拒绝，或者和应用时的内容对不上 |
+
+`segmentId` 不是一个工作区部分（不存在，或是平台部分）就是 404 `admin_proposal_segment_not_found`。
+
+**放进附加包目录**：结果的 `files` 每一项是相对 `config/packs/` 的路径和内容。控制台入口（AA5d-3）之前，把结果存成 `export.json`，
+写成目录、打包，再按 §14.10 放进去：
+
+```
+mkdir export && cd export
+jq -c '.files[]' ../export.json | while read -r f; do
+  p=$(printf '%s' "$f" | jq -r .path); mkdir -p "$(dirname "$p")"
+  printf '%s' "$f" | jq -j .content > "$p"
+done
+tar -cf ../<sourceName>.tar <sourceName>
+```
+
+**已知限制**：
+
+- 只导出版本 1，一个来源名一个包。同一来源名的另一份提案应用后再导出，内容不同就是 `pack_name_taken`；要出新版本，按 §14.1 手工加版本目录。
+- 提案改的是目标工作区里原本就有的同名族（不是按来源名派生的那个 id）时，导出的包仍用派生 id：那个工作区里它读作「未安装」，
+  别的工作区照常装。
+- 看的是最近一次验证的结果：验证之后工作区里又被改过、还没重新验证的，照样能导出；导出的内容始终是这一段应用时的内容。
 
 ## 15. 平台默认入口模型（P-D 剩余 E5）
 

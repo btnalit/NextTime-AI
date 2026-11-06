@@ -4083,6 +4083,27 @@ const platformCapabilities = [
     description:
       'The packs this deployment adds beside the image’s (`EXTRA_PACKS_DIR`, the host’s `config/packs/`), read now: each one read (every workspace’s list_packs offers it as source extra; never a module), and each one left out with the rule it breaks — its manifest or a component file, its versions, a name or a component a pack of the image has, a component another extra pack publishes too (both are left out), a pack it requires that is not here, a cycle — a pack requiring one left out is left out too. A file is named by its path under that directory; a value that looks like a credential is masked. configured false: the kernel has no extra packs directory. unreadable: the directory is there but cannot be read. Writes nothing.',
   },
+  // S11 AA5d-2 (the AA5 plan's F7(a), the AA5d plan's forks 6–13): an applied, verified workspace
+  // segment of an admin proposal as a pack another workspace installs — the files, which a
+  // maintainer puts in the extra packs directory. Platform administrators only, in the console: the
+  // agent proposes, people decide what becomes a pack.
+  {
+    name: 'export_admin_proposal_pack',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        segmentId: z.guid(),
+        summary: z.string().trim().min(1).max(wire.EXPORTED_PACK_SUMMARY_MAX_LENGTH),
+        notes: z.string().max(wire.EXPORTED_PACK_NOTES_MAX_LENGTH).optional(),
+      })
+      .strict(),
+    resultSchema: wire.AdminProposalPackExportWireSchema,
+    description:
+      'Export an applied workspace segment of an admin proposal as version 1 of a capability pack named by the proposal’s source name — its ontology families, Skills and Workers as the segment applied them (each Worker with the systems it names; never gates or a model), requires.connectors the systems its Workers name — so the Skills and Workers keep the ids they have in the workspace it was applied to, and another workspace installs them as any pack (put the files in the host’s config/packs/, then list_packs offers it as source extra). Operation changes are not carried (omitted): installed elsewhere, those gates keep their own settings. Only once what it applied is verified in that workspace now (the system checks; the result is all the platform reads of it). The same segment, summary and notes give the same files and digest; summary and notes are yours, for workspace owners. Refused, writing nothing, with 409 admin_proposal_pack_not_exportable and details.problems (code, path, message — never a credential’s value): segment_not_applied, not_verified, suspected_credentials, component_name_invalid (a Skill or Worker name a pack cannot have), worker_skill_outside (a Worker mounts a Skill the segment does not bring), component_owned (an item changes a component a pack of this deployment has), pack_name_taken (a different pack by that name is here), no_components, not_a_valid_pack (the files read back by the registry’s own loader are refused, or differ from what was applied). 404 admin_proposal_segment_not_found for anything but a workspace segment. Writes nothing but its audit row.',
+  },
   // S11 AA3b (plan F12): the admin proposals admin agents made, as platform administrators read
   // them — every proposal, across trial workspaces — and withdrawing one. The agent reads its own
   // through the `admin_proposal` group (`agent_list_admin_proposals` / `agent_get_admin_proposal`); the

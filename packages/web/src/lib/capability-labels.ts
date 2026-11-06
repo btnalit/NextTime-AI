@@ -1455,6 +1455,14 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '列出本部署附加的能力包，以及没读进来的包和原因。',
     enHint: 'Lists the packs this deployment adds, and those left out with the reason.',
   },
+  export_admin_proposal_pack: {
+    zh: '把管理员提案导出成能力包',
+    en: 'Export admin proposal as pack',
+    zhHint:
+      '把一份已应用、验证通过的管理员提案工作区部分导出成能力包的文件（本体、Skill、Worker；Operation 改动不带）。放进主机的附加能力包目录后，别的工作区就能安装。',
+    enHint:
+      "Exports an applied, verified workspace part of an admin proposal as a pack's files (ontology, Skills, Workers; not Operation changes). Put in the host's extra packs directory, other workspaces can install it.",
+  },
   platform_draft_residue: {
     zh: '查看草稿残留',
     en: 'Draft residue',

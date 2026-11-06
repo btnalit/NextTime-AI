@@ -1254,6 +1254,43 @@ export const PACK_SOURCE_VALUES = ['builtin', 'extra'] as const;
 export type PackSource = (typeof PACK_SOURCE_VALUES)[number];
 export const PackSourceSchema = asEnum(PACK_SOURCE_VALUES);
 
+/**
+ * S11 AA5d-2: why an applied workspace segment of an admin proposal cannot be exported as a pack
+ * (`export_admin_proposal_pack`, 409 `admin_proposal_pack_not_exportable`, `details.problems[].code`):
+ *  - `segment_not_applied`: the segment is not `applied` now (proposed, rejected, withdrawn, or
+ *    rolled back) — only what a workspace applied is exported;
+ *  - `not_verified`: what it applied is not verified in that workspace now (its latest
+ *    verification did not pass, or none ran) — the system's check (governance 0039);
+ *  - `suspected_credentials`: something the pack would carry looks like a credential (by path, never
+ *    the value) — a pack ships none, so nothing is masked into it;
+ *  - `component_name_invalid`: a Skill's or Worker's name is not a pack component's (lower-case
+ *    words joined by hyphens, starting with a letter) — a proposal's Worker name is free text, and a
+ *    Skill's may start with a digit;
+ *  - `worker_skill_outside`: a Worker mounts a Skill the segment does not bring — a pack's Worker
+ *    mounts the pack's own Skills;
+ *  - `component_owned`: an item changes a component a pack of this deployment has;
+ *  - `pack_name_taken`: this deployment already has a different pack by the proposal's source name;
+ *  - `no_components`: nothing of the segment goes into a pack (only Operation changes, say);
+ *  - `not_a_valid_pack`: the files, read back by the registry's own loader, are refused or differ
+ *    from what the segment applied (a Skill's text a pack file cannot keep as it is, say).
+ */
+export const ADMIN_PROPOSAL_PACK_EXPORT_PROBLEM_VALUES = [
+  'segment_not_applied',
+  'not_verified',
+  'suspected_credentials',
+  'component_name_invalid',
+  'worker_skill_outside',
+  'component_owned',
+  'pack_name_taken',
+  'no_components',
+  'not_a_valid_pack',
+] as const;
+export type AdminProposalPackExportProblem =
+  (typeof ADMIN_PROPOSAL_PACK_EXPORT_PROBLEM_VALUES)[number];
+export const AdminProposalPackExportProblemSchema = asEnum(
+  ADMIN_PROPOSAL_PACK_EXPORT_PROBLEM_VALUES,
+);
+
 // ---------------------------------------------------------------------------------------------
 // §5.5 Publishable lifecycle (OntologyVersion / WorkerDefinition / Skill / Procedure / Manifest)
 // ---------------------------------------------------------------------------------------------

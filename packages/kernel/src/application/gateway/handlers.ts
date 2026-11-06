@@ -177,6 +177,7 @@ import {
   agentListAdminProposalsHandler,
   agentWithdrawAdminProposalHandler,
   applyAdminProposalSegmentHandler,
+  exportAdminProposalPackHandler,
   getAdminProposalHandler,
   getAdminProposalSegmentCountsHandler,
   listAdminProposalSegmentsHandler,
@@ -2831,6 +2832,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['list_admin_proposals', listAdminProposalsHandler],
   ['get_admin_proposal', getAdminProposalHandler],
   ['withdraw_admin_proposal', withdrawAdminProposalHandler],
+  ['export_admin_proposal_pack', exportAdminProposalPackHandler],
   // S11 AA3b-2 — the owner of the workspace a segment is addressed to decides it.
   ['list_admin_proposal_segments', listAdminProposalSegmentsHandler],
   ['get_admin_proposal_segment_counts', getAdminProposalSegmentCountsHandler],

@@ -180,6 +180,45 @@ describe('extra packs: one breaking a rule is left out, with the reason', () => 
     expect(skipped[0]?.reason).not.toContain(token);
   });
 
+  it('a credential in an extra pack’s domain pack: left out like one in a Skill, never its value', async () => {
+    const token = `gh${'p_'}${'a1B2c3D4'.repeat(4)}`;
+    const dirs = await packs(BASE, {
+      'leaky-ontology': [
+        {
+          ontology: [
+            {
+              family: 'leaky-ontology',
+              domainPack: 'leaky.yaml',
+              yaml: objectTypeYaml('Leak').replace('description: d', `description: "use ${token}"`),
+            },
+          ],
+        },
+      ],
+    });
+    const { registry, skipped } = await read(dirs);
+    expect([...registry.keys()]).toEqual(['base-pack']);
+    expect(skipped.map((skip) => skip.name)).toEqual(['leaky-ontology']);
+    expect(skipped[0]?.reason).toBe(
+      'pack manifest "leaky-ontology/1/ontology/leaky.yaml": carries 1 suspected credential value(s) (at objectTypes[0].description); a pack ships no credentials',
+    );
+  });
+
+  it('a manifest the schema refuses: each field to fix as `path: message`, never zod’s issue JSON', async () => {
+    const dirs = await packs(BASE, { 'thin-pack': [FAMILY('thin-pack', 't.yaml', 'Thin')] });
+    await writeFile(
+      path.join(dirs.extraDir, 'thin-pack', '1', 'pack.yaml'),
+      'schema: 1\nname: thin-pack\nversion: 1\nnotes: ""\nbreaking: false\n',
+    );
+    const { skipped } = await read(dirs);
+    expect(skipped).toEqual([
+      {
+        name: 'thin-pack',
+        reason:
+          'pack manifest "thin-pack/1/pack.yaml": summary: Invalid input: expected string, received undefined; components: Invalid input: expected object, received undefined',
+      },
+    ]);
+  });
+
   it('a file that is a symbolic link, or sits under one, is refused: a pack’s files are its own', async () => {
     const secret = 'not-for-any-pack: the content of a file outside the packs directory';
     const withSkill = (family: string, type: string): PackFixtureVersion => ({
@@ -221,6 +260,22 @@ describe('extra packs: one breaking a rule is left out, with the reason', () => 
     const { registry, skipped } = await read({ ...dirs, extraDir: linked });
     expect(skipped).toEqual([]);
     expect(requirePack(registry, 'org-pack').source).toBe('extra');
+  });
+
+  it('a long reason is clipped to 2000 characters', async () => {
+    const dirs = await packs(BASE, { 'long-pack': [FAMILY('long-pack', 'l.yaml', 'Long')] });
+    // Each name breaks the rule for a Skill name: the parser reports every one of them.
+    const names = Array.from({ length: 200 }, (_, index) => `Bad_Skill_${index}`);
+    await writeFile(
+      path.join(dirs.extraDir, 'long-pack', '1', 'pack.yaml'),
+      `schema: 1\nname: long-pack\nversion: 1\nsummary: s\ncomponents:\n  skills: [${names.join(', ')}]\n`,
+    );
+    const { skipped } = await read(dirs);
+    expect(skipped.map((skip) => skip.name)).toEqual(['long-pack']);
+    const reason = skipped[0]?.reason ?? '';
+    expect(reason.startsWith('pack manifest "long-pack/1/pack.yaml"')).toBe(true);
+    expect(reason).toHaveLength(2_001);
+    expect(reason.endsWith('…')).toBe(true);
   });
 
   it('a name a pack of the image has', async () => {
@@ -374,6 +429,30 @@ describe('memoryPackFiles: a pack read from files held in memory', () => {
       fromDisk.versions.map((version) => version.digest),
     );
     expect(fromMemory.versions.map((version) => version.version)).toEqual([1, 2]);
+  });
+
+  it('hidden directories are left out in memory as on disk: one being unpacked is not a pack', async () => {
+    const dirs = await packs(BASE, { 'org-pack': [FAMILY('org-pack', 'org.yaml', 'Org')] });
+    // operations.md §14.10 unpacks into `.incoming` under the directory before moving a pack in.
+    const incoming = path.join(dirs.extraDir, '.incoming', 'half-pack', '1');
+    await mkdir(incoming, { recursive: true });
+    await writeFile(path.join(incoming, 'pack.yaml'), 'schema: 1\nname: [\n');
+    await mkdir(path.join(dirs.extraDir, 'org-pack', '.draft'));
+    await writeFile(path.join(dirs.extraDir, 'org-pack', '.draft', 'pack.yaml'), 'schema: 1\n');
+    const { registry, skipped } = await read(dirs);
+    expect([...registry.keys()]).toEqual(['base-pack', 'org-pack']);
+    expect(skipped).toEqual([]);
+    const files = await filesUnder(dirs.extraDir);
+    expect(files.has('.incoming/half-pack/1/pack.yaml')).toBe(true);
+    const memory = memoryPackFiles('/memory', files);
+    expect(await memory.subdirectories('/memory')).toEqual(['org-pack']);
+    expect(await memory.subdirectories('/memory')).toEqual(
+      await diskPackFiles.subdirectories(dirs.extraDir),
+    );
+    expect(await memory.subdirectories('/memory/org-pack')).toEqual(['1']);
+    expect(await memory.subdirectories('/memory/org-pack')).toEqual(
+      await diskPackFiles.subdirectories(path.join(dirs.extraDir, 'org-pack')),
+    );
   });
 
   it('a file or directory that is not there is refused, as on disk', async () => {

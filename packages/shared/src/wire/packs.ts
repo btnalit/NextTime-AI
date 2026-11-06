@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  AdminProposalPackExportProblemSchema,
   ChangeItemClassificationSchema,
   PackInstallStatusSchema,
   PackRequirementStateSchema,
@@ -253,6 +254,65 @@ export const ExtraPacksWireSchema = z
   })
   .strict();
 export type ExtraPacksWire = z.infer<typeof ExtraPacksWireSchema>;
+
+/** S11 AA5d-2: an exported pack's summary — what the pack is, in a sentence a workspace owner reads
+ *  before installing (the console starts it from the proposal's title). */
+export const EXPORTED_PACK_SUMMARY_MAX_LENGTH = 500;
+/** S11 AA5d-2: an exported pack's notes — what it brings, for workspace owners. */
+export const EXPORTED_PACK_NOTES_MAX_LENGTH = 4000;
+
+/** S11 AA5d-2: one file of an exported pack, by its path under the extra packs directory
+ *  (`<name>/1/pack.yaml`, `<name>/1/skills/<skill>.md`, …) — what a maintainer unpacks into the
+ *  host's `config/packs/` as it is. */
+export const ExportedPackFileWireSchema = z
+  .object({ path: z.string().min(1), content: z.string() })
+  .strict();
+export type ExportedPackFileWire = z.infer<typeof ExportedPackFileWireSchema>;
+
+/** S11 AA5d-2: an item of the segment a pack does not carry: an Operation's governance revision
+ *  (a pack has no Operation component; installed elsewhere, that gate keeps its own settings, which
+ *  are no wider than what the proposal set). `index`: its place in the segment's `items`. */
+export const ExportedPackOmittedItemWireSchema = z
+  .object({
+    index: z.number().int().nonnegative(),
+    kind: z.literal('operation_version'),
+    gateId: z.string(),
+    name: z.string(),
+  })
+  .strict();
+export type ExportedPackOmittedItemWire = z.infer<typeof ExportedPackOmittedItemWireSchema>;
+
+/** S11 AA5d-2: `export_admin_proposal_pack` — an applied, verified workspace segment of an admin
+ *  proposal as version 1 of a pack named by the proposal's source name, so its Skills and Workers
+ *  keep the ids they have in the workspace it was applied to. The same segment, summary and notes
+ *  always give the same files and digest. Nothing is written: a maintainer puts the files in the
+ *  extra packs directory, and every workspace's `list_packs` then offers it (`source: 'extra'`). */
+export const AdminProposalPackExportWireSchema = z
+  .object({
+    name: z.string(),
+    version: z.literal(1),
+    /** The version's digest as the registry computes it — the source digest of every install. */
+    digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+    /** In path order. */
+    files: z.array(ExportedPackFileWireSchema).min(2),
+    omitted: z.array(ExportedPackOmittedItemWireSchema),
+  })
+  .strict();
+export type AdminProposalPackExportWire = z.infer<typeof AdminProposalPackExportWireSchema>;
+
+/** S11 AA5d-2: one reason a segment is not exported (409 `admin_proposal_pack_not_exportable`,
+ *  `details.problems`): `path` names the place — `items[n]…` of the segment, `summary` or `notes`
+ *  — when there is one; a credential's value never appears. */
+export const AdminProposalPackExportProblemWireSchema = z
+  .object({
+    code: AdminProposalPackExportProblemSchema,
+    path: z.string().optional(),
+    message: z.string(),
+  })
+  .strict();
+export type AdminProposalPackExportProblemWire = z.infer<
+  typeof AdminProposalPackExportProblemWireSchema
+>;
 
 /** What an item changes in its family's type names (a LinkType name counts once, whatever its
  *  endpoints; `changed`: declared in both, differently). */
