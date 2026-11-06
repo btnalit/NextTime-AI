@@ -10,8 +10,10 @@
 //   M1  registry ↔ matrix, one row per capability, none missing, none extra
 //   M2  `console: required` ⇔ packages/web/src calls it (`http.call('<name>'` / `useCapability*(…, '<name>'`);
 //       `indirect: <file>` = called through a variable, the file names it; `none: <reason>` = no call
-//   M3  `agents` equals the tool sets the code registers: `entry` (ontology/entry-agent.yaml
-//       `capabilities`), `admin` (platform-extension modes/admin.ts `ADMIN_TOOL_CAPABILITY_NAMES`)
+//   M3  `agents` equals the tool sets the code registers: `entry` (platform-extension modes/entry.ts
+//       `ENTRY_TOOL_CAPABILITY_NAMES`), `admin` (modes/admin.ts `ADMIN_TOOL_CAPABILITY_NAMES`). Names
+//       the extension calls itself (`get_entry_context`, `report_turn`) or reaches through projected
+//       gate tools (`observe_operation`) are on the Handle ceiling, not tools, and are not listed
 //   M5  `kernel_test: missing` ⇔ no packages/kernel test file names it
 //   R   ratchet: the `none: 待说明…` rows and the `kernel_test: missing` rows are counted, and the
 //       counts must equal `ratchet:` at the top of the file — a new one cannot be added without
@@ -54,22 +56,24 @@ export function scanConsoleCalls(sourceText, names) {
   return found;
 }
 
-/** `ADMIN_TOOL_CAPABILITY_NAMES = [ ... ]` in modes/admin.ts — the admin agent's pi tools. */
-export function parseAdminTools(adminSource) {
-  const match = adminSource.match(/ADMIN_TOOL_CAPABILITY_NAMES\s*=\s*\[([\s\S]*?)\]/);
-  if (!match)
-    throw new Error('capability-matrix: ADMIN_TOOL_CAPABILITY_NAMES not found in modes/admin.ts');
-  const body = match[1].replace(/\/\/.*$/gm, '');
-  return new Set([...body.matchAll(/['"]([a-z_]+)['"]/g)].map((m) => m[1]));
-}
-
-/** `capabilities:` of ontology/entry-agent.yaml — the built-in entry agent's tools. */
-export function parseEntryTools(entryYaml) {
-  const doc = parse(entryYaml);
-  if (!doc || !Array.isArray(doc.capabilities)) {
-    throw new Error('capability-matrix: ontology/entry-agent.yaml has no capabilities list');
+/** `<constName> = [ ... ]` in a platform-extension mode — the pi tools that mode registers
+ *  (`ENTRY_TOOL_CAPABILITY_NAMES` in modes/entry.ts, `ADMIN_TOOL_CAPABILITY_NAMES` in modes/admin.ts).
+ *  Fails loudly on anything it cannot read as a plain list of string literals (a spread, a computed
+ *  entry), rather than silently dropping names. */
+export function parseToolArray(source, constName) {
+  const match = source.match(new RegExp(`${constName}\\s*=\\s*\\[([\\s\\S]*?)\\]\\s*as const`));
+  if (!match) throw new Error(`capability-matrix: ${constName} = [ ... ] as const not found`);
+  const body = match[1].replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  const names = [];
+  for (const entry of body.split(',')) {
+    const item = entry.trim();
+    if (item === '') continue;
+    const literal = item.match(/^['"]([a-z0-9_]+)['"]$/);
+    if (!literal)
+      throw new Error(`capability-matrix: ${constName} has an entry it cannot read: ${item}`);
+    names.push(literal[1]);
   }
-  return new Set(doc.capabilities.filter((name) => typeof name === 'string'));
+  return new Set(names);
 }
 
 /** Names quoted anywhere in the kernel's test files. */
@@ -255,8 +259,14 @@ export async function collectFacts() {
   return {
     names,
     consoleCalls: scanConsoleCalls(webText, names),
-    entry: parseEntryTools(read('ontology/entry-agent.yaml')),
-    admin: parseAdminTools(read('packages/platform-extension/src/modes/admin.ts')),
+    entry: parseToolArray(
+      read('packages/platform-extension/src/modes/entry.ts'),
+      'ENTRY_TOOL_CAPABILITY_NAMES',
+    ),
+    admin: parseToolArray(
+      read('packages/platform-extension/src/modes/admin.ts'),
+      'ADMIN_TOOL_CAPABILITY_NAMES',
+    ),
     kernelTested: scanQuoted(kernelTestText, names),
     fileHasName: (file, name) => {
       try {
@@ -275,7 +285,7 @@ const HEADER = `# Capability matrix — one row per capability in packages/share
 #           indirect: <file>     the console calls it through a variable; <file> names it
 #           none: <reason>       no console entry, on purpose — say why
 #           none: 待说明…        not decided yet (counted by ratchet.console_unexplained, only goes down)
-# agents:   which agents get it as a tool: entry (ontology/entry-agent.yaml), admin (modes/admin.ts).
+# agents:   which agents register it as a pi tool: entry (modes/entry.ts), admin (modes/admin.ts).
 #           [] is a decision too: a new capability's PR says here whether the agents should see it.
 # kernel_test: missing           no kernel test names it yet (counted by ratchet.kernel_test_missing)
 `;

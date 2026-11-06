@@ -6,8 +6,7 @@ import { parse } from 'yaml';
 import {
   bootstrapMatrix,
   checkMatrix,
-  parseAdminTools,
-  parseEntryTools,
+  parseToolArray,
   scanConsoleCalls,
   scanQuoted,
 } from './capability-matrix.mjs';
@@ -38,18 +37,27 @@ test('scanConsoleCalls: a name is not matched inside a longer name', () => {
   assert.equal(scanConsoleCalls("http.call('list_tasks_extra')", ['list_tasks']).size, 0);
 });
 
-test('parseAdminTools reads the array and ignores comments', () => {
+test('parseToolArray reads the list and ignores comments', () => {
   const src = `export const ADMIN_TOOL_CAPABILITY_NAMES = [
-    // graph: 'not_a_tool'
+    // graph: 'not_a_tool' [see below]
     'get_object',
-    'search', // trailing 'nope'
+    /* 'also_not' */ 'search', // trailing 'nope'
+    'step2_read',
   ] as const;`;
-  assert.deepEqual([...parseAdminTools(src)].sort(), ['get_object', 'search']);
+  assert.deepEqual([...parseToolArray(src, 'ADMIN_TOOL_CAPABILITY_NAMES')].sort(), [
+    'get_object',
+    'search',
+    'step2_read',
+  ]);
 });
 
-test('parseEntryTools reads capabilities from the entry template', () => {
-  const yaml = 'kind: entry\ncapabilities:\n  # comment\n  - get_object\n  - search\n';
-  assert.deepEqual([...parseEntryTools(yaml)].sort(), ['get_object', 'search']);
+test('parseToolArray fails loudly on an entry it cannot read instead of dropping it', () => {
+  const spread = "export const ENTRY_TOOL_CAPABILITY_NAMES = ['get_object', ...MORE] as const;";
+  assert.throws(
+    () => parseToolArray(spread, 'ENTRY_TOOL_CAPABILITY_NAMES'),
+    /cannot read: \.\.\.MORE/,
+  );
+  assert.throws(() => parseToolArray('const X = [];', 'ENTRY_TOOL_CAPABILITY_NAMES'), /not found/);
 });
 
 function facts(overrides = {}) {

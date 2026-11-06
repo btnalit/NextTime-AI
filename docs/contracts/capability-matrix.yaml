@@ -5,7 +5,7 @@
 #           indirect: <file>     the console calls it through a variable; <file> names it
 #           none: <reason>       no console entry, on purpose — say why
 #           none: 待说明…        not decided yet (counted by ratchet.console_unexplained, only goes down)
-# agents:   which agents get it as a tool: entry (ontology/entry-agent.yaml), admin (modes/admin.ts).
+# agents:   which agents register it as a pi tool: entry (modes/entry.ts), admin (modes/admin.ts).
 #           [] is a decision too: a new capability's PR says here whether the agents should see it.
 # kernel_test: missing           no kernel test names it yet (counted by ratchet.kernel_test_missing)
 ratchet:
@@ -201,7 +201,7 @@ capabilities:
     agents: []
   get_entry_context:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
-    agents: [entry]
+    agents: []
   get_entry_template_status:
     console: required
     agents: []
@@ -461,7 +461,7 @@ capabilities:
     agents: []
   observe_operation:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
-    agents: [entry]
+    agents: []
   pause_goal:
     console: required
     agents: []
@@ -633,7 +633,7 @@ capabilities:
     agents: []
   report_turn:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
-    agents: [entry]
+    agents: []
   request_action:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: []
