@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { AxeBuilder } from '@axe-core/playwright';
-import { expect, test } from '@playwright/test';
 import { ADMIN_LOGIN, OWNER_API_KEY } from '../lib/auth.js';
+import { expect, test } from '../lib/test.js';
 import { allPatterns } from './copy-patterns.js';
 import { UPDATE_BASELINE, loadJson, saveJson } from './ratchet.js';
 import { SURFACES, VIEWPORT_HEIGHT, visitSurface } from './surfaces.js';

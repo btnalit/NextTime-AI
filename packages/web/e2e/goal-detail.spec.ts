@@ -1,6 +1,6 @@
 import { getCapability } from '@nexttime/shared';
-import { type Page, expect, test } from '@playwright/test';
 import { OWNER_API_KEY, loginAsOwner, signedInOwner } from './lib/auth.js';
+import { type Page, expect, test } from './lib/test.js';
 
 /**
  * e2e/goal-detail.spec.ts (S11 GO6): the 目标 list and one goal's page with real content, and the

@@ -1,5 +1,5 @@
-import { expect, test } from '@playwright/test';
 import { loginWithApiKey, reachLoginForm } from './auth-helpers.js';
+import { expect, test } from './lib/test.js';
 import { expectReadableErrors } from './lib/ux-lint.js';
 
 /**

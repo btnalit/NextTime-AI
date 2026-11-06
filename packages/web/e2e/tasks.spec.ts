@@ -1,5 +1,5 @@
-import { expect, test } from '@playwright/test';
 import { loginWithApiKey, reachLoginForm } from './auth-helpers.js';
+import { expect, test } from './lib/test.js';
 
 /**
  * e2e/tasks.spec.ts (S6-A C22 / B6 — console-completion-plan §9 "补齐今天零覆盖的任务 … e2e"):

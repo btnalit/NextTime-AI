@@ -1,5 +1,5 @@
-import { expect, test } from '@playwright/test';
 import { loginWithApiKey, reachLoginForm } from './auth-helpers.js';
+import { expect, test } from './lib/test.js';
 
 /**
  * e2e/catalog.spec.ts (S6-A A2 acceptance — console-completion-plan §5.3 "在页面新建一个 Skill

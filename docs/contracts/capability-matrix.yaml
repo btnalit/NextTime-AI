@@ -1,5 +1,5 @@
 # Capability matrix — one row per capability in packages/shared/src/capabilities.ts.
-# Guard: scripts/guards/capability-matrix.mjs (rules M1–M5, R); design: docs/test-coverage-gaps-2026-11-06.md §5.1.
+# Guard: scripts/guards/capability-matrix.mjs (rules M1–M5, R); design: docs/test-coverage-gaps-2026-11-06.md §5.1, §5.3.
 #
 # console:  required             the console calls it (http.call / useCapability*)
 #           indirect: <file>     the console calls it through a variable; <file> names it
@@ -7,23 +7,31 @@
 #           none: 待说明…        not decided yet (counted by ratchet.console_unexplained, only goes down)
 # agents:   which agents register it as a pi tool: entry (modes/entry.ts), admin (modes/admin.ts).
 #           [] is a decision too: a new capability's PR says here whether the agents should see it.
+# e2e:      observed             (a capability that is not observe, with a console entry) an e2e test
+#                                calls it through the console; web-e2e checks each run (M4)
+#           "waived: <legacy no.>"  not yet (counted by ratchet.e2e_waived, only goes down)
 # kernel_test: missing           no kernel test names it yet (counted by ratchet.kernel_test_missing)
 ratchet:
   console_unexplained: 10
   kernel_test_missing: 6
+  e2e_waived: 87
 capabilities:
   add_eval_case:
     console: required
     agents: []
+    e2e: "waived: 657"
   add_eval_fixture_gate:
     console: required
     agents: []
+    e2e: "waived: 657"
   add_member:
     console: required
     agents: []
+    e2e: observed
   add_membership:
     console: required
     agents: []
+    e2e: "waived: 657"
   agent_get_admin_proposal:
     console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
     agents: [admin]
@@ -42,112 +50,143 @@ capabilities:
   apply_admin_proposal_segment:
     console: required
     agents: []
+    e2e: observed
   apply_platform_segment:
     console: required
     agents: []
+    e2e: observed
   approve:
     console: required
     agents: []
+    e2e: observed
   approve_step_trial:
     console: required
     agents: []
+    e2e: "waived: 657"
   archive_chat:
     console: required
     agents: []
+    e2e: observed
   assert_fact:
     console: "none: 待说明（2026-11-06 盘点）"
     agents: []
   attest_fact:
     console: required
     agents: []
+    e2e: "waived: 657"
   audit_query:
     console: required
     agents: []
   cancel_connection_request:
     console: required
     agents: []
+    e2e: observed
   cancel_draft_evaluation:
     console: required
     agents: []
+    e2e: "waived: 657"
   cancel_goal:
     console: required
     agents: []
+    e2e: "waived: 657"
   cancel_task:
     console: required
     agents: []
+    e2e: "waived: 657"
   causal_chain:
     console: required
     agents: []
   confirm_gate_manifest:
     console: required
     agents: []
+    e2e: "waived: 657"
   confirm_goal:
     console: required
     agents: []
+    e2e: "waived: 657"
   confirm_goal_acceptance:
     console: required
     agents: []
+    e2e: "waived: 657"
   connect_gatekeeper:
     console: "none: 待说明（2026-11-06 盘点）"
     agents: []
   create_connection:
     console: required
     agents: []
+    e2e: "waived: 657"
   create_eval_suite:
     console: required
     agents: []
+    e2e: "waived: 657"
   create_gate_instance:
     console: required
     agents: []
+    e2e: observed
   create_principal:
     console: required
     agents: []
+    e2e: observed
   create_user:
     console: required
     agents: []
+    e2e: observed
   create_workspace:
     console: required
     agents: []
+    e2e: observed
   decide_plan_revision:
     console: required
     agents: []
+    e2e: "waived: 657"
   decision_impact:
     console: required
     agents: []
   delete_gate_instance:
     console: required
     agents: []
+    e2e: "waived: 657"
   deprecate_operation:
     console: "indirect: packages/web/src/components/CatalogPage.tsx"
     agents: []
+    e2e: "waived: 657"
   deprecate_procedure:
     console: "indirect: packages/web/src/components/CatalogPage.tsx"
     agents: []
+    e2e: "waived: 657"
     kernel_test: missing
   deprecate_skill:
     console: "indirect: packages/web/src/components/CatalogPage.tsx"
     agents: []
+    e2e: "waived: 657"
   deprecate_worker_definition:
     console: required
     agents: []
+    e2e: "waived: 657"
   disable_principal:
     console: required
     agents: []
+    e2e: "waived: 657"
   discard_draft:
     console: required
     agents: []
+    e2e: "waived: 657"
   discard_operation_draft:
     console: required
     agents: []
+    e2e: "waived: 657"
   edit_eval_case:
     console: required
     agents: []
+    e2e: "waived: 657"
   enable_gate_instance:
     console: required
     agents: []
+    e2e: observed
   end_goal:
     console: required
     agents: []
+    e2e: "waived: 657"
   execution_readiness:
     console: required
     agents: []
@@ -274,6 +313,7 @@ capabilities:
   grant_capability:
     console: required
     agents: []
+    e2e: observed
   graph_freshness:
     console: required
     agents: [admin]
@@ -286,27 +326,34 @@ capabilities:
   install_pack:
     console: required
     agents: []
+    e2e: observed
   invalidate_fact:
     console: required
     agents: []
+    e2e: "waived: 657"
   invoke_worker:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: [entry, admin]
   issue_gate_credential_token:
     console: required
     agents: []
+    e2e: "waived: 657"
   issue_gate_host_token:
     console: required
     agents: []
+    e2e: observed
   issue_handle:
     console: required
     agents: []
+    e2e: "waived: 657"
   issue_llm_admin_token:
     console: required
     agents: []
+    e2e: observed
   issue_service_handle:
     console: required
     agents: []
+    e2e: observed
   list_action_requests:
     console: required
     agents: []
@@ -452,22 +499,27 @@ capabilities:
   mark_turn_outcome:
     console: required
     agents: []
+    e2e: "waived: 657"
     kernel_test: missing
   merge_user:
     console: required
     agents: []
+    e2e: "waived: 657"
   mint_connection_secret:
     console: required
     agents: []
+    e2e: observed
   new_chat:
     console: required
     agents: []
+    e2e: observed
   observe_operation:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: []
   pause_goal:
     console: required
     agents: []
+    e2e: "waived: 657"
   pi_drift:
     console: required
     agents: []
@@ -531,6 +583,7 @@ capabilities:
   propose_entry_template_upgrade:
     console: required
     agents: []
+    e2e: observed
   propose_goal:
     console: "none: 入口 agent 替人提议目标；人在控制台确认或拒绝（confirm / reject 目标的能力）"
     agents: [entry]
@@ -540,48 +593,61 @@ capabilities:
   propose_operation:
     console: required
     agents: [entry, admin]
+    e2e: "waived: 657"
   propose_pack_install:
     console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；所有者在能力目录的管理员提案页审阅，用 install_pack 带 adminProposalSegmentId 安装，或拒绝"
     agents: [admin]
   propose_procedure:
     console: required
     agents: [entry, admin]
+    e2e: "waived: 657"
   propose_skill:
     console: required
     agents: [entry, admin]
+    e2e: observed
   propose_worker_definition:
     console: required
     agents: [entry, admin]
+    e2e: observed
   publish_manifest:
     console: required
     agents: []
+    e2e: "waived: 657"
   publish_ontology_version:
     console: required
     agents: []
+    e2e: "waived: 657"
   publish_operation:
     console: required
     agents: []
+    e2e: "waived: 657"
   publish_procedure:
     console: required
     agents: []
+    e2e: "waived: 657"
   publish_skill:
     console: required
     agents: []
+    e2e: observed
   publish_worker_definition:
     console: required
     agents: []
+    e2e: observed
   purge_user:
     console: required
     agents: []
+    e2e: "waived: 657"
   purge_workspace:
     console: required
     agents: []
+    e2e: "waived: 657"
   query_decisions:
     console: required
     agents: []
   reconcile_goal_action:
     console: required
     agents: []
+    e2e: "waived: 657"
   reconstruct:
     console: required
     agents: []
@@ -594,42 +660,54 @@ capabilities:
   refresh_operation_governance:
     console: required
     agents: []
+    e2e: "waived: 657"
   register_source:
     console: "none: 数据接入，由 collector 用服务 Handle 调用，不是人的操作"
     agents: []
   reject:
     console: required
     agents: []
+    e2e: "waived: 657"
   reject_admin_proposal_segment:
     console: required
     agents: []
+    e2e: "waived: 657"
   reject_draft:
     console: required
     agents: []
+    e2e: "waived: 657"
   reject_goal:
     console: required
     agents: []
+    e2e: "waived: 657"
   reject_platform_segment:
     console: required
     agents: []
+    e2e: "waived: 657"
   release_eval_seal_hold:
     console: required
     agents: []
+    e2e: "waived: 657"
   release_goal_hold:
     console: required
     agents: []
+    e2e: "waived: 657"
   remove_eval_fixture_gate:
     console: required
     agents: []
+    e2e: "waived: 657"
   remove_membership:
     console: required
     agents: []
+    e2e: "waived: 657"
   rename_chat:
     console: required
     agents: []
+    e2e: observed
   repin_eval_suite:
     console: required
     agents: []
+    e2e: "waived: 657"
   report_task_outcome:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: [entry]
@@ -646,51 +724,66 @@ capabilities:
   request_connection:
     console: required
     agents: [entry, admin]
+    e2e: observed
   reset_user_password:
     console: required
     agents: []
+    e2e: "waived: 657"
   resolve_conflict:
     console: required
     agents: []
+    e2e: "waived: 657"
   resolve_refs:
     console: required
     agents: []
   resume_goal:
     console: required
     agents: []
+    e2e: "waived: 657"
   resume_self_connection:
     console: required
     agents: []
+    e2e: "waived: 657"
   retire_eval_case:
     console: required
     agents: []
+    e2e: "waived: 657"
   revise_goal:
     console: required
     agents: []
+    e2e: "waived: 657"
   revoke_capability:
     console: required
     agents: []
+    e2e: "waived: 657"
   revoke_external_runtime:
     console: required
     agents: []
+    e2e: observed
   roll_back_change_segment:
     console: required
     agents: []
+    e2e: observed
   roll_back_platform_change_segment:
     console: required
     agents: []
+    e2e: "waived: 657"
   roll_entry_containers:
     console: required
     agents: []
+    e2e: "waived: 657"
   rollback_runtime_image:
     console: required
     agents: []
+    e2e: "waived: 657"
   rotate_api_key:
     console: required
     agents: []
+    e2e: "waived: 657"
   rotate_connection_secret:
     console: required
     agents: []
+    e2e: "waived: 657"
   runtime_inventory:
     console: required
     agents: []
@@ -700,71 +793,92 @@ capabilities:
   send_chat_message:
     console: required
     agents: []
+    e2e: observed
   set_active_runtime_image:
     console: required
     agents: []
+    e2e: "waived: 657"
   set_admin_agent_targets:
     console: required
     agents: []
+    e2e: observed
   set_agent_policy:
     console: required
     agents: []
+    e2e: "waived: 657"
   set_agent_profile:
     console: required
     agents: []
+    e2e: "waived: 657"
   set_allowed_models:
     console: required
     agents: []
+    e2e: "waived: 657"
   set_auto_approved_action_kind:
     console: required
     agents: []
+    e2e: observed
   set_connector_mode:
     console: required
     agents: []
+    e2e: observed
   set_default_modules:
     console: required
     agents: []
+    e2e: "waived: 657"
     kernel_test: missing
   set_membership_role:
     console: required
     agents: []
+    e2e: "waived: 657"
   set_platform_default_model:
     console: required
     agents: []
+    e2e: observed
   set_policy:
     console: required
     agents: []
+    e2e: "waived: 657"
   set_principal_role:
     console: required
     agents: []
+    e2e: "waived: 657"
   set_quota:
     console: required
     agents: []
+    e2e: "waived: 657"
   set_user_budget:
     console: required
     agents: []
+    e2e: "waived: 657"
     kernel_test: missing
   set_user_status:
     console: required
     agents: []
+    e2e: "waived: 657"
   set_workspace_status:
     console: required
     agents: []
+    e2e: observed
   start_draft_evaluation:
     console: required
     agents: []
+    e2e: "waived: 657"
   start_eval_case_trial:
     console: required
     agents: []
+    e2e: "waived: 657"
   state_at:
     console: required
     agents: [entry, admin]
   stop_admin_agent:
     console: required
     agents: []
+    e2e: "waived: 657"
   stop_agent:
     console: required
     agents: []
+    e2e: "waived: 657"
   submit_observations:
     console: "none: 数据接入，由 collector 用服务 Handle 调用，不是人的操作"
     agents: []
@@ -774,12 +888,15 @@ capabilities:
   supersede_fact:
     console: required
     agents: []
+    e2e: "waived: 657"
   suspend_self_connection:
     console: required
     agents: []
+    e2e: "waived: 657"
   sync_eval_fixture_gate:
     console: required
     agents: []
+    e2e: "waived: 657"
   test_gate_instance:
     console: required
     agents: []
@@ -789,21 +906,27 @@ capabilities:
   unarchive_chat:
     console: required
     agents: []
+    e2e: observed
   update_gate_instance:
     console: required
     agents: []
+    e2e: observed
   update_operation_description:
     console: required
     agents: []
+    e2e: "waived: 657"
   update_platform_settings:
     console: required
     agents: []
+    e2e: "waived: 657"
   update_user:
     console: required
     agents: []
+    e2e: "waived: 657"
   update_workspace:
     console: required
     agents: []
+    e2e: "waived: 657"
   upgrade_module:
     console: "none: 待说明（2026-11-06 盘点）"
     agents: []
@@ -813,9 +936,12 @@ capabilities:
   verify_change_segment:
     console: required
     agents: []
+    e2e: "waived: 657"
   verify_fact:
     console: required
     agents: []
+    e2e: "waived: 657"
   withdraw_admin_proposal:
     console: required
     agents: []
+    e2e: "waived: 657"

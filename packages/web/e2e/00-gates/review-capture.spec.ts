@@ -1,6 +1,6 @@
-import { test } from '@playwright/test';
 import { OWNER_API_KEY } from '../lib/auth.js';
 import { freezeClock, settleForCapture } from '../lib/determinism.js';
+import { test } from '../lib/test.js';
 import { SURFACES, VIEWPORT_HEIGHT, goToSurface } from './surfaces.js';
 
 /**

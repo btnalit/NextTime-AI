@@ -1,5 +1,5 @@
-import { type Page, expect, test } from '@playwright/test';
 import { loginWithPassword, reachLoginForm } from './auth-helpers.js';
+import { type Page, expect, test } from './lib/test.js';
 
 /**
  * e2e/modules.spec.ts: the P-B2b acceptance flow (docs/development-tasks.md §5d S7-D; design

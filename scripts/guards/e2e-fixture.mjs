@@ -1,0 +1,140 @@
+// e2e-fixture.mjs — every e2e test runs on packages/web/e2e/lib/test.ts's `test`
+// (docs/test-coverage-gaps-2026-11-06.md §5.3, gap G5, batch B2).
+//
+// lib/test.ts adds an automatic fixture that records each capability call a page makes; the end
+// of the `web-e2e` job holds the capability matrix's `e2e: observed` rows to those records (rule
+// M4, scripts/guards/capability-matrix.mjs). A spec that takes Playwright's own `test` instead
+// still passes, but its calls go unrecorded, and a capability only it covers reads as untested:
+//
+//   E1  under packages/web/e2e, only lib/test.ts imports the value `test` from '@playwright/test'
+//       (also `test as x`, a namespace or default import, `require`, a dynamic `import()`, or a
+//       re-export: `export { test }` / `export *` from it).
+//       Types (`import type { Page }`, `type Page`) and `expect` may come from either.
+//   E2  no code run inside the page (`evaluate`, `evaluateHandle`, `evaluateAll`, `$eval`,
+//       `$$eval`, `addInitScript`) names `/api/cap`: a capability called from there is sent by the
+//       page, so it would be recorded as if a person had used the console. Call the API from Node
+//       (`page.request`) to seed or check state — that is not recorded, which is the point.
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import ts from 'typescript';
+
+const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
+const PLAYWRIGHT = '@playwright/test';
+const IN_PAGE = new Set([
+  'evaluate',
+  'evaluateHandle',
+  'evaluateAll',
+  '$eval',
+  '$$eval',
+  'addInitScript',
+]);
+const CAP_PATH = '/api/cap';
+
+/** Whether any string or template text under `node` contains `/api/cap`. */
+function namesCapPath(node) {
+  if (ts.isStringLiteralLike(node) || ts.isTemplateLiteralToken(node)) {
+    if (node.text.includes(CAP_PATH)) return true;
+  }
+  return ts.forEachChild(node, namesCapPath) === true;
+}
+export const FIXTURE_FILE = 'packages/web/e2e/lib/test.ts';
+
+/** E1 and E2 over one file: `[{ line, rule, text }]`. */
+export function findViolations(fileName, sourceText) {
+  if (fileName === FIXTURE_FILE) return [];
+  const source = ts.createSourceFile(fileName, sourceText, ts.ScriptTarget.Latest, true);
+  const out = [];
+  const report = (node, why, rule = 'E1') =>
+    out.push({
+      line: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
+      rule,
+      text: `${why}: ${node.getText(source).replace(/\s+/g, ' ')}`,
+    });
+  const visit = (node) => {
+    if (
+      ts.isImportDeclaration(node) &&
+      ts.isStringLiteral(node.moduleSpecifier) &&
+      node.moduleSpecifier.text === PLAYWRIGHT
+    ) {
+      const clause = node.importClause;
+      if (clause && !clause.isTypeOnly) {
+        if (clause.name) report(node, 'default import');
+        const bindings = clause.namedBindings;
+        if (bindings && ts.isNamespaceImport(bindings)) report(node, 'namespace import');
+        if (bindings && ts.isNamedImports(bindings)) {
+          for (const element of bindings.elements) {
+            const imported = (element.propertyName ?? element.name).text;
+            if (imported === 'test' && !element.isTypeOnly)
+              report(node, "imports Playwright's test");
+          }
+        }
+      }
+    }
+    if (
+      ts.isExportDeclaration(node) &&
+      !node.isTypeOnly &&
+      node.moduleSpecifier &&
+      ts.isStringLiteral(node.moduleSpecifier) &&
+      node.moduleSpecifier.text === PLAYWRIGHT &&
+      (!node.exportClause ||
+        ts.isNamespaceExport(node.exportClause) ||
+        node.exportClause.elements.some(
+          (element) =>
+            !element.isTypeOnly && (element.propertyName ?? element.name).text === 'test',
+        ))
+    ) {
+      report(node, "re-exports Playwright's test");
+    }
+    if (
+      ts.isCallExpression(node) &&
+      (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(node.expression) && node.expression.text === 'require')) &&
+      node.arguments.length > 0 &&
+      ts.isStringLiteral(node.arguments[0]) &&
+      node.arguments[0].text === PLAYWRIGHT
+    ) {
+      report(node, 'loads @playwright/test at run time');
+    }
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      IN_PAGE.has(node.expression.name.text) &&
+      node.arguments.some(namesCapPath)
+    ) {
+      report(node.expression, `calls ${CAP_PATH} from code run in the page`, 'E2');
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return out;
+}
+
+function main() {
+  const files = execFileSync(
+    'git',
+    ['ls-files', '--', 'packages/web/e2e/*.ts', 'packages/web/e2e/**/*.ts'],
+    { cwd: REPO_ROOT, encoding: 'utf8' },
+  )
+    .split('\n')
+    .filter((file) => file.length > 0);
+  let count = 0;
+  for (const file of files) {
+    for (const v of findViolations(file, readFileSync(path.join(REPO_ROOT, file), 'utf8'))) {
+      count += 1;
+      const fixture = path.posix
+        .relative(path.posix.dirname(file), FIXTURE_FILE)
+        .replace(/\.ts$/, '.js');
+      const fix =
+        v.rule === 'E1'
+          ? `import { test, expect } from '${fixture.startsWith('.') ? fixture : `./${fixture}`}' — that test records which capabilities the console called (capability matrix M4)`
+          : 'drive the console instead, or call the API from Node (page.request) — a call sent from inside the page reads as a person using the console (capability matrix M4)';
+      console.error(`e2e-fixture: ${file}:${v.line} ${v.rule} ${v.text}\n  ${fix}`);
+    }
+  }
+  if (count > 0) process.exit(1);
+  console.log(`e2e-fixture: OK (${files.length} files on ${FIXTURE_FILE}'s test)`);
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) main();

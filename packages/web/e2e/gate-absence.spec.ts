@@ -1,6 +1,6 @@
 import { getCapability } from '@nexttime/shared';
-import { type Page, expect, test } from '@playwright/test';
 import { OWNER_API_KEY, loginAsOwner } from './lib/auth.js';
+import { type Page, expect, test } from './lib/test.js';
 
 /**
  * e2e/gate-absence.spec.ts (S11 「门确认不存在」 A, B-a): an observe Operation that declares which of

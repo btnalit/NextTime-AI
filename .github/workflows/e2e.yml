@@ -693,6 +693,16 @@ jobs:
             FORBIDDEN_VALUES_FILE="$forbidden" EXPECT_ERROR_ENTRY=1 \
             sh scripts/check-caddy-log-redaction.sh
 
+      # Batch B2 (docs/test-coverage-gaps-2026-11-06.md §5.3, gap G5): every spec runs on
+      # e2e/lib/test.ts's `test`, which records each capability call a page made into its
+      # test-results/<test>/cap-calls.jsonl. The matrix's `e2e: observed` rows must all be among
+      # the calls a page got ok for; a waived row a page now reaches must become `observed`
+      # (capability-matrix.mjs rule M4). Only on a passing run: a run that stopped early would read
+      # as coverage lost. The records are in the playwright-report artifact either way.
+      - name: Writes the console reaches match the capability matrix (capability-matrix.mjs --e2e-observed, M4)
+        if: ${{ success() && github.event.inputs.update_baselines != 'true' }}
+        run: node scripts/guards/capability-matrix.mjs --e2e-observed packages/web/test-results
+
       # `always()`, not `failure()`: a retried-then-passed ("flaky") test only shows up in the
       # report, never in the job's conclusion — uploading it every time is how a flake stays
       # visible now that this workflow is meant to become a required check.

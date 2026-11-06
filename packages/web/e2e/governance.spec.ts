@@ -1,5 +1,5 @@
-import { expect, test } from '@playwright/test';
 import { loginWithApiKey, reachLoginForm } from './auth-helpers.js';
+import { expect, test } from './lib/test.js';
 
 /**
  * e2e/governance.spec.ts: CI smoke coverage for the S3.11/S3.12/S3.13/S3.14 governance surface

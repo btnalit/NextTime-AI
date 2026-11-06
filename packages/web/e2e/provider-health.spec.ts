@@ -2,8 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { type Page, expect, test } from '@playwright/test';
 import { loginWithPassword, reachLoginForm } from './auth-helpers.js';
+import { type Page, expect, test } from './lib/test.js';
 
 /**
  * e2e/provider-health.spec.ts (console audit P0-2, #530): the provider status llm-proxy writes to

@@ -1,5 +1,4 @@
 import { getCapability } from '@nexttime/shared';
-import { type Locator, expect, test } from '@playwright/test';
 import { OWNER_API_KEY, loginAsOwner, signedInOwner } from './lib/auth.js';
 import {
   appendToChatHistory,
@@ -7,6 +6,7 @@ import {
   openNewChat,
   systemMessage,
 } from './lib/chat-stand-ins.js';
+import { type Locator, expect, test } from './lib/test.js';
 
 /**
  * e2e/chat-goal.spec.ts (S11 GO5e-2): a goal in the chat it was proposed from — the proposal as a

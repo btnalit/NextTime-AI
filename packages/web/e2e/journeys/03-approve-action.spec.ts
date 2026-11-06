@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from '../lib/test.js';
 import { OWNER_API_KEY, asOwner, goToByLabel } from './helpers.js';
 
 /**
