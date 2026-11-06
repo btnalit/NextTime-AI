@@ -2452,6 +2452,29 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **行为变化**：附加包与自带包的清单、Skill、Worker 文件不合 schema 时，原因从 zod 的整段 issue JSON 变成一行 `字段: 原因; …`（只是文字）。新能力不调就什么都不发生。
 - **回滚**（见 §6 一行）：上一版不调这个函数，只回滚代码就行；要删函数：`drop function admin_proposal_segment_verified(uuid)`，再删 `schema_migrations` 里 governance 39 那一行。
 
+### 3.129 控制台标出附加包、平台面看附加包状态、把管理员提案导出成能力包（#977，S11 AA5d-3，0.62.0 之后的下一版）
+
+只改控制台（加 runbook 一行）：没有迁移，不改 compose，没有新环境变量，线上契约不变，主机不需要操作。控制台与内核同版（用到 §3.127 的 `PackWire.source`、`extra_packs_status` 与 §3.128 的 `export_admin_proposal_pack`）。
+
+- **发版说明可写**：能力目录里附加包标「本部署附加」，详情多一行「来源」。「平台 · 模块」多一张「本部署附加的能力包」卡片：读进来的包、没读进来的目录和原因、没配置 / 读不了 / 是空的各有说明，「重新读取」立刻重读目录。「平台 · 管理员提案」详情里，已应用的工作区部分可以「导出成能力包…」：写简介（默认提案标题）和说明（默认列出不带的 Operation 改动），导出后列出文件、没带的条目和摘要，可以下载成 `<名字>-1.tar`，按 `operations.md` §14.10 放进主机 `config/packs/`；被拒时逐条列出原因和位置；某个文件路径放不进 tar 时不下载，提示是哪条路径。
+- **回滚**：只回滚代码。
+
+### 3.130 验收：把工单旅程应用的部分导出成能力包，在第三个工作区安装（#979，S11 AA5d-4，0.62.0 之后的下一版）
+
+只改验收脚本和 runbook：没有迁移，不改 compose，没有新环境变量，线上契约和运行时都不变。
+
+- **发版说明可写**：`accept_s2` 在管理员智能体工单旅程之后多一步 `admin_agent_pack_step`：平台管理员导出目标工作区已应用的部分（两次导出 digest 相同），维护者按 `operations.md` §14.10 放进 `config/packs/`，目标工作区读到它是附加包，第三个工作区由所有者启用门、审阅、安装并通过验证；人做的每件事逐条打印，作为 D-W5 证据。`operations.md` §14.10 的 `mkdir .incoming` 与 tar 串进同一条 `&&` 链；§14.11 写明导出命令、jq 读 `.result.files[]`、写文件前校验路径。
+- **主机升级步骤不变**。在主机上跑 S2 时，`config/packs/` 里会短暂多一个 `accept-tickets-<nonce>` 包目录，收尾删掉（`--keep` 也删）；工单旅程没有应用工作区部分时这一步只打一行 `NOTE admin-agent-pack`。
+- **回滚**：只回滚代码。
+
+### 3.131 验收：`accept_s2 --real` 让真实模型走一遍管理员智能体工单旅程（#981，S11 AA5，0.62.0 之后的下一版）
+
+只改验收脚本和 runbook：没有迁移，不改 compose，没有新环境变量，线上契约和运行时都不变。
+
+- **发版说明可写**：内核开着 `ADMIN_AGENT_ENABLED` 时，`accept_s2.sh --real` 多一项 `admin_tickets`：用这一轮的真实模型让管理员智能体在试验工作区接一个测试工单系统、起草 Worker 和 Skill、试开一张工单、提议到目标工作区；人的那几步由脚本扮演。结果是一行 `RUN scenario=admin_tickets`（`reached=` / `stuck=` / `turns=` / `nudges=` / `refused=` / `tokens=` / `cost_usd=` / `human_steps=` 等，见 `host-accept-real-model.md` §5），**模型没走完不让这一轮失败**；只有模型造不成的事（审批被绕过、正式凭证开了工单、凭证进了内核表、审计记错手、人的步骤失败、试验工作区被预算拒过）才 FAIL。内核开关关着时 NOTE 一行，S2 照样 OK。
+- **主机升级步骤不变**。这一项不在主机上跑；合入后在 staging 上用 main 跑一轮 `--real`（runs=1、8M token 上限），结果记 STATUS。
+- **回滚**：只回滚脚本。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：

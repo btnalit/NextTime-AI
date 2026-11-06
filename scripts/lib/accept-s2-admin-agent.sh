@@ -82,7 +82,11 @@ admin_cap() {
   ADMIN_VALUE=$(parse_kv "$ac_out" EXTRACTED)
 }
 
-admin_agent_step() {
+# admin_agent_setup: the administrator, its trial workspace and one target, chosen — what the
+# admin agent scenarios share (admin_agent_step here; real_admin_tickets_step with --real,
+# accept-s2-real-admin-agent.sh). Returns 1, after its NOTE line, when the running kernel has the
+# switch off (a FAIL instead with ACCEPT_REQUIRE_ADMIN_AGENT=1).
+admin_agent_setup() {
   switch=$(admin_agent_switch | tr 'A-Z' 'a-z')
   case "$switch" in
     1 | true) : ;;
@@ -90,8 +94,8 @@ admin_agent_step() {
       if [ "$ACCEPT_REQUIRE_ADMIN_AGENT" = "1" ]; then
         fail "admin-agent-switch" "ACCEPT_REQUIRE_ADMIN_AGENT=1 but the running kernel reads ADMIN_AGENT_ENABLED='${switch}' — set ADMIN_AGENT_ENABLED=1 in secrets/kernel.env before the stack starts"
       fi
-      echo "NOTE admin-agent the admin agent scenario (real pi in its admin container proposing once) not run: the kernel reads ADMIN_AGENT_ENABLED='${switch:-unset}' — the platform switch stays off unless the maintainer turns it on (docs/runbooks/host-accept-s2.md)"
-      return 0
+      echo "NOTE admin-agent the admin agent scenarios (real pi in its admin container) not run: the kernel reads ADMIN_AGENT_ENABLED='${switch:-unset}' — the platform switch stays off unless the maintainer turns it on (docs/runbooks/host-accept-s2.md)"
+      return 1
       ;;
   esac
 
@@ -126,6 +130,10 @@ admin_agent_step() {
   ADMIN_PRINCIPAL_ID=$(psql_ws "select id from principals where workspace_id='$ADMIN_TRIAL_ID' and user_id='$ADMIN_USER_ID' and kind='human'")
   [ -n "$ADMIN_PRINCIPAL_ID" ] || fail "admin-agent-workspaces" "no Principal of $ADMIN_USER_ID in the trial workspace $ADMIN_TRIAL_ID"
   pass "admin-agent-workspaces" "trial workspace $ADMIN_TRIAL_ID (admin_trial) and target $ADMIN_TARGET_ID; the admin agent may start in the trial workspace and propose to the target"
+}
+
+admin_agent_step() {
+  admin_agent_setup || return 0
 
   # The Turn: a new admin agent Chat in the trial workspace; fake-llm scripts the three calls
   # (deploy/fake-llm/server.mjs adminAgentProposeChatScenario).
