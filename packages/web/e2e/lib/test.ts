@@ -8,6 +8,11 @@ import { type BrowserContext, type Page, type Response, test as base } from '@pl
  * requests — is appended to that test's `cap-calls.jsonl` in its output directory
  * (`test-results/<test>/`), one `{"name", "via", "ok", "status"}` line per call.
  *
+ * A call counts only when the real kernel answered it. An answer a test made up — `route.fulfill`
+ * (it has no server address), or any frame on a socket opened after `routeWebSocket` (the test
+ * stands between page and kernel; even a passed-through answer is not told apart) — is recorded
+ * with `via: 'stub'`, and the matrix guard does not count it.
+ *
  * `scripts/guards/capability-matrix.mjs --e2e-observed packages/web/test-results` (the end of the
  * `web-e2e` job) reads every such file and holds `docs/contracts/capability-matrix.yaml`'s `e2e:`
  * column to it (rule M4): a write capability marked `e2e: observed` must have been called, and
@@ -24,7 +29,7 @@ export * from '@playwright/test';
 /** One line of `cap-calls.jsonl`. `via` says which transport carried it. */
 export interface CapCall {
   readonly name: string;
-  readonly via: 'http' | 'ws';
+  readonly via: 'http' | 'ws' | 'stub';
   readonly ok: boolean;
   readonly status: number | null;
 }
@@ -44,17 +49,44 @@ function rpcFrame(payload: string | Buffer): Record<string, unknown> | null {
   }
 }
 
-/** Starts recording `context`'s capability calls into `calls`; returns how to stop. */
-export function recordCapCalls(context: BrowserContext, calls: CapCall[]): () => void {
+/** `routeWebSocket` on `target`, wrapped so that `onRoute()` runs first. */
+function watchSocketRoutes(target: BrowserContext | Page, onRoute: () => void): void {
+  const original = target.routeWebSocket.bind(target) as (...args: unknown[]) => Promise<void>;
+  (target as { routeWebSocket: unknown }).routeWebSocket = (...args: unknown[]) => {
+    onRoute();
+    return original(...args);
+  };
+}
+
+/**
+ * Starts recording `context`'s capability calls into `calls`; the returned function stops it and
+ * resolves once every response seen so far has been classified.
+ */
+export function recordCapCalls(context: BrowserContext, calls: CapCall[]): () => Promise<void> {
+  const settling: Promise<void>[] = [];
+  let contextRoutesSockets = false;
+  const pagesRoutingSockets = new WeakSet<Page>();
   const onResponse = (response: Response) => {
     const request = response.request();
     if (request.method() !== 'POST') return;
     const match = HTTP_PATH.exec(new URL(response.url()).pathname);
     if (match?.[1] === undefined) return;
-    calls.push({ name: match[1], via: 'http', ok: response.ok(), status: response.status() });
+    const name = match[1];
+    settling.push(
+      response
+        .serverAddr()
+        .catch(() => null)
+        .then((address) => {
+          // `route.fulfill` (and `route.fetch` + `fulfill`) answers have no server address.
+          const via = address === null ? 'stub' : 'http';
+          calls.push({ name, via, ok: response.ok(), status: response.status() });
+        }),
+    );
   };
   const onPage = (page: Page) => {
+    watchSocketRoutes(page, () => pagesRoutingSockets.add(page));
     page.on('websocket', (socket) => {
+      const via = contextRoutesSockets || pagesRoutingSockets.has(page) ? 'stub' : 'ws';
       // JSON-RPC ids are per socket: what each request asked for, until its answer comes back.
       const pending = new Map<unknown, string>();
       socket.on('framesent', ({ payload }) => {
@@ -70,16 +102,20 @@ export function recordCapCalls(context: BrowserContext, calls: CapCall[]): () =>
         pending.delete(frame.id);
         // `authenticate` opens the socket; it is not a capability.
         if (name === 'authenticate') return;
-        calls.push({ name, via: 'ws', ok: !('error' in frame), status: null });
+        calls.push({ name, via, ok: !('error' in frame), status: null });
       });
     });
   };
+  watchSocketRoutes(context, () => {
+    contextRoutesSockets = true;
+  });
   context.on('response', onResponse);
   context.on('page', onPage);
   for (const page of context.pages()) onPage(page);
-  return () => {
+  return async () => {
     context.off('response', onResponse);
     context.off('page', onPage);
+    await Promise.all(settling);
   };
 }
 
@@ -89,7 +125,7 @@ export const test = base.extend<{ capCalls: undefined }>({
       const calls: CapCall[] = [];
       const stop = recordCapCalls(context, calls);
       await use(undefined);
-      stop();
+      await stop();
       if (calls.length > 0) {
         mkdirSync(testInfo.outputDir, { recursive: true });
         appendFileSync(

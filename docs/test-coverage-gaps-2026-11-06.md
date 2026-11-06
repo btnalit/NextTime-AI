@@ -130,8 +130,8 @@ M1–M3、M5、R 与 M4 的静态半边是纯静态检查，在 `quality` 与 `p
 
 ### 5.3 e2e capability 调用采集（G5）
 
-- `e2e/lib/test.ts`：`test = base.extend(...)`，自动 fixture 在 browser context 上记录 `POST /api/cap/<name>` 的响应与对话 WebSocket 上 JSON-RPC 请求的应答（`authenticate` 不算），每个测试把 `{name, via, ok, status}` 逐行写进自己输出目录的 `test-results/<test>/cap-calls.jsonl`。
-- 守卫规则 E1（`scripts/guards/e2e-fixture.mjs`，`quality` 与 `pnpm ci:guards`）：`packages/web/e2e` 下除 `lib/test.ts` 外不得从 `@playwright/test` 取值 `test`（含 `test as x`、命名空间 / 默认导入、`require`、动态 `import()`）；类型与 `expect` 不限。存量一次性机械替换 40 个文件。
+- `e2e/lib/test.ts`：`test = base.extend(...)`，自动 fixture 在 browser context 上记录 `POST /api/cap/<name>` 的响应与对话 WebSocket 上 JSON-RPC 请求的应答（`authenticate` 不算），每个测试把 `{name, via, ok, status}` 逐行写进自己输出目录的 `test-results/<test>/cap-calls.jsonl`。测试自己伪造的应答（`route.fulfill` 没有服务器地址；`routeWebSocket` 之后开的 socket 整条不区分转发与伪造）记成 `via: "stub"`，守卫不计入——"用户能从界面完成"要求真实内核回答了它。
+- 守卫规则 E1（`scripts/guards/e2e-fixture.mjs`，`quality` 与 `pnpm ci:guards`）：`packages/web/e2e` 下除 `lib/test.ts` 外不得从 `@playwright/test` 取值 `test`（含 `test as x`、命名空间 / 默认导入、`require`、动态 `import()`）；类型与 `expect` 不限。存量一次性机械替换 40 个文件。规则 E2（同一守卫）：在页面里执行的代码（`evaluate` / `evaluateHandle` / `evaluateAll` / `$eval` / `$$eval` / `addInitScript`）不许写 `/api/cap`，否则绕过界面的调用会被当成页面发出的记下来。
 - `web-e2e` 末尾：`node scripts/guards/capability-matrix.mjs --e2e-observed packages/web/test-results` 汇总"经 UI 成功调到过"的集合，按 M4 逐行核对（一个 `cap-calls.jsonl` 都没有直接失败）；`test-results/` 随 playwright-report 产物上传，作为覆盖报告。只在全部 spec 通过时跑（有失败时缺调用是噪声）。
 - 只统计页面发出的请求，测试辅助代码绕过 UI 直接调 API 的不算——这正是我们要的语义："用户能从界面完成这个动作"。
 

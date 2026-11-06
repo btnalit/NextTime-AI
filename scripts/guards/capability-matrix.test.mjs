@@ -234,7 +234,7 @@ test('M4 at run time: observed must have been called ok; a waived row that was i
   assert.ok(checkObserved(m, new Set(['a_cap', 'c_cap'])).some((v) => v.startsWith('M4 c_cap')));
 });
 
-test('readObserved keeps the calls answered ok, from every cap-calls.jsonl below the dir', () => {
+test('readObserved keeps the calls the kernel answered ok, from every cap-calls.jsonl below the dir', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'cap-calls-'));
   mkdirSync(path.join(dir, 'a-test'));
   mkdirSync(path.join(dir, 'b-test-retry1'));
@@ -244,7 +244,7 @@ test('readObserved keeps the calls answered ok, from every cap-calls.jsonl below
   );
   writeFileSync(
     path.join(dir, 'b-test-retry1', 'cap-calls.jsonl'),
-    `${JSON.stringify({ name: 'c_cap', via: 'ws', ok: false, status: null })}\n\n`,
+    `${JSON.stringify({ name: 'c_cap', via: 'ws', ok: false, status: null })}\n\n${JSON.stringify({ name: 'd_cap', via: 'stub', ok: true, status: 200 })}\n`,
   );
   writeFileSync(path.join(dir, 'a-test', 'other.jsonl'), 'not json');
   const { names, files } = readObserved(dir);

@@ -1,4 +1,4 @@
-// Unit tests for scripts/guards/e2e-fixture.mjs (rule E1).
+// Unit tests for scripts/guards/e2e-fixture.mjs (rules E1, E2).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { FIXTURE_FILE, findViolations } from './e2e-fixture.mjs';
@@ -24,4 +24,21 @@ test('types and expect may come from Playwright; the fixture may import its test
     findViolations(FIXTURE_FILE, "import { test as base } from '@playwright/test';"),
     [],
   );
+});
+
+test('E2: code run in the page may not call /api/cap; Node-side requests and routes may', () => {
+  const rules = (text) => findViolations(SPEC, text).map((v) => `${v.line}:${v.rule}`);
+  assert.deepEqual(
+    rules("await page.evaluate(() => fetch('/api/cap/approve', { method: 'POST' }));"),
+    ['1:E2'],
+  );
+  assert.deepEqual(
+    rules(
+      'await page.evaluate((n) => fetch(`/api/cap/${n}`), name);\nawait page.addInitScript(() => { void fetch("/api/cap/x"); });',
+    ),
+    ['1:E2', '2:E2'],
+  );
+  assert.deepEqual(rules("await page.request.post('/api/cap/approve', { data: {} });"), []);
+  assert.deepEqual(rules("await page.route('**/api/cap/get_goal', (r) => r.continue());"), []);
+  assert.deepEqual(rules('await page.evaluate(() => document.title);'), []);
 });

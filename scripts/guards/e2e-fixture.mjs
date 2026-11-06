@@ -9,6 +9,10 @@
 //   E1  under packages/web/e2e, only lib/test.ts imports the value `test` from '@playwright/test'
 //       (also `test as x`, a namespace or default import, `require`, a dynamic `import()`).
 //       Types (`import type { Page }`, `type Page`) and `expect` may come from either.
+//   E2  no code run inside the page (`evaluate`, `evaluateHandle`, `evaluateAll`, `$eval`,
+//       `$$eval`, `addInitScript`) names `/api/cap`: a capability called from there is sent by the
+//       page, so it would be recorded as if a person had used the console. Call the API from Node
+//       (`page.request`) to seed or check state — that is not recorded, which is the point.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -17,16 +21,34 @@ import ts from 'typescript';
 
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const PLAYWRIGHT = '@playwright/test';
+const IN_PAGE = new Set([
+  'evaluate',
+  'evaluateHandle',
+  'evaluateAll',
+  '$eval',
+  '$$eval',
+  'addInitScript',
+]);
+const CAP_PATH = '/api/cap';
+
+/** Whether any string or template text under `node` contains `/api/cap`. */
+function namesCapPath(node) {
+  if (ts.isStringLiteralLike(node) || ts.isTemplateLiteralToken(node)) {
+    if (node.text.includes(CAP_PATH)) return true;
+  }
+  return ts.forEachChild(node, namesCapPath) === true;
+}
 export const FIXTURE_FILE = 'packages/web/e2e/lib/test.ts';
 
-/** E1 over one file: `[{ line, text }]`. */
+/** E1 and E2 over one file: `[{ line, rule, text }]`. */
 export function findViolations(fileName, sourceText) {
   if (fileName === FIXTURE_FILE) return [];
   const source = ts.createSourceFile(fileName, sourceText, ts.ScriptTarget.Latest, true);
   const out = [];
-  const report = (node, why) =>
+  const report = (node, why, rule = 'E1') =>
     out.push({
       line: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
+      rule,
       text: `${why}: ${node.getText(source).replace(/\s+/g, ' ')}`,
     });
   const visit = (node) => {
@@ -59,6 +81,14 @@ export function findViolations(fileName, sourceText) {
     ) {
       report(node, 'loads @playwright/test at run time');
     }
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      IN_PAGE.has(node.expression.name.text) &&
+      node.arguments.some(namesCapPath)
+    ) {
+      report(node.expression, `calls ${CAP_PATH} from code run in the page`, 'E2');
+    }
     ts.forEachChild(node, visit);
   };
   visit(source);
@@ -80,9 +110,11 @@ function main() {
       const fixture = path.posix
         .relative(path.posix.dirname(file), FIXTURE_FILE)
         .replace(/\.ts$/, '.js');
-      console.error(
-        `e2e-fixture: ${file}:${v.line} E1 ${v.text}\n  import { test, expect } from '${fixture.startsWith('.') ? fixture : `./${fixture}`}' — that test records which capabilities the console called (capability matrix M4)`,
-      );
+      const fix =
+        v.rule === 'E1'
+          ? `import { test, expect } from '${fixture.startsWith('.') ? fixture : `./${fixture}`}' — that test records which capabilities the console called (capability matrix M4)`
+          : 'drive the console instead, or call the API from Node (page.request) — a call sent from inside the page reads as a person using the console (capability matrix M4)';
+      console.error(`e2e-fixture: ${file}:${v.line} ${v.rule} ${v.text}\n  ${fix}`);
     }
   }
   if (count > 0) process.exit(1);

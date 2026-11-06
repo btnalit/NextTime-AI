@@ -116,11 +116,16 @@ PR 在同一提交里加一行；大面积改名后可 `node scripts/guards/capa
 写入口有没有 e2e 走到（M4）：非 observe 且有控制台入口的行写 `e2e: observed` 或
 `e2e: "waived: <遗留编号>"`。每个 spec 从 `packages/web/e2e/lib/test.ts` 取 `test`（守卫
 `scripts/guards/e2e-fixture.mjs`，规则 E1），它把页面发出的 capability 调用记进
-`test-results/<test>/cap-calls.jsonl`；`web-e2e` 全部通过后跑
+`test-results/<test>/cap-calls.jsonl`。只有真实内核的应答才算数：`route.fulfill` 伪造的应答、
+`routeWebSocket` 之后开的 socket 上的帧都记成 `via: "stub"`，不计入；在页面里执行的代码
+（`evaluate`、`addInitScript` 等）不许调 `/api/cap`（规则 E2），要准备或核对状态从 Node 侧
+`page.request` 调。`web-e2e` 全部通过后跑
 `node scripts/guards/capability-matrix.mjs --e2e-observed packages/web/test-results`，`observed` 的行没被
 页面调通、或 `waived` 的行被调通了都失败。新写入口在同一 PR 里带 e2e 并写 `observed`；本地只跑部分
 spec 时不要跑这一步。重新生成可用 `--bootstrap --e2e-observed <目录> --waive <遗留编号>`（目录取一次
-完整 CI 运行的 playwright-report 产物）。
+完整 CI 运行的 playwright-report 产物）。`observed` 只说明有页面经控制台调通了这个写入口，不说明
+是怎么点到的；交互必须落在用户看得见、读屏读得出名字的控件上，由定位器守卫（§5.2，下一段）管，
+两者互补。
 
 两条测试债棘轮——矩阵的 `ratchet:`（`console_unexplained`、`kernel_test_missing`、`e2e_waived`）和 e2e 定位基线 `scripts/guards/e2e-locators-baseline.json`
 （§5.2，交互按角色 / 标签定位）——各自的守卫只核对同一提交里的代码。PR 上 CI `quality` 另跑

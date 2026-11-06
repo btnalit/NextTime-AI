@@ -18,7 +18,8 @@
 //       whether an e2e test reaches it through the console: `e2e: observed`, or
 //       `e2e: "waived: <legacy no.>"` (counted by ratchet.e2e_waived). No other row has `e2e`.
 //       `--e2e-observed <dir>` (the end of `web-e2e`) reads the calls packages/web/e2e/lib/test.ts
-//       recorded (`cap-calls.jsonl`): every `observed` row was called by a page and answered ok, and
+//       recorded (`cap-calls.jsonl`): every `observed` row was called by a page and answered ok by the
+//       kernel (a stubbed answer, `via: 'stub'`, does not count), and
 //       a waived row a page called ok must become `observed` (and lower the ratchet)
 //   M5  `kernel_test: missing` ⇔ no packages/kernel test file names it
 //   R   ratchet: the `none: 待说明…` rows, the `kernel_test: missing` rows and the `e2e: waived`
@@ -270,7 +271,8 @@ export function checkObserved(matrix, observed) {
   return out;
 }
 
-/** Lines of every `cap-calls.jsonl` under `dir` → the names called ok, and how many files. */
+/** Lines of every `cap-calls.jsonl` under `dir` → the names the real kernel answered ok, and how
+ *  many files. A `via: 'stub'` line (an answer the test made up) does not count. */
 export function readObserved(dir) {
   const names = new Set();
   let files = 0;
@@ -283,7 +285,12 @@ export function readObserved(dir) {
         for (const line of readFileSync(full, 'utf8').split('\n')) {
           if (line.trim() === '') continue;
           const call = JSON.parse(line);
-          if (call.ok === true && typeof call.name === 'string') names.add(call.name);
+          if (
+            call.ok === true &&
+            (call.via === 'http' || call.via === 'ws') &&
+            typeof call.name === 'string'
+          )
+            names.add(call.name);
         }
       }
     }
