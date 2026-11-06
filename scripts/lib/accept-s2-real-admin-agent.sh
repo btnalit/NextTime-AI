@@ -57,7 +57,8 @@
 # fake path).
 #
 # The repository and its run logs are public: no reply text is printed, only counts, ids, tool
-# names and refusal codes.
+# names, refusal codes and, per Turn, the shape of the agent's reply (`replies=`, rat_reply_shape:
+# whether it ends on a question, its length, and which of a fixed list of topics it mentions).
 
 RAT_START=""
 RAT_REACHED=""
@@ -75,6 +76,7 @@ RAT_BOOK_BEFORE=""
 RAT_TURN_TIMEOUTS=0
 RAT_TURN_ERRORS=0
 RAT_TURN_ERROR=""
+RAT_REPLIES=""
 
 # rat_reached <step>: the journey got through <step>.
 rat_reached() {
@@ -120,7 +122,22 @@ rat_turn() {
     RAT_TURN_TIMEOUTS=$((RAT_TURN_TIMEOUTS + 1))
     rat_stop_turn
   fi
+  rat_reply_shape "$TICKETS_CHAT_ID" "$(parse_kv "$rt_out" TURN_ID)"
   return 0
+}
+
+# rat_reply_shape <chat> <turn id>: one more entry for `replies=` — the shape of what the agent
+# wrote in that Turn, never its words: `q` when its last message asks something (a question mark
+# in its last 200 characters) else `s`, then how many characters it wrote in the Turn, then, after
+# `:`, which of these it mentions (`+`-joined; fixed patterns, a mention is not a request): `addr`
+# an address or URL, `cred` a credential or account, `mode` the connector's self-serve / preset
+# mode, `confirm` a confirmation, `cannot` that it cannot or may not do something. `none` when the
+# Turn left no reply. A Turn's messages are the ones carrying its id; failing that (an older
+# history without ids), the agent's messages after the person's last one.
+rat_reply_shape() {
+  rrs_out=$(run_driver get-history "$(admin_cred "$ADMIN_TRIAL_ID")" "$1" "(() => { const own = d.filter((m) => m.role === 'assistant' && m.turnId === '$2'); const lastUser = d.reduce((i, m, j) => (m.role === 'user' ? j : i), -1); const ms = own.length ? own : d.slice(lastUser + 1).filter((m) => m.role === 'assistant'); if (!ms.length) return 'none'; const t = ms.map((m) => String(m.text || '')).join(' '); const last = String(ms[ms.length - 1].text || '').trim(); const topics = [['addr', /地址|网址|url|address|endpoint|https?:/i], ['cred', /凭证|密码|账号|token|credential|account/i], ['mode', /自助|预设|self.?serve|preset/i], ['confirm', /确认|confirm/i], ['cannot', /无法|不能|不可以|没有权限|cannot|unable|not (allowed|available|permitted)/i]].filter((p) => p[1].test(t)).map((p) => p[0]); return (/[?？]/.test(last.slice(-200)) ? 'q' : 's') + t.length + (topics.length ? ':' + topics.join('+') : ''); })()")
+  rrs=$(parse_kv "$rrs_out" EXTRACTED | tr -dc 'a-z0-9+:')
+  RAT_REPLIES="${RAT_REPLIES:+$RAT_REPLIES,}${rrs:-none}"
 }
 
 # rat_stop_turn: the Chat's running Turn, if any, is stopped as the person would (stop_agent) and
@@ -221,7 +238,9 @@ rat_approver() {
 rat_journey() {
   # --- Connect: the agent asks for the ticket system ---
   tickets_gate_up
-  rat_turn new:admin_agent "我想在试验工作区里试接一个测试用的工单系统，看看能不能让一个 Worker 帮我开工单。它是 http 系统，请把它叫作 helpdesk，用测试账号。请先发一个接入请求，凭证我会在控制台填。"
+  # Everything a person asking for a connection would say: what the system is, its address, its
+  # name, and that the credential is theirs to enter.
+  rat_turn new:admin_agent "我想在试验工作区里试接一个测试用的工单系统，看看能不能让一个 Worker 帮我开工单。它是 http 系统，地址是 $TICKETS_SYSTEM_URL，请把它叫作 helpdesk，用测试账号。请先发一个接入请求，凭证我会在控制台填。"
   # The target is the agent's text: JSON-encoded by postgres for the person's call, letters, digits
   # and ._:/- only (others as _) in the RUN line.
   cr_sql="select id || ',' || kind || ',' || to_json(target)::text from connection_requests where workspace_id = '$ADMIN_TRIAL_ID' and status = 'requested' and requested_at >= '$RAT_START' order by requested_at desc limit 1"
@@ -551,7 +570,7 @@ real_admin_tickets_step() {
   usage=$(psql_ws "select coalesce(sum(input_tokens + output_tokens + coalesce(cache_read_tokens, 0) + coalesce(cache_write_tokens, 0)), 0) || ',' || coalesce(round(sum(cost_usd), 4), 0) from llm_usage where workspace_id = '$ADMIN_TRIAL_ID' and started_at >= '$RAT_START'")
   tools=$(printf '%s' "$RAT_TOOLS" | tr ',' '\n' | sed '/^$/d' | sort | uniq -c | sed 's/^ *\([0-9]*\) \(.*\)$/\2×\1/' | tr '\n' ',' | sed 's/,$//')
   human=$(printf '%s' "$TICKETS_HUMAN_ACTIONS" | sed '/^$/d' | wc -l | tr -d ' ')
-  real_run_line admin_tickets 1 "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "reached=${RAT_REACHED:-none} stuck=${RAT_STUCK:--} turns=$RAT_TURNS nudges=$RAT_NUDGES turn_timeouts=$RAT_TURN_TIMEOUTS turn_errors=$RAT_TURN_ERRORS${RAT_TURN_ERROR:+[$RAT_TURN_ERROR]} turn_tools=$RAT_TC/$RAT_TE[$tools] refused=$(rat_agent_refusals) tokens=${usage%%,*} cost_usd=${usage#*,} human_steps=$human${RAT_DETAIL:+ $RAT_DETAIL}"
+  real_run_line admin_tickets 1 "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "reached=${RAT_REACHED:-none} stuck=${RAT_STUCK:--} turns=$RAT_TURNS nudges=$RAT_NUDGES turn_timeouts=$RAT_TURN_TIMEOUTS turn_errors=$RAT_TURN_ERRORS${RAT_TURN_ERROR:+[$RAT_TURN_ERROR]} turn_tools=$RAT_TC/$RAT_TE[$tools] replies=${RAT_REPLIES:--} refused=$(rat_agent_refusals) tokens=${usage%%,*} cost_usd=${usage#*,} human_steps=$human${RAT_DETAIL:+ $RAT_DETAIL}"
   real_stat_add admin_tickets "$ok" "$RAT_TC" "$RAT_TE" 0 0
   rat_invariants
   real_budget_check "real-admin-tickets-budget" "$ADMIN_TRIAL_ID"
