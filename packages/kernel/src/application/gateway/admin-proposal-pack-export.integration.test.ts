@@ -482,6 +482,42 @@ describe.runIf(DATABASE_URL !== undefined)(
         code: 'admin_proposal_segment_not_found',
       });
 
+      // A proposal's platform part is not a workspace segment: not found either.
+      const gateId = `aa5d2-gate-${tag}`;
+      const platformOnly = await call<AdminProposalWire>(agent, 'propose_admin_proposal', {
+        title: 'Connect the ticket system',
+        description: 'What the trial workspace settled on.',
+        sourceName: `aa5d2-platform-${tag}`,
+        segments: [],
+        platform: {
+          items: [
+            {
+              kind: 'gate_instance',
+              gateId,
+              displayName: `Tickets ${gateId}`,
+              transportKind: 'http',
+              target: `https://${gateId}.example.invalid`,
+              credentialMode: 'shared',
+              manifestSource: `https://${gateId}.example.invalid/openapi.json`,
+              connector: `tickets-${tag}`,
+            },
+          ],
+        },
+      });
+      const platformPart = platformOnly.segments.find((s) => s.authority === 'platform');
+      expect(platformPart).toBeDefined();
+      const notWorkspace = await thrownBy(
+        call(platformCaller(user), 'export_admin_proposal_pack', {
+          segmentId: platformPart?.id,
+          summary: 'Gates.',
+        }),
+      );
+      expect(notWorkspace).toBeInstanceOf(AdminProposalSegmentNotFoundError);
+      expect(mapCapabilityError(notWorkspace)).toMatchObject({
+        status: 404,
+        code: 'admin_proposal_segment_not_found',
+      });
+
       // The target's owner, the administrator in their own trial workspace, and their agent: none
       // is a platform console session.
       for (const caller of [
