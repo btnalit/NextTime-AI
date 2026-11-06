@@ -11,10 +11,13 @@ import type {
 import type { PoolClient } from 'pg';
 import { type PoolLike, withWorkspace } from '../../adapters/db/pool.js';
 import {
+  AdminProposalSegmentUnchangedError,
   type ChangeProvenance,
   type PlannedChangeItem,
   loadFamilyProvenance,
   loadOntologyProvenance,
+  markPackInstallSegmentApplied,
+  openPackInstallSegment,
   verifyChangeSegment,
 } from '../change-plan/index.js';
 import { loadConnectorPresets } from '../gates/index.js';
@@ -376,6 +379,7 @@ export const installPackHandler: CapabilityHandler = async (
     reviewedDigest: string;
     confirmedOrdinals?: number[];
     workerGates?: Record<string, string[]>;
+    adminProposalSegmentId?: string;
   };
   if (!context?.principalId) throw new Error('install_pack: no calling principal in context');
   // `channel: 'human'`: the person installing is the one confirming any widening item (I-A4).
@@ -393,13 +397,36 @@ export const installPackHandler: CapabilityHandler = async (
     );
   }
   const registry = await loadPackRegistry();
+  // S11 AA5g-2: an install answering an admin proposal segment addressed here — opened (locked,
+  // checked to ask for exactly this pack and version) before anything is installed.
+  const answering =
+    input.adminProposalSegmentId === undefined
+      ? null
+      : await openPackInstallSegment(client, workspaceId, input.adminProposalSegmentId, {
+          name: input.name,
+          version: input.version,
+        });
   const installed = await installPack(client, workspaceId, context.principalId, registry, {
     name: input.name,
     version: input.version,
     reviewedDigest: input.reviewedDigest,
     confirmedOrdinals,
     workerGates: workerGateChoice(input.workerGates),
+    ...(answering !== null ? { adminProposal: answering.origin } : {}),
   });
+  if (answering !== null) {
+    // Already up to date: nothing was recorded, so nothing answers the segment (reject it).
+    if (installed.segmentId === null) {
+      throw new AdminProposalSegmentUnchangedError(answering.segmentId);
+    }
+    await markPackInstallSegmentApplied(
+      client,
+      workspaceId,
+      context.principalId,
+      answering.segmentId,
+      installed.segmentId,
+    );
+  }
   const result: PackInstallResultWire = {
     pack: await toPackWire(client, workspaceId, registry, installed.state),
     segmentId: installed.segmentId,
@@ -413,6 +440,9 @@ export const installPackHandler: CapabilityHandler = async (
     result,
     resourceType: 'change_segment',
     resourceId: segmentId,
+    ...(answering !== null
+      ? { auditPayload: { adminProposalSegmentId: answering.segmentId } }
+      : {}),
     // S11 P1-E: once the install has committed, verify it once — as the person who installed,
     // recorded as `trigger: system` — in a transaction of its own, so the gate probes run after the
     // install's locks are gone. The install stands whatever happens here.

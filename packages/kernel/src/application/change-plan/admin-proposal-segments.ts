@@ -4,6 +4,7 @@ import {
   type AdminProposalItemBlocker,
   type AdminProposalItemBlockerWire,
   type AdminProposalItemIntentWire,
+  type AdminProposalPackInstallIntentWire,
   type AdminProposalPlatformInstanceChangeWire,
   type AdminProposalPlatformItemIntentWire,
   type AdminProposalPreviewItemWire,
@@ -11,6 +12,7 @@ import {
   type AdminProposalSegmentStatus,
   type AdminProposalWorkerGateBindingWire,
   type AdminProposalWorkerGateSource,
+  type AdminProposalWorkspaceItemWire,
   type ChangeItemKind,
   type ListEnvelope,
   type OperationFieldChangeWire,
@@ -245,6 +247,56 @@ export class AdminProposalTargetNoLongerChosenError extends Error {
   }
 }
 
+/** S11 AA5g-2: the segment asks for a pack install (`pack_install`, `propose_pack_install`), which
+ *  is installed through `install_pack` with its id — never previewed or applied as a segment of
+ *  intents. Mapped to 409 `admin_proposal_segment_is_pack_install` with `details: { pack, version }`;
+ *  nothing was written. */
+export class AdminProposalSegmentIsPackInstallError extends Error {
+  readonly code = 'admin_proposal_segment_is_pack_install' as const;
+  readonly details: { readonly pack: string; readonly version: number };
+  constructor(segmentId: string, intent: AdminProposalPackInstallIntentWire) {
+    super(
+      `admin proposal segment ${segmentId} asks for pack ${intent.pack} version ${intent.version} to be installed: review it with preview_pack_install and install it with install_pack and this segment's id (adminProposalSegmentId), or reject it — nothing was changed`,
+    );
+    this.name = 'AdminProposalSegmentIsPackInstallError';
+    this.details = { pack: intent.pack, version: intent.version };
+  }
+}
+
+/** S11 AA5g-2: `install_pack` names a segment that asks for another pack, another version, or no
+ *  pack install at all. Mapped to 409 `admin_proposal_pack_mismatch` with `details: { pack,
+ *  version }` — what the segment asks for (`null` for a segment of intents); nothing was written. */
+export class AdminProposalPackMismatchError extends Error {
+  readonly code = 'admin_proposal_pack_mismatch' as const;
+  readonly details: { readonly pack: string | null; readonly version: number | null };
+  constructor(segmentId: string, asked: AdminProposalPackInstallIntentWire | null) {
+    super(
+      asked === null
+        ? `admin proposal segment ${segmentId} asks for no pack install: preview and apply it with preview_admin_proposal_segment / apply_admin_proposal_segment — nothing was installed`
+        : `admin proposal segment ${segmentId} asks for pack ${asked.pack} version ${asked.version}, not this install — nothing was installed`,
+    );
+    this.name = 'AdminProposalPackMismatchError';
+    this.details = { pack: asked?.pack ?? null, version: asked?.version ?? null };
+  }
+}
+
+/** The segment's one `pack_install`, or `null` for a segment of intents (governance 0040: a
+ *  `pack_install` is alone in its segment). */
+function packInstallOf(row: ReceivedSegmentRow): AdminProposalPackInstallIntentWire | null {
+  const first = row.items[0];
+  return row.items.length === 1 && first?.kind === 'pack_install' ? first : null;
+}
+
+/** A segment of intents' items — refusing one that asks for a pack install
+ *  ({@link AdminProposalSegmentIsPackInstallError}). */
+function intentsOf(row: ReceivedSegmentRow): AdminProposalItemIntentWire[] {
+  const pack = packInstallOf(row);
+  if (pack !== null) throw new AdminProposalSegmentIsPackInstallError(row.id, pack);
+  return row.items.filter(
+    (item): item is AdminProposalItemIntentWire => item.kind !== 'pack_install',
+  );
+}
+
 /** Whether the proposal's proposer still has this workspace among their admin agent's targets
  *  (`admin_proposal_target_chosen`, governance 0036: it answers for a proposal addressed here). */
 async function targetStillChosen(client: PoolClient, proposalId: string): Promise<boolean> {
@@ -263,7 +315,7 @@ interface ReceivedSegmentRow {
   id: string;
   proposal_id: string;
   ordinal: number;
-  items: AdminProposalItemIntentWire[];
+  items: AdminProposalWorkspaceItemWire[];
   content_digest: string;
   status: AdminProposalSegmentStatus;
   decided_at: Date | null;
@@ -986,6 +1038,7 @@ export async function previewAdminProposalSegment(
 ): Promise<AdminProposalSegmentPreviewWire> {
   const row = await loadReceivedSegment(client, workspaceId, segmentId);
   assertOpen(row);
+  const intents = intentsOf(row);
   const suspected = suspectedSecretsOf(row);
   const credentials = {
     suspectedSecretValues: suspected.count,
@@ -997,7 +1050,7 @@ export async function previewAdminProposalSegment(
     client,
     workspaceId,
     row.source_name,
-    row.items,
+    intents,
     row.platform_items ?? [],
     choice,
   );
@@ -1092,6 +1145,7 @@ export async function applyAdminProposalSegment(
   );
   const row = await loadReceivedSegment(client, workspaceId, input.segmentId, { forUpdate: true });
   assertOpen(row);
+  const intents = intentsOf(row);
   const standing = await platformStandingOf(client, row);
   if (standing.platformStatus !== null && standing.platformStatus !== 'applied') {
     throw new PlatformSegmentNotAppliedError(row.id, standing.platformStatus);
@@ -1106,7 +1160,7 @@ export async function applyAdminProposalSegment(
     client,
     workspaceId,
     row.source_name,
-    row.items,
+    intents,
     row.platform_items ?? [],
     input.workerGates,
   );
@@ -1146,6 +1200,70 @@ export async function applyAdminProposalSegment(
     plan: applied.plan,
     suspectedSecretValues: suspected.count,
   };
+}
+
+/** S11 AA5g-2: a pack install answering a segment addressed here — what `install_pack` records the
+ *  install with (`ApplyWorkspaceSegmentInput.adminProposal`). */
+export interface OpenPackInstallSegment {
+  readonly segmentId: string;
+  readonly origin: AdminProposalOrigin;
+}
+
+/**
+ * S11 AA5g-2 (docs/admin-agent-packs-design-2026-11-06.md D3): `install_pack` with
+ * `adminProposalSegmentId`, before it installs — in the install's own transaction, as this
+ * workspace's owner. The segment's row lock (so a withdrawal or another decision waits for the
+ * install, and sees `applied`), then: it is proposed (409), it asks for exactly this pack and
+ * version (409 {@link AdminProposalPackMismatchError}), and its proposer still lets their admin agent
+ * propose here (409, governance 0036's guard refuses the `applied` edge too). Writes nothing; the
+ * install then records the change naming it (governance 0040 checks the same against the row), and
+ * {@link markPackInstallSegmentApplied} moves it.
+ */
+export async function openPackInstallSegment(
+  client: PoolClient,
+  workspaceId: string,
+  segmentId: string,
+  pack: { readonly name: string; readonly version: number },
+): Promise<OpenPackInstallSegment> {
+  const row = await loadReceivedSegment(client, workspaceId, segmentId, { forUpdate: true });
+  assertOpen(row);
+  const asked = packInstallOf(row);
+  if (asked === null || asked.pack !== pack.name || asked.version !== pack.version) {
+    throw new AdminProposalPackMismatchError(row.id, asked);
+  }
+  if (!(await targetStillChosen(client, row.proposal_id))) {
+    throw new AdminProposalTargetNoLongerChosenError(row.id);
+  }
+  return {
+    segmentId: row.id,
+    origin: {
+      proposalId: row.proposal_id,
+      proposalSegmentId: row.id,
+      proposedByUser: row.proposed_by_user,
+      proposerDisplayName: row.proposer_display_name,
+    },
+  };
+}
+
+/** S11 AA5g-2: the install recorded `changeSegmentId` answering `segmentId` — the segment's
+ *  `applied` edge, decided by `principalId` (the owner who installed), in the same transaction. */
+export async function markPackInstallSegmentApplied(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+  segmentId: string,
+  changeSegmentId: string,
+): Promise<ReceivedAdminProposalSegmentWire> {
+  const updated = await client.query(
+    `update admin_proposal_segments
+        set status = 'applied', decided_by = $3, applied_segment_id = $4
+      where id = $1 and target_workspace_id = $2 and status = 'proposed'`,
+    [segmentId, workspaceId, principalId, changeSegmentId],
+  );
+  if (updated.rowCount !== 1) {
+    throw new Error(`markPackInstallSegmentApplied: segment ${segmentId} did not move to applied`);
+  }
+  return getAdminProposalSegment(client, workspaceId, segmentId);
 }
 
 /** `reject_admin_proposal_segment`, as `principalId` (this workspace's owner), with `reason`

@@ -156,6 +156,34 @@ export const AdminProposalItemIntentWireSchema = z.discriminatedUnion('kind', [
 ]);
 export type AdminProposalItemIntentWire = z.infer<typeof AdminProposalItemIntentWireSchema>;
 
+/**
+ * S11 AA5g-2 (docs/admin-agent-packs-design-2026-11-06.md D2–D4): a workspace segment that asks
+ * its owner to install the capability pack `pack` at `version` — a pack this deployment has, at
+ * what was its latest version when proposed. Made by `propose_pack_install` only (never one of
+ * `propose_admin_proposal`'s intents), and alone in its segment (governance 0040). The owner
+ * installs it through `install_pack` with `adminProposalSegmentId`: the change segment that records
+ * it is the pack's (`source_kind = 'pack'`), naming this proposal as what asked for it — a pack's
+ * content is the deployment's, not drafted by an agent.
+ */
+export const AdminProposalPackInstallIntentWireSchema = z
+  .object({
+    kind: z.literal('pack_install'),
+    pack: z.string().max(64).regex(ADMIN_PROPOSAL_SOURCE_NAME_PATTERN),
+    version: z.number().int().positive(),
+  })
+  .strict();
+export type AdminProposalPackInstallIntentWire = z.infer<
+  typeof AdminProposalPackInstallIntentWireSchema
+>;
+
+/** What a workspace segment holds, as read back: the intents of `propose_admin_proposal`, or one
+ *  `pack_install` (`propose_pack_install`). */
+export const AdminProposalWorkspaceItemWireSchema = z.union([
+  AdminProposalItemIntentWireSchema,
+  AdminProposalPackInstallIntentWireSchema,
+]);
+export type AdminProposalWorkspaceItemWire = z.infer<typeof AdminProposalWorkspaceItemWireSchema>;
+
 /** Items in a platform segment. */
 export const ADMIN_PROPOSAL_PLATFORM_MAX_ITEMS = 10;
 
@@ -203,9 +231,10 @@ export type AdminProposalPlatformItemIntentWire = z.infer<
 >;
 
 /** An intent of either kind of segment, as a proposal reads back: a workspace segment's
- *  ({@link AdminProposalItemIntentWireSchema}) or a platform segment's. */
+ *  ({@link AdminProposalWorkspaceItemWireSchema}) or a platform segment's. */
 export const AdminProposalAnyItemIntentWireSchema = z.union([
   AdminProposalItemIntentWireSchema,
+  AdminProposalPackInstallIntentWireSchema,
   AdminProposalPlatformItemIntentWireSchema,
 ]);
 export type AdminProposalAnyItemIntentWire = z.infer<typeof AdminProposalAnyItemIntentWireSchema>;
@@ -349,7 +378,11 @@ export type AdminProposalWithheldGateInstanceWire = z.infer<
 export const AgentAdminProposalSegmentWireSchema = AdminProposalSegmentWireSchema.extend({
   /** A workspace segment's intents as proposed, or the platform segment's without addresses. */
   items: z.array(
-    z.union([AdminProposalItemIntentWireSchema, AdminProposalWithheldGateInstanceWireSchema]),
+    z.union([
+      AdminProposalItemIntentWireSchema,
+      AdminProposalPackInstallIntentWireSchema,
+      AdminProposalWithheldGateInstanceWireSchema,
+    ]),
   ),
 }).strict();
 export type AgentAdminProposalSegmentWire = z.infer<typeof AgentAdminProposalSegmentWireSchema>;

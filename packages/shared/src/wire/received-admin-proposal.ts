@@ -12,9 +12,9 @@ import {
 } from '../enums.js';
 import { SkillApplicableSchema } from '../skill.js';
 import {
-  AdminProposalItemIntentWireSchema,
   AdminProposalPlatformItemIntentWireSchema,
   AdminProposalProposerWireSchema,
+  AdminProposalWorkspaceItemWireSchema,
 } from './admin-proposal.js';
 import {
   ChangeGateRefWireSchema,
@@ -83,8 +83,10 @@ export const ReceivedAdminProposalSegmentWireSchema = z
     id: z.string(),
     proposal: ReceivedAdminProposalHeadWireSchema,
     ordinal: z.number().int().positive(),
-    /** As proposed: workspace-agnostic intents (`AdminProposalItemIntentWire`). */
-    items: z.array(AdminProposalItemIntentWireSchema),
+    /** As proposed: workspace-agnostic intents (`AdminProposalItemIntentWire`), or one
+     *  `pack_install` (S11 AA5g-2) — installed through `install_pack` with this segment's id, never
+     *  previewed or applied as the others are. */
+    items: z.array(AdminProposalWorkspaceItemWireSchema),
     /** `sha256:` of what the segment proposes. */
     contentDigest: z.string(),
     status: AdminProposalSegmentStatusSchema,

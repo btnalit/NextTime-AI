@@ -11,6 +11,7 @@ import {
   type AdminProposalSummaryWire,
   type AdminProposalWire,
   type AdminProposalWithheldGateInstanceWire,
+  type AdminProposalWorkspaceItemWire,
   type AgentAdminProposalWire,
   type ListEnvelope,
   adminProposalStatusOf,
@@ -214,9 +215,16 @@ export interface AdminProposalInput {
   readonly platform?: AdminProposalPlatformSegmentInputWire;
 }
 
+/** A workspace segment as it is stored: `propose_admin_proposal`'s intents, or (S11 AA5g-2) one
+ *  `pack_install` (`propose_pack_install`). */
+export interface StoredWorkspaceSegment {
+  readonly targetWorkspaceId: string;
+  readonly items: readonly AdminProposalWorkspaceItemWire[];
+}
+
 /** What {@link checkAdminProposal} returns: the segments as they will be stored. */
 export interface CheckedAdminProposal {
-  readonly segments: readonly AdminProposalSegmentInputWire[];
+  readonly segments: readonly StoredWorkspaceSegment[];
   readonly platform: AdminProposalPlatformSegmentInputWire | null;
 }
 
@@ -388,8 +396,85 @@ function checkPlatformSegment(
   return { items: platform.items };
 }
 
+/** S11 AA5g-2: `propose_pack_install`'s params (already bounded by the capability). */
+export interface PackInstallProposalInput {
+  readonly pack: string;
+  readonly version: number;
+  readonly targetWorkspaceIds: readonly string[];
+  readonly title: string;
+  readonly description?: string;
+}
+
+/** What {@link checkPackInstallProposal} is told of a pack this deployment has: its name and its
+ *  latest version (the gateway reads the registry; this module never does). */
+export interface PackOnOffer {
+  readonly name: string;
+  readonly latestVersion: number;
+}
+
+/**
+ * S11 AA5g-2 (docs/admin-agent-packs-design-2026-11-06.md D2): `propose_pack_install` as the
+ * proposal it writes — `sourceName` the pack, one workspace segment per target, each holding one
+ * `pack_install` (governance 0040: alone in its segment) — checked as {@link checkAdminProposal}
+ * checks the rest (credentials and the redaction mark in the free text first, naming places only).
+ * Refused with {@link AdminProposalInvalidError} for a target named twice, a pack this deployment
+ * does not have, or a version that is not its latest now: the owner installs the latest version
+ * only (`install_pack`), so a proposal for another could never be installed.
+ */
+export function checkPackInstallProposal(
+  input: PackInstallProposalInput,
+  offered: PackOnOffer | null,
+): { readonly proposal: AdminProposalInput; readonly checked: CheckedAdminProposal } {
+  const text = { title: input.title, description: input.description };
+  const credentials = findCredentialValues(text);
+  if (credentials.count > 0) {
+    throw new AdminProposalCredentialError(credentials.count, credentials.paths);
+  }
+  const redacted = redactedPathsIn(text).map((path) => `proposal.${path}`);
+  if (redacted.length > 0) throw new RedactedTextSubmittedError(redacted[0] as string, redacted);
+
+  const problems: AdminProposalProblem[] = [];
+  if (offered === null) {
+    problems.push({
+      path: 'pack',
+      message: `this deployment has no pack named "${input.pack}": agent_list_packs lists those it has`,
+    });
+  } else if (offered.latestVersion !== input.version) {
+    problems.push({
+      path: 'version',
+      message: `pack ${offered.name}'s latest version is ${offered.latestVersion}: an owner installs only the latest, so propose that one`,
+    });
+  }
+  const seen = new Map<string, number>();
+  for (const [i, id] of input.targetWorkspaceIds.entries()) {
+    const first = seen.get(id);
+    if (first !== undefined) {
+      problems.push({
+        path: `targetWorkspaceIds[${i}]`,
+        message: `names the workspace targetWorkspaceIds[${first}] does: one segment per workspace`,
+      });
+    } else {
+      seen.set(id, i);
+    }
+  }
+  if (problems.length > 0) throw new AdminProposalInvalidError(problems);
+  const segments: StoredWorkspaceSegment[] = input.targetWorkspaceIds.map((id) => ({
+    targetWorkspaceId: id,
+    items: [{ kind: 'pack_install', pack: input.pack, version: input.version }],
+  }));
+  return {
+    proposal: {
+      title: input.title,
+      ...(input.description !== undefined ? { description: input.description } : {}),
+      sourceName: input.pack,
+      segments: [],
+    },
+    checked: { segments, platform: null },
+  };
+}
+
 /** `sha256:` of what a segment proposes: its target and its items. */
-export function adminProposalSegmentDigest(segment: AdminProposalSegmentInputWire): string {
+export function adminProposalSegmentDigest(segment: StoredWorkspaceSegment): string {
   return contentDigest({ targetWorkspaceId: segment.targetWorkspaceId, items: segment.items });
 }
 
@@ -456,7 +541,7 @@ export function platformItemConnector(
  */
 async function unknownWorkerSystems(
   client: PoolClient,
-  segments: readonly AdminProposalSegmentInputWire[],
+  segments: readonly StoredWorkspaceSegment[],
   platform: AdminProposalPlatformSegmentInputWire | null,
 ): Promise<AdminProposalProblem[]> {
   const named = segments.flatMap((segment, s) =>
@@ -492,7 +577,7 @@ async function unknownWorkerSystems(
  *  0001). */
 async function firstUnavailableTarget(
   client: PoolClient,
-  segments: readonly AdminProposalSegmentInputWire[],
+  segments: readonly StoredWorkspaceSegment[],
 ): Promise<number | undefined> {
   const ids = segments.map((segment) => segment.targetWorkspaceId);
   const result = await client.query<{ id: string }>(
@@ -510,7 +595,7 @@ async function firstUnavailableTarget(
  *  transaction's own Principal in this trial workspace only. */
 async function firstTargetNotChosen(
   client: PoolClient,
-  segments: readonly AdminProposalSegmentInputWire[],
+  segments: readonly StoredWorkspaceSegment[],
 ): Promise<number | undefined> {
   if (segments.length === 0) return undefined;
   const result = await client.query<{ id: string }>('select admin_agent_chosen_targets() as id');

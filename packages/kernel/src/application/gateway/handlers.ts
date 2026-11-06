@@ -184,6 +184,7 @@ import {
   listAdminProposalsHandler,
   previewAdminProposalSegmentHandler,
   proposeAdminProposalHandler,
+  proposePackInstallHandler,
   rejectAdminProposalSegmentHandler,
   withdrawAdminProposalHandler,
 } from './admin-proposal-handlers.js';
@@ -2824,6 +2825,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   // S11 AA3b-1 — Admin proposals (admin-proposal-handlers.ts): what an admin agent
   // proposes and reads back (`admin_proposal`), and the platform administrator's reads and withdrawal.
   ['propose_admin_proposal', proposeAdminProposalHandler],
+  // S11 AA5g-2 — asking owners to install a pack (admin-proposal-handlers.ts).
+  ['propose_pack_install', proposePackInstallHandler],
   ['agent_list_admin_proposals', agentListAdminProposalsHandler],
   ['agent_get_admin_proposal', agentGetAdminProposalHandler],
   ['agent_withdraw_admin_proposal', agentWithdrawAdminProposalHandler],

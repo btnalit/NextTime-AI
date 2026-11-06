@@ -843,6 +843,8 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c, AA5a, AA5
         'platform_state_updates',
         // S11 AA3a (F3): the five draft proposals, each recording that an agent wrote it.
         'propose_admin_proposal',
+        // S11 AA5g-2: asking owners to install a pack (an admin proposal).
+        'propose_pack_install',
         'propose_ontology_change',
         'propose_operation',
         'propose_procedure',
@@ -882,7 +884,7 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c, AA5a, AA5
     }
   });
 
-  it('holds only handle-channel observe reads, the seven proposals, withdrawing an admin proposal, starting a trial Worker and that Worker’s report: no human-channel, platform, execute-class or other writing capability', () => {
+  it('holds only handle-channel observe reads, the eight proposals, withdrawing an admin proposal, starting a trial Worker and that Worker’s report: no human-channel, platform, execute-class or other writing capability', () => {
     const proposals = [
       'propose_admin_proposal',
       'propose_ontology_change',
@@ -890,6 +892,8 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c, AA5a, AA5
       'propose_procedure',
       'propose_skill',
       'propose_worker_definition',
+      // S11 AA5g-2: a pack install proposal is an admin proposal (origin agent).
+      'propose_pack_install',
       // S11 AA5a-1: the connection request records the admin agent session it came through.
       'request_connection',
     ];
@@ -1022,6 +1026,9 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c, AA5a, AA5
         'agent_list_admin_proposals',
         'agent_get_admin_proposal',
         'agent_withdraw_admin_proposal',
+        // S11 AA5g
+        'agent_list_packs',
+        'propose_pack_install',
       ]) {
         await expect(
           issueHandle(client, {
