@@ -950,7 +950,11 @@ export const ChangeSourceKindSchema = asEnum(CHANGE_SOURCE_KIND_VALUES);
  *  - `operation_not_found`: the gate this workspace enabled has no published Operation by that name;
  *  - `operation_revision_invalid`: what the intent sets does not make a valid revision of the
  *    Operation as it is here (a description the rules refuse, a field the gate's own definition
- *    fixes — an ssh binding's `blast_radius`).
+ *    fixes — an ssh binding's `blast_radius`);
+ *  - `worker_system_not_connected` (S11 AA5f): the Worker names a system (`systems`) this workspace
+ *    has no connected gate of, and has no gates of its own yet — applying would bind it to none, and
+ *    binding it later publishes its next version, which leaves this segment's item `replaced`. One
+ *    blocker per such system (`connector`), with where it stands (`gateAvailability`).
  */
 export const ADMIN_PROPOSAL_ITEM_BLOCKER_VALUES = [
   'name_taken',
@@ -959,6 +963,7 @@ export const ADMIN_PROPOSAL_ITEM_BLOCKER_VALUES = [
   'gate_not_enabled',
   'operation_not_found',
   'operation_revision_invalid',
+  'worker_system_not_connected',
 ] as const;
 export type AdminProposalItemBlocker = (typeof ADMIN_PROPOSAL_ITEM_BLOCKER_VALUES)[number];
 export const AdminProposalItemBlockerSchema = asEnum(ADMIN_PROPOSAL_ITEM_BLOCKER_VALUES);
@@ -966,7 +971,8 @@ export const AdminProposalItemBlockerSchema = asEnum(ADMIN_PROPOSAL_ITEM_BLOCKER
 /**
  * S11 AA3c-2 (F-c1): for a `gate_not_enabled` blocker, where the gate instance the intent names
  * stands for this workspace — the pack requirements' two states short of `connected`
- * (`PACK_REQUIREMENT_STATE_VALUES`), by instance rather than by connector:
+ * (`PACK_REQUIREMENT_STATE_VALUES`), by instance rather than by connector (for a
+ * `worker_system_not_connected` one, S11 AA5f, by connector: the pack requirement's own state):
  *  - `can_enable`: the platform offers it (`enabled`, on a `platform_preset` connector): the owner
  *    enables it here (`enable_gate_instance`, with its own manifest review) and previews again;
  *  - `needs_platform`: it is not offered yet — no such instance, or not `enabled` (a new instance
@@ -977,6 +983,20 @@ export const ADMIN_PROPOSAL_GATE_AVAILABILITY_VALUES = ['can_enable', 'needs_pla
 export type AdminProposalGateAvailability =
   (typeof ADMIN_PROPOSAL_GATE_AVAILABILITY_VALUES)[number];
 export const AdminProposalGateAvailabilitySchema = asEnum(ADMIN_PROPOSAL_GATE_AVAILABILITY_VALUES);
+
+/**
+ * S11 AA5f: where the gates a proposed Worker publishes in the workspace applying it come from:
+ *  - `workspace`: its head here has gates of its own (possibly none, an owner's earlier choice) —
+ *    kept, as a pack's install keeps them;
+ *  - `apply`: it names its systems and has no gates here yet, so this apply binds it to the
+ *    connected gates of those systems the owner keeps (every one unless they kept fewer; keeping
+ *    none publishes `gates: []`, kept like any other choice);
+ *  - `none`: it names no system and has no gates here — it publishes none.
+ */
+export const ADMIN_PROPOSAL_WORKER_GATE_SOURCE_VALUES = ['workspace', 'apply', 'none'] as const;
+export type AdminProposalWorkerGateSource =
+  (typeof ADMIN_PROPOSAL_WORKER_GATE_SOURCE_VALUES)[number];
+export const AdminProposalWorkerGateSourceSchema = asEnum(ADMIN_PROPOSAL_WORKER_GATE_SOURCE_VALUES);
 
 /**
  * An applied item's target now (S11 P1-B, read at the time of the call): `in_effect` — what the item

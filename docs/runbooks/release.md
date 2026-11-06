@@ -2421,6 +2421,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **行为变化**：管理员提案的验证可能从「通过」变成「不通过」，门不通或被切断时就会这样，这是本意。
 - **回滚**：只回滚代码。
 
+### 3.125 应用管理员提案时给 Worker 绑门，应用后自动验证一次（#968，S11 AA5f-1，0.62.0 之后的下一版）
+
+没有迁移，不改 compose，没有新环境变量，主机不需要操作。线上契约有新增（都是可选输入或新输出字段）：Worker 意图的 `systems`，preview / apply 的 `workerGates`，Worker 预览项的 `gateBinding`，新阻断 `worker_system_not_connected`（带 `connector`、`gateAvailability`、`offered`、`fromPlatformSegment`），apply 结果的 `verification`。
+
+- **发版说明可写**：管理员智能体提议 Worker 时写明它要用的系统（`systems`，按连接器名，1–8 个，不能是通用连接器）。所有者预览、应用时，这个 Worker 在本工作区还没有门，就按这些系统绑到本工作区已接上的门上（默认全绑，可只留一部分）；已经有门的 Worker 保持不动。列出的系统在本工作区没有已接上的门时，这一项被阻断，控制台说明情况，能就地启用的可以就地启用。绑门不等于授权，授权之前用到这个 Worker 的步骤仍会被拒。应用工作区部分后会以所有者身份自动验证一次，结果随 apply 返回。
+- **行为变化**：应用后马上手动验证会碰到 60 秒冷却；带 `systems` 的 Worker 在本工作区还没有门时，应用会给它绑门。
+- **回滚**：只回滚代码。已存提案里 Worker 的 `systems` 旧代码不读（结果校验 `KERNEL_VALIDATE_RESULTS` 只在测试和 CI 里开），应用时按旧规则不绑门；已经绑门发布的 Worker 版本就是普通的已发布定义，不受影响。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：

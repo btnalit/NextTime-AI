@@ -7,7 +7,11 @@ import type {
   RequirementCheck,
   RequirementGateCheck,
 } from '../change-plan/index.js';
-import { type GatekeeperPlatformPolicy, readGatekeeperPlatformPolicies } from '../gates/index.js';
+import {
+  type GatekeeperPlatformPolicy,
+  gateConnectedByPlatform,
+  readGatekeeperPlatformPolicies,
+} from '../gates/index.js';
 import {
   type PackRegistryOptions,
   loadPackRegistry,
@@ -65,13 +69,11 @@ async function probeGates(
   );
 }
 
-/** Whether a workspace Gatekeeper can be acted through now, by the platform's cut-offs — the rule
- *  `readPackRequirements` connects a system by: a catalog gate whose instance is enabled, a
- *  self-connected one not suspended. One with neither record (registered directly, never by a
- *  deployment's own paths) has no cut-off. */
+/** Whether a workspace Gatekeeper can be acted through now, by the platform's cut-offs — the one
+ *  rule a system's standing is read by too (`gateConnectedByPlatform`). One with neither record
+ *  (registered directly, never by a deployment's own paths) has no cut-off. */
 function gateUsable(policy: GatekeeperPlatformPolicy | undefined): boolean {
-  if (policy === undefined) return true;
-  return policy.origin === 'catalog' ? policy.instanceStatus === 'enabled' : !policy.suspended;
+  return policy === undefined || gateConnectedByPlatform(policy);
 }
 
 /** An admin proposal segment's requirements (see this module's comment): the gates it runs

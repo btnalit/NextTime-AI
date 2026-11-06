@@ -557,6 +557,97 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(await proposalCount()).toBe(before);
     });
 
+    it('AA5f: a Worker names the systems it acts on by connector — one the platform has or this proposal’s platform segment creates, never a generic one, each once', async () => {
+      const caller = await agent(trialId, adminPrincipalId);
+      const known = `aa5f-known-${tag}`;
+      await withAdminClient(pool, (client) =>
+        client.query(
+          "insert into connectors (name, kind, mode) values ($1, 'http', 'platform_preset') on conflict (name) do nothing",
+          [known],
+        ),
+      );
+      const brought = `aa5f-brought-${tag}`;
+      const before = await proposalCount();
+
+      // Unknown to the platform and not brought by the proposal: refused, by where it stands.
+      const unknown = await thrownBy(
+        propose(
+          caller,
+          proposalParams([
+            {
+              targetWorkspaceId: targetA.workspaceId,
+              items: [
+                {
+                  ...workerItem({ name: 'tickets-worker', systemPrompt: 'x' }),
+                  systems: [known, `aa5f-nowhere-${tag}`],
+                },
+              ],
+            },
+          ]),
+        ),
+      );
+      expect(unknown).toBeInstanceOf(AdminProposalInvalidError);
+      expect(mapCapabilityError(unknown)).toMatchObject({
+        status: 400,
+        code: 'invalid_params',
+        details: { problems: [{ path: 'segments[0].items[0].systems[1]' }] },
+      });
+      // A generic connector names a transport, not a system; a system named twice.
+      for (const systems of [['http'], [known, known]]) {
+        const refused = await thrownBy(
+          propose(
+            caller,
+            proposalParams([
+              {
+                targetWorkspaceId: targetA.workspaceId,
+                items: [{ ...workerItem({ name: 'tickets-worker', systemPrompt: 'x' }), systems }],
+              },
+            ]),
+          ),
+        );
+        expect(mapCapabilityError(refused)).toMatchObject({ status: 400, code: 'invalid_params' });
+      }
+      expect(await proposalCount()).toBe(before);
+
+      // A connector the platform has, and one this proposal's platform segment creates.
+      const proposal = await propose(
+        caller,
+        proposalParams(
+          [
+            {
+              targetWorkspaceId: targetA.workspaceId,
+              items: [
+                {
+                  ...workerItem({ name: 'tickets-worker', systemPrompt: 'x' }),
+                  systems: [known, brought],
+                },
+              ],
+            },
+          ],
+          {
+            platform: {
+              items: [
+                {
+                  kind: 'gate_instance',
+                  gateId: `aa5f-gate-${tag}`,
+                  transportKind: 'http',
+                  target: `https://aa5f-gate-${tag}.example.invalid`,
+                  credentialMode: 'shared',
+                  manifestSource: `https://aa5f-gate-${tag}.example.invalid/openapi.json`,
+                  connector: brought,
+                },
+              ],
+            },
+          },
+        ),
+      );
+      expect(proposal.segments[0]?.items[0]).toMatchObject({
+        kind: 'worker_definition_version',
+        systems: [known, brought],
+      });
+      expect(await proposalCount()).toBe(before + 1);
+    });
+
     it('F12: the agent reads and withdraws only its own administrator’s proposals in the trial workspace', async () => {
       const mine = await agent(trialId, adminPrincipalId);
       const theirs = await agent(trialId, otherAdminPrincipalId);

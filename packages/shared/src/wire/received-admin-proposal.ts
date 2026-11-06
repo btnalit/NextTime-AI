@@ -4,6 +4,7 @@ import {
   AdminProposalItemBlockerSchema,
   AdminProposalSegmentStatusSchema,
   AdminProposalWithdrawnOriginSchema,
+  AdminProposalWorkerGateSourceSchema,
   ChangeItemClassificationSchema,
   ChangeItemKindSchema,
   DraftOriginSchema,
@@ -18,6 +19,7 @@ import {
 import {
   ChangeGateRefWireSchema,
   ChangePrincipalRefWireSchema,
+  ChangeVerificationWireSchema,
   ChangeWideningReasonWireSchema,
   ContentVersionRefWireSchema,
   OntologyVersionChangeTargetWireSchema,
@@ -117,19 +119,67 @@ export const ReceivedAdminProposalCountsWireSchema = z
   .strict();
 export type ReceivedAdminProposalCountsWire = z.infer<typeof ReceivedAdminProposalCountsWireSchema>;
 
+/** A platform gate instance this workspace may enable (`enable_gate_instance`), as a pack
+ *  requirement offers it. */
+export const AdminProposalGateOfferWireSchema = z
+  .object({ gateId: z.string(), displayName: z.string() })
+  .strict();
+export type AdminProposalGateOfferWire = z.infer<typeof AdminProposalGateOfferWireSchema>;
+
 /** An intent that does not resolve here (`ADMIN_PROPOSAL_ITEM_BLOCKER_VALUES`), by its ordinal in
- *  the segment. `gateAvailability` (S11 AA3c-2, F-c1), only on `gate_not_enabled`: whether the
- *  owner can enable the gate instance here now (`can_enable`) or the platform has to offer it first
- *  (`needs_platform`) — `ADMIN_PROPOSAL_GATE_AVAILABILITY_VALUES`. */
+ *  the segment. `gateAvailability` (S11 AA3c-2, F-c1), on `gate_not_enabled` and
+ *  `worker_system_not_connected`: whether the owner can enable a gate instance here now
+ *  (`can_enable`) or the platform has to offer one first (`needs_platform`) —
+ *  `ADMIN_PROPOSAL_GATE_AVAILABILITY_VALUES`. `fromPlatformSegment` (S11 AA5f), on the same two:
+ *  whether the gate (by id) or the system (by connector) is one this proposal's platform segment
+ *  creates — only then does the owner wait for that part; any other system the platform has to
+ *  offer some other way. On `worker_system_not_connected` (S11 AA5f) only: `connector`, the system
+ *  with no connected gate here, and `offered`, the instances of it the platform offers this
+ *  workspace (for `can_enable`; empty otherwise). */
 export const AdminProposalItemBlockerWireSchema = z
   .object({
     ordinal: z.number().int().positive(),
     kind: ChangeItemKindSchema,
     reason: AdminProposalItemBlockerSchema,
     gateAvailability: AdminProposalGateAvailabilitySchema.optional(),
+    fromPlatformSegment: z.boolean().optional(),
+    connector: z.string().optional(),
+    offered: z.array(AdminProposalGateOfferWireSchema).optional(),
   })
   .strict();
 export type AdminProposalItemBlockerWire = z.infer<typeof AdminProposalItemBlockerWireSchema>;
+
+/** S11 AA5f: a connected gate of a system a proposed Worker names, which this apply may bind it to
+ *  — with whether the person previewing holds it (`held`: a `connect_gatekeeper` Grant of theirs
+ *  covers it). Binding is what the Worker may act on; holding is whether this person can hand the
+ *  gate to it when they run it (`invoke_worker` narrows a Worker to the gates its caller holds), so
+ *  a gate not held is shown, never granted by applying (Systems & access, 系统与授权, does that). */
+export const AdminProposalWorkerGateCandidateWireSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    connector: z.string(),
+    held: z.boolean(),
+  })
+  .strict();
+export type AdminProposalWorkerGateCandidateWire = z.infer<
+  typeof AdminProposalWorkerGateCandidateWireSchema
+>;
+
+/** S11 AA5f: how applying sets a proposed Worker's gates here (`ADMIN_PROPOSAL_WORKER_GATE_SOURCE_
+ *  VALUES`). `systems`: what the proposal names (empty: none). `candidates`: for `apply`, the
+ *  connected gates of those systems, in the systems' order (the item's `gates` are the ones kept —
+ *  every candidate unless `workerGates` kept fewer); empty for `workspace` and `none`. */
+export const AdminProposalWorkerGateBindingWireSchema = z
+  .object({
+    systems: z.array(z.string()),
+    source: AdminProposalWorkerGateSourceSchema,
+    candidates: z.array(AdminProposalWorkerGateCandidateWireSchema),
+  })
+  .strict();
+export type AdminProposalWorkerGateBindingWire = z.infer<
+  typeof AdminProposalWorkerGateBindingWireSchema
+>;
 
 const AdminProposalPreviewItemCommonShape = {
   ordinal: z.number().int().positive(),
@@ -145,7 +195,8 @@ const AdminProposalPreviewItemCommonShape = {
  * preview shows them. `skill_version` / `worker_definition_version`: `newFamily` — no family here
  * goes by that name, so it starts one (under the id `derivePackComponentId(sourceName, …)` gives);
  * `changedFields` the fields that differ from the head. A Worker keeps this workspace's own `gates`
- * and `model` from its head (none for a new one: bind it here afterwards). `operation_version`:
+ * and `model` from its head; one with no gates here yet that names its systems is bound to the
+ * connected gates of those systems the owner keeps (`gateBinding`, S11 AA5f). `operation_version`:
  * `fields` the governance fields it changes. An `authority_widening` item is confirmed by its
  * ordinal in `apply_admin_proposal_segment` (I-A4).
  */
@@ -187,10 +238,13 @@ export const AdminProposalPreviewItemWireSchema = z.discriminatedUnion('kind', [
       newFamily: z.boolean(),
       before: ContentVersionRefWireSchema.nullable(),
       after: z.object({ contentDigest: z.string() }).strict(),
-      /** The definition it publishes, with the head's `gates` and `model` kept. */
+      /** The definition it publishes, with the head's `gates` and `model` kept, or the gates this
+       *  apply binds it to. */
       definition: z.record(z.string(), z.unknown()),
-      /** The gates it keeps from the head (empty: none — a new Worker, or a head with none). */
+      /** The gates it publishes: kept from the head, or bound by this apply (`gateBinding.source`);
+       *  empty: none. */
       gates: z.array(ChangeGateRefWireSchema),
+      gateBinding: AdminProposalWorkerGateBindingWireSchema,
       changedFields: z.array(z.string()),
     })
     .strict(),
@@ -268,6 +322,10 @@ export const AdminProposalSegmentApplyResultWireSchema = z
   .object({
     segment: ReceivedAdminProposalSegmentWireSchema,
     changeSegmentId: z.string(),
+    /** S11 AA5f: the change segment's first verification, run once the apply committed (as the
+     *  owner, `trigger: system`), as `install_pack`'s is; `null` when that run could not be made —
+     *  the apply stands, and the owner verifies it from 安装历史. */
+    verification: ChangeVerificationWireSchema.nullable(),
   })
   .strict();
 export type AdminProposalSegmentApplyResultWire = z.infer<

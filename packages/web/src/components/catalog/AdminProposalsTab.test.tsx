@@ -136,6 +136,7 @@ function preview(
           capabilities: ['request_action'],
         },
         gates: [{ id: 'gk-1', name: 'Docker prod' }],
+        gateBinding: { systems: [], source: 'workspace', candidates: [] },
         changedFields: ['capabilities'],
       },
       {
@@ -427,6 +428,192 @@ describe('AdminProposalsTab (能力目录 · 管理员提案, S11 AA4a)', () => 
     await screen.findByTestId('catalog-proposal-items');
     expect(named(http.calls, 'preview_admin_proposal_segment').length).toBe(2);
     expect(screen.queryByTestId('catalog-proposal-blockers')).toBeNull();
+  });
+
+  it('a proposed Worker naming its systems says which gates applying binds it to, and the ones the owner does not hold', async () => {
+    const bound = (held: boolean) =>
+      preview({
+        items: preview().items.map((item) =>
+          item.kind === 'worker_definition_version'
+            ? {
+                ...item,
+                newFamily: true,
+                before: null,
+                gates: [
+                  { id: 'gk-1', name: 'Docker prod' },
+                  { id: 'gk-2', name: 'Docker staging' },
+                ],
+                gateBinding: {
+                  systems: ['docker'],
+                  source: 'apply' as const,
+                  candidates: [
+                    { id: 'gk-1', name: 'Docker prod', connector: 'docker', held: true },
+                    { id: 'gk-2', name: 'Docker staging', connector: 'docker', held },
+                  ],
+                },
+              }
+            : item,
+        ),
+      });
+    for (const held of [true, false]) {
+      cleanup();
+      const http = scriptedHttp({
+        get_workspace: () => OWNER_WORKSPACE,
+        list_admin_proposal_segments: () => ({ items: [received()] }),
+        preview_admin_proposal_segment: () => bound(held),
+      });
+      renderTab(http, SEGMENT);
+      const gates = (await screen.findByTestId('catalog-proposal-item-2-gates')).textContent;
+      expect(gates).toMatch(
+        /接入的系统：它要用 docker，应用时绑到本工作区的 Docker prod、Docker staging/,
+      );
+      if (held) expect(gates).not.toContain('还没有授权');
+      else
+        expect(gates).toContain(
+          '其中 Docker staging 你还没有授权给自己：授权之前，目标里用到这个 Worker 的步骤会被拒绝，你的智能体委派它也可能被拒。先在「系统与授权」里授权',
+        );
+    }
+  });
+
+  it('a system a proposed Worker names that is not connected here is enabled on the spot, each instance the platform offers', async () => {
+    let enabled = false;
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_admin_proposal_segments: () => ({ items: [received()] }),
+      list_available_gate_instances: () => ({ items: [DOCKER] }),
+      preview_admin_proposal_segment: () =>
+        enabled
+          ? preview()
+          : preview({
+              digest: null,
+              items: [],
+              blockers: [
+                {
+                  ordinal: 2,
+                  kind: 'worker_definition_version',
+                  reason: 'worker_system_not_connected',
+                  gateAvailability: 'can_enable',
+                  connector: 'docker',
+                  offered: [{ gateId: 'docker-a', displayName: 'Docker prod' }],
+                },
+              ],
+            }),
+      preview_gate_instance_enable: () => ({
+        gateId: 'docker-a',
+        ambiguousCandidates: [],
+        wouldLink: null,
+        operationsToImport: [],
+        operationsAlreadyPresent: [],
+        manifestDigest: 'sha256:manifest',
+      }),
+      enable_gate_instance: () => {
+        enabled = true;
+        return { gatekeeperId: 'gk-1', linkedExisting: false, publishedOperationNames: [] };
+      },
+    });
+    renderTab(http, SEGMENT);
+
+    const blocker = await screen.findByTestId('catalog-proposal-blocker-2');
+    expect(blocker.textContent).toContain(
+      'Worker ops-runner：它要用的系统 docker 平台已经提供，本工作区还没启用',
+    );
+    fireEvent.click(within(blocker).getByTestId('catalog-proposal-blocker-2-enable-docker-a'));
+    fireEvent.click(await screen.findByRole('button', { name: '注册并启用' }));
+    await waitFor(() =>
+      expect(named(http.calls, 'enable_gate_instance').map((call) => call.params)).toEqual([
+        { gateId: 'docker-a', manifestDigest: 'sha256:manifest' },
+      ]),
+    );
+    await screen.findByTestId('catalog-proposal-items');
+    expect(named(http.calls, 'preview_admin_proposal_segment').length).toBe(2);
+    expect(screen.queryByTestId('catalog-proposal-blockers')).toBeNull();
+  });
+
+  it('a system a proposed Worker names that the platform does not offer says a platform administrator offers it first', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_admin_proposal_segments: () => ({ items: [received()] }),
+      preview_admin_proposal_segment: () =>
+        preview({
+          digest: null,
+          items: [],
+          blockers: [
+            {
+              ordinal: 2,
+              kind: 'worker_definition_version',
+              reason: 'worker_system_not_connected',
+              gateAvailability: 'needs_platform',
+              connector: 'tickets',
+              offered: [],
+            },
+          ],
+        }),
+    });
+    renderTab(http, SEGMENT);
+
+    const blocker = await screen.findByTestId('catalog-proposal-blocker-2');
+    expect(blocker.textContent).toContain(
+      'Worker ops-runner：它要用的系统 tickets 平台还没有提供给工作区，需要平台管理员先提供。',
+    );
+    expect(within(blocker).queryByRole('button')).toBeNull();
+  });
+
+  it('UX M-1 (#968): while the platform part waits, only a system that part creates is said to wait on it; any other needs the platform some other way', async () => {
+    const platformSegment = {
+      id: OTHER,
+      status: 'proposed' as const,
+      items: [
+        {
+          kind: 'gate_instance' as const,
+          gateId: 'ragflow-a',
+          displayName: 'RAGFlow',
+          preset: 'ragflow',
+          target: 'https://ragflow.internal.example',
+        },
+      ],
+    };
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_admin_proposal_segments: () => ({ items: [received({ platformSegment })] }),
+      preview_admin_proposal_segment: () =>
+        preview(
+          {
+            digest: null,
+            items: [],
+            blockers: [
+              {
+                ordinal: 2,
+                kind: 'worker_definition_version',
+                reason: 'worker_system_not_connected',
+                gateAvailability: 'needs_platform',
+                connector: 'ragflow',
+                fromPlatformSegment: true,
+                offered: [],
+              },
+              {
+                ordinal: 2,
+                kind: 'worker_definition_version',
+                reason: 'worker_system_not_connected',
+                gateAvailability: 'needs_platform',
+                connector: 'tickets',
+                fromPlatformSegment: false,
+                offered: [],
+              },
+            ],
+          },
+          { platformSegment },
+        ),
+    });
+    renderTab(http, SEGMENT);
+
+    const [created, other] = await screen.findAllByTestId('catalog-proposal-blocker-2');
+    expect(created?.textContent).toContain(
+      'Worker ops-runner：它要用的系统 ragflow 由这份提案的平台部分新建，要等平台管理员应用平台部分并启用这个系统',
+    );
+    expect(other?.textContent).toContain(
+      'Worker ops-runner：它要用的系统 tickets 平台还没有提供给工作区，需要平台管理员先提供。',
+    );
+    expect(other?.textContent).not.toContain('平台部分');
   });
 
   it('a platform part not applied yet holds the apply and says who goes first', async () => {

@@ -9,6 +9,7 @@ import {
   type AdminProposalSegmentApplyResultWire,
   type AdminProposalSegmentPreviewWire,
   type AdminProposalSegmentStatus,
+  type AdminProposalWorkerGateBindingWire,
   type AvailableGateInstanceWire,
   type ChangePrincipalRefWire,
   type GateInstanceDriftField,
@@ -235,13 +236,16 @@ function platformChangeText(
   return t(`${name}：${fields.join('、')}改过`, `${name}: ${fields.join(', ')} changed`);
 }
 
-/** Why an intent does not resolve here, as what the owner can do about it. */
+/** Why an intent does not resolve here, as what the owner can do about it. A gate or system waits
+ *  on the platform part only when the kernel says that part creates it (`fromPlatformSegment`):
+ *  any other the platform has to offer some other way (UX acceptance of #968, M-1). */
 function blockerText(
   blocker: AdminProposalItemBlockerWire,
   subject: string,
   platformPartPending: boolean,
   t: Translate,
 ): string {
+  const waitsOnPlatformPart = platformPartPending && blocker.fromPlatformSegment === true;
   switch (blocker.reason) {
     case 'name_taken':
       return t(
@@ -264,7 +268,7 @@ function blockerText(
             `${subject}：它要改的系统平台已经提供，本工作区还没启用。可以在下面直接启用，启用后会重新检查。`,
             `${subject}: the platform offers the system it changes, but this workspace has not enabled it. Enable it below; the review is checked again afterwards.`,
           )
-        : platformPartPending
+        : waitsOnPlatformPart
           ? t(
               `${subject}：它要改的系统由这份提案的平台部分新建，要等平台管理员应用平台部分并启用这个系统，之后才能在这里启用。`,
               `${subject}: the system it changes is the one this proposal’s platform part creates; a platform administrator has to apply that part and enable the system before it can be enabled here.`,
@@ -283,6 +287,23 @@ function blockerText(
         `${subject}：它要改的设置对本工作区里的这个 Operation 不成立（例如系统自己定死的字段）。只能拒绝，或请平台管理员改过后重新提议。`,
         `${subject}: what it sets does not make a valid revision of this Operation here (such as a field the system itself fixes). Reject it, or ask a platform administrator to revise and propose it again.`,
       );
+    case 'worker_system_not_connected': {
+      const system = blocker.connector ?? '';
+      return blocker.gateAvailability === 'can_enable'
+        ? t(
+            `${subject}：它要用的系统 ${system} 平台已经提供，本工作区还没启用。可以在下面直接启用，启用后会重新检查。`,
+            `${subject}: the platform offers the system it acts on (${system}), but this workspace has not enabled it. Enable it below; the review is checked again afterwards.`,
+          )
+        : waitsOnPlatformPart
+          ? t(
+              `${subject}：它要用的系统 ${system} 由这份提案的平台部分新建，要等平台管理员应用平台部分并启用这个系统，之后才能在这里启用。`,
+              `${subject}: the system it acts on (${system}) is the one this proposal’s platform part creates; a platform administrator has to apply that part and enable the system before it can be enabled here.`,
+            )
+          : t(
+              `${subject}：它要用的系统 ${system} 平台还没有提供给工作区，需要平台管理员先提供。`,
+              `${subject}: the platform does not offer the system it acts on (${system}) to workspaces yet; a platform administrator has to offer it first.`,
+            );
+    }
   }
 }
 
@@ -887,9 +908,11 @@ function SegmentReview({
                 'Part of it does not fit this workspace; it cannot be applied until that is dealt with:',
               )}
             </span>
-            {data.blockers.map((blocker) => (
+            {data.blockers.map((blocker, index) => (
               <BlockerLine
-                key={blocker.ordinal}
+                // A Worker has one blocker per system it names that is not connected (AA5f), so
+                // the ordinal alone is not unique.
+                key={`${blocker.ordinal}-${index}`}
                 http={http}
                 blocker={blocker}
                 intent={segment.items[blocker.ordinal - 1]}
@@ -1152,12 +1175,38 @@ function BlockerLine({
           </span>
         ) : null
       ) : null}
+      {blocker.reason === 'worker_system_not_connected' &&
+      blocker.gateAvailability === 'can_enable' &&
+      (blocker.offered ?? []).length > 0 ? (
+        can('enable_gate_instance') !== false ? (
+          <span className="row-wrap">
+            {(blocker.offered ?? []).map((offer) => (
+              <EnableGateConfirm
+                key={offer.gateId}
+                http={http}
+                gateId={offer.gateId}
+                gateDisplayName={offer.displayName}
+                platformAdmin={platformAdmin}
+                onEnabled={onEnabled}
+                testId={`catalog-proposal-blocker-${blocker.ordinal}-enable-${offer.gateId}`}
+              />
+            ))}
+          </span>
+        ) : null
+      ) : null}
+      {blocker.reason === 'worker_system_not_connected' &&
+      blocker.gateAvailability !== 'can_enable' &&
+      platformAdmin ? (
+        <RouteLink href={hrefs.platformIntegrations()}>
+          {t('去「平台 · 集成」', 'Open Platform · Integrations')}
+        </RouteLink>
+      ) : null}
       {blocker.reason === 'gate_not_enabled' &&
       blocker.gateAvailability !== 'can_enable' &&
       platformAdmin ? (
         <RouteLink
           href={
-            gateId !== null && !platformPartPending
+            gateId !== null && !(platformPartPending && blocker.fromPlatformSegment === true)
               ? hrefs.platformGateInstance(gateId)
               : hrefs.platformIntegrations()
           }
@@ -1166,6 +1215,42 @@ function BlockerLine({
         </RouteLink>
       ) : null}
     </span>
+  );
+}
+
+/** S11 AA5f: how applying binds a proposed Worker that names its systems and has no gates here
+ *  yet — to the gates it keeps (`gates`) of those systems; and the ones among them the person
+ *  previewing does not hold (binding grants nothing: 系统与授权 does). Until they hold them, a goal
+ *  step using the Worker is refused outright (`authority_lost: gates`), and so is delegating to it
+ *  when it holds an execute-class capability (`InvokeWorkerAttenuationError`); one that only
+ *  observes drops those gates and goes on (#501 on #968, P3-1). The owner cannot tell those apart
+ *  here, so delegating "may be" refused (UX re-check of #968). */
+function workerGateBindingText(
+  binding: AdminProposalWorkerGateBindingWire,
+  gates: readonly { readonly id: string; readonly name: string }[],
+  t: Translate,
+): string {
+  const systems = binding.systems.join(t('、', ', '));
+  if (gates.length === 0) {
+    return t(
+      `接入的系统：它要用 ${systems}，这次应用一个门都不绑`,
+      `Systems: it acts on ${systems}; this apply binds it to no gate`,
+    );
+  }
+  const names = gates.map((gate) => gate.name).join(t('、', ', '));
+  const kept = new Set(gates.map((gate) => gate.id));
+  const notHeld = binding.candidates
+    .filter((candidate) => kept.has(candidate.id) && !candidate.held)
+    .map((candidate) => candidate.name);
+  const bound = t(
+    `接入的系统：它要用 ${systems}，应用时绑到本工作区的 ${names}`,
+    `Systems: it acts on ${systems}; applying binds it to ${names} here`,
+  );
+  if (notHeld.length === 0) return bound;
+  const them = notHeld.length === 1 ? 'it' : 'them';
+  return t(
+    `${bound}。其中 ${notHeld.join('、')} 你还没有授权给自己：授权之前，目标里用到这个 Worker 的步骤会被拒绝，你的智能体委派它也可能被拒。先在「系统与授权」里授权`,
+    `${bound}. You do not hold ${notHeld.join(', ')} yet: until you grant ${them} to yourself on Systems & access, goal steps that use this Worker are refused, and your agent may be refused when it delegates to it`,
   );
 }
 
@@ -1343,20 +1428,22 @@ function ItemChanges({
         </span>
       ) : null}
       <span className="text-3 text-small" data-testid={`${prefix}-gates`}>
-        {item.newFamily
-          ? t(
-              '接入的系统：新的 Worker 不接入任何系统；应用后在「Worker」页给它选',
-              'Systems: a new Worker is connected to none; pick some on the Workers tab afterwards',
-            )
-          : item.gates.length > 0
+        {item.gateBinding.source === 'apply'
+          ? workerGateBindingText(item.gateBinding, item.gates, t)
+          : item.newFamily
             ? t(
-                `接入的系统：沿用工作区为它选的 ${item.gates.map((gate) => gate.name).join('、')}`,
-                `Systems: keeps the ones the workspace chose, ${item.gates.map((gate) => gate.name).join(', ')}`,
+                '接入的系统：新的 Worker 不接入任何系统；应用后在「Worker」页给它选',
+                'Systems: a new Worker is connected to none; pick some on the Workers tab afterwards',
               )
-            : t(
-                '接入的系统：沿用工作区的设置，不接入任何系统',
-                'Systems: keeps the workspace’s setting, none',
-              )}
+            : item.gates.length > 0
+              ? t(
+                  `接入的系统：沿用工作区为它选的 ${item.gates.map((gate) => gate.name).join('、')}`,
+                  `Systems: keeps the ones the workspace chose, ${item.gates.map((gate) => gate.name).join(', ')}`,
+                )
+              : t(
+                  '接入的系统：沿用工作区的设置，不接入任何系统',
+                  'Systems: keeps the workspace’s setting, none',
+                )}
       </span>
       <details className="disclosure" data-testid={`${prefix}-content`}>
         <summary>{t('查看系统提示词', 'Show the system prompt')}</summary>

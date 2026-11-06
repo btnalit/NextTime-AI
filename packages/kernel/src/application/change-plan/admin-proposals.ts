@@ -49,6 +49,9 @@ import { contentDigest } from './digest.js';
  *  - it names one target twice, or one item target twice in a segment, or content that would not
  *    publish (a Skill's rules, a Worker's definition — never its `gates` or `model`, the target
  *    workspace's own), or a source name a shipped pack has;
+ *  - a Worker names a system (`systems`, S11 AA5f) that is neither a connector the platform has nor
+ *    one the proposal's own platform segment creates (`unknownWorkerSystems`: what each target's
+ *    owner binds it to when applying are that system's gates);
  *  - its administrator already proposed {@link ADMIN_PROPOSAL_DAILY_LIMIT} proposals today (F11, UTC,
  *    across every trial workspace, withdrawn ones included);
  *  - a target cannot take a proposal: unknown, disabled, or a trial workspace — all three refused alike
@@ -280,7 +283,11 @@ function checkItem(
       }
       return item;
     }
-    return { kind: item.kind, definition: parsed.data as Record<string, unknown> };
+    return {
+      kind: item.kind,
+      definition: parsed.data as Record<string, unknown>,
+      ...(item.systems !== undefined ? { systems: [...item.systems] } : {}),
+    };
   }
   return item;
 }
@@ -429,6 +436,57 @@ export interface AdminProposalProposer {
   readonly sessionId: string;
 }
 
+/** The connector a platform segment's `gate_instance` item puts its instance under: its preset's
+ *  (a preset is its connector, `hosted-plan.ts`), the one it names, or the generic one of its
+ *  transport (`null` here: never a system a Worker names). Also which blocker of a workspace
+ *  segment waits on the platform segment (`admin-proposal-segments.ts`, `fromPlatformSegment`). */
+export function platformItemConnector(
+  item: AdminProposalPlatformSegmentInputWire['items'][number],
+): string | null {
+  return item.preset ?? item.connector ?? null;
+}
+
+/**
+ * S11 AA5f: each Worker's `systems` that is neither a connector the platform has (`connectors` is
+ * readable by every transaction, core 0023) nor one the proposal's own platform segment creates —
+ * one problem per such name, by where it stands. A Worker may name a system its proposal brings
+ * (its platform segment is applied before any workspace segment), as the agent connected it in its
+ * trial workspace; a name nothing will ever carry would leave every target's owner unable to bind
+ * it.
+ */
+async function unknownWorkerSystems(
+  client: PoolClient,
+  segments: readonly AdminProposalSegmentInputWire[],
+  platform: AdminProposalPlatformSegmentInputWire | null,
+): Promise<AdminProposalProblem[]> {
+  const named = segments.flatMap((segment, s) =>
+    segment.items.flatMap((item, i) =>
+      item.kind === 'worker_definition_version'
+        ? (item.systems ?? []).map((system, j) => ({
+            system,
+            path: `segments[${s}].items[${i}].systems[${j}]`,
+          }))
+        : [],
+    ),
+  );
+  if (named.length === 0) return [];
+  const result = await client.query<{ name: string }>(
+    'select name from connectors where name = any($1::text[])',
+    [[...new Set(named.map((entry) => entry.system))]],
+  );
+  const known = new Set(result.rows.map((row) => row.name));
+  for (const item of platform?.items ?? []) {
+    const connector = platformItemConnector(item);
+    if (connector !== null) known.add(connector);
+  }
+  return named
+    .filter((entry) => !known.has(entry.system))
+    .map((entry) => ({
+      path: entry.path,
+      message: `"${entry.system}" is no connector the platform has, nor one this proposal's platform segment creates: name the connector of the gate you reach the system through`,
+    }));
+}
+
 /** F10: the first segment whose target cannot take a proposal, or none. One read of each, the same
  *  answer for unknown, disabled and trial (`workspaces` is readable by every transaction, core
  *  0001). */
@@ -503,6 +561,9 @@ export async function proposeAdminProposal(
     client,
     segments.map((segment) => segment.targetWorkspaceId),
   );
+  // AA5f: what a Worker names as its systems is bound to those systems' gates where it is applied.
+  const unknownSystems = await unknownWorkerSystems(client, segments, platform);
+  if (unknownSystems.length > 0) throw new AdminProposalInvalidError(unknownSystems);
 
   const displayName = (user.rows[0]?.display_name ?? '').slice(0, 200) || proposer.userId;
   const description = input.description ?? '';
