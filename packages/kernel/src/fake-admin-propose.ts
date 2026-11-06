@@ -2,6 +2,8 @@ import {
   type AdminProposalItemIntentWire,
   AgentAdminProposalWireSchema,
   AgentProposalTargetsWireSchema,
+  type PackWire,
+  PackWireSchema,
 } from '@nexttime/shared';
 import type { CryptoKey } from 'jose';
 import { withWorkspace } from './adapters/db/pool.js';
@@ -95,41 +97,48 @@ export function fakeAdminProposal(
   };
 }
 
+/** Steps 1–3's first half, shared by both hooks: the Turn's admin agent Handle, presented the way
+ *  a container presents it, and the targets its administrator chose (none: the Turn fails). */
+async function adminAgentCaller(deps: FakeAdminProposeHandlerDeps, input: StartTurnInput) {
+  const { workspaceId, principalId, sessionId } = input;
+  if (input.agentKind !== 'admin_agent' || sessionId === undefined) {
+    throw new Error('fake-admin-propose: not an admin agent Turn with its session');
+  }
+  const issued = await withWorkspace(deps.pool, { workspaceId, principalId }, (client) =>
+    issueAdminAgentHandle(client, {
+      workspaceId,
+      principalId,
+      sessionId,
+      ttlSeconds: FAKE_ADMIN_HANDLE_TTL_SECONDS,
+      privateKey: deps.privateKey,
+    }),
+  );
+  const caller = await resolveSourceBoundCaller(issued.token, {
+    pool: deps.pool,
+    loadHandlePublicKey: deps.loadHandlePublicKey,
+  });
+  const { targetWorkspaceIds } = AgentProposalTargetsWireSchema.parse(
+    await dispatchCapability({ pool: deps.pool }, caller, 'agent_list_proposal_targets', {}),
+  );
+  if (targetWorkspaceIds.length === 0) {
+    throw new Error(
+      'fake-admin-propose: no proposal targets chosen for this trial workspace — choose them on 平台 · 管理员智能体 first',
+    );
+  }
+  const suffix = input.turnId.replace(/[^a-z0-9]/g, '').slice(0, 8);
+  return { caller, targetWorkspaceIds, suffix };
+}
+
 /** Builds the `FakeAgentRuntime.onAdminPropose` hook — see this module's doc comment. */
 export function createFakeAdminProposeHandler(
   deps: FakeAdminProposeHandlerDeps,
 ): (input: StartTurnInput) => Promise<FakeAdminProposeOutcome> {
   return async (input: StartTurnInput): Promise<FakeAdminProposeOutcome> => {
-    const { workspaceId, principalId, sessionId } = input;
-    if (input.agentKind !== 'admin_agent' || sessionId === undefined) {
-      throw new Error('fake-admin-propose: not an admin agent Turn with its session');
-    }
-    const issued = await withWorkspace(deps.pool, { workspaceId, principalId }, (client) =>
-      issueAdminAgentHandle(client, {
-        workspaceId,
-        principalId,
-        sessionId,
-        ttlSeconds: FAKE_ADMIN_HANDLE_TTL_SECONDS,
-        privateKey: deps.privateKey,
-      }),
-    );
-    const caller = await resolveSourceBoundCaller(issued.token, {
-      pool: deps.pool,
-      loadHandlePublicKey: deps.loadHandlePublicKey,
-    });
-    const { targetWorkspaceIds } = AgentProposalTargetsWireSchema.parse(
-      await dispatchCapability({ pool: deps.pool }, caller, 'agent_list_proposal_targets', {}),
-    );
-    if (targetWorkspaceIds.length === 0) {
-      throw new Error(
-        'fake-admin-propose: no proposal targets chosen for this trial workspace — choose them on 平台 · 管理员智能体 first',
-      );
-    }
+    const { caller, targetWorkspaceIds, suffix } = await adminAgentCaller(deps, input);
     const [preset] = await loadConnectorPresets({ presetsDir: deps.presetsDir });
     if (preset === undefined) {
       throw new Error('fake-admin-propose: this deployment ships no connector preset');
     }
-    const suffix = input.turnId.replace(/[^a-z0-9]/g, '').slice(0, 8);
     const proposal = AgentAdminProposalWireSchema.parse(
       await dispatchCapability(
         { pool: deps.pool },
@@ -137,6 +146,50 @@ export function createFakeAdminProposeHandler(
         'propose_admin_proposal',
         fakeAdminProposal(suffix, targetWorkspaceIds, preset.name),
       ),
+    );
+    return { proposalId: proposal.id, title: proposal.title, status: proposal.status };
+  };
+}
+
+/** The pack the pack hook proposes: by name, the first whose latest version needs no system and
+ *  builds on no other pack — installable in any fresh workspace without a gate or another install
+ *  first. The kernel names no pack (§7.10): it is whatever this deployment ships that fits. */
+export function fakeProposablePack(packs: readonly PackWire[]): PackWire | undefined {
+  return [...packs]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .find((pack) => pack.requirements.length === 0 && pack.dependencies.length === 0);
+}
+
+/**
+ * Builds the `FakeAgentRuntime.onAdminProposePack` hook (S11 AA5g): the same Handle, presentation
+ * and targets as {@link createFakeAdminProposeHandler}, then the real `agent_list_packs` and the
+ * real `propose_pack_install` (the admin-agent-only gate, the ceiling, the trial workspace, the
+ * chosen targets, the quota, the registry's latest-version check, the audit row) for
+ * {@link fakeProposablePack}'s pack at its latest version, one segment per chosen target. The
+ * owner's install, the segment turning applied and the rollback turning it rolled_back are all the
+ * real code paths.
+ */
+export function createFakeAdminProposePackHandler(
+  deps: FakeAdminProposeHandlerDeps,
+): (input: StartTurnInput) => Promise<FakeAdminProposeOutcome> {
+  return async (input: StartTurnInput): Promise<FakeAdminProposeOutcome> => {
+    const { caller, targetWorkspaceIds, suffix } = await adminAgentCaller(deps, input);
+    const listed = await dispatchCapability({ pool: deps.pool }, caller, 'agent_list_packs', {});
+    const packs = PackWireSchema.array().parse((listed as { items: unknown }).items);
+    const pack = fakeProposablePack(packs);
+    if (pack === undefined) {
+      throw new Error(
+        'fake-admin-propose: this deployment ships no pack that needs no system and no other pack',
+      );
+    }
+    const proposal = AgentAdminProposalWireSchema.parse(
+      await dispatchCapability({ pool: deps.pool }, caller, 'propose_pack_install', {
+        pack: pack.name,
+        version: pack.latestVersion,
+        targetWorkspaceIds,
+        title: `CI pack install ${suffix}`,
+        description: `Proposed by the CI admin agent journey: install ${pack.name} v${pack.latestVersion} in each target.`,
+      }),
     );
     return { proposalId: proposal.id, title: proposal.title, status: proposal.status };
   };

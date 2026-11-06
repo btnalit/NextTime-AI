@@ -5,7 +5,8 @@
 // The kernel's `FakeAgentRuntime` (AGENT_RUNTIME=fake) turns a chat message carrying
 // `__nexttime_fake_delegate__` into a scripted `invoke_worker`, and one carrying
 // `__nexttime_fake_admin_propose__` in an admin agent Turn into a scripted
-// `propose_admin_proposal` — both only when `main()` wired the hooks, which it does only under
+// `propose_admin_proposal`, and one carrying `__nexttime_fake_admin_pack__` into a scripted
+// `propose_pack_install` (S11 AA5g) — all only when `main()` wired the hooks, which it does only under
 // `FAKE_INVOKE_WORKER=1`. Three rules keep that from ever reaching a real deployment or a real
 // agent:
 //
@@ -15,7 +16,7 @@
 //      fake LLM the rehearsal drives real pi with — can react to them, because none of it names
 //      them: to real pi a marker is text it passes to the model.
 //   2. The hooks are built only by the kernel's composition root (`createFakeDelegateHandler`,
-//      `createFakeAdminProposeHandler` called in packages/kernel/src/index.ts only), which builds
+//      `createFakeAdminProposeHandler`, `createFakeAdminProposePackHandler` called in packages/kernel/src/index.ts only), which builds
 //      them only inside its `FAKE_INVOKE_WORKER === '1' && kind === 'fake' && handleKeyPair` block.
 //   3. `FAKE_INVOKE_WORKER` gets a value only in deploy/ci/env.ci.template: docker-compose.yml
 //      passes it through empty by default, and no other env file, compose file, workflow or script
@@ -29,7 +30,11 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-export const MARKERS = ['__nexttime_fake_delegate__', '__nexttime_fake_admin_propose__'];
+export const MARKERS = [
+  '__nexttime_fake_delegate__',
+  '__nexttime_fake_admin_propose__',
+  '__nexttime_fake_admin_pack__',
+];
 
 /** Rule 1: where a marker literal may appear. */
 export const MARKER_ALLOWED = [
@@ -40,11 +45,16 @@ export const MARKER_ALLOWED = [
   /^docs\//,
 ];
 
-/** Rule 2: where a fake hook may be built (its own module and tests define and call it). */
-export const HOOK_BUILDERS = ['createFakeDelegateHandler', 'createFakeAdminProposeHandler'];
+/** Rule 2: where a fake hook may be built (its own module and its unit and integration tests
+ *  define, import and call it). */
+export const HOOK_BUILDERS = [
+  'createFakeDelegateHandler',
+  'createFakeAdminProposeHandler',
+  'createFakeAdminProposePackHandler',
+];
 export const HOOK_ALLOWED = [
   /^packages\/kernel\/src\/index\.ts$/,
-  /^packages\/kernel\/src\/fake-(invoke-worker|admin-propose)(\.integration\.test)?\.ts$/,
+  /^packages\/kernel\/src\/fake-(invoke-worker|admin-propose)(\.integration\.test|\.test)?\.ts$/,
   /^scripts\/guards\/fake-markers(\.test)?\.mjs$/,
   /^docs\//,
 ];

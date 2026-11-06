@@ -87,7 +87,10 @@ import {
   runTaskReaper,
 } from './application/task/index.js';
 import { DEFAULT_DRAFT_EXPIRY_DAYS, expireDraftsOnce } from './application/worker/index.js';
-import { createFakeAdminProposeHandler } from './fake-admin-propose.js';
+import {
+  createFakeAdminProposeHandler,
+  createFakeAdminProposePackHandler,
+} from './fake-admin-propose.js';
 import { FakeTaskSupervisorClient, createFakeDelegateHandler } from './fake-invoke-worker.js';
 import {
   ApprovalDrainer,
@@ -495,6 +498,10 @@ export interface CreateBackgroundServicesOptions {
   readonly fakeAgentRuntimeOnAdminPropose?: (
     input: StartTurnInput,
   ) => Promise<FakeAdminProposeOutcome>;
+  /** S11 AA5g (test-only): `FakeAgentRuntime`'s `onAdminProposePack`, the same way. */
+  readonly fakeAgentRuntimeOnAdminProposePack?: (
+    input: StartTurnInput,
+  ) => Promise<FakeAdminProposeOutcome>;
   /** How often the S2.7 task reaper polls (duration-limit enforcement + supervisor-status
    *  reconciliation). Default `DEFAULT_TASK_REAPER_INTERVAL_MS` (30s — much tighter than the
    *  approval reaper's 5 minutes, matching `worker-supervisor`'s own 30s `reap()` cadence). */
@@ -655,6 +662,7 @@ function buildDefaultRuntime(options: CreateBackgroundServicesOptions): AgentRun
       sink,
       onDelegate: options.fakeAgentRuntimeOnDelegate,
       onAdminPropose: options.fakeAgentRuntimeOnAdminPropose,
+      onAdminProposePack: options.fakeAgentRuntimeOnAdminProposePack,
     });
   }
 
@@ -1670,6 +1678,10 @@ export function main(): void {
     let fakeAgentRuntimeOnAdminPropose:
       | ((input: StartTurnInput) => Promise<FakeAdminProposeOutcome>)
       | undefined;
+    // S11 AA5g: and `FAKE_ADMIN_PROPOSE_PACK_MARKER` proposes a pack install the same way.
+    let fakeAgentRuntimeOnAdminProposePack:
+      | ((input: StartTurnInput) => Promise<FakeAdminProposeOutcome>)
+      | undefined;
     if (process.env.FAKE_INVOKE_WORKER === '1' && kind === 'fake' && handleKeyPair) {
       fakeTaskSupervisorClient = new FakeTaskSupervisorClient({
         pool,
@@ -1684,8 +1696,12 @@ export function main(): void {
         pool,
         privateKey: handleKeyPair.privateKey,
       });
+      fakeAgentRuntimeOnAdminProposePack = createFakeAdminProposePackHandler({
+        pool,
+        privateKey: handleKeyPair.privateKey,
+      });
       app.log.warn(
-        "FAKE_INVOKE_WORKER=1: invoke_worker and the admin agent's propose_admin_proposal are scripted (no real worker-supervisor spawn, no pi) — never set this outside CI",
+        "FAKE_INVOKE_WORKER=1: invoke_worker and the admin agent's propose_admin_proposal / propose_pack_install are scripted (no real worker-supervisor spawn, no pi) — never set this outside CI",
       );
     }
 
@@ -1698,6 +1714,7 @@ export function main(): void {
       taskSupervisorClient: fakeTaskSupervisorClient,
       fakeAgentRuntimeOnDelegate,
       fakeAgentRuntimeOnAdminPropose,
+      fakeAgentRuntimeOnAdminProposePack,
       taskReaperIntervalMs,
       onTaskReaperError: (err: unknown) => app.log.error(err),
       onGoalAdvancerError: (err: unknown) => app.log.error(err),

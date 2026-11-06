@@ -32,6 +32,7 @@ export type {
 
 export {
   FAKE_ADMIN_PROPOSE_MARKER,
+  FAKE_ADMIN_PROPOSE_PACK_MARKER,
   FAKE_DELEGATE_MARKER,
   FakeAgentRuntime,
 } from './fake-runtime.js';

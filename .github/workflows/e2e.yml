@@ -201,7 +201,8 @@ jobs:
           sudo env "NEXTTIME_DATA=$NEXTTIME_DATA" sh scripts/gen-handle-keys.sh
           sudo cp config/llm-providers.fake.example.yaml "$NEXTTIME_DATA/config/llm-providers.yaml"
           echo 'FAKE_LLM_API_KEY=fake' | sudo tee -a "$NEXTTIME_DATA/secrets/llm-proxy.env" >/dev/null
-          # The admin agent journey (journeys/09-admin-agent.spec.ts, S11 AA4d) needs the platform
+          # The admin agent journeys (journeys/09-admin-agent.spec.ts, S11 AA4d, and
+          # 10-admin-agent-pack.spec.ts, AA5g) need the platform
           # switch on. A new install starts with it on: host-env-init.sh writes it into the
           # kernel.env it creates, so this checks that default instead of setting it.
           sudo grep -qx 'ADMIN_AGENT_ENABLED=1' "$NEXTTIME_DATA/secrets/kernel.env" \

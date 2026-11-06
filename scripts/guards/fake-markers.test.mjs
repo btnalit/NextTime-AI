@@ -20,6 +20,7 @@ test('a marker is allowed in the fake runtime, its tests and the e2e specs only'
     'packages/kernel/src/application/host-bridge/fake-runtime.test.ts',
     'packages/kernel/src/fake-admin-propose.integration.test.ts',
     'packages/web/e2e/journeys/09-admin-agent.spec.ts',
+    'packages/web/e2e/journeys/10-admin-agent-pack.spec.ts',
   ]) {
     assert.deepEqual(markerFindings(rel, text), [], rel);
   }
@@ -70,6 +71,14 @@ test('a hook is built only by index.ts, inside the FAKE_INVOKE_WORKER gate', () 
     hookFindings(
       'packages/kernel/src/fake-admin-propose.ts',
       'export function createFakeAdminProposeHandler(deps) {}',
+    ),
+    [],
+  );
+  // Its unit test imports the module too (S11 AA5g: `fakeProposablePack`).
+  assert.deepEqual(
+    hookFindings(
+      'packages/kernel/src/fake-admin-propose.test.ts',
+      "import { fakeProposablePack } from './fake-admin-propose.js';",
     ),
     [],
   );
