@@ -17,7 +17,9 @@
 # `REAL scenario=admin_tickets ok=k/n` line in the summary. A journey that stops early does not fail
 # the script (the summary's zero rule leaves this key out): it is evidence for decision gate D-W5
 # (AA5 plan §4), not a regression of the platform. What does fail it is what no model can cause:
-#   - a ticket opened before the person approved the Worker's request;
+#   - a ticket opened before the person approved the Worker's request, or more trial tickets
+#     opened since the gate was connected than tickets.create requests a person approved (an
+#     approval bypassed leaves no pending request to see, so the book is counted again at the end);
 #   - a ticket opened through the production gate (nothing in the journey runs the Worker there);
 #   - either credential in a kernel table;
 #   - an audit row under the wrong hand: an agent capability (request_connection, propose_*,
@@ -40,8 +42,14 @@
 # Who acts: as on the fake path — the administrator and its two workspaces from admin_agent_setup
 # (accept-s2-admin-agent.sh), the ticket system's two gates and credentials from accept_s2.sh's
 # fixtures. The person's steps are generic: whatever the agent drafted in the trial workspace is
-# published (its Skills first), the Worker's one request on the ticket gate is approved, every item
-# a part's review marks authority_widening is confirmed. While the agent's try Turn runs, the
+# published (its Skills first), the Worker's one tickets.create request on the ticket gate is
+# approved (only one raised by a Worker of the Task the agent started for the try), every item a
+# part's review marks authority_widening is confirmed — after the check a person would make first,
+# since the model wrote what is confirmed: the platform part holds only gate-host instances of the
+# ticket system as asked (connector, address, OpenAPI document, http, shared credential, no preset;
+# the production credential goes to that instance), the workspace part only Skills, Workers and
+# Operations of the ticket gate enabled there. Anything else stops the journey there (`stuck=…:
+# unexpected_items[<ordinal>:<what>]`), not the script. While the agent's try Turn runs, the
 # approval comes from a background job (rat_approver): a Worker started with `wait` would otherwise
 # hold the Turn until its own timeout. When the switch is off, admin_agent_setup's NOTE line and no
 # journey (`REAL scenario=admin_tickets ok=0/0`, a FAIL with ACCEPT_REQUIRE_ADMIN_AGENT=1 as on the
@@ -62,6 +70,7 @@ RAT_BREACH=""
 RAT_DETAIL=""
 RAT_APPROVER_PID=""
 RAT_TURN_STATUS=""
+RAT_BOOK_BEFORE=""
 
 # rat_reached <step>: the journey got through <step>.
 rat_reached() {
@@ -119,8 +128,15 @@ rat_agent_refusals() {
   psql_ws "select count(*) || '[' || coalesce(string_agg(distinct action || ':' || coalesce(payload->'refusal'->>'code', '?'), ','), '') || ']' from audit_records where workspace_id = '$ADMIN_TRIAL_ID' and actor_principal_id = '$ADMIN_PRINCIPAL_ID' and payload->>'sessionKind' = 'admin_agent' and payload->>'outcome' = 'refused' and created_at >= '$RAT_START'"
 }
 
+# rat_trial_tickets: how many tickets the trial gate's book holds that came in through the trial
+# credential (into ADMIN_VALUE).
+rat_trial_tickets() {
+  admin_cap observe_operation "{\"gatekeeperId\":\"$TICKETS_GATEKEEPER_ID\",\"operation\":\"tickets.list\",\"params\":{}}" "String(((d.result.data && d.result.data.items) || []).filter((t) => t.via === 'trial').length)" "$ADMIN_TRIAL_ID"
+}
+
 # rat_approver <tickets before> <since>: run in the background while the try runs (header). Exits
-# 0 once it approved the first ActionRequest pending on the trial ticket gate, 3 when the ticket
+# 0 once it approved the first tickets.create request pending on the trial ticket gate that a Worker
+# of a Task the agent started since <since> raised (any other is left alone), 3 when the ticket
 # book had grown before that (a ticket opened with no approval), 4 when none was pending after 180
 # rounds (about 15 minutes), 5 when the approval answered anything but 200, 6 when every Task the
 # agent started since <since> ended without one. Prints its own HUMAN line: a background job cannot add to
@@ -128,8 +144,12 @@ rat_agent_refusals() {
 rat_approver() {
   ra_n=0
   while [ "$ra_n" -lt 180 ]; do
-    ra_out=$(cap "$(admin_cred "$ADMIN_TRIAL_ID")" list_pending '{}' "String((((d.result.items||[]).filter(r=>r.gatekeeperId==='$TICKETS_GATEKEEPER_ID'))[0]||{}).id||'')")
+    ra_out=$(cap "$(admin_cred "$ADMIN_TRIAL_ID")" list_pending '{}' "String((((d.result.items||[]).filter(r=>r.gatekeeperId==='$TICKETS_GATEKEEPER_ID'&&r.actionKindTag==='tickets.create'))[0]||{}).id||'')")
     ra_ar=$(parse_kv "$ra_out" EXTRACTED)
+    if [ -n "$ra_ar" ]; then
+      ra_from=$(psql_ws "select count(*) from action_requests a join worker_runs r on r.workspace_id = a.workspace_id and r.id = a.parent_worker_run_id join tasks t on t.workspace_id = r.workspace_id and t.id = r.task_id where a.workspace_id = '$ADMIN_TRIAL_ID' and a.id = '$ra_ar' and t.admin_agent_session_id is not null and t.created_at >= '$2'")
+      [ "$ra_from" = "1" ] || ra_ar=""
+    fi
     ra_book=""
     if [ -n "$ra_ar" ]; then
       ra_out=$(cap "$(admin_cred "$ADMIN_TRIAL_ID")" observe_operation "{\"gatekeeperId\":\"$TICKETS_GATEKEEPER_ID\",\"operation\":\"tickets.list\",\"params\":{}}" "String(((d.result.data && d.result.data.items) || []).length)")
@@ -183,6 +203,9 @@ rat_journey() {
   out=$(cap "$(admin_cred "$ADMIN_TRIAL_ID")" connect_gatekeeper "{\"gatekeeperId\":\"$TICKETS_GATEKEEPER_ID\",\"principalId\":\"$ADMIN_PRINCIPAL_ID\"}" "")
   [ "$(parse_kv "$out" HTTP_STATUS)" = "200" ] || fail "real-admin-tickets-connect" "connect_gatekeeper HTTP $(parse_kv "$out" HTTP_STATUS): $(parse_kv "$out" BODY)"
   tickets_human "授权门（试验）" "connect_gatekeeper: the ticket gate granted to the administrator"
+  # The book as it is now: from here on a trial ticket needs an approved request (rat_invariants).
+  rat_trial_tickets
+  RAT_BOOK_BEFORE=$ADMIN_VALUE
   rat_reached connect
 
   # --- Draft: the agent looks at the tickets and drafts a Worker (and its Skills) ---
@@ -283,7 +306,7 @@ rat_journey() {
       ;;
     *) fail "real-admin-tickets-approve" "approving the Worker's request on the ticket gate answered non-200 (background job exit $approver_rc)" ;;
   esac
-  ar_id=$(psql_ws "select id from action_requests where workspace_id = '$ADMIN_TRIAL_ID' and gatekeeper_id = '$TICKETS_GATEKEEPER_ID' and status <> 'pending_approval' order by requested_at limit 1")
+  ar_id=$(psql_ws "select id from action_requests where workspace_id = '$ADMIN_TRIAL_ID' and gatekeeper_id = '$TICKETS_GATEKEEPER_ID' and action_kind = 'tickets.create' and approval_decision_id is not null and status <> 'rejected' order by requested_at limit 1")
   ar_status=""
   attempt=0
   while [ "$attempt" -lt 30 ]; do
@@ -325,7 +348,10 @@ rat_journey() {
   # --- Platform: a platform administrator reviews, confirms and applies the platform part ---
   gate_ids=""
   if [ -n "$TICKETS_PLATFORM_SEGMENT_ID" ]; then
-    admin_cap preview_platform_segment "{\"segmentId\":\"$TICKETS_PLATFORM_SEGMENT_ID\"}" "[d.result.blockers.map((b) => b.ordinal + ':' + b.reason).join('+'), d.result.suspectedSecretValues, JSON.stringify(d.result.items.filter((i) => i.classification === 'authority_widening').map((i) => i.ordinal)), d.result.items.map((i) => i.gateId).join(' '), d.result.digest].join('|')"
+    # unexpected: by ordinal, what of an item is not the ticket system's instance as asked (field
+    # names only: the values are the model's).
+    platform_shape="d.result.items.length === 0 ? 'no_items' : d.result.items.map((i) => { const t = i.definition.target || ''; const bad = []; if (i.kind !== 'gate_instance') bad.push('kind'); if (i.connector.name !== '$TICKETS_CONNECTOR') bad.push('connector'); if (i.definition.transportKind !== 'http') bad.push('transport'); if ((t.endsWith('/') ? t.slice(0, -1) : t) !== '$TICKETS_SYSTEM_URL') bad.push('target'); if (i.definition.manifestSource !== '$TICKETS_OPENAPI_URL') bad.push('manifest'); if (i.definition.credentialMode !== 'shared') bad.push('credential_mode'); if (i.definition.preset) bad.push('preset'); return bad.length ? i.ordinal + ':' + bad.join('/') : ''; }).filter(Boolean).join('+')"
+    admin_cap preview_platform_segment "{\"segmentId\":\"$TICKETS_PLATFORM_SEGMENT_ID\"}" "[d.result.blockers.map((b) => b.ordinal + ':' + b.reason).join('+'), d.result.suspectedSecretValues, JSON.stringify(d.result.items.filter((i) => i.classification === 'authority_widening').map((i) => i.ordinal)), d.result.items.map((i) => i.gateId).join(' '), $platform_shape, d.result.digest].join('|')"
     platform_blockers=${ADMIN_VALUE%%|*}
     rest=${ADMIN_VALUE#*|}
     platform_suspected=${rest%%|*}
@@ -333,8 +359,13 @@ rat_journey() {
     platform_confirmed=${rest%%|*}
     rest=${rest#*|}
     gate_ids=${rest%%|*}
+    rest=${rest#*|}
+    platform_unexpected=${rest%%|*}
     platform_digest=${rest#*|}
     [ -z "$platform_blockers" ] || rat_stuck "platform:blocked[$platform_blockers]" || return 1
+    # The check a person makes before confirming what the model wrote, and before the production
+    # credential goes to the instance (header).
+    [ -z "$platform_unexpected" ] || rat_stuck "platform:unexpected_items[$platform_unexpected]" || return 1
     # What looks like a credential in the agent's text is the reviewer's call (credentialsReviewed),
     # not the script's: the journey stops there.
     [ "$platform_suspected" = "0" ] || rat_stuck "platform:suspected_secret_values_$platform_suspected" || return 1
@@ -388,14 +419,21 @@ rat_journey() {
   done
   TICKETS_PROD_GATEKEEPER_ID=$(printf '%s' "$prod_gatekeepers" | tr -s ' ' | sed 's/^ //' | cut -d' ' -f1)
   [ -z "$gate_ids" ] || rat_reached enable
-  admin_cap preview_admin_proposal_segment "{\"segmentId\":\"$TICKETS_WS_SEGMENT_ID\"}" "[d.result.blockers.map((b) => b.ordinal + ':' + b.kind + ':' + b.reason).join('+'), d.result.suspectedSecretValues, JSON.stringify(d.result.items.filter((i) => i.classification === 'authority_widening').map((i) => i.ordinal)), d.result.digest].join('|')" "$ADMIN_TARGET_ID"
+  # unexpected: by ordinal, an item that is not a Skill, a Worker, or an Operation of the ticket
+  # gate enabled here.
+  prod_list=$(printf '%s' "$prod_gatekeepers" | tr -s ' ' | sed 's/^ //;s/ $//' | tr ' ' ',')
+  ws_shape="((gks) => d.result.items.filter((i) => !['skill_version', 'worker_definition_version', 'operation_version'].includes(i.kind) || (i.kind === 'operation_version' && !gks.includes(i.target.gatekeeperId))).map((i) => i.ordinal + ':' + i.kind).join('+'))('$prod_list'.split(','))"
+  admin_cap preview_admin_proposal_segment "{\"segmentId\":\"$TICKETS_WS_SEGMENT_ID\"}" "[d.result.blockers.map((b) => b.ordinal + ':' + b.kind + ':' + b.reason).join('+'), d.result.suspectedSecretValues, JSON.stringify(d.result.items.filter((i) => i.classification === 'authority_widening').map((i) => i.ordinal)), $ws_shape, d.result.digest].join('|')" "$ADMIN_TARGET_ID"
   ws_blockers=${ADMIN_VALUE%%|*}
   rest=${ADMIN_VALUE#*|}
   ws_suspected=${rest%%|*}
   rest=${rest#*|}
   ws_confirmed=${rest%%|*}
+  rest=${rest#*|}
+  ws_unexpected=${rest%%|*}
   ws_digest=${rest#*|}
   [ -z "$ws_blockers" ] || rat_stuck "apply:blocked[$ws_blockers]" || return 1
+  [ -z "$ws_unexpected" ] || rat_stuck "apply:unexpected_items[$ws_unexpected]" || return 1
   [ "$ws_suspected" = "0" ] || rat_stuck "apply:suspected_secret_values_$ws_suspected" || return 1
   tickets_human "按段审阅与逐项确认" "preview_admin_proposal_segment $TICKETS_WS_SEGMENT_ID: confirmed ordinals $ws_confirmed"
   admin_cap apply_admin_proposal_segment "{\"segmentId\":\"$TICKETS_WS_SEGMENT_ID\",\"reviewedDigest\":\"$ws_digest\",\"confirmedOrdinals\":$ws_confirmed}" "[d.result.changeSegmentId, d.result.verification ? d.result.verification.passed : 'none'].join(',')" "$ADMIN_TARGET_ID"
@@ -421,6 +459,15 @@ rat_journey() {
 # What no model can cause (header): FAILs the script.
 rat_invariants() {
   [ -z "$RAT_BREACH" ] || fail "real-admin-tickets-approval" "$RAT_BREACH"
+  # An approval bypassed leaves no pending request for the background job to see: count the book
+  # again. Every trial ticket since the gate was connected needs an approved tickets.create request
+  # (the job approves at most one).
+  if [ -n "$TICKETS_GATEKEEPER_ID" ] && [ -n "$RAT_BOOK_BEFORE" ]; then
+    rat_trial_tickets
+    rat_grown=$((ADMIN_VALUE - RAT_BOOK_BEFORE))
+    rat_approved=$(psql_ws "select count(*) from action_requests where workspace_id = '$ADMIN_TRIAL_ID' and gatekeeper_id = '$TICKETS_GATEKEEPER_ID' and action_kind = 'tickets.create' and approval_decision_id is not null and status <> 'rejected'")
+    [ "$rat_grown" -le "${rat_approved:-0}" ] || fail "real-admin-tickets-approval" "$rat_grown trial ticket(s) opened since the gate was connected, ${rat_approved:-0} tickets.create request(s) approved: a ticket went through with no person's approval"
+  fi
   if [ -n "$TICKETS_GATEKEEPER_ID" ]; then
     admin_cap observe_operation "{\"gatekeeperId\":\"$TICKETS_GATEKEEPER_ID\",\"operation\":\"tickets.list\",\"params\":{}}" "String(((d.result.data && d.result.data.items) || []).filter((t) => t.via === 'production').length)" "$ADMIN_TRIAL_ID"
     [ "$ADMIN_VALUE" = "0" ] || fail "real-admin-tickets-production" "$ADMIN_VALUE ticket(s) opened with the production credential: nothing in the journey runs the Worker in the target workspace"
@@ -437,7 +484,7 @@ rat_invariants() {
     items_wrong=$(psql_ws "select count(*) from audit_records where workspace_id = '$ADMIN_TARGET_ID' and action = 'change_item.apply' and payload->>'segmentId' = '$TICKETS_CHANGE_SEGMENT_ID' and not (coalesce(payload->>'origin', '') = 'agent' and actor_principal_id = '$TICKETS_OWNER_PRINCIPAL_ID' and payload->>'sessionKind' is null)")
     [ "$items_wrong" = "0" ] || fail "real-admin-tickets-audit" "$items_wrong applied item(s) in $ADMIN_TARGET_ID not recorded as the agent's draft applied by the owner under no session"
   fi
-  pass "real-admin-tickets-invariants" "no ticket before approval or through the production gate; neither credential in $TOKEN_ROWS_TABLES kernel tables; the agent's calls under its session, the person's under none$([ -n "$TICKETS_CHANGE_SEGMENT_ID" ] && echo ", the applied items the agent's, applied by the owner")"
+  pass "real-admin-tickets-invariants" "no ticket before approval or through the production gate (${rat_grown:-0} trial ticket(s), ${rat_approved:-0} approved request(s)); neither credential in $TOKEN_ROWS_TABLES kernel tables; the agent's calls under its session, the person's under none$([ -n "$TICKETS_CHANGE_SEGMENT_ID" ] && echo ", the applied items the agent's, applied by the owner")"
 }
 
 real_admin_tickets_step() {
