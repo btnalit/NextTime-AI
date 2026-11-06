@@ -148,6 +148,10 @@ fi
 # (admin_agent_tickets_step, right after admin_agent_step) and its cleanup
 # (admin_agent_tickets_cleanup) — see that file's own header comment.
 . "$(dirname "$0")/lib/accept-s2-admin-agent-tickets.sh"
+# S11 AA5d-4: what that journey applied to the target, exported as a pack, put in config/packs/ and
+# installed in a third workspace (admin_agent_pack_step, right after admin_agent_tickets_step) and
+# its cleanup (admin_agent_pack_cleanup) — see that file's own header comment.
+. "$(dirname "$0")/lib/accept-s2-admin-agent-pack.sh"
 # --real only: a goal proposed from chat (#829), evaluation trials (#822) and one draft evaluation
 # (#833) under the real model — see that file's own header comment.
 . "$(dirname "$0")/lib/accept-s2-real-goal-eval.sh"
@@ -1436,7 +1440,9 @@ cleanup_step() {
   goal_cleanup_planner_model
   # The admin agent scenarios' administrator, session and workspaces, --keep or not: a console
   # session and a platform administrator are not fixtures (admin_agent_cleanup); before it, the
-  # ticket journey's Task if one is still running (admin_agent_tickets_cleanup).
+  # ticket journey's Task if one is still running (admin_agent_tickets_cleanup), and before that the
+  # pack it exported (admin_agent_pack_cleanup: every workspace reads config/packs/).
+  admin_agent_pack_cleanup
   admin_agent_tickets_cleanup
   admin_agent_cleanup
   if [ "$KEEP" -eq 1 ]; then
@@ -2084,6 +2090,7 @@ else
   step9_goal_from_chat
   admin_agent_step
   admin_agent_tickets_step
+  admin_agent_pack_step
   goal_scenarios_step
   cleanup_step
 fi
