@@ -42,6 +42,7 @@ on:
       - .github/workflows/staging.yml
       - scripts/staging-rehearsal.sh
       - scripts/apply-release.sh
+      - scripts/restore.sh
       - scripts/pull-images.sh
       - scripts/build-images.sh
       - scripts/host-*.sh
@@ -79,6 +80,10 @@ on:
         default: auto
       seed:
         description: 'Run the `from` release''s S3/S1/S2/S4 before the apply (non-empty tables for the migrations)'
+        type: boolean
+        default: true
+      rollback_drill:
+        description: 'After the apply, roll back to `from` (its own apply-release.sh), then restore the pre-upgrade dump and run its S1 (about 20-30 minutes)'
         type: boolean
         default: true
       real_model:
@@ -308,6 +313,7 @@ jobs:
           TO: ${{ needs.plan.outputs.to }}
           RUNTIME: ${{ inputs.worker_runtime || 'auto' }}
           SEED: ${{ github.event_name != 'workflow_dispatch' || inputs.seed }}
+          ROLLBACK: ${{ github.event_name != 'workflow_dispatch' || inputs.rollback_drill }}
           REAL: ${{ steps.real.outputs.enabled || 'false' }}
           BUDGET: ${{ inputs.token_budget || '8000000' }}
           RUNS: ${{ inputs.runs || '3' }}
@@ -318,12 +324,24 @@ jobs:
           set -- --disposable-host --from "$FROM" --to "$TO" --work "$RUNNER_TEMP/staging"
           [ "$RUNTIME" = auto ] || set -- "$@" --worker-runtime "$RUNTIME"
           [ "$SEED" = true ] || set -- "$@" --no-seed
+          [ "$ROLLBACK" = true ] || set -- "$@" --no-rollback-drill
           if [ "$REAL" = true ]; then
             set -- "$@" --real "$(cat "$RUNNER_TEMP/real/model")" --runs "$RUNS" --real-token-budget "$BUDGET" \
               --real-providers "$RUNNER_TEMP/real/llm-providers.yaml" --real-env "$RUNNER_TEMP/real/llm-proxy.env"
             [ "$EXTENDED" = true ] && set -- "$@" --real-extended
           fi
           sudo sh scripts/staging-rehearsal.sh "$@"
+
+      - name: Rollback drill summary
+        if: ${{ always() }}
+        run: |
+          f="$RUNNER_TEMP/staging/logs/rollback-summary.txt"
+          sudo test -f "$f" || exit 0
+          {
+            echo "### Rollback drill"
+            echo
+            sudo cat "$f" | sed 's/^/- /'
+          } >>"$GITHUB_STEP_SUMMARY"
 
       - name: Collect logs
         if: ${{ always() }}

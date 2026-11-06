@@ -29,6 +29,7 @@
 | apply | 与 `release.md` §3 同一入口：`git show <to>:scripts/apply-release.sh` 取出**目标版本自己的**副本，在检出根目录跑 `sh <副本> [--pull] <to>`：dump → 检出 → 镜像（tag：先 `sh <副本> --prefetch <to>` 预拉，apply 的拉取随后全部复用、只重新验签，`STEP apply images <n> of <m> reused from the prefetch`；否则源码构建）→ 迁移 → up → 目标版本 S3 → S1 → S2 → S4 → backup / 保留策略。预演脚本 `export ACCEPT_DISRUPTIVE=1`，目标版本的 S2 因此也跑会中断服务的目标场景 S12、S2（锁行、杀内核、重启 worker-supervisor）；目标版本带管理员智能体场景时，预演在 `secrets/kernel.env` 里追加 `ADMIN_AGENT_ENABLED=1` 并 `export ACCEPT_REQUIRE_ADMIN_AGENT=1`，S2 用真 pi 在管理员容器里提一份管理员提案，并在同一个试验工作区里走一遍工单旅程（接入测试工单系统、起草并试跑一个 Worker，再经管理员提案带进目标工作区、应用并验证，AA5c），再把应用的那一段导出成能力包、放进 `config/packs/`、在第三个工作区安装并验证（AA5d-4），内核没开就 FAIL | `release.md` §3；主机上这些场景默认不跑：S12、S2 只在窗口里 victor 当场同意后跑，管理员智能体场景只在维护者打开开关后跑（`host-accept-s2.md` §2） |
 | 控制台 file probe | 一次性平台管理员经 caddy 登录 → `issue_llm_admin_token`；假供应商写进 `config/llm-providers.yaml`、假 key 文件放进 `secrets/llm-provider-keys/`，llm-proxy 须列出它（`source: file`、读到 key）且 `gen-models` 输出它，随后恢复原样（零 token） | `README.md` ①、`host-env-init.sh` |
 | 真实模型（可选） | 走控制台路径加供应商（管理员登录 → `issue_llm_admin_token` → `/api/llm-admin` 建供应商、设 key → llm-proxy 重写 models.json → 控制台"测试"）→ `accept_s2/s3.sh --real` | `host-accept-real-model.md` |
+| 回滚演练（默认开，`--no-rollback-drill` / 输入 `rollback_drill` 关） | 前面全部通过后：① 只回代码——`git show <from>:scripts/apply-release.sh` 取 `--from` 自己的副本，先 `--prefetch` 再 `--pull <from>`（`release.md` §5 的回滚就是按 §3 切回上一版），`--from` 的 S3/S1/S2/S4 跑在目标版本的 schema 和验收留下的数据上（不跑会中断服务的场景）；通过记 `STEP rollback-code ok`，不通过记 `STEP rollback-code NOTE …`，**不算失败**，是 `release.md` §6 可逆性在真实数据上的证据（`reversibility-probe.yml` 只在空库上问）。② 再恢复数据库——用 `--from` 的 `restore.sh --target-db nexttime --i-know` 把目标 apply 自己的 pre-upgrade dump 恢复到线上库，再跑 `--from` 的 S1；**失败即 `RESULT rollback-restore-failed`** | `release.md` §5 回滚；`backup-restore.md` 从备份恢复；以前只有主机上手动的 `drill-upgrade.sh` |
 
 staging overlay（写在数据目录 `staging/docker-compose.staging.yml`，不在检出里，所以对 from / to
 两个版本都生效）只做一件事：把 `gatekeeper-ragflow` 移到一个不启用的 profile——预演环境没有
@@ -158,18 +159,19 @@ secret 缺任何一个时，真实模型部分在 job 摘要里标 **SKIPPED** �
 | RagFlow 门与 S4 的 ragflow 部分 | 没有 RagFlow 上游；预演的 S4 只覆盖 docker 门 |
 | 局域网 / 路由侧、主机上其他服务 | runner 是孤立的公网 VM |
 | 长期运行性质 | 重启恢复、夜间备份计划、日志与磁盘增长——runner 跑完即销毁 |
-| 生产上的回滚 | 预演只证明前滚；回滚演练见 `drill-upgrade.sh`（在主机或另一台一次性主机上） |
+| 生产上的回滚 | 预演的回滚演练（§2 末行）在一次性主机上走同一条回滚路径，但每个版本 §3 自己列的手动回滚步骤（排空 Worker 等）不在里面；生产回滚仍按 `release.md` §5 与该版本的 §3 一节做 |
 | 发版授权 | 预演绿不等于可以上生产；生产 apply 仍需维护者明确同意 |
 
 ## 6. 怎么读输出
 
 与 `apply-release.sh` 同格式：每步一行 `STEP …`，停止时 `FAIL <step>`，最后一行
 `RESULT ok` / `RESULT failed-at=<step>` / `RESULT acceptance-failures=<n>` /
-`RESULT degraded=<step>[,…]` / `RESULT real-model-failures=<n>`，只有 `RESULT ok` 退出 0。
+`RESULT degraded=<step>[,…]` / `RESULT real-model-failures=<n>` / `RESULT rollback-restore-failed`，只有 `RESULT ok` 退出 0。
+回滚演练的行以 `STEP rollback-` 开头；`STEP rollback-code NOTE` 说明这一版只回代码不够，要恢复数据库，这时 `release.md` §6 表里这一版应写成不可逆。
 `degraded` 是 `apply-release.sh` 的结果原样转出：版本已应用并在运行，但某个不致命的步骤没做完（如
 BACKUP_NOW 失败导致 raw-secret-scrub 跳过、scrub 中途失败），该步骤的 `STEP` 行写了要重跑的命令；预演里出现
 它同样算失败。`STEP apply | …` 是 `apply-release.sh` 自己日志里的行。完整日志在 artifact `staging-logs`（保留 7 天）：
-`baseline-<from>-s{1..4}.log`、`prefetch-probe-<from>.log`、`prefetch-<tag>-<ts>[-pull].log`（tag 目标）、`apply-<tag>-<ts>[-sN].log`、`compose-logs.txt` 等。
+`baseline-<from>-s{1..4}.log`、`prefetch-probe-<from>.log`、`prefetch-<tag>-<ts>[-pull].log`（tag 目标）、`apply-<tag>-<ts>[-sN].log`、回滚演练的 `apply-<from>-<ts>[-sN].log` / `rollback-restore.log` / `rollback-<from>-s1.log`、`compose-logs.txt` 等。
 
 ## 7. 常见问题
 
