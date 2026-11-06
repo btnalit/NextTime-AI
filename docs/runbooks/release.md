@@ -2421,7 +2421,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **行为变化**：管理员提案的验证可能从「通过」变成「不通过」，门不通或被切断时就会这样，这是本意。
 - **回滚**：只回滚代码。
 
-### 3.125 应用管理员提案时给 Worker 绑门，应用后自动验证一次（#968，S11 AA5f-1，0.62.0 之后的下一版）
+### 3.125 应用管理员提案时给 Worker 绑门，应用后自动验证一次（#968，S11 AA5f-1，0.63.0 起）
 
 没有迁移，不改 compose，没有新环境变量，主机不需要操作。线上契约有新增（都是可选输入或新输出字段）：Worker 意图的 `systems`，preview / apply 的 `workerGates`，Worker 预览项的 `gateBinding`，新阻断 `worker_system_not_connected`（带 `connector`、`gateAvailability`、`offered`、`fromPlatformSegment`），apply 结果的 `verification`。
 
@@ -2429,14 +2429,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **行为变化**：应用后马上手动验证会碰到 60 秒冷却；带 `systems` 的 Worker 在本工作区还没有门时，应用会给它绑门。
 - **回滚**：只回滚代码。已存提案里 Worker 的 `systems` 旧代码不读（结果校验 `KERNEL_VALIDATE_RESULTS` 只在测试和 CI 里开），应用时按旧规则不绑门；已经绑门发布的 Worker 版本就是普通的已发布定义，不受影响。
 
-### 3.126 应用管理员提案前在控制台选要绑的门，显示应用后的核验结果（#969，S11 AA5f-2，0.62.0 之后的下一版）
+### 3.126 应用管理员提案前在控制台选要绑的门，显示应用后的核验结果（#969，S11 AA5f-2，0.63.0 起）
 
 只改控制台：没有迁移，不改 compose，没有新环境变量，线上契约不变，主机不需要操作。控制台与内核同版（用到 §3.125 的 `workerGates` 与 `verification`）。
 
 - **发版说明可写**：能力目录 →「管理员提案」的预览里，应用时要绑门的 Worker 多一组复选框，默认全部绑上，可以取消勾选；没授权给自己的门有标注。改了勾选会按新的选择重新预览，之前的权限边界确认要重新勾。一个都不勾时写明后果。留下的门已经不能绑时（被平台切断或断开），选择改回默认并提示重新选。应用之后，详情里说应用后的核验结果（通过、没通过、没能核验）。
 - **回滚**：只回滚代码。
 
-### 3.127 镜像外的附加能力包目录 `config/packs/`（#971，S11 AA5d-1，0.62.0 之后的下一版）
+### 3.127 镜像外的附加能力包目录 `config/packs/`（#971，S11 AA5d-1，0.63.0 起）
 
 没有迁移。compose 有变化：kernel 多一个环境变量 `EXTRA_PACKS_DIR=/data/config/packs`（写在 compose 里，主机 `.env` 不用改），走已有的只读 `config/` 挂载。`host-env-init.sh`（新装）和 `apply-release.sh`（升级）都会建 `config/packs/`，空目录什么都不改。线上契约新增：`PackWire.source`（`builtin` / `extra`），平台面只读能力 `extra_packs_status`。
 
@@ -2444,7 +2444,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **主机**：升级后 `config/packs/` 由 `apply-release.sh` 自动建好，不放包就没有任何变化。
 - **回滚**：只回滚代码。`config/packs/` 留着无害，旧内核不读它；已经从附加包装进工作区的内容是普通的安装记录，撤销照旧（旧内核找不到这个包，安装记录可能显示成已定制，这一点是 #488 的推断，未验证）。
 
-### 3.128 把验证通过的管理员提案导出成能力包（#976，S11 AA5d-2，0.62.0 之后的下一版）
+### 3.128 把验证通过的管理员提案导出成能力包（#976，S11 AA5d-2，0.63.0 起）
 
 带一个迁移，随 `apply-release.sh` 自动应用：governance `0039_admin_proposal_segment_verified`（只建一个 security definer 函数 `admin_proposal_segment_verified(uuid)`）。不改 compose，没有新环境变量，主机不需要操作。线上契约新增：平台面能力 `export_admin_proposal_pack`，错误码 409 `admin_proposal_pack_not_exportable`（`details.problems`）。
 
@@ -2452,14 +2452,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **行为变化**：附加包与自带包的清单、Skill、Worker 文件不合 schema 时，原因从 zod 的整段 issue JSON 变成一行 `字段: 原因; …`（只是文字）。新能力不调就什么都不发生。
 - **回滚**（见 §6 一行）：上一版不调这个函数，只回滚代码就行；要删函数：`drop function admin_proposal_segment_verified(uuid)`，再删 `schema_migrations` 里 governance 39 那一行。
 
-### 3.129 控制台标出附加包、平台面看附加包状态、把管理员提案导出成能力包（#977，S11 AA5d-3，0.62.0 之后的下一版）
+### 3.129 控制台标出附加包、平台面看附加包状态、把管理员提案导出成能力包（#977，S11 AA5d-3，0.63.0 起）
 
 只改控制台（加 runbook 一行）：没有迁移，不改 compose，没有新环境变量，线上契约不变，主机不需要操作。控制台与内核同版（用到 §3.127 的 `PackWire.source`、`extra_packs_status` 与 §3.128 的 `export_admin_proposal_pack`）。
 
 - **发版说明可写**：能力目录里附加包标「本部署附加」，详情多一行「来源」。「平台 · 模块」多一张「本部署附加的能力包」卡片：读进来的包、没读进来的目录和原因、没配置 / 读不了 / 是空的各有说明，「重新读取」立刻重读目录。「平台 · 管理员提案」详情里，已应用的工作区部分可以「导出成能力包…」：写简介（默认提案标题）和说明（默认列出不带的 Operation 改动），导出后列出文件、没带的条目和摘要，可以下载成 `<名字>-1.tar`，按 `operations.md` §14.10 放进主机 `config/packs/`；被拒时逐条列出原因和位置；某个文件路径放不进 tar 时不下载，提示是哪条路径。
 - **回滚**：只回滚代码。
 
-### 3.130 验收：把工单旅程应用的部分导出成能力包，在第三个工作区安装（#979，S11 AA5d-4，0.62.0 之后的下一版）
+### 3.130 验收：把工单旅程应用的部分导出成能力包，在第三个工作区安装（#979，S11 AA5d-4，0.63.0 起）
 
 只改验收脚本和 runbook：没有迁移，不改 compose，没有新环境变量，线上契约和运行时都不变。
 
@@ -2467,13 +2467,21 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **主机升级步骤不变**。在主机上跑 S2 时，`config/packs/` 里会短暂多一个 `accept-tickets-<nonce>` 包目录，收尾删掉（`--keep` 也删）；工单旅程没有应用工作区部分时这一步只打一行 `NOTE admin-agent-pack`。
 - **回滚**：只回滚代码。
 
-### 3.131 验收：`accept_s2 --real` 让真实模型走一遍管理员智能体工单旅程（#981，S11 AA5，0.62.0 之后的下一版）
+### 3.131 验收：`accept_s2 --real` 让真实模型走一遍管理员智能体工单旅程（#981，S11 AA5，0.63.0 起）
 
 只改验收脚本和 runbook：没有迁移，不改 compose，没有新环境变量，线上契约和运行时都不变。
 
 - **发版说明可写**：内核开着 `ADMIN_AGENT_ENABLED` 时，`accept_s2.sh --real` 多一项 `admin_tickets`：用这一轮的真实模型让管理员智能体在试验工作区接一个测试工单系统、起草 Worker 和 Skill、试开一张工单、提议到目标工作区；人的那几步由脚本扮演。结果是一行 `RUN scenario=admin_tickets`（`reached=` / `stuck=` / `turns=` / `nudges=` / `refused=` / `tokens=` / `cost_usd=` / `human_steps=` 等，见 `host-accept-real-model.md` §5），**模型没走完不让这一轮失败**；只有模型造不成的事（审批被绕过、正式凭证开了工单、凭证进了内核表、审计记错手、人的步骤失败、试验工作区被预算拒过）才 FAIL。内核开关关着时 NOTE 一行，S2 照样 OK。
 - **主机升级步骤不变**。这一项不在主机上跑；合入后在 staging 上用 main 跑一轮 `--real`（runs=1、8M token 上限），结果记 STATUS。
 - **回滚**：只回滚脚本。
+
+### 3.132 只给能请求动作的 Handle 列执行类 Operation（#989，内核，0.63.0 起）
+
+内核行为修正：没有迁移，不改 compose，没有新环境变量，线上契约 schema 不变（只改了 `propose_worker_definition` 的 description）。
+
+- **发版说明可写**：`list_allowed_operations` 只在 Handle 持有 `request_action` 时列执行类 Operation。持有门、没有 `request_action` 的 Handle（例如没声明 `capabilities` 的 Worker）以前会拿到每次都 403 的执行类工具，现在不再列出，与 MCP 投影的规则一致；持有 `request_action` 的 Handle 列出的和以前一样。`propose_worker_definition` 的描述写清 worker 定义的字段、不写 `capabilities` 时的默认值、写了的列表会替换默认值、要请求动作必须显式列出 `request_action`。默认值不改：声明 `gates` 不隐式带上 `request_action`。
+- **主机升级步骤不变**。
+- **回滚**：只回滚代码。
 
 ## 4. Hotfix 流程
 
@@ -2648,7 +2656,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.62.0 | task `0013_task_admin_agent_session`（#954，AA5a-1）：`tasks.admin_agent_session_id`（可空、不回填）、外键 `tasks_admin_agent_session_fk`、守卫 `tasks_admin_agent_session_guard` 及其函数（插入时只许本工作区、代表 `on_behalf_of` 的 `admin_agent` 会话且工作区是试验工作区；写入后不改） | 可逆 | 旧代码插入、读取都写明列名，从不写这一列，插入时为 NULL 能过守卫；管理员智能体派的 Task 仍在表里，旧代码只是不显示来源 | 只需回退代码。要撤迁移：`drop trigger tasks_admin_agent_session_guard on tasks`、删它的函数、`alter table tasks drop column admin_agent_session_id`（外键随之删除），再删 `schema_migrations` 里 task 13 那一行（见 0013 文件头） |
 | v0.62.0 | governance `0037_connection_request_admin_agent_session`（#954，AA5a-1）：`connection_requests.admin_agent_session_id`（可空、不回填）、外键 `connection_requests_admin_agent_session_fk`、守卫 `connection_requests_admin_agent_session_guard` 及其函数（插入时只许本工作区、代表 `requested_by` 的 `admin_agent` 会话且工作区是试验工作区；写入后不改） | 可逆 | 旧代码插入、读取都写明列名，从不写这一列；完成、取消请求时不动这一列，能过守卫 | 只需回退代码。要撤迁移：`drop trigger connection_requests_admin_agent_session_guard on connection_requests`、删它的函数、`alter table connection_requests drop column admin_agent_session_id`，再删 `schema_migrations` 里 governance 37 那一行（见 0037 文件头） |
 | v0.62.0 | governance `0038_admin_proposal_rejection_reads`（#956，AA5a-2，遗留 595）：security definer 函数 `admin_proposal_rejections_since(timestamptz)`，只回答事务自己的平台用户在给定时间之后被拒的工作区部分（目标、提案、部分、时间，不含理由） | 可逆 | 只加函数，旧代码不调它 | 只需回退代码。要撤迁移：`drop function admin_proposal_rejections_since(timestamptz)`，再删 `schema_migrations` 里 governance 38 那一行（见 0038 文件头） |
-| v0.62.0 之后的下一版 | governance `0039_admin_proposal_segment_verified`（#976，AA5d-2）：security definer 函数 `admin_proposal_segment_verified(uuid)`，只对平台面回答这一段应用的东西在工作区里现在是否 `verified`（只给是或否，不给 id、条目、结果或时间，按 core 0042 的规矩） | 可逆 | 只加函数，旧代码不调它 | 只需回退代码。要撤迁移：`drop function admin_proposal_segment_verified(uuid)`，再删 `schema_migrations` 里 governance 39 那一行 |
+| v0.63.0 | governance `0039_admin_proposal_segment_verified`（#976，AA5d-2）：security definer 函数 `admin_proposal_segment_verified(uuid)`，只对平台面回答这一段应用的东西在工作区里现在是否 `verified`（只给是或否，不给 id、条目、结果或时间，按 core 0042 的规矩） | 可逆 | 只加函数，旧代码不调它 | 只需回退代码。要撤迁移：`drop function admin_proposal_segment_verified(uuid)`，再删 `schema_migrations` 里 governance 39 那一行 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
