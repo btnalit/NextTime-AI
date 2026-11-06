@@ -986,17 +986,20 @@ config/packs/
 
 ```
 mkdir -p ${NEXTTIME_DATA}/config/packs && cd ${NEXTTIME_DATA}/config/packs
-mkdir .incoming && tar --no-same-owner --no-same-permissions -xf /path/to/org-notes.tar -C .incoming
-# 没有符号链接才往下走；内核以 uid 10001 读，所以要 chmod
-test -z "$(find .incoming -type l)" \
+# 一条链：哪一步失败都不往下走；没有符号链接才 mv；内核以 uid 10001 读，所以要 chmod
+mkdir .incoming \
+  && tar --no-same-owner --no-same-permissions -xf /path/to/org-notes.tar -C .incoming \
+  && test -z "$(find .incoming -type l)" \
   && chmod -R a+rX .incoming \
   && mv -T .incoming/org-notes ./org-notes \
-  || { echo '包里有符号链接，或上面哪一步失败了：没有放进去'; find .incoming -type l; }
+  || { echo '没有放进去：.incoming 已经在、tar 失败、包里有符号链接，或目标已经在'; find .incoming -type l 2>/dev/null; }
 # 已有的包加一个新版本时，把上面的 mv 换成：mv -T .incoming/org-notes/2 ./org-notes/2
 rm -r .incoming
 ```
 
 - `mkdir -p`：AA5d 之前装的主机原来没有 `config/packs/`；`apply-release.sh` 和 `host-env-init.sh` 都会建，这里再保底一次。
+- 整段是一条 `&&` 链：tar 没解完（比如文件下载被截断）就停下，不会把解了一半的东西 `mv` 上线；`.incoming` 已经在（上次没收尾）时
+  `mkdir` 停下，不会把上次的残留 `mv` 上线。失败之后最后的 `rm -r .incoming` 照样清掉它，改好再从头跑一遍。
 - `--no-same-owner --no-same-permissions`：root 解 tar 默认保留包里的属主和权限；这里让文件归 root、只读给容器。
 - `mv -T`：同名的目录已经在、里面有东西，就报错停下，不会把包嵌进那个目录里（变成 `org-notes/org-notes`）。
 - 符号链接：包里的文件必须是它自己的。有链接时那一段只打印链接，不会 `chmod` 和 `mv`；最后的 `rm -r` 把解开的东西清掉。内核也不读：附加包里的文件是链接或在链接下面，这个包整个丢掉（原因写「symbolic link」），因为链接会把内核能读到的别的文件（比如 `/run/secrets/` 下的）带进包里。
@@ -1055,16 +1058,19 @@ rm -r .incoming
 
 `segmentId` 不是一个工作区部分（不存在，或是平台部分）就是 404 `admin_proposal_segment_not_found`。
 
-**放进附加包目录**：结果的 `files` 每一项是相对 `config/packs/` 的路径和内容。控制台入口（AA5d-3）之前，把结果存成 `export.json`，
-写成目录、打包，再按 §14.10 放进去：
+**放进附加包目录**：结果的 `files` 每一项是相对 `config/packs/` 的路径和内容。控制台入口（AA5d-3）之前，把整个响应存成 `export.json`，
+写成目录、打包，再按 §14.10 放进去。这一段要 `jq`，主机上不一定有，可以在装了 `jq` 的机器上做完，再把 tar 拷过去：
 
 ```
+cap export_admin_proposal_pack '{"segmentId":"<segmentId>","summary":"<一句简介>"}' > export.json
 mkdir export && cd export
-jq -c '.files[]' ../export.json | while read -r f; do
-  p=$(printf '%s' "$f" | jq -r .path); mkdir -p "$(dirname "$p")"
-  printf '%s' "$f" | jq -j .content > "$p"
-done
-tar -cf ../<sourceName>.tar <sourceName>
+# 响应是 {"ok":true,"result":{…}}；只存了 result 的，把 .result.files[] 换成 .files[]
+jq -c '.result.files[]' ../export.json | while read -r f; do
+  p=$(printf '%s' "$f" | jq -r .path)
+  # 只写相对 config/packs/ 的路径：绝对路径、带 .. 的、空的都停下
+  case "$p" in '' | /* | *..*) echo "路径不对，停下：$p"; exit 1 ;; esac
+  mkdir -p "$(dirname "$p")" && printf '%s' "$f" | jq -j .content > "$p" || exit 1
+done && tar -cf ../<sourceName>.tar <sourceName>
 ```
 
 **已知限制**：

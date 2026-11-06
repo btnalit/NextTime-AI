@@ -40,12 +40,14 @@
 #
 # Cleanup (admin_agent_pack_cleanup, logged, never failed — --keep or not, since the directory is
 # read by every workspace): the install rolled back in the third workspace, that workspace disabled,
-# then the pack's directory removed (only the one this run created, named accept-tickets-<nonce>).
+# then the pack's directory removed (only the one this run created, named accept-tickets-<nonce>),
+# and the staging directory .incoming-<nonce> when a FAIL left it.
 # The gate it enabled there goes with the ticket journey's cleanup, which disables the gate-host
 # instance.
 
 PACK_NAME=""
 PACK_DIR=""
+PACK_INCOMING=""
 PACK_WORKSPACE_ID=""
 PACK_GATEKEEPER_ID=""
 PACK_SEGMENT_ID=""
@@ -102,9 +104,11 @@ admin_agent_pack_step() {
   pass "admin-agent-pack-export" "the platform administrator exported the target's applied part as $PACK_NAME version 1 ($pack_digest): two Skills and the Worker, tickets.create's blast radius left out; the same pack when asked again"
 
   # --- 2. A maintainer puts the files in config/packs/ ---
-  # Each path checked before anything is written: under <name>/1/, no `..`, no empty segment, the
-  # characters a pack's names allow. The directory must not be there yet (operations.md §14.10:
-  # `mv -T` refuses to nest a pack in one that is).
+  # The way operations.md §14.10 says: written into .incoming-<nonce>/ on the same file system
+  # (the kernel never reads a directory starting with `.`), then one `mv -T` into place, so the
+  # kernel never reads a half-written pack. Each path checked before anything is written: under
+  # <name>/1/, no `..`, no empty segment, the characters a pack's names allow. The directory must
+  # not be there yet (`mv -T` refuses to nest a pack in one that is).
   [ ! -e "$packs_root/$PACK_NAME" ] || fail "admin-agent-pack-place" "$packs_root/$PACK_NAME is already there — a pack of this run's name left by another run? Remove it by hand after checking"
   for entry in $(printf '%s' "$pack_files" | tr ',' ' '); do
     rel=${entry%%=*}
@@ -116,18 +120,28 @@ admin_agent_pack_step() {
       *..* | *//* | */ | *[!A-Za-z0-9._/-]*) fail "admin-agent-pack-place" "the export named a file '$rel' this script does not write" ;;
     esac
   done
-  PACK_DIR="$packs_root/$PACK_NAME"
+  incoming="$packs_root/.incoming-$TICKETS_NONCE"
+  [ ! -e "$incoming" ] || fail "admin-agent-pack-place" "$incoming is already there — left by another run? Remove it by hand after checking"
+  (umask 022 && mkdir "$incoming") || fail "admin-agent-pack-place" "could not make $incoming"
+  PACK_INCOMING=$incoming
   for entry in $(printf '%s' "$pack_files" | tr ',' ' '); do
     rel=${entry%%=*}
-    dest="$packs_root/$rel"
+    dest="$incoming/$rel"
     (umask 022 && mkdir -p "$(dirname "$dest")" && printf '%s' "${entry#*=}" | base64 -d >"$dest") || fail "admin-agent-pack-place" "could not write $dest"
   done
+  staged=$(cd "$incoming" && find . -type f | sed 's|^\./||' | LC_ALL=C sort | tr '\n' '+')
+  [ "${staged%+}" = "$expected_files" ] || fail "admin-agent-pack-place" "$incoming holds '${staged%+}', expected $expected_files"
+  [ -z "$(find "$incoming" -type l)" ] || fail "admin-agent-pack-place" "$incoming holds a symbolic link"
+  PACK_DIR="$packs_root/$PACK_NAME"
+  mv -T "$incoming/$PACK_NAME" "$PACK_DIR" || fail "admin-agent-pack-place" "mv -T $incoming/$PACK_NAME $PACK_DIR failed"
+  rmdir "$incoming" || fail "admin-agent-pack-place" "$incoming is not empty after the mv"
+  PACK_INCOMING=""
   placed=$(cd "$packs_root" && find "$PACK_NAME" -type f | LC_ALL=C sort | tr '\n' '+')
   [ "${placed%+}" = "$expected_files" ] || fail "admin-agent-pack-place" "$packs_root holds '${placed%+}' for $PACK_NAME, expected $expected_files"
-  pack_human "放进附加包目录" "the exported files into $packs_root/$PACK_NAME/1/ (operations.md §14.10)"
+  pack_human "放进附加包目录" "the exported files into $incoming/, then mv -T to $packs_root/$PACK_NAME (operations.md §14.10)"
   admin_cap extra_packs_status '{}' "[d.result.configured, d.result.unreadable === null ? '-' : d.result.unreadable, (d.result.packs.find((p) => p.name === '$PACK_NAME') || {}).latestVersion || 'absent', (d.result.skipped.find((s) => s.name === '$PACK_NAME') || {}).reason || '-'].join('|')"
   [ "$ADMIN_VALUE" = "true|-|1|-" ] || fail "admin-agent-pack-place" "extra_packs_status reads '$ADMIN_VALUE' (configured|unreadable|$PACK_NAME's latest version|why it is left out), expected true|-|1|- — docker compose logs kernel"
-  pass "admin-agent-pack-place" "the files in $packs_root/$PACK_NAME/1/; the platform reads $PACK_NAME as an extra pack at version 1, nothing left out, no restart"
+  pass "admin-agent-pack-place" "the files written into .incoming-$TICKETS_NONCE/, then one mv -T to $packs_root/$PACK_NAME/1/; the platform reads $PACK_NAME as an extra pack at version 1, nothing left out, no restart"
 
   # --- 3. The target workspace already has it ---
   pack_in "$ADMIN_TARGET_ID"
@@ -212,6 +226,12 @@ admin_agent_pack_cleanup() {
     out=$(cap "$(admin_cred)" set_workspace_status "{\"workspaceId\":\"$PACK_WORKSPACE_ID\",\"status\":\"disabled\"}")
     echo "cleanup: set_workspace_status disabled $PACK_WORKSPACE_ID HTTP $(parse_kv "$out" HTTP_STATUS)"
   fi
+  # The staging directory, when a FAIL came between writing it and the mv.
+  if [ -n "$PACK_INCOMING" ] && [ -n "$NEXTTIME_DATA" ] && [ -n "$TICKETS_NONCE" ] && [ "$PACK_INCOMING" = "$NEXTTIME_DATA/config/packs/.incoming-$TICKETS_NONCE" ]; then
+    rm -rf -- "$PACK_INCOMING" && echo "cleanup: removed $PACK_INCOMING (the pack's staging directory)" ||
+      echo "cleanup: could not remove $PACK_INCOMING — remove it by hand"
+  fi
+  PACK_INCOMING=""
   [ -n "$PACK_DIR" ] || return 0
   case "$PACK_NAME" in
     accept-tickets-*) : ;;

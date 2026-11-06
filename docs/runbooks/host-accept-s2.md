@@ -157,8 +157,8 @@ D-W5 的证据（AA5 方案 §4 第 3 份清单）：「授权门（试验）」
    来源名 `accept-tickets-<nonce>`，版本 1，带两个 Skill 和 Worker（写着它用的系统，不带门和模型），`tickets.create` 的 blast radius
    列进 `omitted`（包里没有 Operation）；再导出一次，文件和 digest 一样（导出什么都不写）；
 2. 维护者把文件放进 `${NEXTTIME_DATA}/config/packs/accept-tickets-<nonce>/1/`（`operations.md` §14.10：控制台下载的 tar 解开就是这些；
-   目录必须还不存在；root 所有、0644 / 0755，内核经只读的 `config/` 挂载以 uid 10001 读）。平台读到它是附加包（`extra_packs_status`），
-   不用重启；
+   照那里的做法先写进同一目录下的 `.incoming-<nonce>/`，再一次 `mv -T` 到位，内核不会读到写了一半的包；目录必须还不存在；
+   root 所有、0644 / 0755，内核经只读的 `config/` 挂载以 uid 10001 读）。平台读到它是附加包（`extra_packs_status`），不用重启；
 3. 目标工作区读到这个包 `up_to_date`（`source: extra`）：Skill 和 Worker 就是按来源名派生的那几个族，内容是应用时的内容；
    应用时给 Worker 绑的门是工作区自己的，不算改过；
 4. 新建第三个工作区 `accept-s2-pack-<nonce>`（同一个所有者）：包是 `not_installed`，它要的系统 `can_enable`（平台部分建的那个
@@ -168,7 +168,8 @@ D-W5 的证据（AA5 方案 §4 第 3 份清单）：「授权门（试验）」
 
 最后打印人为了复用做了哪几件事（导出、放进附加包目录、启用门、按段审阅与逐项确认、安装），作为 D-W5 的证据。包在
 `config/packs/` 里的这几分钟，**每个工作区的「能力包」列表都会列出它**（附加包目录本来就是这样用的）；清理时不管 `--keep` 与否都会：
-在第三个工作区回滚这次安装、停用这个工作区、删掉这个包的目录（只删本次建的、名字是 `accept-tickets-<nonce>` 的那个）。它启用的门
+在第三个工作区回滚这次安装、停用这个工作区、删掉这个包的目录（只删本次建的、名字是 `accept-tickets-<nonce>` 的那个；
+`mv` 之前就失败的，删掉留下的 `.incoming-<nonce>/`）。它启用的门
 随工单旅程的清理一起断开（停用 gate-host 实例）。
 
 不要在别人正用这台主机上的栈时跑 fake 路径（`ACCEPT_DISRUPTIVE=1` 时尤其如此）。`--real` 不跑这些场景，并且在发布 http 门的清单之前把夹具测试账本的
@@ -321,8 +322,8 @@ PASS admin-agent-tickets-human what the person did: 启用门×2 录凭证×2 �
 NOTE admin-agent-tickets 授权门（试验） is a person's step the AA5 plan's §5.8 list leaves out: the Worker asks for actions only on gates its person holds (connect_gatekeeper on Systems & access, 系统与授权) — D-W5 evidence (AA5 plan §4 item 3)
 HUMAN admin-agent-pack 导出: export_admin_proposal_pack <uuid> (the console's 导出成能力包…)
 PASS admin-agent-pack-export the platform administrator exported the target's applied part as accept-tickets-<hex> version 1 (sha256:<hex>): two Skills and the Worker, tickets.create's blast radius left out; the same pack when asked again
-HUMAN admin-agent-pack 放进附加包目录: the exported files into <data>/config/packs/accept-tickets-<hex>/1/ (operations.md §14.10)
-PASS admin-agent-pack-place the files in <data>/config/packs/accept-tickets-<hex>/1/; the platform reads accept-tickets-<hex> as an extra pack at version 1, nothing left out, no restart
+HUMAN admin-agent-pack 放进附加包目录: the exported files into <data>/config/packs/.incoming-<hex>/, then mv -T to <data>/config/packs/accept-tickets-<hex> (operations.md §14.10)
+PASS admin-agent-pack-place the files written into .incoming-<hex>/, then one mv -T to <data>/config/packs/accept-tickets-<hex>/1/; the platform reads accept-tickets-<hex> as an extra pack at version 1, nothing left out, no restart
 PASS admin-agent-pack-target the target <uuid> reads accept-tickets-<hex> up_to_date (extra): its Skills and Worker <uuid> are the pack's families, the Worker's gate there its own
 PASS admin-agent-pack-workspace workspace <uuid>: accept-tickets-<hex> not installed, its system accept-s2-tickets offered by the platform (accept-tickets-<hex>)
 HUMAN admin-agent-pack 启用门: enable_gate_instance accept-tickets-<hex> in <uuid> (from the pack's requirement)
