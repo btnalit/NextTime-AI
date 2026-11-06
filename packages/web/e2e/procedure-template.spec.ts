@@ -1,6 +1,6 @@
 import { getCapability } from '@nexttime/shared';
-import { type Page, expect, test } from '@playwright/test';
 import { OWNER_API_KEY, loginAsOwner } from './lib/auth.js';
+import { type Page, expect, test } from './lib/test.js';
 
 /**
  * e2e/procedure-template.spec.ts (S11 GO5d-2): a Procedure's catalog page read as the template a

@@ -1,5 +1,5 @@
-import { expect, test } from '@playwright/test';
 import { OWNER_API_KEY, loginAsOwner } from './lib/auth.js';
+import { expect, test } from './lib/test.js';
 
 /**
  * e2e/approval-failure-reason.spec.ts — legacy 339, UX acceptance of #614 (MUST-1): a long failure

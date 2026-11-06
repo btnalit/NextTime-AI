@@ -1,12 +1,17 @@
 // Unit tests for scripts/guards/capability-matrix.mjs; the guard itself runs against the real
 // registry and console in CI (`quality`) and `pnpm ci:guards`.
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { test } from 'node:test';
 import { parse } from 'yaml';
 import {
   bootstrapMatrix,
   checkMatrix,
+  checkObserved,
   parseToolArray,
+  readObserved,
   scanConsoleCalls,
   scanQuoted,
 } from './capability-matrix.mjs';
@@ -72,7 +77,7 @@ function facts(overrides = {}) {
   };
 }
 
-function matrix(rows, ratchet = { console_unexplained: 0, kernel_test_missing: 0 }) {
+function matrix(rows, ratchet = { console_unexplained: 0, kernel_test_missing: 0, e2e_waived: 0 }) {
   return { ratchet, capabilities: rows };
 }
 
@@ -144,26 +149,33 @@ test('M5: an untested capability fails unless waived; a stale waiver fails', () 
   assert.ok(checkMatrix(matrix(GOOD), untested).some((v) => v.startsWith('M5 c_cap')));
   const waived = { ...GOOD, c_cap: { ...GOOD.c_cap, kernel_test: 'missing' } };
   assert.deepEqual(
-    checkMatrix(matrix(waived, { console_unexplained: 0, kernel_test_missing: 1 }), untested),
+    checkMatrix(
+      matrix(waived, { console_unexplained: 0, kernel_test_missing: 1, e2e_waived: 0 }),
+      untested,
+    ),
     [],
   );
   assert.ok(
-    checkMatrix(matrix(waived, { console_unexplained: 0, kernel_test_missing: 1 }), facts()).some(
-      (v) => v.startsWith('M5 c_cap'),
-    ),
+    checkMatrix(
+      matrix(waived, { console_unexplained: 0, kernel_test_missing: 1, e2e_waived: 0 }),
+      facts(),
+    ).some((v) => v.startsWith('M5 c_cap')),
   );
 });
 
 test('R: the ratchet must equal the counts, in both directions', () => {
   const rows = { ...GOOD, b_cap: { console: 'none: 待说明（x）', agents: ['entry', 'admin'] } };
   assert.deepEqual(
-    checkMatrix(matrix(rows, { console_unexplained: 1, kernel_test_missing: 0 }), facts()),
+    checkMatrix(
+      matrix(rows, { console_unexplained: 1, kernel_test_missing: 0, e2e_waived: 0 }),
+      facts(),
+    ),
     [],
   );
   const up = checkMatrix(matrix(rows), facts());
   assert.ok(up.some((v) => v.startsWith('R ratchet.console_unexplained') && v.includes('raises')));
   const down = checkMatrix(
-    matrix(GOOD, { console_unexplained: 2, kernel_test_missing: 0 }),
+    matrix(GOOD, { console_unexplained: 2, kernel_test_missing: 0, e2e_waived: 0 }),
     facts(),
   );
   assert.ok(down.some((v) => v.startsWith('R ratchet.console_unexplained') && v.includes('lower')));
@@ -182,4 +194,74 @@ test('bootstrap output passes its own check and keeps earlier reasons', () => {
 
 test('scanQuoted finds quoted names only', () => {
   assert.deepEqual([...scanQuoted("call('a_cap'); b_cap", ['a_cap', 'b_cap'])], ['a_cap']);
+});
+
+// M4: a_cap is a write the console calls, c_cap a write it calls indirectly, b_cap an observe.
+const MODES = new Map([
+  ['a_cap', 'write'],
+  ['b_cap', 'observe'],
+  ['c_cap', 'execute'],
+]);
+const E2E = {
+  a_cap: { ...GOOD.a_cap, e2e: 'observed' },
+  b_cap: GOOD.b_cap,
+  c_cap: { ...GOOD.c_cap, e2e: 'waived: 656' },
+};
+const E2E_RATCHET = { console_unexplained: 0, kernel_test_missing: 0, e2e_waived: 1 };
+
+test('M4: a write with a console entry says observed or waived; nothing else carries e2e', () => {
+  const f = facts({ modes: MODES });
+  assert.deepEqual(checkMatrix(matrix(E2E, E2E_RATCHET), f), []);
+  const missing = { ...E2E, a_cap: GOOD.a_cap };
+  assert.ok(checkMatrix(matrix(missing, E2E_RATCHET), f).some((v) => v.startsWith('M4 a_cap')));
+  const noNumber = { ...E2E, c_cap: { ...GOOD.c_cap, e2e: 'waived: later' } };
+  assert.ok(checkMatrix(matrix(noNumber, E2E_RATCHET), f).some((v) => v.startsWith('M4 c_cap')));
+  const onObserve = { ...E2E, b_cap: { ...GOOD.b_cap, e2e: 'observed' } };
+  assert.ok(checkMatrix(matrix(onObserve, E2E_RATCHET), f).some((v) => v.startsWith('M4 b_cap')));
+  // the waiver is counted: one more without raising the ratchet fails R
+  const twoWaived = { ...E2E, a_cap: { ...GOOD.a_cap, e2e: 'waived: 656' } };
+  assert.ok(
+    checkMatrix(matrix(twoWaived, E2E_RATCHET), f).some((v) =>
+      v.startsWith('R ratchet.e2e_waived'),
+    ),
+  );
+});
+
+test('M4 at run time: observed must have been called ok; a waived row that was is reported', () => {
+  const m = matrix(E2E, E2E_RATCHET);
+  assert.deepEqual(checkObserved(m, new Set(['a_cap'])), []);
+  assert.ok(checkObserved(m, new Set()).some((v) => v.startsWith('M4 a_cap: e2e: observed')));
+  assert.ok(checkObserved(m, new Set(['a_cap', 'c_cap'])).some((v) => v.startsWith('M4 c_cap')));
+});
+
+test('readObserved keeps the calls answered ok, from every cap-calls.jsonl below the dir', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'cap-calls-'));
+  mkdirSync(path.join(dir, 'a-test'));
+  mkdirSync(path.join(dir, 'b-test-retry1'));
+  writeFileSync(
+    path.join(dir, 'a-test', 'cap-calls.jsonl'),
+    `${JSON.stringify({ name: 'a_cap', via: 'http', ok: true, status: 200 })}\n`,
+  );
+  writeFileSync(
+    path.join(dir, 'b-test-retry1', 'cap-calls.jsonl'),
+    `${JSON.stringify({ name: 'c_cap', via: 'ws', ok: false, status: null })}\n\n`,
+  );
+  writeFileSync(path.join(dir, 'a-test', 'other.jsonl'), 'not json');
+  const { names, files } = readObserved(dir);
+  assert.equal(files, 2);
+  assert.deepEqual([...names], ['a_cap']);
+});
+
+test('bootstrap with an e2e run: observed where called, waived under the given no. elsewhere', () => {
+  const f = facts({ modes: MODES });
+  const text = bootstrapMatrix(f, matrix(GOOD), { observed: new Set(['a_cap']), waiver: '656' });
+  const parsed = parse(text);
+  assert.equal(parsed.capabilities.a_cap.e2e, 'observed');
+  assert.equal(parsed.capabilities.c_cap.e2e, 'waived: 656');
+  assert.equal(parsed.capabilities.b_cap.e2e, undefined);
+  assert.equal(parsed.ratchet.e2e_waived, 1);
+  assert.deepEqual(checkMatrix(parsed, f), []);
+  // without a run, the e2e it had stays; without one and no waiver no., it refuses
+  assert.equal(parse(bootstrapMatrix(f, parsed)).capabilities.a_cap.e2e, 'observed');
+  assert.throws(() => bootstrapMatrix(f, matrix(GOOD)), /--waive/);
 });

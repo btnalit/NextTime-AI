@@ -1,5 +1,5 @@
-import { type Page, expect, test } from '@playwright/test';
 import { loginWithPassword, reachLoginForm } from './auth-helpers.js';
+import { type Page, expect, test } from './lib/test.js';
 
 /**
  * e2e/workspaces.spec.ts: the P-A2 acceptance flow (docs/development-tasks.md "### P-A2" 完成标准,

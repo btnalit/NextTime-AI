@@ -1,5 +1,5 @@
-import { type Page, expect, test } from '@playwright/test';
 import { ADMIN_INITIAL_PASSWORD, ADMIN_LOGIN } from '../lib/auth.js';
+import { type Page, expect, test } from '../lib/test.js';
 import {
   OWNER_API_KEY,
   asOwner,

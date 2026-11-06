@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { expect, test } from '@playwright/test';
 import { loginWithApiKey, reachLoginForm } from './auth-helpers.js';
+import { expect, test } from './lib/test.js';
 
 /**
  * e2e/approvals.spec.ts: the S2.10 acceptance flow (docs/development-tasks.md S2.10: "卡片出现 →

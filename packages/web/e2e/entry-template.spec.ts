@@ -1,6 +1,6 @@
 import type { EntryTemplateStatusWire, WorkerDefinitionWire } from '@nexttime/shared';
-import { type Page, expect, test } from '@playwright/test';
 import { OWNER_API_KEY, loginAsOwner } from './lib/auth.js';
+import { type Page, expect, test } from './lib/test.js';
 
 /**
  * e2e/entry-template.spec.ts (legacy 145): a workspace whose entry definition predates what the

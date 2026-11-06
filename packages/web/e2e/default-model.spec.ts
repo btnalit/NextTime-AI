@@ -1,5 +1,5 @@
-import { type Page, expect, test } from '@playwright/test';
 import { loginWithPassword, reachLoginForm } from './auth-helpers.js';
+import { type Page, expect, test } from './lib/test.js';
 
 /**
  * e2e/default-model.spec.ts: the S7-E-page acceptance for E5 (P-D 剩余,

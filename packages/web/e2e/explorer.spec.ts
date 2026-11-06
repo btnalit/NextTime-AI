@@ -1,5 +1,5 @@
-import { expect, test } from '@playwright/test';
 import { loginWithPassword, reachLoginForm } from './auth-helpers.js';
+import { expect, test } from './lib/test.js';
 
 /**
  * e2e/explorer.spec.ts: CI smoke coverage for the Explorer's cookie-based auth (S4.1 rewrite —

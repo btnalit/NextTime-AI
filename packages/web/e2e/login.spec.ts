@@ -1,5 +1,5 @@
-import { expect, test } from '@playwright/test';
 import { loginWithPassword, reachLoginForm } from './auth-helpers.js';
+import { expect, test } from './lib/test.js';
 
 /**
  * e2e/login.spec.ts: the P-A1 acceptance flow (docs/platform-admin-design.md §4/§5) — admin first

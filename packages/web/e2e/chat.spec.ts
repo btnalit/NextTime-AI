@@ -1,5 +1,5 @@
-import { expect, test } from '@playwright/test';
 import { loginWithApiKey, reachLoginForm } from './auth-helpers.js';
+import { expect, test } from './lib/test.js';
 
 /**
  * e2e/chat.spec.ts: the S1.8 acceptance flow (docs/development-tasks.md S1.8: "Playwright：登录 →

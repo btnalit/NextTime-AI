@@ -14,9 +14,15 @@
 //       `ENTRY_TOOL_CAPABILITY_NAMES`), `admin` (modes/admin.ts `ADMIN_TOOL_CAPABILITY_NAMES`). Names
 //       the extension calls itself (`get_entry_context`, `report_turn`) or reaches through projected
 //       gate tools (`observe_operation`) are on the Handle ceiling, not tools, and are not listed
+//   M4  a capability that is not `observe` and has a console entry (`required` / `indirect:`) says
+//       whether an e2e test reaches it through the console: `e2e: observed`, or
+//       `e2e: "waived: <legacy no.>"` (counted by ratchet.e2e_waived). No other row has `e2e`.
+//       `--e2e-observed <dir>` (the end of `web-e2e`) reads the calls packages/web/e2e/lib/test.ts
+//       recorded (`cap-calls.jsonl`): every `observed` row was called by a page and answered ok, and
+//       a waived row a page called ok must become `observed` (and lower the ratchet)
 //   M5  `kernel_test: missing` ⇔ no packages/kernel test file names it
-//   R   ratchet: the `none: 待说明…` rows and the `kernel_test: missing` rows are counted, and the
-//       counts must equal `ratchet:` at the top of the file — a new one cannot be added without
+//   R   ratchet: the `none: 待说明…` rows, the `kernel_test: missing` rows and the `e2e: waived`
+//       rows are counted, and the counts must equal `ratchet:` at the top of the file — a new one cannot be added without
 //       raising the number in the same diff, a fixed one must lower it
 //
 // Reads @nexttime/shared's built dist (like vocabulary.mjs): `pnpm --filter @nexttime/shared build`
@@ -24,7 +30,7 @@
 // first made and how a large rename can be re-seeded — never a way to make a failing check pass
 // without reading the diff.
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse } from 'yaml';
@@ -33,6 +39,8 @@ const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 export const MATRIX_PATH = 'docs/contracts/capability-matrix.yaml';
 export const UNEXPLAINED_PREFIX = 'none: 待说明';
 export const AGENT_SURFACES = ['entry', 'admin'];
+export const E2E_OBSERVED = 'observed';
+export const E2E_WAIVED = /^waived: [0-9]+$/;
 
 // ---------------------------------------------------------------------------------------------
 // Scanners (pure functions over file text, unit-tested in capability-matrix.test.mjs)
@@ -89,10 +97,20 @@ export function scanQuoted(text, names) {
 // The check
 // ---------------------------------------------------------------------------------------------
 
+/** M4's scope: a write (any mode but `observe`) the console has an entry for. */
+export function needsE2e(mode, consoleDecl) {
+  return (
+    mode !== undefined &&
+    mode !== 'observe' &&
+    (consoleDecl === 'required' || consoleDecl.startsWith('indirect:'))
+  );
+}
+
 /**
  * @param {{ ratchet?: Record<string, number>, capabilities?: Record<string, any> }} matrix
  * @param {{ names: string[], consoleCalls: Set<string>, entry: Set<string>, admin: Set<string>,
- *           kernelTested: Set<string>, fileHasName: (file: string, name: string) => boolean }} facts
+ *           kernelTested: Set<string>, fileHasName: (file: string, name: string) => boolean,
+ *           modes?: Map<string, string> }} facts  `modes`: registry mode per name (M4)
  * @returns {string[]} violations
  */
 export function checkMatrix(matrix, facts) {
@@ -115,6 +133,7 @@ export function checkMatrix(matrix, facts) {
 
   let unexplained = 0;
   let kernelMissing = 0;
+  let e2eWaived = 0;
   for (const name of facts.names) {
     const row = rows[name];
     if (!row || typeof row !== 'object') continue;
@@ -174,6 +193,23 @@ export function checkMatrix(matrix, facts) {
       }
     }
 
+    // M4 (the static half; `checkObserved` is the run-time half)
+    if (needsE2e(facts.modes?.get(name), consoleDecl)) {
+      if (row.e2e === E2E_OBSERVED) {
+        // held to the run by checkObserved
+      } else if (typeof row.e2e === 'string' && E2E_WAIVED.test(row.e2e)) {
+        e2eWaived += 1;
+      } else {
+        out.push(
+          `M4 ${name}: a ${facts.modes.get(name)} capability with a console entry — say e2e: observed (an e2e test calls it through the console), or e2e: "waived: <legacy no.>" with a higher ratchet.e2e_waived (got ${JSON.stringify(row.e2e)})`,
+        );
+      }
+    } else if (row.e2e !== undefined) {
+      out.push(
+        `M4 ${name}: e2e is only for a capability that is not observe and has a console entry — remove it`,
+      );
+    }
+
     // M5
     const tested = facts.kernelTested.has(name);
     if (row.kernel_test === 'missing') {
@@ -198,6 +234,7 @@ export function checkMatrix(matrix, facts) {
   for (const [key, count] of [
     ['console_unexplained', unexplained],
     ['kernel_test_missing', kernelMissing],
+    ['e2e_waived', e2eWaived],
   ]) {
     if (ratchet[key] !== count) {
       out.push(
@@ -210,6 +247,49 @@ export function checkMatrix(matrix, facts) {
     }
   }
   return out;
+}
+
+/**
+ * M4, run-time half: `observed` is the set of names a page called and got ok for in this e2e run.
+ * @returns {string[]} violations
+ */
+export function checkObserved(matrix, observed) {
+  const out = [];
+  for (const [name, row] of Object.entries(matrix?.capabilities ?? {})) {
+    if (row?.e2e === E2E_OBSERVED && !observed.has(name)) {
+      out.push(
+        `M4 ${name}: e2e: observed, but no page called it and got ok in this run — the test that covered it no longer does; cover it again, or waive it with a legacy no.`,
+      );
+    }
+    if (typeof row?.e2e === 'string' && E2E_WAIVED.test(row.e2e) && observed.has(name)) {
+      out.push(
+        `M4 ${name}: ${row.e2e}, but a page called it ok in this run — change it to e2e: observed and lower ratchet.e2e_waived`,
+      );
+    }
+  }
+  return out;
+}
+
+/** Lines of every `cap-calls.jsonl` under `dir` → the names called ok, and how many files. */
+export function readObserved(dir) {
+  const names = new Set();
+  let files = 0;
+  const walk = (at) => {
+    for (const entry of readdirSync(at, { withFileTypes: true })) {
+      const full = path.join(at, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name === 'cap-calls.jsonl') {
+        files += 1;
+        for (const line of readFileSync(full, 'utf8').split('\n')) {
+          if (line.trim() === '') continue;
+          const call = JSON.parse(line);
+          if (call.ok === true && typeof call.name === 'string') names.add(call.name);
+        }
+      }
+    }
+  };
+  walk(dir);
+  return { names, files };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -228,7 +308,7 @@ function read(rel) {
   return readFileSync(path.join(REPO_ROOT, rel), 'utf8');
 }
 
-async function loadRegistryNames() {
+async function loadRegistry() {
   const distIndex = path.join(REPO_ROOT, 'packages', 'shared', 'dist', 'index.js');
   let shared;
   try {
@@ -239,13 +319,12 @@ async function loadRegistryNames() {
     );
     throw err;
   }
-  return shared.CAPABILITY_REGISTRY.map((capability) => capability.name).filter(
-    (name) => !name.includes('<'),
-  );
+  return shared.CAPABILITY_REGISTRY.filter((capability) => !capability.name.includes('<'));
 }
 
 export async function collectFacts() {
-  const names = await loadRegistryNames();
+  const registry = await loadRegistry();
+  const names = registry.map((capability) => capability.name);
   const webFiles = gitFiles([
     'packages/web/src/*.ts',
     'packages/web/src/**/*.ts',
@@ -258,6 +337,7 @@ export async function collectFacts() {
     .join('\n');
   return {
     names,
+    modes: new Map(registry.map((capability) => [capability.name, capability.mode])),
     consoleCalls: scanConsoleCalls(webText, names),
     entry: parseToolArray(
       read('packages/platform-extension/src/modes/entry.ts'),
@@ -279,7 +359,7 @@ export async function collectFacts() {
 }
 
 const HEADER = `# Capability matrix — one row per capability in packages/shared/src/capabilities.ts.
-# Guard: scripts/guards/capability-matrix.mjs (rules M1–M5, R); design: docs/test-coverage-gaps-2026-11-06.md §5.1.
+# Guard: scripts/guards/capability-matrix.mjs (rules M1–M5, R); design: docs/test-coverage-gaps-2026-11-06.md §5.1, §5.3.
 #
 # console:  required             the console calls it (http.call / useCapability*)
 #           indirect: <file>     the console calls it through a variable; <file> names it
@@ -287,13 +367,22 @@ const HEADER = `# Capability matrix — one row per capability in packages/share
 #           none: 待说明…        not decided yet (counted by ratchet.console_unexplained, only goes down)
 # agents:   which agents register it as a pi tool: entry (modes/entry.ts), admin (modes/admin.ts).
 #           [] is a decision too: a new capability's PR says here whether the agents should see it.
+# e2e:      observed             (a capability that is not observe, with a console entry) an e2e test
+#                                calls it through the console; web-e2e checks each run (M4)
+#           "waived: <legacy no.>"  not yet (counted by ratchet.e2e_waived, only goes down)
 # kernel_test: missing           no kernel test names it yet (counted by ratchet.kernel_test_missing)
 `;
 
-export function bootstrapMatrix(facts, previous) {
+/**
+ * @param options `observed` (names an e2e run called ok, `readObserved`) and `waiver` (the legacy
+ *   no. a row no test reaches is waived under) decide each M4 row's `e2e`; without `observed`, a
+ *   row keeps the `e2e` it had.
+ */
+export function bootstrapMatrix(facts, previous, options = {}) {
   const rows = {};
   let unexplained = 0;
   let kernelMissing = 0;
+  let e2eWaived = 0;
   for (const name of [...facts.names].sort()) {
     const old = previous?.capabilities?.[name];
     let consoleDecl;
@@ -306,6 +395,13 @@ export function bootstrapMatrix(facts, previous) {
       console: consoleDecl,
       agents: AGENT_SURFACES.filter((surface) => facts[surface].has(name)),
     };
+    if (needsE2e(facts.modes?.get(name), consoleDecl)) {
+      if (options.observed?.has(name)) row.e2e = E2E_OBSERVED;
+      else if (options.observed === undefined && typeof old?.e2e === 'string') row.e2e = old.e2e;
+      else if (options.waiver !== undefined) row.e2e = `waived: ${options.waiver}`;
+      else throw new Error(`capability-matrix: ${name} needs e2e — pass --waive <legacy no.>`);
+      if (row.e2e !== E2E_OBSERVED) e2eWaived += 1;
+    }
     if (!facts.kernelTested.has(name)) {
       row.kernel_test = 'missing';
       kernelMissing += 1;
@@ -316,6 +412,7 @@ export function bootstrapMatrix(facts, previous) {
     'ratchet:',
     `  console_unexplained: ${unexplained}`,
     `  kernel_test_missing: ${kernelMissing}`,
+    `  e2e_waived: ${e2eWaived}`,
     'capabilities:',
   ];
   for (const [name, row] of Object.entries(rows)) {
@@ -324,6 +421,8 @@ export function bootstrapMatrix(facts, previous) {
       `    console: ${row.console === 'required' ? 'required' : JSON.stringify(row.console)}`,
     );
     lines.push(`    agents: [${row.agents.join(', ')}]`);
+    if (row.e2e)
+      lines.push(`    e2e: ${row.e2e === E2E_OBSERVED ? row.e2e : JSON.stringify(row.e2e)}`);
     if (row.kernel_test) lines.push(`    kernel_test: ${row.kernel_test}`);
   }
   const body = `${lines.join('\n')}\n`;
@@ -339,12 +438,37 @@ async function main() {
     // missing file: M1 reports every capability
   }
   const matrix = matrixText ? parse(matrixText) : {};
+  const arg = (flag) => {
+    const at = process.argv.indexOf(flag);
+    return at > 0 ? process.argv[at + 1] : undefined;
+  };
+  const observedDir = arg('--e2e-observed');
+  let observed;
+  if (observedDir !== undefined) {
+    const read = readObserved(path.resolve(observedDir));
+    if (read.files === 0) {
+      console.error(
+        `capability-matrix: no cap-calls.jsonl under ${observedDir} — did the e2e run use packages/web/e2e/lib/test.ts's test?`,
+      );
+      process.exit(1);
+    }
+    observed = read.names;
+    console.log(
+      `capability-matrix: ${read.files} test(s) recorded calls; ${observed.size} capabilities called ok by a page`,
+    );
+  }
   if (process.argv.includes('--bootstrap')) {
-    writeFileSync(path.join(REPO_ROOT, MATRIX_PATH), bootstrapMatrix(facts, matrix));
+    writeFileSync(
+      path.join(REPO_ROOT, MATRIX_PATH),
+      bootstrapMatrix(facts, matrix, { observed, waiver: arg('--waive') }),
+    );
     console.log(`capability-matrix: wrote ${MATRIX_PATH} — read the diff before committing it`);
     return;
   }
-  const violations = checkMatrix(matrix, facts);
+  const violations = [
+    ...checkMatrix(matrix, facts),
+    ...(observed !== undefined ? checkObserved(matrix, observed) : []),
+  ];
   if (violations.length > 0) {
     for (const violation of violations) console.error(`capability-matrix: ${violation}`);
     console.error(

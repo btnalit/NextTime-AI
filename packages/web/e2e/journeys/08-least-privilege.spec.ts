@@ -1,6 +1,6 @@
-import { type Page, type Request, expect, test } from '@playwright/test';
 import { loginWithPassword, reachLoginForm } from '../auth-helpers.js';
 import { ADMIN_INITIAL_PASSWORD, ADMIN_LOGIN } from '../lib/auth.js';
+import { type Page, type Request, expect, test } from '../lib/test.js';
 import {
   expectNoHalfEnglish,
   watchForbiddenCapabilityCalls,

@@ -1,6 +1,6 @@
-import { type Page, expect, test } from '@playwright/test';
 import { OWNER_API_KEY, loginAsOwner } from '../lib/auth.js';
 import { MASK_SELECTORS, freezeClock, settleForCapture } from '../lib/determinism.js';
+import { type Page, expect, test } from '../lib/test.js';
 import { SURFACES, VIEWPORT_HEIGHT, WIDTHS, goToSurface } from './surfaces.js';
 
 /**

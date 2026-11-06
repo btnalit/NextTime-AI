@@ -1,5 +1,5 @@
-import { expect, test } from '@playwright/test';
 import { loginWithApiKey, reachLoginForm } from './auth-helpers.js';
+import { expect, test } from './lib/test.js';
 
 /**
  * e2e/goals.spec.ts (S11 GO6, read-only part): CI smoke coverage for the 目标 Goals pages against

@@ -1,4 +1,3 @@
-import { expect, test } from '@playwright/test';
 import {
   createFreshWorkspace,
   goToByLabel,
@@ -6,6 +5,7 @@ import {
   signInAsFreshOwner,
 } from './journeys/helpers.js';
 import { ADMIN_INITIAL_PASSWORD, ADMIN_LOGIN } from './lib/auth.js';
+import { expect, test } from './lib/test.js';
 
 /**
  * S11 AA5b: the admin chat's 「在 系统与授权 完成这个连接」 link (`hrefs.completeConnectionRequest`,

@@ -1,10 +1,10 @@
-import { expect, test } from '@playwright/test';
 import {
   createFreshWorkspace,
   selectOwnedWorkspace,
   signInAsFreshOwner,
 } from './journeys/helpers.js';
 import { ADMIN_INITIAL_PASSWORD, ADMIN_LOGIN } from './lib/auth.js';
+import { expect, test } from './lib/test.js';
 
 /**
  * e2e/nav-drawer.spec.ts (legacies 596 and 610, UX acceptance of #924): a person in a trial

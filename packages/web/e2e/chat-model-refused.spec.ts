@@ -1,4 +1,3 @@
-import { expect, test } from '@playwright/test';
 import { OWNER_API_KEY, loginAsOwner } from './lib/auth.js';
 import {
   appendToChatHistory,
@@ -7,6 +6,7 @@ import {
   systemMessage,
   userMessage,
 } from './lib/chat-stand-ins.js';
+import { expect, test } from './lib/test.js';
 
 /**
  * e2e/chat-model-refused.spec.ts (legacy 589): a message whose every model call the platform

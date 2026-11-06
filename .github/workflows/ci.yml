@@ -182,6 +182,12 @@ jobs:
       - name: e2e tests act on what a person sees — role or label, not a test id or CSS (scripts/guards/e2e-locators.mjs, baseline only shrinks)
         run: node scripts/guards/e2e-locators.mjs
 
+      - name: e2e fixture guard unit tests
+        run: node --test scripts/guards/e2e-fixture.test.mjs
+
+      - name: e2e specs run on e2e/lib/test.ts, which records the capabilities the console calls (scripts/guards/e2e-fixture.mjs, E1)
+        run: node scripts/guards/e2e-fixture.mjs
+
       - name: Ratchet guard unit tests
         run: node --test scripts/guards/ratchet-shrinks.test.mjs
 
