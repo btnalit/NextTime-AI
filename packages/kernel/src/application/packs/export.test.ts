@@ -256,6 +256,47 @@ describe('buildAdminProposalPack: refused, with every reason', () => {
     for (const problem of built.problems) expect(JSON.stringify(problem)).not.toContain(token);
   });
 
+  it('a suspected credential in a Worker: its own problem, at its path, not left to the loader', async () => {
+    const token = `gh${'p_'}${'a1B2c3D4'.repeat(4)}`;
+    const built = await build({
+      sourceName: 'leaky-worker-pack',
+      items: [
+        {
+          kind: 'worker_definition_version',
+          definition: {
+            name: 'leaky-worker',
+            systemPrompt: `Log in with ${token}.`,
+            description: 'd',
+          },
+        },
+      ],
+    });
+    expect(built.ok).toBe(false);
+    if (built.ok) return;
+    expect(
+      built.problems
+        .filter((problem) => problem.code === 'suspected_credentials')
+        .map((problem) => problem.path),
+    ).toEqual(['items[0].definition.systemPrompt']);
+    for (const problem of built.problems) expect(JSON.stringify(problem)).not.toContain(token);
+  });
+
+  it('a suspected credential in an ontology family: its own problem, at its path, not left to the loader', async () => {
+    const token = `gh${'p_'}${'a1B2c3D4'.repeat(4)}`;
+    const definition = parseOntologyDefinition(
+      objectTypeYaml('Ticket').replace('description: d', `description: "log in with ${token}"`),
+    );
+    const built = await build({
+      sourceName: 'leaky-ontology',
+      items: [{ kind: 'ontology_version', family: 'leaky-ontology', definition }],
+    });
+    expect(built.ok).toBe(false);
+    if (built.ok) return;
+    expect(built.problems.map((problem) => problem.code)).toEqual(['suspected_credentials']);
+    expect(built.problems[0]?.path).toBe('items[0].definition.objectTypes[0].description');
+    for (const problem of built.problems) expect(JSON.stringify(problem)).not.toContain(token);
+  });
+
   it('a component a pack of this deployment has', async () => {
     const other = await exported({ sourceName: 'other-pack', items: [SKILL] });
     const registry: PackRegistry = new Map([['other-pack', await readBack(other)]]);

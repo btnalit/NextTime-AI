@@ -20,6 +20,7 @@ import type { CryptoKey } from 'jose';
 import type { Pool } from 'pg';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
+import { withPlatform } from '../../adapters/db/platform-context.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { HANDLE_SIGNING_ALG } from '../../governance/capability/index.js';
 import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
@@ -312,6 +313,28 @@ describe.runIf(DATABASE_URL !== undefined)(
           params,
         ),
       ).toEqual(pack);
+
+      // governance 0039 answers the platform plane only: in the target's own transaction, the one
+      // plane that reads its change segments, the same verified segment reads false (as anywhere
+      // else that is not the platform).
+      const verifiedOn = async (run: (sql: string) => Promise<{ rows: { verified: boolean }[] }>) =>
+        (await run('select admin_proposal_segment_verified($1) as verified')).rows[0]?.verified;
+      expect(
+        await verifiedOn((sql) =>
+          withPlatform(pool, { userId: user.id }, (client) =>
+            client.query<{ verified: boolean }>(sql, [segmentId]),
+          ),
+        ),
+      ).toBe(true);
+      expect(
+        await verifiedOn((sql) =>
+          withWorkspace(
+            pool,
+            { workspaceId: target.workspaceId, principalId: target.ownerPrincipalId },
+            (client) => client.query<{ verified: boolean }>(sql, [segmentId]),
+          ),
+        ),
+      ).toBe(false);
 
       await putInExtraPacks(pack);
       // The workspace it was applied to has exactly this: the same family ids, the same content.
