@@ -303,6 +303,15 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '工作区里已经是它提议的样子，没有要应用的内容，本次没有写入任何内容。不需要它的话可以拒绝',
     en: 'The workspace already is as it proposes, so there is nothing to apply — nothing was written. Reject it if it is not needed',
   },
+  // S11 AA5g-2: a segment asking for a pack install is answered by installing the pack.
+  admin_proposal_segment_is_pack_install: {
+    zh: '这份管理员提案请求安装一个能力包，要用能力包自己的安装审阅来安装，不能按普通提案应用。本次没有写入任何内容。在提案里点「安装…」',
+    en: 'This admin proposal asks to install a pack, which installs through the pack’s own install review, not as an ordinary proposal. Nothing was written. Use Install… on the proposal',
+  },
+  admin_proposal_pack_mismatch: {
+    zh: '这份管理员提案请求的是另一个能力包或另一个版本（能力包可能已经有了新版本），本次没有写入任何内容。可以拒绝它，或在「能力包」页安装最新版本',
+    en: 'This admin proposal asks for another pack or another version (the pack may have a newer version now) — nothing was written. Reject it, or install the latest version from Packs',
+  },
   platform_segment_not_applied: {
     zh: '这份管理员提案还有平台部分（例如新建一个门宿主实例），要等平台管理员先应用它；平台部分被拒绝或撤销后，这一部分就不能再应用了。本次没有写入任何内容',
     en: 'This admin proposal also has a platform part (a new gate-host instance, say) that a platform administrator has to apply first; once that part is rejected or rolled back, this one can no longer be applied. Nothing was written',

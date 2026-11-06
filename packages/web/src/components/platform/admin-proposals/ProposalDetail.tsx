@@ -555,6 +555,13 @@ function WorkspacePart({
   const t = useT();
   const prefix = `platform-admin-proposal-workspace-part-${segment.ordinal}`;
   const when = segment.status === 'rolled_back' ? segment.rolledBackAt : segment.decidedAt;
+  // S11 AA5g-2: a part asking its workspace to install a pack holds that one item; it is the pack's
+  // own install there, so there is nothing of its own to export as a pack.
+  const [first] = segment.items;
+  const packInstall =
+    segment.items.length === 1 && first?.kind === 'pack_install'
+      ? { pack: first.pack, versionText: `v${first.version}` }
+      : null;
   return (
     <div className="card card-padded stack-s" data-testid={prefix}>
       <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
@@ -578,6 +585,14 @@ function WorkspacePart({
           </>
         ) : null}
       </span>
+      {packInstall !== null ? (
+        <span className="text-small" data-testid={`${prefix}-pack`}>
+          {t(
+            `请求安装能力包 ${packInstall.pack} ${packInstall.versionText}`,
+            `Asks to install the pack ${packInstall.pack} ${packInstall.versionText}`,
+          )}
+        </span>
+      ) : null}
       {segment.reason !== null ? (
         <span className="text-small pre-wrap wrap-anywhere" data-testid={`${prefix}-reason`}>
           {segment.status === 'rejected'
@@ -586,7 +601,7 @@ function WorkspacePart({
           {segment.reason}
         </span>
       ) : null}
-      {segment.status === 'applied' ? (
+      {segment.status === 'applied' && packInstall === null ? (
         // S11 AA5d-3: what it applied, as a pack other workspaces install (the kernel checks it
         // is verified there now).
         <div className="row-wrap">

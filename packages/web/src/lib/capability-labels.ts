@@ -1628,6 +1628,14 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     enHint:
       'An admin agent reads the deployment’s capability packs and which its trial workspace has installed — never another workspace’s, and it cannot install one.',
   },
+  propose_pack_install: {
+    zh: '智能体提议安装能力包',
+    en: 'Admin agent proposes a pack install',
+    zhHint:
+      '管理员智能体向它的目标工作区提议安装一个能力包的最新版本；由工作区所有者在「管理员提案」里审阅后安装或拒绝，它自己不能安装。',
+    enHint:
+      'An admin agent proposes that its target workspaces install the latest version of a pack; each workspace owner reviews it under Admin proposals and installs or rejects it — the agent never installs one.',
+  },
   list_admin_proposals: {
     zh: '查看管理员提案',
     en: 'List admin proposals',

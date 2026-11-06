@@ -162,6 +162,9 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   // S11 AA4c-3: the admin agent and its targets.
   admin_agent_refused: 'The admin agent cannot start here',
   admin_proposal_target_no_longer_chosen: 'No longer among the targets',
+  // S11 AA5g-2: a segment asking for a pack install, and an install answering one.
+  admin_proposal_segment_is_pack_install: 'Installed from its pack',
+  admin_proposal_pack_mismatch: 'Not the pack version it asks for',
   admin_role_not_stored: 'Administrator role not stored',
   // S11 GO5c: the requester already has as many goals waiting to be confirmed as one may.
   proposed_goal_limit: 'Too many goals waiting',
@@ -277,6 +280,8 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   platform_change_segment_rolled_back: '已经撤销过了',
   admin_agent_refused: '管理员智能体不能在这里开始',
   admin_proposal_target_no_longer_chosen: '已不在目标工作区里',
+  admin_proposal_segment_is_pack_install: '要从能力包安装',
+  admin_proposal_pack_mismatch: '和提案请求的能力包版本不一致',
   admin_role_not_stored: '平台管理员身份没有存进平台',
   proposed_goal_limit: '等待确认的目标太多',
   quota_exceeded: '超出配额',
