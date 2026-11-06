@@ -2517,6 +2517,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **主机升级步骤不变**。
 - **回滚**：只回滚脚本。
 
+### 3.137 管理员智能体能看到能力包、提议所有者安装（#1002，S11 AA5g，0.63.0 之后的下一版）
+
+带一个迁移，随 `apply-release.sh` 自动应用：governance `0040_pack_installs_from_admin_proposals`（可逆，见 §6）。不改 compose，没有新环境变量，主机不需要操作。线上契约新增：管理员智能体能力 `agent_list_packs`（只读）与 `propose_pack_install`，`install_pack` 多一个可选参数 `adminProposalSegmentId`，以及两个新的 409 错误码：`admin_proposal_segment_is_pack_install`（把装包段当普通段预览或应用）、`admin_proposal_pack_mismatch`（安装与段请求的包、版本或摘要不一致）。
+
+- **发版说明可写**：平台管理员的管理员智能体能列出部署里的能力包，并向某个工作区的所有者提议安装其中一个（一份只有工作区段、段里只有一项 `pack_install` 的管理员提案）。所有者在提案里或「能力包」页安装，两条路径是同一个 `install_pack`、同一套权限；装完提案记为已应用，安装记录能回到提案。装不了时（包已不在、版本已不是最新、已在「能力包」页装上）只能拒绝，控制台写明原因。装进来的内容仍记 `origin: human`（它是部署的包，不是智能体写的）。
+- **主机**：`ADMIN_AGENT_ENABLED` 已在主机上打开，所以升级后主机的管理员智能体就能用这两个新工具；不打开时没有影响。
+- **回滚**：只回滚代码即可，见 §6 的 0040 一行。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -2691,6 +2699,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.62.0 | governance `0037_connection_request_admin_agent_session`（#954，AA5a-1）：`connection_requests.admin_agent_session_id`（可空、不回填）、外键 `connection_requests_admin_agent_session_fk`、守卫 `connection_requests_admin_agent_session_guard` 及其函数（插入时只许本工作区、代表 `requested_by` 的 `admin_agent` 会话且工作区是试验工作区；写入后不改） | 可逆 | 旧代码插入、读取都写明列名，从不写这一列；完成、取消请求时不动这一列，能过守卫 | 只需回退代码。要撤迁移：`drop trigger connection_requests_admin_agent_session_guard on connection_requests`、删它的函数、`alter table connection_requests drop column admin_agent_session_id`，再删 `schema_migrations` 里 governance 37 那一行（见 0037 文件头） |
 | v0.62.0 | governance `0038_admin_proposal_rejection_reads`（#956，AA5a-2，遗留 595）：security definer 函数 `admin_proposal_rejections_since(timestamptz)`，只回答事务自己的平台用户在给定时间之后被拒的工作区部分（目标、提案、部分、时间，不含理由） | 可逆 | 只加函数，旧代码不调它 | 只需回退代码。要撤迁移：`drop function admin_proposal_rejections_since(timestamptz)`，再删 `schema_migrations` 里 governance 38 那一行（见 0038 文件头） |
 | v0.63.0 | governance `0039_admin_proposal_segment_verified`（#976，AA5d-2）：security definer 函数 `admin_proposal_segment_verified(uuid)`，只对平台面回答这一段应用的东西在工作区里现在是否 `verified`（只给是或否，不给 id、条目、结果或时间，按 core 0042 的规矩） | 可逆 | 只加函数，旧代码不调它 | 只需回退代码。要撤迁移：`drop function admin_proposal_segment_verified(uuid)`，再删 `schema_migrations` 里 governance 39 那一行 |
+| 0.63.0 之后的下一版 | governance `0040_pack_installs_from_admin_proposals`（#1002，AA5g-2）：放宽 `change_segments_proposer`，pack 来源的安装记录可以带提案溯源（`admin_proposal_id`、`admin_proposal_segment_id`、提议人两列，四列要么全有、要么全空）；`change_segments_admin_proposal_guard` 加 pack 分支（只管 insert），核对记录与提案段一致：同一提案、同一提议人、段仍是 `proposed`、段里那一项是同包同版本的 `pack_install`、段的 `content_digest` 等于记录的 `source_digest`；`admin_proposal_segments_item_kinds` 允许工作区段只含一项 `pack_install`（平台段不行）。`admin_proposal` 记录的三条规则原样保留 | 可逆 | 约束放宽、guard 加分支、check 加一种情况。旧版本写的行三条都满足（pack 记录四列全空，没有段含 `pack_install`），旧代码读记录也不依赖 pack 记录这四列为空。CI 可逆性探针在 #1002 上是绿的，`reversibility-deltas.json` 没有新增声明。只回滚代码时，旧代码列出 `pack_install` 段会显示它不认识的条目类型、也应用不了它，只能拒绝或撤回 | 只需回退代码。要撤迁移，前提是没有带提案溯源的 pack 记录、也没有 `pack_install` 段：恢复 0033 的 `change_segments_proposer` 与 guard 函数体、0034 的 `admin_proposal_segments_item_kinds`，再删 `schema_migrations` 里 governance 40 那一行（见 0040 文件头） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
