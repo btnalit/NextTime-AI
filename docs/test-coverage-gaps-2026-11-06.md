@@ -140,6 +140,7 @@ M1–M3、M5、R 与 M4 的静态半边是纯静态检查，在 `quality` 与 `p
 - Playwright 新项目 `resilience`，排在最后跑（沿用 `playwright.config.ts` 已有的按项目钉顺序做法），只在 CI 设了 `E2E_RESTART_KERNEL_CMD`（`docker compose restart kernel`）时启用，本地缺省跳过。
 - 场景：①对话页与一个列表页开着 → 重启 kernel → 断言 N 秒内页面自动恢复（下一次写操作成功、推送重新到达），或出现带"重新加载"按钮的中文提示，二者之一，不允许静默失效；②`context.setOffline(true/false)` 模拟断网；③切换工作区 / 切到管理面恰好在重启窗口内（复现主机上的 `connection_closed`）；④登录过期后第一次写操作给出重新登录入口且不丢已填内容。
 - 成本：重启约 20 秒，项目总时长预计 2–3 分钟，在 `web-e2e` 20 分钟预算内。
+- 实现（批次 C1）：Playwright 项目 `resilience`（`packages/web/e2e/resilience/`）排在 `chromium-login` 之后；`web-e2e` 写 `$RUNNER_TEMP/restart-kernel.sh`（`docker compose restart kernel`，等 caddy 的 `/api/health` 回 200 才返回）并以 `E2E_RESTART_KERNEL_CMD` 传给 spec，未设置则整文件跳过。已覆盖场景①的两种会话：API key 会话的对话页、密码（cookie）会话的列表页，各自断言重启期间连接状态显示「重连中 / 已断开」、不刷新页面自行回到「已连接」、之后的下一次写操作（发消息 / 新对话）拿到推送的回复，且历史不丢不重。②断网（Chromium 的 `setOffline` 不关已建立的 WebSocket，要换成经 caddy 的断流手段）、③重启窗口内切换工作区 / 切面、④会话过期留给 C2。
 
 ### 5.5 PR 模板「测试覆盖」一栏
 
