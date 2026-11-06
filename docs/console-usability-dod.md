@@ -18,7 +18,7 @@
 | **没有 403** | 控制台不发出当前角色会被内核拒绝的请求：读按角色挂起，写按角色收起，路由按路由表放行。 | 10 | 请求层 `HttpClient.roleGate`；`src/role-gating.guard.test.ts`（语法树逐处检查，CI `test`）；旅程 ⑧ 四个非所有者角色 `/api/cap/*` 零 403 |
 | **不显示原始 API 名或英文服务端文案** | zh 下不出现能力名、枚举值、错误码、内核英文原文、裸 UUID；这些只进「技术细节」。 | 3、5 | `scripts/guards/i18n-pairs.mjs`；`e2e/00-gates/content.spec.ts`；`expectNoHalfEnglish` / `expectReadableErrors` |
 | **每个按钮当前角色都用得了** | 角色做不了的写操作不显示；按内容暂时不能点的按钮灰掉并写明「还差：…」；指向别的页面的链接只在当前角色打得开时才是链接。 | 4、10 | `useRoleCan` / `kit/route-link` 的 `RouteLink` 与 `useCanOpen`（由角色门禁守卫逐处检查）；`scripts/guards/disabled-reason.mjs`（CI `guards`）；e2e `expectDisabledExplained` |
-| **e2e 用 data-testid 定位** | e2e 辅助函数和新写的规格按 `data-testid` 找元素，不按可见文字；改可见文字时同一提交更新 e2e。 | 11 | 评审清单；CI web-e2e |
+| **e2e 走用户的路** | 点击、填写、选择的那个控件按用户看得见的角色和名字找（`getByRole` / `getByLabel`）；`data-testid` 只用来圈定范围和断言，不用文案、样式类做定位。拿不到可访问名字的控件是控制台缺陷（遗留 646：测试对没标签的 `<select>` 直接 `selectOption`，用户用的搜索框坏了而 CI 是绿的）。改可见文字时同一提交更新 e2e。 | 11 | `scripts/guards/e2e-locators.mjs`（CI `quality`，存量见基线、只减不增）；评审清单；CI web-e2e |
 
 下面 11 条是完整标准。新功能也按这一页验收：后端新增或改变了用户可见的能力（capability、配置项、状态、错误）时，同一个 PR，或写明的跟进 issue，要给出控制台里的入口和呈现。
 
