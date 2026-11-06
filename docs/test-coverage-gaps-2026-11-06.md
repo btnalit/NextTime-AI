@@ -56,15 +56,15 @@ v0.63.0 上主机后，维护者当天撞到三个 bug，而 CI（`guards / qual
 |---|---|---|---|---|---|
 | G1 | 用户旅程 e2e 走真实路径 | 9 条旅程，但交互主要靠 testid / CSS id | 没有规则禁止"绕开可见控件"；同一字段存在两个控件时测试可以选错的那个（646） | **P1** | e2e 定位器守卫（§5.2）+ 旅程逐条改写；#488 + UX 验收 |
 | G2 | 后端重启 / 断线恢复 | `WsClient` 有 R-63 重连；`connection_closed` 有中文文案；e2e 0 个中断场景；chaos 脚本只在主机 | 页面开着时 kernel 重启、短暂断网、caddy 重启，前端能否自动恢复或明确提示，无任何自动化断言 | **P1** | 新 e2e 项目 `resilience`（§5.4）；#488 + UX 验收 |
-| G3 | 升级后旧前端 bundle | `packages/web/src` 没找到版本探测 | 主机升级后已打开的标签页继续跑旧 JS 调新内核；没有"发现新版本、请刷新"的机制，也没有测试。v0.63.0 当天的切换失败发生在升级之后，是否与此相关**待核实** | **P1** | 先产品决定（内核在握手里回版本、控制台比对提示刷新），再加 e2e；控制台 + #493 |
+| G3 | 升级后旧前端 bundle | `packages/web/src` 没找到版本探测 | 主机升级后已打开的标签页继续跑旧 JS 调新内核；没有"发现新版本、请刷新"的机制，也没有测试。v0.63.0 当天切到管理面报 `connection_closed`，已确认是升级时 kernel / caddy 重建、旧标签页一直开着，那一刻浏览器所有请求都失败，F5 即恢复（修复在 #1003）；旧 bundle 是相关缺口，不是已证实的根因 | **P1** | 先产品决定（内核在握手里回版本、控制台比对提示刷新），再加 e2e；控制台 + #493 |
 | G4 | capability 投影对账（控制台 / API / agent） | 2026-09-26 有一次性人工对账文档 `kernel-console-coverage-2026-09-26.md`，之后没人维护 | 新 capability 不需要声明投影到哪；admin agent 看不到能力包就是这样漏的 | **P1** | capability matrix + 守卫（§5.1）；#488（守卫）+ #493（如需内核改动） |
 | G5 | 写操作的 e2e 覆盖 | 134 个有控制台入口的非 observe capability，e2e 覆盖面未知 | 没有"每个控制台写入口至少被 e2e 通过 UI 调到一次"的度量 | **P1** | e2e 运行时 capability 采集（§5.3）+ matrix 豁免棘轮 |
 | G6 | 写操作幂等 / 重复提交 | 46 个内核测试文件提到 idempotent；没有系统性规则 | `grant_capability` 不去重（647）；没有"每个 write capability 重复调用一次行为确定"的遍历测试 | **P2** | 内核遍历测试：matrix 给每个 write 声明 `repeat: idempotent / conflict / creates`，测试按声明断言；#493 |
-| G7 | 升级路径的起点 | staging 默认 `from` = 目标之下最新 tag；主机 v0.50.0 → v0.63.0 一次跨 13 个版本 | 实际主机的起点版本是否被预演过，**待核实**；没有机制强制 `from` = 主机当前版本 | **P1** | `release.md` §1 第 5 步改为必须填 `from` = 主机当前版本，预演摘要打印 `from`，主机窗口检查表核对；#484 |
+| G7 | 升级路径的起点 | staging 默认 `from` = 目标之下最新 tag；主机 v0.50.0 → v0.63.0 一次跨 13 个版本，这次维护者手动填了 `from`（staging run 452「v0.50.0 -> v0.63.0」，绿） | 做对了靠的是人记得，没有机制强制 `from` = 主机当前版本；默认值恰好是错的那个 | **P2** | `release.md` §1 第 5 步改为必须填 `from` = 主机当前版本，预演摘要打印 `from`，主机窗口检查表核对；#484 |
 | G8 | 回滚演练 | `reversibility-probe` 证明旧代码能跑新 schema（空库）；`drill-upgrade.sh` 只在主机手动 | 云上没有"带数据升级 → 代码回滚到 n-1 → 验收"的预演 | **P2** | staging 加 `rollback` 阶段（升级后切回 `from` 镜像跑 S1）；#488 |
 | G9 | 能力包全生命周期 | `install_pack` 有 e2e；`preview_pack_install` / `list_packs` / `extra_packs_status` / `export_admin_proposal_pack` 只有内核测试 + accept_s2 | 安装 → 升级（同包新版本）→ 回滚安装记录 → 导出 → 放进 `config/packs/` 导入 → 第二个工作区安装：没有一条控制台旅程；维护者"手动导出导入"仍待人工确认 | **P2** | 新旅程 `10-pack-lifecycle.spec.ts`；UX 验收 |
 | G10 | 权限矩阵（含拒绝路径） | `roles.test.ts` 单元级遍历；`08-least-privilege` 只验"看得到的页不 403" | 没有按角色×写 capability 走真实 HTTP 的拒绝断言；没有"控制台对无权角色隐藏 / 禁用并说明"的遍历 | **P2** | 内核集成测试遍历 registry 经 dispatch 断言 403 + 审计记 refused；#493 |
-| G11 | 审计 actor 正确性 | 审计写入在 `dispatch.ts`；遗留 644（`raw_secrets_scrubbed` 记 unattributed） | 没有"每个有副作用 capability 的审计行 actor = 实际调用者"的遍历断言；协调提到的 `set_admin_agent_targets` 记成 self **待复现** | **P2** | 内核遍历测试（与 G10 同一夹具，调用后读 `audit_records` 断言 actor / 工作区 / outcome）；#493 |
+| G11 | 审计 actor 正确性 | 审计写入在 `dispatch.ts`；遗留 644（`raw_secrets_scrubbed` 记 unattributed） | 没有"每个有副作用 capability 的审计行 actor = 实际调用者"的遍历断言。`set_admin_agent_targets` 记成 self 经核实不是 bug（维护者本人在控制台保存）；但 #1002 上 #484 指出：管理员智能体自己在平台面的审计行记的也是管理员账号，人和智能体在审计里分不开——这是本条要断言的典型（actor 必须能区分人、管理员智能体会话、服务 Handle） | **P2** | 内核遍历测试（与 G10 同一夹具，调用后读 `audit_records` 断言 actor / 工作区 / outcome）；#493 |
 | G12 | 多工作区隔离 | 37 个内核测试文件涉及跨工作区 | 没有"在 A 工作区建的每类对象，B 工作区的成员经任一 observe capability 都读不到"的遍历；没有 e2e 双工作区串读场景 | **P2** | 内核遍历测试 + e2e 一条双工作区旅程；#493 / UX |
 | G13 | 真实模型与 fake-llm 差异 | fake-llm 场景脚本化；staging `--real` 用 Claude；主机用 DeepSeek | 工具参数首次被拒 7 次（645），只在主机窗口才看到；云上没有 DeepSeek 回归（预算只给 Anthropic） | **P2** | 不加付费跑：把"首次被拒率"做成主机真实模型回归的固定输出并设阈值；工具 schema 加一条"与 strict JSON schema 子集兼容"的静态检查；#481 |
 | G14 | 备份恢复演练 | `drill-restore.sh` 只在主机；staging 只做文件探针 | 云上没有 `backup → 清库 → restore → 验收` 的完整一轮 | **P2** | staging 加 `restore` 阶段；#488 |
@@ -170,6 +170,6 @@ A、F 可以马上并行；B 依赖 A 的 matrix；C、E 依赖 B 的 fixture；
 
 ## 8. 待核实
 
-1. G3：主机 v0.63.0 上切到管理面 `connection_closed` 是否由旧标签页的 bundle 引起（等维护者的 DevTools / F5 结果）。
-2. G7：v0.63.0 的 staging 预演 `from` 填的是不是 v0.50.0。
-3. G11：`set_admin_agent_targets` 的审计 actor 被记成 self 的具体复现路径。
+1. G3：旧 bundle 无版本探测是否需要单独修（#1003 修的是断线后的恢复；版本探测是否另做由协调 / 维护者定）。
+
+已核实（2026-11-06）：G7 的 v0.63.0 预演 `from` = v0.50.0（staging run 452，绿）；G11 的 `set_admin_agent_targets` 记成 self 是维护者本人操作，改为记录 #1002 发现的智能体审计 actor 不可区分。
