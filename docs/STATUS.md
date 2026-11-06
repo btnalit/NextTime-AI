@@ -5,7 +5,7 @@
 > 拆解与实现说明在 `development-tasks.md`，评估在 `retrospective-*.md` / `code-review-*.md`，
 > 本文只链接不复制。与代码冲突时以代码为准，并修正本文。
 
-最后更新：2026-11-06（**S11 AA5d-3 合入（#977，4a93d34，只改控制台，进 0.62.0 之后的下一版）**：控制台标出附加包、平台面看附加包状态、把管理员提案导出成能力包；记 638。计划变更：主机不升 v0.62.0，仍在 v0.50.0，等 AA5d / e 齐后的下一版再升）。 上一版 2026-11-06（**S11 AA5d-2 合入（#976，5c80a43，迁移 governance 0039，进 0.62.0 之后的下一版）**：把验证通过的管理员提案导出成能力包。主机升级到 v0.62.0 进行中，结果待维护者回传）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
+最后更新：2026-11-06（**S11 AA5 `accept_s2 --real` 管理员智能体工单旅程合入（#981，17613f6，只改验收脚本与 runbook，进 0.62.0 之后的下一版）**：真实模型走一遍工单旅程，按步记到哪、卡在哪，不让整轮失败。下一步 staging `--real` 一轮，再 AA5e；主机仍在 v0.50.0，等下一版再升）。 上一版 2026-11-06（**S11 AA5d-4 合入（#979，3c01a4b，只改验收脚本与 runbook，进 0.62.0 之后的下一版）**：S2 把工单旅程应用的部分导出成能力包、在第三个工作区安装，人做的事逐条留证；记 639。AA5d 全部合入，下一步 #981 与 AA5e；主机仍在 v0.50.0，等下一版再升）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
 
 ## 1. 入口指引
 
@@ -338,6 +338,8 @@
 | 2026-11-06 | S11 AA5d-2「把验证通过的管理员提案导出成能力包」合入（#976，W1a，5c80a43，迁移 governance 0039，契约有新增，进 0.62.0 之后的下一版；见 release.md §3.128）：`application/packs/export.ts` `buildAdminProposalPack`（纯函数：从这一段的条目和本部署能力包注册表算文件，查名字、归属、凭证，用 `memoryPackFiles` 按附加包同一个加载器读回比对；同样输入同样 `digest`）；governance 0039 definer 函数让平台面知道这一段是否 `verified`；平台面能力 `export_admin_proposal_pack`（observe、人工通道、只平台管理员），409 `admin_proposal_pack_not_exportable` 列九种原因，平台部分或不存在 404；`requires.connectors` 只放 Worker 的 `systems`、Operation 只进 `omitted`（与方案两处差异已告诉协调，可改回）；`operations.md` §14.11、§14.10 改用 `mv -T`（#488 在 #971 的可选 P3）；补了 #493 在 #971 上的两个测试缺口；按 #493 在本 PR 的建议补了三条测试（E1 0039 只对平台面返回真、E6 Worker 凭证问题码、E8 附加包本体的凭证检查），附加包的本体域包也过 `assertNoSuspectedSecrets`（`registry.ts` `loadDomainPack`，只对附加包）；附加包 schema 报错改成一行（#977 UX P2-1）。#493 在最终头通过（runbook 部分合入后请 #488 补看）；CI 与 rehearsal 全绿 | #976 |
 | 2026-11-06 | S11 AA5d-3「控制台标出附加包、平台面看附加包状态、导出管理员提案为能力包」合入（#977，W1a，4a93d34，只改控制台，契约不变，进 0.62.0 之后的下一版；见 release.md §3.129）：`lib/tar.ts`（只写普通文件的 ustar，0644、属主 0/0、mtime 0，字节确定；长路径拆进 prefix，绝对路径、`.` / `..` / 空段与控制字符（C0、DEL）拒绝，放不进 tar 的路径不下载并指出是哪条）；`ExtraPacksSection.tsx` 进「平台 · 模块」；`admin-proposals/ExportPack.tsx` 进提案详情；`PacksTab.tsx` 来源标记；`lib/errors.ts` 加 `admin_proposal_pack_not_exportable` 标题。#501 审查通过（P3「NUL 截断 name」在 PR 内修，d9efdcf1）；UX 验收通过，P2 两条与 P3-1/3/4/5 在 PR 内修（P2-1 在 #976）；记 638（P3-2）；CI 全绿 | #977 |
 | 2026-11-06 | 计划变更（维护者 11-06 定，推翻 11-05 协调「主机这次升到 v0.62.0」）：主机没有升 v0.62.0，仍在 v0.50.0；等更完整的版本再升。顺序：#979（AA5d-4）、#981（管理员智能体真实模型旅程）合入 → staging `--real` 一轮 → AA5e 合入 → 发下一版 → 协调给维护者本机的会话发主机升级提示词（连同 `release.md` §3.75 起各节与 §6）。另：维护者确认 main 分支保护对管理员账号不生效保持现状 | 本 PR |
+| 2026-11-06 | S11 AA5d-4「验收：把工单旅程应用的部分导出成能力包、在第三个工作区安装」合入（#979，W1a，3c01a4b，只改验收脚本与 runbook，契约不变，进 0.62.0 之后的下一版；见 release.md §3.130）：`scripts/lib/accept-s2-admin-agent-pack.sh`（新，POSIX sh，不建临时文件、不用 jq）接在 `admin_agent_tickets_step` 之后，收尾排在工单旅程收尾之前；S2 多 7 条（`admin-agent-pack-export` / `-place` / `-target` / `-workspace` / `-enable` / `-install` / `-human`），staging 预演 v0.62.0 → 分支 S2 195/0；`operations.md` §14.10 / §14.11 三处修正（#488 在 #976 合入后补审的 3 条 P3 在本 PR 修）。#488 通过；记 639（#488 发现的既有问题）；CI 与 rehearsal 全绿 | #979 |
+| 2026-11-06 | S11 AA5「`accept_s2 --real` 管理员智能体工单旅程」合入（#981，W1a，17613f6，只改验收脚本与 runbook，契约不变，进 0.62.0 之后的下一版；见 release.md §3.131）：`scripts/lib/accept-s2-real-admin-agent.sh`（新：旅程、试跑 Turn 期间只批 `tickets.create` 且能追溯到智能体所开 Task 的后台批准作业、不管停在哪都复查的不变量）；`admin_agent_setup`、`tickets_gate_up` 从 fake 路径拆出共用；`real_budget_check` 多接试验工作区；`host-accept-real-model.md` §4 / §5、`host-accept-s2.md` NOTE 同步。#488（两条 P2、两条 P3 在 PR 内修，含驱动报错时找回 Chat 停掉 Turn）、#481（必修与应修在 PR 内修）在最终代码头通过；不记遗留；CI 与 rehearsal 全绿（staging 预演 S1 25/0、S2 188/0、S3 34/0、S4 17/0）。staging 上用 main 跑 `--real` 一轮待记 | #981 |
 | 2026-10-16 | 控制台文案第二批合入（#628，25bfdfe，无迁移，只改控制台，未发版；遗留 335、359、360、361、362、363 关闭）：对话输入框因 U+0000 被拒后，提示旁有「移除看不见的字符」按钮，移除后消息不会自动发出（335）；清除预览与审计资源类型统一为「动作请求」「授权」（359）；下一步文案里的 builder 改为「构建者」（360）；错误文案与成员页统一为「最后一位有效的所有者」「人类用户」，capability 名称为「API key 轮换」（i18n 守卫不允许中文短标签以英文结尾）（361）；服务凭证表单输入时就提示保留名规则（362）；640px 以下对话页头部改为两行（363）。另含一个只改测试的提交：旅程③窄屏用例按 Escape 后先等抽屉关上再点下一行（#625 种子行排到第一位后暴露的时序问题）。只改控制台，不需要内核审查（协调线程定）；UX 验收首轮 1 条 P2（390 宽度错误条被按钮挤窄）在本 PR 内修好，复验 PASS（`console-ux/acceptance-628.md`），CI 全绿合入；无主机动作 | PR #628 |
 
 ### 2.2 验收证明了什么，没证明什么
@@ -929,6 +931,7 @@
 | 636 | 重新打开已应用的管理员提案时，「应用后已核验」那一行不见了，只剩安装记录的链接；详情里可以带上安装记录当前的核验状态（#969 UX P3-3） | P3 | 控制台 | 开放 |
 | 637 | 控制台里的 `<fieldset>` 都是浏览器默认的深灰细边框，和卡片的浅色圆角边框不一致（管理员提案的选门、`PacksTab` 的 Worker 绑门、`DirectoryPickers` 等），要全站统一一种样式（#969 UX P3-4，非本 PR 引入） | P3 | 控制台 | 开放 |
 | 638 | 「平台 · 模块」的「本部署附加的能力包」卡片里，没读进来的目录的原因在中文界面里是内核的英文原话；常见几种（同名、撞组成部分、缺依赖、循环）应有中文说法。干净的做法是 `extra_packs_status.skipped[]` 加原因代码（线上契约变更），控制台按代码翻译、原话作补充（#977 UX P3-2） | P3 | 控制台 + 内核 / W1a | 开放 |
+| 639 | `operations.md` 两条示例命令读错了层：`cap runtime_inventory | jq '{activeImage, …}'` 与 `cap platform_status | jq '{health, …}'` 没有先取 `.result`，而 `cap` 返回 `{ok, result}`，照抄只会打出一串 null；应改为 `jq '.result | {…}'`（#979 上 #488 发现，非本 PR 引入） | P3 | W1a | 开放 |
 
 ## 5. 更新规则
 
