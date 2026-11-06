@@ -257,6 +257,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         origin: 'agent',
         status: 'proposed',
       });
+      // Its reads say which pack it asks for (the source name says nothing of it).
+      expect(proposal.packInstall).toEqual({ pack: PACK, version: latest });
       // Each segment's content digest is the pack version's: the install's source digest answers it.
       expect(proposal.segments.map((segment) => segment.contentDigest)).toEqual([
         latestDigest,

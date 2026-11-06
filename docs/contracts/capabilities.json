@@ -2067,6 +2067,30 @@
           ],
           "type": "string"
         },
+        "packInstall": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "pack": {
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pack",
+                "version"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "platformSegmentStatus": {
           "anyOf": [
             {
@@ -2624,6 +2648,7 @@
         "status",
         "segmentCounts",
         "platformSegmentStatus",
+        "packInstall",
         "description",
         "contentDigest",
         "segments"
@@ -2662,6 +2687,30 @@
                   "platform"
                 ],
                 "type": "string"
+              },
+              "packInstall": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "pack": {
+                        "type": "string"
+                      },
+                      "version": {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "pack",
+                      "version"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "platformSegmentStatus": {
                 "anyOf": [
@@ -2757,7 +2806,8 @@
               "proposedAt",
               "status",
               "segmentCounts",
-              "platformSegmentStatus"
+              "platformSegmentStatus",
+              "packInstall"
             ],
             "type": "object"
           },
@@ -3674,6 +3724,30 @@
           ],
           "type": "string"
         },
+        "packInstall": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "pack": {
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pack",
+                "version"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "platformSegmentStatus": {
           "anyOf": [
             {
@@ -4231,6 +4305,7 @@
         "status",
         "segmentCounts",
         "platformSegmentStatus",
+        "packInstall",
         "description",
         "contentDigest",
         "segments"
@@ -16725,6 +16800,30 @@
           ],
           "type": "string"
         },
+        "packInstall": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "pack": {
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pack",
+                "version"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "platformSegmentStatus": {
           "anyOf": [
             {
@@ -17299,6 +17398,7 @@
         "status",
         "segmentCounts",
         "platformSegmentStatus",
+        "packInstall",
         "description",
         "contentDigest",
         "segments"
@@ -36140,6 +36240,30 @@
                 ],
                 "type": "string"
               },
+              "packInstall": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "pack": {
+                        "type": "string"
+                      },
+                      "version": {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "pack",
+                      "version"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "platformSegmentStatus": {
                 "anyOf": [
                   {
@@ -36234,7 +36358,8 @@
               "proposedAt",
               "status",
               "segmentCounts",
-              "platformSegmentStatus"
+              "platformSegmentStatus",
+              "packInstall"
             ],
             "type": "object"
           },
@@ -55855,6 +55980,30 @@
           ],
           "type": "string"
         },
+        "packInstall": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "pack": {
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pack",
+                "version"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "platformSegmentStatus": {
           "anyOf": [
             {
@@ -56412,6 +56561,7 @@
         "status",
         "segmentCounts",
         "platformSegmentStatus",
+        "packInstall",
         "description",
         "contentDigest",
         "segments"
@@ -58601,6 +58751,30 @@
           ],
           "type": "string"
         },
+        "packInstall": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "pack": {
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pack",
+                "version"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "platformSegmentStatus": {
           "anyOf": [
             {
@@ -59158,6 +59332,7 @@
         "status",
         "segmentCounts",
         "platformSegmentStatus",
+        "packInstall",
         "description",
         "contentDigest",
         "segments"
@@ -62712,6 +62887,30 @@
           ],
           "type": "string"
         },
+        "packInstall": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "pack": {
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pack",
+                "version"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "platformSegmentStatus": {
           "anyOf": [
             {
@@ -63286,6 +63485,7 @@
         "status",
         "segmentCounts",
         "platformSegmentStatus",
+        "packInstall",
         "description",
         "contentDigest",
         "segments"
@@ -77910,6 +78110,30 @@
           ],
           "type": "string"
         },
+        "packInstall": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "pack": {
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pack",
+                "version"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "platformSegmentStatus": {
           "anyOf": [
             {
@@ -78484,6 +78708,7 @@
         "status",
         "segmentCounts",
         "platformSegmentStatus",
+        "packInstall",
         "description",
         "contentDigest",
         "segments"

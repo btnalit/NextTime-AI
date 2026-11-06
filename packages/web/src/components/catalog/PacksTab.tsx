@@ -564,12 +564,26 @@ function PackProposalNotice({
   if (asking === undefined || item?.kind !== 'pack_install') return null;
   const { proposedBy } = asking.proposal;
   const name = proposedBy.displayName || shortId(proposedBy.userId);
+  // UX P3-1 (#1002): it reads as installable from the proposal only when it is — the version it
+  // asks for is still the latest, and not installed already; otherwise it can only be rejected.
+  const installed = pack.status === 'up_to_date' && pack.installedVersion === item.version;
+  const outdated = pack.latestVersion !== item.version;
   return (
     <Notice testId="catalog-pack-proposal">
-      {t(
-        `平台管理员 ${name} 的管理员智能体提议在本工作区安装 v${item.version}。从那份管理员提案里安装，它会记为已应用；在这里直接安装的话，那份提案还得另外拒绝。`,
-        `${name}'s admin agent (platform administrator) proposes installing v${item.version} here. Installing it from that admin proposal marks the proposal applied; installing it here leaves the proposal to be rejected separately.`,
-      )}{' '}
+      {installed
+        ? t(
+            `平台管理员 ${name} 的管理员智能体提议在本工作区安装 v${item.version}，工作区里已经是这一版，没有要装的。不需要那份管理员提案的话，可以打开它拒绝。`,
+            `${name}'s admin agent (platform administrator) proposes installing v${item.version} here, which the workspace already has, so there is nothing to install. Open that admin proposal to reject it if it is not needed.`,
+          )
+        : outdated
+          ? t(
+              `平台管理员 ${name} 的管理员智能体提议在本工作区安装 v${item.version}，现在最新的是 v${pack.latestVersion}，只能安装最新版本，所以不能照那份管理员提案安装。可以打开它拒绝。`,
+              `${name}'s admin agent (platform administrator) proposes installing v${item.version} here; the latest is now v${pack.latestVersion}, and only the latest installs, so it cannot be installed as that admin proposal asks. Open it to reject it.`,
+            )
+          : t(
+              `平台管理员 ${name} 的管理员智能体提议在本工作区安装 v${item.version}。从那份管理员提案里安装，它会记为已应用；在这里直接安装的话，那份提案还得另外拒绝。`,
+              `${name}'s admin agent (platform administrator) proposes installing v${item.version} here. Installing it from that admin proposal marks the proposal applied; installing it here leaves the proposal to be rejected separately.`,
+            )}{' '}
       <RouteLink href={hrefs.catalog('proposals', asking.id)} testId="catalog-pack-proposal-link">
         {t('打开这份管理员提案', 'Open the admin proposal')}
       </RouteLink>

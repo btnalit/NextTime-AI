@@ -35,6 +35,7 @@ import { type PresetLabel, usePresetLabel } from './preset-labels.js';
 import { ADMIN_PROPOSAL_STALE_READS } from './stale-reads.js';
 import {
   nextStepText,
+  packInstallText,
   partialApplicationText,
   platformIntentText,
   proposerText,
@@ -143,21 +144,33 @@ export function ProposalDetail({
             label: t('提议时间', 'Proposed'),
             value: <span data-volatile="">{formatDateTime(proposal.proposedAt)}</span>,
           },
-          {
-            key: 'source',
-            label: t('来源名', 'Source name'),
-            value: (
-              <span
-                className="mono wrap-anywhere"
-                title={t(
-                  '工作区里新建的 Skill 和 Worker 以它命名',
-                  'New Skills and Workers in a workspace are named under it',
-                )}
-              >
-                {proposal.sourceName}
-              </span>
-            ),
-          },
+          // S11 AA5g: a pack install proposal derives nothing under its source name — it says
+          // which pack it asks for instead.
+          proposal.packInstall !== null
+            ? {
+                key: 'pack',
+                label: t('能力包', 'Pack'),
+                value: (
+                  <span data-testid="platform-admin-proposal-pack">
+                    {packInstallText(proposal.packInstall, t)}
+                  </span>
+                ),
+              }
+            : {
+                key: 'source',
+                label: t('来源名', 'Source name'),
+                value: (
+                  <span
+                    className="mono wrap-anywhere"
+                    title={t(
+                      '工作区里新建的 Skill 和 Worker 以它命名',
+                      'New Skills and Workers in a workspace are named under it',
+                    )}
+                  >
+                    {proposal.sourceName}
+                  </span>
+                ),
+              },
         ]}
       />
       {notice !== null ? (
@@ -560,7 +573,7 @@ function WorkspacePart({
   const [first] = segment.items;
   const packInstall =
     segment.items.length === 1 && first?.kind === 'pack_install'
-      ? { pack: first.pack, versionText: `v${first.version}` }
+      ? { pack: first.pack, version: first.version }
       : null;
   return (
     <div className="card card-padded stack-s" data-testid={prefix}>
@@ -587,10 +600,7 @@ function WorkspacePart({
       </span>
       {packInstall !== null ? (
         <span className="text-small" data-testid={`${prefix}-pack`}>
-          {t(
-            `请求安装能力包 ${packInstall.pack} ${packInstall.versionText}`,
-            `Asks to install the pack ${packInstall.pack} ${packInstall.versionText}`,
-          )}
+          {packInstallText(packInstall, t)}
         </span>
       ) : null}
       {segment.reason !== null ? (

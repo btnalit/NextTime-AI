@@ -1313,6 +1313,8 @@ function PackInstallProposalReview({
   const can = useRoleCan(http);
   const asked = packInstallOf(segment);
   const packs = useCapabilityList<PackWire>(http, 'list_packs', {});
+  // Installed from here: said at once, while the list reads the segment as applied (UX P3-2).
+  const [installedHere, setInstalledHere] = useState(false);
   // The packs last read, kept while they are read again (a refusal reads the lists again): the
   // install review stays open on screen, saying why nothing was installed.
   const lastPacks = useRef<readonly PackWire[] | null>(null);
@@ -1354,12 +1356,22 @@ function PackInstallProposalReview({
 
   return (
     <div className="stack" data-testid="catalog-proposal-pack-review">
-      <Notice testId="catalog-proposal-pack-ask">
-        {t(
-          `它请求在本工作区安装能力包 ${asked.pack} 的 v${asked.version}。安装前先看它会改动什么，审阅和在「能力包」页安装时一样；装上后这份管理员提案记为已应用，安装记录的来源是这个能力包，在「安装历史」里可以整条撤销。`,
-          `It asks this workspace to install v${asked.version} of the pack ${asked.pack}. Review what it changes first, the same review as installing it from Packs; once installed, this admin proposal reads applied, and the install record — its source the pack — can be rolled back as a whole under Install history.`,
-        )}
-      </Notice>
+      {installedHere ? (
+        <Notice testId="catalog-proposal-pack-installed-here">
+          {t(
+            `已装上 ${asked.pack} v${asked.version}，这份管理员提案记为已应用。安装记录在「安装历史」里，需要时可以整条撤销。`,
+            `${asked.pack} v${asked.version} is installed and this admin proposal reads applied. The install record is under Install history, where it can be rolled back as a whole.`,
+          )}
+        </Notice>
+      ) : known !== null && standing === null ? (
+        // UX P3-2: how installing answers it — said only while it can be installed from here.
+        <Notice testId="catalog-proposal-pack-ask">
+          {t(
+            `它请求在本工作区安装能力包 ${asked.pack} 的 v${asked.version}。安装前先看它会改动什么，审阅和在「能力包」页安装时一样；装上后这份管理员提案记为已应用，安装记录的来源是这个能力包，在「安装历史」里可以整条撤销。`,
+            `It asks this workspace to install v${asked.version} of the pack ${asked.pack}. Review what it changes first, the same review as installing it from Packs; once installed, this admin proposal reads applied, and the install record — its source the pack — can be rolled back as a whole under Install history.`,
+          )}
+        </Notice>
+      ) : null}
       {known === null && packs.state.status === 'loading' ? (
         <SkeletonRows count={2} label={t('正在加载能力包…', 'Loading pack')} />
       ) : packs.state.status === 'error' ? (
@@ -1402,19 +1414,22 @@ function PackInstallProposalReview({
           ]}
         />
       ) : null}
-      {standing !== null ? (
+      {standing !== null && !installedHere ? (
         <Notice tone="warn" testId={standing.testId}>
           {standing.text}
         </Notice>
       ) : null}
       {canInstall || canReject ? (
         <div className="row-wrap">
-          {canInstall && pack !== undefined && standing === null ? (
+          {canInstall && pack !== undefined && standing === null && !installedHere ? (
             <InstallPack
               http={http}
               pack={pack}
               adminProposalSegmentId={segment.id}
-              onInstalled={(result) => onInstalled(result.verification)}
+              onInstalled={(result) => {
+                setInstalledHere(true);
+                onInstalled(result.verification);
+              }}
               onStale={() => void packs.reload()}
               onProposalStale={(code) => {
                 // Decided meanwhile: the list says how it stands now. A newer version: the packs
@@ -1424,7 +1439,9 @@ function PackInstallProposalReview({
               }}
             />
           ) : null}
-          {canReject ? <RejectSegment http={http} segment={segment} onDecided={onDecided} /> : null}
+          {canReject && !installedHere ? (
+            <RejectSegment http={http} segment={segment} onDecided={onDecided} />
+          ) : null}
         </div>
       ) : (
         <p className="text-3 text-small" data-testid="catalog-proposal-owner-only">

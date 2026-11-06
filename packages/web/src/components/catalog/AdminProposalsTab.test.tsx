@@ -1354,6 +1354,8 @@ describe('AdminProposalsTab — a proposal asking for a pack install (S11 AA5g-3
       /最新版本是 v3.*请求的 v2 已经不是最新/,
     );
     expect(screen.queryByTestId('catalog-pack-install-trigger')).toBeNull();
+    // How installing answers it is said only while it can be installed (UX P3-2).
+    expect(screen.queryByTestId('catalog-proposal-pack-ask')).toBeNull();
 
     fireEvent.click(screen.getByTestId('catalog-proposal-reject-trigger'));
     const confirm = await screen.findByTestId('catalog-proposal-reject-confirm');

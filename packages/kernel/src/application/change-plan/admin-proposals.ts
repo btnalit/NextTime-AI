@@ -785,6 +785,7 @@ interface ProposalRow {
   withdrawn: number;
   rolled_back: number;
   platform_status: AdminProposalSegmentStatus | null;
+  pack_install: { pack: string; version: number } | null;
 }
 
 interface SegmentRow {
@@ -814,7 +815,8 @@ const PLAN_STATUS_SQL = `case
 const PLAN_SELECT = `
   select p.id, p.title, p.description, p.source_name, p.origin, p.proposed_by_user,
          p.proposer_display_name, p.content_digest, p.created_at,
-         c.proposed, c.applied, c.rejected, c.withdrawn, c.rolled_back, c.platform_status
+         c.proposed, c.applied, c.rejected, c.withdrawn, c.rolled_back, c.platform_status,
+         c.pack_install
     from admin_proposals p
     cross join lateral (
       select count(s.id)::int as total,
@@ -825,7 +827,11 @@ const PLAN_SELECT = `
              (count(*) filter (where s.status = 'rolled_back'))::int as rolled_back,
              -- Legacy 619: a proposal has at most one platform segment
              -- (admin_proposal_segments_one_platform), so max() is its status, or null.
-             (max(s.status::text) filter (where s.authority = 'platform')) as platform_status
+             (max(s.status::text) filter (where s.authority = 'platform')) as platform_status,
+             -- S11 AA5g: a pack install proposal's segments each hold the same one pack_install
+             -- (governance 0040: alone in its segment).
+             (array_agg(s.items -> 0 order by s.ordinal)
+                filter (where s.items -> 0 ->> 'kind' = 'pack_install'))[1] as pack_install
         from admin_proposal_segments s
        where s.workspace_id = p.workspace_id and s.proposal_id = p.id
     ) c`;
@@ -871,6 +877,10 @@ function summaryOf(row: ProposalRow): AdminProposalSummaryWire {
       rolledBack: row.rolled_back,
     },
     platformSegmentStatus: row.platform_status,
+    packInstall:
+      row.pack_install === null
+        ? null
+        : { pack: row.pack_install.pack, version: row.pack_install.version },
   };
 }
 

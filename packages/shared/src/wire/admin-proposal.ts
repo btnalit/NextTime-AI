@@ -326,6 +326,13 @@ const adminProposalHeadShape = {
    *  decide, before any of its workspace segments can be applied (F8); `null` when it has none.
    *  `segmentCounts` counts it too. */
   platformSegmentStatus: AdminProposalSegmentStatusSchema.nullable(),
+  /** S11 AA5g: for a proposal asking its targets to install a pack (`propose_pack_install`), the
+   *  pack and version each of its segments asks for — its `sourceName` is then pack install
+   *  proposals' own and says nothing of the pack; `null` for any other proposal. */
+  packInstall: z
+    .object({ pack: z.string(), version: z.number().int().positive() })
+    .strict()
+    .nullable(),
 };
 
 /** A proposal in a list. */
