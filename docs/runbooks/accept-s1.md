@@ -38,6 +38,11 @@
   再确认 agent-host 日志里出现 `kernel-link: connected`。恢复没做完时（重建失败，或者链路没回来），
   脚本还会打一行 `FAIL restore-provider`，并以非零退出码结束，即使前面的场景都通过了。
   `staging-rehearsal.sh` 按退出码和 `FAIL` 行判断，所以这次会被算作失败。
+- **恢复之后脚本会停掉 fake-llm**（遗留 643）。它是不带认证的测试端点，生产恢复之后用不上；下一次跑
+  时脚本切 fake provider 会重新拉起它，所以跑完之后它不在运行是正常的。停不掉只打一行
+  `accept: WARNING — could not stop fake-llm …`，不算失败，按提示手动停
+  （`docker compose --profile test stop fake-llm`）；`apply-release.sh` 的验收夹具检查（7b）也会报出来。
+  S2、S3 的 `--real` 不切 provider，也不碰 fake-llm。
 - 迁移已跑到最新（`make migrate` 或已随 `kernel` 容器启动流程跑过）。
 - 主机上有 `docker`、`curl`；**没有** `node`/`corepack`（`scripts/accept_s1.sh` 因此把每一次
   JSON-RPC 交互都放进一次性的 kernel 镜像容器里跑，见脚本头注释）。

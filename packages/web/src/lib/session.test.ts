@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   clearApiKey,
   loadApiKey,
   loadSelectedWorkspaceId,
+  reloadIntoWorkspace,
   saveApiKey,
   saveSelectedWorkspaceId,
 } from './session.js';
@@ -33,5 +34,20 @@ describe('selected workspace store (S4.1)', () => {
     saveSelectedWorkspaceId('ws-1');
     expect(loadSelectedWorkspaceId()).toBe('ws-1');
     expect(loadApiKey()).toBeNull();
+  });
+});
+
+describe('reloadIntoWorkspace (legacy 649)', () => {
+  it('selects the workspace, sets the destination without a hashchange, then reloads', () => {
+    window.history.replaceState(null, '', '/#/platform/admin-agent');
+    const onHashChange = vi.fn();
+    window.addEventListener('hashchange', onHashChange);
+    const reload = vi.fn();
+    reloadIntoWorkspace('ws-trial', '#/work/chats?open=admin_agent', reload);
+    window.removeEventListener('hashchange', onHashChange);
+    expect(loadSelectedWorkspaceId()).toBe('ws-trial');
+    expect(window.location.hash).toBe('#/work/chats?open=admin_agent');
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(onHashChange).not.toHaveBeenCalled();
   });
 });

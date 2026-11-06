@@ -50,3 +50,20 @@ export async function findComboboxOption(input: HTMLElement, text: string): Prom
 export async function pickComboboxOption(input: HTMLElement, text: string): Promise<void> {
   fireEvent.click(await findComboboxOption(input, text));
 }
+
+/** Picks the option whose value (`data-value`) is `value` from `input`'s list, once the
+ *  asynchronously loaded options include it. */
+export async function pickComboboxValue(input: HTMLElement, value: string): Promise<void> {
+  openCombobox(input);
+  const option = await waitFor(() => {
+    const list = listbox(input);
+    const found = list
+      ? within(list)
+          .queryAllByRole('option')
+          .find((candidate) => candidate.getAttribute('data-value') === value)
+      : undefined;
+    if (!found) throw new Error(`no option with value "${value}"`);
+    return found;
+  });
+  fireEvent.click(option);
+}

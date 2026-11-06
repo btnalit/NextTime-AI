@@ -16,7 +16,7 @@ import { roleLabel, transportKindLabel } from '../../lib/labels.js';
 import { sameNameIds, withSameNameId } from '../../lib/same-name.js';
 import { useGatekeeperDirectory } from '../approvals/useDirectoryNames.js';
 import { Button } from '../kit/button.js';
-import { Confirm } from '../kit/confirm.js';
+import { Combobox, type ComboboxOption } from '../kit/combobox.js';
 import { useGuardedClose } from '../kit/discard-guard.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { Field, describedBy } from '../kit/field.js';
@@ -29,9 +29,8 @@ import { announceReadinessChange } from '../readiness/useExecutionReadiness.js';
 
 export interface GrantGateFormProps {
   readonly http: CapabilityCaller;
-  /** Opened from a system card: the gate is fixed, no picker renders for it, and no "全部门" toggle
-   *  — the audit's own "pre-selected when opened from a card" (J6/SY2). Omitted (opened from the
-   *  Access page): a member+multi-gate picker with an explicit "全部门" toggle. */
+  /** Opened from a system card: the gate is fixed and no picker renders for it — the audit's own
+   *  "pre-selected when opened from a card" (J6/SY2). Omitted: a member + multi-gate picker. */
   readonly lockedGatekeeper?: { readonly id: string; readonly name: string };
   readonly onGranted: (grants: readonly GrantRow[]) => void;
   readonly onCancel?: () => void;
@@ -45,23 +44,22 @@ export interface GrantGateFormProps {
  * this in a `kit/sheet`; the launcher's step 3 embeds it inline, locked to the gate it just
  * enabled). Replaces `GrantCapabilityForm`'s free-text `resourceId`/JSON `scope` fields (Access
  * page) and `RegisteredSystemsSection`'s in-card expanding form (a bare principal id/select) — a
- * member picker (`list_principals` with `q`), a gate picker (`list_gatekeepers` with `q`,
+ * member combobox (`list_principals`, filtered as you type), a gate picker (`list_gatekeepers` with `q`,
  * multi-select, hidden entirely when `lockedGatekeeper` is given), and — only while the grant
  * targets exactly one gate — a read-only list of that gate's Operations the grant will cover
  * (`list_operations{gatekeeperId}`). No id or JSON is ever shown as an editable field: everything
  * submitted comes from a picked row.
  *
- * "全部门" (every gate, including ones registered later) is a distinct, explicit choice — ticking
- * it clears any gate selection and opens a `medium` confirm before it takes effect (J6: "「全部门」
- * 必须显式选择并走确认"); nothing here fires `grant_capability` until the caller presses 授予.
+ * There is no "全部门" (every gate) choice: `grant_capability` takes exactly one gate (R-26 / D-14
+ * made `resourceId` required), so a grant without one could only be refused.
  *
  * R-39 (D-13): a gate grant also makes an `operator` an approver of every action on that gate (the
  * kernel counts the grant as I14 approval scope). The covered-Operations hint says so, and picking
  * a member whose role makes the grant an approval grant (`gateGrantMakesApprover`) shows a notice
  * naming them before anything is submitted.
  *
- * One `grant_capability` call per selected gate (the capability takes one `resourceId` at a time);
- * `resourceId` omitted entirely for the "全部门" case. There is no `scope`: the kernel never
+ * One `grant_capability` call per selected gate (the capability takes one `resourceId` at a time).
+ * There is no `scope`: the kernel never
  * enforced `capability_grants.scope`, and since 2026-09-25 `grant_capability` no longer accepts it
  * (leftover 80). A grant covers the whole gate, and the Operations list says so.
  */
@@ -97,16 +95,22 @@ function GrantGateFormBody({
   const can = useRoleCan(http);
 
   // ---- Member picker -----------------------------------------------------------------------
-  const [memberQuery, setMemberQuery] = useState('');
+  // One combobox over the whole directory (read once, every page): typing filters it and picking
+  // a row is what chooses the member. It used to be a search box labelled 成员 plus a separate
+  // <select> below it, so a name typed into the box chose nobody and 授予 stayed blocked on
+  // 「选择成员」 (host acceptance of v0.63.0) — the two-controls-for-one-field shape legacy 153 ①
+  // removed from `platform/UserPicker`.
   const principals = useCapabilityList<PrincipalRow>(
     http,
     'list_principals',
-    memberQuery.trim() ? { q: memberQuery.trim() } : {},
+    {},
     { autoLoadAll: true, enabled: can('list_principals') === true },
   );
   const memberOptions =
     principals.state.status === 'ready'
-      ? principals.state.data.items.filter((row) => row.kind === 'human' && !row.disabledAt)
+      ? principals.state.data.items.filter(
+          (row) => row.kind === 'human' && !row.disabledAt && !row.internal,
+        )
       : [];
   // Two members with the same name (and role) must not read the same in the picker, or the owner
   // could grant the wrong person (#559 acceptance).
@@ -117,6 +121,37 @@ function GrantGateFormBody({
   );
   const [principalId, setPrincipalId] = useState('');
   const selectedPrincipal = memberOptions.find((row) => row.id === principalId);
+  // Who already holds the locked gate: they stay in the picker, marked 「已授权」 and not pickable —
+  // granting them again would only add a second grant for the same person (`grant_capability`
+  // does not merge them, legacy 647). Read here, not passed in, so every entry point (a system
+  // card, the launcher's step 3) gets it; the members granted in this drawer count at once.
+  const grants = useCapabilityList<GrantRow>(
+    http,
+    'list_grants',
+    {},
+    { autoLoadAll: true, enabled: lockedGatekeeper !== undefined && can('list_grants') === true },
+  );
+  const [grantedHere, setGrantedHere] = useState<ReadonlySet<string>>(new Set());
+  const alreadyGranted = new Set(grantedHere);
+  if (lockedGatekeeper && grants.state.status === 'ready') {
+    for (const row of grants.state.data.items) {
+      if (
+        row.status === 'active' &&
+        row.resourceType === 'gatekeeper' &&
+        row.resourceId === lockedGatekeeper.id
+      ) {
+        alreadyGranted.add(row.principalId);
+      }
+    }
+  }
+  const memberComboOptions: ComboboxOption[] = memberOptions.map((row) => ({
+    value: row.id,
+    label: withSameNameId(row.displayName, row.id, memberSame),
+    secondary: alreadyGranted.has(row.id)
+      ? t(`${roleLabel(row.role, t)} · 已授权`, `${roleLabel(row.role, t)} · already granted`)
+      : roleLabel(row.role, t),
+    disabled: alreadyGranted.has(row.id),
+  }));
 
   // ---- Gate picker (hidden entirely when locked) -------------------------------------------
   const [gateQuery, setGateQuery] = useState('');
@@ -131,11 +166,8 @@ function GrantGateFormBody({
   // filtered by the search (or not read at all for a locked gate), so it can miss the other one.
   const gateSame = useGatekeeperDirectory(http).same;
   const [selectedGateIds, setSelectedGateIds] = useState<ReadonlySet<string>>(new Set());
-  const [allGates, setAllGates] = useState(false);
-  const [allGatesConfirmOpen, setAllGatesConfirmOpen] = useState(false);
 
   function toggleGate(id: string): void {
-    setAllGates(false);
     setSelectedGateIds((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
@@ -147,9 +179,7 @@ function GrantGateFormBody({
   // ---- Effective target(s) — drives the covered-Operations list --------------------------------
   const targetGateIds: readonly string[] = lockedGatekeeper
     ? [lockedGatekeeper.id]
-    : allGates
-      ? []
-      : [...selectedGateIds];
+    : [...selectedGateIds];
   const singleTargetGateId = targetGateIds.length === 1 ? targetGateIds[0] : null;
 
   const operations = useCapabilityList<OperationSummaryWire>(
@@ -172,10 +202,10 @@ function GrantGateFormBody({
   // and its banner, above the pinned action row, below the fold — focus goes to the banner.
   const submitErrorRef = useFocusWhenLost<HTMLDivElement>(error);
   const [failedGate, setFailedGate] = useState<string | null>(null);
-  /** What was granted in this drawer session, for the summary: who got which gates (`null` = every
-   *  gate). Kept as display data so the summary survives the form resetting for the next grant. */
+  /** What was granted in this drawer session, for the summary: who got which gates. Kept as display
+   *  data so the summary survives the form resetting for the next grant. */
   const [grantedLog, setGrantedLog] = useState<
-    readonly { readonly member: string; readonly gate: string | null }[]
+    readonly { readonly member: string; readonly gate: string }[]
   >([]);
   // Names of every gate row seen, so the summary can name a gate even after a later search hides it.
   const gateNames = useRef(new Map<string, string>());
@@ -185,14 +215,12 @@ function GrantGateFormBody({
 
   const canSubmit =
     principalId !== '' &&
-    (lockedGatekeeper !== undefined || allGates || selectedGateIds.size > 0) &&
+    (lockedGatekeeper !== undefined || selectedGateIds.size > 0) &&
     !submitting;
   // Audit P1-9: a disabled 授予 says what it still waits for.
   const missing = [
     principalId === '' ? t('选择成员', 'choose a member') : null,
-    lockedGatekeeper !== undefined || allGates || selectedGateIds.size > 0
-      ? null
-      : t('选择门', 'pick a gate'),
+    lockedGatekeeper !== undefined || selectedGateIds.size > 0 ? null : t('选择门', 'pick a gate'),
   ].filter((item): item is string => item !== null);
 
   async function submit(): Promise<void> {
@@ -209,46 +237,38 @@ function GrantGateFormBody({
     const doneGateIds: string[] = [];
     let failedGateId: string | null = null;
     try {
-      if (allGates) {
+      // No `scope`: `capability_grants.scope` is stored but never enforced by any authorization
+      // path, so offering an operations checklist would present a narrowing that does not exist
+      // (a grant always covers the whole gate). The list below is shown read-only instead.
+      for (const gatekeeperId of targetGateIds) {
+        failedGateId = gatekeeperId;
         results.push(
           await http.call<GrantRow>('grant_capability', {
             principalId,
             resourceType: 'gatekeeper',
+            resourceId: gatekeeperId,
           }),
         );
-      } else {
-        // No `scope`: `capability_grants.scope` is stored but never enforced by any authorization
-        // path, so offering an operations checklist would present a narrowing that does not exist
-        // (a grant always covers the whole gate). The list below is shown read-only instead.
-        for (const gatekeeperId of targetGateIds) {
-          failedGateId = gatekeeperId;
-          results.push(
-            await http.call<GrantRow>('grant_capability', {
-              principalId,
-              resourceType: 'gatekeeper',
-              resourceId: gatekeeperId,
-            }),
-          );
-          doneGateIds.push(gatekeeperId);
-        }
-        failedGateId = null;
+        doneGateIds.push(gatekeeperId);
       }
+      failedGateId = null;
       setGrantedLog((current) => [
         ...current,
-        ...(allGates
-          ? [{ member: memberName, gate: null }]
-          : doneGateIds.map((id) => ({
-              member: memberName,
-              gate: withSameNameId(gateName(id), id, gateSame),
-            }))),
+        ...doneGateIds.map((id) => ({
+          member: memberName,
+          gate: withSameNameId(gateName(id), id, gateSame),
+        })),
       ]);
       announceReadinessChange(http);
       onGranted(results);
+      if (lockedGatekeeper) {
+        setGrantedHere((current) => new Set([...current, principalId]));
+        void grants.reload();
+      }
       // Reset for another grant in the same drawer session — keep the drawer open so multi-gate
       // and repeat grants (a common "add another member" flow) do not each re-open it.
       setPrincipalId('');
       setSelectedGateIds(new Set());
-      setAllGates(false);
     } catch (err) {
       setError(err);
       setFailedGate(failedGateId === null ? null : gateName(failedGateId));
@@ -278,49 +298,33 @@ function GrantGateFormBody({
   return (
     <div className="stack" data-testid={testId ?? 'grant-gate-form'} data-discard-guard>
       <Field
-        id="ggf-member-query"
+        id="ggf-member"
         label={t('成员', 'Member')}
         required
         hint={t(
-          '按名字搜索，从下方选择一位。',
-          'Search by name, then pick one from the list below.',
+          '点开列表选一位，或输入名字缩小范围后选择。',
+          'Open the list and pick one, or type a name to narrow it down, then pick.',
         )}
       >
-        <input
-          id="ggf-member-query"
-          className="input"
-          value={memberQuery}
-          onChange={(event) => setMemberQuery(event.target.value)}
-          placeholder={t('搜索成员…', 'Search members…')}
-          data-no-discard-guard
+        <Combobox
+          id="ggf-member"
+          options={memberComboOptions}
+          value={principalId}
+          onChange={setPrincipalId}
+          loading={principals.state.status === 'loading'}
           disabled={submitting}
-          aria-describedby={describedBy('ggf-member-query', true, false)}
-        />
-      </Field>
-      <select
-        id="ggf-member-select"
-        className="select"
-        aria-label={t('选择成员', 'Choose a member')}
-        value={principalId}
-        onChange={(event) => setPrincipalId(event.target.value)}
-        disabled={submitting || memberOptions.length === 0}
-        data-testid="ggf-member-select"
-      >
-        <option value="">
-          {principals.state.status === 'loading'
-            ? t('正在加载…', 'Loading…')
-            : principals.state.status === 'error'
+          placeholder={t('选择或搜索成员…', 'Pick or search a member…')}
+          emptyText={
+            principals.state.status === 'error'
               ? t('成员列表加载失败', 'Could not load members')
               : memberOptions.length === 0
-                ? t('没有匹配的成员', 'No matching member')
-                : t('— 选择 —', '— Choose —')}
-        </option>
-        {memberOptions.map((row) => (
-          <option key={row.id} value={row.id}>
-            {withSameNameId(row.displayName, row.id, memberSame)} ({roleLabel(row.role, t)})
-          </option>
-        ))}
-      </select>
+                ? t('这个工作区还没有可授权的成员。', 'No member in this workspace to grant yet.')
+                : t('没有匹配的成员。', 'No matching member.')
+          }
+          aria-describedby={describedBy('ggf-member', true, false)}
+          testId="ggf-member"
+        />
+      </Field>
       {principals.state.status === 'error' ? (
         <ErrorBanner
           error={principals.state.error}
@@ -328,18 +332,6 @@ function GrantGateFormBody({
           onRetry={() => void principals.reload()}
           testId="ggf-members-error"
         />
-      ) : null}
-      {selectedPrincipal ? (
-        // Wrapped so the chip keeps its own width instead of stretching across the column stack.
-        <div>
-          <RefChip
-            kind="principal"
-            id={selectedPrincipal.id}
-            name={selectedPrincipal.displayName}
-            size="s"
-            testId="ggf-member-chip"
-          />
-        </div>
       ) : null}
       {selectedPrincipal && gateGrantMakesApprover(selectedPrincipal.role) ? (
         <Notice tone="warn" testId="ggf-approver-notice">
@@ -369,10 +361,7 @@ function GrantGateFormBody({
             id="ggf-gate-query"
             label={t('门', 'Gatekeeper')}
             required
-            hint={t(
-              '可多选；或授予全部门（见下）。',
-              'Pick one or more — or grant every gate below.',
-            )}
+            hint={t('可多选。', 'Pick one or more.')}
           >
             <input
               id="ggf-gate-query"
@@ -381,7 +370,7 @@ function GrantGateFormBody({
               onChange={(event) => setGateQuery(event.target.value)}
               placeholder={t('搜索门…', 'Search gates…')}
               data-no-discard-guard
-              disabled={submitting || allGates}
+              disabled={submitting}
               aria-describedby={describedBy('ggf-gate-query', true, false)}
             />
           </Field>
@@ -404,7 +393,7 @@ function GrantGateFormBody({
                     type="checkbox"
                     checked={selectedGateIds.has(row.id)}
                     onChange={() => toggleGate(row.id)}
-                    disabled={submitting || allGates}
+                    disabled={submitting}
                     data-testid={`ggf-gate-${row.id}`}
                   />
                   <span>
@@ -425,42 +414,10 @@ function GrantGateFormBody({
               {selectedGateNames.join('、')}
             </p>
           ) : null}
-
-          <Confirm
-            tier="medium"
-            open={allGatesConfirmOpen}
-            onOpenChange={setAllGatesConfirmOpen}
-            anchor={
-              <label className="checkbox" data-testid="ggf-all-gates-toggle">
-                <input
-                  type="checkbox"
-                  checked={allGates}
-                  onChange={(event) => {
-                    if (event.target.checked) setAllGatesConfirmOpen(true);
-                    else setAllGates(false);
-                  }}
-                  disabled={submitting}
-                  data-testid="ggf-all-gates-checkbox"
-                />
-                <span>{t('全部门（含未来新增）', 'Every gate, including ones added later')}</span>
-              </label>
-            }
-            title={t('授予全部门', 'Grant every gate')}
-            description={t(
-              '该成员将能经 Worker 对工作区里的每一个门提出写操作（仍按审批规则处理），包括以后新接入的门——不限于当前列表。只读操作不需要授权。',
-              'This member will be able to request write operations on every gate in this workspace through a Worker (still subject to approval), including gates connected later — not just the ones listed today. Read operations need no grant.',
-            )}
-            confirmLabel={t('我确认，授予全部门', 'Confirm — grant every gate')}
-            onConfirm={() => {
-              setAllGates(true);
-              setSelectedGateIds(new Set());
-            }}
-            testId="ggf-all-gates-confirm"
-          />
         </div>
       )}
 
-      {singleTargetGateId && !allGates ? (
+      {singleTargetGateId ? (
         <div className="stack-s" data-testid="ggf-operations-scope">
           <span className="field-label">
             {t('授权覆盖的 Operation', 'Operations this grant covers')}
@@ -502,15 +459,6 @@ function GrantGateFormBody({
         </div>
       ) : null}
 
-      {allGates ? (
-        <Notice tone="warn" testId="ggf-all-gates-notice">
-          {t(
-            '已选择「全部门」：成员可以请求本工作区每个门的全部 Operation，包括以后新接入的门；执行类仍按审批规则处理。',
-            'Every gate is selected: the member may request every operation of every gate in this workspace, including gates connected later; execute-class ones still follow the approval rules.',
-          )}
-        </Notice>
-      ) : null}
-
       {grantedLog.length > 0 ? (
         <Notice testId="ggf-granted-summary">
           <span>{t('本次已授予：', 'Granted so far:')}</span>
@@ -518,9 +466,7 @@ function GrantGateFormBody({
             {grantedLog.map((entry, index) => (
               // biome-ignore lint/suspicious/noArrayIndexKey: an append-only log; entries may repeat
               <li key={index} data-testid="ggf-granted-entry">
-                {entry.gate === null
-                  ? t(`${entry.member} → 全部门`, `${entry.member} → every gate`)
-                  : `${entry.member} → ${entry.gate}`}
+                {`${entry.member} → ${entry.gate}`}
               </li>
             ))}
           </ul>

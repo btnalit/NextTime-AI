@@ -389,10 +389,10 @@ accept_provider_up() {
 
 # Recreates llm-proxy, worker-supervisor and the kernel from the root compose file alone
 # (production provider config, production models.json path), waits until they are healthy and
-# agent-host is linked to the kernel again — the time production is back. Idempotent; a no-op if
-# accept_provider_up never succeeded. fake-llm is left running — it is harmless and
-# `--profile test` only. A failure here is P1 (docs/runbooks/accept-s1.md §1): the kernel may be
-# down or still on the fake catalog, and the console with it.
+# agent-host is linked to the kernel again — the time production is back — and stops fake-llm.
+# Idempotent; a no-op if accept_provider_up never succeeded. A failure to restore is P1
+# (docs/runbooks/accept-s1.md §1): the kernel may be down or still on the fake catalog, and the
+# console with it.
 accept_provider_restore() {
   [ "$ACCEPT_PROVIDER_SWITCHED" -eq 1 ] || return 0
   restore_since=$(accept_utc_now)
@@ -403,6 +403,13 @@ accept_provider_restore() {
   # Restored either way: the services run on the production files, so running this again would
   # not help with the link.
   ACCEPT_PROVIDER_SWITCHED=0
+  # fake-llm is an unauthenticated test endpoint on the control network, and nothing needs it once
+  # production is back; accept_provider_up starts it again on the next run. A standalone run used
+  # to leave it up until the next apply stopped it (legacy 643). Not stopping it is a warning, not
+  # P1: production is already back, and apply-release.sh's fixture check (7b) still reports it.
+  if ! docker compose --profile test stop fake-llm </dev/null >/dev/null 2>&1; then
+    echo "accept: WARNING — could not stop fake-llm, an unauthenticated test endpoint; stop it by hand: docker compose --profile test stop fake-llm" >&2
+  fi
   if ! wait_kernel_link "$restore_since"; then
     echo "accept: P1 — the production provider is restored, but agent-host did not reconnect to the kernel within ${ACCEPT_KERNEL_LINK_WAIT_S} s (no 'kernel-link: connected' in 'docker compose logs agent-host' since $restore_since), so chats fail until it does — check 'docker compose ps agent-host' and its log, and 'docker compose restart agent-host' if it stays down${WKL_PROBLEM:+ ($WKL_PROBLEM)}" >&2
     return 1
