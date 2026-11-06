@@ -24,7 +24,7 @@ v0.63.0 上主机后，维护者当天撞到三个 bug，而 CI（`guards / qual
 | 契约 | `pnpm contract:check`（capability / event 快照）、词表守卫、prompt-contract 守卫 | CI `quality` |
 | 控制台 e2e | 39 个 spec，含 9 条旅程（`e2e/journeys/`）、`00-gates` 截图 / axe / 文案基线、`08-least-privilege` 四种角色走查 | `web-e2e`（必需检查） |
 | 升级 | `staging.yml` 预演：`--from` 版本带数据跑 S3/S1/S2/S4 → apply → 目标版本全套验收（含会中断服务的 S12、S2）；`reversibility-probe.yml`：BASE 内核测试跑在 HEAD schema 上 | 迁移 / 部署相关 PR 自动触发 + 发版前手动 |
-| 真实模型 | staging `--real`（Claude），主机窗口真实模型回归（DeepSeek） | 手动 |
+| 真实模型 | staging `--real`（云上的模型），主机窗口真实模型回归（主机的模型） | 手动 |
 | 运维演练 | `drill-restore.sh` / `drill-upgrade.sh` / `chaos-kill-*.sh` | 只在主机，手动 |
 | 控制台可用性 | DoD 六条底线、`disabled-reason` / `i18n-pairs` / `css-tokens` 守卫、UX 验收线程 | CI `quality` + 人工 |
 
@@ -64,9 +64,9 @@ v0.63.0 上主机后，维护者当天撞到三个 bug，而 CI（`guards / qual
 | G8 | 回滚演练 | `reversibility-probe` 证明旧代码能跑新 schema（空库）；`drill-upgrade.sh` 只在主机手动 | 云上没有"带数据升级 → 代码回滚到 n-1 → 验收"的预演 | **P2** | staging 加 `rollback` 阶段（升级后切回 `from` 镜像跑 S1）；#488 |
 | G9 | 能力包全生命周期 | `install_pack` 有 e2e；`preview_pack_install` / `list_packs` / `extra_packs_status` / `export_admin_proposal_pack` 只有内核测试 + accept_s2 | 安装 → 升级（同包新版本）→ 回滚安装记录 → 导出 → 放进 `config/packs/` 导入 → 第二个工作区安装：没有一条控制台旅程；维护者"手动导出导入"仍待人工确认 | **P2** | 新旅程 `10-pack-lifecycle.spec.ts`；UX 验收 |
 | G10 | 权限矩阵（含拒绝路径） | `roles.test.ts` 单元级遍历；`08-least-privilege` 只验"看得到的页不 403" | 没有按角色×写 capability 走真实 HTTP 的拒绝断言；没有"控制台对无权角色隐藏 / 禁用并说明"的遍历 | **P2** | 内核集成测试遍历 registry 经 dispatch 断言 403 + 审计记 refused；#493 |
-| G11 | 审计 actor 正确性 | 审计写入在 `dispatch.ts`；遗留 644（`raw_secrets_scrubbed` 记 unattributed） | 没有"每个有副作用 capability 的审计行 actor = 实际调用者"的遍历断言。`set_admin_agent_targets` 记成 self 经核实不是 bug（维护者本人在控制台保存）；但 #1002 上 #484 指出：管理员智能体自己在平台面的审计行记的也是管理员账号，人和智能体在审计里分不开——这是本条要断言的典型（actor 必须能区分人、管理员智能体会话、服务 Handle） | **P2** | 内核遍历测试（与 G10 同一夹具，调用后读 `audit_records` 断言 actor / 工作区 / outcome）；#493 |
+| G11 | 审计 actor 正确性 | 审计写入在 `dispatch.ts`；遗留 644（`raw_secrets_scrubbed` 记 unattributed） | 没有"每个有副作用 capability 的审计行 actor = 实际调用者"的遍历断言。`set_admin_agent_targets` 记成 self 是对的（维护者本人在控制台保存）。真正的缺口（#1002 上 #484 指出）：管理员智能体在平台面的审计行，actor 也记成管理员本人，人和智能体的操作目前只能靠 `payload.channel` 区分；actor 应能直接区分人、管理员智能体会话与服务 Handle，并有遍历断言 | **P2** | 内核遍历测试（与 G10 同一夹具，调用后读 `audit_records` 断言 actor / 工作区 / outcome）；#493 |
 | G12 | 多工作区隔离 | 37 个内核测试文件涉及跨工作区 | 没有"在 A 工作区建的每类对象，B 工作区的成员经任一 observe capability 都读不到"的遍历；没有 e2e 双工作区串读场景 | **P2** | 内核遍历测试 + e2e 一条双工作区旅程；#493 / UX |
-| G13 | 真实模型与 fake-llm 差异 | fake-llm 场景脚本化；staging `--real` 用 Claude；主机用 DeepSeek | 工具参数首次被拒 7 次（645），只在主机窗口才看到；云上没有 DeepSeek 回归（预算只给 Anthropic） | **P2** | 不加付费跑：把"首次被拒率"做成主机真实模型回归的固定输出并设阈值；工具 schema 加一条"与 strict JSON schema 子集兼容"的静态检查；#481 |
+| G13 | 真实模型与 fake-llm 差异 | fake-llm 场景脚本化；staging `--real` 用云上的模型，主机用主机的模型，两者不同 | 工具参数首次被拒 7 次（645），只在主机窗口才看到；云上跑不到主机的模型（付费预算只覆盖云上的模型） | **P2** | 不加付费跑：把"首次被拒率"做成主机真实模型回归的固定输出并设阈值；工具 schema 加一条"与 strict JSON schema 子集兼容"的静态检查；#481 |
 | G14 | 备份恢复演练 | `drill-restore.sh` 只在主机；staging 只做文件探针 | 云上没有 `backup → 清库 → restore → 验收` 的完整一轮 | **P2** | staging 加 `restore` 阶段；#488 |
 | G15 | 配置组合 | 新装默认 `ADMIN_AGENT_ENABLED=1`，老主机不自动翻；staging 预演强制打开 | "开关关着的升级主机"这条组合只在 S2 打一行 NOTE，没有断言控制台在关闭时的呈现 | **P3** | e2e 在 fake 栈加一个开关关闭的变体（或单测覆盖控制台分支）；UX |
 | G16 | 会话过期 / 长开页面 | 没有测试 | 页面开很久、登录过期后第一个写操作的表现（是否丢输入、是否给出重新登录入口）未覆盖 | **P3** | 并入 G2 的 `resilience` 项目 |
@@ -89,7 +89,7 @@ v0.63.0 上主机后，维护者当天撞到三个 bug，而 CI（`guards / qual
 install_pack:
   console: required            # required | "none: <理由>"
   agents: []                   # entry / worker / admin 的子集，必须与代码里的工具列表一致
-  agents_note: 管理员智能体经 platform_state 读已装包（另一线程在补）   # 可选
+  agents_note: 管理员智能体不调人用的 install_pack；读已装包走另开的 agent_list_packs（AA5g D1）   # 可选
   e2e: observed                # observed | "waived: <遗留编号>"（仅非 observe 且 console: required 时有意义）
   repeat: creates              # 仅非 observe：idempotent | conflict | creates（G6）
 ```
@@ -166,10 +166,10 @@ A、F 可以马上并行；B 依赖 A 的 matrix；C、E 依赖 B 的 fixture；
 - **守卫误报拖慢开发**：所有守卫先带自测（`*.test.mjs`），首版只对新增代码生效；静态扫描规则保持保守，宁可漏报靠守门人补，不做猜测性拦截。
 - **matrix 声明与真实意图脱节**（填表应付）：M2、M3 是双向一致性检查，填错会直接失败；`agents_note` 理由由守门人审查。
 - **CI 时长**：`resilience` 约 2–3 分钟；遍历测试在已有 DB 套件里，增加量级为秒到分钟。
-- **不做**：不引入 mutation testing、不加第二个浏览器、不在云上跑 DeepSeek（预算只给 Anthropic，G13 用主机回归的固定输出代替）。
+- **不做**：不引入 mutation testing、不加第二个浏览器、不在云上跑主机的模型（付费预算只覆盖云上的模型，G13 用主机回归的固定输出代替）。
 
 ## 8. 待核实
 
 1. G3：旧 bundle 无版本探测是否需要单独修（#1003 修的是断线后的恢复；版本探测是否另做由协调 / 维护者定）。
 
-已核实（2026-11-06）：G7 的 v0.63.0 预演 `from` = v0.50.0（staging run 452，绿）；G11 的 `set_admin_agent_targets` 记成 self 是维护者本人操作，改为记录 #1002 发现的智能体审计 actor 不可区分。
+已核实（2026-11-06）：G7 的 v0.63.0 预演 `from` = v0.50.0（staging run 452，绿）；G11 的 `set_admin_agent_targets` 记成 self 是正确行为（维护者本人操作），缺口改为 #1002 指出的平台面智能体审计行 actor 记成管理员、只能靠 `payload.channel` 区分。
