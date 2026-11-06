@@ -259,7 +259,7 @@ export function checkObserved(matrix, observed) {
   for (const [name, row] of Object.entries(matrix?.capabilities ?? {})) {
     if (row?.e2e === E2E_OBSERVED && !observed.has(name)) {
       out.push(
-        `M4 ${name}: e2e: observed, but no page called it and got ok in this run — the test that covered it no longer does; cover it again, or waive it with a legacy no.`,
+        `M4 ${name}: e2e: observed, but no page called it and the kernel answered ok in this run — the test that covered it no longer does (moved, stubbed, or skipped by an environment condition); cover it again, or waive it with a legacy no.`,
       );
     }
     if (typeof row?.e2e === 'string' && E2E_WAIVED.test(row.e2e) && observed.has(name)) {

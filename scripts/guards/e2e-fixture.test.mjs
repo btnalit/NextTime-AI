@@ -13,12 +13,17 @@ test("importing Playwright's test, under any name or shape, is reported", () => 
   assert.deepEqual(lines("import pw from '@playwright/test';"), [1]);
   assert.deepEqual(lines("const pw = require('@playwright/test');"), [1]);
   assert.deepEqual(lines("const pw = await import('@playwright/test');"), [1]);
+  assert.deepEqual(lines("export { test } from '@playwright/test';"), [1]);
+  assert.deepEqual(lines("export * from '@playwright/test';"), [1]);
+  assert.deepEqual(lines("export * as pw from '@playwright/test';"), [1]);
 });
 
 test('types and expect may come from Playwright; the fixture may import its test', () => {
   assert.deepEqual(lines("import type { Page } from '@playwright/test';"), []);
   assert.deepEqual(lines("import { type Page, expect } from '@playwright/test';"), []);
   assert.deepEqual(lines("import type { test } from '@playwright/test';"), []);
+  assert.deepEqual(lines("export { expect, type Page } from '@playwright/test';"), []);
+  assert.deepEqual(lines("export type { Page } from '@playwright/test';"), []);
   assert.deepEqual(lines("import { type Page, expect, test } from '../lib/test.js';"), []);
   assert.deepEqual(
     findViolations(FIXTURE_FILE, "import { test as base } from '@playwright/test';"),

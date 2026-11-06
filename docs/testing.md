@@ -125,7 +125,8 @@ PR 在同一提交里加一行；大面积改名后可 `node scripts/guards/capa
 spec 时不要跑这一步。重新生成可用 `--bootstrap --e2e-observed <目录> --waive <遗留编号>`（目录取一次
 完整 CI 运行的 playwright-report 产物）。`observed` 只说明有页面经控制台调通了这个写入口，不说明
 是怎么点到的；交互必须落在用户看得见、读屏读得出名字的控件上，由定位器守卫（§5.2，下一段）管，
-两者互补。
+两者互补。应答 ok 就算调通，包括进了待审批的写（入口走到了，审批是另一条链路的事）；带环境门槛
+`test.skip` 的 spec 在 CI 里没跑时，它调的入口会报 M4，要么让它在 CI 里跑，要么给那一行写豁免。
 
 两条测试债棘轮——矩阵的 `ratchet:`（`console_unexplained`、`kernel_test_missing`、`e2e_waived`）和 e2e 定位基线 `scripts/guards/e2e-locators-baseline.json`
 （§5.2，交互按角色 / 标签定位）——各自的守卫只核对同一提交里的代码。PR 上 CI `quality` 另跑

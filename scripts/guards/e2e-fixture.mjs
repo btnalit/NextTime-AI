@@ -7,7 +7,8 @@
 // still passes, but its calls go unrecorded, and a capability only it covers reads as untested:
 //
 //   E1  under packages/web/e2e, only lib/test.ts imports the value `test` from '@playwright/test'
-//       (also `test as x`, a namespace or default import, `require`, a dynamic `import()`).
+//       (also `test as x`, a namespace or default import, `require`, a dynamic `import()`, or a
+//       re-export: `export { test }` / `export *` from it).
 //       Types (`import type { Page }`, `type Page`) and `expect` may come from either.
 //   E2  no code run inside the page (`evaluate`, `evaluateHandle`, `evaluateAll`, `$eval`,
 //       `$$eval`, `addInitScript`) names `/api/cap`: a capability called from there is sent by the
@@ -70,6 +71,21 @@ export function findViolations(fileName, sourceText) {
           }
         }
       }
+    }
+    if (
+      ts.isExportDeclaration(node) &&
+      !node.isTypeOnly &&
+      node.moduleSpecifier &&
+      ts.isStringLiteral(node.moduleSpecifier) &&
+      node.moduleSpecifier.text === PLAYWRIGHT &&
+      (!node.exportClause ||
+        ts.isNamespaceExport(node.exportClause) ||
+        node.exportClause.elements.some(
+          (element) =>
+            !element.isTypeOnly && (element.propertyName ?? element.name).text === 'test',
+        ))
+    ) {
+      report(node, "re-exports Playwright's test");
     }
     if (
       ts.isCallExpression(node) &&

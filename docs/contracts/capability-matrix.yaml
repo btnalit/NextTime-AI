@@ -14,7 +14,7 @@
 ratchet:
   console_unexplained: 10
   kernel_test_missing: 6
-  e2e_waived: 82
+  e2e_waived: 87
 capabilities:
   add_eval_case:
     console: required
@@ -103,7 +103,7 @@ capabilities:
   confirm_goal:
     console: required
     agents: []
-    e2e: observed
+    e2e: "waived: 657"
   confirm_goal_acceptance:
     console: required
     agents: []
@@ -620,7 +620,7 @@ capabilities:
   publish_operation:
     console: required
     agents: []
-    e2e: observed
+    e2e: "waived: 657"
   publish_procedure:
     console: required
     agents: []
@@ -660,7 +660,7 @@ capabilities:
   refresh_operation_governance:
     console: required
     agents: []
-    e2e: observed
+    e2e: "waived: 657"
   register_source:
     console: "none: 数据接入，由 collector 用服务 Handle 调用，不是人的操作"
     agents: []
@@ -691,7 +691,7 @@ capabilities:
   release_goal_hold:
     console: required
     agents: []
-    e2e: observed
+    e2e: "waived: 657"
   remove_eval_fixture_gate:
     console: required
     agents: []
@@ -751,7 +751,7 @@ capabilities:
   revise_goal:
     console: required
     agents: []
-    e2e: observed
+    e2e: "waived: 657"
   revoke_capability:
     console: required
     agents: []

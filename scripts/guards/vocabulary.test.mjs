@@ -76,10 +76,7 @@ test('(c) evaluateProposeModeCapability', async (t) => {
     assert.match(message, /not "propose"/);
   });
   await t.test('request_action is the one documented exemption', () => {
-    assert.equal(
-      evaluateProposeModeCapability({ name: 'request_action', mode: 'execute' }),
-      null,
-    );
+    assert.equal(evaluateProposeModeCapability({ name: 'request_action', mode: 'execute' }), null);
   });
 });
 
