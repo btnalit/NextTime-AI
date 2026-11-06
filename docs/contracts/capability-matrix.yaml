@@ -1,0 +1,815 @@
+# Capability matrix — one row per capability in packages/shared/src/capabilities.ts.
+# Guard: scripts/guards/capability-matrix.mjs (rules M1–M5, R); design: docs/test-coverage-gaps-2026-11-06.md §5.1.
+#
+# console:  required             the console calls it (http.call / useCapability*)
+#           indirect: <file>     the console calls it through a variable; <file> names it
+#           none: <reason>       no console entry, on purpose — say why
+#           none: 待说明…        not decided yet (counted by ratchet.console_unexplained, only goes down)
+# agents:   which agents register it as a pi tool: entry (modes/entry.ts), admin (modes/admin.ts).
+#           [] is a decision too: a new capability's PR says here whether the agents should see it.
+# kernel_test: missing           no kernel test names it yet (counted by ratchet.kernel_test_missing)
+ratchet:
+  console_unexplained: 10
+  kernel_test_missing: 6
+capabilities:
+  add_eval_case:
+    console: required
+    agents: []
+  add_eval_fixture_gate:
+    console: required
+    agents: []
+  add_member:
+    console: required
+    agents: []
+  add_membership:
+    console: required
+    agents: []
+  agent_get_admin_proposal:
+    console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
+    agents: [admin]
+  agent_list_admin_proposals:
+    console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
+    agents: [admin]
+  agent_list_proposal_targets:
+    console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
+    agents: [admin]
+  agent_withdraw_admin_proposal:
+    console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
+    agents: [admin]
+  apply_admin_proposal_segment:
+    console: required
+    agents: []
+  apply_platform_segment:
+    console: required
+    agents: []
+  approve:
+    console: required
+    agents: []
+  approve_step_trial:
+    console: required
+    agents: []
+  archive_chat:
+    console: required
+    agents: []
+  assert_fact:
+    console: "none: 待说明（2026-11-06 盘点）"
+    agents: []
+  attest_fact:
+    console: required
+    agents: []
+  audit_query:
+    console: required
+    agents: []
+  cancel_connection_request:
+    console: required
+    agents: []
+  cancel_draft_evaluation:
+    console: required
+    agents: []
+  cancel_goal:
+    console: required
+    agents: []
+  cancel_task:
+    console: required
+    agents: []
+  causal_chain:
+    console: required
+    agents: []
+  confirm_gate_manifest:
+    console: required
+    agents: []
+  confirm_goal:
+    console: required
+    agents: []
+  confirm_goal_acceptance:
+    console: required
+    agents: []
+  connect_gatekeeper:
+    console: "none: 待说明（2026-11-06 盘点）"
+    agents: []
+  create_connection:
+    console: required
+    agents: []
+  create_eval_suite:
+    console: required
+    agents: []
+  create_gate_instance:
+    console: required
+    agents: []
+  create_principal:
+    console: required
+    agents: []
+  create_user:
+    console: required
+    agents: []
+  create_workspace:
+    console: required
+    agents: []
+  decide_plan_revision:
+    console: required
+    agents: []
+  decision_impact:
+    console: required
+    agents: []
+  delete_gate_instance:
+    console: required
+    agents: []
+  deprecate_operation:
+    console: "indirect: packages/web/src/components/CatalogPage.tsx"
+    agents: []
+  deprecate_procedure:
+    console: "indirect: packages/web/src/components/CatalogPage.tsx"
+    agents: []
+    kernel_test: missing
+  deprecate_skill:
+    console: "indirect: packages/web/src/components/CatalogPage.tsx"
+    agents: []
+  deprecate_worker_definition:
+    console: required
+    agents: []
+  disable_principal:
+    console: required
+    agents: []
+  discard_draft:
+    console: required
+    agents: []
+  discard_operation_draft:
+    console: required
+    agents: []
+  edit_eval_case:
+    console: required
+    agents: []
+  enable_gate_instance:
+    console: required
+    agents: []
+  end_goal:
+    console: required
+    agents: []
+  execution_readiness:
+    console: required
+    agents: []
+  explain:
+    console: required
+    agents: [entry, admin]
+  export_admin_proposal_pack:
+    console: required
+    agents: []
+  export_prov:
+    console: required
+    agents: []
+  extra_packs_status:
+    console: required
+    agents: []
+  find_operations:
+    console: "none: agent 的手段发现；人在控制台按「能力目录」各页浏览同一批对象"
+    agents: [entry, admin]
+  find_precedents:
+    console: required
+    agents: []
+  find_procedures:
+    console: "none: agent 的手段发现；人在控制台按「能力目录」各页浏览同一批对象"
+    agents: [entry, admin]
+  find_workers:
+    console: "none: agent 的手段发现；人在控制台按「能力目录」各页浏览同一批对象"
+    agents: [entry, admin]
+  get_action:
+    console: required
+    agents: []
+  get_admin_agent_status:
+    console: required
+    agents: []
+  get_admin_proposal:
+    console: required
+    agents: []
+  get_admin_proposal_segment_counts:
+    console: required
+    agents: []
+  get_agent_policy:
+    console: required
+    agents: []
+  get_agent_profile:
+    console: required
+    agents: []
+  get_change_segment:
+    console: required
+    agents: []
+  get_chat_history:
+    console: required
+    agents: []
+  get_draft_evaluation:
+    console: required
+    agents: []
+  get_entry_context:
+    console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
+    agents: []
+  get_entry_template_status:
+    console: required
+    agents: []
+  get_eval_budget:
+    console: required
+    agents: []
+  get_eval_case:
+    console: required
+    agents: []
+  get_eval_run:
+    console: required
+    agents: []
+  get_eval_suite:
+    console: required
+    agents: []
+  get_gate_instance:
+    console: required
+    agents: []
+  get_gatekeeper:
+    console: required
+    agents: []
+  get_goal:
+    console: required
+    agents: [entry, admin]
+  get_goal_revision:
+    console: required
+    agents: [entry, admin]
+  get_object:
+    console: required
+    agents: [entry, admin]
+  get_operation_stats:
+    console: required
+    agents: []
+  get_platform_change_segment:
+    console: required
+    agents: []
+  get_platform_settings:
+    console: required
+    agents: []
+  get_procedure_stats:
+    console: required
+    agents: []
+  get_skill:
+    console: required
+    agents: [admin]
+  get_skill_draft_verdicts:
+    console: "none: 待说明（2026-11-06 盘点）"
+    agents: [entry, admin]
+  get_skill_publish_evidence:
+    console: required
+    agents: []
+  get_skill_stats:
+    console: required
+    agents: []
+  get_task:
+    console: required
+    agents: [entry, admin]
+  get_type:
+    console: required
+    agents: [admin]
+  get_worker_definition:
+    console: required
+    agents: []
+  get_workspace:
+    console: required
+    agents: []
+  grant_capability:
+    console: required
+    agents: []
+  graph_freshness:
+    console: required
+    agents: [admin]
+  graph_overview:
+    console: "none: 待说明（2026-11-06 盘点）"
+    agents: [admin]
+  install_module:
+    console: "none: 待说明（2026-11-06 盘点）"
+    agents: []
+  install_pack:
+    console: required
+    agents: []
+  invalidate_fact:
+    console: required
+    agents: []
+  invoke_worker:
+    console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
+    agents: [entry, admin]
+  issue_gate_credential_token:
+    console: required
+    agents: []
+  issue_gate_host_token:
+    console: required
+    agents: []
+  issue_handle:
+    console: required
+    agents: []
+  issue_llm_admin_token:
+    console: required
+    agents: []
+  issue_service_handle:
+    console: required
+    agents: []
+  list_action_requests:
+    console: required
+    agents: []
+  list_admin_proposal_segments:
+    console: required
+    agents: []
+  list_admin_proposals:
+    console: required
+    agents: []
+  list_allowed_operations:
+    console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
+    agents: []
+  list_available_gate_instances:
+    console: required
+    agents: []
+  list_capability_names:
+    console: required
+    agents: []
+    kernel_test: missing
+  list_change_segments:
+    console: required
+    agents: []
+  list_chat_turns:
+    console: required
+    agents: []
+  list_chats:
+    console: required
+    agents: []
+  list_conflicts:
+    console: required
+    agents: []
+  list_connection_requests:
+    console: required
+    agents: []
+  list_connector_presets:
+    console: required
+    agents: []
+  list_connectors:
+    console: required
+    agents: []
+  list_draft_evaluations:
+    console: required
+    agents: []
+  list_draft_rejections:
+    console: required
+    agents: []
+  list_eval_runs:
+    console: required
+    agents: []
+  list_eval_seal_holds:
+    console: required
+    agents: []
+  list_eval_suites:
+    console: required
+    agents: []
+  list_external_runtimes:
+    console: required
+    agents: []
+  list_facts:
+    console: required
+    agents: [entry, admin]
+  list_gate_instances:
+    console: required
+    agents: []
+  list_gatekeepers:
+    console: required
+    agents: []
+  list_goal_unresolved_actions:
+    console: required
+    agents: [entry, admin]
+  list_goals:
+    console: required
+    agents: [entry, admin]
+  list_grants:
+    console: required
+    agents: []
+  list_models:
+    console: required
+    agents: []
+  list_modules:
+    console: required
+    agents: []
+  list_ontology_versions:
+    console: required
+    agents: [admin]
+  list_operations:
+    console: required
+    agents: []
+  list_packs:
+    console: required
+    agents: []
+  list_pending:
+    console: required
+    agents: []
+  list_platform_change_segments:
+    console: required
+    agents: []
+  list_platform_models:
+    console: required
+    agents: []
+  list_policies:
+    console: required
+    agents: []
+  list_principals:
+    console: required
+    agents: []
+  list_procedures:
+    console: required
+    agents: [admin]
+  list_quotas:
+    console: required
+    agents: []
+  list_runtime_images:
+    console: "none: 待说明（2026-11-06 盘点）"
+    agents: []
+  list_self_connections:
+    console: required
+    agents: []
+  list_skills:
+    console: required
+    agents: [admin]
+  list_tasks:
+    console: required
+    agents: []
+  list_types:
+    console: required
+    agents: [admin]
+  list_user_memberships:
+    console: "none: 待说明（2026-11-06 盘点）"
+    agents: []
+  list_users:
+    console: required
+    agents: []
+  list_worker_definitions:
+    console: required
+    agents: [admin]
+  list_workspace_modules:
+    console: "none: 待说明（2026-11-06 盘点）"
+    agents: []
+  list_workspaces:
+    console: required
+    agents: []
+  mark_turn_outcome:
+    console: required
+    agents: []
+    kernel_test: missing
+  merge_user:
+    console: required
+    agents: []
+  mint_connection_secret:
+    console: required
+    agents: []
+  new_chat:
+    console: required
+    agents: []
+  observe_operation:
+    console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
+    agents: []
+  pause_goal:
+    console: required
+    agents: []
+  pi_drift:
+    console: required
+    agents: []
+  platform_audit_query:
+    console: required
+    agents: []
+  platform_draft_residue:
+    console: required
+    agents: []
+  platform_overview:
+    console: required
+    agents: []
+  platform_state_audit:
+    console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
+    agents: [admin]
+  platform_state_connectors:
+    console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
+    agents: [admin]
+  platform_state_gates:
+    console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
+    agents: [admin]
+  platform_state_invariants:
+    console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
+    agents: [admin]
+  platform_state_runtime:
+    console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
+    agents: [admin]
+  platform_state_updates:
+    console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
+    agents: [admin]
+  platform_status:
+    console: required
+    agents: []
+  platform_updates:
+    console: required
+    agents: []
+  preview_admin_proposal_segment:
+    console: required
+    agents: []
+  preview_gate_instance_enable:
+    console: required
+    agents: []
+  preview_gatekeeper_resync:
+    console: required
+    agents: []
+  preview_pack_install:
+    console: required
+    agents: []
+  preview_platform_segment:
+    console: required
+    agents: []
+  preview_roll_back_change_segment:
+    console: required
+    agents: []
+  preview_roll_back_platform_change_segment:
+    console: required
+    agents: []
+  propose_admin_proposal:
+    console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
+    agents: [admin]
+  propose_entry_template_upgrade:
+    console: required
+    agents: []
+  propose_goal:
+    console: "none: 入口 agent 替人提议目标；人在控制台确认或拒绝（confirm / reject 目标的能力）"
+    agents: [entry]
+  propose_ontology_change:
+    console: "none: 待说明（2026-11-06 盘点）"
+    agents: [entry, admin]
+  propose_operation:
+    console: required
+    agents: [entry, admin]
+  propose_procedure:
+    console: required
+    agents: [entry, admin]
+  propose_skill:
+    console: required
+    agents: [entry, admin]
+  propose_worker_definition:
+    console: required
+    agents: [entry, admin]
+  publish_manifest:
+    console: required
+    agents: []
+  publish_ontology_version:
+    console: required
+    agents: []
+  publish_operation:
+    console: required
+    agents: []
+  publish_procedure:
+    console: required
+    agents: []
+  publish_skill:
+    console: required
+    agents: []
+  publish_worker_definition:
+    console: required
+    agents: []
+  purge_user:
+    console: required
+    agents: []
+  purge_workspace:
+    console: required
+    agents: []
+  query_decisions:
+    console: required
+    agents: []
+  reconcile_goal_action:
+    console: required
+    agents: []
+  reconstruct:
+    console: required
+    agents: []
+  record_decision:
+    console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
+    agents: [entry]
+  record_procedure_followed:
+    console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
+    agents: [entry]
+  refresh_operation_governance:
+    console: required
+    agents: []
+  register_source:
+    console: "none: 数据接入，由 collector 用服务 Handle 调用，不是人的操作"
+    agents: []
+  reject:
+    console: required
+    agents: []
+  reject_admin_proposal_segment:
+    console: required
+    agents: []
+  reject_draft:
+    console: required
+    agents: []
+  reject_goal:
+    console: required
+    agents: []
+  reject_platform_segment:
+    console: required
+    agents: []
+  release_eval_seal_hold:
+    console: required
+    agents: []
+  release_goal_hold:
+    console: required
+    agents: []
+  remove_eval_fixture_gate:
+    console: required
+    agents: []
+  remove_membership:
+    console: required
+    agents: []
+  rename_chat:
+    console: required
+    agents: []
+  repin_eval_suite:
+    console: required
+    agents: []
+  report_task_outcome:
+    console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
+    agents: [entry]
+    kernel_test: missing
+  report_task_result:
+    console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
+    agents: []
+  report_turn:
+    console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
+    agents: []
+  request_action:
+    console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
+    agents: []
+  request_connection:
+    console: required
+    agents: [entry, admin]
+  reset_user_password:
+    console: required
+    agents: []
+  resolve_conflict:
+    console: required
+    agents: []
+  resolve_refs:
+    console: required
+    agents: []
+  resume_goal:
+    console: required
+    agents: []
+  resume_self_connection:
+    console: required
+    agents: []
+  retire_eval_case:
+    console: required
+    agents: []
+  revise_goal:
+    console: required
+    agents: []
+  revoke_capability:
+    console: required
+    agents: []
+  revoke_external_runtime:
+    console: required
+    agents: []
+  roll_back_change_segment:
+    console: required
+    agents: []
+  roll_back_platform_change_segment:
+    console: required
+    agents: []
+  roll_entry_containers:
+    console: required
+    agents: []
+  rollback_runtime_image:
+    console: required
+    agents: []
+  rotate_api_key:
+    console: required
+    agents: []
+  rotate_connection_secret:
+    console: required
+    agents: []
+  runtime_inventory:
+    console: required
+    agents: []
+  search:
+    console: required
+    agents: [entry, admin]
+  send_chat_message:
+    console: required
+    agents: []
+  set_active_runtime_image:
+    console: required
+    agents: []
+  set_admin_agent_targets:
+    console: required
+    agents: []
+  set_agent_policy:
+    console: required
+    agents: []
+  set_agent_profile:
+    console: required
+    agents: []
+  set_allowed_models:
+    console: required
+    agents: []
+  set_auto_approved_action_kind:
+    console: required
+    agents: []
+  set_connector_mode:
+    console: required
+    agents: []
+  set_default_modules:
+    console: required
+    agents: []
+    kernel_test: missing
+  set_membership_role:
+    console: required
+    agents: []
+  set_platform_default_model:
+    console: required
+    agents: []
+  set_policy:
+    console: required
+    agents: []
+  set_principal_role:
+    console: required
+    agents: []
+  set_quota:
+    console: required
+    agents: []
+  set_user_budget:
+    console: required
+    agents: []
+    kernel_test: missing
+  set_user_status:
+    console: required
+    agents: []
+  set_workspace_status:
+    console: required
+    agents: []
+  start_draft_evaluation:
+    console: required
+    agents: []
+  start_eval_case_trial:
+    console: required
+    agents: []
+  state_at:
+    console: required
+    agents: [entry, admin]
+  stop_admin_agent:
+    console: required
+    agents: []
+  stop_agent:
+    console: required
+    agents: []
+  submit_observations:
+    console: "none: 数据接入，由 collector 用服务 Handle 调用，不是人的操作"
+    agents: []
+  subscribe_chat:
+    console: required
+    agents: []
+  supersede_fact:
+    console: required
+    agents: []
+  suspend_self_connection:
+    console: required
+    agents: []
+  sync_eval_fixture_gate:
+    console: required
+    agents: []
+  test_gate_instance:
+    console: required
+    agents: []
+  traverse:
+    console: "none: agent 的图遍历；控制台的对象页用 get_object / state_at 呈现同样的关系"
+    agents: [entry, admin]
+  unarchive_chat:
+    console: required
+    agents: []
+  update_gate_instance:
+    console: required
+    agents: []
+  update_operation_description:
+    console: required
+    agents: []
+  update_platform_settings:
+    console: required
+    agents: []
+  update_user:
+    console: required
+    agents: []
+  update_workspace:
+    console: required
+    agents: []
+  upgrade_module:
+    console: "none: 待说明（2026-11-06 盘点）"
+    agents: []
+  validate:
+    console: required
+    agents: [admin]
+  verify_change_segment:
+    console: required
+    agents: []
+  verify_fact:
+    console: required
+    agents: []
+  withdraw_admin_proposal:
+    console: required
+    agents: []
