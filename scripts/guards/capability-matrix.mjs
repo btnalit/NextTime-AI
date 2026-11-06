@@ -201,7 +201,7 @@ export function checkMatrix(matrix, facts) {
         e2eWaived += 1;
       } else {
         out.push(
-          `M4 ${name}: a ${facts.modes.get(name)} capability with a console entry — say e2e: observed (an e2e test calls it through the console), or e2e: "waived: <legacy no.>" with a higher ratchet.e2e_waived (got ${JSON.stringify(row.e2e)})`,
+          `M4 ${name}: mode ${facts.modes.get(name)} with a console entry — say e2e: observed (an e2e test calls it through the console), or e2e: "waived: <legacy no.>" with a higher ratchet.e2e_waived (got ${JSON.stringify(row.e2e)})`,
         );
       }
     } else if (row.e2e !== undefined) {

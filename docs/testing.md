@@ -113,7 +113,16 @@ pnpm ci:guards        # kernel purity + pi 版本一致性 + membership-capabili
 PR 在同一提交里加一行；大面积改名后可 `node scripts/guards/capability-matrix.mjs --bootstrap` 重新生成，
 保留已有理由，提交前读 diff。
 
-两条测试债棘轮——矩阵的 `ratchet:` 和 e2e 定位基线 `scripts/guards/e2e-locators-baseline.json`
+写入口有没有 e2e 走到（M4）：非 observe 且有控制台入口的行写 `e2e: observed` 或
+`e2e: "waived: <遗留编号>"`。每个 spec 从 `packages/web/e2e/lib/test.ts` 取 `test`（守卫
+`scripts/guards/e2e-fixture.mjs`，规则 E1），它把页面发出的 capability 调用记进
+`test-results/<test>/cap-calls.jsonl`；`web-e2e` 全部通过后跑
+`node scripts/guards/capability-matrix.mjs --e2e-observed packages/web/test-results`，`observed` 的行没被
+页面调通、或 `waived` 的行被调通了都失败。新写入口在同一 PR 里带 e2e 并写 `observed`；本地只跑部分
+spec 时不要跑这一步。重新生成可用 `--bootstrap --e2e-observed <目录> --waive <遗留编号>`（目录取一次
+完整 CI 运行的 playwright-report 产物）。
+
+两条测试债棘轮——矩阵的 `ratchet:`（`console_unexplained`、`kernel_test_missing`、`e2e_waived`）和 e2e 定位基线 `scripts/guards/e2e-locators-baseline.json`
 （§5.2，交互按角色 / 标签定位）——各自的守卫只核对同一提交里的代码。PR 上 CI `quality` 另跑
 `scripts/guards/ratchet-shrinks.mjs --base HEAD^1`：两者都不能比 base 高（定位基线按调用文本跨文件
 求和，改文件名不算上升）。base 是这次检出的 merge commit 的第一父提交，重跑时也是同一个，不受 base

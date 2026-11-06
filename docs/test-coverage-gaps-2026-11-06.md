@@ -103,18 +103,18 @@ capabilities:
 
 `install_pack` 的 `agents: []` 本身就是决定：管理员智能体不调人用的 `install_pack`，读已装包走另开的 `agent_list_packs`（AA5g D1），加进去的那个 PR 会在矩阵里多一行 `agent_list_packs`，`agents: [admin]`。
 
-守卫 `scripts/guards/capability-matrix.mjs`（读 `packages/shared/dist`，与词表守卫同前提；批次 A 已实现 M1–M3、M5、R）：
+守卫 `scripts/guards/capability-matrix.mjs`（读 `packages/shared/dist`，与词表守卫同前提；批次 A 实现 M1–M3、M5、R，批次 B2 实现 M4）：
 
 | 规则 | 断言 | 拦住什么 |
 |---|---|---|
 | M1 | 注册表 ↔ matrix 一一对应（不缺不多） | 新增 capability 却没回答"投影到哪" |
 | M2 | `console: required` ⇔ `packages/web/src` 非测试代码以调用 helper 的写法调它（`http.call('<name>'`、`call<T>('<name>'`、`useCapability*(http, '<name>'`）；文案、标签表、`can('<name>')` 权限探测、注释都不算。经变量调用的写 `indirect: <文件>`，守卫只核对该文件存在且以引号写着这个名字（不核对它真的被调用，那一层由人审查与批次 B 的运行时采集补上） | 声称有入口却没做；做了入口却没声明 |
 | M3 | `agents` 等于 `modes/entry.ts` 的 `ENTRY_TOOL_CAPABILITY_NAMES` 与 `modes/admin.ts` 的 `ADMIN_TOOL_CAPABILITY_NAMES` 实际注册为 pi 工具的集合（扩展自己调的 `get_entry_context` / `report_turn` 与经投影门工具到达的 `observe_operation` 在 Handle 天花板上、不是工具，不算）（Worker 的工具按 WorkerDefinition 在 ceiling 内声明，不是固定集合，暂不进矩阵） | agent 工具面与声明漂移（能力包那一类） |
-| M4 | 批次 B：非 observe 且 `console: required` 的行加 `e2e: observed \| "waived: <遗留编号>"`，observed 由 §5.3 的运行时采集核对，waived 计入棘轮 | 新写入口不带 e2e 就合并 |
+| M4 | 非 observe 且有控制台入口（`console: required` 或 `indirect:`）的行必须写 `e2e: observed` 或 `e2e: "waived: <遗留编号>"`，其他行不许有 `e2e`（静态半边，`quality`）；`web-e2e` 末尾按 §5.3 的采集核对：`observed` 的行本次必须有页面调到且返回 ok，`waived` 的行若被页面调通必须改成 `observed` 并调低棘轮（运行时半边）。waived 计入棘轮 `e2e_waived`，存量记遗留 657 | 新写入口不带 e2e 就合并；e2e 不再走到某入口却没人发现 |
 | M5 | `kernel_test: missing` ⇔ 没有内核 `*.test.ts` 写着这个名字（补了测试却不删豁免也失败） | 内核实现没有任何测试 |
 | R | `ratchet:` 两个数必须等于实际计数：新增豁免要在同一 diff 里调高并由审查同意，修掉一个必须调低 | 豁免悄悄变多 |
 
-M1–M3、M5、R 是纯静态检查，在 `quality` 与 `pnpm ci:guards` 里跑；M4 在 `web-e2e` 末尾。初版 matrix 由 `node scripts/guards/capability-matrix.mjs --bootstrap` 从当前代码扫出（保留已有理由），41 行没有控制台调用的 capability 里 31 行人工写了理由，剩 10 行「待说明」进棘轮。G6 的 `repeat` 字段随批次 D 加。
+M1–M3、M5、R 与 M4 的静态半边是纯静态检查，在 `quality` 与 `pnpm ci:guards` 里跑；M4 的运行时半边在 `web-e2e` 末尾（`--e2e-observed`）。初版 matrix 由 `node scripts/guards/capability-matrix.mjs --bootstrap` 从当前代码扫出（保留已有理由），41 行没有控制台调用的 capability 里 31 行人工写了理由，剩 10 行「待说明」进棘轮。G6 的 `repeat` 字段随批次 D 加。
 
 **为什么不把这些字段加进注册表本身**：注册表是线上契约（快照进 `docs/contracts/capabilities.json`），投影意图和测试豁免会频繁变，混进去会让契约快照随测试状态抖动；独立文件 + 双向一一对应的守卫，强度与"必填字段"等价。
 
@@ -130,9 +130,9 @@ M1–M3、M5、R 是纯静态检查，在 `quality` 与 `pnpm ci:guards` 里跑�
 
 ### 5.3 e2e capability 调用采集（G5）
 
-- 新增 `e2e/lib/test.ts`：`test = base.extend(...)`，自动 fixture 在每个 page 上监听 `/api/cap/<name>` 的请求与响应，把 `{name, status, ok}` 追加到 `test-results/cap-calls/*.jsonl`。
-- 守卫规则 E1：spec 只能从 `./lib/test` 导入 `test` / `expect`，不能直接从 `@playwright/test` 导入（一次性机械替换 39 个文件）。
-- `web-e2e` 末尾：`node scripts/guards/capability-matrix.mjs --e2e-observed test-results/cap-calls` 汇总"经 UI 成功调到过"的集合，对 `e2e: observed` 的行逐条核对；产物上传，作为覆盖报告。
+- `e2e/lib/test.ts`：`test = base.extend(...)`，自动 fixture 在 browser context 上记录 `POST /api/cap/<name>` 的响应与对话 WebSocket 上 JSON-RPC 请求的应答（`authenticate` 不算），每个测试把 `{name, via, ok, status}` 逐行写进自己输出目录的 `test-results/<test>/cap-calls.jsonl`。
+- 守卫规则 E1（`scripts/guards/e2e-fixture.mjs`，`quality` 与 `pnpm ci:guards`）：`packages/web/e2e` 下除 `lib/test.ts` 外不得从 `@playwright/test` 取值 `test`（含 `test as x`、命名空间 / 默认导入、`require`、动态 `import()`）；类型与 `expect` 不限。存量一次性机械替换 40 个文件。
+- `web-e2e` 末尾：`node scripts/guards/capability-matrix.mjs --e2e-observed packages/web/test-results` 汇总"经 UI 成功调到过"的集合，按 M4 逐行核对（一个 `cap-calls.jsonl` 都没有直接失败）；`test-results/` 随 playwright-report 产物上传，作为覆盖报告。只在全部 spec 通过时跑（有失败时缺调用是噪声）。
 - 只统计页面发出的请求，测试辅助代码绕过 UI 直接调 API 的不算——这正是我们要的语义："用户能从界面完成这个动作"。
 
 ### 5.4 resilience 项目（G2 / G16，G3 定案后并入）
