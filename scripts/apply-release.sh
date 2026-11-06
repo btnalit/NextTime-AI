@@ -232,6 +232,13 @@ mkdir -p "$D/config/update-feed" && chown 10002:10002 "$D/config/update-feed" &&
   chmod 755 "$D/config/update-feed" &&
   echo "STEP update-feed-dir config/update-feed is 10002:10002 0755" ||
   { echo "STEP update-feed-dir WARNING could not set config/update-feed to 10002:10002 0755 — the update-feed service cannot write the update notice; fix: mkdir -p $D/config/update-feed && chown 10002:10002 $D/config/update-feed && chmod 755 $D/config/update-feed"; degrade update-feed-dir; }
+# S11 AA5d: the extra packs directory (EXTRA_PACKS_DIR=/data/config/packs, under the kernel's
+# read-only config/ mount). A host set up before AA5d has none; the kernel reads a missing one as no
+# extra packs, and creating it here lets the runbook's steps (operations.md §14.10) start with `cd`.
+# Root-owned, as host-env-init.sh makes it: nothing in a container writes it.
+mkdir -p "$D/config/packs" && chmod 755 "$D/config/packs" &&
+  echo "STEP extra-packs-dir config/packs is there (0755)" ||
+  { echo "STEP extra-packs-dir WARNING could not create config/packs — create it before adding a pack: mkdir -p $D/config/packs && chmod 755 $D/config/packs"; degrade extra-packs-dir; }
 # worker-supervisor (uid 10001) rewrites config/egress-sources.json in place on every spawn / stop;
 # a root-owned file makes every write fail, and egress-proxy then refuses those containers'
 # traffic as unknown sources. Older hosts have it root-owned (host-env-init.sh only set the owner

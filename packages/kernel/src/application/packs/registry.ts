@@ -1,5 +1,5 @@
 import type { Dirent } from 'node:fs';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -83,7 +83,8 @@ import {
  * `ontology/<file>`, since a pack from outside the image cannot add to the ontology library. Each
  * is `source: 'extra'` (`PackEntry.source`), never a module (`application/platform/modules.ts`).
  * The image's packs are checked first and alone, as above; an extra pack breaking any rule —
- * its own (a manifest, a component file, versions), or one across packs (a name or a component
+ * its own (a manifest, a component file, versions, a file that is a symbolic link or sits under one
+ * — `confinedDiskPackFiles`), or one across packs (a name or a component
  * the image's packs have, a component another extra pack publishes too, a pack it requires that
  * is not here, a cycle) — is left out with the reason (`readPackRegistry`'s `skipped`, logged and
  * shown to platform administrators by `extra_packs_status`), and so is every extra pack requiring
@@ -280,6 +281,31 @@ export const diskPackFiles: PackFiles = {
       .sort();
   },
 };
+
+/**
+ * `diskPackFiles` confined to `root` (S11 AA5d, the extra packs directory): a file read is refused
+ * when it is a symbolic link or sits under one beneath `root` — its real path must be its path under
+ * `root`'s real path. An extra pack comes from outside the image, and a link in it would read
+ * whatever the kernel can (`/run/secrets/…`) into a pack a workspace installs; a pack's files are
+ * its own. Directories need nothing more: a link is never listed as one (`Dirent.isDirectory`).
+ */
+export function confinedDiskPackFiles(root: string): PackFiles {
+  let realRoot: Promise<string> | undefined;
+  return {
+    readText: async (file) => {
+      realRoot ??= realpath(root);
+      const expected = path.join(await realRoot, path.relative(root, file));
+      const real = await realpath(file);
+      if (real !== expected) {
+        throw new Error(
+          `"${file}" is a symbolic link or under one; a pack's files are its own, not links`,
+        );
+      }
+      return readFile(real, 'utf8');
+    },
+    subdirectories: diskPackFiles.subdirectories,
+  };
+}
 
 /** Files in memory, keyed by their path under `root` (`<pack>/<version>/pack.yaml`, …, with `/`):
  *  a directory is any path prefix of a file. */
@@ -747,16 +773,14 @@ async function readExtraPacks(
   }
   const skipped = new Map<string, string>();
   const loaded = new Map<string, PackEntry>();
+  const files = confinedDiskPackFiles(dir);
   for (const name of names) {
     if (builtin.has(name)) {
       skipped.set(name, `a pack named "${name}" ships with the platform`);
       continue;
     }
     try {
-      loaded.set(
-        name,
-        await loadPackEntry(diskPackFiles, path.join(dir, name), name, 'extra', 'version'),
-      );
+      loaded.set(name, await loadPackEntry(files, path.join(dir, name), name, 'extra', 'version'));
     } catch (err) {
       skipped.set(name, local(err instanceof Error ? err.message : String(err)));
     }

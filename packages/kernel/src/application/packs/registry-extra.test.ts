@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { moduleRegistryOf } from '../platform/modules.js';
@@ -178,6 +178,49 @@ describe('extra packs: one breaking a rule is left out, with the reason', () => 
     expect(skipped[0]?.reason).toContain('leaky-pack/1/pack.yaml');
     expect(skipped[0]?.reason).toContain('[redacted]');
     expect(skipped[0]?.reason).not.toContain(token);
+  });
+
+  it('a file that is a symbolic link, or sits under one, is refused: a pack’s files are its own', async () => {
+    const secret = 'not-for-any-pack: the content of a file outside the packs directory';
+    const withSkill = (family: string, type: string): PackFixtureVersion => ({
+      ...FAMILY(family, `${family}.yaml`, type),
+      skills: [skillFile('linked-skill', 'A Skill.', 'Do it.')],
+    });
+    const dirs = await packs(BASE, {
+      'good-pack': [FAMILY('good-pack', 'good.yaml', 'Good')],
+      'file-link-pack': [withSkill('file-link-pack', 'FileLink')],
+      'dir-link-pack': [withSkill('dir-link-pack', 'DirLink')],
+    });
+    const outside = path.join(path.dirname(dirs.extraDir), 'outside');
+    await mkdir(outside, { recursive: true });
+    await writeFile(
+      path.join(outside, 'linked-skill.md'),
+      `---\nname: linked-skill\ndescription: ${secret}\n---\nbody\n`,
+    );
+    // A Skill file that is a link to a file outside the directory.
+    const fileLink = path.join(dirs.extraDir, 'file-link-pack', '1', 'skills', 'linked-skill.md');
+    await rm(fileLink);
+    await symlink(path.join(outside, 'linked-skill.md'), fileLink);
+    // A Skill directory that is a link to a directory outside it.
+    const dirLink = path.join(dirs.extraDir, 'dir-link-pack', '1', 'skills');
+    await rm(dirLink, { recursive: true });
+    await symlink(outside, dirLink);
+    const { registry, skipped } = await read(dirs);
+    expect([...registry.keys()]).toEqual(['base-pack', 'good-pack']);
+    expect(skipped.map((skip) => skip.name)).toEqual(['dir-link-pack', 'file-link-pack']);
+    for (const skip of skipped) {
+      expect(skip.reason).toMatch(/symbolic link or under one/);
+      expect(skip.reason).not.toContain(secret);
+    }
+  });
+
+  it('the extra packs directory itself may be reached through a link', async () => {
+    const dirs = await packs(BASE, { 'org-pack': [FAMILY('org-pack', 'org.yaml', 'Org')] });
+    const linked = path.join(path.dirname(dirs.extraDir), 'linked-packs');
+    await symlink(dirs.extraDir, linked);
+    const { registry, skipped } = await read({ ...dirs, extraDir: linked });
+    expect(skipped).toEqual([]);
+    expect(requirePack(registry, 'org-pack').source).toBe('extra');
   });
 
   it('a name a pack of the image has', async () => {

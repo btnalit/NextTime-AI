@@ -153,7 +153,8 @@ for (const [name, service] of Object.entries(doc.services ?? {})) {
   ) {
     problems.push('kernel must mount ${NEXTTIME_DATA}/config at /data/config read-only');
   }
-  const PACKS_SOURCE = /\/config(\/packs(\/.*)?)?\/?$/;
+  // `config/`, `config/packs/` or below — or the whole data directory (`$VAR`), which holds them.
+  const PACKS_SOURCE = /^\$VAR\/?$|\/config(\/packs(\/.*)?)?\/?$/;
   for (const [name, service] of Object.entries(doc.services ?? {})) {
     for (const mount of mountsOf(service)) {
       if (PACKS_SOURCE.test(mount.source) && !mount.readOnly) {

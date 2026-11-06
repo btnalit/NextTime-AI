@@ -55,6 +55,7 @@ export {
   type PackVersion,
   type SkippedExtraPack,
   derivePackComponentId,
+  confinedDiskPackFiles,
   diskPackFiles,
   latestPackVersion,
   loadPackEntry,
