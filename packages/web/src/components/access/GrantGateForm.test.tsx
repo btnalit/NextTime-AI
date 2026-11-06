@@ -106,6 +106,21 @@ function scriptedHttp(
   };
 }
 
+function grantRow(fields: {
+  readonly id: string;
+  readonly principalId: string;
+  readonly resourceId: string;
+  readonly status?: 'active' | 'revoked';
+}) {
+  return {
+    resourceType: 'gatekeeper',
+    grantedBy: 'p-owner',
+    createdAt: '2026-09-01T00:00:00.000Z',
+    status: 'active',
+    ...fields,
+  };
+}
+
 describe('GrantGateForm', () => {
   const twoMembers = () => ({
     items: [
@@ -156,7 +171,9 @@ describe('GrantGateForm', () => {
     await waitFor(() =>
       expect(screen.getByTestId('ggf-submit').hasAttribute('disabled')).toBe(false),
     );
-    expect(screen.getByTestId('ggf-member-chip').textContent).toContain('Carol');
+    // The box itself says who is chosen — no second chip repeating the name.
+    expect((member as HTMLInputElement).value).toBe('Carol');
+    expect(screen.queryByTestId('ggf-member-chip')).toBeNull();
 
     fireEvent.click(screen.getByTestId('ggf-submit'));
     await waitFor(() =>
@@ -169,12 +186,21 @@ describe('GrantGateForm', () => {
   });
 
   it('a member who already holds the locked gate is listed as 已授权 and cannot be picked again', async () => {
-    const http = scriptedHttp({ list_principals: twoMembers });
+    const http = scriptedHttp({
+      list_principals: twoMembers,
+      list_grants: () => ({
+        items: [
+          // Bob holds this gate; Carol holds another one, and an earlier grant of hers here was revoked.
+          grantRow({ id: 'g-1', principalId: 'p-1', resourceId: 'gk-1' }),
+          grantRow({ id: 'g-2', principalId: 'p-2', resourceId: 'gk-2' }),
+          grantRow({ id: 'g-3', principalId: 'p-2', resourceId: 'gk-1', status: 'revoked' }),
+        ],
+      }),
+    });
     render(
       <GrantGateForm
         http={http}
         lockedGatekeeper={{ id: 'gk-1', name: 'docker-gate' }}
-        grantedPrincipalIds={['p-1']}
         onGranted={vi.fn()}
       />,
     );
@@ -188,8 +214,31 @@ describe('GrantGateForm', () => {
       .find((option) => option.getAttribute('data-value') === 'p-1');
     expect(bob?.getAttribute('aria-disabled')).toBe('true');
     fireEvent.click(bob as HTMLElement);
-    expect(screen.queryByTestId('ggf-member-chip')).toBeNull();
+    expect((member as HTMLInputElement).value).toBe('');
     expect(screen.getByTestId('ggf-submit').hasAttribute('disabled')).toBe(true);
+  });
+
+  it('the member just granted in this drawer is 已授权 when the list opens again', async () => {
+    const http = scriptedHttp({
+      list_principals: twoMembers,
+      list_grants: () => ({ items: [] }),
+      grant_capability: () => grantRow({ id: 'g-9', principalId: 'p-2', resourceId: 'gk-1' }),
+    });
+    render(
+      <GrantGateForm
+        http={http}
+        lockedGatekeeper={{ id: 'gk-1', name: 'docker-gate' }}
+        onGranted={vi.fn()}
+      />,
+    );
+    await selectMember('p-2');
+    fireEvent.click(screen.getByTestId('ggf-submit'));
+    await screen.findByTestId('ggf-granted-summary');
+    const member = screen.getByTestId('ggf-member');
+    openCombobox(member);
+    await waitFor(() =>
+      expect(comboboxOptionTexts(member)).toEqual(['Bob成员', 'Carol成员 · 已授权']),
+    );
   });
 
   it('legacy 266: a locked gate that shares its name with another gate shows its short id', async () => {

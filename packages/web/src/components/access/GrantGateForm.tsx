@@ -32,10 +32,6 @@ export interface GrantGateFormProps {
   /** Opened from a system card: the gate is fixed and no picker renders for it — the audit's own
    *  "pre-selected when opened from a card" (J6/SY2). Omitted: a member + multi-gate picker. */
   readonly lockedGatekeeper?: { readonly id: string; readonly name: string };
-  /** With `lockedGatekeeper`: the members who already hold a grant on it. They stay in the member
-   *  picker, marked 「已授权」 and not pickable — granting them again would only add a second grant
-   *  for the same person. */
-  readonly grantedPrincipalIds?: readonly string[];
   readonly onGranted: (grants: readonly GrantRow[]) => void;
   readonly onCancel?: () => void;
   readonly submitLabel?: string;
@@ -88,7 +84,6 @@ export function GrantGateForm(props: GrantGateFormProps) {
 function GrantGateFormBody({
   http,
   lockedGatekeeper,
-  grantedPrincipalIds,
   onGranted,
   onCancel,
   submitLabel,
@@ -126,7 +121,29 @@ function GrantGateFormBody({
   );
   const [principalId, setPrincipalId] = useState('');
   const selectedPrincipal = memberOptions.find((row) => row.id === principalId);
-  const alreadyGranted = new Set(lockedGatekeeper ? (grantedPrincipalIds ?? []) : []);
+  // Who already holds the locked gate: they stay in the picker, marked 「已授权」 and not pickable —
+  // granting them again would only add a second grant for the same person (`grant_capability`
+  // does not merge them, legacy 647). Read here, not passed in, so every entry point (a system
+  // card, the launcher's step 3) gets it; the members granted in this drawer count at once.
+  const grants = useCapabilityList<GrantRow>(
+    http,
+    'list_grants',
+    {},
+    { autoLoadAll: true, enabled: lockedGatekeeper !== undefined && can('list_grants') === true },
+  );
+  const [grantedHere, setGrantedHere] = useState<ReadonlySet<string>>(new Set());
+  const alreadyGranted = new Set(grantedHere);
+  if (lockedGatekeeper && grants.state.status === 'ready') {
+    for (const row of grants.state.data.items) {
+      if (
+        row.status === 'active' &&
+        row.resourceType === 'gatekeeper' &&
+        row.resourceId === lockedGatekeeper.id
+      ) {
+        alreadyGranted.add(row.principalId);
+      }
+    }
+  }
   const memberComboOptions: ComboboxOption[] = memberOptions.map((row) => ({
     value: row.id,
     label: withSameNameId(row.displayName, row.id, memberSame),
@@ -244,6 +261,10 @@ function GrantGateFormBody({
       ]);
       announceReadinessChange(http);
       onGranted(results);
+      if (lockedGatekeeper) {
+        setGrantedHere((current) => new Set([...current, principalId]));
+        void grants.reload();
+      }
       // Reset for another grant in the same drawer session — keep the drawer open so multi-gate
       // and repeat grants (a common "add another member" flow) do not each re-open it.
       setPrincipalId('');
@@ -311,18 +332,6 @@ function GrantGateFormBody({
           onRetry={() => void principals.reload()}
           testId="ggf-members-error"
         />
-      ) : null}
-      {selectedPrincipal ? (
-        // Wrapped so the chip keeps its own width instead of stretching across the column stack.
-        <div>
-          <RefChip
-            kind="principal"
-            id={selectedPrincipal.id}
-            name={selectedPrincipal.displayName}
-            size="s"
-            testId="ggf-member-chip"
-          />
-        </div>
       ) : null}
       {selectedPrincipal && gateGrantMakesApprover(selectedPrincipal.role) ? (
         <Notice tone="warn" testId="ggf-approver-notice">

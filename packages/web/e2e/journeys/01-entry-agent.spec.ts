@@ -220,7 +220,7 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
     // 输入名字缩小列表，回车选中——之前输入名字什么也选不中。
     await member.fill(ownName.slice(0, Math.max(1, ownName.length - 1)));
     await member.press('Enter');
-    await expect(grantForm.getByTestId('ggf-member-chip')).toContainText(ownName);
+    await expect(member).toHaveValue(ownName);
 
     await grantForm.getByTestId('ggf-submit').click();
     await expect(grantForm.getByTestId('ggf-granted-summary')).toBeVisible({ timeout: 15_000 });

@@ -596,8 +596,6 @@ export function SystemAccessCard({
         open={grantOpen}
         onOpenChange={setGrantOpen}
         lockedGatekeeper={{ id: gate.gateId, name: gate.name }}
-        // Only the full roster says who holds a grant; the self-only view knows nothing of others.
-        grantedPrincipalIds={directory ? rows.map((row) => row.principalId) : undefined}
         onGranted={onGranted}
       />
 
