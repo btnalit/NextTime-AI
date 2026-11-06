@@ -1039,6 +1039,13 @@
 }
 
 /* ---- OnboardingWizard (S3.12 接入向导) ------------------------------------------------ */
+/* S11 AA5d-3: the extra packs card's lists line up with its description (no list indent). */
+.extra-packs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
 .wizard-steps {
   display: flex;
   gap: var(--space-2);

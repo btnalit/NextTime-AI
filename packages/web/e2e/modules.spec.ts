@@ -87,6 +87,16 @@ test.describe('P-B2b acceptance: platform modules page, install ops-assets into 
     await expect(versions).toBeVisible();
     await expect(versions).toContainText('v1');
     await expect(versions).toContainText('v2');
+
+    // S11 AA5d-3: below the modules, the packs this deployment adds. The CI stack adds none,
+    // whether or not its config/packs/ is there; none is left out either.
+    const extra = page.getByTestId('extra-packs');
+    await expect(extra).toBeVisible();
+    await expect(
+      extra.getByTestId('extra-packs-none').or(extra.getByTestId('extra-packs-not-configured')),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(extra.getByTestId('extra-packs-skipped')).toHaveCount(0);
+    await expect(extra.getByTestId('extra-packs-unreadable')).toHaveCount(0);
   });
 
   test('create a second workspace, switch into it, and install ops-assets (lands on v2, its latest)', async ({

@@ -34,7 +34,19 @@ function scriptedHttp(
     calls,
     call: vi.fn(async (name: string, params?: unknown) => {
       calls.push({ name, params });
-      const handler = handlers[name];
+      // S11 AA5d-3: the extra packs section below the table reads on its own; these tests are
+      // about the table, so a deployment without the directory unless a test says otherwise.
+      const handler =
+        handlers[name] ??
+        (name === 'extra_packs_status'
+          ? () => ({
+              configured: false,
+              packs: [],
+              skipped: [],
+              unreadable: null,
+              checkedAt: '2026-11-06T00:00:00.000Z',
+            })
+          : undefined);
       if (!handler) throw new Error(`unscripted capability ${name}`);
       return handler(params);
     }) as CapabilityCaller['call'],

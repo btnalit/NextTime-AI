@@ -243,8 +243,8 @@ export function PacksTab({ http, itemId, onSelectItem, platformAdmin = false }: 
       <div className="stack-s" data-testid="catalog-packs">
         <p className="text-3 text-small">
           {t(
-            '能力包是随平台部署附带、按版本发布的一组能力：本体（对象、关系和动作类型）、Skill（Worker 读的做事方法）和 Worker（可以被委派任务的执行者）。安装或升级之前先看它会改动什么；每次安装留下一条安装记录，可以在「安装历史」里撤销。',
-            'A pack is a versioned set of capabilities shipped with the platform: ontology (object, link and action types), Skills (ways of working a Worker reads) and Workers (agents tasks are delegated to). Review what it changes before installing or upgrading; each install leaves an install record you can roll back under Install history.',
+            '能力包是按版本发布的一组能力：本体（对象、关系和动作类型）、Skill（Worker 读的做事方法）和 Worker（可以被委派任务的执行者）。大多随平台附带；标着「本部署附加」的，是平台管理员放进这个部署的。安装或升级之前先看它会改动什么；每次安装留下一条安装记录，可以在「安装历史」里撤销。',
+            'A pack is a versioned set of capabilities: ontology (object, link and action types), Skills (ways of working a Worker reads) and Workers (agents tasks are delegated to). Most ship with the platform; one marked Added by this deployment was put here by its platform administrators. Review what it changes before installing or upgrading; each install leaves an install record you can roll back under Install history.',
           )}
         </p>
         {rows.length === 0 ? (
@@ -262,7 +262,12 @@ export function PacksTab({ http, itemId, onSelectItem, platformAdmin = false }: 
                 onSelect={() => onSelectItem(pack.name)}
               >
                 <span className="row-wrap" style={{ justifyContent: 'space-between' }}>
-                  <span className="mono truncate">{pack.name}</span>
+                  <span className="row" style={{ minWidth: 0 }}>
+                    <span className="mono truncate">{pack.name}</span>
+                    {pack.source === 'extra' ? (
+                      <ExtraPackTag testId={`catalog-pack-row-${pack.name}-extra`} />
+                    ) : null}
+                  </span>
                   <StatusChip machine="packInstall" status={pack.status} size="s" />
                 </span>
                 <span className="truncate text-3">{versionLine(pack, t)}</span>
@@ -355,6 +360,23 @@ function PackDetail({
         items={[
           { key: 'installed', label: t('已装版本', 'Installed'), value: installedText(pack, t) },
           { key: 'latest', label: t('最新版本', 'Latest'), value: `v${pack.latestVersion}` },
+          {
+            key: 'source',
+            label: t('来源', 'Source'),
+            value:
+              pack.source === 'extra' ? (
+                <span data-testid="catalog-pack-source">
+                  {t(
+                    '本部署附加：平台管理员放在这个部署里的能力包（比如由管理员提案导出的），不随平台升级更新。',
+                    'Added by this deployment: a pack its platform administrators put here (such as one exported from an admin proposal); platform upgrades do not update it.',
+                  )}
+                </span>
+              ) : (
+                <span data-testid="catalog-pack-source">
+                  {t('随平台附带', 'Shipped with the platform')}
+                </span>
+              ),
+          },
         ]}
       />
       {pack.status === 'customized' ? (
@@ -1503,5 +1525,15 @@ function ContentItemChanges({
         </div>
       </details>
     </>
+  );
+}
+
+/** S11 AA5d-3: a pack this deployment adds (`source: 'extra'`), beside its name. */
+function ExtraPackTag({ testId }: { readonly testId: string }) {
+  const t = useT();
+  return (
+    <span className="tag" data-testid={testId}>
+      {t('本部署附加', 'Added by this deployment')}
+    </span>
   );
 }
