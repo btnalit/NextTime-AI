@@ -111,7 +111,7 @@ API 不可用，正在跑的入口 agent 会断线重连，每个 Task 容器短
   `FAIL admin-agent-switch`，不是跳过。所以每次预演都用真 pi 跑一遍管理员智能体（AA5 的前置）。
 - **开关关着的主机**（升级上来、`secrets/kernel.env` 里没写这一项的主机，或维护者设成 `0` 的；新装主机默认是开的，
   见 `host-checkout.md` §E3.3）：什么也不建，日志里只有一行
-  `NOTE admin-agent the admin agent scenario (real pi in its admin container proposing once) not run: the kernel reads ADMIN_AGENT_ENABLED='unset' …`
+  `NOTE admin-agent the admin agent scenarios (real pi in its admin container) not run: the kernel reads ADMIN_AGENT_ENABLED='unset' …`
   （`apply-release.sh` 的 S2 摘要也打印这一行），最后照样是 `S2 OK`。开关由维护者在主机上决定，验收不替他打开。
 
 **管理员智能体的工单旅程（S11 AA5c，`scripts/lib/accept-s2-admin-agent-tickets.sh`，AA5 方案 §5.8）紧接着上面那个场景跑，

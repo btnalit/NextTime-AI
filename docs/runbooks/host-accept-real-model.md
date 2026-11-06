@@ -97,6 +97,7 @@ dependency` 判定脚本本身失败的条件（§5）；`1 ≤ k < 8` 不会让
 | `goal`（accept_s2.sh，`real_goal_run`，S11 / #829） | 新开 Chat 请入口 agent **只提议不确认**一个目标：ops-runner 读一次测试库存并报告，验收由平台读测试 API 看 symbol 是不是 `NXT` → 入口 agent 自己找 Worker、写计划、调 `propose_goal`。RUN 行带本 Turn 起源的 GoalRun 数（`goals=`）、`propose_goal` 调用数、其中失败的次数（zod 4 的错误文案回给了模型）、第一次失败的错误码，以及 `retried=1`（失败后又提成了） | Turn `completed` 且 `originated_in_turn_id` 是本 Turn 的 GoalRun 里至少一条处于 `proposed`。每次跑完把本 Turn 起源的每一条都马上 `reject_goal`（模型可能一个 Turn 里提议两次），免得 `--runs` 次提议碰到每人提议上限 |
 | `eval_trial`（accept_s2.sh，`real_eval_trial_run`，S10 E3-2a / #822） | 用例集钉住本脚本发布的 ops-runner 版本（`$REAL_MODEL`），夹具门是 http 门（`stock.get`），对回归用例 `start_eval_case_trial` → 评测 Task、夹具应答、出网全拒 → 打分 | 试跑 `scored` 且 `passed`（调过 `stock.get`，报告的 summary 含夹具的 symbol）。试跑被拒，或以非 Worker 自身原因 `errored`（起不来、丢失、被终止、崩溃、被封条挡下）**出现一次脚本就失败**（`real-eval-trial`：平台缺陷，不是模型没做好）；等满 10 分钟还没结束只算这一次失败：脚本用所有者的 `cancel_task` 取消它的评测 Task，最多再等 2 分钟让它结束（RUN 行带 `cancelled=<cancel_task 的 HTTP 状态>/<之后的 run 状态>`），免得慢的那次一直占着 Worker 运行名额（遗留 588）；试跑恰好在取消前结束的，这一次仍记失败（`cancelled=…/finished`，少算一次成功，不算缺陷）。启动返回 429 `concurrency_exceeded`、而工作区里还有没结束的评测 Task，是撞了这个名额，同样只算这一次失败（RUN 行带 `start_eval_case_trial=HTTP<状态>/<错误码>` 和 `evaluation_tasks_running=`）；别的 429（`evaluation_budget_exhausted`、`daily_cost_exceeded`）照旧算缺陷 |
 | `eval_draft`（accept_s2.sh，`real_eval_draft_step`，S10 E3-2b / #833，跑一次） | 一个 Skill：已发布的 v1 让 Worker 在 summary 末尾写一个样式标记，草稿 v2 写另一个；两个版本都经 `issue_handle` → `/mcp` 的 `propose_skill` 提议、alice 发布 v1。对用例集（回归 1 条、full dev 1 条、full holdout 1 条）`start_draft_evaluation`：回归 2 次 × 两臂，再确认 3 次 × 两臂 × 2 条，最多 16 次试跑 | 评测 `finished`，判定来自某一段的规则（不是 `unmeasured`、`contaminated`，也不是因 `errored_trials` 或 `budget` 的 `inconclusive`），且 baseline 臂的每个 WorkerRun 都挂了 v1、candidate 臂的没有一个挂 v1（`worker_run_skills`；草稿是内联挂载，不成行）。**报告里出现另一臂的标记，脚本直接失败**（`real-eval-arms`：这一臂加载错了 Skill 版本）；各臂报告带本臂标记的次数只报告不判定（模型可能不读 Skill） |
+| `admin_tickets`（accept_s2.sh，`real_admin_tickets_step`，S11 AA5 计划 §5.8，**只跑一次**，内核开着 `ADMIN_AGENT_ENABLED` 才跑） | 平台管理员的管理员智能体（真实 pi、admin 容器、`--real` 的模型）在试验工作区里，用大白话被要求：接一个测试工单系统 → 看看里面的工单、起草能开工单的 Worker 和 Skill → 试开一张工单 → 把它提议到目标工作区，平台部分建一个 gate-host 实例。脚本扮演人：完成接入请求并录测试凭证、发布智能体的全部草稿、批准 Worker 的那一个动作（试跑的 Turn 进行期间由后台作业批）、逐项确认审阅里标成 authority_widening 的条目、两段各自应用、录正式凭证、两处启用门。某一步智能体没做（没发请求、没起草、没开 Task、没提案），人再说一句「请直接按刚才说的做」，每步最多一次；发布草稿被拒时人把错误码告诉它、让它改一次 | 走到 `bound`：目标工作区的那一段应用了、应用后自动核验 `passed`、目标里那个 Worker 绑到了工单系统在那里的门。**没走到不让脚本失败**（这一项不进 `real-summary` 的"全军覆没"规则），RUN 行写走到哪（`reached=`）、卡在哪（`stuck=<步骤>:<原因>`）。**让脚本失败的只有模型造不成的事**：批准之前工单就多了（`real-admin-tickets-approval`）、正式凭证开了工单、两份凭证出现在内核任一表里、审计记错了手（智能体的能力调用不带它的会话、人的步骤带了会话、目标里应用的条目不是智能体的草稿由所有者应用，都是 `real-admin-tickets-audit`），以及人自己那几步（建连接、发布门的操作、审阅没有阻断的那一段的应用……）没成功；试验工作区被预算拒过一次也让这一轮作废（`real-admin-tickets-budget`） |
 | `deny`（accept_s2.sh `--extended`，`real_deny_run`，在"总是允许"之前跑） | Worker 申请一条 ssh 命令 → 脚本以 alice 身份 `reject`（带 reason）→ Worker 收到拒绝后自行收尾 | ActionRequest 终态 `rejected`、本次没有任何 `executing`/`executed`、Task 到达终态（completed 或 failed 都算——拒绝后 Worker 怎么报告由它决定）。只数本 Task 自己的 WorkerRun 发出的请求。**被拒的请求仍被执行或离开 `rejected`，出现一次脚本就失败**（`real-deny-boundary`：审批边界被突破是平台缺陷，不是模型没做好） |
 | `memory`（accept_s2.sh `--extended`，`real_memory_run`） | 第一轮告诉入口 agent 一个随机暗号 → 停掉 alice 的入口容器 → 同一 Chat 第二轮问暗号；随后 bob 新开 Chat 问同一个暗号 | worker-supervisor 对停止返回 200、停止后容器确实不在运行、第二轮跑在新启动的容器里（`StartedAt` 变了），两轮都 `completed`，第二轮（只看最后一条助手消息）含暗号，bob 的回复不含暗号。bob 命中记 `leaked_to_bob=1`，本次判 fail 待查，但不单独让脚本失败——agent 自己写进工作区记忆的内容按设计对成员共享 |
 | `stop`（accept_s2.sh `--extended`，`real_stop_run`） | 长文请求发出 5 秒后 `stop_agent` → 该 Turn 结束 → 同一 Chat 再发一句 | `stop_agent` 返回 `stopped=true`、被停的 Turn（`activities` 行）终态 `interrupted`、下一轮 `completed` 且回复含本次随机标记 |
@@ -122,6 +123,18 @@ RUN scenario=<key> run=<i> outcome=ok|fail <detail>
 按回复判定的场景（`docker_observe`、`dependency_chat`）还带 `says_unavailable=0|1`：回复里是否
 出现「无法 / 不能 / not available」这类说法，用来区分「模型说看不到」和「模型答了别的」。RUN 行
 只放这类有界标记，不放回复正文（仓库和 run artifact 都是公开的）。
+
+`admin_tickets` 的 RUN 行（`run=1`）字段：`reached=`（按顺序 connect, draft, publish, try,
+approve, ticket, propose, platform, enable, applied, bound）、`stuck=`（`-` 表示走完；最后一个
+Turn 没正常结束时带 `(last_turn=failed|timeout)`）、`turns=` / `nudges=`、`turn_tools=`（几个 Turn
+合计）、`refused=<次数>[<能力>:<拒绝码>,…]`（智能体被内核拒掉的调用——是护栏在起作用，不是缺陷）、
+`tokens=` / `cost_usd=`（试验工作区自这一项开始以来的 `llm_usage`，含它试跑的 Worker）、
+`human_steps=`（人做了几步，明细是上面的 `HUMAN admin-agent-tickets …` 行），以及走到的那几步
+各自的观察：`request=<kind>/<target>`、`observed=yes|no`（起草前有没有调观察工具读工单）、
+`skills=` / `workers=`、`worker_gate=yes|no`（发布的 Worker 有没有带工单门）、`tasks=`、
+`action=<操作>:<状态>`、`task=`、`title=yes|no`（新工单是不是要的标题）、`proposal=<各段条目>`、
+`gate=<门 id>:<状态>`、`platform_part=none`、`verified=`、`target_worker_gates=`。这些是 D-W5
+（AA5 计划 §4）要的证据：智能体在哪一步需要人帮、帮了几次。
 
 每个场景跑完全部 `--runs` 次后打印一行汇总：
 
