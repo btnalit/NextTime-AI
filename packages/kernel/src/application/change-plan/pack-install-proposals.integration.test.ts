@@ -311,12 +311,20 @@ describe.runIf(DATABASE_URL !== undefined)(
         adminProposal: { proposalId: proposal.id, proposalSegmentId: segA },
       });
       // The pack's content, reviewed and published by the owner — never drafted by an agent (I-A7).
+      // The target is new, so everything with an origin in it is what this install published: some
+      // of it, and none of it the agent's (#493 on #1002, C5).
       const origins = await withAdminClient(pool, (client) =>
-        client.query<{ origin: string | null }>(
-          'select distinct origin from skills where workspace_id = $1',
+        client.query<{ origin: string | null; rows: number }>(
+          `select origin, count(*)::int as rows from (
+             select origin from ontology_versions where workspace_id = $1
+             union all select origin from skills where workspace_id = $1
+             union all select origin from worker_definitions where workspace_id = $1
+             union all select origin from procedures where workspace_id = $1
+           ) published group by origin`,
           [a.workspaceId],
         ),
       );
+      expect(origins.rows.reduce((total, row) => total + row.rows, 0)).toBeGreaterThan(0);
       expect(origins.rows.map((row) => row.origin)).not.toContain('agent');
 
       // The other owner rejects theirs.
@@ -461,7 +469,18 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       const row = head.rows[0];
       if (!row) throw new Error('no proposal');
-      const insert = (version: string, name = PACK, partial = false, digest = latestDigest) =>
+      const other = await proposeInstall(agent, [a]);
+      const insert = (
+        version: string,
+        name = PACK,
+        partial = false,
+        digest = latestDigest,
+        provenance: {
+          proposalId?: string;
+          segmentId?: string | null;
+          proposedByUser?: string;
+        } = {},
+      ) =>
         withWorkspace(
           pool,
           { workspaceId: a.workspaceId, principalId: a.ownerPrincipalId },
@@ -478,9 +497,9 @@ describe.runIf(DATABASE_URL !== undefined)(
                 name,
                 version,
                 a.ownerPrincipalId,
-                proposal.id,
-                segmentId,
-                row.proposed_by_user,
+                provenance.proposalId ?? proposal.id,
+                provenance.segmentId === undefined ? segmentId : provenance.segmentId,
+                provenance.proposedByUser ?? row.proposed_by_user,
                 partial ? null : row.proposer_display_name,
                 digest,
               ],
@@ -496,10 +515,23 @@ describe.runIf(DATABASE_URL !== undefined)(
       await expect(insert(String(latest), PACK, false, `sha256:${'0'.repeat(64)}`)).rejects.toThrow(
         /a pack install answers a proposal segment asking for this pack .* with this content/,
       );
-      // A part of the proposal's provenance names no proposal it could be checked against.
+      // A part of the provenance: no segment while the other three are there names no proposal
+      // segment it could be checked against (0040's `change_segments_proposer`, the guard passing a
+      // record with no segment) …
+      await expect(
+        insert(String(latest), PACK, false, latestDigest, { segmentId: null }),
+      ).rejects.toThrow(/change_segments_proposer/);
+      // … and a segment with its proposer's name left out is not its proposer (the guard first).
       await expect(insert(String(latest), PACK, true)).rejects.toThrow(
-        /change_segments_proposer|a pack install's proposal and proposer/,
+        /a pack install's proposal and proposer are its proposal segment's/,
       );
+      // Another proposal's id, or another proposer, beside this segment (#493 on #1002, G3 / G4).
+      await expect(
+        insert(String(latest), PACK, false, latestDigest, { proposalId: other.id }),
+      ).rejects.toThrow(/a pack install's proposal and proposer are its proposal segment's/);
+      await expect(
+        insert(String(latest), PACK, false, latestDigest, { proposedByUser: randomUUID() }),
+      ).rejects.toThrow(/a pack install's proposal and proposer are its proposal segment's/);
 
       // A pack_install beside another item, written past the kernel: what a segment proposes never
       // changes (0032's guard), and the kinds it may hold are 0040's `item_kinds` check, probed on
