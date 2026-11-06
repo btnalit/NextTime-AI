@@ -60,7 +60,7 @@ v0.63.0 上主机后，维护者当天撞到三个 bug，而 CI（`guards / qual
 | G4 | capability 投影对账（控制台 / API / agent） | 2026-09-26 有一次性人工对账文档 `kernel-console-coverage-2026-09-26.md`，之后没人维护 | 新 capability 不需要声明投影到哪；admin agent 看不到能力包就是这样漏的 | **P1** | capability matrix + 守卫（§5.1）；#488（守卫）+ #493（如需内核改动） |
 | G5 | 写操作的 e2e 覆盖 | 134 个有控制台入口的非 observe capability，e2e 覆盖面未知 | 没有"每个控制台写入口至少被 e2e 通过 UI 调到一次"的度量 | **P1** | e2e 运行时 capability 采集（§5.3）+ matrix 豁免棘轮 |
 | G6 | 写操作幂等 / 重复提交 | 46 个内核测试文件提到 idempotent；没有系统性规则 | `grant_capability` 不去重（647）；没有"每个 write capability 重复调用一次行为确定"的遍历测试 | **P2** | 内核遍历测试：matrix 给每个 write 声明 `repeat: idempotent / conflict / creates`，测试按声明断言；#493 |
-| G7 | 升级路径的起点 | staging 默认 `from` = 目标之下最新 tag；主机 v0.50.0 → v0.63.0 一次跨 13 个版本，这次维护者手动填了 `from`（staging run 452「v0.50.0 -> v0.63.0」，绿） | 做对了靠的是人记得，没有机制强制 `from` = 主机当前版本；默认值恰好是错的那个 | **P2** | `release.md` §1 第 5 步改为必须填 `from` = 主机当前版本，预演摘要打印 `from`，主机窗口检查表核对；#484 |
+| G7 | 主机升级预演的起点 | staging 默认 `from` = 目标之下最新 tag；主机升级攒到大版本统一做一次（维护者 2026-11-06 决定），v0.50.0 → v0.63.0 那次维护者手动填了 `from`（staging run 452，绿） | 日常预演的 `from` 不需要等于主机版本（维护者决定，不做 CI 强制）；只有**主机升级前的那次预演**必须 `from` = 主机当前版本，目前靠人记得，`release.md` 没写成规则 | **P3** | `release.md` §1 第 5 步：主机升级窗口前的预演必须填 `from` = 主机当前版本，主机窗口检查表核对 run 名；#484 |
 | G8 | 回滚演练 | `reversibility-probe` 证明旧代码能跑新 schema（空库）；`drill-upgrade.sh` 只在主机手动 | 云上没有"带数据升级 → 代码回滚到 n-1 → 验收"的预演 | **P2** | staging 加 `rollback` 阶段（升级后切回 `from` 镜像跑 S1）；#488 |
 | G9 | 能力包全生命周期 | `install_pack` 有 e2e；`preview_pack_install` / `list_packs` / `extra_packs_status` / `export_admin_proposal_pack` 只有内核测试 + accept_s2 | 安装 → 升级（同包新版本）→ 回滚安装记录 → 导出 → 放进 `config/packs/` 导入 → 第二个工作区安装：没有一条控制台旅程；维护者"手动导出导入"仍待人工确认 | **P2** | 新旅程 `10-pack-lifecycle.spec.ts`；UX 验收 |
 | G10 | 权限矩阵（含拒绝路径） | `roles.test.ts` 单元级遍历；`08-least-privilege` 只验"看得到的页不 403" | 没有按角色×写 capability 走真实 HTTP 的拒绝断言；没有"控制台对无权角色隐藏 / 禁用并说明"的遍历 | **P2** | 内核集成测试遍历 registry 经 dispatch 断言 403 + 审计记 refused；#493 |
@@ -154,7 +154,7 @@ M4 的"observed"不靠名字匹配，靠 §5.3 的运行时采集，在 `web-e2e
 | C | `resilience` 项目（重启 / 断网 / 切面 / 会话过期） | G2、G16 | #488 + UX 验收；如需改重连逻辑走控制台 PR | B 的 fixture |
 | D | 内核遍历测试：角色×写 capability 经 dispatch 的拒绝路径 + 审计 actor / outcome + 重复调用按 `repeat` 声明断言 + 跨工作区读隔离 | G6、G10、G11、G12 | #493 | A（读 matrix 的 `repeat`） |
 | E | 旅程 `10-pack-lifecycle`；旧旅程按定位器守卫改写（先 646 所在的 01、06、08） | G9、G1 存量 | UX 验收 | B |
-| F | staging 加 rollback 与 restore 阶段；`release.md` 强制 `from` = 主机当前版本 | G7、G8、G14 | #488、#484 | 无 |
+| F | staging 加 rollback 与 restore 阶段；`release.md` 写明主机升级前那次预演的 `from` = 主机当前版本（日常预演不限） | G7、G8、G14 | #488、#484 | 无 |
 | G | 产品决定后：前端版本探测 + e2e | G3 | 控制台、#493 | 维护者 / 协调定 |
 | — | G13、G15、G17、G18 | — | 随相关波次 | — |
 
