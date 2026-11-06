@@ -2671,8 +2671,17 @@ const workerCapabilities = [
       })
       .strict(),
     resultSchema: wire.WorkerDefinitionWireSchema,
+    // Staging real-model run 2026-11-06: `definition` is an opaque record here, and an admin agent
+    // drafted a Worker that named its ticket gate but no `request_action` — the least-privilege
+    // default (`capabilities` omitted = the worker ceiling minus execute-class names) — so the
+    // Worker could not ask for the one action it was for. The fields and that rule are spelled
+    // out here, since this description is all the agent sees; the default itself stays (execute
+    // authority is declared, never implied by `gates`, and an approver sees it in the draft).
+    // A declared list replaces the default rather than adding to it (only the Worker protocol
+    // names, WORKER_INFRASTRUCTURE_CAPABILITY_NAMES in kernel handles.ts, are always added), so the
+    // text says to list the reads too: `["request_action"]` alone would drop search and get_object.
     description:
-      'Propose a private draft WorkerDefinition version: definitionId omitted starts a new family; given, it must name a family you can see (not found otherwise) and the version keeps its kind.',
+      'Propose a private draft WorkerDefinition version: definitionId omitted starts a new family; given, it must name a family you can see (not found otherwise) and the version keeps its kind. A kind "worker" definition holds systemPrompt (required), name, description, model, skills (the Skills it loads, by name or id), gates (the Gatekeeper ids it acts on) and capabilities. Without capabilities the Worker gets the default set: graph reads such as search and get_object, and proposing, but no actions. A capabilities list replaces that default (get_task, list_allowed_operations, observe_operation and report_task_result are always added): for the Worker to request actions on its gates (execute-class Operations, each an ActionRequest that waits for approval), list "request_action" together with the reads it needs, for example ["search", "get_object", "request_action"].',
   },
   {
     // Legacy 145: the platform's entry template against the entry definition the workspace runs
