@@ -2436,6 +2436,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：能力目录 →「管理员提案」的预览里，应用时要绑门的 Worker 多一组复选框，默认全部绑上，可以取消勾选；没授权给自己的门有标注。改了勾选会按新的选择重新预览，之前的权限边界确认要重新勾。一个都不勾时写明后果。留下的门已经不能绑时（被平台切断或断开），选择改回默认并提示重新选。应用之后，详情里说应用后的核验结果（通过、没通过、没能核验）。
 - **回滚**：只回滚代码。
 
+### 3.127 镜像外的附加能力包目录 `config/packs/`（#971，S11 AA5d-1，0.62.0 之后的下一版）
+
+没有迁移。compose 有变化：kernel 多一个环境变量 `EXTRA_PACKS_DIR=/data/config/packs`（写在 compose 里，主机 `.env` 不用改），走已有的只读 `config/` 挂载。`host-env-init.sh`（新装）和 `apply-release.sh`（升级）都会建 `config/packs/`，空目录什么都不改。线上契约新增：`PackWire.source`（`builtin` / `extra`），平台面只读能力 `extra_packs_status`。
+
+- **发版说明可写**：除了镜像自带的包，内核还读主机 `config/packs/` 里的附加能力包，放进去就生效、不用重启；在能力目录里标「附加」，安装、审阅、撤销、核验和自带包一样，附加包永远不当模块。附加包有问题只丢掉它自己（违反规则、是符号链接或在符号链接下面、和自带包或其他附加包撞名撞组成部分、依赖缺失或成环），其余照常；被丢掉的包和原因在平台面 `extra_packs_status` 里看（路径相对 `config/packs/`，疑似凭证打码），内核日志每条记一行 `extra_pack_skipped`。放包的步骤见 `operations.md` §14.10（先解到 `.incoming`、`--no-same-owner --no-same-permissions`、有符号链接就停下、`chmod` 后原子 `mv`）。
+- **主机**：升级后 `config/packs/` 由 `apply-release.sh` 自动建好，不放包就没有任何变化。
+- **回滚**：只回滚代码。`config/packs/` 留着无害，旧内核不读它；已经从附加包装进工作区的内容是普通的安装记录，撤销照旧（旧内核找不到这个包，安装记录可能显示成已定制，这一点是 #488 的推断，未验证）。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
