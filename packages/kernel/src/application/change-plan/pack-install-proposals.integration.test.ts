@@ -326,6 +326,23 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       expect(origins.rows.reduce((total, row) => total + row.rows, 0)).toBeGreaterThan(0);
       expect(origins.rows.map((row) => row.origin)).not.toContain('agent');
+      // Each item's audit row names the proposal that asked for it and says the person drafted it
+      // (#493 on #1002, C5: `change_item.apply`'s payload).
+      const itemAudits = await withAdminClient(pool, (client) =>
+        client.query<{ payload: Record<string, unknown> }>(
+          `select payload from audit_records
+            where workspace_id = $1 and action = 'change_item.apply'
+              and payload ->> 'segmentId' = $2`,
+          [a.workspaceId, changeSegmentId],
+        ),
+      );
+      expect(itemAudits.rows.length).toBeGreaterThan(0);
+      for (const { payload } of itemAudits.rows) {
+        expect(payload).toMatchObject({
+          origin: 'human',
+          adminProposal: { proposalId: proposal.id, proposalSegmentId: segA },
+        });
+      }
 
       // The other owner rejects theirs.
       await call(ownerCaller(b), 'reject_admin_proposal_segment', {
