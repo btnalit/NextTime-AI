@@ -553,6 +553,25 @@ rat_invariants() {
   pass "real-admin-tickets-invariants" "no ticket before approval or through the production gate (${rat_grown:-0} trial ticket(s), ${rat_approved:-0} approved request(s)); neither credential in $TOKEN_ROWS_TABLES kernel tables; the agent's calls under its session, the person's under none$([ -n "$TICKETS_CHANGE_SEGMENT_ID" ] && echo ", the applied items the agent's, applied by the owner")"
 }
 
+# rat_usage: `<tokens>,<cost_usd>` of the trial workspace's llm_usage since the journey started,
+# read once it has settled: llm-proxy reports usage to the kernel in batches (about every 2 s,
+# longer while it backs off), so a read right after the last Turn can miss that Turn's calls (the
+# first --real round's RUN line counted only its first Turn's two calls). Read every 3 s until two
+# reads agree, at most 10 times.
+rat_usage() {
+  ru_prev=""
+  ru_i=0
+  while :; do
+    ru_now=$(psql_ws "select count(*) || ',' || coalesce(sum(input_tokens + output_tokens + coalesce(cache_read_tokens, 0) + coalesce(cache_write_tokens, 0)), 0) || ',' || coalesce(round(sum(cost_usd), 4), 0) from llm_usage where workspace_id = '$ADMIN_TRIAL_ID' and started_at >= '$RAT_START'")
+    [ "$ru_now" != "$ru_prev" ] || break
+    ru_i=$((ru_i + 1))
+    [ "$ru_i" -lt 10 ] || break
+    ru_prev=$ru_now
+    sleep 3
+  done
+  printf '%s' "${ru_now#*,}"
+}
+
 real_admin_tickets_step() {
   echo "=== admin agent ticket journey (real model, run=1) ==="
   if ! admin_agent_setup; then
@@ -567,7 +586,7 @@ real_admin_tickets_step() {
     wait "$RAT_APPROVER_PID" 2>/dev/null
     RAT_APPROVER_PID=""
   fi
-  usage=$(psql_ws "select coalesce(sum(input_tokens + output_tokens + coalesce(cache_read_tokens, 0) + coalesce(cache_write_tokens, 0)), 0) || ',' || coalesce(round(sum(cost_usd), 4), 0) from llm_usage where workspace_id = '$ADMIN_TRIAL_ID' and started_at >= '$RAT_START'")
+  usage=$(rat_usage)
   tools=$(printf '%s' "$RAT_TOOLS" | tr ',' '\n' | sed '/^$/d' | sort | uniq -c | sed 's/^ *\([0-9]*\) \(.*\)$/\2×\1/' | tr '\n' ',' | sed 's/,$//')
   human=$(printf '%s' "$TICKETS_HUMAN_ACTIONS" | sed '/^$/d' | wc -l | tr -d ' ')
   real_run_line admin_tickets 1 "$([ "$ok" -eq 1 ] && echo ok || echo fail)" "reached=${RAT_REACHED:-none} stuck=${RAT_STUCK:--} turns=$RAT_TURNS nudges=$RAT_NUDGES turn_timeouts=$RAT_TURN_TIMEOUTS turn_errors=$RAT_TURN_ERRORS${RAT_TURN_ERROR:+[$RAT_TURN_ERROR]} turn_tools=$RAT_TC/$RAT_TE[$tools] replies=${RAT_REPLIES:--} refused=$(rat_agent_refusals) tokens=${usage%%,*} cost_usd=${usage#*,} human_steps=$human${RAT_DETAIL:+ $RAT_DETAIL}"

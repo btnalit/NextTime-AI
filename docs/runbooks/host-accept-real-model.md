@@ -130,7 +130,7 @@ Turn 没正常结束时带 `(last_turn=failed|timeout|error)`）、`turns=` / `n
 Turn 的）、`turn_timeouts=`（420 秒没结束的 Turn：脚本像人一样先 `stop_agent` 停掉、最多等 60 秒，
 再说下一句，免得下一句被 409 拒掉、它也接着花钱）、`turn_errors=[<内核原话，只留字母数字>]`（消息
 没发出去、没开 Turn 的次数，例如上一个 Turn 还没停下）、`turn_tools=`（几个 Turn 合计）、`replies=`（每个 Turn 一项，按顺序、逗号分隔：智能体这一 Turn 回复的形状，不是原文——`q` 表示它最后一条消息的最后 200 个字符里有问号、否则 `s`，接着是这一 Turn 写了多少个字符；`:` 后面是它提到了下面哪几类（`+` 连接，固定的匹配词，提到不等于在要）：`addr` 地址或 URL、`cred` 凭证或账号、`mode` 连接器的自助 / 预设模式、`confirm` 确认、`cannot` 说做不了或不允许；这一 Turn 没留下回复记 `none`。智能体停在某一步时，靠它区分「在问人要东西」和「说做不了」）、`refused=<次数>[<能力>:<拒绝码>,…]`（智能体被内核拒掉的调用——是护栏在起作用，不是缺陷）、
-`tokens=` / `cost_usd=`（试验工作区自这一项开始以来的 `llm_usage`，含它试跑的 Worker）、
+`tokens=` / `cost_usd=`（试验工作区自这一项开始以来的 `llm_usage`，含它试跑的 Worker；llm-proxy 分批上报用量，所以每 3 秒读一次，两次读数一致才算，最多读 10 次）、
 `human_steps=`（人做了几步，明细是上面的 `HUMAN admin-agent-tickets …` 行），以及走到的那几步
 各自的观察：`request=<kind>/<target>`（target 是智能体写的，只留字母数字和 `._:/-`，其余换成 `_`）、`observed=yes|no`（起草前有没有调观察工具读工单）、
 `skills=` / `workers=`、`worker_gate=yes|no`（发布的 Worker 有没有带工单门）、`tasks=`、
