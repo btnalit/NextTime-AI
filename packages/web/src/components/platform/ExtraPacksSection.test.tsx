@@ -35,7 +35,9 @@ describe('ExtraPacksSection', () => {
   it('without the directory: says so, and how to make it', async () => {
     render(<ExtraPacksSection http={httpReturning(status({ configured: false }))} />);
     const notice = await screen.findByTestId('extra-packs-not-configured');
-    expect(notice.textContent).toContain('没有配置附加能力包目录');
+    // Not configured is the kernel's EXTRA_PACKS_DIR unset: a directory on the host alone does not change it.
+    expect(notice.textContent).toContain('内核没有设置附加能力包目录');
+    expect(notice.textContent).toContain('EXTRA_PACKS_DIR');
     expect(notice.textContent).toContain('§14.10');
     expect(screen.queryByTestId('extra-packs-list')).toBeNull();
   });

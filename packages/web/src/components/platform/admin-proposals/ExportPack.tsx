@@ -130,8 +130,8 @@ export function exportProblemText(
       );
     case 'pack_name_taken':
       return t(
-        '本部署已经有一个同名、内容不同的能力包（比如这个来源名之前导出过另一份内容）。',
-        'This deployment already has a different pack by this name (this source name may have been exported with other content before).',
+        '本部署已经有一个同名、内容不同的能力包：这个来源名导出过别的内容，或者这份提案上次导出时的简介、说明和这次不同。要换掉上次导出的那份，先把主机 config/packs/ 里同名的目录移走，在「平台 · 模块」点「重新读取」，再导出。已经有工作区装了那份的，别换掉它，按 operations.md §14.1 加一个新版本。',
+        'This deployment already has a different pack by this name: this source name was exported with other content, or this proposal with another summary or notes. To replace the pack exported before, move the directory of that name out of the host’s config/packs/, choose Read again on Platform · Modules, then export again. If a workspace has installed it, keep it and add a new version instead (operations.md §14.1).',
       );
     case 'no_components':
       return t(
@@ -171,9 +171,8 @@ function ExportPackDialog({
   const [summary, setSummary] = useState(() =>
     proposal.title.trim().slice(0, EXPORTED_PACK_SUMMARY_MAX_LENGTH),
   );
-  const [notes, setNotes] = useState(() =>
-    omittedNotes(segment, t).slice(0, EXPORTED_PACK_NOTES_MAX_LENGTH),
-  );
+  const startingNotes = omittedNotes(segment, t);
+  const [notes, setNotes] = useState(() => startingNotes.slice(0, EXPORTED_PACK_NOTES_MAX_LENGTH));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [pack, setPack] = useState<AdminProposalPackExportWire | null>(null);
@@ -249,10 +248,17 @@ function ExportPackDialog({
             <Field
               id={`${prefix}-notes`}
               label={t('说明', 'Notes')}
-              hint={t(
-                '选填，写进能力包，给工作区所有者看。已经写好了它不带的 Operation 改动，可以改。',
-                'Optional, kept in the pack for workspace owners. It starts with the Operation changes the pack does not carry; edit as you like.',
-              )}
+              hint={
+                startingNotes === ''
+                  ? t(
+                      '选填，写进能力包，给工作区所有者看。',
+                      'Optional, kept in the pack for workspace owners.',
+                    )
+                  : t(
+                      '选填，写进能力包，给工作区所有者看。已经写好了它不带的 Operation 改动，可以改。',
+                      'Optional, kept in the pack for workspace owners. It starts with the Operation changes the pack does not carry; edit as you like.',
+                    )
+              }
             >
               <Textarea
                 id={`${prefix}-notes`}

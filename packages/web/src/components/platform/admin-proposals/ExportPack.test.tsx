@@ -79,6 +79,7 @@ describe('ExportPack', () => {
     expect(summary.value).toBe('Ticket triage everywhere');
     expect(notes.value).toContain('不带下面这些 Operation 改动');
     expect(notes.value).toContain('- tickets-prod · ticket.close');
+    expect(screen.getByText(/已经写好了它不带的 Operation 改动/)).toBeTruthy();
     expect(screen.getByTestId('part-2-export-dialog').textContent).toContain('ticket-desk');
 
     fireEvent.change(summary, { target: { value: '  Ticket triage, from the admin agent.  ' } });
@@ -123,6 +124,9 @@ describe('ExportPack', () => {
     );
     fireEvent.click(screen.getByTestId('part-2-export-trigger'));
     expect((screen.getByTestId('part-2-export-notes') as HTMLTextAreaElement).value).toBe('');
+    // Nothing left out, so the hint does not say the notes already list it.
+    expect(screen.getByText('选填，写进能力包，给工作区所有者看。')).toBeTruthy();
+    expect(screen.queryByText(/已经写好了/)).toBeNull();
     fireEvent.change(screen.getByTestId('part-2-export-summary'), { target: { value: '   ' } });
     const submit = screen.getByTestId('part-2-export-submit') as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
@@ -170,6 +174,33 @@ describe('ExportPack', () => {
       'reads back with another content digest',
     );
     expect(screen.queryByTestId('part-2-export-result')).toBeNull();
+  });
+
+  it('a pack of that name already here: why, and what to do next', async () => {
+    const http = httpWith(() => {
+      throw new HttpError(
+        'capability_error',
+        'admin proposal segment seg-1 is not exported as a pack: pack_name_taken',
+        'admin_proposal_pack_not_exportable',
+        {
+          problems: [
+            {
+              code: 'pack_name_taken',
+              path: 'sourceName',
+              message: 'pack "ticket-desk" is already in this deployment with other content',
+            },
+          ],
+        },
+      );
+    });
+    renderExport(http);
+    fireEvent.click(screen.getByTestId('part-2-export-submit'));
+    const taken = await screen.findByTestId('part-2-export-problem-pack_name_taken');
+    // The same proposal exported again with another summary is this case too.
+    expect(taken.textContent).toContain('上次导出时的简介、说明和这次不同');
+    expect(taken.textContent).toContain('config/packs/ 里同名的目录移走');
+    expect(taken.textContent).toContain('「重新读取」');
+    expect(taken.textContent).toContain('§14.1 加一个新版本');
   });
 
   it('any other failure shows as an error, the form kept', async () => {

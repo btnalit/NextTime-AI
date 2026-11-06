@@ -69,8 +69,8 @@ function ExtraPacksBody({ status }: { readonly status: ExtraPacksWire }) {
     return (
       <Notice testId="extra-packs-not-configured">
         {t(
-          '这个部署没有配置附加能力包目录，只有镜像自带的能力包。按 operations.md §14.10 在主机上建好 config/packs/ 即可。',
-          'This deployment has no extra packs directory, only the packs its image ships. Make config/packs/ on the host as operations.md §14.10 says.',
+          '内核没有设置附加能力包目录（compose 里 kernel 的 EXTRA_PACKS_DIR），所以只有镜像自带的能力包。用标准的 compose 部署，并按 operations.md §14.10 在主机上建好 config/packs/。',
+          'The kernel has no extra packs directory set (EXTRA_PACKS_DIR on the kernel in compose), so only the packs its image ships are here. Deploy with the standard compose and make config/packs/ on the host as operations.md §14.10 says.',
         )}
       </Notice>
     );
@@ -82,7 +82,7 @@ function ExtraPacksBody({ status }: { readonly status: ExtraPacksWire }) {
           <span className="wrap-anywhere">
             {t(
               '目录在，但读不了，所以一个附加包也没读进来：',
-              'The directory is there but cannot be read, so no extra pack is: ',
+              'The directory is there but cannot be read, so no extra pack is read: ',
             )}
             {status.unreadable}
           </span>
@@ -95,7 +95,7 @@ function ExtraPacksBody({ status }: { readonly status: ExtraPacksWire }) {
           </p>
         ) : null
       ) : (
-        <ul className="stack-s" data-testid="extra-packs-list">
+        <ul className="stack-s extra-packs-list" data-testid="extra-packs-list">
           {status.packs.map((pack) => (
             <li key={pack.name} className="row-wrap" data-testid={`extra-pack-${pack.name}`}>
               <span className="mono">{pack.name}</span>
@@ -113,7 +113,7 @@ function ExtraPacksBody({ status }: { readonly status: ExtraPacksWire }) {
               `${status.skipped.length} director(ies) are not read as packs, and no workspace sees them. Below is the rule each breaks; a pack building on one left out is left out too.`,
             )}
           </Notice>
-          <ul className="stack-s">
+          <ul className="stack-s extra-packs-list">
             {status.skipped.map((skipped) => (
               <li
                 key={skipped.name}
