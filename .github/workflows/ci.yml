@@ -173,6 +173,23 @@ jobs:
       - name: e2e tests act on what a person sees — role or label, not a test id or CSS (scripts/guards/e2e-locators.mjs, baseline only shrinks)
         run: node scripts/guards/e2e-locators.mjs
 
+      - name: Ratchet guard unit tests
+        run: node --test scripts/guards/ratchet-shrinks.test.mjs
+
+      # The two guards above hold each ratchet file to the code of the same commit; this holds it to
+      # the base branch, so a PR cannot raise one by re-baselining. A reviewed raise (a waiver) needs
+      # the ratchet-raise label — add it, then re-run this job.
+      - name: Test-debt ratchets only go down against the base branch (scripts/guards/ratchet-shrinks.mjs)
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          ALLOW_RAISE: ${{ contains(github.event.pull_request.labels.*.name, 'ratchet-raise') }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_REF"
+          set -- --base FETCH_HEAD
+          if [ "$ALLOW_RAISE" = true ]; then set -- "$@" --allow-raise; fi
+          node scripts/guards/ratchet-shrinks.mjs "$@"
+
       - name: Compose static validation (R-03 — the internal-plane root is mounted into the kernel only; every service secret is declared)
         run: node scripts/validate-compose.mjs
 

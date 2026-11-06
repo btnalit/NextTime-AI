@@ -113,6 +113,12 @@ pnpm ci:guards        # kernel purity + pi 版本一致性 + membership-capabili
 PR 在同一提交里加一行；大面积改名后可 `node scripts/guards/capability-matrix.mjs --bootstrap` 重新生成，
 保留已有理由，提交前读 diff。
 
+两条测试债棘轮——矩阵的 `ratchet:` 和 e2e 定位基线 `scripts/guards/e2e-locators-baseline.json`
+（§5.2，交互按角色 / 标签定位）——各自的守卫只核对同一提交里的代码。PR 上 CI `quality` 另跑
+`scripts/guards/ratchet-shrinks.mjs --base <base 分支>`：两者都不能比 base 分支高（定位基线按调用文本
+跨文件求和，改文件名不算上升）。确有理由上升（经审查的 `kernel_test: missing` 豁免）时，由审查者给 PR
+加 `ratchet-raise` 标签并在 PR 里写明理由，再重跑 `quality`；上升会打印在日志里。
+
 ## 5. 常见问题
 
 | 现象 | 原因 | 处理 |
