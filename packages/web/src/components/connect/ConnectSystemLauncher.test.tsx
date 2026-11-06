@@ -10,6 +10,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
+import {
+  comboboxOptionTexts,
+  openCombobox,
+  pickComboboxValue,
+} from '../kit/combobox.test-helpers.js';
 import { ConnectSystemLauncher, type ConnectSystemLauncherProps } from './ConnectSystemLauncher.js';
 
 /**
@@ -534,10 +539,8 @@ describe('ConnectSystemLauncher — hosted path from the workspace page (non-adm
     expect(screen.getByTestId('launcher-next').hasAttribute('disabled')).toBe(true);
 
     const grant = screen.getByTestId('launcher-grant');
-    const select = within(grant).getByTestId('ggf-member-select');
-    // `list_principals` resolves asynchronously — the `<option value="p-alice">` may not exist yet.
-    await waitFor(() => expect(select.querySelector('option[value="p-alice"]')).not.toBeNull());
-    fireEvent.change(select, { target: { value: 'p-alice' } });
+    // `list_principals` resolves asynchronously — the picker waits for Alice's row.
+    await pickComboboxValue(within(grant).getByTestId('ggf-member'), 'p-alice');
     fireEvent.click(within(grant).getByTestId('ggf-submit'));
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'grant_capability')).toBe(true),
@@ -858,9 +861,8 @@ describe('ConnectSystemLauncher — "我的智能体现在能用它吗？" (cons
     fireEvent.click(within(confirm).getByTestId('confirm-button'));
     await within(workspaceSide).findByTestId('launcher-workspace-linked');
     const grant = screen.getByTestId('launcher-grant');
-    const select = within(grant).getByTestId('ggf-member-select');
-    await waitFor(() => expect(select.querySelector('option[value="p-alice"]')).not.toBeNull());
-    fireEvent.change(select, { target: { value: 'p-alice' } });
+    // `list_principals` resolves asynchronously — the picker waits for Alice's row.
+    await pickComboboxValue(within(grant).getByTestId('ggf-member'), 'p-alice');
     fireEvent.click(within(grant).getByTestId('ggf-submit'));
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'grant_capability')).toBe(true),
@@ -871,6 +873,83 @@ describe('ConnectSystemLauncher — "我的智能体现在能用它吗？" (cons
     next();
     return http;
   }
+
+  it('UX acceptance of #997: step 3 marks a member who already holds the gate as 已授权, so they are not granted twice', async () => {
+    const row = availableRow();
+    const http = scriptedHttp({
+      list_available_gate_instances: () => ({ items: [row] }),
+      preview_gate_instance_enable: () => ({
+        gateId: 'docker-prod',
+        wouldLink: null,
+        ambiguousCandidates: [],
+        operationsToImport: [],
+        operationsAlreadyPresent: [],
+      }),
+      enable_gate_instance: () => ({
+        gateId: 'docker-prod',
+        gatekeeperId: 'gk-9',
+        publishedOperationNames: ['container_list', 'container_restart'],
+        skippedOperationNames: [],
+        linkedExisting: true,
+      }),
+      list_principals: () => ({
+        items: [
+          {
+            id: 'p-alice',
+            kind: 'human',
+            role: 'member',
+            displayName: 'Alice',
+            createdAt: '2026-09-01T00:00:00.000Z',
+            hasApiKey: true,
+          },
+          {
+            id: 'p-bob',
+            kind: 'human',
+            role: 'member',
+            displayName: 'Bob',
+            createdAt: '2026-09-01T00:00:00.000Z',
+            hasApiKey: false,
+          },
+        ],
+      }),
+      // Bob already holds this gate (an existing system linked again).
+      list_grants: () => ({
+        items: [
+          {
+            id: 'grant-bob',
+            principalId: 'p-bob',
+            resourceType: 'gatekeeper',
+            resourceId: 'gk-9',
+            status: 'active',
+            grantedBy: 'p-owner',
+            createdAt: '2026-09-01T00:00:00.000Z',
+          },
+        ],
+      }),
+    });
+    renderLauncher({
+      http,
+      origin: 'workspace',
+      platformAdmin: false,
+      canEnable: true,
+      available: [row],
+    });
+    fireEvent.click(screen.getByTestId('launcher-kind-mcp'));
+    next();
+    fireEvent.click(await screen.findByTestId('launcher-gate-docker-prod'));
+    next();
+    const workspaceSide = screen.getByTestId('launcher-workspace-enable');
+    await screen.findByTestId('launcher-workspace-checklist');
+    fireEvent.click(within(workspaceSide).getByTestId('launcher-workspace-enable-button'));
+    const confirm = await screen.findByTestId('launcher-workspace-enable-button-confirm');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await within(workspaceSide).findByTestId('launcher-workspace-linked');
+    const member = within(screen.getByTestId('launcher-grant')).getByTestId('ggf-member');
+    openCombobox(member);
+    await waitFor(() =>
+      expect(comboboxOptionTexts(member)).toEqual(['Alice成员', 'Bob成员 · 已授权']),
+    );
+  });
 
   it('direct: says the agent can already call its read operations itself, then offers 去对话里试一句', async () => {
     await reachHandshake(() =>

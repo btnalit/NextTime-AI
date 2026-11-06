@@ -1,8 +1,9 @@
 // node --test scripts/accept-kernel-link.test.mjs — wait_kernel_link in scripts/lib/accept-common.sh
 // (#856 review #488 P2): after accept_provider_up / accept_provider_restore recreate the kernel,
-// the scripts wait until agent-host logs `kernel-link: connected` again. Run through POSIX sh with
-// a stand-in `docker` first on PATH that answers `docker compose logs …` from a file, so no Docker
-// is needed.
+// the scripts wait until agent-host logs `kernel-link: connected` again. Also accept_provider_restore
+// itself: it stops fake-llm once production is back (legacy 643). Run through POSIX sh with a
+// stand-in `docker` first on PATH that answers `docker compose …` from a script, so no Docker is
+// needed.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -115,4 +116,89 @@ test('wait_kernel_link: a log it cannot read is reported as that, not as a missi
   assert.equal(calls.length, 3);
   assert.match(problem, /'docker compose logs agent-host' itself failed/);
   assert.match(problem, /logging driver does not support reading/);
+});
+
+/**
+ * Runs `accept_provider_restore` with a fake `docker` that records each call: `compose up` fails
+ * when `upFails`, `compose --profile test stop fake-llm` fails when `stopFails`, and `compose logs`
+ * always shows the link (so the wait ends at once). `switched` is ACCEPT_PROVIDER_SWITCHED.
+ */
+function providerRestore({ switched = 1, upFails = false, stopFails = false }) {
+  const dir = mkdtempSync(path.join(tmpdir(), 'accept-provider-restore-'));
+  try {
+    const calls = path.join(dir, 'calls');
+    writeFileSync(calls, '');
+    const docker = path.join(dir, 'docker');
+    writeFileSync(
+      docker,
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "${calls}"
+case "$*" in
+  'compose up '*) [ ${upFails ? 1 : 0} -eq 0 ] || { echo 'up failed' >&2; exit 1; } ;;
+  'compose --profile test stop fake-llm') [ ${stopFails ? 1 : 0} -eq 0 ] || exit 1 ;;
+  'compose logs '*) printf '%s\\n' '{"level":"info","msg":"kernel-link: connected"}' ;;
+esac
+exit 0
+`,
+    );
+    chmodSync(docker, 0o755);
+    const result = spawnSync(
+      'sh',
+      [
+        '-c',
+        '. scripts/lib/accept-common.sh && ACCEPT_PROVIDER_SWITCHED=$1 && accept_provider_restore',
+        'sh',
+        String(switched),
+      ],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${dir}:${process.env.PATH}`,
+          ACCEPT_KERNEL_LINK_WAIT_S: '0',
+          ACCEPT_KERNEL_LINK_POLL_S: '0',
+        },
+      },
+    );
+    return {
+      status: result.status,
+      calls: readFileSync(calls, 'utf8').trim().split('\n').filter(Boolean),
+      stderr: result.stderr,
+    };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const STOP_FAKE_LLM = 'compose --profile test stop fake-llm';
+
+test('accept_provider_restore: stops fake-llm once production is back (legacy 643)', () => {
+  const { status, calls, stderr } = providerRestore({});
+  assert.equal(status, 0, stderr);
+  assert.match(
+    calls[0],
+    /^compose up -d --force-recreate --wait llm-proxy worker-supervisor kernel$/,
+  );
+  assert.equal(calls[1], STOP_FAKE_LLM);
+  assert.match(calls[2], /^compose logs /);
+});
+
+test('accept_provider_restore: a stop that fails is a warning, not a failed restore', () => {
+  const { status, calls, stderr } = providerRestore({ stopFails: true });
+  assert.equal(status, 0);
+  assert.ok(calls.includes(STOP_FAKE_LLM));
+  assert.match(stderr, /WARNING — could not stop fake-llm/);
+});
+
+test('accept_provider_restore: a restore that fails leaves fake-llm alone and is P1', () => {
+  const { status, calls, stderr } = providerRestore({ upFails: true });
+  assert.equal(status, 1);
+  assert.equal(calls.length, 1);
+  assert.match(stderr, /P1 — restoring the production provider failed/);
+});
+
+test('accept_provider_restore: nothing to do when the provider was never switched', () => {
+  const { status, calls } = providerRestore({ switched: 0 });
+  assert.equal(status, 0);
+  assert.deepEqual(calls, []);
 });
