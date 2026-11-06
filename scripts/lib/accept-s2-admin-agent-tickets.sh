@@ -132,15 +132,10 @@ tickets_book() {
   admin_cap observe_operation "{\"gatekeeperId\":\"$TICKETS_GATEKEEPER_ID\",\"operation\":\"tickets.list\",\"params\":{}}" "(() => { const items = (d.result.data && d.result.data.items) || []; return items.length + '|' + JSON.stringify(items.filter((t) => t.title === '$1').map((t) => ({ via: t.via, priority: t.priority }))); })()" "$ADMIN_TRIAL_ID"
 }
 
-admin_agent_tickets_step() {
-  if [ -z "$ADMIN_SESSION" ] || [ -z "$ADMIN_TRIAL_ID" ] || [ -z "$ADMIN_PRINCIPAL_ID" ]; then
-    echo "NOTE admin-agent-tickets the admin agent ticket journey (connect, draft, try a Worker in the trial workspace) not run: the admin agent scenario did not run (see its NOTE above)"
-    return 0
-  fi
-  TICKETS_NONCE=$(real_token)
-  model=${ACCEPT_S2_MODEL:-fake/fake-echo}
-
-  # The ticket system's gate, on a connection secret minted in the trial workspace.
+# tickets_gate_up: the ticket system's gate, on a connection secret minted in the trial workspace
+# (left in tickets_secret for the person's create_connection) — the trial half's one gate, here and
+# with --real (accept-s2-real-admin-agent.sh).
+tickets_gate_up() {
   tickets_dir="${NEXTTIME_DATA}/accept-s2/tickets-gate"
   mkdir -p "$tickets_dir"
   chmod 777 "$tickets_dir"
@@ -161,6 +156,16 @@ admin_agent_tickets_step() {
   [ $? -eq 0 ] || fail "admin-agent-tickets-gate" "docker compose up failed: $(printf '%s' "$up_out" | tail -20)"
   wait_for_gate_health "http://accept-s2-tickets-gate:8090" "$tickets_token_file" || fail "admin-agent-tickets-gate" "accept-s2-tickets-gate /gate/health never came back ok — docker compose logs accept-s2-tickets-gate"
   pass "admin-agent-tickets-gate" "accept-s2-tickets-gate healthy on its own connection secret $(redact "$tickets_secret") (minted in the trial workspace)"
+}
+
+admin_agent_tickets_step() {
+  if [ -z "$ADMIN_SESSION" ] || [ -z "$ADMIN_TRIAL_ID" ] || [ -z "$ADMIN_PRINCIPAL_ID" ]; then
+    echo "NOTE admin-agent-tickets the admin agent ticket journey (connect, draft, try a Worker in the trial workspace) not run: the admin agent scenario did not run (see its NOTE above)"
+    return 0
+  fi
+  TICKETS_NONCE=$(real_token)
+  model=${ACCEPT_S2_MODEL:-fake/fake-echo}
+  tickets_gate_up
 
   # --- Turn A: the agent asks for the ticket system ---
   tickets_turn "admin-agent-tickets-request" new:admin_agent "验收工单：接入工单系统 TICKETS_NONCE=$TICKETS_NONCE"
@@ -508,6 +513,13 @@ admin_agent_tickets_step() {
 # when its platform part never was applied; a Task still running is cancelled; everything else
 # goes with cleanup_step's `rm -sf` and admin_agent_cleanup.
 admin_agent_tickets_cleanup() {
+  # With --real, the journey's background approver (accept-s2-real-admin-agent.sh), when a FAIL
+  # left it running: it must not approve anything after this point.
+  if [ -n "${RAT_APPROVER_PID:-}" ]; then
+    kill "$RAT_APPROVER_PID" 2>/dev/null
+    echo "cleanup: stopped the ticket journey's background approver"
+    RAT_APPROVER_PID=""
+  fi
   [ -n "$ADMIN_SESSION" ] || return 0
   if [ -n "$TICKETS_CHANGE_SEGMENT_ID" ] && [ -n "$ADMIN_TARGET_ID" ]; then
     out=$(cap "$(admin_cred "$ADMIN_TARGET_ID")" preview_roll_back_change_segment "{\"segmentId\":\"$TICKETS_CHANGE_SEGMENT_ID\"}" "JSON.stringify(d.result.items.filter((i) => i.classification === 'authority_widening').map((i) => i.ordinal))")

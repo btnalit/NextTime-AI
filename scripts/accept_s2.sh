@@ -18,7 +18,9 @@
 # with outcome-judged scenarios repeated --runs times (default 3) — see the "W7 real-model mode"
 # section below and docs/runbooks/host-accept-real-model.md. Never defaults the model. Proposing
 # a goal from chat, one evaluation trial and one draft evaluation run there too
-# (scripts/lib/accept-s2-real-goal-eval.sh).
+# (scripts/lib/accept-s2-real-goal-eval.sh), and so does the admin agent ticket journey once —
+# asked in plain words, judged by how far it got, never failing the run for a model miss — while
+# the kernel has ADMIN_AGENT_ENABLED on (scripts/lib/accept-s2-real-admin-agent.sh).
 # --extended (with --real): also the scenarios in the "--extended" section — memory across an
 # entry-container restart, stop mid-Turn, a rejected approval, docker observe, a Worker's own
 # egress, two principals at once — each --runs times. Roughly triples the real-model spend.
@@ -28,10 +30,12 @@
 # out with one NOTE line. scripts/staging-rehearsal.sh sets it; on the production host only in the
 # window, once victor has agreed on the spot (docs/runbooks/host-accept-s2.md §2).
 #
-# The admin agent scenario (S11 AA4d, scripts/lib/accept-s2-admin-agent.sh) runs on the fake path
-# only while the kernel has ADMIN_AGENT_ENABLED on (secrets/kernel.env; this script never sets it);
-# otherwise one NOTE line. ACCEPT_REQUIRE_ADMIN_AGENT=1 makes the switch being off a FAIL —
-# scripts/staging-rehearsal.sh sets both.
+# The admin agent scenario (S11 AA4d, scripts/lib/accept-s2-admin-agent.sh) runs on the fake path,
+# the admin agent ticket journey under the real model with --real
+# (scripts/lib/accept-s2-real-admin-agent.sh), each only while the kernel has ADMIN_AGENT_ENABLED on
+# (secrets/kernel.env; this script never sets it); otherwise one NOTE line.
+# ACCEPT_REQUIRE_ADMIN_AGENT=1 makes the switch being off a FAIL — scripts/staging-rehearsal.sh
+# sets both.
 #
 # --keep skips removing the accept-s2 fixture containers (leaves the fixtures/gates/workspace up
 # for inspection). --keep does not skip the fake-provider restore below — the EXIT trap always
@@ -155,6 +159,9 @@ fi
 # --real only: a goal proposed from chat (#829), evaluation trials (#822) and one draft evaluation
 # (#833) under the real model — see that file's own header comment.
 . "$(dirname "$0")/lib/accept-s2-real-goal-eval.sh"
+# --real only: the admin agent ticket journey (AA5 plan §5.8) under the real model, once — see that
+# file's own header comment.
+. "$(dirname "$0")/lib/accept-s2-real-admin-agent.sh"
 require_driver
 
 # `set -u` is active from the top of this script — pre-set every variable cleanup_step reads so
@@ -2053,6 +2060,9 @@ real_summary_step() {
     # summary must never report success for zero real-model runs.
     [ "$ok" -gt 0 ] || zero=1
   done
+  # The admin agent ticket journey: measured, never judged (accept-s2-real-admin-agent.sh header) —
+  # n=0 when the kernel has the switch off (its NOTE line above).
+  printf 'REAL scenario=admin_tickets ok=%s/%s turn_tool_calls=%s turn_tool_errors=%s worker_tool_calls=0 worker_tool_errors=0 (not counted for the zero rule)\n' "${REAL_OK_admin_tickets:-0}" "${REAL_N_admin_tickets:-0}" "${REAL_TC_admin_tickets:-0}" "${REAL_TE_admin_tickets:-0}"
   # Before judging the counts: a refusal for the workspace budget voids them (legacy 586).
   real_budget_check "real-budget"
   [ "$zero" -eq 0 ] || fail "real-summary" "at least one scenario had zero successful runs (see REAL lines)"
@@ -2074,6 +2084,7 @@ ops_runner_step
 if [ "$REAL" -eq 1 ]; then
   real_smoke_step
   real_scenarios_step
+  real_admin_tickets_step
   step6_env_and_egress
   real_evidence_step
   step8_mcp_connect
