@@ -13,12 +13,16 @@ import { withAdminClient } from './application/gateway/auth.js';
 import { dispatchCapability } from './application/gateway/index.js';
 import type { ResolvedCaller } from './application/gateway/resolve-caller.js';
 import type { StartTurnInput } from './application/host-bridge/index.js';
-import { FAKE_ADMIN_PROPOSE_MARKER } from './application/host-bridge/index.js';
+import {
+  FAKE_ADMIN_PROPOSE_MARKER,
+  FAKE_ADMIN_PROPOSE_PACK_MARKER,
+} from './application/host-bridge/index.js';
 import { type UserRow, createUser } from './application/identity/index.js';
 import { createWorkspaceWithOwner } from './application/workspace/index.js';
 import {
   FAKE_ADMIN_PROPOSAL_SOURCE_NAME,
   createFakeAdminProposeHandler,
+  createFakeAdminProposePackHandler,
 } from './fake-admin-propose.js';
 import { generateEphemeralHandleKeyPair } from './governance/capability/index.js';
 
@@ -131,6 +135,13 @@ describe.runIf(DATABASE_URL !== undefined)(
         loadHandlePublicKey: async () => publicKey,
       });
 
+    const packHandler = () =>
+      createFakeAdminProposePackHandler({
+        pool,
+        privateKey,
+        loadHandlePublicKey: async () => publicKey,
+      });
+
     async function proposalsOf(trial: Trial): Promise<number> {
       const result = await withAdminClient(pool, (client) =>
         client.query<{ n: string }>(
@@ -234,6 +245,55 @@ describe.runIf(DATABASE_URL !== undefined)(
       await expect(handler()(turnOf(trial, sessionId))).rejects.toThrow(/has ended/);
 
       expect(await proposalsOf(trial)).toBe(0);
+    });
+
+    it('S11 AA5g: the pack marker proposes a pack install through the real propose_pack_install: one pack_install segment per chosen target, no platform segment, the pack a fresh workspace can install', async () => {
+      const trial = await newTrial();
+      const [targetA, targetB] = [await newTarget(), await newTarget()];
+      await chooseTargets(trial, [targetA, targetB]);
+      const sessionId = await sessionOf(trial);
+      const input = {
+        ...turnOf(trial, sessionId),
+        prompt: `${FAKE_ADMIN_PROPOSE_PACK_MARKER} 装包`,
+      };
+
+      const outcome = await packHandler()(input);
+
+      expect(outcome).toMatchObject({
+        status: 'proposed',
+        title: expect.stringMatching(/^CI pack install /),
+      });
+      const proposal = (await dispatchCapability(
+        { pool },
+        platform(trial.user),
+        'get_admin_proposal',
+        { proposalId: outcome.proposalId },
+      )) as AdminProposalWire;
+      expect(proposal).toMatchObject({ sourceName: 'pack-install', origin: 'agent' });
+      expect(proposal.segments.every((s) => s.authority === 'workspace')).toBe(true);
+      expect(proposal.segments.map((s) => s.targetWorkspaceId).sort()).toEqual(
+        [targetA, targetB].sort(),
+      );
+      // The pack it picked needs no system and no other pack: a fresh target installs it as is.
+      const audit = await withAdminClient(pool, (client) =>
+        client.query<{ payload: Record<string, unknown> }>(
+          `select payload from audit_records
+            where workspace_id = $1 and action = 'propose_pack_install'
+            order by created_at desc, id desc limit 1`,
+          [trial.workspaceId],
+        ),
+      );
+      expect(audit.rows[0]?.payload).toMatchObject({ sessionKind: 'admin_agent', sessionId });
+
+      // No targets chosen: refused as the real agent is, proposing nothing.
+      const bare = await newTrial();
+      await expect(
+        packHandler()({
+          ...turnOf(bare, await sessionOf(bare)),
+          prompt: FAKE_ADMIN_PROPOSE_PACK_MARKER,
+        }),
+      ).rejects.toThrow(/no proposal targets/);
+      expect(await proposalsOf(bare)).toBe(0);
     });
   },
 );

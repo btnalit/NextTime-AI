@@ -38,6 +38,14 @@ export const FAKE_DELEGATE_MARKER = '__nexttime_fake_delegate__';
  */
 export const FAKE_ADMIN_PROPOSE_MARKER = '__nexttime_fake_admin_propose__';
 
+/**
+ * S11 AA5g (CI only): the same as {@link FAKE_ADMIN_PROPOSE_MARKER} for
+ * `FakeAgentRuntimeOptions.onAdminProposePack` — a scripted "the admin agent called
+ * propose_pack_install" Turn. Not a substring of the other marker, nor it of this one: a prompt
+ * carries one or the other.
+ */
+export const FAKE_ADMIN_PROPOSE_PACK_MARKER = '__nexttime_fake_admin_pack__';
+
 /** What `onAdminPropose` resolves with: the proposal as the admin agent reads it back, reduced to
  *  what the scripted reply names. */
 export interface FakeAdminProposeOutcome {
@@ -99,6 +107,12 @@ export interface FakeAgentRuntimeOptions {
    * (CI-only glue) under the same `FAKE_INVOKE_WORKER=1` gate as `onDelegate`.
    */
   readonly onAdminPropose?: (input: StartTurnInput) => Promise<FakeAdminProposeOutcome>;
+  /**
+   * S11 AA5g: {@link onAdminPropose}'s twin for {@link FAKE_ADMIN_PROPOSE_PACK_MARKER} — a scripted
+   * "the admin agent called propose_pack_install" Turn, the same events. Wired only by
+   * `packages/kernel/src/fake-admin-propose.ts` under the same gate.
+   */
+  readonly onAdminProposePack?: (input: StartTurnInput) => Promise<FakeAdminProposeOutcome>;
 }
 
 const DEFAULT_CHUNK_SIZE = 8;
@@ -124,6 +138,7 @@ export class FakeAgentRuntime implements AgentRuntime {
   private readonly shouldFail: (input: StartTurnInput) => boolean;
   private readonly onDelegate?: (input: StartTurnInput) => Promise<FakeDelegateOutcome>;
   private readonly onAdminPropose?: (input: StartTurnInput) => Promise<FakeAdminProposeOutcome>;
+  private readonly onAdminProposePack?: (input: StartTurnInput) => Promise<FakeAdminProposeOutcome>;
   /** turnId -> stop requested. Checked between emitted chunks so a `stopTurn` mid-stream ends the
    *  Turn with `status: 'interrupted'` instead of running to completion. */
   private readonly stopRequested = new Set<string>();
@@ -140,6 +155,7 @@ export class FakeAgentRuntime implements AgentRuntime {
     this.shouldFail = options.shouldFail ?? (() => false);
     this.onDelegate = options.onDelegate;
     this.onAdminPropose = options.onAdminPropose;
+    this.onAdminProposePack = options.onAdminProposePack;
   }
 
   async startTurn(input: StartTurnInput): Promise<void> {
@@ -182,7 +198,11 @@ export class FakeAgentRuntime implements AgentRuntime {
     // the other kind's Turn is just text, echoed.
     if (input.agentKind === 'admin_agent') {
       if (this.onAdminPropose && input.prompt.includes(FAKE_ADMIN_PROPOSE_MARKER)) {
-        await this.runAdminPropose(input, this.onAdminPropose);
+        await this.runAdminPropose(input, this.onAdminPropose, 'propose_admin_proposal');
+        return;
+      }
+      if (this.onAdminProposePack && input.prompt.includes(FAKE_ADMIN_PROPOSE_PACK_MARKER)) {
+        await this.runAdminPropose(input, this.onAdminProposePack, 'propose_pack_install');
         return;
       }
     } else if (this.onDelegate && input.prompt.includes(FAKE_DELEGATE_MARKER)) {
@@ -264,18 +284,19 @@ export class FakeAgentRuntime implements AgentRuntime {
     await this.endTurn(input, this.shouldFail(input) ? 'failed' : 'completed');
   }
   /** S11 AA4d: the scripted "call propose_admin_proposal" path `run()` dispatches an admin agent
-   *  Turn to on a marker match. `onAdminPropose` rejecting (no target chosen, the switch off, a
+   *  Turn to on a marker match (S11 AA5g: and "call propose_pack_install", `tool` naming which). `onAdminPropose` rejecting (no target chosen, the switch off, a
    *  refusal of the proposal itself) ends the Turn `failed` with the error's message, as
    *  {@link runDelegate} does. */
   private async runAdminPropose(
     input: StartTurnInput,
     onAdminPropose: (input: StartTurnInput) => Promise<FakeAdminProposeOutcome>,
+    tool: 'propose_admin_proposal' | 'propose_pack_install',
   ): Promise<void> {
     const toolCallId = `fake-admin-propose-${input.turnId}`;
     await this.emit(input, {
       type: 'toolCallStarted',
       toolCallId,
-      name: 'propose_admin_proposal',
+      name: tool,
       args: {},
     });
 
@@ -293,7 +314,7 @@ export class FakeAgentRuntime implements AgentRuntime {
       await this.emit(input, {
         type: 'message',
         role: 'assistant',
-        content: { text: `propose_admin_proposal failed: ${message}` },
+        content: { text: `${tool} failed: ${message}` },
       });
       await this.endTurn(input, 'failed');
       return;
@@ -304,7 +325,7 @@ export class FakeAgentRuntime implements AgentRuntime {
       type: 'message',
       role: 'assistant',
       content: {
-        text: `propose_admin_proposal: proposed "${outcome.title}" (${outcome.proposalId}), now ${outcome.status}.`,
+        text: `${tool}: proposed "${outcome.title}" (${outcome.proposalId}), now ${outcome.status}.`,
       },
     });
 

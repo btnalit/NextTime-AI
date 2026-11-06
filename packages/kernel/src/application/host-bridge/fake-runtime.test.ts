@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentRuntimeEvent, StartTurnInput } from './agent-runtime.js';
 import {
   FAKE_ADMIN_PROPOSE_MARKER,
+  FAKE_ADMIN_PROPOSE_PACK_MARKER,
   FAKE_DELEGATE_MARKER,
   type FakeAdminProposeOutcome,
   FakeAgentRuntime,
@@ -351,6 +352,74 @@ describe('FakeAgentRuntime', () => {
         content: { text: 'propose_admin_proposal failed: no proposal targets chosen' },
       });
       expect(events.find((e) => e.type === 'turnEnded')).toMatchObject({ status: 'failed' });
+    });
+
+    describe('onAdminProposePack (S11 AA5g)', () => {
+      const PACK_INPUT: StartTurnInput = {
+        ...ADMIN_INPUT,
+        prompt: `${FAKE_ADMIN_PROPOSE_PACK_MARKER} 建议装一个能力包`,
+      };
+
+      it('neither marker contains the other: a prompt carries one or the other', () => {
+        expect(FAKE_ADMIN_PROPOSE_PACK_MARKER.includes(FAKE_ADMIN_PROPOSE_MARKER)).toBe(false);
+        expect(FAKE_ADMIN_PROPOSE_MARKER.includes(FAKE_ADMIN_PROPOSE_PACK_MARKER)).toBe(false);
+      });
+
+      it('the pack marker calls the pack hook once, emits a propose_pack_install pair, and ends completed', async () => {
+        const onAdminPropose = vi.fn(async () => OUTCOME);
+        const onAdminProposePack = vi.fn(async () => OUTCOME);
+        const events = await run({ onAdminPropose, onAdminProposePack }, PACK_INPUT);
+
+        expect(onAdminProposePack).toHaveBeenCalledTimes(1);
+        expect(onAdminProposePack).toHaveBeenCalledWith(PACK_INPUT);
+        expect(onAdminPropose).not.toHaveBeenCalled();
+        expect(events.find((e) => e.type === 'toolCallStarted')).toMatchObject({
+          name: 'propose_pack_install',
+        });
+        expect(events.find((e) => e.type === 'message')).toMatchObject({
+          content: {
+            text: `propose_pack_install: proposed "${OUTCOME.title}" (${OUTCOME.proposalId}), now ${OUTCOME.status}.`,
+          },
+        });
+        expect(events.map((e) => e.type)).toEqual([
+          'toolCallStarted',
+          'toolCallEnded',
+          'message',
+          'turnEnded',
+        ]);
+        expect(events.find((e) => e.type === 'turnEnded')).toMatchObject({ status: 'completed' });
+      });
+
+      it('the proposal marker still calls only the proposal hook', async () => {
+        const onAdminPropose = vi.fn(async () => OUTCOME);
+        const onAdminProposePack = vi.fn(async () => OUTCOME);
+        await run({ onAdminPropose, onAdminProposePack }, ADMIN_INPUT);
+
+        expect(onAdminPropose).toHaveBeenCalledTimes(1);
+        expect(onAdminProposePack).not.toHaveBeenCalled();
+      });
+
+      it('in an entry Turn, or with no hook wired, the pack marker is echoed', async () => {
+        const onAdminProposePack = vi.fn(async () => OUTCOME);
+        const entry = await run({ onAdminProposePack }, { ...INPUT, prompt: PACK_INPUT.prompt });
+        expect(onAdminProposePack).not.toHaveBeenCalled();
+        expect(entry.find((e) => e.type === 'message')).toMatchObject({
+          content: { text: `echo: ${PACK_INPUT.prompt}` },
+        });
+        const unwired = await run({}, PACK_INPUT);
+        expect(unwired.some((e) => e.type === 'toolCallStarted')).toBe(false);
+      });
+
+      it('a rejection ends the Turn failed, naming propose_pack_install', async () => {
+        const onAdminProposePack = vi.fn(async (): Promise<FakeAdminProposeOutcome> => {
+          throw new Error('no proposal targets chosen');
+        });
+        const events = await run({ onAdminProposePack }, PACK_INPUT);
+        expect(events.find((e) => e.type === 'message')).toMatchObject({
+          content: { text: 'propose_pack_install failed: no proposal targets chosen' },
+        });
+        expect(events.find((e) => e.type === 'turnEnded')).toMatchObject({ status: 'failed' });
+      });
     });
   });
 });
