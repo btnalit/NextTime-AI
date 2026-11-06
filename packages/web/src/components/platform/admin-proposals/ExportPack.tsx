@@ -9,7 +9,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { CapabilityCaller } from '../../../lib/clients.js';
 import { HttpError } from '../../../lib/http-client.js';
 import { type Translate, useT } from '../../../lib/i18n.js';
-import { downloadTar } from '../../../lib/tar.js';
+import { TarPathError, downloadTar } from '../../../lib/tar.js';
 import { Button } from '../../kit/button.js';
 import {
   Dialog,
@@ -176,7 +176,10 @@ function ExportPackDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [pack, setPack] = useState<AdminProposalPackExportWire | null>(null);
-  const [downloadFailed, setDownloadFailed] = useState(false);
+  // Why the download did not happen: the browser cannot download, or a path the tar cannot hold.
+  const [downloadFailed, setDownloadFailed] = useState<
+    null | { readonly kind: 'unsupported' } | { readonly kind: 'path'; readonly path: string }
+  >(null);
   const resultRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (pack !== null) resultRef.current?.focus();
@@ -326,11 +329,18 @@ function ExportPackDialog({
               </p>
             ) : null}
             <span className="text-3 text-small mono wrap-anywhere">{pack.digest}</span>
-            {downloadFailed ? (
+            {downloadFailed?.kind === 'unsupported' ? (
               <Notice tone="warn" testId={`${prefix}-download-failed`}>
                 {t(
                   '这个浏览器下载不了文件。上面列出的就是全部文件。',
                   'This browser cannot download files. The files listed above are all of it.',
+                )}
+              </Notice>
+            ) : downloadFailed?.kind === 'path' ? (
+              <Notice tone="warn" testId={`${prefix}-download-failed`}>
+                {t(
+                  `有一个文件的路径放不进 tar：${JSON.stringify(downloadFailed.path)}。没有下载任何东西；上面列出的就是全部文件，可以照 operations.md §14.11 写成文件。`,
+                  `One file's path cannot go in a tar: ${JSON.stringify(downloadFailed.path)}. Nothing was downloaded; the files listed above are all of it, and operations.md §14.11 writes them out.`,
                 )}
               </Notice>
             ) : null}
@@ -353,7 +363,16 @@ function ExportPackDialog({
             <Button
               variant="primary"
               size="s"
-              onClick={() => setDownloadFailed(!downloadTar(filename, pack.files))}
+              onClick={() => {
+                try {
+                  setDownloadFailed(
+                    downloadTar(filename, pack.files) ? null : { kind: 'unsupported' },
+                  );
+                } catch (err) {
+                  if (!(err instanceof TarPathError)) throw err;
+                  setDownloadFailed({ kind: 'path', path: err.path });
+                }
+              }}
               data-testid={`${prefix}-download`}
             >
               {t(`下载 ${filename}`, `Download ${filename}`)}

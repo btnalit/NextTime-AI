@@ -70,7 +70,20 @@ describe('ustarArchive', () => {
   });
 
   it('refuses a path that would unpack elsewhere or cannot be held', () => {
-    for (const bad of ['/etc/passwd', '../x', 'a/../b', 'a//b', './a', '', 'c'.repeat(101)]) {
+    for (const bad of [
+      '/etc/passwd',
+      '../x',
+      'a/../b',
+      'a//b',
+      './a',
+      '',
+      'c'.repeat(101),
+      // #501 on #977: a NUL ends the ustar name field early — `pk/1/..\0/x` reads back as `pk/1/..`.
+      'pk/1/skills/a\0b.md',
+      'pk/1/..\0/x',
+      'pk/1/a\nb.md',
+      'pk/1/a\u007fb.md',
+    ]) {
       expect(() => ustarArchive([{ path: bad, content: '' }]), bad).toThrow(TarPathError);
     }
   });

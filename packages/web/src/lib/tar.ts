@@ -7,7 +7,8 @@
  * Regular files only (`tar` makes the directories a path needs), mode 0644, owner 0/0 with no
  * names, modification time 0: the same files give the same bytes, as the export itself is
  * deterministic. A path longer than the 100-byte name field is split at a `/` into the 155-byte
- * prefix field; one that cannot be split, an absolute path, or one with a `..` segment is refused
+ * prefix field; one that cannot be split, an absolute path, one with a `..` segment, or one with a
+ * control character (a NUL ends a ustar name early: `a/..\0/x` reads back as `a/..`) is refused
  * rather than written in a form that unpacks somewhere else.
  */
 
@@ -20,10 +21,21 @@ export interface TarFile {
 }
 
 export class TarPathError extends Error {
+  readonly path: string;
   constructor(path: string, why: string) {
-    super(`cannot put "${path}" in a tar archive: ${why}`);
+    super(`cannot put ${JSON.stringify(path)} in a tar archive: ${why}`);
     this.name = 'TarPathError';
+    this.path = path;
   }
+}
+
+/** A C0 control character or DEL anywhere in `text` (NUL included). */
+function hasControlCharacter(text: string): boolean {
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
 }
 
 const encoder = new TextEncoder();
@@ -42,6 +54,7 @@ function writeField(header: Uint8Array, offset: number, width: number, text: str
 /** The ustar name and prefix fields for `path`. */
 function splitPath(path: string): { readonly name: string; readonly prefix: string } {
   if (path === '' || path.startsWith('/')) throw new TarPathError(path, 'not a relative path');
+  if (hasControlCharacter(path)) throw new TarPathError(path, 'a control character');
   if (path.split('/').some((segment) => segment === '' || segment === '.' || segment === '..')) {
     throw new TarPathError(path, 'an empty, "." or ".." segment');
   }

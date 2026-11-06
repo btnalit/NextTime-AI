@@ -112,6 +112,25 @@ describe('ExportPack', () => {
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:pack');
   });
 
+  it('a path the tar cannot hold downloads nothing and says which (#501 on #977)', async () => {
+    const http = httpWith(() => ({
+      ...PACK,
+      files: [...PACK.files, { path: 'ticket-desk/1/skills/a\0b.md', content: '' }],
+    }));
+    renderExport(http);
+    fireEvent.click(screen.getByTestId('part-2-export-submit'));
+    await screen.findByTestId('part-2-export-result');
+    const createObjectURL = vi.fn((_blob: Blob) => 'blob:pack');
+    Object.assign(URL, { createObjectURL, revokeObjectURL: vi.fn() });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    fireEvent.click(screen.getByTestId('part-2-export-download'));
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(click).not.toHaveBeenCalled();
+    const notice = screen.getByTestId('part-2-export-download-failed').textContent ?? '';
+    expect(notice).toContain('有一个文件的路径放不进');
+    expect(notice).toContain('ticket-desk/1/skills/a\\u0000b.md');
+  });
+
   it('a summary is required; empty notes are not sent', async () => {
     const http = httpWith(() => PACK);
     render(
