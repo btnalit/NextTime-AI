@@ -10,7 +10,7 @@ v0.63.0 上主机后，维护者当天撞到三个 bug，而 CI（`guards / qual
 | 现象 | 根因类型 | 为什么测试没拦住 |
 |---|---|---|
 | 「系统与授权」点授权后「成员」选不了（遗留 646，修复 #997） | **路径替身**：测试走的不是用户的路 | `journeys/01-entry-agent.spec.ts` 用 `getByTestId('ggf-member-select')` 直接对一个没有可见标签的 `<select>` 做 `selectOption`；用户操作的是标着「成员」的搜索框，那条路径没有任何测试 |
-| 后端重启后前端连接不恢复（切到管理面 `connection_closed`） | **环境替身**：测试只在理想环境里跑 | 所有 e2e 都在全新启动、全程不中断的 fake 栈上跑；没有一个 spec 在页面开着时重启 kernel、断网或换版本 |
+| 后端重启后前端连接不恢复（切到管理面 `connection_closed`） | **环境替身**：测试只在理想环境里跑（直接原因已确认：升级时 kernel / caddy 重建、旧标签页一直开着；与 G3 旧 bundle 的关系待核实） | 所有 e2e 都在全新启动、全程不中断的 fake 栈上跑；没有一个 spec 在页面开着时重启 kernel、断网或换版本 |
 | 管理员智能体看不到能力包 | **投影缺失**：同一领域动作在各层的投影没人对账 | `list_packs` / `extra_packs_status` 是 `channel: human`，只投影到控制台；`ADMIN_TOOL_CAPABILITY_NAMES` 里没有任何能力包读能力。没有一张表要求"新 capability 必须声明它投影到哪些入口" |
 
 **结论**：现有测试体系不弱（下节），问题是三类系统性盲区——①测试可以绕开用户的真实操作路径；②测试环境从不模拟"活着的系统"会遇到的扰动；③capability 在控制台 / API / agent 工具三层的投影没有声明，也没有对账。靠 PR 作者自觉补测试已经证明不可靠，要把"功能和测试同步"做成 CI 能拒绝的规则（§5）。
@@ -46,7 +46,7 @@ v0.63.0 上主机后，维护者当天撞到三个 bug，而 CI（`guards / qual
 | 非 observe 且有控制台入口 | 134，其中 e2e spec 里能找到名字的只有 37（低估，见上） |
 | e2e 直接交互的定位方式（单行匹配，近似） | `getByTestId` 251 次、CSS `locator()` 102 次、`getByRole`/`getByLabel` 75 次、`getByPlaceholder` 9 次 |
 
-最后一行是第一类盲区的量化：**约 80% 的点击 / 填写 / 选择不经过用户可见的角色或标签**。
+最后一行是第一类盲区的量化：**这类直接交互的定位器调用中约 80% 不经过用户可见的角色或标签**（单行匹配，作为上限看）。
 
 ## 4. 缺口清单
 
@@ -86,25 +86,35 @@ v0.63.0 上主机后，维护者当天撞到三个 bug，而 CI（`guards / qual
 
 ```yaml
 # 每个注册表 capability 一行，不允许缺省继承——新增一行就是一次显式决定
-install_pack:
-  console: required            # required | "none: <理由>"
-  agents: []                   # entry / worker / admin 的子集，必须与代码里的工具列表一致
-  agents_note: 管理员智能体不调人用的 install_pack；读已装包走另开的 agent_list_packs（AA5g D1）   # 可选
-  e2e: observed                # observed | "waived: <遗留编号>"（仅非 observe 且 console: required 时有意义）
-  repeat: creates              # 仅非 observe：idempotent | conflict | creates（G6）
+ratchet:
+  console_unexplained: 10      # 下面 console 写「none: 待说明…」的行数，只减不增
+  kernel_test_missing: 6       # 下面 kernel_test: missing 的行数，只减不增
+capabilities:
+  install_pack:
+    console: required          # required | "indirect: <文件>" | "none: <理由>"
+    agents: []                 # entry / admin 的子集，必须与代码里注册的工具一致
+  deprecate_skill:
+    console: "indirect: packages/web/src/components/CatalogPage.tsx"   # 经变量调用
+    agents: []
+  traverse:
+    console: "none: agent 的图遍历；控制台的对象页用 get_object / state_at 呈现同样的关系"
+    agents: [entry, admin]
 ```
 
-守卫 `scripts/guards/capability-matrix.mjs`（读 `packages/shared/dist`，与词表守卫同前提）：
+`install_pack` 的 `agents: []` 本身就是决定：管理员智能体不调人用的 `install_pack`，读已装包走另开的 `agent_list_packs`（AA5g D1），加进去的那个 PR 会在矩阵里多一行 `agent_list_packs`，`agents: [admin]`。
+
+守卫 `scripts/guards/capability-matrix.mjs`（读 `packages/shared/dist`，与词表守卫同前提；批次 A 已实现 M1–M3、M5、R）：
 
 | 规则 | 断言 | 拦住什么 |
 |---|---|---|
 | M1 | 注册表 ↔ matrix 一一对应（不缺不多） | 新增 capability 却没回答"投影到哪" |
-| M2 | `console: required` ⇔ `packages/web/src` 非测试代码里有调用方 | 声称有入口却没做；做了入口却没声明 |
-| M3 | `agents` 等于 `entry-agent.yaml` / `worker.ts` / `admin.ts` 实际注册的集合；并且是 kernel ceiling（`handles.ts`）的子集 | agent 工具面与声明漂移（能力包那一类） |
-| M4 | 非 observe 且 `console: required` 时必须有 `e2e` 字段；`waived` 的总数不得超过基线文件 `capability-matrix-baseline.json` 记录的数 | 新写入口不带 e2e 就合并 |
-| M5 | 名字至少出现在一个内核 `*.test.ts`（当前 6 个例外进基线） | 内核实现没有任何测试 |
+| M2 | `console: required` ⇔ `packages/web/src` 非测试代码以调用 helper 的写法调它（`http.call('<name>'`、`call<T>('<name>'`、`useCapability*(http, '<name>'`）；文案、标签表、`can('<name>')` 权限探测、注释都不算。经变量调用的写 `indirect: <文件>`，守卫只核对该文件存在且以引号写着这个名字（不核对它真的被调用，那一层由人审查与批次 B 的运行时采集补上） | 声称有入口却没做；做了入口却没声明 |
+| M3 | `agents` 等于 `modes/entry.ts` 的 `ENTRY_TOOL_CAPABILITY_NAMES` 与 `modes/admin.ts` 的 `ADMIN_TOOL_CAPABILITY_NAMES` 实际注册为 pi 工具的集合（扩展自己调的 `get_entry_context` / `report_turn` 与经投影门工具到达的 `observe_operation` 在 Handle 天花板上、不是工具，不算）（Worker 的工具按 WorkerDefinition 在 ceiling 内声明，不是固定集合，暂不进矩阵） | agent 工具面与声明漂移（能力包那一类） |
+| M4 | 批次 B：非 observe 且 `console: required` 的行加 `e2e: observed \| "waived: <遗留编号>"`，observed 由 §5.3 的运行时采集核对，waived 计入棘轮 | 新写入口不带 e2e 就合并 |
+| M5 | `kernel_test: missing` ⇔ 没有内核 `*.test.ts` 写着这个名字（补了测试却不删豁免也失败） | 内核实现没有任何测试 |
+| R | `ratchet:` 两个数必须等于实际计数：新增豁免要在同一 diff 里调高并由审查同意，修掉一个必须调低 | 豁免悄悄变多 |
 
-M4 的"observed"不靠名字匹配，靠 §5.3 的运行时采集，在 `web-e2e` job 末尾核对；M1–M3、M5 是纯静态检查，在 `quality` 里跑。初版 matrix 由生成器从当前代码扫出来（`node scripts/guards/capability-matrix.mjs --bootstrap`），所有现状缺口进基线，不阻塞任何在途 PR。
+M1–M3、M5、R 是纯静态检查，在 `quality` 与 `pnpm ci:guards` 里跑；M4 在 `web-e2e` 末尾。初版 matrix 由 `node scripts/guards/capability-matrix.mjs --bootstrap` 从当前代码扫出（保留已有理由），41 行没有控制台调用的 capability 里 31 行人工写了理由，剩 10 行「待说明」进棘轮。G6 的 `repeat` 字段随批次 D 加。
 
 **为什么不把这些字段加进注册表本身**：注册表是线上契约（快照进 `docs/contracts/capabilities.json`），投影意图和测试豁免会频繁变，混进去会让契约快照随测试状态抖动；独立文件 + 双向一一对应的守卫，强度与"必填字段"等价。
 
@@ -163,8 +173,8 @@ A、F 可以马上并行；B 依赖 A 的 matrix；C、E 依赖 B 的 fixture；
 ## 7. 风险与不做的事
 
 - **基线变成垃圾场**：豁免只减不增，新增豁免必须改基线文件并带遗留编号，守门人在 PR 里逐条问。
-- **守卫误报拖慢开发**：所有守卫先带自测（`*.test.mjs`），首版只对新增代码生效；静态扫描规则保持保守，宁可漏报靠守门人补，不做猜测性拦截。
-- **matrix 声明与真实意图脱节**（填表应付）：M2、M3 是双向一致性检查，填错会直接失败；`agents_note` 理由由守门人审查。
+- **守卫误报拖慢开发**：所有守卫先带自测（`*.test.mjs`），首版只对新增代码生效；静态扫描规则保持保守，宁可漏报靠守门人补，不做猜测性拦截。M2 只认调用 helper 的写法，经变量调用的要人写 `indirect:`，这是有意的：宁可让作者多写一行，也不让文案里出现的名字被当成入口。
+- **matrix 声明与真实意图脱节**（填表应付）：M2、M3 是双向一致性检查，填错会直接失败；`none:` 的理由由守门人审查。
 - **CI 时长**：`resilience` 约 2–3 分钟；遍历测试在已有 DB 套件里，增加量级为秒到分钟。
 - **不做**：不引入 mutation testing、不加第二个浏览器、不在云上跑主机的模型（付费预算只覆盖云上的模型，G13 用主机回归的固定输出代替）。
 
