@@ -219,6 +219,17 @@ function callLogger(
   };
 }
 
+/** Legacy 649: what a log line may say about an unexpected error — its name and, for a database
+ *  error, its SQLSTATE. Never the message, which can quote a credential-bearing value. */
+function errorFields(err: unknown): { errorName: string; sqlState?: string } {
+  const errorName = err instanceof Error ? err.name : typeof err;
+  const sqlState =
+    typeof err === 'object' && err !== null && typeof (err as { code?: unknown }).code === 'string'
+      ? (err as { code: string }).code
+      : undefined;
+  return sqlState === undefined ? { errorName } : { errorName, sqlState };
+}
+
 function rawDataBytes(raw: RawData): number {
   if (Array.isArray(raw)) return raw.reduce((sum, chunk) => sum + chunk.byteLength, 0);
   return raw.byteLength;
@@ -537,9 +548,17 @@ function handleConnection(
   }, authTimeoutMs);
   authTimer.unref?.();
 
-  socket.once('close', () => {
+  socket.once('close', (code: number, reason: Buffer) => {
     clearTimeout(authTimer);
     dropSubscriptions(state);
+    // Legacy 649: how a socket ended, and whether it ever had a caller — a socket that closes
+    // unauthenticated is what the console reports as `connection_closed`.
+    request.log.info({
+      ws: 'closed',
+      code,
+      reason: reason.toString(),
+      authenticated: state.caller !== undefined,
+    });
   });
 
   socket.on('message', (raw: RawData) => {
@@ -555,6 +574,7 @@ function handleConnection(
   /** L1-16: closes a socket that broke a pre-auth limit, dropping what it had queued. See
    *  {@link WS_POLICY_CLOSE_CODE} for why no JSON-RPC error frame goes first. */
   function closeForPolicy(reason: string): void {
+    request.log.warn({ ws: 'policy_close', reason, pendingFrames: state.pendingFrames.length });
     state.pendingFrames.splice(0);
     state.pendingBytes = 0;
     socket.close(WS_POLICY_CLOSE_CODE, reason);
@@ -636,6 +656,9 @@ function handleConnection(
         return { error: { code: WS_ERROR_CODES.FORBIDDEN, message: err.message } };
       }
       if (err instanceof UnauthorizedError) return unauthorized;
+      // Legacy 649: not a refusal but a failure to resolve at all (the database, a key file) —
+      // still answered as unauthorized, never silently.
+      request.log.error({ ws: 'authenticate', outcome: 'error', ...errorFields(err) });
       return unauthorized;
     }
   }
@@ -661,8 +684,17 @@ function handleConnection(
       // L1-16: one credential resolution at a time. Frames arriving meanwhile wait in the bounded
       // queue instead of each starting a lookup of its own.
       state.authReady = false;
+      const startedAt = performance.now();
       const attempt = await authenticateFromParams(req.params);
+      const durationMs = performance.now() - startedAt;
       if ('error' in attempt) {
+        request.log.warn({
+          ws: 'authenticate',
+          outcome: 'refused',
+          code: attempt.error.code,
+          durationMs,
+          open: socket.readyState === 1,
+        });
         send(socket, errorResponse(req.id, attempt.error.code, attempt.error.message));
         socket.close();
         return;
@@ -673,7 +705,18 @@ function handleConnection(
         socket.close();
         return;
       }
-      if (!adoptCaller(caller)) return;
+      if (!adoptCaller(caller)) {
+        // The deadline (or the client) closed the socket while the credential was resolving.
+        request.log.warn({ ws: 'authenticate', outcome: 'too_late', durationMs });
+        return;
+      }
+      request.log.info({
+        ws: 'authenticate',
+        outcome: 'success',
+        workspaceId: caller.principal.workspaceId,
+        principalId: caller.principal.id,
+        durationMs,
+      });
       send(socket, successResponse(req.id, { authenticated: true }));
       await drainPending();
       return;
@@ -753,7 +796,10 @@ function handleConnection(
         } else if (!adoptCaller(caller)) {
           state.authFailed = true;
         }
-      } catch {
+      } catch (err) {
+        if (!(err instanceof UnauthorizedError) && !(err instanceof ForbiddenError)) {
+          request.log.error({ ws: 'authenticate', outcome: 'error', ...errorFields(err) });
+        }
         send(socket, errorResponse(null, WS_ERROR_CODES.UNAUTHORIZED, 'unauthorized'));
         socket.close();
         state.authFailed = true;
