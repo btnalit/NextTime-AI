@@ -80,7 +80,7 @@ pnpm ci:guards        # kernel purity + pi 版本一致性 + membership-capabili
                        # 见 .github/workflows/ci.yml，本地没有等价单条命令）
 ```
 
-一次性跑到 CI 三个 job 会跑的全部内容（不含 ⑤ 端到端，那两个不在 CI 里）：`make ci`
+一次性跑到 `ci.yml` 三个 job 会跑的全部内容（不含 ⑤ 端到端：验收脚本与演练只在主机 / staging 预演跑，Playwright 在单独的 `e2e.yml` 里跑，`make ci` 不起它）：`make ci`
 （`lint typecheck test build depcruise` + `pnpm ci:guards`）—— 但 `make ci` 不会自动起临时 Postgres，
 先跑 §3 里的 `test-db.sh` + 导出 `DATABASE_URL` 再跑 `make ci`，否则②层的 DB 套件全部被跳过（见
 §5，跳过不是失败，`make ci` 仍会显示绿）。

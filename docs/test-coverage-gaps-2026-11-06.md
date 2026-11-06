@@ -108,7 +108,7 @@ capabilities:
 | 规则 | 断言 | 拦住什么 |
 |---|---|---|
 | M1 | 注册表 ↔ matrix 一一对应（不缺不多） | 新增 capability 却没回答"投影到哪" |
-| M2 | `console: required` ⇔ `packages/web/src` 非测试代码以调用 helper 的写法调它（`http.call('<name>'`、`call<T>('<name>'`、`useCapability*(http, '<name>'`）；文案、标签表、`can('<name>')` 权限探测、注释都不算。经变量调用的写 `indirect: <文件>`，守卫核对该文件确实写着这个名字 | 声称有入口却没做；做了入口却没声明 |
+| M2 | `console: required` ⇔ `packages/web/src` 非测试代码以调用 helper 的写法调它（`http.call('<name>'`、`call<T>('<name>'`、`useCapability*(http, '<name>'`）；文案、标签表、`can('<name>')` 权限探测、注释都不算。经变量调用的写 `indirect: <文件>`，守卫只核对该文件是入库文件且以引号写着这个名字（不核对它真的被调用，那一层由人审查与批次 B 的运行时采集补上） | 声称有入口却没做；做了入口却没声明 |
 | M3 | `agents` 等于 `ontology/entry-agent.yaml` 的 `capabilities` 与 `modes/admin.ts` 的 `ADMIN_TOOL_CAPABILITY_NAMES` 实际注册的集合（Worker 的工具按 WorkerDefinition 在 ceiling 内声明，不是固定集合，暂不进矩阵） | agent 工具面与声明漂移（能力包那一类） |
 | M4 | 批次 B：非 observe 且 `console: required` 的行加 `e2e: observed \| "waived: <遗留编号>"`，observed 由 §5.3 的运行时采集核对，waived 计入棘轮 | 新写入口不带 e2e 就合并 |
 | M5 | `kernel_test: missing` ⇔ 没有内核 `*.test.ts` 写着这个名字（补了测试却不删豁免也失败） | 内核实现没有任何测试 |
