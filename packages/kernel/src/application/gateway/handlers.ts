@@ -346,6 +346,7 @@ import {
   updateOperationDescriptionHandler,
 } from './operation-manifest-handlers.js';
 import {
+  extraPacksStatusHandler,
   installPackHandler,
   listPacksHandler,
   previewPackInstallHandler,
@@ -2589,6 +2590,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   // P-B2b modules (platform-modules-handlers.ts)
   ['list_modules', listModulesHandler],
   ['set_default_modules', setDefaultModulesHandler],
+  // S11 AA5d extra packs, platform plane (pack-handlers.ts)
+  ['extra_packs_status', extraPacksStatusHandler],
   ['list_workspace_modules', listWorkspaceModulesHandler],
   ['install_module', installModuleHandler],
   ['upgrade_module', upgradeModuleHandler],

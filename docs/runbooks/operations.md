@@ -695,7 +695,8 @@ Skill / Worker 文件与跨清单规则）：目录名就是包名和版本号�
 **这与 `add-domain-pack.md` 的关系**：那份手册讲的 `seed-domain-pack` CLI（主机 `config/ontology/`，
 `DOMAIN_PACK_DIR`）是操作员手动往**某一个**工作区塞一个领域包的旁路，不经过 `packs/`，也不留安装记录；
 控制台「能力包」页只会按哈希认出它（对上某个包版本就显示那个版本，对不上就是「已定制」，见下）。凡是要让
-owner 在控制台里审阅后「安装 / 升级」的内容，都必须走本节——进 `packs/` 并随镜像发布。
+owner 在控制台里审阅后「安装 / 升级」的内容，都必须走本节——进 `packs/` 并随镜像发布，或者作为本部署附加的包放进
+主机 `config/packs/`（§14.10）。
 
 **"已安装版本" 怎么判定**：内核不存安装状态，每次调用都现算——每个组成部分：把各版本里该族的定义文件（或
 Skill / Worker 文件）按发布时相同的解析路径读出，规范化 JSON 后 sha256（`contentDigest`，`sha256:` 前缀），与工作区
@@ -959,6 +960,68 @@ requires:
 端到端验收见 `packages/kernel/src/application/gateway/knowledge-pack.integration.test.ts`。这个测试用假的 RAGFlow
 走完整条路径：按预设建门、工作区接入、先装 knowledge 被拒、装 ops-assets、装 knowledge 并核验通过，然后 Worker 检索，
 RAGFlow 的 key 只由门发出。
+
+### 14.10 本部署附加的能力包（S11 AA5d）
+
+除了镜像里自带的 `packs/`，一个部署可以加自己的能力包：比如把一份已应用的管理员提案导出成包，或者组织自己写的包。
+放在主机 `${NEXTTIME_DATA}/config/packs/<name>/<version>/`，内核经只读的 `config/` 挂载读 `/data/config/packs`
+（compose 里 kernel 的 `EXTRA_PACKS_DIR`，`host-env-init.sh` 建好这个目录）。内核写不了这里
+（`scripts/validate-compose.mjs` 守着），包只能由维护者放进来。
+
+**格式**：和 §14、§14.5 完全一样（Pack Contract v1），只有一处不同：本体组成部分的 `domainPack` 从这个版本自己的
+`ontology/` 目录读（`<name>/<version>/ontology/<domainPack>`），不从镜像的 `ontology/` 读，因为附加包没法往镜像里加文件。
+
+```
+config/packs/
+  org-notes/
+    1/
+      pack.yaml
+      ontology/org-notes.yaml
+      skills/org-note-taking.md
+      workers/org-note-worker.yaml
+```
+
+**放进去就生效，不用重启内核**：和自带包一样，每次调用都重新读。所以一定先解到同一个文件系统里的临时目录，再一次
+`mv` 过去，内核就不会读到写了一半的目录（以 `.` 开头的目录不会被当成包）：
+
+```
+mkdir -p ${NEXTTIME_DATA}/config/packs && cd ${NEXTTIME_DATA}/config/packs
+mkdir .incoming && tar --no-same-owner --no-same-permissions -xf /path/to/org-notes.tar -C .incoming
+# 没有符号链接才往下走；内核以 uid 10001 读，所以要 chmod
+test -z "$(find .incoming -type l)" \
+  && chmod -R a+rX .incoming \
+  && mv .incoming/org-notes ./org-notes \
+  || { echo '包里有符号链接，或上面哪一步失败了：没有放进去'; find .incoming -type l; }
+# 已有的包加一个新版本时，把上面的 mv 换成：mv .incoming/org-notes/2 ./org-notes/2
+rm -r .incoming
+```
+
+- `mkdir -p`：AA5d 之前装的主机原来没有 `config/packs/`；`apply-release.sh` 和 `host-env-init.sh` 都会建，这里再保底一次。
+- `--no-same-owner --no-same-permissions`：root 解 tar 默认保留包里的属主和权限；这里让文件归 root、只读给容器。
+- 符号链接：包里的文件必须是它自己的。有链接时那一段只打印链接，不会 `chmod` 和 `mv`；最后的 `rm -r` 把解开的东西清掉。内核也不读：附加包里的文件是链接或在链接下面，这个包整个丢掉（原因写「symbolic link」），因为链接会把内核能读到的别的文件（比如 `/run/secrets/` 下的）带进包里。
+
+**附加包有毛病，只丢它自己**：自带包有一条规则不过，整个注册表照旧拒绝加载（那是部署本身的 bug）；附加包不一样，
+违反任何一条，只把这个包丢掉，其余照常列出、安装、核验、提案和新建工作区。会被丢掉的情况：
+
+- 它自己的规则：包名、版本目录（从 1 连续）、清单、Skill / Worker 文件、域包文件、疑似凭证，同 §14、§14.5；文件是符号链接或在链接下面；
+- 和自带包同名，或者带了自带包已有的组成部分（本体族、Skill 名、Worker 名）；
+- 和另一个附加包带了同一个组成部分：**两个都丢**，因为分不清哪个才是想要的；
+- 依赖的包不在（或版本不够），或者附加包之间互相依赖绕成环；依赖了被丢掉的包的，也一起丢掉。
+
+自带包永远不会依赖附加包。被丢掉的包和原因在两处能看到：平台面的 `extra_packs_status`（控制台入口在 AA5d-3 加；文件按它在
+`config/packs/` 下的路径写，疑似凭证的值打码），和内核日志里每个原因一行 `{"event":"extra_pack_skipped", ...}`
+（每个进程每个原因只记一次）。改好文件后不用做别的，下次调用就会重新读。
+
+**附加包永远不是模块**：不出现在平台「模块」页，不能设成默认模块，工作区里只在「能力目录 → 能力包」里出现，
+`list_packs` 里 `source: "extra"`（自带的是 `"builtin"`）。安装、审阅、安装记录、撤销、核验和自带包完全一样。
+
+**版本规矩和自带包一样**：已经放进去的版本不要改，要改内容就加一个新版本目录（§14.1）。改了已有版本的文件，
+装着这个版本的工作区会立刻变成「已定制」，之前的安装记录再核验也会不通过。
+
+**撤掉一个附加包**：把它的目录移出 `config/packs/`。之后它不再出现在能力包列表里，也不能再装；已经装进工作区的内容
+留着，安装记录照样能在「安装历史」里撤销，只是再核验会因为「这个部署里已经没有这个版本」而不通过。要恢复，把目录移回来。
+
+**备份**：`config/packs/` 在 `config/` 里，跟着备份走（`backup-restore.md`）。
 
 ## 15. 平台默认入口模型（P-D 剩余 E5）
 

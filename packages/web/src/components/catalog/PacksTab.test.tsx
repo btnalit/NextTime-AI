@@ -61,6 +61,7 @@ function component(patch: Partial<PackComponentStateWire> = {}): PackComponentSt
 function pack(patch: Partial<PackWire> = {}): PackWire {
   return {
     name: 'ops-assets',
+    source: 'builtin',
     summary: 'Hosts and the services on them',
     latestVersion: 2,
     versions: VERSIONS,

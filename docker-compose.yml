@@ -126,6 +126,12 @@ services:
         # visible through the read-only /data/config mount below. Put the yaml there, run seed;
         # no kernel rebuild. The image's own /app/ontology stays the bundled examples.
         DOMAIN_PACK_DIR: /data/config/ontology,
+        # S11 AA5d (docs/runbooks/operations.md §14): packs this deployment adds beside the image's
+        # — the host's `${NEXTTIME_DATA}/config/packs/<name>/<version>/`, through the same read-only
+        # mount. Read on every call (no restart); one that breaks a rule is left out and shown on
+        # the platform plane (`extra_packs_status`), never the whole registry. The kernel cannot write
+        # here (scripts/validate-compose.mjs).
+        EXTRA_PACKS_DIR: /data/config/packs,
         # S10 U1: the same URL the update-feed service downloads from (keep the two defaults equal —
         # scripts/validate-compose.mjs checks it). The kernel never fetches it (E3); it only takes
         # the owner/repo from it and drops any link in the downloaded record that points elsewhere.

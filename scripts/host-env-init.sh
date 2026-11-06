@@ -262,6 +262,13 @@ chmod 644 "$EGRESS_SOURCES_JSON"
 # idempotent since S5.3); an existing one is left alone.
 mkdir -p "$CONFIG_DIR/ontology"
 
+# --- config/packs/: capability packs this deployment adds (S11 AA5d, docs/runbooks/operations.md
+# §14) — the kernel reads `packs/<name>/<version>/` from here on every call (env EXTRA_PACKS_DIR,
+# through the read-only config/ mount), beside the image's own. Root-owned and read-only for the
+# containers like the rest of config/: a pack comes in by a maintainer's hand, never the kernel's.
+# Covered by the backup of config/. An existing directory and the packs in it are left alone.
+mkdir -p "$CONFIG_DIR/packs"
+
 # --- config/update-feed/: the update-feed service's one writable directory (S10 U1) -----------
 # docker-compose.yml's `update-feed` runs as its own uid:gid 10002:10002 and writes channel.json
 # here; the kernel reads it through the read-only config/ mount. Owned by that uid alone — config/

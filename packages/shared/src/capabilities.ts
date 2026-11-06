@@ -4069,6 +4069,20 @@ const platformCapabilities = [
     description:
       'Set the module family names `create_workspace` installs (each at its own latest version) into every new workspace. Every name must already be in `list_modules` — an unknown name 400s rather than being silently kept.',
   },
+  // S11 AA5d: the packs a deployment adds beside the image's (`EXTRA_PACKS_DIR`, the host's
+  // `config/packs/`) — which are read, and which are left out and why, so a maintainer who put one
+  // there sees it on the platform plane, not only in the kernel's log.
+  {
+    name: 'extra_packs_status',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: noParams,
+    resultSchema: wire.ExtraPacksWireSchema,
+    description:
+      'The packs this deployment adds beside the image’s (`EXTRA_PACKS_DIR`, the host’s `config/packs/`), read now: each one read (every workspace’s list_packs offers it as source extra; never a module), and each one left out with the rule it breaks — its manifest or a component file, its versions, a name or a component a pack of the image has, a component another extra pack publishes too (both are left out), a pack it requires that is not here, a cycle — a pack requiring one left out is left out too. A file is named by its path under that directory; a value that looks like a credential is masked. configured false: the kernel has no extra packs directory. unreadable: the directory is there but cannot be read. Writes nothing.',
+  },
   // S11 AA3b (plan F12): the admin proposals admin agents made, as platform administrators read
   // them — every proposal, across trial workspaces — and withdrawing one. The agent reads its own
   // through the `admin_proposal` group (`agent_list_admin_proposals` / `agent_get_admin_proposal`); the

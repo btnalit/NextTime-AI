@@ -15,6 +15,7 @@ const WORKER = '66666666-7777-4888-8999-000000000000';
 function pack(components: readonly PackComponentStateWire[]): PackWire {
   return {
     name: 'ops-base',
+    source: 'builtin',
     summary: 'Hosts and the services on them',
     latestVersion: 3,
     versions: [],

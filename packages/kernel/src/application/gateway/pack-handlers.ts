@@ -1,4 +1,5 @@
 import type {
+  ExtraPacksWire,
   PackComponentStateWire,
   PackComponentWire,
   PackInstallItemWire,
@@ -33,6 +34,7 @@ import {
   loadPackState,
   previewPackInstall,
   readPackDependencies,
+  readPackRegistry,
   readPackRequirements,
   readWorkerBindings,
 } from '../packs/index.js';
@@ -168,6 +170,7 @@ async function toPackWire(
   }
   return {
     name: state.entry.name,
+    source: state.entry.source,
     summary: latest.summary,
     latestVersion: latest.version,
     versions: state.entry.versions.map(toPackVersionWire),
@@ -305,6 +308,27 @@ export const listPacksHandler: CapabilityHandler = async (client, workspaceId) =
     );
   }
   return { result: { items } };
+};
+
+/** S11 AA5d `extra_packs_status` (platform plane): the extra packs read and those left out, read
+ *  now (`readPackRegistry`). Reads no table. */
+export const extraPacksStatusHandler: CapabilityHandler = async () => {
+  const read = await readPackRegistry();
+  const packs = [...read.registry.values()]
+    .filter((entry) => entry.source === 'extra')
+    .map((entry) => {
+      const latest = latestPackVersion(entry);
+      return { name: entry.name, summary: latest.summary, latestVersion: latest.version };
+    })
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const result: ExtraPacksWire = {
+    configured: read.extraPacksDir !== null,
+    packs,
+    skipped: read.skipped.map((skip) => ({ name: skip.name, reason: skip.reason })),
+    unreadable: read.extraPacksUnreadable,
+    checkedAt: new Date().toISOString(),
+  };
+  return { result };
 };
 
 /** `workerGates` as the domain takes it (by Worker name). */

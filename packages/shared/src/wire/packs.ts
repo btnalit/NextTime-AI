@@ -3,6 +3,7 @@ import {
   ChangeItemClassificationSchema,
   PackInstallStatusSchema,
   PackRequirementStateSchema,
+  PackSourceSchema,
 } from '../enums.js';
 import {
   ChangeGateRefWireSchema,
@@ -197,6 +198,8 @@ export type PackComponentStateWire = z.infer<typeof PackComponentStateWireSchema
 export const PackWireSchema = z
   .object({
     name: z.string(),
+    /** S11 AA5d: the image's own pack (`builtin`) or one this deployment added (`extra`). */
+    source: PackSourceSchema,
     /** The latest version's. */
     summary: z.string(),
     latestVersion: z.number().int().positive(),
@@ -212,6 +215,44 @@ export const PackWireSchema = z
   })
   .strict();
 export type PackWire = z.infer<typeof PackWireSchema>;
+
+/** S11 AA5d: an extra pack this deployment reads (`extra_packs_status`), by its latest version. */
+export const ExtraPackWireSchema = z
+  .object({
+    name: z.string(),
+    summary: z.string(),
+    latestVersion: z.number().int().positive(),
+  })
+  .strict();
+export type ExtraPackWire = z.infer<typeof ExtraPackWireSchema>;
+
+/** S11 AA5d: a directory in the extra packs directory that is not read as a pack, and why — a
+ *  file named by its path under that directory, a value that looks like a credential masked. */
+export const SkippedExtraPackWireSchema = z
+  .object({
+    name: z.string(),
+    reason: z.string(),
+  })
+  .strict();
+export type SkippedExtraPackWire = z.infer<typeof SkippedExtraPackWireSchema>;
+
+/** S11 AA5d: `extra_packs_status` — the deployment's extra packs (`EXTRA_PACKS_DIR`, the host's
+ *  `config/packs/`), as platform administrators check them. `configured`: the kernel has an extra
+ *  packs directory (false: every list below is empty). `packs`: those read, in name order; every
+ *  workspace's `list_packs` offers them (`source: 'extra'`). `skipped`: those left out, each with
+ *  the rule it breaks — a pack requiring one left out is left out too. `unreadable`: the
+ *  directory is there but cannot be read (no extra pack is), else `null`; a directory that is not
+ *  there is no extra packs, not an error. Read now: the kernel reads the directory on every call. */
+export const ExtraPacksWireSchema = z
+  .object({
+    configured: z.boolean(),
+    packs: z.array(ExtraPackWireSchema),
+    skipped: z.array(SkippedExtraPackWireSchema),
+    unreadable: z.string().nullable(),
+    checkedAt: z.string(),
+  })
+  .strict();
+export type ExtraPacksWire = z.infer<typeof ExtraPacksWireSchema>;
 
 /** What an item changes in its family's type names (a LinkType name counts once, whatever its
  *  endpoints; `changed`: declared in both, differently). */

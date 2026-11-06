@@ -122,6 +122,54 @@ for (const [name, service] of Object.entries(doc.services ?? {})) {
     }
   }
 }
+// S11 AA5d: the extra packs the kernel reads (EXTRA_PACKS_DIR) are the host's config/packs/,
+// through the read-only config/ mount — no service may write the directory a pack is read from,
+// the kernel (and an agent acting through it) least of all; a pack comes in by a maintainer's hand.
+{
+  const problems = [];
+  const kernel = doc.services?.kernel;
+  if (kernel?.environment?.EXTRA_PACKS_DIR !== '/data/config/packs') {
+    problems.push('kernel EXTRA_PACKS_DIR must be /data/config/packs');
+  }
+  const mountsOf = (service) =>
+    (service?.volumes ?? []).map((entry) => {
+      if (typeof entry !== 'string') {
+        return {
+          source: String(entry?.source ?? ''),
+          target: String(entry?.target ?? ''),
+          readOnly: entry?.read_only === true,
+        };
+      }
+      const [source = '', target = '', mode = ''] = entry
+        .replace(/\$\{[^}]*\}/g, '$VAR')
+        .split(':');
+      return { source, target, readOnly: mode.split(',').includes('ro') };
+    });
+  if (
+    !mountsOf(kernel).some(
+      (mount) =>
+        mount.source === '$VAR/config' && mount.target === '/data/config' && mount.readOnly,
+    )
+  ) {
+    problems.push('kernel must mount ${NEXTTIME_DATA}/config at /data/config read-only');
+  }
+  // `config/`, `config/packs/` or below — or the whole data directory (`$VAR`), which holds them.
+  const PACKS_SOURCE = /^\$VAR\/?$|\/config(\/packs(\/.*)?)?\/?$/;
+  for (const [name, service] of Object.entries(doc.services ?? {})) {
+    for (const mount of mountsOf(service)) {
+      if (PACKS_SOURCE.test(mount.source) && !mount.readOnly) {
+        problems.push(`service ${name} mounts ${mount.source} writable`);
+      }
+    }
+  }
+  for (const problem of problems) {
+    console.error(`extra packs (S11 AA5d): ${problem}`);
+    process.exitCode = 1;
+  }
+  if (problems.length === 0)
+    console.log('extra packs (S11 AA5d): config/packs read-only everywhere');
+}
+
 const requiredCredentialWiring = [
   ['llm-proxy', 'LLM_PROVIDER_KEYS_DIR'],
   ['gatekeeper-ragflow', 'GATE_CREDENTIAL_RAGFLOW_API_KEY_FILE'],

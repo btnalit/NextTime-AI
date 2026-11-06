@@ -134,7 +134,7 @@ describe('classifyModuleState', () => {
   const entry = {
     name: 'test-mod',
     versions: [version(1, 'digest-v1'), version(2, 'digest-v2')],
-    pack: { name: 'test-mod', versions: [] },
+    pack: { name: 'test-mod', source: 'builtin' as const, versions: [] },
   };
 
   it('not_installed when no row exists', () => {
