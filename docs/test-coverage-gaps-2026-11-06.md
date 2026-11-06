@@ -163,7 +163,7 @@ M1–M3、M5、R 与 M4 的静态半边是纯静态检查，在 `quality` 与 `p
 | B | e2e 定位器守卫 + 基线；`e2e/lib/test.ts` 采集 fixture + E1；`web-e2e` 末尾核对 M4 | G1、G5 | #488；UX 验收（触 `packages/web/e2e`） | A |
 | C | `resilience` 项目（重启 / 断网 / 切面 / 会话过期） | G2、G16 | #488 + UX 验收；如需改重连逻辑走控制台 PR | B 的 fixture |
 | D | 内核遍历测试：角色×写 capability 经 dispatch 的拒绝路径 + 审计 actor / outcome + 重复调用按 `repeat` 声明断言 + 跨工作区读隔离 | G6、G10、G11、G12 | #493 | A（读 matrix 的 `repeat`） |
-| E | 旅程 `10-pack-lifecycle`；旧旅程按定位器守卫改写（先 646 所在的 01、06、08） | G9、G1 存量 | UX 验收 | B |
+| E | 旅程 `10-pack-lifecycle`；旧旅程按定位器守卫改写（先 646 所在的 01、06、08）；遗留 657 里先补所有者关键动作的真实旅程：`confirm_goal`、`release_goal_hold`、`revise_goal`、`publish_operation`、`refresh_operation_governance`（B2 之前只被伪造应答走到过，见 §5.3） | G9、G1 存量、G5 存量 | UX 验收 | B |
 | F | staging 加 rollback 与 restore 阶段；`release.md` 写明主机升级前那次预演的 `from` = 主机当前版本（日常预演不限） | G7、G8、G14 | #488、#484 | 无 |
 | G | 产品决定后：前端版本探测 + e2e | G3 | 控制台、#493 | 维护者 / 协调定 |
 | — | G13、G15、G17、G18 | — | 随相关波次 | — |
