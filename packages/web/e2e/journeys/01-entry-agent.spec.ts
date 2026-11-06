@@ -208,7 +208,8 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
 
     // 「成员」这一栏本身就是成员列表（主机 v0.63.0 验收：它曾经只是搜索框，下拉框是下面另一个
     // 控件，在框里输入名字并不算选中，授予一直卡在「选择成员」）。
-    const member = grantForm.getByTestId('ggf-member');
+    // By its label, the way a person finds it (scripts/guards/e2e-locators.mjs).
+    const member = grantForm.getByRole('combobox', { name: '成员' });
     await expect(member).toBeEnabled({ timeout: 15_000 });
     await member.click();
     const memberOptions = grantForm.getByRole('option');
