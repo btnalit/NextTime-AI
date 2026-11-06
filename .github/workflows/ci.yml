@@ -54,9 +54,18 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
+    # pull-requests: read — the ratchet step reads the PR's labels at run time (a job-level block
+    # replaces the workflow's, so contents: read is restated).
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The pull_request checkout is the merge commit; its first parent is the base the PR is
+          # compared with (the ratchet step below).
+          fetch-depth: 2
 
       # pnpm/action-setup does not support pnpm v11+ (root package.json pins
       # packageManager: pnpm@11.25.0) - its own README points to pnpm/setup for v11 and newer,
@@ -177,17 +186,27 @@ jobs:
         run: node --test scripts/guards/ratchet-shrinks.test.mjs
 
       # The two guards above hold each ratchet file to the code of the same commit; this holds it to
-      # the base branch, so a PR cannot raise one by re-baselining. A reviewed raise (a waiver) needs
-      # the ratchet-raise label — add it, then re-run this job.
+      # the base branch, so a PR cannot raise one by re-baselining. The base is the merge commit's
+      # first parent — what this run's merge was made from, also on a re-run — not the base tip
+      # fetched now. A reviewed raise (a waiver) needs the ratchet-raise label: add it, then re-run
+      # this job. The labels are read from the API at run time, because a re-run reuses the event
+      # payload, which does not have a label added after it.
       - name: Test-debt ratchets only go down against the base branch (scripts/guards/ratchet-shrinks.mjs)
         if: ${{ github.event_name == 'pull_request' }}
         env:
-          BASE_REF: ${{ github.base_ref }}
-          ALLOW_RAISE: ${{ contains(github.event.pull_request.labels.*.name, 'ratchet-raise') }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
-          git fetch --no-tags --depth=1 origin "$BASE_REF"
-          set -- --base FETCH_HEAD
-          if [ "$ALLOW_RAISE" = true ]; then set -- "$@" --allow-raise; fi
+          git rev-parse --verify --quiet HEAD^2 >/dev/null \
+            || { echo "::error::expected the pull_request merge commit checked out" >&2; exit 1; }
+          set -- --base HEAD^1
+          # Read first, then match: a failed read fails the step (closed), and `grep -q` exiting
+          # early cannot turn the pipe red under pipefail.
+          labels=$(gh api "repos/$REPO/issues/$PR/labels" --jq '.[].name')
+          if grep -qx 'ratchet-raise' <<<"$labels"; then
+            set -- "$@" --allow-raise
+          fi
           node scripts/guards/ratchet-shrinks.mjs "$@"
 
       - name: Compose static validation (R-03 — the internal-plane root is mounted into the kernel only; every service secret is declared)
