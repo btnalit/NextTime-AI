@@ -475,6 +475,297 @@ describe('AdminProposalsTab (能力目录 · 管理员提案, S11 AA4a)', () => 
     }
   });
 
+  it('the owner keeps fewer gates for a proposed Worker: the review is read again with that choice, and the apply binds exactly it and says how the check right after went', async () => {
+    const candidates = [
+      { id: 'gk-1', name: 'Docker prod', connector: 'docker', held: true },
+      { id: 'gk-2', name: 'Docker staging', connector: 'docker', held: false },
+    ];
+    const reviewed = (kept: readonly string[] | undefined) => {
+      const ids = kept ?? candidates.map((gate) => gate.id);
+      return preview({
+        digest: kept === undefined ? 'sha256:reviewed' : `sha256:kept-${ids.join('+') || 'none'}`,
+        items: preview().items.map((item) =>
+          item.kind === 'worker_definition_version'
+            ? {
+                ...item,
+                newFamily: true,
+                before: null,
+                gates: candidates
+                  .filter((gate) => ids.includes(gate.id))
+                  .map((gate) => ({ id: gate.id, name: gate.name })),
+                gateBinding: { systems: ['docker'], source: 'apply' as const, candidates },
+              }
+            : item,
+        ),
+      });
+    };
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_admin_proposal_segments: () => ({ items: [received()] }),
+      preview_admin_proposal_segment: (params) =>
+        reviewed(
+          (params as { workerGates?: Record<string, readonly string[]> }).workerGates?.[
+            'ops-runner'
+          ],
+        ),
+      apply_admin_proposal_segment: () => ({
+        segment: received({
+          status: 'applied',
+          appliedSegmentId: RECORD,
+          decidedAt: '2026-11-02T08:00:00.000Z',
+          decidedBy: { id: 'p-owner', kind: 'human', displayName: 'Owner' },
+        }),
+        changeSegmentId: RECORD,
+        verification: {
+          trigger: 'system',
+          verifiedBy: { id: 'p-owner', kind: 'human', displayName: 'Owner' },
+          verifiedAt: '2026-11-02T08:00:01.000Z',
+          passed: true,
+          sourceFound: true,
+          items: [],
+          requirements: [],
+          dependencies: [],
+        },
+      }),
+    });
+    renderTab(http, SEGMENT);
+
+    // Every candidate ticked by default; the one the owner does not hold says so.
+    const choice = await screen.findByTestId('catalog-proposal-item-2-binding-choice');
+    const prod = within(choice).getByTestId('catalog-proposal-item-2-binding-gate-gk-1');
+    const staging = within(choice).getByTestId('catalog-proposal-item-2-binding-gate-gk-2');
+    expect((prod as HTMLInputElement).checked).toBe(true);
+    expect((staging as HTMLInputElement).checked).toBe(true);
+    expect(
+      within(choice).queryByTestId('catalog-proposal-item-2-binding-gate-gk-1-not-held'),
+    ).toBeNull();
+    expect(
+      within(choice).getByTestId('catalog-proposal-item-2-binding-gate-gk-2-not-held'),
+    ).toBeTruthy();
+
+    // Unticking one reads the review again with the choice, by the name the Worker goes by; a
+    // confirmation given before is given again for the new review.
+    fireEvent.click(screen.getByTestId('catalog-proposal-item-2-confirm'));
+    fireEvent.click(staging);
+    expect(
+      (screen.getByTestId('catalog-proposal-item-2-confirm') as HTMLInputElement).checked,
+    ).toBe(false);
+    await waitFor(() =>
+      expect(
+        named(http.calls, 'preview_admin_proposal_segment').map((call) => call.params),
+      ).toEqual([
+        { segmentId: SEGMENT },
+        { segmentId: SEGMENT, workerGates: { 'ops-runner': ['gk-1'] } },
+      ]),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('catalog-proposal-item-2-gates').textContent).not.toContain(
+        'Docker staging',
+      ),
+    );
+    expect(screen.queryByTestId('catalog-proposal-rereading')).toBeNull();
+    expect(
+      (screen.getByTestId('catalog-proposal-item-2-binding-gate-gk-2') as HTMLInputElement).checked,
+    ).toBe(false);
+
+    // Unticking the other too binds none, and says what that means.
+    fireEvent.click(screen.getByTestId('catalog-proposal-item-2-binding-gate-gk-1'));
+    expect(await screen.findByTestId('catalog-proposal-item-2-binding-none-kept')).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.getByTestId('catalog-proposal-item-2-gates').textContent).toContain(
+        '这次应用一个门都不绑',
+      ),
+    );
+    fireEvent.click(screen.getByTestId('catalog-proposal-item-2-binding-gate-gk-1'));
+    await waitFor(() =>
+      expect(screen.queryByTestId('catalog-proposal-item-2-binding-none-kept')).toBeNull(),
+    );
+    await waitFor(() => expect(screen.queryByTestId('catalog-proposal-rereading')).toBeNull());
+
+    fireEvent.click(screen.getByTestId('catalog-proposal-item-2-confirm'));
+    fireEvent.click(screen.getByTestId('catalog-proposal-item-3-confirm'));
+    fireEvent.click(screen.getByTestId('catalog-proposal-apply-trigger'));
+    const confirm = await screen.findByTestId('catalog-proposal-apply-confirm');
+    fireEvent.click(within(confirm).getByRole('button', { name: '应用' }));
+    await waitFor(() =>
+      expect(named(http.calls, 'apply_admin_proposal_segment').map((call) => call.params)).toEqual([
+        {
+          segmentId: SEGMENT,
+          reviewedDigest: 'sha256:kept-gk-1',
+          confirmedOrdinals: [2, 3],
+          workerGates: { 'ops-runner': ['gk-1'] },
+        },
+      ]),
+    );
+    expect((await screen.findByTestId('catalog-proposal-applied-verification')).textContent).toBe(
+      '应用后已核验：通过。',
+    );
+  });
+
+  it('a gate kept for a Worker that can no longer be bound sends the choice back to the default, and says so', async () => {
+    const candidates = [
+      { id: 'gk-1', name: 'Docker prod', connector: 'docker', held: true },
+      { id: 'gk-2', name: 'Docker staging', connector: 'docker', held: true },
+    ];
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_admin_proposal_segments: () => ({ items: [received()] }),
+      preview_admin_proposal_segment: (params) => {
+        if ((params as { workerGates?: unknown }).workerGates !== undefined) {
+          throw new HttpError(
+            'capability_error',
+            'gate(s) gk-1 are not connected gates of the systems Worker "ops-runner" names',
+            'invalid_params',
+          );
+        }
+        return preview({
+          items: preview().items.map((item) =>
+            item.kind === 'worker_definition_version'
+              ? {
+                  ...item,
+                  gates: candidates.map((gate) => ({ id: gate.id, name: gate.name })),
+                  gateBinding: { systems: ['docker'], source: 'apply' as const, candidates },
+                }
+              : item,
+          ),
+        });
+      },
+    });
+    renderTab(http, SEGMENT);
+    fireEvent.click(await screen.findByTestId('catalog-proposal-item-2-binding-gate-gk-2'));
+    expect((await screen.findByTestId('catalog-proposal-choice-reset')).textContent).toContain(
+      '改回了默认',
+    );
+    await waitFor(() =>
+      expect(
+        (screen.getByTestId('catalog-proposal-item-2-binding-gate-gk-2') as HTMLInputElement)
+          .checked,
+      ).toBe(true),
+    );
+    expect(screen.queryByTestId('catalog-proposal-preview-error')).toBeNull();
+  });
+
+  it('a choice the apply refuses (a kept gate cut off since the review was read) reads the review again and goes back to the default', async () => {
+    const candidates = [
+      { id: 'gk-1', name: 'Docker prod', connector: 'docker', held: true },
+      { id: 'gk-2', name: 'Docker staging', connector: 'docker', held: true },
+    ];
+    let cutOff = false;
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_admin_proposal_segments: () => ({ items: [received()] }),
+      preview_admin_proposal_segment: (params) => {
+        const kept = (params as { workerGates?: Record<string, readonly string[]> }).workerGates?.[
+          'ops-runner'
+        ];
+        if (kept !== undefined && cutOff) {
+          throw new HttpError(
+            'capability_error',
+            'gate(s) gk-1 are not connected gates of the systems Worker "ops-runner" names',
+            'invalid_params',
+          );
+        }
+        const ids = kept ?? candidates.map((gate) => gate.id);
+        return preview({
+          digest: kept === undefined ? 'sha256:reviewed' : `sha256:kept-${ids.join('+')}`,
+          items: preview().items.map((item) =>
+            item.kind === 'worker_definition_version'
+              ? {
+                  ...item,
+                  newFamily: true,
+                  before: null,
+                  gates: candidates
+                    .filter((gate) => ids.includes(gate.id))
+                    .map((gate) => ({ id: gate.id, name: gate.name })),
+                  gateBinding: { systems: ['docker'], source: 'apply' as const, candidates },
+                }
+              : item,
+          ),
+        });
+      },
+      apply_admin_proposal_segment: () => {
+        cutOff = true;
+        throw new HttpError(
+          'capability_error',
+          'gate(s) gk-1 are not connected gates of the systems Worker "ops-runner" names',
+          'invalid_params',
+        );
+      },
+    });
+    renderTab(http, SEGMENT);
+    fireEvent.click(await screen.findByTestId('catalog-proposal-item-2-binding-gate-gk-2'));
+    await waitFor(() =>
+      expect(screen.getByTestId('catalog-proposal-item-2-gates').textContent).not.toContain(
+        'Docker staging',
+      ),
+    );
+    await waitFor(() => expect(screen.queryByTestId('catalog-proposal-rereading')).toBeNull());
+    fireEvent.click(screen.getByTestId('catalog-proposal-item-2-confirm'));
+    fireEvent.click(screen.getByTestId('catalog-proposal-item-3-confirm'));
+    fireEvent.click(screen.getByTestId('catalog-proposal-apply-trigger'));
+    const confirm = await screen.findByTestId('catalog-proposal-apply-confirm');
+    fireEvent.click(within(confirm).getByRole('button', { name: '应用' }));
+
+    expect((await screen.findByTestId('catalog-proposal-choice-reset')).textContent).toContain(
+      '改回了默认',
+    );
+    await waitFor(() =>
+      expect(
+        (screen.getByTestId('catalog-proposal-item-2-binding-gate-gk-2') as HTMLInputElement)
+          .checked,
+      ).toBe(true),
+    );
+    expect(named(http.calls, 'preview_admin_proposal_segment').map((call) => call.params)).toEqual([
+      { segmentId: SEGMENT },
+      { segmentId: SEGMENT, workerGates: { 'ops-runner': ['gk-1'] } },
+      { segmentId: SEGMENT, workerGates: { 'ops-runner': ['gk-1'] } },
+      { segmentId: SEGMENT },
+    ]);
+  });
+
+  it('applying says when the check right after could not run, or did not pass', async () => {
+    for (const verification of [null, { passed: false }] as const) {
+      cleanup();
+      const http = scriptedHttp({
+        get_workspace: () => OWNER_WORKSPACE,
+        list_admin_proposal_segments: () => ({ items: [received({ items: ONLY_SKILL })] }),
+        preview_admin_proposal_segment: () => preview({ items: ONLY_SKILL_PREVIEW }),
+        apply_admin_proposal_segment: () => ({
+          segment: received({
+            items: ONLY_SKILL,
+            status: 'applied',
+            appliedSegmentId: RECORD,
+            decidedAt: '2026-11-02T08:00:00.000Z',
+            decidedBy: { id: 'p-owner', kind: 'human', displayName: 'Owner' },
+          }),
+          changeSegmentId: RECORD,
+          verification:
+            verification === null
+              ? null
+              : {
+                  trigger: 'system',
+                  verifiedBy: { id: 'p-owner', kind: 'human', displayName: 'Owner' },
+                  verifiedAt: '2026-11-02T08:00:01.000Z',
+                  passed: false,
+                  sourceFound: true,
+                  items: [],
+                  requirements: [],
+                  dependencies: [],
+                },
+        }),
+      });
+      renderTab(http, SEGMENT);
+      fireEvent.click(await screen.findByTestId('catalog-proposal-apply-trigger'));
+      const confirm = await screen.findByTestId('catalog-proposal-apply-confirm');
+      fireEvent.click(within(confirm).getByRole('button', { name: '应用' }));
+      expect((await screen.findByTestId('catalog-proposal-applied-verification')).textContent).toBe(
+        verification === null
+          ? '应用后没能核验，可以在安装记录里再核验一次。'
+          : '应用后已核验：没有通过，原因见安装记录。',
+      );
+    }
+  });
+
   it('a system a proposed Worker names that is not connected here is enabled on the spot, each instance the platform offers', async () => {
     let enabled = false;
     const http = scriptedHttp({
