@@ -340,7 +340,7 @@ function ExportPackDialog({
               <Notice tone="warn" testId={`${prefix}-download-failed`}>
                 {t(
                   `有一个文件的路径放不进 tar：${JSON.stringify(downloadFailed.path)}。没有下载任何东西；上面列出的就是全部文件，可以照 operations.md §14.11 写成文件。`,
-                  `One file's path cannot go in a tar: ${JSON.stringify(downloadFailed.path)}. Nothing was downloaded; the files listed above are all of it, and operations.md §14.11 writes them out.`,
+                  `One file's path cannot go in a tar: ${JSON.stringify(downloadFailed.path)}. Nothing was downloaded; the files listed above are all of it, and operations.md §14.11 says how to write them out.`,
                 )}
               </Notice>
             ) : null}
