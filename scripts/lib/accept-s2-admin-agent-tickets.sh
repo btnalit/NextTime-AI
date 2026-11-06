@@ -28,8 +28,8 @@
 #      the person completes the request card: enters the test credential (`create_connection`
 #      naming the request, the OpenAPI document as its manifest source), publishes the three
 #      imported Operations as read (`publish_manifest`), grants the gate to themselves
-#      (`connect_gatekeeper` — the console's 系统访问 card; without it the Worker below could not
-#      ask for an action on the gate);
+#      (`connect_gatekeeper` — the console's Systems & access page, 系统与授权; without it the
+#      Worker below could not ask for an action on the gate);
 #   B. the agent finds the ticket Operations, observes `tickets.list` through its projected observe
 #      tool (its execute tool is never offered to it), drafts two Skills and a Worker that may ask
 #      for actions on that gate; the person publishes the three drafts in the trial workspace;
@@ -37,14 +37,16 @@
 #      decision; the person approves it; the ticket book then holds exactly one more ticket, opened
 #      with the trial credential, and the Task records the agent's session;
 #   D. the agent proposes for the target workspace what it tried (`propose_admin_proposal`): the
-#      two Skills, the Worker (never its gates or model) and `tickets.create` at blast radius low
-#      in the workspace part; one http gate-host instance for the ticket system, shared credential,
+#      two Skills, the Worker (never its gates or model; the system it acts on, `systems`) and
+#      `tickets.create` at blast radius low in the workspace part; one http gate-host instance for the ticket system, shared credential,
 #      in the platform part. The person, as platform administrator: reviews the platform part and
 #      confirms its one item, applies it, waits for the gate host to announce the instance's
 #      Operations (enabling it before that would pin an empty manifest), enters the production
 #      credential, enables it on the platform. As the target's owner: enables the gate there (and
 #      reads the ticket book through it: the production credential, no ticket opened), reviews the
-#      workspace part — all four items authority_widening, each confirmed — applies and verifies it;
+#      workspace part — all four items authority_widening, each confirmed; the Worker bound to the
+#      production Gatekeeper, the ticket system's one connected gate there (S11 AA5f) — and applies
+#      it, which verifies the part once by itself (the production Gatekeeper probed);
 #   E. the agent reads its proposal back (`agent_get_admin_proposal`): both parts applied, and —
 #      like the platform's own read (`get_admin_proposal`) — nothing of the owner's dry run
 #      (TICKETS_DRY_RUN_KEYS).
@@ -52,10 +54,10 @@
 # confirmed and applied by the person; the person's calls under no session), neither credential in
 # a kernel table, the production half opening no ticket, and the list of what the person had to
 # do, checked against the plan's kinds: 录凭证 (twice), 试验工作区发布, 批准试验动作, 按段审阅与逐项确认
-# and 每段应用 (each part), 启用门 (platform and workspace) — plus two the plan's list leaves out,
-# each printed as a NOTE (evidence for decision gate D-W5, AA5 plan §4 item 3): 授权门（试验） and
-# 验证 (applying does not verify; the owner does, and the run probes the gates the part runs
-# through — legacy 630).
+# and 每段应用 (each part), 启用门 (platform and workspace) — plus one the plan's list leaves out,
+# printed as a NOTE (evidence for decision gate D-W5, AA5 plan §4 item 3): 授权门（试验）. Binding
+# the Worker's gate and verifying the part are no person's steps any more (S11 AA5f): the apply
+# does both.
 #
 # Runs only when the admin agent scenario did (its administrator signed in, its trial workspace
 # set up): otherwise one `NOTE admin-agent-tickets …` line, as admin_agent_step's switch NOTE.
@@ -202,7 +204,7 @@ admin_agent_tickets_step() {
   out=$(cap "$(admin_cred "$ADMIN_TRIAL_ID")" connect_gatekeeper "{\"gatekeeperId\":\"$TICKETS_GATEKEEPER_ID\",\"principalId\":\"$ADMIN_PRINCIPAL_ID\"}" "")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "admin-agent-tickets-grant" "connect_gatekeeper HTTP $status: $(parse_kv "$out" BODY)"
-  tickets_human "授权门（试验）" "connect_gatekeeper: the ticket gate granted to the administrator (the console's 系统访问 card)"
+  tickets_human "授权门（试验）" "connect_gatekeeper: the ticket gate granted to the administrator (the console's Systems & access page, 系统与授权)"
   pass "admin-agent-tickets-grant" "the ticket gate granted to the administrator's Principal in the trial workspace"
 
   # --- Turn B: the agent looks and drafts ---
@@ -322,8 +324,8 @@ admin_agent_tickets_step() {
   [ -n "$TICKETS_PROPOSAL_ID" ] || fail "admin-agent-tickets-propose" "no proposal in the admin agent's reply: '$TICKETS_REPLY'"
   [ "$(tickets_field "$TICKETS_REPLY" TICKETS_PROPOSAL_STATUS)" = "proposed" ] || fail "admin-agent-tickets-propose" "proposal $TICKETS_PROPOSAL_ID came back '$(tickets_field "$TICKETS_REPLY" TICKETS_PROPOSAL_STATUS)', expected proposed"
   [ "$(tickets_field "$TICKETS_REPLY" TICKETS_ADDRESS_WITHHELD)" = "yes" ] || fail "admin-agent-tickets-propose" "the agent read its gate-host instance back with its addresses: '$TICKETS_REPLY'"
-  admin_cap get_admin_proposal "{\"proposalId\":\"$TICKETS_PROPOSAL_ID\"}" "d.result.segments.map((s) => [s.authority, s.status, s.targetWorkspaceId || '-', s.items.map((i) => i.kind).join('+')].join(':')).join(',')"
-  [ "$ADMIN_VALUE" = "workspace:proposed:$ADMIN_TARGET_ID:skill_version+skill_version+worker_definition_version+operation_version,platform:proposed:-:gate_instance" ] || fail "admin-agent-tickets-propose" "proposal $TICKETS_PROPOSAL_ID reads '$ADMIN_VALUE' on the platform, expected a workspace part for $ADMIN_TARGET_ID (two Skills, the Worker, one Operation) and a platform part (one gate-host instance), both proposed"
+  admin_cap get_admin_proposal "{\"proposalId\":\"$TICKETS_PROPOSAL_ID\"}" "d.result.segments.map((s) => [s.authority, s.status, s.targetWorkspaceId || '-', s.items.map((i) => i.kind + (i.systems ? '[' + i.systems.join('+') + ']' : '')).join('+')].join(':')).join(',')"
+  [ "$ADMIN_VALUE" = "workspace:proposed:$ADMIN_TARGET_ID:skill_version+skill_version+worker_definition_version[$TICKETS_CONNECTOR]+operation_version,platform:proposed:-:gate_instance" ] || fail "admin-agent-tickets-propose" "proposal $TICKETS_PROPOSAL_ID reads '$ADMIN_VALUE' on the platform, expected a workspace part for $ADMIN_TARGET_ID (two Skills, the Worker naming the system $TICKETS_CONNECTOR, one Operation) and a platform part (one gate-host instance), both proposed"
   admin_cap get_admin_proposal "{\"proposalId\":\"$TICKETS_PROPOSAL_ID\"}" "d.result.segments.find((s) => s.authority === 'workspace').id + ',' + d.result.segments.find((s) => s.authority === 'platform').id"
   TICKETS_WS_SEGMENT_ID=${ADMIN_VALUE%%,*}
   TICKETS_PLATFORM_SEGMENT_ID=${ADMIN_VALUE#*,}
@@ -394,29 +396,34 @@ admin_agent_tickets_step() {
   [ "$ADMIN_VALUE" = "production,$after" ] || fail "admin-agent-tickets-enable" "tickets.list through the production gate reads '$ADMIN_VALUE', expected production,$after (read with the production credential; the trial's ticket the last one)"
   pass "admin-agent-tickets-enable" "the owner enabled $TICKETS_GATE_ID in $ADMIN_TARGET_ID (Gatekeeper $TICKETS_PROD_GATEKEEPER_ID); through it the ticket system answers the production credential"
 
-  admin_cap preview_admin_proposal_segment "{\"segmentId\":\"$TICKETS_WS_SEGMENT_ID\"}" "[d.result.blockers.length, d.result.targetChosen, d.result.suspectedSecretValues, d.result.items.map((i) => [i.ordinal, i.kind, i.classification, i.widening.map((w) => w.path + '/' + w.reason).join('+')].join(':')).join(','), d.result.digest].join('|')" "$ADMIN_TARGET_ID"
+  # S11 AA5f: the Worker names the ticket system, has no gates here yet, so the apply binds it to
+  # the system's connected gates here — the production Gatekeeper alone, which the owner does not
+  # hold (enabling a gate grants nobody; the binding grants nothing either).
+  admin_cap preview_admin_proposal_segment "{\"segmentId\":\"$TICKETS_WS_SEGMENT_ID\"}" "[d.result.blockers.length, d.result.targetChosen, d.result.suspectedSecretValues, d.result.items.map((i) => [i.ordinal, i.kind, i.classification, i.widening.map((w) => w.path + '/' + w.reason).join('+')].join(':')).join(','), (() => { const w = d.result.items.find((i) => i.kind === 'worker_definition_version'); return w ? [w.gateBinding.source, w.gateBinding.systems.join('+'), w.gateBinding.candidates.map((c) => c.id + '/' + c.connector + '/' + c.held).join('+'), w.gates.map((g) => g.id).join('+')].join(':') : 'absent'; })(), d.result.digest].join('|')" "$ADMIN_TARGET_ID"
   case "$ADMIN_VALUE" in
-    "0|true|0|1:skill_version:authority_widening:skill/added,2:skill_version:authority_widening:skill/added,3:worker_definition_version:authority_widening:worker/added,4:operation_version:authority_widening:operation.blast_radius/loosened|sha256:"*) : ;;
-    *) fail "admin-agent-tickets-apply" "preview_admin_proposal_segment in $ADMIN_TARGET_ID reads '$ADMIN_VALUE', expected no blocker, still a chosen target, no suspected credential, four authority_widening items (two Skills and the Worker added, tickets.create's blast radius loosened) and a digest" ;;
+    "0|true|0|1:skill_version:authority_widening:skill/added,2:skill_version:authority_widening:skill/added,3:worker_definition_version:authority_widening:worker/added,4:operation_version:authority_widening:operation.blast_radius/loosened|apply:$TICKETS_CONNECTOR:$TICKETS_PROD_GATEKEEPER_ID/$TICKETS_CONNECTOR/false:$TICKETS_PROD_GATEKEEPER_ID|sha256:"*) : ;;
+    *) fail "admin-agent-tickets-apply" "preview_admin_proposal_segment in $ADMIN_TARGET_ID reads '$ADMIN_VALUE', expected no blocker, still a chosen target, no suspected credential, four authority_widening items (two Skills and the Worker added, tickets.create's blast radius loosened), the Worker bound by this apply to $TICKETS_PROD_GATEKEEPER_ID (the one connected gate of $TICKETS_CONNECTOR here, not held by the owner) and a digest" ;;
   esac
   ws_digest=${ADMIN_VALUE##*|}
   tickets_human "按段审阅与逐项确认" "preview_admin_proposal_segment $TICKETS_WS_SEGMENT_ID: four items, each confirmed by its ordinal"
-  admin_cap apply_admin_proposal_segment "{\"segmentId\":\"$TICKETS_WS_SEGMENT_ID\",\"reviewedDigest\":\"$ws_digest\",\"confirmedOrdinals\":[1,2,3,4]}" "[d.result.segment.status, d.result.changeSegmentId].join(',')" "$ADMIN_TARGET_ID"
-  TICKETS_CHANGE_SEGMENT_ID=${ADMIN_VALUE#*,}
-  [ "$ADMIN_VALUE" = "applied,$TICKETS_CHANGE_SEGMENT_ID" ] && [ -n "$TICKETS_CHANGE_SEGMENT_ID" ] || fail "admin-agent-tickets-apply" "apply_admin_proposal_segment reads '$ADMIN_VALUE', expected applied and its change segment"
+  # S11 AA5f: right after it commits, the apply verifies the part once as the owner (trigger
+  # system) — legacy 630's probe of the gates what it wrote runs through: here only the production
+  # Gatekeeper (tickets.create's blast radius lives there, and the Worker is bound to it).
+  admin_cap apply_admin_proposal_segment "{\"segmentId\":\"$TICKETS_WS_SEGMENT_ID\",\"reviewedDigest\":\"$ws_digest\",\"confirmedOrdinals\":[1,2,3,4]}" "[d.result.segment.status, d.result.changeSegmentId, (() => { const v = d.result.verification; return v ? [v.trigger, v.passed, v.items.map((i) => i.state).join('+'), v.requirements.map((r) => [r.connector, r.state, r.met, r.gates.map((g) => g.id + '/' + g.health).join('+')].join(':')).join(';')].join('|') : 'null'; })()].join(',')" "$ADMIN_TARGET_ID"
+  apply_rest=${ADMIN_VALUE#*,}
+  TICKETS_CHANGE_SEGMENT_ID=${apply_rest%%,*}
+  [ "$ADMIN_VALUE" = "applied,$TICKETS_CHANGE_SEGMENT_ID,system|true|in_effect+in_effect+in_effect+in_effect|$TICKETS_CONNECTOR:connected:true:$TICKETS_PROD_GATEKEEPER_ID/ok" ] && [ -n "$TICKETS_CHANGE_SEGMENT_ID" ] || fail "admin-agent-tickets-apply" "apply_admin_proposal_segment reads '$ADMIN_VALUE', expected applied, its change segment, and the verification it ran: trigger system, passed, the four items in effect and one requirement — $TICKETS_CONNECTOR connected and met, its production Gatekeeper probed ok"
   tickets_human "每段应用" "apply_admin_proposal_segment $TICKETS_WS_SEGMENT_ID in $ADMIN_TARGET_ID"
-  admin_cap verify_change_segment "{\"segmentId\":\"$TICKETS_CHANGE_SEGMENT_ID\"}" "[d.result.segment.status, d.result.verification.passed, d.result.verification.items.map((i) => i.state).join('+'), d.result.verification.requirements.map((r) => [r.connector, r.state, r.met, r.gates.map((g) => g.id + '/' + g.health).join('+')].join(':')).join(';')].join(',')" "$ADMIN_TARGET_ID"
-  # Legacy 630: the run probes the gates what the segment wrote runs through — here only the
-  # production Gatekeeper (tickets.create's blast radius lives there; the Worker has no gate).
-  [ "$ADMIN_VALUE" = "verified,true,in_effect+in_effect+in_effect+in_effect,$TICKETS_CONNECTOR:connected:true:$TICKETS_PROD_GATEKEEPER_ID/ok" ] || fail "admin-agent-tickets-apply" "verify_change_segment $TICKETS_CHANGE_SEGMENT_ID reads '$ADMIN_VALUE', expected verified, passed, the four items in effect and one requirement: $TICKETS_CONNECTOR connected and met, its production Gatekeeper probed ok"
-  tickets_human "验证" "verify_change_segment $TICKETS_CHANGE_SEGMENT_ID (安装历史)"
-  # What applying wrote: the Worker without a gate (a proposal never sets one: the owner binds it
-  # here), tickets.create at blast radius low and still approved one by one.
-  admin_cap list_worker_definitions '{"kind":"worker","limit":100}' "(() => { const w = d.result.items.find((x) => x.definition.name === 'accept-tickets-worker-$TICKETS_NONCE'); return w ? [w.status, w.origin, (w.definition.gates || []).length, (w.definition.capabilities || []).join('|')].join(',') : 'absent'; })()" "$ADMIN_TARGET_ID"
-  [ "$ADMIN_VALUE" = "published,agent,0,request_action" ] || fail "admin-agent-tickets-apply" "the Worker in $ADMIN_TARGET_ID reads '$ADMIN_VALUE', expected published, origin agent, no gate, request_action"
+  admin_cap get_change_segment "{\"segmentId\":\"$TICKETS_CHANGE_SEGMENT_ID\"}" "[d.result.segment.status, d.result.verification ? d.result.verification.trigger : 'none'].join(',')" "$ADMIN_TARGET_ID"
+  [ "$ADMIN_VALUE" = "verified,system" ] || fail "admin-agent-tickets-apply" "get_change_segment $TICKETS_CHANGE_SEGMENT_ID reads '$ADMIN_VALUE', expected verified by the apply's own run (trigger system)"
+  # What applying wrote: the Worker bound to the production Gatekeeper (a proposal never sets a
+  # gate: the apply bound the one the owner kept), tickets.create at blast radius low and still
+  # approved one by one.
+  admin_cap list_worker_definitions '{"kind":"worker","limit":100}' "(() => { const w = d.result.items.find((x) => x.definition.name === 'accept-tickets-worker-$TICKETS_NONCE'); return w ? [w.status, w.origin, (w.definition.gates || []).join('+'), (w.definition.capabilities || []).join('|')].join(',') : 'absent'; })()" "$ADMIN_TARGET_ID"
+  [ "$ADMIN_VALUE" = "published,agent,$TICKETS_PROD_GATEKEEPER_ID,request_action" ] || fail "admin-agent-tickets-apply" "the Worker in $ADMIN_TARGET_ID reads '$ADMIN_VALUE', expected published, origin agent, its one gate $TICKETS_PROD_GATEKEEPER_ID, request_action"
   admin_cap list_operations "{\"gatekeeperId\":\"$TICKETS_PROD_GATEKEEPER_ID\"}" "(() => { const o = d.result.items.filter((x) => x.name === 'tickets.create' && x.status === 'published').sort((a, b) => b.version - a.version)[0]; return o ? [o.status, o.mode, o.blastRadius, o.autoApprovable].join(',') : 'absent'; })()" "$ADMIN_TARGET_ID"
   [ "$ADMIN_VALUE" = "published,execute,low,false" ] || fail "admin-agent-tickets-apply" "tickets.create in $ADMIN_TARGET_ID reads '$ADMIN_VALUE', expected published, execute, blast radius low, still not auto-approvable"
-  pass "admin-agent-tickets-apply" "the owner applied the workspace part (change segment $TICKETS_CHANGE_SEGMENT_ID, four items confirmed one by one) and verified it; the Worker is published without a gate, tickets.create is low and still not auto-approvable"
+  pass "admin-agent-tickets-apply" "the owner applied the workspace part (change segment $TICKETS_CHANGE_SEGMENT_ID, four items confirmed one by one), which verified it by itself; the Worker is published bound to $TICKETS_PROD_GATEKEEPER_ID, tickets.create is low and still not auto-approvable"
 
   # --- What the platform and the agent read of the workspace part: the proposal, never the dry run ---
   admin_cap get_admin_proposal "{\"proposalId\":\"$TICKETS_PROPOSAL_ID\"}" "(() => { const keys = new Set(); const walk = (v) => { if (Array.isArray(v)) v.forEach(walk); else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) { keys.add(k); walk(x); } }; walk(d.result.segments.filter((s) => s.authority === 'workspace')); return d.result.segments.map((s) => s.authority + ':' + s.status).join(',') + ' ' + [...keys].sort().join('|'); })()"
@@ -454,8 +461,10 @@ admin_agent_tickets_step() {
   for n in 1 2 3 4; do expected="${expected:+$expected,}$n:agent:$ADMIN_USER_ID:true:true:person"; done
   [ "$item_rows" = "$expected" ] || fail "admin-agent-tickets-audit" "the applied items' audit rows in $ADMIN_TARGET_ID read '$item_rows', expected $expected (drafted by the agent of $ADMIN_USER_ID, confirmed and applied by the owner, under no session)"
   # enable_gate_instance's row names its gate only in the call's params (dispatch's audit copy).
-  apply_rows=$(psql_ws "select string_agg(action || ':' || (actor_principal_id = '$TICKETS_OWNER_PRINCIPAL_ID')::text || ':' || coalesce(payload->>'sessionKind', 'person'), ',' order by action) from audit_records where workspace_id = '$ADMIN_TARGET_ID' and ((action = 'apply_admin_proposal_segment' and payload->>'proposalId' = '$TICKETS_PROPOSAL_ID') or (action = 'enable_gate_instance' and payload->'params'->>'gateId' = '$TICKETS_GATE_ID') or (action = 'verify_change_segment' and resource_id = '$TICKETS_CHANGE_SEGMENT_ID'))")
-  [ "$apply_rows" = "apply_admin_proposal_segment:true:person,enable_gate_instance:true:person,verify_change_segment:true:person" ] || fail "admin-agent-tickets-audit" "the owner's apply, enable and verify rows in $ADMIN_TARGET_ID read '$apply_rows', expected one each, by the owner under no session"
+  # The apply's own verification (S11 AA5f) is the verify row, as the owner's run with trigger
+  # system; nobody called verify_change_segment.
+  apply_rows=$(psql_ws "select string_agg(action || ':' || (actor_principal_id = '$TICKETS_OWNER_PRINCIPAL_ID')::text || ':' || coalesce(payload->>'sessionKind', 'person') || ':' || coalesce(payload->>'trigger', '-'), ',' order by action) from audit_records where workspace_id = '$ADMIN_TARGET_ID' and ((action = 'apply_admin_proposal_segment' and payload->>'proposalId' = '$TICKETS_PROPOSAL_ID') or (action = 'enable_gate_instance' and payload->'params'->>'gateId' = '$TICKETS_GATE_ID') or (action in ('verify_change_segment', 'change_segment.verify') and resource_id = '$TICKETS_CHANGE_SEGMENT_ID'))")
+  [ "$apply_rows" = "apply_admin_proposal_segment:true:person:-,change_segment.verify:true:person:system,enable_gate_instance:true:person:-" ] || fail "admin-agent-tickets-audit" "the owner's apply, verify and enable rows in $ADMIN_TARGET_ID read '$apply_rows', expected one each, by the owner under no session, the verification the apply's own (trigger system)"
   platform_rows=$(psql_ws "select string_agg(action || ':' || (actor_user_id = '$ADMIN_USER_ID')::text || ':' || coalesce(payload->>'sessionKind', 'person') || ':' || coalesce(payload->>'proposedByUser', '-'), ',' order by action) from audit_records where workspace_id is null and action = 'apply_platform_segment' and payload->>'proposalId' = '$TICKETS_PROPOSAL_ID'")
   [ "$platform_rows" = "apply_platform_segment:true:person:$ADMIN_USER_ID" ] || fail "admin-agent-tickets-audit" "the platform part's apply row reads '$platform_rows', expected one by the administrator under no session, recording $ADMIN_USER_ID as whose agent proposed it"
   pass "admin-agent-tickets-audit-production" "audit: the proposal under the agent's session; four applied items marked origin agent, proposed for $ADMIN_USER_ID, confirmed and applied by the owner; the platform part applied by the administrator — none of the person's rows under a session"
@@ -477,7 +486,7 @@ admin_agent_tickets_step() {
   for kind in $(printf '%s' "$TICKETS_HUMAN_ACTIONS" | sort -u); do
     case "$kind" in
       录凭证 | 试验工作区发布 | 批准试验动作 | 按段审阅与逐项确认 | 每段应用 | 启用门) : ;;
-      授权门（试验） | 验证) extra="${extra:+$extra }$kind" ;;
+      授权门（试验）) extra="${extra:+$extra }$kind" ;;
       *) fail "admin-agent-tickets-human" "the person did '$kind', not one of the plan's kinds (录凭证, 试验工作区发布, 批准试验动作, 按段审阅与逐项确认, 每段应用, 启用门)" ;;
     esac
   done
@@ -489,8 +498,7 @@ admin_agent_tickets_step() {
   pass "admin-agent-tickets-human" "what the person did: $summary"
   for kind in $extra; do
     case "$kind" in
-      授权门（试验）) echo "NOTE admin-agent-tickets $kind is a person's step the AA5 plan's §5.8 list leaves out: the Worker asks for actions only on gates its person holds (connect_gatekeeper on the 系统访问 card) — D-W5 evidence (AA5 plan §4 item 3)" ;;
-      验证) echo "NOTE admin-agent-tickets $kind is a person's step the AA5 plan's §5.8 list leaves out: applying a workspace part does not verify it, the owner does (verify_change_segment, 安装历史) — D-W5 evidence (AA5 plan §4 item 3)" ;;
+      授权门（试验）) echo "NOTE admin-agent-tickets $kind is a person's step the AA5 plan's §5.8 list leaves out: the Worker asks for actions only on gates its person holds (connect_gatekeeper on Systems & access, 系统与授权) — D-W5 evidence (AA5 plan §4 item 3)" ;;
     esac
   done
 }

@@ -214,6 +214,8 @@ export {
   AdminProposalSegmentNotOpenError,
   AdminProposalSegmentUnchangedError,
   AdminProposalTargetNoLongerChosenError,
+  type AdminProposalWorkerGateChoice,
+  AdminProposalWorkerGatesError,
   PlatformSegmentChangedError,
   PlatformSegmentNotAppliedError,
   applyAdminProposalSegment,

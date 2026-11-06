@@ -1,10 +1,10 @@
 import type { PackInstallStatus, PackRequirementState } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { getGatekeeper } from '../../governance/gatekeepers/index.js';
 import {
-  listAvailableGateInstances,
+  type ConnectorGate,
+  type ConnectorOffer,
   readConnectorOccupancy,
-  readGatekeeperPlatformPolicies,
+  readConnectorStandings,
 } from '../gates/index.js';
 import type { PackRequirementManifest } from './manifest.js';
 import { type PackRegistry, requirePack } from './registry.js';
@@ -13,10 +13,10 @@ import { loadPackState } from './state.js';
 /**
  * application/packs/requirements: where each system a pack version needs (`requires.connectors`,
  * `manifest.ts`) stands in a workspace (S11 P1-E; S10 plan §3.3 I-P3 — a gate is a code component
- * the platform deploys, so a pack only checks it is in place). Read from the gate catalog as the
- * gates' own reads see it (`readGatekeeperPlatformPolicies`, `listAvailableGateInstances`); nothing
- * is called and nothing is written. `@nexttime/shared` `PACK_REQUIREMENT_STATE_VALUES` has the
- * states; the first that holds is the answer:
+ * the platform deploys, so a pack only checks it is in place). Read from the gate catalog by the
+ * rule a proposed Worker's systems share (`readConnectorStandings`, application/gates/connector-
+ * standing.ts, S11 AA5f); nothing is called and nothing is written. `@nexttime/shared`
+ * `PACK_REQUIREMENT_STATE_VALUES` has the states; the first that holds is the answer:
  *
  *   connected      — a Gatekeeper of the workspace runs on the connector and the platform has not
  *                    cut it off: a catalog instance it is linked to is `enabled`, or its own
@@ -43,16 +43,10 @@ import { loadPackState } from './state.js';
  */
 
 /** A Gatekeeper of the workspace, by id and the name people know it by. */
-export interface PackRequirementGate {
-  readonly id: string;
-  readonly name: string;
-}
+export type PackRequirementGate = ConnectorGate;
 
 /** A platform gate instance the workspace may enable (`enable_gate_instance`). */
-export interface PackRequirementOffer {
-  readonly gateId: string;
-  readonly displayName: string;
-}
+export type PackRequirementOffer = ConnectorOffer;
 
 export interface PackRequirementStatus {
   readonly connector: string;
@@ -78,60 +72,18 @@ export async function readPackRequirements(
   presets: ReadonlySet<string> = new Set(),
 ): Promise<readonly PackRequirementStatus[]> {
   if (connectors.length === 0) return [];
-  const policies = await readGatekeeperPlatformPolicies(client, workspaceId);
-  const available = await listAvailableGateInstances(client, workspaceId);
+  const standings = await readConnectorStandings(client, workspaceId, connectors);
   const occupancy = await readConnectorOccupancy(
     client,
     connectors.filter((connector) => presets.has(connector)),
   );
-  const statuses: PackRequirementStatus[] = [];
-  for (const connector of connectors) {
-    const gatekeeperIds = [...policies]
-      .filter(([, policy]) =>
-        policy.connector !== connector
-          ? false
-          : policy.origin === 'catalog'
-            ? policy.instanceStatus === 'enabled'
-            : !policy.suspended,
-      )
-      .map(([gatekeeperId]) => gatekeeperId)
-      .sort();
-    if (gatekeeperIds.length > 0) {
-      const gatekeepers: PackRequirementGate[] = [];
-      for (const id of gatekeeperIds) {
-        const gatekeeper = await getGatekeeper(client, workspaceId, id);
-        gatekeepers.push({ id, name: gatekeeper?.name ?? id });
-      }
-      statuses.push({
-        connector,
-        state: 'connected',
-        gatekeepers,
-        offered: [],
-        platformPreset: false,
-      });
-      continue;
-    }
-    const offered = available
-      .filter(
-        (instance) =>
-          instance.connector === connector &&
-          instance.status === 'enabled' &&
-          instance.gatekeeperId === null,
-      )
-      .map((instance) => ({ gateId: instance.gateId, displayName: instance.displayName }));
-    const state = offered.length > 0 ? 'can_enable' : 'needs_platform';
-    statuses.push({
-      connector,
-      state,
-      gatekeepers: [],
-      offered,
-      platformPreset:
-        state === 'needs_platform' &&
-        presets.has(connector) &&
-        occupancy.get(connector)?.packaged !== true,
-    });
-  }
-  return statuses;
+  return standings.map((standing) => ({
+    ...standing,
+    platformPreset:
+      standing.state === 'needs_platform' &&
+      presets.has(standing.connector) &&
+      occupancy.get(standing.connector)?.packaged !== true,
+  }));
 }
 
 /** One pack a version builds on (`requires.packs`, S11 P1-F) and how the workspace has it now

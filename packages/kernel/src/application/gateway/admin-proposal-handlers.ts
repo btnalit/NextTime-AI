@@ -5,9 +5,11 @@ import type {
   AdminProposalSegmentStatus,
   AdminProposalStatus,
 } from '@nexttime/shared';
+import { type PoolLike, withWorkspace } from '../../adapters/db/pool.js';
 import { credentialReviewAudit } from '../../governance/redaction/index.js';
 import {
   type AdminProposalScope,
+  type AdminProposalWorkerGateChoice,
   agentProposalOf,
   applyAdminProposalSegment,
   checkAdminProposal,
@@ -18,6 +20,7 @@ import {
   previewAdminProposalSegment,
   proposeAdminProposal,
   rejectAdminProposalSegment,
+  verifyChangeSegment,
   withdrawAdminProposal,
 } from '../change-plan/index.js';
 import { loadPackRegistry } from '../packs/index.js';
@@ -26,6 +29,8 @@ import type {
   CapabilityHandlerContext,
   CapabilityHandlerResult,
 } from './capability-handler.js';
+import { toChangeVerificationWire } from './change-segment-handlers.js';
+import { sourceRequirementsChecker } from './change-verification.js';
 
 /**
  * application/gateway/admin-proposal-handlers (S11 AA3b-1): Admin proposals
@@ -300,14 +305,32 @@ export const getAdminProposalSegmentCountsHandler: CapabilityHandler = async (
   result: await countAdminProposalSegments(client, workspaceId),
 });
 
+/** `workerGates` as the domain takes it (by Worker name), as `install_pack`'s. */
+function workerGateChoice(
+  param: Readonly<Record<string, string[]>> | undefined,
+): AdminProposalWorkerGateChoice {
+  return new Map(Object.entries(param ?? {}));
+}
+
 export const previewAdminProposalSegmentHandler: CapabilityHandler = async (
   client,
   workspaceId,
   params,
+  ctx,
 ): Promise<CapabilityHandlerResult> => {
-  const { segmentId } = params as { readonly segmentId: string };
+  const principalId = ownerOf('preview_admin_proposal_segment', ctx);
+  const { segmentId, workerGates } = params as {
+    readonly segmentId: string;
+    readonly workerGates?: Record<string, string[]>;
+  };
   return {
-    result: await previewAdminProposalSegment(client, workspaceId, segmentId),
+    result: await previewAdminProposalSegment(
+      client,
+      workspaceId,
+      principalId,
+      segmentId,
+      workerGateChoice(workerGates),
+    ),
     resourceType: 'admin_proposal_segment',
     resourceId: segmentId,
   };
@@ -325,6 +348,7 @@ export const applyAdminProposalSegmentHandler: CapabilityHandler = async (
     readonly reviewedDigest: string;
     readonly confirmedOrdinals?: number[];
     readonly credentialsReviewed?: boolean;
+    readonly workerGates?: Record<string, string[]>;
   };
   const applied = await applyAdminProposalSegment(client, workspaceId, principalId, {
     segmentId: input.segmentId,
@@ -333,23 +357,63 @@ export const applyAdminProposalSegmentHandler: CapabilityHandler = async (
     ...(input.credentialsReviewed !== undefined
       ? { credentialsReviewed: input.credentialsReviewed }
       : {}),
+    workerGates: workerGateChoice(input.workerGates),
   });
   const result: AdminProposalSegmentApplyResultWire = {
     segment: applied.segment,
     changeSegmentId: applied.changeSegmentId,
+    verification: null,
   };
+  const { changeSegmentId } = applied;
   return {
     result,
     resourceType: 'admin_proposal_segment',
     resourceId: input.segmentId,
     auditPayload: {
       proposalId: applied.segment.proposal.id,
-      changeSegmentId: applied.changeSegmentId,
+      changeSegmentId,
       digest: applied.plan.digest,
       ...credentialReviewAudit(applied.suspectedSecretValues),
     },
+    // S11 AA5f: once the apply has committed, verify it once — as the owner who applied it,
+    // recorded as `trigger: system` — in a transaction of its own, so the gate probes run after
+    // the apply's locks are gone (as `install_pack`'s `verifyAfterInstall`). The apply stands
+    // whatever happens here.
+    afterCommit: async (pool) => ({
+      ...result,
+      verification: await verifyAfterApply(pool, workspaceId, principalId, changeSegmentId),
+    }),
   };
 };
+
+/** The apply's first verification (see `applyAdminProposalSegmentHandler`); `null` when the run
+ *  could not be made — logged, never thrown: the apply is committed, and the owner verifies it
+ *  again from 安装历史. */
+async function verifyAfterApply(
+  pool: PoolLike,
+  workspaceId: string,
+  principalId: string,
+  changeSegmentId: string,
+): Promise<AdminProposalSegmentApplyResultWire['verification']> {
+  try {
+    return await withWorkspace(pool, { workspaceId, principalId }, async (client) => {
+      const { verification } = await verifyChangeSegment(client, workspaceId, {
+        segmentId: changeSegmentId,
+        verifiedBy: principalId,
+        trigger: 'system',
+        checkRequirements: sourceRequirementsChecker(client, workspaceId),
+      });
+      return toChangeVerificationWire(verification);
+    });
+  } catch (err) {
+    console.error(
+      `[kernel] apply_admin_proposal_segment: verifying change segment ${changeSegmentId} after the apply failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    return null;
+  }
+}
 
 export const rejectAdminProposalSegmentHandler: CapabilityHandler = async (
   client,

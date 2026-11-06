@@ -357,6 +357,9 @@ export const ALLOWED_NON_TOOL_WORDS = {
     // S11 AA4c-2: the code `propose_admin_proposal` refuses an unchosen target with, named so the
     // agent recognizes it and tells its administrator — not a tool.
     'admin_proposal_target_not_chosen',
+    // S11 AA5f: the field of propose_admin_proposal's Worker item that names the systems it acts
+    // on, so the owner applying it can bind it to their gates of those — not a tool.
+    'systems',
   ]),
   'ontology/ops-runner.yaml': new Set([
     'context', // the pi `context` event/injection mechanism, not a capability of this name.

@@ -29,6 +29,7 @@ import {
   AdminProposalTargetNotChosenError,
   AdminProposalTargetRejectedRepeatedlyError,
   AdminProposalTargetUnavailableError,
+  AdminProposalWorkerGatesError,
   ChangeApplierNotAPersonError,
   ChangeConfirmationRequiredError,
   ChangePlanChangedError,
@@ -404,6 +405,12 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof AdminProposalSegmentUnchangedError) {
     return { status: 409, code: err.code, message: err.message };
+  }
+  // S11 AA5f: `workerGates` naming a Worker the segment does not propose, or a gate that is not one
+  // of its candidates — a caller-input mistake, as `install_pack`'s (the console offers only
+  // candidates).
+  if (err instanceof AdminProposalWorkerGatesError) {
+    return { status: 400, code: 'invalid_params', message: err.message };
   }
   // S11 AA3c-1: the platform segment and its record, decided on the platform plane. Not a platform
   // segment → 404; an item the platform would not take now → 409 `details.blockers`; a workspace
