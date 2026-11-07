@@ -880,6 +880,30 @@ describe('ChatPage send that got no answer (legacy 673)', () => {
     expect(sendCalls(fake)).toHaveLength(1);
   });
 
+  it('keeps what a Turn streamed before its send answered', async () => {
+    const fake = fakeClient();
+    let answer: (value: unknown) => void = () => undefined;
+    (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => new Promise((resolve) => (answer = resolve)),
+    );
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => fake.caughtUp());
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'restart web-1' } });
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+    await waitFor(() => expect(sendCalls(fake)).toHaveLength(1));
+
+    act(() => fake.stream('turn-1', { streamKind: 'textDelta', delta: 'echo' }));
+    await act(async () => answer({ messageId: 'm-1', sequence: 1, turnId: 'turn-1' }));
+    await waitFor(() =>
+      expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe(''),
+    );
+    expect(document.querySelector('.message-streaming .message-text')?.textContent).toContain(
+      'echo',
+    );
+    expect(screen.getByRole('button', { name: '停止本轮' })).toBeTruthy();
+  });
+
   it('drops a key the kernel refuses as reused, so the next send goes under a new one', async () => {
     const fake = fakeClient();
     const banner = await timeOutOneSend(fake, 'restart web-1');

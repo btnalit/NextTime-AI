@@ -18,7 +18,7 @@ import {
   pendingSendLanded,
   savePendingSend,
 } from '../../lib/pending-send.js';
-import { type TurnState, initialTurnState, streamReducer } from '../../lib/streaming-reducer.js';
+import { type TurnState, streamReducer } from '../../lib/streaming-reducer.js';
 import { type ChatMessage, RpcTimeoutError, type WsClient } from '../../lib/ws-client.js';
 
 export interface ComposerState {
@@ -131,7 +131,8 @@ export function useComposer(
       // A second try the kernel answered with the first message: its Turn may be over already,
       // and a finished Turn sends no end push — marking it running would hold the box shut.
       if (result.changed !== false || result.turnStatus === 'running') {
-        setTurn(streamReducer(initialTurnState, { kind: 'turnStarted', turnId: result.turnId }));
+        // Its first pushes may have come before this answer: the reducer keeps them.
+        setTurn((prev) => streamReducer(prev, { kind: 'turnStarted', turnId: result.turnId }));
       }
       setComposerText('');
       setFollow(true);
