@@ -211,7 +211,8 @@ test.describe('Journey ⑱: 成员资格与服务凭证的一生', () => {
     // The key is the only `.mono` text in the shown-once box (`PrincipalDetail`); it has no test id.
     const newKey = ((await rotated.locator('.mono').textContent()) ?? '').trim();
     expect(newKey).not.toBe('');
-    expect(newKey).not.toBe(oldKey);
+    // Compared as a boolean: a failing matcher would print both keys into the public CI log.
+    expect(newKey === oldKey, 'the rotated key differs from the old one').toBe(false);
     const asNewKey = await capResult<WorkspaceWire>(
       'get_workspace',
       await getWorkspaceWithKey(page, newKey),
