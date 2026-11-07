@@ -103,7 +103,7 @@ import {
 import {
   ReviewedVersionChangedError,
   WORKER_CEILING_CAPABILITIES,
-  grantCapability,
+  ensureCapabilityGrant,
   listGrants,
   revokeCapabilityGrant,
 } from '../../governance/capability/index.js';
@@ -430,6 +430,7 @@ import { observeOperationHandler, requestActionHandler } from './request-action-
 import { resolveRefsHandler } from './resolve-refs-handler.js';
 import {
   displayedObject,
+  grantAuditPayload,
   toWireAuditRecord,
   toWireChat,
   toWireFact,
@@ -1947,13 +1948,18 @@ const grantCapabilityHandler: CapabilityHandler = async (client, workspaceId, pa
     resourceId: string;
   };
   const grantedBy = await currentPrincipalId(client);
-  const result = await grantCapability(client, workspaceId, {
+  const { grant, created, expiredGrantIds } = await ensureCapabilityGrant(client, workspaceId, {
     principalId,
     resourceType,
     resourceId,
     grantedBy,
   });
-  return { result: toWireGrant(result), resourceType: 'capability_grant', resourceId: result.id };
+  return {
+    result: toWireGrant(grant),
+    resourceType: 'capability_grant',
+    resourceId: grant.id,
+    auditPayload: grantAuditPayload(created, expiredGrantIds),
+  };
 };
 
 const revokeCapabilityHandler: CapabilityHandler = async (client, workspaceId, params) => {

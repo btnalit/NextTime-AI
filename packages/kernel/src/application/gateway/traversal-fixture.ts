@@ -124,6 +124,32 @@ export async function seedWorkspace(
   return { workspaceId, ownerId, marker, chatId: chat.id, gatekeeperId, ...rows };
 }
 
+/** Makes the seeded gate a registered one — a transport, target and endpoint, what
+ *  `getGatekeeper` needs to find it — for a call that refuses an unregistered gate
+ *  (`connect_gatekeeper`). Nothing reaches the endpoint. */
+export async function registerSeededGatekeeper(pool: Pool, seed: Seeded): Promise<void> {
+  await withWorkspace(
+    pool,
+    { workspaceId: seed.workspaceId, principalId: seed.ownerId },
+    async (client) => {
+      await client.query(
+        `update objects set properties = properties || $3::jsonb
+         where workspace_id = $1 and id = $2`,
+        [
+          seed.workspaceId,
+          seed.gatekeeperId,
+          {
+            transportKind: 'http',
+            target: seed.marker,
+            endpoint: 'http://seeded-gate.invalid:8090',
+          },
+        ],
+      );
+    },
+    { skipRoleSwitch: true },
+  );
+}
+
 /** The seeded rows' ids. */
 export function seededIds(seed: Seeded): string[] {
   return [seed.chatId, seed.gatekeeperId, seed.operationId, seed.actionRequestId];
