@@ -23,6 +23,10 @@ import { type Page, expect, test } from '../lib/test.js';
  */
 
 const RESTART_KERNEL = process.env.E2E_RESTART_KERNEL_CMD;
+/** Stops the kernel and returns once caddy no longer reaches it (`RESTART_KERNEL` brings it back). */
+const STOP_KERNEL = process.env.E2E_STOP_KERNEL_CMD;
+/** `<script> <login>`: expires every open console session of that login in Postgres. */
+const EXPIRE_SESSIONS = process.env.E2E_EXPIRE_SESSIONS_CMD;
 const API_KEY = process.env.WEB_E2E_API_KEY;
 const OWNER_LOGIN = process.env.WEB_E2E_OWNER_LOGIN;
 const OWNER_PASSWORD = process.env.WEB_E2E_OWNER_PASSWORD;
@@ -31,8 +35,12 @@ const OWNER_PASSWORD = process.env.WEB_E2E_OWNER_PASSWORD;
  *  backoff (≤ 30 s, ws-client.ts `DEFAULT_MAX_RECONNECT_DELAY_MS`) before the page reconnects. */
 const RECOVERY_MS = 60_000;
 
+async function run(script: string, ...args: string[]): Promise<void> {
+  await promisify(execFile)('sh', [script, ...args], { timeout: 120_000 });
+}
+
 async function restartKernel(): Promise<void> {
-  await promisify(execFile)('sh', [RESTART_KERNEL as string], { timeout: 120_000 });
+  await run(RESTART_KERNEL as string);
 }
 
 function escapeRegExp(value: string): string {
@@ -65,9 +73,10 @@ async function restartUnderOpenPage(page: Page): Promise<void> {
   const sawDrop = expect(status).toHaveText(/重连中|已断开/, { timeout: RECOVERY_MS });
   await Promise.all([sawDrop, restartKernel()]);
   await expect(status).toHaveAttribute('data-status', 'connected', { timeout: RECOVERY_MS });
+  await expect(status).toHaveText('已连接');
 }
 
-test.describe('batch C: an open console page across a kernel restart', () => {
+test.describe('batch C: an open console page across a kernel restart, an outage and an expired session', () => {
   test.skip(
     !RESTART_KERNEL,
     'set E2E_RESTART_KERNEL_CMD to a script that restarts the kernel and waits for /api/health (.github/workflows/e2e.yml writes one)',
@@ -113,5 +122,75 @@ test.describe('batch C: an open console page across a kernel restart', () => {
     await openNewChat(page);
     await sendAndSeeReply(page, `resilience-cookie-${Date.now()}`);
     await expect(page.getByTestId('login-submit')).toHaveCount(0);
+  });
+
+  test('pressing send while the kernel is down: a readable error, the draft kept, one turn after', async ({
+    page,
+  }) => {
+    test.skip(!API_KEY || !STOP_KERNEL, 'set WEB_E2E_API_KEY and E2E_STOP_KERNEL_CMD');
+    await page.goto('/');
+    await reachLoginForm(page);
+    await loginWithApiKey(page, API_KEY as string);
+    await openNewChat(page);
+    const status = page.getByTestId('ws-status');
+    await expect(status).toHaveAttribute('data-status', 'connected');
+
+    try {
+      await run(STOP_KERNEL as string);
+      await expect(status).toHaveText(/重连中|已断开/, { timeout: RECOVERY_MS });
+
+      // What a person does during an upgrade: types, presses send, and the page has to say why
+      // nothing happened — in words — and keep what they typed.
+      const prompt = `resilience-while-down-${Date.now()}`;
+      const composer = page.getByPlaceholder('输入消息…');
+      await composer.fill(prompt);
+      await page.getByRole('button', { name: '发送' }).click();
+      await expect(page.getByRole('alert').filter({ hasText: '连接已断开' })).toBeVisible();
+      await expect(composer).toHaveValue(prompt);
+      await expect(page.locator('.message-user .message-text')).toHaveCount(0);
+    } finally {
+      // Always bring the kernel back: every spec and step after this one needs it.
+      await restartKernel();
+    }
+
+    await expect(status).toHaveAttribute('data-status', 'connected', { timeout: RECOVERY_MS });
+    await expect(status).toHaveText('已连接');
+    // The same draft, sent again, makes exactly one turn — the refused attempt left nothing behind.
+    const prompt = await page.getByPlaceholder('输入消息…').inputValue();
+    await page.getByRole('button', { name: '发送' }).click();
+    await expect(page.locator('.message-user .message-text')).toHaveText([prompt]);
+    await expect(page.locator('.message-assistant .message-text').last()).toHaveText(
+      new RegExp(`^echo: <!--nexttime:turn_id=[^>]+-->\\n${escapeRegExp(prompt)}$`),
+      { timeout: 20_000 },
+    );
+  });
+
+  test('the console session expires under an open chat: the next send lands on sign-in, not a dead page', async ({
+    page,
+  }) => {
+    test.skip(
+      !OWNER_LOGIN || !OWNER_PASSWORD || !EXPIRE_SESSIONS,
+      'set WEB_E2E_OWNER_LOGIN, WEB_E2E_OWNER_PASSWORD and E2E_EXPIRE_SESSIONS_CMD',
+    );
+    await page.goto('/');
+    await reachLoginForm(page);
+    await loginWithPassword(page, OWNER_LOGIN as string, OWNER_PASSWORD as string);
+    await page.goto('/#/work/chats');
+    await openNewChat(page);
+    await expect(page.getByTestId('ws-status')).toHaveAttribute('data-status', 'connected');
+
+    await run(EXPIRE_SESSIONS as string, OWNER_LOGIN as string);
+
+    // The open socket authenticated before the expiry; the kernel re-checks the session on every
+    // call (session-revocation.ts), so this send is refused as unauthorized and the console goes
+    // back to sign-in. Whether it also keeps the draft and says why is legacy 658.
+    await page.getByPlaceholder('输入消息…').fill(`resilience-expired-${Date.now()}`);
+    await page.getByRole('button', { name: '发送' }).click();
+    await expect(page.getByTestId('login-submit')).toBeVisible({ timeout: 15_000 });
+
+    // And signing in again works: an expired session is not a locked account.
+    await loginWithPassword(page, OWNER_LOGIN as string, OWNER_PASSWORD as string);
+    await page.goto('/#/work/chats');
+    await expect(page.getByRole('heading', { name: '对话' })).toBeVisible();
   });
 });
