@@ -113,6 +113,40 @@ test('a target that cannot be traced (a parameter, a shadowing parameter, a name
   );
 });
 
+test('L3 (655): clicking, submitting or setting a control from page-side JavaScript is reported', () => {
+  assert.deepEqual(
+    rules(`
+      const row = page.getByRole('row');
+      await row.evaluate((el) => (el as HTMLElement).click());
+      await page.locator('form').evaluateAll((els) => els.forEach((f) => f.requestSubmit()));
+      await page.evaluate(() => document.querySelector('#go')?.dispatchEvent(new MouseEvent('click')));
+      await page.$eval('#agree', (el) => { el.checked = true; });
+      await page.evaluate("document.querySelector('#go').click()");
+      await page.getByLabel('名称').evaluate((el, v) => { el.value = v; }, 'x');
+    `),
+    [
+      'L3 row.evaluate((el) => (el as HTMLElement).click())',
+      'L3 page.locator(\'form\').evaluateAll((els) => els.forEach((f) => f.requestSubmit()))',
+      "L3 page.evaluate(() => document.querySelector('#go')?.dispatchEvent(new MouseEvent('click')))",
+      "L3 page.$eval('#agree', (el) => { el.checked = true; })",
+      'L3 page.evaluate("document.querySelector(\'#go\').click()")',
+      "L3 page.getByLabel('名称').evaluate((el, v) => { el.value = v; }, 'x')",
+    ],
+  );
+});
+
+test('L3: reading the page from evaluate is fine', () => {
+  assert.deepEqual(
+    rules(`
+      const text = await page.getByRole('row').evaluate((el) => el.textContent);
+      const ok = await page.evaluate(() => (document.querySelector('input') as HTMLInputElement).value === 'x');
+      const n = await page.$$eval('li', (els) => els.length);
+      await page.evaluate(() => window.scrollTo(0, 0));
+    `),
+    [],
+  );
+});
+
 test('baseline: new violations fail, listed ones pass, gone ones are stale', () => {
   const found = {
     'a.ts': [
