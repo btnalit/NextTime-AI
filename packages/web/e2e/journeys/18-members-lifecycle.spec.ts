@@ -120,9 +120,6 @@ test.describe('Journey ⑱: 成员资格与服务凭证的一生', () => {
 
     // --- 1. 用户 → 管理 → 管理成员资格：加入这条旅程的工作区，角色保持成员 --------------------------
     await goToByLabel(page, '用户');
-    // Removing the membership (step 3) leaves a user who never signed in with only a disabled
-    // membership — the residue the default view hides, which would close the drawer under step 3.
-    await page.getByRole('checkbox', { name: /隐藏验收残留/ }).uncheck();
     await page.getByRole('textbox', { name: '搜索', exact: true }).fill(MEMBER_LOGIN);
     await page.getByRole('button', { name: '应用', exact: true }).click();
     const userRow = page.getByTestId('platform-user-row').filter({ hasText: MEMBER_LOGIN });
