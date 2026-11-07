@@ -9,7 +9,7 @@ import { type Page, expect, test } from '../lib/test.js';
 import { SECOND_PRINCIPAL_API_KEY, goToByLabel } from './helpers.js';
 
 /**
- * Journey ⑮: 把跑得好的组合沉淀为新的 Worker 定义（S11 GO16b）
+ * Journey ⑯: 把跑得好的组合沉淀为新的 Worker 定义（S11 GO16b）
  *
  * 步骤:
  *   1. 所有者在「能力目录 → Worker」打开一个已发布的 Worker，在「可沉淀的组合」里看到一份步骤调整：
@@ -80,7 +80,7 @@ const BASE_NAME = `journey-keep-worker-${RUN}`;
 const KEPT_NAME = `journey-kept-${RUN}`;
 const INSTRUCTIONS = '先读最近一小时的日志，再动手。';
 
-test.describe('Journey ⑮: 把跑得好的组合沉淀为定义', () => {
+test.describe('Journey ⑯: 把跑得好的组合沉淀为定义', () => {
   test.skip(
     !OWNER_API_KEY || !SECOND_PRINCIPAL_API_KEY,
     'set WEB_E2E_API_KEY and WEB_E2E_API_KEY_B (see README.md)',
@@ -99,7 +99,7 @@ test.describe('Journey ⑮: 把跑得好的组合沉淀为定义', () => {
       kind: 'worker',
       definition: {
         name: BASE_NAME,
-        description: 'Journey ⑮ fixture Worker: fixes one thing a goal asks for.',
+        description: 'Journey ⑯ fixture Worker: fixes one thing a goal asks for.',
         systemPrompt: 'You fix one thing and report what you did.',
       },
     });
@@ -109,7 +109,7 @@ test.describe('Journey ⑮: 把跑得好的组合沉淀为定义', () => {
     });
     for (const n of [1, 2, 3]) {
       const proposed = await callAs<ProposeGoalResultWire>(page, requester, 'propose_goal', {
-        statement: `旅程⑮：修好第 ${n} 个服务（${attempt}）`,
+        statement: `旅程⑯：修好第 ${n} 个服务（${attempt}）`,
         plan: {
           steps: [
             {
@@ -122,7 +122,7 @@ test.describe('Journey ⑮: 把跑得好的组合沉淀为定义', () => {
           acceptance: [{ kind: 'requester_confirm', key: 'fixed', prompt: '服务已经修好' }],
         },
         budget: { maxTokens: 100_000, maxSteps: 5, maxRevisions: 3, maxWallClockSeconds: 3600 },
-        idempotencyKey: `journey-15-${attempt}-${n}`,
+        idempotencyKey: `journey-16-${attempt}-${n}`,
       });
       await callAs(page, requester, 'confirm_goal', {
         goalRunId: proposed.goalRunId,
@@ -166,7 +166,10 @@ test.describe('Journey ⑮: 把跑得好的组合沉淀为定义', () => {
       '这段内容会写进一份新的定义草稿；发布后，工作区里所有人都能看到它。',
     );
     await keep.getByText('要写进草稿的定义', { exact: true }).click();
-    await expect(keep).toContainText(INSTRUCTIONS);
+    // The part the adjustments add is set apart, marked, and on screen — not off to the side of a
+    // scrolled code block (UX acceptance of #1071).
+    await expect(keep.getByText(INSTRUCTIONS, { exact: true })).toBeVisible();
+    await expect(keep.getByText('来自步骤调整', { exact: true }).first()).toBeVisible();
     await keep.getByRole('textbox', { name: '新定义的名称' }).fill(KEPT_NAME);
     await keep.getByRole('button', { name: '写成草稿', exact: true }).click();
     await expect(page.getByText(`已写成草稿：${KEPT_NAME}。审核后由你发布`)).toBeVisible({

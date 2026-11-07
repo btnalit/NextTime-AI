@@ -5,6 +5,7 @@ import {
   type CombinationEvidenceWire,
   type WorkerDefinitionDerivationWire,
   type WorkerDefinitionWire,
+  type WorkerSpec,
 } from '@nexttime/shared';
 import { useState } from 'react';
 import { useCapability } from '../../hooks/useCapability.js';
@@ -18,8 +19,10 @@ import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { Field } from '../kit/field.js';
+import { KeyValue } from '../kit/key-value.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { SkeletonRows } from '../kit/skeleton.js';
+import { contentFieldText } from './ChangesTab.js';
 
 /**
  * components/catalog/CombinationCandidates (S11 GO16b; `@nexttime/shared` `combination.ts`, GO16
@@ -164,7 +167,7 @@ function CandidateCard({
         <span className="text-3 text-small" data-testid={`${testId}-step-only`}>
           {t(
             `${zhJoin(stepOnly.map((field) => workerSpecFieldLabel(field, t)).join('、'), '只对目标步骤生效')}，定义里没有这一项，沉淀时不带过去。`,
-            `${stepOnly.map((field) => workerSpecFieldLabel(field, t)).join(', ')} apply to a goal step only — a definition has no such field, so they do not carry over.`,
+            `${stepOnly.map((field) => workerSpecFieldLabel(field, t)).join(', ')} ${stepOnly.length === 1 ? 'applies' : 'apply'} to a goal step only — a definition has no such field, so ${stepOnly.length === 1 ? 'it does' : 'they do'} not carry over.`,
           )}
         </span>
       ) : null}
@@ -198,6 +201,7 @@ function CandidateCard({
           http={http}
           candidate={candidate}
           specDigest={candidate.specDigest}
+          spec={candidate.spec}
           definition={candidate.definition}
           baseName={baseName}
           onProposed={onProposed}
@@ -214,6 +218,7 @@ function KeepAsDefinition({
   http,
   candidate,
   specDigest,
+  spec,
   definition,
   baseName,
   onProposed,
@@ -224,6 +229,7 @@ function KeepAsDefinition({
   readonly http: CapabilityCaller;
   readonly candidate: CombinationCandidateWire;
   readonly specDigest: string;
+  readonly spec: WorkerSpec;
   readonly definition: Readonly<Record<string, unknown>>;
   readonly baseName: string;
   readonly onProposed: (draft: WorkerDefinitionWire) => void;
@@ -271,7 +277,9 @@ function KeepAsDefinition({
             }}
             data-testid={`${testId}-keep`}
           >
-            {t('沉淀为定义…', 'Keep as a definition…')}
+            {candidate.derivedAs.length > 0
+              ? t('再沉淀一份…', 'Keep another definition…')
+              : t('沉淀为定义…', 'Keep as a definition…')}
           </Button>
         </span>
       }
@@ -334,9 +342,87 @@ function KeepAsDefinition({
       </Field>
       <details className="disclosure" data-testid={`${testId}-preview`}>
         <summary>{t('要写进草稿的定义', 'The definition the draft gets')}</summary>
-        <pre className="code-block disclosure-body">{prettyJsonVisible(definition)}</pre>
+        <div className="disclosure-body">
+          <DefinitionPreview
+            definition={definition}
+            spec={spec}
+            testId={`${testId}-preview`}
+            t={t}
+          />
+        </div>
       </details>
     </Confirm>
+  );
+}
+
+/** The WorkerDefinition fields a WorkerSpec replaces outright when kept (`mergeCombinationDefinition`). */
+const REPLACED_FROM_SPEC = ['skills', 'gates', 'capabilities', 'model'] as const;
+
+function previewFieldLabel(field: string, t: Translate): string {
+  if (field === 'inputSchema') return t('输入约定', 'input contract');
+  if (field === 'outputSchema') return t('输出约定', 'output contract');
+  return contentFieldText(field, t);
+}
+
+/**
+ * What the draft gets, field by field (UX acceptance of #1071, P2): the system prompt as wrapped
+ * text with the part the step's adjustments add set apart and marked — the warning above asks the
+ * person to check exactly that part, so it must never sit off to the right of a scrolled code
+ * block — then every other field on its own line, marked where the adjustments set it.
+ */
+function DefinitionPreview({
+  definition,
+  spec,
+  testId,
+  t,
+}: {
+  readonly definition: Readonly<Record<string, unknown>>;
+  readonly spec: WorkerSpec;
+  readonly testId: string;
+  readonly t: Translate;
+}) {
+  const prompt = typeof definition.systemPrompt === 'string' ? definition.systemPrompt : '';
+  const instructions = spec.instructions?.trim() ?? '';
+  const added =
+    instructions !== '' && prompt.endsWith(`\n\n${instructions}`) ? instructions : null;
+  const basePrompt = added === null ? prompt : prompt.slice(0, -(added.length + 2));
+  const fromSpec = new Set<string>(REPLACED_FROM_SPEC.filter((field) => spec[field] !== undefined));
+  const marker = (
+    <span className="chip chip-accent chip-s">{t('来自步骤调整', 'From the step adjustments')}</span>
+  );
+  const others = Object.entries(definition).filter(([field]) => field !== 'systemPrompt');
+  return (
+    <div className="stack-s" data-testid={`${testId}-content`}>
+      <span className="text-3 text-small">{contentFieldText('systemPrompt', t)}</span>
+      {basePrompt !== '' ? <p className="pre-wrap wrap-anywhere">{basePrompt}</p> : null}
+      {added !== null ? (
+        <span className="stack-s" data-testid={`${testId}-added`}>
+          {marker}
+          <p className="pre-wrap wrap-anywhere">{added}</p>
+        </span>
+      ) : null}
+      {others.length > 0 ? (
+        <KeyValue
+          testId={`${testId}-fields`}
+          items={others.map(([field, value]) => ({
+            key: field,
+            label: previewFieldLabel(field, t),
+            value: (
+              <span className="row-wrap">
+                {Array.isArray(value) && value.every((item) => typeof item === 'string') ? (
+                  <span className="wrap-anywhere">{value.join('、')}</span>
+                ) : typeof value === 'string' ? (
+                  <span className="pre-wrap wrap-anywhere">{value}</span>
+                ) : (
+                  <pre className="code-block pre-wrap">{prettyJsonVisible(value)}</pre>
+                )}
+                {fromSpec.has(field) ? marker : null}
+              </span>
+            ),
+          }))}
+        />
+      ) : null}
+    </div>
   );
 }
 

@@ -137,9 +137,16 @@ describe('CombinationCandidatesSection (S11 GO16b)', () => {
     );
     const confirm = screen.getByTestId(`${cardId}-confirm`);
     expect(confirm.textContent).toContain('草稿只有你看得到');
-    expect(within(confirm).getByTestId(`${cardId}-preview`).textContent).toContain(
-      'Check the logs first.',
-    );
+    // Field by field, wrapped (UX acceptance of #1071): the base prompt, then what the step's
+    // adjustments add, set apart and marked; the capabilities they replace, marked too.
+    const preview = within(confirm).getByTestId(`${cardId}-preview`);
+    expect(preview.querySelector('pre')).toBeNull();
+    const added = within(preview).getByTestId(`${cardId}-preview-added`);
+    expect(added.textContent).toBe('来自步骤调整Check the logs first.');
+    expect(within(added).getByText('Check the logs first.').className).toContain('pre-wrap');
+    expect(within(preview).getByText('You fix services.').className).toContain('pre-wrap');
+    const fields = within(preview).getByTestId(`${cardId}-preview-fields`);
+    expect(fields.textContent).toBe('能力范围get_object来自步骤调整');
     const name = within(confirm).getByTestId(`${cardId}-name`) as HTMLInputElement;
     expect(name.value).toBe('Fixer（调整版）');
 
@@ -219,6 +226,8 @@ describe('CombinationCandidatesSection (S11 GO16b)', () => {
     const derived = await screen.findByTestId(`${cardId}-derived`);
     expect(derived.textContent).toContain('已经沉淀为');
     expect(derived.textContent).toContain('Fixer · logs');
+    // Kept once already: the button says it makes another one (UX acceptance of #1071).
+    expect(screen.getByTestId(`${cardId}-keep`).textContent).toBe('再沉淀一份…');
   });
 
   it('none meets the thresholds yet: says so under the rule', async () => {
