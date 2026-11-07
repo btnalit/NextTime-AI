@@ -4,8 +4,10 @@ import { actionKindRaw, actionKindTagText, formatDateTime, formatRelative } from
 import type { GatekeeperDetail } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { gateOwnedParamsText } from './connect/GateOwnedParams.js';
+import { RedactedNote } from './kit/redacted-note.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
+import { Notice } from './ui/Notice.js';
 import { SkeletonRows } from './ui/Skeleton.js';
 import { StatusChip } from './ui/StatusChip.js';
 
@@ -21,6 +23,11 @@ export interface GatekeeperDetailDrawerProps {
  * that page keeps unchanged — this is the one new read this PR adds to it. `health` is the wire's
  * `'ok' | 'unreachable' | 'unauthorized'`, shown with the `gateHealth` chip the system card and
  * the gate instance lists use, so the drawer and the card never disagree (legacy 271).
+ *
+ * Legacy 674: a gate the workspace connected itself that the platform suspended says so first —
+ * when, the reason given, that nothing here lifts it and who does — above its Operations, which
+ * stay listed: they are kept, and refused on every call until it is resumed. The health probe
+ * still answers 健康 then (the gate itself is fine), so without the note the page read as working.
  */
 export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailDrawerProps) {
   const t = useT();
@@ -57,8 +64,36 @@ export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailD
     nameCounts.set(operation.name, (nameCounts.get(operation.name) ?? 0) + 1);
   }
 
+  const suspension = gate.platformSuspension;
+
   return (
     <div className="stack" data-testid="gatekeeper-detail">
+      {suspension ? (
+        <Notice tone="warn" testId="gatekeeper-platform-suspension">
+          <strong>
+            {t('平台暂停了这个门', 'The platform has suspended this gate')}
+            {' · '}
+            <time title={formatDateTime(suspension.suspendedAt)}>
+              {formatRelative(suspension.suspendedAt)}
+            </time>
+          </strong>
+          <p className="text-small wrap-anywhere">
+            {suspension.reason
+              ? t(`原因：${suspension.reason}`, `Reason: ${suspension.reason}`)
+              : t('平台管理员没有写原因。', 'The platform administrator gave no reason.')}
+          </p>
+          <RedactedNote
+            value={suspension.reason}
+            testId="gatekeeper-platform-suspension-redacted"
+          />
+          <p className="text-small">
+            {t(
+              '暂停期间，它的每个 Operation 都会被拒绝，智能体也调用不了；连接、Operation 和历史都保留。工作区里没有办法解除，请找平台管理员恢复它。',
+              'While it is suspended, every Operation on it is refused, agents included; the connection, its Operations and their history are kept. Nothing in this workspace lifts it: ask a platform administrator to resume it.',
+            )}
+          </p>
+        </Notice>
+      ) : null}
       <dl className="definition-list">
         <dt>{t('健康', 'Health')}</dt>
         <dd>

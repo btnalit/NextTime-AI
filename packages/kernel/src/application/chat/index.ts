@@ -30,6 +30,7 @@ export {
   CHAT_AUTO_TITLE_MAX_CHARS,
   CHAT_TITLE_MAX_CHARS,
   ChatArchivedError,
+  IdempotencyKeyReusedError,
   ChatNotFoundError,
   DEFAULT_CHAT_HISTORY_LIMIT,
   TurnAlreadyRunningError,

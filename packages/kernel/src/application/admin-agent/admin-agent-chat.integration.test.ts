@@ -501,6 +501,49 @@ describe.runIf(DATABASE_URL !== undefined)(
       await expect(send(trial, chat.id)).resolves.toMatchObject({ turnId: expect.any(String) });
     });
 
+    it('legacy 673: resending a message with its idempotencyKey only reads the Chat — the switch off still returns it, a person no longer an administrator is refused', async () => {
+      type Sent = { messageId: string; turnId: string; changed: boolean; turnStatus: string };
+      const trial = await newTrial();
+      const chat = await newAdminChat(trial);
+      const params = {
+        chatId: chat.id,
+        text: 'look at the platform',
+        idempotencyKey: `aa4c-${randomUUID()}`,
+      };
+      const resend = () => call<Sent>(person(trial), 'send_chat_message', params);
+      const sent = await resend();
+      expect(sent.changed).toBe(true);
+      await call(person(trial), 'stop_agent', { chatId: chat.id });
+      const ended = (await turnRow(trial, sent.turnId))?.status;
+      expect(ended).not.toBe('running');
+      const returned = { messageId: sent.messageId, turnId: sent.turnId, changed: false };
+
+      // Switched off, a new message is refused (`turn`); the one already sent is returned, as its
+      // history would be (`read`), with its Turn as it ended.
+      await withSwitchOff(async () => {
+        await expect(resend()).resolves.toEqual({
+          ...returned,
+          sequence: expect.any(Number),
+          turnStatus: ended,
+        });
+        const refused = await thrownBy(
+          call(person(trial), 'send_chat_message', { ...params, idempotencyKey: randomUUID() }),
+        );
+        expect((refused as AdminAgentRefused).reason).toBe('switched_off');
+      });
+
+      // No longer an administrator: not even that, as for every other read of the Chat.
+      await setStoredRole(admin, 'user');
+      try {
+        const refused = await thrownBy(resend());
+        expect(refused).toBeInstanceOf(AdminAgentRefused);
+        expect((refused as AdminAgentRefused).reason).toBe('not_platform_admin');
+      } finally {
+        await setStoredRole(admin, 'admin');
+      }
+      await expect(resend()).resolves.toMatchObject(returned);
+    });
+
     it('linkage (#937 C08): what the entry agent’s work leaves for the person goes to their newest entry Chat — never an admin agent Chat, however recent', async () => {
       const trial = await newTrial();
       const resolve = () =>

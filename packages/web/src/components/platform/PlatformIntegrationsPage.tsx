@@ -1265,9 +1265,10 @@ function SelfConnectionAction({
         <Field
           id={reasonId}
           label={t('原因（可选）', 'Reason (optional)')}
+          // Legacy 674: the workspace's owner reads it too, in the gate's 「健康与操作」.
           hint={t(
-            '记在这次暂停上，列表和平台审计里都能看到。',
-            'Kept with this suspension; shown in this list and in the platform audit.',
+            '记在这次暂停上，这个列表、平台审计和这个工作区的「健康与操作」里都能看到。',
+            'Kept with this suspension; shown in this list, in the platform audit and to this workspace under the gate’s Health and operations.',
           )}
         >
           <Input

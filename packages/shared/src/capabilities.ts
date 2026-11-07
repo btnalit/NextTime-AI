@@ -20,6 +20,7 @@ import {
   ActionRequestStatusSchema,
   GoalRunStatusSchema,
   ObjectiveOutcomeSchema,
+  TurnStatusSchema,
 } from './enums.js';
 import type { CapabilityChannel, Role } from './enums.js';
 import { listEnvelope } from './envelope.js';
@@ -292,6 +293,10 @@ const gateObserveResultSchema = z
 // chat — human channel only ("只走 human 通道")
 // -------------------------------------------------------------------------------------------
 
+/** Legacy 673: `send_chat_message`'s `idempotencyKey` ceiling (`chat_messages.idempotency_key`,
+ *  migrations/core/0055 checks the same length); the same as `propose_goal`'s. */
+export const MAX_CHAT_MESSAGE_IDEMPOTENCY_KEY_CHARS = 200;
+
 const chatCapabilities = [
   {
     name: 'list_chats',
@@ -327,10 +332,29 @@ const chatCapabilities = [
     mode: 'execute',
     channel: 'human',
     minRole: 'member',
-    paramsSchema: z.object({ chatId: id, text: z.string().min(1) }).strict(),
-    resultSchema: z.object({ messageId: id, sequence: z.number(), turnId: z.string() }).strict(),
-    description:
-      'Send a message on a Chat and start a Turn (§8.1 sendChatMessage). Rejected if a Turn is already running.',
+    // Legacy 673: `idempotencyKey` names the message, within its Chat — a send that timed out on
+    // the client may still have reached the kernel, and sending the same message again with the
+    // same key returns the one already sent (its Turn, `changed: false`) instead of starting a
+    // second Turn, whose tool calls and approvals would act twice. `turnStatus` is that Turn's
+    // status now, so a client resending learns whether it is still running. Without a key, a send
+    // is a new message every time.
+    paramsSchema: z
+      .object({
+        chatId: id,
+        text: z.string().min(1),
+        idempotencyKey: z.string().min(1).max(MAX_CHAT_MESSAGE_IDEMPOTENCY_KEY_CHARS).optional(),
+      })
+      .strict(),
+    resultSchema: z
+      .object({
+        messageId: id,
+        sequence: z.number(),
+        turnId: z.string(),
+        changed: z.boolean(),
+        turnStatus: TurnStatusSchema,
+      })
+      .strict(),
+    description: `Send a message on a Chat and start a Turn (§8.1 sendChatMessage); turnStatus is running and changed is true. Rejected if a Turn is already running (409 turn_already_running). idempotencyKey (optional, at most ${MAX_CHAT_MESSAGE_IDEMPOTENCY_KEY_CHARS} characters, one per message — send a new message with a new key): the same key on the same Chat with the same text returns the message first sent with it — its messageId, sequence and turnId, changed: false and turnStatus as that Turn is now — and starts no Turn, whatever has happened since; the same key with another text, or a key another person sent with, is refused and nothing is written (409 idempotency_key_reused with details.messageId).`,
   },
   {
     name: 'stop_agent',
@@ -1208,7 +1232,10 @@ const connectionCapabilities = [
     resultSchema: wire.GatekeeperDetailWireSchema,
     description:
       'One Gatekeeper instance with its Operations and a live health probe. A draft Operation ' +
-      'is listed only to its proposer, a builder or the owner (D-26, I16).',
+      'is listed only to its proposer, a builder or the owner (D-26, I16). Operations the ' +
+      'connector deny list refuses are left out. Legacy 674: while the platform suspends a gate ' +
+      'the workspace connected itself, platformSuspension says when and the reason given (never ' +
+      'who), and its Operations stay listed — kept, refused on every call until resumed.',
   },
   {
     name: 'list_operations',

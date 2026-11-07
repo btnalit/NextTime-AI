@@ -751,16 +751,24 @@ const newChatHandler: CapabilityHandler = async (client, workspaceId, params) =>
 };
 
 const sendChatMessageHandler: CapabilityHandler = async (client, workspaceId, params) => {
-  const { chatId, text } = params as { chatId: string; text: string };
+  const { chatId, text, idempotencyKey } = params as {
+    chatId: string;
+    text: string;
+    idempotencyKey?: string;
+  };
   const principalId = await currentPrincipalId(client);
-  const { message, turnId } = await sendChatMessage(client, workspaceId, principalId, {
-    chatId,
-    text,
-  });
+  const { message, turnId, changed, turnStatus } = await sendChatMessage(
+    client,
+    workspaceId,
+    principalId,
+    { chatId, text, ...(idempotencyKey === undefined ? {} : { idempotencyKey }) },
+  );
   return {
-    result: { messageId: message.id, sequence: message.sequence, turnId },
+    result: { messageId: message.id, sequence: message.sequence, turnId, changed, turnStatus },
     resourceType: 'chat',
     resourceId: chatId,
+    // Legacy 673: a message sent again under its key starts nothing; the call's own row says so.
+    ...(changed ? {} : { auditPayload: { alreadySent: true, messageId: message.id } }),
   };
 };
 
