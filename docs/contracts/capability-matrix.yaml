@@ -1,5 +1,5 @@
 # Capability matrix — one row per capability in packages/shared/src/capabilities.ts.
-# Guard: scripts/guards/capability-matrix.mjs (rules M1–M5, R); design: docs/test-coverage-gaps-2026-11-06.md §5.1, §5.3.
+# Guard: scripts/guards/capability-matrix.mjs (rules M1–M6, R); design: docs/test-coverage-gaps-2026-11-06.md §5.1, §5.3.
 #
 # console:  required             the console calls it (http.call / useCapability*)
 #           indirect: <file>     the console calls it through a variable; <file> names it
@@ -11,27 +11,39 @@
 #                                calls it through the console; web-e2e checks each run (M4)
 #           "waived: <legacy no.>"  not yet (counted by ratchet.e2e_waived, only goes down)
 # kernel_test: missing           no kernel test names it yet (counted by ratchet.kernel_test_missing)
+# repeat:   (a capability with side effects) what a second call with the same params does (M6):
+#           idempotent           succeeds, changes nothing but its own audit row, same id back
+#           creates              makes another entity (a new id)
+#           repeats              applies its effect again to the same entity (same id, new state)
+#           "conflict: <code>"   refused with that wire error code (a typed 4xx), nothing changes
+#           "unclear: <legacy no.>"  not decided / not exercised yet (counted by ratchet.repeat_unclear)
+#           every declared row is exercised by kernel repeat-call.integration.test.ts
 ratchet:
   console_unexplained: 10
   kernel_test_missing: 6
   e2e_waived: 87
+  repeat_unclear: 135
 capabilities:
   add_eval_case:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   add_eval_fixture_gate:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   add_member:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   add_membership:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   agent_get_admin_proposal:
     console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
     agents: [admin]
@@ -47,33 +59,41 @@ capabilities:
   agent_withdraw_admin_proposal:
     console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
     agents: [admin]
+    repeat: "unclear: 664"
   apply_admin_proposal_segment:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   apply_platform_segment:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   approve:
     console: required
     agents: []
     e2e: observed
+    repeat: "conflict: illegal_transition"
   approve_step_trial:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   archive_chat:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 665"
   assert_fact:
     console: "none: 待说明（2026-11-06 盘点）"
     agents: []
+    repeat: "unclear: 664"
   attest_fact:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   audit_query:
     console: required
     agents: []
@@ -81,18 +101,22 @@ capabilities:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   cancel_draft_evaluation:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   cancel_goal:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   cancel_task:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   causal_chain:
     console: required
     agents: []
@@ -100,45 +124,56 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   confirm_goal:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   confirm_goal_acceptance:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   connect_gatekeeper:
     console: "none: 待说明（2026-11-06 盘点）"
     agents: []
+    repeat: "unclear: 664"
   create_connection:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   create_eval_suite:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   create_gate_instance:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   create_principal:
     console: required
     agents: []
     e2e: observed
+    repeat: creates
   create_user:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   create_workspace:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   decide_plan_revision:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   decision_impact:
     console: required
     agents: []
@@ -146,47 +181,58 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   deprecate_operation:
     console: "indirect: packages/web/src/components/CatalogPage.tsx"
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   deprecate_procedure:
     console: "indirect: packages/web/src/components/CatalogPage.tsx"
     agents: []
     e2e: "waived: 657"
     kernel_test: missing
+    repeat: "unclear: 664"
   deprecate_skill:
     console: "indirect: packages/web/src/components/CatalogPage.tsx"
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   deprecate_worker_definition:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   disable_principal:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   discard_draft:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   discard_operation_draft:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   edit_eval_case:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   enable_gate_instance:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   end_goal:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   execution_readiness:
     console: required
     agents: []
@@ -244,6 +290,7 @@ capabilities:
   get_entry_context:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: []
+    repeat: "unclear: 664"
   get_entry_template_status:
     console: required
     agents: []
@@ -314,6 +361,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   graph_freshness:
     console: required
     agents: [admin]
@@ -323,37 +371,46 @@ capabilities:
   install_module:
     console: "none: 待说明（2026-11-06 盘点）"
     agents: []
+    repeat: "unclear: 664"
   install_pack:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   invalidate_fact:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   invoke_worker:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: [entry, admin]
+    repeat: "unclear: 664"
   issue_gate_credential_token:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   issue_gate_host_token:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   issue_handle:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   issue_llm_admin_token:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   issue_service_handle:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   list_action_requests:
     console: required
     agents: []
@@ -501,25 +558,31 @@ capabilities:
     agents: []
     e2e: "waived: 657"
     kernel_test: missing
+    repeat: "unclear: 664"
   merge_user:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   mint_connection_secret:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   new_chat:
     console: required
     agents: []
     e2e: observed
+    repeat: creates
   observe_operation:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: []
+    repeat: "unclear: 664"
   pause_goal:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   pi_drift:
     console: required
     agents: []
@@ -580,67 +643,84 @@ capabilities:
   propose_admin_proposal:
     console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
     agents: [admin]
+    repeat: "unclear: 664"
   propose_entry_template_upgrade:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   propose_goal:
     console: "none: 入口 agent 替人提议目标；人在控制台确认或拒绝（confirm / reject 目标的能力）"
     agents: [entry]
+    repeat: "unclear: 664"
   propose_ontology_change:
     console: "none: 待说明（2026-11-06 盘点）"
     agents: [entry, admin]
+    repeat: "unclear: 664"
   propose_operation:
     console: required
     agents: [entry, admin]
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   propose_pack_install:
     console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；所有者在能力目录的管理员提案页审阅，用 install_pack 带 adminProposalSegmentId 安装，或拒绝"
     agents: [admin]
+    repeat: "unclear: 664"
   propose_procedure:
     console: required
     agents: [entry, admin]
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   propose_skill:
     console: required
     agents: [entry, admin]
     e2e: observed
+    repeat: "unclear: 664"
   propose_worker_definition:
     console: required
     agents: [entry, admin]
     e2e: observed
+    repeat: "unclear: 664"
   publish_manifest:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   publish_ontology_version:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   publish_operation:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   publish_procedure:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   publish_skill:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   publish_worker_definition:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   purge_user:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   purge_workspace:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   query_decisions:
     console: required
     agents: []
@@ -648,91 +728,114 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   reconstruct:
     console: required
     agents: []
   record_decision:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: [entry]
+    repeat: "unclear: 664"
   record_procedure_followed:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: [entry]
+    repeat: "unclear: 664"
   refresh_operation_governance:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   register_source:
     console: "none: 数据接入，由 collector 用服务 Handle 调用，不是人的操作"
     agents: []
+    repeat: idempotent
   reject:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "conflict: illegal_transition"
   reject_admin_proposal_segment:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   reject_draft:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   reject_goal:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   reject_platform_segment:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   release_eval_seal_hold:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   release_goal_hold:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   remove_eval_fixture_gate:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   remove_membership:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   rename_chat:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 665"
   repin_eval_suite:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   report_task_outcome:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: [entry]
     kernel_test: missing
+    repeat: "unclear: 664"
   report_task_result:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: []
+    repeat: "unclear: 664"
   report_turn:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: []
+    repeat: "unclear: 664"
   request_action:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: []
+    repeat: "unclear: 664"
   request_connection:
     console: required
     agents: [entry, admin]
     e2e: observed
+    repeat: creates
   reset_user_password:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   resolve_conflict:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   resolve_refs:
     console: required
     agents: []
@@ -740,50 +843,62 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   resume_self_connection:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   retire_eval_case:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   revise_goal:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   revoke_capability:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   revoke_external_runtime:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   roll_back_change_segment:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   roll_back_platform_change_segment:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   roll_entry_containers:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   rollback_runtime_image:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   rotate_api_key:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   rotate_connection_secret:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   runtime_inventory:
     console: required
     agents: []
@@ -794,80 +909,99 @@ capabilities:
     console: required
     agents: []
     e2e: observed
+    repeat: "conflict: turn_already_running"
   set_active_runtime_image:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   set_admin_agent_targets:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   set_agent_policy:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   set_agent_profile:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   set_allowed_models:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   set_auto_approved_action_kind:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   set_connector_mode:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   set_default_modules:
     console: required
     agents: []
     e2e: "waived: 657"
     kernel_test: missing
+    repeat: "unclear: 664"
   set_membership_role:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   set_platform_default_model:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   set_policy:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   set_principal_role:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   set_quota:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   set_user_budget:
     console: required
     agents: []
     e2e: "waived: 657"
     kernel_test: missing
+    repeat: "unclear: 664"
   set_user_status:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   set_workspace_status:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   start_draft_evaluation:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   start_eval_case_trial:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   state_at:
     console: required
     agents: [entry, admin]
@@ -875,13 +1009,16 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   stop_agent:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: idempotent
   submit_observations:
     console: "none: 数据接入，由 collector 用服务 Handle 调用，不是人的操作"
     agents: []
+    repeat: "unclear: 664"
   subscribe_chat:
     console: required
     agents: []
@@ -889,17 +1026,21 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   suspend_self_connection:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   sync_eval_fixture_gate:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   test_gate_instance:
     console: required
     agents: []
+    repeat: "unclear: 664"
   traverse:
     console: "none: agent 的图遍历；控制台的对象页用 get_object / state_at 呈现同样的关系"
     agents: [entry, admin]
@@ -907,29 +1048,36 @@ capabilities:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 665"
   update_gate_instance:
     console: required
     agents: []
     e2e: observed
+    repeat: "unclear: 664"
   update_operation_description:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   update_platform_settings:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   update_user:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   update_workspace:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   upgrade_module:
     console: "none: 待说明（2026-11-06 盘点）"
     agents: []
+    repeat: "unclear: 664"
   validate:
     console: required
     agents: [admin]
@@ -937,11 +1085,14 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   verify_fact:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
   withdraw_admin_proposal:
     console: required
     agents: []
     e2e: "waived: 657"
+    repeat: "unclear: 664"
