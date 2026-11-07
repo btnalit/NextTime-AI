@@ -17,6 +17,7 @@ import type {
   ResolvedCaller,
 } from '../../application/gateway/index.js';
 import {
+  CapabilityCallRefusedError,
   ForbiddenError,
   UnauthorizedError,
   dispatchCapability,
@@ -196,6 +197,8 @@ function logWsCall(log: FastifyBaseLogger, capability: string, err?: unknown): v
     capability,
     outcome: 'error',
     errorName: err instanceof Error ? err.name : typeof err,
+    // Batch D3: why authorization refused it, as on the HTTP transport's line.
+    ...(err instanceof CapabilityCallRefusedError ? { refusalReason: err.reason } : {}),
     code: mapped.code,
   });
 }

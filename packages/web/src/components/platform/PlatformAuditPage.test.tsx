@@ -47,6 +47,8 @@ function row(overrides: Partial<PlatformAuditRecordWire> = {}): PlatformAuditRec
     resourceId: 'u-2',
     payload: { login: 'bob' },
     createdAt: '2026-09-10T00:00:00.000Z',
+    actingThrough: null,
+    actingSessionId: null,
     ...overrides,
   };
 }

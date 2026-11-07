@@ -83,6 +83,7 @@ import { GateInstanceNotAvailableError } from '../../application/gateway/gate-in
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
 import {
   AgentProfileValidationError,
+  CapabilityCallRefusedError,
   CapabilityNotFoundError,
   CapabilityNotImplementedError,
   ConflictNotFoundError,
@@ -1309,6 +1310,9 @@ export async function handleCapabilityRoute(
       ...(err instanceof UnauthorizedError && err.cause instanceof Error
         ? { causeName: err.cause.name }
         : {}),
+      // Batch D3: why authorization refused it (authorize.ts `CALL_REFUSAL_REASONS`) — a person's
+      // refusal is not audited, so this line and the refusal counter are its record.
+      ...(err instanceof CapabilityCallRefusedError ? { refusalReason: err.reason } : {}),
       code: mapped.code,
       status: mapped.status,
     });

@@ -24,7 +24,8 @@ import {
   redactSuspectedSecrets,
   redactedForAudit,
 } from '../../governance/redaction/index.js';
-import { writeAudit } from '../../substrate/audit/index.js';
+import type { ActingContext, ActingContextHandle } from '../../substrate/audit/index.js';
+import { runWithActingContext, writeAudit } from '../../substrate/audit/index.js';
 import {
   type AdminAgentAuthorityFacts,
   type AdminAgentRefusalReason,
@@ -49,7 +50,17 @@ import {
   recordRejectedOutput,
 } from '../task/index.js';
 import { auditedHandlerPayload } from './audit-copy.js';
-import { ForbiddenError, assertActsForPerson, authorizeCapabilityCall } from './authorize.js';
+import {
+  CapabilityCallRefusedError,
+  ForbiddenError,
+  assertActsForPerson,
+  authorizeCapabilityCall,
+} from './authorize.js';
+import {
+  actingContextForHandle,
+  auditHandleCallRefusal,
+  countPersonRefusal,
+} from './call-refusals.js';
 import type { CapabilityHandlerContext } from './capability-handler.js';
 import {
   type EvaluationSession,
@@ -934,9 +945,62 @@ export async function dispatchCapability(
   name: string,
   rawParams: unknown,
 ): Promise<unknown> {
+  // Batch D3 (migration core 0054): every audit row this call writes, in whichever transaction,
+  // records what it acts through — a person's own session from the start; a Handle's once its
+  // session's kind is read (below, and in `auditHandleCallRefusal`). Closed when the call settles.
+  return runWithActingContext(
+    caller.channel === 'handle' ? undefined : PERSON_ACTING_CONTEXT,
+    (acting) => dispatchInActingContext(deps, caller, name, rawParams, acting),
+  );
+}
+
+const PERSON_ACTING_CONTEXT: ActingContext = { actingThrough: 'person' };
+
+/**
+ * Batch D3: a refused authorization (authorize.ts) — a Handle's audited in its own transaction
+ * (call-refusals.ts, within the hourly limit), a person's only counted — then thrown on as it was.
+ */
+async function recordCallRefusal(
+  deps: DispatchDeps,
+  caller: ResolvedCaller,
+  err: CapabilityCallRefusedError,
+  rawParams: unknown,
+  acting: ActingContextHandle,
+  sessionKind?: string,
+): Promise<void> {
+  if (caller.channel !== 'handle') {
+    countPersonRefusal(caller.channel, err.capabilityName, err.reason);
+    return;
+  }
+  await auditHandleCallRefusal(deps, {
+    workspaceId: caller.claims.ws,
+    principalId: caller.claims.obo,
+    sessionId: caller.claims.sid,
+    capability: err.capabilityName,
+    reason: err.reason,
+    rawParams,
+    acting,
+    ...(sessionKind !== undefined ? { sessionKind } : {}),
+  });
+}
+
+async function dispatchInActingContext(
+  deps: DispatchDeps,
+  caller: ResolvedCaller,
+  name: string,
+  rawParams: unknown,
+  acting: ActingContextHandle,
+): Promise<unknown> {
   const capability = lookupCapabilityOrThrow(name);
 
-  authorizeCapabilityCall(caller, capability);
+  try {
+    authorizeCapabilityCall(caller, capability);
+  } catch (err) {
+    if (err instanceof CapabilityCallRefusedError) {
+      await recordCallRefusal(deps, caller, err, rawParams, acting);
+    }
+    throw err;
+  }
 
   // Before Zod: an oversized collection would cost one issue per element (params-budget.ts).
   if (exceedsValueBudget(rawParams)) {
@@ -1028,6 +1092,8 @@ export async function dispatchCapability(
   let actingSession = undefined as ActingSession | undefined;
   // S11 AA2: with it, once its authority is checked, the platform user it acts for.
   let adminAgent = undefined as { sessionId: string; userId: string } | undefined;
+  // Batch D3: the kind of the session a Handle was issued under, once read (below).
+  let handleSessionKind = undefined as string | undefined;
 
   const handlerResult = await withWorkspace(
     deps.pool,
@@ -1052,7 +1118,10 @@ export async function dispatchCapability(
           'select kind from sessions where workspace_id = $1 and id = $2',
           [workspaceId, caller.claims.sid],
         );
-        if (session.rows[0]?.kind === ADMIN_AGENT_SESSION_KIND) {
+        handleSessionKind = session.rows[0]?.kind;
+        // Batch D3: what every row of this call acts through, from the Handle's session.
+        acting.set(actingContextForHandle(handleSessionKind, caller.claims.sid));
+        if (handleSessionKind === ADMIN_AGENT_SESSION_KIND) {
           actingSession = { sessionKind: ADMIN_AGENT_SESSION_KIND, sessionId: caller.claims.sid };
           const facts = await assertAdminAgentCall(client, workspaceId, principalId, name);
           adminAgent = { sessionId: caller.claims.sid, userId: facts.userId };
@@ -1185,6 +1254,11 @@ export async function dispatchCapability(
       ...(evaluation ? { auditAction: evaluationAuditAction(name) } : {}),
       ...(actingSession ? { actingSession } : {}),
     };
+    // Batch D3: a Handle's call for a Principal that is not a person, refused by
+    // `assertActsForPerson` above — audited like every other authorization refusal.
+    if (err instanceof CapabilityCallRefusedError) {
+      await recordCallRefusal(deps, caller, err, parsed.data, acting, handleSessionKind);
+    }
     await auditAdminAgentRefusal(deps, refused);
     await auditGateRefusal(deps, refused);
     await auditEvaluationWithheld(deps, refused);

@@ -8,7 +8,7 @@ import {
   internalAuthorizationHeader,
   resolveCorrelationId,
 } from '@nexttime/shared';
-import Fastify, { type FastifyInstance, LogController } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyServerOptions, LogController } from 'fastify';
 import type { CryptoKey } from 'jose';
 import type { Pool } from 'pg';
 import { createPool, logIdleClientErrorToStderr, withWorkspace } from './adapters/db/pool.js';
@@ -35,6 +35,7 @@ import {
   createGatekeeperActionExecutor,
   reapStaleExecutingActionRequests,
   registerActionRequestDrainConsumer,
+  renderCallRefusalMetrics,
   runWithCorrelationId,
   setConnectionHandlerDeps,
   setRequestActionDeps,
@@ -129,7 +130,12 @@ import {
   setAgentHostRuntimeForWsRoute,
 } from './interfaces/ws/index.js';
 import type { InvariantCheckResult, InvariantMetricsSnapshot } from './substrate/audit/index.js';
-import { renderInvariantMetricsPrometheus, runInvariantChecks } from './substrate/audit/index.js';
+import {
+  SYSTEM_ACTING_CONTEXT,
+  renderInvariantMetricsPrometheus,
+  runInvariantChecks,
+  runWithStandingActingContext,
+} from './substrate/audit/index.js';
 
 /**
  * The one canonical construction of "a `GatekeeperClient` + the admin-mode `ActionExecutor` over
@@ -300,8 +306,9 @@ export interface KernelServerDeps
 export interface CreateServerOptions {
   /** Fastify's own `logger` option — the structured per-call log (§12) is written regardless of
    *  this setting (interfaces/http/capability-route.ts uses `request.log`, a no-op sink when
-   *  `logger` is `false`); this only controls Fastify's own request/response access log. */
-  logger?: boolean;
+   *  `logger` is `false`); this only controls Fastify's own request/response access log. Tests
+   *  pass logger options with a `stream` to read those lines. */
+  logger?: FastifyServerOptions['logger'];
   /** `request_action`'s `await_decision:true` poll timeout (default 90s,
    *  request-action-handler.ts's own `DEFAULT_AWAIT_DECISION_TIMEOUT_MS`) — `main()` reads this
    *  from `REQUEST_ACTION_AWAIT_DECISION_TIMEOUT_MS`. */
@@ -973,285 +980,291 @@ export function createBackgroundServices(
   return {
     dispatcher,
     runtime,
-    async start() {
-      await interruptStaleRunningTurns({ pool: options.pool });
-      dispatcher.start();
+    start() {
+      // Batch D3 (migration core 0054): every loop started here — and every timer those loops set —
+      // writes its audit rows as the kernel's own work, `acting_through = 'system'`.
+      return runWithStandingActingContext(SYSTEM_ACTING_CONTEXT, async () => {
+        await interruptStaleRunningTurns({ pool: options.pool });
+        dispatcher.start();
 
-      const approvalTick = (): void => {
-        expireOverduePendingApprovals(options.pool, {
-          timeoutMs: options.approvalTimeoutMs,
-        }).catch(onApprovalReaperError);
-      };
-      approvalReaperTimer = setInterval(
-        approvalTick,
-        options.approvalReaperIntervalMs ?? DEFAULT_APPROVAL_REAPER_INTERVAL_MS,
-      );
-      approvalReaperTimer.unref?.();
+        const approvalTick = (): void => {
+          expireOverduePendingApprovals(options.pool, {
+            timeoutMs: options.approvalTimeoutMs,
+          }).catch(onApprovalReaperError);
+        };
+        approvalReaperTimer = setInterval(
+          approvalTick,
+          options.approvalReaperIntervalMs ?? DEFAULT_APPROVAL_REAPER_INTERVAL_MS,
+        );
+        approvalReaperTimer.unref?.();
 
-      // P-B1 (development-tasks.md P-B 决定 ⑤): gate instances heartbeat by re-announcing
-      // (`GATE_ANNOUNCE_INTERVAL_SEC`, default 60 s in gatekeeper-base); one whose last heartbeat is
-      // older than `GATE_LOST_AFTER_SEC` (default 3× that) is marked `lost`. The only liveness
-      // sweep — `probeGatekeeperHealth` runs on demand from `test_gate_instance`, never here.
-      const gateLivenessTick = (): void => {
-        withWorkspace(
-          options.pool,
-          { workspaceId: SYSTEM_ACTOR_PLACEHOLDER, principalId: SYSTEM_ACTOR_PLACEHOLDER },
-          (client) =>
-            markLostGateInstances(
-              client,
-              options.gateLostAfterSeconds ?? DEFAULT_GATE_LOST_AFTER_SECONDS,
-            ),
-          { skipRoleSwitch: true },
-        )
-          .then((lost) => {
-            if (lost.length > 0) {
+        // P-B1 (development-tasks.md P-B 决定 ⑤): gate instances heartbeat by re-announcing
+        // (`GATE_ANNOUNCE_INTERVAL_SEC`, default 60 s in gatekeeper-base); one whose last heartbeat is
+        // older than `GATE_LOST_AFTER_SEC` (default 3× that) is marked `lost`. The only liveness
+        // sweep — `probeGatekeeperHealth` runs on demand from `test_gate_instance`, never here.
+        const gateLivenessTick = (): void => {
+          withWorkspace(
+            options.pool,
+            { workspaceId: SYSTEM_ACTOR_PLACEHOLDER, principalId: SYSTEM_ACTOR_PLACEHOLDER },
+            (client) =>
+              markLostGateInstances(
+                client,
+                options.gateLostAfterSeconds ?? DEFAULT_GATE_LOST_AFTER_SECONDS,
+              ),
+            { skipRoleSwitch: true },
+          )
+            .then((lost) => {
+              if (lost.length > 0) {
+                console.error(
+                  JSON.stringify({
+                    level: 'warn',
+                    msg: 'gates: instances marked lost (no heartbeat)',
+                    gateIds: lost,
+                  }),
+                );
+              }
+            })
+            .catch((err: unknown) => {
               console.error(
                 JSON.stringify({
                   level: 'warn',
-                  msg: 'gates: instances marked lost (no heartbeat)',
-                  gateIds: lost,
+                  msg: 'gates: liveness sweep failed',
+                  error: String(err),
                 }),
               );
+            });
+        };
+        gateLivenessTimer = setInterval(
+          gateLivenessTick,
+          options.gateLivenessIntervalMs ?? DEFAULT_GATE_LIVENESS_INTERVAL_MS,
+        );
+        gateLivenessTimer.unref?.();
+
+        const drainTick = async (): Promise<void> => {
+          const drainable = await listDistinctExecutableGatekeepers(options.pool);
+          for (const { workspaceId, gatekeeperId } of drainable) {
+            try {
+              await drainer.drainGatekeeper(workspaceId, SYSTEM_ACTOR_PLACEHOLDER, gatekeeperId);
+            } catch (err) {
+              // A benign race with another drain trigger (the outbox consumer, or an inline
+              // execution from request-action-handler.ts) — see action-request-drain-consumer.ts's
+              // own doc comment. One pair's race must not stop the rest of this tick's batch.
+              if (err instanceof IllegalTransition) continue;
+              onGatekeeperDrainError(err);
             }
-          })
-          .catch((err: unknown) => {
-            console.error(
-              JSON.stringify({
-                level: 'warn',
-                msg: 'gates: liveness sweep failed',
-                error: String(err),
-              }),
-            );
-          });
-      };
-      gateLivenessTimer = setInterval(
-        gateLivenessTick,
-        options.gateLivenessIntervalMs ?? DEFAULT_GATE_LIVENESS_INTERVAL_MS,
-      );
-      gateLivenessTimer.unref?.();
-
-      const drainTick = async (): Promise<void> => {
-        const drainable = await listDistinctExecutableGatekeepers(options.pool);
-        for (const { workspaceId, gatekeeperId } of drainable) {
-          try {
-            await drainer.drainGatekeeper(workspaceId, SYSTEM_ACTOR_PLACEHOLDER, gatekeeperId);
-          } catch (err) {
-            // A benign race with another drain trigger (the outbox consumer, or an inline
-            // execution from request-action-handler.ts) — see action-request-drain-consumer.ts's
-            // own doc comment. One pair's race must not stop the rest of this tick's batch.
-            if (err instanceof IllegalTransition) continue;
-            onGatekeeperDrainError(err);
           }
-        }
-      };
-      gatekeeperDrainTimer = setInterval(() => {
-        drainTick().catch(onGatekeeperDrainError);
-      }, options.gatekeeperDrainIntervalMs ?? DEFAULT_GATEKEEPER_DRAIN_INTERVAL_MS);
-      gatekeeperDrainTimer.unref?.();
-
-      // P1-3: the stale-`executing` reaper — same admin-mode `actionExecutor` the drainer above
-      // already uses (`buildGatekeeperExecutionDeps`, "the single shared executor path").
-      const actionRequestReaperTick = (): void => {
-        reapStaleExecutingActionRequests(options.pool, actionExecutor, {
-          staleAfterMs: options.staleExecutingTimeoutMs,
-          onRowError: onActionRequestReaperError,
-        }).catch((err: unknown) => onActionRequestReaperError('unknown', err));
-      };
-      actionRequestReaperTimer = setInterval(
-        actionRequestReaperTick,
-        options.actionRequestReaperIntervalMs ?? DEFAULT_ACTION_REQUEST_REAPER_INTERVAL_MS,
-      );
-      actionRequestReaperTimer.unref?.();
-
-      if (taskDeps) {
-        const taskTick = (): void => {
-          runTaskReaper(taskDeps as NonNullable<typeof taskDeps>).catch(onTaskReaperError);
         };
-        taskReaperTimer = setInterval(
-          taskTick,
-          options.taskReaperIntervalMs ?? DEFAULT_TASK_REAPER_INTERVAL_MS,
+        gatekeeperDrainTimer = setInterval(() => {
+          drainTick().catch(onGatekeeperDrainError);
+        }, options.gatekeeperDrainIntervalMs ?? DEFAULT_GATEKEEPER_DRAIN_INTERVAL_MS);
+        gatekeeperDrainTimer.unref?.();
+
+        // P1-3: the stale-`executing` reaper — same admin-mode `actionExecutor` the drainer above
+        // already uses (`buildGatekeeperExecutionDeps`, "the single shared executor path").
+        const actionRequestReaperTick = (): void => {
+          reapStaleExecutingActionRequests(options.pool, actionExecutor, {
+            staleAfterMs: options.staleExecutingTimeoutMs,
+            onRowError: onActionRequestReaperError,
+          }).catch((err: unknown) => onActionRequestReaperError('unknown', err));
+        };
+        actionRequestReaperTimer = setInterval(
+          actionRequestReaperTick,
+          options.actionRequestReaperIntervalMs ?? DEFAULT_ACTION_REQUEST_REAPER_INTERVAL_MS,
         );
-        taskReaperTimer.unref?.();
+        actionRequestReaperTimer.unref?.();
 
-        const goalDeps = {
-          pool: options.pool,
-          taskRuntime: taskDeps,
-          options: options.goalAdvancerOptions,
-          onStartError: onGoalAdvancerError,
-          // S11 GO8a: a step's WorkerSpec model is checked against the catalog on every attempt.
-          modelCatalog: () => readModelCatalogIds(),
-        };
-        const goalAdvancerTick = (): void => {
-          if (goalAdvancerRunning) return;
-          goalAdvancerRunning = true;
-          runGoalAdvancerTick(goalDeps, { onError: (err) => onGoalAdvancerError(err) })
-            .catch(onGoalAdvancerError)
-            .finally(() => {
-              goalAdvancerRunning = false;
-            });
-        };
-        goalAdvancerTimer = setInterval(
-          goalAdvancerTick,
-          options.goalAdvancerIntervalMs ?? DEFAULT_GOAL_ADVANCER_INTERVAL_MS,
-        );
-        goalAdvancerTimer.unref?.();
-        // Legacy 364: the cleanup sweep goes on where the previous one stopped.
-        const goalCleanupCursor: GoalCleanupCursor = { after: null };
-        goalReconcileTimer = setInterval(() => {
-          // The scan skips the runs the advancer stopped retrying (legacy 356): same limit.
-          markReconcileDue(options.pool, {
-            maxConsecutiveAdvanceFailures:
-              options.goalAdvancerOptions?.maxConsecutiveAdvanceFailures,
-          }).catch(onGoalAdvancerError);
-          // S11 GO3a: a cancelled run's leftovers, on the same period.
-          sweepGoalCancelCleanup(goalDeps, { cursor: goalCleanupCursor }).catch(
-            onGoalAdvancerError,
+        if (taskDeps) {
+          const taskTick = (): void => {
+            runTaskReaper(taskDeps as NonNullable<typeof taskDeps>).catch(onTaskReaperError);
+          };
+          taskReaperTimer = setInterval(
+            taskTick,
+            options.taskReaperIntervalMs ?? DEFAULT_TASK_REAPER_INTERVAL_MS,
           );
-        }, options.goalReconcileIntervalMs ?? DEFAULT_GOAL_RECONCILE_INTERVAL_MS);
-        goalReconcileTimer.unref?.();
+          taskReaperTimer.unref?.();
 
-        const reconcileCheckDeps = {
-          pool: options.pool,
-          gatekeeperClient,
-          options: options.goalReconcileCheckOptions,
-        };
-        goalReconcileCheckTimer = setInterval(() => {
-          if (goalReconcileCheckRunning) return;
-          goalReconcileCheckRunning = true;
-          runReconcileCheckTick(reconcileCheckDeps, { onError: (err) => onGoalAdvancerError(err) })
-            .catch(onGoalAdvancerError)
-            .finally(() => {
-              goalReconcileCheckRunning = false;
-            });
-        }, options.goalReconcileCheckIntervalMs ?? DEFAULT_RECONCILE_CHECK_INTERVAL_MS);
-        goalReconcileCheckTimer.unref?.();
-
-        const acceptanceCheckDeps = {
-          pool: options.pool,
-          gatekeeperClient,
-          options: options.goalAcceptanceCheckOptions,
-        };
-        goalAcceptanceCheckTimer = setInterval(() => {
-          if (goalAcceptanceCheckRunning) return;
-          goalAcceptanceCheckRunning = true;
-          // S11 「门确认不存在」 B-c: the absence checks' baselines first, under the same options —
-          // a run waits on them before any step starts.
-          runAbsenceBaselineTick(acceptanceCheckDeps, {
-            onError: (err) => onGoalAdvancerError(err),
-          })
-            .catch(onGoalAdvancerError)
-            .then(() =>
-              runAcceptanceCheckTick(acceptanceCheckDeps, {
-                onError: (err) => onGoalAdvancerError(err),
-              }),
-            )
-            .catch(onGoalAdvancerError)
-            .finally(() => {
-              goalAcceptanceCheckRunning = false;
-            });
-        }, options.goalAcceptanceCheckIntervalMs ?? DEFAULT_ACCEPTANCE_CHECK_INTERVAL_MS);
-        goalAcceptanceCheckTimer.unref?.();
-
-        evalTrialTimer = setInterval(() => {
-          if (evalTrialRunning) return;
-          evalTrialRunning = true;
-          runEvalTrialTick(options.pool, { onError: (err) => onEvalTrialError(err) })
-            .catch(onEvalTrialError)
-            .finally(() => {
-              evalTrialRunning = false;
-            });
-        }, options.evalTrialIntervalMs ?? DEFAULT_EVAL_TRIAL_INTERVAL_MS);
-        evalTrialTimer.unref?.();
-
-        const filesKeepDeps = { pool: options.pool, supervisorClient: taskDeps.supervisorClient };
-        goalFilesKeepTimer = setInterval(() => {
-          if (goalFilesKeepRunning) return;
-          goalFilesKeepRunning = true;
-          runGoalFilesKeepTick(filesKeepDeps, { onError: (err) => onGoalAdvancerError(err) })
-            .then(onGoalFilesKeepComplete)
-            .catch(onGoalAdvancerError)
-            .finally(() => {
-              goalFilesKeepRunning = false;
-            });
-        }, options.goalFilesKeepIntervalMs ?? DEFAULT_GOAL_FILES_KEEP_INTERVAL_MS);
-        goalFilesKeepTimer.unref?.();
-      }
-
-      // S8 W3 K2 (leftover 82): the draft-expiry sweep — `draftExpiryDays === 0` is a deliberate
-      // opt-out (no timer is ever started), the same convention `outboxPruneDays === 0` already
-      // established; every other value, including the compiled-in default (30), sweeps.
-      const draftExpiryDays = options.draftExpiryDays ?? DEFAULT_DRAFT_EXPIRY_DAYS;
-      if (draftExpiryDays > 0) {
-        const draftExpiryTick = (): void => {
-          if (draftExpiryRunning) return; // no overlap — see this function's own doc comment.
-          draftExpiryRunning = true;
-          expireDraftsOnce(options.pool, { thresholdDays: draftExpiryDays })
-            .then(onDraftExpiryComplete)
-            .catch(onDraftExpiryError)
-            .finally(() => {
-              draftExpiryRunning = false;
-            });
-        };
-        draftExpiryTimer = setInterval(
-          draftExpiryTick,
-          options.draftExpiryIntervalMs ?? DEFAULT_DRAFT_EXPIRY_INTERVAL_MS,
-        );
-        draftExpiryTimer.unref?.();
-      }
-
-      // fix/invoke-worker-wait-and-outbox-prune: `pruneDispatched` (PR #76) had nothing calling
-      // it — wire it up the same "composition root holds the timer handle, start()/stop() paired"
-      // way every reaper above does. `outboxPruneDays === 0` is a deliberate opt-out (no timer
-      // ever starts, distinct from every other reaper here — see this file's own doc comment on
-      // `outboxPruneDays`); every other value, including the compiled-in default, prunes.
-      const outboxPruneDays = options.outboxPruneDays ?? DEFAULT_OUTBOX_PRUNE_DAYS;
-      if (outboxPruneDays > 0) {
-        const outboxPruneTick = (): void => {
-          dispatcher
-            .pruneDispatched(outboxPruneDays)
-            .then((deleted) => onOutboxPruneComplete({ deleted }))
-            .catch(onOutboxPruneError);
-        };
-        // First tick fires shortly after start (OUTBOX_PRUNE_INITIAL_DELAY_MS), not after a full
-        // OUTBOX_PRUNE_INTERVAL_MS (6h) — see that constant's own doc comment for why pruning
-        // deliberately does not follow the "wait a full interval for the first tick" convention
-        // every other reaper in this file uses.
-        outboxPruneInitialTimer = setTimeout(() => {
-          outboxPruneTick();
-          outboxPruneIntervalTimer = setInterval(
-            outboxPruneTick,
-            options.outboxPruneIntervalMs ?? DEFAULT_OUTBOX_PRUNE_INTERVAL_MS,
+          const goalDeps = {
+            pool: options.pool,
+            taskRuntime: taskDeps,
+            options: options.goalAdvancerOptions,
+            onStartError: onGoalAdvancerError,
+            // S11 GO8a: a step's WorkerSpec model is checked against the catalog on every attempt.
+            modelCatalog: () => readModelCatalogIds(),
+          };
+          const goalAdvancerTick = (): void => {
+            if (goalAdvancerRunning) return;
+            goalAdvancerRunning = true;
+            runGoalAdvancerTick(goalDeps, { onError: (err) => onGoalAdvancerError(err) })
+              .catch(onGoalAdvancerError)
+              .finally(() => {
+                goalAdvancerRunning = false;
+              });
+          };
+          goalAdvancerTimer = setInterval(
+            goalAdvancerTick,
+            options.goalAdvancerIntervalMs ?? DEFAULT_GOAL_ADVANCER_INTERVAL_MS,
           );
-          outboxPruneIntervalTimer.unref?.();
-        }, OUTBOX_PRUNE_INITIAL_DELAY_MS);
-        outboxPruneInitialTimer.unref?.();
-      }
+          goalAdvancerTimer.unref?.();
+          // Legacy 364: the cleanup sweep goes on where the previous one stopped.
+          const goalCleanupCursor: GoalCleanupCursor = { after: null };
+          goalReconcileTimer = setInterval(() => {
+            // The scan skips the runs the advancer stopped retrying (legacy 356): same limit.
+            markReconcileDue(options.pool, {
+              maxConsecutiveAdvanceFailures:
+                options.goalAdvancerOptions?.maxConsecutiveAdvanceFailures,
+            }).catch(onGoalAdvancerError);
+            // S11 GO3a: a cancelled run's leftovers, on the same period.
+            sweepGoalCancelCleanup(goalDeps, { cursor: goalCleanupCursor }).catch(
+              onGoalAdvancerError,
+            );
+          }, options.goalReconcileIntervalMs ?? DEFAULT_GOAL_RECONCILE_INTERVAL_MS);
+          goalReconcileTimer.unref?.();
 
-      // S3.8: `substrate/audit`'s periodic invariant scan (docs/development-tasks.md S3.8
-      // deliverable 1). `invariantCheckIntervalMs === 0` is a deliberate opt-out (no timer ever
-      // starts), the same convention `outboxPruneDays === 0` established above; every other value,
-      // including the compiled-in default, runs. First tick fires shortly after start
-      // (`INVARIANT_CHECK_INITIAL_DELAY_MS`), matching outbox-prune's own "do not report zero
-      // series for a whole interval after every restart" reasoning, not the wait-a-full-interval
-      // convention the other reapers in this file use.
-      const invariantCheckIntervalMs =
-        options.invariantCheckIntervalMs ?? DEFAULT_INVARIANT_CHECK_INTERVAL_MS;
-      if (invariantCheckIntervalMs > 0) {
-        const invariantCheckTick = (): void => {
-          runInvariantChecks(options.pool)
-            .then((results) => {
-              options.invariantMetrics?.record(results);
-              onInvariantCheckComplete(results);
+          const reconcileCheckDeps = {
+            pool: options.pool,
+            gatekeeperClient,
+            options: options.goalReconcileCheckOptions,
+          };
+          goalReconcileCheckTimer = setInterval(() => {
+            if (goalReconcileCheckRunning) return;
+            goalReconcileCheckRunning = true;
+            runReconcileCheckTick(reconcileCheckDeps, {
+              onError: (err) => onGoalAdvancerError(err),
             })
-            .catch(onInvariantCheckError);
-        };
-        invariantCheckInitialTimer = setTimeout(() => {
-          invariantCheckTick();
-          invariantCheckIntervalTimer = setInterval(invariantCheckTick, invariantCheckIntervalMs);
-          invariantCheckIntervalTimer.unref?.();
-        }, INVARIANT_CHECK_INITIAL_DELAY_MS);
-        invariantCheckInitialTimer.unref?.();
-      }
+              .catch(onGoalAdvancerError)
+              .finally(() => {
+                goalReconcileCheckRunning = false;
+              });
+          }, options.goalReconcileCheckIntervalMs ?? DEFAULT_RECONCILE_CHECK_INTERVAL_MS);
+          goalReconcileCheckTimer.unref?.();
+
+          const acceptanceCheckDeps = {
+            pool: options.pool,
+            gatekeeperClient,
+            options: options.goalAcceptanceCheckOptions,
+          };
+          goalAcceptanceCheckTimer = setInterval(() => {
+            if (goalAcceptanceCheckRunning) return;
+            goalAcceptanceCheckRunning = true;
+            // S11 「门确认不存在」 B-c: the absence checks' baselines first, under the same options —
+            // a run waits on them before any step starts.
+            runAbsenceBaselineTick(acceptanceCheckDeps, {
+              onError: (err) => onGoalAdvancerError(err),
+            })
+              .catch(onGoalAdvancerError)
+              .then(() =>
+                runAcceptanceCheckTick(acceptanceCheckDeps, {
+                  onError: (err) => onGoalAdvancerError(err),
+                }),
+              )
+              .catch(onGoalAdvancerError)
+              .finally(() => {
+                goalAcceptanceCheckRunning = false;
+              });
+          }, options.goalAcceptanceCheckIntervalMs ?? DEFAULT_ACCEPTANCE_CHECK_INTERVAL_MS);
+          goalAcceptanceCheckTimer.unref?.();
+
+          evalTrialTimer = setInterval(() => {
+            if (evalTrialRunning) return;
+            evalTrialRunning = true;
+            runEvalTrialTick(options.pool, { onError: (err) => onEvalTrialError(err) })
+              .catch(onEvalTrialError)
+              .finally(() => {
+                evalTrialRunning = false;
+              });
+          }, options.evalTrialIntervalMs ?? DEFAULT_EVAL_TRIAL_INTERVAL_MS);
+          evalTrialTimer.unref?.();
+
+          const filesKeepDeps = { pool: options.pool, supervisorClient: taskDeps.supervisorClient };
+          goalFilesKeepTimer = setInterval(() => {
+            if (goalFilesKeepRunning) return;
+            goalFilesKeepRunning = true;
+            runGoalFilesKeepTick(filesKeepDeps, { onError: (err) => onGoalAdvancerError(err) })
+              .then(onGoalFilesKeepComplete)
+              .catch(onGoalAdvancerError)
+              .finally(() => {
+                goalFilesKeepRunning = false;
+              });
+          }, options.goalFilesKeepIntervalMs ?? DEFAULT_GOAL_FILES_KEEP_INTERVAL_MS);
+          goalFilesKeepTimer.unref?.();
+        }
+
+        // S8 W3 K2 (leftover 82): the draft-expiry sweep — `draftExpiryDays === 0` is a deliberate
+        // opt-out (no timer is ever started), the same convention `outboxPruneDays === 0` already
+        // established; every other value, including the compiled-in default (30), sweeps.
+        const draftExpiryDays = options.draftExpiryDays ?? DEFAULT_DRAFT_EXPIRY_DAYS;
+        if (draftExpiryDays > 0) {
+          const draftExpiryTick = (): void => {
+            if (draftExpiryRunning) return; // no overlap — see this function's own doc comment.
+            draftExpiryRunning = true;
+            expireDraftsOnce(options.pool, { thresholdDays: draftExpiryDays })
+              .then(onDraftExpiryComplete)
+              .catch(onDraftExpiryError)
+              .finally(() => {
+                draftExpiryRunning = false;
+              });
+          };
+          draftExpiryTimer = setInterval(
+            draftExpiryTick,
+            options.draftExpiryIntervalMs ?? DEFAULT_DRAFT_EXPIRY_INTERVAL_MS,
+          );
+          draftExpiryTimer.unref?.();
+        }
+
+        // fix/invoke-worker-wait-and-outbox-prune: `pruneDispatched` (PR #76) had nothing calling
+        // it — wire it up the same "composition root holds the timer handle, start()/stop() paired"
+        // way every reaper above does. `outboxPruneDays === 0` is a deliberate opt-out (no timer
+        // ever starts, distinct from every other reaper here — see this file's own doc comment on
+        // `outboxPruneDays`); every other value, including the compiled-in default, prunes.
+        const outboxPruneDays = options.outboxPruneDays ?? DEFAULT_OUTBOX_PRUNE_DAYS;
+        if (outboxPruneDays > 0) {
+          const outboxPruneTick = (): void => {
+            dispatcher
+              .pruneDispatched(outboxPruneDays)
+              .then((deleted) => onOutboxPruneComplete({ deleted }))
+              .catch(onOutboxPruneError);
+          };
+          // First tick fires shortly after start (OUTBOX_PRUNE_INITIAL_DELAY_MS), not after a full
+          // OUTBOX_PRUNE_INTERVAL_MS (6h) — see that constant's own doc comment for why pruning
+          // deliberately does not follow the "wait a full interval for the first tick" convention
+          // every other reaper in this file uses.
+          outboxPruneInitialTimer = setTimeout(() => {
+            outboxPruneTick();
+            outboxPruneIntervalTimer = setInterval(
+              outboxPruneTick,
+              options.outboxPruneIntervalMs ?? DEFAULT_OUTBOX_PRUNE_INTERVAL_MS,
+            );
+            outboxPruneIntervalTimer.unref?.();
+          }, OUTBOX_PRUNE_INITIAL_DELAY_MS);
+          outboxPruneInitialTimer.unref?.();
+        }
+
+        // S3.8: `substrate/audit`'s periodic invariant scan (docs/development-tasks.md S3.8
+        // deliverable 1). `invariantCheckIntervalMs === 0` is a deliberate opt-out (no timer ever
+        // starts), the same convention `outboxPruneDays === 0` established above; every other value,
+        // including the compiled-in default, runs. First tick fires shortly after start
+        // (`INVARIANT_CHECK_INITIAL_DELAY_MS`), matching outbox-prune's own "do not report zero
+        // series for a whole interval after every restart" reasoning, not the wait-a-full-interval
+        // convention the other reapers in this file use.
+        const invariantCheckIntervalMs =
+          options.invariantCheckIntervalMs ?? DEFAULT_INVARIANT_CHECK_INTERVAL_MS;
+        if (invariantCheckIntervalMs > 0) {
+          const invariantCheckTick = (): void => {
+            runInvariantChecks(options.pool)
+              .then((results) => {
+                options.invariantMetrics?.record(results);
+                onInvariantCheckComplete(results);
+              })
+              .catch(onInvariantCheckError);
+          };
+          invariantCheckInitialTimer = setTimeout(() => {
+            invariantCheckTick();
+            invariantCheckIntervalTimer = setInterval(invariantCheckTick, invariantCheckIntervalMs);
+            invariantCheckIntervalTimer.unref?.();
+          }, INVARIANT_CHECK_INITIAL_DELAY_MS);
+          invariantCheckInitialTimer.unref?.();
+        }
+      });
     },
     stop() {
       dispatcher.stop();
@@ -1467,7 +1480,12 @@ export function main(): void {
   // the closure `isBackgroundReady` captures below can be handed to it.
   let backgroundReady = false;
   const app = createServer(
-    { pool, renderMetrics: invariantMetrics.renderMetrics },
+    {
+      pool,
+      // Batch D3: the capability-refusal counters (application/gateway/call-refusals.ts) after
+      // the invariant metrics — both newline-terminated Prometheus text.
+      renderMetrics: () => invariantMetrics.renderMetrics() + renderCallRefusalMetrics(),
+    },
     {
       logger: true,
       requestActionAwaitDecisionTimeoutMs,

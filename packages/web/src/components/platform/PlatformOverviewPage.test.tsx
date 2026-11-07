@@ -106,6 +106,8 @@ function overview(overrides: Partial<PlatformOverviewWire> = {}): PlatformOvervi
         resourceId: 'u-2',
         payload: {},
         createdAt: '2026-09-10T00:00:00.000Z',
+        actingThrough: null,
+        actingSessionId: null,
       },
     ],
     ...overrides,
@@ -516,6 +518,8 @@ describe('PlatformOverviewPage', () => {
               resourceId: 'ws-1',
               payload: { attributedActor: false },
               createdAt: '2026-09-10T00:00:00.000Z',
+              actingThrough: null,
+              actingSessionId: null,
             },
           ],
         }),
@@ -894,6 +898,8 @@ describe('PlatformOverviewPage O1 control tower (S8 W2 U3a)', () => {
       resourceId: null,
       payload: {},
       createdAt: '2026-09-10T00:00:00.000Z',
+      actingThrough: null,
+      actingSessionId: null,
     }));
     const http = scriptedHttp({
       platform_overview: () => overview({ recentAudit: rows }),

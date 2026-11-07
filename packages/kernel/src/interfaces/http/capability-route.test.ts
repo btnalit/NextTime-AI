@@ -990,6 +990,57 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
+    // Batch D3: a person's refusal writes no audit row; the per-call line says why it was refused.
+    it("a person's refused call: the failure line carries the refusal reason, and no audit row is written", async () => {
+      const lines: Record<string, unknown>[] = [];
+      const app = createServer(
+        { pool },
+        {
+          logger: {
+            level: 'info',
+            stream: {
+              write: (line: string) => {
+                lines.push(JSON.parse(line) as Record<string, unknown>);
+              },
+            },
+          },
+        },
+      );
+      const audited = () =>
+        withWorkspace(
+          pool,
+          { workspaceId, principalId: randomUUID() },
+          async (client) =>
+            (
+              await client.query<{ n: number }>(
+                `select count(*)::int as n from audit_records
+                  where workspace_id = $1 and action = 'grant_capability'`,
+                [workspaceId],
+              )
+            ).rows[0]?.n,
+          { skipRoleSwitch: true },
+        );
+      const before = await audited();
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/cap/grant_capability',
+        headers: { authorization: `Bearer ${memberApiKey}` },
+        payload: { principalId: randomUUID(), resourceType: 'gatekeeper', scope: {} },
+      });
+      expect(response.statusCode).toBe(403);
+      expect(lines).toContainEqual(
+        expect.objectContaining({
+          capability: 'grant_capability',
+          errorName: 'ForbiddenError',
+          refusalReason: 'role',
+          code: 'forbidden',
+          status: 403,
+        }),
+      );
+      expect(await audited()).toBe(before);
+      await app.close();
+    });
+
     it('unknown capability name → 404', async () => {
       const app = createServer({ pool });
       const response = await app.inject({
