@@ -159,6 +159,8 @@ const RPC_CODE_NAMES: Readonly<Record<number, string>> = {
   [-32018]: 'evaluation_content_withheld',
   // S10 E3-2c: the person's agents are paused by the evaluation seal (the chat composer's path).
   [-32019]: 'evaluation_probe_hold',
+  // Legacy 673: the same `send_chat_message` idempotency key with different text.
+  [-32020]: 'idempotency_key_reused',
   // Client-side only (lib/ws-client.ts `RPC_TIMEOUT_CODE`, C5): the kernel never answered.
   [-32000]: 'timeout',
 };
@@ -173,6 +175,7 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   not_implemented: 'Not implemented on this kernel',
   illegal_transition: 'State has changed',
   turn_already_running: 'A turn is already running',
+  idempotency_key_reused: 'Not the message first sent',
   gatekeeper_timeout: 'Gate timed out',
   gatekeeper_error: 'Gate returned an error',
   manifest_fetch_failed: 'Manifest fetch failed',
@@ -222,7 +225,7 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   network: 'Network error',
   invalid_response: 'Unexpected response',
   connection_closed: 'Connection closed',
-  timeout: 'No response from the kernel',
+  timeout: 'No answer from the kernel',
   service_unavailable: 'Service unavailable',
   conflict: 'Conflicts with existing data',
   workspace_required: 'No workspace selected',
@@ -297,6 +300,7 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   not_implemented: '当前内核尚未支持',
   illegal_transition: '状态已变化',
   turn_already_running: '已有一轮对话在运行',
+  idempotency_key_reused: '和第一次发出的消息不一样',
   gatekeeper_timeout: '门响应超时',
   gatekeeper_error: '门返回了错误',
   manifest_fetch_failed: '拉取清单失败',
@@ -338,7 +342,7 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   network: '网络错误',
   invalid_response: '返回内容无法识别',
   connection_closed: '连接已断开',
-  timeout: '内核没有响应',
+  timeout: '没有收到内核的答复',
   service_unavailable: '服务暂时不可用',
   conflict: '和现有数据冲突',
   workspace_required: '还没有选择工作区',
@@ -431,6 +435,22 @@ export function composerUnstorableTextStep(t: Translate, canStrip = false): stri
   return t(
     `消息内容里${UNSTORABLE_TEXT_WHAT.zh}，所以这条消息没有发出。${UNSTORABLE_TEXT_FIX.zh}，然后重新发送。`,
     `The message ${UNSTORABLE_TEXT_WHAT.en}, so it was not sent. ${UNSTORABLE_TEXT_FIX.en}, then send it again.`,
+  );
+}
+
+/** Legacy 673: a send that got no answer (timed out, or its connection closed while it was out),
+ *  as the chat composer shows it. It may have run, so the next step is to look, not to retry;
+ *  「再发一次」 is offered while the box still holds the same text, which reuses the send's key. */
+export function composerUncertainSendStep(t: Translate, canResend: boolean): string {
+  if (canResend) {
+    return t(
+      '没有收到平台的答复，这条消息可能已经发出，也可能没有。连接恢复后看看对话里有没有它：出现了，这条提示和草稿会自己收起；没有出现，点「再发一次」，它不会发成两条。',
+      'No answer came back, so the message may or may not have gone out. Once the connection is back, look for it in the chat: if it is there, this note and the draft go by themselves; if not, choose “Send again” — it cannot go out twice.',
+    );
+  }
+  return t(
+    '没有收到平台的答复，上一条消息可能已经发出，也可能没有。连接恢复后看看对话里有没有它：出现了，这条提示会自己收起。框里的文字改过了，再发送就是一条新消息。',
+    'No answer came back, so the last message may or may not have gone out. Once the connection is back, look for it in the chat: if it is there, this note goes by itself. The text in the box has changed, so sending it now sends a new message.',
   );
 }
 
@@ -536,6 +556,11 @@ export const ERROR_NEXT_STEPS: Readonly<
   turn_already_running: {
     zh: '等当前这一轮结束，或先停止它。',
     en: 'Wait for the current turn to finish, or stop it first.',
+  },
+  // Legacy 673: only a console fault reaches this — editing a draft gives it a new key.
+  idempotency_key_reused: {
+    zh: '这条消息改过了，平台没有把它当成第一次那条重发，什么也没有写。再按一次发送，它会作为一条新消息发出。',
+    en: 'This message was edited, so the platform did not take it as a second try of the first one and wrote nothing. Send it again and it goes as a new message.',
   },
   invalid_params: {
     zh: '提交的内容有不符合要求的地方。按「技术细节」里的说明修改后重试。',
@@ -702,9 +727,11 @@ export const ERROR_NEXT_STEPS: Readonly<
     zh: '平台内部出错了。稍后重试；反复出现时，把「技术细节」发给平台管理员。',
     en: 'The platform hit an internal error. Retry later; if it keeps happening, send the technical details to a platform administrator.',
   },
+  // Legacy 673: no answer is not "nothing happened" — the request may have reached the kernel and
+  // run, so the next step is to look first, not to do it again.
   timeout: {
-    zh: '平台没有及时响应。检查网络后重试。',
-    en: 'The platform did not answer in time. Check the network and retry.',
+    zh: '平台没有及时答复，这次操作可能已经生效，也可能没有。连接恢复后先看看结果，再决定要不要重做。',
+    en: 'The platform did not answer in time, so this may or may not have taken effect. Once the connection is back, check the result before doing it again.',
   },
   connection_closed: {
     zh: '和平台的连接断了。页面会自己重新连接，连上后再试一次。',
@@ -1043,8 +1070,8 @@ export function transportErrorMessage(err: unknown, t: Translate): string | null
   if (!(err instanceof HttpError)) return null;
   if (err.kind === 'network') {
     return t(
-      '浏览器没有收到控制台服务的响应。检查网络连接，或确认服务正在运行，然后重试',
-      'The browser got no response from the console service. Check the network connection or that the service is running, then retry',
+      '浏览器没有收到控制台服务的答复。检查网络连接，或确认服务正在运行；如果这是一次修改，它可能已经生效，恢复后先看看结果，再决定要不要重做',
+      'The browser got no answer from the console service. Check the network connection or that the service is running; if this was a change, it may have taken effect, so once it is back, check the result before doing it again',
     );
   }
   if (err.kind === 'invalid_response') {

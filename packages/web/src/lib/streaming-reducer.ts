@@ -41,9 +41,10 @@ export const initialTurnState: TurnState = {
 };
 
 export type StreamAction =
-  /** Dispatched locally when `send_chat_message` succeeds (result.turnId) — the only way this
-   *  reducer learns a new Turn started; nothing on the wire announces "TurnStarted" to the human
-   *  channel (design doc §7.10's `TurnStarted` domain event is host-bridge-internal). */
+  /** Dispatched locally when `send_chat_message` succeeds (result.turnId); nothing on the wire
+   *  announces "TurnStarted" to the human channel (design doc §7.10's `TurnStarted` domain event
+   *  is host-bridge-internal). A Turn this page did not start is picked up from its first
+   *  `chat.stream` instead (see `stream`). */
   | { readonly kind: 'turnStarted'; readonly turnId: string }
   /** One `chat.stream` push (WsClient's `onStream(turnId, payload)`). */
   | { readonly kind: 'stream'; readonly turnId: string; readonly payload: ChatStreamPayload }
@@ -101,10 +102,22 @@ function applyStreamPayload(state: TurnState, payload: ChatStreamPayload): TurnS
 export function streamReducer(state: TurnState, action: StreamAction): TurnState {
   switch (action.kind) {
     case 'turnStarted':
+      // Already following it (its first pushes came before the send's answer): keep what came.
+      if (state.turnId === action.turnId && state.status === 'running') return state;
       return { turnId: action.turnId, status: 'running', streamingText: '', toolCalls: [] };
 
     case 'stream':
-      if (action.turnId !== state.turnId) return state;
+      if (action.turnId !== state.turnId) {
+        // A Chat runs one Turn at a time and streams only while it runs, so a stream for another
+        // Turn while none is running here is that Turn: one this page's send got no answer to but
+        // ran (legacy 673, its message landed late), or one another tab started. Follow it, so
+        // the page shows it and can stop it. While one is running here, another's is stale.
+        if (state.status === 'running') return state;
+        return applyStreamPayload(
+          { turnId: action.turnId, status: 'running', streamingText: '', toolCalls: [] },
+          action.payload,
+        );
+      }
       return applyStreamPayload(state, action.payload);
 
     case 'metadata': {

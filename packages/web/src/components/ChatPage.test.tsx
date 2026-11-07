@@ -9,7 +9,9 @@ import {
   type ChatMessage,
   type ChatSubscriptionHandlers,
   RpcError,
+  RpcTimeoutError,
   type WsClient,
+  WsNotSentError,
 } from '../lib/ws-client.js';
 import { ChatPage } from './ChatPage.js';
 import { goalDetail } from './goals/goal-fixtures.test-helpers.js';
@@ -610,7 +612,11 @@ describe('ChatPage send and stream (C22)', () => {
     fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'restart web-1' } });
     fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
     await waitFor(() =>
-      expect(fake.client.sendChatMessage).toHaveBeenCalledWith('chat-1', 'restart web-1'),
+      expect(fake.client.sendChatMessage).toHaveBeenCalledWith(
+        'chat-1',
+        'restart web-1',
+        expect.stringMatching(/^[0-9a-f]{32}$/),
+      ),
     );
     // S8 W1-A10: TurnStatusBadge text is bilingual via t() now; default zh-CN renders '回复中'.
     await screen.findByText('回复中');
@@ -755,8 +761,10 @@ describe('ChatPage send refused by a dropped connection', () => {
         return () => listeners.delete(fn);
       },
     });
+    // While reconnecting the send is refused before it leaves (legacy 673: one the connection
+    // closed under is another case — it may have run).
     (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      new Error('WsClient: connection closed'),
+      new Error('WsClient: not connected'),
     );
     renderChat(fake.client, scriptedHttp({}));
     await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
@@ -780,6 +788,224 @@ describe('ChatPage send refused by a dropped connection', () => {
     expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe(
       'during the outage',
     );
+  });
+});
+
+// Legacy 673: a send that got no answer may have run. The page says so instead of asking for a
+// retry, keeps the idempotency key for a second try of the same text, and lets the draft go once
+// the message turns up.
+describe('ChatPage send that got no answer (legacy 673)', () => {
+  function sendCalls(fake: FakeClient): unknown[][] {
+    return (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mock.calls;
+  }
+
+  async function timeOutOneSend(fake: FakeClient, text: string): Promise<HTMLElement> {
+    (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new RpcTimeoutError('send_chat_message', 30_000),
+    );
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => fake.caughtUp());
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: text } });
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+    return screen.findByRole('alert');
+  }
+
+  it('says the outcome is not known, and lets the note and the draft go once the message shows up', async () => {
+    const fake = fakeClient();
+    const banner = await timeOutOneSend(fake, 'restart web-1');
+    expect(banner.textContent).toContain('不确定消息发出没有');
+    expect(banner.textContent).toContain('可能已经发出，也可能没有');
+    expect(banner.textContent).not.toContain('重试');
+    expect(within(banner).getByRole('button', { name: '再发一次' })).toBeTruthy();
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('restart web-1');
+
+    // The late request ran: its message arrives with the network.
+    act(() => fake.deliver(persisted(1, 'user', 'restart web-1')));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('');
+    expect(sendCalls(fake)).toHaveLength(1);
+  });
+
+  it('sends again under the same key, and does not hold the box for a Turn that already ended', async () => {
+    const fake = fakeClient();
+    const banner = await timeOutOneSend(fake, 'restart web-1');
+    (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      messageId: 'm-1',
+      sequence: 1,
+      turnId: 'turn-1',
+      changed: false,
+      turnStatus: 'completed',
+    });
+    fireEvent.click(within(banner).getByRole('button', { name: '再发一次' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+
+    const [first, second] = sendCalls(fake);
+    expect(second?.[2]).toBe(first?.[2]);
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('');
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).disabled).toBe(false);
+    expect(screen.queryByText('回复中')).toBeNull();
+  });
+
+  it('gives edited text a new key and no 「再发一次」', async () => {
+    const fake = fakeClient();
+    const banner = await timeOutOneSend(fake, 'restart web-1');
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'restart web-2' } });
+    expect(within(banner).queryByRole('button', { name: '再发一次' })).toBeNull();
+    expect(banner.textContent).toContain('再发送就是一条新消息');
+
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+    await waitFor(() => expect(sendCalls(fake)).toHaveLength(2));
+    const [first, second] = sendCalls(fake);
+    expect(second?.[1]).toBe('restart web-2');
+    expect(second?.[2]).not.toBe(first?.[2]);
+  });
+
+  it('follows the Turn a late first request started, so it can be stopped', async () => {
+    const fake = fakeClient();
+    await timeOutOneSend(fake, 'restart web-1');
+    act(() => fake.deliver({ ...persisted(1, 'user', 'restart web-1'), turnId: 'turn-late' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    act(() => fake.stream('turn-late', { streamKind: 'textDelta', delta: 'On it' }));
+
+    const stop = await screen.findByRole('button', { name: '停止本轮' });
+    expect(stop).toBeTruthy();
+    expect(document.querySelector('.message-streaming .message-text')?.textContent).toContain(
+      'On it',
+    );
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).disabled).toBe(true);
+
+    act(() => handlersOf(fake).onMetadata({ turnId: 'turn-late', turnStatus: 'completed' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: '停止本轮' })).toBeNull());
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).disabled).toBe(false);
+    expect(sendCalls(fake)).toHaveLength(1);
+  });
+
+  it('keeps what a Turn streamed before its send answered', async () => {
+    const fake = fakeClient();
+    let answer: (value: unknown) => void = () => undefined;
+    (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => fake.caughtUp());
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'restart web-1' } });
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+    await waitFor(() => expect(sendCalls(fake)).toHaveLength(1));
+
+    act(() => fake.stream('turn-1', { streamKind: 'textDelta', delta: 'echo' }));
+    await act(async () => answer({ messageId: 'm-1', sequence: 1, turnId: 'turn-1' }));
+    await waitFor(() =>
+      expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe(''),
+    );
+    expect(document.querySelector('.message-streaming .message-text')?.textContent).toContain(
+      'echo',
+    );
+    expect(screen.getByRole('button', { name: '停止本轮' })).toBeTruthy();
+  });
+
+  it('drops a key the kernel refuses as reused, so the next send goes under a new one', async () => {
+    const fake = fakeClient();
+    const banner = await timeOutOneSend(fake, 'restart web-1');
+    (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new RpcError(-32020, 'idempotency key already names another message'),
+    );
+    fireEvent.click(within(banner).getByRole('button', { name: '再发一次' }));
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain('和第一次发出的消息不一样'),
+    );
+    expect(
+      within(screen.getByRole('alert')).queryByRole('button', { name: '再发一次' }),
+    ).toBeNull();
+
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+    await waitFor(() => expect(sendCalls(fake)).toHaveLength(3));
+    const [first, second, third] = sendCalls(fake);
+    expect(second?.[2]).toBe(first?.[2]);
+    expect(third?.[1]).toBe('restart web-1');
+    expect(third?.[2]).toMatch(/^[0-9a-f]{32}$/);
+    expect(third?.[2]).not.toBe(first?.[2]);
+  });
+
+  it('keeps the note when the same message is sent again while there is no connection', async () => {
+    const fake = fakeClient();
+    let status = 'connected';
+    const listeners = new Set<(next: string) => void>();
+    Object.assign(fake.client, {
+      getStatus: () => status,
+      onStatusChange: (fn: (next: string) => void) => {
+        listeners.add(fn);
+        return () => listeners.delete(fn);
+      },
+    });
+    const setStatus = (next: string) =>
+      act(() => {
+        status = next;
+        for (const fn of listeners) fn(status);
+      });
+    await timeOutOneSend(fake, 'restart web-1');
+    setStatus('reconnecting');
+
+    // Enter on the same text while reconnecting: refused before it leaves — the WsClient's own
+    // refusal for a socket not yet authenticated (ws-client.test.ts, legacy 673).
+    (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new WsNotSentError('WsClient: call() before authenticate() succeeded'),
+    );
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+    await waitFor(() => expect(sendCalls(fake)).toHaveLength(2));
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain('不确定消息发出没有'),
+    );
+
+    setStatus('connected');
+    const banner = screen.getByRole('alert');
+    expect(banner.textContent).toContain('可能已经发出，也可能没有');
+    const resend = within(banner).getByRole('button', { name: '再发一次' }) as HTMLButtonElement;
+    expect(resend.disabled).toBe(false);
+    const [first, second] = sendCalls(fake);
+    expect(second?.[2]).toBe(first?.[2]);
+  });
+
+  it('keeps the note through a reconnect when the connection closed under the send', async () => {
+    const fake = fakeClient();
+    let status = 'connected';
+    const listeners = new Set<(next: string) => void>();
+    Object.assign(fake.client, {
+      getStatus: () => status,
+      onStatusChange: (fn: (next: string) => void) => {
+        listeners.add(fn);
+        return () => listeners.delete(fn);
+      },
+    });
+    (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('WsClient: connection closed'),
+    );
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'restart web-1' } });
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+    const banner = await screen.findByRole('alert');
+    expect(banner.textContent).toContain('不确定消息发出没有');
+    act(() => {
+      status = 'reconnecting';
+      for (const fn of listeners) fn(status);
+    });
+    expect(
+      (within(banner).getByRole('button', { name: '再发一次' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    act(() => {
+      status = 'connected';
+      for (const fn of listeners) fn(status);
+    });
+    expect(screen.getByRole('alert').textContent).toContain('不确定消息发出没有');
+    expect(
+      (within(banner).getByRole('button', { name: '再发一次' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
   });
 });
 
