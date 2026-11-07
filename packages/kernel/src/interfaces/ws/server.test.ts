@@ -467,6 +467,51 @@ describe('/ws pre-auth limits (L1-16 / L5-12(b); fake pool, always runs)', () =>
     ws.close();
   });
 
+  // Legacy 672: the console's heartbeat.
+  it('ping is answered {} once authenticated and reads nothing: no session re-check, no dispatch', async () => {
+    const { pool, connect } = createPreAuthPool();
+    const url = await listenWs(pool);
+    const ws = await open(url);
+    const frames = framesOf(ws);
+    ws.send(rpc(1, 'authenticate', { token: PREAUTH_API_KEY }));
+    await vi.waitFor(() => expect(frames).toHaveLength(1));
+    expect(frames[0]).toMatchObject({ id: 1, result: { authenticated: true } });
+    const connectsAfterAuth = connect.mock.calls.length;
+
+    ws.send(rpc(2, 'ping'));
+    ws.send(JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'ping' }));
+    ws.send(rpc(4, 'ping', { since: 1 }));
+    ws.send(rpc(5, 'ping', []));
+    await vi.waitFor(() => expect(frames).toHaveLength(5));
+    expect(frames[1]).toEqual({ jsonrpc: '2.0', id: 2, result: {} });
+    expect(frames[2]).toEqual({ jsonrpc: '2.0', id: 3, result: {} });
+    expect(frames[3]).toMatchObject({ id: 4, error: { code: WS_ERROR_CODES.INVALID_PARAMS } });
+    expect(frames[4]).toMatchObject({ id: 5, error: { code: WS_ERROR_CODES.INVALID_PARAMS } });
+    // The fake pool throws on any query it does not know, so a session re-check or a dispatch
+    // would have answered an error; ping does not even take a connection.
+    expect(connect).toHaveBeenCalledTimes(connectsAfterAuth);
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    ws.close();
+  });
+
+  it('ping before authenticate is refused like any other first frame, and the socket is closed', async () => {
+    const { pool, connect } = createPreAuthPool();
+    const url = await listenWs(pool);
+    const ws = await open(url);
+    const frames = framesOf(ws);
+    const closed = closeOf(ws);
+    ws.send(rpc(1, 'ping'));
+    await closed;
+    expect(frames).toEqual([
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        error: { code: WS_ERROR_CODES.UNAUTHORIZED, message: 'must authenticate first' },
+      },
+    ]);
+    expect(connect).not.toHaveBeenCalled();
+  });
+
   it('frames sent while the Authorization header resolves are served in order once it does', async () => {
     const { pool, release } = createPreAuthPool(true);
     const url = await listenWs(pool);

@@ -454,6 +454,16 @@ function subscribeCallerToPrincipalPush(
   );
 }
 
+/** Legacy 672: `ping`'s params, when sent at all, are `{}`. */
+function isEmptyObject(value: unknown): boolean {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === 0
+  );
+}
+
 /** R-05: the error a revoked session is answered with — what a fresh `authenticate` would get
  *  right now (application/gateway/session-revocation.ts): UNAUTHORIZED for a credential that is
  *  gone, FORBIDDEN for a cookie user whose membership here was disabled. */
@@ -727,6 +737,22 @@ function handleConnection(
 
     if (req.method === 'authenticate') {
       send(socket, errorResponse(req.id, WS_ERROR_CODES.INVALID_REQUEST, 'already authenticated'));
+      return;
+    }
+
+    // Legacy 672: `ping` is the console's heartbeat. A socket whose network died in silence
+    // answers nothing and closes nothing: pushes just stop, and a call only fails after its own
+    // 30 seconds. The console pings every 15 seconds and gives the socket up when an answer takes
+    // longer than 10. The answer proves only that this socket and the kernel still answer, so it
+    // reads nothing, dispatches nothing and writes no audit row (one every 15 seconds per open
+    // tab would bury the audit log). A revoked session does not wait for it: the kick bus closes
+    // the socket at once (R-05), and every call re-checks the session.
+    if (req.method === 'ping') {
+      if (req.params !== undefined && !isEmptyObject(req.params)) {
+        send(socket, errorResponse(req.id, WS_ERROR_CODES.INVALID_PARAMS, 'ping takes no params'));
+        return;
+      }
+      send(socket, successResponse(req.id, {}));
       return;
     }
 

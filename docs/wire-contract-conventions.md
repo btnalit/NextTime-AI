@@ -36,6 +36,7 @@
 - 关联 ID（遗留 87，加法、可选）：HTTP 请求头 `x-correlation-id`、WS JSON-RPC 请求帧顶层 `correlationId`；8–64 位
   `[A-Za-z0-9_-]`，不合法即由服务端另铸，从不因它拒绝请求；HTTP 响应头回显实际采用的 ID，审计 `payload.correlationId`
   记同一个值。它只用于追踪，是调用方自报、非权威的线索（不证明因果，按它查审计须同时按工作区过滤），不是凭证、不进 Handle scope（`packages/shared/src/correlation.ts`，`runbooks/observability.md`）。
+- WS 上只有两个方法不是能力：`authenticate`（首帧认证）与 `ping`（心跳，遗留 672）。其余方法都是能力注册表 `chat` 组的能力，经 `dispatchCapability`，有审计。`ping` 认证后才能调，参数 `{}` 或省略，结果 `{}`；不读库、不进 dispatch、不记审计，只证明这个 socket 和内核还在应答。认证前发 `ping` 与任何非 `authenticate` 首帧一样，回 `-32001 must authenticate first` 并关闭（`packages/kernel/src/interfaces/ws/server.ts`）。
 
 ## 4. 版本与兼容
 
