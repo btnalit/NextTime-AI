@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.64.1](https://github.com/btnalit/NextTime-AI/compare/v0.64.0...v0.64.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* an owner sees that the platform suspended a self-connected gate, when and why (legacy 674) ([#1051](https://github.com/btnalit/NextTime-AI/issues/1051)) ([da9fde5](https://github.com/btnalit/NextTime-AI/commit/da9fde5960b715e0cfe280b5f38127074339391f))
+* **kernel,web:** the audit streams leave reads out before paging (legacy 669) ([#1040](https://github.com/btnalit/NextTime-AI/issues/1040)) ([0c0ffff](https://github.com/btnalit/NextTime-AI/commit/0c0ffffa5ee72f6386ce74f9b4fca3d4d22de434))
+* **kernel:** grant a scope once, so a repeated grant returns the grant held (legacy 647) ([#1036](https://github.com/btnalit/NextTime-AI/issues/1036)) ([12c4b1a](https://github.com/btnalit/NextTime-AI/commit/12c4b1a24b8a2f3f5d6168a852e3bd1bfe487751))
+
 ## [0.64.0](https://github.com/btnalit/NextTime-AI/compare/v0.63.0...v0.64.0) (2026-11-07)
 
 
