@@ -152,6 +152,9 @@ interface ConnectionState {
   /** R-05: this connection's kick-bus subscription (application/gateway/session-revocation.ts) —
    *  set right after `principalUnsubscribe`, torn down with it. */
   kickUnsubscribe: (() => void) | undefined;
+  /** Legacy 677: closes the connection when its console session ends by itself
+   *  (`armSessionExpiry`) — set with `kickUnsubscribe`, cleared with it. */
+  expiryTimer: NodeJS.Timeout | undefined;
 }
 
 /** Drops every push subscription the connection holds — on close, and immediately when its
@@ -163,6 +166,8 @@ function dropSubscriptions(state: ConnectionState): void {
   state.principalUnsubscribe = undefined;
   state.kickUnsubscribe?.();
   state.kickUnsubscribe = undefined;
+  clearTimeout(state.expiryTimer);
+  state.expiryTimer = undefined;
 }
 
 type WsOutgoingMessage = JsonRpcSuccessResponse | JsonRpcErrorResponse | JsonRpcNotification;
@@ -503,6 +508,33 @@ function subscribeCallerToSessionKicks(
   });
 }
 
+/** Legacy 677: the longest delay `setTimeout` keeps (2^31 − 1 ms, about 24.8 days); a longer one
+ *  would fire at once. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+/** Legacy 677: a console session also ends by itself, at `sessionExpiresAt` (fixed at login, never
+ *  extended), and nothing kicks it then: HTTP refuses the cookie from that moment, but this socket
+ *  authenticated once and would go on receiving pushes until its next call re-checked the session.
+ *  So it closes at that moment too, as a revoked session does (R-05: an UNAUTHORIZED frame with
+ *  `id: null`, every push subscription dropped, then the close); the console signs out. An API-key
+ *  socket has no end of its own: a key does not expire, and resetting it kicks. */
+function armSessionExpiry(socket: WebSocket, caller: HumanCaller, state: ConnectionState): void {
+  const expiresAt = caller.user?.sessionExpiresAt;
+  if (expiresAt === undefined) return;
+  const wait = (): void => {
+    const left = expiresAt.getTime() - Date.now();
+    state.expiryTimer =
+      left > MAX_TIMER_DELAY_MS
+        ? setTimeout(wait, MAX_TIMER_DELAY_MS)
+        : setTimeout(expire, Math.max(0, left));
+  };
+  const expire = (): void => {
+    state.expiryTimer = undefined;
+    endRevokedSession(socket, state, null, new UnauthorizedError('session expired'));
+  };
+  wait();
+}
+
 /**
  * S4.1 (design doc §7.11 "CSRF … WS 握手校验 Origin"): a browser always sends `Origin` on a
  * WebSocket upgrade and the console session cookie rides along with it, so a page on another
@@ -553,6 +585,7 @@ function handleConnection(
     subscription: undefined,
     principalUnsubscribe: undefined,
     kickUnsubscribe: undefined,
+    expiryTimer: undefined,
   };
 
   // L1-16: the auth deadline. Cleared once a caller is adopted (`adoptCaller`) or the socket closes.
@@ -615,6 +648,7 @@ function handleConnection(
     state.caller = caller;
     subscribeCallerToPrincipalPush(socket, caller, state);
     subscribeCallerToSessionKicks(socket, caller, state);
+    armSessionExpiry(socket, caller, state);
     return true;
   }
 

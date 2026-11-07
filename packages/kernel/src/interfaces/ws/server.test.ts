@@ -1568,6 +1568,70 @@ describe.runIf(DATABASE_URL !== undefined)(
         other.close();
       });
 
+      // Legacy 677: a console session also ends by itself, and nothing kicks it then.
+      it('a console session that expires by itself closes its socket at that moment, not the same user’s other session', async () => {
+        const user = await newConsoleUser();
+        await insertMember({ userId: user.id });
+        const expiringToken = await loginForCookie(user.login);
+        // Directly in the database, as if that login were about to reach the end of its TTL.
+        const ended = await pool.query<{ expires_at: Date }>(
+          `update user_sessions set expires_at = now() + interval '1500 milliseconds'
+            where user_id = $1 returning expires_at`,
+          [user.id],
+        );
+        const expiresAt = ended.rows[0]?.expires_at;
+        if (!expiresAt) throw new Error('no console session to shorten');
+        const otherToken = await loginForCookie(user.login);
+        const expiring = await cookieSocket(expiringToken);
+        const other = await cookieSocket(otherToken);
+
+        await expiring.waitForClose(5000);
+        // Not before its end (the database's clock, as the cookie check reads it).
+        const { rows } = await pool.query<{ ended: boolean }>('select now() >= $1 as ended', [
+          expiresAt,
+        ]);
+        expect(rows[0]?.ended).toBe(true);
+        expect(expiring.unsolicitedErrors).toContainEqual({
+          code: WS_ERROR_CODES.UNAUTHORIZED,
+          message: 'unauthorized',
+        });
+
+        const chats = await other.call<{ items: unknown[] }>('list_chats', {});
+        expect(Array.isArray(chats.items)).toBe(true);
+        other.close();
+      });
+
+      // Legacy 677: the expiry timer must go with the socket. Left behind, it would hold every
+      // closed console socket for up to the session's 8 hours, and a reconnecting tab adds one
+      // per reconnect.
+      it('a console socket the client closes leaves no expiry timer behind', async () => {
+        const user = await newConsoleUser();
+        await insertMember({ userId: user.id });
+        const token = await loginForCookie(user.login);
+        const setSpy = vi.spyOn(globalThis, 'setTimeout');
+        const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+        try {
+          const client = await cookieSocket(token);
+          // The session's own end, a little under the 8-hour TTL away: the only timer that long.
+          const expiryTimers = setSpy.mock.calls.flatMap((call, i) => {
+            const delay = call[1] ?? 0;
+            return delay > 7 * 3_600_000 && delay <= 8 * 3_600_000
+              ? [setSpy.mock.results[i]?.value]
+              : [];
+          });
+          expect(expiryTimers).toHaveLength(1);
+
+          client.close();
+          await client.waitForClose();
+          await vi.waitFor(() => expect(clearSpy).toHaveBeenCalledWith(expiryTimers[0]), {
+            timeout: 2000,
+          });
+        } finally {
+          setSpy.mockRestore();
+          clearSpy.mockRestore();
+        }
+      });
+
       it('reset_user_password closes the user’s console sockets', async () => {
         const admin = await newConsoleUser('admin');
         const user = await newConsoleUser();

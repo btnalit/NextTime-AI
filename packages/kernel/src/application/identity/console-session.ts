@@ -165,24 +165,32 @@ export async function createUserSession(
   });
 }
 
+/** A live console session's user, and when the session ends by itself. */
+export interface ConsoleSessionUser {
+  readonly user: UserRow;
+  /** The session row's `expires_at`: fixed when the session is created (login,
+   *  `CONSOLE_SESSION_TTL_SECONDS`), never extended. */
+  readonly sessionExpiresAt: Date;
+}
+
 /** Re-validates a console session on every request: the row must exist, be unrevoked and
  *  unexpired, and the user must still be active. `null` = 401. */
 export async function lookupConsoleSessionUser(
   pool: PoolLike,
   claims: { readonly uid: string; readonly sid: string },
-): Promise<UserRow | null> {
-  const live = await withAdminClient(pool, async (client) => {
-    const result = await client.query(
-      `select 1 from user_sessions
+): Promise<ConsoleSessionUser | null> {
+  const sessionExpiresAt = await withAdminClient(pool, async (client) => {
+    const result = await client.query<{ expires_at: Date }>(
+      `select expires_at from user_sessions
         where id = $1 and user_id = $2 and revoked_at is null and expires_at > now()`,
       [claims.sid, claims.uid],
     );
-    return (result.rowCount ?? 0) > 0;
+    return result.rows[0]?.expires_at;
   });
-  if (!live) return null;
+  if (sessionExpiresAt === undefined) return null;
   const user = await findUserById(pool, claims.uid);
   if (!user || user.status !== 'active') return null;
-  return user;
+  return { user, sessionExpiresAt };
 }
 
 export async function revokeUserSession(pool: PoolLike, sessionId: string): Promise<void> {

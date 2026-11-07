@@ -238,8 +238,9 @@ export async function resolveConsoleUser(
   } catch (err) {
     throw new UnauthorizedError('invalid console session', { cause: err });
   }
-  const user = await lookupConsoleSessionUser(deps.pool, claims);
-  if (!user) throw new UnauthorizedError('console session no longer valid');
+  const live = await lookupConsoleSessionUser(deps.pool, claims);
+  if (!live) throw new UnauthorizedError('console session no longer valid');
+  const { user } = live;
   return {
     id: user.id,
     login: user.login,
@@ -247,6 +248,8 @@ export async function resolveConsoleUser(
     platformRole: user.platformRole,
     mustChangePassword: user.mustChangePassword,
     consoleSessionId: claims.sid,
+    // Legacy 677: the cookie is refused from the earlier of its row's end and its own `exp`.
+    sessionExpiresAt: new Date(Math.min(live.sessionExpiresAt.getTime(), claims.exp * 1000)),
   };
 }
 

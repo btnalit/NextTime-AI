@@ -476,6 +476,7 @@ CLI 建（key 打印一次），LLM 供应商靠主机改 YAML 再重启 `llm-pr
   claims `{uid, sid, iat, exp}`；`Path=/`、`HttpOnly`、`Secure`、`SameSite=Strict`，8 小时），会话记
   在新的平台级表 `user_sessions`（`id`、`user_id`、`created_at`、`expires_at`、`revoked_at`、
   `user_agent`）。`sessions` 表（工作区内、FK 到 Principal、非空）不承载它——用户登录时还没有工作区。
+  会话 8 小时到期后，cookie 被拒；用这个 cookie 认证的 `/ws` 连接也在同一刻关闭（`-32001` 后断开，与登出、撤销的踢出一样），不会等到下一次调用复查会话才发现，推送随之停止。到期时间在登录时定下，不顺延（遗留 677，`interfaces/ws/server.ts` `armSessionExpiry`）。
 - **工作区上下文按请求给**：web 在每个能力调用上带 `X-Workspace-Id`，WS `authenticate` 带
   `workspaceId`；gateway 用 cookie 找到用户，再在该工作区找到这个用户的 Principal，之后与今天一样
   以该 Principal 执行。用户只属于一个工作区时前端自动选中；多个时侧栏有工作区切换器。否决：会话
