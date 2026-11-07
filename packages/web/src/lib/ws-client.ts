@@ -301,6 +301,21 @@ const HISTORY_PAGE_LIMIT = 200;
 const DEFAULT_RECONNECT_DELAY_MS = 1000;
 const DEFAULT_MAX_RECONNECT_DELAY_MS = 30_000;
 
+/** Legacy 672: a network that drops silently (Wi-Fi, a VPN, a firewall dropping packets) sends no
+ *  FIN or RST, so the socket never closes and the page kept saying 已连接 while nothing got
+ *  through. Every {@link DEFAULT_HEARTBEAT_INTERVAL_MS} the client sends a `ping`; no answer within
+ *  {@link DEFAULT_HEARTBEAT_TIMEOUT_MS} and the socket is given up as dead — status `reconnecting`,
+ *  what was in flight rejected as "connection closed" — and a new one is opened at once. Any answer
+ *  counts, an error included: a kernel that predates `ping` answers it -32601, which proves the
+ *  socket alive just as well. */
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
+const DEFAULT_HEARTBEAT_TIMEOUT_MS = 10_000;
+
+/** Legacy 672: how long one (re)connect waits for the socket to open. Over a silent drop the
+ *  browser's own TCP connect hangs for minutes; giving up sooner and trying again is what lets
+ *  the page come back within seconds of the network. */
+const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
+
 interface ActiveSubscription {
   readonly chatId: string;
   readonly handlers: ChatSubscriptionHandlers;
@@ -327,6 +342,12 @@ export interface WsClientOptions {
   /** C5: how long one `call()` waits for its JSON-RPC response before rejecting with
    *  `RpcTimeoutError`. Default 30 s; `0` disables. Per call override: `call(_, _, {timeoutMs})`. */
   readonly rpcTimeoutMs?: number;
+  /** Legacy 672: how often an authenticated socket is pinged (`0` disables). Default 15 s. */
+  readonly heartbeatIntervalMs?: number;
+  /** Legacy 672: how long a ping may go unanswered before the socket is given up. Default 10 s. */
+  readonly heartbeatTimeoutMs?: number;
+  /** Legacy 672: how long a (re)connect waits for the socket to open (`0` disables). Default 10 s. */
+  readonly connectTimeoutMs?: number;
 }
 
 export class WsClient {
@@ -336,6 +357,14 @@ export class WsClient {
   private readonly maxReconnectDelayMs: number;
   private readonly random: () => number;
   private readonly rpcTimeoutMs: number;
+  private readonly heartbeatIntervalMs: number;
+  private readonly heartbeatTimeoutMs: number;
+  private readonly connectTimeoutMs: number;
+  private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  private pingInFlight = false;
+  /** Legacy 672: the last attempt never got an answer (it timed out opening) — the network, not a
+   *  kernel turning connections away, so the next try does not back off further. */
+  private lastAttemptUnanswered = false;
 
   private socket: WebSocketLike | undefined;
   private nextId = 1;
@@ -374,6 +403,9 @@ export class WsClient {
     this.maxReconnectDelayMs = options.maxReconnectDelayMs ?? DEFAULT_MAX_RECONNECT_DELAY_MS;
     this.random = options.random ?? Math.random;
     this.rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+    this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? DEFAULT_HEARTBEAT_TIMEOUT_MS;
+    this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
   }
 
   /** Opens the socket and resolves once it is open (or rejects on a connect-time error). Does not
@@ -387,13 +419,27 @@ export class WsClient {
       const socket = this.createSocket(this.url);
       this.socket = socket;
       let settled = false;
+      // Legacy 672: a socket that neither opens nor fails is given up, as a dead one is.
+      const openTimer =
+        this.connectTimeoutMs > 0
+          ? setTimeout(() => {
+              if (settled || this.socket !== socket) return;
+              settled = true;
+              this.lastAttemptUnanswered = true;
+              reject(new Error('WsClient: connection timed out'));
+              this.abandonSocket(socket);
+            }, this.connectTimeoutMs)
+          : undefined;
       socket.onopen = () => {
+        clearTimeout(openTimer);
         settled = true;
+        this.lastAttemptUnanswered = false;
         this.setStatus('connected');
         resolve();
       };
       socket.onerror = () => {
         if (!settled) {
+          clearTimeout(openTimer);
           settled = true;
           reject(new Error('WsClient: connection error'));
         }
@@ -401,6 +447,7 @@ export class WsClient {
       socket.onmessage = (event) => this.handleFrame(event.data);
       socket.onclose = (event) => {
         if (!settled) {
+          clearTimeout(openTimer);
           settled = true;
           reject(new Error('WsClient: connection closed before open'));
         }
@@ -417,6 +464,57 @@ export class WsClient {
     this.authenticated = true;
     this.credential = credential;
     this.endReason = undefined;
+    this.startHeartbeat();
+  }
+
+  /** Legacy 672: pings the authenticated socket on an interval (see
+   *  {@link DEFAULT_HEARTBEAT_INTERVAL_MS}). One ping out at a time; it stops when the socket
+   *  goes (`handleClose`, `close`). */
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    if (this.heartbeatIntervalMs <= 0) return;
+    const socket = this.socket;
+    this.heartbeatTimer = setInterval(() => {
+      if (this.pingInFlight || this.socket !== socket || !this.authenticated) return;
+      this.pingInFlight = true;
+      this.rpc('ping', {}, { timeoutMs: this.heartbeatTimeoutMs })
+        .catch((err: unknown) => {
+          // No answer at all: the socket is dead even though it never closed. An error answer
+          // (a kernel without `ping`) is still an answer.
+          if (err instanceof RpcTimeoutError && this.socket === socket && socket) {
+            console.warn('WsClient: no answer to ping, reconnecting');
+            this.abandonSocket(socket);
+          }
+        })
+        .finally(() => {
+          this.pingInFlight = false;
+        });
+    }, this.heartbeatIntervalMs);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = undefined;
+    this.pingInFlight = false;
+  }
+
+  /** Legacy 672: gives up on a socket that stopped answering. Its handlers are detached first — a
+   *  close over a dead network may take minutes to report, and nothing it says any more matters —
+   *  then everything proceeds as on a close: what was in flight is rejected, and a reconnect is
+   *  scheduled (at once: the network, not the kernel, is the likely cause). */
+  private abandonSocket(socket: WebSocketLike): void {
+    socket.onopen = null;
+    socket.onmessage = null;
+    socket.onerror = null;
+    socket.onclose = null;
+    try {
+      socket.close();
+    } catch {
+      // Already closing — nothing more to do with it.
+    }
+    if (this.socket !== socket) return;
+    this.lastAttemptUnanswered = true;
+    this.handleClose({ code: 4000, reason: 'no answer' });
   }
 
   /** One JSON-RPC request/response round trip. `method` must be a registered chat capability name
@@ -731,6 +829,7 @@ export class WsClient {
   }
 
   private handleClose(event: { code?: number; reason?: string }): void {
+    this.stopHeartbeat();
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(new Error('WsClient: connection closed'));
@@ -770,6 +869,12 @@ export class WsClient {
    *  `maxReconnectDelayMs`, and the wait is a random point in the upper half of that window, so a
    *  kernel restart does not see every open tab reconnect in the same instant. */
   private nextReconnectDelay(): number {
+    // Legacy 672: an attempt nobody answered already took its timeout to fail, and reached no
+    // kernel — waiting longer each time would only delay the page coming back with the network.
+    if (this.lastAttemptUnanswered) {
+      this.lastAttemptUnanswered = false;
+      return this.reconnectDelayMs;
+    }
     const ceiling = Math.min(
       this.maxReconnectDelayMs,
       this.reconnectDelayMs * 2 ** Math.min(this.reconnectAttempts, 30),
@@ -816,6 +921,7 @@ export class WsClient {
   /** Closes the socket and stops any pending reconnect attempt. */
   close(): void {
     this.manuallyClosed = true;
+    this.stopHeartbeat();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;

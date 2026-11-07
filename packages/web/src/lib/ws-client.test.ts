@@ -1074,4 +1074,114 @@ describe('WsClient', () => {
       });
     });
   });
+  // Legacy 672: a silent drop never closes the socket, so the client pings it and gives up on
+  // one that stops answering.
+  describe('heartbeat (legacy 672)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    function heartbeatClient(): { client: WsClient; sockets: FakeWebSocket[] } {
+      const sockets: FakeWebSocket[] = [];
+      const client = new WsClient({
+        url: 'ws://kernel.test/ws',
+        createSocket: (url) => {
+          const socket = new FakeWebSocket(url);
+          sockets.push(socket);
+          return socket;
+        },
+        reconnectDelayMs: 100,
+        maxReconnectDelayMs: 400,
+        random: () => 0,
+        rpcTimeoutMs: 30_000,
+        heartbeatIntervalMs: 1_000,
+        heartbeatTimeoutMs: 500,
+        connectTimeoutMs: 2_000,
+      });
+      return { client, sockets };
+    }
+
+    function pings(socket: FakeWebSocket): SentFrame[] {
+      return socket.sent.filter((frame) => frame.method === 'ping');
+    }
+
+    it('pings an authenticated socket, one at a time, and takes any answer as alive', async () => {
+      vi.useFakeTimers();
+      const { client, sockets } = heartbeatClient();
+      const socket = await connectAndAuth(client, sockets);
+      expect(pings(socket)).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(pings(socket)).toHaveLength(1);
+      // A kernel without `ping` answers -32601 — still an answer.
+      respondError(socket, pings(socket)[0] as SentFrame, {
+        code: -32601,
+        message: 'unknown method "ping"',
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(pings(socket)).toHaveLength(2);
+      respond(socket, pings(socket)[1] as SentFrame, {});
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(client.getStatus()).toBe('connected');
+      expect(sockets).toHaveLength(1);
+      client.close();
+    });
+
+    it('gives up on a socket whose ping goes unanswered: in-flight calls fail as closed, and it reconnects at once', async () => {
+      vi.useFakeTimers();
+      const { client, sockets } = heartbeatClient();
+      const socket = await connectAndAuth(client, sockets);
+      const statuses: string[] = [];
+      client.onStatusChange((next) => statuses.push(next));
+      const send = client.sendChatMessage('chat-1', 'hello', 'k-1');
+      const sendFailed = send.catch((err: unknown) => err);
+
+      await vi.advanceTimersByTimeAsync(1_000 + 500);
+      expect(statuses).toEqual(['reconnecting']);
+      expect(((await sendFailed) as Error).message).toBe('WsClient: connection closed');
+      // The network, not the kernel: the first try comes after the base delay, not backed off.
+      await vi.advanceTimersByTimeAsync(99);
+      expect(sockets).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sockets).toHaveLength(2);
+      // The dead socket's late close changes nothing.
+      socket.onclose?.({ code: 1006 });
+      expect(sockets).toHaveLength(2);
+      client.close();
+    });
+
+    it('gives up on a reconnect that never opens, and tries again without backing off', async () => {
+      vi.useFakeTimers();
+      const { client, sockets } = heartbeatClient();
+      await connectAndAuth(client, sockets);
+      sockets[0]?.remoteClose();
+      await vi.advanceTimersByTimeAsync(50);
+      expect(sockets).toHaveLength(2);
+
+      // The network is gone: the socket neither opens nor fails.
+      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(99);
+      expect(sockets).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sockets).toHaveLength(3);
+
+      // The network is back: this one opens, authenticates, and the page is connected again.
+      const socket3 = sockets[2] as FakeWebSocket;
+      socket3.open();
+      await vi.advanceTimersByTimeAsync(0);
+      respond(socket3, sentFrame(socket3, 0), { authenticated: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.getStatus()).toBe('connected');
+      client.close();
+    });
+
+    it('stops pinging once closed', async () => {
+      vi.useFakeTimers();
+      const { client, sockets } = heartbeatClient();
+      const socket = await connectAndAuth(client, sockets);
+      client.close();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(pings(socket)).toHaveLength(0);
+    });
+  });
 });
