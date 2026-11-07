@@ -31,21 +31,26 @@ export function ActingThroughChip({
     );
   }
   const recorded = actingThrough !== null && actingThrough !== undefined;
+  const text = actingThroughChipText(actingThrough, actingName, t);
+  // Review of #1038 (P3-3): a long Worker name ends in an ellipsis inside the row, never past
+  // it; the whole of it is the chip's title.
   return (
     <span
-      className="chip chip-s chip-neutral"
+      className="chip chip-s chip-neutral audit-acting-through"
       data-testid="audit-acting-through"
       data-acting-through={recorded ? actingThrough : 'unrecorded'}
       title={
         recorded
-          ? undefined
+          ? actingName
+            ? text
+            : undefined
           : t(
               '这一条早于平台开始记录「经由」，或者不是在一次调用里写下的。',
               'This row is older than the platform’s record of what an act came through, or was written outside a call.',
             )
       }
     >
-      {actingThroughChipText(actingThrough, actingName, t)}
+      <span className="audit-acting-through-text">{text}</span>
     </span>
   );
 }

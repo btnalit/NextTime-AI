@@ -81,8 +81,14 @@ describe('ActingThroughChip', () => {
     expect(shown().textContent).toMatch(/^经由 Worker · invoice-reader$/);
     rerender(named('service_handle', 'nightly-sync'));
     expect(shown().textContent).toMatch(/^经由 服务账号 · nightly-sync$/);
+    // Review of #1038 (P3-3): a long name ends in an ellipsis (CSS), and the title holds it whole.
+    expect(shown().getAttribute('title')).toBe(shown().textContent);
+    expect(shown().querySelector('.audit-acting-through-text')?.textContent).toBe(
+      shown().textContent,
+    );
     rerender(named('service_handle', null));
     expect(shown().textContent).toBe('经由 服务账号');
+    expect(shown().getAttribute('title')).toBeNull();
   });
 
   it('a row from before it was recorded says so, and explains why', () => {

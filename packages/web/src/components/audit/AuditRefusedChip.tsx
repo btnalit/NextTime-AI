@@ -24,7 +24,9 @@ export function AuditRefusedChip({
   const t = useT();
   const refusal = auditRefusal(payload);
   if (refusal === null) return null;
-  const reasonText = refusal.reason === null ? null : callRefusalReasonText(refusal.reason, t);
+  // Review of #1038 (P3-2): the admin agent's own refusal rows (`dispatch.ts`
+  // `auditAdminAgentRefusal`) record `admin_agent_only` as their code, with no reason.
+  const reasonText = callRefusalReasonText(refusal.reason ?? refusal.code ?? '', t);
   return (
     <span className="audit-refused">
       <span

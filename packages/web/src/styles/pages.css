@@ -1054,6 +1054,18 @@
   justify-self: start;
 }
 
+/* Review of #1038 (P3-3): an audit row's 「经由 Worker · …」 never runs past the row; a long name
+ * ends in an ellipsis and the chip's title carries it whole. */
+.audit-acting-through {
+  max-width: 100%;
+}
+
+.audit-acting-through-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ---- OnboardingWizard (S3.12 接入向导) ------------------------------------------------ */
 /* S11 AA5d-3: the extra packs card's lists line up with its description (no list indent). */
 .extra-packs-list {

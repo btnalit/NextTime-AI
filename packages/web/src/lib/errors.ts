@@ -53,8 +53,8 @@ const CALL_REFUSAL_REASON_TEXT: Readonly<
     en: 'A workspace operation, called with no workspace selected',
   },
   human_channel_only: {
-    zh: '这一项只能由本人在控制台里做，智能体和 Handle 都不能代做',
-    en: 'Only the person may do this in the console, never an agent or a Handle',
+    zh: '这一项只接受人直接调用（控制台或本人的 API key），经 Handle 来的调用都不行，包括智能体、Worker 和 MCP 客户端',
+    en: 'Only a person’s own call may do this (the console or their API key), never one through a Handle — an agent, a Worker or an MCP client',
   },
   admin_agent_only: {
     zh: '这一项只给管理员智能体用',
@@ -74,7 +74,7 @@ const CALL_REFUSAL_REASON_TEXT: Readonly<
   },
   not_for_person: {
     zh: '这一项只能为人类成员做，这次调用不是为人做的',
-    en: 'This is made only for a person, and this call was not for one',
+    en: 'This can only be done for a person, and this call was made for something else',
   },
 };
 
