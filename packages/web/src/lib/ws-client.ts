@@ -196,10 +196,6 @@ const FORBIDDEN_CODE = -32002;
  *  and `lib/errors.ts` names it `timeout` for the banner. */
 export const RPC_TIMEOUT_CODE = -32000;
 
-/** `rpc()` gave up waiting for the response to one request (C5, console-completion-plan §2b):
- *  the socket stayed open but no frame with that `id` came back within the deadline. A subclass
- *  of `RpcError` so every existing `instanceof RpcError` / `err.code` consumer keeps working;
- *  `method` names the call for the log line and the banner. */
 /** A call refused before it left the page — no socket open, or one not yet authenticated (a
  *  reconnect in progress). It did not reach the kernel, so it did not run (legacy 673 tells this
  *  apart from a call whose answer was lost). The messages are unchanged from before the class. */
@@ -210,6 +206,10 @@ export class WsNotSentError extends Error {
   }
 }
 
+/** `rpc()` gave up waiting for the response to one request (C5, console-completion-plan §2b):
+ *  the socket stayed open but no frame with that `id` came back within the deadline. A subclass
+ *  of `RpcError` so every existing `instanceof RpcError` / `err.code` consumer keeps working;
+ *  `method` names the call for the log line and the banner. */
 export class RpcTimeoutError extends RpcError {
   readonly method: string;
   readonly timeoutMs: number;

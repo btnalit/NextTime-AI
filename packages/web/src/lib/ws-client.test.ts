@@ -1106,6 +1106,17 @@ describe('WsClient', () => {
       return socket.sent.filter((frame) => frame.method === 'ping');
     }
 
+    it('refuses a send as not sent when the socket is no longer open but its close has not come yet (legacy 673)', async () => {
+      const { client, sockets } = heartbeatClient();
+      const socket = await connectAndAuth(client, sockets);
+      socket.readyState = FakeWebSocket.CLOSED; // closed, onclose not fired yet
+      await expect(client.sendChatMessage('chat-1', 'restart web-1')).rejects.toBeInstanceOf(
+        WsNotSentError,
+      );
+      expect(socket.sent.filter((frame) => frame.method === 'send_chat_message')).toHaveLength(0);
+      client.close();
+    });
+
     it('refuses a send as not sent, before it leaves, once the dead socket is given up and while the new one is not yet in (legacy 673)', async () => {
       vi.useFakeTimers();
       const { client, sockets } = heartbeatClient();

@@ -219,7 +219,8 @@ function neverLeft(err: unknown): boolean {
 
 /** A send whose answer never came: the deadline passed, or the socket closed while it was out
  *  (`WsClient` rejects what is in flight with "connection closed"). A send refused before it left
- *  ("not connected") or answered with an error did not run. */
+ *  (`WsNotSentError`: no socket, or one not yet authenticated) or answered with an error did not
+ *  run. */
 function answerLost(err: unknown): boolean {
   return (
     err instanceof RpcTimeoutError ||
