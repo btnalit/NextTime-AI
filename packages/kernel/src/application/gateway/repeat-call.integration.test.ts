@@ -8,9 +8,18 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import type {
+  TaskSpawnInput,
+  TaskSpawnOutcome,
+  TaskSupervisorClientPort,
+  TaskSupervisorStatus,
+} from '../../adapters/supervisor-client/index.js';
+import { generateEphemeralHandleKeyPair } from '../../governance/capability/index.js';
 import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
+import { advanceGoalRun } from '../goal/advance.js';
 import { createGoalRun } from '../goal/index.js';
 import { insertPendingContextItem } from '../linkage/index.js';
+import { completeTaskWithResult } from '../task/index.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 import {
@@ -230,6 +239,84 @@ async function goalRun(
     dispatchCapability({ pool: ctx.pool }, caller, name, params);
   if (confirm) await by(byRequester, 'confirm_goal', { goalRunId, revision: 1 });
   if (pause) await by(pausedBy ?? byRequester, 'pause_goal', { goalRunId });
+  return goalRunId;
+}
+
+/** Every spawn starts `running`; a recipe ends one by reporting the Task's result. */
+class FakeTaskSupervisorClient implements TaskSupervisorClientPort {
+  readonly statuses = new Map<string, TaskSupervisorStatus>();
+
+  async spawn(input: TaskSpawnInput): Promise<TaskSpawnOutcome> {
+    const containerId = `container-${input.workerRunId}`;
+    this.statuses.set(input.workerRunId, {
+      workerRunId: input.workerRunId,
+      status: 'running',
+      exitCode: undefined,
+      containerId,
+      ip: '198.51.100.23',
+      startedAt: new Date().toISOString(),
+      finishedAt: undefined,
+      reason: undefined,
+    });
+    return { containerId, ip: '198.51.100.23' };
+  }
+
+  async terminate(workerRunId: string): Promise<boolean> {
+    return this.statuses.delete(workerRunId);
+  }
+
+  async status(workerRunId: string): Promise<TaskSupervisorStatus | undefined> {
+    return this.statuses.get(workerRunId);
+  }
+}
+
+/** One advance of the run by hand (no advancer runs in this file), then parked again, so nothing
+ *  moves it between a case's two calls. */
+async function advanceOnce(ctx: RecipeContext, goalRunId: string, requesterId: string) {
+  const { privateKey } = await generateEphemeralHandleKeyPair();
+  await advanceGoalRun(
+    {
+      pool: ctx.pool,
+      taskRuntime: { pool: ctx.pool, privateKey, supervisorClient: new FakeTaskSupervisorClient() },
+      options: { retryBackoffMs: () => 0 },
+    },
+    { workspaceId: ctx.seed.workspaceId, goalRunId, requesterId },
+  );
+  await ctx.pool.query(
+    'update goal_runs set next_tick_at = null where workspace_id = $1 and id = $2',
+    [ctx.seed.workspaceId, goalRunId],
+  );
+}
+
+/** A run of the owner's whose one step is done, so the run is verifying: its round's check waits
+ *  for the requester to confirm it (confirm_goal_acceptance). */
+async function verifyingGoalRun(ctx: RecipeContext): Promise<string> {
+  const { workspaceId, ownerId } = ctx.seed;
+  const goalRunId = await goalRun(ctx, { confirm: true });
+  await advanceOnce(ctx, goalRunId, ownerId);
+  const attempt = await ctx.pool.query<{ task_id: string; run_id: string }>(
+    `select t.id as task_id, r.id as run_id
+       from step_runs s
+       join tasks t on t.workspace_id = s.workspace_id and t.step_run_id = s.id
+       join worker_runs r on r.workspace_id = t.workspace_id and r.task_id = t.id
+      where s.workspace_id = $1 and s.goal_run_id = $2`,
+    [workspaceId, goalRunId],
+  );
+  const started = attempt.rows[0];
+  if (started === undefined) throw new Error('the advance started no attempt of the step');
+  await withWorkspace(ctx.pool, { workspaceId, principalId: ownerId }, (client) =>
+    completeTaskWithResult(client, workspaceId, ownerId, started.task_id, started.run_id, {
+      summary: 'web-1 answers again',
+    }),
+  );
+  await advanceOnce(ctx, goalRunId, ownerId);
+  const status = await ctx.pool.query<{ status: string }>(
+    'select status from goal_runs where workspace_id = $1 and id = $2',
+    [workspaceId, goalRunId],
+  );
+  if (status.rows[0]?.status !== 'verifying') {
+    throw new Error(`the run is ${status.rows[0]?.status}, not verifying`);
+  }
   return goalRunId;
 }
 
@@ -705,6 +792,12 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       },
     },
   },
+  confirm_goal_acceptance: {
+    // The second confirmation finds the round's check confirmed: the same decision, nothing new.
+    'a run verifying its one done step': {
+      setUp: async (ctx) => ({ goalRunId: await verifyingGoalRun(ctx) }),
+    },
+  },
   reconcile_goal_action: {
     'an action of the run whose outcome is unknown': {
       setUp: async (ctx) => {
@@ -764,6 +857,7 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'revise_goal',
   'reconcile_goal_action',
   'propose_goal',
+  'confirm_goal_acceptance',
 ]);
 
 interface Declared {
