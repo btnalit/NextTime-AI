@@ -22,7 +22,7 @@ ratchet:
   console_unexplained: 10
   kernel_test_missing: 3
   e2e_waived: 65
-  repeat_unclear: 61
+  repeat_unclear: 59
 capabilities:
   add_eval_case:
     console: required
@@ -584,7 +584,7 @@ capabilities:
   observe_operation:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: []
-    repeat: "unclear: 664"
+    repeat: repeats # each read calls the gate again and records another observe Activity on the same Gatekeeper (and the Facts the gate observed, if any)
   pause_goal:
     console: required
     agents: []
@@ -1031,7 +1031,7 @@ capabilities:
   submit_observations:
     console: "none: 数据接入，由 collector 用服务 Handle 调用，不是人的操作"
     agents: []
-    repeat: "unclear: 664"
+    repeat: repeats # one Activity per submission: the same observations again record another Activity and Observations, and upsert the same Objects
   subscribe_chat:
     console: required
     agents: []
