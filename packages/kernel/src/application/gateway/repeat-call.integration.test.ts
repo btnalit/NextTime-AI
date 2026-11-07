@@ -9,7 +9,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
-import { FakeTaskSupervisorClient } from '../../fake-invoke-worker.js';
 import { requestAction } from '../../governance/approval/index.js';
 import { HANDLE_SIGNING_ALG } from '../../governance/capability/index.js';
 import {
@@ -1238,17 +1237,19 @@ describe.runIf(DATABASE_URL !== undefined)(
       pool = createPool();
       await runMigrations(pool, MIGRATIONS_DIR);
       // Issuing a Handle signs it: the task runtime holds the key (as the kernel's main() wires
-      // it). The supervisor is the shared fake one (fake-invoke-worker.ts); no row spawns a Task.
-      const { privateKey, publicKey } = await generateKeyPair(HANDLE_SIGNING_ALG, {
-        crv: 'Ed25519',
-      });
+      // it). No row here spawns a Task, so the supervisor only says so. (The CI-only fake one in
+      // fake-invoke-worker.ts may be imported by index.ts alone — guard fake-markers rule 2.)
+      const { privateKey } = await generateKeyPair(HANDLE_SIGNING_ALG, { crv: 'Ed25519' });
       configureTaskRuntime({
         pool,
         privateKey,
-        supervisorClient: new FakeTaskSupervisorClient({
-          pool,
-          loadHandlePublicKey: async () => publicKey,
-        }),
+        supervisorClient: {
+          spawn: async () => {
+            throw new Error('the repeat walk spawns no Task');
+          },
+          terminate: async () => false,
+          status: async () => undefined,
+        },
       });
     });
 
