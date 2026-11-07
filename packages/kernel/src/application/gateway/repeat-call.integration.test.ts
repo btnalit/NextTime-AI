@@ -7,8 +7,10 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { runMigrations } from '../../adapters/db/migrate.js';
-import { createPool } from '../../adapters/db/pool.js';
+import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
+import { createGoalRun } from '../goal/index.js';
+import { insertPendingContextItem } from '../linkage/index.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 import {
@@ -181,6 +183,81 @@ async function pendingV2(ctx: RecipeContext, kind: 'skill' | 'procedure') {
   const next = kind === 'skill' ? { ...body, markdown: '# Two' } : { ...body, description: 'v2' };
   const v2 = await as<Proposed>(ctx, `propose_${kind}`, { [kind]: next, [`${kind}Id`]: v1.id });
   return { kind, id: v1.id, version: 2, draftDigest: v2.draftDigest, reason: 'Not this one.' };
+}
+
+/** Workspaces a goal recipe moved a run in: `afterAll` ends their runs, so no advancer of a later
+ *  file (one that starts a whole kernel) claims one (as goal-operations.integration.test.ts does). */
+const GOAL_WORKSPACES = new Set<string>();
+const GOAL_BUDGET = {
+  maxTokens: 100_000,
+  maxSteps: 10,
+  maxRevisions: 2,
+  maxWallClockSeconds: 3600,
+};
+
+/** A goal run of one step on a published Worker, proposed for `requester` (the owner, unless
+ *  named); `confirm`: confirmed by them, then `pause`: paused — by them, or by `pausedBy`. No
+ *  advance runs in this file, so the run stays where the recipe left it. */
+async function goalRun(
+  ctx: RecipeContext,
+  {
+    requester = ctx.seed.ownerId,
+    confirm = false,
+    pause = false,
+    pausedBy,
+  }: { requester?: string; confirm?: boolean; pause?: boolean; pausedBy?: ResolvedCaller } = {},
+): Promise<string> {
+  const { workspaceId } = ctx.seed;
+  GOAL_WORKSPACES.add(workspaceId);
+  const worker = await workerV1(ctx, true);
+  const created = await withWorkspace(ctx.pool, { workspaceId, principalId: requester }, (client) =>
+    createGoalRun(client, workspaceId, {
+      requesterId: requester,
+      proposedBy: requester,
+      statement: 'Restart web-1 and say when it answers again.',
+      plan: {
+        steps: [
+          { key: 'a', worker: { definitionId: worker.id, version: 1 }, input: { step: 'a' } },
+        ],
+      },
+      budget: GOAL_BUDGET,
+    }),
+  );
+  const goalRunId = created.goalRunId;
+  const byRequester =
+    requester === ctx.seed.ownerId ? ctx.caller : humanCaller(workspaceId, requester, 'member');
+  const by = (caller: ResolvedCaller, name: string, params: Record<string, unknown>) =>
+    dispatchCapability({ pool: ctx.pool }, caller, name, params);
+  if (confirm) await by(byRequester, 'confirm_goal', { goalRunId, revision: 1 });
+  if (pause) await by(pausedBy ?? byRequester, 'pause_goal', { goalRunId });
+  return goalRunId;
+}
+
+/** An action of the run's step whose outcome is unknown — what reconcile_goal_action records a
+ *  finding on. Written with the guards off: nothing this file reaches fails an action that way. */
+async function outcomeUnknownAction(ctx: RecipeContext, goalRunId: string): Promise<string> {
+  const { workspaceId, ownerId, gatekeeperId } = ctx.seed;
+  return withWorkspace(
+    ctx.pool,
+    { workspaceId, principalId: ownerId },
+    async (client) => {
+      await client.query('set local session_replication_role = replica');
+      const result = await client.query<{ id: string }>(
+        `insert into action_requests (workspace_id, status, failure_kind, gatekeeper_id,
+           action_kind, blast_radius, policy_decision, await_decision, on_behalf_of,
+           actor_runtime, requested_at, step_run_id)
+         select $1, 'failed', 'outcome_unknown', $2, 'fixture.act', 'low', 'allow', false, $3,
+                'pi', now(), s.id
+           from step_runs s where s.workspace_id = $1 and s.goal_run_id = $4
+         returning id`,
+        [workspaceId, gatekeeperId, ownerId, goalRunId],
+      );
+      const id = result.rows[0]?.id;
+      if (id === undefined) throw new Error('the run has no step to fail an action of');
+      return id;
+    },
+    { skipRoleSwitch: true },
+  );
 }
 
 /** Extra cases for a row, beyond the one with schema-built params on the bare seed. A declaration
@@ -514,12 +591,25 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
     },
   },
   get_entry_context: {
-    'a running Turn': {
+    // An item waiting for the Chat, so the first call leases it to the Turn and the second finds
+    // it leased already (per #493 on batch 2: without one the lease path ran empty).
+    'a running Turn, an item waiting for its Chat': {
       setUp: async (ctx) => {
         const sent = await as<{ turnId: string }>(ctx, 'send_chat_message', {
           chatId: ctx.seed.chatId,
           text: 'what is going on',
         });
+        const { workspaceId, ownerId, chatId } = ctx.seed;
+        await withWorkspace(ctx.pool, { workspaceId, principalId: ownerId }, (client) =>
+          insertPendingContextItem(client, workspaceId, {
+            principalId: ownerId,
+            chatId,
+            kind: 'task_completed',
+            subjectId: randomUUID(),
+            payload: { summary: 'web-1 restarted' },
+            sourceOutboxId: String(Date.now()),
+          }),
+        );
         return { turnId: sent.turnId };
       },
     },
@@ -528,6 +618,104 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
     // The rejected draft is taken off its family, so the second call finds no such version.
     'a pending Skill v2': { setUp: (ctx) => pendingV2(ctx, 'skill') },
     'a pending Procedure v2': { setUp: (ctx) => pendingV2(ctx, 'procedure') },
+  },
+  // A goal run's operations answer `changed: false` on a run already where the call puts it — the
+  // run's state and the revision the call names make a retry safe, no key needed (goal/control.ts).
+  confirm_goal: {
+    'a proposed run': {
+      setUp: async (ctx) => ({ goalRunId: await goalRun(ctx), revision: 1 }),
+    },
+  },
+  reject_goal: {
+    'a proposed run': {
+      setUp: async (ctx) => ({ goalRunId: await goalRun(ctx), revision: 1 }),
+    },
+  },
+  pause_goal: {
+    'a running run': {
+      setUp: async (ctx) => ({ goalRunId: await goalRun(ctx, { confirm: true }) }),
+    },
+  },
+  resume_goal: {
+    // The second call finds the run running: a plain resume changes nothing.
+    'a run its requester paused': {
+      setUp: async (ctx) => ({ goalRunId: await goalRun(ctx, { confirm: true, pause: true }) }),
+    },
+  },
+  release_goal_hold: {
+    "an owner's hold on a member's run": {
+      setUp: async (ctx) => ({
+        goalRunId: await goalRun(ctx, {
+          requester: ctx.memberId,
+          confirm: true,
+          pause: true,
+          pausedBy: ctx.caller,
+        }),
+      }),
+    },
+  },
+  cancel_goal: {
+    'a running run': {
+      setUp: async (ctx) => ({ goalRunId: await goalRun(ctx, { confirm: true }) }),
+    },
+  },
+  end_goal: {
+    'a paused run, not achieved': {
+      setUp: async (ctx) => ({
+        goalRunId: await goalRun(ctx, { confirm: true, pause: true }),
+        outcome: 'not_achieved',
+      }),
+    },
+  },
+  revise_goal: {
+    // The second call is based on the revision the first replaced: stale.
+    'a paused run': {
+      setUp: async (ctx) => {
+        const goalRunId = await goalRun(ctx, { confirm: true, pause: true });
+        const worker = await workerV1(ctx, true);
+        return {
+          goalRunId,
+          basedOnRevision: 1,
+          plan: {
+            steps: [
+              { key: 'b', worker: { definitionId: worker.id, version: 1 }, input: { step: 'b' } },
+            ],
+          },
+          reason: 'step b does it another way',
+        };
+      },
+    },
+  },
+  propose_goal: {
+    // The same proposal from the same session, while it is still proposed, is the run it proposed
+    // (R-54) — in the console the person is the session, so a double submit is one run.
+    'a plan on a published Worker': {
+      setUp: async (ctx) => {
+        GOAL_WORKSPACES.add(ctx.seed.workspaceId);
+        const worker = await workerV1(ctx, true);
+        return {
+          statement: 'Restart web-1 and say when it answers again.',
+          plan: {
+            steps: [
+              { key: 'a', worker: { definitionId: worker.id, version: 1 }, input: { step: 'a' } },
+            ],
+          },
+          budget: GOAL_BUDGET,
+        };
+      },
+    },
+  },
+  reconcile_goal_action: {
+    'an action of the run whose outcome is unknown': {
+      setUp: async (ctx) => {
+        const goalRunId = await goalRun(ctx, { confirm: true });
+        return {
+          goalRunId,
+          actionRequestId: await outcomeUnknownAction(ctx, goalRunId),
+          verdict: 'effect_seen',
+        };
+      },
+    },
   },
 };
 
@@ -566,6 +754,16 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'report_turn',
   'mark_turn_outcome',
   'get_entry_context',
+  'confirm_goal',
+  'reject_goal',
+  'pause_goal',
+  'resume_goal',
+  'release_goal_hold',
+  'cancel_goal',
+  'end_goal',
+  'revise_goal',
+  'reconcile_goal_action',
+  'propose_goal',
 ]);
 
 interface Declared {
@@ -634,6 +832,23 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     afterAll(async () => {
+      // Leave no run for a later file's kernel to advance.
+      for (const workspaceId of GOAL_WORKSPACES) {
+        const client = await pool.connect();
+        try {
+          await client.query('begin');
+          await client.query('set local session_replication_role = replica');
+          await client.query(
+            `update goal_runs set status = 'cancelled', pause_reason = null, paused_by = null,
+                    paused_by_authority = null, ended_at = now(), next_tick_at = null
+              where workspace_id = $1 and status not in ('completed', 'cancelled', 'failed')`,
+            [workspaceId],
+          );
+          await client.query('commit');
+        } finally {
+          client.release();
+        }
+      }
       await pool?.end();
     });
 

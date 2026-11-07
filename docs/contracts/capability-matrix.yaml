@@ -22,7 +22,7 @@ ratchet:
   console_unexplained: 10
   kernel_test_missing: 4
   e2e_waived: 76
-  repeat_unclear: 100
+  repeat_unclear: 90
 capabilities:
   add_eval_case:
     console: required
@@ -111,7 +111,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent
   cancel_task:
     console: required
     agents: []
@@ -129,12 +129,12 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: idempotent
   confirm_goal_acceptance:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "unclear: 682"  # a retry after the advancer completed the run is 409 (legacy 682)
   connect_gatekeeper:
     console: "none: 待说明（2026-11-06 盘点）"
     agents: []
@@ -231,7 +231,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent
   execution_readiness:
     console: required
     agents: []
@@ -583,7 +583,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: idempotent
   pi_drift:
     console: required
     agents: []
@@ -653,7 +653,7 @@ capabilities:
   propose_goal:
     console: "none: 入口 agent 替人提议目标；人在控制台确认或拒绝（confirm / reject 目标的能力）"
     agents: [entry]
-    repeat: "unclear: 664"
+    repeat: idempotent  # the same proposal from the same session, while still proposed (R-54)
   propose_ontology_change:
     console: "none: 待说明（2026-11-06 盘点）"
     agents: [entry, admin]
@@ -729,7 +729,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent
   reconstruct:
     console: required
     agents: []
@@ -769,7 +769,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent
   reject_platform_segment:
     console: required
     agents: []
@@ -784,7 +784,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: idempotent
   remove_eval_fixture_gate:
     console: required
     agents: []
@@ -844,7 +844,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent
   resume_self_connection:
     console: required
     agents: []
@@ -859,7 +859,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: illegal_transition"
   revoke_capability:
     console: required
     agents: []
