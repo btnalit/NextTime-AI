@@ -53,9 +53,19 @@ import { workerSpecDigest } from './step-attempt.js';
  * A read-only projection across modules (worker, goal, approval tables beside this module's own):
  * it writes nothing, so it moves no state those modules own. Every table read here is
  * workspace-isolated only (no per-principal RLS), so the counts cover the whole workspace: the
- * capability is the builders' (builder floor, human channel) and answers numbers, digests and field
- * names only — no Turn, Task, goal or ActionRequest id and no free text leaves this module.
+ * capability is the builders' (builder floor, human channel) and answers numbers, labels and field
+ * names only — no Turn, Task, goal or ActionRequest id and no free text leaves this module. A
+ * WorkerSpec's digest leaves it only for a caller who can read a goal the WorkerSpec ran in
+ * (`canReadGoal`, the goal reads' own rule, passed in by the gateway — this module never decides
+ * goal visibility): the digest is an unsalted hash, and beside the field names it would confirm a
+ * guess at a low-entropy setting of a goal the caller cannot read (review #493 on #1064). Anyone
+ * else is given a label that tells the combinations apart and is derived from nothing
+ * ({@link labelSpecs}).
  */
+
+/** Whether the caller may read a goal — `goalVisibleTo` with the caller's goal viewer, from the
+ *  gateway. */
+export type CanReadGoal = (goal: { readonly onBehalfOf: string }) => boolean;
 
 interface DefinitionTaskRow {
   readonly id: string;
@@ -71,6 +81,8 @@ interface DefinitionTaskRow {
   readonly outcome_given_at: Date | null;
   /** The WorkerSpec digest the attempt's run configuration keeps; `null`: the definition as it is. */
   readonly spec_digest: string | null;
+  /** The requester of the goal the Task is a step of; `null` when it is none's. */
+  readonly goal_on_behalf_of: string | null;
   /** The environment of the Task's last run; meaningless when `has_run` is false. */
   readonly last_environment: string | null;
   readonly has_run: boolean;
@@ -84,12 +96,13 @@ interface RunRow {
   readonly last_started_at: Date;
 }
 
-/** WorkerDefinition family `definitionId`'s statistics, or `null` when the workspace has no such
- *  family or none of its versions is published or deprecated. */
+/** WorkerDefinition family `definitionId`'s statistics as `viewer` reads them, or `null` when the
+ *  workspace has no such family or none of its versions is published or deprecated. */
 export async function readWorkerDefinitionStats(
   client: PoolClient,
   workspaceId: string,
   definitionId: string,
+  viewer: { readonly canReadGoal: CanReadGoal },
 ): Promise<WorkerDefinitionStatsWire | null> {
   const versions = await client.query<{
     version: number;
@@ -111,9 +124,11 @@ export async function readWorkerDefinitionStats(
             (t.rejected_output is not null) as output_rejected, t.created_by_activity_id,
             t.goal_run_id, t.step_run_id, t.objective_outcome, t.outcome_given_at,
             t.run_config_snapshot -> 'spec' ->> 'digest' as spec_digest,
+            g.on_behalf_of as goal_on_behalf_of,
             last_run.environment_digest as last_environment,
             (last_run.id is not null) as has_run
        from tasks t
+       left join goal_runs g on g.workspace_id = t.workspace_id and g.id = t.goal_run_id
        left join lateral (
          select r.id, r.environment_digest from worker_runs r
           where r.workspace_id = t.workspace_id and r.task_id = t.id
@@ -169,6 +184,8 @@ export async function readWorkerDefinitionStats(
         const combinationTasks = versionTasks.filter((task) => task.spec_digest === specDigest);
         const combinationTaskIds = new Set(combinationTasks.map((task) => task.id));
         return {
+          // Labelled below, once every slice is in its order.
+          specRef: null,
           specDigest,
           fields: specDigest === null ? [] : (fieldsByDigest.get(specDigest) ?? null),
           usage: usageOf(
@@ -193,12 +210,57 @@ export async function readWorkerDefinitionStats(
     };
   });
 
+  const label = labelSpecs(readableDigests(tasks.rows, viewer.canReadGoal));
+  const labelled = <T extends { readonly specDigest: string | null }>(slice: T): T => ({
+    ...slice,
+    ...label(slice.specDigest),
+  });
+  const versionsLabelled = versionStats.map((version) => ({
+    ...version,
+    combinations: version.combinations.map(labelled),
+  }));
   return {
     definitionId,
     name: latest.name,
     reviewStreak: REVIEW_STREAK,
-    versions: versionStats,
-    failureGroups: failureGroupsOf(tasks.rows, refusalByTask),
+    versions: versionsLabelled,
+    failureGroups: failureGroupsOf(tasks.rows, refusalByTask).map(labelled),
+  };
+}
+
+/** The WorkerSpec digests that ran in a goal the caller can read. */
+function readableDigests(
+  tasks: readonly DefinitionTaskRow[],
+  canReadGoal: CanReadGoal,
+): ReadonlySet<string> {
+  const readable = new Set<string>();
+  for (const task of tasks) {
+    if (task.spec_digest === null || task.goal_on_behalf_of === null) continue;
+    if (readable.has(task.spec_digest)) continue;
+    if (canReadGoal({ onBehalfOf: task.goal_on_behalf_of })) readable.add(task.spec_digest);
+  }
+  return readable;
+}
+
+/**
+ * What a slice says of its WorkerSpec (`SpecRefSchema`), called in the order the slices are
+ * sent: the definition as it is, no label; a digest the caller may be given, the digest and its
+ * first 12 hex digits; any other, no digest and `#n` — numbered in order of first call, the same
+ * number for the same digest.
+ */
+export function labelSpecs(
+  readable: ReadonlySet<string>,
+): (digest: string | null) => { specRef: string | null; specDigest: string | null } {
+  const numbers = new Map<string, string>();
+  return (digest) => {
+    if (digest === null) return { specRef: null, specDigest: null };
+    if (readable.has(digest)) return { specRef: digest.slice(0, 12), specDigest: digest };
+    let ref = numbers.get(digest);
+    if (ref === undefined) {
+      ref = `#${numbers.size + 1}`;
+      numbers.set(digest, ref);
+    }
+    return { specRef: ref, specDigest: null };
   };
 }
 
@@ -321,6 +383,8 @@ function failureGroupsOf(
     } else {
       groups.set(key, {
         definitionVersion: task.version,
+        // Labelled by the caller, once the groups are in their order.
+        specRef: null,
         specDigest: task.spec_digest,
         category,
         refusal,

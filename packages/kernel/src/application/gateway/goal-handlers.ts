@@ -111,7 +111,7 @@ import { readModelCatalogIds } from './models-catalog-handler.js';
 /** The caller as a goal viewer: the human channel's resolved Principal — every run when it is the
  *  owner — or, on the handle channel, where `principalId` is the Handle's `obo`, that principal
  *  for their own runs only. */
-async function goalViewer(
+export async function goalViewer(
   client: PoolClient,
   ctx: CapabilityHandlerContext | undefined,
 ): Promise<GoalViewer> {
