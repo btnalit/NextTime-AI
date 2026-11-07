@@ -180,8 +180,9 @@ describe('AuditPage entry points', () => {
     });
     renderPage(http, { resourceType: 'action_request', resourceId: 'ar-1' });
     const row = await screen.findByTestId('audit-row');
+    // Legacy 669: the reads are left out by the kernel, before paging.
     expect(queries[0]).toEqual({
-      filter: { resourceType: 'action_request', resourceId: 'ar-1' },
+      filter: { resourceType: 'action_request', resourceId: 'ar-1', excludeReads: true },
       limit: 50,
     });
     await waitFor(() => expect(row.textContent).toContain('Alice'));
@@ -206,7 +207,12 @@ describe('AuditPage entry points', () => {
     fireEvent.click(screen.getByTestId('audit-apply'));
     await waitFor(() =>
       expect(queries[queries.length - 1]).toEqual({
-        filter: { actorPrincipalId: 'p-1', resourceType: 'action_request', resourceId: 'ar-1' },
+        filter: {
+          actorPrincipalId: 'p-1',
+          resourceType: 'action_request',
+          resourceId: 'ar-1',
+          excludeReads: true,
+        },
         limit: 50,
       }),
     );
@@ -368,7 +374,7 @@ describe('AuditPage entry points', () => {
         (c) => c.name === 'audit_query' && (c.params as { limit?: number }).limit === 50,
       )?.params,
     ).toEqual({
-      filter: { resourceType: 'action_request', resourceId: 'ar-1' },
+      filter: { resourceType: 'action_request', resourceId: 'ar-1', excludeReads: true },
       limit: 50,
     });
     await screen.findByTestId('audit-row');
@@ -416,7 +422,7 @@ describe('AuditPage entry points', () => {
     await waitFor(() =>
       expect(http.calls.at(-1)).toEqual({
         name: 'audit_query',
-        params: { filter: { actingThrough: 'entry_agent' }, limit: 50 },
+        params: { filter: { actingThrough: 'entry_agent', excludeReads: true }, limit: 50 },
       }),
     );
     // The narrowed list says which rows it can hold: none of the unrecorded ones.
@@ -425,23 +431,35 @@ describe('AuditPage entry points', () => {
     );
   });
 
-  it('S11 fix (CI #288/#290): when every loaded row is a read, the empty state (not a blank page) shows and "Show reads" reveals them', async () => {
+  it('legacy 669: the reads are left out by the kernel; with none left the empty state offers them, and "Show reads" asks again', async () => {
+    // The kernel's part: `excludeReads` leaves the one row, a read, out.
     const http = scriptedHttp({
-      audit_query: () => ({ items: [auditRow({ id: 'audit-read', action: 'list_grants' })] }),
+      audit_query: (params) =>
+        (params as { filter?: { excludeReads?: boolean } }).filter?.excludeReads === true
+          ? { items: [] }
+          : { items: [auditRow({ id: 'audit-read', action: 'list_grants' })] },
       list_principals: principalsPage,
       list_gatekeepers: () => ({ items: [] }),
     });
     renderPage(http);
 
-    // Neither a bare "no rows at all" empty state nor the list — `audit-empty` is reused for
-    // "rows exist, all filtered" too, so the page is never blank.
     const empty = await screen.findByTestId('audit-empty');
-    expect(empty.textContent).toContain('1');
+    // The audit log's own page (limit 50) — the id pickers' audit scans ask for 200.
+    const pages = () =>
+      http.calls.filter(
+        (c) => c.name === 'audit_query' && (c.params as { limit?: number }).limit === 50,
+      );
+    expect(pages()[0]?.params).toEqual({
+      filter: { excludeReads: true },
+      limit: 50,
+    });
+    expect(empty.textContent).toMatch(/读操作默认不列出/);
     expect(screen.queryByTestId('audit-list')).toBeNull();
     expect(screen.queryByTestId('audit-row')).toBeNull();
 
     fireEvent.click(within(empty).getByRole('button', { name: /显示读操作|Show reads/ }));
     await waitFor(() => expect(screen.getAllByTestId('audit-row')).toHaveLength(1));
+    expect(pages().at(-1)?.params).toEqual({ limit: 50 });
     expect(screen.queryByTestId('audit-empty')).toBeNull();
     // Legacy 479 (same class): the button went away; focus is on the toggle that now says so.
     const toggle = screen.getByTestId('audit-show-reads-toggle').querySelector('input');
@@ -449,7 +467,8 @@ describe('AuditPage entry points', () => {
     expect(toggle?.checked).toBe(true);
   });
 
-  it('legacy 628: a refused call says 被拦下 with its code; a refused read stays shown while plain reads are hidden', async () => {
+  it('legacy 628: a refused call says 被拦下 with its code; a refused read is shown as the kernel keeps it', async () => {
+    // What the kernel answers `excludeReads` with (legacy 669): no plain read, the refused one kept.
     const http = scriptedHttp({
       audit_query: () => ({
         items: [
@@ -467,7 +486,6 @@ describe('AuditPage entry points', () => {
               refusal: { code: 'forbidden', status: 403, reason: 'not_in_scope' },
             },
           }),
-          auditRow({ id: 'audit-read', action: 'search', payload: {} }),
           auditRow({
             id: 'audit-refused-nocode',
             action: 'evaluation.seal_hold_refused',
@@ -489,10 +507,9 @@ describe('AuditPage entry points', () => {
       if (!found) throw new Error(`no row for ${action}`);
       return found;
     };
-    // The plain read is hidden and counted; the refused read is not.
     expect(rows).toHaveLength(4);
-    expect(screen.getByTestId('audit-hidden-reads-note').textContent).toContain('1');
-    expect(() => rowOf('search')).toThrow();
+    // Nothing more is hidden in the browser: the page counts no reads of its own.
+    expect(screen.queryByTestId('audit-hidden-reads-note')).toBeNull();
 
     expect(within(rowOf('action_request.approve')).queryByTestId('audit-refused')).toBeNull();
     const write = rowOf('assert_fact');
@@ -672,7 +689,7 @@ describe('AuditPage pickers', () => {
     fireEvent.click(screen.getByTestId('audit-apply'));
     await waitFor(() =>
       expect(queries.at(-1)).toEqual({
-        filter: { resourceType: 'gatekeeper', resourceId: 'gk-1' },
+        filter: { resourceType: 'gatekeeper', resourceId: 'gk-1', excludeReads: true },
         limit: 50,
       }),
     );
@@ -769,7 +786,10 @@ describe('AuditPage pickers', () => {
     expect((input as HTMLInputElement).value).toBe('p-7');
     fireEvent.click(screen.getByTestId('audit-apply'));
     await waitFor(() =>
-      expect(queries.at(-1)).toEqual({ filter: { actorPrincipalId: 'p-7' }, limit: 50 }),
+      expect(queries.at(-1)).toEqual({
+        filter: { actorPrincipalId: 'p-7', excludeReads: true },
+        limit: 50,
+      }),
     );
   });
 

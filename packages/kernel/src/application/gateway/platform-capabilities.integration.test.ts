@@ -1212,6 +1212,47 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(personAgain.items.some((item) => item.action === older)).toBe(false);
       });
+
+      it('legacy 669: excludeReads leaves the reads out before paging, a refused read kept', async () => {
+        // A target workspace of its own (`payload.params.workspaceId`), so the page holds only
+        // what this test wrote.
+        const tag = randomUUID();
+        const write = (action: string, extra?: Record<string, unknown>) =>
+          withWorkspace(
+            pool,
+            { workspaceId, principalId: randomUUID() },
+            (client) =>
+              writeAudit(client, {
+                workspaceId: null,
+                actorPrincipalId: null,
+                actorUserId: admin.id,
+                action,
+                payload: { params: { workspaceId: tag }, ...extra },
+              }),
+            { skipRoleSwitch: true },
+          );
+        await write('create_workspace');
+        await write('platform_audit_query', { outcome: 'refused' });
+        for (let i = 0; i < 3; i += 1) await write('list_users');
+
+        const query = (params: Record<string, unknown>) =>
+          callAsAdmin<ListEnvelope<PlatformAuditRecordWire>>('platform_audit_query', {
+            targetWorkspaceId: tag,
+            ...params,
+          });
+        expect((await query({ limit: 100 })).items).toHaveLength(5);
+        expect((await query({ excludeReads: false, limit: 100 })).items).toHaveLength(5);
+        const first = await query({ excludeReads: true, limit: 1 });
+        expect(first.items).toHaveLength(1);
+        expect(typeof first.nextCursor).toBe('string');
+        const second = await query({ excludeReads: true, limit: 1, cursor: first.nextCursor });
+        expect(second.items).toHaveLength(1);
+        expect(second.nextCursor).toBeUndefined();
+        expect([...first.items, ...second.items].map((item) => item.action).sort()).toEqual([
+          'create_workspace',
+          'platform_audit_query',
+        ]);
+      });
     });
 
     describe('platform_overview', () => {

@@ -205,6 +205,7 @@ import {
   toWireSkillLoads,
   toWireTurnAttribution,
 } from './attribution-handlers.js';
+import { READ_AUDIT_ACTIONS } from './audit-reads.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 import { computeCapabilityReachability, operationReachability } from './capability-reachability.js';
@@ -635,6 +636,8 @@ function toAuditQueryFilter(filter: Record<string, unknown> | undefined): AuditQ
   if (typeof filter.resourceType === 'string') result.resourceType = filter.resourceType;
   if (typeof filter.resourceId === 'string') result.resourceId = filter.resourceId;
   if (typeof filter.actingThrough === 'string') result.actingThrough = filter.actingThrough;
+  // Legacy 669: the console's default view, writes and decisions, narrowed before paging.
+  if (filter.excludeReads === true) result.hiddenReadActions = READ_AUDIT_ACTIONS;
   if (typeof filter.limit === 'number') result.limit = filter.limit;
   return result;
 }

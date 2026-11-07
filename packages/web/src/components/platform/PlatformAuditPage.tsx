@@ -8,7 +8,6 @@ import {
 } from '../../lib/acting-through.js';
 import { useDebounced } from '../../lib/audit-id-picker.js';
 import { platformAuditActionSuggestions } from '../../lib/audit-pickers.js';
-import { auditRefusal, isReadAuditAction } from '../../lib/audit.js';
 import { actionLabel } from '../../lib/capability-labels.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
@@ -66,8 +65,9 @@ const USER_SEARCH_DEBOUNCE_MS = 250;
  * S8 W4-A (ui-audit PA1 "见 S11"): the subtitle used to claim "every platform-scope write", but
  * `platform_audit_query`'s stream is the same `workspace_id is null` table every platform-scope
  * capability dispatch audits itself under, reads included — same "default hides pure reads, a
- * toggle shows them" fix `AuditLogSection`'s own S11 fix applies, over the same `isReadAuditAction`
- * helper (`lib/audit.ts`); the subtitle now says what the stream actually is.
+ * toggle shows them" fix `AuditLogSection`'s own S11 fix applies; the subtitle now says what the
+ * stream actually is. Legacy 669: the reads are left out by the kernel (`excludeReads`), before
+ * paging, not here after it.
  */
 export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
   const t = useT();
@@ -78,7 +78,12 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
   const [showReads, setShowReads] = useState(false);
   const showReadsToggle = useRef<HTMLInputElement>(null);
 
-  const params = useMemo(() => ({ limit: PAGE_SIZE, ...applied }), [applied]);
+  // Legacy 669: the kernel leaves the reads out before paging (`excludeReads`, a refused read
+  // kept — legacy 628), so a page of writes is a whole page; the toggle asks again.
+  const params = useMemo(
+    () => ({ limit: PAGE_SIZE, ...applied, ...(showReads ? {} : { excludeReads: true }) }),
+    [applied, showReads],
+  );
   const audit = useCapabilityList<PlatformAuditRecordWire>(http, 'platform_audit_query', params);
 
   // S8 W4-A (ui-audit AU1 "平台审计页停止要求裸 UUID 输入"): a `<select>` over `list_users` when
@@ -130,18 +135,6 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
 
   const rows = audit.state.status === 'ready' ? audit.state.data.items : [];
   const nextCursor = audit.state.status === 'ready' ? audit.state.data.nextCursor : undefined;
-  // Legacy 628: a refused read stays shown — what was refused is exactly what an auditor looks for.
-  const visibleRows = useMemo(
-    () =>
-      showReads
-        ? rows
-        : rows.filter(
-            (row) => !isReadAuditAction(row.action) || auditRefusal(row.payload) !== null,
-          ),
-    [rows, showReads],
-  );
-  const hiddenReadCount = rows.length - visibleRows.length;
-
   return (
     <div className="page">
       <PageHeader
@@ -293,52 +286,39 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
         <EmptyState
           icon="search"
           title={t('没有匹配的平台审计记录', 'No matching platform audit rows')}
-          testId="platform-audit-empty"
-        />
-      ) : visibleRows.length === 0 ? (
-        // S8 W4-A fix (CI #288/#290 — same audit.spec.ts-shaped assertion applies here too): the
-        // *same* `platform-audit-empty` testid every other "nothing to show" state already uses,
-        // never neither `platform-audit-list` nor `platform-audit-empty` — rows exist, they are
-        // filtered, not absent, so the empty state says that instead of the generic title.
-        <EmptyState
-          icon="search"
-          title={t('已加载的记录全部是读操作', 'Every loaded row is a read')}
-          body={t(
-            `已隐藏 ${hiddenReadCount} 条——勾选上方"显示读操作"查看。`,
-            `${hiddenReadCount} hidden — check "Show reads" above to see them.`,
-          )}
-          action={
-            <Button
-              variant="secondary"
-              size="s"
-              onClick={() => {
-                setShowReads(true);
-                // Legacy 479 (same class): this button goes away as the reads show; focus lands
-                // on the toggle that now says they are shown.
-                showReadsToggle.current?.focus();
-              }}
-            >
-              {t('显示读操作', 'Show reads')}
-            </Button>
-          }
+          {...(showReads
+            ? {}
+            : {
+                body: t(
+                  '读操作默认不列出；勾选“显示读操作”可一并查看。',
+                  'Reads are not listed by default; check “Show reads” to include them.',
+                ),
+                action: (
+                  <Button
+                    variant="secondary"
+                    size="s"
+                    data-testid="platform-audit-empty-show-reads"
+                    onClick={() => {
+                      setShowReads(true);
+                      // Legacy 479 (same class): this button goes away as the reads show; focus
+                      // lands on the toggle that now says they are shown.
+                      showReadsToggle.current?.focus();
+                    }}
+                  >
+                    {t('显示读操作', 'Show reads')}
+                  </Button>
+                ),
+              })}
           testId="platform-audit-empty"
         />
       ) : (
         <>
-          {hiddenReadCount > 0 ? (
-            <p className="text-3 text-small" data-testid="platform-audit-hidden-reads-note">
-              {t(
-                `已隐藏 ${hiddenReadCount} 条读操作`,
-                `${hiddenReadCount} read ${hiddenReadCount === 1 ? 'row' : 'rows'} hidden`,
-              )}
-            </p>
-          ) : null}
           <ul
             className="data-list"
             aria-label={t('平台审计', 'Platform audit')}
             data-testid="platform-audit-list"
           >
-            {visibleRows.map((row) => (
+            {rows.map((row) => (
               <li className="data-row" key={row.id} data-testid="platform-audit-row">
                 <div className="data-row-main">
                   <div className="data-row-title audit-row-title">

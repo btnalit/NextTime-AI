@@ -47304,6 +47304,9 @@
           "minLength": 1,
           "type": "string"
         },
+        "excludeReads": {
+          "type": "boolean"
+        },
         "limit": {
           "maximum": 200,
           "minimum": 1,

@@ -75,7 +75,7 @@ describe('PlatformAuditPage', () => {
   it('queries with a default limit of 50 and renders action/actor/resource rows', async () => {
     const http = scriptedHttp({
       platform_audit_query: (params) => {
-        expect(params).toEqual({ limit: 50 });
+        expect(params).toEqual({ limit: 50, excludeReads: true });
         return { items: [row()] };
       },
     });
@@ -105,7 +105,7 @@ describe('PlatformAuditPage', () => {
     await waitFor(() =>
       expect(http.calls.at(-1)).toEqual({
         name: 'platform_audit_query',
-        params: { limit: 50, action: 'update_platform_settings' },
+        params: { limit: 50, action: 'update_platform_settings', excludeReads: true },
       }),
     );
   });
@@ -138,7 +138,7 @@ describe('PlatformAuditPage', () => {
     await waitFor(() =>
       expect(http.calls.at(-1)).toEqual({
         name: 'platform_audit_query',
-        params: { limit: 50, actingThrough: 'admin_agent_session' },
+        params: { limit: 50, actingThrough: 'admin_agent_session', excludeReads: true },
       }),
     );
     // 管理员智能体 also keeps the older rows whose payload names the agent, and says so.
@@ -149,7 +149,10 @@ describe('PlatformAuditPage', () => {
     fireEvent.change(through, { target: { value: '' } });
     fireEvent.click(within(form).getByRole('button', { name: '应用' }));
     await waitFor(() =>
-      expect(http.calls.at(-1)).toEqual({ name: 'platform_audit_query', params: { limit: 50 } }),
+      expect(http.calls.at(-1)).toEqual({
+        name: 'platform_audit_query',
+        params: { limit: 50, excludeReads: true },
+      }),
     );
     expect(screen.queryByTestId('platform-audit-acting-through-note')).toBeNull();
   });
@@ -206,13 +209,16 @@ describe('PlatformAuditPage', () => {
     expect(list.textContent).not.toContain('12345678-abcd-4321-8888-000000000000');
   });
 
-  it('PA1/S11: pure reads (mode:observe) are hidden by default; "Show reads" reveals them', async () => {
+  it('PA1/S11, legacy 669: pure reads are left out by the kernel by default; "Show reads" asks again with them', async () => {
+    // The kernel's part: `excludeReads` leaves the read out.
     const http = scriptedHttp({
       list_users: () => ({ items: [] }),
-      platform_audit_query: () => ({
+      platform_audit_query: (params) => ({
         items: [
           row({ id: 'audit-write', action: 'create_user' }),
-          row({ id: 'audit-read', action: 'list_users' }),
+          ...((params as { excludeReads?: boolean }).excludeReads === true
+            ? []
+            : [row({ id: 'audit-read', action: 'list_users' })]),
         ],
       }),
     });
@@ -222,7 +228,7 @@ describe('PlatformAuditPage', () => {
     expect(within(list).getAllByTestId('platform-audit-row')).toHaveLength(1);
     expect(list.textContent).toContain('create_user');
     expect(list.textContent).not.toContain('list_users');
-    expect(screen.getByTestId('platform-audit-hidden-reads-note').textContent).toContain('1');
+    expect(screen.queryByTestId('platform-audit-hidden-reads-note')).toBeNull();
 
     fireEvent.click(
       screen
@@ -234,9 +240,13 @@ describe('PlatformAuditPage', () => {
         within(screen.getByTestId('platform-audit-list')).getAllByTestId('platform-audit-row'),
       ).toHaveLength(2),
     );
+    expect(http.calls.filter((c) => c.name === 'platform_audit_query').at(-1)?.params).toEqual({
+      limit: 50,
+    });
   });
 
-  it('legacy 628: a refused call says 被拦下 with its code; a refused read stays shown while plain reads are hidden', async () => {
+  it('legacy 628: a refused call says 被拦下 with its code; a refused read is shown as the kernel keeps it', async () => {
+    // What the kernel answers `excludeReads` with (legacy 669): no plain read, the refused one kept.
     const http = scriptedHttp({
       list_users: () => ({ items: [] }),
       platform_audit_query: () => ({
@@ -252,7 +262,6 @@ describe('PlatformAuditPage', () => {
             action: 'list_users',
             payload: { outcome: 'refused', refusal: { code: 'forbidden', status: 403 } },
           }),
-          row({ id: 'audit-read', action: 'list_workspaces', payload: {} }),
           row({
             id: 'audit-refused-nocode',
             action: 'platform.workspace_purged',
@@ -272,10 +281,9 @@ describe('PlatformAuditPage', () => {
       if (!found) throw new Error(`no row for ${action}`);
       return found;
     };
-    // The plain read is hidden and counted; the refused read is not.
     expect(rows).toHaveLength(4);
-    expect(screen.getByTestId('platform-audit-hidden-reads-note').textContent).toContain('1');
-    expect(() => rowOf('list_workspaces')).toThrow();
+    // Nothing more is hidden in the browser: the page counts no reads of its own.
+    expect(screen.queryByTestId('platform-audit-hidden-reads-note')).toBeNull();
 
     expect(within(rowOf('create_user')).queryByTestId('audit-refused')).toBeNull();
     const write = rowOf('set_user_status');
@@ -294,15 +302,18 @@ describe('PlatformAuditPage', () => {
     expect(within(noCode).queryByTestId('audit-refused-code')).toBeNull();
   });
 
-  it('S11 fix (CI #288/#290): when every loaded row is a read, the empty state (not a blank page) shows and "Show reads" reveals it', async () => {
+  it('legacy 669: with every row a read, the empty state offers the reads and "Show reads" asks again', async () => {
     const http = scriptedHttp({
       list_users: () => ({ items: [] }),
-      platform_audit_query: () => ({ items: [row({ id: 'audit-read', action: 'list_users' })] }),
+      platform_audit_query: (params) =>
+        (params as { excludeReads?: boolean }).excludeReads === true
+          ? { items: [] }
+          : { items: [row({ id: 'audit-read', action: 'list_users' })] },
     });
     renderPage(http);
 
     const empty = await screen.findByTestId('platform-audit-empty');
-    expect(empty.textContent).toContain('1');
+    expect(empty.textContent).toMatch(/读操作默认不列出/);
     expect(screen.queryByTestId('platform-audit-list')).toBeNull();
     expect(screen.queryByTestId('platform-audit-row')).toBeNull();
 
@@ -393,7 +404,7 @@ describe('PlatformAuditPage', () => {
     await waitFor(() =>
       expect(http.calls.at(-1)).toEqual({
         name: 'platform_audit_query',
-        params: { limit: 50, actorUserId: 'u-bob' },
+        params: { limit: 50, actorUserId: 'u-bob', excludeReads: true },
       }),
     );
   });
