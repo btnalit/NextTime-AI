@@ -8,6 +8,7 @@ import {
   type EndGoalResultWire,
   GOAL_LIST_DEFAULT_LIMIT,
   GOAL_LIST_MAX_LIMIT,
+  GOAL_PRECEDENT_DEFAULT_LIMIT,
   type GoalAcceptanceCheckWire,
   type GoalAcceptanceRoundWire,
   type GoalAcceptanceWire,
@@ -60,6 +61,7 @@ import {
   createGoalRun,
   decidePlanRevision,
   endGoalRun,
+  findGoalPrecedents,
   getGoalRun,
   getGoalRunVisibleTo,
   listGoalRunUnresolvedActionsVisibleTo,
@@ -515,6 +517,33 @@ export const listGoalsHandler: CapabilityHandler = async (client, workspaceId, p
       ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),
     },
   };
+};
+
+/** S11 GO17: the caller's own earlier goals of the same kind — on a Handle, its obo's; an owner's
+ *  too, never anyone else's (`precedents.ts`: an agent never gets other people's plans). */
+export const findGoalPrecedentsHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const { procedureId, workerDefinitionIds, limit } = params as {
+    procedureId?: string;
+    workerDefinitionIds?: string[];
+    limit?: number;
+  };
+  const { principalId } = await goalViewer(client, ctx);
+  const items = await findGoalPrecedents(
+    client,
+    workspaceId,
+    principalId,
+    {
+      ...(procedureId !== undefined ? { procedureId } : {}),
+      ...(workerDefinitionIds !== undefined ? { workerDefinitionIds } : {}),
+    },
+    limit ?? GOAL_PRECEDENT_DEFAULT_LIMIT,
+  );
+  return { result: { items } };
 };
 
 export const getGoalRevisionHandler: CapabilityHandler = async (

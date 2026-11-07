@@ -115,6 +115,8 @@ export const AUDITOR_READ_CAPABILITIES: ReadonlySet<string> = new Set<Capability
   'get_goal',
   'get_goal_revision',
   'list_goal_unresolved_actions',
+  // S11 GO17: the caller's own earlier goals of the same kind (only their own, whatever the role).
+  'find_goal_precedents',
   'list_chats',
   'get_chat_history',
   'subscribe_chat',

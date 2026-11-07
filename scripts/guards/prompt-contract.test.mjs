@@ -25,6 +25,7 @@ import {
   checkGoalGuidance,
   checkGoalUpdateWords,
   checkGraphQuestionGuidance,
+  checkPrecedentPolarityWords,
   checkPromptFile,
   checkProposeGoalDescription,
   checkProposeGoalWords,
@@ -319,6 +320,22 @@ test('checkGoalUpdateWords', async (t) => {
     assert.equal(violations.length, 1);
     assert.match(violations[0], /"pauseReason"/);
     assert.ok(GOAL_UPDATE_FIELD_WORDS.has('pauseReason'));
+  });
+});
+
+test('checkPrecedentPolarityWords', async (t) => {
+  const polarities = new Set(['positive', 'negative', 'unverified']);
+
+  await t.test('no violations when the prompt names every polarity in backticks', () => {
+    const prompt = 'a polarity: `positive` (checked), `negative` (failed), `unverified` (said).';
+    assert.deepEqual(checkPrecedentPolarityWords('fixture.yaml', prompt, polarities), []);
+  });
+
+  await t.test('catches a polarity the prompt never names', () => {
+    const prompt = 'a polarity: `positive` (checked), `negative` (failed), unverified (said).';
+    const violations = checkPrecedentPolarityWords('fixture.yaml', prompt, polarities);
+    assert.equal(violations.length, 1);
+    assert.match(violations[0], /"unverified"/);
   });
 });
 

@@ -462,6 +462,22 @@ export interface GoalAcceptanceView {
   } | null;
 }
 
+/** The checks an `achieved` on the requester's word overrode, as its Decision recorded them —
+ *  empty for any other outcome. */
+export async function readOverriddenChecks(
+  client: PoolClient,
+  workspaceId: string,
+  goal: Pick<GoalRunRow, 'outcome' | 'outcomeDecisionId'>,
+): Promise<readonly OverriddenAcceptanceCheck[]> {
+  if (!goal.outcomeDecisionId || goal.outcome !== 'achieved') return [];
+  const decision = await client.query<{ rationale: { overriddenChecks?: unknown } | null }>(
+    'select rationale from decisions where workspace_id = $1 and id = $2',
+    [workspaceId, goal.outcomeDecisionId],
+  );
+  const listed = decision.rows[0]?.rationale?.overriddenChecks;
+  return Array.isArray(listed) ? (listed as OverriddenAcceptanceCheck[]) : [];
+}
+
 /** The run's verification — see the module comment. `null` when the run does not exist. */
 export async function readGoalAcceptance(
   client: PoolClient,
@@ -471,15 +487,7 @@ export async function readGoalAcceptance(
   const goal = await getGoalRun(client, workspaceId, goalRunId);
   if (!goal) return null;
   const rows = await listAcceptanceChecks(client, workspaceId, goalRunId);
-  let overriddenChecks: readonly OverriddenAcceptanceCheck[] = [];
-  if (goal.outcomeDecisionId && goal.outcome === 'achieved') {
-    const decision = await client.query<{ rationale: { overriddenChecks?: unknown } | null }>(
-      'select rationale from decisions where workspace_id = $1 and id = $2',
-      [workspaceId, goal.outcomeDecisionId],
-    );
-    const listed = decision.rows[0]?.rationale?.overriddenChecks;
-    if (Array.isArray(listed)) overriddenChecks = listed as OverriddenAcceptanceCheck[];
-  }
+  const overriddenChecks = await readOverriddenChecks(client, workspaceId, goal);
   const overridden = new Set(
     overriddenChecks
       .filter((check) => check.round !== null)

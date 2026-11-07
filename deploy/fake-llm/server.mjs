@@ -1044,6 +1044,8 @@ const ENTRY_ONLY_TOOLS = [
   'record_procedure_followed',
   'report_task_outcome',
   'propose_goal',
+  // S11 GO17: precedents are for whoever writes the plan of a goal; the admin agent writes none.
+  'find_goal_precedents',
 ];
 
 function offeredToolNames(tools) {

@@ -90,6 +90,8 @@ const INTERACTIVE_TOOL_CAPABILITY_NAMES = [
   'list_goals',
   'get_goal_revision',
   'list_goal_unresolved_actions',
+  // S11 GO17: as in entry mode.
+  'find_goal_precedents',
 ] as const;
 
 export interface InteractiveModeOptions {

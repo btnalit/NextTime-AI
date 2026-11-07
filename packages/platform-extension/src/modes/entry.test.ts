@@ -126,6 +126,7 @@ describe('registerEntryMode', () => {
       'list_goals',
       'get_goal_revision',
       'list_goal_unresolved_actions',
+      'find_goal_precedents',
     ]);
     const getObject = fake.tools.get('get_object');
     expect(getObject?.description).toContain('Object');
@@ -818,6 +819,7 @@ describe('registerEntryMode — per-turn gate tool projection (C3)', () => {
     'list_goals',
     'get_goal_revision',
     'list_goal_unresolved_actions',
+    'find_goal_precedents',
   ];
 
   let kernel: FakeKernel;
@@ -1003,8 +1005,8 @@ describe('registerEntryMode — per-turn gate tool projection (C3)', () => {
     expect(listReads()).toBe(4);
     expect(kernel.requests.filter((r) => r.capability !== 'list_allowed_operations')).toEqual([]);
     expect(fake.api.setActiveTools).not.toHaveBeenCalled();
-    // 26 static tools + 1 gate tool, each registered once.
-    expect(fake.api.registerTool).toHaveBeenCalledTimes(27);
+    // 27 static tools + 1 gate tool, each registered once.
+    expect(fake.api.registerTool).toHaveBeenCalledTimes(28);
     // Only the first projection is a change worth logging.
     expect(logLines(logSpy).filter((line) => line.includes('check=tool_projection'))).toHaveLength(
       1,

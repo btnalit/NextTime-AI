@@ -103,6 +103,8 @@ export const ENTRY_TOOL_CAPABILITY_NAMES = [
   'list_goals',
   'get_goal_revision',
   'list_goal_unresolved_actions',
+  // S11 GO17: the person's own earlier goals of the same kind, read before writing a plan.
+  'find_goal_precedents',
 ] as const;
 
 export interface EntryModeOptions {
