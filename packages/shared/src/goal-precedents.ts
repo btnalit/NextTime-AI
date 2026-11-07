@@ -24,6 +24,13 @@ import { WORKER_HINT_WINDOW_DAYS } from './wire/worker-discovery.js';
  *     a Worker of the same family (`worker`). With nothing to match against, the most recent ones
  *     (`recent`). Newest first within each, procedure matches before worker matches.
  *   - **Polarity** ({@link goalPrecedentPolarity}).
+ *
+ * S11 GO17b (F4 A): a revision records the precedents its plan was written from
+ * (`plan_revisions.cited_precedents`, migration goal/0018; `citedPrecedents` on every read of a
+ * revision): the entry agent names them in `propose_goal`'s `precedents`, the goal planner in its
+ * report. Each is one of the requester's own completed goals, cited once, at most
+ * {@link GOAL_PRECEDENT_MAX_CITED}; a planner cites only the precedents its round's input gave it.
+ * A citation authorizes nothing either.
  */
 
 /** How far back a precedent may have ended — the window GO13's hints and GO16's combinations
@@ -34,6 +41,9 @@ export const GOAL_PRECEDENT_CONTEXT_LIMIT = 3;
 /** `find_goal_precedents`' default and ceiling. */
 export const GOAL_PRECEDENT_DEFAULT_LIMIT = 3;
 export const GOAL_PRECEDENT_MAX_LIMIT = 10;
+/** S11 GO17b (F4 A): how many precedents one revision may cite — what one `find_goal_precedents`
+ *  returns at most; migration goal/0018's `plan_revisions_cited_precedents_shape` holds the same. */
+export const GOAL_PRECEDENT_MAX_CITED = GOAL_PRECEDENT_MAX_LIMIT;
 /** How many Worker families `find_goal_precedents` matches against at once. */
 export const GOAL_PRECEDENT_MAX_WORKER_FILTER = 20;
 

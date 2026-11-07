@@ -96,6 +96,10 @@ export interface PlanRevisionRow {
     readonly version: number;
     readonly parameters: Readonly<Record<string, unknown>> | null;
   } | null;
+  /** S11 GO17b (goal/0018): the precedents the plan was written from — the requester's own
+   *  completed goals its writer named (`propose_goal`'s `precedents`, a planner's report), in the
+   *  order given; empty when it cited none. Never changes after the insert. */
+  readonly citedPrecedentIds: readonly string[];
 }
 
 export interface StepRunRow {
@@ -183,7 +187,7 @@ export function mapGoalRunRow(row: GoalRunDbRow): GoalRunRow {
 export const PLAN_REVISION_ROW_COLUMNS =
   'workspace_id, id, goal_run_id, revision, status, based_on_revision, plan, proposed_by, ' +
   'reason, validation, decided_by, decided_at, created_at, removals, source_procedure_id, ' +
-  'source_procedure_version, source_procedure_parameters';
+  'source_procedure_version, source_procedure_parameters, cited_precedents';
 
 export interface PlanRevisionDbRow {
   workspace_id: string;
@@ -203,6 +207,7 @@ export interface PlanRevisionDbRow {
   source_procedure_id: string | null;
   source_procedure_version: number | null;
   source_procedure_parameters: Record<string, unknown> | null;
+  cited_precedents: string[] | null;
 }
 
 export function mapPlanRevisionRow(row: PlanRevisionDbRow): PlanRevisionRow {
@@ -229,6 +234,7 @@ export function mapPlanRevisionRow(row: PlanRevisionDbRow): PlanRevisionRow {
             parameters: row.source_procedure_parameters,
           }
         : null,
+    citedPrecedentIds: row.cited_precedents ?? [],
   };
 }
 

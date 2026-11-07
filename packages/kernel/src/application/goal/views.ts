@@ -34,6 +34,7 @@ import {
   readGoalAcceptance,
 } from './acceptance.js';
 import { readCancelLeftovers } from './cancelling.js';
+import { type CitedPrecedentView, readCitedPrecedents } from './cited-precedents.js';
 import { planContractHints } from './contract-hints.js';
 import { procedureConfirmCheck } from './from-procedure.js';
 import {
@@ -340,11 +341,36 @@ async function planSourceOf(
 /** A revision as a read shows it — S11 GO9a: with who proposed it, a person or the workspace's
  *  goal planner (`planner.ts`), whose Principal `proposedBy` then names; GO9b: and who accepted
  *  it — the platform, under the requester's `apply_minor` leave (an `applied` planning round
- *  names it; `decidedBy` is the requester then too), or a person. */
+ *  names it; `decidedBy` is the requester then too), or a person. S11 GO17b: and the precedents
+ *  its plan was written from, in the order cited — goals of the same requester, so whoever reads
+ *  the revision may read them. */
 export type PlanRevisionRead = PlanRevisionRow & {
   readonly proposer: PlanRevisionProposer;
   readonly acceptedBy: PlanRevisionAcceptor | null;
+  readonly citedPrecedents: readonly CitedPrecedentView[];
 };
+
+/** `rows` as a read shows them ({@link PlanRevisionRead}). */
+async function asRevisionReads(
+  client: PoolClient,
+  workspaceId: string,
+  rows: readonly PlanRevisionRow[],
+): Promise<readonly PlanRevisionRead[]> {
+  const cited = await readCitedPrecedents(
+    client,
+    workspaceId,
+    rows.flatMap((row) => row.citedPrecedentIds),
+  );
+  const precedentsOf = (row: PlanRevisionRow): readonly CitedPrecedentView[] =>
+    row.citedPrecedentIds.flatMap((id) => {
+      const view = cited.get(id);
+      return view ? [view] : [];
+    });
+  return (await withProposers(client, workspaceId, rows)).map((row) => ({
+    ...row,
+    citedPrecedents: precedentsOf(row),
+  }));
+}
 
 /** `rows` with their proposer — the goal planner when its Principal proposed one — and who
  *  accepted the accepted ones. */
@@ -352,7 +378,7 @@ async function withProposers(
   client: PoolClient,
   workspaceId: string,
   rows: readonly PlanRevisionRow[],
-): Promise<readonly PlanRevisionRead[]> {
+): Promise<readonly Omit<PlanRevisionRead, 'citedPrecedents'>[]> {
   if (rows.length === 0) return [];
   const plannerId = await findGoalPlannerPrincipal(client, workspaceId);
   const applied = new Set<string>();
@@ -597,7 +623,7 @@ export async function readPlanRevisionVisibleTo(
   const goal = await getGoalRunVisibleTo(client, workspaceId, viewer, goalRunId);
   const row = await getPlanRevision(client, workspaceId, goalRunId, revision);
   if (!row) throw new GoalRevisionNotFoundError(goalRunId, revision);
-  const [read] = await withProposers(client, workspaceId, [row]);
+  const [read] = await asRevisionReads(client, workspaceId, [row]);
   if (!read) throw new GoalRevisionNotFoundError(goalRunId, revision);
   return planRevisionView(client, workspaceId, goal, read, options);
 }
@@ -652,7 +678,7 @@ export async function readGoalRunDetail(
 ): Promise<GoalRunDetail> {
   const goal = await getGoalRunVisibleTo(client, workspaceId, viewer, goalRunId);
   const [summary] = await summarizeGoalRuns(client, workspaceId, [goal]);
-  const revisions = await withProposers(
+  const revisions = await asRevisionReads(
     client,
     workspaceId,
     await listPlanRevisions(client, workspaceId, goalRunId),

@@ -676,6 +676,89 @@ function entryGoalChatScenario(messages) {
   ];
 }
 
+/** S11 GO17b (scripts/accept_s2.sh `step9_goal_from_chat`, after the goal above completed):
+ *  "引用先例发起目标 GOAL_NONCE=<n>" — asked in the same chat, the entry agent looks up how this
+ *  user's earlier goals of the same kind went and cites the one it builds on. Every argument
+ *  chains off a *real* tool result, never a value accept_s2.sh guessed:
+ *
+ *  Turn 1: `find_workers({need:'restart'})` — the ops-runner WorkerDefinition, as above.
+ *
+ *  Turn 2: `find_goal_precedents({workerDefinitionIds:[its id]})` — alice's own completed goals
+ *  with a step on that Worker; the one step 9 just saw achieved is among them, `positive`.
+ *
+ *  Turn 3: `propose_goal` — one step on that Worker, citing the newest `positive` precedent in
+ *  `precedents`. No acceptance check: accept_s2.sh turns the goal down unconfirmed, nothing runs.
+ *  Neither the statement nor the input carries a chat marker (see `entryGoalChatScenario`).
+ *
+ *  Turn 4: a final text with `PRECEDENT_GOAL_ID=` (the new run), `CITED=` (the id it cited, or
+ *  `none`) and `FOUND=` (how many precedents the lookup returned) for accept_s2.sh to read.
+ */
+function entryGoalPrecedentChatScenario(messages) {
+  const asked = latestMessageWith(messages, '引用先例发起目标');
+  const nonce = extractMarker(asked, 'GOAL_NONCE') ?? 'none';
+  const foundWorkers = findToolResult(messages, 'find_workers');
+  const workerMatch = Array.isArray(foundWorkers?.items)
+    ? foundWorkers.items.find((w) => w && w.kind === 'worker')
+    : undefined;
+  const found = findToolResult(messages, 'find_goal_precedents');
+  const items = Array.isArray(found?.items) ? found.items : undefined;
+  const cited = items?.find(
+    (p) => p && p.polarity === 'positive' && typeof p.goalRunId === 'string',
+  );
+  const proposed = findToolResult(messages, 'propose_goal');
+  const goalRunId =
+    proposed && typeof proposed.goalRunId === 'string' ? proposed.goalRunId : undefined;
+
+  return [
+    { tool: { name: 'find_workers', args: { need: 'restart' } } },
+    workerMatch
+      ? {
+          tool: {
+            name: 'find_goal_precedents',
+            args: { workerDefinitionIds: [workerMatch.definitionId] },
+          },
+        }
+      : {
+          text: 'echo: 引用先例发起目标 (find_workers did not resolve — see docs/runbooks/host-accept-s2.md)',
+        },
+    workerMatch && cited
+      ? {
+          tool: {
+            name: 'propose_goal',
+            args: {
+              statement: `accept_s2 precedent journey ${nonce}: the same one ops-runner step, planned from the goal that went well before.`,
+              plan: {
+                steps: [
+                  {
+                    key: 'report',
+                    worker: {
+                      definitionId: workerMatch.definitionId,
+                      version: workerMatch.version,
+                    },
+                    input: `ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=${nonce}`,
+                  },
+                ],
+              },
+              budget: {
+                maxTokens: 200000,
+                maxSteps: 3,
+                maxRevisions: 1,
+                maxWallClockSeconds: 1800,
+              },
+              idempotencyKey: `accept-s2-precedent-${nonce}`,
+              precedents: [cited.goalRunId],
+            },
+          },
+        }
+      : {
+          text: `echo: 引用先例发起目标 (find_goal_precedents found no positive precedent: FOUND=${items?.length ?? 'unresolved'} — see docs/runbooks/host-accept-s2.md)`,
+        },
+    {
+      text: `Proposed goal PRECEDENT_GOAL_ID=${goalRunId ?? 'none'} CITED=${cited?.goalRunId ?? 'none'} FOUND=${items?.length ?? 0} — written from the goal that went well before; confirm it in the console under Goals.`,
+    },
+  ];
+}
+
 /** S11 GO5e-1: the *Worker* half of `entryGoalChatScenario` — the goal's one step. Reports back
  *  with no Fact: the goal is accepted on the platform's own observation of the stock API, which a
  *  Worker's report could not stand in for. S11 GO7a-3 (S2, S12): with `HOLD=<name>` in its input
@@ -1519,6 +1602,8 @@ const SCENARIOS = [
   { marker: '哪个服务依赖哪个', build: entryDependencyChatScenario, chat: true },
   { marker: '发起验收目标', build: entryGoalChatScenario, chat: true },
   { marker: '发起三步验收目标', build: entryGoalDagChatScenario, chat: true },
+  // S11 GO17b. Not a superstring of '发起验收目标': `pickScenario` takes the latest marker.
+  { marker: '引用先例发起目标', build: entryGoalPrecedentChatScenario, chat: true },
   { marker: ADMIN_PROPOSE_MARKER, build: adminAgentProposeChatScenario, chat: true },
   { marker: TICKETS_CONNECT_MARKER, build: ticketsConnectChatScenario, chat: true },
   { marker: TICKETS_DRAFT_MARKER, build: ticketsDraftChatScenario, chat: true },

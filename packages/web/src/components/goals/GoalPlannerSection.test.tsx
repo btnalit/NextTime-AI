@@ -88,6 +88,7 @@ function proposedDetail(overrides: Partial<GoalDetailWire> = {}): GoalDetailWire
         createdAt: '2026-10-20T00:06:00.000Z',
         removals: {},
         fromProcedure: null,
+        citedPrecedents: [],
       },
     ],
     ...overrides,
@@ -484,6 +485,7 @@ describe('minor revisions the platform adopts (S11 GO9b)', () => {
           createdAt: '2026-10-20T00:06:00.000Z',
           removals: {},
           fromProcedure: null,
+          citedPrecedents: [],
         },
       ],
     };
@@ -905,6 +907,7 @@ describe('the planner card after the UX review of #866', () => {
           createdAt: '2026-10-20T00:06:00.000Z',
           removals: {},
           fromProcedure: null,
+          citedPrecedents: [],
         },
       ],
     };

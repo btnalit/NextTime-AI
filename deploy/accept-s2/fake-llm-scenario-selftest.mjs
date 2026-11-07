@@ -1020,6 +1020,225 @@ async function main() {
       }
     }
 
+    // 6j-2. S11 GO17b entryGoalPrecedentChatScenario: "引用先例发起目标" — find_workers, then
+    //       find_goal_precedents on that Worker's family, then propose_goal citing the positive
+    //       precedent the lookup *really* returned, then a final text accept_s2.sh reads. Asked in
+    //       the chat step 9's "发起验收目标" goal was asked in, whose turns are still in the history.
+    {
+      const WORKER_ID = '11111111-1111-4111-8111-111111111111';
+      const EARLIER_ID = '33333333-3333-4333-8333-333333333333';
+      const FAILED_ID = '44444444-4444-4444-8444-444444444444';
+      const NEW_ID = '55555555-5555-4555-8555-555555555555';
+      const ask = { role: 'user', content: '引用先例发起目标 GOAL_NONCE=p42' };
+      const call = (id, name, args) => ({
+        role: 'assistant',
+        content: null,
+        tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+      });
+      const result = (id, content) => ({
+        role: 'tool',
+        tool_call_id: id,
+        content: typeof content === 'string' ? content : JSON.stringify(content),
+      });
+      const precedentOf = (goalRunId, polarity, outcome) => ({
+        goalRunId,
+        match: 'worker',
+        polarity,
+        statement: `accept_s2 goal journey ${goalRunId}`,
+        outcome,
+        outcomeBasis: 'verified_by_check',
+        endedAt: '2026-11-07T00:00:00.000Z',
+        fromProcedure: null,
+        revision: 1,
+        revisions: 1,
+        plan: {
+          steps: [
+            {
+              key: 'report',
+              worker: { definitionId: WORKER_ID, version: 2 },
+              input: 'ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=n42',
+            },
+          ],
+        },
+        steps: [{ key: 'report', status: 'succeeded', attempts: 1, failureCategory: null }],
+        acceptance: {
+          round: 1,
+          checks: [
+            {
+              checkKey: 'stock',
+              kind: 'observe_predicate',
+              status: outcome === 'achieved' ? 'passed' : 'failed',
+              observationId: null,
+              factId: null,
+              lastError: null,
+            },
+          ],
+        },
+        overriddenChecks: [],
+      });
+      const foundWorkers = [
+        call('call_fw2', 'find_workers', { need: 'restart' }),
+        result('call_fw2', {
+          items: [{ definitionId: WORKER_ID, version: 2, kind: 'worker', name: 'ops-runner' }],
+        }),
+      ];
+      // Newest first: the failed one is not the one to build on.
+      const foundPrecedents = [
+        call('call_fp', 'find_goal_precedents', { workerDefinitionIds: [WORKER_ID] }),
+        result(
+          'call_fp',
+          wireResult('entry-goal-precedent-chat-found', 'find_goal_precedents', {
+            items: [
+              precedentOf(FAILED_ID, 'negative', 'not_achieved'),
+              precedentOf(EARLIER_ID, 'positive', 'achieved'),
+            ],
+          }),
+        ),
+      ];
+      const proposed = [
+        call('call_pg2', 'propose_goal', {}),
+        result(
+          'call_pg2',
+          wireResult('entry-goal-precedent-chat-proposed', 'propose_goal', {
+            goalRunId: NEW_ID,
+            status: 'proposed',
+            changed: true,
+            planRevisionId: 'rev-1',
+            hints: [],
+          }),
+        ),
+      ];
+      // Step 9's own asking in the same chat, answered to its end.
+      const step9Chat = [
+        { role: 'user', content: '发起验收目标 GOAL_NONCE=n42' },
+        call('call_fw', 'find_workers', { need: 'restart' }),
+        result('call_fw', {
+          items: [{ definitionId: WORKER_ID, version: 2, kind: 'worker', name: 'ops-runner' }],
+        }),
+        call('call_pg', 'propose_goal', {}),
+        result('call_pg', {
+          goalRunId: EARLIER_ID,
+          status: 'proposed',
+          changed: true,
+          planRevisionId: 'rev-0',
+          hints: [],
+        }),
+        { role: 'assistant', content: `Proposed goal GOAL_ID=${EARLIER_ID}` },
+      ];
+
+      {
+        const { json } = await post([...step9Chat, ask]);
+        const turn1 = toolCallOf(json);
+        check(
+          'entry-goal-precedent-chat-turn1',
+          turn1?.name === 'find_workers' && turn1.args.need === 'restart',
+          JSON.stringify(json.choices[0]),
+        );
+        checkToolCallAgainstRegistry('entry-goal-precedent-chat-turn1', turn1);
+      }
+      {
+        // Not "发起验收目标"'s turn 2 (find_operations): the newest asking picks the script.
+        const { json } = await post([...step9Chat, ask, ...foundWorkers]);
+        const turn2 = toolCallOf(json);
+        check(
+          'entry-goal-precedent-chat-turn2',
+          turn2?.name === 'find_goal_precedents' &&
+            JSON.stringify(turn2.args) === JSON.stringify({ workerDefinitionIds: [WORKER_ID] }),
+          JSON.stringify(json.choices[0]),
+        );
+        checkToolCallAgainstRegistry('entry-goal-precedent-chat-turn2', turn2);
+      }
+      {
+        const { json } = await post([
+          ask,
+          call('call_fw2', 'find_workers', { need: 'restart' }),
+          result('call_fw2', 'Tool find_workers not found'),
+        ]);
+        check(
+          'entry-goal-precedent-chat-turn2-unresolved',
+          json.choices[0].finish_reason === 'stop' &&
+            json.choices[0].message.content.includes('did not resolve'),
+          JSON.stringify(json.choices[0]),
+        );
+      }
+      {
+        const { json } = await post([...step9Chat, ask, ...foundWorkers, ...foundPrecedents]);
+        const turn3 = toolCallOf(json);
+        const steps = turn3?.args?.plan?.steps;
+        check(
+          'entry-goal-precedent-chat-turn3',
+          turn3?.name === 'propose_goal' &&
+            JSON.stringify(turn3.args.precedents) === JSON.stringify([EARLIER_ID]) &&
+            steps?.length === 1 &&
+            steps[0].worker.definitionId === WORKER_ID &&
+            steps[0].worker.version === 2 &&
+            steps[0].input === 'ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=p42' &&
+            turn3.args.plan.acceptance === undefined &&
+            turn3.args.idempotencyKey === 'accept-s2-precedent-p42',
+          JSON.stringify(json.choices[0]),
+        );
+        // Neither chat marker reaches the plan: a step's Worker would read the entry agent's script.
+        check(
+          'entry-goal-precedent-chat-turn3-no-chat-marker',
+          turn3 !== undefined &&
+            !JSON.stringify(turn3.args).includes('引用先例发起目标') &&
+            !JSON.stringify(turn3.args).includes('发起验收目标'),
+          JSON.stringify(turn3?.args),
+        );
+        checkToolCallAgainstRegistry('entry-goal-precedent-chat-turn3', turn3);
+      }
+      {
+        // Nothing went well before: no citation made up, the reply says what was found.
+        const { json } = await post([
+          ask,
+          ...foundWorkers,
+          call('call_fp', 'find_goal_precedents', { workerDefinitionIds: [WORKER_ID] }),
+          result('call_fp', { items: [precedentOf(FAILED_ID, 'negative', 'not_achieved')] }),
+        ]);
+        check(
+          'entry-goal-precedent-chat-turn3-none-positive',
+          json.choices[0].finish_reason === 'stop' &&
+            json.choices[0].message.content.includes('no positive precedent') &&
+            json.choices[0].message.content.includes('FOUND=1'),
+          JSON.stringify(json.choices[0]),
+        );
+      }
+      {
+        const { json } = await post([
+          ...step9Chat,
+          ask,
+          ...foundWorkers,
+          ...foundPrecedents,
+          ...proposed,
+        ]);
+        const text = json.choices[0].message.content;
+        check(
+          'entry-goal-precedent-chat-turn4',
+          json.choices[0].finish_reason === 'stop' &&
+            text.includes(`PRECEDENT_GOAL_ID=${NEW_ID}`) &&
+            text.includes(`CITED=${EARLIER_ID}`) &&
+            text.includes('FOUND=2'),
+          JSON.stringify(json.choices[0]),
+        );
+      }
+      {
+        // A refused proposal names no run — not step 9's, whose propose_goal is earlier in the chat.
+        const { json } = await post([
+          ...step9Chat,
+          ask,
+          ...foundWorkers,
+          ...foundPrecedents,
+          call('call_pg2', 'propose_goal', {}),
+          result('call_pg2', 'invalid_params: precedents.0: not a completed goal of the requester'),
+        ]);
+        check(
+          'entry-goal-precedent-chat-turn4-refused',
+          json.choices[0].message.content.includes('PRECEDENT_GOAL_ID=none'),
+          JSON.stringify(json.choices[0]),
+        );
+      }
+    }
+
     // 6k. S11 GO5e-1 goalStepScenario: the goal's step Worker reports back with no Fact.
     {
       const { json } = await post([

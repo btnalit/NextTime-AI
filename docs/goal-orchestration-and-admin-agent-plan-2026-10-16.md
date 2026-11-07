@@ -392,6 +392,9 @@ WorkerSpec 可声明观察允许的门集合，推进器把它作为 Task 级的
 `overriddenChecks` 与 `not_achieved` 标为反例；先例只从当前请求人能看到的目标里取，用 GO5a / 遗留 421 的同一个可见性谓词（2026-10-23 补）。
 GO17a（2026-11-07，`s11-w4/go17-default-plan.md` F2 A）收得更窄：只取请求人自己发起的目标，请求人是 owner 也一样——owner 在控制台看得到别人的目标，
 但别人的计划不进 owner 的 agent 上下文；同类只按结构认（同一 Procedure，或计划里有同一 Worker 家族），已取消的不算；没被平台验证、只凭人的话达成的标 `unverified`。
+GO17b（F4 A）记下「这一版参考了哪些先例」：入口 agent 在 `propose_goal` 的 `precedents`、规划器在修订报告的 `precedents` 里点名，修订把它们存进
+`plan_revisions.cited_precedents`（goal/0018，插入后不变），`get_goal` / `get_goal_revision` 读回 `citedPrecedents`（陈述、结果、依据、正反例），控制台在那一版旁写「参考了先例」并链到它们。
+能引用的只有同一请求人已结束（`completed`）的目标，每个一次；规划器只能引用这一轮输入里给它的；引用不授权任何东西，也不改计划受的检查。
 
 ### 4.14 控制台（随各波次交付，不允许"后端先上、界面以后补"）
 

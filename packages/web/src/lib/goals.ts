@@ -3,6 +3,7 @@ import type {
   ActionFailureCode,
   ActionRequestFailureKind,
   ActionRequestReconciliation,
+  CitedGoalPrecedentWire,
   FactCheck,
   FactObjectRef,
   GoalAbsenceBaselineWire,
@@ -342,6 +343,28 @@ const OUTCOME_BASIS: Readonly<Record<GoalOutcomeBasis, readonly [string, string]
 export function outcomeBasisLabel(basis: GoalOutcomeBasis, t: Translate): string {
   const [zh, en] = OUTCOME_BASIS[basis];
   return t(zh, en);
+}
+
+/**
+ * S11 GO17b: how a precedent a plan was written from ended, short enough to follow its statement
+ * in 「参考了先例」 — by its polarity (`goalPrecedentPolarity` in `@nexttime/shared`): achieved with
+ * the platform's checks passing; achieved over checks the requester overrode, or not achieved; or
+ * achieved on the requester's word or a review alone.
+ */
+export function citedPrecedentOutcomeText(
+  precedent: Pick<CitedGoalPrecedentWire, 'outcome' | 'outcomeBasis' | 'polarity'>,
+  t: Translate,
+): string {
+  if (precedent.outcome === 'not_achieved') return t('未达成', 'not achieved');
+  if (precedent.polarity === 'positive') {
+    return t('达成，平台检查通过', 'achieved, the platform’s checks passed');
+  }
+  if (precedent.polarity === 'negative') {
+    return t('达成，但覆盖了没通过的检查', 'achieved over checks that did not pass');
+  }
+  return precedent.outcomeBasis === 'reviewer_assessed'
+    ? t('达成，依据独立评审', 'achieved on a review')
+    : t('达成，只有请求人确认', 'achieved on the requester’s word');
 }
 
 // ---------------------------------------------------------------------------------------------

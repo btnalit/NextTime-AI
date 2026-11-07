@@ -146,6 +146,23 @@ export const PlanSourceProcedureWireSchema = z
   .strict();
 export type PlanSourceProcedureWire = z.infer<typeof PlanSourceProcedureWireSchema>;
 
+/** S11 GO17b (F4 A, migration goal/0018): a precedent a revision's plan was written from — one of
+ *  the requester's own completed goals, named by whoever wrote the plan (`propose_goal`'s
+ *  `precedents`, the goal planner's report) — with its statement (as every read shows it), its
+ *  outcome, what that rests on and its polarity (`goal-precedents.ts`). Whoever reads the revision
+ *  may read the goal it cites (`get_goal`): both are the same requester's. A citation says what
+ *  the plan was written from; it authorizes nothing. */
+export const CitedGoalPrecedentWireSchema = z
+  .object({
+    goalRunId: z.string(),
+    statement: z.string(),
+    outcome: ObjectiveOutcomeSchema,
+    outcomeBasis: GoalOutcomeBasisSchema,
+    polarity: GoalPrecedentPolaritySchema,
+  })
+  .strict();
+export type CitedGoalPrecedentWire = z.infer<typeof CitedGoalPrecedentWireSchema>;
+
 /** One revision of a run's plan (`get_goal_revision`, and `get_goal`'s `planRevision`): revision 1
  *  is the proposal the requester confirmed (or has yet to); a later one is a revision the
  *  requester made of a paused run, accepted as made, or — S11 GO9a — one the goal planner
@@ -181,6 +198,9 @@ export const PlanRevisionWireSchema = z
     checkedStepKeys: z.array(z.string()),
     /** S11 GO5d-2: the Procedure the plan was made from; `null` for a plan written as it is. */
     fromProcedure: PlanSourceProcedureWireSchema.nullable(),
+    /** S11 GO17b: the precedents the plan was written from, in the order cited; empty when it
+     *  cited none (a person's own revision, and every revision made before the platform kept them). */
+    citedPrecedents: z.array(CitedGoalPrecedentWireSchema),
   })
   .strict();
 export type PlanRevisionWire = z.infer<typeof PlanRevisionWireSchema>;
