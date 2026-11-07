@@ -21,7 +21,7 @@
 ratchet:
   console_unexplained: 10
   kernel_test_missing: 4
-  e2e_waived: 65
+  e2e_waived: 59
   repeat_unclear: 76
 capabilities:
   add_eval_case:
@@ -42,7 +42,7 @@ capabilities:
   add_membership:
     console: required
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: "unclear: 664"
   agent_get_admin_proposal:
     console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
@@ -205,7 +205,7 @@ capabilities:
   disable_principal:
     console: required
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: idempotent
   discard_draft:
     console: required
@@ -793,7 +793,7 @@ capabilities:
   remove_membership:
     console: required
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: "unclear: 664"
   rename_chat:
     console: required
@@ -893,7 +893,7 @@ capabilities:
   rotate_api_key:
     console: required
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: repeats
   rotate_connection_secret:
     console: required
@@ -957,7 +957,7 @@ capabilities:
   set_membership_role:
     console: required
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: "unclear: 664"
   set_platform_default_model:
     console: required
@@ -972,7 +972,7 @@ capabilities:
   set_principal_role:
     console: required
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: idempotent
   set_quota:
     console: required
