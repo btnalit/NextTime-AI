@@ -384,7 +384,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "conflict: change_plan_changed" # the install changes what its dry run shows, so the same reviewedDigest again is refused, nothing written; reviewed again, an up-to-date pack installs as a no-op
+    repeat: "conflict: change_plan_changed" # the install changes what its dry run shows, so the same reviewedDigest again is refused, nothing written; reviewed again, an up-to-date pack installs as a no-op. With adminProposalSegmentId the retry is refused earlier, 409 admin_proposal_segment_not_open (the segment it answered is applied)
   invalidate_fact:
     console: required
     agents: []
