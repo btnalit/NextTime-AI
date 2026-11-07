@@ -124,6 +124,7 @@ M1–M3、M5、R 与 M4 的静态半边是纯静态检查，在 `quality` 与 `p
 
 - **交互动作**（`click` / `fill` / `selectOption` / `check` / `uncheck` / `press` / `type` / `setInputFiles`）的目标必须由 `getByRole` / `getByLabel` / `getByText` / `getByPlaceholder` 取得。`getByTestId` 与 CSS `locator()` 只允许用来**圈定范围**（如 `drawer.getByRole('combobox', { name: '成员' })`）和**断言**。
 - 禁止 `page.locator('#…')`、`locator('option…')`、`locator('input[type=…]')` 后直接交互。
+- L3（遗留 655）：在页面里执行的代码（`evaluate` / `evaluateAll` / `evaluateHandle` / `$eval` / `$$eval`，函数或字符串）不许 `click()` / `dblclick()` / `dispatchEvent()` / `submit()` / `requestSubmit()`，也不许给 `value` / `checked` / `selected` / `selectedIndex` / `files` 赋值——那样点到的控件用户看不看得见都一样，是 L1 堵住的同一个盲区换了条路。只读页面（`el => el.textContent`）不受限。上线时存量 0 处，基线不变。
 - 现有违规按"文件:行内容哈希"进基线，只减不增；改到的文件里的旧违规不强制当场修，但守门人会在 PR 里指出。
 
 与现有 DoD「e2e 用 data-testid 定位」的关系：DoD 那一条的本意是**不用易变的文案和样式类做定位**，它仍然成立于圈定范围和断言；本守卫补的是"最后被点的那个控件必须是用户能看见、读屏能读出名字的那个"。两条一起改进 `docs/console-usability-dod.md` 与 PR 模板措辞，避免两份规则互相矛盾。附带收益：交互控件拿不到可访问名字时测试写不出来，等于把 a11y 标签变成了硬要求——646 的那个无标签 `<select>` 在这条规则下根本无法被测试使用。
