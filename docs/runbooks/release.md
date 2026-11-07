@@ -2643,6 +2643,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：Worker 详情新增「使用情况」，按版本、运行环境和组合（原样，或带步骤调整）统计运行次数、Task 结果、达成率和失败分组。
 - **回滚**：只回滚代码即可。#1064 和 #1069 要一起回滚；只回滚 #1069 会让所有 builder 重新拿到完整指纹。
 
+### 3.151 可沉淀的组合（#1071，S11 GO16b，0.65.0 之后的下一版）
+
+有迁移：worker `0014_definition_derivations`。它新建 `worker_definition_derivations` 表和插入触发器，不改已有数据。不改 compose，没有新环境变量。线上契约只增。rehearsal 已绿。
+
+- **主机**：升级后可选核对 `select count(*) from worker_definition_derivations`，应为 0。
+- **发版说明可写**：Worker 详情新增「可沉淀的组合」。同一个 Worker 版本配同一份步骤调整，近 90 天里达成至少 3 次（请求人确认或平台判定），来自至少 2 个目标，达成率至少 80%，满足这些条件时，能读到那些目标的人可以把它沉淀为新的 Worker 定义草稿。确认前会提示：内容发布后全工作区可见。新定义会记下自己从哪来。猜测指纹的调用一律返回 404，不能借此确认别人的私有设置。
+- **回滚**：只回退代码即可。上一版不读也不写这张表，沉淀出的家族在那边就是普通的 WorkerDefinition，只是不再显示来历。要连表一起删，按迁移文件头的三条语句操作；删表会丢掉来历，审计仍在。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -2821,6 +2829,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.64.0 | core `0054_audit_acting_through`（#1028，批次 D3）：`audit_records` 加可空列 `acting_through`、`acting_session_id`（uuid，无外键），约束 `audit_records_acting_through_check` 与 `audit_records_acting_session_shape`（都是 `not valid`，只检查新写的行） | 可逆 | 只加列、加约束。旧代码不写这两列（写入为 `null`，两条约束都满足），读审计都用显式列名，不受新列影响。只回滚代码时，新版本写下的值留在表里，旧代码不读也不显示 | 只需回退代码。要撤迁移：删两条约束，再删两列，最后删 `schema_migrations` 里 core 54 那一行（见 0054 文件头） |
 | v0.65.0 | governance `0041_one_active_grant_per_scope`（#1036，遗留 647）：`capability_grants` 加部分唯一索引 `capability_grants_one_active_per_scope`（`workspace_id, principal_id, resource_type, resource_id`，`nulls not distinct`，`where status = 'active'`）；建索引前先查存量重复，有就报错停下、什么都不改（§3.143） | 可逆 | 只加索引，不改任何行。只回滚代码时，旧代码对已持有的范围再插一行会被索引拒掉（23505），那次调用返回 500，不会写出重复行 | 只需回退代码。要撤迁移：`drop index capability_grants_one_active_per_scope;`，再删 `schema_migrations` 里 governance 41 那一行 |
 | v0.65.0 | core `0055_chat_message_idempotency_key`（#1050，遗留 673）：`chat_messages` 加可空列 `idempotency_key`、约束 `chat_messages_idempotency_key_shape`（`not valid`）、部分唯一索引 `chat_messages_idempotency_key_uidx` | 可逆 | 只加列、约束和索引；旧代码不写这一列（写入为 `null`，约束满足），读消息都用显式列名 | 只需回退代码。要撤迁移：删索引、约束和列，再删 `schema_migrations` 里 core 55 那一行（见 0055 文件头） |
+| 0.65.0 之后的下一版 | worker `0014_definition_derivations`（#1071，GO16b）：新表 `worker_definition_derivations`（基版本、指纹、证据、沉淀人、时间），只许插入（`nexttime_app` 没有 UPDATE / DELETE 权限），插入前触发器校验基版本 | 可逆 | 只加新表：旧代码不读也不写 | 只需回退代码，表可以留着。要删表，按 0014 文件头的三条语句操作，再删 `schema_migrations` 里的 worker 14；删表会丢掉来历 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
