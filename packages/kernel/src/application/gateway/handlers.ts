@@ -163,6 +163,7 @@ import {
   setActiveRuntimeImageHandler,
   setPlatformDefaultModelHandler,
 } from '../platform/index.js';
+import { actingNameOf, actingNamesOf } from './acting-names.js';
 import { hashStableParams, scopeExplicitIdempotencyKey } from './action-executor.js';
 import { toWireActionRequest } from './action-request-wire.js';
 import {
@@ -658,9 +659,10 @@ const auditQueryHandler: CapabilityHandler = async (client, workspaceId, params)
     cursor,
   });
   const truncated = effectiveLimit !== undefined && effectiveLimit > MAX_AUDIT_QUERY_LIMIT;
+  const names = await actingNamesOf(client, workspaceId, page.items);
   return {
     result: {
-      items: page.items.map(toWireAuditRecord),
+      items: page.items.map((row) => toWireAuditRecord(row, actingNameOf(names, row))),
       ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
       ...(truncated ? { truncated: true as const } : {}),
     },
@@ -670,11 +672,14 @@ const auditQueryHandler: CapabilityHandler = async (client, workspaceId, params)
 const reconstructHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { entityId } = params as { entityId: string };
   const result = await reconstruct(client, workspaceId, { objectId: entityId });
+  const names = await actingNamesOf(client, workspaceId, result.auditRecords);
   return {
     result: {
       object: result.object ? toWireObject(result.object) : null,
       facts: result.facts.map(toWireFact),
-      auditRecords: result.auditRecords.map(toWireAuditRecord),
+      auditRecords: result.auditRecords.map((row) =>
+        toWireAuditRecord(row, actingNameOf(names, row)),
+      ),
     },
     resourceType: 'object',
     resourceId: entityId,

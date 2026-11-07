@@ -72,6 +72,10 @@ export const AuditRecordWireSchema = z
      *  loop. */
     actingThrough: AuditActingThroughSchema.nullable(),
     actingSessionId: z.string().nullable(),
+    /** Legacy 666: the name a person knows that session by, where it has one — the Worker a
+     *  `worker_handle` ran, the service account a `service_handle` belongs to — read when the row
+     *  is; `null` for every other channel, and for a session the kernel can no longer place. */
+    actingName: z.string().nullable(),
   })
   .strict();
 export type AuditRecordWire = z.infer<typeof AuditRecordWireSchema>;

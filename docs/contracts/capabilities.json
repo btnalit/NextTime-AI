@@ -6803,6 +6803,12 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "actingName": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "actingSessionId": {
                 "type": [
                   "string",
@@ -6866,7 +6872,8 @@
               "payload",
               "createdAt",
               "actingThrough",
-              "actingSessionId"
+              "actingSessionId",
+              "actingName"
             ],
             "type": "object"
           },
@@ -61110,6 +61117,12 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "actingName": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "actingSessionId": {
                 "type": [
                   "string",
@@ -61173,7 +61186,8 @@
               "payload",
               "createdAt",
               "actingThrough",
-              "actingSessionId"
+              "actingSessionId",
+              "actingName"
             ],
             "type": "object"
           },

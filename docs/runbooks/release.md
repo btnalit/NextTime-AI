@@ -2555,6 +2555,13 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **已知问题**：还不显示是哪个 Handle、被拦下的行还不写具体原因（遗留 666）；选「本人」时第一页可能全是被隐藏的读操作（遗留 669）。
 - **回滚**：只回滚代码即可。
 
+### 3.142 被拦下的审计行写出原因，Worker 与服务账号的行写出名字（#1038，遗留 666 第二部分、670，0.63.0 之后的下一版）
+
+控制台加内核查询：没有迁移，不改 compose，没有新环境变量，主机不需要操作。线上契约：`AuditRecordWire` 新增 `actingName: string | null`（`audit_query` 与 `reconstruct` 的结果，只增）；Worker run 的行取 Task 固定版本的 Worker 定义名（草稿定义不出名字），服务 Handle 的行取服务账号名，成员 Handle 的行为 `null`。`PlatformAuditRecordWire` 不变。
+
+- **发版说明可写**：审计页上被拦下的行用中文写出 8 种原因之一（与控制台其他地方的错误文案共用一份）；经由 Worker 或服务账号做的事写出它的名字（如「经由 Worker ticket-triage」），取不到时写类别名。审计页的筛选排成同一网格；英文界面写 "In person" / "Via …"。
+- **回滚**：只回滚代码即可。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：

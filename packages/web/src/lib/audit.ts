@@ -293,19 +293,26 @@ export function isReadAuditAction(action: string): boolean {
  *  …}`; `evaluation.seal_hold_refused` does with no code). Not every withholding writer says
  *  `refused`: `evaluation.content_withheld` records `'withheld'`, and its label already says the
  *  content was withheld, so it is not marked again.
- *  `code` is `payload.refusal.code` when it is a non-empty string, null otherwise. */
+ *  `code` is `payload.refusal.code` when it is a non-empty string, null otherwise; `reason`
+ *  likewise `payload.refusal.reason` (legacy 666: why authorization refused a Handle's call,
+ *  `CALL_REFUSAL_REASONS`). */
 export function auditRefusal(
   payload: Readonly<Record<string, unknown>> | null | undefined,
-): { readonly code: string | null } | null {
+): { readonly code: string | null; readonly reason: string | null } | null {
   if (typeof payload !== 'object' || payload === null || payload.outcome !== 'refused') {
     return null;
   }
   const refusal = payload.refusal;
-  const code =
+  const fields =
     typeof refusal === 'object' && refusal !== null && !Array.isArray(refusal)
-      ? (refusal as Readonly<Record<string, unknown>>).code
+      ? (refusal as Readonly<Record<string, unknown>>)
       : undefined;
-  return { code: typeof code === 'string' && code !== '' ? code : null };
+  const code = fields?.code;
+  const reason = fields?.reason;
+  return {
+    code: typeof code === 'string' && code !== '' ? code : null,
+    reason: typeof reason === 'string' && reason !== '' ? reason : null,
+  };
 }
 
 /** Every workspace-scope capability name from `CAPABILITY_REGISTRY` (a dispatched call is
@@ -364,6 +371,8 @@ export interface AuditRecordRow {
   readonly createdAt: string;
   /** Legacy 666 (#1028): what the act came through; `null` when not recorded. */
   readonly actingThrough?: string | null;
+  /** Legacy 666: the Worker or service account it came through, by name; `null` otherwise. */
+  readonly actingName?: string | null;
 }
 
 /** An audit row's `payload` — `resourceHref` reads a `change_item`'s `segmentId` from it. */

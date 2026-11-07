@@ -132,7 +132,8 @@ export function toWireFact(fact: Fact) {
   };
 }
 
-export function toWireAuditRecord(row: AuditRecordRow) {
+/** `actingName`: what `actingNamesOf` (acting-names.ts) found for the row's session, if anything. */
+export function toWireAuditRecord(row: AuditRecordRow, actingName: string | null) {
   return {
     id: row.id,
     actorPrincipalId: row.actorPrincipalId,
@@ -146,6 +147,8 @@ export function toWireAuditRecord(row: AuditRecordRow) {
     // Batch D3 (migration core 0054).
     actingThrough: row.actingThrough,
     actingSessionId: row.actingSessionId,
+    // Legacy 666.
+    actingName,
   };
 }
 

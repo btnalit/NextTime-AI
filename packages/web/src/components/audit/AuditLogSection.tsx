@@ -219,7 +219,7 @@ export function AuditLogSection({
         ) : null}
       </div>
       <form
-        className="inline-form inline-form-top row-wrap"
+        className="inline-form inline-form-top audit-query-grid"
         onSubmit={handleSubmit}
         data-testid="audit-query-form"
       >
@@ -430,6 +430,7 @@ export function AuditLogSection({
                         />
                         <ActingThroughChip
                           actingThrough={row.actingThrough}
+                          actingName={row.actingName}
                           payload={row.payload}
                         />
                         {row.resourceId ? (
