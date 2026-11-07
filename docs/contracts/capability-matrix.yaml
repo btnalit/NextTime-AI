@@ -22,7 +22,7 @@ ratchet:
   console_unexplained: 10
   kernel_test_missing: 4
   e2e_waived: 65
-  repeat_unclear: 66
+  repeat_unclear: 64
 capabilities:
   add_eval_case:
     console: required
@@ -38,7 +38,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "conflict: already_member"
+    repeat: "conflict: already_member" # sequential calls; two at once, the second is a 500 (legacy 688)
   add_membership:
     console: required
     agents: []
@@ -143,7 +143,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: endpoint_already_connected"
   create_eval_suite:
     console: required
     agents: []
@@ -753,7 +753,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: repeats # the Operations stay as the first call left them; each call records another refresh Activity on the same Gatekeeper (legacy 689)
   register_source:
     console: "none: 数据接入，由 collector 用服务 Handle 调用，不是人的操作"
     agents: []
