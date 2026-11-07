@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { newProcedureBinding, nextStepKey } from './catalog.js';
-import { createUidCounter, reserveClientUidsIn } from './client-uids.js';
+import { MAX_RESERVED_UID, createUidCounter, reserveClientUidsIn } from './client-uids.js';
 
 /** client-uids.test.ts: legacy 662 — a restored draft's row keys are never handed out again. */
 describe('lib/client-uids', () => {
@@ -26,5 +26,17 @@ describe('lib/client-uids', () => {
     expect(counter.next()).toBe(11);
     reserveClientUidsIn(['field-2']);
     expect(counter.next()).toBe(12);
+  });
+
+  it('ignores a number no key of this page reaches, so a counter never sticks (legacy 667)', () => {
+    const counter = createUidCounter();
+    reserveClientUidsIn([
+      'step-99999999999999999999',
+      `field-${Number.MAX_SAFE_INTEGER}`,
+      `pred-${MAX_RESERVED_UID + 1}`,
+    ]);
+    const first = counter.next();
+    expect(first).toBeLessThan(MAX_RESERVED_UID);
+    expect(counter.next()).toBe(first + 1);
   });
 });

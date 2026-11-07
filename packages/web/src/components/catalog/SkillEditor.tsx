@@ -130,13 +130,19 @@ export function SkillEditor({
   // Legacy 662: what the editor opened with — the row's fields, then the fetched body — so a
   // draft is kept only once the person changed something.
   const [opened, setOpened] = useState<SkillForm>(form);
+  // Legacy 667: the fetched body is what the editor opened with even when a restored draft got
+  // to the form first — so setting the restored body back to it keeps nothing, as anywhere else.
+  const openedDetail = useRef(false);
   useEffect(() => {
-    if (appliedDetail.current) return;
     if (skillDetail.state.status !== 'ready' || skillDetail.state.data === null) return;
-    appliedDetail.current = true;
     const detail = skillDetail.state.data;
+    if (!openedDetail.current) {
+      openedDetail.current = true;
+      setOpened((prev) => ({ ...prev, markdown: detail.markdown }));
+    }
+    if (appliedDetail.current) return;
+    appliedDetail.current = true;
     setForm((prev) => ({ ...prev, markdown: detail.markdown }));
-    setOpened((prev) => ({ ...prev, markdown: detail.markdown }));
   }, [skillDetail.state]);
 
   // Legacy 662: kept in this tab while edited, back for the same caller and the same target after

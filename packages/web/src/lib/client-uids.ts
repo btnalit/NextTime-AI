@@ -23,10 +23,17 @@ export function createUidCounter(): { next(): number } {
 
 const KEY_SHAPE = /^[a-z][a-z-]*-(\d+)$/;
 
+/** Legacy 667: no counter is moved past this. A key this module handed out never comes near it
+ *  (one per row added in one page load), so a larger number is text that only looks like a key —
+ *  and taking it would leave a counter where `+ 1` no longer changes the number
+ *  (`Number.MAX_SAFE_INTEGER` and up), handing out the same key again and again. */
+export const MAX_RESERVED_UID = 2 ** 31 - 1;
+
 function highestKeyNumber(value: unknown, seen = 0): number {
   if (typeof value === 'string') {
     const match = KEY_SHAPE.exec(value);
-    return match ? Math.max(seen, Number(match[1])) : seen;
+    const n = match ? Number(match[1]) : Number.NaN;
+    return n <= MAX_RESERVED_UID ? Math.max(seen, n) : seen;
   }
   if (Array.isArray(value))
     return value.reduce<number>((n, item) => highestKeyNumber(item, n), seen);
