@@ -15,7 +15,11 @@ import { ChatPage } from './ChatPage.js';
 import { goalDetail } from './goals/goal-fixtures.test-helpers.js';
 import { ToastProvider } from './ui/Toast.js';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  // Legacy 658: the composer keeps its draft in sessionStorage; no test inherits another's.
+  sessionStorage.clear();
+});
 
 /**
  * ChatPage.test.tsx: C8 (the "always allow" guard) and the W3 auto-follow reproduction
@@ -656,6 +660,126 @@ describe('ChatPage send and stream (C22)', () => {
     const line = screen.getByTestId('system-status-line');
     expect(line.querySelector('[data-status="executed"]')).toBeTruthy();
     expect(line.textContent).toContain('docker container restart executed');
+  });
+});
+
+// Legacy 658: a session that expires under an open chat unmounts the page; what was typed comes
+// back when the same caller opens the same chat again, and to no one else.
+describe('ChatPage composer draft (legacy 658)', () => {
+  function identityHttp(callerId: string) {
+    return scriptedHttp({
+      get_workspace: () => ({ name: 'ws', caller: { id: callerId, role: 'member' } }),
+    });
+  }
+
+  /** Opens the chat and returns once `get_workspace` has answered — the caller is known, so the
+   *  composer has restored (or not) and keeps what is typed from here on. */
+  async function openChat(callerId: string, client = fakeClient().client) {
+    const http = identityHttp(callerId);
+    const view = renderChat(client, http);
+    await waitFor(() => expect(client.subscribeChat).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(http.calls.some((call) => call.name === 'get_workspace')).toBe(true),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    return view;
+  }
+
+  function composer(): HTMLTextAreaElement {
+    return screen.getByLabelText('Message') as HTMLTextAreaElement;
+  }
+
+  it('the page goes away with text unsent; the same caller opening the chat again finds it', async () => {
+    const first = await openChat('p-me');
+    fireEvent.change(composer(), { target: { value: 'half a thought' } });
+    first.unmount();
+
+    await openChat('p-me');
+    await waitFor(() => expect(composer().value).toBe('half a thought'));
+  });
+
+  it('someone else signing in on this tab does not see it', async () => {
+    const first = await openChat('p-me');
+    fireEvent.change(composer(), { target: { value: 'not for you' } });
+    first.unmount();
+
+    await openChat('p-other');
+    expect(composer().value).toBe('');
+    // And theirs is kept apart: typing does not overwrite the first caller's draft.
+    fireEvent.change(composer(), { target: { value: 'mine' } });
+    const drafts = JSON.parse(sessionStorage.getItem('nexttime.drafts') ?? '{}');
+    expect(drafts).toEqual({ 'p-me/chat-1': 'not for you', 'p-other/chat-1': 'mine' });
+  });
+
+  it('a message that was sent is no draft any more', async () => {
+    const fake = fakeClient();
+    const first = await openChat('p-me', fake.client);
+    fireEvent.change(composer(), { target: { value: 'restart web-1' } });
+    fireEvent.keyDown(composer(), { key: 'Enter' });
+    await waitFor(() => expect(fake.client.sendChatMessage).toHaveBeenCalled());
+    await waitFor(() => expect(sessionStorage.getItem('nexttime.drafts')).toBeNull());
+    first.unmount();
+
+    await openChat('p-me');
+    expect(composer().value).toBe('');
+  });
+
+  it('a refused send keeps the draft — the next sign-in still finds it', async () => {
+    const fake = fakeClient();
+    (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new RpcError(-32001, 'session_invalid'),
+    );
+    const first = await openChat('p-me', fake.client);
+    fireEvent.change(composer(), { target: { value: 'still here' } });
+    fireEvent.keyDown(composer(), { key: 'Enter' });
+    await waitFor(() => expect(fake.client.sendChatMessage).toHaveBeenCalled());
+    first.unmount();
+
+    await openChat('p-me');
+    await waitFor(() => expect(composer().value).toBe('still here'));
+  });
+});
+
+// UX P3-3 on #1023: the dropped connection's refusal goes once the page is connected again.
+describe('ChatPage send refused by a dropped connection', () => {
+  it('says so while disconnected and takes the note away once reconnected', async () => {
+    const fake = fakeClient();
+    let status = 'connected';
+    const listeners = new Set<(next: string) => void>();
+    Object.assign(fake.client, {
+      getStatus: () => status,
+      onStatusChange: (fn: (next: string) => void) => {
+        listeners.add(fn);
+        return () => listeners.delete(fn);
+      },
+    });
+    (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('WsClient: connection closed'),
+    );
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => {
+      status = 'reconnecting';
+      for (const fn of listeners) fn(status);
+    });
+
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'during the outage' } });
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+    const banner = await screen.findByRole('alert');
+    expect(banner.textContent).toContain('连接已断开');
+    expect(banner.textContent).toContain('页面会自己重新连接');
+    expect(banner.textContent).not.toContain('刷新');
+
+    act(() => {
+      status = 'connected';
+      for (const fn of listeners) fn(status);
+    });
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe(
+      'during the outage',
+    );
   });
 });
 

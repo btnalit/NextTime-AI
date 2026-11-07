@@ -8,6 +8,7 @@ import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Field, Input } from './ui/Field.js';
+import { Notice } from './ui/Notice.js';
 
 /**
  * components/LoginPage: the console sign-in screen (design doc §7.11; S4.1). The primary form is
@@ -23,6 +24,9 @@ export interface LoginPageProps {
   readonly onLoggedIn: (result: SessionResult) => void;
   /** Injectable `fetch` for tests — see `lib/auth-api.ts`'s own module doc comment. */
   readonly fetchImpl?: typeof fetch;
+  /** Legacy 658: the console came back here because the kernel stopped taking its session
+   *  (`PreSessionState` `login.reason`); the page says so above the form. */
+  readonly reason?: 'sessionExpired' | 'keyInvalid';
 }
 
 /** Kernel wire code → the exact Chinese copy this page shows for a login failure (§7.11's own
@@ -50,6 +54,7 @@ export function LoginPage({
   apiKeyError,
   onLoggedIn,
   fetchImpl,
+  reason,
 }: LoginPageProps) {
   const t = useT();
   const [login, setLogin] = useState('');
@@ -91,6 +96,27 @@ export function LoginPage({
               </p>
             </div>
           </div>
+
+          {reason ? (
+            <Notice tone="warn" testId="login-reason">
+              <strong>
+                {reason === 'keyInvalid'
+                  ? t('API key 已失效', 'The API key no longer works')
+                  : t('会话已过期', 'Your session expired')}
+              </strong>
+              <p>
+                {reason === 'keyInvalid'
+                  ? t(
+                      '平台不再接受这把 key（已撤销或已过期）。用有效的 key 或密码重新登录；对话框里没发出的文字，用同一身份登录后回到原来的对话就能看到。',
+                      'The platform no longer accepts this key (revoked or expired). Sign in again with a valid key or your password; text you had not sent in a chat comes back when you sign in as the same identity and open that chat.',
+                    )
+                  : t(
+                      '登录已过期或被撤销，请重新登录。对话框里没发出的文字，用同一账户登录后回到原来的对话就能看到。',
+                      'Your sign-in expired or was revoked. Sign in again; text you had not sent in a chat comes back when you sign in to the same account and open that chat.',
+                    )}
+              </p>
+            </Notice>
+          ) : null}
 
           <Field id="login-name" label={t('登录名', 'Login')} required>
             <Input
@@ -145,6 +171,7 @@ export function LoginPage({
           pending={apiKeyPending}
           error={apiKeyError}
           footerExtra="用 key 登录后可在「我的账户」设置密码，之后用密码登录。"
+          defaultOpen={reason === 'keyInvalid'}
         />
       </Card>
     </div>

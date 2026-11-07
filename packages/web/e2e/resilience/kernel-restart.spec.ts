@@ -145,7 +145,12 @@ test.describe('batch C: an open console page across a kernel restart, an outage 
       const composer = page.getByPlaceholder('输入消息…');
       await composer.fill(prompt);
       await page.getByRole('button', { name: '发送' }).click();
-      await expect(page.getByRole('alert').filter({ hasText: '连接已断开' })).toBeVisible();
+      const outage = page.getByRole('alert').filter({ hasText: '连接已断开' });
+      await expect(outage).toBeVisible();
+      // Legacy 659: the page reconnects by itself, and a reload is what loses a draft — the alert
+      // says it is reconnecting, never to reload.
+      await expect(outage).toContainText('页面会自己重新连接');
+      await expect(outage).not.toContainText('刷新');
       await expect(composer).toHaveValue(prompt);
       await expect(page.locator('.message-user .message-text')).toHaveCount(0);
     } finally {
@@ -183,13 +188,19 @@ test.describe('batch C: an open console page across a kernel restart, an outage 
 
     // The open socket authenticated before the expiry; the kernel re-checks the session on every
     // call (session-revocation.ts), so this send is refused as unauthorized and the console goes
-    // back to sign-in. Whether it also keeps the draft and says why is legacy 658.
-    await page.getByPlaceholder('输入消息…').fill(`resilience-expired-${Date.now()}`);
+    // back to sign-in.
+    const draft = `resilience-expired-${Date.now()}`;
+    await page.getByPlaceholder('输入消息…').fill(draft);
     await page.getByRole('button', { name: '发送' }).click();
     await expect(page.getByTestId('login-submit')).toBeVisible({ timeout: 15_000 });
+    // Legacy 658: sign-in says why it is back.
+    await expect(page.getByText('会话已过期')).toBeVisible();
 
-    // And signing in again works: an expired session is not a locked account.
+    // And signing in again works: an expired session is not a locked account. The same chat
+    // opens again (the address survived sign-in) with what was typed still in the box.
     await loginWithPassword(page, OWNER_LOGIN as string, OWNER_PASSWORD as string);
+    await expect(page.getByPlaceholder('输入消息…')).toHaveValue(draft, { timeout: 15_000 });
+    await expect(page.getByText('会话已过期')).toHaveCount(0);
     await page.goto('/#/work/chats');
     await expect(page.getByRole('heading', { name: '对话' })).toBeVisible();
   });

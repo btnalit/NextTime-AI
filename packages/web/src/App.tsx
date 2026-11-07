@@ -63,6 +63,7 @@ export function App() {
           onLoggedIn={(result) =>
             void machine.proceedAfterCookieAuth(result.user, result.memberships)
           }
+          reason={preSession.reason}
         />
       );
     case 'changePassword':

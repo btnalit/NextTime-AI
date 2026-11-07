@@ -42,7 +42,14 @@ export interface Session {
  */
 export type PreSessionState =
   | { readonly kind: 'boot' }
-  | { readonly kind: 'login' }
+  | {
+      readonly kind: 'login';
+      /** Legacy 658: why the console is back at sign-in when it did not start there — the
+       *  kernel stopped taking the session it had (`useSessionMachine` `sessionInvalid`): a
+       *  console session that expired or was revoked, or an API key that no longer authenticates.
+       *  Absent at boot and after a sign-out, where sign-in needs no explaining. */
+      readonly reason?: 'sessionExpired' | 'keyInvalid';
+    }
   | {
       readonly kind: 'changePassword';
       readonly user: WireUser;
