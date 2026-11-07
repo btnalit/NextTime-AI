@@ -59,6 +59,8 @@ git push
 两种方式效果一样：都会补发一次 `pull_request` 事件，`guards`/`quality`/`test` 正常跑起来，跑绿
 之后就能正常合并（分支保护 + `allow_auto_merge` 已经开着，合并方式不变）。
 
+**镜像签名碰上 Rekor 409 时（v0.65.0 遇到过）**：发布 run 的 `build-sign` 在 `cosign sign` 这一步报 `createLogEntryConflict`（409，透明日志里已有同样的条目），这是 Sigstore 那边的问题，与代码无关，镜像已经推上去了，只是没签上。先「Re-run failed jobs」一次；还失败的话，不要再重跑整个 release run，在 Actions 手动 dispatch `publish-images`（`tag` = 这个版本），它会重新构建、签名并扫描全部 11 个镜像；成功后再手动 dispatch 一次 `release-channel`，写出 `channel.json`。tag 和 GitHub Release 不受影响，不用重做。
+
 ## 3. 主机怎么跟随一个 release tag
 
 **应用一个 release 的唯一入口（S9 D2）**：在检出根目录，跑**目标 tag 自己的** `apply-release.sh`
@@ -2562,7 +2564,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：审计页上被拦下的行用中文写出 8 种原因之一（与控制台其他地方的错误文案共用一份）；经由 Worker 或服务账号做的事写出它的名字（如「经由 Worker ticket-triage」），取不到时写类别名。审计页的筛选排成同一网格；英文界面写 "In person" / "Via …"。
 - **回滚**：只回滚代码即可。
 
-### 3.143 同一范围只保留一条有效授权，升级前先查存量重复（#1036，遗留 647，governance 0041，0.64.0 之后的下一版）
+### 3.143 同一范围只保留一条有效授权，升级前先查存量重复（#1036，遗留 647，governance 0041，0.65.0 起）
 
 带一个迁移，随 `apply-release.sh` 自动应用：governance `0041_one_active_grant_per_scope`，是可逆的，见 §6。不改 compose，没有新环境变量。线上契约不变（`CapabilityGrantWire` 没加字段，只是两条能力的描述写明「再授予返回同一条」）。
 
@@ -2583,21 +2585,21 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：给同一成员再授予已持有的访问（`grant_capability` 或 `connect_gatekeeper`），会返回原来那条授权，不新增行，也不重签入口 Handle。这次调用照常写审计，payload 带 `alreadyGranted: true`。撤销或过期之后再授予，就是一条新授权。之前重复授予会多出一条有效授权，撤销一条后另一条仍然生效。
 - **回滚**：只回滚代码时，旧代码对已持有的范围再插一行会被索引拒掉，这次调用返回 500，不会写出重复行；其他调用不受影响。要撤迁移，见 §6 的 0041 一行。
 
-### 3.144 审计页的读操作改由内核在分页前去掉（#1040，遗留 669，0.64.0 之后的下一版）
+### 3.144 审计页的读操作改由内核在分页前去掉（#1040，遗留 669，0.65.0 起）
 
 控制台加内核查询：没有迁移，不改 compose，没有新环境变量，主机不需要操作。线上契约只增不改：`platform_audit_query` 多一个可选参数 `excludeReads: boolean`；`audit_query` 的 `filter` 本来就是开放记录，多认一个 `filter.excludeReads`，schema 没改。两者都是不传时结果与以前相同。控制台与内核同版升级，按 §3.112。
 
 - **发版说明可写**：两个审计页没勾「显示读操作」时，一页 50 条都是写操作和决定，选「经由 本人」等筛选后第一页不再全是被藏起来的读操作（0.64.0 的已知问题，遗留 669）。被拦下的读操作照旧列出。读操作隐藏时什么也没查到，空状态会提示「读操作默认不列出」，旁边有「显示读操作」按钮；按名字筛一个读操作时开关自动勾上。导出的文件多一个 `readsShown` 字段。
 - **回滚**：只回滚代码即可。
 
-### 3.145 同一条消息只发一次：`send_chat_message` 认客户端幂等键（#1050，遗留 673 内核部分，core 0055，0.64.0 之后的下一版）
+### 3.145 同一条消息只发一次：`send_chat_message` 认客户端幂等键（#1050，遗留 673 内核部分，core 0055，0.65.0 起）
 
 带一个迁移，随 `apply-release.sh` 自动应用：core `0055_chat_message_idempotency_key`（可逆，见 §6）。不改 compose，没有新环境变量，主机不需要操作。线上契约只增：`send_chat_message` 多一个可选参数 `idempotencyKey`，结果多 `changed`、`turnStatus`；新错误 409 `idempotency_key_reused`（WS `-32020`）。
 
-- **发版说明可写**：同一个对话里，带同一个幂等键、同样文字的重发，会返回原来那条消息和它的那一轮，不会再开一轮；同一个键换了文字或换了发送人，会被拒绝（409）。控制台这一版还不带这个键，所以用户看到的行为还没变；控制台部分修好之前，遗留 673 仍然开着。
+- **发版说明可写**：同一个对话里，带同一个幂等键、同样文字的重发，会返回原来那条消息和它的那一轮，不会再开一轮；同一个键换了文字或换了发送人，会被拒绝（409）。控制台在同一版里带上了这个键（#1053，见 §3.147），遗留 673 随之关闭。
 - **回滚**：只回滚代码即可，见 §6 的 0055 一行。
 
-### 3.146 所有者能看到门被平台暂停、什么时候、为什么（#1051，遗留 674，0.64.0 之后的下一版）
+### 3.146 所有者能看到门被平台暂停、什么时候、为什么（#1051，遗留 674，0.65.0 起）
 
 控制台加内核查询：没有迁移，不改 compose，没有新环境变量。线上契约只增：`get_gatekeeper` 的结果多一个可选字段 `platformSuspension`（`reason`、`suspendedAt`）。
 
@@ -2610,6 +2612,20 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 
   结果是 0 就照常升级。不是 0 的话，先请维护者看过这些原因，确认可以给工作区成员看，再升级；结果记 `docs/private/`。
 - **发版说明可写**：自接入的门被平台暂停后，所有者在「健康与操作」里能看到暂停的时间、原因，以及要找平台管理员；门的 Operation 照常列出，抽屉与系统卡片的计数一致。原因里的疑似凭据仍然遮住。之前写下的暂停原因升级后也会给工作区成员看到。
+- **回滚**：只回滚代码即可。
+
+### 3.147 发送结果不确定时可以安全重发；断线很快能看出来；会话到期即断开推送（#1053、#1054、#1057，遗留 673、672、677，0.65.0 起）
+
+没有迁移，不改 compose，没有新环境变量，主机不需要操作。线上契约只增：WS 多一个 `ping` 方法（认证后可调，`{}` → `{}`）。
+
+- **发版说明可写**：发送后没有收到答复时，对话页会说结果不确定，并给「再发一次」；重发不会多出一轮（内核按 §3.145 的幂等键去重）。网络静默断开后十几秒内，连接状态就会显示「重连中」，网络恢复后马上重连。控制台会话到期后，已打开的页面不会再收到推送，要重新登录。
+- **回滚**：只回滚代码即可。
+
+### 3.148 重复归档、取消归档或改成同一标题不再多记一笔（#1060，遗留 665，0.65.0 起）
+
+只改内核：没有迁移，不改 compose，没有新环境变量，主机不需要操作。线上契约不变。
+
+- **发版说明可写**：对已归档的对话再归档、对未归档的再取消归档，或把对话改成它现在的标题，只写 dispatch 行，不再写 `chat.archive` / `chat.unarchive` / `chat.rename` 领域行，也不推送。比较前锁行读旧状态。能力矩阵这三行的 repeat 改为 `idempotent`。
 - **回滚**：只回滚代码即可。
 
 ## 4. Hotfix 流程
@@ -2788,8 +2804,8 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.63.0 | governance `0039_admin_proposal_segment_verified`（#976，AA5d-2）：security definer 函数 `admin_proposal_segment_verified(uuid)`，只对平台面回答这一段应用的东西在工作区里现在是否 `verified`（只给是或否，不给 id、条目、结果或时间，按 core 0042 的规矩） | 可逆 | 只加函数，旧代码不调它 | 只需回退代码。要撤迁移：`drop function admin_proposal_segment_verified(uuid)`，再删 `schema_migrations` 里 governance 39 那一行 |
 | v0.64.0 | governance `0040_pack_installs_from_admin_proposals`（#1002，AA5g-2）：放宽 `change_segments_proposer`，pack 来源的安装记录可以带提案溯源（`admin_proposal_id`、`admin_proposal_segment_id`、提议人两列，四列要么全有、要么全空）；`change_segments_admin_proposal_guard` 加 pack 分支（只管 insert），核对记录与提案段一致：同一提案、同一提议人、段仍是 `proposed`、段里那一项是同包同版本的 `pack_install`、段的 `content_digest` 等于记录的 `source_digest`；`admin_proposal_segments_item_kinds` 允许工作区段只含一项 `pack_install`（平台段不行）。`admin_proposal` 记录的三条规则原样保留 | 可逆 | 约束放宽、guard 加分支、check 加一种情况。旧版本写的行三条都满足（pack 记录四列全空，没有段含 `pack_install`），旧代码读记录也不依赖 pack 记录这四列为空。CI 可逆性探针在 #1002 上是绿的，`reversibility-deltas.json` 没有新增声明。只回滚代码时，旧代码列出 `pack_install` 段会显示它不认识的条目类型、也应用不了它，只能拒绝或撤回 | 只需回退代码。要撤迁移，前提是没有带提案溯源的 pack 记录、也没有 `pack_install` 段：恢复 0033 的 `change_segments_proposer` 与 guard 函数体、0034 的 `admin_proposal_segments_item_kinds`，再删 `schema_migrations` 里 governance 40 那一行（见 0040 文件头） |
 | v0.64.0 | core `0054_audit_acting_through`（#1028，批次 D3）：`audit_records` 加可空列 `acting_through`、`acting_session_id`（uuid，无外键），约束 `audit_records_acting_through_check` 与 `audit_records_acting_session_shape`（都是 `not valid`，只检查新写的行） | 可逆 | 只加列、加约束。旧代码不写这两列（写入为 `null`，两条约束都满足），读审计都用显式列名，不受新列影响。只回滚代码时，新版本写下的值留在表里，旧代码不读也不显示 | 只需回退代码。要撤迁移：删两条约束，再删两列，最后删 `schema_migrations` 里 core 54 那一行（见 0054 文件头） |
-| 0.64.0 之后的下一版 | governance `0041_one_active_grant_per_scope`（#1036，遗留 647）：`capability_grants` 加部分唯一索引 `capability_grants_one_active_per_scope`（`workspace_id, principal_id, resource_type, resource_id`，`nulls not distinct`，`where status = 'active'`）；建索引前先查存量重复，有就报错停下、什么都不改（§3.143） | 可逆 | 只加索引，不改任何行。只回滚代码时，旧代码对已持有的范围再插一行会被索引拒掉（23505），那次调用返回 500，不会写出重复行 | 只需回退代码。要撤迁移：`drop index capability_grants_one_active_per_scope;`，再删 `schema_migrations` 里 governance 41 那一行 |
-| 0.64.0 之后的下一版 | core `0055_chat_message_idempotency_key`（#1050，遗留 673）：`chat_messages` 加可空列 `idempotency_key`、约束 `chat_messages_idempotency_key_shape`（`not valid`）、部分唯一索引 `chat_messages_idempotency_key_uidx` | 可逆 | 只加列、约束和索引；旧代码不写这一列（写入为 `null`，约束满足），读消息都用显式列名 | 只需回退代码。要撤迁移：删索引、约束和列，再删 `schema_migrations` 里 core 55 那一行（见 0055 文件头） |
+| v0.65.0 | governance `0041_one_active_grant_per_scope`（#1036，遗留 647）：`capability_grants` 加部分唯一索引 `capability_grants_one_active_per_scope`（`workspace_id, principal_id, resource_type, resource_id`，`nulls not distinct`，`where status = 'active'`）；建索引前先查存量重复，有就报错停下、什么都不改（§3.143） | 可逆 | 只加索引，不改任何行。只回滚代码时，旧代码对已持有的范围再插一行会被索引拒掉（23505），那次调用返回 500，不会写出重复行 | 只需回退代码。要撤迁移：`drop index capability_grants_one_active_per_scope;`，再删 `schema_migrations` 里 governance 41 那一行 |
+| v0.65.0 | core `0055_chat_message_idempotency_key`（#1050，遗留 673）：`chat_messages` 加可空列 `idempotency_key`、约束 `chat_messages_idempotency_key_shape`（`not valid`）、部分唯一索引 `chat_messages_idempotency_key_uidx` | 可逆 | 只加列、约束和索引；旧代码不写这一列（写入为 `null`，约束满足），读消息都用显式列名 | 只需回退代码。要撤迁移：删索引、约束和列，再删 `schema_migrations` 里 core 55 那一行（见 0055 文件头） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

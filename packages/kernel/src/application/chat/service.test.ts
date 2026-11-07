@@ -2,13 +2,14 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Pool, PoolClient } from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { _resetChatPushEventsForTests, subscribeToChatPushEvents } from './push.js';
 import {
   CHAT_AUTO_TITLE_MAX_CHARS,
   ChatNotFoundError,
+  type ChatRow,
   TurnAlreadyRunningError,
   chatMessageKind,
   currentPrincipalId,
@@ -425,7 +426,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(audit.rows[0]?.payload).toEqual({ from: null, to: 'deploy key [redacted]' });
     });
 
-    it('setChatArchived: archive hides the chat from listChats by default (includeArchived shows it), is idempotent, unarchive restores; both audited', async () => {
+    it('setChatArchived: archive hides the chat from listChats by default (includeArchived shows it), is idempotent, unarchive restores; each change audited once', async () => {
       const chat = await inTxAs(ownerId, (client) =>
         newChat(client, workspaceId, ownerId, { title: 'to archive' }),
       );
@@ -486,10 +487,134 @@ describe.runIf(DATABASE_URL !== undefined)(
           [workspaceId, chat.id],
         ),
       );
-      expect(audit.rows.map((r) => r.action)).toEqual([
+      // Legacy 665: the second archive changed nothing, so it records no transition.
+      expect(audit.rows.map((r) => r.action)).toEqual(['chat.archive', 'chat.unarchive']);
+    });
+
+    /** Legacy 665: the Chat's own domain rows (`chat.*`), oldest first. */
+    async function chatDomainRows(
+      chatId: string,
+    ): Promise<{ action: string; payload: Record<string, unknown> }[]> {
+      const result = await pool.query<{ action: string; payload: Record<string, unknown> }>(
+        `select action, payload from audit_records
+         where workspace_id = $1 and resource_type = 'chat' and resource_id = $2
+           and action in ('chat.rename', 'chat.archive', 'chat.unarchive')
+         order by created_at asc, id asc`,
+        [workspaceId, chatId],
+      );
+      return result.rows;
+    }
+
+    it('renameChat / setChatArchived that change nothing write no domain row and push nothing (legacy 665)', async () => {
+      _resetChatPushEventsForTests();
+      const chat = await inTxAs(ownerId, (client) =>
+        newChat(client, workspaceId, ownerId, { title: 'kept' }),
+      );
+      const pushed: unknown[] = [];
+      subscribeToChatPushEvents(chat.id, (event) => pushed.push(event));
+
+      // The same title again, as normalization reads it; unarchiving a Chat that is active.
+      const renamed = await inTxAs(ownerId, (client) =>
+        renameChat(client, workspaceId, {
+          chatId: chat.id,
+          title: '  kept ',
+          actorPrincipalId: ownerId,
+        }),
+      );
+      expect(renamed.title).toBe('kept');
+      const active = await inTxAs(ownerId, (client) =>
+        setChatArchived(client, workspaceId, {
+          chatId: chat.id,
+          archived: false,
+          actorPrincipalId: ownerId,
+        }),
+      );
+      expect(active.archivedAt).toBeNull();
+      expect(await chatDomainRows(chat.id)).toEqual([]);
+      expect(pushed).toEqual([]);
+
+      // A change is still recorded and pushed, once; the same change again is not.
+      for (let round = 0; round < 2; round += 1) {
+        await inTxAs(ownerId, (client) =>
+          setChatArchived(client, workspaceId, {
+            chatId: chat.id,
+            archived: true,
+            actorPrincipalId: ownerId,
+          }),
+        );
+        await inTxAs(ownerId, (client) =>
+          renameChat(client, workspaceId, {
+            chatId: chat.id,
+            title: 'renamed',
+            actorPrincipalId: ownerId,
+          }),
+        );
+      }
+      expect((await chatDomainRows(chat.id)).map((row) => row.action)).toEqual([
         'chat.archive',
-        'chat.archive',
-        'chat.unarchive',
+        'chat.rename',
+      ]);
+      expect(pushed).toEqual([
+        { type: 'chat.metadata', chatId: chat.id, metadata: { archivedAt: expect.any(String) } },
+        { type: 'chat.metadata', chatId: chat.id, metadata: { title: 'renamed' } },
+      ]);
+    });
+
+    it('renameChat compares against the title its own update replaces, not one a concurrent rename has since changed (legacy 665)', async () => {
+      const chat = await inTxAs(ownerId, (client) =>
+        newChat(client, workspaceId, ownerId, { title: 'A' }),
+      );
+      // The first rename holds its transaction open; the second starts while it does.
+      let releaseFirst: () => void = () => {};
+      const firstHeld = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      let firstPid: number | undefined;
+      let firstRenamed = false;
+      const first = inTxAs(ownerId, async (client) => {
+        const pid = await client.query<{ pid: number }>('select pg_backend_pid() as pid');
+        firstPid = pid.rows[0]?.pid;
+        await renameChat(client, workspaceId, {
+          chatId: chat.id,
+          title: 'B',
+          actorPrincipalId: ownerId,
+        });
+        firstRenamed = true;
+        await firstHeld;
+      });
+      let second: Promise<ChatRow> | undefined;
+      try {
+        // Its update has run, so it holds the row until it commits.
+        await vi.waitFor(() => expect(firstRenamed).toBe(true), { timeout: 5000 });
+        // Back to `A`, which is what the second call would read without the row lock.
+        second = inTxAs(ownerId, (client) =>
+          renameChat(client, workspaceId, {
+            chatId: chat.id,
+            title: 'A',
+            actorPrincipalId: ownerId,
+          }),
+        );
+        // The second is waiting on the first's row lock.
+        await vi.waitFor(
+          async () => {
+            const { rows } = await pool.query<{ n: number }>(
+              'select count(*)::int as n from pg_stat_activity where $1 = any(pg_blocking_pids(pid))',
+              [firstPid],
+            );
+            expect(rows[0]?.n).toBe(1);
+          },
+          { timeout: 5000 },
+        );
+      } finally {
+        releaseFirst();
+      }
+      await first;
+      const final = await second;
+
+      expect(final.title).toBe('A');
+      expect((await chatDomainRows(chat.id)).map((row) => row.payload)).toEqual([
+        { from: 'A', to: 'B' },
+        { from: 'B', to: 'A' },
       ]);
     });
 
