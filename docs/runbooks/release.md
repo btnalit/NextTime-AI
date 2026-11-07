@@ -2628,14 +2628,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：对已归档的对话再归档、对未归档的再取消归档，或把对话改成它现在的标题，只写 dispatch 行，不再写 `chat.archive` / `chat.unarchive` / `chat.rename` 领域行，也不推送。比较前锁行读旧状态。能力矩阵这三行的 repeat 改为 `idempotent`。
 - **回滚**：只回滚代码即可。
 
-### 3.149 编辑器草稿不再撑满标签页的存储（#1062，遗留 667，0.65.0 之后的下一版）
+### 3.149 编辑器草稿不再撑满标签页的存储（#1062，遗留 667，0.66.0 起）
 
 只改控制台：没有迁移，不改 compose，没有新环境变量，主机不需要操作。
 
 - **发版说明可写**：一个标签页里所有编辑器草稿加起来不超过 100 万字符，超出时先丢最旧的。浏览器拒绝写入时，也从最旧的开始丢，已经发出或放弃的草稿不会再回来。Skill 编辑器恢复草稿后，把正文改回原样就不再保留草稿。恢复的草稿里有异常大的行编号时，之后新加的行也不会撞成同一个 key。
 - **回滚**：只回滚代码即可。
 
-### 3.150 Worker 详情的「使用情况」（#1064，S11 GO16a，遗留 569，0.65.0 之后的下一版）
+### 3.150 Worker 详情的「使用情况」（#1064，S11 GO16a，遗留 569，0.66.0 起）
 
 内核加只读查询，控制台加页面：没有迁移，不改 compose，没有新环境变量，主机不需要操作。线上契约只增：新的只读能力 `get_worker_definition_stats`（human，builder 起）。
 
@@ -2643,7 +2643,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：Worker 详情新增「使用情况」，按版本、运行环境和组合（原样，或带步骤调整）统计运行次数、Task 结果、达成率和失败分组。
 - **回滚**：只回滚代码即可。#1064 和 #1069 要一起回滚；只回滚 #1069 会让所有 builder 重新拿到完整指纹。
 
-### 3.151 可沉淀的组合（#1071，S11 GO16b，0.65.0 之后的下一版）
+### 3.151 可沉淀的组合（#1071，S11 GO16b，0.66.0 起）
 
 有迁移：worker `0014_definition_derivations`。它新建 `worker_definition_derivations` 表和插入触发器，不改已有数据。不改 compose，没有新环境变量。线上契约只增。rehearsal 已绿。
 
@@ -2829,7 +2829,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.64.0 | core `0054_audit_acting_through`（#1028，批次 D3）：`audit_records` 加可空列 `acting_through`、`acting_session_id`（uuid，无外键），约束 `audit_records_acting_through_check` 与 `audit_records_acting_session_shape`（都是 `not valid`，只检查新写的行） | 可逆 | 只加列、加约束。旧代码不写这两列（写入为 `null`，两条约束都满足），读审计都用显式列名，不受新列影响。只回滚代码时，新版本写下的值留在表里，旧代码不读也不显示 | 只需回退代码。要撤迁移：删两条约束，再删两列，最后删 `schema_migrations` 里 core 54 那一行（见 0054 文件头） |
 | v0.65.0 | governance `0041_one_active_grant_per_scope`（#1036，遗留 647）：`capability_grants` 加部分唯一索引 `capability_grants_one_active_per_scope`（`workspace_id, principal_id, resource_type, resource_id`，`nulls not distinct`，`where status = 'active'`）；建索引前先查存量重复，有就报错停下、什么都不改（§3.143） | 可逆 | 只加索引，不改任何行。只回滚代码时，旧代码对已持有的范围再插一行会被索引拒掉（23505），那次调用返回 500，不会写出重复行 | 只需回退代码。要撤迁移：`drop index capability_grants_one_active_per_scope;`，再删 `schema_migrations` 里 governance 41 那一行 |
 | v0.65.0 | core `0055_chat_message_idempotency_key`（#1050，遗留 673）：`chat_messages` 加可空列 `idempotency_key`、约束 `chat_messages_idempotency_key_shape`（`not valid`）、部分唯一索引 `chat_messages_idempotency_key_uidx` | 可逆 | 只加列、约束和索引；旧代码不写这一列（写入为 `null`，约束满足），读消息都用显式列名 | 只需回退代码。要撤迁移：删索引、约束和列，再删 `schema_migrations` 里 core 55 那一行（见 0055 文件头） |
-| 0.65.0 之后的下一版 | worker `0014_definition_derivations`（#1071，GO16b）：新表 `worker_definition_derivations`（基版本、指纹、证据、沉淀人、时间），只许插入（`nexttime_app` 没有 UPDATE / DELETE 权限），插入前触发器校验基版本 | 可逆 | 只加新表：旧代码不读也不写 | 只需回退代码，表可以留着。要删表，按 0014 文件头的三条语句操作，再删 `schema_migrations` 里的 worker 14；删表会丢掉来历 |
+| v0.66.0 | worker `0014_definition_derivations`（#1071，GO16b）：新表 `worker_definition_derivations`（基版本、指纹、证据、沉淀人、时间），只许插入（`nexttime_app` 没有 UPDATE / DELETE 权限），插入前触发器校验基版本 | 可逆 | 只加新表：旧代码不读也不写 | 只需回退代码，表可以留着。要删表，按 0014 文件头的三条语句操作，再删 `schema_migrations` 里的 worker 14；删表会丢掉来历 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

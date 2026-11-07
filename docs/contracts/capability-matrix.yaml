@@ -20,9 +20,9 @@
 #           every declared row is exercised by kernel repeat-call.integration.test.ts
 ratchet:
   console_unexplained: 10
-  kernel_test_missing: 4
+  kernel_test_missing: 3
   e2e_waived: 65
-  repeat_unclear: 71
+  repeat_unclear: 62
 capabilities:
   add_eval_case:
     console: required
@@ -38,7 +38,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: already_member" # sequential calls; two at once, the second is a 500 (legacy 688)
   add_membership:
     console: required
     agents: []
@@ -116,7 +116,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent  # an already cancelled Task stays as it is
   causal_chain:
     console: required
     agents: []
@@ -143,7 +143,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: endpoint_already_connected"
   create_eval_suite:
     console: required
     agents: []
@@ -393,7 +393,7 @@ capabilities:
   invoke_worker:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: [entry, admin]
-    repeat: "unclear: 664"
+    repeat: idempotent  # the same idempotencyKey, or an identical call while the first Task is unfinished; once it has finished, an identical call without a key starts a new one
   issue_gate_credential_token:
     console: required
     agents: []
@@ -575,7 +575,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: idempotent # stores nothing (the secret carries its salt; only create_connection records it): another call returns another secret and changes no row
   new_chat:
     console: required
     agents: []
@@ -756,7 +756,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: repeats # the Operations stay as the first call left them; each call records another refresh Activity on the same Gatekeeper (legacy 689)
   register_source:
     console: "none: 数据接入，由 collector 用服务 Handle 调用，不是人的操作"
     agents: []
@@ -819,12 +819,11 @@ capabilities:
   report_task_outcome:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: [entry]
-    kernel_test: missing
-    repeat: "unclear: 664"
+    repeat: idempotent
   report_task_result:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: []
-    repeat: "unclear: 664"
+    repeat: "conflict: unauthorized" # the first report settles the Task, and ending its WorkerRun revokes the run's Handle
   report_turn:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: []
@@ -910,7 +909,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: repeats # a new salt on the same Gatekeeper each call; the secret before it stops working
   runtime_inventory:
     console: required
     agents: []
