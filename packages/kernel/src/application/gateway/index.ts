@@ -48,7 +48,15 @@ export {
 } from './session-revocation.js';
 export type { HumanCaller, HumanSessionVerdict, SessionKick } from './session-revocation.js';
 
-export { authorizeCapabilityCall, roleSatisfiesMinRole, ForbiddenError } from './authorize.js';
+export {
+  authorizeCapabilityCall,
+  roleSatisfiesMinRole,
+  CALL_REFUSAL_REASONS,
+  CapabilityCallRefusedError,
+  ForbiddenError,
+} from './authorize.js';
+export type { CallRefusalReason } from './authorize.js';
+export { renderCallRefusalMetrics } from './call-refusals.js';
 
 // `explainHandler` (handlers.ts) already depends on `substrate/epistemic` directly (the six-layer
 // rule permits application -> substrate); re-exported here so `interfaces/http`/`interfaces/ws`

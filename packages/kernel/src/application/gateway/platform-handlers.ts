@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import type {
+  AuditActingThrough,
   PlatformAuditRecordWire,
   PlatformOverviewWire,
   PlatformWorkspaceWire,
@@ -1582,6 +1583,9 @@ interface AuditDbRow {
   payload: Record<string, unknown>;
   created_at: Date;
   created_at_cursor: string;
+  // Batch D3 (migration core 0054).
+  acting_through: AuditActingThrough | null;
+  acting_session_id: string | null;
 }
 
 function toWireAudit(row: AuditDbRow): PlatformAuditRecordWire {
@@ -1595,12 +1599,15 @@ function toWireAudit(row: AuditDbRow): PlatformAuditRecordWire {
     // Legacy 420: as a workspace audit read shows a payload (`shownAuditPayload`).
     payload: shownAuditPayload(row.payload),
     createdAt: row.created_at.toISOString(),
+    actingThrough: row.acting_through,
+    actingSessionId: row.acting_session_id,
   };
 }
 
 const PLATFORM_AUDIT_SELECT = `
   select a.id, a.action, a.actor_user_id, u.login as actor_login, a.resource_type, a.resource_id,
-         a.payload, a.created_at, a.created_at::text as created_at_cursor
+         a.payload, a.created_at, a.created_at::text as created_at_cursor,
+         a.acting_through, a.acting_session_id
     from audit_records a
     left join users u on u.id = a.actor_user_id
    where a.workspace_id is null`;

@@ -143,6 +143,9 @@ export function toWireAuditRecord(row: AuditRecordRow) {
     // they did, and text a handler kept as given, reads masked here (`shownAuditPayload`).
     payload: shownAuditPayload(row.payload),
     createdAt: row.createdAt.toISOString(),
+    // Batch D3 (migration core 0054).
+    actingThrough: row.actingThrough,
+    actingSessionId: row.actingSessionId,
   };
 }
 

@@ -77,7 +77,10 @@ function facts(overrides = {}) {
   };
 }
 
-function matrix(rows, ratchet = { console_unexplained: 0, kernel_test_missing: 0, e2e_waived: 0 }) {
+function matrix(
+  rows,
+  ratchet = { console_unexplained: 0, kernel_test_missing: 0, e2e_waived: 0, repeat_unclear: 0 },
+) {
   return { ratchet, capabilities: rows };
 }
 
@@ -150,14 +153,24 @@ test('M5: an untested capability fails unless waived; a stale waiver fails', () 
   const waived = { ...GOOD, c_cap: { ...GOOD.c_cap, kernel_test: 'missing' } };
   assert.deepEqual(
     checkMatrix(
-      matrix(waived, { console_unexplained: 0, kernel_test_missing: 1, e2e_waived: 0 }),
+      matrix(waived, {
+        console_unexplained: 0,
+        kernel_test_missing: 1,
+        e2e_waived: 0,
+        repeat_unclear: 0,
+      }),
       untested,
     ),
     [],
   );
   assert.ok(
     checkMatrix(
-      matrix(waived, { console_unexplained: 0, kernel_test_missing: 1, e2e_waived: 0 }),
+      matrix(waived, {
+        console_unexplained: 0,
+        kernel_test_missing: 1,
+        e2e_waived: 0,
+        repeat_unclear: 0,
+      }),
       facts(),
     ).some((v) => v.startsWith('M5 c_cap')),
   );
@@ -167,7 +180,12 @@ test('R: the ratchet must equal the counts, in both directions', () => {
   const rows = { ...GOOD, b_cap: { console: 'none: 待说明（x）', agents: ['entry', 'admin'] } };
   assert.deepEqual(
     checkMatrix(
-      matrix(rows, { console_unexplained: 1, kernel_test_missing: 0, e2e_waived: 0 }),
+      matrix(rows, {
+        console_unexplained: 1,
+        kernel_test_missing: 0,
+        e2e_waived: 0,
+        repeat_unclear: 0,
+      }),
       facts(),
     ),
     [],
@@ -175,7 +193,12 @@ test('R: the ratchet must equal the counts, in both directions', () => {
   const up = checkMatrix(matrix(rows), facts());
   assert.ok(up.some((v) => v.startsWith('R ratchet.console_unexplained') && v.includes('raises')));
   const down = checkMatrix(
-    matrix(GOOD, { console_unexplained: 2, kernel_test_missing: 0, e2e_waived: 0 }),
+    matrix(GOOD, {
+      console_unexplained: 2,
+      kernel_test_missing: 0,
+      e2e_waived: 0,
+      repeat_unclear: 0,
+    }),
     facts(),
   );
   assert.ok(down.some((v) => v.startsWith('R ratchet.console_unexplained') && v.includes('lower')));
@@ -207,7 +230,12 @@ const E2E = {
   b_cap: GOOD.b_cap,
   c_cap: { ...GOOD.c_cap, e2e: 'waived: 656' },
 };
-const E2E_RATCHET = { console_unexplained: 0, kernel_test_missing: 0, e2e_waived: 1 };
+const E2E_RATCHET = {
+  console_unexplained: 0,
+  kernel_test_missing: 0,
+  e2e_waived: 1,
+  repeat_unclear: 0,
+};
 
 test('M4: a write with a console entry says observed or waived; nothing else carries e2e', () => {
   const f = facts({ modes: MODES });
@@ -264,4 +292,78 @@ test('bootstrap with an e2e run: observed where called, waived under the given n
   // without a run, the e2e it had stays; without one and no waiver no., it refuses
   assert.equal(parse(bootstrapMatrix(f, parsed)).capabilities.a_cap.e2e, 'observed');
   assert.throws(() => bootstrapMatrix(f, matrix(GOOD)), /--waive/);
+});
+
+// M6: a_cap and c_cap have side effects, b_cap does not.
+const SIDE_EFFECTS = new Set(['a_cap', 'c_cap']);
+const REPEAT = {
+  a_cap: { ...GOOD.a_cap, repeat: 'idempotent' },
+  b_cap: GOOD.b_cap,
+  c_cap: { ...GOOD.c_cap, repeat: 'unclear: 664' },
+};
+const REPEAT_RATCHET = {
+  console_unexplained: 0,
+  kernel_test_missing: 0,
+  e2e_waived: 0,
+  repeat_unclear: 1,
+};
+
+test('M6: a capability with side effects declares repeat; observe rows carry none', () => {
+  const f = facts({ sideEffects: SIDE_EFFECTS });
+  assert.deepEqual(checkMatrix(matrix(REPEAT, REPEAT_RATCHET), f), []);
+  for (const repeat of ['creates', 'repeats', 'conflict: illegal_transition']) {
+    const rows = { ...REPEAT, a_cap: { ...GOOD.a_cap, repeat } };
+    assert.deepEqual(checkMatrix(matrix(rows, REPEAT_RATCHET), f), [], repeat);
+  }
+  // missing on a side-effecting row: a hard failure, not a silent debt
+  const missing = { ...REPEAT, a_cap: GOOD.a_cap };
+  assert.ok(checkMatrix(matrix(missing, REPEAT_RATCHET), f).some((v) => v.startsWith('M6 a_cap')));
+  // on an observe row
+  const onObserve = { ...REPEAT, b_cap: { ...GOOD.b_cap, repeat: 'idempotent' } };
+  assert.ok(
+    checkMatrix(matrix(onObserve, REPEAT_RATCHET), f).some((v) => v.startsWith('M6 b_cap')),
+  );
+  // malformed: an unknown word, unclear without a number, conflict without a code
+  for (const repeat of [
+    'sometimes',
+    'unclear: later',
+    'unclear',
+    'conflict',
+    'conflict: Bad Code',
+  ]) {
+    const rows = { ...REPEAT, a_cap: { ...GOOD.a_cap, repeat } };
+    assert.ok(
+      checkMatrix(matrix(rows, REPEAT_RATCHET), f).some((v) => v.startsWith('M6 a_cap')),
+      repeat,
+    );
+  }
+});
+
+test('M6 + R: unclear rows are counted by ratchet.repeat_unclear, in both directions', () => {
+  const f = facts({ sideEffects: SIDE_EFFECTS });
+  const two = { ...REPEAT, a_cap: { ...GOOD.a_cap, repeat: 'unclear: 664' } };
+  assert.ok(
+    checkMatrix(matrix(two, REPEAT_RATCHET), f).some(
+      (v) => v.startsWith('R ratchet.repeat_unclear') && v.includes('raises'),
+    ),
+  );
+  const none = { ...REPEAT, c_cap: { ...GOOD.c_cap, repeat: 'creates' } };
+  assert.ok(
+    checkMatrix(matrix(none, REPEAT_RATCHET), f).some(
+      (v) => v.startsWith('R ratchet.repeat_unclear') && v.includes('lower'),
+    ),
+  );
+});
+
+test('bootstrap keeps declared repeats and marks the rest unclear under the given no.', () => {
+  const f = facts({ sideEffects: SIDE_EFFECTS });
+  const text = bootstrapMatrix(f, matrix(REPEAT, REPEAT_RATCHET), { repeatUnclear: '664' });
+  const parsed = parse(text);
+  assert.equal(parsed.capabilities.a_cap.repeat, 'idempotent');
+  assert.equal(parsed.capabilities.c_cap.repeat, 'unclear: 664');
+  assert.equal(parsed.capabilities.b_cap.repeat, undefined);
+  assert.equal(parsed.ratchet.repeat_unclear, 1);
+  assert.deepEqual(checkMatrix(parsed, f), []);
+  // a side-effecting row with nothing to keep and no legacy no. given: refuse
+  assert.throws(() => bootstrapMatrix(f, matrix(GOOD)), /--repeat-unclear/);
 });
