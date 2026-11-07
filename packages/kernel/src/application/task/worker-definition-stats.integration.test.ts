@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { workerSpecDigest } from './step-attempt.js';
-import { readWorkerDefinitionStats } from './worker-definition-stats.js';
+import { type CanReadGoal, readWorkerDefinitionStats } from './worker-definition-stats.js';
 
 /**
  * application/task/worker-definition-stats.integration.test: DB-gated (real Postgres; auto-skip
@@ -15,7 +15,8 @@ import { readWorkerDefinitionStats } from './worker-definition-stats.js';
  * records it counts are written by other modules' write paths (spawn, goal advance, approvals), so
  * the fixtures here are inserted directly with the guards off — what is under test is how the read
  * counts them. The outcome and refusal rules it shares with `get_skill_stats` are tested in depth
- * in skill-stats.integration.test.ts; here, that they apply per version, segment and combination.
+ * in skill-stats.integration.test.ts; here, that they apply per version, segment and combination,
+ * and that a WorkerSpec's digest goes only to a caller who can read a goal it ran in.
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -30,6 +31,10 @@ const at = (hhmm: string) => new Date(`2026-10-01T${hhmm}:00.000Z`);
 
 const SPEC_A: WorkerSpec = { instructions: 'triage before restarting', skills: ['restart-web'] };
 const SPEC_B: WorkerSpec = { model: 'model-b' };
+const SPEC_C: WorkerSpec = { tokenBudget: 4000 };
+
+/** Who reads every goal: the workspace owner, as the gateway's goal viewer has it. */
+const READS_EVERY_GOAL = () => true;
 
 describe.runIf(DATABASE_URL !== undefined)(
   'get_worker_definition_stats read (S11 GO16a, integration, real Postgres)',
@@ -53,9 +58,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         { skipRoleSwitch: true },
       );
 
-    const stats = (definitionId: string) =>
+    const stats = (definitionId: string, canReadGoal: CanReadGoal = READS_EVERY_GOAL) =>
       withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-        readWorkerDefinitionStats(client, workspaceId, definitionId),
+        readWorkerDefinitionStats(client, workspaceId, definitionId, { canReadGoal }),
       );
 
     /** A family whose version `i + 1` has `versions[i]`'s status and name. */
@@ -98,6 +103,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       readonly stepEndedAt?: Date;
       readonly goalOutcome?: { readonly outcome: string; readonly basis: string };
       readonly endedAt?: Date;
+      /** The goal's requester; the owner when not given. */
+      readonly requester?: string;
     }): Promise<GoalStep> {
       const [goal] = await raw<{ id: string }>(
         `insert into goal_runs (workspace_id, status, outcome, outcome_basis, on_behalf_of,
@@ -109,7 +116,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           input.goalOutcome ? 'completed' : 'running',
           input.goalOutcome?.outcome ?? null,
           input.goalOutcome?.basis ?? null,
-          ownerId,
+          input.requester ?? ownerId,
           input.goalOutcome ? (input.endedAt ?? new Date()) : null,
         ],
       );
@@ -505,6 +512,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       ]);
       expect(
         v2?.combinations.map((combination) => ({
+          specRef: combination.specRef,
           specDigest: combination.specDigest,
           fields: combination.fields,
           usage: combination.usage,
@@ -512,6 +520,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         })),
       ).toEqual([
         {
+          specRef: digestB.slice(0, 12),
           specDigest: digestB,
           fields: null,
           usage: {
@@ -522,6 +531,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           outcomes: tally(0, 0),
         },
         {
+          specRef: digestA.slice(0, 12),
           specDigest: digestA,
           fields: ['instructions', 'skills'],
           usage: {
@@ -532,6 +542,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           outcomes: tally(2, 3),
         },
         {
+          specRef: null,
           specDigest: null,
           fields: [],
           usage: {
@@ -550,12 +561,13 @@ describe.runIf(DATABASE_URL !== undefined)(
           lastUsedAt: at('08:50').toISOString(),
         },
         segments: [{ environmentDigest: ENV_A }],
-        combinations: [{ specDigest: null, fields: [] }],
+        combinations: [{ specRef: null, specDigest: null, fields: [] }],
       });
 
       expect(result.failureGroups).toEqual([
         {
           definitionVersion: 2,
+          specRef: null,
           specDigest: null,
           category: taskFailureCategory('timeout'),
           refusal: 'output_rejected',
@@ -564,6 +576,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         },
         {
           definitionVersion: 2,
+          specRef: digestA.slice(0, 12),
           specDigest: digestA,
           category: taskFailureCategory('timeout'),
           refusal: 'output_rejected',
@@ -572,6 +585,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         },
         {
           definitionVersion: 2,
+          specRef: null,
           specDigest: null,
           category: taskFailureCategory('worker_failed'),
           refusal: 'rejected',
@@ -580,6 +594,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         },
         {
           definitionVersion: 1,
+          specRef: null,
           specDigest: null,
           category: taskFailureCategory('budget_exhausted'),
           refusal: 'none',
@@ -631,6 +646,101 @@ describe.runIf(DATABASE_URL !== undefined)(
         [digest, ['model'], true],
       ]);
       expect(version?.reviewSuggested).toBe(true);
+    });
+
+    it('gives a WorkerSpec’s digest only to a caller who can read a goal it ran in; any other gets a label numbered in the response, the same across versions and failure groups', async () => {
+      const reader = randomUUID();
+      const someoneElse = randomUUID();
+      const canReadGoal: CanReadGoal = (goal) => goal.onBehalfOf === reader;
+      const definitionId = await family([{ status: 'deprecated' }, { status: 'published' }]);
+      const digestA = workerSpecDigest(SPEC_A) as string;
+      const digestB = workerSpecDigest(SPEC_B) as string;
+      const digestC = workerSpecDigest(SPEC_C) as string;
+      const ran = async (input: {
+        readonly version: number;
+        readonly spec: WorkerSpec;
+        readonly requester: string;
+        readonly startedAt: Date;
+        readonly failed?: boolean;
+      }) => {
+        const step = await goalStep({
+          spec: input.spec,
+          acceptance: false,
+          stepStatus: 'running',
+          requester: input.requester,
+        });
+        const id = await task({
+          definitionId,
+          version: input.version,
+          status: input.failed ? 'failed' : 'completed',
+          ...(input.failed ? { failureReason: 'worker_failed', failedAt: input.startedAt } : {}),
+          attempt: { step, specDigest: workerSpecDigest(input.spec) },
+        });
+        await run({ taskId: id, startedAt: input.startedAt, environment: ENV_A });
+      };
+      // v2: A in a goal the reader can read and in one they cannot — readable, so its digest
+      // is given. C, then B, in goals they cannot read; B failed. v1: B again.
+      await ran({ version: 2, spec: SPEC_A, requester: someoneElse, startedAt: at('10:00') });
+      await ran({ version: 2, spec: SPEC_A, requester: reader, startedAt: at('10:10') });
+      await ran({ version: 2, spec: SPEC_C, requester: someoneElse, startedAt: at('10:20') });
+      await ran({
+        version: 2,
+        spec: SPEC_B,
+        requester: someoneElse,
+        startedAt: at('10:05'),
+        failed: true,
+      });
+      await ran({ version: 1, spec: SPEC_B, requester: someoneElse, startedAt: at('09:00') });
+
+      const labels = (result: Awaited<ReturnType<typeof stats>>) => ({
+        versions: result?.versions.map((version) =>
+          version.combinations.map((combination) => [
+            combination.specRef,
+            combination.specDigest,
+            combination.fields,
+          ]),
+        ),
+        failureGroups: result?.failureGroups.map((group) => [
+          group.definitionVersion,
+          group.specRef,
+          group.specDigest,
+        ]),
+      });
+      // Most recently used first: C, A, B in v2.
+      expect(labels(await stats(definitionId, canReadGoal))).toEqual({
+        versions: [
+          [
+            ['#1', null, ['tokenBudget']],
+            [digestA.slice(0, 12), digestA, ['instructions', 'skills']],
+            ['#2', null, ['model']],
+          ],
+          [['#2', null, ['model']]],
+        ],
+        failureGroups: [[2, '#2', null]],
+      });
+      // The owner reads every goal; a caller who reads none of them is given no digest at all.
+      expect(labels(await stats(definitionId))).toEqual({
+        versions: [
+          [
+            [digestC.slice(0, 12), digestC, ['tokenBudget']],
+            [digestA.slice(0, 12), digestA, ['instructions', 'skills']],
+            [digestB.slice(0, 12), digestB, ['model']],
+          ],
+          [[digestB.slice(0, 12), digestB, ['model']]],
+        ],
+        failureGroups: [[2, digestB.slice(0, 12), digestB]],
+      });
+      expect(labels(await stats(definitionId, () => false))).toEqual({
+        versions: [
+          [
+            ['#1', null, ['tokenBudget']],
+            ['#2', null, ['instructions', 'skills']],
+            ['#3', null, ['model']],
+          ],
+          [['#3', null, ['model']]],
+        ],
+        failureGroups: [[2, '#3', null]],
+      });
     });
   },
 );

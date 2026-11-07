@@ -33067,6 +33067,17 @@
                       "null"
                     ]
                   },
+                  "specRef": {
+                    "anyOf": [
+                      {
+                        "pattern": "^(?:[0-9a-f]{12}|#[1-9][0-9]*)$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "tasks": {
                     "exclusiveMinimum": 0,
                     "type": "integer"
@@ -33074,6 +33085,7 @@
                 },
                 "required": [
                   "definitionVersion",
+                  "specRef",
                   "specDigest",
                   "category",
                   "refusal",
@@ -33247,6 +33259,17 @@
                             "null"
                           ]
                         },
+                        "specRef": {
+                          "anyOf": [
+                            {
+                              "pattern": "^(?:[0-9a-f]{12}|#[1-9][0-9]*)$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "usage": {
                           "additionalProperties": false,
                           "properties": {
@@ -33298,6 +33321,7 @@
                         }
                       },
                       "required": [
+                        "specRef",
                         "specDigest",
                         "fields",
                         "usage",
