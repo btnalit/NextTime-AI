@@ -14,6 +14,12 @@
 //   L2  no page-level selector actions (`page.click('#x')`, `page.fill(sel, …)`,
 //       `page.press(sel, key)`, `page.selectOption(sel, …)`): they bypass locators altogether.
 //       (`page.keyboard.press(key)` is not one.)
+//   L3  no interaction inside the page's own JavaScript (legacy 655): an `evaluate`,
+//       `evaluateAll`, `evaluateHandle`, `$eval` or `$$eval` whose function calls `click()`,
+//       `dblclick()`, `dispatchEvent()`, `submit()` or `requestSubmit()`, or sets `value`,
+//       `checked`, `selected`, `selectedIndex` or `files` — or whose string does. That clicks a
+//       control whether or not anyone could see or reach it, the same blind spot L1 closes.
+//       Reading the page in `evaluate` (`el => el.textContent`) is fine.
 //
 // A control a test cannot reach by role or label has no accessible name — that is the defect to
 // fix in the console, not in the test. A variable is traced to its declaration in the nearest
@@ -161,6 +167,46 @@ export function classify(expr, declarations, seen = new Set()) {
   }
 }
 
+/** L3 (legacy 655): the page-side functions of these run inside the page. */
+const EVALUATE = new Set(['evaluate', 'evaluateAll', 'evaluateHandle', '$eval', '$$eval']);
+/** What, done from page-side JavaScript, acts on a control instead of looking at it. */
+const DOM_ACTIONS = new Set(['click', 'dblclick', 'dispatchEvent', 'submit', 'requestSubmit']);
+const DOM_SETTERS = new Set(['value', 'checked', 'selected', 'selectedIndex', 'files']);
+const DOM_ACTION_TEXT = new RegExp(
+  `\\.(?:(?:${[...DOM_ACTIONS].join('|')})\\s*\\(|(?:${[...DOM_SETTERS].join('|')})\\s*=(?!=))`,
+);
+
+/** Whether `node` (an `evaluate`'s argument) clicks, submits or sets a control's state. */
+function actsOnPage(node) {
+  if (ts.isStringLiteralLike(node) || ts.isTemplateExpression(node)) {
+    return DOM_ACTION_TEXT.test(node.getText());
+  }
+  let found = false;
+  const visit = (child) => {
+    if (found) return;
+    if (
+      ts.isCallExpression(child) &&
+      ts.isPropertyAccessExpression(child.expression) &&
+      DOM_ACTIONS.has(child.expression.name.text)
+    ) {
+      found = true;
+      return;
+    }
+    if (
+      ts.isBinaryExpression(child) &&
+      child.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      ts.isPropertyAccessExpression(child.left) &&
+      DOM_SETTERS.has(child.left.name.text)
+    ) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(child, visit);
+  };
+  if (ts.isFunctionLike(node)) visit(node);
+  return found;
+}
+
 function isPageLike(expr) {
   return ts.isIdentifier(expr) && /^(page|popup|newPage|\w+Page)$/.test(expr.text);
 }
@@ -180,6 +226,10 @@ export function findViolations(fileName, sourceText) {
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
       const action = node.expression.name.text;
       const target = node.expression.expression;
+      if (EVALUATE.has(action) && node.arguments.some(actsOnPage)) {
+        const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+        out.push({ rule: 'L3', text: node.getText(sourceFile).replace(/\s+/g, ' '), line });
+      }
       if (ACTIONS.has(action)) {
         const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
         const text = node.getText(sourceFile).replace(/\s+/g, ' ');
@@ -260,7 +310,7 @@ function main() {
   const { fresh, stale } = compareWithBaseline(found, baseline);
   for (const v of fresh) {
     console.error(
-      `e2e-locators: ${v.file}:${v.line} ${v.rule} ${v.text}\n  act on what a person sees: getByRole / getByLabel (scope with getByTestId if needed). A control with no accessible name is a console bug to fix.`,
+      `e2e-locators: ${v.file}:${v.line} ${v.rule} ${v.text}\n  act on what a person sees: getByRole / getByLabel (scope with getByTestId if needed)${v.rule === 'L3' ? ', with a Playwright action (click / fill / check), not page-side JavaScript' : ''}. A control with no accessible name is a console bug to fix.`,
     );
   }
   for (const s of stale) {

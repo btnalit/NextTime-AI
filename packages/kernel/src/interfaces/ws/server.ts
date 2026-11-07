@@ -152,6 +152,9 @@ interface ConnectionState {
   /** R-05: this connection's kick-bus subscription (application/gateway/session-revocation.ts) —
    *  set right after `principalUnsubscribe`, torn down with it. */
   kickUnsubscribe: (() => void) | undefined;
+  /** Legacy 677: closes the connection when its console session ends by itself
+   *  (`armSessionExpiry`) — set with `kickUnsubscribe`, cleared with it. */
+  expiryTimer: NodeJS.Timeout | undefined;
 }
 
 /** Drops every push subscription the connection holds — on close, and immediately when its
@@ -163,6 +166,8 @@ function dropSubscriptions(state: ConnectionState): void {
   state.principalUnsubscribe = undefined;
   state.kickUnsubscribe?.();
   state.kickUnsubscribe = undefined;
+  clearTimeout(state.expiryTimer);
+  state.expiryTimer = undefined;
 }
 
 type WsOutgoingMessage = JsonRpcSuccessResponse | JsonRpcErrorResponse | JsonRpcNotification;
@@ -454,6 +459,16 @@ function subscribeCallerToPrincipalPush(
   );
 }
 
+/** Legacy 672: `ping`'s params, when sent at all, are `{}`. */
+function isEmptyObject(value: unknown): boolean {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === 0
+  );
+}
+
 /** R-05: the error a revoked session is answered with — what a fresh `authenticate` would get
  *  right now (application/gateway/session-revocation.ts): UNAUTHORIZED for a credential that is
  *  gone, FORBIDDEN for a cookie user whose membership here was disabled. */
@@ -491,6 +506,33 @@ function subscribeCallerToSessionKicks(
     const verdict = sessionKickVerdict(caller, kick);
     if (verdict) endRevokedSession(socket, state, null, revocationError(verdict));
   });
+}
+
+/** Legacy 677: the longest delay `setTimeout` keeps (2^31 − 1 ms, about 24.8 days); a longer one
+ *  would fire at once. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+/** Legacy 677: a console session also ends by itself, at `sessionExpiresAt` (fixed at login, never
+ *  extended), and nothing kicks it then: HTTP refuses the cookie from that moment, but this socket
+ *  authenticated once and would go on receiving pushes until its next call re-checked the session.
+ *  So it closes at that moment too, as a revoked session does (R-05: an UNAUTHORIZED frame with
+ *  `id: null`, every push subscription dropped, then the close); the console signs out. An API-key
+ *  socket has no end of its own: a key does not expire, and resetting it kicks. */
+function armSessionExpiry(socket: WebSocket, caller: HumanCaller, state: ConnectionState): void {
+  const expiresAt = caller.user?.sessionExpiresAt;
+  if (expiresAt === undefined) return;
+  const wait = (): void => {
+    const left = expiresAt.getTime() - Date.now();
+    state.expiryTimer =
+      left > MAX_TIMER_DELAY_MS
+        ? setTimeout(wait, MAX_TIMER_DELAY_MS)
+        : setTimeout(expire, Math.max(0, left));
+  };
+  const expire = (): void => {
+    state.expiryTimer = undefined;
+    endRevokedSession(socket, state, null, new UnauthorizedError('session expired'));
+  };
+  wait();
 }
 
 /**
@@ -543,6 +585,7 @@ function handleConnection(
     subscription: undefined,
     principalUnsubscribe: undefined,
     kickUnsubscribe: undefined,
+    expiryTimer: undefined,
   };
 
   // L1-16: the auth deadline. Cleared once a caller is adopted (`adoptCaller`) or the socket closes.
@@ -605,6 +648,7 @@ function handleConnection(
     state.caller = caller;
     subscribeCallerToPrincipalPush(socket, caller, state);
     subscribeCallerToSessionKicks(socket, caller, state);
+    armSessionExpiry(socket, caller, state);
     return true;
   }
 
@@ -727,6 +771,22 @@ function handleConnection(
 
     if (req.method === 'authenticate') {
       send(socket, errorResponse(req.id, WS_ERROR_CODES.INVALID_REQUEST, 'already authenticated'));
+      return;
+    }
+
+    // Legacy 672: `ping` is the console's heartbeat. A socket whose network died in silence
+    // answers nothing and closes nothing: pushes just stop, and a call only fails after its own
+    // 30 seconds. The console pings every 15 seconds and gives the socket up when an answer takes
+    // longer than 10. The answer proves only that this socket and the kernel still answer, so it
+    // reads nothing, dispatches nothing and writes no audit row (one every 15 seconds per open
+    // tab would bury the audit log). A revoked session does not wait for it: the kick bus closes
+    // the socket at once (R-05), and every call re-checks the session.
+    if (req.method === 'ping') {
+      if (req.params !== undefined && !isEmptyObject(req.params)) {
+        send(socket, errorResponse(req.id, WS_ERROR_CODES.INVALID_PARAMS, 'ping takes no params'));
+        return;
+      }
+      send(socket, successResponse(req.id, {}));
       return;
     }
 

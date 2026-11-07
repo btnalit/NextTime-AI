@@ -467,6 +467,51 @@ describe('/ws pre-auth limits (L1-16 / L5-12(b); fake pool, always runs)', () =>
     ws.close();
   });
 
+  // Legacy 672: the console's heartbeat.
+  it('ping is answered {} once authenticated and reads nothing: no session re-check, no dispatch', async () => {
+    const { pool, connect } = createPreAuthPool();
+    const url = await listenWs(pool);
+    const ws = await open(url);
+    const frames = framesOf(ws);
+    ws.send(rpc(1, 'authenticate', { token: PREAUTH_API_KEY }));
+    await vi.waitFor(() => expect(frames).toHaveLength(1));
+    expect(frames[0]).toMatchObject({ id: 1, result: { authenticated: true } });
+    const connectsAfterAuth = connect.mock.calls.length;
+
+    ws.send(rpc(2, 'ping'));
+    ws.send(JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'ping' }));
+    ws.send(rpc(4, 'ping', { since: 1 }));
+    ws.send(rpc(5, 'ping', []));
+    await vi.waitFor(() => expect(frames).toHaveLength(5));
+    expect(frames[1]).toEqual({ jsonrpc: '2.0', id: 2, result: {} });
+    expect(frames[2]).toEqual({ jsonrpc: '2.0', id: 3, result: {} });
+    expect(frames[3]).toMatchObject({ id: 4, error: { code: WS_ERROR_CODES.INVALID_PARAMS } });
+    expect(frames[4]).toMatchObject({ id: 5, error: { code: WS_ERROR_CODES.INVALID_PARAMS } });
+    // The fake pool throws on any query it does not know, so a session re-check or a dispatch
+    // would have answered an error; ping does not even take a connection.
+    expect(connect).toHaveBeenCalledTimes(connectsAfterAuth);
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    ws.close();
+  });
+
+  it('ping before authenticate is refused like any other first frame, and the socket is closed', async () => {
+    const { pool, connect } = createPreAuthPool();
+    const url = await listenWs(pool);
+    const ws = await open(url);
+    const frames = framesOf(ws);
+    const closed = closeOf(ws);
+    ws.send(rpc(1, 'ping'));
+    await closed;
+    expect(frames).toEqual([
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        error: { code: WS_ERROR_CODES.UNAUTHORIZED, message: 'must authenticate first' },
+      },
+    ]);
+    expect(connect).not.toHaveBeenCalled();
+  });
+
   it('frames sent while the Authorization header resolves are served in order once it does', async () => {
     const { pool, release } = createPreAuthPool(true);
     const url = await listenWs(pool);
@@ -1521,6 +1566,70 @@ describe.runIf(DATABASE_URL !== undefined)(
         const chats = await other.call<{ items: unknown[] }>('list_chats', {});
         expect(Array.isArray(chats.items)).toBe(true);
         other.close();
+      });
+
+      // Legacy 677: a console session also ends by itself, and nothing kicks it then.
+      it('a console session that expires by itself closes its socket at that moment, not the same user’s other session', async () => {
+        const user = await newConsoleUser();
+        await insertMember({ userId: user.id });
+        const expiringToken = await loginForCookie(user.login);
+        // Directly in the database, as if that login were about to reach the end of its TTL.
+        const ended = await pool.query<{ expires_at: Date }>(
+          `update user_sessions set expires_at = now() + interval '1500 milliseconds'
+            where user_id = $1 returning expires_at`,
+          [user.id],
+        );
+        const expiresAt = ended.rows[0]?.expires_at;
+        if (!expiresAt) throw new Error('no console session to shorten');
+        const otherToken = await loginForCookie(user.login);
+        const expiring = await cookieSocket(expiringToken);
+        const other = await cookieSocket(otherToken);
+
+        await expiring.waitForClose(5000);
+        // Not before its end (the database's clock, as the cookie check reads it).
+        const { rows } = await pool.query<{ ended: boolean }>('select now() >= $1 as ended', [
+          expiresAt,
+        ]);
+        expect(rows[0]?.ended).toBe(true);
+        expect(expiring.unsolicitedErrors).toContainEqual({
+          code: WS_ERROR_CODES.UNAUTHORIZED,
+          message: 'unauthorized',
+        });
+
+        const chats = await other.call<{ items: unknown[] }>('list_chats', {});
+        expect(Array.isArray(chats.items)).toBe(true);
+        other.close();
+      });
+
+      // Legacy 677: the expiry timer must go with the socket. Left behind, it would hold every
+      // closed console socket for up to the session's 8 hours, and a reconnecting tab adds one
+      // per reconnect.
+      it('a console socket the client closes leaves no expiry timer behind', async () => {
+        const user = await newConsoleUser();
+        await insertMember({ userId: user.id });
+        const token = await loginForCookie(user.login);
+        const setSpy = vi.spyOn(globalThis, 'setTimeout');
+        const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+        try {
+          const client = await cookieSocket(token);
+          // The session's own end, a little under the 8-hour TTL away: the only timer that long.
+          const expiryTimers = setSpy.mock.calls.flatMap((call, i) => {
+            const delay = call[1] ?? 0;
+            return delay > 7 * 3_600_000 && delay <= 8 * 3_600_000
+              ? [setSpy.mock.results[i]?.value]
+              : [];
+          });
+          expect(expiryTimers).toHaveLength(1);
+
+          client.close();
+          await client.waitForClose();
+          await vi.waitFor(() => expect(clearSpy).toHaveBeenCalledWith(expiryTimers[0]), {
+            timeout: 2000,
+          });
+        } finally {
+          setSpy.mockRestore();
+          clearSpy.mockRestore();
+        }
       });
 
       it('reset_user_password closes the user’s console sockets', async () => {

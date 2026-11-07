@@ -20,9 +20,9 @@
 #           every declared row is exercised by kernel repeat-call.integration.test.ts
 ratchet:
   console_unexplained: 10
-  kernel_test_missing: 6
+  kernel_test_missing: 5
   e2e_waived: 76
-  repeat_unclear: 133
+  repeat_unclear: 115
 capabilities:
   add_eval_case:
     console: required
@@ -101,7 +101,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: illegal_transition"
   cancel_draft_evaluation:
     console: required
     agents: []
@@ -191,28 +191,27 @@ capabilities:
     console: "indirect: packages/web/src/components/CatalogPage.tsx"
     agents: []
     e2e: "waived: 657"
-    kernel_test: missing
-    repeat: "unclear: 664"
+    repeat: "conflict: illegal_transition"
   deprecate_skill:
     console: "indirect: packages/web/src/components/CatalogPage.tsx"
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: illegal_transition"
   deprecate_worker_definition:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: illegal_transition"
   disable_principal:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent
   discard_draft:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: not_found"
   discard_operation_draft:
     console: required
     agents: []
@@ -670,17 +669,17 @@ capabilities:
     console: required
     agents: [entry, admin]
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: creates
   propose_skill:
     console: required
     agents: [entry, admin]
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: creates
   propose_worker_definition:
     console: required
     agents: [entry, admin]
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: creates
   publish_manifest:
     console: required
     agents: []
@@ -700,17 +699,17 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: illegal_transition"
   publish_skill:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: illegal_transition"
   publish_worker_definition:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: illegal_transition"
   purge_user:
     console: required
     agents: []
@@ -735,7 +734,7 @@ capabilities:
   record_decision:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: [entry]
-    repeat: "unclear: 664"
+    repeat: creates
   record_procedure_followed:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: [entry]
@@ -763,7 +762,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: not_found"
   reject_goal:
     console: required
     agents: []
@@ -863,7 +862,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: not_found"
   revoke_external_runtime:
     console: required
     agents: []
@@ -893,7 +892,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: repeats
   rotate_connection_secret:
     console: required
     agents: []
@@ -931,7 +930,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: repeats
   set_allowed_models:
     console: required
     agents: []
@@ -972,7 +971,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent
   set_quota:
     console: required
     agents: []

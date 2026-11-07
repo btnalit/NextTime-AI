@@ -2590,6 +2590,28 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：两个审计页没勾「显示读操作」时，一页 50 条都是写操作和决定，选「经由 本人」等筛选后第一页不再全是被藏起来的读操作（0.64.0 的已知问题，遗留 669）。被拦下的读操作照旧列出。读操作隐藏时什么也没查到，空状态会提示「读操作默认不列出」，旁边有「显示读操作」按钮；按名字筛一个读操作时开关自动勾上。导出的文件多一个 `readsShown` 字段。
 - **回滚**：只回滚代码即可。
 
+### 3.145 同一条消息只发一次：`send_chat_message` 认客户端幂等键（#1050，遗留 673 内核部分，core 0055，0.64.0 之后的下一版）
+
+带一个迁移，随 `apply-release.sh` 自动应用：core `0055_chat_message_idempotency_key`（可逆，见 §6）。不改 compose，没有新环境变量，主机不需要操作。线上契约只增：`send_chat_message` 多一个可选参数 `idempotencyKey`，结果多 `changed`、`turnStatus`；新错误 409 `idempotency_key_reused`（WS `-32020`）。
+
+- **发版说明可写**：同一个对话里，带同一个幂等键、同样文字的重发，会返回原来那条消息和它的那一轮，不会再开一轮；同一个键换了文字或换了发送人，会被拒绝（409）。控制台这一版还不带这个键，所以用户看到的行为还没变；控制台部分修好之前，遗留 673 仍然开着。
+- **回滚**：只回滚代码即可，见 §6 的 0055 一行。
+
+### 3.146 所有者能看到门被平台暂停、什么时候、为什么（#1051，遗留 674，0.64.0 之后的下一版）
+
+控制台加内核查询：没有迁移，不改 compose，没有新环境变量。线上契约只增：`get_gatekeeper` 的结果多一个可选字段 `platformSuspension`（`reason`、`suspendedAt`）。
+
+- **窗口前（主机，只读）**：平台暂停自接入门时写下的原因，以前的提示是「只在列表和平台审计里可见」。升级到这一版后，这些原因会显示给对应工作区的成员。升级前先数一下已有的暂停原因：
+
+  ```sql
+  select count(*) from workspace_self_connections
+  where suspended_at is not null and suspension_reason is not null;
+  ```
+
+  结果是 0 就照常升级。不是 0 的话，先请维护者看过这些原因，确认可以给工作区成员看，再升级；结果记 `docs/private/`。
+- **发版说明可写**：自接入的门被平台暂停后，所有者在「健康与操作」里能看到暂停的时间、原因，以及要找平台管理员；门的 Operation 照常列出，抽屉与系统卡片的计数一致。原因里的疑似凭据仍然遮住。之前写下的暂停原因升级后也会给工作区成员看到。
+- **回滚**：只回滚代码即可。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -2767,6 +2789,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.64.0 | governance `0040_pack_installs_from_admin_proposals`（#1002，AA5g-2）：放宽 `change_segments_proposer`，pack 来源的安装记录可以带提案溯源（`admin_proposal_id`、`admin_proposal_segment_id`、提议人两列，四列要么全有、要么全空）；`change_segments_admin_proposal_guard` 加 pack 分支（只管 insert），核对记录与提案段一致：同一提案、同一提议人、段仍是 `proposed`、段里那一项是同包同版本的 `pack_install`、段的 `content_digest` 等于记录的 `source_digest`；`admin_proposal_segments_item_kinds` 允许工作区段只含一项 `pack_install`（平台段不行）。`admin_proposal` 记录的三条规则原样保留 | 可逆 | 约束放宽、guard 加分支、check 加一种情况。旧版本写的行三条都满足（pack 记录四列全空，没有段含 `pack_install`），旧代码读记录也不依赖 pack 记录这四列为空。CI 可逆性探针在 #1002 上是绿的，`reversibility-deltas.json` 没有新增声明。只回滚代码时，旧代码列出 `pack_install` 段会显示它不认识的条目类型、也应用不了它，只能拒绝或撤回 | 只需回退代码。要撤迁移，前提是没有带提案溯源的 pack 记录、也没有 `pack_install` 段：恢复 0033 的 `change_segments_proposer` 与 guard 函数体、0034 的 `admin_proposal_segments_item_kinds`，再删 `schema_migrations` 里 governance 40 那一行（见 0040 文件头） |
 | v0.64.0 | core `0054_audit_acting_through`（#1028，批次 D3）：`audit_records` 加可空列 `acting_through`、`acting_session_id`（uuid，无外键），约束 `audit_records_acting_through_check` 与 `audit_records_acting_session_shape`（都是 `not valid`，只检查新写的行） | 可逆 | 只加列、加约束。旧代码不写这两列（写入为 `null`，两条约束都满足），读审计都用显式列名，不受新列影响。只回滚代码时，新版本写下的值留在表里，旧代码不读也不显示 | 只需回退代码。要撤迁移：删两条约束，再删两列，最后删 `schema_migrations` 里 core 54 那一行（见 0054 文件头） |
 | 0.64.0 之后的下一版 | governance `0041_one_active_grant_per_scope`（#1036，遗留 647）：`capability_grants` 加部分唯一索引 `capability_grants_one_active_per_scope`（`workspace_id, principal_id, resource_type, resource_id`，`nulls not distinct`，`where status = 'active'`）；建索引前先查存量重复，有就报错停下、什么都不改（§3.143） | 可逆 | 只加索引，不改任何行。只回滚代码时，旧代码对已持有的范围再插一行会被索引拒掉（23505），那次调用返回 500，不会写出重复行 | 只需回退代码。要撤迁移：`drop index capability_grants_one_active_per_scope;`，再删 `schema_migrations` 里 governance 41 那一行 |
+| 0.64.0 之后的下一版 | core `0055_chat_message_idempotency_key`（#1050，遗留 673）：`chat_messages` 加可空列 `idempotency_key`、约束 `chat_messages_idempotency_key_shape`（`not valid`）、部分唯一索引 `chat_messages_idempotency_key_uidx` | 可逆 | 只加列、约束和索引；旧代码不写这一列（写入为 `null`，约束满足），读消息都用显式列名 | 只需回退代码。要撤迁移：删索引、约束和列，再删 `schema_migrations` 里 core 55 那一行（见 0055 文件头） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

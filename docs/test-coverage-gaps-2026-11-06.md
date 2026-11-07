@@ -62,7 +62,7 @@ v0.63.0 上主机后，维护者当天撞到三个 bug，而 CI（`guards / qual
 | G6 | 写操作幂等 / 重复提交 | 46 个内核测试文件提到 idempotent；没有系统性规则 | `grant_capability` 不去重（647）；没有"每个 write capability 重复调用一次行为确定"的遍历测试 | **P2** | 内核遍历测试：matrix 给每个 write 声明 `repeat: idempotent / conflict / creates`，测试按声明断言；#493 |
 | G7 | 主机升级预演的起点 | staging 默认 `from` = 目标之下最新 tag；主机升级攒到大版本统一做一次（维护者 2026-11-06 决定），v0.50.0 → v0.63.0 那次维护者手动填了 `from`（staging run 452，绿） | 日常预演的 `from` 不需要等于主机版本（维护者决定，不做 CI 强制）；只有**主机升级前的那次预演**必须 `from` = 主机当前版本，目前靠人记得，`release.md` 没写成规则 | **P3** | `release.md` §1 第 5 步：主机升级窗口前的预演必须填 `from` = 主机当前版本，主机窗口检查表核对 run 名；#484 |
 | G8 | 回滚演练 | `reversibility-probe` 证明旧代码能跑新 schema（空库）；`drill-upgrade.sh` 只在主机手动 | 云上没有"带数据升级 → 代码回滚到 n-1 → 验收"的预演 | **P2** | staging 加 `rollback` 阶段（升级后切回 `from` 镜像跑 S1）；#488 |
-| G9 | 能力包全生命周期 | `install_pack` 有 e2e；`preview_pack_install` / `list_packs` / `extra_packs_status` / `export_admin_proposal_pack` 只有内核测试 + accept_s2 | 安装 → 升级（同包新版本）→ 回滚安装记录 → 导出 → 放进 `config/packs/` 导入 → 第二个工作区安装：没有一条控制台旅程；维护者"手动导出导入"仍待人工确认 | **P2** | 新旅程 `10-pack-lifecycle.spec.ts`；UX 验收 |
+| G9 | 能力包全生命周期 | `install_pack` 有 e2e；`preview_pack_install` / `list_packs` / `extra_packs_status` / `export_admin_proposal_pack` 只有内核测试 + accept_s2 | 安装 → 升级（同包新版本）→ 回滚安装记录 → 导出 → 放进 `config/packs/` 导入 → 第二个工作区安装：没有一条控制台旅程；维护者"手动导出导入"仍待人工确认 | **P2** | 旅程 `14-pack-lifecycle.spec.ts`（批次 E，见 §6 批次 E 的实现说明）；UX 验收 |
 | G10 | 权限矩阵（含拒绝路径） | `roles.test.ts` 单元级遍历；`08-least-privilege` 只验"看得到的页不 403" | 没有按角色×写 capability 走真实 HTTP 的拒绝断言；没有"控制台对无权角色隐藏 / 禁用并说明"的遍历 | **P2** | 内核集成测试遍历 registry 经 dispatch 断言 403 + 审计记 refused；#493 |
 | G11 | 审计 actor 正确性 | 审计写入在 `dispatch.ts`；遗留 644（`raw_secrets_scrubbed` 记 unattributed） | 没有"每个有副作用 capability 的审计行 actor = 实际调用者"的遍历断言。`set_admin_agent_targets` 记成 self 是对的（维护者本人在控制台保存）。真正的缺口（#1002 上 #484 指出）：管理员智能体在平台面的审计行，actor 也记成管理员本人，人和智能体的操作目前只能靠 `payload.channel` 区分；actor 应能直接区分人、管理员智能体会话与服务 Handle，并有遍历断言 | **P2** | 内核遍历测试（与 G10 同一夹具，调用后读 `audit_records` 断言 actor / 工作区 / outcome）；#493 |
 | G12 | 多工作区隔离 | 37 个内核测试文件涉及跨工作区 | 没有"在 A 工作区建的每类对象，B 工作区的成员经任一 observe capability 都读不到"的遍历；没有 e2e 双工作区串读场景 | **P2** | 内核遍历测试 + e2e 一条双工作区旅程；#493 / UX |
@@ -124,6 +124,7 @@ M1–M3、M5、R 与 M4 的静态半边是纯静态检查，在 `quality` 与 `p
 
 - **交互动作**（`click` / `fill` / `selectOption` / `check` / `uncheck` / `press` / `type` / `setInputFiles`）的目标必须由 `getByRole` / `getByLabel` / `getByText` / `getByPlaceholder` 取得。`getByTestId` 与 CSS `locator()` 只允许用来**圈定范围**（如 `drawer.getByRole('combobox', { name: '成员' })`）和**断言**。
 - 禁止 `page.locator('#…')`、`locator('option…')`、`locator('input[type=…]')` 后直接交互。
+- L3（遗留 655）：在页面里执行的代码（`evaluate` / `evaluateAll` / `evaluateHandle` / `$eval` / `$$eval`，函数或字符串）不许 `click()` / `dblclick()` / `dispatchEvent()` / `submit()` / `requestSubmit()`，也不许给 `value` / `checked` / `selected` / `selectedIndex` / `files` 赋值——那样点到的控件用户看不看得见都一样，是 L1 堵住的同一个盲区换了条路。只读页面（`el => el.textContent`）不受限。上线时存量 0 处，基线不变。
 - 现有违规按"文件:行内容哈希"进基线，只减不增；改到的文件里的旧违规不强制当场修，但守门人会在 PR 里指出。
 
 与现有 DoD「e2e 用 data-testid 定位」的关系：DoD 那一条的本意是**不用易变的文案和样式类做定位**，它仍然成立于圈定范围和断言；本守卫补的是"最后被点的那个控件必须是用户能看见、读屏能读出名字的那个"。两条一起改进 `docs/console-usability-dod.md` 与 PR 模板措辞，避免两份规则互相矛盾。附带收益：交互控件拿不到可访问名字时测试写不出来，等于把 a11y 标签变成了硬要求——646 的那个无标签 `<select>` 在这条规则下根本无法被测试使用。
@@ -192,12 +193,19 @@ M1–M3、M5、R 与 M4 的静态半边是纯静态检查，在 `quality` 与 `p
 | B | e2e 定位器守卫 + 基线；`e2e/lib/test.ts` 采集 fixture + E1；`web-e2e` 末尾核对 M4 | G1、G5 | #488；UX 验收（触 `packages/web/e2e`） | A |
 | C | `resilience` 项目（重启 / 断网 / 切面 / 会话过期） | G2、G16 | #488 + UX 验收；如需改重连逻辑走控制台 PR | B 的 fixture |
 | D | 内核遍历测试：角色×写 capability 经 dispatch 的拒绝路径 + 审计 actor / outcome + 重复调用按 `repeat` 声明断言 + 跨工作区读隔离 | G6、G10、G11、G12 | #493 | A（读 matrix 的 `repeat`） |
-| E | 旅程 `10-pack-lifecycle`；旧旅程按定位器守卫改写（先 646 所在的 01、06、08）；遗留 657 里先补所有者关键动作的真实旅程：`confirm_goal`、`release_goal_hold`、`revise_goal`、`publish_operation`、`refresh_operation_governance`（B2 之前只被伪造应答走到过，见 §5.3） | G9、G1 存量、G5 存量 | UX 验收 | B |
+| E | 旅程 `14-pack-lifecycle`（编号 10 已给了管理员智能体装包的旅程）；旧旅程按定位器守卫改写（先 646 所在的 01、06、08）；遗留 657 里先补所有者关键动作的真实旅程：`confirm_goal`、`release_goal_hold`、`revise_goal`、`publish_operation`、`refresh_operation_governance`（B2 之前只被伪造应答走到过，见 §5.3） | G9、G1 存量、G5 存量 | UX 验收 | B |
 | F | staging 加 rollback 与 restore 阶段；`release.md` 写明主机升级前那次预演的 `from` = 主机当前版本（日常预演不限） | G7、G8、G14 | #488、#484 | 无 |
 | G | 产品决定后：前端版本探测 + e2e | G3 | 控制台、#493 | 维护者 / 协调定 |
 | — | G13、G15、G17、G18 | — | 随相关波次 | — |
 
 A、F 可以马上并行；B 依赖 A 的 matrix；C、E 依赖 B 的 fixture；D 独立于 B。
+
+批次 E 的实现说明（`packages/web/e2e/journeys/14-pack-lifecycle.spec.ts`，关闭遗留 656）：
+- 包从哪里来：不加 CI 专用的静态包。用 ⑨ 的 CI 标记让管理员智能体提一份提案（给工作区 A 加一个 Skill），A 的所有者应用后，平台管理员在「平台 → 管理员提案」把这一部分「导出成能力包」，从浏览器下载 tar。这样导出、控制台打 tar、附加包加载器三段一起被走到；还核对了控制台打的 tar 能被系统 `tar` 原样读出。
+- 部署那边的事：`E2E_EXTRA_PACK_CMD tar|version|remove`（e2e.yml）。`tar` 按 operations.md §14.10 的步骤把 tar 解进 `config/packs/`：root 解包，不保留 tar 里的属主和权限，有符号链接就不放进去，最后一次 `mv`。`version` 按 §14.1 加一个版本目录。`remove` 按 §14.10「撤掉一个附加包」把包移出去，什么都不删。一轮 CI 只能导出一个 `ci-admin-journey`，所以重试时先 `remove` 再从头走。
+- 走到的状态：A 里它直接是「已是最新」，不用装（同一批 id）；B 安装 v1、升级到 v2、在「安装历史」撤销升级，三次都要先勾那 1 项权限边界确认（新增的 Skill、Skill 正文的改动）。没勾时确认按钮不可点，并写着「还差：勾选 1 项权限边界确认」，这就是遗留 656 要的路径。每一步再从页面外读 `list_packs`（`source`、`status`、`installedVersion`）。
+- `modules.spec.ts` 原来断言 CI 栈「没有附加包」，⑭ 先于它跑，所以放宽为「没有被丢掉的包、附加包不出现在模块列表里」。
+- 本地按 e2e.yml 搭的同款栈上 6/6 通过，模拟重试路径（上次的包还在）也通过。
 
 ## 7. 风险与不做的事
 

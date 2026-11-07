@@ -773,6 +773,48 @@ jobs:
           SH
           echo "E2E_ANNOUNCE_GATE_CMD=$RUNNER_TEMP/announce-gate.sh" >>"$GITHUB_ENV"
 
+      # Batch E (journeys/14-pack-lifecycle.spec.ts, gap G9): the maintainer's steps on the
+      # deployment's extra packs directory (docs/runbooks/operations.md §14.10), which no console
+      # page does — the kernel only reads `config/packs/` (read-only mount). `tar <file>`: an
+      # exported pack's tar unpacked the way §14.10 says (root, no owner or modes from the tar, no
+      # symbolic links, then one `mv`); `version <dir> <name>/<n>`: a new version directory added
+      # beside the ones there (§14.1); `remove <name>`: a pack moved out (§14.10, "撤掉一个附加包"),
+      # so a retried journey can export again. Nothing is deleted. `.incoming` is the staging
+      # directory: dash runs no EXIT trap when a signal kills it (a maintainer() timeout), so the
+      # signals exit through it, and a leftover from a run killed harder is cleared first.
+      - name: Prepare the extra packs script (journeys/14, batch E)
+        run: |
+          set -euo pipefail
+          {
+            printf "packs='%s'\n" "$NEXTTIME_DATA/config/packs"
+            printf "moved='%s'\n" "$RUNNER_TEMP/removed-packs"
+            cat <<'SH'
+          set -eu
+          case "${1:?usage: tar <file> | version <dir> <name>/<n> | remove <name>}" in
+            tar)
+              sudo -n sh -euc 'cd "$1"; rm -rf .incoming; mkdir .incoming; trap "rm -rf .incoming" EXIT; trap "exit 1" INT TERM HUP
+                tar --no-same-owner --no-same-permissions -xf "$2" -C .incoming
+                test -z "$(find .incoming -type l)"
+                chmod -R a+rX .incoming
+                for d in .incoming/*; do mv -T "$d" "./${d#.incoming/}"; done' sh "$packs" "$2" ;;
+            version)
+              sudo -n sh -euc 'cd "$1"; rm -rf .incoming; mkdir .incoming; trap "rm -rf .incoming" EXIT; trap "exit 1" INT TERM HUP
+                mkdir -p ".incoming/$(dirname "$3")"
+                cp -R "$2/$3" ".incoming/$3"
+                chown -R 0:0 .incoming
+                test -z "$(find .incoming -type l)"
+                chmod -R a+rX .incoming
+                mv -T ".incoming/$3" "./$3"' sh "$packs" "$2" "$3" ;;
+            remove)
+              sudo -n sh -euc 'test -e "$1/$2" || exit 0
+                mkdir -p "$3"; mv -T "$1/$2" "$3/$2-$(date +%s)"' sh "$packs" "$2" "$moved" ;;
+            *) echo "unknown step: $1" >&2; exit 2 ;;
+          esac
+          SH
+          } >"$RUNNER_TEMP/extra-pack.sh"
+          sudo mkdir -p "$NEXTTIME_DATA/config/packs"
+          echo "E2E_EXTRA_PACK_CMD=$RUNNER_TEMP/extra-pack.sh" >>"$GITHUB_ENV"
+
       # --- the actual e2e suite ----------------------------------------------------------------
 
       # Runs every file under packages/web/e2e/ for real: chat.spec.ts and governance.spec.ts
