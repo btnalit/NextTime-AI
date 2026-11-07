@@ -459,6 +459,22 @@ describe.runIf(DATABASE_URL !== undefined)(
       await expect(insert([randomUUID()])).rejects.toThrow(
         /not a completed goal of the same requester/,
       );
+      // The requester's own goal that has not ended, or ended cancelled, is no precedent either
+      // (#493 on #1087: the trigger's `status = 'completed'` had no test of its own).
+      const stillProposed = (await propose(entryAgent(aliceId), proposal('a goal not yet run')))
+        .goalRunId;
+      const cancelled = (await propose(entryAgent(aliceId), proposal('a goal turned down')))
+        .goalRunId;
+      await raw(
+        `update goal_runs set status = 'cancelled', ended_at = now()
+          where workspace_id = $1 and id = $2`,
+        [workspaceId, cancelled],
+      );
+      for (const notEnded of [stillProposed, cancelled]) {
+        await expect(insert([notEnded])).rejects.toThrow(
+          /not a completed goal of the same requester/,
+        );
+      }
       // Written once, never changed: not by an update, not to nothing.
       await raw(
         `update plan_revisions set cited_precedents = $3::uuid[]
