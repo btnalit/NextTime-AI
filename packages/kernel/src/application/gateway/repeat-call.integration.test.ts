@@ -1330,6 +1330,37 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       },
     },
   },
+  request_action: {
+    // An approval in flight: the same call (its key derived from the session, gate, Operation
+    // and params) returns that ActionRequest.
+    'a Worker that may act on the gate asks to run its published Operation': {
+      first: expect.objectContaining({ status: 'pending_approval' }),
+      by: workerHandle,
+      setUp: async (ctx) => {
+        const gatekeeperId = await gateWithOperation(ctx);
+        // No rule denies it; this one asks a person to approve.
+        await as(ctx, 'set_policy', {
+          policy: { gatekeeperId, actionKindTag: GATE_OP.name, autoApprove: false },
+        });
+        const worker = await as<{ id: string }>(ctx, 'propose_worker_definition', {
+          kind: 'worker',
+          definition: {
+            systemPrompt: 'A worker that restarts services.',
+            capabilities: ['request_action'],
+            gates: [gatekeeperId],
+          },
+        });
+        await as(ctx, 'publish_worker_definition', { definitionId: worker.id, version: 1 });
+        TASK_WORKSPACES.add(ctx.seed.workspaceId);
+        await as(ctx, 'invoke_worker', {
+          definitionId: worker.id,
+          version: 1,
+          input: { host: 'web-1' },
+        });
+        return { gatekeeperId, operation: GATE_OP.name, params: { host: 'web-1' } };
+      },
+    },
+  },
   cancel_task: {
     // The first call cancels it; a second finds it cancelled already and changes nothing.
     'a running Task': {
@@ -1461,6 +1492,7 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'refresh_operation_governance',
   'report_task_result',
   'report_task_outcome',
+  'request_action',
   'rotate_connection_secret',
   'issue_handle',
   'issue_service_handle',
