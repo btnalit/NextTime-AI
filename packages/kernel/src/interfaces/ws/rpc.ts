@@ -138,6 +138,8 @@ import {
   ModuleNotFoundError,
 } from '../../application/platform/modules.js';
 import {
+  CombinationNotEligibleError,
+  CombinationNotFoundError,
   InvalidQuotaValueError,
   InvokeWorkerAttenuationError,
   InvokeWorkerDefinitionNotEnabledError,
@@ -838,11 +840,17 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (
     err instanceof WorkerDefinitionNotFoundError ||
     err instanceof SkillNotFoundError ||
-    err instanceof ProcedureNotFoundError
+    err instanceof ProcedureNotFoundError ||
+    // S11 GO16b — same mapping as interfaces/http/capability-route.ts.
+    err instanceof CombinationNotFoundError
   ) {
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
   }
-  if (err instanceof WorkerDefinitionNotPublishedError) {
+  if (
+    err instanceof WorkerDefinitionNotPublishedError ||
+    // S11 GO16b: mirrors HTTP 409 `combination_not_eligible`.
+    err instanceof CombinationNotEligibleError
+  ) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // S8 W3 K2 (leftover 82) `discard_draft` — same mapping as interfaces/http/capability-route.ts's

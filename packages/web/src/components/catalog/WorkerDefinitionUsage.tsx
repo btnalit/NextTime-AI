@@ -9,7 +9,7 @@ import { useCapability } from '../../hooks/useCapability.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
-import { formatRelative } from '../../lib/format.js';
+import { formatRelative, zhJoin } from '../../lib/format.js';
 import { workerSpecFieldLabel } from '../../lib/goals.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { taskFailureCategoryLabel, taskRefusalLabel } from '../../lib/labels.js';
@@ -258,7 +258,10 @@ function combinationLabel(combination: CombinationNaming, t: Translate): string 
     );
   }
   const fields = combination.fields.map((field) => workerSpecFieldLabel(field, t));
-  return t(`调整了${fields.join('、')} · 编号 ${ref}`, `Sets ${fields.join(', ')} · ref ${ref}`);
+  return t(
+    `${zhJoin('调整了', fields.join('、'))} · 编号 ${ref}`,
+    `Sets ${fields.join(', ')} · ref ${ref}`,
+  );
 }
 
 function combinationTitle(combination: CombinationNaming, t: Translate): string {

@@ -1078,6 +1078,21 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     enHint:
       "Counts a Worker's runs, Task results, attainment and failure groups per version, by run environment and by combination (as defined, or with a step's adjustments).",
   },
+  get_combination_candidates: {
+    zh: '查看可沉淀的组合',
+    en: 'See combinations worth keeping',
+    zhHint:
+      '列出一个 Worker 已发布版本带着某份步骤调整、近 90 天一直达成的组合，以及它们的证据；调整内容只给能看到那些目标的人。',
+    enHint:
+      "Lists the combinations of a Worker's published versions with one step's adjustments that kept being achieved over the last 90 days, with their evidence; what the adjustments say only for those who can see those goals.",
+  },
+  propose_definition_from_combination: {
+    zh: '沉淀为定义',
+    en: 'Keep as a definition',
+    zhHint: '把一个可沉淀的组合写成一个新 Worker 的私有草稿，并记下它的来历；发布后全工作区可见。',
+    enHint:
+      'Writes a combination worth keeping as a new Worker’s private draft and records where it came from; once published, the whole workspace sees it.',
+  },
 
   // -----------------------------------------------------------------------------------------
   // Capabilities — ingest

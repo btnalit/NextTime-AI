@@ -171,6 +171,8 @@ import {
   ModuleNotFoundError,
 } from '../../application/platform/modules.js';
 import {
+  CombinationNotEligibleError,
+  CombinationNotFoundError,
   InvalidQuotaValueError,
   InvokeWorkerAttenuationError,
   InvokeWorkerDefinitionNotEnabledError,
@@ -1137,9 +1139,21 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   if (
     err instanceof WorkerDefinitionNotFoundError ||
     err instanceof SkillNotFoundError ||
-    err instanceof ProcedureNotFoundError
+    err instanceof ProcedureNotFoundError ||
+    // S11 GO16b: no goal the caller can read ran the combination — as an unknown definition.
+    err instanceof CombinationNotFoundError
   ) {
     return { status: 404, code: 'not_found', message: err.message };
+  }
+  // S11 GO16b: the combination does not qualify now — `details.shortfalls` and
+  // `details.evidence`; nothing was proposed.
+  if (err instanceof CombinationNotEligibleError) {
+    return {
+      status: 409,
+      code: err.code,
+      message: err.message,
+      details: { shortfalls: [...err.details.shortfalls], evidence: { ...err.details.evidence } },
+    };
   }
   if (err instanceof WorkerDefinitionNotPublishedError) {
     return { status: 409, code: 'not_published', message: err.message };

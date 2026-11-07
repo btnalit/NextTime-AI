@@ -4,6 +4,7 @@ import type {
   GateOwnedParamWire,
   PublishEvaluationReview,
   SkillDetailWire,
+  WorkerDefinitionDerivationWire,
 } from '@nexttime/shared';
 import { visibleText } from '@nexttime/shared';
 import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from 'react';
@@ -93,6 +94,7 @@ import {
 import { AdminProposalsTab } from './catalog/AdminProposalsTab.js';
 import { DraftExpiryNote, type EditorState } from './catalog/CatalogShared.js';
 import { ChangesTab } from './catalog/ChangesTab.js';
+import { CombinationCandidatesSection, DerivedFromNote } from './catalog/CombinationCandidates.js';
 import { DiscardReasonField } from './catalog/DiscardReasonField.js';
 import { AgentDraftMark, draftOriginItem, operationOriginItem } from './catalog/DraftOrigin.js';
 import {
@@ -3512,7 +3514,12 @@ type CatalogWorkerRow = WorkerDefinitionSummary & {
   /** Legacy 597: who wrote this version (`WorkerDefinitionWire.origin`); absent on a version
    *  written before it was recorded. */
   readonly origin?: DraftOrigin;
+  /** S11 GO16b: where the family came from, when a person kept it from a combination. */
+  readonly derivedFrom?: WorkerDefinitionDerivationWire;
 };
+
+/** A Worker family's name and its latest version the reader can see, as a detail link. */
+type WorkerFamilyRef = { readonly name: string; readonly href: string };
 
 type WorkerEditorState =
   | { readonly kind: 'new' }
@@ -3747,6 +3754,8 @@ function WorkerDetailView({
   onPublish,
   onDeprecate,
   onDiscard,
+  familyOf,
+  onKeptAsDefinition,
 }: {
   readonly http: CapabilityCaller;
   readonly row: CatalogWorkerRow;
@@ -3779,6 +3788,10 @@ function WorkerDetailView({
   readonly onPublish: () => Promise<void>;
   readonly onDeprecate: () => Promise<void>;
   readonly onDiscard: (reason: string | undefined) => Promise<void>;
+  /** S11 GO16b: a Worker family by id, from the rows the page has read. */
+  readonly familyOf: (id: string) => WorkerFamilyRef | null;
+  /** S11 GO16b: a combination of this family was just kept as a new Worker's draft. */
+  readonly onKeptAsDefinition: (draft: CatalogWorkerRow) => void;
 }) {
   const t = useT();
   const name = workerLabel(row, t);
@@ -3803,6 +3816,21 @@ function WorkerDetailView({
   }
   const workerOrigin = draftOriginItem(row.origin, row.status, t, 'worker-detail-origin');
   if (workerOrigin !== null) items.push(workerOrigin);
+  // S11 GO16b: a Worker kept from a combination says which version and adjustments it came from,
+  // on every version — the draft a reviewer publishes included.
+  if (row.derivedFrom) {
+    items.push({
+      key: 'derived-from',
+      label: t('来历', 'Kept from'),
+      value: (
+        <DerivedFromNote
+          derivedFrom={row.derivedFrom}
+          base={familyOf(row.derivedFrom.definitionId)}
+          t={t}
+        />
+      ),
+    });
+  }
   if (typeof row.definition.description === 'string') {
     items.push({
       key: 'description',
@@ -3875,6 +3903,18 @@ function WorkerDetailView({
           definition takes no Tasks. */}
       {row.kind === 'worker' && row.status !== 'draft' ? (
         <WorkerDefinitionUsageSection http={http} definitionId={row.id} />
+      ) : null}
+
+      {/* S11 GO16b: the family's combinations that kept working, on its published version — a
+          person may keep one as a new Worker's draft (builders and up; the section decides). */}
+      {row.kind === 'worker' && row.status === 'published' ? (
+        <CombinationCandidatesSection
+          http={http}
+          definitionId={row.id}
+          baseName={name}
+          familyOf={familyOf}
+          onProposed={onKeptAsDefinition}
+        />
       ) : null}
 
       {isMyDraft && canPublish ? (
@@ -4212,6 +4252,20 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     : null;
   // Legacy 481: Workers with several published versions — each stays invocable by its version.
   const familyHeads = publishedFamilyHeads(everyRow);
+  // S11 GO16b: a family by id — its newest version the reader has read (published first, then
+  // their own draft), as a name and a detail link.
+  function familyOf(id: string): WorkerFamilyRef | null {
+    const versions = everyRow
+      .filter((row) => row.id === id)
+      .sort(
+        (a, b) =>
+          Number(b.status !== 'draft') - Number(a.status !== 'draft') || b.version - a.version,
+      );
+    const head = versions[0];
+    return head
+      ? { name: workerLabel(head, t), href: hrefs.catalog('workers', workerKey(head)) }
+      : null;
+  }
   // D-24: Publish / Deprecate on a definition another principal proposed is the owner's — and
   // publishing a new version of a family supersedes its published version, so that version's
   // proposer counts too (legacy 315; kernel `assertFamilyPublishAuthority`: any published version
@@ -4531,6 +4585,19 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       onPublish={() => publishDraft(selected)}
       onDeprecate={() => deprecate(selected)}
       onDiscard={(reason) => discardWorkerDraft(selected, reason)}
+      familyOf={familyOf}
+      onKeptAsDefinition={(draft) => {
+        toast.push({
+          tone: 'ok',
+          title: t(
+            `已写成草稿：${workerLabel(draft, t)}。审核后由你发布`,
+            `Draft written: ${workerLabel(draft, t)}. Review it, then publish`,
+          ),
+        });
+        refresh();
+        setFocusKey(workerKey(draft));
+        selectRow(workerKey(draft));
+      }}
     />
   ) : (
     <SelectionPlaceholder

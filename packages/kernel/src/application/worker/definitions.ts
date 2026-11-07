@@ -3,6 +3,7 @@ import {
   IllegalTransition,
   PUBLISHABLE_TRANSITIONS,
   type PublishableStatus,
+  type WorkerDefinitionDerivationWire,
   type WorkerDefinitionKind,
   transition,
   workerDefinitionContentSchemaFor,
@@ -19,6 +20,7 @@ import {
   type WorkerDefinitionReferenceSources,
   assertWorkerDefinitionReferencesResolve,
 } from './definition-references.js';
+import { DERIVED_FROM_SQL } from './derivations.js';
 import { assertFamilyPublishAuthority } from './publish-family.js';
 import { lockWorkerRegistry } from './registry-lock.js';
 
@@ -67,6 +69,9 @@ interface WorkerDefinitionDbRow {
   published_by: string | null;
   created_at: Date;
   published_at: Date | null;
+  /** S11 GO16b: the family's `worker_definition_derivations` row, as `derivations.ts` builds it
+   *  (`null` for a family not derived from a combination). */
+  derived_from: WorkerDefinitionDerivationWire | null;
 }
 
 export interface WorkerDefinitionRow {
@@ -83,6 +88,9 @@ export interface WorkerDefinitionRow {
   readonly publishedBy: string | null;
   readonly createdAt: Date;
   readonly publishedAt: Date | null;
+  /** S11 GO16b: the combination a person derived this family from (worker/0014) — the same on
+   *  every version of the family; `null` for a family written any other way. */
+  readonly derivedFrom: WorkerDefinitionDerivationWire | null;
 }
 
 function mapRow(row: WorkerDefinitionDbRow): WorkerDefinitionRow {
@@ -98,11 +106,14 @@ function mapRow(row: WorkerDefinitionDbRow): WorkerDefinitionRow {
     publishedBy: row.published_by,
     createdAt: row.created_at,
     publishedAt: row.published_at,
+    derivedFrom: row.derived_from ?? null,
   };
 }
 
+// S11 GO16b: every read names the family's derivation (`derivations.ts` `DERIVED_FROM_SQL`); a
+// query here reads `worker_definitions` unaliased, so the correlated subquery can name it.
 const SELECT_COLUMNS = `workspace_id, id, version, kind, status, definition, proposed_by, origin,
-  published_by, created_at, published_at`;
+  published_by, created_at, published_at, ${DERIVED_FROM_SQL} as derived_from`;
 
 // -------------------------------------------------------------------------------------------
 // Errors
