@@ -9,6 +9,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import {
+  HttpGatekeeperClient,
+  createGateConnectionSecrets,
+} from '../../adapters/gatekeeper-client/index.js';
 import { requestAction } from '../../governance/approval/index.js';
 import { HANDLE_SIGNING_ALG } from '../../governance/capability/index.js';
 import {
@@ -27,9 +31,11 @@ import {
 } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { createGoalRun } from '../goal/index.js';
+import { createUser } from '../identity/index.js';
 import { insertPendingContextItem } from '../linkage/index.js';
 import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
 import { workerSpecDigest } from '../task/step-attempt.js';
+import { setConnectionHandlerDeps } from './connection-handlers.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 import {
@@ -1217,6 +1223,26 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       },
     },
   },
+  add_member: {
+    // A platform user who is not in the workspace yet; the second add finds them a member.
+    'an active platform user not yet a member': {
+      setUp: async ({ pool }) => {
+        const login = `repeat-member-${randomUUID().slice(0, 8)}`;
+        await createUser(pool, {
+          login,
+          displayName: 'Repeat Member',
+          password: 'correct horse battery staple',
+        });
+        return { login, role: 'member' };
+      },
+    },
+  },
+  rotate_connection_secret: {
+    // Each call stores a new salt on the same Gatekeeper: the secret before it stops working.
+    'a gate the workspace connected itself': {
+      setUp: async (ctx) => ({ gatekeeperId: await gateWithOperation(ctx, false) }),
+    },
+  },
   reconcile_goal_action: {
     'an action of the run whose outcome is unknown': {
       setUp: async (ctx) => {
@@ -1294,6 +1320,8 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'record_procedure_followed',
   'propose_ontology_change',
   'publish_ontology_version',
+  'add_member',
+  'rotate_connection_secret',
   'issue_handle',
   'issue_service_handle',
   'invoke_worker',
@@ -1379,6 +1407,13 @@ describe.runIf(DATABASE_URL !== undefined)(
           terminate: async () => false,
           status: async () => undefined,
         },
+      });
+      // mint / rotate_connection_secret issue a secret from the gate token (a test one here); no
+      // row of this walk calls a gate, so the client is never used.
+      const gateToken = `repeat-gate-token-${randomUUID()}`;
+      setConnectionHandlerDeps({
+        gatekeeperClient: new HttpGatekeeperClient({ token: gateToken }),
+        connectionSecrets: createGateConnectionSecrets(gateToken),
       });
     });
 

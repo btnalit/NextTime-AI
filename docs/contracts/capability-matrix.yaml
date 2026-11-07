@@ -22,7 +22,7 @@ ratchet:
   console_unexplained: 10
   kernel_test_missing: 4
   e2e_waived: 65
-  repeat_unclear: 69
+  repeat_unclear: 66
 capabilities:
   add_eval_case:
     console: required
@@ -38,7 +38,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: already_member"
   add_membership:
     console: required
     agents: []
@@ -572,7 +572,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: idempotent # stores nothing (the secret carries its salt; only create_connection records it): another call returns another secret and changes no row
   new_chat:
     console: required
     agents: []
@@ -907,7 +907,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: repeats # a new salt on the same Gatekeeper each call; the secret before it stops working
   runtime_inventory:
     console: required
     agents: []
