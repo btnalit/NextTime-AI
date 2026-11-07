@@ -90,6 +90,7 @@ export {
   executableGatekeepers,
   narrowScopeToExecutableGates,
   readExecuteAccess,
+  serviceHandleResources,
 } from './execute-access.js';
 export type {
   ObserveExclusions,

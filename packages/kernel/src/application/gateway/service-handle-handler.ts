@@ -1,6 +1,7 @@
 import { type Role, getCapability } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { issueHandle, roleMayUseCapability } from '../../governance/capability/index.js';
+import { serviceHandleResources } from '../gates/index.js';
 import { getConfiguredTaskRuntime } from '../task/index.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import {
@@ -19,6 +20,7 @@ import {
  * platform capability whatever the page asks for. The token is returned once and never stored.
  * Review 2026-10-02 R-36: the platform's internal service Principals are refused, and the
  * requested capabilities are narrowed by the service Principal's role, like every other issuer's.
+ * Legacy 690: and its gates are the service Principal's own, by `issue_handle`'s rule.
  */
 
 const DEFAULT_SERVICE_HANDLE_TTL_SECONDS = 365 * 24 * 60 * 60;
@@ -97,9 +99,18 @@ export const issueServiceHandleHandler: CapabilityHandler = async (client, works
   if (!sessionId)
     throw new Error('issue_service_handle: session INSERT ... RETURNING produced no row');
 
+  // Legacy 690: its gates, by `issue_handle`'s rule — the service Principal's own gate Grants now,
+  // when a capability reads them (application/gates/execute-access.ts `serviceHandleResources`).
+  const resources = await serviceHandleResources(
+    client,
+    workspaceId,
+    input.principalId,
+    capabilities,
+  );
+
   const issued = await issueHandle(client, {
     sessionId,
-    scope: { capabilities, resources: {} },
+    scope: { capabilities, resources },
     ttlSeconds: input.ttlSeconds ?? DEFAULT_SERVICE_HANDLE_TTL_SECONDS,
     privateKey,
   });

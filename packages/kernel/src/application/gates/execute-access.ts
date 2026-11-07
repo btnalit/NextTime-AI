@@ -106,3 +106,41 @@ export function narrowScopeToExecutableGates(
   if (narrowed.length > 0) resources.gatekeeper = [...narrowed];
   return { ...scope, resources };
 }
+
+/** The capabilities whose calls read a Handle's `resources.gatekeeper`: `request_action` (the
+ *  policy engine's coverage check, governance/policy/engine.ts), `invoke_worker` (a Worker's gates
+ *  are attenuated from it, application/task/handle-mint.ts) and `list_allowed_operations` (its
+ *  execute-class tools, worker-result-handler.ts). */
+const GATE_SCOPE_READERS: ReadonlySet<string> = new Set([
+  'request_action',
+  'invoke_worker',
+  'list_allowed_operations',
+]);
+
+/**
+ * Legacy 690: the `resources` a service Handle is minted with — by `issue_service_handle`
+ * (application/gateway/service-handle-handler.ts) and the `issue-service-handle` CLI
+ * (cli/bootstrap.ts) — by the rule `issue_handle` mints an MCP Handle with: the service
+ * Principal's own gate set now (`entryGatekeeperIds` — its gate Grants minus its AgentProfile
+ * exclusions, capped by the AgentPolicy). Until then both wrote `{}`, so a service Principal the
+ * owner had granted a gate still had every `request_action` denied
+ * (`requester_scope_does_not_cover_gatekeeper`).
+ *
+ * Carried only when one of `capabilities` reads it (R-35's rule for the entry Handle,
+ * `entryScope`): a Handle that cannot act on a gate holds none. A snapshot, not authority on its
+ * own: every execute call still keeps only the gates the Principal may act on at that moment
+ * (`narrowScopeToExecutableGates`), so a Grant revoked after issue drops the gate then, for a
+ * Handle that lives a year.
+ */
+export async function serviceHandleResources(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+  capabilities: readonly string[],
+): Promise<Record<string, string[]>> {
+  if (!capabilities.some((name) => GATE_SCOPE_READERS.has(name))) return {};
+  const gatekeeperIds = entryGatekeeperIds(
+    await readExecuteAccess(client, workspaceId, principalId),
+  );
+  return gatekeeperIds.length > 0 ? { gatekeeper: [...gatekeeperIds] } : {};
+}

@@ -200,6 +200,9 @@ service。"系统接入"页变为从平台集成目录**启用**门实例（管�
 - **外部运行时**（Claude Code、本机 pi 经 `/mcp`；未来 A2A）：签发仍在工作区"访问"页（service Principal +
   Handle，替代 `issue-service-handle` CLI，本设计把它搬进页面）；集成页"外部运行时"标签只做跨工作区盘点
   与吊销。
+  签发时 Handle 带上这个 service Principal 自己的门（遗留 690，与 `issue_handle` 同一规则：它的门 Grant，
+  受 AgentPolicy 限制；只在带了会用到门的能力时才带）：先在「系统与授权」给它授门，外部运行时才能经审批调
+  `request_action`；每次调用仍只保留它当时能用的门，之后撤销的 Grant 对已签的 Handle 立即生效。
 
 ### 6.4 模块（领域包、Worker 模板、Skill）
 

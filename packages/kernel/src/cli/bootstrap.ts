@@ -14,6 +14,7 @@ import type { PoolClient } from 'pg';
 import { parse as parseYaml } from 'yaml';
 import { createPool, withWorkspace } from '../adapters/db/pool.js';
 import type { PoolLike } from '../adapters/db/pool.js';
+import { serviceHandleResources } from '../application/gates/index.js';
 import { generateApiKey, hashApiKey } from '../application/gateway/index.js';
 import {
   createPlatformAdmin,
@@ -412,9 +413,18 @@ export async function issueServiceHandleFromCli(
         throw new Error('issue-service-handle: session INSERT ... RETURNING produced no row');
       }
 
+      // Legacy 690: the same gates `issue_service_handle` gives a service Handle — this Principal's
+      // own gate Grants now (none for one just created), when a capability reads them.
+      const resources = await serviceHandleResources(
+        client,
+        input.workspaceId,
+        principalId,
+        input.scope,
+      );
+
       const issued = await issueHandle(client, {
         sessionId: sessionRow.id,
-        scope: { capabilities: [...input.scope], resources: {} },
+        scope: { capabilities: [...input.scope], resources },
         ttlSeconds: input.ttlSeconds ?? DEFAULT_SERVICE_HANDLE_TTL_SECONDS,
         privateKey: keyPair.privateKey,
       });
