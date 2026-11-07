@@ -13,6 +13,7 @@ import {
   RpcTimeoutError,
   TurnAlreadyRunningError,
   WsClient,
+  WsNotSentError,
 } from './ws-client.js';
 
 /**
@@ -1104,6 +1105,30 @@ describe('WsClient', () => {
     function pings(socket: FakeWebSocket): SentFrame[] {
       return socket.sent.filter((frame) => frame.method === 'ping');
     }
+
+    it('refuses a send as not sent, before it leaves, once the dead socket is given up and while the new one is not yet in (legacy 673)', async () => {
+      vi.useFakeTimers();
+      const { client, sockets } = heartbeatClient();
+      const socket = await connectAndAuth(client, sockets);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(client.getStatus()).toBe('reconnecting');
+
+      const refused = client.sendChatMessage('chat-1', 'restart web-1', 'k'.repeat(32));
+      await expect(refused).rejects.toBeInstanceOf(WsNotSentError);
+      expect(socket.sent.filter((frame) => frame.method === 'send_chat_message')).toHaveLength(0);
+
+      // The next socket is open but not yet authenticated: still refused before it leaves.
+      await vi.advanceTimersByTimeAsync(100);
+      const next = sockets[1];
+      if (!next) throw new Error('expected a second socket');
+      next.open();
+      await expect(client.sendChatMessage('chat-1', 'restart web-1')).rejects.toBeInstanceOf(
+        WsNotSentError,
+      );
+      expect(next.sent.filter((frame) => frame.method === 'send_chat_message')).toHaveLength(0);
+      client.close();
+    });
 
     it('pings an authenticated socket, one at a time, and takes any answer as alive', async () => {
       vi.useFakeTimers();

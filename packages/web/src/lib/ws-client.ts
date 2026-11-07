@@ -200,6 +200,16 @@ export const RPC_TIMEOUT_CODE = -32000;
  *  the socket stayed open but no frame with that `id` came back within the deadline. A subclass
  *  of `RpcError` so every existing `instanceof RpcError` / `err.code` consumer keeps working;
  *  `method` names the call for the log line and the banner. */
+/** A call refused before it left the page — no socket open, or one not yet authenticated (a
+ *  reconnect in progress). It did not reach the kernel, so it did not run (legacy 673 tells this
+ *  apart from a call whose answer was lost). The messages are unchanged from before the class. */
+export class WsNotSentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WsNotSentError';
+  }
+}
+
 export class RpcTimeoutError extends RpcError {
   readonly method: string;
   readonly timeoutMs: number;
@@ -527,7 +537,7 @@ export class WsClient {
    *  `RpcTimeoutError` when no response arrives within the deadline (C5). */
   call<T = unknown>(method: string, params?: unknown, options: CallOptions = {}): Promise<T> {
     if (method !== 'authenticate' && !this.authenticated) {
-      return Promise.reject(new Error('WsClient: call() before authenticate() succeeded'));
+      return Promise.reject(new WsNotSentError('WsClient: call() before authenticate() succeeded'));
     }
     return this.rpc<T>(method, params, options);
   }
@@ -539,7 +549,7 @@ export class WsClient {
   ): Promise<T> {
     const socket = this.socket;
     if (!socket || socket.readyState !== READY_STATE_OPEN) {
-      return Promise.reject(new Error('WsClient: not connected'));
+      return Promise.reject(new WsNotSentError('WsClient: not connected'));
     }
     const id = this.nextId++;
     const request = { jsonrpc: '2.0' as const, id, method, params };

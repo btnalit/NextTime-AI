@@ -11,6 +11,7 @@ import {
   RpcError,
   RpcTimeoutError,
   type WsClient,
+  WsNotSentError,
 } from '../lib/ws-client.js';
 import { ChatPage } from './ChatPage.js';
 import { goalDetail } from './goals/goal-fixtures.test-helpers.js';
@@ -949,9 +950,10 @@ describe('ChatPage send that got no answer (legacy 673)', () => {
     await timeOutOneSend(fake, 'restart web-1');
     setStatus('reconnecting');
 
-    // Enter on the same text while disconnected: refused before it leaves.
+    // Enter on the same text while reconnecting: refused before it leaves — the WsClient's own
+    // refusal for a socket not yet authenticated (ws-client.test.ts, legacy 673).
     (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      new Error('WsClient: not connected'),
+      new WsNotSentError('WsClient: call() before authenticate() succeeded'),
     );
     fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
     await waitFor(() => expect(sendCalls(fake)).toHaveLength(2));

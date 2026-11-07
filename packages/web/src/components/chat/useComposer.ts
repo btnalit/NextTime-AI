@@ -19,7 +19,12 @@ import {
   savePendingSend,
 } from '../../lib/pending-send.js';
 import { type TurnState, streamReducer } from '../../lib/streaming-reducer.js';
-import { type ChatMessage, RpcTimeoutError, type WsClient } from '../../lib/ws-client.js';
+import {
+  type ChatMessage,
+  RpcTimeoutError,
+  type WsClient,
+  WsNotSentError,
+} from '../../lib/ws-client.js';
 
 export interface ComposerState {
   readonly composerText: string;
@@ -206,9 +211,10 @@ export function useComposer(
   };
 }
 
-/** The send was refused before it left the page: it did not run. */
+/** The send was refused before it left the page (no socket, or one not yet authenticated): it
+ *  did not run. */
 function neverLeft(err: unknown): boolean {
-  return err instanceof Error && err.message === 'WsClient: not connected';
+  return err instanceof WsNotSentError;
 }
 
 /** A send whose answer never came: the deadline passed, or the socket closed while it was out
