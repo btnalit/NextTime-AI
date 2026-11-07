@@ -1601,6 +1601,37 @@ describe.runIf(DATABASE_URL !== undefined)(
         other.close();
       });
 
+      // Legacy 677: the expiry timer must go with the socket. Left behind, it would hold every
+      // closed console socket for up to the session's 8 hours, and a reconnecting tab adds one
+      // per reconnect.
+      it('a console socket the client closes leaves no expiry timer behind', async () => {
+        const user = await newConsoleUser();
+        await insertMember({ userId: user.id });
+        const token = await loginForCookie(user.login);
+        const setSpy = vi.spyOn(globalThis, 'setTimeout');
+        const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+        try {
+          const client = await cookieSocket(token);
+          // The session's own end, a little under the 8-hour TTL away: the only timer that long.
+          const expiryTimers = setSpy.mock.calls.flatMap((call, i) => {
+            const delay = call[1] ?? 0;
+            return delay > 7 * 3_600_000 && delay <= 8 * 3_600_000
+              ? [setSpy.mock.results[i]?.value]
+              : [];
+          });
+          expect(expiryTimers).toHaveLength(1);
+
+          client.close();
+          await client.waitForClose();
+          await vi.waitFor(() => expect(clearSpy).toHaveBeenCalledWith(expiryTimers[0]), {
+            timeout: 2000,
+          });
+        } finally {
+          setSpy.mockRestore();
+          clearSpy.mockRestore();
+        }
+      });
+
       it('reset_user_password closes the user’s console sockets', async () => {
         const admin = await newConsoleUser('admin');
         const user = await newConsoleUser();
