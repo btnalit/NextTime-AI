@@ -157,6 +157,14 @@ M1–M3、M5、R 与 M4 的静态半边是纯静态检查，在 `quality` 与 `p
 - 每周一次：读 `web-e2e` 的覆盖产物与 retried 列表，基线能收紧就开 PR 收紧（棘轮往下拧）。
 - 补测试按 §6 批次开 PR，并发不超过 3。
 
+### 5.7 内核遍历测试（批次 D，G6 / G10 / G11 / G12）
+
+按注册表遍历，不按 capability 点名：新注册的 capability 自动被走到。
+
+- **D1（G12，已落地）** `packages/kernel/src/application/gateway/workspace-isolation-traversal.integration.test.ts`：工作区 A 经 `new_chat` / `rename_chat` 建一个对话，再写入一个 Gatekeeper、一个已发布 Operation 和一个待审批 ActionRequest，每一行的可见字段都带一个唯一标记串。B 的 owner（最宽角色）经 `dispatchCapability` 调全部工作区 `observe` capability，跑两遍。第一遍不带参数，答复里不得出现标记、A 的工作区 id 或 A 的任何行 id。第二遍按参数 schema 把 id 形字段（`chatId`、`gatekeeperId`、`objectId`、`entityId` 等）指向 A 的行，自由文本参数（搜索词、名称过滤）填标记的前半段，让跨工作区的搜索能命中 A 的行，而被查的完整标记从不出现在参数里。第二遍里，答复不得出现完整标记或 A 的工作区 id，成功的答复里也不得出现 A 的任何行 id（一个只回 `{id, status}` 的串读不带标记）；错误信息可以回显本次调用自己传入的 id（例如「某 id 不存在」），但不得出现其他 A 的 id。审计组的读（`group: audit`）不查行 id，因为 B 的每次调用都按原参数审计进 B 自己的审计表，审计读回显的是 B 问过什么的记录，不是 A 的数据。两遍都同时查结果和错误：被拒或失败的调用，按 `mapCapabilityError` 得到客户端实际收到的 message 和 details，做同样的检查。调用可以失败，失败不算泄漏，但两遍合计至少要有 50 个 capability 正常答复（今天是 64 个）。同一遍历以 A 的 owner 跑一次作正向对照：`list_chats`、`list_gatekeepers`、`list_pending`、`get_object`、`get_action` 和按前半段搜索的 `find_operations` 必须读到标记，证明种子可达、检查会触发。e2e 双工作区串读旅程仍待做（UX）。#493 审查提的后续项（不阻塞）：存在性旁路对照（A 的 id 与随机 uuid 两次结果比对）、Handle channel 各走一遍、更多种子（Skill、WorkerDefinition、Fact、task、goal、change segment、memory）、`security definer` 函数设闸的静态检查。
+- **D2（G10，已落地）** `role-refusal-traversal.integration.test.ts`：一个工作区里五个角色各一个 Principal，并按 D1 的方式造好数据。对每个工作区 capability（不含平台面和 `adminAgentOnly`）× 每个 `roleMayUseCapability` 不放行的角色，经 `dispatchCapability` 调用，参数按 schema 指向真实的行。每次调用都必须抛 `ForbiddenError`，且错误信息点名该角色；今天共 325 对，下限 100。整轮遍历前后，对工作区在 62 张带 `workspace_id` 的表里的全部行各做一次摘要，前后必须一致，即没有写入、没有审计行、没有 outbox 事件。角色拒绝今天不写审计，本测试把这一点钉住；是否该记一条 `refused` 审计，交 D3 由 #493 定。放行一侧不遍历：用编造的参数以有权角色调每个写，只会白跑真实 handler。
+- 两个测试共用 `traversal-fixture.ts`（造工作区、造数据、按 schema 生成参数、工作区摘要），D3 / D4 接着用。
+
 ## 6. 分批路线
 
 | 批次 | 内容 | 关闭缺口 | 审查 | 前置 |
