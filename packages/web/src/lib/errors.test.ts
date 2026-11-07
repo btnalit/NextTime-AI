@@ -59,7 +59,7 @@ describe('describeError', () => {
       new RpcError(-32000, 'WsClient: approve timed out after 30000ms'),
     );
     expect(described.code).toBe('timeout');
-    expect(described.title).toBe('No response from the kernel');
+    expect(described.title).toBe('No answer from the kernel');
   });
 
   it('maps JSON-RPC codes to the same stable names the HTTP transport uses', () => {
@@ -72,6 +72,8 @@ describe('describeError', () => {
     expect(describeError(new RpcError(-32016, 'excluded')).code).toBe(
       'worker_definition_not_enabled',
     );
+    // Legacy 673: one idempotency key, two different texts.
+    expect(describeError(new RpcError(-32020, 'reused')).code).toBe('idempotency_key_reused');
     // Legacy 336: -32014 by its message, `gatekeeper_error` when the message says nothing.
     expect(describeError(new RpcError(-32014, 'gate_error: boom')).code).toBe('gatekeeper_error');
     expect(

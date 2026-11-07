@@ -113,10 +113,16 @@ interface ChatHistoryResult {
   readonly nextCursor?: string;
 }
 
-interface SendChatMessageResult {
+/** Legacy 673: `changed: false` means the kernel had already taken a message under the same
+ *  `idempotencyKey` in this Chat (the first try of a send whose answer was lost) and answered with
+ *  that message instead of writing another; `turnStatus` is where its Turn is now — a finished one
+ *  sends no more `chat.metadata`. Both absent from a kernel that predates the key. */
+export interface SendChatMessageResult {
   readonly messageId: string;
   readonly sequence: number;
   readonly turnId: string;
+  readonly changed?: boolean;
+  readonly turnStatus?: 'running' | 'completed' | 'interrupted' | 'failed';
 }
 
 /** Handlers a `subscribeChat` caller supplies. `onMessage` fires at most once per distinct
@@ -532,9 +538,18 @@ export class WsClient {
   }
 
   /** Sends a chat message and starts a Turn. Rejects with `TurnAlreadyRunningError` (not a plain
-   *  `RpcError`) when the Chat already has a Turn running (§9.4). */
-  sendChatMessage(chatId: string, text: string): Promise<SendChatMessageResult> {
-    return this.call<SendChatMessageResult>('send_chat_message', { chatId, text });
+   *  `RpcError`) when the Chat already has a Turn running (§9.4). Legacy 673: `idempotencyKey`
+   *  makes a second try of the same message safe — the kernel answers it with the first one
+   *  (`changed: false`) instead of starting another Turn. */
+  sendChatMessage(
+    chatId: string,
+    text: string,
+    idempotencyKey?: string,
+  ): Promise<SendChatMessageResult> {
+    return this.call<SendChatMessageResult>(
+      'send_chat_message',
+      idempotencyKey === undefined ? { chatId, text } : { chatId, text, idempotencyKey },
+    );
   }
 
   stopAgent(chatId: string): Promise<{ stopped: boolean }> {

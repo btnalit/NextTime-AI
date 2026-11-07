@@ -61,7 +61,7 @@ describe('kit/ErrorBanner', () => {
     render(<ErrorBanner error={error} testId="eb" />);
     const el = screen.getByRole('alert');
     expect(el.querySelector('.error-banner-message')?.textContent).toContain(
-      '浏览器没有收到控制台服务的响应',
+      '浏览器没有收到控制台服务的答复',
     );
     expect(screen.getByTestId('eb-detail').textContent).toContain('Failed to fetch');
     expect(el.textContent).toContain('网络错误');
