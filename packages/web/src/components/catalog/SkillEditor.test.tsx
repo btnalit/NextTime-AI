@@ -351,6 +351,37 @@ describe('SkillEditor draft across an unmount (legacy 662)', () => {
     expect(bodyField().value).toBe('v2 body, half rewritten');
   });
 
+  it('a restored body set back to the fetched one keeps nothing, though the body came after the restore (legacy 667)', async () => {
+    const { caller } = http({
+      get_workspace: WORKSPACE('p-me'),
+      get_skill: () => ({ markdown: 'v2 body' }),
+    });
+    const first = render(
+      <SkillEditor http={caller} nextVersionOf={ROW} onProposed={vi.fn()} onDone={vi.fn()} />,
+    );
+    await waitFor(() => expect(bodyField().value).toBe('v2 body'));
+    fill(/SKILL.md 正文/, 'v2 body, half rewritten');
+    first.unmount();
+
+    let answer: (value: { markdown: string }) => void = () => undefined;
+    const again = http({
+      get_workspace: WORKSPACE('p-me'),
+      get_skill: () =>
+        new Promise<{ markdown: string }>((resolve) => {
+          answer = resolve;
+        }),
+    });
+    const second = render(
+      <SkillEditor http={again.caller} nextVersionOf={ROW} onProposed={vi.fn()} onDone={vi.fn()} />,
+    );
+    await waitFor(() => expect(bodyField().value).toBe('v2 body, half rewritten'));
+    answer({ markdown: 'v2 body' });
+    await waitFor(() => expect(bodyField().disabled).toBe(false));
+    fill(/SKILL.md 正文/, 'v2 body');
+    second.unmount();
+    expect(sessionStorage.getItem('nexttime.drafts')).toBeNull();
+  });
+
   it('nothing is kept for an editor opened and left as it was', async () => {
     const { caller } = http({
       get_workspace: WORKSPACE('p-me'),
