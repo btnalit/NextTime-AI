@@ -24,8 +24,9 @@ import { type Page, expect, test } from '../lib/test.js';
  * without a reload. When 672 / 673 are fixed, their assertions go into this case.
  *
  * ③ The kernel stops (`E2E_STOP_KERNEL_CMD`) under a cookie session that belongs to two
- * workspaces (the CI owner, added as an owner of `ci-e2e-switch` — the workflow creates it and
- * hands this file its owner's key, `WEB_E2E_SWITCH_API_KEY`), and the person switches workspace.
+ * workspaces (the CI owner, added as an owner of `ci-e2e-switch` — `E2E_SWITCH_WORKSPACE_CMD`
+ * creates it when this case runs, last, so no spec before it sees it, and prints its owner's key),
+ * and the person switches workspace.
  * On 主机 this was legacy 649: an upgrade under an open page, then a switch that did nothing. The
  * page must say it stayed where it was and offer a way in (R-64, #1003), and once the kernel is
  * back that way in must work — the first write in the new workspace included.
@@ -35,7 +36,7 @@ const CUT_NETWORK = process.env.E2E_CUT_NETWORK_CMD;
 const STOP_KERNEL = process.env.E2E_STOP_KERNEL_CMD;
 const RESTART_KERNEL = process.env.E2E_RESTART_KERNEL_CMD;
 const API_KEY = process.env.WEB_E2E_API_KEY;
-const SWITCH_API_KEY = process.env.WEB_E2E_SWITCH_API_KEY;
+const SWITCH_WORKSPACE = process.env.E2E_SWITCH_WORKSPACE_CMD;
 const OWNER_LOGIN = process.env.WEB_E2E_OWNER_LOGIN;
 const OWNER_PASSWORD = process.env.WEB_E2E_OWNER_PASSWORD;
 
@@ -130,13 +131,19 @@ test.describe('batch C3: an open console page across a network cut and a switch 
     page,
   }) => {
     test.skip(
-      !STOP_KERNEL || !RESTART_KERNEL || !SWITCH_API_KEY || !OWNER_LOGIN || !OWNER_PASSWORD,
-      'set E2E_STOP_KERNEL_CMD, E2E_RESTART_KERNEL_CMD, WEB_E2E_SWITCH_API_KEY, WEB_E2E_OWNER_LOGIN and WEB_E2E_OWNER_PASSWORD',
+      !STOP_KERNEL || !RESTART_KERNEL || !SWITCH_WORKSPACE || !OWNER_LOGIN || !OWNER_PASSWORD,
+      'set E2E_STOP_KERNEL_CMD, E2E_RESTART_KERNEL_CMD, E2E_SWITCH_WORKSPACE_CMD, WEB_E2E_OWNER_LOGIN and WEB_E2E_OWNER_PASSWORD',
     );
-    // Setup outside the page: the CI owner joins `ci-e2e-switch` as an owner (its owner's key, from
-    // Node). A retry finds the membership already there.
+    // Setup outside the page: the second workspace (the workflow's script; a retry gets the same
+    // one), and the CI owner joins it as an owner (its owner's key, from Node). A retry finds the
+    // membership already there.
+    const { stdout } = await promisify(execFile)('sh', [SWITCH_WORKSPACE as string], {
+      timeout: 120_000,
+    });
+    const switchKey = stdout.trim();
+    expect(switchKey, 'E2E_SWITCH_WORKSPACE_CMD printed a key').not.toBe('');
     const added = await page.request.post('/api/cap/add_member', {
-      headers: { authorization: `Bearer ${SWITCH_API_KEY}` },
+      headers: { authorization: `Bearer ${switchKey}` },
       data: { login: OWNER_LOGIN, role: 'owner' },
     });
     const body = (await added.json()) as { ok: boolean; error?: { code: string } };
