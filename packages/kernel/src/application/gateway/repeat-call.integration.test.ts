@@ -63,6 +63,72 @@ interface RecipeContext {
 interface Recipe {
   readonly setUp: (ctx: RecipeContext) => Promise<Record<string, unknown>>;
   readonly first?: unknown;
+  /** This path's answer, when it is not the row's: a row declares what its default path does
+   *  (the params a caller sends most), and a known, intended other path says its own here. */
+  readonly repeat?: string;
+}
+
+/** A call as the recipe's owner, for setting a case up. */
+function as<T = Record<string, unknown>>(
+  ctx: RecipeContext,
+  name: string,
+  params: Record<string, unknown>,
+): Promise<T> {
+  return dispatchCapability({ pool: ctx.pool }, ctx.caller, name, params) as Promise<T>;
+}
+
+/** A Skill / Procedure body the walk cannot build (a name, a description, Markdown or steps). */
+const skillBody = () => ({
+  name: `repeat-skill-${randomUUID().slice(0, 8)}`,
+  description: 'A Skill for the repeat walk.',
+  markdown: '# Steps\n\nOne.',
+});
+const procedureBody = () => ({
+  name: `repeat-procedure-${randomUUID().slice(0, 8)}`,
+  description: 'A Procedure for the repeat walk.',
+  steps: [{ kind: 'approval', description: 'A human approves the change.' }],
+});
+
+interface Proposed {
+  readonly id: string;
+  readonly draftDigest: string;
+}
+
+/** v1 of a Skill (or Procedure), proposed and — when `publish` — published. */
+async function familyV1(
+  ctx: RecipeContext,
+  kind: 'skill' | 'procedure',
+  body: Record<string, unknown>,
+  publish: boolean,
+): Promise<Proposed> {
+  const v1 = await as<Proposed>(ctx, `propose_${kind}`, { [kind]: body });
+  if (publish) {
+    await as(ctx, `publish_${kind}`, {
+      [`${kind}Id`]: v1.id,
+      version: 1,
+      draftDigest: v1.draftDigest,
+    });
+  }
+  return v1;
+}
+
+/** v1 of a worker WorkerDefinition, proposed and — when `publish` — published. */
+async function workerV1(ctx: RecipeContext, publish: boolean): Promise<{ id: string }> {
+  const v1 = await as<{ id: string }>(ctx, 'propose_worker_definition', {
+    kind: 'worker',
+    definition: { systemPrompt: 'A worker for the repeat walk.' },
+  });
+  if (publish) await as(ctx, 'publish_worker_definition', { definitionId: v1.id, version: 1 });
+  return v1;
+}
+
+/** reject_draft's case: v1 published, v2 proposed — the pending draft the reviewer takes off. */
+async function pendingV2(ctx: RecipeContext, kind: 'skill' | 'procedure') {
+  const body = kind === 'skill' ? skillBody() : procedureBody();
+  const v1 = await familyV1(ctx, kind, body, true);
+  const next = kind === 'skill' ? { ...body, markdown: '# Two' } : { ...body, description: 'v2' };
+  const v2 = await as<Proposed>(ctx, `propose_${kind}`, { [kind]: next, [`${kind}Id`]: v1.id });
+  return { kind, id: v1.id, version: 2, draftDigest: v2.draftDigest, reason: 'Not this one.' };
 }
 
 /** Extra cases for a row, beyond the one with schema-built params on the bare seed. A declaration
@@ -104,11 +170,201 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       },
     },
   },
+  // Legacy 664, batch 1. The rows below name a person, a Grant, a request or a draft the walk
+  // cannot pick, so they run their recipes only (`RECIPES_ONLY`).
+  set_principal_role: {
+    'the member, to builder': {
+      setUp: async ({ memberId }) => ({ principalId: memberId, role: 'builder' }),
+    },
+  },
+  disable_principal: {
+    'the member': { setUp: async ({ memberId }) => ({ principalId: memberId }) },
+  },
+  rotate_api_key: {
+    // People sign in with a password (a person's key is refused): a service Principal's key.
+    'a service Principal': {
+      setUp: async (ctx) => {
+        const made = await as<{ principal: { id: string } }>(ctx, 'create_principal', {
+          role: 'member',
+          displayName: 'repeat service',
+        });
+        return { principalId: made.principal.id };
+      },
+    },
+  },
+  revoke_capability: {
+    // An already revoked Grant is not offered again: grants.ts `revokeCapabilityGrant` matches
+    // active rows only, on purpose, so the second revoke is the not-found of a missing one.
+    'a Grant to the member': {
+      setUp: async (ctx) => {
+        const grant = await as<{ id: string }>(ctx, 'grant_capability', {
+          principalId: ctx.memberId,
+          resourceType: 'gatekeeper',
+          resourceId: ctx.seed.gatekeeperId,
+        });
+        return { grantId: grant.id };
+      },
+    },
+  },
+  cancel_connection_request: {
+    'a pending request': {
+      setUp: async (ctx) => {
+        const request = await as<{ id: string }>(ctx, 'request_connection', {
+          kind: 'ssh',
+          target: 'repeat.example',
+        });
+        return { connectionRequestId: request.id };
+      },
+    },
+  },
+  record_decision: {
+    // A Decision is attributed to the running Turn; with no agent runtime nothing ends it.
+    'a running Turn': {
+      setUp: async (ctx) => {
+        await as(ctx, 'send_chat_message', { chatId: ctx.seed.chatId, text: 'decide something' });
+        return { summary: 'Restart web-1 tonight.' };
+      },
+    },
+  },
+  publish_skill: {
+    'a v1 draft': {
+      setUp: async (ctx) => {
+        const v1 = await familyV1(ctx, 'skill', skillBody(), false);
+        return { skillId: v1.id, version: 1, draftDigest: v1.draftDigest };
+      },
+    },
+  },
+  deprecate_skill: {
+    'a published v1': {
+      setUp: async (ctx) => ({ skillId: (await familyV1(ctx, 'skill', skillBody(), true)).id }),
+    },
+  },
+  publish_procedure: {
+    'a v1 draft': {
+      setUp: async (ctx) => {
+        const v1 = await familyV1(ctx, 'procedure', procedureBody(), false);
+        return { procedureId: v1.id, version: 1, draftDigest: v1.draftDigest };
+      },
+    },
+  },
+  deprecate_procedure: {
+    'a published v1': {
+      setUp: async (ctx) => ({
+        procedureId: (await familyV1(ctx, 'procedure', procedureBody(), true)).id,
+      }),
+    },
+  },
+  // Without an id, each call starts a new draft family — same name or not; two families with
+  // one name are stopped at publish (`skill_name_conflict`), by design (#493 on 664 batch 1). An
+  // agent retrying a lost answer leaves extra drafts, never an extra published Skill. With the id
+  // of a published family, the first call proposes its next version and a second one is refused
+  // while that draft is pending.
+  propose_skill: {
+    'a new family': { setUp: async () => ({ skill: skillBody() }) },
+    'the next version of a published one': {
+      setUp: async (ctx) => {
+        const body = skillBody();
+        const v1 = await familyV1(ctx, 'skill', body, true);
+        return { skill: { ...body, markdown: '# Two' }, skillId: v1.id };
+      },
+      repeat: 'conflict: draft_pending',
+    },
+  },
+  propose_procedure: {
+    'a new family': { setUp: async () => ({ procedure: procedureBody() }) },
+    'the next version of a published one': {
+      setUp: async (ctx) => {
+        const body = procedureBody();
+        const v1 = await familyV1(ctx, 'procedure', body, true);
+        return { procedure: { ...body, description: 'v2' }, procedureId: v1.id };
+      },
+      repeat: 'conflict: draft_pending',
+    },
+  },
+  // Legacy 679: saving the same profile again rewrites updated_at / updated_by
+  // and revokes the person's entry Handles. It should be idempotent; until it is, `repeats`.
+  set_agent_profile: {
+    "the owner's own": { setUp: async () => ({ promptAddendum: 'Be brief.' }) },
+  },
+  propose_worker_definition: {
+    'a new family': {
+      setUp: async () => ({
+        kind: 'worker',
+        definition: { systemPrompt: 'A worker for the repeat walk.' },
+      }),
+    },
+    // Legacy 680: unlike Skills and Procedures (E2-0, one pending draft a family),
+    // a WorkerDefinition family stacks drafts — the second call makes v3 beside a pending v2.
+    // As it is: `repeats`; once it is aligned, `conflict: draft_pending`.
+    'the next version of a published one': {
+      setUp: async (ctx) => ({
+        definitionId: (await workerV1(ctx, true)).id,
+        kind: 'worker',
+        definition: { systemPrompt: 'Version two.' },
+      }),
+      repeat: 'repeats',
+    },
+  },
+  publish_worker_definition: {
+    'a v1 draft': {
+      setUp: async (ctx) => ({ definitionId: (await workerV1(ctx, false)).id, version: 1 }),
+    },
+  },
+  deprecate_worker_definition: {
+    'a published v1': {
+      setUp: async (ctx) => ({ definitionId: (await workerV1(ctx, true)).id, version: 1 }),
+    },
+  },
+  discard_draft: {
+    // The discarded draft is gone, so the second call finds no such version.
+    'a worker draft': {
+      setUp: async (ctx) => ({
+        kind: 'worker_definition',
+        id: (await workerV1(ctx, false)).id,
+        version: 1,
+        reason: 'Not needed.',
+      }),
+    },
+    'a Skill draft': {
+      setUp: async (ctx) => ({
+        kind: 'skill',
+        id: (await familyV1(ctx, 'skill', skillBody(), false)).id,
+        version: 1,
+        reason: 'Not needed.',
+      }),
+    },
+  },
+  reject_draft: {
+    // The rejected draft is taken off its family, so the second call finds no such version.
+    'a pending Skill v2': { setUp: (ctx) => pendingV2(ctx, 'skill') },
+    'a pending Procedure v2': { setUp: (ctx) => pendingV2(ctx, 'procedure') },
+  },
 };
 
 /** Rows whose schema-built params cannot make a first call succeed on the bare seed — a param
  *  naming something the walk has no value for — run their recipes instead of that case. */
-const RECIPES_ONLY: ReadonlySet<string> = new Set(['grant_capability', 'connect_gatekeeper']);
+const RECIPES_ONLY: ReadonlySet<string> = new Set([
+  'grant_capability',
+  'connect_gatekeeper',
+  'set_principal_role',
+  'disable_principal',
+  'rotate_api_key',
+  'revoke_capability',
+  'cancel_connection_request',
+  'record_decision',
+  'publish_skill',
+  'deprecate_skill',
+  'publish_procedure',
+  'deprecate_procedure',
+  'reject_draft',
+  'propose_skill',
+  'propose_procedure',
+  'set_agent_profile',
+  'propose_worker_definition',
+  'publish_worker_definition',
+  'deprecate_worker_definition',
+  'discard_draft',
+]);
 
 interface Declared {
   readonly capability: Capability;
@@ -132,13 +388,14 @@ function declaredRows(): Declared[] {
     }
     if (!RECIPES_ONLY.has(name)) out.push({ capability, repeat: row.repeat });
     for (const recipe of recipes) {
-      out.push({ capability, repeat: row.repeat, recipe });
+      out.push({ capability, repeat: RECIPES[name]?.[recipe]?.repeat ?? row.repeat, recipe });
     }
   }
   return out;
 }
 
-/** The entity a result names: its own `id`, or the `id` of its one object-valued field. */
+/** The entity a result names: its own `id`, or the `id` of its one object-valued field, or else
+ *  its one `…Id` field (`rotate_api_key` answers `{ principalId, apiKey }`). */
 function entityId(result: unknown): string | undefined {
   if (result === null || typeof result !== 'object') return undefined;
   const record = result as Record<string, unknown>;
@@ -149,7 +406,12 @@ function entityId(result: unknown): string | undefined {
       typeof value === 'object' &&
       typeof (value as { id?: unknown }).id === 'string',
   );
-  return nested.length === 1 ? (nested[0]?.id as string) : undefined;
+  if (nested.length === 1) return nested[0]?.id as string;
+  if (nested.length > 1) return undefined;
+  const ids = Object.entries(record).filter(
+    ([key, value]) => key.endsWith('Id') && typeof value === 'string',
+  );
+  return ids.length === 1 ? (ids[0]?.[1] as string) : undefined;
 }
 
 interface AuditRow {
