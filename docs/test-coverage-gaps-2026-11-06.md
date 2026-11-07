@@ -184,6 +184,7 @@ M1–M3、M5、R 与 M4 的静态半边是纯静态检查，在 `quality` 与 `p
 
   没写 repeat 是硬失败，新增 capability 的 PR 必须当场决定。`repeat-call.integration.test.ts` 读 matrix 表驱动：每个已声明的行都在新造的工作区里连调两次，按声明断言。第一次调不成功的声明直接失败，要么在 `RECIPES` 里补参数配方，要么改回 unclear。所以不可能出现"声明了却没人测"的行。首批声明 8 行：`new_chat`、`request_connection`、`create_principal` 为 creates；`stop_agent`、`register_source` 为 idempotent；`send_chat_message` 为 conflict: turn_already_running；`approve`、`reject` 为 conflict: illegal_transition（第二次批准不会再排 outbox，钉住了"批准两次不会执行两次"）。`request_connection` 第二次会再排一条 outbox，也就是工作区里多一条待处理的连接请求，按 creates 可以接受；要不要合并重复的待审请求，是控制台 UX 的问题。`archive_chat`、`unarchive_chat`、`rename_chat` 在状态不变时仍写领域审计行（遗留 665，内核修），暂标 `unclear: 665`，修好后改为 idempotent。其余 132 行挂 `unclear: 664`，按批补参数配方、逐批声明，棘轮初值 135。平台面的写要先有平台调用方的夹具才能声明。验证本测试确实会失败：故意把 `archive_chat` 写成 idempotent、`stop_agent` 写成 creates、`approve` 写错错误码、`request_connection` 写成 idempotent（outbox 会多一条），四处都被测试抓到。
 - D1–D4 共用 `traversal-fixture.ts`（造工作区、造数据、按 schema 生成参数、工作区摘要）。
+- 待收敛的测试工具债（#1066 上 #493 的可选建议，不单开批次）：`packages/kernel/src/fake-invoke-worker.ts` 已经导出 `FakeTaskSupervisorClient`，但还有 18 个集成测试文件各自另写了一份同名类，主要在 `application/goal`、`application/linkage`、`application/gateway`、`application/task` 下。下一个需要驱动推进器或 Worker 的批次（遗留 664 里的 `decide_plan_revision`，遗留 682 的修复）直接用导出的那一份。其余文件在各自被改动时顺手换掉，不做一次性的大改。
 
 ## 6. 分批路线
 
