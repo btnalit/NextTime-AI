@@ -129,7 +129,7 @@ test.describe('batch C3: an open console page across a network cut and a switch 
     // by itself and there is nothing to press. Either order ends in the same state, asserted
     // below; the resend path itself is pinned by ChatPage.test.tsx (legacy 673).
     const resend = uncertain.getByRole('button', { name: '再发一次' });
-    await expect(resend.or(users.filter({ hasText: during }))).toBeVisible();
+    await expect(resend.or(users.filter({ hasText: during })).first()).toBeVisible();
     if (await resend.isVisible()) {
       // The note can go between the check and the press when the late request lands then.
       await resend.click({ timeout: 5_000 }).catch(() => undefined);
