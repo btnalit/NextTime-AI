@@ -22,7 +22,7 @@ ratchet:
   console_unexplained: 10
   kernel_test_missing: 4
   e2e_waived: 65
-  repeat_unclear: 71
+  repeat_unclear: 69
 capabilities:
   add_eval_case:
     console: required
@@ -116,7 +116,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent  # an already cancelled Task stays as it is
   causal_chain:
     console: required
     agents: []
@@ -390,7 +390,7 @@ capabilities:
   invoke_worker:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: [entry, admin]
-    repeat: "unclear: 664"
+    repeat: idempotent  # the same idempotencyKey, or an identical call while the first Task is unfinished; once it has finished, an identical call without a key starts a new one
   issue_gate_credential_token:
     console: required
     agents: []

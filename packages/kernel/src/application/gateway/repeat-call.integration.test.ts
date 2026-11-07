@@ -477,6 +477,21 @@ async function draftOf(ctx: RecipeContext, gatekeeperId: string) {
   return draft;
 }
 
+/** Workspaces a recipe started a Task in: `afterAll` cancels what is still unfinished, so no
+ *  sweeper or quota of a later file counts a Worker that will never report. */
+const TASK_WORKSPACES = new Set<string>();
+
+/** invoke_worker's params for a published worker of the recipe's own. */
+async function workerCall(ctx: RecipeContext, idempotencyKey?: string) {
+  TASK_WORKSPACES.add(ctx.seed.workspaceId);
+  return {
+    definitionId: (await workerV1(ctx, true)).id,
+    version: 1,
+    input: { host: 'web-1' },
+    ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+  };
+}
+
 /** The session a Handle was issued for. */
 const sessionOf = (result: unknown) => (result as { sessionId?: string }).sessionId;
 
@@ -1170,6 +1185,38 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       },
     },
   },
+  // Legacy 664, batch 9: Tasks, on a published worker.
+  invoke_worker: {
+    'one idempotency key': {
+      setUp: (ctx) => workerCall(ctx, `repeat-${randomUUID()}`),
+    },
+    // An explicit key returns its Task whatever state it is in, a finished one too (per #493 on
+    // batch 9: with only running Tasks, matching unfinished Tasks alone would pass as well).
+    'one idempotency key, its Task already cancelled': {
+      first: expect.objectContaining({ status: 'cancelled' }),
+      setUp: async (ctx) => {
+        const params = await workerCall(ctx, `repeat-${randomUUID()}`);
+        const task = await as<{ id: string }>(ctx, 'invoke_worker', params);
+        await as(ctx, 'cancel_task', { taskId: task.id });
+        return params;
+      },
+    },
+    // Without a key an identical call returns the unfinished Task too (the Worker here never
+    // reports); once a Task has finished, an identical call starts a new one.
+    'no idempotency key, the first still running': {
+      setUp: (ctx) => workerCall(ctx),
+    },
+  },
+  cancel_task: {
+    // The first call cancels it; a second finds it cancelled already and changes nothing.
+    'a running Task': {
+      first: expect.objectContaining({ status: 'cancelled' }),
+      setUp: async (ctx) => {
+        const task = await as<{ id: string }>(ctx, 'invoke_worker', await workerCall(ctx));
+        return { taskId: task.id };
+      },
+    },
+  },
   reconcile_goal_action: {
     'an action of the run whose outcome is unknown': {
       setUp: async (ctx) => {
@@ -1249,6 +1296,8 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'publish_ontology_version',
   'issue_handle',
   'issue_service_handle',
+  'invoke_worker',
+  'cancel_task',
 ]);
 
 interface Declared {
@@ -1318,16 +1367,15 @@ describe.runIf(DATABASE_URL !== undefined)(
       pool = createPool();
       await runMigrations(pool, MIGRATIONS_DIR);
       // Issuing a Handle signs it: the task runtime holds the key (as the kernel's main() wires
-      // it). No row here spawns a Task, so the supervisor only says so. (The CI-only fake one in
+      // it). A spawned Worker never runs: no container, no report. (The CI-only fake one in
       // fake-invoke-worker.ts may be imported by index.ts alone — guard fake-markers rule 2.)
       const { privateKey } = await generateKeyPair(HANDLE_SIGNING_ALG, { crv: 'Ed25519' });
       configureTaskRuntime({
         pool,
         privateKey,
         supervisorClient: {
-          spawn: async () => {
-            throw new Error('the repeat walk spawns no Task');
-          },
+          // A Worker "starts" and never reports: its Task stays running for cancel_task.
+          spawn: async () => ({ containerId: `repeat-${randomUUID()}`, ip: undefined }),
           terminate: async () => false,
           status: async () => undefined,
         },
@@ -1351,6 +1399,19 @@ describe.runIf(DATABASE_URL !== undefined)(
         } finally {
           client.release();
         }
+      }
+      for (const workspaceId of TASK_WORKSPACES) {
+        await withWorkspace(
+          pool,
+          { workspaceId, principalId: randomUUID() },
+          (client) =>
+            client.query(
+              `update tasks set status = 'cancelled', cancelled_at = now()
+                where workspace_id = $1 and status in ('created', 'queued', 'running', 'waiting_approval')`,
+              [workspaceId],
+            ),
+          { skipRoleSwitch: true },
+        );
       }
       resetTaskRuntimeForTests();
       await pool?.end();
