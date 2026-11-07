@@ -8,6 +8,7 @@ import {
 } from '../../lib/acting-through.js';
 import { useDebounced } from '../../lib/audit-id-picker.js';
 import { platformAuditActionSuggestions } from '../../lib/audit-pickers.js';
+import { isReadAuditAction } from '../../lib/audit.js';
 import { actionLabel } from '../../lib/capability-labels.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
@@ -130,6 +131,9 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
     if (actionInput.trim()) next.action = actionInput.trim();
     if (actorUserIdInput.trim()) next.actorUserId = actorUserIdInput.trim();
     if (actingThroughInput) next.actingThrough = actingThroughInput;
+    // #501 on #1040 (P3-1): asking for a read by name shows the reads, the same rule a deep link
+    // follows — never an empty page that says nothing matched while the rows are there.
+    if (next.action !== undefined && isReadAuditAction(next.action)) setShowReads(true);
     setApplied(next);
   }
 
@@ -290,7 +294,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
             ? {}
             : {
                 body: t(
-                  '读操作默认不列出；勾选“显示读操作”可一并查看。',
+                  '读操作默认不列出；勾选「显示读操作」可一并查看。',
                   'Reads are not listed by default; check “Show reads” to include them.',
                 ),
                 action: (

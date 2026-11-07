@@ -302,6 +302,28 @@ describe('PlatformAuditPage', () => {
     expect(within(noCode).queryByTestId('audit-refused-code')).toBeNull();
   });
 
+  it('legacy 669 (#501 P3-1): applying a read by name shows the reads', async () => {
+    const http = scriptedHttp({
+      list_users: () => ({ items: [] }),
+      platform_audit_query: () => ({ items: [] }),
+    });
+    renderPage(http);
+    await screen.findByTestId('platform-audit-empty');
+    const toggle = screen
+      .getByTestId('platform-audit-show-reads-toggle')
+      .querySelector('input') as HTMLInputElement;
+    const form = screen.getByTestId('platform-audit-filter-form');
+    fireEvent.change(within(form).getByLabelText('动作'), { target: { value: 'list_users' } });
+    fireEvent.click(within(form).getByRole('button', { name: '应用' }));
+    await waitFor(() =>
+      expect(http.calls.at(-1)).toEqual({
+        name: 'platform_audit_query',
+        params: { limit: 50, action: 'list_users' },
+      }),
+    );
+    expect(toggle.checked).toBe(true);
+  });
+
   it('legacy 669: with every row a read, the empty state offers the reads and "Show reads" asks again', async () => {
     const http = scriptedHttp({
       list_users: () => ({ items: [] }),

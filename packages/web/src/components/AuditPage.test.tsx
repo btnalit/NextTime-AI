@@ -201,6 +201,11 @@ describe('AuditPage entry points', () => {
     fireEvent.click(screen.getByTestId('audit-export'));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     expect(http.calls.filter((c) => c.name === 'export_prov')).toHaveLength(0);
+    // Legacy 669 (#501 P3-2): the file says whether the reads were in it.
+    const exported = JSON.parse(
+      await ((create.mock.calls[0] as unknown[] | undefined)?.[0] as Blob).text(),
+    ) as { readsShown: boolean; count: number };
+    expect(exported).toMatchObject({ readsShown: false, count: 2 });
 
     // Applying a new filter from the form re-queries with only the non-blank keys.
     fireEvent.change(screen.getByTestId('audit-actor-select'), { target: { value: 'p-1' } });
@@ -429,6 +434,43 @@ describe('AuditPage entry points', () => {
     expect(screen.getByTestId('audit-acting-through-note').textContent).toContain(
       '早于平台开始记录的行不在其中',
     );
+  });
+
+  it('legacy 669 (#501 P3-1): applying a read by name shows the reads, as a deep link to one does', async () => {
+    const http = scriptedHttp({
+      audit_query: () => ({ items: [] }),
+      list_principals: principalsPage,
+      list_gatekeepers: () => ({ items: [] }),
+    });
+    renderPage(http);
+    await screen.findByTestId('audit-empty');
+    const toggle = screen
+      .getByTestId('audit-show-reads-toggle')
+      .querySelector('input') as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+    const pages = () =>
+      http.calls.filter(
+        (c) => c.name === 'audit_query' && (c.params as { limit?: number }).limit === 50,
+      );
+
+    // A write by name: the reads stay out.
+    fireEvent.change(screen.getByLabelText('动作'), { target: { value: 'assert_fact' } });
+    fireEvent.click(screen.getByTestId('audit-apply'));
+    await waitFor(() =>
+      expect(pages().at(-1)?.params).toEqual({
+        filter: { action: 'assert_fact', excludeReads: true },
+        limit: 50,
+      }),
+    );
+    expect(toggle.checked).toBe(false);
+
+    // A read by name: asked for with the reads, the toggle says so.
+    fireEvent.change(screen.getByLabelText('动作'), { target: { value: 'list_grants' } });
+    fireEvent.click(screen.getByTestId('audit-apply'));
+    await waitFor(() =>
+      expect(pages().at(-1)?.params).toEqual({ filter: { action: 'list_grants' }, limit: 50 }),
+    );
+    expect(toggle.checked).toBe(true);
   });
 
   it('legacy 669: the reads are left out by the kernel; with none left the empty state offers them, and "Show reads" asks again', async () => {

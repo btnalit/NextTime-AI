@@ -169,6 +169,9 @@ export function AuditLogSection({
     if (resourceType.trim()) next.resourceType = resourceType.trim();
     if (resourceId.trim()) next.resourceId = resourceId.trim();
     if (actingThrough) next.actingThrough = actingThrough;
+    // #501 on #1040 (P3-1): asking for a read by name shows the reads, the same rule a deep link
+    // follows — never an empty page that says nothing matched while the rows are there.
+    if (next.action !== undefined && isReadAuditAction(next.action)) setShowReads(true);
     setApplied(next);
   }
 
@@ -362,7 +365,7 @@ export function AuditLogSection({
             ? {}
             : {
                 body: t(
-                  '读操作默认不列出；勾选“显示读操作”可一并查看。',
+                  '读操作默认不列出；勾选「显示读操作」可一并查看。',
                   'Reads are not listed by default; check “Show reads” to include them.',
                 ),
                 action: (
