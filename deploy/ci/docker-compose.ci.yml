@@ -40,5 +40,10 @@ services:
     build: { context: ., dockerfile: deploy/ci/self-gate/Dockerfile }
     environment: { GATE_KERNEL_TOKEN_FILE: /data/gate/kernel.token, GATE_PORT: '8090' }
     volumes: ['${NEXTTIME_DATA}/ci-self-gate:/data/gate:ro']
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:8090/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     networks: [control]
     restart: 'no'
