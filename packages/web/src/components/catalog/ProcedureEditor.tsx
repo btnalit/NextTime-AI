@@ -2,8 +2,10 @@ import type { OutputSchema } from '@nexttime/shared';
 import { type FormEvent, useMemo, useRef, useState } from 'react';
 import { byData, useFocusAfterRender } from '../../hooks/useFocusAfterRender.js';
 import { useFocusWhenLost } from '../../hooks/useFocusWhenLost.js';
+import { useFormDraft } from '../../hooks/useFormDraft.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
+import { useWorkspaceIdentity } from '../../hooks/useWorkspaceIdentity.js';
 import {
   EMPTY_PROCEDURE_FORM,
   type FieldErrors,
@@ -47,6 +49,7 @@ import {
   workerDefinitionChoices,
 } from '../../lib/tasks.js';
 import { useGuardedClose } from '../kit/discard-guard.js';
+import { RestoredDraftNotice } from '../kit/restored-draft-notice.js';
 import { Button } from '../ui/Button.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Field, Input, Select, Textarea, describedBy } from '../ui/Field.js';
@@ -132,6 +135,24 @@ export function ProcedureEditor({
   const submitErrorRef = useFocusWhenLost<HTMLDivElement>(error);
   const [proposed, setProposed] = useState<ProposedDraft | null>(null);
   const content = useMemo(() => procedureContentFromForm(form), [form]);
+
+  // Legacy 662: kept in this tab once edited, back for the same caller and the same target after
+  // a session that expired under it.
+  const { principalId } = useWorkspaceIdentity(http);
+  const [opened] = useState(() => JSON.stringify(form));
+  const edited = useMemo(() => JSON.stringify(form) !== opened, [form, opened]);
+  const draft = useFormDraft<ProcedureForm>({
+    principalId,
+    target: nextVersionOf
+      ? `procedure:version:${nextVersionOf.id}@${nextVersionOf.version}`
+      : copyOf
+        ? `procedure:copy:${copyOf.id}`
+        : 'procedure:new',
+    value: form,
+    edited,
+    parse: parseProcedureForm,
+    restore: setForm,
+  });
   // Legacy 485: a step can only run a `kind='worker'` definition (the kernel's `invoke.ts` and
   // `step-attempt.ts` refuse an entry one), so only Workers are offered; the entry definitions
   // stay in `workerDefinitions` so a step that already names one says what it is.
@@ -240,6 +261,7 @@ export function ProcedureEditor({
         procedure: validated.value,
         ...(nextVersionOf ? { procedureId: nextVersionOf.id } : {}),
       });
+      draft.forget();
       setProposed(result);
       onProposed(result);
     } catch (err) {
@@ -295,6 +317,7 @@ export function ProcedureEditor({
       onSubmit={(event) => void handleSubmit(event)}
       data-testid="procedure-editor"
     >
+      {draft.restored ? <RestoredDraftNotice discard="cancel" /> : null}
       {nextVersionOf ? (
         <Notice testId="procedure-new-version-notice">
           {t(
@@ -799,7 +822,16 @@ export function ProcedureEditor({
         <Button type="submit" variant="primary" loading={busy} data-testid="procedure-submit">
           {t('保存草稿', 'Save draft')}
         </Button>
-        <Button variant="ghost" onClick={() => guardedClose(onDone)} disabled={busy}>
+        <Button
+          variant="ghost"
+          onClick={() =>
+            guardedClose(() => {
+              draft.forget();
+              onDone();
+            })
+          }
+          disabled={busy}
+        >
           {t('取消', 'Cancel')}
         </Button>
       </div>
@@ -845,4 +877,24 @@ function stepReferenceField(
         ? { name: 'version', control: 'version' }
         : { name: 'definitionId', control: 'definition' };
   return { error: `${prefix}.${field.name}`, control: `${prefix}-${field.control}` };
+}
+
+/** A kept `ProcedureForm` (legacy 662), or `null` when what was kept is not one this console can
+ *  render — it must survive the same derivation the editor runs on every render. */
+function parseProcedureForm(raw: unknown): ProcedureForm | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = raw as Record<string, unknown>;
+  if (typeof value.name !== 'string' || typeof value.description !== 'string') return null;
+  if (!Array.isArray(value.steps)) return null;
+  if (
+    !value.steps.every((step) => step && typeof step === 'object' && typeof step.key === 'string')
+  )
+    return null;
+  const form = raw as ProcedureForm;
+  try {
+    procedureContentFromForm(form);
+  } catch {
+    return null;
+  }
+  return form;
 }

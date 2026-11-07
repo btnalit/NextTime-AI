@@ -9,7 +9,9 @@ import {
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import { byData, useFocusAfterRender } from '../../hooks/useFocusAfterRender.js';
+import { useFormDraft } from '../../hooks/useFormDraft.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
+import { useWorkspaceIdentity } from '../../hooks/useWorkspaceIdentity.js';
 import { workerContractOf } from '../../lib/catalog.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import {
@@ -67,6 +69,7 @@ import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
 import { Field, describedBy } from '../kit/field.js';
 import { Notice } from '../kit/notice.js';
+import { RestoredDraftNotice } from '../kit/restored-draft-notice.js';
 import { DashboardCard } from '../kit/section.js';
 import { Select } from '../kit/select.js';
 import { StatusChip } from '../kit/status-chip.js';
@@ -124,14 +127,38 @@ export function GoalPlanEditor({
   // The revision this draft is made against, as the page showed it when the editor opened. A
   // re-read meanwhile (a push, a retry) moves the steps' states, never the base: sending against
   // the newest revision would overwrite one this draft was never made from (I-G3).
-  const [base] = useState(() => latest.planRevision);
-  const baseRevision = useState(() => latest.currentRevision ?? latest.planRevision.revision)[0];
+  const [base, setBase] = useState(() => latest.planRevision);
+  const [baseRevision, setBaseRevision] = useState(
+    () => latest.currentRevision ?? latest.planRevision.revision,
+  );
   const goal = useMemo(() => ({ ...latest, planRevision: base }), [latest, base]);
   const newer =
     (latest.currentRevision ?? latest.planRevision.revision) !== baseRevision
       ? (latest.currentRevision ?? latest.planRevision.revision)
       : null;
   const [draft, setDraft] = useState<PlanDraft>(() => draftFromDetail(goal));
+  // Legacy 662: the revision in progress — with the revision it was made against, so a draft
+  // restored after the plan moved on is still checked against its own base (`newer`, below) —
+  // kept in this tab once edited, back after a session that expired under it.
+  const { principalId } = useWorkspaceIdentity(http);
+  const keptRevision = useMemo(() => ({ draft, base, baseRevision }), [draft, base, baseRevision]);
+  const revisionEdited = useMemo(() => draftEdited(draft, goal), [draft, goal]);
+  const formDraft = useFormDraft<KeptRevision>({
+    principalId,
+    target: goalRevisionDraftTarget(latest.id),
+    value: keptRevision,
+    edited: revisionEdited,
+    parse: parseKeptRevision,
+    restore: (kept) => {
+      setBase(kept.base);
+      setBaseRevision(kept.baseRevision);
+      setDraft(kept.draft);
+    },
+  });
+  const cancel = () => {
+    formDraft.forget();
+    onCancel();
+  };
   // The editor takes the page's place: focus moves to its title so the change is announced.
   const titleRef = useRef<HTMLSpanElement>(null);
   useEffect(() => titleRef.current?.focus(), []);
@@ -171,7 +198,11 @@ export function GoalPlanEditor({
       skillDirectory.state.status === 'ready' && skillDirectory.state.data.nextCursor === undefined,
     loading: specOpened && skillDirectory.state.status === 'loading',
   };
-  const run = useOperationDone(onDone, latest);
+  // Sent, or refused because the goal moved on: either way the editor closes, and so does its draft.
+  const run = useOperationDone((outcome) => {
+    formDraft.forget();
+    onDone(outcome);
+  }, latest);
   const runs = useMemo(() => liveRuns(goal), [goal]);
   if (can('revise_goal') === false) return null;
 
@@ -298,6 +329,7 @@ export function GoalPlanEditor({
       data-testid="goal-plan-editor"
     >
       <div className="stack">
+        {formDraft.restored ? <RestoredDraftNotice discard="discardChanges" /> : null}
         <Notice tone="info">
           {t(
             '改好后提交，计划立即换成新的一版，目标仍然暂停，回到详情页按「继续」才接着执行。没改的步骤沿用原来的进度。',
@@ -555,7 +587,7 @@ export function GoalPlanEditor({
               <Button
                 variant="ghost"
                 size="s"
-                onClick={() => (edited ? setDiscardOpen(true) : onCancel())}
+                onClick={() => (edited ? setDiscardOpen(true) : cancel())}
                 data-testid="goal-plan-cancel"
               >
                 {t('放弃修改', 'Discard changes')}
@@ -571,7 +603,7 @@ export function GoalPlanEditor({
             confirmLabel={t('放弃修改', 'Discard changes')}
             cancelLabel={t('接着改', 'Keep editing')}
             danger
-            onConfirm={onCancel}
+            onConfirm={cancel}
             testId="goal-plan-discard"
           />
         </div>
@@ -1608,4 +1640,58 @@ function ReasonField({
       />
     </Field>
   );
+}
+
+/** Legacy 662: what a revision in progress keeps — the draft and the revision it is made from. */
+interface KeptRevision {
+  readonly draft: PlanDraft;
+  readonly base: GoalDetailWire['planRevision'];
+  readonly baseRevision: number;
+}
+
+/** Where `useFormDraft` files a goal's revision in progress; `GoalDetailPage` reads it to open the
+ *  editor again after a session that expired under it. */
+export function goalRevisionDraftTarget(goalRunId: string): string {
+  return `goal:${goalRunId}`;
+}
+
+/** The editor's own 「edited」 (below), from the draft alone. */
+function draftEdited(draft: PlanDraft, goal: GoalDetailWire): boolean {
+  if (draft.reason.trim() !== '') return true;
+  const plan = planOf(draft);
+  if (plan === null) return true;
+  const diff = planDiff(goal.planRevision.plan, plan);
+  return (
+    diff.added.length > 0 ||
+    diff.removed.length > 0 ||
+    diff.changed.length > 0 ||
+    diff.acceptanceChanged ||
+    budgetOf(draft, goal.budget) !== null
+  );
+}
+
+/** A kept revision this editor can take, or `null` (another console's shape, or not one). */
+function parseKeptRevision(raw: unknown): KeptRevision | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const kept = raw as Record<string, unknown>;
+  const draft = kept.draft as Record<string, unknown> | undefined;
+  const base = kept.base as Record<string, unknown> | undefined;
+  if (typeof kept.baseRevision !== 'number' || !draft || !base) return null;
+  if (typeof base.revision !== 'number' || !base.plan || typeof base.plan !== 'object') return null;
+  if (
+    !Array.isArray(draft.steps) ||
+    !Array.isArray(draft.acceptance) ||
+    !draft.budget ||
+    typeof draft.budget !== 'object' ||
+    typeof draft.reason !== 'string' ||
+    !draft.removals ||
+    typeof draft.removals !== 'object'
+  )
+    return null;
+  try {
+    planOf(kept.draft as PlanDraft);
+  } catch {
+    return null;
+  }
+  return raw as KeptRevision;
 }

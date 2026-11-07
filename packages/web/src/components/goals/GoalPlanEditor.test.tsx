@@ -1376,3 +1376,51 @@ describe('S11 GO15b: a step’s adjustments to its Worker, edited in the plan ed
     );
   });
 });
+
+// Legacy 662: a session that expires under the plan editor unmounts the page; the requester
+// signing in again lands on the goal with the editor open and their changes back.
+describe('the plan editor across an unmount (legacy 662)', () => {
+  const attempts = () =>
+    within(step('apply')).getByTestId('goal-plan-step-attempts') as HTMLInputElement;
+
+  it('opens again on the goal with what was changed, says so, and 放弃修改 drops it', async () => {
+    const first = renderPage(scriptedHttp(handlers(paused(), workspace('p-alice', 'member'))));
+    await openEditor();
+    fireEvent.change(attempts(), { target: { value: '3' } });
+    await waitFor(() => expect(sessionStorage.getItem('nexttime.drafts')).not.toBeNull());
+    first.unmount();
+
+    renderPage(scriptedHttp(handlers(paused(), workspace('p-alice', 'member'))));
+    await screen.findByTestId('goal-plan-editor');
+    expect(screen.getByTestId('restored-draft').textContent).toContain('已恢复上次没有提交的修改');
+    expect(attempts().value).toBe('3');
+
+    fireEvent.click(screen.getByTestId('goal-plan-cancel'));
+    fireEvent.click(
+      within(await screen.findByTestId('goal-plan-discard')).getByTestId('confirm-button'),
+    );
+    await waitFor(() => expect(screen.queryByTestId('goal-plan-editor')).toBeNull());
+    expect(sessionStorage.getItem('nexttime.drafts')).toBeNull();
+  });
+
+  it('not for another reader, and not once the goal can no longer be revised', async () => {
+    const first = renderPage(scriptedHttp(handlers(paused(), workspace('p-alice', 'member'))));
+    await openEditor();
+    fireEvent.change(attempts(), { target: { value: '3' } });
+    await waitFor(() => expect(sessionStorage.getItem('nexttime.drafts')).not.toBeNull());
+    first.unmount();
+
+    const owner = renderPage(scriptedHttp(handlers(paused(), workspace('p-owner', 'owner'))));
+    await screen.findByTestId('goal-detail');
+    await waitFor(() => expect(screen.queryByTestId('goal-plan-editor')).toBeNull());
+    owner.unmount();
+    expect(sessionStorage.getItem('nexttime.drafts')).not.toBeNull();
+
+    renderPage(
+      scriptedHttp(handlers(paused({ status: 'running' }), workspace('p-alice', 'member'))),
+    );
+    await screen.findByTestId('goal-detail');
+    await waitFor(() => expect(sessionStorage.getItem('nexttime.drafts')).toBeNull());
+    expect(screen.queryByTestId('goal-plan-editor')).toBeNull();
+  });
+});

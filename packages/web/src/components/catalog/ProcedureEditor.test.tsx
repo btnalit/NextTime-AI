@@ -1896,3 +1896,69 @@ describe('ProcedureEditor (S6-A A2)', () => {
     expect(input.getAttribute('aria-describedby')?.split(' ')).toContain(reason.id);
   });
 });
+
+// Legacy 662: a session that expires under the editor unmounts it; the steps typed come back for
+// the same caller, with a notice, and a step added afterwards gets a key of its own.
+describe('ProcedureEditor draft across an unmount (legacy 662)', () => {
+  const WORKSPACE = (callerId: string) => () => ({
+    id: 'ws-1',
+    name: 'ws',
+    caller: { id: callerId, role: 'builder' },
+  });
+
+  it('a new Procedure half written: unmounted, opened again — its name and steps are back', async () => {
+    const { caller } = http({ get_workspace: WORKSPACE('p-me') });
+    const first = render(<ProcedureEditor http={caller} onProposed={vi.fn()} onDone={vi.fn()} />);
+    await waitFor(() => expect(caller.call).toHaveBeenCalledWith('get_workspace', undefined));
+    fireEvent.change(screen.getByLabelText(/^名称/), { target: { value: 'Deploy' } });
+    fireEvent.click(screen.getByTestId('procedure-add-step'));
+    fireEvent.change(within(screen.getByTestId('procedure-step')).getByLabelText(/说明/), {
+      target: { value: 'ops signs off' },
+    });
+    await waitFor(() => expect(sessionStorage.getItem('nexttime.drafts')).not.toBeNull());
+    first.unmount();
+
+    const again = http({ get_workspace: WORKSPACE('p-me') });
+    render(<ProcedureEditor http={again.caller} onProposed={vi.fn()} onDone={vi.fn()} />);
+    await screen.findByTestId('restored-draft');
+    expect((screen.getByLabelText(/^名称/) as HTMLInputElement).value).toBe('Deploy');
+    const restored = screen.getByTestId('procedure-step');
+    expect((within(restored).getByLabelText(/说明/) as HTMLTextAreaElement).value).toBe(
+      'ops signs off',
+    );
+
+    fireEvent.click(screen.getByTestId('procedure-add-step'));
+    const keys = screen
+      .getAllByTestId('procedure-step')
+      .map((step) => step.closest('[data-step-uid]')?.getAttribute('data-step-uid'));
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
+  });
+
+  it('another caller gets an empty form, and 取消 drops the draft', async () => {
+    const { caller } = http({ get_workspace: WORKSPACE('p-me') });
+    const onDone = vi.fn();
+    const first = render(<ProcedureEditor http={caller} onProposed={vi.fn()} onDone={onDone} />);
+    await waitFor(() => expect(caller.call).toHaveBeenCalledWith('get_workspace', undefined));
+    fireEvent.change(screen.getByLabelText(/^名称/), { target: { value: 'Deploy' } });
+    await waitFor(() => expect(sessionStorage.getItem('nexttime.drafts')).not.toBeNull());
+    first.unmount();
+
+    const theirs = http({ get_workspace: WORKSPACE('p-other') });
+    const second = render(
+      <ProcedureEditor http={theirs.caller} onProposed={vi.fn()} onDone={vi.fn()} />,
+    );
+    await waitFor(() =>
+      expect(theirs.caller.call).toHaveBeenCalledWith('get_workspace', undefined),
+    );
+    expect((screen.getByLabelText(/^名称/) as HTMLInputElement).value).toBe('');
+    expect(screen.queryByTestId('restored-draft')).toBeNull();
+    second.unmount();
+
+    render(<ProcedureEditor http={caller} onProposed={vi.fn()} onDone={onDone} />);
+    await screen.findByTestId('restored-draft');
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(onDone).toHaveBeenCalled();
+    expect(sessionStorage.getItem('nexttime.drafts')).toBeNull();
+  });
+});

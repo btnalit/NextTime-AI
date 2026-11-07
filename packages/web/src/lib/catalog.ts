@@ -10,6 +10,7 @@ import {
   type WorkerDefinitionKind,
   workerDefinitionContentSchemaFor,
 } from '@nexttime/shared';
+import { createUidCounter } from './client-uids.js';
 import {
   type FactCheckDraft,
   emptyFactCheckDraft,
@@ -326,17 +327,16 @@ export interface ProcedureStepForm {
   readonly checkJsonText: string;
 }
 
-let stepCounter = 0;
-/** A fresh client key per step (module-local counter — unique within a page load). */
+const stepCounter = createUidCounter();
+/** A fresh client key per step (module-local counter — unique within a page load, and past any
+ *  key a restored draft carries: `lib/client-uids.ts`). */
 export function nextStepKey(): string {
-  stepCounter += 1;
-  return `step-${stepCounter}`;
+  return `step-${stepCounter.next()}`;
 }
 
-let bindingCounter = 0;
+const bindingCounter = createUidCounter();
 export function newProcedureBinding(): ProcedureBindingForm {
-  bindingCounter += 1;
-  return { uid: `binding-${bindingCounter}`, to: '', from: '', path: '' };
+  return { uid: `binding-${bindingCounter.next()}`, to: '', from: '', path: '' };
 }
 
 export const EMPTY_STEP: ProcedureStepForm = {

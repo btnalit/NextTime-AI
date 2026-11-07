@@ -3,11 +3,13 @@ import {
   type OntologyTypeWire,
   type SkillDetailWire,
 } from '@nexttime/shared';
-import { type FormEvent, useEffect, useRef, useState } from 'react';
+import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import { useFocusWhenLost } from '../../hooks/useFocusWhenLost.js';
+import { useFormDraft } from '../../hooks/useFormDraft.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
+import { useWorkspaceIdentity } from '../../hooks/useWorkspaceIdentity.js';
 import { finalizeSkillName, slugifySkillNameDraft } from '../../lib/catalog-input.js';
 import {
   EMPTY_SKILL_FORM,
@@ -28,6 +30,7 @@ import { transportKindLabel } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
 import { Combobox, ComboboxChips } from '../kit/combobox.js';
 import { useGuardedClose } from '../kit/discard-guard.js';
+import { RestoredDraftNotice } from '../kit/restored-draft-notice.js';
 import { Button } from '../ui/Button.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Field, Input, Textarea, describedBy } from '../ui/Field.js';
@@ -123,13 +126,37 @@ export function SkillEditor({
   // `form`/`update`, so typing in the Markdown field before the read resolves is never clobbered
   // by a second application, and the effect does not need `form`/`setForm` in its own deps.
   const appliedDetail = useRef(false);
+  // Legacy 662: what the editor opened with — the row's fields, then the fetched body — so a
+  // draft is kept only once the person changed something.
+  const [opened, setOpened] = useState<SkillForm>(form);
   useEffect(() => {
     if (appliedDetail.current) return;
     if (skillDetail.state.status !== 'ready' || skillDetail.state.data === null) return;
     appliedDetail.current = true;
     const detail = skillDetail.state.data;
     setForm((prev) => ({ ...prev, markdown: detail.markdown }));
+    setOpened((prev) => ({ ...prev, markdown: detail.markdown }));
   }, [skillDetail.state]);
+
+  // Legacy 662: kept in this tab while edited, back for the same caller and the same target after
+  // a session that expired under it. A restored body wins over the fetched one.
+  const { principalId } = useWorkspaceIdentity(http);
+  const edited = useMemo(() => !sameSkillForm(form, opened), [form, opened]);
+  const draft = useFormDraft<SkillForm>({
+    principalId,
+    target: nextVersionOf
+      ? `skill:version:${nextVersionOf.id}@${nextVersionOf.version}`
+      : copyOf
+        ? `skill:copy:${copyOf.id}`
+        : 'skill:new',
+    value: form,
+    edited,
+    parse: parseSkillForm,
+    restore: (kept) => {
+      appliedDetail.current = true;
+      setForm(kept);
+    },
+  });
 
   function update<K extends keyof SkillForm>(key: K, value: SkillForm[K]): void {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -202,6 +229,7 @@ export function SkillEditor({
         skill: validated.value,
         ...(nextVersionOf ? { skillId: nextVersionOf.id } : {}),
       });
+      draft.forget();
       setProposed(result);
       onProposed(result);
     } catch (err) {
@@ -299,6 +327,7 @@ export function SkillEditor({
       onSubmit={(event) => void handleSubmit(event)}
       data-testid="skill-editor"
     >
+      {draft.restored ? <RestoredDraftNotice discard="cancel" /> : null}
       {nextVersionOf ? (
         <Notice testId="skill-new-version-notice">
           {t(
@@ -577,10 +606,44 @@ export function SkillEditor({
         <Button type="submit" variant="primary" loading={busy} data-testid="skill-submit">
           {t('保存草稿', 'Save draft')}
         </Button>
-        <Button variant="ghost" onClick={() => guardedClose(onDone)} disabled={busy}>
+        <Button
+          variant="ghost"
+          onClick={() =>
+            guardedClose(() => {
+              draft.forget();
+              onDone();
+            })
+          }
+          disabled={busy}
+        >
           {t('取消', 'Cancel')}
         </Button>
       </div>
     </form>
   );
+}
+
+function sameSkillForm(a: SkillForm, b: SkillForm): boolean {
+  return (
+    a.name === b.name &&
+    a.description === b.description &&
+    a.markdown === b.markdown &&
+    a.gateKinds === b.gateKinds &&
+    a.objectTypes === b.objectTypes
+  );
+}
+
+/** A kept `SkillForm` (legacy 662), or `null` when what was kept is not one. */
+function parseSkillForm(raw: unknown): SkillForm | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = raw as Record<string, unknown>;
+  const keys = ['name', 'description', 'markdown', 'gateKinds', 'objectTypes'] as const;
+  if (!keys.every((key) => typeof value[key] === 'string')) return null;
+  return {
+    name: value.name as string,
+    description: value.description as string,
+    markdown: value.markdown as string,
+    gateKinds: value.gateKinds as string,
+    objectTypes: value.objectTypes as string,
+  };
 }

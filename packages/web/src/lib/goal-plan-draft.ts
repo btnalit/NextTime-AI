@@ -20,6 +20,7 @@ import {
   validateOutput,
 } from '@nexttime/shared';
 import { workerContractOf } from './catalog.js';
+import { createUidCounter } from './client-uids.js';
 import { goalBudgetRows, planDiff, skillRefShown } from './goals.js';
 import type { SkillRow } from './governance.js';
 import type { Translate } from './i18n.js';
@@ -248,10 +249,9 @@ function minutesText(seconds: number): string {
   return String(Math.round((seconds / 60) * 100) / 100);
 }
 
-let uidCounter = 0;
+const uidCounter = createUidCounter();
 export function newUid(prefix: string): string {
-  uidCounter += 1;
-  return `${prefix}-${uidCounter}`;
+  return `${prefix}-${uidCounter.next()}`;
 }
 
 export function draftFromDetail(detail: GoalDetailWire): PlanDraft {

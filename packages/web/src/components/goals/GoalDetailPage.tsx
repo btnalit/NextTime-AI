@@ -10,8 +10,10 @@ import { useResource } from '../../hooks/useResource.js';
 import { useWorkspaceIdentity } from '../../hooks/useWorkspaceIdentity.js';
 import { auditHref } from '../../lib/audit.js';
 import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
+import { draftScope, forgetDraft, loadDraftValue } from '../../lib/drafts.js';
 import { describeError } from '../../lib/errors.js';
 import { actionKindTagText, excerpt, formatDateTime, formatRelative } from '../../lib/format.js';
+import { goalOperations } from '../../lib/goal-actions.js';
 import { plannerNeedsAttention } from '../../lib/goal-planner.js';
 import {
   goalBudgetRows,
@@ -48,7 +50,7 @@ import {
   type GoalOperationOutcome,
   GoalOperationsBar,
 } from './GoalOperationsBar.js';
-import { GoalPlanEditor } from './GoalPlanEditor.js';
+import { GoalPlanEditor, goalRevisionDraftTarget } from './GoalPlanEditor.js';
 import { GoalPlannerSection } from './GoalPlannerSection.js';
 
 import { GoalReconcileControls } from './GoalReconcileControls.js';
@@ -108,6 +110,22 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
   const [done, setDone] = useState<GoalOperationOutcome | null>(null);
   // The plan editor (`revise_goal`) in place of the page's sections, until it is sent or left.
   const [revising, setRevising] = useState(false);
+  // Legacy 662: a revision this caller had in progress here when a session expired under it (or
+  // they left the page) opens again, with what they had changed (`GoalPlanEditor`) — while the
+  // goal can still be revised by them; one that no longer can drops what was kept.
+  const reopenCheckedFor = useRef<string | null>(null);
+  const loadedGoal = detail.state.status === 'ready' ? detail.state.data : null;
+  useEffect(() => {
+    const principalId = identity.principalId;
+    if (principalId === null || loadedGoal === null) return;
+    if (reopenCheckedFor.current === goalRunId) return;
+    reopenCheckedFor.current = goalRunId;
+    const scope = draftScope(principalId, goalRevisionDraftTarget(goalRunId));
+    if (loadDraftValue(scope) === null) return;
+    if (goalOperations(loadedGoal, { principalId, isOwner: viewer.isOwner }, t).revise)
+      setRevising(true);
+    else forgetDraft(scope);
+  }, [identity.principalId, viewer.isOwner, loadedGoal, goalRunId, t]);
   const onDone = useCallback(
     (outcome: GoalOperationOutcome) => {
       setDone(outcome);

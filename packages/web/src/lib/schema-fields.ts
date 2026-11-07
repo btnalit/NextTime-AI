@@ -1,4 +1,5 @@
 import type { OutputSchemaType } from '@nexttime/shared';
+import { createUidCounter } from './client-uids.js';
 import type { Translate } from './i18n.js';
 
 /**
@@ -66,10 +67,15 @@ export type SchemaDraft =
     }
   | { readonly mode: 'json'; readonly text: string };
 
-let rowCounter = 0;
+const rowCounter = createUidCounter();
 export function newSchemaRow(): SchemaFieldRow {
-  rowCounter += 1;
-  return { uid: `field-${rowCounter}`, name: '', kind: 'string', required: false, description: '' };
+  return {
+    uid: `field-${rowCounter.next()}`,
+    name: '',
+    kind: 'string',
+    required: false,
+    description: '',
+  };
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
