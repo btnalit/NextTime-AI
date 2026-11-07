@@ -24,7 +24,7 @@ import {
  *      未授权；把新密钥放进门之后，又说健康。
  *   3. 平台管理员在「集成 → 自己接入的门」暂停它，写上原因（`suspend_self_connection`）；所有者那边
  *      这个门的 Operation 全部不可用。
- *   4. 平台管理员恢复它（`resume_self_connection`），所有者的 Operation 回来。
+ *   4. 平台管理员恢复它（`resume_self_connection`）；所有者那边两个 Operation 又列出来了。
  *   5. 一个平台门实例公告了多一个 Operation 的新清单；平台管理员在「集成 → 门实例」审阅并采用
  *      （`confirm_gate_manifest`）。
  * 状态覆盖:
@@ -44,7 +44,7 @@ import {
  * 操作，这里由工作流给的脚本代劳（`E2E_SET_SELF_GATE_SECRET_CMD`，密钥走 stdin）。第 5 步的公告同样
  * 是门那边的事（`E2E_ANNOUNCE_GATE_CMD`，与 e2e.yml 给 ci-fixture-mcp 播种的公告是同一种调用）：
  * 新清单只有在管理员已经决定过的实例上才会被扣下待审，所以这个旅程公告自己的实例、在页面外把它设为
- * 停用，再公告一次多一个 Operation 的清单。五个测试按顺序跑，共享这一轮的工作区和门；重试时整组重来。
+ * 停用，再公告一次多一个 Operation 的清单。七个测试按顺序跑，共享这一轮的工作区和门；重试时整组重来。
  */
 
 const SET_SECRET_CMD = process.env.E2E_SET_SELF_GATE_SECRET_CMD;
@@ -71,6 +71,7 @@ interface CapResult {
 
 interface GatekeeperDetail {
   readonly health: string;
+  readonly operationCount: number;
   readonly operations: readonly { readonly name: string; readonly status: string }[];
 }
 
@@ -277,10 +278,15 @@ test.describe('Journey ⑬: 接入自己运行的门，换密钥，平台暂停�
     await signInAsOwner(page);
     await goToByLabel(page, '系统与授权');
     await openHealth(page, '健康');
+    // Today's behaviour, legacy 674 (review of #1046, test steward): the owner gets the generic
+    // empty state — not that the platform suspended this gate, why, or that the platform
+    // administrator is who to ask. Once that is fixed, assert the suspension and its reason here.
     await expect(page.getByRole('dialog', { name: '健康与操作' })).toContainText(
       '这个门没有 Operation',
     );
-    expect((await ownerGatekeeper(page)).operations).toEqual([]);
+    const gate = await ownerGatekeeper(page);
+    expect(gate.operations).toEqual([]);
+    expect(gate.operationCount).toBe(0);
   });
 
   test('5. the administrator resumes it; the owner’s operations are back', async ({ page }) => {
@@ -300,6 +306,22 @@ test.describe('Journey ⑬: 接入自己运行的门，换密钥，平台暂停�
       suspendedByLogin: null,
       suspensionReason: null,
     });
+  });
+
+  // Review of #1046 (test steward): resuming is for the owner — their operations come back, not
+  // only the platform's fields clearing.
+  test('5b. once resumed the owner’s operations are listed again', async ({ page }) => {
+    expect(gatekeeperId, 'test 1 connected the gate').not.toBe('');
+    await signInAsOwner(page);
+    await goToByLabel(page, '系统与授权');
+    await openHealth(page, '健康');
+    const detail = page.getByRole('dialog', { name: '健康与操作' });
+    await expect(detail).not.toContainText('这个门没有 Operation');
+    for (const name of IMPORTED) await expect(detail).toContainText(name);
+    const gate = await ownerGatekeeper(page);
+    expect(gate.operations.map((op) => op.name).sort()).toEqual(IMPORTED);
+    expect(gate.operations.every((op) => op.status === 'draft')).toBe(true);
+    expect(gate.operationCount).toBe(2);
   });
 
   test('6. the administrator adopts a gate instance’s new manifest', async ({ page }) => {
