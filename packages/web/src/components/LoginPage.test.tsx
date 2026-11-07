@@ -173,12 +173,13 @@ describe('LoginPage: why sign-in is back', () => {
     );
   }
 
-  it('an expired session: 「会话已过期」, and that the unsent chat text comes back', () => {
+  it('an expired session: 「会话已过期」, and that what was not submitted comes back (UX P3-1 on #1029)', () => {
     renderWith('sessionExpired');
     const notice = screen.getByTestId('login-reason');
     expect(notice.textContent).toContain('会话已过期');
     expect(notice.textContent).toContain('请重新登录');
     expect(notice.textContent).toContain('没发出的文字');
+    expect(notice.textContent).toContain('Skill、流程、目标计划里没保存的修改');
     // The password form is the way back; the key form stays folded.
     expect(document.querySelector('details.api-key-login')?.hasAttribute('open')).toBe(false);
     expect(document.activeElement).not.toBe(screen.getByPlaceholderText('sk-...'));

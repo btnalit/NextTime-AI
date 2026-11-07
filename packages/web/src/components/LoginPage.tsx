@@ -107,12 +107,12 @@ export function LoginPage({
               <p>
                 {reason === 'keyInvalid'
                   ? t(
-                      '平台不再接受这把 key（已撤销或已过期）。用有效的 key 或密码重新登录；对话框里没发出的文字，用同一身份登录后回到原来的对话就能看到。',
-                      'The platform no longer accepts this key (revoked or expired). Sign in again with a valid key or your password; text you had not sent in a chat comes back when you sign in as the same identity and open that chat.',
+                      '平台不再接受这把 key（已撤销或已过期）。用有效的 key 或密码重新登录；还没提交的内容（对话里没发出的文字，Skill、流程、目标计划里没保存的修改），用同一身份登录后回到原处就能找回。',
+                      'The platform no longer accepts this key (revoked or expired). Sign in again with a valid key or your password; what you had not submitted (unsent chat text, unsaved changes to a Skill, a Procedure or a goal plan) comes back when you sign in as the same identity and return to it.',
                     )
                   : t(
-                      '登录已过期或被撤销，请重新登录。对话框里没发出的文字，用同一账户登录后回到原来的对话就能看到。',
-                      'Your sign-in expired or was revoked. Sign in again; text you had not sent in a chat comes back when you sign in to the same account and open that chat.',
+                      '登录已过期或被撤销，请重新登录。还没提交的内容（对话里没发出的文字，Skill、流程、目标计划里没保存的修改），用同一账户登录后回到原处就能找回。',
+                      'Your sign-in expired or was revoked. Sign in again; what you had not submitted (unsent chat text, unsaved changes to a Skill, a Procedure or a goal plan) comes back when you sign in to the same account and return to it.',
                     )}
               </p>
             </Notice>

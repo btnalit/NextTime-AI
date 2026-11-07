@@ -3126,6 +3126,57 @@ describe('CatalogPage editors (S6-A A2)', () => {
     }
   });
 
+  it('legacy 662 (#501 P2-1 on #1029): an editor discarded with Escape goes with its draft; 新建草稿 opens empty', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({
+        matches: true,
+        media: '',
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    try {
+      for (const tab of ['skills', 'procedures'] as const) {
+        const family = tab === 'skills' ? 'skill' : 'procedure';
+        const http = scriptedHttp({
+          get_workspace: () => ({
+            id: 'ws-1',
+            name: 'Acme',
+            createdAt: '2026-01-01T00:00:00Z',
+            principalCount: 1,
+            gatekeeperCount: 0,
+            caller: { id: 'p-me', role: 'owner', displayName: 'Me', kind: 'human' },
+          }),
+          list_skills: () => ({ items: [] }),
+          list_procedures: () => ({ items: [] }),
+        });
+        const view = renderPage(http, tab);
+        await screen.findByTestId('catalog-empty');
+        await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+        fireEvent.click(screen.getByTestId(`${tab}-new-draft`));
+        const drawer = await screen.findByTestId(`${family}-editor-drawer`);
+        const name = within(drawer).getByLabelText(/^名称/) as HTMLInputElement;
+        fireEvent.change(name, { target: { value: 'half-written' } });
+        await waitFor(() => expect(sessionStorage.getItem('nexttime.drafts')).toContain('half'));
+        fireEvent.keyDown(name, { key: 'Escape' });
+        fireEvent.click(await screen.findByTestId('discard-confirm-discard'));
+        await waitFor(() => expect(screen.queryByTestId(`${family}-editor-drawer`)).toBeNull());
+        expect(sessionStorage.getItem('nexttime.drafts')).toBeNull();
+
+        fireEvent.click(screen.getByTestId(`${tab}-new-draft`));
+        const again = await screen.findByTestId(`${family}-editor-drawer`);
+        expect((within(again).getByLabelText(/^名称/) as HTMLInputElement).value).toBe('');
+        expect(within(again).queryByTestId('restored-draft')).toBeNull();
+        // Unmounted with that editor open, its mark stays (as after an expired session).
+        view.unmount();
+        sessionStorage.clear();
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('hides "New draft" once propose_* has been refused for the session', async () => {
     const http = scriptedHttp({
       list_procedures: () => ({ items: [] }),
