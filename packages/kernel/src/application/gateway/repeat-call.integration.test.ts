@@ -2,12 +2,20 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type Capability, getCapability } from '@nexttime/shared';
+import { type Capability, type Operation, getCapability } from '@nexttime/shared';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { requestAction } from '../../governance/approval/index.js';
+import {
+  getPublishedOperation,
+  importManifest,
+  operationRecordDigest,
+  publishOperation,
+  registerGatekeeper,
+} from '../../governance/gatekeepers/index.js';
 import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
 import {
   attachEvidence,
@@ -318,6 +326,87 @@ async function outcomeUnknownAction(ctx: RecipeContext, goalRunId: string): Prom
     },
     { skipRoleSwitch: true },
   );
+}
+
+const GATE_OP: Operation = {
+  name: 'repeat.restart',
+  description: 'Restarts a host.',
+  binding: { kind: 'http', method: 'POST', path: '/restart' },
+  params_schema: {},
+  mode: 'execute',
+  blast_radius: 'medium',
+  reversibility: false,
+  auto_approvable: true,
+  await_decision: false,
+  reads: [],
+  writes: [],
+};
+
+/** A registered gate whose interface manifest is `GATE_OP` — imported as a draft, and published
+ *  unless `publish` is false. The seeded gate's Operation is not a valid definition, so a call
+ *  that reads one (an approval rule, a catalog transition) needs this gate. */
+async function gateWithOperation({ pool, seed }: RecipeContext, publish = true): Promise<string> {
+  const { workspaceId, ownerId } = seed;
+  return withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+    const activity = await startActivity(client, workspaceId, {
+      kind: 'test.connection',
+      principalId: ownerId,
+    });
+    const { gatekeeperId } = await registerGatekeeper(client, workspaceId, {
+      name: 'repeat-gate',
+      transportKind: 'http',
+      target: 'repeat-gate',
+      endpoint: 'http://repeat-gate.invalid:8080',
+      activityId: activity.id,
+      registeredBy: { id: ownerId, kind: 'human' },
+    });
+    await importManifest(client, workspaceId, {
+      gatekeeperId,
+      operations: [GATE_OP],
+      proposedBy: { id: ownerId, kind: 'human' },
+      activityId: activity.id,
+    });
+    if (publish) await publishOperation(client, workspaceId, { gatekeeperId, name: GATE_OP.name });
+    return gatekeeperId;
+  });
+}
+
+/** A pending ActionRequest for `GATE_OP`, made as `request_action` makes it: against the
+ *  definition published now (legacy 218). */
+async function pendingRequest({ pool, seed }: RecipeContext, gatekeeperId: string) {
+  const { workspaceId, ownerId } = seed;
+  return withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+    const published = await getPublishedOperation(client, workspaceId, gatekeeperId, GATE_OP.name);
+    if (published === null || published === undefined) throw new Error('GATE_OP is not published');
+    const request = await requestAction(client, workspaceId, {
+      gatekeeperId,
+      actionKind: GATE_OP.name,
+      resourceScope: gatekeeperId,
+      blastRadius: 'medium',
+      operationAutoApprovable: true,
+      awaitDecision: false,
+      onBehalfOf: ownerId,
+      actorRuntime: 'pi',
+      requesterScope: {
+        capabilities: ['request_action'],
+        resources: { gatekeeper: [gatekeeperId] },
+      },
+      idempotencyKey: randomUUID(),
+      operationDigest: operationRecordDigest(published),
+    });
+    return request.id;
+  });
+}
+
+/** The catalog's one draft of `GATE_OP` (version and draftDigest as list_operations shows them). */
+async function draftOf(ctx: RecipeContext, gatekeeperId: string) {
+  const listed = await as<{
+    items: { name: string; status: string; version: number; draftDigest?: string }[];
+  }>(ctx, 'list_operations', { gatekeeperId });
+  const draft = listed.items.find((item) => item.name === GATE_OP.name && item.status === 'draft');
+  if (draft === undefined)
+    throw new Error(`no draft of ${GATE_OP.name}: ${JSON.stringify(listed)}`);
+  return draft;
 }
 
 /** Extra cases for a row, beyond the one with schema-built params on the bare seed. A declaration
@@ -868,6 +957,59 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       setUp: async () => ({ memberCanEditProfile: false }),
     },
   },
+  // Legacy 664, batch 6: the Operation catalog and its approval rule, on a real gate.
+  set_auto_approved_action_kind: {
+    'a pending request for the published Operation': {
+      setUp: async (ctx) => {
+        const gatekeeperId = await gateWithOperation(ctx);
+        return {
+          gatekeeperId,
+          actionKindTag: GATE_OP.name,
+          actionRequestId: await pendingRequest(ctx, gatekeeperId),
+        };
+      },
+    },
+  },
+  publish_operation: {
+    "the gate's imported draft": {
+      setUp: async (ctx) => {
+        const gatekeeperId = await gateWithOperation(ctx, false);
+        const draft = await draftOf(ctx, gatekeeperId);
+        return { gatekeeperId, name: GATE_OP.name, draftDigest: draft.draftDigest };
+      },
+    },
+  },
+  publish_manifest: {
+    "the gate's imported draft": {
+      setUp: async (ctx) => {
+        const gatekeeperId = await gateWithOperation(ctx, false);
+        const draft = await draftOf(ctx, gatekeeperId);
+        return { gatekeeperId, drafts: [{ name: GATE_OP.name, draftDigest: draft.draftDigest }] };
+      },
+    },
+  },
+  discard_operation_draft: {
+    "the gate's imported draft": {
+      setUp: async (ctx) => {
+        const gatekeeperId = await gateWithOperation(ctx, false);
+        const draft = await draftOf(ctx, gatekeeperId);
+        return {
+          gatekeeperId,
+          name: GATE_OP.name,
+          version: draft.version,
+          draftDigest: draft.draftDigest,
+        };
+      },
+    },
+  },
+  propose_operation: {
+    'a new Operation on the gate': {
+      setUp: async (ctx) => ({
+        gatekeeperId: await gateWithOperation(ctx),
+        operation: { ...GATE_OP, name: 'repeat.status', mode: 'observe' },
+      }),
+    },
+  },
   reconcile_goal_action: {
     'an action of the run whose outcome is unknown': {
       setUp: async (ctx) => {
@@ -936,6 +1078,11 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'set_policy',
   'set_quota',
   'set_agent_policy',
+  'set_auto_approved_action_kind',
+  'publish_operation',
+  'publish_manifest',
+  'discard_operation_draft',
+  'propose_operation',
 ]);
 
 interface Declared {
