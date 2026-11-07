@@ -489,6 +489,7 @@ test.describe('S11 GO6: a goal’s pages with content (stand-in reads)', () => {
       // GO17b: and the earlier goal it was written from, opening that goal's page.
       const precedents = page.getByTestId('goal-revision-precedents');
       await expect(precedents).toHaveText('参考了先例上个月续期主站证书（达成，平台检查通过）');
+      await expect(precedents.getByRole('listitem')).toHaveCount(1);
       await expect(precedents.getByRole('link', { name: '上个月续期主站证书' })).toHaveAttribute(
         'href',
         `#/work/goals/${PRECEDENT}`,

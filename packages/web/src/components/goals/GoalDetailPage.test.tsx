@@ -864,6 +864,17 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
         .getAllByRole('link')
         .map((link) => link.getAttribute('href')),
     ).toEqual(['#/work/goals/goal-before', '#/work/goals/goal-failed']);
+    // One precedent a line under the label, and a negative one in the warning colour (UX P2 / P3
+    // on #1087).
+    const items = within(line).getAllByRole('listitem');
+    expect(items.map((item) => item.textContent)).toEqual([
+      '续期主站证书（达成，平台检查通过）',
+      '续期备用站证书（未达成）',
+    ]);
+    expect(items.map((item) => item.querySelector('[data-polarity]')?.className)).toEqual([
+      'text-3',
+      'text-warn',
+    ]);
   });
 
   it('a revision that cites no precedent shows no such line (S11 GO17b)', async () => {
