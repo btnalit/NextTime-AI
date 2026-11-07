@@ -23288,6 +23288,21 @@
           },
           "type": "array"
         },
+        "platformSuspension": {
+          "additionalProperties": false,
+          "properties": {
+            "reason": {
+              "type": "string"
+            },
+            "suspendedAt": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "suspendedAt"
+          ],
+          "type": "object"
+        },
         "status": {
           "const": "active",
           "type": "string"

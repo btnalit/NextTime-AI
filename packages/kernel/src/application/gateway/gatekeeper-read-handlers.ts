@@ -26,7 +26,11 @@ import {
 } from '../../governance/gatekeepers/index.js';
 import { shownFreeText } from '../../governance/redaction/index.js';
 import type { GatekeeperPlatformPolicy } from '../gates/index.js';
-import { operationPlatformStatus, readGatekeeperPlatformPolicy } from '../gates/index.js';
+import {
+  findSelfConnection,
+  operationPlatformStatus,
+  readGatekeeperPlatformPolicy,
+} from '../gates/index.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 import { resolveGateTarget } from './gate-target.js';
 
@@ -316,11 +320,18 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
   const allOperations = await listOperations(client, workspaceId, { gatekeeperId });
   const revisionChanges = revisionChangesForDrafts(allOperations);
   const platformPolicy = await platformPolicyFor(client, workspaceId, gatekeeperId);
+  // Legacy 674: a suspension is the whole connection's, not a deny list on some Operations — they
+  // stay listed under it, so the owner sees what is kept and why none of it runs.
+  const suspension =
+    platformPolicy?.origin === 'self' && platformPolicy.suspended
+      ? await findSelfConnection(client, workspaceId, gatekeeperId)
+      : null;
   const health = await healthProbe;
-  const operations = allOperations.filter(
-    (op) =>
-      operationVisibleTo(viewer, op) && !operationPlatformStatus(platformPolicy, op.name).disabled,
-  );
+  const operations = allOperations.filter((op) => {
+    if (!operationVisibleTo(viewer, op)) return false;
+    const platform = operationPlatformStatus(platformPolicy, op.name);
+    return !platform.disabled || platform.reason === 'self_connection_suspended';
+  });
 
   const summary = toWireGatekeeperSummary(
     {
@@ -338,6 +349,14 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
       ...summary,
       operations: operations.map((op) => toWireOperationSummary(op, revisionChanges.get(op.id))),
       health,
+      ...(suspension?.suspendedAt
+        ? {
+            platformSuspension: {
+              suspendedAt: suspension.suspendedAt.toISOString(),
+              ...(suspension.suspensionReason ? { reason: suspension.suspensionReason } : {}),
+            },
+          }
+        : {}),
     },
     resourceType: 'gatekeeper',
     resourceId: gatekeeperId,

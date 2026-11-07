@@ -163,6 +163,9 @@ export type GatekeeperHealth = GatekeeperDetailWire['health'];
 export interface GatekeeperDetail extends GatekeeperListRow {
   readonly operations: readonly GatekeeperDetailOperation[];
   readonly health: GatekeeperHealth;
+  /** Legacy 674: present only while the platform suspends this self-connected gate — when, and
+   *  the reason the administrator gave. Never who. */
+  readonly platformSuspension?: { readonly suspendedAt: string; readonly reason?: string };
 }
 
 // -------------------------------------------------------------------------------------------
