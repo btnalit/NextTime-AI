@@ -186,6 +186,8 @@ describe('PlatformStatusPage', () => {
               resourceId: null,
               payload: {},
               createdAt: '2026-09-22T00:00:00.000Z',
+              actingThrough: null,
+              actingSessionId: null,
             },
           ],
         }),
@@ -208,6 +210,8 @@ describe('PlatformStatusPage', () => {
       resourceId: null,
       payload: {},
       createdAt: '2026-09-22T00:00:00.000Z',
+      actingThrough: null,
+      actingSessionId: null,
     };
     const http = scriptedHttp({
       platform_status: () =>

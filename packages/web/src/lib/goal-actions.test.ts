@@ -222,6 +222,8 @@ describe('lib/goal-actions', () => {
         resourceId: 'goal-1',
         payload,
         createdAt,
+        actingThrough: null,
+        actingSessionId: null,
       }) satisfies AuditRecordWire;
     expect(
       holdPlacedAt([

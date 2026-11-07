@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  AuditActingThroughSchema,
   BlastRadiusSchema,
   OperationModeSchema,
   PublishableStatusSchema,
@@ -166,6 +167,12 @@ export const PlatformAuditRecordWireSchema = z
     resourceId: z.string().nullable(),
     payload: z.record(z.string(), z.unknown()),
     createdAt: z.string(),
+    /** Batch D3 (kernel migration core 0054): what the act came through (`AUDIT_ACTING_THROUGH_VALUES`
+     *  says what each value means), and the session of the Handle it came through — `null` on a
+     *  row from before the column existed or written outside every capability call and background
+     *  loop. */
+    actingThrough: AuditActingThroughSchema.nullable(),
+    actingSessionId: z.string().nullable(),
   })
   .strict();
 export type PlatformAuditRecordWire = z.infer<typeof PlatformAuditRecordWireSchema>;

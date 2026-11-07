@@ -37,6 +37,14 @@ export type {
   AuditRecordRow,
 } from './writer.js';
 
+export {
+  SYSTEM_ACTING_CONTEXT,
+  currentActingContext,
+  runWithActingContext,
+  runWithStandingActingContext,
+} from './acting-context.js';
+export type { ActingContext, ActingContextHandle } from './acting-context.js';
+
 export { reconstruct } from './reconstruct.js';
 export type { ReconstructInput, ReconstructResult } from './reconstruct.js';
 

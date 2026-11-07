@@ -52,6 +52,72 @@ export const SESSION_KIND_VALUES = [
 export type SessionKind = (typeof SESSION_KIND_VALUES)[number];
 export const SessionKindSchema = asEnum(SESSION_KIND_VALUES);
 
+/**
+ * Batch D3 (docs/test-coverage-gaps-2026-11-06.md G11; kernel migration core 0054): what an
+ * audited act came through. `audit_records.actor_principal_id` stays the Principal answerable for
+ * it (I13: for a Handle, its `on_behalf_of`); this says whether that Principal acted by hand or
+ * through one of its agents. The kernel derives it from the caller of the capability call the row
+ * was written in — never from what a handler passes — and from the session a Handle was issued
+ * under (`sessions.kind`):
+ *
+ *   - `person`: a person's own console or platform session (human and platform channels);
+ *   - `admin_agent_session`: a platform administrator's admin agent (session kind `admin_agent`);
+ *   - `entry_agent`: the person's entry agent (session kind `entry`);
+ *   - `worker_handle`: a Worker run's Handle (session kind `worker_run`);
+ *   - `service_handle`: an external runtime's service Handle (session kind `service`);
+ *   - `member_handle`: a Handle a member issued to their own client (`issue_handle`, session kind
+ *     `mcp_session`) — a client acting for the person, not the person by hand;
+ *   - `system`: the kernel's own background work (the scheduled loops), with no caller.
+ *
+ * Absent (`null`) on a row written before the column existed, and on one written outside every
+ * capability call and every background loop (sign-in and identity routes, the llm-proxy's
+ * administrator reports, the operator CLI): such a row did not come through the capability
+ * gateway, and its `actor_user_id` says who acted.
+ */
+export const AUDIT_ACTING_THROUGH_VALUES = [
+  'person',
+  'admin_agent_session',
+  'entry_agent',
+  'worker_handle',
+  'service_handle',
+  'member_handle',
+  'system',
+] as const;
+export type AuditActingThrough = (typeof AUDIT_ACTING_THROUGH_VALUES)[number];
+export const AuditActingThroughSchema = asEnum(AUDIT_ACTING_THROUGH_VALUES);
+
+/** The {@link AUDIT_ACTING_THROUGH_VALUES} that name a session (`audit_records.acting_session_id`):
+ *  every one a Handle is issued under. A person's own session and the kernel's background work
+ *  carry none. */
+export const AUDIT_ACTING_THROUGH_WITH_SESSION_VALUES = [
+  'admin_agent_session',
+  'entry_agent',
+  'worker_handle',
+  'service_handle',
+  'member_handle',
+] as const satisfies readonly AuditActingThrough[];
+
+/** The {@link AuditActingThrough} a Handle issued under a session of `kind` acts through;
+ *  `undefined` for a kind no Handle is issued under (`web`) or one this table does not know. */
+export function actingThroughForSessionKind(
+  kind: string | undefined,
+): AuditActingThrough | undefined {
+  switch (kind) {
+    case 'admin_agent':
+      return 'admin_agent_session';
+    case 'entry':
+      return 'entry_agent';
+    case 'worker_run':
+      return 'worker_handle';
+    case 'service':
+      return 'service_handle';
+    case 'mcp_session':
+      return 'member_handle';
+    default:
+      return undefined;
+  }
+}
+
 /** S11 AA4c (migrations/core/0053): which agent holds a Chat — the person's entry agent, or a
  *  platform administrator's admin agent in a trial workspace (its Turns run through an
  *  `admin_agent` session and its own container). Set when the Chat is created, never changed. */

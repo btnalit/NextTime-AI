@@ -1,5 +1,6 @@
 import { type ActionRequestFailureKind, IllegalTransition } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { SYSTEM_ACTING_CONTEXT, runWithActingContext } from '../../substrate/audit/index.js';
 import {
   markActionRequestExecuted,
   markActionRequestFailed,
@@ -127,7 +128,23 @@ export class ApprovalDrainer {
     this.deps = deps;
   }
 
+  /**
+   * Batch D3 (migration core 0054): a drain runs as the platform's own work (`acting_through =
+   * 'system'`) whoever's call started it — `request_action` drains inline, and the queue it
+   * drains may hold other callers' requests ahead of its own; their transitions are not that
+   * caller's acts. The rows still name each request's own Principal as their actor.
+   */
   async drainGatekeeper(
+    workspaceId: string,
+    principalId: string,
+    gatekeeperId: string,
+  ): Promise<DrainResult> {
+    return runWithActingContext(SYSTEM_ACTING_CONTEXT, () =>
+      this.drain(workspaceId, principalId, gatekeeperId),
+    );
+  }
+
+  private async drain(
     workspaceId: string,
     principalId: string,
     gatekeeperId: string,

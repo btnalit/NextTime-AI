@@ -6803,6 +6803,31 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "actingSessionId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "actingThrough": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "person",
+                      "admin_agent_session",
+                      "entry_agent",
+                      "worker_handle",
+                      "service_handle",
+                      "member_handle",
+                      "system"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "action": {
                 "type": "string"
               },
@@ -6839,7 +6864,9 @@
               "resourceType",
               "resourceId",
               "payload",
-              "createdAt"
+              "createdAt",
+              "actingThrough",
+              "actingSessionId"
             ],
             "type": "object"
           },
@@ -47282,6 +47309,31 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "actingSessionId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "actingThrough": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "person",
+                      "admin_agent_session",
+                      "entry_agent",
+                      "worker_handle",
+                      "service_handle",
+                      "member_handle",
+                      "system"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "action": {
                 "type": "string"
               },
@@ -47328,7 +47380,9 @@
               "resourceType",
               "resourceId",
               "payload",
-              "createdAt"
+              "createdAt",
+              "actingThrough",
+              "actingSessionId"
             ],
             "type": "object"
           },
@@ -47631,6 +47685,31 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "actingSessionId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "actingThrough": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "person",
+                      "admin_agent_session",
+                      "entry_agent",
+                      "worker_handle",
+                      "service_handle",
+                      "member_handle",
+                      "system"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "action": {
                 "type": "string"
               },
@@ -47677,7 +47756,9 @@
               "resourceType",
               "resourceId",
               "payload",
-              "createdAt"
+              "createdAt",
+              "actingThrough",
+              "actingSessionId"
             ],
             "type": "object"
           },
@@ -49006,6 +49087,31 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "actingSessionId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "actingThrough": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "person",
+                      "admin_agent_session",
+                      "entry_agent",
+                      "worker_handle",
+                      "service_handle",
+                      "member_handle",
+                      "system"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "action": {
                 "type": "string"
               },
@@ -49052,7 +49158,9 @@
               "resourceType",
               "resourceId",
               "payload",
-              "createdAt"
+              "createdAt",
+              "actingThrough",
+              "actingSessionId"
             ],
             "type": "object"
           },
@@ -60990,6 +61098,31 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "actingSessionId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "actingThrough": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "person",
+                      "admin_agent_session",
+                      "entry_agent",
+                      "worker_handle",
+                      "service_handle",
+                      "member_handle",
+                      "system"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "action": {
                 "type": "string"
               },
@@ -61026,7 +61159,9 @@
               "resourceType",
               "resourceId",
               "payload",
-              "createdAt"
+              "createdAt",
+              "actingThrough",
+              "actingSessionId"
             ],
             "type": "object"
           },

@@ -1,5 +1,7 @@
+import type { AuditActingThrough } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { currentCorrelationId } from '../correlation/index.js';
+import { currentActingContext } from './acting-context.js';
 
 /**
  * substrate/audit/writer: append-only writes to and filtered reads of `audit_records`
@@ -40,6 +42,9 @@ export interface AuditRecordInput {
    *  `writeAudit` adds `correlationId` (leftover 87) when the row is written inside a correlated
    *  call and the payload does not already carry one — see {@link writeAudit}. */
   readonly payload?: Record<string, unknown>;
+  // Batch D3: no `actingThrough` / `actingSessionId` here on purpose — `writeAudit` takes both from
+  // the acting context the capability call (or background loop) runs in (acting-context.ts), so a
+  // handler cannot choose what its rows act through.
 }
 
 export interface AuditRecordRow {
@@ -52,6 +57,11 @@ export interface AuditRecordRow {
   readonly resourceId: string | null;
   readonly payload: Record<string, unknown>;
   readonly createdAt: Date;
+  /** Batch D3 (core 0054): what the act came through, and the session of the Handle it came
+   *  through — `null` on a row from before the column existed or written outside every capability
+   *  call and background loop (acting-context.ts). */
+  readonly actingThrough: AuditActingThrough | null;
+  readonly actingSessionId: string | null;
 }
 
 interface AuditRecordDbRow {
@@ -64,6 +74,8 @@ interface AuditRecordDbRow {
   resource_id: string | null;
   payload: Record<string, unknown>;
   created_at: Date;
+  acting_through?: AuditActingThrough | null;
+  acting_session_id?: string | null;
 }
 
 function mapAuditRecordRow(row: AuditRecordDbRow): AuditRecordRow {
@@ -77,6 +89,8 @@ function mapAuditRecordRow(row: AuditRecordDbRow): AuditRecordRow {
     resourceId: row.resource_id,
     payload: row.payload,
     createdAt: row.created_at,
+    actingThrough: row.acting_through ?? null,
+    actingSessionId: row.acting_session_id ?? null,
   };
 }
 
@@ -93,15 +107,20 @@ function withCorrelationId(payload: Record<string, unknown> | undefined): Record
   return { ...base, correlationId };
 }
 
-/** Appends one AuditRecord. Throws (and, per the caller's transaction, rolls it back) on failure. */
+/**
+ * Appends one AuditRecord. Throws (and, per the caller's transaction, rolls it back) on failure.
+ * `acting_through` / `acting_session_id` come from the current acting context (acting-context.ts),
+ * never from `record`.
+ */
 export async function writeAudit(
   client: PoolClient,
   record: AuditRecordInput,
 ): Promise<AuditRecordRow> {
+  const acting = currentActingContext();
   const result = await client.query<AuditRecordDbRow>(
-    `insert into audit_records (workspace_id, actor_principal_id, actor_user_id, action, resource_type, resource_id, payload)
-     values ($1, $2, $3, $4, $5, $6, $7::jsonb)
-     returning workspace_id, id, actor_principal_id, actor_user_id, action, resource_type, resource_id, payload, created_at`,
+    `insert into audit_records (workspace_id, actor_principal_id, actor_user_id, action, resource_type, resource_id, payload, acting_through, acting_session_id)
+     values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
+     returning workspace_id, id, actor_principal_id, actor_user_id, action, resource_type, resource_id, payload, created_at, acting_through, acting_session_id`,
     [
       record.workspaceId,
       record.actorPrincipalId,
@@ -110,6 +129,8 @@ export async function writeAudit(
       record.resourceType ?? null,
       record.resourceId ?? null,
       JSON.stringify(withCorrelationId(record.payload)),
+      acting?.actingThrough ?? null,
+      acting?.actingSessionId ?? null,
     ],
   );
   const row = result.rows[0];
@@ -206,7 +227,8 @@ export async function queryAuditPage(
   const limit = resolveLimit(filter.limit);
   const cursor = decodeAuditCursor(filter.cursor);
   const result = await client.query<AuditRecordDbRow>(
-    `select workspace_id, id, actor_principal_id, action, resource_type, resource_id, payload, created_at
+    `select workspace_id, id, actor_principal_id, action, resource_type, resource_id, payload, created_at,
+            acting_through, acting_session_id
      from audit_records
      where workspace_id = $1
        and ($2::uuid is null or actor_principal_id = $2)

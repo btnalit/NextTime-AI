@@ -6,6 +6,7 @@ import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { currentActingContext, runWithActingContext } from '../../substrate/audit/index.js';
 import { type ActionExecutor, type ActionExecutorResult, ApprovalDrainer } from './drainer.js';
 import { withdrawActionRequest } from './execution.js';
 import { getActionRequest } from './reads.js';
@@ -210,6 +211,37 @@ describe.runIf(DATABASE_URL !== undefined)(
         (client) => getActionRequest(client, workspaceId, third.id),
       );
       expect(thirdAfter?.status).toBe('auto_approved');
+    });
+
+    it("batch D3: a drain is the platform's own work, whoever's call started it — its rows say system", async () => {
+      const gatekeeperId = await insertGatekeeperObject();
+      // Another caller's request, queued ahead on the same Gatekeeper.
+      const queued = await createAutoApproved(gatekeeperId, 'test.drain.someone_elses');
+      const seen: unknown[] = [];
+      const executor: ActionExecutor = {
+        async execute() {
+          seen.push(currentActingContext());
+          return { ok: true };
+        },
+      };
+      const drainer = new ApprovalDrainer({ executor, withTransaction });
+      // As `request_action` drains inline, inside a person's call.
+      await runWithActingContext({ actingThrough: 'person' }, () =>
+        drainer.drainGatekeeper(workspaceId, ownerId, gatekeeperId),
+      );
+      expect(seen).toEqual([{ actingThrough: 'system' }]);
+      const rows = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        client.query<{ action: string; acting_through: string | null }>(
+          `select action, acting_through from audit_records
+            where workspace_id = $1 and resource_id = $2 order by created_at, id`,
+          [workspaceId, queued.id],
+        ),
+      );
+      // The request itself was written outside any call; every row of the drain says system.
+      const drained = rows.rows.filter((row) => row.acting_through !== null);
+      expect(drained.length).toBeGreaterThan(0);
+      expect(drained.every((row) => row.acting_through === 'system')).toBe(true);
+      expect(rows.rows.some((row) => row.acting_through === 'person')).toBe(false);
     });
 
     it('a failed executor result marks the row failed and the drain continues to the next row', async () => {

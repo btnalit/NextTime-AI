@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { EpistemicStatusSchema, HUMAN_ATTESTATION_EVIDENCE_KIND } from '../enums.js';
+import {
+  AuditActingThroughSchema,
+  EpistemicStatusSchema,
+  HUMAN_ATTESTATION_EVIDENCE_KIND,
+} from '../enums.js';
 
 /**
  * wire/graph: Object / Fact / AuditRecord / Explain wire shapes (docs/wire-contract-conventions.md
@@ -62,6 +66,12 @@ export const AuditRecordWireSchema = z
     resourceId: z.string().nullable(),
     payload: z.record(z.string(), z.unknown()),
     createdAt: z.string(),
+    /** Batch D3 (kernel migration core 0054): what the act came through (`AUDIT_ACTING_THROUGH_VALUES`
+     *  says what each value means), and the session of the Handle it came through — `null` on a
+     *  row from before the column existed or written outside every capability call and background
+     *  loop. */
+    actingThrough: AuditActingThroughSchema.nullable(),
+    actingSessionId: z.string().nullable(),
   })
   .strict();
 export type AuditRecordWire = z.infer<typeof AuditRecordWireSchema>;

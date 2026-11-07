@@ -52,13 +52,57 @@ export class ForbiddenError extends Error {
 }
 
 /**
+ * Batch D3: why {@link authorizeCapabilityCall} (or {@link assertActsForPerson}) refused a call — a
+ * fixed set, so it can name a refusal in an audit row and label a counter (never free text):
+ *
+ *   - `platform_scope`: a platform capability from anyone but a platform administrator;
+ *   - `workspace_scope`: a workspace capability from a platform caller (no workspace selected);
+ *   - `human_channel_only`: a `channel: 'human'` capability through a Handle;
+ *   - `admin_agent_only`: an `adminAgentOnly` capability from anything but a Handle;
+ *   - `not_in_scope`: a capability outside the calling Handle's `scope.capabilities`;
+ *   - `role`: the person's role does not reach the capability's `minRole`;
+ *   - `auditor_read_only`: an auditor and a capability off the auditor's allowlist;
+ *   - `not_for_person`: an `actsForPerson` capability for a Principal that is not a person.
+ */
+export const CALL_REFUSAL_REASONS = [
+  'platform_scope',
+  'workspace_scope',
+  'human_channel_only',
+  'admin_agent_only',
+  'not_in_scope',
+  'role',
+  'auditor_read_only',
+  'not_for_person',
+] as const;
+export type CallRefusalReason = (typeof CALL_REFUSAL_REASONS)[number];
+
+/**
+ * A {@link ForbiddenError} raised by this file's checks, with the {@link CallRefusalReason}. Every
+ * transport still answers it as the 403 `forbidden` it always was (`instanceof ForbiddenError`),
+ * and its `name` stays `ForbiddenError`, so the request logs read as before; dispatch.ts reads
+ * `reason` to audit a Handle's refusal (`auditHandleCallRefusal`) and to count every one.
+ */
+export class CapabilityCallRefusedError extends ForbiddenError {
+  readonly reason: CallRefusalReason;
+  readonly capabilityName: string;
+
+  constructor(capabilityName: string, reason: CallRefusalReason, message: string) {
+    super(message);
+    this.reason = reason;
+    this.capabilityName = capabilityName;
+  }
+}
+
+/**
  * S11 GO5c (`Capability.actsForPerson`): refuses a call made for a Principal that is not a person.
  * The human channel checks it in {@link authorizeCapabilityCall} (the caller's row is in hand); the
  * handle channel in `dispatch.ts`, which reads the `obo`'s kind — a Handle's claims carry none.
  */
 export function assertActsForPerson(capability: Capability, kind: PrincipalKind | undefined): void {
   if (!capability.actsForPerson || kind === 'human') return;
-  throw new ForbiddenError(
+  throw new CapabilityCallRefusedError(
+    capability.name,
+    'not_for_person',
     `capability "${capability.name}" is made only for a person, and this call is for ${kind === undefined ? 'no known Principal' : `a ${kind} Principal`}`,
   );
 }
@@ -101,30 +145,46 @@ export function authorizeCapabilityCall(caller: ResolvedCaller, capability: Capa
   // 403 here regardless of role or scope.
   if (capability.scope === 'platform') {
     if (caller.channel !== 'platform') {
-      throw new ForbiddenError(`capability "${capability.name}" requires a platform administrator`);
+      throw new CapabilityCallRefusedError(
+        capability.name,
+        'platform_scope',
+        `capability "${capability.name}" requires a platform administrator`,
+      );
     }
     return;
   }
   if (caller.channel === 'platform') {
-    throw new ForbiddenError(
+    throw new CapabilityCallRefusedError(
+      capability.name,
+      'workspace_scope',
       `capability "${capability.name}" is workspace-scoped; select a workspace to call it`,
     );
   }
 
   if (capability.channel === 'human' && caller.channel !== 'human') {
-    throw new ForbiddenError(`capability "${capability.name}" is human-channel-only`);
+    throw new CapabilityCallRefusedError(
+      capability.name,
+      'human_channel_only',
+      `capability "${capability.name}" is human-channel-only`,
+    );
   }
 
   // S11 AA2 (`Capability.adminAgentOnly`): the one exception to "a human caller may call what a
   // Handle could" (this file's doc comment) — only an admin agent's Handle reads the platform's
   // state. Which session a Handle belongs to is not in its claims; dispatch.ts checks that.
   if (capability.adminAgentOnly && caller.channel !== 'handle') {
-    throw new ForbiddenError(`capability "${capability.name}" is only an admin agent's`);
+    throw new CapabilityCallRefusedError(
+      capability.name,
+      'admin_agent_only',
+      `capability "${capability.name}" is only an admin agent's`,
+    );
   }
 
   if (caller.channel === 'handle') {
     if (!caller.claims.scope.capabilities.includes(capability.name)) {
-      throw new ForbiddenError(
+      throw new CapabilityCallRefusedError(
+        capability.name,
+        'not_in_scope',
         `capability "${capability.name}" is not in the calling handle's scope`,
       );
     }
@@ -132,9 +192,13 @@ export function authorizeCapabilityCall(caller: ResolvedCaller, capability: Capa
   }
 
   if (!roleMayUseCapability(caller.principal.role, capability)) {
-    throw new ForbiddenError(
+    const auditorReadOnly =
       caller.principal.role === 'auditor' &&
-        roleSatisfiesMinRole(caller.principal.role, capability.minRole)
+      roleSatisfiesMinRole(caller.principal.role, capability.minRole);
+    throw new CapabilityCallRefusedError(
+      capability.name,
+      auditorReadOnly ? 'auditor_read_only' : 'role',
+      auditorReadOnly
         ? `principal role "auditor" is read-only: capability "${capability.name}" is not on the auditor's allowlist (R-35 / D-07)`
         : `principal role "${caller.principal.role}" does not satisfy capability "${capability.name}"'s minRole "${capability.minRole}"`,
     );

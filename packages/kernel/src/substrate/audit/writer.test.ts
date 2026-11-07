@@ -7,6 +7,7 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { runWithCorrelationId } from '../correlation/index.js';
 import { SqlGraphStore } from '../graph/index.js';
+import { runWithActingContext } from './acting-context.js';
 import {
   MAX_AUDIT_QUERY_LIMIT,
   decodeAuditCursor,
@@ -79,6 +80,60 @@ describe('writeAudit correlationId (unit, no DB)', () => {
     );
     expect(payloads[0]).toEqual({ channel: 'human' });
     expect(payloads[1]).toEqual({ correlationId: 'explicit-id-0001' });
+  });
+});
+
+// Batch D3 (migration core 0054): `acting_through` / `acting_session_id` come from the acting
+// context, never from the record (`AuditRecordInput` has no field for them).
+describe('writeAudit acting columns (unit, no DB)', () => {
+  function captureClient(): { client: PoolClient; acting: unknown[][] } {
+    const acting: unknown[][] = [];
+    const client = {
+      async query(_sql: string, params: unknown[]) {
+        acting.push([params[7], params[8]]);
+        return {
+          rows: [
+            {
+              workspace_id: params[0],
+              id: randomUUID(),
+              actor_principal_id: params[1],
+              actor_user_id: params[2],
+              action: params[3],
+              resource_type: params[4],
+              resource_id: params[5],
+              payload: JSON.parse(String(params[6])),
+              created_at: new Date(),
+              acting_through: params[7],
+              acting_session_id: params[8],
+            },
+          ],
+        };
+      },
+    } as unknown as PoolClient;
+    return { client, acting };
+  }
+
+  const record = {
+    workspaceId: randomUUID(),
+    actorPrincipalId: randomUUID(),
+    action: 'list_skills',
+  };
+
+  it('writes the current context, and nothing outside one', async () => {
+    const { client, acting } = captureClient();
+    const sessionId = randomUUID();
+    const row = await runWithActingContext(
+      { actingThrough: 'worker_handle', actingSessionId: sessionId },
+      async () => writeAudit(client, record),
+    );
+    await runWithActingContext({ actingThrough: 'person' }, async () => writeAudit(client, record));
+    await writeAudit(client, record);
+    expect(acting).toEqual([
+      ['worker_handle', sessionId],
+      ['person', null],
+      [null, null],
+    ]);
+    expect(row).toMatchObject({ actingThrough: 'worker_handle', actingSessionId: sessionId });
   });
 });
 
