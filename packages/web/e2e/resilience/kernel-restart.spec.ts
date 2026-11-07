@@ -9,8 +9,8 @@ import { type Page, expect, test } from '../lib/test.js';
  * or says so; it never goes quietly dead. On 主机 an upgrade restarts the kernel under every open
  * browser tab, and green CI had never once exercised that (legacy 649 was found by hand).
  *
- * `E2E_RESTART_KERNEL_CMD` is a script `.github/workflows/e2e.yml` writes: it restarts the
- * kernel container and returns once `/api/health` answers 200 through caddy again. Unset (a local
+ * `E2E_RESTART_KERNEL_CMD` is a script `.github/workflows/e2e.yml` writes: it replaces the
+ * kernel container (`--force-recreate`, as an upgrade does) and returns once `/api/health` answers 200 through caddy again. Unset (a local
  * run against a host you did not start yourself) skips the file — restarting someone's kernel is
  * not something a test does by default. playwright.config.ts runs this directory as its own
  * project, after every other one, so no other spec sees the restart.
