@@ -66,6 +66,7 @@ import {
   readHandleObserveExclusions,
   readProcedureOutcomeHints,
   readTaskAttributions,
+  readWorkerDefinitionStats,
   resolveParentAuthority,
   resolveWaitTimeoutMs,
   setQuotaValue,
@@ -1422,6 +1423,15 @@ const getWorkerDefinitionHandler: CapabilityHandler = async (client, workspaceId
   };
 };
 
+/** S11 GO16a (legacy 569): a WorkerDefinition family's statistics, counted when read
+ *  (application/task/worker-definition-stats.ts) — the same audience and reasoning as
+ *  `get_skill_stats`. */
+const getWorkerDefinitionStatsHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { definitionId } = params as { definitionId: string };
+  const stats = await readWorkerDefinitionStats(client, workspaceId, definitionId);
+  return { result: stats, resourceType: 'worker_definition', resourceId: definitionId };
+};
+
 // -------------------------------------------------------------------------------------------
 // S3.3: `assert_fact`/`supersede_fact`/`invalidate_fact` are now real handlers
 // (`fact-handlers.ts`, imported above) — the I16 meta-ontology guard they apply is unchanged from
@@ -2716,6 +2726,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['deprecate_worker_definition', deprecateWorkerDefinitionHandler],
   ['list_worker_definitions', listWorkerDefinitionsHandler],
   ['get_worker_definition', getWorkerDefinitionHandler],
+  ['get_worker_definition_stats', getWorkerDefinitionStatsHandler],
   ['get_entry_template_status', getEntryTemplateStatusHandler],
   ['propose_entry_template_upgrade', proposeEntryTemplateUpgradeHandler],
   // S8 W3 K2 (leftover 82) — discard-draft-handler.ts.

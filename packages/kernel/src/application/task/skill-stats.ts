@@ -15,7 +15,7 @@ import {
   taskFailureCategory,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { type SubjectOutcome, outcomeTallyWire, readSubjectOutcomes } from './stats-read.js';
+import { outcomeTallyWire, readRefusals, readSubjectOutcomes, subjectsOf } from './stats-read.js';
 
 /**
  * application/task/skill-stats (S11 W1a E2-1; S10 §5.4, docs/global-roadmap-2026-10-16.md W1a E2):
@@ -207,57 +207,6 @@ function byLastUsedDesc(a: SkillStatsSegmentWire, b: SkillStatsSegmentWire): num
   const at = (segment: SkillStatsSegmentWire) =>
     segment.usage.lastUsedAt === null ? 0 : Date.parse(segment.usage.lastUsedAt);
   return at(b) - at(a);
-}
-
-/** The outcome subjects covering `tasks`, each once — keyed `turn:`, `task:`, `step:`, `goal:`. */
-function subjectsOf(
-  tasks: readonly TaskRow[],
-  subjectsByTask: ReadonlyMap<string, ReadonlyMap<string, SubjectOutcome>>,
-): Map<string, SubjectOutcome> {
-  const subjects = new Map<string, SubjectOutcome>();
-  for (const task of tasks) {
-    for (const [key, subject] of subjectsByTask.get(task.id) ?? []) subjects.set(key, subject);
-  }
-  return subjects;
-}
-
-/**
- * What refused each failed Task's work (`TaskRefusal`): its output contract's refusal
- * (`tasks.rejected_output`) first — it ends the Task's run — else the most recently requested
- * ActionRequest its runs (nested children included, as the goal advancer judges an attempt) raised
- * that was rejected, expired, denied, or refused before it ran.
- */
-async function readRefusals(
-  client: PoolClient,
-  workspaceId: string,
-  tasks: readonly TaskRow[],
-): Promise<Map<string, TaskRefusal>> {
-  const refusals = new Map<string, TaskRefusal>();
-  const failed = tasks.filter((task) => task.status === 'failed');
-  for (const task of failed)
-    refusals.set(task.id, task.output_rejected ? 'output_rejected' : 'none');
-  const open = failed.filter((task) => !task.output_rejected).map((task) => task.id);
-  if (open.length === 0) return refusals;
-  const result = await client.query<{ task_id: string; refusal: TaskRefusal }>(
-    `with recursive tree as (
-       select r.id, r.task_id as root from worker_runs r
-        where r.workspace_id = $1 and r.task_id = any($2::uuid[])
-       union
-       select c.id, tree.root from worker_runs c
-         join tree on c.parent_worker_run_id = tree.id
-        where c.workspace_id = $1
-     )
-     select distinct on (tree.root) tree.root as task_id,
-            case when a.status = 'failed' then 'refused' else a.status end as refusal
-       from tree
-       join action_requests a on a.workspace_id = $1 and a.parent_worker_run_id = tree.id
-      where a.status in ('rejected', 'expired', 'denied')
-         or (a.status = 'failed' and a.failure_kind = 'refused')
-      order by tree.root, a.requested_at desc, a.id desc`,
-    [workspaceId, open],
-  );
-  for (const row of result.rows) refusals.set(row.task_id, row.refusal);
-  return refusals;
 }
 
 async function readDefinitionNames(
