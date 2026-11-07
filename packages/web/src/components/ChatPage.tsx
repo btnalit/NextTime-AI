@@ -4,6 +4,7 @@ import { useRoleCan } from '../hooks/useRoleCan.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import { messageRoleLabel } from '../lib/chat-messages.js';
 import type { CapabilityCaller } from '../lib/clients.js';
+import { draftScope } from '../lib/drafts.js';
 import {
   composerEvaluationContentStep,
   composerProbeHoldStep,
@@ -111,6 +112,8 @@ export function ChatPage({
   const latestGoalStatus = useMemo(() => latestGoalStatuses(messages), [messages]);
   const goalRunIds = useMemo(() => goalRunIdsIn(messages), [messages]);
   const goals = useChatGoals(http, goalRunIds);
+  // S10 E1: the per-Turn outcome line goes under each Turn's last assistant reply.
+  const { principalId: viewerId } = useWorkspaceIdentity(http);
   const composer = useComposer(
     client,
     chatId,
@@ -119,10 +122,9 @@ export function ChatPage({
     setTurn,
     setSendError,
     follow.setFollow,
+    viewerId === null ? null : draftScope(viewerId, chatId),
   );
 
-  // S10 E1: the per-Turn outcome line goes under each Turn's last assistant reply.
-  const { principalId: viewerId } = useWorkspaceIdentity(http);
   const turnAttributions = useTurnAttributions(http, chatId, turn.status);
   const lastReplyOfTurn = useMemo(() => {
     const last = new Map<string, number>();

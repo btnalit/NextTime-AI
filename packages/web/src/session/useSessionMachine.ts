@@ -8,6 +8,7 @@ import {
   getMe,
   setWorkspaceCookie,
 } from '../lib/auth-api.js';
+import { clearDrafts } from '../lib/drafts.js';
 import { HttpClient } from '../lib/http-client.js';
 import { hrefs, navigate } from '../lib/router.js';
 import {
@@ -155,7 +156,12 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
       setSession(null);
       if (current.authMode === 'apiKey') clearApiKey();
       else setWorkspaceCookie(null);
-      setPreSession({ kind: 'login' });
+      // Legacy 658: sign-in says why it is back, and the drafts this tab keeps (`lib/drafts.ts`)
+      // stay for the same caller to find once signed in again — this is not a sign-out.
+      setPreSession({
+        kind: 'login',
+        reason: current.authMode === 'apiKey' ? 'keyInvalid' : 'sessionExpired',
+      });
     },
     [currentSession],
   );
@@ -437,6 +443,7 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
     session?.ws.close();
     setSession(null);
     clearApiKey();
+    clearDrafts();
     setApiKeyError(null);
     window.location.hash = '';
   }, [session]);
@@ -446,6 +453,7 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
     session?.ws.close();
     setSession(null);
     setWorkspaceCookie(null);
+    clearDrafts();
     setPreSession({ kind: 'login' });
     // R-15: signed out here at once, whatever the request below does. The session cookie is
     // HttpOnly — only the kernel's logout response can clear it — so until that response arrives

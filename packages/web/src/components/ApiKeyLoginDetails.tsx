@@ -12,6 +12,9 @@ export interface ApiKeyLoginDetailsProps {
   /** Extra footer copy appended after the standard "Your key is issued by..." line — currently
    *  only `LoginPage` uses this, to point a key-only sign-in at the `/me/account` claim form. */
   readonly footerExtra?: ReactNode;
+  /** Starts unfolded — legacy 658: back at sign-in because the key stopped working, the key form
+   *  is where the person is headed. Only the first render reads it; the person folds it as usual. */
+  readonly defaultOpen?: boolean;
 }
 
 /**
@@ -26,10 +29,12 @@ export function ApiKeyLoginDetails({
   pending,
   error,
   footerExtra,
+  defaultOpen = false,
 }: ApiKeyLoginDetailsProps) {
   const t = useT();
   const [apiKey, setApiKey] = useState('');
   const [revealed, setRevealed] = useState(false);
+  const [initiallyOpen] = useState(defaultOpen);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
@@ -42,7 +47,7 @@ export function ApiKeyLoginDetails({
   const unauthorized = described?.code === 'unauthorized';
 
   return (
-    <details className="api-key-login">
+    <details className="api-key-login" open={initiallyOpen || undefined}>
       <summary data-testid="api-key-login-toggle">
         {t('用 API key 登录', 'Use an API key instead')}
       </summary>

@@ -5,9 +5,11 @@ import {
   type KeyboardEvent,
   type RefObject,
   type SetStateAction,
+  useEffect,
   useRef,
   useState,
 } from 'react';
+import { loadDraft, saveDraft } from '../../lib/drafts.js';
 import { type TurnState, initialTurnState, streamReducer } from '../../lib/streaming-reducer.js';
 import type { WsClient } from '../../lib/ws-client.js';
 
@@ -33,6 +35,11 @@ export interface ComposerState {
  * `send_chat_message`'s -32010 (`TurnAlreadyRunningError`, surfaced via `setSendError` from the
  * caller). An archived chat is read-only *here* — the kernel does not refuse `send_chat_message` on
  * an archived chat, so this is a client-side rule.
+ *
+ * Legacy 658: the unsent text is kept under `draftScope` (`lib/drafts.ts`, who is typing in which
+ * chat) as it changes, and put back into an empty box when the box opens again for the same scope —
+ * after a session expired under it and the person signed in again, or after they left the chat.
+ * `null` while the caller is not known yet: nothing is read or kept until it is.
  */
 export function useComposer(
   client: WsClient,
@@ -42,10 +49,28 @@ export function useComposer(
   setTurn: Dispatch<SetStateAction<TurnState>>,
   setSendError: Dispatch<SetStateAction<unknown | null>>,
   setFollow: (next: boolean) => void,
+  draftScope: string | null,
 ): ComposerState {
   const [composerText, setComposerText] = useState('');
   const [busy, setBusy] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // One effect, so the first run for a scope restores before anything is kept: keeping the empty
+  // box first would throw away the very draft there is to restore. Text typed before the caller
+  // was known wins over a stored draft — it is newer — and is kept from then on.
+  const restoredFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (draftScope === null) return;
+    if (restoredFor.current !== draftScope) {
+      restoredFor.current = draftScope;
+      const stored = composerText === '' ? loadDraft(draftScope) : null;
+      if (stored !== null) {
+        setComposerText(stored);
+        return;
+      }
+    }
+    saveDraft(draftScope, composerText);
+  }, [draftScope, composerText]);
 
   async function send(): Promise<void> {
     const text = composerText.trim();
