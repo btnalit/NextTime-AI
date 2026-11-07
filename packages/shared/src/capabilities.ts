@@ -3,6 +3,7 @@ import { GateAbsenceSchema } from './action-description.js';
 import {
   AdminProposalSegmentStatusSchema,
   AdminProposalStatusSchema,
+  AuditActingThroughSchema,
   ChatAgentKindSchema,
   ConflictStatusSchema,
   ConnectionRequestStatusSchema,
@@ -2977,7 +2978,10 @@ const auditCapabilities = [
     // top-level `limit` / `cursor`, the same shape `platform_audit_query` and
     // `list_action_requests` use; `filter` keeps its pre-existing opaque record
     // (`actorPrincipalId` / `action` / `resourceType` / `resourceId`, plus a legacy `limit` that
-    // still works when the top-level one is absent). Page order and cursor are
+    // still works when the top-level one is absent; legacy 666 adds `actingThrough`, what the act
+    // came through, `AUDIT_ACTING_THROUGH_VALUES` — an unrecorded row matches only `admin_agent_session`,
+    // and only when its payload names that session; any other string matches nothing). Page order
+    // and cursor are
     // `(date_trunc('milliseconds', created_at), id)` — substrate/audit/writer.ts's own doc comment.
     paramsSchema: z
       .object({
@@ -2991,7 +2995,7 @@ const auditCapabilities = [
     // above — fixed anyway.
     resultSchema: listEnvelope(wire.AuditRecordWireSchema),
     description:
-      'Query this workspace’s AuditRecords newest first, narrowed by filter {actorPrincipalId?, action?, resourceType?, resourceId?}; keyset-paginated (limit — default 100, max 1000, truncated: true when clamped — and cursor → nextCursor).',
+      'Query this workspace’s AuditRecords newest first, narrowed by filter {actorPrincipalId?, action?, resourceType?, resourceId?, actingThrough?}; keyset-paginated (limit — default 100, max 1000, truncated: true when clamped — and cursor → nextCursor).',
   },
   {
     name: 'reconstruct',
@@ -3548,12 +3552,16 @@ const platformCapabilities = [
         action: z.string().min(1).optional(),
         targetUserId: platformUserId.optional(),
         targetWorkspaceId: z.string().min(1).optional(),
+        /** Legacy 666: only the rows an act came through this way (`audit_records.acting_through`,
+         *  #1028). Rows written before it was recorded carry none and match no value but
+         *  `admin_agent_session`, which also keeps one whose payload names the admin agent's session. */
+        actingThrough: AuditActingThroughSchema.optional(),
         ...platformCursorParams,
       })
       .strict(),
     resultSchema: listEnvelope(wire.PlatformAuditRecordWireSchema),
     description:
-      'The platform audit stream (`workspace_id is null`): who changed what on the platform itself, newest first, filterable by actor, action, target user or target workspace.',
+      'The platform audit stream (`workspace_id is null`): who changed what on the platform itself, newest first, filterable by actor, action, target user, target workspace or what the act came through (actingThrough).',
   },
   // P-A2 (docs/platform-admin-design.md §2 / §5 "工作区配置", development-tasks P-A2 deliverable 1):
   // workspaces as platform objects. Deeper per-workspace configuration (members, gates, catalog,

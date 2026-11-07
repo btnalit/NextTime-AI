@@ -47,6 +47,34 @@ test.describe('audit page', () => {
     });
   });
 
+  test('legacy 666: every row says what its act came through, and 经由 narrows the stream to it', async ({
+    page,
+  }) => {
+    await login(page, API_KEY as string);
+    await page.goto('/#/govern/audit');
+    const log = page.getByTestId('audit-log');
+    await log.getByLabel('显示读操作').check();
+    const form = page.getByTestId('audit-query-form');
+    // Signing in and opening this page are the person's own calls: the stream has some.
+    await form.getByLabel('经由').selectOption({ label: '本人' });
+    await form.getByRole('button', { name: '应用' }).click();
+    const rows = log.getByTestId('audit-row');
+    await expect(rows.first()).toBeVisible({ timeout: 15_000 });
+    const shown = await rows.getByTestId('audit-acting-through').allTextContents();
+    expect(shown.length).toBeGreaterThan(0);
+    expect(new Set(shown)).toEqual(new Set(['经由 本人']));
+
+    // The platform's own background work, in this workspace: only its rows, or none at all.
+    await form.getByLabel('经由').selectOption({ label: '平台后台任务' });
+    await form.getByRole('button', { name: '应用' }).click();
+    await expect(log.getByTestId('audit-list').or(log.getByTestId('audit-empty'))).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect(rows.getByTestId('audit-acting-through').filter({ hasText: '本人' })).toHaveCount(
+      0,
+    );
+  });
+
   test('explain: an unknown node id shows the coded error banner', async ({ page }) => {
     await login(page, API_KEY as string);
     await page.goto('/#/govern/audit');

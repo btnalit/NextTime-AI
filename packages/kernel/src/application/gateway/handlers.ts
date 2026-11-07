@@ -633,6 +633,7 @@ function toAuditQueryFilter(filter: Record<string, unknown> | undefined): AuditQ
   if (typeof filter.action === 'string') result.action = filter.action;
   if (typeof filter.resourceType === 'string') result.resourceType = filter.resourceType;
   if (typeof filter.resourceId === 'string') result.resourceId = filter.resourceId;
+  if (typeof filter.actingThrough === 'string') result.actingThrough = filter.actingThrough;
   if (typeof filter.limit === 'number') result.limit = filter.limit;
   return result;
 }

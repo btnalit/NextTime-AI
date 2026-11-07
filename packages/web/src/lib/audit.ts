@@ -326,6 +326,8 @@ export interface AuditFilter {
   readonly action?: string;
   readonly resourceType?: string;
   readonly resourceId?: string;
+  /** Legacy 666: what the act came through (`lib/acting-through.ts`). */
+  readonly actingThrough?: string;
 }
 
 export function auditFilterFromEntry(entry: AuditEntry): AuditFilter {
@@ -346,7 +348,8 @@ export function isEmptyFilter(filter: AuditFilter): boolean {
     filter.actorPrincipalId === undefined &&
     filter.action === undefined &&
     filter.resourceType === undefined &&
-    filter.resourceId === undefined
+    filter.resourceId === undefined &&
+    filter.actingThrough === undefined
   );
 }
 
@@ -359,6 +362,8 @@ export interface AuditRecordRow {
   readonly resourceId: string | null;
   readonly payload: Readonly<Record<string, unknown>>;
   readonly createdAt: string;
+  /** Legacy 666 (#1028): what the act came through; `null` when not recorded. */
+  readonly actingThrough?: string | null;
 }
 
 /** An audit row's `payload` — `resourceHref` reads a `change_item`'s `segmentId` from it. */

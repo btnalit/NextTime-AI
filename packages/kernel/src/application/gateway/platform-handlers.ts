@@ -1650,6 +1650,7 @@ export async function queryPlatformAudit(
     action?: string;
     targetUserId?: string;
     targetWorkspaceId?: string;
+    actingThrough?: string;
     cursor?: string;
     limit: number;
   },
@@ -1673,6 +1674,16 @@ export async function queryPlatformAudit(
   if (filter.targetWorkspaceId) {
     values.push(filter.targetWorkspaceId);
     conditions.push(`a.payload->'params'->>'workspaceId' = $${values.length}`);
+  }
+  // Legacy 666: what the act came through (#1028's column). A row from before carries none and
+  // matches no value but `admin_agent_session`, which also keeps one whose payload names the
+  // admin agent's session (legacy 583, the same rule as `queryAudit`).
+  if (filter.actingThrough) {
+    values.push(filter.actingThrough);
+    const n = values.length;
+    conditions.push(
+      `(a.acting_through = $${n}::text or ($${n}::text = 'admin_agent_session' and a.acting_through is null and a.payload ->> 'sessionKind' = 'admin_agent'))`,
+    );
   }
   if (filter.cursor) {
     const decoded = decodeCursor(filter.cursor);
@@ -1706,6 +1717,7 @@ export const platformAuditQueryHandler: CapabilityHandler = async (
     action?: string;
     targetUserId?: string;
     targetWorkspaceId?: string;
+    actingThrough?: string;
     cursor?: string;
     limit?: number;
   };
