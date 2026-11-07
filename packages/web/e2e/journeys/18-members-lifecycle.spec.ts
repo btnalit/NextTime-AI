@@ -70,7 +70,10 @@ async function callCap<T>(page: Page, name: string, data: unknown): Promise<T> {
   return capResult<T>(name, res);
 }
 
-/** `get_workspace` with an API key from Node — the raw response, so a refused key can be read. */
+/** `get_workspace` with an API key from Node — the raw response, so a refused key can be read.
+ *  `page.request` also sends the owner's session cookie; the kernel resolves the Bearer key first
+ *  and refuses a bad one with 401 rather than falling back to the cookie, which is what lets a
+ *  401 here mean "this key is refused". */
 function getWorkspaceWithKey(page: Page, apiKey: string) {
   return page.request.post('/api/cap/get_workspace', {
     headers: { authorization: `Bearer ${apiKey}` },
@@ -205,6 +208,7 @@ test.describe('Journey ⑱: 成员资格与服务凭证的一生', () => {
     await drawer.getByRole('button', { name: '轮换 API key', exact: true }).click();
     const rotated = drawer.getByTestId('rotated-api-key');
     await expect(rotated).toBeVisible({ timeout: 15_000 });
+    // The key is the only `.mono` text in the shown-once box (`PrincipalDetail`); it has no test id.
     const newKey = ((await rotated.locator('.mono').textContent()) ?? '').trim();
     expect(newKey).not.toBe('');
     expect(newKey).not.toBe(oldKey);
@@ -227,5 +231,8 @@ test.describe('Journey ⑱: 成员资格与服务凭证的一生', () => {
     );
     const disabled = await listedPrincipal(page, service.principal.id);
     expect(disabled?.disabledAt ?? null).not.toBeNull();
+    // What disabling guarantees: the credential no longer works. The key that worked in step 5 is
+    // now refused like the rotated-out one (the kernel resolves keys of active Principals only).
+    expect((await getWorkspaceWithKey(page, newKey)).status()).toBe(401);
   });
 });
