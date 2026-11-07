@@ -9,7 +9,7 @@ import {
 } from './helpers.js';
 
 /**
- * Journey ⑯: 一个 Operation 的去留——提议重分类、留下草稿不发布、丢弃这份草稿；弃用另一个 Operation
+ * Journey ⑰: 一个 Operation 的去留——提议重分类、留下草稿不发布、丢弃这份草稿；弃用另一个 Operation
  * （遗留 657，缺口 G5：控制台写操作走真实内核）
  *
  * 步骤:
@@ -78,7 +78,7 @@ async function versionsOf(
   return items.filter((op) => op.name === name);
 }
 
-test.describe('Journey ⑯: 一个 Operation 的去留', () => {
+test.describe('Journey ⑰: 一个 Operation 的去留', () => {
   test.skip(
     !ADMIN_LOGIN || !ADMIN_INITIAL_PASSWORD,
     'set WEB_E2E_ADMIN_LOGIN and WEB_E2E_ADMIN_INITIAL_PASSWORD (see README.md)',
