@@ -73,6 +73,29 @@ describe('GatekeeperDetailDrawer', () => {
     expect(screen.queryByText('这个门没有 Operation')).toBeNull();
   });
 
+  it('legacy 674: a reason the kernel read out masked says what [redacted] stands for', async () => {
+    const http = callerReturning({
+      id: 'gk-1',
+      name: 'notes',
+      kind: 'http',
+      status: 'active',
+      operationCount: 0,
+      createdAt: '2026-09-01T00:00:00.000Z',
+      operations: [],
+      health: 'ok',
+      platformSuspension: {
+        suspendedAt: '2026-11-07T09:00:00.000Z',
+        reason: 'token [redacted] leaked',
+      },
+    });
+    renderDrawer(http);
+    const notice = await screen.findByTestId('gatekeeper-platform-suspension');
+    expect(notice.textContent).toContain('原因：token [redacted] leaked');
+    expect(screen.getByTestId('gatekeeper-platform-suspension-redacted').textContent).toContain(
+      '看起来像密码、令牌或密钥',
+    );
+  });
+
   it('legacy 674: a suspension with no reason says none was given', async () => {
     const http = callerReturning({
       id: 'gk-1',

@@ -4,6 +4,7 @@ import { actionKindRaw, actionKindTagText, formatDateTime, formatRelative } from
 import type { GatekeeperDetail } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { gateOwnedParamsText } from './connect/GateOwnedParams.js';
+import { RedactedNote } from './kit/redacted-note.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Notice } from './ui/Notice.js';
@@ -76,11 +77,15 @@ export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailD
               {formatRelative(suspension.suspendedAt)}
             </time>
           </strong>
-          <p className="text-small">
+          <p className="text-small wrap-anywhere">
             {suspension.reason
               ? t(`原因：${suspension.reason}`, `Reason: ${suspension.reason}`)
               : t('平台管理员没有写原因。', 'The platform administrator gave no reason.')}
           </p>
+          <RedactedNote
+            value={suspension.reason}
+            testId="gatekeeper-platform-suspension-redacted"
+          />
           <p className="text-small">
             {t(
               '暂停期间，它的每个 Operation 都会被拒绝，智能体也调用不了；连接、Operation 和历史都保留。工作区里没有办法解除，请找平台管理员恢复它。',
