@@ -2,12 +2,20 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type Capability, getCapability } from '@nexttime/shared';
+import { type Capability, type Operation, getCapability } from '@nexttime/shared';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { requestAction } from '../../governance/approval/index.js';
+import {
+  getPublishedOperation,
+  importManifest,
+  operationRecordDigest,
+  publishOperation,
+  registerGatekeeper,
+} from '../../governance/gatekeepers/index.js';
 import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
 import {
   attachEvidence,
@@ -75,6 +83,9 @@ interface Recipe {
   /** This path's answer, when it is not the row's: a row declares what its default path does
    *  (the params a caller sends most), and a known, intended other path says its own here. */
   readonly repeat?: string;
+  /** The entity a result names, when `entityId` cannot tell (a result keyed by more than one
+   *  field, such as an Operation draft's gate, name and version). */
+  readonly entity?: (result: unknown) => string | undefined;
 }
 
 /** A call as the recipe's owner, for setting a case up. */
@@ -318,6 +329,87 @@ async function outcomeUnknownAction(ctx: RecipeContext, goalRunId: string): Prom
     },
     { skipRoleSwitch: true },
   );
+}
+
+const GATE_OP: Operation = {
+  name: 'repeat.restart',
+  description: 'Restarts a host.',
+  binding: { kind: 'http', method: 'POST', path: '/restart' },
+  params_schema: {},
+  mode: 'execute',
+  blast_radius: 'medium',
+  reversibility: false,
+  auto_approvable: true,
+  await_decision: false,
+  reads: [],
+  writes: [],
+};
+
+/** A registered gate whose interface manifest is `GATE_OP` — imported as a draft, and published
+ *  unless `publish` is false. The seeded gate's Operation is not a valid definition, so a call
+ *  that reads one (an approval rule, a catalog transition) needs this gate. */
+async function gateWithOperation({ pool, seed }: RecipeContext, publish = true): Promise<string> {
+  const { workspaceId, ownerId } = seed;
+  return withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+    const activity = await startActivity(client, workspaceId, {
+      kind: 'test.connection',
+      principalId: ownerId,
+    });
+    const { gatekeeperId } = await registerGatekeeper(client, workspaceId, {
+      name: 'repeat-gate',
+      transportKind: 'http',
+      target: 'repeat-gate',
+      endpoint: 'http://repeat-gate.invalid:8080',
+      activityId: activity.id,
+      registeredBy: { id: ownerId, kind: 'human' },
+    });
+    await importManifest(client, workspaceId, {
+      gatekeeperId,
+      operations: [GATE_OP],
+      proposedBy: { id: ownerId, kind: 'human' },
+      activityId: activity.id,
+    });
+    if (publish) await publishOperation(client, workspaceId, { gatekeeperId, name: GATE_OP.name });
+    return gatekeeperId;
+  });
+}
+
+/** A pending ActionRequest for `GATE_OP`, made as `request_action` makes it: against the
+ *  definition published now (legacy 218). */
+async function pendingRequest({ pool, seed }: RecipeContext, gatekeeperId: string) {
+  const { workspaceId, ownerId } = seed;
+  return withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+    const published = await getPublishedOperation(client, workspaceId, gatekeeperId, GATE_OP.name);
+    if (published === null || published === undefined) throw new Error('GATE_OP is not published');
+    const request = await requestAction(client, workspaceId, {
+      gatekeeperId,
+      actionKind: GATE_OP.name,
+      resourceScope: gatekeeperId,
+      blastRadius: 'medium',
+      operationAutoApprovable: true,
+      awaitDecision: false,
+      onBehalfOf: ownerId,
+      actorRuntime: 'pi',
+      requesterScope: {
+        capabilities: ['request_action'],
+        resources: { gatekeeper: [gatekeeperId] },
+      },
+      idempotencyKey: randomUUID(),
+      operationDigest: operationRecordDigest(published),
+    });
+    return request.id;
+  });
+}
+
+/** The catalog's one draft of `GATE_OP` (version and draftDigest as list_operations shows them). */
+async function draftOf(ctx: RecipeContext, gatekeeperId: string) {
+  const listed = await as<{
+    items: { name: string; status: string; version: number; draftDigest?: string }[];
+  }>(ctx, 'list_operations', { gatekeeperId });
+  const draft = listed.items.find((item) => item.name === GATE_OP.name && item.status === 'draft');
+  if (draft === undefined)
+    throw new Error(`no draft of ${GATE_OP.name}: ${JSON.stringify(listed)}`);
+  return draft;
 }
 
 /** Extra cases for a row, beyond the one with schema-built params on the bare seed. A declaration
@@ -842,6 +934,96 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       },
     },
   },
+  // Legacy 664, batch 5: the governance and agent-policy setters. Each is an upsert of one row,
+  // and writing the same value again rewrites that row's updated_at, so they are `repeats`.
+  set_policy: {
+    "a rule for the seeded gate's Operation": {
+      setUp: async ({ pool, seed }) => {
+        await registerSeededGatekeeper(pool, seed);
+        return {
+          policy: {
+            gatekeeperId: seed.gatekeeperId,
+            actionKindTag: seed.marker,
+            autoApprove: false,
+          },
+        };
+      },
+    },
+  },
+  set_quota: {
+    'the evaluation budget': {
+      setUp: async () => ({ key: 'evaluation.monthly_cost_budget_usd', value: 20 }),
+    },
+  },
+  set_agent_policy: {
+    'members may not edit their profile': {
+      setUp: async () => ({ memberCanEditProfile: false }),
+    },
+  },
+  // Legacy 664, batch 6: the Operation catalog and its approval rule, on a real gate.
+  set_auto_approved_action_kind: {
+    'a pending request for the published Operation': {
+      setUp: async (ctx) => {
+        const gatekeeperId = await gateWithOperation(ctx);
+        return {
+          gatekeeperId,
+          actionKindTag: GATE_OP.name,
+          actionRequestId: await pendingRequest(ctx, gatekeeperId),
+        };
+      },
+    },
+  },
+  publish_operation: {
+    "the gate's imported draft": {
+      setUp: async (ctx) => {
+        const gatekeeperId = await gateWithOperation(ctx, false);
+        const draft = await draftOf(ctx, gatekeeperId);
+        return { gatekeeperId, name: GATE_OP.name, draftDigest: draft.draftDigest };
+      },
+    },
+  },
+  publish_manifest: {
+    "the gate's imported draft": {
+      setUp: async (ctx) => {
+        const gatekeeperId = await gateWithOperation(ctx, false);
+        const draft = await draftOf(ctx, gatekeeperId);
+        return { gatekeeperId, drafts: [{ name: GATE_OP.name, draftDigest: draft.draftDigest }] };
+      },
+    },
+  },
+  discard_operation_draft: {
+    "the gate's imported draft": {
+      setUp: async (ctx) => {
+        const gatekeeperId = await gateWithOperation(ctx, false);
+        const draft = await draftOf(ctx, gatekeeperId);
+        return {
+          gatekeeperId,
+          name: GATE_OP.name,
+          version: draft.version,
+          draftDigest: draft.draftDigest,
+        };
+      },
+    },
+  },
+  propose_operation: {
+    // The result has no id: the draft is its gate, name and version, and what it says. A second
+    // propose revises that same draft in place — not a new version (per #493 on batch 6).
+    'a new Operation on the gate': {
+      entity: (result) => {
+        const draft = result as {
+          gatekeeperId: string;
+          name: string;
+          version: number;
+          draftDigest: string;
+        };
+        return `${draft.gatekeeperId}/${draft.name}@${draft.version} ${draft.draftDigest}`;
+      },
+      setUp: async (ctx) => ({
+        gatekeeperId: await gateWithOperation(ctx),
+        operation: { ...GATE_OP, name: 'repeat.status', mode: 'observe' },
+      }),
+    },
+  },
   reconcile_goal_action: {
     'an action of the run whose outcome is unknown': {
       setUp: async (ctx) => {
@@ -907,6 +1089,14 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'verify_fact',
   'attest_fact',
   'resolve_conflict',
+  'set_policy',
+  'set_quota',
+  'set_agent_policy',
+  'set_auto_approved_action_kind',
+  'publish_operation',
+  'publish_manifest',
+  'discard_operation_draft',
+  'propose_operation',
 ]);
 
 interface Declared {
@@ -938,7 +1128,8 @@ function declaredRows(): Declared[] {
 }
 
 /** The entity a result names: its own `id`, or the `id` of its one object-valued field, or else
- *  its one `…Id` field (`rotate_api_key` answers `{ principalId, apiKey }`). */
+ *  its one `…Id` field (`rotate_api_key` answers `{ principalId, apiKey }`), or else its `key`
+ *  (a Quota is keyed by name: `set_quota` answers `{ key, value, … }`). */
 function entityId(result: unknown): string | undefined {
   if (result === null || typeof result !== 'object') return undefined;
   const record = result as Record<string, unknown>;
@@ -954,7 +1145,9 @@ function entityId(result: unknown): string | undefined {
   const ids = Object.entries(record).filter(
     ([key, value]) => key.endsWith('Id') && typeof value === 'string',
   );
-  return ids.length === 1 ? (ids[0]?.[1] as string) : undefined;
+  if (ids.length === 1) return ids[0]?.[1] as string;
+  if (ids.length > 1) return undefined;
+  return typeof record.key === 'string' ? record.key : undefined;
 }
 
 interface AuditRow {
@@ -1048,6 +1241,7 @@ describe.runIf(DATABASE_URL !== undefined)(
               memberId: workspace.principals.get('member') as string,
             });
       const call = () => dispatchCapability({ pool }, caller, capability.name, params);
+      const entityOf = chosen?.entity ?? entityId;
 
       let first: unknown;
       try {
@@ -1088,21 +1282,21 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       expect(refusal, 'the second call must succeed').toBeUndefined();
       if (repeat === 'idempotent') {
-        const firstId = entityId(first);
-        if (firstId !== undefined) expect(entityId(second)).toBe(firstId);
+        const firstId = entityOf(first);
+        if (firstId !== undefined) expect(entityOf(second)).toBe(firstId);
         expect(rowsAfterSecond).toEqual(rowsAfterFirst);
         expect(newAudit.map((row) => row.action)).toEqual([capability.name]);
         expect(newAudit[0]?.actor_principal_id).toBe(ownerId);
       } else if (repeat === 'creates') {
-        const firstId = entityId(first);
+        const firstId = entityOf(first);
         expect(firstId, 'creates: the result names the entity it made').toBeDefined();
-        expect(entityId(second)).not.toBe(firstId);
+        expect(entityOf(second)).not.toBe(firstId);
         // A new id with nothing stored for it would not be a second entity (per #488).
         expect(rowsAfterSecond).not.toEqual(rowsAfterFirst);
       } else if (repeat === 'repeats') {
-        const firstId = entityId(first);
+        const firstId = entityOf(first);
         expect(firstId, 'repeats: the result names the entity it acted on').toBeDefined();
-        expect(entityId(second)).toBe(firstId);
+        expect(entityOf(second)).toBe(firstId);
         expect(rowsAfterSecond).not.toEqual(rowsAfterFirst);
       } else {
         throw new Error(`unknown repeat declaration ${repeat} (guard M6 should have refused it)`);
