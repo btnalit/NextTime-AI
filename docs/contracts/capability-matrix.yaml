@@ -753,7 +753,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: repeats # the Operations stay as the first call left them; each call records another refresh Activity on the same Gatekeeper
+    repeat: repeats # the Operations stay as the first call left them; each call records another refresh Activity on the same Gatekeeper (legacy 689)
   register_source:
     console: "none: 数据接入，由 collector 用服务 Handle 调用，不是人的操作"
     agents: []
