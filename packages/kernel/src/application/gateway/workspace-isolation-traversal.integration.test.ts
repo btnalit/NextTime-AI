@@ -1,14 +1,21 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CAPABILITY_REGISTRY, type Capability, type Role } from '@nexttime/shared';
+import { CAPABILITY_REGISTRY, type Capability } from '@nexttime/shared';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { ZodType } from 'zod';
 import { runMigrations } from '../../adapters/db/migrate.js';
-import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { createPool } from '../../adapters/db/pool.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
+import {
+  type Seeded,
+  humanCaller,
+  newWorkspace,
+  paramsFor,
+  seedWorkspace,
+  seededIds,
+} from './traversal-fixture.js';
 
 /**
  * Batch D1 (docs/test-coverage-gaps-2026-11-06.md §6, gap G12): what workspace A holds never
@@ -41,111 +48,6 @@ const WORKSPACE_READS = CAPABILITY_REGISTRY.filter(
   (capability: Capability) => capability.mode === 'observe' && capability.scope !== 'platform',
 );
 
-function humanCaller(workspaceId: string, principalId: string, role: Role): ResolvedCaller {
-  return {
-    channel: 'human',
-    principal: { workspaceId, id: principalId, kind: 'human', role, displayName: null },
-    session: {
-      workspaceId,
-      id: randomUUID(),
-      principalId,
-      kind: 'web',
-      onBehalfOf: principalId,
-      status: 'active',
-      createdAt: new Date(),
-      expiresAt: null,
-    },
-  };
-}
-
-/** A's rows, by the id field names a read's params use for them. */
-interface Seeded {
-  readonly workspaceId: string;
-  readonly ownerId: string;
-  readonly marker: string;
-  readonly chatId: string;
-  readonly gatekeeperId: string;
-  readonly operationId: string;
-  readonly actionRequestId: string;
-}
-
-/** What a read's free-text params get: never the marker, so a marker in an answer is A's data. */
-const PROBE = 'isolation-probe';
-
-function ids(a: Seeded): string[] {
-  return [a.chatId, a.gatekeeperId, a.operationId, a.actionRequestId];
-}
-
-function idFor(key: string, a: Seeded): string | undefined {
-  if (key === 'chatId') return a.chatId;
-  if (key === 'gatekeeperId' || key === 'gateId') return a.gatekeeperId;
-  if (key === 'actionRequestId') return a.actionRequestId;
-  if (/^(objectId|entityId|nodeId|fromId|toId|id|definitionId)$/.test(key)) return a.operationId;
-  return undefined;
-}
-
-/** A zod v4 schema's def, read by its `type` tag (no class checks — the walk only needs shapes). */
-interface Def {
-  readonly type: string;
-  readonly innerType?: ZodType;
-  readonly in?: ZodType;
-  readonly shape?: Record<string, ZodType>;
-  readonly element?: ZodType;
-  readonly entries?: Record<string, string | number>;
-  readonly values?: readonly unknown[];
-  readonly format?: string;
-}
-
-function defOf(schema: ZodType): Def {
-  return (schema as unknown as { _zod: { def: Def } })._zod.def;
-}
-
-/** Strips optional / nullable / default / pipe wrappers down to the shape a value must have. */
-function unwrap(schema: ZodType): Def {
-  let def = defOf(schema);
-  for (;;) {
-    const next = def.innerType ?? (def.type === 'pipe' ? def.in : undefined);
-    if (next === undefined) return def;
-    def = defOf(next);
-  }
-}
-
-/** A value for one field: A's id where the name says it is one, else the simplest the type takes. */
-function valueFor(key: string, schema: ZodType, a: Seeded): unknown {
-  const def = unwrap(schema);
-  switch (def.type) {
-    case 'array':
-      return [idFor(key.replace(/s$/, 'Id'), a) ?? a.operationId];
-    case 'string':
-      return idFor(key, a) ?? (/Id$/.test(key) || def.format === 'uuid' ? a.operationId : PROBE);
-    case 'number':
-    case 'int':
-      return 1;
-    case 'boolean':
-      return false;
-    case 'enum':
-      return Object.values(def.entries ?? {})[0];
-    case 'literal':
-      return def.values?.[0];
-    case 'object':
-      return paramsFor(schema, a);
-    default:
-      return undefined;
-  }
-}
-
-/** Params for a read: every field its schema declares (optional ones too, so an id filter is set). */
-function paramsFor(schema: ZodType, a: Seeded): Record<string, unknown> {
-  const def = unwrap(schema);
-  if (def.type !== 'object') return {};
-  const out: Record<string, unknown> = {};
-  for (const [key, field] of Object.entries(def.shape ?? {})) {
-    const value = valueFor(key, field, a);
-    if (value !== undefined) out[key] = value;
-  }
-  return out;
-}
-
 describe.runIf(DATABASE_URL !== undefined)(
   'workspace isolation over every read — batch D1 / G12 (integration, real Postgres)',
   () => {
@@ -154,86 +56,17 @@ describe.runIf(DATABASE_URL !== undefined)(
     let workspaceB: string;
     let ownerIdB: string;
 
-    async function newWorkspace(name: string): Promise<{ workspaceId: string; ownerId: string }> {
-      const workspaceId = randomUUID();
-      const ownerId = randomUUID();
-      await withWorkspace(
-        pool,
-        { workspaceId, principalId: ownerId },
-        async (client) => {
-          await client.query('insert into workspaces (id, name) values ($1, $2)', [
-            workspaceId,
-            name,
-          ]);
-          await client.query(
-            "insert into principals (workspace_id, id, kind, role, display_name) values ($1, $2, 'human', 'owner', $3)",
-            [workspaceId, ownerId, name],
-          );
-        },
-        { skipRoleSwitch: true },
-      );
-      return { workspaceId, ownerId };
-    }
-
     beforeAll(async () => {
       pool = createPool();
       await runMigrations(pool, MIGRATIONS_DIR);
       const marker = `leak-marker-${randomUUID()}`;
-      const { workspaceId, ownerId } = await newWorkspace(`isolation-a ${marker}`);
+      const workspaceA = await newWorkspace(pool, `isolation-a ${marker}`);
+      const ownerIdA = workspaceA.principals.get('owner') as string;
+      a = await seedWorkspace(pool, workspaceA.workspaceId, ownerIdA, marker);
 
-      // A chat, through the capability a person uses, titled with the marker.
-      const ownerA = humanCaller(workspaceId, ownerId, 'owner');
-      const chat = (await dispatchCapability({ pool }, ownerA, 'new_chat', {})) as { id: string };
-      await dispatchCapability({ pool }, ownerA, 'rename_chat', { chatId: chat.id, title: marker });
-
-      // A gate, a published Operation on it, and a pending request for it — the shape the CI e2e
-      // seed writes (.github/workflows/e2e.yml "Prepare the always-allow seed").
-      const gatekeeperId = randomUUID();
-      const seeded = await withWorkspace(
-        pool,
-        { workspaceId, principalId: ownerId },
-        async (client) => {
-          await client.query(
-            "insert into objects (workspace_id, id, object_type, properties) values ($1, $2, 'Gatekeeper', $3)",
-            [workspaceId, gatekeeperId, { name: marker }],
-          );
-          const operation = await client.query<{ id: string }>(
-            `insert into objects (workspace_id, object_type, identity_key, properties)
-             values ($1, 'Operation', $2, $3) returning id`,
-            [
-              workspaceId,
-              { gatekeeperId, name: marker, version: 1 },
-              {
-                name: marker,
-                description: marker,
-                status: 'published',
-                version: 1,
-                origin: 'import',
-                mode: 'execute',
-              },
-            ],
-          );
-          const request = await client.query<{ id: string }>(
-            `insert into action_requests
-               (workspace_id, status, gatekeeper_id, action_kind, resource_scope, blast_radius,
-                policy_decision, await_decision, on_behalf_of, actor_runtime, params)
-             values ($1, 'pending_approval', $2::uuid, $3, $2::text, 'medium', 'require_approval',
-                     false, $4, 'worker', $5)
-             returning id`,
-            [workspaceId, gatekeeperId, marker, ownerId, { note: marker }],
-          );
-          return {
-            operationId: operation.rows[0]?.id ?? '',
-            actionRequestId: request.rows[0]?.id ?? '',
-          };
-        },
-        { skipRoleSwitch: true },
-      );
-      a = { workspaceId, ownerId, marker, chatId: chat.id, gatekeeperId, ...seeded };
-
-      const b = await newWorkspace('isolation-b');
+      const b = await newWorkspace(pool, 'isolation-b');
       workspaceB = b.workspaceId;
-      ownerIdB = b.ownerId;
+      ownerIdB = b.principals.get('owner') as string;
     });
 
     afterAll(async () => {
@@ -290,11 +123,11 @@ describe.runIf(DATABASE_URL !== undefined)(
     it("no read a B owner can make answers with anything of A's", async () => {
       const ownerB = humanCaller(workspaceB, ownerIdB, 'owner');
       // Pass 1, no params: nothing B asked for names A, so none of A's ids may come back either.
-      const listed = await walk(ownerB, () => ({}), [a.marker, a.workspaceId, ...ids(a)]);
+      const listed = await walk(ownerB, () => ({}), [a.marker, a.workspaceId, ...seededIds(a)]);
       // Pass 2, every id-shaped param pointed at A's rows. Each B call is itself audited in B with
       // its params (dispatch.ts), so B's own audit reads now echo A's ids back — that is B's record
       // of what B asked, not A's data. A's data is what carries the marker, which no param ever
-      // holds (strings get PROBE), and A's workspace id, which no param names.
+      // holds (free-text params get the fixture's PROBE), and A's workspace id, which no param names.
       const fetched = await walk(ownerB, byId, [a.marker, a.workspaceId]);
 
       expect([...listed.hits, ...fetched.hits]).toEqual([]);
