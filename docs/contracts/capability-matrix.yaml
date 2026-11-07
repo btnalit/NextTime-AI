@@ -820,7 +820,7 @@ capabilities:
   report_task_result:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: []
-    repeat: "conflict: illegal_transition"
+    repeat: "conflict: unauthorized" # the first report settles the Task, and ending its WorkerRun revokes the run's Handle
   report_turn:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: []
