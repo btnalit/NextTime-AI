@@ -21,7 +21,7 @@
 ratchet:
   console_unexplained: 10
   kernel_test_missing: 4
-  e2e_waived: 68
+  e2e_waived: 65
   repeat_unclear: 76
 capabilities:
   add_eval_case:
@@ -185,7 +185,7 @@ capabilities:
   deprecate_operation:
     console: "indirect: packages/web/src/components/CatalogPage.tsx"
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: "conflict: illegal_transition"
   deprecate_procedure:
     console: "indirect: packages/web/src/components/CatalogPage.tsx"
@@ -215,7 +215,7 @@ capabilities:
   discard_operation_draft:
     console: required
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: "conflict: illegal_transition"  # already discarded
   edit_eval_case:
     console: required
@@ -661,7 +661,7 @@ capabilities:
   propose_operation:
     console: required
     agents: [entry, admin]
-    e2e: "waived: 657"
+    e2e: observed
     repeat: repeats  # the same draft, revised in place (same version); each call records an Activity
   propose_pack_install:
     console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；所有者在能力目录的管理员提案页审阅，用 install_pack 带 adminProposalSegmentId 安装，或拒绝"
