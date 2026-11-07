@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Role, WorkerDefinitionStatsWire } from '@nexttime/shared';
+import type { Role, WorkerDefinitionStatsWire, WorkerSpec } from '@nexttime/shared';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { workerSpecDigest } from '../task/step-attempt.js';
 import { ForbiddenError } from './authorize.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
@@ -13,8 +14,10 @@ import type { ResolvedCaller } from './resolve-caller.js';
 /**
  * application/gateway/get-worker-definition-stats-handler.integration.test: DB-gated (real
  * Postgres; auto-skip without DATABASE_URL) — who may call `get_worker_definition_stats` (S11
- * GO16a, legacy 569: builder floor, human channel, as `get_skill_stats`) and which versions it
- * lists. How it counts is application/task/worker-definition-stats.integration.test.ts.
+ * GO16a, legacy 569: builder floor, human channel, as `get_skill_stats`), which versions it
+ * lists, and whose goals' WorkerSpec digests the caller is given (the gateway's goal viewer: the
+ * requester, and the owner every goal — review #493 on #1064). How it counts is
+ * application/task/worker-definition-stats.integration.test.ts.
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -125,6 +128,102 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     afterAll(async () => {
       await pool.end();
+    });
+
+    /** A write with the guards off — fixtures whose write paths this capability does not own. */
+    const raw = async <T = Record<string, unknown>>(
+      sql: string,
+      params: readonly unknown[] = [],
+    ): Promise<T[]> =>
+      withWorkspace(
+        pool,
+        { workspaceId, principalId: principals.owner },
+        async (client) => {
+          await client.query('set local session_replication_role = replica');
+          return (await client.query(sql, [...params])).rows as T[];
+        },
+        { skipRoleSwitch: true },
+      );
+
+    /** A completed Task of `familyId` v1 that ran as a step of `requester`'s goal with `spec`. */
+    async function goalStepTask(familyId: string, requester: string, spec: WorkerSpec) {
+      const [goal] = await raw<{ id: string }>(
+        `insert into goal_runs (workspace_id, status, on_behalf_of, statement, current_revision,
+           confirmed_at, budget_max_tokens, budget_max_steps, budget_max_revisions,
+           budget_max_wall_clock_seconds)
+         values ($1, 'running', $2, 'a goal', 1, now(), 100000, 10, 5, 3600) returning id`,
+        [workspaceId, requester],
+      );
+      await raw(
+        `insert into plan_revisions (workspace_id, goal_run_id, revision, status, plan,
+           proposed_by, decided_by, decided_at)
+         values ($1, $2, 1, 'accepted', $3, $4, $4, now())`,
+        [workspaceId, goal?.id, JSON.stringify({ steps: [{ key: 's', spec }] }), requester],
+      );
+      const [step] = await raw<{ id: string }>(
+        `insert into step_runs (workspace_id, goal_run_id, step_key, introduced_in_revision,
+           status, attempt_count, updated_at)
+         values ($1, $2, 's', 1, 'running', 1, now()) returning id`,
+        [workspaceId, goal?.id],
+      );
+      await raw(
+        `insert into tasks (workspace_id, id, status, on_behalf_of, worker_definition_id,
+           worker_definition_version, goal_run_id, step_run_id, plan_revision, step_attempt,
+           run_config_snapshot)
+         values ($1, $2, 'completed', $3, $4, 1, $5, $6, 1, 1, $7)`,
+        [
+          workspaceId,
+          randomUUID(),
+          requester,
+          familyId,
+          goal?.id,
+          step?.id,
+          JSON.stringify({ v: 2, spec: { digest: workerSpecDigest(spec) } }),
+        ],
+      );
+    }
+
+    it('gives the builder the digest of a WorkerSpec that ran in their own goal, a label for one that ran only in the owner’s; the owner is given both', async () => {
+      const familyId = randomUUID();
+      await raw(
+        `insert into worker_definitions (workspace_id, id, version, kind, status, definition,
+           proposed_by)
+         values ($1, $2, 1, 'worker', 'published', '{"name":"spec-visibility"}', $3)`,
+        [workspaceId, familyId, principals.owner],
+      );
+      const own: WorkerSpec = { instructions: 'the builder’s own' };
+      const owners: WorkerSpec = { model: 'model-x' };
+      await goalStepTask(familyId, principals.builder, own);
+      await goalStepTask(familyId, principals.owner, owners);
+      const ownDigest = workerSpecDigest(own) as string;
+      const ownersDigest = workerSpecDigest(owners) as string;
+
+      const read = async (role: Role) => {
+        const stats = (await dispatchCapability(
+          { pool },
+          humanCaller(role),
+          'get_worker_definition_stats',
+          { definitionId: familyId },
+        )) as WorkerDefinitionStatsWire;
+        return new Map(
+          stats.versions[0]?.combinations.map((combination) => [
+            combination.fields?.[0],
+            [combination.specRef, combination.specDigest],
+          ]),
+        );
+      };
+      expect(await read('builder')).toEqual(
+        new Map([
+          ['instructions', [ownDigest.slice(0, 12), ownDigest]],
+          ['model', ['#1', null]],
+        ]),
+      );
+      expect(await read('owner')).toEqual(
+        new Map([
+          ['instructions', [ownDigest.slice(0, 12), ownDigest]],
+          ['model', [ownersDigest.slice(0, 12), ownersDigest]],
+        ]),
+      );
     });
 
     it.each(['owner', 'builder'] as const)(

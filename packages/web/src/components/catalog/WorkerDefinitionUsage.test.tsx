@@ -19,7 +19,9 @@ afterEach(() => {
 const WORKER = '66666666-7777-4888-8999-000000000000';
 const ENV_A = `v1:${'a'.repeat(64)}`;
 const SPEC_A = 'c'.repeat(64);
-const SPEC_B = 'd'.repeat(64);
+const REF_A = 'c'.repeat(12);
+/** Adjustments that ran only in goals the reader cannot see: no digest, the page's own number. */
+const REF_B = '#1';
 
 function workspaceAs(role: string) {
   return {
@@ -112,6 +114,7 @@ function stats(patch: Partial<WorkerDefinitionStatsWire> = {}): WorkerDefinition
         ],
         combinations: [
           {
+            specRef: REF_A,
             specDigest: SPEC_A,
             fields: ['instructions', 'skills'],
             usage: usage({ runs: 3, lastUsedAt: RECENT }),
@@ -119,13 +122,15 @@ function stats(patch: Partial<WorkerDefinitionStatsWire> = {}): WorkerDefinition
             reviewSuggested: true,
           },
           {
-            specDigest: SPEC_B,
+            specRef: REF_B,
+            specDigest: null,
             fields: null,
             usage: usage({ runs: 1, lastUsedAt: RECENT }),
             outcomes: tally([0, 0]),
             reviewSuggested: false,
           },
           {
+            specRef: null,
             specDigest: null,
             fields: [],
             usage: usage({ runs: 3, lastUsedAt: RECENT }),
@@ -139,6 +144,7 @@ function stats(patch: Partial<WorkerDefinitionStatsWire> = {}): WorkerDefinition
     failureGroups: [
       {
         definitionVersion: 2,
+        specRef: REF_A,
         specDigest: SPEC_A,
         category: 'limit_reached',
         refusal: 'output_rejected',
@@ -147,6 +153,7 @@ function stats(patch: Partial<WorkerDefinitionStatsWire> = {}): WorkerDefinition
       },
       {
         definitionVersion: 2,
+        specRef: null,
         specDigest: null,
         category: 'worker_error',
         refusal: 'denied',
@@ -205,7 +212,7 @@ describe('WorkerDefinitionUsageSection (S11 GO16a)', () => {
     expect(http.calls.filter((name) => name === 'get_worker_definition_stats')).toHaveLength(1);
   });
 
-  it('by combination: as defined, or a step’s adjustments named by what they set, never by what they say; a note that the two lists are not added', async () => {
+  it('by combination: as defined, or a step’s adjustments named by the fields they set and then a number, never by what they say; a note that the two lists are not added', async () => {
     show(scriptedHttp('builder', () => stats()));
     const combinations = await screen.findByTestId('worker-usage-version-2-combinations');
     fireEvent.click(within(combinations).getByText('按组合（3 种）'));
@@ -213,18 +220,22 @@ describe('WorkerDefinitionUsageSection (S11 GO16a)', () => {
       '数字不要相加',
     );
 
-    const a = screen.getByTestId(`worker-usage-version-2-combination-${SPEC_A}`);
-    const aLabel = within(a).getByTestId(`worker-usage-version-2-combination-${SPEC_A}-label`);
-    expect(aLabel.textContent).toBe(`步骤调整 ${'c'.repeat(12)} · 调整了：职责说明、Skill`);
-    expect(aLabel.getAttribute('title')).toContain(SPEC_A);
-    expect(aLabel.getAttribute('title')).toContain('不论来自哪个目标');
+    const a = screen.getByTestId(`worker-usage-version-2-combination-${REF_A}`);
+    const aLabel = within(a).getByTestId(`worker-usage-version-2-combination-${REF_A}-label`);
+    expect(aLabel.textContent).toBe(`调整了职责说明、Skill · 编号 ${REF_A}`);
+    expect(aLabel.getAttribute('title')).toBe(
+      '编号只用来区分不同的调整：编号相同就是同一份调整，不论来自哪个目标。',
+    );
     // Its review comes from its own outcomes, and says so.
-    const review = within(a).getByTestId(`worker-usage-version-2-combination-${SPEC_A}-review`);
+    const review = within(a).getByTestId(`worker-usage-version-2-combination-${REF_A}-review`);
     expect(review.getAttribute('title')).toBe('这个组合最近 3 个结果都未达成');
 
-    const b = screen.getByTestId(`worker-usage-version-2-combination-${SPEC_B}-label`);
-    expect(b.textContent).toBe(`步骤调整 ${'d'.repeat(12)} · 调整了什么读不到`);
+    // Ran only in goals the reader cannot see: the number is the page's own, and says so.
+    const b = screen.getByTestId(`worker-usage-version-2-combination-${REF_B}-label`);
+    expect(b.textContent).toBe('步骤调整（调整了什么读不到） · 编号 #1');
+    expect(b.getAttribute('title')).toContain('编号只在这一页有效');
     expect(b.getAttribute('title')).toContain('平台不猜');
+    expect(aLabel.getAttribute('title')).not.toContain('这一页');
 
     const asDefined = screen.getByTestId('worker-usage-version-2-combination-as-defined');
     expect(
@@ -262,7 +273,7 @@ describe('WorkerDefinitionUsageSection (S11 GO16a)', () => {
     const groups = await screen.findAllByTestId('worker-usage-failure-group');
     expect(groups).toHaveLength(2);
     expect(groups[0]?.textContent).toMatch(
-      new RegExp(`v2 · 步骤调整 ${'c'.repeat(12)} · 2 个 Task`),
+      new RegExp(`v2 · 步骤调整（编号 ${REF_A}） · 2 个 Task`),
     );
     expect(groups[0]?.textContent).toContain('超出时长或 token 预算');
     expect(groups[1]?.textContent).toMatch(/v2 · 原样 · 1 个 Task/);
@@ -291,6 +302,7 @@ describe('WorkerDefinitionUsageSection (S11 GO16a)', () => {
               usage: usage({ tasks: { completed: 0, failed: 0, cancelled: 0, inProgress: 1 } }),
               combinations: [
                 {
+                  specRef: null,
                   specDigest: null,
                   fields: [],
                   usage: usage({ tasks: { completed: 0, failed: 0, cancelled: 0, inProgress: 1 } }),

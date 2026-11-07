@@ -4635,7 +4635,14 @@ describe('CatalogPage — Worker usage (S11 GO16a)', () => {
             reviewSuggested: false,
             segments: [],
             combinations: [
-              { specDigest: null, fields: [], usage: used, outcomes, reviewSuggested: false },
+              {
+                specRef: null,
+                specDigest: null,
+                fields: [],
+                usage: used,
+                outcomes,
+                reviewSuggested: false,
+              },
             ],
           },
         ],

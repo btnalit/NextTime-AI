@@ -9,7 +9,7 @@ import { useCapability } from '../../hooks/useCapability.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
-import { formatRelative, shortDigest } from '../../lib/format.js';
+import { formatRelative } from '../../lib/format.js';
 import { workerSpecFieldLabel } from '../../lib/goals.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { taskFailureCategoryLabel, taskRefusalLabel } from '../../lib/labels.js';
@@ -30,8 +30,10 @@ import { EnvironmentLabel, ReviewSuggestedChip, runNumbers, versionList } from '
  *   - one block per version some Task used: runs, Task results, the attainment rate with its
  *     sample size, proxy outcomes apart, last used, 「建议复核」;
  *   - under it, the same numbers per run environment, and per combination — the Worker as defined,
- *     or with one goal step's adjustments (the same fingerprint is the same adjustments, whichever
- *     goal they came from) — with a note that the two cut the same Tasks, so they are not added;
+ *     or with one goal step's adjustments, named by the fields they set and a number (`specRef`:
+ *     the same number is the same adjustments, whichever goal they came from; a number that is no
+ *     fingerprint is the page's own, for adjustments that ran only in goals the reader cannot
+ *     see) — with a note that the two cut the same Tasks, so they are not added;
  *   - failed Tasks grouped by version × combination × failure category × what refused them.
  */
 export function WorkerDefinitionUsageSection({
@@ -196,11 +198,11 @@ function VersionBlock({
             </span>
             {version.combinations.map((combination) => (
               <CombinationBlock
-                key={combination.specDigest ?? 'as-defined'}
+                key={combination.specRef ?? 'as-defined'}
                 combination={combination}
                 reviewStreak={reviewStreak}
                 t={t}
-                testId={`${testId}-combination-${combination.specDigest ?? 'as-defined'}`}
+                testId={`${testId}-combination-${combination.specRef ?? 'as-defined'}`}
               />
             ))}
           </div>
@@ -241,47 +243,54 @@ function SegmentBlock({
   );
 }
 
-/** What a combination is, in words: as defined, or the step adjustments it sets. */
-function combinationLabel(
-  combination: Pick<WorkerDefinitionCombinationWire, 'specDigest' | 'fields'>,
-  t: Translate,
-): string {
-  if (combination.specDigest === null)
+type CombinationNaming = Pick<WorkerDefinitionCombinationWire, 'specRef' | 'specDigest' | 'fields'>;
+
+/** What a combination is, in words: as defined, or the fields its step adjustments set, then
+ *  their number (UX on #1064: the fields first; the number only tells adjustments apart). */
+function combinationLabel(combination: CombinationNaming, t: Translate): string {
+  if (combination.specRef === null)
     return t('原样（没有步骤调整）', 'As defined (no step adjustments)');
-  const digest = shortDigest(combination.specDigest);
+  const ref = combination.specRef;
   if (combination.fields === null) {
     return t(
-      `步骤调整 ${digest} · 调整了什么读不到`,
-      `Step adjustments ${digest} · what they set cannot be read`,
+      `步骤调整（调整了什么读不到） · 编号 ${ref}`,
+      `Step adjustments (what they set cannot be read) · ref ${ref}`,
     );
   }
   const fields = combination.fields.map((field) => workerSpecFieldLabel(field, t));
-  return t(
-    `步骤调整 ${digest} · 调整了：${fields.join('、')}`,
-    `Step adjustments ${digest} · sets: ${fields.join(', ')}`,
-  );
+  return t(`调整了${fields.join('、')} · 编号 ${ref}`, `Sets ${fields.join(', ')} · ref ${ref}`);
 }
 
-function combinationTitle(
-  combination: Pick<WorkerDefinitionCombinationWire, 'specDigest' | 'fields'>,
-  t: Translate,
-): string {
-  if (combination.specDigest === null) {
+function combinationTitle(combination: CombinationNaming, t: Translate): string {
+  if (combination.specRef === null) {
     return t(
       '不是目标步骤的 Task，或所在步骤没有对 Worker 做调整',
       'Tasks that are no goal step’s, or whose step adjusts nothing of the Worker',
     );
   }
-  const same = t(
-    '指纹相同就是同一份调整，不论来自哪个目标。',
-    'The same fingerprint is the same adjustments, whichever goal they came from.',
-  );
-  return combination.fields === null
-    ? t(
-        `${combination.specDigest}\n${same}\n这份调整所在的计划条目已读不出同一份内容，平台不猜它调整了什么。`,
-        `${combination.specDigest}\n${same}\nThe plan entry these adjustments came from no longer reads as them, so the platform does not guess what they set.`,
-      )
-    : `${combination.specDigest}\n${same}`;
+  const lines = [
+    t(
+      '编号只用来区分不同的调整：编号相同就是同一份调整，不论来自哪个目标。',
+      'The ref only tells adjustments apart: the same ref is the same adjustments, whichever goal they came from.',
+    ),
+  ];
+  if (combination.specDigest === null) {
+    lines.push(
+      t(
+        '这份调整只用在你看不到的目标里，所以编号只在这一页有效。',
+        'These adjustments ran only in goals you cannot see, so the ref holds on this page only.',
+      ),
+    );
+  }
+  if (combination.fields === null) {
+    lines.push(
+      t(
+        '这份调整所在的计划条目已读不出同一份内容，平台不猜它调整了什么。',
+        'The plan entry these adjustments came from no longer reads as them, so the platform does not guess what they set.',
+      ),
+    );
+  }
+  return lines.join('\n');
 }
 
 function CombinationBlock({
@@ -299,7 +308,7 @@ function CombinationBlock({
     <div className="stack-s" data-testid={testId}>
       <div className="row-wrap">
         <span
-          className={combination.specDigest === null ? undefined : 'wrap-anywhere'}
+          className={combination.specRef === null ? undefined : 'wrap-anywhere'}
           title={combinationTitle(combination, t)}
           data-testid={`${testId}-label`}
         >
@@ -338,17 +347,14 @@ function FailureGroups({
       ) : (
         <ul className="stack-s">
           {groups.map((group) => {
-            // By its fingerprint only: what it sets is on the version's combination list above.
+            // By its number only: what it sets is on the version's combination list above.
             const combination =
-              group.specDigest === null
+              group.specRef === null
                 ? t('原样', 'As defined')
-                : t(
-                    `步骤调整 ${shortDigest(group.specDigest)}`,
-                    `Step adjustments ${shortDigest(group.specDigest)}`,
-                  );
+                : t(`步骤调整（编号 ${group.specRef}）`, `Step adjustments (ref ${group.specRef})`);
             return (
               <li
-                key={`${group.definitionVersion}:${group.specDigest ?? ''}:${group.category}:${group.refusal}`}
+                key={`${group.definitionVersion}:${group.specRef ?? ''}:${group.category}:${group.refusal}`}
                 className="stack-s"
                 data-testid="worker-usage-failure-group"
               >

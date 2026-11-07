@@ -11,8 +11,11 @@ import { OutcomeTallyWireSchema } from './skill-stats.js';
  *
  * Numbers only, as `get_skill_stats` (coordinator decision 2026-10-29, E2 fork 7 = a): no Turn,
  * Task, goal or ActionRequest id and no free text — the counts span conversations and goals the
- * reader may not otherwise see. A WorkerSpec is shown by its digest and the names of the fields it
- * sets, never by what it says.
+ * reader may not otherwise see. A WorkerSpec is shown by the names of the fields it sets and a
+ * label (`specRef`), never by what it says; its digest only to a caller who can read a goal it ran
+ * in (the goal's requester; the workspace owner every goal — `get_goal`'s rule). The digest is an
+ * unsalted hash of the WorkerSpec: beside the field names, it would let anyone confirm a guess at
+ * a low-entropy setting (a model from the catalog, a token budget) of a goal they cannot read.
  *
  *   - Which Tasks: ordinary work only (`purpose` null — an evaluation's or the goal planner's Task
  *     is not use), each under the version it was created with (`tasks.worker_definition_version`,
@@ -65,11 +68,27 @@ export const WorkerDefinitionSegmentWireSchema = z
   .strict();
 export type WorkerDefinitionSegmentWire = z.infer<typeof WorkerDefinitionSegmentWireSchema>;
 
-/** One combination a version ran as. `specDigest` `null`: the definition as it is. `fields`: what
- *  the WorkerSpec sets (`WORKER_SPEC_FIELD_VALUES` order) — `[]` for the definition as it is,
- *  `null` when the plan entry the WorkerSpec came from no longer reads as it (not guessed). */
+/**
+ * A combination's label in one response — `null` for the definition as it is. For a WorkerSpec
+ * whose digest the caller is given (`specDigest`), the digest's first 12 hex digits, the same
+ * wherever it appears; otherwise `#1`, `#2`, … in order of first appearance (versions newest
+ * first, then each version's combinations, then the failure groups), the same for the same
+ * WorkerSpec across versions and failure groups of the response, and nothing derived from the
+ * WorkerSpec. A label tells combinations apart; it identifies nothing outside the response.
+ */
+export const SpecRefSchema = z
+  .string()
+  .regex(/^(?:[0-9a-f]{12}|#[1-9][0-9]*)$/)
+  .nullable();
+
+/** One combination a version ran as. `specRef` `null`: the definition as it is. `specDigest`:
+ *  the WorkerSpec's digest when the caller can read a goal it ran in; `null` otherwise, and for
+ *  the definition as it is. `fields`: what the WorkerSpec sets (`WORKER_SPEC_FIELD_VALUES`
+ *  order) — `[]` for the definition as it is, `null` when the plan entry the WorkerSpec came from
+ *  no longer reads as it (not guessed). */
 export const WorkerDefinitionCombinationWireSchema = z
   .object({
+    specRef: SpecRefSchema,
     specDigest: z.string().nullable(),
     fields: z.array(WorkerSpecFieldSchema).nullable(),
     usage: WorkerDefinitionUsageWireSchema,
@@ -97,10 +116,11 @@ export type WorkerDefinitionVersionStatsWire = z.infer<
 >;
 
 /** Failed Tasks of one version, grouped by combination × failure category × what refused them
- *  (S10 §5.4 "确定性失败分组"). */
+ *  (S10 §5.4 "确定性失败分组"). `specRef` and `specDigest` as on the combination. */
 export const WorkerDefinitionFailureGroupWireSchema = z
   .object({
     definitionVersion: z.number().int().positive(),
+    specRef: SpecRefSchema,
     specDigest: z.string().nullable(),
     category: TaskFailureCategorySchema,
     refusal: TaskRefusalSchema,
