@@ -21,7 +21,7 @@
 ratchet:
   console_unexplained: 10
   kernel_test_missing: 4
-  e2e_waived: 76
+  e2e_waived: 68
   repeat_unclear: 100
 capabilities:
   add_eval_case:
@@ -190,17 +190,17 @@ capabilities:
   deprecate_procedure:
     console: "indirect: packages/web/src/components/CatalogPage.tsx"
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: "conflict: illegal_transition"
   deprecate_skill:
     console: "indirect: packages/web/src/components/CatalogPage.tsx"
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: "conflict: illegal_transition"
   deprecate_worker_definition:
     console: required
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: "conflict: illegal_transition"
   disable_principal:
     console: required
@@ -210,7 +210,7 @@ capabilities:
   discard_draft:
     console: required
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: "conflict: not_found"
   discard_operation_draft:
     console: required
@@ -667,7 +667,7 @@ capabilities:
   propose_procedure:
     console: required
     agents: [entry, admin]
-    e2e: "waived: 657"
+    e2e: observed
     repeat: creates  # without an id; with a published family's id: "conflict: draft_pending" (repeat-call recipe)
   propose_skill:
     console: required
@@ -697,7 +697,7 @@ capabilities:
   publish_procedure:
     console: required
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: "conflict: illegal_transition"
   publish_skill:
     console: required
@@ -760,7 +760,7 @@ capabilities:
   reject_draft:
     console: required
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: "conflict: not_found"
   reject_goal:
     console: required
@@ -1057,7 +1057,7 @@ capabilities:
   update_operation_description:
     console: required
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: idempotent
   update_platform_settings:
     console: required
