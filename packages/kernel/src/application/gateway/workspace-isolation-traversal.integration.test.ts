@@ -6,6 +6,7 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool } from '../../adapters/db/pool.js';
+import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 import {
@@ -44,6 +45,11 @@ const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 const MIN_ANSWERED = 50;
 
 /** Every read a workspace member can make; platform reads are a different trust boundary. */
+/** The marker's first half: `leak-marker-` and the first group of its uuid. */
+function markerPrefix(seed: Seeded): string {
+  return seed.marker.slice(0, 'leak-marker-'.length + 8);
+}
+
 const WORKSPACE_READS = CAPABILITY_REGISTRY.filter(
   (capability: Capability) => capability.mode === 'observe' && capability.scope !== 'platform',
 );
@@ -73,48 +79,64 @@ describe.runIf(DATABASE_URL !== undefined)(
       await pool?.end();
     });
 
-    /** Calls every workspace read as `caller`, with `paramsOf`'s params; returns which reads
-     *  answered and which answers named any of `forbidden`. */
+    /**
+     * Calls every workspace read as `caller`, with `paramsOf`'s params; returns which reads
+     * answered and which named any of `forbiddenOf`'s values — in the result, or in the error a
+     * client would get for a refused call (`mapCapabilityError`'s message and details, what HTTP
+     * sends; a refusal that quoted A's data would leak as surely as an answer).
+     */
     async function walk(
       caller: ResolvedCaller,
       paramsOf: (capability: Capability) => Record<string, unknown>,
-      forbidden: readonly string[],
+      forbiddenOf: (capability: Capability, params: Record<string, unknown>) => readonly string[],
     ): Promise<{ answered: Set<string>; hits: string[] }> {
       const answered = new Set<string>();
       const hits: string[] = [];
       for (const capability of WORKSPACE_READS) {
         const params = paramsOf(capability);
-        let result: unknown;
+        let text: string;
         try {
-          result = await dispatchCapability({ pool }, caller, capability.name, params);
-        } catch {
-          continue; // refused, or params the builder could not satisfy — not a leak
+          const result = await dispatchCapability({ pool }, caller, capability.name, params);
+          answered.add(capability.name);
+          text = JSON.stringify(result) ?? '';
+        } catch (error) {
+          // Refused, or params the builder could not satisfy: not an answer, but still checked.
+          const { message, details } = mapCapabilityError(error);
+          text = JSON.stringify({ message, details });
         }
-        answered.add(capability.name);
-        const text = JSON.stringify(result) ?? '';
-        for (const value of forbidden) {
-          if (text.includes(value))
+        for (const value of forbiddenOf(capability, params)) {
+          if (text.includes(value)) {
             hits.push(`${capability.name}(${JSON.stringify(params)}) → ${value}`);
+          }
         }
       }
       return { answered, hits };
     }
 
+    /** Every id-shaped param pointed at A's rows; every free-text one (a search query, a name
+     *  filter) given the marker's first half, so a search that crossed workspaces would match A's
+     *  rows — while the full marker, what is checked for, is never in a param to be echoed. */
     const byId = (capability: Capability): Record<string, unknown> =>
-      paramsFor(capability.paramsSchema, a);
+      paramsFor(capability.paramsSchema, a, markerPrefix(a));
 
     it("the same walk, as A's own owner, finds A's rows — the seed is reachable and the check bites", async () => {
       const ownerA = humanCaller(a.workspaceId, a.ownerId, 'owner');
-      const listed = await walk(ownerA, () => ({}), [a.marker]);
-      const fetched = await walk(ownerA, byId, [a.marker]);
+      const listed = await walk(
+        ownerA,
+        () => ({}),
+        () => [a.marker],
+      );
+      const fetched = await walk(ownerA, byId, () => [a.marker]);
       const found = new Set([...listed.hits, ...fetched.hits].map((hit) => hit.split('(')[0]));
-      // Lists and by-id reads alike: the chat, the gate, the Operation and the request each surface.
+      // Lists, by-id reads and a text search alike: the chat, the gate, the Operation and the
+      // request each surface.
       for (const name of [
         'list_chats',
         'list_gatekeepers',
         'list_pending',
         'get_object',
         'get_action',
+        'find_operations', // searched by the marker's first half
       ]) {
         expect(found).toContain(name);
       }
@@ -123,12 +145,24 @@ describe.runIf(DATABASE_URL !== undefined)(
     it("no read a B owner can make answers with anything of A's", async () => {
       const ownerB = humanCaller(workspaceB, ownerIdB, 'owner');
       // Pass 1, no params: nothing B asked for names A, so none of A's ids may come back either.
-      const listed = await walk(ownerB, () => ({}), [a.marker, a.workspaceId, ...seededIds(a)]);
-      // Pass 2, every id-shaped param pointed at A's rows. Each B call is itself audited in B with
-      // its params (dispatch.ts), so B's own audit reads now echo A's ids back — that is B's record
-      // of what B asked, not A's data. A's data is what carries the marker, which no param ever
-      // holds (free-text params get the fixture's PROBE), and A's workspace id, which no param names.
-      const fetched = await walk(ownerB, byId, [a.marker, a.workspaceId]);
+      const listed = await walk(
+        ownerB,
+        () => ({}),
+        () => [a.marker, a.workspaceId, ...seededIds(a)],
+      );
+      // Pass 2, `byId`'s params. The full marker (no param holds more than its first half) and
+      // A's workspace id (no param names it) may
+      // never come back. Of A's row ids, one this call passed may be echoed ("<id> not found");
+      // any other may not. Except in the audit reads: each B call is itself audited in B with its
+      // params (dispatch.ts), so B's audit now holds A's ids as B's record of what B asked — B's
+      // data, not A's.
+      const fetched = await walk(ownerB, byId, (capability, params) => [
+        a.marker,
+        a.workspaceId,
+        ...(capability.group === 'audit'
+          ? []
+          : seededIds(a).filter((id) => !JSON.stringify(params).includes(id))),
+      ]);
 
       expect([...listed.hits, ...fetched.hits]).toEqual([]);
       expect(new Set([...listed.answered, ...fetched.answered]).size).toBeGreaterThanOrEqual(

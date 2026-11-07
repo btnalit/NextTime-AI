@@ -166,14 +166,14 @@ function unwrap(schema: ZodType): Def {
 }
 
 /** A value for one field: a seeded id where the name says it is one, else the simplest the type takes. */
-function valueFor(key: string, schema: ZodType, seed: Seeded): unknown {
+function valueFor(key: string, schema: ZodType, seed: Seeded, probe: string): unknown {
   const def = unwrap(schema);
   switch (def.type) {
     case 'array':
       return [idFor(key.replace(/s$/, 'Id'), seed) ?? seed.operationId];
     case 'string':
       return (
-        idFor(key, seed) ?? (/Id$/.test(key) || def.format === 'uuid' ? seed.operationId : PROBE)
+        idFor(key, seed) ?? (/Id$/.test(key) || def.format === 'uuid' ? seed.operationId : probe)
       );
     case 'number':
     case 'int':
@@ -185,19 +185,24 @@ function valueFor(key: string, schema: ZodType, seed: Seeded): unknown {
     case 'literal':
       return def.values?.[0];
     case 'object':
-      return paramsFor(schema, seed);
+      return paramsFor(schema, seed, probe);
     default:
       return undefined;
   }
 }
 
-/** Params for a capability: every field its schema declares (optional ones too, so an id filter is set). */
-export function paramsFor(schema: ZodType, seed: Seeded): Record<string, unknown> {
+/** Params for a capability: every field its schema declares (optional ones too, so an id filter
+ *  is set); free-text fields get `probe`. */
+export function paramsFor(
+  schema: ZodType,
+  seed: Seeded,
+  probe: string = PROBE,
+): Record<string, unknown> {
   const def = unwrap(schema);
   if (def.type !== 'object') return {};
   const out: Record<string, unknown> = {};
   for (const [key, field] of Object.entries(def.shape ?? {})) {
-    const value = valueFor(key, field, seed);
+    const value = valueFor(key, field, seed, probe);
     if (value !== undefined) out[key] = value;
   }
   return out;
