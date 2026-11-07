@@ -384,6 +384,7 @@ test('checkProposeGoalWords', async (t) => {
       statement: { type: 'string' },
       fromProcedure: { type: 'object', properties: { procedureId: { type: 'string' } } },
       idempotencyKey: { type: 'string' },
+      precedents: { type: 'array' },
       plan: {
         type: 'object',
         properties: {
