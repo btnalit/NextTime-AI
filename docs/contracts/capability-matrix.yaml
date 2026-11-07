@@ -22,7 +22,7 @@ ratchet:
   console_unexplained: 10
   kernel_test_missing: 4
   e2e_waived: 65
-  repeat_unclear: 73
+  repeat_unclear: 71
 capabilities:
   add_eval_case:
     console: required
@@ -402,7 +402,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: creates
   issue_llm_admin_token:
     console: required
     agents: []
@@ -412,7 +412,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: creates
   list_action_requests:
     console: required
     agents: []

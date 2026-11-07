@@ -3,12 +3,15 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type Capability, type Operation, getCapability } from '@nexttime/shared';
+import { generateKeyPair } from 'jose';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { FakeTaskSupervisorClient } from '../../fake-invoke-worker.js';
 import { requestAction } from '../../governance/approval/index.js';
+import { HANDLE_SIGNING_ALG } from '../../governance/capability/index.js';
 import {
   getPublishedOperation,
   importManifest,
@@ -26,6 +29,7 @@ import {
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { createGoalRun } from '../goal/index.js';
 import { insertPendingContextItem } from '../linkage/index.js';
+import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 import {
@@ -411,6 +415,9 @@ async function draftOf(ctx: RecipeContext, gatekeeperId: string) {
     throw new Error(`no draft of ${GATE_OP.name}: ${JSON.stringify(listed)}`);
   return draft;
 }
+
+/** The session a Handle was issued for. */
+const sessionOf = (result: unknown) => (result as { sessionId?: string }).sessionId;
 
 const ONTOLOGY_CHANGE = {
   objectTypes: [
@@ -1064,6 +1071,26 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       },
     },
   },
+  // Legacy 664, batch 8: Handles. Each call mints a new session and its token; the session is the
+  // entity (a service Handle's answer also names its Principal).
+  issue_handle: {
+    'an interactive session': {
+      entity: sessionOf,
+      setUp: async () => ({ sessionKind: 'interactive' }),
+    },
+  },
+  issue_service_handle: {
+    'a service Principal': {
+      entity: sessionOf,
+      setUp: async (ctx) => {
+        const made = await as<{ principal: { id: string } }>(ctx, 'create_principal', {
+          role: 'member',
+          displayName: 'repeat runtime',
+        });
+        return { principalId: made.principal.id, scope: ['find_procedures'] };
+      },
+    },
+  },
   reconcile_goal_action: {
     'an action of the run whose outcome is unknown': {
       setUp: async (ctx) => {
@@ -1140,6 +1167,8 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'record_procedure_followed',
   'propose_ontology_change',
   'publish_ontology_version',
+  'issue_handle',
+  'issue_service_handle',
 ]);
 
 interface Declared {
@@ -1208,6 +1237,19 @@ describe.runIf(DATABASE_URL !== undefined)(
     beforeAll(async () => {
       pool = createPool();
       await runMigrations(pool, MIGRATIONS_DIR);
+      // Issuing a Handle signs it: the task runtime holds the key (as the kernel's main() wires
+      // it). The supervisor is the shared fake one (fake-invoke-worker.ts); no row spawns a Task.
+      const { privateKey, publicKey } = await generateKeyPair(HANDLE_SIGNING_ALG, {
+        crv: 'Ed25519',
+      });
+      configureTaskRuntime({
+        pool,
+        privateKey,
+        supervisorClient: new FakeTaskSupervisorClient({
+          pool,
+          loadHandlePublicKey: async () => publicKey,
+        }),
+      });
     });
 
     afterAll(async () => {
@@ -1228,6 +1270,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           client.release();
         }
       }
+      resetTaskRuntimeForTests();
       await pool?.end();
     });
 
