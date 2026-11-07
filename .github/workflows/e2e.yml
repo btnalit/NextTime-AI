@@ -646,6 +646,11 @@ jobs:
           exit 1
           SH
           echo "E2E_RESTART_KERNEL_CMD=$RUNNER_TEMP/restart-kernel.sh" >>"$GITHUB_ENV"
+          # The gate-host container the suite starts with; the check after the suite holds the
+          # one it ends with to the same id, so "still healthy" means healed, not replaced.
+          gate_host=$(sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml ps -q gate-host)
+          test -n "$gate_host"
+          echo "E2E_GATE_HOST_CONTAINER=$gate_host" >>"$GITHUB_ENV"
 
       # --- the actual e2e suite ----------------------------------------------------------------
 
@@ -702,8 +707,14 @@ jobs:
       - name: gate-host is still healthy after the kernel was replaced (batch C)
         if: ${{ github.event.inputs.update_baselines != 'true' }}
         run: |
-          sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
-            up -d --no-deps --wait --wait-timeout 90 gate-host
+          set -euo pipefail
+          compose="sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml"
+          $compose up -d --no-deps --wait --wait-timeout 90 gate-host
+          now=$($compose ps -q gate-host)
+          if [ "$now" != "$E2E_GATE_HOST_CONTAINER" ]; then
+            echo "::error::gate-host is a different container ($now) than before the suite ($E2E_GATE_HOST_CONTAINER) — healthy proves nothing about healing" >&2
+            exit 1
+          fi
 
       # S1 lite (W6, STATUS leftover 7): the subset of scripts/accept_s1.sh that needs no entry
       # container — bootstrap, WorkerDefinition v2 via caddy, two chats answered by the kernel's
