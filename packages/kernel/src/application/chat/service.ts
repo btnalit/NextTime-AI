@@ -717,6 +717,10 @@ export async function sendChatMessage(
       throw err;
     }
     await client.query('ROLLBACK TO SAVEPOINT send_chat_message_turn');
+    // This look-up sees the winner's message because the transaction runs at READ COMMITTED (the
+    // database default; nothing in the kernel raises it): each statement takes a new snapshot,
+    // and the conflict above was only raised once the winner had committed. Under REPEATABLE READ
+    // the snapshot taken before the wait would still miss it, and the send would be refused.
     const sent = await messageOfKey(client, workspaceId, input.chatId, idempotencyKey);
     // A running Turn of another message: refused as before. The key's own index cannot conflict
     // with no message holding the key — not finding it would contradict the violation.
