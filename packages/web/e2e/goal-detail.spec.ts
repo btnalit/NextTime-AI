@@ -555,6 +555,9 @@ test.describe('S11 GO6: operations on a goal (stand-in reads and operations)', (
                 resourceId: GOAL,
                 payload: { pausedByAuthority: 'owner' },
                 createdAt: T1,
+                // Batch D3: the owner paused it from the console.
+                actingThrough: 'person',
+                actingSessionId: null,
               },
             ],
           }),
