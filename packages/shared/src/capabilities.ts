@@ -2908,6 +2908,44 @@ const workerCapabilities = [
     description:
       'How each published or deprecated version of a WorkerDefinition family has done, over its Tasks of ordinary work (evaluation and planning Tasks are not counted): WorkerRuns; Tasks completed / failed / cancelled / in progress under the version they were created with; the attainment rate (requester and verified_by_check outcomes) with proxy outcomes (agent_reported, reviewer_assessed) apart; the same per run environment (environmentDigest, null = unknown) and per combination — the definition as it is (specRef null) or with a goal step’s WorkerSpec (a label, specRef, and the names of the fields it sets, null when its plan entry no longer reads as it; its digest, specDigest, only when you can read a goal it ran in — you are its requester, or the workspace owner; the label is then the digest’s first 12 hex digits, otherwise #1, #2, … within the response) — each marked reviewSuggested when its latest reviewStreak primary outcomes were all not achieved; and failed Tasks grouped by version × combination × failure category × what refused them. Segments and combinations cut the same Tasks two ways. Numbers only. Builder floor; null for an unknown definitionId, or a family with no published or deprecated version.',
   },
+  {
+    // S11 GO16b (combination.ts, GO16 F1/F2/F7 = A): the combinations of a family's published
+    // versions that kept working — read when asked, never stored. A person's: the platform lists,
+    // a person decides (an agent never proposes a combination, F2). Builders see every candidate's
+    // numbers and field names, as `get_worker_definition_stats`; what a WorkerSpec says only when
+    // they can read a goal it ran in (F7).
+    name: 'get_combination_candidates',
+    group: 'worker',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'builder',
+    paramsSchema: z.object({ definitionId: id }).strict(),
+    resultSchema: wire.CombinationCandidatesWireSchema.nullable(),
+    description:
+      'The combinations of a worker-kind WorkerDefinition family’s published versions — a version run with one goal step’s WorkerSpec (by its digest) — that qualify to become a WorkerDefinition of their own: over the Tasks of ordinary work that ran as one and ended in the last thresholds.windowDays days, at least thresholds.minAchieved primary outcomes achieved (the requester’s word or a platform check; the executor’s own report does not count) from at least thresholds.minGoals different goals, an attainment rate of at least thresholds.minRate, and no review suggested on it. Each candidate gives its evidence, the fields its WorkerSpec sets, and the families already derived from it that you can see. spec (what the WorkerSpec says), definition (what propose_definition_from_combination would write, but for its name) and specDigest (what it takes) only when you can read a goal it ran in — its requester, or the workspace owner; null otherwise, and specRef is then #1, #2, … within the response. A candidate authorizes nothing. Builder floor; null for an unknown definitionId, an entry definition, or a family with no published version.',
+  },
+  {
+    // S11 GO16b (combination.ts, GO16 F2–F5/F7 = A): a person turns a candidate into the first
+    // draft of a new family — judged again now, the content taken from a goal they can read, the
+    // derivation recorded by the kernel (worker/0014). The draft then goes through the usual
+    // review and publish (`publish_worker_definition`); nothing here publishes or grants.
+    name: 'propose_definition_from_combination',
+    group: 'worker',
+    mode: 'propose',
+    channel: 'human',
+    minRole: 'builder',
+    paramsSchema: z
+      .object({
+        definitionId: id,
+        version: z.number().int().positive(),
+        specDigest: z.string().regex(/^[0-9a-f]{64}$/),
+        name: z.string().trim().min(1).max(200),
+      })
+      .strict(),
+    resultSchema: wire.WorkerDefinitionWireSchema,
+    description:
+      'Propose a combination get_combination_candidates lists as a new WorkerDefinition: the first draft (version 1) of a new worker-kind family, yours, which you then review and publish as any other (publish_worker_definition). Its content is the base version’s with what the WorkerSpec sets: instructions after the base’s systemPrompt, following a blank line; skills, gates, capabilities and model in place of the base’s; the rest the base’s; name as given. A WorkerSpec’s observeScope and tokenBudget are for one step and are not carried — the plan steps that use the new definition set them again. The combination is judged again now: one that no longer qualifies is refused 409 combination_not_eligible (details: shortfalls — base_not_published, too_few_achieved, too_few_goals, rate_too_low, review_suggested — and evidence), nothing written. The WorkerSpec is read from a goal you can read (its requester, or the workspace owner): with none, not found, as an unknown definition. The draft records where it came from (derivedFrom: the base version, the digest and the evidence now), written by the platform, never changed; the audit record also names the goal, plan revision and step the content was taken from. Every call proposes another family. Builder floor.',
+  },
 ] as const satisfies readonly Capability[];
 
 // -------------------------------------------------------------------------------------------
@@ -5739,6 +5777,9 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   'get_procedure_stats',
   // S11 GO16a: and WorkerDefinitions.
   'get_worker_definition_stats',
+  // S11 GO16b: a person turns a combination that kept working into a definition (F2 = A).
+  'get_combination_candidates',
+  'propose_definition_from_combination',
   'get_workspace',
   'list_models',
   // S3.13 (docs/development-tasks.md "每用户智能体配置") — AgentProfile/AgentPolicy management and

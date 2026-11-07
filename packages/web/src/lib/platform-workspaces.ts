@@ -179,6 +179,7 @@ const PURGE_COUNT_LABELS = {
   skills: { zh: 'Skill', en: 'Skills' },
   turnOutcomes: { zh: '对话结果标记', en: 'Turn outcomes' },
   turnProcedureClaims: { zh: '流程使用记录', en: 'Procedure usage records' },
+  workerDefinitionDerivations: { zh: 'Worker 定义的来历', en: 'Worker definition origins' },
   workerDefinitions: { zh: 'Worker 定义', en: 'Worker definitions' },
   workerRunSkills: { zh: 'Skill 使用记录', en: 'Skill usage records' },
   workspaceGateLinks: { zh: '已启用的门实例', en: 'Enabled gate instances' },

@@ -64,6 +64,8 @@ import {
   invokeWorkerCreate,
   listQuotas,
   listTasksForPrincipal,
+  proposeDefinitionFromCombination,
+  readCombinationCandidates,
   readHandleObserveExclusions,
   readProcedureOutcomeHints,
   readTaskAttributions,
@@ -1231,6 +1233,7 @@ function toWireWorkerDefinition(row: WorkerDefinitionRow, plannerFamily: string 
     createdAt: row.createdAt.toISOString(),
     publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
     goalPlanner: row.id === plannerFamily,
+    ...(row.derivedFrom !== null ? { derivedFrom: row.derivedFrom } : {}),
   };
 }
 
@@ -1447,7 +1450,8 @@ const getWorkerDefinitionStatsHandler: CapabilityHandler = async (
 
 // A WorkerSpec's digest is shown only to a caller who can read a goal it ran in — `goalVisibleTo`
 // with their goal viewer (the requester, or the owner on the human channel), the rule the goal
-// reads apply (review #493 on #1064).
+// reads apply (review #493 on #1064); GO16b's candidates read a WorkerSpec's content by the same
+// rule (F7 = A).
 async function goalReaderOf(
   client: PoolClient,
   ctx: CapabilityHandlerContext | undefined,
@@ -1458,6 +1462,58 @@ async function goalReaderOf(
     canReadGoal: (goal) => goalVisibleTo(viewer, goal),
   };
 }
+
+const getCombinationCandidatesHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const { definitionId } = params as { definitionId: string };
+  const candidates = await readCombinationCandidates(
+    client,
+    workspaceId,
+    definitionId,
+    await goalReaderOf(client, ctx),
+  );
+  return { result: candidates, resourceType: 'worker_definition', resourceId: definitionId };
+};
+
+const proposeDefinitionFromCombinationHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const input = params as {
+    definitionId: string;
+    version: number;
+    specDigest: string;
+    name: string;
+  };
+  const proposed = await proposeDefinitionFromCombination(
+    client,
+    workspaceId,
+    await goalReaderOf(client, ctx),
+    input,
+  );
+  return {
+    result: toWireWorkerDefinition(proposed.row, await findGoalPlannerFamily(client, workspaceId)),
+    resourceType: 'worker_definition',
+    resourceId: proposed.row.id,
+    // The combination, its evidence now, and where its WorkerSpec was read from (coordinator,
+    // GO16 F7): the goal, the plan revision and the step.
+    auditPayload: {
+      derivedFrom: {
+        definitionId: input.definitionId,
+        version: input.version,
+        specDigest: input.specDigest,
+      },
+      evidence: proposed.evidence,
+      source: proposed.source,
+    },
+  };
+};
 
 // -------------------------------------------------------------------------------------------
 // S3.3: `assert_fact`/`supersede_fact`/`invalidate_fact` are now real handlers
@@ -2754,6 +2810,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['list_worker_definitions', listWorkerDefinitionsHandler],
   ['get_worker_definition', getWorkerDefinitionHandler],
   ['get_worker_definition_stats', getWorkerDefinitionStatsHandler],
+  ['get_combination_candidates', getCombinationCandidatesHandler],
+  ['propose_definition_from_combination', proposeDefinitionFromCombinationHandler],
   ['get_entry_template_status', getEntryTemplateStatusHandler],
   ['propose_entry_template_upgrade', proposeEntryTemplateUpgradeHandler],
   // S8 W3 K2 (leftover 82) — discard-draft-handler.ts.

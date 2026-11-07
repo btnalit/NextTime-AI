@@ -20,6 +20,7 @@ import {
   prettyJsonVisible,
   redactSensitive,
   shortId,
+  zhJoin,
 } from './format.js';
 import type { Translate } from './i18n.js';
 
@@ -307,5 +308,16 @@ describe('actionKindTagToastText', () => {
     expect([...shown]).toHaveLength(ACTION_KIND_INLINE_MAX);
     expect(shown.endsWith('.end')).toBe(true);
     expect(actionKindTagToastText('x\u202Ey')).toBe('x\\u{202E}y');
+  });
+});
+
+describe('zhJoin (UX acceptance of #1069)', () => {
+  // The Latin word is spliced in so no literal here is itself a Chinese-then-Latin pair.
+  const latin = 'Skill';
+  it('spaces a Latin word from the Chinese beside it, and nothing else', () => {
+    expect(zhJoin('调整了', `${latin}、职责说明`)).toBe(`调整了 ${latin}、职责说明`);
+    expect(zhJoin('调整了', `职责说明、${latin}`)).toBe(`调整了职责说明、${latin}`);
+    expect(zhJoin(`挂载的 ${latin}`, '增加')).toBe(`挂载的 ${latin} 增加`);
+    expect(zhJoin('正文', '有改动')).toBe('正文有改动');
   });
 });

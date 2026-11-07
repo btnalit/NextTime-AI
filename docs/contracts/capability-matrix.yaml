@@ -283,6 +283,9 @@ capabilities:
   get_chat_history:
     console: required
     agents: []
+  get_combination_candidates:
+    console: required
+    agents: []
   get_draft_evaluation:
     console: required
     agents: []
@@ -645,6 +648,11 @@ capabilities:
     console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
     agents: [admin]
     repeat: "unclear: 664"
+  propose_definition_from_combination:
+    console: required
+    agents: []
+    e2e: observed
+    repeat: creates
   propose_entry_template_upgrade:
     console: required
     agents: []

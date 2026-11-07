@@ -30,6 +30,12 @@ export {
   WorkerDefinitionValidationError,
 } from './definitions.js';
 export {
+  combinationKey,
+  derivedFamiliesOf,
+  recordDefinitionDerivation,
+} from './derivations.js';
+export type { RecordDefinitionDerivationInput } from './derivations.js';
+export {
   unresolvedWorkerDefinitionReferences,
   WORKER_DEFINITION_REFERENCE_FIELDS,
   WorkerDefinitionReferenceError,
