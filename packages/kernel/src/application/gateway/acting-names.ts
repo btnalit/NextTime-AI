@@ -11,7 +11,9 @@ import type { AuditRecordRow } from '../../substrate/audit/index.js';
  *
  * One query for a whole page, never one per row, read inside the caller's workspace transaction
  * (the same RLS every table it reads already has). A session it cannot place — gone, or another
- * workspace's — has no name, and the row still says what it came through.
+ * workspace's — has no name, and the row still says what it came through. A draft WorkerDefinition
+ * names nothing (review of #1038): a draft is its proposer's alone, and no auditor reads its name
+ * here even if a Task ever came to pin one.
  */
 export async function actingNamesOf(
   client: PoolClient,
@@ -40,6 +42,7 @@ export async function actingNamesOf(
                     on wd.workspace_id = t.workspace_id
                    and wd.id = t.worker_definition_id
                    and wd.version = t.worker_definition_version
+                   and wd.status <> 'draft'
                  where wr.workspace_id = s.workspace_id and wr.session_id = s.id
                  limit 1
               )

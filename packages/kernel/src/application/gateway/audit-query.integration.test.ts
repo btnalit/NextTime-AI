@@ -318,5 +318,55 @@ describe.runIf(DATABASE_URL !== undefined)(
         Object.fromEntries(rebuilt.auditRecords.map((row) => [row.actingThrough, row.actingName])),
       ).toEqual(named);
     });
+
+    it('legacy 666 (review of #1038): a Task pinned to a draft WorkerDefinition names nothing', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const definitionId = randomUUID();
+      const action = 'test.acting_name_draft';
+      const workerSession = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          await client.query(
+            `insert into worker_definitions (workspace_id, id, version, kind, status, definition, proposed_by)
+             values ($1, $2, 1, 'worker', 'draft', $3, $4)`,
+            [workspaceId, definitionId, JSON.stringify({ name: 'unpublished-draft' }), ownerId],
+          );
+          const session = (
+            await client.query<{ id: string }>(
+              `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+               values ($1, $2, 'worker_run', $2, 'active') returning id`,
+              [workspaceId, ownerId],
+            )
+          ).rows[0]?.id as string;
+          const task = await client.query<{ id: string }>(
+            `insert into tasks (workspace_id, status, on_behalf_of, worker_definition_id, worker_definition_version)
+             values ($1, 'completed', $2, $3, 1) returning id`,
+            [workspaceId, ownerId, definitionId],
+          );
+          await client.query(
+            `insert into worker_runs (workspace_id, status, task_id, session_id, depth, attempt)
+             values ($1, 'terminated', $2, $3, 0, 1)`,
+            [workspaceId, task.rows[0]?.id, session],
+          );
+          return session;
+        },
+        { skipRoleSwitch: true },
+      );
+      await runWithActingContext(
+        { actingThrough: 'worker_handle', actingSessionId: workerSession },
+        () =>
+          withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+            writeAudit(client, { workspaceId, actorPrincipalId: ownerId, action }),
+          ),
+      );
+      const page = (await dispatchCapability({ pool }, owner, 'audit_query', {
+        filter: { action },
+        limit: 10,
+      })) as { items: { actingThrough: string; actingName: string | null }[] };
+      expect(page.items.map((row) => [row.actingThrough, row.actingName])).toEqual([
+        ['worker_handle', null],
+      ]);
+    });
   },
 );
