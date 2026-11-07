@@ -742,6 +742,47 @@ describe('ChatPage composer draft (legacy 658)', () => {
   });
 });
 
+// UX P3-3 on #1023: the dropped connection's refusal goes once the page is connected again.
+describe('ChatPage send refused by a dropped connection', () => {
+  it('says so while disconnected and takes the note away once reconnected', async () => {
+    const fake = fakeClient();
+    let status = 'connected';
+    const listeners = new Set<(next: string) => void>();
+    Object.assign(fake.client, {
+      getStatus: () => status,
+      onStatusChange: (fn: (next: string) => void) => {
+        listeners.add(fn);
+        return () => listeners.delete(fn);
+      },
+    });
+    (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('WsClient: connection closed'),
+    );
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => {
+      status = 'reconnecting';
+      for (const fn of listeners) fn(status);
+    });
+
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'during the outage' } });
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+    const banner = await screen.findByRole('alert');
+    expect(banner.textContent).toContain('连接已断开');
+    expect(banner.textContent).toContain('页面会自己重新连接');
+    expect(banner.textContent).not.toContain('刷新');
+
+    act(() => {
+      status = 'connected';
+      for (const fn of listeners) fn(status);
+    });
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe(
+      'during the outage',
+    );
+  });
+});
+
 // S10 E3-1c (UX acceptance of #813, P3): the evaluation seal stops a chat message only at the
 // entry agent's Turn, so the composer's note names the message and nothing about a Worker.
 describe('ChatPage send refused for evaluation content (S10 E3-1c)', () => {

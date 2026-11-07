@@ -658,8 +658,8 @@ export const ERROR_NEXT_STEPS: Readonly<
     en: 'The platform did not answer in time. Check the network and retry.',
   },
   connection_closed: {
-    zh: '和平台的连接断了。页面会自己重新连接，连接状态回到「已连接」后再试一次。',
-    en: 'The connection to the platform closed. The page reconnects by itself; try again once the status shows Connected.',
+    zh: '和平台的连接断了。页面会自己重新连接，连上后再试一次。',
+    en: 'The connection to the platform closed. The page reconnects by itself; try again once it is back.',
   },
   // Legacy 333 (UX review of #605, P3-1): the caller's own AgentProfile excludes the Worker. The
   // profile is the person's own preference, so the person is the one who turns it back on.

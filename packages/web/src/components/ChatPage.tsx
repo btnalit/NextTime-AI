@@ -1,7 +1,8 @@
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
+import { useWsStatus } from '../hooks/useWsStatus.js';
 import { messageRoleLabel } from '../lib/chat-messages.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { draftScope } from '../lib/drafts.js';
@@ -99,6 +100,16 @@ export function ChatPage({
   const can = useRoleCan(http);
   const toast = useToast();
   const [sendError, setSendError] = useState<unknown | null>(null);
+
+  // UX P3-3 on #1023: a send the dropped connection refused says so until the page is connected
+  // again — then the note is stale (the page reconnected by itself, as it said) and goes.
+  const wsStatus = useWsStatus(client);
+  useEffect(() => {
+    if (wsStatus !== 'connected') return;
+    setSendError((current: unknown) =>
+      current !== null && describeError(current).code === 'connection_closed' ? null : current,
+    );
+  }, [wsStatus]);
 
   const chatSummary = useChatSummary(client, chatId);
   const { messages, turn, setTurn, caughtUp, subscribeError } = useChatMessages(
