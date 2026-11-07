@@ -117,7 +117,7 @@ test.describe('Journey ⑫: 发布 Operation 修订，再与门的公告对齐',
     await page.getByRole('button', { name: '发布', exact: true }).click();
     const publish = page.getByRole('dialog', { name: '发布这个 Operation' });
     await expect(publish).toContainText(EXECUTE_OP);
-    await expect(publish).toContainText('影响级');
+    await expect(publish).toContainText('中影响→高影响');
     await publish.getByRole('button', { name: '发布', exact: true }).click();
     await expect(page.getByText(/已发布 v2$/)).toBeVisible({ timeout: 15_000 });
 
