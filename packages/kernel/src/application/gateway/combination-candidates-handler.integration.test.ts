@@ -11,6 +11,7 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
 import {
   CombinationNotEligibleError,
   CombinationNotFoundError,
@@ -476,6 +477,44 @@ describe.runIf(DATABASE_URL !== undefined)(
           name: 'Fixer · logs',
         }),
       ).rejects.toBeInstanceOf(CombinationNotFoundError);
+      expect(await derivationsHere()).toEqual([]);
+    });
+
+    it('a builder guessing digests of goals they cannot read learns nothing: one that qualifies, one that does not, one with only the executor’s word and one that never ran all answer the same 404, with no evidence (#493 on #1071)', async () => {
+      const answerTo = async (version: number, specDigest: string) => {
+        try {
+          await call(human('bob'), 'propose_definition_from_combination', {
+            definitionId: familyId,
+            version,
+            specDigest,
+            name: 'guessed',
+          });
+        } catch (err) {
+          expect(err).toBeInstanceOf(CombinationNotFoundError);
+          const mapped = mapCapabilityError(err);
+          return { ...mapped, message: mapped.message.replace(specDigest, '<digest>') };
+        }
+        throw new Error('expected a refusal');
+      };
+      const neverRan = 'e'.repeat(64);
+      const expected = await answerTo(2, neverRan);
+      expect(expected).toEqual({
+        status: 404,
+        code: 'not_found',
+        message: `no combination ${familyId}@2 with WorkerSpec <digest> you can read`,
+      });
+      for (const spec of [SPEC_GOOD, SPEC_FEW, SPEC_RATE, SPEC_AGENT]) {
+        expect(await answerTo(2, digest(spec))).toEqual(expected);
+      }
+      // Alice reads those goals: for her the one that does not qualify is a 409 with its evidence.
+      await expect(
+        call(human('alice'), 'propose_definition_from_combination', {
+          definitionId: familyId,
+          version: 2,
+          specDigest: digest(SPEC_FEW),
+          name: 'refused',
+        }),
+      ).rejects.toBeInstanceOf(CombinationNotEligibleError);
       expect(await derivationsHere()).toEqual([]);
     });
 

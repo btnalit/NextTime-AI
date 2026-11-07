@@ -416,13 +416,14 @@ export interface ProposedDefinitionFromCombination {
 }
 
 /**
- * `propose_definition_from_combination`: judges the combination again (F1), takes the WorkerSpec
- * from a goal the caller can read (F7), writes the merged content (F4) as a new family's version 1
- * draft, the caller's, and records the derivation (F5). Refuses, nothing written: an unknown base
- * version, a draft or an entry definition (`WorkerDefinitionNotFoundError`), a combination that
- * does not qualify ({@link CombinationNotEligibleError}), one with no readable source
- * ({@link CombinationNotFoundError}), content the WorkerDefinition schema refuses
- * (`WorkerDefinitionValidationError`).
+ * `propose_definition_from_combination`: takes the WorkerSpec from a goal the caller can read
+ * (F7), judges the combination again (F1), writes the merged content (F4) as a new family's
+ * version 1 draft, the caller's, and records the derivation (F5). Refuses, nothing written, in this
+ * order: an unknown base version, a draft or an entry definition (`WorkerDefinitionNotFoundError`);
+ * one with no source the caller can read ({@link CombinationNotFoundError}) — the same answer for a
+ * digest that never ran, so a caller who reads none of its goals learns nothing from guessing;
+ * only then a combination that does not qualify ({@link CombinationNotEligibleError}, with its
+ * evidence); content the WorkerDefinition schema refuses (`WorkerDefinitionValidationError`).
  */
 export async function proposeDefinitionFromCombination(
   client: PoolClient,
@@ -439,6 +440,19 @@ export async function proposeDefinitionFromCombination(
   if (!baseRow || !base) {
     throw new WorkerDefinitionNotFoundError(workspaceId, input.definitionId, input.version);
   }
+  // A source the proposer can read comes first: until then the digest is a guess, and every
+  // answer to a guess must be the same 404 — a 409 for one that ran, with its evidence, would
+  // confirm it and hand over its record (what #1069 closed on the stats read).
+  const sources =
+    (
+      await readCombinationSources(client, workspaceId, input.definitionId, [
+        { version: input.version, specDigest: input.specDigest },
+      ])
+    ).get(combinationKey(input.version, input.specDigest)) ?? [];
+  const source = sources.find((candidate) => proposer.canReadGoal(candidate));
+  if (!source) {
+    throw new CombinationNotFoundError(input.definitionId, input.version, input.specDigest);
+  }
   const judgement = (
     await judgeCombinations(
       client,
@@ -453,16 +467,6 @@ export async function proposeDefinitionFromCombination(
     judgement?.shortfalls ?? combinationShortfalls(NO_EVIDENCE, baseRow.status === 'published');
   if (shortfalls.length > 0) {
     throw new CombinationNotEligibleError(shortfalls, evidenceWire(evidence));
-  }
-  const sources =
-    (
-      await readCombinationSources(client, workspaceId, input.definitionId, [
-        { version: input.version, specDigest: input.specDigest },
-      ])
-    ).get(combinationKey(input.version, input.specDigest)) ?? [];
-  const source = sources.find((candidate) => proposer.canReadGoal(candidate));
-  if (!source) {
-    throw new CombinationNotFoundError(input.definitionId, input.version, input.specDigest);
   }
 
   const definition = mergeCombinationDefinition(base, source.spec, input.name);
