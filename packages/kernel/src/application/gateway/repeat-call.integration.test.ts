@@ -842,6 +842,32 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       },
     },
   },
+  // Legacy 664, batch 5: the governance and agent-policy setters. Each is an upsert of one row,
+  // and writing the same value again rewrites that row's updated_at, so they are `repeats`.
+  set_policy: {
+    "a rule for the seeded gate's Operation": {
+      setUp: async ({ pool, seed }) => {
+        await registerSeededGatekeeper(pool, seed);
+        return {
+          policy: {
+            gatekeeperId: seed.gatekeeperId,
+            actionKindTag: seed.marker,
+            autoApprove: false,
+          },
+        };
+      },
+    },
+  },
+  set_quota: {
+    'the evaluation budget': {
+      setUp: async () => ({ key: 'evaluation.monthly_cost_budget_usd', value: 20 }),
+    },
+  },
+  set_agent_policy: {
+    'members may not edit their profile': {
+      setUp: async () => ({ memberCanEditProfile: false }),
+    },
+  },
   reconcile_goal_action: {
     'an action of the run whose outcome is unknown': {
       setUp: async (ctx) => {
@@ -907,6 +933,9 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'verify_fact',
   'attest_fact',
   'resolve_conflict',
+  'set_policy',
+  'set_quota',
+  'set_agent_policy',
 ]);
 
 interface Declared {
@@ -938,7 +967,8 @@ function declaredRows(): Declared[] {
 }
 
 /** The entity a result names: its own `id`, or the `id` of its one object-valued field, or else
- *  its one `…Id` field (`rotate_api_key` answers `{ principalId, apiKey }`). */
+ *  its one `…Id` field (`rotate_api_key` answers `{ principalId, apiKey }`), or else its `key`
+ *  (a Quota is keyed by name: `set_quota` answers `{ key, value, … }`). */
 function entityId(result: unknown): string | undefined {
   if (result === null || typeof result !== 'object') return undefined;
   const record = result as Record<string, unknown>;
@@ -954,7 +984,9 @@ function entityId(result: unknown): string | undefined {
   const ids = Object.entries(record).filter(
     ([key, value]) => key.endsWith('Id') && typeof value === 'string',
   );
-  return ids.length === 1 ? (ids[0]?.[1] as string) : undefined;
+  if (ids.length === 1) return ids[0]?.[1] as string;
+  if (ids.length > 1) return undefined;
+  return typeof record.key === 'string' ? record.key : undefined;
 }
 
 interface AuditRow {
