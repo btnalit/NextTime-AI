@@ -22,7 +22,7 @@ ratchet:
   console_unexplained: 10
   kernel_test_missing: 3
   e2e_waived: 65
-  repeat_unclear: 62
+  repeat_unclear: 61
 capabilities:
   add_eval_case:
     console: required
@@ -831,7 +831,7 @@ capabilities:
   request_action:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: []
-    repeat: "unclear: 664"
+    repeat: idempotent # an explicit idempotencyKey replays its ActionRequest in any state; without one, a call collapses onto the request only while it is in flight, and once that is terminal an identical call is a new one
   request_connection:
     console: required
     agents: [entry, admin]
