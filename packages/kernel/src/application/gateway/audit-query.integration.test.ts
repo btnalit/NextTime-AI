@@ -185,6 +185,18 @@ describe.runIf(DATABASE_URL !== undefined)(
           payload: { sessionKind: 'admin_agent', sessionId: randomUUID() },
         }),
       );
+      // A recorded value decides: the same payload on a row recorded as platform work is not the agent's.
+      const recordedSystem = 'test.acting_through_recorded_system';
+      await runWithActingContext({ actingThrough: 'system' }, () =>
+        withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          writeAudit(client, {
+            workspaceId,
+            actorPrincipalId: ownerId,
+            action: recordedSystem,
+            payload: { sessionKind: 'admin_agent', sessionId: randomUUID() },
+          }),
+        ),
+      );
 
       const through = async (actingThrough: string) =>
         (
@@ -207,6 +219,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const agent = await through('admin_agent_session');
       expect(agent.map((row) => row.action)).toContain(olderAgent);
       expect(agent.some((row) => row.action === action)).toBe(false);
+      expect(agent.some((row) => row.action === recordedSystem)).toBe(false);
       expect((await through('worker_handle')).map((row) => row.action)).toEqual([action]);
       // Not one of the values: nothing, never the unfiltered stream.
       expect(await through('somebody')).toEqual([]);

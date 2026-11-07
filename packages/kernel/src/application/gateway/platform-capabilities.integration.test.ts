@@ -1180,6 +1180,24 @@ describe.runIf(DATABASE_URL !== undefined)(
             }),
           { skipRoleSwitch: true },
         );
+        // A recorded value decides: the same payload on a row recorded as platform work is not the
+        // agent's.
+        const recordedSystem = 'test.platform_acting_through_recorded_system';
+        await runWithActingContext({ actingThrough: 'system' }, () =>
+          withWorkspace(
+            pool,
+            { workspaceId, principalId: randomUUID() },
+            (client) =>
+              writeAudit(client, {
+                workspaceId: null,
+                actorPrincipalId: null,
+                actorUserId: admin.id,
+                action: recordedSystem,
+                payload: { sessionKind: 'admin_agent', sessionId: randomUUID() },
+              }),
+            { skipRoleSwitch: true },
+          ),
+        );
         const agentAgain = await callAsAdmin<ListEnvelope<PlatformAuditRecordWire>>(
           'platform_audit_query',
           { actingThrough: 'admin_agent_session', limit: 200 },
@@ -1187,6 +1205,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(agentAgain.items.map((item) => item.action)).toEqual(
           expect.arrayContaining([action, older]),
         );
+        expect(agentAgain.items.some((item) => item.action === recordedSystem)).toBe(false);
         const personAgain = await callAsAdmin<ListEnvelope<PlatformAuditRecordWire>>(
           'platform_audit_query',
           { actingThrough: 'person', limit: 200 },
