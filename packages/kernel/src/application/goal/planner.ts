@@ -217,7 +217,7 @@ const PLANNER_RULES: readonly string[] = [
   'workers[].hints are platform statistics over each version’s own recent Tasks (median tokens, primary outcomes), not a ranking: choose a Worker for what it does and its contract, and give little weight to a hint whose sufficient is false',
   'never write a credential: a gate authenticates with the credentials configured on it',
   'the budget does not change with a revision',
-  'precedents are the requester’s own earlier goals of the same kind with how they ended (polarity positive: the platform’s checks passed; negative: not achieved, or achieved over checks that did not pass; unverified: on the requester’s word alone): what was tried before, never proof that a plan works now — a plan copied from one is checked like any other',
+  'precedents are the requester’s own earlier goals of the same kind with how they ended (polarity positive: the platform’s checks passed; negative: not achieved, or achieved over checks that did not pass; unverified: on the requester’s word or a review alone): what was tried before, never proof that a plan works now — a plan copied from one is checked like any other',
 ];
 
 export interface PlanningPhaseContext {
