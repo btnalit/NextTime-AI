@@ -97,6 +97,33 @@ export const AUDIT_ACTING_THROUGH_WITH_SESSION_VALUES = [
   'member_handle',
 ] as const satisfies readonly AuditActingThrough[];
 
+/**
+ * Batch D3 / legacy 666: why the kernel's authorization refused a capability call (kernel
+ * `application/gateway/authorize.ts`) — a fixed set, so a refused call's audit row names it
+ * (`payload.refusal.reason`) and a counter is labelled by it, never free text. The console words
+ * each one once (web `lib/errors.ts`):
+ *
+ *   - `platform_scope`: a platform capability from anyone but a platform administrator;
+ *   - `workspace_scope`: a workspace capability from a platform caller (no workspace selected);
+ *   - `human_channel_only`: a `channel: 'human'` capability through a Handle;
+ *   - `admin_agent_only`: an `adminAgentOnly` capability from anything but a Handle;
+ *   - `not_in_scope`: a capability outside the calling Handle's `scope.capabilities`;
+ *   - `role`: the person's role does not reach the capability's `minRole`;
+ *   - `auditor_read_only`: an auditor and a capability off the auditor's allowlist;
+ *   - `not_for_person`: an `actsForPerson` capability for a Principal that is not a person.
+ */
+export const CALL_REFUSAL_REASONS = [
+  'platform_scope',
+  'workspace_scope',
+  'human_channel_only',
+  'admin_agent_only',
+  'not_in_scope',
+  'role',
+  'auditor_read_only',
+  'not_for_person',
+] as const;
+export type CallRefusalReason = (typeof CALL_REFUSAL_REASONS)[number];
+
 /** The {@link AuditActingThrough} a Handle issued under a session of `kind` acts through;
  *  `undefined` for a kind no Handle is issued under (`web`) or one this table does not know. */
 export function actingThroughForSessionKind(

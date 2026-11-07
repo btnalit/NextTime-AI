@@ -48,6 +48,20 @@ export function actingThroughFilterNote(value: string, t: Translate): string {
       );
 }
 
+/** What a row's chip says: 「经由 …」, and in English "In person" or "Via …" (UX P3-1 on #1035:
+ *  "Through In person" does not read). `name` (legacy 666, the wire's `actingName`): the Worker or
+ *  service account the act came through, after the channel. */
+export function actingThroughChipText(
+  value: string | null | undefined,
+  name: string | null | undefined,
+  t: Translate,
+): string {
+  const label = actingThroughLabel(value, t);
+  const named = name ? `${label} · ${name}` : label;
+  if (value === 'person') return t(`经由 ${named}`, named);
+  return t(`经由 ${named}`, `Via ${named}`);
+}
+
 /** A value's name; `null` (a row from before it was recorded, or written outside any call) is
  *  「未记录」, and an unknown value stays visible as itself. */
 export function actingThroughLabel(value: string | null | undefined, t: Translate): string {

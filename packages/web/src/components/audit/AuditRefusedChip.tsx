@@ -1,4 +1,5 @@
 import { auditRefusal } from '../../lib/audit.js';
+import { callRefusalReasonText } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
 
 /**
@@ -9,7 +10,9 @@ import { useT } from '../../lib/i18n.js';
  * `detailsBelow={false}` where the row has no payload details (the recent-audit lists): the
  * tooltip then points to the platform audit page instead. The chip and the code are one group
  * (`.audit-refused`): at narrow widths it moves to the next line as a whole, and a long code
- * breaks anywhere (UX P2-1 on #964).
+ * breaks anywhere (UX P2-1 on #964). Legacy 666: when the row names why authorization refused it
+ * (`payload.refusal.reason`), that reason follows in words (`lib/errors.ts`'s one wording of
+ * each), the code kept beside it.
  */
 export function AuditRefusedChip({
   payload,
@@ -21,6 +24,7 @@ export function AuditRefusedChip({
   const t = useT();
   const refusal = auditRefusal(payload);
   if (refusal === null) return null;
+  const reasonText = refusal.reason === null ? null : callRefusalReasonText(refusal.reason, t);
   return (
     <span className="audit-refused">
       <span
@@ -40,6 +44,18 @@ export function AuditRefusedChip({
       >
         {t('被拦下', 'Refused')}
       </span>
+      {reasonText !== null ? (
+        <span className="text-small audit-refused-reason" data-testid="audit-refused-reason">
+          {reasonText}
+        </span>
+      ) : refusal.reason !== null ? (
+        <span
+          className="mono text-3 text-small audit-refused-code"
+          data-testid="audit-refused-reason"
+        >
+          {refusal.reason}
+        </span>
+      ) : null}
       {refusal.code !== null ? (
         <span
           className="mono text-3 text-small audit-refused-code"

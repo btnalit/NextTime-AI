@@ -1,4 +1,9 @@
-import type { Capability, PrincipalKind } from '@nexttime/shared';
+import {
+  CALL_REFUSAL_REASONS,
+  type CallRefusalReason,
+  type Capability,
+  type PrincipalKind,
+} from '@nexttime/shared';
 import { roleMayUseCapability, roleSatisfiesMinRole } from '../../governance/capability/index.js';
 import type { ResolvedCaller } from './caller.js';
 
@@ -53,28 +58,11 @@ export class ForbiddenError extends Error {
 
 /**
  * Batch D3: why {@link authorizeCapabilityCall} (or {@link assertActsForPerson}) refused a call — a
- * fixed set, so it can name a refusal in an audit row and label a counter (never free text):
- *
- *   - `platform_scope`: a platform capability from anyone but a platform administrator;
- *   - `workspace_scope`: a workspace capability from a platform caller (no workspace selected);
- *   - `human_channel_only`: a `channel: 'human'` capability through a Handle;
- *   - `admin_agent_only`: an `adminAgentOnly` capability from anything but a Handle;
- *   - `not_in_scope`: a capability outside the calling Handle's `scope.capabilities`;
- *   - `role`: the person's role does not reach the capability's `minRole`;
- *   - `auditor_read_only`: an auditor and a capability off the auditor's allowlist;
- *   - `not_for_person`: an `actsForPerson` capability for a Principal that is not a person.
+ * fixed set, so it can name a refusal in an audit row and label a counter (never free text). The
+ * set and what each reason means live in `@nexttime/shared` (`CALL_REFUSAL_REASONS`, legacy 666),
+ * so the console names a refused audit row's reason from the same list.
  */
-export const CALL_REFUSAL_REASONS = [
-  'platform_scope',
-  'workspace_scope',
-  'human_channel_only',
-  'admin_agent_only',
-  'not_in_scope',
-  'role',
-  'auditor_read_only',
-  'not_for_person',
-] as const;
-export type CallRefusalReason = (typeof CALL_REFUSAL_REASONS)[number];
+export { CALL_REFUSAL_REASONS, type CallRefusalReason };
 
 /**
  * A {@link ForbiddenError} raised by this file's checks, with the {@link CallRefusalReason}. Every

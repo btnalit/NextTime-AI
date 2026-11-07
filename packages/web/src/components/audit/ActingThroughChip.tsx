@@ -1,4 +1,4 @@
-import { actingThroughLabel } from '../../lib/acting-through.js';
+import { actingThroughChipText } from '../../lib/acting-through.js';
 import { useT } from '../../lib/i18n.js';
 import { AdminAgentActingMark, actedByAdminAgent } from './AdminAgentActingChip.js';
 
@@ -11,14 +11,24 @@ import { AdminAgentActingMark, actedByAdminAgent } from './AdminAgentActingChip.
  */
 export function ActingThroughChip({
   actingThrough,
+  actingName,
   payload,
 }: {
   readonly actingThrough: string | null | undefined;
+  /** Legacy 666: the Worker or service account it came through (`actingName`), if any. */
+  readonly actingName?: string | null;
   readonly payload: unknown;
 }) {
   const t = useT();
   if (actingThrough === 'admin_agent_session' || actedByAdminAgent(payload)) {
-    return <AdminAgentActingMark testId="audit-admin-agent" />;
+    // Legacy 670 (UX P3-3 on #1035): worded like every other row's 「经由 …」, the filter's own
+    // name for it, and still the warning mark.
+    return (
+      <AdminAgentActingMark
+        testId="audit-admin-agent"
+        text={actingThroughChipText('admin_agent_session', null, t)}
+      />
+    );
   }
   const recorded = actingThrough !== null && actingThrough !== undefined;
   return (
@@ -35,7 +45,7 @@ export function ActingThroughChip({
             )
       }
     >
-      {t('经由', 'Through')} {actingThroughLabel(actingThrough, t)}
+      {actingThroughChipText(actingThrough, actingName, t)}
     </span>
   );
 }

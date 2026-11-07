@@ -17,7 +17,15 @@ export function actedByAdminAgent(payload: unknown): boolean {
 
 /** The same mark wherever a resource records the admin agent session that made it in the
  *  person's name (S11 AA5b: a connection request's or a Task's `adminAgentSessionId`). */
-export function AdminAgentActingMark({ testId }: { readonly testId: string }) {
+export function AdminAgentActingMark({
+  testId,
+  text,
+}: {
+  readonly testId: string;
+  /** What the mark says, where the surface words it its own way (an audit row: 「经由 管理员智能体」,
+   *  legacy 670); 「由管理员智能体代为」 otherwise. */
+  readonly text?: string;
+}) {
   const t = useT();
   return (
     <span
@@ -28,7 +36,7 @@ export function AdminAgentActingMark({ testId }: { readonly testId: string }) {
         'This was done by this platform administrator’s admin agent, in their name',
       )}
     >
-      {t('由管理员智能体代为', 'By their admin agent')}
+      {text ?? t('由管理员智能体代为', 'By their admin agent')}
     </span>
   );
 }
