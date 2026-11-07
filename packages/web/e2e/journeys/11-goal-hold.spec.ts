@@ -16,8 +16,8 @@ import { SECOND_PRINCIPAL_API_KEY, goToByLabel } from './helpers.js';
  *   - 空: 跳过——goals.spec.ts 已覆盖目标列表的空态。
  *   - 错: 跳过——计划被拒的几种情况（凭据、遮蔽标记、版本过期）由 goal-detail.spec.ts 的替身覆盖，
  *     内核一侧由 goal-handlers 的集成测试覆盖。
- *   - 无权限: 所有者看别人的目标时，暂停按钮写的是「暂停并锁定」，确认框说明这是锁定；请求人不是所有者，
- *     看不到「解除锁定」。
+ *   - 无权限: 所有者看别人的目标时，暂停按钮写的是「暂停并锁定」，确认框说明这是锁定；锁定期间请求人
+ *     打开它，「继续」不可用并说要等所有者解除，也没有「解除锁定」。
  *   - 窄屏: 跳过——goal-detail.spec.ts 在 390 宽度下截过确认框、解除锁定与计划编辑器。
  * 成功判据:
  *   - 每一步都由真实内核答复：页面说出结果（「目标已确认」「目标已暂停并锁定」「锁定已解除」「计划已改为
@@ -31,7 +31,7 @@ import { SECOND_PRINCIPAL_API_KEY, goToByLabel } from './helpers.js';
  *
  * 步骤的 Worker 由 CI 的假 Worker 执行器跑（`FAKE_INVOKE_WORKER=1`，`fake-invoke-worker.ts`），
  * 很快报回结果；计划的验收是请求人确认，所以目标跑完步骤后停在验收中，等请求人——不会自己结束。
- * 三个测试按顺序跑（serial），共享同一个目标；重试时整组重来，提议用这一轮自己的 idempotencyKey。
+ * 五个测试按顺序跑（serial），共享同一个目标；重试时整组重来，提议用这一轮自己的 idempotencyKey。
  */
 
 interface CapResult {
@@ -130,7 +130,7 @@ test.describe('Journey ⑪: 确认目标、锁定与解除、修订计划', () =
     expect(after.currentRevision).toBe(1);
   });
 
-  test('2. an owner holds someone else’s goal, then lifts the hold', async ({ page }) => {
+  test('2. an owner holds someone else’s goal', async ({ page }) => {
     const owner = OWNER_API_KEY as string;
     expect(goalRunId, 'test 1 proposed and confirmed the goal').not.toBe('');
 
@@ -148,8 +148,32 @@ test.describe('Journey ⑪: 确认目标、锁定与解除、修订计划', () =
     const held = await callAs<GoalDetailWire>(page, owner, 'get_goal', { goalRunId });
     expect(held.status).toBe('paused');
     expect(held.pausedByAuthority).toBe('owner');
+  });
 
-    // --- 2b. 解除锁定：目标仍然暂停，交回请求人 -------------------------------------------------
+  test('3. while it is held, the requester can neither resume it nor lift the hold', async ({
+    page,
+  }) => {
+    const requester = SECOND_PRINCIPAL_API_KEY as string;
+    expect(goalRunId, 'test 1 proposed and confirmed the goal').not.toBe('');
+
+    await loginAsOwner(page, requester);
+    await openGoal(page);
+    // Review of #1043 (test steward): the hold's whole point — the requester waits for an owner.
+    await expect(page.getByRole('button', { name: '继续', exact: true })).toBeDisabled({
+      timeout: 15_000,
+    });
+    await expect(page.getByText('已被锁定：要等所有者解除锁定才能继续。')).toBeVisible();
+    await expect(page.getByRole('button', { name: '解除锁定', exact: true })).toHaveCount(0);
+  });
+
+  test('4. the owner lifts the hold; the goal stays paused', async ({ page }) => {
+    const owner = OWNER_API_KEY as string;
+    expect(goalRunId, 'test 1 proposed and confirmed the goal').not.toBe('');
+
+    await loginAsOwner(page, owner);
+    await openGoal(page);
+
+    // --- 解除锁定：目标仍然暂停，交回请求人 ---------------------------------------------------
     await page.getByRole('button', { name: '解除锁定', exact: true }).click();
     const release = page.getByRole('dialog', { name: '解除锁定' });
     await expect(release).toContainText('目标仍然暂停');
@@ -158,10 +182,13 @@ test.describe('Journey ⑪: 确认目标、锁定与解除、修订计划', () =
     await expect(page.getByRole('button', { name: '解除锁定', exact: true })).toHaveCount(0);
     const released = await callAs<GoalDetailWire>(page, owner, 'get_goal', { goalRunId });
     expect(released.status).toBe('paused');
-    expect(released.pausedByAuthority).not.toBe('owner');
+    // Review of #1043 (test steward): both cleared — never turned into the requester's own pause,
+    // which the requester could then resume alone.
+    expect(released.pausedByAuthority).toBeNull();
+    expect(released.pausedBy).toBeNull();
   });
 
-  test('3. the requester revises the plan of the paused goal', async ({ page }) => {
+  test('5. the requester revises the plan of the paused goal', async ({ page }) => {
     const requester = SECOND_PRINCIPAL_API_KEY as string;
     expect(goalRunId, 'test 1 proposed and confirmed the goal').not.toBe('');
 
