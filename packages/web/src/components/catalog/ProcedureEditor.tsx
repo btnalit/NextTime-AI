@@ -64,6 +64,7 @@ import {
   WorkerPlanFields,
 } from './ProcedurePlanFields.js';
 import { SchemaFieldsEditor } from './SchemaFieldsEditor.js';
+import { catalogEditorDraftTarget } from './useEditorReopen.js';
 
 export interface ProcedureEditorProps {
   readonly http: CapabilityCaller;
@@ -143,11 +144,14 @@ export function ProcedureEditor({
   const edited = useMemo(() => JSON.stringify(form) !== opened, [form, opened]);
   const draft = useFormDraft<ProcedureForm>({
     principalId,
-    target: nextVersionOf
-      ? `procedure:version:${nextVersionOf.id}@${nextVersionOf.version}`
-      : copyOf
-        ? `procedure:copy:${copyOf.id}`
-        : 'procedure:new',
+    target: catalogEditorDraftTarget(
+      'procedure',
+      nextVersionOf
+        ? { kind: 'version', row: nextVersionOf }
+        : copyOf
+          ? { kind: 'copy', row: copyOf }
+          : { kind: 'new' },
+    ),
     value: form,
     edited,
     parse: parseProcedureForm,

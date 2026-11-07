@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { nextStepKey } from '../../lib/catalog.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { draftScope, loadDraftValue, saveDraftValue } from '../../lib/drafts.js';
 import { HttpError } from '../../lib/http-client.js';
 import { hrefs } from '../../lib/router.js';
 import { ProcedureEditor } from './ProcedureEditor.js';
@@ -1932,6 +1934,30 @@ describe('ProcedureEditor draft across an unmount (legacy 662)', () => {
       .getAllByTestId('procedure-step')
       .map((step) => step.closest('[data-step-uid]')?.getAttribute('data-step-uid'));
     expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
+  });
+
+  it('a kept step whose key is ahead of this page’s counter (kept before a reload) is not handed out again (#501 P3-1 on #1029)', async () => {
+    const { caller } = http({ get_workspace: WORKSPACE('p-me') });
+    const first = render(<ProcedureEditor http={caller} onProposed={vi.fn()} onDone={vi.fn()} />);
+    await waitFor(() => expect(caller.call).toHaveBeenCalledWith('get_workspace', undefined));
+    fireEvent.change(screen.getByLabelText(/^名称/), { target: { value: 'Deploy' } });
+    fireEvent.click(screen.getByTestId('procedure-add-step'));
+    const scope = draftScope('p-me', 'procedure:new');
+    await waitFor(() => expect(loadDraftValue(scope)).not.toBeNull());
+    first.unmount();
+    // A fresh page counts from 1; here, the next key this page would give is `ahead`.
+    const ahead = `step-${Number(nextStepKey().slice('step-'.length)) + 1}`;
+    const kept = loadDraftValue(scope) as { steps: { key: string }[] };
+    saveDraftValue(scope, { ...kept, steps: kept.steps.map((step) => ({ ...step, key: ahead })) });
+
+    render(<ProcedureEditor http={caller} onProposed={vi.fn()} onDone={vi.fn()} />);
+    await screen.findByTestId('restored-draft');
+    fireEvent.click(screen.getByTestId('procedure-add-step'));
+    const keys = screen
+      .getAllByTestId('procedure-step')
+      .map((step) => step.closest('[data-step-uid]')?.getAttribute('data-step-uid'));
+    expect(keys[0]).toBe(ahead);
     expect(new Set(keys).size).toBe(2);
   });
 

@@ -2,6 +2,36 @@ import { useEffect, useRef } from 'react';
 import { draftScope, forgetDraft, loadDraftValue, saveDraftValue } from '../../lib/drafts.js';
 import type { EditorState } from './CatalogShared.js';
 
+/** The row an editor opened from: what a draft target names of it. */
+interface EditorSource {
+  readonly id: string;
+  readonly version: number;
+}
+
+/**
+ * Legacy 662: the target a catalog editor's form draft is kept under (`hooks/useFormDraft`) — the
+ * same for the editor itself and for the tab that closes it (`forgetEditorDraft`).
+ */
+export function catalogEditorDraftTarget(
+  family: 'skill' | 'procedure',
+  editor: Exclude<EditorState<EditorSource>, null>,
+): string {
+  if (editor.kind === 'version') return `${family}:version:${editor.row.id}@${editor.row.version}`;
+  if (editor.kind === 'copy') return `${family}:copy:${editor.row.id}`;
+  return `${family}:new`;
+}
+
+/** Legacy 662 (#501 P2-1 on #1029): the editor discarded from the drawer itself — Esc, a press
+ *  outside, its close button, confirmed — goes with its draft, as 取消 does. */
+export function forgetEditorDraft(
+  principalId: string | null,
+  family: 'skill' | 'procedure',
+  editor: EditorState<EditorSource>,
+): void {
+  if (principalId === null || editor === null) return;
+  forgetDraft(draftScope(principalId, catalogEditorDraftTarget(family, editor)));
+}
+
 interface OpenEditorMark {
   readonly kind: 'new' | 'copy' | 'version';
   readonly rowId?: string;
@@ -23,6 +53,9 @@ function parseMark(raw: unknown): OpenEditorMark | null {
  * came back to 「未找到」 and the form's kept draft (`hooks/useFormDraft`) had nowhere to show.
  * Back at that address with no editor open, the same caller gets the same editor again, and the
  * editor its draft. Closing the editor — finished, cancelled, another row picked — drops the mark.
+ * The form's draft goes when the editor is finished, cancelled or closed from the drawer
+ * (`forgetEditorDraft`); picking another row in the list while it is open keeps it, so 新建草稿
+ * (or the same copy / next version) later opens with it again, saying so.
  */
 export function useEditorReopen<Row extends { readonly id: string }>({
   principalId,

@@ -120,7 +120,7 @@ import {
 } from './catalog/SkillPublishReview.js';
 import { SkillUsageSection } from './catalog/SkillUsage.js';
 import { WorkerEditorHost } from './catalog/WorkerEditorHost.js';
-import { useEditorReopen } from './catalog/useEditorReopen.js';
+import { forgetEditorDraft, useEditorReopen } from './catalog/useEditorReopen.js';
 import { gateOwnedParamsText } from './connect/GateOwnedParams.js';
 import {
   GovernanceChangeList,
@@ -2494,6 +2494,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   );
 
   function closeEditor(): void {
+    forgetEditorDraft(principalId, 'skill', editor);
     setEditor(null);
     onSelectItem(null);
   }
@@ -3120,6 +3121,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   );
 
   function closeEditor(): void {
+    forgetEditorDraft(principalId, 'procedure', editor);
     setEditor(null);
     onSelectItem(null);
   }

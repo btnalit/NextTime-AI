@@ -38,6 +38,7 @@ import { Notice } from '../ui/Notice.js';
 import { Tabs } from '../ui/Tabs.js';
 import { DraftProposed, type ProposedDraft } from './DraftProposed.js';
 import { MarkdownPreview } from './MarkdownPreview.js';
+import { catalogEditorDraftTarget } from './useEditorReopen.js';
 
 export interface SkillEditorProps {
   readonly http: CapabilityCaller;
@@ -144,11 +145,14 @@ export function SkillEditor({
   const edited = useMemo(() => !sameSkillForm(form, opened), [form, opened]);
   const draft = useFormDraft<SkillForm>({
     principalId,
-    target: nextVersionOf
-      ? `skill:version:${nextVersionOf.id}@${nextVersionOf.version}`
-      : copyOf
-        ? `skill:copy:${copyOf.id}`
-        : 'skill:new',
+    target: catalogEditorDraftTarget(
+      'skill',
+      nextVersionOf
+        ? { kind: 'version', row: nextVersionOf }
+        : copyOf
+          ? { kind: 'copy', row: copyOf }
+          : { kind: 'new' },
+    ),
     value: form,
     edited,
     parse: parseSkillForm,
