@@ -33,6 +33,21 @@ export function isActingThrough(value: string): value is AuditActingThrough {
   return ownEntry(ACTING_THROUGH_LABELS, value) !== undefined;
 }
 
+/** Under the 经由 filter while it narrows the list: which rows it can show. Rows from before the
+ *  platform recorded it carry none and match no value — except 管理员智能体, which also keeps
+ *  the older rows whose payload names the admin agent (the kernel's rule, `queryAudit`). */
+export function actingThroughFilterNote(value: string, t: Translate): string {
+  return value === 'admin_agent_session'
+    ? t(
+        '只列出记录了「经由」的行，以及更早的、负载里标明由管理员智能体代为的行。',
+        'Only rows that record what they came through, and older rows whose payload names the admin agent.',
+      )
+    : t(
+        '只列出记录了「经由」的行；早于平台开始记录的行不在其中。',
+        'Only rows that record what they came through; rows from before the platform recorded it are not listed.',
+      );
+}
+
 /** A value's name; `null` (a row from before it was recorded, or written outside any call) is
  *  「未记录」, and an unknown value stays visible as itself. */
 export function actingThroughLabel(value: string | null | undefined, t: Translate): string {

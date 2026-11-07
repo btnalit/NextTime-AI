@@ -1163,6 +1163,35 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(person.items.length).toBeGreaterThan(0);
         expect(person.items.every((item) => item.actingThrough === 'person')).toBe(true);
         expect(person.items.some((item) => item.action === action)).toBe(false);
+
+        // An admin agent's act from before #1028: no `acting_through`, its session in the
+        // payload. 管理员智能体 keeps it; no other value does.
+        const older = 'test.platform_acting_through_older_agent';
+        await withWorkspace(
+          pool,
+          { workspaceId, principalId: randomUUID() },
+          (client) =>
+            writeAudit(client, {
+              workspaceId: null,
+              actorPrincipalId: null,
+              actorUserId: admin.id,
+              action: older,
+              payload: { sessionKind: 'admin_agent', sessionId: randomUUID() },
+            }),
+          { skipRoleSwitch: true },
+        );
+        const agentAgain = await callAsAdmin<ListEnvelope<PlatformAuditRecordWire>>(
+          'platform_audit_query',
+          { actingThrough: 'admin_agent_session', limit: 200 },
+        );
+        expect(agentAgain.items.map((item) => item.action)).toEqual(
+          expect.arrayContaining([action, older]),
+        );
+        const personAgain = await callAsAdmin<ListEnvelope<PlatformAuditRecordWire>>(
+          'platform_audit_query',
+          { actingThrough: 'person', limit: 200 },
+        );
+        expect(personAgain.items.some((item) => item.action === older)).toBe(false);
       });
     });
 

@@ -419,6 +419,10 @@ describe('AuditPage entry points', () => {
         params: { filter: { actingThrough: 'entry_agent' }, limit: 50 },
       }),
     );
+    // The narrowed list says which rows it can hold: none of the unrecorded ones.
+    expect(screen.getByTestId('audit-acting-through-note').textContent).toContain(
+      '早于平台开始记录的行不在其中',
+    );
   });
 
   it('S11 fix (CI #288/#290): when every loaded row is a read, the empty state (not a blank page) shows and "Show reads" reveals them', async () => {

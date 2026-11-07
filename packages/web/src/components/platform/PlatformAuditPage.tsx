@@ -1,7 +1,11 @@
 import type { PlatformAuditRecordWire, UserWire } from '@nexttime/shared';
 import { type FormEvent, useMemo, useRef, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
-import { ACTING_THROUGH_OPTIONS, actingThroughLabel } from '../../lib/acting-through.js';
+import {
+  ACTING_THROUGH_OPTIONS,
+  actingThroughFilterNote,
+  actingThroughLabel,
+} from '../../lib/acting-through.js';
 import { useDebounced } from '../../lib/audit-id-picker.js';
 import { platformAuditActionSuggestions } from '../../lib/audit-pickers.js';
 import { auditRefusal, isReadAuditAction } from '../../lib/audit.js';
@@ -266,6 +270,11 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
           {t('显示读操作', 'Show reads')}
         </label>
       </form>
+      {applied.actingThrough ? (
+        <p className="text-3 text-small" data-testid="platform-audit-acting-through-note">
+          {actingThroughFilterNote(applied.actingThrough, t)}
+        </p>
+      ) : null}
 
       {audit.state.status === 'loading' ? (
         <SkeletonRows

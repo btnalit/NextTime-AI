@@ -3,7 +3,11 @@ import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useAskForAccess } from '../../hooks/useAskForAccess.js';
 import { useCanOpen } from '../../hooks/useCanOpen.js';
 import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
-import { ACTING_THROUGH_OPTIONS, actingThroughLabel } from '../../lib/acting-through.js';
+import {
+  ACTING_THROUGH_OPTIONS,
+  actingThroughFilterNote,
+  actingThroughLabel,
+} from '../../lib/acting-through.js';
 import { AuditIdPicker } from '../../lib/audit-id-picker.js';
 import { auditActorSource, resourceIdSource } from '../../lib/audit-pickers.js';
 import {
@@ -322,6 +326,11 @@ export function AuditLogSection({
           {t('应用', 'Apply')}
         </Button>
       </form>
+      {applied.actingThrough ? (
+        <p className="text-3 text-small" data-testid="audit-acting-through-note">
+          {actingThroughFilterNote(applied.actingThrough, t)}
+        </p>
+      ) : null}
 
       {audit.state.status === 'loading' ? (
         <SkeletonRows

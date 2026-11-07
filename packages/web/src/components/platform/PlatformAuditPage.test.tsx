@@ -141,12 +141,17 @@ describe('PlatformAuditPage', () => {
         params: { limit: 50, actingThrough: 'admin_agent_session' },
       }),
     );
+    // 管理员智能体 also keeps the older rows whose payload names the agent, and says so.
+    expect(screen.getByTestId('platform-audit-acting-through-note').textContent).toContain(
+      '负载里标明由管理员智能体代为',
+    );
     // Back to 任意: the param goes.
     fireEvent.change(through, { target: { value: '' } });
     fireEvent.click(within(form).getByRole('button', { name: '应用' }));
     await waitFor(() =>
       expect(http.calls.at(-1)).toEqual({ name: 'platform_audit_query', params: { limit: 50 } }),
     );
+    expect(screen.queryByTestId('platform-audit-acting-through-note')).toBeNull();
   });
 
   it('shows a "加载更多" button when nextCursor is present, and appends the next page', async () => {

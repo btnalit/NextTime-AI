@@ -65,14 +65,18 @@ describe('ActingThroughChip', () => {
     expect(shown.getAttribute('title')).toContain('早于平台开始记录');
   });
 
-  it('the admin agent keeps its own mark — recorded, or only in an older row’s payload', () => {
+  it('the admin agent keeps its own mark whenever the recorded value or the payload says so', () => {
     const { rerender } = render(chip('admin_agent_session'));
     expect(screen.getByTestId('audit-admin-agent').textContent).toBe('由管理员智能体代为');
     expect(screen.queryByTestId('audit-acting-through')).toBeNull();
     rerender(chip(null, { sessionKind: 'admin_agent', sessionId: 's-1' }));
     expect(screen.getByTestId('audit-admin-agent')).toBeTruthy();
-    // A recorded value wins over what an older payload field says.
+    // The payload alone still shows it, whatever was recorded: the mark legacy 583 put on such
+    // a row never goes away.
     rerender(chip('person', { sessionKind: 'admin_agent' }));
+    expect(screen.getByTestId('audit-admin-agent')).toBeTruthy();
+    // Neither says so: the plain chip.
+    rerender(chip('person', { sessionKind: 'entry' }));
     expect(screen.queryByTestId('audit-admin-agent')).toBeNull();
     expect(screen.getByTestId('audit-acting-through').textContent).toBe('经由 本人');
   });

@@ -5,8 +5,9 @@ import { AdminAgentActingMark, actedByAdminAgent } from './AdminAgentActingChip.
 /**
  * components/audit/ActingThroughChip (legacy 666): 「经由 …」 beside an audit row's actor — what the
  * act came through (`actingThrough`, `lib/acting-through.ts`), on every row of both audit pages.
- * The person's admin agent keeps its own warning mark (legacy 583, `AdminAgentActingMark`), also
- * on a row from before #1028 recorded it, which says so only in its payload (`sessionKind`).
+ * The person's admin agent keeps its own warning mark (legacy 583, `AdminAgentActingMark`)
+ * whenever either says so: the recorded value, or the payload (`sessionKind`) that is all a row
+ * from before #1028 has — the mark this page showed before legacy 666 never goes away.
  */
 export function ActingThroughChip({
   actingThrough,
@@ -16,10 +17,7 @@ export function ActingThroughChip({
   readonly payload: unknown;
 }) {
   const t = useT();
-  if (
-    actingThrough === 'admin_agent_session' ||
-    ((actingThrough === null || actingThrough === undefined) && actedByAdminAgent(payload))
-  ) {
+  if (actingThrough === 'admin_agent_session' || actedByAdminAgent(payload)) {
     return <AdminAgentActingMark testId="audit-admin-agent" />;
   }
   const recorded = actingThrough !== null && actingThrough !== undefined;

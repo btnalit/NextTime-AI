@@ -175,6 +175,16 @@ describe.runIf(DATABASE_URL !== undefined)(
         writeAudit(client, { workspaceId, actorPrincipalId: ownerId, action }),
       );
       await dispatchCapability({ pool }, owner, 'new_chat', { title: 'acting-through' });
+      // An admin agent's act from before #1028: no `acting_through`, its session in the payload.
+      const olderAgent = 'test.acting_through_older_agent';
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        writeAudit(client, {
+          workspaceId,
+          actorPrincipalId: ownerId,
+          action: olderAgent,
+          payload: { sessionKind: 'admin_agent', sessionId: randomUUID() },
+        }),
+      );
 
       const through = async (actingThrough: string) =>
         (
@@ -191,6 +201,13 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(person.every((row) => row.actingThrough === 'person')).toBe(true);
       expect(person.some((row) => row.action === 'new_chat')).toBe(true);
       expect(person.some((row) => row.action === action)).toBe(false);
+      expect(person.some((row) => row.action === olderAgent)).toBe(false);
+      // The admin agent's older act still answers 管理员智能体, as its payload says; no other
+      // value takes an unrecorded row.
+      const agent = await through('admin_agent_session');
+      expect(agent.map((row) => row.action)).toContain(olderAgent);
+      expect(agent.some((row) => row.action === action)).toBe(false);
+      expect((await through('worker_handle')).map((row) => row.action)).toEqual([action]);
       // Not one of the values: nothing, never the unfiltered stream.
       expect(await through('somebody')).toEqual([]);
     });
