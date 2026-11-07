@@ -88,7 +88,7 @@ capabilities:
   assert_fact:
     console: "none: 待说明（2026-11-06 盘点）"
     agents: []
-    repeat: repeats  # the same Fact; each call records an Activity of its own
+    repeat: repeats  # the same Fact; each call records an Activity of its own (legacy 685)
   attest_fact:
     console: required
     agents: []
