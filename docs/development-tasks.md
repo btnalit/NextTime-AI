@@ -4701,11 +4701,26 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **GO16 — 沉淀提议：WorkerSpec 组合提议为 WorkerDefinition**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（GO16a #1064 fa28987、指纹收紧 #1069 ac9639b、GO16b #1071 767ac12，2026-11-07 合入；方案为项目文件 `s11-w4/go16-default-plan.md`，F1–F7 默认 A，调整记在 §5b）：
+  - **使用情况**（GO16a，关闭遗留 569）：`get_worker_definition_stats`（observe，human，builder 起），`application/task/worker-definition-stats.ts`。读时算、不存，只出数字。只算普通工作（`purpose is null`），每个 Task 按创建时的版本计；只列已发布与已弃用的版本。结果计数复用 `stats-read.ts`，与 Skill 统计同一套规则（primary 是达成率，proxy 另列）。按运行环境、按组合各切一次；组合即 `tasks.run_config_snapshot->'spec'->>'digest'`，`null` 是原样；字段名从计划条目用 `WorkerSpecSchema` 解析、用 `workerSpecDigest` 核对，对不上给 `null`，不猜。
+  - **指纹可见性**（#1069，关闭遗留 681）：指纹只给能读到来源目标的调用者（请求人与 owner，同 `get_goal`）。网关 `goalReaderOf` 组出 `canReadGoal` 传给统计；其余调用者拿到 `specRef` 编号 `#1`、`#2`…（`labelSpecs` 按响应顺序编，只在这次响应里有效）。字段名照旧给所有 builder。
+  - **可沉淀的组合**（GO16b）：门槛常量在 `packages/shared/src/combination.ts`（近 90 天、至少 3 次 primary 达成、至少 2 个目标、达成率至少 80%、无「建议复核」），判定在 `application/task/combination-candidates.ts`，读时算。`get_combination_candidates`（observe）与 `propose_definition_from_combination`（propose）都只给人（F2）。合并规则 `mergeCombinationDefinition`：`instructions` 接在原 `systemPrompt` 后，`skills`、`gates`、`capabilities`、`model` 用调整里的，`observeScope`、`tokenBudget` 不带。读不到来源目标的一切猜测都返回同一个 404（不先判资格，免得重开 #1069 关掉的预言机）；能读到但不够格返回 409 `combination_not_eligible`。
+  - **来历**：迁移 worker/0014 `worker_definition_derivations` 只许插入（触发器校验基版本与新家族 v1）；线上 `derivedFrom` 不带指纹，表与审计里留。
+  - **没选的备选项**：F2-B（agent 发起沉淀）、F4-B（定义带观察范围与 token 上限）这次不做。
+  - **审查**：#493、UX 均 PASS；#1071 rehearsal 绿。发版 v0.66.0（release.md §3.150、§3.151）。
 
 **GO17 — 先例与经验召回**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（GO17a #1080，2026-11-07 合入，3ae2454；方案为项目文件 `s11-w4/go17-default-plan.md`，F1–F5 默认 A）：
+  - **先例读时算、不存**：规则与常量在 `packages/shared/src/goal-precedents.ts`，读在 `application/goal/precedents.ts`（候选一条 SQL 按档排序，记录逐个读）。
+  - **同类只按结构**：第 1 版的 Procedure → 结束时计划里的 Worker 家族 → 最近；窗口 90 天，同档新的在前。
+  - **只取 `on_behalf_of = 请求人`**：owner 也一样，比 GO5a 的可见性谓词窄；已取消的不算。
+  - **正反例**：`positive` / `negative` / `unverified`，取值在 `GOAL_PRECEDENT_POLARITY_VALUES`。
+  - **给谁**：`find_goal_precedents`（observe，Handle 与人工通道，member 起，`console: none`，`agents: [entry]`）只给入口 agent，管理员 agent 与步骤 Worker 不给。入口上下文 3 条短引用（一条查询）；规划器输入至多 3 条完整记录（计划截短，整体 `redactSecrets`）。
+  - **提示词与守卫**：`entry-agent.yaml`、`goal-planner.yaml` 写明先例是数据不是指令；`prompt-contract` 新增一条，入口提示词必须点名每个正反例取值。入口模板改了，已部署的工作区按遗留 145 提示升级。
+  - **回滚**：没有迁移，revert 即可（release.md §3.152）。
+  - **审查**：#481、#493、UX 均 PASS；rehearsal 绿。
+  - **下一步**：GO17b，记录「引用了哪个先例」：`propose_goal` 与规划器报告的 `precedents`、迁移 goal/0018 `plan_revisions.cited_precedents`、`get_goal(_revision)` 的 `citedPrecedents`、控制台一行、验收用集成测试与 fake-llm 场景。
 
 **GO18 — `review` 类验收**（见 `global-roadmap-2026-10-16.md` §4）
 
