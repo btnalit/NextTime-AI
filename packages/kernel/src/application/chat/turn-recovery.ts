@@ -226,7 +226,9 @@ export function publishTurnEnded(ended: EndedTurn | undefined): void {
 /**
  * Records that the user asked `turnId` to stop (`metadata.stopRequestedAt`) — a no-op unless the
  * Turn is still running. `stop_agent` calls it before signalling the runtime, so the row lock it
- * takes orders it ahead of any `report_turn` the resulting abort produces.
+ * takes orders it ahead of any `report_turn` the resulting abort produces. A second stop of the same
+ * Turn keeps the first request's time: the Turn was asked to stop then, and `stop_agent` is
+ * declared idempotent (docs/contracts/capability-matrix.yaml, batch D4).
  */
 export async function requestTurnStop(
   client: PoolClient,
@@ -236,7 +238,8 @@ export async function requestTurnStop(
   await client.query(
     `update activities
      set metadata = metadata || jsonb_build_object('stopRequestedAt', now())
-     where workspace_id = $1 and id = $2 and kind = 'agent_turn' and status = 'running'`,
+     where workspace_id = $1 and id = $2 and kind = 'agent_turn' and status = 'running'
+       and not metadata ? 'stopRequestedAt'`,
     [workspaceId, turnId],
   );
 }
