@@ -412,6 +412,21 @@ async function draftOf(ctx: RecipeContext, gatekeeperId: string) {
   return draft;
 }
 
+const ONTOLOGY_CHANGE = {
+  objectTypes: [
+    { name: 'repeat.host', description: 'A host.', identityKey: ['hostname'] },
+    { name: 'repeat.service', description: 'A service.', identityKey: ['name'] },
+  ],
+  linkTypes: [
+    {
+      name: 'repeat.runs_on',
+      domain: 'repeat.service',
+      range: 'repeat.host',
+      description: 'Where a service runs.',
+    },
+  ],
+};
+
 /** Extra cases for a row, beyond the one with schema-built params on the bare seed. A declaration
  *  holds on every path, so a row whose answer depends on state gets a case per state (per #493 on
  *  batch D4). */
@@ -1024,6 +1039,31 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       }),
     },
   },
+  // Legacy 664, batch 7: a followed Procedure, the ontology.
+  record_procedure_followed: {
+    'a running Turn, a published Procedure': {
+      setUp: async (ctx) => {
+        const procedure = await familyV1(ctx, 'procedure', procedureBody(), true);
+        await as(ctx, 'send_chat_message', { chatId: ctx.seed.chatId, text: 'follow it' });
+        return { procedureId: procedure.id, version: 1 };
+      },
+    },
+  },
+  propose_ontology_change: {
+    'a new family': {
+      setUp: async () => ({ change: ONTOLOGY_CHANGE }),
+    },
+  },
+  publish_ontology_version: {
+    'its v1 draft': {
+      setUp: async (ctx) => {
+        const draft = await as<{ id: string; version: number }>(ctx, 'propose_ontology_change', {
+          change: ONTOLOGY_CHANGE,
+        });
+        return { id: draft.id, version: draft.version };
+      },
+    },
+  },
   reconcile_goal_action: {
     'an action of the run whose outcome is unknown': {
       setUp: async (ctx) => {
@@ -1097,6 +1137,9 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'publish_manifest',
   'discard_operation_draft',
   'propose_operation',
+  'record_procedure_followed',
+  'propose_ontology_change',
+  'publish_ontology_version',
 ]);
 
 interface Declared {
