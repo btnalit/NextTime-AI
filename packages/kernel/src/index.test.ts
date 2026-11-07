@@ -20,6 +20,7 @@ import {
   startBackgroundServicesOrExit,
 } from './index.js';
 import { deriveInternalCredential } from './interfaces/internal-auth/index.js';
+import { SYSTEM_ACTING_CONTEXT, currentActingContext } from './substrate/audit/index.js';
 import { currentCorrelationId } from './substrate/correlation/index.js';
 
 /** The internal-plane root every server below is built with. Generated per run — never a literal
@@ -415,8 +416,11 @@ describe('createBackgroundServices: outbox-prune loop', () => {
   });
 
   afterEach(() => {
-    vi.useRealTimers();
+    // Spies first: a `setTimeout` / `setInterval` spied while the fake clock was installed would
+    // otherwise be "restored" to the fake clock's function after `useRealTimers`, and every later
+    // test in this file would get timers that never fire.
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it('runs the first prune tick after OUTBOX_PRUNE_INITIAL_DELAY_MS (not a full interval), with the default days, then schedules the recurring tick at the default interval', async () => {
@@ -551,6 +555,47 @@ describe('createBackgroundServices: outbox-prune loop', () => {
     background2.stop();
     await vi.advanceTimersByTimeAsync(DEFAULT_OUTBOX_PRUNE_INTERVAL_MS * 2);
     expect(pruneSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Batch D3 (#1028 review, mutation B13): whatever the scheduled loops write is the kernel's own
+// work — `acting_through = 'system'` (substrate/audit/acting-context.ts) — from `start()`'s own
+// startup scan and from every timer it sets, while the caller of `start()` stays outside it.
+describe('createBackgroundServices: what the scheduled loops act through', () => {
+  it("every query start() and its timers make runs as 'system'; the caller is left outside", async () => {
+    const seen: { text: string; acting: unknown }[] = [];
+    const client = {
+      query: vi.fn(async (text: string) => {
+        seen.push({ text: text.trim(), acting: currentActingContext() });
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const pool = { connect: vi.fn(async () => client as unknown as PoolClient) };
+    const background = createBackgroundServices({
+      pool: pool as unknown as Pool,
+      kind: 'fake',
+      approvalReaperIntervalMs: 20,
+      outboxPruneDays: 0,
+      invariantCheckIntervalMs: 0,
+    });
+    try {
+      await background.start();
+      expect(currentActingContext()).toBeUndefined();
+      const startup = seen.length;
+      expect(startup).toBeGreaterThan(0);
+      // The approval reaper's scan, from its own `setInterval` tick.
+      await vi.waitFor(() =>
+        expect(
+          seen
+            .slice(startup)
+            .some((query) => query.text.startsWith('select workspace_id, id from action_requests')),
+        ).toBe(true),
+      );
+    } finally {
+      background.stop();
+    }
+    expect(seen.filter((query) => query.acting !== SYSTEM_ACTING_CONTEXT)).toEqual([]);
   });
 });
 

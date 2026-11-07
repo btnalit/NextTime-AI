@@ -167,8 +167,10 @@ const limiter = new RefusalAuditLimiter({
 });
 
 /** The param names a refused call carried, never their values: a refused call's params were not
- *  validated (authorization runs first), so they are recorded only as names, and only names that
- *  read as one. */
+ *  validated (authorization runs first, before even the params budget), so they are recorded only
+ *  as names, and only names that read as one — the first {@link MAX_RECORDED_PARAM_KEYS} such, in
+ *  the order the call sent them, then sorted. The scan stops there: a refused call with a huge
+ *  object costs no more than one with 32 keys (#1028 review). */
 export function refusedParamKeys(rawParams: unknown): {
   readonly paramKeys: readonly string[];
   readonly paramKeysOmitted?: number;
@@ -177,8 +179,12 @@ export function refusedParamKeys(rawParams: unknown): {
     return { paramKeys: [] };
   }
   const all = Object.keys(rawParams);
-  const recordable = all.filter((key) => RECORDABLE_PARAM_KEY.test(key)).sort();
-  const paramKeys = recordable.slice(0, MAX_RECORDED_PARAM_KEYS);
+  const paramKeys: string[] = [];
+  for (const key of all) {
+    if (paramKeys.length === MAX_RECORDED_PARAM_KEYS) break;
+    if (RECORDABLE_PARAM_KEY.test(key)) paramKeys.push(key);
+  }
+  paramKeys.sort();
   const omitted = all.length - paramKeys.length;
   return omitted > 0 ? { paramKeys, paramKeysOmitted: omitted } : { paramKeys };
 }

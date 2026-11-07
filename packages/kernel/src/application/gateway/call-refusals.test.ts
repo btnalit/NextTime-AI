@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { RefusalAuditLimiter, actingContextForHandle, refusedParamKeys } from './call-refusals.js';
 
 /** application/gateway/call-refusals (batch D3): the hourly audit limit and the param names a
@@ -78,6 +78,20 @@ describe('refusedParamKeys (unit)', () => {
     const recorded = refusedParamKeys(many);
     expect(recorded.paramKeys).toHaveLength(32);
     expect(recorded.paramKeysOmitted).toBe(8);
+    // The first 32 the call sent (k0..k31), sorted: k32..k39 are the ones left out.
+    expect(recorded.paramKeys).not.toContain('k32');
+    expect(recorded.paramKeys.slice(0, 3)).toEqual(['k0', 'k1', 'k10']);
+  });
+
+  it('stops reading names once it has 32: a huge refused object is scanned no further', () => {
+    const huge = Object.fromEntries(Array.from({ length: 50_000 }, (_, i) => [`k${i}`, i]));
+    const test = vi.spyOn(RegExp.prototype, 'test');
+    try {
+      expect(refusedParamKeys(huge)).toMatchObject({ paramKeysOmitted: 50_000 - 32 });
+      expect(test.mock.calls.length).toBeLessThanOrEqual(32);
+    } finally {
+      test.mockRestore();
+    }
   });
 
   it('records nothing of a non-object', () => {
