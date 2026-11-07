@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type Capability, type Operation, type WorkerSpec, getCapability } from '@nexttime/shared';
-import { generateKeyPair } from 'jose';
+import { decodeJwt, generateKeyPair } from 'jose';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -14,7 +14,7 @@ import {
   createGateConnectionSecrets,
 } from '../../adapters/gatekeeper-client/index.js';
 import { requestAction } from '../../governance/approval/index.js';
-import { HANDLE_SIGNING_ALG } from '../../governance/capability/index.js';
+import { HANDLE_SIGNING_ALG, type HandleClaims } from '../../governance/capability/index.js';
 import {
   getPublishedOperation,
   importManifest,
@@ -96,7 +96,55 @@ interface Recipe {
   /** The entity a result names, when `entityId` cannot tell (a result keyed by more than one
    *  field, such as an Operation draft's gate, name and version). */
   readonly entity?: (result: unknown) => string | undefined;
+  /** Who makes the two calls, when not the owner on the human channel: a `handle` row's caller
+   *  (a Worker's run, an agent session), resolved after `setUp`. */
+  readonly by?: (ctx: RecipeContext) => Promise<ResolvedCaller>;
 }
+
+/** The Handle of the WorkerRun the recipe started last, as a Worker would call with it. */
+async function workerHandle({ pool, seed }: RecipeContext): Promise<ResolvedCaller> {
+  const result = await pool.query<{
+    session_id: string;
+    jti: string;
+    on_behalf_of: string;
+    scope: HandleClaims['scope'];
+    expires_at: Date;
+  }>(
+    `select wr.session_id, h.jti, h.on_behalf_of, h.scope, h.expires_at
+       from worker_runs wr
+       join capability_handles h
+         on h.workspace_id = wr.workspace_id and h.session_id = wr.session_id
+      where wr.workspace_id = $1
+      order by wr.started_at desc limit 1`,
+    [seed.workspaceId],
+  );
+  const row = result.rows[0];
+  if (!row) throw new Error('workerHandle: the recipe started no WorkerRun');
+  return {
+    channel: 'handle',
+    claims: {
+      ws: seed.workspaceId,
+      sid: row.session_id,
+      obo: row.on_behalf_of,
+      scope: row.scope,
+      jti: row.jti,
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(row.expires_at.getTime() / 1000),
+    },
+  };
+}
+
+/** An agent session's Handle for the owner (issue_handle), as the entry agent would call with it. */
+async function sessionHandle(ctx: RecipeContext): Promise<ResolvedCaller> {
+  const { handle } = await as<{ handle: string }>(ctx, 'issue_handle', {
+    sessionKind: 'interactive',
+  });
+  return { channel: 'handle', claims: decodeJwt(handle) as unknown as HandleClaims };
+}
+
+/** The Principal a caller acts as — who an audit row names. */
+const actingPrincipal = (caller: ResolvedCaller, ownerId: string) =>
+  caller.channel === 'handle' ? caller.claims.obo : ownerId;
 
 /** A call as the recipe's owner, for setting a case up. */
 function as<T = Record<string, unknown>>(
@@ -1246,6 +1294,37 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       setUp: (ctx) => workerCall(ctx),
     },
   },
+  report_task_result: {
+    // The first report settles the Task; the run has nothing left to report for.
+    'a running Task, reported by its Worker': {
+      first: expect.objectContaining({ status: 'completed' }),
+      by: workerHandle,
+      setUp: async (ctx) => {
+        await as(ctx, 'invoke_worker', await workerCall(ctx));
+        return { summary: 'Restarted web-1.' };
+      },
+    },
+  },
+  report_task_outcome: {
+    // A finished Task the owner delegated, graded from the owner's agent session; the same grade
+    // again is a no-op (a different one is the one correction allowed).
+    'a finished Task, graded by the session that delegated it': {
+      first: expect.objectContaining({ outcome: 'achieved', revision: 1 }),
+      by: sessionHandle,
+      setUp: async (ctx) => {
+        const task = await as<{ id: string }>(ctx, 'invoke_worker', await workerCall(ctx));
+        await dispatchCapability(
+          { pool: ctx.pool },
+          await workerHandle(ctx),
+          'report_task_result',
+          {
+            summary: 'Restarted web-1.',
+          },
+        );
+        return { taskId: task.id, outcome: 'achieved' };
+      },
+    },
+  },
   cancel_task: {
     // The first call cancels it; a second finds it cancelled already and changes nothing.
     'a running Task': {
@@ -1375,6 +1454,8 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'add_member',
   'create_connection',
   'refresh_operation_governance',
+  'report_task_result',
+  'report_task_outcome',
   'rotate_connection_secret',
   'issue_handle',
   'issue_service_handle',
@@ -1559,7 +1640,16 @@ describe.runIf(DATABASE_URL !== undefined)(
               seed,
               memberId: workspace.principals.get('member') as string,
             });
-      const call = () => dispatchCapability({ pool }, caller, capability.name, params);
+      const by =
+        chosen?.by === undefined
+          ? caller
+          : await chosen.by({
+              pool,
+              caller,
+              seed,
+              memberId: workspace.principals.get('member') as string,
+            });
+      const call = () => dispatchCapability({ pool }, by, capability.name, params);
       const entityOf = chosen?.entity ?? entityId;
 
       let first: unknown;
@@ -1605,7 +1695,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         if (firstId !== undefined) expect(entityOf(second)).toBe(firstId);
         expect(rowsAfterSecond).toEqual(rowsAfterFirst);
         expect(newAudit.map((row) => row.action)).toEqual([capability.name]);
-        expect(newAudit[0]?.actor_principal_id).toBe(ownerId);
+        expect(newAudit[0]?.actor_principal_id).toBe(actingPrincipal(by, ownerId));
       } else if (repeat === 'creates') {
         const firstId = entityOf(first);
         expect(firstId, 'creates: the result names the entity it made').toBeDefined();
