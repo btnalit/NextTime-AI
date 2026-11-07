@@ -37,7 +37,12 @@ import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.
 import { workerSpecDigest } from '../task/step-attempt.js';
 import { setConnectionHandlerDeps } from './connection-handlers.js';
 import { dispatchCapability } from './dispatch.js';
-import type { ResolvedCaller } from './resolve-caller.js';
+import {
+  type ResolveCallerDeps,
+  type ResolvedCaller,
+  resolveCaller,
+  resolveSourceBoundCaller,
+} from './resolve-caller.js';
 import {
   type Seeded,
   humanCaller,
@@ -96,7 +101,56 @@ interface Recipe {
   /** The entity a result names, when `entityId` cannot tell (a result keyed by more than one
    *  field, such as an Operation draft's gate, name and version). */
   readonly entity?: (result: unknown) => string | undefined;
+  /** Who makes the two calls, when not the owner on the human channel: the Handle of a `handle`
+   *  row's caller (a Worker's run, an agent session), got after `setUp`. Each call presents it the
+   *  way its holder does (`callerFor`), so a Handle revoked, expired or not signed by the task
+   *  runtime's key is refused before the handler (per #493 on batch 12). */
+  readonly by?: (ctx: RecipeContext) => Promise<HeldHandle>;
 }
+
+/** The Handle each spawned WorkerRun was given, by WorkerRun id (the supervisor stub's record). */
+const SPAWNED_HANDLES = new Map<string, string>();
+/** Verifies the Handles the task runtime signs (its key pair is made in `beforeAll`). */
+let loadHandlePublicKey: ResolveCallerDeps['loadHandlePublicKey'];
+
+/** A Handle as its holder presents it: a container-held one through the source binding
+ *  (`resolveSourceBoundCaller`), one handed to its holder as a bearer token in the request. */
+interface HeldHandle {
+  readonly handle: string;
+  readonly presented: 'source' | 'bearer';
+}
+
+/** A request's caller for a Handle, resolved as the kernel resolves that presentation. */
+function callerFor(pool: Pool, { handle, presented }: HeldHandle): Promise<ResolvedCaller> {
+  const deps = { pool, loadHandlePublicKey };
+  return presented === 'source'
+    ? resolveSourceBoundCaller(handle, deps)
+    : resolveCaller(`Bearer ${handle}`, deps);
+}
+
+/** The Handle of the WorkerRun the recipe started last, as its Worker holds it. */
+async function workerHandle({ pool, seed }: RecipeContext): Promise<HeldHandle> {
+  const result = await pool.query<{ id: string }>(
+    'select id from worker_runs where workspace_id = $1 order by started_at desc limit 1',
+    [seed.workspaceId],
+  );
+  const run = result.rows[0];
+  const handle = run === undefined ? undefined : SPAWNED_HANDLES.get(run.id);
+  if (handle === undefined) throw new Error('workerHandle: the recipe started no WorkerRun');
+  return { handle, presented: 'source' };
+}
+
+/** An agent session's Handle for the owner (issue_handle), as the entry agent holds it. */
+async function sessionHandle(ctx: RecipeContext): Promise<HeldHandle> {
+  const { handle } = await as<{ handle: string }>(ctx, 'issue_handle', {
+    sessionKind: 'interactive',
+  });
+  return { handle, presented: 'bearer' };
+}
+
+/** The Principal a caller acts as — who an audit row names. */
+const actingPrincipal = (caller: ResolvedCaller, ownerId: string) =>
+  caller.channel === 'handle' ? caller.claims.obo : ownerId;
 
 /** A call as the recipe's owner, for setting a case up. */
 function as<T = Record<string, unknown>>(
@@ -1246,6 +1300,36 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       setUp: (ctx) => workerCall(ctx),
     },
   },
+  report_task_result: {
+    // The first report settles the Task, and ending its WorkerRun revokes the run's Handle: the
+    // Worker's second call is refused at the door, before the handler (per #493 on batch 12).
+    'a running Task, reported by its Worker': {
+      first: expect.objectContaining({ status: 'completed' }),
+      by: workerHandle,
+      setUp: async (ctx) => {
+        await as(ctx, 'invoke_worker', await workerCall(ctx));
+        return { summary: 'Restarted web-1.' };
+      },
+    },
+  },
+  report_task_outcome: {
+    // A finished Task the owner delegated, graded from the owner's agent session; the same grade
+    // again is a no-op (a different one is the one correction allowed).
+    'a finished Task, graded by the session that delegated it': {
+      first: expect.objectContaining({ outcome: 'achieved', revision: 1 }),
+      by: sessionHandle,
+      setUp: async (ctx) => {
+        const task = await as<{ id: string }>(ctx, 'invoke_worker', await workerCall(ctx));
+        await dispatchCapability(
+          { pool: ctx.pool },
+          await callerFor(ctx.pool, await workerHandle(ctx)),
+          'report_task_result',
+          { summary: 'Restarted web-1.' },
+        );
+        return { taskId: task.id, outcome: 'achieved' };
+      },
+    },
+  },
   cancel_task: {
     // The first call cancels it; a second finds it cancelled already and changes nothing.
     'a running Task': {
@@ -1375,6 +1459,8 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'add_member',
   'create_connection',
   'refresh_operation_governance',
+  'report_task_result',
+  'report_task_outcome',
   'rotate_connection_secret',
   'issue_handle',
   'issue_service_handle',
@@ -1451,13 +1537,19 @@ describe.runIf(DATABASE_URL !== undefined)(
       // Issuing a Handle signs it: the task runtime holds the key (as the kernel's main() wires
       // it). A spawned Worker never runs: no container, no report. (The CI-only fake one in
       // fake-invoke-worker.ts may be imported by index.ts alone — guard fake-markers rule 2.)
-      const { privateKey } = await generateKeyPair(HANDLE_SIGNING_ALG, { crv: 'Ed25519' });
+      const { privateKey, publicKey } = await generateKeyPair(HANDLE_SIGNING_ALG, {
+        crv: 'Ed25519',
+      });
+      loadHandlePublicKey = async () => publicKey;
       configureTaskRuntime({
         pool,
         privateKey,
         supervisorClient: {
           // A Worker "starts" and never reports: its Task stays running for cancel_task.
-          spawn: async () => ({ containerId: `repeat-${randomUUID()}`, ip: undefined }),
+          spawn: async (input) => {
+            SPAWNED_HANDLES.set(input.workerRunId, input.capabilityHandle);
+            return { containerId: `repeat-${randomUUID()}`, ip: undefined };
+          },
           terminate: async () => false,
           status: async () => undefined,
         },
@@ -1559,7 +1651,20 @@ describe.runIf(DATABASE_URL !== undefined)(
               seed,
               memberId: workspace.principals.get('member') as string,
             });
-      const call = () => dispatchCapability({ pool }, caller, capability.name, params);
+      const held =
+        chosen?.by === undefined
+          ? undefined
+          : await chosen.by({
+              pool,
+              caller,
+              seed,
+              memberId: workspace.principals.get('member') as string,
+            });
+      const callerNow = () =>
+        held === undefined ? Promise.resolve(caller) : callerFor(pool, held);
+      const by = await callerNow();
+      const call = async () =>
+        dispatchCapability({ pool }, await callerNow(), capability.name, params);
       const entityOf = chosen?.entity ?? entityId;
 
       let first: unknown;
@@ -1605,7 +1710,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         if (firstId !== undefined) expect(entityOf(second)).toBe(firstId);
         expect(rowsAfterSecond).toEqual(rowsAfterFirst);
         expect(newAudit.map((row) => row.action)).toEqual([capability.name]);
-        expect(newAudit[0]?.actor_principal_id).toBe(ownerId);
+        expect(newAudit[0]?.actor_principal_id).toBe(actingPrincipal(by, ownerId));
       } else if (repeat === 'creates') {
         const firstId = entityOf(first);
         expect(firstId, 'creates: the result names the entity it made').toBeDefined();
