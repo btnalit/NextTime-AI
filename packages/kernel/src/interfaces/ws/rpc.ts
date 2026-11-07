@@ -51,6 +51,7 @@ import {
 import {
   ChatArchivedError,
   ChatNotFoundError,
+  IdempotencyKeyReusedError,
   TurnAlreadyRunningError,
 } from '../../application/chat/index.js';
 import {
@@ -326,6 +327,11 @@ export const WS_ERROR_CODES = {
    *  for are paused by the evaluation seal until the workspace owner releases them. Its own code,
    *  for the chat composer as above: the person must read what happened and who can undo it. */
   EVALUATION_PROBE_HOLD: -32019,
+  /** Legacy 673 — mirrors HTTP 409 `idempotency_key_reused`: a `send_chat_message` key that already
+   *  names another message of the Chat (another text, or another sender). Its own code, not
+   *  ILLEGAL_TRANSITION: the chat composer that resent must say this message was not sent, and that
+   *  it keys messages wrongly, not that something changed state. */
+  IDEMPOTENCY_KEY_REUSED: -32020,
 } as const;
 
 /** A passed-through gate refusal's HTTP status (`gateRefusalOf`) as its WS code: 400, 403, 404
@@ -416,6 +422,9 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   if (err instanceof ChatNotFoundError) {
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
+  }
+  if (err instanceof IdempotencyKeyReusedError) {
+    return { code: WS_ERROR_CODES.IDEMPOTENCY_KEY_REUSED, message: err.message };
   }
   // Lane-4 P2 fix (docs/development-tasks.md "Unmapped error classes → 500") — WS equivalents of
   // capability-route.ts's own new mappings (see that file's comment on the same three classes).

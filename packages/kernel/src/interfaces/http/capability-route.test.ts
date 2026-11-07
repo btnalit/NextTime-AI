@@ -21,7 +21,11 @@ import {
   ChangeSegmentNotFoundError,
   ChangeSegmentRolledBackError,
 } from '../../application/change-plan/index.js';
-import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
+import {
+  ChatNotFoundError,
+  IdempotencyKeyReusedError,
+  TurnAlreadyRunningError,
+} from '../../application/chat/index.js';
 import { ChatArchivedError } from '../../application/chat/index.js';
 import {
   EvaluationContentWithheldError,
@@ -637,6 +641,13 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
     const mapped = mapCapabilityError(new ChatNotFoundError('ws-1', 'chat-1'));
     expect(mapped.status).toBe(404);
     expect(mapped.code).toBe('chat_not_found');
+  });
+
+  it('IdempotencyKeyReusedError (legacy 673) → 409 idempotency_key_reused naming the message the key holds', () => {
+    const mapped = mapCapabilityError(new IdempotencyKeyReusedError('chat-1', 'message-1'));
+    expect(mapped.status).toBe(409);
+    expect(mapped.code).toBe('idempotency_key_reused');
+    expect(mapped.details).toEqual({ messageId: 'message-1' });
   });
 
   it('lane-4 P2 fix: TurnNotFoundError (report_turn) → 404 turn_not_found, not 500', () => {

@@ -909,7 +909,9 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "conflict: turn_already_running"
+    # Legacy 673: with its idempotencyKey (the schema-built params carry one). Without a key, a
+    # second send while the Turn runs is refused (409 turn_already_running), as before.
+    repeat: idempotent
   set_active_runtime_image:
     console: required
     agents: []

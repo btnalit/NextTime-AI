@@ -70808,6 +70808,11 @@
           "minLength": 1,
           "type": "string"
         },
+        "idempotencyKey": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
         "text": {
           "minLength": 1,
           "type": "string"
@@ -70823,6 +70828,9 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "changed": {
+          "type": "boolean"
+        },
         "messageId": {
           "minLength": 1,
           "type": "string"
@@ -70832,12 +70840,23 @@
         },
         "turnId": {
           "type": "string"
+        },
+        "turnStatus": {
+          "enum": [
+            "running",
+            "completed",
+            "interrupted",
+            "failed"
+          ],
+          "type": "string"
         }
       },
       "required": [
         "messageId",
         "sequence",
-        "turnId"
+        "turnId",
+        "changed",
+        "turnStatus"
       ],
       "type": "object"
     },
