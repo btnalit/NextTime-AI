@@ -18,6 +18,11 @@ export interface ConsoleUser {
   readonly mustChangePassword: boolean;
   /** The `user_sessions` row the cookie names — what `POST /api/auth/logout` revokes. */
   readonly consoleSessionId: string;
+  /** Legacy 677: when that session ends by itself (`resolveConsoleUser`: the earlier of the row's
+   *  `expires_at` and the cookie's `exp`, both fixed at login). From then on the cookie is refused;
+   *  a `/ws` socket it opened closes then (interfaces/ws/server.ts `armSessionExpiry`). Absent
+   *  only on a caller made without resolving a cookie (tests). */
+  readonly sessionExpiresAt?: Date;
 }
 
 export type ResolvedCaller =
