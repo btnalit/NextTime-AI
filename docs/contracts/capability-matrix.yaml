@@ -691,7 +691,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "conflict: not_found"  # a published version no longer reads as a draft; publish_skill and the other publish rows answer illegal_transition
+    repeat: "conflict: not_found"  # a published version no longer reads as a draft; the other publish rows answer illegal_transition (legacy 686)
   publish_operation:
     console: required
     agents: []
