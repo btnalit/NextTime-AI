@@ -31,7 +31,8 @@ import {
  *   - 空: 跳过——全新工作区本来就没有系统，`createFreshWorkspace` 之后第 1 步从空开始。
  *   - 错: 第 2 步就是一个：密钥换了、门还拿着旧的，「健康与操作」说未授权，不说健康。表单的字段级
  *     拒绝（端点是平台门、已接入过、带凭据）由 CompleteConnectionForm 的组件测试覆盖。
- *   - 无权限: 第 3 步——暂停后所有者看不到这个门的 Operation，这不是工作区能修的。非所有者看不到
+ *   - 无权限: 第 3、4 步——暂停后所有者的「健康与操作」说平台暂停了它、原因，以及要找平台管理员
+ *     恢复（遗留 674），这不是工作区能修的。非所有者看不到
  *     「重新签发连接密钥」由 SystemAccessCard 的组件测试覆盖。
  *   - 窄屏: 跳过——`00-gates/` 的截图门槛在 768 宽度下截过系统与授权和集成。
  * 成功判据:
@@ -73,6 +74,7 @@ interface GatekeeperDetail {
   readonly health: string;
   readonly operationCount: number;
   readonly operations: readonly { readonly name: string; readonly status: string }[];
+  readonly platformSuspension?: { readonly suspendedAt: string; readonly reason?: string };
 }
 
 /** A capability called from Node as whoever is signed in — setup and reads only. */
@@ -273,20 +275,25 @@ test.describe('Journey ⑬: 接入自己运行的门，换密钥，平台暂停�
     expect(suspended.suspensionReason).toBe(SUSPENSION_REASON);
   });
 
-  test('4. while suspended the owner sees none of its operations', async ({ page }) => {
+  test('4. while suspended the owner is told so, why, and who lifts it', async ({ page }) => {
     expect(gatekeeperId, 'test 1 connected the gate').not.toBe('');
     await signInAsOwner(page);
     await goToByLabel(page, '系统与授权');
     await openHealth(page, '健康');
-    // Today's behaviour, legacy 674 (review of #1046, test steward): the owner gets the generic
-    // empty state — not that the platform suspended this gate, why, or that the platform
-    // administrator is who to ask. Once that is fixed, assert the suspension and its reason here.
-    await expect(page.getByRole('dialog', { name: '健康与操作' })).toContainText(
-      '这个门没有 Operation',
-    );
+    // Legacy 674: not the generic empty state — the platform's suspension, the reason the
+    // administrator gave and who lifts it, above the Operations it keeps.
+    const detail = page.getByRole('dialog', { name: '健康与操作' });
+    await expect(detail).toContainText('平台暂停了这个门');
+    await expect(detail).toContainText(`原因：${SUSPENSION_REASON}`);
+    await expect(detail).toContainText('请找平台管理员恢复它');
+    await expect(detail).not.toContainText('这个门没有 Operation');
+    for (const name of IMPORTED) await expect(detail).toContainText(name);
     const gate = await ownerGatekeeper(page);
-    expect(gate.operations).toEqual([]);
-    expect(gate.operationCount).toBe(0);
+    expect(gate.platformSuspension).toMatchObject({ reason: SUSPENSION_REASON });
+    expect(gate.operations.map((op) => op.name).sort()).toEqual(IMPORTED);
+    expect(gate.operationCount).toBe(2);
+    // When and why, never who: who suspended it stays on the platform side.
+    expect(Object.keys(gate.platformSuspension ?? {}).sort()).toEqual(['reason', 'suspendedAt']);
   });
 
   test('5. the administrator resumes it; the owner’s operations are back', async ({ page }) => {
@@ -317,8 +324,10 @@ test.describe('Journey ⑬: 接入自己运行的门，换密钥，平台暂停�
     await openHealth(page, '健康');
     const detail = page.getByRole('dialog', { name: '健康与操作' });
     await expect(detail).not.toContainText('这个门没有 Operation');
+    await expect(detail).not.toContainText('平台暂停了这个门');
     for (const name of IMPORTED) await expect(detail).toContainText(name);
     const gate = await ownerGatekeeper(page);
+    expect(gate.platformSuspension).toBeUndefined();
     expect(gate.operations.map((op) => op.name).sort()).toEqual(IMPORTED);
     expect(gate.operations.every((op) => op.status === 'draft')).toBe(true);
     expect(gate.operationCount).toBe(2);
