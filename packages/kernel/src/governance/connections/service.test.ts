@@ -182,13 +182,14 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
   it('connectGatekeeper writes a CapabilityGrant scoped to one gatekeeperId', async () => {
     const gatekeeperId = await fixtureGatekeeper('example-system-3');
 
-    const grant = await inTx((client) =>
+    const { grant, created } = await inTx((client) =>
       connectGatekeeper(client, workspaceId, {
         gatekeeperId,
         principalId: memberId,
         grantedBy: ownerId,
       }),
     );
+    expect(created).toBe(true);
     expect(grant.principalId).toBe(memberId);
     expect(grant.resourceType).toBe('gatekeeper');
     expect(grant.resourceId).toBe(gatekeeperId);

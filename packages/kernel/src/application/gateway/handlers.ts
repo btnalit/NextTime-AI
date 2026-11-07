@@ -103,7 +103,7 @@ import {
 import {
   ReviewedVersionChangedError,
   WORKER_CEILING_CAPABILITIES,
-  grantCapability,
+  ensureCapabilityGrant,
   listGrants,
   revokeCapabilityGrant,
 } from '../../governance/capability/index.js';
@@ -1941,13 +1941,20 @@ const grantCapabilityHandler: CapabilityHandler = async (client, workspaceId, pa
     resourceId: string;
   };
   const grantedBy = await currentPrincipalId(client);
-  const result = await grantCapability(client, workspaceId, {
+  const { grant, created } = await ensureCapabilityGrant(client, workspaceId, {
     principalId,
     resourceType,
     resourceId,
     grantedBy,
   });
-  return { result: toWireGrant(result), resourceType: 'capability_grant', resourceId: result.id };
+  return {
+    result: toWireGrant(grant),
+    resourceType: 'capability_grant',
+    resourceId: grant.id,
+    // Legacy 647: granting what is already held returns that grant and changes nothing; the call's
+    // own audit row says so.
+    ...(created ? {} : { auditPayload: { alreadyGranted: true } }),
+  };
 };
 
 const revokeCapabilityHandler: CapabilityHandler = async (client, workspaceId, params) => {

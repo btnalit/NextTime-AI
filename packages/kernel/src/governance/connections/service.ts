@@ -1,8 +1,8 @@
 import type { PrincipalKind } from '@nexttime/shared';
 import { CONNECTION_REQUEST_TRANSITIONS, transition } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import type { CapabilityGrantRow } from '../../governance/capability/index.js';
-import { grantCapability } from '../../governance/capability/index.js';
+import type { CapabilityGrantOutcome } from '../../governance/capability/index.js';
+import { ensureCapabilityGrant } from '../../governance/capability/index.js';
 import { GatekeeperNotFoundError, getGatekeeper } from '../../governance/gatekeepers/index.js';
 import type { GatekeeperRecord } from '../../governance/gatekeepers/index.js';
 import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
@@ -40,7 +40,7 @@ import {
  * `kernel-adapters-imported-only-by-application-or-interfaces`): the manifest fetch and the
  * credential POST to the gate happen in `application/gateway/connection-handlers.ts`.
  *
- * **Sibling-module calls, not internals**: `grantCapability` (`governance/capability`) is called
+ * **Sibling-module calls, not internals**: `ensureCapabilityGrant` (`governance/capability`) is called
  * through its published service interface — the same pattern `governance/approval` uses for
  * `governance/policy`/`governance/capability` (§7.10 module contract: modules "互相调用公开接口，不
  * 互相读表").
@@ -307,12 +307,15 @@ export interface ConnectGatekeeperInput {
  *
  * Throws `GatekeeperNotFoundError` if `gatekeeperId` does not name a registered Gatekeeper Object
  * — this Grant would otherwise silently name a resource that can never exist.
+ *
+ * Once (legacy 647): a Principal already granted this Gatekeeper gets that grant back, unchanged
+ * (`ensureCapabilityGrant`, `created: false`) — whether it came from here or `grant_capability`.
  */
 export async function connectGatekeeper(
   client: PoolClient,
   workspaceId: string,
   input: ConnectGatekeeperInput,
-): Promise<CapabilityGrantRow> {
+): Promise<CapabilityGrantOutcome> {
   const gatekeeper: GatekeeperRecord | null = await getGatekeeper(
     client,
     workspaceId,
@@ -320,7 +323,7 @@ export async function connectGatekeeper(
   );
   if (!gatekeeper) throw new GatekeeperNotFoundError(input.gatekeeperId);
 
-  return grantCapability(client, workspaceId, {
+  return ensureCapabilityGrant(client, workspaceId, {
     principalId: input.principalId,
     resourceType: GATEKEEPER_RESOURCE_SCOPE_KEY,
     resourceId: input.gatekeeperId,

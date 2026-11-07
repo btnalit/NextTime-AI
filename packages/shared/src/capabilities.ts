@@ -1020,7 +1020,8 @@ const connectionCapabilities = [
     minRole: 'owner',
     paramsSchema: z.object({ gatekeeperId: id, principalId: id }).strict(),
     resultSchema: wire.CapabilityGrantWireSchema,
-    description: 'Grant a user’s entry agent use of an existing Gatekeeper (a CapabilityGrant).',
+    description:
+      'Grant a user’s entry agent use of an existing Gatekeeper (a CapabilityGrant). A user already granted that Gatekeeper (here or with grant_capability) gets that grant back, same id, and nothing changes.',
   },
   {
     // S2.13 addition: the owner-facing queue `request_connection` cards land in — same "list a
@@ -2163,7 +2164,7 @@ const governanceCapabilities = [
       .strict(),
     resultSchema: wire.CapabilityGrantWireSchema,
     description:
-      'Grant a Principal access to one Gatekeeper: resourceType "gatekeeper" with that Gatekeeper’s id as resourceId (no wildcard, no other resource types).',
+      'Grant a Principal access to one Gatekeeper: resourceType "gatekeeper" with that Gatekeeper’s id as resourceId (no wildcard, no other resource types). A Principal holds one active grant of a Gatekeeper: granting it again (here or with connect_gatekeeper) returns that grant, same id, and changes nothing.',
   },
   {
     name: 'revoke_capability',

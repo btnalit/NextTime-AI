@@ -22,7 +22,7 @@ ratchet:
   console_unexplained: 10
   kernel_test_missing: 6
   e2e_waived: 87
-  repeat_unclear: 135
+  repeat_unclear: 133
 capabilities:
   add_eval_case:
     console: required
@@ -138,7 +138,7 @@ capabilities:
   connect_gatekeeper:
     console: "none: 待说明（2026-11-06 盘点）"
     agents: []
-    repeat: "unclear: 664"
+    repeat: idempotent
   create_connection:
     console: required
     agents: []
@@ -361,7 +361,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: idempotent
   graph_freshness:
     console: required
     agents: [admin]

@@ -692,7 +692,7 @@ export const connectGatekeeperHandler: CapabilityHandler = async (
   const { gatekeeperId, principalId } = params as { gatekeeperId: string; principalId: string };
   const grantedBy = ctx?.principalId ?? (await currentPrincipalId(client));
 
-  const grant = await connectGatekeeper(client, workspaceId, {
+  const { grant, created } = await connectGatekeeper(client, workspaceId, {
     gatekeeperId,
     principalId,
     grantedBy,
@@ -702,6 +702,8 @@ export const connectGatekeeperHandler: CapabilityHandler = async (
     result: toWireGrant(grant),
     resourceType: 'capability_grant',
     resourceId: grant.id,
+    // Legacy 647: as `grant_capability` — a Gatekeeper already granted returns that grant.
+    ...(created ? {} : { auditPayload: { alreadyGranted: true } }),
   };
 };
 

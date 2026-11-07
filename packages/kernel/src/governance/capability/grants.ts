@@ -122,20 +122,48 @@ export interface GrantCapabilityInput {
   readonly expiresAt?: Date;
 }
 
-export async function grantCapability(
+/** What granting a scope did: `created` false when the Principal already held an active grant of
+ *  it, in which case `grant` is that one, unchanged. */
+export interface CapabilityGrantOutcome {
+  readonly grant: CapabilityGrantRow;
+  readonly created: boolean;
+}
+
+/**
+ * Grants `input.principalId` one scope (`resourceType` × `resourceId`) — once (legacy 647). A
+ * Principal holds at most one active grant of a scope (migrations/governance/0041's unique index),
+ * so granting what is already held returns the grant held, as it is (its grantor, time and expiry),
+ * and writes nothing: no second row, and no Handle reissued, since nothing was widened. A grant
+ * revoked or expired does not hold the scope; granting it again creates a new grant.
+ *
+ * An active row past its `expires_at` no longer grants anything (`MATCHING_GRANT_WHERE`) but still
+ * holds the scope's one place in the index, which cannot read the clock — so it is marked `expired`
+ * first (active → expired, design §5.5), and the new grant takes its place.
+ *
+ * Two grants of one scope racing: the insert names the index as its arbiter (`on conflict ... do
+ * nothing`), so the one that loses waits for the other to commit and then returns its grant.
+ */
+export async function ensureCapabilityGrant(
   client: PoolClient,
   workspaceId: string,
   input: GrantCapabilityInput,
-): Promise<CapabilityGrantRow> {
-  const result = await client.query<CapabilityGrantDbRow>(
+): Promise<CapabilityGrantOutcome> {
+  const scope = [workspaceId, input.principalId, input.resourceType, input.resourceId ?? null];
+  const sameScope = `workspace_id = $1 and principal_id = $2 and resource_type = $3
+       and resource_id is not distinct from $4::uuid and status = 'active'`;
+  await client.query(
+    `update capability_grants set status = 'expired'
+     where ${sameScope} and expires_at is not null and expires_at <= now()`,
+    scope,
+  );
+  const inserted = await client.query<CapabilityGrantDbRow>(
     `insert into capability_grants (workspace_id, principal_id, resource_type, resource_id, scope, granted_by, expires_at)
-     values ($1, $2, $3, $4, $5::jsonb, $6, $7)
+     values ($1, $2, $3, $4::uuid, $5::jsonb, $6, $7)
+     on conflict (workspace_id, principal_id, resource_type, resource_id) where status = 'active'
+     do nothing
      returning ${GRANT_COLUMNS}`,
     [
-      workspaceId,
-      input.principalId,
-      input.resourceType,
-      input.resourceId ?? null,
+      ...scope,
       // New grants never carry a `scope` (leftover 80, 2026-09-25): nothing reads it, the column
       // stays only for historical rows.
       '{}',
@@ -143,8 +171,18 @@ export async function grantCapability(
       input.expiresAt ?? null,
     ],
   );
-  const row = result.rows[0];
-  if (!row) throw new Error('grantCapability: INSERT ... RETURNING produced no row');
+  const row = inserted.rows[0];
+  if (!row) {
+    const held = await client.query<CapabilityGrantDbRow>(
+      `select ${GRANT_COLUMNS} from capability_grants where ${sameScope}`,
+      scope,
+    );
+    const heldRow = held.rows[0];
+    if (!heldRow) {
+      throw new Error('grantCapability: the insert met an active grant of this scope, then none');
+    }
+    return { grant: mapGrantRow(heldRow), created: false };
+  }
   const mapped = mapGrantRow(row);
 
   // Item 4 fix: a new `'gatekeeper'` Grant widens what this principal may reach through their
@@ -155,7 +193,16 @@ export async function grantCapability(
   if (mapped.resourceType === GATEKEEPER_GRANT_CAPABILITY) {
     await revokeGateGrantScopedSessionHandles(client, workspaceId, mapped.principalId);
   }
-  return mapped;
+  return { grant: mapped, created: true };
+}
+
+/** `ensureCapabilityGrant`'s grant alone: the new one, or the one already held. */
+export async function grantCapability(
+  client: PoolClient,
+  workspaceId: string,
+  input: GrantCapabilityInput,
+): Promise<CapabilityGrantRow> {
+  return (await ensureCapabilityGrant(client, workspaceId, input)).grant;
 }
 
 export class GrantNotFoundError extends Error {
