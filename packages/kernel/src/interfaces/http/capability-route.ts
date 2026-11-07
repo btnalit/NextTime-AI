@@ -52,6 +52,7 @@ import {
 import {
   ChatArchivedError,
   ChatNotFoundError,
+  IdempotencyKeyReusedError,
   TurnAlreadyRunningError,
 } from '../../application/chat/index.js';
 import {
@@ -533,6 +534,10 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof ChatNotFoundError) {
     return { status: 404, code: 'chat_not_found', message: err.message };
+  }
+  // Legacy 673: a `send_chat_message` key that names another message (application/chat/service.ts).
+  if (err instanceof IdempotencyKeyReusedError) {
+    return { status: 409, code: err.code, message: err.message, details: { ...err.details } };
   }
   // Lane-4 P2 fix (docs/development-tasks.md "Unmapped error classes → 500"): `report_turn`'s own
   // `turnId` lookup failure and `record_decision`'s "no currently-running Turn to attribute this

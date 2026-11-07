@@ -969,6 +969,37 @@ describe.runIf(DATABASE_URL !== undefined)(
       client.close();
     });
 
+    // Legacy 673: the console resends a message it gave up on with the same key. The resend
+    // returns the message already sent, and the connection does not deliver it twice: its push
+    // carries the same sequence, which this socket already delivered (`shouldDeliver`), and it is
+    // published before the resend's own response is sent.
+    it('send_chat_message resent with its idempotencyKey returns the message sent and pushes it once', async () => {
+      const client = await WsRpcClient.connect(wsUrl, { authorization: `Bearer ${ownerApiKey}` });
+      const chatId = await newChat(client);
+      await client.call('subscribe_chat', { chatId });
+      const params = { chatId, text: 'sent once', idempotencyKey: randomUUID() };
+
+      const first = await client.call<{ messageId: string; changed: boolean }>(
+        'send_chat_message',
+        params,
+      );
+      const again = await client.call<{ messageId: string; changed: boolean }>(
+        'send_chat_message',
+        params,
+      );
+
+      expect(first.changed).toBe(true);
+      expect(again).toMatchObject({ messageId: first.messageId, changed: false });
+      const pushesOfIt = client.notifications.filter(
+        (n) =>
+          n.method === 'chat.message' &&
+          (n.params as { message: { id: string } }).message.id === first.messageId,
+      );
+      expect(pushesOfIt).toHaveLength(1);
+
+      client.close();
+    });
+
     // Legacy 320 (UX acceptance of #602): the console's composer sends over this transport, so
     // pasted text holding U+0000 must come back as its own code naming the field, not as
     // INVALID_PARAMS — and nothing is written, so the chat takes the next message as usual.
