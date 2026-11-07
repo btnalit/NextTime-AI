@@ -54,10 +54,20 @@ describe('ActingThroughChip', () => {
 
     localStorage.setItem('nexttime.lang', 'en');
     const { rerender: rerenderEn } = render(chip('service_handle'));
-    expect(shown().textContent).toBe('Via Service account');
+    expect(shown().textContent).toBe('Via service account');
     // UX P3-1 on #1035: "Through In person" did not read.
     rerenderEn(chip('person'));
     expect(shown().textContent).toBe('In person');
+    // UX P3-1 on #1038: the channel reads lower-case inside the sentence, a proper noun does not,
+    // and an unrecorded row says only that.
+    rerenderEn(chip('entry_agent'));
+    expect(shown().textContent).toBe('Via entry agent');
+    rerenderEn(chip('worker_handle'));
+    expect(shown().textContent).toBe('Via Worker');
+    rerenderEn(chip(null));
+    expect(shown().textContent).toBe('Not recorded');
+    rerenderEn(chip('admin_agent_session'));
+    expect(screen.getByTestId('audit-admin-agent').textContent).toBe('Via admin agent');
   });
 
   it('legacy 666: names the Worker or service account it came through, when the row does', () => {

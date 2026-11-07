@@ -14,16 +14,27 @@ import { ownEntry } from './own.js';
 interface BilingualLabel {
   readonly zh: string;
   readonly en: string;
+  /** The English name inside a sentence ("Via admin agent"), where it is not the same as `en`
+   *  (UX P3-1 on #1038): a common noun goes lower-case there, a proper one (Worker, MCP) does not. */
+  readonly enInline?: string;
 }
 
 const ACTING_THROUGH_LABELS: Readonly<Record<AuditActingThrough, BilingualLabel>> = {
   person: { zh: '本人', en: 'In person' },
-  admin_agent_session: { zh: '管理员智能体', en: 'Admin agent' },
-  entry_agent: { zh: '入口智能体', en: 'Entry agent' },
+  admin_agent_session: { zh: '管理员智能体', en: 'Admin agent', enInline: 'admin agent' },
+  entry_agent: { zh: '入口智能体', en: 'Entry agent', enInline: 'entry agent' },
   worker_handle: { zh: 'Worker', en: 'Worker' },
-  service_handle: { zh: '服务账号', en: 'Service account' },
-  member_handle: { zh: '成员的 MCP 会话', en: 'Member’s MCP session' },
-  system: { zh: '平台后台任务', en: 'Platform background work' },
+  service_handle: { zh: '服务账号', en: 'Service account', enInline: 'service account' },
+  member_handle: {
+    zh: '成员的 MCP 会话',
+    en: 'Member’s MCP session',
+    enInline: 'member’s MCP session',
+  },
+  system: {
+    zh: '平台后台任务',
+    en: 'Platform background work',
+    enInline: 'platform background work',
+  },
 };
 
 /** Every value, in the order the filter offers them: the person first, the platform last. */
@@ -48,18 +59,21 @@ export function actingThroughFilterNote(value: string, t: Translate): string {
       );
 }
 
-/** What a row's chip says: 「经由 …」, and in English "In person" or "Via …" (UX P3-1 on #1035:
- *  "Through In person" does not read). `name` (legacy 666, the wire's `actingName`): the Worker or
- *  service account the act came through, after the channel. */
+/** What a row's chip says: 「经由 …」, and in English "In person", "Via …" with the channel as it
+ *  reads inside a sentence, or "Not recorded" (UX P3-1 on #1035 and #1038). `name` (legacy 666,
+ *  the wire's `actingName`): the Worker or service account the act came through, after the
+ *  channel. */
 export function actingThroughChipText(
   value: string | null | undefined,
   name: string | null | undefined,
   t: Translate,
 ): string {
-  const label = actingThroughLabel(value, t);
-  const named = name ? `${label} · ${name}` : label;
-  if (value === 'person') return t(`经由 ${named}`, named);
-  return t(`经由 ${named}`, `Via ${named}`);
+  const suffix = name ? ` · ${name}` : '';
+  const zh = `经由 ${actingThroughLabel(value, (zhText) => zhText)}${suffix}`;
+  if (value === null || value === undefined) return t(zh, 'Not recorded');
+  if (value === 'person') return t(zh, `In person${suffix}`);
+  const entry = ownEntry(ACTING_THROUGH_LABELS, value);
+  return t(zh, `Via ${entry ? (entry.enInline ?? entry.en) : value}${suffix}`);
 }
 
 /** A value's name; `null` (a row from before it was recorded, or written outside any call) is
