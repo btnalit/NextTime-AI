@@ -2543,6 +2543,24 @@ describe.runIf(DATABASE_URL !== undefined)(
             const gate = reach.gates.find((g) => g.gateId === selfGatekeeperId);
             expect(gate?.status).toBe('unreachable');
             expect(gate?.reason).toBe('disabled_by_platform');
+            // Legacy 674: the owner's own read says it is the platform's suspension, when and why
+            // — never who — and still lists what is kept.
+            const shownSuspended = await dispatchCapability(
+              { pool },
+              humanCallerFor(cWorkspaceId, cOwnerId, 'owner'),
+              'get_gatekeeper',
+              { gatekeeperId: selfGatekeeperId },
+            );
+            expect(shownSuspended).toMatchObject({
+              platformSuspension: { suspendedAt: suspended.suspendedAt, reason: 'under review' },
+              operations: expect.arrayContaining([expect.objectContaining({ name: SELF_OP.name })]),
+            });
+            const { operations: keptOperations, operationCount: keptCount } = shownSuspended as {
+              operations: unknown[];
+              operationCount: number;
+            };
+            expect(keptCount).toBe(keptOperations.length);
+            expect(JSON.stringify(shownSuspended)).not.toContain(admin.login);
             const connectors = await callAsAdmin<ListEnvelope<ConnectorWire>>('list_connectors');
             expect(
               connectors.items.find((c) => c.name === 'http')?.suspendedSelfConnectionCount,
@@ -2640,6 +2658,13 @@ describe.runIf(DATABASE_URL !== undefined)(
             });
           }
           await expect(observeSelf()).resolves.toBeDefined();
+          const shownResumed = await dispatchCapability(
+            { pool },
+            humanCallerFor(cWorkspaceId, cOwnerId, 'owner'),
+            'get_gatekeeper',
+            { gatekeeperId: selfGatekeeperId },
+          );
+          expect(shownResumed).not.toHaveProperty('platformSuspension');
           const after = await reachForMember();
           expect(operationReachability(after, selfGatekeeperId, 'observe', SELF_OP.name)).toEqual({
             status: 'direct',

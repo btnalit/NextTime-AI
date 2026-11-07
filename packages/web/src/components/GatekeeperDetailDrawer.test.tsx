@@ -48,6 +48,64 @@ describe('GatekeeperDetailDrawer', () => {
     expect(screen.getByText('docker.restart')).toBeTruthy();
   });
 
+  it('legacy 674: a self-connected gate the platform suspended says so, why, and who lifts it, and keeps its operations listed', async () => {
+    const http = callerReturning({
+      id: 'gk-1',
+      name: 'notes',
+      kind: 'http',
+      status: 'active',
+      operationCount: 2,
+      createdAt: '2026-09-01T00:00:00.000Z',
+      operations: [
+        { name: 'notes.list', status: 'published', mode: 'observe' },
+        { name: 'notes.archive', status: 'published', mode: 'execute' },
+      ],
+      health: 'ok',
+      platformSuspension: { suspendedAt: '2026-11-07T09:00:00.000Z', reason: '安全审查中' },
+    });
+    renderDrawer(http);
+    const notice = await screen.findByTestId('gatekeeper-platform-suspension');
+    expect(notice.textContent).toContain('平台暂停了这个门');
+    expect(notice.textContent).toContain('原因：安全审查中');
+    expect(notice.textContent).toContain('请找平台管理员恢复它');
+    expect(screen.getByText('notes.list')).toBeTruthy();
+    expect(screen.getByText('notes.archive')).toBeTruthy();
+    expect(screen.queryByText('这个门没有 Operation')).toBeNull();
+  });
+
+  it('legacy 674: a suspension with no reason says none was given', async () => {
+    const http = callerReturning({
+      id: 'gk-1',
+      name: 'notes',
+      kind: 'http',
+      status: 'active',
+      operationCount: 0,
+      createdAt: '2026-09-01T00:00:00.000Z',
+      operations: [],
+      health: 'ok',
+      platformSuspension: { suspendedAt: '2026-11-07T09:00:00.000Z' },
+    });
+    renderDrawer(http);
+    const notice = await screen.findByTestId('gatekeeper-platform-suspension');
+    expect(notice.textContent).toContain('平台管理员没有写原因');
+  });
+
+  it('shows no suspension note for a gate the platform has not suspended', async () => {
+    const http = callerReturning({
+      id: 'gk-1',
+      name: 'notes',
+      kind: 'http',
+      status: 'active',
+      operationCount: 0,
+      createdAt: '2026-09-01T00:00:00.000Z',
+      operations: [],
+      health: 'ok',
+    });
+    renderDrawer(http);
+    await screen.findByTestId('gatekeeper-health');
+    expect(screen.queryByTestId('gatekeeper-platform-suspension')).toBeNull();
+  });
+
   it('legacy 232: an old Operation name with a hidden character shows it as \\u{XXXX}', async () => {
     const http = callerReturning({
       id: 'gk-1',
