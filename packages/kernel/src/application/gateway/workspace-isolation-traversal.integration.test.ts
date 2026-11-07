@@ -88,23 +88,29 @@ describe.runIf(DATABASE_URL !== undefined)(
     async function walk(
       caller: ResolvedCaller,
       paramsOf: (capability: Capability) => Record<string, unknown>,
-      forbiddenOf: (capability: Capability, params: Record<string, unknown>) => readonly string[],
+      forbiddenOf: (
+        capability: Capability,
+        params: Record<string, unknown>,
+        answered: boolean,
+      ) => readonly string[],
     ): Promise<{ answered: Set<string>; hits: string[] }> {
       const answered = new Set<string>();
       const hits: string[] = [];
       for (const capability of WORKSPACE_READS) {
         const params = paramsOf(capability);
         let text: string;
+        let ok = true;
         try {
           const result = await dispatchCapability({ pool }, caller, capability.name, params);
           answered.add(capability.name);
           text = JSON.stringify(result) ?? '';
         } catch (error) {
           // Refused, or params the builder could not satisfy: not an answer, but still checked.
+          ok = false;
           const { message, details } = mapCapabilityError(error);
           text = JSON.stringify({ message, details });
         }
-        for (const value of forbiddenOf(capability, params)) {
+        for (const value of forbiddenOf(capability, params, ok)) {
           if (text.includes(value)) {
             hits.push(`${capability.name}(${JSON.stringify(params)}) → ${value}`);
           }
@@ -151,17 +157,17 @@ describe.runIf(DATABASE_URL !== undefined)(
         () => [a.marker, a.workspaceId, ...seededIds(a)],
       );
       // Pass 2, `byId`'s params. The full marker (no param holds more than its first half) and
-      // A's workspace id (no param names it) may
-      // never come back. Of A's row ids, one this call passed may be echoed ("<id> not found");
-      // any other may not. Except in the audit reads: each B call is itself audited in B with its
-      // params (dispatch.ts), so B's audit now holds A's ids as B's record of what B asked — B's
-      // data, not A's.
-      const fetched = await walk(ownerB, byId, (capability, params) => [
+      // A's workspace id (no param names it) may never come back. Nor may any of A's row ids in an
+      // answer — a read that handed back A's row as just `{id, status}` carries no marker — except
+      // in the audit reads: each B call is itself audited in B with its params (dispatch.ts), so
+      // B's audit holds A's ids as B's record of what B asked, B's data, not A's. An error may
+      // echo an id the call itself passed ("<id> not found"); any other of A's ids, never.
+      const fetched = await walk(ownerB, byId, (capability, params, answered) => [
         a.marker,
         a.workspaceId,
         ...(capability.group === 'audit'
           ? []
-          : seededIds(a).filter((id) => !JSON.stringify(params).includes(id))),
+          : seededIds(a).filter((id) => answered || !JSON.stringify(params).includes(id))),
       ]);
 
       expect([...listed.hits, ...fetched.hits]).toEqual([]);
