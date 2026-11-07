@@ -157,6 +157,8 @@ const ENTRY_CEILING_EXTRA_CAPABILITY_NAMES = [
   'list_goals',
   'get_goal_revision',
   'list_goal_unresolved_actions',
+  // S11 GO17: the obo's own earlier goals of the same kind, read before writing a plan.
+  'find_goal_precedents',
   // S10 E3-3 (I-E4, §5.5 封闭 / 防噪): how the evaluations of its person's own Skill drafts came
   // out, on the dev cases only — read before proposing a Skill's next version.
   'get_skill_draft_verdicts',

@@ -390,6 +390,8 @@ WorkerSpec 可声明观察允许的门集合，推进器把它作为 Task 级的
 执行类动作所在的步骤，若目标对象的最近观察早于新鲜度窗口，先观察再提交（W2 起可在准入里强制）。`precedents` 与历史经验召回放 W4。
 先例（GO17）引用完整记录而不是摘要：PlanRevision、目标结果与 `basis`、证据 Observation id；只有 `verified_by_check` 且未被覆盖的作为正例，
 `overriddenChecks` 与 `not_achieved` 标为反例；先例只从当前请求人能看到的目标里取，用 GO5a / 遗留 421 的同一个可见性谓词（2026-10-23 补）。
+GO17a（2026-11-07，`s11-w4/go17-default-plan.md` F2 A）收得更窄：只取请求人自己发起的目标，请求人是 owner 也一样——owner 在控制台看得到别人的目标，
+但别人的计划不进 owner 的 agent 上下文；同类只按结构认（同一 Procedure，或计划里有同一 Worker 家族），已取消的不算；没被平台验证、只凭人的话达成的标 `unverified`。
 
 ### 4.14 控制台（随各波次交付，不允许"后端先上、界面以后补"）
 

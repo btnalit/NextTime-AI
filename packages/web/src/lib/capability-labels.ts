@@ -735,6 +735,14 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '读取目标计划的某一个版本：当时的计划、谁改的、为什么改。',
     enHint: "Reads one revision of a goal's plan: the plan as it stood, who made it and why.",
   },
+  find_goal_precedents: {
+    zh: '查找同类目标的先例',
+    en: 'Find goal precedents',
+    zhHint:
+      '找出发起人自己以前做过、已有结果的同类目标，带当时的计划、结果和验收情况，供写新计划时参考。',
+    enHint:
+      "Finds the requester's own earlier goals of the same kind that ended with an outcome, with their plan, outcome and checks, to consult when writing a new plan.",
+  },
   list_goal_unresolved_actions: {
     zh: '查看目标待核对的动作',
     en: 'List goal actions to check',

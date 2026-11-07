@@ -338,9 +338,10 @@ describe('computeChildHandleScope', () => {
       'list_goals',
       'get_goal_revision',
       'list_goal_unresolved_actions',
+      'find_goal_precedents',
     ];
 
-    it("a member's entry Handle holds propose_goal and the four goal reads, and no goal operation", () => {
+    it("a member's entry Handle holds propose_goal and the goal reads, and no goal operation", () => {
       const entry = entryScope({}, { role: 'member' });
       expect(goalCapabilities.filter((name) => entry.capabilities.includes(name)).sort()).toEqual(
         [...entryGoalNames].sort(),

@@ -247,6 +247,9 @@ capabilities:
   extra_packs_status:
     console: required
     agents: []
+  find_goal_precedents:
+    console: "none: agent 写计划前查同类目标的先例；人在控制台「目标」列表与详情页看同一批目标"
+    agents: [entry]
   find_operations:
     console: "none: agent 的手段发现；人在控制台按「能力目录」各页浏览同一批对象"
     agents: [entry, admin]

@@ -485,6 +485,55 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect((await liveStep(goalRunId, 'renew')).id).toBe(step.id);
     });
 
+    it("S11 GO17: the planner's input holds the requester's own earlier goals of the same kind, as records", async () => {
+      const requester = await newPrincipal('member');
+      const someoneElse = await newPrincipal('member');
+      /** An ended goal of `by` whose one step ran `worker` — the write paths are other files'. */
+      const ended = async (by: string, outcome: string, basis: string) => {
+        const [row] = await raw<{ id: string }>(
+          `insert into goal_runs (workspace_id, status, outcome, outcome_basis, on_behalf_of,
+             statement, current_revision, confirmed_at, budget_max_tokens, budget_max_steps,
+             budget_max_revisions, budget_max_wall_clock_seconds, ended_at)
+           values ($1, 'completed', $2, $3, $4, 'renew the certificate last time', 1, now(),
+                   100000, 10, 3, 3600, now()) returning id`,
+          [workspaceId, outcome, basis, by],
+        );
+        const id = row?.id as string;
+        await raw(
+          `insert into plan_revisions (workspace_id, goal_run_id, revision, status, plan,
+             proposed_by, decided_by, decided_at)
+           values ($1, $2, 1, 'accepted', $3, $4, $4, now())`,
+          [workspaceId, id, JSON.stringify(planOf([{ key: 'renew' }])), by],
+        );
+        await raw(
+          `insert into step_runs (workspace_id, goal_run_id, step_key, introduced_in_revision,
+             status, attempt_count, ended_at)
+           values ($1, $2, 'renew', 1, 'succeeded', 1, now())`,
+          [workspaceId, id],
+        );
+        return id;
+      };
+      const first = await ended(requester, 'achieved', 'verified_by_check');
+      const notMine = await ended(someoneElse, 'not_achieved', 'requester');
+
+      const { goalRunId } = await failedForPerson(requester);
+      const [round] = await rounds(goalRunId);
+      if (!round) throw new Error('no round');
+      const input = (await plannerTask(round.id)).input as {
+        precedents: { goalRunId: string; match: string; polarity: string; plan: unknown }[];
+      };
+      expect(input.precedents.map((precedent) => precedent.goalRunId)).toEqual([first]);
+      expect(input.precedents[0]).toMatchObject({
+        match: 'worker',
+        polarity: 'positive',
+        outcome: 'achieved',
+        outcomeBasis: 'verified_by_check',
+        steps: [{ key: 'renew', status: 'succeeded' }],
+      });
+      expect(JSON.stringify(input.precedents)).not.toContain(notMine);
+      expect(input.precedents.map((precedent) => precedent.goalRunId)).not.toContain(goalRunId);
+    });
+
     it('the planner proposes another Worker; the requester accepts and resumes; the goal reaches done the other way', async () => {
       const requester = await newPrincipal('member');
       const { goalRunId } = await failedForPerson(requester);

@@ -7,7 +7,7 @@ import type {
   Role,
   WorkerDefinitionKind,
 } from '@nexttime/shared';
-import { getCapability, storableValue } from '@nexttime/shared';
+import { GOAL_PRECEDENT_CONTEXT_LIMIT, getCapability, storableValue } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   adminAgentRefusal,
@@ -156,7 +156,7 @@ import {
   SqlGraphStore,
   objectDisplayName,
 } from '../../substrate/graph/index.js';
-import { goalVisibleTo } from '../goal/index.js';
+import { goalVisibleTo, readRecentGoalPrecedents } from '../goal/index.js';
 import {
   listRuntimeImagesHandler,
   piDriftHandler,
@@ -308,6 +308,7 @@ import {
   confirmGoalHandler,
   decidePlanRevisionHandler,
   endGoalHandler,
+  findGoalPrecedentsHandler,
   getGoalHandler,
   getGoalRevisionHandler,
   goalViewer,
@@ -972,8 +973,10 @@ const renameChatHandler: CapabilityHandler = async (client, workspaceId, params,
  * `tasks`/`pendingApprovals` are populated from `application/linkage`'s `pending_context_items` —
  * Task outcomes, budget warnings (≥80%) and `waiting_approval` notices (`tasks` bucket), and
  * ActionRequest status changes this principal is the requester of (`pendingApprovals` bucket).
- * `precedents` remains S3 scope (no Procedure/Skill graph content exists yet to precedent-match
- * against).
+ * S11 GO17: `precedents` are the principal's most recently ended goals (`application/goal`
+ * `precedents.ts` — only their own, whatever their role), as references; `find_goal_precedents`
+ * reads the records. They change only when one of their goals ends, so a mid-Turn update rarely
+ * carries them.
  *
  * Delivery (2026-10-02 review R-57, maintainer decision D-23): pi's `context` event fires before
  * every LLM call and its injection is not persisted, so a read must not consume.
@@ -1016,7 +1019,12 @@ const getEntryContextHandler: CapabilityHandler = async (client, workspaceId, pa
       tasks: items.tasks,
       facts: facts.map(toWireFact),
       factCountsByLinkType,
-      precedents: [],
+      precedents: await readRecentGoalPrecedents(
+        client,
+        workspaceId,
+        (await goalViewer(client, ctx)).principalId,
+        GOAL_PRECEDENT_CONTEXT_LIMIT,
+      ),
     },
   };
 };
@@ -2722,6 +2730,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   // S11 GO5a goal reads (goal-handlers.ts)
   ['get_goal', getGoalHandler],
   ['list_goals', listGoalsHandler],
+  ['find_goal_precedents', findGoalPrecedentsHandler],
   ['get_goal_revision', getGoalRevisionHandler],
   ['list_goal_unresolved_actions', listGoalUnresolvedActionsHandler],
   // S11 GO5c proposing a goal run (goal-handlers.ts)
