@@ -298,11 +298,14 @@ jobs:
 
       # P-B2a: the generic gate host and the fixture MCP server the hosted-instance e2e targets
       # (deploy/ci/docker-compose.ci.yml). gate-host depends on a healthy kernel (it pulls its
-      # instance list from the internal plane), hence after the step above.
-      - name: Start gate-host and fixture-mcp
+      # instance list from the internal plane), hence after the step above. Legacy 671: the
+      # self-connected gate journeys/13 connects starts with them, holding no secret yet (it
+      # refuses every call until the journey writes one — "Prepare the self-connected gate's
+      # secret script" below).
+      - name: Start gate-host, fixture-mcp and ci-self-gate
         run: |
           sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
-            up -d --wait gate-host fixture-mcp
+            up -d --wait gate-host fixture-mcp ci-self-gate
 
       # caddy has no `healthcheck:` in docker-compose.yml, so `up --wait` above only confirms it
       # is running, not that its reverse proxy to kernel (and its own on-demand TLS issuance) is
@@ -725,6 +728,50 @@ jobs:
           SH
           } >"$RUNNER_TEMP/switch-workspace.sh"
           echo "E2E_SWITCH_WORKSPACE_CMD=$RUNNER_TEMP/switch-workspace.sh" >>"$GITHUB_ENV"
+
+      # Legacy 671: journeys/13 connects ci-self-gate from the console the way an owner connects a
+      # gate they run themselves — the console mints a connection secret and shows it once, and the
+      # owner puts it in the gate's GATE_KERNEL_TOKEN_FILE. This script is that last step: the
+      # secret on stdin (never argv), written for the gate's uid (10001) to read, replacing the
+      # file whole. The gate re-reads the file on every request, so a rotated secret needs no
+      # restart. The data root is baked in at this step; the token directory is the one
+      # deploy/ci/docker-compose.ci.yml mounts read-only into the gate.
+      - name: Prepare the self-connected gate and announce scripts (journeys/13, legacy 671)
+        run: |
+          set -euo pipefail
+          token_dir="$NEXTTIME_DATA/ci-self-gate"
+          sudo mkdir -p "$token_dir"
+          cat >"$RUNNER_TEMP/set-self-gate-secret.sh" <<SH
+          set -eu
+          sudo -n sh -c 'umask 077; cat >"\$1.tmp" && chown 10001:10001 "\$1.tmp" && mv "\$1.tmp" "\$1"' sh "$token_dir/kernel.token"
+          SH
+          echo "E2E_SET_SELF_GATE_SECRET_CMD=$RUNNER_TEMP/set-self-gate-secret.sh" >>"$GITHUB_ENV"
+          # journeys/13's last step: a platform administrator adopts a gate instance's new manifest
+          # (`confirm_gate_manifest`). A changed announcement is held for review only for an
+          # instance the administrator already decided on, so the journey announces its own
+          # instance (never ci-fixture-mcp, whose heartbeat above re-announces the manifest in
+          # effect and would clear a held one), decides it, then announces it again with one more
+          # Operation. `<script> <body.json>`: the same announce as "Seed a discovered gate
+          # instance" — the packaged gates' credential on stdin, from inside gate-host for its
+          # network position — with the journey's own body.
+          cat >"$RUNNER_TEMP/announce-gate.js" <<'JS'
+          const fs = require("node:fs");
+          const token = fs.readFileSync(0, "utf8").trim();
+          fetch("http://kernel:8080/internal/gates/announce", { method: "POST",
+          headers: { "content-type": "application/json", authorization: "Bearer " + token },
+          body: process.env.GATE_ANNOUNCE_BODY })
+          .then(async (r) => { const text = await r.text(); console.error(r.status, text); if (!r.ok) process.exit(1); })
+          .catch((err) => { console.error(String(err)); process.exit(1); });
+          JS
+          cat >"$RUNNER_TEMP/announce-gate.sh" <<SH
+          set -eu
+          cd "$GITHUB_WORKSPACE"
+          body=\$(cat "\$1")
+          sudo -n cat "$NEXTTIME_DATA/secrets/internal-gate-to-kernel.token" | \\
+            sudo -n docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \\
+            exec -T -e GATE_ANNOUNCE_BODY="\$body" gate-host node -e "\$(cat "$RUNNER_TEMP/announce-gate.js")"
+          SH
+          echo "E2E_ANNOUNCE_GATE_CMD=$RUNNER_TEMP/announce-gate.sh" >>"$GITHUB_ENV"
 
       # --- the actual e2e suite ----------------------------------------------------------------
 

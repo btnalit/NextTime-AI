@@ -21,7 +21,7 @@
 ratchet:
   console_unexplained: 10
   kernel_test_missing: 6
-  e2e_waived: 81
+  e2e_waived: 76
   repeat_unclear: 133
 capabilities:
   add_eval_case:
@@ -123,7 +123,7 @@ capabilities:
   confirm_gate_manifest:
     console: required
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: "unclear: 664"
   confirm_goal:
     console: required
@@ -142,7 +142,7 @@ capabilities:
   create_connection:
     console: required
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: "unclear: 664"
   create_eval_suite:
     console: required
@@ -847,7 +847,7 @@ capabilities:
   resume_self_connection:
     console: required
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: "unclear: 664"
   retire_eval_case:
     console: required
@@ -897,7 +897,7 @@ capabilities:
   rotate_connection_secret:
     console: required
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: "unclear: 664"
   runtime_inventory:
     console: required
@@ -1030,7 +1030,7 @@ capabilities:
   suspend_self_connection:
     console: required
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: "unclear: 664"
   sync_eval_fixture_gate:
     console: required

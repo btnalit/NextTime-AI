@@ -29,3 +29,21 @@ services:
     build: { context: ., dockerfile: deploy/accept-s2/mcp/Dockerfile }
     networks: [control]
     restart: 'no'
+  # Legacy 671: the self-connected gate the console e2e connects with `create_connection`
+  # (deploy/ci/self-gate/server.mjs's header). Like a gate an owner runs themselves, it holds no
+  # platform gate token — only the connection secret the console minted, which the e2e writes into
+  # its GATE_KERNEL_TOKEN_FILE (E2E_SET_SELF_GATE_SECRET_CMD, .github/workflows/e2e.yml) and which
+  # it re-reads on every request. It sits on the control network for the kernel to reach, so
+  # deploy/ci/env.ci.template names it in NEXTTIME_CONNECTION_ALLOW_HOSTS (R-27); nothing else on
+  # the platform calls it, and it calls nothing.
+  ci-self-gate:
+    build: { context: ., dockerfile: deploy/ci/self-gate/Dockerfile }
+    environment: { GATE_KERNEL_TOKEN_FILE: /data/gate/kernel.token, GATE_PORT: '8090' }
+    volumes: ['${NEXTTIME_DATA}/ci-self-gate:/data/gate:ro']
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:8090/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [control]
+    restart: 'no'
