@@ -10,6 +10,7 @@ import {
   ChangeSegmentNotFoundError,
   ChangeSegmentRolledBackError,
 } from '../../application/change-plan/index.js';
+import { IdempotencyKeyReusedError } from '../../application/chat/index.js';
 import {
   EvaluationContentWithheldError,
   EvaluationProbeHoldError,
@@ -201,6 +202,15 @@ describe('mapDispatchError — legacy 232 unknown operation', () => {
     expect(WS_ERROR_CODES.EVALUATION_PROBE_HOLD).toBe(-32019);
     expect(mapDispatchError(err)).toEqual({
       code: WS_ERROR_CODES.EVALUATION_PROBE_HOLD,
+      message: err.message,
+    });
+  });
+
+  it('IdempotencyKeyReusedError (legacy 673) maps to its own IDEMPOTENCY_KEY_REUSED (-32020)', () => {
+    const err = new IdempotencyKeyReusedError('chat-1', 'message-1');
+    expect(WS_ERROR_CODES.IDEMPOTENCY_KEY_REUSED).toBe(-32020);
+    expect(mapDispatchError(err)).toEqual({
+      code: WS_ERROR_CODES.IDEMPOTENCY_KEY_REUSED,
       message: err.message,
     });
   });

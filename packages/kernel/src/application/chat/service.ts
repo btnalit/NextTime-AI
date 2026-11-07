@@ -1,4 +1,4 @@
-import type { ChatAgentKind, ToolCallMessageContent } from '@nexttime/shared';
+import type { ChatAgentKind, ToolCallMessageContent, TurnStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { redactedForAudit } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
@@ -85,6 +85,25 @@ export class ChatArchivedError extends Error {
 }
 
 const ONE_RUNNING_TURN_PER_CHAT_CONSTRAINT = 'activities_one_running_turn_per_chat_uidx';
+
+/** Legacy 673: a key already names a message of this Chat that was sent with another text, or by
+ *  another person — the call is refused, nothing written. Maps to 409 `idempotency_key_reused`
+ *  (`details.messageId`, the message the key names) at every transport. */
+export class IdempotencyKeyReusedError extends Error {
+  readonly code = 'idempotency_key_reused';
+  readonly details: { readonly messageId: string };
+
+  constructor(chatId: string, messageId: string) {
+    super(
+      `chat ${chatId} already has message ${messageId} sent with this idempotencyKey, with another text or by another person — send a new message with a new key`,
+    );
+    this.name = 'IdempotencyKeyReusedError';
+    this.details = { messageId };
+  }
+}
+
+/** Legacy 673 (migrations/core/0055): one message per `idempotency_key` in a Chat. */
+const CHAT_MESSAGE_IDEMPOTENCY_KEY_CONSTRAINT = 'chat_messages_idempotency_key_uidx';
 
 function isUniqueViolation(err: unknown, constraintName: string): boolean {
   if (!err || typeof err !== 'object') return false;
@@ -174,6 +193,10 @@ const CHAT_COLUMNS =
   'workspace_id, id, owner_principal_id, title, visibility, created_at, archived_at, agent_kind';
 const CHAT_MESSAGE_COLUMNS =
   'workspace_id, id, chat_id, turn_id, role, content, sequence, created_at, source_outbox_id';
+/** `CHAT_MESSAGE_COLUMNS` of a message aliased `m`. */
+const CHAT_MESSAGE_COLUMNS_M = CHAT_MESSAGE_COLUMNS.split(', ')
+  .map((column) => `m.${column}`)
+  .join(', ');
 
 // S8 W4 (audit C1): `last_activity_at`/`has_running_turn` are read-only projections — no new
 // column, no new write path — shared by every query below that returns a wire-facing `ChatRow`
@@ -448,6 +471,9 @@ export interface InsertChatMessageInput {
    *  second insert attempt for the same `(workspaceId, sourceOutboxId, chatId)` returns the row
    *  already written instead of creating a duplicate. */
   readonly sourceOutboxId?: string;
+  /** Legacy 673: the key a person's message was sent with (`sendChatMessage`) —
+   *  `chat_messages_idempotency_key_uidx` refuses a second message with it in the Chat. */
+  readonly idempotencyKey?: string;
 }
 
 /**
@@ -479,13 +505,14 @@ export async function insertChatMessage(
   await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [input.chatId]);
 
   const result = await client.query<ChatMessageDbRow>(
-    `insert into chat_messages (workspace_id, chat_id, turn_id, role, content, sequence, source_outbox_id)
+    `insert into chat_messages
+       (workspace_id, chat_id, turn_id, role, content, sequence, source_outbox_id, idempotency_key)
      select $1, $2, $3, $4, $5::jsonb,
        coalesce(
          (select max(sequence) from chat_messages where workspace_id = $1 and chat_id = $2),
          0
        ) + 1,
-       $6
+       $6, $7
      on conflict (workspace_id, source_outbox_id, chat_id) where source_outbox_id is not null
        do nothing
      returning ${CHAT_MESSAGE_COLUMNS}`,
@@ -496,6 +523,7 @@ export async function insertChatMessage(
       input.role,
       JSON.stringify(input.content),
       input.sourceOutboxId ?? null,
+      input.idempotencyKey ?? null,
     ],
   );
   const row = result.rows[0];
@@ -563,11 +591,69 @@ export async function insertToolCallMessage(
 export interface SendChatMessageInput {
   readonly chatId: string;
   readonly text: string;
+  /** Legacy 673: the key the client chose for this message (`send_chat_message.idempotencyKey`). */
+  readonly idempotencyKey?: string;
 }
 
 export interface SendChatMessageResult {
   readonly message: ChatMessageRow;
   readonly turnId: string;
+  /** `false`: the message was sent before with this key, and this call started nothing. */
+  readonly changed: boolean;
+  /** The Turn's status now: `running` for a message just sent. */
+  readonly turnStatus: TurnStatus;
+}
+
+/** The message a key names in a Chat, with who sent it and how its Turn stands now. */
+interface MessageOfKey {
+  readonly message: ChatMessageRow;
+  readonly turnId: string;
+  readonly senderId: string | null;
+  readonly turnStatus: TurnStatus;
+}
+
+async function messageOfKey(
+  client: PoolClient,
+  workspaceId: string,
+  chatId: string,
+  idempotencyKey: string,
+): Promise<MessageOfKey | null> {
+  const result = await client.query<
+    ChatMessageDbRow & { sender_id: string | null; turn_status: TurnStatus }
+  >(
+    `select ${CHAT_MESSAGE_COLUMNS_M}, a.started_by as sender_id, a.status as turn_status
+     from chat_messages m
+     join activities a on a.workspace_id = m.workspace_id and a.id = m.turn_id
+     where m.workspace_id = $1 and m.chat_id = $2 and m.idempotency_key = $3`,
+    [workspaceId, chatId, idempotencyKey],
+  );
+  const row = result.rows[0];
+  if (row === undefined) return null;
+  const message = mapChatMessageRow(row);
+  return {
+    message,
+    turnId: message.turnId as string,
+    senderId: row.sender_id,
+    turnStatus: row.turn_status,
+  };
+}
+
+/** A send of a message already sent: the same person and the same text return it, as it stands;
+ *  anything else under its key is refused. */
+function resentMessage(
+  sent: MessageOfKey,
+  principalId: string,
+  input: SendChatMessageInput,
+): SendChatMessageResult {
+  if (sent.senderId !== principalId || sent.message.content.text !== input.text) {
+    throw new IdempotencyKeyReusedError(input.chatId, sent.message.id);
+  }
+  return {
+    message: sent.message,
+    turnId: sent.turnId,
+    changed: false,
+    turnStatus: sent.turnStatus,
+  };
 }
 
 /**
@@ -576,6 +662,16 @@ export interface SendChatMessageResult {
  * transaction, and this function never calls an `AgentRuntime` itself (design doc §7.10 "outbox
  * domain events are the coupling mechanism" — `application/host-bridge`'s `TurnStarted` consumer
  * does that, from the outbox, in a separate transaction entirely).
+ *
+ * Legacy 673: with an `idempotencyKey`, a message already sent with it on this Chat is returned
+ * (`changed: false`, its Turn's status now) and nothing is started — no Turn, no message, no
+ * `TurnStarted`: a send the client gave up on may have reached the kernel after all, and sending it
+ * again must not run the request a second time. Only reading the Chat is asked of that call (an
+ * admin agent's Chat: `read`), since it starts nothing. Two sends of one key at the same moment both
+ * miss the look-up; the one that loses meets the winner's running Turn
+ * (`activities_one_running_turn_per_chat_uidx`), or, the winner's Turn already over, the winner's
+ * key (`chat_messages_idempotency_key_uidx`), rolls back to before it began its Turn and returns the
+ * winner's message.
  */
 export async function sendChatMessage(
   client: PoolClient,
@@ -584,6 +680,13 @@ export async function sendChatMessage(
   input: SendChatMessageInput,
 ): Promise<SendChatMessageResult> {
   const chat = await requireChatAccess(client, workspaceId, input.chatId);
+  if (input.idempotencyKey !== undefined) {
+    const sent = await messageOfKey(client, workspaceId, input.chatId, input.idempotencyKey);
+    if (sent !== null) {
+      await assertChatKindAccess(client, workspaceId, chat, principalId, 'read');
+      return resentMessage(sent, principalId, input);
+    }
+  }
   if (chat.archivedAt !== null) throw new ChatArchivedError(input.chatId);
   // S11 AA4c: an admin agent's Chat starts a Turn only while its administrator may act now.
   await assertChatKindAccess(client, workspaceId, chat, principalId, 'turn');
@@ -597,6 +700,43 @@ export async function sendChatMessage(
     throw new EvaluationContentWithheldError('entry_turn');
   }
 
+  const idempotencyKey = input.idempotencyKey;
+  if (idempotencyKey === undefined) {
+    return startTurn(client, workspaceId, principalId, chat, input);
+  }
+  await client.query('SAVEPOINT send_chat_message_turn');
+  try {
+    const started = await startTurn(client, workspaceId, principalId, chat, input);
+    await client.query('RELEASE SAVEPOINT send_chat_message_turn');
+    return started;
+  } catch (err) {
+    if (
+      !(err instanceof TurnAlreadyRunningError) &&
+      !isUniqueViolation(err, CHAT_MESSAGE_IDEMPOTENCY_KEY_CONSTRAINT)
+    ) {
+      throw err;
+    }
+    await client.query('ROLLBACK TO SAVEPOINT send_chat_message_turn');
+    // This look-up sees the winner's message because the transaction runs at READ COMMITTED (the
+    // database default; nothing in the kernel raises it): each statement takes a new snapshot,
+    // and the conflict above was only raised once the winner had committed. Under REPEATABLE READ
+    // the snapshot taken before the wait would still miss it, and the send would be refused.
+    const sent = await messageOfKey(client, workspaceId, input.chatId, idempotencyKey);
+    // A running Turn of another message: refused as before. The key's own index cannot conflict
+    // with no message holding the key — not finding it would contradict the violation.
+    if (sent === null) throw err;
+    return resentMessage(sent, principalId, input);
+  }
+}
+
+/** The new Turn and the message that starts it (`sendChatMessage`, its checks passed). */
+async function startTurn(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+  chat: ChatRow,
+  input: SendChatMessageInput,
+): Promise<SendChatMessageResult> {
   // leftover 64 (docs/STATUS.md §4): `roll_entry_containers` (`application/platform/runtime.ts`)
   // takes the *same* session-scoped advisory lock, keyed identically
   // (`roll_entry_containers:<principalId>`), around its own "no in-flight Turn? then stop the
@@ -648,6 +788,7 @@ export async function sendChatMessage(
     turnId,
     role: 'user',
     content: { text: input.text },
+    ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
   });
 
   if (chat.title === null) {
@@ -668,7 +809,7 @@ export async function sendChatMessage(
       : { agentKind: 'admin_agent', sessionId: adminSessionId }),
   });
 
-  return { message, turnId };
+  return { message, turnId, changed: true, turnStatus: 'running' };
 }
 
 // -------------------------------------------------------------------------------------------
