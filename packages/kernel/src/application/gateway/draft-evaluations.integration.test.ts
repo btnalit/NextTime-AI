@@ -19,7 +19,7 @@ import {
 } from '@nexttime/shared';
 import { decodeJwt } from 'jose';
 import type { Pool, PoolClient } from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import type {
@@ -179,8 +179,17 @@ const allPass: Behave = () => 'pass';
 const candidateWins: Behave = ({ stage, arm }) =>
   stage === 'regression' || arm === 'candidate' ? 'pass' : 'fail';
 
+// Legacy 663: every test here plays each trial's Worker and ticks the runner until a stage ends,
+// so it is CPU-bound, in Node and in Postgres alike — the first one, which runs all three stages
+// (36 trials, 8 ticks, ~360 transactions), takes ~1.5 s on an idle 4-core machine. It slows in
+// step with load and nothing in it waits on a lock: ~2.3 s beside the web suite, ~4 s with the
+// cores oversubscribed three times. CI runs `pnpm -r test`, so this file runs beside the web
+// suite on a 4-vCPU runner: ~2.7 s there, and once over Vitest's 5 s default on a runner that ran
+// every kernel file about twice as slow. A ceiling for this file alone, as the two heaviest tests
+// below already have their own; a real hang still fails (`drive` gives up after 60 ticks).
 describe.runIf(DATABASE_URL !== undefined)(
   'draft evaluations (S10 E3-2b, integration, real Postgres)',
+  { timeout: 30_000 },
   () => {
     let pool: Pool;
     let privateKey: Awaited<ReturnType<typeof generateEphemeralHandleKeyPair>>['privateKey'];
@@ -569,6 +578,24 @@ describe.runIf(DATABASE_URL !== undefined)(
       regressionOnly = await suiteWith('Restarts, regression only', [
         restartCase(REGRESSION_INPUT, 'Restart web-1', 'regression'),
       ]);
+    });
+
+    // Legacy 663: each test starts its own evaluation of the same draft, and a draft is evaluated
+    // once at a time. A test that fails before its evaluation ends — a timeout too, since Vitest
+    // moves on while the body still runs — left it running, and every later start was refused
+    // `draft_evaluating`: on CI one timeout read as fourteen failures. The owner ends it here, so
+    // the tests after it run as usual; only the summary test, which reads every evaluation above
+    // it, still notices the one that is missing.
+    afterEach(async () => {
+      const running = await asOwnerRole((client) =>
+        client.query<{ id: string }>(
+          `select id from eval_draft_evaluations where workspace_id = $1 and status = 'running'`,
+          [workspaceId],
+        ),
+      );
+      for (const { id } of running.rows) {
+        await call(person('owner'), 'cancel_draft_evaluation', { evaluationId: id });
+      }
     });
 
     afterAll(async () => {
