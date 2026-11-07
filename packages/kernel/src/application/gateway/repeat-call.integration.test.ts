@@ -13,7 +13,7 @@ import {
   type GatekeeperClient,
   createGateConnectionSecrets,
 } from '../../adapters/gatekeeper-client/index.js';
-import { requestAction } from '../../governance/approval/index.js';
+import { ApprovalDrainer, requestAction } from '../../governance/approval/index.js';
 import { HANDLE_SIGNING_ALG } from '../../governance/capability/index.js';
 import {
   getPublishedOperation,
@@ -35,8 +35,10 @@ import { createUser } from '../identity/index.js';
 import { insertPendingContextItem } from '../linkage/index.js';
 import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
 import { workerSpecDigest } from '../task/step-attempt.js';
+import { createAdminWithTransaction, createGatekeeperActionExecutor } from './action-executor.js';
 import { setConnectionHandlerDeps } from './connection-handlers.js';
 import { dispatchCapability } from './dispatch.js';
+import { setRequestActionDeps } from './request-action-handler.js';
 import {
   type ResolveCallerDeps,
   type ResolvedCaller,
@@ -99,8 +101,9 @@ interface Recipe {
    *  (the params a caller sends most), and a known, intended other path says its own here. */
   readonly repeat?: string;
   /** The entity a result names, when `entityId` cannot tell (a result keyed by more than one
-   *  field, such as an Operation draft's gate, name and version). */
-  readonly entity?: (result: unknown) => string | undefined;
+   *  field, such as an Operation draft's gate, name and version) — or, for a call whose result
+   *  names none (a gate read), the one its params address. */
+  readonly entity?: (result: unknown, params: Record<string, unknown>) => string | undefined;
   /** Who makes the two calls, when not the owner on the human channel: the Handle of a `handle`
    *  row's caller (a Worker's run, an agent session), got after `setUp`. Each call presents it the
    *  way its holder does (`callerFor`), so a Handle revoked, expired or not signed by the task
@@ -470,10 +473,24 @@ const GATE_OP: Operation = {
   writes: [],
 };
 
+/** An observe-class Operation on the same gate: reading a host's status. */
+const OBSERVE_OP: Operation = {
+  ...GATE_OP,
+  name: 'repeat.status',
+  description: "Reads a host's status.",
+  binding: { kind: 'http', method: 'GET', path: '/status' },
+  mode: 'observe',
+  blast_radius: 'low',
+};
+
 /** A registered gate whose interface manifest is `GATE_OP` — imported as a draft, and published
  *  unless `publish` is false. The seeded gate's Operation is not a valid definition, so a call
  *  that reads one (an approval rule, a catalog transition) needs this gate. */
-async function gateWithOperation({ pool, seed }: RecipeContext, publish = true): Promise<string> {
+async function gateWithOperation(
+  { pool, seed }: RecipeContext,
+  publish = true,
+  operation: Operation = GATE_OP,
+): Promise<string> {
   const { workspaceId, ownerId } = seed;
   return withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
     const activity = await startActivity(client, workspaceId, {
@@ -490,11 +507,12 @@ async function gateWithOperation({ pool, seed }: RecipeContext, publish = true):
     });
     await importManifest(client, workspaceId, {
       gatekeeperId,
-      operations: [GATE_OP],
+      operations: [operation],
       proposedBy: { id: ownerId, kind: 'human' },
       activityId: activity.id,
     });
-    if (publish) await publishOperation(client, workspaceId, { gatekeeperId, name: GATE_OP.name });
+    if (publish)
+      await publishOperation(client, workspaceId, { gatekeeperId, name: operation.name });
     return gatekeeperId;
   });
 }
@@ -552,15 +570,16 @@ async function workerCall(ctx: RecipeContext, idempotencyKey?: string) {
   };
 }
 
-/** A gate that only describes itself (GATE_OP): create_connection imports that, and a re-sync
- *  reads it again. Any call that would run something fails the test. */
+/** A gate that describes itself (GATE_OP) and answers an observe: create_connection imports the
+ *  description, and a re-sync reads it again. Any call that would run something fails the test. */
 const notInThisWalk = async (): Promise<never> => {
   throw new Error('the repeat walk calls no gate Operation');
 };
 const FAKE_GATE: GatekeeperClient = {
   describeOperations: async () =>
     ({ operations: [GATE_OP] }) as Awaited<ReturnType<GatekeeperClient['describeOperations']>>,
-  observe: notInThisWalk,
+  // What a host's status read answers: the walk's one observe-class Operation (OBSERVE_OP).
+  observe: async () => ({ data: { host: 'web-1', up: true } }),
   simulate: notInThisWalk,
   apply: notInThisWalk,
   lookupApply: notInThisWalk,
@@ -602,6 +621,27 @@ const ONTOLOGY_CHANGE = {
     },
   ],
 };
+
+/** One observation of the walk's ontology: host web-1, up. */
+const REPEAT_HOST_OBSERVATION = {
+  objectType: 'repeat.host',
+  identity: { hostname: 'web-1' },
+  properties: { up: true },
+};
+
+/** A collector Source of the owner, on a freshly published ONTOLOGY_CHANGE. */
+async function observingSource(ctx: RecipeContext): Promise<string> {
+  const draft = await as<{ id: string; version: number }>(ctx, 'propose_ontology_change', {
+    change: ONTOLOGY_CHANGE,
+  });
+  await as(ctx, 'publish_ontology_version', { id: draft.id, version: draft.version });
+  const source = await as<{ id: string }>(ctx, 'register_source', {
+    kind: 'collector',
+    name: `repeat-source-${randomUUID().slice(0, 8)}`,
+    visibility: 'workspace',
+  });
+  return source.id;
+}
 
 /** Extra cases for a row, beyond the one with schema-built params on the bare seed. A declaration
  *  holds on every path, so a row whose answer depends on state gets a case per state (per #493 on
@@ -1361,6 +1401,50 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       },
     },
   },
+  observe_operation: {
+    // Each read calls the gate again and records another observe Activity on the same Gatekeeper
+    // (its result names no entity: the gate it read is the one the params address).
+    'a published observe-class Operation': {
+      first: expect.objectContaining({ status: 'ok', data: { host: 'web-1', up: true } }),
+      entity: (_result, params) => params.gatekeeperId as string,
+      setUp: async (ctx) => ({
+        gatekeeperId: await gateWithOperation(ctx, true, OBSERVE_OP),
+        operation: OBSERVE_OP.name,
+        params: { host: 'web-1' },
+      }),
+    },
+  },
+  submit_observations: {
+    // One Activity per submission: the second is another Activity that upserts the same Object
+    // (its identity names it), so the Object is the entity both calls act on.
+    'a Source of the owner, on a published ontology': {
+      first: expect.objectContaining({ objectsUpserted: 1 }),
+      entity: (result) => (result as { objects: { id: string }[] }).objects[0]?.id,
+      setUp: async (ctx) => ({
+        sourceId: await observingSource(ctx),
+        observations: [REPEAT_HOST_OBSERVATION],
+      }),
+    },
+    // A run's window close, in the Activity its earlier submission returned: no new Activity and
+    // nothing left to invalidate, so a second close changes no row (per #493 on batch 14).
+    "a window close in the run's own Activity": {
+      repeat: 'idempotent',
+      first: expect.objectContaining({ objectsUpserted: 0, factsInvalidated: 0 }),
+      setUp: async (ctx) => {
+        const sourceId = await observingSource(ctx);
+        const run = await as<{ activityId: string }>(ctx, 'submit_observations', {
+          sourceId,
+          observations: [REPEAT_HOST_OBSERVATION],
+        });
+        return {
+          sourceId,
+          activityId: run.activityId,
+          observations: [],
+          window: { complete: true, objectTypes: ['repeat.host'] },
+        };
+      },
+    },
+  },
   cancel_task: {
     // The first call cancels it; a second finds it cancelled already and changes nothing.
     'a running Task': {
@@ -1493,6 +1577,8 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'report_task_result',
   'report_task_outcome',
   'request_action',
+  'observe_operation',
+  'submit_observations',
   'rotate_connection_secret',
   'issue_handle',
   'issue_service_handle',
@@ -1593,6 +1679,19 @@ describe.runIf(DATABASE_URL !== undefined)(
         gatekeeperClient: FAKE_GATE,
         connectionSecrets: createGateConnectionSecrets(gateToken),
         outboundTargetGuard: async () => {},
+      });
+      // observe_operation reads a gate through the request-action deps; nothing here is approved,
+      // so the drainer's executor never applies anything.
+      const adminWithTransaction = createAdminWithTransaction(pool);
+      setRequestActionDeps({
+        gatekeeperClient: FAKE_GATE,
+        drainer: new ApprovalDrainer({
+          executor: createGatekeeperActionExecutor({
+            gatekeeperClient: FAKE_GATE,
+            withTransaction: adminWithTransaction,
+          }),
+          withTransaction: adminWithTransaction,
+        }),
       });
     });
 
@@ -1738,21 +1837,21 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       expect(refusal, 'the second call must succeed').toBeUndefined();
       if (repeat === 'idempotent') {
-        const firstId = entityOf(first);
-        if (firstId !== undefined) expect(entityOf(second)).toBe(firstId);
+        const firstId = entityOf(first, params);
+        if (firstId !== undefined) expect(entityOf(second, params)).toBe(firstId);
         expect(rowsAfterSecond).toEqual(rowsAfterFirst);
         expect(newAudit.map((row) => row.action)).toEqual([capability.name]);
         expect(newAudit[0]?.actor_principal_id).toBe(actingPrincipal(by, ownerId));
       } else if (repeat === 'creates') {
-        const firstId = entityOf(first);
+        const firstId = entityOf(first, params);
         expect(firstId, 'creates: the result names the entity it made').toBeDefined();
-        expect(entityOf(second)).not.toBe(firstId);
+        expect(entityOf(second, params)).not.toBe(firstId);
         // A new id with nothing stored for it would not be a second entity (per #488).
         expect(rowsAfterSecond).not.toEqual(rowsAfterFirst);
       } else if (repeat === 'repeats') {
-        const firstId = entityOf(first);
+        const firstId = entityOf(first, params);
         expect(firstId, 'repeats: the result names the entity it acted on').toBeDefined();
-        expect(entityOf(second)).toBe(firstId);
+        expect(entityOf(second, params)).toBe(firstId);
         expect(rowsAfterSecond).not.toEqual(rowsAfterFirst);
       } else {
         throw new Error(`unknown repeat declaration ${repeat} (guard M6 should have refused it)`);
