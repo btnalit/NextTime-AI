@@ -157,10 +157,23 @@ export const OperationSummaryWireSchema = z
   .strict();
 export type OperationSummaryWire = z.infer<typeof OperationSummaryWireSchema>;
 
+/** Legacy 674: a gate the workspace connected itself that the platform suspended — when, and the
+ *  reason the administrator gave (absent when none). Who suspended it stays on the platform side:
+ *  the workspace asks a platform administrator, whoever it was. */
+export const GatekeeperPlatformSuspensionWireSchema = z
+  .object({ suspendedAt: z.string(), reason: z.string().optional() })
+  .strict();
+export type GatekeeperPlatformSuspensionWire = z.infer<
+  typeof GatekeeperPlatformSuspensionWireSchema
+>;
+
 /** `get_gatekeeper`'s result: the summary plus its Operations and a live health probe. */
 export const GatekeeperDetailWireSchema = GatekeeperSummaryWireSchema.extend({
   operations: z.array(OperationSummaryWireSchema),
   health: z.enum(['ok', 'unreachable', 'unauthorized']),
+  /** Legacy 674: present only while the platform suspends this self-connected gate. Its
+   *  Operations stay listed — kept, and refused on every call until it is resumed. */
+  platformSuspension: GatekeeperPlatformSuspensionWireSchema.optional(),
 });
 export type GatekeeperDetailWire = z.infer<typeof GatekeeperDetailWireSchema>;
 

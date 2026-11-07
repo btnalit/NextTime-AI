@@ -1232,7 +1232,10 @@ const connectionCapabilities = [
     resultSchema: wire.GatekeeperDetailWireSchema,
     description:
       'One Gatekeeper instance with its Operations and a live health probe. A draft Operation ' +
-      'is listed only to its proposer, a builder or the owner (D-26, I16).',
+      'is listed only to its proposer, a builder or the owner (D-26, I16). Operations the ' +
+      'connector deny list refuses are left out. Legacy 674: while the platform suspends a gate ' +
+      'the workspace connected itself, platformSuspension says when and the reason given (never ' +
+      'who), and its Operations stay listed — kept, refused on every call until resumed.',
   },
   {
     name: 'list_operations',
