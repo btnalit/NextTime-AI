@@ -383,12 +383,13 @@ function DefinitionPreview({
 }) {
   const prompt = typeof definition.systemPrompt === 'string' ? definition.systemPrompt : '';
   const instructions = spec.instructions?.trim() ?? '';
-  const added =
-    instructions !== '' && prompt.endsWith(`\n\n${instructions}`) ? instructions : null;
+  const added = instructions !== '' && prompt.endsWith(`\n\n${instructions}`) ? instructions : null;
   const basePrompt = added === null ? prompt : prompt.slice(0, -(added.length + 2));
   const fromSpec = new Set<string>(REPLACED_FROM_SPEC.filter((field) => spec[field] !== undefined));
   const marker = (
-    <span className="chip chip-accent chip-s">{t('来自步骤调整', 'From the step adjustments')}</span>
+    <span className="chip chip-accent chip-s">
+      {t('来自步骤调整', 'From the step adjustments')}
+    </span>
   );
   const others = Object.entries(definition).filter(([field]) => field !== 'systemPrompt');
   return (
