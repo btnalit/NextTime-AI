@@ -269,6 +269,16 @@ export {
 export { readProcedureOutcomeHints, readProcedureStats } from './procedure-stats.js';
 export { readSkillStats } from './skill-stats.js';
 export { type CanReadGoal, readWorkerDefinitionStats } from './worker-definition-stats.js';
+export {
+  CombinationNotEligibleError,
+  CombinationNotFoundError,
+  readCombinationCandidates,
+  proposeDefinitionFromCombination,
+} from './combination-candidates.js';
+export type {
+  ProposeDefinitionFromCombinationInput,
+  ProposedDefinitionFromCombination,
+} from './combination-candidates.js';
 
 export {
   type GateAccessContext,

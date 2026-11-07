@@ -21,7 +21,7 @@ import { usePermissions } from '../../hooks/usePermissions.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
-import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
+import { formatDateTime, formatRelative, shortId, zhJoin } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { operationFieldLabel, principalShownName } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
@@ -127,14 +127,6 @@ export function contentFieldText(field: string, t: Translate): string {
     default:
       return field;
   }
-}
-
-/** 「挂载的 Skill 增加」, 「带来的 Skill 版本」, 「正文有改动」: a space only where a Latin word
- *  meets Chinese. */
-function zhJoin(head: string, tail: string): string {
-  return /[A-Za-z0-9]$/.test(head) || /^[A-Za-z0-9]/.test(tail)
-    ? `${head} ${tail}`
-    : `${head}${tail}`;
 }
 
 /** 「Worker 挂载的 Skill 增加」 — a Skill's or Worker's widening reason (path `skill` / `worker`,

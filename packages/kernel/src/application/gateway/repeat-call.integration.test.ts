@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type Capability, getCapability } from '@nexttime/shared';
+import { type Capability, type WorkerSpec, getCapability } from '@nexttime/shared';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -11,6 +11,7 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
 import { createGoalRun } from '../goal/index.js';
 import { insertPendingContextItem } from '../linkage/index.js';
+import { workerSpecDigest } from '../task/step-attempt.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 import {
@@ -174,6 +175,67 @@ async function suiteWithCase(ctx: RecipeContext) {
     },
   );
   return { suiteId: withCase.id, suiteVersion: withCase.version, caseId: withCase.cases[0]?.id };
+}
+
+/**
+ * propose_definition_from_combination's case (S11 GO16b): a goal the owner asked for, ended a day
+ * ago as achieved by their word, whose one step `definitionId` v1 ran with `spec` — written with
+ * the guards off, since the goal's own write paths are not this capability's.
+ */
+async function achievedGoalStep(
+  ctx: RecipeContext,
+  definitionId: string,
+  spec: WorkerSpec,
+): Promise<void> {
+  const { workspaceId, ownerId } = ctx.seed;
+  const endedAt = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  await withWorkspace(
+    ctx.pool,
+    { workspaceId, principalId: ownerId },
+    async (client) => {
+      await client.query('set local session_replication_role = replica');
+      const goal = await client.query<{ id: string }>(
+        `insert into goal_runs (workspace_id, status, outcome, outcome_basis, on_behalf_of,
+           statement, current_revision, confirmed_at, budget_max_tokens, budget_max_steps,
+           budget_max_revisions, budget_max_wall_clock_seconds, ended_at)
+         values ($1, 'completed', 'achieved', 'requester', $2, 'a goal for the repeat walk', 1,
+           $3, 100000, 10, 5, 3600, $3) returning id`,
+        [workspaceId, ownerId, endedAt],
+      );
+      const goalRunId = goal.rows[0]?.id;
+      const plan = { steps: [{ key: 's0', worker: { definitionId, version: 1 }, spec }] };
+      await client.query(
+        `insert into plan_revisions (workspace_id, goal_run_id, revision, status, plan,
+           proposed_by, decided_by, decided_at)
+         values ($1, $2, 1, 'accepted', $3, $4, $4, now())`,
+        [workspaceId, goalRunId, JSON.stringify(plan), ownerId],
+      );
+      const step = await client.query<{ id: string }>(
+        `insert into step_runs (workspace_id, goal_run_id, step_key, introduced_in_revision,
+           status, attempt_count, ended_at, updated_at)
+         values ($1, $2, 's0', 1, 'succeeded', 1, $3, $3) returning id`,
+        [workspaceId, goalRunId, endedAt],
+      );
+      await client.query(
+        `insert into tasks (workspace_id, id, status, on_behalf_of, worker_definition_id,
+           worker_definition_version, completed_at, goal_run_id, step_run_id, plan_revision,
+           step_attempt, run_config_snapshot, created_at)
+         values ($1, $2, 'completed', $3, $4, 1, $5, $6, $7, 1, 1, $8, $9)`,
+        [
+          workspaceId,
+          randomUUID(),
+          ownerId,
+          definitionId,
+          endedAt,
+          goalRunId,
+          step.rows[0]?.id,
+          JSON.stringify({ v: 2, spec: { digest: workerSpecDigest(spec) } }),
+          new Date(endedAt.getTime() - 60_000),
+        ],
+      );
+    },
+    { skipRoleSwitch: true },
+  );
 }
 
 /** reject_draft's case: v1 published, v2 proposed — the pending draft the reviewer takes off. */
@@ -432,6 +494,24 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
         definition: { systemPrompt: 'Version two.' },
       }),
       repeat: 'repeats',
+    },
+  },
+  // S11 GO16b: each call writes a new family's v1 draft from the combination — a second one is
+  // another family (its derivation the family's own), as a second propose_worker_definition is.
+  // A qualifying combination needs goals the schema walk cannot make: recipes only.
+  propose_definition_from_combination: {
+    'a combination that qualifies': {
+      setUp: async (ctx) => {
+        const base = await workerV1(ctx, true);
+        const spec = { instructions: 'Read the logs first.' };
+        for (let goal = 0; goal < 3; goal += 1) await achievedGoalStep(ctx, base.id, spec);
+        return {
+          definitionId: base.id,
+          version: 1,
+          specDigest: workerSpecDigest(spec),
+          name: 'Kept for the repeat walk',
+        };
+      },
     },
   },
   publish_worker_definition: {
@@ -739,6 +819,7 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'propose_procedure',
   'set_agent_profile',
   'propose_worker_definition',
+  'propose_definition_from_combination',
   'publish_worker_definition',
   'deprecate_worker_definition',
   'discard_draft',

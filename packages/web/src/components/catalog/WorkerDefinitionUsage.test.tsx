@@ -116,7 +116,7 @@ function stats(patch: Partial<WorkerDefinitionStatsWire> = {}): WorkerDefinition
           {
             specRef: REF_A,
             specDigest: SPEC_A,
-            fields: ['instructions', 'skills'],
+            fields: ['skills', 'capabilities'],
             usage: usage({ runs: 3, lastUsedAt: RECENT }),
             outcomes: tally([0, 3]),
             reviewSuggested: true,
@@ -222,7 +222,7 @@ describe('WorkerDefinitionUsageSection (S11 GO16a)', () => {
 
     const a = screen.getByTestId(`worker-usage-version-2-combination-${REF_A}`);
     const aLabel = within(a).getByTestId(`worker-usage-version-2-combination-${REF_A}-label`);
-    expect(aLabel.textContent).toBe(`调整了职责说明、Skill · 编号 ${REF_A}`);
+    expect(aLabel.textContent).toBe(`调整了 Skill、能力范围 · 编号 ${REF_A}`);
     expect(aLabel.getAttribute('title')).toBe(
       '编号只用来区分不同的调整：编号相同就是同一份调整，不论来自哪个目标。',
     );

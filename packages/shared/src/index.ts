@@ -34,6 +34,7 @@ export * from './json-schema.js';
 export * from './outcome-basis.js';
 export * from './skill-stats.js';
 export * from './goal-plan.js';
+export * from './combination.js';
 export * from './goal-planner.js';
 export * from './ontology-definition.js';
 export * from './worker-result.js';
