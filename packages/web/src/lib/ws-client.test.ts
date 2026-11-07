@@ -1113,7 +1113,7 @@ describe('WsClient', () => {
 
       await vi.advanceTimersByTimeAsync(1_000);
       expect(pings(socket)).toHaveLength(1);
-      // A kernel without `ping` answers -32601 — still an answer.
+      // The kernel answers a method it lacks with -32601 — still an answer.
       respondError(socket, pings(socket)[0] as SentFrame, {
         code: -32601,
         message: 'unknown method "ping"',

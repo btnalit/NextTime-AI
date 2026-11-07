@@ -860,6 +860,26 @@ describe('ChatPage send that got no answer (legacy 673)', () => {
     expect(second?.[2]).not.toBe(first?.[2]);
   });
 
+  it('follows the Turn a late first request started, so it can be stopped', async () => {
+    const fake = fakeClient();
+    await timeOutOneSend(fake, 'restart web-1');
+    act(() => fake.deliver({ ...persisted(1, 'user', 'restart web-1'), turnId: 'turn-late' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    act(() => fake.stream('turn-late', { streamKind: 'textDelta', delta: 'On it' }));
+
+    const stop = await screen.findByRole('button', { name: '停止本轮' });
+    expect(stop).toBeTruthy();
+    expect(document.querySelector('.message-streaming .message-text')?.textContent).toContain(
+      'On it',
+    );
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).disabled).toBe(true);
+
+    act(() => handlersOf(fake).onMetadata({ turnId: 'turn-late', turnStatus: 'completed' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: '停止本轮' })).toBeNull());
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).disabled).toBe(false);
+    expect(sendCalls(fake)).toHaveLength(1);
+  });
+
   it('drops a key the kernel refuses as reused, so the next send goes under a new one', async () => {
     const fake = fakeClient();
     const banner = await timeOutOneSend(fake, 'restart web-1');

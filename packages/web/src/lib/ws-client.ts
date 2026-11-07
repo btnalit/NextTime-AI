@@ -116,7 +116,9 @@ interface ChatHistoryResult {
 /** Legacy 673: `changed: false` means the kernel had already taken a message under the same
  *  `idempotencyKey` in this Chat (the first try of a send whose answer was lost) and answered with
  *  that message instead of writing another; `turnStatus` is where its Turn is now — a finished one
- *  sends no more `chat.metadata`. Both absent from a kernel that predates the key. */
+ *  sends no more `chat.metadata`. The kernel always sends both; they are optional here only so a
+ *  stub without them reads as a fresh send. (No older kernel answers a send with a key at all: its
+ *  strict params refuse it, and the console and the kernel ship together.) */
 export interface SendChatMessageResult {
   readonly messageId: string;
   readonly sequence: number;
@@ -306,8 +308,9 @@ const DEFAULT_MAX_RECONNECT_DELAY_MS = 30_000;
  *  through. Every {@link DEFAULT_HEARTBEAT_INTERVAL_MS} the client sends a `ping`; no answer within
  *  {@link DEFAULT_HEARTBEAT_TIMEOUT_MS} and the socket is given up as dead — status `reconnecting`,
  *  what was in flight rejected as "connection closed" — and a new one is opened at once. Any answer
- *  counts, an error included: a kernel that predates `ping` answers it -32601, which proves the
- *  socket alive just as well. */
+ *  counts, an error included. The kernel answers a method it does not have at once with -32601 (no
+ *  database read, no log line), and until it has `ping` the heartbeat rides on that answer: it
+ *  proves the socket alive just as well. */
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
 const DEFAULT_HEARTBEAT_TIMEOUT_MS = 10_000;
 
@@ -480,7 +483,7 @@ export class WsClient {
       this.rpc('ping', {}, { timeoutMs: this.heartbeatTimeoutMs })
         .catch((err: unknown) => {
           // No answer at all: the socket is dead even though it never closed. An error answer
-          // (a kernel without `ping`) is still an answer.
+          // (-32601 while the kernel has no `ping`) is still an answer.
           if (err instanceof RpcTimeoutError && this.socket === socket && socket) {
             console.warn('WsClient: no answer to ping, reconnecting');
             this.abandonSocket(socket);
