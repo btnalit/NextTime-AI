@@ -368,5 +368,75 @@ describe.runIf(DATABASE_URL !== undefined)(
         ['worker_handle', null],
       ]);
     });
+
+    it('legacy 669: filter.excludeReads leaves the reads out before paging, a refused read kept', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      // One actor of its own, so the page holds only what this test wrote.
+      const readerId = randomUUID();
+      await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        (client) =>
+          client.query(
+            `insert into principals (workspace_id, id, kind, role, display_name)
+             values ($1, $2, 'human', 'member', 'reader')`,
+            [workspaceId, readerId],
+          ),
+        { skipRoleSwitch: true },
+      );
+      const write = (action: string, payload?: Record<string, unknown>) =>
+        withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          writeAudit(client, {
+            workspaceId,
+            actorPrincipalId: readerId,
+            action,
+            ...(payload ? { payload } : {}),
+          }),
+        );
+      // A write, an action the registry does not know (never a read), three reads newest, and a
+      // refused read.
+      await write('new_chat');
+      await write('test.not_in_registry');
+      await write('audit_query', { outcome: 'refused' });
+      // Review of #1040: only a refusal keeps a read, not any recorded outcome.
+      await write('search', { outcome: 'failed' });
+      for (let i = 0; i < 3; i += 1) await write('search');
+
+      const page = async (params: Record<string, unknown>) =>
+        (await dispatchCapability({ pool }, owner, 'audit_query', params)) as AuditPage;
+
+      const all = await page({ filter: { actorPrincipalId: readerId }, limit: 100 });
+      expect(all.items).toHaveLength(7);
+      const notExcluded = await page({
+        filter: { actorPrincipalId: readerId, excludeReads: false },
+        limit: 100,
+      });
+      expect(notExcluded.items).toHaveLength(7);
+
+      // Two to a page: the first page is two writes, not the three newest reads.
+      const first = await page({
+        filter: { actorPrincipalId: readerId, excludeReads: true },
+        limit: 2,
+      });
+      expect(first.items).toHaveLength(2);
+      expect(typeof first.nextCursor).toBe('string');
+      const second = await page({
+        filter: { actorPrincipalId: readerId, excludeReads: true },
+        limit: 2,
+        cursor: first.nextCursor,
+      });
+      expect(second.items).toHaveLength(1);
+      expect(second.nextCursor).toBeUndefined();
+      expect([...first.items, ...second.items].map((row) => row.action).sort()).toEqual([
+        'audit_query',
+        'new_chat',
+        'test.not_in_registry',
+      ]);
+      // It narrows alongside the other filters.
+      const searches = await page({
+        filter: { actorPrincipalId: readerId, action: 'search', excludeReads: true },
+      });
+      expect(searches.items).toEqual([]);
+    });
   },
 );

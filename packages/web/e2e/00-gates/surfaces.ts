@@ -43,6 +43,9 @@ export interface Surface {
    *  from each page component's own source — see the per-surface comments below for which) or an
    *  existing `data-testid` an already-shipped spec already relies on. */
   readonly ready: (page: Page) => Locator;
+  /** Parts of this surface that differ from run to run on the CI stack's own data and are
+   *  masked in its screenshot, on top of the base `MASK_SELECTORS`. */
+  readonly masks?: readonly string[];
 }
 
 function heading(page: Page, name: string): Locator {
@@ -316,6 +319,14 @@ export const SURFACES: readonly Surface[] = [
     hash: '#/platform/audit',
     role: 'admin',
     ready: (page) => heading(page, '平台审计'), // PlatformAuditPage.tsx
+    // Legacy 669: with the reads left out by the kernel, the first screen is the stack's own
+    // writes — ids minted for this run (a model management token's), and rows written in one
+    // transaction, whose order ties on a random id. Their text is masked; the rows' layout
+    // is still compared.
+    masks: [
+      '[data-testid="platform-audit-row"] .data-row-title',
+      '[data-testid="platform-audit-row"] .data-row-meta',
+    ],
   },
   {
     id: 'platform-residue',

@@ -197,7 +197,11 @@ test.describe('Journey ⑧: 非所有者角色走一遍', () => {
       // content: nothing refused on the way, no section that only says "not your role".
       for (const href of new Set([...fixLinks, ...pageLinks])) {
         await page.goto(`/${href}`);
-        await expect(page.getByRole('heading', { level: 1 })).toBeVisible({ timeout: 15_000 });
+        // An open chat carries two (the list pane's 对话 and the chat's own title); legacy 669 put a
+        // chat's link on the audit page an auditor follows, so any one of them shows the page.
+        await expect(page.getByRole('heading', { level: 1 }).first()).toBeVisible({
+          timeout: 15_000,
+        });
         await settled();
         expect(
           await localRefusals.take(),

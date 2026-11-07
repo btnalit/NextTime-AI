@@ -151,6 +151,9 @@ export interface AuditQueryFilter {
    *  legacy 583 — the console marks it 由管理员智能体代为 too). A string that is not one of
    *  `AUDIT_ACTING_THROUGH_VALUES` matches nothing. */
   readonly actingThrough?: string;
+  /** Legacy 669: leave out rows whose `action` is one of these — the caller's pure reads — unless
+   *  the call was refused (`payload.outcome = 'refused'`), which an auditor looks for. */
+  readonly hiddenReadActions?: readonly string[];
   /** Any one of these `action` values (legacy 291: a set the caller would otherwise pick out of a
    *  capped page afterwards, where newer rows of other actions could take every slot). Internal
    *  only — `audit_query`'s wire filter never sets it. */
@@ -250,6 +253,11 @@ export async function queryAuditPage(
              and payload ->> 'sessionKind' = 'admin_agent')
        )
        and (
+         $12::text[] is null
+         or action <> all($12::text[])
+         or payload ->> 'outcome' = 'refused'
+       )
+       and (
          $7::timestamptz is null
          or (date_trunc('milliseconds', created_at), id) < ($7::timestamptz, $8::uuid)
        )
@@ -267,6 +275,7 @@ export async function queryAuditPage(
       filter.actions ? [...filter.actions] : null,
       filter.createdAtOrBefore ?? null,
       filter.actingThrough ?? null,
+      filter.hiddenReadActions ? [...filter.hiddenReadActions] : null,
     ],
   );
   const rows = result.rows.slice(0, limit).map(mapAuditRecordRow);

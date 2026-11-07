@@ -47,7 +47,7 @@ test.describe('S8 W1-B screenshot gate', () => {
       test.slow();
       await freezeClock(page);
       await goToSurface(page, surface);
-      await captureWidths(page, surface.id);
+      await captureWidths(page, surface.id, surface.masks);
     });
   }
 

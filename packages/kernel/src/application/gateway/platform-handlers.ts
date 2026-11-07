@@ -13,7 +13,6 @@ import type {
   UserWire,
   WorkspaceOwnerWire,
 } from '@nexttime/shared';
-import { CAPABILITY_REGISTRY, capabilityHasSideEffects } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { setWorkspaceContext, withPlatform } from '../../adapters/db/platform-context.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
@@ -45,6 +44,7 @@ import {
 import { getConfiguredTaskRuntime } from '../task/runtime.js';
 import { createWorkspaceWithOwner } from '../workspace/create.js';
 import type { WorkspacePurpose } from '../workspace/create.js';
+import { READ_AUDIT_ACTIONS } from './audit-reads.js';
 import { isLastActiveHumanOwner } from './auth.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 import { readModelCatalog, readModelCatalogWithHealth } from './models-catalog-handler.js';
@@ -1612,14 +1612,6 @@ const PLATFORM_AUDIT_SELECT = `
     left join users u on u.id = a.actor_user_id
    where a.workspace_id is null`;
 
-/** Registry capabilities with no side effects (`capabilityHasSideEffects`): a dispatched call is
- *  audited under its own name, so these are the pure-read audit rows — the same test the console's
- *  audit view uses for its "writes and decisions" default (`web/src/lib/audit.ts`
- *  `isReadAuditAction`). An action the registry does not know is never a read. */
-const READ_AUDIT_ACTIONS: readonly string[] = CAPABILITY_REGISTRY.filter(
-  (capability) => !capabilityHasSideEffects(capability),
-).map((capability) => capability.name);
-
 /** How many of the newest platform audit rows a `recentWrites` query looks through: the overview
  *  and status cards show the latest changes among them, and a console polling reads can never make
  *  that query scan the whole table. */
@@ -1651,6 +1643,8 @@ export async function queryPlatformAudit(
     targetUserId?: string;
     targetWorkspaceId?: string;
     actingThrough?: string;
+    /** Legacy 669: leave out the pure reads (`READ_AUDIT_ACTIONS`), except a refused one. */
+    excludeReads?: boolean;
     cursor?: string;
     limit: number;
   },
@@ -1683,6 +1677,14 @@ export async function queryPlatformAudit(
     const n = values.length;
     conditions.push(
       `(a.acting_through = $${n}::text or ($${n}::text = 'admin_agent_session' and a.acting_through is null and a.payload ->> 'sessionKind' = 'admin_agent'))`,
+    );
+  }
+  // Legacy 669: the reads go before paging, so a page of writes is a whole page. A refused read
+  // stays — what was refused is exactly what an auditor looks for (legacy 628).
+  if (filter.excludeReads) {
+    values.push(READ_AUDIT_ACTIONS);
+    conditions.push(
+      `(a.action <> all($${values.length}::text[]) or a.payload ->> 'outcome' = 'refused')`,
     );
   }
   if (filter.cursor) {
@@ -1718,6 +1720,7 @@ export const platformAuditQueryHandler: CapabilityHandler = async (
     targetUserId?: string;
     targetWorkspaceId?: string;
     actingThrough?: string;
+    excludeReads?: boolean;
     cursor?: string;
     limit?: number;
   };
