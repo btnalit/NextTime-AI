@@ -204,4 +204,54 @@ test.describe('batch C: an open console page across a kernel restart, an outage 
     await page.goto('/#/work/chats');
     await expect(page.getByRole('heading', { name: '对话' })).toBeVisible();
   });
+
+  test('the console session expires under an open Skill editor: signed in again, the editor and what was typed are back', async ({
+    page,
+  }) => {
+    test.skip(
+      !OWNER_LOGIN || !OWNER_PASSWORD || !EXPIRE_SESSIONS,
+      'set WEB_E2E_OWNER_LOGIN, WEB_E2E_OWNER_PASSWORD and E2E_EXPIRE_SESSIONS_CMD',
+    );
+    await page.goto('/');
+    await reachLoginForm(page);
+    await loginWithPassword(page, OWNER_LOGIN as string, OWNER_PASSWORD as string);
+    await page.goto('/#/govern/catalog/skills');
+    await page.getByRole('button', { name: '新建草稿' }).click();
+    const drawer = page.getByTestId('skill-editor-drawer');
+    await expect(drawer).toBeVisible({ timeout: 15_000 });
+    const name = `resilience-skill-${Date.now()}`;
+    const body = '# Steps\n\n1. Typed before the session expired.';
+    await drawer.getByLabel(/^名称/).fill(name);
+    await drawer.getByLabel(/^描述/).fill('Kept across an expired session');
+    await drawer.getByLabel(/^SKILL\.md 正文/).fill(body);
+
+    await run(EXPIRE_SESSIONS as string, OWNER_LOGIN as string);
+
+    // Legacy 662: the save is refused as unauthorized and the console goes back to sign-in… (a
+    // background read the page makes meanwhile may get there first: then there is no button left
+    // to press, and sign-in is what is checked either way).
+    await drawer
+      .getByRole('button', { name: '保存草稿' })
+      .click({ timeout: 5_000 })
+      .catch(() => undefined);
+    await expect(page.getByTestId('login-submit')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('会话已过期')).toBeVisible();
+
+    // …and signing in again opens the same editor with what was typed, saying it was kept.
+    await loginWithPassword(page, OWNER_LOGIN as string, OWNER_PASSWORD as string);
+    const again = page.getByTestId('skill-editor-drawer');
+    await expect(again).toBeVisible({ timeout: 15_000 });
+    await expect(again.getByTestId('restored-draft')).toBeVisible();
+    await expect(again.getByLabel(/^名称/)).toHaveValue(name);
+    await expect(again.getByLabel(/^SKILL\.md 正文/)).toHaveValue(body);
+
+    // Saved now, the draft is gone: the editor opened afresh starts empty.
+    await again.getByRole('button', { name: '保存草稿' }).click();
+    await expect(again.getByTestId('draft-proposed')).toBeVisible({ timeout: 15_000 });
+    await again.getByRole('button', { name: '完成' }).click();
+    await expect(again).toBeHidden();
+    await page.getByRole('button', { name: '新建草稿' }).click();
+    await expect(page.getByTestId('skill-editor-drawer').getByLabel(/^名称/)).toHaveValue('');
+    await expect(page.getByTestId('restored-draft')).toHaveCount(0);
+  });
 });

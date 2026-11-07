@@ -1,4 +1,5 @@
 import type { OntologyLinkTypeWire } from '@nexttime/shared';
+import { createUidCounter } from './client-uids.js';
 import type { Translate } from './i18n.js';
 import {
   type PredicateDraft,
@@ -52,10 +53,9 @@ export type FactCheckDraft =
     }
   | { readonly mode: 'json'; readonly text: string };
 
-let rowCounter = 0;
+const rowCounter = createUidCounter();
 export function newFactIdentityRow(key = ''): FactIdentityRow {
-  rowCounter += 1;
-  return { uid: `identity-${rowCounter}`, key, valueKind: 'string', valueText: '' };
+  return { uid: `identity-${rowCounter.next()}`, key, valueKind: 'string', valueText: '' };
 }
 
 export function emptyFactRef(): FactRefDraft {

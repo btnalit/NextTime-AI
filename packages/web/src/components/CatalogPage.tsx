@@ -120,6 +120,7 @@ import {
 } from './catalog/SkillPublishReview.js';
 import { SkillUsageSection } from './catalog/SkillUsage.js';
 import { WorkerEditorHost } from './catalog/WorkerEditorHost.js';
+import { forgetEditorDraft, useEditorReopen } from './catalog/useEditorReopen.js';
 import { gateOwnedParamsText } from './connect/GateOwnedParams.js';
 import {
   GovernanceChangeList,
@@ -2458,6 +2459,15 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   // left over from a previous open (e.g. the reader picked a different, real row instead of
   // finishing it) never flashes back in; see `CatalogPage`'s own doc comment.
   const showEditor = editor !== null && itemId === NEW_ITEM_ID;
+  // Legacy 662: the editor open when a session expired under it opens again after sign-in.
+  useEditorReopen({
+    principalId,
+    tab: 'skills',
+    editorAddressed: itemId === NEW_ITEM_ID,
+    editor,
+    setEditor,
+    rows: skills.state.status === 'ready' ? rows : null,
+  });
 
   function refresh(): void {
     invalidateCapability(http, 'list_skills');
@@ -2484,6 +2494,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   );
 
   function closeEditor(): void {
+    forgetEditorDraft(principalId, 'skill', editor);
     setEditor(null);
     onSelectItem(null);
   }
@@ -3075,6 +3086,15 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     refusalShown !== null && refusalShown.problems.length > 0 ? refusalShown.problems : null;
   const publishStepReference = refusalShown?.stepReference ?? null;
   const showEditor = editor !== null && itemId === NEW_ITEM_ID;
+  // Legacy 662: the editor open when a session expired under it opens again after sign-in.
+  useEditorReopen({
+    principalId,
+    tab: 'procedures',
+    editorAddressed: itemId === NEW_ITEM_ID,
+    editor,
+    setEditor,
+    rows: procedures.state.status === 'ready' ? rows : null,
+  });
 
   function refresh(): void {
     invalidateCapability(http, 'list_procedures');
@@ -3101,6 +3121,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   );
 
   function closeEditor(): void {
+    forgetEditorDraft(principalId, 'procedure', editor);
     setEditor(null);
     onSelectItem(null);
   }

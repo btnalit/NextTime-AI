@@ -296,3 +296,124 @@ describe('SkillEditor (S6-A A2)', () => {
     expect(screen.getByTestId('skill-object-types-input')).toBeTruthy();
   });
 });
+
+// Legacy 662: a session that expires under the editor unmounts it; what was typed comes back for
+// the same caller and the same Skill, and the fetched body does not overwrite it.
+describe('SkillEditor draft across an unmount (legacy 662)', () => {
+  const WORKSPACE = (callerId: string) => () => ({
+    id: 'ws-1',
+    name: 'ws',
+    caller: { id: callerId, role: 'builder' },
+  });
+  const ROW = {
+    id: 'sk-1',
+    version: 2,
+    status: 'published' as const,
+    name: 'restart-web',
+    description: 'Restart',
+    applicable: {},
+  };
+
+  function bodyField(): HTMLTextAreaElement {
+    return screen.getByLabelText(/SKILL.md 正文/) as HTMLTextAreaElement;
+  }
+
+  it('the next version being written: unmounted, opened again — the edited body is back, not the fetched one', async () => {
+    const { caller } = http({
+      get_workspace: WORKSPACE('p-me'),
+      get_skill: () => ({ markdown: 'v2 body' }),
+    });
+    const first = render(
+      <SkillEditor http={caller} nextVersionOf={ROW} onProposed={vi.fn()} onDone={vi.fn()} />,
+    );
+    await waitFor(() => expect(bodyField().value).toBe('v2 body'));
+    expect(screen.queryByTestId('restored-draft')).toBeNull();
+    fill(/SKILL.md 正文/, 'v2 body, half rewritten');
+    first.unmount();
+
+    // Signed in again: a new session, so the body is read again — and arrives after the restore.
+    let answer: (value: { markdown: string }) => void = () => undefined;
+    const again = http({
+      get_workspace: WORKSPACE('p-me'),
+      get_skill: () =>
+        new Promise<{ markdown: string }>((resolve) => {
+          answer = resolve;
+        }),
+    });
+    render(
+      <SkillEditor http={again.caller} nextVersionOf={ROW} onProposed={vi.fn()} onDone={vi.fn()} />,
+    );
+    await waitFor(() => expect(bodyField().value).toBe('v2 body, half rewritten'));
+    expect(screen.getByTestId('restored-draft').textContent).toContain('已恢复上次没有提交的内容');
+    // The fetched body arrives too; the restored one stays.
+    answer({ markdown: 'v2 body' });
+    await waitFor(() => expect(bodyField().disabled).toBe(false));
+    expect(bodyField().value).toBe('v2 body, half rewritten');
+  });
+
+  it('nothing is kept for an editor opened and left as it was', async () => {
+    const { caller } = http({
+      get_workspace: WORKSPACE('p-me'),
+      get_skill: () => ({ markdown: 'v2 body' }),
+    });
+    const first = render(
+      <SkillEditor http={caller} nextVersionOf={ROW} onProposed={vi.fn()} onDone={vi.fn()} />,
+    );
+    await waitFor(() => expect(bodyField().value).toBe('v2 body'));
+    first.unmount();
+    expect(sessionStorage.getItem('nexttime.drafts')).toBeNull();
+  });
+
+  it('another caller opening the same Skill does not get it', async () => {
+    const mine = http({
+      get_workspace: WORKSPACE('p-me'),
+      get_skill: () => ({ markdown: 'v2 body' }),
+    });
+    const first = render(
+      <SkillEditor http={mine.caller} nextVersionOf={ROW} onProposed={vi.fn()} onDone={vi.fn()} />,
+    );
+    await waitFor(() => expect(bodyField().value).toBe('v2 body'));
+    fill(/SKILL.md 正文/, 'mine');
+    first.unmount();
+
+    const theirs = http({
+      get_workspace: WORKSPACE('p-other'),
+      get_skill: () => ({ markdown: 'v2 body' }),
+    });
+    render(
+      <SkillEditor
+        http={theirs.caller}
+        nextVersionOf={ROW}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(bodyField().value).toBe('v2 body'));
+    expect(screen.queryByTestId('restored-draft')).toBeNull();
+  });
+
+  it('取消 drops the draft, and so does a saved one', async () => {
+    const { caller } = http({
+      get_workspace: WORKSPACE('p-me'),
+      propose_skill: () => ({ id: 'sk-9', version: 1, status: 'draft', name: 'restart-web' }),
+    });
+    const onDone = vi.fn();
+    const first = render(<SkillEditor http={caller} onProposed={vi.fn()} onDone={onDone} />);
+    await waitFor(() => expect(caller.call).toHaveBeenCalledWith('get_workspace', undefined));
+    fill(/^名称/, 'restart-web');
+    await waitFor(() => expect(sessionStorage.getItem('nexttime.drafts')).not.toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(onDone).toHaveBeenCalled();
+    expect(sessionStorage.getItem('nexttime.drafts')).toBeNull();
+    first.unmount();
+
+    render(<SkillEditor http={caller} onProposed={vi.fn()} onDone={vi.fn()} />);
+    fill(/^名称/, 'restart-web');
+    fill(/^描述/, 'Restart');
+    fill(/SKILL.md 正文/, 'body');
+    await waitFor(() => expect(sessionStorage.getItem('nexttime.drafts')).not.toBeNull());
+    fireEvent.click(screen.getByTestId('skill-submit'));
+    await screen.findByTestId('draft-proposed');
+    expect(sessionStorage.getItem('nexttime.drafts')).toBeNull();
+  });
+});

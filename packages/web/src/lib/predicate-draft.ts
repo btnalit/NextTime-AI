@@ -6,6 +6,7 @@ import {
   PREDICATE_ORDER_OPS,
   type PredicateCompareOp,
 } from '@nexttime/shared';
+import { createUidCounter } from './client-uids.js';
 import type { Translate } from './i18n.js';
 
 /**
@@ -87,10 +88,9 @@ export type PredicateDraft =
     }
   | { readonly mode: 'json'; readonly text: string };
 
-let uidCounter = 0;
+const uidCounter = createUidCounter();
 function nextUid(): string {
-  uidCounter += 1;
-  return `pred-${uidCounter}`;
+  return `pred-${uidCounter.next()}`;
 }
 
 export function newPredicateCondition(): PredicateConditionDraft {

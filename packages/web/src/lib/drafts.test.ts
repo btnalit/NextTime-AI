@@ -2,11 +2,15 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   MAX_DRAFTS,
+  MAX_DRAFT_CHARS,
   clearDrafts,
   draftScope,
+  forgetDraft,
   keepDraftsOf,
   loadDraft,
+  loadDraftValue,
   saveDraft,
+  saveDraftValue,
 } from './drafts.js';
 
 /** drafts.test.ts: legacy 658 — the chat box's unsent text in this tab's sessionStorage. */
@@ -73,5 +77,27 @@ describe('lib/drafts keepDraftsOf', () => {
     expect(loadDraft(draftScope('p-3', 'chat-b'))).toBe('three');
     keepDraftsOf([]);
     expect(sessionStorage.getItem('nexttime.drafts')).toBeNull();
+  });
+});
+
+describe('lib/drafts structured values (legacy 662)', () => {
+  it('keeps an editor form as JSON and gives it back', () => {
+    const scope = draftScope('p-1', 'skill:new');
+    saveDraftValue(scope, { name: 'restart-web', steps: [{ key: 'step-1' }] });
+    expect(loadDraftValue(scope)).toEqual({ name: 'restart-web', steps: [{ key: 'step-1' }] });
+    forgetDraft(scope);
+    expect(loadDraftValue(scope)).toBeNull();
+  });
+
+  it('a chat draft under the same key is not taken for a value', () => {
+    saveDraft(draftScope('p-1', 'x'), 'plain text');
+    expect(loadDraftValue(draftScope('p-1', 'x'))).toBeNull();
+  });
+
+  it('a draft past the size ceiling is not kept, and an older copy goes', () => {
+    const scope = draftScope('p-1', 'skill:new');
+    saveDraftValue(scope, { markdown: 'short' });
+    saveDraftValue(scope, { markdown: 'x'.repeat(MAX_DRAFT_CHARS) });
+    expect(loadDraftValue(scope)).toBeNull();
   });
 });
