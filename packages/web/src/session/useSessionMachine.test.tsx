@@ -378,6 +378,25 @@ describe('useSessionMachine: back at sign-in, the reason and the drafts (legacy 
     expect(JSON.parse(sessionStorage.getItem('nexttime.drafts') ?? '{}')).toEqual(DRAFT);
   });
 
+  it('someone else signing in after an expiry: the last person’s drafts are gone from storage, not only out of sight (#501 P3-1)', async () => {
+    const { result } = await bootCookieSession([membership('ws-1')]);
+    sessionStorage.setItem(
+      'nexttime.drafts',
+      JSON.stringify({ ...DRAFT, 'p-ws-2/chat-2': 'the next person’s own' }),
+    );
+    act(() => lastSocket().end('session_invalid'));
+    await waitFor(() => expect(result.current.preSession.kind).toBe('login'));
+
+    // Signed in as a user whose only membership is ws-2.
+    await act(() =>
+      result.current.proceedAfterCookieAuth({ ...BOB, id: 'u-carol' }, [membership('ws-2')]),
+    );
+
+    expect(JSON.parse(sessionStorage.getItem('nexttime.drafts') ?? '{}')).toEqual({
+      'p-ws-2/chat-2': 'the next person’s own',
+    });
+  });
+
   it('Sign out says nothing and clears the drafts', async () => {
     const { result } = await bootCookieSession([membership('ws-1')]);
     sessionStorage.setItem('nexttime.drafts', JSON.stringify(DRAFT));

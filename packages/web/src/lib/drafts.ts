@@ -9,7 +9,9 @@
  * Same storage rules as `lib/session.ts`: `sessionStorage` only (it goes when the tab closes),
  * best-effort (it throws in some private-browsing contexts, and a draft that cannot be kept is no
  * worse than before), and cleared on an explicit sign-out (`clearDrafts`) — a tab someone signed
- * out of keeps nothing they typed.
+ * out of keeps nothing they typed. A sign-in that is not a sign-out's — someone else signing in
+ * after a session expired — keeps only the drafts of the principals it signed in as
+ * (`keepDraftsOf`): what the last person typed is not only out of sight, it is gone from storage.
  */
 
 const DRAFTS_STORAGE_KEY = 'nexttime.drafts';
@@ -65,6 +67,20 @@ export function saveDraft(scope: string, text: string): void {
     }
   }
   writeAll(drafts);
+}
+
+/** Drops every draft not typed by one of `principalIds` — a sign-in keeps only its own. */
+export function keepDraftsOf(principalIds: readonly string[]): void {
+  const keep = new Set(principalIds);
+  const drafts = readAll();
+  let changed = false;
+  for (const scope of Object.keys(drafts)) {
+    if (!keep.has(scope.slice(0, scope.indexOf('/')))) {
+      delete drafts[scope];
+      changed = true;
+    }
+  }
+  if (changed) writeAll(drafts);
 }
 
 /** Every draft of this tab, gone — an explicit sign-out or "forget key". */

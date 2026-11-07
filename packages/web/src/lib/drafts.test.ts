@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest';
-import { MAX_DRAFTS, clearDrafts, draftScope, loadDraft, saveDraft } from './drafts.js';
+import {
+  MAX_DRAFTS,
+  clearDrafts,
+  draftScope,
+  keepDraftsOf,
+  loadDraft,
+  saveDraft,
+} from './drafts.js';
 
 /** drafts.test.ts: legacy 658 — the chat box's unsent text in this tab's sessionStorage. */
 
@@ -51,6 +58,20 @@ describe('lib/drafts', () => {
   it('clearDrafts empties the store', () => {
     saveDraft(draftScope('p-1', 'chat-a'), 'one');
     clearDrafts();
+    expect(sessionStorage.getItem('nexttime.drafts')).toBeNull();
+  });
+});
+
+describe('lib/drafts keepDraftsOf', () => {
+  it('keeps the drafts of the principals given and drops the rest', () => {
+    saveDraft(draftScope('p-1', 'chat-a'), 'one');
+    saveDraft(draftScope('p-2', 'chat-a'), 'two');
+    saveDraft(draftScope('p-3', 'chat-b'), 'three');
+    keepDraftsOf(['p-1', 'p-3']);
+    expect(loadDraft(draftScope('p-1', 'chat-a'))).toBe('one');
+    expect(loadDraft(draftScope('p-2', 'chat-a'))).toBeNull();
+    expect(loadDraft(draftScope('p-3', 'chat-b'))).toBe('three');
+    keepDraftsOf([]);
     expect(sessionStorage.getItem('nexttime.drafts')).toBeNull();
   });
 });
