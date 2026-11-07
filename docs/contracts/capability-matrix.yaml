@@ -22,7 +22,7 @@ ratchet:
   console_unexplained: 10
   kernel_test_missing: 4
   e2e_waived: 76
-  repeat_unclear: 103
+  repeat_unclear: 100
 capabilities:
   add_eval_case:
     console: required
@@ -84,7 +84,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 665"
+    repeat: idempotent
   assert_fact:
     console: "none: 待说明（2026-11-06 盘点）"
     agents: []
@@ -796,7 +796,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 665"
+    repeat: idempotent
   repin_eval_suite:
     console: required
     agents: []
@@ -1048,7 +1048,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 665"
+    repeat: idempotent
   update_gate_instance:
     console: required
     agents: []

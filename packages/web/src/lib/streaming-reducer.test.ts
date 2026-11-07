@@ -41,6 +41,49 @@ describe('streamReducer', () => {
     expect(state).toBe(started);
   });
 
+  it('follows a Turn it did not start from its first stream while none is running (legacy 673)', () => {
+    const state = streamReducer(initialTurnState, {
+      kind: 'stream',
+      turnId: 'turn-late',
+      payload: { streamKind: 'textDelta', delta: 'On it' },
+    });
+    expect(state).toEqual({
+      turnId: 'turn-late',
+      status: 'running',
+      streamingText: 'On it',
+      toolCalls: [],
+    });
+    const ended = streamReducer(state, {
+      kind: 'metadata',
+      metadata: { turnId: 'turn-late', turnStatus: 'completed' },
+    });
+    expect(ended.status).toBe('completed');
+  });
+
+  it('follows the next Turn after its own has ended', () => {
+    let state = streamReducer(initialTurnState, { kind: 'turnStarted', turnId: 't1' });
+    state = streamReducer(state, {
+      kind: 'metadata',
+      metadata: { turnId: 't1', turnStatus: 'completed' },
+    });
+    state = streamReducer(state, {
+      kind: 'stream',
+      turnId: 't2',
+      payload: { streamKind: 'textDelta', delta: 'next' },
+    });
+    expect(state).toMatchObject({ turnId: 't2', status: 'running', streamingText: 'next' });
+  });
+
+  it('keeps what a Turn already streamed when the send that started it answers late', () => {
+    let state = streamReducer(initialTurnState, {
+      kind: 'stream',
+      turnId: 't1',
+      payload: { streamKind: 'textDelta', delta: 'echo' },
+    });
+    state = streamReducer(state, { kind: 'turnStarted', turnId: 't1' });
+    expect(state).toMatchObject({ turnId: 't1', status: 'running', streamingText: 'echo' });
+  });
+
   it('adds a toolCallStarted row and updates it on toolCallEnded', () => {
     let state = streamReducer(initialTurnState, { kind: 'turnStarted', turnId: 't1' });
     state = streamReducer(state, {

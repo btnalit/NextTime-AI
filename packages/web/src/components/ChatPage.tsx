@@ -9,6 +9,7 @@ import { draftScope } from '../lib/drafts.js';
 import {
   composerEvaluationContentStep,
   composerProbeHoldStep,
+  composerUncertainSendStep,
   composerUnstorableTextStep,
   describeError,
 } from '../lib/errors.js';
@@ -101,15 +102,7 @@ export function ChatPage({
   const toast = useToast();
   const [sendError, setSendError] = useState<unknown | null>(null);
 
-  // UX P3-3 on #1023: a send the dropped connection refused says so until the page is connected
-  // again — then the note is stale (the page reconnected by itself, as it said) and goes.
   const wsStatus = useWsStatus(client);
-  useEffect(() => {
-    if (wsStatus !== 'connected') return;
-    setSendError((current: unknown) =>
-      current !== null && describeError(current).code === 'connection_closed' ? null : current,
-    );
-  }, [wsStatus]);
 
   const chatSummary = useChatSummary(client, chatId);
   const { messages, turn, setTurn, caughtUp, subscribeError } = useChatMessages(
@@ -134,7 +127,20 @@ export function ChatPage({
     setSendError,
     follow.setFollow,
     viewerId === null ? null : draftScope(viewerId, chatId),
+    messages,
   );
+
+  // UX P3-3 on #1023: a send the dropped connection refused says so until the page is connected
+  // again — then the note is stale (the page reconnected by itself, as it said) and goes. Not a
+  // send the connection closed under (legacy 673): that one may have run, and reconnecting does
+  // not say whether it did.
+  const sendUncertain = composer.sendUncertain;
+  useEffect(() => {
+    if (wsStatus !== 'connected' || sendUncertain) return;
+    setSendError((current: unknown) =>
+      current !== null && describeError(current).code === 'connection_closed' ? null : current,
+    );
+  }, [wsStatus, sendUncertain]);
 
   const turnAttributions = useTurnAttributions(http, chatId, turn.status);
   const lastReplyOfTurn = useMemo(() => {
@@ -338,15 +344,41 @@ export function ChatPage({
               {sendError !== null ? (
                 <ErrorBanner
                   error={sendError}
+                  title={
+                    composer.sendUncertain
+                      ? t('不确定消息发出没有', 'Not sure the message went out')
+                      : undefined
+                  }
                   overrides={{
+                    ...(composer.sendUncertain
+                      ? {
+                          timeout: composerUncertainSendStep(t, composer.resendable),
+                          connection_closed: composerUncertainSendStep(t, composer.resendable),
+                        }
+                      : {}),
                     unstorable_text: composerUnstorableTextStep(t, composer.hasUnstorableChar),
                     evaluation_content_withheld: composerEvaluationContentStep(t),
                     evaluation_probe_hold: composerProbeHoldStep(t),
                   }}
                   action={
-                    // Legacy 335: the character is in the draft, so the page can take it out.
+                    // Legacy 673: the same text again, under the same key — safe to press.
+                    composer.resendable ? (
+                      <Button
+                        variant="secondary"
+                        size="s"
+                        disabled={wsStatus !== 'connected' || composer.busy}
+                        title={
+                          wsStatus !== 'connected'
+                            ? t('等连接恢复后再发', 'Wait for the connection to come back')
+                            : undefined
+                        }
+                        onClick={composer.resend}
+                      >
+                        {t('再发一次', 'Send again')}
+                      </Button>
+                    ) : // Legacy 335: the character is in the draft, so the page can take it out.
                     describeError(sendError).code === 'unstorable_text' &&
-                    composer.hasUnstorableChar ? (
+                      composer.hasUnstorableChar ? (
                       <Button
                         variant="secondary"
                         size="s"
