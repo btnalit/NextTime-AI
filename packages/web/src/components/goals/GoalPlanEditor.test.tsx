@@ -1392,7 +1392,11 @@ describe('the plan editor across an unmount (legacy 662)', () => {
 
     renderPage(scriptedHttp(handlers(paused(), workspace('p-alice', 'member'))));
     await screen.findByTestId('goal-plan-editor');
-    expect(screen.getByTestId('restored-draft').textContent).toContain('已恢复上次没有提交的修改');
+    // The editor reads who is editing on its own (`useWorkspaceIdentity`), so the restore lands a
+    // read after the editor shows — wait for it rather than look on the first render.
+    expect((await screen.findByTestId('restored-draft')).textContent).toContain(
+      '已恢复上次没有提交的修改',
+    );
     expect(attempts().value).toBe('3');
 
     fireEvent.click(screen.getByTestId('goal-plan-cancel'));

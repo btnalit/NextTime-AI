@@ -130,15 +130,18 @@ describe('lib/drafts total size (legacy 667)', () => {
     });
     saveDraft(draftScope('p-1', 'chat-c'), 'newest');
     expect(loadDraft(draftScope('p-1', 'chat-a'))).toBeNull();
+    // Only as many as it takes: the next oldest is still there.
+    expect(loadDraft(draftScope('p-1', 'chat-b'))).toBe('newer');
     expect(loadDraft(draftScope('p-1', 'chat-c'))).toBe('newest');
   });
 
   it('a draft forgotten while the store is full does not come back', () => {
     saveDraft(draftScope('p-1', 'chat-a'), 'sent already');
+    saveDraft(draftScope('p-1', 'chat-b'), 'typed');
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new DOMException('full', 'QuotaExceededError');
     });
-    saveDraft(draftScope('p-1', 'chat-b'), 'typed');
+    forgetDraft(draftScope('p-1', 'chat-a'));
     expect(loadDraft(draftScope('p-1', 'chat-a'))).toBeNull();
   });
 });
