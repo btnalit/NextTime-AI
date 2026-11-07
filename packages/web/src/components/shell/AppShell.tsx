@@ -9,6 +9,7 @@ import { useWorkspaceIdentity } from '../../hooks/useWorkspaceIdentity.js';
 import { useWsStatus } from '../../hooks/useWsStatus.js';
 import type { WireMembership, WireUser } from '../../lib/auth-api.js';
 import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
+import { keepDraftsOf } from '../../lib/drafts.js';
 import { useExplorerAvailable } from '../../lib/explorer-probe.js';
 import type { WorkspaceInfo } from '../../lib/governance.js';
 import { breadcrumbFor } from '../../lib/nav.js';
@@ -65,7 +66,12 @@ export function AppShell({
   // pages under the shell read the same number (`useAdminProposalCountValue`).
   const adminProposalCount = useAdminProposalCount(http, pushes);
   const wsStatus = useWsStatus(pushes);
-  const { workspaceName, role } = useWorkspaceIdentity(http);
+  const { workspaceName, role, principalId } = useWorkspaceIdentity(http);
+  // Legacy 658 (#501 P3-1 on #1023): an API-key session learns who it is here; drafts another
+  // principal left on this tab go. A cookie session does it at sign-in (`useSessionMachine`).
+  useEffect(() => {
+    if (authMode === 'apiKey' && principalId !== null) keepDraftsOf([principalId]);
+  }, [authMode, principalId]);
   const kernelVersion = useKernelVersion(http, platformRole === 'admin');
   // S6-C (§5.7): hide the third-party Explorer link while caddy serves the "bundle not built"
   // placeholder; the native 图谱 page is always there.

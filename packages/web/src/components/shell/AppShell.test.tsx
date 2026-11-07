@@ -284,3 +284,30 @@ describe('AppShell follows a role change without a reload (#541 review M2)', () 
     expect(screen.queryByTestId('nav-members')).toBeNull();
   });
 });
+
+// Legacy 658 (#501 P3-1 on #1023): an API-key session keeps only its own chat drafts on this tab.
+describe('AppShell: drafts another principal left on this tab', () => {
+  const DRAFTS = { 'p-1/chat-a': 'mine', 'p-9/chat-b': 'the last person’s' };
+
+  afterEach(() => sessionStorage.clear());
+
+  it('an API-key session drops them once it knows who it is', async () => {
+    sessionStorage.setItem('nexttime.drafts', JSON.stringify(DRAFTS));
+    renderShell(scriptedHttp(baseHandlers()), { authMode: 'apiKey' });
+    await waitFor(() =>
+      expect(JSON.parse(sessionStorage.getItem('nexttime.drafts') ?? '{}')).toEqual({
+        'p-1/chat-a': 'mine',
+      }),
+    );
+  });
+
+  it('a cookie session leaves that to sign-in, which knows all its memberships', async () => {
+    sessionStorage.setItem('nexttime.drafts', JSON.stringify(DRAFTS));
+    const http = scriptedHttp(baseHandlers());
+    renderShell(http);
+    await waitFor(() =>
+      expect(http.calls.some((call) => call.name === 'get_workspace')).toBe(true),
+    );
+    expect(JSON.parse(sessionStorage.getItem('nexttime.drafts') ?? '{}')).toEqual(DRAFTS);
+  });
+});

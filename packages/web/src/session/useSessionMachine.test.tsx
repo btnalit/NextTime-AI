@@ -10,7 +10,8 @@ import type { WsSessionEndReason } from '../lib/ws-client.js';
  * kernel ends a published session for good. `-32001` / HTTP `unauthorized` → login, with the
  * socket closed (the client itself no longer reconnects — lib/ws-client.test.ts); `-32002` →
  * re-read `/api/auth/me` and choose a workspace again, not login. R-15: a Sign out the kernel never
- * confirmed is still a sign-out on every later load. `lib/auth-api`, `lib/ws-client` and
+ * confirmed is still a sign-out on every later load. Legacy 658: the login the kernel sends the
+ * console back to says why, and keeps this tab's chat drafts; a sign-out clears them. `lib/auth-api`, `lib/ws-client` and
  * `lib/http-client` are stubbed at the module boundary, as in App.test.tsx.
  */
 
@@ -130,7 +131,7 @@ describe('useSessionMachine: the kernel ends the published session (R-16)', () =
     act(() => socket.end('session_invalid'));
 
     await waitFor(() => expect(result.current.session).toBeNull());
-    expect(result.current.preSession).toEqual({ kind: 'login' });
+    expect(result.current.preSession).toEqual({ kind: 'login', reason: 'sessionExpired' });
     expect(socket.closed).toBe(true);
     expect(stubs.sockets).toHaveLength(1); // nothing reopened
   });
@@ -142,7 +143,7 @@ describe('useSessionMachine: the kernel ends the published session (R-16)', () =
     act(() => stubs.httpOptions[stubs.httpOptions.length - 1]?.onUnauthorized?.());
 
     await waitFor(() => expect(result.current.session).toBeNull());
-    expect(result.current.preSession).toEqual({ kind: 'login' });
+    expect(result.current.preSession).toEqual({ kind: 'login', reason: 'sessionExpired' });
     expect(socket.closed).toBe(true);
   });
 
@@ -179,7 +180,9 @@ describe('useSessionMachine: the kernel ends the published session (R-16)', () =
     stubs.getMe.mockRejectedValueOnce(new Error('401'));
     act(() => lastSocket().end('membership_gone'));
 
-    await waitFor(() => expect(result.current.preSession).toEqual({ kind: 'login' }));
+    await waitFor(() =>
+      expect(result.current.preSession).toEqual({ kind: 'login', reason: 'sessionExpired' }),
+    );
     expect(result.current.session).toBeNull();
   });
 
@@ -195,7 +198,7 @@ describe('useSessionMachine: the kernel ends the published session (R-16)', () =
     act(() => lastSocket().end('session_invalid'));
 
     await waitFor(() => expect(result.current.session).toBeNull());
-    expect(result.current.preSession).toEqual({ kind: 'login' });
+    expect(result.current.preSession).toEqual({ kind: 'login', reason: 'keyInvalid' });
     expect(sessionStorage.getItem('nexttime.apiKey')).toBeNull();
   });
 
@@ -357,5 +360,63 @@ describe('useSessionMachine: Sign out when the kernel cannot be reached (R-15)',
     await waitFor(() => expect(next.result.current.preSession).toEqual({ kind: 'login' }));
     expect(stubs.getMe).toHaveBeenCalledTimes(1);
     expect(stubs.logout).not.toHaveBeenCalled();
+  });
+});
+
+describe('useSessionMachine: back at sign-in, the reason and the drafts (legacy 658)', () => {
+  const DRAFT = { 'p-ws-1/chat-1': 'half a message' };
+
+  it('a session the kernel ended keeps the drafts for the same caller to find', async () => {
+    const { result } = await bootCookieSession([membership('ws-1')]);
+    sessionStorage.setItem('nexttime.drafts', JSON.stringify(DRAFT));
+
+    act(() => lastSocket().end('session_invalid'));
+
+    await waitFor(() =>
+      expect(result.current.preSession).toEqual({ kind: 'login', reason: 'sessionExpired' }),
+    );
+    expect(JSON.parse(sessionStorage.getItem('nexttime.drafts') ?? '{}')).toEqual(DRAFT);
+  });
+
+  it('someone else signing in after an expiry: the last person’s drafts are gone from storage, not only out of sight (#501 P3-1)', async () => {
+    const { result } = await bootCookieSession([membership('ws-1')]);
+    sessionStorage.setItem(
+      'nexttime.drafts',
+      JSON.stringify({ ...DRAFT, 'p-ws-2/chat-2': 'the next person’s own' }),
+    );
+    act(() => lastSocket().end('session_invalid'));
+    await waitFor(() => expect(result.current.preSession.kind).toBe('login'));
+
+    // Signed in as a user whose only membership is ws-2.
+    await act(() =>
+      result.current.proceedAfterCookieAuth({ ...BOB, id: 'u-carol' }, [membership('ws-2')]),
+    );
+
+    expect(JSON.parse(sessionStorage.getItem('nexttime.drafts') ?? '{}')).toEqual({
+      'p-ws-2/chat-2': 'the next person’s own',
+    });
+  });
+
+  it('Sign out says nothing and clears the drafts', async () => {
+    const { result } = await bootCookieSession([membership('ws-1')]);
+    sessionStorage.setItem('nexttime.drafts', JSON.stringify(DRAFT));
+
+    await act(() => result.current.cookieLogout());
+
+    expect(result.current.preSession).toEqual({ kind: 'login' });
+    expect(sessionStorage.getItem('nexttime.drafts')).toBeNull();
+  });
+
+  it('Forget key clears the drafts too', async () => {
+    stubs.getMe.mockRejectedValueOnce(new Error('401'));
+    const { result } = renderHook(() => useSessionMachine({ syncRoute: () => undefined }));
+    await waitFor(() => expect(result.current.preSession).toEqual({ kind: 'login' }));
+    await act(() => result.current.connectApiKey('sk-member'));
+    sessionStorage.setItem('nexttime.drafts', JSON.stringify(DRAFT));
+
+    act(() => result.current.forgetKey());
+
+    expect(result.current.session).toBeNull();
+    expect(sessionStorage.getItem('nexttime.drafts')).toBeNull();
   });
 });
