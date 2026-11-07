@@ -10,6 +10,7 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool } from '../../adapters/db/pool.js';
 import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
 import { dispatchCapability } from './dispatch.js';
+import type { ResolvedCaller } from './resolve-caller.js';
 import {
   type Seeded,
   humanCaller,
@@ -48,12 +49,46 @@ const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 const MATRIX = path.join(KERNEL_ROOT, '..', '..', 'docs', 'contracts', 'capability-matrix.yaml');
 
-/** Params for rows the schema-built ones cannot make succeed; empty until a row needs one. */
-const RECIPES: Readonly<Record<string, (seed: Seeded) => Record<string, unknown>>> = {};
+/** What a recipe gets: the seeded workspace, its owner's caller, and the pool. */
+interface RecipeContext {
+  readonly pool: Pool;
+  readonly caller: ResolvedCaller;
+  readonly seed: Seeded;
+}
+
+/** One extra case: sets the workspace up before the first call and returns the params; `first`
+ *  is what the first call must answer, so the case provably took the path it is named for. */
+interface Recipe {
+  readonly setUp: (ctx: RecipeContext) => Promise<Record<string, unknown>>;
+  readonly first?: unknown;
+}
+
+/** Extra cases for a row, beyond the one with schema-built params on the bare seed. A declaration
+ *  holds on every path, so a row whose answer depends on state gets a case per state (per #493 on
+ *  batch D4). */
+const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
+  stop_agent: {
+    // The bare seed has no Turn, so the schema-built case only walks the idle path
+    // (`stopped: false` twice). Here a Turn is running first — `send_chat_message` starts one,
+    // and with no agent runtime wired nothing ends it — so both calls take the stop path.
+    'a running Turn': {
+      setUp: async ({ pool, caller, seed }) => {
+        await dispatchCapability({ pool }, caller, 'send_chat_message', {
+          chatId: seed.chatId,
+          text: 'run, so that it can be stopped',
+        });
+        return { chatId: seed.chatId };
+      },
+      first: { stopped: true },
+    },
+  },
+};
 
 interface Declared {
   readonly capability: Capability;
   readonly repeat: string;
+  /** The recipe case this is, or undefined for schema-built params on the bare seed. */
+  readonly recipe?: string;
 }
 
 function declaredRows(): Declared[] {
@@ -66,6 +101,9 @@ function declaredRows(): Declared[] {
     const capability = getCapability(name);
     if (capability === undefined) throw new Error(`matrix row ${name} has no capability`);
     out.push({ capability, repeat: row.repeat });
+    for (const recipe of Object.keys(RECIPES[name] ?? {})) {
+      out.push({ capability, repeat: row.repeat, recipe });
+    }
   }
   return out;
 }
@@ -124,85 +162,94 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(declared.length).toBeGreaterThan(0);
     });
 
-    it.each(declared.map((row) => [row.capability.name, row] as const))(
-      '%s',
-      async (_name, { capability, repeat }) => {
-        expect(capability.scope, 'a platform row needs a platform fixture first').not.toBe(
-          'platform',
-        );
-        const workspace = await newWorkspace(pool, `repeat-${capability.name}`, [
-          'owner',
-          'member',
-        ]);
-        const ownerId = workspace.principals.get('owner') as string;
-        const seed = await seedWorkspace(
-          pool,
-          workspace.workspaceId,
-          ownerId,
-          `repeat-${randomUUID()}`,
-        );
-        const caller = humanCaller(workspace.workspaceId, ownerId, 'owner');
-        const params = (
-          RECIPES[capability.name] ?? ((s: Seeded) => paramsFor(capability.paramsSchema, s))
-        )(seed);
-        const call = () => dispatchCapability({ pool }, caller, capability.name, params);
+    it.each(
+      declared.map(
+        (row) =>
+          [
+            row.recipe === undefined
+              ? row.capability.name
+              : `${row.capability.name} — ${row.recipe}`,
+            row,
+          ] as const,
+      ),
+    )('%s', async (_name, { capability, repeat, recipe }) => {
+      expect(capability.scope, 'a platform row needs a platform fixture first').not.toBe(
+        'platform',
+      );
+      const workspace = await newWorkspace(pool, `repeat-${capability.name}`, ['owner', 'member']);
+      const ownerId = workspace.principals.get('owner') as string;
+      const seed = await seedWorkspace(
+        pool,
+        workspace.workspaceId,
+        ownerId,
+        `repeat-${randomUUID()}`,
+      );
+      const caller = humanCaller(workspace.workspaceId, ownerId, 'owner');
+      const chosen = recipe === undefined ? undefined : RECIPES[capability.name]?.[recipe];
+      const params =
+        chosen === undefined
+          ? paramsFor(capability.paramsSchema, seed)
+          : await chosen.setUp({ pool, caller, seed });
+      const call = () => dispatchCapability({ pool }, caller, capability.name, params);
 
-        let first: unknown;
-        try {
-          first = await call();
-        } catch (error) {
-          throw new Error(
-            `${capability.name} declares repeat: ${repeat}, but its first call failed (${String(error)}) — add a recipe to RECIPES, or declare it unclear`,
-          );
-        }
-        const rowsAfterFirst = await rowsBut(workspace.workspaceId);
-        const auditAfterFirst = new Set(
-          (await auditRows(workspace.workspaceId)).map((row) => row.id),
+      let first: unknown;
+      try {
+        first = await call();
+      } catch (error) {
+        throw new Error(
+          `${capability.name} declares repeat: ${repeat}, but its first call failed (${String(error)}) — fix the recipe or add one to RECIPES, or declare it unclear`,
         );
+      }
+      if (chosen?.first !== undefined) expect(first).toEqual(chosen.first);
+      const rowsAfterFirst = await rowsBut(workspace.workspaceId);
+      const auditAfterFirst = new Set(
+        (await auditRows(workspace.workspaceId)).map((row) => row.id),
+      );
 
-        let second: unknown;
-        let refusal: unknown;
-        try {
-          second = await call();
-        } catch (error) {
-          refusal = error;
-        }
-        const rowsAfterSecond = await rowsBut(workspace.workspaceId);
-        const newAudit = (await auditRows(workspace.workspaceId)).filter(
-          (row) => !auditAfterFirst.has(row.id),
-        );
+      let second: unknown;
+      let refusal: unknown;
+      try {
+        second = await call();
+      } catch (error) {
+        refusal = error;
+      }
+      const rowsAfterSecond = await rowsBut(workspace.workspaceId);
+      const newAudit = (await auditRows(workspace.workspaceId)).filter(
+        (row) => !auditAfterFirst.has(row.id),
+      );
 
-        if (repeat.startsWith('conflict: ')) {
-          expect(refusal, 'the second call must be refused').toBeDefined();
-          const mapped = mapCapabilityError(refusal);
-          expect(mapped.code).toBe(repeat.slice('conflict: '.length));
-          expect(mapped.status).toBeGreaterThanOrEqual(400);
-          expect(mapped.status).toBeLessThan(500);
-          expect(rowsAfterSecond).toEqual(rowsAfterFirst);
-          expect(newAudit.filter((row) => row.payload.outcome !== 'refused')).toEqual([]);
-          return;
-        }
+      if (repeat.startsWith('conflict: ')) {
+        expect(refusal, 'the second call must be refused').toBeDefined();
+        const mapped = mapCapabilityError(refusal);
+        expect(mapped.code).toBe(repeat.slice('conflict: '.length));
+        expect(mapped.status).toBeGreaterThanOrEqual(400);
+        expect(mapped.status).toBeLessThan(500);
+        expect(rowsAfterSecond).toEqual(rowsAfterFirst);
+        expect(newAudit.filter((row) => row.payload.outcome !== 'refused')).toEqual([]);
+        return;
+      }
 
-        expect(refusal, 'the second call must succeed').toBeUndefined();
-        if (repeat === 'idempotent') {
-          const firstId = entityId(first);
-          if (firstId !== undefined) expect(entityId(second)).toBe(firstId);
-          expect(rowsAfterSecond).toEqual(rowsAfterFirst);
-          expect(newAudit.map((row) => row.action)).toEqual([capability.name]);
-          expect(newAudit[0]?.actor_principal_id).toBe(ownerId);
-        } else if (repeat === 'creates') {
-          const firstId = entityId(first);
-          expect(firstId, 'creates: the result names the entity it made').toBeDefined();
-          expect(entityId(second)).not.toBe(firstId);
-        } else if (repeat === 'repeats') {
-          const firstId = entityId(first);
-          expect(firstId, 'repeats: the result names the entity it acted on').toBeDefined();
-          expect(entityId(second)).toBe(firstId);
-          expect(rowsAfterSecond).not.toEqual(rowsAfterFirst);
-        } else {
-          throw new Error(`unknown repeat declaration ${repeat} (guard M6 should have refused it)`);
-        }
-      },
-    );
+      expect(refusal, 'the second call must succeed').toBeUndefined();
+      if (repeat === 'idempotent') {
+        const firstId = entityId(first);
+        if (firstId !== undefined) expect(entityId(second)).toBe(firstId);
+        expect(rowsAfterSecond).toEqual(rowsAfterFirst);
+        expect(newAudit.map((row) => row.action)).toEqual([capability.name]);
+        expect(newAudit[0]?.actor_principal_id).toBe(ownerId);
+      } else if (repeat === 'creates') {
+        const firstId = entityId(first);
+        expect(firstId, 'creates: the result names the entity it made').toBeDefined();
+        expect(entityId(second)).not.toBe(firstId);
+        // A new id with nothing stored for it would not be a second entity (per #488).
+        expect(rowsAfterSecond).not.toEqual(rowsAfterFirst);
+      } else if (repeat === 'repeats') {
+        const firstId = entityId(first);
+        expect(firstId, 'repeats: the result names the entity it acted on').toBeDefined();
+        expect(entityId(second)).toBe(firstId);
+        expect(rowsAfterSecond).not.toEqual(rowsAfterFirst);
+      } else {
+        throw new Error(`unknown repeat declaration ${repeat} (guard M6 should have refused it)`);
+      }
+    });
   },
 );
