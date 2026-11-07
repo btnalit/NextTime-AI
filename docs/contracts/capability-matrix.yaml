@@ -21,8 +21,8 @@
 ratchet:
   console_unexplained: 10
   kernel_test_missing: 4
-  e2e_waived: 76
-  repeat_unclear: 90
+  e2e_waived: 68
+  repeat_unclear: 76
 capabilities:
   add_eval_case:
     console: required
@@ -88,12 +88,12 @@ capabilities:
   assert_fact:
     console: "none: 待说明（2026-11-06 盘点）"
     agents: []
-    repeat: "unclear: 664"
+    repeat: repeats  # the same Fact; each call records an Activity of its own (legacy 685)
   attest_fact:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: creates
   audit_query:
     console: required
     agents: []
@@ -190,17 +190,17 @@ capabilities:
   deprecate_procedure:
     console: "indirect: packages/web/src/components/CatalogPage.tsx"
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: "conflict: illegal_transition"
   deprecate_skill:
     console: "indirect: packages/web/src/components/CatalogPage.tsx"
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: "conflict: illegal_transition"
   deprecate_worker_definition:
     console: required
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: "conflict: illegal_transition"
   disable_principal:
     console: required
@@ -210,13 +210,13 @@ capabilities:
   discard_draft:
     console: required
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: "conflict: not_found"
   discard_operation_draft:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: illegal_transition"  # already discarded
   edit_eval_case:
     console: required
     agents: []
@@ -386,7 +386,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: illegal_transition"
   invoke_worker:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: [entry, admin]
@@ -670,7 +670,7 @@ capabilities:
     console: required
     agents: [entry, admin]
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: repeats  # the same draft, revised in place (same version); each call records an Activity
   propose_pack_install:
     console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；所有者在能力目录的管理员提案页审阅，用 install_pack 带 adminProposalSegmentId 安装，或拒绝"
     agents: [admin]
@@ -678,7 +678,7 @@ capabilities:
   propose_procedure:
     console: required
     agents: [entry, admin]
-    e2e: "waived: 657"
+    e2e: observed
     repeat: creates  # without an id; with a published family's id: "conflict: draft_pending" (repeat-call recipe)
   propose_skill:
     console: required
@@ -694,7 +694,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent  # nothing left to publish
   publish_ontology_version:
     console: required
     agents: []
@@ -704,11 +704,11 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: illegal_transition"  # already published
   publish_procedure:
     console: required
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: "conflict: illegal_transition"
   publish_skill:
     console: required
@@ -771,7 +771,7 @@ capabilities:
   reject_draft:
     console: required
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: "conflict: not_found"
   reject_goal:
     console: required
@@ -844,7 +844,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: illegal_transition"
   resolve_refs:
     console: required
     agents: []
@@ -935,7 +935,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: repeats  # a second write of the same value rewrites the row's updated_at
   set_agent_profile:
     console: required
     agents: []
@@ -950,7 +950,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: repeats  # a second tick of the same request rewrites the rule's updated_at
   set_connector_mode:
     console: required
     agents: []
@@ -976,7 +976,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: repeats  # a second write of the same value rewrites the row's updated_at
   set_principal_role:
     console: required
     agents: []
@@ -986,7 +986,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: repeats  # a second write of the same value rewrites the row's updated_at
   set_user_budget:
     console: required
     agents: []
@@ -1037,7 +1037,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: illegal_transition"
   suspend_self_connection:
     console: required
     agents: []
@@ -1068,7 +1068,7 @@ capabilities:
   update_operation_description:
     console: required
     agents: []
-    e2e: "waived: 657"
+    e2e: observed
     repeat: idempotent
   update_platform_settings:
     console: required
@@ -1101,7 +1101,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: illegal_transition"
   withdraw_admin_proposal:
     console: required
     agents: []
