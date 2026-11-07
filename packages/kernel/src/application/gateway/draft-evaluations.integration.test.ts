@@ -585,8 +585,10 @@ describe.runIf(DATABASE_URL !== undefined)(
     // moves on while the body still runs — left it running, and every later start was refused
     // `draft_evaluating`: on CI one timeout read as fourteen failures. The owner ends it here, so
     // the tests after it run as usual; only the summary test, which reads every evaluation above
-    // it, still notices the one that is missing.
-    afterEach(async () => {
+    // it, still notices the one that is missing. A test that passed yet left one running is a
+    // leak, and fails here by name (#1032 review): the refused start used to be what caught it.
+    afterEach(async ({ task }) => {
+      const failed = task.result?.state === 'fail';
       const running = await asOwnerRole((client) =>
         client.query<{ id: string }>(
           `select id from eval_draft_evaluations where workspace_id = $1 and status = 'running'`,
@@ -595,6 +597,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       for (const { id } of running.rows) {
         await call(person('owner'), 'cancel_draft_evaluation', { evaluationId: id });
+      }
+      if (!failed && running.rows.length > 0) {
+        throw new Error(
+          `${task.name} passed but left ${running.rows.length} evaluation(s) running`,
+        );
       }
     });
 
