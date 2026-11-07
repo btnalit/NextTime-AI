@@ -2525,6 +2525,28 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **主机**：`ADMIN_AGENT_ENABLED` 已在主机上打开，所以升级后主机的管理员智能体就能用这两个新工具；不打开时没有影响。
 - **回滚**：只回滚代码即可，见 §6 的 0040 一行。
 
+### 3.138 审计行记下经由什么做的，被拒的 Handle 调用写审计（#1028，批次 D3，0.63.0 之后的下一版）
+
+带一个迁移，随 `apply-release.sh` 自动应用：core `0054_audit_acting_through`（可逆，见 §6）。不改 compose，没有新环境变量，主机不需要操作。线上契约：`audit_query`、`platform_audit_query`、`platform_overview` / `platform_status` 的 `recentAudit`、`reconstruct` 返回的审计行多 `actingThrough` 与 `actingSessionId`（可为 null）。
+
+- **发版说明可写**：审计记录现在写明每条操作是人本人做的，还是经由管理员智能体、入口智能体、Worker、服务或成员的 Handle 做的，或是系统自己的后台工作。智能体被拒绝的调用也会进审计，每个会话每种拒绝每小时最多 20 条，其余只计数。升级前的旧记录这一项为空。
+- **控制台**：新字段暂不显示，见遗留 666。
+- **回滚**：只回滚代码即可，见 §6 的 0054 一行。
+
+### 3.139 重复停止不再改写停止请求时间（#1031，批次 D4，0.63.0 之后的下一版）
+
+内核一行 SQL 条件：`requestTurnStop` 只在尚未请求过停止时写 `metadata.stopRequestedAt`，第二次 `stop_agent` 保留第一次的时间。读这个字段的地方只看键是否存在，行为不变。没有迁移，不改 compose，没有新环境变量，主机不需要操作。
+
+- **发版说明**：不必单写，用户看不到区别。
+- **回滚**：只回滚代码即可。
+
+### 3.140 技能、流程、目标计划编辑器在会话过期时保留没保存的内容（#1029，遗留 662，0.63.0 之后的下一版）
+
+只改控制台。会话过期时，这三个编辑器里没保存的内容存在本标签页（按身份隔离，换人登录清掉上一个人的），重新登录后回到同一编辑器并恢复；在抽屉里放弃编辑会清掉草稿。没有迁移，不改 compose，没有新环境变量，主机不需要操作。
+
+- **发版说明可写**：编辑技能、流程或目标计划时登录过期，重新登录后会回到原来的编辑器，没保存的内容还在。
+- **回滚**：只回滚代码即可。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -2700,6 +2722,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.62.0 | governance `0038_admin_proposal_rejection_reads`（#956，AA5a-2，遗留 595）：security definer 函数 `admin_proposal_rejections_since(timestamptz)`，只回答事务自己的平台用户在给定时间之后被拒的工作区部分（目标、提案、部分、时间，不含理由） | 可逆 | 只加函数，旧代码不调它 | 只需回退代码。要撤迁移：`drop function admin_proposal_rejections_since(timestamptz)`，再删 `schema_migrations` 里 governance 38 那一行（见 0038 文件头） |
 | v0.63.0 | governance `0039_admin_proposal_segment_verified`（#976，AA5d-2）：security definer 函数 `admin_proposal_segment_verified(uuid)`，只对平台面回答这一段应用的东西在工作区里现在是否 `verified`（只给是或否，不给 id、条目、结果或时间，按 core 0042 的规矩） | 可逆 | 只加函数，旧代码不调它 | 只需回退代码。要撤迁移：`drop function admin_proposal_segment_verified(uuid)`，再删 `schema_migrations` 里 governance 39 那一行 |
 | 0.63.0 之后的下一版 | governance `0040_pack_installs_from_admin_proposals`（#1002，AA5g-2）：放宽 `change_segments_proposer`，pack 来源的安装记录可以带提案溯源（`admin_proposal_id`、`admin_proposal_segment_id`、提议人两列，四列要么全有、要么全空）；`change_segments_admin_proposal_guard` 加 pack 分支（只管 insert），核对记录与提案段一致：同一提案、同一提议人、段仍是 `proposed`、段里那一项是同包同版本的 `pack_install`、段的 `content_digest` 等于记录的 `source_digest`；`admin_proposal_segments_item_kinds` 允许工作区段只含一项 `pack_install`（平台段不行）。`admin_proposal` 记录的三条规则原样保留 | 可逆 | 约束放宽、guard 加分支、check 加一种情况。旧版本写的行三条都满足（pack 记录四列全空，没有段含 `pack_install`），旧代码读记录也不依赖 pack 记录这四列为空。CI 可逆性探针在 #1002 上是绿的，`reversibility-deltas.json` 没有新增声明。只回滚代码时，旧代码列出 `pack_install` 段会显示它不认识的条目类型、也应用不了它，只能拒绝或撤回 | 只需回退代码。要撤迁移，前提是没有带提案溯源的 pack 记录、也没有 `pack_install` 段：恢复 0033 的 `change_segments_proposer` 与 guard 函数体、0034 的 `admin_proposal_segments_item_kinds`，再删 `schema_migrations` 里 governance 40 那一行（见 0040 文件头） |
+| 0.63.0 之后的下一版 | core `0054_audit_acting_through`（#1028，批次 D3）：`audit_records` 加可空列 `acting_through`、`acting_session_id`（uuid，无外键），约束 `audit_records_acting_through_check` 与 `audit_records_acting_session_shape`（都是 `not valid`，只检查新写的行） | 可逆 | 只加列、加约束。旧代码不写这两列（写入为 `null`，两条约束都满足），读审计都用显式列名，不受新列影响。只回滚代码时，新版本写下的值留在表里，旧代码不读也不显示 | 只需回退代码。要撤迁移：删两条约束，再删两列，最后删 `schema_migrations` 里 core 54 那一行（见 0054 文件头） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
