@@ -1038,6 +1038,34 @@
   margin-top: calc(var(--fs-13) * var(--lh-body) + 6px);
 }
 
+/* Legacy 666 (UX P3-2 on #1035): the audit stream's filters are a grid, so a field that wraps to
+ * the next row keeps a column's width instead of stretching across the whole row. The Apply button
+ * keeps its own width. */
+.inline-form.audit-query-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+}
+
+.inline-form.audit-query-grid .field {
+  min-width: 0;
+}
+
+.inline-form.audit-query-grid > button {
+  justify-self: start;
+}
+
+/* Review of #1038 (P3-3): an audit row's 「经由 Worker · …」 never runs past the row; a long name
+ * ends in an ellipsis and the chip's title carries it whole. */
+.audit-acting-through {
+  max-width: 100%;
+}
+
+.audit-acting-through-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ---- OnboardingWizard (S3.12 接入向导) ------------------------------------------------ */
 /* S11 AA5d-3: the extra packs card's lists line up with its description (no list indent). */
 .extra-packs-list {

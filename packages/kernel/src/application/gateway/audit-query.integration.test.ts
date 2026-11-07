@@ -224,5 +224,149 @@ describe.runIf(DATABASE_URL !== undefined)(
       // Not one of the values: nothing, never the unfiltered stream.
       expect(await through('somebody')).toEqual([]);
     });
+
+    it('legacy 666: a Worker run’s and a service Handle’s rows name the Worker and the service account', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const serviceId = randomUUID();
+      const definitionId = randomUUID();
+      const action = 'test.acting_name';
+      const { workerSession, serviceSession, memberSession } = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          await client.query(
+            `insert into principals (workspace_id, id, kind, role, display_name)
+             values ($1, $2, 'service', 'operator', 'nightly-sync')`,
+            [workspaceId, serviceId],
+          );
+          await client.query(
+            `insert into worker_definitions (workspace_id, id, version, kind, status, definition, proposed_by)
+             values ($1, $2, 1, 'worker', 'published', $3, $4),
+                    ($1, $2, 2, 'worker', 'published', $5, $4)`,
+            [
+              workspaceId,
+              definitionId,
+              JSON.stringify({ name: 'invoice-reader v1' }),
+              ownerId,
+              JSON.stringify({ name: 'invoice-reader' }),
+            ],
+          );
+          const session = async (principalId: string, kind: string) =>
+            (
+              await client.query<{ id: string }>(
+                `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+                 values ($1, $2, $3, $4, 'active') returning id`,
+                [workspaceId, principalId, kind, kind === 'service' ? principalId : ownerId],
+              )
+            ).rows[0]?.id as string;
+          const workerSession = await session(ownerId, 'worker_run');
+          const serviceSession = await session(serviceId, 'service');
+          const memberSession = await session(ownerId, 'mcp_session');
+          const task = await client.query<{ id: string }>(
+            `insert into tasks (workspace_id, status, on_behalf_of, worker_definition_id, worker_definition_version)
+             values ($1, 'completed', $2, $3, 2) returning id`,
+            [workspaceId, ownerId, definitionId],
+          );
+          await client.query(
+            `insert into worker_runs (workspace_id, status, task_id, session_id, depth, attempt)
+             values ($1, 'terminated', $2, $3, 0, 1)`,
+            [workspaceId, task.rows[0]?.id, workerSession],
+          );
+          return { workerSession, serviceSession, memberSession };
+        },
+        { skipRoleSwitch: true },
+      );
+      const entity = randomUUID();
+      const write = (
+        actingThrough: 'worker_handle' | 'service_handle' | 'member_handle',
+        id: string,
+      ) =>
+        runWithActingContext({ actingThrough, actingSessionId: id }, () =>
+          withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+            writeAudit(client, {
+              workspaceId,
+              actorPrincipalId: ownerId,
+              action,
+              resourceType: 'object',
+              resourceId: entity,
+            }),
+          ),
+        );
+      await write('worker_handle', workerSession);
+      await write('service_handle', serviceSession);
+      await write('member_handle', memberSession);
+
+      const page = (await dispatchCapability({ pool }, owner, 'audit_query', {
+        filter: { action },
+        limit: 10,
+      })) as { items: { actingThrough: string; actingName: string | null }[] };
+      const named = Object.fromEntries(
+        page.items.map((row) => [row.actingThrough, row.actingName]),
+      );
+      // The Worker at the version its Task pinned; the service account by its name; a member's own
+      // client names no one but the member, who is already the actor.
+      expect(named).toEqual({
+        worker_handle: 'invoice-reader',
+        service_handle: 'nightly-sync',
+        member_handle: null,
+      });
+      // `reconstruct` carries the same rows the same way.
+      const rebuilt = (await dispatchCapability({ pool }, owner, 'reconstruct', {
+        entityId: entity,
+      })) as { auditRecords: { actingThrough: string; actingName: string | null }[] };
+      expect(
+        Object.fromEntries(rebuilt.auditRecords.map((row) => [row.actingThrough, row.actingName])),
+      ).toEqual(named);
+    });
+
+    it('legacy 666 (review of #1038): a Task pinned to a draft WorkerDefinition names nothing', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const definitionId = randomUUID();
+      const action = 'test.acting_name_draft';
+      const workerSession = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          await client.query(
+            `insert into worker_definitions (workspace_id, id, version, kind, status, definition, proposed_by)
+             values ($1, $2, 1, 'worker', 'draft', $3, $4)`,
+            [workspaceId, definitionId, JSON.stringify({ name: 'unpublished-draft' }), ownerId],
+          );
+          const session = (
+            await client.query<{ id: string }>(
+              `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+               values ($1, $2, 'worker_run', $2, 'active') returning id`,
+              [workspaceId, ownerId],
+            )
+          ).rows[0]?.id as string;
+          const task = await client.query<{ id: string }>(
+            `insert into tasks (workspace_id, status, on_behalf_of, worker_definition_id, worker_definition_version)
+             values ($1, 'completed', $2, $3, 1) returning id`,
+            [workspaceId, ownerId, definitionId],
+          );
+          await client.query(
+            `insert into worker_runs (workspace_id, status, task_id, session_id, depth, attempt)
+             values ($1, 'terminated', $2, $3, 0, 1)`,
+            [workspaceId, task.rows[0]?.id, session],
+          );
+          return session;
+        },
+        { skipRoleSwitch: true },
+      );
+      await runWithActingContext(
+        { actingThrough: 'worker_handle', actingSessionId: workerSession },
+        () =>
+          withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+            writeAudit(client, { workspaceId, actorPrincipalId: ownerId, action }),
+          ),
+      );
+      const page = (await dispatchCapability({ pool }, owner, 'audit_query', {
+        filter: { action },
+        limit: 10,
+      })) as { items: { actingThrough: string; actingName: string | null }[] };
+      expect(page.items.map((row) => [row.actingThrough, row.actingName])).toEqual([
+        ['worker_handle', null],
+      ]);
+    });
   },
 );

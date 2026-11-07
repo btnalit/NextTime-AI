@@ -1,4 +1,5 @@
 import {
+  type CallRefusalReason,
   EVAL_SEAL_HOLD_THRESHOLD,
   EVAL_SEAL_HOLD_WINDOW_HOURS,
   PRINCIPAL_REFUSAL_REASON_VALUES,
@@ -34,6 +35,54 @@ export interface ErrorDescription {
   readonly code: string;
   readonly title: string;
   readonly message: string;
+}
+
+/** Legacy 666: why the kernel's authorization refused a call (`@nexttime/shared`
+ *  `CALL_REFUSAL_REASONS`) — the one wording of each, which a refused audit row shows
+ *  (`AuditRefusedChip`). Keyed by the shared type, so a reason added there does not compile until
+ *  it is worded here. */
+const CALL_REFUSAL_REASON_TEXT: Readonly<
+  Record<CallRefusalReason, { readonly zh: string; readonly en: string }>
+> = {
+  platform_scope: {
+    zh: '这是平台层的操作，只有平台管理员能做',
+    en: 'A platform operation: only a platform administrator may do it',
+  },
+  workspace_scope: {
+    zh: '这是工作区里的操作，调用时没有选定工作区',
+    en: 'A workspace operation, called with no workspace selected',
+  },
+  human_channel_only: {
+    zh: '这一项只接受人直接调用（控制台或本人的 API key），经 Handle 来的调用都不行，包括智能体、Worker 和 MCP 客户端',
+    en: 'Only a person’s own call may do this (the console or their API key), never one through a Handle — an agent, a Worker or an MCP client',
+  },
+  admin_agent_only: {
+    zh: '这一项只给管理员智能体用',
+    en: 'Only the admin agent may do this',
+  },
+  not_in_scope: {
+    zh: '不在这个 Handle 被授予的能力范围内',
+    en: 'Outside what this Handle was granted',
+  },
+  role: {
+    zh: '这个人的角色够不上这项能力要求的角色',
+    en: 'The person’s role is below what this capability needs',
+  },
+  auditor_read_only: {
+    zh: '审计员只能读，这一项不在审计员能用的范围内',
+    en: 'Auditors only read, and this is not one of the things they may use',
+  },
+  not_for_person: {
+    zh: '这一项只能为人类成员做，这次调用不是为人做的',
+    en: 'This can only be done for a person, and this call was made for something else',
+  },
+};
+
+/** A refused call's reason in the reader's language, or `null` for a value this table does not
+ *  know (shown as the code it is instead). */
+export function callRefusalReasonText(reason: string, t: Translate): string | null {
+  const entry = ownEntry(CALL_REFUSAL_REASON_TEXT, reason);
+  return entry ? t(entry.zh, entry.en) : null;
 }
 
 /** `PrincipalOperationRefusedError`'s reasons (kernel `application/gateway/members-handlers.ts`),

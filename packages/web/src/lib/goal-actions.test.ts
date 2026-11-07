@@ -224,6 +224,7 @@ describe('lib/goal-actions', () => {
         createdAt,
         actingThrough: null,
         actingSessionId: null,
+        actingName: null,
       }) satisfies AuditRecordWire;
     expect(
       holdPlacedAt([

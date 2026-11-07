@@ -462,7 +462,10 @@ describe('AuditPage entry points', () => {
           auditRow({
             id: 'audit-refused-read',
             action: 'list_grants',
-            payload: { outcome: 'refused', refusal: { code: 'forbidden', status: 403 } },
+            payload: {
+              outcome: 'refused',
+              refusal: { code: 'forbidden', status: 403, reason: 'not_in_scope' },
+            },
           }),
           auditRow({ id: 'audit-read', action: 'search', payload: {} }),
           auditRow({
@@ -504,6 +507,19 @@ describe('AuditPage entry points', () => {
     expect(within(rowOf('list_grants')).getByTestId('audit-refused-code').textContent).toBe(
       'forbidden',
     );
+    // Legacy 666: why authorization refused it, in words (lib/errors.ts), beside the code.
+    expect(within(rowOf('list_grants')).getByTestId('audit-refused-reason').textContent).toBe(
+      '不在这个 Handle 被授予的能力范围内',
+    );
+    // Review of #1038 (P3-2): the admin agent's own refusal records `admin_agent_only` as its code
+    // and no reason; it is worded all the same.
+    expect(within(write).getByTestId('audit-refused-reason').textContent).toBe(
+      '这一项只给管理员智能体用',
+    );
+    // A code that is not a refusal reason (a gate's, `forbidden`) stays the code alone.
+    expect(
+      within(rowOf('evaluation.seal_hold_refused')).queryByTestId('audit-refused-reason'),
+    ).toBeNull();
     const noCode = rowOf('evaluation.seal_hold_refused');
     expect(within(noCode).getByTestId('audit-refused')).toBeTruthy();
     expect(within(noCode).queryByTestId('audit-refused-code')).toBeNull();

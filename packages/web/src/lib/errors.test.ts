@@ -1,7 +1,9 @@
+import { CALL_REFUSAL_REASONS } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
   CODE_TITLES,
   CODE_TITLES_ZH,
+  callRefusalReasonText,
   describeError,
   errorMessage,
   isForbiddenError,
@@ -9,6 +11,7 @@ import {
   presentError,
 } from './errors.js';
 import { HttpError } from './http-client.js';
+import type { Translate } from './i18n.js';
 import { RpcError, TurnAlreadyRunningError } from './ws-client.js';
 
 describe('describeError', () => {
@@ -140,5 +143,22 @@ describe('legacy 493: invalid_step_reference', () => {
       zh,
     );
     expect(shown.message).toMatch(/有一步引用的 Operation 或 Worker 现在用不了/);
+  });
+});
+
+/** Legacy 666: every reason the kernel's authorization refuses a call for is worded, once. */
+describe('callRefusalReasonText', () => {
+  it('words every CALL_REFUSAL_REASONS value in both languages, and nothing else', () => {
+    const zh: Translate = (text) => text;
+    const en: Translate = (_zh, text) => text;
+    for (const reason of CALL_REFUSAL_REASONS) {
+      expect(callRefusalReasonText(reason, zh)).toMatch(/[一-鿿]/);
+      expect(callRefusalReasonText(reason, en)).toMatch(/^[A-Z]/);
+    }
+    expect(
+      new Set(CALL_REFUSAL_REASONS.map((reason) => callRefusalReasonText(reason, zh))).size,
+    ).toBe(CALL_REFUSAL_REASONS.length);
+    expect(callRefusalReasonText('somebody', zh)).toBeNull();
+    expect(callRefusalReasonText('toString', zh)).toBeNull();
   });
 });

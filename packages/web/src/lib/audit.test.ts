@@ -42,18 +42,37 @@ describe('auditRefusal (legacy 628)', () => {
         outcome: 'refused',
         refusal: { code: 'admin_proposal_target_rejected_repeatedly', status: 409 },
       }),
-    ).toEqual({ code: 'admin_proposal_target_rejected_repeatedly' });
+    ).toEqual({ code: 'admin_proposal_target_rejected_repeatedly', reason: null });
+  });
+
+  it('legacy 666: reads why authorization refused a Handle’s call', () => {
+    expect(
+      auditRefusal({
+        outcome: 'refused',
+        refusal: { code: 'forbidden', status: 403, reason: 'not_in_scope' },
+      }),
+    ).toEqual({ code: 'forbidden', reason: 'not_in_scope' });
   });
 
   it('a refused row with no refusal (evaluation.seal_hold_refused) has no code', () => {
     expect(auditRefusal({ outcome: 'refused', path: '/x', capability: 'search' })).toEqual({
       code: null,
+      reason: null,
     });
   });
 
   it('a malformed refusal never yields a code', () => {
-    for (const refusal of [null, 'denied', ['code'], { code: '' }, { code: 409 }, {}]) {
-      expect(auditRefusal({ outcome: 'refused', refusal })).toEqual({ code: null });
+    for (const refusal of [
+      null,
+      'denied',
+      ['code'],
+      { code: '' },
+      { code: 409 },
+      {},
+      { reason: '' },
+      { reason: 3 },
+    ]) {
+      expect(auditRefusal({ outcome: 'refused', refusal })).toEqual({ code: null, reason: null });
     }
   });
 
