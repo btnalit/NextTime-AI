@@ -163,15 +163,24 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       expect(again.id).not.toBe(first.id);
       expect(again.status).toBe('active');
+      expect((await auditFor(workspaceId, 'grant_capability'))[1]?.alreadyGranted).toBeUndefined();
+      // And the new grant is the one held: granting once more returns it, never the revoked one
+      // (#493 on #1036).
+      const held = (await dispatchCapability(
+        { pool },
+        owner,
+        'grant_capability',
+        params,
+      )) as GrantWire;
+      expect(held).toEqual(again);
       expect(await grantRows(workspaceId, memberId)).toEqual([
         { id: first.id, status: 'revoked' },
         { id: again.id, status: 'active' },
       ]);
-      expect((await auditFor(workspaceId, 'grant_capability'))[1]?.alreadyGranted).toBeUndefined();
     });
 
     it('a grant past its expiry is marked expired, and the scope granted anew', async () => {
-      const { workspaceId, ownerId, memberId, seed } = await workspace('expired');
+      const { workspaceId, ownerId, memberId, seed, owner } = await workspace('expired');
       const ctx = { workspaceId, principalId: ownerId };
       const input = {
         principalId: memberId,
@@ -187,15 +196,66 @@ describe.runIf(DATABASE_URL !== undefined)(
         }),
       );
       expect(lapsed.created).toBe(true);
-      const renewed = await withWorkspace(pool, ctx, (client) =>
+      const renewed = (await dispatchCapability({ pool }, owner, 'grant_capability', {
+        principalId: memberId,
+        resourceType: 'gatekeeper',
+        resourceId: seed.gatekeeperId,
+      })) as GrantWire;
+
+      expect(renewed.id).not.toBe(lapsed.grant.id);
+      expect(await grantRows(workspaceId, memberId)).toEqual([
+        { id: lapsed.grant.id, status: 'expired' },
+        { id: renewed.id, status: 'active' },
+      ]);
+      // The transition is on the record: the call's own audit row names the grant it expired.
+      const audit = await auditFor(workspaceId, 'grant_capability');
+      expect(audit).toHaveLength(1);
+      expect(audit[0]?.expiredGrantIds).toEqual([lapsed.grant.id]);
+      expect(audit[0]?.alreadyGranted).toBeUndefined();
+    });
+
+    it('a grant revoked between the insert and the read: the scope is free, and the insert is tried again', async () => {
+      const { workspaceId, ownerId, memberId, seed } = await workspace('revoked-between');
+      const ctx = { workspaceId, principalId: ownerId };
+      const input = {
+        principalId: memberId,
+        resourceType: 'gatekeeper',
+        resourceId: seed.gatekeeperId,
+        grantedBy: ownerId,
+      };
+      const held = await withWorkspace(pool, ctx, (client) =>
         ensureCapabilityGrant(client, workspaceId, input),
       );
 
-      expect(renewed.created).toBe(true);
-      expect(renewed.grant.id).not.toBe(lapsed.grant.id);
+      const outcome = await withWorkspace(pool, ctx, (client) => {
+        // The first read after the insert met the held grant: another owner revokes it, and
+        // commits, just before the read starts.
+        let revoked = false;
+        const racing = new Proxy(client, {
+          get(target, property) {
+            const value = Reflect.get(target, property, target);
+            if (property !== 'query') {
+              return typeof value === 'function' ? value.bind(target) : value;
+            }
+            return async (text: unknown, values?: unknown[]) => {
+              if (!revoked && typeof text === 'string' && /^\s*select/i.test(text)) {
+                revoked = true;
+                await withWorkspace(pool, ctx, (other) =>
+                  revokeCapabilityGrant(other, workspaceId, held.grant.id),
+                );
+              }
+              return target.query(text as string, values);
+            };
+          },
+        });
+        return ensureCapabilityGrant(racing, workspaceId, input);
+      });
+
+      expect(outcome.created).toBe(true);
+      expect(outcome.grant.id).not.toBe(held.grant.id);
       expect(await grantRows(workspaceId, memberId)).toEqual([
-        { id: lapsed.grant.id, status: 'expired' },
-        { id: renewed.grant.id, status: 'active' },
+        { id: held.grant.id, status: 'revoked' },
+        { id: outcome.grant.id, status: 'active' },
       ]);
     });
 
@@ -217,7 +277,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         ensureCapabilityGrant(client, workspaceId, input),
       );
 
-      expect(second).toEqual({ grant: first.grant, created: false });
+      expect(second).toEqual({ grant: first.grant, created: false, expiredGrantIds: [] });
     });
 
     it('a wildcard scope (no resource id, a historical row shape) is held once too', async () => {
@@ -237,7 +297,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
 
       expect(first.created).toBe(true);
-      expect(second).toEqual({ grant: first.grant, created: false });
+      expect(second).toEqual({ grant: first.grant, created: false, expiredGrantIds: [] });
     });
 
     it('two grants of one scope at once: one row, both get it back', async () => {

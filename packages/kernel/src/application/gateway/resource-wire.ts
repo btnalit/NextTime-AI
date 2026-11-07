@@ -181,6 +181,19 @@ export function toWireGrant(row: CapabilityGrantRow) {
   };
 }
 
+/** What `grant_capability` and `connect_gatekeeper` add to their own audit row (legacy 647):
+ *  `alreadyGranted` when the scope was held — the call returned that grant and changed nothing —
+ *  and `expiredGrantIds` when grants of it past their expiry were marked `expired` on the way. */
+export function grantAuditPayload(
+  created: boolean,
+  expiredGrantIds: readonly string[],
+): Record<string, unknown> {
+  return {
+    ...(created ? {} : { alreadyGranted: true }),
+    ...(expiredGrantIds.length > 0 ? { expiredGrantIds: [...expiredGrantIds] } : {}),
+  };
+}
+
 /** `inForce` (legacy 218): the version published on the rule's gate now, and whether an "always
  *  allow" rule was given for it — computed by the handler, which reads the Operation. */
 export function toWirePolicy(

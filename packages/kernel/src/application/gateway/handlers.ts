@@ -429,6 +429,7 @@ import { observeOperationHandler, requestActionHandler } from './request-action-
 import { resolveRefsHandler } from './resolve-refs-handler.js';
 import {
   displayedObject,
+  grantAuditPayload,
   toWireAuditRecord,
   toWireChat,
   toWireFact,
@@ -1941,7 +1942,7 @@ const grantCapabilityHandler: CapabilityHandler = async (client, workspaceId, pa
     resourceId: string;
   };
   const grantedBy = await currentPrincipalId(client);
-  const { grant, created } = await ensureCapabilityGrant(client, workspaceId, {
+  const { grant, created, expiredGrantIds } = await ensureCapabilityGrant(client, workspaceId, {
     principalId,
     resourceType,
     resourceId,
@@ -1951,9 +1952,7 @@ const grantCapabilityHandler: CapabilityHandler = async (client, workspaceId, pa
     result: toWireGrant(grant),
     resourceType: 'capability_grant',
     resourceId: grant.id,
-    // Legacy 647: granting what is already held returns that grant and changes nothing; the call's
-    // own audit row says so.
-    ...(created ? {} : { auditPayload: { alreadyGranted: true } }),
+    auditPayload: grantAuditPayload(created, expiredGrantIds),
   };
 };
 

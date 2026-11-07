@@ -123,11 +123,16 @@ export interface GrantCapabilityInput {
 }
 
 /** What granting a scope did: `created` false when the Principal already held an active grant of
- *  it, in which case `grant` is that one, unchanged. */
+ *  it, in which case `grant` is that one, unchanged. `expiredGrantIds`: grants of the scope found
+ *  past their expiry and marked `expired` on the way (usually none). */
 export interface CapabilityGrantOutcome {
   readonly grant: CapabilityGrantRow;
   readonly created: boolean;
+  readonly expiredGrantIds: readonly string[];
 }
+
+/** How many times the insert is tried when the grant it met is gone before it is read back. */
+const GRANT_ATTEMPTS = 2;
 
 /**
  * Grants `input.principalId` one scope (`resourceType` × `resourceId`) — once (legacy 647). A
@@ -141,7 +146,9 @@ export interface CapabilityGrantOutcome {
  * first (active → expired, design §5.5), and the new grant takes its place.
  *
  * Two grants of one scope racing: the insert names the index as its arbiter (`on conflict ... do
- * nothing`), so the one that loses waits for the other to commit and then returns its grant.
+ * nothing`), so the one that loses waits for the other to commit and then returns its grant. Should
+ * that grant be revoked between the insert and the read (each statement sees what is committed when
+ * it starts), the scope is free again and the insert is tried once more (#493 on #1036).
  */
 export async function ensureCapabilityGrant(
   client: PoolClient,
@@ -151,49 +158,54 @@ export async function ensureCapabilityGrant(
   const scope = [workspaceId, input.principalId, input.resourceType, input.resourceId ?? null];
   const sameScope = `workspace_id = $1 and principal_id = $2 and resource_type = $3
        and resource_id is not distinct from $4::uuid and status = 'active'`;
-  await client.query(
+  const expired = await client.query<{ id: string }>(
     `update capability_grants set status = 'expired'
-     where ${sameScope} and expires_at is not null and expires_at <= now()`,
+     where ${sameScope} and expires_at is not null and expires_at <= now()
+     returning id`,
     scope,
   );
-  const inserted = await client.query<CapabilityGrantDbRow>(
-    `insert into capability_grants (workspace_id, principal_id, resource_type, resource_id, scope, granted_by, expires_at)
-     values ($1, $2, $3, $4::uuid, $5::jsonb, $6, $7)
-     on conflict (workspace_id, principal_id, resource_type, resource_id) where status = 'active'
-     do nothing
-     returning ${GRANT_COLUMNS}`,
-    [
-      ...scope,
-      // New grants never carry a `scope` (leftover 80, 2026-09-25): nothing reads it, the column
-      // stays only for historical rows.
-      '{}',
-      input.grantedBy,
-      input.expiresAt ?? null,
-    ],
-  );
-  const row = inserted.rows[0];
-  if (!row) {
+  const expiredGrantIds = expired.rows.map((row) => row.id);
+
+  for (let attempt = 1; attempt <= GRANT_ATTEMPTS; attempt += 1) {
+    const inserted = await client.query<CapabilityGrantDbRow>(
+      `insert into capability_grants (workspace_id, principal_id, resource_type, resource_id, scope, granted_by, expires_at)
+       values ($1, $2, $3, $4::uuid, $5::jsonb, $6, $7)
+       on conflict (workspace_id, principal_id, resource_type, resource_id) where status = 'active'
+       do nothing
+       returning ${GRANT_COLUMNS}`,
+      [
+        ...scope,
+        // New grants never carry a `scope` (leftover 80, 2026-09-25): nothing reads it, the column
+        // stays only for historical rows.
+        '{}',
+        input.grantedBy,
+        input.expiresAt ?? null,
+      ],
+    );
+    const row = inserted.rows[0];
+    if (row) {
+      const mapped = mapGrantRow(row);
+      // Item 4 fix: a new `'gatekeeper'` Grant widens what this principal may reach through their
+      // entry agent — force their cached entry Handle(s) to reissue on the next Turn rather than
+      // waiting for `ensureEntryHandle`'s own ttl-driven reissue window (see
+      // `revokeEntrySessionHandles`'s own doc comment). S11 AA5a-1: their admin agent's Handle
+      // too, which carries the same Grants in a trial workspace
+      // (`revokeGateGrantScopedSessionHandles`).
+      if (mapped.resourceType === GATEKEEPER_GRANT_CAPABILITY) {
+        await revokeGateGrantScopedSessionHandles(client, workspaceId, mapped.principalId);
+      }
+      return { grant: mapped, created: true, expiredGrantIds };
+    }
     const held = await client.query<CapabilityGrantDbRow>(
       `select ${GRANT_COLUMNS} from capability_grants where ${sameScope}`,
       scope,
     );
     const heldRow = held.rows[0];
-    if (!heldRow) {
-      throw new Error('grantCapability: the insert met an active grant of this scope, then none');
-    }
-    return { grant: mapGrantRow(heldRow), created: false };
+    if (heldRow) return { grant: mapGrantRow(heldRow), created: false, expiredGrantIds };
   }
-  const mapped = mapGrantRow(row);
-
-  // Item 4 fix: a new `'gatekeeper'` Grant widens what this principal may reach through their
-  // entry agent — force their cached entry Handle(s) to reissue on the next Turn rather than
-  // waiting for `ensureEntryHandle`'s own ttl-driven reissue window (see
-  // `revokeEntrySessionHandles`'s own doc comment). S11 AA5a-1: their admin agent's Handle too,
-  // which carries the same Grants in a trial workspace (`revokeGateGrantScopedSessionHandles`).
-  if (mapped.resourceType === GATEKEEPER_GRANT_CAPABILITY) {
-    await revokeGateGrantScopedSessionHandles(client, workspaceId, mapped.principalId);
-  }
-  return { grant: mapped, created: true };
+  throw new Error(
+    `grantCapability: the scope was held by a grant revoked before it could be read, ${GRANT_ATTEMPTS} times`,
+  );
 }
 
 /** `ensureCapabilityGrant`'s grant alone: the new one, or the one already held. */
