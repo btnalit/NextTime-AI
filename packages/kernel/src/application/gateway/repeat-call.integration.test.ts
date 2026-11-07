@@ -10,7 +10,7 @@ import { parse } from 'yaml';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import {
-  HttpGatekeeperClient,
+  type GatekeeperClient,
   createGateConnectionSecrets,
 } from '../../adapters/gatekeeper-client/index.js';
 import { requestAction } from '../../governance/approval/index.js';
@@ -495,6 +495,39 @@ async function workerCall(ctx: RecipeContext, idempotencyKey?: string) {
     version: 1,
     input: { host: 'web-1' },
     ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+  };
+}
+
+/** A gate that only describes itself (GATE_OP): create_connection imports that, and a re-sync
+ *  reads it again. Any call that would run something fails the test. */
+const notInThisWalk = async (): Promise<never> => {
+  throw new Error('the repeat walk calls no gate Operation');
+};
+const FAKE_GATE: GatekeeperClient = {
+  describeOperations: async () =>
+    ({ operations: [GATE_OP] }) as Awaited<ReturnType<GatekeeperClient['describeOperations']>>,
+  observe: notInThisWalk,
+  simulate: notInThisWalk,
+  apply: notInThisWalk,
+  lookupApply: notInThisWalk,
+  revert: notInThisWalk,
+  health: notInThisWalk,
+  storeConnectedAccount: notInThisWalk,
+  deleteConnectedAccount: notInThisWalk,
+};
+
+/** create_connection's params for a gate of the recipe's own, at an address no other row uses. */
+async function connectionCall(ctx: RecipeContext) {
+  const { connectionSecret } = await as<{ connectionSecret: string }>(
+    ctx,
+    'mint_connection_secret',
+    {},
+  );
+  return {
+    kind: 'http',
+    target: 'repeat-connection',
+    endpoint: `http://repeat-${randomUUID().slice(0, 8)}.invalid:8080`,
+    connectionSecret,
   };
 }
 
@@ -1237,6 +1270,25 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       },
     },
   },
+  create_connection: {
+    // The second finds a Gatekeeper at that address already: re-sync it or rotate its secret.
+    'a gate not connected yet': { setUp: connectionCall },
+  },
+  refresh_operation_governance: {
+    'a gate the workspace connected itself, its preview read': {
+      setUp: async (ctx) => {
+        const { gatekeeperId } = await as<{ gatekeeperId: string }>(
+          ctx,
+          'create_connection',
+          await connectionCall(ctx),
+        );
+        const preview = await as<{ manifestDigest: string }>(ctx, 'preview_gatekeeper_resync', {
+          gatekeeperId,
+        });
+        return { gatekeeperId, manifestDigest: preview.manifestDigest };
+      },
+    },
+  },
   rotate_connection_secret: {
     // Each call stores a new salt on the same Gatekeeper: the secret before it stops working.
     'a gate the workspace connected itself': {
@@ -1321,6 +1373,8 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'propose_ontology_change',
   'publish_ontology_version',
   'add_member',
+  'create_connection',
+  'refresh_operation_governance',
   'rotate_connection_secret',
   'issue_handle',
   'issue_service_handle',
@@ -1408,12 +1462,13 @@ describe.runIf(DATABASE_URL !== undefined)(
           status: async () => undefined,
         },
       });
-      // mint / rotate_connection_secret issue a secret from the gate token (a test one here); no
-      // row of this walk calls a gate, so the client is never used.
+      // The connection rows issue a secret from the gate token (a test one here) and describe a
+      // gate through FAKE_GATE; nothing leaves the process.
       const gateToken = `repeat-gate-token-${randomUUID()}`;
       setConnectionHandlerDeps({
-        gatekeeperClient: new HttpGatekeeperClient({ token: gateToken }),
+        gatekeeperClient: FAKE_GATE,
         connectionSecrets: createGateConnectionSecrets(gateToken),
+        outboundTargetGuard: async () => {},
       });
     });
 
