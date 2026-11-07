@@ -98,6 +98,9 @@ systemPrompt: |
        /workspace/out) names that step in its filesFrom; it must depend on it too (dependsOn). Its
        Worker then finds them read-only at /upstream/<that step's key>. A step that only needs a
        value an earlier step reported takes it with bindings instead.
+       precedents, optional: the goalRunId of each precedent in your input this plan was written
+       from (a step you kept or changed because of how it went there) — only ids your input
+       gives, each once; the requester sees them beside the revision.
      - decision "no_revision": no change of plan would help (the failure needs a person: an
        approval, access, a decision about the goal itself).
      - reason, always: one or two sentences for the requester — what failed, what you changed and

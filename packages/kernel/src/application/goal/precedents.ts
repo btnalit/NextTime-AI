@@ -25,6 +25,9 @@ import { getGoalRun, getPlanRevision, listStepRuns } from './reads.js';
  * Whose goals: only `on_behalf_of = requester` — never `goalVisibleTo`'s owner view: an owner's
  * agent does not get other people's plans (F2 A). A reader is told the requester; this module
  * never widens it. Text is shown as every goal read shows it (`shownFreeText`, `planAsRead`).
+ *
+ * S11 GO17b (F4 A): which of them a plan was written from is recorded on its revision
+ * (`plan_revisions.cited_precedents`, goal/0018) — `cited-precedents.ts`.
  */
 
 export interface PrecedentFilter {

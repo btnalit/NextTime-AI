@@ -6,10 +6,16 @@ import {
 } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { formatDateTime, formatRelative } from '../../lib/format.js';
-import { type PlanDiff, planDiff, stepRemovalText } from '../../lib/goals.js';
+import { excerpt, formatDateTime, formatRelative } from '../../lib/format.js';
+import {
+  type PlanDiff,
+  citedPrecedentOutcomeText,
+  planDiff,
+  stepRemovalText,
+} from '../../lib/goals.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { type StepChange, planStepDiff } from '../../lib/plan-step-diff.js';
+import { hrefs } from '../../lib/router.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { DashboardCard } from '../kit/section.js';
@@ -146,6 +152,24 @@ function RevisionItem({
             source={revision.fromProcedure}
             testId="goal-revision-parameters"
           />
+        </span>
+      ) : null}
+      {/* S11 GO17b: the requester's earlier goals the plan was written from, each opening its page
+          (the same requester's: whoever reads this revision may read them). */}
+      {revision.citedPrecedents.length > 0 ? (
+        <span className="row-wrap text-small" data-testid="goal-revision-precedents">
+          <span className="text-3">{t('参考了先例', 'Written from earlier goals')}</span>
+          {revision.citedPrecedents.map((precedent) => (
+            <span key={precedent.goalRunId} data-precedent={precedent.goalRunId}>
+              <a href={hrefs.goal(precedent.goalRunId)}>{excerpt(precedent.statement, 80)}</a>
+              <span className="text-3">
+                {t(
+                  `（${citedPrecedentOutcomeText(precedent, t)}）`,
+                  ` (${citedPrecedentOutcomeText(precedent, t)})`,
+                )}
+              </span>
+            </span>
+          ))}
         </span>
       ) : null}
       {revision.status === 'proposed' && revision.proposer === 'planner' ? (

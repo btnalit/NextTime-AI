@@ -47,6 +47,7 @@ import {
   workerContractOf,
   workerRefKey,
 } from '../task/index.js';
+import { citedPrecedentProblems } from './cited-precedents.js';
 import {
   DEFAULT_MAX_ATTEMPTS,
   GoalPlanValidationError,
@@ -218,6 +219,7 @@ const PLANNER_RULES: readonly string[] = [
   'never write a credential: a gate authenticates with the credentials configured on it',
   'the budget does not change with a revision',
   'precedents are the requester’s own earlier goals of the same kind with how they ended (polarity positive: the platform’s checks passed; negative: not achieved, or achieved over checks that did not pass; unverified: on the requester’s word or a review alone): what was tried before, never proof that a plan works now — a plan copied from one is checked like any other',
+  'output.precedents (decision revise, optional) cites only goalRunIds of precedents in this input, each once: the requester sees them beside the revision',
 ];
 
 export interface PlanningPhaseContext {
@@ -383,6 +385,22 @@ async function settleFinishedRound(
     });
     return settled(`proposed no revision (${boundDetail(output.data.reason)})`);
   }
+  // S11 GO17b: the precedents it cites, held to what its round's input gave it (as at report).
+  const precedents = output.data.precedents ?? [];
+  const cited = await citedPrecedentProblems(client, ws, goal.onBehalfOf, precedents, {
+    at: 'output.precedents',
+    goalRunId: goal.id,
+    offered: await offeredPrecedents(client, ws, task.id),
+  });
+  if (cited.length > 0) {
+    const detail = cited.map((problem) => `${problem.path}: ${problem.message}`).join('; ');
+    await settlePlanningRound(client, ws, actor, round, {
+      status: 'failed',
+      reason: 'invalid_revision',
+      detail,
+    });
+    return settled(`proposed a revision that no longer passes (${boundDetail(detail)})`);
+  }
   let candidate: RevisionCandidate;
   try {
     refuseRedactedText('reason', output.data.reason);
@@ -407,8 +425,8 @@ async function settleFinishedRound(
   const inserted = await client.query<{ id: string }>(
     `insert into plan_revisions (
        workspace_id, goal_run_id, revision, based_on_revision, plan, proposed_by, reason,
-       validation, removals
-     ) values ($1, $2, $3, $4, $5::jsonb, $6, $7, $8::jsonb, '{}'::jsonb)
+       validation, removals, cited_precedents
+     ) values ($1, $2, $3, $4, $5::jsonb, $6, $7, $8::jsonb, '{}'::jsonb, $9::uuid[])
      returning id`,
     [
       ws,
@@ -419,6 +437,7 @@ async function settleFinishedRound(
       plannerId,
       output.data.reason,
       JSON.stringify(revisionValidation(candidate)),
+      precedents.length > 0 ? [...precedents] : null,
     ],
   );
   const planRevisionId = inserted.rows[0]?.id;
@@ -439,6 +458,7 @@ async function settleFinishedRound(
       planningRoundId: round.id,
       taskId: task.id,
       onBehalfOf: goal.onBehalfOf,
+      ...(precedents.length > 0 ? { citedPrecedents: [...precedents] } : {}),
     },
   });
   const base = await readBasePlan(client, ws, goal);
@@ -1319,7 +1339,9 @@ export async function plannerReportProblems(
         message:
           issue.path[0] === 'plan'
             ? 'plan is given with decision revise, and only then'
-            : issue.message,
+            : issue.code === 'unrecognized_keys' && issue.keys.includes('precedents')
+              ? 'precedents are given with decision revise, and only then'
+              : issue.message,
       });
     }
     return problems;
@@ -1344,6 +1366,21 @@ export async function plannerReportProblems(
     if (goal?.status !== stays || goal.currentRevision !== row.based_on_revision) {
       return problems;
     }
+    // S11 GO17b: a planner cites only precedents its input gave it — and, like any writer, only
+    // completed goals of the requester (`cited-precedents.ts`).
+    problems.push(
+      ...(await citedPrecedentProblems(
+        client,
+        workspaceId,
+        goal.onBehalfOf,
+        output.data.precedents ?? [],
+        {
+          at: 'output.precedents',
+          goalRunId: goal.id,
+          offered: await offeredPrecedents(client, workspaceId, taskId),
+        },
+      )),
+    );
     try {
       await checkRevisionCandidate(client, workspaceId, goal, {
         plan: output.data.plan,
@@ -1356,6 +1393,25 @@ export async function plannerReportProblems(
     }
   }
   return problems;
+}
+
+/** S11 GO17b: the goals a planning Task's input gave its planner as precedents (`plannerInput`'s
+ *  `precedents`) — the only ones its report may cite. */
+async function offeredPrecedents(
+  client: PoolClient,
+  workspaceId: string,
+  taskId: string,
+): Promise<ReadonlySet<string>> {
+  const result = await client.query<{ id: string | null }>(
+    `select precedent ->> 'goalRunId' as id
+       from tasks t
+      cross join lateral jsonb_array_elements(
+              case when jsonb_typeof(t.input -> 'precedents') = 'array'
+                   then t.input -> 'precedents' else '[]'::jsonb end) as precedent
+      where t.workspace_id = $1 and t.id = $2`,
+    [workspaceId, taskId],
+  );
+  return new Set(result.rows.flatMap((row) => (row.id ? [row.id] : [])));
 }
 
 /** The planner revision `revision` of the run, when the planner proposed it: its row. */

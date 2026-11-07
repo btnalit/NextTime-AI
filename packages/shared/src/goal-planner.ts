@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { MAX_REVISION_REASON_CHARS } from './goal-plan.js';
+import { GOAL_PRECEDENT_CONTEXT_LIMIT } from './goal-precedents.js';
 import type { OutputSchema } from './output-schema.js';
 
 /**
@@ -34,6 +35,16 @@ export const PLANNER_OUTPUT_SCHEMA: OutputSchema = {
       description:
         'decision revise only: the whole plan as it should be from now on — every step, the ones kept unchanged included, and the acceptance checks. A step left out is removed and its Worker stopped.',
     },
+    // S11 GO17b (F4 A): which of the input's precedents the revision was written from — recorded
+    // on the revision (`citedPrecedents`); the kernel takes only ids its input gave (`planner.ts`).
+    precedents: {
+      type: 'array',
+      description:
+        'decision revise only, optional: the goalRunId of each precedent in your input that this plan was written from, each once.',
+      items: { type: 'string', minLength: 36, maxLength: 36 },
+      minItems: 1,
+      maxItems: GOAL_PRECEDENT_CONTEXT_LIMIT,
+    },
     reason: { type: 'string', minLength: 1, maxLength: MAX_REVISION_REASON_CHARS },
   },
   required: ['decision', 'reason'],
@@ -41,12 +52,14 @@ export const PLANNER_OUTPUT_SCHEMA: OutputSchema = {
 };
 
 /** A planner's report, as its output contract and the platform's own rule (a plan exactly with
- *  `revise`) read it; the plan itself is checked by the kernel's plan validation. */
+ *  `revise`, and the precedents it cites only with it) read it; the plan itself is checked by the
+ *  kernel's plan validation, the precedents against the round's input. */
 export const PlannerOutputSchema = z.discriminatedUnion('decision', [
   z
     .object({
       decision: z.literal('revise'),
       plan: z.record(z.string(), z.unknown()),
+      precedents: z.array(z.guid()).min(1).max(GOAL_PRECEDENT_CONTEXT_LIMIT).optional(),
       reason: z.string().min(1).max(MAX_REVISION_REASON_CHARS),
     })
     .strict(),

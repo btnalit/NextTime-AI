@@ -17,6 +17,7 @@ import {
   checkErrorLabel,
   checkErrorReason,
   checkKindLabel,
+  citedPrecedentOutcomeText,
   confirmRefusedText,
   exhaustedBudget,
   factCheckSentence,
@@ -1450,5 +1451,42 @@ describe('goalMilestoneText (S11 GO5e-2)', () => {
     expect(goalMilestoneText({ ...base, change: 'finish_cancel', cleanupPending: true }, zh)).toBe(
       '目标已取消，还有遗留要清理',
     );
+  });
+});
+
+describe('citedPrecedentOutcomeText (S11 GO17b)', () => {
+  const en: Translate = (_zh, enText) => enText;
+  it('says how each kind of precedent ended, by its polarity', () => {
+    const cases = [
+      [
+        { outcome: 'achieved', outcomeBasis: 'verified_by_check', polarity: 'positive' },
+        '达成，平台检查通过',
+        'achieved, the platform’s checks passed',
+      ],
+      [
+        { outcome: 'achieved', outcomeBasis: 'requester', polarity: 'negative' },
+        '达成，但覆盖了没通过的检查',
+        'achieved over checks that did not pass',
+      ],
+      [
+        { outcome: 'not_achieved', outcomeBasis: 'verified_by_check', polarity: 'negative' },
+        '未达成',
+        'not achieved',
+      ],
+      [
+        { outcome: 'achieved', outcomeBasis: 'requester', polarity: 'unverified' },
+        '达成，只有请求人确认',
+        'achieved on the requester’s word',
+      ],
+      [
+        { outcome: 'achieved', outcomeBasis: 'reviewer_assessed', polarity: 'unverified' },
+        '达成，依据独立评审',
+        'achieved on a review',
+      ],
+    ] as const;
+    for (const [precedent, zhText, enText] of cases) {
+      expect(citedPrecedentOutcomeText(precedent, zh)).toBe(zhText);
+      expect(citedPrecedentOutcomeText(precedent, en)).toBe(enText);
+    }
   });
 });

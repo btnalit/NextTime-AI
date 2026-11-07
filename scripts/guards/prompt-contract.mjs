@@ -236,6 +236,7 @@ export const PROPOSE_GOAL_SCHEMA_WORDS = new Set([
   'fact_predicate',
   'requester_confirm',
   'idempotencyKey',
+  'precedents',
 ]);
 
 export const PROPOSE_GOAL_REFUSAL_CODES = new Set([

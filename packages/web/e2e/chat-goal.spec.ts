@@ -104,6 +104,7 @@ function proposedGoal(requester: string) {
       hints: [],
       checkedStepKeys: [],
       fromProcedure: null,
+      citedPrecedents: [],
     },
     revisions: [],
     steps: [],
