@@ -622,6 +622,27 @@ const ONTOLOGY_CHANGE = {
   ],
 };
 
+/** One observation of the walk's ontology: host web-1, up. */
+const REPEAT_HOST_OBSERVATION = {
+  objectType: 'repeat.host',
+  identity: { hostname: 'web-1' },
+  properties: { up: true },
+};
+
+/** A collector Source of the owner, on a freshly published ONTOLOGY_CHANGE. */
+async function observingSource(ctx: RecipeContext): Promise<string> {
+  const draft = await as<{ id: string; version: number }>(ctx, 'propose_ontology_change', {
+    change: ONTOLOGY_CHANGE,
+  });
+  await as(ctx, 'publish_ontology_version', { id: draft.id, version: draft.version });
+  const source = await as<{ id: string }>(ctx, 'register_source', {
+    kind: 'collector',
+    name: `repeat-source-${randomUUID().slice(0, 8)}`,
+    visibility: 'workspace',
+  });
+  return source.id;
+}
+
 /** Extra cases for a row, beyond the one with schema-built params on the bare seed. A declaration
  *  holds on every path, so a row whose answer depends on state gets a case per state (per #493 on
  *  batch D4). */
@@ -1399,25 +1420,27 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
     'a Source of the owner, on a published ontology': {
       first: expect.objectContaining({ objectsUpserted: 1 }),
       entity: (result) => (result as { objects: { id: string }[] }).objects[0]?.id,
+      setUp: async (ctx) => ({
+        sourceId: await observingSource(ctx),
+        observations: [REPEAT_HOST_OBSERVATION],
+      }),
+    },
+    // A run's window close, in the Activity its earlier submission returned: no new Activity and
+    // nothing left to invalidate, so a second close changes no row (per #493 on batch 14).
+    "a window close in the run's own Activity": {
+      repeat: 'idempotent',
+      first: expect.objectContaining({ objectsUpserted: 0, factsInvalidated: 0 }),
       setUp: async (ctx) => {
-        const draft = await as<{ id: string; version: number }>(ctx, 'propose_ontology_change', {
-          change: ONTOLOGY_CHANGE,
-        });
-        await as(ctx, 'publish_ontology_version', { id: draft.id, version: draft.version });
-        const source = await as<{ id: string }>(ctx, 'register_source', {
-          kind: 'collector',
-          name: `repeat-source-${randomUUID().slice(0, 8)}`,
-          visibility: 'workspace',
+        const sourceId = await observingSource(ctx);
+        const run = await as<{ activityId: string }>(ctx, 'submit_observations', {
+          sourceId,
+          observations: [REPEAT_HOST_OBSERVATION],
         });
         return {
-          sourceId: source.id,
-          observations: [
-            {
-              objectType: 'repeat.host',
-              identity: { hostname: 'web-1' },
-              properties: { up: true },
-            },
-          ],
+          sourceId,
+          activityId: run.activityId,
+          observations: [],
+          window: { complete: true, objectTypes: ['repeat.host'] },
         };
       },
     },

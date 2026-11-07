@@ -1031,7 +1031,7 @@ capabilities:
   submit_observations:
     console: "none: 数据接入，由 collector 用服务 Handle 调用，不是人的操作"
     agents: []
-    repeat: repeats # one Activity per submission: the same observations again record another Activity and Observations, and upsert the same Objects
+    repeat: repeats # without an activityId, one Activity per submission: the same observations again record another Activity and Observations, and upsert the same Objects; a submission into a given activityId records no new Activity, and a window close repeated there changes nothing
   subscribe_chat:
     console: required
     agents: []
