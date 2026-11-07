@@ -158,3 +158,43 @@ describe('LoginPage: API-key details', () => {
     expect(screen.getByPlaceholderText('sk-...')).toHaveProperty('disabled', true);
   });
 });
+
+// Legacy 658: back here because the kernel stopped taking the session, the page says so.
+describe('LoginPage: why sign-in is back', () => {
+  function renderWith(reason?: 'sessionExpired' | 'keyInvalid') {
+    return render(
+      <LoginPage
+        onApiKeyLogin={vi.fn()}
+        apiKeyPending={false}
+        apiKeyError={null}
+        onLoggedIn={vi.fn()}
+        reason={reason}
+      />,
+    );
+  }
+
+  it('an expired session: 「会话已过期」, and that the unsent chat text comes back', () => {
+    renderWith('sessionExpired');
+    const notice = screen.getByTestId('login-reason');
+    expect(notice.textContent).toContain('会话已过期');
+    expect(notice.textContent).toContain('请重新登录');
+    expect(notice.textContent).toContain('没发出的文字');
+    // The password form is the way back; the key form stays folded.
+    expect(document.querySelector('details.api-key-login')?.hasAttribute('open')).toBe(false);
+    expect(document.activeElement).not.toBe(screen.getByPlaceholderText('sk-...'));
+  });
+
+  it('a key that stopped working: says so, and opens the key form', () => {
+    renderWith('keyInvalid');
+    expect(screen.getByTestId('login-reason').textContent).toContain('API key 已失效');
+    expect(document.querySelector('details.api-key-login')?.hasAttribute('open')).toBe(true);
+    // UX P3-1 on #1023: the key box is below the password form — focus goes to it.
+    expect(document.activeElement).toBe(screen.getByPlaceholderText('sk-...'));
+  });
+
+  it('a first sign-in or a sign-out explains nothing', () => {
+    renderWith();
+    expect(screen.queryByTestId('login-reason')).toBeNull();
+    expect(screen.queryByText('会话已过期')).toBeNull();
+  });
+});

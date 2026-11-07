@@ -8,6 +8,7 @@ import {
   getMe,
   setWorkspaceCookie,
 } from '../lib/auth-api.js';
+import { clearDrafts, keepDraftsOf } from '../lib/drafts.js';
 import { HttpClient } from '../lib/http-client.js';
 import { hrefs, navigate } from '../lib/router.js';
 import {
@@ -155,7 +156,12 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
       setSession(null);
       if (current.authMode === 'apiKey') clearApiKey();
       else setWorkspaceCookie(null);
-      setPreSession({ kind: 'login' });
+      // Legacy 658: sign-in says why it is back, and the drafts this tab keeps (`lib/drafts.ts`)
+      // stay for the same caller to find once signed in again — this is not a sign-out.
+      setPreSession({
+        kind: 'login',
+        reason: current.authMode === 'apiKey' ? 'keyInvalid' : 'sessionExpired',
+      });
     },
     [currentSession],
   );
@@ -309,6 +315,9 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
     ): Promise<void> => {
       // R-15: a fresh sign-in (login, claim) replaced the cookie a failed sign-out left behind.
       clearSignOutPending();
+      // Legacy 658 (#501 P3-1 on #1023): this user's drafts stay, anyone else's left on this tab
+      // by a session that expired go — an API-key session does the same in `AppShell`.
+      keepDraftsOf(memberships.map((m) => m.principalId));
       // Landing on a pre-session state while a session is still published (C1: the claim form
       // runs inside a live API-key session, and the claimed user may have no membership yet, or
       // a temporary password) must tear that session down, or `App`'s render switch — which
@@ -437,6 +446,7 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
     session?.ws.close();
     setSession(null);
     clearApiKey();
+    clearDrafts();
     setApiKeyError(null);
     window.location.hash = '';
   }, [session]);
@@ -446,6 +456,7 @@ export function useSessionMachine({ syncRoute }: SessionMachineOptions): Session
     session?.ws.close();
     setSession(null);
     setWorkspaceCookie(null);
+    clearDrafts();
     setPreSession({ kind: 'login' });
     // R-15: signed out here at once, whatever the request below does. The session cookie is
     // HttpOnly — only the kernel's logout response can clear it — so until that response arrives
