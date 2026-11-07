@@ -8,11 +8,13 @@ import {
 import type { PoolClient } from 'pg';
 import { refuseCredentialText, refuseRedactedText } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
+import { citedPrecedentProblems } from './cited-precedents.js';
 import { planContractHints } from './contract-hints.js';
 import { type PlanSource, planFromProcedure, refuseProcedureParameters } from './from-procedure.js';
 import { moveGoalRun } from './moves.js';
 import {
   type GoalPlan,
+  GoalPlanValidationError,
   type PlanHint,
   type PlanReferenceSources,
   planHints,
@@ -126,6 +128,9 @@ export interface CreateGoalRunInput {
   readonly plan?: unknown;
   /** S11 GO5d-2: the published Procedure the plan is made from, with its parameters. */
   readonly fromProcedure?: GoalFromProcedure;
+  /** S11 GO17b: the requester's earlier goals the plan was written from (`cited-precedents.ts`) —
+   *  recorded on revision 1; not part of what makes two proposals the same (`idempotencyKey`). */
+  readonly precedents?: readonly string[];
   readonly budget: GoalRunBudget;
   readonly originatedInTurnId?: string;
   /** S11 GO5c: the stored key (`explicit:…` or `auto:…`, goal/0008) — derived by `propose_goal`;
@@ -302,6 +307,18 @@ export async function createGoalRun(
   }
   if (input.fromProcedure !== undefined) refuseProcedureParameters(input.fromProcedure.parameters);
   else refusePlanCredentials(planShape(input.plan));
+  const cited = await citedPrecedentProblems(
+    client,
+    workspaceId,
+    input.requesterId,
+    input.precedents ?? [],
+    { at: 'precedents' },
+  );
+  if (cited.length > 0) {
+    throw new GoalPlanValidationError(
+      cited.map((problem) => `${problem.path}: ${problem.message}`),
+    );
+  }
   // The cap's count and this call's insert are one step per requester: two proposals at once
   // cannot both take the last place. A replay proposes nothing, so it is answered at the cap too.
   if (input.maxProposed !== undefined) {
@@ -386,8 +403,8 @@ async function insertGoalRun(
   const revision = await client.query<{ id: string }>(
     `insert into plan_revisions (
        workspace_id, goal_run_id, revision, plan, proposed_by, validation, source_procedure_id,
-       source_procedure_version, source_procedure_parameters
-     ) values ($1, $2, 1, $3::jsonb, $4, $5::jsonb, $6, $7, $8::jsonb)
+       source_procedure_version, source_procedure_parameters, cited_precedents
+     ) values ($1, $2, 1, $3::jsonb, $4, $5::jsonb, $6, $7, $8::jsonb, $9::uuid[])
      returning id`,
     [
       workspaceId,
@@ -398,6 +415,7 @@ async function insertGoalRun(
       source?.procedureId ?? null,
       source?.version ?? null,
       source?.parameters ? JSON.stringify(source.parameters) : null,
+      input.precedents && input.precedents.length > 0 ? [...input.precedents] : null,
     ],
   );
   const planRevisionId = revision.rows[0]?.id;
@@ -415,6 +433,10 @@ async function insertGoalRun(
       // Which version only: the parameters are on the revision, read masked, not in the audit.
       ...(source !== null
         ? { fromProcedure: { procedureId: source.procedureId, version: source.version } }
+        : {}),
+      // S11 GO17b: what the plan was written from, as the revision records it.
+      ...(input.precedents && input.precedents.length > 0
+        ? { citedPrecedents: [...input.precedents] }
         : {}),
     },
   });

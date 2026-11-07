@@ -532,6 +532,58 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       expect(JSON.stringify(input.precedents)).not.toContain(notMine);
       expect(input.precedents.map((precedent) => precedent.goalRunId)).not.toContain(goalRunId);
+
+      // S11 GO17b: its report cites only precedents its input gave it, and only with a revision.
+      const task = await plannerTask(round.id);
+      const goal = await getGoal(goalRunId, requester);
+      const cite = (precedents: unknown, decision = 'revise') =>
+        report(task.id, {
+          decision,
+          ...(decision === 'revise' ? { plan: reroute(goal) } : {}),
+          precedents,
+          reason: 'The other Worker renewed it the last time.',
+        });
+      for (const [precedents, place, message] of [
+        [[notMine], 'output.precedents.0', 'is not one of the precedents your input gives'],
+        [[first, first], 'output.precedents.1', 'is cited a second time'],
+        [[goalRunId], 'output.precedents.0', 'a goal is never its own precedent'],
+        [['not-an-id'], 'output.precedents.0', ''],
+      ] as const) {
+        const refused = await refusal(cite(precedents));
+        expect(refused).toMatchObject({ status: 400 });
+        const problems = JSON.stringify(refused.details);
+        expect(problems).toContain(place);
+        expect(problems).toContain(message);
+      }
+      const noRevision = JSON.stringify((await refusal(cite([first], 'no_revision'))).details);
+      expect(noRevision).toContain('precedents are given with decision revise, and only then');
+      expect((await plannerTask(round.id)).status).toBe('running');
+
+      await cite([first]);
+      await advanceOnce(goalRunId, requester);
+      const proposed = await getGoal(goalRunId, requester);
+      expect(proposed.revisions.at(-1)).toMatchObject({
+        revision: 2,
+        proposer: 'planner',
+        citedPrecedents: [
+          {
+            goalRunId: first,
+            statement: 'renew the certificate last time',
+            outcome: 'achieved',
+            outcomeBasis: 'verified_by_check',
+            polarity: 'positive',
+          },
+        ],
+      });
+      // Revision 1, the requester's, cites nothing.
+      expect(proposed.revisions[0]?.citedPrecedents).toEqual([]);
+      const [audit] = await raw<{ payload: Record<string, unknown> }>(
+        `select payload from audit_records
+          where workspace_id = $1 and action = 'plan_revision.propose'
+            and payload ->> 'goalRunId' = $2`,
+        [workspaceId, goalRunId],
+      );
+      expect(audit?.payload).toMatchObject({ proposer: 'planner', citedPrecedents: [first] });
     });
 
     it('the planner proposes another Worker; the requester accepts and resumes; the goal reaches done the other way', async () => {

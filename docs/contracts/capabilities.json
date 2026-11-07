@@ -26643,6 +26643,51 @@
               },
               "type": "array"
             },
+            "citedPrecedents": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "goalRunId": {
+                    "type": "string"
+                  },
+                  "outcome": {
+                    "enum": [
+                      "achieved",
+                      "not_achieved"
+                    ],
+                    "type": "string"
+                  },
+                  "outcomeBasis": {
+                    "enum": [
+                      "verified_by_check",
+                      "requester",
+                      "reviewer_assessed"
+                    ],
+                    "type": "string"
+                  },
+                  "polarity": {
+                    "enum": [
+                      "positive",
+                      "negative",
+                      "unverified"
+                    ],
+                    "type": "string"
+                  },
+                  "statement": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "goalRunId",
+                  "statement",
+                  "outcome",
+                  "outcomeBasis",
+                  "polarity"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
             "createdAt": {
               "type": "string"
             },
@@ -28165,7 +28210,8 @@
             "removals",
             "hints",
             "checkedStepKeys",
-            "fromProcedure"
+            "fromProcedure",
+            "citedPrecedents"
           ],
           "type": "object"
         },
@@ -28434,6 +28480,51 @@
                   }
                 ]
               },
+              "citedPrecedents": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "goalRunId": {
+                      "type": "string"
+                    },
+                    "outcome": {
+                      "enum": [
+                        "achieved",
+                        "not_achieved"
+                      ],
+                      "type": "string"
+                    },
+                    "outcomeBasis": {
+                      "enum": [
+                        "verified_by_check",
+                        "requester",
+                        "reviewer_assessed"
+                      ],
+                      "type": "string"
+                    },
+                    "polarity": {
+                      "enum": [
+                        "positive",
+                        "negative",
+                        "unverified"
+                      ],
+                      "type": "string"
+                    },
+                    "statement": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "goalRunId",
+                    "statement",
+                    "outcome",
+                    "outcomeBasis",
+                    "polarity"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "createdAt": {
                 "type": "string"
               },
@@ -28595,7 +28686,8 @@
               "decidedAt",
               "createdAt",
               "removals",
-              "fromProcedure"
+              "fromProcedure",
+              "citedPrecedents"
             ],
             "type": "object"
           },
@@ -29210,6 +29302,51 @@
         "checkedStepKeys": {
           "items": {
             "type": "string"
+          },
+          "type": "array"
+        },
+        "citedPrecedents": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "goalRunId": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "achieved",
+                  "not_achieved"
+                ],
+                "type": "string"
+              },
+              "outcomeBasis": {
+                "enum": [
+                  "verified_by_check",
+                  "requester",
+                  "reviewer_assessed"
+                ],
+                "type": "string"
+              },
+              "polarity": {
+                "enum": [
+                  "positive",
+                  "negative",
+                  "unverified"
+                ],
+                "type": "string"
+              },
+              "statement": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "goalRunId",
+              "statement",
+              "outcome",
+              "outcomeBasis",
+              "polarity"
+            ],
+            "type": "object"
           },
           "type": "array"
         },
@@ -30735,7 +30872,8 @@
         "removals",
         "hints",
         "checkedStepKeys",
-        "fromProcedure"
+        "fromProcedure",
+        "citedPrecedents"
       ],
       "type": "object"
     },
@@ -61233,6 +61371,15 @@
             "steps"
           ],
           "type": "object"
+        },
+        "precedents": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "maxItems": 10,
+          "minItems": 1,
+          "type": "array"
         },
         "statement": {
           "maxLength": 2000,

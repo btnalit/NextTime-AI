@@ -6,10 +6,16 @@ import {
 } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { formatDateTime, formatRelative } from '../../lib/format.js';
-import { type PlanDiff, planDiff, stepRemovalText } from '../../lib/goals.js';
+import { excerpt, formatDateTime, formatRelative } from '../../lib/format.js';
+import {
+  type PlanDiff,
+  citedPrecedentOutcomeText,
+  planDiff,
+  stepRemovalText,
+} from '../../lib/goals.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { type StepChange, planStepDiff } from '../../lib/plan-step-diff.js';
+import { hrefs } from '../../lib/router.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { DashboardCard } from '../kit/section.js';
@@ -147,6 +153,32 @@ function RevisionItem({
             testId="goal-revision-parameters"
           />
         </span>
+      ) : null}
+      {/* S11 GO17b: the requester's earlier goals the plan was written from, each opening its page
+          (the same requester's: whoever reads this revision may read them). The label on its own
+          line and one precedent a line, so an outcome never reads as the start of the next one;
+          a negative one (not achieved, or achieved over checks that did not pass) in the warning
+          colour (UX P2 / P3 on #1087). */}
+      {revision.citedPrecedents.length > 0 ? (
+        <div className="stack-s text-small" data-testid="goal-revision-precedents">
+          <span className="text-3">{t('参考了先例', 'Written from earlier goals')}</span>
+          <ul className="stack-s">
+            {revision.citedPrecedents.map((precedent) => (
+              <li key={precedent.goalRunId} data-precedent={precedent.goalRunId}>
+                <a href={hrefs.goal(precedent.goalRunId)}>{excerpt(precedent.statement, 80)}</a>
+                <span
+                  className={precedent.polarity === 'negative' ? 'text-warn' : 'text-3'}
+                  data-polarity={precedent.polarity}
+                >
+                  {t(
+                    `（${citedPrecedentOutcomeText(precedent, t)}）`,
+                    ` (${citedPrecedentOutcomeText(precedent, t)})`,
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : null}
       {revision.status === 'proposed' && revision.proposer === 'planner' ? (
         <span className="text-small text-3">

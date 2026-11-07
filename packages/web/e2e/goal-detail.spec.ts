@@ -29,6 +29,8 @@ const TASK_FETCH = '66000000-0000-4000-8000-000000000101';
 const TASK_APPLY = '66000000-0000-4000-8000-000000000102';
 const TASK_FETCH_REWORK = '66000000-0000-4000-8000-000000000103';
 const PROCEDURE = '66000000-0000-4000-8000-000000000201';
+// GO17b: an earlier goal of alice's that revision 1 was written from.
+const PRECEDENT = '66000000-0000-4000-8000-000000000301';
 
 // Within the last hour, so the wall-clock budget reads as it would on a goal running today.
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
@@ -156,6 +158,19 @@ function revision(n: 1 | 2) {
             confirmCheck: { key: 'looks-right', procedureSteps: [2] },
           }
         : null,
+    // GO17b: revision 1 was written from one of alice's earlier goals.
+    citedPrecedents:
+      n === 1
+        ? [
+            {
+              goalRunId: PRECEDENT,
+              statement: '上个月续期主站证书',
+              outcome: 'achieved',
+              outcomeBasis: 'verified_by_check',
+              polarity: 'positive',
+            },
+          ]
+        : [],
   };
 }
 
@@ -471,6 +486,14 @@ test.describe('S11 GO6: a goal’s pages with content (stand-in reads)', () => {
         `#/govern/catalog/procedures/${PROCEDURE}`,
       );
       await expect(page.getByTestId('goal-revision-from-procedure')).toHaveCount(1);
+      // GO17b: and the earlier goal it was written from, opening that goal's page.
+      const precedents = page.getByTestId('goal-revision-precedents');
+      await expect(precedents).toHaveText('参考了先例上个月续期主站证书（达成，平台检查通过）');
+      await expect(precedents.getByRole('listitem')).toHaveCount(1);
+      await expect(precedents.getByRole('link', { name: '上个月续期主站证书' })).toHaveAttribute(
+        'href',
+        `#/work/goals/${PRECEDENT}`,
+      );
       // Legacy 454: the start parameters it was made with, and where the requester's
       // confirmation came from.
       await expect(page.getByTestId('goal-plan-parameters')).toHaveText('要续期的站点 site = main');
@@ -751,6 +774,7 @@ test.describe('S11 「门确认不存在」 B: absence checks on a goal (stand-i
                     decidedAt: null,
                     removals: {},
                     fromProcedure: null,
+                    citedPrecedents: [],
                   },
                   revisions: [
                     {

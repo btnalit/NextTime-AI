@@ -232,6 +232,14 @@ function toWirePlanRevisionSummary(
               : null,
           }
         : null,
+    // S11 GO17b: each cited goal's statement read as `statement` above.
+    citedPrecedents: row.citedPrecedents.map((precedent) => ({
+      goalRunId: precedent.goalRunId,
+      statement: precedent.statement,
+      outcome: precedent.outcome,
+      outcomeBasis: precedent.outcomeBasis,
+      polarity: precedent.polarity,
+    })),
   };
 }
 
@@ -616,6 +624,7 @@ export const proposeGoalHandler: CapabilityHandler = async (client, workspaceId,
     fromProcedure?: GoalFromProcedure;
     budget: GoalRunBudget;
     idempotencyKey?: string;
+    precedents?: readonly string[];
   };
   const requesterId =
     ctx?.principal?.id ?? (ctx?.principalId || (await currentPrincipalId(client)));
@@ -642,6 +651,8 @@ export const proposeGoalHandler: CapabilityHandler = async (client, workspaceId,
       ? { fromProcedure: input.fromProcedure }
       : { plan: input.plan }),
     budget: input.budget,
+    // S11 GO17b: recorded on revision 1, checked first; not part of the derived key above.
+    ...(input.precedents !== undefined ? { precedents: input.precedents } : {}),
     idempotencyKey,
     maxProposed: maxProposedGoalsPerRequester(process.env.GOAL_MAX_PROPOSED_PER_REQUESTER),
     // Legacy 513: an agent proposing through its Handle never learns who connected which account.

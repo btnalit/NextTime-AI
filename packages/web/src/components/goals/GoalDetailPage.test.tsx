@@ -803,6 +803,7 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
       proposedBy: 'p-alice',
       reason: '多加一步',
       fromProcedure: null,
+      citedPrecedents: [],
     };
     const { plan: _plan, hints: _hints, ...v2Summary } = v2;
     const [v1Summary] = base.revisions;
@@ -828,6 +829,58 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     expect(
       within(revisions[0] as HTMLElement).queryByTestId('goal-revision-from-procedure'),
     ).toBeNull();
+  });
+
+  it('a revision written from precedents names them, each linked to its goal, with how it ended (S11 GO17b)', async () => {
+    const base = goalDetail();
+    const [v1Summary] = base.revisions;
+    const cited = [
+      {
+        goalRunId: 'goal-before',
+        statement: '续期主站证书',
+        outcome: 'achieved' as const,
+        outcomeBasis: 'verified_by_check' as const,
+        polarity: 'positive' as const,
+      },
+      {
+        goalRunId: 'goal-failed',
+        statement: '续期备用站证书',
+        outcome: 'not_achieved' as const,
+        outcomeBasis: 'requester' as const,
+        polarity: 'negative' as const,
+      },
+    ];
+    const detail = goalDetail({
+      revisions: [{ ...(v1Summary as (typeof base.revisions)[number]), citedPrecedents: cited }],
+    });
+    renderPage(scriptedHttp(baseHandlers(detail)));
+
+    const line = await screen.findByTestId('goal-revision-precedents');
+    expect(line.textContent).toBe(
+      '参考了先例续期主站证书（达成，平台检查通过）续期备用站证书（未达成）',
+    );
+    expect(
+      within(line)
+        .getAllByRole('link')
+        .map((link) => link.getAttribute('href')),
+    ).toEqual(['#/work/goals/goal-before', '#/work/goals/goal-failed']);
+    // One precedent a line under the label, and a negative one in the warning colour (UX P2 / P3
+    // on #1087).
+    const items = within(line).getAllByRole('listitem');
+    expect(items.map((item) => item.textContent)).toEqual([
+      '续期主站证书（达成，平台检查通过）',
+      '续期备用站证书（未达成）',
+    ]);
+    expect(items.map((item) => item.querySelector('[data-polarity]')?.className)).toEqual([
+      'text-3',
+      'text-warn',
+    ]);
+  });
+
+  it('a revision that cites no precedent shows no such line (S11 GO17b)', async () => {
+    renderPage(scriptedHttp(baseHandlers(goalDetail())));
+    await screen.findAllByTestId('goal-revision');
+    expect(screen.queryByTestId('goal-revision-precedents')).toBeNull();
   });
 
   it('a plan made from a Procedure shows its start parameters, and which steps the requester’s confirmation came from (legacy 454)', async () => {
