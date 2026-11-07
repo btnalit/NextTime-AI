@@ -9,6 +9,13 @@ import { parse } from 'yaml';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
+import {
+  attachEvidence,
+  recordSourceObservation,
+  registerPrivateSource,
+  startActivity,
+} from '../../substrate/epistemic/index.js';
+import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { createGoalRun } from '../goal/index.js';
 import { insertPendingContextItem } from '../linkage/index.js';
 import { dispatchCapability } from './dispatch.js';
@@ -231,6 +238,59 @@ async function goalRun(
   if (confirm) await by(byRequester, 'confirm_goal', { goalRunId, revision: 1 });
   if (pause) await by(pausedBy ?? byRequester, 'pause_goal', { goalRunId });
   return goalRunId;
+}
+
+const graphStore = new SqlGraphStore();
+
+/** Two Objects and a Fact between them, asserted by the owner under an Activity of their own;
+ *  `from` names a private Source the Activity observed, so a second Fact from another Source with
+ *  other content opens a Conflict. */
+async function ownerFact(
+  ctx: RecipeContext,
+  objects?: { readonly hostId: string; readonly serviceId: string },
+  port = 80,
+): Promise<{ factId: string; hostId: string; serviceId: string }> {
+  const { workspaceId, ownerId } = ctx.seed;
+  return withWorkspace(ctx.pool, { workspaceId, principalId: ownerId }, async (client) => {
+    const hostId =
+      objects?.hostId ??
+      (
+        await graphStore.upsertObject(client, workspaceId, {
+          objectType: 'test.host',
+          identity: { hostname: `repeat-${randomUUID()}` },
+        })
+      ).id;
+    const serviceId =
+      objects?.serviceId ??
+      (
+        await graphStore.upsertObject(client, workspaceId, {
+          objectType: 'test.service',
+          identity: { name: `repeat-svc-${randomUUID()}` },
+        })
+      ).id;
+    const source = await registerPrivateSource(client, workspaceId, {
+      kind: 'test.collector',
+      ownerPrincipalId: ownerId,
+    });
+    const activity = await startActivity(client, workspaceId, { kind: 'test.ingest' });
+    await recordSourceObservation(client, workspaceId, {
+      sourceId: source.id,
+      activityId: activity.id,
+    });
+    const fact = await graphStore.assertFact(
+      client,
+      workspaceId,
+      { id: ownerId, kind: 'human' },
+      {
+        linkType: 'test.runs_on',
+        sourceObjectId: serviceId,
+        targetObjectId: hostId,
+        activityId: activity.id,
+        properties: { port },
+      },
+    );
+    return { factId: fact.id, hostId, serviceId };
+  });
 }
 
 /** An action of the run's step whose outcome is unknown — what reconcile_goal_action records a
@@ -705,6 +765,83 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       },
     },
   },
+  assert_fact: {
+    'a Fact between two Objects': {
+      setUp: async (ctx) => {
+        const { hostId, serviceId } = await ownerFact(ctx);
+        return {
+          sourceObjectId: serviceId,
+          targetObjectId: hostId,
+          linkType: 'test.runs_on',
+          properties: { port: 443 },
+        };
+      },
+    },
+  },
+  supersede_fact: {
+    'an active Fact': {
+      setUp: async (ctx) => {
+        const { factId, hostId, serviceId } = await ownerFact(ctx);
+        return {
+          factId,
+          sourceObjectId: serviceId,
+          targetObjectId: hostId,
+          linkType: 'test.runs_on',
+          properties: { port: 8080 },
+        };
+      },
+    },
+  },
+  invalidate_fact: {
+    'an active Fact': {
+      setUp: async (ctx) => ({ factId: (await ownerFact(ctx)).factId, reason: 'gone' }),
+    },
+  },
+  verify_fact: {
+    'a Fact with Evidence on file': {
+      setUp: async (ctx) => {
+        const { factId } = await ownerFact(ctx);
+        const { workspaceId, ownerId } = ctx.seed;
+        await withWorkspace(ctx.pool, { workspaceId, principalId: ownerId }, (client) =>
+          attachEvidence(client, workspaceId, {
+            linkId: factId,
+            kind: 'test.evidence',
+            content: { note: 'looks right' },
+            createdBy: ownerId,
+          }),
+        );
+        return { factId };
+      },
+    },
+  },
+  attest_fact: {
+    'an active Fact': {
+      setUp: async (ctx) => ({
+        factId: (await ownerFact(ctx)).factId,
+        note: 'I checked it on the host.',
+      }),
+    },
+  },
+  resolve_conflict: {
+    'an open Conflict between two Sources': {
+      setUp: async (ctx) => {
+        const a = await ownerFact(ctx);
+        const b = await ownerFact(ctx, a, 81);
+        const open = await as<{ items: { id: string; factAId: string; factBId: string }[] }>(
+          ctx,
+          'list_conflicts',
+          { status: 'open' },
+        );
+        const conflict = open.items.find(
+          (item) =>
+            [item.factAId, item.factBId].includes(a.factId) &&
+            [item.factAId, item.factBId].includes(b.factId),
+        );
+        if (conflict === undefined) throw new Error('the two Facts opened no Conflict');
+        return { conflictId: conflict.id, resolution: 'keep_a', reason: 'the first is right' };
+      },
+    },
+  },
   reconcile_goal_action: {
     'an action of the run whose outcome is unknown': {
       setUp: async (ctx) => {
@@ -764,6 +901,12 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'revise_goal',
   'reconcile_goal_action',
   'propose_goal',
+  'assert_fact',
+  'supersede_fact',
+  'invalidate_fact',
+  'verify_fact',
+  'attest_fact',
+  'resolve_conflict',
 ]);
 
 interface Declared {

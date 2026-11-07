@@ -22,7 +22,7 @@ ratchet:
   console_unexplained: 10
   kernel_test_missing: 4
   e2e_waived: 76
-  repeat_unclear: 90
+  repeat_unclear: 84
 capabilities:
   add_eval_case:
     console: required
@@ -88,12 +88,12 @@ capabilities:
   assert_fact:
     console: "none: 待说明（2026-11-06 盘点）"
     agents: []
-    repeat: "unclear: 664"
+    repeat: repeats  # the same Fact; each call records an Activity of its own
   attest_fact:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: creates
   audit_query:
     console: required
     agents: []
@@ -383,7 +383,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: illegal_transition"
   invoke_worker:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: [entry, admin]
@@ -836,7 +836,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: illegal_transition"
   resolve_refs:
     console: required
     agents: []
@@ -1029,7 +1029,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: illegal_transition"
   suspend_self_connection:
     console: required
     agents: []
@@ -1093,7 +1093,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: illegal_transition"
   withdraw_admin_proposal:
     console: required
     agents: []
