@@ -236,7 +236,7 @@ graph LR
 
 **OntologyVersion / WorkerDefinition**：`draft → published → deprecated`；draft 可由 agent 经 `propose_*` 提议，对提议者私有；publish 只走 human 通道，发布后工作区可见。
 
-**CapabilityGrant**：`active → revoked | expired`。
+**CapabilityGrant**：`active → revoked | expired`。一个 Principal 对同一范围（`resource_type` × `resource_id`）同时只有一条 `active` 授权（遗留 647，数据库唯一约束兜底）：再授予已持有的范围返回那条授权、不新增行；撤销或过期之后再授予，才是一条新授权。
 
 ### 5.6 认知状态与可见性
 

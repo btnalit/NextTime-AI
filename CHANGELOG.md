@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.64.0](https://github.com/btnalit/NextTime-AI/compare/v0.63.0...v0.64.0) (2026-11-07)
+
+
+### Features
+
+* **admin-agent:** let the admin agent see capability packs and propose installing them (AA5g) ([#1002](https://github.com/btnalit/NextTime-AI/issues/1002)) ([6705498](https://github.com/btnalit/NextTime-AI/commit/6705498e8e17359628c5087bf904eabd286e33a6))
+* **kernel:** record what an audited act came through and audit refused Handle calls ([#1028](https://github.com/btnalit/NextTime-AI/issues/1028)) ([6c6beb2](https://github.com/btnalit/NextTime-AI/commit/6c6beb2a3f24ff14659f61f7bc389602091b8c98))
+* **web,kernel:** a refused audit row says why, and a Worker's or service account's act names it (legacy 666, 670) ([#1038](https://github.com/btnalit/NextTime-AI/issues/1038)) ([3d11bd7](https://github.com/btnalit/NextTime-AI/commit/3d11bd706d304ab4d3628942ccf648dc4eeab068))
+* **web:** show and filter what an audited act came through on both audit pages (legacy 666) ([#1035](https://github.com/btnalit/NextTime-AI/issues/1035)) ([70479cd](https://github.com/btnalit/NextTime-AI/commit/70479cd2a1da54b5d15eea3db1c53e509daac215))
+
+
+### Bug Fixes
+
+* **accept:** stop fake-llm once the production provider is back (legacy 643) ([#1001](https://github.com/btnalit/NextTime-AI/issues/1001)) ([01f16f2](https://github.com/btnalit/NextTime-AI/commit/01f16f2bfbf304b205c9c66ab2d657a3fcac6fb5))
+* **goal:** say where propose_goal's acceptance goes and that paths are JMESPath (legacy 645) ([#1000](https://github.com/btnalit/NextTime-AI/issues/1000)) ([8e048d4](https://github.com/btnalit/NextTime-AI/commit/8e048d4f6d6d13d5afe68c22a645463ef5bfbe5d))
+* **web,kernel:** offer a reload when a workspace switch cannot reach the platform ([#1003](https://github.com/btnalit/NextTime-AI/issues/1003)) ([4015564](https://github.com/btnalit/NextTime-AI/commit/4015564874424b9bb50dfd82f29c8b031f63ff3b))
+* **web:** keep the chat draft and say why across a session that expires (legacy 658, 659) ([#1023](https://github.com/btnalit/NextTime-AI/issues/1023)) ([c77ed15](https://github.com/btnalit/NextTime-AI/commit/c77ed152d710e44c81bfa4d3aa03ed7f359577da))
+* **web:** keep the skill, procedure and goal plan editors' unsaved work across an expired session (legacy 662) ([#1029](https://github.com/btnalit/NextTime-AI/issues/1029)) ([dfe80d4](https://github.com/btnalit/NextTime-AI/commit/dfe80d4733f67e2a46eae3eea6e6a9910a46f710))
+* **web:** pick the member to grant in one searchable list on Systems & access ([#997](https://github.com/btnalit/NextTime-AI/issues/997)) ([729bae9](https://github.com/btnalit/NextTime-AI/commit/729bae93b396d0683dfc478923f469dc11341d6a))
+
 ## [0.63.0](https://github.com/btnalit/NextTime-AI/compare/v0.62.0...v0.63.0) (2026-11-06)
 
 

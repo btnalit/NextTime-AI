@@ -16,6 +16,7 @@ import {
   humanCaller,
   newWorkspace,
   paramsFor,
+  registerSeededGatekeeper,
   seedWorkspace,
   workspaceDigest,
 } from './traversal-fixture.js';
@@ -49,11 +50,12 @@ const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 const MATRIX = path.join(KERNEL_ROOT, '..', '..', 'docs', 'contracts', 'capability-matrix.yaml');
 
-/** What a recipe gets: the seeded workspace, its owner's caller, and the pool. */
+/** What a recipe gets: the seeded workspace, its owner's caller, its member, and the pool. */
 interface RecipeContext {
   readonly pool: Pool;
   readonly caller: ResolvedCaller;
   readonly seed: Seeded;
+  readonly memberId: string;
 }
 
 /** One extra case: sets the workspace up before the first call and returns the params; `first`
@@ -82,7 +84,31 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       first: { stopped: true },
     },
   },
+  // Legacy 647: a second grant of one scope returns the first. Both name a person, which the
+  // schema walk cannot pick (`principalId` falls back to an Operation's id), so these rows run their
+  // recipes only (`RECIPES_ONLY`).
+  grant_capability: {
+    'the member, the seeded gate': {
+      setUp: async ({ seed, memberId }) => ({
+        principalId: memberId,
+        resourceType: 'gatekeeper',
+        resourceId: seed.gatekeeperId,
+      }),
+    },
+  },
+  connect_gatekeeper: {
+    'the member, the seeded gate': {
+      setUp: async ({ pool, seed, memberId }) => {
+        await registerSeededGatekeeper(pool, seed);
+        return { gatekeeperId: seed.gatekeeperId, principalId: memberId };
+      },
+    },
+  },
 };
+
+/** Rows whose schema-built params cannot make a first call succeed on the bare seed — a param
+ *  naming something the walk has no value for — run their recipes instead of that case. */
+const RECIPES_ONLY: ReadonlySet<string> = new Set(['grant_capability', 'connect_gatekeeper']);
 
 interface Declared {
   readonly capability: Capability;
@@ -100,8 +126,12 @@ function declaredRows(): Declared[] {
     if (row.repeat === undefined || row.repeat.startsWith('unclear:')) continue;
     const capability = getCapability(name);
     if (capability === undefined) throw new Error(`matrix row ${name} has no capability`);
-    out.push({ capability, repeat: row.repeat });
-    for (const recipe of Object.keys(RECIPES[name] ?? {})) {
+    const recipes = Object.keys(RECIPES[name] ?? {});
+    if (RECIPES_ONLY.has(name) && recipes.length === 0) {
+      throw new Error(`matrix row ${name} runs its recipes only, and has none`);
+    }
+    if (!RECIPES_ONLY.has(name)) out.push({ capability, repeat: row.repeat });
+    for (const recipe of recipes) {
       out.push({ capability, repeat: row.repeat, recipe });
     }
   }
@@ -189,7 +219,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       const params =
         chosen === undefined
           ? paramsFor(capability.paramsSchema, seed)
-          : await chosen.setUp({ pool, caller, seed });
+          : await chosen.setUp({
+              pool,
+              caller,
+              seed,
+              memberId: workspace.principals.get('member') as string,
+            });
       const call = () => dispatchCapability({ pool }, caller, capability.name, params);
 
       let first: unknown;

@@ -52,7 +52,7 @@ import {
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import { platformGateIdForEndpoint } from './gate-target.js';
-import { toWireConnectionRequest, toWireGrant } from './resource-wire.js';
+import { grantAuditPayload, toWireConnectionRequest, toWireGrant } from './resource-wire.js';
 
 /**
  * application/gateway/connection-handlers: `request_connection`, `create_connection` (this
@@ -692,7 +692,7 @@ export const connectGatekeeperHandler: CapabilityHandler = async (
   const { gatekeeperId, principalId } = params as { gatekeeperId: string; principalId: string };
   const grantedBy = ctx?.principalId ?? (await currentPrincipalId(client));
 
-  const grant = await connectGatekeeper(client, workspaceId, {
+  const { grant, created, expiredGrantIds } = await connectGatekeeper(client, workspaceId, {
     gatekeeperId,
     principalId,
     grantedBy,
@@ -702,6 +702,7 @@ export const connectGatekeeperHandler: CapabilityHandler = async (
     result: toWireGrant(grant),
     resourceType: 'capability_grant',
     resourceId: grant.id,
+    auditPayload: grantAuditPayload(created, expiredGrantIds),
   };
 };
 
