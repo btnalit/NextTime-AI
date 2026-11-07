@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   MAX_DRAFTS,
+  MAX_DRAFTS_TOTAL_CHARS,
   MAX_DRAFT_CHARS,
   clearDrafts,
   draftScope,
@@ -99,5 +100,48 @@ describe('lib/drafts structured values (legacy 662)', () => {
     saveDraftValue(scope, { markdown: 'short' });
     saveDraftValue(scope, { markdown: 'x'.repeat(MAX_DRAFT_CHARS) });
     expect(loadDraftValue(scope)).toBeNull();
+  });
+});
+
+describe('lib/drafts total size (legacy 667)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('keeps all drafts together under the total ceiling, the oldest going first', () => {
+    const big = 'x'.repeat(MAX_DRAFT_CHARS - 10);
+    const scopes = Array.from({ length: 8 }, (_, i) => draftScope('p-1', `chat-${i}`));
+    for (const scope of scopes) saveDraft(scope, big);
+    const kept = scopes.filter((scope) => loadDraft(scope) !== null);
+    expect(kept.length * big.length).toBeLessThanOrEqual(MAX_DRAFTS_TOTAL_CHARS);
+    expect(kept).toEqual(scopes.slice(scopes.length - kept.length));
+    expect(loadDraft(scopes[7] as string)).toBe(big);
+  });
+
+  it('a store the browser will not take drops the oldest drafts until it does', () => {
+    saveDraft(draftScope('p-1', 'chat-a'), 'older');
+    saveDraft(draftScope('p-1', 'chat-b'), 'newer');
+    const setItem = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
+      this: Storage,
+      key: string,
+      value: string,
+    ) {
+      if (value.length > 60) throw new DOMException('full', 'QuotaExceededError');
+      setItem.call(this, key, value);
+    });
+    saveDraft(draftScope('p-1', 'chat-c'), 'newest');
+    expect(loadDraft(draftScope('p-1', 'chat-a'))).toBeNull();
+    // Only as many as it takes: the next oldest is still there.
+    expect(loadDraft(draftScope('p-1', 'chat-b'))).toBe('newer');
+    expect(loadDraft(draftScope('p-1', 'chat-c'))).toBe('newest');
+  });
+
+  it('a draft forgotten while the store is full does not come back', () => {
+    saveDraft(draftScope('p-1', 'chat-a'), 'sent already');
+    saveDraft(draftScope('p-1', 'chat-b'), 'typed');
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('full', 'QuotaExceededError');
+    });
+    forgetDraft(draftScope('p-1', 'chat-a'));
+    expect(loadDraft(draftScope('p-1', 'chat-a'))).toBeNull();
   });
 });

@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.65.0](https://github.com/btnalit/NextTime-AI/compare/v0.64.0...v0.65.0) (2026-11-07)
+
+
+### Features
+
+* **kernel:** answer a WS ping so the console can tell a dead socket (legacy 672) ([#1054](https://github.com/btnalit/NextTime-AI/issues/1054)) ([5368e65](https://github.com/btnalit/NextTime-AI/commit/5368e653c4bbdf2f42b8d27a9b03fa2b41ad5e08))
+
+
+### Bug Fixes
+
+* an owner sees that the platform suspended a self-connected gate, when and why (legacy 674) ([#1051](https://github.com/btnalit/NextTime-AI/issues/1051)) ([da9fde5](https://github.com/btnalit/NextTime-AI/commit/da9fde5960b715e0cfe280b5f38127074339391f))
+* **kernel,web:** the audit streams leave reads out before paging (legacy 669) ([#1040](https://github.com/btnalit/NextTime-AI/issues/1040)) ([0c0ffff](https://github.com/btnalit/NextTime-AI/commit/0c0ffffa5ee72f6386ce74f9b4fca3d4d22de434))
+* **kernel:** close a console socket when its session expires by itself (legacy 677) ([#1057](https://github.com/btnalit/NextTime-AI/issues/1057)) ([a176bff](https://github.com/btnalit/NextTime-AI/commit/a176bff151def179e86b2e09914282e4898807d7))
+* **kernel:** grant a scope once, so a repeated grant returns the grant held (legacy 647) ([#1036](https://github.com/btnalit/NextTime-AI/issues/1036)) ([12c4b1a](https://github.com/btnalit/NextTime-AI/commit/12c4b1a24b8a2f3f5d6168a852e3bd1bfe487751))
+* **kernel:** renaming or archiving a Chat to the state it is in records no transition (legacy 665) ([#1060](https://github.com/btnalit/NextTime-AI/issues/1060)) ([7a6afd0](https://github.com/btnalit/NextTime-AI/commit/7a6afd0f016ad06a181528d2fc7b65e954d2600f))
+* **kernel:** send a chat message once, so a resend with its idempotencyKey returns the message sent (legacy 673) ([#1050](https://github.com/btnalit/NextTime-AI/issues/1050)) ([7a8444f](https://github.com/btnalit/NextTime-AI/commit/7a8444f82b34f9e6dba5a7d329c11a85b7809435))
+* **web:** a send with no answer says its outcome is not known and resends once; a dropped connection shows promptly (legacies 673, 672) ([#1053](https://github.com/btnalit/NextTime-AI/issues/1053)) ([5a5a81c](https://github.com/btnalit/NextTime-AI/commit/5a5a81c379335d604cb2d08fa795bf7841a68048))
+
 ## [0.64.0](https://github.com/btnalit/NextTime-AI/compare/v0.63.0...v0.64.0) (2026-11-07)
 
 

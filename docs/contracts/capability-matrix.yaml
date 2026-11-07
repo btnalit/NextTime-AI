@@ -20,20 +20,20 @@
 #           every declared row is exercised by kernel repeat-call.integration.test.ts
 ratchet:
   console_unexplained: 10
-  kernel_test_missing: 5
+  kernel_test_missing: 4
   e2e_waived: 76
-  repeat_unclear: 112
+  repeat_unclear: 100
 capabilities:
   add_eval_case:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: version_changed"
   add_eval_fixture_gate:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: version_changed"
   add_member:
     console: required
     agents: []
@@ -148,7 +148,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: eval_suite_name_taken"
   create_gate_instance:
     console: required
     agents: []
@@ -186,7 +186,7 @@ capabilities:
     console: "indirect: packages/web/src/components/CatalogPage.tsx"
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: illegal_transition"
   deprecate_procedure:
     console: "indirect: packages/web/src/components/CatalogPage.tsx"
     agents: []
@@ -221,7 +221,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: version_changed"
   enable_gate_instance:
     console: required
     agents: []
@@ -289,7 +289,7 @@ capabilities:
   get_entry_context:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: []
-    repeat: "unclear: 664"
+    repeat: idempotent
   get_entry_template_status:
     console: required
     agents: []
@@ -559,8 +559,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    kernel_test: missing
-    repeat: "unclear: 664"
+    repeat: idempotent
   merge_user:
     console: required
     agents: []
@@ -672,17 +671,17 @@ capabilities:
     console: required
     agents: [entry, admin]
     e2e: "waived: 657"
-    repeat: creates
+    repeat: creates  # without an id; with a published family's id: "conflict: draft_pending" (repeat-call recipe)
   propose_skill:
     console: required
     agents: [entry, admin]
     e2e: observed
-    repeat: creates
+    repeat: creates  # without an id; with a published family's id: "conflict: draft_pending" (repeat-call recipe)
   propose_worker_definition:
     console: required
     agents: [entry, admin]
     e2e: observed
-    repeat: creates
+    repeat: creates  # without an id; with a published family's id: repeats (legacy 680) (repeat-call recipe)
   publish_manifest:
     console: required
     agents: []
@@ -790,7 +789,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: version_changed"
   remove_membership:
     console: required
     agents: []
@@ -805,7 +804,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: version_changed"
   report_task_outcome:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: [entry]
@@ -818,7 +817,7 @@ capabilities:
   report_turn:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: []
-    repeat: "unclear: 664"
+    repeat: idempotent
   request_action:
     console: "none: agent 或 Worker 在对话、任务里调用的回调；控制台只在签发 Handle 的范围选择里列出它，人看结果走对话、任务、审批与审计页"
     agents: []
@@ -855,7 +854,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: version_changed"
   revise_goal:
     console: required
     agents: []
@@ -1062,7 +1061,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent
   update_platform_settings:
     console: required
     agents: []

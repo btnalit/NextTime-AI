@@ -122,6 +122,58 @@ async function workerV1(ctx: RecipeContext, publish: boolean): Promise<{ id: str
   return v1;
 }
 
+/** An evaluation suite on a published worker v1; `withGate`: the seeded gate frozen into it (v2). */
+async function evalSuite(
+  ctx: RecipeContext,
+  withGate: boolean,
+): Promise<{ id: string; version: number; workerId: string }> {
+  const worker = await workerV1(ctx, true);
+  const suite = await as<{ id: string; version: number }>(ctx, 'create_eval_suite', {
+    name: `repeat-suite-${randomUUID().slice(0, 8)}`,
+    workerDefinitionId: worker.id,
+    workerDefinitionVersion: 1,
+  });
+  if (!withGate) return { ...suite, workerId: worker.id };
+  await registerSeededGatekeeper(ctx.pool, ctx.seed);
+  const frozen = await as<{ id: string; version: number }>(ctx, 'add_eval_fixture_gate', {
+    suiteId: suite.id,
+    suiteVersion: suite.version,
+    gatekeeperId: ctx.seed.gatekeeperId,
+  });
+  return { ...frozen, workerId: worker.id };
+}
+
+/** A case on the seeded gate's one Operation (named after the marker). */
+const evalCase = (seed: Seeded) => ({
+  title: 'Restart web-1 when it hangs',
+  input: 'web-1 hangs',
+  fixtures: [
+    {
+      gatekeeperId: seed.gatekeeperId,
+      operation: seed.marker,
+      answer: { kind: 'data', data: { restarted: true } },
+    },
+  ],
+  assertions: [{ expect: { path: 'result.summary', op: 'contains', value: 'web-1' } }],
+});
+
+/** A suite with one case (v3), and that case's id. */
+async function suiteWithCase(ctx: RecipeContext) {
+  const suite = await evalSuite(ctx, true);
+  const withCase = await as<{ id: string; version: number; cases: { id: string }[] }>(
+    ctx,
+    'add_eval_case',
+    {
+      suiteId: suite.id,
+      suiteVersion: suite.version,
+      partition: 'regression',
+      split: 'dev',
+      ...evalCase(ctx.seed),
+    },
+  );
+  return { suiteId: withCase.id, suiteVersion: withCase.version, caseId: withCase.cases[0]?.id };
+}
+
 /** reject_draft's case: v1 published, v2 proposed — the pending draft the reviewer takes off. */
 async function pendingV2(ctx: RecipeContext, kind: 'skill' | 'procedure') {
   const body = kind === 'skill' ? skillBody() : procedureBody();
@@ -334,6 +386,144 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       }),
     },
   },
+  // Evaluation suites (S10): a suite has one name in a workspace, and every change names the
+  // version it was made against — a second identical change finds the suite one version on.
+  create_eval_suite: {
+    'a published worker': {
+      setUp: async (ctx) => ({
+        name: 'Restart drills',
+        workerDefinitionId: (await workerV1(ctx, true)).id,
+        workerDefinitionVersion: 1,
+      }),
+    },
+  },
+  repin_eval_suite: {
+    'the worker’s v2, published': {
+      setUp: async (ctx) => {
+        const suite = await evalSuite(ctx, false);
+        await as(ctx, 'propose_worker_definition', {
+          definitionId: suite.workerId,
+          kind: 'worker',
+          definition: { systemPrompt: 'Version two.' },
+        });
+        await as(ctx, 'publish_worker_definition', { definitionId: suite.workerId, version: 2 });
+        return {
+          suiteId: suite.id,
+          suiteVersion: suite.version,
+          workerDefinitionVersion: 2,
+          reason: 'v2 is the one in use.',
+        };
+      },
+    },
+  },
+  add_eval_fixture_gate: {
+    'the seeded gate': {
+      setUp: async (ctx) => {
+        await registerSeededGatekeeper(ctx.pool, ctx.seed);
+        const suite = await evalSuite(ctx, false);
+        return {
+          suiteId: suite.id,
+          suiteVersion: suite.version,
+          gatekeeperId: ctx.seed.gatekeeperId,
+        };
+      },
+    },
+  },
+  remove_eval_fixture_gate: {
+    'the frozen seeded gate': {
+      setUp: async (ctx) => {
+        const suite = await evalSuite(ctx, true);
+        return {
+          suiteId: suite.id,
+          suiteVersion: suite.version,
+          gatekeeperId: ctx.seed.gatekeeperId,
+          reason: 'Not needed.',
+        };
+      },
+    },
+  },
+  add_eval_case: {
+    'a case on the frozen gate': {
+      setUp: async (ctx) => {
+        const suite = await evalSuite(ctx, true);
+        return {
+          suiteId: suite.id,
+          suiteVersion: suite.version,
+          partition: 'regression',
+          split: 'dev',
+          ...evalCase(ctx.seed),
+        };
+      },
+    },
+  },
+  edit_eval_case: {
+    'its one case': {
+      setUp: async (ctx) => ({
+        ...(await suiteWithCase(ctx)),
+        reason: 'Tighter.',
+        ...evalCase(ctx.seed),
+        title: 'Restart web-1 once',
+      }),
+    },
+  },
+  retire_eval_case: {
+    'its one case': {
+      setUp: async (ctx) => ({ ...(await suiteWithCase(ctx)), reason: 'Obsolete.' }),
+    },
+  },
+  // The seeded gate's one Operation (named after the marker), once the gate is registered.
+  update_operation_description: {
+    'the seeded Operation': {
+      setUp: async ({ pool, seed }) => {
+        await registerSeededGatekeeper(pool, seed);
+        return { gatekeeperId: seed.gatekeeperId, name: seed.marker, description: 'Lists hosts.' };
+      },
+    },
+  },
+  deprecate_operation: {
+    'the seeded Operation': {
+      setUp: async ({ pool, seed }) => {
+        await registerSeededGatekeeper(pool, seed);
+        return { gatekeeperId: seed.gatekeeperId, name: seed.marker };
+      },
+    },
+  },
+  // A Turn: `send_chat_message` starts one; with no agent runtime wired, `report_turn` (what the
+  // entry agent sends at the end) is what ends it.
+  report_turn: {
+    'a running Turn': {
+      setUp: async (ctx) => {
+        const sent = await as<{ turnId: string }>(ctx, 'send_chat_message', {
+          chatId: ctx.seed.chatId,
+          text: 'report back',
+        });
+        return { turnId: sent.turnId, summary: 'Done.' };
+      },
+    },
+  },
+  mark_turn_outcome: {
+    'a finished Turn': {
+      setUp: async (ctx) => {
+        const sent = await as<{ turnId: string }>(ctx, 'send_chat_message', {
+          chatId: ctx.seed.chatId,
+          text: 'finish, then be judged',
+        });
+        await as(ctx, 'report_turn', { turnId: sent.turnId, summary: 'Done.' });
+        return { turnId: sent.turnId, outcome: 'achieved' };
+      },
+    },
+  },
+  get_entry_context: {
+    'a running Turn': {
+      setUp: async (ctx) => {
+        const sent = await as<{ turnId: string }>(ctx, 'send_chat_message', {
+          chatId: ctx.seed.chatId,
+          text: 'what is going on',
+        });
+        return { turnId: sent.turnId };
+      },
+    },
+  },
   reject_draft: {
     // The rejected draft is taken off its family, so the second call finds no such version.
     'a pending Skill v2': { setUp: (ctx) => pendingV2(ctx, 'skill') },
@@ -364,6 +554,18 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'publish_worker_definition',
   'deprecate_worker_definition',
   'discard_draft',
+  'create_eval_suite',
+  'repin_eval_suite',
+  'add_eval_fixture_gate',
+  'remove_eval_fixture_gate',
+  'add_eval_case',
+  'edit_eval_case',
+  'retire_eval_case',
+  'update_operation_description',
+  'deprecate_operation',
+  'report_turn',
+  'mark_turn_outcome',
+  'get_entry_context',
 ]);
 
 interface Declared {

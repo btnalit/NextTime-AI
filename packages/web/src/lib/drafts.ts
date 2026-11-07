@@ -24,6 +24,11 @@ export const MAX_DRAFTS = 20;
  *  a whole tab's store shares the origin's few megabytes with the API key. */
 export const MAX_DRAFT_CHARS = 200_000;
 
+/** Legacy 667: all of a tab's drafts together, in characters; past it the oldest go first. Twenty
+ *  drafts at the one-draft ceiling would be 4M characters — about 8 MB as the browser stores
+ *  them, past what `sessionStorage` allows, so a write would fail and keep nothing new. */
+export const MAX_DRAFTS_TOTAL_CHARS = 1_000_000;
+
 /** The key a draft is filed under: who typed it, and where — a chat id, or an editor's own
  *  target (legacy 662: `skill:new`, `procedure:version:<id>@<n>`, `goal:<id>`, …). */
 export function draftScope(principalId: string, target: string): string {
@@ -47,12 +52,27 @@ function readAll(): Record<string, string> {
 }
 
 function writeAll(drafts: Record<string, string>): void {
-  try {
-    if (Object.keys(drafts).length === 0) sessionStorage.removeItem(DRAFTS_STORAGE_KEY);
-    else sessionStorage.setItem(DRAFTS_STORAGE_KEY, JSON.stringify(drafts));
-  } catch {
-    // Best-effort — see module doc comment.
+  // Legacy 667: when the store will not take it (the origin's quota, shared with the session
+  // key), the oldest drafts go until it does — never the old store left as it was, which would
+  // bring back a draft just sent or discarded.
+  const kept = { ...drafts };
+  for (;;) {
+    try {
+      if (Object.keys(kept).length === 0) sessionStorage.removeItem(DRAFTS_STORAGE_KEY);
+      else sessionStorage.setItem(DRAFTS_STORAGE_KEY, JSON.stringify(kept));
+      return;
+    } catch {
+      const oldest = Object.keys(kept)[0];
+      if (oldest === undefined) return; // Best-effort — see module doc comment.
+      delete kept[oldest];
+    }
   }
+}
+
+function totalChars(drafts: Record<string, string>): number {
+  let total = 0;
+  for (const text of Object.values(drafts)) total += text.length;
+  return total;
 }
 
 export function loadDraft(scope: string): string | null {
@@ -68,6 +88,11 @@ export function saveDraft(scope: string, text: string): void {
     drafts[scope] = text;
     const scopes = Object.keys(drafts);
     for (const old of scopes.slice(0, Math.max(0, scopes.length - MAX_DRAFTS))) {
+      delete drafts[old];
+    }
+    // The newest is under the one-draft ceiling, so it always fits once older ones go.
+    for (const old of Object.keys(drafts)) {
+      if (old === scope || totalChars(drafts) <= MAX_DRAFTS_TOTAL_CHARS) break;
       delete drafts[old];
     }
   }
