@@ -137,6 +137,7 @@ test.describe('Journey ⑫: 发布 Operation 修订，再与门的公告对齐',
     await expect(gateRow).not.toContainText('分类与平台最新清单不一致');
 
     const aligned = await publishedOperation(page, gatekeeperId);
-    expect(aligned).toMatchObject({ version: 2, blastRadius: 'medium' });
+    // Review of #1043 (#501): aligning loosened only the blast radius — still needs approval.
+    expect(aligned).toMatchObject({ version: 2, blastRadius: 'medium', autoApprovable: false });
   });
 });
