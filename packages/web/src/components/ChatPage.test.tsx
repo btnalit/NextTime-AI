@@ -927,6 +927,44 @@ describe('ChatPage send that got no answer (legacy 673)', () => {
     expect(third?.[2]).not.toBe(first?.[2]);
   });
 
+  it('keeps the note when the same message is sent again while there is no connection', async () => {
+    const fake = fakeClient();
+    let status = 'connected';
+    const listeners = new Set<(next: string) => void>();
+    Object.assign(fake.client, {
+      getStatus: () => status,
+      onStatusChange: (fn: (next: string) => void) => {
+        listeners.add(fn);
+        return () => listeners.delete(fn);
+      },
+    });
+    const setStatus = (next: string) =>
+      act(() => {
+        status = next;
+        for (const fn of listeners) fn(status);
+      });
+    await timeOutOneSend(fake, 'restart web-1');
+    setStatus('reconnecting');
+
+    // Enter on the same text while disconnected: refused before it leaves.
+    (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('WsClient: not connected'),
+    );
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+    await waitFor(() => expect(sendCalls(fake)).toHaveLength(2));
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain('不确定消息发出没有'),
+    );
+
+    setStatus('connected');
+    const banner = screen.getByRole('alert');
+    expect(banner.textContent).toContain('可能已经发出，也可能没有');
+    const resend = within(banner).getByRole('button', { name: '再发一次' }) as HTMLButtonElement;
+    expect(resend.disabled).toBe(false);
+    const [first, second] = sendCalls(fake);
+    expect(second?.[2]).toBe(first?.[2]);
+  });
+
   it('keeps the note through a reconnect when the connection closed under the send', async () => {
     const fake = fakeClient();
     let status = 'connected';

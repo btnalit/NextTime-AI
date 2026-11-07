@@ -121,13 +121,20 @@ export function useComposer(
     const text = composerText.trim();
     if (!text || turnStatus === 'running' || busy || archived) return;
     const attempt = pendingSendFor(text, pending.current, messages);
+    // The same message again after a send that got no answer: until this try is answered, what
+    // the page knows is still that the first may have gone out.
+    const resending = sendUncertain && attempt.idempotencyKey === pending.current?.idempotencyKey;
     keepPending(attempt);
-    setSendError(null);
-    setSendUncertain(false);
+    if (!resending) {
+      setSendError(null);
+      setSendUncertain(false);
+    }
     setBusy(true);
     try {
       const result = await client.sendChatMessage(chatId, text, attempt.idempotencyKey);
       keepPending(null);
+      setSendError(null);
+      setSendUncertain(false);
       // A second try the kernel answered with the first message: its Turn may be over already,
       // and a finished Turn sends no end push — marking it running would hold the box shut.
       if (result.changed !== false || result.turnStatus === 'running') {
@@ -138,6 +145,9 @@ export function useComposer(
       setFollow(true);
       textareaRef.current?.focus();
     } catch (err) {
+      // Refused before it left (no connection): it says nothing about the first try, so the note
+      // that it may have gone out stays, and so does 「再发一次」 for when the connection is back.
+      if (resending && neverLeft(err)) return;
       if (describeError(err).code === 'idempotency_key_reused') keepPending(null);
       setSendUncertain(answerLost(err));
       setSendError(err);
@@ -199,6 +209,11 @@ export function useComposer(
 /** A send whose answer never came: the deadline passed, or the socket closed while it was out
  *  (`WsClient` rejects what is in flight with "connection closed"). A send refused before it left
  *  ("not connected") or answered with an error did not run. */
+/** The send was refused before it left the page: it did not run. */
+function neverLeft(err: unknown): boolean {
+  return err instanceof Error && err.message === 'WsClient: not connected';
+}
+
 function answerLost(err: unknown): boolean {
   return (
     err instanceof RpcTimeoutError ||
