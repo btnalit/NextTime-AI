@@ -157,6 +157,12 @@ M1–M3、M5、R 与 M4 的静态半边是纯静态检查，在 `quality` 与 `p
 - 每周一次：读 `web-e2e` 的覆盖产物与 retried 列表，基线能收紧就开 PR 收紧（棘轮往下拧）。
 - 补测试按 §6 批次开 PR，并发不超过 3。
 
+### 5.7 内核遍历测试（批次 D，G6 / G10 / G11 / G12）
+
+按注册表遍历，不按 capability 点名：新注册的 capability 自动被走到。
+
+- **D1（G12，已落地）** `packages/kernel/src/application/gateway/workspace-isolation-traversal.integration.test.ts`：工作区 A 经 `new_chat` / `rename_chat` 建一个对话，再写入一个 Gatekeeper、一个已发布 Operation 和一个待审批 ActionRequest，每一行的可见字段都带一个唯一标记串。B 的 owner（最宽角色）经 `dispatchCapability` 调全部工作区 `observe` capability，跑两遍。第一遍不带参数，答复里不得出现标记、A 的工作区 id 或 A 的任何行 id。第二遍按参数 schema 把 id 形字段（`chatId`、`gatekeeperId`、`objectId`、`entityId` 等）指向 A 的行，自由文本参数一律填探针串，答复里不得出现标记或 A 的工作区 id。第二遍不查行 id，因为 B 的每次调用都按原参数审计进 B 自己的审计表，B 的审计读会回显 A 的 id：那是 B 问过什么的记录，不是 A 的数据。调用可以失败，失败不算泄漏，但两遍合计至少要有 50 个 capability 正常答复（今天是 64 个）。同一遍历以 A 的 owner 跑一次作正向对照：`list_chats`、`list_gatekeepers`、`list_pending`、`get_object`、`get_action` 必须读到标记，证明种子可达、检查会触发。e2e 双工作区串读旅程仍待做（UX）。
+
 ## 6. 分批路线
 
 | 批次 | 内容 | 关闭缺口 | 审查 | 前置 |
