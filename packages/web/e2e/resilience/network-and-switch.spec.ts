@@ -12,16 +12,15 @@ import { type Page, expect, test } from '../lib/test.js';
  * ② `E2E_CUT_NETWORK_CMD on|off` (.github/workflows/e2e.yml) drops every packet of every
  * connection to caddy, both ways, established ones included: no RST, no FIN, the way a laptop's
  * Wi-Fi or a VPN drops. Chromium's `setOffline` does not do this — it leaves an open WebSocket
- * working — so the cut happens below the browser. What the page does today, seen on the CI stack:
- * the connection line keeps saying 已连接 for the whole cut (nothing on the socket notices it is
- * dead — legacy 672); a message sent during the cut is answered after the RPC deadline (30 s,
- * ws-client.ts) by a readable 内核没有响应 alert with the draft kept; when the network comes back
- * the request that timed out still reaches the kernel and runs (on TCP's next retransmission, tens
- * of seconds later), while the page keeps the alert and the draft — so the obvious next move,
- * pressing send again, makes a second, identical turn (legacy 673, reproduced by hand on the CI
- * stack). This case pins what is right today and what must hold whatever the fix: the prompt sent
- * into the cut never runs twice unless the person sends it twice, and the page works again
- * without a reload. When 672 / 673 are fixed, their assertions go into this case.
+ * working — so the cut happens below the browser. Before legacy 672 / 673 the connection line said
+ * 已连接 for the whole cut, the send into it failed after the RPC deadline with 「检查网络后重试」,
+ * and the request that timed out still ran once the network came back (on TCP's next
+ * retransmission, tens of seconds later) — so pressing send again made a second, identical turn.
+ * Now: the heartbeat (ws-client.ts) notices the dead socket and the line says 重连中; the send's
+ * note says it may or may not have gone out and keeps the draft; once the network is back the page
+ * reconnects by itself, 「再发一次」 sends the same message under the same idempotency key, and the
+ * kernel holds the prompt once however the late request and the second try land — read from
+ * outside the page once the late request has had its window.
  *
  * ③ The kernel stops (`E2E_STOP_KERNEL_CMD`) under a cookie session that belongs to two
  * workspaces (the CI owner, added as an owner of `ci-e2e-switch` — `E2E_SWITCH_WORKSPACE_CMD`
@@ -47,6 +46,11 @@ const RPC_DEADLINE_MS = 45_000;
 const LATE_DELIVERY_MS = 90_000;
 /** As kernel-restart.spec.ts: restart and health wait, then up to the client's capped backoff. */
 const RECOVERY_MS = 60_000;
+/** Legacy 672 (ws-client.ts): a ping every 15 s, given up after 10 s unanswered — plus slack. */
+const HEARTBEAT_MS = 35_000;
+/** Legacy 672: after the network is back, the next connect attempt (one gives up after 10 s and
+ *  the next follows after the base delay, not backed off) — plus slack. */
+const RECONNECT_MS = 30_000;
 
 async function run(script: string, ...args: string[]): Promise<void> {
   await promisify(execFile)('sh', [script, ...args], { timeout: 120_000 });
@@ -92,38 +96,70 @@ test.describe('batch C3: an open console page across a network cut and a switch 
     const users = page.locator('.message-user .message-text');
 
     const during = `cut-during-${Date.now()}`;
+    const status = page.getByTestId('ws-status');
+    // Legacy 673: the page cannot know whether a send it got no answer to ran, so it says so.
+    const uncertain = page.getByRole('alert').filter({ hasText: '不确定消息发出没有' });
     try {
       await run(CUT_NETWORK as string, 'on');
       await composer.fill(during);
       await page.getByRole('button', { name: '发送' }).click();
-      // No answer comes: within the RPC deadline the page says the platform did not respond, in
-      // words, and keeps what was typed. It does not show the message as sent.
-      const noResponse = page.getByRole('alert').filter({ hasText: '内核没有响应' });
-      await expect(noResponse).toBeVisible({ timeout: RPC_DEADLINE_MS });
-      await expect(noResponse).toContainText('检查网络后重试');
+      // Legacy 672: the heartbeat notices the dead socket well inside the RPC deadline — the
+      // status line stops saying 已连接 while the cut lasts.
+      await expect(status).toHaveText('重连中', { timeout: HEARTBEAT_MS });
+      // No answer came: the page says the message may or may not have gone out, keeps the draft
+      // and does not show the message as sent. It does not ask for a retry.
+      await expect(uncertain).toBeVisible({ timeout: RPC_DEADLINE_MS });
+      await expect(uncertain).toContainText('可能已经发出，也可能没有');
+      await expect(uncertain).not.toContainText('重试');
       await expect(composer).toHaveValue(during);
       await expect(users).toHaveText([before]);
+      // 「再发一次」 waits for the connection.
+      await expect(uncertain.getByRole('button', { name: '再发一次' })).toBeDisabled();
     } finally {
       // Always restore the network: every step and spec after this one needs it.
       await run(CUT_NETWORK as string, 'off');
     }
 
-    // Today (legacy 673) the socket the page kept is the one that went quiet; once TCP's next
-    // retransmission gets through (~25 s after the network is back, on the CI stack) the request
-    // that timed out reaches the kernel and runs, and the page shows it — with the alert and the
-    // draft still up. Waiting for that keeps the next step from racing it; when 673 is fixed, this
-    // is where the fixed behaviour is asserted instead.
+    // Legacy 672: the page is back on a new socket soon after the network, without a reload.
+    await expect(status).toHaveText('已连接', { timeout: RECONNECT_MS });
+    // The obvious next move, and what used to make a second identical turn (legacy 673): send it
+    // again. The same idempotency key goes with it, so whether the first request ran (its packets
+    // may still arrive late on the old socket) or not, the prompt runs once.
+    await expect(uncertain).toBeVisible();
+    await uncertain.getByRole('button', { name: '再发一次' }).click();
     await expect(users).toHaveText([before, during], { timeout: LATE_DELIVERY_MS });
-    // …and its turn finishes (a send while it runs is refused as turn_already_running).
+    // The message is in the chat, so the note and the draft go by themselves.
+    await expect(uncertain).toHaveCount(0);
+    await expect(composer).toHaveValue('');
     await expect(page.locator('.message-assistant .message-text')).toHaveCount(2, {
       timeout: 20_000,
     });
 
-    // The page works again without a reload: a new message gets its reply pushed.
+    // The page works as before: a new message gets its reply pushed.
     const after = `cut-after-${Date.now()}`;
     await sendAndSeeReply(page, after);
-    await expect(page.getByTestId('ws-status')).toHaveText('已连接');
-    // The prompt sent into the cut ran once, never twice: nobody sent a second copy.
+    await expect(status).toHaveText('已连接');
+    await expect(users).toHaveText([before, during, after]);
+
+    // From outside the page: the kernel holds the prompt sent into the cut once — a late first
+    // request and the second try made one message, not two. A first request still in flight on
+    // the old socket gets the rest of its window (~25 s after the network on the CI stack) before
+    // this is read: an absence has no event to wait for.
+    await page.waitForTimeout(30_000);
+    const chatId = decodeURIComponent(new URL(page.url()).hash.split('/').pop() ?? '');
+    const history = await page.request.post('/api/cap/get_chat_history', {
+      headers: { authorization: `Bearer ${API_KEY}` },
+      data: { chatId, limit: 50 },
+    });
+    const body = (await history.json()) as {
+      ok: boolean;
+      result?: { items: { role: string; text: string }[] };
+    };
+    expect(body.ok, JSON.stringify(body)).toBe(true);
+    const sentTexts = (body.result?.items ?? [])
+      .filter((item) => item.role === 'user')
+      .map((item) => item.text);
+    expect(sentTexts).toEqual([before, during, after]);
     await expect(users).toHaveText([before, during, after]);
   });
 
