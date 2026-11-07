@@ -683,6 +683,51 @@ jobs:
           gate_host=$(sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml ps -q gate-host)
           test -n "$gate_host"
           echo "E2E_GATE_HOST_CONTAINER=$gate_host" >>"$GITHUB_ENV"
+          # C3 ② (e2e/resilience/network-and-switch.spec.ts): the network under an open page goes
+          # quiet. Drops every packet of every connection to caddy's published port, both ways,
+          # established ones included — no RST, no FIN, the way Wi-Fi or a VPN drops (Chromium's
+          # `setOffline` leaves an open WebSocket working). Matched on the connection's original
+          # destination, so it holds whether docker reaches the container by DNAT or docker-proxy.
+          # `off` removes every copy, so a rerun after a failed step starts clean.
+          cat >"$RUNNER_TEMP/cut-network.sh" <<'SH'
+          set -eu
+          rule() { sudo -n iptables "$1" "$2" -p tcp -m conntrack --ctorigdst 127.0.0.1 --ctorigdstport 8443 -j DROP; }
+          case "${1:-}" in
+            on) rule -I OUTPUT; rule -I INPUT ;;
+            off) while rule -D OUTPUT 2>/dev/null; do :; done; while rule -D INPUT 2>/dev/null; do :; done ;;
+            *) echo "usage: cut-network.sh on|off" >&2; exit 2 ;;
+          esac
+          SH
+          echo "E2E_CUT_NETWORK_CMD=$RUNNER_TEMP/cut-network.sh" >>"$GITHUB_ENV"
+          # C3 ③: a second workspace for the CI owner to switch to while the kernel is down, made
+          # only when the spec asks — last, in the resilience project — so no spec before it (the
+          # screenshot gate's platform pages above all) sees another workspace, user or
+          # membership. Prints its owner's API key on stdout and nothing else; the key is kept in a
+          # 0600 file, so a retry gets the same workspace and the caddy-log check below can hold
+          # it as a forbidden value.
+          {
+            printf "key_file='%s'\n" "$RUNNER_TEMP/switch-workspace.key"
+            printf "cd '%s'\n" "$GITHUB_WORKSPACE"
+            cat <<'SH'
+          set -eu
+          if [ ! -s "$key_file" ]; then
+            set +e
+            out=$(sudo -n docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
+              run --rm --no-deps -T kernel node dist/cli/bootstrap.js create-workspace \
+              --name ci-e2e-switch --owner switch-owner </dev/null 2>&1)
+            rc=$?
+            set -e
+            key=$(printf '%s\n' "$out" | awk '/^API key/{getline; print; exit}')
+            if [ "$rc" -ne 0 ] || [ -z "$key" ]; then
+              echo "create-workspace ci-e2e-switch exited $rc, or printed no API key" >&2
+              exit 1
+            fi
+            (umask 077 && printf '%s\n' "$key" >"$key_file")
+          fi
+          cat "$key_file"
+          SH
+          } >"$RUNNER_TEMP/switch-workspace.sh"
+          echo "E2E_SWITCH_WORKSPACE_CMD=$RUNNER_TEMP/switch-workspace.sh" >>"$GITHUB_ENV"
 
       # Legacy 671: journeys/13 connects ci-self-gate from the console the way an owner connects a
       # gate they run themselves — the console mints a connection secret and shows it once, and the
@@ -813,6 +858,7 @@ jobs:
           set -euo pipefail
           forbidden="$RUNNER_TEMP/caddy-forbidden-values"
           (umask 077 && printf '%s\n' "${WEB_E2E_API_KEY:-}" "${WEB_E2E_API_KEY_B:-}" \
+            "$(cat "$RUNNER_TEMP/switch-workspace.key" 2>/dev/null || true)" \
             "${WEB_E2E_ADMIN_INITIAL_PASSWORD:-}" "${WEB_E2E_OWNER_PASSWORD:-}" \
             "${WEB_E2E_TEMP_PASSWORD:-}" >"$forbidden")
           COMPOSE="sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml" \
