@@ -99,17 +99,27 @@ export default defineConfig({
   // other spec runs in `chromium`, login.spec.ts alone in `chromium-login` behind it. Note the
   // trade this makes: a genuine failure anywhere in `chromium` now *skips* `chromium-login` rather
   // than running it and reporting both.
+  //
+  // Batch C (docs/test-coverage-gaps-2026-11-06.md §5.4): `e2e/resilience/` restarts the kernel
+  // under an open page, so it runs last of all, behind `chromium-login`, where nothing else can
+  // see the restart. Its specs skip themselves unless CI gave them E2E_RESTART_KERNEL_CMD.
   projects: [
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
-      testIgnore: /login\.spec\.ts$/,
+      testIgnore: [/login\.spec\.ts$/, /[\\/]resilience[\\/]/],
     },
     {
       name: 'chromium-login',
       use: { ...devices['Desktop Chrome'] },
       testMatch: /login\.spec\.ts$/,
       dependencies: ['chromium'],
+    },
+    {
+      name: 'resilience',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: /[\\/]resilience[\\/].*\.spec\.ts$/,
+      dependencies: ['chromium-login'],
     },
   ],
 });

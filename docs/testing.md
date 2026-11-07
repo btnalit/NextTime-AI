@@ -103,7 +103,9 @@ pnpm ci:guards        # kernel purity + pi 版本一致性 + membership-capabili
 - `packages/web` 的 Playwright（`pnpm --filter @nexttime/web e2e`）：已在 CI，`.github/workflows/e2e.yml`
   的 `web-e2e` job 在 runner 里起一次性的 `AGENT_RUNTIME=fake` compose 栈跑全部 spec，是合并的必需检查
   （docs-only 改动经 `changes` job 跳过）。本地跑法与基线更新见 `docs/runbooks/web-console.md`
-  "CI（Playwright）"与"UX 门槛基线"。
+  "CI（Playwright）"与"UX 门槛基线"。`e2e/resilience/` 是最后跑的单独项目：在打开的页面底下重启内核
+  （CI 给的 `E2E_RESTART_KERNEL_CMD`，本地不设就跳过），断言页面自行恢复或明说断开
+  （`docs/test-coverage-gaps-2026-11-06.md` §5.4）。
 
 ## 4a. 功能与测试同步：capability matrix
 

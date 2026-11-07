@@ -618,6 +618,40 @@ jobs:
           SH
           echo "WEB_E2E_ALWAYS_ALLOW_SEED=$RUNNER_TEMP/seed-always-allow.sh" >>"$GITHUB_ENV"
 
+      # Batch C (docs/test-coverage-gaps-2026-11-06.md §5.4): e2e/resilience/ restarts the kernel
+      # under an open console page and checks the page recovers (or says it cannot). The spec runs
+      # this script (E2E_RESTART_KERNEL_CMD); playwright.config.ts runs that directory last, after
+      # login.spec.ts, so no other spec sees the restart. Like an upgrade on 主机, it replaces the
+      # container (`--force-recreate`: a new container, likely a new address on the network —
+      # legacy 649 and #1003 only showed up that way), not a `restart` of the same one. It returns
+      # only once /api/health answers 200 through caddy again — the steps after the suite (S1
+      # lite, the caddy log check) find the stack as healthy as before.
+      - name: Prepare the kernel restart script (e2e/resilience, batch C)
+        run: |
+          set -euo pipefail
+          cat >"$RUNNER_TEMP/restart-kernel.sh" <<'SH'
+          set -eu
+          cd "$GITHUB_WORKSPACE"
+          # `sudo -n`, as the always-allow seed: fail instead of waiting on a password prompt.
+          sudo -n docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml \
+            up -d --no-deps --force-recreate kernel >&2
+          i=0
+          while [ "$i" -lt 90 ]; do
+            code=$(curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:8443/api/health || true)
+            if [ "$code" = 200 ]; then echo "restart-kernel: /api/health is back after ${i}s" >&2; exit 0; fi
+            i=$((i + 1))
+            sleep 1
+          done
+          echo "restart-kernel: /api/health never came back (last: $code)" >&2
+          exit 1
+          SH
+          echo "E2E_RESTART_KERNEL_CMD=$RUNNER_TEMP/restart-kernel.sh" >>"$GITHUB_ENV"
+          # The gate-host container the suite starts with; the check after the suite holds the
+          # one it ends with to the same id, so "still healthy" means healed, not replaced.
+          gate_host=$(sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml ps -q gate-host)
+          test -n "$gate_host"
+          echo "E2E_GATE_HOST_CONTAINER=$gate_host" >>"$GITHUB_ENV"
+
       # --- the actual e2e suite ----------------------------------------------------------------
 
       # Runs every file under packages/web/e2e/ for real: chat.spec.ts and governance.spec.ts
@@ -665,6 +699,22 @@ jobs:
           # captures under test-results/review/ (uploaded with the playwright-report artifact).
           E2E_REVIEW_CAPTURE: '1'
         run: pnpm --filter @nexttime/web exec playwright test --update-snapshots=changed
+
+      # Batch C: gate-host was left running while e2e/resilience/ replaced the kernel under it. It
+      # polls the kernel for its instance table rather than holding a connection, so it should
+      # heal on its next poll; this says so before the steps below lean on the stack. `up --wait`
+      # on an unchanged service recreates nothing — it only waits for its healthcheck.
+      - name: gate-host is still healthy after the kernel was replaced (batch C)
+        if: ${{ github.event.inputs.update_baselines != 'true' }}
+        run: |
+          set -euo pipefail
+          compose="sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml"
+          $compose up -d --no-deps --wait --wait-timeout 90 gate-host
+          now=$($compose ps -q gate-host)
+          if [ "$now" != "$E2E_GATE_HOST_CONTAINER" ]; then
+            echo "::error::gate-host is a different container ($now) than before the suite ($E2E_GATE_HOST_CONTAINER) — healthy proves nothing about healing" >&2
+            exit 1
+          fi
 
       # S1 lite (W6, STATUS leftover 7): the subset of scripts/accept_s1.sh that needs no entry
       # container — bootstrap, WorkerDefinition v2 via caddy, two chats answered by the kernel's
