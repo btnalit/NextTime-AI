@@ -643,6 +643,39 @@ async function observingSource(ctx: RecipeContext): Promise<string> {
   return source.id;
 }
 
+/** A module install's provenance: the ChangePlan segment it applied, as a person. */
+const APPLIED_HERE = { status: 'recorded', segmentStatus: 'applied', channel: 'human' };
+
+/** A shipped module at the latest version the owner is shown (`list_workspace_modules`). */
+async function latestModule(ctx: RecipeContext, name: string): Promise<Record<string, unknown>> {
+  const listed = await as<{ items: { name: string; latestVersion: number }[] }>(
+    ctx,
+    'list_workspace_modules',
+    {},
+  );
+  const module = listed.items.find((item) => item.name === name);
+  if (module === undefined) throw new Error(`no module ${name}`);
+  return { name, version: module.latestVersion };
+}
+
+/** A shipped pack's install as its dry run showed it: the reviewed version and digest, every
+ *  authority-widening item confirmed. */
+async function reviewedPack(ctx: RecipeContext, name: string): Promise<Record<string, unknown>> {
+  const preview = await as<{
+    targetVersion: number;
+    digest: string;
+    items: { ordinal: number; classification: string }[];
+  }>(ctx, 'preview_pack_install', { name });
+  return {
+    name,
+    version: preview.targetVersion,
+    reviewedDigest: preview.digest,
+    confirmedOrdinals: preview.items
+      .filter((item) => item.classification === 'authority_widening')
+      .map((item) => item.ordinal),
+  };
+}
+
 /** Extra cases for a row, beyond the one with schema-built params on the bare seed. A declaration
  *  holds on every path, so a row whose answer depends on state gets a case per state (per #493 on
  *  batch D4). */
@@ -1506,11 +1539,44 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       },
     },
   },
+  // Legacy 664, batch 15: modules and packs the deployment ships, into a workspace that has none.
+  install_module: {
+    'a module not installed here': {
+      first: expect.objectContaining({ provenance: expect.objectContaining(APPLIED_HERE) }),
+      setUp: (ctx) => latestModule(ctx, 'ops-assets'),
+    },
+  },
+  upgrade_module: {
+    'a module not installed here': {
+      first: expect.objectContaining({ provenance: expect.objectContaining(APPLIED_HERE) }),
+      setUp: (ctx) => latestModule(ctx, 'ops-assets'),
+    },
+  },
+  install_pack: {
+    // The first install changes what the dry run shows, so the same reviewed digest again is
+    // refused before anything is written: preview again to see it is up to date.
+    'a pack not installed here, as its dry run showed it': {
+      first: expect.objectContaining({ segmentId: expect.any(String) }),
+      setUp: (ctx) => reviewedPack(ctx, 'ops-assets'),
+    },
+    // Reviewed again once installed: up to date, so neither call records anything.
+    'a pack already up to date, as its dry run shows it': {
+      repeat: 'idempotent',
+      first: expect.objectContaining({ segmentId: null }),
+      setUp: async (ctx) => {
+        await as(ctx, 'install_pack', await reviewedPack(ctx, 'ops-assets'));
+        return reviewedPack(ctx, 'ops-assets');
+      },
+    },
+  },
 };
 
 /** Rows whose schema-built params cannot make a first call succeed on the bare seed — a param
  *  naming something the walk has no value for — run their recipes instead of that case. */
 const RECIPES_ONLY: ReadonlySet<string> = new Set([
+  'install_module',
+  'upgrade_module',
+  'install_pack',
   'grant_capability',
   'connect_gatekeeper',
   'set_principal_role',
