@@ -75,6 +75,7 @@ const NAV_TESTID_BY_LABEL: Readonly<Record<string, string>> = {
   对话: 'chats',
   待我审批: 'approvals',
   任务: 'tasks',
+  目标: 'goals',
   图谱: 'graph',
   我的智能体: 'agent',
   我的账户: 'account',
