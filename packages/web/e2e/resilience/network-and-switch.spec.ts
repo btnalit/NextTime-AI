@@ -124,9 +124,16 @@ test.describe('batch C3: an open console page across a network cut and a switch 
     await expect(status).toHaveText('已连接', { timeout: RECONNECT_MS });
     // The obvious next move, and what used to make a second identical turn (legacy 673): send it
     // again. The same idempotency key goes with it, so whether the first request ran (its packets
-    // may still arrive late on the old socket) or not, the prompt runs once.
-    await expect(uncertain).toBeVisible();
-    await uncertain.getByRole('button', { name: '再发一次' }).click();
+    // may still arrive late on the old socket) or not, the prompt runs once. Which comes first is
+    // TCP's retransmission timing, not the page's: if the late request lands first, the note goes
+    // by itself and there is nothing to press. Either order ends in the same state, asserted
+    // below; the resend path itself is pinned by ChatPage.test.tsx (legacy 673).
+    const resend = uncertain.getByRole('button', { name: '再发一次' });
+    await expect(resend.or(users.filter({ hasText: during }))).toBeVisible();
+    if (await resend.isVisible()) {
+      // The note can go between the check and the press when the late request lands then.
+      await resend.click({ timeout: 5_000 }).catch(() => undefined);
+    }
     await expect(users).toHaveText([before, during], { timeout: LATE_DELIVERY_MS });
     // The message is in the chat, so the note and the draft go by themselves.
     await expect(uncertain).toHaveCount(0);
@@ -144,7 +151,9 @@ test.describe('batch C3: an open console page across a network cut and a switch 
     // From outside the page: the kernel holds the prompt sent into the cut once — a late first
     // request and the second try made one message, not two. A first request still in flight on
     // the old socket gets the rest of its window (~25 s after the network on the CI stack) before
-    // this is read: an absence has no event to wait for.
+    // this is read: an absence has no event to wait for. The 30 s count starts after the after
+    // message's reply, itself after the reconnect, so the window from the network coming back is
+    // at least 30 s plus that — keep it above the retransmission delay if this is ever shortened.
     await page.waitForTimeout(30_000);
     const chatId = decodeURIComponent(new URL(page.url()).hash.split('/').pop() ?? '');
     const history = await page.request.post('/api/cap/get_chat_history', {

@@ -860,6 +860,29 @@ describe('ChatPage send that got no answer (legacy 673)', () => {
     expect(second?.[2]).not.toBe(first?.[2]);
   });
 
+  it('drops a key the kernel refuses as reused, so the next send goes under a new one', async () => {
+    const fake = fakeClient();
+    const banner = await timeOutOneSend(fake, 'restart web-1');
+    (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new RpcError(-32020, 'idempotency key already names another message'),
+    );
+    fireEvent.click(within(banner).getByRole('button', { name: '再发一次' }));
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain('和第一次发出的消息不一样'),
+    );
+    expect(
+      within(screen.getByRole('alert')).queryByRole('button', { name: '再发一次' }),
+    ).toBeNull();
+
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+    await waitFor(() => expect(sendCalls(fake)).toHaveLength(3));
+    const [first, second, third] = sendCalls(fake);
+    expect(second?.[2]).toBe(first?.[2]);
+    expect(third?.[1]).toBe('restart web-1');
+    expect(third?.[2]).toMatch(/^[0-9a-f]{32}$/);
+    expect(third?.[2]).not.toBe(first?.[2]);
+  });
+
   it('keeps the note through a reconnect when the connection closed under the send', async () => {
     const fake = fakeClient();
     let status = 'connected';
