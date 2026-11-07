@@ -83,6 +83,9 @@ interface Recipe {
   /** This path's answer, when it is not the row's: a row declares what its default path does
    *  (the params a caller sends most), and a known, intended other path says its own here. */
   readonly repeat?: string;
+  /** The entity a result names, when `entityId` cannot tell (a result keyed by more than one
+   *  field, such as an Operation draft's gate, name and version). */
+  readonly entity?: (result: unknown) => string | undefined;
 }
 
 /** A call as the recipe's owner, for setting a case up. */
@@ -1003,7 +1006,18 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
     },
   },
   propose_operation: {
+    // The result has no id: the draft is its gate, name and version, and what it says. A second
+    // propose revises that same draft in place — not a new version (per #493 on batch 6).
     'a new Operation on the gate': {
+      entity: (result) => {
+        const draft = result as {
+          gatekeeperId: string;
+          name: string;
+          version: number;
+          draftDigest: string;
+        };
+        return `${draft.gatekeeperId}/${draft.name}@${draft.version} ${draft.draftDigest}`;
+      },
       setUp: async (ctx) => ({
         gatekeeperId: await gateWithOperation(ctx),
         operation: { ...GATE_OP, name: 'repeat.status', mode: 'observe' },
@@ -1227,6 +1241,7 @@ describe.runIf(DATABASE_URL !== undefined)(
               memberId: workspace.principals.get('member') as string,
             });
       const call = () => dispatchCapability({ pool }, caller, capability.name, params);
+      const entityOf = chosen?.entity ?? entityId;
 
       let first: unknown;
       try {
@@ -1267,21 +1282,21 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       expect(refusal, 'the second call must succeed').toBeUndefined();
       if (repeat === 'idempotent') {
-        const firstId = entityId(first);
-        if (firstId !== undefined) expect(entityId(second)).toBe(firstId);
+        const firstId = entityOf(first);
+        if (firstId !== undefined) expect(entityOf(second)).toBe(firstId);
         expect(rowsAfterSecond).toEqual(rowsAfterFirst);
         expect(newAudit.map((row) => row.action)).toEqual([capability.name]);
         expect(newAudit[0]?.actor_principal_id).toBe(ownerId);
       } else if (repeat === 'creates') {
-        const firstId = entityId(first);
+        const firstId = entityOf(first);
         expect(firstId, 'creates: the result names the entity it made').toBeDefined();
-        expect(entityId(second)).not.toBe(firstId);
+        expect(entityOf(second)).not.toBe(firstId);
         // A new id with nothing stored for it would not be a second entity (per #488).
         expect(rowsAfterSecond).not.toEqual(rowsAfterFirst);
       } else if (repeat === 'repeats') {
-        const firstId = entityId(first);
+        const firstId = entityOf(first);
         expect(firstId, 'repeats: the result names the entity it acted on').toBeDefined();
-        expect(entityId(second)).toBe(firstId);
+        expect(entityOf(second)).toBe(firstId);
         expect(rowsAfterSecond).not.toEqual(rowsAfterFirst);
       } else {
         throw new Error(`unknown repeat declaration ${repeat} (guard M6 should have refused it)`);
