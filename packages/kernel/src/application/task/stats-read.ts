@@ -3,14 +3,17 @@ import {
   type ObjectiveOutcome,
   type OutcomeBasis,
   type OutcomeTallyWire,
+  type TaskRefusal,
+  type TaskStatus,
   tallyOutcomesByBasis,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 
 /**
- * application/task/stats-read (S11 W1a E2-1, E2-2): what `get_skill_stats` (`skill-stats.ts`) and
- * `get_procedure_stats` (`procedure-stats.ts`) read the same way — an outcome subject's record, the
- * tally as sent, and which goal step Tasks a step's or goal's verdict judged.
+ * application/task/stats-read (S11 W1a E2-1, E2-2, GO16a): what `get_skill_stats`
+ * (`skill-stats.ts`), `get_procedure_stats` (`procedure-stats.ts`) and `get_worker_definition_stats`
+ * (`worker-definition-stats.ts`) read the same way — an outcome subject's record, the tally as
+ * sent, which goal step Tasks a step's or goal's verdict judged, and what refused a failed Task.
  */
 
 /** One outcome subject's record: whose judgement (`basis`), what, and when it was given. */
@@ -200,4 +203,62 @@ export async function readSubjectOutcomes(
     byTask.set(task.id, subjects);
   }
   return byTask;
+}
+
+/** The outcome subjects covering `tasks`, each once — keyed `turn:`, `task:`, `step:`, `goal:`. */
+export function subjectsOf(
+  tasks: readonly { readonly id: string }[],
+  subjectsByTask: ReadonlyMap<string, ReadonlyMap<string, SubjectOutcome>>,
+): Map<string, SubjectOutcome> {
+  const subjects = new Map<string, SubjectOutcome>();
+  for (const task of tasks) {
+    for (const [key, subject] of subjectsByTask.get(task.id) ?? []) subjects.set(key, subject);
+  }
+  return subjects;
+}
+
+/** What {@link readRefusals} reads of a Task. */
+export interface RefusalTaskRow {
+  readonly id: string;
+  readonly status: TaskStatus;
+  readonly output_rejected: boolean;
+}
+
+/**
+ * What refused each failed Task's work (`TaskRefusal`): its output contract's refusal
+ * (`tasks.rejected_output`) first — it ends the Task's run — else the most recently requested
+ * ActionRequest its runs (nested children included, as the goal advancer judges an attempt) raised
+ * that was rejected, expired, denied, or refused before it ran.
+ */
+export async function readRefusals(
+  client: PoolClient,
+  workspaceId: string,
+  tasks: readonly RefusalTaskRow[],
+): Promise<Map<string, TaskRefusal>> {
+  const refusals = new Map<string, TaskRefusal>();
+  const failed = tasks.filter((task) => task.status === 'failed');
+  for (const task of failed)
+    refusals.set(task.id, task.output_rejected ? 'output_rejected' : 'none');
+  const open = failed.filter((task) => !task.output_rejected).map((task) => task.id);
+  if (open.length === 0) return refusals;
+  const result = await client.query<{ task_id: string; refusal: TaskRefusal }>(
+    `with recursive tree as (
+       select r.id, r.task_id as root from worker_runs r
+        where r.workspace_id = $1 and r.task_id = any($2::uuid[])
+       union
+       select c.id, tree.root from worker_runs c
+         join tree on c.parent_worker_run_id = tree.id
+        where c.workspace_id = $1
+     )
+     select distinct on (tree.root) tree.root as task_id,
+            case when a.status = 'failed' then 'refused' else a.status end as refusal
+       from tree
+       join action_requests a on a.workspace_id = $1 and a.parent_worker_run_id = tree.id
+      where a.status in ('rejected', 'expired', 'denied')
+         or (a.status = 'failed' and a.failure_kind = 'refused')
+      order by tree.root, a.requested_at desc, a.id desc`,
+    [workspaceId, open],
+  );
+  for (const row of result.rows) refusals.set(row.task_id, row.refusal);
+  return refusals;
 }

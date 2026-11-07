@@ -2893,6 +2893,21 @@ const workerCapabilities = [
       'Read one version of a WorkerDefinition — published or deprecated, or a draft the caller ' +
       'proposed; null for an unknown id or version, or another principal’s draft.',
   },
+  {
+    // S11 GO16a (legacy 569; plan §4.4, W4 GO16): a WorkerDefinition family's statistics,
+    // aggregated when read — see `wire/worker-definition-stats.ts` for every counting rule. Same
+    // audience as `get_skill_stats` (human channel, builder floor, numbers only): the numbers span
+    // every conversation and goal in the workspace.
+    name: 'get_worker_definition_stats',
+    group: 'worker',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'builder',
+    paramsSchema: z.object({ definitionId: id }).strict(),
+    resultSchema: wire.WorkerDefinitionStatsWireSchema.nullable(),
+    description:
+      'How each published or deprecated version of a WorkerDefinition family has done, over its Tasks of ordinary work (evaluation and planning Tasks are not counted): WorkerRuns; Tasks completed / failed / cancelled / in progress under the version they were created with; the attainment rate (requester and verified_by_check outcomes) with proxy outcomes (agent_reported, reviewer_assessed) apart; the same per run environment (environmentDigest, null = unknown) and per combination — the definition as it is (specRef null) or with a goal step’s WorkerSpec (a label, specRef, and the names of the fields it sets, null when its plan entry no longer reads as it; its digest, specDigest, only when you can read a goal it ran in — you are its requester, or the workspace owner; the label is then the digest’s first 12 hex digits, otherwise #1, #2, … within the response) — each marked reviewSuggested when its latest reviewStreak primary outcomes were all not achieved; and failed Tasks grouped by version × combination × failure category × what refused them. Segments and combinations cut the same Tasks two ways. Numbers only. Builder floor; null for an unknown definitionId, or a family with no published or deprecated version.',
+  },
 ] as const satisfies readonly Capability[];
 
 // -------------------------------------------------------------------------------------------
@@ -5722,6 +5737,8 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   // S11 W1a E2-1 / E2-2: workspace-wide numbers for the people who maintain Skills and Procedures.
   'get_skill_stats',
   'get_procedure_stats',
+  // S11 GO16a: and WorkerDefinitions.
+  'get_worker_definition_stats',
   'get_workspace',
   'list_models',
   // S3.13 (docs/development-tasks.md "每用户智能体配置") — AgentProfile/AgentPolicy management and

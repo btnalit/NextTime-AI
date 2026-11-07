@@ -1,23 +1,21 @@
 import type {
-  OutcomeTallyWire,
   SkillFailureGroupWire,
   SkillStatsSegmentWire,
   SkillStatsWire,
-  SkillUsageWire,
   SkillVersionStatsWire,
 } from '@nexttime/shared';
 import { useCapability } from '../../hooks/useCapability.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
-import { formatRelative, shortDigest } from '../../lib/format.js';
+import { formatRelative } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { taskFailureCategoryLabel, taskRefusalLabel } from '../../lib/labels.js';
 import { ErrorBanner } from '../kit/error-banner.js';
-import { KeyValue, type KeyValueItem } from '../kit/key-value.js';
+import { KeyValue } from '../kit/key-value.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
-import { AttainmentValue, versionList } from './usage-common.js';
+import { EnvironmentLabel, ReviewSuggestedChip, runNumbers, versionList } from './usage-common.js';
 
 /**
  * components/catalog/SkillUsage (S11 W1a E2-1): 「使用情况」 on a Skill's detail — how each version
@@ -131,16 +129,14 @@ function ReviewSuggested({
   readonly testId: string;
 }) {
   return (
-    <span
-      className="chip chip-warn chip-s"
+    <ReviewSuggestedChip
       title={t(
         `同一运行环境下最近 ${reviewStreak} 个结果都未达成`,
         `The latest ${reviewStreak} outcomes in one run environment were all not achieved`,
       )}
-      data-testid={testId}
-    >
-      {t('建议复核', 'Review suggested')}
-    </span>
+      t={t}
+      testId={testId}
+    />
   );
 }
 
@@ -164,7 +160,7 @@ function VersionBlock({
         ) : null}
       </div>
       <KeyValue
-        items={numbersOf(version.usage, version.outcomes, t)}
+        items={runNumbers(version.usage, version.outcomes, t, 'skill-usage')}
         testId={`${testId}-numbers`}
       />
       {version.segments.length > 0 ? (
@@ -203,93 +199,17 @@ function SegmentBlock({
   readonly t: Translate;
   readonly testId: string;
 }) {
-  const digest = segment.environmentDigest;
   return (
     <div className="stack-s" data-testid={testId}>
       <div className="row-wrap">
-        {digest !== null ? (
-          <span
-            className="mono"
-            title={t(
-              `${digest}\n指纹相同的运行，定义版本、模型、镜像、平台版本和系统提示都相同。`,
-              `${digest}\nRuns with the same fingerprint ran the same definition version, model, image, platform version and system prompt.`,
-            )}
-          >
-            {t(`环境 ${shortDigest(digest)}`, `Environment ${shortDigest(digest)}`)}
-          </span>
-        ) : (
-          <span
-            title={t(
-              '运行时没有上报，或用了默认模型、平台没读到模型配置',
-              'The runtime reported nothing, or the run used the default model and the platform could not read its model configuration',
-            )}
-          >
-            {t('环境未知', 'Environment unknown')}
-          </span>
-        )}
+        <EnvironmentLabel digest={segment.environmentDigest} t={t} />
         {segment.reviewSuggested ? (
           <ReviewSuggested reviewStreak={reviewStreak} t={t} testId={`${testId}-review`} />
         ) : null}
       </div>
-      <KeyValue items={numbersOf(segment.usage, segment.outcomes, t)} />
+      <KeyValue items={runNumbers(segment.usage, segment.outcomes, t, 'skill-usage')} />
     </div>
   );
-}
-
-/** The same rows for a version and for one of its segments. */
-function numbersOf(
-  usage: SkillUsageWire,
-  outcomes: OutcomeTallyWire,
-  t: Translate,
-): KeyValueItem[] {
-  const { completed, failed, cancelled, inProgress } = usage.tasks;
-  const { primary, proxy } = outcomes;
-  const items: KeyValueItem[] = [
-    {
-      key: 'runs',
-      label: t('运行', 'Runs'),
-      value: t(
-        `${usage.runs} 次 · 最近 ${formatRelative(usage.lastUsedAt)}`,
-        `${usage.runs} · last ${formatRelative(usage.lastUsedAt)}`,
-      ),
-    },
-    {
-      key: 'tasks',
-      label: 'Task',
-      value: t(
-        `完成 ${completed} · 失败 ${failed} · 取消 ${cancelled} · 进行中 ${inProgress}`,
-        `${completed} completed · ${failed} failed · ${cancelled} cancelled · ${inProgress} in progress`,
-      ),
-    },
-    {
-      key: 'attainment',
-      label: t('达成率', 'Attainment'),
-      value: <AttainmentValue primary={primary} t={t} testId="skill-usage-attainment" />,
-    },
-  ];
-  if (proxy.total > 0) {
-    items.push({
-      key: 'proxy',
-      label: t('代理指标', 'Proxy signals'),
-      value: (
-        <span className="row-wrap" data-testid="skill-usage-proxy">
-          <span>
-            {t(
-              `达成 ${proxy.achieved} · 未达成 ${proxy.notAchieved}`,
-              `${proxy.achieved} achieved · ${proxy.notAchieved} not achieved`,
-            )}
-          </span>
-          <span className="text-3 text-small">
-            {t(
-              'Agent 自报与独立评审，不计入达成率',
-              'Agent reports and independent reviews, not counted toward attainment',
-            )}
-          </span>
-        </span>
-      ),
-    });
-  }
-  return items;
 }
 
 function FailureGroups({

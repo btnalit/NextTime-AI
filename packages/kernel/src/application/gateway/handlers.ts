@@ -43,6 +43,7 @@ import {
   peekContextItems,
 } from '../../application/linkage/index.js';
 import {
+  type CanReadGoal,
   DERIVED_TASK_IDEMPOTENCY_KEY_PREFIX,
   type InvokeWorkerInput,
   type InvokeWorkerResult,
@@ -66,6 +67,7 @@ import {
   readHandleObserveExclusions,
   readProcedureOutcomeHints,
   readTaskAttributions,
+  readWorkerDefinitionStats,
   resolveParentAuthority,
   resolveWaitTimeoutMs,
   setQuotaValue,
@@ -152,6 +154,7 @@ import {
   SqlGraphStore,
   objectDisplayName,
 } from '../../substrate/graph/index.js';
+import { goalVisibleTo } from '../goal/index.js';
 import {
   listRuntimeImagesHandler,
   piDriftHandler,
@@ -305,6 +308,7 @@ import {
   endGoalHandler,
   getGoalHandler,
   getGoalRevisionHandler,
+  goalViewer,
   listGoalUnresolvedActionsHandler,
   listGoalsHandler,
   pauseGoalHandler,
@@ -1421,6 +1425,39 @@ const getWorkerDefinitionHandler: CapabilityHandler = async (client, workspaceId
     result: toWireWorkerDefinition(row, await findGoalPlannerFamily(client, workspaceId)),
   };
 };
+
+/** S11 GO16a (legacy 569): a WorkerDefinition family's statistics, counted when read
+ *  (application/task/worker-definition-stats.ts) — the same audience and reasoning as
+ *  `get_skill_stats`. */
+const getWorkerDefinitionStatsHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const { definitionId } = params as { definitionId: string };
+  const stats = await readWorkerDefinitionStats(
+    client,
+    workspaceId,
+    definitionId,
+    await goalReaderOf(client, ctx),
+  );
+  return { result: stats, resourceType: 'worker_definition', resourceId: definitionId };
+};
+
+// A WorkerSpec's digest is shown only to a caller who can read a goal it ran in — `goalVisibleTo`
+// with their goal viewer (the requester, or the owner on the human channel), the rule the goal
+// reads apply (review #493 on #1064).
+async function goalReaderOf(
+  client: PoolClient,
+  ctx: CapabilityHandlerContext | undefined,
+): Promise<{ principalId: string; canReadGoal: CanReadGoal }> {
+  const viewer = await goalViewer(client, ctx);
+  return {
+    principalId: viewer.principalId,
+    canReadGoal: (goal) => goalVisibleTo(viewer, goal),
+  };
+}
 
 // -------------------------------------------------------------------------------------------
 // S3.3: `assert_fact`/`supersede_fact`/`invalidate_fact` are now real handlers
@@ -2716,6 +2753,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['deprecate_worker_definition', deprecateWorkerDefinitionHandler],
   ['list_worker_definitions', listWorkerDefinitionsHandler],
   ['get_worker_definition', getWorkerDefinitionHandler],
+  ['get_worker_definition_stats', getWorkerDefinitionStatsHandler],
   ['get_entry_template_status', getEntryTemplateStatusHandler],
   ['propose_entry_template_upgrade', proposeEntryTemplateUpgradeHandler],
   // S8 W3 K2 (leftover 82) — discard-draft-handler.ts.
