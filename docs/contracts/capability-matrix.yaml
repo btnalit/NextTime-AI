@@ -353,6 +353,9 @@ capabilities:
   get_worker_definition:
     console: required
     agents: []
+  get_worker_definition_stats:
+    console: required
+    agents: []
   get_workspace:
     console: required
     agents: []

@@ -1070,6 +1070,14 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     enHint:
       'Reads one version of a Worker definition: a published or deprecated one for anyone, a draft for its proposer only.',
   },
+  get_worker_definition_stats: {
+    zh: 'Worker 使用情况',
+    en: 'Worker usage',
+    zhHint:
+      '统计一个 Worker 各版本的运行次数、Task 结果、达成率和失败分组，按运行环境和按组合（原样或带某个步骤调整）分开列。',
+    enHint:
+      "Counts a Worker's runs, Task results, attainment and failure groups per version, by run environment and by combination (as defined, or with a step's adjustments).",
+  },
 
   // -----------------------------------------------------------------------------------------
   // Capabilities — ingest

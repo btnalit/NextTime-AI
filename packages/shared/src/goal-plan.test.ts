@@ -3,7 +3,10 @@ import {
   PLAN_HINT_ADMISSION,
   PLAN_HINT_CODE_VALUES,
   type PlanHint,
+  WORKER_SPEC_FIELD_VALUES,
+  WorkerSpecSchema,
   stepAdmissionOf,
+  workerSpecFieldsOf,
 } from './goal-plan.js';
 
 const trial = {
@@ -82,5 +85,18 @@ describe('stepAdmissionOf (S11 GO15a)', () => {
       verdict: 'refused',
       hints: [requester],
     });
+  });
+});
+
+describe('WORKER_SPEC_FIELD_VALUES (S11 GO16a)', () => {
+  it('names every field a WorkerSpec may set', () => {
+    expect([...WORKER_SPEC_FIELD_VALUES].sort()).toEqual(
+      Object.keys(WorkerSpecSchema.shape).sort(),
+    );
+  });
+
+  it('lists what a WorkerSpec sets in that order, whatever order it was written in', () => {
+    const spec = WorkerSpecSchema.parse({ model: 'm', tokenBudget: 10, instructions: 'do it' });
+    expect(workerSpecFieldsOf(spec)).toEqual(['instructions', 'model', 'tokenBudget']);
   });
 });

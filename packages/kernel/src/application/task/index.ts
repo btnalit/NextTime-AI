@@ -268,6 +268,7 @@ export {
 // S11 W1a E2-1 — `get_skill_stats`, read-time aggregation over the records the work left.
 export { readProcedureOutcomeHints, readProcedureStats } from './procedure-stats.js';
 export { readSkillStats } from './skill-stats.js';
+export { readWorkerDefinitionStats } from './worker-definition-stats.js';
 
 export {
   type GateAccessContext,

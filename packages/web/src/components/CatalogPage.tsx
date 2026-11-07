@@ -119,6 +119,7 @@ import {
   useSkillPublishEvidence,
 } from './catalog/SkillPublishReview.js';
 import { SkillUsageSection } from './catalog/SkillUsage.js';
+import { WorkerDefinitionUsageSection } from './catalog/WorkerDefinitionUsage.js';
 import { WorkerEditorHost } from './catalog/WorkerEditorHost.js';
 import { forgetEditorDraft, useEditorReopen } from './catalog/useEditorReopen.js';
 import { gateOwnedParamsText } from './connect/GateOwnedParams.js';
@@ -3868,6 +3869,13 @@ function WorkerDetailView({
           {prettyJsonVisible(row.definition)}
         </pre>
       </div>
+
+      {/* S11 GO16a (legacy 569): the family's statistics — a Worker's published or deprecated
+          version (a draft never runs), builders and up only (the section decides). An entry
+          definition takes no Tasks. */}
+      {row.kind === 'worker' && row.status !== 'draft' ? (
+        <WorkerDefinitionUsageSection http={http} definitionId={row.id} />
+      ) : null}
 
       {isMyDraft && canPublish ? (
         <PublishCredentialSlot review={credentialReview} busy={busy} />
