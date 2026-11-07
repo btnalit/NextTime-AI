@@ -1190,6 +1190,17 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
     'one idempotency key': {
       setUp: (ctx) => workerCall(ctx, `repeat-${randomUUID()}`),
     },
+    // An explicit key returns its Task whatever state it is in, a finished one too (per #493 on
+    // batch 9: with only running Tasks, matching unfinished Tasks alone would pass as well).
+    'one idempotency key, its Task already cancelled': {
+      first: expect.objectContaining({ status: 'cancelled' }),
+      setUp: async (ctx) => {
+        const params = await workerCall(ctx, `repeat-${randomUUID()}`);
+        const task = await as<{ id: string }>(ctx, 'invoke_worker', params);
+        await as(ctx, 'cancel_task', { taskId: task.id });
+        return params;
+      },
+    },
     // Without a key an identical call returns the unfinished Task too (the Worker here never
     // reports); once a Task has finished, an identical call starts a new one.
     'no idempotency key, the first still running': {
