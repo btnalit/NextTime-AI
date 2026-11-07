@@ -93,6 +93,7 @@ describe('registerInteractiveMode', () => {
       'list_goals',
       'get_goal_revision',
       'list_goal_unresolved_actions',
+      'find_goal_precedents',
     ]);
     const getObject = fake.tools.get('get_object');
     expect(getObject?.description).toContain('Object');

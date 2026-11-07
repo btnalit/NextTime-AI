@@ -56,6 +56,13 @@ export {
 } from './disposition.js';
 
 export {
+  type PrecedentFilter,
+  findGoalPrecedents,
+  precedentsOfGoal,
+  readRecentGoalPrecedents,
+} from './precedents.js';
+
+export {
   getGoalRun,
   getPlanRevision,
   getStepRun,

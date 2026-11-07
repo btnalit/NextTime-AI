@@ -283,7 +283,7 @@ OAuth 2.0 或 JWT Bearer 认证；工具含 `search_metadata`（`query` / `entit
 | Worker 的工作目录 | 不跨 Task，保留期到期删除 | Worker | Task 模式每次新目录；supervisor 按 `TASK_WORKDIR_RETENTION_HOURS` 清理 | 已有 |
 | 目标内步骤产物（GO14） | 跨步骤，限本 GoalRun 保留期 | 上游 Worker | 推进器绑定、只读挂载，挂在下游 cwd 的上级链与 agentDir 之外 | 设计，未实现 |
 | Skill / Procedure / WorkerDefinition / 本体 / Operation | 永久 | 只能经人发布 | I16、发布绑定版本（#592） | 已有 |
-| 先例召回（GO17） | 跨目标 | 平台 | 只引用完整记录与证据，正例只取 `verified_by_check` 且未被覆盖的；只从当前请求人能看到的目标里取，用 GO5a / 遗留 421 的同一个可见性谓词 | 设计，未实现 |
+| 先例召回（GO17） | 跨目标 | 平台 | 只引用完整记录与证据，正例只取 `verified_by_check` 且未被覆盖的；只取请求人自己发起的目标（GO17a 收窄：owner 也一样，比 GO5a / 遗留 421 的可见性谓词更窄） | GO17a 读出（`find_goal_precedents`、入口上下文、规划器输入），读时算、不存；「引用了哪个」的记录在 GO17b |
 | 入口 agent 的持久工作目录 | 永久（按用户） | 入口 agent（bash / write） | **白名单启动**：pi 的全部资源发现关闭（上下文文件、扩展、skills、提示模板、MCP），`settings.json` 由平台整份写入，平台扩展、已发布 Skill、入口提示显式传入；U2 建成前守卫先放 e2e / CI 测试，U2 建成后并入 | **未完成**（遗留 422，AA5 之前关闭）；今天 pi 每次启动仍会加载其中的 `AGENTS.md`、扩展与 `mcp.json` |
 | 入口 agent 的个人记忆（E4） | 跨会话（按用户） | 受审扩展 | 平台显式加载的固定版本扩展，不进图谱 | 推迟 |
 

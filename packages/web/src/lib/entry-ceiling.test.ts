@@ -11,6 +11,7 @@ describe('lib/entry-ceiling', () => {
         'list_goals',
         'get_goal_revision',
         'list_goal_unresolved_actions',
+        'find_goal_precedents',
       ]),
     );
     for (const operation of ['confirm_goal', 'pause_goal', 'revise_goal', 'cancel_goal']) {
