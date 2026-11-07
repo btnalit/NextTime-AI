@@ -884,7 +884,10 @@ describe('ChatPage send that got no answer (legacy 673)', () => {
     const fake = fakeClient();
     let answer: (value: unknown) => void = () => undefined;
     (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      () => new Promise((resolve) => (answer = resolve)),
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
     );
     renderChat(fake.client, scriptedHttp({}));
     await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
