@@ -88,13 +88,18 @@ test.describe('P-B2b acceptance: platform modules page, install ops-assets into 
     await expect(versions).toContainText('v1');
     await expect(versions).toContainText('v2');
 
-    // S11 AA5d-3: below the modules, the packs this deployment adds. The CI stack adds none,
-    // whether or not its config/packs/ is there; none is left out either.
+    // S11 AA5d-3: below the modules, the packs this deployment adds. The CI stack starts with
+    // none; journeys/14-pack-lifecycle.spec.ts (which runs first) puts the pack it exports there.
+    // Either way, none is left out, and an extra pack is never listed as a module.
     const extra = page.getByTestId('extra-packs');
     await expect(extra).toBeVisible();
     await expect(
-      extra.getByTestId('extra-packs-none').or(extra.getByTestId('extra-packs-not-configured')),
+      extra
+        .getByTestId('extra-packs-none')
+        .or(extra.getByTestId('extra-packs-not-configured'))
+        .or(extra.getByTestId('extra-packs-list')),
     ).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('module-row-ci-admin-journey')).toHaveCount(0);
     await expect(extra.getByTestId('extra-packs-skipped')).toHaveCount(0);
     await expect(extra.getByTestId('extra-packs-unreadable')).toHaveCount(0);
   });
