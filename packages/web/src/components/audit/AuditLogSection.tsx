@@ -3,6 +3,11 @@ import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useAskForAccess } from '../../hooks/useAskForAccess.js';
 import { useCanOpen } from '../../hooks/useCanOpen.js';
 import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
+import {
+  ACTING_THROUGH_OPTIONS,
+  actingThroughFilterNote,
+  actingThroughLabel,
+} from '../../lib/acting-through.js';
 import { AuditIdPicker } from '../../lib/audit-id-picker.js';
 import { auditActorSource, resourceIdSource } from '../../lib/audit-pickers.js';
 import {
@@ -39,7 +44,7 @@ import { Field, Input, Select } from '../ui/Field.js';
 import { RefChip } from '../ui/RefChip.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { useToast } from '../ui/Toast.js';
-import { AdminAgentActingChip } from './AdminAgentActingChip.js';
+import { ActingThroughChip } from './ActingThroughChip.js';
 import { AuditPayloadNotes, adminProposalBreakerTarget } from './AuditPayloadNotes.js';
 import { AuditRefusedChip } from './AuditRefusedChip.js';
 
@@ -86,6 +91,7 @@ export function AuditLogSection({
   const [action, setAction] = useState(requestedFilter?.action ?? '');
   const [resourceType, setResourceType] = useState(requestedFilter?.resourceType ?? '');
   const [resourceId, setResourceId] = useState(requestedFilter?.resourceId ?? '');
+  const [actingThrough, setActingThrough] = useState(requestedFilter?.actingThrough ?? '');
   const [applied, setApplied] = useState<AuditFilter>(requestedFilter ?? {});
   // S8 W4-A (ui-audit S11/PA1): default hides pure reads — a deep link that names a specific
   // action (`?action=`) or comes from an approval/explain context is almost always about a
@@ -102,6 +108,7 @@ export function AuditLogSection({
     setAction(requestedFilter.action ?? '');
     setResourceType(requestedFilter.resourceType ?? '');
     setResourceId(requestedFilter.resourceId ?? '');
+    setActingThrough(requestedFilter.actingThrough ?? '');
     setApplied(requestedFilter);
     setShowReads(requestedFilter.action !== undefined && isReadAuditAction(requestedFilter.action));
   }, [requestedFilter]);
@@ -165,6 +172,7 @@ export function AuditLogSection({
     if (action.trim()) next.action = action.trim();
     if (resourceType.trim()) next.resourceType = resourceType.trim();
     if (resourceId.trim()) next.resourceId = resourceId.trim();
+    if (actingThrough) next.actingThrough = actingThrough;
     setApplied(next);
   }
 
@@ -300,10 +308,29 @@ export function AuditLogSection({
           )}
           testId="audit-resource-id"
         />
+        <Field id="audit-acting-through" label={t('经由', 'Through')}>
+          <Select
+            id="audit-acting-through"
+            value={actingThrough}
+            onChange={(event) => setActingThrough(event.target.value)}
+          >
+            <option value="">{t('任意', 'Any')}</option>
+            {ACTING_THROUGH_OPTIONS.map((value) => (
+              <option key={value} value={value}>
+                {actingThroughLabel(value, t)}
+              </option>
+            ))}
+          </Select>
+        </Field>
         <Button type="submit" variant="secondary" data-testid="audit-apply">
           {t('应用', 'Apply')}
         </Button>
       </form>
+      {applied.actingThrough ? (
+        <p className="text-3 text-small" data-testid="audit-acting-through-note">
+          {actingThroughFilterNote(applied.actingThrough, t)}
+        </p>
+      ) : null}
 
       {audit.state.status === 'loading' ? (
         <SkeletonRows
@@ -401,7 +428,10 @@ export function AuditLogSection({
                           name={nameOf(principalNames, row.actorPrincipalId)}
                           size="s"
                         />
-                        <AdminAgentActingChip payload={row.payload} />
+                        <ActingThroughChip
+                          actingThrough={row.actingThrough}
+                          payload={row.payload}
+                        />
                         {row.resourceId ? (
                           <>
                             <span className="meta-sep" />

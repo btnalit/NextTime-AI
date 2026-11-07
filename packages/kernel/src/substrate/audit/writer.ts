@@ -145,6 +145,12 @@ export interface AuditQueryFilter {
   readonly action?: string;
   readonly resourceType?: string;
   readonly resourceId?: string;
+  /** Legacy 666: only rows whose `acting_through` is this (#1028's column). A row written before
+   *  it was recorded carries none and matches no value but one: `admin_agent_session` also keeps
+   *  such a row whose payload names the admin agent's session (`sessionKind: 'admin_agent'`,
+   *  legacy 583 — the console marks it 由管理员智能体代为 too). A string that is not one of
+   *  `AUDIT_ACTING_THROUGH_VALUES` matches nothing. */
+  readonly actingThrough?: string;
   /** Any one of these `action` values (legacy 291: a set the caller would otherwise pick out of a
    *  capped page afterwards, where newer rows of other actions could take every slot). Internal
    *  only — `audit_query`'s wire filter never sets it. */
@@ -238,6 +244,12 @@ export async function queryAuditPage(
        and ($9::text[] is null or action = any($9))
        and ($10::timestamptz is null or date_trunc('milliseconds', created_at) <= $10)
        and (
+         $11::text is null
+         or acting_through = $11
+         or ($11 = 'admin_agent_session' and acting_through is null
+             and payload ->> 'sessionKind' = 'admin_agent')
+       )
+       and (
          $7::timestamptz is null
          or (date_trunc('milliseconds', created_at), id) < ($7::timestamptz, $8::uuid)
        )
@@ -254,6 +266,7 @@ export async function queryAuditPage(
       cursor?.id ?? null,
       filter.actions ? [...filter.actions] : null,
       filter.createdAtOrBefore ?? null,
+      filter.actingThrough ?? null,
     ],
   );
   const rows = result.rows.slice(0, limit).map(mapAuditRecordRow);

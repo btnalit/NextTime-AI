@@ -47273,6 +47273,18 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "actingThrough": {
+          "enum": [
+            "person",
+            "admin_agent_session",
+            "entry_agent",
+            "worker_handle",
+            "service_handle",
+            "member_handle",
+            "system"
+          ],
+          "type": "string"
+        },
         "action": {
           "minLength": 1,
           "type": "string"

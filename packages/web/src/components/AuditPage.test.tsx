@@ -374,6 +374,57 @@ describe('AuditPage entry points', () => {
     await screen.findByTestId('audit-row');
   });
 
+  it('legacy 666: every row says what its act came through, and 经由 filters the stream by it from a list', async () => {
+    const http = scriptedHttp({
+      audit_query: () => ({
+        items: [
+          auditRow({ id: 'a-person', actingThrough: 'person' }),
+          auditRow({ id: 'a-worker', actingThrough: 'worker_handle' }),
+          auditRow({ id: 'a-old', actingThrough: null }),
+        ],
+      }),
+      list_principals: principalsPage,
+      list_gatekeepers: () => ({ items: [] }),
+    });
+    renderPage(http);
+    const rows = await screen.findAllByTestId('audit-row');
+    const through = (row: HTMLElement) =>
+      within(row).getByTestId('audit-acting-through').getAttribute('data-acting-through');
+    expect(rows.map(through)).toEqual(['person', 'worker_handle', 'unrecorded']);
+    expect(within(rows[0] as HTMLElement).getByTestId('audit-acting-through').textContent).toBe(
+      '经由 本人',
+    );
+    expect(within(rows[2] as HTMLElement).getByTestId('audit-acting-through').textContent).toBe(
+      '经由 未记录',
+    );
+
+    const form = screen.getByTestId('audit-query-form');
+    const select = within(form).getByLabelText('经由') as HTMLSelectElement;
+    expect(select.tagName).toBe('SELECT');
+    expect([...select.options].map((option) => option.textContent)).toEqual([
+      '任意',
+      '本人',
+      '管理员智能体',
+      '入口智能体',
+      'Worker',
+      '服务账号',
+      '成员的 MCP 会话',
+      '平台后台任务',
+    ]);
+    fireEvent.change(select, { target: { value: 'entry_agent' } });
+    fireEvent.click(within(form).getByRole('button', { name: '应用' }));
+    await waitFor(() =>
+      expect(http.calls.at(-1)).toEqual({
+        name: 'audit_query',
+        params: { filter: { actingThrough: 'entry_agent' }, limit: 50 },
+      }),
+    );
+    // The narrowed list says which rows it can hold: none of the unrecorded ones.
+    expect(screen.getByTestId('audit-acting-through-note').textContent).toContain(
+      '早于平台开始记录的行不在其中',
+    );
+  });
+
   it('S11 fix (CI #288/#290): when every loaded row is a read, the empty state (not a blank page) shows and "Show reads" reveals them', async () => {
     const http = scriptedHttp({
       audit_query: () => ({ items: [auditRow({ id: 'audit-read', action: 'list_grants' })] }),

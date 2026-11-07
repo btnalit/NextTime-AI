@@ -1,6 +1,11 @@
 import type { PlatformAuditRecordWire, UserWire } from '@nexttime/shared';
 import { type FormEvent, useMemo, useRef, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
+import {
+  ACTING_THROUGH_OPTIONS,
+  actingThroughFilterNote,
+  actingThroughLabel,
+} from '../../lib/acting-through.js';
 import { useDebounced } from '../../lib/audit-id-picker.js';
 import { platformAuditActionSuggestions } from '../../lib/audit-pickers.js';
 import { auditRefusal, isReadAuditAction } from '../../lib/audit.js';
@@ -17,7 +22,7 @@ import {
 import { useT } from '../../lib/i18n.js';
 import { auditResourceTypeLabel } from '../../lib/labels.js';
 import { breadcrumbFor } from '../../lib/nav.js';
-import { AdminAgentActingChip } from '../audit/AdminAgentActingChip.js';
+import { ActingThroughChip } from '../audit/ActingThroughChip.js';
 import { AuditPayloadNotes } from '../audit/AuditPayloadNotes.js';
 import { AuditRefusedChip } from '../audit/AuditRefusedChip.js';
 import { Combobox } from '../kit/combobox.js';
@@ -25,7 +30,7 @@ import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
-import { Field, Input } from '../ui/Field.js';
+import { Field, Input, Select } from '../ui/Field.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 
 export interface PlatformAuditPageProps {
@@ -35,6 +40,8 @@ export interface PlatformAuditPageProps {
 interface AppliedFilters {
   readonly action?: string;
   readonly actorUserId?: string;
+  /** Legacy 666: what the act came through (`lib/acting-through.ts`). */
+  readonly actingThrough?: string;
 }
 
 const PAGE_SIZE = 50;
@@ -66,6 +73,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
   const t = useT();
   const [actionInput, setActionInput] = useState('');
   const [actorUserIdInput, setActorUserIdInput] = useState('');
+  const [actingThroughInput, setActingThroughInput] = useState('');
   const [applied, setApplied] = useState<AppliedFilters>({});
   const [showReads, setShowReads] = useState(false);
   const showReadsToggle = useRef<HTMLInputElement>(null);
@@ -113,9 +121,10 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
 
   function handleFilterSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
-    const next: { action?: string; actorUserId?: string } = {};
+    const next: { action?: string; actorUserId?: string; actingThrough?: string } = {};
     if (actionInput.trim()) next.action = actionInput.trim();
     if (actorUserIdInput.trim()) next.actorUserId = actorUserIdInput.trim();
+    if (actingThroughInput) next.actingThrough = actingThroughInput;
     setApplied(next);
   }
 
@@ -234,6 +243,20 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
             ) : null}
           </Field>
         )}
+        <Field id="platform-audit-acting-through" label={t('经由', 'Through')}>
+          <Select
+            id="platform-audit-acting-through"
+            value={actingThroughInput}
+            onChange={(event) => setActingThroughInput(event.target.value)}
+          >
+            <option value="">{t('任意', 'Any')}</option>
+            {ACTING_THROUGH_OPTIONS.map((value) => (
+              <option key={value} value={value}>
+                {actingThroughLabel(value, t)}
+              </option>
+            ))}
+          </Select>
+        </Field>
         <Button type="submit" variant="secondary">
           {t('应用', 'Apply')}
         </Button>
@@ -247,6 +270,11 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
           {t('显示读操作', 'Show reads')}
         </label>
       </form>
+      {applied.actingThrough ? (
+        <p className="text-3 text-small" data-testid="platform-audit-acting-through-note">
+          {actingThroughFilterNote(applied.actingThrough, t)}
+        </p>
+      ) : null}
 
       {audit.state.status === 'loading' ? (
         <SkeletonRows
@@ -324,7 +352,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
                     {row.resourceType
                       ? ` · ${auditResourceTypeLabel(row.resourceType, t)}${row.resourceId ? `:${shortId(row.resourceId)}` : ''}`
                       : ''}
-                    <AdminAgentActingChip payload={row.payload} />
+                    <ActingThroughChip actingThrough={row.actingThrough} payload={row.payload} />
                   </div>
                   <AuditPayloadNotes payload={row.payload} />
                   <details className="platform-audit-payload">
