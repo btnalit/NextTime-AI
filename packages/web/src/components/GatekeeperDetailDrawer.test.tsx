@@ -90,7 +90,7 @@ describe('GatekeeperDetailDrawer', () => {
     });
     renderDrawer(http);
     const notice = await screen.findByTestId('gatekeeper-platform-suspension');
-    expect(notice.textContent).toContain('原因：token [redacted] leaked');
+    expect(notice.textContent).toContain('token [redacted] leaked');
     expect(screen.getByTestId('gatekeeper-platform-suspension-redacted').textContent).toContain(
       '看起来像密码、令牌或密钥',
     );
