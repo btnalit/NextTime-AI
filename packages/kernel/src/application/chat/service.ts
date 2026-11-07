@@ -814,13 +814,16 @@ async function startTurn(
 
 // -------------------------------------------------------------------------------------------
 // S6-A chat lifecycle (docs/console-completion-plan.md §4 "Chat 生命周期", §5.1, §6): auto-title
-// on the first user message, `rename_chat`, `archive_chat` / `unarchive_chat`. Each write here
+// on the first user message, `rename_chat`, `archive_chat` / `unarchive_chat`. Each change here
 // also appends its own domain audit row (`chat.rename` / `chat.archive` / `chat.unarchive`) —
 // dispatch.ts's per-capability row documents the API call, this one the Chat transition, the
 // same two-row discipline governance/approval's transition-log.ts follows — and pushes
 // `chat.metadata` so a client with the chat open (or the chat list) learns the new title /
 // archived state without a reload (the same in-process push turn-recovery.ts uses for
-// `turnStatus`). Ownership (own Chat; owner may archive others') is the *handler's* check
+// `turnStatus`). A call that changes nothing (the same title again, archiving an archived Chat,
+// unarchiving an active one) records no transition: dispatch.ts's row still documents the call,
+// but there is no domain row and no push (legacy 665; capability-matrix.yaml `repeat: idempotent`).
+// Ownership (own Chat; owner may archive others') is the *handler's* check
 // (application/gateway/handlers.ts) — this module only ever sees a Chat RLS already showed the
 // caller (`requireChatAccess`), and it never widens that.
 // -------------------------------------------------------------------------------------------
@@ -871,6 +874,25 @@ async function autoTitleChat(
   }
 }
 
+/** Legacy 665: the Chat's title and archived state as they stand, row-locked until the
+ *  transaction ends, so a rename or (un)archive compares against the state its own update replaces
+ *  — not one a concurrent call has since changed (an unlocked read could see "A", miss a rename to
+ *  "B", and then take a rename back to "A" for no change). Throws `ChatNotFoundError` when RLS
+ *  hides the row, as `requireChatAccess` does. */
+async function lockChatState(
+  client: PoolClient,
+  workspaceId: string,
+  chatId: string,
+): Promise<{ readonly title: string | null; readonly archivedAt: Date | null }> {
+  const result = await client.query<{ title: string | null; archived_at: Date | null }>(
+    'select title, archived_at from chats where workspace_id = $1 and id = $2 for update',
+    [workspaceId, chatId],
+  );
+  const row = result.rows[0];
+  if (row === undefined) throw new ChatNotFoundError(workspaceId, chatId);
+  return { title: row.title, archivedAt: row.archived_at };
+}
+
 export interface RenameChatInput {
   readonly chatId: string;
   /** Raw title as the caller sent it — normalized here (`normalizeChatTitle`,
@@ -881,9 +903,10 @@ export interface RenameChatInput {
 }
 
 /** `rename_chat` — writes `chats.title` unconditionally (a rename always wins over the auto-title,
- *  see `autoTitleChat`), audits `chat.rename` with the before/after pair, pushes `chat.metadata`.
- *  Throws `ChatNotFoundError` when RLS hides the row (the handler has already done the ownership
- *  check on the row it read, so this can only be a race with a concurrent delete). */
+ *  see `autoTitleChat`), audits `chat.rename` with the before/after pair, pushes `chat.metadata`;
+ *  the same title again (after normalization) does neither (legacy 665). Throws
+ *  `ChatNotFoundError` when RLS hides the row (the handler has already done the ownership check on
+ *  the row it read, so this can only be a race with a concurrent delete). */
 export async function renameChat(
   client: PoolClient,
   workspaceId: string,
@@ -895,7 +918,7 @@ export async function renameChat(
       'renameChat: title is blank after normalization (paramsSchema should refuse it)',
     );
   }
-  const before = await requireChatAccess(client, workspaceId, input.chatId);
+  const before = await lockChatState(client, workspaceId, input.chatId);
   // Wrapped in a CTE (`updated`, aliased `c`) rather than a plain `UPDATE ... RETURNING` — Postgres
   // has no `RETURNING ... FROM` to join against `chat_messages`/`activities` directly, and the
   // console splices this result straight into its own `list_chats` cache (`chat-lifecycle.ts`'s
@@ -915,6 +938,7 @@ export async function renameChat(
   const row = result.rows[0];
   if (row === undefined) throw new ChatNotFoundError(workspaceId, input.chatId);
   const updated = mapChatRow(row);
+  if (updated.title === before.title) return updated;
 
   await writeAudit(client, {
     workspaceId,
@@ -937,19 +961,21 @@ export interface SetChatArchivedInput {
   readonly chatId: string;
   /** `true` = `archive_chat` (sets `archived_at = now()` if not already set), `false` =
    *  `unarchive_chat` (clears it). Both idempotent: re-archiving keeps the original timestamp,
-   *  re-activating an active chat is a no-op — still audited, since the caller asked for it. */
+   *  re-activating an active chat is a no-op — neither writes a domain row or pushes (legacy 665;
+   *  dispatch.ts's row still records that the caller asked). */
   readonly archived: boolean;
   readonly actorPrincipalId: string;
 }
 
 /** `archive_chat` / `unarchive_chat` (docs/console-completion-plan.md §4 `active ↔ archived`):
  *  visibility-only — nothing about the Chat's Turns, messages or provenance changes. Audits
- *  `chat.archive` / `chat.unarchive`, pushes `chat.metadata {archivedAt}`. */
+ *  `chat.archive` / `chat.unarchive`, pushes `chat.metadata {archivedAt}` — when the state changed. */
 export async function setChatArchived(
   client: PoolClient,
   workspaceId: string,
   input: SetChatArchivedInput,
 ): Promise<ChatRow> {
+  const before = await lockChatState(client, workspaceId, input.chatId);
   // See `renameChat`'s own comment on the CTE wrapper: same reason (splice target, needs current
   // `last_activity_at`/`has_running_turn`), same shape.
   const result = await client.query<ChatDbRow>(
@@ -976,6 +1002,7 @@ export async function setChatArchived(
   if (row === undefined) throw new ChatNotFoundError(workspaceId, input.chatId);
   const updated = mapChatRow(row);
   const archivedAt = updated.archivedAt ? updated.archivedAt.toISOString() : null;
+  if ((before.archivedAt !== null) === input.archived) return updated;
 
   await writeAudit(client, {
     workspaceId,
