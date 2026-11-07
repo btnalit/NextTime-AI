@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.66.0](https://github.com/btnalit/NextTime-AI/compare/v0.65.0...v0.66.0) (2026-11-07)
+
+
+### Features
+
+* **kernel,shared,web:** keep a combination that kept working as a new Worker definition (S11 GO16b) ([#1071](https://github.com/btnalit/NextTime-AI/issues/1071)) ([767ac12](https://github.com/btnalit/NextTime-AI/commit/767ac12f7d3e71f4b54e71535f570022175c74fd))
+* **kernel,shared,web:** Worker usage per version, run environment and combination (S11 GO16a, legacy 569) ([#1064](https://github.com/btnalit/NextTime-AI/issues/1064)) ([fa28987](https://github.com/btnalit/NextTime-AI/commit/fa289877f00e70f50f5933f444bd5a5e23fd49db))
+
+
+### Bug Fixes
+
+* **kernel,shared,web:** show a WorkerSpec's digest only to readers of a goal it ran in ([#1069](https://github.com/btnalit/NextTime-AI/issues/1069)) ([ac9639b](https://github.com/btnalit/NextTime-AI/commit/ac9639b972e98dfe6dc70eddeeb96231618ab6d6))
+* **web:** editor drafts keep within the tab's storage, row keys cannot stall, a restored Skill body set back keeps nothing (legacy 667) ([#1062](https://github.com/btnalit/NextTime-AI/issues/1062)) ([171b834](https://github.com/btnalit/NextTime-AI/commit/171b834803ad3f0915ef3213d8d97ba97b98e3ce))
+
 ## [0.65.0](https://github.com/btnalit/NextTime-AI/compare/v0.64.0...v0.65.0) (2026-11-07)
 
 
