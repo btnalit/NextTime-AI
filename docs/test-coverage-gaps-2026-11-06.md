@@ -114,7 +114,7 @@ capabilities:
 | M5 | `kernel_test: missing` ⇔ 没有内核 `*.test.ts` 写着这个名字（补了测试却不删豁免也失败） | 内核实现没有任何测试 |
 | R | `ratchet:` 两个数必须等于实际计数：新增豁免要在同一 diff 里调高并由审查同意，修掉一个必须调低 | 豁免悄悄变多 |
 
-M1–M3、M5、R 与 M4 的静态半边是纯静态检查，在 `quality` 与 `pnpm ci:guards` 里跑；M4 的运行时半边在 `web-e2e` 末尾（`--e2e-observed`）。初版 matrix 由 `node scripts/guards/capability-matrix.mjs --bootstrap` 从当前代码扫出（保留已有理由），41 行没有控制台调用的 capability 里 31 行人工写了理由，剩 10 行「待说明」进棘轮。G6 的 `repeat` 字段随批次 D 加。
+M1–M3、M5、R 与 M4 的静态半边是纯静态检查，在 `quality` 与 `pnpm ci:guards` 里跑；M4 的运行时半边在 `web-e2e` 末尾（`--e2e-observed`）。初版 matrix 由 `node scripts/guards/capability-matrix.mjs --bootstrap` 从当前代码扫出（保留已有理由），41 行没有控制台调用的 capability 里 31 行人工写了理由，剩 10 行「待说明」进棘轮。G6 的 `repeat` 字段由批次 D4 加（M6，见 §5.7）。
 
 **为什么不把这些字段加进注册表本身**：注册表是线上契约（快照进 `docs/contracts/capabilities.json`），投影意图和测试豁免会频繁变，混进去会让契约快照随测试状态抖动；独立文件 + 双向一一对应的守卫，强度与"必填字段"等价。
 
@@ -169,7 +169,15 @@ M1–M3、M5、R 与 M4 的静态半边是纯静态检查，在 `quality` 与 `p
   - 失败的调用要么不留行，要么只留 `outcome: 'refused'` 的拒绝记录。
 
   今天人类一遍成功 59 个读、10 个写，Handle 一遍成功 21 个读，下限分别是 45、8、15。测的是现行语义：actor 表示责任人，channel 记在 payload 里。#493 的结论（人类 channel 的角色 403 不写审计；Handle 被拒写带上限的 refused 审计；新增一等列 `acting_through`）交给内核线程「GO1 目标与步骤数据模型」做，落地后再收紧这里的断言。平台面的管理员智能体读（`readPlatformStateForAdminAgent`）在审计 payload 里已经带 `sessionKind` / `sessionId`。
-- D1–D3 共用 `traversal-fixture.ts`（造工作区、造数据、按 schema 生成参数、工作区摘要），D4 接着用。
+- **D4（G6，已落地）** matrix 新增 `repeat` 列，守卫规则 M6：凡 `capabilityHasSideEffects` 为真的行都必须写明"同参数第二次调用会怎样"，observe 行不许写。取值有五种：
+  - `idempotent`：第二次成功，返回同一实体；除审计外工作区的行不变，outbox 也不增；审计恰好多一条该次调用的 dispatch 行，不多任何领域行。
+  - `creates`：第二次新建另一个实体，返回新的 id。
+  - `repeats`：第二次对同一实体再施加一次效果，id 相同但状态变了，比如轮换。
+  - `"conflict: <code>"`：第二次被拒，经 `mapCapabilityError` 后是这个错误码，且是带类型的 4xx；状态不变，审计只允许多出 refused 行。
+  - `"unclear: <遗留号>"`：未定或还没被验证，由 `ratchet.repeat_unclear` 计数。
+
+  没写 repeat 是硬失败，新增 capability 的 PR 必须当场决定。`repeat-call.integration.test.ts` 读 matrix 表驱动：每个已声明的行都在新造的工作区里连调两次，按声明断言。第一次调不成功的声明直接失败，要么在 `RECIPES` 里补参数配方，要么改回 unclear。所以不可能出现"声明了却没人测"的行。首批声明 8 行：`new_chat`、`request_connection`、`create_principal` 为 creates；`stop_agent`、`register_source` 为 idempotent；`send_chat_message` 为 conflict: turn_already_running；`approve`、`reject` 为 conflict: illegal_transition（第二次批准不会再排 outbox，钉住了"批准两次不会执行两次"）。`request_connection` 第二次会再排一条 outbox，也就是工作区里多一条待处理的连接请求，按 creates 可以接受；要不要合并重复的待审请求，是控制台 UX 的问题。`archive_chat`、`unarchive_chat`、`rename_chat` 在状态不变时仍写领域审计行（遗留 665，内核修），暂标 `unclear: 665`，修好后改为 idempotent。其余 132 行挂 `unclear: 664`，按批补参数配方、逐批声明，棘轮初值 135。平台面的写要先有平台调用方的夹具才能声明。验证本测试确实会失败：故意把 `archive_chat` 写成 idempotent、`stop_agent` 写成 creates、`approve` 写错错误码、`request_connection` 写成 idempotent（outbox 会多一条），四处都被测试抓到。
+- D1–D4 共用 `traversal-fixture.ts`（造工作区、造数据、按 schema 生成参数、工作区摘要）。
 
 ## 6. 分批路线
 

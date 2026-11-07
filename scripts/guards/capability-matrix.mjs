@@ -22,8 +22,17 @@
 //       kernel (a stubbed answer, `via: 'stub'`, does not count), and
 //       a waived row a page called ok must become `observed` (and lower the ratchet)
 //   M5  `kernel_test: missing` ⇔ no packages/kernel test file names it
-//   R   ratchet: the `none: 待说明…` rows, the `kernel_test: missing` rows and the `e2e: waived`
-//       rows are counted, and the counts must equal `ratchet:` at the top of the file — a new one cannot be added without
+//   M6  a capability with side effects (`capabilityHasSideEffects`) says what calling it twice with
+//       the same params does: `repeat: idempotent` (the second call succeeds, changes nothing but
+//       its own audit row, same id back), `creates` (each call makes a new entity, a new id),
+//       `repeats` (each call applies its effect again to the same entity: same id, new state, e.g. a
+//       rotation), `"conflict: <code>"` (the second call is refused with that wire error code, a
+//       typed 4xx, and changes nothing), or `"unclear: <legacy no.>"` (not decided or not yet
+//       exercised; counted by ratchet.repeat_unclear). An observe row has no `repeat`. Every
+//       declared row is exercised by packages/kernel/src/application/gateway/
+//       repeat-call.integration.test.ts, which reads this file
+//   R   ratchet: the `none: 待说明…` rows, the `kernel_test: missing` rows, the `e2e: waived`
+//       rows and the `repeat: unclear` rows are counted, and the counts must equal `ratchet:` at the top of the file — a new one cannot be added without
 //       raising the number in the same diff, a fixed one must lower it
 //
 // Reads @nexttime/shared's built dist (like vocabulary.mjs): `pnpm --filter @nexttime/shared build`
@@ -42,6 +51,18 @@ export const UNEXPLAINED_PREFIX = 'none: 待说明';
 export const AGENT_SURFACES = ['entry', 'admin'];
 export const E2E_OBSERVED = 'observed';
 export const E2E_WAIVED = /^waived: [0-9]+$/;
+/** M6: the declared answers to "what does a second, identical call do". */
+export const REPEAT_PLAIN = ['idempotent', 'creates', 'repeats'];
+export const REPEAT_CONFLICT = /^conflict: [a-z][a-z0-9_]*$/;
+export const REPEAT_UNCLEAR = /^unclear: [0-9]+$/;
+
+/** M6: whether `repeat` is a well-formed declaration. */
+export function isRepeatDecl(value) {
+  return (
+    typeof value === 'string' &&
+    (REPEAT_PLAIN.includes(value) || REPEAT_CONFLICT.test(value) || REPEAT_UNCLEAR.test(value))
+  );
+}
 
 // ---------------------------------------------------------------------------------------------
 // Scanners (pure functions over file text, unit-tested in capability-matrix.test.mjs)
@@ -111,7 +132,8 @@ export function needsE2e(mode, consoleDecl) {
  * @param {{ ratchet?: Record<string, number>, capabilities?: Record<string, any> }} matrix
  * @param {{ names: string[], consoleCalls: Set<string>, entry: Set<string>, admin: Set<string>,
  *           kernelTested: Set<string>, fileHasName: (file: string, name: string) => boolean,
- *           modes?: Map<string, string> }} facts  `modes`: registry mode per name (M4)
+ *           modes?: Map<string, string>, sideEffects?: Set<string> }} facts  `modes`: registry
+ *           mode per name (M4); `sideEffects`: the names `capabilityHasSideEffects` is true for (M6)
  * @returns {string[]} violations
  */
 export function checkMatrix(matrix, facts) {
@@ -135,6 +157,7 @@ export function checkMatrix(matrix, facts) {
   let unexplained = 0;
   let kernelMissing = 0;
   let e2eWaived = 0;
+  let repeatUnclear = 0;
   for (const name of facts.names) {
     const row = rows[name];
     if (!row || typeof row !== 'object') continue;
@@ -228,6 +251,21 @@ export function checkMatrix(matrix, facts) {
         `M5 ${name}: no packages/kernel test names '${name}' — add one (a waiver is kernel_test: missing plus a higher ratchet, and needs a reviewer's reason)`,
       );
     }
+
+    // M6
+    if (facts.sideEffects !== undefined) {
+      if (facts.sideEffects.has(name)) {
+        if (!isRepeatDecl(row.repeat)) {
+          out.push(
+            `M6 ${name}: has side effects — say what a second identical call does: repeat: idempotent | creates | repeats | "conflict: <error code>", or "unclear: <legacy no.>" with a higher ratchet.repeat_unclear (got ${JSON.stringify(row.repeat)})`,
+          );
+        } else if (REPEAT_UNCLEAR.test(row.repeat)) {
+          repeatUnclear += 1;
+        }
+      } else if (row.repeat !== undefined) {
+        out.push(`M6 ${name}: repeat is only for a capability with side effects — remove it`);
+      }
+    }
   }
 
   // R
@@ -236,6 +274,7 @@ export function checkMatrix(matrix, facts) {
     ['console_unexplained', unexplained],
     ['kernel_test_missing', kernelMissing],
     ['e2e_waived', e2eWaived],
+    ['repeat_unclear', repeatUnclear],
   ]) {
     if (ratchet[key] !== count) {
       out.push(
@@ -326,11 +365,14 @@ async function loadRegistry() {
     );
     throw err;
   }
-  return shared.CAPABILITY_REGISTRY.filter((capability) => !capability.name.includes('<'));
+  return shared;
 }
 
 export async function collectFacts() {
-  const registry = await loadRegistry();
+  const shared = await loadRegistry();
+  const registry = shared.CAPABILITY_REGISTRY.filter(
+    (capability) => !capability.name.includes('<'),
+  );
   const names = registry.map((capability) => capability.name);
   const webFiles = gitFiles([
     'packages/web/src/*.ts',
@@ -345,6 +387,11 @@ export async function collectFacts() {
   return {
     names,
     modes: new Map(registry.map((capability) => [capability.name, capability.mode])),
+    sideEffects: new Set(
+      registry
+        .filter((capability) => shared.capabilityHasSideEffects(capability))
+        .map((c) => c.name),
+    ),
     consoleCalls: scanConsoleCalls(webText, names),
     entry: parseToolArray(
       read('packages/platform-extension/src/modes/entry.ts'),
@@ -366,7 +413,7 @@ export async function collectFacts() {
 }
 
 const HEADER = `# Capability matrix — one row per capability in packages/shared/src/capabilities.ts.
-# Guard: scripts/guards/capability-matrix.mjs (rules M1–M5, R); design: docs/test-coverage-gaps-2026-11-06.md §5.1, §5.3.
+# Guard: scripts/guards/capability-matrix.mjs (rules M1–M6, R); design: docs/test-coverage-gaps-2026-11-06.md §5.1, §5.3.
 #
 # console:  required             the console calls it (http.call / useCapability*)
 #           indirect: <file>     the console calls it through a variable; <file> names it
@@ -378,6 +425,13 @@ const HEADER = `# Capability matrix — one row per capability in packages/share
 #                                calls it through the console; web-e2e checks each run (M4)
 #           "waived: <legacy no.>"  not yet (counted by ratchet.e2e_waived, only goes down)
 # kernel_test: missing           no kernel test names it yet (counted by ratchet.kernel_test_missing)
+# repeat:   (a capability with side effects) what a second call with the same params does (M6):
+#           idempotent           succeeds, changes nothing but its own audit row, same id back
+#           creates              makes another entity (a new id)
+#           repeats              applies its effect again to the same entity (same id, new state)
+#           "conflict: <code>"   refused with that wire error code (a typed 4xx), nothing changes
+#           "unclear: <legacy no.>"  not decided / not exercised yet (counted by ratchet.repeat_unclear)
+#           every declared row is exercised by kernel repeat-call.integration.test.ts
 `;
 
 /**
@@ -390,6 +444,7 @@ export function bootstrapMatrix(facts, previous, options = {}) {
   let unexplained = 0;
   let kernelMissing = 0;
   let e2eWaived = 0;
+  let repeatUnclear = 0;
   for (const name of [...facts.names].sort()) {
     const old = previous?.capabilities?.[name];
     let consoleDecl;
@@ -413,6 +468,16 @@ export function bootstrapMatrix(facts, previous, options = {}) {
       row.kernel_test = 'missing';
       kernelMissing += 1;
     }
+    if (facts.sideEffects?.has(name)) {
+      if (isRepeatDecl(old?.repeat)) row.repeat = old.repeat;
+      else if (options.repeatUnclear !== undefined)
+        row.repeat = `unclear: ${options.repeatUnclear}`;
+      else
+        throw new Error(
+          `capability-matrix: ${name} needs repeat — pass --repeat-unclear <legacy no.>`,
+        );
+      if (REPEAT_UNCLEAR.test(row.repeat)) repeatUnclear += 1;
+    }
     rows[name] = row;
   }
   const lines = [
@@ -420,6 +485,7 @@ export function bootstrapMatrix(facts, previous, options = {}) {
     `  console_unexplained: ${unexplained}`,
     `  kernel_test_missing: ${kernelMissing}`,
     `  e2e_waived: ${e2eWaived}`,
+    `  repeat_unclear: ${repeatUnclear}`,
     'capabilities:',
   ];
   for (const [name, row] of Object.entries(rows)) {
@@ -431,6 +497,10 @@ export function bootstrapMatrix(facts, previous, options = {}) {
     if (row.e2e)
       lines.push(`    e2e: ${row.e2e === E2E_OBSERVED ? row.e2e : JSON.stringify(row.e2e)}`);
     if (row.kernel_test) lines.push(`    kernel_test: ${row.kernel_test}`);
+    if (row.repeat)
+      lines.push(
+        `    repeat: ${REPEAT_PLAIN.includes(row.repeat) ? row.repeat : JSON.stringify(row.repeat)}`,
+      );
   }
   const body = `${lines.join('\n')}\n`;
   return HEADER + body;
@@ -467,7 +537,11 @@ async function main() {
   if (process.argv.includes('--bootstrap')) {
     writeFileSync(
       path.join(REPO_ROOT, MATRIX_PATH),
-      bootstrapMatrix(facts, matrix, { observed, waiver: arg('--waive') }),
+      bootstrapMatrix(facts, matrix, {
+        observed,
+        waiver: arg('--waive'),
+        repeatUnclear: arg('--repeat-unclear'),
+      }),
     );
     console.log(`capability-matrix: wrote ${MATRIX_PATH} — read the diff before committing it`);
     return;

@@ -111,7 +111,7 @@ pnpm ci:guards        # kernel purity + pi 版本一致性 + membership-capabili
 
 `docs/contracts/capability-matrix.yaml` 给每个 capability 写明控制台入口与哪些 agent 拿到它当工具，
 `scripts/guards/capability-matrix.mjs`（CI `quality`、`pnpm ci:guards`，先构建 shared）核对代码，
-规则 M1–M5 与棘轮见该文件头注释和 `docs/test-coverage-gaps-2026-11-06.md` §5.1。新增 capability 的
+规则 M1–M6 与棘轮见该文件头注释和 `docs/test-coverage-gaps-2026-11-06.md` §5.1。新增 capability 的
 PR 在同一提交里加一行；大面积改名后可 `node scripts/guards/capability-matrix.mjs --bootstrap` 重新生成，
 保留已有理由，提交前读 diff。
 

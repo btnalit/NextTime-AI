@@ -196,7 +196,7 @@ describe('endTurn: refused model calls (legacy 589)', () => {
 });
 
 describe('requestTurnStop', () => {
-  it('marks stopRequestedAt on the Turn, only while it is running', async () => {
+  it('marks stopRequestedAt on the Turn, only while it is running and only once', async () => {
     const { client, queries } = createFakeClient(undefined);
 
     await requestTurnStop(client, WORKSPACE_ID, TURN_ID);
@@ -204,6 +204,7 @@ describe('requestTurnStop', () => {
     expect(queries).toHaveLength(1);
     expect(queries[0]?.text).toContain("jsonb_build_object('stopRequestedAt', now())");
     expect(queries[0]?.text).toContain("status = 'running'");
+    expect(queries[0]?.text).toContain("not metadata ? 'stopRequestedAt'");
     expect(queries[0]?.values).toEqual([WORKSPACE_ID, TURN_ID]);
   });
 });
