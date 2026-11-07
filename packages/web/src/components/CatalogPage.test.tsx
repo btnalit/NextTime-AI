@@ -4580,6 +4580,103 @@ describe('CatalogPage — Skill usage (S11 W1a E2-1)', () => {
   });
 });
 
+describe('CatalogPage — Worker usage (S11 GO16a)', () => {
+  function workspaceAs(role: string) {
+    return {
+      id: 'ws-1',
+      name: 'Acme',
+      createdAt: '2026-01-01T00:00:00Z',
+      principalCount: 1,
+      gatekeeperCount: 0,
+      caller: { id: 'p-me', role, displayName: 'Me', kind: 'human' },
+    };
+  }
+
+  const tier = (achieved: number, notAchieved: number) => ({
+    achieved,
+    notAchieved,
+    total: achieved + notAchieved,
+    attainment: achieved + notAchieved > 0 ? achieved / (achieved + notAchieved) : null,
+  });
+  const outcomes = {
+    primary: tier(1, 1),
+    proxy: tier(0, 0),
+    byBasis: [
+      { basis: 'verified_by_check', achieved: 1, notAchieved: 0 },
+      { basis: 'requester', achieved: 0, notAchieved: 1 },
+      { basis: 'reviewer_assessed', achieved: 0, notAchieved: 0 },
+      { basis: 'agent_reported', achieved: 0, notAchieved: 0 },
+    ],
+  };
+  const used = {
+    runs: 2,
+    tasks: { completed: 1, failed: 1, cancelled: 0, inProgress: 0 },
+    lastUsedAt: new Date().toISOString(),
+  };
+
+  function catalog(role: string, row: { kind: string; status: string }) {
+    return scriptedHttp({
+      get_workspace: () => workspaceAs(role),
+      list_worker_definitions: () => ({
+        items: [
+          { id: 'wd-1', version: 1, ...row, proposedBy: 'p-me', definition: { name: 'Fixer' } },
+        ],
+      }),
+      get_worker_definition_stats: () => ({
+        definitionId: 'wd-1',
+        name: 'Fixer',
+        reviewStreak: 3,
+        versions: [
+          {
+            version: 1,
+            status: 'published',
+            usage: used,
+            outcomes,
+            reviewSuggested: false,
+            segments: [],
+            combinations: [
+              { specDigest: null, fields: [], usage: used, outcomes, reviewSuggested: false },
+            ],
+          },
+        ],
+        failureGroups: [],
+      }),
+    });
+  }
+
+  it('a builder sees the family’s usage on a published Worker’s detail', async () => {
+    const http = catalog('builder', { kind: 'worker', status: 'published' });
+    renderPage(http, 'workers');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    const usage = await within(detail).findByTestId('worker-usage-version-1');
+    expect(usage.textContent).toContain('完成 1 · 失败 1');
+    expect(
+      within(within(usage).getByTestId('worker-usage-version-1-numbers')).getByTestId(
+        'worker-usage-attainment',
+      ).textContent,
+    ).toBe('50%（1 / 2）');
+    expect(http.calls.find((call) => call.name === 'get_worker_definition_stats')?.params).toEqual({
+      definitionId: 'wd-1',
+    });
+  });
+
+  it.each([
+    ['a member’s detail', 'member', { kind: 'worker', status: 'published' }],
+    ['a draft (it never runs)', 'builder', { kind: 'worker', status: 'draft' }],
+    ['an entry definition (it takes no Tasks)', 'builder', { kind: 'entry', status: 'published' }],
+  ] as const)('%s has no usage and asks for none', async (_case, role, row) => {
+    const http = catalog(role, row);
+    renderPage(http, 'workers');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    await within(detail).findByTestId('worker-detail-definition');
+    await waitFor(() =>
+      expect(http.calls.some((call) => call.name === 'get_workspace')).toBe(true),
+    );
+    expect(within(detail).queryByTestId('worker-usage')).toBeNull();
+    expect(http.calls.some((call) => call.name === 'get_worker_definition_stats')).toBe(false);
+  });
+});
+
 describe('CatalogPage — Procedure usage (S11 W1a E2-2)', () => {
   function workspaceAs(role: string) {
     return {

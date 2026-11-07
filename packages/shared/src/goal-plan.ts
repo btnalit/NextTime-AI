@@ -204,6 +204,25 @@ export const WorkerSpecSchema = z
 
 export type WorkerSpec = z.infer<typeof WorkerSpecSchema>;
 
+/** S11 GO16a: the fields a WorkerSpec may set, in the order they are listed — what
+ *  `get_worker_definition_stats` names of a combination (never their content). */
+export const WORKER_SPEC_FIELD_VALUES = [
+  'instructions',
+  'skills',
+  'gates',
+  'capabilities',
+  'model',
+  'observeScope',
+  'tokenBudget',
+] as const satisfies readonly (keyof WorkerSpec)[];
+export type WorkerSpecField = (typeof WORKER_SPEC_FIELD_VALUES)[number];
+export const WorkerSpecFieldSchema = z.enum(WORKER_SPEC_FIELD_VALUES);
+
+/** What `spec` sets, in {@link WORKER_SPEC_FIELD_VALUES} order. */
+export function workerSpecFieldsOf(spec: WorkerSpec): WorkerSpecField[] {
+  return WORKER_SPEC_FIELD_VALUES.filter((field) => spec[field] !== undefined);
+}
+
 export const PlanStepSchema = z
   .object({
     key: StepKeySchema,
