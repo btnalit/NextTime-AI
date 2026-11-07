@@ -110,6 +110,45 @@ describe('PlatformAuditPage', () => {
     );
   });
 
+  it('legacy 666: every row says what its act came through, and 经由 filters by it from a list', async () => {
+    const http = scriptedHttp({
+      platform_audit_query: () => ({
+        items: [
+          row({ id: 'a-person', actingThrough: 'person' }),
+          row({ id: 'a-system', actingThrough: 'system' }),
+          row({ id: 'a-agent', actingThrough: 'admin_agent_session', actingSessionId: 's-1' }),
+        ],
+      }),
+    });
+    renderPage(http);
+    const rows = await screen.findAllByTestId('platform-audit-row');
+    expect(within(rows[0] as HTMLElement).getByTestId('audit-acting-through').textContent).toBe(
+      '经由 本人',
+    );
+    expect(within(rows[1] as HTMLElement).getByTestId('audit-acting-through').textContent).toBe(
+      '经由 平台后台任务',
+    );
+    expect(within(rows[2] as HTMLElement).getByTestId('audit-admin-agent')).toBeTruthy();
+
+    const form = screen.getByTestId('platform-audit-filter-form');
+    const through = within(form).getByLabelText('经由') as HTMLSelectElement;
+    expect(through.tagName).toBe('SELECT');
+    fireEvent.change(through, { target: { value: 'admin_agent_session' } });
+    fireEvent.click(within(form).getByRole('button', { name: '应用' }));
+    await waitFor(() =>
+      expect(http.calls.at(-1)).toEqual({
+        name: 'platform_audit_query',
+        params: { limit: 50, actingThrough: 'admin_agent_session' },
+      }),
+    );
+    // Back to 任意: the param goes.
+    fireEvent.change(through, { target: { value: '' } });
+    fireEvent.click(within(form).getByRole('button', { name: '应用' }));
+    await waitFor(() =>
+      expect(http.calls.at(-1)).toEqual({ name: 'platform_audit_query', params: { limit: 50 } }),
+    );
+  });
+
   it('shows a "加载更多" button when nextCursor is present, and appends the next page', async () => {
     const http = scriptedHttp({
       platform_audit_query: (params) =>

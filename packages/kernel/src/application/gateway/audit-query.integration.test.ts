@@ -6,6 +6,7 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { runWithActingContext } from '../../substrate/audit/acting-context.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
@@ -156,6 +157,42 @@ describe.runIf(DATABASE_URL !== undefined)(
         redactedValues: 1,
         credentialReview: { suspectedSecretValues: 1, confirmed: true },
       });
+    });
+
+    it('legacy 666: filter.actingThrough keeps only the rows an act came through that way', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const action = 'test.acting_through_filter';
+      // One row a Worker Handle wrote, one with no acting context (as before #1028), and a
+      // dispatched call of the person's own.
+      await runWithActingContext(
+        { actingThrough: 'worker_handle', actingSessionId: randomUUID() },
+        () =>
+          withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+            writeAudit(client, { workspaceId, actorPrincipalId: ownerId, action }),
+          ),
+      );
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        writeAudit(client, { workspaceId, actorPrincipalId: ownerId, action }),
+      );
+      await dispatchCapability({ pool }, owner, 'new_chat', { title: 'acting-through' });
+
+      const through = async (actingThrough: string) =>
+        (
+          (await dispatchCapability({ pool }, owner, 'audit_query', {
+            filter: { actingThrough },
+            limit: 1000,
+          })) as { items: { action: string; actingThrough: string | null }[] }
+        ).items;
+
+      const worker = await through('worker_handle');
+      expect(worker.map((row) => row.action)).toEqual([action]);
+      const person = await through('person');
+      expect(person.length).toBeGreaterThan(0);
+      expect(person.every((row) => row.actingThrough === 'person')).toBe(true);
+      expect(person.some((row) => row.action === 'new_chat')).toBe(true);
+      expect(person.some((row) => row.action === action)).toBe(false);
+      // Not one of the values: nothing, never the unfiltered stream.
+      expect(await through('somebody')).toEqual([]);
     });
   },
 );

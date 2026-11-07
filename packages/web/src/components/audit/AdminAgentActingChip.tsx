@@ -11,16 +11,9 @@ export function actedByAdminAgent(payload: unknown): boolean {
   );
 }
 
-/**
- * components/audit/AdminAgentActingChip (S11 AA4c-3, legacy 583; the AA4 plan F10-3): 「由管理员
- * 智能体代为」 beside an audit row's actor when that person's admin agent did it — the actor is
- * still the person (the agent acts as them, within its own ceiling), so the row says both.
- * Renders nothing for any other row.
- */
-export function AdminAgentActingChip({ payload }: { readonly payload: unknown }) {
-  if (!actedByAdminAgent(payload)) return null;
-  return <AdminAgentActingMark testId="audit-admin-agent" />;
-}
+/* components/audit/AdminAgentActingChip (S11 AA4c-3, legacy 583; the AA4 plan F10-3): 「由管理员
+ * 智能体代为」 — the actor is still the person (the agent acts as them, within its own ceiling), so
+ * an audit row says both. Audit rows show it through `ActingThroughChip` (legacy 666). */
 
 /** The same mark wherever a resource records the admin agent session that made it in the
  *  person's name (S11 AA5b: a connection request's or a Task's `adminAgentSessionId`). */

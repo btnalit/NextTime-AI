@@ -21,6 +21,7 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { addPrincipal } from '../../cli/bootstrap.js';
 import { HANDLE_SIGNING_ALG, issueHandle } from '../../governance/capability/index.js';
 import { createServer } from '../../index.js';
+import { runWithActingContext } from '../../substrate/audit/acting-context.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import {
   CONSOLE_SESSION_COOKIE,
@@ -1127,6 +1128,41 @@ describe.runIf(DATABASE_URL !== undefined)(
           note: 'PGPASSWORD=[redacted] was in the script',
           credentialReview: { suspectedSecretValues: 1, confirmed: true },
         });
+      });
+
+      it('legacy 666: filters by what the act came through', async () => {
+        const action = 'test.platform_acting_through';
+        await runWithActingContext(
+          { actingThrough: 'admin_agent_session', actingSessionId: randomUUID() },
+          () =>
+            withWorkspace(
+              pool,
+              { workspaceId, principalId: randomUUID() },
+              (client) =>
+                writeAudit(client, {
+                  workspaceId: null,
+                  actorPrincipalId: null,
+                  actorUserId: admin.id,
+                  action,
+                }),
+              { skipRoleSwitch: true },
+            ),
+        );
+        const agent = await callAsAdmin<ListEnvelope<PlatformAuditRecordWire>>(
+          'platform_audit_query',
+          { actingThrough: 'admin_agent_session', limit: 200 },
+        );
+        expect(agent.items.map((item) => item.action)).toContain(action);
+        expect(agent.items.every((item) => item.actingThrough === 'admin_agent_session')).toBe(
+          true,
+        );
+        const person = await callAsAdmin<ListEnvelope<PlatformAuditRecordWire>>(
+          'platform_audit_query',
+          { actingThrough: 'person', limit: 200 },
+        );
+        expect(person.items.length).toBeGreaterThan(0);
+        expect(person.items.every((item) => item.actingThrough === 'person')).toBe(true);
+        expect(person.items.some((item) => item.action === action)).toBe(false);
       });
     });
 

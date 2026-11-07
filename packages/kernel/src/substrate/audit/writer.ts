@@ -145,6 +145,10 @@ export interface AuditQueryFilter {
   readonly action?: string;
   readonly resourceType?: string;
   readonly resourceId?: string;
+  /** Legacy 666: only rows whose `acting_through` is this (#1028's column). A row written before
+   *  it was recorded carries none and never matches; a string that is not one of
+   *  `AUDIT_ACTING_THROUGH_VALUES` matches nothing. */
+  readonly actingThrough?: string;
   /** Any one of these `action` values (legacy 291: a set the caller would otherwise pick out of a
    *  capped page afterwards, where newer rows of other actions could take every slot). Internal
    *  only — `audit_query`'s wire filter never sets it. */
@@ -237,6 +241,7 @@ export async function queryAuditPage(
        and ($5::uuid is null or resource_id = $5)
        and ($9::text[] is null or action = any($9))
        and ($10::timestamptz is null or date_trunc('milliseconds', created_at) <= $10)
+       and ($11::text is null or acting_through = $11)
        and (
          $7::timestamptz is null
          or (date_trunc('milliseconds', created_at), id) < ($7::timestamptz, $8::uuid)
@@ -254,6 +259,7 @@ export async function queryAuditPage(
       cursor?.id ?? null,
       filter.actions ? [...filter.actions] : null,
       filter.createdAtOrBefore ?? null,
+      filter.actingThrough ?? null,
     ],
   );
   const rows = result.rows.slice(0, limit).map(mapAuditRecordRow);
