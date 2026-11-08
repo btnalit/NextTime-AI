@@ -22,7 +22,7 @@ ratchet:
   console_unexplained: 10
   kernel_test_missing: 3
   e2e_waived: 65
-  repeat_unclear: 56
+  repeat_unclear: 54
 capabilities:
   add_eval_case:
     console: required
@@ -660,7 +660,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: idempotent # returns the caller's identical draft (created: false); with no published entry a second call is another entry family (legacy 691)
   propose_goal:
     console: "none: 入口 agent 替人提议目标；人在控制台确认或拒绝（confirm / reject 目标的能力）"
     agents: [entry]
@@ -790,7 +790,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: conflict" # the first call releases the pause; the same release again finds it released already, nothing written
   release_goal_hold:
     console: required
     agents: []

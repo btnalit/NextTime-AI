@@ -676,6 +676,22 @@ async function reviewedPack(ctx: RecipeContext, name: string): Promise<Record<st
   };
 }
 
+/** The entry template as the caller read it (`get_entry_template_status`): its digest and the
+ *  published entry version it would be based on. */
+async function entryTemplateRead(ctx: RecipeContext): Promise<Record<string, unknown>> {
+  const now = await as<{
+    template: { digest: string };
+    current: { definitionId: string; version: number } | null;
+  }>(ctx, 'get_entry_template_status', {});
+  return {
+    templateDigest: now.template.digest,
+    basedOn:
+      now.current === null
+        ? null
+        : { definitionId: now.current.definitionId, version: now.current.version },
+  };
+}
+
 /** Extra cases for a row, beyond the one with schema-built params on the bare seed. A declaration
  *  holds on every path, so a row whose answer depends on state gets a case per state (per #493 on
  *  batch D4). */
@@ -1569,11 +1585,72 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       },
     },
   },
+  propose_entry_template_upgrade: {
+    // A published entry the template has moved past: the second call finds the caller's own
+    // identical draft and returns it (`created: false`).
+    'a published entry behind the template': {
+      first: expect.objectContaining({ created: true, differs: ['systemPrompt'] }),
+      entity: (result) => (result as { draft: { id: string } }).draft.id,
+      setUp: async (ctx) => {
+        const fresh = await as<{ draft: { id: string; version: number; definition: object } }>(
+          ctx,
+          'propose_entry_template_upgrade',
+          await entryTemplateRead(ctx),
+        );
+        await as(ctx, 'publish_worker_definition', {
+          definitionId: fresh.draft.id,
+          version: fresh.draft.version,
+        });
+        const older = await as<{ id: string; version: number }>(ctx, 'propose_worker_definition', {
+          definitionId: fresh.draft.id,
+          kind: 'entry',
+          definition: { ...fresh.draft.definition, systemPrompt: 'An older entry prompt.' },
+        });
+        await as(ctx, 'publish_worker_definition', {
+          definitionId: older.id,
+          version: older.version,
+        });
+        return entryTemplateRead(ctx);
+      },
+    },
+    // Legacy 691: with no published entry (basedOn: null) a second call is a second entry family,
+    // not the caller's identical draft — the lookup reads the published family's drafts only.
+    // As it is: `creates`; once aligned, `idempotent`.
+    'no published entry': {
+      repeat: 'creates',
+      first: expect.objectContaining({ created: true, basedOn: null }),
+      entity: (result) => (result as { draft: { id: string } }).draft.id,
+      setUp: (ctx) => entryTemplateRead(ctx),
+    },
+  },
+  release_eval_seal_hold: {
+    // The first call releases the pause; the same release again finds none active (409).
+    "an active pause of the member's agents": {
+      first: expect.objectContaining({ status: 'released' }),
+      setUp: async ({ pool, seed, memberId }) => {
+        const hold = await withWorkspace(
+          pool,
+          { workspaceId: seed.workspaceId, principalId: seed.ownerId },
+          (client) =>
+            client.query<{ id: string }>(
+              `insert into eval_seal_holds (workspace_id, principal_id, hits, places)
+               values ($1, $2, 3, '{"capabilityResult": 3, "capabilityError": 0, "workerStart": 0}')
+               returning id`,
+              [seed.workspaceId, memberId],
+            ),
+          { skipRoleSwitch: true },
+        );
+        return { holdId: hold.rows[0]?.id, reason: 'Checked: the refusals were a test.' };
+      },
+    },
+  },
 };
 
 /** Rows whose schema-built params cannot make a first call succeed on the bare seed — a param
  *  naming something the walk has no value for — run their recipes instead of that case. */
 const RECIPES_ONLY: ReadonlySet<string> = new Set([
+  'release_eval_seal_hold',
+  'propose_entry_template_upgrade',
   'install_module',
   'upgrade_module',
   'install_pack',
