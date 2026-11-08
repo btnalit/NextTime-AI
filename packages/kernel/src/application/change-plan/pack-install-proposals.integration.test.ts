@@ -190,10 +190,19 @@ describe.runIf(DATABASE_URL !== undefined)(
     /** Previews the pack's install as the owner, then installs what it showed, confirming every
      *  widening item — naming `segmentId` when given. */
     async function install(target: Target, segmentId?: string, caller = ownerCaller(target)) {
+      return call<PackInstallResultWire>(
+        caller,
+        'install_pack',
+        await installParams(caller, segmentId),
+      );
+    }
+
+    /** What `install` sends: the dry run's version and digest, every widening item confirmed. */
+    async function installParams(caller: ResolvedCaller, segmentId?: string) {
       const dryRun = await call<PackInstallPreviewWire>(caller, 'preview_pack_install', {
         name: PACK,
       });
-      return call<PackInstallResultWire>(caller, 'install_pack', {
+      return {
         name: PACK,
         version: dryRun.targetVersion,
         reviewedDigest: dryRun.digest,
@@ -201,7 +210,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           .filter((item) => item.classification === 'authority_widening')
           .map((item) => item.ordinal),
         ...(segmentId !== undefined ? { adminProposalSegmentId: segmentId } : {}),
-      });
+      };
     }
 
     async function segmentRow(segmentId: string) {
@@ -293,13 +302,24 @@ describe.runIf(DATABASE_URL !== undefined)(
       }
 
       // Installed by the owner, answering the segment.
-      const installed = await install(a, segA);
+      const sent = await installParams(ownerCaller(a), segA);
+      const installed = await call<PackInstallResultWire>(ownerCaller(a), 'install_pack', sent);
       expect(installed.pack.status).toBe('up_to_date');
       const changeSegmentId = installed.segmentId;
       if (changeSegmentId === null) throw new Error('installed nothing');
       expect(await segmentRow(segA)).toMatchObject({
         status: 'applied',
         decided_by: a.ownerPrincipalId,
+        applied_segment_id: changeSegmentId,
+      });
+      // The same call again (a retry after a lost answer): the segment it answers is applied, so it
+      // is refused before the reviewed digest is compared, and nothing changes (legacy 664, #493 on
+      // batch 15).
+      expect(
+        mapCapabilityError(await thrownBy(call(ownerCaller(a), 'install_pack', sent))),
+      ).toMatchObject({ status: 409, code: 'admin_proposal_segment_not_open' });
+      expect(await segmentRow(segA)).toMatchObject({
+        status: 'applied',
         applied_segment_id: changeSegmentId,
       });
       const record = await call<ChangeSegmentDetailWire>(ownerCaller(a), 'get_change_segment', {
