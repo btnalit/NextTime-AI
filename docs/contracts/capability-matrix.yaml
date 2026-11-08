@@ -22,7 +22,7 @@ ratchet:
   console_unexplained: 10
   kernel_test_missing: 3
   e2e_waived: 65
-  repeat_unclear: 59
+  repeat_unclear: 56
 capabilities:
   add_eval_case:
     console: required
@@ -379,12 +379,12 @@ capabilities:
   install_module:
     console: "none: 待说明（2026-11-06 盘点）"
     agents: []
-    repeat: "unclear: 664"
+    repeat: idempotent # installed at the latest content already: a no-op returning the current state, no new segment or version
   install_pack:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: change_plan_changed" # the install changes what its dry run shows, so the same reviewedDigest again is refused, nothing written; reviewed again, an up-to-date pack installs as a no-op. With adminProposalSegmentId the retry is refused earlier, 409 admin_proposal_segment_not_open (the segment it answered is applied)
   invalidate_fact:
     console: required
     agents: []
@@ -1090,7 +1090,7 @@ capabilities:
   upgrade_module:
     console: "none: 待说明（2026-11-06 盘点）"
     agents: []
-    repeat: "unclear: 664"
+    repeat: idempotent # installed at the latest content already: a no-op returning the current state, no new segment or version
   validate:
     console: required
     agents: [admin]

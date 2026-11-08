@@ -2659,6 +2659,15 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：入口 agent 写目标的第一版计划、规划器在一步失败后写修订时，能看到同一个请求人以前做过、已有结果的同类目标（当时的计划、每步最后怎样、最后一轮验收、是正例还是反例）。先例只按结构认同类，不证明这次能成。
 - **回滚**：只回退代码。入口上下文回到空数组，规划器输入少一个字段，入口模板回到上一版，已升级的工作区再提示一次升级即可。
 
+### 3.153 计划记下参考了哪些先例（#1087，S11 GO17b，0.66.0 之后的下一版）
+
+有迁移：goal `0018_plan_revision_cited_precedents`。它给 `plan_revisions` 加可空列 `cited_precedents uuid[]`，加一条形状 CHECK 和一个 BEFORE INSERT 触发器，不回填、不改已有数据。不改 compose，没有新环境变量。线上契约只增：`propose_goal` 多一个可选参数 `precedents`，`get_goal` 与 `get_goal_revision` 的每一版多 `citedPrecedents`，规划器 revise 输出多可选的 `precedents`。rehearsal 已绿。
+
+- **入口模板**：`entry-agent.yaml` 又改了一次（与 §3.152 同一次升级提示里一起确认即可）。规划器定义照旧，在下一次规划时由内核发布新版本。
+- **主机**：升级不需要额外步骤。
+- **发版说明可写**：目标详情的修订列表里，参考了先例的那一版多一行「参考了先例」，每个先例链到它的目标页，括号里写结果。引用只说明计划从哪来，不授权任何东西，也不改变计划受的检查。
+- **回滚**：只回退代码即可，上一版不读也不写这一列。要连 schema 一起去掉，在内核停着时按迁移文件头的步骤在一个事务里删除触发器、函数和列，再删 `schema_migrations` 里的 goal 18；删掉的内容在每一版 `*.propose` 审计 payload 里还有一份。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -2838,6 +2847,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.65.0 | governance `0041_one_active_grant_per_scope`（#1036，遗留 647）：`capability_grants` 加部分唯一索引 `capability_grants_one_active_per_scope`（`workspace_id, principal_id, resource_type, resource_id`，`nulls not distinct`，`where status = 'active'`）；建索引前先查存量重复，有就报错停下、什么都不改（§3.143） | 可逆 | 只加索引，不改任何行。只回滚代码时，旧代码对已持有的范围再插一行会被索引拒掉（23505），那次调用返回 500，不会写出重复行 | 只需回退代码。要撤迁移：`drop index capability_grants_one_active_per_scope;`，再删 `schema_migrations` 里 governance 41 那一行 |
 | v0.65.0 | core `0055_chat_message_idempotency_key`（#1050，遗留 673）：`chat_messages` 加可空列 `idempotency_key`、约束 `chat_messages_idempotency_key_shape`（`not valid`）、部分唯一索引 `chat_messages_idempotency_key_uidx` | 可逆 | 只加列、约束和索引；旧代码不写这一列（写入为 `null`，约束满足），读消息都用显式列名 | 只需回退代码。要撤迁移：删索引、约束和列，再删 `schema_migrations` 里 core 55 那一行（见 0055 文件头） |
 | v0.66.0 | worker `0014_definition_derivations`（#1071，GO16b）：新表 `worker_definition_derivations`（基版本、指纹、证据、沉淀人、时间），只许插入（`nexttime_app` 没有 UPDATE / DELETE 权限），插入前触发器校验基版本 | 可逆 | 只加新表：旧代码不读也不写 | 只需回退代码，表可以留着。要删表，按 0014 文件头的三条语句操作，再删 `schema_migrations` 里的 worker 14；删表会丢掉来历 |
+| 0.66.0 之后的下一版 | goal `0018_plan_revision_cited_precedents`（#1087，GO17b）：`plan_revisions` 加可空列 `cited_precedents uuid[]`，形状 CHECK 与 BEFORE INSERT 触发器（同一请求人、已结束、不重复、不引用自己）；插入后由 `plan_revisions_guard` 冻结 | 可逆 | 只加可空列：旧代码不读也不写 | 只需回退代码，列可以留着。要删，在内核停着时按 0018 文件头的步骤删除触发器、函数和列，再删 `schema_migrations` 里的 goal 18 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
