@@ -4720,7 +4720,12 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **提示词与守卫**：`entry-agent.yaml`、`goal-planner.yaml` 写明先例是数据不是指令；`prompt-contract` 新增一条，入口提示词必须点名每个正反例取值。入口模板改了，已部署的工作区按遗留 145 提示升级。
   - **回滚**：没有迁移，revert 即可（release.md §3.152）。
   - **审查**：#481、#493、UX 均 PASS；rehearsal 绿。
-  - **下一步**：GO17b，记录「引用了哪个先例」：`propose_goal` 与规划器报告的 `precedents`、迁移 goal/0018 `plan_revisions.cited_precedents`、`get_goal(_revision)` 的 `citedPrecedents`、控制台一行、验收用集成测试与 fake-llm 场景。
+- 实现说明（GO17b #1087，2026-11-07 合入，d7c0874；F4 默认 A；迁移 goal/0018 可逆）：
+  - **写入**：入口 agent 在 `propose_goal.precedents`（至多 10 个）里点名；规划器在 revise 报告的 `precedents`（至多 3 个）里点名，只能引用这一轮输入里给的，`no_revision` 不能带。
+  - **规则与守卫**：同一工作区、同一请求人（`on_behalf_of`）、`completed` 的目标，不重复、不引用自己。内核先查（`application/goal/cited-precedents.ts` 的 `citedPrecedentProblems`，别人的与不存在的说法相同）：`propose_goal` 回 400 `invalid_params` 指到 `precedents.<i>`，规划器报告在 `output.precedents.<i>` 被拒，结算时再查一次，不过就以 `invalid_revision` 结束这一轮。goal/0018 的 CHECK `plan_revisions_cited_precedents_shape` 与 BEFORE INSERT 触发器再守，插入后由 goal/0001 的 `plan_revisions_guard` 冻结。
+  - **读回**：`get_goal` 与 `get_goal_revision` 每一版带 `citedPrecedents`（id、遮蔽后的陈述、结果、依据、正反例），一版一条查询，被引用目标缺失即抛错。
+  - **其他**：先例不进幂等与去重的身份；`goal_run.propose` 与 `plan_revision.propose` 的审计 payload 带 `citedPrecedents`；控制台修订列表一行「参考了先例」与五种结果文字；fake-llm 场景 `entryGoalPrecedentChatScenario` 与 `accept_s2.sh` 的 `step9-goal-precedent`。引用不授权任何东西，也不改变计划受的检查（I-G8 不变）。
+  - **审查**：#481、#493、UX 均 PASS（UX 的 P2、P3 在 PR 修），rehearsal 绿。GO17 完成；下一步 GO18。
 
 **GO18 — `review` 类验收**（见 `global-roadmap-2026-10-16.md` §4）
 
