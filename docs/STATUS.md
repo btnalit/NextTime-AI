@@ -5,7 +5,7 @@
 > 拆解与实现说明在 `development-tasks.md`，评估在 `retrospective-*.md` / `code-review-*.md`，
 > 本文只链接不复制。与代码冲突时以代码为准，并修正本文。
 
-最后更新：2026-11-08（**S11 GO17 完成**（GO17a #1080、GO17b #1087）：写计划前能看到请求人以前的同类目标，计划记下参考了哪些；一个可逆迁移 goal/0018。遗留 664 第十四、十五批（#1089、#1090），棘轮降到 56。主机仍在 v0.63.0）。 上一版 2026-11-07（**S11 GO17a 合入**（#1080）：写计划前能看到请求人以前的同类目标；GO17b 待做。遗留 664 第十到第十三批（#1082–#1085），棘轮降到 61。登记遗留 688、689、690。主机仍在 v0.63.0）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
+最后更新：2026-11-08（遗留 690 关闭（#1091）：授了门的 service Principal 能用 `request_action` 了。S11 GO17 已完成（#1080、#1087），下一步发 v0.67.0。主机仍在 v0.63.0）。 上一版 2026-11-08（**S11 GO17 完成**（GO17a #1080、GO17b #1087）：写计划前能看到请求人以前的同类目标，计划记下参考了哪些；一个可逆迁移 goal/0018。遗留 664 第十四、十五批（#1089、#1090），棘轮降到 56。主机仍在 v0.63.0）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
 
 ## 1. 入口指引
 
@@ -415,6 +415,7 @@
 | 2026-11-07 | 遗留 664 第十四批合入（#1089，测试守门人，a08254a，只改能力矩阵与内核集成测试）：`observe_operation`、`submit_observations` 声明为 `repeats`，同一个 Activity 里重复收窗另有用例断言 `idempotent`；`ratchet.repeat_unclear` 61 → 59。#493 首轮指出收窗那条路径没有覆盖，作者补上配方后复审 PASS；无新遗留 | #1089 |
 | 2026-11-07 | **S11 GO17b 合入，GO17 完成**（#1087，内核作者，d7c0874）：入口 agent 提议目标（`propose_goal.precedents`，至多 10 个）、规划器提修订（revise 的 `precedents`，至多 3 个，只能引用输入里给的）时可以点名参考的先例；只能引用同一请求人已结束的目标，不重复、不引用自己，内核先查，迁移 goal/0018 的 CHECK 与插入触发器再守，插入后不变。`get_goal(_revision)` 每一版带 `citedPrecedents`；控制台目标详情显示「参考了先例」。fake-llm 场景与 `accept_s2.sh` 的 `step9-goal-precedent` 覆盖入口这条路。#481、#493、UX PASS（UX 的一条 P2、一条 P3 在 PR 里修掉），rehearsal 绿，CI 全绿（release.md §3.153） | #1087 |
 | 2026-11-08 | 遗留 664 第十五批合入（#1090，测试守门人，edfe7fe，只改能力矩阵与内核集成测试）：`install_module`、`upgrade_module` 声明为 `idempotent`，`install_pack` 声明为 `conflict: change_plan_changed`（带 `adminProposalSegmentId` 时重试先得到 409 `admin_proposal_segment_not_open`，断言补进 pack-install-proposals 测试）；`ratchet.repeat_unclear` 59 → 56。#493 复审 PASS，判定响应丢失后重试回 409 可以接受，不登记遗留 | #1090 |
+| 2026-11-08 | 遗留 690 关闭（#1091，内核作者，f5fce7a，没有迁移）：`issue_service_handle` 与 CLI 签发 service Handle 时，按协调者定的方案 A 填入这个 Principal 当前有效的门，只在带了会用门的能力时才带；调用时 R-37 交集仍是上限，撤销 Grant 立即生效。#493 复审时指出这样一来低风险、可自动批准的操作会直接执行，协调者定为与 `issue_handle` 一致、保留自动批准（由 AgentPolicy `allowMemberAutoApproveLow` 控制），文档与测试已补。新集成测试 6 例；#493 复审 PASS，CI 全绿（release.md §3.154） | #1091 |
 | 2026-10-16 | 控制台文案第二批合入（#628，25bfdfe，无迁移，只改控制台，未发版；遗留 335、359、360、361、362、363 关闭）：对话输入框因 U+0000 被拒后，提示旁有「移除看不见的字符」按钮，移除后消息不会自动发出（335）；清除预览与审计资源类型统一为「动作请求」「授权」（359）；下一步文案里的 builder 改为「构建者」（360）；错误文案与成员页统一为「最后一位有效的所有者」「人类用户」，capability 名称为「API key 轮换」（i18n 守卫不允许中文短标签以英文结尾）（361）；服务凭证表单输入时就提示保留名规则（362）；640px 以下对话页头部改为两行（363）。另含一个只改测试的提交：旅程③窄屏用例按 Escape 后先等抽屉关上再点下一行（#625 种子行排到第一位后暴露的时序问题）。只改控制台，不需要内核审查（协调线程定）；UX 验收首轮 1 条 P2（390 宽度错误条被按钮挤窄）在本 PR 内修好，复验 PASS（`console-ux/acceptance-628.md`），CI 全绿合入；无主机动作 | PR #628 |
 
 ### 2.2 验收证明了什么，没证明什么
@@ -1057,7 +1058,7 @@
 | 687 | 平台管理员把成员「移出」工作区后无法撤回。移出只是停用 principal；加入下拉会排除这个工作区（`add_membership` 判为 `already_member`）；能力矩阵里也没有恢复成员资格或启用 principal 的能力，所以误移出的用户回不到这个工作区。已移出的那一行还能改角色、还能再点移出，两者都返回 ok，页面却没有变化。修法：内核加恢复能力，重新启用这条成员资格，要经审批或记审计；控制台把已移出的行改为只读，只留「恢复」。适合并进遗留 657 的下一批「成员资格」（UX 在 #1076 上发现的既有问题） | P2 | 内核 + 控制台 | 开放 |
 | 688 | 两个请求同时 `add_member` 同一个用户时，后到的那个撞上唯一索引 `principals_workspace_user_key`，返回 500，而不是 409 `already_member`。修法：handler 捕获这个索引上的 23505，改抛 `AlreadyMemberError`。能力矩阵 `add_member` 行尾已标 `(legacy 688)`（#493 在 #1082 上发现） | P3 | 内核 | 开放 |
 | 689 | `refresh_operation_governance` 什么都没刷新时，仍留下一条空的 `governance.refresh_operation_governance` Activity，和遗留 685 同类。修法：`startActivity` 前设 SAVEPOINT，`refreshed` 与 `revisionDrafts` 都为空时回滚到它。能力矩阵这一行从 `repeats` 改为 `idempotent` 时关闭（#493 在 #1083 上判定） | P3 | 内核 | 开放 |
-| 690 | `issue_service_handle`（service-handle-handler.ts:102）和 CLI bootstrap 签 Handle 时把 `scope.resources` 写死为 `{}`。Handle 通道上 `resolveRequesterScope` 直接取 claims 里的范围，所以 service Principal 调 `request_action` 总是被拒（`requester_scope_does_not_cover_gatekeeper`），哪怕它有门的 Grant。R-37 只修了 `issue_handle`，漏了这条路径。后果只会是拒绝、不会多给，不是安全问题。协调者 11-07 定方案 A：签发时按 Principal 当前有效的门填 `resources.gatekeeper`，调用时 R-37 的交集仍是上限。要补的测试：没有门 Grant 的 service Principal 仍被拒；Grant 撤销后，之前签的 Handle 调用被拒；service Handle 调 `request_action` 的集成测试通过时关闭（测试守门人在 #1085 探针中发现） | P3 | 内核 | 开放 |
+| 690 | `issue_service_handle`（service-handle-handler.ts:102）和 CLI bootstrap 签 Handle 时把 `scope.resources` 写死为 `{}`。Handle 通道上 `resolveRequesterScope` 直接取 claims 里的范围，所以 service Principal 调 `request_action` 总是被拒（`requester_scope_does_not_cover_gatekeeper`），哪怕它有门的 Grant。R-37 只修了 `issue_handle`，漏了这条路径。后果只会是拒绝、不会多给，不是安全问题。协调者 11-07 定方案 A：签发时按 Principal 当前有效的门填 `resources.gatekeeper`，调用时 R-37 的交集仍是上限。要补的测试：没有门 Grant 的 service Principal 仍被拒；Grant 撤销后，之前签的 Handle 调用被拒；service Handle 调 `request_action` 的集成测试通过时关闭（测试守门人在 #1085 探针中发现） | P3 | 内核 | 已关闭（#1091，f5fce7a） |
 
 ## 5. 更新规则
 
