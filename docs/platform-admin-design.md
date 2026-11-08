@@ -201,8 +201,11 @@ service。"系统接入"页变为从平台集成目录**启用**门实例（管�
   Handle，替代 `issue-service-handle` CLI，本设计把它搬进页面）；集成页"外部运行时"标签只做跨工作区盘点
   与吊销。
   签发时 Handle 带上这个 service Principal 自己的门（遗留 690，与 `issue_handle` 同一规则：它的门 Grant，
-  受 AgentPolicy 限制；只在带了会用到门的能力时才带）：先在「系统与授权」给它授门，外部运行时才能经审批调
-  `request_action`；每次调用仍只保留它当时能用的门，之后撤销的 Grant 对已签的 Handle 立即生效。
+  受 AgentPolicy 限制；只在带了会用到门的能力时才带）：先在「系统与授权」给它授门，外部运行时才能对这些门调
+  `request_action`。请求与其他成员的一样判定：要审批的操作等人批准；低风险、可自动批准的操作在默认 AgentPolicy
+  下直接 `auto_approved` 并执行，不经人；owner 关掉 AgentPolicy 的 `allowMemberAutoApproveLow` 后，这类操作也
+  改为等人批准。每次调用仍只保留它当时能用的门（R-37）：对非 owner 的 service Principal，之后撤销的 Grant 对已签
+  的 Handle 立即生效。
 
 ### 6.4 模块（领域包、Worker 模板、Skill）
 

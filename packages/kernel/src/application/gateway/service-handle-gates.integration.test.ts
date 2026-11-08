@@ -8,6 +8,7 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
 import type {
   TaskSpawnInput,
   TaskSpawnOutcome,
@@ -15,6 +16,7 @@ import type {
   TaskSupervisorStatus,
 } from '../../adapters/supervisor-client/index.js';
 import { setAgentPolicy } from '../../governance/agent-profile/index.js';
+import { ApprovalDrainer } from '../../governance/approval/index.js';
 import {
   HANDLE_SIGNING_ALG,
   grantCapability,
@@ -27,9 +29,10 @@ import {
 } from '../../governance/gatekeepers/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { configureTaskRuntime } from '../task/index.js';
+import { createAdminWithTransaction, createGatekeeperActionExecutor } from './action-executor.js';
 import { dispatchCapability } from './dispatch.js';
 import { authenticateHandle } from './handle-auth.js';
-import { ActionRequestDeniedError } from './request-action-handler.js';
+import { ActionRequestDeniedError, setRequestActionDeps } from './request-action-handler.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
 /**
@@ -41,9 +44,11 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * `request_action` was denied (`requester_scope_does_not_cover_gatekeeper`). What the Handle
  * carries is a snapshot: each call still keeps only the gates the Principal may act on then (R-37).
  *
- * The Operation waits for a person's approval (`auto_approvable: false`, `await_decision: false`),
- * so a request that passes the scope check stops at `pending_approval` and no gate is ever called
- * (its simulation, decoration on the card, fails on the unreachable endpoint and is recorded so).
+ * Once through the scope check a request is decided as anyone's is. `host.restart` waits for a
+ * person (`auto_approvable: false`, `await_decision: false`), so it stops at `pending_approval`;
+ * `host.check` is low and auto-approvable, so under the default AgentPolicy it runs with no person
+ * (`allowMemberAutoApproveLow`, the owner's switch) — #493 on #1091. The gate is a stand-in that
+ * records each `apply` and answers each `simulate`; nothing leaves the process.
  */
 
 class UnusedSupervisorClient implements TaskSupervisorClientPort {
@@ -73,6 +78,35 @@ const RESTART_OP: Operation = {
   await_decision: false,
   reads: [],
   writes: [],
+};
+
+const CHECK_OP: Operation = {
+  ...RESTART_OP,
+  name: 'host.check',
+  binding: { kind: 'http', method: 'POST', path: '/check' },
+  blast_radius: 'low',
+  reversibility: true,
+  auto_approvable: true,
+};
+
+/** The gates' far side: answers a `simulate`, records an `apply` (by ActionRequest id). */
+const applied: string[] = [];
+const unused = async (): Promise<never> => {
+  throw new Error('legacy 690 tests only simulate and apply');
+};
+const recordingGate: GatekeeperClient = {
+  describeOperations: unused,
+  observe: unused,
+  simulate: async (_target, input) => ({ description: `would run ${input.operation}` }),
+  apply: async (_target, input) => {
+    applied.push(input.actionRequestId);
+    return { replayed: false };
+  },
+  lookupApply: unused,
+  revert: unused,
+  health: unused,
+  storeConnectedAccount: unused,
+  deleteConnectedAccount: unused,
 };
 
 describe.runIf(DATABASE_URL !== undefined)(
@@ -136,11 +170,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
         await importManifest(client, workspaceId, {
           gatekeeperId: id,
-          operations: [RESTART_OP],
+          operations: [RESTART_OP, CHECK_OP],
           proposedBy: { id: ownerId, kind: 'human' },
           activityId: activity.id,
         });
         await publishOperation(client, workspaceId, { gatekeeperId: id, name: RESTART_OP.name });
+        await publishOperation(client, workspaceId, { gatekeeperId: id, name: CHECK_OP.name });
         return id;
       });
     }
@@ -176,13 +211,15 @@ describe.runIf(DATABASE_URL !== undefined)(
       return { channel: 'handle', claims };
     }
 
-    function restart(caller: ResolvedCaller, gate: string, host: string) {
+    function act(operation: Operation, caller: ResolvedCaller, gate: string, host: string) {
       return dispatchCapability({ pool }, caller, 'request_action', {
         gatekeeperId: gate,
-        operation: RESTART_OP.name,
+        operation: operation.name,
         params: { host },
       }) as Promise<{ id: string; status: string }>;
     }
+    const restart = (caller: ResolvedCaller, gate: string, host: string) =>
+      act(RESTART_OP, caller, gate, host);
 
     async function requestsOf(principalId: string): Promise<string[]> {
       const result = await admin((client) =>
@@ -204,6 +241,17 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       handlePublicKey = publicKey;
       configureTaskRuntime({ pool, privateKey, supervisorClient: new UnusedSupervisorClient() });
+      const adminWithTransaction = createAdminWithTransaction(pool);
+      setRequestActionDeps({
+        gatekeeperClient: recordingGate,
+        drainer: new ApprovalDrainer({
+          executor: createGatekeeperActionExecutor({
+            gatekeeperClient: recordingGate,
+            withTransaction: adminWithTransaction,
+          }),
+          withTransaction: adminWithTransaction,
+        }),
+      });
 
       workspaceId = randomUUID();
       ownerId = randomUUID();
@@ -289,6 +337,37 @@ describe.runIf(DATABASE_URL !== undefined)(
           setAgentPolicy(client, workspaceId, ownerId, { allowedGatekeepers: [] }),
         );
       }
+    });
+
+    it('on a gate it was granted, a low auto-approvable Operation runs with no person under the default AgentPolicy, and waits for one once the owner turns that off', async () => {
+      // A gate of its own: the requests the earlier cases left waiting on the shared gate would
+      // hold an approved one back (the drainer's per-gate order), which is not what this shows.
+      const gate = await registerGate('legacy-690-check-gate');
+      const serviceId = await insertPrincipal('service', 'member');
+      await grantGate(serviceId, gate);
+      const caller = await asHandle(await issue(serviceId, ['request_action']));
+
+      const ran = await act(CHECK_OP, caller, gate, 'web-4');
+      expect(ran.status).toBe('executed');
+      expect(applied).toContain(ran.id);
+
+      const setAutoApproveLow = (allowMemberAutoApproveLow: boolean) =>
+        withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          setAgentPolicy(client, workspaceId, ownerId, { allowMemberAutoApproveLow }),
+        );
+      await setAutoApproveLow(false);
+      try {
+        const held = await act(CHECK_OP, caller, gate, 'web-5');
+        expect(held.status).toBe('pending_approval');
+        expect(applied).not.toContain(held.id);
+      } finally {
+        await setAutoApproveLow(true);
+      }
+      expect(await requestsOf(serviceId)).toEqual(['executed', 'pending_approval']);
+      // The medium one never ran: it waits for a person under either setting.
+      const restarted = await restart(caller, gate, 'web-6');
+      expect(restarted.status).toBe('pending_approval');
+      expect(applied).not.toContain(restarted.id);
     });
 
     it('a Handle with no capability that acts on a gate carries none, granted or not', async () => {
