@@ -2668,6 +2668,15 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：目标详情的修订列表里，参考了先例的那一版多一行「参考了先例」，每个先例链到它的目标页，括号里写结果。引用只说明计划从哪来，不授权任何东西，也不改变计划受的检查。
 - **回滚**：只回退代码即可，上一版不读也不写这一列。要连 schema 一起去掉，在内核停着时按迁移文件头的步骤在一个事务里删除触发器、函数和列，再删 `schema_migrations` 里的 goal 18；删掉的内容在每一版 `*.propose` 审计 payload 里还有一份。
 
+### 3.154 service Handle 带上它的 Principal 被授的门（#1091，遗留 690，0.66.0 之后的下一版）
+
+没有迁移，不改 compose，没有新环境变量，线上契约不变（只改了 `issue_service_handle` 的能力描述）。
+
+- **行为变化**：`issue_service_handle` 与 CLI `issue-service-handle` 签发时，按 `issue_handle` 的规则填 `resources.gatekeeper`：取这个 service Principal 当前有效的门（门 Grant 减去 AgentProfile 排除的，再受 AgentPolicy 上限约束），只在 Handle 带了会用门的能力（`request_action`、`invoke_worker`、`list_allowed_operations`）时才带。调用时 R-37 的交集照旧是上限，签发后撤销的 Grant 立即生效。
+- **要告诉所有者的**：授了门的 service Principal 用 `request_action` 时，和其他成员一样判定：要审批的等人批准；低风险、可自动批准的操作在默认 AgentPolicy 下直接执行，所有者可以关掉 AgentPolicy 的 `allowMemberAutoApproveLow`，让这类操作也等人批准。升级前就签出的 service Handle 仍是空门集，要用 `request_action` 得重新签一个。
+- **发版说明可写**：给 service Principal 授了门之后，外部运行时用它的 Handle 调 `request_action` 不再总是被拒。
+- **回滚**：只回退代码。已签出的带门 Handle 回退后仍有效，并继续受每次调用时的 R-37 交集约束；要收回，在集成页「外部运行时」吊销。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
