@@ -49,6 +49,19 @@ export const MAX_GOAL_IDEMPOTENCY_KEY_CHARS = 200;
  *  instead of opening another round. A platform constant, not a budget field. */
 export const GOAL_PLANNER_NO_PROGRESS_LIMIT = 3;
 
+/** S11 GO18: review checks one plan carries at most — each starts a reviewer Worker. */
+export const MAX_PLAN_REVIEW_CHECKS = 4;
+/** S11 GO18: steps one review check reviews at most (each one's output, and its files). */
+export const MAX_REVIEW_SUBJECTS = 8;
+/** S11 GO18: criteria one review check scores at most. */
+export const MAX_REVIEW_CRITERIA = 8;
+/** S11 GO18: the longest description of what a criterion asks for. */
+export const MAX_REVIEW_CRITERION_CHARS = 1000;
+/** S11 GO18: the highest weight a criterion carries (the lowest is 1). */
+export const REVIEW_WEIGHT_MAX = 5;
+/** S11 GO18: the highest score a reviewer gives a criterion (the lowest is 0). */
+export const REVIEW_SCORE_MAX = 4;
+
 /** S11 GO5d-1: input bindings one step carries at most. */
 export const MAX_STEP_BINDINGS = 16;
 /** S11 GO14: earlier steps whose files one step reads, at most — each is one read-only mount. */
@@ -258,6 +271,38 @@ export const PlanStepSchema = z
 
 export type PlanStep = z.infer<typeof PlanStepSchema>;
 
+/** S11 GO18: one thing a review check scores — what good looks like, and how much it counts. */
+export const ReviewCriterionSchema = z
+  .object({
+    key: StepKeySchema,
+    description: z.string().max(MAX_REVIEW_CRITERION_CHARS).regex(/\S/, 'says nothing to score'),
+    weight: z.number().int().min(1).max(REVIEW_WEIGHT_MAX),
+  })
+  .strict();
+export type ReviewCriterion = z.infer<typeof ReviewCriterionSchema>;
+
+/**
+ * S11 GO18 (plan §4.6; `s11-w4/go18-default-plan.md`): an independent review of what the steps
+ * named in `subjects` produced — their accepted output and their files — against `criteria`. The
+ * reviewer Worker the platform starts scores each criterion 0–{@link REVIEW_SCORE_MAX} (or says it
+ * cannot); the check passes when the weighted points reach `passAt` percent of the most it could
+ * score (`goal-review.ts` `reviewDerivation`, the kernel's arithmetic, never the reviewer's word).
+ * `model`: the model it reviews with — by default the requester's, like the goal planner's. The
+ * goal's own acceptance only (a step's never waits on a review), and the criteria are never shown
+ * to the steps' Workers or the goal planner (the kernel's `application/goal/review.ts`).
+ */
+export const ReviewCheckSchema = z
+  .object({
+    kind: z.literal('review'),
+    key: StepKeySchema,
+    subjects: z.array(StepKeySchema).min(1).max(MAX_REVIEW_SUBJECTS),
+    criteria: z.array(ReviewCriterionSchema).min(1).max(MAX_REVIEW_CRITERIA),
+    passAt: z.number().int().min(1).max(100),
+    model: WorkerSpecRefSchema.optional(),
+  })
+  .strict();
+export type ReviewCheck = z.infer<typeof ReviewCheckSchema>;
+
 /** S11 GO4a: one acceptance check of the plan. */
 export const AcceptanceCheckSchema = z.discriminatedUnion('kind', [
   ObservePredicateCheckSchema,
@@ -270,6 +315,7 @@ export const AcceptanceCheckSchema = z.discriminatedUnion('kind', [
       prompt: z.string().max(MAX_ACCEPTANCE_PROMPT_CHARS).regex(/\S/, 'says nothing to confirm'),
     })
     .strict(),
+  ReviewCheckSchema,
 ]);
 
 export type AcceptanceCheck = z.infer<typeof AcceptanceCheckSchema>;
@@ -316,6 +362,13 @@ export type StepTrialDraftInfo = z.infer<typeof StepTrialDraftInfoSchema>;
  * What a person confirming a plan should know that does not stop it:
  *   - `requester_confirm_only` (the kernel's `planHints`) — no check the platform makes, so the
  *     goal is achieved only on the requester's word;
+ *   - S11 GO18, `review_only` (the kernel's `planHints`) — no check the platform makes and no
+ *     confirmation asked: the goal is achieved once its reviews pass, on a model's scores alone
+ *     (`reviewer_assessed`);
+ *   - S11 GO18, `review_and_confirm` (the kernel's `planHints`) — no check the platform makes, and
+ *     reviews besides the requester's confirmation: the goal is achieved only when its reviews
+ *     pass and the requester then confirms it (a review below its line fails the goal, whatever
+ *     the requester would say);
  *   - S11 GO5c, the confirmation card's check of the requester's authority (the kernel's
  *     `planAuthorityHints`, worked out when it is read, for a proposed run — authority changes):
  *     what would stop a step's first attempt from starting, the goal then pausing for a person
@@ -366,12 +419,15 @@ export type StepTrialDraftInfo = z.infer<typeof StepTrialDraftInfoSchema>;
  *       - `step_input_mismatch` — a step with no `bindings` whose `input` does not match the
  *         Worker's `inputSchema`; `inputProblems` names the places (`input.…`, never the values).
  *     Read from the step's pinned WorkerDefinition version, which does not change.
- *   Where they appear: every hint but `requester_confirm_only` is on the proposal of a run still
- *   proposed and — S11 GO8a — on the current revision of a paused run, for its steps that have not
- *   started an attempt, so a pause can say which step would not start and why.
+ *   Where they appear: every hint but `requester_confirm_only`, `review_only` and
+ *   `review_and_confirm` is on the proposal of a run still proposed and — S11 GO8a — on the current revision of a paused run, for
+ *   its steps that have not started an attempt, so a pause can say which step would not start and
+ *   why.
  */
 export const PLAN_HINT_CODE_VALUES = [
   'requester_confirm_only',
+  'review_only',
+  'review_and_confirm',
   'requester_cannot_start_workers',
   'step_gate_not_held',
   'step_capability_not_held',
@@ -443,10 +499,13 @@ export type PlanHintAdmission = 'refused' | 'needs_approval' | 'note' | 'plan';
  *     ({@link stepAdmissionOf});
  *   - `note` — the step starts as the plan says: advice about its Worker's contract, or what
  *     happens once it runs (a gate refuses calls for want of the requester's account);
- *   - `plan` — about the plan, not a step's start (`requester_confirm_only`).
+ *   - `plan` — about the plan, not a step's start (`requester_confirm_only`, `review_only`,
+ *     `review_and_confirm`).
  */
 export const PLAN_HINT_ADMISSION = {
   requester_confirm_only: 'plan',
+  review_only: 'plan',
+  review_and_confirm: 'plan',
   requester_cannot_start_workers: 'refused',
   step_gate_not_held: 'refused',
   step_capability_not_held: 'refused',

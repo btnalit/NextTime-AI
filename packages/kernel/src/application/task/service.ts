@@ -38,6 +38,7 @@ import {
 } from './handle-mint.js';
 import { failTaskRow, readTaskRow, readWorkerRunRow, terminateWorkerRunRow } from './lifecycle.js';
 import { findGoalPlannerFamily } from './planning-task.js';
+import { findGoalReviewerFamily } from './review-task.js';
 import { type TaskRuntimeDeps, getConfiguredTaskRuntime } from './runtime.js';
 import { recordTaskTransition } from './transition-log.js';
 import {
@@ -128,9 +129,15 @@ export function taskVisibleTo(
   workerRuns: readonly WorkerRunRow[],
 ): boolean {
   if (viewer.seesEveryTask) return true;
-  if (task.onBehalfOf === viewer.principalId) return true;
   const sessionId = viewer.sessionId;
-  return sessionId !== undefined && workerRuns.some((run) => run.sessionId === sessionId);
+  const ownRun = sessionId !== undefined && workerRuns.some((run) => run.sessionId === sessionId);
+  // S11 GO18 (F5, I-E4 「对人透明、对 agent 封闭」): a goal reviewer's Task — the criteria in its
+  // input, the scores in its report — is closed to every agent but the reviewer: on the handle
+  // channel only its own WorkerRun's Handle reads it, never another Handle acting for the
+  // requester (a step Worker of the same goal acts for them too). People read it as before.
+  if (task.purpose === 'review' && sessionId !== undefined) return ownRun;
+  if (task.onBehalfOf === viewer.principalId) return true;
+  return ownRun;
 }
 
 /** `get_task`: `getTaskWithWorkerRuns` narrowed by `taskVisibleTo`. A Task the viewer may not see
@@ -676,6 +683,7 @@ export async function findWorkers(
   // Nothing asked for, nothing read — and so no reason for an empty result either.
   if (limit !== undefined && limit <= 0) return { items: [] };
   let plannerFamily: string | null | undefined;
+  let reviewerFamily: string | null | undefined;
   // S11 GO13: why a match was not usable, counted as the candidates are read — exact when the
   // result is empty (every candidate was read); the planner's family, an entry definition and a
   // version no longer published are not matches at all.
@@ -697,6 +705,9 @@ export async function findWorkers(
       // a workspace owner's too (review #488 on #864).
       plannerFamily ??= await findGoalPlannerFamily(client, workspaceId);
       if (plannerFamily !== null && match.definitionId === plannerFamily) return undefined;
+      // S11 GO18: so is the goal reviewer's, run only for a review check (`review-task.ts`).
+      reviewerFamily ??= await findGoalReviewerFamily(client, workspaceId);
+      if (reviewerFamily !== null && match.definitionId === reviewerFamily) return undefined;
       if (!isWorkerDefinitionEnabledForCaller(caller, match.definitionId)) {
         excludedByProfile += 1;
         return undefined;

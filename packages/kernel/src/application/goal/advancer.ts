@@ -9,7 +9,12 @@ import { getActionRequest, shownAuditReason } from '../../governance/approval/in
 import { SYSTEM_ACTOR_PLACEHOLDER } from '../../governance/gatekeepers/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import type { DomainEvent } from '../../substrate/outbox/index.js';
-import { readTaskGoalStep, readTaskPlanningRound, terminateTaskWith } from '../task/index.js';
+import {
+  readTaskGoalStep,
+  readTaskPlanningRound,
+  readTaskReview,
+  terminateTaskWith,
+} from '../task/index.js';
 import { type GoalAdvanceDeps, type GoalAdvanceTarget, advanceGoalRun } from './advance.js';
 import { readCancelLeftovers } from './cancelling.js';
 import { actionDisposition } from './disposition.js';
@@ -235,6 +240,9 @@ export async function recordAdvanceFailure(
  *       is not counted: their settlement sets the run due (`acceptance-check.ts`).
  *   (h) a planning round (S11 GO9a, `planner.ts`) whose Task ended while the round still runs —
  *       to settle — or whose Task still runs after the round stopped running — to terminate.
+ *   (i) a review check (S11 GO18, `review.ts`) whose reviewer Task ended while the check is still
+ *       pending — to settle — or whose reviewer Task still runs after the check stopped waiting on
+ *       it (the run left `verifying`) — to terminate.
  * Returns how many runs it set due. A `waiting(reconcile)` step is not counted: its GoalRun is
  * paused for a person, whose finding sets the run due in its own transaction (`reconcile.ts`,
  * GO3c) — or, while the platform's check of it is pending, keeps running, and the check's
@@ -319,6 +327,15 @@ export async function markReconcileDue(
                            on t.workspace_id = pr.workspace_id and t.planning_round_id = pr.id
                         where pr.workspace_id = c.workspace_id and pr.goal_run_id = c.id
                           and (pr.status = 'running')
+                              = (t.status in ('completed', 'failed', 'cancelled')))
+                     or exists (
+                       select 1 from goal_acceptance_checks ac
+                         join tasks t
+                           on t.workspace_id = ac.workspace_id and t.goal_run_id = ac.goal_run_id
+                          and t.review_round = ac.round and t.review_check_key = ac.check_key
+                        where ac.workspace_id = c.workspace_id and ac.goal_run_id = c.id
+                          and ac.kind = 'review'
+                          and (ac.status = 'pending')
                               = (t.status in ('completed', 'failed', 'cancelled')))
                    )
                    for no key update skip locked)`,
@@ -504,6 +521,8 @@ export function registerGoalWakeConsumer(
         (await readTaskGoalStep(client, event.workspaceId, event.taskId))?.goalRunId ??
         // S11 GO9a: a planning Task's end settles its round.
         (await readTaskPlanningRound(client, event.workspaceId, event.taskId))?.goalRunId ??
+        // S11 GO18: a reviewer Task's end settles its review.
+        (await readTaskReview(client, event.workspaceId, event.taskId))?.goalRunId ??
         null,
     );
   });

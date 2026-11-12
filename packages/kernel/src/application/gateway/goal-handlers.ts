@@ -17,6 +17,7 @@ import {
   type GoalOperationResultWire,
   type GoalPlan,
   type GoalPlannerMode,
+  type GoalReviewWire,
   type GoalRunStatus,
   type GoalRunWire,
   type ObjectiveOutcome,
@@ -43,6 +44,7 @@ import {
   type GoalAcceptanceRoundView,
   type GoalAcceptanceView,
   type GoalControlActor,
+  type GoalReviewView,
   type GoalRunBudget,
   type GoalRunDetail,
   type GoalRunStepView,
@@ -344,6 +346,7 @@ function toWireAcceptanceCheck(check: GoalAcceptanceCheckView): GoalAcceptanceCh
     check: shownFreeTextIn(check.check) as typeof check.check,
     fact: shownFreeTextIn(check.fact) as typeof check.fact,
     prompt: shownFreeText(check.prompt),
+    review: toWireReview(check.review),
     attempts: check.attempts,
     lastError: check.lastError,
     observationId: check.observationId,
@@ -352,6 +355,42 @@ function toWireAcceptanceCheck(check: GoalAcceptanceCheckView): GoalAcceptanceCh
     nextAttemptAt: iso(check.nextAttemptAt),
     settledAt: iso(check.settledAt),
     overridden: check.overridden,
+  };
+}
+
+/** S11 GO18: a review check — the criteria a person wrote and the reasons and comment the reviewer
+ *  wrote read like the plan's free text (legacy 420); the derivation's numbers as recorded. */
+function toWireReview(review: GoalReviewView | null): GoalReviewWire | null {
+  if (!review) return null;
+  const { declaration, assessment } = review;
+  return {
+    subjects: [...declaration.subjects],
+    criteria: declaration.criteria.map((criterion) => ({
+      ...criterion,
+      description: shownFreeText(criterion.description),
+    })),
+    passAt: declaration.passAt,
+    model: declaration.model ?? null,
+    taskId: review.taskId,
+    assessment: assessment
+      ? {
+          reviewTaskId: assessment.reviewTaskId,
+          reviewerModel: assessment.reviewerModel,
+          executorModels: assessment.executorModels.map((executor) => ({ ...executor })),
+          sameModel: assessment.sameModel,
+          lines: assessment.derivation.lines.map((line) => ({
+            ...line,
+            reason: shownFreeText(line.reason),
+          })),
+          comment: shownFreeText(assessment.comment),
+          points: assessment.derivation.points,
+          maxPoints: assessment.derivation.maxPoints,
+          passAt: assessment.derivation.passAt,
+          unassessed: [...assessment.derivation.unassessed],
+          verdict: assessment.derivation.verdict,
+          createdAt: assessment.createdAt.toISOString(),
+        }
+      : null,
   };
 }
 

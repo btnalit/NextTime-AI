@@ -237,6 +237,12 @@ export const PROPOSE_GOAL_SCHEMA_WORDS = new Set([
   'requester_confirm',
   'idempotencyKey',
   'precedents',
+  // S11 GO18: a review check and its fields.
+  'review',
+  'subjects',
+  'description',
+  'weight',
+  'passAt',
 ]);
 
 export const PROPOSE_GOAL_REFUSAL_CODES = new Set([
@@ -657,6 +663,18 @@ const PROMPT_FILES = [
   { path: 'ontology/ops-runner.yaml', toolSetKey: 'workerTools', includeResultContractKeys: true },
   // S11 AA4c-2: the admin agent's system prompt (only a prompt — no WorkerDefinition holds it).
   { path: 'ontology/admin-agent.yaml', toolSetKey: 'adminTools', includeResultContractKeys: false },
+  // S11 GO18 (#481 on #1102): the kernel's own Workers run in worker mode too — the goal planner
+  // and the goal reviewer name its tools, never a result-contract field they may not write.
+  {
+    path: 'ontology/goal-planner.yaml',
+    toolSetKey: 'workerTools',
+    includeResultContractKeys: false,
+  },
+  {
+    path: 'ontology/goal-reviewer.yaml',
+    toolSetKey: 'workerTools',
+    includeResultContractKeys: false,
+  },
 ];
 
 export async function main() {

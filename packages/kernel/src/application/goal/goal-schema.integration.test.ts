@@ -1057,7 +1057,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           params,
         );
       const NOT_BY_CHECK =
-        /achieved by check needs every acceptance check of the latest round passed on the current plan, at least one of them observed by the platform \(I-G5\)/;
+        /achieved by check needs every acceptance check of the latest round passed on the current plan, at least one of them observed by the platform and none of them a review \(I-G5\)/;
       const onWord = (goalRunId: string, decisionId: string | null, outcome = 'achieved') =>
         setGoal(
           goalRunId,
@@ -1067,7 +1067,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const NOT_ON_WORD =
         /an outcome on the requester's word rests on their own decision saying so \(I-G5\)/;
 
-      it('achieves a run by check only out of verifying, with no person’s decision, once every check of its latest round passed — one of them an observation', async () => {
+      it('achieves a run by check only out of verifying, with no person’s decision, once every check of its latest round passed — one of them an observation, none of them a review (goal/0019’s guard, S11 GO18)', async () => {
         const goalRunId = await runningGoal(
           ['A', 'B'],
           [observeCheck('up'), observeCheck('healthy')],
@@ -1119,7 +1119,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         await expect(byCheck(paused)).rejects.toThrow(/only verification achieves a goal by check/);
       });
 
-      it('a round with only the requester’s confirmation passed does not achieve a run by check; their decision does, on their word', async () => {
+      it('a round with only the requester’s confirmation passed does not achieve a run by check; their decision does, on their word (goal/0019’s guard, S11 GO18)', async () => {
         // A plan that declares no check: the round is the requester's confirmation of the goal.
         const goalRunId = await runningGoal(['A', 'B'], []);
         await setGoal(goalRunId, "status = 'verifying'");
@@ -1147,7 +1147,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
       });
 
-      it('a round passed on an earlier plan does not achieve the run once a revision took effect', async () => {
+      it('a round passed on an earlier plan does not achieve the run once a revision took effect (goal/0019’s guard, S11 GO18)', async () => {
         const goalRunId = await runningGoal();
         await setGoal(goalRunId, "status = 'verifying'");
         await passRound(goalRunId);
@@ -1161,7 +1161,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         await byCheck(goalRunId);
       });
 
-      it('an outcome on the requester’s word rests on their own approved decision naming this run and that outcome — never an agent’s, another run’s or another outcome’s', async () => {
+      it('an outcome on the requester’s word rests on their own approved decision naming this run and that outcome — never an agent’s, another run’s or another outcome’s; a reviewer_assessed outcome only out of verifying (goal/0019’s guard, S11 GO18)', async () => {
         const agentId = randomUUID();
         await withWorkspace(
           pool,
@@ -1195,12 +1195,13 @@ describe.runIf(DATABASE_URL !== undefined)(
         await expect(
           setGoal(goalRunId, 'outcome_decision_id = $3', [await decision(said())]),
         ).rejects.toThrow(/the outcome decision is written with the outcome, once/);
+        // S11 GO18 (goal/0019): a reviewer_assessed outcome is recorded now — by verification only.
         await expect(
           setGoal(
             goalRunId,
             "status = 'completed', outcome = 'achieved', outcome_basis = 'reviewer_assessed', ended_at = now()",
           ),
-        ).rejects.toThrow(/a reviewer_assessed outcome is not recorded yet/);
+        ).rejects.toThrow(/only verification achieves a goal on a review/);
         const word = await decision(said());
         await onWord(goalRunId, word, 'not_achieved');
         expect(await asApp((client) => getGoalRun(client, workspaceId, goalRunId))).toMatchObject({

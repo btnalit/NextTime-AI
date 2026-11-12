@@ -50,12 +50,16 @@ export const GOAL_PRECEDENT_MAX_WORKER_FILTER = 20;
 /**
  * What a precedent says about its plan:
  *
- *   - `positive`: achieved, and the platform's own checks say so (`verified_by_check`) — an
- *     achieved goal whose checks a person overrode rests on the requester's word, never on this;
+ *   - `positive`: achieved, and the platform's own checks say so — achieved by check
+ *     (`verified_by_check`), or (S11 GO18, `platformChecksPassed`) its last verification round
+ *     passed whole with at least one check the platform makes in it, whatever a review or the
+ *     requester's confirmation added on top: a stricter acceptance never makes a goal count for
+ *     less. An achieved goal whose checks a person overrode rests on the requester's word, never
+ *     on this;
  *   - `negative`: not achieved, or achieved on the requester's word over checks that did not pass
  *     (`overriddenChecks`);
- *   - `unverified`: achieved on the requester's word alone (no check the platform makes, nothing
- *     overridden) or on a review — said, not checked.
+ *   - `unverified`: achieved on the requester's word or a review with no check the platform makes
+ *     (nothing overridden) — said, not checked.
  *
  * None of them says the plan will work this time: a positive one worked on a goal like this.
  */
@@ -72,7 +76,8 @@ export function goalPrecedentPolarity(
   outcome: ObjectiveOutcome,
   basis: GoalOutcomeBasis,
   overriddenChecks: number,
+  platformChecksPassed: boolean,
 ): GoalPrecedentPolarity {
   if (outcome === 'not_achieved' || overriddenChecks > 0) return 'negative';
-  return basis === 'verified_by_check' ? 'positive' : 'unverified';
+  return basis === 'verified_by_check' || platformChecksPassed ? 'positive' : 'unverified';
 }

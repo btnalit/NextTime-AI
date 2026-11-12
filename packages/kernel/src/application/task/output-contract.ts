@@ -91,8 +91,9 @@ export class TaskOutputRejectedError extends Error {
     readonly problems: readonly OutputProblem[];
     readonly problemCount: number;
     /** What the output is held to: a goal step's output contract (the default), or — S11 GO9a —
-     *  what a goal planner's report must be (its output contract and its proposal's checks). */
-    readonly heldTo?: 'step' | 'planner';
+     *  what a goal planner's report must be (its output contract and its proposal's checks), or —
+     *  S11 GO18 — what a goal reviewer's must be (its scores, for its check's criteria). */
+    readonly heldTo?: 'step' | 'planner' | 'reviewer';
   }) {
     const listed = input.problems
       .slice(0, MAX_OUTPUT_PROBLEMS)
@@ -105,7 +106,9 @@ export class TaskOutputRejectedError extends Error {
     const contract =
       input.heldTo === 'planner'
         ? "what the goal planner's report must be"
-        : "this step's output contract";
+        : input.heldTo === 'reviewer'
+          ? "what the goal reviewer's report must be"
+          : "this step's output contract";
     super(
       `report_task_result: the output does not meet ${contract} (${input.problemCount} problem${input.problemCount === 1 ? '' : 's'}) — ${listed}${more}. Fix the output and report the result again.`,
     );

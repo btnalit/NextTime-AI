@@ -37,7 +37,7 @@ import type {
   UnresolvedGoalActionWire,
   WorkerSpec,
 } from '@nexttime/shared';
-import { GOAL_PLANNER_NO_PROGRESS_LIMIT, visibleText } from '@nexttime/shared';
+import { GOAL_PLANNER_NO_PROGRESS_LIMIT, PLAN_HINT_ADMISSION, visibleText } from '@nexttime/shared';
 import { actionLabel } from './capability-labels.js';
 import { clipMiddle, redactSensitive, shortId } from './format.js';
 import {
@@ -470,6 +470,7 @@ const CHECK_KIND: Readonly<Record<GoalAcceptanceCheckKind, readonly [string, str
   observe_absent: ['平台确认不存在', 'Platform confirms it is not there'],
   fact_predicate: ['事实判定', 'Fact check'],
   requester_confirm: ['请求人确认', 'Requester confirms'],
+  review: ['独立评审', 'Independent review'],
 };
 
 /** Legacy 454: the Procedure a goal's plan was made from — revision 1's, the only one that can be
@@ -657,6 +658,17 @@ const PLAN_HINT: Readonly<
   requester_confirm_only: () => [
     '这个计划没有平台能做的验收检查：目标是否达成只凭请求人确认。',
     'No check the platform makes: the goal is achieved only on the requester’s word.',
+  ],
+  // S11 GO18 (independent review N4): reviews alone decide.
+  review_only: () => [
+    '这个计划没有平台能做的验收检查，也不请请求人确认：评审打分过线，目标就算达成，只凭模型的打分。',
+    'No check the platform makes and no confirmation asked of the requester: the goal is achieved once its reviews pass, on a model’s scores alone.',
+  ],
+  // S11 GO18 (UX acceptance of #1102): reviews and the requester's word — a review below its line
+  // fails the goal, whatever the requester would say.
+  review_and_confirm: () => [
+    '这个计划没有平台能做的验收检查：评审打分过线、再由请求人确认，目标才算达成。',
+    'No check the platform makes: the goal is achieved only when its reviews pass and the requester then confirms it.',
   ],
   requester_cannot_start_workers: () => [
     '请求人现在不能启动 Worker（角色不允许，或已被停用）：这个计划的步骤都不会开始，目标会在第一步就停下等人处理。可以请工作区所有者在「成员与授权」查看请求人的角色和状态。',
@@ -923,10 +935,11 @@ export function isStepContractHint(hint: PlanHint): boolean {
 }
 
 /** Whether a plan hint is about the requester's authority over a step (S11 GO5c) — the steps card
- *  shows those; `requester_confirm_only`, about how the goal is verified, stays with acceptance;
- *  a contract hint (S11 GO13) is advice the steps card shows apart. */
+ *  shows those; `requester_confirm_only`, `review_only` and `review_and_confirm` (S11 GO18), about
+ *  how the goal is verified, stay with acceptance; a contract hint (S11 GO13) is advice the steps
+ *  card shows apart. */
 export function isStepAuthorityHint(hint: PlanHint): boolean {
-  return hint.code !== 'requester_confirm_only' && !isStepContractHint(hint);
+  return PLAN_HINT_ADMISSION[hint.code] !== 'plan' && !isStepContractHint(hint);
 }
 
 /** The chip a step row carries for its own authority hint. */
@@ -1448,6 +1461,13 @@ export function planCheckSentence(
       return factCheckSentence(check.fact, t, objectNames);
     case 'requester_confirm':
       return check.prompt;
+    // S11 GO18: what the review scores and its line; its criteria are on the goal's detail. The
+    // row's kind label already says 「独立评审」 (UX acceptance of #1102).
+    case 'review':
+      return t(
+        `给 ${check.subjects.join('、')} 的产出打分：${check.criteria.length} 条标准，得分达到 ${check.passAt}% 才算通过`,
+        `Scores what ${check.subjects.join(', ')} produced: ${check.criteria.length} criteria, passing at ${check.passAt}% of the points`,
+      );
   }
 }
 

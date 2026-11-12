@@ -3500,6 +3500,7 @@ function workerKey(row: Pick<WorkerDefinitionSummary, 'id' | 'version'>): string
 function workerLabel(row: WorkerDefinitionSummary, t: Translate): string {
   // UX P3-1 on #864: the platform's goal planner reads by what it is, in the reader's language.
   if (row.goalPlanner === true) return t('目标规划器', 'Goal planner');
+  if (row.goalReviewer === true) return t('目标评审器', 'Goal reviewer');
   return definitionName([row], row.id, row.version) ?? unnamedDefinitionLabel(row.kind, t);
 }
 
@@ -3814,7 +3815,13 @@ function WorkerDetailView({
   if (row.proposedBy !== undefined) {
     items.push(proposerItem(http, row.proposedBy, t, 'worker-detail-proposer'));
   }
-  const workerOrigin = draftOriginItem(row.origin, row.status, t, 'worker-detail-origin');
+  const workerOrigin = draftOriginItem(
+    row.origin,
+    row.status,
+    t,
+    'worker-detail-origin',
+    row.goalPlanner === true || row.goalReviewer === true,
+  );
   if (workerOrigin !== null) items.push(workerOrigin);
   // S11 GO16b: a Worker kept from a combination says which version and adjustments it came from,
   // on every version — the draft a reviewer publishes included.
@@ -4440,6 +4447,14 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                         {t(
                           '平台的目标规划器（不用于步骤）',
                           'The platform’s goal planner (not for steps)',
+                        )}
+                      </span>
+                    ) : null}
+                    {row.goalReviewer === true ? (
+                      <span className="chip chip-s" data-testid="worker-goal-reviewer">
+                        {t(
+                          '平台的目标评审器（不用于步骤）',
+                          'The platform’s goal reviewer (not for steps)',
                         )}
                       </span>
                     ) : null}

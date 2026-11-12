@@ -11,6 +11,7 @@ import {
   MAX_ACCEPTANCE_PROMPT_CHARS,
   MAX_PLAN_ACCEPTANCE_CHECKS,
   MAX_PLAN_BYTES,
+  MAX_PLAN_REVIEW_CHECKS,
   MAX_PLAN_STEPS,
   MAX_STEP_ACCEPTANCE_CHECKS,
   MAX_STEP_ATTEMPTS,
@@ -60,7 +61,11 @@ import {
   observeRefusal,
   readGatekeeperPlatformPolicy,
 } from '../gates/index.js';
-import { findGoalPlannerFamily } from '../task/index.js';
+import {
+  findGoalPlannerFamily,
+  findGoalReviewerFamily,
+  requesterAllowedModels,
+} from '../task/index.js';
 import { type DraftViewer, classifySkillRefs, getWorkerDefinition } from '../worker/index.js';
 
 /**
@@ -147,7 +152,14 @@ import { type DraftViewer, classifySkillRefs, getWorkerDefinition } from '../wor
  *     so on those only the Fact being there can be checked;
  *   - `requester_confirm` — `prompt` is what the requester is asked to confirm; asked once every
  *     check the platform makes passed. At most one, and no prompt that looks like it carries a
- *     credential.
+ *     credential;
+ *   - `review` (S11 GO18, the goal's acceptance only) — an independent reviewer the platform
+ *     starts once every check it makes passed, scoring `criteria` (keys unique, descriptions free
+ *     of credentials) over the accepted output and files of `subjects` (steps of the plan, each
+ *     once); it passes on the platform's arithmetic over the scores against `passAt`
+ *     (`review.ts`). `model`, when set, is one the llm-proxy catalog offers and the requester's
+ *     workspace allows. At most {@link MAX_PLAN_REVIEW_CHECKS}. A proxy indicator: the goal is then
+ *     achieved on `reviewer_assessed`, or on the requester's word when the plan also asks them.
  * A plan without any is allowed: its goal is achieved only on the requester's word (an implicit
  * `requester_confirm` whose prompt is the goal statement) — {@link planHints} says so, for the
  * confirmation card to show.
@@ -257,6 +269,7 @@ export function parsePlan(plan: unknown): GoalPlan {
     );
   }
   problems.push(...acceptanceShapeProblems(shaped.acceptance ?? [], lintBudget, ''));
+  problems.push(...reviewShapeProblems(shaped.acceptance ?? [], keys));
   if (problems.length > 0) throw new GoalPlanValidationError(problems);
   return shaped;
 }
@@ -293,6 +306,8 @@ function acceptanceShapeProblems(
       }
       return;
     }
+    // GO18: a review's own rules are `reviewShapeProblems`'s.
+    if (check.kind === 'review') return;
     if (check.kind === 'fact_predicate') {
       for (const problem of factSelectorProblems(check.fact)) problems.push(`${where}: ${problem}`);
     }
@@ -310,6 +325,48 @@ function acceptanceShapeProblems(
     for (const problem of predicateCredentialProblems(expect)) {
       problems.push(`${where}: ${problem}`);
     }
+  });
+  return problems;
+}
+
+/** S11 GO18: the plan's reviews — at most {@link MAX_PLAN_REVIEW_CHECKS}, each reviewing steps of
+ *  the plan (`stepKeys`) once each and scoring criteria whose keys are unique and whose
+ *  descriptions carry nothing the credential review counts (the reviewer and every person reading
+ *  the plan read them as written). */
+function reviewShapeProblems(
+  acceptance: readonly AcceptanceCheck[],
+  stepKeys: ReadonlySet<string>,
+): readonly string[] {
+  const problems: string[] = [];
+  let reviews = 0;
+  acceptance.forEach((check, index) => {
+    if (check.kind !== 'review') return;
+    const where = `acceptance[${index}] "${check.key}"`;
+    reviews += 1;
+    if (reviews === MAX_PLAN_REVIEW_CHECKS + 1) {
+      problems.push(`${where}: a plan has at most ${MAX_PLAN_REVIEW_CHECKS} review checks`);
+    }
+    const subjects = new Set<string>();
+    for (const subject of check.subjects) {
+      if (subjects.has(subject)) {
+        problems.push(`${where}: reviews step "${subject}" more than once`);
+      } else if (!stepKeys.has(subject)) {
+        problems.push(`${where}: reviews step "${subject}", which is not in the plan`);
+      }
+      subjects.add(subject);
+    }
+    const criteria = new Set<string>();
+    check.criteria.forEach((criterion, at) => {
+      const named = `${where}: criteria[${at}] "${criterion.key}"`;
+      if (criteria.has(criterion.key)) problems.push(`${named}: the key appears more than once`);
+      criteria.add(criterion.key);
+      const found = findSuspectedSecrets(criterion.description);
+      if (found.count > 0) {
+        problems.push(
+          `${named}: the description looks like it carries a credential (${found.count} suspected) — a plan does not carry credentials`,
+        );
+      }
+    });
   });
   return problems;
 }
@@ -340,6 +397,32 @@ export function factSelectorProblems(fact: FactCheck): readonly string[] {
 export function planHints(plan: GoalPlan): readonly PlanHint[] {
   const acceptance = plan.acceptance ?? [];
   if (acceptance.some((check) => isPlatformAcceptanceCheck(check.kind))) return [];
+  // S11 GO18 (independent review N4: a hint, no confirmation added): reviews and
+  // nothing else — no observation of the real state, no person — achieve the goal on a model's
+  // scores alone, and whoever confirms the plan should know it.
+  const reviewed = acceptance.some((check) => check.kind === 'review');
+  const confirmed = acceptance.some((check) => check.kind === 'requester_confirm');
+  if (reviewed && !confirmed) {
+    return [
+      {
+        code: 'review_only',
+        message:
+          'the plan has no check the platform makes and asks no confirmation of the requester: the goal is achieved once its reviews pass, on a model’s scores alone',
+      },
+    ];
+  }
+  // S11 GO18 (UX acceptance of #1102): reviews and the requester's word — not the requester's
+  // word alone: they confirm only once every review has passed (`confirm_goal_acceptance`), and
+  // a review below its line fails the goal whatever they would say.
+  if (reviewed) {
+    return [
+      {
+        code: 'review_and_confirm',
+        message:
+          'the plan has no check the platform makes: the goal is achieved only when its reviews pass and the requester then confirms it',
+      },
+    ];
+  }
   return [
     {
       code: 'requester_confirm_only',
@@ -943,6 +1026,8 @@ export async function validatePlan(
   // S11 GO9a: the goal planner's family is the platform's, for planning rounds only — its Worker
   // reads a planning Task's input, so as a step it could do nothing useful.
   const plannerFamily = await findGoalPlannerFamily(client, workspaceId);
+  // S11 GO18: so is the goal reviewer's, for review checks only.
+  const reviewerFamily = await findGoalReviewerFamily(client, workspaceId);
   for (const step of parsed.steps) {
     const definition = await getWorkerDefinition(client, workspaceId, step.worker);
     const ref = `${step.worker.definitionId}@${step.worker.version}`;
@@ -951,6 +1036,10 @@ export async function validatePlan(
     } else if (step.worker.definitionId === plannerFamily) {
       problems.push(
         `step "${step.key}": WorkerDefinition ${ref} is the goal planner's; it plans goals and does not run a step`,
+      );
+    } else if (step.worker.definitionId === reviewerFamily) {
+      problems.push(
+        `step "${step.key}": WorkerDefinition ${ref} is the goal reviewer's; it reviews goals and does not run a step`,
       );
     } else if (definition.kind !== 'worker') {
       problems.push(`step "${step.key}": WorkerDefinition ${ref} is ${definition.kind}-kind`);
@@ -984,9 +1073,11 @@ export async function validatePlan(
   }
   for (const [index, check] of (parsed.acceptance ?? []).entries()) {
     const where = `acceptance[${index}] "${check.key}"`;
-    for (const problem of await acceptanceReferenceProblems(client, workspaceId, check)) {
-      problems.push(`${where}: ${problem}`);
-    }
+    const found =
+      check.kind === 'review'
+        ? await reviewModelProblems(client, workspaceId, requester, check.model, sources)
+        : await acceptanceReferenceProblems(client, workspaceId, check);
+    for (const problem of found) problems.push(`${where}: ${problem}`);
   }
   if (problems.length > 0) throw new GoalPlanValidationError(problems);
   return parsed;
@@ -1058,6 +1149,28 @@ export async function workerSpecProblems(
   return problems;
 }
 
+/** S11 GO18: a review's `model`, when it names one — offered by the llm-proxy catalog (when
+ *  `sources` reads it) and allowed by the requester's workspace (AgentPolicy `allowedModels`).
+ *  Checked again when the review starts (`review.ts`): either can change. */
+async function reviewModelProblems(
+  client: PoolClient,
+  workspaceId: string,
+  requester: string,
+  model: string | undefined,
+  sources: PlanReferenceSources,
+): Promise<readonly string[]> {
+  if (model === undefined) return [];
+  const problems: string[] = [];
+  if (sources.modelCatalog && !(await sources.modelCatalog()).has(model)) {
+    problems.push(`model — one the llm-proxy catalog does not offer: ${JSON.stringify(model)}`);
+  }
+  const allowed = await requesterAllowedModels(client, workspaceId, requester);
+  if (allowed.length > 0 && !allowed.includes(model)) {
+    problems.push(`model — one this workspace does not allow: ${JSON.stringify(model)}`);
+  }
+  return problems;
+}
+
 /** What an acceptance check refers to, as of now: an observation's what
  *  {@link observationCheckProblems} accepts — an absence check's Operation declaring, besides,
  *  which answers mean "does not exist" (without, nothing it answers could meet the check); a fact
@@ -1068,7 +1181,7 @@ async function acceptanceReferenceProblems(
   workspaceId: string,
   check: AcceptanceCheck | StepAcceptanceCheck,
 ): Promise<readonly string[]> {
-  if (check.kind === 'requester_confirm') return [];
+  if (check.kind === 'requester_confirm' || check.kind === 'review') return [];
   if (check.kind === 'observe_predicate' || check.kind === 'observe_absent') {
     return (await observationCheckProblems(client, workspaceId, check.check)).map(
       (problem) => `check: ${problem}`,

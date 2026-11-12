@@ -120,6 +120,22 @@ export {
   readTaskPlanningRound,
 } from './planning-task.js';
 
+export {
+  type CreateReviewTaskInput,
+  type CreateReviewTaskResult,
+  GOAL_REVIEWER_PRINCIPAL_DISPLAY_NAME,
+  REVIEWER_HANDLE_CAPABILITIES,
+  REVIEWER_MAX_DURATION_SEC,
+  REVIEWER_MAX_TOKEN_BUDGET,
+  REVIEWER_MIN_TOKEN_BUDGET,
+  createReviewTask,
+  ensureReviewerDefinition,
+  findGoalReviewerFamily,
+  loadReviewerTemplate,
+  readTaskReview,
+  requesterAllowedModels,
+} from './review-task.js';
+
 export { failTaskForModelRefusal, workerModelRefusal } from './model-refusal.js';
 
 export {
