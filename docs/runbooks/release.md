@@ -2677,7 +2677,7 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **发版说明可写**：给 service Principal 授了门之后，外部运行时用它的 Handle 调 `request_action` 不再总是被拒。
 - **回滚**：只回退代码。已签出的带门 Handle 回退后仍有效，并继续受每次调用时的 R-37 交集约束；要收回，在集成页「外部运行时」吊销。
 
-### 3.155 目标验收加「独立评审」（#1102，S11 GO18a，0.67.0 之后的下一版）
+### 3.155 目标验收加「独立评审」（#1102，S11 GO18a，0.68.0 起）
 
 有三个迁移：goal `0019_review_acceptance`、task `0014_task_review`，以及跟进 PR #1108 的 task `0015_task_review_result`。goal/0019 给验收检查表加 `review_check` 列和 `review` 种类，新建只许插入的 `goal_review_assessments`，并整份重写 `goal_acceptance_checks_guard`、`goal_runs_status_guard`；task/0014 给 `tasks` 加可空列 `review_round`、`review_check_key`，`purpose` 多 `review`。两个都不回填、不改已有数据。不改 compose，没有新环境变量。线上契约只增：计划 schema 多 `review` 检查，`get_goal` 多评审的读模型，计划提示多 `review_only`，任务 `purpose` 多 `review`。rehearsal 已绿。
 
@@ -2867,9 +2867,9 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.65.0 | core `0055_chat_message_idempotency_key`（#1050，遗留 673）：`chat_messages` 加可空列 `idempotency_key`、约束 `chat_messages_idempotency_key_shape`（`not valid`）、部分唯一索引 `chat_messages_idempotency_key_uidx` | 可逆 | 只加列、约束和索引；旧代码不写这一列（写入为 `null`，约束满足），读消息都用显式列名 | 只需回退代码。要撤迁移：删索引、约束和列，再删 `schema_migrations` 里 core 55 那一行（见 0055 文件头） |
 | v0.66.0 | worker `0014_definition_derivations`（#1071，GO16b）：新表 `worker_definition_derivations`（基版本、指纹、证据、沉淀人、时间），只许插入（`nexttime_app` 没有 UPDATE / DELETE 权限），插入前触发器校验基版本 | 可逆 | 只加新表：旧代码不读也不写 | 只需回退代码，表可以留着。要删表，按 0014 文件头的三条语句操作，再删 `schema_migrations` 里的 worker 14；删表会丢掉来历 |
 | v0.67.0 | goal `0018_plan_revision_cited_precedents`（#1087，GO17b）：`plan_revisions` 加可空列 `cited_precedents uuid[]`，形状 CHECK 与 BEFORE INSERT 触发器（同一请求人、已结束、不重复、不引用自己）；插入后由 `plan_revisions_guard` 冻结 | 可逆 | 只加可空列：旧代码不读也不写 | 只需回退代码，列可以留着。要删，在内核停着时按 0018 文件头的步骤删除触发器、函数和列，再删 `schema_migrations` 里的 goal 18 |
-| 0.67.0 之后的下一版 | goal `0019_review_acceptance`（#1102，GO18a）：`goal_acceptance_checks` 加 `review_check` 列与 `review` 种类；新表 `goal_review_assessments`（只许插入，写入时按评审报告重算）；整份重写 `goal_acceptance_checks_guard` 与 `goal_runs_status_guard`（允许依据 `reviewer_assessed`，有评审的一轮不再记 `verified_by_check`） | 可逆 | 只加列、加表、重写守卫。上一版不认带评审的计划，会把这样的目标停下等人；已达成的行不受影响（守卫只看状态转换） | 只需回退代码，表与列可以留着。要撤，先让评审 Task 结束、数清按评审达成的目标（§3.155），再在内核停着时恢复 goal/0011 的两个函数 |
-| 0.67.0 之后的下一版 | task `0014_task_review`（#1102，GO18a）：`tasks` 加可空列 `review_round`、`review_check_key`，`purpose` 多 `review`；每条检查至多一个评审 Task（唯一索引）；评审 Task 的输入建后不改 | 可逆 | 只加可空列：上一版插入与查询都写明列名，不写这两列 | 只需回退代码。回滚前让评审 Task 跑完：上一版不会重试 `purpose` 非空的 Task，留下的评审 Task 不会在出网隔离之外重启 |
-| 0.67.0 之后的下一版 | task `0015_task_review_result`（#1108，GO18a 跟进）：触发器 `tasks_review_result_guard`（`before update of result`），评审 Task 的 `result` 只能由完成它的那次更新写，完成后不能再改 | 可逆 | 只加触发器。上一版只在完成 Task 时写 `result`，它的更新都过得了 | 只需回退代码。要撤：`drop trigger tasks_review_result_guard on tasks`、`drop function tasks_review_result_guard()`，再删 `schema_migrations` 里 task 15 那一行 |
+| v0.68.0 | goal `0019_review_acceptance`（#1102，GO18a）：`goal_acceptance_checks` 加 `review_check` 列与 `review` 种类；新表 `goal_review_assessments`（只许插入，写入时按评审报告重算）；整份重写 `goal_acceptance_checks_guard` 与 `goal_runs_status_guard`（允许依据 `reviewer_assessed`，有评审的一轮不再记 `verified_by_check`） | 可逆 | 只加列、加表、重写守卫。上一版不认带评审的计划，会把这样的目标停下等人；已达成的行不受影响（守卫只看状态转换） | 只需回退代码，表与列可以留着。要撤，先让评审 Task 结束、数清按评审达成的目标（§3.155），再在内核停着时恢复 goal/0011 的两个函数 |
+| v0.68.0 | task `0014_task_review`（#1102，GO18a）：`tasks` 加可空列 `review_round`、`review_check_key`，`purpose` 多 `review`；每条检查至多一个评审 Task（唯一索引）；评审 Task 的输入建后不改 | 可逆 | 只加可空列：上一版插入与查询都写明列名，不写这两列 | 只需回退代码。回滚前让评审 Task 跑完：上一版不会重试 `purpose` 非空的 Task，留下的评审 Task 不会在出网隔离之外重启 |
+| v0.68.0 | task `0015_task_review_result`（#1108，GO18a 跟进）：触发器 `tasks_review_result_guard`（`before update of result`），评审 Task 的 `result` 只能由完成它的那次更新写，完成后不能再改 | 可逆 | 只加触发器。上一版只在完成 Task 时写 `result`，它的更新都过得了 | 只需回退代码。要撤：`drop trigger tasks_review_result_guard on tasks`、`drop function tasks_review_result_guard()`，再删 `schema_migrations` 里 task 15 那一行 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
