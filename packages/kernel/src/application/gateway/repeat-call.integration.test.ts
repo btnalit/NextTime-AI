@@ -1644,11 +1644,59 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       },
     },
   },
+  start_eval_case_trial: {
+    // Each call starts another case_trial run and its evaluation Task (left running: the Worker
+    // never reports here; afterAll ends it).
+    'its one case': {
+      setUp: (ctx) => {
+        TASK_WORKSPACES.add(ctx.seed.workspaceId);
+        return suiteWithCase(ctx);
+      },
+    },
+  },
+  sync_eval_fixture_gate: {
+    // The first sync freezes the gate again as a new suite version, so the same call again names a
+    // suite version that is no longer the latest (409 version_changed), nothing written.
+    'a frozen gate that publishes another Operation since': {
+      first: expect.objectContaining({ version: expect.any(Number) }),
+      setUp: async (ctx) => {
+        const suite = await evalSuite(ctx, true);
+        const { pool, seed } = ctx;
+        await withWorkspace(
+          pool,
+          { workspaceId: seed.workspaceId, principalId: seed.ownerId },
+          async (client) => {
+            const activity = await startActivity(client, seed.workspaceId, {
+              kind: 'test.connection',
+              principalId: seed.ownerId,
+            });
+            await importManifest(client, seed.workspaceId, {
+              gatekeeperId: seed.gatekeeperId,
+              operations: [GATE_OP],
+              proposedBy: { id: seed.ownerId, kind: 'human' },
+              activityId: activity.id,
+            });
+            await publishOperation(client, seed.workspaceId, {
+              gatekeeperId: seed.gatekeeperId,
+              name: GATE_OP.name,
+            });
+          },
+        );
+        return {
+          suiteId: suite.id,
+          suiteVersion: suite.version,
+          gatekeeperId: ctx.seed.gatekeeperId,
+        };
+      },
+    },
+  },
 };
 
 /** Rows whose schema-built params cannot make a first call succeed on the bare seed — a param
  *  naming something the walk has no value for — run their recipes instead of that case. */
 const RECIPES_ONLY: ReadonlySet<string> = new Set([
+  'start_eval_case_trial',
+  'sync_eval_fixture_gate',
   'release_eval_seal_hold',
   'propose_entry_template_upgrade',
   'install_module',
