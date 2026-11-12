@@ -22,7 +22,7 @@ ratchet:
   console_unexplained: 10
   kernel_test_missing: 3
   e2e_waived: 65
-  repeat_unclear: 54
+  repeat_unclear: 50
 capabilities:
   add_eval_case:
     console: required
@@ -106,7 +106,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: conflict" # the first call cancels the running evaluation; the same cancel again finds it ended, nothing written (409 conflict)
   cancel_goal:
     console: required
     agents: []
@@ -1009,12 +1009,12 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: draft_evaluating" # while the first evaluation of the draft runs, the same start again is refused, nothing written
   start_eval_case_trial:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: creates # each call starts another case_trial run and its evaluation Task
   state_at:
     console: required
     agents: [entry, admin]
@@ -1049,7 +1049,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: version_changed" # each sync is a new suite version, so the same suiteVersion again is refused, nothing written; read again, the gate matches (409 conflict)
   test_gate_instance:
     console: required
     agents: []
