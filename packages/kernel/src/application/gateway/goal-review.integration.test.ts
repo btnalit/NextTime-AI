@@ -616,6 +616,24 @@ describe.runIf(DATABASE_URL !== undefined)(
         await setTried(1, tried?.first_attempt_at ?? null);
       }
 
+      // #493 on #1108 (legacy 693), task/0015: nor is a report written before the Task completes —
+      // the running Task's `result` alone, its status left as it is, is refused.
+      expect(
+        await dbRefusal(
+          guarded(
+            `update tasks set result = jsonb_build_object('output', $3::jsonb)
+              where workspace_id = $1 and id = $2`,
+            [workspaceId, task.id, JSON.stringify(scores(4, 4))],
+          ),
+        ),
+      ).toMatch(/what a review Task reported is written once, when it completes/);
+      expect(
+        await raw<{ status: string; result: unknown }>(
+          'select status, result from tasks where workspace_id = $1 and id = $2',
+          [workspaceId, task.id],
+        ),
+      ).toEqual([{ status: 'running', result: null }]);
+
       await reviewerReports(task.id, { ...scores(4, 2), comment: 'Reads well.' });
       // N3: what the reviewer read is the record its assessment rests on; so is whom it acted for
       // and — #493 on #1102, task/0015 — what it reported, once it completed.

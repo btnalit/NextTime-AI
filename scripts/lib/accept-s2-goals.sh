@@ -48,8 +48,9 @@
 # kernel's restarts would drop a background goal's checks and every connection to the kernel. No
 # two scenarios have a step's Worker running at the same time, and no two have a write at the http
 # gate at the same time (S7 reads the gate's queue); only S6's goal planner, once its check gives
-# up, may run beside another scenario's step — it observes nothing and has no gate — and so may
-# S15's goal reviewer, likewise.
+# up, may run beside another scenario's step — it observes nothing and has no gate. S15's goal
+# reviewer never does: S15 waits for each of its goals to settle, and a goal settles only after its
+# review does.
 #
 # With --real none of these scenarios runs, and the ledger is discarded before the http gate's
 # manifest is published (goal_ledger_discard_real / goal_ledger_withheld_check_real, called from
@@ -1587,14 +1588,16 @@ goal_s14_handoff() {
 #   - review-derivation: get_goal reads back each criterion's weight, score and points, the points
 #     against the line and the verdict — what the console's goal page shows — and the reviewer and
 #     the step it reviewed ran on the same model, which the assessment marks (`sameModel`);
-#   - review-closed: the reviewer's Task read the criteria but not the line (`passAt`), the line
-#     being the platform's (F5);
+#   - review-closed: the reviewer's Task read the criteria but not the line (`passAt`, at no depth of
+#     its input), the line being the platform's (F5);
 #   - review-below-line: both criteria score 1 — 4 of 16 — and the goal pauses needs_decision for
 #     alice, confirmed with the planner's leave `propose` yet no planning round opens for a review
-#     that fell short (F6); cleanup_step cancels it.
+#     that fell short (F6), and the review is not run again — its one reviewer Task stays the only
+#     one; cleanup_step cancels it.
 S15_REVIEW_EXPR="(() => { const r = d.result.acceptance.rounds; const c = r.length ? r[r.length - 1].checks.find((x) => x.checkKey === 'quality') : undefined; const v = c && c.review; const a = v && v.assessment; return c ? [c.status, a ? a.points : '-', a ? a.maxPoints : '-', a ? a.passAt : '-', a ? a.verdict : '-', a ? a.lines.map((l) => [l.criterion, l.weight, l.score, l.points, l.maxPoints].join(':')).join('+') : '-', a && v.taskId === a.reviewTaskId ? 'own-task' : 'no-task', a ? String(a.sameModel) : '-', a && a.executorModels.every((e) => e.model === a.reviewerModel) ? 'models-match' : 'models-differ'].join(',') : 'none'; })()"
 
-# goal_s15_review_json <subjects JSON> <clear's score marker>: the review check of S15.
+# goal_s15_review_json <subjects JSON> <complete's score marker> <clear's score marker>: the review
+# check of S15.
 goal_s15_review_json() {
   printf '{"kind":"review","key":"quality","subjects":%s,"criteria":[{"key":"complete","description":"The report names the goal step it was written for%s","weight":3},{"key":"clear","description":"The report reads plainly%s","weight":1}],"passAt":75}' \
     "$1" "$2" "$3"
@@ -1606,6 +1609,13 @@ goal_s15_propose() {
   schema='{"type":"object","properties":{"report":{"type":"string","minLength":1}},"required":["report"],"additionalProperties":false}'
   step=$(goal_step_json report "ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=$n GOAL_REPORT=$n" "\"outputSchema\":$schema")
   goal_propose_confirm "$1" "{\"statement\":\"accept_s2 S15 $n ($1): one ops-runner step writes a report; the platform observes the stock API and an independent review scores the report.\",\"plan\":{\"steps\":[$step],\"acceptance\":[$(goal_observe_check_json stock-visible stock.get '{}' symbol '"NXT"'),$(goal_s15_review_json '["report"]' "$2" "$3")]},\"budget\":$GOAL_BUDGET,\"idempotencyKey\":\"accept-s2-goal-$1-$n\"}" "" "${4:-}"
+}
+
+# goal_s15_reviewers <goal id>: the run's reviewer Tasks, oldest first, each as
+# purpose:status:observe scope:line:criteria — the line `line-shown` if its input names `passAt` at
+# any depth (F5), `line-closed` if not.
+goal_s15_reviewers() {
+  psql_ws "select coalesce(string_agg(purpose || ':' || status || ':' || coalesce(cardinality(observe_scope)::text, 'unscoped') || ':' || (case when jsonb_path_exists(input, 'strict \$.**.passAt') then 'line-shown' else 'line-closed' end) || ':' || coalesce(jsonb_array_length(input->'criteria'), 0), ',' order by created_at), 'none') from tasks where workspace_id='$WORKSPACE_ID' and goal_run_id='$1' and purpose = 'review'"
 }
 
 goal_s15_review() {
@@ -1620,9 +1630,9 @@ goal_s15_review() {
   [ "$review" = "passed,14,16,75,passed,complete:3:4:12:12+clear:1:2:2:4,own-task,true,models-match" ] || goal_fail "s15-review-derivation" "$S15_GOAL_ID" "the review reads '$review', expected passed,14,16,75,passed,complete:3:4:12:12+clear:1:2:2:4,own-task,true,models-match (4×3 + 2×1 = 14 of 16 points, at least 12 at 75%; the reviewer Task the check names; reviewer and step on the same model, marked so)"
   pass "s15-review-derivation" "get_goal reads back the derivation: complete 4/4 × 3 = 12, clear 2/4 × 1 = 2, 14 of 16 points against a line of 75% (12): passed; the same model scored the step's work, and the assessment says so"
 
-  reviewer=$(psql_ws "select coalesce(string_agg(purpose || ':' || status || ':' || coalesce(cardinality(observe_scope)::text, 'unscoped') || ':' || (case when input ? 'passAt' then 'line-shown' else 'line-closed' end) || ':' || coalesce(jsonb_array_length(input->'criteria'), 0), ',' order by created_at), 'none') from tasks where workspace_id='$WORKSPACE_ID' and goal_run_id='$S15_GOAL_ID' and purpose = 'review'")
-  [ "$reviewer" = "review:completed:0:line-closed:2" ] || goal_fail "s15-review-closed" "$S15_GOAL_ID" "the run's reviewer Tasks read '$reviewer', expected one, completed, observing nothing, its input holding the two criteria and not the line (review:completed:0:line-closed:2)"
-  pass "s15-review-closed" "one reviewer Task on goal $S15_GOAL_ID: purpose review, completed, observing nothing; it read the two criteria, not the line"
+  reviewer=$(goal_s15_reviewers "$S15_GOAL_ID")
+  [ "$reviewer" = "review:completed:0:line-closed:2" ] || goal_fail "s15-review-closed" "$S15_GOAL_ID" "the run's reviewer Tasks read '$reviewer', expected one, completed, observing nothing, its input holding the two criteria and nowhere the line (review:completed:0:line-closed:2)"
+  pass "s15-review-closed" "one reviewer Task on goal $S15_GOAL_ID: purpose review, completed, observing nothing; it read the two criteria, and its input names no line at any depth"
 
   goal_s15_propose s15-below " ACCEPT_S2_SCORE=1" " ACCEPT_S2_SCORE=1" '"planner":"propose"'
   S15_BELOW_GOAL_ID=$GOAL_RUN_ID
@@ -1638,7 +1648,10 @@ goal_s15_review() {
   sleep 10
   rounds=$(goal_get "$S15_BELOW_GOAL_ID" "String(d.result.planningRounds.length)")
   [ "$rounds" = "0" ] || goal_fail "s15-review-below-line" "$S15_BELOW_GOAL_ID" "goal $S15_BELOW_GOAL_ID has $rounds planning rounds, expected none for a review below its line; rounds: $(goal_get "$S15_BELOW_GOAL_ID" "$S13_ROUNDS_WHY_EXPR")"
-  pass "s15-review-below-line" "goal $S15_BELOW_GOAL_ID: its review scored 4 of 16, below the 12 its line asks — paused needs_decision for alice, no planning round opened"
+  # Nor is the review run again until it passes: one reviewer Task, the one that scored 4.
+  reviewer=$(goal_s15_reviewers "$S15_BELOW_GOAL_ID")
+  [ "$reviewer" = "review:completed:0:line-closed:2" ] || goal_fail "s15-review-below-line" "$S15_BELOW_GOAL_ID" "the run's reviewer Tasks read '$reviewer', expected the one that scored it, and no other (review:completed:0:line-closed:2)"
+  pass "s15-review-below-line" "goal $S15_BELOW_GOAL_ID: its review scored 4 of 16, below the 12 its line asks — paused needs_decision for alice, no planning round opened, its one reviewer Task not run again"
 }
 
 # goal_scenarios_step: the scenarios, in the order the header explains; S12 and S2 only with
