@@ -1255,6 +1255,27 @@ async function main() {
         JSON.stringify(json.choices[0]),
       );
       checkToolCallAgainstRegistry('goal-step-worker', call);
+      check('goal-step-worker-no-output', call?.args?.output === undefined, JSON.stringify(call));
+    }
+    // 6k'. S11 GO18b: `GOAL_REPORT=<word>` (accept_s2 S15) reports an output `{report}` as well —
+    //      what the step's outputSchema asks for and its review reads.
+    {
+      const { json } = await post([
+        {
+          role: 'custom',
+          content: '### Task input\nACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=r42 GOAL_REPORT=r42',
+        },
+        { role: 'user', content: 'Begin working on your assigned Task now' },
+      ]);
+      const call = toolCallOf(json);
+      check(
+        'goal-step-worker-output',
+        call?.name === 'report_result' &&
+          call.args.output?.report === 'accept_s2 report r42 for goal step r42' &&
+          Object.keys(call.args.output).length === 1,
+        JSON.stringify(json.choices[0]),
+      );
+      checkToolCallAgainstRegistry('goal-step-worker-output', call);
     }
 
     // 6l. S11 GO7a entryGoalDagChatScenario: "发起三步验收目标" — the same two finds, then a
