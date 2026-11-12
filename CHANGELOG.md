@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.67.0](https://github.com/btnalit/NextTime-AI/compare/v0.66.0...v0.67.0) (2026-11-08)
+
+
+### Features
+
+* **kernel,shared,web:** record which earlier goals a plan was written from (S11 GO17b) ([#1087](https://github.com/btnalit/NextTime-AI/issues/1087)) ([d7c0874](https://github.com/btnalit/NextTime-AI/commit/d7c087446af16d25fc0ea88601571375bea41c5f))
+* **kernel,shared:** give whoever writes a goal's plan the requester's earlier goals of the same kind (S11 GO17a) ([#1080](https://github.com/btnalit/NextTime-AI/issues/1080)) ([3ae2454](https://github.com/btnalit/NextTime-AI/commit/3ae2454ce1f5f636fe4fe9891a3b91842dd8231e))
+
+
+### Bug Fixes
+
+* **kernel:** give a service Handle the gates its Principal was granted (legacy 690) ([#1091](https://github.com/btnalit/NextTime-AI/issues/1091)) ([f5fce7a](https://github.com/btnalit/NextTime-AI/commit/f5fce7a1ee5195ad8d738beedc602403d295afee))
+
 ## [0.66.0](https://github.com/btnalit/NextTime-AI/compare/v0.65.0...v0.66.0) (2026-11-07)
 
 
