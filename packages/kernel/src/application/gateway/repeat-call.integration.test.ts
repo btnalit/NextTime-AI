@@ -261,6 +261,19 @@ async function suiteWithCase(ctx: RecipeContext) {
   return { suiteId: withCase.id, suiteVersion: withCase.version, caseId: withCase.cases[0]?.id };
 }
 
+/** start_draft_evaluation's params: a pending Skill v2 (v1 published) on a suite with one case. */
+async function draftEvaluationParams(ctx: RecipeContext) {
+  const suite = await suiteWithCase(ctx);
+  const draft = await pendingV2(ctx, 'skill');
+  return {
+    skillId: draft.id,
+    version: draft.version,
+    draftDigest: draft.draftDigest,
+    suiteId: suite.suiteId,
+    suiteVersion: suite.suiteVersion,
+  };
+}
+
 /**
  * propose_definition_from_combination's case (S11 GO16b): a goal the owner asked for, ended a day
  * ago as achieved by their word, whose one step `definitionId` v1 ran with `spec` — written with
@@ -1690,11 +1703,39 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       },
     },
   },
+  start_draft_evaluation: {
+    // While the first evaluation of the draft runs, the same start again is refused (409
+    // draft_evaluating), nothing written. Its Tasks are left running: afterAll ends them.
+    'a pending Skill v2 on a suite with one case': {
+      first: expect.objectContaining({ status: 'running' }),
+      setUp: (ctx) => {
+        TASK_WORKSPACES.add(ctx.seed.workspaceId);
+        return draftEvaluationParams(ctx);
+      },
+    },
+  },
+  cancel_draft_evaluation: {
+    // The first call cancels the running evaluation; the same cancel again finds it ended (409
+    // conflict), nothing written.
+    'a running evaluation of a pending Skill v2': {
+      setUp: async (ctx) => {
+        TASK_WORKSPACES.add(ctx.seed.workspaceId);
+        const started = await as<{ id: string }>(
+          ctx,
+          'start_draft_evaluation',
+          await draftEvaluationParams(ctx),
+        );
+        return { evaluationId: started.id };
+      },
+    },
+  },
 };
 
 /** Rows whose schema-built params cannot make a first call succeed on the bare seed — a param
  *  naming something the walk has no value for — run their recipes instead of that case. */
 const RECIPES_ONLY: ReadonlySet<string> = new Set([
+  'start_draft_evaluation',
+  'cancel_draft_evaluation',
   'start_eval_case_trial',
   'sync_eval_fixture_gate',
   'release_eval_seal_hold',
