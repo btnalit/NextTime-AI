@@ -2679,9 +2679,10 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 
 ### 3.155 目标验收加「独立评审」（#1102，S11 GO18a，0.67.0 之后的下一版）
 
-有两个迁移：goal `0019_review_acceptance` 与 task `0014_task_review`。goal/0019 给验收检查表加 `review_check` 列和 `review` 种类，新建只许插入的 `goal_review_assessments`，并整份重写 `goal_acceptance_checks_guard`、`goal_runs_status_guard`；task/0014 给 `tasks` 加可空列 `review_round`、`review_check_key`，`purpose` 多 `review`。两个都不回填、不改已有数据。不改 compose，没有新环境变量。线上契约只增：计划 schema 多 `review` 检查，`get_goal` 多评审的读模型，计划提示多 `review_only`，任务 `purpose` 多 `review`。rehearsal 已绿。
+有三个迁移：goal `0019_review_acceptance`、task `0014_task_review`，以及跟进 PR #1108 的 task `0015_task_review_result`。goal/0019 给验收检查表加 `review_check` 列和 `review` 种类，新建只许插入的 `goal_review_assessments`，并整份重写 `goal_acceptance_checks_guard`、`goal_runs_status_guard`；task/0014 给 `tasks` 加可空列 `review_round`、`review_check_key`，`purpose` 多 `review`。两个都不回填、不改已有数据。不改 compose，没有新环境变量。线上契约只增：计划 schema 多 `review` 检查，`get_goal` 多评审的读模型，计划提示多 `review_only`，任务 `purpose` 多 `review`。rehearsal 已绿。
 
 - **入口模板**：`entry-agent.yaml` 加了一句（质量类目标可以加评审；只靠评审的目标要跟用户说清楚），已部署的工作区升级后会看到「入口模板可升级」，所有者确认一次即可。规划器与新的评审器（`goal-reviewer.yaml`）由内核在下次用到时发布。
+- **跟进（#1108）**：task/0015 加一个触发器 `tasks_review_result_guard`，评审 Task 的报告只能由完成它的那次更新写，之后不能改（assessment 按这份报告重算）；规划器挑步骤 Worker 时不再把评审器当候选。内核写报告本来就只在完成时，行为不变。
 - **主机**：升级不需要额外步骤。评审 Task 的 token 从目标预算里扣（每次 10k 到 100k），时长上限 600 秒，没有出网。
 - **发版说明可写**：目标计划里可以加一条「独立评审」：写几条标准和通过线，平台在其他验收检查都过了以后起一个评审 Worker 打分，过不过由平台按分数算。只靠评审达成的目标记为「评审评估」，确认卡事先提示这一点。评审没过或判断不了，目标停下等请求人决定。控制台的计划编辑与逐条分数在 GO18b。
 - **回滚**：先让正在验收的目标的评审跑完（`select count(*) from tasks where purpose = 'review' and status in ('created', 'queued', 'running');` 为 0），再数一下已按评审达成的目标（`select count(*) from goal_runs where outcome_basis = 'reviewer_assessed';`）。之后只回退代码即可：上一版不认带评审的计划，遇到会把目标停下等人（`needs_decision`），已经达成的目标保留原样。要连 schema 一起撤，在内核停着时按两个迁移文件头的说明恢复 goal/0011 的两个函数，表与列可以留着。
@@ -2868,6 +2869,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.67.0 | goal `0018_plan_revision_cited_precedents`（#1087，GO17b）：`plan_revisions` 加可空列 `cited_precedents uuid[]`，形状 CHECK 与 BEFORE INSERT 触发器（同一请求人、已结束、不重复、不引用自己）；插入后由 `plan_revisions_guard` 冻结 | 可逆 | 只加可空列：旧代码不读也不写 | 只需回退代码，列可以留着。要删，在内核停着时按 0018 文件头的步骤删除触发器、函数和列，再删 `schema_migrations` 里的 goal 18 |
 | 0.67.0 之后的下一版 | goal `0019_review_acceptance`（#1102，GO18a）：`goal_acceptance_checks` 加 `review_check` 列与 `review` 种类；新表 `goal_review_assessments`（只许插入，写入时按评审报告重算）；整份重写 `goal_acceptance_checks_guard` 与 `goal_runs_status_guard`（允许依据 `reviewer_assessed`，有评审的一轮不再记 `verified_by_check`） | 可逆 | 只加列、加表、重写守卫。上一版不认带评审的计划，会把这样的目标停下等人；已达成的行不受影响（守卫只看状态转换） | 只需回退代码，表与列可以留着。要撤，先让评审 Task 结束、数清按评审达成的目标（§3.155），再在内核停着时恢复 goal/0011 的两个函数 |
 | 0.67.0 之后的下一版 | task `0014_task_review`（#1102，GO18a）：`tasks` 加可空列 `review_round`、`review_check_key`，`purpose` 多 `review`；每条检查至多一个评审 Task（唯一索引）；评审 Task 的输入建后不改 | 可逆 | 只加可空列：上一版插入与查询都写明列名，不写这两列 | 只需回退代码。回滚前让评审 Task 跑完：上一版不会重试 `purpose` 非空的 Task，留下的评审 Task 不会在出网隔离之外重启 |
+| 0.67.0 之后的下一版 | task `0015_task_review_result`（#1108，GO18a 跟进）：触发器 `tasks_review_result_guard`（`before update of result`），评审 Task 的 `result` 只能由完成它的那次更新写，完成后不能再改 | 可逆 | 只加触发器。上一版只在完成 Task 时写 `result`，它的更新都过得了 | 只需回退代码。要撤：`drop trigger tasks_review_result_guard on tasks`、`drop function tasks_review_result_guard()`，再删 `schema_migrations` 里 task 15 那一行 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

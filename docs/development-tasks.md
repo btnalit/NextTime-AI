@@ -4738,7 +4738,8 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **依据**（I-G5，B1）：有评审无确认 → `reviewer_assessed`；有评审有确认 → `requester`；无评审有平台检查 → `verified_by_check`；都没有 → `requester`。内核、goal/0019 守卫、检查器三层一致。只靠评审的计划带提示 `review_only`（维护者 11-12 定「只加提示」）。
   - **失败与封存**：评审没过或判断不了，目标 `needs_decision`，不开规划器提议轮，暂停说明只有内核算出的数。规划器读到的计划与先例里评审的 `criteria`、`passAt` 换成 `[sealed]`，交回时只能原样保留或删掉。
   - **审查**：#481、#493（xhigh）、UX 均 PASS，rehearsal 绿。UX 的 P2「确认时看不到评审标准与权重」并入 GO18b，发版前完成。
-  - **下一步**：#493 非阻塞建议的跟进 PR（冻结已完成评审 Task 的报告，迁移 task/0015；规划器候选排除评审器；反向测试），然后 GO18b 控制台。
+  - **跟进**（#1108，2026-11-12 合入，cde94d6）：迁移 task/0015 的触发器 `tasks_review_result_guard` 让评审 Task 的 `result` 只由完成它的那次更新写；`goal/planner.ts` 的 `plannerWorkers` 另排除评审器家族；`goal-schema`、`goal-review`、`goal-invariant-checks` 补反向测试，#493 列出的存活变异全部被抓到。F6（平台检查全过才开评审）仍只在应用层，库不拦，#493 同意。R2 分支缺反向测试为遗留 693。
+  - **下一步**：GO18b 控制台（计划编辑、确认卡的评审行与标准权重、详情的逐条分数）。
 
 ### W5 — 管理员 Agent 代码层（待定）
 
