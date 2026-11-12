@@ -1605,7 +1605,7 @@ goal_s15_propose() {
   n=$(real_token)
   schema='{"type":"object","properties":{"report":{"type":"string","minLength":1}},"required":["report"],"additionalProperties":false}'
   step=$(goal_step_json report "ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=$n GOAL_REPORT=$n" "\"outputSchema\":$schema")
-  goal_propose_confirm "$1" "{\"statement\":\"accept_s2 S15 $n ($1): one ops-runner step writes a report; the platform observes the stock API and an independent review scores the report.\",\"plan\":{\"steps\":[$step],\"acceptance\":[$(goal_observe_check_json stock-visible stock.get '{}' symbol '"NXT"'),$(goal_s15_review_json '["report"]' "$2" "$3")]},\"budget\":$GOAL_BUDGET,\"idempotencyKey\":\"accept-s2-goal-$1-$n\"}" "" "$4"
+  goal_propose_confirm "$1" "{\"statement\":\"accept_s2 S15 $n ($1): one ops-runner step writes a report; the platform observes the stock API and an independent review scores the report.\",\"plan\":{\"steps\":[$step],\"acceptance\":[$(goal_observe_check_json stock-visible stock.get '{}' symbol '"NXT"'),$(goal_s15_review_json '["report"]' "$2" "$3")]},\"budget\":$GOAL_BUDGET,\"idempotencyKey\":\"accept-s2-goal-$1-$n\"}" "" "${4:-}"
 }
 
 goal_s15_review() {
