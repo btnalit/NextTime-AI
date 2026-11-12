@@ -22,7 +22,7 @@ ratchet:
   console_unexplained: 10
   kernel_test_missing: 3
   e2e_waived: 65
-  repeat_unclear: 48
+  repeat_unclear: 46
 capabilities:
   add_eval_case:
     console: required
@@ -999,7 +999,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: repeats # the same status is set again (disabling again revokes the already revoked credentials); the user row moves by its updated_at
   set_workspace_status:
     console: required
     agents: []
@@ -1081,7 +1081,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: repeats # the same values are written again; the user row moves only by its updated_at
   update_workspace:
     console: required
     agents: []
