@@ -2,7 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type Capability, type Operation, type WorkerSpec, getCapability } from '@nexttime/shared';
+import {
+  type Capability,
+  type Operation,
+  type Role,
+  type WorkerSpec,
+  getCapability,
+} from '@nexttime/shared';
 import { generateKeyPair } from 'jose';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -744,14 +750,35 @@ function platformUser(ctx: RecipeContext): Promise<UserRow> {
 }
 
 /** A user the administrator creates (create_user) as a member of the case's workspace. */
-async function workspaceMember(ctx: RecipeContext): Promise<string> {
+async function workspaceMember(ctx: RecipeContext, role: Role = 'member'): Promise<string> {
   const created = await as<{ user: { id: string } }>(ctx, 'create_user', {
     login: `repeat-member-${randomUUID().slice(0, 8)}`,
     displayName: 'Repeat Member',
     workspaceId: ctx.seed.workspaceId,
-    role: 'member',
+    role,
   });
   return created.user.id;
+}
+
+/** A second owner of the case's workspace (workspaceMember) holding a live agent session: an
+ *  interactive Handle the owner issued (issue_handle is the owner's), so a row that ends the
+ *  member's sessions has one to end the first time and an already-revoked one the second (per
+ *  #493 on batch 22). */
+async function memberWithSession(ctx: RecipeContext): Promise<string> {
+  const userId = await workspaceMember(ctx, 'owner');
+  const principal = await ctx.pool.query<{ id: string }>(
+    'select id from principals where user_id = $1 and workspace_id = $2',
+    [userId, ctx.seed.workspaceId],
+  );
+  const principalId = principal.rows[0]?.id;
+  if (principalId === undefined) throw new Error('memberWithSession: the member has no Principal');
+  await dispatchCapability(
+    { pool: ctx.pool },
+    humanCaller(ctx.seed.workspaceId, principalId, 'owner'),
+    'issue_handle',
+    { sessionKind: 'interactive' },
+  );
+  return userId;
 }
 
 /** A user row's updated_at, as text: what a write of the same values still moves. */
@@ -1884,6 +1911,44 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       }),
     },
   },
+  set_membership_role: {
+    // The role is already the one asked for: nothing changes, the sessions are already ended.
+    "a second owner of the case's workspace with a live session, to builder": {
+      first: expect.objectContaining({ role: 'builder' }),
+      setUp: async (ctx) => ({
+        userId: await memberWithSession(ctx),
+        workspaceId: ctx.seed.workspaceId,
+        role: 'builder',
+      }),
+    },
+  },
+  remove_membership: {
+    // The membership is already disabled and its credentials already revoked.
+    "a second owner of the case's workspace with a live session": {
+      first: expect.objectContaining({ removed: true }),
+      setUp: async (ctx) => ({
+        userId: await memberWithSession(ctx),
+        workspaceId: ctx.seed.workspaceId,
+      }),
+    },
+  },
+  update_workspace: {
+    // The workspace already has the name.
+    "the case's workspace, a new name": {
+      first: expect.objectContaining({ name: 'Renamed Workspace' }),
+      setUp: async (ctx) => ({ workspaceId: ctx.seed.workspaceId, name: 'Renamed Workspace' }),
+    },
+  },
+  set_workspace_status: {
+    // Disabled already: its sessions are revoked, and disabled_at keeps the first time.
+    "the case's workspace, a second owner with a live session, to disabled": {
+      first: expect.objectContaining({ status: 'disabled' }),
+      setUp: async (ctx) => {
+        await memberWithSession(ctx);
+        return { workspaceId: ctx.seed.workspaceId, status: 'disabled' };
+      },
+    },
+  },
   roll_back_change_segment: {
     // The first call rolls the segment back; the same call again finds it rolled back (409
     // change_segment_rolled_back), nothing written.
@@ -1897,6 +1962,10 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
 /** Rows whose schema-built params cannot make a first call succeed on the bare seed — a param
  *  naming something the walk has no value for — run their recipes instead of that case. */
 const RECIPES_ONLY: ReadonlySet<string> = new Set([
+  'set_membership_role',
+  'remove_membership',
+  'update_workspace',
+  'set_workspace_status',
   'create_user',
   'add_membership',
   'update_user',
