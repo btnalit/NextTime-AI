@@ -789,6 +789,43 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(missing.message).toContain('complete');
       expect((await reviewTask(goalRunId)).status).toBe('running');
       expect(await checkRow(goalRunId)).toMatchObject({ status: 'pending', attempts: 1 });
+
+      // Independent review of #1102: the run leaves `verifying` (here the requester pauses it) and
+      // its checks are superseded in that commit; the reviewer's Task is stopped only after it. A
+      // report landing in between is still held to what a reviewer may write.
+      await call(human(requester), 'pause_goal', { goalRunId });
+      expect(await checkRow(goalRunId)).toMatchObject({ status: 'superseded' });
+      expect((await reviewTask(goalRunId)).status).toBe('running');
+      const late = await refusal(
+        dispatchCapability({ pool }, await workerOf(task.id), 'report_task_result', {
+          summary: 'reviewed',
+          output: scores(4, 4),
+          factsToAssert: [
+            {
+              linkType: 'reviewed',
+              source: { objectType: 'Document', identity: { name: 'draft' } },
+              target: { objectType: 'Document', identity: { name: 'outline' } },
+            },
+          ],
+          proposedSkill: {
+            name: 'grading',
+            description: 'how this goal is graded',
+            markdown: 'clear weighs 3, complete 1',
+          },
+        }),
+      );
+      expect(late.status).toBe(400);
+      expect(late.message).toContain('factsToAssert:');
+      expect(late.message).toContain('proposedSkill:');
+      // Its scores alone are kept on the Task and move nothing (§3.4).
+      await reviewerReports(task.id, scores(4, 4));
+      expect(await checkRow(goalRunId)).toMatchObject({ status: 'superseded' });
+      expect(
+        await raw(
+          'select 1 from goal_review_assessments where workspace_id = $1 and goal_run_id = $2',
+          [workspaceId, goalRunId],
+        ),
+      ).toEqual([]);
     });
 
     it('a review and the requester’s confirmation: they confirm only once the review passed, and the goal is achieved on their word', async () => {

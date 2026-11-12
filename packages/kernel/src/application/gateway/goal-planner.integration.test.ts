@@ -1232,6 +1232,29 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(refused.message).toContain('evidence:');
       expect(await facts()).toBe(before);
       expect((await plannerTask(round.id)).status).toBe('running');
+
+      // S11 GO18 (independent review of #1102): the round stops running (here the owner holds the
+      // run) and the planner's Task is stopped only after that commit — a report landing in
+      // between is still held to what a planner may write.
+      await call(human(ownerId), 'pause_goal', { goalRunId });
+      expect(await rounds(goalRunId)).toMatchObject([{ status: 'abandoned' }]);
+      expect((await plannerTask(round.id)).status).toBe('running');
+      const late = await refusal(
+        dispatchCapability({ pool }, await workerOf(task.id), 'report_task_result', {
+          summary: 'planned',
+          output: { decision: 'no_revision', reason: 'nothing to change' },
+          factsToAssert: [
+            {
+              linkType: 'runs_on',
+              source: { objectType: 'Host', identity: { name: 'web-1' } },
+              target: { objectType: 'Host', identity: { name: 'rack-1' } },
+            },
+          ],
+        }),
+      );
+      expect(late).toMatchObject({ status: 400 });
+      expect(late.message).toContain('factsToAssert:');
+      expect(await facts()).toBe(before);
     });
 
     it('a rejected proposal stays rejected: no accepting it after, no new round for the same failure', async () => {

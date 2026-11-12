@@ -1,5 +1,9 @@
-import type { GoalPlan } from '@nexttime/shared';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { type GoalPlan, REVIEW_SCORE_MAX, REVIEW_WEIGHT_MAX } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
+import { resolveOntologyDir } from '../../substrate/ontology/loader.js';
+import { loadReviewerTemplate } from '../task/review-task.js';
 import { planHints, roundAcceptance } from './plan.js';
 import { REVIEW_SEALED, sameModelOf, sealReviews, unsealPlannerPlan } from './review.js';
 
@@ -142,5 +146,23 @@ describe('a plan checked by reviews (S11 GO18, independent review N4)', () => {
     expect(planHints(confirmed).map((hint) => hint.code)).toEqual(['requester_confirm_only']);
     expect(roundAcceptance(PLAN, STATEMENT)).toEqual([OBSERVE, REVIEW]);
     expect(planHints(PLAN)).toEqual([]);
+  });
+});
+
+// #481 on #1102: the prompts write the platform's numbers out; they stay the platform's.
+describe('the prompts say the platform’s scoring numbers', () => {
+  const flat = (text: string) => text.replace(/\s+/g, ' ');
+
+  it('the reviewer’s template scores 0 to the score maximum', async () => {
+    const template = await loadReviewerTemplate();
+    const prompt = flat(String(template.definition.systemPrompt));
+    expect(prompt).toContain(
+      `Score 0 when the criterion is not met at all and ${REVIEW_SCORE_MAX} when`,
+    );
+  });
+
+  it('the entry template gives a criterion’s weight as 1 to the weight maximum', async () => {
+    const entry = flat(await readFile(join(resolveOntologyDir(), 'entry-agent.yaml'), 'utf8'));
+    expect(entry).toContain(`a \`weight\` of 1 to ${REVIEW_WEIGHT_MAX})`);
   });
 });

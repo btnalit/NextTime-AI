@@ -1317,9 +1317,11 @@ const PLANNER_REPORT_FORBIDDEN = [
  * S11 GO9a: a planning Task's report, after its output contract passed (`report_task_result`,
  * `worker-result-handler.ts`): it holds nothing but the proposal, and a `revise` plan passes every
  * check a person's revision does on the run as it stands — refused otherwise, each place named,
- * so the planner fixes it in its session (the contract's way). Nothing is checked once the round
- * stopped running: the report is kept on the Task and moves nothing. `contract` is the report as
- * it would be stored (scrubbed). Returns the problems; empty when it passes or is no planner's.
+ * so the planner fixes it in its session (the contract's way). What a planner may write is held
+ * for as long as its Task takes a report; the rest is not checked once the round stopped running
+ * (S11 GO18, independent review of #1102: a round settles before its Task is stopped after the
+ * commit): the report is kept on the Task and moves nothing. `contract` is the report as it would
+ * be stored (scrubbed). Returns the problems; empty when it passes or is no planner's.
  */
 export async function plannerReportProblems(
   client: PoolClient,
@@ -1329,17 +1331,6 @@ export async function plannerReportProblems(
 ): Promise<readonly OutputProblem[]> {
   const planning = await readTaskPlanningRound(client, workspaceId, taskId);
   if (!planning) return [];
-  const round = await client.query<{
-    status: string;
-    based_on_revision: number;
-    kind: PlanningRoundKind;
-  }>(
-    `select status, based_on_revision, kind from goal_planning_rounds
-      where workspace_id = $1 and id = $2`,
-    [workspaceId, planning.planningRoundId],
-  );
-  const row = round.rows[0];
-  if (row?.status !== 'running') return [];
   const problems: OutputProblem[] = [];
   for (const field of PLANNER_REPORT_FORBIDDEN) {
     const value = contract[field];
@@ -1350,6 +1341,17 @@ export async function plannerReportProblems(
         'a planner reports its proposal in output only; it writes no Facts, evidence, artifacts or proposals',
     });
   }
+  const round = await client.query<{
+    status: string;
+    based_on_revision: number;
+    kind: PlanningRoundKind;
+  }>(
+    `select status, based_on_revision, kind from goal_planning_rounds
+      where workspace_id = $1 and id = $2`,
+    [workspaceId, planning.planningRoundId],
+  );
+  const row = round.rows[0];
+  if (row?.status !== 'running') return problems;
   const output = PlannerOutputSchema.safeParse(contract.output);
   if (!output.success) {
     for (const issue of output.error.issues) {
