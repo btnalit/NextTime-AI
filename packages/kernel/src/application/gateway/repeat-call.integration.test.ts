@@ -1958,10 +1958,11 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
     },
   },
   reset_user_password: {
-    // Each reset hashes a new temporary password and revokes the user's credentials again.
-    "a member of the case's workspace": {
+    // Each reset hashes a new temporary password and revokes the user's credentials again (the
+    // first time a live session's, per #493 on batch 23).
+    "a second owner of the case's workspace with a live session": {
       first: expect.objectContaining({ temporaryPassword: expect.any(String) }),
-      setUp: async (ctx) => ({ userId: await workspaceMember(ctx) }),
+      setUp: async (ctx) => ({ userId: await memberWithSession(ctx) }),
       moves: async (ctx, params) => {
         const result = await ctx.pool.query<{ hash: string }>(
           'select password_hash as hash from users where id = $1',

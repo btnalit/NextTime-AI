@@ -841,7 +841,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: repeats
+    repeat: repeats  # each reset hashes a new temporary password and revokes the credentials again
   resolve_conflict:
     console: required
     agents: []
@@ -947,7 +947,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: repeats
+    repeat: repeats  # the same list again rewrites the workspace AgentPolicy's updated_at
   set_auto_approved_action_kind:
     console: required
     agents: []
@@ -993,7 +993,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: repeats
+    repeat: repeats  # the same limit again rewrites the user row's updated_at
   set_user_status:
     console: required
     agents: []
@@ -1075,7 +1075,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: repeats
+    repeat: repeats  # each update keeps the replaced version in the history and takes the next
   update_user:
     console: required
     agents: []
