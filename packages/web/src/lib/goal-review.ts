@@ -148,11 +148,20 @@ export function inPlanOrder(
   subjects: readonly string[],
   stepKeys: readonly string[],
 ): readonly string[] {
+  return inPlanOrderBy(subjects, (key) => key, stepKeys);
+}
+
+/** `inPlanOrder` for items that each name a step (a review's executor models, say). */
+export function inPlanOrderBy<T>(
+  items: readonly T[],
+  stepKeyOf: (item: T) => string,
+  stepKeys: readonly string[],
+): readonly T[] {
   const at = (key: string) => {
     const index = stepKeys.indexOf(key);
     return index === -1 ? stepKeys.length : index;
   };
-  return [...subjects].sort((a, b) => at(a) - at(b));
+  return [...items].sort((a, b) => at(stepKeyOf(a)) - at(stepKeyOf(b)));
 }
 
 /** The points against the line: 「得分 11 / 16（69%），至少 12 分通过」. */

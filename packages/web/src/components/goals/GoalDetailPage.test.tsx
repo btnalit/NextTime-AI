@@ -233,10 +233,15 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
 
     const failed = reviewCheck({
       ...review,
+      subjects: ['apply', 'fetch'],
       assessment: {
         reviewTaskId: TASK,
         reviewerModel: null,
-        executorModels: [{ stepKey: 'apply', attempt: 1, model: null }],
+        // Not in the plan's order (fetch runs first): the page lists them the way the plan runs.
+        executorModels: [
+          { stepKey: 'apply', attempt: 1, model: null },
+          { stepKey: 'fetch', attempt: 2, model: null },
+        ],
         sameModel: true,
         lines: [
           {
@@ -289,8 +294,11 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     expect(within(outcome).getByTestId('goal-review-comment').textContent).toContain(
       'Thorough but hard to read.',
     );
-    expect(within(outcome).getByTestId('goal-review-models').textContent).toContain(
-      'apply（第 1 次尝试）：默认模型',
+    const models = within(outcome).getByTestId('goal-review-models').textContent ?? '';
+    expect(models).toContain('apply（第 1 次尝试）：默认模型');
+    expect(models.indexOf('fetch（第 2 次尝试）')).toBeGreaterThan(-1);
+    expect(models.indexOf('fetch（第 2 次尝试）')).toBeLessThan(
+      models.indexOf('apply（第 1 次尝试）'),
     );
     expect(within(outcome).getByTestId('goal-review-same-model').textContent).toContain(
       '同一个模型',

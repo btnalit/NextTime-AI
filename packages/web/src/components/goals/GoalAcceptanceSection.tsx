@@ -342,7 +342,9 @@ function CheckRow({
         <span className="text-small text-danger">{checkErrorLabel(check.lastError, t)}</span>
       ) : null}
       {/* S11 GO18b: what the review came to, and how. */}
-      {check.review ? <ReviewOutcome review={check.review} http={http} /> : null}
+      {check.review ? (
+        <ReviewOutcome review={check.review} stepOrder={stepOrder} http={http} />
+      ) : null}
     </li>
   );
 }

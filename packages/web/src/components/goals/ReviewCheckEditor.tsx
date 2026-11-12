@@ -83,6 +83,7 @@ export function ReviewCheckEditor({
     (row) => row.id,
   );
   const modelKnown = review.model === '' || modelRows.some((row) => row.id === review.model);
+  const catalogUnread = models.state.status === 'error';
   const passChoices = REVIEW_PASS_AT_CHOICES.includes(Number(review.passAt))
     ? REVIEW_PASS_AT_CHOICES
     : [...REVIEW_PASS_AT_CHOICES, Number(review.passAt)].sort((a, b) => a - b);
@@ -286,10 +287,15 @@ export function ReviewCheckEditor({
       <Field
         id={`${id}-model`}
         label={t('评审模型', 'Reviewer model')}
-        hint={t(
-          '从模型目录里这个工作区允许的模型中选；和做这些步骤的模型不同，评审更可信。',
-          'From the catalog’s models this workspace allows; a model other than the one doing the steps makes the review more telling.',
-        )}
+        // While the catalog cannot be read, the note below says what is left to pick instead.
+        hint={
+          catalogUnread
+            ? undefined
+            : t(
+                '从模型目录里这个工作区允许的模型中选；和做这些步骤的模型不同，评审更可信。',
+                'From the catalog’s models this workspace allows; a model other than the one doing the steps makes the review more telling.',
+              )
+        }
         error={modelError}
       >
         <Select
@@ -300,7 +306,7 @@ export function ReviewCheckEditor({
           onChange={(event) => patch({ model: event.target.value })}
           invalid={modelError !== null}
           aria-describedby={withModelHealthNote(
-            describedBy(`${id}-model`, true, modelError !== null),
+            describedBy(`${id}-model`, !catalogUnread, modelError !== null),
             `${id}-model-health`,
             modelRows,
             review.model,
@@ -325,7 +331,7 @@ export function ReviewCheckEditor({
           testId="goal-plan-review-model-health"
           id={`${id}-model-health`}
         />
-        {models.state.status === 'error' ? (
+        {catalogUnread ? (
           <span
             className="row-wrap text-small text-warn"
             data-testid="goal-plan-review-models-error"

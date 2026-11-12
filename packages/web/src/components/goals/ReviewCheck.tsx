@@ -2,6 +2,7 @@ import type { GoalPlan, GoalReviewWire, ReviewCheck } from '@nexttime/shared';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import {
   assessedModelText,
+  inPlanOrderBy,
   planReviewModelMatch,
   planReviewModelNote,
   reviewCriterionWeightText,
@@ -75,9 +76,12 @@ export function ReviewDeclaration({
 
 export function ReviewOutcome({
   review,
+  stepOrder = [],
   http,
 }: {
   readonly review: GoalReviewWire;
+  /** The plan's step keys, in order: the executors' models are listed the way the plan runs. */
+  readonly stepOrder?: readonly string[];
   readonly http?: CapabilityCaller;
 }) {
   const t = useT();
@@ -163,14 +167,16 @@ export function ReviewOutcome({
             `Reviewer model: ${assessedModelText(assessment.reviewerModel, t)}`,
           )}
         </span>
-        {assessment.executorModels.map((executor) => (
-          <span key={executor.stepKey}>
-            {t(
-              `${executor.stepKey}（第 ${executor.attempt} 次尝试）：${assessedModelText(executor.model, t)}`,
-              `${executor.stepKey} (attempt ${executor.attempt}): ${assessedModelText(executor.model, t)}`,
-            )}
-          </span>
-        ))}
+        {inPlanOrderBy(assessment.executorModels, (executor) => executor.stepKey, stepOrder).map(
+          (executor) => (
+            <span key={executor.stepKey}>
+              {t(
+                `${executor.stepKey}（第 ${executor.attempt} 次尝试）：${assessedModelText(executor.model, t)}`,
+                `${executor.stepKey} (attempt ${executor.attempt}): ${assessedModelText(executor.model, t)}`,
+              )}
+            </span>
+          ),
+        )}
         {task}
       </span>
       {assessment.sameModel === false ? (

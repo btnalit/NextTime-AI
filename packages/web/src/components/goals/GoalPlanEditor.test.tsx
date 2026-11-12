@@ -1637,6 +1637,8 @@ describe('S11 GO18b: an independent review, edited in the plan editor', () => {
     const check = reviewCheck();
     const note = await within(check).findByTestId('goal-plan-review-models-error');
     expect(note.textContent).toContain('读不到模型目录');
+    // The usual "pick from the catalog" hint would contradict it: gone while the catalog is out.
+    expect(check.textContent).not.toContain('从模型目录里这个工作区允许的模型中选');
     // The requester's model is still there to pick.
     expect((within(check).getByTestId('goal-plan-review-model') as HTMLSelectElement).value).toBe(
       '',
@@ -1651,6 +1653,7 @@ describe('S11 GO18b: an independent review, edited in the plan editor', () => {
         (option) => option.value,
       ),
     ).toEqual(['', 'model-a', 'model-b']);
+    expect(check.textContent).toContain('从模型目录里这个工作区允许的模型中选');
   });
 
   it('removes a new review and gives the focus back to 加一条独立评审, which goes at the plan’s limit', async () => {

@@ -2,6 +2,7 @@ import { REVIEW_SCORE_MAX, REVIEW_WEIGHT_MAX, reviewDerivation } from '@nexttime
 import { describe, expect, it } from 'vitest';
 import {
   inPlanOrder,
+  inPlanOrderBy,
   planReviewModelMatch,
   reviewMaxPoints,
   reviewPointsText,
@@ -71,6 +72,14 @@ describe('lib/goal-review (S11 GO18b)', () => {
       'draft',
       'polish',
       'gone',
+    ]);
+    const executors = [
+      { stepKey: 'polish', attempt: 1 },
+      { stepKey: 'draft', attempt: 2 },
+    ];
+    expect(inPlanOrderBy(executors, (item) => item.stepKey, ['draft', 'polish'])).toEqual([
+      { stepKey: 'draft', attempt: 2 },
+      { stepKey: 'polish', attempt: 1 },
     ]);
   });
 });
