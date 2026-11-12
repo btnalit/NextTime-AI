@@ -1,5 +1,11 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
-import { type BrowserContext, type Page, type Response, test as base } from '@playwright/test';
+import {
+  type BrowserContext,
+  type Page,
+  type Request,
+  type Response,
+  test as base,
+} from '@playwright/test';
 
 /**
  * e2e/lib/test.ts — the `test` every spec imports (docs/test-coverage-gaps-2026-11-06.md §5.3,
@@ -58,20 +64,43 @@ function watchSocketRoutes(target: BrowserContext | Page, onRoute: () => void): 
   };
 }
 
+/** The capability a request calls (`POST /api/cap/<name>`), or undefined for any other request. */
+function capName(request: Request): string | undefined {
+  if (request.method() !== 'POST') return undefined;
+  return HTTP_PATH.exec(new URL(request.url()).pathname)?.[1];
+}
+
+/**
+ * How long `stop` waits for the answers to capability requests the page has sent (legacy 692). The
+ * page can act on an answer — the test sees the DOM change and ends — before Playwright reports
+ * that answer's `response` event; stopping at once would drop the call, often a test's last write.
+ */
+const IN_FLIGHT_GRACE_MS = 5_000;
+
 /**
  * Starts recording `context`'s capability calls into `calls`; the returned function stops it and
- * resolves once every response seen so far has been classified.
+ * resolves once every capability request sent so far has been answered (or failed, or the grace
+ * period ran out) and every answer classified.
  */
 export function recordCapCalls(context: BrowserContext, calls: CapCall[]): () => Promise<void> {
   const settling: Promise<void>[] = [];
   let contextRoutesSockets = false;
   const pagesRoutingSockets = new WeakSet<Page>();
+  // Capability requests sent and not yet answered or failed; `stop` waits for this to empty.
+  const inFlight = new Set<Request>();
+  let drained: (() => void) | undefined;
+  const settle = (request: Request) => {
+    if (inFlight.delete(request) && inFlight.size === 0) drained?.();
+  };
+  const onRequest = (request: Request) => {
+    if (capName(request) !== undefined) inFlight.add(request);
+  };
+  const onRequestFailed = (request: Request) => settle(request);
   const onResponse = (response: Response) => {
     const request = response.request();
-    if (request.method() !== 'POST') return;
-    const match = HTTP_PATH.exec(new URL(response.url()).pathname);
-    if (match?.[1] === undefined) return;
-    const name = match[1];
+    settle(request);
+    const name = capName(request);
+    if (name === undefined) return;
     settling.push(
       response
         .serverAddr()
@@ -109,10 +138,26 @@ export function recordCapCalls(context: BrowserContext, calls: CapCall[]): () =>
   watchSocketRoutes(context, () => {
     contextRoutesSockets = true;
   });
+  context.on('request', onRequest);
+  context.on('requestfailed', onRequestFailed);
   context.on('response', onResponse);
   context.on('page', onPage);
   for (const page of context.pages()) onPage(page);
   return async () => {
+    if (inFlight.size > 0) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        new Promise<void>((resolve) => {
+          drained = resolve;
+        }),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, IN_FLIGHT_GRACE_MS);
+        }),
+      ]);
+      clearTimeout(timer);
+    }
+    context.off('request', onRequest);
+    context.off('requestfailed', onRequestFailed);
     context.off('response', onResponse);
     context.off('page', onPage);
     await Promise.all(settling);
