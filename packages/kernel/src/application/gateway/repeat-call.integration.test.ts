@@ -111,6 +111,9 @@ interface Recipe {
    *  way its holder does (`callerFor`), so a Handle revoked, expired or not signed by the task
    *  runtime's key is refused before the handler (per #493 on batch 12). */
   readonly by?: (ctx: RecipeContext) => Promise<HeldHandle>;
+  /** For a `repeats` row: what the second call moves, read after each call (the two reads must
+   *  differ), so a change elsewhere in the digest cannot stand in for it. */
+  readonly moves?: (ctx: RecipeContext, params: Record<string, unknown>) => Promise<unknown>;
 }
 
 /** The Handle each spawned WorkerRun was given, by WorkerRun id (the supervisor stub's record). */
@@ -173,17 +176,15 @@ function platformCaller(user: UserRow): ResolvedCaller {
   };
 }
 
-/** A digest of the platform plane: every `public` table with no `workspace_id` column, all of its
- *  rows (test files run one at a time, so nothing else writes these while a case runs). */
-async function platformDigest(pool: Pool): Promise<Record<string, string>> {
+/** A digest of the whole database but its audit trail: every `public` table, all of its rows. A
+ *  platform row may write anywhere (another workspace, a member's Principals), and test files run
+ *  one at a time, so nothing else writes while a case runs. */
+async function databaseDigest(pool: Pool): Promise<Record<string, string>> {
   const tables = await pool.query<{ table_name: string }>(
-    `select t.table_name from information_schema.tables t
-      where t.table_schema = 'public' and t.table_type = 'BASE TABLE'
-        and t.table_name <> 'schema_migrations'
-        and not exists (select 1 from information_schema.columns c
-                         where c.table_schema = 'public' and c.table_name = t.table_name
-                           and c.column_name = 'workspace_id')
-      order by t.table_name`,
+    `select table_name from information_schema.tables
+      where table_schema = 'public' and table_type = 'BASE TABLE'
+        and table_name not in ('audit_records', 'schema_migrations')
+      order by table_name`,
   );
   const digest: Record<string, string> = {};
   for (const { table_name } of tables.rows) {
@@ -191,7 +192,7 @@ async function platformDigest(pool: Pool): Promise<Record<string, string>> {
       `select md5(coalesce(string_agg(t::text, '|' order by t::text), '')) as digest
          from "${table_name}" t`,
     );
-    digest[`platform:${table_name}`] = result.rows[0]?.digest ?? '';
+    digest[table_name] = result.rows[0]?.digest ?? '';
   }
   return digest;
 }
@@ -737,6 +738,26 @@ function platformUser(ctx: RecipeContext): Promise<UserRow> {
     displayName: 'Repeat Person',
     password: 'repeat-walk-password-1',
   });
+}
+
+/** A user the administrator creates (create_user) as a member of the case's workspace. */
+async function workspaceMember(ctx: RecipeContext): Promise<string> {
+  const created = await as<{ user: { id: string } }>(ctx, 'create_user', {
+    login: `repeat-member-${randomUUID().slice(0, 8)}`,
+    displayName: 'Repeat Member',
+    workspaceId: ctx.seed.workspaceId,
+    role: 'member',
+  });
+  return created.user.id;
+}
+
+/** A user row's updated_at, as text: what a write of the same values still moves. */
+async function userUpdatedAt(ctx: RecipeContext, userId: string): Promise<string | undefined> {
+  const result = await ctx.pool.query<{ at: string }>(
+    'select updated_at::text as at from users where id = $1',
+    [userId],
+  );
+  return result.rows[0]?.at;
 }
 
 /** The ChangePlan segment of a shipped pack installed here, as its dry run showed it. */
@@ -1816,7 +1837,7 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
     },
   },
   // Platform rows: run by an administrator of the case's own (platformCaller); their rows are the
-  // platform plane's as well as the workspace's (platformDigest).
+  // whole database's (databaseDigest), their audit rows every one written since the case began.
   update_user: {
     // The same values written again: the row moves only by its updated_at.
     'another user, a new display name': {
@@ -1825,13 +1846,39 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
         userId: (await platformUser(ctx)).id,
         displayName: 'Renamed Person',
       }),
+      moves: (ctx, params) => userUpdatedAt(ctx, params.userId as string),
     },
   },
   set_user_status: {
-    // Disabling again revokes the (already revoked) credentials again and moves updated_at.
-    'another active user, to disabled': {
+    // Disabling again revokes the member's (already revoked) credentials again and moves the
+    // user row's updated_at.
+    "a member of the case's workspace, to disabled": {
       first: expect.objectContaining({ status: 'disabled' }),
-      setUp: async (ctx) => ({ userId: (await platformUser(ctx)).id, status: 'disabled' }),
+      setUp: async (ctx) => ({ userId: await workspaceMember(ctx), status: 'disabled' }),
+      moves: (ctx, params) => userUpdatedAt(ctx, params.userId as string),
+    },
+  },
+  create_user: {
+    // The login is taken by the first call, so the same call again is refused (409 login_taken).
+    'a new login': {
+      first: expect.objectContaining({ user: expect.objectContaining({ status: 'active' }) }),
+      setUp: async () => ({
+        login: `repeat-new-${randomUUID().slice(0, 8)}`,
+        displayName: 'New Person',
+        workspaceId: null,
+      }),
+    },
+  },
+  add_membership: {
+    // The first call makes the user a member, so the same call again is refused (409
+    // already_member).
+    "a user who is not in the case's workspace": {
+      first: expect.objectContaining({ role: 'member' }),
+      setUp: async (ctx) => ({
+        userId: (await platformUser(ctx)).id,
+        workspaceId: ctx.seed.workspaceId,
+        role: 'member',
+      }),
     },
   },
   roll_back_change_segment: {
@@ -1847,6 +1894,8 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
 /** Rows whose schema-built params cannot make a first call succeed on the bare seed — a param
  *  naming something the walk has no value for — run their recipes instead of that case. */
 const RECIPES_ONLY: ReadonlySet<string> = new Set([
+  'create_user',
+  'add_membership',
   'update_user',
   'set_user_status',
   'verify_change_segment',
@@ -2080,23 +2129,32 @@ describe.runIf(DATABASE_URL !== undefined)(
       await pool?.end();
     });
 
-    /** Every row the case can touch, but audit: its workspace's, and for a platform row the
-     *  platform plane's too. */
+    /** Every row the case can touch, but audit: its workspace's; for a platform row, every row
+     *  of the database. */
     async function rowsBut(
       workspaceId: string,
       platform: boolean,
     ): Promise<Record<string, string>> {
+      if (platform) return databaseDigest(pool);
       const { audit_records: _audit, ...rest } = await workspaceDigest(pool, workspaceId);
-      return platform ? { ...rest, ...(await platformDigest(pool)) } : rest;
+      return rest;
     }
 
-    /** The case's audit rows: its workspace's, and those its administrator wrote anywhere. */
-    async function auditRows(workspaceId: string, admin: UserRow | null): Promise<AuditRow[]> {
-      const result = await pool.query<AuditRow>(
-        `select id, action, actor_principal_id, actor_user_id, payload from audit_records
-          where workspace_id = $1 or actor_user_id = $2`,
-        [workspaceId, admin?.id ?? null],
-      );
+    /** The case's audit rows: its workspace's; for a platform row, every row written since the
+     *  case began (`since`), wherever it landed. */
+    async function auditRows(workspaceId: string, since: Date | null): Promise<AuditRow[]> {
+      const result =
+        since === null
+          ? await pool.query<AuditRow>(
+              `select id, action, actor_principal_id, actor_user_id, payload from audit_records
+                where workspace_id = $1`,
+              [workspaceId],
+            )
+          : await pool.query<AuditRow>(
+              `select id, action, actor_principal_id, actor_user_id, payload from audit_records
+                where created_at >= $1`,
+              [since],
+            );
       return result.rows;
     }
 
@@ -2165,6 +2223,18 @@ describe.runIf(DATABASE_URL !== undefined)(
       const call = async () =>
         dispatchCapability({ pool }, await callerNow(), capability.name, params);
       const entityOf = chosen?.entity ?? entityId;
+      const ctx: RecipeContext = {
+        pool,
+        caller,
+        seed,
+        memberId: workspace.principals.get('member') as string,
+        admin,
+      };
+      // A platform row's audit rows are told apart by time: those written from here on.
+      const since = platform
+        ? ((await pool.query<{ now: Date }>('select clock_timestamp() as now')).rows[0]?.now ??
+          null)
+        : null;
 
       let first: unknown;
       try {
@@ -2176,8 +2246,9 @@ describe.runIf(DATABASE_URL !== undefined)(
       }
       if (chosen?.first !== undefined) expect(first).toEqual(chosen.first);
       const rowsAfterFirst = await rowsBut(workspace.workspaceId, platform);
+      const movedAfterFirst = await chosen?.moves?.(ctx, params);
       const auditAfterFirst = new Set(
-        (await auditRows(workspace.workspaceId, admin)).map((row) => row.id),
+        (await auditRows(workspace.workspaceId, since)).map((row) => row.id),
       );
 
       let second: unknown;
@@ -2188,7 +2259,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         refusal = error;
       }
       const rowsAfterSecond = await rowsBut(workspace.workspaceId, platform);
-      const newAudit = (await auditRows(workspace.workspaceId, admin)).filter(
+      const movedAfterSecond = await chosen?.moves?.(ctx, params);
+      const newAudit = (await auditRows(workspace.workspaceId, since)).filter(
         (row) => !auditAfterFirst.has(row.id),
       );
 
@@ -2225,6 +2297,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(firstId, 'repeats: the result names the entity it acted on').toBeDefined();
         expect(entityOf(second, params)).toBe(firstId);
         expect(rowsAfterSecond).not.toEqual(rowsAfterFirst);
+        if (chosen?.moves !== undefined) {
+          expect(
+            movedAfterSecond,
+            'repeats: the second call moves what the recipe names',
+          ).not.toEqual(movedAfterFirst);
+        }
       } else {
         throw new Error(`unknown repeat declaration ${repeat} (guard M6 should have refused it)`);
       }
