@@ -20,7 +20,7 @@
 #           every declared row is exercised by kernel repeat-call.integration.test.ts
 ratchet:
   console_unexplained: 10
-  kernel_test_missing: 3
+  kernel_test_missing: 2
   e2e_waived: 65
   repeat_unclear: 36
 capabilities:
@@ -993,7 +993,6 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    kernel_test: missing
     repeat: repeats
   set_user_status:
     console: required
