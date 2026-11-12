@@ -5,6 +5,11 @@ import {
   type GoalDetailWire,
   type GoalPlan,
   MAX_ACCEPTANCE_PROMPT_CHARS,
+  MAX_PLAN_ACCEPTANCE_CHECKS,
+  MAX_PLAN_REVIEW_CHECKS,
+  MAX_REVIEW_CRITERIA,
+  MAX_REVIEW_CRITERION_CHARS,
+  MAX_REVIEW_SUBJECTS,
   MAX_REVISION_REASON_CHARS,
   MAX_STEP_FILES_FROM,
   MAX_WORKER_SPEC_INSTRUCTIONS_CHARS,
@@ -12,6 +17,7 @@ import {
   MAX_WORKER_SPEC_TOKEN_BUDGET,
   type OutputSchema,
   type PlanStep,
+  type ReviewCheck,
   SECRET_FIELD_MASK,
   STEP_KEY_PATTERN,
   type StepRemoval,
@@ -48,6 +54,11 @@ import type { WorkerDefinitionSummary } from './tasks.js';
  * field by field (`SpecDraft`): each list, the model and the observation scope either keep the
  * Worker's (「沿用定义」) or are picked from the directories; only the step's responsibility is
  * typed, and the token cap is a number.
+ *
+ * S11 GO18b: an independent review (a `review` check) is added and edited here too
+ * (`ReviewDraft`): the steps it reviews are ticked from the plan's, each criterion is described and
+ * weighted from a select, the pass line and the model are picked, and the criteria's keys are made
+ * up here — nothing that can be chosen is typed.
  */
 
 /** S11 GO15b: the WorkerSpec fields the editor offers (all of them). */
@@ -67,7 +78,8 @@ export type FieldKey =
   | `step:${string}:${'key' | 'worker' | 'dependsOn' | 'filesFrom' | 'maxAttempts' | 'input'}`
   | `step:${string}:spec.${SpecField}`
   | `step:${string}`
-  | `check:${string}:prompt`
+  | `check:${string}:${'prompt' | 'subjects' | 'criteria' | 'passAt' | 'model'}`
+  | `check:${string}:criterion:${string}`
   | `check:${string}`
   | `budget:${keyof GoalBudget}`
   | 'reason'
@@ -197,13 +209,43 @@ export function specChanged(step: StepDraft): boolean {
 
 export interface CheckDraft {
   readonly uid: string;
-  /** The check as the plan in force has it; `null` for a confirmation this revision adds. */
+  /** The check as the plan in force has it; `null` for a confirmation or a review this revision
+   *  adds. */
   readonly original: AcceptanceCheck | null;
   readonly key: string;
-  /** A `requester_confirm` check's prompt; the editor changes no other kind of check. */
+  /** A `requester_confirm` check's prompt. */
   readonly prompt: string;
+  /** S11 GO18b: a `review` check as the editor holds it — `null` for every other kind. Besides a
+   *  confirmation's prompt, the only check the editor changes. */
+  readonly review: ReviewDraft | null;
   readonly removed: boolean;
 }
+
+/** S11 GO18b: one criterion of a review as the editor holds it. Its key is the plan's, kept as it
+ *  was, or one the editor makes up for a criterion this revision adds (`c1`, `c2`…): never typed. */
+export interface ReviewCriterionDraft {
+  readonly uid: string;
+  readonly key: string;
+  readonly description: string;
+  /** `'1'` to `'5'` (`REVIEW_WEIGHT_MAX`), as the select holds it. */
+  readonly weight: string;
+}
+
+/** S11 GO18b: an independent review as the editor holds it — the steps it reviews (ticked from the
+ *  plan's), its criteria, its pass line (picked, percent) and its model (picked from the catalog;
+ *  `''`: the requester's). */
+export interface ReviewDraft {
+  readonly subjects: readonly string[];
+  readonly criteria: readonly ReviewCriterionDraft[];
+  readonly passAt: string;
+  readonly model: string;
+}
+
+/** The pass lines the editor offers, in percent of the most a review can score; a check's own line
+ *  stays offered too. */
+export const REVIEW_PASS_AT_CHOICES: readonly number[] = [50, 60, 70, 75, 80, 85, 90, 100];
+/** A new review's line. */
+export const DEFAULT_REVIEW_PASS_AT = 75;
 
 /** Budget fields as typed; wall clock in minutes. */
 export interface BudgetDraft {
@@ -277,6 +319,7 @@ export function draftFromDetail(detail: GoalDetailWire): PlanDraft {
       original: check,
       key: check.key,
       prompt: check.kind === 'requester_confirm' ? check.prompt : '',
+      review: check.kind === 'review' ? reviewDraftOf(check) : null,
       removed: false,
     })),
     budget: {
@@ -312,15 +355,134 @@ export function requesterConfirmDraft(draft: PlanDraft): CheckDraft {
   const taken = new Set(draft.acceptance.map((check) => check.key));
   let key = 'requester-confirm';
   for (let n = 2; taken.has(key); n += 1) key = `requester-confirm-${n}`;
-  return { uid: newUid('check'), original: null, key, prompt: '', removed: false };
+  return { uid: newUid('check'), original: null, key, prompt: '', review: null, removed: false };
+}
+
+/** Whether a check is the requester's confirmation (one the plan has, or one this revision adds). */
+export function isConfirmDraft(check: CheckDraft): boolean {
+  return (
+    check.review === null &&
+    (check.original === null || check.original.kind === 'requester_confirm')
+  );
 }
 
 /** Whether the draft holds a `requester_confirm` check that stays (a plan has at most one). */
 export function hasRequesterConfirm(draft: PlanDraft): boolean {
-  return draft.acceptance.some(
-    (check) =>
-      !check.removed && (check.original === null || check.original.kind === 'requester_confirm'),
+  return draft.acceptance.some((check) => !check.removed && isConfirmDraft(check));
+}
+
+/** S11 GO18b: a review check of the plan as the editor holds it. */
+export function reviewDraftOf(check: ReviewCheck): ReviewDraft {
+  return {
+    subjects: check.subjects,
+    criteria: check.criteria.map((criterion) => ({
+      uid: newUid('criterion'),
+      key: criterion.key,
+      description: criterion.description,
+      weight: String(criterion.weight),
+    })),
+    passAt: String(check.passAt),
+    model: check.model ?? '',
+  };
+}
+
+/** S11 GO18b: a criterion a review gets in this revision — weight 1, with a key none of the
+ *  review's criteria has or had (`c1`, `c2`…). */
+export function newReviewCriterion(
+  review: ReviewDraft,
+  original: AcceptanceCheck | null,
+): ReviewCriterionDraft {
+  const taken = new Set([
+    ...review.criteria.map((criterion) => criterion.key),
+    ...(original?.kind === 'review' ? original.criteria.map((criterion) => criterion.key) : []),
+  ]);
+  let n = 1;
+  while (taken.has(`c${n}`)) n += 1;
+  return { uid: newUid('criterion'), key: `c${n}`, description: '', weight: '1' };
+}
+
+/** S11 GO18b: a review this revision adds (key `review`, `review-2`…): of the steps the plan ends
+ *  with — those no kept step comes after — with one criterion to describe, passing at
+ *  {@link DEFAULT_REVIEW_PASS_AT}%, on the requester's model. */
+export function reviewCheckDraft(draft: PlanDraft): CheckDraft {
+  const taken = new Set(draft.acceptance.map((check) => check.key));
+  let key = 'review';
+  for (let n = 2; taken.has(key); n += 1) key = `review-${n}`;
+  const kept = draft.steps.filter((step) => !step.removed && STEP_KEY_PATTERN.test(step.key));
+  const last = kept.filter((step) => !kept.some((other) => other.dependsOn.includes(step.key)));
+  const review: ReviewDraft = {
+    subjects: last.slice(0, MAX_REVIEW_SUBJECTS).map((step) => step.key),
+    criteria: [],
+    passAt: String(DEFAULT_REVIEW_PASS_AT),
+    model: '',
+  };
+  return {
+    uid: newUid('check'),
+    original: null,
+    key,
+    prompt: '',
+    review: { ...review, criteria: [newReviewCriterion(review, null)] },
+    removed: false,
+  };
+}
+
+/** S11 GO18b: whether one more review may be added — under the plan's limits on reviews and on
+ *  checks. */
+export function canAddReview(draft: PlanDraft): boolean {
+  const kept = draft.acceptance.filter((check) => !check.removed);
+  return (
+    kept.length < MAX_PLAN_ACCEPTANCE_CHECKS &&
+    kept.filter((check) => check.review !== null).length < MAX_PLAN_REVIEW_CHECKS
   );
+}
+
+/** S11 GO18b: the review check a review draft stands for. Subjects ticked off and on again keep the
+ *  plan's order; left as the plan has it, the review is the plan's own object (`planOf`), so what a
+ *  read only showed of it goes back as stored (`reviewRevisedPlan`). */
+function reviewCheckOf(check: CheckDraft, review: ReviewDraft): ReviewCheck {
+  const original = check.original?.kind === 'review' ? check.original : null;
+  const next: ReviewCheck = {
+    kind: 'review',
+    key: check.key,
+    subjects:
+      original !== null && sameSet(review.subjects, original.subjects)
+        ? original.subjects
+        : [...review.subjects],
+    criteria: review.criteria.map((criterion) => ({
+      key: criterion.key,
+      description: criterion.description,
+      weight: Number(criterion.weight),
+    })),
+    passAt: Number(review.passAt),
+  };
+  if (review.model !== '') next.model = review.model;
+  return original !== null && sameReview(next, original) ? original : next;
+}
+
+function sameReview(a: ReviewCheck, b: ReviewCheck): boolean {
+  return (
+    a.key === b.key &&
+    a.passAt === b.passAt &&
+    a.model === b.model &&
+    a.subjects.length === b.subjects.length &&
+    a.subjects.every((subject, index) => b.subjects[index] === subject) &&
+    a.criteria.length === b.criteria.length &&
+    a.criteria.every((criterion, index) => {
+      const other = b.criteria[index];
+      return (
+        other !== undefined &&
+        other.key === criterion.key &&
+        other.description === criterion.description &&
+        other.weight === criterion.weight
+      );
+    })
+  );
+}
+
+/** S11 GO18b: whether a review of the plan in force changes in this revision (one added: yes). */
+export function reviewChanged(check: CheckDraft): boolean {
+  if (check.review === null) return false;
+  return check.original === null || reviewCheckOf(check, check.review) !== check.original;
 }
 
 /** The live StepRun of each key of the plan in force. */
@@ -485,11 +647,13 @@ export function planOf(draft: PlanDraft): GoalPlan | null {
   const acceptance: AcceptanceCheck[] = draft.acceptance
     .filter((check) => !check.removed)
     .map((check) =>
-      check.original === null
-        ? { kind: 'requester_confirm', key: check.key, prompt: check.prompt }
-        : check.original.kind === 'requester_confirm'
-          ? { ...check.original, prompt: check.prompt }
-          : check.original,
+      check.review !== null
+        ? reviewCheckOf(check, check.review)
+        : check.original === null
+          ? { kind: 'requester_confirm', key: check.key, prompt: check.prompt }
+          : check.original.kind === 'requester_confirm'
+            ? { ...check.original, prompt: check.prompt }
+            : check.original,
     );
   const original = draft.acceptance.some((check) => check.original !== null);
   return acceptance.length > 0 || original ? { steps, acceptance } : { steps };
@@ -703,10 +867,25 @@ export function draftProblems(
       );
     }
   }
+  let reviews = 0;
   for (const check of draft.acceptance) {
-    if (check.removed) continue;
-    const isConfirm = check.original === null || check.original.kind === 'requester_confirm';
-    if (!isConfirm) continue;
+    if (check.removed || check.review === null) continue;
+    reviews += 1;
+    if (reviews > MAX_PLAN_REVIEW_CHECKS) {
+      problems.set(
+        `check:${check.uid}`,
+        t(
+          `一个计划最多 ${MAX_PLAN_REVIEW_CHECKS} 条独立评审：移除这一条或另一条。`,
+          `A plan has at most ${MAX_PLAN_REVIEW_CHECKS} reviews: remove this one or another.`,
+        ),
+      );
+    }
+    for (const [key, problem] of reviewProblems(check, check.review, kept, rewrite, t)) {
+      problems.set(key, problem);
+    }
+  }
+  for (const check of draft.acceptance) {
+    if (check.removed || !isConfirmDraft(check)) continue;
     const at = `check:${check.uid}:prompt` as const;
     if (check.prompt.trim() === '') {
       problems.set(at, t('写上要请求人确认什么。', 'Say what the requester confirms.'));
@@ -912,6 +1091,80 @@ export function workerChanged(step: StepDraft): boolean {
   );
 }
 
+/** S11 GO18b: what keeps a review the editor holds from being sent — the kernel's own rules
+ *  (`ReviewCheckSchema`, `reviewShapeProblems`) that the editor can tell: steps of the plan, each
+ *  once, at most {@link MAX_REVIEW_SUBJECTS}; 1 to {@link MAX_REVIEW_CRITERIA} criteria, each
+ *  saying something, within {@link MAX_REVIEW_CRITERION_CHARS}; and, once the review changes, no
+ *  criterion still as a read only showed it (the review is one call: changed anywhere, every
+ *  criterion counts as written anew). Whether a description carries a credential, and whether the
+ *  model is offered and allowed, the kernel says. */
+function reviewProblems(
+  check: CheckDraft,
+  review: ReviewDraft,
+  kept: readonly StepDraft[],
+  rewrite: (kind: 'mask' | 'escape') => string,
+  t: Translate,
+): ReadonlyMap<FieldKey, string> {
+  const problems = new Map<FieldKey, string>();
+  const missing = review.subjects.filter((subject) => !kept.some((step) => step.key === subject));
+  if (review.subjects.length === 0) {
+    problems.set(
+      `check:${check.uid}:subjects`,
+      t('勾选要评审的步骤，至少一步。', 'Tick the steps to review, at least one.'),
+    );
+  } else if (missing.length > 0) {
+    problems.set(
+      `check:${check.uid}:subjects`,
+      t(
+        `要评审的步骤不在计划里了：${missing.join('、')}。取消勾选，或者恢复那一步。`,
+        `Reviews steps no longer in the plan: ${missing.join(', ')}. Untick them, or restore the step.`,
+      ),
+    );
+  } else if (review.subjects.length > MAX_REVIEW_SUBJECTS) {
+    problems.set(
+      `check:${check.uid}:subjects`,
+      t(
+        `一条评审最多评 ${MAX_REVIEW_SUBJECTS} 个步骤。`,
+        `A review reviews at most ${MAX_REVIEW_SUBJECTS} steps.`,
+      ),
+    );
+  }
+  if (review.criteria.length === 0 || review.criteria.length > MAX_REVIEW_CRITERIA) {
+    problems.set(
+      `check:${check.uid}:criteria`,
+      t(
+        `一条评审有 1 到 ${MAX_REVIEW_CRITERIA} 条标准。`,
+        `A review has 1 to ${MAX_REVIEW_CRITERIA} criteria.`,
+      ),
+    );
+  }
+  const changed = reviewChanged(check);
+  for (const criterion of review.criteria) {
+    const at = `check:${check.uid}:criterion:${criterion.uid}` as const;
+    if (criterion.description.trim() === '') {
+      problems.set(
+        at,
+        t(
+          '写上这条标准：好的产出在这一点上是什么样。',
+          'Say what this criterion asks: what good output looks like on this point.',
+        ),
+      );
+    } else if (criterion.description.length > MAX_REVIEW_CRITERION_CHARS) {
+      problems.set(
+        at,
+        t(
+          `最多 ${MAX_REVIEW_CRITERION_CHARS} 个字符。`,
+          `At most ${MAX_REVIEW_CRITERION_CHARS} characters.`,
+        ),
+      );
+    } else if (changed) {
+      const shown = shownOnly(criterion.description);
+      if (shown !== null) problems.set(at, rewrite(shown));
+    }
+  }
+  return problems;
+}
+
 /** A confirmation's prompt as the plan in force has it (`''` for one this revision adds). */
 export function originalPrompt(check: CheckDraft): string {
   return check.original?.kind === 'requester_confirm' ? check.original.prompt : '';
@@ -970,9 +1223,42 @@ export function fieldOfRefusal(field: string, draft: PlanDraft): FieldKey {
   if (check) {
     const sent = draft.acceptance.filter((item) => !item.removed)[Number(check[1])];
     if (sent === undefined) return 'plan';
-    return check[2]?.startsWith('prompt') ? `check:${sent.uid}:prompt` : `check:${sent.uid}`;
+    return checkFieldOf(sent, check[2] ?? '');
   }
   return 'plan';
+}
+
+/** The field of a check a path below it names (`prompt`; a review's `subjects…`,
+ *  `criteria.<i>…`, `passAt`, `model`), else the check. */
+function checkFieldOf(check: CheckDraft, path: string): FieldKey {
+  if (path.startsWith('prompt')) return `check:${check.uid}:prompt`;
+  if (check.review === null) return `check:${check.uid}`;
+  const criterion = /^criteria(?:\.|\[)(\d+)/.exec(path);
+  if (criterion) {
+    const found = check.review.criteria[Number(criterion[1])];
+    return found ? `check:${check.uid}:criterion:${found.uid}` : `check:${check.uid}:criteria`;
+  }
+  if (path.startsWith('criteria')) return `check:${check.uid}:criteria`;
+  if (path.startsWith('subjects')) return `check:${check.uid}:subjects`;
+  if (path === 'passAt') return `check:${check.uid}:passAt`;
+  if (path === 'model') return `check:${check.uid}:model`;
+  return `check:${check.uid}`;
+}
+
+/** S11 GO18b: the field of a review one of the kernel's plan problems is about
+ *  (`reviewShapeProblems`, `reviewModelProblems`: `… "<key>": <what>`), else the check. */
+function reviewProblemField(check: CheckDraft, what: string): FieldKey {
+  if (check.review === null) return `check:${check.uid}`;
+  const criterion = /^criteria\[(\d+)\] "([^"]+)"/.exec(what);
+  if (criterion) {
+    const found =
+      check.review.criteria.find((item) => item.key === criterion[2]) ??
+      check.review.criteria[Number(criterion[1])];
+    return found ? `check:${check.uid}:criterion:${found.uid}` : `check:${check.uid}:criteria`;
+  }
+  if (/^reviews step "/.test(what)) return `check:${check.uid}:subjects`;
+  if (/^model\b/.test(what)) return `check:${check.uid}:model`;
+  return `check:${check.uid}`;
 }
 
 /** The WorkerSpec field a path below a step names (`spec.model`, `spec.skills.0`), or a bare field
@@ -988,11 +1274,11 @@ export function fieldOfProblem(problem: string, draft: PlanDraft): FieldKey {
   const path = /^(?:plan\.)?((?:steps|acceptance)\.\d+(?:\.[\w.]+)?):/.exec(problem);
   if (path?.[1]) return fieldOfRefusal(path[1], draft);
   // A plan-level check: `acceptance[<i>] "<key>": …` (a step's own checks carry the step prefix).
-  const check = /^acceptance\[(\d+)\] "([^"]+)"/.exec(problem);
+  const check = /^acceptance\[(\d+)\] "([^"]+)": /.exec(problem);
   if (check) {
     const sent = draft.acceptance.filter((item) => !item.removed);
     const found = sent.find((item) => item.key === check[2]) ?? sent[Number(check[1])];
-    return found ? `check:${found.uid}` : 'plan';
+    return found ? reviewProblemField(found, problem.slice(check[0].length)) : 'plan';
   }
   const named = /step "([^"]+)"/.exec(problem);
   if (named) {

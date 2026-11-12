@@ -1,5 +1,12 @@
 // @vitest-environment jsdom
-import type { GoalAbsenceBaselineWire, GoalDetailWire, PlanRevisionWire } from '@nexttime/shared';
+import type {
+  GoalAbsenceBaselineWire,
+  GoalAcceptanceCheckWire,
+  GoalDetailWire,
+  GoalReviewWire,
+  PlanRevisionWire,
+  PlanStep,
+} from '@nexttime/shared';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
@@ -90,6 +97,264 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     renderPage(checked);
     expect(await screen.findByText('依据平台验收检查')).toBeTruthy();
     expect(screen.queryByTestId('outcome-proxy-note')).toBeNull();
+  });
+
+  it('a review in the plan lists each criterion with its weight, how many points pass, that it is a proxy indicator and which model scores (S11 GO18b, UX acceptance of #1102)', async () => {
+    const base = goalDetail();
+    const review = {
+      kind: 'review' as const,
+      key: 'quality',
+      subjects: ['apply'],
+      criteria: [
+        { key: 'clear', description: '报告写得清楚，非专业的人也读得懂', weight: 3 },
+        { key: 'complete', description: '覆盖了每一台主机', weight: 1 },
+      ],
+      passAt: 75,
+    };
+    const detail = goalDetail({
+      status: 'proposed',
+      planRevision: {
+        ...base.planRevision,
+        plan: { ...base.planRevision.plan, acceptance: [review] },
+      },
+    });
+    renderPage(scriptedHttp(baseHandlers(detail)));
+    const check = await screen.findByTestId('goal-plan-check');
+    // Whose output it scores; the line is said once, with its points, in the declaration below.
+    expect(check.textContent).toContain('给 apply 的产出打分');
+    expect(check.textContent).not.toContain('得分达到 75% 才算通过');
+    const declaration = within(check).getByTestId('goal-review-declaration');
+    // 4 points a criterion at most: 3×4 + 1×4 = 16, and 75% of it is 12.
+    expect(declaration.textContent).toContain('至少 12 分（满分 16 的 75%）算通过');
+    expect(
+      within(declaration)
+        .getAllByTestId('goal-review-criterion')
+        .map((line) => line.textContent),
+    ).toEqual(['报告写得清楚，非专业的人也读得懂权重 3', '覆盖了每一台主机权重 1']);
+    expect(within(declaration).getByTestId('goal-review-model').textContent).toBe(
+      '评审模型：请求人的模型（请求人的智能体设置来选）',
+    );
+    expect(within(declaration).getByTestId('goal-review-proxy').textContent).toContain('代理指标');
+    // Neither the review nor the step names a model: both may run on the requester's.
+    expect(within(declaration).getByTestId('goal-review-model-note').textContent).toContain(
+      '可能用同一个模型',
+    );
+    cleanup();
+
+    // The review names the model the step it reviews sets: a model scoring itself.
+    const [fetch, apply] = base.planRevision.plan.steps as [PlanStep, PlanStep];
+    const same = goalDetail({
+      status: 'proposed',
+      planRevision: {
+        ...base.planRevision,
+        plan: {
+          steps: [fetch, { ...apply, spec: { model: 'model-a' } }],
+          acceptance: [{ ...review, model: 'model-a' }],
+        },
+      },
+    });
+    renderPage(scriptedHttp(baseHandlers(same)));
+    const sameNote = await screen.findByTestId('goal-review-model-note');
+    expect(sameNote.textContent).toContain('和被评步骤的一样');
+    const named = screen.getByTestId('goal-review-model').textContent ?? '';
+    expect(named.startsWith('评审模型：')).toBe(true);
+    expect(named.endsWith('model-a')).toBe(true);
+    cleanup();
+
+    // Another model than the step's: nothing to warn about.
+    const other = goalDetail({
+      status: 'proposed',
+      planRevision: {
+        ...base.planRevision,
+        plan: {
+          steps: [fetch, { ...apply, spec: { model: 'model-a' } }],
+          acceptance: [{ ...review, model: 'model-b' }],
+        },
+      },
+    });
+    renderPage(scriptedHttp(baseHandlers(other)));
+    await screen.findByTestId('goal-review-declaration');
+    expect(screen.queryByTestId('goal-review-model-note')).toBeNull();
+  });
+
+  it('a review of a round shows its reviewer Task while it runs, then each criterion’s score, weight, points and reason, the points against the line, the verdict, the models and whether they were the same (S11 GO18b)', async () => {
+    const TASK = '44444444-4444-4444-8444-444444444444';
+    const criteria = [
+      { key: 'clear', description: 'Reads clearly', weight: 3 },
+      { key: 'complete', description: 'Covers every host', weight: 1 },
+    ];
+    const reviewCheck = (review: GoalAcceptanceCheckWire['review']): GoalAcceptanceCheckWire => ({
+      checkKey: 'quality',
+      kind: 'review',
+      status: 'pending',
+      check: null,
+      fact: null,
+      prompt: null,
+      review,
+      attempts: 1,
+      lastError: null,
+      observationId: null,
+      factId: null,
+      decisionId: null,
+      nextAttemptAt: null,
+      settledAt: null,
+      overridden: false,
+    });
+    const roundWith = (check: GoalAcceptanceCheckWire) =>
+      goalDetail({
+        status: 'verifying',
+        acceptance: {
+          rounds: [
+            { round: 1, planRevision: 1, openedAt: '2026-10-20T01:00:00.000Z', checks: [check] },
+          ],
+          steps: [],
+          absenceBaselines: [],
+          overriddenChecks: [],
+        },
+      });
+    const review = {
+      subjects: ['apply'],
+      criteria,
+      passAt: 75,
+      model: null,
+      taskId: TASK,
+      assessment: null,
+    };
+
+    renderPage(scriptedHttp(baseHandlers(roundWith(reviewCheck(review)))));
+    const pending = await screen.findByTestId('goal-review-pending');
+    expect(pending.textContent).toContain('评审任务');
+    // Named for what it is, in the page's language — not the platform Worker's English name.
+    expect(within(pending).getByTestId('goal-review-task').textContent).toContain('独立评审');
+    expect((await screen.findByTestId('goal-acceptance-check')).textContent).toContain(
+      '给 apply 的产出打分：2 条标准，得分达到 75% 才算通过',
+    );
+    cleanup();
+
+    const failed = reviewCheck({
+      ...review,
+      subjects: ['apply', 'fetch'],
+      assessment: {
+        reviewTaskId: TASK,
+        reviewerModel: null,
+        // Not in the plan's order (fetch runs first): the page lists them the way the plan runs.
+        executorModels: [
+          { stepKey: 'apply', attempt: 1, model: null },
+          { stepKey: 'fetch', attempt: 2, model: null },
+        ],
+        sameModel: true,
+        lines: [
+          {
+            criterion: 'clear',
+            weight: 3,
+            score: 2,
+            reason: 'Half of it is jargon.',
+            points: 6,
+            maxPoints: 12,
+          },
+          {
+            criterion: 'complete',
+            weight: 1,
+            score: 4,
+            reason: 'Every host is there.',
+            points: 4,
+            maxPoints: 4,
+          },
+        ],
+        comment: 'Thorough but hard to read.',
+        points: 10,
+        maxPoints: 16,
+        passAt: 75,
+        unassessed: [],
+        verdict: 'failed',
+        createdAt: '2026-10-20T01:05:00.000Z',
+      },
+    });
+    renderPage(
+      scriptedHttp(
+        baseHandlers(
+          roundWith({ ...failed, status: 'failed', settledAt: '2026-10-20T01:05:00.000Z' }),
+        ),
+      ),
+    );
+    const outcome = await screen.findByTestId('goal-review-outcome');
+    expect(outcome.getAttribute('data-verdict')).toBe('failed');
+    expect(within(outcome).getByTestId('goal-review-verdict').textContent).toBe('评审没过线');
+    expect(within(outcome).getByTestId('goal-review-points').textContent).toBe(
+      '得分 10 / 16（62%），至少 12 分（75%）通过',
+    );
+    const lines = within(outcome).getAllByTestId('goal-review-line');
+    expect(lines.map((line) => line.getAttribute('data-criterion'))).toEqual(['clear', 'complete']);
+    expect(lines[0]?.textContent).toContain('Reads clearly');
+    // What the reviewer gave and the points it makes, told apart (UX acceptance of #1111).
+    expect(lines[0]?.textContent).toContain('权重 3 · 打分 2 / 4 · 得 6 / 12 分');
+    // The check's row has the status chip; the outcome says its verdict once, in words.
+    expect(within(outcome).queryByText('未通过')).toBeNull();
+    expect(lines[0]?.textContent).toContain('Half of it is jargon.');
+    expect(within(outcome).getByTestId('goal-review-comment').textContent).toContain(
+      'Thorough but hard to read.',
+    );
+    const models = within(outcome).getByTestId('goal-review-models').textContent ?? '';
+    expect(models).toContain('apply（第 1 次尝试）：默认模型');
+    expect(models.indexOf('fetch（第 2 次尝试）')).toBeGreaterThan(-1);
+    expect(models.indexOf('fetch（第 2 次尝试）')).toBeLessThan(
+      models.indexOf('apply（第 1 次尝试）'),
+    );
+    expect(within(outcome).getByTestId('goal-review-same-model').textContent).toContain(
+      '同一个模型',
+    );
+    cleanup();
+
+    // A criterion not judged: no verdict, never a pass; the check's code reads as words.
+    const unjudged = reviewCheck({
+      ...review,
+      assessment: {
+        ...(failed.review?.assessment as NonNullable<GoalReviewWire['assessment']>),
+        sameModel: false,
+        reviewerModel: 'model-b',
+        lines: [
+          {
+            criterion: 'clear',
+            weight: 3,
+            score: null,
+            reason: 'Nothing to read.',
+            points: null,
+            maxPoints: 12,
+          },
+          {
+            criterion: 'complete',
+            weight: 1,
+            score: 4,
+            reason: 'Every host is there.',
+            points: 4,
+            maxPoints: 4,
+          },
+        ],
+        points: 4,
+        unassessed: ['clear'],
+        verdict: 'unavailable',
+      },
+    });
+    renderPage(
+      scriptedHttp(
+        baseHandlers(
+          roundWith({ ...unjudged, status: 'unavailable', lastError: 'criteria_unassessed' }),
+        ),
+      ),
+    );
+    const unavailable = await screen.findByTestId('goal-review-outcome');
+    expect(within(unavailable).getByTestId('goal-review-verdict').textContent).toContain(
+      '有 1 条标准评审判断不了',
+    );
+    expect(within(unavailable).getAllByTestId('goal-review-score')[0]?.textContent).toBe(
+      '判断不了',
+    );
+    expect(within(unavailable).getByTestId('goal-review-same-model').textContent).toContain(
+      '不是同一个模型',
+    );
+    expect(screen.getByTestId('goal-acceptance-check').textContent).toContain(
+      '有标准评审判断不了，没有结论',
+    );
   });
 
   it('a goal it may not see reads as not found, without saying which', async () => {

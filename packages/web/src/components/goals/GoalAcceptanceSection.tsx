@@ -19,6 +19,7 @@ import {
   planCheckSentence,
   planHintKey,
   planHintText,
+  reviewSubjectsSentence,
   roundCheckSentence,
 } from '../../lib/goals.js';
 import { type Translate, useT } from '../../lib/i18n.js';
@@ -28,6 +29,7 @@ import { RouteLink } from '../kit/route-link.js';
 import { DashboardCard } from '../kit/section.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { AbsenceBaselineLine, AbsenceBasis } from './AbsenceBasis.js';
+import { ReviewDeclaration, ReviewOutcome } from './ReviewCheck.js';
 import type { AbsenceOperations } from './useAbsenceOperations.js';
 
 export interface GoalAcceptanceSectionProps {
@@ -59,6 +61,8 @@ export function GoalAcceptanceSection({
 }: GoalAcceptanceSectionProps) {
   const t = useT();
   const planChecks = detail.planRevision.plan.acceptance ?? [];
+  // S11 GO18b: a review's steps read in the plan's order.
+  const stepOrder = detail.planRevision.plan.steps.map((step) => step.key);
   const rounds = [...detail.acceptance.rounds].reverse();
   const [latest, ...older] = rounds;
   const overridden = detail.acceptance.overriddenChecks;
@@ -117,7 +121,12 @@ export function GoalAcceptanceSection({
                 <li key={check.key} className="row-wrap" data-testid="goal-plan-check">
                   <span className="mono">{check.key}</span>
                   <span className="text-3 text-small">{checkKindLabel(check.kind, t)}</span>
-                  <span>{planCheckSentence(check, gateNames, t, objectNames)}</span>
+                  <span>
+                    {check.kind === 'review'
+                      ? // Its criteria, points and line are just below (`ReviewDeclaration`).
+                        reviewSubjectsSentence(check.subjects, stepOrder, t)
+                      : planCheckSentence(check, gateNames, t, objectNames)}
+                  </span>
                   <CheckOrigin text={origin(check.key)} />
                   {check.kind === 'observe_absent' && http ? (
                     <AbsenceBasis
@@ -132,6 +141,10 @@ export function GoalAcceptanceSection({
                       firstAttemptAt={goalFirstAttemptAt(detail)}
                     />
                   ) : null}
+                  {/* S11 GO18b: what the goal is judged by, criterion by criterion. */}
+                  {check.kind === 'review' ? (
+                    <ReviewDeclaration check={check} plan={detail.planRevision.plan} />
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -144,6 +157,8 @@ export function GoalAcceptanceSection({
             gateNames={gateNames}
             objectNames={objectNames}
             origin={origin}
+            stepOrder={stepOrder}
+            http={http}
             t={t}
           />
         ) : (
@@ -167,6 +182,8 @@ export function GoalAcceptanceSection({
                   gateNames={gateNames}
                   objectNames={objectNames}
                   origin={origin}
+                  stepOrder={stepOrder}
+                  http={http}
                   t={t}
                 />
               ))}
@@ -199,12 +216,16 @@ function Round({
   gateNames,
   objectNames,
   origin,
+  stepOrder,
+  http,
   t,
 }: {
   readonly round: GoalAcceptanceRoundWire;
   readonly gateNames: ReadonlyMap<string, string>;
   readonly objectNames: ReadonlyMap<string, string> | undefined;
   readonly origin: (checkKey: string) => string | null;
+  readonly stepOrder: readonly string[];
+  readonly http: CapabilityCaller | undefined;
   readonly t: Translate;
 }) {
   return (
@@ -227,6 +248,8 @@ function Round({
             gateNames={gateNames}
             objectNames={objectNames}
             origin={origin(check.checkKey)}
+            stepOrder={stepOrder}
+            http={http}
             t={t}
           />
         ))}
@@ -240,12 +263,16 @@ function CheckRow({
   gateNames,
   objectNames,
   origin,
+  stepOrder,
+  http,
   t,
 }: {
   readonly check: GoalAcceptanceCheckWire;
   readonly gateNames: ReadonlyMap<string, string>;
   readonly objectNames: ReadonlyMap<string, string> | undefined;
   readonly origin: string | null;
+  readonly stepOrder: readonly string[];
+  readonly http: CapabilityCaller | undefined;
   readonly t: Translate;
 }) {
   return (
@@ -261,7 +288,7 @@ function CheckRow({
           </span>
         ) : null}
       </span>
-      <span>{roundCheckSentence(check, gateNames, t, objectNames)}</span>
+      <span>{roundCheckSentence(check, gateNames, t, objectNames, stepOrder)}</span>
       <span className="row-wrap text-small text-3">
         {check.kind !== 'requester_confirm' ? (
           <span className="tabular">
@@ -313,6 +340,10 @@ function CheckRow({
       </span>
       {check.lastError ? (
         <span className="text-small text-danger">{checkErrorLabel(check.lastError, t)}</span>
+      ) : null}
+      {/* S11 GO18b: what the review came to, and how. */}
+      {check.review ? (
+        <ReviewOutcome review={check.review} stepOrder={stepOrder} http={http} />
       ) : null}
     </li>
   );
