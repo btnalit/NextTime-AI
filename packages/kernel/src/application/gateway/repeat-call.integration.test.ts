@@ -1884,6 +1884,41 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       }),
     },
   },
+  set_membership_role: {
+    // The role is already the one asked for: nothing changes, the sessions are already ended.
+    "a member of the case's workspace, to builder": {
+      first: expect.objectContaining({ role: 'builder' }),
+      setUp: async (ctx) => ({
+        userId: await workspaceMember(ctx),
+        workspaceId: ctx.seed.workspaceId,
+        role: 'builder',
+      }),
+    },
+  },
+  remove_membership: {
+    // The membership is already disabled and its credentials already revoked.
+    "a member of the case's workspace": {
+      first: expect.objectContaining({ removed: true }),
+      setUp: async (ctx) => ({
+        userId: await workspaceMember(ctx),
+        workspaceId: ctx.seed.workspaceId,
+      }),
+    },
+  },
+  update_workspace: {
+    // The workspace already has the name.
+    "the case's workspace, a new name": {
+      first: expect.objectContaining({ name: 'Renamed Workspace' }),
+      setUp: async (ctx) => ({ workspaceId: ctx.seed.workspaceId, name: 'Renamed Workspace' }),
+    },
+  },
+  set_workspace_status: {
+    // Disabled already: its sessions are revoked, and disabled_at keeps the first time.
+    "the case's workspace, to disabled": {
+      first: expect.objectContaining({ status: 'disabled' }),
+      setUp: async (ctx) => ({ workspaceId: ctx.seed.workspaceId, status: 'disabled' }),
+    },
+  },
   roll_back_change_segment: {
     // The first call rolls the segment back; the same call again finds it rolled back (409
     // change_segment_rolled_back), nothing written.
@@ -1897,6 +1932,10 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
 /** Rows whose schema-built params cannot make a first call succeed on the bare seed — a param
  *  naming something the walk has no value for — run their recipes instead of that case. */
 const RECIPES_ONLY: ReadonlySet<string> = new Set([
+  'set_membership_role',
+  'remove_membership',
+  'update_workspace',
+  'set_workspace_status',
   'create_user',
   'add_membership',
   'update_user',
