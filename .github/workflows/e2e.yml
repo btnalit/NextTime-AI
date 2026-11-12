@@ -82,10 +82,18 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
-    # A healthy run takes about ten minutes (three to bring the stack up, five or six of tests).
-    # The test steps carry their own, tighter limits below and playwright.config.ts stops after a
-    # handful of failures, so a suite-wide break costs a few minutes, not the whole budget.
-    timeout-minutes: 20
+    # A healthy run takes about fifteen minutes (three to bring the stack up, eleven of tests on
+    # 2026-11-12). The test steps carry their own, tighter limits below and playwright.config.ts
+    # stops after a handful of failures, so a suite-wide break costs a few minutes, not the whole
+    # budget.
+    timeout-minutes: 28
+    env:
+      # Legacy 684: the whole Playwright run's ceiling (playwright.config.ts globalTimeout). The
+      # "Run web e2e" step warns when a run used more than 70% of it, so the next journey that
+      # eats the margin shows up as an annotation on its own PR, not as a red run on someone
+      # else's. Raise it only with the durations that step reports; the step timeouts below are
+      # this plus one minute.
+      E2E_SUITE_MINUTES: '17'
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -837,8 +845,13 @@ jobs:
       # shortcut.
       - name: Run web e2e
         if: ${{ github.event.inputs.update_baselines != 'true' }}
-        timeout-minutes: 13
-        run: pnpm --filter @nexttime/web e2e
+        timeout-minutes: 18
+        run: |
+          start=$(date +%s)
+          status=0
+          pnpm --filter @nexttime/web e2e || status=$?
+          sh scripts/e2e-budget.sh "$start" "$E2E_SUITE_MINUTES"
+          exit "$status"
 
       # S8 W1-A3 follow-up: `pnpm --filter <pkg> <script> -- <args>` does NOT strip the `--`
       # before forwarding (verified against this repo's pnpm: the child process receives literal
@@ -855,7 +868,7 @@ jobs:
       # the tolerance.
       - name: Run web e2e (regenerate gate baselines)
         if: ${{ github.event.inputs.update_baselines == 'true' }}
-        timeout-minutes: 14
+        timeout-minutes: 19
         env:
           E2E_GATE_UPDATE_BASELINE: '1'
           # Design system v2: 00-gates/review-capture.spec.ts writes dark-theme and 390px review

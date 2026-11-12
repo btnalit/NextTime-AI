@@ -22,7 +22,7 @@ ratchet:
   console_unexplained: 10
   kernel_test_missing: 3
   e2e_waived: 65
-  repeat_unclear: 48
+  repeat_unclear: 44
 capabilities:
   add_eval_case:
     console: required
@@ -43,7 +43,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: already_member" # the first call makes the user a member, so the same call again is refused, nothing written (409)
   agent_get_admin_proposal:
     console: "none: 管理员智能体专用（adminAgentOnly），控制台里的人调不了；人看管理员提案走能力目录里的提案页"
     agents: [admin]
@@ -163,7 +163,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: login_taken" # the first call takes the login, so the same call again is refused, nothing written (409)
   create_workspace:
     console: required
     agents: []
@@ -999,7 +999,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: repeats # the same status is set again (disabling again revokes a member's already revoked credentials); the user row moves by its updated_at
   set_workspace_status:
     console: required
     agents: []
@@ -1081,7 +1081,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: repeats # the same values are written again; the user row moves only by its updated_at
   update_workspace:
     console: required
     agents: []

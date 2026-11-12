@@ -31,7 +31,7 @@ import {
 } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { createGoalRun } from '../goal/index.js';
-import { createUser } from '../identity/index.js';
+import { type UserRow, createPlatformAdmin, createUser } from '../identity/index.js';
 import { insertPendingContextItem } from '../linkage/index.js';
 import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
 import { workerSpecDigest } from '../task/step-attempt.js';
@@ -90,6 +90,8 @@ interface RecipeContext {
   readonly caller: ResolvedCaller;
   readonly seed: Seeded;
   readonly memberId: string;
+  /** A platform row's caller: an administrator of the case's own (null for a workspace row). */
+  readonly admin: UserRow | null;
 }
 
 /** One extra case: sets the workspace up before the first call and returns the params; `first`
@@ -109,6 +111,9 @@ interface Recipe {
    *  way its holder does (`callerFor`), so a Handle revoked, expired or not signed by the task
    *  runtime's key is refused before the handler (per #493 on batch 12). */
   readonly by?: (ctx: RecipeContext) => Promise<HeldHandle>;
+  /** For a `repeats` row: what the second call moves, read after each call (the two reads must
+   *  differ), so a change elsewhere in the digest cannot stand in for it. */
+  readonly moves?: (ctx: RecipeContext, params: Record<string, unknown>) => Promise<unknown>;
 }
 
 /** The Handle each spawned WorkerRun was given, by WorkerRun id (the supervisor stub's record). */
@@ -154,6 +159,46 @@ async function sessionHandle(ctx: RecipeContext): Promise<HeldHandle> {
 /** The Principal a caller acts as — who an audit row names. */
 const actingPrincipal = (caller: ResolvedCaller, ownerId: string) =>
   caller.channel === 'handle' ? caller.claims.obo : ownerId;
+
+/** The caller `resolvePlatformCaller` builds for an administrator's console session: no
+ *  workspace, no Principal. */
+function platformCaller(user: UserRow): ResolvedCaller {
+  return {
+    channel: 'platform',
+    user: {
+      id: user.id,
+      login: user.login,
+      displayName: user.displayName,
+      platformRole: 'admin',
+      mustChangePassword: false,
+      consoleSessionId: randomUUID(),
+    },
+  };
+}
+
+/** A digest of the whole database but its audit trail: every `public` table, all of its rows. A
+ *  platform row may write anywhere (another workspace, a member's Principals), and test files run
+ *  one at a time, so nothing else writes while a case runs. Each table's digest is its row count
+ *  and the sum of its rows' hashes: one linear scan, no sort, whatever earlier files left behind
+ *  (#488 on 664 batch 21). */
+async function databaseDigest(pool: Pool): Promise<Record<string, string>> {
+  const tables = await pool.query<{ table_name: string }>(
+    `select table_name from information_schema.tables
+      where table_schema = 'public' and table_type = 'BASE TABLE'
+        and table_name not in ('audit_records', 'schema_migrations')
+      order by table_name`,
+  );
+  const digest: Record<string, string> = {};
+  for (const { table_name } of tables.rows) {
+    const result = await pool.query<{ digest: string }>(
+      `select count(*)::text || ':' ||
+              coalesce(sum(('x' || left(md5(t::text), 16))::bit(64)::bigint), 0)::text as digest
+         from "${table_name}" t`,
+    );
+    digest[table_name] = result.rows[0]?.digest ?? '';
+  }
+  return digest;
+}
 
 /** A call as the recipe's owner, for setting a case up. */
 function as<T = Record<string, unknown>>(
@@ -687,6 +732,35 @@ async function reviewedPack(ctx: RecipeContext, name: string): Promise<Record<st
       .filter((item) => item.classification === 'authority_widening')
       .map((item) => item.ordinal),
   };
+}
+
+/** A platform user of the case's own (no membership), for a platform row to act on. */
+function platformUser(ctx: RecipeContext): Promise<UserRow> {
+  return createUser(ctx.pool, {
+    login: `repeat-user-${randomUUID().slice(0, 8)}`,
+    displayName: 'Repeat Person',
+    password: 'repeat-walk-password-1',
+  });
+}
+
+/** A user the administrator creates (create_user) as a member of the case's workspace. */
+async function workspaceMember(ctx: RecipeContext): Promise<string> {
+  const created = await as<{ user: { id: string } }>(ctx, 'create_user', {
+    login: `repeat-member-${randomUUID().slice(0, 8)}`,
+    displayName: 'Repeat Member',
+    workspaceId: ctx.seed.workspaceId,
+    role: 'member',
+  });
+  return created.user.id;
+}
+
+/** A user row's updated_at, as text: what a write of the same values still moves. */
+async function userUpdatedAt(ctx: RecipeContext, userId: string): Promise<string | undefined> {
+  const result = await ctx.pool.query<{ at: string }>(
+    'select updated_at::text as at from users where id = $1',
+    [userId],
+  );
+  return result.rows[0]?.at;
 }
 
 /** The ChangePlan segment of a shipped pack installed here, as its dry run showed it. */
@@ -1765,6 +1839,51 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       },
     },
   },
+  // Platform rows: run by an administrator of the case's own (platformCaller); their rows are the
+  // whole database's (databaseDigest), their audit rows every one written since the case began.
+  update_user: {
+    // The same values written again: the row moves only by its updated_at.
+    'another user, a new display name': {
+      first: expect.objectContaining({ displayName: 'Renamed Person' }),
+      setUp: async (ctx) => ({
+        userId: (await platformUser(ctx)).id,
+        displayName: 'Renamed Person',
+      }),
+      moves: (ctx, params) => userUpdatedAt(ctx, params.userId as string),
+    },
+  },
+  set_user_status: {
+    // Disabling again revokes the member's (already revoked) credentials again and moves the
+    // user row's updated_at.
+    "a member of the case's workspace, to disabled": {
+      first: expect.objectContaining({ status: 'disabled' }),
+      setUp: async (ctx) => ({ userId: await workspaceMember(ctx), status: 'disabled' }),
+      moves: (ctx, params) => userUpdatedAt(ctx, params.userId as string),
+    },
+  },
+  create_user: {
+    // The login is taken by the first call, so the same call again is refused (409 login_taken).
+    'a new login': {
+      first: expect.objectContaining({ user: expect.objectContaining({ status: 'active' }) }),
+      setUp: async () => ({
+        login: `repeat-new-${randomUUID().slice(0, 8)}`,
+        displayName: 'New Person',
+        workspaceId: null,
+      }),
+    },
+  },
+  add_membership: {
+    // The first call makes the user a member, so the same call again is refused (409
+    // already_member).
+    "a user who is not in the case's workspace": {
+      first: expect.objectContaining({ role: 'member' }),
+      setUp: async (ctx) => ({
+        userId: (await platformUser(ctx)).id,
+        workspaceId: ctx.seed.workspaceId,
+        role: 'member',
+      }),
+    },
+  },
   roll_back_change_segment: {
     // The first call rolls the segment back; the same call again finds it rolled back (409
     // change_segment_rolled_back), nothing written.
@@ -1778,6 +1897,10 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
 /** Rows whose schema-built params cannot make a first call succeed on the bare seed — a param
  *  naming something the walk has no value for — run their recipes instead of that case. */
 const RECIPES_ONLY: ReadonlySet<string> = new Set([
+  'create_user',
+  'add_membership',
+  'update_user',
+  'set_user_status',
   'verify_change_segment',
   'roll_back_change_segment',
   'start_draft_evaluation',
@@ -1915,10 +2038,15 @@ function entityId(result: unknown): string | undefined {
   return typeof record.key === 'string' ? record.key : undefined;
 }
 
+/** A case's time limit: a platform row reads the whole database twice (databaseDigest), which
+ *  grows with what earlier files left in it; Vitest's default 5 s is not that budget. */
+const CASE_TIMEOUT_MS = 60_000;
+
 interface AuditRow {
   readonly id: string;
   readonly action: string;
   readonly actor_principal_id: string | null;
+  readonly actor_user_id: string | null;
   readonly payload: Record<string, unknown>;
 }
 
@@ -2008,16 +2136,32 @@ describe.runIf(DATABASE_URL !== undefined)(
       await pool?.end();
     });
 
-    async function rowsBut(workspaceId: string): Promise<Record<string, string>> {
+    /** Every row the case can touch, but audit: its workspace's; for a platform row, every row
+     *  of the database. */
+    async function rowsBut(
+      workspaceId: string,
+      platform: boolean,
+    ): Promise<Record<string, string>> {
+      if (platform) return databaseDigest(pool);
       const { audit_records: _audit, ...rest } = await workspaceDigest(pool, workspaceId);
       return rest;
     }
 
-    async function auditRows(workspaceId: string): Promise<AuditRow[]> {
-      const result = await pool.query<AuditRow>(
-        'select id, action, actor_principal_id, payload from audit_records where workspace_id = $1',
-        [workspaceId],
-      );
+    /** The case's audit rows: its workspace's; for a platform row, every row written since the
+     *  case began (`since`), wherever it landed. */
+    async function auditRows(workspaceId: string, since: Date | null): Promise<AuditRow[]> {
+      const result =
+        since === null
+          ? await pool.query<AuditRow>(
+              `select id, action, actor_principal_id, actor_user_id, payload from audit_records
+                where workspace_id = $1`,
+              [workspaceId],
+            )
+          : await pool.query<AuditRow>(
+              `select id, action, actor_principal_id, actor_user_id, payload from audit_records
+                where created_at >= $1`,
+              [since],
+            );
       return result.rows;
     }
 
@@ -2037,103 +2181,145 @@ describe.runIf(DATABASE_URL !== undefined)(
             row,
           ] as const,
       ),
-    )('%s', async (_name, { capability, repeat, recipe }) => {
-      expect(capability.scope, 'a platform row needs a platform fixture first').not.toBe(
-        'platform',
-      );
-      const workspace = await newWorkspace(pool, `repeat-${capability.name}`, ['owner', 'member']);
-      const ownerId = workspace.principals.get('owner') as string;
-      const seed = await seedWorkspace(
-        pool,
-        workspace.workspaceId,
-        ownerId,
-        `repeat-${randomUUID()}`,
-      );
-      const caller = humanCaller(workspace.workspaceId, ownerId, 'owner');
-      const chosen = recipe === undefined ? undefined : RECIPES[capability.name]?.[recipe];
-      const params =
-        chosen === undefined
-          ? paramsFor(capability.paramsSchema, seed)
-          : await chosen.setUp({
-              pool,
-              caller,
-              seed,
-              memberId: workspace.principals.get('member') as string,
-            });
-      const held =
-        chosen?.by === undefined
-          ? undefined
-          : await chosen.by({
-              pool,
-              caller,
-              seed,
-              memberId: workspace.principals.get('member') as string,
-            });
-      const callerNow = () =>
-        held === undefined ? Promise.resolve(caller) : callerFor(pool, held);
-      const by = await callerNow();
-      const call = async () =>
-        dispatchCapability({ pool }, await callerNow(), capability.name, params);
-      const entityOf = chosen?.entity ?? entityId;
-
-      let first: unknown;
-      try {
-        first = await call();
-      } catch (error) {
-        throw new Error(
-          `${capability.name} declares repeat: ${repeat}, but its first call failed (${String(error)}) — fix the recipe or add one to RECIPES, or declare it unclear`,
+    )(
+      '%s',
+      async (_name, { capability, repeat, recipe }) => {
+        const platform = capability.scope === 'platform';
+        const workspace = await newWorkspace(pool, `repeat-${capability.name}`, [
+          'owner',
+          'member',
+        ]);
+        const ownerId = workspace.principals.get('owner') as string;
+        const seed = await seedWorkspace(
+          pool,
+          workspace.workspaceId,
+          ownerId,
+          `repeat-${randomUUID()}`,
         );
-      }
-      if (chosen?.first !== undefined) expect(first).toEqual(chosen.first);
-      const rowsAfterFirst = await rowsBut(workspace.workspaceId);
-      const auditAfterFirst = new Set(
-        (await auditRows(workspace.workspaceId)).map((row) => row.id),
-      );
+        // A platform row runs as an administrator of its own, so its audit rows are told apart.
+        const admin = platform
+          ? await createPlatformAdmin(pool, {
+              login: `repeat-admin-${randomUUID().slice(0, 8)}`,
+              displayName: 'Repeat Admin',
+              password: 'repeat-walk-password-1',
+            })
+          : null;
+        const caller =
+          admin === null
+            ? humanCaller(workspace.workspaceId, ownerId, 'owner')
+            : platformCaller(admin);
+        const chosen = recipe === undefined ? undefined : RECIPES[capability.name]?.[recipe];
+        const params =
+          chosen === undefined
+            ? paramsFor(capability.paramsSchema, seed)
+            : await chosen.setUp({
+                pool,
+                caller,
+                seed,
+                memberId: workspace.principals.get('member') as string,
+                admin,
+              });
+        const held =
+          chosen?.by === undefined
+            ? undefined
+            : await chosen.by({
+                pool,
+                caller,
+                seed,
+                memberId: workspace.principals.get('member') as string,
+                admin,
+              });
+        const callerNow = () =>
+          held === undefined ? Promise.resolve(caller) : callerFor(pool, held);
+        const by = await callerNow();
+        const call = async () =>
+          dispatchCapability({ pool }, await callerNow(), capability.name, params);
+        const entityOf = chosen?.entity ?? entityId;
+        const ctx: RecipeContext = {
+          pool,
+          caller,
+          seed,
+          memberId: workspace.principals.get('member') as string,
+          admin,
+        };
+        // A platform row's audit rows are told apart by time: those written from here on.
+        const since = platform
+          ? ((await pool.query<{ now: Date }>('select clock_timestamp() as now')).rows[0]?.now ??
+            null)
+          : null;
 
-      let second: unknown;
-      let refusal: unknown;
-      try {
-        second = await call();
-      } catch (error) {
-        refusal = error;
-      }
-      const rowsAfterSecond = await rowsBut(workspace.workspaceId);
-      const newAudit = (await auditRows(workspace.workspaceId)).filter(
-        (row) => !auditAfterFirst.has(row.id),
-      );
+        let first: unknown;
+        try {
+          first = await call();
+        } catch (error) {
+          throw new Error(
+            `${capability.name} declares repeat: ${repeat}, but its first call failed (${String(error)}) — fix the recipe or add one to RECIPES, or declare it unclear`,
+          );
+        }
+        if (chosen?.first !== undefined) expect(first).toEqual(chosen.first);
+        const rowsAfterFirst = await rowsBut(workspace.workspaceId, platform);
+        const movedAfterFirst = await chosen?.moves?.(ctx, params);
+        const auditAfterFirst = new Set(
+          (await auditRows(workspace.workspaceId, since)).map((row) => row.id),
+        );
 
-      if (repeat.startsWith('conflict: ')) {
-        expect(refusal, 'the second call must be refused').toBeDefined();
-        const mapped = mapCapabilityError(refusal);
-        expect(mapped.code).toBe(repeat.slice('conflict: '.length));
-        expect(mapped.status).toBeGreaterThanOrEqual(400);
-        expect(mapped.status).toBeLessThan(500);
-        expect(rowsAfterSecond).toEqual(rowsAfterFirst);
-        expect(newAudit.filter((row) => row.payload.outcome !== 'refused')).toEqual([]);
-        return;
-      }
+        let second: unknown;
+        let refusal: unknown;
+        try {
+          second = await call();
+        } catch (error) {
+          refusal = error;
+        }
+        const rowsAfterSecond = await rowsBut(workspace.workspaceId, platform);
+        const movedAfterSecond = await chosen?.moves?.(ctx, params);
+        const newAudit = (await auditRows(workspace.workspaceId, since)).filter(
+          (row) => !auditAfterFirst.has(row.id),
+        );
 
-      expect(refusal, 'the second call must succeed').toBeUndefined();
-      if (repeat === 'idempotent') {
-        const firstId = entityOf(first, params);
-        if (firstId !== undefined) expect(entityOf(second, params)).toBe(firstId);
-        expect(rowsAfterSecond).toEqual(rowsAfterFirst);
-        expect(newAudit.map((row) => row.action)).toEqual([capability.name]);
-        expect(newAudit[0]?.actor_principal_id).toBe(actingPrincipal(by, ownerId));
-      } else if (repeat === 'creates') {
-        const firstId = entityOf(first, params);
-        expect(firstId, 'creates: the result names the entity it made').toBeDefined();
-        expect(entityOf(second, params)).not.toBe(firstId);
-        // A new id with nothing stored for it would not be a second entity (per #488).
-        expect(rowsAfterSecond).not.toEqual(rowsAfterFirst);
-      } else if (repeat === 'repeats') {
-        const firstId = entityOf(first, params);
-        expect(firstId, 'repeats: the result names the entity it acted on').toBeDefined();
-        expect(entityOf(second, params)).toBe(firstId);
-        expect(rowsAfterSecond).not.toEqual(rowsAfterFirst);
-      } else {
-        throw new Error(`unknown repeat declaration ${repeat} (guard M6 should have refused it)`);
-      }
-    });
+        if (repeat.startsWith('conflict: ')) {
+          expect(refusal, 'the second call must be refused').toBeDefined();
+          const mapped = mapCapabilityError(refusal);
+          expect(mapped.code).toBe(repeat.slice('conflict: '.length));
+          expect(mapped.status).toBeGreaterThanOrEqual(400);
+          expect(mapped.status).toBeLessThan(500);
+          expect(rowsAfterSecond).toEqual(rowsAfterFirst);
+          expect(newAudit.filter((row) => row.payload.outcome !== 'refused')).toEqual([]);
+          return;
+        }
+
+        expect(refusal, 'the second call must succeed').toBeUndefined();
+        if (repeat === 'idempotent') {
+          const firstId = entityOf(first, params);
+          if (firstId !== undefined) expect(entityOf(second, params)).toBe(firstId);
+          expect(rowsAfterSecond).toEqual(rowsAfterFirst);
+          expect(newAudit.map((row) => row.action)).toEqual([capability.name]);
+          if (admin === null) {
+            expect(newAudit[0]?.actor_principal_id).toBe(actingPrincipal(by, ownerId));
+          } else {
+            expect(newAudit[0]?.actor_user_id).toBe(admin.id);
+          }
+        } else if (repeat === 'creates') {
+          const firstId = entityOf(first, params);
+          expect(firstId, 'creates: the result names the entity it made').toBeDefined();
+          expect(entityOf(second, params)).not.toBe(firstId);
+          // A new id with nothing stored for it would not be a second entity (per #488).
+          expect(rowsAfterSecond).not.toEqual(rowsAfterFirst);
+        } else if (repeat === 'repeats') {
+          const firstId = entityOf(first, params);
+          expect(firstId, 'repeats: the result names the entity it acted on').toBeDefined();
+          expect(entityOf(second, params)).toBe(firstId);
+          expect(rowsAfterSecond).not.toEqual(rowsAfterFirst);
+          if (chosen?.moves !== undefined) {
+            expect(
+              movedAfterSecond,
+              'repeats: the second call moves what the recipe names',
+            ).not.toEqual(movedAfterFirst);
+          }
+        } else {
+          throw new Error(`unknown repeat declaration ${repeat} (guard M6 should have refused it)`);
+        }
+      },
+      CASE_TIMEOUT_MS,
+    );
   },
 );
