@@ -1081,7 +1081,7 @@
 | 693 | `tasks_review_result_guard`（task/0015）与 task/0014 守卫的 R2 分支（评审 Task 还没完成就写 `result`）没有反向测试。#493 在 #1108 上用库探针证明这样的写入确实会被拒，判定补不补都行。修法：在 `goal-review` 集成测试里加一条，对未完成的评审 Task 直接写 `result`，断言被拒。下一个改到这几个测试文件的内核 PR 顺手补上时关闭 | P3 | 内核 | 已关闭（8430ac6） |
 | 694 | web-e2e 的墙钟时间（接遗留 684）。#1115 把整套上限调到 17 分钟，当时整套用 679 秒，占 67%。`scripts/e2e-budget.sh` 在超过上限的 70% 时给 PR 留 warning 注解；**第一次出现这条 warning 时**就动手：把整套拆成两条并行 job（各起一套栈，合并 M4 记录器的输出，先排查跨文件的状态依赖），或给最慢的两个 resilience 用例瘦身（kernel-restart 67 秒、network-and-switch 57 秒）。另有 #488 的一条 P3 顺手带上：e2e.yml 里调用 `e2e-budget.sh` 后加 `\|\| warning`，免得这个只做报告的脚本出错时改变 step 结论 | P3 | 测试守门人 / #488 | 开放 |
 | 695 | `accept_s2` S15（`scripts/lib/accept-s2-goals.sh`）的断言可以更严，#481、#493 审 #1111 时提出：① `s15-review-closed` 只查评审 Task 的 input 顶层有没有 `passAt`，改为任意层级（`jsonb_path_exists(input, 'strict $.**.passAt')`），漏进 criteria 或 rules 也能抓到；② 没过线的目标也断言「恰好一个评审 Task」，防止评审重跑到过线为止；③ 可选：断言评审 Task 在观察检查通过之后才开始；④ `goal_s15_review_json` 注释里的参数个数与实际不符，S15 头部注释说评审员可能与别的场景并行，实际不会。内核线程在后续 PR 里与遗留 693 一起改 | P3 | 内核 | 已关闭（8430ac6） |
-| 696 | `set_membership_role` 用同一个角色调用时，成员的会话被标为 revoked，但从这些会话签出的 Handle 仍然有效，直到 TTL 过期，因为 `verifyHandle` 只看 Handle 自己的 `revoked_at`。权限上没有越界，但「会话撤销了、Handle 还能用」语义不一致。#493 审 #1120 时提出，要人来定方向：同角色时真正什么都不做（会话也不动）；或者撤销会话时连同它签出的 Handle 一起撤销。定了以后改内核并补测试 | P3 | 内核（待定方向） | 开放 |
+| 696 | `set_membership_role` 用同一个角色调用时，成员的会话被标为 revoked，但从这些会话签出的 Handle 仍然有效，直到 TTL 过期，因为 `verifyHandle` 只看 Handle 自己的 `revoked_at`。权限上没有越界，但「会话撤销了、Handle 还能用」语义不一致。#493 审 #1120 时提出，两个方向：同角色时真正什么都不做（会话也不动）；或者撤销会话时连同它签出的 Handle 一起撤销。**2026-11-12 协调线程定为前者**：角色没变时不结束会话、不撤销 Handle，内核线程实现，并把 #1120 的专项用例改成断言会话也保留 | P3 | 内核 | 开放 |
 
 ## 5. 更新规则
 
