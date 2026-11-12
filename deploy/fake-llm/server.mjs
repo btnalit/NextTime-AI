@@ -1037,6 +1037,11 @@ function reviewerTaskInput(messages) {
   return undefined;
 }
 
+/** S11 GO18a (runtime contract 3): pi built-ins a goal reviewer is never offered. The kernel
+ *  spawns every review Task with `builtinTools: read_only`, and the image's entrypoint then gives
+ *  pi only read, grep, find and ls (deploy/worker-runtime/pi-settings-read-only.json). */
+const REVIEWER_FORBIDDEN_TOOLS = ['bash', 'edit', 'write'];
+
 /** S11 GO18 (accept_s2's review step, GO18b): the goal reviewer — the Worker the platform starts
  *  for a goal's `review` check once every check it makes passed (ontology/goal-reviewer.yaml).
  *  Selected by `goal_review`, which only the reviewer's Task input carries; listed before the step
@@ -1044,8 +1049,22 @@ function reviewerTaskInput(messages) {
  *  a score for every criterion of the input, each once — `ACCEPT_S2_SCORE=<n>` in a criterion's
  *  description scores it n (a script can make a review fail), any other the highest score — and
  *  nothing but its output: a reviewer writes no findings, Facts, evidence or artifacts
- *  (packages/kernel/src/application/goal/review.ts `REVIEWER_REPORT_FORBIDDEN`). */
-function goalReviewerScenario(messages) {
+ *  (packages/kernel/src/application/goal/review.ts `REVIEWER_REPORT_FORBIDDEN`).
+ *
+ *  A request that offers the reviewer any of {@link REVIEWER_FORBIDDEN_TOOLS} gets a text answer
+ *  naming them instead of the report: the reviewer ran with pi's full tool set, so it ends without
+ *  reporting, its review settles `unavailable` and S15's goals miss the outcomes S15 asserts. */
+function goalReviewerScenario(messages, tools) {
+  const offered = (Array.isArray(tools) ? tools : [])
+    .map((tool) => tool?.function?.name ?? tool?.name)
+    .filter((name) => REVIEWER_FORBIDDEN_TOOLS.includes(name));
+  if (offered.length > 0) {
+    return [
+      {
+        text: `accept_s2: the goal reviewer was offered ${offered.join(', ')}; a reviewer's pi tools must be read-only (S11 GO18a).`,
+      },
+    ];
+  }
   const input = reviewerTaskInput(messages);
   const criteria = Array.isArray(input?.criteria) ? input.criteria : [];
   const max = typeof input?.scoreRange?.max === 'number' ? input.scoreRange.max : 4;
