@@ -5,7 +5,7 @@
 > 拆解与实现说明在 `development-tasks.md`，评估在 `retrospective-*.md` / `code-review-*.md`，
 > 本文只链接不复制。与代码冲突时以代码为准，并修正本文。
 
-最后更新：2026-11-12（遗留 664 第十六批（#1093），棘轮降到 54；登记遗留 691。GO18 方案已独立复核，I-G5 改为三类依据（#1097）。v0.67.0 已发布，主机仍在 v0.63.0）。 上一版 2026-11-12（GO18 方案独立复核完成，3 条 blocking 由内核线程在送审前补齐；I-G5 按复核改为三类依据并加依据表。v0.67.0 已发布（#1086，3591aca），主机仍在 v0.63.0）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
+最后更新：2026-11-12（遗留 692 关闭（#1099）：e2e 调用记录器不再漏记测试结束时还在途的调用，M4 不再误报。GO18 方案已独立复核，内核线程补齐 3 条 blocking 后送审。v0.67.0 已发布，主机仍在 v0.63.0）。 上一版 2026-11-12（遗留 664 第十六批（#1093），棘轮降到 54；登记遗留 691。GO18 方案已独立复核，I-G5 改为三类依据（#1097）。v0.67.0 已发布，主机仍在 v0.63.0）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
 
 ## 1. 入口指引
 
@@ -419,6 +419,7 @@
 | 2026-11-12 | **v0.67.0 发布**（#1086，tag 在 3591aca；主机未应用，停在 v0.63.0）：包含 v0.66.0 之后合入的 #1080（GO17a）、#1087（GO17b，goal 0018）、#1091（遗留 690），以及遗留 664 第九到第十五批（#1079、#1082–#1085、#1089、#1090）。S11 GO17 完成。release PR 的 web-e2e 第一次是红的：204 个用例全过，红在 M4 覆盖检查，原因是记录器漏记了一次调用，登记为遗留 692。重跑一次后转绿。release run 43243341616：11 个镜像全部构建、签名并通过扫描，release channel 已发。升级须知写在 GitHub release 正文里，对应 release.md §3.152–§3.154。发版前 `pnpm audit` 无已知漏洞。由协调线程按维护者 2026-11-07 的授权决定发版 | #1086 |
 | 2026-11-12 | GO18（`review` 类验收）方案独立复核完成：方向成立，提出 3 条 blocking（B1 依据由一轮的构成唯一决定、数据库两个方向都守；B2 评审检查的「通过」在库里绑定证据；B3 评审 Task 对其他 Handle 整体不可见，`last_error` 只用封闭词表），由内核线程在 GO18a 送 #493 审查前补齐。按复核 N9，设计文档 §3.3 的 I-G5 改为「平台观察、独立评审（代理）、本人确认」三类依据，并加上依据表 | #1097 |
 | 2026-11-12 | 遗留 664 第十六批合入（#1093，测试守门人，5392d97，只改能力矩阵与内核集成测试）：`propose_entry_template_upgrade` 声明为 `idempotent`（已有发布的 entry 时返回同一份草稿；没有时那条路径记 `creates`，登记为遗留 691），`release_eval_seal_hold` 声明为 `conflict: conflict`；`ratchet.repeat_unclear` 56 → 54。#493 PASS | #1093 |
+| 2026-11-12 | 遗留 692 关闭（#1099，测试守门人，184f9f5，只改 `packages/web/e2e/lib/test.ts`）：e2e 的 cap 调用记录器另外监听 `request` 与 `requestfailed`，跟踪还没答复的 `POST /api/cap/*`；`stop()` 先等它们答复或失败（最多 5 秒）再解除监听，测试体结束后才到的答复不再被丢，M4 不再误报。本地最小复现确认旧代码漏记、新代码不漏，不答复的请求按时放行；web-e2e 时长落在近期波动范围内。#488 PASS，CI 全绿。#488 的一条可选建议（宽限耗尽时打 warn）随下次改这个文件带上，不登记遗留 | #1099 |
 | 2026-10-16 | 控制台文案第二批合入（#628，25bfdfe，无迁移，只改控制台，未发版；遗留 335、359、360、361、362、363 关闭）：对话输入框因 U+0000 被拒后，提示旁有「移除看不见的字符」按钮，移除后消息不会自动发出（335）；清除预览与审计资源类型统一为「动作请求」「授权」（359）；下一步文案里的 builder 改为「构建者」（360）；错误文案与成员页统一为「最后一位有效的所有者」「人类用户」，capability 名称为「API key 轮换」（i18n 守卫不允许中文短标签以英文结尾）（361）；服务凭证表单输入时就提示保留名规则（362）；640px 以下对话页头部改为两行（363）。另含一个只改测试的提交：旅程③窄屏用例按 Escape 后先等抽屉关上再点下一行（#625 种子行排到第一位后暴露的时序问题）。只改控制台，不需要内核审查（协调线程定）；UX 验收首轮 1 条 P2（390 宽度错误条被按钮挤窄）在本 PR 内修好，复验 PASS（`console-ux/acceptance-628.md`），CI 全绿合入；无主机动作 | PR #628 |
 
 ### 2.2 验收证明了什么，没证明什么
@@ -1063,7 +1064,7 @@
 | 689 | `refresh_operation_governance` 什么都没刷新时，仍留下一条空的 `governance.refresh_operation_governance` Activity，和遗留 685 同类。修法：`startActivity` 前设 SAVEPOINT，`refreshed` 与 `revisionDrafts` 都为空时回滚到它。能力矩阵这一行从 `repeats` 改为 `idempotent` 时关闭（#493 在 #1083 上判定） | P3 | 内核 | 开放 |
 | 690 | `issue_service_handle`（service-handle-handler.ts:102）和 CLI bootstrap 签 Handle 时把 `scope.resources` 写死为 `{}`。Handle 通道上 `resolveRequesterScope` 直接取 claims 里的范围，所以 service Principal 调 `request_action` 总是被拒（`requester_scope_does_not_cover_gatekeeper`），哪怕它有门的 Grant。R-37 只修了 `issue_handle`，漏了这条路径。后果只会是拒绝、不会多给，不是安全问题。协调者 11-07 定方案 A：签发时按 Principal 当前有效的门填 `resources.gatekeeper`，调用时 R-37 的交集仍是上限。要补的测试：没有门 Grant 的 service Principal 仍被拒；Grant 撤销后，之前签的 Handle 调用被拒；service Handle 调 `request_action` 的集成测试通过时关闭（测试守门人在 #1085 探针中发现） | P3 | 内核 | 已关闭（#1091，f5fce7a） |
 | 691 | 工作区还没有已发布的 entry 定义时，用 `propose_entry_template_upgrade` 带 `basedOn: null` 连调两次，会建出两个新的 entry 家族草稿，两次都返回 `created: true`、id 不同，和能力描述里的「Returns your identical draft instead of a second one」不符。原因在 `application/worker/entry-template.ts` 的 `proposeEntryTemplateUpgrade`：查找「内容相同的草稿」只在 `if (current)` 分支里做。修法：没有当前定义时，也按 `proposed_by`、kind `entry` 与内容查调用者自己的草稿。只是多出草稿，不涉及权限。能力矩阵这一行按两条路径声明，`basedOn: null` 那条记 `creates` 并挂本项，作为绊线（测试守门人在 #1093 发现，#493 认可） | P3 | 内核 | 开放 |
-| 692 | web-e2e 的 cap 调用记录器（`packages/web/e2e/lib/test.ts` 的 `recordCapCalls`）会漏记：测试体结束时页面发出的 cap POST 还没拿到答复，fixture 先执行 `context.off('response')`，晚到的 response 事件被丢掉，M4 于是误报「没有页面调用过」。#1086 的 run 42429822831 出现过一次：旅程 ⑬ 第 6 步的 `confirm_gate_manifest` 实际返回了 200，却没有记下；重跑后转绿。修法：同时监听 `request` 与 `requestfailed`，跟踪在途的 cap POST，`stop()` 先等它们清空（最多 5 秒）再解除监听。测试守门人已在本地用最小 spec 复现并验证了修法 | P3 | 测试守门人 | 开放 |
+| 692 | web-e2e 的 cap 调用记录器（`packages/web/e2e/lib/test.ts` 的 `recordCapCalls`）会漏记：测试体结束时页面发出的 cap POST 还没拿到答复，fixture 先执行 `context.off('response')`，晚到的 response 事件被丢掉，M4 于是误报「没有页面调用过」。#1086 的 run 42429822831 出现过一次：旅程 ⑬ 第 6 步的 `confirm_gate_manifest` 实际返回了 200，却没有记下；重跑后转绿。修法：同时监听 `request` 与 `requestfailed`，跟踪在途的 cap POST，`stop()` 先等它们清空（最多 5 秒）再解除监听。测试守门人已在本地用最小 spec 复现并验证了修法 | P3 | 测试守门人 | 已关闭（#1099，184f9f5） |
 
 ## 5. 更新规则
 
