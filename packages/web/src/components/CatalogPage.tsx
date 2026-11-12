@@ -3815,7 +3815,13 @@ function WorkerDetailView({
   if (row.proposedBy !== undefined) {
     items.push(proposerItem(http, row.proposedBy, t, 'worker-detail-proposer'));
   }
-  const workerOrigin = draftOriginItem(row.origin, row.status, t, 'worker-detail-origin');
+  const workerOrigin = draftOriginItem(
+    row.origin,
+    row.status,
+    t,
+    'worker-detail-origin',
+    row.goalPlanner === true || row.goalReviewer === true,
+  );
   if (workerOrigin !== null) items.push(workerOrigin);
   // S11 GO16b: a Worker kept from a combination says which version and adjustments it came from,
   // on every version — the draft a reviewer publishes included.

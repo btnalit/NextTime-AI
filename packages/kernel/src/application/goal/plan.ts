@@ -400,15 +400,26 @@ export function planHints(plan: GoalPlan): readonly PlanHint[] {
   // S11 GO18 (independent review N4: a hint, no confirmation added): reviews and
   // nothing else — no observation of the real state, no person — achieve the goal on a model's
   // scores alone, and whoever confirms the plan should know it.
-  if (
-    acceptance.some((check) => check.kind === 'review') &&
-    !acceptance.some((check) => check.kind === 'requester_confirm')
-  ) {
+  const reviewed = acceptance.some((check) => check.kind === 'review');
+  const confirmed = acceptance.some((check) => check.kind === 'requester_confirm');
+  if (reviewed && !confirmed) {
     return [
       {
         code: 'review_only',
         message:
           'the plan has no check the platform makes and asks no confirmation of the requester: the goal is achieved once its reviews pass, on a model’s scores alone',
+      },
+    ];
+  }
+  // S11 GO18 (UX acceptance of #1102): reviews and the requester's word — not the requester's
+  // word alone: they confirm only once every review has passed (`confirm_goal_acceptance`), and
+  // a review below its line fails the goal whatever they would say.
+  if (reviewed) {
+    return [
+      {
+        code: 'review_and_confirm',
+        message:
+          'the plan has no check the platform makes: the goal is achieved only when its reviews pass and the requester then confirms it',
       },
     ];
   }

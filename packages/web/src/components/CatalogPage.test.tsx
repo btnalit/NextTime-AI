@@ -5093,6 +5093,16 @@ describe('CatalogPage 起草方 (legacy 597)', () => {
             definition: { name: 'Old' },
             proposedBy: 'p-owner',
           },
+          {
+            id: 'wd-reviewer',
+            version: 1,
+            kind: 'worker',
+            status: 'published',
+            goalReviewer: true,
+            definition: { name: 'goal-reviewer' },
+            proposedBy: 'p-reviewer',
+            origin: 'platform',
+          },
         ],
       }),
       resolve_refs: () => ({ items: [{ id: 'p-owner', kind: 'principal', name: 'Olga' }] }),
@@ -5101,6 +5111,7 @@ describe('CatalogPage 起草方 (legacy 597)', () => {
     const rows = await screen.findAllByTestId('catalog-row');
     const entryRow = rows.find((row) => row.textContent?.includes('Entry')) as HTMLElement;
     const oldRow = rows.find((row) => row.textContent?.includes('Old')) as HTMLElement;
+    const reviewerRow = rows.find((row) => row.textContent?.includes('目标评审器')) as HTMLElement;
     const entry = await selectRow(entryRow);
     const origin = within(entry).getByTestId('worker-detail-origin');
     expect(origin.querySelector('.chip')?.textContent).toBe('平台模板');
@@ -5116,6 +5127,13 @@ describe('CatalogPage 起草方 (legacy 597)', () => {
     const old = await selectRow(oldRow);
     expect(within(old).getByTestId('worker-detail-proposer')).toBeTruthy();
     expect(within(old).queryByTestId('worker-detail-origin')).toBeNull();
+
+    // UX acceptance of #1102: the platform's goal reviewer (and planner) is proposed by the
+    // service account it runs as — its note says so, not that its proposer is the owner.
+    const reviewer = await selectRow(reviewerRow);
+    expect(within(reviewer).getByTestId('worker-detail-origin-note').textContent).toBe(
+      '平台自带，由平台维护；提议者是平台为它设的服务账号，不是工作区里的人。',
+    );
   });
 
   it('an Operation draft an agent last wrote warns it may have replaced its proposer’s own draft; the gate’s manifest names no proposer', async () => {

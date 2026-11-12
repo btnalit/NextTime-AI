@@ -11961,6 +11961,7 @@
                 "enum": [
                   "requester_confirm_only",
                   "review_only",
+                  "review_and_confirm",
                   "requester_cannot_start_workers",
                   "step_gate_not_held",
                   "step_capability_not_held",
@@ -27328,6 +27329,7 @@
                     "enum": [
                       "requester_confirm_only",
                       "review_only",
+                      "review_and_confirm",
                       "requester_cannot_start_workers",
                       "step_gate_not_held",
                       "step_capability_not_held",
@@ -30061,6 +30063,7 @@
                 "enum": [
                   "requester_confirm_only",
                   "review_only",
+                  "review_and_confirm",
                   "requester_cannot_start_workers",
                   "step_gate_not_held",
                   "step_capability_not_held",
@@ -62186,6 +62189,7 @@
                 "enum": [
                   "requester_confirm_only",
                   "review_only",
+                  "review_and_confirm",
                   "requester_cannot_start_workers",
                   "step_gate_not_held",
                   "step_capability_not_held",
@@ -73438,6 +73442,7 @@
                 "enum": [
                   "requester_confirm_only",
                   "review_only",
+                  "review_and_confirm",
                   "requester_cannot_start_workers",
                   "step_gate_not_held",
                   "step_capability_not_held",

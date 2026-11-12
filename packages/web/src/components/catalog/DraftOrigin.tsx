@@ -14,13 +14,17 @@ import { StatusChip } from '../kit/status-chip.js';
  * account" and not which one — the console's own words for both (#927 UX P3-1). Only a draft asks to be checked before
  * publishing; a version past that step just says who wrote it (#927 UX P2-1). `null` (no row) for
  * a version written before origins were recorded. The caller puts it right under the proposer row:
- * read together, whom the version is for and who wrote it (#927 UX P3-2).
+ * read together, whom the version is for and who wrote it (#927 UX P3-2). `platformService`: the
+ * platform's goal planner or reviewer (S11 GO18, UX acceptance of #1102) — the platform keeps it,
+ * and its proposer is the service account it runs as, not the owner an entry template is written
+ * for.
  */
 export function draftOriginItem(
   origin: DraftOrigin | undefined,
   status: string,
   t: Translate,
   testId: string,
+  platformService = false,
 ): KeyValueItem | null {
   if (origin === undefined) return null;
   return {
@@ -43,6 +47,13 @@ export function draftOriginItem(
             {t(
               '这一版是智能体或服务账号写的，不是人直接写的。',
               'An agent or a service account wrote this version, not a person directly.',
+            )}
+          </span>
+        ) : origin === 'platform' && platformService ? (
+          <span className="text-3 text-small" data-testid={`${testId}-note`}>
+            {t(
+              '平台自带，由平台维护；提议者是平台为它设的服务账号，不是工作区里的人。',
+              'The platform’s own, kept by the platform; the proposer is the service account the platform runs it as, not a person in the workspace.',
             )}
           </span>
         ) : origin === 'platform' ? (

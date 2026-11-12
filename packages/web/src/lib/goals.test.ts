@@ -1,4 +1,5 @@
 import {
+  type AcceptanceCheck,
   GOAL_RUN_CHANGE_VALUES,
   type GoalDetailWire,
   type GoalPlan,
@@ -222,6 +223,7 @@ describe('lib/goals', () => {
     expect(isStepAuthorityHint(gate)).toBe(true);
     expect(isStepAuthorityHint({ code: 'requester_confirm_only', message: 'm' })).toBe(false);
     expect(isStepAuthorityHint({ code: 'review_only', message: 'm' })).toBe(false);
+    expect(isStepAuthorityHint({ code: 'review_and_confirm', message: 'm' })).toBe(false);
     expect(stepHintChipLabel(gate, zh)).toBe('请求人无权限');
     expect(stepHintChipLabel(capability, zh)).toBe('请求人无权限');
     expect(
@@ -1265,6 +1267,34 @@ describe('lib/goals', () => {
     );
     expect(withParams).toMatch(/以参数 .*"host":"web-1"/);
     expect(withParams).not.toMatch(/not-a-real-value/);
+  });
+
+  it('S11 GO18 (UX acceptance of #1102): a plan reviewed and then confirmed says both decide; the review row does not repeat its label', () => {
+    const both = planHintText({ code: 'review_and_confirm', message: 'm' }, zh);
+    expect(both).toBe(
+      '这个计划没有平台能做的验收检查：评审打分过线、再由请求人确认，目标才算达成。',
+    );
+    expect(both).not.toContain('只凭请求人确认');
+    expect(planHintText({ code: 'review_and_confirm', message: 'm' }, en)).toMatch(
+      /only when its reviews pass and the requester then confirms it\.$/,
+    );
+    const review: AcceptanceCheck = {
+      kind: 'review',
+      key: 'quality',
+      subjects: ['draft', 'polish'],
+      criteria: [
+        { key: 'clear', description: 'Reads clearly', weight: 2 },
+        { key: 'sourced', description: 'Cites its sources', weight: 1 },
+        { key: 'short', description: 'Fits on a page', weight: 1 },
+      ],
+      passAt: 75,
+    };
+    const zhRow = planCheckSentence(review, new Map(), zh);
+    expect(zhRow).toBe('给 draft、polish 的产出打分：3 条标准，得分达到 75% 才算通过');
+    expect(`${checkKindLabel('review', zh)} ${zhRow}`).not.toMatch(/独立评审.*独立评审/);
+    expect(planCheckSentence(review, new Map(), en)).toBe(
+      'Scores what draft, polish produced: 3 criteria, passing at 75% of the points',
+    );
   });
 
   it('an absence check reads as the gate answering “not there”, in both languages (S11 「门确认不存在」 B)', () => {

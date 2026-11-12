@@ -831,9 +831,10 @@ describe.runIf(DATABASE_URL !== undefined)(
     it('a review and the requester’s confirmation: they confirm only once the review passed, and the goal is achieved on their word', async () => {
       const requester = await newPrincipal('member');
       const goalRunId = await propose(requester, planOf([REVIEW, CONFIRM]));
+      // UX acceptance of #1102: not 「only on the requester's word」 — the review must pass first.
       expect(
         (await getGoal(goalRunId, requester)).planRevision.hints.map((hint) => hint.code),
-      ).toEqual(['requester_confirm_only']);
+      ).toEqual(['review_and_confirm']);
       await call(human(requester), 'confirm_goal', { goalRunId, revision: 1 });
       await advanceOnce(goalRunId, requester);
       await succeed(goalRunId, requester);

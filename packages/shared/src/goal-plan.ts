@@ -365,6 +365,10 @@ export type StepTrialDraftInfo = z.infer<typeof StepTrialDraftInfoSchema>;
  *   - S11 GO18, `review_only` (the kernel's `planHints`) — no check the platform makes and no
  *     confirmation asked: the goal is achieved once its reviews pass, on a model's scores alone
  *     (`reviewer_assessed`);
+ *   - S11 GO18, `review_and_confirm` (the kernel's `planHints`) — no check the platform makes, and
+ *     reviews besides the requester's confirmation: the goal is achieved only when its reviews
+ *     pass and the requester then confirms it (a review below its line fails the goal, whatever
+ *     the requester would say);
  *   - S11 GO5c, the confirmation card's check of the requester's authority (the kernel's
  *     `planAuthorityHints`, worked out when it is read, for a proposed run — authority changes):
  *     what would stop a step's first attempt from starting, the goal then pausing for a person
@@ -415,14 +419,15 @@ export type StepTrialDraftInfo = z.infer<typeof StepTrialDraftInfoSchema>;
  *       - `step_input_mismatch` — a step with no `bindings` whose `input` does not match the
  *         Worker's `inputSchema`; `inputProblems` names the places (`input.…`, never the values).
  *     Read from the step's pinned WorkerDefinition version, which does not change.
- *   Where they appear: every hint but `requester_confirm_only` and `review_only` is on the
- *   proposal of a run still proposed and — S11 GO8a — on the current revision of a paused run, for
+ *   Where they appear: every hint but `requester_confirm_only`, `review_only` and
+ *   `review_and_confirm` is on the proposal of a run still proposed and — S11 GO8a — on the current revision of a paused run, for
  *   its steps that have not started an attempt, so a pause can say which step would not start and
  *   why.
  */
 export const PLAN_HINT_CODE_VALUES = [
   'requester_confirm_only',
   'review_only',
+  'review_and_confirm',
   'requester_cannot_start_workers',
   'step_gate_not_held',
   'step_capability_not_held',
@@ -494,11 +499,13 @@ export type PlanHintAdmission = 'refused' | 'needs_approval' | 'note' | 'plan';
  *     ({@link stepAdmissionOf});
  *   - `note` — the step starts as the plan says: advice about its Worker's contract, or what
  *     happens once it runs (a gate refuses calls for want of the requester's account);
- *   - `plan` — about the plan, not a step's start (`requester_confirm_only`, `review_only`).
+ *   - `plan` — about the plan, not a step's start (`requester_confirm_only`, `review_only`,
+ *     `review_and_confirm`).
  */
 export const PLAN_HINT_ADMISSION = {
   requester_confirm_only: 'plan',
   review_only: 'plan',
+  review_and_confirm: 'plan',
   requester_cannot_start_workers: 'refused',
   step_gate_not_held: 'refused',
   step_capability_not_held: 'refused',

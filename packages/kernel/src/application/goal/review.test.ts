@@ -140,10 +140,18 @@ describe('a plan checked by reviews (S11 GO18, independent review N4)', () => {
     ]);
   });
 
-  it('with a confirmation, it is achieved on the requester’s word; with a check the platform makes, no hint', () => {
+  it('with a confirmation, it is achieved when the reviews pass and the requester confirms; with a check the platform makes, no hint', () => {
     const confirmed = { ...PLAN, acceptance: [REVIEW, asked] };
     expect(roundAcceptance(confirmed, STATEMENT)).toEqual([REVIEW, asked]);
-    expect(planHints(confirmed).map((hint) => hint.code)).toEqual(['requester_confirm_only']);
+    expect(planHints(confirmed)).toEqual([
+      {
+        code: 'review_and_confirm',
+        message: expect.stringContaining('its reviews pass and the requester then confirms it'),
+      },
+    ]);
+    expect(planHints({ ...PLAN, acceptance: [asked] }).map((hint) => hint.code)).toEqual([
+      'requester_confirm_only',
+    ]);
     expect(roundAcceptance(PLAN, STATEMENT)).toEqual([OBSERVE, REVIEW]);
     expect(planHints(PLAN)).toEqual([]);
   });
