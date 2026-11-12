@@ -377,10 +377,13 @@ export const TaskStatusSchema = asEnum(TASK_STATUS_VALUES);
  * gate calls, its report), every gate call is answered from the case's fixtures and its egress is
  * denied. S11 GO9a `planning`: a goal planner's run for one planning round of a GoalRun — it acts
  * for the goal's requester, observes nothing, its Handle holds its own Task, its (empty) tool list
- * and its report, and what it reports is a proposal the requester decides on. `null` on the wire:
+ * and its report, and what it reports is a proposal the requester decides on. S11 GO18 `review`: a
+ * reviewer's run for one `review` acceptance check of a verifying GoalRun — it acts for the goal's
+ * requester, observes nothing, reaches nothing outside, its Handle holds the same three, and what
+ * it reports is scores the platform works the check's verdict out from. `null` on the wire:
  * ordinary work.
  */
-export const TASK_PURPOSE_VALUES = ['evaluation', 'planning'] as const;
+export const TASK_PURPOSE_VALUES = ['evaluation', 'planning', 'review'] as const;
 export type TaskPurpose = (typeof TASK_PURPOSE_VALUES)[number];
 export const TaskPurposeSchema = asEnum(TASK_PURPOSE_VALUES);
 
@@ -639,17 +642,23 @@ export const GoalOutcomeBasisSchema = asEnum(GOAL_OUTCOME_BASIS_VALUES);
  *     and a predicate over its properties (`FactCheck`), judged by the platform on a Fact observed
  *     since the round opened, and not by the goal's own doing;
  *   - `requester_confirm` (请求人确认): the requester says the goal is achieved — asked once every
- *     check the platform makes in the round passed. A plan with no acceptance check has one
- *     implicitly.
+ *     other check of the round passed. A plan with no acceptance check has one implicitly;
+ *   - `review` (独立评审, S11 GO18, goal/0019): an independent reviewer Worker the platform starts
+ *     scores what named steps produced against the check's criteria (`ReviewCheck`), once every
+ *     check the platform makes in the round passed; the kernel works out from the scores whether
+ *     it passes (`goal-review.ts` `reviewDerivation`) — the reviewer's word alone is not a
+ *     verdict. A proxy indicator, not an observation of the world: an `achieved` resting on one
+ *     is `reviewer_assessed`.
  * A step's own acceptance (S11 GO4b, `step_acceptance_checks`, goal/0006) has the platform's kinds
  * only (`observe_predicate`, `observe_absent`, `fact_predicate`): a step's acceptance never waits
- * on a person. W4 adds `review`.
+ * on a person, and is never reviewed.
  */
 export const GOAL_ACCEPTANCE_CHECK_KIND_VALUES = [
   'observe_predicate',
   'observe_absent',
   'fact_predicate',
   'requester_confirm',
+  'review',
 ] as const;
 export type GoalAcceptanceCheckKind = (typeof GOAL_ACCEPTANCE_CHECK_KIND_VALUES)[number];
 export const GoalAcceptanceCheckKindSchema = asEnum(GOAL_ACCEPTANCE_CHECK_KIND_VALUES);

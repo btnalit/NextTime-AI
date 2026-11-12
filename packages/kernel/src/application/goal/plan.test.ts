@@ -684,9 +684,10 @@ describe('parsePlan — absence is never proof, wherever a predicate sits (S11 G
 
   it('covers reconcile and every acceptance check kind that carries a predicate, on the goal and on a step', () => {
     // The requester's word carries none, nor does an absence check (S11 「门确认不存在」 B): the
-    // gate's answer is the check, and its schema refuses a predicate (`predicate.test.ts`).
+    // gate's answer is the check, and its schema refuses a predicate (`predicate.test.ts`); nor
+    // does a review (S11 GO18): the platform's arithmetic over a reviewer's scores is its verdict.
     const judged = GOAL_ACCEPTANCE_CHECK_KIND_VALUES.filter(
-      (kind) => kind !== 'requester_confirm' && kind !== 'observe_absent',
+      (kind) => kind !== 'requester_confirm' && kind !== 'observe_absent' && kind !== 'review',
     );
     expect(Object.keys(PLACES).sort()).toEqual(
       ['reconcile', ...judged.flatMap((kind) => [`goal ${kind}`, `step ${kind}`])].sort(),

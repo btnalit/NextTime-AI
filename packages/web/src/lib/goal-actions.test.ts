@@ -86,6 +86,7 @@ describe('lib/goal-actions', () => {
       check: null,
       fact: null,
       prompt: kind === 'requester_confirm' ? '证书都换好了吗？' : null,
+      review: null,
       attempts: 0,
       lastError: null,
       observationId: null,

@@ -72,6 +72,8 @@ const INTERNAL_PRINCIPAL_LABELS: Readonly<Record<string, BilingualLabel>> = {
   __draft_reaper__: { zh: '草稿清理服务', en: 'Draft cleanup service' },
   // S11 GO9a: proposes goal plan revisions for a requester (`ontology/goal-planner.yaml`).
   __goal_planner__: { zh: '目标规划器', en: 'Goal planner' },
+  // S11 GO18: reviews a goal's results against its review check (`ontology/goal-reviewer.yaml`).
+  __goal_reviewer__: { zh: '目标评审器', en: 'Goal reviewer' },
 };
 
 /**

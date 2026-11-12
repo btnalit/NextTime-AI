@@ -123,6 +123,8 @@ const PURGE_COUNT_LABELS = {
   // S11 GO9a (goal/0014).
   goalPlannerDelegations: { zh: '目标规划器授权', en: 'Goal planner leaves' },
   goalPlanningRounds: { zh: '规划轮次', en: 'Planning rounds' },
+  // S11 GO18 (goal/0019).
+  goalReviewAssessments: { zh: '目标评审的打分结果', en: 'Goal review assessments' },
   chats: { zh: '对话', en: 'Chats' },
   chatMessages: { zh: '消息', en: 'Messages' },
   activities: { zh: '活动', en: 'Activities' },

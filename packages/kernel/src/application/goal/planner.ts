@@ -65,6 +65,7 @@ import {
 } from './planning-rounds.js';
 import { precedentsOfGoal } from './precedents.js';
 import { getGoalRun, getPlanRevision } from './reads.js';
+import { REVIEW_SEALED, sealReviews, unsealPlannerPlan } from './review.js';
 import {
   type RevisionCandidate,
   adoptRevision,
@@ -217,6 +218,7 @@ const PLANNER_RULES: readonly string[] = [
   'a Worker’s inputSchema is the input it expects; its outputSchema is what it reports — a step is held to an output, and a later step can bind to it, only when the step sets outputSchema itself (copy the Worker’s); contractOmitted means the Worker declares a contract left out here for size',
   'workers[].hints are platform statistics over each version’s own recent Tasks (median tokens, primary outcomes), not a ranking: choose a Worker for what it does and its contract, and give little weight to a hint whose sufficient is false',
   'never write a credential: a gate authenticates with the credentials configured on it',
+  `a review check is the requester's: keep it exactly as read (its criteria and passAt are sealed as ${REVIEW_SEALED}), or leave it out (a change to the goal's acceptance, for the requester to decide); write no review check of your own; a step a kept review names in subjects stays in the plan under its key`,
   'the budget does not change with a revision',
   'precedents are the requester’s own earlier goals of the same kind with how they ended (polarity positive: the platform’s checks passed; negative: not achieved, or achieved over checks that did not pass; unverified: on the requester’s word or a review alone): what was tried before, never proof that a plan works now — a plan copied from one is checked like any other',
   'output.precedents (decision revise, optional) cites only goalRunIds of precedents in this input, each once: the requester sees them beside the revision',
@@ -401,13 +403,26 @@ async function settleFinishedRound(
     });
     return settled(`proposed a revision that no longer passes (${boundDetail(detail)})`);
   }
+  // S11 GO18 (F5): a sealed review is the stored one only when sent back exactly as read.
+  const unsealed = unsealPlannerPlan(await readBasePlan(client, ws, goal), output.data.plan);
+  if (unsealed.problems.length > 0) {
+    const detail = unsealed.problems
+      .map((problem) => `${problem.path}: ${problem.message}`)
+      .join('; ');
+    await settlePlanningRound(client, ws, actor, round, {
+      status: 'failed',
+      reason: 'invalid_revision',
+      detail,
+    });
+    return settled(`proposed a revision that no longer passes (${boundDetail(detail)})`);
+  }
   let candidate: RevisionCandidate;
   try {
     refuseRedactedText('reason', output.data.reason);
     refuseCredentialText('reason', output.data.reason);
     // An autonomous round's revision may be adopted in this transaction: checked as its writer.
     candidate = await checkRevisionCandidate(client, ws, goal, {
-      plan: output.data.plan,
+      plan: unsealed.plan,
       lock: autonomous,
     });
   } catch (err) {
@@ -782,7 +797,9 @@ async function failedAcceptanceRound(
   const first = checks[0];
   if (!first) return null;
   if (checks.some((check) => check.plan_revision !== goal.currentRevision)) return null;
-  if (!checks.some((check) => check.status === 'failed')) return null;
+  // A review's verdict is the requester's to weigh (GO18 F6): a round whose only failures are
+  // reviews pauses for a person and opens no planner round.
+  if (!checks.some((check) => check.status === 'failed' && check.kind !== 'review')) return null;
   if (rounds.some((round) => round.acceptanceRound === first.round)) return null;
   const resumed = await client.query<{ at: Date | null }>(
     `select max(created_at) as at from audit_records
@@ -1012,7 +1029,9 @@ async function plannerInput(
 ): Promise<Record<string, unknown>> {
   const { client, goal } = ctx;
   const ws = goal.workspaceId;
-  const plan = planAsRead(await readBasePlan(client, ws, goal));
+  const read = planAsRead(await readBasePlan(client, ws, goal));
+  // S11 GO18 (F5): how a review scores is closed to the planner — here and in every precedent.
+  const plan = sealReviews(read);
   const live = ctx.steps.filter((step) => step.status !== 'superseded');
   const usage = await readGoalRunUsage(client, ws, goal.id);
   const accepted = await client.query<{ accepted: number }>(
@@ -1079,8 +1098,8 @@ async function plannerInput(
       // S11 GO17: the requester's own earlier goals of the same kind — their plan cut like an
       // output; the rest as `find_goal_precedents` gives it.
       precedents: (
-        await precedentsOfGoal(client, ws, goal, plan, GOAL_PRECEDENT_CONTEXT_LIMIT, ctx.now)
-      ).map((precedent) => ({ ...precedent, plan: previewOf(precedent.plan) })),
+        await precedentsOfGoal(client, ws, goal, read, GOAL_PRECEDENT_CONTEXT_LIMIT, ctx.now)
+      ).map((precedent) => ({ ...precedent, plan: previewOf(sealReviews(precedent.plan)) })),
       rules: PLANNER_RULES,
     },
     { maxNodes: Number.POSITIVE_INFINITY },
@@ -1298,9 +1317,11 @@ const PLANNER_REPORT_FORBIDDEN = [
  * S11 GO9a: a planning Task's report, after its output contract passed (`report_task_result`,
  * `worker-result-handler.ts`): it holds nothing but the proposal, and a `revise` plan passes every
  * check a person's revision does on the run as it stands — refused otherwise, each place named,
- * so the planner fixes it in its session (the contract's way). Nothing is checked once the round
- * stopped running: the report is kept on the Task and moves nothing. `contract` is the report as
- * it would be stored (scrubbed). Returns the problems; empty when it passes or is no planner's.
+ * so the planner fixes it in its session (the contract's way). What a planner may write is held
+ * for as long as its Task takes a report; the rest is not checked once the round stopped running
+ * (S11 GO18, independent review of #1102: a round settles before its Task is stopped after the
+ * commit): the report is kept on the Task and moves nothing. `contract` is the report as it would
+ * be stored (scrubbed). Returns the problems; empty when it passes or is no planner's.
  */
 export async function plannerReportProblems(
   client: PoolClient,
@@ -1310,17 +1331,6 @@ export async function plannerReportProblems(
 ): Promise<readonly OutputProblem[]> {
   const planning = await readTaskPlanningRound(client, workspaceId, taskId);
   if (!planning) return [];
-  const round = await client.query<{
-    status: string;
-    based_on_revision: number;
-    kind: PlanningRoundKind;
-  }>(
-    `select status, based_on_revision, kind from goal_planning_rounds
-      where workspace_id = $1 and id = $2`,
-    [workspaceId, planning.planningRoundId],
-  );
-  const row = round.rows[0];
-  if (row?.status !== 'running') return [];
   const problems: OutputProblem[] = [];
   for (const field of PLANNER_REPORT_FORBIDDEN) {
     const value = contract[field];
@@ -1331,6 +1341,17 @@ export async function plannerReportProblems(
         'a planner reports its proposal in output only; it writes no Facts, evidence, artifacts or proposals',
     });
   }
+  const round = await client.query<{
+    status: string;
+    based_on_revision: number;
+    kind: PlanningRoundKind;
+  }>(
+    `select status, based_on_revision, kind from goal_planning_rounds
+      where workspace_id = $1 and id = $2`,
+    [workspaceId, planning.planningRoundId],
+  );
+  const row = round.rows[0];
+  if (row?.status !== 'running') return problems;
   const output = PlannerOutputSchema.safeParse(contract.output);
   if (!output.success) {
     for (const issue of output.error.issues) {
@@ -1381,9 +1402,18 @@ export async function plannerReportProblems(
         },
       )),
     );
+    // S11 GO18 (F5): a sealed review stands for the stored one only when left exactly as read.
+    const unsealed = unsealPlannerPlan(
+      await readBasePlan(client, workspaceId, goal),
+      output.data.plan,
+    );
+    if (unsealed.problems.length > 0) {
+      problems.push(...unsealed.problems);
+      return problems;
+    }
     try {
       await checkRevisionCandidate(client, workspaceId, goal, {
-        plan: output.data.plan,
+        plan: unsealed.plan,
         lock: false,
       });
     } catch (err) {

@@ -1013,6 +1013,62 @@ function plannerTaskInput(messages) {
   return undefined;
 }
 
+/** The goal reviewer's Task input (`kind: goal_review`, see `goalReviewerScenario`), read like the
+ *  planner's ({@link plannerTaskInput}). `undefined` when no message carries one. */
+function reviewerTaskInput(messages) {
+  for (const message of messages) {
+    if (!message) continue;
+    const text = toolMessageText(message);
+    const at = text.indexOf('### Task input\n');
+    if (at < 0) continue;
+    const rest = text.slice(at + '### Task input\n'.length);
+    const end = rest.indexOf('\n\n');
+    try {
+      const input = JSON.parse(end < 0 ? rest : rest.slice(0, end));
+      if (input && typeof input === 'object' && input.kind === 'goal_review') return input;
+    } catch {
+      // Not the reviewer's input: look further.
+    }
+  }
+  return undefined;
+}
+
+/** S11 GO18 (accept_s2's review step, GO18b): the goal reviewer — the Worker the platform starts
+ *  for a goal's `review` check once every check it makes passed (ontology/goal-reviewer.yaml).
+ *  Selected by `goal_review`, which only the reviewer's Task input carries; listed before the step
+ *  scenarios because that input shows the reviewed steps' output. One turn: `report_result` with
+ *  a score for every criterion of the input, each once — `ACCEPT_S2_SCORE=<n>` in a criterion's
+ *  description scores it n (a script can make a review fail), any other the highest score — and
+ *  nothing but its output: a reviewer writes no findings, Facts, evidence or artifacts
+ *  (packages/kernel/src/application/goal/review.ts `REVIEWER_REPORT_FORBIDDEN`). */
+function goalReviewerScenario(messages) {
+  const input = reviewerTaskInput(messages);
+  const criteria = Array.isArray(input?.criteria) ? input.criteria : [];
+  const max = typeof input?.scoreRange?.max === 'number' ? input.scoreRange.max : 4;
+  const scores = criteria
+    .filter((criterion) => criterion && typeof criterion.key === 'string')
+    .map((criterion) => {
+      const scripted = /ACCEPT_S2_SCORE=(\d+)/.exec(String(criterion.description ?? ''))?.[1];
+      const score = scripted === undefined ? max : Math.min(max, Number(scripted));
+      return {
+        criterion: criterion.key,
+        score,
+        reason: `accept_s2: scripted score ${score} of ${max}.`,
+      };
+    });
+  return [
+    {
+      tool: {
+        name: 'report_result',
+        args: {
+          summary: `accept_s2: the goal reviewer scored ${scores.length} criteria.`,
+          output: { scores },
+        },
+      },
+    },
+  ];
+}
+
 /** S11 GO9a/GO9b (scripts/lib/accept-s2-goals.sh `goal_s13_planner`, legacy 549): the goal
  *  planner — the Worker the platform starts for a goal whose step failed for its requester
  *  (ontology/goal-planner.yaml). Selected by `goal_planning`, which only the planner's Task input
@@ -1611,6 +1667,7 @@ const SCENARIOS = [
   { marker: TICKETS_PROPOSE_MARKER, build: ticketsProposeChatScenario, chat: true },
   { marker: TICKETS_PROGRESS_MARKER, build: ticketsProgressChatScenario, chat: true },
   { marker: 'goal_planning', build: goalPlannerScenario, chat: false },
+  { marker: 'goal_review', build: goalReviewerScenario, chat: false },
   { marker: 'ACCEPT_S2_SCENARIO=docker_restart', build: dockerRestartScenario, chat: false },
   { marker: 'ACCEPT_S2_SCENARIO=ssh_run', build: sshRunScenario, chat: false },
   { marker: 'ACCEPT_S2_SCENARIO=goal_step', build: goalStepScenario, chat: false },

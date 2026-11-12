@@ -11960,6 +11960,8 @@
               "code": {
                 "enum": [
                   "requester_confirm_only",
+                  "review_only",
+                  "review_and_confirm",
                   "requester_cannot_start_workers",
                   "step_gate_not_held",
                   "step_capability_not_held",
@@ -12630,6 +12632,10 @@
           "type": "object"
         },
         "goalPlanner": {
+          "type": "boolean"
+        },
+        "goalReviewer": {
+          "const": true,
           "type": "boolean"
         },
         "id": {
@@ -14233,7 +14239,8 @@
                   "observe_predicate",
                   "observe_absent",
                   "fact_predicate",
-                  "requester_confirm"
+                  "requester_confirm",
+                  "review"
                 ],
                 "type": "string"
               },
@@ -15678,7 +15685,8 @@
                                 "observe_predicate",
                                 "observe_absent",
                                 "fact_predicate",
-                                "requester_confirm"
+                                "requester_confirm",
+                                "review"
                               ],
                               "type": "string"
                             },
@@ -15804,7 +15812,8 @@
                         "observe_predicate",
                         "observe_absent",
                         "fact_predicate",
-                        "requester_confirm"
+                        "requester_confirm",
+                        "review"
                       ],
                       "type": "string"
                     },
@@ -16257,6 +16266,76 @@
                             "kind",
                             "key",
                             "prompt"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "criteria": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "description": {
+                                    "maxLength": 1000,
+                                    "pattern": "\\S",
+                                    "type": "string"
+                                  },
+                                  "key": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                                    "type": "string"
+                                  },
+                                  "weight": {
+                                    "maximum": 5,
+                                    "minimum": 1,
+                                    "type": "integer"
+                                  }
+                                },
+                                "required": [
+                                  "key",
+                                  "description",
+                                  "weight"
+                                ],
+                                "type": "object"
+                              },
+                              "maxItems": 8,
+                              "minItems": 1,
+                              "type": "array"
+                            },
+                            "key": {
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                              "type": "string"
+                            },
+                            "kind": {
+                              "const": "review",
+                              "type": "string"
+                            },
+                            "model": {
+                              "maxLength": 200,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "passAt": {
+                              "maximum": 100,
+                              "minimum": 1,
+                              "type": "integer"
+                            },
+                            "subjects": {
+                              "items": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                                "type": "string"
+                              },
+                              "maxItems": 8,
+                              "minItems": 1,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "key",
+                            "subjects",
+                            "criteria",
+                            "passAt"
                           ],
                           "type": "object"
                         }
@@ -25398,7 +25477,8 @@
                       "observe_predicate",
                       "observe_absent",
                       "fact_predicate",
-                      "requester_confirm"
+                      "requester_confirm",
+                      "review"
                     ],
                     "type": "string"
                   },
@@ -25817,7 +25897,8 @@
                             "observe_predicate",
                             "observe_absent",
                             "fact_predicate",
-                            "requester_confirm"
+                            "requester_confirm",
+                            "review"
                           ],
                           "type": "string"
                         },
@@ -25848,6 +25929,234 @@
                             "null"
                           ]
                         },
+                        "review": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "assessment": {
+                                  "anyOf": [
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "comment": {
+                                          "type": [
+                                            "string",
+                                            "null"
+                                          ]
+                                        },
+                                        "createdAt": {
+                                          "type": "string"
+                                        },
+                                        "executorModels": {
+                                          "items": {
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "attempt": {
+                                                "exclusiveMinimum": 0,
+                                                "type": "integer"
+                                              },
+                                              "model": {
+                                                "type": [
+                                                  "string",
+                                                  "null"
+                                                ]
+                                              },
+                                              "stepKey": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": [
+                                              "stepKey",
+                                              "attempt",
+                                              "model"
+                                            ],
+                                            "type": "object"
+                                          },
+                                          "type": "array"
+                                        },
+                                        "lines": {
+                                          "items": {
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "criterion": {
+                                                "type": "string"
+                                              },
+                                              "maxPoints": {
+                                                "exclusiveMinimum": 0,
+                                                "type": "integer"
+                                              },
+                                              "points": {
+                                                "anyOf": [
+                                                  {
+                                                    "minimum": 0,
+                                                    "type": "integer"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "reason": {
+                                                "type": "string"
+                                              },
+                                              "score": {
+                                                "anyOf": [
+                                                  {
+                                                    "minimum": 0,
+                                                    "type": "integer"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "weight": {
+                                                "exclusiveMinimum": 0,
+                                                "type": "integer"
+                                              }
+                                            },
+                                            "required": [
+                                              "criterion",
+                                              "weight",
+                                              "score",
+                                              "reason",
+                                              "points",
+                                              "maxPoints"
+                                            ],
+                                            "type": "object"
+                                          },
+                                          "type": "array"
+                                        },
+                                        "maxPoints": {
+                                          "exclusiveMinimum": 0,
+                                          "type": "integer"
+                                        },
+                                        "passAt": {
+                                          "exclusiveMinimum": 0,
+                                          "type": "integer"
+                                        },
+                                        "points": {
+                                          "minimum": 0,
+                                          "type": "integer"
+                                        },
+                                        "reviewTaskId": {
+                                          "type": "string"
+                                        },
+                                        "reviewerModel": {
+                                          "type": [
+                                            "string",
+                                            "null"
+                                          ]
+                                        },
+                                        "sameModel": {
+                                          "type": [
+                                            "boolean",
+                                            "null"
+                                          ]
+                                        },
+                                        "unassessed": {
+                                          "items": {
+                                            "type": "string"
+                                          },
+                                          "type": "array"
+                                        },
+                                        "verdict": {
+                                          "enum": [
+                                            "passed",
+                                            "failed",
+                                            "unavailable"
+                                          ],
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "reviewTaskId",
+                                        "reviewerModel",
+                                        "executorModels",
+                                        "sameModel",
+                                        "lines",
+                                        "comment",
+                                        "points",
+                                        "maxPoints",
+                                        "passAt",
+                                        "unassessed",
+                                        "verdict",
+                                        "createdAt"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "criteria": {
+                                  "items": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "description": {
+                                        "maxLength": 1000,
+                                        "pattern": "\\S",
+                                        "type": "string"
+                                      },
+                                      "key": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                                        "type": "string"
+                                      },
+                                      "weight": {
+                                        "maximum": 5,
+                                        "minimum": 1,
+                                        "type": "integer"
+                                      }
+                                    },
+                                    "required": [
+                                      "key",
+                                      "description",
+                                      "weight"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "type": "array"
+                                },
+                                "model": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "passAt": {
+                                  "exclusiveMinimum": 0,
+                                  "type": "integer"
+                                },
+                                "subjects": {
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                },
+                                "taskId": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "subjects",
+                                "criteria",
+                                "passAt",
+                                "model",
+                                "taskId",
+                                "assessment"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "settledAt": {
                           "type": [
                             "string",
@@ -25872,6 +26181,7 @@
                         "check",
                         "fact",
                         "prompt",
+                        "review",
                         "attempts",
                         "lastError",
                         "observationId",
@@ -26284,7 +26594,8 @@
                                   "observe_predicate",
                                   "observe_absent",
                                   "fact_predicate",
-                                  "requester_confirm"
+                                  "requester_confirm",
+                                  "review"
                                 ],
                                 "type": "string"
                               },
@@ -26315,6 +26626,234 @@
                                   "null"
                                 ]
                               },
+                              "review": {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "assessment": {
+                                        "anyOf": [
+                                          {
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "comment": {
+                                                "type": [
+                                                  "string",
+                                                  "null"
+                                                ]
+                                              },
+                                              "createdAt": {
+                                                "type": "string"
+                                              },
+                                              "executorModels": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "attempt": {
+                                                      "exclusiveMinimum": 0,
+                                                      "type": "integer"
+                                                    },
+                                                    "model": {
+                                                      "type": [
+                                                        "string",
+                                                        "null"
+                                                      ]
+                                                    },
+                                                    "stepKey": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "stepKey",
+                                                    "attempt",
+                                                    "model"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "type": "array"
+                                              },
+                                              "lines": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "criterion": {
+                                                      "type": "string"
+                                                    },
+                                                    "maxPoints": {
+                                                      "exclusiveMinimum": 0,
+                                                      "type": "integer"
+                                                    },
+                                                    "points": {
+                                                      "anyOf": [
+                                                        {
+                                                          "minimum": 0,
+                                                          "type": "integer"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "reason": {
+                                                      "type": "string"
+                                                    },
+                                                    "score": {
+                                                      "anyOf": [
+                                                        {
+                                                          "minimum": 0,
+                                                          "type": "integer"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "weight": {
+                                                      "exclusiveMinimum": 0,
+                                                      "type": "integer"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "criterion",
+                                                    "weight",
+                                                    "score",
+                                                    "reason",
+                                                    "points",
+                                                    "maxPoints"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "type": "array"
+                                              },
+                                              "maxPoints": {
+                                                "exclusiveMinimum": 0,
+                                                "type": "integer"
+                                              },
+                                              "passAt": {
+                                                "exclusiveMinimum": 0,
+                                                "type": "integer"
+                                              },
+                                              "points": {
+                                                "minimum": 0,
+                                                "type": "integer"
+                                              },
+                                              "reviewTaskId": {
+                                                "type": "string"
+                                              },
+                                              "reviewerModel": {
+                                                "type": [
+                                                  "string",
+                                                  "null"
+                                                ]
+                                              },
+                                              "sameModel": {
+                                                "type": [
+                                                  "boolean",
+                                                  "null"
+                                                ]
+                                              },
+                                              "unassessed": {
+                                                "items": {
+                                                  "type": "string"
+                                                },
+                                                "type": "array"
+                                              },
+                                              "verdict": {
+                                                "enum": [
+                                                  "passed",
+                                                  "failed",
+                                                  "unavailable"
+                                                ],
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": [
+                                              "reviewTaskId",
+                                              "reviewerModel",
+                                              "executorModels",
+                                              "sameModel",
+                                              "lines",
+                                              "comment",
+                                              "points",
+                                              "maxPoints",
+                                              "passAt",
+                                              "unassessed",
+                                              "verdict",
+                                              "createdAt"
+                                            ],
+                                            "type": "object"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "criteria": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "description": {
+                                              "maxLength": 1000,
+                                              "pattern": "\\S",
+                                              "type": "string"
+                                            },
+                                            "key": {
+                                              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                                              "type": "string"
+                                            },
+                                            "weight": {
+                                              "maximum": 5,
+                                              "minimum": 1,
+                                              "type": "integer"
+                                            }
+                                          },
+                                          "required": [
+                                            "key",
+                                            "description",
+                                            "weight"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "type": "array"
+                                      },
+                                      "model": {
+                                        "type": [
+                                          "string",
+                                          "null"
+                                        ]
+                                      },
+                                      "passAt": {
+                                        "exclusiveMinimum": 0,
+                                        "type": "integer"
+                                      },
+                                      "subjects": {
+                                        "items": {
+                                          "type": "string"
+                                        },
+                                        "type": "array"
+                                      },
+                                      "taskId": {
+                                        "type": [
+                                          "string",
+                                          "null"
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "subjects",
+                                      "criteria",
+                                      "passAt",
+                                      "model",
+                                      "taskId",
+                                      "assessment"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
                               "settledAt": {
                                 "type": [
                                   "string",
@@ -26339,6 +26878,7 @@
                               "check",
                               "fact",
                               "prompt",
+                              "review",
                               "attempts",
                               "lastError",
                               "observationId",
@@ -26788,6 +27328,8 @@
                   "code": {
                     "enum": [
                       "requester_confirm_only",
+                      "review_only",
+                      "review_and_confirm",
                       "requester_cannot_start_workers",
                       "step_gate_not_held",
                       "step_capability_not_held",
@@ -27313,6 +27855,76 @@
                           "kind",
                           "key",
                           "prompt"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "criteria": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "description": {
+                                  "maxLength": 1000,
+                                  "pattern": "\\S",
+                                  "type": "string"
+                                },
+                                "key": {
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                                  "type": "string"
+                                },
+                                "weight": {
+                                  "maximum": 5,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "key",
+                                "description",
+                                "weight"
+                              ],
+                              "type": "object"
+                            },
+                            "maxItems": 8,
+                            "minItems": 1,
+                            "type": "array"
+                          },
+                          "key": {
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                            "type": "string"
+                          },
+                          "kind": {
+                            "const": "review",
+                            "type": "string"
+                          },
+                          "model": {
+                            "maxLength": 200,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "passAt": {
+                            "maximum": 100,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "subjects": {
+                            "items": {
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                              "type": "string"
+                            },
+                            "maxItems": 8,
+                            "minItems": 1,
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "key",
+                          "subjects",
+                          "criteria",
+                          "passAt"
                         ],
                         "type": "object"
                       }
@@ -29450,6 +30062,8 @@
               "code": {
                 "enum": [
                   "requester_confirm_only",
+                  "review_only",
+                  "review_and_confirm",
                   "requester_cannot_start_workers",
                   "step_gate_not_held",
                   "step_capability_not_held",
@@ -29975,6 +30589,76 @@
                       "kind",
                       "key",
                       "prompt"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "criteria": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "description": {
+                              "maxLength": 1000,
+                              "pattern": "\\S",
+                              "type": "string"
+                            },
+                            "key": {
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                              "type": "string"
+                            },
+                            "weight": {
+                              "maximum": 5,
+                              "minimum": 1,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "key",
+                            "description",
+                            "weight"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "key": {
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "review",
+                        "type": "string"
+                      },
+                      "model": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "passAt": {
+                        "maximum": 100,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "subjects": {
+                        "items": {
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                          "type": "string"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "key",
+                      "subjects",
+                      "criteria",
+                      "passAt"
                     ],
                     "type": "object"
                   }
@@ -34268,7 +34952,8 @@
             {
               "enum": [
                 "evaluation",
-                "planning"
+                "planning",
+                "review"
               ],
               "type": "string"
             },
@@ -35087,6 +35772,10 @@
               "type": "object"
             },
             "goalPlanner": {
+              "type": "boolean"
+            },
+            "goalReviewer": {
+              "const": true,
               "type": "boolean"
             },
             "id": {
@@ -48008,7 +48697,8 @@
                   {
                     "enum": [
                       "evaluation",
-                      "planning"
+                      "planning",
+                      "review"
                     ],
                     "type": "string"
                   },
@@ -49152,6 +49842,10 @@
                 "type": "object"
               },
               "goalPlanner": {
+                "type": "boolean"
+              },
+              "goalReviewer": {
+                "const": true,
                 "type": "boolean"
               },
               "id": {
@@ -59781,6 +60475,10 @@
         "goalPlanner": {
           "type": "boolean"
         },
+        "goalReviewer": {
+          "const": true,
+          "type": "boolean"
+        },
         "id": {
           "type": "string"
         },
@@ -60004,6 +60702,10 @@
               "type": "object"
             },
             "goalPlanner": {
+              "type": "boolean"
+            },
+            "goalReviewer": {
+              "const": true,
               "type": "boolean"
             },
             "id": {
@@ -60549,6 +61251,76 @@
                       "kind",
                       "key",
                       "prompt"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "criteria": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "description": {
+                              "maxLength": 1000,
+                              "pattern": "\\S",
+                              "type": "string"
+                            },
+                            "key": {
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                              "type": "string"
+                            },
+                            "weight": {
+                              "maximum": 5,
+                              "minimum": 1,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "key",
+                            "description",
+                            "weight"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "key": {
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "review",
+                        "type": "string"
+                      },
+                      "model": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "passAt": {
+                        "maximum": 100,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "subjects": {
+                        "items": {
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                          "type": "string"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "key",
+                      "subjects",
+                      "criteria",
+                      "passAt"
                     ],
                     "type": "object"
                   }
@@ -61416,6 +62188,8 @@
               "code": {
                 "enum": [
                   "requester_confirm_only",
+                  "review_only",
+                  "review_and_confirm",
                   "requester_cannot_start_workers",
                   "step_gate_not_held",
                   "step_capability_not_held",
@@ -62917,6 +63691,10 @@
         "goalPlanner": {
           "type": "boolean"
         },
+        "goalReviewer": {
+          "const": true,
+          "type": "boolean"
+        },
         "id": {
           "type": "string"
         },
@@ -63866,6 +64644,10 @@
           "type": "object"
         },
         "goalPlanner": {
+          "type": "boolean"
+        },
+        "goalReviewer": {
+          "const": true,
           "type": "boolean"
         },
         "id": {
@@ -71699,6 +72481,76 @@
                       "prompt"
                     ],
                     "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "criteria": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "description": {
+                              "maxLength": 1000,
+                              "pattern": "\\S",
+                              "type": "string"
+                            },
+                            "key": {
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                              "type": "string"
+                            },
+                            "weight": {
+                              "maximum": 5,
+                              "minimum": 1,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "key",
+                            "description",
+                            "weight"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "key": {
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "review",
+                        "type": "string"
+                      },
+                      "model": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "passAt": {
+                        "maximum": 100,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "subjects": {
+                        "items": {
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                          "type": "string"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "key",
+                      "subjects",
+                      "criteria",
+                      "passAt"
+                    ],
+                    "type": "object"
                   }
                 ]
               },
@@ -72589,6 +73441,8 @@
               "code": {
                 "enum": [
                   "requester_confirm_only",
+                  "review_only",
+                  "review_and_confirm",
                   "requester_cannot_start_workers",
                   "step_gate_not_held",
                   "step_capability_not_held",

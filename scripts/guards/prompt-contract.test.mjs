@@ -409,6 +409,17 @@ test('checkProposeGoalWords', async (t) => {
                 { properties: { kind: { const: 'observe_absent' } } },
                 { properties: { kind: { const: 'fact_predicate' } } },
                 { properties: { kind: { type: 'string', enum: ['requester_confirm'] } } },
+                {
+                  properties: {
+                    kind: { const: 'review' },
+                    subjects: {},
+                    criteria: {
+                      type: 'array',
+                      items: { properties: { key: {}, description: {}, weight: {} } },
+                    },
+                    passAt: {},
+                  },
+                },
               ],
             },
           },

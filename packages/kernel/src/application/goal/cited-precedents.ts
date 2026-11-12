@@ -90,6 +90,23 @@ interface CitedRow {
   outcome: ObjectiveOutcome;
   outcome_basis: GoalOutcomeBasis;
   overridden: number;
+  platform_checks_passed: boolean;
+}
+
+/**
+ * S11 GO18 (independent review N2; `goalPrecedentPolarity`'s `platformChecksPassed`): whether the
+ * last verification round of GoalRun `g` (a `goal_runs` alias) passed whole with at least one
+ * check the platform makes in it — whatever a review or the requester's confirmation added on top.
+ */
+export function platformChecksPassedSql(g: string): string {
+  return `coalesce((select bool_and(c.status = 'passed')
+                           and bool_or(c.kind in ('observe_predicate', 'observe_absent',
+                                                  'fact_predicate'))
+                      from goal_acceptance_checks c
+                     where c.workspace_id = ${g}.workspace_id and c.goal_run_id = ${g}.id
+                       and c.round = (select max(r.round) from goal_acceptance_checks r
+                                       where r.workspace_id = ${g}.workspace_id
+                                         and r.goal_run_id = ${g}.id)), false)`;
 }
 
 /**
@@ -107,7 +124,8 @@ export async function readCitedPrecedents(
   const result = await client.query<CitedRow>(
     `select g.id, g.statement, g.outcome, g.outcome_basis,
             case when jsonb_typeof(d.rationale -> 'overriddenChecks') = 'array'
-                 then jsonb_array_length(d.rationale -> 'overriddenChecks') else 0 end as overridden
+                 then jsonb_array_length(d.rationale -> 'overriddenChecks') else 0 end as overridden,
+            ${platformChecksPassedSql('g')} as platform_checks_passed
        from goal_runs g
        left join decisions d
          on g.outcome = 'achieved' and d.workspace_id = g.workspace_id and d.id = g.outcome_decision_id
@@ -123,7 +141,12 @@ export async function readCitedPrecedents(
         statement: shownFreeText(row.statement),
         outcome: row.outcome,
         outcomeBasis: row.outcome_basis,
-        polarity: goalPrecedentPolarity(row.outcome, row.outcome_basis, row.overridden),
+        polarity: goalPrecedentPolarity(
+          row.outcome,
+          row.outcome_basis,
+          row.overridden,
+          row.platform_checks_passed,
+        ),
       } satisfies CitedPrecedentView,
     ]),
   );

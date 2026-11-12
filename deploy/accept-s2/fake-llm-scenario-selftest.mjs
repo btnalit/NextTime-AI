@@ -1900,6 +1900,66 @@ async function main() {
       );
     }
 
+    // 6r. S11 GO18 goalReviewerScenario: the reviewer's Task input as the kernel writes it
+    //     (`kind: goal_review`). A score for every criterion, each once — the scripted one where a
+    //     description asks — and nothing but its output; the report passes the Worker result
+    //     contract and its `output` the reviewer's own schema.
+    {
+      const begin = { role: 'user', content: 'Begin working on your assigned Task now' };
+      const reviewerInput = {
+        kind: 'goal_review',
+        goal: { statement: 'write the quarterly report' },
+        subjects: [
+          {
+            key: 'draft',
+            status: 'succeeded',
+            attempt: 1,
+            output: { text: 'ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=s6-p42' },
+            files: null,
+          },
+        ],
+        criteria: [
+          { key: 'clear', description: 'A reader follows it', weight: 3 },
+          { key: 'complete', description: 'Every section is there ACCEPT_S2_SCORE=1', weight: 1 },
+        ],
+        scoreRange: { min: 0, max: 4 },
+      };
+      const review = toolCallOf(
+        (
+          await post([
+            {
+              role: 'custom',
+              content: `## NextTime worker context\n\n### Task input\n${JSON.stringify(reviewerInput)}\n\n### Rules\nreport_result once.`,
+            },
+            begin,
+          ])
+        ).json,
+      );
+      const scored = (review?.args?.output?.scores ?? []).map((line) => [
+        line.criterion,
+        line.score,
+      ]);
+      check(
+        'goal-reviewer-scores',
+        review?.name === 'report_result' &&
+          JSON.stringify(scored) ===
+            JSON.stringify([
+              ['clear', 4],
+              ['complete', 1],
+            ]) &&
+          review.args.findings === undefined &&
+          review.args.factsToAssert === undefined,
+        JSON.stringify(review),
+      );
+      checkToolCallAgainstRegistry('goal-reviewer-scores', review);
+      const reviewOutput = shared.ReviewerOutputSchema.safeParse(review?.args?.output);
+      check(
+        'goal-reviewer-output',
+        reviewOutput.success,
+        reviewOutput.success ? '' : JSON.stringify(reviewOutput.error.issues),
+      );
+    }
+
     // 6t. S11 AA5c: the admin agent's ticket journey — three chat Turns, then the Worker it tries.
     {
       const fn = (name) => ({

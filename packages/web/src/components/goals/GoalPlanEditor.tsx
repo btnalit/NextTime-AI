@@ -278,7 +278,9 @@ export function GoalPlanEditor({
   const planProblem = errorOf('plan');
   const defs = definitions.state.status === 'ready' ? definitions.state.data.items : undefined;
   // UX P2-4 on #864: the goal planner's Worker plans goals; no step runs it.
-  const published = defs?.filter((row) => row.status === 'published' && row.goalPlanner !== true);
+  const published = defs?.filter(
+    (row) => row.status === 'published' && row.goalPlanner !== true && row.goalReviewer !== true,
+  );
   const dropped = plannerWorkDropped(latest, t);
 
   const submit = async () => {

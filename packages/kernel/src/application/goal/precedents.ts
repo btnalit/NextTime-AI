@@ -13,7 +13,8 @@ import type { PoolClient } from 'pg';
 import { shownFreeText } from '../../governance/redaction/index.js';
 import { listAcceptanceChecks } from './acceptance-checks.js';
 import { readOverriddenChecks } from './acceptance.js';
-import { planAsRead } from './plan.js';
+import { platformChecksPassedSql } from './cited-precedents.js';
+import { isPlatformAcceptanceCheck, planAsRead } from './plan.js';
 import { getGoalRun, getPlanRevision, listStepRuns } from './reads.js';
 
 /**
@@ -155,11 +156,21 @@ async function precedentRecord(
   const checks = await listAcceptanceChecks(client, workspaceId, goal.id);
   const lastRound = checks.reduce((max, check) => Math.max(max, check.round), 0);
   const overriddenChecks = await readOverriddenChecks(client, workspaceId, goal);
+  const lastChecks = checks.filter((check) => check.round === lastRound);
+  const platformChecksPassed =
+    lastChecks.length > 0 &&
+    lastChecks.every((check) => check.status === 'passed') &&
+    lastChecks.some((check) => isPlatformAcceptanceCheck(check.kind));
   const source = first.sourceProcedure;
   return {
     goalRunId: goal.id,
     match,
-    polarity: goalPrecedentPolarity(goal.outcome, goal.outcomeBasis, overriddenChecks.length),
+    polarity: goalPrecedentPolarity(
+      goal.outcome,
+      goal.outcomeBasis,
+      overriddenChecks.length,
+      platformChecksPassed,
+    ),
     statement: shownFreeText(goal.statement),
     outcome: goal.outcome,
     outcomeBasis: goal.outcomeBasis,
@@ -204,6 +215,7 @@ interface RecentRow {
   source_procedure_id: string | null;
   source_procedure_version: number | null;
   overridden: number;
+  platform_checks_passed: boolean;
 }
 
 /**
@@ -223,7 +235,8 @@ export async function readRecentGoalPrecedents(
     `select g.id, g.statement, g.outcome, g.outcome_basis, g.ended_at,
             first.source_procedure_id, first.source_procedure_version,
             case when jsonb_typeof(d.rationale -> 'overriddenChecks') = 'array'
-                 then jsonb_array_length(d.rationale -> 'overriddenChecks') else 0 end as overridden
+                 then jsonb_array_length(d.rationale -> 'overriddenChecks') else 0 end as overridden,
+            ${platformChecksPassedSql('g')} as platform_checks_passed
        from goal_runs g
        join plan_revisions first
          on first.workspace_id = g.workspace_id and first.goal_run_id = g.id and first.revision = 1
@@ -241,7 +254,12 @@ export async function readRecentGoalPrecedents(
     statement: shownFreeText(row.statement),
     outcome: row.outcome,
     outcomeBasis: row.outcome_basis,
-    polarity: goalPrecedentPolarity(row.outcome, row.outcome_basis, row.overridden),
+    polarity: goalPrecedentPolarity(
+      row.outcome,
+      row.outcome_basis,
+      row.overridden,
+      row.platform_checks_passed,
+    ),
     endedAt: row.ended_at.toISOString(),
     fromProcedure:
       row.source_procedure_id !== null && row.source_procedure_version !== null
