@@ -31,7 +31,7 @@ import {
 } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { createGoalRun } from '../goal/index.js';
-import { createUser } from '../identity/index.js';
+import { type UserRow, createPlatformAdmin, createUser } from '../identity/index.js';
 import { insertPendingContextItem } from '../linkage/index.js';
 import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
 import { workerSpecDigest } from '../task/step-attempt.js';
@@ -90,6 +90,8 @@ interface RecipeContext {
   readonly caller: ResolvedCaller;
   readonly seed: Seeded;
   readonly memberId: string;
+  /** A platform row's caller: an administrator of the case's own (null for a workspace row). */
+  readonly admin: UserRow | null;
 }
 
 /** One extra case: sets the workspace up before the first call and returns the params; `first`
@@ -154,6 +156,45 @@ async function sessionHandle(ctx: RecipeContext): Promise<HeldHandle> {
 /** The Principal a caller acts as — who an audit row names. */
 const actingPrincipal = (caller: ResolvedCaller, ownerId: string) =>
   caller.channel === 'handle' ? caller.claims.obo : ownerId;
+
+/** The caller `resolvePlatformCaller` builds for an administrator's console session: no
+ *  workspace, no Principal. */
+function platformCaller(user: UserRow): ResolvedCaller {
+  return {
+    channel: 'platform',
+    user: {
+      id: user.id,
+      login: user.login,
+      displayName: user.displayName,
+      platformRole: 'admin',
+      mustChangePassword: false,
+      consoleSessionId: randomUUID(),
+    },
+  };
+}
+
+/** A digest of the platform plane: every `public` table with no `workspace_id` column, all of its
+ *  rows (test files run one at a time, so nothing else writes these while a case runs). */
+async function platformDigest(pool: Pool): Promise<Record<string, string>> {
+  const tables = await pool.query<{ table_name: string }>(
+    `select t.table_name from information_schema.tables t
+      where t.table_schema = 'public' and t.table_type = 'BASE TABLE'
+        and t.table_name <> 'schema_migrations'
+        and not exists (select 1 from information_schema.columns c
+                         where c.table_schema = 'public' and c.table_name = t.table_name
+                           and c.column_name = 'workspace_id')
+      order by t.table_name`,
+  );
+  const digest: Record<string, string> = {};
+  for (const { table_name } of tables.rows) {
+    const result = await pool.query<{ digest: string }>(
+      `select md5(coalesce(string_agg(t::text, '|' order by t::text), '')) as digest
+         from "${table_name}" t`,
+    );
+    digest[`platform:${table_name}`] = result.rows[0]?.digest ?? '';
+  }
+  return digest;
+}
 
 /** A call as the recipe's owner, for setting a case up. */
 function as<T = Record<string, unknown>>(
@@ -687,6 +728,15 @@ async function reviewedPack(ctx: RecipeContext, name: string): Promise<Record<st
       .filter((item) => item.classification === 'authority_widening')
       .map((item) => item.ordinal),
   };
+}
+
+/** A platform user of the case's own (no membership), for a platform row to act on. */
+function platformUser(ctx: RecipeContext): Promise<UserRow> {
+  return createUser(ctx.pool, {
+    login: `repeat-user-${randomUUID().slice(0, 8)}`,
+    displayName: 'Repeat Person',
+    password: 'repeat-walk-password-1',
+  });
 }
 
 /** The ChangePlan segment of a shipped pack installed here, as its dry run showed it. */
@@ -1765,6 +1815,25 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       },
     },
   },
+  // Platform rows: run by an administrator of the case's own (platformCaller); their rows are the
+  // platform plane's as well as the workspace's (platformDigest).
+  update_user: {
+    // The same values written again: the row moves only by its updated_at.
+    'another user, a new display name': {
+      first: expect.objectContaining({ displayName: 'Renamed Person' }),
+      setUp: async (ctx) => ({
+        userId: (await platformUser(ctx)).id,
+        displayName: 'Renamed Person',
+      }),
+    },
+  },
+  set_user_status: {
+    // Disabling again revokes the (already revoked) credentials again and moves updated_at.
+    'another active user, to disabled': {
+      first: expect.objectContaining({ status: 'disabled' }),
+      setUp: async (ctx) => ({ userId: (await platformUser(ctx)).id, status: 'disabled' }),
+    },
+  },
   roll_back_change_segment: {
     // The first call rolls the segment back; the same call again finds it rolled back (409
     // change_segment_rolled_back), nothing written.
@@ -1778,6 +1847,8 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
 /** Rows whose schema-built params cannot make a first call succeed on the bare seed — a param
  *  naming something the walk has no value for — run their recipes instead of that case. */
 const RECIPES_ONLY: ReadonlySet<string> = new Set([
+  'update_user',
+  'set_user_status',
   'verify_change_segment',
   'roll_back_change_segment',
   'start_draft_evaluation',
@@ -1919,6 +1990,7 @@ interface AuditRow {
   readonly id: string;
   readonly action: string;
   readonly actor_principal_id: string | null;
+  readonly actor_user_id: string | null;
   readonly payload: Record<string, unknown>;
 }
 
@@ -2008,15 +2080,22 @@ describe.runIf(DATABASE_URL !== undefined)(
       await pool?.end();
     });
 
-    async function rowsBut(workspaceId: string): Promise<Record<string, string>> {
+    /** Every row the case can touch, but audit: its workspace's, and for a platform row the
+     *  platform plane's too. */
+    async function rowsBut(
+      workspaceId: string,
+      platform: boolean,
+    ): Promise<Record<string, string>> {
       const { audit_records: _audit, ...rest } = await workspaceDigest(pool, workspaceId);
-      return rest;
+      return platform ? { ...rest, ...(await platformDigest(pool)) } : rest;
     }
 
-    async function auditRows(workspaceId: string): Promise<AuditRow[]> {
+    /** The case's audit rows: its workspace's, and those its administrator wrote anywhere. */
+    async function auditRows(workspaceId: string, admin: UserRow | null): Promise<AuditRow[]> {
       const result = await pool.query<AuditRow>(
-        'select id, action, actor_principal_id, payload from audit_records where workspace_id = $1',
-        [workspaceId],
+        `select id, action, actor_principal_id, actor_user_id, payload from audit_records
+          where workspace_id = $1 or actor_user_id = $2`,
+        [workspaceId, admin?.id ?? null],
       );
       return result.rows;
     }
@@ -2038,9 +2117,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           ] as const,
       ),
     )('%s', async (_name, { capability, repeat, recipe }) => {
-      expect(capability.scope, 'a platform row needs a platform fixture first').not.toBe(
-        'platform',
-      );
+      const platform = capability.scope === 'platform';
       const workspace = await newWorkspace(pool, `repeat-${capability.name}`, ['owner', 'member']);
       const ownerId = workspace.principals.get('owner') as string;
       const seed = await seedWorkspace(
@@ -2049,7 +2126,18 @@ describe.runIf(DATABASE_URL !== undefined)(
         ownerId,
         `repeat-${randomUUID()}`,
       );
-      const caller = humanCaller(workspace.workspaceId, ownerId, 'owner');
+      // A platform row runs as an administrator of its own, so its audit rows are told apart.
+      const admin = platform
+        ? await createPlatformAdmin(pool, {
+            login: `repeat-admin-${randomUUID().slice(0, 8)}`,
+            displayName: 'Repeat Admin',
+            password: 'repeat-walk-password-1',
+          })
+        : null;
+      const caller =
+        admin === null
+          ? humanCaller(workspace.workspaceId, ownerId, 'owner')
+          : platformCaller(admin);
       const chosen = recipe === undefined ? undefined : RECIPES[capability.name]?.[recipe];
       const params =
         chosen === undefined
@@ -2059,6 +2147,7 @@ describe.runIf(DATABASE_URL !== undefined)(
               caller,
               seed,
               memberId: workspace.principals.get('member') as string,
+              admin,
             });
       const held =
         chosen?.by === undefined
@@ -2068,6 +2157,7 @@ describe.runIf(DATABASE_URL !== undefined)(
               caller,
               seed,
               memberId: workspace.principals.get('member') as string,
+              admin,
             });
       const callerNow = () =>
         held === undefined ? Promise.resolve(caller) : callerFor(pool, held);
@@ -2085,9 +2175,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
       }
       if (chosen?.first !== undefined) expect(first).toEqual(chosen.first);
-      const rowsAfterFirst = await rowsBut(workspace.workspaceId);
+      const rowsAfterFirst = await rowsBut(workspace.workspaceId, platform);
       const auditAfterFirst = new Set(
-        (await auditRows(workspace.workspaceId)).map((row) => row.id),
+        (await auditRows(workspace.workspaceId, admin)).map((row) => row.id),
       );
 
       let second: unknown;
@@ -2097,8 +2187,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       } catch (error) {
         refusal = error;
       }
-      const rowsAfterSecond = await rowsBut(workspace.workspaceId);
-      const newAudit = (await auditRows(workspace.workspaceId)).filter(
+      const rowsAfterSecond = await rowsBut(workspace.workspaceId, platform);
+      const newAudit = (await auditRows(workspace.workspaceId, admin)).filter(
         (row) => !auditAfterFirst.has(row.id),
       );
 
@@ -2119,7 +2209,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         if (firstId !== undefined) expect(entityOf(second, params)).toBe(firstId);
         expect(rowsAfterSecond).toEqual(rowsAfterFirst);
         expect(newAudit.map((row) => row.action)).toEqual([capability.name]);
-        expect(newAudit[0]?.actor_principal_id).toBe(actingPrincipal(by, ownerId));
+        if (admin === null) {
+          expect(newAudit[0]?.actor_principal_id).toBe(actingPrincipal(by, ownerId));
+        } else {
+          expect(newAudit[0]?.actor_user_id).toBe(admin.id);
+        }
       } else if (repeat === 'creates') {
         const firstId = entityOf(first, params);
         expect(firstId, 'creates: the result names the entity it made').toBeDefined();
