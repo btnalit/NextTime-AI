@@ -40,6 +40,7 @@ import { lockGoalRun } from '../goal/service.js';
 import { PLANNER_HANDLE_CAPABILITIES, PLANNER_MIN_TOKEN_BUDGET } from '../task/index.js';
 import { failTaskAndReapWorkerRuns } from '../task/lifecycle.js';
 import { findGoalPlannerFamily } from '../task/planning-task.js';
+import { ensureReviewerDefinition, loadReviewerTemplate } from '../task/review-task.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
@@ -3244,6 +3245,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
 
       const requester = await newPrincipal('member');
+      // S11 GO18 (#493 on #1102): the goal reviewer's family, once a review has published it.
+      const reviewer = await asApp(requester, async (client) =>
+        ensureReviewerDefinition(client, workspaceId, await loadReviewerTemplate()),
+      );
+      if (!reviewer) throw new Error('no reviewer definition');
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       try {
         const { goalRunId } = await failedForPerson(requester);
@@ -3277,11 +3283,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(
           (byId.get(worker.definitionId)?.hints as { cost: { tasks: number } }).cost.tasks,
         ).toBeGreaterThan(0);
-        // The planner's family is never offered (as find_workers).
+        // The planner's family is never offered (as find_workers), nor the reviewer's.
         const plannerFamily = await asApp(requester, (client) =>
           findGoalPlannerFamily(client, workspaceId),
         );
         expect(byId.has(plannerFamily)).toBe(false);
+        expect(byId.has(reviewer.id)).toBe(false);
         expect(task.input.rules).toEqual(
           expect.arrayContaining([expect.stringContaining('not a ranking')]),
         );

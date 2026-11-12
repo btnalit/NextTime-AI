@@ -35,6 +35,7 @@ import {
   ensurePlannerDefinition,
   findGoalPlannerFamily,
   findGoalPlannerPrincipal,
+  findGoalReviewerFamily,
   getOrCreateGoalPlannerPrincipal,
   loadPlannerTemplate,
   lockTaskQuotas,
@@ -1208,8 +1209,11 @@ async function plannerWorkers(
   goal: GoalRunRow,
   basedOnRevision: number,
 ): Promise<readonly Record<string, unknown>[]> {
-  // Not the planner's own family, whoever published a version of it (as `find_workers`).
+  // Not the planner's own family nor — S11 GO18 (#493 on #1102) — the goal reviewer's, whoever
+  // published a version of them (as `find_workers`): neither is a Worker for a step, and
+  // `validatePlan` refuses both.
   const plannerFamily = await findGoalPlannerFamily(client, workspaceId);
+  const reviewerFamily = await findGoalReviewerFamily(client, workspaceId);
   const result = await client.query<{
     id: string;
     version: number;
@@ -1218,10 +1222,10 @@ async function plannerWorkers(
     `select distinct on (id) id, version, definition
        from worker_definitions
       where workspace_id = $1 and kind = 'worker' and status = 'published'
-        and id is distinct from $2
+        and id is distinct from $2 and id is distinct from $3
       order by id, version desc
-      limit $3`,
-    [workspaceId, plannerFamily, PLANNER_MAX_WORKERS],
+      limit $4`,
+    [workspaceId, plannerFamily, reviewerFamily, PLANNER_MAX_WORKERS],
   );
   const refs = result.rows.map((row) => ({ definitionId: row.id, version: row.version }));
   const hints = await readWorkerHints(client, workspaceId, refs);
