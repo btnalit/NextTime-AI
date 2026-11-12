@@ -5,6 +5,7 @@ import {
   planReviewModelMatch,
   planReviewModelNote,
   reviewCriterionWeightText,
+  reviewLinePointsText,
   reviewModelText,
   reviewPassText,
   reviewPointsText,
@@ -17,7 +18,6 @@ import { useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
 import { Notice } from '../kit/notice.js';
 import { RefChip } from '../kit/ref-chip.js';
-import { StatusChip } from '../kit/status-chip.js';
 
 /**
  * components/goals/ReviewCheck (S11 GO18b): a goal's independent review on its page.
@@ -88,6 +88,9 @@ export function ReviewOutcome({
     <RefChip
       kind="task"
       id={review.taskId}
+      // The platform's reviewer Worker is named in English; say what the Task is, in the page's
+      // language (UX acceptance of #1111).
+      name={t('独立评审', 'Independent review')}
       http={http}
       href={hrefs.task(review.taskId)}
       size="s"
@@ -115,9 +118,11 @@ export function ReviewOutcome({
       data-testid="goal-review-outcome"
       data-verdict={assessment.verdict}
     >
+      {/* The check's own status chip is on its row above: the verdict in words only. */}
       <span className="row-wrap text-small">
-        <StatusChip machine="goalCheck" status={assessment.verdict} size="s" />
-        <span data-testid="goal-review-verdict">{reviewVerdictText(assessment, t)}</span>
+        <span className="font-medium" data-testid="goal-review-verdict">
+          {reviewVerdictText(assessment, t)}
+        </span>
         <span className="tabular" data-testid="goal-review-points">
           {reviewPointsText(assessment, t)}
         </span>
@@ -138,10 +143,7 @@ export function ReviewOutcome({
                 <span data-testid="goal-review-score">{reviewScoreText(line.score, t)}</span>
                 {line.points === null
                   ? null
-                  : t(
-                      ` · ${line.points} / ${line.maxPoints} 分`,
-                      ` · ${line.points} of ${line.maxPoints} points`,
-                    )}
+                  : ` · ${reviewLinePointsText(line.points, line.maxPoints, t)}`}
               </span>
             </span>
             <span className="text-3">{line.reason}</span>

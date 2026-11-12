@@ -1526,7 +1526,8 @@ describe('S11 GO18b: an independent review, edited in the plan editor', () => {
         {
           kind: 'review',
           key: 'review',
-          subjects: ['apply', 'fetch'],
+          // In the plan's order (fetch, then apply), not the order they were ticked in.
+          subjects: ['fetch', 'apply'],
           criteria: [
             { key: 'c1', description: 'Every expiring certificate is renewed', weight: 3 },
             { key: 'c2', description: 'The report says what changed on each host', weight: 1 },
@@ -1617,6 +1618,39 @@ describe('S11 GO18b: an independent review, edited in the plan editor', () => {
       expect(errorOf('goal-plan-review-criterion-description')).toMatch(/carries a credential/),
     );
     expect(errorOf('goal-plan-review-model')).toMatch(/does not allow/);
+  });
+
+  it('says so when the model catalog cannot be read, and reads it again on asking', async () => {
+    let offline = true;
+    const http = scriptedHttp(
+      handlers(paused(), workspace('p-alice', 'member'), {
+        ...models,
+        list_models: (params) => {
+          if (offline) throw new HttpError('capability_error', 'catalog down', 'internal', {});
+          return models.list_models?.(params);
+        },
+      }),
+    );
+    renderPage(http);
+    await openEditor();
+    fireEvent.click(screen.getByTestId('goal-plan-add-review'));
+    const check = reviewCheck();
+    const note = await within(check).findByTestId('goal-plan-review-models-error');
+    expect(note.textContent).toContain('读不到模型目录');
+    // The requester's model is still there to pick.
+    expect((within(check).getByTestId('goal-plan-review-model') as HTMLSelectElement).value).toBe(
+      '',
+    );
+    offline = false;
+    fireEvent.click(within(note).getByRole('button', { name: '重新读取' }));
+    await waitFor(() =>
+      expect(within(check).queryByTestId('goal-plan-review-models-error')).toBeNull(),
+    );
+    expect(
+      [...(within(check).getByTestId('goal-plan-review-model') as HTMLSelectElement).options].map(
+        (option) => option.value,
+      ),
+    ).toEqual(['', 'model-a', 'model-b']);
   });
 
   it('removes a new review and gives the focus back to 加一条独立评审, which goes at the plan’s limit', async () => {

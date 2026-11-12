@@ -1236,7 +1236,8 @@ test.describe('S11 GO18b: an independent review on a goal (stand-in reads)', () 
         '得分 14 / 16（87%），至少 12 分（75%）通过',
       );
       await expect(outcome.getByTestId('goal-review-same-model')).toContainText('同一个模型');
-      await expect(outcome.getByTestId('goal-review-task')).toBeVisible();
+      await expect(outcome.getByTestId('goal-review-task')).toContainText('独立评审');
+      await expect(outcome.getByTestId('goal-review-line').first()).toContainText('打分');
       await page.getByTestId('goal-review-declaration').scrollIntoViewIfNeeded();
       await page.screenshot({
         path: testInfo.outputPath(`goal-review-${width}.png`),

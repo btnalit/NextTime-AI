@@ -129,10 +129,30 @@ export function planReviewModelNote(
   }
 }
 
-/** A score as the page shows it: 「3 / 4」, or 「未判断」 for a criterion the reviewer could not
- *  judge. */
+/** A score as the page shows it — 「打分 3 / 4」, told apart from the points it makes (UX acceptance
+ *  of #1111) — or 「判断不了」 for a criterion the reviewer could not judge. */
 export function reviewScoreText(score: number | null, t: Translate): string {
-  return score === null ? t('判断不了', 'not judged') : `${score} / ${REVIEW_SCORE_MAX}`;
+  return score === null
+    ? t('判断不了', 'not judged')
+    : t(`打分 ${score} / ${REVIEW_SCORE_MAX}`, `scored ${score} of ${REVIEW_SCORE_MAX}`);
+}
+
+/** The points a criterion's score makes (score × weight), out of the most it can make. */
+export function reviewLinePointsText(points: number, maxPoints: number, t: Translate): string {
+  return t(`得 ${points} / ${maxPoints} 分`, `${points} of ${maxPoints} points`);
+}
+
+/** A review's steps in the order the plan has them (UX acceptance of #1111: 「polish、draft」 read
+ *  backwards); a key the plan no longer has keeps its place after the rest. */
+export function inPlanOrder(
+  subjects: readonly string[],
+  stepKeys: readonly string[],
+): readonly string[] {
+  const at = (key: string) => {
+    const index = stepKeys.indexOf(key);
+    return index === -1 ? stepKeys.length : index;
+  };
+  return [...subjects].sort((a, b) => at(a) - at(b));
 }
 
 /** The points against the line: 「得分 11 / 16（69%），至少 12 分通过」. */

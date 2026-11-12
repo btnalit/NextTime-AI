@@ -1,6 +1,7 @@
 import { REVIEW_SCORE_MAX, REVIEW_WEIGHT_MAX, reviewDerivation } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
+  inPlanOrder,
   planReviewModelMatch,
   reviewMaxPoints,
   reviewPointsText,
@@ -62,5 +63,14 @@ describe('lib/goal-review (S11 GO18b)', () => {
     );
     // The review takes the requester's model.
     expect(planReviewModelMatch({ subjects: ['draft'] }, plan)).toBe('unknown');
+  });
+
+  it('lists a review’s steps in the plan’s order, a step the plan no longer has last', () => {
+    expect(inPlanOrder(['polish', 'draft'], ['draft', 'polish'])).toEqual(['draft', 'polish']);
+    expect(inPlanOrder(['gone', 'polish', 'draft'], ['draft', 'polish'])).toEqual([
+      'draft',
+      'polish',
+      'gone',
+    ]);
   });
 });

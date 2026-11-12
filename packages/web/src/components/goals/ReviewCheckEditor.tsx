@@ -14,6 +14,7 @@ import {
   newReviewCriterion,
 } from '../../lib/goal-plan-draft.js';
 import {
+  inPlanOrder,
   planReviewModelMatch,
   planReviewModelNote,
   reviewPassText,
@@ -117,7 +118,15 @@ export function ReviewCheckEditor({
         error={errorOf(at('subjects'))}
         options={subjectOptions}
         selected={review.subjects}
-        onToggle={(key) => patch({ subjects: toggleListItem(review.subjects, key) })}
+        // In the plan's order, whatever order they were ticked in (UX acceptance of #1111).
+        onToggle={(key) =>
+          patch({
+            subjects: inPlanOrder(
+              toggleListItem(review.subjects, key),
+              kept.map((step) => step.key),
+            ),
+          })
+        }
         testId="goal-plan-review-subjects"
         emptyHint={t('计划里还没有步骤。', 'The plan has no steps yet.')}
       />
@@ -316,6 +325,20 @@ export function ReviewCheckEditor({
           testId="goal-plan-review-model-health"
           id={`${id}-model-health`}
         />
+        {models.state.status === 'error' ? (
+          <span
+            className="row-wrap text-small text-warn"
+            data-testid="goal-plan-review-models-error"
+          >
+            {t(
+              '读不到模型目录，现在只能选请求人的模型，或者留着原来的模型。',
+              'The model catalog cannot be read: for now, only the requester’s model, or the one already chosen.',
+            )}
+            <Button variant="ghost" size="s" onClick={() => void models.reload()}>
+              {t('重新读取', 'Read again')}
+            </Button>
+          </span>
+        ) : null}
       </Field>
       {modelNote ? (
         <Notice tone="warn" testId="goal-plan-review-model-note">

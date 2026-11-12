@@ -19,6 +19,7 @@ import {
   planCheckSentence,
   planHintKey,
   planHintText,
+  reviewSubjectsSentence,
   roundCheckSentence,
 } from '../../lib/goals.js';
 import { type Translate, useT } from '../../lib/i18n.js';
@@ -60,6 +61,8 @@ export function GoalAcceptanceSection({
 }: GoalAcceptanceSectionProps) {
   const t = useT();
   const planChecks = detail.planRevision.plan.acceptance ?? [];
+  // S11 GO18b: a review's steps read in the plan's order.
+  const stepOrder = detail.planRevision.plan.steps.map((step) => step.key);
   const rounds = [...detail.acceptance.rounds].reverse();
   const [latest, ...older] = rounds;
   const overridden = detail.acceptance.overriddenChecks;
@@ -118,7 +121,12 @@ export function GoalAcceptanceSection({
                 <li key={check.key} className="row-wrap" data-testid="goal-plan-check">
                   <span className="mono">{check.key}</span>
                   <span className="text-3 text-small">{checkKindLabel(check.kind, t)}</span>
-                  <span>{planCheckSentence(check, gateNames, t, objectNames)}</span>
+                  <span>
+                    {check.kind === 'review'
+                      ? // Its criteria, points and line are just below (`ReviewDeclaration`).
+                        reviewSubjectsSentence(check.subjects, stepOrder, t)
+                      : planCheckSentence(check, gateNames, t, objectNames)}
+                  </span>
                   <CheckOrigin text={origin(check.key)} />
                   {check.kind === 'observe_absent' && http ? (
                     <AbsenceBasis
@@ -149,6 +157,7 @@ export function GoalAcceptanceSection({
             gateNames={gateNames}
             objectNames={objectNames}
             origin={origin}
+            stepOrder={stepOrder}
             http={http}
             t={t}
           />
@@ -173,6 +182,7 @@ export function GoalAcceptanceSection({
                   gateNames={gateNames}
                   objectNames={objectNames}
                   origin={origin}
+                  stepOrder={stepOrder}
                   http={http}
                   t={t}
                 />
@@ -206,6 +216,7 @@ function Round({
   gateNames,
   objectNames,
   origin,
+  stepOrder,
   http,
   t,
 }: {
@@ -213,6 +224,7 @@ function Round({
   readonly gateNames: ReadonlyMap<string, string>;
   readonly objectNames: ReadonlyMap<string, string> | undefined;
   readonly origin: (checkKey: string) => string | null;
+  readonly stepOrder: readonly string[];
   readonly http: CapabilityCaller | undefined;
   readonly t: Translate;
 }) {
@@ -236,6 +248,7 @@ function Round({
             gateNames={gateNames}
             objectNames={objectNames}
             origin={origin(check.checkKey)}
+            stepOrder={stepOrder}
             http={http}
             t={t}
           />
@@ -250,6 +263,7 @@ function CheckRow({
   gateNames,
   objectNames,
   origin,
+  stepOrder,
   http,
   t,
 }: {
@@ -257,6 +271,7 @@ function CheckRow({
   readonly gateNames: ReadonlyMap<string, string>;
   readonly objectNames: ReadonlyMap<string, string> | undefined;
   readonly origin: string | null;
+  readonly stepOrder: readonly string[];
   readonly http: CapabilityCaller | undefined;
   readonly t: Translate;
 }) {
@@ -273,7 +288,7 @@ function CheckRow({
           </span>
         ) : null}
       </span>
-      <span>{roundCheckSentence(check, gateNames, t, objectNames)}</span>
+      <span>{roundCheckSentence(check, gateNames, t, objectNames, stepOrder)}</span>
       <span className="row-wrap text-small text-3">
         {check.kind !== 'requester_confirm' ? (
           <span className="tabular">

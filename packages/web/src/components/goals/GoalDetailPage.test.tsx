@@ -120,7 +120,9 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     });
     renderPage(scriptedHttp(baseHandlers(detail)));
     const check = await screen.findByTestId('goal-plan-check');
-    expect(check.textContent).toContain('给 apply 的产出打分：2 条标准，得分达到 75% 才算通过');
+    // Whose output it scores; the line is said once, with its points, in the declaration below.
+    expect(check.textContent).toContain('给 apply 的产出打分');
+    expect(check.textContent).not.toContain('得分达到 75% 才算通过');
     const declaration = within(check).getByTestId('goal-review-declaration');
     // 4 points a criterion at most: 3×4 + 1×4 = 16, and 75% of it is 12.
     expect(declaration.textContent).toContain('至少 12 分（满分 16 的 75%）算通过');
@@ -222,7 +224,8 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     renderPage(scriptedHttp(baseHandlers(roundWith(reviewCheck(review)))));
     const pending = await screen.findByTestId('goal-review-pending');
     expect(pending.textContent).toContain('评审任务');
-    expect(within(pending).getByTestId('goal-review-task')).toBeTruthy();
+    // Named for what it is, in the page's language — not the platform Worker's English name.
+    expect(within(pending).getByTestId('goal-review-task').textContent).toContain('独立评审');
     expect((await screen.findByTestId('goal-acceptance-check')).textContent).toContain(
       '给 apply 的产出打分：2 条标准，得分达到 75% 才算通过',
     );
@@ -278,7 +281,10 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     const lines = within(outcome).getAllByTestId('goal-review-line');
     expect(lines.map((line) => line.getAttribute('data-criterion'))).toEqual(['clear', 'complete']);
     expect(lines[0]?.textContent).toContain('Reads clearly');
-    expect(lines[0]?.textContent).toContain('权重 3 · 2 / 4 · 6 / 12 分');
+    // What the reviewer gave and the points it makes, told apart (UX acceptance of #1111).
+    expect(lines[0]?.textContent).toContain('权重 3 · 打分 2 / 4 · 得 6 / 12 分');
+    // The check's row has the status chip; the outcome says its verdict once, in words.
+    expect(within(outcome).queryByText('未通过')).toBeNull();
     expect(lines[0]?.textContent).toContain('Half of it is jargon.');
     expect(within(outcome).getByTestId('goal-review-comment').textContent).toContain(
       'Thorough but hard to read.',
