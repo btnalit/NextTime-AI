@@ -98,7 +98,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       readonly maxRevisions?: number;
       readonly maxWallClockSeconds?: number;
       readonly outcome?: 'achieved' | 'not_achieved';
-      readonly outcomeBasis?: 'verified_by_check' | 'requester';
+      readonly outcomeBasis?: 'verified_by_check' | 'requester' | 'reviewer_assessed';
     }
 
     async function goal(fields: GoalFields = {}): Promise<string> {
@@ -875,6 +875,136 @@ describe.runIf(DATABASE_URL !== undefined)(
             `passed-without-evidence ${workspaceId}:${id} (round 1 check ${key} (${kind}) passed without its evidence)`,
           );
         }
+      });
+
+      // #493 on #1102: each of GO18's clauses flags what it is there to flag, not only leaves a
+      // healthy run alone.
+      it('counts a run achieved by check over a review, one achieved on a review whose latest round is not reviews passed without a confirmation, a review passed without its assessment passing it, and a review not as declared (S11 GO18)', async () => {
+        const REVIEWED = {
+          kind: 'review',
+          key: 'quality',
+          subjects: ['s'],
+          criteria: [{ key: 'clear', description: 'Reads clearly', weight: 1 }],
+          passAt: 75,
+        };
+        const declaredReview = ({ kind: _kind, key: _key, ...rest }: typeof REVIEWED) => rest;
+        /** A review check of round `round`; settled, by default on an assessment with its verdict. */
+        const review = async (
+          goalRunId: string,
+          fields: {
+            readonly status?: 'pending' | 'passed' | 'failed';
+            readonly round?: number;
+            readonly assessed?: 'passed' | 'failed' | null;
+            readonly declared?: typeof REVIEWED;
+          } = {},
+        ) => {
+          const status = fields.status ?? 'passed';
+          const round = fields.round ?? 1;
+          await raw(
+            `insert into goal_acceptance_checks (workspace_id, goal_run_id, round, check_key,
+               plan_revision, kind, review_check, status, attempts, first_attempt_at, settled_at)
+             values ($1, $2, $3, 'quality', 1, 'review', $4::jsonb, $5, $6, $7, $8)`,
+            [
+              workspaceId,
+              goalRunId,
+              round,
+              JSON.stringify(declaredReview(fields.declared ?? REVIEWED)),
+              status,
+              status === 'pending' ? 0 : 1,
+              status === 'pending' ? null : new Date(),
+              status === 'pending' ? null : new Date(),
+            ],
+          );
+          const verdict = fields.assessed === undefined ? status : fields.assessed;
+          if (verdict === 'passed' || verdict === 'failed') {
+            const score = verdict === 'passed' ? 4 : 0;
+            await raw(
+              `insert into goal_review_assessments (workspace_id, goal_run_id, round, check_key,
+                 review_task_id, reviewer_model, executor_models, same_model, lines, comment,
+                 points, max_points, pass_at, unassessed, verdict)
+               values ($1, $2, $3, 'quality', $4, null, '[]'::jsonb, null, $5::jsonb, null, $6, 4,
+                       75, '[]'::jsonb, $7)`,
+              [
+                workspaceId,
+                goalRunId,
+                round,
+                randomUUID(),
+                JSON.stringify([
+                  {
+                    criterion: 'clear',
+                    weight: 1,
+                    score,
+                    reason: 'r',
+                    points: score,
+                    maxPoints: 4,
+                  },
+                ]),
+                score,
+                verdict,
+              ],
+            );
+          }
+        };
+        const byReview = () => goal({ status: 'completed', outcomeBasis: 'reviewer_assessed' });
+
+        const healthy = await byReview();
+        await declare(healthy, [REVIEWED]);
+        await review(healthy);
+        // F7: a round with a review is never achieved by check alone.
+        const checkOverReview = await goal({
+          status: 'completed',
+          outcomeBasis: 'verified_by_check',
+        });
+        await declare(checkOverReview, [observed('up'), REVIEWED]);
+        await acceptance(checkOverReview, 'up');
+        await review(checkOverReview);
+        // Achieved on a review: none in the round, a confirmation in it, one not passed, no round.
+        const noReview = await byReview();
+        await declare(noReview, [observed('up')]);
+        await acceptance(noReview, 'up');
+        const confirmed = await byReview();
+        await declare(confirmed, [REVIEWED, confirmation('report')]);
+        await review(confirmed);
+        await acceptance(confirmed, 'report', { kind: 'requester_confirm' });
+        const failed = await byReview();
+        await declare(failed, [REVIEWED]);
+        await review(failed, { status: 'failed' });
+        const noRound = await byReview();
+        await declare(noRound, [REVIEWED]);
+        // A review passed with no assessment, or with one that failed it.
+        const unassessed = await goal({ status: 'verifying' });
+        await review(unassessed, { assessed: null });
+        const contradicted = await goal({ status: 'verifying' });
+        await review(contradicted, { assessed: 'failed' });
+        // The plan in force holds the review to a higher line than the round's check was.
+        const notAsDeclared = await byReview();
+        await declare(notAsDeclared, [{ ...REVIEWED, passAt: 90 }]);
+        await review(notAsDeclared);
+
+        const result = await check((client) => checkIG5(client, ALL));
+        expect(mentioned(result, healthy)).toBe(false);
+        expect(result.sample).toContain(
+          `achieved-by-check ${workspaceId}:${checkOverReview} (round 1: 0 not passed, 0 off the current plan, 1 made by the platform, 1 reviews)`,
+        );
+        for (const [id, detail] of [
+          [noReview, 'round 1: 0 not passed, 0 off the current plan, 0 reviews, 0 confirmations'],
+          [confirmed, 'round 1: 0 not passed, 0 off the current plan, 1 reviews, 1 confirmations'],
+          [failed, 'round 1: 1 not passed, 0 off the current plan, 1 reviews, 0 confirmations'],
+          [noRound, 'no acceptance round'],
+        ] as const) {
+          expect(result.sample, detail).toContain(
+            `achieved-by-review ${workspaceId}:${id} (${detail})`,
+          );
+        }
+        for (const id of [unassessed, contradicted]) {
+          expect(result.sample, id).toContain(
+            `passed-without-evidence ${workspaceId}:${id} (round 1 check quality (review) passed without its evidence)`,
+          );
+        }
+        expect(result.sample).toContain(
+          `achieved-not-as-declared ${workspaceId}:${notAsDeclared} (round 1: 1 not as the plan in force declares them, 0 declared checks missing)`,
+        );
+        expect(flagged(result, 'achieved-by-review', notAsDeclared)).toBe(false);
       });
 
       it('counts a succeeded step whose declared acceptance checks did not all pass for its current attempt in its latest round (S11 GO4b)', async () => {

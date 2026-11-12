@@ -1119,6 +1119,97 @@ describe.runIf(DATABASE_URL !== undefined)(
         await expect(byCheck(paused)).rejects.toThrow(/only verification achieves a goal by check/);
       });
 
+      // #493 on #1102: each basis holds out the other's round — a review in it keeps it from being
+      // achieved by check, and none in it from being achieved on a review.
+      const REVIEWED = {
+        kind: 'review',
+        key: 'quality',
+        subjects: ['A'],
+        criteria: [{ key: 'clear', description: 'Reads clearly', weight: 1 }],
+        passAt: 75,
+      } as const;
+      /** A review check as its round records it: the declaration without its kind and key. */
+      const reviewCheckOf = ({
+        kind: _kind,
+        key: _key,
+        ...declaration
+      }: Omit<typeof REVIEWED, 'key'> & { key: string }) => JSON.stringify(declaration);
+
+      it('a passed round with a review is no basis for achieving by check, and one without a review none for achieving on a review (goal/0019’s guard, S11 GO18)', async () => {
+        const onReview = (goalRunId: string) =>
+          setGoal(
+            goalRunId,
+            "status = 'completed', outcome = 'achieved', outcome_basis = 'reviewer_assessed', ended_at = now()",
+          );
+        const NOT_ON_REVIEW =
+          /achieved on a review needs every acceptance check of the latest round passed on the current plan, at least one of them a review and none the requester's confirmation \(I-G5\)/;
+
+        // An observation and a review of the round, both passed (the review as a row state its
+        // assessment would leave — the guards on assessments are goal-review's).
+        const both = await runningGoal(['A', 'B'], [observeCheck('up'), REVIEWED]);
+        await setGoal(both, "status = 'verifying'");
+        await passRound(both);
+        await raw(
+          `insert into goal_acceptance_checks (workspace_id, goal_run_id, round, check_key,
+             plan_revision, kind, review_check, status, attempts, first_attempt_at, settled_at)
+           values ($1, $2, 1, 'quality', 1, 'review', $3::jsonb, 'passed', 1, now(), now())`,
+          [workspaceId, both, reviewCheckOf(REVIEWED)],
+        );
+        await expect(byCheck(both)).rejects.toThrow(NOT_BY_CHECK);
+        await onReview(both);
+
+        // Only the platform's observation: achieved by check, never on a review.
+        const observed = await runningGoal();
+        await setGoal(observed, "status = 'verifying'");
+        await passRound(observed);
+        await expect(onReview(observed)).rejects.toThrow(NOT_ON_REVIEW);
+        await byCheck(observed);
+      });
+
+      // #493 on #1102: the check guard's review rules each refuse what they are there to refuse.
+      it('a review is tried only by starting its reviewer Task, and passes only on its own assessment — not another check’s (goal/0019, S11 GO18)', async () => {
+        const style = { ...REVIEWED, key: 'style' } as const;
+        const goalRunId = await runningGoal(['A', 'B'], [REVIEWED, style]);
+        await setGoal(goalRunId, "status = 'verifying'");
+        for (const declared of [REVIEWED, style]) {
+          await sql(
+            `insert into goal_acceptance_checks (workspace_id, goal_run_id, round, check_key,
+               plan_revision, kind, review_check)
+             values ($1, $2, 1, $3, 1, 'review', $4::jsonb)`,
+            [workspaceId, goalRunId, declared.key, reviewCheckOf(declared)],
+          );
+        }
+        await expect(
+          setCheck(goalRunId, 1, 'quality', 'attempts = 1, first_attempt_at = now()'),
+        ).rejects.toThrow(/a review is tried only by starting its reviewer Task/);
+
+        // Both tried, as starting their reviewer Tasks leaves them, and `quality` assessed passed.
+        await raw(
+          `update goal_acceptance_checks set attempts = 1, first_attempt_at = now()
+            where workspace_id = $1 and goal_run_id = $2 and round = 1`,
+          [workspaceId, goalRunId],
+        );
+        await raw(
+          `insert into goal_review_assessments (workspace_id, goal_run_id, round, check_key,
+             review_task_id, reviewer_model, executor_models, same_model, lines, comment, points,
+             max_points, pass_at, unassessed, verdict)
+           values ($1, $2, 1, 'quality', $3, null, '[]'::jsonb, null, $4::jsonb, null, 4, 4, 75,
+                   '[]'::jsonb, 'passed')`,
+          [
+            workspaceId,
+            goalRunId,
+            randomUUID(),
+            JSON.stringify([
+              { criterion: 'clear', weight: 1, score: 4, reason: 'r', points: 4, maxPoints: 4 },
+            ]),
+          ],
+        );
+        await expect(
+          setCheck(goalRunId, 1, 'style', "status = 'passed', settled_at = now()"),
+        ).rejects.toThrow(/a review passes or fails only on its assessment, with that verdict/);
+        await setCheck(goalRunId, 1, 'quality', "status = 'passed', settled_at = now()");
+      });
+
       it('a round with only the requester’s confirmation passed does not achieve a run by check; their decision does, on their word (goal/0019’s guard, S11 GO18)', async () => {
         // A plan that declares no check: the round is the requester's confirmation of the goal.
         const goalRunId = await runningGoal(['A', 'B'], []);

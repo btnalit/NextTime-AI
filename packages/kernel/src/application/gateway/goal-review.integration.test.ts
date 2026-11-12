@@ -36,9 +36,9 @@ import type { ResolvedCaller } from './resolve-caller.js';
 /**
  * Integration tests (real Postgres; auto-skip without DATABASE_URL) for S11 GO18a: a goal's
  * acceptance holding an independent review (`application/goal/review.ts`, phase V of `advance.ts`,
- * goal/0019, task/0014) — through the capability gateway as the console, the steps' Workers, the
- * reviewer and the goal planner call it, with an in-memory supervisor and every report written by
- * the test (no model runs).
+ * goal/0019, task/0014, task/0015) — through the capability gateway as the console, the steps'
+ * Workers, the reviewer and the goal planner call it, with an in-memory supervisor and every report
+ * written by the test (no model runs).
  *
  * What the plan and the independent review asked tests for (go18-default-plan.md,
  * go18-independent-review.md): the review runs once every check the platform makes passed and
@@ -375,6 +375,16 @@ describe.runIf(DATABASE_URL !== undefined)(
       return row;
     }
 
+    /** A second Task like `taskId` (a new id, `overrides` applied), written with the guards on —
+     *  what task/0014 refuses of a review Task that no path starts. */
+    const copyTask = (taskId: string, overrides: Record<string, unknown> = {}) =>
+      guarded(
+        `insert into tasks
+         select (jsonb_populate_record(null::tasks, to_jsonb(t) || $3::jsonb)).*
+           from tasks t where t.workspace_id = $1 and t.id = $2`,
+        [workspaceId, taskId, JSON.stringify({ id: randomUUID(), ...overrides })],
+      );
+
     const planningRounds = (goalRunId: string) =>
       raw<{ id: string; status: string; revision: number | null }>(
         `select id, status, revision from goal_planning_rounds
@@ -579,9 +589,36 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(await call(human(requester), 'get_task', { taskId: task.id })).toEqual(
         expect.objectContaining({ id: task.id }),
       );
+      // #493 on #1102: task/0014 starts a review Task only for an untried, pending check, acting
+      // for the run's requester — a second Task for this check, or one for someone else, is
+      // refused before the one-Task-per-check index is reached.
+      const someoneElse = await newPrincipal('member');
+      expect(await dbRefusal(copyTask(task.id))).toMatch(
+        /a review Task starts for an untried, pending review check/,
+      );
+      const [tried] = await raw<{ first_attempt_at: Date }>(
+        `select first_attempt_at from goal_acceptance_checks
+          where workspace_id = $1 and goal_run_id = $2 and check_key = 'quality'`,
+        [workspaceId, goalRunId],
+      );
+      const setTried = (attempts: number, at: Date | null) =>
+        raw(
+          `update goal_acceptance_checks set attempts = $3, first_attempt_at = $4
+            where workspace_id = $1 and goal_run_id = $2 and check_key = 'quality'`,
+          [workspaceId, goalRunId, attempts, at],
+        );
+      await setTried(0, null);
+      try {
+        expect(await dbRefusal(copyTask(task.id, { on_behalf_of: someoneElse }))).toMatch(
+          /a review Task acts for the requester of its goal run/,
+        );
+      } finally {
+        await setTried(1, tried?.first_attempt_at ?? null);
+      }
 
       await reviewerReports(task.id, { ...scores(4, 2), comment: 'Reads well.' });
-      // N3: what the reviewer read is the record its assessment rests on.
+      // N3: what the reviewer read is the record its assessment rests on; so is whom it acted for
+      // and — #493 on #1102, task/0015 — what it reported, once it completed.
       expect(
         await dbRefusal(
           guarded(`update tasks set input = '{}'::jsonb where workspace_id = $1 and id = $2`, [
@@ -590,6 +627,24 @@ describe.runIf(DATABASE_URL !== undefined)(
           ]),
         ),
       ).toMatch(/what a review Task reads never changes after it is created/);
+      expect(
+        await dbRefusal(
+          guarded('update tasks set on_behalf_of = $3 where workspace_id = $1 and id = $2', [
+            workspaceId,
+            task.id,
+            someoneElse,
+          ]),
+        ),
+      ).toMatch(/a review Task acts for the requester it was created for/);
+      expect(
+        await dbRefusal(
+          guarded(
+            `update tasks set result = jsonb_set(result, '{output,scores,1,score}', '4')
+              where workspace_id = $1 and id = $2`,
+            [workspaceId, task.id],
+          ),
+        ),
+      ).toMatch(/what a review Task reported is written once, when it completes/);
       await advanceOnce(goalRunId, requester);
       expect(await goalRow(goalRunId)).toMatchObject({
         status: 'completed',
@@ -685,6 +740,125 @@ describe.runIf(DATABASE_URL !== undefined)(
       const [check] = (await getGoal(goalRunId, requester)).acceptance.rounds[0]?.checks ?? [];
       expect(check?.review?.assessment).toMatchObject({ points: 7, verdict: 'failed' });
       await notFlaggedByIG5([goalRunId]);
+    });
+
+    // #493 on #1102: each of goal/0019's rules on an assessment refuses what it is there to refuse —
+    // the kernel's own row (the one test above writes) passes them all.
+    it('the database takes an assessment only as the reviewer reported it and the WorkerRuns record it, of a pending review, once', async () => {
+      const requester = await newPrincipal('member');
+      const goalRunId = await startGoal(requester, planOf([REVIEW]));
+      await succeed(goalRunId, requester);
+      const task = await reviewTask(goalRunId);
+      const reported = { ...scores(4, 2), comment: 'Reads well.' };
+      const derivation = reviewDerivation(REVIEW.criteria, REVIEW.passAt, reported.scores);
+      const modelOf = async (taskId: string) => {
+        const [row] = await raw<{ model: string | null }>(
+          `select run_spec ->> 'model' as model from worker_runs
+            where workspace_id = $1 and task_id = $2 order by started_at desc, id desc limit 1`,
+          [workspaceId, taskId],
+        );
+        return row?.model ?? null;
+      };
+      const reviewerModel = await modelOf(task.id);
+      const executor = {
+        stepKey: 'draft',
+        attempt: 1,
+        model: await modelOf((await lastAttempt((await liveStep(goalRunId, 'draft')).id)).id),
+      };
+      const sameModel = sameModelOf(reviewerModel, [executor]);
+      const row = {
+        reviewerModel,
+        executors: [executor] as Record<string, unknown>[],
+        sameModel,
+        lines: derivation.lines as readonly unknown[],
+        comment: reported.comment as string | null,
+      };
+      /** Whether the database takes `assessment` — written and rolled back, so the kernel's own
+       *  write is the one that stays. */
+      const takes = (assessment: typeof row) =>
+        admin(async (client) => {
+          await client.query('savepoint probe');
+          try {
+            await client.query(
+              `insert into goal_review_assessments (
+                 workspace_id, goal_run_id, round, check_key, review_task_id, reviewer_model,
+                 executor_models, same_model, lines, comment, points, max_points, pass_at,
+                 unassessed, verdict
+               ) values ($1, $2, 1, 'quality', $3, $4, $5::jsonb, $6, $7::jsonb, $8, $9, $10, $11,
+                         '[]'::jsonb, $12)`,
+              [
+                workspaceId,
+                goalRunId,
+                task.id,
+                assessment.reviewerModel,
+                JSON.stringify(assessment.executors),
+                assessment.sameModel,
+                JSON.stringify(assessment.lines),
+                assessment.comment,
+                derivation.points,
+                derivation.maxPoints,
+                derivation.passAt,
+                derivation.verdict,
+              ],
+            );
+            return 'taken';
+          } catch (err) {
+            return err instanceof Error ? err.message : String(err);
+          } finally {
+            await client.query('rollback to savepoint probe');
+          }
+        });
+
+      // Not before the reviewer's Task completed.
+      expect(await takes(row)).toMatch(
+        /an assessment rests on the completed reviewer Task of its review/,
+      );
+      await reviewerReports(task.id, reported);
+      expect(await takes(row)).toBe('taken');
+      for (const [tampered, refused] of [
+        [
+          { ...row, reviewerModel: `${reviewerModel ?? 'default'}-other` },
+          /the reviewer model is the one its WorkerRun records/,
+        ],
+        [
+          { ...row, executors: [] },
+          /the executors are the reviewed steps that succeeded, each once/,
+        ],
+        [
+          { ...row, executors: [executor, executor] },
+          /the executors are the reviewed steps that succeeded, each once/,
+        ],
+        [
+          { ...row, executors: [{ ...executor, model: `${executor.model ?? 'default'}-other` }] },
+          /executor draft is a reviewed step's accepted attempt, with the model its WorkerRun records/,
+        ],
+        [
+          { ...row, sameModel: sameModel !== true },
+          /same_model says whether a reviewed step ran on the reviewer's model/,
+        ],
+        [{ ...row, comment: 'Reads wonderfully.' }, /the comment is the reviewer's, as reported/],
+        [{ ...row, comment: null }, /the comment is the reviewer's, as reported/],
+        [
+          { ...row, lines: [...derivation.lines].reverse() },
+          /line 0 is not criterion clear, weighed and scored as the reviewer scored it/,
+        ],
+      ] satisfies [typeof row, RegExp][]) {
+        expect(await takes(tampered), JSON.stringify(tampered)).toMatch(refused);
+      }
+
+      await advanceOnce(goalRunId, requester);
+      expect(await checkRow(goalRunId)).toMatchObject({ status: 'passed' });
+      // Settled: no second assessment, and the kernel's is never changed or removed.
+      expect(await takes(row)).toMatch(/an assessment is of a pending review/);
+      for (const write of [
+        `update goal_review_assessments set comment = 'Reads wonderfully.'
+          where workspace_id = $1 and goal_run_id = $2`,
+        'delete from goal_review_assessments where workspace_id = $1 and goal_run_id = $2',
+      ]) {
+        expect(await dbRefusal(guarded(write, [workspaceId, goalRunId]))).toMatch(
+          /an assessment is written once and never changed/,
+        );
+      }
     });
 
     it('a review that cannot decide says why under a closed code: a criterion the reviewer could not judge, a reviewer that failed, a step that left nothing to review, a goal with too few tokens left', async () => {
@@ -905,8 +1079,16 @@ describe.runIf(DATABASE_URL !== undefined)(
       await notFlaggedByIG5([goalRunId]);
     });
 
-    it('the goal planner reads a review sealed, and keeps it only exactly as read — the revision holds the requester’s review', async () => {
+    it('the goal planner reads a review sealed — in its plan and in a precedent’s — and keeps it only exactly as read; the revision holds the requester’s review', async () => {
       const requester = await newPrincipal('member');
+      // #493 on #1102: an earlier goal of theirs, achieved on the same review — a precedent the
+      // planner reads.
+      const earlier = await startGoal(requester, planOf([REVIEW]));
+      await succeed(earlier, requester);
+      await reviewerReports((await reviewTask(earlier)).id, scores(4, 4));
+      await advanceOnce(earlier, requester);
+      expect(await goalRow(earlier)).toMatchObject({ outcome_basis: 'reviewer_assessed' });
+
       const goalRunId = await startGoal(requester, planOf([REVIEW]), 'propose');
       const step = await liveStep(goalRunId, 'draft');
       await loseTask((await lastAttempt(step.id)).id, requester);
@@ -924,6 +1106,13 @@ describe.runIf(DATABASE_URL !== undefined)(
       };
       const sealed = { ...REVIEW, criteria: REVIEW_SEALED, passAt: REVIEW_SEALED };
       expect(read.acceptance).toEqual([sealed]);
+      const precedents = planner.input.precedents as {
+        goalRunId: string;
+        plan: { acceptance?: unknown[] };
+      }[];
+      expect(
+        precedents.find((precedent) => precedent.goalRunId === earlier)?.plan.acceptance,
+      ).toEqual([sealed]);
       expect(JSON.stringify(planner.input)).not.toContain('A reader new to the topic');
 
       const proposal = async (acceptance: readonly unknown[]) =>
