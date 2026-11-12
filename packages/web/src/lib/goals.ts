@@ -45,6 +45,7 @@ import {
   plannerRoundsUsedUpText,
   planningOutcomeText,
 } from './goal-planner.js';
+import { REVIEW_UNAVAILABLE_TEXT } from './goal-review.js';
 import { pendingTrialStepKeys } from './goal-trials.js';
 import { isUuidLike } from './graph-view.js';
 import type { Translate } from './i18n.js';
@@ -1367,6 +1368,8 @@ const CHECK_ERROR: Readonly<Record<string, readonly [string, string]>> = {
     '平台用同样的调用没有一次看到过它在：现在它不在，证明不了是这个目标删掉的，检查不做',
     'No look of the platform’s with the same call ever saw it there: its absence now does not show this goal removed it, so the check is not made',
   ],
+  // S11 GO18b: why a review has no verdict — a closed list of codes (`lib/goal-review.ts`).
+  ...REVIEW_UNAVAILABLE_TEXT,
 };
 
 /** What went wrong at a check's last attempt (`lastError`, a short code the kernel keeps): the
@@ -1464,11 +1467,23 @@ export function planCheckSentence(
     // S11 GO18: what the review scores and its line; its criteria are on the goal's detail. The
     // row's kind label already says 「独立评审」 (UX acceptance of #1102).
     case 'review':
-      return t(
-        `给 ${check.subjects.join('、')} 的产出打分：${check.criteria.length} 条标准，得分达到 ${check.passAt}% 才算通过`,
-        `Scores what ${check.subjects.join(', ')} produced: ${check.criteria.length} criteria, passing at ${check.passAt}% of the points`,
-      );
+      return reviewSentence(check, t);
   }
+}
+
+/** A review check in one line: whose output it scores, on how many criteria, and its line. */
+function reviewSentence(
+  review: {
+    readonly subjects: readonly string[];
+    readonly criteria: readonly unknown[];
+    readonly passAt: number;
+  },
+  t: Translate,
+): string {
+  return t(
+    `给 ${review.subjects.join('、')} 的产出打分：${review.criteria.length} 条标准，得分达到 ${review.passAt}% 才算通过`,
+    `Scores what ${review.subjects.join(', ')} produced: ${review.criteria.length} criteria, passing at ${review.passAt}% of the points`,
+  );
 }
 
 /** An absence check of the plan in force (S11 「门确认不存在」 B) — the goal's (`stepKey` null) or
@@ -1578,6 +1593,8 @@ export function roundCheckSentence(
     return observationSentence(check.check, gateNames.get(check.check.gatekeeperId) ?? null, t);
   }
   if (check.fact) return factCheckSentence(check.fact, t, objectNames);
+  // S11 GO18b: a review check as its round made it.
+  if (check.review) return reviewSentence(check.review, t);
   return check.prompt ?? '';
 }
 

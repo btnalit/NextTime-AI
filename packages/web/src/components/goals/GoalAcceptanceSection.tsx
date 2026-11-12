@@ -28,6 +28,7 @@ import { RouteLink } from '../kit/route-link.js';
 import { DashboardCard } from '../kit/section.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { AbsenceBaselineLine, AbsenceBasis } from './AbsenceBasis.js';
+import { ReviewDeclaration, ReviewOutcome } from './ReviewCheck.js';
 import type { AbsenceOperations } from './useAbsenceOperations.js';
 
 export interface GoalAcceptanceSectionProps {
@@ -132,6 +133,10 @@ export function GoalAcceptanceSection({
                       firstAttemptAt={goalFirstAttemptAt(detail)}
                     />
                   ) : null}
+                  {/* S11 GO18b: what the goal is judged by, criterion by criterion. */}
+                  {check.kind === 'review' ? (
+                    <ReviewDeclaration check={check} plan={detail.planRevision.plan} />
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -144,6 +149,7 @@ export function GoalAcceptanceSection({
             gateNames={gateNames}
             objectNames={objectNames}
             origin={origin}
+            http={http}
             t={t}
           />
         ) : (
@@ -167,6 +173,7 @@ export function GoalAcceptanceSection({
                   gateNames={gateNames}
                   objectNames={objectNames}
                   origin={origin}
+                  http={http}
                   t={t}
                 />
               ))}
@@ -199,12 +206,14 @@ function Round({
   gateNames,
   objectNames,
   origin,
+  http,
   t,
 }: {
   readonly round: GoalAcceptanceRoundWire;
   readonly gateNames: ReadonlyMap<string, string>;
   readonly objectNames: ReadonlyMap<string, string> | undefined;
   readonly origin: (checkKey: string) => string | null;
+  readonly http: CapabilityCaller | undefined;
   readonly t: Translate;
 }) {
   return (
@@ -227,6 +236,7 @@ function Round({
             gateNames={gateNames}
             objectNames={objectNames}
             origin={origin(check.checkKey)}
+            http={http}
             t={t}
           />
         ))}
@@ -240,12 +250,14 @@ function CheckRow({
   gateNames,
   objectNames,
   origin,
+  http,
   t,
 }: {
   readonly check: GoalAcceptanceCheckWire;
   readonly gateNames: ReadonlyMap<string, string>;
   readonly objectNames: ReadonlyMap<string, string> | undefined;
   readonly origin: string | null;
+  readonly http: CapabilityCaller | undefined;
   readonly t: Translate;
 }) {
   return (
@@ -314,6 +326,8 @@ function CheckRow({
       {check.lastError ? (
         <span className="text-small text-danger">{checkErrorLabel(check.lastError, t)}</span>
       ) : null}
+      {/* S11 GO18b: what the review came to, and how. */}
+      {check.review ? <ReviewOutcome review={check.review} http={http} /> : null}
     </li>
   );
 }

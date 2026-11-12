@@ -769,6 +769,9 @@ function goalStepScenario(messages) {
   const nonce = extractMarker(blob, 'GOAL_NONCE') ?? 'none';
   // S11 GO7a-3: `HOLD=<name>` keeps the report back until accept_s2.sh releases it ("Held turns").
   const hold = extractMarker(blob, 'HOLD');
+  // S11 GO18b (accept_s2 S15, a goal judged by review): `GOAL_REPORT=<word>` reports an output
+  // `{report}` too — what the step's `outputSchema` there asks for, and what its review reads.
+  const report = extractMarker(blob, 'GOAL_REPORT');
   return [
     {
       ...(hold ? { hold } : {}),
@@ -780,6 +783,7 @@ function goalStepScenario(messages) {
           factsToAssert: [],
           evidence: [{ kind: 'accept_s2_worker_note', content: { nonce } }],
           artifacts: [],
+          ...(report ? { output: { report: `accept_s2 report ${report} for goal step ${nonce}` } } : {}),
         },
       },
     },
