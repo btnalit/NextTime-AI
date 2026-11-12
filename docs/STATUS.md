@@ -5,7 +5,7 @@
 > 拆解与实现说明在 `development-tasks.md`，评估在 `retrospective-*.md` / `code-review-*.md`，
 > 本文只链接不复制。与代码冲突时以代码为准，并修正本文。
 
-最后更新：2026-11-08（遗留 690 关闭（#1091）：授了门的 service Principal 能用 `request_action` 了。S11 GO17 已完成（#1080、#1087），下一步发 v0.67.0。主机仍在 v0.63.0）。 上一版 2026-11-08（**S11 GO17 完成**（GO17a #1080、GO17b #1087）：写计划前能看到请求人以前的同类目标，计划记下参考了哪些；一个可逆迁移 goal/0018。遗留 664 第十四、十五批（#1089、#1090），棘轮降到 56。主机仍在 v0.63.0）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
+最后更新：2026-11-12（**v0.67.0 发布**（#1086，3591aca）：S11 GO17 完成，写计划前能看到请求人以前的同类目标，并记下参考了哪些；service Handle 能用 `request_action` 了（遗留 690）。一个可逆迁移 goal/0018。登记遗留 692。主机仍在 v0.63.0）。 上一版 2026-11-08（遗留 690 关闭（#1091）：授了门的 service Principal 能用 `request_action` 了。S11 GO17 已完成（#1080、#1087），下一步发 v0.67.0。主机仍在 v0.63.0）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
 
 ## 1. 入口指引
 
@@ -39,7 +39,7 @@
 | 真实模型验证 | 真实模型跑 S2 / S3 场景，统计工具调用成功率 | 达成；S5.7 例行化 | W7（各 3 次）：docker_restart 2/3、api_observe 3/3、ssh_run_approve 3/3、ssh_run_auto 1/1、dependency_chat 2/3（`retrospective-2026-09-11.md` §2）。2026-09-18 v0.13.0（各 10 次）：docker_restart 0/10、api_observe 10/10、ssh_run_approve 3/10、ssh_run_auto 1/1、dependency_chat 10/10、make demo 0/1——两条新根因（遗留 30 第二根因 #208、遗留 44 / #210）；v0.13.1 复跑见 §2.2 |
 | S5 | 基座打磨：I2 写入点强制、新鲜度与失效、数据与代码分离、prompt 契约守卫、加固批次、稳定性、真实模型回归、交付与演示闭环（S5.8，W11 最后） | **W9–W11 完成（2026-09-18，S5.1–S5.8）**；主机已应用到 v0.13.2（`drill-upgrade.sh` 演练 + 真实升级 + 三轮 `--real --runs 10`，数字见 §2.2）；`drill-install.sh` 无干净主机未实跑；S5.1 `warn → reject` 切换留给维护者在控制台点（I-S5-1 已为 0） | `development-tasks.md` §5b 各节实现说明；CI guards / quality / test（含 Postgres 集成套件）/ e2e 全绿 |
 | S6 | 控制台完善：视觉体系（S6-A0）、遗留 41–44 与 B1、控制台闭环（S6-A：对话生命周期 / `approve.reason` / 审批与任务与审计上下文 / 能力目录编辑器 / 工作区与用户清除）、模型与供应商（S6-B）、接入启动器（S6-C）、原生图谱页（S6-D） | **已合入并发布 v0.14.0**（#217，2026-09-22；S6-B 密钥写入仍为 501 stub——维护者定为不过审批，S7-A 实现）；主机未应用 | `development-tasks.md` §5c；`retrospective-2026-09-19.md` §2（本机全包测试 + Playwright 36 / 36 + `accept_s1.sh --lite`）；CI 见 PR |
-| 发布 | — | v0.66.0（2026-11-07：tag 232aae5，含 v0.65.0 之后合入的 #1062、#1064、#1069、#1071，S11 GO16 完成；11 个镜像在 release run 42407127950 里全部构建、签名并通过扫描，release channel 已发；一个可逆迁移 worker/0014；compose 与 env 不变；从 v0.65.0 之前升级还要跑 §3.143、§3.146 两条只读查询；带已知问题（遗留 687、675、629）；由协调者按维护者 2026-11-07 的授权决定发版；主机未应用，停在 v0.63.0，按大版本攒着升） |
+| 发布 | — | v0.67.0（2026-11-12：tag 3591aca，含 v0.66.0 之后合入的 #1080、#1087、#1091，以及遗留 664 第九到第十五批；S11 GO17 完成；release run 43243341616：11 个镜像全部构建、签名并通过扫描，release channel 已发；一个可逆迁移 goal/0018；compose 与 env 不变；入口模板改了，已部署的工作区要确认一次升级；从 v0.65.0 之前升级还要跑 §3.143、§3.146 两条只读查询；带已知问题（遗留 687、675、629）；由协调者按维护者 2026-11-07 的授权决定发版；主机未应用，停在 v0.63.0，按大版本攒着升） |
 
 > S1–S3 的「达成」以各自验收脚本为准。2026-09-10 复审曾发现 S3.2 的冲突检测在 Worker 断言主路径上不生效
 > （`code-review-2026-09-10.md` §2.1），当时验收对 Conflict 的唯一断言是「采集器跑两遍后为零」，压制 Conflict 的缺陷
@@ -416,6 +416,7 @@
 | 2026-11-07 | **S11 GO17b 合入，GO17 完成**（#1087，内核作者，d7c0874）：入口 agent 提议目标（`propose_goal.precedents`，至多 10 个）、规划器提修订（revise 的 `precedents`，至多 3 个，只能引用输入里给的）时可以点名参考的先例；只能引用同一请求人已结束的目标，不重复、不引用自己，内核先查，迁移 goal/0018 的 CHECK 与插入触发器再守，插入后不变。`get_goal(_revision)` 每一版带 `citedPrecedents`；控制台目标详情显示「参考了先例」。fake-llm 场景与 `accept_s2.sh` 的 `step9-goal-precedent` 覆盖入口这条路。#481、#493、UX PASS（UX 的一条 P2、一条 P3 在 PR 里修掉），rehearsal 绿，CI 全绿（release.md §3.153） | #1087 |
 | 2026-11-08 | 遗留 664 第十五批合入（#1090，测试守门人，edfe7fe，只改能力矩阵与内核集成测试）：`install_module`、`upgrade_module` 声明为 `idempotent`，`install_pack` 声明为 `conflict: change_plan_changed`（带 `adminProposalSegmentId` 时重试先得到 409 `admin_proposal_segment_not_open`，断言补进 pack-install-proposals 测试）；`ratchet.repeat_unclear` 59 → 56。#493 复审 PASS，判定响应丢失后重试回 409 可以接受，不登记遗留 | #1090 |
 | 2026-11-08 | 遗留 690 关闭（#1091，内核作者，f5fce7a，没有迁移）：`issue_service_handle` 与 CLI 签发 service Handle 时，按协调者定的方案 A 填入这个 Principal 当前有效的门，只在带了会用门的能力时才带；调用时 R-37 交集仍是上限，撤销 Grant 立即生效。#493 复审时指出这样一来低风险、可自动批准的操作会直接执行，协调者定为与 `issue_handle` 一致、保留自动批准（由 AgentPolicy `allowMemberAutoApproveLow` 控制），文档与测试已补。新集成测试 6 例；#493 复审 PASS，CI 全绿（release.md §3.154） | #1091 |
+| 2026-11-12 | **v0.67.0 发布**（#1086，tag 在 3591aca；主机未应用，停在 v0.63.0）：包含 v0.66.0 之后合入的 #1080（GO17a）、#1087（GO17b，goal 0018）、#1091（遗留 690），以及遗留 664 第九到第十五批（#1079、#1082–#1085、#1089、#1090）。S11 GO17 完成。release PR 的 web-e2e 第一次是红的：204 个用例全过，红在 M4 覆盖检查，原因是记录器漏记了一次调用，登记为遗留 692。重跑一次后转绿。release run 43243341616：11 个镜像全部构建、签名并通过扫描，release channel 已发。升级须知写在 GitHub release 正文里，对应 release.md §3.152–§3.154。发版前 `pnpm audit` 无已知漏洞。由协调线程按维护者 2026-11-07 的授权决定发版 | #1086 |
 | 2026-10-16 | 控制台文案第二批合入（#628，25bfdfe，无迁移，只改控制台，未发版；遗留 335、359、360、361、362、363 关闭）：对话输入框因 U+0000 被拒后，提示旁有「移除看不见的字符」按钮，移除后消息不会自动发出（335）；清除预览与审计资源类型统一为「动作请求」「授权」（359）；下一步文案里的 builder 改为「构建者」（360）；错误文案与成员页统一为「最后一位有效的所有者」「人类用户」，capability 名称为「API key 轮换」（i18n 守卫不允许中文短标签以英文结尾）（361）；服务凭证表单输入时就提示保留名规则（362）；640px 以下对话页头部改为两行（363）。另含一个只改测试的提交：旅程③窄屏用例按 Escape 后先等抽屉关上再点下一行（#625 种子行排到第一位后暴露的时序问题）。只改控制台，不需要内核审查（协调线程定）；UX 验收首轮 1 条 P2（390 宽度错误条被按钮挤窄）在本 PR 内修好，复验 PASS（`console-ux/acceptance-628.md`），CI 全绿合入；无主机动作 | PR #628 |
 
 ### 2.2 验收证明了什么，没证明什么
@@ -1059,6 +1060,7 @@
 | 688 | 两个请求同时 `add_member` 同一个用户时，后到的那个撞上唯一索引 `principals_workspace_user_key`，返回 500，而不是 409 `already_member`。修法：handler 捕获这个索引上的 23505，改抛 `AlreadyMemberError`。能力矩阵 `add_member` 行尾已标 `(legacy 688)`（#493 在 #1082 上发现） | P3 | 内核 | 开放 |
 | 689 | `refresh_operation_governance` 什么都没刷新时，仍留下一条空的 `governance.refresh_operation_governance` Activity，和遗留 685 同类。修法：`startActivity` 前设 SAVEPOINT，`refreshed` 与 `revisionDrafts` 都为空时回滚到它。能力矩阵这一行从 `repeats` 改为 `idempotent` 时关闭（#493 在 #1083 上判定） | P3 | 内核 | 开放 |
 | 690 | `issue_service_handle`（service-handle-handler.ts:102）和 CLI bootstrap 签 Handle 时把 `scope.resources` 写死为 `{}`。Handle 通道上 `resolveRequesterScope` 直接取 claims 里的范围，所以 service Principal 调 `request_action` 总是被拒（`requester_scope_does_not_cover_gatekeeper`），哪怕它有门的 Grant。R-37 只修了 `issue_handle`，漏了这条路径。后果只会是拒绝、不会多给，不是安全问题。协调者 11-07 定方案 A：签发时按 Principal 当前有效的门填 `resources.gatekeeper`，调用时 R-37 的交集仍是上限。要补的测试：没有门 Grant 的 service Principal 仍被拒；Grant 撤销后，之前签的 Handle 调用被拒；service Handle 调 `request_action` 的集成测试通过时关闭（测试守门人在 #1085 探针中发现） | P3 | 内核 | 已关闭（#1091，f5fce7a） |
+| 692 | web-e2e 的 cap 调用记录器（`packages/web/e2e/lib/test.ts` 的 `recordCapCalls`）会漏记：测试体结束时页面发出的 cap POST 还没拿到答复，fixture 先执行 `context.off('response')`，晚到的 response 事件被丢掉，M4 于是误报「没有页面调用过」。#1086 的 run 42429822831 出现过一次：旅程 ⑬ 第 6 步的 `confirm_gate_manifest` 实际返回了 200，却没有记下；重跑后转绿。修法：同时监听 `request` 与 `requestfailed`，跟踪在途的 cap POST，`stop()` 先等它们清空（最多 5 秒）再解除监听。测试守门人已在本地用最小 spec 复现并验证了修法 | P3 | 测试守门人 | 开放 |
 
 ## 5. 更新规则
 
