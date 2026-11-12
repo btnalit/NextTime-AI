@@ -4730,7 +4730,15 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **GO18 — `review` 类验收**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（GO18a #1102，2026-11-12 合入，6087d7e；方案为项目文件 `s11-w4/go18-default-plan.md`，F1–F8 取推荐项，另补独立复核的 B1–B3；迁移 goal/0019、task/0014 可逆）：
+  - **检查**：shared `goal-plan.ts` 的 `ReviewCheckSchema` 只在目标级：`subjects`（步骤 key）、`criteria`（key、description、weight 1–5，至多 8 条）、`passAt`、可选 `model`（不填用请求人的模型）。一个计划至多 4 条；Procedure 的 verify 与步骤级检查不收 `review`。
+  - **运行**：`advance.ts` V 阶段在这一轮平台检查全过后开评审（`application/goal/review.ts`、`application/task/review-task.ts`）。token 从目标预算扣（10k–100k），时长上限 600 秒，只跑一次；结算与写 assessment 同一事务，崩溃后按 Task 存下的结果幂等结算。
+  - **评审器**：`ontology/goal-reviewer.yaml`；Handle 只有 `get_task`、`list_allowed_operations`、`report_task_result`，无出网，被评步骤交接目录只读挂载，WorkerRun 是根 run。输入不含通过线；报告只能有逐条 `scores`（0–4 或 null）、可选 `comment` 与 summary，带别的字段即拒。
+  - **判定**：shared `reviewDerivation`，Σ(分数×权重)×100 ≥ passAt×4×Σ权重，全程整数；有 null 即 `unavailable`（`criteria_unassessed`）。
+  - **依据**（I-G5，B1）：有评审无确认 → `reviewer_assessed`；有评审有确认 → `requester`；无评审有平台检查 → `verified_by_check`；都没有 → `requester`。内核、goal/0019 守卫、检查器三层一致。只靠评审的计划带提示 `review_only`（维护者 11-12 定「只加提示」）。
+  - **失败与封存**：评审没过或判断不了，目标 `needs_decision`，不开规划器提议轮，暂停说明只有内核算出的数。规划器读到的计划与先例里评审的 `criteria`、`passAt` 换成 `[sealed]`，交回时只能原样保留或删掉。
+  - **审查**：#481、#493（xhigh）、UX 均 PASS，rehearsal 绿。UX 的 P2「确认时看不到评审标准与权重」并入 GO18b，发版前完成。
+  - **下一步**：#493 非阻塞建议的跟进 PR（冻结已完成评审 Task 的报告，迁移 task/0015；规划器候选排除评审器；反向测试），然后 GO18b 控制台。
 
 ### W5 — 管理员 Agent 代码层（待定）
 
