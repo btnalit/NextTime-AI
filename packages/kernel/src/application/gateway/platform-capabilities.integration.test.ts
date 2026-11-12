@@ -811,6 +811,36 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
       });
 
+      it('set_membership_role: the same role ends the sessions but keeps their Handles; a new role revokes them', async () => {
+        // S3.11 / R-12: only a role change makes a Handle's capability set stale, so only a role
+        // change revokes the Handles minted under the old role (#493 on legacy 664 batch 22: the
+        // repeat walk cannot see this, its second call meets Handles the first already revoked).
+        const user = await createUser(pool, {
+          login: `role-keep-${randomUUID().slice(0, 8)}`,
+          displayName: 'Role Fixture',
+          password: PASSWORD,
+        });
+        const membership = await callAsAdmin<UserMembershipWire>('add_membership', {
+          userId: user.id,
+          workspaceId,
+          role: 'member',
+        });
+
+        const kept = await issueSessionHandle(workspaceId, membership.principalId, 'mcp_session');
+        await callAsAdmin('set_membership_role', { userId: user.id, workspaceId, role: 'member' });
+        const ended = await withAdminClient(pool, (client) =>
+          client.query<{ status: string }>('select status from sessions where id = $1', [
+            kept.sessionId,
+          ]),
+        );
+        expect(ended.rows[0]?.status).toBe('revoked');
+        expect(await handleRevoked(kept.jti)).toBe(false);
+
+        const stale = await issueSessionHandle(workspaceId, membership.principalId, 'mcp_session');
+        await callAsAdmin('set_membership_role', { userId: user.id, workspaceId, role: 'builder' });
+        expect(await handleRevoked(stale.jti)).toBe(true);
+      });
+
       it('remove_membership: disables the membership Principal; the last owner is refused', async () => {
         const user = await createUser(pool, {
           login: `removed-${randomUUID().slice(0, 8)}`,
