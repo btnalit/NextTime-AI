@@ -51,7 +51,7 @@
 import { mkdirSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { posix as posixPath } from 'node:path';
 import { isValidCorrelationId } from '@nexttime/shared';
-import type { SupervisorConfig, TaskUpstreamFiles } from './config.js';
+import type { SupervisorConfig, TaskBuiltinTools, TaskUpstreamFiles } from './config.js';
 import type { TaskSkillInline } from './config.js';
 import type { ContainerState, DockerClient } from './docker-client.js';
 import { denyAllEntryFields, taskSourceId } from './egress-map.js';
@@ -139,6 +139,9 @@ export interface TaskSpawnInput {
    *  `TASK_EGRESS_DENY_ALL_LABEL` for `reconcile()`. A run whose entry cannot be written is never
    *  left running: `spawn()` fails, `reconcile()` terminates it. */
   readonly egressDenyAll?: boolean;
+  /** S11 GO18a P3: `read_only` limits the Worker's pi built-in tools to reading files
+   *  (`config.ts` `TaskSpawnRequestSchema.builtinTools`, `task-spawn-spec.ts`). */
+  readonly builtinTools?: TaskBuiltinTools;
   /** Leftover 87: the delegating call's correlation id (`server.ts` passes the request's own id —
    *  the kernel's `x-correlation-id`, or one minted here). Becomes the container's
    *  `NEXTTIME_CORRELATION_ID` and label, and this run's egress source-map `correlationId`. */
@@ -502,6 +505,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         timeoutSec,
         egressDeny,
         egressDenyAll,
+        builtinTools,
         correlationId,
         goalRunId,
         upstream,
@@ -593,6 +597,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         networkName,
         egressDeny,
         egressDenyAll,
+        builtinTools,
         correlationId,
         upstream,
       });

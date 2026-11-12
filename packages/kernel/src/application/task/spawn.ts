@@ -334,6 +334,10 @@ export async function spawnWorkerRun(
         input.task.purpose === 'review'
           ? { egressDenyAll: true }
           : {}),
+        // S11 GO18a P3 (independent review N6): a goal reviewer reads what other Workers wrote
+        // and runs none of it — only the pi built-in tools that read files, whatever the
+        // reviewer's definition says.
+        ...(input.task.purpose === 'review' ? { builtinTools: 'read_only' as const } : {}),
         systemPrompt: input.systemPrompt,
         image: input.image,
         ...(input.goalRunId !== undefined ? { goalRunId: input.goalRunId } : {}),

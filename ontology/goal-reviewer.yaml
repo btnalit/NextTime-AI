@@ -10,7 +10,9 @@
 #
 # What the reviewer may do is fixed by the kernel, not by this file: its Handle holds exactly its
 # own Task, its (empty) tool list and its report, it observes nothing (`observe_scope = '{}'`), its
-# container has no egress, the steps' files it reads are mounted read-only, and its report is held
+# container has no egress, the steps' files it reads are mounted read-only, pi's built-in tools in
+# its container are only read, grep, find and ls (no bash, edit or write: the kernel spawns every
+# review Task with `builtinTools: read_only`, docs/runbooks/pi-upgrade.md §2.2), and its report is held
 # to `@nexttime/shared` `REVIEWER_OUTPUT_SCHEMA` and to the check's criteria, each once. It decides
 # nothing: whether the review passes is the platform's integer arithmetic over its scores against a
 # pass line it is not shown (`reviewDerivation`; migration goal/0019 recomputes it), and a
