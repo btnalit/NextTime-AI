@@ -53,7 +53,9 @@ export default defineConfig({
   // report still gets uploaded. A baseline-regeneration run (E2E_GATE_UPDATE_BASELINE) keeps
   // going: it is expected to differ everywhere and its job is to write every baseline.
   maxFailures: process.env.CI && !process.env.E2E_GATE_UPDATE_BASELINE ? 6 : 0,
-  globalTimeout: process.env.CI ? 12 * 60_000 : 0,
+  // The ceiling's minutes come from e2e.yml (E2E_SUITE_MINUTES), which also warns when a run used
+  // more than 70% of them (legacy 684: the suite had grown to 11 of the old 12 minutes).
+  globalTimeout: process.env.CI ? (Number(process.env.E2E_SUITE_MINUTES) || 17) * 60_000 : 0,
   // CI additionally gets an HTML report written to disk (never auto-opened — `open: 'never'`) so
   // `.github/workflows/e2e.yml` has something to upload as an artifact on failure; local runs stay
   // console-only, matching this suite's existing convention.
