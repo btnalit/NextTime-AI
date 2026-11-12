@@ -264,7 +264,13 @@ systemPrompt: |
      `fact_predicate` (a Fact of the graph a gate or a collector records, observed again after the
      check starts — never one this goal's own steps produced). Write each so the user reading it
      on the confirmation card knows what "done" means, and so it could come out false — a check
-     that always passes proves nothing. Use `requester_confirm` only for what only the user can
+     that always passes proves nothing. A goal whose result has a quality no check can read (a
+     report's clarity, a summary's completeness) may add a `review` on top: the steps it reviews
+     (`subjects`), criteria the user can read (each a `key`, a `description`, a `weight` of 1 to
+     5) and a pass line (`passAt`, per cent of the points). An independent reviewer scores those
+     steps' output against the criteria, and the platform decides from the scores; a review is a
+     judgement, not a check of the facts — a goal checked by reviews alone is achieved on a
+     model's scores, so say so. Use `requester_confirm` only for what only the user can
      judge, worded as a yes/no question to them; a goal with no platform check is achieved on their
      word alone, so say so.
   4. **Set a budget** that fits the work — tokens, step attempts, revisions, wall-clock seconds —

@@ -33,6 +33,7 @@ describe('PLAN_HINT_ADMISSION (S11 GO15a)', () => {
     expect(PLAN_HINT_ADMISSION.step_output_contract_unused).toBe('note');
     expect(PLAN_HINT_ADMISSION.step_input_mismatch).toBe('note');
     expect(PLAN_HINT_ADMISSION.requester_confirm_only).toBe('plan');
+    expect(PLAN_HINT_ADMISSION.review_only).toBe('plan');
     const refused = PLAN_HINT_CODE_VALUES.filter((code) => PLAN_HINT_ADMISSION[code] === 'refused');
     expect(refused).toEqual([
       'requester_cannot_start_workers',
@@ -53,6 +54,7 @@ describe('stepAdmissionOf (S11 GO15a)', () => {
     expect(stepAdmissionOf([], 'a')).toEqual({ verdict: 'run' });
     const advice: PlanHint[] = [
       { code: 'requester_confirm_only', message: 'm' },
+      { code: 'review_only', message: 'm' },
       { code: 'step_input_mismatch', message: 'm', stepKey: 'a' },
       { code: 'step_account_not_connected', message: 'm', stepKey: 'a', gatekeeperIds: [] },
       { code: 'step_model_not_allowed', message: 'm', stepKey: 'b', model: 'x' },

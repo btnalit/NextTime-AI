@@ -237,6 +237,12 @@ export const PROPOSE_GOAL_SCHEMA_WORDS = new Set([
   'requester_confirm',
   'idempotencyKey',
   'precedents',
+  // S11 GO18: a review check and its fields.
+  'review',
+  'subjects',
+  'description',
+  'weight',
+  'passAt',
 ]);
 
 export const PROPOSE_GOAL_REFUSAL_CODES = new Set([

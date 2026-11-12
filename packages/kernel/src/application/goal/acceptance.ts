@@ -36,6 +36,12 @@ import { isPlatformAcceptanceCheck, roundAcceptance } from './plan.js';
 import { closePlanning, listPlanningRounds } from './planning-rounds.js';
 import { getGoalRun, getPlanRevision, listStepRuns, lockStepRuns } from './reads.js';
 import {
+  type ReviewAssessmentView,
+  type ReviewDeclaration,
+  readRunReviews,
+  reviewDeclarationOf,
+} from './review.js';
+import {
   GoalRunForbiddenError,
   GoalRunInputError,
   GoalRunNotFoundError,
@@ -55,7 +61,7 @@ import type { GoalControlActor, GoalRunRow } from './types.js';
  *
  *   - {@link confirmGoalAcceptance}: the requester confirms the round's `requester_confirm` check —
  *     only while the run is `verifying` and only once every check of the round the platform makes
- *     (an observation, a Fact it judges) passed. A
+ *     (an observation, a Fact it judges) and every review (S11 GO18, `review.ts`) passed. A
  *     Decision of theirs (`goal_outcome`, `achieved`, naming the run, the round and the check) is
  *     what the row passes on; the run is due, and the advance completes it (`advance.ts` phase V).
  *   - {@link endGoalRun}: the requester ends the run with an outcome, on their word (`requester`
@@ -201,12 +207,15 @@ export async function confirmGoalAcceptance(
       `goal run ${goal.id}: confirmation ${confirmation.checkKey} is ${confirmation.status}`,
     );
   }
+  // GO18 (F6): a review runs after the platform's checks, and the requester is asked after it.
   const unpassed = round.filter(
-    (check) => isPlatformAcceptanceCheck(check.kind) && check.status !== 'passed',
+    (check) =>
+      (isPlatformAcceptanceCheck(check.kind) || check.kind === 'review') &&
+      check.status !== 'passed',
   );
   if (unpassed.length > 0) {
     throw new GoalRunStateError(
-      `goal run ${goal.id}: the platform's checks have not all passed yet (${unpassed
+      `goal run ${goal.id}: the platform's checks${unpassed.some((check) => check.kind === 'review') ? ' and reviews' : ''} have not all passed yet (${unpassed
         .map((check) => `${check.checkKey}: ${check.status}`)
         .join(', ')}); the requester confirms after them`,
     );
@@ -287,10 +296,16 @@ export async function endGoalRun(
         round.task !== null &&
         liveTasks.some((task) => task.taskId === round.task?.id),
     );
+    // S11 GO18: so is a review's reviewer Task.
+    const reviewing = [...(await readRunReviews(client, workspaceId, goal.id)).entries()].find(
+      ([, review]) => liveTasks.some((task) => task.taskId === review.taskId),
+    );
     throw new GoalRunStateError(
       planning && liveTasks.every((task) => task.stepRunId === null)
         ? `goal run ${goal.id}: the goal planner is still looking at the failure of step ${planning.stepKey}; wait for what it proposes, or cancel the run`
-        : `goal run ${goal.id}: a Task of it still runs; wait for it, or cancel the run`,
+        : reviewing && liveTasks.every((task) => task.stepRunId === null)
+          ? `goal run ${goal.id}: the reviewer of acceptance check ${reviewing[0].split(':').slice(1).join(':')} is still assessing; wait for its verdict, or cancel the run`
+          : `goal run ${goal.id}: a Task of it still runs; wait for it, or cancel the run`,
     );
   }
   for (const step of steps) {
@@ -395,6 +410,9 @@ export interface GoalAcceptanceCheckView {
   /** A fact check's (S11 GO4c): the Fact judged. */
   readonly fact: FactCheck | null;
   readonly prompt: string | null;
+  /** A review's (S11 GO18): what it reviews and by which criteria, its reviewer Task once started,
+   *  and what it came to once that Task ended with a report the platform read. */
+  readonly review: GoalReviewView | null;
   readonly attempts: number;
   readonly lastError: string | null;
   /** The evidence: the latest Observation (an observation), the latest Fact seen (a fact check),
@@ -407,6 +425,14 @@ export interface GoalAcceptanceCheckView {
   readonly settledAt: Date | null;
   /** 「已覆盖」: the requester declared the goal achieved over this check, which had not passed. */
   readonly overridden: boolean;
+}
+
+/** A review check as a person reads it (S11 GO18): its declaration, its reviewer Task and the
+ *  assessment (`review.ts`). */
+export interface GoalReviewView {
+  readonly declaration: ReviewDeclaration;
+  readonly taskId: string | null;
+  readonly assessment: ReviewAssessmentView | null;
 }
 
 export interface GoalAcceptanceRoundView {
@@ -504,7 +530,7 @@ export async function readGoalAcceptance(
       stepKey: step.stepKey,
       attempt: step.attemptCount,
       state,
-      rounds: roundViews(own, () => false).map((round) => ({
+      rounds: roundViews(own, () => false, new Map()).map((round) => ({
         ...round,
         stepAttempt: own.find((row) => row.round === round.round)?.stepAttempt ?? 0,
       })),
@@ -519,7 +545,13 @@ export async function readGoalAcceptance(
   return {
     goalRunId: goal.id,
     status: goal.status,
-    rounds: roundViews(rows, (round, checkKey) => overridden.has(`${round}:${checkKey}`)),
+    rounds: roundViews(
+      rows,
+      (round, checkKey) => overridden.has(`${round}:${checkKey}`),
+      rows.some((row) => row.kind === 'review')
+        ? await readRunReviews(client, workspaceId, goalRunId)
+        : new Map(),
+    ),
     steps,
     absenceBaselines: [...baselines.values()],
     outcome:
@@ -556,6 +588,7 @@ function stepAcceptanceState(
 function roundViews(
   rows: readonly AcceptanceCheckRow[],
   isOverridden: (round: number, checkKey: string) => boolean,
+  reviews: Awaited<ReturnType<typeof readRunReviews>>,
 ): GoalAcceptanceRoundView[] {
   const rounds = new Map<number, AcceptanceCheckRow[]>();
   for (const row of rows) rounds.set(row.round, [...(rounds.get(row.round) ?? []), row]);
@@ -573,6 +606,7 @@ function roundViews(
       check: check.observationCheck,
       fact: check.factCheck,
       prompt: check.prompt,
+      review: reviewView(check, reviews),
       attempts: check.attempts,
       lastError: check.lastError,
       observationId: check.observationId,
@@ -586,4 +620,18 @@ function roundViews(
       overridden: isOverridden(round, check.checkKey),
     })),
   }));
+}
+
+function reviewView(
+  check: AcceptanceCheckRow,
+  reviews: Awaited<ReturnType<typeof readRunReviews>>,
+): GoalReviewView | null {
+  const declaration = reviewDeclarationOf(check);
+  if (!declaration) return null;
+  const review = reviews.get(`${check.round}:${check.checkKey}`);
+  return {
+    declaration,
+    taskId: review?.taskId ?? null,
+    assessment: review?.assessment ?? null,
+  };
 }

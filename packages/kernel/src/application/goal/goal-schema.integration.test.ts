@@ -1057,7 +1057,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           params,
         );
       const NOT_BY_CHECK =
-        /achieved by check needs every acceptance check of the latest round passed on the current plan, at least one of them observed by the platform \(I-G5\)/;
+        /achieved by check needs every acceptance check of the latest round passed on the current plan, at least one of them observed by the platform and none of them a review \(I-G5\)/;
       const onWord = (goalRunId: string, decisionId: string | null, outcome = 'achieved') =>
         setGoal(
           goalRunId,
@@ -1195,12 +1195,13 @@ describe.runIf(DATABASE_URL !== undefined)(
         await expect(
           setGoal(goalRunId, 'outcome_decision_id = $3', [await decision(said())]),
         ).rejects.toThrow(/the outcome decision is written with the outcome, once/);
+        // S11 GO18 (goal/0019): a reviewer_assessed outcome is recorded now — by verification only.
         await expect(
           setGoal(
             goalRunId,
             "status = 'completed', outcome = 'achieved', outcome_basis = 'reviewer_assessed', ended_at = now()",
           ),
-        ).rejects.toThrow(/a reviewer_assessed outcome is not recorded yet/);
+        ).rejects.toThrow(/only verification achieves a goal on a review/);
         const word = await decision(said());
         await onWord(goalRunId, word, 'not_achieved');
         expect(await asApp((client) => getGoalRun(client, workspaceId, goalRunId))).toMatchObject({

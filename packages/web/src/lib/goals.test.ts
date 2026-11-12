@@ -221,6 +221,7 @@ describe('lib/goals', () => {
     // how the goal is verified stays with acceptance.
     expect(isStepAuthorityHint(gate)).toBe(true);
     expect(isStepAuthorityHint({ code: 'requester_confirm_only', message: 'm' })).toBe(false);
+    expect(isStepAuthorityHint({ code: 'review_only', message: 'm' })).toBe(false);
     expect(stepHintChipLabel(gate, zh)).toBe('请求人无权限');
     expect(stepHintChipLabel(capability, zh)).toBe('请求人无权限');
     expect(

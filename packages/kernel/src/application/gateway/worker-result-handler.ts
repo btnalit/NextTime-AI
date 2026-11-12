@@ -6,7 +6,7 @@ import {
   storableValue,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { plannerReportProblems } from '../../application/goal/index.js';
+import { plannerReportProblems, reviewerReportProblems } from '../../application/goal/index.js';
 import type {
   ContractPreRejections,
   RejectedResultFact,
@@ -360,6 +360,7 @@ export const reportTaskResultHandler: CapabilityHandler = async (
         problems: check.problems,
         problemCount: check.problemCount,
         ...(outputContract.purpose === 'planning' ? { heldTo: 'planner' as const } : {}),
+        ...(outputContract.purpose === 'review' ? { heldTo: 'reviewer' as const } : {}),
       });
     }
     // S11 GO9a: a goal planner's report is its proposal and nothing else, and the plan it
@@ -372,6 +373,18 @@ export const reportTaskResultHandler: CapabilityHandler = async (
         problems: planner.slice(0, MAX_OUTPUT_PROBLEMS),
         problemCount: planner.length,
         heldTo: 'planner',
+      });
+    }
+    // S11 GO18 (F5): a goal reviewer's report is its scores — each of its check's criteria, once —
+    // and nothing else: no Fact, evidence, artifact or proposal.
+    const reviewer = await reviewerReportProblems(client, workspaceId, workerRun.taskId, contract);
+    if (reviewer.length > 0) {
+      throw new TaskOutputRejectedError({
+        taskId: workerRun.taskId,
+        output: contract.output ?? null,
+        problems: reviewer.slice(0, MAX_OUTPUT_PROBLEMS),
+        problemCount: reviewer.length,
+        heldTo: 'reviewer',
       });
     }
   }
