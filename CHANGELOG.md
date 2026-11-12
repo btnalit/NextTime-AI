@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.68.0](https://github.com/btnalit/NextTime-AI/compare/v0.67.0...v0.68.0) (2026-11-12)
+
+
+### Features
+
+* **goal:** independent review acceptance checks (S11 GO18a) ([#1102](https://github.com/btnalit/NextTime-AI/issues/1102)) ([6087d7e](https://github.com/btnalit/NextTime-AI/commit/6087d7ed2b76e98da0c08aae69c586f6408737c8))
+* **web:** independent review in the plan editor and on the goal page, accept_s2 S15 (S11 GO18b) ([#1111](https://github.com/btnalit/NextTime-AI/issues/1111)) ([451921c](https://github.com/btnalit/NextTime-AI/commit/451921c58b0726dba6becd5ce63a8537a614308a))
+
+
+### Bug Fixes
+
+* **goal:** freeze a review Task's report and keep the reviewer out of the planner's Workers; reverse tests for the review guards (S11 GO18a) ([#1108](https://github.com/btnalit/NextTime-AI/issues/1108)) ([cde94d6](https://github.com/btnalit/NextTime-AI/commit/cde94d6e417bec22ff1aac778e605b2d93b3365a))
+
 ## [0.67.0](https://github.com/btnalit/NextTime-AI/compare/v0.66.0...v0.67.0) (2026-11-08)
 
 
