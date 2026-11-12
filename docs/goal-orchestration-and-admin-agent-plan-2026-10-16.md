@@ -162,7 +162,7 @@ Task / WorkerRun 与转移日志（每次转移发 `TaskUpdated`，`task/transit
 | I-G2 | 只有当前计划版本的步骤能被推进；旧版本 Task 的结果入库、入审计，但不改变步骤状态 | Task 带 `plan_revision`；推进时比较（fencing），不一致只记录 |
 | I-G3 | 计划修订基于当前版本（乐观并发），无环、引用可解析、在预算内 | 修订校验函数；`based_on ≠ current` 拒绝（同本体 R-60 的做法） |
 | I-G4 | 同一步骤内，同一业务动作身份（§3.1）至多执行一次，除非有显式、留痕的"重新执行"决定；同一 Operation 在本步骤有结果不明的动作时，先核对完再放行同类请求 | 步骤范围的去重键（跨 WorkerRun、跨状态）；`outcome_unknown` / `in_doubt` 先核对；重新执行需要人或（W2）规划器提议 + 平台接受 |
-| I-G5 | GoalRun 的目标结果 `achieved` 只能来自平台执行的、经请求者确认过的验收检查，或请求者本人确认；执行步骤的 Worker 自报与入口 agent 的 `agent_reported` 都不能给出它 | 验收由推进器发起，用请求者的观察权限；依据词表扩展现有 `OBJECTIVE_OUTCOME_BASIS_VALUES`（`requester` / `agent_reported`）加 `verified_by_check` / `reviewer_assessed`；`report_task_outcome` 继续只在入口上限内 |
+| I-G5 | GoalRun 的目标结果 `achieved` 只能来自下面三类依据之一，执行步骤的 Worker 自报与入口 agent 的 `agent_reported` 都不能给出它：① **平台观察**：`observe_predicate`、`observe_absent`、`fact_predicate`，即平台用请求者的观察权限对真实状态的观察，判定式经请求者确认过，依据记 `verified_by_check`。代码里的 `isPlatformAcceptanceCheck` 只指这一类，「平台检查」一词也只指这一类；② **独立评审**（`review`，W4 GO18）：平台运行的评审 Worker 按请求者确认过的评分标准打分，是否通过由内核按分数算，依据记 `reviewer_assessed`，统计上归代理指标档。评审也由平台运行，但它不是平台观察；③ **本人确认**：`requester_confirm`，带请求者自己的 Decision，依据记 `requester`。依据由最新一轮的构成唯一决定，见下方「I-G5 依据表」 | 验收由推进器发起，用请求者的观察权限；依据词表扩展现有 `OBJECTIVE_OUTCOME_BASIS_VALUES`（`requester` / `agent_reported`）加 `verified_by_check` / `reviewer_assessed`；内核、数据库守卫、I-G5 检查器三层都按依据表守；`report_task_outcome` 继续只在入口上限内 |
 | I-G6 | GoalRun 累计花费、步骤数、修订次数、墙钟时长不超过预算；超出即暂停，不是失败 | 推进前检查；`paused(budget_exhausted)` |
 | I-G7 | 每一步开始时按请求者**当前**授权铸 Handle；授权缩小后不再开始新步骤 | 复用现有函数：`entryGatekeeperIds` 现算请求者入口范围作父 Handle，再 `computeChildHandleScope`；执行时 R-37 照常复核；`paused(authority_lost)` |
 | I-G8 | WorkerSpec 组合不增权：直接运行的组合只能由已发布组件、请求者已有的门与模型构成 | 准入函数（§4.4），拒绝或转审批 |
@@ -175,6 +175,18 @@ Task / WorkerRun 与转移日志（每次转移发 `TaskUpdated`，`task/transit
 | I-A6 | 管理员 Agent 的探索只发生在试验工作区；生产工作区只经已应用的 ChangePlan 改变 | 它在生产工作区没有 Principal |
 | I-A7 | agent 起草的东西在溯源上可区分：起草者种类与批准人分开记录 | 扩展现有 `origin` / `proposer_kind` 到 Skill / Procedure / WorkerDefinition 草稿与 ChangePlan（遗留 293），不新增平行字段；审计记录两者 |
 | I-A8 | 应用的必须是人审过的那一份：每段应用时重算干跑，内容摘要与审阅时不同即拒绝；工作区段的摘要包含它依赖的平台段 id 与该段应用时的摘要，平台段之后改过即拒绝 | 段级 `reviewedDigest`，在该段的应用事务里复查；沿用 `enable_gate_instance` 已有的 `manifestDigest` 同事务校验（`gate-instance-handlers.ts:306,337`，R-18）与 ActionRequest `operation_digest` 的模式 |
+
+**I-G5 依据表**（GO18 独立复核 2026-11-12 B1 / N9 定稿；`review` 与 `reviewer_assessed` 两行随 GO18 落地，GO18 合入前现行代码只有后两行）：
+
+| 最新一轮的构成（全部通过、在当前计划上、计划声明的检查都在） | 唯一允许的依据 |
+|---|---|
+| 有评审，没有本人确认 | `reviewer_assessed` |
+| 有评审，有本人确认（确认带 Decision） | `requester` |
+| 没有评审，有平台观察类检查 | `verified_by_check` |
+| 没有评审，没有平台观察类检查 | `requester` |
+
+- GO18 起，含评审的一轮不能记成 `verified_by_check`：守卫的 `verified_by_check` 分支要求这一轮没有 `review` 检查，当前计划也没有声明 `review`；`isPlatformAcceptanceCheck` 对 `review` 为假。
+- GO18 起，本人确认在评审之后：`requester_confirm` 要通过，前提是本轮的评审检查都已通过，库里守，不只靠内核里的顺序。
 
 ### 3.4 状态机
 
