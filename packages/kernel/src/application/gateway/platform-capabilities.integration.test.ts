@@ -811,10 +811,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
       });
 
-      it('set_membership_role: the same role ends the sessions but keeps their Handles; a new role revokes them', async () => {
-        // S3.11 / R-12: only a role change makes a Handle's capability set stale, so only a role
-        // change revokes the Handles minted under the old role (#493 on legacy 664 batch 22: the
-        // repeat walk cannot see this, its second call meets Handles the first already revoked).
+      it('set_membership_role: the same role changes nothing — the sessions and their Handles stay live; a new role ends the sessions and revokes their Handles (legacy 696)', async () => {
+        // S3.11 / R-12: only a role change makes a Handle's capability set stale. Legacy 696: the
+        // same role used to end the sessions while the Handles they had issued stayed valid until
+        // ttl (`verifyHandle` reads only a Handle's own `revoked_at`). Now the person's authority
+        // does not change, so nothing does (#493 on legacy 664 batch 22: the repeat walk cannot
+        // see this, its second call meets sessions and Handles the first already ended).
         const user = await createUser(pool, {
           login: `role-keep-${randomUUID().slice(0, 8)}`,
           displayName: 'Role Fixture',
@@ -825,20 +827,50 @@ describe.runIf(DATABASE_URL !== undefined)(
           workspaceId,
           role: 'member',
         });
+        const live = await issueSessionHandle(workspaceId, membership.principalId, 'mcp_session');
+        /** The row versions (`xmin`) of the membership Principal, its session and the Handle: a
+         *  write to any of them — even one that sets a column to the value it has — changes it. */
+        const rowVersions = () =>
+          withAdminClient(pool, async (client) => {
+            const versions = await client.query<{
+              principal: string;
+              session: string;
+              handle: string;
+            }>(
+              `select (select xmin::text from principals where workspace_id = $1 and id = $2) as principal,
+                      (select xmin::text from sessions where id = $3) as session,
+                      (select xmin::text from capability_handles where jti = $4) as handle`,
+              [workspaceId, membership.principalId, live.sessionId, live.jti],
+            );
+            return versions.rows[0];
+          });
+        const roleAudits = () =>
+          withAdminClient(pool, async (client) => {
+            const audits = await client.query<{ payload: { unchanged?: boolean } }>(
+              `select payload from audit_records
+                where action = 'set_membership_role' and resource_id = $1 order by created_at, id`,
+              [membership.principalId],
+            );
+            return audits.rows.map((row) => row.payload.unchanged);
+          });
+        const before = await rowVersions();
 
-        const kept = await issueSessionHandle(workspaceId, membership.principalId, 'mcp_session');
-        await callAsAdmin('set_membership_role', { userId: user.id, workspaceId, role: 'member' });
-        const ended = await withAdminClient(pool, (client) =>
-          client.query<{ status: string }>('select status from sessions where id = $1', [
-            kept.sessionId,
-          ]),
-        );
-        expect(ended.rows[0]?.status).toBe('revoked');
-        expect(await handleRevoked(kept.jti)).toBe(false);
+        const same = await callAsAdmin<UserMembershipWire>('set_membership_role', {
+          userId: user.id,
+          workspaceId,
+          role: 'member',
+        });
+        expect(same).toMatchObject({ principalId: membership.principalId, role: 'member' });
+        expect(await sessionStatus(live.sessionId)).toBe('active');
+        expect(await handleRevoked(live.jti)).toBe(false);
+        expect(await rowVersions()).toEqual(before);
+        // The call is still audited, and its row says it changed nothing.
+        expect(await roleAudits()).toEqual([true]);
 
-        const stale = await issueSessionHandle(workspaceId, membership.principalId, 'mcp_session');
         await callAsAdmin('set_membership_role', { userId: user.id, workspaceId, role: 'builder' });
-        expect(await handleRevoked(stale.jti)).toBe(true);
+        expect(await sessionStatus(live.sessionId)).toBe('revoked');
+        expect(await handleRevoked(live.jti)).toBe(true);
+        expect(await roleAudits()).toEqual([true, undefined]);
       });
 
       it('remove_membership: disables the membership Principal; the last owner is refused', async () => {
