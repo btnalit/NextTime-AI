@@ -689,6 +689,16 @@ async function reviewedPack(ctx: RecipeContext, name: string): Promise<Record<st
   };
 }
 
+/** The ChangePlan segment of a shipped pack installed here, as its dry run showed it. */
+async function installedPackSegment(ctx: RecipeContext): Promise<string> {
+  const installed = await as<{ segmentId: string }>(
+    ctx,
+    'install_pack',
+    await reviewedPack(ctx, 'ops-assets'),
+  );
+  return installed.segmentId;
+}
+
 /** The entry template as the caller read it (`get_entry_template_status`): its digest and the
  *  published entry version it would be based on. */
 async function entryTemplateRead(ctx: RecipeContext): Promise<Record<string, unknown>> {
@@ -1729,11 +1739,47 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       },
     },
   },
+  verify_change_segment: {
+    // The first call checks the segment again and records it; the same call again inside the
+    // cooldown is refused before anything is checked (429 change_verification_cooldown).
+    // Installing verifies the segment once, so that run's time is set back past the cooldown
+    // (with the guards off: verified_at is only ever a run's own stamp).
+    'a pack install applied here, last verified two minutes ago': {
+      first: expect.objectContaining({ verification: expect.any(Object) }),
+      setUp: async (ctx) => {
+        const segmentId = await installedPackSegment(ctx);
+        await withWorkspace(
+          ctx.pool,
+          { workspaceId: ctx.seed.workspaceId, principalId: ctx.seed.ownerId },
+          async (client) => {
+            await client.query('set local session_replication_role = replica');
+            await client.query(
+              `update change_segments set verified_at = verified_at - interval '2 minutes'
+                where workspace_id = $1 and id = $2`,
+              [ctx.seed.workspaceId, segmentId],
+            );
+          },
+          { skipRoleSwitch: true },
+        );
+        return { segmentId };
+      },
+    },
+  },
+  roll_back_change_segment: {
+    // The first call rolls the segment back; the same call again finds it rolled back (409
+    // change_segment_rolled_back), nothing written.
+    'a pack install applied here': {
+      first: expect.objectContaining({ status: 'rolled_back' }),
+      setUp: async (ctx) => ({ segmentId: await installedPackSegment(ctx) }),
+    },
+  },
 };
 
 /** Rows whose schema-built params cannot make a first call succeed on the bare seed — a param
  *  naming something the walk has no value for — run their recipes instead of that case. */
 const RECIPES_ONLY: ReadonlySet<string> = new Set([
+  'verify_change_segment',
+  'roll_back_change_segment',
   'start_draft_evaluation',
   'cancel_draft_evaluation',
   'start_eval_case_trial',

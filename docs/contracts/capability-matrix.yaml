@@ -22,7 +22,7 @@ ratchet:
   console_unexplained: 10
   kernel_test_missing: 3
   e2e_waived: 65
-  repeat_unclear: 50
+  repeat_unclear: 48
 capabilities:
   add_eval_case:
     console: required
@@ -884,7 +884,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: change_segment_rolled_back" # the same rollback again finds the segment rolled back, nothing written (409)
   roll_back_platform_change_segment:
     console: required
     agents: []
@@ -1098,7 +1098,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: change_verification_cooldown" # the same verification again inside the cooldown is refused before anything is checked, nothing written (429)
   verify_fact:
     console: required
     agents: []
