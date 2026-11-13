@@ -358,22 +358,34 @@ export function SystemAccessCard({
     { gatekeeperId: gate.gateId },
     { enabled: menuConfirm === 'rotate' },
   );
+  // Review #501 of #1158 (P3): a read cached from an earlier look at this gate (its drawer, the
+  // move sheet, an earlier confirm) comes back as ready + refreshing — still checking, not
+  // checked; a refresh that fails keeps the old data but is no answer either.
+  const rotateState = rotateRead.state;
+  const rotateChecking =
+    rotateState.status === 'loading' || (rotateState.status === 'ready' && rotateState.refreshing);
+  const rotateCheckFailed =
+    rotateState.status === 'error' ||
+    (rotateState.status === 'ready' && rotateState.refreshError !== null);
   const pendingMove =
-    menuConfirm === 'rotate' && rotateRead.state.status === 'ready'
-      ? (rotateRead.state.data.pendingAddressChange ?? null)
+    menuConfirm === 'rotate' &&
+    rotateState.status === 'ready' &&
+    !rotateChecking &&
+    !rotateCheckFailed
+      ? (rotateState.data.pendingAddressChange ?? null)
       : null;
   // Review #501 of #1158: 签发 waits for that read (it is quick), so the line is there before the
   // secret is issued; a read that fails does not hold a rotation up — the confirm says it could
   // not tell, and what a waiting move would mean.
   const pendingMoveLine = (): string | null => {
     if (menuConfirm !== 'rotate') return null;
-    if (rotateRead.state.status === 'loading') {
+    if (rotateChecking) {
       return t(
         '正在确认这个门有没有等平台管理员批准的更换地址申请…',
         'Checking whether a move of this gate is waiting for a platform administrator…',
       );
     }
-    if (rotateRead.state.status === 'error') {
+    if (rotateCheckFailed) {
       return t(
         '没能确认这个门有没有等批准的更换地址申请；有的话，批准后门改用为那次更换生成的密钥，这次签发的密钥随之作废',
         'Could not check whether a move of this gate is waiting for approval; if one is, approving it gives the gate the secret made for the move, and the one issued now stops working',
@@ -579,7 +591,7 @@ export function SystemAccessCard({
               ...(pendingMoveLine() !== null ? [pendingMoveLine() as string] : []),
             ]}
             confirmLabel={t('签发', 'Issue')}
-            confirmDisabled={menuConfirm === 'rotate' && rotateRead.state.status === 'loading'}
+            confirmDisabled={menuConfirm === 'rotate' && rotateChecking}
             onConfirm={async () => {
               const result = await http.call<RotateConnectionSecretResultWire>(
                 'rotate_connection_secret',

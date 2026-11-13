@@ -1097,6 +1097,48 @@ describe('SystemsPage', () => {
     ).toBe(false);
   });
 
+  // Review #501 of #1158 (P3): opened again, the confirm finds the earlier read cached — it still
+  // waits for the fresh one, and a fresh read that fails says it could not tell.
+  it('legacy 701: opened again, 签发 waits for a fresh read, not the cached one', async () => {
+    let reads = 0;
+    let fail: (error: unknown) => void = () => {};
+    const http = scriptedHttp({
+      execution_readiness: () => readiness({ principalId: 'p-self', gates: [gate()] }),
+      get_gatekeeper: () => {
+        reads += 1;
+        if (reads === 1) return { id: 'gk-1', name: '库存', endpoint: 'http://gate-a:8090' };
+        return new Promise((_resolve, reject) => {
+          fail = reject;
+        });
+      },
+    });
+    renderPage(http);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    const openConfirm = async () => {
+      fireEvent.pointerDown(within(card).getByTestId('gatekeeper-more'), { button: 0 });
+      fireEvent.click(await screen.findByTestId('gatekeeper-rotate-secret'));
+      return screen.findByTestId('gatekeeper-rotate-secret-confirm');
+    };
+    const first = await openConfirm();
+    const issueIn = (confirm: HTMLElement) =>
+      within(confirm).getByRole('button', { name: '签发' }) as HTMLButtonElement;
+    await waitFor(() => expect(issueIn(first).disabled).toBe(false));
+    fireEvent.click(within(first).getByRole('button', { name: '取消' }));
+    await waitFor(() =>
+      expect(screen.queryByTestId('gatekeeper-rotate-secret-confirm')).toBeNull(),
+    );
+
+    const second = await openConfirm();
+    await waitFor(() => expect(reads).toBe(2));
+    expect(second.textContent).toContain('正在确认这个门有没有等平台管理员批准的更换地址申请');
+    expect(issueIn(second).disabled).toBe(true);
+    fail(new HttpError('network', 'offline'));
+    await waitFor(() =>
+      expect(second.textContent).toContain('没能确认这个门有没有等批准的更换地址申请'),
+    );
+    expect(issueIn(second).disabled).toBe(false);
+  });
+
   // Review #501 of #1158: both act for the owner only (rotate_connection_secret and
   // propose_gate_address_change); a member's row menu has neither.
   it('legacy 701: a member sees neither 更换地址 nor 重新签发连接密钥 on a self-connected gate', async () => {
