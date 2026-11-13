@@ -25037,6 +25037,59 @@
         "kind": {
           "type": "string"
         },
+        "lastAddressChangeOutcome": {
+          "additionalProperties": false,
+          "properties": {
+            "accountCredentialsLeftOnOldHost": {
+              "type": "boolean"
+            },
+            "createdAt": {
+              "type": "string"
+            },
+            "endedAt": {
+              "type": "string"
+            },
+            "fromEndpoint": {
+              "type": "string"
+            },
+            "gatekeeperId": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "rejectionReason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "rejected",
+                "withdrawn",
+                "expired"
+              ],
+              "type": "string"
+            },
+            "toEndpoint": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "gatekeeperId",
+            "fromEndpoint",
+            "toEndpoint",
+            "status",
+            "createdAt",
+            "endedAt",
+            "rejectionReason",
+            "accountCredentialsLeftOnOldHost"
+          ],
+          "type": "object"
+        },
         "name": {
           "type": "string"
         },

@@ -189,6 +189,27 @@ export async function findOpenGateAddressChange(
   return row ? mapRow(row) : null;
 }
 
+/** Legacy 715: the gate's latest proposal that is no longer open — final, or `proposed` and past
+ *  `expires_at` by the database's clock (`lapsed`, not recorded as `expired` yet). One proposal is
+ *  open at a time and a new one records a lapsed one first (I-A2, `expireStaleGateAddressChange`),
+ *  so a gate's proposals follow one another: the latest created is the latest ended. */
+export async function findLatestEndedGateAddressChange(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperId: string,
+): Promise<{ readonly row: GateAddressChangeRow; readonly lapsed: boolean } | null> {
+  const result = await client.query<GateAddressChangeDbRow>(
+    `select ${COLUMNS} from gate_address_changes c
+      where c.workspace_id = $1 and c.gatekeeper_object_id = $2
+        and (c.status <> 'proposed' or now() >= c.expires_at)
+      order by c.created_at desc, c.id desc
+      limit 1`,
+    [workspaceId, gatekeeperId],
+  );
+  const row = result.rows[0];
+  return row ? { row: mapRow(row), lapsed: row.status === 'proposed' } : null;
+}
+
 /** Whether a proposal of this workspace ever carried `salt` — a secret serves one proposal,
  *  whatever became of it. */
 export async function gateAddressChangeSaltUsed(

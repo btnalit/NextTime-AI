@@ -1304,7 +1304,12 @@ const connectionCapabilities = [
       'is listed only to its proposer, a builder or the owner (D-26, I16). Operations the ' +
       'connector deny list refuses are left out. Legacy 674: while the platform suspends a gate ' +
       'the workspace connected itself, platformSuspension says when and the reason given (never ' +
-      'who), and its Operations stay listed — kept, refused on every call until resumed.',
+      'who), and its Operations stay listed — kept, refused on every call until resumed. ' +
+      'Legacy 701 / 715: for a workspace owner, a gate the workspace connected itself also ' +
+      'carries its address, its open proposal to move (pendingAddressChange) and how its latest ' +
+      'proposal that is no longer open ended (lastAddressChangeOutcome: applied — account ' +
+      'credentials left at the old address to clear; rejected — the reason given, never who; ' +
+      'withdrawn; expired).',
   },
   {
     name: 'list_operations',
@@ -4135,7 +4140,7 @@ const platformCapabilities = [
       .strict(),
     resultSchema: wire.PlatformGateAddressChangeWireSchema,
     description:
-      'Reject a proposal to move a self-connected gate to a new address; the gate keeps its address and secret, and the workspace sees the reason. 409 gate_address_change_decided when it is no longer open.',
+      'Reject a proposal to move a self-connected gate to a new address; the gate keeps its address and secret. The reason is shown to the workspace’s owners on the gate (get_gatekeeper’s lastAddressChangeOutcome), never who rejected it: write it for them, about this proposal only. 409 gate_address_change_decided when it is no longer open.',
   },
   // S6-B (docs/console-completion-plan.md §5.4 / §6; docs/platform-admin-design.md §6.2): the
   // console's only kernel-side piece of provider management. The provider records live in

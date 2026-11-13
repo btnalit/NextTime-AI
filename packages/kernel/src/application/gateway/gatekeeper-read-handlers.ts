@@ -33,7 +33,10 @@ import {
   readGatekeeperPlatformPolicy,
 } from '../gates/index.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
-import { pendingGateAddressChangeWire } from './gate-address-change-handlers.js';
+import {
+  lastGateAddressChangeOutcomeWire,
+  pendingGateAddressChangeWire,
+} from './gate-address-change-handlers.js';
 import { resolveGateTarget } from './gate-target.js';
 
 /**
@@ -334,6 +337,11 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
   const pendingAddressChange = ownerOfSelfConnection
     ? await pendingGateAddressChangeWire(client, workspaceId, gatekeeperId)
     : null;
+  // Legacy 715: and how its latest proposal that is no longer open ended (the platform
+  // administrator's decision and reason, or its expiry), which the owner otherwise never learns.
+  const lastAddressChangeOutcome = ownerOfSelfConnection
+    ? await lastGateAddressChangeOutcomeWire(client, workspaceId, gatekeeperId)
+    : null;
   const health = await healthProbe;
   const operations = allOperations.filter((op) => {
     if (!operationVisibleTo(viewer, op)) return false;
@@ -361,6 +369,7 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
         ? { endpoint: redactConnectionAddress('endpoint', record.endpoint) }
         : {}),
       ...(pendingAddressChange ? { pendingAddressChange } : {}),
+      ...(lastAddressChangeOutcome ? { lastAddressChangeOutcome } : {}),
       ...(suspension?.suspendedAt
         ? {
             platformSuspension: {
