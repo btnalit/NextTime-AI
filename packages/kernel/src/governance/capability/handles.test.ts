@@ -29,7 +29,6 @@ import {
   issueHandle,
   revokeEntrySessionHandles,
   revokeHandle,
-  revokeRoleScopedSessionHandles,
   revokeSession,
   verifyHandle,
 } from './handles.js';
@@ -66,6 +65,8 @@ interface FakeSessionRow {
   onBehalfOf: string;
   /** `sessions.kind` — omitted reads as `mcp_session`, a bearer Handle's kind. */
   kind?: string;
+  /** `sessions.status` — omitted reads as `active`. */
+  status?: string;
 }
 
 interface FakeHandleRow {
@@ -85,7 +86,7 @@ function createFakeCapabilityClient() {
   const query = vi.fn(async (text: string, params: unknown[] = []) => {
     const sql = text.trim();
 
-    if (sql.startsWith('select workspace_id, on_behalf_of, kind from sessions')) {
+    if (sql.startsWith('select workspace_id, on_behalf_of, kind, status from sessions')) {
       const [sessionId] = params as [string];
       const row = sessions.get(sessionId);
       return {
@@ -95,11 +96,30 @@ function createFakeCapabilityClient() {
                 workspace_id: row.workspaceId,
                 on_behalf_of: row.onBehalfOf,
                 kind: row.kind ?? 'mcp_session',
+                status: row.status ?? 'active',
               },
             ]
           : [],
         rowCount: row ? 1 : 0,
       };
+    }
+
+    if (
+      sql.startsWith('select revoked_at is not null as revoked, session_id from capability_handles')
+    ) {
+      const [, jti] = params as [string, string];
+      const row = handles.get(jti);
+      return {
+        rows: row ? [{ revoked: row.revoked_at !== null, session_id: row.session_id }] : [],
+        rowCount: row ? 1 : 0,
+      };
+    }
+
+    if (sql.startsWith('select 1 from sessions where id = $1 for no key update')) {
+      const [sessionId] = params as [string];
+      return sessions.has(sessionId)
+        ? { rows: [{ '?column?': 1 }], rowCount: 1 }
+        : { rows: [], rowCount: 0 };
     }
 
     if (sql.startsWith('insert into capability_handles')) {
@@ -1317,98 +1337,6 @@ describe.runIf(DATABASE_URL !== undefined)(
         HandleRevoked,
       );
       // Untouched: not a `kind='entry'` session, or belongs to a different principal.
-      await expect(verifyHandle(webIssued.token, { publicKey, isRevoked })).resolves.toBeTruthy();
-      await expect(
-        verifyHandle(otherOwnerIssued.token, { publicKey, isRevoked }),
-      ).resolves.toBeTruthy();
-    });
-
-    // W5.5 review fix: `set_principal_role` now calls this instead of `revokeEntrySessionHandles`
-    // above — a role change must reach every session kind whose ceiling depends on role, not just
-    // the resident entry agent's.
-    it('revokeRoleScopedSessionHandles revokes handles under both kind=entry and kind=mcp_session sessions, and leaves other kinds/principals untouched', async () => {
-      const { privateKey, publicKey } = await generateEphemeralHandleKeyPair();
-      const scope: CapabilityScope = { capabilities: ['get_object'], resources: {} };
-
-      const targetPrincipalId = otherPrincipalId;
-      const entrySessionId = await insertSession(workspaceId, targetPrincipalId, targetPrincipalId);
-      const mcpSessionId = await withWorkspace(
-        pool,
-        { workspaceId, principalId: targetPrincipalId },
-        async (client) => {
-          const id = randomUUID();
-          await client.query(
-            `insert into sessions (workspace_id, id, principal_id, kind, on_behalf_of, status)
-             values ($1, $2, $3, 'mcp_session', $3, 'active')`,
-            [workspaceId, id, targetPrincipalId],
-          );
-          return id;
-        },
-      );
-      // A non-role-scoped (web) session for the same principal, and an entry session for a
-      // *different* principal — neither must be touched.
-      const webSessionId = await withWorkspace(
-        pool,
-        { workspaceId, principalId: targetPrincipalId },
-        async (client) => {
-          const id = randomUUID();
-          await client.query(
-            `insert into sessions (workspace_id, id, principal_id, kind, on_behalf_of, status)
-             values ($1, $2, $3, 'web', $3, 'active')`,
-            [workspaceId, id, targetPrincipalId],
-          );
-          return id;
-        },
-      );
-
-      const [entryIssued, mcpIssued, webIssued, otherOwnerIssued] = await withWorkspace(
-        pool,
-        { workspaceId, principalId: ownerId },
-        async (client) => {
-          const entry = await issueHandle(client, {
-            sessionId: entrySessionId,
-            scope,
-            ttlSeconds: 300,
-            privateKey,
-          });
-          const mcp = await issueHandle(client, {
-            sessionId: mcpSessionId,
-            scope,
-            ttlSeconds: 300,
-            privateKey,
-          });
-          const web = await issueHandle(client, {
-            sessionId: webSessionId,
-            scope,
-            ttlSeconds: 300,
-            privateKey,
-          });
-          const otherOwner = await issueHandle(client, {
-            sessionId,
-            scope,
-            ttlSeconds: 300,
-            privateKey,
-          });
-          return [entry, mcp, web, otherOwner];
-        },
-      );
-
-      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-        revokeRoleScopedSessionHandles(client, workspaceId, targetPrincipalId),
-      );
-
-      const isRevoked = (jti: string): Promise<boolean> =>
-        withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-          createDbRevocationCheck(client)(jti),
-        );
-
-      await expect(verifyHandle(entryIssued.token, { publicKey, isRevoked })).rejects.toThrow(
-        HandleRevoked,
-      );
-      await expect(verifyHandle(mcpIssued.token, { publicKey, isRevoked })).rejects.toThrow(
-        HandleRevoked,
-      );
-      // Untouched: not an `entry`/`mcp_session` kind, or belongs to a different principal.
       await expect(verifyHandle(webIssued.token, { publicKey, isRevoked })).resolves.toBeTruthy();
       await expect(
         verifyHandle(otherOwnerIssued.token, { publicKey, isRevoked }),

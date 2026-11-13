@@ -244,6 +244,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       ws: string,
       principalId: string,
       kind: 'entry' | 'mcp_session' | 'worker_run',
+      capabilities: readonly string[] = ['search'],
     ): Promise<{ readonly sessionId: string; readonly jti: string }> {
       return withAdminClient(pool, async (client) => {
         const session = await client.query<{ id: string }>(
@@ -255,7 +256,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         if (!sessionId) throw new Error('issueSessionHandle: no session row');
         const issued = await issueHandle(client, {
           sessionId,
-          scope: { capabilities: ['search'], resources: {} },
+          scope: { capabilities: [...capabilities], resources: {} },
           ttlSeconds: 3600,
           privateKey,
         });
@@ -871,6 +872,55 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(await sessionStatus(live.sessionId)).toBe('revoked');
         expect(await handleRevoked(live.jti)).toBe(true);
         expect(await roleAudits()).toEqual([true, undefined]);
+      });
+
+      it('set_membership_role (legacy 699): a role change ends the entry and MCP sessions and the Workers the new role does not cover; a promotion keeps a Worker; the console session stays', async () => {
+        const user = await createUser(pool, {
+          login: `role-workers-${randomUUID().slice(0, 8)}`,
+          displayName: 'Role Workers Fixture',
+          password: PASSWORD,
+        });
+        const { principalId } = await callAsAdmin<UserMembershipWire>('add_membership', {
+          userId: user.id,
+          workspaceId,
+          role: 'builder',
+        });
+        const entry = await issueSessionHandle(workspaceId, principalId, 'entry');
+        const mcp = await issueSessionHandle(workspaceId, principalId, 'mcp_session');
+        // `propose_operation` is `minRole: 'builder'`: a member may not hold it.
+        const builderWorker = await issueSessionHandle(workspaceId, principalId, 'worker_run', [
+          'search',
+          'propose_operation',
+        ]);
+        const memberWorker = await issueSessionHandle(workspaceId, principalId, 'worker_run');
+        const web = await withAdminClient(pool, async (client) => {
+          const result = await client.query<{ id: string }>(
+            `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+             values ($1, $2, 'web', $2, 'active') returning id`,
+            [workspaceId, principalId],
+          );
+          return result.rows[0]?.id ?? '';
+        });
+
+        await callAsAdmin('set_membership_role', { userId: user.id, workspaceId, role: 'member' });
+        for (const ended of [entry, mcp, builderWorker]) {
+          expect(await sessionStatus(ended.sessionId)).toBe('revoked');
+          expect(await handleRevoked(ended.jti)).toBe(true);
+        }
+        expect(await sessionStatus(memberWorker.sessionId)).toBe('active');
+        expect(await handleRevoked(memberWorker.jti)).toBe(false);
+        // Every request reads the person's role now, so the console session carries on.
+        expect(await sessionStatus(web)).toBe('active');
+
+        await callAsAdmin('set_membership_role', { userId: user.id, workspaceId, role: 'builder' });
+        expect(await sessionStatus(memberWorker.sessionId)).toBe('active');
+        expect(await handleRevoked(memberWorker.jti)).toBe(false);
+
+        // An auditor starts no Workers: whatever a Worker holds, the new role covers none of it.
+        await callAsAdmin('set_membership_role', { userId: user.id, workspaceId, role: 'auditor' });
+        expect(await sessionStatus(memberWorker.sessionId)).toBe('revoked');
+        expect(await handleRevoked(memberWorker.jti)).toBe(true);
+        expect(await sessionStatus(web)).toBe('active');
       });
 
       it('remove_membership: disables the membership Principal; the last owner is refused', async () => {

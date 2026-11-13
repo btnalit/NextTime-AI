@@ -100,6 +100,15 @@ import {
  * pauses (I-G6, with a grace period — default 10 minutes, `goalBudgetGraceMs`); only a live step
  * of a live GoalRun raises actions and has them run (I-G9). I-G3/I-G4/I-G7/I-G8 are enforced where
  * their mechanism lives (a DB trigger for I-G3's base revision; GO2–GO4 code for the rest).
+ *
+ * ## Handle revocation — I-H1
+ *
+ * Legacy 699 / 707: a revoked session has no valid Handle (`revoked_at is null and expires_at >
+ * now()`). Enforced by governance 0042 — the `sessions_revoked_revokes_handles` trigger revokes a
+ * session's Handles when it is revoked, and the insert trigger refuses a Handle under a revoked
+ * session. `checkIH1` is the monitor: it reads non-zero if the trigger is dropped or stops reaching
+ * rows (it is a `security definer` function and `capability_handles` must never FORCE row level
+ * security, which would hide every row from it).
  */
 
 export interface InvariantCheckResult {
@@ -661,6 +670,25 @@ async function checkIP1Link(client: PoolClient): Promise<InvariantCheckResult> {
 }
 
 // -------------------------------------------------------------------------------------------
+// I-H1 — a revoked session has no valid Handle (legacy 699 / 707, see module doc comment).
+// -------------------------------------------------------------------------------------------
+
+async function checkIH1(client: PoolClient): Promise<InvariantCheckResult> {
+  const result = await client.query<{ workspace_id: string; jti: string }>(
+    `select h.workspace_id, h.jti
+     from capability_handles h
+     join sessions s on s.workspace_id = h.workspace_id and s.id = h.session_id
+     where s.status = 'revoked' and h.revoked_at is null and h.expires_at > now()
+     order by h.created_at desc, h.jti desc`,
+  );
+  return {
+    invariant: 'I-H1',
+    violations: result.rows.length,
+    sample: result.rows.slice(0, SAMPLE_LIMIT).map((row) => `${row.workspace_id}:${row.jti}`),
+  };
+}
+
+// -------------------------------------------------------------------------------------------
 // Beyond I1–I16 — operational-health checks (see module doc comment).
 // -------------------------------------------------------------------------------------------
 
@@ -798,6 +826,7 @@ export const INVARIANT_CHECK_IDS: readonly string[] = [
   'I-G5',
   'I-G6',
   'I-G9',
+  'I-H1',
   'ops.one_running_turn',
   'ops.outbox_stuck',
   'ops.collector_silent',
@@ -839,6 +868,7 @@ export async function runInvariantChecks(
       await checkIG5(client, SAMPLE_LIMIT),
       await checkIG6(client, SAMPLE_LIMIT, goalBudgetGraceMs),
       await checkIG9(client, SAMPLE_LIMIT),
+      await checkIH1(client),
       await checkOneRunningTurn(client),
       await checkOutboxStuck(client, thresholdMs),
       await checkCollectorSilent(client, collectorSilenceMs),

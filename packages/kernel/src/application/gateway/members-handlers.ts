@@ -1,11 +1,9 @@
 import type { PrincipalKind, PrincipalRefusalReason, Role } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import {
-  revokeOnBehalfOfSessionHandles,
-  revokeRoleScopedSessionHandles,
-} from '../../governance/capability/index.js';
+import { revokeOnBehalfOfSessionHandles } from '../../governance/capability/index.js';
 import { countGatekeepers } from '../../governance/gatekeepers/index.js';
 import { currentPrincipalId } from '../chat/index.js';
+import { applyRoleChange } from '../task/role-change.js';
 import { generateApiKey, hashApiKey, isLastActiveHumanOwner } from './auth.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
@@ -452,9 +450,11 @@ export const setPrincipalRoleHandler: CapabilityHandler = async (client, workspa
   // role — the resident entry agent's *and* any `issue_handle` `mcp_session` ones (which can carry
   // a ttl of up to 30 days) — otherwise a demoted member keeps builder-gated `propose_*` until ttl,
   // and a promoted one waits for it. The agent-host runtime's in-memory cache re-checks its cached
-  // Handle's revocation on the next Turn and reissues on its own.
+  // Handle's revocation on the next Turn and reissues on its own. Legacy 699: and a running
+  // Worker's, when the new role no longer covers it — the rule the platform's
+  // `set_membership_role` applies too (`applyRoleChange`).
   if (role !== target.role) {
-    await revokeRoleScopedSessionHandles(client, workspaceId, principalId);
+    await applyRoleChange(client, workspaceId, principalId);
   }
 
   const wire = toWirePrincipal({ ...target, role });

@@ -1004,6 +1004,10 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // invalid issuance request (unknown session, non-positive ttl) — the caller's own malformed
   // request, same 400 bucket every other Handle-mint failure mode above already uses.
   if (err instanceof HandleIssuanceError) {
+    // Legacy 699: the caller's session or the Handle it attenuates from was revoked while the call
+    // ran — its credential is gone, the same generic 401 as a revoked Handle.
+    if (err.code !== undefined)
+      return { status: 401, code: 'unauthorized', message: 'unauthorized' };
     return { status: 400, code: 'invalid_params', message: err.message };
   }
   // Review fix 2026-09 (code-review finding F10): `invoke_worker`'s task-runtime precondition

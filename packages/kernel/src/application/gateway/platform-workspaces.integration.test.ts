@@ -23,7 +23,7 @@ import {
   readAgentPolicy,
   readEffectiveAgentProfile,
 } from '../../governance/agent-profile/index.js';
-import { HANDLE_SIGNING_ALG } from '../../governance/capability/index.js';
+import { HANDLE_SIGNING_ALG, issueHandle } from '../../governance/capability/index.js';
 import { createServer } from '../../index.js';
 import {
   CONSOLE_SESSION_COOKIE,
@@ -1202,6 +1202,50 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect((await callWithOwnerApiKey(app)).statusCode).toBe(200);
         // Two password verifies (scrypt) plus the HTTP round-trips above.
       }, 60_000);
+
+      it('legacy 707: disabling revokes every valid Handle in the workspace — a Worker’s too — though the kernel runs it on the platform plane', async () => {
+        // llm-proxy honours only the revocation table, so a Handle the disable left valid kept
+        // reaching the model until its ttl. governance 0042's trigger revokes a session's Handles
+        // when the session is marked revoked; it is `security definer`, because this caller's
+        // `app.workspace_id` is the platform's and row level security would hide every row.
+        const issued = await inWorkspace(workspaceId, ownerPrincipalId, async (client) => {
+          const handles: string[] = [];
+          for (const kind of ['entry', 'worker_run', 'mcp_session'] as const) {
+            const session = await client.query<{ id: string }>(
+              `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+               values ($1, $2, $3, $2, 'active') returning id`,
+              [workspaceId, ownerPrincipalId, kind],
+            );
+            const id = session.rows[0]?.id;
+            if (!id) throw new Error('failed to insert the fixture session');
+            const handle = await issueHandle(client, {
+              sessionId: id,
+              scope: { capabilities: ['search'], resources: {} },
+              ttlSeconds: 3600,
+              privateKey,
+            });
+            handles.push(handle.jti);
+          }
+          return handles;
+        });
+        const validHandles = () =>
+          withAdminClient(pool, async (client) => {
+            const result = await client.query<{ jti: string }>(
+              `select jti from capability_handles
+                where jti = any($1::uuid[]) and revoked_at is null and expires_at > now()`,
+              [issued],
+            );
+            return result.rows.map((row) => row.jti);
+          });
+        expect(await validHandles()).toHaveLength(3);
+
+        await callAsAdmin('set_workspace_status', { workspaceId, status: 'disabled' });
+        expect(await validHandles()).toEqual([]);
+
+        // Re-enabling restores the channels, never a revoked Handle: each is issued again.
+        await callAsAdmin('set_workspace_status', { workspaceId, status: 'active' });
+        expect(await validHandles()).toEqual([]);
+      }, 30_000);
     });
   },
 );
