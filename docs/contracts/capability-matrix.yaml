@@ -22,7 +22,7 @@ ratchet:
   console_unexplained: 10
   kernel_test_missing: 1
   e2e_waived: 65
-  repeat_unclear: 30
+  repeat_unclear: 26
 capabilities:
   add_eval_case:
     console: required
@@ -172,7 +172,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: creates  # names are not unique: each call makes another workspace
   decide_plan_revision:
     console: required
     agents: []
@@ -577,7 +577,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: user_not_found"  # the first call deletes the source user, so the same call again finds none (404)
   mint_connection_secret:
     console: required
     agents: []
@@ -741,12 +741,12 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent # purged already: the second call skips the user as not found
   purge_workspace:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent # the preview (no confirm) removes nothing; a confirmed purge again finds no workspace (404 workspace_not_found)
   query_decisions:
     console: required
     agents: []

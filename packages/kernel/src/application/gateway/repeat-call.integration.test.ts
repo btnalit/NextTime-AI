@@ -955,6 +955,31 @@ async function linkedConnector(ctx: RecipeContext): Promise<{ name: string; jti:
   return { name, jti: await entryHandle(ctx) };
 }
 
+/** A user with no password yet (one an API key made, before anyone logged in as them), in no
+ *  workspace: what `purge_user` purges, and what `merge_user` may merge away. */
+async function passwordlessUser(ctx: RecipeContext): Promise<string> {
+  const user = await createUser(ctx.pool, {
+    login: `repeat-passwordless-${randomUUID().slice(0, 8)}`,
+    displayName: 'Passwordless Person',
+  });
+  return user.id;
+}
+
+/** A workspace of the case's own, disabled past its retention: what `purge_workspace` purges. */
+async function purgeableWorkspace(ctx: RecipeContext): Promise<string> {
+  const owner = await platformUser(ctx);
+  const created = await createWorkspaceWithOwner(ctx.pool, {
+    name: `repeat-purgeable-${randomUUID().slice(0, 8)}`,
+    owner: { userId: owner.id, displayName: owner.displayName },
+  });
+  await ctx.pool.query(
+    `update workspaces set status = 'disabled', disabled_at = now() - interval '8 days'
+      where id = $1`,
+    [created.workspaceId],
+  );
+  return created.workspaceId;
+}
+
 /** The entry Handle `linkedConnector` issued, by connector name (for the recipe's `holds`). */
 const ENTRY_JTI = new Map<string, string>();
 
@@ -2258,6 +2283,60 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       setUp: async (ctx) => ({ segmentId: await installedPackSegment(ctx) }),
     },
   },
+  create_workspace: {
+    // Names are not unique: each call makes another workspace, with an owner of its own Principal.
+    'a new workspace, another user its owner': {
+      first: expect.objectContaining({ name: 'Repeat Workspace', status: 'active' }),
+      setUp: async (ctx) => ({
+        name: 'Repeat Workspace',
+        ownerUserId: (await platformUser(ctx)).id,
+      }),
+    },
+  },
+  merge_user: {
+    // The first call moves the source's memberships to the target and deletes the source, so the
+    // same call again finds no source (404 user_not_found), nothing written.
+    "a member of the case's workspace with no password, into another user": {
+      first: expect.objectContaining({
+        memberships: [expect.objectContaining({ role: 'member' })],
+      }),
+      setUp: async (ctx) => {
+        const sourceUserId = await passwordlessUser(ctx);
+        await as(ctx, 'add_membership', {
+          userId: sourceUserId,
+          workspaceId: ctx.seed.workspaceId,
+          role: 'member',
+        });
+        return { sourceUserId, targetUserId: (await platformUser(ctx)).id };
+      },
+    },
+  },
+  purge_user: {
+    // Purged already: the second call skips the user as not found, nothing written.
+    'a user with no password, in no workspace': {
+      first: expect.objectContaining({ purgedCount: 1 }),
+      second: expect.objectContaining({
+        purgedCount: 0,
+        outcomes: [expect.objectContaining({ status: 'skipped', reason: 'user_not_found' })],
+      }),
+      setUp: async (ctx) => ({ userIds: [await passwordlessUser(ctx)] }),
+    },
+  },
+  purge_workspace: {
+    // The preview (no confirm) counts what a purge would remove and removes nothing.
+    'a workspace disabled past its retention, previewed': {
+      first: expect.objectContaining({ executed: false }),
+      second: expect.objectContaining({ executed: false }),
+      setUp: async (ctx) => ({ workspaceId: await purgeableWorkspace(ctx) }),
+    },
+    // Confirmed: the first call removes the workspace, so the same call again finds none (404
+    // workspace_not_found), nothing written.
+    'a workspace disabled past its retention, confirmed': {
+      repeat: 'conflict: workspace_not_found',
+      first: expect.objectContaining({ executed: true }),
+      setUp: async (ctx) => ({ workspaceId: await purgeableWorkspace(ctx), confirm: true }),
+    },
+  },
   set_default_modules: {
     // The default modules it already has: the settings keep the version they replace in the
     // history and take the next (as update_platform_settings does); what a new workspace gets
@@ -2350,6 +2429,10 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
 /** Rows whose schema-built params cannot make a first call succeed on the bare seed — a param
  *  naming something the walk has no value for — run their recipes instead of that case. */
 const RECIPES_ONLY: ReadonlySet<string> = new Set([
+  'create_workspace',
+  'merge_user',
+  'purge_user',
+  'purge_workspace',
   'set_default_modules',
   'set_connector_mode',
   'suspend_self_connection',
