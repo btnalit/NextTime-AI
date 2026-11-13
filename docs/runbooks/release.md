@@ -2809,6 +2809,14 @@ where object_type = 'Operation' and properties->>'status' = 'published'
   预期为空：本仓库自带的本体和验收脚本发布的本体都能解析；手工发布过的本体以查询结果为准。不为空时，那些版本照常可用，也不挡别的本体发布，但它们所在的族下一次发布必须先改正；升级后巡检会把它们报为 I-P1-LINK。
 - **回滚**：回代码即可，没有迁移。
 
+### 3.164 启用门必须带预览给出的清单摘要（#1143，遗留 311，0.68.0 之后的下一版）
+
+无迁移，无主机动作。线上契约：`enable_gate_instance` 的 `manifestDigest` 由可选改为必填。
+
+- **行为变化**：直接调 API 启用门实例时，必须先调 `preview_gate_instance_enable`，再把它返回的 `manifestDigest` 带给 `enable_gate_instance`；不带返回 400，预览之后清单变了返回 409 `manifest_changed`，重新预览即可。控制台本来就先预览，不受影响。
+- **升级前**：主机上自己写的脚本或集成如果直接调 `enable_gate_instance`，升级前改成先预览再带摘要。仓库自带的 `demo.sh`、`accept_s2.sh`、`accept_s4.sh` 已改。
+- **回滚**：回代码即可，没有迁移。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
