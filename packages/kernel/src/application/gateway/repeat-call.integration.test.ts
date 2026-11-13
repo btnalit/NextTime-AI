@@ -20,7 +20,7 @@ import {
   createGateConnectionSecrets,
 } from '../../adapters/gatekeeper-client/index.js';
 import { ApprovalDrainer, requestAction } from '../../governance/approval/index.js';
-import { HANDLE_SIGNING_ALG } from '../../governance/capability/index.js';
+import { HANDLE_SIGNING_ALG, issueHandle } from '../../governance/capability/index.js';
 import {
   getPublishedOperation,
   importManifest,
@@ -123,6 +123,12 @@ interface Recipe {
   /** For a `repeats` row: what the second call moves, read after each call (the two reads must
    *  differ), so a change elsewhere in the digest cannot stand in for it. */
   readonly moves?: (ctx: RecipeContext, params: Record<string, unknown>) => Promise<unknown>;
+  /** What the second call must answer, when the row's answer says what it did (a count of what
+   *  it revoked): an idempotent row's second call did nothing (per #493 on batch 24). */
+  readonly second?: unknown;
+  /** What must still hold after both calls, beyond the digest: state neither call may change
+   *  (an entry Handle a no-op must not re-issue, per #493 on batch 24). */
+  readonly holds?: (ctx: RecipeContext, params: Record<string, unknown>) => Promise<void>;
 }
 
 /** The Handle each spawned WorkerRun was given, by WorkerRun id (the supervisor stub's record). */
@@ -867,8 +873,9 @@ async function entryTemplateRead(ctx: RecipeContext): Promise<Record<string, unk
   };
 }
 
-/** A gate the case's owner connected itself (create_connection lands a self connection): the
- *  workspace and Gatekeeper the platform's cut-off (`suspend_self_connection`) takes. */
+/** A gate the case's owner connected itself (create_connection lands a self connection), the
+ *  workspace's entry agent holding a live Handle: the workspace and Gatekeeper the platform's
+ *  cut-off (`suspend_self_connection`) takes. */
 async function selfConnection(
   ctx: RecipeContext,
 ): Promise<{ workspaceId: string; gatekeeperId: string }> {
@@ -878,8 +885,78 @@ async function selfConnection(
     'create_connection',
     await connectionCall(owner),
   );
+  // The workspace's entry agent holds a Handle: a change re-issues it (and audits that), so a
+  // second call that took itself for a change would write that audit row again (per #493 on
+  // batch 24).
+  await entryHandle(ctx);
   return { workspaceId: ctx.seed.workspaceId, gatekeeperId };
 }
+
+/** A live entry-agent Handle of the case's owner, on the seeded gate: an `entry` session holding
+ *  one, as the entry agent's would (what a platform change to a gate the workspace uses
+ *  re-issues). Returns its jti. */
+async function entryHandle(ctx: RecipeContext): Promise<string> {
+  const { privateKey } = await generateKeyPair(HANDLE_SIGNING_ALG, { crv: 'Ed25519' });
+  const sessionId = randomUUID();
+  return withWorkspace(
+    ctx.pool,
+    { workspaceId: ctx.seed.workspaceId, principalId: ctx.seed.ownerId },
+    async (client) => {
+      await client.query(
+        `insert into sessions (workspace_id, id, principal_id, kind, on_behalf_of, status)
+         values ($1, $2, $3, 'entry', $3, 'ready')`,
+        [ctx.seed.workspaceId, sessionId, ctx.seed.ownerId],
+      );
+      const issued = await issueHandle(client, {
+        sessionId,
+        scope: {
+          capabilities: ['observe_operation'],
+          resources: { gatekeeper: [ctx.seed.gatekeeperId] },
+        },
+        ttlSeconds: 3600,
+        privateKey,
+        basis: { kind: 'role', role: 'owner' },
+      });
+      return issued.jti;
+    },
+  );
+}
+
+/** When a Handle was revoked (null: it was not). */
+async function handleRevokedAt(ctx: RecipeContext, jti: string): Promise<string | null> {
+  const result = await ctx.pool.query<{ at: string | null }>(
+    'select revoked_at::text as at from capability_handles where jti = $1',
+    [jti],
+  );
+  return result.rows[0]?.at ?? null;
+}
+
+/** A connector of the case's own, its one catalog gate linked into the case's workspace on the
+ *  seeded Gatekeeper, the workspace's entry agent holding a live Handle (`entryHandle`): what
+ *  `set_connector_mode` re-issues when it changes what the connector lets a workspace call. Its
+ *  own, so no other file's connector is touched. */
+async function linkedConnector(ctx: RecipeContext): Promise<{ name: string; jti: string }> {
+  const name = `repeat-${randomUUID().slice(0, 8)}`;
+  const gateId = `${name}-gate`;
+  await ctx.pool.query(
+    `insert into connectors (name, kind, mode) values ($1, 'http', 'self_serve')`,
+    [name],
+  );
+  await ctx.pool.query(
+    `insert into gate_instances (gate_id, connector, display_name, transport_kind, endpoint, status)
+     values ($1, $2, $1, 'http', $3, 'enabled')`,
+    [gateId, name, `https://${gateId}.example.invalid`],
+  );
+  await ctx.pool.query(
+    `insert into workspace_gate_links (workspace_id, gate_id, gatekeeper_object_id, enabled_by)
+     values ($1, $2, $3, $4)`,
+    [ctx.seed.workspaceId, gateId, ctx.seed.gatekeeperId, ctx.seed.ownerId],
+  );
+  return { name, jti: await entryHandle(ctx) };
+}
+
+/** The entry Handle `linkedConnector` issued, by connector name (for the recipe's `holds`). */
+const ENTRY_JTI = new Map<string, string>();
 
 /** A connector row as it stands: what `set_connector_mode` writes the same of again. */
 async function connectorNow(
@@ -2199,15 +2276,22 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
   },
   set_connector_mode: {
     // The mode and deny list it already has: the connector row moves only by its updated_at, and
-    // since what it lets a workspace call does not change, no entry Handle is re-issued.
-    'the http connector, the mode and deny list it already has': {
-      first: expect.objectContaining({ name: 'http' }),
+    // since what it lets a workspace call does not change, the linked workspace's entry Handle is
+    // not re-issued, by either call.
+    "a connector of the case's own, linked here with a live entry Handle, as it already is": {
+      first: expect.objectContaining({ mode: 'self_serve', disabledOperations: [] }),
       setUp: async (ctx) => {
-        const { mode, disabledOperations } = await connectorNow(ctx, 'http');
-        return { name: 'http', mode, disabledOperations };
+        const { name, jti } = await linkedConnector(ctx);
+        ENTRY_JTI.set(name, jti);
+        const { mode, disabledOperations } = await connectorNow(ctx, name);
+        return { name, mode, disabledOperations };
       },
       entity: (result) => (result as { name?: string }).name,
-      moves: async (ctx) => (await connectorNow(ctx, 'http')).updatedAt,
+      moves: async (ctx, params) => (await connectorNow(ctx, params.name as string)).updatedAt,
+      holds: async (ctx, params) => {
+        const jti = ENTRY_JTI.get(params.name as string) as string;
+        expect(await handleRevokedAt(ctx, jti), 'the entry Handle is not re-issued').toBeNull();
+      },
     },
   },
   suspend_self_connection: {
@@ -2238,6 +2322,7 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
     // The list it already is: nothing is added or removed, nothing written.
     "the administrator's trial workspace, the case's workspace as its one target": {
       first: expect.objectContaining({ added: [expect.any(String)], removed: [] }),
+      second: expect.objectContaining({ added: [], removed: [] }),
       setUp: async (ctx) => ({
         trialWorkspaceId: (await adminTrial(ctx)).workspaceId,
         targetWorkspaceIds: [ctx.seed.workspaceId],
@@ -2248,10 +2333,12 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
     // The session is already revoked, its Handles with it: nothing is left to revoke or stop.
     "the administrator's trial workspace, its admin agent running": {
       first: { revokedSessions: 1, stoppedTurns: 0 },
+      second: { revokedSessions: 0, stoppedTurns: 0 },
       setUp: async (ctx) => ({ trialWorkspaceId: await adminTrialWithSession(ctx) }),
     },
     'every trial workspace of the administrator, its admin agent running': {
       first: { revokedSessions: 1, stoppedTurns: 0 },
+      second: { revokedSessions: 0, stoppedTurns: 0 },
       setUp: async (ctx) => {
         await adminTrialWithSession(ctx);
         return {};
@@ -2672,6 +2759,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         }
 
         expect(refusal, 'the second call must succeed').toBeUndefined();
+        if (chosen?.second !== undefined) expect(second).toEqual(chosen.second);
+        await chosen?.holds?.(ctx, params);
         if (repeat === 'idempotent') {
           const firstId = entityOf(first, params);
           if (firstId !== undefined) expect(entityOf(second, params)).toBe(firstId);

@@ -975,7 +975,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: repeats  # the same mode and deny list again rewrite the connector row (its updated_at); no Handle is re-issued
+    repeat: repeats  # the same mode and deny list again rewrite the connector row (its updated_at); no linked entry Handle is re-issued
   set_default_modules:
     console: required
     agents: []
