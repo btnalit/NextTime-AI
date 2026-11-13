@@ -1082,7 +1082,29 @@ async function platformApplyParams(ctx: RecipeContext, segmentId: string) {
 async function adminProposal(
   ctx: RecipeContext,
   shape: 'workspace' | 'platform' = 'workspace',
-): Promise<{ proposalId: string; segmentId: string }> {
+): Promise<{ proposalId: string; segmentId: string; held: HeldHandle }> {
+  const held = await adminAgent(ctx);
+  return withAdminAgentOn(async () => {
+    const agent = await callerFor(ctx.pool, held);
+    const proposal = (await dispatchCapability(
+      { pool: ctx.pool },
+      agent,
+      'propose_admin_proposal',
+      adminProposalParams(ctx, shape),
+    )) as { id: string; segments: { id: string; authority: string }[] };
+    const segmentId = proposal.segments.find((segment) =>
+      shape === 'workspace' ? segment.authority === 'workspace' : segment.authority === 'platform',
+    )?.id;
+    if (segmentId === undefined) throw new Error('adminProposal: no segment');
+    return { proposalId: proposal.id, segmentId, held };
+  });
+}
+
+/** An administrator (the case's own on a platform row, else one made for it) with a trial
+ *  workspace whose agent may propose to the case's workspace: the agent's Handle, signed by the
+ *  task runtime and presented through the source binding as the agent's container does. Its
+ *  calls run with the admin agent switched on (`ADMIN_AGENT_ENABLED`, `withAdminAgentOn`). */
+async function adminAgent(ctx: RecipeContext): Promise<HeldHandle> {
   const admin =
     ctx.admin ??
     (await createUser(ctx.pool, {
@@ -1099,8 +1121,8 @@ async function adminProposal(
     trialWorkspaceId: trial.workspaceId,
     targetWorkspaceIds: [ctx.seed.workspaceId],
   });
-  return withAdminAgentOn(async () => {
-    const issued = await withWorkspace(
+  const issued = await withAdminAgentOn(() =>
+    withWorkspace(
       ctx.pool,
       { workspaceId: trial.workspaceId, principalId: trial.ownerPrincipalId },
       (client) =>
@@ -1110,44 +1132,49 @@ async function adminProposal(
           ttlSeconds: 600,
           privateKey: getConfiguredTaskRuntime().privateKey,
         }),
-    );
-    const agent = await callerFor(ctx.pool, { handle: issued.token, presented: 'source' });
-    const proposal = (await dispatchCapability(
-      { pool: ctx.pool },
-      agent,
-      'propose_admin_proposal',
-      {
-        title: 'Disk triage',
-        description: 'What the trial workspace settled on.',
-        sourceName: `repeat-${randomUUID().slice(0, 8)}`,
-        ...(shape === 'workspace'
-          ? {
-              segments: [
+    ),
+  );
+  return { handle: issued.token, presented: 'source' };
+}
+
+/** What an admin agent proposes: one new Skill for the case's workspace, or a platform segment of
+ *  one instance. */
+function adminProposalParams(
+  ctx: RecipeContext,
+  shape: 'workspace' | 'platform',
+): Record<string, unknown> {
+  return {
+    title: 'Disk triage',
+    description: 'What the trial workspace settled on.',
+    sourceName: `repeat-${randomUUID().slice(0, 8)}`,
+    ...(shape === 'workspace'
+      ? {
+          segments: [
+            {
+              targetWorkspaceId: ctx.seed.workspaceId,
+              items: [
                 {
-                  targetWorkspaceId: ctx.seed.workspaceId,
-                  items: [
-                    {
-                      kind: 'skill_version',
-                      skill: {
-                        name: `repeat-triage-${randomUUID().slice(0, 8)}`,
-                        description: 'Triage a full disk.',
-                        markdown: '# Steps\n\n1. Look at the disk.',
-                      },
-                    },
-                  ],
+                  kind: 'skill_version',
+                  skill: {
+                    name: `repeat-triage-${randomUUID().slice(0, 8)}`,
+                    description: 'Triage a full disk.',
+                    markdown: '# Steps\n\n1. Look at the disk.',
+                  },
                 },
               ],
-            }
-          : { segments: [], platform: { items: [platformGateItem()] } }),
-      },
-    )) as { id: string; segments: { id: string; authority: string }[] };
-    const segmentId = proposal.segments.find((segment) =>
-      shape === 'workspace' ? segment.authority === 'workspace' : segment.authority === 'platform',
-    )?.id;
-    if (segmentId === undefined) throw new Error('adminProposal: no segment');
-    return { proposalId: proposal.id, segmentId };
-  });
+            },
+          ],
+        }
+      : { segments: [], platform: { items: [platformGateItem()] } }),
+  };
 }
+
+/** The admin agent Handle the case's `setUp` made, for its `by`. */
+let caseAdminAgent: HeldHandle | undefined;
+const heldAdminAgent = async (): Promise<HeldHandle> => {
+  if (caseAdminAgent === undefined) throw new Error('setUp made no admin agent');
+  return caseAdminAgent;
+};
 
 /** The entry Handle `linkedConnector` issued, by connector name (for the recipe's `holds`). */
 const ENTRY_JTI = new Map<string, string>();
@@ -2494,6 +2521,34 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       setUp: async (ctx) => ({ proposalId: (await adminProposal(ctx)).proposalId }),
     },
   },
+  propose_admin_proposal: {
+    // Each call is another proposal (a new id), from the same agent to the same workspace.
+    "the case's workspace, by an admin agent its administrator pointed at it": {
+      first: expect.objectContaining({
+        segments: [expect.objectContaining({ authority: 'workspace', status: 'proposed' })],
+      }),
+      setUp: async (ctx) => {
+        caseAdminAgent = await adminAgent(ctx);
+        return adminProposalParams(ctx, 'workspace');
+      },
+      by: heldAdminAgent,
+    },
+  },
+  agent_withdraw_admin_proposal: {
+    // Withdrawn by the first call, so the same call again finds nothing still proposed (409
+    // admin_proposal_not_open), nothing written.
+    "the agent's own proposal": {
+      first: expect.objectContaining({
+        segments: [expect.objectContaining({ status: 'withdrawn' })],
+      }),
+      setUp: async (ctx) => {
+        const { proposalId, held } = await adminProposal(ctx);
+        caseAdminAgent = held;
+        return { proposalId };
+      },
+      by: heldAdminAgent,
+    },
+  },
   reject_platform_segment: {
     // Rejected by the first call, so the same call again finds it decided (409
     // admin_proposal_segment_not_open), nothing written.
@@ -2736,6 +2791,8 @@ const RECIPES_ONLY: ReadonlySet<string> = new Set([
   'reject_admin_proposal_segment',
   'apply_admin_proposal_segment',
   'withdraw_admin_proposal',
+  'propose_admin_proposal',
+  'agent_withdraw_admin_proposal',
   'reject_platform_segment',
   'apply_platform_segment',
   'roll_back_platform_change_segment',
@@ -3005,13 +3062,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       await pool?.end();
     });
 
-    /** Every row the case can touch, but audit: its workspace's; for a platform row, every row
-     *  of the database. */
-    async function rowsBut(
-      workspaceId: string,
-      platform: boolean,
-    ): Promise<Record<string, string>> {
-      if (platform) return databaseDigest(pool);
+    /** Every row the case can touch, but audit: its workspace's; for a platform row or an admin
+     *  agent's, every row of the database. */
+    async function rowsBut(workspaceId: string, wide: boolean): Promise<Record<string, string>> {
+      if (wide) return databaseDigest(pool);
       const { audit_records: _audit, ...rest } = await workspaceDigest(pool, workspaceId);
       return rest;
     }
@@ -3098,11 +3152,16 @@ describe.runIf(DATABASE_URL !== undefined)(
                 memberId: workspace.principals.get('member') as string,
                 admin,
               });
+        // An admin agent's call is refused while the admin agent is switched off (I-A3).
+        const switchedOn = <T>(run: () => Promise<T>) =>
+          capability.adminAgentOnly === true ? withAdminAgentOn(run) : run();
         const callerNow = () =>
-          held === undefined ? Promise.resolve(caller) : callerFor(pool, held);
+          held === undefined ? Promise.resolve(caller) : switchedOn(() => callerFor(pool, held));
         const by = await callerNow();
-        const call = async () =>
-          dispatchCapability({ pool }, await callerNow(), capability.name, params);
+        const call = () =>
+          switchedOn(async () =>
+            dispatchCapability({ pool }, await callerNow(), capability.name, params),
+          );
         const entityOf = chosen?.entity ?? entityId;
         const ctx: RecipeContext = {
           pool,
@@ -3111,8 +3170,11 @@ describe.runIf(DATABASE_URL !== undefined)(
           memberId: workspace.principals.get('member') as string,
           admin,
         };
-        // A platform row's audit rows are told apart by time: those written from here on.
-        const since = platform
+        // A platform row's audit rows are told apart by time: those written from here on. So are
+        // an admin agent's: it acts from its trial workspace, not the case's, and a proposal it
+        // makes or withdraws is that workspace's record — the whole database is compared.
+        const wide = platform || capability.adminAgentOnly === true;
+        const since = wide
           ? ((await pool.query<{ now: Date }>('select clock_timestamp() as now')).rows[0]?.now ??
             null)
           : null;
@@ -3126,7 +3188,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           );
         }
         if (chosen?.first !== undefined) expect(first).toEqual(chosen.first);
-        const rowsAfterFirst = await rowsBut(workspace.workspaceId, platform);
+        const rowsAfterFirst = await rowsBut(workspace.workspaceId, wide);
         const movedAfterFirst = await chosen?.moves?.(ctx, params);
         const auditAfterFirst = new Set(
           (await auditRows(workspace.workspaceId, since)).map((row) => row.id),
@@ -3139,7 +3201,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         } catch (error) {
           refusal = error;
         }
-        const rowsAfterSecond = await rowsBut(workspace.workspaceId, platform);
+        const rowsAfterSecond = await rowsBut(workspace.workspaceId, wide);
         const movedAfterSecond = await chosen?.moves?.(ctx, params);
         const newAudit = (await auditRows(workspace.workspaceId, since)).filter(
           (row) => !auditAfterFirst.has(row.id),
