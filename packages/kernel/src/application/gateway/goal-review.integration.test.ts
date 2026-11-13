@@ -1093,6 +1093,19 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
         expect(await reviewTasks(late)).toEqual([]);
 
+        // Review #493 on #1123: a reviewer started with little of the wall clock left runs no
+        // longer than what is left, as a step's attempt does — not its own 600 s.
+        const close = await startGoal(requester, planOf([REVIEW]));
+        await succeed(close, requester, () => wallClockLeft(close, 90));
+        const durations = await raw<{ duration_limit_sec: number }>(
+          `select duration_limit_sec from tasks
+            where workspace_id = $1 and goal_run_id = $2 and purpose = 'review'`,
+          [workspaceId, close],
+        );
+        expect(durations).toHaveLength(1);
+        expect(durations[0]?.duration_limit_sec).toBeGreaterThan(0);
+        expect(durations[0]?.duration_limit_sec).toBeLessThanOrEqual(90);
+
         // F8: too few tokens left end the review at once — not after the quota let it try.
         const spent = await startGoal(requester, planOf([REVIEW]));
         await succeed(spent, requester, async (taskId) => {
@@ -1116,7 +1129,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           'acceptance check quality: the review did not run to a verdict (no_budget)',
         );
         expect(await reviewTasks(spent)).toEqual([]);
-        await notFlaggedByIG5([waits, late, spent]);
+        await notFlaggedByIG5([waits, late, close, spent]);
       } finally {
         await setConcurrency(null);
       }

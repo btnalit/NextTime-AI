@@ -60,7 +60,9 @@ import type { GoalRunRow, StepRunRow } from './types.js';
  *     tokens left settles it `no_budget` before anything else could make it wait. What only
  *     delays it — the requester's concurrency quota, a reviewed step's container not yet exited
  *     — is tried again, no later than the wall clock's end, so a wait never outlasts the goal's
- *     budget.
+ *     budget. A reviewer that starts runs no longer than what is left of the wall clock, its own
+ *     `REVIEWER_MAX_DURATION_SEC` at most — as phase D caps a step's attempt (review #493 on
+ *     #1123).
  *   - The verdict is `reviewDerivation`'s integer arithmetic over the reviewer's scores
  *     (`@nexttime/shared`), recomputed by the database from the reviewer Task's own report when
  *     the assessment is written. A criterion the reviewer could not judge makes it `unavailable`,
@@ -504,6 +506,7 @@ async function startReview(
     checkKey: row.checkKey,
     input: reviewerInput(goal, declaration, subjects, mounted),
     tokenCap: headroom,
+    durationCapSec: Math.max(1, Math.floor((ctx.deadline - ctx.now.getTime()) / 1000)),
     ...(declaration.model !== undefined ? { model: declaration.model } : {}),
     upstream,
   });
