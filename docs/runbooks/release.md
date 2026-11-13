@@ -2857,6 +2857,31 @@ where object_type = 'Operation' and properties->>'status' = 'published'
   - 已撤销的会话或父 Handle 在 HTTP 与 WS 上都返回 401。
 - **回滚**：回退代码即可；迁移已撤销的 Handle 不会恢复（撤销是单向的）。
 
+### 3.168 签发与改权限串行，停用的权威名下没有有效 Handle（#1152，遗留 702，0.68.0 之后的下一版）
+
+迁移 governance 0043：权威锁函数、6 个触发器（停用工作区、用户、主体时撤销其会话，连带 0042 撤 Handle），并补救存量。可逆，回退代码即可。没有主机手工步骤。
+
+- **升级前只读预检**（**主机动作**，结果记 `docs/private/`）：按工作区统计停用的工作区、用户、主体名下仍然有效的 Handle 数。迁移会把它们撤掉，并按主体各写一条审计（`principal.disabled_authority_handles_revoked`）。按 release.md 惯例用 `psql -U nexttime` 跑：
+
+  ```sql
+  select h.workspace_id, count(*) as live_handles_under_disabled_authority
+  from capability_handles h
+  join principals p on p.workspace_id = h.workspace_id and p.id = h.on_behalf_of
+  join workspaces w on w.id = h.workspace_id
+  left join users u on u.id = p.user_id
+  where (p.disabled_at is not null or u.status = 'disabled' or w.status = 'disabled')
+    and h.revoked_at is null
+    and h.expires_at > now()
+  group by h.workspace_id
+  order by 1;
+  ```
+
+- **行为变化**：
+  - 停用工作区、用户或主体时，其名下会话与 Handle 一并撤销（包括内核之外直接改库的写方，由触发器兜住）。
+  - `issue-service-handle` 对已停用的同名服务主体报错。
+  - 改权限和签发并发时，后到的一方会短暂等待；签发只在 READ COMMITTED 下进行。
+- **回滚**：回退代码即可；迁移已撤销的会话与 Handle 不会恢复。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
