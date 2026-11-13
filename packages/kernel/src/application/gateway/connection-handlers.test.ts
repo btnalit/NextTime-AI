@@ -268,6 +268,8 @@ describe('create_connection before any fetch (R-27 predicate, R-01 secret) — n
     ['http://localhost:8090', 'bare-hostname'],
     ['http://127.0.0.1:8090', 'loopback'],
     ['http://169.254.169.254/', 'link-local'],
+    // Legacy 413: the resolver here answers with a public address, so plain http:// is refused.
+    ['http://gate.owner.example:8090', 'plaintext-public'],
   ])('refuses endpoint %s (%s) before calling it', async (endpoint, reason) => {
     const { fake, fetchImpl } = wire();
     await expect(
@@ -279,6 +281,36 @@ describe('create_connection before any fetch (R-27 predicate, R-01 secret) — n
         connectionSecret: secrets.mint(WORKSPACE).secret,
       }),
     ).rejects.toMatchObject({ code: 'connection_target_refused', reason });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(fake.targets).toEqual([]);
+  });
+
+  // Legacy 413: a connected account's credential is never posted to a plain http:// public
+  // endpoint, and a manifest is never fetched over plain http:// from the public internet.
+  it.each([
+    [
+      'endpoint',
+      {
+        endpoint: 'http://gate.owner.example:8090',
+        credentialKind: 'connected_account',
+        credentials: { token: 'synthetic-not-a-secret' },
+      },
+    ],
+    ['manifestSource', { manifestSource: 'http://api.owner.example/openapi.json' }],
+  ])('refuses a plain http:// public %s before contacting anything', async (field, override) => {
+    const { fake, fetchImpl } = wire();
+    const thrown = await call({
+      kind: 'http',
+      target: 'x',
+      endpoint: 'https://gate.owner.example',
+      credentialKind: 'shared',
+      connectionSecret: secrets.mint(WORKSPACE).secret,
+      manifestSource: 'https://api.owner.example/openapi.json',
+      ...override,
+    }).catch((err: unknown) => err);
+    expect(thrown).toBeInstanceOf(OutboundTargetRefusedError);
+    expect(thrown).toMatchObject({ code: 'connection_target_refused', reason: 'plaintext-public' });
+    expect((thrown as Error).message).toMatch(new RegExp(`^${field} "[a-z.]+" is refused: `));
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(fake.targets).toEqual([]);
   });

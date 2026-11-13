@@ -600,8 +600,8 @@ export const ERROR_NEXT_STEPS: Readonly<
     en: 'The gate refused this call: headers, credential query parameters and cookies are set by the gate, not passed as parameters. Remove the parameter from the manifest and import it again.',
   },
   connection_target_refused: {
-    zh: '这个地址指向平台内部网络，不能作为外部系统接入。换成外部系统的最终地址（不经过跳转）。',
-    en: 'This address points into the platform network and cannot be connected. Use the external system’s final address (no redirect).',
+    zh: '这个地址不能接入：它指向平台内部网络，或是用 http:// 连公网地址。换成外部系统的最终地址（不经过跳转），公网地址用 https://。',
+    en: 'This address cannot be connected: it points into the platform network, or uses http:// to a public internet address. Use the external system’s final address (no redirect), and https:// for a public one.',
   },
   credentials_in_observe_params: {
     zh: '参数里带了凭据，调用没有发出。不要把凭据当参数传，门会用自己配置的凭据认证。',

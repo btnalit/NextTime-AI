@@ -473,8 +473,27 @@ describe('mapCapabilityError — S2.13 create_connection errors (unit)', () => {
         'manifestSource',
       ),
     );
-    expect(refused).toMatchObject({ status: 400, code: 'connection_target_refused' });
+    expect(refused).toMatchObject({
+      status: 400,
+      code: 'connection_target_refused',
+      details: { reason: 'bare-hostname' },
+    });
     expect(refused.message).toContain('manifestSource "worker-supervisor"');
+    // Legacy 413: the console tells "use https://" apart from "points at the platform" by the reason.
+    expect(
+      mapCapabilityError(
+        new OutboundTargetRefusedError(
+          'http://gate.owner.example:8090',
+          'plaintext-public',
+          'gate.owner.example',
+          'endpoint',
+        ),
+      ),
+    ).toMatchObject({
+      status: 400,
+      code: 'connection_target_refused',
+      details: { reason: 'plaintext-public' },
+    });
     // R-01 (D-01) connection secrets.
     expect(mapCapabilityError(new ConnectionSecretInvalidError(true))).toMatchObject({
       status: 400,

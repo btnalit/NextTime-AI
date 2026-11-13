@@ -462,6 +462,49 @@ describe('CompleteConnectionForm', () => {
     expect(fieldError?.textContent).not.toContain('is refused');
   });
 
+  // Legacy 413: http:// to a public internet address is refused (`details.reason`
+  // 'plaintext-public'); the field says to use https://, not that it points at the platform.
+  it.each([
+    [
+      'endpoint',
+      /门端点/,
+      'http://gate.example.com:8090',
+      'cc-endpoint-error',
+      '门端点是公网地址，却用的是 http://',
+    ],
+    [
+      'manifestSource',
+      /清单来源/,
+      'http://grafana.example.com/openapi.json',
+      'cc-manifest-error',
+      '清单来源是公网地址，却用的是 http://',
+    ],
+  ])(
+    'shows a plaintext-public connection_target_refused on the %s field',
+    async (field, label, value, errorId, explanation) => {
+      const kernelText = `create_connection: ${field} "x.example.com" is refused: it is a plain http:// URL to an address on the public internet`;
+      const http = httpWith(async () => {
+        throw new HttpError('capability_error', kernelText, 'connection_target_refused', {
+          reason: 'plaintext-public',
+        });
+      });
+      render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
+      await secretShown();
+      fireEvent.change(screen.getByLabelText(/目标系统/), { target: { value: 'x' } });
+      fireEvent.change(screen.getByLabelText(/门端点/), {
+        target: { value: 'https://gate.example.com' },
+      });
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+      fireEvent.click(screen.getByRole('button', { name: '注册门' }));
+      const raw = await screen.findByTestId(`${errorId}-detail`);
+      expect(raw.textContent).toContain('plain http://');
+      const fieldError = document.getElementById(errorId);
+      expect(fieldError?.textContent).toContain(explanation);
+      expect(fieldError?.textContent).toContain('https://');
+      expect(fieldError?.textContent).not.toContain('指向平台自身的服务');
+    },
+  );
+
   // P0b (one landing path): an address this workspace already connected is refused, not connected a
   // second time — said on the endpoint field, with where that connection is and what to do instead.
   it('shows an endpoint_already_connected 409 on the endpoint field', async () => {

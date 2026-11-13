@@ -134,6 +134,7 @@ export function fieldErrorExplanation(
   code: string,
   t: Translate,
   credentialKind: CredentialKind = 'shared',
+  targetRefusal?: string,
 ): string {
   if (code === 'credentials_in_connection_params') {
     if (field === 'endpoint') {
@@ -152,6 +153,18 @@ export function fieldErrorExplanation(
       '目标系统里带了凭据（URL 里的密码、token 或 key），已拒绝，什么也没保存：目标系统只写地址或名称。',
       'The target system carries a credential (a URL password, a token or a key) — refused, nothing was saved. Enter only its address or name.',
     )}${credentialPlace(credentialKind, t)}`;
+  }
+  if (code === 'connection_target_refused' && targetRefusal === 'plaintext-public') {
+    // Legacy 413: the kernel refuses http:// to an address on the public internet.
+    return field === 'manifestSource'
+      ? t(
+          '清单来源是公网地址，却用的是 http://，已拒绝，什么也没保存：明文传输时清单可能在路上被换掉。请改成 https:// 地址。',
+          'The manifest source is on the public internet but uses http:// — refused, nothing was saved: a manifest sent in clear text could be swapped on the way. Use its https:// address.',
+        )
+      : t(
+          '门端点是公网地址，却用的是 http://，已拒绝，什么也没保存：连接密钥和凭证会明文经过互联网。请改成门的 https:// 地址；门在内网时填它的内网地址，可以继续用 http://。',
+          'The Gatekeeper endpoint is on the public internet but uses http:// — refused, nothing was saved: the connection secret and credentials would cross the internet unencrypted. Use the gate’s https:// address, or its in-network address, where http:// is still fine.',
+        );
   }
   if (code === 'connection_target_refused') {
     return t(
@@ -181,6 +194,13 @@ export function fieldErrorExplanation(
         'The target system was not accepted — enter a base URL, host or service name.',
       );
   }
+}
+
+/** Which outbound-target rule a `connection_target_refused` 400 names (`details.reason`, legacy
+ *  413); `undefined` from a kernel that does not send it, which then gets the general text. */
+function targetRefusalOf(err: unknown): string | undefined {
+  const reason = err instanceof HttpError ? err.details?.reason : undefined;
+  return typeof reason === 'string' ? reason : undefined;
 }
 
 /** The field a `credentials_in_connection_params` 400 names (`details.field`, legacy 186) — the
@@ -393,7 +413,13 @@ export function CompleteConnectionForm({
           [field]:
             described.code === 'endpoint_already_connected'
               ? endpointAlreadyConnectedMessage(existing?.name ?? null, t)
-              : fieldErrorExplanation(field, described.code, t, credentialKind),
+              : fieldErrorExplanation(
+                  field,
+                  described.code,
+                  t,
+                  credentialKind,
+                  targetRefusalOf(err),
+                ),
         });
         setServerFieldError({ field, code: shown.code, raw: shown.raw ?? described.message });
       } else {

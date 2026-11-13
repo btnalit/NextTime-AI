@@ -412,7 +412,11 @@ Operation，不需要 `publish_manifest`），之后照常 `connect_gatekeeper`�
 （控制台"系统与授权 → ⋯ → 重新签发连接密钥"），旧密钥立即失效。`endpoint` 与 `manifestSource` 都要过
 内核的出站目标判定（R-27）：裸服务名 / `localhost` / 回环 / 链路本地 / 平台两个子网一律
 `400 connection_target_refused`；确需把自连门跑在平台网络上时，由操作员把主机名加进 `.env` 的
-`NEXTTIME_CONNECTION_ALLOW_HOSTS` 并重建 kernel（更好的做法是把它做成打包门）。
+`NEXTTIME_CONNECTION_ALLOW_HOSTS` 并重建 kernel（更好的做法是把它做成打包门）。**公网地址必须用
+`https://`**（遗留 413）：每次调用自连门都带着它的连接密钥，`connected_account` 方式还会把凭证发给它，
+`http://` 连公网地址会让这些明文经过互联网，所以同样 `400 connection_target_refused`
+（`details.reason` 为 `plaintext-public`）；已经接入的这类门，内核之后对它的每次调用都以 `target_refused`
+失败，不发出任何请求。内网地址（RFC 1918、CGNAT、IPv6 ULA）照旧可以用 `http://`；名字只要解析出一个公网地址就按公网算。
 
 下面用一个**不在目录里**的门演示 S2.13 的流程（例如你自己在 `control` 网络之外起的一个 `http` 门；
 把 `<gate-endpoint>` 换成它的地址）：

@@ -922,9 +922,16 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
     };
   }
   // R-27: an owner-supplied `endpoint` / `manifestSource` that points at the platform's own
-  // services or networks — refused before any fetch (adapters/outbound-target).
+  // services or networks, or (legacy 413) a plain http:// URL to the public internet — refused
+  // before any fetch (adapters/outbound-target). `details.reason` is the predicate's closed reason
+  // (`OutboundTargetRefusalReason`), so the console can say which of the two it was.
   if (err instanceof OutboundTargetRefusedError) {
-    return { status: 400, code: err.code, message: `create_connection: ${err.message}` };
+    return {
+      status: 400,
+      code: err.code,
+      message: `create_connection: ${err.message}`,
+      details: { reason: err.reason },
+    };
   }
   // R-01 (D-01) connection secrets: missing / not minted for this workspace (400), reused or not
   // applicable to a platform-catalog gate (409), no gate token to derive one from (503).
