@@ -309,7 +309,7 @@ export interface CreateServerOptions {
    *  `logger` is `false`); this only controls Fastify's own request/response access log. Tests
    *  pass logger options with a `stream` to read those lines. */
   logger?: FastifyServerOptions['logger'];
-  /** `request_action`'s `await_decision:true` poll timeout (default 90s,
+  /** `request_action`'s `await_decision:true` poll timeout (default 25 s,
    *  request-action-handler.ts's own `DEFAULT_AWAIT_DECISION_TIMEOUT_MS`) — `main()` reads this
    *  from `REQUEST_ACTION_AWAIT_DECISION_TIMEOUT_MS`. */
   requestActionAwaitDecisionTimeoutMs?: number;

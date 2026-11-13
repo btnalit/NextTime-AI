@@ -517,6 +517,15 @@ export async function runTaskReaper(deps: TaskRuntimeDeps): Promise<RunTaskReape
         );
         return;
       }
+      // Legacy 290 (decided, not a gap): the limit is wall clock from the run's start, time in
+      // `waiting_approval` included. A Worker blocks on an `await_decision` Operation for one
+      // `request_action` poll at most (25 s by default, request-action-handler.ts), then gets
+      // `pending_approval` and is told to report rather than wait (platform-extension
+      // modes/worker.ts) — the approval is executed later without it. Its container runs all the
+      // while, and worker-supervisor's own `timeoutSec` and the Handle's ttl (spawn.ts) count the
+      // same clock, so pausing it here would only give a live container more time this sweep
+      // alone enforces. A wait that may be long belongs in a goal step, whose wait is the
+      // StepRun's, not a Task's (S11 GO3).
       const limitSec = candidate.duration_limit_sec ?? DEFAULT_DURATION_LIMIT_SEC;
       const elapsedMs = now - new Date(candidate.started_at).getTime();
       if (elapsedMs > limitSec * 1000) {

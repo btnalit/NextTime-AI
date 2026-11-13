@@ -641,7 +641,8 @@ export async function invokeWorkerCreate(
   // pure result — cheap, and keeps this function from having to thread a precomputed scope through
   // the requeue path too (`lifecycle.ts`'s `spawnWorkerRunForRetry` calls `spawnWorkerRun`
   // directly, with no equivalent pre-check of its own — a requeue attenuates from the failed
-  // WorkerRun's own already-granted scope, which cannot newly fail this check). Pure/synchronous —
+  // WorkerRun's own already-granted scope, narrowed to what its person may hold now (legacy 289),
+  // which cannot newly fail this check). Pure/synchronous —
   // deliberately run *before* the locked transaction below, not inside it, so an attenuation
   // rejection never even attempts to take the advisory lock.
   computeChildHandleScope({

@@ -19,11 +19,13 @@ the platform) are all implemented.
 
 ## Modes
 
-- **entry**: registers the S1 graph observe tools (`get_object`/`traverse`/`search`/`explain`/
-  `get_task`, from `@nexttime/shared`'s registry); injects context via pi's `context` event
-  (`get_entry_context`); correlates each pi run with a platform Turn (`agent_start`/`agent_end`/
-  `agent_settled`) and reports it (`report_turn`) once settled. `find_workers`/`invoke_worker`
-  land in S2.7/S2.4. Per-prompt turn id: the caller prefixes the prompt text with
+- **entry**: registers the entry agent's tools from `@nexttime/shared`'s registry
+  (`ENTRY_TOOL_CAPABILITY_NAMES` in `modes/entry.ts`: the graph reads, `find_workers` /
+  `invoke_worker`, `find_operations` / `find_procedures`, the goal tools and the rest) plus one
+  `<gate>.<op>` tool per observe-class Operation, refreshed every turn; injects context via pi's
+  `context` event (`get_entry_context`); correlates each pi run with a platform Turn
+  (`agent_start`/`agent_end`/`agent_settled`) and reports it (`report_turn`) once settled.
+  Per-prompt turn id: the caller prefixes the prompt text with
   `<!--nexttime:turn_id=<id>-->\n`, which the `input` event strips (the RPC `prompt` command has
   no metadata field).
 - **worker** (`modes/worker.ts`): drives its own single turn inside a one-shot Worker container.

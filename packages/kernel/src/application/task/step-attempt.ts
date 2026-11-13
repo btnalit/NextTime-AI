@@ -24,6 +24,7 @@ import {
   readVisibleSkillDrafts,
   skillDraftDigest,
 } from '../worker/index.js';
+import { principalDisabled, roleStartsWorkers } from './acting-authority.js';
 import {
   type ResolvedRunSkills,
   type TrialDraftRef,
@@ -258,27 +259,6 @@ export const STEP_ATTEMPT_PAUSED_DETAIL =
 /** Capabilities a step's Handle carries only when its plan entry declares `nested`. */
 const DERIVATION_CAPABILITIES: ReadonlySet<string> = new Set(['invoke_worker', 'find_workers']);
 
-/** Whether the requester, their platform user or their workspace is disabled — the predicate
- *  `application/gateway/handle-auth.ts` applies to every Handle acting for them (a missing row is
- *  disabled). A Worker minted for a disabled requester could not authenticate anyway. */
-async function requesterDisabled(
-  client: PoolClient,
-  workspaceId: string,
-  principalId: string,
-): Promise<boolean> {
-  const result = await client.query<{ disabled: boolean }>(
-    `select (p.disabled_at is not null
-             or coalesce(u.status = 'disabled', false)
-             or w.status = 'disabled') as disabled
-       from principals p
-       join workspaces w on w.id = p.workspace_id
-       left join users u on u.id = p.user_id
-      where p.workspace_id = $1 and p.id = $2`,
-    [workspaceId, principalId],
-  );
-  return result.rows[0]?.disabled ?? true;
-}
-
 /** The parent scope of a step's Handle — see the module doc comment (I-G7) — with who reads the
  *  Skill registry for the requester and the models their workspace allows (S11 GO8a). */
 interface StepParent {
@@ -294,7 +274,7 @@ async function stepParentScope(
   requesterId: string,
   nested: boolean,
 ): Promise<StepParent | { readonly refusal: StepAttemptRefusal }> {
-  if (await requesterDisabled(client, workspaceId, requesterId)) {
+  if (await principalDisabled(client, workspaceId, requesterId)) {
     return {
       refusal: { kind: 'authority_lost', reason: 'requester', detail: 'the requester is disabled' },
     };
@@ -314,7 +294,7 @@ async function stepParentScope(
     gatekeeperIds.length > 0 ? { resources: { gatekeeper: [...gatekeeperIds] } } : {},
     { role: access.role },
   );
-  if (!entry.capabilities.includes('invoke_worker')) {
+  if (!roleStartsWorkers(access.role)) {
     return {
       refusal: {
         kind: 'authority_lost',
