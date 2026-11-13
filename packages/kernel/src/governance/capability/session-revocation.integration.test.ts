@@ -71,7 +71,9 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     /** Issued on the person's role (the fixture's owner) unless `basis` says otherwise: a child
      *  names its parent as `parentJti`, and as its basis only when it is issued on that parent's
-     *  authority (legacy 702). */
+     *  authority (legacy 702). A child lives half as long as a parent: with the same ttl, one
+     *  issued in a later second would outlive its parent and 0042's I13 trigger would refuse it
+     *  (#1152 review). */
     function issue(
       client: PoolClient,
       sessionId: string,
@@ -81,7 +83,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       return issueHandle(client, {
         sessionId,
         scope: SCOPE,
-        ttlSeconds: 3600,
+        ttlSeconds: parentJti === undefined ? 3600 : 1800,
         privateKey,
         ...(parentJti !== undefined ? { parentJti } : {}),
         basis,

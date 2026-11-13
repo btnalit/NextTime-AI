@@ -275,7 +275,8 @@ describe.runIf(DATABASE_URL !== undefined)(
             issueHandle(client, {
               sessionId: run,
               scope: SCOPE,
-              ttlSeconds: 3600,
+              // Shorter than the parent's, as a child's always is (0042's I13).
+              ttlSeconds: 1800,
               privateKey,
               parentJti: parent.jti,
               basis: { kind: 'parent', parentJti: parent.jti },
@@ -288,7 +289,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           issueHandle(client, {
             sessionId: run,
             scope: SCOPE,
-            ttlSeconds: 3600,
+            ttlSeconds: 1800,
             privateKey,
             parentJti: parent.jti,
             basis: { kind: 'role', role: at.role },
