@@ -16,7 +16,7 @@
  */
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
-import { revokeSession } from '../../governance/capability/index.js';
+import { lockAuthoritiesForChange, revokeSession } from '../../governance/capability/index.js';
 import { withAdminClient } from '../gateway/auth.js';
 import { readPlatformSettings } from '../platform/settings.js';
 import { revokeAllUserSessions } from './console-session.js';
@@ -124,6 +124,11 @@ export async function revokeUserCredentials(
   userId: string,
   options: RevokeUserCredentialsOptions = {},
 ): Promise<UserCredentialRevocation> {
+  // Legacy 702 (governance 0043): the user's authority lock before any session of theirs is
+  // touched, so an issuer for one of their memberships that holds it commits first and its Handle
+  // is revoked below. A caller that also changes a Principal of the user has taken this lock
+  // before that Principal's (the global order); taking it again is free.
+  await lockAuthoritiesForChange(client, { userIds: [userId] });
   const consoleSessionIds =
     options.workspaceId === undefined
       ? await revokeAllUserSessions(client, userId, {

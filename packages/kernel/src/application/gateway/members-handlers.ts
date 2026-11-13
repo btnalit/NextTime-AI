@@ -1,6 +1,9 @@
 import type { PrincipalKind, PrincipalRefusalReason, Role } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { revokeOnBehalfOfSessionHandles } from '../../governance/capability/index.js';
+import {
+  lockAuthoritiesForChange,
+  revokeOnBehalfOfSessionHandles,
+} from '../../governance/capability/index.js';
 import { countGatekeepers } from '../../governance/gatekeepers/index.js';
 import { currentPrincipalId } from '../chat/index.js';
 import { applyRoleChange } from '../task/role-change.js';
@@ -429,6 +432,9 @@ export class AlreadyMemberError extends Error {
 
 export const setPrincipalRoleHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { principalId, role } = SetPrincipalRoleParams(params);
+  // Legacy 702 (governance 0043): the Principal's authority lock before any row is read or
+  // locked here (`assertNotLastActiveHumanOwner` takes `for update` on the owners' rows).
+  await lockAuthoritiesForChange(client, { principalIds: [principalId] });
   const target = await getPrincipalDetailed(client, workspaceId, principalId);
   if (!target) throw new PrincipalNotFoundError(workspaceId, principalId);
   assertManageableTarget(target, 'set_principal_role');
@@ -536,6 +542,8 @@ export const disablePrincipalHandler: CapabilityHandler = async (
     );
   }
 
+  // Legacy 702 (governance 0043): the Principal's authority lock before any row is read or locked.
+  await lockAuthoritiesForChange(client, { principalIds: [principalId] });
   const target = await getPrincipalDetailed(client, workspaceId, principalId);
   if (!target) throw new PrincipalNotFoundError(workspaceId, principalId);
   assertManageableTarget(target, 'disable_principal');

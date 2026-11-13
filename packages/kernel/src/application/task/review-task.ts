@@ -24,7 +24,7 @@ import {
   type PreparedStepAttempt,
   STEP_ATTEMPT_PAUSED_DETAIL,
   type StepAttemptRefusal,
-  requesterStartRefusal,
+  requesterStartAuthority,
 } from './step-attempt.js';
 import { recordTaskTransition } from './transition-log.js';
 import { QuotaExceededError, TASK_ROW_COLUMNS, mapTaskRow } from './types.js';
@@ -157,8 +157,8 @@ export async function createReviewTask(
   if (await hasActiveSealHold(client, workspaceId, input.requesterId)) {
     return refused({ kind: 'paused', detail: STEP_ATTEMPT_PAUSED_DETAIL });
   }
-  const cannot = await requesterStartRefusal(client, workspaceId, input.requesterId);
-  if (cannot) return refused(cannot);
+  const authority = await requesterStartAuthority(client, workspaceId, input.requesterId);
+  if ('refusal' in authority) return refused(authority.refusal);
 
   const { definition } = input;
   const content = readDefinitionContent(definition.definition);
@@ -263,6 +263,8 @@ export async function createReviewTask(
         onBehalfOf: input.requesterId,
         parentAuthority: handleScope,
         parentClaimsForLineage: undefined,
+        // Legacy 702: issued only while the requester's role is still the one read above.
+        issuanceBasis: { kind: 'role', role: authority.role },
         declaredCapabilities: REVIEWER_HANDLE_CAPABILITIES,
         declaredGates: [],
         model,

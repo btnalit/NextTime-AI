@@ -17,6 +17,7 @@ import {
   HandleInvalid,
   HandleIssuanceError,
   HandleRevoked,
+  type IssuanceBasis,
   ScopeValidationError,
   WORKER_CEILING_CAPABILITIES,
   WORKER_INFRASTRUCTURE_CAPABILITY_NAMES,
@@ -85,6 +86,26 @@ function createFakeCapabilityClient() {
 
   const query = vi.fn(async (text: string, params: unknown[] = []) => {
     const sql = text.trim();
+
+    // Legacy 702: issueHandle's unlocked lookup of where the session acts, before its locks.
+    if (sql.startsWith('select workspace_id, on_behalf_of from sessions')) {
+      const [sessionId] = params as [string];
+      const row = sessions.get(sessionId);
+      return {
+        rows: row ? [{ workspace_id: row.workspaceId, on_behalf_of: row.onBehalfOf }] : [],
+        rowCount: row ? 1 : 0,
+      };
+    }
+
+    // Legacy 702 (governance 0043): the issuance locks, then the authority re-read under them —
+    // the Principal has no user here and is an enabled owner.
+    if (sql.startsWith('select lock_issuing_authority(')) {
+      return { rows: [{ user_id: null }], rowCount: 1 };
+    }
+
+    if (sql.startsWith('select p.role, p.user_id,')) {
+      return { rows: [{ role: 'owner', user_id: null, disabled: false }], rowCount: 1 };
+    }
 
     if (sql.startsWith('select workspace_id, on_behalf_of, kind, status from sessions')) {
       const [sessionId] = params as [string];
@@ -182,6 +203,11 @@ function createFakeCapabilityClient() {
   return { client, addSession, handles };
 }
 
+/** Legacy 702: what this file's Handles are issued under — the fake reads every Principal back as
+ *  an enabled owner; the integration block's fixture has an owner and a member. */
+const OWNER_BASIS: IssuanceBasis = { kind: 'role', role: 'owner' };
+const MEMBER_BASIS: IssuanceBasis = { kind: 'role', role: 'member' };
+
 function neverRevoked(): boolean {
   return false;
 }
@@ -207,6 +233,7 @@ describe('issueHandle / verifyHandle', () => {
       scope,
       ttlSeconds: 300,
       privateKey,
+      basis: OWNER_BASIS,
     });
 
     expect(issued.workspaceId).toBe(workspaceId);
@@ -240,7 +267,13 @@ describe('issueHandle / verifyHandle', () => {
     ] as const) {
       const sessionId = randomUUID();
       addSession(sessionId, { workspaceId: randomUUID(), onBehalfOf: randomUUID(), kind });
-      const issued = await issueHandle(client, { sessionId, scope, ttlSeconds: 60, privateKey });
+      const issued = await issueHandle(client, {
+        sessionId,
+        scope,
+        ttlSeconds: 60,
+        privateKey,
+        basis: OWNER_BASIS,
+      });
       const claims = await verifyHandle(issued.token, { publicKey, isRevoked: neverRevoked });
       expect(issued.holder, kind).toBe(holder);
       expect(handleHolderOf(claims), kind).toBe(holder);
@@ -259,6 +292,7 @@ describe('issueHandle / verifyHandle', () => {
         scope: { capabilities: [], resources: {} },
         ttlSeconds: 60,
         privateKey,
+        basis: OWNER_BASIS,
       }),
     ).rejects.toThrow(HandleIssuanceError);
   });
@@ -275,6 +309,7 @@ describe('issueHandle / verifyHandle', () => {
         scope: { capabilities: [], resources: {} },
         ttlSeconds: 0,
         privateKey,
+        basis: OWNER_BASIS,
       }),
     ).rejects.toThrow(HandleIssuanceError);
   });
@@ -291,6 +326,7 @@ describe('issueHandle / verifyHandle', () => {
         scope: { capabilities: ['not_a_real_capability'], resources: {} },
         ttlSeconds: 60,
         privateKey,
+        basis: OWNER_BASIS,
       }),
     ).rejects.toThrow(ScopeValidationError);
   });
@@ -309,6 +345,7 @@ describe('issueHandle / verifyHandle', () => {
           scope: { capabilities: [name], resources: {} },
           ttlSeconds: 60,
           privateKey,
+          basis: OWNER_BASIS,
         }),
       ).rejects.toThrow(ScopeValidationError);
     },
@@ -352,6 +389,7 @@ describe('verifyHandle — failure modes', () => {
       scope: { capabilities: [], resources: {} },
       ttlSeconds: 60,
       privateKey,
+      basis: OWNER_BASIS,
     });
 
     // Flip the leading character of the payload segment (middle segment of the compact JWS) —
@@ -388,6 +426,7 @@ describe('verifyHandle — failure modes', () => {
       scope: { capabilities: [], resources: {} },
       ttlSeconds: 60,
       privateKey,
+      basis: OWNER_BASIS,
     });
 
     await expect(verifyHandle(issued.token, { publicKey, isRevoked: () => true })).rejects.toThrow(
@@ -412,12 +451,14 @@ describe('revokeHandle / revokeSession / createDbRevocationCheck', () => {
       scope: { capabilities: [], resources: {} },
       ttlSeconds: 60,
       privateKey,
+      basis: OWNER_BASIS,
     });
     const second = await issueHandle(client, {
       sessionId,
       scope: { capabilities: [], resources: {} },
       ttlSeconds: 60,
       privateKey,
+      basis: OWNER_BASIS,
     });
 
     return { client, publicKey, sessionId, first, second };
@@ -469,7 +510,13 @@ describe('attenuate', () => {
     const sessionId = randomUUID();
     addSession(sessionId, { workspaceId: randomUUID(), onBehalfOf: randomUUID() });
 
-    const parent = await issueHandle(client, { sessionId, scope, ttlSeconds, privateKey });
+    const parent = await issueHandle(client, {
+      sessionId,
+      scope,
+      ttlSeconds,
+      privateKey,
+      basis: OWNER_BASIS,
+    });
     return { client, privateKey, publicKey, sessionId, parent };
   }
 
@@ -592,6 +639,7 @@ describe('attenuate', () => {
       scope: { capabilities: ['get_object'], resources: {} },
       ttlSeconds: 3600,
       privateKey,
+      basis: OWNER_BASIS,
     });
 
     // Reproduces the real race IssueHandleParams.notAfterSeconds's own doc comment describes:
@@ -708,7 +756,13 @@ describe('entryScope', () => {
     addSession(sessionId, { workspaceId: randomUUID(), onBehalfOf: randomUUID() });
 
     await expect(
-      issueHandle(client, { sessionId, scope: entryScope(), ttlSeconds: 60, privateKey }),
+      issueHandle(client, {
+        sessionId,
+        scope: entryScope(),
+        ttlSeconds: 60,
+        privateKey,
+        basis: OWNER_BASIS,
+      }),
     ).resolves.toBeDefined();
   });
 
@@ -1015,6 +1069,7 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c, AA5a, AA5
           scope: { capabilities: ['get_object', extra], resources: {} },
           ttlSeconds: 60,
           privateKey,
+          basis: OWNER_BASIS,
         }),
         extra,
       ).rejects.toThrow(HandleIssuanceError);
@@ -1024,6 +1079,7 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c, AA5a, AA5
       scope: adminAgentScope(),
       ttlSeconds: 60,
       privateKey,
+      basis: OWNER_BASIS,
     });
     expect(issued.holder).toBe('container');
   });
@@ -1056,6 +1112,7 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c, AA5a, AA5
             scope: { capabilities: ['get_object', name], resources: {} },
             ttlSeconds: 60,
             privateKey,
+            basis: OWNER_BASIS,
           }),
           `${kind} ${name}`,
         ).rejects.toThrow(/only an admin agent's Handle carries/);
@@ -1067,6 +1124,7 @@ describe('ADMIN_AGENT_CEILING_CAPABILITIES (S11 AA1, AA3a, AA3b, AA4c, AA5a, AA5
           scope: { capabilities: ['get_object'], resources: {} },
           ttlSeconds: 60,
           privateKey,
+          basis: OWNER_BASIS,
         }),
         kind,
       ).resolves.toBeDefined();
@@ -1157,7 +1215,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const scope: CapabilityScope = { capabilities: ['get_object'], resources: {} };
 
       const issued = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-        issueHandle(client, { sessionId, scope, ttlSeconds: 300, privateKey }),
+        issueHandle(client, { sessionId, scope, ttlSeconds: 300, privateKey, basis: OWNER_BASIS }),
       );
 
       expect(issued.onBehalfOf).toBe(onBehalfOf);
@@ -1197,7 +1255,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const scope: CapabilityScope = { capabilities: ['get_object'], resources: {} };
 
       const issued = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-        issueHandle(client, { sessionId, scope, ttlSeconds: 300, privateKey }),
+        issueHandle(client, { sessionId, scope, ttlSeconds: 300, privateKey, basis: OWNER_BASIS }),
       );
 
       await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
@@ -1228,12 +1286,14 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope,
             ttlSeconds: 300,
             privateKey,
+            basis: OWNER_BASIS,
           });
           const b = await issueHandle(client, {
             sessionId: localSessionId,
             scope,
             ttlSeconds: 300,
             privateKey,
+            basis: OWNER_BASIS,
           });
           return { first: a, second: b };
         },
@@ -1298,24 +1358,28 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope,
             ttlSeconds: 300,
             privateKey,
+            basis: MEMBER_BASIS,
           });
           const secondEntry = await issueHandle(client, {
             sessionId: secondEntrySessionId,
             scope,
             ttlSeconds: 300,
             privateKey,
+            basis: MEMBER_BASIS,
           });
           const web = await issueHandle(client, {
             sessionId: webSessionId,
             scope,
             ttlSeconds: 300,
             privateKey,
+            basis: MEMBER_BASIS,
           });
           const otherOwner = await issueHandle(client, {
             sessionId,
             scope,
             ttlSeconds: 300,
             privateKey,
+            basis: OWNER_BASIS,
           });
           return [entry, secondEntry, web, otherOwner];
         },
@@ -1348,7 +1412,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const scope: CapabilityScope = { capabilities: ['get_object'], resources: {} };
 
       const issued = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-        issueHandle(client, { sessionId, scope, ttlSeconds: 300, privateKey }),
+        issueHandle(client, { sessionId, scope, ttlSeconds: 300, privateKey, basis: OWNER_BASIS }),
       );
 
       await expect(
@@ -1424,6 +1488,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: { capabilities: [], resources: {} },
             ttlSeconds: 3600,
             privateKey,
+            basis: OWNER_BASIS,
           }),
         );
 
@@ -1450,6 +1515,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: { capabilities: [], resources: {} },
             ttlSeconds: 3600,
             privateKey,
+            basis: OWNER_BASIS,
           }),
         );
 

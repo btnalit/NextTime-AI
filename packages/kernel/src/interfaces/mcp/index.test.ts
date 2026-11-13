@@ -160,6 +160,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           scope: { capabilities: [...opts.capabilities], resources: {} },
           ttlSeconds: 3600,
           privateKey: opts.privateKey,
+          basis: { kind: 'role', role: 'owner' },
         });
         return issued.token;
       });

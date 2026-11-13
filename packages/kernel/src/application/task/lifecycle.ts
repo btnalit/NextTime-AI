@@ -667,6 +667,12 @@ async function spawnWorkerRunForRetry(
     if (found.disabled)
       throw new RetryAuthorityLostError('the principal the Task acts for is disabled');
     const scope = retryScopeNow(handleRow.scope as CapabilityScope, found.access);
+    // Legacy 702: the retry's Handle is issued only while the person's role is still the one
+    // `retryScopeNow` read (a change since fails the retry, as a disable does).
+    const retryRole = found.access.role;
+    if (retryRole === undefined) {
+      throw new RetryAuthorityLostError('the principal the Task acts for no longer exists');
+    }
 
     const { model, skillsInline, loadedSkills, definitionName, egressDeny, systemPrompt, image } =
       await withWorkspace(deps.pool, { workspaceId, principalId: onBehalfOf }, async (client) => {
@@ -736,6 +742,7 @@ async function spawnWorkerRunForRetry(
         jti: handleRow.jti,
         exp: Math.floor(new Date(handleRow.expires_at).getTime() / 1000),
       },
+      issuanceBasis: { kind: 'role', role: retryRole },
       declaredCapabilities: scope.capabilities,
       declaredGates: scope.resources.gatekeeper ?? [],
       model,

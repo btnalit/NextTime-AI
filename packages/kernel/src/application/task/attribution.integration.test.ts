@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { CapabilityScope, HandleClaims } from '@nexttime/shared';
+import type { CapabilityScope, HandleClaims, Role } from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
@@ -117,7 +117,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       return withWorkspace(pool, { workspaceId, principalId }, fn);
     }
 
-    async function entryClaims(principalId: string): Promise<HandleClaims> {
+    async function entryClaims(principalId: string, role: Role): Promise<HandleClaims> {
       const sessionId = await inTx(principalId, async (client) => {
         const result = await client.query<{ id: string }>(
           `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
@@ -128,7 +128,13 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       return claimsOf(
         await inTx(principalId, (client) =>
-          issueHandle(client, { sessionId, scope: entryScope(), ttlSeconds: 3600, privateKey }),
+          issueHandle(client, {
+            sessionId,
+            scope: entryScope(),
+            ttlSeconds: 3600,
+            privateKey,
+            basis: { kind: 'role', role },
+          }),
         ),
       );
     }
@@ -263,7 +269,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const runtimeDeps = deps(supervisorClient);
         const spawned = await invokeWorker(
           workspaceId,
-          { principalId: ownerId, channel: 'handle', claims: await entryClaims(ownerId) },
+          { principalId: ownerId, channel: 'handle', claims: await entryClaims(ownerId, 'owner') },
           { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
           runtimeDeps,
         );
@@ -308,7 +314,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         const spawned = await invokeWorker(
           workspaceId,
-          { principalId: ownerId, channel: 'handle', claims: await entryClaims(ownerId) },
+          { principalId: ownerId, channel: 'handle', claims: await entryClaims(ownerId, 'owner') },
           { definitionId: bare.id, version: bare.version, input: {}, wait: false },
           deps(new FakeTaskSupervisorClient()),
         );
@@ -364,7 +370,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         const spawned = await invokeWorker(
           workspaceId,
-          { principalId: ownerId, channel: 'handle', claims: await entryClaims(ownerId) },
+          { principalId: ownerId, channel: 'handle', claims: await entryClaims(ownerId, 'owner') },
           { definitionId: definition.id, version: definition.version, input: {}, wait: false },
           deps(new FakeTaskSupervisorClient()),
         );
@@ -386,7 +392,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           {
             principalId: ownerId,
             channel: 'handle',
-            claims: await entryClaims(ownerId),
+            claims: await entryClaims(ownerId, 'owner'),
             turnId: rootTurn,
           },
           { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
@@ -408,6 +414,7 @@ describe.runIf(DATABASE_URL !== undefined)(
               scope: { capabilities: ['invoke_worker', 'get_task'], resources: {} },
               ttlSeconds: 600,
               privateKey,
+              basis: { kind: 'role', role: 'owner' },
             }),
           ),
         );
@@ -558,7 +565,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         const { turnId } = await insertTurn(ownerId, 'running');
         const spawned = await invokeWorker(
           workspaceId,
-          { principalId: ownerId, channel: 'handle', claims: await entryClaims(ownerId), turnId },
+          {
+            principalId: ownerId,
+            channel: 'handle',
+            claims: await entryClaims(ownerId, 'owner'),
+            turnId,
+          },
           { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
           deps(new FakeTaskSupervisorClient()),
         );

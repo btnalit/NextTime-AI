@@ -539,6 +539,7 @@ describe.runIf(DATABASE_URL !== undefined)(
               scope: { capabilities: ['get_task'], resources: {} },
               ttlSeconds: 3600,
               privateKey,
+              basis: { kind: 'role', role: 'member' },
             });
             return issued.token;
           },
@@ -957,6 +958,7 @@ describe.runIf(DATABASE_URL !== undefined)(
                 scope: { capabilities: ['search'], resources: {} },
                 ttlSeconds: 3600,
                 privateKey,
+                basis: { kind: 'role', role: 'owner' },
               });
             },
             { skipRoleSwitch: true },

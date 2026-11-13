@@ -316,6 +316,9 @@ jobs:
       - name: Membership capabilities must never enter a Handle-scope ceiling (S3.11)
         run: sh scripts/check-membership-capabilities-not-in-handle-scope.sh
 
+      - name: Only the operator CLI issues a Handle with no basis (legacy 702)
+        run: sh scripts/check-operator-handle-cli-only.sh
+
       - name: Shell scripts must be LF and executable
         run: |
           bad=$(git ls-files -s 'scripts/*.sh' | grep -v '^100755 ') || true

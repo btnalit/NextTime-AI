@@ -3,6 +3,7 @@ import type { CryptoKey } from 'jose';
 import type { PoolClient } from 'pg';
 import {
   type CapabilityScope,
+  type IssuanceBasis,
   type IssuedHandle,
   WORKER_CEILING_CAPABILITIES,
   WORKER_INFRASTRUCTURE_CAPABILITY_NAMES,
@@ -309,12 +310,53 @@ export async function resolveParentAuthority(
   },
 ): Promise<ParentAuthority> {
   if (caller.claims) return caller.claims.scope;
+  const role = await readCallerRole(client, workspaceId, caller.principalId);
+  return role === 'owner' ? 'unconstrained' : EMPTY_CAPABILITY_SCOPE;
+}
+
+async function readCallerRole(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+): Promise<Role | undefined> {
   const result = await client.query<{ role: Role }>(
     'select role from principals where workspace_id = $1 and id = $2',
-    [workspaceId, caller.principalId],
+    [workspaceId, principalId],
   );
-  const role = result.rows[0]?.role;
-  return role === 'owner' ? 'unconstrained' : EMPTY_CAPABILITY_SCOPE;
+  return result.rows[0]?.role;
+}
+
+/**
+ * Legacy 702: {@link resolveParentAuthority} with what a Worker's Handle minted from it is issued
+ * under ({@link IssuanceBasis}) — the caller's Handle (`parent`: issued only while it is not
+ * revoked), or the human caller's role as read here (`role`: issued only while it still is). For
+ * `invoke_worker`, which spawns the Worker in a later transaction.
+ */
+export async function resolveParentAuthorityWithBasis(
+  client: PoolClient,
+  workspaceId: string,
+  caller: {
+    readonly principalId: string;
+    readonly channel: CapabilityChannel;
+    readonly claims?: HandleClaims;
+  },
+): Promise<{ readonly authority: ParentAuthority; readonly basis: IssuanceBasis }> {
+  if (caller.claims) {
+    return {
+      authority: caller.claims.scope,
+      basis: { kind: 'parent', parentJti: caller.claims.jti },
+    };
+  }
+  const role = await readCallerRole(client, workspaceId, caller.principalId);
+  if (role === undefined) {
+    throw new InvokeWorkerValidationError(
+      `invoke_worker: the calling Principal ${caller.principalId} is not in this workspace`,
+    );
+  }
+  return {
+    authority: role === 'owner' ? 'unconstrained' : EMPTY_CAPABILITY_SCOPE,
+    basis: { kind: 'role', role },
+  };
 }
 
 export interface MintWorkerRunHandleInput {
@@ -323,11 +365,17 @@ export interface MintWorkerRunHandleInput {
   readonly scope: CapabilityScope;
   readonly ttlSeconds: number;
   readonly privateKey: CryptoKey;
+  /** Legacy 702: what the scope was computed under ({@link IssuanceBasis}) — re-checked by
+   *  `issueHandle` under the authority locks the caller has taken (`lockIssuingAuthority`). */
+  readonly basis: IssuanceBasis;
 }
 
 /**
  * Creates a fresh `kind='worker_run'` session (§9.2 `sessions.kind` CHECK; `on_behalf_of` copied
- * verbatim from `input.onBehalfOf` — I13 inheritance) and issues a Handle under it. `ttlSeconds`
+ * verbatim from `input.onBehalfOf` — I13 inheritance) and issues a Handle under it. Legacy 702:
+ * the caller has taken the authority locks for `onBehalfOf` (`lockIssuingAuthority`) before
+ * its transaction locked or inserted anything — the session row below references the Principal,
+ * so taking them here would be too late (`spawn.ts` takes them first). `ttlSeconds`
  * is additionally capped to the parent Handle's own remaining ttl when one exists (a child should
  * never outlive the credential that authorized it), mirroring `attenuate()`'s own ttl rule.
  *
@@ -379,6 +427,7 @@ export async function mintWorkerRunHandle(
     parentJti: input.parentClaims?.jti,
     notAfterSeconds: input.parentClaims?.exp,
     privateKey: input.privateKey,
+    basis: input.basis,
   });
 }
 

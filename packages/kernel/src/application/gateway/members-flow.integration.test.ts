@@ -145,6 +145,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     async function issueEntryHandle(
       ws: string,
       principalId: string,
+      role: Role,
       keyPair: Awaited<ReturnType<typeof generateKeyPair>>,
     ): Promise<{ token: string; jti: string }> {
       return withWorkspace(
@@ -163,6 +164,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: entryScope(),
             ttlSeconds: 3600,
             privateKey: keyPair.privateKey,
+            basis: { kind: 'role', role },
           });
           return { token: issued.token, jti: issued.jti };
         },
@@ -493,7 +495,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       // set_principal_role: an `issue_handle` (mcp_session) Handle minted under the owner role is
       // revoked by the demotion, the same way a person's is.
-      const mcp = await issueMcpSessionHandle(workspaceId, serviceId, keyPair);
+      const mcp = await issueMcpSessionHandle(workspaceId, serviceId, 'owner', keyPair);
       const demoted = (await dispatchCapability({ pool }, owner, 'set_principal_role', {
         principalId: serviceId,
         role: 'member',
@@ -535,6 +537,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: { capabilities: ['search'], resources: {} },
             ttlSeconds: 3600,
             privateKey: keyPair.privateKey,
+            basis: { kind: 'role', role: 'member' },
           });
         },
         { skipRoleSwitch: true },
@@ -598,7 +601,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         crv: 'Ed25519',
         extractable: true,
       });
-      const { token, jti } = await issueEntryHandle(workspaceId, targetId, keyPair);
+      const { token, jti } = await issueEntryHandle(workspaceId, targetId, 'member', keyPair);
 
       // Sanity: the Handle verifies before the disable.
       await expect(
@@ -639,6 +642,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     async function issueMcpSessionHandle(
       ws: string,
       principalId: string,
+      role: Role,
       keyPair: Awaited<ReturnType<typeof generateKeyPair>>,
     ): Promise<{ token: string; jti: string }> {
       return withWorkspace(
@@ -657,6 +661,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: entryScope(),
             ttlSeconds: 3600,
             privateKey: keyPair.privateKey,
+            basis: { kind: 'role', role },
           });
           return { token: issued.token, jti: issued.jti };
         },
@@ -670,6 +675,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     async function issueWorkerRunHandle(
       ws: string,
       principalId: string,
+      role: Role,
       keyPair: Awaited<ReturnType<typeof generateKeyPair>>,
     ): Promise<{ token: string; jti: string }> {
       return withWorkspace(
@@ -688,6 +694,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: entryScope(),
             ttlSeconds: 3600,
             privateKey: keyPair.privateKey,
+            basis: { kind: 'role', role },
           });
           return { token: issued.token, jti: issued.jti };
         },
@@ -702,10 +709,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         crv: 'Ed25519',
         extractable: true,
       });
-      const entry = await issueEntryHandle(workspaceId, targetId, keyPair);
-      const mcp = await issueMcpSessionHandle(workspaceId, targetId, keyPair);
-      const workerRun = await issueWorkerRunHandle(workspaceId, targetId, keyPair);
-      const otherWorkerRun = await issueWorkerRunHandle(workspaceId, otherId, keyPair);
+      const entry = await issueEntryHandle(workspaceId, targetId, 'member', keyPair);
+      const mcp = await issueMcpSessionHandle(workspaceId, targetId, 'member', keyPair);
+      const workerRun = await issueWorkerRunHandle(workspaceId, targetId, 'member', keyPair);
+      const otherWorkerRun = await issueWorkerRunHandle(workspaceId, otherId, 'member', keyPair);
 
       const owner = humanCaller(workspaceId, ownerId, 'owner');
       await dispatchCapability({ pool }, owner, 'disable_principal', { principalId: targetId });
@@ -733,13 +740,14 @@ describe.runIf(DATABASE_URL !== undefined)(
         crv: 'Ed25519',
         extractable: true,
       });
-      const { token, jti } = await issueEntryHandle(workspaceId, targetId, keyPair);
+      const { token, jti } = await issueEntryHandle(workspaceId, targetId, 'member', keyPair);
       const { token: mcpToken, jti: mcpJti } = await issueMcpSessionHandle(
         workspaceId,
         targetId,
+        'member',
         keyPair,
       );
-      const { token: otherToken } = await issueEntryHandle(workspaceId, otherId, keyPair);
+      const { token: otherToken } = await issueEntryHandle(workspaceId, otherId, 'member', keyPair);
 
       // Sanity: all three Handles verify before the role change.
       await expect(
@@ -790,7 +798,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         crv: 'Ed25519',
         extractable: true,
       });
-      const { token } = await issueEntryHandle(workspaceId, targetId, keyPair);
+      const { token } = await issueEntryHandle(workspaceId, targetId, 'member', keyPair);
 
       const owner = humanCaller(workspaceId, ownerId, 'owner');
       const updated = (await dispatchCapability({ pool }, owner, 'set_principal_role', {
@@ -826,6 +834,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             scope: { capabilities, resources: {} },
             ttlSeconds: 3600,
             privateKey: keyPair.privateKey,
+            basis: { kind: 'role', role: 'builder' },
           });
           return { sessionId, jti: issued.jti };
         });
@@ -868,7 +877,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         crv: 'Ed25519',
         extractable: true,
       });
-      /** A service key holding exactly `capabilities` (`issue_service_handle`'s session shape). */
+      /**
+       * A service key holding exactly `capabilities` (`issue_service_handle`'s session shape),
+       * issued while the key is a builder (both calls below run under that role).
+       */
       const serviceKey = (capabilities: string[]) =>
         withWorkspace(
           pool,
@@ -886,6 +898,7 @@ describe.runIf(DATABASE_URL !== undefined)(
               scope: { capabilities, resources: {} },
               ttlSeconds: 3600,
               privateKey: keyPair.privateKey,
+              basis: { kind: 'role', role: 'builder' },
             });
             return { sessionId, jti: issued.jti };
           },

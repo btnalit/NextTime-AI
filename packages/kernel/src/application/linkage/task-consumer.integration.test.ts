@@ -166,7 +166,13 @@ describe.runIf(DATABASE_URL !== undefined)(
       scope: CapabilityScope,
     ): Promise<IssuedHandle> {
       return inTx(ownerId, (client) =>
-        issueHandle(client, { sessionId, scope, ttlSeconds: 3600, privateKey }),
+        issueHandle(client, {
+          sessionId,
+          scope,
+          ttlSeconds: 3600,
+          privateKey,
+          basis: { kind: 'role', role: 'owner' },
+        }),
       );
     }
 

@@ -503,7 +503,7 @@ interface FakeHandleRow {
 
 /** A tiny in-memory stand-in for `sessions` + `capability_handles`, matched against the exact
  *  small set of SQL statements mintWorkerRunHandle (session INSERT) and issueHandle (session
- *  SELECT, capability_handles INSERT) issue — same pattern as governance/capability/
+ *  SELECTs, issuance locks, authority read, capability_handles INSERT) issue — same pattern as governance/capability/
  *  handles.test.ts's own `createFakeCapabilityClient`. */
 function createFakeMintClient() {
   const sessions = new Map<string, FakeSessionRow>();
@@ -518,6 +518,25 @@ function createFakeMintClient() {
       const id = randomUUID();
       sessions.set(id, { workspaceId, onBehalfOf });
       return { rows: [{ id }], rowCount: 1 };
+    }
+
+    // Legacy 702: issueHandle's unlocked lookup of where the session acts, its issuance locks
+    // (governance 0043) and its authority re-read under them — an enabled owner with no user.
+    if (sql.startsWith('select workspace_id, on_behalf_of from sessions')) {
+      const [sessionId] = params as [string];
+      const row = sessions.get(sessionId);
+      return {
+        rows: row ? [{ workspace_id: row.workspaceId, on_behalf_of: row.onBehalfOf }] : [],
+        rowCount: row ? 1 : 0,
+      };
+    }
+
+    if (sql.startsWith('select lock_issuing_authority(')) {
+      return { rows: [{ user_id: null }], rowCount: 1 };
+    }
+
+    if (sql.startsWith('select p.role, p.user_id,')) {
+      return { rows: [{ role: 'owner', user_id: null, disabled: false }], rowCount: 1 };
     }
 
     if (sql.startsWith('select workspace_id, on_behalf_of, kind, status from sessions')) {
@@ -593,6 +612,7 @@ describe('mintWorkerRunHandle', () => {
       scope: { capabilities: ['get_object'], resources: {} },
       ttlSeconds: 3600, // >= the parent's remaining ttl — the worst case for this race
       privateKey,
+      basis: { kind: 'role', role: 'owner' },
     };
 
     // Same monotonically-advancing fake clock as handles.test.ts's `attenuate` race test: every
@@ -646,6 +666,7 @@ describe('mintWorkerRunHandle', () => {
       scope: { capabilities: ['get_object'], resources: {} },
       ttlSeconds: 300,
       privateKey,
+      basis: { kind: 'role', role: 'owner' },
     };
 
     await expect(mintWorkerRunHandle(client, workspaceId, input)).rejects.toThrow(

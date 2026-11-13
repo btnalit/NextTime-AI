@@ -69,4 +69,13 @@ export const ADVISORY_LOCK_NAMESPACES = {
    * while that rollback commits, nor the other way round.
    */
   adminProposalDependency: 7241033,
+  /**
+   * governance/0043 (legacy 702): one authority a Handle is issued under — a workspace, a platform
+   * user or a Principal; second key `authority_lock_instance(kind, id)` = `hashtext(kind || ':' ||
+   * id)`. Every issuer takes the three it issues under shared (`lock_issuing_authority`, from
+   * `issueHandle`), every change of one takes it exclusive (0043's BEFORE UPDATE triggers, and
+   * `lock_authorities` for a writer that changes several) — in the order workspace, user,
+   * Principal, each before any row lock it relates to.
+   */
+  authority: 7241034,
 } as const;

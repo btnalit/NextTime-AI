@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { canonicalJson } from '@nexttime/gatekeeper-base';
-import type { CapabilityScope, OutputSchema, WorkerSpec } from '@nexttime/shared';
+import type { CapabilityScope, OutputSchema, Role, WorkerSpec } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import type { TaskUpstreamFilesInput } from '../../adapters/supervisor-client/index.js';
@@ -316,15 +316,17 @@ async function stepParentScope(
 }
 
 /** S11 GO9a: why the requester cannot start a Worker now — disabled, gone, or a role that no
- *  longer starts Workers — or `null`: the check every attempt makes first ({@link stepParentScope}),
- *  for a Task of a goal that is no step's (the planner's, `planning-task.ts`). */
-export async function requesterStartRefusal(
+ *  longer starts Workers — or, when they can, their role: the check every attempt makes first
+ *  ({@link stepParentScope}), for a Task of a goal that is no step's (the planner's,
+ *  `planning-task.ts`; the reviewer's, `review-task.ts`). Legacy 702: the role is what that Task's
+ *  Handle is issued under (`IssuanceBasis`). */
+export async function requesterStartAuthority(
   client: PoolClient,
   workspaceId: string,
   requesterId: string,
-): Promise<StepAttemptRefusal | null> {
+): Promise<{ readonly refusal: StepAttemptRefusal } | { readonly role: Role }> {
   const parent = await stepParentScope(client, workspaceId, requesterId, false);
-  return 'refusal' in parent ? parent.refusal : null;
+  return 'refusal' in parent ? { refusal: parent.refusal } : { role: parent.viewer.role };
 }
 
 /** S11 GO8a: the digest a RunConfigSnapshot keeps of a step's WorkerSpec (`null`: none). */
@@ -967,6 +969,10 @@ export async function createStepAttemptTask(
         onBehalfOf: requesterId,
         parentAuthority: parent.scope,
         parentClaimsForLineage: undefined,
+        // Legacy 702: issued only while the requester's role is still the one `parent.scope` was
+        // computed from (a change since this attempt was prepared fails its start `spawn_failed`,
+        // and the next attempt reads the new role).
+        issuanceBasis: { kind: 'role', role: parent.viewer.role },
         declaredCapabilities,
         declaredGates,
         model,

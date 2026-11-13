@@ -799,7 +799,13 @@ describe.runIf(DATABASE_URL !== undefined)(
           pool,
           { workspaceId, principalId: ownerPrincipalId },
           (client) =>
-            issueHandle(client, { sessionId: entrySessionId, scope, ttlSeconds: 3600, privateKey }),
+            issueHandle(client, {
+              sessionId: entrySessionId,
+              scope,
+              ttlSeconds: 3600,
+              privateKey,
+              basis: { kind: 'role', role: 'owner' },
+            }),
         );
 
         // A no-op save (the same, already-current deny list) must not revoke anything.
@@ -2518,6 +2524,7 @@ describe.runIf(DATABASE_URL !== undefined)(
                 },
                 ttlSeconds: 3600,
                 privateKey,
+                basis: { kind: 'role', role: 'owner' },
               }),
           );
           const entryHandleRevokedAt = (): Promise<Date | null> =>

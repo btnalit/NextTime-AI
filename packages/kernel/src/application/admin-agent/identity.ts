@@ -10,6 +10,7 @@ import {
   type IssuedHandle,
   adminAgentScope,
   issueHandle,
+  lockIssuingAuthority,
 } from '../../governance/capability/index.js';
 import { type PlatformRole, effectivePlatformRole } from '../identity/users.js';
 
@@ -234,7 +235,7 @@ export class AdminAgentSessionEndedError extends Error {
 
 /**
  * Issues an admin agent's Handle, on `client` inside a transaction of `workspaceId`: the authority
- * check (refusing with {@link AdminAgentRefused}), then the Principal's `admin_agent` session — the
+ * locks, the authority check under them (refusing with {@link AdminAgentRefused}), then the Principal's `admin_agent` session — the
  * newest one not revoked or expired, or a new one — and a Handle under it scoped to
  * `adminAgentScope` for the Principal's role here (issueHandle refuses anything wider for this
  * session kind). The runtime (`AgentHostRuntime`, S11 AA4c-2) calls it when an admin agent's Turn
@@ -255,6 +256,10 @@ export async function issueAdminAgentHandle(
       `an admin agent's Handle lives between 1 and ${ADMIN_AGENT_HANDLE_MAX_TTL_SECONDS} seconds, got ${params.ttlSeconds}`,
     );
   }
+  // The authority locks first (governance 0043, legacy 702): the I-A3 check below then reads every
+  // change of the workspace, the user (its platform role) or the Principal that committed before
+  // them, and any later one waits until this transaction commits — and then revokes this Handle.
+  await lockIssuingAuthority(client, params.workspaceId, params.principalId);
   const facts = await assertAdminAgentAuthority(client, params.workspaceId, params.principalId);
   const sessionId =
     params.sessionId === undefined
@@ -270,6 +275,7 @@ export async function issueAdminAgentHandle(
     scope: adminAgentScope(params.resources ?? {}, { role: facts.principalRole }),
     ttlSeconds: params.ttlSeconds,
     privateKey: params.privateKey,
+    basis: { kind: 'role', role: facts.principalRole },
   });
 }
 

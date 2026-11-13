@@ -162,9 +162,15 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     }
 
-    async function issueTestHandle(sessionId: string): Promise<IssuedHandle> {
+    async function issueTestHandle(sessionId: string, role: Role): Promise<IssuedHandle> {
       return inTx(ownerId, (client) =>
-        issueHandle(client, { sessionId, scope: entryScope(), ttlSeconds: 3600, privateKey }),
+        issueHandle(client, {
+          sessionId,
+          scope: entryScope(),
+          ttlSeconds: 3600,
+          privateKey,
+          basis: { kind: 'role', role },
+        }),
       );
     }
 
@@ -202,9 +208,9 @@ describe.runIf(DATABASE_URL !== undefined)(
     /** find_workers/invoke_worker for `principalId`, over a fresh entry session/Handle (S3.13
      *  runtime-consumer tests below) — same shape the existing "two-phase wait" test above already
      *  establishes, generalized to any principal rather than the module's own `ownerId`. */
-    async function entryHandleCallerFor(principalId: string): Promise<ResolvedCaller> {
+    async function entryHandleCallerFor(principalId: string, role: Role): Promise<ResolvedCaller> {
       const sessionId = await insertSession('entry', principalId, principalId);
-      const issued = await issueTestHandle(sessionId);
+      const issued = await issueTestHandle(sessionId, role);
       return { channel: 'handle', claims: claimsFromIssued(issued) };
     }
 
@@ -264,7 +270,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       configureTaskRuntime({ pool, privateKey, supervisorClient });
 
       const sessionId = await insertSession('entry', ownerId, ownerId);
-      const issued = await issueTestHandle(sessionId);
+      const issued = await issueTestHandle(sessionId, 'owner');
       const caller: ResolvedCaller = { channel: 'handle', claims: claimsFromIssued(issued) };
 
       const result = (await dispatchCapability({ pool }, caller, 'invoke_worker', {
@@ -292,7 +298,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           supervisorClient: new NeverFinishingSupervisorClient(pool, workspaceId),
         });
         const principalId = await adminInsertPrincipal('owner', 'r54-derived-owner');
-        const caller = await entryHandleCallerFor(principalId);
+        const caller = await entryHandleCallerFor(principalId, 'owner');
         const call = (target: ResolvedCaller, params: Record<string, unknown>) =>
           dispatchCapability({ pool }, target, 'invoke_worker', {
             definitionId: workerDefinitionId,
@@ -312,7 +318,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const otherInput = await call(caller, { input: { job: 2 } });
         expect(otherInput.id).not.toBe(first.id);
 
-        const otherSession = await call(await entryHandleCallerFor(principalId), {
+        const otherSession = await call(await entryHandleCallerFor(principalId, 'owner'), {
           input: { job: 1 },
         });
         expect(otherSession.id).not.toBe(first.id);
@@ -325,7 +331,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           supervisorClient: new NeverFinishingSupervisorClient(pool, workspaceId),
         });
         const principalId = await adminInsertPrincipal('owner', 'r54-terminal-owner');
-        const caller = await entryHandleCallerFor(principalId);
+        const caller = await entryHandleCallerFor(principalId, 'owner');
         const call = (params: Record<string, unknown>) =>
           dispatchCapability({ pool }, caller, 'invoke_worker', {
             definitionId: workerDefinitionId,
@@ -355,7 +361,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         supervisorClient: new NeverFinishingSupervisorClient(pool, workspaceId),
       });
       const principalId = await adminInsertPrincipal('owner', 'legacy-184-owner');
-      const caller = await entryHandleCallerFor(principalId);
+      const caller = await entryHandleCallerFor(principalId, 'owner');
       const invoke = (input: unknown) =>
         dispatchCapability({ pool }, caller, 'invoke_worker', {
           definitionId: workerDefinitionId,
@@ -448,7 +454,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           excludedWorkerDefinitions: [definitionB],
         });
 
-        const caller = await entryHandleCallerFor(principalId);
+        const caller = await entryHandleCallerFor(principalId, 'owner');
 
         const found = (await dispatchCapability({ pool }, caller, 'find_workers', {
           need: 'agent-profile-narrow-worker',
@@ -490,7 +496,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           'agent-profile-unset-worker-b-unique',
         );
 
-        const caller = await entryHandleCallerFor(principalId);
+        const caller = await entryHandleCallerFor(principalId, 'member');
 
         const found = (await dispatchCapability({ pool }, caller, 'find_workers', {
           need: 'agent-profile-unset-worker',

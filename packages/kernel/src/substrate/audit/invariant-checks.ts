@@ -109,6 +109,13 @@ import {
  * session. `checkIH1` is the monitor: it reads non-zero if the trigger is dropped or stops reaching
  * rows (it is a `security definer` function and `capability_handles` must never FORCE row level
  * security, which would hide every row from it).
+ *
+ * ## Handle authority — I-H2
+ *
+ * Legacy 702: a disabled workspace, user or Principal has no valid Handle acting for it. Enforced
+ * by governance 0043 — every disable revokes the sessions acting for it (and 0042 their Handles),
+ * and every issuer re-checks the authority under the advisory locks every writer takes. `checkIH2`
+ * is the monitor: non-zero means a disable missed a session, or a Handle was issued past one.
  */
 
 export interface InvariantCheckResult {
@@ -689,6 +696,33 @@ async function checkIH1(client: PoolClient): Promise<InvariantCheckResult> {
 }
 
 // -------------------------------------------------------------------------------------------
+// I-H2 — a disabled workspace, user or Principal has no valid Handle (legacy 702).
+// -------------------------------------------------------------------------------------------
+
+async function checkIH2(client: PoolClient): Promise<InvariantCheckResult> {
+  const result = await client.query<{ workspace_id: string; jti: string; what: string }>(
+    `select h.workspace_id, h.jti,
+            case when w.status = 'disabled' then 'workspace'
+                 when u.status = 'disabled' then 'user'
+                 else 'principal' end as what
+     from capability_handles h
+     join principals p on p.workspace_id = h.workspace_id and p.id = h.on_behalf_of
+     join workspaces w on w.id = h.workspace_id
+     left join users u on u.id = p.user_id
+     where h.revoked_at is null and h.expires_at > now()
+       and (p.disabled_at is not null or u.status = 'disabled' or w.status = 'disabled')
+     order by h.created_at desc, h.jti desc`,
+  );
+  return {
+    invariant: 'I-H2',
+    violations: result.rows.length,
+    sample: result.rows
+      .slice(0, SAMPLE_LIMIT)
+      .map((row) => `${row.workspace_id}:${row.jti} (${row.what} disabled)`),
+  };
+}
+
+// -------------------------------------------------------------------------------------------
 // Beyond I1–I16 — operational-health checks (see module doc comment).
 // -------------------------------------------------------------------------------------------
 
@@ -827,6 +861,7 @@ export const INVARIANT_CHECK_IDS: readonly string[] = [
   'I-G6',
   'I-G9',
   'I-H1',
+  'I-H2',
   'ops.one_running_turn',
   'ops.outbox_stuck',
   'ops.collector_silent',
@@ -869,6 +904,7 @@ export async function runInvariantChecks(
       await checkIG6(client, SAMPLE_LIMIT, goalBudgetGraceMs),
       await checkIG9(client, SAMPLE_LIMIT),
       await checkIH1(client),
+      await checkIH2(client),
       await checkOneRunningTurn(client),
       await checkOutboxStuck(client, thresholdMs),
       await checkCollectorSilent(client, collectorSilenceMs),

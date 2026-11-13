@@ -8,6 +8,7 @@ import type {
   PlatformDraftResidueWire,
   PlatformOverviewWire,
   PlatformSettingsWire,
+  Role,
   UserMembershipWire,
   UserWire,
 } from '@nexttime/shared';
@@ -243,6 +244,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     async function issueSessionHandle(
       ws: string,
       principalId: string,
+      role: Role,
       kind: 'entry' | 'mcp_session' | 'worker_run',
       capabilities: readonly string[] = ['search'],
     ): Promise<{ readonly sessionId: string; readonly jti: string }> {
@@ -259,6 +261,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           scope: { capabilities: [...capabilities], resources: {} },
           ttlSeconds: 3600,
           privateKey,
+          basis: { kind: 'role', role },
         });
         return { sessionId, jti: issued.jti };
       });
@@ -594,8 +597,18 @@ describe.runIf(DATABASE_URL !== undefined)(
           role: 'member',
         });
         const apiKey = await giveLegacyApiKey(workspaceId, membership.principalId);
-        const entry = await issueSessionHandle(workspaceId, membership.principalId, 'entry');
-        const mcp = await issueSessionHandle(workspaceId, membership.principalId, 'mcp_session');
+        const entry = await issueSessionHandle(
+          workspaceId,
+          membership.principalId,
+          'member',
+          'entry',
+        );
+        const mcp = await issueSessionHandle(
+          workspaceId,
+          membership.principalId,
+          'member',
+          'mcp_session',
+        );
 
         await callAsAdmin<UserWire>('set_user_status', { userId: user.id, status: 'disabled' });
 
@@ -693,13 +706,14 @@ describe.runIf(DATABASE_URL !== undefined)(
         const user = await findUserByLogin(pool, holder.login);
         if (!user) throw new Error('addPrincipal linked no user');
         const held = [
-          await issueSessionHandle(workspaceId, holder.principalId, 'entry'),
-          await issueSessionHandle(workspaceId, holder.principalId, 'mcp_session'),
-          await issueSessionHandle(workspaceId, holder.principalId, 'worker_run'),
+          await issueSessionHandle(workspaceId, holder.principalId, 'member', 'entry'),
+          await issueSessionHandle(workspaceId, holder.principalId, 'member', 'mcp_session'),
+          await issueSessionHandle(workspaceId, holder.principalId, 'member', 'worker_run'),
         ];
         const bystanderHandle = await issueSessionHandle(
           workspaceId,
           bystander.principalId,
+          'member',
           'mcp_session',
         );
 
@@ -828,7 +842,12 @@ describe.runIf(DATABASE_URL !== undefined)(
           workspaceId,
           role: 'member',
         });
-        const live = await issueSessionHandle(workspaceId, membership.principalId, 'mcp_session');
+        const live = await issueSessionHandle(
+          workspaceId,
+          membership.principalId,
+          'member',
+          'mcp_session',
+        );
         /** The row versions (`xmin`) of the membership Principal, its session and the Handle: a
          *  write to any of them — even one that sets a column to the value it has — changes it. */
         const rowVersions = () =>
@@ -885,14 +904,22 @@ describe.runIf(DATABASE_URL !== undefined)(
           workspaceId,
           role: 'builder',
         });
-        const entry = await issueSessionHandle(workspaceId, principalId, 'entry');
-        const mcp = await issueSessionHandle(workspaceId, principalId, 'mcp_session');
+        const entry = await issueSessionHandle(workspaceId, principalId, 'builder', 'entry');
+        const mcp = await issueSessionHandle(workspaceId, principalId, 'builder', 'mcp_session');
         // `propose_operation` is `minRole: 'builder'`: a member may not hold it.
-        const builderWorker = await issueSessionHandle(workspaceId, principalId, 'worker_run', [
-          'search',
-          'propose_operation',
-        ]);
-        const memberWorker = await issueSessionHandle(workspaceId, principalId, 'worker_run');
+        const builderWorker = await issueSessionHandle(
+          workspaceId,
+          principalId,
+          'builder',
+          'worker_run',
+          ['search', 'propose_operation'],
+        );
+        const memberWorker = await issueSessionHandle(
+          workspaceId,
+          principalId,
+          'builder',
+          'worker_run',
+        );
         const web = await withAdminClient(pool, async (client) => {
           const result = await client.query<{ id: string }>(
             `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
@@ -984,9 +1011,15 @@ describe.runIf(DATABASE_URL !== undefined)(
         const removedHandle = await issueSessionHandle(
           otherWorkspaceId,
           removed.principalId,
+          'member',
           'mcp_session',
         );
-        const keptHandle = await issueSessionHandle(workspaceId, kept.principalId, 'mcp_session');
+        const keptHandle = await issueSessionHandle(
+          workspaceId,
+          kept.principalId,
+          'member',
+          'mcp_session',
+        );
         const app = appWithKeys();
         const cookie = await loginAs(app, login, PASSWORD);
 

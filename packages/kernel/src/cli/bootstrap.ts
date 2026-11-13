@@ -36,7 +36,11 @@ import {
   createWorkspaceWithOwner,
 } from '../application/workspace/index.js';
 import type { WorkspacePurpose } from '../application/workspace/index.js';
-import { issueHandle, loadHandleKeyPair } from '../governance/capability/index.js';
+import {
+  issueOperatorHandle,
+  loadHandleKeyPair,
+  lockIssuingAuthority,
+} from '../governance/capability/index.js';
 import { writeAudit } from '../substrate/audit/index.js';
 import {
   publishOntologyDomainPack,
@@ -401,6 +405,9 @@ export async function issueServiceHandleFromCli(
     { workspaceId: input.workspaceId, principalId: randomUUID() },
     async (client) => {
       const principalId = await getOrCreateServicePrincipal(client, input.workspaceId, input.name);
+      // Legacy 702 (governance 0043): the authority locks before the session row below references
+      // the Principal. A disabled service Principal of that name is refused (I-H2).
+      await lockIssuingAuthority(client, input.workspaceId, principalId);
 
       const sessionResult = await client.query<{ id: string }>(
         `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
@@ -422,7 +429,7 @@ export async function issueServiceHandleFromCli(
         input.scope,
       );
 
-      const issued = await issueHandle(client, {
+      const issued = await issueOperatorHandle(client, {
         sessionId: sessionRow.id,
         scope: { capabilities: [...input.scope], resources },
         ttlSeconds: input.ttlSeconds ?? DEFAULT_SERVICE_HANDLE_TTL_SECONDS,
