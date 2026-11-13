@@ -24,6 +24,7 @@ import {
   type IssuedHandle,
   issueHandle,
   lockIssuingAuthority,
+  revokeGateGrantScopedSessionHandles,
 } from './handles.js';
 import { generateEphemeralHandleKeyPair } from './keys.js';
 
@@ -551,6 +552,118 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         expect(refusalCode(await issuer)).toBe('authority_changed');
       });
+    });
+
+    describe('the lock order: authority locks, then sessions by id, then Handles (#1150 review)', () => {
+      // A bulk revocation (one statement over every session acting for a Principal or in a
+      // workspace: governance 0043's triggers, a role change) and a per-session one (a gate Grant change revoking
+      // the Principal's entry Handles, which takes no authority lock) on the same two sessions.
+      // Their ids run against the order they are stored in, so a revoker that took rows in storage
+      // order would meet them the other way round from one that takes them by id. A third
+      // transaction holds one of the two first, so both revokers queue behind it and then race.
+      const bulk: readonly {
+        readonly writer: string;
+        readonly fragment: string;
+        readonly write: (at: Member, owner: Member) => Promise<unknown>;
+      }[] = [
+        {
+          writer: 'disable_principal',
+          fragment: 'set disabled_at',
+          write: (at, owner) =>
+            asApp(owner, (client) =>
+              disablePrincipalHandler(
+                client,
+                at.workspaceId,
+                { principalId: at.principalId },
+                { channel: 'human', principalId: owner.principalId },
+              ),
+            ),
+        },
+        {
+          writer: 'set_principal_role',
+          fragment: 'and on_behalf_of = $2',
+          write: (at) =>
+            asApp(at, (client) =>
+              setPrincipalRoleHandler(client, at.workspaceId, {
+                principalId: at.principalId,
+                role: 'member',
+              }),
+            ),
+        },
+        {
+          writer: 'set_workspace_status',
+          fragment: 'update workspaces',
+          write: (at) =>
+            asPlatform((client) =>
+              setWorkspaceStatusHandler(client, at.workspaceId, {
+                workspaceId: at.workspaceId,
+                status: 'disabled',
+              }),
+            ),
+        },
+      ];
+      const cases = bulk.flatMap((b) =>
+        (['lower', 'higher'] as const).map((held) => ({ ...b, held })),
+      );
+
+      it.each(cases)(
+        '$writer and a gate Grant change on the same sessions both complete, the $held id held first — no deadlock (40P01)',
+        async ({ fragment, write, held }) => {
+          const at = await member();
+          const owner = await member({ workspaceId: at.workspaceId, role: 'owner' });
+          const [low, high] = [randomUUID(), randomUUID()].sort() as [string, string];
+          for (const id of [high, low]) {
+            await asApp(at, (client) =>
+              client.query(
+                `insert into sessions (id, workspace_id, principal_id, kind, on_behalf_of, status)
+                 values ($1, $2, $3, 'entry', $3, 'active')`,
+                [id, at.workspaceId, at.principalId],
+              ),
+            );
+          }
+          const handles = [
+            await asApp(at, (client) => issue(client, at, low)),
+            await asApp(at, (client) => issue(client, at, high)),
+          ];
+
+          const locked = latch();
+          const release = latch();
+          const blocker = asOwner(at.workspaceId, async (client) => {
+            await client.query('select 1 from sessions where id = $1 for share', [
+              held === 'lower' ? low : high,
+            ]);
+            locked.open();
+            await release.wait;
+          });
+          await locked.wait;
+
+          const perSession = asApp(owner, (client) =>
+            revokeGateGrantScopedSessionHandles(client, at.workspaceId, at.principalId),
+          );
+          await waitUntilBlocked('order by id for no key update');
+          const bulkWrite = write(at, owner);
+          await waitUntilBlocked(fragment);
+          release.open();
+          await blocker;
+
+          const outcomes = await Promise.allSettled([perSession, bulkWrite]);
+          expect(
+            outcomes.map((outcome) =>
+              outcome.status === 'fulfilled'
+                ? 'completed'
+                : `failed: ${(outcome.reason as { code?: string }).code ?? String(outcome.reason)}`,
+            ),
+          ).toEqual(['completed', 'completed']);
+          for (const handle of handles) expect(await handleState(at, handle.jti)).toBe('revoked');
+          const sessions = await asOwner(at.workspaceId, (client) =>
+            client.query<{ status: string }>(
+              'select status from sessions where id = any($1::uuid[])',
+              [[low, high]],
+            ),
+          );
+          expect(sessions.rows.map((row) => row.status)).toEqual(['revoked', 'revoked']);
+        },
+      );
     });
 
     describe('Handles left valid under an authority disabled before this release', () => {

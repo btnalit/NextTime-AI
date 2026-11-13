@@ -73,8 +73,16 @@ export type { CapabilityScope, HandleClaims };
  * triggers), and a disable revokes the sessions acting for it (0043 again, then 0042), so a change
  * either waits for the Handle and revokes it, or makes the issuer wait and refuse. The operator
  * CLI issues on no basis (`issueOperatorHandle`, `src/cli/` only — a ci:guards check), still
- * refused for a disabled Principal, user or workspace. Two rules
- * keep the locks free of deadlocks:
+ * refused for a disabled Principal, user or workspace.
+ *
+ * Lock order (legacy 702, #1150 review). Whoever issues or revokes takes its locks in one global
+ * order, so two of them never wait on each other in a cycle (Postgres would end one with 40P01):
+ *
+ *   1. the authority locks (governance 0043): workspaces, users, Principals, each sorted by id;
+ *   2. session rows, by id;
+ *   3. Handle rows.
+ *
+ * Three rules keep to it:
  *
  *   - whoever changes an authority takes its lock first, before it reads or locks any row
  *     ({@link lockAuthoritiesForChange}; several at once in the global order) — 0043's triggers
@@ -82,7 +90,13 @@ export type { CapabilityScope, HandleClaims };
  *   - whoever issues takes its shared locks before it locks or inserts a row that references the
  *     Principal — a caller that inserts the session it then issues under calls
  *     {@link lockIssuingAuthority} first (the locks are re-entrant, so `issueHandle` taking them
- *     again costs nothing).
+ *     again costs nothing); then its session row, then its parent Handle row;
+ *   - whoever revokes more than one session takes all their rows in one statement, ordered by id,
+ *     before it changes any of them or their Handles ({@link lockSessions}, {@link revokeSessions};
+ *     `order by id for no key update` ahead of 0043's bulk UPDATEs). It takes live sessions only:
+ *     a revoked session has no valid Handle (I-H1), so nothing locks one to revoke Handles, and a
+ *     later statement of the same transaction finds the sessions it would take already held or
+ *     already revoked.
  */
 
 // -------------------------------------------------------------------------------------------
@@ -1429,10 +1443,40 @@ export async function revokeHandle(client: PoolClient, jti: string): Promise<voi
  * Handle was cut from.
  */
 export async function revokeSession(client: PoolClient, sessionId: string): Promise<void> {
-  await client.query('select 1 from sessions where id = $1 for no key update', [sessionId]);
+  await revokeSessions(client, [sessionId]);
+}
+
+/**
+ * Lock order step 2 (module comment): takes `sessionIds`' rows in one statement, ordered by id,
+ * with the lock an UPDATE of them takes (`for no key update`), so two transactions revoking
+ * overlapping sets wait on each other in one direction only. A caller that marks sessions
+ * `revoked` takes them here first, then UPDATEs them; sessions in several workspaces may be taken
+ * at once where the caller's transaction sees them all (a platform transaction, the admin client).
+ */
+export async function lockSessions(
+  client: PoolClient,
+  sessionIds: readonly string[],
+): Promise<void> {
+  if (sessionIds.length === 0) return;
   await client.query(
-    'update capability_handles set revoked_at = now() where session_id = $1 and revoked_at is null',
-    [sessionId],
+    'select 1 from sessions where id = any($1::uuid[]) order by id for no key update',
+    [[...sessionIds]],
+  );
+}
+
+/**
+ * {@link revokeSession} for several sessions of the caller's workspace at once: their rows in one
+ * statement, ordered by id ({@link lockSessions}), then every Handle issued under them.
+ */
+export async function revokeSessions(
+  client: PoolClient,
+  sessionIds: readonly string[],
+): Promise<void> {
+  if (sessionIds.length === 0) return;
+  await lockSessions(client, sessionIds);
+  await client.query(
+    'update capability_handles set revoked_at = now() where session_id = any($1::uuid[]) and revoked_at is null',
+    [[...sessionIds]],
   );
 }
 
@@ -1463,12 +1507,14 @@ export async function revokeEntrySessionHandles(
 ): Promise<void> {
   const result = await client.query<{ id: string }>(
     `select id from sessions
-     where workspace_id = $1 and principal_id = $2 and on_behalf_of = $2 and kind = 'entry'`,
+     where workspace_id = $1 and principal_id = $2 and on_behalf_of = $2 and kind = 'entry'
+       and status <> 'revoked'`,
     [workspaceId, principalId],
   );
-  for (const row of result.rows) {
-    await revokeSession(client, row.id);
-  }
+  await revokeSessions(
+    client,
+    result.rows.map((row) => row.id),
+  );
 }
 
 /**
@@ -1489,12 +1535,13 @@ export async function revokeGateGrantScopedSessionHandles(
   const result = await client.query<{ id: string }>(
     `select id from sessions
      where workspace_id = $1 and principal_id = $2 and on_behalf_of = $2
-       and kind in ('entry', 'admin_agent')`,
+       and kind in ('entry', 'admin_agent') and status <> 'revoked'`,
     [workspaceId, principalId],
   );
-  for (const row of result.rows) {
-    await revokeSession(client, row.id);
-  }
+  await revokeSessions(
+    client,
+    result.rows.map((row) => row.id),
+  );
 }
 
 /**
@@ -1510,12 +1557,14 @@ export async function revokeWorkspaceEntrySessionHandles(
 ): Promise<void> {
   const result = await client.query<{ id: string }>(
     `select id from sessions
-     where workspace_id = $1 and principal_id = on_behalf_of and kind = 'entry'`,
+     where workspace_id = $1 and principal_id = on_behalf_of and kind = 'entry'
+       and status <> 'revoked'`,
     [workspaceId],
   );
-  for (const row of result.rows) {
-    await revokeSession(client, row.id);
-  }
+  await revokeSessions(
+    client,
+    result.rows.map((row) => row.id),
+  );
 }
 
 /**
@@ -1523,8 +1572,10 @@ export async function revokeWorkspaceEntrySessionHandles(
  * behalf — the entry agent's `entry` session(s), `issue_handle`'s `mcp_session`s and every
  * running Worker's `worker_run` session (`application/task/handle-mint.ts` copies the human's
  * `on_behalf_of` onto it). `disable_principal` calls this: a disabled member keeps no LLM or
- * capability access through any of them, including a Worker mid-Task. `revokeSession` writes
- * `capability_handles.revoked_at`, which llm-proxy picks up through its revocation sync.
+ * capability access through any of them, including a Worker mid-Task. `revokeSessions` writes
+ * `capability_handles.revoked_at`, which llm-proxy picks up through its revocation sync. Live
+ * sessions only, like every revoker here (a revoked session has no valid Handle, I-H1): after
+ * `disable_principal`'s own UPDATE, governance 0043's trigger has revoked them, and this finds none.
  */
 export async function revokeOnBehalfOfSessionHandles(
   client: PoolClient,
@@ -1532,10 +1583,11 @@ export async function revokeOnBehalfOfSessionHandles(
   principalId: string,
 ): Promise<void> {
   const result = await client.query<{ id: string }>(
-    'select id from sessions where workspace_id = $1 and on_behalf_of = $2',
+    `select id from sessions where workspace_id = $1 and on_behalf_of = $2 and status <> 'revoked'`,
     [workspaceId, principalId],
   );
-  for (const row of result.rows) {
-    await revokeSession(client, row.id);
-  }
+  await revokeSessions(
+    client,
+    result.rows.map((row) => row.id),
+  );
 }

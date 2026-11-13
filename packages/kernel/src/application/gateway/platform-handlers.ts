@@ -1363,8 +1363,12 @@ export const setWorkspaceStatusHandler: CapabilityHandler = async (
   // when an already-disabled workspace is disabled again — and keeps a pre-0030 `null` null,
   // which `purge_workspace` reads as "retention elapsed" (§12 决定 3).
   //
-  // Legacy 707: the status first, then the sessions — every writer changes the authority before
-  // it revokes what was issued under it (the order the issuance locks of legacy 702 rely on).
+  // Disabling revokes every session in the workspace — entry, Worker, MCP, service; R-12: every
+  // one not `revoked`, an entry session may still be `starting` — and through governance 0042 their
+  // Handles, so llm-proxy stops them too, not only the kernel (which refuses every call in a
+  // disabled workspace). governance 0043's `workspaces_disabled_revokes_sessions` trigger does it in
+  // this UPDATE, taking the sessions in one statement ordered by id first (the lock order,
+  // governance/capability/handles.ts); a second revocation here would only find them revoked.
   await client.query(
     `update workspaces
         set status = $2,
@@ -1373,15 +1377,6 @@ export const setWorkspaceStatusHandler: CapabilityHandler = async (
     [input.workspaceId, input.status],
   );
   if (input.status === 'disabled') {
-    // Every session in the workspace — entry, Worker, MCP, service — under `sessions_platform_admin`.
-    // R-12: `<> 'revoked'`, not `= 'active'` — an entry session stays `starting`. Legacy 707: their
-    // Handles go with them (governance 0042's trigger), so llm-proxy stops them too, not only the
-    // kernel (which refuses every call in a disabled workspace).
-    await client.query(
-      `update sessions set status = 'revoked', expires_at = least(expires_at, now())
-        where workspace_id = $1 and status <> 'revoked'`,
-      [input.workspaceId],
-    );
     principalIds = await listHumanPrincipalIds(client, { workspaceId: input.workspaceId });
   }
   const result = await loadPlatformWorkspace(client, input.workspaceId);

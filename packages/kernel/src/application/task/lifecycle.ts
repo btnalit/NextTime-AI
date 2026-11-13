@@ -12,7 +12,7 @@ import type { PoolClient } from 'pg';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import type { TaskSupervisorStatus } from '../../adapters/supervisor-client/index.js';
 import { readEffectiveAgentProfile } from '../../governance/agent-profile/index.js';
-import { revokeSession } from '../../governance/capability/index.js';
+import { revokeSessions } from '../../governance/capability/index.js';
 import { readExecuteAccess } from '../gates/execute-access.js';
 import {
   composeSystemPrompt,
@@ -71,27 +71,37 @@ export async function readWorkerRunRow(
 }
 
 /** Revokes `workerRunId`'s own Handle (its session's Handle(s), `governance/capability`'s
- *  `revokeSession`) and recursively every descendant WorkerRun's Handle (the `par` chain, walked
- *  via `worker_runs.parent_worker_run_id` — bounded by I18's depth ≤ 3, so this recursion is
- *  always shallow). Idempotent: revoking an already-revoked Handle is a no-op
- *  (`governance/capability/handles.ts`'s `revokeHandle`/`revokeSession` doc comments). */
+ *  `revokeSessions`) and every descendant WorkerRun's Handle (the `par` chain, walked via
+ *  `worker_runs.parent_worker_run_id` — bounded by I18's depth ≤ 3, so this recursion is always
+ *  shallow). The whole tree's sessions are gathered first and taken in one statement ordered by id
+ *  (the lock order, governance/capability/handles.ts). Idempotent: revoking an already-revoked
+ *  Handle is a no-op (`governance/capability/handles.ts`'s `revokeHandle`/`revokeSession` doc
+ *  comments). */
 export async function revokeWorkerRunAndDescendants(
   client: PoolClient,
   workspaceId: string,
   workerRunId: string,
 ): Promise<void> {
+  await revokeSessions(client, await workerRunTreeSessionIds(client, workspaceId, workerRunId));
+}
+
+/** The session of `workerRunId` and of every descendant WorkerRun (descendants first). */
+async function workerRunTreeSessionIds(
+  client: PoolClient,
+  workspaceId: string,
+  workerRunId: string,
+): Promise<string[]> {
   const children = await client.query<{ id: string }>(
     'select id from worker_runs where workspace_id = $1 and parent_worker_run_id = $2',
     [workspaceId, workerRunId],
   );
+  const sessionIds: string[] = [];
   for (const child of children.rows) {
-    await revokeWorkerRunAndDescendants(client, workspaceId, child.id);
+    sessionIds.push(...(await workerRunTreeSessionIds(client, workspaceId, child.id)));
   }
-
   const row = await readWorkerRunRow(client, workspaceId, workerRunId);
-  if (row?.sessionId) {
-    await revokeSession(client, row.sessionId);
-  }
+  if (row?.sessionId) sessionIds.push(row.sessionId);
+  return sessionIds;
 }
 
 /** Transitions a WorkerRun to `terminated` (if it is not already there — a no-op, not an error,

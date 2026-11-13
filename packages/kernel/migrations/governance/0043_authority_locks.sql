@@ -31,20 +31,24 @@
 --    user's memberships' (across workspaces), the Principal's — and so, through 0042, their
 --    Handles: a disabled workspace, user (`set_user_status`) or Principal (`disable_principal`,
 --    `remove_membership`) revokes them in the database, not only in the handler that disabled
---    it (the handlers keep their own revocation; it is idempotent). `security definer` for the
---    reason 0042 gives: a platform-plane caller would see no session under RLS. Neither reads
---    `users` (which FORCEs row level security): the users trigger uses only `new.id`.
+--    it (`disable_principal` and `remove_membership` keep their own revocation, which then finds
+--    nothing live; `set_workspace_status` leaves it to the trigger). Each first takes the rows it
+--    revokes in one statement ordered by id, then UPDATEs them (the lock order below). `security
+--    definer` for the reason 0042 gives: a platform-plane caller would see no session under RLS.
+--    Neither reads `users` (which FORCEs row level security): the users trigger uses only
+--    `new.id`.
 -- 4. Remediation: sessions still live under a disabled workspace, user or Principal are revoked
 --    (their Handles with them, 0042), with one audit record per Principal whose Handles were still
 --    valid.
 --
--- The rule that keeps this free of deadlocks (governance/capability/handles.ts, module comment):
--- whoever changes an authority takes its lock first, before it reads or locks any row
--- (`lock_authorities`, several in the global order); whoever issues takes its shared locks before
--- it locks or inserts a row that references the Principal. The triggers in 2 take the same lock
--- again (re-entrant) and are what covers a writer outside the kernel; one that locks rows first
--- can deadlock with an issuer, which Postgres detects by aborting one of the two — never by
--- leaving a Handle valid.
+-- The lock order that keeps this free of deadlocks (governance/capability/handles.ts, module
+-- comment): the authority locks, then session rows by id, then Handle rows. Whoever changes an
+-- authority takes its lock first, before it reads or locks any row (`lock_authorities`, several in
+-- the global order); whoever issues takes its shared locks before it locks or inserts a row that
+-- references the Principal; whoever revokes several sessions takes them in one statement ordered
+-- by id (the triggers in 3 included). The triggers in 2 take the same lock again (re-entrant) and
+-- are what covers a writer outside the kernel; one that locks rows first can deadlock with an
+-- issuer, which Postgres detects by aborting one of the two — never by leaving a Handle valid.
 --
 -- Reversibility (release.md §6): the previous release's code does not call the functions; the
 -- triggers take a lock nobody else holds and revoke what that code's handlers revoke anyway; the
@@ -189,6 +193,12 @@ language plpgsql security definer
 set search_path = public, pg_temp
 as $$
 begin
+  -- The lock order (header): the rows in one statement by id, then the UPDATE.
+  perform 1 from sessions
+   where workspace_id = new.id
+     and status <> 'revoked'
+   order by id
+   for no key update;
   update sessions
      set status = 'revoked', expires_at = least(expires_at, now())
    where workspace_id = new.id
@@ -209,6 +219,16 @@ language plpgsql security definer
 set search_path = public, pg_temp
 as $$
 begin
+  -- The lock order (header): the rows in one statement by id — across the user's workspaces — then
+  -- the UPDATE.
+  perform 1 from sessions s
+   where s.status <> 'revoked'
+     and exists (
+       select 1 from principals p
+        where p.user_id = new.id and p.workspace_id = s.workspace_id and p.id = s.on_behalf_of
+     )
+   order by s.id
+   for no key update of s;
   update sessions s
      set status = 'revoked', expires_at = least(s.expires_at, now())
     from principals p
@@ -232,6 +252,13 @@ language plpgsql security definer
 set search_path = public, pg_temp
 as $$
 begin
+  -- The lock order (header): the rows in one statement by id, then the UPDATE.
+  perform 1 from sessions
+   where workspace_id = new.workspace_id
+     and on_behalf_of = new.id
+     and status <> 'revoked'
+   order by id
+   for no key update;
   update sessions
      set status = 'revoked', expires_at = least(expires_at, now())
    where workspace_id = new.workspace_id

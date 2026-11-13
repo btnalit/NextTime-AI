@@ -136,11 +136,14 @@ function createFakeCapabilityClient() {
       };
     }
 
-    if (sql.startsWith('select 1 from sessions where id = $1 for no key update')) {
-      const [sessionId] = params as [string];
-      return sessions.has(sessionId)
-        ? { rows: [{ '?column?': 1 }], rowCount: 1 }
-        : { rows: [], rowCount: 0 };
+    if (
+      sql.startsWith(
+        'select 1 from sessions where id = any($1::uuid[]) order by id for no key update',
+      )
+    ) {
+      const [sessionIds] = params as [string[]];
+      const locked = [...sessionIds].filter((id) => sessions.has(id)).sort();
+      return { rows: locked.map(() => ({ '?column?': 1 })), rowCount: locked.length };
     }
 
     if (sql.startsWith('insert into capability_handles')) {
@@ -179,11 +182,15 @@ function createFakeCapabilityClient() {
       return { rows: [], rowCount: affected ? 1 : 0 };
     }
 
-    if (sql.startsWith('update capability_handles set revoked_at = now() where session_id')) {
-      const [sessionId] = params as [string];
+    if (
+      sql.startsWith(
+        'update capability_handles set revoked_at = now() where session_id = any($1::uuid[])',
+      )
+    ) {
+      const [sessionIds] = params as [string[]];
       let count = 0;
       for (const row of handles.values()) {
-        if (row.session_id === sessionId && row.revoked_at === null) {
+        if (sessionIds.includes(row.session_id) && row.revoked_at === null) {
           row.revoked_at = new Date().toISOString();
           count += 1;
         }

@@ -50,6 +50,17 @@ export async function applyRoleChange(
   workspaceId: string,
   principalId: string,
 ): Promise<void> {
+  // The lock order (governance/capability/handles.ts): every live session either UPDATE below may
+  // revoke, in one statement ordered by id, before the first of them. The caller holds the
+  // Principal's authority lock, so no issuer for it waits on these rows meanwhile.
+  await client.query(
+    `select 1 from sessions
+      where workspace_id = $1 and on_behalf_of = $2 and status <> 'revoked'
+        and kind in ('entry', 'mcp_session', 'admin_agent', 'worker_run', 'service')
+      order by id
+      for no key update`,
+    [workspaceId, principalId],
+  );
   await client.query(
     `update sessions set status = 'revoked', expires_at = least(expires_at, now())
       where workspace_id = $1 and on_behalf_of = $2
