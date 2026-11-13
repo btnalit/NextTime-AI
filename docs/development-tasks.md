@@ -3923,6 +3923,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - `spawnWorkerRunForRetry`：认领之后的每一步都在 `try` 里，找不到可衰减的 Handle（`!handleRow`）或任何 spawn 前异常都走 `failTaskAndReapWorkerRuns(…, 'worker_failed')`。
 - 测试：`invoke.integration.test.ts` R-58 区块 6 个确定性屏障测试（迟到的反应、reaper 的 `terminate` 钩子里先跑轮询、取消清扫中跑崩溃反应、取消中看到 `terminated: requested`、取消 UPDATE 未提交时 spawn 等锁（`pg_stat_activity` 判定）、认领后无 Handle），各自去掉修复即红；原「与取消并发完成」用例改在取消的 UPDATE 前注入完成。
 - 剩余崩溃窗口（bump 提交后进程崩溃、取消两个事务之间崩溃）与增量审查的三条（`exited` / `terminated` 守卫无测试、取消后回收前崩溃、终态 Task 不清扫）并进遗留 206；纵深防御见 207。历史影响统计见 `release.md` §3.22。
+- 收尾（#1133，遗留 206、207，dfd472e）：reaper 遇到已决 Task 下的活 run 直接结束（`task_ended`），不改 Task、不重试；`terminateTask` 对终态 Task 不再提前返回，也清扫残留 run。取消的第二个事务没有并进第一个（`terminateTaskWith` 先锁 Task 再扫 run，与反应路径的锁顺序合并会死锁），改由 reaper 一个 tick 内兜底。「running 却没有活 run」由遗留 320 的 `run_lost` 覆盖。
 
 **caddy 日志不记凭据；apply 不再把没做完的事报成 ok（#556，2026-10-15 合入，无迁移；遗留 236、252 关闭）**
 
