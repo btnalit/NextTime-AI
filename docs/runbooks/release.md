@@ -2948,6 +2948,19 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **升级后核对**（可选）：平台管理员打开集成 →「自己接入的门」，没有申请时不出现换地址列表。
 - 无主机动作。
 
+### 3.172 所有者读得到自接门换地址申请的结局（#1166，遗留 715 内核部分，0.68.0 之后的下一版）
+
+没有迁移，没有写路径变化。线上契约只多了一个可选读字段。
+
+- **行为变化**：自接门的所有者读 `get_gatekeeper` 时，多一个 `lastAddressChangeOutcome`，是这扇门最近一次已结束的换地址申请：
+  - 结局和结束时间：applied、rejected、withdrawn、expired。过期的结束时间取 `expires_at`。
+  - 驳回原因：经脱敏，没写就是 null。
+  - 批准时多 `accountCredentialsLeftOnOldHost: true`，提示所有者自己去旧主机清账号凭证。
+  - 不带决定人。成员读不到，平台目录门没有这个字段。有新申请开着时，它和 `pendingAddressChange` 同时出现。
+- `reject_gate_address_change` 的说明写明：驳回原因会给工作区所有者看到。平台管理员写原因时，写给所有者看，只谈这一次申请。
+- **回滚**：回退代码即可。
+- 无主机动作。控制台显示随遗留 715 的下一个 PR。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
