@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useCapability } from '../hooks/useCapability.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { actionKindRaw, actionKindTagText, formatDateTime, formatRelative } from '../lib/format.js';
@@ -37,6 +38,8 @@ export interface GatekeeperDetailDrawerProps {
 export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailDrawerProps) {
   const t = useT();
   const detail = useCapability<GatekeeperDetail>(http, 'get_gatekeeper', { gatekeeperId });
+  // Review #501 of #1158: a proposal just withdrawn is gone at once, not after the read again.
+  const [withdrawnId, setWithdrawnId] = useState<string | null>(null);
 
   if (detail.state.status === 'loading') {
     return (
@@ -99,11 +102,14 @@ export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailD
           </p>
         </Notice>
       ) : null}
-      {gate.pendingAddressChange ? (
+      {gate.pendingAddressChange && gate.pendingAddressChange.id !== withdrawnId ? (
         <PendingGateAddressChange
           http={http}
           change={gate.pendingAddressChange}
-          onWithdrawn={() => void detail.reload()}
+          onWithdrawn={() => {
+            setWithdrawnId(gate.pendingAddressChange?.id ?? null);
+            void detail.reload();
+          }}
         />
       ) : null}
       <dl className="definition-list">

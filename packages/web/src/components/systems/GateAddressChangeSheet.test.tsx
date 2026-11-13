@@ -64,6 +64,8 @@ interface Script {
   /** The gate's open proposal, read by every `get_gatekeeper`. */
   pending?: GateAddressChangeWire | undefined;
   preview?: (params: unknown) => unknown;
+  /** Every `get_gatekeeper` after a withdrawal never answers (a slow read). */
+  stallReadsAfterWithdraw?: boolean;
 }
 
 function scriptedHttp(script: Script): CapabilityCaller & {
@@ -71,12 +73,14 @@ function scriptedHttp(script: Script): CapabilityCaller & {
 } {
   const calls: { name: string; params: unknown }[] = [];
   let minted = 0;
+  let withdrawn = false;
   return {
     calls,
     call: vi.fn(async (name: string, params?: unknown) => {
       calls.push({ name, params });
       switch (name) {
         case 'get_gatekeeper':
+          if (withdrawn && script.stallReadsAfterWithdraw) return new Promise(() => {});
           return {
             id: GATE,
             name: 'notes',
@@ -92,6 +96,7 @@ function scriptedHttp(script: Script): CapabilityCaller & {
           script.pending = change;
           return change;
         case 'withdraw_gate_address_change':
+          withdrawn = true;
           script.pending = undefined;
           return { ...change, status: 'withdrawn' };
         default:
@@ -256,5 +261,21 @@ describe('GateAddressChangeSheet (legacy 701)', () => {
     // The secret the proposal carried is spent: the steps come back with a new one.
     expect((await screen.findByTestId('connection-secret-value')).textContent).toBe(secretNo(1));
     expect(callsOf(http, 'mint_connection_secret')).toHaveLength(1);
+  });
+
+  // Review #501 of #1158: the withdrawn proposal and its 撤回 do not linger while the gate is read
+  // again — that read still answers with the proposal until it returns.
+  it('a withdrawn proposal is gone at once, before the gate is read again', async () => {
+    const http = scriptedHttp({ pending: change, stallReadsAfterWithdraw: true });
+    show(http);
+    const pending = await screen.findByTestId('gate-address-change-pending');
+    fireEvent.click(within(pending).getByTestId('gate-address-change-withdraw'));
+    const confirm = await screen.findByRole('dialog', { name: '撤回换地址的申请' });
+    fireEvent.click(within(confirm).getByRole('button', { name: '撤回' }));
+
+    await waitFor(() => expect(callsOf(http, 'get_gatekeeper')).toHaveLength(2));
+    expect(screen.queryByTestId('gate-address-change-pending')).toBeNull();
+    expect(screen.queryByTestId('gate-address-change-withdraw')).toBeNull();
+    expect((await screen.findByTestId('connection-secret-value')).textContent).toBe(secretNo(1));
   });
 });

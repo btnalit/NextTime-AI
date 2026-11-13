@@ -362,6 +362,29 @@ export function SystemAccessCard({
     menuConfirm === 'rotate' && rotateRead.state.status === 'ready'
       ? (rotateRead.state.data.pendingAddressChange ?? null)
       : null;
+  // Review #501 of #1158: 签发 waits for that read (it is quick), so the line is there before the
+  // secret is issued; a read that fails does not hold a rotation up — the confirm says it could
+  // not tell, and what a waiting move would mean.
+  const pendingMoveLine = (): string | null => {
+    if (menuConfirm !== 'rotate') return null;
+    if (rotateRead.state.status === 'loading') {
+      return t(
+        '正在确认这个门有没有等平台管理员批准的更换地址申请…',
+        'Checking whether a move of this gate is waiting for a platform administrator…',
+      );
+    }
+    if (rotateRead.state.status === 'error') {
+      return t(
+        '没能确认这个门有没有等批准的更换地址申请；有的话，批准后门改用为那次更换生成的密钥，这次签发的密钥随之作废',
+        'Could not check whether a move of this gate is waiting for approval; if one is, approving it gives the gate the secret made for the move, and the one issued now stops working',
+      );
+    }
+    if (pendingMove === null) return null;
+    return t(
+      `这个门有一个等平台管理员批准的更换地址申请（换到 ${pendingMove.toEndpoint}）：批准后门改用为那次更换生成的密钥，这次签发的密钥随之作废`,
+      `This gate has a proposal to move to ${pendingMove.toEndpoint} awaiting a platform administrator: once it is approved the gate uses the secret made for the move, and the one issued now stops working`,
+    );
+  };
 
   async function publish(): Promise<void> {
     setPublishing(true);
@@ -553,16 +576,10 @@ export function SystemAccessCard({
                 'The old secret stops working now — the kernel cannot reach this gate until it holds the new one and restarts',
               ),
               t('新密钥只显示一次', 'The new secret is shown once'),
-              ...(pendingMove !== null
-                ? [
-                    t(
-                      `这个门有一个等平台管理员批准的更换地址申请（换到 ${pendingMove.toEndpoint}）：批准后门改用为那次更换生成的密钥，这次签发的密钥随之作废`,
-                      `This gate has a proposal to move to ${pendingMove.toEndpoint} awaiting a platform administrator: once it is approved the gate uses the secret made for the move, and the one issued now stops working`,
-                    ),
-                  ]
-                : []),
+              ...(pendingMoveLine() !== null ? [pendingMoveLine() as string] : []),
             ]}
             confirmLabel={t('签发', 'Issue')}
+            confirmDisabled={menuConfirm === 'rotate' && rotateRead.state.status === 'loading'}
             onConfirm={async () => {
               const result = await http.call<RotateConnectionSecretResultWire>(
                 'rotate_connection_secret',

@@ -93,6 +93,9 @@ function GateAddressChangeBody({
   const detail = useCapability<GatekeeperDetail>(http, 'get_gatekeeper', { gatekeeperId });
   // The proposal just made, shown at once rather than after the read that follows it.
   const [proposed, setProposed] = useState<GateAddressChangeWire | null>(null);
+  // Review #501 of #1158: the proposal just withdrawn, hidden at once rather than after the read
+  // that follows it (until then that read still answers with it).
+  const [withdrawnId, setWithdrawnId] = useState<string | null>(null);
 
   if (detail.state.status === 'loading') {
     return (
@@ -114,7 +117,8 @@ function GateAddressChangeBody({
     );
   }
   const gate = detail.state.data;
-  const pending = proposed ?? gate.pendingAddressChange ?? null;
+  const stored = gate.pendingAddressChange ?? null;
+  const pending = proposed ?? (stored !== null && stored.id !== withdrawnId ? stored : null);
   return (
     <div className="stack">
       <KeyValue
@@ -132,6 +136,7 @@ function GateAddressChangeBody({
           http={http}
           change={pending}
           onWithdrawn={() => {
+            setWithdrawnId(pending.id);
             setProposed(null);
             void detail.reload();
           }}
@@ -277,8 +282,8 @@ function ProposeGateAddressChange({
         </span>
         <p className="field-hint">
           {t(
-            '把它配给新地址上的门，门才答得出它的清单。批准之前，内核仍用现在的密钥调用现在的地址；如果新旧地址其实是同一扇门（比如只是从 http 换成 https），换上新密钥之后旧地址的调用会被门拒绝，直到批准。',
-            'Give it to the gate at the new address so it can answer for its manifest. Until the move is approved, the kernel keeps calling the current address with the current secret; if both addresses reach the same gate (only http to https, say), calls to the current address are refused by the gate once it holds the new secret, until the move is approved.',
+            '把它配给新地址上的门，门才答得出它的清单。批准之前，内核仍用现在的密钥调用现在的地址；如果新旧地址其实是同一扇门（比如只是从 http 换成 https），换上新密钥之后旧地址的调用会被门拒绝，直到批准——这种情况下，提交后请尽快联系平台管理员审批。',
+            'Give it to the gate at the new address so it can answer for its manifest. Until the move is approved, the kernel keeps calling the current address with the current secret; if both addresses reach the same gate (only http to https, say), calls to the current address are refused by the gate once it holds the new secret, until the move is approved — so in that case, ask a platform administrator to decide it soon after you propose it.',
           )}
         </p>
         {secretError !== null ? (

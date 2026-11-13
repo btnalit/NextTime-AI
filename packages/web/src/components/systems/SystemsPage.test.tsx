@@ -1054,6 +1054,64 @@ describe('SystemsPage', () => {
     expect(http.calls.some((c) => c.name === 'rotate_connection_secret')).toBe(false);
   });
 
+  // Review #501 of #1158: 签发 waits for that read, so the line is there before the secret is
+  // issued; a read that fails says it could not tell, and does not hold the rotation up.
+  it('legacy 701: 签发 waits for the read of a waiting move; a failed read says it could not tell', async () => {
+    let answer: (value: unknown) => void = () => {};
+    const http = scriptedHttp({
+      execution_readiness: () => readiness({ principalId: 'p-self', gates: [gate()] }),
+      get_gatekeeper: () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    });
+    renderPage(http);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    fireEvent.pointerDown(within(card).getByTestId('gatekeeper-more'), { button: 0 });
+    fireEvent.click(await screen.findByTestId('gatekeeper-rotate-secret'));
+    const confirm = await screen.findByTestId('gatekeeper-rotate-secret-confirm');
+    const issue = () => within(confirm).getByRole('button', { name: '签发' }) as HTMLButtonElement;
+    expect(confirm.textContent).toContain('正在确认这个门有没有等平台管理员批准的更换地址申请');
+    expect(issue().disabled).toBe(true);
+    answer({ id: 'gk-1', name: '库存', endpoint: 'http://gate-a:8090' });
+    await waitFor(() => expect(issue().disabled).toBe(false));
+    expect(confirm.textContent).not.toContain('更换地址申请');
+    cleanup();
+
+    const failing = scriptedHttp({
+      execution_readiness: () => readiness({ principalId: 'p-self', gates: [gate()] }),
+      get_gatekeeper: () => {
+        throw new HttpError('network', 'offline');
+      },
+    });
+    renderPage(failing);
+    const again = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    fireEvent.pointerDown(within(again).getByTestId('gatekeeper-more'), { button: 0 });
+    fireEvent.click(await screen.findByTestId('gatekeeper-rotate-secret'));
+    const failed = await screen.findByTestId('gatekeeper-rotate-secret-confirm');
+    await waitFor(() =>
+      expect(failed.textContent).toContain('没能确认这个门有没有等批准的更换地址申请'),
+    );
+    expect(
+      (within(failed).getByRole('button', { name: '签发' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  // Review #501 of #1158: both act for the owner only (rotate_connection_secret and
+  // propose_gate_address_change); a member's row menu has neither.
+  it('legacy 701: a member sees neither 更换地址 nor 重新签发连接密钥 on a self-connected gate', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => workspace('member'),
+      execution_readiness: () => readiness({ principalId: 'p-self', gates: [gate()] }),
+    });
+    renderPage(http);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    fireEvent.pointerDown(within(card).getByTestId('gatekeeper-more'), { button: 0 });
+    await screen.findByRole('menuitem', { name: '健康与操作' });
+    expect(screen.queryByTestId('gatekeeper-change-address')).toBeNull();
+    expect(screen.queryByTestId('gatekeeper-rotate-secret')).toBeNull();
+  });
+
   // Legacy 701: the same gates — the workspace connected them itself — move to a new address
   // through 「更换地址」, a proposal a platform administrator decides.
   it('legacy 701: the owner opens 更换地址 for a self-connected gate from the row’s menu', async () => {
