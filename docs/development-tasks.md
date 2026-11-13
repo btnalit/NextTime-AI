@@ -4745,6 +4745,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **验收**：`accept_s2` S15 四项（达成、推导、封存、没过线暂停），staging rehearsal 首跑全过；e2e「目标上的独立评审」。fake-llm 的 `GOAL_REPORT` 与 selftest 同步。
   - **审查**：UX 两轮、#481、#493 均 PASS。S15 断言的 P3 为遗留 695。GO18 完成。
   - **收尾**（#1118，2026-11-12 合入，8430ac6）：遗留 693 的反向测试（running 的评审 Task 写 `result` 被拒）；S15 在整个 input 里找 `passAt`、没过线只一个评审 Task；遗留 695 关闭。阶段 V 门的内核测试放在下一个内核 PR。
+  - **GO18a 两条 P3**（#1123，2026-11-13 合入，3e2790a；无迁移，运行时契约 2 → 3）：`review.ts`、`advance.ts` 阶段 V 先结算再开新的，墙钟、评测封存、token、推迟重试都按阶段 D 的规则约束评审员，时长上限取墙钟剩余；`spawn.ts` 按 `purpose` 给评审 Task 带 `builtinTools: read_only`，supervisor 设 `NEXTTIME_BUILTIN_TOOLS` 与 label，entrypoint 换成 `pi-settings-read-only.json`（read、grep、find、ls），未知取值 fail-closed；阶段 V 门测试（#493 的 V1、V3 变异被杀）；fake-llm 评审员剧本检查工具集，rehearsal 的 S15 因此核对只读。规划器同样收紧为遗留 697。
 
 ### W5 — 管理员 Agent 代码层（待定）
 
