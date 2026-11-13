@@ -2129,6 +2129,14 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       },
     },
   },
+  mint_connection_secret: {
+    // Legacy 711: each call issues another secret, its salt another row of the issuance ledger
+    // (the result names no entity: the salt it carries is the one).
+    'a gate about to be connected': {
+      setUp: async () => ({}),
+      entity: (result) => (result as { connectionSecret: string }).connectionSecret.split('_')[1],
+    },
+  },
   rotate_connection_secret: {
     // Each call stores a new salt on the same Gatekeeper: the secret before it stops working.
     'a gate the workspace connected itself': {
@@ -2915,6 +2923,8 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
 /** Rows whose schema-built params cannot make a first call succeed on the bare seed — a param
  *  naming something the walk has no value for — run their recipes instead of that case. */
 const RECIPES_ONLY: ReadonlySet<string> = new Set([
+  // Its result names no entity: its recipe says which (the salt the secret carries).
+  'mint_connection_secret',
   'reject_admin_proposal_segment',
   'apply_admin_proposal_segment',
   'withdraw_admin_proposal',

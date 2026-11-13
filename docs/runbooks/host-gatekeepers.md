@@ -413,7 +413,10 @@ Operation，不需要 `publish_manifest`），之后照常 `connect_gatekeeper`�
 接入的自连门拿到的是它**自己的**连接密钥，内核绝不把 `gate_token` 发给 owner 填的地址。owner 先调
 `mint_connection_secret`（控制台"直接注册门"表单打开时自动做，只显示一次），把返回的 `connectionSecret`
 写进门的 `GATE_KERNEL_TOKEN_FILE` 指向的文件并重启门，再 `create_connection` 带上同一把
-`connectionSecret`；内核只存它的非秘密 salt、每次调用时重新派生。换密钥：`rotate_connection_secret`
+`connectionSecret`；内核只存它的非秘密 salt、每次调用时重新派生。一把密钥只用一次（遗留 711）：签出后
+24 小时内用于一次 `create_connection` 或一次换地址申请，用过的、轮换下来的再拿来接入会得到 `409
+connection_secret_in_use`，过期的（包括升级到 core 0058 之前签出、还没用的）得到 `409
+connection_secret_expired`，重新签一把即可。换密钥：`rotate_connection_secret`
 （控制台"系统与授权 → ⋯ → 重新签发连接密钥"），旧密钥立即失效。`endpoint` 与 `manifestSource` 都要过
 内核的出站目标判定（R-27）：裸服务名 / `localhost` / 回环 / 链路本地 / 平台两个子网一律
 `400 connection_target_refused`；确需把自连门跑在平台网络上时，由操作员把主机名加进 `.env` 的

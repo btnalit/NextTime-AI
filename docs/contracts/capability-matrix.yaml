@@ -583,7 +583,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: idempotent # stores nothing (the secret carries its salt; only create_connection records it): another call returns another secret and changes no row
+    repeat: creates # legacy 711: another secret each call, its salt another issued row (usable once, within 24 hours)
   new_chat:
     console: required
     agents: []

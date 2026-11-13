@@ -216,8 +216,12 @@ export function proposeGateAddressChangeErrors(err: unknown, t: Translate): Erro
       'The new address is a gate instance the platform provides, where a gate the workspace connected itself cannot move, so nothing changed: use another address.',
     ),
     connection_secret_in_use: t(
-      '① 的连接密钥已经用过（属于这个工作区的另一扇门，或已经用于一次更换申请），什么也没改：关掉「更换地址」再打开，会签出一把新的；把它放进新地址上的门、重启门，再预览。',
-      'Step ①’s connection secret is spoken for (another gate of this workspace holds it, or it already served a move), so nothing changed: close “Move to a new address” and open it again for a new one, put that in the gate at the new address, restart it, and preview again.',
+      '① 的连接密钥已经用过（接入过这个工作区的一扇门，或已经用于一次更换申请），什么也没改：关掉「更换地址」再打开，会签出一把新的；把它放进新地址上的门、重启门，再预览。',
+      'Step ①’s connection secret was already used (it connected a gate of this workspace, or already served a move), so nothing changed: close “Move to a new address” and open it again for a new one, put that in the gate at the new address, restart it, and preview again.',
+    ),
+    connection_secret_expired: t(
+      '① 的连接密钥已经过期（生成后 24 小时内要提交申请），什么也没改：关掉「更换地址」再打开，会签出一把新的；把它放进新地址上的门、重启门，再预览。',
+      'Step ①’s connection secret has expired (a proposal must follow within 24 hours of minting it), so nothing changed: close “Move to a new address” and open it again for a new one, put that in the gate at the new address, restart it, and preview again.',
     ),
     credentials_in_connection_params: t(
       '新地址里不能带用户名、密码、查询参数（?）或片段（#），什么也没改：只填门自己的地址。',
