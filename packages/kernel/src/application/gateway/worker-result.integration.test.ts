@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { HandleClaims } from '@nexttime/shared';
+import type { HandleClaims, Role } from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
@@ -221,8 +221,12 @@ describe.runIf(DATABASE_URL !== undefined)(
      *  returns the real minted WorkerRun claims to call `report_task_result` as. `principalId`
      *  (default `ownerId`) is both the entry session's own principal and the Task's `on_behalf_of`
      *  — pass a second human principal (see `adminInsertPrincipal`) to spawn a run on their behalf
-     *  instead of the suite's default owner (W5.5 cross-principal corroboration test). */
-    async function spawnWorkerRun(principalId: string = ownerId): Promise<{
+     *  instead of the suite's default owner (W5.5 cross-principal corroboration test), with their
+     *  `role` (what the entry Handle is issued under, legacy 702). */
+    async function spawnWorkerRun(
+      principalId: string = ownerId,
+      role: Role = 'owner',
+    ): Promise<{
       taskId: string;
       workerRunId: string;
       claims: HandleClaims;
@@ -234,6 +238,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           scope: entryScope(),
           ttlSeconds: 3600,
           privateKey,
+          basis: { kind: 'role', role },
         }),
       );
       const entryClaims: HandleClaims = {
@@ -436,6 +441,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           scope: entryScope(),
           ttlSeconds: 3600,
           privateKey,
+          basis: { kind: 'role', role: 'owner' },
         }),
       );
       const entryCaller: ResolvedCaller = {
@@ -924,7 +930,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const [factIdA] = resultA.factIds;
       if (!factIdA) throw new Error('expected run A to write a fact id');
 
-      const runB = await spawnWorkerRun(otherId);
+      const runB = await spawnWorkerRun(otherId, 'member');
       const callerB: ResolvedCaller = { channel: 'handle', claims: runB.claims };
       const resultB = (await dispatchCapability({ pool }, callerB, 'report_task_result', {
         summary: 'run B',

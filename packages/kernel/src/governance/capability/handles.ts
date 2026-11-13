@@ -64,6 +64,42 @@ export type { CapabilityScope, HandleClaims };
  *   - a transaction that issues makes no network call (a revoker waits for it, so its length counts
  *     toward the revoker's): `application/task/spawn.ts` issues in one transaction and calls the
  *     supervisor in another.
+ *
+ * Authority (legacy 702, I-H2 — a disabled workspace, user or Principal has no valid Handle acting
+ * for it): every Handle is issued on a stated basis (`IssuanceBasis`) — the role the caller read,
+ * or the parent Handle it carries — and `issueHandle` re-checks that basis, and that the workspace,
+ * the user and the Principal are not disabled, under governance 0043's authority locks, taken
+ * shared (`lock_issuing_authority`). Every change of one of them takes its lock exclusive (0043's
+ * triggers), and a disable revokes the sessions acting for it (0043 again, then 0042), so a change
+ * either waits for the Handle and revokes it, or makes the issuer wait and refuse. The operator
+ * CLI issues on no basis (`issueOperatorHandle`, `src/cli/` only — a ci:guards check), still
+ * refused for a disabled Principal, user or workspace.
+ *
+ * Lock order (legacy 702, #1150 review). Whoever issues or revokes takes its locks in one global
+ * order, so two of them never wait on each other in a cycle (Postgres would end one with 40P01):
+ *
+ *   1. the authority locks (governance 0043): workspaces, users, Principals, each sorted by id;
+ *   2. session rows, by id;
+ *   3. Handle rows.
+ *
+ * Three rules keep to it:
+ *
+ *   - whoever changes an authority takes its lock first, before it reads or locks any row
+ *     ({@link lockAuthoritiesForChange}; several at once in the global order) — 0043's triggers
+ *     take it again, re-entrantly, for a writer outside the kernel;
+ *   - whoever issues takes its shared locks before it locks or inserts a row that references the
+ *     Principal — a caller that inserts the session it then issues under calls
+ *     {@link lockIssuingAuthority} first (the locks are re-entrant, so `issueHandle` taking them
+ *     again costs nothing); then its session row, then its parent Handle row;
+ *   - whoever revokes more than one session takes all their rows in one statement, ordered by id,
+ *     before it changes any of them or their Handles ({@link lockSessions}, {@link revokeSessions};
+ *     `order by id for no key update` ahead of 0043's bulk UPDATEs). It takes live sessions only:
+ *     a revoked session has no valid Handle (I-H1), so nothing locks one to revoke Handles. A later
+ *     statement of the same transaction finds the sessions that statement saw already held or
+ *     already revoked; a session inserted without an authority lock (`ensureEntrySession`) and
+ *     committed between the two statements is taken in scan order — a cycle through it needs a
+ *     third revoker on it as well, and ends at worst in a deadlock error (40P01), never in a
+ *     Handle left valid.
  */
 
 // -------------------------------------------------------------------------------------------
@@ -762,11 +798,21 @@ export class AttenuationError extends Error {
   }
 }
 
-/** Why `issueHandle` refused a session or parent that exists (legacy 699, I-H1). */
-export type HandleIssuanceRefusal = 'session_revoked' | 'parent_revoked';
+/** Why `issueHandle` refused a session, parent or authority that exists: the session or the
+ *  parent Handle is revoked (legacy 699, I-H1); the Principal it acts for, their user or their
+ *  workspace is disabled (`acting_principal_disabled`, I-H2), or what the Handle was computed from
+ *  changed before it could be issued (`authority_changed`: the Principal holds another role than
+ *  the role basis, or belongs to another user than when the issue began) — legacy 702. A parent
+ *  Handle revoked meanwhile is `parent_revoked`; one that expired is refused by its remaining
+ *  lifetime, with no code. */
+export type HandleIssuanceRefusal =
+  | 'session_revoked'
+  | 'parent_revoked'
+  | 'acting_principal_disabled'
+  | 'authority_changed';
 
 /** Thrown by `issueHandle` for an invalid issuance request (unknown session, non-positive ttl) or,
- *  with a `code`, for a session or parent Handle already revoked. */
+ *  with a `code`, for a session, parent Handle or authority that no longer allows it. */
 export class HandleIssuanceError extends Error {
   readonly code: HandleIssuanceRefusal | undefined;
   constructor(message: string, code?: HandleIssuanceRefusal) {
@@ -780,7 +826,38 @@ export class HandleIssuanceError extends Error {
 // issueHandle
 // -------------------------------------------------------------------------------------------
 
-export interface IssueHandleParams {
+/**
+ * Legacy 702: what a Handle is issued under — the authority {@link issueHandle} checks again once
+ * it holds the issuance locks (governance 0043). Every caller names one; there is no default.
+ * Whatever the basis, the Principal the Handle acts for must not be disabled — nor their user,
+ * nor their workspace (`acting_principal_disabled`, I-H2) — and must still belong to the user the
+ * locks were taken for (`authority_changed`).
+ *
+ *   - `role`: the scope was computed from the Principal's role (`entryScope`, `adminAgentScope`,
+ *     a goal step's parent scope, a crash retry's `retryScopeNow`, `issue_handle`, a service
+ *     Handle's role narrowing, a planner's, reviewer's or evaluation Task's fixed set on behalf of
+ *     its requester). Issued only while the role is still `role`; in the middle of a role change
+ *     the issue is refused (`authority_changed`) and the caller's next attempt is computed from the
+ *     new role. Never relaxed to "either role". An admin agent's caller also runs its own I-A3
+ *     check (the platform role) after taking the locks (`lockIssuingAuthority`).
+ *   - `parent`: the scope was narrowed from a caller's Handle (`attenuate`, `invoke_worker` from a
+ *     Handle). Issued only while that Handle is not revoked (`parent_revoked`).
+ *
+ * The operator CLI's bootstrap computes its scope from no role and issues through
+ * {@link issueOperatorHandle} (no basis; the disabled checks still apply), which `pnpm ci:guards`
+ * allows under `src/cli/` only.
+ */
+export type IssuanceBasis =
+  | { readonly kind: 'role'; readonly role: Role }
+  | { readonly kind: 'parent'; readonly parentJti: string };
+
+export interface IssueHandleParams extends OperatorIssueHandleParams {
+  /** What the Handle is issued under ({@link IssuanceBasis}). */
+  readonly basis: IssuanceBasis;
+}
+
+/** {@link issueOperatorHandle}'s parameters: {@link IssueHandleParams} without a basis. */
+export interface OperatorIssueHandleParams {
   readonly sessionId: string;
   readonly scope: CapabilityScope;
   /** Handle lifetime in seconds from issuance; must be positive. */
@@ -855,20 +932,164 @@ export function holderForSessionKind(kind: string | undefined): HandleHolder {
  * `client` scoped to a different workspace than the session's simply sees/writes nothing, rather
  * than silently issuing a Handle into the wrong workspace.
  *
+ * Legacy 702: first the issuance locks (governance 0043, {@link lockIssuingAuthority}), then every
+ * read this function decides on. Under them it refuses a disabled Principal, user or workspace
+ * (`acting_principal_disabled`) and an authority other than `params.basis` names
+ * (`authority_changed`, {@link IssuanceBasis}). A writer that changes any of them waits for this
+ * transaction and then revokes what it inserted; one that came first is seen here.
+ *
  * Legacy 699 (I-H1): refuses a session that is revoked (`session_revoked`) and, for a child under
- * its parent's own session (`attenuate`), a parent Handle that is (`parent_revoked`). Both rows are
- * read `for share`, so a transaction revoking either waits for this one to commit and then revokes
- * what it inserted (module comment). governance 0042's insert trigger refuses the same two cases
- * as the wall behind this.
+ * its parent's own session (`attenuate`) or on its parent's authority, a parent Handle that is
+ * (`parent_revoked`). Both rows are read `for share`, so a transaction revoking either waits for
+ * this one to commit and then revokes what it inserted (module comment). governance 0042's insert
+ * trigger refuses the same two session-level cases as the wall behind this.
  */
 export async function issueHandle(
   client: PoolClient,
   params: IssueHandleParams,
 ): Promise<IssuedHandle> {
+  return issue(client, params, params.basis);
+}
+
+/**
+ * The operator CLI's bootstrap Handle (`issue-service-handle`, src/cli/bootstrap.ts): issued under
+ * the locks like any other and refused like any other for a disabled Principal, user or workspace
+ * (I-H2), but on no basis — the operator acts with host-level trust and computed the scope from
+ * no role, and the service Principal it names may have been created in the same transaction.
+ * `pnpm ci:guards` refuses a call to it outside `src/cli/`.
+ */
+export async function issueOperatorHandle(
+  client: PoolClient,
+  params: OperatorIssueHandleParams,
+): Promise<IssuedHandle> {
+  return issue(client, params, null);
+}
+
+/**
+ * Legacy 702 (governance 0043): takes the issuance locks for a Handle acting for `principalId` —
+ * its workspace, its user, itself, shared, in that order — and returns the user read just before
+ * them. {@link issueHandle} takes them itself; a caller takes them first when, before it issues, it
+ * locks or inserts a row that references the Principal (a new session, an activity, an audit row)
+ * — every writer takes its exclusive lock before it touches such a row, so an issuer that took them
+ * after would wait on that writer while holding the row it waits for. Taking them again is free:
+ * advisory locks are re-entrant within a transaction. Refuses a transaction not at READ COMMITTED.
+ */
+export async function lockIssuingAuthority(
+  client: PoolClient,
+  workspaceId: string,
+  principalId: string,
+): Promise<string | null> {
+  const result = await client.query<{ user_id: string | null }>(
+    'select lock_issuing_authority($1, $2) as user_id',
+    [workspaceId, principalId],
+  );
+  return result.rows[0]?.user_id ?? null;
+}
+
+/**
+ * Legacy 702 (governance 0043): every writer of an authority — a disable, a role or platform-role
+ * change, a membership moved to another user — takes its exclusive locks here first, before it
+ * reads or locks any row: in one call, or in several that follow the global order (workspaces,
+ * users, Principals; each call sorts by id). Several handlers lock rows an issuer may be waiting to
+ * reference before they change the authority (`isLastActiveHumanOwner` takes `for update` on every
+ * owner's row), and the BEFORE UPDATE trigger, which takes the same lock, fires only after the
+ * row is locked. The trigger is what covers a writer outside the kernel (an admin client,
+ * hand-written SQL); there a deadlock is possible, and Postgres then aborts one of the two
+ * transactions — never a Handle left valid.
+ */
+export async function lockAuthoritiesForChange(
+  client: PoolClient,
+  authorities: {
+    readonly workspaceIds?: readonly string[];
+    readonly userIds?: readonly string[];
+    readonly principalIds?: readonly string[];
+  },
+): Promise<void> {
+  await client.query('select lock_authorities($1::uuid[], $2::uuid[], $3::uuid[])', [
+    [...(authorities.workspaceIds ?? [])],
+    [...(authorities.userIds ?? [])],
+    [...(authorities.principalIds ?? [])],
+  ]);
+}
+
+/** The authority under the locks: refuses a disabled Principal, user or workspace — the predicate
+ *  `application/gateway/handle-auth.ts` applies to every call, a missing row disabled — a
+ *  Principal moved to another user since the locks were taken, and a basis that no longer holds
+ *  (`null`, the operator's: none to check). */
+async function assertIssuingAuthority(
+  client: PoolClient,
+  at: {
+    readonly workspaceId: string;
+    readonly principalId: string;
+    readonly lockedUserId: string | null;
+  },
+  basis: IssuanceBasis | null,
+  parent: { readonly revoked: boolean } | undefined,
+): Promise<void> {
+  const result = await client.query<{ role: Role; user_id: string | null; disabled: boolean }>(
+    `select p.role, p.user_id,
+            (p.disabled_at is not null
+             or coalesce(u.status = 'disabled', false)
+             or w.status = 'disabled') as disabled
+       from principals p
+       join workspaces w on w.id = p.workspace_id
+       left join users u on u.id = p.user_id
+      where p.workspace_id = $1 and p.id = $2`,
+    [at.workspaceId, at.principalId],
+  );
+  const row = result.rows[0];
+  if (!row || row.disabled) {
+    throw new HandleIssuanceError(
+      `the Principal "${at.principalId}", their user or their workspace is disabled; no Handle is issued for them`,
+      'acting_principal_disabled',
+    );
+  }
+  if (row.user_id !== at.lockedUserId) {
+    throw new HandleIssuanceError(
+      `the Principal "${at.principalId}" belongs to another user since this issue began`,
+      'authority_changed',
+    );
+  }
+  if (basis?.kind === 'role' && row.role !== basis.role) {
+    throw new HandleIssuanceError(
+      `the Principal "${at.principalId}" is ${quotedName(row.role)} now, not ${quotedName(basis.role)} as this Handle was computed for`,
+      'authority_changed',
+    );
+  }
+  if (basis?.kind === 'parent' && (parent === undefined || parent.revoked)) {
+    throw new HandleIssuanceError(
+      `parent Handle "${basis.parentJti}" is revoked; no Handle is issued on its authority`,
+      'parent_revoked',
+    );
+  }
+}
+
+async function issue(
+  client: PoolClient,
+  params: OperatorIssueHandleParams,
+  basis: IssuanceBasis | null,
+): Promise<IssuedHandle> {
   assertValidScope(params.scope);
   if (!Number.isFinite(params.ttlSeconds) || params.ttlSeconds <= 0) {
     throw new HandleIssuanceError(`ttlSeconds must be a positive number, got ${params.ttlSeconds}`);
   }
+  if (basis?.kind === 'parent' && basis.parentJti !== params.parentJti) {
+    throw new HandleIssuanceError(
+      "a Handle issued on its parent's authority names that parent as its parentJti",
+    );
+  }
+
+  // Legacy 702: where the session acts, unlocked (`on_behalf_of` never changes, governance 0001),
+  // only to know which locks to take; then the locks; then the reads this function decides on.
+  const located = await client.query<{ workspace_id: string; on_behalf_of: string }>(
+    'select workspace_id, on_behalf_of from sessions where id = $1',
+    [params.sessionId],
+  );
+  const at = located.rows[0];
+  if (!at) {
+    throw new HandleIssuanceError(`no session found for sessionId "${params.sessionId}"`);
+  }
+  const lockedUserId = await lockIssuingAuthority(client, at.workspace_id, at.on_behalf_of);
 
   const sessionResult = await client.query<SessionRow>(
     'select workspace_id, on_behalf_of, kind, status from sessions where id = $1 for share',
@@ -884,20 +1105,22 @@ export async function issueHandle(
       'session_revoked',
     );
   }
+  let parentRow: { revoked: boolean; session_id: string } | undefined;
   if (params.parentJti !== undefined) {
     const parent = await client.query<{ revoked: boolean; session_id: string }>(
       `select revoked_at is not null as revoked, session_id from capability_handles
         where workspace_id = $1 and jti = $2 for share`,
       [sessionRow.workspace_id, params.parentJti],
     );
-    const parentRow = parent.rows[0];
+    parentRow = parent.rows[0];
     // A child under the parent's own session (`attenuate`) is the Handle a revocation of the
     // session must reach. A child under a new Worker run session (`worker_run`, minted from its
     // caller's Handle) names its parent as lineage, and its caller has checked the authority:
-    // `invoke_worker` against the caller's live Handle, a crash retry (`lifecycle.ts`) by the
-    // person's authority now, from the failed run's Handle that was revoked when it failed. No
-    // other kind of session is opened from a parent Handle; one that ever is gets refused here (and
-    // by governance 0042's trigger) until that is decided.
+    // `invoke_worker` against the caller's live Handle (`basis: parent`, refused below), a crash
+    // retry (`lifecycle.ts`) by the person's authority now (`basis: role`), from the failed run's
+    // Handle that was revoked when it failed. No other kind of session is opened from a parent
+    // Handle; one that ever is gets refused here (and by governance 0042's trigger) until that is
+    // decided.
     if (
       parentRow?.revoked === true &&
       (parentRow.session_id === params.sessionId || sessionRow.kind !== 'worker_run')
@@ -908,6 +1131,16 @@ export async function issueHandle(
       );
     }
   }
+  await assertIssuingAuthority(
+    client,
+    {
+      workspaceId: sessionRow.workspace_id,
+      principalId: sessionRow.on_behalf_of,
+      lockedUserId,
+    },
+    basis,
+    parentRow,
+  );
 
   // S11 AA1 (I-A2): no issuance path gives an admin agent more than its ceiling — `issue_handle`
   // never opens an `admin_agent` session, and one that is opened (application/admin-agent) issues
@@ -1169,6 +1402,9 @@ export async function attenuate(
     // this function's ttlSeconds computation (above) and issueHandle's own, later Date.now() call.
     notAfterSeconds: parentClaims.exp,
     privateKey: options.privateKey,
+    // The parent carries the authority (legacy 702): re-read under the authority locks, it must
+    // still be unrevoked, and the Principal not disabled nor moved to another user.
+    basis: { kind: 'parent', parentJti: parentClaims.jti },
   });
 }
 
@@ -1212,10 +1448,40 @@ export async function revokeHandle(client: PoolClient, jti: string): Promise<voi
  * Handle was cut from.
  */
 export async function revokeSession(client: PoolClient, sessionId: string): Promise<void> {
-  await client.query('select 1 from sessions where id = $1 for no key update', [sessionId]);
+  await revokeSessions(client, [sessionId]);
+}
+
+/**
+ * Lock order step 2 (module comment): takes `sessionIds`' rows in one statement, ordered by id,
+ * with the lock an UPDATE of them takes (`for no key update`), so two transactions revoking
+ * overlapping sets wait on each other in one direction only. A caller that marks sessions
+ * `revoked` takes them here first, then UPDATEs them; sessions in several workspaces may be taken
+ * at once where the caller's transaction sees them all (a platform transaction, the admin client).
+ */
+export async function lockSessions(
+  client: PoolClient,
+  sessionIds: readonly string[],
+): Promise<void> {
+  if (sessionIds.length === 0) return;
   await client.query(
-    'update capability_handles set revoked_at = now() where session_id = $1 and revoked_at is null',
-    [sessionId],
+    'select 1 from sessions where id = any($1::uuid[]) order by id for no key update',
+    [[...sessionIds]],
+  );
+}
+
+/**
+ * {@link revokeSession} for several sessions of the caller's workspace at once: their rows in one
+ * statement, ordered by id ({@link lockSessions}), then every Handle issued under them.
+ */
+export async function revokeSessions(
+  client: PoolClient,
+  sessionIds: readonly string[],
+): Promise<void> {
+  if (sessionIds.length === 0) return;
+  await lockSessions(client, sessionIds);
+  await client.query(
+    'update capability_handles set revoked_at = now() where session_id = any($1::uuid[]) and revoked_at is null',
+    [[...sessionIds]],
   );
 }
 
@@ -1246,12 +1512,14 @@ export async function revokeEntrySessionHandles(
 ): Promise<void> {
   const result = await client.query<{ id: string }>(
     `select id from sessions
-     where workspace_id = $1 and principal_id = $2 and on_behalf_of = $2 and kind = 'entry'`,
+     where workspace_id = $1 and principal_id = $2 and on_behalf_of = $2 and kind = 'entry'
+       and status <> 'revoked'`,
     [workspaceId, principalId],
   );
-  for (const row of result.rows) {
-    await revokeSession(client, row.id);
-  }
+  await revokeSessions(
+    client,
+    result.rows.map((row) => row.id),
+  );
 }
 
 /**
@@ -1272,12 +1540,13 @@ export async function revokeGateGrantScopedSessionHandles(
   const result = await client.query<{ id: string }>(
     `select id from sessions
      where workspace_id = $1 and principal_id = $2 and on_behalf_of = $2
-       and kind in ('entry', 'admin_agent')`,
+       and kind in ('entry', 'admin_agent') and status <> 'revoked'`,
     [workspaceId, principalId],
   );
-  for (const row of result.rows) {
-    await revokeSession(client, row.id);
-  }
+  await revokeSessions(
+    client,
+    result.rows.map((row) => row.id),
+  );
 }
 
 /**
@@ -1293,12 +1562,14 @@ export async function revokeWorkspaceEntrySessionHandles(
 ): Promise<void> {
   const result = await client.query<{ id: string }>(
     `select id from sessions
-     where workspace_id = $1 and principal_id = on_behalf_of and kind = 'entry'`,
+     where workspace_id = $1 and principal_id = on_behalf_of and kind = 'entry'
+       and status <> 'revoked'`,
     [workspaceId],
   );
-  for (const row of result.rows) {
-    await revokeSession(client, row.id);
-  }
+  await revokeSessions(
+    client,
+    result.rows.map((row) => row.id),
+  );
 }
 
 /**
@@ -1306,8 +1577,10 @@ export async function revokeWorkspaceEntrySessionHandles(
  * behalf — the entry agent's `entry` session(s), `issue_handle`'s `mcp_session`s and every
  * running Worker's `worker_run` session (`application/task/handle-mint.ts` copies the human's
  * `on_behalf_of` onto it). `disable_principal` calls this: a disabled member keeps no LLM or
- * capability access through any of them, including a Worker mid-Task. `revokeSession` writes
- * `capability_handles.revoked_at`, which llm-proxy picks up through its revocation sync.
+ * capability access through any of them, including a Worker mid-Task. `revokeSessions` writes
+ * `capability_handles.revoked_at`, which llm-proxy picks up through its revocation sync. Live
+ * sessions only, like every revoker here (a revoked session has no valid Handle, I-H1): after
+ * `disable_principal`'s own UPDATE, governance 0043's trigger has revoked them, and this finds none.
  */
 export async function revokeOnBehalfOfSessionHandles(
   client: PoolClient,
@@ -1315,10 +1588,11 @@ export async function revokeOnBehalfOfSessionHandles(
   principalId: string,
 ): Promise<void> {
   const result = await client.query<{ id: string }>(
-    'select id from sessions where workspace_id = $1 and on_behalf_of = $2',
+    `select id from sessions where workspace_id = $1 and on_behalf_of = $2 and status <> 'revoked'`,
     [workspaceId, principalId],
   );
-  for (const row of result.rows) {
-    await revokeSession(client, row.id);
-  }
+  await revokeSessions(
+    client,
+    result.rows.map((row) => row.id),
+  );
 }

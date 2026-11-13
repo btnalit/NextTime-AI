@@ -13,7 +13,7 @@ import { completeTaskWithResult, failTaskRow, terminateWorkerRunRow } from './li
  * Everything else this function touches (`worker_runs` reads/writes, `audit_records`, `outbox`)
  * lives in this same fake so the test exercises the real function end to end without a database —
  * the one deliberate simplification is a `WorkerRun` with no `sessionId`, so
- * `revokeWorkerRunAndDescendants` never has to call into `governance/capability`'s `revokeSession`.
+ * `revokeWorkerRunAndDescendants` never has to call into `governance/capability`'s `revokeSessions`.
  */
 
 interface FakeClientOptions {

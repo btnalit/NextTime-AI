@@ -327,6 +327,7 @@ describe.runIf(DATABASE_URL !== undefined)('S6-B llm admin (integration, real Po
         scope: { capabilities: [], resources: {} },
         ttlSeconds: 3600,
         privateKey,
+        basis: { kind: 'role', role: 'owner' },
       });
       await client.query(
         `insert into llm_usage (workspace_id, session_id, jti, provider, model, input_tokens, output_tokens, cost_usd, started_at, status)

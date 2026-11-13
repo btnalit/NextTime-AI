@@ -12,6 +12,7 @@ import { authenticateHandle } from '../../application/gateway/handle-auth.js';
 import { runInvariantChecks } from '../../substrate/audit/invariant-checks.js';
 import {
   HandleIssuanceError,
+  type IssuanceBasis,
   type IssuedHandle,
   issueHandle,
   revokeHandle,
@@ -68,17 +69,24 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     }
 
+    /** Issued on the person's role (the fixture's owner) unless `basis` says otherwise: a child
+     *  names its parent as `parentJti`, and as its basis only when it is issued on that parent's
+     *  authority (legacy 702). A child lives half as long as a parent: with the same ttl, one
+     *  issued in a later second would outlive its parent and 0042's I13 trigger would refuse it
+     *  (#1152 review). */
     function issue(
       client: PoolClient,
       sessionId: string,
       parentJti?: string,
+      basis: IssuanceBasis = { kind: 'role', role: 'owner' },
     ): Promise<IssuedHandle> {
       return issueHandle(client, {
         sessionId,
         scope: SCOPE,
-        ttlSeconds: 3600,
+        ttlSeconds: parentJti === undefined ? 3600 : 1800,
         privateKey,
         ...(parentJti !== undefined ? { parentJti } : {}),
+        basis,
       });
     }
 
@@ -206,7 +214,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       const parent = await asApp((client) => issue(client, entry));
       await asApp((client) => revokeHandle(client, parent.jti));
 
-      const thrown = await refusal(() => asApp((client) => issue(client, entry, parent.jti)));
+      // `attenuate`: on the parent's authority, under its session.
+      const thrown = await refusal(() =>
+        asApp((client) =>
+          issue(client, entry, parent.jti, { kind: 'parent', parentJti: parent.jti }),
+        ),
+      );
       expect(thrown).toBeInstanceOf(HandleIssuanceError);
       expect((thrown as HandleIssuanceError).code).toBe('parent_revoked');
       await expect(asApp((client) => rawInsert(client, entry, parent.jti))).rejects.toThrow(/I-H1/);
@@ -230,7 +243,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       const entry = await openSession('entry', 'starting');
       const parent = await asApp((client) => issue(client, entry));
       const run = await openSession('worker_run');
-      const child = await asApp((client) => issue(client, run, parent.jti));
+      // `invoke_worker` from a Handle: on the parent's authority, under a new session.
+      const child = await asApp((client) =>
+        issue(client, run, parent.jti, { kind: 'parent', parentJti: parent.jti }),
+      );
 
       await asApp((client) =>
         client.query(`update sessions set status = 'revoked' where id = $1`, [entry]),

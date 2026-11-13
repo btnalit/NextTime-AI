@@ -140,7 +140,13 @@ describe.runIf(DATABASE_URL !== undefined)(
         return result.rows[0]?.id as string;
       });
       const issued = await asApp((client) =>
-        issueHandle(client, { sessionId, scope: entryScope(), ttlSeconds: 600, privateKey }),
+        issueHandle(client, {
+          sessionId,
+          scope: entryScope(),
+          ttlSeconds: 600,
+          privateKey,
+          basis: { kind: 'role', role: who },
+        }),
       );
       const claims: HandleClaims = {
         ws: issued.workspaceId,

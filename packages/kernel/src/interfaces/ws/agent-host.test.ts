@@ -76,6 +76,25 @@ function createFakePool(): PoolLike {
       return { rows: [{ role: 'owner', disabled: false }], rowCount: 1 };
     }
 
+    // Legacy 702: governance/capability/handles.ts's `issue` — where the session acts (unlocked),
+    // governance 0043's shared locks (no platform user), the authority under them (owner, enabled).
+    if (sql.startsWith('select workspace_id, on_behalf_of from sessions')) {
+      const [sessionId] = params as [string];
+      const principalId = [...sessionIdByPrincipal.entries()].find(
+        ([, id]) => id === sessionId,
+      )?.[0];
+      return {
+        rows: principalId ? [{ workspace_id: 'unused', on_behalf_of: principalId }] : [],
+        rowCount: principalId ? 1 : 0,
+      };
+    }
+    if (sql.startsWith('select lock_issuing_authority(')) {
+      return { rows: [{ user_id: null }], rowCount: 1 };
+    }
+    if (sql.startsWith('select p.role, p.user_id,')) {
+      return { rows: [{ role: 'owner', user_id: null, disabled: false }], rowCount: 1 };
+    }
+
     if (sql.startsWith('select workspace_id, on_behalf_of, kind, status from sessions')) {
       const [sessionId] = params as [string];
       const principalId = [...sessionIdByPrincipal.entries()].find(

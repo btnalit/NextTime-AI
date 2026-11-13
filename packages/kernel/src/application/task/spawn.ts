@@ -6,7 +6,11 @@ import type {
   TaskSpawnOutcome,
   TaskUpstreamFilesInput,
 } from '../../adapters/supervisor-client/index.js';
-import { revokeSession } from '../../governance/capability/index.js';
+import {
+  type IssuanceBasis,
+  lockIssuingAuthority,
+  revokeSession,
+} from '../../governance/capability/index.js';
 import { currentCorrelationId } from '../../substrate/correlation/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import {
@@ -63,6 +67,10 @@ export interface SpawnWorkerRunInput {
   readonly onBehalfOf: string;
   readonly parentAuthority: ParentAuthority;
   readonly parentClaimsForLineage: MintWorkerRunHandleInput['parentClaims'];
+  /** Legacy 702: what `parentAuthority` was computed under — the caller's Handle, or the role of
+   *  `onBehalfOf` the caller read ({@link IssuanceBasis}). The Handle is issued only while it
+   *  still holds, under the authority locks this function takes first. */
+  readonly issuanceBasis: IssuanceBasis;
   readonly declaredCapabilities: readonly string[];
   readonly declaredGates: readonly string[];
   readonly requestedGates?: readonly string[];
@@ -150,6 +158,13 @@ export async function spawnWorkerRun(
     deps.pool,
     { workspaceId, principalId: input.onBehalfOf },
     async (client) => {
+      // Legacy 702 (governance 0043): the authority locks of the Principal this Worker acts for,
+      // before this transaction locks or inserts anything — the Task read `for share` below, the
+      // rows that reference the Principal (the WorkerRun's activity, its session) — so a disable
+      // or a role change either waits for this spawn and then ends the Worker it started, or
+      // comes first and the Handle below is refused (the Task fails `spawn_failed`).
+      await lockIssuingAuthority(client, workspaceId, input.onBehalfOf);
+
       // 2026-10-02 review R-58: never start a WorkerRun under a Task that is already terminal. The
       // caller read `input.task` earlier (`invoke.ts`'s initial spawn sees it `queued`,
       // `lifecycle.ts`'s crash retry `running`), and a cancel may have landed since. Checked before
@@ -274,6 +289,7 @@ export async function spawnWorkerRun(
         scope: childScope,
         ttlSeconds: durationLimitSec + HANDLE_TTL_GRACE_SECONDS,
         privateKey: deps.privateKey,
+        basis: input.issuanceBasis,
       });
       await client.query(
         'update worker_runs set session_id = $3 where workspace_id = $1 and id = $2',

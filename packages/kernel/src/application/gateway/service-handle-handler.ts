@@ -1,6 +1,10 @@
 import { type Role, getCapability } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { issueHandle, roleMayUseCapability } from '../../governance/capability/index.js';
+import {
+  issueHandle,
+  lockIssuingAuthority,
+  roleMayUseCapability,
+} from '../../governance/capability/index.js';
 import { serviceHandleResources } from '../gates/index.js';
 import { getConfiguredTaskRuntime } from '../task/index.js';
 import type { CapabilityHandler } from './capability-handler.js';
@@ -71,6 +75,9 @@ async function requireServicePrincipal(
 export const issueServiceHandleHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { privateKey } = getConfiguredTaskRuntime();
   const input = params as { principalId: string; scope: string[]; ttlSeconds?: number };
+  // Legacy 702 (governance 0043): the authority locks before the service Principal is read, and
+  // before the session row below references it; `issueHandle` re-checks the role under them.
+  await lockIssuingAuthority(client, workspaceId, input.principalId);
   const role = await requireServicePrincipal(client, workspaceId, input.principalId);
   // R-36: the third Handle issuer applies the same role narrowing as the other two (W5.5,
   // `entryScope({ role })` / issue-handle-handler.ts): a capability the service Principal's role
@@ -113,6 +120,7 @@ export const issueServiceHandleHandler: CapabilityHandler = async (client, works
     scope: { capabilities, resources },
     ttlSeconds: input.ttlSeconds ?? DEFAULT_SERVICE_HANDLE_TTL_SECONDS,
     privateKey,
+    basis: { kind: 'role', role },
   });
   return {
     result: {

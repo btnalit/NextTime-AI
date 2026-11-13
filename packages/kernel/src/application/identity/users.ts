@@ -14,6 +14,7 @@ import type { Role, WorkspacePurposeWire } from '@nexttime/shared';
  */
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
+import { lockAuthoritiesForChange } from '../../governance/capability/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { withAdminClient } from '../gateway/auth.js';
 import {
@@ -253,6 +254,9 @@ export async function ensureUserForHumanPrincipal(
   );
   const existing = current.rows[0]?.user_id;
   if (existing) return existing;
+  // Legacy 702 (governance 0043): the Principal changes user below — its authority lock first, so
+  // an issuer for it either commits before or re-reads the new user and refuses.
+  await lockAuthoritiesForChange(client, { principalIds: [principal.id] });
   const login = derivedLogin(principal.displayName, principal.id);
   const taken = await client.query('select 1 from users where login = $1', [login]);
   if ((taken.rowCount ?? 0) > 0) {
@@ -390,6 +394,14 @@ export async function bindPrincipalToUser(
   input: BindPrincipalInput,
 ): Promise<void> {
   await withAdminClient(pool, async (client) => {
+    // Legacy 702 (governance 0043): the Principal moves to the caller's user — that user's and the
+    // Principal's authority locks before the row lock below. An issuer for the Principal either
+    // commits first or re-reads the new user and refuses; a disable of the caller's user waits, so
+    // its revocation sees the moved membership.
+    await lockAuthoritiesForChange(client, {
+      userIds: [input.userId],
+      principalIds: [input.principalId],
+    });
     const current = await client.query<{ user_id: string | null }>(
       `select user_id from principals
         where workspace_id = $1 and id = $2 and kind = 'human' and disabled_at is null

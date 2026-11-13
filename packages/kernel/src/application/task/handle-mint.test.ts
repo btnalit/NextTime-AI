@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { CAPABILITY_REGISTRY, type CapabilityScope } from '@nexttime/shared';
+import { CAPABILITY_REGISTRY, type CapabilityScope, type HandleClaims } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -19,6 +19,7 @@ import {
   computeChildHandleScope,
   defaultWorkerCapabilities,
   mintWorkerRunHandle,
+  resolveParentAuthorityWithBasis,
   resolveRequestedGateIds,
 } from './handle-mint.js';
 import { InvokeWorkerAttenuationError, InvokeWorkerValidationError } from './types.js';
@@ -503,7 +504,7 @@ interface FakeHandleRow {
 
 /** A tiny in-memory stand-in for `sessions` + `capability_handles`, matched against the exact
  *  small set of SQL statements mintWorkerRunHandle (session INSERT) and issueHandle (session
- *  SELECT, capability_handles INSERT) issue — same pattern as governance/capability/
+ *  SELECTs, issuance locks, authority read, capability_handles INSERT) issue — same pattern as governance/capability/
  *  handles.test.ts's own `createFakeCapabilityClient`. */
 function createFakeMintClient() {
   const sessions = new Map<string, FakeSessionRow>();
@@ -518,6 +519,25 @@ function createFakeMintClient() {
       const id = randomUUID();
       sessions.set(id, { workspaceId, onBehalfOf });
       return { rows: [{ id }], rowCount: 1 };
+    }
+
+    // Legacy 702: issueHandle's unlocked lookup of where the session acts, its issuance locks
+    // (governance 0043) and its authority re-read under them — an enabled owner with no user.
+    if (sql.startsWith('select workspace_id, on_behalf_of from sessions')) {
+      const [sessionId] = params as [string];
+      const row = sessions.get(sessionId);
+      return {
+        rows: row ? [{ workspace_id: row.workspaceId, on_behalf_of: row.onBehalfOf }] : [],
+        rowCount: row ? 1 : 0,
+      };
+    }
+
+    if (sql.startsWith('select lock_issuing_authority(')) {
+      return { rows: [{ user_id: null }], rowCount: 1 };
+    }
+
+    if (sql.startsWith('select p.role, p.user_id,')) {
+      return { rows: [{ role: 'owner', user_id: null, disabled: false }], rowCount: 1 };
     }
 
     if (sql.startsWith('select workspace_id, on_behalf_of, kind, status from sessions')) {
@@ -593,6 +613,7 @@ describe('mintWorkerRunHandle', () => {
       scope: { capabilities: ['get_object'], resources: {} },
       ttlSeconds: 3600, // >= the parent's remaining ttl — the worst case for this race
       privateKey,
+      basis: { kind: 'role', role: 'owner' },
     };
 
     // Same monotonically-advancing fake clock as handles.test.ts's `attenuate` race test: every
@@ -646,11 +667,78 @@ describe('mintWorkerRunHandle', () => {
       scope: { capabilities: ['get_object'], resources: {} },
       ttlSeconds: 300,
       privateKey,
+      basis: { kind: 'role', role: 'owner' },
     };
 
     await expect(mintWorkerRunHandle(client, workspaceId, input)).rejects.toThrow(
       HandleIssuanceError,
     );
     expect(handles.size).toBe(0);
+  });
+});
+
+describe('resolveParentAuthorityWithBasis — what a Worker minted by invoke_worker is issued under (legacy 702, #1152 review P2-1)', () => {
+  function roleClient(role: string | undefined): {
+    readonly client: PoolClient;
+    readonly query: ReturnType<typeof vi.fn>;
+  } {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.startsWith('select role from principals')) {
+        return { rows: role === undefined ? [] : [{ role }], rowCount: role === undefined ? 0 : 1 };
+      }
+      throw new Error(`unhandled query: ${sql}`);
+    });
+    return { client: { query } as unknown as PoolClient, query };
+  }
+
+  it("a Handle-channel caller: its own Handle (parent basis, by the caller's jti) — so a caller Handle revoked between authorisation and spawn is refused under the lock, whatever the new session", async () => {
+    const { client, query } = roleClient('owner');
+    const now = Math.floor(Date.now() / 1000);
+    const claims: HandleClaims = {
+      ws: randomUUID(),
+      sid: randomUUID(),
+      obo: randomUUID(),
+      scope: { capabilities: ['get_object'], resources: {} },
+      jti: randomUUID(),
+      iat: now,
+      exp: now + 600,
+    };
+
+    const resolved = await resolveParentAuthorityWithBasis(client, claims.ws, {
+      principalId: claims.obo,
+      channel: 'handle',
+      claims,
+    });
+
+    expect(resolved.basis).toEqual({ kind: 'parent', parentJti: claims.jti });
+    expect(resolved.authority).toEqual(claims.scope);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("a human-channel caller: the role read here (role basis); an owner's authority is unconstrained, anyone else's empty", async () => {
+    const owner = await resolveParentAuthorityWithBasis(roleClient('owner').client, randomUUID(), {
+      principalId: randomUUID(),
+      channel: 'human',
+    });
+    expect(owner).toEqual({ authority: 'unconstrained', basis: { kind: 'role', role: 'owner' } });
+
+    const builder = await resolveParentAuthorityWithBasis(
+      roleClient('builder').client,
+      randomUUID(),
+      { principalId: randomUUID(), channel: 'human' },
+    );
+    expect(builder).toEqual({
+      authority: EMPTY_CAPABILITY_SCOPE,
+      basis: { kind: 'role', role: 'builder' },
+    });
+  });
+
+  it('a human-channel caller not in the workspace is a validation error, not an empty basis', async () => {
+    await expect(
+      resolveParentAuthorityWithBasis(roleClient(undefined).client, randomUUID(), {
+        principalId: randomUUID(),
+        channel: 'human',
+      }),
+    ).rejects.toThrow(InvokeWorkerValidationError);
   });
 });

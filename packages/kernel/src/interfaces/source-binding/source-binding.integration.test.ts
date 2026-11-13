@@ -118,6 +118,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           scope: { capabilities: [...capabilities], resources: {} },
           ttlSeconds: 600,
           privateKey,
+          basis: { kind: 'role', role: 'member' },
         });
         return { token: issued.token, jti: issued.jti };
       });

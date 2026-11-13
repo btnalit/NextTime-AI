@@ -405,6 +405,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           scope: entryScope(),
           ttlSeconds: 600,
           privateKey,
+          basis: { kind: 'role', role: 'owner' },
         });
         return { taskId, workerRunId: run.rows[0]?.id as string, sessionId, jti: issued.jti };
       });

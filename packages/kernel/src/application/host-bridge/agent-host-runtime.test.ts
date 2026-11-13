@@ -192,6 +192,34 @@ function createFakePool(
       };
     }
 
+    // Legacy 702: governance/capability/handles.ts's `issue` — where the session acts (unlocked),
+    // then governance 0043's shared locks (no platform user here: `user_id` null), then the
+    // authority under them, which the entry Handle's role basis must match.
+    if (sql.startsWith('select workspace_id, on_behalf_of from sessions')) {
+      const [sessionId] = params as [string];
+      const row = [...sessionsByPrincipal.values()].find((s) => s.id === sessionId);
+      return {
+        rows: row ? [{ workspace_id: row.workspaceId, on_behalf_of: row.onBehalfOf }] : [],
+        rowCount: row ? 1 : 0,
+      };
+    }
+    if (sql.startsWith('select lock_issuing_authority(')) {
+      return { rows: [{ user_id: null }], rowCount: 1 };
+    }
+    if (sql.startsWith('select p.role, p.user_id,')) {
+      const [, principalId] = params as [string, string];
+      return {
+        rows: [
+          {
+            role: rolesByPrincipal.get(principalId) ?? 'owner',
+            user_id: null,
+            disabled: disabledPrincipals.has(principalId),
+          },
+        ],
+        rowCount: 1,
+      };
+    }
+
     if (sql.startsWith('select workspace_id, on_behalf_of, kind, status from sessions')) {
       const [sessionId] = params as [string];
       const row = [...sessionsByPrincipal.values()].find((s) => s.id === sessionId);

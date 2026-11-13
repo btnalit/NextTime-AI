@@ -25,7 +25,7 @@ import {
 import {
   computeChildHandleScope,
   defaultWorkerCapabilities,
-  resolveParentAuthority,
+  resolveParentAuthorityWithBasis,
   resolveRequestedGateIds,
 } from './handle-mint.js';
 import type { DeclaredGateRecord, MintWorkerRunHandleInput } from './handle-mint.js';
@@ -563,41 +563,47 @@ export async function invokeWorkerCreate(
   const definitionName =
     typeof definition.definition.name === 'string' ? definition.definition.name : definition.id;
 
-  const { parentAuthority, resolvedSkills, effectiveModel, agentProfile, systemPrompt, image } =
-    await withWorkspace(
-      deps.pool,
-      { workspaceId, principalId: caller.principalId },
-      async (client) => ({
-        parentAuthority: await resolveParentAuthority(client, workspaceId, caller),
-        resolvedSkills: await resolveSkillsInline(client, workspaceId, content.skills ?? []),
-        // P-A2: the Worker's system prompt = its WorkerDefinition's own `systemPrompt` + the
-        // platform's `instanceInstructions` (docs/platform-admin-design.md §6.6), read fresh here.
-        systemPrompt: composeSystemPrompt({
-          base: content.systemPrompt,
-          instanceInstructions: await readInstanceInstructions(client),
-        }),
-        // S7-E (P-C §6.5 决定 E1): the platform's active runtime image, read fresh alongside
-        // `systemPrompt` above — `undefined` (setting unset) leaves worker-supervisor's own
-        // `WORKER_IMAGE` env default in effect, unchanged from before this field existed.
-        image: await resolveActiveRuntimeImage(client),
-        // S3.13: only read when the WorkerDefinition itself declares no model — the requesting
-        // principal's own effective.model is the fallback, never a widening of what the
-        // WorkerDefinition author already pinned. `EffectiveAgentProfile.model` is always a
-        // concrete `string` (`''` = "nothing configured anywhere",
-        // `governance/agent-profile/resolve.ts`'s own doc comment) — normalized to `undefined`
-        // here so an unconfigured model never becomes a literal empty-string CMD arg.
-        effectiveModel:
-          content.model === undefined
-            ? (await readEffectiveAgentProfile(client, workspaceId, caller.principalId)).model ||
-              undefined
-            : undefined,
-        // S3.13 runtime consumer (this task): the raw row, not `readEffectiveAgentProfile` — this
-        // field carries no AgentPolicy cap (`resolve.ts`'s own doc comment), so `null`/no-row already
-        // *is* "no restriction" without needing the "available" resolution machinery; see
-        // `InvokeWorkerDefinitionNotEnabledError`'s own doc comment (types.ts) for the full reasoning.
-        agentProfile: await readAgentProfile(client, workspaceId, caller.principalId),
+  const {
+    parentAuthority: { authority: parentAuthority, basis: issuanceBasis },
+    resolvedSkills,
+    effectiveModel,
+    agentProfile,
+    systemPrompt,
+    image,
+  } = await withWorkspace(
+    deps.pool,
+    { workspaceId, principalId: caller.principalId },
+    async (client) => ({
+      parentAuthority: await resolveParentAuthorityWithBasis(client, workspaceId, caller),
+      resolvedSkills: await resolveSkillsInline(client, workspaceId, content.skills ?? []),
+      // P-A2: the Worker's system prompt = its WorkerDefinition's own `systemPrompt` + the
+      // platform's `instanceInstructions` (docs/platform-admin-design.md §6.6), read fresh here.
+      systemPrompt: composeSystemPrompt({
+        base: content.systemPrompt,
+        instanceInstructions: await readInstanceInstructions(client),
       }),
-    );
+      // S7-E (P-C §6.5 决定 E1): the platform's active runtime image, read fresh alongside
+      // `systemPrompt` above — `undefined` (setting unset) leaves worker-supervisor's own
+      // `WORKER_IMAGE` env default in effect, unchanged from before this field existed.
+      image: await resolveActiveRuntimeImage(client),
+      // S3.13: only read when the WorkerDefinition itself declares no model — the requesting
+      // principal's own effective.model is the fallback, never a widening of what the
+      // WorkerDefinition author already pinned. `EffectiveAgentProfile.model` is always a
+      // concrete `string` (`''` = "nothing configured anywhere",
+      // `governance/agent-profile/resolve.ts`'s own doc comment) — normalized to `undefined`
+      // here so an unconfigured model never becomes a literal empty-string CMD arg.
+      effectiveModel:
+        content.model === undefined
+          ? (await readEffectiveAgentProfile(client, workspaceId, caller.principalId)).model ||
+            undefined
+          : undefined,
+      // S3.13 runtime consumer (this task): the raw row, not `readEffectiveAgentProfile` — this
+      // field carries no AgentPolicy cap (`resolve.ts`'s own doc comment), so `null`/no-row already
+      // *is* "no restriction" without needing the "available" resolution machinery; see
+      // `InvokeWorkerDefinitionNotEnabledError`'s own doc comment (types.ts) for the full reasoning.
+      agentProfile: await readAgentProfile(client, workspaceId, caller.principalId),
+    }),
+  );
 
   // S3.13 runtime consumer: narrowing only, checked before anything is created (same "before any
   // Task row exists" placement the quota checks below and the attenuation pre-check just after this
@@ -677,6 +683,7 @@ export async function invokeWorkerCreate(
       onBehalfOf: caller.principalId,
       parentAuthority,
       parentClaimsForLineage,
+      issuanceBasis,
       declaredCapabilities,
       declaredGates,
       requestedGates: resolvedRequestedGates,

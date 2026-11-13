@@ -17,6 +17,7 @@ import type { PoolClient } from 'pg';
 import { setWorkspaceContext, withPlatform } from '../../adapters/db/platform-context.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { modelPolicyViolation } from '../../governance/agent-profile/index.js';
+import { lockAuthoritiesForChange } from '../../governance/capability/index.js';
 import { shownAuditPayload } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS } from '../../substrate/audit/invariant-checks.js';
@@ -489,6 +490,10 @@ async function assertAdminCanBeReduced(client: PoolClient, user: UserWire): Prom
 
 export const updateUserHandler: CapabilityHandler = async (client, _workspaceId, params) => {
   const input = params as { userId: string; displayName?: string; platformRole?: 'admin' | 'user' };
+  // Legacy 702 (governance 0043): the user's authority lock before any row is read or locked.
+  if (input.platformRole !== undefined) {
+    await lockAuthoritiesForChange(client, { userIds: [input.userId] });
+  }
   const before = await loadUser(client, input.userId);
   const demoted = input.platformRole === 'user' && before.platformRole === 'admin';
   if (demoted) await assertAdminCanBeReduced(client, before);
@@ -561,6 +566,11 @@ export const setUserStatusHandler: CapabilityHandler = async (
   context,
 ) => {
   const input = params as { userId: string; status: 'active' | 'disabled' };
+  // Legacy 702 (governance 0043): the user's authority lock before any row is read or locked —
+  // `assertNotLastHumanOwnerAnywhere` takes `for update` on owners' rows, which an issuer holding
+  // this user's lock may be waiting to reference. A disable then revokes the sessions of every
+  // membership of the user in the database too (0043's trigger).
+  await lockAuthoritiesForChange(client, { userIds: [input.userId] });
   const before = await loadUser(client, input.userId);
   if (input.status === 'disabled') {
     if (before.id === actingUser(context).id) {
@@ -722,6 +732,8 @@ export const setMembershipRoleHandler: CapabilityHandler = async (client, _works
       auditPayload: { unchanged: true },
     };
   }
+  // Legacy 702 (governance 0043): the Principal's authority lock before any row is locked here.
+  await lockAuthoritiesForChange(client, { principalIds: [membership.principalId] });
   if (
     membership.role === 'owner' &&
     !membership.disabled &&
@@ -753,6 +765,12 @@ export const setMembershipRoleHandler: CapabilityHandler = async (client, _works
 export const removeMembershipHandler: CapabilityHandler = async (client, _workspaceId, params) => {
   const input = params as { userId: string; workspaceId: string };
   const membership = await loadMembership(client, input.userId, input.workspaceId);
+  // Legacy 702 (governance 0043): the user's and the Principal's authority locks, in that order,
+  // before any row is locked here (`revokeUserCredentials` takes the user's again).
+  await lockAuthoritiesForChange(client, {
+    userIds: [input.userId],
+    principalIds: [membership.principalId],
+  });
   if (
     membership.role === 'owner' &&
     !membership.disabled &&
@@ -789,7 +807,16 @@ export const mergeUserHandler: CapabilityHandler = async (client, _workspaceId, 
   if (input.sourceUserId === input.targetUserId) {
     throw new PlatformAdminError('already_claimed', 'source and target are the same user');
   }
+  // Legacy 702 (governance 0043): both users' authority locks, then the moved memberships', before
+  // any row is locked — every membership of the source user changes user, and an issuer for one of
+  // them either commits first or re-reads the new user and refuses (`authority_changed`). The
+  // target's lock also makes a concurrent disable of the target wait, so its revocation sees the
+  // moved memberships.
+  await lockAuthoritiesForChange(client, { userIds: [input.sourceUserId, input.targetUserId] });
   const source = await loadUser(client, input.sourceUserId);
+  await lockAuthoritiesForChange(client, {
+    principalIds: source.memberships.map((membership) => membership.principalId),
+  });
   const target = await loadUser(client, input.targetUserId);
   if (source.hasPassword) {
     throw new PlatformAdminError(
@@ -1318,6 +1345,8 @@ export const setWorkspaceStatusHandler: CapabilityHandler = async (
   params,
 ) => {
   const input = params as { workspaceId: string; status: 'active' | 'disabled' };
+  // Legacy 702 (governance 0043): the workspace's authority lock before any row is read or locked.
+  await lockAuthoritiesForChange(client, { workspaceIds: [input.workspaceId] });
   await loadPlatformWorkspaceRow(client, input.workspaceId);
   let principalIds: string[] = [];
   if (input.status === 'disabled') {
@@ -1334,8 +1363,12 @@ export const setWorkspaceStatusHandler: CapabilityHandler = async (
   // when an already-disabled workspace is disabled again — and keeps a pre-0030 `null` null,
   // which `purge_workspace` reads as "retention elapsed" (§12 决定 3).
   //
-  // Legacy 707: the status first, then the sessions — every writer changes the authority before
-  // it revokes what was issued under it (the order the issuance locks of legacy 702 rely on).
+  // Disabling revokes every session in the workspace — entry, Worker, MCP, service; R-12: every
+  // one not `revoked`, an entry session may still be `starting` — and through governance 0042 their
+  // Handles, so llm-proxy stops them too, not only the kernel (which refuses every call in a
+  // disabled workspace). governance 0043's `workspaces_disabled_revokes_sessions` trigger does it in
+  // this UPDATE, taking the sessions in one statement ordered by id first (the lock order,
+  // governance/capability/handles.ts); a second revocation here would only find them revoked.
   await client.query(
     `update workspaces
         set status = $2,
@@ -1344,15 +1377,6 @@ export const setWorkspaceStatusHandler: CapabilityHandler = async (
     [input.workspaceId, input.status],
   );
   if (input.status === 'disabled') {
-    // Every session in the workspace — entry, Worker, MCP, service — under `sessions_platform_admin`.
-    // R-12: `<> 'revoked'`, not `= 'active'` — an entry session stays `starting`. Legacy 707: their
-    // Handles go with them (governance 0042's trigger), so llm-proxy stops them too, not only the
-    // kernel (which refuses every call in a disabled workspace).
-    await client.query(
-      `update sessions set status = 'revoked', expires_at = least(expires_at, now())
-        where workspace_id = $1 and status <> 'revoked'`,
-      [input.workspaceId],
-    );
     principalIds = await listHumanPrincipalIds(client, { workspaceId: input.workspaceId });
   }
   const result = await loadPlatformWorkspace(client, input.workspaceId);
@@ -1497,6 +1521,9 @@ export const purgeUserHandler: CapabilityHandler = async (
   const acting = actingUser(context);
   const outcomes: PurgeUserOutcomeWire[] = [];
   let purgedCount = 0;
+  // Legacy 702 (governance 0043): every named user's authority lock first, in one ordered call; the
+  // detached memberships' locks follow in the trigger (Principals after users, the global order).
+  await lockAuthoritiesForChange(client, { userIds: input.userIds });
   for (const userId of [...new Set(input.userIds)]) {
     const found = await client.query<PurgeUserDbRow>(
       `select u.id, u.login, u.platform_role, u.has_password,

@@ -767,6 +767,48 @@ describe.runIf(DATABASE_URL !== undefined)('createWorkspace (integration, real P
         expect(second.jti).not.toBe(first.jti);
       });
 
+      it('legacy 702: refuses a disabled service Principal of that name (I-H2) — the operator issues on no basis, never for a disabled authority', async () => {
+        const owner = await createWorkspace(
+          pool,
+          'bootstrap-test-workspace-issue-service-handle-disabled',
+          'Alice',
+        );
+        const first = await issueServiceHandleFromCli(pool, {
+          workspaceId: owner.workspaceId,
+          name: 'host-inventory-disabled-test',
+          scope: ['register_source'],
+        });
+        await withWorkspace(
+          pool,
+          { workspaceId: owner.workspaceId, principalId: owner.ownerPrincipalId },
+          (client) =>
+            client.query(
+              'update principals set disabled_at = now() where workspace_id = $1 and id = $2',
+              [owner.workspaceId, first.principalId],
+            ),
+        );
+
+        await expect(
+          issueServiceHandleFromCli(pool, {
+            workspaceId: owner.workspaceId,
+            name: 'host-inventory-disabled-test',
+            scope: ['register_source'],
+          }),
+        ).rejects.toMatchObject({ code: 'acting_principal_disabled' });
+        const handles = await withWorkspace(
+          pool,
+          { workspaceId: owner.workspaceId, principalId: owner.ownerPrincipalId },
+          (client) =>
+            client.query<{ valid: number }>(
+              `select count(*)::int as valid from capability_handles
+                where workspace_id = $1 and on_behalf_of = $2
+                  and revoked_at is null and expires_at > now()`,
+              [owner.workspaceId, first.principalId],
+            ),
+        );
+        expect(handles.rows[0]?.valid).toBe(0);
+      });
+
       it('legacy 690: carries the service Principal’s own gate Grants when a capability acts on a gate — none for a new one', async () => {
         const owner = await createWorkspace(
           pool,

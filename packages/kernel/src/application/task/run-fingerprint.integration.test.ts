@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import {
   type CapabilityScope,
   type HandleClaims,
+  type Role,
   RunEnvironmentWireSchema,
 } from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
@@ -122,7 +123,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       return withWorkspace(pool, { workspaceId, principalId }, fn);
     }
 
-    async function entryClaims(principalId: string): Promise<HandleClaims> {
+    async function entryClaims(principalId: string, role: Role): Promise<HandleClaims> {
       const sessionId = await inTx(principalId, async (client) => {
         const result = await client.query<{ id: string }>(
           `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
@@ -132,7 +133,13 @@ describe.runIf(DATABASE_URL !== undefined)(
         return result.rows[0]?.id as string;
       });
       const issued: IssuedHandle = await inTx(principalId, (client) =>
-        issueHandle(client, { sessionId, scope: entryScope(), ttlSeconds: 3600, privateKey }),
+        issueHandle(client, {
+          sessionId,
+          scope: entryScope(),
+          ttlSeconds: 3600,
+          privateKey,
+          basis: { kind: 'role', role },
+        }),
       );
       return {
         ws: issued.workspaceId,
@@ -166,7 +173,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const deps: TaskRuntimeDeps = { pool, privateKey, supervisorClient };
       return invokeWorker(
         workspaceId,
-        { principalId: ownerId, channel: 'handle', claims: await entryClaims(ownerId) },
+        { principalId: ownerId, channel: 'handle', claims: await entryClaims(ownerId, 'owner') },
         { definitionId: id, version: 1, input: {}, wait: false },
         deps,
       );

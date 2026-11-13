@@ -1214,9 +1214,11 @@ export class AgentHostRuntime implements AgentRuntime {
       principalId,
       cached?.jti,
     );
-    if (disabled) {
+    if (disabled || role === undefined) {
       this.handleCache.delete(principalId);
-      throw new Error(`ensureEntryHandle: principal ${principalId} or its user is disabled`);
+      throw new Error(
+        `ensureEntryHandle: principal ${principalId} ${role === undefined ? 'not found' : 'or its user is disabled'}`,
+      );
     }
 
     const sessionId = await this.ensureEntrySession(workspaceId, principalId);
@@ -1255,10 +1257,14 @@ export class AgentHostRuntime implements AgentRuntime {
         sessionId,
         scope: entryScope(
           gatekeeperIds.length > 0 ? { resources: { gatekeeper: gatekeeperIds } } : {},
-          role === undefined ? {} : { role },
+          { role },
         ),
         ttlSeconds: this.entryHandleTtlSeconds,
         privateKey: this.privateKey,
+        // Legacy 702: issued only while the role this scope was computed from is still the
+        // Principal's, and nothing above them is disabled, under governance 0043's locks — a
+        // change committed since `readHandleFreshness` fails this Turn; the next one reads it.
+        basis: { kind: 'role', role },
       }),
     );
     this.handleCache.set(principalId, {

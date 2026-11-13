@@ -2518,6 +2518,13 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     enHint:
       'An upgrade revoked Handles still valid under sessions that had ended (left by a disabled workspace or a role change).',
   },
+  'principal.disabled_authority_handles_revoked': {
+    zh: '已停用者的凭证已吊销',
+    en: 'Disabled authority’s Handles revoked',
+    zhHint: '升级时吊销了仍然有效、却代表已停用的成员、用户或工作区的凭证。',
+    enHint:
+      'An upgrade revoked Handles still valid while acting for a member, user or workspace that had been disabled.',
+  },
 
   // -----------------------------------------------------------------------------------------
   // Platform audit events (`workspace_id` null, not capability names)
