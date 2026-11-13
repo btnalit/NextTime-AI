@@ -12,6 +12,7 @@ import {
 import type {
   DispatchDeps,
   HumanCaller,
+  HumanSessionRecheck,
   HumanSessionVerdict,
   ResolveCallerDeps,
   ResolvedCaller,
@@ -20,6 +21,7 @@ import {
   CapabilityCallRefusedError,
   ForbiddenError,
   UnauthorizedError,
+  callerWithRole,
   dispatchCapability,
   recheckHumanSession,
   resolveCaller,
@@ -521,15 +523,25 @@ const MAX_TIMER_DELAY_MS = 2_147_483_647;
 function armSessionExpiry(socket: WebSocket, caller: HumanCaller, state: ConnectionState): void {
   const expiresAt = caller.user?.sessionExpiresAt;
   if (expiresAt === undefined) return;
+  // The session has ended once the wall clock is past this millisecond: `expires_at` is read with
+  // microseconds and kept here rounded down, so its own millisecond may still be before it.
+  const lastLiveMs = expiresAt.getTime();
   const wait = (): void => {
-    const left = expiresAt.getTime() - Date.now();
+    const left = lastLiveMs + 1 - Date.now();
     state.expiryTimer =
       left > MAX_TIMER_DELAY_MS
         ? setTimeout(wait, MAX_TIMER_DELAY_MS)
         : setTimeout(expire, Math.max(0, left));
   };
+  // A timer counts on the monotonic clock in whole milliseconds, so it can fire up to about a
+  // millisecond before `Date.now()` reaches its end (more when the wall clock is being slewed): the
+  // socket would close while the cookie still works. Read the wall clock again, and wait the rest.
   const expire = (): void => {
     state.expiryTimer = undefined;
+    if (Date.now() <= lastLiveMs) {
+      wait();
+      return;
+    }
     endRevokedSession(socket, state, null, new UnauthorizedError('session expired'));
   };
   wait();
@@ -801,27 +813,32 @@ function handleConnection(
     // Leftover 87: every dispatched call runs in its own correlation context (audit rows, gate /
     // supervisor calls) and logs with that id — see `callLogger`.
     const { correlationId, log } = callLogger(request, req.correlationId);
-    const caller = state.caller;
+    const authenticated = state.caller;
 
     // R-05: HTTP re-resolves its caller on every request; this socket authenticated once, so the
     // session it authenticated with is re-checked before every call (one indexed read). A socket
     // already closing — its session was just revoked — dispatches nothing more.
     if (socket.readyState !== 1) return;
-    let verdict: HumanSessionVerdict;
+    let recheck: HumanSessionRecheck;
     try {
-      verdict = await recheckHumanSession(deps.pool, caller);
+      recheck = await recheckHumanSession(deps.pool, authenticated);
     } catch (err) {
       const mapped = mapDispatchError(err);
       send(socket, errorResponse(req.id, mapped.code, mapped.message));
       logWsCall(log, req.method, err);
       return;
     }
-    if (verdict !== 'live') {
-      const err = revocationError(verdict);
+    if (recheck.verdict !== 'live') {
+      const err = revocationError(recheck.verdict);
       endRevokedSession(socket, state, req.id, err);
       logWsCall(log, req.method, err);
       return;
     }
+    // Legacy 699: the call runs with the role the Principal has now, read by that recheck — a
+    // `set_principal_role` / `set_membership_role` since connect applies from this call on, as it
+    // does over HTTP. The socket stays open: a role change signs nobody out.
+    const caller = callerWithRole(authenticated, recheck.role);
+    state.caller = caller;
 
     if (req.method === 'subscribe_chat') {
       await runWithCorrelationId(correlationId, () =>

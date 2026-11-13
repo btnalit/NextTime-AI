@@ -520,13 +520,31 @@ function createFakeMintClient() {
       return { rows: [{ id }], rowCount: 1 };
     }
 
-    if (sql.startsWith('select workspace_id, on_behalf_of, kind from sessions')) {
+    if (sql.startsWith('select workspace_id, on_behalf_of, kind, status from sessions')) {
       const [sessionId] = params as [string];
       const row = sessions.get(sessionId);
       return {
         rows: row
-          ? [{ workspace_id: row.workspaceId, on_behalf_of: row.onBehalfOf, kind: 'worker_run' }]
+          ? [
+              {
+                workspace_id: row.workspaceId,
+                on_behalf_of: row.onBehalfOf,
+                kind: 'worker_run',
+                status: 'active',
+              },
+            ]
           : [],
+        rowCount: row ? 1 : 0,
+      };
+    }
+
+    if (
+      sql.startsWith('select revoked_at is not null as revoked, session_id from capability_handles')
+    ) {
+      const [, jti] = params as [string, string];
+      const row = handles.get(jti);
+      return {
+        rows: row ? [{ revoked: false, session_id: row.session_id }] : [],
         rowCount: row ? 1 : 0,
       };
     }

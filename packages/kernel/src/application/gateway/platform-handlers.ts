@@ -17,7 +17,6 @@ import type { PoolClient } from 'pg';
 import { setWorkspaceContext, withPlatform } from '../../adapters/db/platform-context.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { modelPolicyViolation } from '../../governance/agent-profile/index.js';
-import { revokeRoleScopedSessionHandles } from '../../governance/capability/index.js';
 import { shownAuditPayload } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS } from '../../substrate/audit/invariant-checks.js';
@@ -41,6 +40,7 @@ import {
   toWirePlatformSettings,
   updatePlatformSettings,
 } from '../platform/settings.js';
+import { applyRoleChange } from '../task/role-change.js';
 import { getConfiguredTaskRuntime } from '../task/runtime.js';
 import { createWorkspaceWithOwner } from '../workspace/create.js';
 import type { WorkspacePurpose } from '../workspace/create.js';
@@ -737,17 +737,15 @@ export const setMembershipRoleHandler: CapabilityHandler = async (client, _works
     membership.principalId,
     input.role,
   ]);
-  // The entry Handle is re-minted with the new role on the next turn (S3.11); current workspace
-  // sessions of this Principal are ended so no stale-role session outlives the change.
+  // Legacy 699: one rule with the workspace-side `set_principal_role` (`applyRoleChange`). The
+  // sessions whose Handles carry the old role's scope end (entry, MCP, admin agent; their Handles
+  // with them, governance 0042) and are issued again with the new role on next use; a running
+  // Worker ends only when the new role no longer covers what it holds. The person's console is
+  // not signed out — it reads the current role on every request. This used to end every session of
+  // the Principal while revoking only the entry / MCP / admin agent Handles, so a demoted person's
+  // Workers kept the old scope until ttl.
   await setWorkspaceContext(client, input.workspaceId, membership.principalId);
-  await client.query(
-    `update sessions set status = 'revoked', expires_at = least(expires_at, now())
-      where workspace_id = $1 and principal_id = $2 and status <> 'revoked'`,
-    [input.workspaceId, membership.principalId],
-  );
-  // Same as the workspace-side `set_principal_role` (W5.5, leftover 18): Handles minted under the
-  // old role carry its capability set until ttl unless revoked here.
-  await revokeRoleScopedSessionHandles(client, input.workspaceId, membership.principalId);
+  await applyRoleChange(client, input.workspaceId, membership.principalId);
   const after = await loadMembership(client, input.userId, input.workspaceId);
   return { result: after, resourceType: 'principal', resourceId: membership.principalId };
 };
@@ -1330,19 +1328,14 @@ export const setWorkspaceStatusHandler: CapabilityHandler = async (
         'the platform default workspace cannot be disabled — pick another default first',
       );
     }
-    // Every session in the workspace — entry, Worker, MCP, service — under `sessions_platform_admin`.
-    // R-12: `<> 'revoked'`, not `= 'active'` — an entry session stays `starting`.
-    await client.query(
-      `update sessions set status = 'revoked', expires_at = least(expires_at, now())
-        where workspace_id = $1 and status <> 'revoked'`,
-      [input.workspaceId],
-    );
-    principalIds = await listHumanPrincipalIds(client, { workspaceId: input.workspaceId });
   }
   // S6 (migration core 0030): `disabled_at` starts the 7-day purge retention clock; re-enabling
   // clears it (a later disable starts a fresh clock). `coalesce` keeps the original timestamp
   // when an already-disabled workspace is disabled again — and keeps a pre-0030 `null` null,
   // which `purge_workspace` reads as "retention elapsed" (§12 决定 3).
+  //
+  // Legacy 707: the status first, then the sessions — every writer changes the authority before
+  // it revokes what was issued under it (the order the issuance locks of legacy 702 rely on).
   await client.query(
     `update workspaces
         set status = $2,
@@ -1350,6 +1343,18 @@ export const setWorkspaceStatusHandler: CapabilityHandler = async (
       where id = $1`,
     [input.workspaceId, input.status],
   );
+  if (input.status === 'disabled') {
+    // Every session in the workspace — entry, Worker, MCP, service — under `sessions_platform_admin`.
+    // R-12: `<> 'revoked'`, not `= 'active'` — an entry session stays `starting`. Legacy 707: their
+    // Handles go with them (governance 0042's trigger), so llm-proxy stops them too, not only the
+    // kernel (which refuses every call in a disabled workspace).
+    await client.query(
+      `update sessions set status = 'revoked', expires_at = least(expires_at, now())
+        where workspace_id = $1 and status <> 'revoked'`,
+      [input.workspaceId],
+    );
+    principalIds = await listHumanPrincipalIds(client, { workspaceId: input.workspaceId });
+  }
   const result = await loadPlatformWorkspace(client, input.workspaceId);
   return {
     result,

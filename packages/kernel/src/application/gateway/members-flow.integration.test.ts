@@ -805,6 +805,57 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).resolves.toMatchObject({ obo: targetId });
     });
 
+    it('set_principal_role (legacy 699): a demotion ends the Workers the new role does not cover and keeps the rest; a promotion keeps them; an auditor keeps none — the same rule as the platform plane', async () => {
+      const targetId = await adminInsertPrincipal(workspaceId, 'builder', 'Olga');
+      const keyPair = await generateKeyPair(HANDLE_SIGNING_ALG, {
+        crv: 'Ed25519',
+        extractable: true,
+      });
+      /** A Worker's Handle holding exactly `capabilities` (handle-mint.ts's session shape). */
+      const worker = (capabilities: string[]) =>
+        withWorkspace(pool, { workspaceId, principalId: targetId }, async (client) => {
+          const session = await client.query<{ id: string }>(
+            `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+             values ($1, $2, 'worker_run', $2, 'active') returning id`,
+            [workspaceId, targetId],
+          );
+          const sessionId = session.rows[0]?.id;
+          if (!sessionId) throw new Error('worker: no session row');
+          const issued = await issueHandle(client, {
+            sessionId,
+            scope: { capabilities, resources: {} },
+            ttlSeconds: 3600,
+            privateKey: keyPair.privateKey,
+          });
+          return { sessionId, jti: issued.jti };
+        });
+      const state = async (handle: { sessionId: string; jti: string }) => {
+        const result = await pool.query<{ status: string; revoked: boolean }>(
+          `select s.status, h.revoked_at is not null as revoked
+             from sessions s join capability_handles h on h.session_id = s.id
+            where s.id = $1 and h.jti = $2`,
+          [handle.sessionId, handle.jti],
+        );
+        return result.rows[0];
+      };
+      // `propose_operation` is `minRole: 'builder'`.
+      const builderWorker = await worker(['search', 'propose_operation']);
+      const memberWorker = await worker(['search']);
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const setRole = (role: Role) =>
+        dispatchCapability({ pool }, owner, 'set_principal_role', { principalId: targetId, role });
+
+      await setRole('member');
+      expect(await state(builderWorker)).toEqual({ status: 'revoked', revoked: true });
+      expect(await state(memberWorker)).toEqual({ status: 'active', revoked: false });
+
+      await setRole('builder');
+      expect(await state(memberWorker)).toEqual({ status: 'active', revoked: false });
+
+      await setRole('auditor');
+      expect(await state(memberWorker)).toEqual({ status: 'revoked', revoked: true });
+    });
+
     it('last-owner protection: refuses demoting or disabling the sole active owner, but allows it once a second owner exists', async () => {
       const soloWs = await adminInsertWorkspace('members-flow-last-owner-workspace');
       const soloOwnerId = await adminInsertPrincipal(soloWs, 'owner', 'Solo Owner');

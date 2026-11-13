@@ -23,6 +23,7 @@ const OTHER_AUDIT_ACTIONS = [
   'agent_policy.auto_approve_low_default_applied',
   'principal.auditor_handles_revoked',
   'principal.container_handles_revoked',
+  'principal.revoked_session_handles_revoked',
   'workspace.created',
   'user.identity_claimed',
   'principal.user_rebound',

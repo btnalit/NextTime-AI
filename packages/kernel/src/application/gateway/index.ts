@@ -41,12 +41,18 @@ export type {
 
 // R-05 (review 2026-10-02): the live-socket half of revocation — per-call recheck + kick bus.
 export {
+  callerWithRole,
   publishSessionKick,
   recheckHumanSession,
   sessionKickVerdict,
   subscribeToSessionKicks,
 } from './session-revocation.js';
-export type { HumanCaller, HumanSessionVerdict, SessionKick } from './session-revocation.js';
+export type {
+  HumanCaller,
+  HumanSessionRecheck,
+  HumanSessionVerdict,
+  SessionKick,
+} from './session-revocation.js';
 
 export {
   authorizeCapabilityCall,

@@ -50,6 +50,20 @@ export type { CapabilityScope, HandleClaims };
  * Handle's workspace, so that RLS (I1) and the two-argument `withWorkspace` transaction/session-var
  * contract apply uniformly across this module and the rest of the kernel. This module never calls
  * `withWorkspace` itself.
+ *
+ * Revocation (legacy 699 / 707, I-H1 — a revoked session has no valid Handle): a session's
+ * Handles are revoked with it by the database (governance 0042's `sessions_revoked_revokes_handles`
+ * trigger), whoever marks the session `revoked`. Issuing and revoking are serialised on the
+ * session row: `issueHandle` reads it `for share` and refuses a revoked session or a revoked
+ * parent; `revokeSession` and the trigger's UPDATE wait for an issuer holding the row, and their
+ * next statement sees the Handle it inserted. Two constraints keep that cheap and keep llm-proxy in
+ * step (it pages the revocation table by `revoked_at`, which is the revoking transaction's start,
+ * with a 60 s overlap):
+ *
+ *   - a transaction that revokes stays short, far below that overlap;
+ *   - a transaction that issues makes no network call (a revoker waits for it, so its length counts
+ *     toward the revoker's): `application/task/spawn.ts` issues in one transaction and calls the
+ *     supervisor in another.
  */
 
 // -------------------------------------------------------------------------------------------
@@ -748,11 +762,17 @@ export class AttenuationError extends Error {
   }
 }
 
-/** Thrown by `issueHandle` for an invalid issuance request (unknown session, non-positive ttl). */
+/** Why `issueHandle` refused a session or parent that exists (legacy 699, I-H1). */
+export type HandleIssuanceRefusal = 'session_revoked' | 'parent_revoked';
+
+/** Thrown by `issueHandle` for an invalid issuance request (unknown session, non-positive ttl) or,
+ *  with a `code`, for a session or parent Handle already revoked. */
 export class HandleIssuanceError extends Error {
-  constructor(message: string) {
+  readonly code: HandleIssuanceRefusal | undefined;
+  constructor(message: string, code?: HandleIssuanceRefusal) {
     super(message);
     this.name = 'HandleIssuanceError';
+    this.code = code;
   }
 }
 
@@ -803,6 +823,7 @@ interface SessionRow {
   workspace_id: string;
   on_behalf_of: string;
   kind: string;
+  status: string;
 }
 
 /**
@@ -833,6 +854,12 @@ export function holderForSessionKind(kind: string | undefined): HandleHolder {
  * both the session lookup and the `capability_handles` insert are subject to RLS (I1), so a
  * `client` scoped to a different workspace than the session's simply sees/writes nothing, rather
  * than silently issuing a Handle into the wrong workspace.
+ *
+ * Legacy 699 (I-H1): refuses a session that is revoked (`session_revoked`) and, for a child under
+ * its parent's own session (`attenuate`), a parent Handle that is (`parent_revoked`). Both rows are
+ * read `for share`, so a transaction revoking either waits for this one to commit and then revokes
+ * what it inserted (module comment). governance 0042's insert trigger refuses the same two cases
+ * as the wall behind this.
  */
 export async function issueHandle(
   client: PoolClient,
@@ -844,12 +871,42 @@ export async function issueHandle(
   }
 
   const sessionResult = await client.query<SessionRow>(
-    'select workspace_id, on_behalf_of, kind from sessions where id = $1',
+    'select workspace_id, on_behalf_of, kind, status from sessions where id = $1 for share',
     [params.sessionId],
   );
   const sessionRow = sessionResult.rows[0];
   if (!sessionRow) {
     throw new HandleIssuanceError(`no session found for sessionId "${params.sessionId}"`);
+  }
+  if (sessionRow.status === 'revoked') {
+    throw new HandleIssuanceError(
+      `session "${params.sessionId}" is revoked; no Handle is issued under it`,
+      'session_revoked',
+    );
+  }
+  if (params.parentJti !== undefined) {
+    const parent = await client.query<{ revoked: boolean; session_id: string }>(
+      `select revoked_at is not null as revoked, session_id from capability_handles
+        where workspace_id = $1 and jti = $2 for share`,
+      [sessionRow.workspace_id, params.parentJti],
+    );
+    const parentRow = parent.rows[0];
+    // A child under the parent's own session (`attenuate`) is the Handle a revocation of the
+    // session must reach. A child under a new Worker run session (`worker_run`, minted from its
+    // caller's Handle) names its parent as lineage, and its caller has checked the authority:
+    // `invoke_worker` against the caller's live Handle, a crash retry (`lifecycle.ts`) by the
+    // person's authority now, from the failed run's Handle that was revoked when it failed. No
+    // other kind of session is opened from a parent Handle; one that ever is gets refused here (and
+    // by governance 0042's trigger) until that is decided.
+    if (
+      parentRow?.revoked === true &&
+      (parentRow.session_id === params.sessionId || sessionRow.kind !== 'worker_run')
+    ) {
+      throw new HandleIssuanceError(
+        `parent Handle "${params.parentJti}" is revoked; no child is issued from it under its session`,
+        'parent_revoked',
+      );
+    }
   }
 
   // S11 AA1 (I-A2): no issuance path gives an admin agent more than its ceiling — `issue_handle`
@@ -1124,6 +1181,9 @@ export async function attenuate(
  * a no-op, not an error). `jti` values are `randomUUID()`-generated and therefore globally unique
  * regardless of workspace, so no `workspaceId` parameter is needed for correctness; RLS (I1)
  * still confines which row `client`'s transaction can see/update to its own workspace.
+ *
+ * Only that Handle: a child attenuated from it stays valid (the kernel's Handle check does not
+ * walk the parent chain). To end everything under a session, use {@link revokeSession}.
  */
 export async function revokeHandle(client: PoolClient, jti: string): Promise<void> {
   await client.query(
@@ -1135,8 +1195,24 @@ export async function revokeHandle(client: PoolClient, jti: string): Promise<voi
 /**
  * Revokes every Handle issued under a session (docs/development-tasks.md S1.9:
  * "revokeSession(client, sessionId) — all handles of a session").
+ *
+ * Legacy 699: locks the session row first (`for no key update`, the lock an UPDATE of it takes),
+ * so a concurrent `issueHandle` holding it `for share` — attenuating a child under this session,
+ * say, while its Worker is terminated — commits before the UPDATE below takes its snapshot, and
+ * that child is revoked with the rest; an issuer that comes second reads its parent revoked and
+ * refuses. The session itself is left as it is: the Grant / Profile / AgentPolicy callers below
+ * revoke Handles so the next Turn is issued fresh ones under the same live session (an admin agent
+ * session ending would end its Chats' Turns). A caller ending the session marks it `revoked`
+ * instead, and governance 0042's trigger revokes its Handles.
+ *
+ * A re-issue that came first (`ensureEntryHandle`, say) may carry a gate scope read from the
+ * Grants before the revoking change committed, and stays valid after this. That widens nothing:
+ * a gate call is judged against the Grants as they are when it runs (R-37 / D-20), and llm-proxy
+ * reads no gate scope. The serialisation here is about which Handles exist, not about the scope a
+ * Handle was cut from.
  */
 export async function revokeSession(client: PoolClient, sessionId: string): Promise<void> {
+  await client.query('select 1 from sessions where id = $1 for no key update', [sessionId]);
   await client.query(
     'update capability_handles set revoked_at = now() where session_id = $1 and revoked_at is null',
     [sessionId],

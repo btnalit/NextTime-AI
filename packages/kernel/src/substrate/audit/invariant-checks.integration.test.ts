@@ -357,7 +357,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       }
     });
 
-    it('ops.collector_silent: a service-owned Source in an active standard workspace whose newest observation is older than the threshold is counted; a fresh one, a never-observed one, a retired one (no active Handle), and one in an ephemeral workspace are not (S6 leftover 41; leftover 62)', async () => {
+    it('ops.collector_silent: a service-owned Source in an active standard workspace whose newest observation is older than the threshold is counted; a fresh one, a never-observed one, a retired one (no active Handle — revoked before its session was, governance 0042), and one in an ephemeral workspace are not (S6 leftover 41; leftover 62)', async () => {
       const serviceId = randomUUID();
       const silentSourceId = randomUUID();
       const freshSourceId = randomUUID();
@@ -447,10 +447,11 @@ describe.runIf(DATABASE_URL !== undefined)(
             [workspaceId, retiredSourceId, retiredActivityId, threeHoursAgo],
           );
           // A revoked Handle (present, but not active) exercises the `revoked_at is null` half of
-          // the exclusion, not just "no row at all".
+          // the exclusion, not just "no row at all". The session is revoked after the Handle is
+          // in: no Handle is inserted under a revoked session (governance 0042).
           const retiredSession = await client.query<{ id: string }>(
             `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
-             values ($1, $2, 'service', $2, 'revoked') returning id`,
+             values ($1, $2, 'service', $2, 'active') returning id`,
             [workspaceId, retiredServiceId],
           );
           await client.query(
@@ -465,6 +466,9 @@ describe.runIf(DATABASE_URL !== undefined)(
               JSON.stringify({ capabilities: ['register_source'], resources: {} }),
             ],
           );
+          await client.query(`update sessions set status = 'revoked' where id = $1`, [
+            retiredSession.rows[0]?.id,
+          ]);
 
           // The same silent shape in an ephemeral workspace — expected to go quiet, never flagged.
           await client.query(

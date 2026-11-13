@@ -2511,6 +2511,13 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '升级时吊销了放在容器环境变量里的旧凭证。',
     enHint: "An upgrade revoked old Handles kept in a container's environment.",
   },
+  'principal.revoked_session_handles_revoked': {
+    zh: '已结束会话的凭证已吊销',
+    en: 'Ended sessions’ Handles revoked',
+    zhHint: '升级时吊销了会话已结束、却仍然有效的凭证（停用工作区、换角色留下的）。',
+    enHint:
+      'An upgrade revoked Handles still valid under sessions that had ended (left by a disabled workspace or a role change).',
+  },
 
   // -----------------------------------------------------------------------------------------
   // Platform audit events (`workspace_id` null, not capability names)

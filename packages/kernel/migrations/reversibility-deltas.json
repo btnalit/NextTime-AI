@@ -443,6 +443,26 @@
         }
       ],
       "rationale": "docs/runbooks/release.md §6, goal 0019 row (S11 GO18a): 0019 rewrites goal_runs_status_guard so that an achieved-by-check run needs a round with no review (B1 of the GO18 independent review) and a reviewer_assessed outcome is recorded — out of verifying only — instead of refused outright. The BASE tests assert the guard's exact refusal text, which now also names reviews; each still gets the refusal it expects, under the new wording. BASE's product code never writes a review check or reviewer_assessed, so every transition it makes is allowed or refused as before. The replacements keep every assertion, with the new messages."
+    },
+    {
+      "migration": "governance/0042_session_revocation_revokes_handles.sql",
+      "baseTests": [
+        {
+          "file": "src/substrate/audit/invariant-checks.integration.test.ts",
+          "fullName": "substrate/audit/invariant-checks (integration, real Postgres) ops.collector_silent: a service-owned Source in an active standard workspace whose newest observation is older than the threshold is counted; a fresh one, a never-observed one, a retired one (no active Handle), and one in an ephemeral workspace are not (S6 leftover 41; leftover 62)"
+        }
+      ],
+      "replacedBy": [
+        {
+          "file": "src/substrate/audit/invariant-checks.integration.test.ts",
+          "fullName": "substrate/audit/invariant-checks (integration, real Postgres) ops.collector_silent: a service-owned Source in an active standard workspace whose newest observation is older than the threshold is counted; a fresh one, a never-observed one, a retired one (no active Handle — revoked before its session was, governance 0042), and one in an ephemeral workspace are not (S6 leftover 41; leftover 62)"
+        },
+        {
+          "file": "src/governance/capability/session-revocation.integration.test.ts",
+          "fullName": "governance/capability — a revoked session has no valid Handle (integration, real Postgres) issueHandle refuses a revoked session (session_revoked), and the DB refuses the row"
+        }
+      ],
+      "rationale": "docs/runbooks/release.md §6, governance 0042: 0042's insert trigger refuses any capability_handles row under a session already revoked (I-H1). The previous release's test fixture inserts its retired source's Handle directly under a session it created revoked; the fixture now inserts the Handle first and revokes the session after. No v0.68.0 product path issues into a revoked session: every reuse lookup filters on expires_at > now(), and every statement that revokes a session pulls expires_at to now."
     }
   ]
 }

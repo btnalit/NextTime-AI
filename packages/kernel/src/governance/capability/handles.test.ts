@@ -66,6 +66,8 @@ interface FakeSessionRow {
   onBehalfOf: string;
   /** `sessions.kind` — omitted reads as `mcp_session`, a bearer Handle's kind. */
   kind?: string;
+  /** `sessions.status` — omitted reads as `active`. */
+  status?: string;
 }
 
 interface FakeHandleRow {
@@ -85,7 +87,7 @@ function createFakeCapabilityClient() {
   const query = vi.fn(async (text: string, params: unknown[] = []) => {
     const sql = text.trim();
 
-    if (sql.startsWith('select workspace_id, on_behalf_of, kind from sessions')) {
+    if (sql.startsWith('select workspace_id, on_behalf_of, kind, status from sessions')) {
       const [sessionId] = params as [string];
       const row = sessions.get(sessionId);
       return {
@@ -95,11 +97,30 @@ function createFakeCapabilityClient() {
                 workspace_id: row.workspaceId,
                 on_behalf_of: row.onBehalfOf,
                 kind: row.kind ?? 'mcp_session',
+                status: row.status ?? 'active',
               },
             ]
           : [],
         rowCount: row ? 1 : 0,
       };
+    }
+
+    if (
+      sql.startsWith('select revoked_at is not null as revoked, session_id from capability_handles')
+    ) {
+      const [, jti] = params as [string, string];
+      const row = handles.get(jti);
+      return {
+        rows: row ? [{ revoked: row.revoked_at !== null, session_id: row.session_id }] : [],
+        rowCount: row ? 1 : 0,
+      };
+    }
+
+    if (sql.startsWith('select 1 from sessions where id = $1 for no key update')) {
+      const [sessionId] = params as [string];
+      return sessions.has(sessionId)
+        ? { rows: [{ '?column?': 1 }], rowCount: 1 }
+        : { rows: [], rowCount: 0 };
     }
 
     if (sql.startsWith('insert into capability_handles')) {
