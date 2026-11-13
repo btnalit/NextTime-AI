@@ -740,7 +740,9 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
       expect(refusal).toBeInstanceOf(OntologyLinkEndpointError);
       expect((refusal as OntologyLinkEndpointError).code).toBe('ontology_link_endpoint_undeclared');
       expect((refusal as OntologyLinkEndpointError).problems).toEqual({
-        undeclared: [{ ontologyId: draft.id, linkType: 'feeds', end: 'range', objectType: typo }],
+        undeclared: [
+          { ontologyId: draft.id, family: null, linkType: 'feeds', end: 'range', objectType: typo },
+        ],
         orphaned: [],
       });
       const rows = await withWorkspace(pool, { workspaceId, principalId: bob }, (client) =>
@@ -795,7 +797,9 @@ describe.runIf(DATABASE_URL !== undefined)('substrate/ontology/registry (integra
         undeclared: [],
         orphaned: [
           {
+            // Published outside the ChangePlan: no recorded name.
             ontologyId: referrerV1.id,
+            family: null,
             linkType: 'served_by',
             end: 'range',
             objectType: target.widget,

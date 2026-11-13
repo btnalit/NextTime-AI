@@ -169,6 +169,7 @@ async function planItemRollback(
                   linkType: p.linkType,
                   end: p.end,
                   objectType: p.objectType,
+                  family: p.family,
                 }))
               : [],
         };

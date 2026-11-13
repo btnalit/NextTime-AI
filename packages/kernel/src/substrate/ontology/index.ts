@@ -80,6 +80,7 @@ export {
   lockOntologyNamespace,
 } from './namespace.js';
 export type {
+  NamedOntologyLinkEndpointProblem,
   OntologyLinkEnd,
   OntologyLinkEndpointProblem,
   OntologyLinkEndpointProblems,

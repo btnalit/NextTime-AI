@@ -339,13 +339,20 @@ describe('mapDispatchError — error-mapping followup: previously-unmapped S3.1/
         undeclared: [
           {
             ontologyId: 'ont-1',
+            family: null,
             linkType: 'served_by',
             end: 'range' as const,
             objectType: 'Gatekeepr',
           },
         ],
         orphaned: [
-          { ontologyId: 'ont-2', linkType: 'runs_on', end: 'domain' as const, objectType: 'Host' },
+          {
+            ontologyId: 'ont-2',
+            family: null,
+            linkType: 'runs_on',
+            end: 'domain' as const,
+            objectType: 'Host',
+          },
         ],
       }),
     );

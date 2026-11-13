@@ -89,12 +89,14 @@ export interface ChangeRollbackConflict {
   /** For `namespace_conflict`: the type names another ontology family declares now (I-P1). */
   readonly conflicts: readonly { readonly kind: 'object' | 'action'; readonly name: string }[];
   /** For `link_endpoint_undeclared` (legacy 303): the LinkType ends that would name an ObjectType
-   *  no published family declares — `ontologyId` is the family whose LinkType it is. */
+   *  no published family declares — `ontologyId` is the family whose LinkType it is, `family` its
+   *  stable name when a ChangePlan item recorded one (`NamedOntologyLinkEndpointProblem`). */
   readonly linkEnds: readonly {
     readonly ontologyId: string;
     readonly linkType: string;
     readonly end: 'domain' | 'range';
     readonly objectType: string;
+    readonly family: string | null;
   }[];
 }
 

@@ -285,8 +285,27 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
         preview(FIRST, {
           blocker: 'link_endpoint_undeclared',
           linkEnds: [
-            { ontologyId: 'o-2', linkType: 'served_by', end: 'range', objectType: 'Host' },
-            { ontologyId: 'o-1', linkType: 'runs_on', end: 'domain', objectType: 'Gone' },
+            {
+              ontologyId: 'o-2',
+              family: 'uxlink-services',
+              linkType: 'served_by',
+              end: 'range',
+              objectType: 'Host',
+            },
+            {
+              ontologyId: 'o-3',
+              family: null,
+              linkType: 'relates',
+              end: 'domain',
+              objectType: 'Host',
+            },
+            {
+              ontologyId: 'o-1',
+              family: 'ops-assets',
+              linkType: 'runs_on',
+              end: 'domain',
+              objectType: 'Gone',
+            },
           ],
         }),
     });
@@ -297,9 +316,10 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
     expect(blocker.textContent).toContain(
       '撤销后会有关系类型指向工作区里没有任何本体声明的对象类型',
     );
-    // Another family's end is called out as such; this item's own is not.
+    // Another family's end names that family (UX acceptance of #1141) — "another ontology" when
+    // no ChangePlan record names it; this item's own end names no family.
     expect(blocker.textContent).toContain(
-      '（另一个本体的关系类型 served_by 的 range（Host）、关系类型 runs_on 的 domain（Gone））',
+      '（本体 uxlink-services 的关系类型 served_by 的 range 是 Host；另一个本体的关系类型 relates 的 domain 是 Host；关系类型 runs_on 的 domain 是 Gone）',
     );
     expect((screen.getByRole('button', { name: '撤销' }) as HTMLButtonElement).disabled).toBe(true);
     expect(http.calls.some((c) => c.name === 'roll_back_change_segment')).toBe(false);

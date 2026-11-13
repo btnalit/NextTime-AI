@@ -1,6 +1,7 @@
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import {
+  type NamedOntologyLinkEndpointProblem,
   type OntologyDefinition,
   OntologyDefinitionSchema,
   OntologyLinkEndpointError,
@@ -278,7 +279,7 @@ export type OntologyRollbackBlocker =
     }
   | {
       readonly reason: 'link_endpoint_undeclared';
-      readonly problems: OntologyLinkEndpointProblems;
+      readonly problems: OntologyLinkEndpointProblems<NamedOntologyLinkEndpointProblem>;
     };
 
 export interface PlannedOntologyRollback {

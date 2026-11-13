@@ -208,14 +208,35 @@ describe('findOntologyLinkEndpointProblems (legacy 303)', () => {
   it('the error names every end, and which family’s end a dropped type would orphan', () => {
     const err = new OntologyLinkEndpointError({
       undeclared: [
-        { ontologyId: null, linkType: 'runs_on', end: 'domain', objectType: 'Contianer' },
+        {
+          ontologyId: null,
+          family: null,
+          linkType: 'runs_on',
+          end: 'domain',
+          objectType: 'Contianer',
+        },
       ],
       orphaned: [
-        { ontologyId: FAMILY_B, linkType: 'served_by', end: 'range', objectType: 'Gatekeeper' },
+        {
+          ontologyId: FAMILY_B,
+          family: null,
+          linkType: 'served_by',
+          end: 'range',
+          objectType: 'Gatekeeper',
+        },
+        {
+          ontologyId: FAMILY_C,
+          family: 'ops-assets',
+          linkType: 'runs_on',
+          end: 'range',
+          objectType: 'Host',
+        },
       ],
     });
     expect(err.code).toBe('ontology_link_endpoint_undeclared');
     expect(err.message).toContain('LinkType "runs_on" domain "Contianer"');
+    // A family the ChangePlan named is called by that name; one it did not, by its id.
     expect(err.message).toContain(`LinkType "served_by" range "Gatekeeper" (ontology ${FAMILY_B})`);
+    expect(err.message).toContain('LinkType "runs_on" range "Host" (ontology ops-assets)');
   });
 });

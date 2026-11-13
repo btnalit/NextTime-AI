@@ -82,13 +82,25 @@ export interface OntologyLinkEndpointProblem {
   readonly objectType: string;
 }
 
-export interface OntologyLinkEndpointProblems {
+/** A problem as `OntologyLinkEndpointError` reports it: with what to call the family whose
+ *  LinkType it is (UX acceptance of #1141 — "another ontology" alone does not say which). */
+export interface NamedOntologyLinkEndpointProblem extends OntologyLinkEndpointProblem {
+  /** The family's stable name as the ChangePlan item that last installed it recorded it
+   *  (`change_items.target.family`: a pack's or module's family) — null when no item has: the
+   *  platform-meta ontology, a family published from a draft or seeded from the command line, a
+   *  family this very publish creates. `ontology_versions` has no name column (`loader.ts`). */
+  readonly family: string | null;
+}
+
+export interface OntologyLinkEndpointProblems<
+  P extends OntologyLinkEndpointProblem = OntologyLinkEndpointProblem,
+> {
   /** The candidate's own LinkType ends naming a type neither it nor another family's head
    *  declares. */
-  readonly undeclared: readonly OntologyLinkEndpointProblem[];
+  readonly undeclared: readonly P[];
   /** Another family's LinkType ends naming a type the candidate's family declares now and the
    *  candidate no longer does. */
-  readonly orphaned: readonly OntologyLinkEndpointProblem[];
+  readonly orphaned: readonly P[];
 }
 
 const describeEnd = (p: OntologyLinkEndpointProblem): string =>
@@ -99,8 +111,8 @@ const describeEnd = (p: OntologyLinkEndpointProblem): string =>
  *  lists in `details`); nothing was published. */
 export class OntologyLinkEndpointError extends Error {
   readonly code = 'ontology_link_endpoint_undeclared' as const;
-  readonly problems: OntologyLinkEndpointProblems;
-  constructor(problems: OntologyLinkEndpointProblems) {
+  readonly problems: OntologyLinkEndpointProblems<NamedOntologyLinkEndpointProblem>;
+  constructor(problems: OntologyLinkEndpointProblems<NamedOntologyLinkEndpointProblem>) {
     const parts: string[] = [];
     if (problems.undeclared.length > 0) {
       parts.push(
@@ -110,7 +122,7 @@ export class OntologyLinkEndpointError extends Error {
     if (problems.orphaned.length > 0) {
       parts.push(
         `${problems.orphaned
-          .map((p) => `${describeEnd(p)} (ontology ${p.ontologyId})`)
+          .map((p) => `${describeEnd(p)} (ontology ${p.family ?? p.ontologyId})`)
           .join(', ')} would name an ObjectType this version removes`,
       );
     }
@@ -237,6 +249,29 @@ async function loadPublishedHeads(
   return result.rows;
 }
 
+/** The stable name of each family in `ontologyIds` that a ChangePlan item installed — the last
+ *  such item's `target.family` (`application/change-plan/ontology-item.ts`); a family no item
+ *  installed is absent. Read only to name the families in an `OntologyLinkEndpointError`, on the
+ *  refusing path: the ChangePlan record is the only place a family's name is kept. */
+async function loadOntologyFamilyNames(
+  client: PoolClient,
+  workspaceId: string,
+  ontologyIds: readonly string[],
+): Promise<ReadonlyMap<string, string>> {
+  if (ontologyIds.length === 0) return new Map();
+  const result = await client.query<{ id: string; family: string }>(
+    `select distinct on (target->>'ontologyId') target->>'ontologyId' as id, target->>'family' as family
+       from change_items
+      where workspace_id = $1
+        and kind = 'ontology_version'
+        and target->>'ontologyId' = any($2::text[])
+        and target->>'family' is not null
+      order by target->>'ontologyId', created_at desc`,
+    [workspaceId, [...ontologyIds]],
+  );
+  return new Map(result.rows.map((row) => [row.id, row.family] as const));
+}
+
 /** What a retired family declares once its last version is gone: nothing. Only ever compared,
  *  never stored (a stored definition has at least one ObjectType and LinkType). */
 const EMPTY_DEFINITION: OntologyDefinition = { objectTypes: [], linkTypes: [] };
@@ -288,6 +323,18 @@ export async function assertOntologyPublishable(
     .map(([id, definition]) => ({ id, definition }));
   const problems = findOntologyLinkEndpointProblems(candidateId, next, current, others);
   if (problems.undeclared.length > 0 || problems.orphaned.length > 0) {
-    throw new OntologyLinkEndpointError(problems);
+    const ids = new Set<string>();
+    for (const p of [...problems.undeclared, ...problems.orphaned]) {
+      if (p.ontologyId !== null) ids.add(p.ontologyId);
+    }
+    const names = await loadOntologyFamilyNames(client, workspaceId, [...ids]);
+    const named = (p: OntologyLinkEndpointProblem): NamedOntologyLinkEndpointProblem => ({
+      ...p,
+      family: p.ontologyId === null ? null : (names.get(p.ontologyId) ?? null),
+    });
+    throw new OntologyLinkEndpointError({
+      undeclared: problems.undeclared.map(named),
+      orphaned: problems.orphaned.map(named),
+    });
   }
 }

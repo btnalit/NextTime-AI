@@ -797,13 +797,20 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
       undeclared: [
         {
           ontologyId: 'ont-1',
+          family: null,
           linkType: 'served_by',
           end: 'range' as const,
           objectType: 'Gatekeepr',
         },
       ],
       orphaned: [
-        { ontologyId: 'ont-2', linkType: 'runs_on', end: 'domain' as const, objectType: 'Host' },
+        {
+          ontologyId: 'ont-2',
+          family: 'ops-assets',
+          linkType: 'runs_on',
+          end: 'domain' as const,
+          objectType: 'Host',
+        },
       ],
     };
     const mapped = mapCapabilityError(new OntologyLinkEndpointError(problems));
@@ -813,7 +820,8 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
       details: problems,
     });
     expect(mapped.message).toContain('"served_by" range "Gatekeepr"');
-    expect(mapped.message).toContain('(ontology ont-2)');
+    // An orphaned end names its family when the ChangePlan recorded one, else its id.
+    expect(mapped.message).toContain('(ontology ops-assets)');
   });
 
   it('OntologyBaseMovedError (publish_ontology_version, R-60) → 409 ontology_base_moved', () => {

@@ -4541,7 +4541,7 @@ const modulesCapabilities = [
     paramsSchema: z.object({ segmentId: z.guid() }).strict(),
     resultSchema: wire.ChangeRollbackPreviewWireSchema,
     description:
-      'Dry run of roll_back_change_segment, writing nothing: per item (in reverse order) the state it would return to, the rollback’s own authority classification, the ontology types it takes out, and why it cannot be rolled back now (changed again since — roll that change back first —, gone, a type name another family has taken, or a LinkType end that would name a type no family declares: one the restored version names that is gone, or one another family names that the rollback takes away — linkEnds lists them); plus how many objects and active Facts use the types taken out (kept, never removed). 404 change_segment_not_found.',
+      'Dry run of roll_back_change_segment, writing nothing: per item (in reverse order) the state it would return to, the rollback’s own authority classification, the ontology types it takes out, and why it cannot be rolled back now (changed again since — roll that change back first —, gone, a type name another family has taken, or a LinkType end that would name a type no family declares: one the restored version names that is gone, or one another family names that the rollback takes away — linkEnds lists them, with the family’s name when a ChangePlan item recorded one); plus how many objects and active Facts use the types taken out (kept, never removed). 404 change_segment_not_found.',
   },
   {
     name: 'roll_back_change_segment',

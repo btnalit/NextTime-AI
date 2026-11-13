@@ -464,8 +464,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         const ws = await newWorkspace();
         const named = await apply(ws, segment('fam-l1', definitionOf(['ObjL'])));
         const referrer = await apply(ws, segment('fam-l2', referring('ObjL2', 'ObjL')));
+        // The referrer is named by the family its ChangePlan item recorded (UX of #1141).
         const end = {
           ontologyId: deriveOntologyPackId('fam-l2'),
+          family: 'fam-l2',
           linkType: 'refers_to',
           end: 'range',
           objectType: 'ObjL',
@@ -501,6 +503,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           linkEnds: [
             {
               ontologyId: deriveOntologyPackId('fam-m2'),
+              family: 'fam-m2',
               linkType: 'refers_to',
               end: 'range',
               objectType: 'ObjM',

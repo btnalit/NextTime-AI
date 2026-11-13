@@ -522,7 +522,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(refusal).toBeInstanceOf(OntologyLinkEndpointError);
         expect((refusal as OntologyLinkEndpointError).problems.undeclared).toEqual([
           {
+            // A family this segment would create has no recorded name yet.
             ontologyId: deriveOntologyPackId('fam-e'),
+            family: null,
             linkType: 'refers_to',
             end: 'range',
             objectType: 'ObjMissing',
@@ -551,6 +553,25 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(await familyVersions(ws, 'fam-k2')).toEqual([
           { version: 1, published_by: ws.ownerId },
         ]);
+
+        // fam-k1's next version dropping ObjK is refused at review, naming fam-k2's end by the
+        // family name its ChangePlan item recorded (UX acceptance of #1141).
+        const drop = await plan(ws, segment('fam-k1', definitionOf('ObjK3'))).catch(
+          (err: unknown) => err,
+        );
+        expect(drop).toBeInstanceOf(OntologyLinkEndpointError);
+        expect((drop as OntologyLinkEndpointError).problems).toEqual({
+          undeclared: [],
+          orphaned: [
+            {
+              ontologyId: deriveOntologyPackId('fam-k2'),
+              family: 'fam-k2',
+              linkType: 'refers_to',
+              end: 'range',
+              objectType: 'ObjK',
+            },
+          ],
+        });
       });
 
       it('a name another family owns is refused at review (I-P1)', async () => {

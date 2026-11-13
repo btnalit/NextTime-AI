@@ -7,7 +7,6 @@ import {
   type ChangeSegmentDetailWire,
   type ChangeSegmentWire,
   type ChangeWideningReasonWire,
-  type OntologyLinkEndWire,
   type OntologyTypeNamesWire,
   type OperationFieldChangeWire,
   type ReceivedAdminProposalSegmentWire,
@@ -25,6 +24,7 @@ import { isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, shortId, zhJoin } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { operationFieldLabel, principalShownName } from '../../lib/labels.js';
+import { ontologyLinkEndsText } from '../../lib/ontology-link-ends.js';
 import { hrefs } from '../../lib/router.js';
 import { BLAST_RADIUS_TONES, labelText } from '../../lib/status-tone.js';
 import { Button } from '../kit/button.js';
@@ -880,16 +880,6 @@ const BLOCKER_TEXT: Readonly<
   },
 };
 
-/** One LinkType end a rollback would leave pointing at nothing (legacy 303), as a short phrase:
- *  whose link type it is (this item's family, or another), which end, and the type it names. */
-function linkEndText(end: OntologyLinkEndWire, ownOntologyId: string, t: Translate): string {
-  const own = end.ontologyId === ownOntologyId;
-  return t(
-    `${own ? '' : '另一个本体的'}关系类型 ${end.linkType} 的 ${end.end}（${end.objectType}）`,
-    `${own ? '' : 'another ontology’s '}link type ${end.linkType}, ${end.end} ${end.objectType}`,
-  );
-}
-
 function workerGatesOf(items: readonly ChangeItemWire[], ordinal: number): WorkerItemGates | null {
   const item = items.find((candidate) => candidate.ordinal === ordinal);
   return item?.kind === 'worker_definition_version' ? item.gates : null;
@@ -1083,8 +1073,8 @@ function RollBackSegment({
                     item.blocker === 'link_endpoint_undeclared' &&
                     item.linkEnds.length > 0
                       ? t(
-                          `（${item.linkEnds.map((e) => linkEndText(e, item.target.ontologyId, t)).join('、')}）`,
-                          ` (${item.linkEnds.map((e) => linkEndText(e, item.target.ontologyId, t)).join('; ')})`,
+                          `（${ontologyLinkEndsText(item.linkEnds, t, item.target.ontologyId)}）`,
+                          ` (${ontologyLinkEndsText(item.linkEnds, t, item.target.ontologyId)})`,
                         )
                       : null}
                     {item.blocker === 'replaced' ? (

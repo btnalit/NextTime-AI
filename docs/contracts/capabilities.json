@@ -58131,6 +58131,12 @@
                           ],
                           "type": "string"
                         },
+                        "family": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
                         "linkType": {
                           "type": "string"
                         },
@@ -58143,6 +58149,7 @@
                       },
                       "required": [
                         "ontologyId",
+                        "family",
                         "linkType",
                         "end",
                         "objectType"

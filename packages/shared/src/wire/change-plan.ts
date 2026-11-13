@@ -386,10 +386,15 @@ const RollbackBlockedByShape = {
 };
 
 /** A LinkType end naming an ObjectType no published ontology family would declare (legacy 303):
- *  the family whose LinkType it is, the LinkType's name, which end, and the type it names. */
+ *  the family whose LinkType it is, the LinkType's name, which end, and the type it names.
+ *  `family` is that family's stable name as the ChangePlan item that last installed it recorded
+ *  it (an `ontology_version` item's `target.family`: a pack's or module's family) — null when no
+ *  item has: the platform-meta ontology, a family published from a draft or seeded from the
+ *  command line. */
 export const OntologyLinkEndWireSchema = z
   .object({
     ontologyId: z.string(),
+    family: z.string().nullable(),
     linkType: z.string(),
     end: z.enum(['domain', 'range']),
     objectType: z.string(),
