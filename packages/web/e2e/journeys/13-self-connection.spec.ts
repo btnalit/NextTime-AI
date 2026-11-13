@@ -472,7 +472,12 @@ test.describe('Journey ⑬: 接入自己运行的门，换密钥，平台暂停�
     const withdraw = page.getByRole('dialog', { name: '撤回换地址的申请' });
     await expect(withdraw).toContainText('这次用的连接密钥作废');
     await withdraw.getByRole('button', { name: '撤回', exact: true }).click();
-    await expect(pending).toHaveCount(0, { timeout: 15_000 });
+    // The open confirm hides 健康与操作 from the accessibility tree, so `pending` (read through the
+    // dialog's role) matches nothing until the confirm is gone; wait for it first, else Escape lands
+    // on the confirm while the withdrawal is still in flight and the drawer stays open.
+    await expect(withdraw).toHaveCount(0, { timeout: 15_000 });
+    await expect(detail.getByTestId('gatekeeper-endpoint')).toHaveText(ENDPOINT);
+    await expect(pending).toHaveCount(0);
     await closeDialog(page, '健康与操作');
     const withdrawn = await ownerGatekeeper(page);
     expect(withdrawn.pendingAddressChange).toBeUndefined();
