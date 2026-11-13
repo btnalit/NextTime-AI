@@ -20,9 +20,9 @@
 #           every declared row is exercised by kernel repeat-call.integration.test.ts
 ratchet:
   console_unexplained: 10
-  kernel_test_missing: 2
+  kernel_test_missing: 1
   e2e_waived: 65
-  repeat_unclear: 36
+  repeat_unclear: 30
 capabilities:
   add_eval_case:
     console: required
@@ -877,7 +877,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: idempotent # not suspended any more: nothing is written, nothing is re-issued
   retire_eval_case:
     console: required
     agents: []
@@ -950,7 +950,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: idempotent # the same list: nothing is added or removed
   set_agent_policy:
     console: required
     agents: []
@@ -975,13 +975,12 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: repeats  # the same mode and deny list again rewrite the connector row (its updated_at); no Handle is re-issued
   set_default_modules:
     console: required
     agents: []
     e2e: "waived: 657"
-    kernel_test: missing
-    repeat: "unclear: 664"
+    repeat: repeats  # each write keeps the replaced settings version in the history and takes the next
   set_membership_role:
     console: required
     agents: []
@@ -1039,7 +1038,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent # the sessions and their Handles are already revoked: nothing left to stop
   stop_agent:
     console: required
     agents: []
@@ -1061,7 +1060,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: idempotent # suspended already: the first suspension stands, nothing is re-issued
   sync_eval_fixture_gate:
     console: required
     agents: []

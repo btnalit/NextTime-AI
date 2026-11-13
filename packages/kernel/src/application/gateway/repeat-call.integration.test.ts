@@ -37,11 +37,13 @@ import {
 } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { seedPlatformMetaOntology } from '../../substrate/ontology/index.js';
+import { issueAdminAgentHandle } from '../admin-agent/identity.js';
 import { createGoalRun } from '../goal/index.js';
 import { type UserRow, createPlatformAdmin, createUser } from '../identity/index.js';
 import { insertPendingContextItem } from '../linkage/index.js';
 import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
 import { workerSpecDigest } from '../task/step-attempt.js';
+import { createWorkspaceWithOwner } from '../workspace/index.js';
 import { createAdminWithTransaction, createGatekeeperActionExecutor } from './action-executor.js';
 import { setConnectionHandlerDeps } from './connection-handlers.js';
 import { dispatchCapability } from './dispatch.js';
@@ -863,6 +865,79 @@ async function entryTemplateRead(ctx: RecipeContext): Promise<Record<string, unk
         ? null
         : { definitionId: now.current.definitionId, version: now.current.version },
   };
+}
+
+/** A gate the case's owner connected itself (create_connection lands a self connection): the
+ *  workspace and Gatekeeper the platform's cut-off (`suspend_self_connection`) takes. */
+async function selfConnection(
+  ctx: RecipeContext,
+): Promise<{ workspaceId: string; gatekeeperId: string }> {
+  const owner = { ...ctx, caller: humanCaller(ctx.seed.workspaceId, ctx.seed.ownerId, 'owner') };
+  const { gatekeeperId } = await as<{ gatekeeperId: string }>(
+    owner,
+    'create_connection',
+    await connectionCall(owner),
+  );
+  return { workspaceId: ctx.seed.workspaceId, gatekeeperId };
+}
+
+/** A connector row as it stands: what `set_connector_mode` writes the same of again. */
+async function connectorNow(
+  ctx: RecipeContext,
+  name: string,
+): Promise<{ mode: string; disabledOperations: string[]; updatedAt: string }> {
+  const result = await ctx.pool.query<{
+    mode: string;
+    disabled_operations: string[];
+    updated_at: string;
+  }>(
+    'select mode, disabled_operations, updated_at::text as updated_at from connectors where name = $1',
+    [name],
+  );
+  const row = result.rows[0];
+  if (row === undefined) throw new Error(`no connector ${name}`);
+  return { mode: row.mode, disabledOperations: row.disabled_operations, updatedAt: row.updated_at };
+}
+
+/** The platform settings' version: what each write of them takes the next of. */
+async function platformSettingsVersion(ctx: RecipeContext): Promise<number | undefined> {
+  const result = await ctx.pool.query<{ version: number }>(
+    'select version from platform_settings where singleton',
+  );
+  return result.rows[0]?.version;
+}
+
+/** A trial workspace of the case's administrator (`admin_trial`, they its owner): where their
+ *  admin agent lives. Its owner Principal is the agent's person. */
+async function adminTrial(
+  ctx: RecipeContext,
+): Promise<{ workspaceId: string; principalId: string }> {
+  if (ctx.admin === null) throw new Error('adminTrial: a platform row only');
+  const created = await createWorkspaceWithOwner(ctx.pool, {
+    name: `repeat-trial-${randomUUID().slice(0, 8)}`,
+    owner: { userId: ctx.admin.id, displayName: ctx.admin.displayName },
+    purpose: 'admin_trial',
+  });
+  return { workspaceId: created.workspaceId, principalId: created.ownerPrincipalId };
+}
+
+/** That trial workspace with the administrator's admin agent running in it: an `admin_agent`
+ *  session holding a Handle, for `stop_admin_agent` to end the first time. The agent is switched
+ *  on (`ADMIN_AGENT_ENABLED`) for the issue only: stopping it needs no switch. */
+async function adminTrialWithSession(ctx: RecipeContext): Promise<string> {
+  const trial = await adminTrial(ctx);
+  const { privateKey } = await generateKeyPair(HANDLE_SIGNING_ALG, { crv: 'Ed25519' });
+  const previous = process.env.ADMIN_AGENT_ENABLED;
+  process.env.ADMIN_AGENT_ENABLED = '1';
+  try {
+    await withWorkspace(ctx.pool, trial, (client) =>
+      issueAdminAgentHandle(client, { ...trial, ttlSeconds: 600, privateKey }),
+    );
+  } finally {
+    if (previous === undefined) Reflect.deleteProperty(process.env, 'ADMIN_AGENT_ENABLED');
+    else process.env.ADMIN_AGENT_ENABLED = previous;
+  }
+  return trial.workspaceId;
 }
 
 /** Extra cases for a row, beyond the one with schema-built params on the bare seed. A declaration
@@ -2106,11 +2181,94 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       setUp: async (ctx) => ({ segmentId: await installedPackSegment(ctx) }),
     },
   },
+  set_default_modules: {
+    // The default modules it already has: the settings keep the version they replace in the
+    // history and take the next (as update_platform_settings does); what a new workspace gets
+    // does not change for the files after this one.
+    'the default modules it already has': {
+      first: expect.objectContaining({ defaultModules: expect.any(Array) }),
+      setUp: async (ctx) => {
+        const current = await ctx.pool.query<{ settings: { defaultModules?: string[] } }>(
+          'select settings from platform_settings where singleton',
+        );
+        return { defaultModules: current.rows[0]?.settings.defaultModules ?? [] };
+      },
+      entity: () => 'platform_settings',
+      moves: (ctx) => platformSettingsVersion(ctx),
+    },
+  },
+  set_connector_mode: {
+    // The mode and deny list it already has: the connector row moves only by its updated_at, and
+    // since what it lets a workspace call does not change, no entry Handle is re-issued.
+    'the http connector, the mode and deny list it already has': {
+      first: expect.objectContaining({ name: 'http' }),
+      setUp: async (ctx) => {
+        const { mode, disabledOperations } = await connectorNow(ctx, 'http');
+        return { name: 'http', mode, disabledOperations };
+      },
+      entity: (result) => (result as { name?: string }).name,
+      moves: async (ctx) => (await connectorNow(ctx, 'http')).updatedAt,
+    },
+  },
+  suspend_self_connection: {
+    // Suspended already: the row keeps the first suspension (its time, administrator and
+    // reason), and nothing is re-issued.
+    "a gate the case's workspace connected itself": {
+      first: expect.objectContaining({
+        suspendedAt: expect.any(String),
+        suspensionReason: 'under review',
+      }),
+      setUp: async (ctx) => ({ ...(await selfConnection(ctx)), reason: 'under review' }),
+      entity: (result) => (result as { gatekeeperId?: string }).gatekeeperId,
+    },
+  },
+  resume_self_connection: {
+    // Not suspended any more: nothing is written, and nothing is re-issued.
+    "a gate the case's workspace connected itself, suspended": {
+      first: expect.objectContaining({ suspendedAt: null }),
+      setUp: async (ctx) => {
+        const connection = await selfConnection(ctx);
+        await as(ctx, 'suspend_self_connection', { ...connection, reason: 'under review' });
+        return connection;
+      },
+      entity: (result) => (result as { gatekeeperId?: string }).gatekeeperId,
+    },
+  },
+  set_admin_agent_targets: {
+    // The list it already is: nothing is added or removed, nothing written.
+    "the administrator's trial workspace, the case's workspace as its one target": {
+      first: expect.objectContaining({ added: [expect.any(String)], removed: [] }),
+      setUp: async (ctx) => ({
+        trialWorkspaceId: (await adminTrial(ctx)).workspaceId,
+        targetWorkspaceIds: [ctx.seed.workspaceId],
+      }),
+    },
+  },
+  stop_admin_agent: {
+    // The session is already revoked, its Handles with it: nothing is left to revoke or stop.
+    "the administrator's trial workspace, its admin agent running": {
+      first: { revokedSessions: 1, stoppedTurns: 0 },
+      setUp: async (ctx) => ({ trialWorkspaceId: await adminTrialWithSession(ctx) }),
+    },
+    'every trial workspace of the administrator, its admin agent running': {
+      first: { revokedSessions: 1, stoppedTurns: 0 },
+      setUp: async (ctx) => {
+        await adminTrialWithSession(ctx);
+        return {};
+      },
+    },
+  },
 };
 
 /** Rows whose schema-built params cannot make a first call succeed on the bare seed — a param
  *  naming something the walk has no value for — run their recipes instead of that case. */
 const RECIPES_ONLY: ReadonlySet<string> = new Set([
+  'set_default_modules',
+  'set_connector_mode',
+  'suspend_self_connection',
+  'resume_self_connection',
+  'set_admin_agent_targets',
+  'stop_admin_agent',
   'set_user_budget',
   'reset_user_password',
   'set_allowed_models',
