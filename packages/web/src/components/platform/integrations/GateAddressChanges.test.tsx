@@ -121,6 +121,11 @@ describe('GateAddressChanges (legacy 701)', () => {
     expect(confirm.textContent).toContain('门留在现在的地址');
     const reason = within(confirm).getByLabelText(/原因（可选）/) as HTMLInputElement;
     expect(reason.maxLength).toBe(GATE_ADDRESS_REJECTION_REASON_MAX);
+    // Legacy 715: the owner reads this reason, so the administrator is told who will and what not to name.
+    expect(confirm.textContent).toContain(
+      '工作区所有者会在门的「健康与操作」里看到这段原因，看不到是谁驳回的',
+    );
+    expect(confirm.textContent).toContain('不要写其他工作区或门的信息');
     fireEvent.change(reason, { target: { value: '  先确认新主机归谁管  ' } });
     fireEvent.click(within(confirm).getByRole('button', { name: '驳回' }));
 

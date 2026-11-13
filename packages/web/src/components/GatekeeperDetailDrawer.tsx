@@ -6,7 +6,10 @@ import type { GatekeeperDetail } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { gateOwnedParamsText } from './connect/GateOwnedParams.js';
 import { RedactedNote } from './kit/redacted-note.js';
-import { PendingGateAddressChange } from './systems/GateAddressChangeSheet.js';
+import {
+  GateAddressChangeOutcome,
+  PendingGateAddressChange,
+} from './systems/GateAddressChangeSheet.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Notice } from './ui/Notice.js';
@@ -33,7 +36,7 @@ export interface GatekeeperDetailDrawerProps {
  *
  * Legacy 701: a workspace owner also sees the address the kernel calls a gate the workspace
  * connected itself at, and an open proposal to move it (with 撤回) — `get_gatekeeper` gives both
- * to owners only.
+ * to owners only. Legacy 715: and, while none is open, how the last one ended.
  */
 export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailDrawerProps) {
   const t = useT();
@@ -111,6 +114,11 @@ export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailD
             void detail.reload();
           }}
         />
+      ) : null}
+      {/* Legacy 715: how the last proposal ended, while none is open (a proposal just withdrawn
+          here is still in this read, so nothing older shows in its place). */}
+      {!gate.pendingAddressChange && gate.lastAddressChangeOutcome ? (
+        <GateAddressChangeOutcome outcome={gate.lastAddressChangeOutcome} />
       ) : null}
       <dl className="definition-list">
         <dt>{t('健康', 'Health')}</dt>

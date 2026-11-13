@@ -172,6 +172,136 @@ describe('GatekeeperDetailDrawer', () => {
     expect(screen.getByTestId('gate-address-change-withdraw')).toBeTruthy();
   });
 
+  // Legacy 715: how the last proposal to move ended, for the owner, while none is open.
+  const gateWith = (extra: Record<string, unknown>) => ({
+    id: 'gk-1',
+    name: 'notes',
+    kind: 'http',
+    status: 'active',
+    operationCount: 0,
+    createdAt: '2026-09-01T00:00:00.000Z',
+    operations: [],
+    health: 'ok',
+    endpoint: 'http://gate-a:8090',
+    ...extra,
+  });
+  const outcome = (extra: Record<string, unknown>) => ({
+    id: 'gac-1',
+    gatekeeperId: 'gk-1',
+    fromEndpoint: 'http://gate-a:8090',
+    toEndpoint: 'https://gate-b.example.com',
+    createdAt: '2026-11-12T00:00:00.000Z',
+    endedAt: '2026-11-12T06:00:00.000Z',
+    rejectionReason: null,
+    accountCredentialsLeftOnOldHost: false,
+    ...extra,
+  });
+
+  it('legacy 715: a rejected move says so, with the reason given and the way back', async () => {
+    renderDrawer(
+      callerReturning(
+        gateWith({
+          lastAddressChangeOutcome: outcome({
+            status: 'rejected',
+            rejectionReason: 'Use the TLS listener, token [redacted] was in the note',
+          }),
+        }),
+      ),
+    );
+    const notice = await screen.findByTestId('gate-address-change-outcome');
+    expect(notice.textContent).toContain('换地址的申请被平台管理员驳回了');
+    expect(notice.textContent).toContain('https://gate-b.example.com');
+    expect(screen.getByTestId('gate-address-change-outcome-reason').textContent).toMatch(
+      /^原因：Use the TLS listener, token \[redacted\] was in the note$/,
+    );
+    expect(screen.getByTestId('gate-address-change-outcome-redacted')).toBeTruthy();
+    expect(notice.textContent).toContain('「更换地址」重新申请');
+    expect(notice.textContent).toContain('「重新签发连接密钥」');
+  });
+
+  it('legacy 715: a rejected move with no reason says none was given', async () => {
+    renderDrawer(
+      callerReturning(gateWith({ lastAddressChangeOutcome: outcome({ status: 'rejected' }) })),
+    );
+    expect((await screen.findByTestId('gate-address-change-outcome-reason')).textContent).toBe(
+      '平台管理员没有写原因。',
+    );
+  });
+
+  it('legacy 715: an expired move says nobody decided it, and the way back', async () => {
+    renderDrawer(
+      callerReturning(gateWith({ lastAddressChangeOutcome: outcome({ status: 'expired' }) })),
+    );
+    const notice = await screen.findByTestId('gate-address-change-outcome');
+    expect(notice.textContent).toContain('换地址的申请过期了，没有生效');
+    expect(notice.textContent).toContain('24 小时内没有平台管理员处理');
+    expect(notice.textContent).toContain('「重新签发连接密钥」');
+    expect(screen.queryByTestId('gate-address-change-outcome-reason')).toBeNull();
+  });
+
+  it('legacy 715: an applied move says where from and to, and reminds the owner what may stay at the old address', async () => {
+    renderDrawer(
+      callerReturning(
+        gateWith({
+          endpoint: 'https://gate-b.example.com',
+          lastAddressChangeOutcome: outcome({
+            status: 'applied',
+            accountCredentialsLeftOnOldHost: true,
+          }),
+        }),
+      ),
+    );
+    const notice = await screen.findByTestId('gate-address-change-outcome');
+    expect(notice.textContent).toContain('门已换到新地址');
+    expect(notice.textContent).toContain('http://gate-a:8090');
+    expect(notice.textContent).toContain('https://gate-b.example.com');
+    // A reminder, not an assertion: the flag is a fact of the moment the move was applied, and the
+    // kernel does not know whether the owner cleared them since (review of #1166).
+    expect(notice.textContent).toContain(
+      '原来地址上的门如果还留着这些账号凭证，请到那台主机上清除',
+    );
+    expect(notice.textContent).not.toContain('重新申请');
+  });
+
+  it('legacy 715: a withdrawn move shows nothing, and no outcome shows while a move is open', async () => {
+    renderDrawer(
+      callerReturning(gateWith({ lastAddressChangeOutcome: outcome({ status: 'withdrawn' }) })),
+    );
+    await screen.findByTestId('gatekeeper-health');
+    expect(screen.queryByTestId('gate-address-change-outcome')).toBeNull();
+    cleanup();
+
+    renderDrawer(
+      callerReturning(
+        gateWith({
+          pendingAddressChange: {
+            id: 'gac-2',
+            gatekeeperId: 'gk-1',
+            fromEndpoint: 'http://gate-a:8090',
+            toEndpoint: 'https://gate-c.example.com',
+            status: 'proposed',
+            impact: {
+              publishedOperationCount: 0,
+              grantCount: 0,
+              autoApprovedOperations: [],
+              workerDefinitionCount: 0,
+              inFlightActionRequestCount: 0,
+            },
+            previewDigest: 'p'.repeat(64),
+            proposedBy: 'p-owner',
+            createdAt: '2026-11-13T00:00:00.000Z',
+            expiresAt: '2026-11-14T00:00:00.000Z',
+            decidedAt: null,
+            rejectionReason: null,
+          },
+          lastAddressChangeOutcome: outcome({ status: 'rejected', rejectionReason: 'No.' }),
+        }),
+      ),
+    );
+    await screen.findByTestId('gate-address-change-pending');
+    expect(screen.queryByTestId('gate-address-change-outcome')).toBeNull();
+  });
+
   it('legacy 701: without the address (not an owner, or a platform gate) no address row shows', async () => {
     const http = callerReturning({
       id: 'gk-1',
