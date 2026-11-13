@@ -1138,30 +1138,63 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
       });
     }
 
-    it.each([
-      [
-        'disabled meanwhile',
-        'update principals set disabled_at = now() where workspace_id = $1 and id = $2',
-      ],
-      [
-        'made an auditor meanwhile',
-        "update principals set role = 'auditor' where workspace_id = $1 and id = $2",
-      ],
+    // Each change runs on the admin client between the first run and its crash ($1 the workspace,
+    // $2 the principal); `undo` puts back what the file's other tests share.
+    it.each<{ who: string; change: readonly string[]; undo?: string }>([
+      {
+        who: 'disabled meanwhile',
+        change: ['update principals set disabled_at = now() where workspace_id = $1 and id = $2'],
+      },
+      {
+        who: 'made an auditor meanwhile',
+        change: ["update principals set role = 'auditor' where workspace_id = $1 and id = $2"],
+      },
+      // Review #501 of #1135 (P3-1): a disabled platform user is seen from the workspace
+      // transaction only through the `users_workspace_members` RLS policy (core 0021) — pinned
+      // here, so a change to that policy cannot quietly let a disabled user's retry through.
+      {
+        who: 'whose platform user was disabled meanwhile',
+        change: [
+          `with u as (
+             insert into users (login, display_name) values ('l289-user-' || $2::text, 'l289 user')
+             returning id
+           )
+           update principals set user_id = (select id from u) where workspace_id = $1 and id = $2::uuid`,
+          `update users set status = 'disabled'
+            where id = (select user_id from principals where workspace_id = $1 and id = $2)`,
+        ],
+      },
+      {
+        who: 'whose workspace was disabled meanwhile',
+        change: [
+          "update workspaces set status = 'disabled' where id = $1 and $2::uuid is not null",
+        ],
+        undo: "update workspaces set status = 'active' where id = $1",
+      },
     ])(
-      'a crash retry for a person %s is not started: the Task fails, no Handle is minted (legacy 289)',
-      async (who, change) => {
+      'a crash retry for a person $who is not started: the Task fails, no Handle is minted (legacy 289)',
+      async ({ who, change, undo }) => {
         const { principalId, supervisorClient, runtimeDeps, spawnResult } = await spawnRunningTask(
           `l289-${who}`,
         );
-        await withAdminClient(pool, (client) => client.query(change, [workspaceId, principalId]));
-        supervisorClient.setStatus(spawnResult.workerRunId, { status: 'failed', exitCode: 1 });
+        try {
+          await withAdminClient(pool, async (client) => {
+            for (const statement of change)
+              await client.query(statement, [workspaceId, principalId]);
+          });
+          supervisorClient.setStatus(spawnResult.workerRunId, { status: 'failed', exitCode: 1 });
 
-        await reactToSupervisorStatus(
-          runtimeDeps,
-          workspaceId,
-          principalId,
-          spawnResult.workerRunId,
-        );
+          await reactToSupervisorStatus(
+            runtimeDeps,
+            workspaceId,
+            principalId,
+            spawnResult.workerRunId,
+          );
+        } finally {
+          if (undo !== undefined) {
+            await withAdminClient(pool, (client) => client.query(undo, [workspaceId]));
+          }
+        }
 
         // Before the fix: a second spawn, with a fresh Handle llm-proxy would accept.
         expect(supervisorClient.spawnCalls).toHaveLength(1);
