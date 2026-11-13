@@ -732,6 +732,15 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
     expect(mapped.code).toBe('invalid_params');
   });
 
+  it('legacy 699: HandleIssuanceError with a code (session or parent revoked) → 401 unauthorized, message withheld', () => {
+    for (const code of ['session_revoked', 'parent_revoked'] as const) {
+      const mapped = mapCapabilityError(
+        new HandleIssuanceError('session "s-1" is revoked; no Handle may be issued into it', code),
+      );
+      expect(mapped).toEqual({ status: 401, code: 'unauthorized', message: 'unauthorized' });
+    }
+  });
+
   it('review fix F10: TaskRuntimeNotConfiguredError (invoke_worker) → 503 service_unavailable, not 500', () => {
     const mapped = mapCapabilityError(new TaskRuntimeNotConfiguredError());
     expect(mapped.status).toBe(503);

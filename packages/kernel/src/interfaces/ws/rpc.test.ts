@@ -304,6 +304,15 @@ describe('mapDispatchError — review fix F10: previously-unmapped error classes
     expect(mapped.code).toBe(WS_ERROR_CODES.INVALID_PARAMS);
   });
 
+  it('legacy 699: HandleIssuanceError with a code (session or parent revoked) maps to UNAUTHORIZED, message withheld', () => {
+    for (const code of ['session_revoked', 'parent_revoked'] as const) {
+      const mapped = mapDispatchError(
+        new HandleIssuanceError('session "s-1" is revoked; no Handle may be issued into it', code),
+      );
+      expect(mapped).toEqual({ code: WS_ERROR_CODES.UNAUTHORIZED, message: 'unauthorized' });
+    }
+  });
+
   it('TaskRuntimeNotConfiguredError (invoke_worker) maps to SERVICE_UNAVAILABLE (-32015), not INTERNAL_ERROR', () => {
     const mapped = mapDispatchError(new TaskRuntimeNotConfiguredError());
     expect(mapped.code).toBe(WS_ERROR_CODES.SERVICE_UNAVAILABLE);
