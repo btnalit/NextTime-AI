@@ -13,12 +13,17 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import type { GateTarget, GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
-import { createGateConnectionSecrets } from '../../adapters/gatekeeper-client/index.js';
+import {
+  GatekeeperClientError,
+  createGateConnectionSecrets,
+} from '../../adapters/gatekeeper-client/index.js';
+import { OutboundTargetRefusedError } from '../../adapters/outbound-target/index.js';
 import { getActionRequest, requestAction } from '../../governance/approval/index.js';
 import {
   gateAddressOrigin,
   getGatekeeper,
   getPublishedOperation,
+  lockSelfConnectionState,
   normalizeGateEndpoint,
   operationRecordDigest,
   publishOperation,
@@ -75,6 +80,8 @@ const OP: Operation = {
  *  got, and whether a member's account is on it (the old host says yes, any other no). */
 function createFakeGates() {
   const described = new Map<string, Operation[]>();
+  /** An address whose `describe_operations` fails with this error. */
+  const failing = new Map<string, Error>();
   const describeCalls: GateTarget[] = [];
   const presenceCalls: string[] = [];
   const runCalls: string[] = [];
@@ -82,6 +89,8 @@ function createFakeGates() {
   const client: GatekeeperClient = {
     describeOperations: async (target) => {
       describeCalls.push(target);
+      const failure = failing.get(target.endpoint);
+      if (failure) throw failure;
       return { operations: described.get(target.endpoint) ?? [OP] };
     },
     observe: async () => {
@@ -109,7 +118,7 @@ function createFakeGates() {
       return { credentialMode: 'connected_account', present: connected.has(target.endpoint) };
     },
   };
-  return { client, described, describeCalls, presenceCalls, runCalls, connected };
+  return { client, described, failing, describeCalls, presenceCalls, runCalls, connected };
 }
 
 function platformCaller(user: UserRow): ResolvedCaller {
@@ -178,6 +187,17 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       const mapped = mapCapabilityError(error);
       return { status: mapped.status, code: mapped.code };
+    }
+
+    /** The whole mapped refusal of a call: status, code, message and details. */
+    async function refusal(call: Promise<unknown>) {
+      const error = await call.then(
+        () => {
+          throw new Error('the call was expected to be refused');
+        },
+        (err: unknown) => err,
+      );
+      return mapCapabilityError(error);
     }
 
     /** A gate the workspace connects itself, its one Operation published. */
@@ -274,6 +294,57 @@ describe.runIf(DATABASE_URL !== undefined)(
         { skipRoleSwitch: true },
       );
       return id;
+    }
+
+    /** A request of OP on `gatekeeperId` through `requestAction`, in `client`'s transaction. */
+    async function requestOn(client: PoolClient, gatekeeperId: string) {
+      const published = await getPublishedOperation(client, workspaceId, gatekeeperId, OP.name);
+      if (!published) throw new Error('OP is not published');
+      return requestAction(client, workspaceId, {
+        gatekeeperId,
+        actionKind: OP.name,
+        resourceScope: gatekeeperId,
+        blastRadius: 'medium',
+        operationAutoApprovable: true,
+        awaitDecision: false,
+        onBehalfOf: ownerId,
+        actorRuntime: 'pi',
+        requesterScope: {
+          capabilities: ['request_action'],
+          resources: { gatekeeper: [gatekeeperId] },
+        },
+        idempotencyKey: randomUUID(),
+        operationDigest: operationRecordDigest(published),
+      });
+    }
+
+    /** Runs `sql` (`$1` the workspace, `$2` the Gatekeeper) on the login role with triggers off —
+     *  a state only an older kernel or a write around the kernel leaves. */
+    async function writeAround(sql: string, gatekeeperId: string, ...more: unknown[]) {
+      const client = await pool.connect();
+      try {
+        await client.query('begin');
+        await client.query('set local session_replication_role = replica');
+        await client.query(sql, [workspaceId, gatekeeperId, ...more]);
+        await client.query('commit');
+      } finally {
+        client.release();
+      }
+    }
+
+    /** Resolves once a transaction waits for the advisory lock on `key`. */
+    async function someoneWaitsFor(key: string): Promise<void> {
+      for (let attempt = 0; attempt < 400; attempt += 1) {
+        const waiting = await pool.query<{ n: number }>(
+          `select count(*)::int as n from pg_locks
+            where locktype = 'advisory' and not granted
+              and objid::bigint = (hashtext($1)::bigint & 4294967295)`,
+          [key],
+        );
+        if ((waiting.rows[0]?.n ?? 0) > 0) return;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      throw new Error(`nothing waited for ${key}`);
     }
 
     beforeAll(async () => {
@@ -776,6 +847,273 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).rejects.toThrow(/I-A3/);
     });
 
+    it('I-A3 under concurrency: a self connection without an address key binds new requests to the gate’s own address, and a new request and an approval wait for each other (#1156 review P2)', async () => {
+      const { gatekeeperId, endpoint } = await connectedGate();
+      // As core 0045's backfill left a self connection made before addresses were keyed.
+      await writeAround(
+        `update workspace_self_connections set endpoint_key = null
+          where workspace_id = $1 and gatekeeper_object_id = $2`,
+        gatekeeperId,
+      );
+      expect((await selfConnectionRow(gatekeeperId))?.endpoint_key).toBeNull();
+      const lockKey = `self_connection:${workspaceId}:${gatekeeperId}`;
+      const asWorkspace = <T>(fn: (client: PoolClient) => Promise<T>) =>
+        withWorkspace(pool, { workspaceId, principalId: ownerId }, fn);
+
+      // Bound to the Gatekeeper's own address, so it does not block a change.
+      const before = await asWorkspace((client) => requestOn(client, gatekeeperId));
+      expect(before.gateEndpointKey).toBe(normalizeGateEndpoint(endpoint));
+
+      // 1. A request in its transaction: the approval waits for it, finds it bound, moves the gate.
+      const { proposal, endpoint: newEndpoint } = await previewAndPropose(gatekeeperId);
+      const previewDigest = (await listed(proposal.id)).previewDigest;
+      let commitRequest = () => {};
+      const committed = new Promise<void>((resolve) => {
+        commitRequest = resolve;
+      });
+      let markRequested = () => {};
+      const requested = new Promise<void>((resolve) => {
+        markRequested = resolve;
+      });
+      const inFlight = asWorkspace(async (client) => {
+        const row = await requestOn(client, gatekeeperId);
+        markRequested();
+        await committed;
+        return row;
+      });
+      await requested;
+      let approved = false;
+      const approval = asAdmin('approve_gate_address_change', {
+        workspaceId,
+        id: proposal.id,
+        previewDigest,
+      }).then((result) => {
+        approved = true;
+        return result;
+      });
+      await someoneWaitsFor(lockKey);
+      expect(approved).toBe(false);
+      commitRequest();
+      const during = await inFlight;
+      expect(await approval).toMatchObject({ status: 'applied' });
+      expect(during.gateEndpointKey).toBe(normalizeGateEndpoint(endpoint));
+      expect((await gatekeeperRecord(gatekeeperId))?.endpoint).toBe(newEndpoint);
+
+      // 2. A change in its transaction (the lock an approval holds from its count to its commit): a
+      // new request waits for it and is bound to where it left the gate.
+      const heldKey = normalizeGateEndpoint(address('held'));
+      const mover = await pool.connect();
+      try {
+        await mover.query('begin');
+        await mover.query('set local session_replication_role = replica');
+        await lockSelfConnectionState(mover, workspaceId, gatekeeperId, 'change');
+        await mover.query(
+          `update workspace_self_connections set endpoint_key = $3
+            where workspace_id = $1 and gatekeeper_object_id = $2`,
+          [workspaceId, gatekeeperId, heldKey],
+        );
+        let bound = false;
+        const waiting = asWorkspace((client) => requestOn(client, gatekeeperId)).then((row) => {
+          bound = true;
+          return row;
+        });
+        await someoneWaitsFor(lockKey);
+        expect(bound).toBe(false);
+        await mover.query('commit');
+        expect((await waiting).gateEndpointKey).toBe(heldKey);
+      } finally {
+        mover.release();
+      }
+      await writeAround(
+        `update workspace_self_connections set endpoint_key = $3
+          where workspace_id = $1 and gatekeeper_object_id = $2`,
+        gatekeeperId,
+        normalizeGateEndpoint(newEndpoint),
+      );
+    });
+
+    it('a secret that served a proposal connects no gate afterwards, whatever became of the proposal (#1156 review P2-1)', async () => {
+      const { gatekeeperId } = await connectedGate();
+      const { proposal, connectionSecret } = await previewAndPropose(gatekeeperId);
+      const described = gates.describeCalls.length;
+      const connectWith = () =>
+        asOwner('create_connection', {
+          kind: 'http',
+          target: 'gac-system',
+          endpoint: address('elsewhere'),
+          connectionSecret,
+        });
+      expect(await refusedWith(connectWith())).toEqual({
+        status: 409,
+        code: 'connection_secret_in_use',
+      });
+      await asAdmin('reject_gate_address_change', { workspaceId, id: proposal.id });
+      expect(await refusedWith(connectWith())).toEqual({
+        status: 409,
+        code: 'connection_secret_in_use',
+      });
+      // Refused before the kernel sent the secret anywhere.
+      expect(gates.describeCalls.length).toBe(described);
+    });
+
+    it('the outbound-target predicate refuses the new address before anything is contacted, at preview and again at approval (#1156 review P2-2)', async () => {
+      const refused = new Set<string>();
+      const guarded: string[] = [];
+      setConnectionHandlerDeps({
+        gatekeeperClient: gates.client,
+        connectionSecrets: secrets,
+        outboundTargetGuard: async (url, subject) => {
+          guarded.push(url);
+          if (refused.has(url)) {
+            throw new OutboundTargetRefusedError(
+              url,
+              'platform-subnet',
+              new URL(url).host,
+              subject,
+            );
+          }
+        },
+      });
+      const { gatekeeperId, endpoint } = await connectedGate();
+
+      const refusedEndpoint = address('refused');
+      refused.add(refusedEndpoint);
+      const beforePreview = gates.describeCalls.length;
+      expect(
+        await refusedWith(
+          asOwner('preview_gate_address_change', {
+            gatekeeperId,
+            endpoint: refusedEndpoint,
+            connectionSecret: newSecret(),
+          }),
+        ),
+      ).toEqual({ status: 400, code: 'connection_target_refused' });
+      expect(guarded).toContain(refusedEndpoint);
+      expect(gates.describeCalls.length).toBe(beforePreview);
+
+      // The platform's networks changed after the proposal: the approval asks the predicate again.
+      const { proposal, endpoint: newEndpoint } = await previewAndPropose(gatekeeperId);
+      refused.add(newEndpoint);
+      const beforeApproval = gates.describeCalls.length;
+      expect(
+        await refusedWith(
+          asAdmin('approve_gate_address_change', {
+            workspaceId,
+            id: proposal.id,
+            previewDigest: (await listed(proposal.id)).previewDigest,
+          }),
+        ),
+      ).toEqual({ status: 400, code: 'connection_target_refused' });
+      expect(gates.describeCalls.length).toBe(beforeApproval);
+      expect((await gatekeeperRecord(gatekeeperId))?.endpoint).toBe(endpoint);
+      expect((await listed(proposal.id)).status).toBe('proposed');
+    });
+
+    it('approve checks the new address again under its locks, and refuses in the platform’s words: the address by its origin, nothing of the workspace’s other gates (#1156 review P2-2, P3-1)', async () => {
+      const approve = async (id: string) =>
+        asAdmin('approve_gate_address_change', {
+          workspaceId,
+          id,
+          previewDigest: (await listed(id)).previewDigest,
+        });
+      /** What a platform refusal must not carry: the address past its origin, another gate. */
+      function platformWorded(
+        mapped: Awaited<ReturnType<typeof refusal>>,
+        toEndpoint: string,
+        options: { readonly other?: string; readonly namesAddress: boolean },
+      ) {
+        expect(mapped.details).toBeUndefined();
+        if (options.namesAddress) {
+          expect(mapped.message).toContain(JSON.stringify(gateAddressOrigin(toEndpoint)));
+        }
+        expect(mapped.message).not.toContain(new URL(toEndpoint).pathname);
+        expect(mapped.message).toContain('reject the change');
+        if (options.other) expect(mapped.message).not.toContain(options.other);
+      }
+
+      // The workspace connected another gate at the new address since the proposal.
+      const first = await connectedGate();
+      const taken = await previewAndPropose(first.gatekeeperId);
+      const { gatekeeperId: squatterId } = await asOwner<{ gatekeeperId: string }>(
+        'create_connection',
+        {
+          kind: 'http',
+          target: 'gac-system',
+          endpoint: taken.endpoint,
+          connectionSecret: newSecret(),
+        },
+      );
+      const addressTaken = await refusal(approve(taken.proposal.id));
+      expect(addressTaken).toMatchObject({ status: 409, code: 'endpoint_already_connected' });
+      platformWorded(addressTaken, taken.endpoint, { other: squatterId, namesAddress: true });
+      expect((await gatekeeperRecord(first.gatekeeperId))?.endpoint).toBe(first.endpoint);
+
+      // Another gate holds the secret the change carries — only a write racing the proposal's own
+      // checks could make it so; made here around them.
+      const second = await connectedGate();
+      const carried = await previewAndPropose(second.gatekeeperId);
+      const holder = await connectedGate();
+      await writeAround(
+        `update objects
+            set properties = jsonb_set(properties, '{connectionSecretSalt}', to_jsonb($3::text))
+          where workspace_id = $1 and id = $2`,
+        holder.gatekeeperId,
+        saltOf(carried.connectionSecret),
+      );
+      const secretHeld = await refusal(approve(carried.proposal.id));
+      expect(secretHeld).toMatchObject({ status: 409, code: 'connection_secret_in_use' });
+      platformWorded(secretHeld, carried.endpoint, {
+        other: holder.gatekeeperId,
+        namesAddress: false,
+      });
+      expect((await gatekeeperRecord(second.gatekeeperId))?.endpoint).toBe(second.endpoint);
+
+      // The new host turns the change's secret away now.
+      const third = await connectedGate();
+      const turned = await previewAndPropose(third.gatekeeperId);
+      gates.failing.set(
+        turned.endpoint,
+        new GatekeeperClientError('gatekeeper client: gate/describe_operations answered 401', {
+          code: 'unauthorized',
+          status: 401,
+        }),
+      );
+      const notDescribed = await refusal(approve(turned.proposal.id));
+      expect(notDescribed).toMatchObject({ status: 502, code: 'manifest_fetch_failed' });
+      platformWorded(notDescribed, turned.endpoint, { namesAddress: true });
+      expect(notDescribed.message).not.toContain('GATE_KERNEL_TOKEN_FILE');
+      expect((await gatekeeperRecord(third.gatekeeperId))?.endpoint).toBe(third.endpoint);
+    });
+
+    it('a lapsed proposal is recorded expired by the next proposal for the gate, which takes its place (#1156 review P3-2)', async () => {
+      const { gatekeeperId } = await connectedGate();
+      const { proposal } = await previewAndPropose(gatekeeperId);
+      await lapse(proposal.id);
+      const next = await previewAndPropose(gatekeeperId);
+      expect(next.proposal.status).toBe('proposed');
+      expect(await listed(proposal.id)).toMatchObject({
+        status: 'expired',
+        decidedAt: expect.any(String),
+      });
+    });
+
+    it('approve compares the new host’s whole manifest with the proposal’s, descriptions included (#1156 review P3-3)', async () => {
+      const { gatekeeperId, endpoint } = await connectedGate();
+      const { proposal, endpoint: newEndpoint } = await previewAndPropose(gatekeeperId);
+      // What the workspace publishes would still match — only the proposal's manifest digest differs.
+      gates.described.set(newEndpoint, [{ ...OP, description: 'Reads one stock, worded anew.' }]);
+      expect(
+        await refusedWith(
+          asAdmin('approve_gate_address_change', {
+            workspaceId,
+            id: proposal.id,
+            previewDigest: (await listed(proposal.id)).previewDigest,
+          }),
+        ),
+      ).toEqual({ status: 409, code: 'gate_address_manifest_mismatch' });
+      expect((await gatekeeperRecord(gatekeeperId))?.endpoint).toBe(endpoint);
+    });
+
     it('I-A1: the checker counts a Gatekeeper whose self connection is not where its last applied change put it', async () => {
       const { gatekeeperId } = await connectedGate();
       const { proposal } = await previewAndPropose(gatekeeperId);
@@ -805,6 +1143,14 @@ describe.runIf(DATABASE_URL !== undefined)(
         await sampleAfter(
           `update workspace_self_connections set endpoint_key = 'http://gac-moved-back.invalid:8080'
             where workspace_id = $1 and gatekeeper_object_id = $2`,
+        ),
+      ).toContain(sampleOf);
+      // The Gatekeeper moved while its self connection stayed.
+      expect(
+        await sampleAfter(
+          `update objects
+              set properties = jsonb_set(properties, '{endpoint}', '"http://gac-object-moved.invalid:8080/gate"')
+            where workspace_id = $1 and id = $2`,
         ),
       ).toContain(sampleOf);
       // The address copy the platform shows, cut by the raw-secret scrub, is not the address.

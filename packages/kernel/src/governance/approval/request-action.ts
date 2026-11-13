@@ -11,6 +11,7 @@ import {
   transition,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { lockSelfConnectionState, normalizeGateEndpoint } from '../gatekeepers/index.js';
 import { evaluate, readEffectivePolicy, toPolicyEvaluationInput } from '../policy/index.js';
 import { countSuspectedSecrets } from '../redaction/index.js';
 import { findActionRequestByIdempotencyKey } from './reads.js';
@@ -258,6 +259,41 @@ async function assertNoActionInDoubt(
   if (inDoubt) throw new ActionInDoubtError(stepRunId, inDoubt.id);
 }
 
+/**
+ * Legacy 701, I-A3: the address a new request of `gatekeeperId` is bound to — the one address it
+ * may run at. Read under the self connection's `check` lock, which an approved address change
+ * holds as `change` from before it counts the gate's unbound requests until it commits: either the
+ * change waits for this transaction (and counts this request), or it committed before this read
+ * (and this request is bound to the new address). Without the lock a request could read the old
+ * state after the count and commit before the move (#1156 review, P2).
+ *
+ * A self-connected gate: the address as its self connection keys it, or — a self connection
+ * recorded before addresses were keyed (core 0045's backfill left the key NULL) — the Gatekeeper
+ * Object's own endpoint in the same spelling (I-A1: the key is that endpoint, normalized), so only
+ * requests made before governance 0044 stay unbound. A catalog gate (no self connection): its
+ * address is the platform instance's and never moves here — `null`.
+ */
+async function gateEndpointBinding(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperId: string,
+): Promise<string | null> {
+  await lockSelfConnectionState(client, workspaceId, gatekeeperId, 'check');
+  const result = await client.query<{ endpoint_key: string | null; endpoint: string | null }>(
+    `select s.endpoint_key, o.properties ->> 'endpoint' as endpoint
+       from workspace_self_connections s
+       left join objects o
+         on o.workspace_id = s.workspace_id and o.id = s.gatekeeper_object_id
+        and o.object_type = 'Gatekeeper'
+      where s.workspace_id = $1 and s.gatekeeper_object_id = $2`,
+    [workspaceId, gatekeeperId],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  if (row.endpoint_key !== null) return row.endpoint_key;
+  return row.endpoint ? normalizeGateEndpoint(row.endpoint) : null;
+}
+
 async function insertActionRequestRow(
   client: PoolClient,
   workspaceId: string,
@@ -265,6 +301,7 @@ async function insertActionRequestRow(
   finalStatus: ActionRequestStatus,
   policyDecision: PolicyDecision,
   requesterCanApprove: boolean,
+  gateEndpointKey: string | null,
 ): Promise<ActionRequestRow> {
   const result = await client.query<ActionRequestDbRow>(
     `insert into action_requests (
@@ -273,11 +310,7 @@ async function insertActionRequestRow(
        idempotency_key, params, requester_can_approve, operation_digest, step_run_id, target,
        gate_endpoint_key
      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $16, $17::jsonb,
-       -- Legacy 701, I-A3: the address of the gate this request is for, as the self connection keys
-       -- it (I-A1: the Gatekeeper's own endpoint, normalized) — the one address it may run at. A
-       -- catalog gate's address is the platform instance's and never moves here: NULL.
-       (select s.endpoint_key from workspace_self_connections s
-         where s.workspace_id = $1 and s.gatekeeper_object_id = $3))
+       $18)
      returning ${ACTION_REQUEST_ROW_COLUMNS}`,
     [
       workspaceId,
@@ -297,6 +330,7 @@ async function insertActionRequestRow(
       input.operationDigest ?? null,
       input.stepRunId ?? null,
       input.target ? JSON.stringify(input.target) : null,
+      gateEndpointKey,
     ],
   );
   const row = result.rows[0];
@@ -370,6 +404,7 @@ export async function requestAction(
     RESOLUTION_EVENT_BY_DECISION[evaluation.decision],
   );
 
+  const gateEndpointKey = await gateEndpointBinding(client, workspaceId, input.gatekeeperId);
   let mapped: ActionRequestRow;
   if (input.idempotencyKey) {
     await client.query('SAVEPOINT request_action_insert');
@@ -381,6 +416,7 @@ export async function requestAction(
         finalStatus,
         evaluation.decision,
         evaluation.requesterCanApprove,
+        gateEndpointKey,
       );
       await client.query('RELEASE SAVEPOINT request_action_insert');
     } catch (err) {
@@ -407,6 +443,7 @@ export async function requestAction(
       finalStatus,
       evaluation.decision,
       evaluation.requesterCanApprove,
+      gateEndpointKey,
     );
   }
 

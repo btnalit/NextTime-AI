@@ -1,5 +1,8 @@
 import type { PoolClient } from 'pg';
-import { normalizeGateEndpoint } from '../../governance/gatekeepers/index.js';
+import {
+  lockSelfConnectionState,
+  normalizeGateEndpoint,
+} from '../../governance/gatekeepers/index.js';
 import { shownFreeText } from '../../governance/redaction/index.js';
 
 /**
@@ -105,23 +108,9 @@ export async function insertSelfConnection(
 }
 
 /** Serializes the platform's suspend / resume of one self connection with every workspace path
- *  that checks it before acting on it — the catalog claim, the re-sync — so what such a check saw
- *  still holds when its transaction commits (#620 review M1, and the same check-then-act class).
- *  Shared for a check (many at once), exclusive for a change. A held check delays a suspension by
- *  at most that transaction — a re-sync's, at most its one `describe_operations` call. */
-export async function lockSelfConnectionState(
-  client: PoolClient,
-  workspaceId: string,
-  gatekeeperObjectId: string,
-  mode: 'check' | 'change',
-): Promise<void> {
-  await client.query(
-    mode === 'change'
-      ? 'select pg_advisory_xact_lock(hashtext($1::text))'
-      : 'select pg_advisory_xact_lock_shared(hashtext($1::text))',
-    [`self_connection:${workspaceId}:${gatekeeperObjectId}`],
-  );
-}
+ *  that checks it before acting on it (`governance/gatekeepers`'s `lockSelfConnectionState`, where
+ *  a new ActionRequest takes it too). */
+export { lockSelfConnectionState };
 
 export async function findSelfConnection(
   client: PoolClient,

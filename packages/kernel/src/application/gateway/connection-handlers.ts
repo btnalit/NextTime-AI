@@ -46,6 +46,7 @@ import {
 import { currentPrincipalId } from '../chat/index.js';
 import {
   assertEndpointFreeForSelfConnection,
+  gateAddressChangeSaltUsed,
   landGatekeeper,
   readConnectorMode,
 } from '../gates/index.js';
@@ -559,6 +560,29 @@ export async function assertConnectionSecretUnused(
   }
 }
 
+/** Throws `ConnectionSecretInUseError` when `salt` ever served a proposal to move a gate (legacy
+ *  701, `gate_address_changes.new_salt`, whatever became of it): the kernel sent that secret to the
+ *  proposed host as a bearer when it asked it to describe its Operations, so it never names another
+ *  connection — not the gate moved, not a new one connected (#1156 review P2-1). */
+export async function assertConnectionSecretNeverProposed(
+  client: PoolClient,
+  workspaceId: string,
+  salt: string,
+  capability = 'create_connection',
+): Promise<void> {
+  if (await gateAddressChangeSaltUsed(client, workspaceId, salt)) {
+    throw connectionSecretServedAProposal(capability);
+  }
+}
+
+/** The one refusal for a secret that served an address-change proposal — the check above, and a
+ *  concurrent proposal's unique violation (`propose_gate_address_change`). */
+export function connectionSecretServedAProposal(capability: string): ConnectionSecretInUseError {
+  return new ConnectionSecretInUseError(
+    `${capability}: this connectionSecret already served a proposal to move a gate — every connection and every change gets its own; get a new one with mint_connection_secret`,
+  );
+}
+
 export const createConnectionHandler: CapabilityHandler = async (
   client,
   workspaceId,
@@ -605,6 +629,7 @@ export const createConnectionHandler: CapabilityHandler = async (
   const salt = connectionSecrets.saltOf(workspaceId, params.connectionSecret);
   if (salt === null) throw new ConnectionSecretInvalidError(false);
   await assertConnectionSecretUnused(client, workspaceId, salt);
+  await assertConnectionSecretNeverProposed(client, workspaceId, salt);
 
   // R-27: both owner-supplied URLs, before any fetch of either.
   const guard = outboundTargetGuard(current);

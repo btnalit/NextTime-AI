@@ -22,6 +22,8 @@ import {
 } from '../../governance/connections/index.js';
 import {
   GatekeeperNotFoundError,
+  findGatekeeperIdByConnectionSecretSalt,
+  findGatekeepersByEndpoint,
   gateAddressOrigin,
   getGatekeeper,
   listPublishedOperationsForGatekeepers,
@@ -44,7 +46,6 @@ import {
   findOpenGateAddressChange,
   findSelfConnection,
   gateAddressChangeExpired,
-  gateAddressChangeSaltUsed,
   insertGateAddressChange,
   listGateAddressChanges,
   lockSelfConnectionEndpoint,
@@ -57,13 +58,15 @@ import {
 import { compareAnnouncedOperations } from './announced-operations.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 import {
-  ConnectionSecretInUseError,
   ConnectionSecretInvalidError,
+  assertConnectionSecretNeverProposed,
   assertConnectionSecretUnused,
   assertEndpointIsNotAPlatformGate,
   connectionAddressDeps,
+  connectionSecretServedAProposal,
 } from './connection-handlers.js';
 import { forgetGatekeeperPresence } from './credential-presence.js';
+import { platformGateIdForEndpoint } from './gate-target.js';
 
 /**
  * application/gateway/gate-address-change-handlers (legacy 701): moving a gate a workspace
@@ -121,7 +124,12 @@ type GateAddressChangeErrorCode =
   | 'gate_address_change_expired'
   | 'gate_address_change_blocked'
   | 'gate_address_change_not_found'
-  | 'manifest_fetch_failed';
+  | 'manifest_fetch_failed'
+  // The new address's checks again at approval, in the platform's words (`assertNewAddressStillFree`):
+  // the codes `create_connection` and the preview answer with for the same conditions.
+  | 'endpoint_is_platform_gate'
+  | 'endpoint_already_connected'
+  | 'connection_secret_in_use';
 
 const STATUS_OF: Readonly<Record<GateAddressChangeErrorCode, 400 | 404 | 409 | 502>> = {
   gate_address_unchanged: 400,
@@ -134,6 +142,9 @@ const STATUS_OF: Readonly<Record<GateAddressChangeErrorCode, 400 | 404 | 409 | 5
   gate_address_change_blocked: 409,
   gate_address_change_not_found: 404,
   manifest_fetch_failed: 502,
+  endpoint_is_platform_gate: 400,
+  endpoint_already_connected: 409,
+  connection_secret_in_use: 409,
 };
 
 /** One refusal of an address change: its wire code and status (interfaces/http/capability-route,
@@ -254,12 +265,16 @@ function previewDigestOf(input: {
 
 /** The new host's `describe_operations`, called with the new secret — what the new host runs, and
  *  proof it holds the secret the change gives it. A failure is the owner's to fix at the new host;
- *  its text is shown as free text is. */
+ *  its text is shown as free text is. To the owner (`workspace`) the address as the owner's reads
+ *  show it; to the administrator approving (`platform`) by its origin only, as everything the
+ *  platform reads of a self connection, with the one remedy the administrator has (#1156 review
+ *  P3-1). */
 async function describeNewHost(
   capability: string,
   workspaceId: string,
   endpoint: string,
   salt: string,
+  voice: 'workspace' | 'platform',
 ): Promise<Operation[]> {
   const { gatekeeperClient } = connectionAddressDeps();
   try {
@@ -271,15 +286,60 @@ async function describeNewHost(
   } catch (err) {
     const why =
       err instanceof GatekeeperClientError && err.status === 401
-        ? 'it refused the new connection secret — put the secret this change was made with in the gate’s GATE_KERNEL_TOKEN_FILE there and restart it'
+        ? voice === 'workspace'
+          ? 'it refused the new connection secret — put the secret this change was made with in the gate’s GATE_KERNEL_TOKEN_FILE there and restart it'
+          : 'it refused the secret this change carries'
         : err instanceof GatekeeperTimeoutError
           ? 'it did not answer in time'
           : err instanceof Error
             ? shownFreeText(err.message)
             : 'it did not answer';
+    const shown =
+      voice === 'workspace'
+        ? redactConnectionAddress('endpoint', endpoint)
+        : gateAddressOrigin(endpoint);
     throw new GateAddressChangeError(
       'manifest_fetch_failed',
-      `${capability}: the gate at ${JSON.stringify(redactConnectionAddress('endpoint', endpoint))} did not describe its Operations: ${why}`,
+      `${capability}: the gate at ${JSON.stringify(shown)} did not describe its Operations: ${why}${voice === 'platform' ? ` — ${PLATFORM_REMEDY}` : ''}`,
+    );
+  }
+}
+
+/** What the administrator approving can do about a refusal the new host or the workspace caused. */
+const PLATFORM_REMEDY = 'reject the change; the workspace owner can propose it again';
+
+/**
+ * I-A4: the new address's checks again, under the change's locks (`lockSelfConnectionEndpoint`
+ * serializes the landing at that address with it) — the preview's checks, answered in the
+ * platform's words: the codes are the ones `create_connection` and the preview answer with, the
+ * address is shown by its origin only, and nothing of the workspace's other gates (their names,
+ * ids, addresses) reaches the administrator (#1156 review P3-1).
+ */
+async function assertNewAddressStillFree(
+  client: PoolClient,
+  workspaceId: string,
+  toEndpoint: string,
+  newSalt: string,
+  capability: string,
+): Promise<void> {
+  const shown = JSON.stringify(gateAddressOrigin(toEndpoint));
+  const platformGateId = await platformGateIdForEndpoint(client, toEndpoint);
+  if (platformGateId !== null) {
+    throw new GateAddressChangeError(
+      'endpoint_is_platform_gate',
+      `${capability}: the new address ${shown} is platform gate instance "${platformGateId}"’s — ${PLATFORM_REMEDY}`,
+    );
+  }
+  if ((await findGatekeepersByEndpoint(client, workspaceId, toEndpoint)).length > 0) {
+    throw new GateAddressChangeError(
+      'endpoint_already_connected',
+      `${capability}: the workspace connected another gate at the new address ${shown} since the change was proposed — ${PLATFORM_REMEDY}`,
+    );
+  }
+  if ((await findGatekeeperIdByConnectionSecretSalt(client, workspaceId, newSalt)) !== null) {
+    throw new GateAddressChangeError(
+      'connection_secret_in_use',
+      `${capability}: another gate of the workspace holds the secret this change carries — ${PLATFORM_REMEDY}`,
     );
   }
 }
@@ -406,12 +466,16 @@ async function previewChange(
   const newSalt = connectionSecrets.saltOf(workspaceId, params.connectionSecret);
   if (newSalt === null) throw new ConnectionSecretInvalidError(false, capability);
   await assertConnectionSecretUnused(client, workspaceId, newSalt, capability);
-  if (await gateAddressChangeSaltUsed(client, workspaceId, newSalt)) {
-    throw secretServedAProposal(capability);
-  }
+  await assertConnectionSecretNeverProposed(client, workspaceId, newSalt, capability);
 
   await outboundTargetGuard(params.endpoint, 'endpoint');
-  const operations = await describeNewHost(capability, workspaceId, params.endpoint, newSalt);
+  const operations = await describeNewHost(
+    capability,
+    workspaceId,
+    params.endpoint,
+    newSalt,
+    'workspace',
+  );
   const manifest = await compareManifest(client, workspaceId, params.gatekeeperId, operations);
   const impact = await impactOf(client, workspaceId, params.gatekeeperId);
   const fromEndpoint = redactConnectionAddress('endpoint', record.endpoint);
@@ -434,12 +498,6 @@ async function previewChange(
     toEndpointKey,
     newSalt,
   };
-}
-
-function secretServedAProposal(capability: string): ConnectionSecretInUseError {
-  return new ConnectionSecretInUseError(
-    `${capability}: this connectionSecret already served a proposal to move a gate — every change gets its own; get a new one with mint_connection_secret`,
-  );
 }
 
 /** `preview_gate_address_change(gatekeeperId, endpoint, connectionSecret)` — human, owner. Writes
@@ -511,7 +569,7 @@ export const proposeGateAddressChangeHandler: CapabilityHandler = async (
   } catch (err) {
     // A concurrent proposal got there first (the checks above ran outside its transaction).
     if (isUniqueViolation(err) && err.constraint === GATE_ADDRESS_CHANGE_SALT_CONSTRAINT) {
-      throw secretServedAProposal(capability);
+      throw connectionSecretServedAProposal(capability);
     }
     if (isUniqueViolation(err) && err.constraint === GATE_ADDRESS_CHANGE_ONE_OPEN_CONSTRAINT) {
       throw pendingChange(capability, input.gatekeeperId);
@@ -684,7 +742,13 @@ async function applyGateAddressChange(
   // The new host again, before anything is held: the predicate (the platform's networks may have
   // changed since the proposal), then what it runs, which must be what was proposed.
   await connectionAddressDeps().outboundTargetGuard(toEndpoint, 'endpoint');
-  const operations = await describeNewHost(capability, workspaceId, toEndpoint, newSalt);
+  const operations = await describeNewHost(
+    capability,
+    workspaceId,
+    toEndpoint,
+    newSalt,
+    'platform',
+  );
   if (manifestDigest(operations) !== proposal.manifestDigest) {
     throw new GateAddressChangeError(
       'gate_address_manifest_mismatch',
@@ -719,9 +783,7 @@ async function applyGateAddressChange(
       );
     }
     assertConnectionParamsCarryNoCredentials(capability, { endpoint: toEndpoint });
-    await assertEndpointIsNotAPlatformGate(client, toEndpoint, capability);
-    await assertEndpointFreeForSelfConnection(client, workspaceId, toEndpoint);
-    await assertConnectionSecretUnused(client, workspaceId, newSalt, capability);
+    await assertNewAddressStillFree(client, workspaceId, toEndpoint, newSalt, capability);
     const inFlight = await countInFlightActionRequestsForGatekeeper(
       client,
       workspaceId,
