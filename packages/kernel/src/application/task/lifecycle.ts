@@ -485,8 +485,9 @@ export async function reactToSupervisorStatus(
   if (status.status === 'exited') {
     await withWorkspace(deps.pool, { workspaceId, principalId: onBehalfOf }, async (client) => {
       // R-58: only the call that terminated the run decides the Task (see the `failed` branch).
-      // A run another writer terminated meanwhile (a cancel, the reaper) has its Task decided by
-      // that writer; failing it here from the stale `task` read above would overwrite a cancel.
+      // A run another writer terminated meanwhile has its Task decided by that writer — or, when
+      // that writer was a crash reaction that claimed the retry, left `running` for the retry:
+      // failing it here would fail a Task whose retry is running (legacy 206 pins this).
       const moved = await terminateWorkerRunRow(
         client,
         workspaceId,

@@ -34,7 +34,7 @@ import {
   readTaskRow,
   readWorkerRunRow,
 } from './lifecycle.js';
-import { runTaskReaper } from './reaper.js';
+import { TaskReaperCandidateErrors, runTaskReaper } from './reaper.js';
 import type { TaskRuntimeDeps } from './runtime.js';
 import { recordWorkerRunUsage, terminateTask } from './service.js';
 import { spawnWorkerRun } from './spawn.js';
@@ -1150,6 +1150,176 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
       );
       expect(run?.status).toBe('terminated');
     });
+
+    // Legacy 206 (#534 delta review, item 1): the `exited` and `terminated` branches decide the Task
+    // only when this call ended the run. The one writer that ends a run and leaves its Task
+    // undecided is a crash reaction that claimed the retry — so a late reaction to the same run,
+    // which reads the Task after the retry was claimed, must leave the retrying Task running.
+    it.each([
+      ['exited', { status: 'exited', exitCode: 0 }],
+      ['terminated: timeout', { status: 'terminated', reason: 'timeout' }],
+    ] as const)(
+      'a late %s reaction to a run another reaction retried leaves the retrying Task running (legacy 206)',
+      async (_label, lateStatus) => {
+        const { principalId, supervisorClient, runtimeDeps, spawnResult } = await spawnRunningTask(
+          `l206-late-${lateStatus.status}`,
+        );
+        supervisorClient.setStatus(spawnResult.workerRunId, { status: 'failed', exitCode: 1 });
+
+        // The late reaction reads the run while it is live; its status call answers only after the
+        // first reaction has claimed the retry and spawned it.
+        let lateEntered!: () => void;
+        const lateInStatus = new Promise<void>((resolve) => {
+          lateEntered = resolve;
+        });
+        let releaseLate!: () => void;
+        const firstDone = new Promise<void>((resolve) => {
+          releaseLate = resolve;
+        });
+        const lateDeps = deps(supervisorClient, {
+          supervisorClient: {
+            spawn: (input) => supervisorClient.spawn(input),
+            terminate: (id) => supervisorClient.terminate(id),
+            status: async (id) => {
+              lateEntered();
+              await firstDone;
+              const seen = await supervisorClient.status(id);
+              return seen === undefined ? undefined : { ...seen, ...lateStatus };
+            },
+          },
+        });
+
+        const late = reactToSupervisorStatus(
+          lateDeps,
+          workspaceId,
+          principalId,
+          spawnResult.workerRunId,
+        );
+        await lateInStatus;
+        await reactToSupervisorStatus(
+          runtimeDeps,
+          workspaceId,
+          principalId,
+          spawnResult.workerRunId,
+        );
+        releaseLate();
+        await late;
+
+        const task = await inTx(principalId, (client) =>
+          readTaskRow(client, workspaceId, spawnResult.taskId),
+        );
+        // Without the guard: failed (no_result / timeout), the retry running under it.
+        expect(task?.status).toBe('running');
+        expect(task?.failureReason).toBeNull();
+        expect(task?.retryCount).toBe(1);
+        const live = await liveRuns(principalId, spawnResult.taskId);
+        expect(live).toHaveLength(1);
+        expect(live[0]?.id).not.toBe(spawnResult.workerRunId);
+        expect(live[0]?.handleRevoked).toBe(false);
+      },
+    );
+
+    /** The cancel committed and the kernel gone before it ended the runs: the Task row as a
+     *  cancel's own transaction leaves it, the run still live (legacy 206, #534 delta item 2). */
+    async function cancelledWithLiveRun(displayName: string) {
+      const spawned = await spawnRunningTask(displayName);
+      await inTx(spawned.principalId, (client) =>
+        client.query(
+          `update tasks set status = 'cancelled', cancelled_at = now()
+           where workspace_id = $1 and id = $2`,
+          [workspaceId, spawned.spawnResult.taskId],
+        ),
+      );
+      const before = await liveRuns(spawned.principalId, spawned.spawnResult.taskId);
+      expect(before).toEqual([
+        { id: spawned.spawnResult.workerRunId, status: 'running', handleRevoked: false },
+      ]);
+      return spawned;
+    }
+
+    async function terminateAudit(principalId: string, workerRunId: string) {
+      return inTx(principalId, async (client) => {
+        const result = await client.query<{ reason: string }>(
+          `select payload->>'reason' as reason from audit_records
+            where workspace_id = $1 and action = 'worker_run.terminate' and resource_id = $2`,
+          [workspaceId, workerRunId],
+        );
+        return result.rows.map((row) => row.reason);
+      });
+    }
+
+    it('cancelling a Task already decided still ends a run left live under it (legacy 206)', async () => {
+      const { principalId, supervisorClient, runtimeDeps, spawnResult } =
+        await cancelledWithLiveRun('l206-cancel-again');
+
+      const { configureTaskRuntime, resetTaskRuntimeForTests } = await import('./runtime.js');
+      configureTaskRuntime(runtimeDeps);
+      let returned: TaskRow;
+      try {
+        returned = await terminateTask(workspaceId, principalId, spawnResult.taskId);
+      } finally {
+        resetTaskRuntimeForTests();
+      }
+
+      // Before: the call returned at once for the cancelled Task, and the run kept its Handle.
+      expect(returned.status).toBe('cancelled');
+      expect(await liveRuns(principalId, spawnResult.taskId)).toEqual([]);
+      expect(supervisorClient.terminated).toContain(spawnResult.workerRunId);
+      expect(await terminateAudit(principalId, spawnResult.workerRunId)).toEqual(['requested']);
+      // No second `task.cancel`: the Task is left as it was.
+      const cancels = await inTx(principalId, (client) =>
+        client.query(
+          `select 1 from audit_records
+            where workspace_id = $1 and action = 'task.cancel' and resource_id = $2`,
+          [workspaceId, spawnResult.taskId],
+        ),
+      );
+      expect(cancels.rowCount).toBe(0);
+    });
+
+    it.each([
+      ['cancelled', 'cancelled_at = now()'],
+      ['failed', "failed_at = now(), failure_reason = 'worker_failed'"],
+      ['completed', 'completed_at = now()'],
+    ] as const)(
+      'the reaper ends a run left live under a %s Task on its next tick, the Task left as it is (legacy 206)',
+      async (status, set) => {
+        const { principalId, supervisorClient, runtimeDeps, spawnResult } = await spawnRunningTask(
+          `l206-reaper-${status}`,
+        );
+        await inTx(principalId, (client) =>
+          client.query(
+            `update tasks set status = '${status}', ${set} where workspace_id = $1 and id = $2`,
+            [workspaceId, spawnResult.taskId],
+          ),
+        );
+        const decided = await inTx(principalId, (client) =>
+          readTaskRow(client, workspaceId, spawnResult.taskId),
+        );
+        // A crash the supervisor already reports would otherwise be reacted to; the sweep ends it
+        // without deciding anything.
+        supervisorClient.setStatus(spawnResult.workerRunId, { status: 'failed', exitCode: 1 });
+
+        const result = await runTaskReaper(runtimeDeps).catch((err: unknown) => {
+          // A row another test left behind may fail on its own; this test's run must not.
+          if (!(err instanceof TaskReaperCandidateErrors)) throw err;
+          expect(
+            (err.errors as { id: string }[]).filter((e) => e.id === spawnResult.workerRunId),
+          ).toEqual([]);
+          return undefined;
+        });
+        if (result) expect(result.taskEnded).toBeGreaterThanOrEqual(1);
+
+        expect(await liveRuns(principalId, spawnResult.taskId)).toEqual([]);
+        expect(supervisorClient.terminated).toContain(spawnResult.workerRunId);
+        expect(await terminateAudit(principalId, spawnResult.workerRunId)).toEqual(['task_ended']);
+        expect(supervisorClient.spawnCalls).toHaveLength(1); // no retry
+        const after = await inTx(principalId, (client) =>
+          readTaskRow(client, workspaceId, spawnResult.taskId),
+        );
+        expect(after).toEqual(decided);
+      },
+    );
 
     it('spawnWorkerRun refuses a terminal Task before creating a WorkerRun or calling the supervisor', async () => {
       const principalId = await adminInsertPrincipal('member', 'r58-spawn-terminal');

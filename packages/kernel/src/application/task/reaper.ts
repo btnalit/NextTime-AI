@@ -234,10 +234,14 @@ interface ReapCandidateRow {
   workspace_id: string;
   worker_run_id: string;
   task_id: string;
+  task_status: string;
   started_at: Date;
   on_behalf_of: string;
   duration_limit_sec: number | null;
 }
+
+/** The Task statuses nothing moves a Task out of. */
+const DECIDED_TASK_STATUSES: ReadonlySet<string> = new Set(['completed', 'failed', 'cancelled']);
 
 export interface RunTaskReaperResult {
   readonly scanned: number;
@@ -245,6 +249,8 @@ export interface RunTaskReaperResult {
   readonly spawnLost: number;
   /** Tasks failed `run_lost` by `reapOrphanedTasks` (legacy 320). */
   readonly runLost: number;
+  /** WorkerRuns terminated because their Task was already decided (legacy 206). */
+  readonly taskEnded: number;
 }
 
 /**
@@ -456,9 +462,10 @@ async function reapOrphanedTasks(
 /**
  * Scans every workspace for WorkerRuns not yet `terminated` (mirrors `governance/approval/
  * execution.ts`'s `expireOverduePendingApprovals`: one raw cross-workspace `SELECT`, no
- * `withWorkspace` — "exactly one kernel process, not one per workspace"), terminates + fails any
- * whose Task duration limit has elapsed, and otherwise asks `reactToSupervisorStatus` to react to
- * whatever the supervisor currently reports (exit/failure/requeue/timeout — see `lifecycle.ts`).
+ * `withWorkspace` — "exactly one kernel process, not one per workspace"), terminates one whose
+ * Task is already decided (legacy 206: the Task left as it is), terminates + fails any whose Task
+ * duration limit has elapsed, and otherwise asks `reactToSupervisorStatus` to react to whatever
+ * the supervisor currently reports (exit/failure/requeue/timeout — see `lifecycle.ts`).
  * Then runs the `spawn_lost` and `run_lost` sweeps. A candidate whose reaping throws does not stop
  * the others (legacy 320): every candidate and both sweeps get their turn, and the tick then throws
  * `TaskReaperCandidateErrors` naming each failed row. Call on an interval from the composition
@@ -469,8 +476,8 @@ export async function runTaskReaper(deps: TaskRuntimeDeps): Promise<RunTaskReape
   let candidates: readonly ReapCandidateRow[];
   try {
     const result = await scanClient.query<ReapCandidateRow>(
-      `select wr.workspace_id, wr.id as worker_run_id, wr.task_id, wr.started_at,
-              t.on_behalf_of, t.duration_limit_sec
+      `select wr.workspace_id, wr.id as worker_run_id, wr.task_id, t.status as task_status,
+              wr.started_at, t.on_behalf_of, t.duration_limit_sec
        from worker_runs wr
        join tasks t on t.workspace_id = wr.workspace_id and t.id = wr.task_id
        where wr.status in ('provisioning', 'running', 'suspended')`,
@@ -482,10 +489,34 @@ export async function runTaskReaper(deps: TaskRuntimeDeps): Promise<RunTaskReape
 
   const now = (deps.now ?? (() => new Date()))().getTime();
   let timedOut = 0;
+  let taskEnded = 0;
   const errors: ReaperCandidateError[] = [];
 
   for (const candidate of candidates) {
     await isolated(errors, 'worker_run', candidate.worker_run_id, async () => {
+      // Legacy 206: a live run under a Task already decided. Every path that decides a Task ends
+      // its runs too, but not always in the same transaction — `terminateTask` commits the cancel
+      // first and then ends each run (ending them inside the cancel would take the Task's row lock
+      // before the runs', the reverse of every crash reaction, and the two could deadlock). A
+      // kernel that dies in between leaves a run with a live Handle under a cancelled Task; this
+      // ends it on the next tick. Nothing decides the Task again: a decided Task stays as it is.
+      if (DECIDED_TASK_STATUSES.has(candidate.task_status)) {
+        taskEnded += 1;
+        await deps.supervisorClient.terminate(candidate.worker_run_id).catch(() => {});
+        await withWorkspace(
+          deps.pool,
+          { workspaceId: candidate.workspace_id, principalId: candidate.on_behalf_of },
+          (client) =>
+            terminateWorkerRunRow(
+              client,
+              candidate.workspace_id,
+              candidate.on_behalf_of,
+              candidate.worker_run_id,
+              'task_ended',
+            ),
+        );
+        return;
+      }
       const limitSec = candidate.duration_limit_sec ?? DEFAULT_DURATION_LIMIT_SEC;
       const elapsedMs = now - new Date(candidate.started_at).getTime();
       if (elapsedMs > limitSec * 1000) {
@@ -532,5 +563,5 @@ export async function runTaskReaper(deps: TaskRuntimeDeps): Promise<RunTaskReape
   const runLost = await reapOrphanedTasks(deps, errors);
 
   if (errors.length > 0) throw new TaskReaperCandidateErrors(errors);
-  return { scanned: candidates.length, timedOut, spawnLost, runLost };
+  return { scanned: candidates.length, timedOut, spawnLost, runLost, taskEnded };
 }

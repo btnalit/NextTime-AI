@@ -323,8 +323,8 @@ function pathToRunning(status: TaskStatus): readonly TaskEvent[] {
 
 /** `cancel_task`'s service half: transitions the Task to `cancelled`, then terminates every
  *  non-terminated WorkerRun under it (revoking their Handles). Idempotent — a Task already in a
- *  terminal status is a no-op, not an error (matches `terminateWorkerRunRow`'s own idempotency
- *  contract).
+ *  terminal status keeps it, not an error (matches `terminateWorkerRunRow`'s own idempotency
+ *  contract); only a run still live under it is ended.
  *
  *  Decide the Task first, then reap its runs — the same order as `failTaskAndReapWorkerRuns`
  *  (2026-10-10 review of #534). Reaping first left two windows: a crash reaction that saw the
@@ -334,7 +334,14 @@ function pathToRunning(status: TaskStatus): readonly TaskEvent[] {
  *  first, a reaction's `failTaskRow` no-ops on the cancelled row, and `spawnWorkerRun`'s
  *  `for share` read either sees `cancelled` and refuses, or commits its WorkerRun before the
  *  cancel can, so the sweep below finds and terminates it. The sweep runs even when another
- *  writer decided the Task first: no live WorkerRun belongs under a terminal Task. */
+ *  writer decided the Task first, or the Task was already terminal when called (legacy 206): no
+ *  live WorkerRun belongs under a terminal Task.
+ *
+ *  The cancel and the sweep stay two transactions: ending the runs inside the cancel would lock
+ *  the Task's row before the runs', the reverse of every crash reaction (`lifecycle.ts`'s
+ *  `reactToSupervisorStatus`), and the two could deadlock. A kernel that dies between them leaves
+ *  a live run under the cancelled Task; the reaper ends it on its next tick (`reaper.ts`,
+ *  legacy 206). */
 export async function terminateTask(
   workspaceId: string,
   actorPrincipalId: string,
@@ -351,16 +358,8 @@ export async function terminateTaskWith(
   actorPrincipalId: string,
   taskId: string,
 ): Promise<TaskRow> {
-  const task = await withWorkspace(
-    deps.pool,
-    { workspaceId, principalId: actorPrincipalId },
-    (client) => readTaskRow(client, workspaceId, taskId),
-  );
-  if (!task) throw new TaskNotFoundError(workspaceId, taskId);
-  if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
-    return task;
-  }
-
+  // Legacy 206: no early return for a Task already decided — the sweep below still runs for it, so
+  // a run a crash left live under it is ended by the next cancel too, not only by the reaper.
   const decided = await withWorkspace(
     deps.pool,
     { workspaceId, principalId: actorPrincipalId },
