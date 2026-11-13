@@ -22,7 +22,7 @@ ratchet:
   console_unexplained: 10
   kernel_test_missing: 1
   e2e_waived: 65
-  repeat_unclear: 26
+  repeat_unclear: 21
 capabilities:
   add_eval_case:
     console: required
@@ -157,7 +157,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: "conflict: gate_id_taken"  # the first call takes the gate id, so the same call again is refused (409)
   create_principal:
     console: required
     agents: []
@@ -185,7 +185,7 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: "conflict: gate_not_found"  # the first call deletes the instance, so the same call again finds none (404)
   deprecate_operation:
     console: "indirect: packages/web/src/components/CatalogPage.tsx"
     agents: []
@@ -402,12 +402,12 @@ capabilities:
     console: required
     agents: []
     e2e: "waived: 657"
-    repeat: "unclear: 664"
+    repeat: idempotent # stores nothing, as issue_gate_host_token: another token for the caller's own slot, no row changed
   issue_gate_host_token:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: idempotent # stores nothing (the token is signed, not recorded): another call mints another token and changes no row
   issue_handle:
     console: required
     agents: []
@@ -1082,7 +1082,7 @@ capabilities:
     console: required
     agents: []
     e2e: observed
-    repeat: "unclear: 664"
+    repeat: repeats  # the same values again rewrite the instance row (its updated_at)
   update_operation_description:
     console: required
     agents: []

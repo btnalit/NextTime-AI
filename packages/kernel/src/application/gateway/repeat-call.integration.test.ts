@@ -980,6 +980,41 @@ async function purgeableWorkspace(ctx: RecipeContext): Promise<string> {
   return created.workspaceId;
 }
 
+/** A gate-host instance of the case's own (create_gate_instance, as a platform administrator: the
+ *  case's own on a platform row, else one made for it), on the generic `mcp` connector. */
+async function hostedGate(
+  ctx: RecipeContext,
+  credentialMode: 'shared' | 'connected_account',
+): Promise<string> {
+  const admin =
+    ctx.admin ??
+    (await createPlatformAdmin(ctx.pool, {
+      login: `repeat-gate-admin-${randomUUID().slice(0, 8)}`,
+      displayName: 'Repeat Gate Admin',
+      password: 'repeat-walk-password-1',
+    }));
+  const gateId = `repeat-hosted-${randomUUID().slice(0, 8)}`;
+  await dispatchCapability({ pool: ctx.pool }, platformCaller(admin), 'create_gate_instance', {
+    gateId,
+    transportKind: 'mcp',
+    target: 'http://mcp.internal.test/',
+    credentialMode,
+  });
+  return gateId;
+}
+
+/** A gate instance's updated_at, as text: what a write of the same values still moves. */
+async function gateInstanceUpdatedAt(
+  ctx: RecipeContext,
+  gateId: string,
+): Promise<string | undefined> {
+  const result = await ctx.pool.query<{ at: string }>(
+    'select updated_at::text as at from gate_instances where gate_id = $1',
+    [gateId],
+  );
+  return result.rows[0]?.at;
+}
+
 /** The entry Handle `linkedConnector` issued, by connector name (for the recipe's `holds`). */
 const ENTRY_JTI = new Map<string, string>();
 
@@ -2283,6 +2318,62 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
       setUp: async (ctx) => ({ segmentId: await installedPackSegment(ctx) }),
     },
   },
+  create_gate_instance: {
+    // The gate id is taken by the first call, so the same call again is refused (409
+    // gate_id_taken), nothing written.
+    'a new gate-host instance': {
+      first: expect.objectContaining({ hosted: true, connector: 'mcp' }),
+      setUp: async () => ({
+        gateId: `repeat-hosted-${randomUUID().slice(0, 8)}`,
+        transportKind: 'mcp',
+        target: 'http://mcp.internal.test/',
+        credentialMode: 'shared',
+      }),
+    },
+  },
+  update_gate_instance: {
+    // The same display name again: the instance row moves only by its updated_at.
+    "a gate-host instance of the case's own, a new display name": {
+      first: expect.objectContaining({ displayName: 'Repeat Gate' }),
+      setUp: async (ctx) => ({
+        gateId: await hostedGate(ctx, 'shared'),
+        displayName: 'Repeat Gate',
+      }),
+      moves: (ctx, params) => gateInstanceUpdatedAt(ctx, params.gateId as string),
+    },
+  },
+  delete_gate_instance: {
+    // The first call deletes the instance, so the same call again finds none (404
+    // gate_not_found), nothing written.
+    "a gate-host instance of the case's own, enabled nowhere": {
+      first: expect.objectContaining({ deleted: true }),
+      setUp: async (ctx) => ({ gateId: await hostedGate(ctx, 'shared') }),
+    },
+  },
+  issue_gate_host_token: {
+    // Stores nothing (the token is signed, not recorded): another call mints another 5-minute
+    // token and changes no row.
+    "a shared-credential gate-host instance of the case's own": {
+      first: expect.objectContaining({ credentialMode: 'shared', token: expect.any(String) }),
+      setUp: async (ctx) => ({ gateId: await hostedGate(ctx, 'shared') }),
+    },
+  },
+  issue_gate_credential_token: {
+    // Stores nothing, as issue_gate_host_token: another call mints another token for the
+    // caller's own slot and changes no row.
+    "a per-member gate-host instance linked into the case's workspace": {
+      first: expect.objectContaining({ token: expect.any(String) }),
+      setUp: async (ctx) => {
+        const gateId = await hostedGate(ctx, 'connected_account');
+        await ctx.pool.query(
+          `insert into workspace_gate_links (workspace_id, gate_id, gatekeeper_object_id, enabled_by)
+           values ($1, $2, $3, $4)`,
+          [ctx.seed.workspaceId, gateId, ctx.seed.gatekeeperId, ctx.seed.ownerId],
+        );
+        return { gateId };
+      },
+    },
+  },
   create_workspace: {
     // Names are not unique: each call makes another workspace, with an owner of its own Principal.
     'a new workspace, another user its owner': {
@@ -2429,6 +2520,11 @@ const RECIPES: Readonly<Record<string, Readonly<Record<string, Recipe>>>> = {
 /** Rows whose schema-built params cannot make a first call succeed on the bare seed — a param
  *  naming something the walk has no value for — run their recipes instead of that case. */
 const RECIPES_ONLY: ReadonlySet<string> = new Set([
+  'create_gate_instance',
+  'update_gate_instance',
+  'delete_gate_instance',
+  'issue_gate_host_token',
+  'issue_gate_credential_token',
   'create_workspace',
   'merge_user',
   'purge_user',
