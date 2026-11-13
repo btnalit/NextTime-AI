@@ -2832,6 +2832,31 @@ where object_type = 'Operation' and properties->>'status' = 'published'
 - **升级后确认**：规划 Task 的容器日志里应有 `nexttime-selfcheck check=builtin_tools result=ok set=read_only`。
 - **回滚**：回代码即可，没有迁移。
 
+### 3.167 已撤销的会话下没有有效 Handle（#1150，遗留 699、707，0.68.0 之后的下一版）
+
+迁移 governance 0042：`sessions` 上新触发器（会话转为 revoked 时撤销它的 Handle）、部分索引、重写 0008 的签发触发器（已撤销的会话或父 Handle 拒签），并补救存量。可逆，回退代码即可。没有主机手工步骤。
+
+- **升级前只读预检**（**主机动作**，结果记 `docs/private/`）：按工作区统计已撤销会话下仍然有效的 Handle 数。迁移会把它们撤掉，并按人各写一条审计（`principal.revoked_session_handles_revoked`）；它们本来就该撤。按 release.md 惯例用 `psql -U nexttime` 跑：
+
+  ```sql
+  select h.workspace_id, count(*) as live_handles_under_revoked_sessions
+  from capability_handles h
+  join sessions s on s.workspace_id = h.workspace_id and s.id = h.session_id
+  where s.status = 'revoked'
+    and h.revoked_at is null
+    and h.expires_at > now()
+  group by h.workspace_id
+  order by 1;
+  ```
+
+- **行为变化**：
+  - 停用工作区、换角色等撤销会话的操作，现在连带撤销会话下的 Handle；llm-proxy 随撤销表生效，不再放行到 TTL。
+  - 平台侧换角色不再结束这个人的控制台会话（与工作区侧一致）。正在跑的 Worker 只在新角色覆盖不了它的 Handle 时被结束，走原有的崩溃重试。
+  - 工作区侧换角色现在也结束这个人的 admin_agent 会话（以前只有平台侧会）。旧会话下已排队、还没开始的 Turn 以 `admin_agent_session_ended` 结束；这个人之后再发消息（仍有权使用时）会开新会话。
+  - 服务主体降级时，带新角色不能用的能力的 key 被撤销，需要 owner 重新签发；只用新角色能用的能力的 key 不受影响。
+  - 已撤销的会话或父 Handle 在 HTTP 与 WS 上都返回 401。
+- **回滚**：回退代码即可；迁移已撤销的 Handle 不会恢复（撤销是单向的）。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
