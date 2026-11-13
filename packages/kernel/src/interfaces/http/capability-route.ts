@@ -113,6 +113,7 @@ import {
   OntologyBaseMovedError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
+  OntologyLinkEndpointError,
   OntologyNamespaceConflictError,
   OntologyViolationError,
   PasswordChangeRequiredError,
@@ -781,6 +782,20 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // owns — `publish_ontology_version`, `install_module`, `upgrade_module`. Nothing was published.
   if (err instanceof OntologyNamespaceConflictError) {
     return { status: 409, code: err.code, message: err.message };
+  }
+  // Legacy 303: a LinkType end would name an ObjectType no published ontology family declares —
+  // the version's own (`undeclared`) or another family's naming a type this version drops
+  // (`orphaned`). Same paths as I-P1 above; nothing was published.
+  if (err instanceof OntologyLinkEndpointError) {
+    return {
+      status: 409,
+      code: err.code,
+      message: err.message,
+      details: {
+        undeclared: err.problems.undeclared.map((p) => ({ ...p })),
+        orphaned: err.problems.orphaned.map((p) => ({ ...p })),
+      },
+    };
   }
   // Legacy 145: `propose_entry_template_upgrade` — nothing to upgrade to, or the template / the
   // published entry version is not the one the caller looked at. Nothing was proposed.

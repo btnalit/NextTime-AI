@@ -24,6 +24,7 @@ import { isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, shortId, zhJoin } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { operationFieldLabel, principalShownName } from '../../lib/labels.js';
+import { ontologyLinkEndsText } from '../../lib/ontology-link-ends.js';
 import { hrefs } from '../../lib/router.js';
 import { BLAST_RADIUS_TONES, labelText } from '../../lib/status-tone.js';
 import { Button } from '../kit/button.js';
@@ -872,6 +873,11 @@ const BLOCKER_TEXT: Readonly<
     zh: '这个 Operation 有一份待审的修订草稿，撤销会越过它，所以不撤销。先在「Operation」页发布或丢弃那份草稿。',
     en: 'This Operation has a revision draft under review; rolling back would go past it, so it is not rolled back. Publish or discard that draft on the Operations tab first.',
   },
+  // Legacy 303: afterwards a link type would start or end at an object type no ontology declares.
+  link_endpoint_undeclared: {
+    zh: '撤销后会有关系类型指向工作区里没有任何本体声明的对象类型：要么是要退回的那一版用到的类型已经不在了，要么是撤销会去掉别的本体的关系类型还在用的类型。先改动那个本体，或先撤销用到它的那条记录。',
+    en: 'Afterwards a link type would point at an object type no ontology in the workspace declares: either the version to return to uses a type that is gone, or the rollback would take away a type another ontology’s link type still uses. Change that ontology first, or roll back the record that uses it.',
+  },
 };
 
 function workerGatesOf(items: readonly ChangeItemWire[], ordinal: number): WorkerItemGates | null {
@@ -1061,6 +1067,14 @@ function RollBackSegment({
                       ? t(
                           `（${item.conflicts.map((c) => `${c.kind === 'object' ? '对象类型' : '动作类型'} ${c.name}`).join('、')}）`,
                           ` (${item.conflicts.map((c) => `${c.kind} type ${c.name}`).join(', ')})`,
+                        )
+                      : null}
+                    {item.kind === 'ontology_version' &&
+                    item.blocker === 'link_endpoint_undeclared' &&
+                    item.linkEnds.length > 0
+                      ? t(
+                          `（${ontologyLinkEndsText(item.linkEnds, t, item.target.ontologyId)}）`,
+                          ` (${ontologyLinkEndsText(item.linkEnds, t, item.target.ontologyId)})`,
                         )
                       : null}
                     {item.blocker === 'replaced' ? (

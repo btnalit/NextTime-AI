@@ -106,11 +106,13 @@ export {
 // `proposeOntologyChange`/`publishOntologyDraft` (R-60: `OntologyBaseMovedError`, the draft's base
 // is no longer the family's published head).
 // I-P1 (S10 P0): either publish path, plus `install_module` / `upgrade_module` through the loader,
-// refuses an ObjectType / ActionType name another family already owns.
+// refuses an ObjectType / ActionType name another family already owns; legacy 303, a LinkType end
+// that would name an ObjectType no published family declares.
 export {
   OntologyBaseMovedError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
+  OntologyLinkEndpointError,
   OntologyNamespaceConflictError,
 } from '../../substrate/ontology/index.js';
 // S3.2 `verify_fact` (I3.6's "harder half" — epistemic-handlers.ts's own doc comment on this

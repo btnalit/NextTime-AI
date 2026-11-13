@@ -8,7 +8,7 @@ import {
   nextOntologyVersion,
 } from './loader.js';
 import type { OntologyVersionDbRow, OntologyVersionRow } from './loader.js';
-import { assertOntologyNamespace } from './namespace.js';
+import { assertOntologyPublishable } from './namespace.js';
 import type { ActionTypeDefinition, ObjectTypeDefinition, OntologyDefinition } from './schema.js';
 import { OntologyDefinitionSchema } from './schema.js';
 
@@ -219,7 +219,9 @@ export interface PublishOntologyDraftInput {
  *
  *  I-P1 (`namespace.ts`): still under that lock (it takes the workspace's namespace lock first),
  *  the draft's ObjectType / ActionType names must not belong to another family's published head,
- *  else `OntologyNamespaceConflictError` and nothing changes. */
+ *  else `OntologyNamespaceConflictError`; and every LinkType end must name an ObjectType some
+ *  published family declares, counting the draft, without dropping one another family's LinkType
+ *  names, else `OntologyLinkEndpointError` (legacy 303). Either way nothing changes. */
 export async function publishOntologyDraft(
   client: PoolClient,
   workspaceId: string,
@@ -241,7 +243,7 @@ export async function publishOntologyDraft(
   if (head !== draftRow.base_version) {
     throw new OntologyBaseMovedError(input.id, input.version, draftRow.base_version, head);
   }
-  await assertOntologyNamespace(client, workspaceId, input.id, draftRow.definition);
+  await assertOntologyPublishable(client, workspaceId, input.id, draftRow.definition);
 
   const result = await client.query<OntologyVersionDbRow>(
     `update ontology_versions

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ChangeItemClassification, ChangeItemKind, ChangeSourceKind } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { writeAudit } from '../../substrate/audit/index.js';
+import type { PendingOntologyHead } from '../../substrate/ontology/index.js';
 import { assertChangeApplierIsPerson } from './applier.js';
 import { type WideningReason, classificationOf } from './classify.js';
 import { contentDigest } from './digest.js';
@@ -211,11 +212,16 @@ async function planItem(
   workspaceId: string,
   intent: ChangeItemIntent,
   ordinal: number,
+  pendingOntology: PendingOntologyHead[],
 ): Promise<KindPlan> {
   const kind = intent.kind;
   switch (kind) {
     case 'ontology_version': {
-      const ontology = await planOntologyItem(client, workspaceId, intent);
+      const ontology = await planOntologyItem(client, workspaceId, intent, pendingOntology);
+      // Legacy 303: applied in this order, so the next items' LinkType ends see this one published.
+      if (!ontology.unchanged) {
+        pendingOntology.push({ id: ontology.target.ontologyId, definition: ontology.definition });
+      }
       return {
         planned: {
           ordinal,
@@ -315,8 +321,9 @@ async function planWithKinds(
   assertDistinctTargets(input.items);
   for (const intent of inLockOrder(input.items)) await lockItem(client, workspaceId, intent);
   const kinds: KindPlan[] = [];
+  const pendingOntology: PendingOntologyHead[] = [];
   for (const [index, intent] of input.items.entries()) {
-    kinds.push(await planItem(client, workspaceId, intent, index + 1));
+    kinds.push(await planItem(client, workspaceId, intent, index + 1, pendingOntology));
   }
   const items = kinds.map((kind) => kind.planned);
   return {

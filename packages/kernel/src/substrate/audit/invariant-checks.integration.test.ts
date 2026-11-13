@@ -559,7 +559,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(before?.sample.some((entry) => entry.includes(typeName))).toBe(false);
 
       // Raw inserts on the login role: both publish functions would refuse the second family
-      // (assertOntologyNamespace) — this is the "written before the check existed" shape.
+      // (assertOntologyPublishable) — this is the "written before the check existed" shape.
       await withWorkspace(
         pool,
         { workspaceId, principalId: ownerId },
@@ -605,6 +605,83 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(entry).toContain(`${workspaceId}:object:${typeName}`);
         expect(entry).toContain(familyA);
         expect(entry).toContain(familyB);
+      }
+    });
+
+    it('I-P1-LINK: a published head’s LinkType end naming no declared ObjectType counts once; "*", its own type, another family’s, an older version and a draft do not (legacy 303)', async () => {
+      const tag = randomUUID().slice(0, 8);
+      const own = `Own_${tag}`;
+      const other = `Other_${tag}`;
+      const missing = `Missing_${tag}`;
+      const familyC = randomUUID();
+      const familyD = randomUUID();
+      const link = (name: string, domain: string, range: string) => ({
+        name,
+        domain,
+        range,
+        description: 'd',
+      });
+      const baseline = await runInvariantChecks(pool);
+      const before = baseline.find((result) => result.invariant === 'I-P1-LINK');
+
+      // Raw inserts: every publish path would refuse familyC's head (assertOntologyPublishable).
+      await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const insert = `insert into ontology_versions (workspace_id, id, version, status, definition, proposed_by, published_by)
+                          values ($1, $2, $3, $4, $5, $6, $7)`;
+          const definition = (objectTypes: string[], linkTypes: object[]) =>
+            JSON.stringify({ objectTypes: objectTypes.map((name) => ({ name })), linkTypes });
+          // An older published version is not the head: its end is not counted.
+          await client.query(insert, [
+            workspaceId,
+            familyC,
+            1,
+            'published',
+            definition([own], [link('older', own, `Older_${tag}`)]),
+            ownerId,
+            ownerId,
+          ]);
+          await client.query(insert, [
+            workspaceId,
+            familyC,
+            2,
+            'published',
+            definition(
+              [own],
+              [link('any', own, '*'), link('across', own, other), link('dangling', own, missing)],
+            ),
+            ownerId,
+            ownerId,
+          ]);
+          await client.query(insert, [
+            workspaceId,
+            familyD,
+            1,
+            'published',
+            definition([other], []),
+            ownerId,
+            ownerId,
+          ]);
+          await client.query(insert, [
+            workspaceId,
+            randomUUID(),
+            1,
+            'draft',
+            definition([`Draft_${tag}`], [link('drafted', `Draft_${tag}`, missing)]),
+            ownerId,
+            null,
+          ]);
+        },
+        { skipRoleSwitch: true },
+      );
+
+      const after = await runInvariantChecks(pool);
+      const ip1Link = after.find((result) => result.invariant === 'I-P1-LINK');
+      expect((ip1Link?.violations ?? 0) - (before?.violations ?? 0)).toBe(1);
+      if ((ip1Link?.violations ?? 0) <= 5) {
+        expect(ip1Link?.sample).toContain(`${workspaceId}:${familyC}:dangling.range -> ${missing}`);
       }
     });
 

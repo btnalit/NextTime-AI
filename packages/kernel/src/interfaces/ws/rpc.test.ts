@@ -25,6 +25,7 @@ import {
   OntologyBaseMovedError,
   OntologyChangeValidationError,
   OntologyDraftNotFoundError,
+  OntologyLinkEndpointError,
   SupersedeIdentityMismatchError,
 } from '../../application/gateway/index.js';
 import { UnknownOperationError } from '../../application/gateway/index.js';
@@ -151,6 +152,7 @@ describe('mapDispatchError — S11 P1-B change segment rollback', () => {
           blocker: 'replaced',
           blockedBy: { segmentId: 'seg-2' },
           conflicts: [],
+          linkEnds: [],
         },
       ]),
     );
@@ -328,6 +330,32 @@ describe('mapDispatchError — error-mapping followup: previously-unmapped S3.1/
 
   it('OntologyBaseMovedError (publish_ontology_version, R-60) maps to ILLEGAL_TRANSITION, like HTTP 409', () => {
     const mapped = mapDispatchError(new OntologyBaseMovedError('ont-1', 3, 1, 2));
+    expect(mapped.code).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
+  });
+
+  it('OntologyLinkEndpointError (legacy 303) maps to ILLEGAL_TRANSITION, like HTTP 409', () => {
+    const mapped = mapDispatchError(
+      new OntologyLinkEndpointError({
+        undeclared: [
+          {
+            ontologyId: 'ont-1',
+            family: null,
+            linkType: 'served_by',
+            end: 'range' as const,
+            objectType: 'Gatekeepr',
+          },
+        ],
+        orphaned: [
+          {
+            ontologyId: 'ont-2',
+            family: null,
+            linkType: 'runs_on',
+            end: 'domain' as const,
+            objectType: 'Host',
+          },
+        ],
+      }),
+    );
     expect(mapped.code).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
   });
 

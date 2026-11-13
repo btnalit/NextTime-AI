@@ -72,12 +72,22 @@ export type {
 } from './meta-objects.js';
 
 export {
+  OntologyLinkEndpointError,
   OntologyNamespaceConflictError,
-  assertOntologyNamespace,
+  assertOntologyPublishable,
+  findOntologyLinkEndpointProblems,
   findOntologyNamespaceConflicts,
   lockOntologyNamespace,
 } from './namespace.js';
-export type { OntologyNamespaceConflict, OntologyNamespaceKind } from './namespace.js';
+export type {
+  NamedOntologyLinkEndpointProblem,
+  OntologyLinkEnd,
+  OntologyLinkEndpointProblem,
+  OntologyLinkEndpointProblems,
+  OntologyNamespaceConflict,
+  OntologyNamespaceKind,
+  PendingOntologyHead,
+} from './namespace.js';
 
 export {
   OntologyBaseMovedError,

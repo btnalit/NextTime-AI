@@ -58059,7 +58059,8 @@
                           "not_installed",
                           "restored_version_missing",
                           "namespace_conflict",
-                          "revision_pending"
+                          "revision_pending",
+                          "link_endpoint_undeclared"
                         ],
                         "type": "string"
                       },
@@ -58118,6 +58119,44 @@
                   "kind": {
                     "const": "ontology_version",
                     "type": "string"
+                  },
+                  "linkEnds": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "end": {
+                          "enum": [
+                            "domain",
+                            "range"
+                          ],
+                          "type": "string"
+                        },
+                        "family": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "linkType": {
+                          "type": "string"
+                        },
+                        "objectType": {
+                          "type": "string"
+                        },
+                        "ontologyId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "ontologyId",
+                        "family",
+                        "linkType",
+                        "end",
+                        "objectType"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
                   },
                   "ordinal": {
                     "exclusiveMinimum": 0,
@@ -58230,7 +58269,8 @@
                   "removes",
                   "blocker",
                   "blockedBy",
-                  "conflicts"
+                  "conflicts",
+                  "linkEnds"
                 ],
                 "type": "object"
               },
@@ -58264,7 +58304,8 @@
                           "not_installed",
                           "restored_version_missing",
                           "namespace_conflict",
-                          "revision_pending"
+                          "revision_pending",
+                          "link_endpoint_undeclared"
                         ],
                         "type": "string"
                       },
@@ -58415,7 +58456,8 @@
                           "not_installed",
                           "restored_version_missing",
                           "namespace_conflict",
-                          "revision_pending"
+                          "revision_pending",
+                          "link_endpoint_undeclared"
                         ],
                         "type": "string"
                       },
@@ -58566,7 +58608,8 @@
                           "not_installed",
                           "restored_version_missing",
                           "namespace_conflict",
-                          "revision_pending"
+                          "revision_pending",
+                          "link_endpoint_undeclared"
                         ],
                         "type": "string"
                       },

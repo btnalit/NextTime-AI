@@ -236,6 +236,13 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '这个版本里有对象类型或动作类型与本工作区另一个已发布的本体族重名；本次没有发布任何内容。请改名，或改动拥有该类型的那个本体族',
     en: 'An object type or action type in this version is already declared by another published ontology family in this workspace — nothing was published. Rename it, or change the family that owns it',
   },
+  // Legacy 303: a link type's domain or range names an object type no published ontology family
+  // of the workspace declares — this version's own, or another family's naming a type this
+  // version drops. Nothing was published.
+  ontology_link_endpoint_undeclared: {
+    zh: '这个版本里有关系类型的 domain 或 range 写的对象类型，工作区里没有任何已发布的本体声明它，或者这个版本去掉了别的本体的关系类型还在用的对象类型；本次没有发布任何内容。「技术细节」里写着是哪个关系类型和对象类型：改正关系类型或补上对象类型；是别的本体在用的，先改那个本体',
+    en: 'A link type’s domain or range in this version names an object type no published ontology in this workspace declares, or this version drops an object type another ontology’s link type still uses — nothing was published. The technical details name the link type and object type: correct the link type or declare the object type; if another ontology uses it, change that ontology first',
+  },
   // Legacy 145: `propose_entry_template_upgrade`. Nothing was proposed in either.
   entry_template_current: {
     zh: '当前生效的入口定义已经和平台模板一致，没有可生成的草稿',

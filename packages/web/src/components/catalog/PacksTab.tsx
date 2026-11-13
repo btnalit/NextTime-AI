@@ -27,6 +27,10 @@ import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { principalShownName } from '../../lib/labels.js';
 import { LocalizedError } from '../../lib/localized-error.js';
+import {
+  ontologyLinkEndpointRefusalOf,
+  ontologyLinkEndsText,
+} from '../../lib/ontology-link-ends.js';
 import { hrefs } from '../../lib/router.js';
 import { PACK_REQUIREMENT_TONES, labelText } from '../../lib/status-tone.js';
 import { Button } from '../kit/button.js';
@@ -968,6 +972,45 @@ function packDraftPendingText(t: Translate): string {
   );
 }
 
+/** Legacy 303: the pack's ontology points at a type this workspace has no ontology for (usually a
+ *  pack it builds on that is not installed), or installing it would drop a type another
+ *  ontology's link type still uses. Says which ends, from the refusal's details (UX acceptance of
+ *  #1141); the general sentence when they cannot be read. */
+function packLinkEndpointText(error: unknown, t: Translate): string {
+  const refusal = ontologyLinkEndpointRefusalOf(error);
+  if (!refusal) {
+    return t(
+      '这个能力包的本体里有关系类型指向的对象类型，工作区里没有任何本体声明它（多半是它依赖的能力包还没装），或者装上会去掉别的本体还在用的对象类型，所以现在装不上，什么也没有改。「技术细节」里写着是哪个关系类型和对象类型；先装好提供这个类型的能力包，或请平台管理员处理。',
+      'A link type in this pack’s ontology points at an object type no ontology in the workspace declares (usually a pack it builds on is not installed yet), or installing it would drop an object type another ontology still uses, so it cannot be installed now and nothing changed. The technical details name the link type and object type; install the pack that provides that type first, or ask a platform administrator.',
+    );
+  }
+  const { undeclared, orphaned } = refusal;
+  const own = undeclared[0]?.ontologyId;
+  const zh: string[] = [];
+  const en: string[] = [];
+  if (undeclared.length > 0) {
+    zh.push(
+      `这个能力包的本体里有关系类型指向工作区里没有任何本体声明的对象类型：${ontologyLinkEndsText(undeclared, t, own)}。多半是它依赖的能力包还没装，先装好提供这些类型的能力包。`,
+    );
+    en.push(
+      `A link type in this pack’s ontology points at an object type no ontology in the workspace declares: ${ontologyLinkEndsText(undeclared, t, own)}. Usually a pack it builds on is not installed yet; install the pack that provides those types first.`,
+    );
+  }
+  if (orphaned.length > 0) {
+    zh.push(
+      `装上它会去掉别的本体的关系类型还在用的对象类型：${ontologyLinkEndsText(orphaned, t)}。先在「安装历史」里撤销装上那个本体的记录，或改动那个本体。`,
+    );
+    en.push(
+      `Installing it would drop an object type another ontology’s link type still uses: ${ontologyLinkEndsText(orphaned, t)}. Roll back the record that installed that ontology under Install history, or change that ontology, first.`,
+    );
+  }
+  zh.push('所以现在装不上，什么也没有改；都做不到时请平台管理员处理。');
+  en.push(
+    'So it cannot be installed now and nothing changed; if neither is possible, ask a platform administrator.',
+  );
+  return t(zh.join(''), en.join(' '));
+}
+
 /** S11 AA5g-3: refusals of an install that answers an admin proposal which mean the proposal is
  *  not open to it any more (decided meanwhile, a newer version, no longer among the targets). */
 const PROPOSAL_STALE_CODES = new Set([
@@ -1206,6 +1249,7 @@ export function InstallPack({
                 '这个能力包里有对象类型或动作类型的名字已经被工作区里另一个本体用了，装上会让两个本体重名，所以现在装不上，什么也没有改。「技术细节」里写着是哪个类型；占用它的本体是从能力包装上的话，可以在「安装历史」里撤销那条记录，否则请平台管理员处理。',
                 'A type name in this pack is already used by another ontology in the workspace; installing it would give the name two owners, so it cannot be installed now and nothing changed. The technical details name the type. If the ontology holding it came from a pack, roll that record back under Install history; otherwise ask a platform administrator.',
               ),
+              ontology_link_endpoint_undeclared: packLinkEndpointText(preview.error, t),
               draft_pending: packDraftPendingText(t),
               skill_name_conflict: t(
                 '这个能力包里有一个 Skill 和工作区里另一个已发布的 Skill 同名；Worker 按名字挂载 Skill，同名会让它挂错，所以现在装不上，什么也没有改。「技术细节」里写着是哪个名字；可以在「Skill」页停用那个 Skill 后再来安装。',
